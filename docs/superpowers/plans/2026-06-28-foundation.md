@@ -1723,7 +1723,7 @@ mod tests {
     #[test] fn nested_vars() {
         let mut v = HashMap::new();
         v.insert("a".into(), "/x/${b}".into());
-        v.insert("b".into(), "/y".into());
+        v.insert("b".into(), "y".into());
         assert_eq!(expand_vars("${a}", &v, &empty_env()).unwrap(), "/x/y");
     }
 
