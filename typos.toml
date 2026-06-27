@@ -1,0 +1,12 @@
+[default]
+extend-ignore-identifiers-re = [
+    "totsuka",
+]
+
+[files]
+extend-exclude = [
+    "target/",
+    "migrations/",
+    "*.lock",
+    ".sqlx/",
+]
