@@ -99,6 +99,7 @@ impl Config {
 mod tests {
     use super::*;
     use crate::schema::{Config, RepoSection};
+    use totsuka_core::ColumnId;
 
     fn baseline() -> Config {
         let toml = include_str!("test_min.toml");
@@ -224,5 +225,27 @@ mod tests {
             .validate()
             .unwrap_err()
             .contains(&ValidationError::UdsCollision));
+    }
+
+    #[test]
+    fn columns_coverage_errors() {
+        let mut c = baseline();
+        c.github.columns.remove(&ColumnId::Inbox);
+        assert!(c
+            .validate()
+            .unwrap_err()
+            .iter()
+            .any(|e| matches!(e, ValidationError::ColumnsCoverage(_))));
+    }
+
+    #[test]
+    fn invalid_qa_mode_errors() {
+        let mut c = baseline();
+        c.qa_service.default_mode = "bogus".into();
+        assert!(c
+            .validate()
+            .unwrap_err()
+            .iter()
+            .any(|e| matches!(e, ValidationError::InvalidQaMode(_))));
     }
 }
