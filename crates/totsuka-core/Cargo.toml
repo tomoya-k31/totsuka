@@ -1,0 +1,15 @@
+[package]
+name = "totsuka-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+chrono = { workspace = true }
+chrono-tz.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
