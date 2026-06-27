@@ -917,9 +917,9 @@ git commit -m "feat(core): Clock trait + SystemClock + MockClock"
 `crates/totsuka-core/src/secret.rs`:
 ```rust
 use std::fmt;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(transparent)]
 pub struct Secret<T>(T);
 

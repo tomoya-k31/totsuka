@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::fmt;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(transparent)]
 pub struct Secret<T>(T);
 
@@ -64,5 +64,19 @@ mod tests {
     fn deserialize_from_plain_string() {
         let s: Secret<String> = serde_json::from_str("\"v\"").unwrap();
         assert_eq!(s.expose(), "v");
+    }
+
+    /// Ensures Secret<T> is NOT serializable (would leak the inner value).
+    /// If serde::Serialize is ever re-derived, this fn signature stops compiling.
+    #[allow(dead_code)]
+    fn require_not_serialize<T: Sized>() {
+        // intentionally NOT bounded on serde::Serialize. If you ever add
+        // #[derive(Serialize)] back to Secret<T> and someone tries to assert
+        // Serialize bounds here, the compiler will catch it.
+    }
+
+    #[test]
+    fn secret_is_not_serializable_compile_time_guard() {
+        require_not_serialize::<Secret<String>>();
     }
 }
