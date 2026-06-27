@@ -291,7 +291,7 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - totsuka_pgmq_data:/var/lib/postgresql/data
+      - totsuka_pgmq_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d totsuka"]
       interval: 5s
