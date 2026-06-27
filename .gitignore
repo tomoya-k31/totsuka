@@ -37,5 +37,4 @@ target/
 **/*.rs.bk
 Cargo.lock
 .sqlx/
-crates/  # Member crates created during development, committed by later tasks
 # runtime state (XDG paths are outside repo)
