@@ -700,7 +700,9 @@ git commit -m "feat(db): catchup_cursor / gh_item_status / tasks / qa_thread_age
 name = "totsuka-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 thiserror.workspace = true
@@ -1605,7 +1607,9 @@ git commit -m "feat(core): NotifyKind enum (15 variants per §13.1)"
 name = "totsuka-config"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 totsuka-core = { path = "../totsuka-core" }
@@ -2465,7 +2469,9 @@ git commit -m "feat(config): TOTSUKA__SECTION__KEY env override"
 name = "totsuka-telemetry"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 totsuka-core   = { path = "../totsuka-core" }
@@ -3144,7 +3150,9 @@ git commit -m "feat(telemetry): LogSink + SlackSink for Notifier"
 name = "totsuka-bus"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 totsuka-core   = { path = "../totsuka-core" }
