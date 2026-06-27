@@ -113,7 +113,7 @@ totsukactl up
 - image: `ghcr.io/pgmq/pg18-pgmq:v1.10.0` (`totsuka-config` で集中管理、`totsukactl` はそれを参照)
 - volume: named volume `totsuka_pgmq_data` を `/var/lib/postgresql` に mount (永続)。PG18 はメジャーバージョン別 subdirectory (例: `/var/lib/postgresql/18/docker`) を使うため、`/var/lib/postgresql/data` に mount すると起動を拒否する。
 - port: `127.0.0.1:5432:5432` (totsuka.toml で変更可)
-- healthcheck: `pg_isready -U postgres -d postgres`
+- healthcheck: `pg_isready -U postgres -d totsuka` (`POSTGRES_DB` と一致させる)
 - restart policy: なし (supervisor 管理下)
 - container user: `"0:0"` (root) — Docker Desktop for macOS が named volume を非 root プロセスで初期化させないため。Linux 環境でも互換。
 
