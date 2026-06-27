@@ -115,6 +115,7 @@ totsukactl up
 - port: `127.0.0.1:5432:5432` (totsuka.toml で変更可)
 - healthcheck: `pg_isready -U postgres -d postgres`
 - restart policy: なし (supervisor 管理下)
+- container user: `"0:0"` (root) — Docker Desktop for macOS が named volume を非 root プロセスで初期化させないため。Linux 環境でも互換。
 
 ### readiness の定義
 | bin | ready 条件 |

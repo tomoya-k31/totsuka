@@ -2,6 +2,7 @@ services:
   pgmq:
     image: ghcr.io/pgmq/pg18-pgmq:v1.10.0
     container_name: totsuka-pgmq
+    user: "0:0"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
