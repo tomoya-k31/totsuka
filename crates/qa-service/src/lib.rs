@@ -10,6 +10,8 @@ pub mod catchup;
 pub mod classifier;
 pub mod error;
 pub mod gh_inbox;
+pub mod lifecycle;
+pub mod listener;
 pub mod mode;
 pub mod question_filter;
 pub mod reaction;
