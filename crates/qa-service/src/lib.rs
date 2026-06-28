@@ -10,6 +10,7 @@ pub mod error;
 pub mod mode;
 pub mod repo_select;
 pub mod schema_check;
+pub mod slack;
 pub mod thread_map;
 
 pub struct QaApp {
