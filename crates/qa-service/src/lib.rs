@@ -4,6 +4,7 @@ use std::sync::Arc;
 use totsuka_config::Config;
 use totsuka_core::Clock;
 
+pub mod adapter_client;
 pub mod error;
 pub mod schema_check;
 
