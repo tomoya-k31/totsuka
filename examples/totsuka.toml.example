@@ -48,6 +48,7 @@ host        = "127.0.0.1"
 port        = 5432
 database    = "totsuka"
 user        = "postgres"
+password    = ""              # DB パスワード。env override: TOTSUKA__POSTGRES__PASSWORD
 volume      = "totsuka_pgmq_data"
 compose_file = "deploy/docker-compose.yml"
 
@@ -124,6 +125,7 @@ project_poll_interval_secs = 20                  # ProjectsV2 status snapshot di
 issues_poll_interval_secs  = 60                  # issues since-pull の周期
 catchup_window_hours       = 24                  # 起動時 catch-up が遡る上限
 graphql_page_size          = 100                 # ProjectsV2 items の 1 ページ取得数
+github_token               = ""                  # GitHub PAT。env override: TOTSUKA__GITHUB_WATCHER__GITHUB_TOKEN
 
 # ---- qa-service ----
 [qa_service]
@@ -134,6 +136,8 @@ reaction_trigger      = "memo"
 default_mode          = "delegated"      # auto | delegated
 adapter_uds           = "${agent_adapter.uds_path}"
 repo_select_mode      = "llm_classify"   # llm_classify (既定) | channel_map (将来)
+slack_app_token       = ""               # Slack App-level token (xapp-…)。env: TOTSUKA__QA_SERVICE__SLACK_APP_TOKEN
+slack_bot_token       = ""               # Slack Bot token (xoxb-…)。env: TOTSUKA__QA_SERVICE__SLACK_BOT_TOKEN
 
 [qa_service.classifier]                              # 詳細 §8.4
 # provider: anthropic | openai | openrouter | litellm | openai_compatible
@@ -141,6 +145,7 @@ repo_select_mode      = "llm_classify"   # llm_classify (既定) | channel_map (
 # openai_compatible は将来用 catch-all (Azure OpenAI / Groq / Together / Ollama 等)
 provider              = "anthropic"
 model                 = "claude-haiku-4-5-20251001"
+api_key               = ""               # LLM API キー。env: TOTSUKA__QA_SERVICE__CLASSIFIER__API_KEY
 
 # api_base: 空文字 ("") なら provider 既定を使用。litellm / openai_compatible は必須指定
 #   anthropic   既定 → "https://api.anthropic.com"

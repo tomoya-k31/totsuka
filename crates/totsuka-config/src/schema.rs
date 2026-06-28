@@ -1,6 +1,18 @@
-use serde::{Deserialize, Serialize};
+use secrecy::{ExposeSecret, SecretString};
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use totsuka_core::ColumnId;
+
+fn default_secret_string() -> SecretString {
+    SecretString::default()
+}
+
+fn serialize_secret_string<S: Serializer>(
+    secret: &SecretString,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    secret.expose_secret().serialize(serializer)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -102,6 +114,11 @@ pub struct PostgresSection {
     pub port: u16,
     pub database: String,
     pub user: String,
+    #[serde(
+        default = "default_secret_string",
+        serialize_with = "serialize_secret_string"
+    )]
+    pub password: SecretString,
     pub volume: String,
     pub compose_file: String,
 }
@@ -217,6 +234,11 @@ pub struct GithubWatcherSection {
     pub catchup_window_hours: u64,
     #[serde(default = "d_100")]
     pub graphql_page_size: u32,
+    #[serde(
+        default = "default_secret_string",
+        serialize_with = "serialize_secret_string"
+    )]
+    pub github_token: SecretString,
 }
 
 fn d_20() -> u64 {
@@ -242,6 +264,16 @@ pub struct QaServiceSection {
     pub adapter_uds: String,
     #[serde(default = "d_llm")]
     pub repo_select_mode: String,
+    #[serde(
+        default = "default_secret_string",
+        serialize_with = "serialize_secret_string"
+    )]
+    pub slack_app_token: SecretString,
+    #[serde(
+        default = "default_secret_string",
+        serialize_with = "serialize_secret_string"
+    )]
+    pub slack_bot_token: SecretString,
     pub classifier: ClassifierSection,
     pub answer: AnswerSection,
 }
@@ -256,6 +288,11 @@ pub struct ClassifierSection {
     pub model: String,
     #[serde(default)]
     pub api_base: String,
+    #[serde(
+        default = "default_secret_string",
+        serialize_with = "serialize_secret_string"
+    )]
+    pub api_key: SecretString,
     #[serde(default = "d_256")]
     pub max_tokens: u32,
     #[serde(default = "d_th")]
@@ -353,8 +390,11 @@ fn d_600() -> u64 {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SlackNotifySection {
-    #[serde(default)]
-    pub webhook_url: String,
+    #[serde(
+        default = "default_secret_string",
+        serialize_with = "serialize_secret_string"
+    )]
+    pub webhook_url: SecretString,
     #[serde(default)]
     pub default_channel: String,
     #[serde(default)]
@@ -519,5 +559,26 @@ model="claude-haiku-4-5-20251001"
     fn missing_required_field_errors() {
         let bad = MIN_TOML.replace(r#"queue_name="totsuka_events""#, "");
         assert!(Config::from_toml_str(&bad).is_err());
+    }
+
+    #[test]
+    fn webhook_url_secret_masks_in_debug() {
+        let toml = format!(
+            r#"{}
+[notifications.slack]
+webhook_url = "https://hooks.slack.com/x"
+"#,
+            MIN_TOML
+        );
+        let c = Config::from_toml_str(&toml).expect("parse");
+        let debug_str = format!("{:?}", c.notifications.slack.webhook_url);
+        assert!(
+            !debug_str.contains("hooks.slack.com"),
+            "Debug output should not expose secret URL, got: {debug_str}"
+        );
+        assert_eq!(
+            c.notifications.slack.webhook_url.expose_secret(),
+            "https://hooks.slack.com/x"
+        );
     }
 }
