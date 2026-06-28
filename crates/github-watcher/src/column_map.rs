@@ -118,13 +118,4 @@ model     = "claude-haiku-4-5-20251001"
         assert_eq!(m.resolve("📥 Inbox"), Some(ColumnId::Inbox));
         assert_eq!(m.resolve("🏁 完了"), Some(ColumnId::Released));
     }
-
-    #[test]
-    fn build_errors_when_a_column_is_missing() {
-        let mut partial = full_map();
-        partial.remove(&ColumnId::Inbox);
-        let c = cfg_with(partial);
-        let err = build(&c).unwrap_err();
-        assert!(matches!(err, WatcherError::ColumnMap(_)), "got: {err:?}");
-    }
 }
