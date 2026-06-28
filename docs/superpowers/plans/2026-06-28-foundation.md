@@ -3648,8 +3648,10 @@ git commit -m "test(e2e): foundation smoke (config + publish/consume + notifier 
 
 ### Task F3: CI hint (lint + test on PR) — optional but recommended
 
+> **2026-06-28 controller note:** リポジトリ初期コミット (6827631) で既に `.github/workflows/ci.yml` (fmt / clippy / test (pgmq service + migrations) / cargo-deny / typos、actions は SHA pin) が導入済み。F3 の意図 (PR CI 整備) は満たされているため新規 workflow は作成不要。本タスクは既存ワークフローの維持を確認するだけで完了とみなす。下記の skeleton は記録のみ。
+
 **Files:**
-- Create: `.github/workflows/ci.yml`
+- ~~Create: `.github/workflows/ci.yml`~~ (既存ファイルで充足)
 
 **Interfaces:**
 - Consumes: GitHub Actions runners
