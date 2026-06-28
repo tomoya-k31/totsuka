@@ -936,42 +936,64 @@ impl EffectLedger {
     pub async fn claim(&self, key: &str, event_key: &str, ty: &str, owner: &str)
         -> Result<ClaimOutcome, OrchestratorError>
     {
+        // The processed_effects PK is (effect_key, created_at) because the
+        // table is PARTITIONED BY RANGE (created_at). That PK does NOT prevent
+        // duplicate `effect_key` rows across different `created_at` values, so
+        // a naive INSERT ... ON CONFLICT (effect_key, created_at) DO NOTHING
+        // would silently allow concurrent double-claims. Serialize per-key
+        // with a pg_advisory_xact_lock keyed on the effect_key hash, then do
+        // a normal SELECT + (INSERT-if-missing | UPDATE-if-expired | SKIP)
+        // inside the same transaction.
         let now = self.clock.now();
         let expires = now + chrono::Duration::seconds(self.lease_secs);
-        let rows = sqlx::query(
-            "INSERT INTO processed_effects
-                (effect_key, event_key, effect_type, status, lease_owner, lease_expires_at, attempts, created_at)
-             VALUES ($1, $2, $3, 'in_progress', $4, $5, 1, $6)
-             ON CONFLICT (effect_key, created_at) DO NOTHING"
-        ).bind(key).bind(event_key).bind(ty).bind(owner).bind(expires).bind(now)
-        .execute(&self.pool).await?;
-        if rows.rows_affected() == 1 { return Ok(ClaimOutcome::Claimed); }
+        let mut tx = self.pool.begin().await?;
 
-        // Already exists. Look at status to decide whether to re-claim.
+        // Lock other claims for this effect_key until commit.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+            .bind(key)
+            .execute(&mut *tx)
+            .await?;
+
         let existing: Option<(String, Option<DateTime<Utc>>)> = sqlx::query_as(
-            "SELECT status, lease_expires_at FROM processed_effects WHERE effect_key = $1
-             ORDER BY created_at DESC LIMIT 1"
-        ).bind(key).fetch_optional(&self.pool).await?;
-        match existing {
-            Some((s, _)) if s == "done" => Ok(ClaimOutcome::Skipped { reason: "already done".into() }),
+            "SELECT status, lease_expires_at FROM processed_effects
+             WHERE effect_key = $1 ORDER BY created_at DESC LIMIT 1"
+        ).bind(key).fetch_optional(&mut *tx).await?;
+
+        let outcome = match existing {
+            None => {
+                sqlx::query(
+                    "INSERT INTO processed_effects
+                        (effect_key, event_key, effect_type, status, lease_owner,
+                         lease_expires_at, attempts, created_at)
+                     VALUES ($1, $2, $3, 'in_progress', $4, $5, 1, $6)"
+                ).bind(key).bind(event_key).bind(ty).bind(owner).bind(expires).bind(now)
+                .execute(&mut *tx).await?;
+                ClaimOutcome::Claimed
+            }
+            Some((s, _)) if s == "done" => ClaimOutcome::Skipped { reason: "already done".into() },
             Some((s, exp)) if s == "in_progress" => {
-                if let Some(e) = exp { if e > now {
-                    return Ok(ClaimOutcome::Skipped { reason: format!("leased until {e}") });
-                }}
-                // Expired in-progress: take it over via UPDATE.
+                if let Some(e) = exp {
+                    if e > now {
+                        tx.commit().await?;
+                        return Ok(ClaimOutcome::Skipped { reason: format!("leased until {e}") });
+                    }
+                }
+                // Expired — take over the most recent row.
                 let upd = sqlx::query(
                     "UPDATE processed_effects SET lease_owner = $2, lease_expires_at = $3,
                      attempts = attempts + 1, updated_at = $4
-                     WHERE effect_key = $1 AND status = 'in_progress'
-                       AND (lease_expires_at IS NULL OR lease_expires_at <= $4)"
+                     WHERE effect_key = $1 AND created_at = (
+                         SELECT max(created_at) FROM processed_effects WHERE effect_key = $1
+                     )"
                 ).bind(key).bind(owner).bind(expires).bind(now)
-                .execute(&self.pool).await?;
-                if upd.rows_affected() == 1 { Ok(ClaimOutcome::Claimed) }
-                else { Ok(ClaimOutcome::Skipped { reason: "race lost".into() }) }
+                .execute(&mut *tx).await?;
+                if upd.rows_affected() == 1 { ClaimOutcome::Claimed }
+                else { ClaimOutcome::Skipped { reason: "race lost".into() } }
             }
-            Some((s, _)) => Ok(ClaimOutcome::Skipped { reason: format!("status={s}") }),
-            None => Ok(ClaimOutcome::Skipped { reason: "race".into() }),
-        }
+            Some((s, _)) => ClaimOutcome::Skipped { reason: format!("status={s}") },
+        };
+        tx.commit().await?;
+        Ok(outcome)
     }
 
     pub async fn complete(&self, key: &str, result: Value) -> Result<(), OrchestratorError> {
