@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod herdr;
+pub mod repo;
 
 use std::sync::Arc;
 use totsuka_config::Config;

@@ -20,6 +20,7 @@ totsuka-telemetry = { path = "../totsuka-telemetry", version = "0.1.0" }
 totsuka-bus       = { path = "../totsuka-bus",       version = "0.1.0" }
 
 tokio       = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "fs", "process", "net", "io-util", "sync", "time"] }
+arc-swap    = { workspace = true }
 axum        = { workspace = true }
 hyper       = { workspace = true }
 hyperlocal  = { workspace = true }

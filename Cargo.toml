@@ -30,6 +30,8 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+# atomic swap
+arc-swap = "1.7"
 # http
 axum = { version = "0.7", features = ["macros"] }
 hyper = { version = "1.4", features = ["full"] }
