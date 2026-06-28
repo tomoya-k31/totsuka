@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod adapter_client;
 pub mod error;
 pub mod repository;
 pub mod schema_check;
