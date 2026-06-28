@@ -11,6 +11,7 @@ pub mod gh_writeback;
 pub mod repository;
 pub mod schema_check;
 pub mod sm;
+pub mod sweeper;
 pub mod timer;
 pub mod wip;
 
