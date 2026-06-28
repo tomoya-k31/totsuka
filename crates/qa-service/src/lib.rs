@@ -12,6 +12,7 @@ pub mod gh_inbox;
 pub mod mode;
 pub mod question_filter;
 pub mod reaction;
+pub mod recovery;
 pub mod repo_select;
 pub mod schema_check;
 pub mod slack;
