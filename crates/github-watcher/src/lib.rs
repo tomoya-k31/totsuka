@@ -8,6 +8,7 @@ pub mod column_map;
 pub mod cursor;
 pub mod error;
 pub mod gh_client;
+pub mod lifecycle;
 pub mod linkage;
 pub mod listener;
 pub mod polling;
