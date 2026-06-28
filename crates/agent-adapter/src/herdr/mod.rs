@@ -39,12 +39,28 @@ impl PaneSnapshot {
 
 /// Parameters for `agent.start`. `argv` is the Claude Code invocation; `env`
 /// carries secrets (spec §11.13: never in argv).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct SpawnRequest {
     pub cwd: String,
     pub argv: Vec<String>,
     pub env: HashMap<String, String>,
     pub label: String, // herdr pane label (e.g. "totsuka:abc123:implv")
+}
+
+/// Hand-written Debug that elides env values to prevent accidental secret
+/// leakage via `tracing::debug!(?req)` (spec §11.7).
+impl std::fmt::Debug for SpawnRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpawnRequest")
+            .field("cwd", &self.cwd)
+            .field("argv", &self.argv)
+            .field(
+                "env",
+                &format_args!("<{} entries: redacted>", self.env.len()),
+            )
+            .field("label", &self.label)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -99,5 +115,27 @@ mod tests {
         };
         assert!(s.is_newer_than(3));
         assert!(!s.is_newer_than(4));
+    }
+
+    #[test]
+    fn spawn_request_debug_does_not_leak_env_values() {
+        let mut env = HashMap::new();
+        env.insert("CLAUDE_TOKEN".to_string(), "tk_secret_123".to_string());
+        let req = SpawnRequest {
+            cwd: "/w".into(),
+            argv: vec!["claude".into()],
+            env,
+            label: "t".into(),
+        };
+        let dbg = format!("{:?}", req);
+        assert!(
+            !dbg.contains("tk_secret_123"),
+            "Debug leaked env value: {dbg}"
+        );
+        assert!(!dbg.contains("CLAUDE_TOKEN"), "Debug leaked env key: {dbg}");
+        assert!(
+            dbg.contains("redacted"),
+            "Debug should mark env as redacted: {dbg}"
+        );
     }
 }
