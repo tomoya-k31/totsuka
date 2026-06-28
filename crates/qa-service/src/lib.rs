@@ -6,6 +6,7 @@ use totsuka_core::Clock;
 
 pub mod adapter_client;
 pub mod answer;
+pub mod catchup;
 pub mod classifier;
 pub mod error;
 pub mod gh_inbox;
