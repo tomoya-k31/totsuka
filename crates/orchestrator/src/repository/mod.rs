@@ -39,4 +39,9 @@ pub trait Repository: Send + Sync {
         &self,
         repo: &str,
     ) -> Result<Vec<Task>, OrchestratorError>;
+    async fn list_overdue(
+        &self,
+        deadline: DateTime<Utc>,
+        phase: &str,
+    ) -> Result<Vec<Task>, OrchestratorError>;
 }
