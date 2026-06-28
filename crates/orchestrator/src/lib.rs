@@ -3,6 +3,7 @@
 pub mod adapter_client;
 pub mod argv;
 pub mod branch;
+pub mod conversation;
 pub mod effect;
 pub mod error;
 pub mod gh_writeback;
