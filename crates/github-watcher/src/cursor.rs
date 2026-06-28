@@ -12,27 +12,38 @@ pub struct CursorKey {
 
 impl CursorKey {
     pub fn project_items() -> Self {
-        Self { source: "github", scope: "projectv2_items".into() }
+        Self {
+            source: "github",
+            scope: "projectv2_items".into(),
+        }
     }
     pub fn issues(repo: &str) -> Self {
-        Self { source: "github", scope: format!("issues:{repo}") }
+        Self {
+            source: "github",
+            scope: format!("issues:{repo}"),
+        }
     }
     pub fn prs(repo: &str) -> Self {
-        Self { source: "github", scope: format!("prs:{repo}") }
+        Self {
+            source: "github",
+            scope: format!("prs:{repo}"),
+        }
     }
     pub fn releases(repo: &str) -> Self {
-        Self { source: "github", scope: format!("releases:{repo}") }
+        Self {
+            source: "github",
+            scope: format!("releases:{repo}"),
+        }
     }
 }
 
 pub async fn get(pool: &PgPool, key: &CursorKey) -> Result<Option<String>, WatcherError> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT cursor FROM catchup_cursor WHERE source = $1 AND scope = $2",
-    )
-    .bind(key.source)
-    .bind(&key.scope)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT cursor FROM catchup_cursor WHERE source = $1 AND scope = $2")
+            .bind(key.source)
+            .bind(&key.scope)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|r| r.0))
 }
 
