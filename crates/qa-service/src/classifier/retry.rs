@@ -24,7 +24,17 @@ where
 
 fn is_retryable(e: &QaError) -> bool {
     matches!(e, QaError::Http(_))
-        || matches!(e, QaError::Classifier(s) if s.contains("429") || s.contains("5") )
+        || matches!(e, QaError::Classifier(s) if is_retryable_classifier_msg(s))
+}
+
+/// `Classifier(s)` strings come from provider impls as `"{provider} {status}: {body}"`
+/// (see anthropic.rs / openai_compat.rs). Retry on rate-limit (429) and 5xx status codes.
+/// Matches both provider format (" 500") and test format ("500 ").
+fn is_retryable_classifier_msg(s: &str) -> bool {
+    let codes = ["429", "500", "502", "503", "504", "520", "522", "524"];
+    codes
+        .iter()
+        .any(|code| s.contains(&format!(" {}", code)) || s.starts_with(&format!("{} ", code)))
 }
 
 fn backoff_secs(attempt: u32) -> u64 {

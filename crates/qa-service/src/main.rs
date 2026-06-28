@@ -88,7 +88,13 @@ async fn main() -> anyhow::Result<()> {
     health.set_ready(true).await;
 
     // 5. Recovery
-    let _report = reconcile(thread_map.as_ref(), adapter.as_ref()).await?;
+    // Best-effort: agent-adapter's GET /v1/agents may not yet be deployed
+    // (known gap recorded in Task 4 review). A reconcile failure should not
+    // prevent qa-service startup — orphan cleanup will happen on the next
+    // successful boot once the adapter route is live.
+    if let Err(e) = reconcile(thread_map.as_ref(), adapter.as_ref()).await {
+        tracing::warn!(error=%e, "recovery skipped (best-effort)");
+    }
 
     // 6. Catchup (best-effort)
     if !config.qa_service.catchup_channels.is_empty() {
@@ -198,7 +204,14 @@ async fn main() -> anyhow::Result<()> {
                         match ev {
                             SlackEvent::Message(m) => {
                                 let thread_key = m.thread_ts.clone().unwrap_or_else(|| m.ts.clone());
-                                let existing = thread_map.get(&thread_key).await.unwrap_or(None).is_some();
+                                let existing = match thread_map.get(&thread_key).await {
+                                    Ok(v) => v.is_some(),
+                                    Err(e) => {
+                                        tracing::warn!(error=%e, thread_ts=%thread_key,
+                                            "thread_map lookup failed; skipping to avoid double-response");
+                                        continue;
+                                    }
+                                };
                                 let trig = filter.evaluate(&m, existing);
                                 if trig == Trigger::None { continue; }
                                 let req = ClassifyRequest {

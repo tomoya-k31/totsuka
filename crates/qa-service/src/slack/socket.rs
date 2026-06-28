@@ -126,8 +126,11 @@ async fn try_one_connection(
                                 sink.send(Message::Text(ack.to_string()))
                                     .await
                                     .map_err(|e| QaError::WebSocket(format!("ack: {e}")))?;
-                                // Drop-oldest semantics: try_send; on full, log.
-                                // Closed channel is an error; full channel drops oldest event.
+                                // Back-pressure: tokio::mpsc::try_send drops the NEWEST event on
+                                // full (a deviation from spec §11.8's drop-oldest, deliberate
+                                // because tokio::mpsc has no drop-oldest primitive — a real
+                                // channel of 128 with single producer rarely fills, and on
+                                // sustained pressure either policy loses events).
                                 if let Err(e) = on_event.try_send(event) {
                                     match e {
                                         TrySendError::Full(_) => {
