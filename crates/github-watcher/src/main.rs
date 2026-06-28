@@ -7,8 +7,8 @@ use github_watcher::lifecycle::{probe_db, probe_github, wait_for_signals};
 use github_watcher::listener::{bind_tcp, serve_tcp};
 use github_watcher::polling::{
     issues::{run_issues_loop, IssuesLoopConfig},
-    prs::{run_prs_loop, PrsLoopConfig},
     project::{run_project_loop, ProjectLoopConfig},
+    prs::{run_prs_loop, PrsLoopConfig},
     releases::{run_releases_loop, ReleasesLoopConfig},
     RepoTracker,
 };
@@ -29,11 +29,8 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("TOTSUKA_CONFIG").unwrap_or_else(|_| "~/.config/totsuka/config.toml".into());
     let config = Arc::new(totsuka_config::Config::load(&config_path)?);
     let state_dir = std::path::PathBuf::from(&config.totsuka.state_dir);
-    let _log_guard = totsuka_telemetry::init_tracing(
-        &state_dir,
-        "github-watcher",
-        &config.totsuka.log_level,
-    );
+    let _log_guard =
+        totsuka_telemetry::init_tracing(&state_dir, "github-watcher", &config.totsuka.log_level);
 
     // 2. DB
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -46,7 +43,10 @@ async fn main() -> anyhow::Result<()> {
             config.postgres.database,
         )
     });
-    let pool = PgPoolOptions::new().max_connections(8).connect(&db_url).await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&db_url)
+        .await?;
     check_schema_version(&pool).await?;
     create_queue(&pool, &config.bus.queue_name).await?;
 
@@ -65,7 +65,13 @@ async fn main() -> anyhow::Result<()> {
     // 5. Health + probes
     let health = HealthState::new();
     probe_db(&pool, &health).await;
-    probe_github(&client, &config.github.project_owner, config.github.project_number, &health).await;
+    probe_github(
+        &client,
+        &config.github.project_owner,
+        config.github.project_number,
+        &health,
+    )
+    .await;
     health.set_ready(true).await;
 
     // 6. Shared state
@@ -89,7 +95,10 @@ async fn main() -> anyhow::Result<()> {
         let clock = clock.clone();
         let health = health.clone();
         tokio::spawn(async move {
-            run_project_loop(pool, client, snapshot, column_map, tracker, clock, health, cfg, s).await
+            run_project_loop(
+                pool, client, snapshot, column_map, tracker, clock, health, cfg, s,
+            )
+            .await
         })
     };
 
@@ -174,8 +183,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 8. Listener
     let listener = bind_tcp(&config.github_watcher.bind).await?;
-    let router = totsuka_telemetry::http::router(health.clone())
-        .layer(axum::middleware::from_fn(totsuka_telemetry::request_id::middleware));
+    let router = totsuka_telemetry::http::router(health.clone()).layer(axum::middleware::from_fn(
+        totsuka_telemetry::request_id::middleware,
+    ));
     let listener_h = tokio::spawn(async move { serve_tcp(listener, router).await });
 
     // 9. Signals
@@ -204,7 +214,9 @@ fn spawn_loop<F>(
     fut: F,
 ) -> tokio::task::JoinHandle<Result<(), github_watcher::error::WatcherError>>
 where
-    F: std::future::Future<Output = Result<(), github_watcher::error::WatcherError>> + Send + 'static,
+    F: std::future::Future<Output = Result<(), github_watcher::error::WatcherError>>
+        + Send
+        + 'static,
 {
     tokio::spawn(async move {
         tracing::info!(loop_name = name, "starting");

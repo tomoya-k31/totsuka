@@ -27,7 +27,10 @@ impl RepoSlug {
         if o.is_empty() || r.is_empty() || r.contains('/') {
             return None;
         }
-        Some(Self { owner: o.into(), repo: r.into() })
+        Some(Self {
+            owner: o.into(),
+            repo: r.into(),
+        })
     }
 }
 

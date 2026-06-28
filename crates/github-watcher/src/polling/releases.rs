@@ -16,6 +16,7 @@ pub struct ReleasesLoopConfig {
     pub catchup_window: chrono::Duration,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_releases_loop(
     pool: PgPool,
     publisher: Arc<Publisher>,
@@ -69,11 +70,21 @@ async fn poll_repo(
             event_type: "github.release_published".into(),
             payload,
         };
-        publisher.send(pool, ev, None).await.map_err(WatcherError::Bus)?;
-        if rel.published_at > high_water { high_water = rel.published_at; }
+        publisher
+            .send(pool, ev, None)
+            .await
+            .map_err(WatcherError::Bus)?;
+        if rel.published_at > high_water {
+            high_water = rel.published_at;
+        }
     }
     if high_water > since {
-        set(pool, &key, &high_water.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)).await?;
+        set(
+            pool,
+            &key,
+            &high_water.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        )
+        .await?;
     }
     Ok(())
 }

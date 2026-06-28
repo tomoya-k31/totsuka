@@ -29,12 +29,11 @@ impl SnapshotStore for PgSnapshotStore {
             return Ok(vec![]);
         }
         let ids: Vec<String> = page.iter().map(|i| i.item_id.clone()).collect();
-        let rows = sqlx::query(
-            "SELECT item_id, status FROM gh_item_status WHERE item_id = ANY($1)",
-        )
-        .bind(&ids)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT item_id, status FROM gh_item_status WHERE item_id = ANY($1)")
+                .bind(&ids)
+                .fetch_all(&self.pool)
+                .await?;
         let mut prev = std::collections::HashMap::<String, Option<ColumnId>>::new();
         for r in rows {
             let id: String = r.get("item_id");
@@ -69,9 +68,7 @@ impl SnapshotStore for PgSnapshotStore {
         let mut tx = self.pool.begin().await?;
         // 1. Publish every event in the same tx (spec §8.3 atomicity)
         for (_k, ev) in events {
-            self.publisher
-                .send_in_tx(&mut tx, ev.clone(), None)
-                .await?;
+            self.publisher.send_in_tx(&mut tx, ev.clone(), None).await?;
         }
         // 2. UPSERT every snapshot row
         for snap in page {

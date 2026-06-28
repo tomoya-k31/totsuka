@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub mod project;
 pub mod issues;
+pub mod project;
 pub mod prs;
 pub mod releases;
 

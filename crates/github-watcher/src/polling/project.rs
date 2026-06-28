@@ -5,9 +5,9 @@ use crate::cursor::{get, set, CursorKey};
 use crate::error::WatcherError;
 use crate::gh_client::GhClient;
 use crate::snapshot::{ItemSnapshot, SnapshotStore};
+use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
-use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use totsuka_core::{event_key_gh_status, Clock, ColumnId, ColumnMap, DomainEvent, Source};
 use totsuka_telemetry::HealthState;
@@ -18,6 +18,7 @@ pub struct ProjectLoopConfig {
     pub poll_interval: Duration,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_project_loop(
     pool: PgPool,
     client: Arc<dyn GhClient>,
@@ -55,7 +56,9 @@ async fn run_one_pass(
     cfg: &ProjectLoopConfig,
 ) -> Result<(), WatcherError> {
     let mut after: Option<String> = get(pool, &CursorKey::project_items()).await?;
-    if after.as_deref() == Some("") { after = None; }
+    if after.as_deref() == Some("") {
+        after = None;
+    }
     loop {
         let page = client
             .project_items_page(&cfg.project_node_id, after.as_deref(), cfg.page_size)
@@ -71,7 +74,10 @@ async fn run_one_pass(
                     None => return Err(WatcherError::UnknownColumn(display.clone())),
                 },
             };
-            let content_ref = it.repo.as_ref().zip(it.content_number)
+            let content_ref = it
+                .repo
+                .as_ref()
+                .zip(it.content_number)
                 .map(|(r, n)| format!("{r}#{n}"));
             snapshots.push(ItemSnapshot {
                 item_id: it.id.clone(),
@@ -79,7 +85,9 @@ async fn run_one_pass(
                 content_ref,
                 closed_at: it.closed_at,
             });
-            if let Some(r) = &it.repo { item_repos.push(r.clone()); }
+            if let Some(r) = &it.repo {
+                item_repos.push(r.clone());
+            }
         }
         // 2. Diff against current snapshot
         let diffs = store.diff_page(&snapshots).await?;
@@ -104,11 +112,17 @@ async fn run_one_pass(
             events.push((key, ev));
         }
         // 4. Atomic commit (events + UPSERTs + cursor in one tx)
-        store.commit_page(&snapshots, &events, page.end_cursor.as_deref()).await?;
+        store
+            .commit_page(&snapshots, &events, page.end_cursor.as_deref())
+            .await?;
         // 5. RepoTracker bookkeeping (after commit — we don't want to leak repos on failure)
-        for r in item_repos { tracker.insert(r).await; }
+        for r in item_repos {
+            tracker.insert(r).await;
+        }
 
-        if !page.has_next { break; }
+        if !page.has_next {
+            break;
+        }
         after = page.end_cursor;
     }
     // Reset cursor so next tick walks from page 1 (ProjectsV2 has no since;

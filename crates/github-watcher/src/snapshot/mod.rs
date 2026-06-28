@@ -36,7 +36,10 @@ pub trait SnapshotStore: Send + Sync + 'static {
     async fn commit_page(
         &self,
         page: &[ItemSnapshot],
-        events: &[(String /* event_key, currently unused but kept for trace */, DomainEvent)],
+        events: &[(
+            String, /* event_key, currently unused but kept for trace */
+            DomainEvent,
+        )],
         next_cursor: Option<&str>,
     ) -> Result<(), WatcherError>;
 }

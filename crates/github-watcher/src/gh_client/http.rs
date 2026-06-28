@@ -1,6 +1,6 @@
 use super::graphql::{PROJECT_ITEMS_QUERY, PROJECT_NODE_QUERY_ORG, PROJECT_NODE_QUERY_USER};
 use super::{
-    GhClient, IssueUpdate, ProjectItem, ProjectItemPage, PrUpdate, ReleaseUpdate, RepoSlug,
+    GhClient, IssueUpdate, PrUpdate, ProjectItem, ProjectItemPage, ReleaseUpdate, RepoSlug,
 };
 use crate::error::WatcherError;
 use async_trait::async_trait;
@@ -113,10 +113,9 @@ impl GhClient for HttpGhClient {
         let items_node = v
             .pointer("/data/node/items")
             .ok_or_else(|| WatcherError::GraphQl("missing data.node.items".into()))?;
-        let pi: PageInfoPart = serde_json::from_value(
-            items_node.get("pageInfo").cloned().unwrap_or(Value::Null),
-        )
-        .map_err(|e| WatcherError::GraphQl(format!("pageInfo: {e}")))?;
+        let pi: PageInfoPart =
+            serde_json::from_value(items_node.get("pageInfo").cloned().unwrap_or(Value::Null))
+                .map_err(|e| WatcherError::GraphQl(format!("pageInfo: {e}")))?;
         let nodes = items_node
             .get("nodes")
             .and_then(|n| n.as_array())

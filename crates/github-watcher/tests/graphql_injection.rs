@@ -54,7 +54,10 @@ async fn malicious_project_id_lands_in_variables_not_query() {
     let raw = server.await.unwrap();
     let body: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     let q = body["query"].as_str().expect("query field present");
-    assert!(!q.contains("fakeField"), "query string was contaminated: {q}");
+    assert!(
+        !q.contains("fakeField"),
+        "query string was contaminated: {q}"
+    );
     assert!(!q.contains(evil), "query string echoed evil verbatim: {q}");
     assert_eq!(body["variables"]["projectId"], evil);
     assert_eq!(body["variables"]["after"], evil);

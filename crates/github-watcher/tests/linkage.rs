@@ -30,8 +30,14 @@ fn trailer_no_match_returns_none() {
 
 #[tokio::test]
 async fn resolve_prefers_trailer_on_mismatch() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else { return };
-    let pool = PgPoolOptions::new().max_connections(2).connect(&url).await.unwrap();
+    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
     // seed two tasks
     sqlx::query("INSERT INTO tasks (id, task_id_short, repo, current_column) VALUES ($1, $2, 'acme/r', 'design') ON CONFLICT DO NOTHING")
         .bind("PVTI_full_xxxxxxxxxxxx").bind("xxxxxxxxxxxx")
@@ -44,6 +50,8 @@ async fn resolve_prefers_trailer_on_mismatch() {
         &pool,
         "totsuka/xxxxxxxxxxxx/implv",
         Some("Totsuka-Task: PVTI_full_yyyyyyyyyyyy\n"),
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
     assert_eq!(r.as_deref(), Some("PVTI_full_yyyyyyyyyyyy"));
 }

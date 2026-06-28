@@ -17,6 +17,7 @@ pub struct PrsLoopConfig {
     pub catchup_window: chrono::Duration,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_prs_loop(
     pool: PgPool,
     publisher: Arc<Publisher>,
@@ -92,9 +93,7 @@ async fn publish_pr_merged(
     let event_key = format!(
         "gh:pr:{}:{}:pr_merged",
         pr.node_id,
-        pr.merged_at
-            .unwrap_or(pr.updated_at)
-            .timestamp_millis(),
+        pr.merged_at.unwrap_or(pr.updated_at).timestamp_millis(),
     );
     let payload = serde_json::json!({
         "item_id":    task_id.clone().unwrap_or_default(),

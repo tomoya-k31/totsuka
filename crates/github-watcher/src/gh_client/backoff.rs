@@ -63,7 +63,7 @@ where
             Ok(v) => return Ok(v),
             Err(WatcherError::RateLimited { reset_at }) => {
                 let now = clock.now();
-                let wait = (reset_at - now).num_seconds().max(0).min(30) as u64;
+                let wait = (reset_at - now).num_seconds().clamp(0, 30) as u64;
                 tracing::warn!(reset_at=%reset_at, "rate-limited; sleeping {wait}s");
                 tokio::time::sleep(Duration::from_secs(wait)).await;
                 if attempt >= max_attempts {
@@ -81,7 +81,8 @@ where
 }
 
 fn is_retryable(e: &WatcherError) -> bool {
-    matches!(e, WatcherError::Http(_)) || matches!(e, WatcherError::Internal(s) if s.starts_with("REST 5"))
+    matches!(e, WatcherError::Http(_))
+        || matches!(e, WatcherError::Internal(s) if s.starts_with("REST 5"))
 }
 
 fn backoff_secs(attempt: u32) -> u64 {
@@ -101,7 +102,7 @@ mod tests {
     fn classify_rate_limited_403() {
         let mut h = HeaderMap::new();
         h.insert("x-ratelimit-remaining", "0".parse().unwrap());
-        h.insert("x-ratelimit-reset",     "1762000000".parse().unwrap());
+        h.insert("x-ratelimit-reset", "1762000000".parse().unwrap());
         let now = Utc.with_ymd_and_hms(2026, 6, 28, 0, 0, 0).unwrap();
         let e = classify_http(StatusCode::FORBIDDEN, &h, now).unwrap();
         assert!(matches!(e, WatcherError::RateLimited { .. }));

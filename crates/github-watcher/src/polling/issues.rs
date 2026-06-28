@@ -16,6 +16,7 @@ pub struct IssuesLoopConfig {
     pub catchup_window: chrono::Duration,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_issues_loop(
     pool: PgPool,
     publisher: Arc<Publisher>,
@@ -75,11 +76,21 @@ async fn poll_repo(
             event_type: "github.issue_updated".into(),
             payload,
         };
-        publisher.send(pool, ev, None).await.map_err(WatcherError::Bus)?;
-        if u.updated_at > high_water { high_water = u.updated_at; }
+        publisher
+            .send(pool, ev, None)
+            .await
+            .map_err(WatcherError::Bus)?;
+        if u.updated_at > high_water {
+            high_water = u.updated_at;
+        }
     }
     if high_water > since {
-        set(pool, &key, &high_water.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)).await?;
+        set(
+            pool,
+            &key,
+            &high_water.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        )
+        .await?;
     }
     Ok(())
 }

@@ -8,34 +8,44 @@ use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use totsuka_bus::{Consumer, Publisher, create_queue};
+use totsuka_bus::{create_queue, Consumer, Publisher};
 use totsuka_core::{ColumnId, ColumnMap, SystemClock};
 use totsuka_telemetry::HealthState;
 
 fn map() -> ColumnMap {
     use std::collections::HashMap;
     let mut m = HashMap::new();
-    m.insert(ColumnId::Inbox,           "📥 Inbox".into());
-    m.insert(ColumnId::Ready,           "📋 Ready".into());
-    m.insert(ColumnId::Design,          "🤖 調査・設計".into());
-    m.insert(ColumnId::DesignReview,    "🚧 設計レビュー".into());
-    m.insert(ColumnId::ImplVerify,      "🤖 実装・受入検証".into());
-    m.insert(ColumnId::FinalReview,     "🚧 最終レビュー".into());
+    m.insert(ColumnId::Inbox, "📥 Inbox".into());
+    m.insert(ColumnId::Ready, "📋 Ready".into());
+    m.insert(ColumnId::Design, "🤖 調査・設計".into());
+    m.insert(ColumnId::DesignReview, "🚧 設計レビュー".into());
+    m.insert(ColumnId::ImplVerify, "🤖 実装・受入検証".into());
+    m.insert(ColumnId::FinalReview, "🚧 最終レビュー".into());
     m.insert(ColumnId::AwaitingRelease, "🚀 リリース待ち".into());
-    m.insert(ColumnId::Released,        "🏁 完了".into());
+    m.insert(ColumnId::Released, "🏁 完了".into());
     ColumnMap::try_new(m).unwrap()
 }
 
 #[tokio::test]
 async fn project_loop_publishes_status_changed_for_every_diff() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else { return };
-    let pool = PgPoolOptions::new().max_connections(4).connect(&url).await.unwrap();
+    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&url)
+        .await
+        .unwrap();
 
     // Clean slate
     sqlx::query("DELETE FROM gh_item_status WHERE item_id LIKE 'E2E_%'")
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("DELETE FROM catchup_cursor WHERE source='github' AND scope='projectv2_items'")
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let queue = format!("ghw_e2e_{}", uuid::Uuid::new_v4().simple());
     create_queue(&pool, &queue).await.unwrap();
@@ -65,15 +75,13 @@ async fn project_loop_publishes_status_changed_for_every_diff() {
             has_next: true,
         },
         ProjectItemPage {
-            items: vec![
-                ProjectItem {
-                    id: "E2E_C".into(),
-                    status_display: Some("🏁 完了".into()),
-                    repo: Some(r1.clone()),
-                    content_number: Some(3),
-                    closed_at: Some(Utc::now()),
-                },
-            ],
+            items: vec![ProjectItem {
+                id: "E2E_C".into(),
+                status_display: Some("🏁 完了".into()),
+                repo: Some(r1.clone()),
+                content_number: Some(3),
+                closed_at: Some(Utc::now()),
+            }],
             end_cursor: Some("p2".into()),
             has_next: false,
         },
@@ -114,17 +122,23 @@ async fn project_loop_publishes_status_changed_for_every_diff() {
     // Snapshot rows present
     let a: (Option<String>,) =
         sqlx::query_as("SELECT status FROM gh_item_status WHERE item_id='E2E_A'")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(a.0.as_deref(), Some("ready"));
 
     let b: (Option<String>,) =
         sqlx::query_as("SELECT status FROM gh_item_status WHERE item_id='E2E_B'")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(b.0.as_deref(), Some("design"));
 
     let c: (Option<String>,) =
         sqlx::query_as("SELECT status FROM gh_item_status WHERE item_id='E2E_C'")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(c.0.as_deref(), Some("released"));
 
     // Three envelopes published

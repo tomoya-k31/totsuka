@@ -8,7 +8,7 @@ use totsuka_telemetry::HealthState;
 
 pub async fn probe_db(pool: &PgPool, health: &HealthState) {
     match sqlx::query("SELECT 1").execute(pool).await {
-        Ok(_)  => health.set_check("db", "ok").await,
+        Ok(_) => health.set_check("db", "ok").await,
         Err(e) => health.set_check("db", &format!("fail: {e}")).await,
     }
 }
@@ -20,7 +20,7 @@ pub async fn probe_github(
     health: &HealthState,
 ) {
     match client.resolve_project_node_id(owner, number).await {
-        Ok(_)  => health.set_check("github", "ok").await,
+        Ok(_) => health.set_check("github", "ok").await,
         Err(e) => health.set_check("github", &format!("fail: {e}")).await,
     }
 }
