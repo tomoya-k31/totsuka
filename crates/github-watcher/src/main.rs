@@ -38,8 +38,9 @@ async fn main() -> anyhow::Result<()> {
     // 2. DB
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
         format!(
-            "postgres://{}:totsuka@{}:{}/{}",
+            "postgres://{}:{}@{}:{}/{}",
             config.postgres.user,
+            config.postgres.password.expose(),
             config.postgres.host,
             config.postgres.port,
             config.postgres.database,
@@ -103,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
         let clock = clock.clone();
         let health = health.clone();
         let s = shutdown.clone();
-        spawn_loop("issues", &shutdown, async move {
+        spawn_loop("issues", async move {
             run_issues_loop(
                 pool,
                 publisher,
@@ -128,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
         let clock = clock.clone();
         let health = health.clone();
         let s = shutdown.clone();
-        spawn_loop("prs", &shutdown, async move {
+        spawn_loop("prs", async move {
             run_prs_loop(
                 pool,
                 publisher,
@@ -153,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
         let clock = clock.clone();
         let health = health.clone();
         let s = shutdown.clone();
-        spawn_loop("releases", &shutdown, async move {
+        spawn_loop("releases", async move {
             run_releases_loop(
                 pool,
                 publisher,
@@ -200,7 +201,6 @@ async fn main() -> anyhow::Result<()> {
 
 fn spawn_loop<F>(
     name: &'static str,
-    _shutdown: &CancellationToken,
     fut: F,
 ) -> tokio::task::JoinHandle<Result<(), github_watcher::error::WatcherError>>
 where
