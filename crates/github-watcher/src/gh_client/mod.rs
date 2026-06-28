@@ -7,7 +7,10 @@ use crate::error::WatcherError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
+pub mod graphql;
+pub mod http;
 pub mod mock;
+pub use http::HttpGhClient;
 pub use mock::MockGhClient;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
