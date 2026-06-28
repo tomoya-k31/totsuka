@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adapter_client;
+pub mod argv;
 pub mod effect;
 pub mod error;
 pub mod repository;
