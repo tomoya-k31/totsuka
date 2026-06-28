@@ -270,3 +270,82 @@ async fn send_to_unknown_agent_returns_404() {
         .unwrap();
     assert_eq!(res.status(), 404);
 }
+
+#[tokio::test]
+async fn output_returns_revision_and_text() {
+    let (_tmp, app, herdr) = app_with_real_git().await;
+    let spawn_body = serde_json::json!({
+        "task_id": "PVTI_x",
+        "phase": "design",
+        "attempt": 0,
+        "repo": "x/y",
+        "branch": "totsuka/yyyyyyyyyyyy/design",
+        "argv": [],
+        "env": {}
+    });
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(spawn_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let id = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Simulate two "send" updates so revision is > 0.
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/agents/{id}/messages"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"text":"foo"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/agents/{id}/messages"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"text":"bar"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Read snapshot with since_revision=1, expect is_newer=true.
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/agents/{id}/output?since_revision=1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["revision"], 2);
+    assert_eq!(v["text"], "foobar");
+    assert_eq!(v["is_newer"], true);
+    let _ = herdr;
+}
