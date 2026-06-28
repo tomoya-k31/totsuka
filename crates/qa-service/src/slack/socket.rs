@@ -12,6 +12,7 @@ use reqwest::Client;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 use totsuka_core::Secret;
@@ -99,7 +100,13 @@ async fn try_one_connection(
                 let msg = msg.map_err(|e| QaError::WebSocket(format!("recv: {e}")))?;
                 match msg {
                     Message::Text(raw) => {
-                        let env = parse(raw.as_str())?;
+                        let env = match parse(raw.as_str()) {
+                            Ok(e) => e,
+                            Err(e) => {
+                                tracing::debug!(error=%e, "ignoring unrecognised slack envelope");
+                                continue;
+                            }
+                        };
                         match env {
                             SlackEnvelope::Hello => {
                                 tracing::info!("socket-mode hello received");
@@ -115,9 +122,18 @@ async fn try_one_connection(
                                     .await
                                     .map_err(|e| QaError::WebSocket(format!("ack: {e}")))?;
                                 // Drop-oldest semantics: try_send; on full, log.
+                                // Closed channel is an error; full channel drops oldest event.
                                 if let Err(e) = on_event.try_send(event) {
-                                    tracing::warn!(error=%e, channel="slack_inbound",
-                                        "channel full; dropping event");
+                                    match e {
+                                        TrySendError::Full(_) => {
+                                            tracing::warn!(channel="slack_inbound", "channel full; dropping event");
+                                        }
+                                        TrySendError::Closed(_) => {
+                                            return Err(crate::error::QaError::Internal(
+                                                "slack_inbound receiver closed".into(),
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                         }
