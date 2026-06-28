@@ -5,6 +5,7 @@ use totsuka_config::Config;
 use totsuka_core::Clock;
 
 pub mod error;
+pub mod schema_check;
 
 pub struct WatcherApp {
     #[allow(dead_code)]
