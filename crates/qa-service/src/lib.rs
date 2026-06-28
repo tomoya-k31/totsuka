@@ -11,6 +11,7 @@ pub mod error;
 pub mod gh_inbox;
 pub mod mode;
 pub mod question_filter;
+pub mod reaction;
 pub mod repo_select;
 pub mod schema_check;
 pub mod slack;
