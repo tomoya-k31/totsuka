@@ -69,12 +69,15 @@ pub async fn gc_tick(state: &AppState) -> GcReport {
                 continue;
             };
             // Branch shape: totsuka/<task_id_short>/<phase_short>
-            let task_id_short = branch
+            let Some(task_id_short) = branch
                 .strip_prefix("totsuka/")
-                .and_then(|rest| rest.split('/').next());
-            let is_live = task_id_short
-                .map(|s| live_task_ids.iter().any(|t| t.ends_with(s)))
-                .unwrap_or(false);
+                .and_then(|rest| rest.split('/').next())
+            else {
+                // Non-totsuka branch (main, hotfix/*, etc.) — always keep
+                report.kept += 1;
+                continue;
+            };
+            let is_live = live_task_ids.iter().any(|t| t.ends_with(task_id_short));
             if is_live {
                 report.kept += 1;
             } else if let Err(e) = state.worktrees.remove(&entry, branch).await {

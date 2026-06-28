@@ -446,8 +446,10 @@ async fn gc_removes_orphan_worktree() {
     let (_tmp, app, herdr, state) = app_with_real_git_and_state().await;
 
     // Spawn one agent (worktree + live in herdr).
+    // task_id must end with the branch's task_id_short ("keepbranchaaa") so
+    // the ends_with liveness check correctly preserves this worktree.
     let body = serde_json::json!({
-        "task_id": "PVTI_keep",
+        "task_id": "PVTI_keepbranchaaa",
         "phase": "design",
         "attempt": 0,
         "repo": "x/y",
@@ -455,7 +457,7 @@ async fn gc_removes_orphan_worktree() {
         "argv": [],
         "env": {}
     });
-    let _ = app
+    let res = app
         .clone()
         .oneshot(
             Request::builder()
@@ -467,6 +469,13 @@ async fn gc_removes_orphan_worktree() {
         )
         .await
         .unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let keep_path = std::path::PathBuf::from(v["worktree_path"].as_str().unwrap());
+    assert!(keep_path.exists());
+
     let entry = state
         .repos
         .resolve(&RepoKey::new("x/y".into()))
@@ -481,8 +490,22 @@ async fn gc_removes_orphan_worktree() {
 
     // Run a GC tick.
     let report = gc_tick(&state).await;
-    assert!(report.removed >= 1, "no orphan removed: {report:?}");
-    assert!(!orphan_path.exists());
+    assert_eq!(
+        report.removed, 1,
+        "expected exactly one orphan removed: {report:?}"
+    );
+    assert!(
+        report.kept >= 1,
+        "expected at least one worktree kept: {report:?}"
+    );
+    assert!(
+        !orphan_path.exists(),
+        "orphan worktree should have been removed"
+    );
+    assert!(
+        keep_path.exists(),
+        "live worktree should have been preserved"
+    );
 }
 
 #[tokio::test]
