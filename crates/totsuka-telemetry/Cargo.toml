@@ -21,6 +21,7 @@ serde_json     = { workspace = true }
 reqwest        = { workspace = true }
 chrono         = { workspace = true }
 thiserror      = { workspace = true }
+async-trait    = "0.1"
 uuid           = { workspace = true }
 
 [dev-dependencies]
