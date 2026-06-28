@@ -6,8 +6,8 @@ use totsuka_core::SystemClock;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config_path = std::env::var("TOTSUKA_CONFIG")
-        .unwrap_or_else(|_| "~/.config/totsuka/config.toml".into());
+    let config_path =
+        std::env::var("TOTSUKA_CONFIG").unwrap_or_else(|_| "~/.config/totsuka/config.toml".into());
     let config = Arc::new(Config::load(&config_path)?);
 
     // Tracing init will be wired in Task 17; bare subscriber for now so logs
