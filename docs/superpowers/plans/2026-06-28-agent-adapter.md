@@ -1741,15 +1741,19 @@ pub struct AppState {
 
 /// Build the complete adapter router. Telemetry routes (healthz / readyz /
 /// metrics + request_id middleware) are nested first; `/v1/*` routes are
-/// added by subsequent tasks via `with_v1_routes`.
+/// added by subsequent tasks via `with_v1_routes`. The request_id middleware
+/// is also applied at the top level so `/v1/*` gets the same propagation
+/// (spec §11.6); foundation's inner layer on healthz/readyz reuses the
+/// header the outer one set, so double-application is idempotent.
 pub fn router(state: AppState) -> Router {
-    // Foundation router already layers request_id + healthz/readyz/metrics.
     let health = totsuka_telemetry::http::router(state.health.clone());
-    let v1 = Router::new();
-    let v1 = with_v1_routes(v1, state.clone());
+    let v1 = with_v1_routes(Router::new(), state.clone());
     Router::new()
         .merge(health)
         .nest("/v1", v1)
+        .layer(axum::middleware::from_fn(
+            totsuka_telemetry::request_id::middleware,
+        ))
 }
 
 /// Tasks 11–15 each add their handler here. Kept as a single fn so reviewers
