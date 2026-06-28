@@ -1,0 +1,209 @@
+# ---- 全体 ----
+[totsuka]
+log_level   = "info"
+state_dir   = "~/.local/state/totsuka"
+data_dir    = "~/.local/share/totsuka"
+timezone    = "Asia/Tokyo"           # 表示・通知用 (storage は UTC 統一、§11.5)
+
+# ---- データ保持 (詳細 §11.2) ----
+[retention]
+events_weeks    = 4
+snapshot_days   = 30
+logs_max_mb     = 1024
+log_file_max_mb = 50
+
+# ---- telemetry (詳細 §11.9) ----
+[telemetry]
+metrics_enabled    = true
+otlp_endpoint      = ""              # 空文字で trace export 無効
+trace_sample_ratio = 0.1
+
+# ---- secrets メタ (詳細 §11.7) ----
+[secrets]
+rotation_warn_days = 30
+
+# ---- supervisor ----
+[supervisor]
+ready_timeout_secs    = 30
+shutdown_grace_secs   = 15
+shutdown_kill_secs    = 5
+recreate_on_image_mismatch = false
+
+[supervisor.heartbeat]
+healthz_interval_secs   = 5
+readyz_interval_secs    = 30
+pgmq_interval_secs      = 30
+unhealthy_threshold     = 3
+degraded_threshold      = 2
+restart_policy          = "on-dead-only"   # on-dead-only | on-unhealthy | never
+restart_backoff_secs    = [5, 15, 60]
+restart_max_attempts    = 5
+notify_on_degraded      = false
+
+# ---- postgres コンテナ ----
+[postgres]
+image       = "ghcr.io/pgmq/pg18-pgmq:v1.10.0"
+container   = "totsuka-pgmq"
+host        = "127.0.0.1"
+port        = 5432
+database    = "totsuka"
+user        = "postgres"
+volume      = "totsuka_pgmq_data"
+compose_file = "deploy/docker-compose.yml"
+
+# ---- bus (pgmq) ----
+[bus]
+queue_name        = "totsuka_events"
+visibility_secs   = 30
+batch_size        = 16
+poll_interval_ms  = 200
+
+# ---- agent-adapter ----
+[agent_adapter]
+uds_path          = "${totsuka.state_dir}/sock/adapter.sock"
+tcp_bind          = ""                 # 空文字で TCP 無効 (本番)。dev は "127.0.0.1:7801" 等
+herdr_socket      = "~/.config/herdr/herdr.sock"
+node_capacity     = 8
+repos_root        = "${env:HOME}/work/repos"
+auto_clone        = true
+
+# worktree GC (詳細 §11.16)
+worktree_failed_ttl_hours          = 72
+worktree_orphan_scan_interval_secs = 3600
+
+[agent_adapter.vars]
+work = "${env:HOME}/work"
+fast = "/Volumes/fast-ssd"
+
+[agent_adapter.repos."gmo-media/hakoniwa"]
+description     = "Web UI (Next.js / TypeScript) for product X"   # qa-service LLM 分類用
+worktree_subdir = ".worktree"
+
+[agent_adapter.repos."gmo-media/vanduit"]
+description     = "Backend API (Rust / axum) for product X"
+repo_path       = "${work}/dev/vanduit"
+worktree_path   = "${fast}/worktrees/vanduit"
+
+# ---- orchestrator ----
+[orchestrator]
+uds_path                  = "${totsuka.state_dir}/sock/orchestrator.sock"
+wip_global                = 3
+phase_timeout_default_secs = 1800
+phase_timeout             = { impl_verify = 7200 }
+retry_max                 = 1
+stuck_threshold_secs      = 600
+adapter_uds               = "${agent_adapter.uds_path}"
+
+[orchestrator.claude_argv]
+global = ["--dangerously-skip-permissions"]
+[orchestrator.claude_argv.per_repo."gmo-media/hakoniwa"]
+extra  = ["--model", "sonnet"]
+[orchestrator.claude_argv.per_phase.impl_verify]
+extra  = ["--model", "opus"]
+
+# ---- GitHub (watcher / orchestrator / qa-service が共通参照、単一 Project 前提) ----
+[github]
+project_owner   = "gmo-media"             # ProjectsV2 オーナー (org or user)
+project_number  = 42                      # ProjectsV2 の番号
+status_field    = "Status"                # ProjectsV2 single-select フィールド名
+
+[github.columns]                          # 必須。totsuka-core::ColumnId 全 8 値を網羅 (詳細 §11.4)
+inbox             = "📥 Inbox"
+ready             = "📋 Ready"
+design            = "🤖 調査・設計"
+design_review     = "🚧 設計レビュー"
+impl_verify       = "🤖 実装・受入検証"
+final_review      = "🚧 最終レビュー"
+awaiting_release  = "🚀 リリース待ち"
+released          = "🏁 完了"
+
+# ---- github-watcher (polling-only。Project 参照は [github]) ----
+[github_watcher]
+bind                       = "127.0.0.1:7802"   # healthz/readyz 用のみ
+project_poll_interval_secs = 20                  # ProjectsV2 status snapshot diff の周期
+issues_poll_interval_secs  = 60                  # issues since-pull の周期
+catchup_window_hours       = 24                  # 起動時 catch-up が遡る上限
+graphql_page_size          = 100                 # ProjectsV2 items の 1 ページ取得数
+
+# ---- qa-service ----
+[qa_service]
+uds_path              = "${totsuka.state_dir}/sock/qa-service.sock"
+allowed_user_ids      = ["U12345", "U67890"]
+catchup_channels      = ["C111", "C222"]
+reaction_trigger      = "memo"
+default_mode          = "delegated"      # auto | delegated
+adapter_uds           = "${agent_adapter.uds_path}"
+repo_select_mode      = "llm_classify"   # llm_classify (既定) | channel_map (将来)
+
+[qa_service.classifier]                              # 詳細 §8.4
+# provider: anthropic | openai | openrouter | litellm | openai_compatible
+# 必須対応 4 つ: anthropic / openai / openrouter / litellm
+# openai_compatible は将来用 catch-all (Azure OpenAI / Groq / Together / Ollama 等)
+provider              = "anthropic"
+model                 = "claude-haiku-4-5-20251001"
+
+# api_base: 空文字 ("") なら provider 既定を使用。litellm / openai_compatible は必須指定
+#   anthropic   既定 → "https://api.anthropic.com"
+#   openai      既定 → "https://api.openai.com/v1"
+#   openrouter  既定 → "https://openrouter.ai/api/v1"
+#   litellm     既定 → なし (必須指定、例: "http://localhost:4000")
+#   openai_compatible 既定 → なし (必須指定)
+api_base              = ""
+
+max_tokens            = 256
+confidence_threshold  = 0.70                          # top-1 がこの未満なら fallback
+top_candidates        = 3                             # 候補上位 N
+on_low_confidence     = "delegated_reaction"          # delegated_reaction | refuse | use_top1
+include_thread_context = true                         # スレッド継続発言は親メッセージも分類入力にする
+request_timeout_secs  = 15
+
+# api key は secrets.toml の [qa_service.classifier].api_key を最優先、
+# 次に provider 別 env (下記) を fallback
+#   anthropic   → ANTHROPIC_API_KEY
+#   openai      → OPENAI_API_KEY
+#   openrouter  → OPENROUTER_API_KEY
+#   litellm     → LITELLM_API_KEY
+#   openai_compatible → 設定ファイル必須 (env fallback なし)
+
+[qa_service.answer]                                  # 詳細 §8.4 Slack 回答フロー
+sentinel               = "<<TOTSUKA_DONE>>"          # Claude が回答末尾に出力するマーカー
+answer_open_tag        = "<answer>"
+answer_close_tag       = "</answer>"
+poll_interval_ms       = 1500                         # pane.read のポーリング間隔
+stable_revision_secs   = 8                            # sentinel が来なくても revision がこの秒数停滞したら done 扱い
+answer_timeout_secs    = 180                          # 全体打ち切り (この時刻までに sentinel/停滞検知できなければ truncate して送信)
+pane_idle_ttl_secs     = 1800                         # スレッド最終活動からこの秒数経過で pane.close
+max_concurrent_answers = 4                            # 同時並行で動かす回答 task の上限
+
+# ---- notifications (§13 詳細、O17 の写像はコード、宛先のみ設定) ----
+[notifications]
+config_error_notify   = true             # ConfigError 種別を発火するか
+dedup_default_secs    = 600
+rate_limit_per_min    = 30               # 全 sink 合計の安全上限
+
+[notifications.dedup_ttl_secs]           # 種別→TTL 秒 (0=dedup 無効)。詳細 §13.6
+human_gate1            = 0
+human_gate2            = 0
+task_failed            = 0
+task_stuck             = 3600
+giving_up              = 0
+process_dead           = 0
+process_unhealthy      = 600
+pgmq_dead              = 600
+config_error           = 1800
+secret_rotation_warn   = 86400
+writeback_conflict     = 3600
+argv_secret_violation  = 0
+qa_spawn_failed        = 300
+qa_answer_timeout      = 600
+worktree_gc_alert      = 3600
+
+[notifications.slack]
+webhook_url            = ""              # 空文字で sink 無効
+default_channel        = "#totsuka"
+channel_overrides      = {}              # 例: { human_gate1 = "#review" }
+bucket_capacity        = 10
+bucket_refill_per_min  = 5
+
+[notifications.github]
+enabled                = false           # 将来用

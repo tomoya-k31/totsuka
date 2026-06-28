@@ -1,0 +1,24 @@
+services:
+  pgmq:
+    image: ghcr.io/pgmq/pg18-pgmq:v1.11.1
+    container_name: totsuka-pgmq
+    user: "0:0"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: totsuka
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - totsuka_pgmq_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d totsuka"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: "no"
+
+volumes:
+  totsuka_pgmq_data:
+    name: totsuka_pgmq_data

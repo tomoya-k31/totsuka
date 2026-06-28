@@ -31,3 +31,10 @@ target
 # Local mise overrides
 mise.local.toml
 .mise.local.toml
+
+# Rust
+target/
+**/*.rs.bk
+.sqlx/
+# runtime state (XDG paths are outside repo)
+# Cargo.lock is tracked (workspace with bins; CI uses --locked)

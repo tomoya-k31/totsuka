@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/totsuka-core",
+    "crates/totsuka-config",
+    "crates/totsuka-telemetry",
+    "crates/totsuka-bus",
+    "crates/totsuka-foundation-e2e",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+repository = "https://github.com/tomoya-k31/totsuka"
+
+[workspace.dependencies]
+# async runtime
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "fs", "process"] }
+# error
+thiserror = "1.0"
+anyhow = "1.0"
+# serde
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+# logging / metrics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+# http
+axum = { version = "0.7", features = ["macros"] }
+hyper = { version = "1.4", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
+# db
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "json", "chrono", "uuid", "migrate"] }
+# time
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+chrono-tz = "0.10"
+# misc
+uuid = { version = "1.10", features = ["v4", "serde"] }
+regex = "1.11"
+async-trait = "0.1"
+
+[profile.release]
+panic = "abort"
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+debug = 1

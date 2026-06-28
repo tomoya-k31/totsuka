@@ -1,0 +1,21 @@
+[package]
+name = "totsuka-bus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+totsuka-core   = { path = "../totsuka-core", version = "0.1.0" }
+totsuka-config = { path = "../totsuka-config", version = "0.1.0" }
+sqlx           = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+tokio          = { workspace = true }
+chrono         = { workspace = true }
+thiserror      = { workspace = true }
+tracing        = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }
