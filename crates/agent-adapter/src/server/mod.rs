@@ -37,8 +37,14 @@ pub fn router(state: AppState) -> Router {
         ))
 }
 
+pub mod spawn;
+
 /// Tasks 11–15 each add their handler here. Kept as a single fn so reviewers
 /// see all `/v1/*` routes at a glance.
-pub fn with_v1_routes(r: Router, _state: AppState) -> Router {
-    r
+pub fn with_v1_routes(r: Router, state: AppState) -> Router {
+    use axum::routing::post;
+    let stateful = Router::new()
+        .route("/agents", post(spawn::spawn))
+        .with_state(state);
+    r.merge(stateful)
 }
