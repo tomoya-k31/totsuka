@@ -38,6 +38,7 @@ pub fn router(state: AppState) -> Router {
 }
 
 pub mod output;
+pub mod reload;
 pub mod send;
 pub mod spawn;
 pub mod stop;
@@ -51,6 +52,7 @@ pub fn with_v1_routes(r: Router, state: AppState) -> Router {
         .route("/agents/:id", delete(stop::stop))
         .route("/agents/:id/messages", post(send::send))
         .route("/agents/:id/output", get(output::output))
+        .route("/repos/reload", post(reload::reload))
         .with_state(state);
     r.merge(stateful)
 }

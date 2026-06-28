@@ -1,5 +1,5 @@
 use agent_adapter::herdr::mock::MockHerdr;
-use agent_adapter::repo::RepoRegistry;
+use agent_adapter::repo::{RepoKey, RepoRegistry};
 use agent_adapter::server::{router, AppState};
 use agent_adapter::worktree::WorktreeManager;
 use axum::body::Body;
@@ -397,4 +397,34 @@ async fn stop_closes_pane_and_removes_worktree() {
     assert_eq!(res.status(), 204);
     assert_eq!(herdr.count(), 0);
     assert!(!std::path::Path::new(&worktree).exists());
+}
+
+#[tokio::test]
+async fn apply_reload_reports_added_repos() {
+    use agent_adapter::server::reload::apply_reload;
+    let (_tmp, _app, _herdr) = app_with_real_git().await;
+    let repos = std::sync::Arc::new(RepoRegistry::new());
+    repos.reload(&cfg_with_repo("/tmp/a", "/tmp/wta"));
+    let state = AppState {
+        herdr: std::sync::Arc::new(MockHerdr::new()),
+        repos: repos.clone(),
+        worktrees: std::sync::Arc::new(WorktreeManager::new()),
+        clock: std::sync::Arc::new(totsuka_core::SystemClock),
+        health: totsuka_telemetry::HealthState::new(),
+    };
+
+    let mut new_cfg = cfg_with_repo("/tmp/a", "/tmp/wta");
+    new_cfg.repos.insert(
+        "x/b".into(),
+        totsuka_config::schema::RepoSection {
+            description: "B".into(),
+            repo_path: None,
+            worktree_subdir: Some(".w".into()),
+            worktree_path: None,
+            default_branch: None,
+        },
+    );
+    let report = apply_reload(&state, &new_cfg);
+    assert_eq!(report.added, vec![RepoKey::new("x/b".into())]);
+    assert!(report.removed.is_empty());
 }
