@@ -7,6 +7,7 @@ use totsuka_core::Clock;
 pub mod adapter_client;
 pub mod classifier;
 pub mod error;
+pub mod repo_select;
 pub mod schema_check;
 pub mod thread_map;
 
