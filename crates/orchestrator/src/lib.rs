@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod error;
+
 use std::sync::Arc;
 use totsuka_config::Config;
 use totsuka_core::Clock;
