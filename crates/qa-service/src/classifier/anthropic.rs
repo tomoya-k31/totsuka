@@ -2,7 +2,9 @@
 //! the response is always structured JSON matching ClassifyResponse.top_candidates.
 
 use super::{
-    prompt::build_prompt, schema::{ClassifyRequest, ClassifyResponse, RepoVerdict}, Classifier,
+    prompt::build_prompt,
+    schema::{ClassifyRequest, ClassifyResponse, RepoVerdict},
+    Classifier,
 };
 use crate::error::QaError;
 use async_trait::async_trait;
@@ -30,8 +32,8 @@ impl AnthropicClassifier {
         request_timeout: Duration,
         override_endpoint: Option<String>,
     ) -> Self {
-        let endpoint = override_endpoint
-            .unwrap_or_else(|| "https://api.anthropic.com/v1/messages".into());
+        let endpoint =
+            override_endpoint.unwrap_or_else(|| "https://api.anthropic.com/v1/messages".into());
         Self {
             client: Client::builder()
                 .user_agent("totsuka-qa-service")
@@ -76,8 +78,12 @@ impl AnthropicClassifier {
 
 #[async_trait]
 impl Classifier for AnthropicClassifier {
-    fn provider(&self) -> &str { "anthropic" }
-    fn model(&self) -> &str { &self.model }
+    fn provider(&self) -> &str {
+        "anthropic"
+    }
+    fn model(&self) -> &str {
+        &self.model
+    }
 
     async fn classify(&self, req: ClassifyRequest) -> Result<ClassifyResponse, QaError> {
         let (system, user) = build_prompt(&req, self.top_n);
@@ -105,17 +111,18 @@ impl Classifier for AnthropicClassifier {
         if !status.is_success() {
             return Err(QaError::Classifier(format!("anthropic {status}: {v}")));
         }
-        let content = v["content"].as_array().ok_or_else(|| {
-            QaError::Classifier(format!("anthropic: missing content array: {v}"))
-        })?;
+        let content = v["content"]
+            .as_array()
+            .ok_or_else(|| QaError::Classifier(format!("anthropic: missing content array: {v}")))?;
         let tool_input = content
             .iter()
             .find(|c| c["type"] == "tool_use")
             .and_then(|c| c.get("input"))
             .cloned()
             .ok_or_else(|| QaError::Classifier(format!("anthropic: no tool_use block: {v}")))?;
-        let verdicts: Vec<RepoVerdict> = serde_json::from_value(tool_input["top_candidates"].clone())
-            .map_err(|e| QaError::Classifier(format!("anthropic tool_use parse: {e}")))?;
+        let verdicts: Vec<RepoVerdict> =
+            serde_json::from_value(tool_input["top_candidates"].clone())
+                .map_err(|e| QaError::Classifier(format!("anthropic tool_use parse: {e}")))?;
         Ok(ClassifyResponse {
             top_candidates: verdicts,
             provider: self.provider().into(),

@@ -36,8 +36,14 @@ impl HttpSlackClient {
         let resp = self
             .client
             .post(&url)
-            .header("authorization", format!("Bearer {}", self.bot_token.expose()))
-            .header("content-type", "application/x-www-form-urlencoded; charset=utf-8")
+            .header(
+                "authorization",
+                format!("Bearer {}", self.bot_token.expose()),
+            )
+            .header(
+                "content-type",
+                "application/x-www-form-urlencoded; charset=utf-8",
+            )
             .form(params)
             .send()
             .await?;
@@ -108,7 +114,10 @@ impl SlackClient for HttpSlackClient {
 
     async fn replies(&self, channel: &str, thread_ts: &str) -> Result<Vec<SlackMessage>, QaError> {
         let v = self
-            .post_form("conversations.replies", &[("channel", channel), ("ts", thread_ts)])
+            .post_form(
+                "conversations.replies",
+                &[("channel", channel), ("ts", thread_ts)],
+            )
             .await?;
         parse_messages(channel, &v)
     }

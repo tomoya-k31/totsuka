@@ -21,7 +21,9 @@ pub struct ThreadMapRepo {
 }
 
 impl ThreadMapRepo {
-    pub fn new(pool: PgPool, clock: Arc<dyn Clock>) -> Self { Self { pool, clock } }
+    pub fn new(pool: PgPool, clock: Arc<dyn Clock>) -> Self {
+        Self { pool, clock }
+    }
 
     pub async fn get(&self, thread_ts: &str) -> Result<Option<ThreadMapping>, QaError> {
         let row = sqlx::query(
@@ -61,17 +63,18 @@ impl ThreadMapRepo {
 
     pub async fn touch(&self, thread_ts: &str) -> Result<(), QaError> {
         let now = self.clock.now();
-        sqlx::query(
-            "UPDATE qa_thread_agent SET last_activity_at = $2 WHERE thread_ts = $1",
-        )
-        .bind(thread_ts)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE qa_thread_agent SET last_activity_at = $2 WHERE thread_ts = $1")
+            .bind(thread_ts)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    pub async fn list_idle(&self, idle_before: DateTime<Utc>) -> Result<Vec<ThreadMapping>, QaError> {
+    pub async fn list_idle(
+        &self,
+        idle_before: DateTime<Utc>,
+    ) -> Result<Vec<ThreadMapping>, QaError> {
         let rows = sqlx::query(
             "SELECT thread_ts, terminal_id, repo, last_activity_at, created_at
                FROM qa_thread_agent
@@ -80,13 +83,16 @@ impl ThreadMapRepo {
         .bind(idle_before)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(|r| ThreadMapping {
-            thread_ts: r.get("thread_ts"),
-            terminal_id: r.get("terminal_id"),
-            repo: r.get("repo"),
-            last_activity_at: r.get("last_activity_at"),
-            created_at: r.get("created_at"),
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| ThreadMapping {
+                thread_ts: r.get("thread_ts"),
+                terminal_id: r.get("terminal_id"),
+                repo: r.get("repo"),
+                last_activity_at: r.get("last_activity_at"),
+                created_at: r.get("created_at"),
+            })
+            .collect())
     }
 
     pub async fn delete(&self, thread_ts: &str) -> Result<(), QaError> {
@@ -103,12 +109,15 @@ impl ThreadMapRepo {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(|r| ThreadMapping {
-            thread_ts: r.get("thread_ts"),
-            terminal_id: r.get("terminal_id"),
-            repo: r.get("repo"),
-            last_activity_at: r.get("last_activity_at"),
-            created_at: r.get("created_at"),
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| ThreadMapping {
+                thread_ts: r.get("thread_ts"),
+                terminal_id: r.get("terminal_id"),
+                repo: r.get("repo"),
+                last_activity_at: r.get("last_activity_at"),
+                created_at: r.get("created_at"),
+            })
+            .collect())
     }
 }

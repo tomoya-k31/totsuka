@@ -22,7 +22,10 @@ fn parses_events_api_message() {
       "event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"17500000001.000100"}
     }}"#;
     match parse(raw).unwrap() {
-        SlackEnvelope::EventsApi { envelope_id, event: SlackEvent::Message(m) } => {
+        SlackEnvelope::EventsApi {
+            envelope_id,
+            event: SlackEvent::Message(m),
+        } => {
             assert_eq!(envelope_id, "env-1");
             assert_eq!(m.text, "hi");
             assert_eq!(m.event_id, "Ev0001");
@@ -41,7 +44,16 @@ fn parses_reaction_added() {
                "event_ts":"17500000003.000100"}
     }}"#;
     match parse(raw).unwrap() {
-        SlackEnvelope::EventsApi { event: SlackEvent::ReactionAdded { reaction, channel, item_ts, .. }, .. } => {
+        SlackEnvelope::EventsApi {
+            event:
+                SlackEvent::ReactionAdded {
+                    reaction,
+                    channel,
+                    item_ts,
+                    ..
+                },
+            ..
+        } => {
             assert_eq!(reaction, "memo");
             assert_eq!(channel, "C1");
             assert_eq!(item_ts, "17500000001.000100");

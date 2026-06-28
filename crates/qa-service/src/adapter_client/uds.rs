@@ -15,10 +15,9 @@ pub struct HyperlocalAdapter {
 
 impl HyperlocalAdapter {
     pub fn new(socket: PathBuf) -> Self {
-        let client = hyper_util::client::legacy::Client::builder(
-            hyper_util::rt::TokioExecutor::new(),
-        )
-        .build::<_, http_body_util::Full<Bytes>>(UnixConnector);
+        let client =
+            hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+                .build::<_, http_body_util::Full<Bytes>>(UnixConnector);
         Self { socket, client }
     }
 
@@ -84,7 +83,11 @@ impl AdapterClient for HyperlocalAdapter {
     async fn send(&self, agent_id: &str, text: &str) -> Result<(), QaError> {
         let body = serde_json::json!({ "text": text });
         let _: serde_json::Value = self
-            .call_json(Method::POST, &format!("/v1/agents/{agent_id}/messages"), body)
+            .call_json(
+                Method::POST,
+                &format!("/v1/agents/{agent_id}/messages"),
+                body,
+            )
             .await?;
         Ok(())
     }

@@ -27,8 +27,8 @@ pub fn build_prompt(req: &ClassifyRequest, top_n: u32) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::schema::RepoCandidate;
+    use super::*;
 
     #[test]
     fn prompt_contains_top_n_and_all_repos() {
@@ -36,8 +36,14 @@ mod tests {
             question: "Where is the auth flow?".into(),
             thread_context: Some("Earlier: tried to log in".into()),
             candidates: vec![
-                RepoCandidate { repo: "acme/web".into(), description: "frontend".into() },
-                RepoCandidate { repo: "acme/api".into(), description: "auth backend".into() },
+                RepoCandidate {
+                    repo: "acme/web".into(),
+                    description: "frontend".into(),
+                },
+                RepoCandidate {
+                    repo: "acme/api".into(),
+                    description: "auth backend".into(),
+                },
             ],
         };
         let (sys, user) = build_prompt(&req, 3);
@@ -54,7 +60,10 @@ mod tests {
         let req = ClassifyRequest {
             question: "q".into(),
             thread_context: None,
-            candidates: vec![RepoCandidate { repo: "a/b".into(), description: "x".into() }],
+            candidates: vec![RepoCandidate {
+                repo: "a/b".into(),
+                description: "x".into(),
+            }],
         };
         let (_sys, user) = build_prompt(&req, 1);
         assert!(!user.contains("Thread context:"));

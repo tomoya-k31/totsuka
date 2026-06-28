@@ -15,9 +15,11 @@ impl LowConfidencePolicy {
     pub fn parse(s: &str) -> Result<Self, QaError> {
         match s {
             "delegated_reaction" => Ok(Self::DelegatedReaction),
-            "refuse"             => Ok(Self::Refuse),
-            "use_top1"           => Ok(Self::UseTop1),
-            other => Err(QaError::Internal(format!("unknown on_low_confidence: {other}"))),
+            "refuse" => Ok(Self::Refuse),
+            "use_top1" => Ok(Self::UseTop1),
+            other => Err(QaError::Internal(format!(
+                "unknown on_low_confidence: {other}"
+            ))),
         }
     }
 }
@@ -37,7 +39,10 @@ pub struct RepoSelector {
 
 impl RepoSelector {
     pub fn from_cfg(threshold: f64, on_low: &str) -> Result<Self, QaError> {
-        Ok(Self { threshold, on_low: LowConfidencePolicy::parse(on_low)? })
+        Ok(Self {
+            threshold,
+            on_low: LowConfidencePolicy::parse(on_low)?,
+        })
     }
 
     pub fn decide(&self, response: &ClassifyResponse) -> SelectOutcome {

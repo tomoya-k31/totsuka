@@ -12,9 +12,9 @@ pub async fn check_schema_version(pool: &PgPool) -> Result<i32, QaError> {
     let row: (Option<i32>,) = sqlx::query_as("SELECT max(version) FROM schema_meta")
         .fetch_one(pool)
         .await?;
-    let got = row.0.ok_or_else(|| {
-        QaError::Internal("schema_meta is empty; run sqlx migrate".into())
-    })?;
+    let got = row
+        .0
+        .ok_or_else(|| QaError::Internal("schema_meta is empty; run sqlx migrate".into()))?;
     if got < MIN_SCHEMA_VERSION || got > TARGET_SCHEMA_VERSION {
         return Err(QaError::SchemaOutOfRange {
             got,

@@ -24,8 +24,14 @@ fn answer_cfg() -> AnswerSection {
 
 #[tokio::test]
 async fn existing_thread_mapping_sends_no_spawn() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else { return };
-    let pool = PgPoolOptions::new().max_connections(2).connect(&url).await.unwrap();
+    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
     let clock = Arc::new(SystemClock);
 
     let adapter = Arc::new(MockAdapter::new());
@@ -40,16 +46,22 @@ async fn existing_thread_mapping_sends_no_spawn() {
 
     let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
     sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
-        .bind(&thread_ts).execute(&pool).await.unwrap();
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let now = Utc::now();
-    thread_map.upsert(&ThreadMapping {
-        thread_ts: thread_ts.clone(),
-        terminal_id: "term_existing".into(),
-        repo: "acme/api".into(),
-        last_activity_at: now,
-        created_at: now,
-    }).await.unwrap();
+    thread_map
+        .upsert(&ThreadMapping {
+            thread_ts: thread_ts.clone(),
+            terminal_id: "term_existing".into(),
+            repo: "acme/api".into(),
+            last_activity_at: now,
+            created_at: now,
+        })
+        .await
+        .unwrap();
 
     let ctx = AnswerCtx {
         adapter: adapter.clone() as Arc<dyn AdapterClient>,
@@ -69,7 +81,10 @@ async fn existing_thread_mapping_sends_no_spawn() {
     };
     let _ = handle_answer(&ctx, input).await.unwrap();
 
-    assert!(adapter.expected_spawns().is_empty(), "must NOT spawn on existing mapping");
+    assert!(
+        adapter.expected_spawns().is_empty(),
+        "must NOT spawn on existing mapping"
+    );
     let sends = adapter.expected_sends();
     assert_eq!(sends.len(), 1);
     assert_eq!(sends[0].0, "term_existing");
@@ -80,5 +95,8 @@ async fn existing_thread_mapping_sends_no_spawn() {
     assert_eq!(posts[0].2, "follow-up");
 
     sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
-        .bind(&thread_ts).execute(&pool).await.unwrap();
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
 }

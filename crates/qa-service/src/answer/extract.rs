@@ -54,7 +54,9 @@ fn truncate(s: &str, max_chars: usize) -> String {
     }
     let mut out = String::with_capacity(max_chars * 4);
     for (i, c) in s.chars().enumerate() {
-        if i >= max_chars { break; }
+        if i >= max_chars {
+            break;
+        }
         out.push(c);
     }
     out

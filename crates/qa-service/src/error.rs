@@ -47,13 +47,30 @@ impl QaError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn schema_oor_codes() {
-        assert_eq!(QaError::SchemaOutOfRange { got: 3, min: 6, target: 6 }.code(), "/errors/schema_out_of_range");
+    #[test]
+    fn schema_oor_codes() {
+        assert_eq!(
+            QaError::SchemaOutOfRange {
+                got: 3,
+                min: 6,
+                target: 6
+            }
+            .code(),
+            "/errors/schema_out_of_range"
+        );
     }
-    #[test] fn websocket_codes() {
-        assert_eq!(QaError::WebSocket("drop".into()).code(), "/errors/websocket");
+    #[test]
+    fn websocket_codes() {
+        assert_eq!(
+            QaError::WebSocket("drop".into()).code(),
+            "/errors/websocket"
+        );
     }
-    #[test] fn classifier_codes() {
-        assert_eq!(QaError::Classifier("provider 500".into()).code(), "/errors/classifier");
+    #[test]
+    fn classifier_codes() {
+        assert_eq!(
+            QaError::Classifier("provider 500".into()).code(),
+            "/errors/classifier"
+        );
     }
 }

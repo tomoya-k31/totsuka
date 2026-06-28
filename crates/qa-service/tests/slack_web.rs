@@ -13,8 +13,13 @@ async fn one_shot_stub(payload: &'static str) -> std::net::SocketAddr {
         loop {
             let mut line = String::new();
             let n = reader.read_line(&mut line).await.unwrap();
-            if n == 0 || line == "\r\n" { break; }
-            if let Some(v) = line.strip_prefix("content-length: ").or_else(|| line.strip_prefix("Content-Length: ")) {
+            if n == 0 || line == "\r\n" {
+                break;
+            }
+            if let Some(v) = line
+                .strip_prefix("content-length: ")
+                .or_else(|| line.strip_prefix("Content-Length: "))
+            {
                 cl = v.trim().parse().unwrap_or(0);
             }
         }

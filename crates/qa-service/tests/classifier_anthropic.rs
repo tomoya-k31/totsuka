@@ -25,8 +25,13 @@ async fn anthropic_forces_tool_use_and_parses_top_candidates() {
         loop {
             let mut line = String::new();
             let n = reader.read_line(&mut line).await.unwrap();
-            if n == 0 || line == "\r\n" { break; }
-            if let Some(v) = line.strip_prefix("content-length: ").or_else(|| line.strip_prefix("Content-Length: ")) {
+            if n == 0 || line == "\r\n" {
+                break;
+            }
+            if let Some(v) = line
+                .strip_prefix("content-length: ")
+                .or_else(|| line.strip_prefix("Content-Length: "))
+            {
                 content_length = v.trim().parse().unwrap_or(0);
             }
         }
@@ -45,15 +50,23 @@ async fn anthropic_forces_tool_use_and_parses_top_candidates() {
     let c = AnthropicClassifier::new(
         Secret::new("sk-ant-test".into()),
         "claude-haiku-4-5-20251001".into(),
-        256, 3, Duration::from_secs(15),
+        256,
+        3,
+        Duration::from_secs(15),
         Some(format!("http://{addr}/v1/messages")),
     );
     let req = ClassifyRequest {
         question: "Where does login live?".into(),
         thread_context: None,
         candidates: vec![
-            RepoCandidate { repo: "acme/api".into(), description: "auth backend".into() },
-            RepoCandidate { repo: "acme/web".into(), description: "frontend".into() },
+            RepoCandidate {
+                repo: "acme/api".into(),
+                description: "auth backend".into(),
+            },
+            RepoCandidate {
+                repo: "acme/web".into(),
+                description: "frontend".into(),
+            },
         ],
     };
     let out = c.classify(req).await.unwrap();

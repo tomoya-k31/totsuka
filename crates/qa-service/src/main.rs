@@ -61,8 +61,10 @@ async fn main() -> anyhow::Result<()> {
     let adapter_path = resolve_uds_path(&config.qa_service.adapter_uds);
     let adapter: Arc<dyn AdapterClient> = Arc::new(HyperlocalAdapter::new(adapter_path));
 
-    let slack: Arc<dyn SlackClient> =
-        Arc::new(HttpSlackClient::new(config.qa_service.slack_bot_token.clone(), None));
+    let slack: Arc<dyn SlackClient> = Arc::new(HttpSlackClient::new(
+        config.qa_service.slack_bot_token.clone(),
+        None,
+    ));
 
     let classifier_arc = classifier::build(&config.qa_service.classifier)?;
 
@@ -105,13 +107,13 @@ async fn main() -> anyhow::Result<()> {
 
     let socket_h = {
         let cfg = SocketModeConfig::new(config.qa_service.slack_app_token.clone());
-        let http = Arc::new(reqwest::Client::builder()
-            .user_agent("totsuka-qa-service")
-            .build()?);
+        let http = Arc::new(
+            reqwest::Client::builder()
+                .user_agent("totsuka-qa-service")
+                .build()?,
+        );
         let s = shutdown.clone();
-        tokio::spawn(async move {
-            run_socket_loop(cfg, http, event_tx, s).await
-        })
+        tokio::spawn(async move { run_socket_loop(cfg, http, event_tx, s).await })
     };
 
     let semaphore = Arc::new(Semaphore::new(
@@ -122,7 +124,9 @@ async fn main() -> anyhow::Result<()> {
         let token = config.github_watcher.github_token.clone();
         let owner = config.github.project_owner.clone();
         let number = config.github.project_number;
-        let http = reqwest::Client::builder().user_agent("totsuka-qa-service").build()?;
+        let http = reqwest::Client::builder()
+            .user_agent("totsuka-qa-service")
+            .build()?;
         let body = serde_json::json!({
             "query": "query($login:String!,$number:Int!){user(login:$login){projectV2(number:$number){id}}}",
             "variables": { "login": owner, "number": number },
@@ -264,8 +268,9 @@ async fn main() -> anyhow::Result<()> {
     let listener_h = {
         let uds = resolve_uds_path(&config.qa_service.uds_path);
         let listener = bind_uds(&uds).await?;
-        let router = totsuka_telemetry::http::router(health.clone())
-            .layer(axum::middleware::from_fn(totsuka_telemetry::request_id::middleware));
+        let router = totsuka_telemetry::http::router(health.clone()).layer(
+            axum::middleware::from_fn(totsuka_telemetry::request_id::middleware),
+        );
         tokio::spawn(async move { serve_uds(listener, router).await })
     };
 

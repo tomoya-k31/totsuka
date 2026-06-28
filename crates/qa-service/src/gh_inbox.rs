@@ -31,8 +31,7 @@ impl GhInboxClient {
                 .user_agent("totsuka-qa-service")
                 .build()
                 .expect("reqwest client"),
-            endpoint: override_endpoint
-                .unwrap_or_else(|| "https://api.github.com/graphql".into()),
+            endpoint: override_endpoint.unwrap_or_else(|| "https://api.github.com/graphql".into()),
             token,
         }
     }
@@ -69,6 +68,8 @@ impl GhInboxClient {
         v.pointer("/data/addProjectV2DraftIssue/projectItem/id")
             .and_then(|x| x.as_str())
             .map(str::to_string)
-            .ok_or_else(|| QaError::GraphQl(format!("addProjectV2DraftIssue: missing item id: {v}")))
+            .ok_or_else(|| {
+                QaError::GraphQl(format!("addProjectV2DraftIssue: missing item id: {v}"))
+            })
     }
 }

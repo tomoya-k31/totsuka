@@ -3,7 +3,9 @@
 //! forces structured output.
 
 use super::{
-    prompt::build_prompt, schema::{ClassifyRequest, ClassifyResponse, RepoVerdict}, Classifier,
+    prompt::build_prompt,
+    schema::{ClassifyRequest, ClassifyResponse, RepoVerdict},
+    Classifier,
 };
 use crate::error::QaError;
 use async_trait::async_trait;
@@ -76,8 +78,12 @@ impl OpenAiCompatClassifier {
 
 #[async_trait]
 impl Classifier for OpenAiCompatClassifier {
-    fn provider(&self) -> &str { &self.provider_name }
-    fn model(&self) -> &str { &self.model }
+    fn provider(&self) -> &str {
+        &self.provider_name
+    }
+    fn model(&self) -> &str {
+        &self.model
+    }
 
     async fn classify(&self, req: ClassifyRequest) -> Result<ClassifyResponse, QaError> {
         let (system, user) = build_prompt(&req, self.top_n);
@@ -110,16 +116,26 @@ impl Classifier for OpenAiCompatClassifier {
         let status = resp.status();
         let v: Value = resp.json().await?;
         if !status.is_success() {
-            return Err(QaError::Classifier(format!("{} {status}: {v}", self.provider_name)));
+            return Err(QaError::Classifier(format!(
+                "{} {status}: {v}",
+                self.provider_name
+            )));
         }
-        let content = v["choices"][0]["message"]["content"].as_str().ok_or_else(|| {
-            QaError::Classifier(format!("{}: missing choices[0].message.content: {v}", self.provider_name))
-        })?;
+        let content = v["choices"][0]["message"]["content"]
+            .as_str()
+            .ok_or_else(|| {
+                QaError::Classifier(format!(
+                    "{}: missing choices[0].message.content: {v}",
+                    self.provider_name
+                ))
+            })?;
         let parsed: Value = serde_json::from_str(content).map_err(|e| {
             QaError::Classifier(format!("{}: content not JSON: {e}", self.provider_name))
         })?;
         let verdicts: Vec<RepoVerdict> = serde_json::from_value(parsed["top_candidates"].clone())
-            .map_err(|e| QaError::Classifier(format!("{}: top_candidates parse: {e}", self.provider_name)))?;
+            .map_err(|e| {
+            QaError::Classifier(format!("{}: top_candidates parse: {e}", self.provider_name))
+        })?;
         Ok(ClassifyResponse {
             top_candidates: verdicts,
             provider: self.provider_name.clone(),

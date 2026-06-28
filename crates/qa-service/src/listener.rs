@@ -8,10 +8,12 @@ use tower::Service;
 
 pub async fn bind_uds(path: &Path) -> Result<UnixListener, QaError> {
     if path.exists() {
-        std::fs::remove_file(path).map_err(|e| QaError::Internal(format!("remove old uds: {e}")))?;
+        std::fs::remove_file(path)
+            .map_err(|e| QaError::Internal(format!("remove old uds: {e}")))?;
     }
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| QaError::Internal(format!("create dir: {e}")))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| QaError::Internal(format!("create dir: {e}")))?;
     }
     UnixListener::bind(path).map_err(|e| QaError::Internal(format!("bind uds: {e}")))
 }

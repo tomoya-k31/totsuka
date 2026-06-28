@@ -64,5 +64,9 @@ pub async fn reconcile(
         pane_orphans_closed,
         "qa-service recovery complete"
     );
-    Ok(RecoveryReport { kept, mapping_orphans_deleted, pane_orphans_closed })
+    Ok(RecoveryReport {
+        kept,
+        mapping_orphans_deleted,
+        pane_orphans_closed,
+    })
 }

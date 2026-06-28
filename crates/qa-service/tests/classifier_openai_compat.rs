@@ -1,4 +1,4 @@
-use qa_service::classifier::{ClassifyRequest, Classifier, OpenAiCompatClassifier, RepoCandidate};
+use qa_service::classifier::{Classifier, ClassifyRequest, OpenAiCompatClassifier, RepoCandidate};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -22,8 +22,13 @@ async fn openai_compat_forces_json_schema_and_parses_content() {
         loop {
             let mut line = String::new();
             let n = reader.read_line(&mut line).await.unwrap();
-            if n == 0 || line == "\r\n" { break; }
-            if let Some(v) = line.strip_prefix("content-length: ").or_else(|| line.strip_prefix("Content-Length: ")) {
+            if n == 0 || line == "\r\n" {
+                break;
+            }
+            if let Some(v) = line
+                .strip_prefix("content-length: ")
+                .or_else(|| line.strip_prefix("Content-Length: "))
+            {
                 content_length = v.trim().parse().unwrap_or(0);
             }
         }
@@ -44,21 +49,32 @@ async fn openai_compat_forces_json_schema_and_parses_content() {
         format!("http://{addr}/v1/chat/completions"),
         Secret::new("sk-or-test".into()),
         "anthropic/claude-3-5-haiku".into(),
-        256, 3, Duration::from_secs(15),
+        256,
+        3,
+        Duration::from_secs(15),
     );
     let req = ClassifyRequest {
         question: "auth flow?".into(),
         thread_context: None,
         candidates: vec![
-            RepoCandidate { repo: "acme/api".into(), description: "backend".into() },
-            RepoCandidate { repo: "acme/web".into(), description: "frontend".into() },
+            RepoCandidate {
+                repo: "acme/api".into(),
+                description: "backend".into(),
+            },
+            RepoCandidate {
+                repo: "acme/web".into(),
+                description: "frontend".into(),
+            },
         ],
     };
     let out = c.classify(req).await.unwrap();
     let raw = server.await.unwrap();
     let body: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     assert_eq!(body["response_format"]["type"], "json_schema");
-    assert_eq!(body["response_format"]["json_schema"]["name"], "classify_repo");
+    assert_eq!(
+        body["response_format"]["json_schema"]["name"],
+        "classify_repo"
+    );
     assert_eq!(body["response_format"]["json_schema"]["strict"], true);
 
     assert_eq!(out.top_candidates.len(), 2);

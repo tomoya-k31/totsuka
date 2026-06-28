@@ -10,8 +10,13 @@ use super::SlackMessage;
 #[derive(Debug, Clone, PartialEq)]
 pub enum SlackEnvelope {
     Hello,
-    Disconnect { reason: String },
-    EventsApi { envelope_id: String, event: SlackEvent },
+    Disconnect {
+        reason: String,
+    },
+    EventsApi {
+        envelope_id: String,
+        event: SlackEvent,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,15 +34,16 @@ pub enum SlackEvent {
 }
 
 pub fn parse(raw: &str) -> Result<SlackEnvelope, QaError> {
-    let v: Value = serde_json::from_str(raw)
-        .map_err(|e| QaError::Slack(format!("envelope parse: {e}")))?;
+    let v: Value =
+        serde_json::from_str(raw).map_err(|e| QaError::Slack(format!("envelope parse: {e}")))?;
     match v["type"].as_str() {
         Some("hello") => Ok(SlackEnvelope::Hello),
         Some("disconnect") => Ok(SlackEnvelope::Disconnect {
             reason: v["reason"].as_str().unwrap_or("unknown").into(),
         }),
         Some("events_api") => {
-            let envelope_id = v["envelope_id"].as_str()
+            let envelope_id = v["envelope_id"]
+                .as_str()
                 .ok_or_else(|| QaError::Slack("events_api missing envelope_id".into()))?
                 .to_string();
             let event = parse_event(&v["payload"]["event"], &v["payload"])?;

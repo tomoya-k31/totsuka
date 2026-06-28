@@ -38,7 +38,10 @@ pub fn build(cfg: &ClassifierSection) -> Result<Arc<dyn Classifier>, QaError> {
             let endpoint = if cfg.api_base.is_empty() {
                 None
             } else {
-                Some(format!("{}/v1/messages", cfg.api_base.trim_end_matches('/')))
+                Some(format!(
+                    "{}/v1/messages",
+                    cfg.api_base.trim_end_matches('/')
+                ))
             };
             Ok(Arc::new(anthropic::AnthropicClassifier::new(
                 cfg.api_key.clone(),
@@ -54,9 +57,11 @@ pub fn build(cfg: &ClassifierSection) -> Result<Arc<dyn Classifier>, QaError> {
                 match provider {
                     "openai" => "https://api.openai.com/v1".to_string(),
                     "openrouter" => "https://openrouter.ai/api/v1".to_string(),
-                    _ => return Err(QaError::Classifier(format!(
-                        "{provider}: api_base is required (no default)"
-                    ))),
+                    _ => {
+                        return Err(QaError::Classifier(format!(
+                            "{provider}: api_base is required (no default)"
+                        )))
+                    }
                 }
             } else {
                 cfg.api_base.trim_end_matches('/').to_string()

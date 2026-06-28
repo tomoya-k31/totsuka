@@ -40,10 +40,7 @@ pub struct AnswerCtx {
     pub system_prompt_template: String,
 }
 
-pub async fn handle_answer(
-    ctx: &AnswerCtx,
-    input: AnswerInput,
-) -> Result<AnswerOutcome, QaError> {
+pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<AnswerOutcome, QaError> {
     // 1. Resolve or spawn the agent.
     let existing = ctx.thread_map.get(&input.thread_ts).await?;
     let agent_id = match existing {
@@ -74,13 +71,15 @@ pub async fn handle_answer(
             // Send the question once the agent is up.
             ctx.adapter.send(&res.terminal_id, &input.question).await?;
             let now = ctx.clock.now();
-            ctx.thread_map.upsert(&ThreadMapping {
-                thread_ts: input.thread_ts.clone(),
-                terminal_id: res.terminal_id.clone(),
-                repo: input.repo.clone(),
-                last_activity_at: now,
-                created_at: now,
-            }).await?;
+            ctx.thread_map
+                .upsert(&ThreadMapping {
+                    thread_ts: input.thread_ts.clone(),
+                    terminal_id: res.terminal_id.clone(),
+                    repo: input.repo.clone(),
+                    last_activity_at: now,
+                    created_at: now,
+                })
+                .await?;
             res.terminal_id
         }
     };
@@ -139,14 +138,18 @@ pub async fn handle_answer(
 
     // 4. Post.
     let SlackPostResult { ts } = match input.mode {
-        AnswerMode::Auto => ctx.slack
-            .post_message(&input.channel, Some(&input.thread_ts), &text)
-            .await?,
+        AnswerMode::Auto => {
+            ctx.slack
+                .post_message(&input.channel, Some(&input.thread_ts), &text)
+                .await?
+        }
         AnswerMode::Delegated => {
             ctx.slack
                 .post_ephemeral(&input.channel, &input.user, Some(&input.thread_ts), &text)
                 .await?;
-            SlackPostResult { ts: format!("ephemeral-{}", input.thread_ts) }
+            SlackPostResult {
+                ts: format!("ephemeral-{}", input.thread_ts),
+            }
         }
     };
 
@@ -168,6 +171,12 @@ fn interpolate_prompt(template: &str, cfg: &AnswerSection) -> String {
 
 fn sanitize_branch(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }

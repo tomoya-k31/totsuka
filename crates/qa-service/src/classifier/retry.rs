@@ -42,8 +42,14 @@ mod tests {
         let calls = AtomicU32::new(0);
         let r: u32 = with_classify_retry(3, || async {
             let n = calls.fetch_add(1, Ordering::SeqCst);
-            if n == 0 { Err(QaError::Classifier("500 internal".into())) } else { Ok(42) }
-        }).await.unwrap();
+            if n == 0 {
+                Err(QaError::Classifier("500 internal".into()))
+            } else {
+                Ok(42)
+            }
+        })
+        .await
+        .unwrap();
         assert_eq!(r, 42);
     }
 
@@ -51,7 +57,8 @@ mod tests {
     async fn gives_up_after_max_attempts() {
         let r: Result<u32, _> = with_classify_retry(2, || async {
             Err::<u32, _>(QaError::Classifier("500 internal".into()))
-        }).await;
+        })
+        .await;
         assert!(matches!(r, Err(QaError::Classifier(_))));
     }
 }

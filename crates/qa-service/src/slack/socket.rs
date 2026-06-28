@@ -36,7 +36,10 @@ impl SocketModeConfig {
 pub async fn fetch_socket_url(client: &Client, cfg: &SocketModeConfig) -> Result<String, QaError> {
     let resp = client
         .post(&cfg.apps_connections_endpoint)
-        .header("authorization", format!("Bearer {}", cfg.app_token.expose()))
+        .header(
+            "authorization",
+            format!("Bearer {}", cfg.app_token.expose()),
+        )
         .header("content-type", "application/x-www-form-urlencoded")
         .send()
         .await?;
@@ -61,7 +64,9 @@ pub async fn run_socket_loop(
 ) -> Result<(), QaError> {
     let mut attempt: u32 = 0;
     loop {
-        if shutdown.is_cancelled() { return Ok(()); }
+        if shutdown.is_cancelled() {
+            return Ok(());
+        }
         match try_one_connection(&cfg, &http, &on_event, &shutdown).await {
             Ok(()) => {
                 attempt = 0;
@@ -118,7 +123,7 @@ async fn try_one_connection(
                             SlackEnvelope::EventsApi { envelope_id, event } => {
                                 // ACK first (Slack will retry within 3s otherwise).
                                 let ack = serde_json::json!({ "envelope_id": envelope_id });
-                                sink.send(Message::Text(ack.to_string().into()))
+                                sink.send(Message::Text(ack.to_string()))
                                     .await
                                     .map_err(|e| QaError::WebSocket(format!("ack: {e}")))?;
                                 // Drop-oldest semantics: try_send; on full, log.

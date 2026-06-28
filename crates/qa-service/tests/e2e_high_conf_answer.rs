@@ -23,8 +23,14 @@ fn answer_cfg() -> AnswerSection {
 
 #[tokio::test]
 async fn high_conf_answer_spawns_polls_extracts_posts() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else { return };
-    let pool = PgPoolOptions::new().max_connections(2).connect(&url).await.unwrap();
+    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
     let clock = Arc::new(SystemClock);
 
     let adapter = Arc::new(MockAdapter::new());
@@ -51,7 +57,10 @@ async fn high_conf_answer_spawns_polls_extracts_posts() {
 
     // Clean any prior state for this thread.
     sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
-        .bind(&thread_ts).execute(&pool).await.unwrap();
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let ctx = AnswerCtx {
         adapter: adapter.clone() as Arc<dyn AdapterClient>,
@@ -70,12 +79,14 @@ async fn high_conf_answer_spawns_polls_extracts_posts() {
         mode: AnswerMode::Auto,
     };
     let outcome = handle_answer(&ctx, input).await.unwrap();
-    assert!(matches!(outcome,
-        qa_service::answer::pipeline::AnswerOutcome::Posted { .. }));
+    assert!(matches!(
+        outcome,
+        qa_service::answer::pipeline::AnswerOutcome::Posted { .. }
+    ));
 
     let posts = slack.posts();
     assert_eq!(posts.len(), 1);
-    assert_eq!(posts[0].2, "OK");                            // text
+    assert_eq!(posts[0].2, "OK"); // text
     assert_eq!(posts[0].1.as_deref(), Some(thread_ts.as_str())); // thread_ts
 
     let mapping = thread_map.get(&thread_ts).await.unwrap().unwrap();
@@ -83,5 +94,8 @@ async fn high_conf_answer_spawns_polls_extracts_posts() {
     assert_eq!(mapping.repo, "acme/api");
 
     sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
-        .bind(&thread_ts).execute(&pool).await.unwrap();
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
 }

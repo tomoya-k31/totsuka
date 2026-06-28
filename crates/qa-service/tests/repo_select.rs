@@ -10,7 +10,11 @@ fn response(verdicts: Vec<RepoVerdict>) -> ClassifyResponse {
     }
 }
 fn v(repo: &str, confidence: f64) -> RepoVerdict {
-    RepoVerdict { repo: repo.into(), confidence, rationale: "".into() }
+    RepoVerdict {
+        repo: repo.into(),
+        confidence,
+        rationale: "".into(),
+    }
 }
 
 #[test]
@@ -59,7 +63,10 @@ fn use_top1_forces_top1_below_threshold() {
 #[test]
 fn empty_response_refuses() {
     let sel = RepoSelector::from_cfg(0.70, "delegated_reaction").unwrap();
-    assert_eq!(sel.decide(&response(vec![])), SelectOutcome::LowConfidenceRefused);
+    assert_eq!(
+        sel.decide(&response(vec![])),
+        SelectOutcome::LowConfidenceRefused
+    );
 }
 
 #[test]

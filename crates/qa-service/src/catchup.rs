@@ -19,7 +19,9 @@ pub async fn run_catchup_once(
         let scope = format!("channel:{channel}");
         let cursor = get_cursor(pool, &scope).await?;
         let oldest = cursor.or_else(|| default_oldest.clone());
-        let msgs = slack.conversation_history(channel, oldest.as_deref(), 100).await?;
+        let msgs = slack
+            .conversation_history(channel, oldest.as_deref(), 100)
+            .await?;
         if let Some(max_ts) = msgs.iter().map(|m| m.ts.clone()).max() {
             set_cursor(pool, &scope, &max_ts).await?;
         }
@@ -30,12 +32,11 @@ pub async fn run_catchup_once(
 }
 
 async fn get_cursor(pool: &PgPool, scope: &str) -> Result<Option<String>, QaError> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT cursor FROM catchup_cursor WHERE source = 'slack' AND scope = $1",
-    )
-    .bind(scope)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT cursor FROM catchup_cursor WHERE source = 'slack' AND scope = $1")
+            .bind(scope)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|r| r.0))
 }
 

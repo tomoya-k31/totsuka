@@ -8,8 +8,14 @@ use totsuka_core::SystemClock;
 
 #[tokio::test]
 async fn reconcile_keeps_pairs_drops_mapping_orphans_closes_pane_orphans() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else { return };
-    let pool = PgPoolOptions::new().max_connections(2).connect(&url).await.unwrap();
+    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
     let clock = Arc::new(SystemClock);
     let thread_map = ThreadMapRepo::new(pool.clone(), clock.clone());
 
@@ -18,24 +24,33 @@ async fn reconcile_keeps_pairs_drops_mapping_orphans_closes_pane_orphans() {
 
     for t in [&alive_ts, &orphan_ts] {
         sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
-            .bind(t).execute(&pool).await.unwrap();
+            .bind(t)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     let now = Utc::now();
-    thread_map.upsert(&ThreadMapping {
-        thread_ts: alive_ts.clone(),
-        terminal_id: "term_alive".into(),
-        repo: "acme/api".into(),
-        last_activity_at: now,
-        created_at: now,
-    }).await.unwrap();
-    thread_map.upsert(&ThreadMapping {
-        thread_ts: orphan_ts.clone(),
-        terminal_id: "term_dead".into(),
-        repo: "acme/api".into(),
-        last_activity_at: now,
-        created_at: now,
-    }).await.unwrap();
+    thread_map
+        .upsert(&ThreadMapping {
+            thread_ts: alive_ts.clone(),
+            terminal_id: "term_alive".into(),
+            repo: "acme/api".into(),
+            last_activity_at: now,
+            created_at: now,
+        })
+        .await
+        .unwrap();
+    thread_map
+        .upsert(&ThreadMapping {
+            thread_ts: orphan_ts.clone(),
+            terminal_id: "term_dead".into(),
+            repo: "acme/api".into(),
+            last_activity_at: now,
+            created_at: now,
+        })
+        .await
+        .unwrap();
 
     let adapter = MockAdapter::new();
     adapter.set_list_response(vec![
@@ -51,7 +66,9 @@ async fn reconcile_keeps_pairs_drops_mapping_orphans_closes_pane_orphans() {
         },
     ]);
 
-    let report = reconcile(&thread_map, &adapter as &dyn AdapterClient).await.unwrap();
+    let report = reconcile(&thread_map, &adapter as &dyn AdapterClient)
+        .await
+        .unwrap();
     assert_eq!(report.kept, 1);
     assert_eq!(report.mapping_orphans_deleted, 1);
     assert_eq!(report.pane_orphans_closed, 1);
@@ -68,6 +85,9 @@ async fn reconcile_keeps_pairs_drops_mapping_orphans_closes_pane_orphans() {
 
     for t in [&alive_ts, &orphan_ts] {
         sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
-            .bind(t).execute(&pool).await.unwrap();
+            .bind(t)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }
