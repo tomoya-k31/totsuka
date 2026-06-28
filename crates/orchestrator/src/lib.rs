@@ -5,6 +5,7 @@ pub mod effect;
 pub mod error;
 pub mod repository;
 pub mod schema_check;
+pub mod wip;
 
 use std::sync::Arc;
 use totsuka_config::Config;
