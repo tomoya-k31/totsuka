@@ -437,12 +437,6 @@ fn d_secret_days() -> u32 {
     30
 }
 
-impl Config {
-    pub fn from_toml_str(s: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(s)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

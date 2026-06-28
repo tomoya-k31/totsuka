@@ -46,7 +46,11 @@ mod tests {
 
     #[test]
     fn schema_oor_codes() {
-        let e = WatcherError::SchemaOutOfRange { got: 3, min: 6, target: 6 };
+        let e = WatcherError::SchemaOutOfRange {
+            got: 3,
+            min: 6,
+            target: 6,
+        };
         assert_eq!(e.code(), "/errors/schema_out_of_range");
     }
     #[test]

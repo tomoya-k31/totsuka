@@ -53,6 +53,31 @@ impl Config {
         cfg.validate().map_err(LoadError::Validation)?;
         Ok(cfg)
     }
+
+    /// In-process variant of `Config::load`: same pipeline (env override →
+    /// [vars] take → expand → deserialize → validate) but reading a string
+    /// instead of a file. Primarily for tests that need to construct a
+    /// Config from a TOML literal.
+    pub fn from_toml_str(raw: &str) -> Result<Config, LoadError> {
+        let parsed: toml::Value = toml::from_str(raw)?;
+
+        // 1. Apply env overrides (TOTSUKA__SECTION__KEY=value).
+        let overlaid = apply_env_overrides(parsed, std::env::vars());
+
+        // 2. Collect [vars] block as the expansion lookup map. Strip from the
+        //    final tree so it never reaches Config deserialization.
+        let (mut tree, vars) = take_vars_table(overlaid);
+
+        // 3. Expand every string leaf in place.
+        expand_toml_value(&mut tree, &vars, &|name| std::env::var(name).ok())?;
+
+        // 4. Deserialize into the typed Config.
+        let cfg: Config = tree.try_into()?;
+
+        // 5. Validate.
+        cfg.validate().map_err(LoadError::Validation)?;
+        Ok(cfg)
+    }
 }
 
 /// Split off a top-level `[vars]` table. Returns `(rest, vars_map)`.
