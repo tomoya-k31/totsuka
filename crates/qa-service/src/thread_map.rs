@@ -42,8 +42,8 @@ impl ThreadMapRepo {
 
     pub async fn upsert(&self, m: &ThreadMapping) -> Result<(), QaError> {
         sqlx::query(
-            "INSERT INTO qa_thread_agent (thread_ts, terminal_id, repo, last_activity_at)
-                  VALUES ($1, $2, $3, $4)
+            "INSERT INTO qa_thread_agent (thread_ts, terminal_id, repo, last_activity_at, created_at)
+                  VALUES ($1, $2, $3, $4, $5)
                   ON CONFLICT (thread_ts) DO UPDATE
                     SET terminal_id      = EXCLUDED.terminal_id,
                         repo             = EXCLUDED.repo,
@@ -53,6 +53,7 @@ impl ThreadMapRepo {
         .bind(&m.terminal_id)
         .bind(&m.repo)
         .bind(m.last_activity_at)
+        .bind(m.created_at)
         .execute(&self.pool)
         .await?;
         Ok(())
