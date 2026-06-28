@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-totsuka-core = { path = "../totsuka-core" }
+totsuka-core = { path = "../totsuka-core", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

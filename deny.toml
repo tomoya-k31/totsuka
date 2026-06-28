@@ -22,6 +22,10 @@ allow = [
     "CC0-1.0",
     "MPL-2.0",
     "0BSD",
+    # webpki-roots (Mozilla CA bundle, pulled in transitively by sqlx → rustls)
+    # ships under CDLA-Permissive-2.0 — a permissive data-license commonly
+    # allowed by Rust projects that use rustls.
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]

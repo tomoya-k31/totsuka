@@ -2,13 +2,16 @@
 name = "totsuka-foundation-e2e"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 publish = false
 
 [dependencies]
-totsuka-core      = { path = "../totsuka-core" }
-totsuka-config    = { path = "../totsuka-config" }
-totsuka-telemetry = { path = "../totsuka-telemetry" }
-totsuka-bus       = { path = "../totsuka-bus" }
+totsuka-core      = { path = "../totsuka-core", version = "0.1.0" }
+totsuka-config    = { path = "../totsuka-config", version = "0.1.0" }
+totsuka-telemetry = { path = "../totsuka-telemetry", version = "0.1.0" }
+totsuka-bus       = { path = "../totsuka-bus", version = "0.1.0" }
 
 [dev-dependencies]
 tokio      = { workspace = true, features = ["macros", "rt-multi-thread"] }
