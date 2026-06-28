@@ -50,6 +50,10 @@ impl RepoRegistry {
         self.map.load().get(key).cloned()
     }
 
+    pub fn keys(&self) -> Vec<RepoKey> {
+        self.map.load().keys().cloned().collect()
+    }
+
     pub fn reload(&self, cfg: &AgentAdapterSection) -> ReloadReport {
         let next: HashMap<RepoKey, RepoEntry> = cfg
             .repos

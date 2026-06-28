@@ -399,6 +399,92 @@ async fn stop_closes_pane_and_removes_worktree() {
     assert!(!std::path::Path::new(&worktree).exists());
 }
 
+async fn app_with_real_git_and_state() -> (tempfile::TempDir, axum::Router, Arc<MockHerdr>, AppState)
+{
+    use tokio::process::Command;
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let wt = tmp.path().join("wt");
+    std::fs::create_dir_all(&repo).unwrap();
+    let run = |args: &[&str]| {
+        let r = repo.clone();
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        async move {
+            assert!(Command::new("git")
+                .current_dir(&r)
+                .args(args)
+                .output()
+                .await
+                .unwrap()
+                .status
+                .success());
+        }
+    };
+    run(&["init", "-b", "main"]).await;
+    run(&["config", "commit.gpgsign", "false"]).await;
+    run(&["config", "user.email", "t@example.com"]).await;
+    run(&["config", "user.name", "Test"]).await;
+    run(&["commit", "--allow-empty", "-m", "init"]).await;
+
+    let repos = Arc::new(RepoRegistry::new());
+    repos.reload(&cfg_with_repo(repo.to_str().unwrap(), wt.to_str().unwrap()));
+    let herdr = Arc::new(MockHerdr::new());
+    let state = AppState {
+        herdr: herdr.clone(),
+        repos: repos.clone(),
+        worktrees: Arc::new(WorktreeManager::new()),
+        clock: Arc::new(SystemClock),
+        health: HealthState::new(),
+    };
+    let app = router(state.clone());
+    (tmp, app, herdr, state)
+}
+
+#[tokio::test]
+async fn gc_removes_orphan_worktree() {
+    use agent_adapter::gc::gc_tick;
+    let (_tmp, app, herdr, state) = app_with_real_git_and_state().await;
+
+    // Spawn one agent (worktree + live in herdr).
+    let body = serde_json::json!({
+        "task_id": "PVTI_keep",
+        "phase": "design",
+        "attempt": 0,
+        "repo": "x/y",
+        "branch": "totsuka/keepbranchaaa/design",
+        "argv": [],
+        "env": {}
+    });
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let entry = state
+        .repos
+        .resolve(&RepoKey::new("x/y".into()))
+        .expect("repo present");
+    let orphan_path = state
+        .worktrees
+        .create(&entry, "totsuka/orphanbranchx/design")
+        .await
+        .unwrap();
+    assert!(orphan_path.exists());
+    let _ = herdr; // already wired through state
+
+    // Run a GC tick.
+    let report = gc_tick(&state).await;
+    assert!(report.removed >= 1, "no orphan removed: {report:?}");
+    assert!(!orphan_path.exists());
+}
+
 #[tokio::test]
 async fn apply_reload_reports_added_repos() {
     use agent_adapter::server::reload::apply_reload;
