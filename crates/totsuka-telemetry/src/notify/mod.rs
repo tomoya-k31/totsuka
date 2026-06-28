@@ -70,7 +70,7 @@ impl Notifier {
         let now = self.clock.now();
 
         if ttl_secs > 0 {
-            let g = self.state.lock().await;
+            let mut g = self.state.lock().await;
             if let Some(last) = g.dedup.get(&dkey) {
                 let age = (now - *last).num_seconds() as u64;
                 if age < ttl_secs {
@@ -78,7 +78,15 @@ impl Notifier {
                     return;
                 }
             }
+            // Optimistically record now before dispatching (prevents TOCTOU)
+            g.dedup.insert(dkey.clone(), now);
+            let snapshot =
+                serde_json::to_vec_pretty(&*g).expect("PersistedState serialization is infallible");
             drop(g);
+            // Persist in background (fire-and-forget with log on error)
+            if let Err(e) = atomic_write(&self.state_path, &snapshot).await {
+                tracing::warn!(error=%e, "failed to persist notify state");
+            }
         }
 
         let sink_ids = self
@@ -92,14 +100,6 @@ impl Notifier {
                     tracing::warn!(kind=?kind, sink=?sid, error=%e, "sink failed");
                 }
             }
-        }
-
-        if ttl_secs > 0 {
-            let mut g = self.state.lock().await;
-            g.dedup.insert(dkey, now);
-            let snapshot = serde_json::to_vec_pretty(&*g).unwrap();
-            drop(g);
-            let _ = atomic_write(&self.state_path, &snapshot).await;
         }
     }
 }
