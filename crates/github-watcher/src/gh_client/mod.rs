@@ -7,6 +7,7 @@ use crate::error::WatcherError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
+pub mod backoff;
 pub mod graphql;
 pub mod http;
 pub mod mock;
