@@ -9,6 +9,7 @@ members = [
     "crates/agent-adapter",
     "crates/github-watcher",
     "crates/orchestrator",
+    "crates/qa-service",
 ]
 
 [workspace.package]
