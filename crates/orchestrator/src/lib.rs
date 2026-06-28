@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod schema_check;
 
 use std::sync::Arc;
 use totsuka_config::Config;
