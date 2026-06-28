@@ -509,6 +509,45 @@ async fn gc_removes_orphan_worktree() {
 }
 
 #[tokio::test]
+async fn ready_probe_marks_herdr_ok_when_mock_responds() {
+    use agent_adapter::lifecycle::probe_ready;
+    let (_tmp, _app, herdr) = app_with_real_git().await;
+    let health = HealthState::new();
+    probe_ready(
+        herdr.clone() as Arc<dyn agent_adapter::herdr::HerdrClient>,
+        &health,
+    )
+    .await;
+    // readyz body shows checks; the helper sets it true if herdr.list works
+    // (verified by re-reading state).
+    // We can't reach back into HealthState's HashMap directly, so call
+    // through the existing telemetry router we already mount in `app`.
+    let app_with_health = router(AppState {
+        herdr: herdr.clone(),
+        repos: Arc::new(RepoRegistry::new()),
+        worktrees: Arc::new(WorktreeManager::new()),
+        clock: Arc::new(SystemClock),
+        health: health.clone(),
+    });
+    health.set_ready(true).await; // probe doesn't flip ready by itself
+    let res = app_with_health
+        .oneshot(
+            Request::builder()
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["checks"]["herdr"], "ok");
+}
+
+#[tokio::test]
 async fn apply_reload_reports_added_repos() {
     use agent_adapter::server::reload::apply_reload;
     let (_tmp, _app, _herdr) = app_with_real_git().await;

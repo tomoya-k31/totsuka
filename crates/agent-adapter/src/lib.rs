@@ -4,6 +4,7 @@ pub mod argv;
 pub mod error;
 pub mod gc;
 pub mod herdr;
+pub mod lifecycle;
 pub mod repo;
 pub mod server;
 pub mod worktree;
