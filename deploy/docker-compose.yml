@@ -1,6 +1,6 @@
 services:
   pgmq:
-    image: ghcr.io/pgmq/pg18-pgmq:v1.10.0
+    image: ghcr.io/pgmq/pg18-pgmq:v1.11.1
     container_name: totsuka-pgmq
     user: "0:0"
     environment:

@@ -82,7 +82,7 @@ totsukactl up
  │   │     未起動 → docker compose up -d pgmq
  │   │     起動済 → そのまま次へ
  │   ├─ image タグ検証
- │   │     running image が ghcr.io/pgmq/pg18-pgmq:v1.10.0 か inspect で照合
+ │   │     running image が ghcr.io/pgmq/pg18-pgmq:v1.11.1 か inspect で照合
  │   │     不一致 → 期待タグと現タグ・差分を表示し、
  │   │              `docker compose pull && totsukactl up --recreate` を案内
  │   └─ healthy 待ち (compose healthcheck + 自前 SELECT 1)
@@ -91,7 +91,7 @@ totsukactl up
  ├─[phase 0: preflight]
  │   ├─ totsuka.toml 読込・バリデーション (totsuka-config)
  │   ├─ pgmq 拡張バージョン確認 (select extversion from pg_extension where extname='pgmq')
- │   │     v1.10.0 互換 (semver) でなければ案内して exit 1
+ │   │     v1.11.1 互換 (semver) でなければ案内して exit 1
  │   ├─ migration 差分チェック (sqlx migrate info)
  │   │     差分あり → `totsukactl migrate` を案内して exit 1 (自動適用しない)
  │   └─ herdr unix socket 疎通 probe (ping)
@@ -110,7 +110,7 @@ totsukactl up
 
 ### compose.yml の規約 (`deploy/docker-compose.yml`)
 - service 名: `pgmq`
-- image: `ghcr.io/pgmq/pg18-pgmq:v1.10.0` (`totsuka-config` で集中管理、`totsukactl` はそれを参照)
+- image: `ghcr.io/pgmq/pg18-pgmq:v1.11.1` (`totsuka-config` で集中管理、`totsukactl` はそれを参照)
 - volume: named volume `totsuka_pgmq_data` を `/var/lib/postgresql` に mount (永続)。PG18 はメジャーバージョン別 subdirectory (例: `/var/lib/postgresql/18/docker`) を使うため、`/var/lib/postgresql/data` に mount すると起動を拒否する。
 - port: `127.0.0.1:5432:5432` (totsuka.toml で変更可)
 - healthcheck: `pg_isready -U postgres -d totsuka` (`POSTGRES_DB` と一致させる)
@@ -266,7 +266,7 @@ notify_on_degraded      = false
 
 # ---- postgres コンテナ ----
 [postgres]
-image       = "ghcr.io/pgmq/pg18-pgmq:v1.10.0"
+image       = "ghcr.io/pgmq/pg18-pgmq:v1.11.1"
 container   = "totsuka-pgmq"
 host        = "127.0.0.1"
 port        = 5432
@@ -1228,7 +1228,7 @@ clippy lint: `tokio::task::block_in_place` は既定で deny。例外は明示�
 |---|---|
 | アプリ分割 | 5 binary (totsukactl / agent-adapter / orchestrator / github-watcher / qa-service) + 4 共有 crate |
 | 起動方式 | 自前 supervisor CLI `totsukactl`、daemon として常駐 |
-| Postgres | docker compose 経由で `ghcr.io/pgmq/pg18-pgmq:v1.10.0` を起動、totsukactl が probe / 起動 / バージョン検証 |
+| Postgres | docker compose 経由で `ghcr.io/pgmq/pg18-pgmq:v1.11.1` を起動、totsukactl が probe / 起動 / バージョン検証 |
 | 起動順序 | postgres → preflight → agent-adapter → orchestrator → (github-watcher ∥ qa-service) |
 | readyz | 全 bin が readyz 200 を返すまで supervisor は次フェーズに進まない (timeout 30s) |
 | shutdown | 逆依存順 (ingestion → control → execution)、SIGTERM grace 15s、Claude pane は kill しない |

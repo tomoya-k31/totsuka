@@ -4,7 +4,7 @@
 
 **Goal:** 残り 5 バイナリ (agent-adapter / orchestrator / github-watcher / qa-service / totsukactl) が依存する **4 つの共有 crate** (totsuka-core / totsuka-config / totsuka-telemetry / totsuka-bus) と、**Postgres+pgmq 動作環境** (docker compose) + **migrations** を確立する。
 
-**Architecture:** Cargo workspace に共有ライブラリ crate を並べ、Postgres は `ghcr.io/pgmq/pg18-pgmq:v1.10.0` を docker compose で起動。pgmq の publish/pull/ack を薄ラッパで隠蔽し、上位 bin は型安全な DomainEvent と effect_key で会話する。Clock / Secret / Notifier / ColumnId などの cross-cutting 規約 (spec §11) も本 plan で固定する。
+**Architecture:** Cargo workspace に共有ライブラリ crate を並べ、Postgres は `ghcr.io/pgmq/pg18-pgmq:v1.11.1` を docker compose で起動。pgmq の publish/pull/ack を薄ラッパで隠蔽し、上位 bin は型安全な DomainEvent と effect_key で会話する。Clock / Secret / Notifier / ColumnId などの cross-cutting 規約 (spec §11) も本 plan で固定する。
 
 **Tech Stack:** Rust stable / tokio (rt-multi-thread) / axum / sqlx (postgres) / serde + toml / tracing + tracing-subscriber + tracing-appender / thiserror + anyhow / chrono / reqwest (TLS) / docker compose / pgmq 1.10.0
 
@@ -13,7 +13,7 @@
 (spec から逐語抜粋。全タスクは暗黙にこれらを満たす)
 
 - Rust toolchain: **stable**、`[profile.release] panic = "abort"`、`tokio::task::block_in_place` は clippy deny
-- Postgres image: `ghcr.io/pgmq/pg18-pgmq:v1.10.0` (固定タグ)
+- Postgres image: `ghcr.io/pgmq/pg18-pgmq:v1.11.1` (固定タグ)
 - pgmq queue name: `totsuka_events`、`visibility_secs=30`、`batch_size=16`
 - Migrations: **forward-only**、`down/` 禁止 (CI で拒否)、唯一の DB mutator は `sqlx migrate`
 - Schema versioning: `schema_meta(version, applied_at)` に最新 migration 番号を持ち、bin は `MIN/TARGET_SCHEMA_VERSION` と照合 (spec §11.1)
@@ -281,7 +281,7 @@ git commit -m "chore: scaffold cargo workspace + dev tooling"
 ```yaml
 services:
   pgmq:
-    image: ghcr.io/pgmq/pg18-pgmq:v1.10.0
+    image: ghcr.io/pgmq/pg18-pgmq:v1.11.1
     container_name: totsuka-pgmq
     user: "0:0"
     environment:
@@ -2038,7 +2038,7 @@ data_dir  = "/tmp/data"
 [supervisor.heartbeat]
 
 [postgres]
-image="ghcr.io/pgmq/pg18-pgmq:v1.10.0"
+image="ghcr.io/pgmq/pg18-pgmq:v1.11.1"
 container="totsuka-pgmq"
 host="127.0.0.1"
 port=5432
@@ -3683,7 +3683,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       pgmq:
-        image: ghcr.io/pgmq/pg18-pgmq:v1.10.0
+        image: ghcr.io/pgmq/pg18-pgmq:v1.11.1
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: totsuka

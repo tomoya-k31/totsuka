@@ -76,7 +76,9 @@ impl Notifier {
         if ttl_secs > 0 {
             let mut g = self.state.lock().await;
             if let Some(last) = g.dedup.get(&dkey) {
-                let age = (now - *last).num_seconds() as u64;
+                // clamp at 0 so a backward clock step (NTP slew, MockClock reset) does NOT
+                // wrap to u64::MAX and silently bypass the dedup window
+                let age = (now - *last).num_seconds().max(0) as u64;
                 if age < ttl_secs {
                     tracing::debug!(kind=?kind, dedup_key=%dkey, age_secs=age, "notify deduped");
                     return;
