@@ -8,6 +8,7 @@ pub mod adapter_client;
 pub mod classifier;
 pub mod error;
 pub mod mode;
+pub mod question_filter;
 pub mod repo_select;
 pub mod schema_check;
 pub mod slack;
