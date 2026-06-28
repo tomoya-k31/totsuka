@@ -1,36 +1,105 @@
-//! Filled progressively by Tasks 14-17.
+//! ImplVerify sub-state machine. spec §9.3 + §4.2 + §11.15.
 
-use crate::error::OrchestratorError;
-use crate::sm::{Engine, HandleOutcome};
-use totsuka_core::DomainEvent;
-
-pub async fn on_pr_merged_ready(
-    _e: &Engine,
-    _ev: &DomainEvent,
-) -> Result<HandleOutcome, OrchestratorError> {
-    Ok(HandleOutcome::Skipped {
-        reason: "not yet implemented".into(),
-    })
-}
-
-pub async fn on_verification(
-    _e: &Engine,
-    _ev: &DomainEvent,
-    _passed: bool,
-) -> Result<HandleOutcome, OrchestratorError> {
-    Ok(HandleOutcome::Skipped {
-        reason: "not yet implemented".into(),
-    })
-}
-
+use serde::Deserialize;
 use std::collections::HashMap;
-use totsuka_core::{key::spawn_effect_key, Phase, TaskId};
+use totsuka_core::{key::spawn_effect_key, DomainEvent, Phase, TaskId};
 
 use crate::adapter_client::SpawnReq;
 use crate::argv::merge_argv;
 use crate::branch::branch_name;
+use crate::conversation::spawn_verifier;
 use crate::effect::ClaimOutcome;
+use crate::error::OrchestratorError;
+use crate::gh_writeback::WritebackResult;
 use crate::repository::Task;
+use crate::sm::{Engine, HandleOutcome};
+
+#[derive(Deserialize)]
+struct PrMergedReady {
+    pub item_id: String,
+    #[serde(default)]
+    pub pr_diff: String,
+}
+
+pub async fn on_pr_merged_ready(
+    e: &Engine,
+    ev: &DomainEvent,
+) -> Result<HandleOutcome, OrchestratorError> {
+    let p: PrMergedReady = serde_json::from_value(ev.payload.clone())
+        .map_err(|err| OrchestratorError::Internal(format!("payload: {err}")))?;
+    let id = TaskId::new(p.item_id.clone());
+    let task = match e.repo.get(&id).await? {
+        Some(t) => t,
+        None => {
+            return Ok(HandleOutcome::Skipped {
+                reason: "no such task".into(),
+            })
+        }
+    };
+    let key = spawn_effect_key(&id, Phase::ImplVerify, task.impl_verify_attempt);
+    let result = e.effects.result_for(&key).await?;
+    let agent_id = result
+        .as_ref()
+        .and_then(|v| v.get("agent_id"))
+        .and_then(|x| x.as_str())
+        .map(String::from);
+    let Some(agent_id) = agent_id else {
+        return Ok(HandleOutcome::Skipped {
+            reason: "no implementer agent recorded".into(),
+        });
+    };
+    spawn_verifier(e, &task, &agent_id, &p.pr_diff).await
+}
+
+#[derive(Deserialize)]
+struct Verification {
+    pub item_id: String,
+}
+
+pub async fn on_verification(
+    e: &Engine,
+    ev: &DomainEvent,
+    passed: bool,
+) -> Result<HandleOutcome, OrchestratorError> {
+    let p: Verification = serde_json::from_value(ev.payload.clone())
+        .map_err(|err| OrchestratorError::Internal(format!("payload: {err}")))?;
+    let id = TaskId::new(p.item_id);
+    let task = match e.repo.get(&id).await? {
+        Some(t) => t,
+        None => {
+            return Ok(HandleOutcome::Skipped {
+                reason: "no such task".into(),
+            })
+        }
+    };
+    if passed {
+        if task.suppress_writeback_until_human_move {
+            return Ok(HandleOutcome::Skipped {
+                reason: "suppressed".into(),
+            });
+        }
+        match e
+            .writeback
+            .move_column(task.id.as_str(), "final_review", None)
+            .await?
+        {
+            WritebackResult::Ok => Ok(HandleOutcome::Applied),
+            WritebackResult::VersionMismatch => {
+                e.repo.set_suppress(&task.id, true).await?;
+                Ok(HandleOutcome::Skipped {
+                    reason: "OCC".into(),
+                })
+            }
+            WritebackResult::Failed(m) => Err(OrchestratorError::Writeback(m)),
+        }
+    } else {
+        // DiffBack: bump attempt, restart implementer.
+        let new_attempt = e.repo.bump_attempt(&task.id).await?;
+        tracing::info!(task=%task.id.as_str(), new_attempt, "DiffBack: re-entering ImplVerify");
+        let updated = e.repo.get(&task.id).await?.unwrap();
+        on_enter(e, &updated).await
+    }
+}
 
 pub async fn on_enter(e: &Engine, task: &Task) -> Result<HandleOutcome, OrchestratorError> {
     let permit = match e.wip.try_acquire() {

@@ -145,4 +145,18 @@ impl EffectLedger {
         .await?;
         Ok(())
     }
+
+    pub async fn result_for(
+        &self,
+        effect_key: &str,
+    ) -> Result<Option<serde_json::Value>, OrchestratorError> {
+        let row: Option<(serde_json::Value,)> = sqlx::query_as(
+            "SELECT result FROM processed_effects WHERE effect_key = $1 AND status = 'done'
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(effect_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
 }
