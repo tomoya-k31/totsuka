@@ -6,6 +6,7 @@ use crate::gh_inbox::GhInboxClient;
 use crate::slack::SlackClient;
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct ReactionCtx {
     pub slack: Arc<dyn SlackClient>,
     pub inbox: Arc<GhInboxClient>,
