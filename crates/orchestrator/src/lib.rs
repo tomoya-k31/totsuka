@@ -5,6 +5,7 @@ pub mod argv;
 pub mod branch;
 pub mod effect;
 pub mod error;
+pub mod gh_writeback;
 pub mod repository;
 pub mod schema_check;
 pub mod wip;
