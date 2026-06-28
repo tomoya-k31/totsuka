@@ -4,6 +4,7 @@ pub mod argv;
 pub mod error;
 pub mod herdr;
 pub mod repo;
+pub mod server;
 pub mod worktree;
 
 use std::sync::Arc;
