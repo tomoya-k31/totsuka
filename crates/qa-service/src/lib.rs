@@ -7,6 +7,7 @@ use totsuka_core::Clock;
 pub mod adapter_client;
 pub mod error;
 pub mod schema_check;
+pub mod thread_map;
 
 pub struct QaApp {
     #[allow(dead_code)]
