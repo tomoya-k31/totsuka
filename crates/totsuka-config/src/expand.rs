@@ -65,6 +65,94 @@ where
     Ok(out)
 }
 
+/// Walk a `toml::Value` tree and expand `${name}` / `${env:NAME}` references in
+/// every string leaf. `vars` should be collected from a top-level `[vars]`
+/// table; `env_lookup` provides env-var fallback.
+///
+/// **Lenient mode for unknown `${name}`**: when a `${name}` reference cannot be
+/// resolved from `vars`, the original token is left in place rather than
+/// raising `ExpandError::Undefined`. This keeps backward compatibility with
+/// configs whose variables live in non-top-level sections (e.g.
+/// `[agent_adapter.vars]`) — the unresolved leaves still hit `validate()` and
+/// the orchestrator can decide what to do with them. Cycles and `${env:NAME}`
+/// misses remain hard errors.
+pub fn expand_toml_value<F>(
+    value: &mut toml::Value,
+    vars: &HashMap<String, String>,
+    env_lookup: &F,
+) -> Result<(), ExpandError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    match value {
+        toml::Value::String(s) => {
+            *s = expand_vars_lenient(s, vars, env_lookup)?;
+        }
+        toml::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                expand_toml_value(v, vars, env_lookup)?;
+            }
+        }
+        toml::Value::Table(tbl) => {
+            for (_, v) in tbl.iter_mut() {
+                expand_toml_value(v, vars, env_lookup)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Like `expand_vars` but undefined `${name}` (not `${env:NAME}`) refs are
+/// left as the literal `${name}` token instead of erroring. Cycles and
+/// undefined env vars still error.
+pub fn expand_vars_lenient<F>(
+    input: &str,
+    vars: &HashMap<String, String>,
+    env_lookup: &F,
+) -> Result<String, ExpandError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    expand_lenient_inner(input, vars, env_lookup, &mut HashSet::new())
+}
+
+fn expand_lenient_inner<F>(
+    input: &str,
+    vars: &HashMap<String, String>,
+    env_lookup: &F,
+    visiting: &mut HashSet<String>,
+) -> Result<String, ExpandError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut out = String::with_capacity(input.len());
+    let mut last = 0usize;
+    for cap in re().captures_iter(input) {
+        let m = cap.get(0).unwrap();
+        let key = cap.get(1).unwrap().as_str();
+        out.push_str(&input[last..m.start()]);
+        if let Some(env_name) = key.strip_prefix("env:") {
+            let v =
+                env_lookup(env_name).ok_or_else(|| ExpandError::UndefinedEnv(env_name.into()))?;
+            out.push_str(&v);
+        } else if let Some(v) = vars.get(key) {
+            if !visiting.insert(key.to_string()) {
+                return Err(ExpandError::Cycle(key.into()));
+            }
+            let r = expand_lenient_inner(v, vars, env_lookup, visiting)?;
+            visiting.remove(key);
+            out.push_str(&r);
+        } else {
+            // Lenient: leave the unresolved token in place.
+            out.push_str(&input[m.start()..m.end()]);
+        }
+        last = m.end();
+    }
+    out.push_str(&input[last..]);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

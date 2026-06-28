@@ -36,6 +36,12 @@ impl<T> From<T> for Secret<T> {
     }
 }
 
+impl<T: Default> Default for Secret<T> {
+    fn default() -> Self {
+        Self(T::default())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

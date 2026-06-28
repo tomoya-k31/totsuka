@@ -1,8 +1,14 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
-use totsuka_core::ColumnId;
+use totsuka_core::{ColumnId, Secret};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Default helper for sensitive `Secret<String>` fields that may be absent in
+/// dev TOML (production values come from env override or `secrets.toml`).
+fn default_secret() -> Secret<String> {
+    Secret::new(String::new())
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub totsuka: TotsukaSection,
     pub supervisor: SupervisorSection,
@@ -20,7 +26,7 @@ pub struct Config {
     pub secrets: SecretsSection,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TotsukaSection {
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -37,7 +43,7 @@ fn default_tz() -> String {
     "Asia/Tokyo".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SupervisorSection {
     #[serde(default = "d_30")]
     pub ready_timeout_secs: u64,
@@ -50,7 +56,7 @@ pub struct SupervisorSection {
     pub heartbeat: HeartbeatSection,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct HeartbeatSection {
     #[serde(default = "d_5")]
     pub healthz_interval_secs: u64,
@@ -94,7 +100,7 @@ fn d_30() -> u64 {
     30
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct PostgresSection {
     pub image: String,
     pub container: String,
@@ -104,9 +110,11 @@ pub struct PostgresSection {
     pub user: String,
     pub volume: String,
     pub compose_file: String,
+    #[serde(default = "default_secret")]
+    pub password: Secret<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct BusSection {
     pub queue_name: String,
     #[serde(default = "d_30")]
@@ -124,7 +132,7 @@ fn d_pi() -> u64 {
     200
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AgentAdapterSection {
     pub uds_path: String,
     #[serde(default)]
@@ -150,7 +158,7 @@ fn d_3600() -> u64 {
     3600
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct RepoSection {
     pub description: String,
     #[serde(default)]
@@ -163,7 +171,7 @@ pub struct RepoSection {
     pub default_branch: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OrchestratorSection {
     pub uds_path: String,
     pub wip_global: u32,
@@ -177,7 +185,7 @@ pub struct OrchestratorSection {
     pub claude_argv: ClaudeArgvSection,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ClaudeArgvSection {
     #[serde(default)]
     pub global: Vec<String>,
@@ -187,13 +195,13 @@ pub struct ClaudeArgvSection {
     pub per_phase: HashMap<String, ClaudeArgvExtra>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ClaudeArgvExtra {
     #[serde(default)]
     pub extra: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GithubSection {
     pub project_owner: String,
     pub project_number: u64,
@@ -206,7 +214,7 @@ fn d_status() -> String {
     "Status".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GithubWatcherSection {
     pub bind: String,
     #[serde(default = "d_20")]
@@ -217,6 +225,8 @@ pub struct GithubWatcherSection {
     pub catchup_window_hours: u64,
     #[serde(default = "d_100")]
     pub graphql_page_size: u32,
+    #[serde(default = "default_secret")]
+    pub github_token: Secret<String>,
 }
 
 fn d_20() -> u64 {
@@ -232,7 +242,7 @@ fn d_100() -> u32 {
     100
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct QaServiceSection {
     pub uds_path: String,
     pub allowed_user_ids: Vec<String>,
@@ -244,18 +254,24 @@ pub struct QaServiceSection {
     pub repo_select_mode: String,
     pub classifier: ClassifierSection,
     pub answer: AnswerSection,
+    #[serde(default = "default_secret")]
+    pub slack_app_token: Secret<String>,
+    #[serde(default = "default_secret")]
+    pub slack_bot_token: Secret<String>,
 }
 
 fn d_llm() -> String {
     "llm_classify".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ClassifierSection {
     pub provider: String, // anthropic | openai | openrouter | litellm | openai_compatible
     pub model: String,
     #[serde(default)]
     pub api_base: String,
+    #[serde(default = "default_secret")]
+    pub api_key: Secret<String>,
     #[serde(default = "d_256")]
     pub max_tokens: u32,
     #[serde(default = "d_th")]
@@ -286,7 +302,7 @@ fn d_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AnswerSection {
     #[serde(default = "d_sentinel")]
     pub sentinel: String,
@@ -331,7 +347,7 @@ fn d_4() -> u32 {
     4
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct NotificationsSection {
     #[serde(default = "d_true")]
     pub config_error_notify: bool,
@@ -351,10 +367,10 @@ fn d_600() -> u64 {
     600
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct SlackNotifySection {
-    #[serde(default)]
-    pub webhook_url: String,
+    #[serde(default = "default_secret")]
+    pub webhook_url: Secret<String>,
     #[serde(default)]
     pub default_channel: String,
     #[serde(default)]
@@ -369,13 +385,13 @@ fn d_10() -> u32 {
     10
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct GithubNotifySection {
     #[serde(default)]
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct RetentionSection {
     #[serde(default = "d_4")]
     pub events_weeks: u32,
@@ -397,7 +413,7 @@ fn d_50() -> u32 {
     50
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TelemetrySection {
     #[serde(default = "d_true")]
     pub metrics_enabled: bool,
@@ -411,7 +427,7 @@ fn d_ratio() -> f64 {
     0.1
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct SecretsSection {
     #[serde(default = "d_secret_days")]
     pub rotation_warn_days: u32,
