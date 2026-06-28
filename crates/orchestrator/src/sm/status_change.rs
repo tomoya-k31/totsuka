@@ -23,6 +23,11 @@ pub async fn handle(e: &Engine, ev: &DomainEvent) -> Result<HandleOutcome, Orche
             return super::ready_to_design::try_spawn(e, &t).await;
         }
     }
+    if p.to_status == "impl_verify" {
+        if let Some(t) = e.repo.get(&id).await? {
+            return super::impl_verify::on_enter(e, &t).await;
+        }
+    }
     Ok(HandleOutcome::Applied)
 }
 
