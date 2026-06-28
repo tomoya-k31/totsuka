@@ -5,6 +5,7 @@ use totsuka_config::Config;
 use totsuka_core::Clock;
 
 pub mod adapter_client;
+pub mod classifier;
 pub mod error;
 pub mod schema_check;
 pub mod thread_map;
