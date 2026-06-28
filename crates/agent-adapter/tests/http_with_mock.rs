@@ -349,3 +349,52 @@ async fn output_returns_revision_and_text() {
     assert_eq!(v["is_newer"], true);
     let _ = herdr;
 }
+
+#[tokio::test]
+async fn stop_closes_pane_and_removes_worktree() {
+    let (_tmp, app, herdr) = app_with_real_git().await;
+    let spawn_body = serde_json::json!({
+        "task_id": "PVTI_x",
+        "phase": "design",
+        "attempt": 0,
+        "repo": "x/y",
+        "branch": "totsuka/qqqqqqqqqqqq/design",
+        "argv": [],
+        "env": {}
+    });
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(spawn_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = v["agent_id"].as_str().unwrap().to_string();
+    let worktree = v["worktree_path"].as_str().unwrap().to_string();
+    assert!(std::path::Path::new(&worktree).exists());
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/v1/agents/{id}"))
+                .header("x-totsuka-branch", "totsuka/qqqqqqqqqqqq/design")
+                .header("x-totsuka-repo", "x/y")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    assert_eq!(herdr.count(), 0);
+    assert!(!std::path::Path::new(&worktree).exists());
+}
