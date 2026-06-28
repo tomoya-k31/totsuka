@@ -8,6 +8,7 @@ pub mod adapter_client;
 pub mod answer;
 pub mod classifier;
 pub mod error;
+pub mod gh_inbox;
 pub mod mode;
 pub mod question_filter;
 pub mod repo_select;
