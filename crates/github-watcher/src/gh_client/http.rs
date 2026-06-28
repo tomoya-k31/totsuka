@@ -173,21 +173,18 @@ impl GhClient for HttpGhClient {
 
     async fn prs_since(
         &self,
-        _repo: &RepoSlug,
-        _since: DateTime<Utc>,
+        repo: &RepoSlug,
+        since: DateTime<Utc>,
     ) -> Result<Vec<PrUpdate>, WatcherError> {
-        Err(WatcherError::Internal(
-            "HttpGhClient::prs_since not yet implemented (Task 10)".into(),
-        ))
+        super::rest::list_prs(&self.client, &self.endpoint_rest, &self.token, repo, since).await
     }
 
     async fn releases_since(
         &self,
-        _repo: &RepoSlug,
-        _since: DateTime<Utc>,
+        repo: &RepoSlug,
+        since: DateTime<Utc>,
     ) -> Result<Vec<ReleaseUpdate>, WatcherError> {
-        Err(WatcherError::Internal(
-            "HttpGhClient::releases_since not yet implemented (Task 10)".into(),
-        ))
+        super::rest::list_releases(&self.client, &self.endpoint_rest, &self.token, repo, since)
+            .await
     }
 }

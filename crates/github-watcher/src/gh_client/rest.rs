@@ -90,27 +90,102 @@ pub(crate) async fn list_issues(
     Ok(out)
 }
 
-// Task 10 fills these in.
+#[derive(Deserialize)]
+struct PrRow {
+    node_id: String,
+    number: u64,
+    head: PrHead,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    merged_at: Option<DateTime<Utc>>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+struct PrHead {
+    #[serde(rename = "ref")]
+    ref_: String,
+}
+
 pub(crate) async fn list_prs(
-    _client: &Client,
-    _endpoint_rest: &str,
-    _token: &Secret<String>,
-    _repo: &RepoSlug,
-    _since: DateTime<Utc>,
+    client: &Client,
+    endpoint_rest: &str,
+    token: &Secret<String>,
+    repo: &RepoSlug,
+    since: DateTime<Utc>,
 ) -> Result<Vec<PrUpdate>, WatcherError> {
-    Err(WatcherError::Internal(
-        "rest::list_prs not yet implemented (Task 10)".into(),
-    ))
+    let mut url = format!(
+        "{endpoint_rest}/repos/{}/{}/pulls?state=all&sort=updated&direction=desc&per_page=100",
+        repo.owner, repo.repo,
+    );
+    let mut out = Vec::new();
+    loop {
+        let (rows, next): (Vec<PrRow>, _) = get_json(client, &url, token).await?;
+        for r in &rows {
+            if r.updated_at <= since {
+                continue;
+            }
+            out.push(PrUpdate {
+                node_id: r.node_id.clone(),
+                repo: repo.clone(),
+                number: r.number,
+                head_ref: r.head.ref_.clone(),
+                body: r.body.clone(),
+                merged: r.merged_at.is_some(),
+                merged_at: r.merged_at,
+                updated_at: r.updated_at,
+            });
+        }
+        // Early exit: descending sort means once we see a row at or before `since`, stop.
+        let saw_old = rows.iter().any(|r| r.updated_at <= since);
+        match next {
+            Some(n) if !saw_old => url = n,
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct ReleaseRow {
+    node_id: String,
+    tag_name: String,
+    published_at: Option<DateTime<Utc>>,
 }
 
 pub(crate) async fn list_releases(
-    _client: &Client,
-    _endpoint_rest: &str,
-    _token: &Secret<String>,
-    _repo: &RepoSlug,
-    _since: DateTime<Utc>,
+    client: &Client,
+    endpoint_rest: &str,
+    token: &Secret<String>,
+    repo: &RepoSlug,
+    since: DateTime<Utc>,
 ) -> Result<Vec<ReleaseUpdate>, WatcherError> {
-    Err(WatcherError::Internal(
-        "rest::list_releases not yet implemented (Task 10)".into(),
-    ))
+    let mut url = format!(
+        "{endpoint_rest}/repos/{}/{}/releases?per_page=100",
+        repo.owner, repo.repo,
+    );
+    let mut out = Vec::new();
+    loop {
+        let (rows, next): (Vec<ReleaseRow>, _) = get_json(client, &url, token).await?;
+        for r in rows {
+            let Some(p) = r.published_at else {
+                continue; // draft
+            };
+            if p <= since {
+                continue;
+            }
+            out.push(ReleaseUpdate {
+                node_id: r.node_id,
+                repo: repo.clone(),
+                tag: r.tag_name,
+                published_at: p,
+            });
+        }
+        match next {
+            Some(n) => url = n,
+            None => break,
+        }
+    }
+    Ok(out)
 }
