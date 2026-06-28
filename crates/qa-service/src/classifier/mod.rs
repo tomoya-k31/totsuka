@@ -26,3 +26,52 @@ pub trait Classifier: Send + Sync + 'static {
     fn provider(&self) -> &str;
     fn model(&self) -> &str;
 }
+
+use std::sync::Arc;
+use std::time::Duration;
+use totsuka_config::schema::ClassifierSection;
+
+pub fn build(cfg: &ClassifierSection) -> Result<Arc<dyn Classifier>, QaError> {
+    let timeout = Duration::from_secs(cfg.request_timeout_secs);
+    match cfg.provider.as_str() {
+        "anthropic" => {
+            let endpoint = if cfg.api_base.is_empty() {
+                None
+            } else {
+                Some(format!("{}/v1/messages", cfg.api_base.trim_end_matches('/')))
+            };
+            Ok(Arc::new(anthropic::AnthropicClassifier::new(
+                cfg.api_key.clone(),
+                cfg.model.clone(),
+                cfg.max_tokens,
+                cfg.top_candidates,
+                timeout,
+                endpoint,
+            )))
+        }
+        provider @ ("openai" | "openrouter" | "litellm" | "openai_compatible") => {
+            let base = if cfg.api_base.is_empty() {
+                match provider {
+                    "openai" => "https://api.openai.com/v1".to_string(),
+                    "openrouter" => "https://openrouter.ai/api/v1".to_string(),
+                    _ => return Err(QaError::Classifier(format!(
+                        "{provider}: api_base is required (no default)"
+                    ))),
+                }
+            } else {
+                cfg.api_base.trim_end_matches('/').to_string()
+            };
+            let endpoint = format!("{base}/chat/completions");
+            Ok(Arc::new(openai_compat::OpenAiCompatClassifier::new(
+                provider.into(),
+                endpoint,
+                cfg.api_key.clone(),
+                cfg.model.clone(),
+                cfg.max_tokens,
+                cfg.top_candidates,
+                timeout,
+            )))
+        }
+        other => Err(QaError::Classifier(format!("unknown provider: {other}"))),
+    }
+}
