@@ -28,6 +28,11 @@ pub async fn handle(e: &Engine, ev: &DomainEvent) -> Result<HandleOutcome, Orche
             return super::impl_verify::on_enter(e, &t).await;
         }
     }
+    if p.to_status == "final_review" {
+        if let Some(t) = e.repo.get(&id).await? {
+            return super::final_review::on_enter(e, &t).await;
+        }
+    }
     Ok(HandleOutcome::Applied)
 }
 
