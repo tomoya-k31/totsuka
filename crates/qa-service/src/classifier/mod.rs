@@ -6,12 +6,14 @@ use async_trait::async_trait;
 
 pub mod anthropic;
 pub mod mock;
+pub mod openai_compat;
 pub mod prompt;
 pub mod retry;
 pub mod schema;
 
 pub use anthropic::AnthropicClassifier;
 pub use mock::MockClassifier;
+pub use openai_compat::OpenAiCompatClassifier;
 pub use prompt::build_prompt;
 pub use retry::with_classify_retry;
 pub use schema::{ClassifyRequest, ClassifyResponse, RepoCandidate, RepoVerdict};
