@@ -165,12 +165,10 @@ impl GhClient for HttpGhClient {
     // The remaining methods are filled in by Tasks 9 / 10.
     async fn issues_since(
         &self,
-        _repo: &RepoSlug,
-        _since: DateTime<Utc>,
+        repo: &RepoSlug,
+        since: DateTime<Utc>,
     ) -> Result<Vec<IssueUpdate>, WatcherError> {
-        Err(WatcherError::Internal(
-            "HttpGhClient::issues_since not yet implemented (Task 9)".into(),
-        ))
+        super::rest::list_issues(&self.client, &self.endpoint_rest, &self.token, repo, since).await
     }
 
     async fn prs_since(

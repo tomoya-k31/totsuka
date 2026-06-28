@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 pub mod graphql;
 pub mod http;
 pub mod mock;
+pub mod rest;
 pub use http::HttpGhClient;
 pub use mock::MockGhClient;
 
