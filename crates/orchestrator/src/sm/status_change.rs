@@ -16,7 +16,13 @@ struct StatusChanged {
 pub async fn handle(e: &Engine, ev: &DomainEvent) -> Result<HandleOutcome, OrchestratorError> {
     let p: StatusChanged = serde_json::from_value(ev.payload.clone())
         .map_err(|err| OrchestratorError::Internal(format!("payload parse: {err}")))?;
+    let id = TaskId::new(p.item_id.clone());
     upsert_column(e, &p).await?;
+    if p.to_status == "ready" {
+        if let Some(t) = e.repo.get(&id).await? {
+            return super::ready_to_design::try_spawn(e, &t).await;
+        }
+    }
     Ok(HandleOutcome::Applied)
 }
 

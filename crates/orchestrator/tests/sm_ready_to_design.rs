@@ -6,7 +6,7 @@ use orchestrator::sm::{Engine, HandleOutcome};
 use orchestrator::wip::WipGate;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
-use totsuka_core::{DomainEvent, Source, SystemClock, TaskId};
+use totsuka_core::{DomainEvent, Source, SystemClock};
 
 fn ev(item_id: &str, to: &str) -> DomainEvent {
     DomainEvent {
@@ -34,7 +34,7 @@ async fn engine() -> Option<(Engine, Arc<MockAdapter>, Arc<MockWriteback>)> {
     );
     let adapter = Arc::new(MockAdapter::new());
     let writeback = Arc::new(MockWriteback::new());
-    let e = Engine {
+    let engine = Engine {
         repo: Arc::new(PgRepository::new(pool.clone(), clock.clone())),
         adapter: adapter.clone(),
         writeback: writeback.clone(),
@@ -44,17 +44,19 @@ async fn engine() -> Option<(Engine, Arc<MockAdapter>, Arc<MockWriteback>)> {
         config: cfg,
         owner_id: "test".into(),
     };
-    Some((e, adapter, writeback))
+    Some((engine, adapter, writeback))
 }
 
 #[tokio::test]
-async fn status_change_upserts_task_column() {
-    let Some((e, _, _)) = engine().await else {
+async fn ready_event_spawns_designer() {
+    let Some((e, adapter, _)) = engine().await else {
         return;
     };
-    let id = format!("PVTI_smtest_{}", uuid::Uuid::new_v4().simple());
+    let id = format!("PVTI_rd_{}", uuid::Uuid::new_v4().simple());
     let out = e.handle(&ev(&id, "ready")).await.unwrap();
     assert_eq!(out, HandleOutcome::Applied);
-    let t = e.repo.get(&TaskId::new(id)).await.unwrap().unwrap();
-    assert_eq!(t.current_column, "ready");
+    assert_eq!(adapter.spawn_count(), 1);
+    let req = adapter.last_spawn().unwrap();
+    assert!(req.branch.ends_with("/design"), "branch={}", req.branch);
+    assert_eq!(req.attempt, 0);
 }
