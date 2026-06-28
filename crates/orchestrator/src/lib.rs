@@ -8,6 +8,7 @@ pub mod error;
 pub mod gh_writeback;
 pub mod repository;
 pub mod schema_check;
+pub mod sm;
 pub mod wip;
 
 use std::sync::Arc;
