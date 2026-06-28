@@ -15,6 +15,8 @@ pub mod polling;
 pub mod schema_check;
 pub mod snapshot;
 
+pub use error::WatcherError;
+
 pub struct WatcherApp {
     #[allow(dead_code)]
     config: Arc<Config>,
