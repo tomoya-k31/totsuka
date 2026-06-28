@@ -206,3 +206,67 @@ async fn spawn_unknown_repo_returns_404() {
         .unwrap();
     assert_eq!(res.status(), 404);
 }
+
+#[tokio::test]
+async fn send_round_trip() {
+    let (_tmp, app, herdr) = app_with_real_git().await;
+    // Spawn first.
+    let spawn_body = serde_json::json!({
+        "task_id": "PVTI_x",
+        "phase": "design",
+        "attempt": 0,
+        "repo": "x/y",
+        "branch": "totsuka/zzzzzzzzzzzz/design",
+        "argv": [],
+        "env": {}
+    });
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(spawn_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = v["agent_id"].as_str().unwrap();
+
+    // Send a message.
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/agents/{id}/messages"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"text":"hello"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    let _ = herdr;
+}
+
+#[tokio::test]
+async fn send_to_unknown_agent_returns_404() {
+    let (_tmp, app, _) = app_with_real_git().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents/nope/messages")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"text":"x"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+}
