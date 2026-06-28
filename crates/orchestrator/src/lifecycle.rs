@@ -31,9 +31,13 @@ pub async fn probe_adapter(adapter: Arc<dyn AdapterClient>, health: &HealthState
 
 pub async fn wait_for_signals(shutdown: CancellationToken) -> Result<(), OrchestratorError> {
     let mut term = signal(SignalKind::terminate())
-        .map_err(|e| OrchestratorError::Internal(format!("signal: {e}")))?;
-    term.recv().await;
-    tracing::info!("SIGTERM received; signaling shutdown");
+        .map_err(|e| OrchestratorError::Internal(format!("install SIGTERM handler: {e}")))?;
+    let mut int = signal(SignalKind::interrupt())
+        .map_err(|e| OrchestratorError::Internal(format!("install SIGINT handler: {e}")))?;
+    tokio::select! {
+        _ = term.recv() => tracing::info!("SIGTERM received; initiating graceful shutdown"),
+        _ = int.recv()  => tracing::info!("SIGINT received; initiating graceful shutdown"),
+    }
     shutdown.cancel();
     tokio::time::sleep(std::time::Duration::from_secs(15)).await;
     Ok(())

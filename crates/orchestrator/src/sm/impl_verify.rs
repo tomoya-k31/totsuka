@@ -96,7 +96,9 @@ pub async fn on_verification(
         // DiffBack: bump attempt, restart implementer.
         let new_attempt = e.repo.bump_attempt(&task.id).await?;
         tracing::info!(task=%task.id.as_str(), new_attempt, "DiffBack: re-entering ImplVerify");
-        let updated = e.repo.get(&task.id).await?.unwrap();
+        let updated = e.repo.get(&task.id).await?.ok_or_else(|| {
+            OrchestratorError::Internal("task disappeared during DiffBack".into())
+        })?;
         on_enter(e, &updated).await
     }
 }

@@ -3308,6 +3308,14 @@ git -c commit.gpgsign=false -c tag.gpgsign=false commit -m "test(orchestrator): 
 - `phase_short` extension when we add a real `Phase::Verify` enum variant
 - WIP gate metrics export to Prometheus
 - Per-repo WIP overrides (current `wip_global` is single-tenant)
+- **Spec §11.8 bounded mpsc topology not implemented.** The current
+  consumer→engine.handle→adapter.spawn call chain is synchronous;
+  back-pressure exists only via pgmq visibility timeout. Spec §11.8
+  mandates four bounded channels (bus pull→SM=32, SM→adapter=node_capacity=8,
+  SM→writeback=64, SM→Notifier=256/drop-oldest) and a
+  `channel_full_total{channel}` metric. Defer to a follow-up that retrofits
+  the channels plus the §11.9 metric; the synchronous shape is acceptable
+  for the current single-instance, low-throughput deployment.
 
 ## Test plan summary
 
