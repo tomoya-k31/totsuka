@@ -35,4 +35,8 @@ pub trait Repository: Send + Sync {
         when: DateTime<Utc>,
     ) -> Result<(), OrchestratorError>;
     async fn find_by_short(&self, short: &str) -> Result<Option<Task>, OrchestratorError>;
+    async fn list_awaiting_release_in_repo(
+        &self,
+        repo: &str,
+    ) -> Result<Vec<Task>, OrchestratorError>;
 }

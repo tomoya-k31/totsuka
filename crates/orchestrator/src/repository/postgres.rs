@@ -147,4 +147,50 @@ impl Repository for PgRepository {
             None => Ok(None),
         }
     }
+
+    async fn list_awaiting_release_in_repo(
+        &self,
+        repo: &str,
+    ) -> Result<Vec<Task>, OrchestratorError> {
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                Option<String>,
+                String,
+                Option<String>,
+                i32,
+                bool,
+                Option<DateTime<Utc>>,
+                DateTime<Utc>,
+                DateTime<Utc>,
+            ),
+        >(
+            "SELECT id, task_id_short, repo, pr_node_id, current_column, current_phase,
+                    impl_verify_attempt, suppress_writeback_until_human_move,
+                    spawned_at, created_at, updated_at
+             FROM tasks WHERE repo = $1 AND current_column = 'awaiting_release'",
+        )
+        .bind(repo)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| Task {
+                id: TaskId::new(r.0),
+                task_id_short: r.1,
+                repo: r.2,
+                pr_node_id: r.3,
+                current_column: r.4,
+                current_phase: r.5,
+                impl_verify_attempt: r.6,
+                suppress_writeback_until_human_move: r.7,
+                spawned_at: r.8,
+                created_at: r.9,
+                updated_at: r.10,
+            })
+            .collect())
+    }
 }
