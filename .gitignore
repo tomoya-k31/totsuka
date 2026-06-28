@@ -35,6 +35,6 @@ mise.local.toml
 # Rust
 target/
 **/*.rs.bk
-Cargo.lock
 .sqlx/
 # runtime state (XDG paths are outside repo)
+# Cargo.lock is tracked (workspace with bins; CI uses --locked)
