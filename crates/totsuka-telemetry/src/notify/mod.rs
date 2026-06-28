@@ -1,8 +1,12 @@
 pub mod payload;
 pub mod routing;
+pub mod sink_log;
+pub mod sink_slack;
 
 pub use payload::NotifyPayload;
 pub use routing::{default_dedup_ttl, default_routing, SinkId};
+pub use sink_log::LogSink;
+pub use sink_slack::SlackSink;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
