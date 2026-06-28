@@ -4,11 +4,13 @@
 
 use async_trait::async_trait;
 
+pub mod anthropic;
 pub mod mock;
 pub mod prompt;
 pub mod retry;
 pub mod schema;
 
+pub use anthropic::AnthropicClassifier;
 pub use mock::MockClassifier;
 pub use prompt::build_prompt;
 pub use retry::with_classify_retry;
