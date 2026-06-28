@@ -8,5 +8,6 @@ pub use http::{router as health_router, HealthState};
 
 pub mod notify;
 pub use notify::{
-    default_dedup_ttl, default_routing, Notifier, NotifyPayload, NotifySink, SinkError, SinkId,
+    default_dedup_ttl, default_routing, LogSink, Notifier, NotifyPayload, NotifySink, SinkError,
+    SinkId, SlackSink,
 };

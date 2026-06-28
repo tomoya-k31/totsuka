@@ -5,6 +5,7 @@ members = [
     "crates/totsuka-config",
     "crates/totsuka-telemetry",
     "crates/totsuka-bus",
+    "crates/totsuka-foundation-e2e",
 ]
 
 [workspace.package]
