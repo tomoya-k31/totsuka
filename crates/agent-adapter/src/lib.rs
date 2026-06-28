@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod argv;
 pub mod herdr;
 pub mod repo;
 
