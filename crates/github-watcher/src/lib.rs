@@ -8,6 +8,7 @@ pub mod column_map;
 pub mod cursor;
 pub mod error;
 pub mod schema_check;
+pub mod snapshot;
 
 pub struct WatcherApp {
     #[allow(dead_code)]
