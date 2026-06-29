@@ -71,3 +71,42 @@ async fn shutdown_with_postgres_calls_compose_stop() {
     shutdown_stack(cfg, registry, compose, paths).await.unwrap();
     assert!(compose_concrete.calls().iter().any(|c| c == "stop:pgmq"));
 }
+
+#[tokio::test]
+async fn shutdown_graceful_three_stage_walks_full_sequence() {
+    let tmp = TempDir::new().unwrap();
+    let paths = Paths {
+        state_dir: tmp.path().into(),
+        data_dir: tmp.path().into(),
+        log_dir: tmp.path().join("logs"),
+        pid_dir: tmp.path().join("pids"),
+        sock_dir: tmp.path().join("sock"),
+    };
+    paths.ensure().unwrap();
+    let registry = Arc::new(Registry::new());
+    let dead_pid = 0x7fff_fffe;
+    for n in ["github-watcher", "qa-service", "orchestrator", "agent-adapter"] {
+        registry.set_pid(n, Some(dead_pid), Some(chrono::Utc::now())).await;
+        std::fs::write(paths.child_pid(n), format!("{dead_pid}\n")).unwrap();
+    }
+    std::fs::write(paths.supervisor_pid(), "1\n").unwrap();
+
+    let compose: Arc<dyn ComposeExec> = Arc::new(MockCompose::default());
+    let cfg = ShutdownCfg {
+        grace: Duration::from_millis(20),
+        second_term: Duration::from_millis(20),
+        force_grace: Duration::from_millis(20),
+        also_postgres: false,
+        force: false, // exercises 3-stage path
+    };
+    shutdown_stack(cfg, registry.clone(), compose, paths.clone()).await.unwrap();
+
+    for n in ["github-watcher", "qa-service", "orchestrator", "agent-adapter"] {
+        assert!(!paths.child_pid(n).exists(), "{n}.pid should be removed");
+        assert_eq!(
+            registry.get(n).await.unwrap().state,
+            totsukactl::state::ChildState::Stopped
+        );
+    }
+    assert!(!paths.supervisor_pid().exists());
+}

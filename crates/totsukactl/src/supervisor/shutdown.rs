@@ -44,11 +44,12 @@ pub async fn shutdown_stack(
         pidfile::remove(&paths.child_pid(n))?;
     }
 
+    pidfile::remove(&paths.supervisor_pid())?;
+
     if cfg.also_postgres {
         compose.stop("pgmq").await?;
         registry.set_state("pgmq", ChildState::Stopped).await;
     }
-    pidfile::remove(&paths.supervisor_pid())?;
     Ok(())
 }
 
