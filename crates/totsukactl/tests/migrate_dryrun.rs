@@ -29,10 +29,14 @@ fn build_db_url_uses_secret_expose_not_hardcoded_password() {
 fn database_url_env_override_wins() {
     let _lock = ENV_LOCK.lock().unwrap();
 
+    let restore = std::env::var("DATABASE_URL").ok();
     std::env::set_var("DATABASE_URL", "postgres://custom@host:1234/x");
     let cfg = totsuka_config::Config::from_toml_str(TOML).unwrap();
     assert_eq!(build_db_url(&cfg), "postgres://custom@host:1234/x");
-    std::env::remove_var("DATABASE_URL");
+    match restore {
+        Some(v) => std::env::set_var("DATABASE_URL", v),
+        None => std::env::remove_var("DATABASE_URL"),
+    }
 }
 
 #[tokio::test]
