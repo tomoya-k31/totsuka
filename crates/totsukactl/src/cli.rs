@@ -77,6 +77,7 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
         Cmd::Logs { bin, follow, lines } => {
             crate::commands::logs::run(&paths, &bin, lines, follow).await
         }
+        Cmd::Migrate => crate::commands::migrate::run(&cfg).await,
         _ => Err(TotsukactlError::Internal(
             "cli dispatch wiring lands in Tasks 23-25".into(),
         )),

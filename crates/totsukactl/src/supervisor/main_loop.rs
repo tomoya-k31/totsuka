@@ -39,16 +39,7 @@ pub async fn run_supervisor(
     pre.run_phase_minus1(recreate).await?;
 
     // Open pool (after compose up — pgmq may still need a few seconds; PgPool retries on connect).
-    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            cfg.postgres.user,
-            cfg.postgres.password.expose(),
-            cfg.postgres.host,
-            cfg.postgres.port,
-            cfg.postgres.database,
-        )
-    });
+    let db_url = crate::commands::migrate::build_db_url(&cfg);
     let pool = retry_connect(&db_url, Duration::from_secs(30)).await?;
 
     // Phase 0: schema check + herdr socket ping
