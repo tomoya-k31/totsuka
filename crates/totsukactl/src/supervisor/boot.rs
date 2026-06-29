@@ -1,5 +1,4 @@
 use crate::child::{ChildSpawner, ChildSpec};
-use crate::compose::ComposeExec;
 use crate::error::TotsukactlError;
 use crate::health::HealthProbe;
 use crate::paths::Paths;
@@ -15,7 +14,6 @@ use std::time::Duration;
 use totsuka_core::Clock;
 
 pub struct BootCtx {
-    pub compose: Arc<dyn ComposeExec>,
     pub spawner: Arc<dyn ChildSpawner>,
     pub probe: Arc<dyn HealthProbe>,
     pub registry: Arc<Registry>,

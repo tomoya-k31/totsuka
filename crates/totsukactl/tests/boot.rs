@@ -4,8 +4,6 @@ use tempfile::TempDir;
 use totsuka_core::SystemClock;
 use totsukactl::child::mock::MockSpawner;
 use totsukactl::child::{ChildSpawner, ChildSpec};
-use totsukactl::compose::mock::MockCompose;
-use totsukactl::compose::ComposeExec;
 use totsukactl::health::{HealthProbe, MockHealthProbe};
 use totsukactl::paths::Paths;
 use totsukactl::registry::Registry;
@@ -33,7 +31,6 @@ async fn boot_happy_path_spawns_all_four_in_order() {
         sock_dir: tmp.path().join("sock"),
     };
     paths.ensure().unwrap();
-    let compose: Arc<dyn ComposeExec> = Arc::new(MockCompose::with_image("ghcr.io/pgmq/pg18-pgmq:v1.11.1"));
     let spawner_concrete = Arc::new(MockSpawner::default());
     let spawner: Arc<dyn ChildSpawner> = spawner_concrete.clone();
     let probe_concrete = Arc::new(MockHealthProbe::default());
@@ -43,7 +40,7 @@ async fn boot_happy_path_spawns_all_four_in_order() {
     }
     let registry = Arc::new(Registry::new());
     let clock: Arc<dyn totsuka_core::Clock> = Arc::new(SystemClock);
-    let ctx = BootCtx { compose, spawner, probe, registry: registry.clone(), clock, paths, ready_timeout: Duration::from_secs(5) };
+    let ctx = BootCtx { spawner, probe, registry: registry.clone(), clock, paths, ready_timeout: Duration::from_secs(5) };
     let specs: Vec<_> = ["agent-adapter", "orchestrator", "github-watcher", "qa-service"]
         .into_iter().map(|n| fake_spec(n, &tmp)).collect();
 
@@ -70,14 +67,13 @@ async fn boot_rolls_back_on_readyz_timeout() {
         sock_dir: tmp.path().join("sock"),
     };
     paths.ensure().unwrap();
-    let compose: Arc<dyn ComposeExec> = Arc::new(MockCompose::default());
     let spawner: Arc<dyn ChildSpawner> = Arc::new(MockSpawner::default());
     let probe_concrete = Arc::new(MockHealthProbe::default());
     let probe: Arc<dyn HealthProbe> = probe_concrete.clone();
     probe_concrete.set_ready("agent-adapter", false); // never becomes ready
     let registry = Arc::new(Registry::new());
     let clock: Arc<dyn totsuka_core::Clock> = Arc::new(SystemClock);
-    let ctx = BootCtx { compose, spawner, probe, registry, clock, paths, ready_timeout: Duration::from_millis(200) };
+    let ctx = BootCtx { spawner, probe, registry, clock, paths, ready_timeout: Duration::from_millis(200) };
     let specs = vec![fake_spec("agent-adapter", &tmp), fake_spec("orchestrator", &tmp),
                      fake_spec("github-watcher", &tmp), fake_spec("qa-service", &tmp)];
     let err = boot(&ctx, &specs, async { Ok(()) }, async { Ok(()) }).await.unwrap_err();
