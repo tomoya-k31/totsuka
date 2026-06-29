@@ -1,4 +1,5 @@
-use crate::child::{specs_from_config, ForkExecSpawner};
+use crate::child::{specs_from_config, ChildSpawner, ForkExecSpawner};
+use crate::restart::RestartCfg;
 use crate::compose::{ComposeExec, DockerCompose};
 use crate::error::TotsukactlError;
 use crate::health::{endpoint_for, Endpoint, HttpHealthProbe};
@@ -47,7 +48,7 @@ pub async fn run_supervisor(
         .await?;
 
     let registry = Arc::new(Registry::new());
-    let spawner = Arc::new(ForkExecSpawner);
+    let spawner_arc: Arc<dyn ChildSpawner> = Arc::new(ForkExecSpawner);
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|pp| pp.to_path_buf()))
@@ -63,7 +64,7 @@ pub async fn run_supervisor(
     let probe: Arc<dyn crate::health::HealthProbe> = Arc::new(HttpHealthProbe::new(eps));
 
     let ctx = BootCtx {
-        spawner,
+        spawner: spawner_arc.clone(),
         probe: probe.clone(),
         registry: registry.clone(),
         clock: clock.clone(),
@@ -125,8 +126,7 @@ pub async fn run_supervisor(
     let shutdown_cfg_grace = Duration::from_secs(cfg.supervisor.shutdown_grace_secs);
     let shutdown_cfg_kill = Duration::from_secs(cfg.supervisor.shutdown_kill_secs);
 
-    // Control dispatcher: loop until SIGTERM/SIGINT or ControlMsg::Shutdown;
-    // Restart/Reload just warn and continue (Task 26 will add real handling).
+    // Control dispatcher: loop until SIGTERM/SIGINT or ControlMsg::Shutdown.
     {
         let registry = registry.clone();
         let compose = compose.clone();
@@ -137,6 +137,7 @@ pub async fn run_supervisor(
             .map_err(|e| TotsukactlError::Internal(format!("install SIGTERM: {e}")))?;
         let mut int = signal(SignalKind::interrupt())
             .map_err(|e| TotsukactlError::Internal(format!("install SIGINT: {e}")))?;
+        let restart_cfg = RestartCfg::from_section(&cfg.supervisor.heartbeat)?;
 
         let (also_postgres, force): (bool, bool) = loop {
             tokio::select! {
@@ -145,10 +146,28 @@ pub async fn run_supervisor(
                 msg = ctl_rx.recv() => match msg {
                     Some(ControlMsg::Shutdown { postgres, force }) => break (postgres, force),
                     Some(ControlMsg::Restart(name)) => {
-                        tracing::warn!(bin = %name, "Restart not yet implemented (Task 26)");
+                        if let Err(e) = crate::supervisor::control::handle_restart(
+                            &name,
+                            registry.clone(),
+                            spawner_arc.clone(),
+                            &specs,
+                            &paths,
+                            clock.clone(),
+                            &restart_cfg,
+                            shutdown_cfg_grace,
+                        )
+                        .await
+                        {
+                            tracing::error!(child = %name, error = %e, "restart failed");
+                        }
                     }
                     Some(ControlMsg::Reload(name)) => {
-                        tracing::warn!(bin = %name, "Reload not yet implemented (Task 26)");
+                        if let Err(e) =
+                            crate::supervisor::control::handle_reload(&name, registry.clone())
+                                .await
+                        {
+                            tracing::error!(child = %name, error = %e, "reload failed");
+                        }
                     }
                     None => break (false, false),
                 },
