@@ -2,6 +2,7 @@
 
 pub mod child;
 pub mod cli;
+pub mod commands;
 pub mod compose;
 pub mod error;
 pub mod health;

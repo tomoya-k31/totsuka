@@ -54,8 +54,22 @@ pub fn parse() -> Cli {
 }
 
 pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
-    let _ = cli;
-    Err(TotsukactlError::Internal(
-        "cli dispatch wiring lands in Tasks 19-25".into(),
-    ))
+    let config_path = cli
+        .config
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .or_else(|| std::env::var("TOTSUKA_CONFIG").ok())
+        .unwrap_or_else(|| "~/.config/totsuka/config.toml".into());
+    let cfg = totsuka_config::Config::load(crate::paths::resolve_tilde(&config_path))
+        .map_err(|e| TotsukactlError::Config(format!("{e:?}")))?;
+    let paths = crate::paths::Paths::from_config(&cfg);
+    let clock: std::sync::Arc<dyn totsuka_core::Clock> =
+        std::sync::Arc::new(totsuka_core::SystemClock);
+
+    match cli.command {
+        Cmd::Status => crate::commands::status::run(&paths, clock.as_ref()).await,
+        _ => Err(TotsukactlError::Internal(
+            "cli dispatch wiring lands in Tasks 20-25".into(),
+        )),
+    }
 }
