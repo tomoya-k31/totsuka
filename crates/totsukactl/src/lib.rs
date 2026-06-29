@@ -9,6 +9,7 @@ pub mod paths;
 pub mod pidfile;
 pub mod probe;
 pub mod registry;
+pub mod schema_check;
 pub mod sock_api;
 pub mod state;
 pub mod supervisor;
