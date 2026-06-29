@@ -44,3 +44,12 @@ async fn restart_adapter_without_supervisor_returns_not_running() {
         .unwrap_err();
     assert!(matches!(err, TotsukactlError::NotRunning));
 }
+
+#[tokio::test]
+async fn reload_adapter_without_supervisor_returns_not_running() {
+    let tmp = TempDir::new().unwrap();
+    let err = reload::run(&paths(&tmp), "agent-adapter")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TotsukactlError::NotRunning));
+}

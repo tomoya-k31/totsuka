@@ -75,7 +75,6 @@ async fn sigterm_parallel(registry: &Registry, names: &[&str]) {
             if let Some(pid) = e.pid {
                 let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
                 tracing::info!(child = *n, pid, "SIGTERM");
-                let _ = registry; // borrow holder
             }
         }
     }

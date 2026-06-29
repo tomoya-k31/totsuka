@@ -5,11 +5,30 @@ use crate::supervisor::run_supervisor;
 use totsuka_config::Config;
 
 pub async fn run(
-    cfg: Config,
+    mut cfg: Config,
     paths: Paths,
     recreate: bool,
-    _bootstrap: bool,
+    bootstrap: bool,
 ) -> Result<(), TotsukactlError> {
+    if bootstrap {
+        let config_dir = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| crate::paths::resolve_tilde("~/.config"))
+            .join("totsuka");
+        let cfg_path = config_dir.join("config.toml");
+        let sec_path = config_dir.join("secrets.toml");
+        if !cfg_path.exists() || !sec_path.exists() {
+            tracing::info!("--bootstrap: config files missing, running init");
+            crate::commands::init::run(&paths).await?;
+            cfg = totsuka_config::Config::load(&cfg_path).map_err(|e| {
+                TotsukactlError::Config(format!("re-loading after bootstrap: {e:?}"))
+            })?;
+            // Re-derive paths from the freshly-loaded config
+            let paths = crate::paths::Paths::from_config(&cfg);
+            paths.ensure()?;
+        }
+    }
+
     match pidfile::check(&paths.supervisor_pid())? {
         pidfile::PidState::Alive(pid) => {
             return Err(TotsukactlError::AlreadyRunning(format!(

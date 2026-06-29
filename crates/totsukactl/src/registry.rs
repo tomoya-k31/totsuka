@@ -21,6 +21,7 @@ pub struct ProcessEntry {
     pub started_at: Option<DateTime<Utc>>,
     pub last_healthz_at: Option<DateTime<Utc>>,
     pub last_readyz_at: Option<DateTime<Utc>>,
+    pub last_restart_attempt_at: Option<DateTime<Utc>>,
     pub consecutive_failures: u32,
     pub restart_count: u32,
 }
@@ -34,6 +35,7 @@ impl ProcessEntry {
             started_at: None,
             last_healthz_at: None,
             last_readyz_at: None,
+            last_restart_attempt_at: None,
             consecutive_failures: 0,
             restart_count: 0,
         }
@@ -112,6 +114,12 @@ impl Registry {
     pub async fn touch_readyz(&self, name: &str, at: DateTime<Utc>) {
         if let Some(e) = self.inner.write().await.get_mut(name) {
             e.last_readyz_at = Some(at);
+        }
+    }
+
+    pub async fn touch_restart_attempt(&self, name: &str, at: DateTime<Utc>) {
+        if let Some(e) = self.inner.write().await.get_mut(name) {
+            e.last_restart_attempt_at = Some(at);
         }
     }
 }

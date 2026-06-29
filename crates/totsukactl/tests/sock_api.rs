@@ -20,7 +20,7 @@ async fn list_round_trip_returns_registry_entries() {
         registry: registry.clone(),
         control_tx: tx,
     };
-    let listener = bind_uds(&sock).await.unwrap();
+    let listener = bind_uds(&sock).unwrap();
     let r = router(state);
     let _h = tokio::spawn(async move {
         let _ = serve_uds(listener, r).await;
@@ -42,7 +42,7 @@ async fn shutdown_post_enqueues_control_msg() {
         registry,
         control_tx: tx,
     };
-    let listener = bind_uds(&sock).await.unwrap();
+    let listener = bind_uds(&sock).unwrap();
     let r = router(state);
     let _h = tokio::spawn(async move {
         let _ = serve_uds(listener, r).await;
@@ -70,7 +70,7 @@ async fn reload_rejects_non_adapter() {
         registry,
         control_tx: tx,
     };
-    let listener = bind_uds(&sock).await.unwrap();
+    let listener = bind_uds(&sock).unwrap();
     let r = router(state);
     let _h = tokio::spawn(async move {
         let _ = serve_uds(listener, r).await;

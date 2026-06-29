@@ -82,7 +82,7 @@ async fn e2e_boot_status_restart_down() {
 
     // Spawn sock_api server
     let (ctl_tx, mut ctl_rx) = mpsc::channel::<ControlMsg>(8);
-    let listener = bind_uds(&paths.supervisor_sock()).await.unwrap();
+    let listener = bind_uds(&paths.supervisor_sock()).unwrap();
     let state = SockApiState {
         registry: registry.clone(),
         control_tx: ctl_tx,

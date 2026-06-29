@@ -10,7 +10,7 @@ pub use client::SupervisorClient;
 pub use dto::{ProcessDto, ShutdownReq};
 pub use server::{router, ControlMsg, SockApiState};
 
-pub async fn bind_uds(path: &Path) -> Result<UnixListener, TotsukactlError> {
+pub fn bind_uds(path: &Path) -> Result<UnixListener, TotsukactlError> {
     if path.exists() {
         std::fs::remove_file(path)?;
     }

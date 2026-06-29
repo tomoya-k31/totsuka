@@ -11,7 +11,8 @@ pub async fn run(paths: &Paths, clock: &dyn Clock) -> Result<(), TotsukactlError
     let client = SupervisorClient::new(paths.supervisor_sock());
     let entries = match client.list().await {
         Ok(v) => v,
-        Err(_) => {
+        Err(e) => {
+            tracing::debug!(error=%e, "supervisor.sock unreachable");
             println!("stack not running");
             return Err(TotsukactlError::NotRunning);
         }

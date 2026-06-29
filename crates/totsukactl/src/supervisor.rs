@@ -3,6 +3,8 @@ pub use boot::{await_ready, boot, BootCtx};
 
 pub mod control;
 
+pub mod restart_tick;
+
 pub mod shutdown;
 pub use shutdown::{shutdown_stack, ShutdownCfg};
 

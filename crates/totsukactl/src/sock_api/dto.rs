@@ -11,6 +11,7 @@ pub struct ProcessDto {
     pub started_at: Option<DateTime<Utc>>,
     pub last_healthz_at: Option<DateTime<Utc>>,
     pub last_readyz_at: Option<DateTime<Utc>>,
+    pub last_restart_attempt_at: Option<DateTime<Utc>>,
     pub consecutive_failures: u32,
     pub restart_count: u32,
 }
@@ -24,6 +25,7 @@ impl From<ProcessEntry> for ProcessDto {
             started_at: e.started_at,
             last_healthz_at: e.last_healthz_at,
             last_readyz_at: e.last_readyz_at,
+            last_restart_attempt_at: e.last_restart_attempt_at,
             consecutive_failures: e.consecutive_failures,
             restart_count: e.restart_count,
         }

@@ -15,6 +15,7 @@ fn table_has_expected_header_and_rows() {
         started_at: Some(started),
         last_healthz_at: Some(healthz),
         last_readyz_at: None,
+        last_restart_attempt_at: None,
         consecutive_failures: 0,
         restart_count: 0,
     };
@@ -25,6 +26,7 @@ fn table_has_expected_header_and_rows() {
         started_at: Some(started),
         last_healthz_at: Some(healthz),
         last_readyz_at: None,
+        last_restart_attempt_at: None,
         consecutive_failures: 0,
         restart_count: 0,
     };
@@ -49,6 +51,7 @@ fn missing_pid_and_times_render_dashes() {
         started_at: None,
         last_healthz_at: None,
         last_readyz_at: None,
+        last_restart_attempt_at: None,
         consecutive_failures: 0,
         restart_count: 2,
     };

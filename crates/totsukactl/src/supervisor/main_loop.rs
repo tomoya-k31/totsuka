@@ -35,7 +35,6 @@ pub async fn run_supervisor(
     let pre = Preflight {
         compose: compose.clone(),
         cfg: &cfg,
-        paths: &paths,
     };
     pre.run_phase_minus1(recreate).await?;
 
@@ -117,9 +116,26 @@ pub async fn run_supervisor(
         shutdown_tok.clone(),
     ));
 
+    // Capture shutdown config values before spawning tasks that need them.
+    let shutdown_cfg_grace = Duration::from_secs(cfg.supervisor.shutdown_grace_secs);
+    let shutdown_cfg_kill = Duration::from_secs(cfg.supervisor.shutdown_kill_secs);
+
+    let restart_cfg = RestartCfg::from_section(&cfg.supervisor.heartbeat)?;
+    let h_rt = tokio::spawn(crate::supervisor::restart_tick::run_restart_tick(
+        std::time::Duration::from_secs(10),
+        registry.clone(),
+        spawner_arc.clone(),
+        specs.clone(),
+        paths.clone(),
+        clock.clone(),
+        restart_cfg.clone(),
+        shutdown_cfg_kill,
+        shutdown_tok.clone(),
+    ));
+
     // sock_api server
     let (ctl_tx, mut ctl_rx) = mpsc::channel::<ControlMsg>(16);
-    let listener = bind_uds(&paths.supervisor_sock()).await?;
+    let listener = bind_uds(&paths.supervisor_sock())?;
     let state = SockApiState {
         registry: registry.clone(),
         control_tx: ctl_tx,
@@ -128,10 +144,6 @@ pub async fn run_supervisor(
     let h_sock = tokio::spawn(async move {
         let _ = serve_uds(listener, r).await;
     });
-
-    // Capture shutdown config values before moving into async block
-    let shutdown_cfg_grace = Duration::from_secs(cfg.supervisor.shutdown_grace_secs);
-    let shutdown_cfg_kill = Duration::from_secs(cfg.supervisor.shutdown_kill_secs);
 
     // Control dispatcher: loop until SIGTERM/SIGINT or ControlMsg::Shutdown.
     {
@@ -144,7 +156,6 @@ pub async fn run_supervisor(
             .map_err(|e| TotsukactlError::Internal(format!("install SIGTERM: {e}")))?;
         let mut int = signal(SignalKind::interrupt())
             .map_err(|e| TotsukactlError::Internal(format!("install SIGINT: {e}")))?;
-        let restart_cfg = RestartCfg::from_section(&cfg.supervisor.heartbeat)?;
 
         let (also_postgres, force): (bool, bool) = loop {
             tokio::select! {
@@ -198,7 +209,8 @@ pub async fn run_supervisor(
     }
 
     h_sock.abort();
-    let _ = tokio::join!(h_hb, h_rd, h_pg, h_sock);
+    h_rt.abort();
+    let _ = tokio::join!(h_hb, h_rd, h_pg, h_rt, h_sock);
     Ok(())
 }
 

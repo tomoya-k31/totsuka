@@ -2,7 +2,6 @@
 
 use crate::compose::ComposeExec;
 use crate::error::TotsukactlError;
-use crate::paths::Paths;
 use crate::schema_check::check_schema_version;
 use sqlx::PgPool;
 use std::path::Path;
@@ -13,7 +12,6 @@ use tokio::net::UnixStream;
 pub struct Preflight<'a> {
     pub compose: Arc<dyn ComposeExec>,
     pub cfg: &'a totsuka_config::Config,
-    pub paths: &'a Paths,
 }
 
 impl<'a> Preflight<'a> {
