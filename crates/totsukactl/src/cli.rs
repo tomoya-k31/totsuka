@@ -54,6 +54,20 @@ pub fn parse() -> Cli {
 }
 
 pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
+    // Init bootstraps the config from scratch, so it runs before config loading.
+    if let Cmd::Init = &cli.command {
+        let state = crate::paths::resolve_tilde("~/.local/state/totsuka");
+        let data = crate::paths::resolve_tilde("~/.local/share/totsuka");
+        let paths = crate::paths::Paths {
+            log_dir: state.join("logs"),
+            pid_dir: state.join("pids"),
+            sock_dir: state.join("sock"),
+            state_dir: state,
+            data_dir: data,
+        };
+        return crate::commands::init::run(&paths).await;
+    }
+
     let config_path = cli
         .config
         .as_ref()
@@ -78,8 +92,6 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
             crate::commands::logs::run(&paths, &bin, lines, follow).await
         }
         Cmd::Migrate => crate::commands::migrate::run(&cfg).await,
-        _ => Err(TotsukactlError::Internal(
-            "cli dispatch wiring lands in Tasks 23-25".into(),
-        )),
+        Cmd::Init => unreachable!("Init is handled before config loading"),
     }
 }

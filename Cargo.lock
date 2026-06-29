@@ -2716,6 +2716,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
+ "toml",
  "totsuka-bus",
  "totsuka-config",
  "totsuka-core",
