@@ -70,7 +70,7 @@ async fn shutdown(
 }
 
 fn known(name: &str) -> bool {
-    crate::registry::ORDER.iter().any(|n| *n == name)
+    crate::registry::ORDER.contains(&name)
 }
 
 fn rfc7807(code: StatusCode, type_uri: &str, detail: &str) -> axum::response::Response {

@@ -68,8 +68,11 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
 
     match cli.command {
         Cmd::Status => crate::commands::status::run(&paths, clock.as_ref()).await,
+        Cmd::Up { recreate, bootstrap } => {
+            crate::commands::up::run(cfg, paths, recreate, bootstrap).await
+        }
         _ => Err(TotsukactlError::Internal(
-            "cli dispatch wiring lands in Tasks 20-25".into(),
+            "cli dispatch wiring lands in Tasks 21-25".into(),
         )),
     }
 }
