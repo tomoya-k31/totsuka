@@ -180,6 +180,7 @@ pub async fn run_supervisor(
         .await?;
     }
 
+    h_sock.abort();
     let _ = tokio::join!(h_hb, h_rd, h_pg, h_sock);
     Ok(())
 }
