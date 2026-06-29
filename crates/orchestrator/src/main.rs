@@ -33,8 +33,9 @@ async fn main() -> anyhow::Result<()> {
     // 3. Open PgPool
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
         format!(
-            "postgres://{}:totsuka@{}:{}/{}",
+            "postgres://{}:{}@{}:{}/{}",
             config.postgres.user,
+            config.postgres.password.expose(),
             config.postgres.host,
             config.postgres.port,
             config.postgres.database,
