@@ -153,6 +153,33 @@ where
     Ok(out)
 }
 
+/// Flatten every string leaf in the TOML tree into a `section.subsection.key → value`
+/// map suitable as a fallback lookup for `${section.key}` expansion.
+pub fn flatten_string_leaves(tree: &toml::Value) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    walk_leaves(tree, &mut Vec::new(), &mut out);
+    out
+}
+
+fn walk_leaves(value: &toml::Value, path: &mut Vec<String>, out: &mut HashMap<String, String>) {
+    match value {
+        toml::Value::String(s) => {
+            if !path.is_empty() {
+                out.insert(path.join("."), s.clone());
+            }
+        }
+        toml::Value::Table(tbl) => {
+            for (k, v) in tbl.iter() {
+                path.push(k.clone());
+                walk_leaves(v, path, out);
+                path.pop();
+            }
+        }
+        // Arrays and scalars are not exposed as ${section.key} refs.
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

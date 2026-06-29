@@ -5,7 +5,7 @@ pub mod path_expand;
 pub mod schema;
 pub mod validate;
 pub use env_override::apply_env_overrides;
-pub use expand::{expand_toml_value, expand_vars, ExpandError};
+pub use expand::{expand_toml_value, expand_vars, flatten_string_leaves, ExpandError};
 pub use path_expand::resolve_tilde;
 pub use schema::Config;
 pub use validate::ValidationError;
@@ -45,6 +45,15 @@ impl Config {
         //    final tree so it never reaches Config deserialization.
         let (mut tree, vars) = take_vars_table(overlaid);
 
+        // 2b. Merge the flat map of string leaves into the lookup. Explicit [vars]
+        //     entries always win over an accidental same-named cross-section value.
+        let flat = crate::expand::flatten_string_leaves(&tree);
+        let mut merged: HashMap<String, String> = flat;
+        for (k, v) in vars {
+            merged.insert(k, v);
+        }
+        let vars = merged;
+
         // 3. Expand every string leaf in place.
         expand_toml_value(&mut tree, &vars, &|name| std::env::var(name).ok())?;
 
@@ -69,6 +78,15 @@ impl Config {
         // 2. Collect [vars] block as the expansion lookup map. Strip from the
         //    final tree so it never reaches Config deserialization.
         let (mut tree, vars) = take_vars_table(overlaid);
+
+        // 2b. Merge the flat map of string leaves into the lookup. Explicit [vars]
+        //     entries always win over an accidental same-named cross-section value.
+        let flat = crate::expand::flatten_string_leaves(&tree);
+        let mut merged: HashMap<String, String> = flat;
+        for (k, v) in vars {
+            merged.insert(k, v);
+        }
+        let vars = merged;
 
         // 3. Expand every string leaf in place.
         expand_toml_value(&mut tree, &vars, &|name| std::env::var(name).ok())?;
