@@ -10,6 +10,7 @@ members = [
     "crates/github-watcher",
     "crates/orchestrator",
     "crates/qa-service",
+    "crates/totsukactl",
 ]
 
 [workspace.package]
