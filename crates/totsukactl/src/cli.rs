@@ -68,12 +68,14 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
 
     match cli.command {
         Cmd::Down { force, postgres } => crate::commands::down::run(&paths, force, postgres).await,
+        Cmd::Restart { bin } => crate::commands::restart::run(&paths, &bin).await,
+        Cmd::Reload { bin } => crate::commands::reload::run(&paths, &bin).await,
         Cmd::Status => crate::commands::status::run(&paths, clock.as_ref()).await,
         Cmd::Up { recreate, bootstrap } => {
             crate::commands::up::run(cfg, paths, recreate, bootstrap).await
         }
         _ => Err(TotsukactlError::Internal(
-            "cli dispatch wiring lands in Tasks 22-25".into(),
+            "cli dispatch wiring lands in Tasks 23-25".into(),
         )),
     }
 }
