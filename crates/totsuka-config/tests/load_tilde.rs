@@ -82,7 +82,10 @@ fn from_toml_str_expands_tildes_using_live_home() {
     let c = Config::from_toml_str(TOML_WITH_TILDES).expect("parse");
     assert_eq!(c.totsuka.state_dir, format!("{home}/.local/state/totsuka"));
     assert_eq!(c.totsuka.data_dir, format!("{home}/.local/share/totsuka"));
-    assert_eq!(c.agent_adapter.uds_path, format!("{home}/sock/adapter.sock"));
+    assert_eq!(
+        c.agent_adapter.uds_path,
+        format!("{home}/sock/adapter.sock")
+    );
     assert_eq!(
         c.agent_adapter.herdr_socket,
         format!("{home}/.config/herdr/herdr.sock")

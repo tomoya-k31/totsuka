@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::net::UnixListener;
 
 pub async fn bind_uds(path: &Path) -> anyhow::Result<UnixListener> {
@@ -35,13 +35,4 @@ pub async fn serve_uds(listener: UnixListener, router: axum::Router) -> anyhow::
             }
         });
     }
-}
-
-pub fn resolve_uds_path(raw: &str) -> PathBuf {
-    if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(raw)
 }

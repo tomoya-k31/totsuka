@@ -5,11 +5,12 @@ use agent_adapter::{
     gc::spawn_gc_loop,
     herdr::wire::WireHerdr,
     lifecycle::{probe_ready, probe_repos, wait_for_signals},
-    listener::{bind_uds, resolve_uds_path, serve_uds},
+    listener::{bind_uds, serve_uds},
     repo::RepoRegistry,
     server::{router, AppState},
     worktree::WorktreeManager,
 };
+use totsuka_config::resolve_tilde;
 use totsuka_core::SystemClock;
 use totsuka_telemetry::HealthState;
 
@@ -23,7 +24,10 @@ async fn main() -> anyhow::Result<()> {
     let _log_guard =
         totsuka_telemetry::init_tracing(&state_dir, "agent-adapter", &config.totsuka.log_level);
 
-    let herdr_socket = resolve_uds_path(&config.agent_adapter.herdr_socket);
+    let herdr_socket = std::path::PathBuf::from(resolve_tilde(
+        &config.agent_adapter.herdr_socket,
+        std::env::var("HOME").ok().as_deref(),
+    ));
     let herdr: Arc<dyn agent_adapter::herdr::HerdrClient> =
         Arc::new(WireHerdr::connect(&herdr_socket).await?);
 
@@ -46,7 +50,10 @@ async fn main() -> anyhow::Result<()> {
     let gc_interval = Duration::from_secs(config.agent_adapter.worktree_orphan_scan_interval_secs);
     let _gc = spawn_gc_loop(state.clone(), gc_interval);
 
-    let uds = resolve_uds_path(&config.agent_adapter.uds_path);
+    let uds = std::path::PathBuf::from(resolve_tilde(
+        &config.agent_adapter.uds_path,
+        std::env::var("HOME").ok().as_deref(),
+    ));
     let listener = bind_uds(&uds).await?;
     tracing::info!(path=?uds, "agent-adapter listening on UDS");
 

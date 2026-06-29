@@ -6,7 +6,7 @@ use qa_service::catchup::run_catchup_once;
 use qa_service::classifier::{self, ClassifyRequest, RepoCandidate};
 use qa_service::gh_inbox::GhInboxClient;
 use qa_service::lifecycle::{probe_adapter, probe_db, probe_repo_descriptions, wait_for_signals};
-use qa_service::listener::{bind_uds, resolve_uds_path, serve_uds};
+use qa_service::listener::{bind_uds, serve_uds};
 use qa_service::mode::AnswerMode;
 use qa_service::question_filter::{QuestionFilter, Trigger};
 use qa_service::reaction::{handle_reaction, ReactionCtx};
@@ -24,6 +24,7 @@ use qa_service::QaApp;
 use sqlx::postgres::PgPoolOptions;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
+use totsuka_config::resolve_tilde;
 use totsuka_core::SystemClock;
 use totsuka_telemetry::HealthState;
 
@@ -58,7 +59,10 @@ async fn main() -> anyhow::Result<()> {
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
 
     // 3. Adapter + Slack + Classifier + Inbox + RepoSelector
-    let adapter_path = resolve_uds_path(&config.qa_service.adapter_uds);
+    let adapter_path = std::path::PathBuf::from(resolve_tilde(
+        &config.qa_service.adapter_uds,
+        std::env::var("HOME").ok().as_deref(),
+    ));
     let adapter: Arc<dyn AdapterClient> = Arc::new(HyperlocalAdapter::new(adapter_path));
 
     let slack: Arc<dyn SlackClient> = Arc::new(HttpSlackClient::new(
@@ -279,7 +283,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let listener_h = {
-        let uds = resolve_uds_path(&config.qa_service.uds_path);
+        let uds = std::path::PathBuf::from(resolve_tilde(
+            &config.qa_service.uds_path,
+            std::env::var("HOME").ok().as_deref(),
+        ));
         let listener = bind_uds(&uds).await?;
         let router = totsuka_telemetry::http::router(health.clone()).layer(
             axum::middleware::from_fn(totsuka_telemetry::request_id::middleware),

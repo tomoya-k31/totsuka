@@ -2,7 +2,7 @@ use crate::error::QaError;
 use hyper::body::Incoming;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as ConnBuilder;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::net::UnixListener;
 use tower::Service;
 
@@ -43,13 +43,4 @@ pub async fn serve_uds(listener: UnixListener, router: axum::Router) -> Result<(
             }
         });
     }
-}
-
-pub fn resolve_uds_path(raw: &str) -> PathBuf {
-    if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(raw)
 }

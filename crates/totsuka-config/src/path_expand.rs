@@ -4,7 +4,9 @@
 /// Returns `raw` unchanged if `home` is `None`, if `raw` doesn't start with a
 /// tilde token (`~/` or exactly `~`), or if `raw` is empty.
 pub fn resolve_tilde(raw: &str, home: Option<&str>) -> String {
-    let Some(home) = home else { return raw.to_string() };
+    let Some(home) = home else {
+        return raw.to_string();
+    };
     if raw == "~" {
         return home.to_string();
     }

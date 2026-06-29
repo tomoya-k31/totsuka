@@ -89,13 +89,15 @@ fn cross_section_adapter_uds_expands_transitively() {
 
 #[test]
 fn vars_table_still_works_alongside_cross_section() {
-    let toml_with_both = MIN_TOML_WITH_CROSS_REFS.replace(
-        "[agent_adapter]",
-        "[vars]\nworkdir = \"/workspace\"\n\n[agent_adapter]",
-    ).replace(
-        r#"herdr_socket="/tmp/herdr.sock""#,
-        r#"herdr_socket="${workdir}/herdr.sock""#,
-    );
+    let toml_with_both = MIN_TOML_WITH_CROSS_REFS
+        .replace(
+            "[agent_adapter]",
+            "[vars]\nworkdir = \"/workspace\"\n\n[agent_adapter]",
+        )
+        .replace(
+            r#"herdr_socket="/tmp/herdr.sock""#,
+            r#"herdr_socket="${workdir}/herdr.sock""#,
+        );
     let c = Config::from_toml_str(&toml_with_both).expect("parse");
     assert_eq!(c.agent_adapter.herdr_socket, "/workspace/herdr.sock");
     // Cross-section ref still works

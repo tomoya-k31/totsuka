@@ -2,7 +2,10 @@ use totsuka_config::path_expand::resolve_tilde;
 
 #[test]
 fn expands_leading_tilde_slash_with_home() {
-    assert_eq!(resolve_tilde("~/.config/x", Some("/home/u")), "/home/u/.config/x");
+    assert_eq!(
+        resolve_tilde("~/.config/x", Some("/home/u")),
+        "/home/u/.config/x"
+    );
 }
 
 #[test]

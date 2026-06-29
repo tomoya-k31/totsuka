@@ -5,7 +5,7 @@ use orchestrator::consumer::run_consumer;
 use orchestrator::effect::EffectLedger;
 use orchestrator::gh_writeback::MockWriteback;
 use orchestrator::lifecycle::{probe_adapter, probe_db, wait_for_signals};
-use orchestrator::listener::{bind_uds, resolve_uds_path, serve_uds};
+use orchestrator::listener::{bind_uds, serve_uds};
 use orchestrator::repository::PgRepository;
 use orchestrator::schema_check::check_schema_version;
 use orchestrator::sm::Engine;
@@ -15,6 +15,7 @@ use orchestrator::wip::WipGate;
 use sqlx::postgres::PgPoolOptions;
 use tokio_util::sync::CancellationToken;
 use totsuka_bus::pgmq::create_queue;
+use totsuka_config::resolve_tilde;
 use totsuka_core::SystemClock;
 use totsuka_telemetry::HealthState;
 
@@ -55,7 +56,10 @@ async fn main() -> anyhow::Result<()> {
     let clock: Arc<dyn totsuka_core::Clock> = Arc::new(SystemClock);
 
     // 6. HyperlocalAdapter (type annotation required — not `as` cast)
-    let adapter_path = resolve_uds_path(&config.orchestrator.adapter_uds);
+    let adapter_path = std::path::PathBuf::from(resolve_tilde(
+        &config.orchestrator.adapter_uds,
+        std::env::var("HOME").ok().as_deref(),
+    ));
     let adapter: Arc<dyn orchestrator::adapter_client::AdapterClient> =
         Arc::new(HyperlocalAdapter::new(adapter_path));
 
@@ -109,7 +113,10 @@ async fn main() -> anyhow::Result<()> {
     let router = totsuka_telemetry::http::router(health.clone()).layer(axum::middleware::from_fn(
         totsuka_telemetry::request_id::middleware,
     ));
-    let uds_path = resolve_uds_path(&config.orchestrator.uds_path);
+    let uds_path = std::path::PathBuf::from(resolve_tilde(
+        &config.orchestrator.uds_path,
+        std::env::var("HOME").ok().as_deref(),
+    ));
     let listener = bind_uds(&uds_path).await?;
     let server_h = tokio::spawn(async move { serve_uds(listener, router).await });
 

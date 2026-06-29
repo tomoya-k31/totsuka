@@ -16,7 +16,10 @@ where
     let expanded = expand_vars_lenient(s, vars, env_lookup)?;
     // Then: leading-tilde expansion using HOME from the env_lookup.
     let home = env_lookup("HOME");
-    Ok(crate::path_expand::resolve_tilde(&expanded, home.as_deref()))
+    Ok(crate::path_expand::resolve_tilde(
+        &expanded,
+        home.as_deref(),
+    ))
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
