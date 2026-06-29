@@ -142,7 +142,9 @@ pub async fn run_supervisor(
     };
     let r = router(state);
     let h_sock = tokio::spawn(async move {
-        let _ = serve_uds(listener, r).await;
+        if let Err(e) = serve_uds(listener, r).await {
+            tracing::error!(error=%e, "supervisor.sock serve_uds exited; CLI IPC will be unavailable");
+        }
     });
 
     // Control dispatcher: loop until SIGTERM/SIGINT or ControlMsg::Shutdown.
@@ -187,7 +189,9 @@ pub async fn run_supervisor(
                             tracing::error!(child = %name, error = %e, "reload failed");
                         }
                     }
-                    None => break (false, false),
+                    None => {
+                        ctl_rx = crate::supervisor::ctl_replace::replace_closed_ctl_rx(ctl_rx).await;
+                    }
                 },
             }
         };
