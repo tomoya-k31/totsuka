@@ -41,6 +41,18 @@ impl Config {
         let raw = std::fs::read_to_string(&resolved)?;
         let parsed: toml::Value = toml::from_str(&raw)?;
 
+        // Optional sibling secrets.toml — merged BELOW env override but ABOVE config.toml.
+        let secrets_path = std::path::Path::new(&*resolved)
+            .parent()
+            .map(|p| p.join("secrets.toml"));
+        let parsed = if let Some(p) = secrets_path.filter(|p| p.exists()) {
+            let raw_sec = std::fs::read_to_string(&p)?;
+            let parsed_sec: toml::Value = toml::from_str(&raw_sec)?;
+            merge_toml(parsed, parsed_sec)
+        } else {
+            parsed
+        };
+
         // 1. Apply env overrides (TOTSUKA__SECTION__KEY=value).
         let overlaid = apply_env_overrides(parsed, std::env::vars());
 
@@ -100,6 +112,25 @@ impl Config {
         // 5. Validate.
         cfg.validate().map_err(LoadError::Validation)?;
         Ok(cfg)
+    }
+}
+
+/// Recursive deep merge: keys present in `overlay` win over `base`. Tables are
+/// merged element-wise; non-table values from `overlay` replace `base`'s.
+fn merge_toml(base: toml::Value, overlay: toml::Value) -> toml::Value {
+    use toml::Value;
+    match (base, overlay) {
+        (Value::Table(mut b), Value::Table(o)) => {
+            for (k, v) in o {
+                let merged = match b.remove(&k) {
+                    Some(bv) => merge_toml(bv, v),
+                    None => v,
+                };
+                b.insert(k, merged);
+            }
+            Value::Table(b)
+        }
+        (_, overlay) => overlay,
     }
 }
 
