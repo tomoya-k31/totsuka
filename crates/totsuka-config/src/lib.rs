@@ -1,10 +1,12 @@
 #![forbid(unsafe_code)]
 pub mod env_override;
 pub mod expand;
+pub mod path_expand;
 pub mod schema;
 pub mod validate;
 pub use env_override::apply_env_overrides;
-pub use expand::{expand_toml_value, expand_vars, ExpandError};
+pub use expand::{expand_toml_value, expand_vars, flatten_string_leaves, ExpandError};
+pub use path_expand::resolve_tilde;
 pub use schema::Config;
 pub use validate::ValidationError;
 
@@ -33,8 +35,23 @@ impl Config {
     /// the overlay step so env-driven values can still reference them); the
     /// `[vars]` table is stripped from the final `Config`.
     pub fn load(path: impl AsRef<Path>) -> Result<Config, LoadError> {
-        let raw = std::fs::read_to_string(path.as_ref())?;
+        let raw_path = path.as_ref().to_string_lossy();
+        let resolved =
+            crate::path_expand::resolve_tilde(&raw_path, std::env::var("HOME").ok().as_deref());
+        let raw = std::fs::read_to_string(&resolved)?;
         let parsed: toml::Value = toml::from_str(&raw)?;
+
+        // Optional sibling secrets.toml — merged BELOW env override but ABOVE config.toml.
+        let secrets_path = std::path::Path::new(&*resolved)
+            .parent()
+            .map(|p| p.join("secrets.toml"));
+        let parsed = if let Some(p) = secrets_path.filter(|p| p.exists()) {
+            let raw_sec = std::fs::read_to_string(&p)?;
+            let parsed_sec: toml::Value = toml::from_str(&raw_sec)?;
+            merge_toml(parsed, parsed_sec)
+        } else {
+            parsed
+        };
 
         // 1. Apply env overrides (TOTSUKA__SECTION__KEY=value).
         let overlaid = apply_env_overrides(parsed, std::env::vars());
@@ -42,6 +59,15 @@ impl Config {
         // 2. Collect [vars] block as the expansion lookup map. Strip from the
         //    final tree so it never reaches Config deserialization.
         let (mut tree, vars) = take_vars_table(overlaid);
+
+        // 2b. Merge the flat map of string leaves into the lookup. Explicit [vars]
+        //     entries always win over an accidental same-named cross-section value.
+        let flat = crate::expand::flatten_string_leaves(&tree);
+        let mut merged: HashMap<String, String> = flat;
+        for (k, v) in vars {
+            merged.insert(k, v);
+        }
+        let vars = merged;
 
         // 3. Expand every string leaf in place.
         expand_toml_value(&mut tree, &vars, &|name| std::env::var(name).ok())?;
@@ -68,6 +94,15 @@ impl Config {
         //    final tree so it never reaches Config deserialization.
         let (mut tree, vars) = take_vars_table(overlaid);
 
+        // 2b. Merge the flat map of string leaves into the lookup. Explicit [vars]
+        //     entries always win over an accidental same-named cross-section value.
+        let flat = crate::expand::flatten_string_leaves(&tree);
+        let mut merged: HashMap<String, String> = flat;
+        for (k, v) in vars {
+            merged.insert(k, v);
+        }
+        let vars = merged;
+
         // 3. Expand every string leaf in place.
         expand_toml_value(&mut tree, &vars, &|name| std::env::var(name).ok())?;
 
@@ -77,6 +112,25 @@ impl Config {
         // 5. Validate.
         cfg.validate().map_err(LoadError::Validation)?;
         Ok(cfg)
+    }
+}
+
+/// Recursive deep merge: keys present in `overlay` win over `base`. Tables are
+/// merged element-wise; non-table values from `overlay` replace `base`'s.
+fn merge_toml(base: toml::Value, overlay: toml::Value) -> toml::Value {
+    use toml::Value;
+    match (base, overlay) {
+        (Value::Table(mut b), Value::Table(o)) => {
+            for (k, v) in o {
+                let merged = match b.remove(&k) {
+                    Some(bv) => merge_toml(bv, v),
+                    None => v,
+                };
+                b.insert(k, merged);
+            }
+            Value::Table(b)
+        }
+        (_, overlay) => overlay,
     }
 }
 

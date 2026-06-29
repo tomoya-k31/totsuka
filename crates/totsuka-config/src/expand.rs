@@ -2,6 +2,26 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+/// Expand a single string leaf: first var/env expansion (lenient), then
+/// leading-tilde expansion using HOME from the env_lookup.
+fn expand_string_leaf<F>(
+    s: &str,
+    vars: &HashMap<String, String>,
+    env_lookup: &F,
+) -> Result<String, ExpandError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    // First: var/env expansion (lenient — unknown ${name} survives as literal).
+    let expanded = expand_vars_lenient(s, vars, env_lookup)?;
+    // Then: leading-tilde expansion using HOME from the env_lookup.
+    let home = env_lookup("HOME");
+    Ok(crate::path_expand::resolve_tilde(
+        &expanded,
+        home.as_deref(),
+    ))
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ExpandError {
     #[error("undefined variable: {0}")]
@@ -86,7 +106,7 @@ where
 {
     match value {
         toml::Value::String(s) => {
-            *s = expand_vars_lenient(s, vars, env_lookup)?;
+            *s = expand_string_leaf(s, vars, env_lookup)?;
         }
         toml::Value::Array(arr) => {
             for v in arr.iter_mut() {
@@ -151,6 +171,33 @@ where
     }
     out.push_str(&input[last..]);
     Ok(out)
+}
+
+/// Flatten every string leaf in the TOML tree into a `section.subsection.key → value`
+/// map suitable as a fallback lookup for `${section.key}` expansion.
+pub fn flatten_string_leaves(tree: &toml::Value) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    walk_leaves(tree, &mut Vec::new(), &mut out);
+    out
+}
+
+fn walk_leaves(value: &toml::Value, path: &mut Vec<String>, out: &mut HashMap<String, String>) {
+    match value {
+        toml::Value::String(s) => {
+            if !path.is_empty() {
+                out.insert(path.join("."), s.clone());
+            }
+        }
+        toml::Value::Table(tbl) => {
+            for (k, v) in tbl.iter() {
+                path.push(k.clone());
+                walk_leaves(v, path, out);
+                path.pop();
+            }
+        }
+        // Arrays and scalars are not exposed as ${section.key} refs.
+        _ => {}
+    }
 }
 
 #[cfg(test)]
