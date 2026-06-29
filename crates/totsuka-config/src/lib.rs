@@ -35,7 +35,10 @@ impl Config {
     /// the overlay step so env-driven values can still reference them); the
     /// `[vars]` table is stripped from the final `Config`.
     pub fn load(path: impl AsRef<Path>) -> Result<Config, LoadError> {
-        let raw = std::fs::read_to_string(path.as_ref())?;
+        let raw_path = path.as_ref().to_string_lossy();
+        let resolved =
+            crate::path_expand::resolve_tilde(&raw_path, std::env::var("HOME").ok().as_deref());
+        let raw = std::fs::read_to_string(&resolved)?;
         let parsed: toml::Value = toml::from_str(&raw)?;
 
         // 1. Apply env overrides (TOTSUKA__SECTION__KEY=value).
