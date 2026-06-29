@@ -36,8 +36,14 @@ pub struct MockPgmqProbe {
 }
 
 impl MockPgmqProbe {
-    pub fn new(initial: bool) -> Self { Self { answer: Mutex::new(initial) } }
-    pub fn set(&self, v: bool) { *self.answer.lock().unwrap() = v; }
+    pub fn new(initial: bool) -> Self {
+        Self {
+            answer: Mutex::new(initial),
+        }
+    }
+    pub fn set(&self, v: bool) {
+        *self.answer.lock().unwrap() = v;
+    }
 }
 
 #[async_trait]

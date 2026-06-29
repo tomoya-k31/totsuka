@@ -3,7 +3,11 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "totsukactl", version, about = "Supervisor + CLI for the totsuka stack")]
+#[command(
+    name = "totsukactl",
+    version,
+    about = "Supervisor + CLI for the totsuka stack"
+)]
 pub struct Cli {
     /// Path to totsuka.toml (defaults to $TOTSUKA_CONFIG or ~/.config/totsuka/config.toml)
     #[arg(long, global = true)]
@@ -85,9 +89,10 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
         Cmd::Restart { bin } => crate::commands::restart::run(&paths, &bin).await,
         Cmd::Reload { bin } => crate::commands::reload::run(&paths, &bin).await,
         Cmd::Status => crate::commands::status::run(&paths, clock.as_ref()).await,
-        Cmd::Up { recreate, bootstrap } => {
-            crate::commands::up::run(cfg, paths, recreate, bootstrap).await
-        }
+        Cmd::Up {
+            recreate,
+            bootstrap,
+        } => crate::commands::up::run(cfg, paths, recreate, bootstrap).await,
         Cmd::Logs { bin, follow, lines } => {
             crate::commands::logs::run(&paths, &bin, lines, follow).await
         }

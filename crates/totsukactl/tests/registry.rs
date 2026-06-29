@@ -14,7 +14,10 @@ async fn list_returns_spec_startup_order() {
 async fn set_state_persists() {
     let reg = Registry::new();
     reg.set_state("orchestrator", ChildState::Healthy).await;
-    assert_eq!(reg.get("orchestrator").await.unwrap().state, ChildState::Healthy);
+    assert_eq!(
+        reg.get("orchestrator").await.unwrap().state,
+        ChildState::Healthy
+    );
 }
 
 #[tokio::test]
@@ -31,7 +34,10 @@ async fn touch_records_last_healthz_at() {
     let reg = Registry::new();
     let t = Utc.with_ymd_and_hms(2026, 6, 29, 12, 0, 0).unwrap();
     reg.touch_healthz("agent-adapter", t).await;
-    assert_eq!(reg.get("agent-adapter").await.unwrap().last_healthz_at, Some(t));
+    assert_eq!(
+        reg.get("agent-adapter").await.unwrap().last_healthz_at,
+        Some(t)
+    );
 }
 
 #[tokio::test]

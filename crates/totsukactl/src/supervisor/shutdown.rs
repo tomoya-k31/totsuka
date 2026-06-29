@@ -24,13 +24,24 @@ pub async fn shutdown_stack(
     paths: Paths,
 ) -> Result<(), TotsukactlError> {
     if cfg.force {
-        let all = ["github-watcher", "qa-service", "orchestrator", "agent-adapter"];
+        let all = [
+            "github-watcher",
+            "qa-service",
+            "orchestrator",
+            "agent-adapter",
+        ];
         sigterm_parallel(&registry, &all).await;
         wait_or_kill(&registry, &all, cfg.force_grace).await;
     } else {
         // stage 1: ingestion
         sigterm_parallel(&registry, &["github-watcher", "qa-service"]).await;
-        wait_or_kill_escalate(&registry, &["github-watcher", "qa-service"], cfg.grace, cfg.second_term).await;
+        wait_or_kill_escalate(
+            &registry,
+            &["github-watcher", "qa-service"],
+            cfg.grace,
+            cfg.second_term,
+        )
+        .await;
         // stage 2: control
         sigterm_parallel(&registry, &["orchestrator"]).await;
         wait_or_kill_escalate(&registry, &["orchestrator"], cfg.grace, cfg.second_term).await;
@@ -39,7 +50,12 @@ pub async fn shutdown_stack(
         wait_or_kill_escalate(&registry, &["agent-adapter"], cfg.grace, cfg.second_term).await;
     }
 
-    for n in ["github-watcher", "qa-service", "orchestrator", "agent-adapter"] {
+    for n in [
+        "github-watcher",
+        "qa-service",
+        "orchestrator",
+        "agent-adapter",
+    ] {
         registry.set_state(n, ChildState::Stopped).await;
         pidfile::remove(&paths.child_pid(n))?;
     }

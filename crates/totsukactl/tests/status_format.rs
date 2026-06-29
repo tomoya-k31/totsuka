@@ -56,6 +56,9 @@ fn missing_pid_and_times_render_dashes() {
     assert!(s.contains("qa-service"));
     assert!(s.contains("stopped"));
     let row = s.lines().nth(1).unwrap();
-    assert!(row.contains('-'), "expected dashes for pid/uptime/healthz, got {row}");
+    assert!(
+        row.contains('-'),
+        "expected dashes for pid/uptime/healthz, got {row}"
+    );
     assert!(row.contains('2'), "restarts should still show count");
 }

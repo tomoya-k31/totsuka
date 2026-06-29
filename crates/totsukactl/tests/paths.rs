@@ -27,13 +27,23 @@ fn ensure_creates_layout_and_sets_sock_mode_0700() {
         sock_dir: state.join("sock"),
     };
     paths.ensure().unwrap();
-    for p in [&paths.state_dir, &paths.data_dir, &paths.log_dir, &paths.pid_dir, &paths.sock_dir] {
+    for p in [
+        &paths.state_dir,
+        &paths.data_dir,
+        &paths.log_dir,
+        &paths.pid_dir,
+        &paths.sock_dir,
+    ] {
         assert!(p.is_dir(), "{p:?} missing");
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&paths.sock_dir).unwrap().permissions().mode() & 0o777;
+        let mode = std::fs::metadata(&paths.sock_dir)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o700);
     }
 }

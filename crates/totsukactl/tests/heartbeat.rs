@@ -54,5 +54,8 @@ async fn healthz_loop_transitions_after_unhealthy_threshold() {
     shutdown.cancel();
     h.await.unwrap();
 
-    assert_eq!(reg.get("orchestrator").await.unwrap().state, ChildState::Unhealthy);
+    assert_eq!(
+        reg.get("orchestrator").await.unwrap().state,
+        ChildState::Unhealthy
+    );
 }

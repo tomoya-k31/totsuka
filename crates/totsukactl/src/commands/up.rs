@@ -12,7 +12,9 @@ pub async fn run(
 ) -> Result<(), TotsukactlError> {
     match pidfile::check(&paths.supervisor_pid())? {
         pidfile::PidState::Alive(pid) => {
-            return Err(TotsukactlError::AlreadyRunning(format!("supervisor pid {pid}")));
+            return Err(TotsukactlError::AlreadyRunning(format!(
+                "supervisor pid {pid}"
+            )));
         }
         pidfile::PidState::Stale(pid) => {
             tracing::warn!(stale_pid = pid, "removing stale supervisor.pid");

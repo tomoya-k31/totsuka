@@ -22,8 +22,15 @@ async fn shutdown_clears_pid_files_and_sets_stopped_state() {
     // Use a fictitious pid (kill on a non-existent pid is a no-op so we exercise
     // the cleanup path only without risking signalling the test runner).
     let pid: i32 = 0x7fff_fffe;
-    for n in ["github-watcher", "qa-service", "orchestrator", "agent-adapter"] {
-        registry.set_pid(n, Some(pid), Some(chrono::Utc::now())).await;
+    for n in [
+        "github-watcher",
+        "qa-service",
+        "orchestrator",
+        "agent-adapter",
+    ] {
+        registry
+            .set_pid(n, Some(pid), Some(chrono::Utc::now()))
+            .await;
         std::fs::write(paths.child_pid(n), format!("{pid}\n")).unwrap();
     }
     std::fs::write(paths.supervisor_pid(), "1\n").unwrap();
@@ -36,8 +43,15 @@ async fn shutdown_clears_pid_files_and_sets_stopped_state() {
         also_postgres: false,
         force: true, // use force to skip the multi-stage waits in the test
     };
-    shutdown_stack(cfg, registry.clone(), compose, paths.clone()).await.unwrap();
-    for n in ["github-watcher", "qa-service", "orchestrator", "agent-adapter"] {
+    shutdown_stack(cfg, registry.clone(), compose, paths.clone())
+        .await
+        .unwrap();
+    for n in [
+        "github-watcher",
+        "qa-service",
+        "orchestrator",
+        "agent-adapter",
+    ] {
         assert!(!paths.child_pid(n).exists(), "{n}.pid still exists");
         assert_eq!(
             registry.get(n).await.unwrap().state,
@@ -85,8 +99,15 @@ async fn shutdown_graceful_three_stage_walks_full_sequence() {
     paths.ensure().unwrap();
     let registry = Arc::new(Registry::new());
     let dead_pid = 0x7fff_fffe;
-    for n in ["github-watcher", "qa-service", "orchestrator", "agent-adapter"] {
-        registry.set_pid(n, Some(dead_pid), Some(chrono::Utc::now())).await;
+    for n in [
+        "github-watcher",
+        "qa-service",
+        "orchestrator",
+        "agent-adapter",
+    ] {
+        registry
+            .set_pid(n, Some(dead_pid), Some(chrono::Utc::now()))
+            .await;
         std::fs::write(paths.child_pid(n), format!("{dead_pid}\n")).unwrap();
     }
     std::fs::write(paths.supervisor_pid(), "1\n").unwrap();
@@ -99,9 +120,16 @@ async fn shutdown_graceful_three_stage_walks_full_sequence() {
         also_postgres: false,
         force: false, // exercises 3-stage path
     };
-    shutdown_stack(cfg, registry.clone(), compose, paths.clone()).await.unwrap();
+    shutdown_stack(cfg, registry.clone(), compose, paths.clone())
+        .await
+        .unwrap();
 
-    for n in ["github-watcher", "qa-service", "orchestrator", "agent-adapter"] {
+    for n in [
+        "github-watcher",
+        "qa-service",
+        "orchestrator",
+        "agent-adapter",
+    ] {
         assert!(!paths.child_pid(n).exists(), "{n}.pid should be removed");
         assert_eq!(
             registry.get(n).await.unwrap().state,

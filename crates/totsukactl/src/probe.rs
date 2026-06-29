@@ -33,7 +33,11 @@ impl<'a> Preflight<'a> {
         .await
     }
 
-    pub async fn run_phase_0(&self, pool: &PgPool, herdr_socket: &Path) -> Result<(), TotsukactlError> {
+    pub async fn run_phase_0(
+        &self,
+        pool: &PgPool,
+        herdr_socket: &Path,
+    ) -> Result<(), TotsukactlError> {
         let extv = pgmq_extversion(pool).await?;
         if !pgmq_compatible(&extv, "1.11.1") {
             return Err(TotsukactlError::Probe(format!(

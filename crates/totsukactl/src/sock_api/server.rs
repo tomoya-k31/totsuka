@@ -44,7 +44,11 @@ async fn restart(State(s): State<SockApiState>, Path(name): Path<String>) -> imp
         return rfc7807(StatusCode::NOT_FOUND, "/errors/unknown_child", &name);
     }
     let _ = s.control_tx.send(ControlMsg::Restart(name.clone())).await;
-    (StatusCode::ACCEPTED, Json(json!({ "queued": true, "name": name }))).into_response()
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({ "queued": true, "name": name })),
+    )
+        .into_response()
 }
 
 async fn reload(State(s): State<SockApiState>, Path(name): Path<String>) -> impl IntoResponse {
@@ -52,7 +56,11 @@ async fn reload(State(s): State<SockApiState>, Path(name): Path<String>) -> impl
         return rfc7807(StatusCode::BAD_REQUEST, "/errors/not_reloadable", &name);
     }
     let _ = s.control_tx.send(ControlMsg::Reload(name.clone())).await;
-    (StatusCode::ACCEPTED, Json(json!({ "queued": true, "name": name }))).into_response()
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({ "queued": true, "name": name })),
+    )
+        .into_response()
 }
 
 async fn shutdown(

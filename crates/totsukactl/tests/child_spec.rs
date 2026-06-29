@@ -81,8 +81,17 @@ fn specs_cover_all_four_bins_in_startup_order() {
     assert_eq!(names, RUST_BINS_IN_ORDER);
     let s = &specs[0];
     assert_eq!(s.bin_path, exe_dir.join("agent-adapter"));
-    assert_eq!(s.args, vec!["--config".to_string(), "/etc/totsuka/config.toml".to_string()]);
-    assert!(s.env.iter().any(|(k, v)| k == "TOTSUKA_CONFIG" && v == "/etc/totsuka/config.toml"));
+    assert_eq!(
+        s.args,
+        vec![
+            "--config".to_string(),
+            "/etc/totsuka/config.toml".to_string()
+        ]
+    );
+    assert!(s
+        .env
+        .iter()
+        .any(|(k, v)| k == "TOTSUKA_CONFIG" && v == "/etc/totsuka/config.toml"));
     assert!(s.env.iter().any(|(k, v)| k == "RUST_LOG" && v == "trace"));
     assert_eq!(s.log_path, paths.log_dir.join("agent-adapter.log"));
 }

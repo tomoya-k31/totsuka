@@ -72,13 +72,19 @@ impl SupervisorClient {
     }
 
     pub async fn restart(&self, name: &str) -> Result<(), TotsukactlError> {
-        self.post_json(&format!("/v1/processes/{name}/restart"), &serde_json::json!({}))
-            .await
+        self.post_json(
+            &format!("/v1/processes/{name}/restart"),
+            &serde_json::json!({}),
+        )
+        .await
     }
 
     pub async fn reload(&self, name: &str) -> Result<(), TotsukactlError> {
-        self.post_json(&format!("/v1/processes/{name}/reload"), &serde_json::json!({}))
-            .await
+        self.post_json(
+            &format!("/v1/processes/{name}/reload"),
+            &serde_json::json!({}),
+        )
+        .await
     }
 
     pub async fn shutdown(&self, postgres: bool, force: bool) -> Result<(), TotsukactlError> {

@@ -21,7 +21,10 @@ fn check_returns_alive_for_self_pid() {
     let tmp = TempDir::new().unwrap();
     let p = tmp.path().join("alive.pid");
     write_pid(&p, std::process::id() as i32).unwrap();
-    assert_eq!(check(&p).unwrap(), PidState::Alive(std::process::id() as i32));
+    assert_eq!(
+        check(&p).unwrap(),
+        PidState::Alive(std::process::id() as i32)
+    );
 }
 
 #[test]

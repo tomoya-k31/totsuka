@@ -1,5 +1,5 @@
 pub mod boot;
-pub use boot::{boot, await_ready, BootCtx};
+pub use boot::{await_ready, boot, BootCtx};
 
 pub mod control;
 

@@ -50,7 +50,13 @@ impl Paths {
     }
 
     pub fn ensure(&self) -> std::io::Result<()> {
-        for p in [&self.state_dir, &self.data_dir, &self.log_dir, &self.pid_dir, &self.sock_dir] {
+        for p in [
+            &self.state_dir,
+            &self.data_dir,
+            &self.log_dir,
+            &self.pid_dir,
+            &self.sock_dir,
+        ] {
             std::fs::create_dir_all(p)?;
         }
         chmod_0700(&self.sock_dir)?;

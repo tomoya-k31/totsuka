@@ -19,18 +19,30 @@ fn pgmq_compatible_rejects_minor_drift() {
 
 #[tokio::test]
 async fn image_match_ok_passes() {
-    let m: Arc<dyn ComposeExec> = Arc::new(MockCompose::with_image("ghcr.io/pgmq/pg18-pgmq:v1.11.1"));
-    ensure_image_match(m.as_ref(), "totsuka-pgmq", "ghcr.io/pgmq/pg18-pgmq:v1.11.1", false)
-        .await
-        .unwrap();
+    let m: Arc<dyn ComposeExec> =
+        Arc::new(MockCompose::with_image("ghcr.io/pgmq/pg18-pgmq:v1.11.1"));
+    ensure_image_match(
+        m.as_ref(),
+        "totsuka-pgmq",
+        "ghcr.io/pgmq/pg18-pgmq:v1.11.1",
+        false,
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
 async fn image_mismatch_without_recreate_errors() {
-    let m: Arc<dyn ComposeExec> = Arc::new(MockCompose::with_image("ghcr.io/pgmq/pg18-pgmq:v1.10.0"));
-    let err = ensure_image_match(m.as_ref(), "totsuka-pgmq", "ghcr.io/pgmq/pg18-pgmq:v1.11.1", false)
-        .await
-        .unwrap_err();
+    let m: Arc<dyn ComposeExec> =
+        Arc::new(MockCompose::with_image("ghcr.io/pgmq/pg18-pgmq:v1.10.0"));
+    let err = ensure_image_match(
+        m.as_ref(),
+        "totsuka-pgmq",
+        "ghcr.io/pgmq/pg18-pgmq:v1.11.1",
+        false,
+    )
+    .await
+    .unwrap_err();
     assert!(err.to_string().contains("image mismatch"));
 }
 
@@ -39,8 +51,13 @@ async fn image_mismatch_with_recreate_calls_up() {
     let inner: Arc<MockCompose> =
         Arc::new(MockCompose::with_image("ghcr.io/pgmq/pg18-pgmq:v1.10.0"));
     let m: Arc<dyn ComposeExec> = inner.clone();
-    ensure_image_match(m.as_ref(), "totsuka-pgmq", "ghcr.io/pgmq/pg18-pgmq:v1.11.1", true)
-        .await
-        .unwrap();
+    ensure_image_match(
+        m.as_ref(),
+        "totsuka-pgmq",
+        "ghcr.io/pgmq/pg18-pgmq:v1.11.1",
+        true,
+    )
+    .await
+    .unwrap();
     assert!(inner.calls().iter().any(|c| c == "up_detached:pgmq:true"));
 }

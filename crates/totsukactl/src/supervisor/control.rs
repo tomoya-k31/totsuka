@@ -37,7 +37,11 @@ pub async fn handle_restart(
         }
     }
     registry.set_state(name, ChildState::Restarting).await;
-    let cur = registry.get(name).await.map(|e| e.restart_count).unwrap_or(0);
+    let cur = registry
+        .get(name)
+        .await
+        .map(|e| e.restart_count)
+        .unwrap_or(0);
     if cur >= restart_cfg.max_attempts {
         registry.set_state(name, ChildState::GivingUp).await;
         return Err(TotsukactlError::Internal(format!(

@@ -20,7 +20,10 @@ pub async fn bind_uds(path: &Path) -> Result<UnixListener, TotsukactlError> {
     Ok(UnixListener::bind(path)?)
 }
 
-pub async fn serve_uds(listener: UnixListener, router: axum::Router) -> Result<(), TotsukactlError> {
+pub async fn serve_uds(
+    listener: UnixListener,
+    router: axum::Router,
+) -> Result<(), TotsukactlError> {
     use hyper::body::Incoming;
     use hyper_util::rt::TokioIo;
     use hyper_util::server::conn::auto::Builder as ConnBuilder;
@@ -35,11 +38,10 @@ pub async fn serve_uds(listener: UnixListener, router: axum::Router) -> Result<(
             .await
             .map_err(|e| TotsukactlError::Internal(format!("router make_service: {e}")))?;
         tokio::spawn(async move {
-            let hyper_service =
-                hyper::service::service_fn(move |req: hyper::Request<Incoming>| {
-                    let mut svc = tower_service.clone();
-                    async move { svc.call(req).await }
-                });
+            let hyper_service = hyper::service::service_fn(move |req: hyper::Request<Incoming>| {
+                let mut svc = tower_service.clone();
+                async move { svc.call(req).await }
+            });
             if let Err(e) = ConnBuilder::new(hyper_util::rt::TokioExecutor::new())
                 .serve_connection(io, hyper_service)
                 .await

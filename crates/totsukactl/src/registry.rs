@@ -51,7 +51,9 @@ impl Registry {
         for name in ORDER {
             map.insert((*name).to_string(), ProcessEntry::fresh(*name));
         }
-        Self { inner: Arc::new(RwLock::new(map)) }
+        Self {
+            inner: Arc::new(RwLock::new(map)),
+        }
     }
 
     pub async fn upsert(&self, e: ProcessEntry) {
@@ -64,10 +66,7 @@ impl Registry {
 
     pub async fn list(&self) -> Vec<ProcessEntry> {
         let map = self.inner.read().await;
-        ORDER
-            .iter()
-            .filter_map(|n| map.get(*n).cloned())
-            .collect()
+        ORDER.iter().filter_map(|n| map.get(*n).cloned()).collect()
     }
 
     pub async fn set_state(&self, name: &str, state: ChildState) {
@@ -85,7 +84,9 @@ impl Registry {
 
     pub async fn bump_failure(&self, name: &str) -> u32 {
         let mut g = self.inner.write().await;
-        let e = g.entry(name.to_string()).or_insert_with(|| ProcessEntry::fresh(name));
+        let e = g
+            .entry(name.to_string())
+            .or_insert_with(|| ProcessEntry::fresh(name));
         e.consecutive_failures = e.consecutive_failures.saturating_add(1);
         e.consecutive_failures
     }

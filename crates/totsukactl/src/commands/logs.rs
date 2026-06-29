@@ -6,10 +6,17 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
-pub async fn run(paths: &Paths, bin: &str, lines: u32, follow: bool) -> Result<(), TotsukactlError> {
+pub async fn run(
+    paths: &Paths,
+    bin: &str,
+    lines: u32,
+    follow: bool,
+) -> Result<(), TotsukactlError> {
     let path = log_path(paths, bin)?;
     if !path.exists() {
-        return Err(TotsukactlError::Internal(format!("log file {path:?} not found")));
+        return Err(TotsukactlError::Internal(format!(
+            "log file {path:?} not found"
+        )));
     }
     let text = std::fs::read_to_string(&path)?;
     print!("{}", tail_lines(&text, lines));

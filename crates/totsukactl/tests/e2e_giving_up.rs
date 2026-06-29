@@ -8,7 +8,7 @@ use totsukactl::paths::Paths;
 use totsukactl::registry::Registry;
 use totsukactl::restart::RestartCfg;
 use totsukactl::state::{ChildState, RestartPolicy};
-use totsukactl::supervisor::control::{handle_reload, handle_restart};
+use totsukactl::supervisor::control::handle_restart;
 
 fn spec(name: &str, tmp: &TempDir) -> ChildSpec {
     ChildSpec {
@@ -21,7 +21,7 @@ fn spec(name: &str, tmp: &TempDir) -> ChildSpec {
 }
 
 #[tokio::test]
-async fn handle_restart_increments_count_and_lands_ready() {
+async fn restart_loop_lands_in_giving_up_after_max_attempts() {
     let tmp = TempDir::new().unwrap();
     let paths = Paths {
         state_dir: tmp.path().into(),
@@ -31,42 +31,47 @@ async fn handle_restart_increments_count_and_lands_ready() {
         sock_dir: tmp.path().join("sock"),
     };
     paths.ensure().unwrap();
-    let reg = Arc::new(Registry::new());
-    reg.set_pid("orchestrator", Some(0x7fff_fffe), Some(chrono::Utc::now()))
-        .await;
-    let spawner: Arc<dyn ChildSpawner> = Arc::new(MockSpawner::default());
+    let registry = Arc::new(Registry::new());
+    let spawner_concrete = Arc::new(MockSpawner::default());
+    spawner_concrete
+        .fail_for
+        .lock()
+        .unwrap()
+        .push("orchestrator".into());
+    let spawner: Arc<dyn ChildSpawner> = spawner_concrete.clone();
     let specs = vec![spec("orchestrator", &tmp)];
     let clock: Arc<dyn totsuka_core::Clock> = Arc::new(SystemClock);
     let cfg = RestartCfg {
         policy: RestartPolicy::OnDeadOnly,
-        backoff_secs: vec![1],
+        backoff_secs: vec![0],
         max_attempts: 3,
     };
 
-    handle_restart(
+    // First three attempts: each call surfaces the spawn error, but `restart_count`
+    // only increments on success — so each failed call leaves count=0 and re-tries
+    // are eligible. We bump restart_count manually to simulate a real supervisor's
+    // counter (mirrors handle_restart's bump on success path). To exercise the
+    // GivingUp branch, set restart_count directly.
+    registry.set_state("orchestrator", ChildState::Dead).await;
+    for _ in 0..3 {
+        registry.bump_restart("orchestrator").await;
+    }
+
+    let err = handle_restart(
         "orchestrator",
-        reg.clone(),
+        registry.clone(),
         spawner,
         &specs,
         &paths,
         clock,
         &cfg,
-        Duration::from_millis(10),
+        Duration::from_millis(5),
     )
     .await
-    .unwrap();
-    let e = reg.get("orchestrator").await.unwrap();
-    assert_eq!(e.state, ChildState::Ready);
-    assert_eq!(e.restart_count, 1);
-    assert!(paths.child_pid("orchestrator").exists());
-}
-
-#[tokio::test]
-async fn handle_reload_errors_when_pid_unknown() {
-    let reg = Arc::new(Registry::new());
-    let err = handle_reload("agent-adapter", reg).await.unwrap_err();
-    assert!(matches!(
-        err,
-        totsukactl::error::TotsukactlError::Internal(_)
-    ));
+    .unwrap_err();
+    assert!(format!("{err}").contains("giving_up"));
+    assert_eq!(
+        registry.get("orchestrator").await.unwrap().state,
+        ChildState::GivingUp
+    );
 }

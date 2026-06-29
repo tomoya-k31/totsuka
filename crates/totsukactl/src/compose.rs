@@ -62,14 +62,7 @@ impl ComposeExec for DockerCompose {
     async fn ps_running(&self, service: &str) -> Result<bool, TotsukactlError> {
         let cf = self.compose_file.to_string_lossy().to_string();
         let out = self
-            .run(&[
-                "compose",
-                "-f",
-                &cf,
-                "ps",
-                "--status=running",
-                "--services",
-            ])
+            .run(&["compose", "-f", &cf, "ps", "--status=running", "--services"])
             .await?;
         Self::ensure_ok(&out, "docker compose ps")?;
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -89,9 +82,7 @@ impl ComposeExec for DockerCompose {
 
     async fn stop(&self, service: &str) -> Result<(), TotsukactlError> {
         let cf = self.compose_file.to_string_lossy().to_string();
-        let out = self
-            .run(&["compose", "-f", &cf, "stop", service])
-            .await?;
+        let out = self.run(&["compose", "-f", &cf, "stop", service]).await?;
         Self::ensure_ok(&out, "docker compose stop")
     }
 

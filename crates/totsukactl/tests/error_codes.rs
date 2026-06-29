@@ -11,7 +11,11 @@ fn codes_are_unique_and_prefixed() {
         TotsukactlError::Probe("x".into()),
         TotsukactlError::Spawn("x".into()),
         TotsukactlError::Health("x".into()),
-        TotsukactlError::SchemaOutOfRange { got: 5, min: 6, target: 6 },
+        TotsukactlError::SchemaOutOfRange {
+            got: 5,
+            min: 6,
+            target: 6,
+        },
         TotsukactlError::SupervisorUnreachable("x".into()),
         TotsukactlError::AlreadyRunning("x".into()),
         TotsukactlError::NotRunning,

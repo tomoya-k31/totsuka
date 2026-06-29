@@ -24,32 +24,21 @@ pub fn format_table(entries: &[ProcessDto], now: DateTime<Utc>) -> String {
     let mut tw = TabWriter::new(Vec::new()).padding(2);
     writeln!(tw, "NAME\tSTATE\tPID\tUPTIME\tHEALTHZ\tRESTARTS").unwrap();
     for e in entries {
-        let state = if e.name == "pgmq"
-            && matches!(e.state, ChildState::Healthy | ChildState::Ready)
-        {
-            "running".to_string()
-        } else {
-            format!("{:?}", e.state).to_lowercase()
-        };
+        let state =
+            if e.name == "pgmq" && matches!(e.state, ChildState::Healthy | ChildState::Ready) {
+                "running".to_string()
+            } else {
+                format!("{:?}", e.state).to_lowercase()
+            };
         let pid = e.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
         let uptime = e
             .started_at
-            .map(|t| {
-                short_dur(
-                    now.signed_duration_since(t)
-                        .num_seconds()
-                        .max(0) as u64,
-                )
-            })
+            .map(|t| short_dur(now.signed_duration_since(t).num_seconds().max(0) as u64))
             .unwrap_or_else(|| "-".into());
         let hz = match e.last_healthz_at {
             Some(t) => format!(
                 "ok({})",
-                short_dur(
-                    now.signed_duration_since(t)
-                        .num_seconds()
-                        .max(0) as u64
-                )
+                short_dur(now.signed_duration_since(t).num_seconds().max(0) as u64)
             ),
             None => "-".into(),
         };

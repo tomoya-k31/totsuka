@@ -1,5 +1,4 @@
 use crate::child::{specs_from_config, ChildSpawner, ForkExecSpawner};
-use crate::restart::RestartCfg;
 use crate::compose::{ComposeExec, DockerCompose};
 use crate::error::TotsukactlError;
 use crate::health::{endpoint_for, Endpoint, HttpHealthProbe};
@@ -8,6 +7,7 @@ use crate::paths::{resolve_tilde, Paths};
 use crate::pgmq_probe::{LivePgmqProbe, PgmqProbe};
 use crate::probe::Preflight;
 use crate::registry::Registry;
+use crate::restart::RestartCfg;
 use crate::sock_api::{bind_uds, router, serve_uds, ControlMsg, SockApiState};
 use crate::supervisor::boot::{boot, BootCtx};
 use crate::supervisor::shutdown::{shutdown_stack, ShutdownCfg};
@@ -53,12 +53,17 @@ pub async fn run_supervisor(
         .ok()
         .and_then(|p| p.parent().map(|pp| pp.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("/usr/local/bin"));
-    let config_path = std::env::var("TOTSUKA_CONFIG")
-        .unwrap_or_else(|_| "~/.config/totsuka/config.toml".into());
+    let config_path =
+        std::env::var("TOTSUKA_CONFIG").unwrap_or_else(|_| "~/.config/totsuka/config.toml".into());
     let specs = specs_from_config(&cfg, &paths, &exe_dir, &config_path);
 
     let mut eps: HashMap<String, Endpoint> = HashMap::new();
-    for n in ["agent-adapter", "orchestrator", "github-watcher", "qa-service"] {
+    for n in [
+        "agent-adapter",
+        "orchestrator",
+        "github-watcher",
+        "qa-service",
+    ] {
         eps.insert(n.into(), endpoint_for(n, &cfg)?);
     }
     let probe: Arc<dyn crate::health::HealthProbe> = Arc::new(HttpHealthProbe::new(eps));
@@ -84,8 +89,10 @@ pub async fn run_supervisor(
         "github-watcher".into(),
         "qa-service".into(),
     ];
-    let pgmq_probe: Arc<dyn PgmqProbe> =
-        Arc::new(LivePgmqProbe { compose: compose.clone(), pool: pool.clone() });
+    let pgmq_probe: Arc<dyn PgmqProbe> = Arc::new(LivePgmqProbe {
+        compose: compose.clone(),
+        pool: pool.clone(),
+    });
     let h_hb = tokio::spawn(run_healthz_loop(
         hb.clone(),
         probe.clone(),

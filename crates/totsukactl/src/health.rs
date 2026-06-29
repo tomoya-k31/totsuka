@@ -36,10 +36,14 @@ pub struct HttpHealthProbe {
 }
 
 impl HttpHealthProbe {
-    pub fn new(endpoints: HashMap<String, Endpoint>) -> Self { Self { endpoints } }
+    pub fn new(endpoints: HashMap<String, Endpoint>) -> Self {
+        Self { endpoints }
+    }
 
     async fn hit(&self, name: &str, path: &str) -> Result<u16, TotsukactlError> {
-        let ep = self.endpoints.get(name)
+        let ep = self
+            .endpoints
+            .get(name)
             .ok_or_else(|| TotsukactlError::UnknownChild(name.into()))?;
         match ep {
             Endpoint::Uds(sock) => {

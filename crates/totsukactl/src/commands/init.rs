@@ -17,10 +17,12 @@ pub async fn run(paths: &Paths) -> Result<(), TotsukactlError> {
     write_if_absent(&sec_path, SECRETS_TMPL, 0o600)?;
 
     // Read back so we can drive compose + migrate from the user's actual values.
-    let cfg = totsuka_config::Config::load(&cfg_path)
-        .map_err(|e| TotsukactlError::Config(format!("re-reading freshly written config: {e:?}")))?;
-    let compose: std::sync::Arc<dyn ComposeExec> =
-        std::sync::Arc::new(DockerCompose::new(PathBuf::from(&cfg.postgres.compose_file)));
+    let cfg = totsuka_config::Config::load(&cfg_path).map_err(|e| {
+        TotsukactlError::Config(format!("re-reading freshly written config: {e:?}"))
+    })?;
+    let compose: std::sync::Arc<dyn ComposeExec> = std::sync::Arc::new(DockerCompose::new(
+        PathBuf::from(&cfg.postgres.compose_file),
+    ));
     compose.docker_info().await?;
     compose.compose_version().await?;
     if !compose.ps_running("pgmq").await? {

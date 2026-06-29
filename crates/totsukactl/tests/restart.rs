@@ -3,7 +3,11 @@ use totsukactl::restart::{backoff_for, decide, RestartCfg, RestartDecision};
 use totsukactl::state::{ChildState, RestartPolicy};
 
 fn cfg(policy: RestartPolicy) -> RestartCfg {
-    RestartCfg { policy, backoff_secs: vec![5, 15, 60], max_attempts: 5 }
+    RestartCfg {
+        policy,
+        backoff_secs: vec![5, 15, 60],
+        max_attempts: 5,
+    }
 }
 
 #[test]
@@ -17,14 +21,23 @@ fn never_policy_always_skips() {
 fn on_dead_only_skips_unhealthy() {
     let c = cfg(RestartPolicy::OnDeadOnly);
     assert_eq!(decide(ChildState::Unhealthy, 0, &c), RestartDecision::Skip);
-    assert_eq!(decide(ChildState::Dead, 0, &c), RestartDecision::Wait(Duration::from_secs(5)));
+    assert_eq!(
+        decide(ChildState::Dead, 0, &c),
+        RestartDecision::Wait(Duration::from_secs(5))
+    );
 }
 
 #[test]
 fn on_unhealthy_wakes_for_both() {
     let c = cfg(RestartPolicy::OnUnhealthy);
-    assert_eq!(decide(ChildState::Unhealthy, 1, &c), RestartDecision::Wait(Duration::from_secs(15)));
-    assert_eq!(decide(ChildState::Dead, 2, &c), RestartDecision::Wait(Duration::from_secs(60)));
+    assert_eq!(
+        decide(ChildState::Unhealthy, 1, &c),
+        RestartDecision::Wait(Duration::from_secs(15))
+    );
+    assert_eq!(
+        decide(ChildState::Dead, 2, &c),
+        RestartDecision::Wait(Duration::from_secs(60))
+    );
 }
 
 #[test]

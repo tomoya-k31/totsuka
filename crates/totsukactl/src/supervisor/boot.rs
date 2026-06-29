@@ -35,9 +35,9 @@ pub async fn await_ready(
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     };
-    tokio::time::timeout(timeout, fut)
-        .await
-        .map_err(|_| TotsukactlError::Timeout(format!("{name} readyz did not arrive in {timeout:?}")))?
+    tokio::time::timeout(timeout, fut).await.map_err(|_| {
+        TotsukactlError::Timeout(format!("{name} readyz did not arrive in {timeout:?}"))
+    })?
 }
 
 pub async fn boot<F1, F2>(

@@ -124,15 +124,31 @@ async fn apply_outcome(
     cfg: &HeartbeatCfg,
 ) {
     let outcome = outcome_from(healthz_ok, readyz_ok);
-    let curr = registry.get(name).await.map(|e| e.state).unwrap_or(ChildState::Healthy);
+    let curr = registry
+        .get(name)
+        .await
+        .map(|e| e.state)
+        .unwrap_or(ChildState::Healthy);
     let next = match outcome {
         HealthOutcome::Ok => {
             registry.reset_failure(name).await;
-            next_state(curr, HealthOutcome::Ok, 0, cfg.degraded_threshold, cfg.unhealthy_threshold)
+            next_state(
+                curr,
+                HealthOutcome::Ok,
+                0,
+                cfg.degraded_threshold,
+                cfg.unhealthy_threshold,
+            )
         }
         _ => {
             let n = registry.bump_failure(name).await;
-            next_state(curr, outcome, n, cfg.degraded_threshold, cfg.unhealthy_threshold)
+            next_state(
+                curr,
+                outcome,
+                n,
+                cfg.degraded_threshold,
+                cfg.unhealthy_threshold,
+            )
         }
     };
     if next != curr {

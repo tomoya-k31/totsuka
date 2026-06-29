@@ -1,4 +1,4 @@
-use super::{ChildSpec, ChildSpawner};
+use super::{ChildSpawner, ChildSpec};
 use crate::error::TotsukactlError;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -23,7 +23,13 @@ impl Default for MockSpawner {
 #[async_trait]
 impl ChildSpawner for MockSpawner {
     async fn spawn(&self, spec: &ChildSpec) -> Result<i32, TotsukactlError> {
-        if self.fail_for.lock().unwrap().iter().any(|n| n == &spec.name) {
+        if self
+            .fail_for
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|n| n == &spec.name)
+        {
             return Err(TotsukactlError::Spawn(format!("mock: fail {}", spec.name)));
         }
         self.spawned.lock().unwrap().push(spec.name.clone());
