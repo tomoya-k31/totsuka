@@ -1,4 +1,5 @@
 pub mod down;
+pub mod logs;
 pub mod reload;
 pub mod restart;
 pub mod status;
