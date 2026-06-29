@@ -67,12 +67,13 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
         std::sync::Arc::new(totsuka_core::SystemClock);
 
     match cli.command {
+        Cmd::Down { force, postgres } => crate::commands::down::run(&paths, force, postgres).await,
         Cmd::Status => crate::commands::status::run(&paths, clock.as_ref()).await,
         Cmd::Up { recreate, bootstrap } => {
             crate::commands::up::run(cfg, paths, recreate, bootstrap).await
         }
         _ => Err(TotsukactlError::Internal(
-            "cli dispatch wiring lands in Tasks 21-25".into(),
+            "cli dispatch wiring lands in Tasks 22-25".into(),
         )),
     }
 }
