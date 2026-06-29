@@ -1,1 +1,2 @@
-// stub: filled by Task N
+pub mod boot;
+pub use boot::{boot, await_ready, BootCtx};

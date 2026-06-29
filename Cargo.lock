@@ -2700,6 +2700,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "futures-util",
  "http-body-util",
  "humantime",
  "hyper",
