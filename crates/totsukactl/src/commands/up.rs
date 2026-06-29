@@ -6,7 +6,7 @@ use totsuka_config::Config;
 
 pub async fn run(
     mut cfg: Config,
-    paths: Paths,
+    mut paths: Paths,
     recreate: bool,
     bootstrap: bool,
 ) -> Result<(), TotsukactlError> {
@@ -24,7 +24,7 @@ pub async fn run(
                 TotsukactlError::Config(format!("re-loading after bootstrap: {e:?}"))
             })?;
             // Re-derive paths from the freshly-loaded config
-            let paths = crate::paths::Paths::from_config(&cfg);
+            paths = crate::paths::Paths::from_config(&cfg);
             paths.ensure()?;
         }
     }
