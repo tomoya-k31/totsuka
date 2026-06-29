@@ -4,6 +4,7 @@ pub mod child;
 pub mod cli;
 pub mod compose;
 pub mod error;
+pub mod health;
 pub mod heartbeat;
 pub mod paths;
 pub mod pidfile;
