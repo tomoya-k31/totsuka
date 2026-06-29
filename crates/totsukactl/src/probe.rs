@@ -47,11 +47,12 @@ impl<'a> Preflight<'a> {
 }
 
 pub async fn pgmq_extversion(pool: &PgPool) -> Result<String, TotsukactlError> {
-    let row: (Option<String>,) =
+    let row: Option<(String,)> =
         sqlx::query_as("SELECT extversion FROM pg_extension WHERE extname='pgmq'")
-            .fetch_one(pool)
+            .fetch_optional(pool)
             .await?;
-    row.0.ok_or_else(|| TotsukactlError::Probe("pgmq extension not installed".into()))
+    row.map(|(v,)| v)
+        .ok_or_else(|| TotsukactlError::Probe("pgmq extension not installed".into()))
 }
 
 /// Major.Minor must match `want`; patch ignored.
