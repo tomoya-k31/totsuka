@@ -187,7 +187,9 @@ pub async fn run_supervisor(
                             tracing::error!(child = %name, error = %e, "reload failed");
                         }
                     }
-                    None => break (false, false),
+                    None => {
+                        ctl_rx = crate::supervisor::ctl_replace::replace_closed_ctl_rx(ctl_rx).await;
+                    }
                 },
             }
         };
