@@ -7,6 +7,7 @@ pub mod error;
 pub mod health;
 pub mod heartbeat;
 pub mod paths;
+pub mod pgmq_probe;
 pub mod pidfile;
 pub mod probe;
 pub mod registry;
