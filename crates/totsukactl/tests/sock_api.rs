@@ -37,7 +37,7 @@ async fn shutdown_post_enqueues_control_msg() {
     let client = SupervisorClient::new(sock);
     client.shutdown(true, false).await.unwrap();
     let msg = rx.recv().await.unwrap();
-    matches!(msg, ControlMsg::Shutdown { postgres: true, force: false });
+    assert!(matches!(msg, ControlMsg::Shutdown { postgres: true, force: false }));
 }
 
 #[tokio::test]
