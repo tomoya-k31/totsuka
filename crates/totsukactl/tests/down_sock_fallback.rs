@@ -35,7 +35,10 @@ async fn down_falls_back_to_sock_when_pid_absent() {
     // Stand up a minimal supervisor.sock that accepts shutdown messages.
     let registry = Arc::new(Registry::new());
     let (tx, mut rx) = mpsc::channel::<ControlMsg>(8);
-    let state = SockApiState { registry, control_tx: tx };
+    let state = SockApiState {
+        registry,
+        control_tx: tx,
+    };
     let listener = bind_uds(&paths.supervisor_sock()).unwrap();
     let r = router(state);
     let _h_sock = tokio::spawn(async move {
@@ -63,7 +66,13 @@ async fn down_falls_back_to_sock_when_pid_absent() {
         .expect("shutdown msg should arrive within 2s")
         .expect("shutdown msg present");
     assert!(
-        matches!(msg, ControlMsg::Shutdown { postgres: false, force: true }),
+        matches!(
+            msg,
+            ControlMsg::Shutdown {
+                postgres: false,
+                force: true
+            }
+        ),
         "expected Shutdown(postgres=false, force=true); got {msg:?}"
     );
 }

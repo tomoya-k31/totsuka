@@ -23,6 +23,6 @@ async fn replaced_rx_does_not_panic_on_drop() {
     drop(tx);
     let new_rx = replace_closed_ctl_rx(rx).await;
     drop(new_rx); // exercise the held-sender's task termination path
-    // Sleep briefly to let the held-sender task notice the drop (it never will, but verify no panic).
+                  // Sleep briefly to let the held-sender task notice the drop (it never will, but verify no panic).
     tokio::time::sleep(Duration::from_millis(50)).await;
 }
