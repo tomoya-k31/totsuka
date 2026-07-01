@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use totsuka_bus::{create_queue, Consumer, Publisher};
-use totsuka_core::SystemClock;
+use totsuka_core::{MockClock, SystemClock};
 use totsuka_telemetry::HealthState;
 
 async fn run_once(
@@ -26,13 +26,20 @@ async fn run_once(
     let shutdown = CancellationToken::new();
     let s2 = shutdown.clone();
     let poll_pool = pool.clone();
+    // Fixed instant safely after all fixture timestamps (t0..t3 are on
+    // 2026-06-29, latest at 13:00) so poll_repo's `since = now - catchup`
+    // window deterministically covers the fixtures regardless of the real
+    // wall-clock date. Using SystemClock here (as before) made this test a
+    // time bomb: it silently broke once real time drifted more than
+    // catchup_window past the fixtures' hardcoded dates.
+    let fixed_now = Utc.with_ymd_and_hms(2026, 6, 29, 14, 0, 0).unwrap();
     let h = tokio::spawn(async move {
         run_issues_loop(
             pool,
             publisher,
             mock as Arc<dyn GhClient>,
             tracker,
-            Arc::new(SystemClock),
+            Arc::new(MockClock::new(fixed_now)),
             HealthState::new(),
             cfg,
             s2,
