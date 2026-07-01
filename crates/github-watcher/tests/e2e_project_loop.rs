@@ -26,7 +26,7 @@ fn map() -> ColumnMap {
     ColumnMap::try_new(m).unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn project_loop_publishes_status_changed_for_every_diff() {
     let Some(url) = std::env::var("DATABASE_URL").ok() else {
         return;
@@ -114,8 +114,24 @@ async fn project_loop_publishes_status_changed_for_every_diff() {
         .await
     });
 
-    // Allow one tick
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Wait for the loop to actually finish processing both mocked pages
+    // (observable via E2E_C's row reaching "released") instead of guessing
+    // a fixed sleep duration.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT status FROM gh_item_status WHERE item_id='E2E_C'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        if matches!(&row, Some((Some(s),)) if s == "released") {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("gh_item_status for E2E_C did not reach 'released' within 5s");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
 
