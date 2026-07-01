@@ -393,7 +393,168 @@ This cannot be verified locally (the `path:` cache restore/save behavior and the
 
 ---
 
-## Manual Verification (after all 3 tasks land)
+### Task 4: Fix the fixed-sleep race AND the SystemClock/hardcoded-date bug in `e2e_pr_linkage.rs`
+
+**Files:**
+- Modify: `crates/github-watcher/tests/e2e_pr_linkage.rs`
+
+**Interfaces:**
+- Consumes: `github_watcher::cursor::{get, CursorKey}` (already imported at the top of the file), `github_watcher::polling::prs::{run_prs_loop, PrsLoopConfig}` (already imported).
+- Produces: nothing consumed by other tasks. This test has no shared `run_once`-style helper (unlike Task 1's file) — the spawn/sleep/cancel/await/poll logic is inline in the single test function `pr_merged_publishes_with_task_id_from_branch`.
+
+Added to this plan after Task 3's implementer discovered it while observing a real CI run: this test has the exact same two bugs Task 1 fixed in a different file, in combination:
+
+1. **The fixed-sleep race** (this plan's original class of bug): the test spawns `run_prs_loop`, sleeps a fixed `Duration::from_millis(200)`, cancels, awaits the handle (2s grace) — then does a single, non-retrying `consumer.poll_one(&pool, 1).await.unwrap().expect("one envelope")` immediately after. If the loop's first poll cycle hasn't actually finished publishing by then, this panics with `.expect("one envelope")`("one envelope") failing on `None`.
+2. **The SystemClock/hardcoded-date bug** (the same root cause Task 1 found and fixed in `e2e_cursor_resume.rs`): `crates/github-watcher/src/polling/prs.rs`'s `poll_repo` (lines 48-85) computes `since = clock.now() - cfg.catchup_window` when no cursor exists yet (line 61), exactly like `issues.rs`'s `poll_repo`. The test wires a real `Arc::new(SystemClock)` (two call sites: `crates/github-watcher/tests/e2e_pr_linkage.rs:41` for the `Publisher`, and `:76` for `run_prs_loop`'s clock argument) together with a hardcoded fixture date `merged_at = Utc.with_ymd_and_hms(2026, 6, 29, 12, 0, 0).unwrap()` (line 45) and a 48-hour catchup window (line 65). Since real time has passed `2026-06-29T12:00:00Z` by more than 48 hours (today is 2026-07-01), `since = SystemClock::now() - 48h` falls after `merged_at`, so `poll_repo`'s `if merged_at > since` check (prs.rs:67) is false and the event is never published — deterministically, regardless of how long the test waits.
+
+Both bugs must be fixed together, the same way Task 1 fixed both in its file: replace the fixed sleep with a poll-until-the-cursor-reaches-its-expected-value loop (safe because `poll_repo` only calls `set()` — prs.rs:76-83 — after the publish for this cycle, prs.rs:68, has already happened), AND replace `SystemClock` with a fixed `totsuka_core::MockClock` for the `run_prs_loop` clock argument (the `Publisher`'s own `SystemClock` at line 41 is unrelated — it is not used for any date-filtering logic and does not need to change).
+
+- [ ] **Step 1: Add the `MockClock` import**
+
+Change:
+
+```rust
+use totsuka_core::SystemClock;
+```
+
+to:
+
+```rust
+use totsuka_core::{MockClock, SystemClock};
+```
+
+(`SystemClock` stays because it is still used for `Publisher::new(queue.clone(), Arc::new(SystemClock))` at line 41 — only the `run_prs_loop` clock argument changes.)
+
+- [ ] **Step 2: Define a fixed instant safely after `merged_at`**
+
+Immediately after the existing line `let merged_at = Utc.with_ymd_and_hms(2026, 6, 29, 12, 0, 0).unwrap();` (line 45), add:
+
+```rust
+    let fixed_now = merged_at + chrono::Duration::hours(1);
+```
+
+This keeps `since = fixed_now - 48h` (`2026-06-27T13:00:00Z`) safely before `merged_at` (`2026-06-29T12:00:00Z`), so `poll_repo`'s `merged_at > since` check still passes, exactly as the test's existing assertions expect.
+
+- [ ] **Step 3: Replace the `run_prs_loop` clock argument**
+
+Change:
+
+```rust
+    let h = tokio::spawn(async move {
+        run_prs_loop(
+            pool2,
+            publisher,
+            mock.clone() as Arc<dyn GhClient>,
+            tracker,
+            Arc::new(SystemClock),
+            HealthState::new(),
+            cfg,
+            s2,
+        )
+        .await
+    });
+```
+
+to:
+
+```rust
+    let h = tokio::spawn(async move {
+        run_prs_loop(
+            pool2,
+            publisher,
+            mock.clone() as Arc<dyn GhClient>,
+            tracker,
+            Arc::new(MockClock::new(fixed_now)),
+            HealthState::new(),
+            cfg,
+            s2,
+        )
+        .await
+    });
+```
+
+- [ ] **Step 4: Replace the fixed sleep with a poll-until-cursor-condition wait**
+
+Change:
+
+```rust
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
+```
+
+to:
+
+```rust
+    // Wait for the cursor to actually reach the expected value instead of
+    // guessing a fixed sleep duration — poll_repo only sets the cursor after
+    // the publish for this cycle has already happened, so this is a safe,
+    // order-guaranteed readiness signal (same technique as e2e_cursor_resume.rs).
+    let key = CursorKey::prs("acme/r");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(v) = get(&pool, &key).await.unwrap() {
+            if v.starts_with("2026-06-29T12:00:00") {
+                break;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("cursor for acme/r did not reach prefix \"2026-06-29T12:00:00\" within 5s");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
+```
+
+(`pool` is still available here — only `pool2`, a clone, was moved into the spawned task, exactly like Task 2's file.)
+
+- [ ] **Step 5: Switch the test to the multi-threaded tokio runtime**
+
+Change:
+
+```rust
+#[tokio::test]
+async fn pr_merged_publishes_with_task_id_from_branch() {
+```
+
+to:
+
+```rust
+#[tokio::test(flavor = "multi_thread")]
+async fn pr_merged_publishes_with_task_id_from_branch() {
+```
+
+- [ ] **Step 6: Run the test against the local Postgres to verify it passes**
+
+```bash
+DATABASE_URL="postgres://postgres:postgres@localhost:5432/totsuka" cargo test --package github-watcher --test e2e_pr_linkage -- --nocapture
+```
+
+Expected: `test pr_merged_publishes_with_task_id_from_branch ... ok`, 1 passed, 0 failed.
+
+- [ ] **Step 7: Run it 5 times in a row to build confidence it is no longer flaky**
+
+```bash
+for i in 1 2 3 4 5; do
+  DATABASE_URL="postgres://postgres:postgres@localhost:5432/totsuka" cargo test --package github-watcher --test e2e_pr_linkage -- --nocapture || break
+done
+```
+
+Expected: all 5 runs report `ok`, 0 failures. Same guidance as Task 1 on interpreting a failure: a panic from Step 4's new deadline loop is a Critical finding to investigate (don't just widen the timeout without understanding why); a failure elsewhere may be a different, pre-existing bug — investigate via the same method Task 1 used (check DB state directly, trace the code path, `git stash` to confirm pre-existing) before concluding.
+
+- [ ] **Step 8: Format, lint, and commit**
+
+Run `cargo fmt --all -- --check` (fix with `cargo fmt --all` if it reports diffs) and `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` (must report no issues). Then:
+
+```bash
+git add crates/github-watcher/tests/e2e_pr_linkage.rs
+git commit -m "fix(github-watcher): replace fixed-sleep race and SystemClock date-drift with cursor-poll wait and MockClock in e2e_pr_linkage test"
+```
+
+---
+
+## Manual Verification (after all 4 tasks land)
 
 1. Push this branch and let CI run in full. Confirm `test (postgres + pgmq)` passes (no `issues_cursor_resumes_and_skips_already_seen` or `project_loop_publishes_status_changed_for_every_diff` failures).
 2. Trigger a second CI run on the same branch (e.g. an empty commit, or re-running the workflow) and confirm the `Cache sqlx-cli binary` step reports a cache hit (`steps.sqlx-cli-cache.outputs.cache-hit` is `true` — visible by the `Install sqlx-cli` step being skipped in the run's step list) and the job's total duration drops meaningfully versus the first run.
