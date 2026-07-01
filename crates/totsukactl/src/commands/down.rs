@@ -37,7 +37,12 @@ mod budget_tests {
     }
 }
 
-pub async fn run(paths: &Paths, force: bool, postgres: bool) -> Result<(), TotsukactlError> {
+pub async fn run(
+    paths: &Paths,
+    force: bool,
+    postgres: bool,
+    wait_budget: Duration,
+) -> Result<(), TotsukactlError> {
     let pid_state = pidfile::check(&paths.supervisor_pid())?;
     let maybe_pid: Option<i32> = match pid_state {
         pidfile::PidState::Alive(p) => Some(p),
@@ -76,7 +81,7 @@ pub async fn run(paths: &Paths, force: bool, postgres: bool) -> Result<(), Totsu
         }
     }
 
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + wait_budget;
     while Instant::now() < deadline {
         if !pidfile::process_alive(pid) {
             pidfile::remove(&paths.supervisor_pid())?;
@@ -90,7 +95,8 @@ pub async fn run(paths: &Paths, force: bool, postgres: bool) -> Result<(), Totsu
         Ok(())
     } else {
         Err(TotsukactlError::Timeout(format!(
-            "supervisor pid {pid} did not exit in 30s; rerun with --force"
+            "supervisor pid {pid} did not exit in {}s; rerun with --force",
+            wait_budget.as_secs()
         )))
     }
 }

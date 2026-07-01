@@ -14,6 +14,8 @@ async fn down_returns_not_running_without_pidfile() {
         sock_dir: tmp.path().join("sock"),
     };
     paths.ensure().unwrap();
-    let err = down::run(&paths, false, false).await.unwrap_err();
+    let err = down::run(&paths, false, false, std::time::Duration::from_secs(1))
+        .await
+        .unwrap_err();
     assert!(matches!(err, TotsukactlError::NotRunning));
 }

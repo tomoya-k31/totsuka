@@ -48,7 +48,12 @@ async fn down_falls_back_to_sock_when_pid_absent() {
     // Run down. It must NOT return NotRunning.
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        down::run(&paths, /*force=*/ true, /*postgres=*/ false),
+        down::run(
+            &paths,
+            /*force=*/ true,
+            /*postgres=*/ false,
+            std::time::Duration::from_secs(1),
+        ),
     )
     .await
     .expect("down::run should not hang");
