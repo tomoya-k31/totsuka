@@ -17,6 +17,7 @@ async fn run_once(
     mock: Arc<MockGhClient>,
     tracker: RepoTracker,
     catchup: chrono::Duration,
+    expect_cursor_prefix: &str,
 ) {
     let cfg = IssuesLoopConfig {
         poll_interval: Duration::from_millis(50),
@@ -24,6 +25,7 @@ async fn run_once(
     };
     let shutdown = CancellationToken::new();
     let s2 = shutdown.clone();
+    let poll_pool = pool.clone();
     let h = tokio::spawn(async move {
         run_issues_loop(
             pool,
@@ -37,12 +39,30 @@ async fn run_once(
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Wait for the cursor to actually reach the expected value instead of
+    // guessing a fixed sleep duration — poll_repo only sets the cursor after
+    // every matching issue for this cycle has already published, so this is
+    // a safe, order-guaranteed readiness signal.
+    let key = CursorKey::issues("acme/cur");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(v) = get(&poll_pool, &key).await.unwrap() {
+            if v.starts_with(expect_cursor_prefix) {
+                break;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("cursor for acme/cur did not reach prefix {expect_cursor_prefix:?} within 5s");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
     shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn issues_cursor_resumes_and_skips_already_seen() {
     let Some(url) = std::env::var("DATABASE_URL").ok() else {
         return;
@@ -104,6 +124,7 @@ async fn issues_cursor_resumes_and_skips_already_seen() {
         mock.clone(),
         tracker.clone(),
         chrono::Duration::hours(48),
+        "2026-06-29T12:00:00",
     )
     .await;
 
@@ -161,6 +182,7 @@ async fn issues_cursor_resumes_and_skips_already_seen() {
         mock.clone(),
         tracker.clone(),
         chrono::Duration::hours(48),
+        "2026-06-29T13:00:00",
     )
     .await;
 
