@@ -11,6 +11,7 @@ pub use path_expand::resolve_tilde;
 pub use schema::Config;
 pub use validate::ValidationError;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -70,8 +71,26 @@ impl Config {
         }
         let vars = merged;
 
-        // 3. Expand every string leaf in place.
-        expand_toml_value(&mut tree, &vars, &|name| std::env::var(name).ok())?;
+        // 3. Expand every string leaf in place. `op://` refs are resolved via
+        //    `op read`, cached per-call so a repeated reference only spawns
+        //    `op` once.
+        let op_cache = RefCell::new(HashMap::<String, String>::new());
+        let op_lookup = |uri: &str| -> Result<String, ExpandError> {
+            if let Some(v) = op_cache.borrow().get(uri) {
+                return Ok(v.clone());
+            }
+            let resolved = crate::op_resolve::resolve(uri)?;
+            op_cache
+                .borrow_mut()
+                .insert(uri.to_string(), resolved.clone());
+            Ok(resolved)
+        };
+        expand_toml_value(
+            &mut tree,
+            &vars,
+            &|name| std::env::var(name).ok(),
+            &op_lookup,
+        )?;
 
         // 4. Deserialize into the typed Config.
         let cfg: Config = tree.try_into()?;
@@ -104,8 +123,26 @@ impl Config {
         }
         let vars = merged;
 
-        // 3. Expand every string leaf in place.
-        expand_toml_value(&mut tree, &vars, &|name| std::env::var(name).ok())?;
+        // 3. Expand every string leaf in place. `op://` refs are resolved via
+        //    `op read`, cached per-call so a repeated reference only spawns
+        //    `op` once.
+        let op_cache = RefCell::new(HashMap::<String, String>::new());
+        let op_lookup = |uri: &str| -> Result<String, ExpandError> {
+            if let Some(v) = op_cache.borrow().get(uri) {
+                return Ok(v.clone());
+            }
+            let resolved = crate::op_resolve::resolve(uri)?;
+            op_cache
+                .borrow_mut()
+                .insert(uri.to_string(), resolved.clone());
+            Ok(resolved)
+        };
+        expand_toml_value(
+            &mut tree,
+            &vars,
+            &|name| std::env::var(name).ok(),
+            &op_lookup,
+        )?;
 
         // 4. Deserialize into the typed Config.
         let cfg: Config = tree.try_into()?;

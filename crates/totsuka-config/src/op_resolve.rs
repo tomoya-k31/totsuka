@@ -48,7 +48,7 @@ mod tests {
     #[test]
     fn resolve_success_strips_trailing_newline() {
         let dir = TempDir::new().unwrap();
-        let script = write_script(&dir.path(), "fake-op", "#!/bin/sh\necho resolved-secret\n");
+        let script = write_script(dir.path(), "fake-op", "#!/bin/sh\necho resolved-secret\n");
         assert_eq!(
             resolve_with(script.to_str().unwrap(), "op://Vault/Item/field").unwrap(),
             "resolved-secret"
@@ -59,7 +59,7 @@ mod tests {
     fn resolve_success_no_trailing_newline_unchanged() {
         let dir = TempDir::new().unwrap();
         let script = write_script(
-            &dir.path(),
+            dir.path(),
             "fake-op",
             "#!/bin/sh\nprintf 'no-newline-value'\n",
         );
@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn resolve_success_strips_trailing_crlf() {
         let dir = TempDir::new().unwrap();
-        let script = write_script(&dir.path(), "fake-op", "#!/bin/sh\nprintf 'value\\r\\n'\n");
+        let script = write_script(dir.path(), "fake-op", "#!/bin/sh\nprintf 'value\\r\\n'\n");
         assert_eq!(
             resolve_with(script.to_str().unwrap(), "op://Vault/Item/field").unwrap(),
             "value"
@@ -83,7 +83,7 @@ mod tests {
     fn resolve_passes_read_and_uri_as_args() {
         let dir = TempDir::new().unwrap();
         let script = write_script(
-            &dir.path(),
+            dir.path(),
             "fake-op",
             "#!/bin/sh\nif [ \"$1\" = read ] && [ \"$2\" = \"op://Vault/Item/field\" ]; then echo ok; else echo wrong-args; exit 1; fi\n",
         );
@@ -97,7 +97,7 @@ mod tests {
     fn resolve_nonzero_exit_is_op_failed() {
         let dir = TempDir::new().unwrap();
         let script = write_script(
-            &dir.path(),
+            dir.path(),
             "fake-op",
             "#!/bin/sh\necho 'not signed in' >&2\nexit 1\n",
         );
@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn resolve_non_utf8_output_is_op_non_utf8() {
         let dir = TempDir::new().unwrap();
-        let script = write_script(&dir.path(), "fake-op", "#!/bin/sh\nprintf '\\xff\\xfe'\n");
+        let script = write_script(dir.path(), "fake-op", "#!/bin/sh\nprintf '\\xff\\xfe'\n");
         match resolve_with(script.to_str().unwrap(), "op://Vault/Item/field").unwrap_err() {
             ExpandError::OpNonUtf8(uri) => assert_eq!(uri, "op://Vault/Item/field"),
             e => panic!("expected OpNonUtf8, got {:?}", e),

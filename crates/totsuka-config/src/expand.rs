@@ -2,19 +2,24 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-/// Expand a single string leaf: first var/env expansion (lenient), then
-/// leading-tilde expansion using HOME from the env_lookup.
-fn expand_string_leaf<F>(
+/// Expand a single string leaf. A whole-value `op://...` reference is
+/// resolved verbatim via `op_lookup` (no further `${...}`/`~` expansion is
+/// applied to the secret it resolves to). Otherwise: first var/env expansion
+/// (lenient), then leading-tilde expansion using HOME from `env_lookup`.
+fn expand_string_leaf<F, O>(
     s: &str,
     vars: &HashMap<String, String>,
     env_lookup: &F,
+    op_lookup: &O,
 ) -> Result<String, ExpandError>
 where
     F: Fn(&str) -> Option<String>,
+    O: Fn(&str) -> Result<String, ExpandError>,
 {
-    // First: var/env expansion (lenient — unknown ${name} survives as literal).
+    if s.starts_with("op://") {
+        return op_lookup(s);
+    }
     let expanded = expand_vars_lenient(s, vars, env_lookup)?;
-    // Then: leading-tilde expansion using HOME from the env_lookup.
     let home = env_lookup("HOME");
     Ok(crate::path_expand::resolve_tilde(
         &expanded,
@@ -91,37 +96,41 @@ where
     Ok(out)
 }
 
-/// Walk a `toml::Value` tree and expand `${name}` / `${env:NAME}` references in
-/// every string leaf. `vars` should be collected from a top-level `[vars]`
-/// table; `env_lookup` provides env-var fallback.
+/// Walk a `toml::Value` tree and expand `${name}` / `${env:NAME}` / `op://...`
+/// references in every string leaf. `vars` should be collected from a
+/// top-level `[vars]` table; `env_lookup` provides env-var fallback;
+/// `op_lookup` resolves whole-value `op://vault/item/field` references (see
+/// `expand_string_leaf`).
 ///
 /// **Lenient mode for unknown `${name}`**: when a `${name}` reference cannot be
 /// resolved from `vars`, the original token is left in place rather than
 /// raising `ExpandError::Undefined`. This keeps backward compatibility with
 /// configs whose variables live in non-top-level sections (e.g.
 /// `[agent_adapter.vars]`) — the unresolved leaves still hit `validate()` and
-/// the orchestrator can decide what to do with them. Cycles and `${env:NAME}`
-/// misses remain hard errors.
-pub fn expand_toml_value<F>(
+/// the orchestrator can decide what to do with them. Cycles, `${env:NAME}`
+/// misses, and `op://` resolution failures remain hard errors.
+pub fn expand_toml_value<F, O>(
     value: &mut toml::Value,
     vars: &HashMap<String, String>,
     env_lookup: &F,
+    op_lookup: &O,
 ) -> Result<(), ExpandError>
 where
     F: Fn(&str) -> Option<String>,
+    O: Fn(&str) -> Result<String, ExpandError>,
 {
     match value {
         toml::Value::String(s) => {
-            *s = expand_string_leaf(s, vars, env_lookup)?;
+            *s = expand_string_leaf(s, vars, env_lookup, op_lookup)?;
         }
         toml::Value::Array(arr) => {
             for v in arr.iter_mut() {
-                expand_toml_value(v, vars, env_lookup)?;
+                expand_toml_value(v, vars, env_lookup, op_lookup)?;
             }
         }
         toml::Value::Table(tbl) => {
             for (_, v) in tbl.iter_mut() {
-                expand_toml_value(v, vars, env_lookup)?;
+                expand_toml_value(v, vars, env_lookup, op_lookup)?;
             }
         }
         _ => {}
@@ -274,5 +283,68 @@ mod tests {
             ExpandError::Cycle(_) => (),
             e => panic!("expected Cycle, got {:?}", e),
         }
+    }
+
+    fn ok_op_lookup() -> impl Fn(&str) -> Result<String, ExpandError> {
+        |uri: &str| Ok(format!("resolved:{uri}"))
+    }
+
+    fn failing_op_lookup() -> impl Fn(&str) -> Result<String, ExpandError> {
+        |uri: &str| Err(ExpandError::OpFailed(uri.to_string(), "boom".into()))
+    }
+
+    #[test]
+    fn op_ref_resolved_via_lookup() {
+        let vars = HashMap::new();
+        assert_eq!(
+            expand_string_leaf(
+                "op://Vault/Item/field",
+                &vars,
+                &empty_env(),
+                &ok_op_lookup()
+            )
+            .unwrap(),
+            "resolved:op://Vault/Item/field"
+        );
+    }
+
+    #[test]
+    fn op_ref_failure_propagates() {
+        let vars = HashMap::new();
+        assert_eq!(
+            expand_string_leaf(
+                "op://Vault/Item/field",
+                &vars,
+                &empty_env(),
+                &failing_op_lookup()
+            )
+            .unwrap_err(),
+            ExpandError::OpFailed("op://Vault/Item/field".into(), "boom".into())
+        );
+    }
+
+    #[test]
+    fn op_ref_is_not_var_expanded() {
+        let mut vars = HashMap::new();
+        vars.insert("x".into(), "should-not-appear".into());
+        assert_eq!(
+            expand_string_leaf(
+                "op://Vault/${x}/field",
+                &vars,
+                &empty_env(),
+                &ok_op_lookup()
+            )
+            .unwrap(),
+            "resolved:op://Vault/${x}/field"
+        );
+    }
+
+    #[test]
+    fn non_op_string_unaffected_by_op_lookup_param() {
+        let vars = HashMap::new();
+        assert_eq!(
+            expand_string_leaf("/plain/path", &vars, &empty_env(), &failing_op_lookup()).unwrap(),
+            "/plain/path"
+        );
     }
 }
