@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use totsuka_bus::{create_queue, Consumer, Publisher};
-use totsuka_core::SystemClock;
+use totsuka_core::{MockClock, SystemClock};
 use totsuka_telemetry::HealthState;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn pr_merged_publishes_with_task_id_from_branch() {
     let Some(url) = std::env::var("DATABASE_URL").ok() else {
         return;
@@ -43,6 +43,7 @@ async fn pr_merged_publishes_with_task_id_from_branch() {
     let mock = Arc::new(MockGhClient::new());
     let repo = RepoSlug::parse("acme/r").unwrap();
     let merged_at = Utc.with_ymd_and_hms(2026, 6, 29, 12, 0, 0).unwrap();
+    let fixed_now = merged_at + chrono::Duration::hours(1);
     mock.set_prs(
         &repo,
         vec![PrUpdate {
@@ -73,7 +74,7 @@ async fn pr_merged_publishes_with_task_id_from_branch() {
             publisher,
             mock.clone() as Arc<dyn GhClient>,
             tracker,
-            Arc::new(SystemClock),
+            Arc::new(MockClock::new(fixed_now)),
             HealthState::new(),
             cfg,
             s2,
@@ -81,7 +82,23 @@ async fn pr_merged_publishes_with_task_id_from_branch() {
         .await
     });
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Wait for the cursor to actually reach the expected value instead of
+    // guessing a fixed sleep duration — poll_repo only sets the cursor after
+    // the publish for this cycle has already happened, so this is a safe,
+    // order-guaranteed readiness signal (same technique as e2e_cursor_resume.rs).
+    let key = CursorKey::prs("acme/r");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(v) = get(&pool, &key).await.unwrap() {
+            if v.starts_with("2026-06-29T12:00:00") {
+                break;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("cursor for acme/r did not reach prefix \"2026-06-29T12:00:00\" within 5s");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
 

@@ -78,10 +78,15 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: test
-      - name: Install sqlx-cli
-        uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
+      - name: Cache sqlx-cli binary
+        id: sqlx-cli-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          tool: sqlx-cli@0.8
+          path: ~/.cargo/bin/sqlx
+          key: sqlx-cli-0.8.6-postgres-rustls-${{ runner.os }}
+      - name: Install sqlx-cli
+        if: steps.sqlx-cli-cache.outputs.cache-hit != 'true'
+        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls --locked
 
       - name: Enable pgmq extension
         run: psql "$DATABASE_URL" -c "CREATE EXTENSION IF NOT EXISTS pgmq CASCADE;"
