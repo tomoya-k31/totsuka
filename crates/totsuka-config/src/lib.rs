@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 pub mod env_override;
 pub mod expand;
+pub mod op_resolve;
 pub mod path_expand;
 pub mod schema;
 pub mod validate;

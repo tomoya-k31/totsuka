@@ -30,6 +30,12 @@ pub enum ExpandError {
     UndefinedEnv(String),
     #[error("cyclic reference involving: {0}")]
     Cycle(String),
+    #[error("op CLI could not be executed for {0}: {1}")]
+    OpExec(String, String),
+    #[error("op read failed for {0}: {1}")]
+    OpFailed(String, String),
+    #[error("op read returned non-UTF8 output for {0}")]
+    OpNonUtf8(String),
 }
 
 fn re() -> &'static Regex {
