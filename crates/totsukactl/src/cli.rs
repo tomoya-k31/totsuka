@@ -85,7 +85,13 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
         std::sync::Arc::new(totsuka_core::SystemClock);
 
     match cli.command {
-        Cmd::Down { force, postgres } => crate::commands::down::run(&paths, force, postgres).await,
+        Cmd::Down { force, postgres } => {
+            let wait_budget = crate::commands::down::shutdown_wait_budget(
+                cfg.supervisor.shutdown_grace_secs,
+                cfg.supervisor.shutdown_kill_secs,
+            );
+            crate::commands::down::run(&paths, force, postgres, wait_budget).await
+        }
         Cmd::Restart { bin } => crate::commands::restart::run(&paths, &bin).await,
         Cmd::Reload { bin } => crate::commands::reload::run(&paths, &bin).await,
         Cmd::Status => crate::commands::status::run(&paths, clock.as_ref()).await,

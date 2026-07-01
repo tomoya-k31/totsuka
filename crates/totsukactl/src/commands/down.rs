@@ -6,7 +6,43 @@ use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use std::time::{Duration, Instant};
 
-pub async fn run(paths: &Paths, force: bool, postgres: bool) -> Result<(), TotsukactlError> {
+pub const SHUTDOWN_WAIT_MARGIN_SECS: u64 = 10;
+
+/// Worst-case time for the 3-stage reverse-order shutdown (ingestion →
+/// orchestrator → agent-adapter) to complete: each stage may need a full
+/// `grace_secs` wait plus a `kill_secs` second-SIGTERM escalation wait,
+/// plus a fixed safety margin for control-channel and scheduling overhead.
+pub fn shutdown_wait_budget(grace_secs: u64, kill_secs: u64) -> Duration {
+    Duration::from_secs(3 * (grace_secs + kill_secs) + SHUTDOWN_WAIT_MARGIN_SECS)
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn budget_matches_default_config_values() {
+        // Defaults from totsuka-config schema.rs: grace=15, kill=5.
+        assert_eq!(shutdown_wait_budget(15, 5), Duration::from_secs(70));
+    }
+
+    #[test]
+    fn budget_is_margin_only_when_grace_and_kill_are_zero() {
+        assert_eq!(shutdown_wait_budget(0, 0), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn budget_scales_linearly_with_configured_values() {
+        assert_eq!(shutdown_wait_budget(30, 10), Duration::from_secs(130));
+    }
+}
+
+pub async fn run(
+    paths: &Paths,
+    force: bool,
+    postgres: bool,
+    wait_budget: Duration,
+) -> Result<(), TotsukactlError> {
     let pid_state = pidfile::check(&paths.supervisor_pid())?;
     let maybe_pid: Option<i32> = match pid_state {
         pidfile::PidState::Alive(p) => Some(p),
@@ -45,7 +81,7 @@ pub async fn run(paths: &Paths, force: bool, postgres: bool) -> Result<(), Totsu
         }
     }
 
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + wait_budget;
     while Instant::now() < deadline {
         if !pidfile::process_alive(pid) {
             pidfile::remove(&paths.supervisor_pid())?;
@@ -59,7 +95,8 @@ pub async fn run(paths: &Paths, force: bool, postgres: bool) -> Result<(), Totsu
         Ok(())
     } else {
         Err(TotsukactlError::Timeout(format!(
-            "supervisor pid {pid} did not exit in 30s; rerun with --force"
+            "supervisor pid {pid} did not exit in {}s; rerun with --force",
+            wait_budget.as_secs()
         )))
     }
 }
