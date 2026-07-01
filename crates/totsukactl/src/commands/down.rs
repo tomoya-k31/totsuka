@@ -16,27 +16,6 @@ pub fn shutdown_wait_budget(grace_secs: u64, kill_secs: u64) -> Duration {
     Duration::from_secs(3 * (grace_secs + kill_secs) + SHUTDOWN_WAIT_MARGIN_SECS)
 }
 
-#[cfg(test)]
-mod budget_tests {
-    use super::*;
-
-    #[test]
-    fn budget_matches_default_config_values() {
-        // Defaults from totsuka-config schema.rs: grace=15, kill=5.
-        assert_eq!(shutdown_wait_budget(15, 5), Duration::from_secs(70));
-    }
-
-    #[test]
-    fn budget_is_margin_only_when_grace_and_kill_are_zero() {
-        assert_eq!(shutdown_wait_budget(0, 0), Duration::from_secs(10));
-    }
-
-    #[test]
-    fn budget_scales_linearly_with_configured_values() {
-        assert_eq!(shutdown_wait_budget(30, 10), Duration::from_secs(130));
-    }
-}
-
 pub async fn run(
     paths: &Paths,
     force: bool,
@@ -98,5 +77,26 @@ pub async fn run(
             "supervisor pid {pid} did not exit in {}s; rerun with --force",
             wait_budget.as_secs()
         )))
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn budget_matches_default_config_values() {
+        // Defaults from totsuka-config schema.rs: grace=15, kill=5.
+        assert_eq!(shutdown_wait_budget(15, 5), Duration::from_secs(70));
+    }
+
+    #[test]
+    fn budget_is_margin_only_when_grace_and_kill_are_zero() {
+        assert_eq!(shutdown_wait_budget(0, 0), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn budget_scales_linearly_with_configured_values() {
+        assert_eq!(shutdown_wait_budget(30, 10), Duration::from_secs(130));
     }
 }
