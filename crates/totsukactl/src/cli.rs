@@ -57,7 +57,7 @@ pub fn parse() -> Cli {
     Cli::parse()
 }
 
-pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
+pub async fn dispatch(cli: Cli) -> Result<std::process::ExitCode, TotsukactlError> {
     // Init bootstraps the config from scratch, so it runs before config loading.
     if let Cmd::Init = &cli.command {
         let state = crate::paths::resolve_tilde("~/.local/state/totsuka");
@@ -69,7 +69,9 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
             state_dir: state,
             data_dir: data,
         };
-        return crate::commands::init::run(&paths).await;
+        return crate::commands::init::run(&paths)
+            .await
+            .map(|()| std::process::ExitCode::SUCCESS);
     }
 
     let config_path = cli
@@ -84,6 +86,16 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
     let clock: std::sync::Arc<dyn totsuka_core::Clock> =
         std::sync::Arc::new(totsuka_core::SystemClock);
 
+    // `status` maps its outcome to an exit code (0 = running, 3 = not
+    // running); every other command is success/failure as before.
+    if let Cmd::Status = cli.command {
+        let compose = crate::compose::DockerCompose::new(std::path::PathBuf::from(
+            &cfg.postgres.compose_file,
+        ));
+        let outcome = crate::commands::status::run(&paths, clock.as_ref(), &compose).await?;
+        return Ok(outcome.exit_code());
+    }
+
     match cli.command {
         Cmd::Down { force, postgres } => {
             let wait_budget = crate::commands::down::shutdown_wait_budget(
@@ -94,7 +106,6 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
         }
         Cmd::Restart { bin } => crate::commands::restart::run(&paths, &bin).await,
         Cmd::Reload { bin } => crate::commands::reload::run(&paths, &bin).await,
-        Cmd::Status => crate::commands::status::run(&paths, clock.as_ref()).await,
         Cmd::Up {
             recreate,
             bootstrap,
@@ -103,6 +114,8 @@ pub async fn dispatch(cli: Cli) -> Result<(), TotsukactlError> {
             crate::commands::logs::run(&paths, &bin, lines, follow).await
         }
         Cmd::Migrate => crate::commands::migrate::run(&cfg).await,
+        Cmd::Status => unreachable!("Status is handled above"),
         Cmd::Init => unreachable!("Init is handled before config loading"),
     }
+    .map(|()| std::process::ExitCode::SUCCESS)
 }
