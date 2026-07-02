@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `totsuka` is a local-PC agent orchestration stack: 5 binaries + 4 shared libs coordinating Claude Code agents (via the existing tool **herdr**, assumed already running) using GitHub Projects V2 as the source of truth for task state.
 
 - **Binaries** (`crates/{name}`, each has a thin `src/main.rs` + logic in `src/lib.rs`): `totsukactl` (supervisor/CLI — boots/shuts down the whole stack, manages Postgres via docker compose), `agent-adapter` (HTTP→herdr bridge + git worktree management), `orchestrator` (task state machine, drives agent-adapter), `github-watcher` (polls GitHub ProjectsV2/Issues), `qa-service` (Slack Socket Mode bot).
-- **Shared libs**: `totsuka-core` (domain types), `totsuka-bus` (pgmq wrapper), `totsuka-config` (TOML schema + `${section.key}`/`~` expansion), `totsuka-telemetry` (tracing/healthz/readyz).
+- **Shared libs**: `totsuka-core` (domain types), `totsuka-bus` (pgmq wrapper), `totsuka-config` (TOML schema + `${section.key}`/`~`/`op://` expansion), `totsuka-telemetry` (tracing/healthz/readyz).
+- `secrets.toml` values may be `op://vault/item/field` (1Password Secret Reference) instead of plaintext, resolved via the `op` CLI during `Config::load()`. Since every binary loads config independently at its own startup, each one needs `op` authenticated in its own process environment (e.g. `OP_SERVICE_ACCOUNT_TOKEN`) — there's no central process that resolves secrets once and distributes them.
 - Full architecture, startup/shutdown sequence, and config schema: `@docs/superpowers/specs/2026-06-28-rust-app-decomposition-design.md`.
 
 ## Build, test, lint
