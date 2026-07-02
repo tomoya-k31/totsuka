@@ -17,16 +17,31 @@ async fn spawn_read_close_against_real_herdr() {
     };
     let client = WireHerdr::connect(&sock).await.expect("connect herdr");
 
-    // Spawn a no-op shell so we don't need Claude itself installed.
+    // Spawn a shell (no Claude needed) that stays alive long enough to be
+    // read and closed — herdr deregisters the agent as soon as the process
+    // exits, so a bare `echo` would vanish before the read.
     let res = client
         .start(SpawnRequest {
             cwd: "/tmp".into(),
-            argv: vec!["bash".into(), "-c".into(), "echo hello".into()],
+            argv: vec!["bash".into(), "-c".into(), "echo hello; sleep 60".into()],
             env: HashMap::new(),
             label: "totsuka-e2e".into(),
         })
         .await
         .expect("spawn");
-    let _snap = client.read(&res.agent_id).await.expect("read");
+    // Poll until the pane has rendered the output (bounded).
+    let mut snap = client.read(&res.agent_id).await.expect("read");
+    for _ in 0..20 {
+        if snap.text.contains("hello") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        snap = client.read(&res.agent_id).await.expect("read");
+    }
+    assert!(
+        snap.text.contains("hello"),
+        "pane output should contain the echo, got: {:?}",
+        snap.text
+    );
     client.close(&res.agent_id).await.expect("close");
 }
