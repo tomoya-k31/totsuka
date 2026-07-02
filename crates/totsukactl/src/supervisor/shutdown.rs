@@ -62,6 +62,16 @@ pub async fn shutdown_stack(
 
     pidfile::remove(&paths.supervisor_pid())?;
 
+    // Children unlink stale sockets only at their next startup, so the
+    // leftovers are ours to remove once everything is stopped.
+    if let Ok(entries) = std::fs::read_dir(&paths.sock_dir) {
+        for entry in entries.flatten() {
+            if let Err(e) = std::fs::remove_file(entry.path()) {
+                tracing::warn!(path = ?entry.path(), error = %e, "failed to remove socket file");
+            }
+        }
+    }
+
     if cfg.also_postgres {
         compose.stop("pgmq").await?;
         registry.set_state("pgmq", ChildState::Stopped).await;

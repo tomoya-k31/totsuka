@@ -191,6 +191,53 @@ async fn shutdown_returns_early_when_children_already_dead() {
     );
 }
 
+/// After shutdown the sock dir must be empty: children unlink stale
+/// sockets only at startup, so `down` owns removing the leftovers.
+/// Otherwise every clean stop shows up as "N stale sockets" in `status`.
+#[tokio::test]
+async fn shutdown_removes_leftover_socket_files() {
+    let tmp = TempDir::new().unwrap();
+    let paths = tmp_paths(&tmp);
+    let registry = Arc::new(Registry::new());
+    let dead_pid = 0x7fff_fffe;
+    for n in [
+        "github-watcher",
+        "qa-service",
+        "orchestrator",
+        "agent-adapter",
+    ] {
+        registry
+            .set_pid(n, Some(dead_pid), Some(chrono::Utc::now()))
+            .await;
+    }
+    std::fs::write(paths.supervisor_pid(), "1\n").unwrap();
+    for sock in ["supervisor.sock", "adapter.sock", "qa-service.sock"] {
+        std::fs::write(paths.sock_dir.join(sock), "").unwrap();
+    }
+
+    let compose: Arc<dyn ComposeExec> = Arc::new(MockCompose::default());
+    let cfg = ShutdownCfg {
+        grace: Duration::from_millis(50),
+        second_term: Duration::from_millis(50),
+        force_grace: Duration::from_millis(50),
+        also_postgres: false,
+        force: false,
+    };
+    shutdown_stack(cfg, registry, compose, paths.clone())
+        .await
+        .unwrap();
+
+    let leftover: Vec<_> = std::fs::read_dir(&paths.sock_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "sock dir must be cleaned by shutdown, found: {leftover:?}"
+    );
+}
+
 /// Regression guard for early-exit polling: a child that ignores SIGTERM
 /// must still walk the 2nd-SIGTERM → SIGKILL escalation and end up dead.
 #[tokio::test]
