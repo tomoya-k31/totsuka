@@ -1,21 +1,9 @@
 use chrono::Utc;
 use github_watcher::cursor::{get, CursorKey};
 use github_watcher::snapshot::{ItemSnapshot, PgSnapshotStore, SnapshotStore};
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use totsuka_bus::{Consumer, Publisher};
 use totsuka_core::{ColumnId, DomainEvent, Source, SystemClock};
-
-async fn pool() -> Option<sqlx::PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    Some(
-        PgPoolOptions::new()
-            .max_connections(2)
-            .connect(&url)
-            .await
-            .unwrap(),
-    )
-}
 
 fn unique_queue() -> String {
     format!("ghw_test_{}", uuid::Uuid::new_v4().simple())
@@ -23,7 +11,11 @@ fn unique_queue() -> String {
 
 #[tokio::test]
 async fn diff_detects_new_and_changed_items() {
-    let Some(pool) = pool().await else { return };
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
     let q = unique_queue();
     totsuka_bus::create_queue(&pool, &q).await.unwrap();
     let publisher = Arc::new(Publisher::new(q.clone(), Arc::new(SystemClock)));
@@ -65,7 +57,11 @@ async fn diff_detects_new_and_changed_items() {
 
 #[tokio::test]
 async fn commit_page_writes_events_snapshots_and_cursor_atomically() {
-    let Some(pool) = pool().await else { return };
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
     let q = unique_queue();
     totsuka_bus::create_queue(&pool, &q).await.unwrap();
     let publisher = Arc::new(Publisher::new(q.clone(), Arc::new(SystemClock)));

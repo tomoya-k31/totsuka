@@ -1,6 +1,5 @@
 use chrono::TimeZone;
 use serde_json::json;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use totsuka_bus::*;
 use totsuka_config::Config;
@@ -9,7 +8,7 @@ use totsuka_telemetry::*;
 
 #[tokio::test]
 async fn config_loaded_publish_consume_notify_deduped() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
         eprintln!("skip");
         return;
     };
@@ -25,11 +24,7 @@ async fn config_loaded_publish_consume_notify_deduped() {
     assert_eq!(cfg.bus.queue_name, "totsuka_events");
 
     // 2. bus publish/consume
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let qname = format!("smoke_{}", uuid::Uuid::new_v4().simple());
     create_queue(&pool, &qname).await.unwrap();
     let clock = Arc::new(MockClock::new(

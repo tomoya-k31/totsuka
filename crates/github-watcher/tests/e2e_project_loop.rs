@@ -4,7 +4,6 @@ use github_watcher::gh_client::{GhClient, MockGhClient, ProjectItem, ProjectItem
 use github_watcher::polling::project::{run_project_loop, ProjectLoopConfig};
 use github_watcher::polling::RepoTracker;
 use github_watcher::snapshot::PgSnapshotStore;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -28,14 +27,11 @@ fn map() -> ColumnMap {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn project_loop_publishes_status_changed_for_every_diff() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
 
     // Clean slate
     sqlx::query("DELETE FROM gh_item_status WHERE item_id LIKE 'E2E_%'")

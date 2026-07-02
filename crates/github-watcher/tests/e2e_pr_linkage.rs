@@ -3,7 +3,6 @@ use github_watcher::cursor::{get, CursorKey};
 use github_watcher::gh_client::{GhClient, MockGhClient, PrUpdate, RepoSlug};
 use github_watcher::polling::prs::{run_prs_loop, PrsLoopConfig};
 use github_watcher::polling::RepoTracker;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -13,14 +12,11 @@ use totsuka_telemetry::HealthState;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn pr_merged_publishes_with_task_id_from_branch() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
 
     let task_id = "PVTI_full_aaaaaaaaaaaa";
     let task_short = "aaaaaaaaaaaa";

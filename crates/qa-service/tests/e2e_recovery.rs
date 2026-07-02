@@ -2,20 +2,16 @@ use chrono::Utc;
 use qa_service::adapter_client::{AdapterClient, AgentSummary, MockAdapter};
 use qa_service::recovery::reconcile;
 use qa_service::thread_map::{ThreadMapRepo, ThreadMapping};
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use totsuka_core::SystemClock;
 
 #[tokio::test]
 async fn reconcile_keeps_pairs_drops_mapping_orphans_closes_pane_orphans() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let clock = Arc::new(SystemClock);
     let thread_map = ThreadMapRepo::new(pool.clone(), clock.clone());
 

@@ -3,7 +3,6 @@ use github_watcher::cursor::{get, CursorKey};
 use github_watcher::gh_client::{GhClient, IssueUpdate, MockGhClient, RepoSlug};
 use github_watcher::polling::issues::{run_issues_loop, IssuesLoopConfig};
 use github_watcher::polling::RepoTracker;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -71,14 +70,11 @@ async fn run_once(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn issues_cursor_resumes_and_skips_already_seen() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
 
     let repo = RepoSlug::parse("acme/cur").unwrap();
     sqlx::query("DELETE FROM catchup_cursor WHERE source='github' AND scope='issues:acme/cur'")

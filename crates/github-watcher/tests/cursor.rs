@@ -1,18 +1,12 @@
 use github_watcher::cursor::{get, set, set_in_tx, CursorKey};
-use sqlx::postgres::PgPoolOptions;
-
-fn db_url() -> Option<String> {
-    std::env::var("DATABASE_URL").ok()
-}
 
 #[tokio::test]
 async fn round_trip_project_cursor() {
-    let Some(url) = db_url() else { return };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
     let k = CursorKey::project_items();
     set(&pool, &k, "abc").await.unwrap();
     assert_eq!(get(&pool, &k).await.unwrap(), Some("abc".into()));
@@ -22,12 +16,11 @@ async fn round_trip_project_cursor() {
 
 #[tokio::test]
 async fn issues_cursor_is_repo_scoped() {
-    let Some(url) = db_url() else { return };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
     let a = CursorKey::issues("acme/a");
     let b = CursorKey::issues("acme/b");
     set(&pool, &a, "2026-06-01T00:00:00Z").await.unwrap();
@@ -44,12 +37,11 @@ async fn issues_cursor_is_repo_scoped() {
 
 #[tokio::test]
 async fn set_in_tx_is_atomic_with_rollback() {
-    let Some(url) = db_url() else { return };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
     let k = CursorKey::prs("acme/tx");
     set(&pool, &k, "baseline").await.unwrap();
 

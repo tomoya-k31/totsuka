@@ -1,25 +1,19 @@
 use chrono::{Duration, Utc};
 use qa_service::thread_map::{ThreadMapRepo, ThreadMapping};
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use totsuka_core::SystemClock;
 
-fn db_url() -> Option<String> {
-    std::env::var("DATABASE_URL").ok()
-}
 fn ts() -> String {
     format!("t_{}", uuid::Uuid::new_v4().simple())
 }
 
 #[tokio::test]
 async fn upsert_get_round_trip() {
-    let Some(url) = db_url() else { return };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
-    let repo = ThreadMapRepo::new(pool, Arc::new(SystemClock));
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let repo = ThreadMapRepo::new(db.pool.clone(), Arc::new(SystemClock));
     let tts = ts();
     let m = ThreadMapping {
         thread_ts: tts.clone(),
@@ -37,13 +31,11 @@ async fn upsert_get_round_trip() {
 
 #[tokio::test]
 async fn touch_advances_last_activity() {
-    let Some(url) = db_url() else { return };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
-    let repo = ThreadMapRepo::new(pool, Arc::new(SystemClock));
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let repo = ThreadMapRepo::new(db.pool.clone(), Arc::new(SystemClock));
     let tts = ts();
     let initial = Utc::now() - Duration::hours(1);
     repo.upsert(&ThreadMapping {
@@ -63,13 +55,11 @@ async fn touch_advances_last_activity() {
 
 #[tokio::test]
 async fn list_idle_filters_by_threshold() {
-    let Some(url) = db_url() else { return };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
-    let repo = ThreadMapRepo::new(pool, Arc::new(SystemClock));
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let repo = ThreadMapRepo::new(db.pool.clone(), Arc::new(SystemClock));
     let old_ts = ts();
     let new_ts = ts();
     let now = Utc::now();

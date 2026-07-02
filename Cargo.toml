@@ -5,6 +5,7 @@ members = [
     "crates/totsuka-config",
     "crates/totsuka-telemetry",
     "crates/totsuka-bus",
+    "crates/totsuka-testkit",
     "crates/totsuka-foundation-e2e",
     "crates/agent-adapter",
     "crates/github-watcher",

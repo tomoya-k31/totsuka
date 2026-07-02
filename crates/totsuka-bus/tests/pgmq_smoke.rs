@@ -1,22 +1,13 @@
 use serde_json::json;
-use sqlx::postgres::PgPoolOptions;
 use totsuka_bus::*;
-
-fn db_url() -> Option<String> {
-    std::env::var("DATABASE_URL").ok()
-}
 
 #[tokio::test]
 async fn send_read_delete_cycle() {
-    let Some(url) = db_url() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
         eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let qname = format!("test_q_{}", uuid::Uuid::new_v4().simple());
 
     create_queue(&pool, &qname).await.unwrap();

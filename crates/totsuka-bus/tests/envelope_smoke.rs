@@ -1,25 +1,16 @@
 use chrono::TimeZone;
 use serde_json::json;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use totsuka_bus::*;
 use totsuka_core::{DomainEvent, MockClock, Source};
 
-fn db_url() -> Option<String> {
-    std::env::var("DATABASE_URL").ok()
-}
-
 #[tokio::test]
 async fn publish_consume_ack() {
-    let Some(url) = db_url() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let qname = format!("test_env_{}", uuid::Uuid::new_v4().simple());
     create_queue(&pool, &qname).await.unwrap();
 
@@ -61,15 +52,11 @@ async fn publish_consume_ack() {
 
 #[tokio::test]
 async fn send_in_tx_commit_visible() {
-    let Some(url) = db_url() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let qname = format!("test_tx_commit_{}", uuid::Uuid::new_v4().simple());
     create_queue(&pool, &qname).await.unwrap();
 
@@ -112,15 +99,11 @@ async fn send_in_tx_commit_visible() {
 
 #[tokio::test]
 async fn send_in_tx_rollback_invisible() {
-    let Some(url) = db_url() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     // pgmq queue names must be ≤47 chars; prefix is 7 chars → 39 total
     let qname = format!("tx_rb_{}", uuid::Uuid::new_v4().simple());
     create_queue(&pool, &qname).await.unwrap();

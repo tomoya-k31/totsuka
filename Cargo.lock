@@ -745,6 +745,7 @@ dependencies = [
  "totsuka-config",
  "totsuka-core",
  "totsuka-telemetry",
+ "totsuka-testkit",
  "tower",
  "tracing",
  "tracing-subscriber",
@@ -1374,6 +1375,7 @@ dependencies = [
  "totsuka-config",
  "totsuka-core",
  "totsuka-telemetry",
+ "totsuka-testkit",
  "tower",
  "tracing",
  "tracing-subscriber",
@@ -1541,6 +1543,7 @@ dependencies = [
  "totsuka-config",
  "totsuka-core",
  "totsuka-telemetry",
+ "totsuka-testkit",
  "tower",
  "tracing",
  "tracing-subscriber",
@@ -2621,6 +2624,7 @@ dependencies = [
  "tokio",
  "totsuka-config",
  "totsuka-core",
+ "totsuka-testkit",
  "tracing",
  "uuid",
 ]
@@ -2666,6 +2670,7 @@ dependencies = [
  "totsuka-config",
  "totsuka-core",
  "totsuka-telemetry",
+ "totsuka-testkit",
  "uuid",
 ]
 
@@ -2689,6 +2694,15 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "totsuka-testkit"
+version = "0.1.0"
+dependencies = [
+ "sqlx",
+ "tokio",
  "uuid",
 ]
 
@@ -2722,6 +2736,7 @@ dependencies = [
  "totsuka-config",
  "totsuka-core",
  "totsuka-telemetry",
+ "totsuka-testkit",
  "tower",
  "tracing",
  "tracing-subscriber",
