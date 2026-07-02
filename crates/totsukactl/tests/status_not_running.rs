@@ -5,13 +5,13 @@
 
 use std::sync::Arc;
 use tempfile::TempDir;
+use totsukactl::commands::status::PidReport;
 use totsukactl::commands::status::{
     format_not_running, gather_not_running_report, run, NotRunningReport, PgmqProbe, StatusOutcome,
 };
 use totsukactl::compose::mock::MockCompose;
 use totsukactl::compose::ComposeExec;
 use totsukactl::paths::Paths;
-use totsukactl::pidfile::PidState;
 
 fn tmp_paths(tmp: &TempDir) -> Paths {
     let paths = Paths {
@@ -27,7 +27,7 @@ fn tmp_paths(tmp: &TempDir) -> Paths {
 
 fn clean_report() -> NotRunningReport {
     NotRunningReport {
-        supervisor_pid: PidState::Absent,
+        supervisor_pid: PidReport::Absent,
         pgmq: PgmqProbe::Running,
         stale_socks: vec![],
         stale_pids: vec![],
@@ -51,7 +51,7 @@ fn clean_stop_renders_all_clear_and_up_hint() {
 #[test]
 fn stale_supervisor_pid_warns_crashed() {
     let r = NotRunningReport {
-        supervisor_pid: PidState::Stale(12345),
+        supervisor_pid: PidReport::Stale(12345),
         ..clean_report()
     };
     let s = format_not_running(&r);
@@ -63,8 +63,8 @@ fn stale_supervisor_pid_warns_crashed() {
 fn alive_child_pid_warns_orphan_and_manual_kill() {
     let r = NotRunningReport {
         stale_pids: vec![
-            ("agent-adapter".into(), PidState::Alive(999)),
-            ("orchestrator".into(), PidState::Stale(444)),
+            ("agent-adapter".into(), PidReport::Alive(999)),
+            ("orchestrator".into(), PidReport::Stale(444)),
         ],
         ..clean_report()
     };
@@ -104,6 +104,45 @@ fn pgmq_stopped_and_unknown_render() {
     assert!(s.contains("docker unreachable"), "got: {s}");
 }
 
+#[test]
+fn unreadable_pid_files_are_surfaced_not_hidden() {
+    // A diagnostics report must not collapse corrupted pid files to
+    // "absent"/"none" — that hides exactly what it exists to expose.
+    let r = NotRunningReport {
+        supervisor_pid: PidReport::Unreadable("malformed pid file".into()),
+        stale_pids: vec![(
+            "qa-service".into(),
+            PidReport::Unreadable("permission denied".into()),
+        )],
+        ..clean_report()
+    };
+    let s = format_not_running(&r);
+    assert!(s.contains("unreadable"), "got: {s}");
+    assert!(s.contains("malformed pid file"), "got: {s}");
+    assert!(s.contains("qa-service"), "got: {s}");
+    assert!(s.contains("permission denied"), "got: {s}");
+}
+
+#[tokio::test]
+async fn gather_reports_malformed_pid_files_as_unreadable() {
+    let tmp = TempDir::new().unwrap();
+    let paths = tmp_paths(&tmp);
+    std::fs::write(paths.supervisor_pid(), "not-a-pid\n").unwrap();
+    std::fs::write(paths.child_pid("qa-service"), "garbage\n").unwrap();
+
+    let compose = MockCompose::default();
+    let r = gather_not_running_report(&paths, &compose).await;
+
+    assert!(
+        matches!(r.supervisor_pid, PidReport::Unreadable(_)),
+        "got: {:?}",
+        r.supervisor_pid
+    );
+    assert_eq!(r.stale_pids.len(), 1, "got: {:?}", r.stale_pids);
+    assert_eq!(r.stale_pids[0].0, "qa-service");
+    assert!(matches!(r.stale_pids[0].1, PidReport::Unreadable(_)));
+}
+
 #[tokio::test]
 async fn gather_collects_stale_state_from_disk() {
     let tmp = TempDir::new().unwrap();
@@ -118,12 +157,12 @@ async fn gather_collects_stale_state_from_disk() {
     *compose.running.lock().unwrap() = true;
     let r = gather_not_running_report(&paths, &compose).await;
 
-    assert_eq!(r.supervisor_pid, PidState::Stale(2147483646));
+    assert_eq!(r.supervisor_pid, PidReport::Stale(2147483646));
     assert!(matches!(r.pgmq, PgmqProbe::Running));
     assert_eq!(r.stale_socks, vec!["qa.sock".to_string()]);
     assert_eq!(
         r.stale_pids,
-        vec![("orchestrator".to_string(), PidState::Stale(2147483645))]
+        vec![("orchestrator".to_string(), PidReport::Stale(2147483645))]
     );
 }
 

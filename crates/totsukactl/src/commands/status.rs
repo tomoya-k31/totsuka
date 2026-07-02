@@ -41,15 +41,36 @@ pub enum PgmqProbe {
     Unknown(String),
 }
 
+/// `PidState` plus the failure case: a pid file that exists but can't be
+/// read or parsed must show up in the report, not collapse to "absent".
+#[derive(Debug, PartialEq, Eq)]
+pub enum PidReport {
+    Absent,
+    Alive(i32),
+    Stale(i32),
+    Unreadable(String),
+}
+
+impl PidReport {
+    fn from_check(result: Result<PidState, TotsukactlError>) -> Self {
+        match result {
+            Ok(PidState::Absent) => Self::Absent,
+            Ok(PidState::Alive(pid)) => Self::Alive(pid),
+            Ok(PidState::Stale(pid)) => Self::Stale(pid),
+            Err(e) => Self::Unreadable(e.to_string()),
+        }
+    }
+}
+
 /// What we can still observe with the supervisor gone. The interesting
 /// cases are the abnormal ones: a stale supervisor.pid (crash), leftover
 /// sockets, and child pid files whose process is still alive (orphans).
 #[derive(Debug)]
 pub struct NotRunningReport {
-    pub supervisor_pid: PidState,
+    pub supervisor_pid: PidReport,
     pub pgmq: PgmqProbe,
     pub stale_socks: Vec<String>,
-    pub stale_pids: Vec<(String, PidState)>,
+    pub stale_pids: Vec<(String, PidReport)>,
 }
 
 pub async fn run(
@@ -63,11 +84,11 @@ pub async fn run(
         Err(e) => {
             tracing::debug!(error=%e, "supervisor.sock unreachable");
             let report = gather_not_running_report(paths, compose).await;
-            println!("{}", format_not_running(&report));
+            print!("{}", format_not_running(&report));
             return Ok(StatusOutcome::NotRunning);
         }
     };
-    println!("{}", format_table(&entries, clock.now()));
+    print!("{}", format_table(&entries, clock.now()));
     Ok(StatusOutcome::Running)
 }
 
@@ -75,7 +96,7 @@ pub async fn gather_not_running_report(
     paths: &Paths,
     compose: &dyn ComposeExec,
 ) -> NotRunningReport {
-    let supervisor_pid = pidfile::check(&paths.supervisor_pid()).unwrap_or(PidState::Absent);
+    let supervisor_pid = PidReport::from_check(pidfile::check(&paths.supervisor_pid()));
     let pgmq = match compose.ps_running("pgmq").await {
         Ok(true) => PgmqProbe::Running,
         Ok(false) => PgmqProbe::Stopped,
@@ -91,9 +112,9 @@ pub async fn gather_not_running_report(
     stale_socks.sort();
     let mut stale_pids = Vec::new();
     for name in CHILDREN {
-        match pidfile::check(&paths.child_pid(name)) {
-            Ok(PidState::Absent) | Err(_) => {}
-            Ok(st) => stale_pids.push((name.to_string(), st)),
+        match PidReport::from_check(pidfile::check(&paths.child_pid(name))) {
+            PidReport::Absent => {}
+            st => stale_pids.push((name.to_string(), st)),
         }
     }
     NotRunningReport {
@@ -107,12 +128,15 @@ pub async fn gather_not_running_report(
 pub fn format_not_running(r: &NotRunningReport) -> String {
     let mut tw = TabWriter::new(Vec::new()).padding(2);
     let supervisor = match &r.supervisor_pid {
-        PidState::Absent => "not running".to_string(),
-        PidState::Stale(pid) => {
+        PidReport::Absent => "not running".to_string(),
+        PidReport::Stale(pid) => {
             format!("not running (stale supervisor.pid: pid {pid} is dead — crashed?)")
         }
-        PidState::Alive(pid) => {
+        PidReport::Alive(pid) => {
             format!("not responding (pid {pid} alive but supervisor.sock unreachable)")
+        }
+        PidReport::Unreadable(reason) => {
+            format!("not running (unreadable supervisor.pid: {reason})")
         }
     };
     writeln!(tw, "SUPERVISOR\t{supervisor}").unwrap();
@@ -139,9 +163,10 @@ pub fn format_not_running(r: &NotRunningReport) -> String {
             .stale_pids
             .iter()
             .map(|(name, st)| match st {
-                PidState::Alive(pid) => {
+                PidReport::Alive(pid) => {
                     format!("{name}.pid (pid {pid} STILL ALIVE — orphan?)")
                 }
+                PidReport::Unreadable(reason) => format!("{name}.pid (unreadable: {reason})"),
                 _ => format!("{name}.pid (dead)"),
             })
             .collect();
@@ -153,7 +178,7 @@ pub fn format_not_running(r: &NotRunningReport) -> String {
     let has_orphan = r
         .stale_pids
         .iter()
-        .any(|(_, st)| matches!(st, PidState::Alive(_)));
+        .any(|(_, st)| matches!(st, PidReport::Alive(_)));
     out.push('\n');
     if has_orphan {
         out.push_str("hint: clean start with `totsukactl up`; orphan processes need manual kill\n");
