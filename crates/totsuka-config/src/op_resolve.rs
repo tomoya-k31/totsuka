@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn resolve_non_utf8_output_is_op_non_utf8() {
         let dir = TempDir::new().unwrap();
-        let script = write_script(dir.path(), "fake-op", "#!/bin/sh\nprintf '\\xff\\xfe'\n");
+        let script = write_script(dir.path(), "fake-op", "#!/bin/sh\nprintf '\\377\\376'\n");
         match resolve_with(script.to_str().unwrap(), "op://Vault/Item/field").unwrap_err() {
             ExpandError::OpNonUtf8(uri) => assert_eq!(uri, "op://Vault/Item/field"),
             e => panic!("expected OpNonUtf8, got {:?}", e),
