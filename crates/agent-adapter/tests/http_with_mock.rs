@@ -150,6 +150,137 @@ async fn spawn_happy_path() {
         .contains("totsuka__abcdefabcdef__design"));
 }
 
+/// Worktrees land at a fresh path every task, so their checked-out
+/// mise.toml is never path-trusted. The adapter must scope-trust it for
+/// the spawned pane by injecting MISE_TRUSTED_CONFIG_PATHS.
+#[tokio::test]
+async fn spawn_injects_mise_trusted_config_paths_env() {
+    let (_tmp, app, herdr) = app_with_real_git().await;
+    let body = serde_json::json!({
+        "task_id": "PVTI_mise",
+        "phase": "design",
+        "attempt": 0,
+        "repo": "x/y",
+        "branch": "totsuka/miseenv/design",
+        "argv": ["claude"],
+        "env": {}
+    });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201);
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let worktree = v["worktree_path"].as_str().unwrap().to_string();
+
+    let spawned = herdr.last_spawn().expect("herdr received a spawn");
+    assert_eq!(
+        spawned
+            .env
+            .get("MISE_TRUSTED_CONFIG_PATHS")
+            .map(String::as_str),
+        Some(worktree.as_str()),
+        "spawn env must trust the worktree for mise"
+    );
+}
+
+/// A caller-provided MISE_TRUSTED_CONFIG_PATHS must be extended
+/// (colon-joined), not clobbered.
+#[tokio::test]
+async fn spawn_appends_to_existing_mise_trusted_config_paths() {
+    let (_tmp, app, herdr) = app_with_real_git().await;
+    let body = serde_json::json!({
+        "task_id": "PVTI_mise2",
+        "phase": "design",
+        "attempt": 0,
+        "repo": "x/y",
+        "branch": "totsuka/miseenv2/design",
+        "argv": ["claude"],
+        "env": {"MISE_TRUSTED_CONFIG_PATHS": "/caller/path"}
+    });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201);
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let worktree = v["worktree_path"].as_str().unwrap().to_string();
+
+    let spawned = herdr.last_spawn().expect("herdr received a spawn");
+    assert_eq!(
+        spawned
+            .env
+            .get("MISE_TRUSTED_CONFIG_PATHS")
+            .map(String::as_str),
+        Some(format!("/caller/path:{worktree}").as_str()),
+        "existing value must be kept, worktree appended"
+    );
+}
+
+/// An EMPTY caller-provided MISE_TRUSTED_CONFIG_PATHS is treated as unset:
+/// appending would produce ":<worktree>" whose leading empty segment has
+/// PATH-like special meaning.
+#[tokio::test]
+async fn spawn_treats_empty_mise_trusted_config_paths_as_unset() {
+    let (_tmp, app, herdr) = app_with_real_git().await;
+    let body = serde_json::json!({
+        "task_id": "PVTI_mise3",
+        "phase": "design",
+        "attempt": 0,
+        "repo": "x/y",
+        "branch": "totsuka/miseenv3/design",
+        "argv": ["claude"],
+        "env": {"MISE_TRUSTED_CONFIG_PATHS": ""}
+    });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201);
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let worktree = v["worktree_path"].as_str().unwrap().to_string();
+
+    let spawned = herdr.last_spawn().expect("herdr received a spawn");
+    assert_eq!(
+        spawned
+            .env
+            .get("MISE_TRUSTED_CONFIG_PATHS")
+            .map(String::as_str),
+        Some(worktree.as_str()),
+        "empty value must be replaced, not colon-prefixed"
+    );
+}
+
 #[tokio::test]
 async fn spawn_rejects_argv_with_token_flag() {
     let (_tmp, app, _herdr) = app_with_real_git().await;

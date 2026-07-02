@@ -18,6 +18,7 @@ struct Pane {
 #[derive(Debug, Default, Clone)]
 pub struct MockHerdr {
     inner: Arc<Mutex<HashMap<AgentId, Pane>>>,
+    last_spawn: Arc<Mutex<Option<SpawnRequest>>>,
 }
 
 impl MockHerdr {
@@ -29,11 +30,17 @@ impl MockHerdr {
     pub fn count(&self) -> usize {
         self.inner.lock().unwrap().len()
     }
+
+    /// Test helper: the most recent SpawnRequest passed to `start`.
+    pub fn last_spawn(&self) -> Option<SpawnRequest> {
+        self.last_spawn.lock().unwrap().clone()
+    }
 }
 
 #[async_trait]
 impl HerdrClient for MockHerdr {
     async fn start(&self, req: SpawnRequest) -> Result<SpawnResult, HerdrError> {
+        *self.last_spawn.lock().unwrap() = Some(req.clone());
         let id = AgentId::new(format!("ag_{}", Uuid::new_v4().simple()));
         let pane = Pane {
             label: req.label,
