@@ -14,6 +14,11 @@ use totsuka_config::resolve_tilde;
 use totsuka_core::SystemClock;
 use totsuka_telemetry::HealthState;
 
+/// Upper bound on the post-SIGTERM in-flight drain. Must stay well under
+/// `supervisor.shutdown_grace_secs` (default 15s) or every `down` escalates
+/// to a 2nd SIGTERM. spec §5: adapter HTTP responses return immediately.
+const SHUTDOWN_DRAIN_DEADLINE: Duration = Duration::from_secs(5);
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config_path =
@@ -58,12 +63,28 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(path=?uds, "agent-adapter listening on UDS");
 
     let app = router(state.clone());
-    let server = tokio::spawn(async move { serve_uds(listener, app).await });
-    let signals = tokio::spawn(wait_for_signals(state.clone(), config_path));
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let mut server = tokio::spawn(serve_uds(
+        listener,
+        app,
+        shutdown.clone(),
+        SHUTDOWN_DRAIN_DEADLINE,
+    ));
+    let signals = tokio::spawn(wait_for_signals(
+        state.clone(),
+        config_path,
+        shutdown.clone(),
+    ));
 
     tokio::select! {
-        r = server => { r??; },
-        r = signals => { r??; },
+        r = &mut server => { r??; },
+        r = signals => {
+            r??;
+            // SIGTERM path: the token is cancelled; wait for the server to
+            // finish draining (bounded by SHUTDOWN_DRAIN_DEADLINE inside
+            // serve_uds), then exit.
+            server.await??;
+        },
     }
 
     Ok(())
