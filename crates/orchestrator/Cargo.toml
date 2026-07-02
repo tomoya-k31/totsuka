@@ -43,4 +43,4 @@ md5         = "0.7"
 [dev-dependencies]
 tokio    = { workspace = true, features = ["test-util"] }
 tempfile = "3.12"
-totsuka-testkit = { path = "../totsuka-testkit" }
+totsuka-testkit = { path = "../totsuka-testkit", version = "0.1.0" }

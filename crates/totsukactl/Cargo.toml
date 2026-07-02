@@ -47,4 +47,4 @@ humantime   = "2.1"
 tokio    = { workspace = true, features = ["test-util"] }
 tempfile = "3.12"
 toml     = { workspace = true }
-totsuka-testkit = { path = "../totsuka-testkit" }
+totsuka-testkit = { path = "../totsuka-testkit", version = "0.1.0" }
