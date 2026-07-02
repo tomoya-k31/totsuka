@@ -1,9 +1,14 @@
 use totsukactl::cli;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> std::process::ExitCode {
     tracing_subscriber::fmt().with_env_filter("info").init();
     let cli = cli::parse();
-    cli::dispatch(cli).await?;
-    Ok(())
+    match cli::dispatch(cli).await {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
 }

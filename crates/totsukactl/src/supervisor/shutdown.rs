@@ -62,6 +62,16 @@ pub async fn shutdown_stack(
 
     pidfile::remove(&paths.supervisor_pid())?;
 
+    // Children unlink stale sockets only at their next startup, so the
+    // leftovers are ours to remove once everything is stopped.
+    if let Ok(entries) = std::fs::read_dir(&paths.sock_dir) {
+        for entry in entries.flatten() {
+            if let Err(e) = std::fs::remove_file(entry.path()) {
+                tracing::warn!(path = ?entry.path(), error = %e, "failed to remove socket file");
+            }
+        }
+    }
+
     if cfg.also_postgres {
         compose.stop("pgmq").await?;
         registry.set_state("pgmq", ChildState::Stopped).await;
@@ -80,28 +90,49 @@ async fn sigterm_parallel(registry: &Registry, names: &[&str]) {
     }
 }
 
+const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Poll until every named child is dead or `deadline` elapses. The grace
+/// periods are deadlines, not mandatory waits — a stage whose children all
+/// exit in 100ms moves on in 100ms, not in the full configured budget.
+/// Returns whoever is still alive at the deadline.
+async fn wait_until_dead(
+    registry: &Registry,
+    names: &[&str],
+    deadline: Duration,
+) -> Vec<(String, i32)> {
+    let end = tokio::time::Instant::now() + deadline;
+    loop {
+        let alive = collect_alive(registry, names).await;
+        if alive.is_empty() || tokio::time::Instant::now() >= end {
+            return alive;
+        }
+        tokio::time::sleep(EXIT_POLL_INTERVAL).await;
+    }
+}
+
 async fn wait_or_kill_escalate(
     registry: &Registry,
     names: &[&str],
     grace: Duration,
     second: Duration,
 ) {
-    tokio::time::sleep(grace).await;
-    let still: Vec<_> = collect_alive(registry, names).await;
+    let still = wait_until_dead(registry, names, grace).await;
+    if still.is_empty() {
+        return;
+    }
     for (n, pid) in &still {
         let _ = kill(Pid::from_raw(*pid), Signal::SIGTERM);
         tracing::warn!(child = %n, pid, "SIGTERM (2nd)");
     }
-    tokio::time::sleep(second).await;
-    for (n, pid) in collect_alive(registry, names).await {
+    for (n, pid) in wait_until_dead(registry, names, second).await {
         let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
         tracing::error!(child = %n, pid, "SIGKILL");
     }
 }
 
 async fn wait_or_kill(registry: &Registry, names: &[&str], grace: Duration) {
-    tokio::time::sleep(grace).await;
-    for (n, pid) in collect_alive(registry, names).await {
+    for (n, pid) in wait_until_dead(registry, names, grace).await {
         let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
         tracing::error!(child = %n, pid, "SIGKILL (force)");
     }

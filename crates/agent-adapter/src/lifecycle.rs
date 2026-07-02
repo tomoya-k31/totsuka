@@ -1,9 +1,9 @@
 //! Startup + signal handling. spec §5 (shutdown) and §6 (config reload).
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::signal::unix::{signal, SignalKind};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::herdr::HerdrClient;
@@ -41,7 +41,17 @@ pub async fn probe_repos(state: &AppState) {
 }
 
 /// Block until SIGTERM. On SIGHUP, re-reads config and applies reload.
-pub async fn wait_for_signals(state: AppState, config_path: String) -> anyhow::Result<()> {
+///
+/// On SIGTERM: flip readyz, cancel `shutdown` (the UDS server drains
+/// in-flight responses against its own deadline), and return immediately.
+/// The supervisor's `shutdown_grace_secs` is a deadline, not a wait we
+/// must sit out (spec §5) — sleeping here delays exit past the grace
+/// window and triggers 2nd-SIGTERM escalation on every `down`.
+pub async fn wait_for_signals(
+    state: AppState,
+    config_path: String,
+    shutdown: CancellationToken,
+) -> anyhow::Result<()> {
     let mut term = signal(SignalKind::terminate())?;
     let mut hup = signal(SignalKind::hangup())?;
     loop {
@@ -49,7 +59,7 @@ pub async fn wait_for_signals(state: AppState, config_path: String) -> anyhow::R
             _ = term.recv() => {
                 info!("SIGTERM received; initiating graceful shutdown");
                 state.health.set_ready(false).await;
-                tokio::time::sleep(Duration::from_secs(15)).await;
+                shutdown.cancel();
                 return Ok(());
             }
             _ = hup.recv() => {
