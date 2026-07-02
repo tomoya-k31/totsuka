@@ -45,12 +45,22 @@ struct RemoteError {
 struct AgentObj {
     terminal_id: String,
     name: String,
-    pane_id: String,
+    workspace_id: String,
 }
 
 #[derive(Deserialize)]
 struct AgentStartedResult {
     agent: AgentObj,
+}
+
+#[derive(Deserialize)]
+struct WorkspaceCreatedResult {
+    workspace: WorkspaceObj,
+}
+
+#[derive(Deserialize)]
+struct WorkspaceObj {
+    workspace_id: String,
 }
 
 #[derive(Deserialize)]
@@ -133,12 +143,33 @@ impl WireHerdr {
 impl HerdrClient for WireHerdr {
     async fn start(&self, req: SpawnRequest) -> Result<SpawnResult, HerdrError> {
         // herdr calls the pane label `name`.
+        // One workspace per task: the agent pane lives in its own herdr
+        // workspace labelled with the task, and the workspace's root shell
+        // opens in the worktree for easy manual intervention.
+        #[derive(Serialize)]
+        struct Ws<'a> {
+            label: &'a str,
+            cwd: &'a str,
+        }
+        let ws: WorkspaceCreatedResult = self
+            .call(
+                "workspace.create",
+                Ws {
+                    label: &req.label,
+                    cwd: &req.cwd,
+                },
+            )
+            .await?;
+        // NB: the RPC param is `workspace_id` (unlike the CLI's --workspace);
+        // an unknown `workspace` key is silently ignored and the agent lands
+        // in whichever workspace happens to be focused.
         #[derive(Serialize)]
         struct P<'a> {
             name: &'a str,
             cwd: &'a str,
             argv: &'a [String],
             env: &'a std::collections::HashMap<String, String>,
+            workspace_id: &'a str,
         }
         let res: AgentStartedResult = self
             .call(
@@ -148,9 +179,20 @@ impl HerdrClient for WireHerdr {
                     cwd: &req.cwd,
                     argv: &req.argv,
                     env: &req.env,
+                    workspace_id: &ws.workspace.workspace_id,
                 },
             )
             .await?;
+        // Guard: if the agent landed anywhere but the workspace we just
+        // created, fail loudly now — otherwise close() would later tear
+        // down whichever workspace the user happened to have focused.
+        if res.agent.workspace_id != ws.workspace.workspace_id {
+            return Err(HerdrError::Decode(format!(
+                "agent landed in workspace {} instead of the created {} — \
+                 herdr ignored workspace_id?",
+                res.agent.workspace_id, ws.workspace.workspace_id
+            )));
+        }
         Ok(SpawnResult {
             agent_id: AgentId::new(res.agent.terminal_id.clone()),
             terminal_id: res.agent.terminal_id,
@@ -197,7 +239,10 @@ impl HerdrClient for WireHerdr {
     }
 
     async fn close(&self, id: &AgentId) -> Result<(), HerdrError> {
-        // herdr has no agent-addressed close; resolve the pane first.
+        // Every totsuka agent lives in its own workspace (see start), so
+        // closing tears down the whole workspace — agent pane and root
+        // shell alike. Resolve it via agent.get; herdr has no
+        // agent-addressed close.
         #[derive(Serialize)]
         struct Get<'a> {
             target: &'a str,
@@ -212,13 +257,13 @@ impl HerdrClient for WireHerdr {
             .await?;
         #[derive(Serialize)]
         struct Close<'a> {
-            pane_id: &'a str,
+            workspace_id: &'a str,
         }
         let _: Value = self
             .call(
-                "pane.close",
+                "workspace.close",
                 Close {
-                    pane_id: &info.agent.pane_id,
+                    workspace_id: &info.agent.workspace_id,
                 },
             )
             .await?;
@@ -271,13 +316,14 @@ mod tests {
             .unwrap();
     }
 
-    fn agent_obj(terminal_id: &str, name: &str, pane_id: &str) -> serde_json::Value {
+    fn agent_obj(terminal_id: &str, name: &str, workspace_id: &str) -> serde_json::Value {
+        let pane_id = format!("{workspace_id}:p2");
         serde_json::json!({
             "terminal_id": terminal_id,
             "name": name,
             "agent_status": "unknown",
-            "workspace_id": "w1",
-            "tab_id": "w1:t1",
+            "workspace_id": workspace_id,
+            "tab_id": format!("{workspace_id}:t1"),
             "pane_id": pane_id,
             "focused": false,
             "cwd": "/w",
@@ -288,25 +334,64 @@ mod tests {
 
     /// Fake herdr speaking the REAL protocol (captured from herdr on
     /// 2026-07-03): string request ids, `name` (not `label`) in
-    /// `agent.start` params, and typed result envelopes.
+    /// `agent.start` params, and typed result envelopes. Each task gets its
+    /// own workspace: `workspace.create` first, then `agent.start` into it.
     #[tokio::test]
-    async fn start_sends_string_id_and_name_and_parses_agent_started_envelope() {
+    async fn start_creates_workspace_then_starts_agent_inside_it() {
         let tmp = tempfile::tempdir().unwrap();
         let sock = tmp.path().join("h.sock");
         let listener = UnixListener::bind(&sock).unwrap();
 
         let server = tokio::spawn(async move {
             let (req, wr) = next_request(&listener).await;
-            assert_eq!(req["method"], "agent.start");
+            assert_eq!(req["method"], "workspace.create");
             assert!(
                 req["id"].is_string(),
                 "herdr requires string request ids, got {}",
                 req["id"]
             );
+            assert_eq!(req["params"]["label"], "lbl");
+            assert_eq!(
+                req["params"]["cwd"], "/w",
+                "workspace root shell should open in the worktree"
+            );
+            reply(
+                wr,
+                serde_json::json!({
+                    "id": req["id"],
+                    "result": {
+                        "type": "workspace_created",
+                        "workspace": {
+                            "workspace_id": "w9",
+                            "number": 3,
+                            "label": "lbl",
+                            "focused": false,
+                            "pane_count": 1,
+                            "tab_count": 1,
+                            "active_tab_id": "w9:t1",
+                            "agent_status": "unknown"
+                        },
+                        "tab": { "tab_id": "w9:t1", "workspace_id": "w9", "number": 1,
+                                 "label": "1", "focused": false, "pane_count": 1,
+                                 "agent_status": "unknown" },
+                        "root_pane": agent_obj("term_root", "", "w9")
+                    },
+                }),
+            )
+            .await;
+
+            let (req, wr) = next_request(&listener).await;
+            assert_eq!(req["method"], "agent.start");
             assert_eq!(req["params"]["cwd"], "/w");
             assert_eq!(
                 req["params"]["name"], "lbl",
                 "herdr wants the label under `name`"
+            );
+            assert_eq!(
+                req["params"]["workspace_id"], "w9",
+                "agent must start inside the workspace created for the task \
+                 (RPC param is workspace_id — `workspace` is silently ignored \
+                 and the agent lands in whichever workspace is focused)"
             );
             reply(
                 wr,
@@ -314,7 +399,7 @@ mod tests {
                     "id": req["id"],
                     "result": {
                         "type": "agent_started",
-                        "agent": agent_obj("term_42", "lbl", "w1:p2"),
+                        "agent": agent_obj("term_42", "lbl", "w9"),
                         "argv": ["claude"]
                     },
                 }),
@@ -333,6 +418,65 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.agent_id.as_str(), "term_42");
+        server.await.unwrap();
+    }
+
+    /// If herdr places the agent somewhere other than the workspace we
+    /// created (e.g. a future param rename ignored again), `start` must
+    /// fail loudly — otherwise `close` would later tear down whichever
+    /// workspace the user happened to have focused.
+    #[tokio::test]
+    async fn start_errors_when_agent_lands_outside_created_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("h.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let server = tokio::spawn(async move {
+            let (req, wr) = next_request(&listener).await;
+            assert_eq!(req["method"], "workspace.create");
+            reply(
+                wr,
+                serde_json::json!({
+                    "id": req["id"],
+                    "result": {
+                        "type": "workspace_created",
+                        "workspace": { "workspace_id": "w9" },
+                        "root_pane": agent_obj("term_root", "", "w9")
+                    },
+                }),
+            )
+            .await;
+
+            let (req, wr) = next_request(&listener).await;
+            assert_eq!(req["method"], "agent.start");
+            // herdr "succeeds" but the agent landed in the focused
+            // workspace w1, not the requested w9.
+            reply(
+                wr,
+                serde_json::json!({
+                    "id": req["id"],
+                    "result": {
+                        "type": "agent_started",
+                        "agent": agent_obj("term_42", "lbl", "w1"),
+                        "argv": ["claude"]
+                    },
+                }),
+            )
+            .await;
+        });
+        let client = WireHerdr::connect(&sock).await.unwrap();
+        let err = client
+            .start(SpawnRequest {
+                cwd: "/w".into(),
+                argv: vec!["claude".into()],
+                env: HashMap::new(),
+                label: "lbl".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("w9") && err.to_string().contains("w1"),
+            "error should name both workspaces, got: {err}"
+        );
         server.await.unwrap();
     }
 
@@ -382,7 +526,7 @@ mod tests {
     /// `close` must resolve the pane via `agent.get` first — herdr has no
     /// agent-addressed close; `pane.close` wants a `pane_id`.
     #[tokio::test]
-    async fn close_resolves_pane_id_via_agent_get_then_closes_pane() {
+    async fn close_resolves_workspace_via_agent_get_then_closes_workspace() {
         let tmp = tempfile::tempdir().unwrap();
         let sock = tmp.path().join("h.sock");
         let listener = UnixListener::bind(&sock).unwrap();
@@ -396,15 +540,17 @@ mod tests {
                     "id": req["id"],
                     "result": {
                         "type": "agent_info",
-                        "agent": agent_obj("term_42", "lbl", "w1:p2"),
+                        "agent": agent_obj("term_42", "lbl", "w1"),
                     },
                 }),
             )
             .await;
 
+            // Every totsuka agent lives in its own workspace, so close tears
+            // down the whole workspace (root shell included), not just the pane.
             let (req, wr) = next_request(&listener).await;
-            assert_eq!(req["method"], "pane.close");
-            assert_eq!(req["params"]["pane_id"], "w1:p2");
+            assert_eq!(req["method"], "workspace.close");
+            assert_eq!(req["params"]["workspace_id"], "w1");
             reply(
                 wr,
                 serde_json::json!({ "id": req["id"], "result": { "type": "ok" } }),
@@ -434,7 +580,7 @@ mod tests {
                     "id": req["id"],
                     "result": {
                         "type": "agent_list",
-                        "agents": [agent_obj("term_1", "totsuka:abc:impl", "w1:p1")]
+                        "agents": [agent_obj("term_1", "totsuka:abc:impl", "w1")]
                     },
                 }),
             )
