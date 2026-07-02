@@ -43,12 +43,20 @@ pub async fn spawn(
         .ok_or_else(|| AdapterError::RepoNotRegistered(body.repo.clone()))?;
     let worktree_path = s.worktrees.create(&repo, &body.branch).await?;
     let label = format!("totsuka:{}:{}:{}", body.task_id, body.phase, body.attempt);
+    // Every worktree lands at a fresh path, so its checked-out mise.toml is
+    // never path-trusted; trust it for this pane only via env (colon-append
+    // to any caller-provided list) instead of mutating global mise state.
+    let mut env = body.env;
+    let worktree_str = worktree_path.to_string_lossy().into_owned();
+    env.entry("MISE_TRUSTED_CONFIG_PATHS".to_string())
+        .and_modify(|v| *v = format!("{v}:{worktree_str}"))
+        .or_insert_with(|| worktree_str.clone());
     let res = s
         .herdr
         .start(SpawnRequest {
-            cwd: worktree_path.to_string_lossy().into_owned(),
+            cwd: worktree_str.clone(),
             argv: body.argv,
-            env: body.env,
+            env,
             label,
         })
         .await
