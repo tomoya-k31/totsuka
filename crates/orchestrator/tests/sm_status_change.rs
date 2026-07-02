@@ -4,7 +4,6 @@ use orchestrator::gh_writeback::MockWriteback;
 use orchestrator::repository::PgRepository;
 use orchestrator::sm::{Engine, HandleOutcome};
 use orchestrator::wip::WipGate;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use totsuka_core::{DomainEvent, Source, SystemClock, TaskId};
 
@@ -18,12 +17,11 @@ fn ev(item_id: &str, to: &str) -> DomainEvent {
 }
 
 async fn engine() -> Option<(Engine, Arc<MockAdapter>, Arc<MockWriteback>)> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return None;
+    };
+    let pool = db.pool.clone();
     let clock: Arc<dyn totsuka_core::Clock> = Arc::new(SystemClock);
     let cfg = Arc::new(
         totsuka_config::Config::load(format!(

@@ -1,19 +1,15 @@
 use chrono::Utc;
 use orchestrator::repository::{PgRepository, Repository, Task};
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use totsuka_core::{SystemClock, TaskId};
 
 #[tokio::test]
 async fn upsert_and_get_round_trip() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let repo = PgRepository::new(pool, Arc::new(SystemClock));
 
     let id = TaskId::new(format!("PVTI_test_{}", uuid::Uuid::new_v4().simple()));

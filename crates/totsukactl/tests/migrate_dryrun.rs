@@ -40,16 +40,34 @@ fn database_url_env_override_wins() {
 }
 
 #[tokio::test]
+// Deliberate: see the ENV_LOCK comment inside — this cannot deadlock because
+// every #[tokio::test] gets its own thread and single-threaded runtime.
+#[allow(clippy::await_holding_lock)]
 async fn migrate_actually_runs_when_db_available() {
-    // Check DATABASE_URL while holding the lock, then drop the lock before any await point.
-    let db_url_present = {
-        let _lock = ENV_LOCK.lock().unwrap();
-        std::env::var("DATABASE_URL").is_ok()
-    };
-    if !db_url_present {
-        eprintln!("skip: DATABASE_URL not set");
+    // Hold the env lock for the whole test: migrate::run reads DATABASE_URL
+    // internally (after an await point), and the sibling tests mutate it.
+    // Each #[tokio::test] runs on its own thread with its own runtime, so
+    // holding a std mutex guard across awaits cannot deadlock here.
+    let _lock = ENV_LOCK.lock().unwrap();
+
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
-    }
+    };
+    // build_db_url honors the DATABASE_URL env override — point migrate at
+    // the ephemeral database so it never touches the live one. testkit has
+    // already applied all migrations there, so this exercises migrate::run's
+    // connect + idempotent re-run path (a fresh-DB apply of the same
+    // migration set is exercised by ephemeral_db() itself).
+    let restore = std::env::var("DATABASE_URL").ok();
+    std::env::set_var("DATABASE_URL", db.url());
+
     let cfg = totsuka_config::Config::from_toml_str(TOML).unwrap();
-    totsukactl::commands::migrate::run(&cfg).await.unwrap();
+    let result = totsukactl::commands::migrate::run(&cfg).await;
+
+    match restore {
+        Some(v) => std::env::set_var("DATABASE_URL", v),
+        None => std::env::remove_var("DATABASE_URL"),
+    }
+    result.unwrap();
 }

@@ -21,3 +21,4 @@ chrono     = { workspace = true }
 uuid       = { workspace = true }
 tempfile    = "3.12"
 async-trait = { workspace = true }
+totsuka-testkit = { path = "../totsuka-testkit" }

@@ -19,3 +19,4 @@ tracing        = { workspace = true }
 
 [dev-dependencies]
 uuid = { workspace = true }
+totsuka-testkit = { path = "../totsuka-testkit" }

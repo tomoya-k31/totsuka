@@ -1,18 +1,14 @@
 use orchestrator::effect::{ClaimOutcome, EffectLedger};
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use totsuka_core::SystemClock;
 
 #[tokio::test]
 async fn double_claim_second_skipped() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let l = EffectLedger::new(pool, Arc::new(SystemClock), 30);
     let key = format!("spawn:test:{}:0", uuid::Uuid::new_v4().simple());
     let event = format!("gh:test:{}", uuid::Uuid::new_v4().simple());
@@ -24,14 +20,11 @@ async fn double_claim_second_skipped() {
 
 #[tokio::test]
 async fn complete_then_re_claim_skipped() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let l = EffectLedger::new(pool, Arc::new(SystemClock), 30);
     let key = format!("spawn:test:{}:0", uuid::Uuid::new_v4().simple());
     l.claim(&key, "ev", "spawn", "a").await.unwrap();

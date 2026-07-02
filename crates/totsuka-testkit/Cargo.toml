@@ -1,0 +1,19 @@
+[package]
+name = "totsuka-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+sqlx  = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+uuid  = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

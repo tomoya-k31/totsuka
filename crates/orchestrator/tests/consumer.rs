@@ -5,7 +5,6 @@ use orchestrator::gh_writeback::MockWriteback;
 use orchestrator::repository::{PgRepository, Repository};
 use orchestrator::sm::Engine;
 use orchestrator::wip::WipGate;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -15,14 +14,11 @@ use totsuka_core::{DomainEvent, Source, SystemClock, TaskId};
 
 #[tokio::test]
 async fn consumer_drives_status_change_into_repo() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let q = format!(
         "test_{}",
         uuid::Uuid::new_v4()

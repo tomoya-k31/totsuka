@@ -5,7 +5,6 @@ use orchestrator::gh_writeback::MockWriteback;
 use orchestrator::repository::{PgRepository, Repository};
 use orchestrator::sm::Engine;
 use orchestrator::wip::WipGate;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -24,14 +23,11 @@ fn ev(item_id: &str, ty: &str, payload: serde_json::Value) -> DomainEvent {
 
 #[tokio::test]
 async fn full_walk_inbox_to_released() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let q = format!(
         "e2e_{}",
         uuid::Uuid::new_v4()

@@ -1,5 +1,4 @@
 use github_watcher::linkage::{resolve_task_id, task_id_from_trailer, task_id_short_from_branch};
-use sqlx::postgres::PgPoolOptions;
 
 #[test]
 fn branch_extracts_short() {
@@ -30,14 +29,11 @@ fn trailer_no_match_returns_none() {
 
 #[tokio::test]
 async fn resolve_prefers_trailer_on_mismatch() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     // seed two tasks
     sqlx::query("INSERT INTO tasks (id, task_id_short, repo, current_column) VALUES ($1, $2, 'acme/r', 'design') ON CONFLICT DO NOTHING")
         .bind("PVTI_full_xxxxxxxxxxxx").bind("xxxxxxxxxxxx")

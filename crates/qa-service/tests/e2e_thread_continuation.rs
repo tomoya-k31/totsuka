@@ -4,7 +4,6 @@ use qa_service::answer::pipeline::{handle_answer, AnswerCtx, AnswerInput};
 use qa_service::mode::AnswerMode;
 use qa_service::slack::{MockSlackClient, SlackClient};
 use qa_service::thread_map::{ThreadMapRepo, ThreadMapping};
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use totsuka_config::schema::AnswerSection;
 use totsuka_core::SystemClock;
@@ -24,14 +23,11 @@ fn answer_cfg() -> AnswerSection {
 
 #[tokio::test]
 async fn existing_thread_mapping_sends_no_spawn() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
         return;
     };
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = db.pool.clone();
     let clock = Arc::new(SystemClock);
 
     let adapter = Arc::new(MockAdapter::new());
