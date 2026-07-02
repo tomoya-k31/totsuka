@@ -79,7 +79,7 @@ pub async fn create_from(admin_url: &str) -> Result<EphemeralDb, sqlx::Error> {
             .await
         {
             Ok(_) => break,
-            Err(e) if attempt < CREATE_RETRIES => {
+            Err(e) if attempt < CREATE_RETRIES && is_concurrent_template_copy(&e) => {
                 attempt += 1;
                 tracing_or_eprintln(&format!("testkit: CREATE DATABASE retry {attempt}: {e}"));
                 tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -101,23 +101,42 @@ pub async fn create_from(admin_url: &str) -> Result<EphemeralDb, sqlx::Error> {
     Ok(EphemeralDb { pool, url, name })
 }
 
+/// SQLSTATE 55006: another session is copying the same template database.
+/// The only condition worth retrying — anything else is a real failure.
+pub fn is_concurrent_template_copy(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(|d| d.code())
+        .map(|c| c == "55006")
+        .unwrap_or(false)
+}
+
 /// Drop leftover test databases from earlier (possibly panicked) runs.
 /// Best-effort: any error is logged and ignored — sweeping must never be
-/// able to fail a test.
+/// able to fail a test. Databases with live connections are skipped:
+/// finished or panicked runs hold none, so only genuinely in-use
+/// databases (e.g. a long local debugging session) survive the window.
 async fn sweep_stale(admin: &PgPool) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before epoch")
         .as_secs();
-    let names: Vec<(String,)> =
-        match sqlx::query_as("SELECT datname FROM pg_database WHERE datname LIKE 'totsuka_test_%'")
-            .fetch_all(admin)
-            .await
-        {
-            Ok(v) => v,
-            Err(_) => return,
-        };
+    let names: Vec<(String,)> = match sqlx::query_as(
+        "SELECT datname FROM pg_database d
+         WHERE datname LIKE 'totsuka_test_%'
+           AND NOT EXISTS (
+               SELECT 1 FROM pg_stat_activity a WHERE a.datname = d.datname
+           )",
+    )
+    .fetch_all(admin)
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => return,
+    };
     for (name,) in names {
+        if !is_sweepable_name(&name) {
+            continue;
+        }
         // totsuka_test_<unix>_<id> — segment 2 is the timestamp.
         let Some(ts) = name.split('_').nth(2).and_then(|s| s.parse::<u64>().ok()) else {
             continue;
@@ -125,7 +144,9 @@ async fn sweep_stale(admin: &PgPool) {
         if now.saturating_sub(ts) < STALE_AFTER_SECS {
             continue;
         }
-        if let Err(e) = sqlx::query(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+        // No FORCE: if something connected between the query above and
+        // here, the drop fails and the db is retried on a later sweep.
+        if let Err(e) = sqlx::query(&format!("DROP DATABASE IF EXISTS {name}"))
             .execute(admin)
             .await
         {
@@ -134,16 +155,40 @@ async fn sweep_stale(admin: &PgPool) {
     }
 }
 
+/// Only names this crate could have generated are eligible for DROP —
+/// they get interpolated into SQL, so restrict to the exact shape
+/// `totsuka_test_<digits>_<lowercase hex/alnum>` (identifier-safe).
+fn is_sweepable_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("totsuka_test_") else {
+        return false;
+    };
+    let Some((ts, id)) = rest.split_once('_') else {
+        return false;
+    };
+    !ts.is_empty()
+        && ts.bytes().all(|b| b.is_ascii_digit())
+        && !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
 /// Swap the database segment of a postgres URL, keeping any query string.
+/// URLs without a path segment (`postgres://user@host`) get one appended —
+/// the `//` of the scheme is not a path separator.
 fn replace_db_name(url: &str, db: &str) -> String {
     let (base, query) = match url.split_once('?') {
         Some((b, q)) => (b, Some(q)),
         None => (url, None),
     };
-    let cut = base.rfind('/').expect("postgres url has a path segment");
+    let after_authority = base.find("://").map(|i| i + 3).unwrap_or(0);
+    let base = match base[after_authority..].find('/') {
+        Some(rel) => &base[..after_authority + rel],
+        None => base,
+    };
     match query {
-        Some(q) => format!("{}/{}?{}", &base[..cut], db, q),
-        None => format!("{}/{}", &base[..cut], db),
+        Some(q) => format!("{base}/{db}?{q}"),
+        None => format!("{base}/{db}"),
     }
 }
 
@@ -153,7 +198,7 @@ fn tracing_or_eprintln(msg: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::replace_db_name;
+    use super::{is_sweepable_name, replace_db_name};
 
     #[test]
     fn replaces_db_segment_and_keeps_query() {
@@ -165,5 +210,29 @@ mod tests {
             replace_db_name("postgres://u@h/db?sslmode=disable", "t_x"),
             "postgres://u@h/t_x?sslmode=disable"
         );
+    }
+
+    #[test]
+    fn appends_db_segment_when_url_has_no_path() {
+        // Valid Postgres URLs may omit the database path entirely; the
+        // "//" of the scheme must not be mistaken for a path separator.
+        assert_eq!(
+            replace_db_name("postgres://u@h", "t_x"),
+            "postgres://u@h/t_x"
+        );
+        assert_eq!(
+            replace_db_name("postgres://u@h:5432?sslmode=disable", "t_x"),
+            "postgres://u@h:5432/t_x?sslmode=disable"
+        );
+    }
+
+    #[test]
+    fn sweep_only_accepts_identifier_safe_generated_names() {
+        assert!(is_sweepable_name("totsuka_test_1000000000_deadbeef"));
+        // Anything outside [a-z0-9_] must be rejected — names are
+        // interpolated into DROP DATABASE statements.
+        assert!(!is_sweepable_name("totsuka_test_1_a\"; DROP TABLE x;--"));
+        assert!(!is_sweepable_name("totsuka_test_1_日本語"));
+        assert!(!is_sweepable_name("totsuka_test__nots"));
     }
 }

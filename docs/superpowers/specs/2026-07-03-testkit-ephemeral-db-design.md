@@ -43,9 +43,14 @@ impl EphemeralDb {
 3. 新 DB に接続し `sqlx::migrate!("../../migrations")` を適用
    （`0000_schema_meta.sql` の `CREATE EXTENSION pgmq` により
    pgmq キューもテストごとに独立）。
-4. **sweep**: 名前に埋め込んだ unix 秒が 30 分より古い `totsuka_test_*`
-   を機会的に `DROP DATABASE ... WITH (FORCE)`。panic で残った残骸は
-   次の実行で回収される。実行中のテストの DB は必ず新しいので誤爆しない。
+4. **sweep**: 名前に埋め込んだ unix 秒が 10 分より古い `totsuka_test_*`
+   を機会的に `DROP DATABASE`。panic で残った残骸は次の実行で回収される。
+   実行中のテストの DB は必ず新しいので誤爆せず、さらにアクティブ接続の
+   ある DB はスキップする（長時間のローカルデバッグセッションを保護。
+   終了/panic 済みの run は接続を残さないので回収は妨げられない）。
+   DROP 対象は本クレートが生成しうる名前形状
+   （`totsuka_test_<digits>_<英小文字数字>`、識別子安全な文字のみ）に
+   限定し、SQL への識別子注入を防ぐ。
 
 テスト終了時の明示的 DROP は行わない（panic 時に走らず、非同期 Drop の
 複雑さに見合わない）。回収は sweep に一本化する。

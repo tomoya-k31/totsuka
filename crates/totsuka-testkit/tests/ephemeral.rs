@@ -104,3 +104,74 @@ async fn stale_test_dbs_are_swept_on_next_create() {
             .unwrap();
     assert!(fresh_exists.is_some(), "fresh db must not be swept");
 }
+
+#[tokio::test]
+async fn sweep_skips_stale_named_db_with_active_connections() {
+    let Some(url) = admin_url() else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let admin = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .unwrap();
+    // Plant a stale-named db and HOLD a connection to it — simulating a
+    // long-running local test session that crossed the staleness window.
+    let held_name = "totsuka_test_1000000001_beefbeef";
+    let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS {held_name} WITH (FORCE)"))
+        .execute(&admin)
+        .await;
+    sqlx::query(&format!("CREATE DATABASE {held_name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let held_url = url
+        .rsplit_once('/')
+        .map(|(b, _)| format!("{b}/{held_name}"))
+        .unwrap();
+    let _held = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .min_connections(1)
+        .connect(&held_url)
+        .await
+        .unwrap();
+
+    let _fresh = create_from(&url).await.unwrap();
+
+    let still_there: Option<(String,)> =
+        sqlx::query_as("SELECT datname FROM pg_database WHERE datname = $1")
+            .bind(held_name)
+            .fetch_optional(&admin)
+            .await
+            .unwrap();
+    assert!(
+        still_there.is_some(),
+        "a stale-named db with live connections must not be swept"
+    );
+
+    drop(_held);
+    let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS {held_name} WITH (FORCE)"))
+        .execute(&admin)
+        .await;
+}
+
+#[tokio::test]
+async fn non_concurrency_db_errors_are_not_retryable() {
+    let Some(url) = admin_url() else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let admin = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .unwrap();
+    // A syntax error (42601) must not be classified as the concurrent
+    // template-copy condition (55006) that warrants a retry.
+    let err = sqlx::query("CREATE DATABASE")
+        .execute(&admin)
+        .await
+        .unwrap_err();
+    assert!(!totsuka_testkit::is_concurrent_template_copy(&err));
+}
