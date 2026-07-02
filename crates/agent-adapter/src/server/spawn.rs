@@ -49,7 +49,16 @@ pub async fn spawn(
     let mut env = body.env;
     let worktree_str = worktree_path.to_string_lossy().into_owned();
     env.entry("MISE_TRUSTED_CONFIG_PATHS".to_string())
-        .and_modify(|v| *v = format!("{v}:{worktree_str}"))
+        .and_modify(|v| {
+            // An empty caller value is "unset": appending would produce
+            // ":<worktree>" whose leading empty segment has PATH-like
+            // special meaning.
+            if v.is_empty() {
+                *v = worktree_str.clone();
+            } else {
+                *v = format!("{v}:{worktree_str}");
+            }
+        })
         .or_insert_with(|| worktree_str.clone());
     let res = s
         .herdr
