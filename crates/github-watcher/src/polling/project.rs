@@ -104,7 +104,7 @@ async fn run_one_pass(
             let snake = to.as_snake();
             let hash_full = format!("{:x}", md5::compute(snake.as_bytes()));
             let hash = &hash_full[..8];
-            let key = event_key_gh_status(&d.item_id, hash);
+            let key = event_key_gh_status(&d.item_id, hash, d.seq);
             let ev = DomainEvent {
                 event_key: key.clone(),
                 source: Source::Github,
@@ -114,6 +114,7 @@ async fn run_one_pass(
                     "to_status": snake,
                     "repo": d.repo.clone().unwrap_or_default(),
                     "issue_number": numbers.get(d.item_id.as_str()),
+                    "seq": d.seq,
                 }),
             };
             events.push((key, ev));

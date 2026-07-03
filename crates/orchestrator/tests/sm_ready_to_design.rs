@@ -8,11 +8,15 @@ use std::sync::Arc;
 use totsuka_core::{DomainEvent, Source, SystemClock};
 
 fn ev(item_id: &str, to: &str) -> DomainEvent {
+    ev_seq(item_id, to, 1)
+}
+
+fn ev_seq(item_id: &str, to: &str, seq: i64) -> DomainEvent {
     DomainEvent {
-        event_key: format!("test:{}:{}", item_id, to),
+        event_key: format!("test:{}:{}:{}", item_id, to, seq),
         source: Source::Github,
         event_type: "github.status_changed".into(),
-        payload: serde_json::json!({"item_id": item_id, "to_status": to, "repo": "x/y", "issue_number": 18}),
+        payload: serde_json::json!({"item_id": item_id, "to_status": to, "repo": "x/y", "issue_number": 18, "seq": seq}),
     }
 }
 
@@ -58,7 +62,7 @@ async fn design_column_move_spawns_designer() {
     assert_eq!(adapter.spawn_count(), 1);
     let req = adapter.last_spawn().unwrap();
     assert!(req.branch.ends_with("/design"), "branch={}", req.branch);
-    assert_eq!(req.attempt, 0);
+    assert_eq!(req.attempt, 1, "attempt slot carries the generation (seq)");
     assert!(
         req.detached,
         "design phase must not create a branch (detached worktree)"
@@ -110,4 +114,38 @@ async fn ready_event_records_column_without_spawning() {
     let out = e.handle(&ev(&id, "ready")).await.unwrap();
     assert_eq!(out, HandleOutcome::Applied);
     assert_eq!(adapter.spawn_count(), 0, "ready must not spawn an agent");
+}
+
+/// Design review can send work back to 調査・設計: the second visit is a
+/// new generation (seq) and must spawn a fresh designer instead of being
+/// absorbed by the effect ledger.
+#[tokio::test]
+async fn revisiting_design_column_respawns_designer() {
+    let Some((e, adapter, _)) = engine().await else {
+        return;
+    };
+    let id = format!("PVTI_rd_{}", uuid::Uuid::new_v4().simple());
+    e.handle(&ev_seq(&id, "design", 1)).await.unwrap();
+    assert_eq!(adapter.spawn_count(), 1);
+
+    // Review sends it back (design_review), then a human moves it to
+    // design again — generation 3.
+    e.handle(&ev_seq(&id, "design_review", 2)).await.unwrap();
+    let out = e.handle(&ev_seq(&id, "design", 3)).await.unwrap();
+    assert_eq!(out, HandleOutcome::Applied);
+    assert_eq!(
+        adapter.spawn_count(),
+        2,
+        "second design visit must spawn a fresh designer"
+    );
+    let req = adapter.last_spawn().unwrap();
+    assert_eq!(req.attempt, 3, "attempt slot carries the generation");
+
+    // Redelivery of the SAME event stays absorbed (idempotency intact).
+    let out = e.handle(&ev_seq(&id, "design", 3)).await.unwrap();
+    assert!(
+        matches!(out, HandleOutcome::Skipped { .. }),
+        "same-generation redelivery must be absorbed, got {out:?}"
+    );
+    assert_eq!(adapter.spawn_count(), 2);
 }

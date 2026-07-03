@@ -159,4 +159,29 @@ impl EffectLedger {
         .await?;
         Ok(row.map(|r| r.0))
     }
+
+    /// Latest completed result whose key starts with `prefix`. Spawn keys
+    /// carry a `:g<seq>` generation suffix (column re-entry), so lookups
+    /// that only know task+phase+attempt match by prefix.
+    pub async fn latest_result_with_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<serde_json::Value>, OrchestratorError> {
+        // Escape LIKE metacharacters in the key prefix, then anchor it.
+        let pattern = format!(
+            "{}%",
+            prefix
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let row: Option<(serde_json::Value,)> = sqlx::query_as(
+            "SELECT result FROM processed_effects WHERE effect_key LIKE $1 AND status = 'done'
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(pattern)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
 }

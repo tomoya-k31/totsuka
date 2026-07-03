@@ -29,20 +29,22 @@ impl SnapshotStore for PgSnapshotStore {
             return Ok(vec![]);
         }
         let ids: Vec<String> = page.iter().map(|i| i.item_id.clone()).collect();
-        let rows =
-            sqlx::query("SELECT item_id, status FROM gh_item_status WHERE item_id = ANY($1)")
-                .bind(&ids)
-                .fetch_all(&self.pool)
-                .await?;
-        let mut prev = std::collections::HashMap::<String, Option<ColumnId>>::new();
+        let rows = sqlx::query(
+            "SELECT item_id, status, status_seq FROM gh_item_status WHERE item_id = ANY($1)",
+        )
+        .bind(&ids)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut prev = std::collections::HashMap::<String, (Option<ColumnId>, i64)>::new();
         for r in rows {
             let id: String = r.get("item_id");
             let s: Option<String> = r.get("status");
-            prev.insert(id, parse_status(s));
+            let seq: i64 = r.get("status_seq");
+            prev.insert(id, (parse_status(s), seq));
         }
         let mut out = Vec::with_capacity(page.len());
         for snap in page {
-            let prior = prev.get(&snap.item_id).cloned().unwrap_or(None);
+            let (prior, prior_seq) = prev.get(&snap.item_id).cloned().unwrap_or((None, 0));
             if prior != snap.status {
                 let repo = snap
                     .content_ref
@@ -53,6 +55,9 @@ impl SnapshotStore for PgSnapshotStore {
                     from_status: prior,
                     to_status: snap.status,
                     repo,
+                    // commit_page will bump status_seq for this change,
+                    // so the event belongs to generation prior_seq + 1.
+                    seq: prior_seq + 1,
                 });
             }
         }
@@ -74,12 +79,15 @@ impl SnapshotStore for PgSnapshotStore {
         for snap in page {
             let status_snake = snap.status.map(|c| c.as_snake().to_string());
             sqlx::query(
-                "INSERT INTO gh_item_status (item_id, status, content_ref, closed_at, updated_at)
-                    VALUES ($1, $2, $3, $4, now())
+                "INSERT INTO gh_item_status (item_id, status, content_ref, closed_at, status_seq, updated_at)
+                    VALUES ($1, $2, $3, $4, CASE WHEN $2::text IS NULL THEN 0 ELSE 1 END, now())
                     ON CONFLICT (item_id) DO UPDATE
                       SET status      = EXCLUDED.status,
                           content_ref = EXCLUDED.content_ref,
                           closed_at   = EXCLUDED.closed_at,
+                          status_seq  = gh_item_status.status_seq
+                                        + CASE WHEN gh_item_status.status IS DISTINCT FROM EXCLUDED.status
+                                               THEN 1 ELSE 0 END,
                           updated_at  = now()",
             )
             .bind(&snap.item_id)

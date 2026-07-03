@@ -45,12 +45,30 @@ mod tests {
         path
     }
 
+    /// Exec'ing a just-written script can hit ETXTBSY when a parallel
+    /// test's fork briefly holds the write fd until its own exec (the
+    /// same race cargo works around when running build scripts). Retry —
+    /// the window is microseconds.
+    fn resolve_retrying(bin: &str, uri: &str) -> Result<String, ExpandError> {
+        let mut last = None;
+        for _ in 0..50 {
+            match resolve_with(bin, uri) {
+                Err(ExpandError::OpExec(_, msg)) if msg.contains("os error 26") => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    last = Some(msg);
+                }
+                other => return other,
+            }
+        }
+        panic!("ETXTBSY persisted across retries: {last:?}");
+    }
+
     #[test]
     fn resolve_success_strips_trailing_newline() {
         let dir = TempDir::new().unwrap();
         let script = write_script(dir.path(), "fake-op", "#!/bin/sh\necho resolved-secret\n");
         assert_eq!(
-            resolve_with(script.to_str().unwrap(), "op://Vault/Item/field").unwrap(),
+            resolve_retrying(script.to_str().unwrap(), "op://Vault/Item/field").unwrap(),
             "resolved-secret"
         );
     }
@@ -64,7 +82,7 @@ mod tests {
             "#!/bin/sh\nprintf 'no-newline-value'\n",
         );
         assert_eq!(
-            resolve_with(script.to_str().unwrap(), "op://Vault/Item/field").unwrap(),
+            resolve_retrying(script.to_str().unwrap(), "op://Vault/Item/field").unwrap(),
             "no-newline-value"
         );
     }
@@ -74,7 +92,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let script = write_script(dir.path(), "fake-op", "#!/bin/sh\nprintf 'value\\r\\n'\n");
         assert_eq!(
-            resolve_with(script.to_str().unwrap(), "op://Vault/Item/field").unwrap(),
+            resolve_retrying(script.to_str().unwrap(), "op://Vault/Item/field").unwrap(),
             "value"
         );
     }
@@ -88,7 +106,7 @@ mod tests {
             "#!/bin/sh\nif [ \"$1\" = read ] && [ \"$2\" = \"op://Vault/Item/field\" ]; then echo ok; else echo wrong-args; exit 1; fi\n",
         );
         assert_eq!(
-            resolve_with(script.to_str().unwrap(), "op://Vault/Item/field").unwrap(),
+            resolve_retrying(script.to_str().unwrap(), "op://Vault/Item/field").unwrap(),
             "ok"
         );
     }
@@ -101,7 +119,7 @@ mod tests {
             "fake-op",
             "#!/bin/sh\necho 'not signed in' >&2\nexit 1\n",
         );
-        match resolve_with(script.to_str().unwrap(), "op://Vault/Item/field").unwrap_err() {
+        match resolve_retrying(script.to_str().unwrap(), "op://Vault/Item/field").unwrap_err() {
             ExpandError::OpFailed(uri, stderr) => {
                 assert_eq!(uri, "op://Vault/Item/field");
                 assert!(stderr.contains("not signed in"));
@@ -114,7 +132,7 @@ mod tests {
     fn resolve_non_utf8_output_is_op_non_utf8() {
         let dir = TempDir::new().unwrap();
         let script = write_script(dir.path(), "fake-op", "#!/bin/sh\nprintf '\\377\\376'\n");
-        match resolve_with(script.to_str().unwrap(), "op://Vault/Item/field").unwrap_err() {
+        match resolve_retrying(script.to_str().unwrap(), "op://Vault/Item/field").unwrap_err() {
             ExpandError::OpNonUtf8(uri) => assert_eq!(uri, "op://Vault/Item/field"),
             e => panic!("expected OpNonUtf8, got {:?}", e),
         }

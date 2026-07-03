@@ -36,8 +36,10 @@ pub async fn on_pr_merged_ready(
             })
         }
     };
-    let key = spawn_effect_key(&id, Phase::ImplVerify, task.impl_verify_attempt);
-    let result = e.effects.result_for(&key).await?;
+    // Implementer spawns are keyed spawn:<id>:impl_verify:<attempt>:g<seq>;
+    // the seq isn't known here, so take the latest matching generation.
+    let key_prefix = spawn_effect_key(&id, Phase::ImplVerify, task.impl_verify_attempt);
+    let result = e.effects.latest_result_with_prefix(&key_prefix).await?;
     let agent_id = result
         .as_ref()
         .and_then(|v| v.get("agent_id"))
@@ -99,18 +101,31 @@ pub async fn on_verification(
         let updated = e.repo.get(&task.id).await?.ok_or_else(|| {
             OrchestratorError::Internal("task disappeared during DiffBack".into())
         })?;
-        on_enter(e, &updated).await
+        // DiffBack uniqueness comes from the bumped attempt, not the
+        // column-event generation.
+        on_enter(e, &updated, 0).await
     }
 }
 
-pub async fn on_enter(e: &Engine, task: &Task) -> Result<HandleOutcome, OrchestratorError> {
+/// `seq` (status-transition generation) is appended to the effect key so a
+/// card re-entering 実装・受入検証 spawns again; `attempt` keeps its own
+/// meaning (DiffBack retry counter, branch naming).
+pub async fn on_enter(
+    e: &Engine,
+    task: &Task,
+    seq: i64,
+) -> Result<HandleOutcome, OrchestratorError> {
     let permit = match e.wip.try_acquire() {
         Some(p) => p,
         None => return Ok(HandleOutcome::WipFull),
     };
     let id: TaskId = task.id.clone();
     let attempt = task.impl_verify_attempt;
-    let key = spawn_effect_key(&id, Phase::ImplVerify, attempt);
+    let key = format!(
+        "{}:g{}",
+        spawn_effect_key(&id, Phase::ImplVerify, attempt),
+        seq
+    );
     let outcome = e
         .effects
         .claim(

@@ -6,7 +6,7 @@ use crate::error::QaError;
 use sqlx::PgPool;
 
 pub const MIN_SCHEMA_VERSION: i32 = 6;
-pub const TARGET_SCHEMA_VERSION: i32 = 7;
+pub const TARGET_SCHEMA_VERSION: i32 = 8;
 
 pub async fn check_schema_version(pool: &PgPool) -> Result<i32, QaError> {
     let row: (Option<i32>,) = sqlx::query_as("SELECT max(version) FROM schema_meta")

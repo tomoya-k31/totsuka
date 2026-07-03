@@ -9,13 +9,22 @@ use crate::error::OrchestratorError;
 use crate::repository::Task;
 use crate::sm::{Engine, HandleOutcome};
 
-pub async fn try_spawn(e: &Engine, task: &Task) -> Result<HandleOutcome, OrchestratorError> {
+/// `seq` is the status-transition generation: it fills the attempt slot of
+/// the effect key (and the herdr label), so a card sent back to design by
+/// review spawns a fresh designer while redeliveries of the same event
+/// stay absorbed.
+pub async fn try_spawn(
+    e: &Engine,
+    task: &Task,
+    seq: i64,
+) -> Result<HandleOutcome, OrchestratorError> {
     let permit = match e.wip.try_acquire() {
         Some(p) => p,
         None => return Ok(HandleOutcome::WipFull),
     };
     let id: TaskId = task.id.clone();
-    let key = spawn_effect_key(&id, Phase::Design, 0);
+    let generation = i32::try_from(seq).unwrap_or(i32::MAX);
+    let key = spawn_effect_key(&id, Phase::Design, generation);
 
     let outcome = e
         .effects
@@ -50,7 +59,7 @@ pub async fn try_spawn(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchest
     let req = SpawnReq {
         task_id: id.as_str().into(),
         phase: Phase::Design.as_snake().into(),
-        attempt: 0,
+        attempt: generation,
         repo: task.repo.clone(),
         branch: branch_name(&id, Phase::Design),
         argv,

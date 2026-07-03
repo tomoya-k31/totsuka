@@ -15,6 +15,10 @@ struct StatusChanged {
     /// for events emitted before the watcher carried it).
     #[serde(default)]
     pub issue_number: Option<i64>,
+    /// Status transition generation (gh_item_status.status_seq). Lets a
+    /// card revisit a 🤖 column and spawn again; 0 for legacy events.
+    #[serde(default)]
+    pub seq: i64,
 }
 
 pub async fn handle(e: &Engine, ev: &DomainEvent) -> Result<HandleOutcome, OrchestratorError> {
@@ -27,12 +31,12 @@ pub async fn handle(e: &Engine, ev: &DomainEvent) -> Result<HandleOutcome, Orche
     // corresponding agent. 📋 Ready is just a backlog state.
     if p.to_status == "design" {
         if let Some(t) = e.repo.get(&id).await? {
-            return super::ready_to_design::try_spawn(e, &t).await;
+            return super::ready_to_design::try_spawn(e, &t, p.seq).await;
         }
     }
     if p.to_status == "impl_verify" {
         if let Some(t) = e.repo.get(&id).await? {
-            return super::impl_verify::on_enter(e, &t).await;
+            return super::impl_verify::on_enter(e, &t, p.seq).await;
         }
     }
     if p.to_status == "final_review" {
