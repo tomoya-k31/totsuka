@@ -9,11 +9,23 @@ pub fn render(template: &str, task: &Task, branch: &str) -> String {
         .issue_number
         .map(|n| n.to_string())
         .unwrap_or_else(|| "unknown".to_string());
-    template
+    let rendered = template
         .replace("{repo}", &task.repo)
         .replace("{issue_number}", &issue_number)
         .replace("{branch}", branch)
-        .replace("{task_id}", task.id.as_str())
+        .replace("{task_id}", task.id.as_str());
+    if task.issue_number.is_some() {
+        return rendered;
+    }
+    // Draft project items have no linked issue: instructions like
+    // `gh issue view unknown` are not executable, so tell the agent
+    // explicitly what to fall back on instead of failing silently.
+    format!(
+        "{rendered}\n\n注意: このカード ({}) には紐づく issue がありません。\
+         上記の issue 参照の指示は無視し、プロジェクトカードのタイトルと\
+         リポジトリの状況から作業内容を判断してください。",
+        task.id.as_str()
+    )
 }
 
 #[cfg(test)]
@@ -54,8 +66,25 @@ mod tests {
     }
 
     #[test]
-    fn missing_issue_number_renders_unknown() {
+    fn missing_issue_number_appends_explicit_caveat() {
+        // "unknown" alone would leave instructions like `gh issue view
+        // unknown` silently non-executable — the agent must be told the
+        // issue reference is void and what to fall back on.
         let out = render("issue #{issue_number}", &task(None), "b");
-        assert_eq!(out, "issue #unknown");
+        assert!(out.starts_with("issue #unknown"), "got: {out}");
+        assert!(
+            out.contains("紐づく issue がありません"),
+            "must warn that no issue is linked: {out}"
+        );
+        assert!(
+            out.contains("PVTI_prompt_test"),
+            "fallback must point at the task id: {out}"
+        );
+    }
+
+    #[test]
+    fn present_issue_number_has_no_caveat() {
+        let out = render("issue #{issue_number}", &task(Some(5)), "b");
+        assert_eq!(out, "issue #5");
     }
 }
