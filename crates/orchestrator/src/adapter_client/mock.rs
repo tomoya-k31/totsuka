@@ -41,6 +41,15 @@ impl MockAdapter {
         self.state.lock().unwrap().spawn_log.last().cloned()
     }
 
+    pub fn send_count(&self) -> usize {
+        self.state.lock().unwrap().send_log.len()
+    }
+
+    /// Test helper: most recent (agent_id, text) passed to `send`.
+    pub fn last_send(&self) -> Option<(String, String)> {
+        self.state.lock().unwrap().send_log.last().cloned()
+    }
+
     pub fn set_pane_text(&self, agent_id: &str, text: &str) {
         let mut g = self.state.lock().unwrap();
         if let Some(p) = g.agents.get_mut(agent_id) {

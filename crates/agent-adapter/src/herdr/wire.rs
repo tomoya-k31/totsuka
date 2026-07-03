@@ -145,11 +145,16 @@ impl HerdrClient for WireHerdr {
         // herdr calls the pane label `name`.
         // One workspace per task: the agent pane lives in its own herdr
         // workspace labelled with the task, and the workspace's root shell
-        // opens in the worktree for easy manual intervention.
+        // opens in the worktree for easy manual intervention. The root
+        // shell gets the same env as the agent — without it the shell's
+        // mise hook can't trust the worktree's mise.toml and greets the
+        // user with mise ERROR (verified against a live herdr: the env
+        // param propagates to the root pane's shell).
         #[derive(Serialize)]
         struct Ws<'a> {
             label: &'a str,
             cwd: &'a str,
+            env: &'a std::collections::HashMap<String, String>,
         }
         let ws: WorkspaceCreatedResult = self
             .call(
@@ -157,6 +162,7 @@ impl HerdrClient for WireHerdr {
                 Ws {
                     label: &req.label,
                     cwd: &req.cwd,
+                    env: &req.env,
                 },
             )
             .await?;
@@ -355,6 +361,12 @@ mod tests {
                 req["params"]["cwd"], "/w",
                 "workspace root shell should open in the worktree"
             );
+            assert_eq!(
+                req["params"]["env"]["MISE_TRUSTED_CONFIG_PATHS"], "/w",
+                "the root shell needs the spawn env too (e.g. mise trust); \
+                 without it the workspace's root pane greets the user with \
+                 mise ERROR"
+            );
             reply(
                 wr,
                 serde_json::json!({
@@ -412,7 +424,10 @@ mod tests {
             .start(SpawnRequest {
                 cwd: "/w".into(),
                 argv: vec!["claude".into()],
-                env: HashMap::new(),
+                env: HashMap::from_iter([(
+                    "MISE_TRUSTED_CONFIG_PATHS".to_string(),
+                    "/w".to_string(),
+                )]),
                 label: "lbl".into(),
             })
             .await

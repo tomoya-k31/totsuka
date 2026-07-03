@@ -59,7 +59,9 @@ pub async fn spawn_verifier(
         }
     };
 
-    let input = format!("{}\n\n--- PR DIFF ---\n{}", snap.text, pr_diff);
+    // Trailing CR submits the input (the TUI's Enter); internal newlines
+    // stay literal.
+    let input = format!("{}\n\n--- PR DIFF ---\n{}\r", snap.text, pr_diff);
     if let Err(err) = engine.adapter.send(&res.agent_id, &input).await {
         engine.effects.fail(&key, &err.to_string()).await?;
         return Err(err);

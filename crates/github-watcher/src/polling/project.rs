@@ -91,7 +91,13 @@ async fn run_one_pass(
         }
         // 2. Diff against current snapshot
         let diffs = store.diff_page(&snapshots).await?;
-        // 3. Build events
+        // 3. Build events. The issue number rides along so the orchestrator
+        // can point the spawned agent at the actual GitHub issue.
+        let numbers: std::collections::HashMap<&str, u64> = page
+            .items
+            .iter()
+            .filter_map(|it| it.content_number.map(|n| (it.id.as_str(), n)))
+            .collect();
         let mut events: Vec<(String, DomainEvent)> = Vec::with_capacity(diffs.len());
         for d in &diffs {
             let Some(to) = d.to_status else { continue }; // skip transitions to "no status"
@@ -107,6 +113,7 @@ async fn run_one_pass(
                     "item_id": d.item_id,
                     "to_status": snake,
                     "repo": d.repo.clone().unwrap_or_default(),
+                    "issue_number": numbers.get(d.item_id.as_str()),
                 }),
             };
             events.push((key, ev));

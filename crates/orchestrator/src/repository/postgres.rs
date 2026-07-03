@@ -28,6 +28,7 @@ impl Repository for PgRepository {
                 String,
                 String,
                 String,
+                Option<i64>,
                 Option<String>,
                 String,
                 Option<String>,
@@ -38,8 +39,8 @@ impl Repository for PgRepository {
                 DateTime<Utc>,
             ),
         >(
-            "SELECT id, task_id_short, repo, pr_node_id, current_column, current_phase,
-                    impl_verify_attempt, suppress_writeback_until_human_move,
+            "SELECT id, task_id_short, repo, issue_number, pr_node_id, current_column,
+                    current_phase, impl_verify_attempt, suppress_writeback_until_human_move,
                     spawned_at, created_at, updated_at FROM tasks WHERE id = $1",
         )
         .bind(id.as_str())
@@ -50,26 +51,28 @@ impl Repository for PgRepository {
             id: TaskId::new(r.0),
             task_id_short: r.1,
             repo: r.2,
-            pr_node_id: r.3,
-            current_column: r.4,
-            current_phase: r.5,
-            impl_verify_attempt: r.6,
-            suppress_writeback_until_human_move: r.7,
-            spawned_at: r.8,
-            created_at: r.9,
-            updated_at: r.10,
+            issue_number: r.3,
+            pr_node_id: r.4,
+            current_column: r.5,
+            current_phase: r.6,
+            impl_verify_attempt: r.7,
+            suppress_writeback_until_human_move: r.8,
+            spawned_at: r.9,
+            created_at: r.10,
+            updated_at: r.11,
         }))
     }
 
     async fn upsert(&self, t: &Task) -> Result<(), OrchestratorError> {
         sqlx::query(
-            "INSERT INTO tasks (id, task_id_short, repo, pr_node_id, current_column,
-                                current_phase, impl_verify_attempt,
+            "INSERT INTO tasks (id, task_id_short, repo, issue_number, pr_node_id,
+                                current_column, current_phase, impl_verify_attempt,
                                 suppress_writeback_until_human_move, spawned_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
              ON CONFLICT (id) DO UPDATE SET
                  task_id_short = excluded.task_id_short,
                  repo = excluded.repo,
+                 issue_number = COALESCE(excluded.issue_number, tasks.issue_number),
                  pr_node_id = excluded.pr_node_id,
                  current_column = excluded.current_column,
                  current_phase = excluded.current_phase,
@@ -81,6 +84,7 @@ impl Repository for PgRepository {
         .bind(t.id.as_str())
         .bind(&t.task_id_short)
         .bind(&t.repo)
+        .bind(t.issue_number)
         .bind(&t.pr_node_id)
         .bind(&t.current_column)
         .bind(&t.current_phase)
@@ -158,6 +162,7 @@ impl Repository for PgRepository {
                 String,
                 String,
                 String,
+                Option<i64>,
                 Option<String>,
                 String,
                 Option<String>,
@@ -168,8 +173,8 @@ impl Repository for PgRepository {
                 DateTime<Utc>,
             ),
         >(
-            "SELECT id, task_id_short, repo, pr_node_id, current_column, current_phase,
-                    impl_verify_attempt, suppress_writeback_until_human_move,
+            "SELECT id, task_id_short, repo, issue_number, pr_node_id, current_column,
+                    current_phase, impl_verify_attempt, suppress_writeback_until_human_move,
                     spawned_at, created_at, updated_at
              FROM tasks WHERE repo = $1 AND current_column = 'awaiting_release'",
         )
@@ -182,14 +187,15 @@ impl Repository for PgRepository {
                 id: TaskId::new(r.0),
                 task_id_short: r.1,
                 repo: r.2,
-                pr_node_id: r.3,
-                current_column: r.4,
-                current_phase: r.5,
-                impl_verify_attempt: r.6,
-                suppress_writeback_until_human_move: r.7,
-                spawned_at: r.8,
-                created_at: r.9,
-                updated_at: r.10,
+                issue_number: r.3,
+                pr_node_id: r.4,
+                current_column: r.5,
+                current_phase: r.6,
+                impl_verify_attempt: r.7,
+                suppress_writeback_until_human_move: r.8,
+                spawned_at: r.9,
+                created_at: r.10,
+                updated_at: r.11,
             })
             .collect())
     }
@@ -205,6 +211,7 @@ impl Repository for PgRepository {
                 String,
                 String,
                 String,
+                Option<i64>,
                 Option<String>,
                 String,
                 Option<String>,
@@ -215,8 +222,8 @@ impl Repository for PgRepository {
                 DateTime<Utc>,
             ),
         >(
-            "SELECT id, task_id_short, repo, pr_node_id, current_column, current_phase,
-                    impl_verify_attempt, suppress_writeback_until_human_move,
+            "SELECT id, task_id_short, repo, issue_number, pr_node_id, current_column,
+                    current_phase, impl_verify_attempt, suppress_writeback_until_human_move,
                     spawned_at, created_at, updated_at FROM tasks
              WHERE current_phase = $2 AND spawned_at IS NOT NULL AND spawned_at < $1",
         )
@@ -230,14 +237,15 @@ impl Repository for PgRepository {
                 id: TaskId::new(r.0),
                 task_id_short: r.1,
                 repo: r.2,
-                pr_node_id: r.3,
-                current_column: r.4,
-                current_phase: r.5,
-                impl_verify_attempt: r.6,
-                suppress_writeback_until_human_move: r.7,
-                spawned_at: r.8,
-                created_at: r.9,
-                updated_at: r.10,
+                issue_number: r.3,
+                pr_node_id: r.4,
+                current_column: r.5,
+                current_phase: r.6,
+                impl_verify_attempt: r.7,
+                suppress_writeback_until_human_move: r.8,
+                spawned_at: r.9,
+                created_at: r.10,
+                updated_at: r.11,
             })
             .collect())
     }

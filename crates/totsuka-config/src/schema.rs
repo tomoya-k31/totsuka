@@ -183,6 +183,44 @@ pub struct OrchestratorSection {
     pub adapter_uds: String,
     #[serde(default)]
     pub claude_argv: ClaudeArgvSection,
+    #[serde(default)]
+    pub prompts: PromptsSection,
+}
+
+/// Per-phase prompt templates sent to a freshly spawned agent.
+/// Placeholders: `{repo}`, `{issue_number}`, `{branch}`, `{task_id}`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PromptsSection {
+    #[serde(default = "default_design_prompt")]
+    pub design: String,
+    #[serde(default = "default_impl_verify_prompt")]
+    pub impl_verify: String,
+}
+
+impl Default for PromptsSection {
+    fn default() -> Self {
+        Self {
+            design: default_design_prompt(),
+            impl_verify: default_impl_verify_prompt(),
+        }
+    }
+}
+
+fn default_design_prompt() -> String {
+    "あなたは {repo} の調査・設計フェーズ担当です。\
+     `gh issue view {issue_number}` で issue #{issue_number} の内容を確認し、\
+     このリポジトリのコードを調査した上で設計をまとめてください。\
+     成果物は設計ドキュメントとして現在のブランチ {branch} にコミットし、\
+     完了したら要約を報告してください。"
+        .to_string()
+}
+
+fn default_impl_verify_prompt() -> String {
+    "あなたは {repo} の実装・受入検証フェーズ担当です。\
+     `gh issue view {issue_number}` で issue #{issue_number} の内容と\
+     関連する設計を確認し、現在のブランチ {branch} で実装してください。\
+     テスト・lint を通した上でコミットし、PR を作成して報告してください。"
+        .to_string()
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

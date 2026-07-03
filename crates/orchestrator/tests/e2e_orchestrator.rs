@@ -100,7 +100,7 @@ async fn full_walk_inbox_to_released() {
         }
     };
 
-    // 1. Human moves Inbox → Ready (event from watcher)
+    // 1a. Human moves Inbox → Ready: backlog state only, no agent yet.
     pub_.send(
         &pool,
         ev(
@@ -113,6 +113,21 @@ async fn full_walk_inbox_to_released() {
     .await
     .unwrap();
     wait_for("ready", Duration::from_secs(5)).await;
+    assert_eq!(adapter.spawn_count(), 0, "ready must not spawn");
+
+    // 1b. Human moves Ready → 🤖 調査・設計: this starts the designer.
+    pub_.send(
+        &pool,
+        ev(
+            &id,
+            "github.status_changed",
+            serde_json::json!({"item_id": id, "to_status": "design", "repo": "x/y"}),
+        ),
+        None,
+    )
+    .await
+    .unwrap();
+    wait_for("design", Duration::from_secs(5)).await;
     let deadline = Instant::now() + Duration::from_secs(5);
     while adapter.spawn_count() < 1 {
         if Instant::now() > deadline {
