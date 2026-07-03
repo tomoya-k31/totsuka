@@ -59,8 +59,13 @@ async fn impl_verify_enter_spawns_implementer() {
     assert_eq!(req.attempt, 0);
     assert!(!req.detached, "impl phase needs a real branch to commit on");
 
-    // The implementer must receive its task prompt right after spawn.
-    let (_agent, prompt) = adapter.last_send().expect("prompt sent after spawn");
+    // The task prompt rides on argv — see sm_ready_to_design for why.
+    assert_eq!(
+        adapter.send_count(),
+        0,
+        "no post-spawn typing — the prompt must be in argv"
+    );
+    let prompt = req.argv.last().cloned().expect("argv carries the prompt");
     assert!(
         prompt.contains("#18"),
         "prompt should reference the issue: {prompt}"
@@ -70,9 +75,8 @@ async fn impl_verify_enter_spawns_implementer() {
         "prompt should reference the repo: {prompt}"
     );
     assert!(
-        prompt.ends_with('\r'),
-        "prompt must end with CR — the TUI submits on Enter (\\r); \
-         without it the text sits in the input box forever"
+        !prompt.ends_with('\r'),
+        "argv prompts need no CR — that was only for typed input"
     );
 }
 

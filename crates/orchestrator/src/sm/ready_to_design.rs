@@ -31,11 +31,22 @@ pub async fn try_spawn(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchest
         return Ok(HandleOutcome::Skipped { reason });
     }
 
-    let argv = merge_argv(
+    let mut argv = merge_argv(
         &e.config.orchestrator.claude_argv,
         &task.repo,
         &Phase::Design,
     );
+    // The task prompt is the final argv element (`claude "<prompt>"`):
+    // typing it into the pane after spawn races TUI startup / paste
+    // detection and the submitting CR gets swallowed — argv delivery has
+    // no race by construction.
+    argv.push(crate::prompt::render(
+        &e.config.orchestrator.prompts.design,
+        task,
+        &branch_name(&id, Phase::Design),
+        &e.config.github.project_owner,
+        e.config.github.project_number,
+    ));
     let req = SpawnReq {
         task_id: id.as_str().into(),
         phase: Phase::Design.as_snake().into(),
@@ -56,24 +67,6 @@ pub async fn try_spawn(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchest
             return Err(err);
         }
     };
-
-    // Hand the agent its task right away — an idle Claude with no
-    // instructions is useless (spec: [orchestrator.prompts]).
-    let prompt = crate::prompt::render(
-        &e.config.orchestrator.prompts.design,
-        task,
-        &branch_name(&id, Phase::Design),
-        &e.config.github.project_owner,
-        e.config.github.project_number,
-    );
-    // Trailing CR = Enter: the agent's TUI submits on \r; without it the
-    // prompt sits in the input box forever (verified on a live pane).
-    let prompt = format!("{prompt}\r");
-    if let Err(err) = e.adapter.send(&res.agent_id, &prompt).await {
-        e.effects.fail(&key, &err.to_string()).await?;
-        drop(permit);
-        return Err(err);
-    }
 
     let now = e.clock.now();
     let mut updated = task.clone();
