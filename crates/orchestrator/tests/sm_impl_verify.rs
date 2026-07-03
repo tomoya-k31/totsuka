@@ -68,6 +68,11 @@ async fn impl_verify_enter_spawns_implementer() {
         prompt.contains("x/y"),
         "prompt should reference the repo: {prompt}"
     );
+    assert!(
+        prompt.ends_with('\r'),
+        "prompt must end with CR — the TUI submits on Enter (\\r); \
+         without it the text sits in the input box forever"
+    );
 }
 
 fn pr_ready(item_id: &str, diff: &str) -> DomainEvent {

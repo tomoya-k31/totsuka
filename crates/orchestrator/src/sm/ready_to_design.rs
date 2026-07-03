@@ -62,6 +62,9 @@ pub async fn try_spawn(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchest
         task,
         &branch_name(&id, Phase::Design),
     );
+    // Trailing CR = Enter: the agent's TUI submits on \r; without it the
+    // prompt sits in the input box forever (verified on a live pane).
+    let prompt = format!("{prompt}\r");
     if let Err(err) = e.adapter.send(&res.agent_id, &prompt).await {
         e.effects.fail(&key, &err.to_string()).await?;
         drop(permit);

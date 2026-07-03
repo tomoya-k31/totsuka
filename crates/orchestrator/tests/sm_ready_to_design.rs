@@ -71,6 +71,11 @@ async fn design_column_move_spawns_designer() {
         prompt.contains("x/y"),
         "prompt should reference the repo: {prompt}"
     );
+    assert!(
+        prompt.ends_with('\r'),
+        "prompt must end with CR — the TUI submits on Enter (\\r); \
+         without it the text sits in the input box forever"
+    );
 }
 
 /// 📋 Ready is a backlog state, not a trigger: the column is recorded
