@@ -2,6 +2,27 @@
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true
   },
+  "permissions": {
+    "allow": [
+      "Bash(cargo test)",
+      "Bash(cargo test *)",
+      "Bash(cargo clippy)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo fmt --check)",
+      "Bash(cargo fmt --check *)",
+      "Bash(cargo fmt --all -- --check)",
+      "Bash(cargo fmt --all -- --check *)",
+      "Bash(gh run watch)",
+      "Bash(gh run watch *)"
+      "Bash(gh project item-list *)",
+      "Bash(gh project field-list *)",
+      "Bash(tmux capture-pane *)",
+      "Bash(tmux list-windows)",
+      "Bash(tmux list-windows *)",
+      "Bash(mise ls)",
+      "Bash(mise ls *)"
+    ]
+  },
   "hooks": {
     "PostToolUse": [
       {
