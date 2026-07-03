@@ -50,6 +50,7 @@ pub async fn spawn_verifier(
         branch,
         argv,
         env: HashMap::new(),
+        detached: false,
     };
     let res = match engine.adapter.spawn(req).await {
         Ok(r) => r,

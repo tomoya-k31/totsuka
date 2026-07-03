@@ -57,6 +57,7 @@ async fn impl_verify_enter_spawns_implementer() {
     let req = adapter.last_spawn().unwrap();
     assert!(req.branch.ends_with("/implv"), "branch={}", req.branch);
     assert_eq!(req.attempt, 0);
+    assert!(!req.detached, "impl phase needs a real branch to commit on");
 
     // The implementer must receive its task prompt right after spawn.
     let (_agent, prompt) = adapter.last_send().expect("prompt sent after spawn");

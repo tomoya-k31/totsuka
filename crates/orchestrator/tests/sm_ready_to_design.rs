@@ -59,6 +59,10 @@ async fn design_column_move_spawns_designer() {
     let req = adapter.last_spawn().unwrap();
     assert!(req.branch.ends_with("/design"), "branch={}", req.branch);
     assert_eq!(req.attempt, 0);
+    assert!(
+        req.detached,
+        "design phase must not create a branch (detached worktree)"
+    );
 
     // The agent must receive its task prompt right after spawn — an idle
     // Claude with no instructions is useless.
@@ -70,6 +74,18 @@ async fn design_column_move_spawns_designer() {
     assert!(
         prompt.contains("x/y"),
         "prompt should reference the repo: {prompt}"
+    );
+    assert!(
+        prompt.contains("gh issue comment"),
+        "design deliverable is an issue comment, not a commit: {prompt}"
+    );
+    assert!(
+        prompt.contains("設計レビュー"),
+        "design prompt must instruct the card move: {prompt}"
+    );
+    assert!(
+        prompt.contains("42"),
+        "prompt must carry the project number for the card move: {prompt}"
     );
     assert!(
         prompt.ends_with('\r'),

@@ -75,6 +75,7 @@ impl AdapterClient for HyperlocalAdapter {
             branch: &req.branch,
             argv: &req.argv,
             env,
+            detached: req.detached,
         };
         let v = serde_json::to_value(&wire).map_err(|e| QaError::Adapter(e.to_string()))?;
         self.call_json(Method::POST, "/v1/agents", v).await

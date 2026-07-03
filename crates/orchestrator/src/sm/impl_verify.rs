@@ -138,6 +138,7 @@ pub async fn on_enter(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchestr
         branch: branch_name(&id, Phase::ImplVerify),
         argv,
         env: HashMap::new(),
+        detached: false,
     };
 
     let res = match e.adapter.spawn(req).await {
@@ -154,6 +155,8 @@ pub async fn on_enter(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchestr
         &e.config.orchestrator.prompts.impl_verify,
         task,
         &branch_name(&id, Phase::ImplVerify),
+        &e.config.github.project_owner,
+        e.config.github.project_number,
     );
     // Trailing CR = Enter: the agent's TUI submits on \r; without it the
     // prompt sits in the input box forever (verified on a live pane).

@@ -19,6 +19,8 @@ pub struct SpawnReq {
     pub branch: String,
     pub argv: Vec<String>,
     pub env: HashMap<String, Secret<String>>,
+    /// Detached-HEAD worktree, no branch creation (design phase).
+    pub detached: bool,
 }
 
 // Hand-written Debug so env values do not leak (mirrors agent-adapter's SpawnRequest fix).
@@ -73,4 +75,5 @@ pub(crate) struct WireSpawn<'a> {
     pub branch: &'a str,
     pub argv: &'a [String],
     pub env: HashMap<&'a str, &'a str>,
+    pub detached: bool,
 }

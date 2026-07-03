@@ -44,7 +44,7 @@ async fn create_then_list_then_remove() {
 
     let m = WorktreeManager::new();
     let path = m
-        .create(&entry, "totsuka/aaaaaaaaaaaa/design")
+        .create(&entry, "totsuka/aaaaaaaaaaaa/design", false)
         .await
         .unwrap();
     assert!(path.exists());
@@ -65,11 +65,11 @@ async fn create_then_list_then_remove() {
 async fn create_returns_worktree_in_use_when_branch_already_has_one() {
     let (_tmp, entry) = init_repo().await;
     let m = WorktreeManager::new();
-    m.create(&entry, "totsuka/aaaaaaaaaaaa/design")
+    m.create(&entry, "totsuka/aaaaaaaaaaaa/design", false)
         .await
         .unwrap();
     let err = m
-        .create(&entry, "totsuka/aaaaaaaaaaaa/design")
+        .create(&entry, "totsuka/aaaaaaaaaaaa/design", false)
         .await
         .unwrap_err();
     let msg = format!("{err}");

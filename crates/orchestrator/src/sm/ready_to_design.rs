@@ -44,6 +44,8 @@ pub async fn try_spawn(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchest
         branch: branch_name(&id, Phase::Design),
         argv,
         env: HashMap::new(),
+        // Design produces an issue comment, not commits — no branch.
+        detached: true,
     };
 
     let res = match e.adapter.spawn(req).await {
@@ -61,6 +63,8 @@ pub async fn try_spawn(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchest
         &e.config.orchestrator.prompts.design,
         task,
         &branch_name(&id, Phase::Design),
+        &e.config.github.project_owner,
+        e.config.github.project_number,
     );
     // Trailing CR = Enter: the agent's TUI submits on \r; without it the
     // prompt sits in the input box forever (verified on a live pane).

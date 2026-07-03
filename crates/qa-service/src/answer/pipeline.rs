@@ -63,6 +63,7 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 branch: format!("qa/{}", sanitize_branch(&input.thread_ts)),
                 argv,
                 env: Default::default(),
+                detached: true,
             };
             let res = match ctx.adapter.spawn(req).await {
                 Ok(r) => r,

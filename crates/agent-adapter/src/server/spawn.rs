@@ -21,6 +21,9 @@ pub struct SpawnBody {
     pub argv: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Detached-HEAD worktree, no branch creation (design / QA phases).
+    #[serde(default)]
+    pub detached: bool,
 }
 
 #[derive(Serialize)]
@@ -41,7 +44,10 @@ pub async fn spawn(
         .repos
         .resolve(&RepoKey::new(body.repo.clone()))
         .ok_or_else(|| AdapterError::RepoNotRegistered(body.repo.clone()))?;
-    let worktree_path = s.worktrees.create(&repo, &body.branch).await?;
+    let worktree_path = s
+        .worktrees
+        .create(&repo, &body.branch, body.detached)
+        .await?;
     let label = format!("totsuka:{}:{}:{}", body.task_id, body.phase, body.attempt);
     // Every worktree lands at a fresh path, so its checked-out mise.toml is
     // never path-trusted; trust it for this pane only via env (colon-append

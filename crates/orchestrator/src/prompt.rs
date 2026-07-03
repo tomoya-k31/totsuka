@@ -4,7 +4,13 @@
 
 use crate::repository::Task;
 
-pub fn render(template: &str, task: &Task, branch: &str) -> String {
+pub fn render(
+    template: &str,
+    task: &Task,
+    branch: &str,
+    project_owner: &str,
+    project_number: u64,
+) -> String {
     let issue_number = task
         .issue_number
         .map(|n| n.to_string())
@@ -13,7 +19,9 @@ pub fn render(template: &str, task: &Task, branch: &str) -> String {
         .replace("{repo}", &task.repo)
         .replace("{issue_number}", &issue_number)
         .replace("{branch}", branch)
-        .replace("{task_id}", task.id.as_str());
+        .replace("{task_id}", task.id.as_str())
+        .replace("{project_owner}", project_owner)
+        .replace("{project_number}", &project_number.to_string());
     if task.issue_number.is_some() {
         return rendered;
     }
@@ -55,13 +63,15 @@ mod tests {
     #[test]
     fn substitutes_all_placeholders() {
         let out = render(
-            "repo={repo} issue=#{issue_number} branch={branch} id={task_id}",
+            "repo={repo} issue=#{issue_number} branch={branch} id={task_id} prj={project_owner}/{project_number}",
             &task(Some(42)),
             "totsuka/x/design",
+            "acme",
+            9,
         );
         assert_eq!(
             out,
-            "repo=acme/rocket issue=#42 branch=totsuka/x/design id=PVTI_prompt_test"
+            "repo=acme/rocket issue=#42 branch=totsuka/x/design id=PVTI_prompt_test prj=acme/9"
         );
     }
 
@@ -70,7 +80,7 @@ mod tests {
         // "unknown" alone would leave instructions like `gh issue view
         // unknown` silently non-executable — the agent must be told the
         // issue reference is void and what to fall back on.
-        let out = render("issue #{issue_number}", &task(None), "b");
+        let out = render("issue #{issue_number}", &task(None), "b", "acme", 9);
         assert!(out.starts_with("issue #unknown"), "got: {out}");
         assert!(
             out.contains("紐づく issue がありません"),
@@ -84,7 +94,7 @@ mod tests {
 
     #[test]
     fn present_issue_number_has_no_caveat() {
-        let out = render("issue #{issue_number}", &task(Some(5)), "b");
+        let out = render("issue #{issue_number}", &task(Some(5)), "b", "acme", 9);
         assert_eq!(out, "issue #5");
     }
 }

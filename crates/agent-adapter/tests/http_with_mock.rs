@@ -281,6 +281,63 @@ async fn spawn_treats_empty_mise_trusted_config_paths_as_unset() {
     );
 }
 
+/// Design-phase (and QA) agents must not create branches: `detached: true`
+/// checks out a detached-HEAD worktree and leaves the branch namespace
+/// untouched.
+#[tokio::test]
+async fn spawn_detached_creates_worktree_without_branch() {
+    let (_tmp, app, _herdr) = app_with_real_git().await;
+    let body = serde_json::json!({
+        "task_id": "PVTI_det",
+        "phase": "design",
+        "attempt": 0,
+        "repo": "x/y",
+        "branch": "totsuka/detached1/design",
+        "argv": ["claude"],
+        "env": {},
+        "detached": true
+    });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201);
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let wt = v["worktree_path"].as_str().unwrap();
+
+    // Worktree exists and is on a detached HEAD…
+    let head = tokio::process::Command::new("git")
+        .args(["-C", wt, "symbolic-ref", "-q", "HEAD"])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        !head.status.success(),
+        "HEAD must be detached, got: {}",
+        String::from_utf8_lossy(&head.stdout)
+    );
+    // …and no branch was created anywhere in the repo.
+    let branches = tokio::process::Command::new("git")
+        .args(["-C", wt, "branch", "--list", "totsuka/detached1/design"])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&branches.stdout).trim().is_empty(),
+        "no branch must be created for a detached spawn"
+    );
+}
+
 #[tokio::test]
 async fn spawn_rejects_argv_with_token_flag() {
     let (_tmp, app, _herdr) = app_with_real_git().await;
@@ -613,7 +670,7 @@ async fn gc_removes_orphan_worktree() {
         .expect("repo present");
     let orphan_path = state
         .worktrees
-        .create(&entry, "totsuka/orphanbranchx/design")
+        .create(&entry, "totsuka/orphanbranchx/design", false)
         .await
         .unwrap();
     assert!(orphan_path.exists());
