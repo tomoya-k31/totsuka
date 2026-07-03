@@ -1,6 +1,7 @@
 //! Renders the per-phase prompt template sent to a freshly spawned agent.
 //! Templates live in `[orchestrator.prompts]`; placeholders are `{repo}`,
-//! `{issue_number}`, `{branch}`, `{task_id}`.
+//! `{issue_number}`, `{branch}`, `{task_id}`, `{project_owner}`,
+//! `{project_number}`.
 
 use crate::repository::Task;
 

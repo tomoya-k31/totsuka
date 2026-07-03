@@ -31,7 +31,8 @@ impl WorktreeManager {
         detached: bool,
     ) -> Result<PathBuf, AdapterError> {
         let target = repo.worktree_root.join(sanitize_branch(branch));
-        // git worktree add -B <branch> <path>; -B forces branch creation/reuse.
+        // git worktree add -B <branch> <path> (branch mode; -B forces branch
+        // creation/reuse) or git worktree add --detach <path> (no branch).
         let mut cmd = Command::new("git");
         cmd.current_dir(&repo.repo_path).arg("worktree").arg("add");
         if detached {

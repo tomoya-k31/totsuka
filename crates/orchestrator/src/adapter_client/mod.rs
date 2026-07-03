@@ -33,6 +33,7 @@ impl std::fmt::Debug for SpawnReq {
             .field("repo", &self.repo)
             .field("branch", &self.branch)
             .field("argv", &self.argv)
+            .field("detached", &self.detached)
             .field(
                 "env",
                 &format_args!("<{} entries: redacted>", self.env.len()),
