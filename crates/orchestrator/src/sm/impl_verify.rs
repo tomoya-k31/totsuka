@@ -125,11 +125,19 @@ pub async fn on_enter(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchestr
         return Ok(HandleOutcome::Skipped { reason });
     }
 
-    let argv = merge_argv(
+    let mut argv = merge_argv(
         &e.config.orchestrator.claude_argv,
         &task.repo,
         &Phase::ImplVerify,
     );
+    // Prompt rides on argv — see ready_to_design.rs for why.
+    argv.push(crate::prompt::render(
+        &e.config.orchestrator.prompts.impl_verify,
+        task,
+        &branch_name(&id, Phase::ImplVerify),
+        &e.config.github.project_owner,
+        e.config.github.project_number,
+    ));
     let req = SpawnReq {
         task_id: id.as_str().into(),
         phase: Phase::ImplVerify.as_snake().into(),
@@ -138,6 +146,7 @@ pub async fn on_enter(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchestr
         branch: branch_name(&id, Phase::ImplVerify),
         argv,
         env: HashMap::new(),
+        detached: false,
     };
 
     let res = match e.adapter.spawn(req).await {
@@ -148,21 +157,6 @@ pub async fn on_enter(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchestr
             return Err(err);
         }
     };
-
-    // Hand the implementer its task right away (spec: [orchestrator.prompts]).
-    let prompt = crate::prompt::render(
-        &e.config.orchestrator.prompts.impl_verify,
-        task,
-        &branch_name(&id, Phase::ImplVerify),
-    );
-    // Trailing CR = Enter: the agent's TUI submits on \r; without it the
-    // prompt sits in the input box forever (verified on a live pane).
-    let prompt = format!("{prompt}\r");
-    if let Err(err) = e.adapter.send(&res.agent_id, &prompt).await {
-        e.effects.fail(&key, &err.to_string()).await?;
-        drop(permit);
-        return Err(err);
-    }
 
     let now = e.clock.now();
     let mut updated = task.clone();

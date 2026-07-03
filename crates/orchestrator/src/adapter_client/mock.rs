@@ -137,6 +137,7 @@ mod tests {
                 branch: "totsuka/aaaaaaaaaaaa/design".into(),
                 argv: vec!["claude".into()],
                 env: HashMap::new(),
+                detached: false,
             })
             .await
             .unwrap();

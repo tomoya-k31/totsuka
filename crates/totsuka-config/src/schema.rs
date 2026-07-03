@@ -209,9 +209,15 @@ impl Default for PromptsSection {
 fn default_design_prompt() -> String {
     "あなたは {repo} の調査・設計フェーズ担当です。\
      `gh issue view {issue_number}` で issue #{issue_number} の内容を確認し、\
-     このリポジトリのコードを調査した上で設計をまとめてください。\
-     成果物は設計ドキュメントとして現在のブランチ {branch} にコミットし、\
-     完了したら要約を報告してください。"
+     このリポジトリのコードを調査した上で設計をまとめてください。\n\
+     制約: ファイルの編集・作成、git commit・ブランチ作成・PR 作成は\
+     行わないでください（読み取りと gh コマンドのみ）。\n\
+     成果物: 設計を `gh issue comment {issue_number}` で issue #{issue_number} の\
+     コメントとして投稿してください。\n\
+     完了後: GitHub Project {project_number}（owner: {project_owner}）の\
+     このカード（item ID: {task_id}）の Status を「🚧 設計レビュー」に\
+     `gh project item-edit` で変更してください（field/option の ID は\
+     `gh project field-list {project_number} --owner {project_owner}` で確認できます）。"
         .to_string()
 }
 

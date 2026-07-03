@@ -59,10 +59,20 @@ async fn design_column_move_spawns_designer() {
     let req = adapter.last_spawn().unwrap();
     assert!(req.branch.ends_with("/design"), "branch={}", req.branch);
     assert_eq!(req.attempt, 0);
+    assert!(
+        req.detached,
+        "design phase must not create a branch (detached worktree)"
+    );
 
-    // The agent must receive its task prompt right after spawn — an idle
-    // Claude with no instructions is useless.
-    let (_agent, prompt) = adapter.last_send().expect("prompt sent after spawn");
+    // The task prompt rides on argv (`claude "<prompt>"`): typing it into
+    // the TUI after spawn races startup/paste detection and the submit CR
+    // gets swallowed — argv delivery has no race by construction.
+    assert_eq!(
+        adapter.send_count(),
+        0,
+        "no post-spawn typing — the prompt must be in argv"
+    );
+    let prompt = req.argv.last().cloned().expect("argv carries the prompt");
     assert!(
         prompt.contains("#18"),
         "prompt should reference the issue: {prompt}"
@@ -72,9 +82,20 @@ async fn design_column_move_spawns_designer() {
         "prompt should reference the repo: {prompt}"
     );
     assert!(
-        prompt.ends_with('\r'),
-        "prompt must end with CR — the TUI submits on Enter (\\r); \
-         without it the text sits in the input box forever"
+        prompt.contains("gh issue comment"),
+        "design deliverable is an issue comment, not a commit: {prompt}"
+    );
+    assert!(
+        prompt.contains("設計レビュー"),
+        "design prompt must instruct the card move: {prompt}"
+    );
+    assert!(
+        prompt.contains("42"),
+        "prompt must carry the project number for the card move: {prompt}"
+    );
+    assert!(
+        !prompt.ends_with('\r'),
+        "argv prompts need no CR — that was only for typed input"
     );
 }
 

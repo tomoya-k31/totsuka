@@ -23,6 +23,8 @@ pub struct SpawnReq {
     pub branch: String,
     pub argv: Vec<String>,
     pub env: HashMap<String, Secret<String>>,
+    /// QA agents only answer questions — no branch, detached worktree.
+    pub detached: bool,
 }
 
 impl std::fmt::Debug for SpawnReq {
@@ -34,6 +36,7 @@ impl std::fmt::Debug for SpawnReq {
             .field("repo", &self.repo)
             .field("branch", &self.branch)
             .field("argv", &self.argv)
+            .field("detached", &self.detached)
             .field(
                 "env",
                 &format_args!("<{} entries: redacted>", self.env.len()),
@@ -82,4 +85,5 @@ pub(crate) struct WireSpawn<'a> {
     pub branch: &'a str,
     pub argv: &'a [String],
     pub env: HashMap<&'a str, &'a str>,
+    pub detached: bool,
 }

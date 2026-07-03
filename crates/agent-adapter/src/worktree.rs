@@ -22,16 +22,25 @@ impl WorktreeManager {
         Self
     }
 
-    pub async fn create(&self, repo: &RepoEntry, branch: &str) -> Result<PathBuf, AdapterError> {
+    /// `detached: true` checks out a detached HEAD and creates no branch —
+    /// for phases that must not touch the branch namespace (design, QA).
+    pub async fn create(
+        &self,
+        repo: &RepoEntry,
+        branch: &str,
+        detached: bool,
+    ) -> Result<PathBuf, AdapterError> {
         let target = repo.worktree_root.join(sanitize_branch(branch));
-        // git worktree add -B <branch> <path>; -B forces branch creation/reuse.
+        // git worktree add -B <branch> <path> (branch mode; -B forces branch
+        // creation/reuse) or git worktree add --detach <path> (no branch).
         let mut cmd = Command::new("git");
-        cmd.current_dir(&repo.repo_path)
-            .arg("worktree")
-            .arg("add")
-            .arg("-B")
-            .arg(branch)
-            .arg(&target);
+        cmd.current_dir(&repo.repo_path).arg("worktree").arg("add");
+        if detached {
+            cmd.arg("--detach");
+        } else {
+            cmd.arg("-B").arg(branch);
+        }
+        cmd.arg(&target);
         let out = cmd
             .output()
             .await

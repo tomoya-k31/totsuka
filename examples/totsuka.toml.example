@@ -100,6 +100,16 @@ global = ["--dangerously-skip-permissions"]
 extra  = ["--model", "sonnet"]
 [orchestrator.claude_argv.per_phase.impl_verify]
 extra  = ["--model", "opus"]
+# design は読み取り専用フェーズ: 成果物は issue コメント。ツール禁止で機械的に強制する
+[orchestrator.claude_argv.per_phase.design]
+extra  = ["--disallowedTools", "Edit", "Write", "NotebookEdit",
+          "--append-system-prompt",
+          "調査・設計フェーズ: ファイルの編集・作成、git commit・ブランチ/PR 作成は禁止。成果物は gh issue comment で issue に投稿する。"]
+
+# ---- フェーズ別プロンプト (省略時は組み込みデフォルト。placeholder: {repo} {issue_number} {branch} {task_id} {project_owner} {project_number}) ----
+# [orchestrator.prompts]
+# design      = "..."
+# impl_verify = "..."
 
 # ---- GitHub (watcher / orchestrator / qa-service が共通参照、単一 Project 前提) ----
 [github]

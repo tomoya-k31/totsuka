@@ -76,6 +76,7 @@ impl AdapterClient for HyperlocalAdapter {
             branch: &req.branch,
             argv: &req.argv,
             env,
+            detached: req.detached,
         };
         let v =
             serde_json::to_value(&wire).map_err(|e| OrchestratorError::Adapter(e.to_string()))?;
