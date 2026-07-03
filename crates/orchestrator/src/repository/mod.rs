@@ -12,6 +12,8 @@ pub struct Task {
     pub id: TaskId,
     pub task_id_short: String,
     pub repo: String,
+    /// GitHub issue number behind the project item (None for drafts).
+    pub issue_number: Option<i64>,
     pub pr_node_id: Option<String>,
     pub current_column: String,
     pub current_phase: Option<String>,

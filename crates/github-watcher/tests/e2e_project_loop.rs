@@ -153,12 +153,25 @@ async fn project_loop_publishes_status_changed_for_every_diff() {
             .unwrap();
     assert_eq!(c.0.as_deref(), Some("released"));
 
-    // Three envelopes published
+    // Three envelopes published — each carrying the issue number so the
+    // orchestrator can point the agent at the actual GitHub issue.
     let consumer = Consumer::new(queue.clone());
     let mut seen = 0;
     for _ in 0..10 {
         if let Some((mid, env)) = consumer.poll_one(&pool, 1).await.unwrap() {
             assert_eq!(env.event_type, "github.status_changed");
+            let item = env.payload["item_id"].as_str().unwrap().to_string();
+            let expected_number = match item.as_str() {
+                "E2E_A" => 1,
+                "E2E_B" => 2,
+                "E2E_C" => 3,
+                other => panic!("unexpected item {other}"),
+            };
+            assert_eq!(
+                env.payload["issue_number"].as_u64(),
+                Some(expected_number),
+                "payload must carry the issue number for {item}"
+            );
             consumer.ack(&pool, mid).await.unwrap();
             seen += 1;
         } else {

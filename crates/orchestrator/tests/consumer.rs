@@ -59,7 +59,7 @@ async fn consumer_drives_status_change_into_repo() {
             event_key: format!("test:cons:{}", id),
             source: Source::Github,
             event_type: "github.status_changed".into(),
-            payload: serde_json::json!({"item_id": id, "to_status": "ready", "repo": "x/y"}),
+            payload: serde_json::json!({"item_id": id, "to_status": "design", "repo": "x/y"}),
         },
         None,
     )
@@ -77,7 +77,7 @@ async fn consumer_drives_status_change_into_repo() {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         if let Some(t) = repo.get(&TaskId::new(id.clone())).await.unwrap() {
-            if t.current_column == "ready" {
+            if t.current_column == "design" {
                 break;
             }
         }
@@ -89,7 +89,7 @@ async fn consumer_drives_status_change_into_repo() {
     assert_eq!(
         adapter.spawn_count(),
         1,
-        "ready event should spawn designer"
+        "design-column event should spawn designer"
     );
     token.cancel();
     let _ = h.await;

@@ -149,6 +149,18 @@ pub async fn on_enter(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchestr
         }
     };
 
+    // Hand the implementer its task right away (spec: [orchestrator.prompts]).
+    let prompt = crate::prompt::render(
+        &e.config.orchestrator.prompts.impl_verify,
+        task,
+        &branch_name(&id, Phase::ImplVerify),
+    );
+    if let Err(err) = e.adapter.send(&res.agent_id, &prompt).await {
+        e.effects.fail(&key, &err.to_string()).await?;
+        drop(permit);
+        return Err(err);
+    }
+
     let now = e.clock.now();
     let mut updated = task.clone();
     updated.current_phase = Some(Phase::ImplVerify.as_snake().into());

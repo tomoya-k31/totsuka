@@ -11,6 +11,10 @@ struct StatusChanged {
     pub to_status: String,
     #[serde(default)]
     pub repo: String,
+    /// GitHub issue number behind the project item (absent for drafts and
+    /// for events emitted before the watcher carried it).
+    #[serde(default)]
+    pub issue_number: Option<i64>,
 }
 
 pub async fn handle(e: &Engine, ev: &DomainEvent) -> Result<HandleOutcome, OrchestratorError> {
@@ -18,7 +22,10 @@ pub async fn handle(e: &Engine, ev: &DomainEvent) -> Result<HandleOutcome, Orche
         .map_err(|err| OrchestratorError::Internal(format!("payload parse: {err}")))?;
     let id = TaskId::new(p.item_id.clone());
     upsert_column(e, &p).await?;
-    if p.to_status == "ready" {
+    // The 🤖 columns are the agent triggers: a human moving a card into
+    // 調査・設計 (design) or 実装・受入検証 (impl_verify) starts the
+    // corresponding agent. 📋 Ready is just a backlog state.
+    if p.to_status == "design" {
         if let Some(t) = e.repo.get(&id).await? {
             return super::ready_to_design::try_spawn(e, &t).await;
         }
@@ -55,6 +62,10 @@ async fn upsert_column(e: &Engine, p: &StatusChanged) -> Result<(), Orchestrator
     let task = match existing {
         Some(mut t) => {
             t.current_column = p.to_status.clone();
+            // Don't clobber a known number with None (older events).
+            if p.issue_number.is_some() {
+                t.issue_number = p.issue_number;
+            }
             t.updated_at = now;
             t
         }
@@ -62,6 +73,7 @@ async fn upsert_column(e: &Engine, p: &StatusChanged) -> Result<(), Orchestrator
             id: id.clone(),
             task_id_short: id.short(),
             repo: p.repo.clone(),
+            issue_number: p.issue_number,
             pr_node_id: None,
             current_column: p.to_status.clone(),
             current_phase: None,

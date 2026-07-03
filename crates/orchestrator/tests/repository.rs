@@ -17,6 +17,7 @@ async fn upsert_and_get_round_trip() {
         id: id.clone(),
         task_id_short: id.short(),
         repo: "x/y".into(),
+        issue_number: Some(7),
         pr_node_id: None,
         current_column: "inbox".into(),
         current_phase: None,
@@ -30,6 +31,7 @@ async fn upsert_and_get_round_trip() {
     let got = repo.get(&id).await.unwrap().expect("present");
     assert_eq!(got.repo, "x/y");
     assert_eq!(got.current_column, "inbox");
+    assert_eq!(got.issue_number, Some(7), "issue_number must round-trip");
 
     let n = repo.bump_attempt(&id).await.unwrap();
     assert_eq!(n, 1);

@@ -10,6 +10,7 @@ pub mod error;
 pub mod gh_writeback;
 pub mod lifecycle;
 pub mod listener;
+pub mod prompt;
 pub mod repository;
 pub mod schema_check;
 pub mod sm;

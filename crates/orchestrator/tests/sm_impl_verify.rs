@@ -12,7 +12,7 @@ fn ev(item_id: &str, to: &str) -> DomainEvent {
         event_key: format!("test:{}:{}", item_id, to),
         source: Source::Github,
         event_type: "github.status_changed".into(),
-        payload: serde_json::json!({"item_id": item_id, "to_status": to, "repo": "x/y"}),
+        payload: serde_json::json!({"item_id": item_id, "to_status": to, "repo": "x/y", "issue_number": 18}),
     }
 }
 
@@ -57,6 +57,17 @@ async fn impl_verify_enter_spawns_implementer() {
     let req = adapter.last_spawn().unwrap();
     assert!(req.branch.ends_with("/implv"), "branch={}", req.branch);
     assert_eq!(req.attempt, 0);
+
+    // The implementer must receive its task prompt right after spawn.
+    let (_agent, prompt) = adapter.last_send().expect("prompt sent after spawn");
+    assert!(
+        prompt.contains("#18"),
+        "prompt should reference the issue: {prompt}"
+    );
+    assert!(
+        prompt.contains("x/y"),
+        "prompt should reference the repo: {prompt}"
+    );
 }
 
 fn pr_ready(item_id: &str, diff: &str) -> DomainEvent {

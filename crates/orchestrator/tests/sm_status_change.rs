@@ -12,7 +12,7 @@ fn ev(item_id: &str, to: &str) -> DomainEvent {
         event_key: format!("test:{}:{}", item_id, to),
         source: Source::Github,
         event_type: "github.status_changed".into(),
-        payload: serde_json::json!({"item_id": item_id, "to_status": to, "repo": "x/y"}),
+        payload: serde_json::json!({"item_id": item_id, "to_status": to, "repo": "x/y", "issue_number": 18}),
     }
 }
 
@@ -55,4 +55,9 @@ async fn status_change_upserts_task_column() {
     assert_eq!(out, HandleOutcome::Applied);
     let t = e.repo.get(&TaskId::new(id)).await.unwrap().unwrap();
     assert_eq!(t.current_column, "ready");
+    assert_eq!(
+        t.issue_number,
+        Some(18),
+        "issue number from the event must be persisted for prompts"
+    );
 }

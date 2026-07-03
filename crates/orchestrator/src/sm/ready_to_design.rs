@@ -55,6 +55,19 @@ pub async fn try_spawn(e: &Engine, task: &Task) -> Result<HandleOutcome, Orchest
         }
     };
 
+    // Hand the agent its task right away — an idle Claude with no
+    // instructions is useless (spec: [orchestrator.prompts]).
+    let prompt = crate::prompt::render(
+        &e.config.orchestrator.prompts.design,
+        task,
+        &branch_name(&id, Phase::Design),
+    );
+    if let Err(err) = e.adapter.send(&res.agent_id, &prompt).await {
+        e.effects.fail(&key, &err.to_string()).await?;
+        drop(permit);
+        return Err(err);
+    }
+
     let now = e.clock.now();
     let mut updated = task.clone();
     updated.current_phase = Some(Phase::Design.as_snake().into());
