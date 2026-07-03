@@ -12,7 +12,8 @@
       "Bash(cargo fmt --check *)",
       "Bash(cargo fmt --all -- --check)",
       "Bash(cargo fmt --all -- --check *)",
-      "Bash(gh run watch *)",
+      "Bash(gh run watch)",
+      "Bash(gh run watch *)"
       "Bash(gh project item-list *)",
       "Bash(gh project field-list *)",
       "Bash(tmux capture-pane *)",
