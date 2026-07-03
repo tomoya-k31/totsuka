@@ -27,6 +27,10 @@ pub struct Diff {
     pub from_status: Option<ColumnId>,
     pub to_status: Option<ColumnId>,
     pub repo: Option<String>,
+    /// Transition generation this diff will become once committed
+    /// (`gh_item_status.status_seq + 1`). Part of the event key so a card
+    /// revisiting a column re-triggers instead of being deduplicated.
+    pub seq: i64,
 }
 
 #[async_trait]

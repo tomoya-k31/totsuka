@@ -5,9 +5,12 @@ pub fn event_key_gh_delivery(delivery_id: &str) -> String {
     format!("gh:delivery:{}", delivery_id)
 }
 
-/// GitHub Project status snapshot diff 由来 (spec §8.3、catchup)
-pub fn event_key_gh_status(item_id: &str, to_status_hash: &str) -> String {
-    format!("gh:status:{}:{}", item_id, to_status_hash)
+/// GitHub Project status snapshot diff 由来 (spec §8.3、catchup)。
+/// `seq` は item ごとの遷移世代 (gh_item_status.status_seq): 同じ列への
+/// 2 回目の移動 (レビュー差し戻し → 再設計など) を新イベントとして
+/// 通すために必要。同一イベントの再配送は同じ seq なので冪等性は保たれる。
+pub fn event_key_gh_status(item_id: &str, to_status_hash: &str, seq: i64) -> String {
+    format!("gh:status:{}:{}:{}", item_id, to_status_hash, seq)
 }
 
 /// GitHub issue updated (REST since pull) 由来
@@ -43,6 +46,17 @@ pub fn slack_post_effect_key(channel: &str, event_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gh_status_key_distinguishes_generations() {
+        // Moving the same card into the same column a SECOND time must
+        // produce a new key, or processed_events absorbs the re-trigger
+        // forever (e.g. design review sending a card back to design).
+        let k1 = event_key_gh_status("PVTI_x", "aabbccdd", 1);
+        let k2 = event_key_gh_status("PVTI_x", "aabbccdd", 2);
+        assert_ne!(k1, k2);
+        assert_eq!(k1, "gh:status:PVTI_x:aabbccdd:1");
+    }
 
     #[test]
     fn event_key_formats_are_stable() {

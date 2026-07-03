@@ -109,3 +109,63 @@ async fn commit_page_writes_events_snapshots_and_cursor_atomically() {
     assert_eq!(env.event_type, "github.status_changed");
     consumer.ack(&pool, msg_id).await.unwrap();
 }
+
+/// Moving a card A→B→A must produce THREE distinct events: the seq
+/// generation in the event key is what lets a design-review send work
+/// back to design and actually re-trigger the agent.
+#[tokio::test]
+async fn revisiting_a_column_produces_a_fresh_event_key() {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let q = unique_queue();
+    totsuka_bus::create_queue(&pool, &q).await.unwrap();
+    let publisher = Arc::new(Publisher::new(q.clone(), Arc::new(SystemClock)));
+    let store = PgSnapshotStore::new(pool.clone(), publisher);
+
+    let snap = |col: ColumnId| {
+        vec![ItemSnapshot {
+            item_id: "PVTI_GEN".into(),
+            status: Some(col),
+            content_ref: Some("acme/r#7".into()),
+            closed_at: None,
+        }]
+    };
+    let mut keys = Vec::new();
+    for col in [ColumnId::Design, ColumnId::DesignReview, ColumnId::Design] {
+        let page = snap(col);
+        let diffs = store.diff_page(&page).await.unwrap();
+        assert_eq!(diffs.len(), 1, "each move is a diff");
+        let d = &diffs[0];
+        let hash_full = format!(
+            "{:x}",
+            md5::compute(d.to_status.unwrap().as_snake().as_bytes())
+        );
+        let key = totsuka_core::key::event_key_gh_status("PVTI_GEN", &hash_full[..8], d.seq);
+        let ev = DomainEvent {
+            event_key: key.clone(),
+            source: Source::Github,
+            event_type: "github.status_changed".into(),
+            payload: serde_json::json!({"item_id": "PVTI_GEN"}),
+        };
+        store
+            .commit_page(&page, &[(key.clone(), ev)], None)
+            .await
+            .unwrap();
+        keys.push(key);
+    }
+    assert_eq!(keys.len(), 3);
+    assert_ne!(
+        keys[0], keys[2],
+        "second visit to design must be a NEW event, got identical keys"
+    );
+    // Generation is monotone per transition.
+    let (seq,): (i64,) =
+        sqlx::query_as("SELECT status_seq FROM gh_item_status WHERE item_id='PVTI_GEN'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(seq, 3, "three transitions = seq 3");
+}

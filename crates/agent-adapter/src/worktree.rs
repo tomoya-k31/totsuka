@@ -31,6 +31,31 @@ impl WorktreeManager {
         detached: bool,
     ) -> Result<PathBuf, AdapterError> {
         let target = repo.worktree_root.join(sanitize_branch(branch));
+        // Branch naming is generation-independent, so a re-spawn of the
+        // same phase (e.g. review sending a card back to design) lands on
+        // the same path. Detached worktrees are read-only scratch space:
+        // replace the leftover instead of failing with "already exists".
+        // Branch-mode worktrees keep the WorktreeInUse guard — a live
+        // implementer may still own that branch.
+        if detached && target.exists() {
+            let out = Command::new("git")
+                .current_dir(&repo.repo_path)
+                .args(["worktree", "remove", "--force"])
+                .arg(&target)
+                .output()
+                .await
+                .map_err(|e| AdapterError::Internal(format!("git spawn: {e}")))?;
+            if !out.status.success() {
+                // Not a registered worktree (e.g. bare leftover dir) —
+                // fall back to removing the directory and pruning.
+                let _ = tokio::fs::remove_dir_all(&target).await;
+                let _ = Command::new("git")
+                    .current_dir(&repo.repo_path)
+                    .args(["worktree", "prune"])
+                    .output()
+                    .await;
+            }
+        }
         // git worktree add -B <branch> <path> (branch mode; -B forces branch
         // creation/reuse) or git worktree add --detach <path> (no branch).
         let mut cmd = Command::new("git");

@@ -75,3 +75,29 @@ async fn create_returns_worktree_in_use_when_branch_already_has_one() {
     let msg = format!("{err}");
     assert!(msg.contains("worktree in use"), "got: {msg}");
 }
+
+/// A re-spawn of the same phase lands on the same worktree path (branch
+/// naming is generation-independent): the leftover worktree from the
+/// previous run must be replaced, not fail the spawn.
+#[tokio::test]
+async fn create_replaces_leftover_worktree_at_same_path() {
+    let (tmp, entry) = init_repo().await;
+    let m = WorktreeManager::new();
+    let first = m
+        .create(&entry, "totsuka/aaaaaaaaaaaa/design", true)
+        .await
+        .unwrap();
+    // Leave a marker to prove the second create really replaced it.
+    std::fs::write(first.join("stale-marker"), "old run").unwrap();
+
+    let second = m
+        .create(&entry, "totsuka/aaaaaaaaaaaa/design", true)
+        .await
+        .expect("re-spawn must tolerate the leftover worktree");
+    assert_eq!(first, second);
+    assert!(
+        !second.join("stale-marker").exists(),
+        "the leftover worktree must be replaced by a fresh checkout"
+    );
+    drop(tmp);
+}
