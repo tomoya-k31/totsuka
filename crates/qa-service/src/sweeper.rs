@@ -39,7 +39,7 @@ pub async fn run_sweeper(
                             tracing::warn!(error=%e, thread_ts=%m.thread_ts, "sweeper stop failed");
                             continue;
                         }
-                        tracing::warn!(thread_ts=%m.thread_ts, terminal_id=%m.terminal_id,
+                        tracing::warn!(error=%e, thread_ts=%m.thread_ts, terminal_id=%m.terminal_id,
                             "pane already gone; dropping stale mapping");
                     }
                     if let Err(e) = thread_map.delete(&m.thread_ts).await {
