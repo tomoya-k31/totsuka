@@ -52,6 +52,13 @@ pub trait SlackClient: Send + Sync + 'static {
 
     async fn add_reaction(&self, channel: &str, ts: &str, name: &str) -> Result<(), QaError>;
 
+    /// conversations.open — 質問者との DM チャンネル ID を解決する。
+    /// Bot Token Scope `im:write` が必要。
+    async fn open_dm(&self, user: &str) -> Result<String, QaError>;
+
+    /// chat.getPermalink — メッセージへの永続リンク。追加スコープ不要。
+    async fn permalink(&self, channel: &str, message_ts: &str) -> Result<String, QaError>;
+
     /// Resolve the bot's own user id (`auth.test`). Called once at startup;
     /// mention detection depends on it, so failure should abort boot.
     async fn bot_user_id(&self) -> Result<String, QaError>;

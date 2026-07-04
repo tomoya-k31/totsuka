@@ -15,6 +15,8 @@ struct MockState {
     history: HashMap<String, Vec<SlackMessage>>,
     replies: HashMap<(String, String), Vec<SlackMessage>>,
     next_post_ts: u64,
+    fail_open_dm: bool,
+    fail_permalink: bool,
 }
 
 pub struct MockSlackClient {
@@ -59,6 +61,12 @@ impl MockSlackClient {
     }
     pub fn reactions(&self) -> Vec<(String, String, String)> {
         self.state.lock().unwrap().reactions.clone()
+    }
+    pub fn set_fail_open_dm(&self, fail: bool) {
+        self.state.lock().unwrap().fail_open_dm = fail;
+    }
+    pub fn set_fail_permalink(&self, fail: bool) {
+        self.state.lock().unwrap().fail_permalink = fail;
     }
 }
 
@@ -128,6 +136,24 @@ impl SlackClient for MockSlackClient {
             .reactions
             .push((channel.into(), ts.into(), name.into()));
         Ok(())
+    }
+    async fn open_dm(&self, user: &str) -> Result<String, QaError> {
+        if self.state.lock().unwrap().fail_open_dm {
+            return Err(QaError::Slack("conversations.open: missing_scope".into()));
+        }
+        Ok(format!("D_{user}"))
+    }
+
+    async fn permalink(&self, channel: &str, message_ts: &str) -> Result<String, QaError> {
+        if self.state.lock().unwrap().fail_permalink {
+            return Err(QaError::Slack(
+                "chat.getPermalink: message_not_found".into(),
+            ));
+        }
+        Ok(format!(
+            "https://mock.slack/archives/{channel}/p{}",
+            message_ts.replace('.', "")
+        ))
     }
     async fn bot_user_id(&self) -> Result<String, QaError> {
         Ok("UBOTMOCK".into())

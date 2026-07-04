@@ -95,3 +95,38 @@ async fn bot_user_id_errors_on_not_ok() {
     let s = c.bot_user_id().await.unwrap_err().to_string();
     assert!(s.contains("invalid_auth"), "got: {s}");
 }
+
+#[tokio::test]
+async fn open_dm_returns_channel_id() {
+    let addr = one_shot_stub(r#"{"ok":true,"channel":{"id":"D123"}}"#).await;
+    let c = HttpSlackClient::new(
+        Secret::new("xoxb-test".into()),
+        Some(format!("http://{addr}/api")),
+    );
+    assert_eq!(c.open_dm("U1").await.unwrap(), "D123");
+}
+
+#[tokio::test]
+async fn open_dm_errors_on_missing_scope() {
+    let addr = one_shot_stub(r#"{"ok":false,"error":"missing_scope"}"#).await;
+    let c = HttpSlackClient::new(
+        Secret::new("xoxb-test".into()),
+        Some(format!("http://{addr}/api")),
+    );
+    let s = c.open_dm("U1").await.unwrap_err().to_string();
+    assert!(s.contains("missing_scope"), "got: {s}");
+}
+
+#[tokio::test]
+async fn permalink_returns_url() {
+    let addr =
+        one_shot_stub(r#"{"ok":true,"permalink":"https://x.slack.com/archives/C1/p123"}"#).await;
+    let c = HttpSlackClient::new(
+        Secret::new("xoxb-test".into()),
+        Some(format!("http://{addr}/api")),
+    );
+    assert_eq!(
+        c.permalink("C1", "123.45").await.unwrap(),
+        "https://x.slack.com/archives/C1/p123"
+    );
+}
