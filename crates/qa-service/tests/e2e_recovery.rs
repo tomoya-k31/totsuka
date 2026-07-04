@@ -32,6 +32,7 @@ async fn reconcile_keeps_pairs_drops_mapping_orphans_closes_pane_orphans() {
             thread_ts: alive_ts.clone(),
             terminal_id: "term_alive".into(),
             repo: "acme/api".into(),
+            origin: "owner".into(),
             last_activity_at: now,
             created_at: now,
         })
@@ -42,6 +43,7 @@ async fn reconcile_keeps_pairs_drops_mapping_orphans_closes_pane_orphans() {
             thread_ts: orphan_ts.clone(),
             terminal_id: "term_dead".into(),
             repo: "acme/api".into(),
+            origin: "owner".into(),
             last_activity_at: now,
             created_at: now,
         })

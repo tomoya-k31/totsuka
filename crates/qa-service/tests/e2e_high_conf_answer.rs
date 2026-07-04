@@ -74,10 +74,12 @@ async fn high_conf_answer_spawns_polls_extracts_posts() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "where is auth?".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Auto,
+        dm_only: false,
     };
     let outcome = handle_answer(&ctx, input).await.unwrap();
     assert!(matches!(
@@ -160,10 +162,12 @@ async fn answer_extracted_even_when_revision_stays_zero() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "where is auth?".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Auto,
+        dm_only: false,
     };
     let outcome = handle_answer(&ctx, input).await.unwrap();
     assert!(matches!(
@@ -219,10 +223,12 @@ async fn delegated_answer_is_ephemeral_with_mention() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "where is auth?".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Delegated,
+        dm_only: false,
     };
     handle_answer(&ctx, input).await.unwrap();
 
@@ -285,10 +291,12 @@ async fn spawn_failure_notifies_user_ephemerally() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "where is auth?".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Delegated,
+        dm_only: false,
     };
     let outcome = handle_answer(&ctx, input).await.unwrap();
     assert!(matches!(
@@ -301,6 +309,61 @@ async fn spawn_failure_notifies_user_ephemerally() {
     assert_eq!(ephemerals.len(), 1);
     assert_eq!(ephemerals[0].1, "U1");
     assert!(ephemerals[0].3.contains("起動に失敗"));
+
+    // No mapping row for a failed spawn.
+    assert!(thread_map.get(&thread_ts).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn spawn_failure_notice_goes_to_dm_when_dm_only() {
+    // spawn_response 未設定 → spawn 失敗。dm_only なのでエフェメラルではなく DM に通知。
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let clock = Arc::new(SystemClock);
+
+    // No spawn_response set → MockAdapter::spawn errors, like a dead herdr.
+    let adapter = Arc::new(MockAdapter::new());
+    let slack = Arc::new(MockSlackClient::new());
+    let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
+    let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
+
+    let ctx = AnswerCtx {
+        adapter: adapter.clone() as Arc<dyn AdapterClient>,
+        slack: slack.clone() as Arc<dyn SlackClient>,
+        thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
+        clock: clock.clone(),
+        answer_cfg: answer_cfg(),
+        system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
+    };
+    let input = AnswerInput {
+        channel: "C_PRIVATE".into(),
+        user: "U_ME".into(),
+        author: "U_COLLEAGUE".into(),
+        thread_ts: thread_ts.clone(),
+        question: "where is auth?".into(),
+        repo: "acme/api".into(),
+        mode: AnswerMode::Delegated,
+        dm_only: true,
+    };
+    let outcome = handle_answer(&ctx, input).await.unwrap();
+    assert!(matches!(
+        outcome,
+        qa_service::answer::pipeline::AnswerOutcome::SpawnFailed(_)
+    ));
+
+    assert!(
+        slack.ephemerals().is_empty(),
+        "dm_only must skip ephemeral notice"
+    );
+    let posts = slack.posts();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].0, "D_U_ME");
+    assert!(posts[0].2.contains("起動に失敗"), "got: {}", posts[0].2);
 
     // No mapping row for a failed spawn.
     assert!(thread_map.get(&thread_ts).await.unwrap().is_none());
@@ -357,10 +420,12 @@ async fn fresh_spawn_replays_persisted_history_and_records_new_exchange() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "Q2".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Auto,
+        dm_only: false,
     };
     handle_answer(&ctx, input).await.unwrap();
 
@@ -438,10 +503,12 @@ async fn delegated_dm_copy_disabled_skips_dm() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "where is auth?".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Delegated,
+        dm_only: false,
     };
     handle_answer(&ctx, input).await.unwrap();
 
@@ -494,10 +561,12 @@ async fn delegated_dm_failure_keeps_answer_flow_intact() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "where is auth?".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Delegated,
+        dm_only: false,
     };
     let outcome = handle_answer(&ctx, input).await.unwrap();
 
@@ -508,6 +577,209 @@ async fn delegated_dm_failure_keeps_answer_flow_intact() {
     ));
     assert_eq!(slack.ephemerals().len(), 1);
     assert!(slack.posts().is_empty());
+
+    sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn self_mention_style_answer_targets_recipient_not_author() {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let clock = Arc::new(SystemClock);
+
+    let adapter = Arc::new(MockAdapter::new());
+    adapter.set_spawn_response(SpawnRes {
+        agent_id: "agent_e2e_sm1".into(),
+        terminal_id: "term_e2e_sm1".into(),
+        worktree_path: "/tmp/wt".into(),
+    });
+    adapter.set_read_response(ReadRes {
+        revision: 1,
+        text: "<answer>OK</answer><<TOTSUKA_DONE>>".into(),
+        is_newer: true,
+    });
+
+    let slack = Arc::new(MockSlackClient::new());
+    let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
+    let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
+
+    let ctx = AnswerCtx {
+        adapter: adapter.clone() as Arc<dyn AdapterClient>,
+        slack: slack.clone() as Arc<dyn SlackClient>,
+        thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
+        clock: clock.clone(),
+        answer_cfg: answer_cfg(),
+        system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
+    };
+    let input = AnswerInput {
+        channel: "C1".into(),
+        user: "U_ME".into(),          // recipient = 自分
+        author: "U_COLLEAGUE".into(), // 質問者 = 同僚
+        thread_ts: thread_ts.clone(),
+        question: "where is auth?".into(),
+        repo: "acme/api".into(),
+        mode: AnswerMode::Delegated,
+        dm_only: false,
+    };
+    handle_answer(&ctx, input).await.unwrap();
+
+    // エフェメラルは自分宛・from 句付き。
+    let ephemerals = slack.ephemerals();
+    assert_eq!(ephemerals.len(), 1);
+    assert_eq!(ephemerals[0].1, "U_ME");
+    assert!(
+        ephemerals[0].3.contains("<@U_COLLEAGUE> からの質問"),
+        "got: {}",
+        ephemerals[0].3
+    );
+    // DM も自分宛(D_U_ME)・from 句付き。
+    let posts = slack.posts();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].0, "D_U_ME");
+    assert!(
+        posts[0].2.contains("(from <@U_COLLEAGUE>)"),
+        "got: {}",
+        posts[0].2
+    );
+
+    sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn dm_only_skips_ephemeral_and_sends_dm_even_when_copy_disabled() {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let clock = Arc::new(SystemClock);
+
+    let adapter = Arc::new(MockAdapter::new());
+    adapter.set_spawn_response(SpawnRes {
+        agent_id: "agent_e2e_sm2".into(),
+        terminal_id: "term_e2e_sm2".into(),
+        worktree_path: "/tmp/wt".into(),
+    });
+    adapter.set_read_response(ReadRes {
+        revision: 1,
+        text: "<answer>OK</answer><<TOTSUKA_DONE>>".into(),
+        is_newer: true,
+    });
+
+    let slack = Arc::new(MockSlackClient::new());
+    let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
+    let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
+
+    let mut cfg = answer_cfg();
+    cfg.dm_copy_enabled = false; // dm_only は flag に優先して DM を送る
+    let ctx = AnswerCtx {
+        adapter: adapter.clone() as Arc<dyn AdapterClient>,
+        slack: slack.clone() as Arc<dyn SlackClient>,
+        thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
+        clock: clock.clone(),
+        answer_cfg: cfg,
+        system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
+    };
+    let input = AnswerInput {
+        channel: "C_PRIVATE".into(),
+        user: "U_ME".into(),
+        author: "U_COLLEAGUE".into(),
+        thread_ts: thread_ts.clone(),
+        question: "where is auth?".into(),
+        repo: "acme/api".into(),
+        mode: AnswerMode::Delegated,
+        dm_only: true,
+    };
+    let outcome = handle_answer(&ctx, input).await.unwrap();
+    assert!(matches!(
+        outcome,
+        qa_service::answer::pipeline::AnswerOutcome::Posted { .. }
+    ));
+
+    assert!(slack.ephemerals().is_empty(), "dm_only must skip ephemeral");
+    let posts = slack.posts();
+    assert_eq!(posts.len(), 1, "DM is the sole answer channel");
+    assert_eq!(posts[0].0, "D_U_ME");
+
+    sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn dm_only_dm_failure_surfaces_as_pipeline_error() {
+    // dm_only の DM は唯一の回答経路 — その失敗を warn で握って Posted を
+    // 返すと「成功したのに誰にも届いていない」状態になる。Err で表面化する。
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let clock = Arc::new(SystemClock);
+
+    let adapter = Arc::new(MockAdapter::new());
+    adapter.set_spawn_response(SpawnRes {
+        agent_id: "agent_e2e_sm3".into(),
+        terminal_id: "term_e2e_sm3".into(),
+        worktree_path: "/tmp/wt".into(),
+    });
+    adapter.set_read_response(ReadRes {
+        revision: 1,
+        text: "<answer>OK</answer><<TOTSUKA_DONE>>".into(),
+        is_newer: true,
+    });
+
+    let slack = Arc::new(MockSlackClient::new());
+    slack.set_fail_open_dm(true); // im:write 未付与相当 — DM が開けない
+    let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
+    let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
+
+    let ctx = AnswerCtx {
+        adapter: adapter.clone() as Arc<dyn AdapterClient>,
+        slack: slack.clone() as Arc<dyn SlackClient>,
+        thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
+        clock: clock.clone(),
+        answer_cfg: answer_cfg(),
+        system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
+    };
+    let input = AnswerInput {
+        channel: "C_PRIVATE".into(),
+        user: "U_ME".into(),
+        author: "U_COLLEAGUE".into(),
+        thread_ts: thread_ts.clone(),
+        question: "where is auth?".into(),
+        repo: "acme/api".into(),
+        mode: AnswerMode::Delegated,
+        dm_only: true,
+    };
+    let err = handle_answer(&ctx, input).await.unwrap_err();
+    assert!(err.to_string().contains("missing_scope"), "got: {err}");
+
+    // 誰にも何も届いていないことが Err と整合している。
+    assert!(slack.posts().is_empty(), "no DM must have been posted");
+    assert!(
+        slack.ephemerals().is_empty(),
+        "dm_only never posts ephemeral"
+    );
 
     sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
         .bind(&thread_ts)

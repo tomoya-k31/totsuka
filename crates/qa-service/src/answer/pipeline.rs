@@ -27,11 +27,17 @@ pub enum AnswerOutcome {
 
 pub struct AnswerInput {
     pub channel: String,
+    /// 回答の宛先(エフェメラル・DM を受け取る人)。
     pub user: String,
+    /// 質問の投稿者。既存フローでは user と同一。SelfMention では同僚。
+    pub author: String,
     pub thread_ts: String,
     pub question: String,
     pub repo: String,
     pub mode: AnswerMode,
+    /// チャンネルに入れなかった(private で invite 失敗等)— エフェメラルを
+    /// スキップし DM を主回答チャネルにする。
+    pub dm_only: bool,
 }
 
 #[derive(Clone)]
@@ -48,6 +54,10 @@ pub struct AnswerCtx {
 pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<AnswerOutcome, QaError> {
     // 1. Resolve or spawn the agent.
     let existing = ctx.thread_map.get(&input.thread_ts).await?;
+    // Self-heal respawn must not flip the thread's origin: a thread a
+    // colleague started stays "self_mention" even if the owner later
+    // bot-mentions in it after the pane died (origin gates continuation).
+    let prior_origin = existing.as_ref().map(|m| m.origin.clone());
     let mut resolved: Option<(String, String)> = None;
     if let Some(m) = existing {
         // The reused pane still shows the previous turn's answer
@@ -135,13 +145,31 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 Err(e) => {
                     tracing::warn!(error=%e, thread_ts=%input.thread_ts, repo=%input.repo,
                         "qa agent spawn failed");
-                    if let Err(pe) = ctx
+                    const SPAWN_FAILURE_NOTICE: &str =
+                        "エージェントの起動に失敗しました。ログを確認してください。";
+                    if input.dm_only {
+                        // bot が入れなかったチャンネルへのエフェメラルは必ず失敗する — DM に迂回。
+                        match ctx.slack.open_dm(&input.user).await {
+                            Ok(dm) => {
+                                if let Err(pe) = ctx
+                                    .slack
+                                    .post_message(&dm, None, SPAWN_FAILURE_NOTICE)
+                                    .await
+                                {
+                                    tracing::warn!(error=%pe, "failed to DM spawn-failure notice");
+                                }
+                            }
+                            Err(pe) => {
+                                tracing::warn!(error=%pe, "failed to open DM for spawn-failure notice")
+                            }
+                        }
+                    } else if let Err(pe) = ctx
                         .slack
                         .post_ephemeral(
                             &input.channel,
                             &input.user,
                             Some(&input.thread_ts),
-                            "エージェントの起動に失敗しました。ログを確認してください。",
+                            SPAWN_FAILURE_NOTICE,
                         )
                         .await
                     {
@@ -159,6 +187,15 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                     thread_ts: input.thread_ts.clone(),
                     terminal_id: res.terminal_id.clone(),
                     repo: input.repo.clone(),
+                    // 由来を固定: author != user は self-mention フロー(カンペ)。
+                    // 既存マッピングがあった(self-heal 再スポーン)なら由来を引き継ぐ。
+                    origin: prior_origin.unwrap_or_else(|| {
+                        if input.author != input.user {
+                            "self_mention".into()
+                        } else {
+                            "owner".into()
+                        }
+                    }),
                     last_activity_at: now,
                     created_at: now,
                 })
@@ -250,21 +287,30 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 .await?
         }
         AnswerMode::Delegated => {
-            // Address the asker explicitly: ephemeral messages carry no
-            // notification badge of their own, so the leading mention is
-            // what makes the answer discoverable in a busy thread.
-            let mention_text = format!("<@{}> {}", input.user, text);
-            ctx.slack
-                .post_ephemeral(
-                    &input.channel,
-                    &input.user,
-                    Some(&input.thread_ts),
-                    &mention_text,
-                )
-                .await?;
+            let from = (input.author != input.user).then_some(input.author.as_str());
+            if !input.dm_only {
+                // Address the asker explicitly: ephemeral messages carry no
+                // notification badge of their own, so the leading mention is
+                // what makes the answer discoverable in a busy thread.
+                let mention_text = match from {
+                    Some(a) => {
+                        format!("<@{}> *<@{}> からの質問への回答:*\n{}", input.user, a, text)
+                    }
+                    None => format!("<@{}> {}", input.user, text),
+                };
+                ctx.slack
+                    .post_ephemeral(
+                        &input.channel,
+                        &input.user,
+                        Some(&input.thread_ts),
+                        &mention_text,
+                    )
+                    .await?;
+            }
             // The ephemeral above evaporates on reload and never notifies —
             // the DM copy is the durable, notifying record (best-effort).
-            if ctx.answer_cfg.dm_copy_enabled {
+            // dm_only のときは DM が唯一の回答経路なので flag に関係なく送る。
+            if ctx.answer_cfg.dm_copy_enabled || input.dm_only {
                 if let Err(e) = super::dm_copy::send_dm_copy(
                     ctx.slack.as_ref(),
                     &input.user,
@@ -272,9 +318,16 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                     &input.thread_ts,
                     &input.question,
                     &text,
+                    from,
                 )
                 .await
                 {
+                    if input.dm_only {
+                        // DM is the sole answer channel here — losing it means
+                        // the asker got nothing, so surface the failure instead
+                        // of claiming Posted.
+                        return Err(e);
+                    }
                     tracing::warn!(error=%e, thread_ts=%input.thread_ts, "DM copy failed");
                 }
             }

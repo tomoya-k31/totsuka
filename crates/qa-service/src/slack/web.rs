@@ -159,6 +159,33 @@ impl SlackClient for HttpSlackClient {
             .ok_or_else(|| QaError::Slack("chat.getPermalink: missing permalink".into()))
     }
 
+    async fn join_channel(&self, channel: &str) -> Result<(), QaError> {
+        self.post_form("conversations.join", &[("channel", channel)])
+            .await?;
+        Ok(())
+    }
+
+    async fn invite_users(&self, channel: &str, users: &str) -> Result<(), QaError> {
+        match self
+            .post_form(
+                "conversations.invite",
+                &[("channel", channel), ("users", users)],
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            // 冪等: 既に居るなら目的は達成されている。
+            Err(QaError::Slack(ref e)) if e.contains("already_in_channel") => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn delete_message(&self, channel: &str, ts: &str) -> Result<(), QaError> {
+        self.post_form("chat.delete", &[("channel", channel), ("ts", ts)])
+            .await?;
+        Ok(())
+    }
+
     async fn bot_user_id(&self) -> Result<String, QaError> {
         let v = self.post_form("auth.test", &[]).await?;
         v["user_id"]

@@ -59,6 +59,19 @@ pub trait SlackClient: Send + Sync + 'static {
     /// chat.getPermalink — メッセージへの永続リンク。追加スコープ不要。
     async fn permalink(&self, channel: &str, message_ts: &str) -> Result<String, QaError>;
 
+    /// conversations.join — 公開チャンネルへ self-join(冪等)。要 channels:join。
+    /// private では method_not_supported_for_channel_type / channel_not_found で失敗する。
+    async fn join_channel(&self, channel: &str) -> Result<(), QaError>;
+
+    /// conversations.invite — users をチャンネルに招待。user トークン(xoxp)の
+    /// クライアントで呼び、bot を private チャンネルへ入れる用途。要 groups:write。
+    /// already_in_channel は成功扱い(冪等)。
+    async fn invite_users(&self, channel: &str, users: &str) -> Result<(), QaError>;
+
+    /// chat.delete — join システムメッセージの best-effort 削除に使用。
+    /// user トークン(管理者)のクライアントで呼ぶ。
+    async fn delete_message(&self, channel: &str, ts: &str) -> Result<(), QaError>;
+
     /// Resolve the bot's own user id (`auth.test`). Called once at startup;
     /// mention detection depends on it, so failure should abort boot.
     async fn bot_user_id(&self) -> Result<String, QaError>;

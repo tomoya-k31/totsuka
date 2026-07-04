@@ -72,6 +72,17 @@ async fn main() -> anyhow::Result<()> {
         None,
     ));
 
+    // xoxp(user トークン)クライアント: private への bot 招待と join メッセージ
+    // 削除にのみ使用。未設定なら None(private は DM フォールバック)。
+    let user_slack: Option<Arc<dyn SlackClient>> = {
+        let t = config.qa_service.slack_user_token.clone();
+        if t.expose().is_empty() {
+            None
+        } else {
+            Some(Arc::new(HttpSlackClient::new(t, None)))
+        }
+    };
+
     // Mention detection depends on knowing the bot's own user id; resolve it
     // from the token itself so operators don't have to export it manually.
     let bot_user_id = slack.bot_user_id().await?;
@@ -164,6 +175,7 @@ async fn main() -> anyhow::Result<()> {
     let dispatch_h = {
         let adapter = adapter.clone();
         let slack = slack.clone();
+        let user_slack = user_slack.clone();
         let classifier_arc = classifier_arc.clone();
         let selector = selector.clone();
         let inbox = inbox.clone();
@@ -174,10 +186,22 @@ async fn main() -> anyhow::Result<()> {
         let semaphore = semaphore.clone();
         let project_node_id = project_node_id.clone();
         let bot_user_id = bot_user_id.clone();
+        let self_mention_user_id = config.qa_service.self_mention_user_id.clone();
         let s = shutdown.clone();
         tokio::spawn(async move {
-            let filter =
-                QuestionFilter::new(config.qa_service.allowed_user_ids.clone(), bot_user_id);
+            let bot_user_id_dispatch = bot_user_id.clone();
+            let filter = QuestionFilter::new(
+                config.qa_service.allowed_user_ids.clone(),
+                bot_user_id,
+                config.qa_service.self_mention_user_id.clone(),
+            );
+            // join/invite 直後の channel_join システムメッセージを best-effort 削除
+            // するための照合マップ(channel → 記録時刻)。BotJoined 到着時に消費。
+            // BotJoined が来ない環境(user_events 未購読等)でも insert 側の prune で
+            // サイズが有界になる。
+            const PENDING_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+            let mut pending_join_delete: std::collections::HashMap<String, std::time::Instant> =
+                std::collections::HashMap::new();
             // The `[agent_adapter.repos.HASH_KEY]` map key IS the `owner/repo`
             // string used by both the classifier and the adapter's spawn call —
             // NOT `RepoSection.repo_path` (which is a local filesystem path).
@@ -215,16 +239,39 @@ async fn main() -> anyhow::Result<()> {
                         match ev {
                             SlackEvent::Message(m) => {
                                 let thread_key = m.thread_ts.clone().unwrap_or_else(|| m.ts.clone());
-                                let existing = match thread_map.get(&thread_key).await {
-                                    Ok(v) => v.is_some(),
+                                let mapping = match thread_map.get(&thread_key).await {
+                                    Ok(v) => v,
                                     Err(e) => {
                                         tracing::warn!(error=%e, thread_ts=%thread_key,
                                             "thread_map lookup failed; skipping to avoid double-response");
                                         continue;
                                     }
                                 };
-                                let trig = filter.evaluate(&m, existing);
+                                let origin = mapping.as_ref().map(|tm| tm.origin.as_str());
+                                let trig = filter.evaluate(&m, origin);
                                 if trig == Trigger::None { continue; }
+                                // SelfMention: 回答前にチャンネル参加を確保する。
+                                // 分類の前に行う — 低確信度通知(エフェメラル)も参加が前提のため。
+                                let (recipient, author, dm_only) = if trig == Trigger::SelfMention {
+                                    let entry = qa_service::channel_entry::ensure_channel_access(
+                                        slack.as_ref(),
+                                        user_slack.as_ref().map(|a| a.as_ref()),
+                                        &m.channel,
+                                        &bot_user_id_dispatch,
+                                    )
+                                    .await;
+                                    if entry == qa_service::channel_entry::ChannelEntry::Full {
+                                        pending_join_delete.retain(|_, t| t.elapsed() < PENDING_TTL);
+                                        pending_join_delete.insert(m.channel.clone(), std::time::Instant::now());
+                                    }
+                                    (
+                                        self_mention_user_id.clone(),
+                                        m.user.clone(),
+                                        entry == qa_service::channel_entry::ChannelEntry::DmOnly,
+                                    )
+                                } else {
+                                    (m.user.clone(), m.user.clone(), false)
+                                };
                                 let req = ClassifyRequest {
                                     question: m.text.clone(),
                                     thread_context: None,
@@ -240,9 +287,21 @@ async fn main() -> anyhow::Result<()> {
                                     SelectOutcome::LowConfidenceUseTop1 { repo, .. } => (repo, default_mode),
                                     SelectOutcome::LowConfidenceDelegated { .. }
                                     | SelectOutcome::LowConfidenceRefused => {
-                                        if let Err(e) = slack.post_ephemeral(
-                                            &m.channel, &m.user, Some(&thread_key),
-                                            "リポジトリを特定できませんでした。明示的に指定してください。",
+                                        const LOW_CONF_NOTICE: &str =
+                                            "リポジトリを特定できませんでした。明示的に指定してください。";
+                                        if dm_only {
+                                            // bot が入れなかったチャンネルへのエフェメラルは必ず失敗する — DM に迂回。
+                                            match slack.open_dm(&recipient).await {
+                                                Ok(dm) => {
+                                                    if let Err(e) = slack.post_message(&dm, None, LOW_CONF_NOTICE).await {
+                                                        tracing::warn!(error=%e, "failed to DM low-confidence notice");
+                                                    }
+                                                }
+                                                Err(e) => tracing::warn!(error=%e, "failed to open DM for low-confidence notice"),
+                                            }
+                                        } else if let Err(e) = slack.post_ephemeral(
+                                            &m.channel, &recipient, Some(&thread_key),
+                                            LOW_CONF_NOTICE,
                                         ).await {
                                             tracing::warn!(error=%e, channel=%m.channel,
                                                 "failed to post low-confidence notice");
@@ -253,11 +312,15 @@ async fn main() -> anyhow::Result<()> {
                                 let permit = semaphore.clone().acquire_owned().await.expect("permit");
                                 let input = AnswerInput {
                                     channel: m.channel.clone(),
-                                    user: m.user.clone(),
+                                    user: recipient,
+                                    author,
                                     thread_ts: thread_key,
                                     question: m.text.clone(),
                                     repo,
-                                    mode,
+                                    // SelfMention の回答は本人にだけ見せる — default_mode に
+                                    // かかわらず Delegated 強制。
+                                    mode: if trig == Trigger::SelfMention { AnswerMode::Delegated } else { mode },
+                                    dm_only,
                                 };
                                 let ctx_cloned = answer_ctx.clone();
                                 tokio::spawn(async move {
@@ -272,6 +335,21 @@ async fn main() -> anyhow::Result<()> {
                                     handle_reaction(&reaction_ctx, &channel, &item_ts, &reaction).await
                                 {
                                     tracing::warn!(error=%e, "reaction handler failed");
+                                }
+                            }
+                            SlackEvent::BotJoined { channel, ts, user } => {
+                                // 自分(bot)の join メッセージ、かつ直近に join/invite した
+                                // チャンネルのものだけ削除する(他人の join には触らない)。
+                                pending_join_delete.retain(|_, t| t.elapsed() < PENDING_TTL);
+                                if user == bot_user_id_dispatch
+                                    && pending_join_delete.remove(&channel).is_some()
+                                {
+                                    if let Some(u) = user_slack.as_ref() {
+                                        if let Err(e) = u.delete_message(&channel, &ts).await {
+                                            tracing::warn!(error=%e, %channel,
+                                                "join message delete failed (best-effort)");
+                                        }
+                                    }
                                 }
                             }
                             SlackEvent::Other => {}

@@ -88,3 +88,23 @@ fn ignores_bot_messages() {
 fn unknown_envelope_type_errors() {
     assert!(parse(r#"{"type":"slash_commands","..":""}"#).is_err());
 }
+
+#[test]
+fn parses_channel_join_as_bot_joined() {
+    let raw = r#"{"type":"events_api","envelope_id":"env-j","payload":{
+        "event_id":"EvJ1",
+        "event":{"type":"message","subtype":"channel_join",
+                 "user":"UBOT","channel":"C9","ts":"17500000009.000100",
+                 "text":"<@UBOT> has joined the channel"}}}"#;
+    match parse(raw).unwrap() {
+        SlackEnvelope::EventsApi { event, .. } => assert_eq!(
+            event,
+            SlackEvent::BotJoined {
+                channel: "C9".into(),
+                ts: "17500000009.000100".into(),
+                user: "UBOT".into(),
+            }
+        ),
+        _ => panic!(),
+    }
+}

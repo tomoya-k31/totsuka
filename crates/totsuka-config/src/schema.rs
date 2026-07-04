@@ -314,6 +314,14 @@ pub struct QaServiceSection {
     pub adapter_uds: String,
     #[serde(default = "d_llm")]
     pub repo_select_mode: String,
+    /// 自分宛メンション監視の対象ユーザー ID(空文字 = 機能無効)。
+    /// このユーザー宛のメンションを検知すると、本人にだけ見えるカンペ回答を返す。
+    #[serde(default)]
+    pub self_mention_user_id: String,
+    /// User OAuth Token(xoxp)。private チャンネルへの bot 招待と
+    /// join システムメッセージ削除にのみ使用(空 = 両機能無効)。
+    #[serde(default = "default_secret")]
+    pub slack_user_token: Secret<String>,
     pub classifier: ClassifierSection,
     pub answer: AnswerSection,
     #[serde(default = "default_secret")]
