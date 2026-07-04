@@ -136,6 +136,29 @@ impl SlackClient for HttpSlackClient {
         Ok(())
     }
 
+    async fn open_dm(&self, user: &str) -> Result<String, QaError> {
+        let v = self
+            .post_form("conversations.open", &[("users", user)])
+            .await?;
+        v["channel"]["id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| QaError::Slack("conversations.open: missing channel.id".into()))
+    }
+
+    async fn permalink(&self, channel: &str, message_ts: &str) -> Result<String, QaError> {
+        let v = self
+            .post_form(
+                "chat.getPermalink",
+                &[("channel", channel), ("message_ts", message_ts)],
+            )
+            .await?;
+        v["permalink"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| QaError::Slack("chat.getPermalink: missing permalink".into()))
+    }
+
     async fn bot_user_id(&self) -> Result<String, QaError> {
         let v = self.post_form("auth.test", &[]).await?;
         v["user_id"]

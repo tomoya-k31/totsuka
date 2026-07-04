@@ -156,3 +156,11 @@ fn load_detects_post_expansion_uds_collision() {
         other => panic!("expected Validation error, got: {other:?}"),
     }
 }
+
+#[test]
+fn dm_copy_enabled_defaults_true() {
+    // [qa_service.answer] はキー省略可 — dm_copy_enabled は明示しなければ有効。
+    let toml = render("/tmp/sock/a.sock", "/tmp/sock/o.sock", "");
+    let cfg = Config::from_toml_str(&toml).expect("parse");
+    assert!(cfg.qa_service.answer.dm_copy_enabled);
+}

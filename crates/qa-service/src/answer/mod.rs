@@ -1,3 +1,4 @@
+pub mod dm_copy;
 pub mod extract;
 pub mod pipeline;
 
