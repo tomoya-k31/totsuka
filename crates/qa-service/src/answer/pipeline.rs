@@ -262,6 +262,22 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                     &mention_text,
                 )
                 .await?;
+            // The ephemeral above evaporates on reload and never notifies —
+            // the DM copy is the durable, notifying record (best-effort).
+            if ctx.answer_cfg.dm_copy_enabled {
+                if let Err(e) = super::dm_copy::send_dm_copy(
+                    ctx.slack.as_ref(),
+                    &input.user,
+                    &input.channel,
+                    &input.thread_ts,
+                    &input.question,
+                    &text,
+                )
+                .await
+                {
+                    tracing::warn!(error=%e, thread_ts=%input.thread_ts, "DM copy failed");
+                }
+            }
             SlackPostResult {
                 ts: format!("ephemeral-{}", input.thread_ts),
             }
