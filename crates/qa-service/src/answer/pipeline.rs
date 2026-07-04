@@ -11,7 +11,11 @@ use crate::adapter_client::{AdapterClient, SpawnReq};
 use crate::error::QaError;
 use crate::mode::AnswerMode;
 use crate::slack::{SlackClient, SlackPostResult};
+use crate::thread_history::ThreadHistoryRepo;
 use crate::thread_map::{ThreadMapRepo, ThreadMapping};
+
+/// How many persisted history entries to replay into a fresh agent.
+const HISTORY_REPLAY_LIMIT: i64 = 20;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnswerOutcome {
@@ -35,6 +39,7 @@ pub struct AnswerCtx {
     pub adapter: Arc<dyn AdapterClient>,
     pub slack: Arc<dyn SlackClient>,
     pub thread_map: Arc<ThreadMapRepo>,
+    pub thread_history: Arc<ThreadHistoryRepo>,
     pub clock: Arc<dyn Clock>,
     pub answer_cfg: AnswerSection,
     pub system_prompt_template: String,
@@ -87,7 +92,34 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 &ctx.system_prompt_template,
                 &ctx.answer_cfg,
             ));
-            argv.push(input.question.clone());
+            // A fresh agent for a thread whose pane was already swept knows
+            // nothing — replay the persisted conversation so the thread
+            // continues where it left off (best-effort: an empty/missing
+            // history degrades to a plain first question).
+            let history = ctx
+                .thread_history
+                .recent(&input.thread_ts, HISTORY_REPLAY_LIMIT)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error=%e, thread_ts=%input.thread_ts,
+                        "history fetch failed; spawning without context");
+                    Vec::new()
+                });
+            let prompt = if history.is_empty() {
+                input.question.clone()
+            } else {
+                let mut p = String::from(
+                    "以下はこのスレッドでのこれまでの会話履歴です。\
+                     文脈として踏まえて回答してください。\n",
+                );
+                for h in &history {
+                    p.push_str(&format!("[{}] {}\n", h.role, h.body));
+                }
+                p.push_str("\n新しい質問: ");
+                p.push_str(&input.question);
+                p
+            };
+            argv.push(prompt);
             let req = SpawnReq {
                 task_id: format!("qa-{}", &input.thread_ts),
                 phase: "answer".into(),
@@ -237,6 +269,26 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
     };
 
     ctx.thread_map.touch(&input.thread_ts).await?;
+
+    // 5. Persist the exchange (best-effort) so a future respawn can replay
+    // it. Only clean tag-delimited answers are recorded — fallback tails
+    // and "(no answer produced)" would poison the replayed context.
+    if let Err(e) = ctx
+        .thread_history
+        .append(&input.thread_ts, "user", &input.question)
+        .await
+    {
+        tracing::warn!(error=%e, thread_ts=%input.thread_ts, "history append (user) failed");
+    }
+    if kind == "tag" {
+        if let Err(e) = ctx
+            .thread_history
+            .append(&input.thread_ts, "assistant", &text)
+            .await
+        {
+            tracing::warn!(error=%e, thread_ts=%input.thread_ts, "history append (assistant) failed");
+        }
+    }
 
     Ok(match (hit_timeout, kind) {
         (true, _) => AnswerOutcome::Truncated { ts },

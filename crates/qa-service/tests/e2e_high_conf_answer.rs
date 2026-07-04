@@ -2,6 +2,7 @@ use qa_service::adapter_client::{AdapterClient, AgentSummary, MockAdapter, ReadR
 use qa_service::answer::pipeline::{handle_answer, AnswerCtx, AnswerInput};
 use qa_service::mode::AnswerMode;
 use qa_service::slack::{MockSlackClient, SlackClient};
+use qa_service::thread_history::ThreadHistoryRepo;
 use qa_service::thread_map::ThreadMapRepo;
 use std::sync::Arc;
 use totsuka_config::schema::AnswerSection;
@@ -49,6 +50,7 @@ async fn high_conf_answer_spawns_polls_extracts_posts() {
 
     let slack = Arc::new(MockSlackClient::new());
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
 
     let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
 
@@ -63,6 +65,7 @@ async fn high_conf_answer_spawns_polls_extracts_posts() {
         adapter: adapter.clone() as Arc<dyn AdapterClient>,
         slack: slack.clone() as Arc<dyn SlackClient>,
         thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
         clock: clock.clone(),
         answer_cfg: answer_cfg(),
         system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
@@ -141,12 +144,14 @@ async fn answer_extracted_even_when_revision_stays_zero() {
 
     let slack = Arc::new(MockSlackClient::new());
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
     let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
 
     let ctx = AnswerCtx {
         adapter: adapter.clone() as Arc<dyn AdapterClient>,
         slack: slack.clone() as Arc<dyn SlackClient>,
         thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
         clock: clock.clone(),
         answer_cfg: answer_cfg(),
         system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
@@ -198,12 +203,14 @@ async fn delegated_answer_is_ephemeral_with_mention() {
 
     let slack = Arc::new(MockSlackClient::new());
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
     let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
 
     let ctx = AnswerCtx {
         adapter: adapter.clone() as Arc<dyn AdapterClient>,
         slack: slack.clone() as Arc<dyn SlackClient>,
         thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
         clock: clock.clone(),
         answer_cfg: answer_cfg(),
         system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
@@ -248,12 +255,14 @@ async fn spawn_failure_notifies_user_ephemerally() {
     let adapter = Arc::new(MockAdapter::new());
     let slack = Arc::new(MockSlackClient::new());
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
     let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
 
     let ctx = AnswerCtx {
         adapter: adapter.clone() as Arc<dyn AdapterClient>,
         slack: slack.clone() as Arc<dyn SlackClient>,
         thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
         clock: clock.clone(),
         answer_cfg: answer_cfg(),
         system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
@@ -280,4 +289,96 @@ async fn spawn_failure_notifies_user_ephemerally() {
 
     // No mapping row for a failed spawn.
     assert!(thread_map.get(&thread_ts).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn fresh_spawn_replays_persisted_history_and_records_new_exchange() {
+    // A thread whose pane was swept respawns with NO agent memory — the
+    // persisted history must ride the initial prompt, and the new Q&A must
+    // be appended for the next respawn.
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let clock = Arc::new(SystemClock);
+
+    let adapter = Arc::new(MockAdapter::new());
+    adapter.set_spawn_response(SpawnRes {
+        agent_id: "agent_hist".into(),
+        terminal_id: "term_hist".into(),
+        worktree_path: "/tmp/wt".into(),
+    });
+    adapter.set_read_response(ReadRes {
+        revision: 0,
+        text: "<answer>A2</answer><<TOTSUKA_DONE>>".into(),
+        is_newer: false,
+    });
+
+    let slack = Arc::new(MockSlackClient::new());
+    let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
+    let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
+
+    // Prior conversation, persisted before the pane was swept.
+    thread_history
+        .append(&thread_ts, "user", "Q1")
+        .await
+        .unwrap();
+    thread_history
+        .append(&thread_ts, "assistant", "A1")
+        .await
+        .unwrap();
+
+    let ctx = AnswerCtx {
+        adapter: adapter.clone() as Arc<dyn AdapterClient>,
+        slack: slack.clone() as Arc<dyn SlackClient>,
+        thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
+        clock: clock.clone(),
+        answer_cfg: answer_cfg(),
+        system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
+    };
+    let input = AnswerInput {
+        channel: "C1".into(),
+        user: "U1".into(),
+        thread_ts: thread_ts.clone(),
+        question: "Q2".into(),
+        repo: "acme/api".into(),
+        mode: AnswerMode::Auto,
+    };
+    handle_answer(&ctx, input).await.unwrap();
+
+    // The initial prompt (last argv element) replays the conversation and
+    // ends with the new question.
+    let spawns = adapter.expected_spawns();
+    assert_eq!(spawns.len(), 1);
+    let prompt = spawns[0].argv.last().unwrap();
+    assert!(prompt.contains("[user] Q1"), "got: {prompt}");
+    assert!(prompt.contains("[assistant] A1"), "got: {prompt}");
+    assert!(prompt.contains("新しい質問: Q2"), "got: {prompt}");
+
+    // The new exchange is persisted for the NEXT respawn.
+    let hist = thread_history.recent(&thread_ts, 10).await.unwrap();
+    let flat: Vec<(String, String)> = hist.into_iter().map(|h| (h.role, h.body)).collect();
+    assert_eq!(
+        flat,
+        vec![
+            ("user".into(), "Q1".into()),
+            ("assistant".into(), "A1".into()),
+            ("user".into(), "Q2".into()),
+            ("assistant".into(), "A2".into()),
+        ]
+    );
+
+    sqlx::query("DELETE FROM qa_thread_history WHERE thread_ts = $1")
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
 }

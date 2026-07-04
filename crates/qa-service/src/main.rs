@@ -19,6 +19,7 @@ use qa_service::slack::{
     HttpSlackClient, SlackClient,
 };
 use qa_service::sweeper::run_sweeper;
+use qa_service::thread_history::ThreadHistoryRepo;
 use qa_service::thread_map::ThreadMapRepo;
 use qa_service::QaApp;
 use sqlx::postgres::PgPoolOptions;
@@ -57,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
 
     let clock: Arc<dyn totsuka_core::Clock> = Arc::new(SystemClock);
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
 
     // 3. Adapter + Slack + Classifier + Inbox + RepoSelector
     let adapter_path = std::path::PathBuf::from(resolve_tilde(
@@ -167,6 +169,7 @@ async fn main() -> anyhow::Result<()> {
         let selector = selector.clone();
         let inbox = inbox.clone();
         let thread_map = thread_map.clone();
+        let thread_history = thread_history.clone();
         let clock = clock.clone();
         let config = config.clone();
         let semaphore = semaphore.clone();
@@ -192,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
                 adapter: adapter.clone(),
                 slack: slack.clone(),
                 thread_map: thread_map.clone(),
+                thread_history: thread_history.clone(),
                 clock: clock.clone(),
                 answer_cfg: config.qa_service.answer.clone(),
                 system_prompt_template:
