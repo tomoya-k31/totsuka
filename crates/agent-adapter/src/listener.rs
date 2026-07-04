@@ -51,7 +51,11 @@ pub async fn serve_uds(
                 let watched = graceful.watch(conn);
                 tokio::spawn(async move {
                     if let Err(e) = watched.await {
-                        tracing::warn!(error=?e, "uds connection error");
+                        if totsuka_telemetry::is_benign_disconnect(e.as_ref()) {
+                            tracing::debug!(error=?e, "uds connection closed by peer");
+                        } else {
+                            tracing::warn!(error=?e, "uds connection error");
+                        }
                     }
                 });
             }
