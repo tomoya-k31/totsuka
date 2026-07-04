@@ -9,6 +9,7 @@ use totsuka_core::SystemClock;
 
 fn answer_cfg() -> AnswerSection {
     AnswerSection {
+        claude_argv: vec!["claude".into()],
         sentinel: "<<TOTSUKA_DONE>>".into(),
         answer_open_tag: "<answer>".into(),
         answer_close_tag: "</answer>".into(),
@@ -89,9 +90,63 @@ async fn high_conf_answer_spawns_polls_extracts_posts() {
     assert_eq!(mapping.terminal_id, "term_e2e_1");
     assert_eq!(mapping.repo, "acme/api");
 
+    // herdr executes argv[0] as the program: command prefix must come first,
+    // system prompt last (a prompt-only argv is unspawnable).
+    let spawns = adapter.expected_spawns();
+    assert_eq!(spawns.len(), 1);
+    assert_eq!(spawns[0].argv[0], "claude");
+    assert!(spawns[0].argv.last().unwrap().contains("answer with"));
+
     sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
         .bind(&thread_ts)
         .execute(&pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn spawn_failure_notifies_user_ephemerally() {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let clock = Arc::new(SystemClock);
+
+    // No spawn_response set → MockAdapter::spawn errors, like a dead herdr.
+    let adapter = Arc::new(MockAdapter::new());
+    let slack = Arc::new(MockSlackClient::new());
+    let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
+
+    let ctx = AnswerCtx {
+        adapter: adapter.clone() as Arc<dyn AdapterClient>,
+        slack: slack.clone() as Arc<dyn SlackClient>,
+        thread_map: thread_map.clone(),
+        clock: clock.clone(),
+        answer_cfg: answer_cfg(),
+        system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
+    };
+    let input = AnswerInput {
+        channel: "C1".into(),
+        user: "U1".into(),
+        thread_ts: thread_ts.clone(),
+        question: "where is auth?".into(),
+        repo: "acme/api".into(),
+        mode: AnswerMode::Delegated,
+    };
+    let outcome = handle_answer(&ctx, input).await.unwrap();
+    assert!(matches!(
+        outcome,
+        qa_service::answer::pipeline::AnswerOutcome::SpawnFailed(_)
+    ));
+
+    // The failure must be surfaced to the asking user, not swallowed.
+    let ephemerals = slack.ephemerals();
+    assert_eq!(ephemerals.len(), 1);
+    assert_eq!(ephemerals[0].1, "U1");
+    assert!(ephemerals[0].3.contains("起動に失敗"));
+
+    // No mapping row for a failed spawn.
+    assert!(thread_map.get(&thread_ts).await.unwrap().is_none());
 }

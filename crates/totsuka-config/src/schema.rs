@@ -366,6 +366,11 @@ fn d_true() -> bool {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AnswerSection {
+    /// Command prefix for the QA answer agent; the system prompt is appended
+    /// as the final argv element. herdr executes argv[0] as the program, so
+    /// this must start with a runnable command.
+    #[serde(default = "d_claude_argv")]
+    pub claude_argv: Vec<String>,
     #[serde(default = "d_sentinel")]
     pub sentinel: String,
     #[serde(default = "d_open")]
@@ -384,6 +389,9 @@ pub struct AnswerSection {
     pub max_concurrent_answers: u32,
 }
 
+fn d_claude_argv() -> Vec<String> {
+    vec!["claude".into()]
+}
 fn d_sentinel() -> String {
     "<<TOTSUKA_DONE>>".into()
 }
@@ -579,6 +587,7 @@ model="claude-haiku-4-5-20251001"
         let c = Config::from_toml_str(MIN_TOML).expect("parse");
         assert_eq!(c.totsuka.timezone, "Asia/Tokyo"); // default applied
         assert_eq!(c.bus.batch_size, 16); // default applied
+        assert_eq!(c.qa_service.answer.claude_argv, vec!["claude"]); // default applied
         assert_eq!(c.github.columns.len(), 8);
         assert_eq!(
             c.github.columns.get(&ColumnId::Design).unwrap(),

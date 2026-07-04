@@ -51,10 +51,13 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
             m.terminal_id
         }
         None => {
-            let argv = vec![interpolate_prompt(
+            // herdr executes argv[0] as the program: command prefix first
+            // (claude_argv), system prompt as the final positional argument.
+            let mut argv = ctx.answer_cfg.claude_argv.clone();
+            argv.push(interpolate_prompt(
                 &ctx.system_prompt_template,
                 &ctx.answer_cfg,
-            )];
+            ));
             let req = SpawnReq {
                 task_id: format!("qa-{}", &input.thread_ts),
                 phase: "answer".into(),
@@ -67,7 +70,23 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
             };
             let res = match ctx.adapter.spawn(req).await {
                 Ok(r) => r,
-                Err(e) => return Ok(AnswerOutcome::SpawnFailed(e.to_string())),
+                Err(e) => {
+                    tracing::warn!(error=%e, thread_ts=%input.thread_ts, repo=%input.repo,
+                        "qa agent spawn failed");
+                    if let Err(pe) = ctx
+                        .slack
+                        .post_ephemeral(
+                            &input.channel,
+                            &input.user,
+                            Some(&input.thread_ts),
+                            "エージェントの起動に失敗しました。ログを確認してください。",
+                        )
+                        .await
+                    {
+                        tracing::warn!(error=%pe, "failed to post spawn-failure notice");
+                    }
+                    return Ok(AnswerOutcome::SpawnFailed(e.to_string()));
+                }
             };
             // Send the question once the agent is up.
             ctx.adapter.send(&res.terminal_id, &input.question).await?;
