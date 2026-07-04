@@ -667,3 +667,68 @@ async fn dm_only_skips_ephemeral_and_sends_dm_even_when_copy_disabled() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn dm_only_dm_failure_surfaces_as_pipeline_error() {
+    // dm_only の DM は唯一の回答経路 — その失敗を warn で握って Posted を
+    // 返すと「成功したのに誰にも届いていない」状態になる。Err で表面化する。
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let clock = Arc::new(SystemClock);
+
+    let adapter = Arc::new(MockAdapter::new());
+    adapter.set_spawn_response(SpawnRes {
+        agent_id: "agent_e2e_sm3".into(),
+        terminal_id: "term_e2e_sm3".into(),
+        worktree_path: "/tmp/wt".into(),
+    });
+    adapter.set_read_response(ReadRes {
+        revision: 1,
+        text: "<answer>OK</answer><<TOTSUKA_DONE>>".into(),
+        is_newer: true,
+    });
+
+    let slack = Arc::new(MockSlackClient::new());
+    slack.set_fail_open_dm(true); // im:write 未付与相当 — DM が開けない
+    let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
+    let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
+
+    let ctx = AnswerCtx {
+        adapter: adapter.clone() as Arc<dyn AdapterClient>,
+        slack: slack.clone() as Arc<dyn SlackClient>,
+        thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
+        clock: clock.clone(),
+        answer_cfg: answer_cfg(),
+        system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
+    };
+    let input = AnswerInput {
+        channel: "C_PRIVATE".into(),
+        user: "U_ME".into(),
+        author: "U_COLLEAGUE".into(),
+        thread_ts: thread_ts.clone(),
+        question: "where is auth?".into(),
+        repo: "acme/api".into(),
+        mode: AnswerMode::Delegated,
+        dm_only: true,
+    };
+    let err = handle_answer(&ctx, input).await.unwrap_err();
+    assert!(err.to_string().contains("missing_scope"), "got: {err}");
+
+    // 誰にも何も届いていないことが Err と整合している。
+    assert!(slack.posts().is_empty(), "no DM must have been posted");
+    assert!(
+        slack.ephemerals().is_empty(),
+        "dm_only never posts ephemeral"
+    );
+
+    sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+}

@@ -291,6 +291,12 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 )
                 .await
                 {
+                    if input.dm_only {
+                        // DM is the sole answer channel here — losing it means
+                        // the asker got nothing, so surface the failure instead
+                        // of claiming Posted.
+                        return Err(e);
+                    }
                     tracing::warn!(error=%e, thread_ts=%input.thread_ts, "DM copy failed");
                 }
             }
