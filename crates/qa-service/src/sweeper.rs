@@ -30,8 +30,17 @@ pub async fn run_sweeper(
                 for m in idle {
                     let branch = format!("qa/{}", sanitize(&m.thread_ts));
                     if let Err(e) = adapter.stop(&m.terminal_id, &m.repo, &branch).await {
-                        tracing::warn!(error=%e, thread_ts=%m.thread_ts, "sweeper stop failed");
-                        continue;
+                        // A pane that is already gone must still lose its
+                        // mapping, or the row leaks forever and later
+                        // continuations target a dead terminal. Keep the
+                        // mapping only on errors that may be transient.
+                        let msg = e.to_string();
+                        if !(msg.contains("not_found") || msg.contains("404")) {
+                            tracing::warn!(error=%e, thread_ts=%m.thread_ts, "sweeper stop failed");
+                            continue;
+                        }
+                        tracing::warn!(thread_ts=%m.thread_ts, terminal_id=%m.terminal_id,
+                            "pane already gone; dropping stale mapping");
                     }
                     if let Err(e) = thread_map.delete(&m.thread_ts).await {
                         tracing::warn!(error=%e, thread_ts=%m.thread_ts, "sweeper delete failed");

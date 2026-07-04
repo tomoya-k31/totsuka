@@ -37,6 +37,7 @@ pub fn router(state: AppState) -> Router {
         ))
 }
 
+pub mod list;
 pub mod output;
 pub mod reload;
 pub mod send;
@@ -48,7 +49,7 @@ pub mod stop;
 pub fn with_v1_routes(r: Router, state: AppState) -> Router {
     use axum::routing::{delete, get, post};
     let stateful = Router::new()
-        .route("/agents", post(spawn::spawn))
+        .route("/agents", post(spawn::spawn).get(list::list))
         .route("/agents/:id", delete(stop::stop))
         .route("/agents/:id/messages", post(send::send))
         .route("/agents/:id/output", get(output::output))
