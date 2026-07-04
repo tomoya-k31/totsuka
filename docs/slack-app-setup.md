@@ -31,12 +31,21 @@ oauth_config:
       - reactions:read    # reaction_added イベント受信(GitHub issue 起票トリガー)
       - channels:history  # conversations.history / replies + message.channels 受信
       - groups:history    # ↑の private チャンネル版(使わないなら削除可)
+      - channels:join     # conversations.join(self-mention 検知時の lazy join)
+    user:                 # self-mention watch 用(使わないならセクションごと削除可)
+      - channels:history  # あなたが参加する public チャンネルの発言イベント
+      - groups:history    # あなたが参加する private チャンネルの発言イベント
+      - groups:write      # conversations.invite(private への bot 自動招待)
+      - chat:write        # chat.delete(join システムメッセージの自動削除)
 settings:
   event_subscriptions:
     bot_events:
       - message.channels  # public チャンネルの発言(質問トリガー)
       - message.groups    # private チャンネルの発言(使わないなら削除可)
       - reaction_added    # reaction_trigger(既定 "memo")による issue 起票
+    user_events:          # self-mention watch 用: あなたが見える範囲の発言
+      - message.channels
+      - message.groups
   socket_mode_enabled: true
   interactivity:
     is_enabled: false
@@ -61,6 +70,26 @@ UI から手作業で作る場合は、**OAuth & Permissions → Bot Token Scope
 > 再インストールするまで新スコープは有効にならず、該当 API が `missing_scope` で失敗する。
 > 例: `im:write` 未反映の間、qa-service は回答自体は届けるが DM コピーだけを
 > `DM copy failed ... missing_scope` の WARN ログに落とす(best-effort 設計)。
+
+## 3.5 User OAuth Token を取得する(`xoxp-`、self-mention watch を使う場合のみ)
+
+self-mention watch(自分宛メンションのカンペ回答)を使う場合、User トークンが必要になる。
+OAuth リダイレクトフローの実装は不要 — アプリ設定画面からの再インストールだけで発行される:
+
+1. **OAuth & Permissions → User Token Scopes** に `channels:history` / `groups:history` /
+   `groups:write` / `chat:write` を追加(マニフェストから作成した場合は設定済み)
+2. **Event Subscriptions → Subscribe to events on behalf of users** に
+   `message.channels` / `message.groups` を追加(同上)
+3. **Reinstall to Workspace** — 認可画面に「あなたのユーザーとしてのアクセス」が
+   表示されるので許可する。**必ず監視対象ユーザー本人(管理者)のアカウントで操作する**
+   (トークンは認可したユーザーに紐づき、イベントも「そのユーザーが見える範囲」になる)
+4. **OAuth & Permissions** ページ上部に現れた **User OAuth Token**(`xoxp-...`)を
+   `secrets.toml` の `[qa_service] slack_user_token` に設定する
+
+注意:
+- Token Rotation は有効にしない(refresh フロー未実装のため失効するようになる)
+- xoxp はあなたの閲覧権限そのもの。`secrets.toml`(0600)か `op://` 参照で管理する
+- アプリを再認可すると xoxp は再発行される — その際は secrets.toml も更新する
 
 ## 4. secrets.toml に設定する
 
@@ -96,10 +125,27 @@ allowed_user_ids = ["U08XXXXXXXX"]   # 質問を受け付けるユーザー(必�
 catchup_channels = ["C0XXXXXXXXX"]   # 起動時 catch-up で遡るチャンネル(任意)
 reaction_trigger = "memo"            # このリアクションで GitHub issue 起票
 default_mode     = "delegated"       # auto(公開回答)| delegated(エフェメラル+DM コピー)
+self_mention_user_id  = "U08XXXXXXXX"    # 自分宛メンション監視 (空 = 無効)。同僚があなたをメンションすると本人だけに見えるカンペ回答が届く
 ```
 
 - **ユーザー ID の調べ方**: Slack でプロフィールを開く → `⋮` → 「メンバー ID をコピー」
 - ボット自身のユーザー ID は設定不要(起動時に `auth.test` で自動解決)
+
+### self-mention watch の挙動
+
+`self_mention_user_id` を設定すると、**bot がチャンネルに参加していなくても**、あなたが
+参加している全チャンネルのあなた宛メンションを検知して回答を用意する(User トークンの
+イベント購読による。事前の `/invite` 行脚は不要):
+
+1. 同僚が `@あなた <質問>` を投稿 → 検知
+2. bot がそのチャンネルへ自動参加(public: self-join / private: あなた名義で自動招待。
+   `slack_user_token` 未設定なら private では参加せず DM のみで回答)
+3. 「参加しました」システムメッセージは best-effort で自動削除(管理者 xoxp の chat.delete。
+   ワークスペースの「メッセージの削除」設定によっては削除できず残る)
+4. 回答は **あなたにだけ**届く: スレッド内エフェメラル(質問者名付き)+ Bot DM の永続コピー
+
+制約: bot はチャンネルのメンバー一覧には表示される(完全に隠す手段はない)。
+回答は `default_mode` にかかわらず常に delegated(非公開)。
 
 ## 7. 動作確認
 
@@ -127,3 +173,6 @@ default_mode     = "delegated"       # auto(公開回答)| delegated(エフェ�
 | リアクションで issue が起票されない | `reactions:read`(イベント)/ `reaction_added` 購読漏れ |
 | 受付リアクションが付かない | `reactions:write` なし |
 | catch-up がチャンネルを読めない | `channels:history`(private は `groups:history`)なし |
+| 自分宛メンションに反応しない | `self_mention_user_id` 未設定 / user events(`message.channels` 等)未購読 / 再インストール・ユーザー認可漏れ |
+| private で回答が DM だけになる | `slack_user_token` 未設定、または user scope `groups:write` なし |
+| 「参加しました」メッセージが残る | user scope `chat:write` なし / ワークスペース設定で管理者のメッセージ削除が不許可(best-effort のため残置は仕様内) |
