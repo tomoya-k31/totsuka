@@ -274,6 +274,7 @@ async fn main() -> anyhow::Result<()> {
                                     tracing::warn!(error=%e, "reaction handler failed");
                                 }
                             }
+                            SlackEvent::BotJoined { .. } => {}
                             SlackEvent::Other => {}
                         }
                     }

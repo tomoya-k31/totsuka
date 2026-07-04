@@ -30,6 +30,13 @@ pub enum SlackEvent {
         event_ts: String,
         event_id: String,
     },
+    /// subtype=channel_join の system message。join メッセージの best-effort
+    /// 削除に使う。user が bot かどうかは dispatch 側で判定する。
+    BotJoined {
+        channel: String,
+        ts: String,
+        user: String,
+    },
     Other,
 }
 
@@ -58,6 +65,13 @@ fn parse_event(ev: &Value, payload: &Value) -> Result<SlackEvent, QaError> {
     let event_id = payload["event_id"].as_str().unwrap_or("").to_string();
     match ev["type"].as_str() {
         Some("message") => {
+            if ev["subtype"].as_str() == Some("channel_join") {
+                return Ok(SlackEvent::BotJoined {
+                    channel: ev["channel"].as_str().unwrap_or("").to_string(),
+                    ts: ev["ts"].as_str().unwrap_or("").to_string(),
+                    user: ev["user"].as_str().unwrap_or("").to_string(),
+                });
+            }
             // Ignore bot messages, message_changed/deleted subtypes — only top-level
             // user messages reach the question pipeline.
             if ev["subtype"].is_string() || ev["bot_id"].is_string() {
