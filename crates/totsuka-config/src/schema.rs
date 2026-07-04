@@ -390,7 +390,9 @@ pub struct AnswerSection {
 }
 
 fn d_claude_argv() -> Vec<String> {
-    vec!["claude".into()]
+    // QA answers are read-only work: boot claude in plan mode so the agent
+    // cannot edit the worktree.
+    vec!["claude".into(), "--permission-mode".into(), "plan".into()]
 }
 fn d_sentinel() -> String {
     "<<TOTSUKA_DONE>>".into()
@@ -587,7 +589,11 @@ model="claude-haiku-4-5-20251001"
         let c = Config::from_toml_str(MIN_TOML).expect("parse");
         assert_eq!(c.totsuka.timezone, "Asia/Tokyo"); // default applied
         assert_eq!(c.bus.batch_size, 16); // default applied
-        assert_eq!(c.qa_service.answer.claude_argv, vec!["claude"]); // default applied
+                                          // QA answer agent boots read-only: plan mode by default
+        assert_eq!(
+            c.qa_service.answer.claude_argv,
+            vec!["claude", "--permission-mode", "plan"]
+        );
         assert_eq!(c.github.columns.len(), 8);
         assert_eq!(
             c.github.columns.get(&ColumnId::Design).unwrap(),

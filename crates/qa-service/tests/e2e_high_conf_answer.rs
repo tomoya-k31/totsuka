@@ -105,6 +105,66 @@ async fn high_conf_answer_spawns_polls_extracts_posts() {
 }
 
 #[tokio::test]
+async fn delegated_answer_is_ephemeral_with_mention() {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let clock = Arc::new(SystemClock);
+
+    let adapter = Arc::new(MockAdapter::new());
+    adapter.set_spawn_response(SpawnRes {
+        agent_id: "agent_e2e_d1".into(),
+        terminal_id: "term_e2e_d1".into(),
+        worktree_path: "/tmp/wt".into(),
+    });
+    adapter.set_read_response(ReadRes {
+        revision: 1,
+        text: "<answer>OK</answer><<TOTSUKA_DONE>>".into(),
+        is_newer: true,
+    });
+
+    let slack = Arc::new(MockSlackClient::new());
+    let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
+
+    let ctx = AnswerCtx {
+        adapter: adapter.clone() as Arc<dyn AdapterClient>,
+        slack: slack.clone() as Arc<dyn SlackClient>,
+        thread_map: thread_map.clone(),
+        clock: clock.clone(),
+        answer_cfg: answer_cfg(),
+        system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
+    };
+    let input = AnswerInput {
+        channel: "C1".into(),
+        user: "U1".into(),
+        thread_ts: thread_ts.clone(),
+        question: "where is auth?".into(),
+        repo: "acme/api".into(),
+        mode: AnswerMode::Delegated,
+    };
+    handle_answer(&ctx, input).await.unwrap();
+
+    // Delegated answers arrive as an in-thread ephemeral addressed to the
+    // asker via a leading mention.
+    let ephemerals = slack.ephemerals();
+    assert_eq!(ephemerals.len(), 1);
+    assert_eq!(ephemerals[0].0, "C1");
+    assert_eq!(ephemerals[0].1, "U1");
+    assert_eq!(ephemerals[0].2.as_deref(), Some(thread_ts.as_str()));
+    assert_eq!(ephemerals[0].3, "<@U1> OK");
+    assert!(slack.posts().is_empty(), "delegated must not post publicly");
+
+    sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn spawn_failure_notifies_user_ephemerally() {
     let Some(db) = totsuka_testkit::ephemeral_db().await else {
         eprintln!("DATABASE_URL not set, skipping");
