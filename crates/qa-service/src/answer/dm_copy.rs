@@ -13,8 +13,9 @@ pub fn build_dm_text(question: &str, permalink: Option<&str>, answer: &str) -> S
     // 改行・連続空白を単一スペースに潰してから chars ベースで切る
     // (バイト境界 slice は日本語質問で panic する)。
     let flat = question.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut excerpt: String = flat.chars().take(QUESTION_EXCERPT_CHARS).collect();
-    if flat.chars().count() > QUESTION_EXCERPT_CHARS {
+    let mut chars = flat.chars();
+    let mut excerpt: String = chars.by_ref().take(QUESTION_EXCERPT_CHARS).collect();
+    if chars.next().is_some() {
         excerpt.push('…');
     }
     let mut out = format!("💬 *質問:* 「{excerpt}」\n");
