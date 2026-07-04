@@ -54,6 +54,10 @@ pub struct AnswerCtx {
 pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<AnswerOutcome, QaError> {
     // 1. Resolve or spawn the agent.
     let existing = ctx.thread_map.get(&input.thread_ts).await?;
+    // Self-heal respawn must not flip the thread's origin: a thread a
+    // colleague started stays "self_mention" even if the owner later
+    // bot-mentions in it after the pane died (origin gates continuation).
+    let prior_origin = existing.as_ref().map(|m| m.origin.clone());
     let mut resolved: Option<(String, String)> = None;
     if let Some(m) = existing {
         // The reused pane still shows the previous turn's answer
@@ -184,11 +188,14 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                     terminal_id: res.terminal_id.clone(),
                     repo: input.repo.clone(),
                     // 由来を固定: author != user は self-mention フロー(カンペ)。
-                    origin: if input.author != input.user {
-                        "self_mention".into()
-                    } else {
-                        "owner".into()
-                    },
+                    // 既存マッピングがあった(self-heal 再スポーン)なら由来を引き継ぐ。
+                    origin: prior_origin.unwrap_or_else(|| {
+                        if input.author != input.user {
+                            "self_mention".into()
+                        } else {
+                            "owner".into()
+                        }
+                    }),
                     last_activity_at: now,
                     created_at: now,
                 })
