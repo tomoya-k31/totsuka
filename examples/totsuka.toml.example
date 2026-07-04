@@ -144,6 +144,8 @@ reaction_trigger      = "memo"
 default_mode          = "delegated"      # auto | delegated
 adapter_uds           = "${agent_adapter.uds_path}"
 repo_select_mode      = "llm_classify"   # llm_classify (既定) | channel_map (将来)
+self_mention_user_id  = ""               # 自分宛メンション監視の対象ユーザー ID (空 = 無効)。回答は本人だけに見える
+# slack_user_token は secrets.toml の [qa_service] に置く (xoxp-、private への bot 招待と join メッセージ削除に使用)
 
 [qa_service.classifier]                              # 詳細 §8.4
 # provider: anthropic | openai | openrouter | litellm | openai_compatible

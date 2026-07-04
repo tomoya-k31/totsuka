@@ -164,3 +164,11 @@ fn dm_copy_enabled_defaults_true() {
     let cfg = Config::from_toml_str(&toml).expect("parse");
     assert!(cfg.qa_service.answer.dm_copy_enabled);
 }
+
+#[test]
+fn self_mention_defaults_disabled() {
+    let toml = render("/tmp/sock/a.sock", "/tmp/sock/o.sock", "");
+    let cfg = Config::from_toml_str(&toml).expect("parse");
+    assert_eq!(cfg.qa_service.self_mention_user_id, "");
+    assert!(cfg.qa_service.slack_user_token.expose().is_empty());
+}
