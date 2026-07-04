@@ -43,21 +43,35 @@ pub struct AnswerCtx {
 pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<AnswerOutcome, QaError> {
     // 1. Resolve or spawn the agent.
     let existing = ctx.thread_map.get(&input.thread_ts).await?;
-    let (agent_id, baseline) = match existing {
-        Some(m) => {
-            // The reused pane still shows the previous turn's answer
-            // (including its sentinel). Capture a baseline BEFORE sending so
-            // the poll below can tell a fresh answer from the stale one.
-            let baseline = ctx
-                .adapter
-                .read(&m.terminal_id, 0)
-                .await
-                .map(|s| s.text)
-                .unwrap_or_default();
-            ctx.adapter.send(&m.terminal_id, &input.question).await?;
-            ctx.thread_map.touch(&input.thread_ts).await?;
-            (m.terminal_id, baseline)
+    let mut resolved: Option<(String, String)> = None;
+    if let Some(m) = existing {
+        // The reused pane still shows the previous turn's answer
+        // (including its sentinel). Capture a baseline BEFORE sending so
+        // the poll below can tell a fresh answer from the stale one.
+        let baseline = ctx
+            .adapter
+            .read(&m.terminal_id, 0)
+            .await
+            .map(|s| s.text)
+            .unwrap_or_default();
+        match ctx.adapter.send(&m.terminal_id, &input.question).await {
+            Ok(()) => {
+                ctx.thread_map.touch(&input.thread_ts).await?;
+                resolved = Some((m.terminal_id, baseline));
+            }
+            Err(e) => {
+                // The mapped terminal is gone (herdr restart, manual pane
+                // close, sweeper race, …). Drop the stale mapping and fall
+                // through to a fresh spawn instead of failing the question.
+                tracing::warn!(error=%e, thread_ts=%input.thread_ts,
+                    terminal_id=%m.terminal_id,
+                    "continuation send failed; respawning a fresh agent");
+                ctx.thread_map.delete(&input.thread_ts).await?;
+            }
         }
+    }
+    let (agent_id, baseline) = match resolved {
+        Some(v) => v,
         None => {
             // herdr executes argv[0] as the program. Instructions ride
             // --append-system-prompt and the question is the positional

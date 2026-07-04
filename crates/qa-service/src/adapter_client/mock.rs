@@ -16,6 +16,8 @@ struct MockState {
     sends: Vec<(String, String)>,
     stops: Vec<(String, String, String)>,
     spawns: Vec<SpawnReq>,
+    send_failure: Option<String>,
+    stop_failure: Option<String>,
 }
 
 pub struct MockAdapter {
@@ -47,6 +49,16 @@ impl MockAdapter {
         self.state.lock().unwrap().read_sequence = rs.into();
     }
 
+    /// Make every `send` fail with this message (still recorded in `sends`).
+    pub fn set_send_failure(&self, msg: &str) {
+        self.state.lock().unwrap().send_failure = Some(msg.into());
+    }
+
+    /// Make every `stop` fail with this message (still recorded in `stops`).
+    pub fn set_stop_failure(&self, msg: &str) {
+        self.state.lock().unwrap().stop_failure = Some(msg.into());
+    }
+
     pub fn set_list_response(&self, r: Vec<AgentSummary>) {
         self.state.lock().unwrap().list_response = r;
     }
@@ -75,11 +87,11 @@ impl AdapterClient for MockAdapter {
     }
 
     async fn send(&self, agent_id: &str, text: &str) -> Result<(), QaError> {
-        self.state
-            .lock()
-            .unwrap()
-            .sends
-            .push((agent_id.into(), text.into()));
+        let mut s = self.state.lock().unwrap();
+        s.sends.push((agent_id.into(), text.into()));
+        if let Some(msg) = &s.send_failure {
+            return Err(QaError::Adapter(msg.clone()));
+        }
         Ok(())
     }
 
@@ -97,11 +109,11 @@ impl AdapterClient for MockAdapter {
     }
 
     async fn stop(&self, agent_id: &str, repo: &str, branch: &str) -> Result<(), QaError> {
-        self.state
-            .lock()
-            .unwrap()
-            .stops
-            .push((agent_id.into(), repo.into(), branch.into()));
+        let mut s = self.state.lock().unwrap();
+        s.stops.push((agent_id.into(), repo.into(), branch.into()));
+        if let Some(msg) = &s.stop_failure {
+            return Err(QaError::Adapter(msg.clone()));
+        }
         Ok(())
     }
 

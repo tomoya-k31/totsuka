@@ -764,3 +764,45 @@ async fn apply_reload_reports_added_repos() {
     assert_eq!(report.added, vec![RepoKey::new("x/b".into())]);
     assert!(report.removed.is_empty());
 }
+
+#[tokio::test]
+async fn get_agents_lists_live_agents_for_recovery() {
+    use agent_adapter::herdr::{HerdrClient, SpawnRequest};
+
+    let herdr = Arc::new(MockHerdr::new());
+    let spawned = herdr
+        .start(SpawnRequest {
+            cwd: "/w".into(),
+            argv: vec!["claude".into()],
+            env: HashMap::new(),
+            label: "totsuka:qa-1:answer:0".into(),
+        })
+        .await
+        .unwrap();
+    let state = AppState {
+        herdr,
+        repos: Arc::new(RepoRegistry::new()),
+        worktrees: Arc::new(WorktreeManager::new()),
+        clock: Arc::new(SystemClock),
+        health: HealthState::new(),
+    };
+    let res = router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/agents")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let arr = v.as_array().expect("json array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["agent_id"], spawned.agent_id.as_str());
+    assert_eq!(arr[0]["label"], "totsuka:qa-1:answer:0");
+    assert!(arr[0]["terminal_id"].is_string());
+}
