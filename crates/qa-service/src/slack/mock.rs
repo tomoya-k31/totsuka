@@ -17,6 +17,12 @@ struct MockState {
     next_post_ts: u64,
     fail_open_dm: bool,
     fail_permalink: bool,
+    joins: Vec<String>,
+    invites: Vec<(String, String)>,
+    deletes: Vec<(String, String)>,
+    fail_join: bool,
+    fail_invite: bool,
+    fail_delete: bool,
 }
 
 pub struct MockSlackClient {
@@ -67,6 +73,24 @@ impl MockSlackClient {
     }
     pub fn set_fail_permalink(&self, fail: bool) {
         self.state.lock().unwrap().fail_permalink = fail;
+    }
+    pub fn joins(&self) -> Vec<String> {
+        self.state.lock().unwrap().joins.clone()
+    }
+    pub fn invites(&self) -> Vec<(String, String)> {
+        self.state.lock().unwrap().invites.clone()
+    }
+    pub fn deletes(&self) -> Vec<(String, String)> {
+        self.state.lock().unwrap().deletes.clone()
+    }
+    pub fn set_fail_join(&self, fail: bool) {
+        self.state.lock().unwrap().fail_join = fail;
+    }
+    pub fn set_fail_invite(&self, fail: bool) {
+        self.state.lock().unwrap().fail_invite = fail;
+    }
+    pub fn set_fail_delete(&self, fail: bool) {
+        self.state.lock().unwrap().fail_delete = fail;
     }
 }
 
@@ -155,6 +179,36 @@ impl SlackClient for MockSlackClient {
             message_ts.replace('.', "")
         ))
     }
+
+    async fn join_channel(&self, channel: &str) -> Result<(), QaError> {
+        let mut s = self.state.lock().unwrap();
+        if s.fail_join {
+            return Err(QaError::Slack(
+                "conversations.join: method_not_supported_for_channel_type".into(),
+            ));
+        }
+        s.joins.push(channel.into());
+        Ok(())
+    }
+
+    async fn invite_users(&self, channel: &str, users: &str) -> Result<(), QaError> {
+        let mut s = self.state.lock().unwrap();
+        if s.fail_invite {
+            return Err(QaError::Slack("conversations.invite: missing_scope".into()));
+        }
+        s.invites.push((channel.into(), users.into()));
+        Ok(())
+    }
+
+    async fn delete_message(&self, channel: &str, ts: &str) -> Result<(), QaError> {
+        let mut s = self.state.lock().unwrap();
+        if s.fail_delete {
+            return Err(QaError::Slack("chat.delete: cant_delete_message".into()));
+        }
+        s.deletes.push((channel.into(), ts.into()));
+        Ok(())
+    }
+
     async fn bot_user_id(&self) -> Result<String, QaError> {
         Ok("UBOTMOCK".into())
     }

@@ -130,3 +130,49 @@ async fn permalink_returns_url() {
         "https://x.slack.com/archives/C1/p123"
     );
 }
+
+#[tokio::test]
+async fn join_channel_ok() {
+    let addr = one_shot_stub(r#"{"ok":true,"channel":{"id":"C1"}}"#).await;
+    let c = HttpSlackClient::new(
+        Secret::new("xoxb-test".into()),
+        Some(format!("http://{addr}/api")),
+    );
+    c.join_channel("C1").await.unwrap();
+}
+
+#[tokio::test]
+async fn join_channel_errors_on_private() {
+    let addr =
+        one_shot_stub(r#"{"ok":false,"error":"method_not_supported_for_channel_type"}"#).await;
+    let c = HttpSlackClient::new(
+        Secret::new("xoxb-test".into()),
+        Some(format!("http://{addr}/api")),
+    );
+    let s = c.join_channel("C1").await.unwrap_err().to_string();
+    assert!(
+        s.contains("method_not_supported_for_channel_type"),
+        "got: {s}"
+    );
+}
+
+#[tokio::test]
+async fn invite_users_treats_already_in_channel_as_ok() {
+    let addr = one_shot_stub(r#"{"ok":false,"error":"already_in_channel"}"#).await;
+    let c = HttpSlackClient::new(
+        Secret::new("xoxp-test".into()),
+        Some(format!("http://{addr}/api")),
+    );
+    c.invite_users("C1", "UBOT").await.unwrap();
+}
+
+#[tokio::test]
+async fn delete_message_errors_on_cant_delete() {
+    let addr = one_shot_stub(r#"{"ok":false,"error":"cant_delete_message"}"#).await;
+    let c = HttpSlackClient::new(
+        Secret::new("xoxp-test".into()),
+        Some(format!("http://{addr}/api")),
+    );
+    let s = c.delete_message("C1", "1.2").await.unwrap_err().to_string();
+    assert!(s.contains("cant_delete_message"), "got: {s}");
+}
