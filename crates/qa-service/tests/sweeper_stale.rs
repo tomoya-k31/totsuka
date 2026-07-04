@@ -21,7 +21,7 @@ async fn sweeper_drops_mapping_when_pane_already_gone() {
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
 
     let adapter = Arc::new(MockAdapter::new());
-    adapter.set_stop_failure("adapter: 404 /v1/agents/term_gone: agent_not_found");
+    adapter.set_stop_failure("404 /v1/agents/term_gone: {\"title\":\"not_found\"}");
 
     // Idle far beyond the TTL.
     let stale_at = Utc::now() - ChronoDuration::hours(2);

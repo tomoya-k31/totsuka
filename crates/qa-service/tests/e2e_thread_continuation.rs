@@ -124,7 +124,9 @@ async fn dead_terminal_heals_by_respawning_fresh_agent() {
     let clock = Arc::new(SystemClock);
 
     let adapter = Arc::new(MockAdapter::new());
-    adapter.set_send_failure("adapter: 503 /v1/agents/term_dead/messages: agent_not_found");
+    adapter.set_send_failure(
+        "503 /v1/agents/term_dead/messages: {\"detail\":\"agent_not_found term_dead\"}",
+    );
     adapter.set_spawn_response(qa_service::adapter_client::SpawnRes {
         agent_id: "agent_fresh".into(),
         terminal_id: "term_fresh".into(),
@@ -208,7 +210,9 @@ async fn transient_send_error_keeps_mapping_and_does_not_respawn() {
     let clock = Arc::new(SystemClock);
 
     let adapter = Arc::new(MockAdapter::new());
-    adapter.set_send_failure("adapter: 503 /v1/agents/term_alive/messages: herdr unavailable");
+    adapter.set_send_failure(
+        "503 /v1/agents/term_alive/messages: {\"detail\":\"herdr unavailable: connect\"}",
+    );
     adapter.set_read_response(ReadRes {
         revision: 0,
         text: "<answer>previous turn</answer><<TOTSUKA_DONE>>".into(),

@@ -34,8 +34,7 @@ pub async fn run_sweeper(
                         // mapping, or the row leaks forever and later
                         // continuations target a dead terminal. Keep the
                         // mapping only on errors that may be transient.
-                        let msg = e.to_string();
-                        if !(msg.contains("not_found") || msg.contains("404")) {
+                        if !crate::adapter_client::is_agent_gone(&e) {
                             tracing::warn!(error=%e, thread_ts=%m.thread_ts, "sweeper stop failed");
                             continue;
                         }

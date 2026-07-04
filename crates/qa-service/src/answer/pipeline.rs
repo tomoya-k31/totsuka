@@ -64,8 +64,7 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 // (herdr restart, manual pane close, sweeper race). On
                 // transient errors keep the mapping — the pane may be alive
                 // and holds the thread's conversation context.
-                let msg = e.to_string();
-                if !(msg.contains("not_found") || msg.contains("404")) {
+                if !crate::adapter_client::is_agent_gone(&e) {
                     return Err(e);
                 }
                 tracing::warn!(error=%e, thread_ts=%input.thread_ts,
