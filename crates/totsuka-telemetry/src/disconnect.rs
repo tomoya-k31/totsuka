@@ -9,9 +9,9 @@
 use std::error::Error;
 use std::io::ErrorKind;
 
-/// True when the error chain bottoms out in an I/O error that just means
-/// "the peer already hung up": NotConnected / BrokenPipe / ConnectionReset /
-/// ConnectionAborted.
+/// True when the error chain contains an I/O error (first one found wins)
+/// that just means "the peer already hung up": NotConnected / BrokenPipe /
+/// ConnectionReset / ConnectionAborted.
 pub fn is_benign_disconnect(e: &(dyn Error + 'static)) -> bool {
     let mut cur: Option<&(dyn Error + 'static)> = Some(e);
     while let Some(err) = cur {
