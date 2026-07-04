@@ -117,6 +117,65 @@ async fn high_conf_answer_spawns_polls_extracts_posts() {
 }
 
 #[tokio::test]
+async fn answer_extracted_even_when_revision_stays_zero() {
+    // Real herdr returns revision:0 on every `visible` read — change
+    // detection must key on pane text, not on the revision counter.
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let clock = Arc::new(SystemClock);
+
+    let adapter = Arc::new(MockAdapter::new());
+    adapter.set_spawn_response(SpawnRes {
+        agent_id: "agent_e2e_r0".into(),
+        terminal_id: "term_e2e_r0".into(),
+        worktree_path: "/tmp/wt".into(),
+    });
+    adapter.set_read_response(ReadRes {
+        revision: 0,
+        text: "<answer>OK</answer><<TOTSUKA_DONE>>".into(),
+        is_newer: false,
+    });
+
+    let slack = Arc::new(MockSlackClient::new());
+    let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
+
+    let ctx = AnswerCtx {
+        adapter: adapter.clone() as Arc<dyn AdapterClient>,
+        slack: slack.clone() as Arc<dyn SlackClient>,
+        thread_map: thread_map.clone(),
+        clock: clock.clone(),
+        answer_cfg: answer_cfg(),
+        system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
+    };
+    let input = AnswerInput {
+        channel: "C1".into(),
+        user: "U1".into(),
+        thread_ts: thread_ts.clone(),
+        question: "where is auth?".into(),
+        repo: "acme/api".into(),
+        mode: AnswerMode::Auto,
+    };
+    let outcome = handle_answer(&ctx, input).await.unwrap();
+    assert!(matches!(
+        outcome,
+        qa_service::answer::pipeline::AnswerOutcome::Posted { .. }
+    ));
+    let posts = slack.posts();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].2, "OK");
+
+    sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
+        .bind(&thread_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn delegated_answer_is_ephemeral_with_mention() {
     let Some(db) = totsuka_testkit::ephemeral_db().await else {
         eprintln!("DATABASE_URL not set, skipping");
