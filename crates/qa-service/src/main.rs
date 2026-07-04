@@ -176,8 +176,11 @@ async fn main() -> anyhow::Result<()> {
         let bot_user_id = bot_user_id.clone();
         let s = shutdown.clone();
         tokio::spawn(async move {
-            let filter =
-                QuestionFilter::new(config.qa_service.allowed_user_ids.clone(), bot_user_id);
+            let filter = QuestionFilter::new(
+                config.qa_service.allowed_user_ids.clone(),
+                bot_user_id,
+                config.qa_service.self_mention_user_id.clone(),
+            );
             // The `[agent_adapter.repos.HASH_KEY]` map key IS the `owner/repo`
             // string used by both the classifier and the adapter's spawn call —
             // NOT `RepoSection.repo_path` (which is a local filesystem path).
