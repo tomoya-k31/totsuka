@@ -74,3 +74,24 @@ async fn history_returns_parsed_messages() {
     assert_eq!(msgs[0].text, "hello");
     assert_eq!(msgs[1].thread_ts.as_deref(), Some("17500000001.000100"));
 }
+
+#[tokio::test]
+async fn bot_user_id_returns_user_id_on_ok() {
+    let addr = one_shot_stub(r#"{"ok":true,"user_id":"U0BOT"}"#).await;
+    let c = HttpSlackClient::new(
+        Secret::new("xoxb-test".into()),
+        Some(format!("http://{addr}/api")),
+    );
+    assert_eq!(c.bot_user_id().await.unwrap(), "U0BOT");
+}
+
+#[tokio::test]
+async fn bot_user_id_errors_on_not_ok() {
+    let addr = one_shot_stub(r#"{"ok":false,"error":"invalid_auth"}"#).await;
+    let c = HttpSlackClient::new(
+        Secret::new("xoxb-test".into()),
+        Some(format!("http://{addr}/api")),
+    );
+    let s = c.bot_user_id().await.unwrap_err().to_string();
+    assert!(s.contains("invalid_auth"), "got: {s}");
+}

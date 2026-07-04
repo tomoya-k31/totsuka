@@ -51,4 +51,8 @@ pub trait SlackClient: Send + Sync + 'static {
     async fn replies(&self, channel: &str, thread_ts: &str) -> Result<Vec<SlackMessage>, QaError>;
 
     async fn add_reaction(&self, channel: &str, ts: &str, name: &str) -> Result<(), QaError>;
+
+    /// Resolve the bot's own user id (`auth.test`). Called once at startup;
+    /// mention detection depends on it, so failure should abort boot.
+    async fn bot_user_id(&self) -> Result<String, QaError>;
 }
