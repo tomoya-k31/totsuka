@@ -234,16 +234,16 @@ fn default_impl_verify_prompt() -> String {
      4. CI 監視: `gh pr checks --watch` で CI を監視し、fail なら原因を修正して push し、\
      全チェックが green になるまで繰り返してください。\n\
      5. レビュー対応: CI green 後、10 分間を待機窓として 1〜2 分間隔でレビュー\
-     (未解決レビュースレッド・PR コメント)をポーリングしてください。新規の指摘が\
-     来たら返信・修正 push を行い(CI が再び green になることを確認)、待機窓を\
+     （未解決レビュースレッド・PR コメント）をポーリングしてください。新規の指摘が\
+     来たら返信・修正 push を行い（CI が再び green になることを確認）、待機窓を\
      仕切り直してください。10 分間新着がなく未解決スレッドが 0 になったら完了です。\n\
-     6. 完了後: GitHub Project {project_number}(owner: {project_owner})の\
-     このカード(item ID: {task_id})の Status を「🚧 最終レビュー」に\
-     `gh project item-edit` で変更してください(field/option の ID は\
-     `gh project field-list {project_number} --owner {project_owner}` で確認できます)。\n\
+     6. 完了後: GitHub Project {project_number}（owner: {project_owner}）の\
+     このカード（item ID: {task_id}）の Status を「🚧 最終レビュー」に\
+     `gh project item-edit` で変更してください（field/option の ID は\
+     `gh project field-list {project_number} --owner {project_owner}` で確認できます）。\n\
      エスカレーション: 修正を繰り返しても CI が通らない・指摘に対応しきれない場合は、\
      カードの Status は変更せず、状況を PR コメントで報告して終了してください\
-     (PR 作成前に失敗した場合のみ issue #{issue_number} へのコメントで報告)。"
+     （PR 作成前に失敗した場合のみ issue #{issue_number} へのコメントで報告）。"
         .to_string()
 }
 
