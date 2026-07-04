@@ -7,6 +7,7 @@ Slack アプリを 1 つ作成し、2 種類のトークンを `~/.config/totsuk
 |---|---|---|---|
 | App-Level Token | `xapp-` | Socket Mode の WebSocket 接続 | `[qa_service] slack_app_token` |
 | Bot User OAuth Token | `xoxb-` | Web API 呼び出し(投稿・DM・リアクション等) | `[qa_service] slack_bot_token` |
+| User OAuth Token | `xoxp-` | 任意: self-mention watch(§3.5)。private への bot 招待と join メッセージ削除 | `[qa_service] slack_user_token` |
 
 ## 1. アプリを作成する(マニフェスト推奨)
 
@@ -99,6 +100,8 @@ OAuth リダイレクトフローの実装は不要 — アプリ設定画面か
 [qa_service]
 slack_app_token = "xapp-1-..."
 slack_bot_token = "xoxb-..."
+# self-mention watch を使う場合のみ(§3.5。未設定なら private への招待・join メッセージ削除は無効)
+slack_user_token = "xoxp-..."
 ```
 
 平文の代わりに 1Password Secret Reference(`op://vault/item/field`)も使える。
