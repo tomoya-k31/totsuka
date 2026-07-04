@@ -87,3 +87,47 @@ pub(crate) struct WireSpawn<'a> {
     pub env: HashMap<&'a str, &'a str>,
     pub detached: bool,
 }
+
+/// True when an adapter error means the target agent no longer exists:
+/// an explicit `404` from the adapter, or herdr reporting `agent_not_found`
+/// (which the send/read handlers surface as `503 herdr_unavailable`).
+/// Scoped to `QaError::Adapter` so unrelated variants can never match —
+/// `HyperlocalAdapter` formats these messages as `"{status} {path}: {body}"`.
+pub fn is_agent_gone(e: &crate::error::QaError) -> bool {
+    match e {
+        crate::error::QaError::Adapter(msg) => msg.starts_with("404 ") || msg.contains("not_found"),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod agent_gone_tests {
+    use super::is_agent_gone;
+    use crate::error::QaError;
+
+    #[test]
+    fn explicit_404_is_gone() {
+        assert!(is_agent_gone(&QaError::Adapter(
+            "404 /v1/agents/t1: not found".into()
+        )));
+    }
+
+    #[test]
+    fn herdr_agent_not_found_via_503_is_gone() {
+        assert!(is_agent_gone(&QaError::Adapter(
+            "503 /v1/agents/t1/messages: {\"detail\":\"agent_not_found t1\"}".into()
+        )));
+    }
+
+    #[test]
+    fn transient_adapter_error_is_not_gone() {
+        assert!(!is_agent_gone(&QaError::Adapter(
+            "503 /v1/agents/t1/messages: herdr unavailable: connect".into()
+        )));
+    }
+
+    #[test]
+    fn non_adapter_variants_never_match() {
+        assert!(!is_agent_gone(&QaError::Slack("channel not_found".into())));
+    }
+}

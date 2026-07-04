@@ -60,12 +60,16 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 resolved = Some((m.terminal_id, baseline));
             }
             Err(e) => {
-                // The mapped terminal is gone (herdr restart, manual pane
-                // close, sweeper race, …). Drop the stale mapping and fall
-                // through to a fresh spawn instead of failing the question.
+                // Self-heal only when the terminal is definitively gone
+                // (herdr restart, manual pane close, sweeper race). On
+                // transient errors keep the mapping — the pane may be alive
+                // and holds the thread's conversation context.
+                if !crate::adapter_client::is_agent_gone(&e) {
+                    return Err(e);
+                }
                 tracing::warn!(error=%e, thread_ts=%input.thread_ts,
                     terminal_id=%m.terminal_id,
-                    "continuation send failed; respawning a fresh agent");
+                    "mapped terminal is gone; respawning a fresh agent");
                 ctx.thread_map.delete(&input.thread_ts).await?;
             }
         }
