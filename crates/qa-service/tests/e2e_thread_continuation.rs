@@ -87,10 +87,12 @@ async fn existing_thread_mapping_sends_no_spawn() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "follow-up question".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Auto,
+        dm_only: false,
     };
     let _ = handle_answer(&ctx, input).await.unwrap();
 
@@ -180,10 +182,12 @@ async fn dead_terminal_heals_by_respawning_fresh_agent() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "second question".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Auto,
+        dm_only: false,
     };
     let _ = handle_answer(&ctx, input).await.unwrap();
 
@@ -254,10 +258,12 @@ async fn transient_send_error_keeps_mapping_and_does_not_respawn() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "second question".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Auto,
+        dm_only: false,
     };
     let err = handle_answer(&ctx, input).await.unwrap_err();
     assert!(err.to_string().contains("herdr unavailable"), "got: {err}");
@@ -323,10 +329,12 @@ async fn continuation_never_reposts_previous_turns_answer() {
     let input = AnswerInput {
         channel: "C1".into(),
         user: "U1".into(),
+        author: "U1".into(),
         thread_ts: thread_ts.clone(),
         question: "second question".into(),
         repo: "acme/api".into(),
         mode: AnswerMode::Auto,
+        dm_only: false,
     };
     let _ = handle_answer(&ctx, input).await.unwrap();
 

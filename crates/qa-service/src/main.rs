@@ -257,6 +257,8 @@ async fn main() -> anyhow::Result<()> {
                                 let input = AnswerInput {
                                     channel: m.channel.clone(),
                                     user: m.user.clone(),
+                                    author: m.user.clone(),
+                                    dm_only: false,
                                     thread_ts: thread_key,
                                     question: m.text.clone(),
                                     repo,

@@ -27,11 +27,17 @@ pub enum AnswerOutcome {
 
 pub struct AnswerInput {
     pub channel: String,
+    /// 回答の宛先(エフェメラル・DM を受け取る人)。
     pub user: String,
+    /// 質問の投稿者。既存フローでは user と同一。SelfMention では同僚。
+    pub author: String,
     pub thread_ts: String,
     pub question: String,
     pub repo: String,
     pub mode: AnswerMode,
+    /// チャンネルに入れなかった(private で invite 失敗等)— エフェメラルを
+    /// スキップし DM を主回答チャネルにする。
+    pub dm_only: bool,
 }
 
 #[derive(Clone)]
@@ -250,21 +256,30 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 .await?
         }
         AnswerMode::Delegated => {
-            // Address the asker explicitly: ephemeral messages carry no
-            // notification badge of their own, so the leading mention is
-            // what makes the answer discoverable in a busy thread.
-            let mention_text = format!("<@{}> {}", input.user, text);
-            ctx.slack
-                .post_ephemeral(
-                    &input.channel,
-                    &input.user,
-                    Some(&input.thread_ts),
-                    &mention_text,
-                )
-                .await?;
+            let from = (input.author != input.user).then_some(input.author.as_str());
+            if !input.dm_only {
+                // Address the asker explicitly: ephemeral messages carry no
+                // notification badge of their own, so the leading mention is
+                // what makes the answer discoverable in a busy thread.
+                let mention_text = match from {
+                    Some(a) => {
+                        format!("<@{}> *<@{}> からの質問への回答:*\n{}", input.user, a, text)
+                    }
+                    None => format!("<@{}> {}", input.user, text),
+                };
+                ctx.slack
+                    .post_ephemeral(
+                        &input.channel,
+                        &input.user,
+                        Some(&input.thread_ts),
+                        &mention_text,
+                    )
+                    .await?;
+            }
             // The ephemeral above evaporates on reload and never notifies —
             // the DM copy is the durable, notifying record (best-effort).
-            if ctx.answer_cfg.dm_copy_enabled {
+            // dm_only のときは DM が唯一の回答経路なので flag に関係なく送る。
+            if ctx.answer_cfg.dm_copy_enabled || input.dm_only {
                 if let Err(e) = super::dm_copy::send_dm_copy(
                     ctx.slack.as_ref(),
                     &input.user,
@@ -272,6 +287,7 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                     &input.thread_ts,
                     &input.question,
                     &text,
+                    from,
                 )
                 .await
                 {
