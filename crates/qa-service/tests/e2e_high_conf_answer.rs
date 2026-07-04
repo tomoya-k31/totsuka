@@ -315,6 +315,61 @@ async fn spawn_failure_notifies_user_ephemerally() {
 }
 
 #[tokio::test]
+async fn spawn_failure_notice_goes_to_dm_when_dm_only() {
+    // spawn_response 未設定 → spawn 失敗。dm_only なのでエフェメラルではなく DM に通知。
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let pool = db.pool.clone();
+    let clock = Arc::new(SystemClock);
+
+    // No spawn_response set → MockAdapter::spawn errors, like a dead herdr.
+    let adapter = Arc::new(MockAdapter::new());
+    let slack = Arc::new(MockSlackClient::new());
+    let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
+    let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
+
+    let ctx = AnswerCtx {
+        adapter: adapter.clone() as Arc<dyn AdapterClient>,
+        slack: slack.clone() as Arc<dyn SlackClient>,
+        thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
+        clock: clock.clone(),
+        answer_cfg: answer_cfg(),
+        system_prompt_template: "answer with {open_tag}…{close_tag}+{sentinel}".into(),
+    };
+    let input = AnswerInput {
+        channel: "C_PRIVATE".into(),
+        user: "U_ME".into(),
+        author: "U_COLLEAGUE".into(),
+        thread_ts: thread_ts.clone(),
+        question: "where is auth?".into(),
+        repo: "acme/api".into(),
+        mode: AnswerMode::Delegated,
+        dm_only: true,
+    };
+    let outcome = handle_answer(&ctx, input).await.unwrap();
+    assert!(matches!(
+        outcome,
+        qa_service::answer::pipeline::AnswerOutcome::SpawnFailed(_)
+    ));
+
+    assert!(
+        slack.ephemerals().is_empty(),
+        "dm_only must skip ephemeral notice"
+    );
+    let posts = slack.posts();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].0, "D_U_ME");
+    assert!(posts[0].2.contains("起動に失敗"), "got: {}", posts[0].2);
+
+    // No mapping row for a failed spawn.
+    assert!(thread_map.get(&thread_ts).await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn fresh_spawn_replays_persisted_history_and_records_new_exchange() {
     // A thread whose pane was swept respawns with NO agent memory — the
     // persisted history must ride the initial prompt, and the new Q&A must

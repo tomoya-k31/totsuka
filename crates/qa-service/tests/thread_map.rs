@@ -19,6 +19,7 @@ async fn upsert_get_round_trip() {
         thread_ts: tts.clone(),
         terminal_id: "term_1".into(),
         repo: "acme/r".into(),
+        origin: "owner".into(),
         last_activity_at: Utc::now(),
         created_at: Utc::now(),
     };
@@ -26,6 +27,29 @@ async fn upsert_get_round_trip() {
     let got = repo.get(&tts).await.unwrap().unwrap();
     assert_eq!(got.terminal_id, "term_1");
     assert_eq!(got.repo, "acme/r");
+    assert_eq!(got.origin, "owner");
+    repo.delete(&tts).await.unwrap();
+}
+
+#[tokio::test]
+async fn self_mention_origin_round_trips() {
+    let Some(db) = totsuka_testkit::ephemeral_db().await else {
+        eprintln!("DATABASE_URL not set, skipping");
+        return;
+    };
+    let repo = ThreadMapRepo::new(db.pool.clone(), Arc::new(SystemClock));
+    let tts = ts();
+    let m = ThreadMapping {
+        thread_ts: tts.clone(),
+        terminal_id: "term_sm".into(),
+        repo: "acme/r".into(),
+        origin: "self_mention".into(),
+        last_activity_at: Utc::now(),
+        created_at: Utc::now(),
+    };
+    repo.upsert(&m).await.unwrap();
+    let got = repo.get(&tts).await.unwrap().unwrap();
+    assert_eq!(got.origin, "self_mention");
     repo.delete(&tts).await.unwrap();
 }
 
@@ -42,6 +66,7 @@ async fn touch_advances_last_activity() {
         thread_ts: tts.clone(),
         terminal_id: "term_2".into(),
         repo: "acme/r".into(),
+        origin: "owner".into(),
         last_activity_at: initial,
         created_at: initial,
     })
@@ -67,6 +92,7 @@ async fn list_idle_filters_by_threshold() {
         thread_ts: old_ts.clone(),
         terminal_id: "term_old".into(),
         repo: "acme/r".into(),
+        origin: "owner".into(),
         last_activity_at: now - Duration::hours(2),
         created_at: now - Duration::hours(2),
     })
@@ -76,6 +102,7 @@ async fn list_idle_filters_by_threshold() {
         thread_ts: new_ts.clone(),
         terminal_id: "term_new".into(),
         repo: "acme/r".into(),
+        origin: "owner".into(),
         last_activity_at: now,
         created_at: now,
     })

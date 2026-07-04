@@ -31,6 +31,7 @@ async fn sweeper_drops_mapping_when_pane_already_gone() {
             thread_ts: thread_ts.clone(),
             terminal_id: "term_gone".into(),
             repo: "acme/api".into(),
+            origin: "owner".into(),
             last_activity_at: stale_at,
             created_at: stale_at,
         })

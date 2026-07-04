@@ -236,15 +236,16 @@ async fn main() -> anyhow::Result<()> {
                         match ev {
                             SlackEvent::Message(m) => {
                                 let thread_key = m.thread_ts.clone().unwrap_or_else(|| m.ts.clone());
-                                let existing = match thread_map.get(&thread_key).await {
-                                    Ok(v) => v.is_some(),
+                                let mapping = match thread_map.get(&thread_key).await {
+                                    Ok(v) => v,
                                     Err(e) => {
                                         tracing::warn!(error=%e, thread_ts=%thread_key,
                                             "thread_map lookup failed; skipping to avoid double-response");
                                         continue;
                                     }
                                 };
-                                let trig = filter.evaluate(&m, existing);
+                                let origin = mapping.as_ref().map(|tm| tm.origin.as_str());
+                                let trig = filter.evaluate(&m, origin);
                                 if trig == Trigger::None { continue; }
                                 // SelfMention: 回答前にチャンネル参加を確保する。
                                 // 分類の前に行う — 低確信度通知(エフェメラル)も参加が前提のため。
@@ -282,9 +283,21 @@ async fn main() -> anyhow::Result<()> {
                                     SelectOutcome::LowConfidenceUseTop1 { repo, .. } => (repo, default_mode),
                                     SelectOutcome::LowConfidenceDelegated { .. }
                                     | SelectOutcome::LowConfidenceRefused => {
-                                        if let Err(e) = slack.post_ephemeral(
+                                        const LOW_CONF_NOTICE: &str =
+                                            "リポジトリを特定できませんでした。明示的に指定してください。";
+                                        if dm_only {
+                                            // bot が入れなかったチャンネルへのエフェメラルは必ず失敗する — DM に迂回。
+                                            match slack.open_dm(&recipient).await {
+                                                Ok(dm) => {
+                                                    if let Err(e) = slack.post_message(&dm, None, LOW_CONF_NOTICE).await {
+                                                        tracing::warn!(error=%e, "failed to DM low-confidence notice");
+                                                    }
+                                                }
+                                                Err(e) => tracing::warn!(error=%e, "failed to open DM for low-confidence notice"),
+                                            }
+                                        } else if let Err(e) = slack.post_ephemeral(
                                             &m.channel, &recipient, Some(&thread_key),
-                                            "リポジトリを特定できませんでした。明示的に指定してください。",
+                                            LOW_CONF_NOTICE,
                                         ).await {
                                             tracing::warn!(error=%e, channel=%m.channel,
                                                 "failed to post low-confidence notice");

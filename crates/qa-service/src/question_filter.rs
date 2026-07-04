@@ -8,6 +8,9 @@
 //! Mention / thread continuation require the author to be in
 //! allowed_user_ids; SelfMention deliberately does not. Bot-authored
 //! messages are already filtered upstream by the envelope parser.
+//!
+//! self_mention 由来のマッピングでは素の返信で継続しない(auto モードでの
+//! 公開リーク防止。継続は同僚の再メンションのみ)。
 
 use crate::slack::SlackMessage;
 use std::collections::HashSet;
@@ -39,7 +42,7 @@ impl QuestionFilter {
         }
     }
 
-    pub fn evaluate(&self, msg: &SlackMessage, existing_mapping: bool) -> Trigger {
+    pub fn evaluate(&self, msg: &SlackMessage, existing_mapping_origin: Option<&str>) -> Trigger {
         let allowed = self.allowed_user_ids.contains(&msg.user);
         if allowed && msg.text.contains(&format!("<@{}>", self.bot_user_id)) {
             return Trigger::Mention;
@@ -53,7 +56,13 @@ impl QuestionFilter {
         {
             return Trigger::SelfMention;
         }
-        if allowed && msg.thread_ts.is_some() && existing_mapping {
+        // self_mention 由来のスレッドは owner の素の返信では継続しない
+        // (default_mode=auto での公開リーク防止)。継続は同僚の再メンション
+        // (SelfMention、上のブロックで既に処理済み)のみ。
+        if allowed
+            && msg.thread_ts.is_some()
+            && matches!(existing_mapping_origin, Some(o) if o != "self_mention")
+        {
             return Trigger::ThreadContinuation;
         }
         Trigger::None

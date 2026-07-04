@@ -141,13 +141,31 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 Err(e) => {
                     tracing::warn!(error=%e, thread_ts=%input.thread_ts, repo=%input.repo,
                         "qa agent spawn failed");
-                    if let Err(pe) = ctx
+                    const SPAWN_FAILURE_NOTICE: &str =
+                        "エージェントの起動に失敗しました。ログを確認してください。";
+                    if input.dm_only {
+                        // bot が入れなかったチャンネルへのエフェメラルは必ず失敗する — DM に迂回。
+                        match ctx.slack.open_dm(&input.user).await {
+                            Ok(dm) => {
+                                if let Err(pe) = ctx
+                                    .slack
+                                    .post_message(&dm, None, SPAWN_FAILURE_NOTICE)
+                                    .await
+                                {
+                                    tracing::warn!(error=%pe, "failed to DM spawn-failure notice");
+                                }
+                            }
+                            Err(pe) => {
+                                tracing::warn!(error=%pe, "failed to open DM for spawn-failure notice")
+                            }
+                        }
+                    } else if let Err(pe) = ctx
                         .slack
                         .post_ephemeral(
                             &input.channel,
                             &input.user,
                             Some(&input.thread_ts),
-                            "エージェントの起動に失敗しました。ログを確認してください。",
+                            SPAWN_FAILURE_NOTICE,
                         )
                         .await
                     {
@@ -165,6 +183,12 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                     thread_ts: input.thread_ts.clone(),
                     terminal_id: res.terminal_id.clone(),
                     repo: input.repo.clone(),
+                    // 由来を固定: author != user は self-mention フロー(カンペ)。
+                    origin: if input.author != input.user {
+                        "self_mention".into()
+                    } else {
+                        "owner".into()
+                    },
                     last_activity_at: now,
                     created_at: now,
                 })
