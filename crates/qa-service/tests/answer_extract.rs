@@ -60,3 +60,16 @@ fn utf8_safe_truncate() {
         other => panic!("got {other:?}"),
     }
 }
+
+#[test]
+fn takes_last_block_when_pane_shows_multiple_turns() {
+    // A reused pane still shows previous turns' answers; extraction must
+    // return the newest (last) block, not the first.
+    let snap = "<answer>old turn</answer><<TOTSUKA_DONE>>\n\
+                ❯ next question\n\
+                <answer>new turn</answer><<TOTSUKA_DONE>>";
+    assert_eq!(
+        extract(snap, &cfg()),
+        AnswerExtraction::TagDelimited("new turn".into())
+    );
+}

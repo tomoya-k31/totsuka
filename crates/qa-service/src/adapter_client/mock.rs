@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use super::{AdapterClient, AgentSummary, ReadRes, SpawnReq, SpawnRes};
@@ -8,6 +9,9 @@ use crate::error::QaError;
 struct MockState {
     spawn_response: Option<SpawnRes>,
     read_response: Option<ReadRes>,
+    /// Sequenced reads: each `read` pops the front; the final entry sticks.
+    /// Takes precedence over `read_response` when non-empty.
+    read_sequence: VecDeque<ReadRes>,
     list_response: Vec<AgentSummary>,
     sends: Vec<(String, String)>,
     stops: Vec<(String, String, String)>,
@@ -37,6 +41,10 @@ impl MockAdapter {
 
     pub fn set_read_response(&self, r: ReadRes) {
         self.state.lock().unwrap().read_response = Some(r);
+    }
+
+    pub fn set_read_sequence(&self, rs: Vec<ReadRes>) {
+        self.state.lock().unwrap().read_sequence = rs.into();
     }
 
     pub fn set_list_response(&self, r: Vec<AgentSummary>) {
@@ -76,10 +84,14 @@ impl AdapterClient for MockAdapter {
     }
 
     async fn read(&self, _agent_id: &str, _since: u64) -> Result<ReadRes, QaError> {
-        self.state
-            .lock()
-            .unwrap()
-            .read_response
+        let mut s = self.state.lock().unwrap();
+        if s.read_sequence.len() > 1 {
+            return Ok(s.read_sequence.pop_front().expect("len checked"));
+        }
+        if let Some(r) = s.read_sequence.front() {
+            return Ok(r.clone()); // final entry sticks
+        }
+        s.read_response
             .clone()
             .ok_or_else(|| QaError::Adapter("MockAdapter has no read_response set".into()))
     }

@@ -43,12 +43,20 @@ pub struct AnswerCtx {
 pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<AnswerOutcome, QaError> {
     // 1. Resolve or spawn the agent.
     let existing = ctx.thread_map.get(&input.thread_ts).await?;
-    let agent_id = match existing {
+    let (agent_id, baseline) = match existing {
         Some(m) => {
-            // Send the new message to the existing agent.
+            // The reused pane still shows the previous turn's answer
+            // (including its sentinel). Capture a baseline BEFORE sending so
+            // the poll below can tell a fresh answer from the stale one.
+            let baseline = ctx
+                .adapter
+                .read(&m.terminal_id, 0)
+                .await
+                .map(|s| s.text)
+                .unwrap_or_default();
             ctx.adapter.send(&m.terminal_id, &input.question).await?;
             ctx.thread_map.touch(&input.thread_ts).await?;
-            m.terminal_id
+            (m.terminal_id, baseline)
         }
         None => {
             // herdr executes argv[0] as the program. Instructions ride
@@ -93,6 +101,8 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 }
             };
             // Question already rides the spawn argv — no post-spawn send.
+            // Fresh pane: nothing stale to guard against.
+            let baseline = String::new();
             let now = ctx.clock.now();
             ctx.thread_map
                 .upsert(&ThreadMapping {
@@ -103,12 +113,26 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                     created_at: now,
                 })
                 .await?;
-            res.terminal_id
+            (res.terminal_id, baseline)
         }
     };
 
     // 2. Poll for output until sentinel / quiescence / timeout.
     let cfg = &ctx.answer_cfg;
+    let extract_cfg = ExtractConfig {
+        sentinel: &cfg.sentinel,
+        open_tag: &cfg.answer_open_tag,
+        close_tag: &cfg.answer_close_tag,
+        max_chars: 40_000,
+        fallback_tail_lines: 40,
+    };
+    let tag_of = |snap: &str| match extract(snap, &extract_cfg) {
+        AnswerExtraction::TagDelimited(s) => Some(s),
+        _ => None,
+    };
+    // On a reused pane the previous turn's answer (and sentinel) is still
+    // visible; completion means a tag block DIFFERENT from this one.
+    let baseline_tag = tag_of(&baseline);
     let mut last_change = Instant::now();
     let deadline = Instant::now() + Duration::from_secs(cfg.answer_timeout_secs);
     let stable = Duration::from_secs(cfg.stable_revision_secs);
@@ -127,24 +151,32 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
             last_change = Instant::now();
             latest_snapshot = snap.text;
         }
-        if latest_snapshot.contains(&cfg.sentinel) {
-            break;
+        let tag = tag_of(&latest_snapshot);
+        let stale = baseline_tag.is_some() && (tag == baseline_tag || latest_snapshot == baseline);
+        if latest_snapshot.contains(&cfg.sentinel) && !stale {
+            // Reused pane: the old sentinel is always visible, so require a
+            // complete NEW tag block before trusting the sentinel check.
+            if baseline_tag.is_none() || tag.is_some() {
+                break;
+            }
         }
-        if last_change.elapsed() >= stable && !latest_snapshot.is_empty() {
+        if last_change.elapsed() >= stable && !latest_snapshot.is_empty() && !stale {
             break;
         }
         tokio::time::sleep(Duration::from_millis(cfg.poll_interval_ms)).await;
     }
 
     // 3. Extract.
-    let extract_cfg = ExtractConfig {
-        sentinel: &cfg.sentinel,
-        open_tag: &cfg.answer_open_tag,
-        close_tag: &cfg.answer_close_tag,
-        max_chars: 40_000,
-        fallback_tail_lines: 40,
-    };
-    let extraction = extract(&latest_snapshot, &extract_cfg);
+    let mut extraction = extract(&latest_snapshot, &extract_cfg);
+    if baseline_tag.is_some() {
+        if let AnswerExtraction::TagDelimited(ref s) = extraction {
+            if Some(s) == baseline_tag.as_ref() {
+                tracing::warn!(thread_ts = %input.thread_ts,
+                    "pane produced no new answer; refusing to repost the previous turn's");
+                extraction = AnswerExtraction::Empty;
+            }
+        }
+    }
     let (text, kind) = match extraction {
         AnswerExtraction::TagDelimited(s) => (s, "tag"),
         AnswerExtraction::FallbackTail(s) => {
