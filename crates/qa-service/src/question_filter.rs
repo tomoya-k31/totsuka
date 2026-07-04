@@ -59,10 +59,9 @@ impl QuestionFilter {
         // self_mention 由来のスレッドは owner の素の返信では継続しない
         // (default_mode=auto での公開リーク防止)。継続は同僚の再メンション
         // (SelfMention、上のブロックで既に処理済み)のみ。
-        if allowed
-            && msg.thread_ts.is_some()
-            && matches!(existing_mapping_origin, Some(o) if o != "self_mention")
-        {
+        // "owner" の明示一致で判定する — 未知の origin 値は fail-closed
+        // (継続不可)に倒し、公開リークの再導入を防ぐ。
+        if allowed && msg.thread_ts.is_some() && existing_mapping_origin == Some("owner") {
             return Trigger::ThreadContinuation;
         }
         Trigger::None

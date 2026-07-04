@@ -197,6 +197,9 @@ async fn main() -> anyhow::Result<()> {
             );
             // join/invite 直後の channel_join システムメッセージを best-effort 削除
             // するための照合マップ(channel → 記録時刻)。BotJoined 到着時に消費。
+            // BotJoined が来ない環境(user_events 未購読等)でも insert 側の prune で
+            // サイズが有界になる。
+            const PENDING_TTL: std::time::Duration = std::time::Duration::from_secs(300);
             let mut pending_join_delete: std::collections::HashMap<String, std::time::Instant> =
                 std::collections::HashMap::new();
             // The `[agent_adapter.repos.HASH_KEY]` map key IS the `owner/repo`
@@ -258,6 +261,7 @@ async fn main() -> anyhow::Result<()> {
                                     )
                                     .await;
                                     if entry == qa_service::channel_entry::ChannelEntry::Full {
+                                        pending_join_delete.retain(|_, t| t.elapsed() < PENDING_TTL);
                                         pending_join_delete.insert(m.channel.clone(), std::time::Instant::now());
                                     }
                                     (
@@ -336,7 +340,6 @@ async fn main() -> anyhow::Result<()> {
                             SlackEvent::BotJoined { channel, ts, user } => {
                                 // 自分(bot)の join メッセージ、かつ直近に join/invite した
                                 // チャンネルのものだけ削除する(他人の join には触らない)。
-                                const PENDING_TTL: std::time::Duration = std::time::Duration::from_secs(300);
                                 pending_join_delete.retain(|_, t| t.elapsed() < PENDING_TTL);
                                 if user == bot_user_id_dispatch
                                     && pending_join_delete.remove(&channel).is_some()

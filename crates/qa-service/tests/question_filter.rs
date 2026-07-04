@@ -144,3 +144,16 @@ fn self_mention_refires_in_mapped_thread() {
         Trigger::SelfMention,
     );
 }
+
+#[test]
+fn unknown_origin_fails_closed_no_continuation() {
+    // 想定外の origin 値(破損・手動編集・将来の拡張)では継続を許可しない。
+    let f = QuestionFilter::new(vec!["U_ALLOWED".into()], "U_BOT".into(), String::new());
+    assert_eq!(
+        f.evaluate(
+            &msg("U_ALLOWED", "more", Some("17500000001.000100")),
+            Some("mystery_origin")
+        ),
+        Trigger::None,
+    );
+}
