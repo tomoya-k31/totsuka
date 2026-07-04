@@ -99,10 +99,9 @@ async fn main() -> anyhow::Result<()> {
     health.set_ready(true).await;
 
     // 5. Recovery
-    // Best-effort: agent-adapter's GET /v1/agents may not yet be deployed
-    // (known gap recorded in Task 4 review). A reconcile failure should not
-    // prevent qa-service startup — orphan cleanup will happen on the next
-    // successful boot once the adapter route is live.
+    // Best-effort: a reconcile failure (e.g. adapter temporarily down) should
+    // not prevent qa-service startup — orphan cleanup will happen on the next
+    // successful boot.
     if let Err(e) = reconcile(thread_map.as_ref(), adapter.as_ref()).await {
         tracing::warn!(error=%e, "recovery skipped (best-effort)");
     }

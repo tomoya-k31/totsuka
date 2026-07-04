@@ -21,9 +21,6 @@ pub async fn reconcile(
     thread_map: &ThreadMapRepo,
     adapter: &dyn AdapterClient,
 ) -> Result<RecoveryReport, QaError> {
-    // TODO: agent-adapter's GET /v1/agents endpoint is not yet implemented.
-    // This function assumes AdapterClient::list() works. The adapter side
-    // handler should be added to crates/agent-adapter/src/server/list.rs.
     let agents = adapter.list().await?;
     let mappings = thread_map.list_all().await?;
 
