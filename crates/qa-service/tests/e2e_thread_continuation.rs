@@ -3,6 +3,7 @@ use qa_service::adapter_client::{AdapterClient, MockAdapter, ReadRes};
 use qa_service::answer::pipeline::{handle_answer, AnswerCtx, AnswerInput};
 use qa_service::mode::AnswerMode;
 use qa_service::slack::{MockSlackClient, SlackClient};
+use qa_service::thread_history::ThreadHistoryRepo;
 use qa_service::thread_map::{ThreadMapRepo, ThreadMapping};
 use std::sync::Arc;
 use totsuka_config::schema::AnswerSection;
@@ -52,6 +53,7 @@ async fn existing_thread_mapping_sends_no_spawn() {
 
     let slack = Arc::new(MockSlackClient::new());
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
 
     let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
     sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
@@ -76,6 +78,7 @@ async fn existing_thread_mapping_sends_no_spawn() {
         adapter: adapter.clone() as Arc<dyn AdapterClient>,
         slack: slack.clone() as Arc<dyn SlackClient>,
         thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
         clock: clock.clone(),
         answer_cfg: answer_cfg(),
         system_prompt_template: "answer".into(),
@@ -149,6 +152,7 @@ async fn dead_terminal_heals_by_respawning_fresh_agent() {
 
     let slack = Arc::new(MockSlackClient::new());
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
     let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
 
     let now = Utc::now();
@@ -167,6 +171,7 @@ async fn dead_terminal_heals_by_respawning_fresh_agent() {
         adapter: adapter.clone() as Arc<dyn AdapterClient>,
         slack: slack.clone() as Arc<dyn SlackClient>,
         thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
         clock: clock.clone(),
         answer_cfg: answer_cfg(),
         system_prompt_template: "answer".into(),
@@ -221,6 +226,7 @@ async fn transient_send_error_keeps_mapping_and_does_not_respawn() {
 
     let slack = Arc::new(MockSlackClient::new());
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
     let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
 
     let now = Utc::now();
@@ -239,6 +245,7 @@ async fn transient_send_error_keeps_mapping_and_does_not_respawn() {
         adapter: adapter.clone() as Arc<dyn AdapterClient>,
         slack: slack.clone() as Arc<dyn SlackClient>,
         thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
         clock: clock.clone(),
         answer_cfg: answer_cfg(),
         system_prompt_template: "answer".into(),
@@ -288,6 +295,7 @@ async fn continuation_never_reposts_previous_turns_answer() {
 
     let slack = Arc::new(MockSlackClient::new());
     let thread_map = Arc::new(ThreadMapRepo::new(pool.clone(), clock.clone()));
+    let thread_history = Arc::new(ThreadHistoryRepo::new(pool.clone(), clock.clone()));
     let thread_ts = format!("e2e_{}", uuid::Uuid::new_v4().simple());
 
     let now = Utc::now();
@@ -306,6 +314,7 @@ async fn continuation_never_reposts_previous_turns_answer() {
         adapter: adapter.clone() as Arc<dyn AdapterClient>,
         slack: slack.clone() as Arc<dyn SlackClient>,
         thread_map: thread_map.clone(),
+        thread_history: thread_history.clone(),
         clock: clock.clone(),
         answer_cfg: answer_cfg(),
         system_prompt_template: "answer".into(),

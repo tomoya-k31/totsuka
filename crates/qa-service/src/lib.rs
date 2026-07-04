@@ -20,6 +20,7 @@ pub mod repo_select;
 pub mod schema_check;
 pub mod slack;
 pub mod sweeper;
+pub mod thread_history;
 pub mod thread_map;
 
 pub struct QaApp {
