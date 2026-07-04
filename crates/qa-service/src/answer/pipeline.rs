@@ -164,8 +164,17 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                 .await?
         }
         AnswerMode::Delegated => {
+            // Address the asker explicitly: ephemeral messages carry no
+            // notification badge of their own, so the leading mention is
+            // what makes the answer discoverable in a busy thread.
+            let mention_text = format!("<@{}> {}", input.user, text);
             ctx.slack
-                .post_ephemeral(&input.channel, &input.user, Some(&input.thread_ts), &text)
+                .post_ephemeral(
+                    &input.channel,
+                    &input.user,
+                    Some(&input.thread_ts),
+                    &mention_text,
+                )
                 .await?;
             SlackPostResult {
                 ts: format!("ephemeral-{}", input.thread_ts),
