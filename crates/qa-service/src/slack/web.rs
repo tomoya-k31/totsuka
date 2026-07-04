@@ -130,6 +130,14 @@ impl SlackClient for HttpSlackClient {
         .await?;
         Ok(())
     }
+
+    async fn bot_user_id(&self) -> Result<String, QaError> {
+        let v = self.post_form("auth.test", &[]).await?;
+        v["user_id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| QaError::Slack("auth.test: missing user_id".into()))
+    }
 }
 
 fn parse_messages(channel: &str, v: &Value) -> Result<Vec<SlackMessage>, QaError> {

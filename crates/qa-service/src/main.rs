@@ -70,6 +70,11 @@ async fn main() -> anyhow::Result<()> {
         None,
     ));
 
+    // Mention detection depends on knowing the bot's own user id; resolve it
+    // from the token itself so operators don't have to export it manually.
+    let bot_user_id = slack.bot_user_id().await?;
+    tracing::info!(%bot_user_id, "resolved bot user id via auth.test");
+
     let classifier_arc = classifier::build(&config.qa_service.classifier)?;
 
     let inbox = Arc::new(GhInboxClient::new(
@@ -166,12 +171,11 @@ async fn main() -> anyhow::Result<()> {
         let config = config.clone();
         let semaphore = semaphore.clone();
         let project_node_id = project_node_id.clone();
+        let bot_user_id = bot_user_id.clone();
         let s = shutdown.clone();
         tokio::spawn(async move {
-            let filter = QuestionFilter::new(
-                config.qa_service.allowed_user_ids.clone(),
-                std::env::var("SLACK_BOT_USER_ID").unwrap_or_default(),
-            );
+            let filter =
+                QuestionFilter::new(config.qa_service.allowed_user_ids.clone(), bot_user_id);
             // The `[agent_adapter.repos.HASH_KEY]` map key IS the `owner/repo`
             // string used by both the classifier and the adapter's spawn call —
             // NOT `RepoSection.repo_path` (which is a local filesystem path).

@@ -129,4 +129,7 @@ impl SlackClient for MockSlackClient {
             .push((channel.into(), ts.into(), name.into()));
         Ok(())
     }
+    async fn bot_user_id(&self) -> Result<String, QaError> {
+        Ok("UBOTMOCK".into())
+    }
 }
