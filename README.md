@@ -51,6 +51,8 @@ Boot order (`totsukactl up`): Postgres (docker compose) → preflight (config va
 
    The generated `config.toml` documents its own schema inline — paths starting with `~/` are tilde-expanded at load, and values may reference `${other_section.key}`. Secrets (tokens, passwords) belong in the separate `secrets.toml` (created `chmod 0600`), never in `config.toml`. `examples/totsuka.toml.example` is a fully worked example of the schema.
 
+   For `qa-service` you also need a Slack app (Socket Mode) and its two tokens — creation steps, required scopes, and the app manifest are documented in [`docs/slack-app-setup.md`](docs/slack-app-setup.md).
+
 3. Build and boot the stack:
 
    ```bash
