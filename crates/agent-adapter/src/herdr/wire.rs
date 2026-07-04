@@ -46,6 +46,8 @@ struct AgentObj {
     terminal_id: String,
     name: String,
     workspace_id: String,
+    #[serde(default)]
+    pane_id: String,
 }
 
 #[derive(Deserialize)]
@@ -217,6 +219,41 @@ impl HerdrClient for WireHerdr {
                 P {
                     target: id.as_str(),
                     text,
+                },
+            )
+            .await?;
+        // herdr's agent.send writes literal text into the pane's input box
+        // and never submits ("use pane run when you want command text plus
+        // Enter"). Without a follow-up Enter keystroke the text just stacks
+        // up unexecuted, so resolve the pane and submit explicitly.
+        #[derive(Serialize)]
+        struct Get<'a> {
+            target: &'a str,
+        }
+        let info: AgentInfoResult = self
+            .call(
+                "agent.get",
+                Get {
+                    target: id.as_str(),
+                },
+            )
+            .await?;
+        if info.agent.pane_id.is_empty() {
+            return Err(HerdrError::Decode(
+                "agent.get returned no pane_id; cannot submit Enter".into(),
+            ));
+        }
+        #[derive(Serialize)]
+        struct Keys<'a> {
+            pane_id: &'a str,
+            keys: Vec<&'a str>,
+        }
+        let _: Value = self
+            .call(
+                "pane.send_keys",
+                Keys {
+                    pane_id: &info.agent.pane_id,
+                    keys: vec!["Enter"],
                 },
             )
             .await?;
@@ -535,6 +572,62 @@ mod tests {
             .unwrap();
         assert_eq!(snap.text, "hello\n");
         assert_eq!(snap.revision, 7);
+        server.await.unwrap();
+    }
+
+    /// `agent.send` writes literal text without submitting (herdr docs:
+    /// "use pane run when you want command text plus Enter"), so `send`
+    /// must follow up with a pane-addressed Enter keystroke or the text
+    /// stacks up unexecuted in the agent's input box.
+    #[tokio::test]
+    async fn send_submits_with_enter_keystroke() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("h.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let server = tokio::spawn(async move {
+            let (req, wr) = next_request(&listener).await;
+            assert_eq!(req["method"], "agent.send");
+            assert_eq!(req["params"]["target"], "term_42");
+            assert_eq!(req["params"]["text"], "follow-up question");
+            reply(
+                wr,
+                serde_json::json!({ "id": req["id"], "result": { "type": "ok" } }),
+            )
+            .await;
+
+            let (req, wr) = next_request(&listener).await;
+            assert_eq!(req["method"], "agent.get");
+            assert_eq!(req["params"]["target"], "term_42");
+            reply(
+                wr,
+                serde_json::json!({
+                    "id": req["id"],
+                    "result": {
+                        "type": "agent_info",
+                        "agent": agent_obj("term_42", "lbl", "w1"),
+                    },
+                }),
+            )
+            .await;
+
+            let (req, wr) = next_request(&listener).await;
+            assert_eq!(req["method"], "pane.send_keys");
+            assert_eq!(req["params"]["pane_id"], "w1:p2");
+            assert_eq!(req["params"]["keys"], serde_json::json!(["Enter"]));
+            reply(
+                wr,
+                serde_json::json!({ "id": req["id"], "result": { "type": "ok" } }),
+            )
+            .await;
+        });
+        let client = WireHerdr::connect(&sock).await.unwrap();
+        client
+            .send(
+                &super::super::AgentId::new("term_42".into()),
+                "follow-up question",
+            )
+            .await
+            .unwrap();
         server.await.unwrap();
     }
 

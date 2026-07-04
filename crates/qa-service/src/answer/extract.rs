@@ -22,12 +22,13 @@ pub fn extract(snapshot: &str, cfg: &ExtractConfig) -> AnswerExtraction {
     if snapshot.is_empty() {
         return AnswerExtraction::Empty;
     }
-    // Sentinel may or may not be present; we only need it to bound the FallbackTail.
-    let bounded = match snapshot.find(cfg.sentinel) {
+    // A reused pane still shows previous turns' answers, so always work on
+    // the LAST sentinel / LAST tag block — earlier ones are stale turns.
+    let bounded = match snapshot.rfind(cfg.sentinel) {
         Some(idx) => &snapshot[..idx],
         None => snapshot,
     };
-    if let Some(o) = bounded.find(cfg.open_tag) {
+    if let Some(o) = bounded.rfind(cfg.open_tag) {
         let after = o + cfg.open_tag.len();
         if let Some(rel_c) = bounded[after..].find(cfg.close_tag) {
             let body = &bounded[after..after + rel_c];
