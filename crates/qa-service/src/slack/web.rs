@@ -21,6 +21,11 @@ impl HttpSlackClient {
         Self {
             client: Client::builder()
                 .user_agent("totsuka-qa-service")
+                // Whole-request deadline: without it a stalled connection
+                // hangs the caller forever — fatal at boot, where
+                // bot_user_id() gates startup and the supervisor's
+                // on-dead-only policy never restarts a hung process.
+                .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .expect("reqwest client"),
             endpoint: override_endpoint
