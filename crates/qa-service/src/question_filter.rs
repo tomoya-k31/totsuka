@@ -1,11 +1,13 @@
 //! Decide whether a Slack message should be treated as a question for the
 //! QA pipeline. Three trigger paths:
 //!   * Mention: text contains `<@bot_user_id>` (top-level invocation)
-//!   * SelfMention: text contains mention of configured user (non-allowed author)
+//!   * SelfMention: text contains mention of `self_mention_user_id` — the
+//!     author may be ANYONE except that user (colleagues asking the owner)
 //!   * Thread continuation: thread_ts present AND mapping already exists
 //!
-//! Author must be in allowed_user_ids; bot-authored messages are already
-//! filtered upstream by the envelope parser.
+//! Mention / thread continuation require the author to be in
+//! allowed_user_ids; SelfMention deliberately does not. Bot-authored
+//! messages are already filtered upstream by the envelope parser.
 
 use crate::slack::SlackMessage;
 use std::collections::HashSet;
