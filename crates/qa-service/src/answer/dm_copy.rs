@@ -37,6 +37,9 @@ pub async fn send_dm_copy(
     answer: &str,
 ) -> Result<(), QaError> {
     // permalink は装飾 — 取れなくても DM 本体は送る。
+    // リンク先は常にスレッド親(最初の質問)。継続ターンでは抜粋と
+    // リンク先の質問がズレるが、これは設計上の割り切り — AnswerInput は
+    // 当該ターンのメッセージ ts を持たず、スレッドを開けば文脈全体が見える。
     let permalink = match slack.permalink(channel, thread_ts).await {
         Ok(l) => Some(l),
         Err(e) => {
