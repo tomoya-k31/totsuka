@@ -387,6 +387,10 @@ pub struct AnswerSection {
     pub pane_idle_ttl_secs: u64,
     #[serde(default = "d_4")]
     pub max_concurrent_answers: u32,
+    /// Delegated 回答を質問者の Bot DM にもコピーする(エフェメラルは
+    /// 非永続・通知なしのため、DM が永続・通知ありの控えになる)。
+    #[serde(default = "d_true")]
+    pub dm_copy_enabled: bool,
 }
 
 fn d_claude_argv() -> Vec<String> {

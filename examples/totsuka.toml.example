@@ -184,6 +184,7 @@ stable_revision_secs   = 8                            # sentinel が来なくて
 answer_timeout_secs    = 180                          # 全体打ち切り (この時刻までに sentinel/停滞検知できなければ truncate して送信)
 pane_idle_ttl_secs     = 1800                         # スレッド最終活動からこの秒数経過で pane.close
 max_concurrent_answers = 4                            # 同時並行で動かす回答 task の上限
+dm_copy_enabled        = true                         # Delegated 回答を質問者の Bot DM にもコピー (要 Slack スコープ im:write)
 
 # ---- notifications (§13 詳細、O17 の写像はコード、宛先のみ設定) ----
 [notifications]

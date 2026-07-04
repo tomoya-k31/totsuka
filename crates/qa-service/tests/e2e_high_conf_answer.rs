@@ -19,6 +19,7 @@ fn answer_cfg() -> AnswerSection {
         answer_timeout_secs: 5,
         pane_idle_ttl_secs: 1800,
         max_concurrent_answers: 4,
+        dm_copy_enabled: true,
     }
 }
 
