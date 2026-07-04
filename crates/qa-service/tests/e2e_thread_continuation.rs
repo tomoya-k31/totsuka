@@ -10,6 +10,7 @@ use totsuka_core::SystemClock;
 
 fn answer_cfg() -> AnswerSection {
     AnswerSection {
+        claude_argv: vec!["claude".into()],
         sentinel: "<<TOTSUKA_DONE>>".into(),
         answer_open_tag: "<answer>".into(),
         answer_close_tag: "</answer>".into(),

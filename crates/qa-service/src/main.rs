@@ -237,10 +237,13 @@ async fn main() -> anyhow::Result<()> {
                                     SelectOutcome::LowConfidenceUseTop1 { repo, .. } => (repo, default_mode),
                                     SelectOutcome::LowConfidenceDelegated { .. }
                                     | SelectOutcome::LowConfidenceRefused => {
-                                        let _ = slack.post_ephemeral(
+                                        if let Err(e) = slack.post_ephemeral(
                                             &m.channel, &m.user, Some(&thread_key),
                                             "リポジトリを特定できませんでした。明示的に指定してください。",
-                                        ).await;
+                                        ).await {
+                                            tracing::warn!(error=%e, channel=%m.channel,
+                                                "failed to post low-confidence notice");
+                                        }
                                         continue;
                                     }
                                 };
