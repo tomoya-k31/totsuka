@@ -109,7 +109,6 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
 
     // 2. Poll for output until sentinel / quiescence / timeout.
     let cfg = &ctx.answer_cfg;
-    let mut prev_revision: u64 = 0;
     let mut last_change = Instant::now();
     let deadline = Instant::now() + Duration::from_secs(cfg.answer_timeout_secs);
     let stable = Duration::from_secs(cfg.stable_revision_secs);
@@ -121,10 +120,12 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
             break;
         }
         let snap = ctx.adapter.read(&agent_id, 0).await?;
-        if snap.revision != prev_revision {
-            prev_revision = snap.revision;
+        // Change-detect on pane text, not snap.revision: real herdr returns
+        // revision 0 on every `visible` read, so a revision-keyed update
+        // never fires and the answer is silently dropped.
+        if snap.text != latest_snapshot {
             last_change = Instant::now();
-            latest_snapshot = snap.text.clone();
+            latest_snapshot = snap.text;
         }
         if latest_snapshot.contains(&cfg.sentinel) {
             break;
