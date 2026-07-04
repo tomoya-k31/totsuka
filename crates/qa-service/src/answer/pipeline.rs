@@ -51,13 +51,17 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
             m.terminal_id
         }
         None => {
-            // herdr executes argv[0] as the program: command prefix first
-            // (claude_argv), system prompt as the final positional argument.
+            // herdr executes argv[0] as the program. Instructions ride
+            // --append-system-prompt and the question is the positional
+            // prompt: claude starts consuming its initial prompt immediately,
+            // so a post-spawn send() races the boot and loses the question.
             let mut argv = ctx.answer_cfg.claude_argv.clone();
+            argv.push("--append-system-prompt".into());
             argv.push(interpolate_prompt(
                 &ctx.system_prompt_template,
                 &ctx.answer_cfg,
             ));
+            argv.push(input.question.clone());
             let req = SpawnReq {
                 task_id: format!("qa-{}", &input.thread_ts),
                 phase: "answer".into(),
@@ -88,8 +92,7 @@ pub async fn handle_answer(ctx: &AnswerCtx, input: AnswerInput) -> Result<Answer
                     return Ok(AnswerOutcome::SpawnFailed(e.to_string()));
                 }
             };
-            // Send the question once the agent is up.
-            ctx.adapter.send(&res.terminal_id, &input.question).await?;
+            // Question already rides the spawn argv — no post-spawn send.
             let now = ctx.clock.now();
             ctx.thread_map
                 .upsert(&ThreadMapping {

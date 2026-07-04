@@ -90,12 +90,24 @@ async fn high_conf_answer_spawns_polls_extracts_posts() {
     assert_eq!(mapping.terminal_id, "term_e2e_1");
     assert_eq!(mapping.repo, "acme/api");
 
-    // herdr executes argv[0] as the program: command prefix must come first,
-    // system prompt last (a prompt-only argv is unspawnable).
+    // herdr executes argv[0] as the program. The system instructions ride
+    // --append-system-prompt and the QUESTION is the final positional arg:
+    // typing it in post-spawn (adapter.send) races claude's boot and loses
+    // the question.
     let spawns = adapter.expected_spawns();
     assert_eq!(spawns.len(), 1);
     assert_eq!(spawns[0].argv[0], "claude");
-    assert!(spawns[0].argv.last().unwrap().contains("answer with"));
+    let sys_pos = spawns[0]
+        .argv
+        .iter()
+        .position(|a| a == "--append-system-prompt")
+        .expect("system prompt flag present");
+    assert!(spawns[0].argv[sys_pos + 1].contains("answer with"));
+    assert_eq!(spawns[0].argv.last().unwrap(), "where is auth?");
+    assert!(
+        adapter.expected_sends().is_empty(),
+        "fresh spawn must not race a send"
+    );
 
     sqlx::query("DELETE FROM qa_thread_agent WHERE thread_ts = $1")
         .bind(&thread_ts)
