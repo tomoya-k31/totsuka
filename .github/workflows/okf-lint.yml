@@ -16,11 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # リンク検査用（Rust製単一バイナリ）。キャッシュされるので2回目以降は数秒
       - name: Install lychee
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@2ca9b94c269419b7b0c711c09d0b21c4e1d51145 # v2.83.1
         with:
           tool: lychee
 
