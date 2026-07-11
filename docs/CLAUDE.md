@@ -18,6 +18,10 @@ tags: [meta, okf, rules]
 
 いきなり `docs/` を全走査しないこと。
 
+ディレクトリ横断で条件検索したい場合（「type が Decision の全部」「status が deprecated な全部」等）は、
+index.md を1つずつ辿る代わりに `okf-search` スキル（`scripts/okf-search.sh`、frontmatter をクエリキーに絞り込む）
+を使ってよい。絞り込んだ少数のファイルだけを読む点は progressive disclosure と同じ。
+
 # OKF ルール（要約）
 
 正本は [SPEC.md](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)。本バンドルで守る規則は以下。
@@ -59,7 +63,7 @@ owner: <拡張キー: 担当チーム>
 |---|---|---|
 | `/architecture/` | システム構成、コンテキスト図、依存関係、非機能要件 | `Architecture`, `Diagram` |
 | `/decisions/` | ADR。1決定=1ファイル、`adr-NNNN-<slug>.md` 連番 | `Decision` |
-| `/components/` | パッケージ/サービス単位の責務・公開IF・依存先 | `Component`, `Service`, `Library` |
+| `/components/` | パッケージ/サービス単位の責務・公開IF・依存先 | `Component`, `Service`, `Library`, `Tool` |
 | `/apis/` | エンドポイントの意味・利用文脈・認証。スキーマ本体は `resource` で参照 | `API Endpoint`, `Webhook`, `Event` |
 | `/data/` | テーブルの意味づけ、ER関係、データライフサイクル | `Table`, `Data Model`, `Queue` |
 | `/infrastructure/` | GCP構成、環境、IaCモジュール、Secret方針 | `GCP Resource`, `Environment`, `IaC Module` |

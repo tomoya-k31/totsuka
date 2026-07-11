@@ -20,6 +20,8 @@ Do not scan all of `docs/` at once. Always follow this order:
 
 Start from `docs/decisions/index.md` for past design decisions, `docs/operations/index.md` for runbooks, `docs/glossary/index.md` for terminology, and `docs/log.md` for a summary of recent changes.
 
+For cross-cutting queries by frontmatter (e.g. "all `type: Decision` docs", "everything `status: deprecated`"), use the `okf-search` skill (`scripts/okf-search.sh`) instead of walking every `index.md` by hand.
+
 ### Writing
 
 Before creating or updating anything under `docs/`, **always** read `docs/CLAUDE.md` first and follow its rules (frontmatter, `type` vocabulary, index/log update obligations, when to write). Use the `okf-docs` skill when it's available.
