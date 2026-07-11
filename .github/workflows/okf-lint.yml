@@ -1,11 +1,10 @@
 name: okf-lint
 
 on:
+  # path フィルタなし: main の required_status_checks が `lint` を必須にしているため、
+  # docs/ 以外だけを触る PR でも必ず1回は lint チェックが報告される必要がある
+  # (フィルタで対象外になると、必須チェックが永久に "Expected" のまま PR が BLOCKED し続ける)。
   pull_request:
-    paths:
-      - "docs/**"
-      - "scripts/okf-lint.sh"
-      - ".github/workflows/okf-lint.yml"
   push:
     branches: [main]
     paths:
