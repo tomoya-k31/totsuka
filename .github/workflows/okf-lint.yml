@@ -1,0 +1,30 @@
+name: okf-lint
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "scripts/okf-lint.sh"
+      - ".github/workflows/okf-lint.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # リンク検査用（Rust製単一バイナリ）。キャッシュされるので2回目以降は数秒
+      - name: Install lychee
+        uses: taiki-e/install-action@v2
+        with:
+          tool: lychee
+
+      # frontmatter / type / index掲載漏れ / log形式 をエラー、リンク切れは警告。
+      # リンク切れも落としたい場合は --strict を付ける。
+      - name: Run okf-lint
+        run: bash scripts/okf-lint.sh docs
