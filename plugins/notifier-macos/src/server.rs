@@ -1,9 +1,11 @@
 //! JSON-RPC dispatch for the stdio server (F-51/F-90).
 //!
 //! Requests (`initialize` / `config/validate` / `shutdown`) get a response;
-//! `notify` is a fire-and-forget notification (no response, F-93) whose delivery
-//! is spawned so a slow/failing send never blocks the read loop. Generic over a
-//! [`SenderFactory`] so the whole surface is tested against a recording fake.
+//! `notify` is a fire-and-forget notification (no response, F-93). Delivery runs
+//! on a single background worker fed by a **bounded** queue, so a flood of
+//! events can never block the read loop nor pile up unbounded `osascript`
+//! processes — an overfull queue drops the newest notice with a log. Generic
+//! over a [`SenderFactory`] so the whole surface is tested against a fake.
 
 use plugin_protocol::jsonrpc::{Error, Response, error_code, to_line};
 use plugin_protocol::methods::{
@@ -12,9 +14,14 @@ use plugin_protocol::methods::{
 use plugin_protocol::{Capabilities, RequestId, method};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tokio::sync::mpsc;
 
 use crate::config::NotifierConfig;
 use crate::sender::{Notice, NotificationSender};
+
+/// Bounded capacity of the delivery queue. Beyond this, notices are dropped
+/// (with a log) rather than blocking the read loop or spawning unbounded work.
+const NOTIFY_QUEUE_CAP: usize = 64;
 
 /// Builds a notification sender from config. Abstracted so the server is tested
 /// against a recording fake.
@@ -52,7 +59,8 @@ impl Reply {
 pub struct Server<F: SenderFactory> {
     factory: F,
     config: NotifierConfig,
-    sender: Option<F::Sender>,
+    /// Sends notices to the delivery worker; `None` until `initialize`.
+    queue: Option<mpsc::Sender<Notice>>,
 }
 
 impl<F: SenderFactory> Server<F> {
@@ -61,7 +69,7 @@ impl<F: SenderFactory> Server<F> {
         Self {
             factory,
             config: NotifierConfig::default(),
-            sender: None,
+            queue: None,
         }
     }
 
@@ -124,20 +132,22 @@ impl<F: SenderFactory> Server<F> {
                 ));
             }
         };
-        self.sender = Some(self.factory.build(&config));
+        // Spawn a single delivery worker fed by a bounded queue (backpressure).
+        let sender = self.factory.build(&config);
+        let (tx, rx) = mpsc::channel::<Notice>(NOTIFY_QUEUE_CAP);
+        tokio::spawn(run_worker(sender, rx));
+        self.queue = Some(tx);
         self.config = config;
         Reply::respond(Response::result(id, capabilities_result()))
     }
 
     async fn config_validate(&mut self, id: RequestId, params: Value) -> Reply {
-        let config: NotifierConfig = match params
-            .get("config")
-            .cloned()
-            .ok_or(())
-            .and_then(|c| serde_json::from_value(c).map_err(|_| ()))
-        {
-            Ok(c) => c,
-            Err(()) => return ok_validate(id, vec!["config does not parse".into()]),
+        let config: NotifierConfig = match params.get("config") {
+            Some(raw) => match serde_json::from_value(raw.clone()) {
+                Ok(c) => c,
+                Err(e) => return ok_validate(id, vec![format!("config does not parse: {e}")]),
+            },
+            None => return ok_validate(id, vec!["config is missing".into()]),
         };
         // Confirm the notification tool is runnable, without posting a visible
         // notification (F-59).
@@ -167,17 +177,33 @@ impl<F: SenderFactory> Server<F> {
             tracing::debug!(event = ?notify.event, workflow = ?notify.workflow, "notification filtered out");
             return;
         }
-        let Some(sender) = self.sender.clone() else {
+        let Some(queue) = &self.queue else {
             tracing::warn!("notify received before initialize; dropping");
             return;
         };
         let notice = format_notice(&notify);
-        // Fire-and-forget (F-93): deliver on a task; a failure is only logged.
-        tokio::spawn(async move {
-            if let Err(e) = sender.send(notice).await {
-                tracing::warn!(error = %e, "failed to post notification");
+        // Fire-and-forget (F-93): hand off to the worker without blocking. A full
+        // queue drops the notice (advisory) rather than stalling the read loop.
+        match queue.try_send(notice) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!("notification queue full; dropping this notification");
             }
-        });
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::warn!("notification worker gone; dropping this notification");
+            }
+        }
+    }
+}
+
+/// The delivery worker: drains the queue and posts each notice, one at a time,
+/// logging (never propagating) a send failure (F-93). Exits when the queue
+/// closes (the server is dropped).
+async fn run_worker<S: NotificationSender>(sender: S, mut rx: mpsc::Receiver<Notice>) {
+    while let Some(notice) = rx.recv().await {
+        if let Err(e) = sender.send(notice).await {
+            tracing::warn!(error = %e, "failed to post notification");
+        }
     }
 }
 
