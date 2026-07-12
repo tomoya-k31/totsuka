@@ -60,7 +60,7 @@ impl<F: SenderFactory> Server<F> {
     pub fn new(factory: F) -> Self {
         Self {
             factory,
-            config: NotifierConfig::defaults(),
+            config: NotifierConfig::default(),
             sender: None,
         }
     }

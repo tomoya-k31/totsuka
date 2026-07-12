@@ -81,17 +81,14 @@ fn default_osascript() -> String {
 }
 
 impl NotifierConfig {
-    /// Apply the default `osascript_bin` when constructed via `Default`.
-    fn normalized(mut self) -> Self {
+    /// The notification binary to run: the configured value, or the standard
+    /// `osascript` when unset/empty (so an explicit empty string still works).
+    pub fn osascript_bin(&self) -> &str {
         if self.osascript_bin.is_empty() {
-            self.osascript_bin = default_osascript();
+            "osascript"
+        } else {
+            &self.osascript_bin
         }
-        self
-    }
-
-    /// A default config with the standard `osascript` binary.
-    pub fn defaults() -> Self {
-        Self::default().normalized()
     }
 }
 
@@ -142,6 +139,14 @@ mod tests {
         // chore turns failed off; done still follows the global off.
         assert!(!cfg.filter.allows(Some("chore"), NotifierEvent::Failed));
         assert!(!cfg.filter.allows(Some("chore"), NotifierEvent::Done));
+    }
+
+    #[test]
+    fn osascript_bin_falls_back_when_empty() {
+        let cfg = parse(serde_json::json!({ "osascript_bin": "" }));
+        assert_eq!(cfg.osascript_bin(), "osascript");
+        let cfg = parse(serde_json::json!({ "osascript_bin": "/opt/osascript" }));
+        assert_eq!(cfg.osascript_bin(), "/opt/osascript");
     }
 
     #[test]

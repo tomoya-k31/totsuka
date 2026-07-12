@@ -16,7 +16,7 @@ struct OsascriptFactory;
 impl SenderFactory for OsascriptFactory {
     type Sender = OsascriptSender;
     fn build(&self, config: &NotifierConfig) -> OsascriptSender {
-        OsascriptSender::new(config.osascript_bin.clone())
+        OsascriptSender::new(config.osascript_bin())
     }
 }
 

@@ -86,15 +86,36 @@ async fn call(srv: &mut Server<FakeFactory>, id: i64, method: &str, params: Valu
     serde_json::from_str(&reply.line.expect("a response line")).expect("valid response")
 }
 
-/// Send a `notify` notification (no id → no reply) and let its spawned delivery
-/// task run.
+/// Send a `notify` notification (no id → no reply). Delivery is spawned; callers
+/// use [`wait_for_count`] / [`settle`] to observe it deterministically.
 async fn notify(srv: &mut Server<FakeFactory>, params: Value) {
     let line = json!({ "jsonrpc": "2.0", "method": "notify", "params": params });
     let reply: Reply = srv.handle_line(&line.to_string()).await;
     assert!(reply.line.is_none(), "notify must not produce a response");
-    // The send is spawned; yield so the delivery task completes before asserting.
-    tokio::task::yield_now().await;
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+}
+
+/// Poll until the sender has recorded at least `n` notices (deterministic, no
+/// fixed sleep), failing fast if it never reaches the count.
+async fn wait_for_count(sender: &FakeSender, n: usize) {
+    for _ in 0..400 {
+        if sender.titles().len() >= n {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    panic!(
+        "timed out waiting for {n} notices, got {}",
+        sender.titles().len()
+    );
+}
+
+/// Give any in-flight spawned delivery a chance to run, for asserting a negative
+/// (that nothing — or nothing further — was delivered).
+async fn settle() {
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
 }
 
 fn init_params(config: Value) -> Value {
@@ -115,6 +136,7 @@ async fn delivers_all_four_event_kinds() {
         )
         .await;
     }
+    wait_for_count(&sender, 4).await;
     let titles = sender.titles();
     assert_eq!(titles.len(), 4, "all four events delivered: {titles:?}");
     assert!(titles.iter().any(|t| t.contains("入力待ち")));
@@ -160,6 +182,8 @@ async fn filter_suppresses_configured_events() {
     )
     .await;
 
+    wait_for_count(&sender, 2).await;
+    settle().await; // ensure the suppressed `done` didn't sneak in
     let titles = sender.titles();
     assert_eq!(
         titles.len(),
@@ -180,6 +204,7 @@ async fn failing_send_is_swallowed_and_server_keeps_serving() {
     call(&mut srv, 1, "initialize", init_params(json!({}))).await;
 
     notify(&mut srv, json!({ "event": "done", "title": "t" })).await;
+    settle().await;
     assert!(
         sender.titles().is_empty(),
         "the failing send recorded nothing"
