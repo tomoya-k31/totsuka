@@ -1,0 +1,30 @@
+[package]
+name = "notifier-macos"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "totsuka notifier plugin delivering events to the macOS Notification Center via osascript."
+# Internal binary crate — depends on plugin-protocol by path, so it must be
+# non-publishable for cargo-deny to permit the path dependency.
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "notifier-macos"
+path = "src/main.rs"
+
+[dependencies]
+plugin-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+semver = { workspace = true, features = ["serde"] }
+# `io-std` (stdin/stdout) on top of the workspace tokio feature set (which
+# already includes `process` for spawning osascript).
+tokio = { workspace = true, features = ["io-std"] }
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

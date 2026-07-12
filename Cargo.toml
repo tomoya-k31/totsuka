@@ -8,6 +8,7 @@ members = [
     "plugins/task-source-notion",
     "plugins/agent-ide-herdr",
     "plugins/agent-ide-orca",
+    "plugins/notifier-macos",
 ]
 
 [workspace.package]
