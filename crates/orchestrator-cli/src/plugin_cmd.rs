@@ -133,7 +133,7 @@ fn uninstall(loc: &Locations, name: &str) -> Result<(), CliError> {
     // Warn if config still declares it (config is the source of truth, F-56).
     if loc.load_config()?.plugins.contains_key(name) {
         eprintln!(
-            "warning: `{name}` is still declared in config.toml → remove `[plugins.{name}]` or it will error on `config validate`"
+            "warning: `{name}` is still declared in config.toml (it stays listed and possibly enabled) → remove `[plugins.{name}]` if you no longer want it"
         );
     }
     Ok(())
@@ -213,8 +213,8 @@ fn list(loc: &Locations, json: bool) -> Result<(), CliError> {
                 installed: inst.is_some(),
                 enabled: cfg.map(|c| c.enabled).unwrap_or(false),
                 kind: inst
-                    .map(|i| format!("{:?}", i.kind))
-                    .or_else(|| cfg.map(|c| format!("{:?}", c.kind))),
+                    .map(|i| i.kind.clone())
+                    .or_else(|| cfg.map(|c| c.kind.as_str().to_string())),
                 version: inst.map(|i| i.version.clone()),
                 protocol: inst.map(|i| i.protocol_version.clone()),
                 name,

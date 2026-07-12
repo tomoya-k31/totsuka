@@ -91,6 +91,8 @@ fn full_lifecycle_install_list_enable_disable_uninstall() {
     assert_eq!(rows[0]["name"], "github");
     assert_eq!(rows[0]["installed"], true);
     assert_eq!(rows[0]["enabled"], false);
+    // JSON kind is stable snake_case, not Debug ("TaskSource").
+    assert_eq!(rows[0]["kind"], "task_source");
 
     // Seed a commented config, then enable/disable and verify formatting is kept.
     fs::write(

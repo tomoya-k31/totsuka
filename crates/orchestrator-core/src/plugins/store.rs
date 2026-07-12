@@ -12,6 +12,7 @@
 //! hashes, [`PluginStore::commit_install`] copies.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use plugin_protocol::manifest::{Manifest, PluginKind};
@@ -67,7 +68,7 @@ pub struct InstallPlan {
     pub name: String,
     /// Where the plugin is being installed from (for display).
     pub source: PathBuf,
-    /// Absolute path of the source binary.
+    /// Canonical (absolute) path of the source binary.
     pub binary: PathBuf,
     /// Hex-encoded SHA-256 of the binary (§5.4).
     pub checksum: String,
@@ -80,8 +81,8 @@ pub struct InstallPlan {
 pub struct InstalledPlugin {
     /// Plugin name.
     pub name: String,
-    /// Plugin kind.
-    pub kind: PluginKind,
+    /// Plugin kind as a stable snake_case string (`task_source`, ...).
+    pub kind: String,
     /// Plugin version.
     pub version: String,
     /// Supported Orchestrator protocol range.
@@ -105,9 +106,10 @@ impl PluginStore {
         self.root.join(name)
     }
 
-    /// Whether a plugin is installed (its manifest exists).
+    /// Whether a plugin is installed (its manifest exists). An unsafe name is
+    /// treated as not installed (never probes outside the plugins root).
     pub fn is_installed(&self, name: &str) -> bool {
-        self.plugin_dir(name).join(MANIFEST_FILE).is_file()
+        validate_plugin_name(name).is_ok() && self.plugin_dir(name).join(MANIFEST_FILE).is_file()
     }
 
     /// Validate a source directory and compute its checksum, **without** writing
@@ -140,6 +142,9 @@ impl PluginStore {
                 dir: source_dir.to_path_buf(),
             });
         }
+        // Canonicalize so `binary` is genuinely absolute (the source may be a
+        // relative path).
+        let binary = binary.canonicalize()?;
         let checksum = sha256_hex(&binary)?;
 
         Ok(InstallPlan {
@@ -164,14 +169,9 @@ impl PluginStore {
 
     /// The plugin kind of an installed plugin as a config string, if installed.
     pub fn kind_str_of(&self, name: &str) -> Result<Option<String>, StoreError> {
-        Ok(self.manifest_of(name)?.map(|m| {
-            match m.kind {
-                PluginKind::TaskSource => "task_source",
-                PluginKind::AgentIde => "agent_ide",
-                PluginKind::Notifier => "notifier",
-            }
-            .to_string()
-        }))
+        Ok(self
+            .manifest_of(name)?
+            .map(|m| kind_string(m.kind).to_string()))
     }
 
     /// Remove an installed plugin. Returns whether it existed.
@@ -188,6 +188,7 @@ impl PluginStore {
 
     /// Read one installed plugin's manifest.
     pub fn manifest_of(&self, name: &str) -> Result<Option<Manifest>, StoreError> {
+        validate_plugin_name(name)?;
         let path = self.plugin_dir(name).join(MANIFEST_FILE);
         if !path.is_file() {
             return Ok(None);
@@ -213,13 +214,22 @@ impl PluginStore {
             let manifest = Manifest::from_toml_str(&fs::read_to_string(&manifest_path)?)?;
             plugins.push(InstalledPlugin {
                 name: manifest.name,
-                kind: manifest.kind,
+                kind: kind_string(manifest.kind).to_string(),
                 version: manifest.version.to_string(),
                 protocol_version: manifest.protocol_version.to_string(),
             });
         }
         plugins.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(plugins)
+    }
+}
+
+/// The stable snake_case string for a plugin kind (matches manifest/config).
+fn kind_string(kind: PluginKind) -> &'static str {
+    match kind {
+        PluginKind::TaskSource => "task_source",
+        PluginKind::AgentIde => "agent_ide",
+        PluginKind::Notifier => "notifier",
     }
 }
 
@@ -239,10 +249,20 @@ fn validate_plugin_name(name: &str) -> Result<(), StoreError> {
     }
 }
 
-/// Compute the hex-encoded SHA-256 of a file.
+/// Compute the hex-encoded SHA-256 of a file, streaming it (binaries can be
+/// large) rather than reading it all into memory.
 fn sha256_hex(path: &Path) -> Result<String, StoreError> {
-    let bytes = fs::read(path)?;
-    let digest = Sha256::digest(&bytes);
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let digest = hasher.finalize();
     Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -359,6 +379,28 @@ protocol_version = "{protocol_req}"
             store.uninstall("../../etc").unwrap_err(),
             StoreError::InvalidName(_)
         ));
+        // Read paths are guarded too (no probing outside the root).
+        assert!(!store.is_installed("../../etc/passwd"));
+        assert!(matches!(
+            store.manifest_of("../../etc/passwd").unwrap_err(),
+            StoreError::InvalidName(_)
+        ));
+    }
+
+    #[test]
+    fn listed_kind_is_snake_case() {
+        let base = scratch("store_kind");
+        let src = base.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fake_source(&src, "github", "^0.1", b"bin");
+        let store = PluginStore::new(base.join("plugins"));
+        let plan = store.prepare_install(&src).unwrap();
+        store.commit_install(&plan).unwrap();
+        assert_eq!(store.list().unwrap()[0].kind, "task_source");
+        assert_eq!(
+            store.kind_str_of("github").unwrap().as_deref(),
+            Some("task_source")
+        );
     }
 
     #[test]
