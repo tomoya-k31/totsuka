@@ -1,0 +1,13 @@
+[package]
+name = "orchestrator-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "totsuka orchestrator core: domain, state machine, and ports (hexagonal architecture)."
+
+[lints]
+workspace = true
+
+[dependencies]

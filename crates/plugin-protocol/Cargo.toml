@@ -1,0 +1,13 @@
+[package]
+name = "plugin-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Public type definitions for totsuka plugin developers (JSON-RPC 2.0, manifest, capabilities)."
+
+[lints]
+workspace = true
+
+[dependencies]

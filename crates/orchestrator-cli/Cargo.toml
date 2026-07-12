@@ -1,0 +1,21 @@
+[package]
+name = "orchestrator-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "totsuka CLI entrypoint (bin: totsuka)."
+# Internal binary crate — never published to crates.io.
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "totsuka"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+orchestrator-core = { path = "../orchestrator-core" }
