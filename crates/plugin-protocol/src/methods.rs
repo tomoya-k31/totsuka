@@ -257,6 +257,10 @@ pub struct NotifyParams {
     /// Related task id, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    /// The workflow that produced the event, if any. Lets a notifier filter by
+    /// workflow × event (F-92). Optional for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
     /// Notification title.
     pub title: String,
     /// Notification body.
@@ -371,6 +375,7 @@ mod tests {
         round_trip(&NotifyParams {
             event: NotifierEvent::WaitingInput,
             task_id: Some("42".into()),
+            workflow: Some("implement-issue".into()),
             title: "Input needed".into(),
             body: Some("The agent has a question".into()),
         });
