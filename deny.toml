@@ -3,7 +3,7 @@
 
 [advisories]
 version = 2
-# Fail on any known vulnerability. Unmaintained/yanked crates surface as warnings.
+# Fail on any known vulnerability (advisory DB defaults) and on yanked crates.
 yanked = "deny"
 
 [licenses]
