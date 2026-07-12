@@ -244,15 +244,21 @@ fn ps_args() -> Vec<String> {
     vec!["worktree".into(), "ps".into(), "--json".into()]
 }
 
+/// A fixed minimum spacing between state polls. Independent of `poll_interval`
+/// (which may be tiny in tests / misconfiguration) so a `terminal wait` that
+/// returns instantly can never spin the loop. Kept small so `done` is still
+/// detected promptly once the TUI goes idle.
+const MIN_POLL_FLOOR: Duration = Duration::from_millis(250);
+
 /// Wait before the next state poll: `orca terminal wait --for tui-idle` when a
 /// terminal handle is known (best-effort; errors are ignored), else sleep.
 ///
-/// A minimum floor is always honored so that a `terminal wait` which returns
+/// [`MIN_POLL_FLOOR`] is always honored so that a `terminal wait` which returns
 /// instantly — because the TUI is already idle (a persistent `waiting_input`)
 /// or because that flag errors on this orca build — cannot spin the poll loop
-/// into hammering the CLI.
+/// into hammering the CLI. During `working`, `terminal wait` blocks up to
+/// `poll` on its own, so the floor does not slow normal pacing.
 async fn pace<C: OrcaCli>(cli: &C, terminal: Option<&str>, poll: Duration) {
-    let floor = poll.min(Duration::from_millis(250));
     match terminal {
         Some(handle) => {
             let args = vec![
@@ -269,11 +275,11 @@ async fn pace<C: OrcaCli>(cli: &C, terminal: Option<&str>, poll: Duration) {
             let started = Instant::now();
             let _ = cli.run(args).await; // best-effort pacing
             let elapsed = started.elapsed();
-            if elapsed < floor {
-                tokio::time::sleep(floor - elapsed).await;
+            if elapsed < MIN_POLL_FLOOR {
+                tokio::time::sleep(MIN_POLL_FLOOR - elapsed).await;
             }
         }
-        None => tokio::time::sleep(poll).await,
+        None => tokio::time::sleep(poll.max(MIN_POLL_FLOOR)).await,
     }
 }
 

@@ -40,15 +40,19 @@ impl OrcaError {
             OrcaError::NotFound(_) => true,
             // orca signals a vanished worktree with a not-found message on
             // stderr. The exact wording is not contractual (orca is
-            // daily-released), so match several phrasings best-effort.
+            // daily-released), so match several phrasings best-effort — but only
+            // when the message is worktree-scoped, so an unrelated CLI error
+            // (e.g. a missing config file) is not mistaken for a gone worktree.
             OrcaError::CliFailed { stderr, .. } => {
                 let s = stderr.to_ascii_lowercase();
-                s.contains("not found")
-                    || s.contains("no such worktree")
-                    || s.contains("no worktree")
-                    || s.contains("unknown worktree")
-                    || s.contains("does not exist")
-                    || s.contains("invalid worktree")
+                s.contains("worktree")
+                    && (s.contains("not found")
+                        || s.contains("no such")
+                        || s.contains("unknown")
+                        || s.contains("does not exist")
+                        || s.contains("invalid")
+                        || s.contains("gone")
+                        || s.contains("missing"))
             }
             _ => false,
         }
