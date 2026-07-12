@@ -51,28 +51,35 @@ impl Paths {
     where
         F: Fn(&str) -> Option<String>,
     {
-        let home = env("HOME")
-            .filter(|h| !h.is_empty())
-            .ok_or(PathsError::NoHome)?;
-        let home = PathBuf::from(home);
+        // `HOME` is only consulted as a fallback base, so resolve it lazily:
+        // an environment that sets every `XDG_*` dir to an absolute path is
+        // valid even without `HOME` (e.g. some container/service setups).
+        let home = env("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
 
-        let base = |var: &str, default: &str| -> PathBuf {
-            xdg_base(env(var), &home, default).join(APP_NAME)
+        // Use the XDG env value when it is an absolute path, else the
+        // `$HOME/<default>` fallback — which requires `HOME` to be set.
+        let base = |var: &str, default: &str| -> Result<PathBuf, PathsError> {
+            let dir = match xdg_base_opt(env(var)) {
+                Some(dir) => dir,
+                None => home.as_ref().ok_or(PathsError::NoHome)?.join(default),
+            };
+            Ok(dir.join(APP_NAME))
         };
 
+        let state = base("XDG_STATE_HOME", ".local/state")?;
         // XDG_RUNTIME_DIR has no standard fallback; when unset we reuse the
-        // state directory so socket/lock paths remain deterministic (F-74).
-        let state = base("XDG_STATE_HOME", ".local/state");
+        // state directory so socket/lock paths remain deterministic (F-74)
+        // without depending on `HOME`.
         let runtime = match xdg_base_opt(env("XDG_RUNTIME_DIR")) {
             Some(dir) => dir.join(APP_NAME),
             None => state.clone(),
         };
 
         Ok(Self {
-            config: base("XDG_CONFIG_HOME", ".config"),
-            data: base("XDG_DATA_HOME", ".local/share"),
+            config: base("XDG_CONFIG_HOME", ".config")?,
+            data: base("XDG_DATA_HOME", ".local/share")?,
             state,
-            cache: base("XDG_CACHE_HOME", ".cache"),
+            cache: base("XDG_CACHE_HOME", ".cache")?,
             runtime,
         })
     }
@@ -104,14 +111,8 @@ impl Paths {
     }
 }
 
-/// Resolve one XDG base directory: use the env value when it is an absolute
-/// path (per the XDG spec, relative values are ignored), else the `$HOME`
-/// default.
-fn xdg_base(value: Option<String>, home: &Path, default: &str) -> PathBuf {
-    xdg_base_opt(value).unwrap_or_else(|| home.join(default))
-}
-
-/// Return the env value as a path only if it is set and absolute.
+/// Return the env value as a path only if it is set and absolute (per the XDG
+/// spec, relative values are ignored).
 fn xdg_base_opt(value: Option<String>) -> Option<PathBuf> {
     value
         .filter(|v| !v.is_empty())
@@ -184,8 +185,37 @@ mod tests {
     }
 
     #[test]
-    fn missing_home_is_an_error() {
+    fn missing_home_is_an_error_when_a_fallback_is_needed() {
+        // No HOME and no XDG dirs -> the first fallback needs HOME.
         let err = Paths::from_env(env_from(&[])).unwrap_err();
         assert!(matches!(err, PathsError::NoHome));
+
+        // HOME still required if even one XDG dir is missing.
+        let err = Paths::from_env(env_from(&[
+            ("XDG_CONFIG_HOME", "/xdg/config"),
+            ("XDG_DATA_HOME", "/xdg/data"),
+            ("XDG_STATE_HOME", "/xdg/state"),
+            // XDG_CACHE_HOME missing -> needs HOME.
+        ]))
+        .unwrap_err();
+        assert!(matches!(err, PathsError::NoHome));
+    }
+
+    #[test]
+    fn resolves_without_home_when_all_xdg_set() {
+        // HOME is unnecessary when every base dir is provided as an absolute
+        // XDG value (runtime falls back to state, not HOME).
+        let paths = Paths::from_env(env_from(&[
+            ("XDG_CONFIG_HOME", "/xdg/config"),
+            ("XDG_DATA_HOME", "/xdg/data"),
+            ("XDG_STATE_HOME", "/xdg/state"),
+            ("XDG_CACHE_HOME", "/xdg/cache"),
+        ]))
+        .unwrap();
+
+        assert_eq!(paths.config_dir(), Path::new("/xdg/config/totsuka"));
+        assert_eq!(paths.cache_dir(), Path::new("/xdg/cache/totsuka"));
+        // XDG_RUNTIME_DIR unset -> state dir, no HOME required.
+        assert_eq!(paths.runtime_dir(), paths.state_dir());
     }
 }

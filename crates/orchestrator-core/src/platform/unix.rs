@@ -12,9 +12,16 @@ pub struct UnixProcessProbe;
 
 impl ProcessProbe for UnixProcessProbe {
     fn is_alive(&self, pid: u32) -> bool {
+        // `pid_t` is signed. A `u32` that doesn't fit cannot name a real
+        // process, and reinterpreting it as a negative value would make
+        // `kill()` target a process group / broadcast instead — a false
+        // positive. Reject out-of-range PIDs up front.
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
         // SAFETY: `kill` with signal 0 has no side effects; it only reports
         // whether `pid` can be signalled.
-        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        let ret = unsafe { libc::kill(pid, 0) };
         if ret == 0 {
             return true;
         }
@@ -42,7 +49,15 @@ mod tests {
 
     #[test]
     fn almost_certainly_dead_pid_is_not_alive() {
-        // A very high PID is exceedingly unlikely to be in use.
-        assert!(!UnixProcessProbe.is_alive(u32::MAX - 1));
+        // High but still within `pid_t` (i32) range, so this genuinely
+        // exercises the `kill` path (returns ESRCH), not the guard below.
+        assert!(!UnixProcessProbe.is_alive(2_000_000_000));
+    }
+
+    #[test]
+    fn out_of_range_pid_is_not_alive() {
+        // Beyond `pid_t::MAX`; must be rejected before reaching `kill` so it
+        // never wraps to a negative process-group target.
+        assert!(!UnixProcessProbe.is_alive(u32::MAX));
     }
 }
