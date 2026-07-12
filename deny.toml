@@ -25,6 +25,9 @@ confidence-threshold = 0.9
 # Warn (do not fail) on duplicate transitive versions for now.
 multiple-versions = "warn"
 wildcards = "deny"
+# Workspace-internal crates are referenced by `path` without a version, which
+# cargo-deny otherwise treats as a wildcard. Permit that for path deps only.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
