@@ -17,4 +17,5 @@ pub mod domain;
 pub mod logging;
 pub mod paths;
 pub mod platform;
+pub mod plugins;
 pub mod ports;

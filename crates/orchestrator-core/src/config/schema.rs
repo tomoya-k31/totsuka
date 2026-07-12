@@ -77,6 +77,17 @@ pub enum PluginKind {
     Notifier,
 }
 
+impl PluginKind {
+    /// The stable snake_case wire/config string for this kind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PluginKind::TaskSource => "task_source",
+            PluginKind::AgentIde => "agent_ide",
+            PluginKind::Notifier => "notifier",
+        }
+    }
+}
+
 /// Common, Orchestrator-interpreted plugin fields from `[plugins.{name}]`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
