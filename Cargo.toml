@@ -17,6 +17,9 @@ repository = "https://github.com/tomoya-k31/totsuka"
 # `<dep>.workspace = true`. Feature/version bumps happen in one place.
 [workspace.dependencies]
 clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+libc = "0.2"
+keyring = { version = "3", features = ["apple-native"] }
 
 # Deny warnings across the whole workspace. Each crate opts in with
 # `[lints] workspace = true`.

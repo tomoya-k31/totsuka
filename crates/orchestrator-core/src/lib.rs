@@ -13,4 +13,6 @@
 
 pub mod adapters;
 pub mod domain;
+pub mod paths;
+pub mod platform;
 pub mod ports;
