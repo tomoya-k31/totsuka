@@ -1,7 +1,7 @@
 //! The orca adapter logic (F-30〜F-38): translate the Orchestrator's agent_ide
 //! calls into `orca` CLI invocations and a polled state stream.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use plugin_protocol::methods::{
     AgentState, ExecutionMode, SessionAttachResult, StateNotification, TaskDispatchParams,
@@ -126,21 +126,51 @@ impl<C: OrcaCli> OrcaAgent<C> {
 
         tokio::spawn(async move {
             let mut previous = AgentState::Idle;
+            let mut consecutive_errors = 0u32;
             loop {
-                // Read the worktree's current state; a vanished worktree means the
-                // run ended (done), any other error stops the stream.
-                let entry = match cli.run(ps_args()).await {
-                    Ok(ps) => find_worktree(&ps, &session_id),
-                    Err(e) if e.is_missing() => None,
-                    Err(_) => break,
+                // Resolve the current state. A worktree merely absent from `ps`
+                // is confirmed via `worktree show` before concluding the run
+                // ended — a transient/empty `ps` must not be read as `done`.
+                let resolved = match cli.run(ps_args()).await {
+                    Ok(ps) => match find_worktree(&ps, &session_id) {
+                        Some(entry) => Resolved::Alive(
+                            map_orca_state(entry_state(&entry).unwrap_or("unknown"), previous),
+                            entry_terminal(&entry).map(str::to_string),
+                        ),
+                        None => confirm(&cli, &session_id, previous).await,
+                    },
+                    Err(e) if e.is_missing() => confirm(&cli, &session_id, previous).await,
+                    // A transient CLI error: don't guess a state, retry.
+                    Err(_) => Resolved::Unknown,
                 };
-                let (state, terminal_handle) = match &entry {
-                    Some(e) => (
-                        map_orca_state(entry_state(e).unwrap_or("unknown"), previous),
-                        entry_terminal(e).map(str::to_string),
-                    ),
-                    // Not listed anymore → the run is over.
-                    None => (AgentState::Done, None),
+
+                let (state, terminal_handle) = match resolved {
+                    Resolved::Alive(state, terminal) => {
+                        consecutive_errors = 0;
+                        (state, terminal)
+                    }
+                    // Confirmed gone → the run genuinely ended.
+                    Resolved::Gone => {
+                        consecutive_errors = 0;
+                        (AgentState::Done, None)
+                    }
+                    // Couldn't read state; retry, but after repeated failures
+                    // surface a terminal `failed` rather than hang or die silently.
+                    Resolved::Unknown => {
+                        consecutive_errors += 1;
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            let _ = tx.send(StateNotification {
+                                session_id: session_id.clone(),
+                                state: AgentState::Failed,
+                                log_chunk: Some(
+                                    "orca state became unreadable after repeated attempts".into(),
+                                ),
+                            });
+                            break;
+                        }
+                        pace(&cli, None, poll).await;
+                        continue;
+                    }
                 };
 
                 if state != previous {
@@ -176,6 +206,39 @@ impl<C: OrcaCli> OrcaAgent<C> {
     }
 }
 
+/// The number of consecutive unreadable-state polls after which the stream
+/// gives up and reports `failed`, rather than looping or dying silently.
+const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
+/// The state resolution for one poll: a live worktree with a state, a confirmed
+/// gone worktree (run over), or an unreadable state (retry).
+enum Resolved {
+    Alive(AgentState, Option<String>),
+    Gone,
+    Unknown,
+}
+
+/// Confirm whether a worktree missing from `ps` is truly gone, via
+/// `worktree show`: a not-found error means gone; a successful read means it is
+/// still alive (the `ps` miss was transient); any other error is unknown.
+async fn confirm<C: OrcaCli>(cli: &C, session_id: &str, previous: AgentState) -> Resolved {
+    let args = vec![
+        "worktree".into(),
+        "show".into(),
+        "--worktree".into(),
+        format!("id:{session_id}"),
+        "--json".into(),
+    ];
+    match cli.run(args).await {
+        Ok(show) => Resolved::Alive(
+            map_orca_state(entry_state(&show).unwrap_or("unknown"), previous),
+            entry_terminal(&show).map(str::to_string),
+        ),
+        Err(e) if e.is_missing() => Resolved::Gone,
+        Err(_) => Resolved::Unknown,
+    }
+}
+
 /// `orca worktree ps --json` argument vector.
 fn ps_args() -> Vec<String> {
     vec!["worktree".into(), "ps".into(), "--json".into()]
@@ -183,7 +246,13 @@ fn ps_args() -> Vec<String> {
 
 /// Wait before the next state poll: `orca terminal wait --for tui-idle` when a
 /// terminal handle is known (best-effort; errors are ignored), else sleep.
+///
+/// A minimum floor is always honored so that a `terminal wait` which returns
+/// instantly — because the TUI is already idle (a persistent `waiting_input`)
+/// or because that flag errors on this orca build — cannot spin the poll loop
+/// into hammering the CLI.
 async fn pace<C: OrcaCli>(cli: &C, terminal: Option<&str>, poll: Duration) {
+    let floor = poll.min(Duration::from_millis(250));
     match terminal {
         Some(handle) => {
             let args = vec![
@@ -197,7 +266,12 @@ async fn pace<C: OrcaCli>(cli: &C, terminal: Option<&str>, poll: Duration) {
                 poll.as_millis().to_string(),
                 "--json".into(),
             ];
+            let started = Instant::now();
             let _ = cli.run(args).await; // best-effort pacing
+            let elapsed = started.elapsed();
+            if elapsed < floor {
+                tokio::time::sleep(floor - elapsed).await;
+            }
         }
         None => tokio::time::sleep(poll).await,
     }

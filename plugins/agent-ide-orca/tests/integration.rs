@@ -241,6 +241,49 @@ async fn state_stream_reports_failed_on_abnormal_state() {
 }
 
 #[tokio::test]
+async fn transient_ps_miss_does_not_report_false_done() {
+    // A worktree momentarily absent from `ps` must be confirmed via
+    // `worktree show` before concluding the run ended — a transient miss while
+    // the agent is still working must NOT emit a spurious `done`.
+    let cli = FakeCli::default();
+    cli.on("worktree create", vec![Canned::Ok(json!({ "id": "wt3" }))]);
+    cli.on(
+        "worktree ps",
+        vec![
+            Canned::Ok(json!({ "worktrees": [{ "id": "wt3", "state": "working" }] })),
+            // Transient miss: worktree not listed this poll.
+            Canned::Ok(json!({ "worktrees": [] })),
+            Canned::Ok(json!({ "worktrees": [{ "id": "wt3", "state": "done" }] })),
+        ],
+    );
+    // `worktree show` confirms it is still alive & working during the miss.
+    cli.on(
+        "worktree show",
+        vec![Canned::Ok(json!({ "id": "wt3", "state": "working" }))],
+    );
+
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    d.call(
+        "task/dispatch",
+        json!({
+            "task": { "id": "T-3", "source": "github", "title": "Transient" },
+            "worktree_path": "/wt/agent-3",
+            "mode": "implement"
+        }),
+    )
+    .await;
+    d.call("state/subscribe", json!({ "session_id": "wt3" }))
+        .await;
+
+    // Exactly two notifications: running then done — no false done in between.
+    let running = d.recv().await.unwrap();
+    assert_eq!(running["params"]["state"], "running");
+    let done = d.recv().await.unwrap();
+    assert_eq!(done["params"]["state"], "done");
+}
+
+#[tokio::test]
 async fn attach_success_and_missing_worktree() {
     let cli = FakeCli::default();
     cli.on(

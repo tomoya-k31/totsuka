@@ -38,12 +38,17 @@ impl OrcaError {
     pub fn is_missing(&self) -> bool {
         match self {
             OrcaError::NotFound(_) => true,
-            // orca signals a vanished worktree with a not-found message on stderr.
+            // orca signals a vanished worktree with a not-found message on
+            // stderr. The exact wording is not contractual (orca is
+            // daily-released), so match several phrasings best-effort.
             OrcaError::CliFailed { stderr, .. } => {
                 let s = stderr.to_ascii_lowercase();
                 s.contains("not found")
                     || s.contains("no such worktree")
+                    || s.contains("no worktree")
                     || s.contains("unknown worktree")
+                    || s.contains("does not exist")
+                    || s.contains("invalid worktree")
             }
             _ => false,
         }
