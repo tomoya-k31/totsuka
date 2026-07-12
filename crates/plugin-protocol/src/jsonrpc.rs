@@ -76,8 +76,11 @@ impl Request {
 pub struct Response {
     /// Always [`JSONRPC_VERSION`].
     pub jsonrpc: String,
-    /// The id of the request being answered.
-    pub id: RequestId,
+    /// The id of the request being answered. Per JSON-RPC 2.0 this is `null`
+    /// when the id could not be determined (parse error / invalid request), so
+    /// it is modelled as an `Option` that serializes as `null` when absent.
+    #[serde(default)]
+    pub id: Option<RequestId>,
     /// Result payload on success.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
@@ -91,17 +94,28 @@ impl Response {
     pub fn result(id: impl Into<RequestId>, result: Value) -> Self {
         Self {
             jsonrpc: JSONRPC_VERSION.to_string(),
-            id: id.into(),
+            id: Some(id.into()),
             result: Some(result),
             error: None,
         }
     }
 
-    /// An error response.
+    /// An error response for a known request id.
     pub fn error(id: impl Into<RequestId>, error: Error) -> Self {
         Self {
             jsonrpc: JSONRPC_VERSION.to_string(),
-            id: id.into(),
+            id: Some(id.into()),
+            result: None,
+            error: Some(error),
+        }
+    }
+
+    /// An error response whose id could not be determined (JSON-RPC `null`
+    /// id) — used for parse errors and invalid requests.
+    pub fn error_without_id(error: Error) -> Self {
+        Self {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            id: None,
             result: None,
             error: Some(error),
         }
@@ -222,6 +236,18 @@ mod tests {
         assert!(err.is_error());
         let back: Response = serde_json::from_str(&to_line(&err).unwrap()).unwrap();
         assert_eq!(back.error.unwrap().code, error_code::METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn error_without_id_serializes_null_id() {
+        // Parse errors have no determinable id; JSON-RPC requires `"id": null`.
+        let err = Response::error_without_id(Error::new(error_code::PARSE_ERROR, "bad json"));
+        let value: serde_json::Value = serde_json::from_str(&to_line(&err).unwrap()).unwrap();
+        assert!(value.get("id").is_some(), "id key must be present");
+        assert!(value["id"].is_null(), "id must be null");
+        let back: Response = serde_json::from_value(value).unwrap();
+        assert_eq!(back.id, None);
+        assert_eq!(back.error.unwrap().code, error_code::PARSE_ERROR);
     }
 
     #[test]

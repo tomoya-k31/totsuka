@@ -56,10 +56,14 @@ mod tests {
             url: None,
             assignee: None,
         };
-        let json = serde_json::to_string(&task).unwrap();
-        assert!(!json.contains("body"), "empty optionals omitted");
-        assert!(!json.contains("labels"));
-        let back: Task = serde_json::from_str(&json).unwrap();
+        // Parse to a JSON object and assert on keys (robust against values
+        // that might contain field-name substrings).
+        let value: serde_json::Value = serde_json::to_value(&task).unwrap();
+        let obj = value.as_object().unwrap();
+        assert!(!obj.contains_key("body"), "empty optionals omitted");
+        assert!(!obj.contains_key("labels"));
+        assert!(obj.contains_key("repo_hint"));
+        let back: Task = serde_json::from_value(value).unwrap();
         assert_eq!(back, task);
     }
 }

@@ -91,4 +91,4 @@ pub use methods::{
     TasksFetchResult,
 };
 pub use task::Task;
-pub use version::{PROTOCOL_VERSION, is_compatible, protocol_version};
+pub use version::{PROTOCOL_VERSION, is_compatible, is_compatible_with_current, protocol_version};
