@@ -7,8 +7,11 @@
 
 use std::collections::HashSet;
 
+use plugin_protocol::manifest::OutputCapability;
+
 use super::resolve::expand_path;
 use super::schema::{CURRENT_SCHEMA_VERSION, PluginKind, RootConfig};
+use crate::domain::workflow::{self, Severity, Workflow};
 
 /// A single static-validation failure. `Display` gives "cause + next action".
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -152,6 +155,63 @@ where
     }
 
     errors
+}
+
+/// Severity of a validation finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindingSeverity {
+    /// Blocks: `config validate` fails.
+    Error,
+    /// Advisory only.
+    Warning,
+}
+
+/// A unified validation finding (static check or workflow check).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finding {
+    /// Severity.
+    pub severity: FindingSeverity,
+    /// Human-readable message ("cause + next action").
+    pub message: String,
+}
+
+/// Run the full config validation: static checks (F-58/63) **plus** workflow
+/// validation (F-81/82/83), returning errors and warnings in one list. This is
+/// the entry point the `config validate` command (#64) drives.
+///
+/// `source_outputs` returns a task-source plugin's declared output
+/// capabilities (from its manifest offline, or `None` when unknown).
+pub fn validate<E, F>(cfg: &RootConfig, env: &E, source_outputs: F) -> Vec<Finding>
+where
+    E: Fn(&str) -> Option<String>,
+    F: Fn(&str) -> Option<Vec<OutputCapability>>,
+{
+    let mut findings: Vec<Finding> = validate_static(cfg, env)
+        .into_iter()
+        .map(|e| Finding {
+            severity: FindingSeverity::Error,
+            message: e.to_string(),
+        })
+        .collect();
+
+    let workflows = Workflow::from_configs(&cfg.workflows);
+    for issue in workflow::validate_workflows(&workflows, source_outputs) {
+        findings.push(Finding {
+            severity: match issue.severity {
+                Severity::Error => FindingSeverity::Error,
+                Severity::Warning => FindingSeverity::Warning,
+            },
+            message: issue.message,
+        });
+    }
+    findings
+}
+
+/// Whether any finding is an error (used for the `config validate` exit code).
+pub fn has_errors(findings: &[Finding]) -> bool {
+    findings
+        .iter()
+        .any(|f| f.severity == FindingSeverity::Error)
 }
 
 /// Validate one plugin reference: it must exist, be enabled (F-58), and be of
@@ -352,6 +412,56 @@ worktree_location = "{{repo}}/../.worktrees/{{bogus}}"
             errors
                 .iter()
                 .any(|e| matches!(e, ValidationError::UnsupportedVersion { found: 999, .. }))
+        );
+    }
+
+    #[test]
+    fn unified_validate_surfaces_workflow_errors_and_warnings() {
+        // Two enabled plugins so plugin-ref checks pass; a plan×pull_request
+        // workflow (error) and an overlapping pair (warning).
+        let toml = r#"
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[workflows]]
+name = "bad_plan"
+source = "github"
+trigger = { label = "x" }
+mode = "plan"
+agent = "herdr"
+output = "pull_request"
+
+[[workflows]]
+name = "overlap_a"
+source = "github"
+trigger = { label = "y" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+
+[[workflows]]
+name = "overlap_b"
+source = "github"
+trigger = { status = "実装待ち" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+"#;
+        let cfg = RootConfig::from_toml_str(toml).unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| None);
+
+        assert!(has_errors(&findings), "plan×pull_request must be an error");
+        assert!(findings.iter().any(|f| f.severity == FindingSeverity::Error
+            && f.message.contains("plan with output = pull_request")));
+        assert!(
+            findings.iter().any(
+                |f| f.severity == FindingSeverity::Warning && f.message.contains("overlapping")
+            )
         );
     }
 }

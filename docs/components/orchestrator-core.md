@@ -3,8 +3,8 @@ type: Component
 title: orchestrator-core クレート
 description: totsuka のコア。ヘキサゴナルアーキテクチャの domain（ドメイン・ステートマシン）/ ports（TaskSource・AgentIde・LlmRouter・SecretStore 等の trait）/ adapters（JSON-RPC ブリッジ・SQLite・Keychain）を担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
-tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin, worktree, git]
-timestamp: 2026-07-12T01:10:00Z
+tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin, worktree, git, workflow]
+timestamp: 2026-07-12T01:20:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -17,11 +17,11 @@ totsuka のビジネスロジックの中核。外部 I/O を持たず、ports �
 
 | モジュール | 責務 | 実装タスク |
 |---|---|---|
-| `domain` | 純粋なドメイン型とタスクステートマシン（`domain::state`: `transition(from,event)` 純関数、9 状態、F-71） | #48 / #54 ほか |
+| `domain` | 純粋なドメイン型。`state`（`transition(from,event)` 純関数、9 状態、F-71）、`workflow`（`source×trigger×mode×agent×output` 定義の解釈・トリガーマッチング（定義順 first-match F-81・status/label 防御的再判定）・検証（plan×pull_request エラー F-82、output=source の capability 検証 F-83、trigger 重複警告 F-81）・on_success/on_failure=OutcomeAction F-84） | #48 / #54 |
 | `ports` | 差し替え対象の trait 境界（`SecretStore` / `ProcessProbe`、後続で `TaskSource` / `AgentIde` / `LlmRouter` / 永続化） | 各機能タスク |
 | `paths` | XDG Base Directory 準拠のパス解決（`config`/`data`/`state`/`cache`/`runtime`、`totsuka` サフィックス、未設定時 `$HOME` フォールバック）。macOS でも XDG を明示採用 | #46 |
 | `platform` | OS 依存実装の隔離。`platform::macos`（Keychain = keyring クレート）、`platform::unix`（`ProcessProbe` = `kill(pid,0)`）、`platform::fallback`（非 macOS の未サポート SecretStore）。`PlatformSecretStore` / `PlatformProcessProbe` で現行 OS の実装を選ぶ | #46 |
-| `config` | 設定ロードと検証。`schema`（`config.toml` パース、F-60/61/64）、`raw`（`plugins/{name}.toml` を無解釈保持 → JSON、F-64）、`resolve`（`${ENV}`/`keychain:` シークレット解決・`~`/`${ENV}` パス展開、F-62/65）、`layered`（CLI>env>plugin-file>config-default の優先順位、F-66）、`validate`（静的検証、F-63/58）、`edit`（`toml_edit` で `[plugins.{name}] enabled` のみ書き換え・コメント整形保持、F-57） | #47 / #52 |
+| `config` | 設定ロードと検証。`schema`（`config.toml` パース、F-60/61/64）、`raw`（`plugins/{name}.toml` を無解釈保持 → JSON、F-64）、`resolve`（`${ENV}`/`keychain:` シークレット解決・`~`/`${ENV}` パス展開、F-62/65）、`layered`（CLI>env>plugin-file>config-default の優先順位、F-66）、`validate`（静的検証 F-63/58 ＋ ワークフロー検証 F-81/82/83 を統合する `validate()` エントリ、Error/Warning の Finding を返す）、`edit`（`toml_edit` で `[plugins.{name}] enabled` のみ書き換え・コメント整形保持、F-57） | #47 / #52 / #54 |
 | `plugins` | プラグインの on-disk ストア（`store`）。install（prepare→confirm→commit の2段、SHA-256 表示 §5.4、manifest/protocol 互換検証 F-54）・uninstall・list。install=バイナリの存在、enabled=設定の宣言を分離（F-56） | #52 |
 | `worktree` | git worktree ライフサイクル（F-20〜25/85）。作成（fetch→origin/{default} を commit 解決して分岐→worktree add、並列安全）、掃除（immediate/retention/manual、未コミットは skip）、孤児検出。ブランチ/配置テンプレート描画とサニタイズ。git は `ports::GitRunner` 越し（`adapters::git::SystemGitRunner`） | #53 |
 | `logging` | 構造化ログと機密マスキング。`redact`（フィールド denylist＋値パターン）、`layer`（redact 済み JSON Lines / 人間可読を出力する tracing レイヤ）、`rotation`（日次ログの世代保持）。規約は [ログ規約](/development/logging-conventions.md) | #49 |

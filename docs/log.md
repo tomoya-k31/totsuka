@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-12
+* **Update**: ワークフロー定義とトリガーマッチング（#54）。[orchestrator-core](/components/orchestrator-core.md) に `domain::workflow`（Workflow/Trigger/OutcomeAction、定義順 first-match マッチング、plan×pull_request・output=source capability・trigger 重複の検証）を追加。
 * **Update**: git worktree ライフサイクル管理（#53）。[orchestrator-core](/components/orchestrator-core.md) に `worktree` モジュールと `ports::GitRunner` / `adapters::git::SystemGitRunner` を追加。作成（origin/{default} を commit 解決して分岐・並列安全）・掃除（ポリシー別、未コミットは skip）・孤児検出を実装。実 git（ローカル bare を origin）で結合テスト。
 * **Update**: プラグイン管理コマンド（#52）。[orchestrator-core](/components/orchestrator-core.md) に `plugins::store`（install/uninstall/list、prepare→confirm→commit・SHA-256・manifest 検証）と `config::edit`（toml_edit で enabled 書き換え・整形保持）を追加。[orchestrator-cli](/components/orchestrator-cli.md) に `plugin` サブコマンドを配線。
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) に `adapters::plugin_host`（#51）を追加。プラグインをサブプロセス起動し NDJSON JSON-RPC で通信（tokio）。ライフサイクル・protocol 互換チェック・リクエスト相関・タイムアウト・クラッシュ隔離・config/validate 委譲。結合テスト用の mock_plugin バイナリ同梱。

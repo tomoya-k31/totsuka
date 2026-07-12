@@ -23,4 +23,6 @@ pub use schema::{
     CURRENT_SCHEMA_VERSION, ConfigError, LlmConfig, LogSettings, OutputPolicy, PluginConfig,
     PluginKind, RepositoryConfig, RootConfig, WorkflowConfig, WorkflowMode, WorktreeConfig,
 };
-pub use validate::{ValidationError, validate_static};
+pub use validate::{
+    Finding, FindingSeverity, ValidationError, has_errors, validate, validate_static,
+};
