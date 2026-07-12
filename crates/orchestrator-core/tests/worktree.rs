@@ -108,11 +108,17 @@ fn create_cleanup_and_orphan_detection() {
     let origin_main = git(&clone, &["rev-parse", "origin/main"]);
     assert_eq!(head, origin_main);
 
-    // Orphan detection: this worktree is unknown → reported.
+    // Orphan detection: this worktree is unknown → reported; the main working
+    // tree is never reported.
     let orphans = mgr.detect_orphans(&clone, &HashSet::new()).unwrap();
     assert!(orphans.iter().any(|p| canon(p) == canon(&wt.path)));
-    // ...but not when it is known.
-    let known: HashSet<PathBuf> = [canon(&wt.path)].into_iter().collect();
+    assert!(
+        !orphans.iter().any(|p| canon(p) == canon(&clone)),
+        "the main worktree must never be an orphan"
+    );
+    // ...but not when it is known. Pass the raw (non-canonical) path that
+    // `create()` returned to confirm detection canonicalizes both sides.
+    let known: HashSet<PathBuf> = [wt.path.clone()].into_iter().collect();
     let orphans = mgr.detect_orphans(&clone, &known).unwrap();
     assert!(
         orphans.is_empty(),
@@ -187,6 +193,50 @@ fn dirty_worktree_is_not_removed() {
         .unwrap();
     assert_eq!(outcome, CleanupOutcome::DirtySkipped);
     assert!(wt.path.is_dir(), "dirty worktree must be preserved");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn retain_policies_do_not_remove() {
+    let base = scratch("retain");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    // Manual: never auto-remove.
+    let wt = mgr.create(&request(&clone, "m", &env)).unwrap();
+    let outcome = mgr
+        .cleanup(
+            &clone,
+            &wt.path,
+            &wt.branch,
+            CleanupPolicy::Manual,
+            Some("2026-07-01T00:00:00Z"),
+            "2026-07-12T00:00:00Z",
+        )
+        .unwrap();
+    assert_eq!(outcome, CleanupOutcome::Retained);
+    assert!(wt.path.is_dir(), "manual policy must keep the worktree");
+
+    // RetentionDays not yet elapsed: keep.
+    let wt2 = mgr.create(&request(&clone, "r", &env)).unwrap();
+    let outcome = mgr
+        .cleanup(
+            &clone,
+            &wt2.path,
+            &wt2.branch,
+            CleanupPolicy::RetentionDays(30),
+            Some("2026-07-11T00:00:00Z"),
+            "2026-07-12T00:00:00Z",
+        )
+        .unwrap();
+    assert_eq!(outcome, CleanupOutcome::Retained);
+    assert!(
+        wt2.path.is_dir(),
+        "retention-not-elapsed must keep the worktree"
+    );
 
     let _ = std::fs::remove_dir_all(&base);
 }

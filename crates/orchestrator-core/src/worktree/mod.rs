@@ -298,14 +298,25 @@ impl<G: GitRunner> WorktreeManager<G> {
                 stderr: remove.stderr,
             });
         }
-        // Best-effort branch delete; a missing branch is not an error.
-        let _ = self.git.run(repo_path, &["branch", "-D", branch])?;
+        // Safe branch delete: `-d` refuses to drop a branch with unmerged
+        // commits, so committed-but-unpushed work is never force-destroyed
+        // (extends the dirty guard to the committed case). Best-effort: a
+        // missing or retained branch is not an error.
+        let _ = self.git.run(repo_path, &["branch", "-d", branch])?;
         Ok(CleanupOutcome::Removed)
     }
 
     /// Whether a worktree has uncommitted (staged/unstaged/untracked) changes.
     fn has_uncommitted_changes(&self, worktree_path: &Path) -> Result<bool, WorktreeError> {
         let out = self.git.run(worktree_path, &["status", "--porcelain"])?;
+        if !out.success() {
+            // Fail closed: if we cannot determine cleanliness, do not proceed
+            // to remove (surface the error rather than assuming clean).
+            return Err(WorktreeError::Git {
+                command: "status".to_string(),
+                stderr: out.stderr,
+            });
+        }
         Ok(!out.stdout.trim().is_empty())
     }
 
@@ -326,6 +337,10 @@ impl<G: GitRunner> WorktreeManager<G> {
             });
         }
         let main = canonical(repo_path);
+        // git emits symlink-resolved absolute paths; compare against a
+        // canonicalized copy of `known` so callers can pass the (possibly
+        // non-canonical) path returned by `create()` without false orphans.
+        let known_canonical: HashSet<PathBuf> = known.iter().map(|p| canonical(p)).collect();
         let mut orphans = Vec::new();
         for line in out.stdout.lines() {
             if let Some(raw) = line.strip_prefix("worktree ") {
@@ -334,7 +349,7 @@ impl<G: GitRunner> WorktreeManager<G> {
                 if canonical_path == main {
                     continue; // never the main working tree
                 }
-                if !known.contains(&path) && !known.contains(&canonical_path) {
+                if !known_canonical.contains(&canonical_path) {
                     orphans.push(path);
                 }
             }
