@@ -33,9 +33,12 @@ impl Trigger {
         &self.0
     }
 
-    /// Convert to JSON for the `tasks/fetch` RPC params.
+    /// Convert to JSON for the `tasks/fetch` RPC params. A `toml::Table` always
+    /// serializes to a JSON object; the fallback is an empty object (never
+    /// `null`) so the RPC always receives an object.
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::to_value(&self.0).unwrap_or(serde_json::Value::Null)
+        serde_json::to_value(&self.0)
+            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
     }
 
     /// Whether `task` satisfies the conditions the Orchestrator understands.
@@ -233,33 +236,28 @@ where
 
 /// Whether some task could satisfy **both** triggers (F-81 ambiguity).
 ///
-/// Two triggers can both match unless a shared key imposes contradictory
-/// constraints. A task has a single `status`, so two different required
-/// statuses are mutually exclusive (e.g. `設計待ち` vs `実装待ち` — not
-/// ambiguous). Labels form a set, so multiple required labels are jointly
-/// satisfiable; unknown/opaque keys cannot be proven contradictory, so they are
-/// treated as compatible. Disjoint keys therefore overlap (a task can satisfy
-/// both), which the previous subset check missed.
+/// Only the `status` dimension can make two triggers mutually exclusive: a task
+/// has a single `status`, so if the two triggers require *different* statuses
+/// no task matches both (e.g. `設計待ち` vs `実装待ち` — not ambiguous).
+/// `status` and `project_status` are the **same** dimension (both compared to
+/// `task.status` in [`Trigger::matches`]), so they are normalized together.
+/// Labels form a set (multiple required labels are jointly satisfiable) and
+/// opaque keys cannot be proven contradictory, so neither forces non-overlap.
 fn triggers_overlap(a: &Trigger, b: &Trigger) -> bool {
-    let bt = b.as_table();
-    a.as_table().iter().all(|(key, av)| match bt.get(key) {
-        Some(bv) => constraints_compatible(key, av, bv),
-        None => true,
-    })
+    let mut statuses: Vec<&str> = required_statuses(a.as_table());
+    statuses.extend(required_statuses(b.as_table()));
+    statuses.sort_unstable();
+    statuses.dedup();
+    // 0 or 1 distinct required status -> jointly satisfiable; 2+ -> exclusive.
+    statuses.len() <= 1
 }
 
-/// Whether the two constraints on the same trigger key can be satisfied at once.
-fn constraints_compatible(key: &str, a: &toml::Value, b: &toml::Value) -> bool {
-    match key {
-        // Single-valued: a task cannot have two different statuses at once.
-        "status" | "project_status" => match (a.as_str(), b.as_str()) {
-            (Some(x), Some(y)) => x == y,
-            _ => true, // opaque (non-string) values are trusted
-        },
-        // Labels form a set; requiring several labels is jointly satisfiable.
-        // Opaque keys cannot be proven contradictory.
-        _ => true,
-    }
+/// The string status values a trigger requires (from `status`/`project_status`).
+fn required_statuses(table: &toml::Table) -> Vec<&str> {
+    ["status", "project_status"]
+        .iter()
+        .filter_map(|key| table.get(*key).and_then(|v| v.as_str()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -460,6 +458,36 @@ on_failure = { set_status = "失敗" }
                 .set_status
                 .as_deref(),
             Some("失敗")
+        );
+    }
+
+    #[test]
+    fn status_and_project_status_are_the_same_dimension_for_overlap() {
+        // Different required statuses via different key spellings are still
+        // mutually exclusive -> no overlap warning.
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "a"
+source = "github"
+trigger = { status = "A" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+
+[[workflows]]
+name = "b"
+source = "github"
+trigger = { project_status = "B" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+"#,
+        );
+        let issues = validate_workflows(&workflows, |_| None);
+        assert!(
+            !issues.iter().any(|i| i.message.contains("overlapping")),
+            "different statuses (status vs project_status) must not warn: {issues:?}"
         );
     }
 
