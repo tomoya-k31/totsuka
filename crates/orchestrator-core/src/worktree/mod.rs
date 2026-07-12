@@ -133,7 +133,15 @@ pub fn render_location(
         .replace("{branch}", &sanitized)
         .replace("{task_id}", ctx.task_id)
         .replace("{source}", ctx.source);
-    Ok(PathBuf::from(rendered))
+    // A leading `~` expands to `$HOME` (e.g. `worktree_location = "~/.worktrees/{branch}"`).
+    if let Some(rest) = rendered.strip_prefix("~/") {
+        let home = env
+            .get("HOME")
+            .ok_or_else(|| ResolveError::EnvNotSet("HOME".to_string()))?;
+        Ok(PathBuf::from(home).join(rest))
+    } else {
+        Ok(PathBuf::from(rendered))
+    }
 }
 
 /// Whether the policy allows removing a worktree given when the task finished.
@@ -487,6 +495,26 @@ mod tests {
             None,
             "2026-07-07T00:00:00Z"
         ));
+    }
+
+    #[test]
+    fn tilde_in_location_expands_to_home() {
+        let ctx = LocationContext {
+            repo_path: Path::new("/r"),
+            repo_name: "r",
+            source: "github",
+            task_id: "1",
+        };
+        let loc = render_location(
+            "~/.worktrees/{branch}",
+            &ctx,
+            "agent/github-1",
+            &env(&[("HOME", "/home/alice")]),
+        )
+        .unwrap();
+        assert_eq!(loc, PathBuf::from("/home/alice/.worktrees/agent-github-1"));
+        // `~/` with no HOME is an error, not a literal directory.
+        assert!(render_location("~/{branch}", &ctx, "b", &env(&[])).is_err());
     }
 
     #[test]
