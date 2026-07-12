@@ -27,6 +27,8 @@ regex.workspace = true
 tokio.workspace = true
 plugin-protocol.workspace = true
 semver = { workspace = true, features = ["serde"] }
+sha2.workspace = true
+toml_edit.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

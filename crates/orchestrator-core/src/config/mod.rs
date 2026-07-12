@@ -7,11 +7,14 @@
 //! - [`layered`]: CLI > env > plugin-file > config-default precedence (F-66).
 //! - [`validate`]: static (offline) validation (F-63, F-58).
 
+pub mod edit;
 pub mod layered;
 pub mod raw;
 pub mod resolve;
 pub mod schema;
 pub mod validate;
+
+pub use edit::{EditError, set_plugin_enabled};
 
 pub use layered::ConfigResolver;
 pub use raw::PluginRawConfig;

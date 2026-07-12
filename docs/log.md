@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-12
+* **Update**: プラグイン管理コマンド（#52）。[orchestrator-core](/components/orchestrator-core.md) に `plugins::store`（install/uninstall/list、prepare→confirm→commit・SHA-256・manifest 検証）と `config::edit`（toml_edit で enabled 書き換え・整形保持）を追加。[orchestrator-cli](/components/orchestrator-cli.md) に `plugin` サブコマンドを配線。
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) に `adapters::plugin_host`（#51）を追加。プラグインをサブプロセス起動し NDJSON JSON-RPC で通信（tokio）。ライフサイクル・protocol 互換チェック・リクエスト相関・タイムアウト・クラッシュ隔離・config/validate 委譲。結合テスト用の mock_plugin バイナリ同梱。
 * **Update**: [plugin-protocol](/components/plugin-protocol.md)（#50）を雛形から本実装へ。JSON-RPC 2.0（NDJSON）型・§11 メソッド型・plugin.toml manifest・capabilities・Task 共通スキーマ・プロトコルバージョニングを実装。
 * **Creation**: [ログ規約（JSON Lines・機密マスキング）](/development/logging-conventions.md)（#49）。`Convention` type を追加。[orchestrator-core](/components/orchestrator-core.md) に `logging` モジュール（redact/layer/rotation）を追加し、`[log]` 設定を config スキーマへ追加。

@@ -1,16 +1,47 @@
 //! totsuka CLI entrypoint.
 //!
-//! Minimal skeleton for #45: a `clap`-parsed root command that supports
-//! `--version` and `--help`. Subcommands are added by later tasks (§5.1 of the
-//! spec).
+//! For #52 this wires the `plugin` subcommand (install / uninstall / enable /
+//! disable / list). The remaining command tree (`run`, `status`, `config`,
+//! `doctor`, ...) is added in #63/#64.
 
-use clap::Parser;
+mod plugin_cmd;
+
+use clap::{Parser, Subcommand};
 
 /// totsuka — local AI-agent orchestrator.
 #[derive(Debug, Parser)]
 #[command(name = "totsuka", version, about, long_about = None)]
-struct Cli {}
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
 
-fn main() {
-    let _cli = Cli::parse();
+/// Top-level commands.
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Manage plugins (install / uninstall / enable / disable / list).
+    Plugin {
+        #[command(subcommand)]
+        cmd: plugin_cmd::PluginCommand,
+    },
+}
+
+fn main() -> std::process::ExitCode {
+    let cli = Cli::parse();
+    let result = match cli.command {
+        Some(Command::Plugin { cmd }) => plugin_cmd::run(cmd),
+        None => {
+            // No subcommand: print help hint (the full run loop is #63).
+            eprintln!("totsuka: no command given. Try `totsuka --help`.");
+            return std::process::ExitCode::from(2);
+        }
+    };
+
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("error: {err}");
+            std::process::ExitCode::FAILURE
+        }
+    }
 }

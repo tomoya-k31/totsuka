@@ -3,8 +3,8 @@ type: Component
 title: orchestrator-cli クレート
 description: totsuka の CLI エントリポイント（bin: totsuka）。init / run / status / task / plugin / config / doctor / logs / completion サブコマンドを提供する（§5.1）。#45 時点では --version/--help のみ。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
-tags: [rust, crate, cli]
-timestamp: 2026-07-12T00:00:00Z
+tags: [rust, crate, cli, plugin]
+timestamp: 2026-07-12T01:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -16,8 +16,8 @@ owner: tomoya-k31
 # 公開インターフェース
 
 - bin 名: `totsuka`
-- #45 時点: `--version` / `--help` のみ動作する最小実装。
-- サブコマンド体系（`run` / `status` / `task` / `plugin` / `config` / `doctor` / `logs` / `completion` と共通フラグ `--debug` / `--json` / `--dry-run` / `--config`）は #63 / #64 で実装する。
+- `plugin`（#52）: `install <dir> [--yes]` / `uninstall <name>` / `enable <name>` / `disable <name>` / `list [--json]`。install は取得元と SHA-256 を表示し確認を要求（§5.4）、GitHub Release からの取得は v1 未対応（ローカルディレクトリからの install に案内）。
+- 残りのサブコマンド体系（`run` / `status` / `task` / `config` / `doctor` / `logs` / `completion` と共通フラグ `--debug` / `--json` / `--dry-run` / `--config`）は #63 / #64 で実装する。
 
 # 依存
 
