@@ -3,8 +3,8 @@
 //! Every field passes through [`redact`](super::redact) before it is written,
 //! so the output is a redacted-by-construction stream. The JSON format
 //! guarantees valid JSON Lines (one object per line, `jq`-parseable); the human
-//! format is for the terminal. Prompt/payload fields are dropped entirely when
-//! `log_prompts` is false.
+//! format is for the terminal. Prompt/payload fields are only recorded at
+//! debug+ and only when `log_prompts` is enabled; otherwise they are dropped.
 
 use std::fmt::Debug;
 use std::io::Write;
@@ -51,15 +51,17 @@ impl<W> RedactingLayer<W> {
 
 /// Collects an event's fields into a redacted JSON map + message.
 struct FieldCollector {
-    log_prompts: bool,
+    /// Whether prompt/payload fields may be recorded for *this* event
+    /// (`log_prompts` AND the event level is DEBUG/TRACE).
+    allow_prompts: bool,
     message: Option<String>,
     fields: Map<String, Value>,
 }
 
 impl FieldCollector {
-    fn new(log_prompts: bool) -> Self {
+    fn new(allow_prompts: bool) -> Self {
         Self {
-            log_prompts,
+            allow_prompts,
             message: None,
             fields: Map::new(),
         }
@@ -67,8 +69,9 @@ impl FieldCollector {
 
     fn record(&mut self, field: &Field, value: String) {
         let name = field.name();
-        // Drop prompt/payload fields unless explicitly enabled (§5.2).
-        if is_prompt_field(name) && !self.log_prompts {
+        // Drop prompt/payload fields unless allowed (§5.2): only at debug+
+        // and only when `log_prompts` is enabled.
+        if is_prompt_field(name) && !self.allow_prompts {
             return;
         }
         let redacted = redact_field(name, &value).into_owned();
@@ -98,7 +101,12 @@ where
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let meta = event.metadata();
-        let mut collector = FieldCollector::new(self.log_prompts);
+        // Prompt/payload fields are only ever logged at debug+ (convention in
+        // docs/development/logging-conventions.md), so a stray `info!(prompt=…)`
+        // cannot leak the body even with `log_prompts = true`.
+        let allow_prompts = self.log_prompts
+            && matches!(*meta.level(), tracing::Level::DEBUG | tracing::Level::TRACE);
+        let mut collector = FieldCollector::new(allow_prompts);
         event.record(&mut collector);
         let ts = now_rfc3339();
 
@@ -253,10 +261,24 @@ mod tests {
         let v: Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
         assert!(v.get("prompt").is_none());
 
-        // ...but present when enabled.
+        // ...but present at debug+ when enabled.
         let out = capture(true, || {
             tracing::debug!(prompt = "visible prompt", "dispatching");
         });
         assert!(out.contains("visible prompt"));
+    }
+
+    #[test]
+    fn prompt_fields_dropped_above_debug_even_when_enabled() {
+        // A stray info!(prompt=…) must not leak the body: prompts are debug+.
+        let out = capture(true, || {
+            tracing::info!(prompt = "should not appear at info", "dispatching");
+        });
+        assert!(
+            !out.contains("should not appear at info"),
+            "prompt leaked: {out}"
+        );
+        let v: Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
+        assert!(v.get("prompt").is_none());
     }
 }
