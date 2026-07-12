@@ -19,5 +19,6 @@ pub mod paths;
 pub mod platform;
 pub mod plugins;
 pub mod ports;
+pub mod repo_select;
 pub mod scheduler;
 pub mod worktree;

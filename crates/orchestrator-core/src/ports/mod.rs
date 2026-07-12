@@ -6,9 +6,11 @@
 //! tasks.
 
 pub mod git;
+pub mod llm;
 pub mod process;
 pub mod secret;
 
 pub use git::{GitOutput, GitRunner};
+pub use llm::{ChatRequest, LlmError, LlmRouter};
 pub use process::ProcessProbe;
 pub use secret::{SecretError, SecretRef, SecretStore, SecretString};
