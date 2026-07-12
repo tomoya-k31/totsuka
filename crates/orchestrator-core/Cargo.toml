@@ -21,6 +21,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 regex.workspace = true
+tokio.workspace = true
+plugin-protocol.workspace = true
+semver = { workspace = true, features = ["serde"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
