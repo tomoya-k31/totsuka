@@ -34,6 +34,9 @@ pub struct RootConfig {
     /// worktree placement defaults (consumed by #53).
     #[serde(default)]
     pub worktree: WorktreeConfig,
+    /// Logging settings (§5.2).
+    #[serde(default)]
+    pub log: LogSettings,
 }
 
 fn default_version() -> u32 {
@@ -168,6 +171,35 @@ pub struct WorktreeConfig {
     /// Global placement template; overridable per repo.
     #[serde(default)]
     pub location: Option<String>,
+}
+
+/// Logging settings from `[log]` (§5.2).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LogSettings {
+    /// Minimum level name (`error`/`warn`/`info`/`debug`/`trace`).
+    #[serde(default)]
+    pub level: Option<String>,
+    /// Whether prompt/RPC-payload fields are logged (debug+ only regardless).
+    #[serde(default = "default_log_prompts")]
+    pub log_prompts: bool,
+    /// Number of daily log files to keep.
+    #[serde(default)]
+    pub max_files: Option<usize>,
+}
+
+fn default_log_prompts() -> bool {
+    true
+}
+
+impl Default for LogSettings {
+    fn default() -> Self {
+        Self {
+            level: None,
+            log_prompts: default_log_prompts(),
+            max_files: None,
+        }
+    }
 }
 
 /// Errors from parsing or converting configuration.

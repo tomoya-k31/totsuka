@@ -3,8 +3,8 @@ type: Component
 title: orchestrator-core クレート
 description: totsuka のコア。ヘキサゴナルアーキテクチャの domain（ドメイン・ステートマシン）/ ports（TaskSource・AgentIde・LlmRouter・SecretStore 等の trait）/ adapters（JSON-RPC ブリッジ・SQLite・Keychain）を担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
-tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine]
-timestamp: 2026-07-12T00:30:00Z
+tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging]
+timestamp: 2026-07-12T00:40:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -22,6 +22,7 @@ totsuka のビジネスロジックの中核。外部 I/O を持たず、ports �
 | `paths` | XDG Base Directory 準拠のパス解決（`config`/`data`/`state`/`cache`/`runtime`、`totsuka` サフィックス、未設定時 `$HOME` フォールバック）。macOS でも XDG を明示採用 | #46 |
 | `platform` | OS 依存実装の隔離。`platform::macos`（Keychain = keyring クレート）、`platform::unix`（`ProcessProbe` = `kill(pid,0)`）、`platform::fallback`（非 macOS の未サポート SecretStore）。`PlatformSecretStore` / `PlatformProcessProbe` で現行 OS の実装を選ぶ | #46 |
 | `config` | 設定ロードと検証。`schema`（`config.toml` パース、F-60/61/64）、`raw`（`plugins/{name}.toml` を無解釈保持 → JSON、F-64）、`resolve`（`${ENV}`/`keychain:` シークレット解決・`~`/`${ENV}` パス展開、F-62/65）、`layered`（CLI>env>plugin-file>config-default の優先順位、F-66）、`validate`（静的検証、F-63/58） | #47 |
+| `logging` | 構造化ログと機密マスキング。`redact`（フィールド denylist＋値パターン）、`layer`（redact 済み JSON Lines / 人間可読を出力する tracing レイヤ）、`rotation`（日次ログの世代保持）。規約は [ログ規約](/development/logging-conventions.md) | #49 |
 | `adapters` | ports の具象実装。`state_db`（SQLite 状態永続化・埋め込みマイグレーション・イベントログ・冪等取り込み → [state.db スキーマ](/data/state-db.md)）、`run_lock`（多重起動防止 F-74）。JSON-RPC プラグインブリッジ等は後続 | #48 ほか |
 
 ## 公開型（#46 時点）

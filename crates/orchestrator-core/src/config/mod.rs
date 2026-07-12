@@ -17,7 +17,7 @@ pub use layered::ConfigResolver;
 pub use raw::PluginRawConfig;
 pub use resolve::{ResolveError, SecretResolver, expand_env, expand_path};
 pub use schema::{
-    CURRENT_SCHEMA_VERSION, ConfigError, LlmConfig, OutputPolicy, PluginConfig, PluginKind,
-    RepositoryConfig, RootConfig, WorkflowConfig, WorkflowMode, WorktreeConfig,
+    CURRENT_SCHEMA_VERSION, ConfigError, LlmConfig, LogSettings, OutputPolicy, PluginConfig,
+    PluginKind, RepositoryConfig, RootConfig, WorkflowConfig, WorkflowMode, WorktreeConfig,
 };
 pub use validate::{ValidationError, validate_static};
