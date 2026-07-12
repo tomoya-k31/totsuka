@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-12
+* **Creation**: [ログ規約（JSON Lines・機密マスキング）](/development/logging-conventions.md)（#49）。`Convention` type を追加。[orchestrator-core](/components/orchestrator-core.md) に `logging` モジュール（redact/layer/rotation）を追加し、`[log]` 設定を config スキーマへ追加。
 * **Creation**: [状態DB（SQLite state.db）スキーマ](/data/state-db.md)（#48）。tasks/sessions/events/schema_migrations の DDL と設計判断、タスクステートマシン（F-71）、多重起動防止（F-74）を記録。`Data Model` type を追加。[orchestrator-core](/components/orchestrator-core.md) に `domain::state` / `adapters::state_db` / `adapters::run_lock` を追記。
 * **Update**: 設定ロードとシークレット参照解決（#47）。[orchestrator-core](/components/orchestrator-core.md) に `config` モジュール（schema/raw/resolve/layered/validate）を追加。`config.toml`+`plugins/{name}.toml` の二層設定パース、`${ENV}`/`keychain:` 解決、優先順位マージ、静的検証（disable 中プラグイン参照エラー含む）。
 * **Update**: XDG パス解決と platform 抽象（#46）。[orchestrator-core](/components/orchestrator-core.md) に `paths` / `platform` モジュールと `SecretStore` / `ProcessProbe` / `SecretString` / `SecretRef` を追加（macOS Keychain を `platform::macos` に隔離）。
