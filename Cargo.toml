@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/orchestrator-core",
+    "crates/orchestrator-cli",
+    "crates/plugin-protocol",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/tomoya-k31/totsuka"
+
+# Common dependencies are declared here and inherited by each crate with
+# `<dep>.workspace = true`. Feature/version bumps happen in one place.
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+
+# Deny warnings across the whole workspace. Each crate opts in with
+# `[lints] workspace = true`.
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[workspace.lints.rust]
+warnings = "deny"

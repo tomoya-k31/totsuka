@@ -3,6 +3,9 @@
 パッケージ/サービス単位の責務・公開インターフェース・依存先。
 
 * [okf-search](okf-search.md) - docs/ の frontmatter（type/status/owner/resource/tags/timestamp）でconceptを絞り込むCLIスクリプトと、絞り込み結果をAIが読んで抽出するokf-searchスキル。
+* [orchestrator-core](orchestrator-core.md) - totsuka のコア。ヘキサゴナルアーキテクチャの domain / ports / adapters を担う。
+* [orchestrator-cli](orchestrator-cli.md) - totsuka の CLI エントリポイント（bin: totsuka）。#45 時点では --version/--help のみ。
+* [plugin-protocol](plugin-protocol.md) - プラグイン開発者向けに公開する型定義クレート（JSON-RPC 2.0・manifest・capabilities）。#45 時点は空の雛形。
 
 <!-- concept を追加したら、ここに 1 行追加する:
 * [Title](file.md) - frontmatter の description を転記
