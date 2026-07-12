@@ -40,9 +40,16 @@ impl Trigger {
 
     /// Whether `task` satisfies the conditions the Orchestrator understands.
     ///
-    /// `status`/`project_status` are checked against `task.status`; `label`
-    /// (string or array) against `task.labels`. Keys the Orchestrator does not
-    /// understand are trusted (the plugin already filtered on them).
+    /// **Reserved trigger keys** the Orchestrator re-checks against the
+    /// normalized [`Task`] (a plugin contract — use these names consistently
+    /// with the common schema, F-01):
+    /// - `status` / `project_status` → compared to `task.status`
+    /// - `label` (string) / `labels` (array) → looked up in `task.labels`
+    ///
+    /// All other keys are opaque: the plugin already filtered on them at
+    /// `tasks/fetch`, so they are trusted. Non-string values on reserved keys
+    /// are also treated as opaque (skipped). An empty trigger matches every
+    /// task (a catch-all).
     pub fn matches(&self, task: &Task) -> bool {
         for (key, value) in &self.0 {
             match key.as_str() {
@@ -224,16 +231,35 @@ where
     issues
 }
 
-/// Whether one trigger's conditions are a subset of the other's, meaning a task
-/// matching the stricter one also matches the looser one.
+/// Whether some task could satisfy **both** triggers (F-81 ambiguity).
+///
+/// Two triggers can both match unless a shared key imposes contradictory
+/// constraints. A task has a single `status`, so two different required
+/// statuses are mutually exclusive (e.g. `設計待ち` vs `実装待ち` — not
+/// ambiguous). Labels form a set, so multiple required labels are jointly
+/// satisfiable; unknown/opaque keys cannot be proven contradictory, so they are
+/// treated as compatible. Disjoint keys therefore overlap (a task can satisfy
+/// both), which the previous subset check missed.
 fn triggers_overlap(a: &Trigger, b: &Trigger) -> bool {
-    is_subset(a.as_table(), b.as_table()) || is_subset(b.as_table(), a.as_table())
+    let bt = b.as_table();
+    a.as_table().iter().all(|(key, av)| match bt.get(key) {
+        Some(bv) => constraints_compatible(key, av, bv),
+        None => true,
+    })
 }
 
-/// Whether every key/value in `sub` appears identically in `sup`.
-fn is_subset(sub: &toml::Table, sup: &toml::Table) -> bool {
-    sub.iter()
-        .all(|(k, v)| sup.get(k).is_some_and(|sv| sv == v))
+/// Whether the two constraints on the same trigger key can be satisfied at once.
+fn constraints_compatible(key: &str, a: &toml::Value, b: &toml::Value) -> bool {
+    match key {
+        // Single-valued: a task cannot have two different statuses at once.
+        "status" | "project_status" => match (a.as_str(), b.as_str()) {
+            (Some(x), Some(y)) => x == y,
+            _ => true, // opaque (non-string) values are trusted
+        },
+        // Labels form a set; requiring several labels is jointly satisfiable.
+        // Opaque keys cannot be proven contradictory.
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -353,6 +379,87 @@ output = "none"
                 .iter()
                 .any(|i| i.severity == Severity::Warning && i.message.contains("overlapping")),
             "expected overlap warning: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn spec_example_does_not_warn_on_disjoint_status() {
+        // design(設計待ち) and implement(実装待ち) contradict on project_status,
+        // so no task matches both -> no overlap warning.
+        let workflows = workflows_from_toml(SPEC_EXAMPLE);
+        let issues = validate_workflows(&workflows, |_| Some(vec![OutputCapability::Source]));
+        assert!(
+            !issues.iter().any(|i| i.message.contains("overlapping")),
+            "design/implement must not warn: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn disjoint_key_triggers_overlap() {
+        // Different dimensions (label vs status) can both match one task.
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "by_label"
+source = "github"
+trigger = { label = "bug" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+
+[[workflows]]
+name = "by_status"
+source = "github"
+trigger = { status = "実装待ち" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+"#,
+        );
+        // A task with both fits both workflows -> ambiguous.
+        let t = task("github", Some("実装待ち"), &["bug"]);
+        assert!(match_workflow(&workflows, &t).is_some());
+        let issues = validate_workflows(&workflows, |_| None);
+        assert!(
+            issues.iter().any(|i| i.severity == Severity::Warning),
+            "disjoint-key triggers must warn: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn array_labels_require_all_and_parse_on_failure() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "multi"
+source = "github"
+trigger = { labels = ["ready", "backend"], status = "実装待ち" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_failure = { set_status = "失敗" }
+"#,
+        );
+        // All required labels + status present.
+        assert!(
+            match_workflow(
+                &workflows,
+                &task("github", Some("実装待ち"), &["ready", "backend"])
+            )
+            .is_some()
+        );
+        // Missing one label -> no match.
+        assert!(
+            match_workflow(&workflows, &task("github", Some("実装待ち"), &["ready"])).is_none()
+        );
+        assert_eq!(
+            workflows[0]
+                .on_failure
+                .as_ref()
+                .unwrap()
+                .set_status
+                .as_deref(),
+            Some("失敗")
         );
     }
 
