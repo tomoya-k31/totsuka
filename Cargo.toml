@@ -6,6 +6,7 @@ members = [
     "crates/plugin-protocol",
     "plugins/task-source-github",
     "plugins/task-source-notion",
+    "plugins/agent-ide-herdr",
 ]
 
 [workspace.package]

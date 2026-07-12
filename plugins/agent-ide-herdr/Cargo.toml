@@ -1,0 +1,30 @@
+[package]
+name = "agent-ide-herdr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "totsuka agent_ide plugin for herdr (stdio JSON-RPC ↔ herdr Socket API adapter)."
+# Internal binary crate — depends on plugin-protocol by path, so it must be
+# non-publishable for cargo-deny to permit the path dependency.
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "agent-ide-herdr"
+path = "src/main.rs"
+
+[dependencies]
+plugin-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+semver = { workspace = true, features = ["serde"] }
+# `net` (Unix socket to herdr) + `io-std` (stdin/stdout) on top of the workspace
+# tokio feature set.
+tokio = { workspace = true, features = ["net", "io-std"] }
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
