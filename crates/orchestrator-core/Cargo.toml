@@ -15,6 +15,8 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+rusqlite.workspace = true
+time.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
