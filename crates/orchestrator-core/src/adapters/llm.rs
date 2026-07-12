@@ -94,16 +94,19 @@ impl OpenAiRouter {
             });
         }
 
-        // choices[0].message.content is a JSON string (structured output).
-        let envelope: Value =
-            serde_json::from_str(&text).map_err(|e| LlmError::InvalidResponse(e.to_string()))?;
-        let content = envelope["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| {
-                LlmError::InvalidResponse("missing choices[0].message.content".into())
-            })?;
-        serde_json::from_str(content).map_err(|e| LlmError::InvalidResponse(e.to_string()))
+        parse_chat_content(&text)
     }
+}
+
+/// Extract and parse `choices[0].message.content` (a JSON string, per structured
+/// output) from a chat-completions response body.
+fn parse_chat_content(text: &str) -> Result<Value, LlmError> {
+    let envelope: Value =
+        serde_json::from_str(text).map_err(|e| LlmError::InvalidResponse(e.to_string()))?;
+    let content = envelope["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or_else(|| LlmError::InvalidResponse("missing choices[0].message.content".into()))?;
+    serde_json::from_str(content).map_err(|e| LlmError::InvalidResponse(e.to_string()))
 }
 
 impl LlmRouter for OpenAiRouter {
@@ -134,7 +137,14 @@ impl LlmRouter for OpenAiRouter {
                 match self.attempt(&body).await {
                     Ok(value) => return Ok(value),
                     Err(e) if e.is_retryable() && attempt < self.config.max_retries => {
-                        let delay = self.config.backoff_base * 2u32.pow(attempt);
+                        // Cap the delay to avoid overflow panics on large attempt
+                        // counts (saturating pow/mul, then a 60s ceiling).
+                        let factor = 2u32.saturating_pow(attempt);
+                        let delay = self
+                            .config
+                            .backoff_base
+                            .saturating_mul(factor)
+                            .min(Duration::from_secs(60));
                         tracing::warn!(attempt, error = %e, "llm call failed; retrying");
                         tokio::time::sleep(delay).await;
                         attempt += 1;
@@ -143,5 +153,49 @@ impl LlmRouter for OpenAiRouter {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn envelope(content: &str) -> String {
+        // `content` is embedded as a JSON string, as the API returns it.
+        serde_json::json!({
+            "choices": [{ "message": { "content": content } }]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn parses_structured_content() {
+        let body = envelope(r#"{"repo":"api","confidence":0.9,"reason":"backend"}"#);
+        let value = parse_chat_content(&body).unwrap();
+        assert_eq!(value["repo"], "api");
+        assert_eq!(value["confidence"], 0.9);
+    }
+
+    #[test]
+    fn non_json_content_is_invalid_response() {
+        let body = envelope("I think it is the api repo");
+        assert!(matches!(
+            parse_chat_content(&body).unwrap_err(),
+            LlmError::InvalidResponse(_)
+        ));
+    }
+
+    #[test]
+    fn missing_content_is_invalid_response() {
+        let body = serde_json::json!({ "choices": [{ "message": {} }] }).to_string();
+        assert!(matches!(
+            parse_chat_content(&body).unwrap_err(),
+            LlmError::InvalidResponse(_)
+        ));
+        // Not even valid JSON.
+        assert!(matches!(
+            parse_chat_content("not json").unwrap_err(),
+            LlmError::InvalidResponse(_)
+        ));
     }
 }

@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 use plugin_protocol::Task;
 
-use crate::ports::llm::{ChatRequest, LlmRouter};
+use crate::ports::llm::{ChatRequest, LlmError, LlmRouter};
 
 /// A repository the task could target.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,8 +122,11 @@ pub async fn select_repo<L: LlmRouter>(
                 }
                 Err(why) => last_error = why, // unusable -> retry once
             },
-            // A transport/status failure is already retried with backoff inside
-            // the router; if it still fails, the task fails (§5.3).
+            // A schema deviation / unparseable content is a *bad answer*, not a
+            // transport failure: retry once then fall back to pending (F-14).
+            Err(e @ LlmError::InvalidResponse(_)) => last_error = e.to_string(),
+            // A genuine transport/status/timeout failure — already retried with
+            // backoff inside the router — fails the task (§5.3).
             Err(e) => {
                 return RepoDecision::Failed {
                     reason: e.to_string(),
@@ -303,10 +306,10 @@ mod tests {
 
     /// A mock router returning a queue of canned results.
     struct MockRouter {
-        results: Mutex<std::collections::VecDeque<Result<Value, String>>>,
+        results: Mutex<std::collections::VecDeque<Result<Value, LlmError>>>,
     }
     impl MockRouter {
-        fn new(results: Vec<Result<Value, String>>) -> Self {
+        fn new(results: Vec<Result<Value, LlmError>>) -> Self {
             Self {
                 results: Mutex::new(results.into_iter().collect()),
             }
@@ -317,20 +320,24 @@ mod tests {
             &self,
             _request: &ChatRequest,
         ) -> impl std::future::Future<Output = Result<Value, LlmError>> + Send {
-            let next = self
-                .results
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or(Err("no more mock results".into()));
-            async move { next.map_err(LlmError::Transport) }
+            let next =
+                self.results
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or(Err(LlmError::InvalidResponse(
+                        "no more mock results".into(),
+                    )));
+            async move { next }
         }
     }
 
     #[tokio::test]
     async fn repo_hint_is_used_without_llm() {
         // owner/repo form resolves to `api`; router would error if called.
-        let llm = MockRouter::new(vec![Err("should not be called".into())]);
+        let llm = MockRouter::new(vec![Err(LlmError::Transport(
+            "should not be called".into(),
+        ))]);
         let decision = select_repo(
             &task(Some("myorg/api")),
             &candidates(),
@@ -410,11 +417,27 @@ mod tests {
 
     #[tokio::test]
     async fn permanent_api_failure_fails_the_task() {
-        let llm = MockRouter::new(vec![Err("connection refused".into())]);
+        let llm = MockRouter::new(vec![Err(LlmError::Transport("connection refused".into()))]);
         let decision =
             select_repo(&task(None), &candidates(), &llm, &SelectConfig::default()).await;
         assert!(
             matches!(decision, RepoDecision::Failed { .. }),
+            "got {decision:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_response_retries_then_pending_not_failed() {
+        // Schema deviation (non-JSON content) is a bad answer -> retry once ->
+        // pending, NOT a permanent failure (F-14).
+        let llm = MockRouter::new(vec![
+            Err(LlmError::InvalidResponse("not json".into())),
+            Err(LlmError::InvalidResponse("still not json".into())),
+        ]);
+        let decision =
+            select_repo(&task(None), &candidates(), &llm, &SelectConfig::default()).await;
+        assert!(
+            matches!(decision, RepoDecision::Pending { .. }),
             "got {decision:?}"
         );
     }
