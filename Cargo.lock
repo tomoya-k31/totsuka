@@ -1269,6 +1269,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-source-notion"
+version = "0.1.0"
+dependencies = [
+ "plugin-protocol",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
