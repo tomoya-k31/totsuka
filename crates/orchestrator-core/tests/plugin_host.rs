@@ -146,6 +146,32 @@ async fn call_after_close_returns_promptly_not_after_timeout() {
     );
 }
 
+#[tokio::test]
+async fn receives_plugin_notifications() {
+    let plugin = Plugin::launch(spec("^0.1")).await.expect("launch");
+    let mut notifications = plugin
+        .take_notifications()
+        .await
+        .expect("receiver available");
+
+    // The mock emits a `state/notification` before acking `state/subscribe`.
+    let _: serde_json::Value = plugin
+        .call("state/subscribe", &serde_json::json!({ "session_id": "s" }))
+        .await
+        .unwrap();
+
+    let note = tokio::time::timeout(Duration::from_secs(5), notifications.recv())
+        .await
+        .expect("notification did not arrive")
+        .expect("notification channel closed");
+    assert_eq!(note.method, "state/notification");
+    let params = note.params.expect("params present");
+    assert_eq!(params["state"], "running");
+    assert_eq!(params["log_chunk"], "compiling...");
+
+    plugin.shutdown(Duration::from_secs(5)).await.unwrap();
+}
+
 #[test]
 fn disabled_plugins_are_not_launchable() {
     let cfg = RootConfig::from_toml_str(

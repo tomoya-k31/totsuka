@@ -11,7 +11,7 @@
 
 use std::io::{BufRead, Write};
 
-use plugin_protocol::jsonrpc::{Error, Response, error_code};
+use plugin_protocol::jsonrpc::{Error, Notification, Response, error_code};
 use plugin_protocol::methods::{ConfigValidateResult, InitializeResult};
 use plugin_protocol::{Capabilities, manifest::OutputCapability};
 use serde_json::Value;
@@ -28,6 +28,11 @@ fn main() {
         let Ok(request) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        // A message without an `id` is a notification; per JSON-RPC it must not
+        // be answered.
+        if request.get("id").is_none() {
+            continue;
+        }
         let id = request.get("id").cloned().unwrap_or(Value::Null);
         let method = request.get("method").and_then(Value::as_str).unwrap_or("");
         let params = request.get("params").cloned().unwrap_or(Value::Null);
@@ -64,6 +69,20 @@ fn main() {
                     })
                     .unwrap(),
                 )
+            }
+            "state/subscribe" => {
+                // Emit one notification (no id), then acknowledge (F-38).
+                let note = Notification::new(
+                    "state/notification",
+                    Some(serde_json::json!({
+                        "session_id": "sess-mock",
+                        "state": "running",
+                        "log_chunk": "compiling..."
+                    })),
+                );
+                let _ = writeln!(stdout, "{}", serde_json::to_string(&note).unwrap());
+                let _ = stdout.flush();
+                Response::result(request_id(&id), Value::Null)
             }
             "crash" => std::process::exit(1),
             "shutdown" => {

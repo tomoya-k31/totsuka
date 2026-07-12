@@ -149,6 +149,9 @@ impl Inner {
         let request = Request::new(id, method, params);
         let line = jsonrpc::to_line(&request)?;
         if self.write_tx.send(line).is_err() {
+            // The writer task is gone (stdin dead) => the plugin is unusable.
+            // Mark it closed so subsequent calls short-circuit.
+            self.closed.store(true, Ordering::Release);
             self.pending.lock().await.remove(&id);
             return Err(HostError::Closed(self.name.clone()));
         }
@@ -342,15 +345,17 @@ impl Plugin {
             let _ = self.inner.write_tx.send(line);
         }
         let mut child = self.child.lock().await;
-        match tokio::time::timeout(grace, child.wait()).await {
-            Ok(_) => {}
-            Err(_) => {
+        let outcome = match tokio::time::timeout(grace, child.wait()).await {
+            // Exited within grace: propagate any wait() IO error.
+            Ok(result) => result.map(|_status| ()),
+            // Timed out: force kill, then reap (propagating that wait's error).
+            Err(_elapsed) => {
                 let _ = child.start_kill();
-                let _ = child.wait().await;
+                child.wait().await.map(|_status| ())
             }
-        }
+        };
         self.inner.closed.store(true, Ordering::Release);
-        Ok(())
+        outcome.map_err(HostError::Io)
     }
 }
 
