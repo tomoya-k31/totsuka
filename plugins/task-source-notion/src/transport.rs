@@ -79,11 +79,13 @@ impl ReqwestTransport {
     /// A transport from connection `settings`.
     pub fn new(settings: TransportSettings<'_>) -> Self {
         // Guard against a zero rps (which would divide by zero): treat it as
-        // "no throttle" via a zero interval.
+        // "no throttle" via a zero interval. Ceil division so the effective rate
+        // never *exceeds* the configured rps — plain `Duration` division
+        // truncates (1s/3 → 333ms), which would allow a hair over the limit.
         let min_interval = if settings.rate_limit_rps == 0 {
             Duration::ZERO
         } else {
-            Duration::from_secs(1) / settings.rate_limit_rps
+            Duration::from_nanos(1_000_000_000u64.div_ceil(u64::from(settings.rate_limit_rps)))
         };
         Self {
             client: reqwest::Client::new(),
