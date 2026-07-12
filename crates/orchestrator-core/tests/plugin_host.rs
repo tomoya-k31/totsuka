@@ -126,6 +126,26 @@ async fn crash_fails_task_and_host_survives() {
     plugin2.shutdown(Duration::from_secs(5)).await.unwrap();
 }
 
+#[tokio::test]
+async fn call_after_close_returns_promptly_not_after_timeout() {
+    // A very long per-call timeout: if a call after close ever fell through to
+    // the timeout path, this test would take ~30s. It must return quickly.
+    let mut s = spec("^0.1");
+    s.timeout = Duration::from_secs(30);
+    let plugin = Plugin::launch(s).await.expect("launch");
+    plugin.shutdown(Duration::from_secs(5)).await.unwrap();
+    assert!(plugin.is_closed());
+
+    let start = std::time::Instant::now();
+    let result: Result<serde_json::Value, _> =
+        plugin.call("config/validate", &serde_json::json!({})).await;
+    assert!(result.is_err());
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "a call on a closed plugin must not wait for the full timeout"
+    );
+}
+
 #[test]
 fn disabled_plugins_are_not_launchable() {
     let cfg = RootConfig::from_toml_str(

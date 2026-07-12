@@ -133,7 +133,18 @@ impl Inner {
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
+        {
+            // The closed-check and the insert must be atomic against the
+            // reader's crash drain (it stores `closed` *then* clears `pending`).
+            // Without this, a call that starts during the crash window would
+            // insert into a map that is never drained again and block for the
+            // full timeout, misreporting a crash as a timeout.
+            let mut pending = self.pending.lock().await;
+            if self.closed.load(Ordering::Acquire) {
+                return Err(HostError::Crashed(self.name.clone()));
+            }
+            pending.insert(id, tx);
+        }
 
         let request = Request::new(id, method, params);
         let line = jsonrpc::to_line(&request)?;
