@@ -248,6 +248,40 @@ async fn collect_states(d: &mut Driver, n: usize) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn state_stream_reports_failed_on_nonzero_exit() {
+    // A non-zero pane exit is the only source of the normalized `failed` state.
+    let socket = FakeHerdr {
+        events_on_subscribe: vec![
+            json!({ "type": "pane.agent_status_changed", "pane_id": "w1:p1", "agent_status": "working" }),
+            json!({ "type": "pane.exited", "pane_id": "w1:p1", "exit_code": 1 }),
+        ],
+        pane_get: PaneGet::Ok(json!({ "agent_status": "working" })),
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .call(
+            "task/dispatch",
+            json!({
+                "task": { "id": "T2", "source": "notion", "title": "Failing task" },
+                "worktree_path": "/wt/agent-2",
+                "mode": "implement"
+            }),
+        )
+        .await;
+    let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
+    d.call("state/subscribe", json!({ "session_id": session_id }))
+        .await;
+
+    let running = d.recv().await.expect("running notification");
+    assert_eq!(running["params"]["state"], "running");
+    let failed = d.recv().await.expect("failed notification");
+    assert_eq!(failed["params"]["state"], "failed");
+}
+
+#[tokio::test]
 async fn attach_reports_live_pane_state() {
     let socket = FakeHerdr {
         events_on_subscribe: vec![],

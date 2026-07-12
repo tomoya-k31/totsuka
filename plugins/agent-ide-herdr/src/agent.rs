@@ -111,20 +111,29 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         }
     }
 
-    /// Cancel a task: interrupt the agent (`ctrl+c`) then close its pane. Both
-    /// steps tolerate an already-gone pane, so cancel is idempotent.
+    /// Cancel a task: interrupt the agent (`ctrl+c`) then close its pane. The
+    /// interrupt is best-effort — even if it fails the pane is still closed —
+    /// and an already-gone pane is treated as success, so cancel is idempotent.
     pub async fn cancel(&self, session_id: &str) -> Result<(), HerdrError> {
         let handle = SessionHandle::decode(session_id);
-        let pane = json!({ "pane_id": handle.pane_id });
+        // Best-effort interrupt: a failure here must not prevent the close,
+        // otherwise a stuck agent's pane would leak.
+        if let Err(e) = self
+            .client
+            .call(
+                "pane.send_keys",
+                json!({ "pane_id": handle.pane_id, "keys": ["ctrl+c"] }),
+            )
+            .await
+            && !e.is_missing()
+        {
+            tracing::warn!(error = %e, "pane.send_keys failed during cancel; closing anyway");
+        }
         ignore_missing(
             self.client
-                .call(
-                    "pane.send_keys",
-                    json!({ "pane_id": handle.pane_id, "keys": ["ctrl+c"] }),
-                )
+                .call("pane.close", json!({ "pane_id": handle.pane_id }))
                 .await,
         )?;
-        ignore_missing(self.client.call("pane.close", pane).await)?;
         Ok(())
     }
 
@@ -154,21 +163,33 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         tokio::spawn(async move {
             let mut previous = AgentState::Idle;
             loop {
-                let event = match events.recv().await {
-                    Ok(ev) => ev,
-                    // Lagged past the buffer: keep going with the next event.
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                let state = match events.recv().await {
+                    Ok(event) => {
+                        if event.get("pane_id").and_then(Value::as_str) != Some(pane_id.as_str()) {
+                            continue; // an event for a different pane on the shared socket
+                        }
+                        match next_state(&event, previous) {
+                            Some(s) => s,
+                            None => continue,
+                        }
+                    }
+                    // Lagged past the buffer: a dropped batch might have held the
+                    // terminal event, so re-derive current state from herdr
+                    // rather than risk blocking forever on the next event.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(dropped)) => {
+                        tracing::warn!(dropped, "herdr event stream lagged; resyncing state");
+                        match resync_state(&client, &pane_id, previous).await {
+                            Some(s) => s,
+                            None => continue,
+                        }
+                    }
                     // The transport closed: end the stream.
                     Err(_) => break,
                 };
-                if event.get("pane_id").and_then(Value::as_str) != Some(pane_id.as_str()) {
-                    continue; // an event for a different pane on the shared socket
-                }
-                let Some(state) = next_state(&event, previous) else {
-                    continue;
-                };
+                // A repeated `blocked` is deduped here, so a *new* question in a
+                // second consecutive block is not re-delivered (best-effort, F-35).
                 if state == previous {
-                    continue; // no transition to report
+                    continue;
                 }
                 previous = state;
 
@@ -199,6 +220,25 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     }
 }
 
+/// Re-derive the current state after a dropped-event lag: read the pane's
+/// status, or treat a vanished pane as a terminal `failed`. `None` means the
+/// state is currently unknowable (transient error) — hold and retry.
+async fn resync_state<T: HerdrTransport>(
+    client: &T,
+    pane_id: &str,
+    previous: AgentState,
+) -> Option<AgentState> {
+    match client.call("pane.get", json!({ "pane_id": pane_id })).await {
+        Ok(pane) => pane
+            .get("agent_status")
+            .and_then(Value::as_str)
+            .map(|status| map_agent_status(status, previous)),
+        // The pane is gone → the agent ended; surface a terminal state.
+        Err(e) if e.is_missing() => Some(AgentState::Failed),
+        Err(_) => None,
+    }
+}
+
 /// The state a single herdr event implies, or `None` if it carries no state
 /// signal we map.
 fn next_state(event: &Value, previous: AgentState) -> Option<AgentState> {
@@ -207,10 +247,11 @@ fn next_state(event: &Value, previous: AgentState) -> Option<AgentState> {
             let status = event.get("agent_status").and_then(Value::as_str)?;
             Some(map_agent_status(status, previous))
         }
-        "pane.exited" => {
-            let code = event.get("exit_code").and_then(Value::as_i64).unwrap_or(0);
-            Some(state_from_exit(code))
-        }
+        "pane.exited" => match event.get("exit_code").and_then(Value::as_i64) {
+            Some(code) => Some(state_from_exit(code)),
+            // An exit herdr couldn't classify (e.g. a signal) is not a success.
+            None => Some(AgentState::Failed),
+        },
         _ => None,
     }
 }

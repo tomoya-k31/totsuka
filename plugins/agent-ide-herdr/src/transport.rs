@@ -149,7 +149,17 @@ impl HerdrTransport for SocketTransport {
 fn spawn_reader(read_half: tokio::net::unix::OwnedReadHalf, inner: Arc<Inner>) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(read_half).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        loop {
+            let line = match lines.next_line().await {
+                Ok(Some(line)) => line,
+                Ok(None) => break, // EOF: herdr closed the socket
+                // A single unreadable line (e.g. invalid UTF-8) must not tear
+                // down the whole connection; skip it and keep serving.
+                Err(e) => {
+                    tracing::warn!(error = %e, "skipping unreadable line from herdr");
+                    continue;
+                }
+            };
             if line.trim().is_empty() {
                 continue;
             }
