@@ -72,6 +72,9 @@ const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
      worktree_path, branch, state, priority, title, url, source_payload, \
      finished_at, created_at, updated_at";
 
+/// Columns of `sessions`, in the order [`row_to_session`] reads them.
+const SESSION_COLUMNS: &str = "id, task_id, plugin, session_id, created_at";
+
 /// Errors from the state store.
 #[derive(Debug, thiserror::Error)]
 pub enum StateError {
@@ -153,6 +156,25 @@ pub struct TaskRecord {
     pub created_at: String,
     /// Last-update timestamp (ISO 8601 UTC).
     pub updated_at: String,
+}
+
+/// A persisted agent session (F-37): the `session_id` returned by
+/// `task/dispatch`, linked to its task and owning plugin.
+///
+/// A task may accumulate several rows — a retry starts a fresh session — so the
+/// newest row is the re-attach target ([`StateDb::latest_session`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRecord {
+    /// Row id.
+    pub id: i64,
+    /// Owning task id.
+    pub task_id: i64,
+    /// Plugin instance name that owns the session (e.g. `herdr`).
+    pub plugin: String,
+    /// The agent's opaque conversation/session id.
+    pub session_id: String,
+    /// Creation timestamp (ISO 8601 UTC).
+    pub created_at: String,
 }
 
 /// The SQLite state database.
@@ -366,6 +388,60 @@ impl StateDb {
         Ok(())
     }
 
+    /// Persist the session id returned by `task/dispatch` (F-37), linking it to
+    /// its task and the owning plugin.
+    ///
+    /// Appends a new row rather than replacing, so a retried task keeps its
+    /// session history; [`latest_session`](Self::latest_session) exposes the
+    /// newest one as the re-attach target. Returns the new row id.
+    pub fn record_session(
+        &self,
+        task_id: i64,
+        plugin: &str,
+        session_id: &str,
+    ) -> Result<i64, StateError> {
+        // Report an unknown task as NotFound rather than surfacing the raw
+        // foreign-key violation, matching the other setters' contract.
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1)",
+            params![task_id],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Err(StateError::NotFound(task_id));
+        }
+        self.conn.execute(
+            "INSERT INTO sessions (task_id, plugin, session_id, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![task_id, plugin, session_id, now()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// The most recent session for a task — the re-attach target (F-37) — or
+    /// `None` if the task was never dispatched.
+    pub fn latest_session(&self, task_id: i64) -> Result<Option<SessionRecord>, StateError> {
+        let sql = format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions WHERE task_id = ?1 \
+             ORDER BY created_at DESC, id DESC LIMIT 1"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![task_id], row_to_session)?;
+        rows.next().transpose().map_err(StateError::from)
+    }
+
+    /// All sessions for a task, newest first (session history for `status`).
+    pub fn list_sessions(&self, task_id: i64) -> Result<Vec<SessionRecord>, StateError> {
+        let sql = format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions WHERE task_id = ?1 \
+             ORDER BY created_at DESC, id DESC"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![task_id], row_to_session)?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(StateError::from)
+    }
+
     /// Count of audit events recorded for a task (F-72).
     pub fn event_count(&self, id: i64) -> Result<i64, StateError> {
         Ok(self.conn.query_row(
@@ -416,6 +492,17 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         finished_at: row.get("finished_at")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
+    })
+}
+
+/// Map a `sessions` row (in [`SESSION_COLUMNS`] order) to a [`SessionRecord`].
+fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
+    Ok(SessionRecord {
+        id: row.get("id")?,
+        task_id: row.get("task_id")?,
+        plugin: row.get("plugin")?,
+        session_id: row.get("session_id")?,
+        created_at: row.get("created_at")?,
     })
 }
 
@@ -536,6 +623,65 @@ mod tests {
             db.set_worktree(999, "/tmp/wt", "b").unwrap_err(),
             StateError::NotFound(999)
         ));
+    }
+
+    #[test]
+    fn sessions_append_and_latest_wins() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+
+        // No dispatch yet -> no session to re-attach.
+        assert!(db.latest_session(id).unwrap().is_none());
+
+        let s1 = db.record_session(id, "herdr", "sess-1").unwrap();
+        let s2 = db.record_session(id, "herdr", "sess-2").unwrap();
+        assert_ne!(s1, s2, "each dispatch appends a distinct session row");
+
+        // Latest (highest id on a created_at tie) is the re-attach target.
+        let latest = db.latest_session(id).unwrap().unwrap();
+        assert_eq!(latest.session_id, "sess-2");
+        assert_eq!(latest.plugin, "herdr");
+        assert_eq!(latest.task_id, id);
+
+        // History keeps both, newest first.
+        let all = db.list_sessions(id).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].session_id, "sess-2");
+        assert_eq!(all[1].session_id, "sess-1");
+    }
+
+    #[test]
+    fn record_session_rejects_unknown_task() {
+        let db = StateDb::open_in_memory().unwrap();
+        assert!(matches!(
+            db.record_session(999, "herdr", "sess-x").unwrap_err(),
+            StateError::NotFound(999)
+        ));
+    }
+
+    #[test]
+    fn sessions_survive_reopen_from_disk() {
+        // kill-and-restart: the re-attach target must survive a process exit.
+        let dir =
+            std::env::temp_dir().join(format!("totsuka-{}-session_reopen", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("state.db");
+
+        let id = {
+            let db = StateDb::open(&path).unwrap();
+            let id = db.upsert_task(&sample_task()).unwrap();
+            db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+            db.apply_event(id, TaskEvent::Start, None).unwrap();
+            db.record_session(id, "herdr", "sess-live").unwrap();
+            id
+        }; // db dropped, simulating process exit
+
+        let db = StateDb::open(&path).unwrap();
+        let latest = db.latest_session(id).unwrap().unwrap();
+        assert_eq!(latest.session_id, "sess-live");
+        assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Running);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
