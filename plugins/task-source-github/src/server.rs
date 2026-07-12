@@ -63,8 +63,9 @@ impl<F: TransportFactory> Server<F> {
         }
     }
 
-    /// Parse one NDJSON line, dispatch it, and produce a reply. Malformed lines
-    /// and notifications (no `id`) produce no response.
+    /// Parse one NDJSON line, dispatch it, and produce a reply. A non-JSON line
+    /// yields a `PARSE_ERROR` response with a null id; blank lines and
+    /// notifications (no `id`) produce no response.
     pub async fn handle_line(&mut self, line: &str) -> Reply {
         let trimmed = line.trim();
         if trimmed.is_empty() {
