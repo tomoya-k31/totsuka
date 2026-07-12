@@ -206,7 +206,16 @@ fn parse_classification(
     let confidence = value["confidence"]
         .as_f64()
         .ok_or("missing/invalid `confidence`")?;
-    let reason = value["reason"].as_str().unwrap_or("").to_string();
+    if !(0.0..=1.0).contains(&confidence) {
+        return Err(format!("`confidence` out of range [0,1]: {confidence}"));
+    }
+    // `reason` is required by the schema and surfaced in --dry-run; a missing or
+    // non-string value is a schema deviation, so route it to retry→pending (F-14)
+    // rather than silently accepting an empty rationale.
+    let reason = value["reason"]
+        .as_str()
+        .ok_or("missing/invalid `reason`")?
+        .to_string();
     Ok(Classification {
         repo,
         confidence,
@@ -412,6 +421,36 @@ mod tests {
                 repo: "web".into(),
                 reason: "frontend task".into()
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_reason_retries_then_pending() {
+        // Schema deviation (no `reason`) must not be accepted as an empty
+        // rationale; both attempts deviate -> pending (F-14).
+        let llm = MockRouter::new(vec![
+            Ok(json!({"repo": "api", "confidence": 0.9})),
+            Ok(json!({"repo": "api", "confidence": 0.9})),
+        ]);
+        let decision =
+            select_repo(&task(None), &candidates(), &llm, &SelectConfig::default()).await;
+        assert!(
+            matches!(decision, RepoDecision::Pending { ref reason } if reason.contains("reason")),
+            "got {decision:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn out_of_range_confidence_retries_then_pending() {
+        let llm = MockRouter::new(vec![
+            Ok(json!({"repo": "api", "confidence": 1.5, "reason": "x"})),
+            Ok(json!({"repo": "api", "confidence": -0.1, "reason": "y"})),
+        ]);
+        let decision =
+            select_repo(&task(None), &candidates(), &llm, &SelectConfig::default()).await;
+        assert!(
+            matches!(decision, RepoDecision::Pending { ref reason } if reason.contains("out of range")),
+            "got {decision:?}"
         );
     }
 

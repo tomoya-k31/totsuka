@@ -114,9 +114,8 @@ impl LlmRouter for OpenAiRouter {
         &self,
         request: &ChatRequest,
     ) -> impl std::future::Future<Output = Result<Value, LlmError>> + Send {
-        let body = json!({
+        let mut body = json!({
             "model": self.config.model,
-            "max_tokens": request.max_tokens,
             "messages": [
                 {"role": "system", "content": request.system},
                 {"role": "user", "content": request.user},
@@ -130,6 +129,11 @@ impl LlmRouter for OpenAiRouter {
                 },
             },
         });
+        // Only send `max_tokens` when set: OpenAI-compatible APIs often reject a
+        // literal `null` for numeric fields with a 400.
+        if let Some(max_tokens) = request.max_tokens {
+            body["max_tokens"] = json!(max_tokens);
+        }
 
         async move {
             let mut attempt = 0;
