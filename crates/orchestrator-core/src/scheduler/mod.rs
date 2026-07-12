@@ -48,12 +48,18 @@ impl Limits {
 }
 
 /// Tracks how many slots are used across the three tiers.
+///
+/// `pair_used` tracks slots per `(repo, agent)` pair and is the authority for
+/// [`SlotManager::release`], so a slot can only be released for a pair that is
+/// genuinely held — the per-tier counts alone would let a cross-pair mismatch
+/// (holding `(a,x)` and `(b,y)`, releasing `(a,y)`) corrupt the breakdown.
 #[derive(Debug, Clone)]
 pub struct SlotManager {
     limits: Limits,
     global_used: u32,
     repo_used: HashMap<String, u32>,
     agent_used: HashMap<String, u32>,
+    pair_used: HashMap<(String, String), u32>,
 }
 
 impl SlotManager {
@@ -64,6 +70,7 @@ impl SlotManager {
             global_used: 0,
             repo_used: HashMap::new(),
             agent_used: HashMap::new(),
+            pair_used: HashMap::new(),
         }
     }
 
@@ -77,10 +84,12 @@ impl SlotManager {
         self.global_used = 0;
         self.repo_used.clear();
         self.agent_used.clear();
+        self.pair_used.clear();
         for (repo, agent) in active {
             self.global_used += 1;
-            *self.repo_used.entry(repo).or_insert(0) += 1;
-            *self.agent_used.entry(agent).or_insert(0) += 1;
+            *self.repo_used.entry(repo.clone()).or_insert(0) += 1;
+            *self.agent_used.entry(agent.clone()).or_insert(0) += 1;
+            *self.pair_used.entry((repo, agent)).or_insert(0) += 1;
         }
     }
 
@@ -108,23 +117,34 @@ impl SlotManager {
         self.global_used += 1;
         *self.repo_used.entry(repo.to_string()).or_insert(0) += 1;
         *self.agent_used.entry(agent.to_string()).or_insert(0) += 1;
+        *self
+            .pair_used
+            .entry((repo.to_string(), agent.to_string()))
+            .or_insert(0) += 1;
         true
     }
 
     /// Release a slot for `(repo, agent)` (on `waiting_input`, `cancelled`, or
     /// completion).
     ///
-    /// Releasing is atomic across all three tiers: it only takes effect if a
-    /// slot is actually held for **both** the repo and the agent, so a
-    /// mismatched or double release cannot corrupt the invariant
-    /// `global_used == Σ repo_used == Σ agent_used` (prevents the drop/
-    /// double-release the spec warns about). A stray release is a safe no-op.
+    /// Releasing is atomic across all tiers: it only takes effect if a slot is
+    /// genuinely held for the exact `(repo, agent)` pair, so a mismatched or
+    /// double release cannot corrupt the invariant `global_used == Σ repo_used
+    /// == Σ agent_used == Σ pair_used` (prevents the drop/double-release the
+    /// spec warns about). A stray release is a safe no-op.
     pub fn release(&mut self, repo: &str, agent: &str) {
-        let held = self.repo_used(repo) > 0 && self.agent_used(agent) > 0;
-        if held {
-            self.global_used = self.global_used.saturating_sub(1);
-            decrement(&mut self.repo_used, repo);
-            decrement(&mut self.agent_used, agent);
+        let pair = (repo.to_string(), agent.to_string());
+        if self.pair_used.get(&pair).copied().unwrap_or(0) == 0 {
+            return; // not held for this exact pair -> no-op
+        }
+        self.global_used = self.global_used.saturating_sub(1);
+        decrement(&mut self.repo_used, repo);
+        decrement(&mut self.agent_used, agent);
+        if let Some(count) = self.pair_used.get_mut(&pair) {
+            *count -= 1;
+            if *count == 0 {
+                self.pair_used.remove(&pair);
+            }
         }
     }
 
@@ -352,6 +372,26 @@ mod tests {
         );
         assert_eq!(slots.repo_used("repoA"), 1);
         assert_eq!(slots.agent_used("herdr"), 1);
+    }
+
+    #[test]
+    fn cross_pair_release_is_a_no_op() {
+        // Holding (repoA, herdr) and (repoB, orca): releasing the never-held
+        // cross pair (repoA, orca) must not corrupt the per-tier breakdown even
+        // though both tiers individually show usage.
+        let mut slots = SlotManager::new(Limits::global(4));
+        slots.acquire("repoA", "herdr");
+        slots.acquire("repoB", "orca");
+        slots.release("repoA", "orca"); // pair never acquired -> no-op
+        assert_eq!(slots.global_used(), 2, "cross-pair release must be a no-op");
+        assert_eq!(slots.repo_used("repoA"), 1);
+        assert_eq!(slots.repo_used("repoB"), 1);
+        assert_eq!(slots.agent_used("herdr"), 1);
+        assert_eq!(slots.agent_used("orca"), 1);
+        // The genuinely-held pairs still release correctly.
+        slots.release("repoA", "herdr");
+        slots.release("repoB", "orca");
+        assert_eq!(slots.global_used(), 0);
     }
 
     #[test]
