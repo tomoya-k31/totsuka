@@ -3,8 +3,8 @@ type: Component
 title: orchestrator-core クレート
 description: totsuka のコア。ヘキサゴナルアーキテクチャの domain（ドメイン・ステートマシン）/ ports（TaskSource・AgentIde・LlmRouter・SecretStore 等の trait）/ adapters（JSON-RPC ブリッジ・SQLite・Keychain）を担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
-tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin, worktree, git]
-timestamp: 2026-07-12T01:10:00Z
+tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin, worktree, git, workflow]
+timestamp: 2026-07-12T01:20:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -17,7 +17,7 @@ totsuka のビジネスロジックの中核。外部 I/O を持たず、ports �
 
 | モジュール | 責務 | 実装タスク |
 |---|---|---|
-| `domain` | 純粋なドメイン型とタスクステートマシン（`domain::state`: `transition(from,event)` 純関数、9 状態、F-71） | #48 / #54 ほか |
+| `domain` | 純粋なドメイン型。`state`（`transition(from,event)` 純関数、9 状態、F-71）、`workflow`（`source×trigger×mode×agent×output` 定義の解釈・トリガーマッチング（定義順 first-match F-81・status/label 防御的再判定）・検証（plan×pull_request エラー F-82、output=source の capability 検証 F-83、trigger 重複警告 F-81）・on_success/on_failure=OutcomeAction F-84） | #48 / #54 |
 | `ports` | 差し替え対象の trait 境界（`SecretStore` / `ProcessProbe`、後続で `TaskSource` / `AgentIde` / `LlmRouter` / 永続化） | 各機能タスク |
 | `paths` | XDG Base Directory 準拠のパス解決（`config`/`data`/`state`/`cache`/`runtime`、`totsuka` サフィックス、未設定時 `$HOME` フォールバック）。macOS でも XDG を明示採用 | #46 |
 | `platform` | OS 依存実装の隔離。`platform::macos`（Keychain = keyring クレート）、`platform::unix`（`ProcessProbe` = `kill(pid,0)`）、`platform::fallback`（非 macOS の未サポート SecretStore）。`PlatformSecretStore` / `PlatformProcessProbe` で現行 OS の実装を選ぶ | #46 |
