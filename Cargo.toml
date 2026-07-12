@@ -5,6 +5,7 @@ members = [
     "crates/orchestrator-cli",
     "crates/plugin-protocol",
     "plugins/task-source-github",
+    "plugins/task-source-notion",
 ]
 
 [workspace.package]
