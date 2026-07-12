@@ -190,18 +190,19 @@ fn check_worktree_placeholders(referrer: &str, template: &str, errors: &mut Vec<
     let bytes = template.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'{' && (i == 0 || bytes[i - 1] != b'$') {
-            if let Some(rel) = template[i + 1..].find('}') {
-                let name = &template[i + 1..i + 1 + rel];
-                if !ALLOWED_WORKTREE_PLACEHOLDERS.contains(&name) {
-                    errors.push(ValidationError::UnknownWorktreePlaceholder {
-                        referrer: referrer.to_string(),
-                        placeholder: name.to_string(),
-                    });
-                }
-                i = i + 1 + rel + 1;
-                continue;
+        if bytes[i] == b'{'
+            && (i == 0 || bytes[i - 1] != b'$')
+            && let Some(rel) = template[i + 1..].find('}')
+        {
+            let name = &template[i + 1..i + 1 + rel];
+            if !ALLOWED_WORKTREE_PLACEHOLDERS.contains(&name) {
+                errors.push(ValidationError::UnknownWorktreePlaceholder {
+                    referrer: referrer.to_string(),
+                    placeholder: name.to_string(),
+                });
             }
+            i = i + 1 + rel + 1;
+            continue;
         }
         i += 1;
     }

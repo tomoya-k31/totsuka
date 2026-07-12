@@ -160,10 +160,10 @@ impl StateDb {
     /// Open (creating if needed) a file-backed state DB and run migrations.
     pub fn open(path: &Path) -> Result<Self, StateError> {
         let preexisting = path.exists();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;

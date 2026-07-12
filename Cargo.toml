@@ -9,7 +9,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+# 1.88 is required transitively by the security-patched `time` 0.3.47
+# (RUSTSEC-2026-0009 fix).
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/tomoya-k31/totsuka"
 

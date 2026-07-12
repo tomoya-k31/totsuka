@@ -37,17 +37,17 @@ impl RunLock {
     pub fn acquire<P: ProcessProbe>(path: &Path, probe: &P) -> Result<Self, LockError> {
         if path.exists() {
             let contents = fs::read_to_string(path)?;
-            if let Ok(pid) = contents.trim().parse::<u32>() {
-                if probe.is_alive(pid) {
-                    return Err(LockError::AlreadyRunning { pid });
-                }
-                // Dead PID -> stale lock; fall through and reclaim it.
+            if let Ok(pid) = contents.trim().parse::<u32>()
+                && probe.is_alive(pid)
+            {
+                return Err(LockError::AlreadyRunning { pid });
             }
+            // Dead/absent PID -> stale lock; fall through and reclaim it.
         }
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
         }
         fs::write(path, std::process::id().to_string())?;
         Ok(Self {
