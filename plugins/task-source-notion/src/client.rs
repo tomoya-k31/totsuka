@@ -301,6 +301,9 @@ impl<T: NotionTransport> NotionClient<T> {
     /// Publish `content` by appending it as blocks to the task's page (F-07).
     /// Markdown is converted to Notion blocks, split to the 2000-char limit, and
     /// appended in batches of [`APPEND_BATCH`].
+    ///
+    /// `_format` is accepted for protocol symmetry but ignored: `v1` always
+    /// parses `content` as Markdown (the only format the orchestrator emits).
     pub async fn publish(
         &self,
         task_id: &str,

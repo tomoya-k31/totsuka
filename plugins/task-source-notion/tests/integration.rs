@@ -153,7 +153,10 @@ fn query_response() -> Value {
                 "Priority": { "select": { "name": "High" } },
                 "Repo": { "rich_text": [] }
             } },
-            // In-progress status → excluded (F-08).
+            // In-progress status. Under the `実装待ち` trigger this page is
+            // rejected by the trigger match; the in-progress *gating* branch
+            // (F-08) is covered separately by
+            // `fetch_excludes_in_progress_on_statusless_trigger`.
             { "id": "P_3", "url": "https://notion.so/P_3", "properties": {
                 "Name": { "title": [{ "plain_text": "Doing" }] },
                 "Status": { "status": { "name": "実装中" } },
@@ -265,6 +268,49 @@ async fn full_flow_initialize_fetch_update_publish() {
     let children = append.body.unwrap()["children"].clone();
     assert_eq!(children[0]["type"], "heading_1");
     assert_eq!(children[1]["type"], "bulleted_list_item");
+}
+
+#[tokio::test]
+async fn fetch_excludes_in_progress_on_statusless_trigger() {
+    // With a status-less trigger `{}` there is no server-side status filter, so
+    // gating relies on `in_progress_statuses` (F-08). This is the production
+    // path that exercises the `is_in_progress` branch directly.
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(json!({
+        "has_more": false, "next_cursor": null,
+        "results": [
+            { "id": "P_todo", "url": "https://notion.so/P_todo", "properties": {
+                "Name": { "title": [{ "plain_text": "Todo" }] },
+                "Status": { "status": { "name": "実装待ち" } },
+                "Owner": { "people": [] } } },
+            { "id": "P_doing", "url": "https://notion.so/P_doing", "properties": {
+                "Name": { "title": [{ "plain_text": "Doing" }] },
+                "Status": { "status": { "name": "実装中" } },
+                "Owner": { "people": [] } } }
+        ]
+    })));
+    // body_source = page, so each surviving task fetches its blocks; only the
+    // todo page survives, so exactly one block fetch follows.
+    shared.push(Canned::Data(json!({ "has_more": false, "results": [] })));
+
+    let resp = call(&mut srv, 2, "tasks/fetch", json!({ "trigger": {} })).await;
+    let tasks = resp.result.unwrap()["tasks"].clone();
+    let tasks = tasks.as_array().unwrap();
+    assert_eq!(tasks.len(), 1, "the in-progress page is gated out (F-08)");
+    assert_eq!(tasks[0]["id"], "P_todo");
+    // No status filter was sent on a status-less trigger.
+    assert!(
+        shared.requests()[0]
+            .body
+            .as_ref()
+            .unwrap()
+            .get("filter")
+            .is_none(),
+        "no server-side filter without a trigger status"
+    );
 }
 
 #[tokio::test]
