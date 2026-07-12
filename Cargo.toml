@@ -4,6 +4,7 @@ members = [
     "crates/orchestrator-core",
     "crates/orchestrator-cli",
     "crates/plugin-protocol",
+    "plugins/task-source-github",
 ]
 
 [workspace.package]

@@ -1,0 +1,7 @@
+name = "github"
+kind = "task_source"
+version = "0.1.0"
+protocol_version = "^0.1"
+
+[capabilities]
+outputs = ["source"]
