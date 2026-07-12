@@ -3,8 +3,8 @@ type: Component
 title: orchestrator-core クレート
 description: totsuka のコア。ヘキサゴナルアーキテクチャの domain（ドメイン・ステートマシン）/ ports（TaskSource・AgentIde・LlmRouter・SecretStore 等の trait）/ adapters（JSON-RPC ブリッジ・SQLite・Keychain）を担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
-tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin]
-timestamp: 2026-07-12T00:50:00Z
+tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin, worktree, git]
+timestamp: 2026-07-12T01:10:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -23,6 +23,7 @@ totsuka のビジネスロジックの中核。外部 I/O を持たず、ports �
 | `platform` | OS 依存実装の隔離。`platform::macos`（Keychain = keyring クレート）、`platform::unix`（`ProcessProbe` = `kill(pid,0)`）、`platform::fallback`（非 macOS の未サポート SecretStore）。`PlatformSecretStore` / `PlatformProcessProbe` で現行 OS の実装を選ぶ | #46 |
 | `config` | 設定ロードと検証。`schema`（`config.toml` パース、F-60/61/64）、`raw`（`plugins/{name}.toml` を無解釈保持 → JSON、F-64）、`resolve`（`${ENV}`/`keychain:` シークレット解決・`~`/`${ENV}` パス展開、F-62/65）、`layered`（CLI>env>plugin-file>config-default の優先順位、F-66）、`validate`（静的検証、F-63/58）、`edit`（`toml_edit` で `[plugins.{name}] enabled` のみ書き換え・コメント整形保持、F-57） | #47 / #52 |
 | `plugins` | プラグインの on-disk ストア（`store`）。install（prepare→confirm→commit の2段、SHA-256 表示 §5.4、manifest/protocol 互換検証 F-54）・uninstall・list。install=バイナリの存在、enabled=設定の宣言を分離（F-56） | #52 |
+| `worktree` | git worktree ライフサイクル（F-20〜25/85）。作成（fetch→origin/{default} を commit 解決して分岐→worktree add、並列安全）、掃除（immediate/retention/manual、未コミットは skip）、孤児検出。ブランチ/配置テンプレート描画とサニタイズ。git は `ports::GitRunner` 越し（`adapters::git::SystemGitRunner`） | #53 |
 | `logging` | 構造化ログと機密マスキング。`redact`（フィールド denylist＋値パターン）、`layer`（redact 済み JSON Lines / 人間可読を出力する tracing レイヤ）、`rotation`（日次ログの世代保持）。規約は [ログ規約](/development/logging-conventions.md) | #49 |
 | `adapters` | ports の具象実装。`state_db`（SQLite 状態永続化・埋め込みマイグレーション・イベントログ・冪等取り込み → [state.db スキーマ](/data/state-db.md)）、`run_lock`（多重起動防止 F-74）、`plugin_host`（プラグインをサブプロセス起動し NDJSON JSON-RPC で通信、initialize/protocol 互換チェック/リクエスト相関/タイムアウト/クラッシュ隔離/config·validate 委譲、F-51/54/58/59/65, §5.3） | #48 / #51 |
 

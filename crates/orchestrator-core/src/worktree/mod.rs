@@ -1,0 +1,487 @@
+//! git worktree lifecycle management (F-20–F-25, F-85).
+//!
+//! Implements the "1 task = 1 repo = 1 worktree = 1 branch" normalization:
+//! creating worktrees (fetch → branch from `origin/{default}` → `worktree
+//! add`), cleaning them up per policy (skipping dirty ones), and detecting
+//! orphans. All git access goes through [`GitRunner`](crate::ports::git::GitRunner)
+//! so the pure rendering logic is unit-tested and the git-touching paths are
+//! integration-tested against a real repo.
+
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use crate::config::resolve::{ResolveError, expand_env};
+use crate::ports::git::GitRunner;
+
+/// Default branch-name template (F-21).
+pub const DEFAULT_BRANCH_TEMPLATE: &str = "agent/{source}-{task_id}";
+/// Default worktree location template — centralized under XDG state (F-22).
+pub const DEFAULT_LOCATION_TEMPLATE: &str =
+    "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}";
+
+/// How many times to retry a git command that hit a lock, and the backoff.
+const GIT_LOCK_RETRIES: u32 = 5;
+const GIT_LOCK_BACKOFF_MS: u64 = 50;
+
+/// Errors from worktree operations.
+#[derive(Debug, thiserror::Error)]
+pub enum WorktreeError {
+    /// Running git failed at the process level.
+    #[error("failed to run git: {0}")]
+    Io(#[from] std::io::Error),
+    /// `git fetch` failed (F-25).
+    #[error("git fetch failed for {repo}: {stderr} → check network and remote access")]
+    Fetch {
+        /// Repository path.
+        repo: String,
+        /// git stderr.
+        stderr: String,
+    },
+    /// The target branch/worktree already exists (retry reuse is #55/#57).
+    #[error("worktree or branch `{branch}` already exists → cancel/retry the owning task instead")]
+    AlreadyExists {
+        /// Branch name.
+        branch: String,
+    },
+    /// A git command failed for another reason.
+    #[error("git {command} failed: {stderr}")]
+    Git {
+        /// The git subcommand.
+        command: String,
+        /// git stderr.
+        stderr: String,
+    },
+    /// A location template referenced an unset variable.
+    #[error(transparent)]
+    Resolve(#[from] ResolveError),
+}
+
+/// The worktree cleanup policy for a workflow mode (F-23, F-85).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupPolicy {
+    /// Remove as soon as the task finishes (default for plan mode).
+    Immediate,
+    /// Keep for N days after the task finished, then remove.
+    RetentionDays(u32),
+    /// Never auto-remove; a human cleans up.
+    Manual,
+}
+
+/// The outcome of a cleanup attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CleanupOutcome {
+    /// The worktree (and branch) were removed.
+    Removed,
+    /// Kept per policy (e.g. retention not elapsed, or manual).
+    Retained,
+    /// Skipped because it had uncommitted changes (data-loss guard).
+    DirtySkipped,
+}
+
+/// A created worktree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Worktree {
+    /// Absolute worktree path.
+    pub path: PathBuf,
+    /// The branch checked out in it.
+    pub branch: String,
+}
+
+/// Sanitize a branch name for use as a single path component: `/` becomes `-`
+/// so `agent/github-123` maps to the directory `agent-github-123` (avoids
+/// unintended nesting, F-22 addendum).
+pub fn sanitize_branch_for_path(branch: &str) -> String {
+    branch.replace('/', "-")
+}
+
+/// Render a branch name from a template (F-21). Placeholders: `{source}`,
+/// `{task_id}`.
+pub fn render_branch(template: &str, source: &str, task_id: &str) -> String {
+    template
+        .replace("{source}", source)
+        .replace("{task_id}", task_id)
+}
+
+/// Context for rendering a worktree location.
+#[derive(Debug, Clone, Copy)]
+pub struct LocationContext<'a> {
+    /// Absolute clone path of the repository.
+    pub repo_path: &'a Path,
+    /// Repository name (namespaces centralized worktrees).
+    pub repo_name: &'a str,
+    /// Source plugin name.
+    pub source: &'a str,
+    /// Task id.
+    pub task_id: &'a str,
+}
+
+/// Render a worktree location from a template (F-22). `${ENV}` is expanded from
+/// `env`; `{repo}` / `{repo_name}` / `{branch}` (sanitized) / `{task_id}` /
+/// `{source}` are substituted.
+pub fn render_location(
+    template: &str,
+    ctx: &LocationContext<'_>,
+    branch: &str,
+    env: &HashMap<String, String>,
+) -> Result<PathBuf, WorktreeError> {
+    let expanded = expand_env(template, &|k: &str| env.get(k).cloned())?;
+    let sanitized = sanitize_branch_for_path(branch);
+    let rendered = expanded
+        .replace("{repo}", &ctx.repo_path.display().to_string())
+        .replace("{repo_name}", ctx.repo_name)
+        .replace("{branch}", &sanitized)
+        .replace("{task_id}", ctx.task_id)
+        .replace("{source}", ctx.source);
+    Ok(PathBuf::from(rendered))
+}
+
+/// Whether the policy allows removing a worktree given when the task finished.
+///
+/// `finished_at` / `now` are RFC 3339 UTC. A `RetentionDays` policy with no
+/// `finished_at` (or an unparseable one) keeps the worktree (safe default).
+pub fn policy_allows_removal(policy: CleanupPolicy, finished_at: Option<&str>, now: &str) -> bool {
+    match policy {
+        CleanupPolicy::Immediate => true,
+        CleanupPolicy::Manual => false,
+        CleanupPolicy::RetentionDays(days) => {
+            let (Some(finished), Ok(now)) = (finished_at, parse_rfc3339(now)) else {
+                return false;
+            };
+            match parse_rfc3339(finished) {
+                Ok(finished) => finished + time::Duration::days(days as i64) <= now,
+                Err(_) => false,
+            }
+        }
+    }
+}
+
+fn parse_rfc3339(s: &str) -> Result<time::OffsetDateTime, time::error::Parse> {
+    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+}
+
+/// Manages worktree lifecycle over a [`GitRunner`].
+#[derive(Debug, Clone)]
+pub struct WorktreeManager<G> {
+    git: G,
+}
+
+/// Request to create a worktree.
+#[derive(Debug, Clone, Copy)]
+pub struct CreateRequest<'a> {
+    /// Absolute repository clone path.
+    pub repo_path: &'a Path,
+    /// Repository name.
+    pub repo_name: &'a str,
+    /// Source plugin name.
+    pub source: &'a str,
+    /// Task id.
+    pub task_id: &'a str,
+    /// Branch template (use [`DEFAULT_BRANCH_TEMPLATE`]).
+    pub branch_template: &'a str,
+    /// Location template (use [`DEFAULT_LOCATION_TEMPLATE`]).
+    pub location_template: &'a str,
+    /// Base branch override; `None` detects `origin`'s default (F-25).
+    pub base_branch: Option<&'a str>,
+    /// Environment for `${ENV}` in the location template.
+    pub env: &'a HashMap<String, String>,
+}
+
+impl<G: GitRunner> WorktreeManager<G> {
+    /// Build a manager over a git runner.
+    pub fn new(git: G) -> Self {
+        Self { git }
+    }
+
+    /// Create a worktree: `git fetch` (F-25), branch from `origin/{default}`,
+    /// then `git worktree add`. Serialization-free; git-lock contention is
+    /// absorbed by a short retry (§5.5).
+    pub fn create(&self, req: &CreateRequest<'_>) -> Result<Worktree, WorktreeError> {
+        // F-25: always fetch first so we branch off fresh remote state.
+        let fetch = self.run_with_lock_retry(req.repo_path, &["fetch", "origin"])?;
+        if !fetch.success() {
+            return Err(WorktreeError::Fetch {
+                repo: req.repo_path.display().to_string(),
+                stderr: fetch.stderr,
+            });
+        }
+
+        let default_branch = match req.base_branch {
+            Some(b) => b.to_string(),
+            None => self.detect_default_branch(req.repo_path)?,
+        };
+        // Resolve `origin/{default}` to a commit and branch from *that*: creating
+        // a branch off a remote-tracking ref sets up upstream tracking, which
+        // writes `.git/config` and contends under parallel creation (§5.5).
+        // Branching from a raw commit avoids that shared-config write entirely.
+        let base_ref = format!("origin/{default_branch}^{{commit}}");
+        let rev = self
+            .git
+            .run(req.repo_path, &["rev-parse", "--verify", &base_ref])?;
+        if !rev.success() {
+            return Err(WorktreeError::Git {
+                command: "rev-parse".to_string(),
+                stderr: rev.stderr,
+            });
+        }
+        let base_commit = rev.stdout.trim().to_string();
+
+        let branch = render_branch(req.branch_template, req.source, req.task_id);
+        let ctx = LocationContext {
+            repo_path: req.repo_path,
+            repo_name: req.repo_name,
+            source: req.source,
+            task_id: req.task_id,
+        };
+        let path = render_location(req.location_template, &ctx, &branch, req.env)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let path_str = path.display().to_string();
+        let add = self.run_with_lock_retry(
+            req.repo_path,
+            &["worktree", "add", &path_str, "-b", &branch, &base_commit],
+        )?;
+        if !add.success() {
+            let combined = format!("{}{}", add.stdout, add.stderr);
+            if combined.contains("already exists") || combined.contains("already used") {
+                return Err(WorktreeError::AlreadyExists { branch });
+            }
+            return Err(WorktreeError::Git {
+                command: "worktree add".to_string(),
+                stderr: add.stderr,
+            });
+        }
+
+        Ok(Worktree { path, branch })
+    }
+
+    /// Detect `origin`'s default branch (e.g. `main`), falling back to `main`.
+    fn detect_default_branch(&self, repo_path: &Path) -> Result<String, WorktreeError> {
+        let out = self
+            .git
+            .run(repo_path, &["rev-parse", "--abbrev-ref", "origin/HEAD"])?;
+        if out.success()
+            && let Some(branch) = out.stdout.trim().strip_prefix("origin/")
+            && !branch.is_empty()
+        {
+            return Ok(branch.to_string());
+        }
+        Ok("main".to_string())
+    }
+
+    /// Clean up a worktree per policy. A worktree with uncommitted changes is
+    /// skipped regardless of policy (data-loss guard).
+    pub fn cleanup(
+        &self,
+        repo_path: &Path,
+        worktree_path: &Path,
+        branch: &str,
+        policy: CleanupPolicy,
+        finished_at: Option<&str>,
+        now: &str,
+    ) -> Result<CleanupOutcome, WorktreeError> {
+        // Data-loss guard first: never remove a dirty worktree (F-23).
+        if self.has_uncommitted_changes(worktree_path)? {
+            return Ok(CleanupOutcome::DirtySkipped);
+        }
+        if !policy_allows_removal(policy, finished_at, now) {
+            return Ok(CleanupOutcome::Retained);
+        }
+
+        let path_str = worktree_path.display().to_string();
+        let remove = self.run_with_lock_retry(repo_path, &["worktree", "remove", &path_str])?;
+        if !remove.success() {
+            return Err(WorktreeError::Git {
+                command: "worktree remove".to_string(),
+                stderr: remove.stderr,
+            });
+        }
+        // Best-effort branch delete; a missing branch is not an error.
+        let _ = self.git.run(repo_path, &["branch", "-D", branch])?;
+        Ok(CleanupOutcome::Removed)
+    }
+
+    /// Whether a worktree has uncommitted (staged/unstaged/untracked) changes.
+    fn has_uncommitted_changes(&self, worktree_path: &Path) -> Result<bool, WorktreeError> {
+        let out = self.git.run(worktree_path, &["status", "--porcelain"])?;
+        Ok(!out.stdout.trim().is_empty())
+    }
+
+    /// List worktrees with no corresponding known path (orphans, F-24). The main
+    /// working tree (the repo itself) is never reported.
+    pub fn detect_orphans(
+        &self,
+        repo_path: &Path,
+        known: &HashSet<PathBuf>,
+    ) -> Result<Vec<PathBuf>, WorktreeError> {
+        let out = self
+            .git
+            .run(repo_path, &["worktree", "list", "--porcelain"])?;
+        if !out.success() {
+            return Err(WorktreeError::Git {
+                command: "worktree list".to_string(),
+                stderr: out.stderr,
+            });
+        }
+        let main = canonical(repo_path);
+        let mut orphans = Vec::new();
+        for line in out.stdout.lines() {
+            if let Some(raw) = line.strip_prefix("worktree ") {
+                let path = PathBuf::from(raw.trim());
+                let canonical_path = canonical(&path);
+                if canonical_path == main {
+                    continue; // never the main working tree
+                }
+                if !known.contains(&path) && !known.contains(&canonical_path) {
+                    orphans.push(path);
+                }
+            }
+        }
+        Ok(orphans)
+    }
+
+    /// Run a git command, retrying briefly on git-lock contention (§5.5).
+    fn run_with_lock_retry(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+    ) -> Result<crate::ports::git::GitOutput, WorktreeError> {
+        let mut attempt = 0;
+        loop {
+            let out = self.git.run(cwd, args)?;
+            if out.success() || !is_lock_error(&out.stderr) || attempt >= GIT_LOCK_RETRIES {
+                return Ok(out);
+            }
+            attempt += 1;
+            std::thread::sleep(std::time::Duration::from_millis(
+                GIT_LOCK_BACKOFF_MS * attempt as u64,
+            ));
+        }
+    }
+}
+
+/// Whether git stderr indicates transient lock contention.
+fn is_lock_error(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.contains("index.lock")
+        || s.contains("unable to lock")
+        || s.contains("cannot lock ref")
+        || s.contains("could not lock")
+        || s.contains("another git process")
+}
+
+/// Canonicalize a path, falling back to the original if it does not exist.
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn renders_default_branch_and_location() {
+        let branch = render_branch(DEFAULT_BRANCH_TEMPLATE, "github", "123");
+        assert_eq!(branch, "agent/github-123");
+
+        let ctx = LocationContext {
+            repo_path: Path::new("/repos/totsuka"),
+            repo_name: "totsuka",
+            source: "github",
+            task_id: "123",
+        };
+        let loc = render_location(
+            DEFAULT_LOCATION_TEMPLATE,
+            &ctx,
+            &branch,
+            &env(&[("XDG_STATE_HOME", "/state")]),
+        )
+        .unwrap();
+        // `/` in the branch is sanitized to `-` in the directory name.
+        assert_eq!(
+            loc,
+            PathBuf::from("/state/totsuka/worktrees/totsuka/agent-github-123")
+        );
+    }
+
+    #[test]
+    fn adjacent_location_template_is_supported() {
+        let ctx = LocationContext {
+            repo_path: Path::new("/repos/totsuka"),
+            repo_name: "totsuka",
+            source: "github",
+            task_id: "1",
+        };
+        let loc = render_location(
+            "{repo}/../.worktrees/{branch}",
+            &ctx,
+            "agent/github-1",
+            &env(&[]),
+        )
+        .unwrap();
+        assert_eq!(
+            loc,
+            PathBuf::from("/repos/totsuka/../.worktrees/agent-github-1")
+        );
+    }
+
+    #[test]
+    fn sanitize_flattens_slashes() {
+        assert_eq!(sanitize_branch_for_path("agent/github-1"), "agent-github-1");
+        assert_eq!(sanitize_branch_for_path("plain"), "plain");
+    }
+
+    #[test]
+    fn policy_immediate_and_manual() {
+        let now = "2026-07-12T00:00:00Z";
+        assert!(policy_allows_removal(CleanupPolicy::Immediate, None, now));
+        assert!(!policy_allows_removal(
+            CleanupPolicy::Manual,
+            Some(now),
+            now
+        ));
+    }
+
+    #[test]
+    fn policy_retention_days() {
+        let finished = "2026-07-01T00:00:00Z";
+        // 5 days retention, 3 days later -> keep.
+        assert!(!policy_allows_removal(
+            CleanupPolicy::RetentionDays(5),
+            Some(finished),
+            "2026-07-04T00:00:00Z"
+        ));
+        // 5 days retention, 6 days later -> remove.
+        assert!(policy_allows_removal(
+            CleanupPolicy::RetentionDays(5),
+            Some(finished),
+            "2026-07-07T00:00:00Z"
+        ));
+        // No finished_at -> keep (safe).
+        assert!(!policy_allows_removal(
+            CleanupPolicy::RetentionDays(1),
+            None,
+            "2026-07-07T00:00:00Z"
+        ));
+    }
+
+    #[test]
+    fn unknown_env_in_location_errors() {
+        let ctx = LocationContext {
+            repo_path: Path::new("/r"),
+            repo_name: "r",
+            source: "s",
+            task_id: "1",
+        };
+        assert!(render_location("${MISSING}/{branch}", &ctx, "b", &env(&[])).is_err());
+    }
+}
