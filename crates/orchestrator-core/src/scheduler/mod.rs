@@ -112,11 +112,20 @@ impl SlotManager {
     }
 
     /// Release a slot for `(repo, agent)` (on `waiting_input`, `cancelled`, or
-    /// completion). Saturating; zeroed entries are dropped.
+    /// completion).
+    ///
+    /// Releasing is atomic across all three tiers: it only takes effect if a
+    /// slot is actually held for **both** the repo and the agent, so a
+    /// mismatched or double release cannot corrupt the invariant
+    /// `global_used == Σ repo_used == Σ agent_used` (prevents the drop/
+    /// double-release the spec warns about). A stray release is a safe no-op.
     pub fn release(&mut self, repo: &str, agent: &str) {
-        self.global_used = self.global_used.saturating_sub(1);
-        decrement(&mut self.repo_used, repo);
-        decrement(&mut self.agent_used, agent);
+        let held = self.repo_used(repo) > 0 && self.agent_used(agent) > 0;
+        if held {
+            self.global_used = self.global_used.saturating_sub(1);
+            decrement(&mut self.repo_used, repo);
+            decrement(&mut self.agent_used, agent);
+        }
     }
 
     /// Total slots in use.
@@ -319,6 +328,30 @@ mod tests {
             before,
             "no leak or double-count across the round trip"
         );
+    }
+
+    #[test]
+    fn stray_release_does_not_corrupt_the_invariant() {
+        let mut slots = SlotManager::new(limits());
+        slots.acquire("repoA", "herdr");
+        // Double release: the second is a no-op (slot no longer held).
+        slots.release("repoA", "herdr");
+        slots.release("repoA", "herdr");
+        assert_eq!(slots.global_used(), 0);
+        assert_eq!(slots.repo_used("repoA"), 0);
+        assert_eq!(slots.agent_used("herdr"), 0);
+
+        // Mismatched release (wrong repo) must not drop the global count and
+        // leave the real slot leaked.
+        slots.acquire("repoA", "herdr");
+        slots.release("repoB", "herdr"); // repoB never held -> no-op
+        assert_eq!(
+            slots.global_used(),
+            1,
+            "global must stay in sync with tiers"
+        );
+        assert_eq!(slots.repo_used("repoA"), 1);
+        assert_eq!(slots.agent_used("herdr"), 1);
     }
 
     #[test]
