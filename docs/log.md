@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-12
+* **Update**: リポジトリ自動選択（#56）。[orchestrator-core](/components/orchestrator-core.md) に `repo_select`（ルール＋LLM フォールバック、README hash キャッシュ）、`ports::LlmRouter`、`adapters::llm::OpenAiRouter`（reqwest・指数バックオフ）を追加。
 * **Update**: 並列実行制御（#55）。[orchestrator-core](/components/orchestrator-core.md) に `scheduler`（3 階層スロット管理・DB 再構築・優先度キュー・waiting_input のスロット解放 F-45）を追加。
 * **Update**: ワークフロー定義とトリガーマッチング（#54）。[orchestrator-core](/components/orchestrator-core.md) に `domain::workflow`（Workflow/Trigger/OutcomeAction、定義順 first-match マッチング、plan×pull_request・output=source capability・trigger 重複の検証）を追加。
 * **Update**: git worktree ライフサイクル管理（#53）。[orchestrator-core](/components/orchestrator-core.md) に `worktree` モジュールと `ports::GitRunner` / `adapters::git::SystemGitRunner` を追加。作成（origin/{default} を commit 解決して分岐・並列安全）・掃除（ポリシー別、未コミットは skip）・孤児検出を実装。実 git（ローカル bare を origin）で結合テスト。

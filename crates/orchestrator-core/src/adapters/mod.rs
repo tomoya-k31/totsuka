@@ -4,6 +4,7 @@
 //! Filled in incrementally by feature tasks.
 
 pub mod git;
+pub mod llm;
 pub mod plugin_host;
 pub mod run_lock;
 pub mod state_db;

@@ -3,8 +3,8 @@ type: Component
 title: orchestrator-core クレート
 description: totsuka のコア。ヘキサゴナルアーキテクチャの domain（ドメイン・ステートマシン）/ ports（TaskSource・AgentIde・LlmRouter・SecretStore 等の trait）/ adapters（JSON-RPC ブリッジ・SQLite・Keychain）を担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
-tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin, worktree, git, workflow, scheduler]
-timestamp: 2026-07-12T01:30:00Z
+tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin, worktree, git, workflow, scheduler, llm, repo-select]
+timestamp: 2026-07-12T01:40:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -23,6 +23,7 @@ totsuka のビジネスロジックの中核。外部 I/O を持たず、ports �
 | `platform` | OS 依存実装の隔離。`platform::macos`（Keychain = keyring クレート）、`platform::unix`（`ProcessProbe` = `kill(pid,0)`）、`platform::fallback`（非 macOS の未サポート SecretStore）。`PlatformSecretStore` / `PlatformProcessProbe` で現行 OS の実装を選ぶ | #46 |
 | `config` | 設定ロードと検証。`schema`（`config.toml` パース、F-60/61/64）、`raw`（`plugins/{name}.toml` を無解釈保持 → JSON、F-64）、`resolve`（`${ENV}`/`keychain:` シークレット解決・`~`/`${ENV}` パス展開、F-62/65）、`layered`（CLI>env>plugin-file>config-default の優先順位、F-66）、`validate`（静的検証 F-63/58 ＋ ワークフロー検証 F-81/82/83 を統合する `validate()` エントリ、Error/Warning の Finding を返す）、`edit`（`toml_edit` で `[plugins.{name}] enabled` のみ書き換え・コメント整形保持、F-57） | #47 / #52 / #54 |
 | `plugins` | プラグインの on-disk ストア（`store`）。install（prepare→confirm→commit の2段、SHA-256 表示 §5.4、manifest/protocol 互換検証 F-54）・uninstall・list。install=バイナリの存在、enabled=設定の宣言を分離（F-56） | #52 |
+| `repo_select` | リポジトリ自動選択（F-10〜15）。repo_hint 解決を最優先、未解決なら LLM 分類（候補=概要＋README先頭N行）。confidence 低/未知repo（1回リトライ後）は pending、API 恒久失敗は failed。`reason` は --dry-run 用。`ReadmeCache`（README hash キャッシュ、F-15）。LLM は `ports::LlmRouter`（OpenAI 互換）越し、reqwest 実装は `adapters::llm::OpenAiRouter`（指数バックオフ §5.3） | #56 |
 | `scheduler` | 並列実行制御（F-40〜45）。3 階層スロット（global/repo/agent）を全て満たすと dispatch 可、`counts_toward_slot` は dispatched/running/publishing のみ計上（waiting_input は解放）。DB から `rebuild` で再構築。`PriorityQueue`（priority 降順→FIFO）、`plan_dispatch`（優先度順にスロット確保） | #55 |
 | `worktree` | git worktree ライフサイクル（F-20〜25/85）。作成（fetch→origin/{default} を commit 解決して分岐→worktree add、並列安全）、掃除（immediate/retention/manual、未コミットは skip）、孤児検出。ブランチ/配置テンプレート描画とサニタイズ。git は `ports::GitRunner` 越し（`adapters::git::SystemGitRunner`） | #53 |
 | `logging` | 構造化ログと機密マスキング。`redact`（フィールド denylist＋値パターン）、`layer`（redact 済み JSON Lines / 人間可読を出力する tracing レイヤ）、`rotation`（日次ログの世代保持）。規約は [ログ規約](/development/logging-conventions.md) | #49 |
