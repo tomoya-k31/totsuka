@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "totsuka CLI entrypoint (bin: totsuka)."
+# Internal binary crate — never published to crates.io.
+publish = false
 
 [lints]
 workspace = true
