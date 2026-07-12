@@ -25,9 +25,10 @@ pub enum ResolveError {
         "environment variable `{0}` is not set → export it, or use a `keychain:<service>/<account>` reference"
     )]
     EnvNotSet(String),
-    /// A `${` placeholder was not closed with `}`.
-    #[error("unterminated `${{` placeholder in value: {0:?}")]
-    UnterminatedPlaceholder(String),
+    /// A `${` placeholder was not closed with `}`. The offending value is
+    /// deliberately omitted so a mistyped secret cannot leak into logs.
+    #[error("unterminated `${{...}}` placeholder → close it with a `}}`")]
+    UnterminatedPlaceholder,
     /// The underlying secret store failed (invalid ref, not found, backend).
     #[error(transparent)]
     Secret(#[from] crate::ports::SecretError),
@@ -48,7 +49,7 @@ where
         let after = &rest[idx + 2..];
         let end = after
             .find('}')
-            .ok_or_else(|| ResolveError::UnterminatedPlaceholder(input.to_string()))?;
+            .ok_or(ResolveError::UnterminatedPlaceholder)?;
         let var = &after[..end];
         let value = env(var).ok_or_else(|| ResolveError::EnvNotSet(var.to_string()))?;
         out.push_str(&value);
@@ -65,15 +66,17 @@ where
     E: Fn(&str) -> Option<String>,
 {
     let expanded = expand_env(input, env)?;
-    let expanded = if let Some(rest) = expanded.strip_prefix("~/") {
+    // Use PathBuf::join (not manual string concat) so separators stay
+    // consistent with the rest of the crate (e.g. paths.rs).
+    if let Some(rest) = expanded.strip_prefix("~/") {
         let home = env("HOME").ok_or_else(|| ResolveError::EnvNotSet("HOME".to_string()))?;
-        format!("{home}/{rest}")
+        Ok(PathBuf::from(home).join(rest))
     } else if expanded == "~" {
-        env("HOME").ok_or_else(|| ResolveError::EnvNotSet("HOME".to_string()))?
+        let home = env("HOME").ok_or_else(|| ResolveError::EnvNotSet("HOME".to_string()))?;
+        Ok(PathBuf::from(home))
     } else {
-        expanded
-    };
-    Ok(PathBuf::from(expanded))
+        Ok(PathBuf::from(expanded))
+    }
 }
 
 /// Resolves secret references against a [`SecretStore`] and an environment.
@@ -163,10 +166,10 @@ mod tests {
     #[test]
     fn unterminated_placeholder_errors() {
         let env = env_from(&[]);
-        assert!(matches!(
-            expand_env("${OPEN", &env).unwrap_err(),
-            ResolveError::UnterminatedPlaceholder(_)
-        ));
+        let err = expand_env("${OPEN", &env).unwrap_err();
+        assert!(matches!(err, ResolveError::UnterminatedPlaceholder));
+        // The offending value must not appear in the message (secret safety).
+        assert!(!err.to_string().contains("OPEN"));
     }
 
     #[test]

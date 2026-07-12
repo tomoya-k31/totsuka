@@ -26,8 +26,19 @@ pub enum ValidationError {
     RepoPathMissing { name: String, path: String },
 
     /// A repository path could not be expanded (e.g. missing env var).
-    #[error("repository `{name}` path is unresolvable: {reason}")]
+    #[error(
+        "repository `{name}` path is unresolvable: {reason} → set the referenced variable, or fix `path` in config.toml"
+    )]
     RepoPathUnresolvable { name: String, reason: String },
+
+    /// A worktree location template uses an unknown `{placeholder}` (F-22).
+    #[error(
+        "{referrer} uses unknown placeholder `{{{placeholder}}}` → allowed: {{repo}}, {{repo_name}}, {{branch}}, {{task_id}}, {{source}}"
+    )]
+    UnknownWorktreePlaceholder {
+        referrer: String,
+        placeholder: String,
+    },
 
     /// Two repositories share a name.
     #[error("duplicate repository name `{0}` → repository names must be unique")]
@@ -60,6 +71,10 @@ pub enum ValidationError {
     },
 }
 
+/// Placeholders permitted in worktree location templates (F-22 addendum).
+const ALLOWED_WORKTREE_PLACEHOLDERS: &[&str] =
+    &["repo", "repo_name", "branch", "task_id", "source"];
+
 /// Run all static checks, returning every problem found (empty = valid).
 pub fn validate_static<E>(cfg: &RootConfig, env: &E) -> Vec<ValidationError>
 where
@@ -72,6 +87,11 @@ where
             found: cfg.version,
             expected: CURRENT_SCHEMA_VERSION,
         });
+    }
+
+    // Global worktree template (F-22).
+    if let Some(location) = &cfg.worktree.location {
+        check_worktree_placeholders("[worktree].location", location, &mut errors);
     }
 
     // Repositories: unique names + path existence.
@@ -97,6 +117,13 @@ where
                 &format!("repository `{}` default_agent", repo.name),
                 agent,
                 PluginKind::AgentIde,
+                &mut errors,
+            );
+        }
+        if let Some(location) = &repo.worktree_location {
+            check_worktree_placeholders(
+                &format!("repository `{}` worktree_location", repo.name),
+                location,
                 &mut errors,
             );
         }
@@ -151,6 +178,32 @@ fn check_plugin_ref(
             expected,
         }),
         Some(_) => {}
+    }
+}
+
+/// Report any `{placeholder}` in `template` outside the allowed set.
+///
+/// `${ENV}` env references are skipped: a `{` immediately preceded by `$` is
+/// part of `${...}` expansion (handled at resolve time), not a worktree
+/// placeholder.
+fn check_worktree_placeholders(referrer: &str, template: &str, errors: &mut Vec<ValidationError>) {
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' && (i == 0 || bytes[i - 1] != b'$') {
+            if let Some(rel) = template[i + 1..].find('}') {
+                let name = &template[i + 1..i + 1 + rel];
+                if !ALLOWED_WORKTREE_PLACEHOLDERS.contains(&name) {
+                    errors.push(ValidationError::UnknownWorktreePlaceholder {
+                        referrer: referrer.to_string(),
+                        placeholder: name.to_string(),
+                    });
+                }
+                i = i + 1 + rel + 1;
+                continue;
+            }
+        }
+        i += 1;
     }
 }
 
@@ -255,6 +308,38 @@ output = "none"
         assert!(errors.iter().any(|e| matches!(
             e,
             ValidationError::RepoPathMissing { name, .. } if name == "missing"
+        )));
+    }
+
+    #[test]
+    fn worktree_templates_reject_unknown_placeholders() {
+        // `${XDG_STATE_HOME}` env ref + valid `{repo_name}`/`{branch}` are OK;
+        // `{bogus}` in the per-repo override is rejected.
+        let dir = env!("CARGO_MANIFEST_DIR");
+        let toml = format!(
+            r#"
+[worktree]
+location = "${{XDG_STATE_HOME}}/totsuka/worktrees/{{repo_name}}/{{branch}}"
+
+[[repositories]]
+name = "totsuka"
+path = "{dir}"
+worktree_location = "{{repo}}/../.worktrees/{{bogus}}"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::UnknownWorktreePlaceholder { placeholder, .. } if placeholder == "bogus"
+            )),
+            "expected unknown-placeholder error, got: {errors:?}"
+        );
+        // The valid global template must NOT produce an error.
+        assert!(!errors.iter().any(|e| matches!(
+            e,
+            ValidationError::UnknownWorktreePlaceholder { referrer, .. } if referrer == "[worktree].location"
         )));
     }
 
