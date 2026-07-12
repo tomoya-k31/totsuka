@@ -9,7 +9,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+# 1.88 is required transitively by the security-patched `time` 0.3.47
+# (RUSTSEC-2026-0009 fix).
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/tomoya-k31/totsuka"
 
@@ -23,6 +25,8 @@ keyring = { version = "3", features = ["apple-native"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
+rusqlite = { version = "0.37", features = ["bundled"] }
+time = { version = "0.3", features = ["formatting"] }
 
 # Deny warnings across the whole workspace. Each crate opts in with
 # `[lints] workspace = true`.
