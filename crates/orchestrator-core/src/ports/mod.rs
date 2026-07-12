@@ -5,11 +5,13 @@
 //! replaced without touching the domain. Filled in incrementally by feature
 //! tasks.
 
+pub mod agent_session;
 pub mod git;
 pub mod llm;
 pub mod process;
 pub mod secret;
 
+pub use agent_session::{AgentSession, AgentSessionError, AttachOutcome};
 pub use git::{GitOutput, GitRunner};
 pub use llm::{ChatRequest, LlmError, LlmRouter};
 pub use process::ProcessProbe;

@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-12
+* **Update**: エージェントセッション管理と再起動回復（#57）。[orchestrator-core](/components/orchestrator-core.md) に `recovery` モジュール（`recover`／`resume_plan`／`retry_plan`／`active_slot_claims`）、`ports::AgentSession`、`adapters::PluginAgentSession` を追加。[state.db スキーマ](/data/state-db.md) の sessions ストア API（`record_session`/`latest_session`/`list_sessions`）と再起動回復フロー（attach 失敗は継続確認待ち・自動 failed にしない §5.3）を記録。mock_plugin に `task/dispatch`/`session/attach`/`task/cancel` を追加し実サブプロセスで結合テスト。
 * **Update**: リポジトリ自動選択（#56）。[orchestrator-core](/components/orchestrator-core.md) に `repo_select`（ルール＋LLM フォールバック、README hash キャッシュ）、`ports::LlmRouter`、`adapters::llm::OpenAiRouter`（reqwest・指数バックオフ）を追加。
 * **Update**: 並列実行制御（#55）。[orchestrator-core](/components/orchestrator-core.md) に `scheduler`（3 階層スロット管理・DB 再構築・優先度キュー・waiting_input のスロット解放 F-45）を追加。
 * **Update**: ワークフロー定義とトリガーマッチング（#54）。[orchestrator-core](/components/orchestrator-core.md) に `domain::workflow`（Workflow/Trigger/OutcomeAction、定義順 first-match マッチング、plan×pull_request・output=source capability・trigger 重複の検証）を追加。

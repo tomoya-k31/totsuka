@@ -5,6 +5,11 @@
 //!
 //! - `initialize` → replies with a version and capabilities.
 //! - `config/validate` → valid unless the config contains `"invalid": true`.
+//! - `task/dispatch` → replies with a fixed `session_id` (`sess-mock`).
+//! - `session/attach` → `attached: false` if the session id contains `gone`,
+//!   otherwise `attached: true` with a state chosen from the id (`waiting`,
+//!   `done`, `fail`, else `running`) so recovery paths are testable (#57).
+//! - `task/cancel` → acknowledges.
 //! - `crash` → exits immediately with code 1 (to test crash isolation).
 //! - `shutdown` → replies, then exits 0.
 //! - anything else → method-not-found error.
@@ -12,7 +17,9 @@
 use std::io::{BufRead, Write};
 
 use plugin_protocol::jsonrpc::{Error, Notification, Response, error_code};
-use plugin_protocol::methods::{ConfigValidateResult, InitializeResult};
+use plugin_protocol::methods::{
+    AgentState, ConfigValidateResult, InitializeResult, SessionAttachResult, TaskDispatchResult,
+};
 use plugin_protocol::{Capabilities, manifest::OutputCapability};
 use serde_json::Value;
 
@@ -70,6 +77,34 @@ fn main() {
                     .unwrap(),
                 )
             }
+            "task/dispatch" => Response::result(
+                request_id(&id),
+                serde_json::to_value(TaskDispatchResult {
+                    session_id: "sess-mock".to_string(),
+                })
+                .unwrap(),
+            ),
+            "session/attach" => {
+                let sid = params
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let attached = !sid.contains("gone");
+                let state = if sid.contains("waiting") {
+                    AgentState::WaitingInput
+                } else if sid.contains("done") {
+                    AgentState::Done
+                } else if sid.contains("fail") {
+                    AgentState::Failed
+                } else {
+                    AgentState::Running
+                };
+                Response::result(
+                    request_id(&id),
+                    serde_json::to_value(SessionAttachResult { attached, state }).unwrap(),
+                )
+            }
+            "task/cancel" => Response::result(request_id(&id), Value::Null),
             "state/subscribe" => {
                 // Emit one notification (no id), then acknowledge (F-38).
                 let note = Notification::new(
