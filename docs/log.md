@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-12
+* **Update**: [plugin-protocol](/components/plugin-protocol.md)（#50）を雛形から本実装へ。JSON-RPC 2.0（NDJSON）型・§11 メソッド型・plugin.toml manifest・capabilities・Task 共通スキーマ・プロトコルバージョニングを実装。
 * **Creation**: [ログ規約（JSON Lines・機密マスキング）](/development/logging-conventions.md)（#49）。`Convention` type を追加。[orchestrator-core](/components/orchestrator-core.md) に `logging` モジュール（redact/layer/rotation）を追加し、`[log]` 設定を config スキーマへ追加。
 * **Creation**: [状態DB（SQLite state.db）スキーマ](/data/state-db.md)（#48）。tasks/sessions/events/schema_migrations の DDL と設計判断、タスクステートマシン（F-71）、多重起動防止（F-74）を記録。`Data Model` type を追加。[orchestrator-core](/components/orchestrator-core.md) に `domain::state` / `adapters::state_db` / `adapters::run_lock` を追記。
 * **Update**: 設定ロードとシークレット参照解決（#47）。[orchestrator-core](/components/orchestrator-core.md) に `config` モジュール（schema/raw/resolve/layered/validate）を追加。`config.toml`+`plugins/{name}.toml` の二層設定パース、`${ENV}`/`keychain:` 解決、優先順位マージ、静的検証（disable 中プラグイン参照エラー含む）。
