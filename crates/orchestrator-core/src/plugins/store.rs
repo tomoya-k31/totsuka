@@ -41,6 +41,11 @@ pub enum StoreError {
         /// Source directory.
         dir: PathBuf,
     },
+    /// The plugin name is not a single safe path component (traversal guard).
+    #[error(
+        "invalid plugin name `{0}` → names must not be empty or contain path separators or `..`"
+    )]
+    InvalidName(String),
     /// The plugin's protocol range excludes this Orchestrator (F-54).
     #[error(
         "plugin `{name}` is protocol-incompatible: it supports `{req}` but the orchestrator is {have} → use a compatible plugin build"
@@ -115,6 +120,9 @@ impl PluginStore {
         }
         let manifest = Manifest::from_toml_str(&fs::read_to_string(&manifest_path)?)?;
 
+        // A crafted manifest name must not escape the plugins root on commit.
+        validate_plugin_name(&manifest.name)?;
+
         // F-54: refuse incompatible plugins at install time.
         let orchestrator = version::protocol_version();
         if !manifest.is_compatible_with(&orchestrator) {
@@ -154,8 +162,21 @@ impl PluginStore {
         Ok(())
     }
 
+    /// The plugin kind of an installed plugin as a config string, if installed.
+    pub fn kind_str_of(&self, name: &str) -> Result<Option<String>, StoreError> {
+        Ok(self.manifest_of(name)?.map(|m| {
+            match m.kind {
+                PluginKind::TaskSource => "task_source",
+                PluginKind::AgentIde => "agent_ide",
+                PluginKind::Notifier => "notifier",
+            }
+            .to_string()
+        }))
+    }
+
     /// Remove an installed plugin. Returns whether it existed.
     pub fn uninstall(&self, name: &str) -> Result<bool, StoreError> {
+        validate_plugin_name(name)?;
         let dir = self.plugin_dir(name);
         if dir.exists() {
             fs::remove_dir_all(&dir)?;
@@ -199,6 +220,22 @@ impl PluginStore {
         }
         plugins.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(plugins)
+    }
+}
+
+/// Reject plugin names that are not a single safe path component, so a name
+/// (from an untrusted manifest or CLI arg) cannot escape the plugins root.
+fn validate_plugin_name(name: &str) -> Result<(), StoreError> {
+    let safe = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0');
+    if safe {
+        Ok(())
+    } else {
+        Err(StoreError::InvalidName(name.to_string()))
     }
 }
 
@@ -298,6 +335,30 @@ protocol_version = "{protocol_req}"
             matches!(err, StoreError::ProtocolIncompatible { .. }),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn traversal_names_are_rejected() {
+        let base = scratch("store_traversal");
+        let src = base.join("src");
+        fs::create_dir_all(&src).unwrap();
+        // A manifest name that would escape the plugins root on commit.
+        fake_source(&src, "x", "^0.1", b"bin");
+        fs::write(
+            src.join(MANIFEST_FILE),
+            "name = \"../evil\"\nkind = \"notifier\"\nversion = \"0.1.0\"\nprotocol_version = \"^0.1\"\n",
+        )
+        .unwrap();
+        let store = PluginStore::new(base.join("plugins"));
+        assert!(matches!(
+            store.prepare_install(&src).unwrap_err(),
+            StoreError::InvalidName(_)
+        ));
+        // And via the uninstall arg.
+        assert!(matches!(
+            store.uninstall("../../etc").unwrap_err(),
+            StoreError::InvalidName(_)
+        ));
     }
 
     #[test]

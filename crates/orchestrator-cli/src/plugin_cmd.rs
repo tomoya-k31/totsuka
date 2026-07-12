@@ -152,16 +152,31 @@ fn set_enabled(loc: &Locations, name: &str, enabled: bool) -> Result<(), CliErro
         }
     })?;
 
-    let updated = set_plugin_enabled(&current, name, enabled)?;
+    // If a new `[plugins.{name}]` section will be created, it needs `kind` to be
+    // schema-valid. Take it from the installed manifest; if the plugin is
+    // neither declared nor installed, we cannot know its kind — refuse rather
+    // than write an unloadable config.
+    let already_declared = loc.load_config()?.plugins.contains_key(name);
+    let kind_if_new = if already_declared {
+        None
+    } else {
+        match loc.store.kind_str_of(name)? {
+            Some(kind) => Some(kind),
+            None => {
+                return Err(format!(
+                    "cannot {} `{name}`: it is neither installed nor declared in config.toml → install it first (`totsuka plugin install <dir>`)",
+                    if enabled { "enable" } else { "disable" }
+                )
+                .into());
+            }
+        }
+    };
+
+    let updated = set_plugin_enabled(&current, name, enabled, kind_if_new.as_deref())?;
     std::fs::write(&loc.config_path, updated)?;
 
     let verb = if enabled { "Enabled" } else { "Disabled" };
     println!("{verb} `{name}` in {}", loc.config_path.display());
-    if enabled && !loc.store.is_installed(name) {
-        eprintln!(
-            "warning: `{name}` is enabled but not installed → run `totsuka plugin install <dir>`"
-        );
-    }
     Ok(())
 }
 

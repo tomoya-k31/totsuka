@@ -126,6 +126,43 @@ fn full_lifecycle_install_list_enable_disable_uninstall() {
 }
 
 #[test]
+fn install_then_enable_produces_loadable_config() {
+    // The natural flow with no pre-seeded config: enable must write `kind` so
+    // the resulting config.toml is schema-valid and later commands still work.
+    let env = Env::new("install_enable");
+    let src = env.root.join("src");
+    fake_source(&src, "github", "^0.1");
+    // A config exists (as after `init`) but has no [plugins.github] section yet.
+    fs::write(env.config_toml(), "version = 1\n").unwrap();
+
+    let (ok, _, _) = env.run(&["plugin", "install", src.to_str().unwrap(), "--yes"], None);
+    assert!(ok);
+
+    let (ok, _, stderr) = env.run(&["plugin", "enable", "github"], None);
+    assert!(ok, "enable failed: {stderr}");
+    let cfg = fs::read_to_string(env.config_toml()).unwrap();
+    assert!(cfg.contains("enabled = true"));
+    assert!(
+        cfg.contains("kind = \"task_source\""),
+        "kind missing: {cfg}"
+    );
+
+    // A subsequent command must not choke on the config we just wrote.
+    let (ok, out, stderr) = env.run(&["plugin", "list", "--json"], None);
+    assert!(ok, "list failed after enable: {stderr}");
+    let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(rows[0]["enabled"], true);
+
+    // Enabling something neither installed nor configured is refused.
+    let (ok, _, stderr) = env.run(&["plugin", "enable", "ghost"], None);
+    assert!(!ok);
+    assert!(
+        stderr.contains("neither installed nor declared"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn install_requires_confirmation() {
     let env = Env::new("confirm");
     let src = env.root.join("src");

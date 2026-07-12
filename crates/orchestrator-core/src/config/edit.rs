@@ -20,12 +20,15 @@ pub enum EditError {
 
 /// Set `[plugins.{name}] enabled = <enabled>`, preserving all other formatting.
 ///
-/// Creates the `[plugins.{name}]` table if absent. Returns the edited document
-/// as a string.
+/// Creates the `[plugins.{name}]` table if absent. When the section is being
+/// created (it has no `kind` yet) and `kind_if_new` is provided, `kind` is also
+/// written — otherwise a brand-new section would be missing the required `kind`
+/// field and make `config.toml` fail to load. Returns the edited document.
 pub fn set_plugin_enabled(
     config_toml: &str,
     name: &str,
     enabled: bool,
+    kind_if_new: Option<&str>,
 ) -> Result<String, EditError> {
     let mut doc: DocumentMut = config_toml.parse()?;
 
@@ -44,6 +47,14 @@ pub fn set_plugin_enabled(
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_mut()
         .ok_or_else(|| EditError::NotATable(format!("plugins.{name}")))?;
+
+    // Fill in `kind` only when the section lacks it, so a newly-created section
+    // is a valid `PluginConfig` and existing sections are left untouched.
+    if !section.contains_key("kind")
+        && let Some(kind) = kind_if_new
+    {
+        section["kind"] = value(kind);
+    }
     section["enabled"] = value(enabled);
 
     Ok(doc.to_string())
@@ -63,7 +74,7 @@ enabled = true
 kind = "agent_ide"   # keep this comment
 max_concurrency = 3
 "#;
-        let disabled = set_plugin_enabled(original, "herdr", false).unwrap();
+        let disabled = set_plugin_enabled(original, "herdr", false, None).unwrap();
         // enabled flipped...
         assert!(disabled.contains("enabled = false"));
         // ...and everything else preserved verbatim.
@@ -73,32 +84,38 @@ max_concurrency = 3
         assert!(disabled.contains("max_concurrency = 3"));
 
         // Round-trips back to enabled.
-        let reenabled = set_plugin_enabled(&disabled, "herdr", true).unwrap();
+        let reenabled = set_plugin_enabled(&disabled, "herdr", true, None).unwrap();
         assert!(reenabled.contains("enabled = true"));
         assert!(reenabled.contains("# keep this comment"));
     }
 
     #[test]
-    fn creates_section_when_absent() {
-        let out = set_plugin_enabled("version = 1\n", "notion", true).unwrap();
+    fn creates_section_with_kind_and_stays_schema_valid() {
+        let out = set_plugin_enabled("version = 1\n", "notion", true, Some("task_source")).unwrap();
         assert!(out.contains("[plugins.notion]"));
         assert!(out.contains("enabled = true"));
+        assert!(out.contains("kind = \"task_source\""));
         // No stray bare `[plugins]` header.
         assert!(!out.contains("[plugins]\n"));
         assert!(out.contains("version = 1"));
+        // The result must load through the real schema (kind is required).
+        crate::config::RootConfig::from_toml_str(&out).expect("new section must be schema-valid");
     }
 
     #[test]
-    fn idempotent_reparse() {
+    fn existing_section_kind_is_untouched() {
         let out = set_plugin_enabled(
             "[plugins.x]\nenabled = true\nkind = \"notifier\"\n",
             "x",
             false,
+            Some("task_source"), // ignored: section already has a kind
         )
         .unwrap();
-        // Result must itself be valid TOML re-parseable by the schema layer.
-        let _: toml::Value = toml::from_str(&out).unwrap();
+        crate::config::RootConfig::from_toml_str(&out).unwrap();
         assert!(out.contains("enabled = false"));
-        assert!(out.contains("kind = \"notifier\""));
+        assert!(
+            out.contains("kind = \"notifier\""),
+            "existing kind must not change"
+        );
     }
 }
