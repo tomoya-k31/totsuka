@@ -8,6 +8,7 @@
 * [plugin-protocol](plugin-protocol.md) - プラグイン開発者向けに公開する型定義クレート。JSON-RPC 2.0（NDJSON）・manifest・capabilities・§11 メソッド型・Task 共通スキーマ・プロトコルバージョニングを提供する、プラグイン境界の単一の正。
 * [task-source-github](task-source-github.md) - GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、Issue コメント publish を行う。
 * [task-source-notion](task-source-notion.md) - Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
+* [agent-ide-herdr](agent-ide-herdr.md) - herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/設計プレビューを担う。
 
 <!-- concept を追加したら、ここに 1 行追加する:
 * [Title](file.md) - frontmatter の description を転記

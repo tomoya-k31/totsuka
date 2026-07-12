@@ -1,0 +1,10 @@
+name = "herdr"
+kind = "agent_ide"
+version = "0.1.0"
+protocol_version = "^0.1"
+
+[capabilities]
+plan_mode = true
+design_preview = true
+pane_control = true
+state_stream = true
