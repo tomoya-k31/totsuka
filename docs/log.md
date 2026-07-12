@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-13
+* **Creation**: [herdr Socket API / 統合エージェント capability（外部一次情報ミラー）](/references/herdr-socket-api.md)（#60）。references/ 初の concept、`Reference` type を新設。herdr 公式ドキュメント（socket-api / integrations）の要約ミラー。agent-ide-herdr プラグイン設計の単一の根拠として、NDJSON トランスポート・ソケット解決順・workspace/pane/agent メソッド・`events.subscribe`・`agent_status`↔totsuka 正規化状態の対応・統合 capability マトリクスを整理。Claude Code は lifecycle authority を持たず状態が screen manifest（画面解析）由来である制約、waiting_input が scrollback best-effort 抽出になる点、plan モードは herdr でなく CLI 側の機能である点を明記。
 * **Creation**: [task-source-notion プラグイン](/components/task-source-notion.md)（#59）。Notion データベースをタスクソースとして接続する公式 task_source プラグイン。プロパティマッピング（F-03）で任意の DB 構造を共通 `Task` スキーマへ正規化する stdio JSON-RPC 単体バイナリ（databases query→正規化・取り込み制御 F-08・ステータス書き戻し F-84・ページ本文へのブロック追記 publish F-07・token/スキーマ疎通 F-59）。Notion REST を `NotionTransport` seam（`Notion-Version` 固定・3rps スロットル・指数バックオフ）で抽象化し録画レスポンス結合テスト。ブロック↔Markdown 変換と 2000 文字分割を `blocks` モジュールに実装。
 * **Creation**: [task-source-github プラグイン](/components/task-source-github.md)（#58）。ワークスペース初の `plugins/` 配下クレート。GitHub Issues / ProjectsV2 を GraphQL でタスク化する stdio JSON-RPC 単体バイナリ（fetch→正規化・取り込み制御 F-08・ステータス書き戻し F-84・Issue コメント publish F-07・token 疎通 F-59）。`GithubTransport` seam で録画レスポンス結合テスト。
 
