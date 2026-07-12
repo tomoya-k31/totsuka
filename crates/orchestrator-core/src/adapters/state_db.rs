@@ -63,6 +63,10 @@ const MIGRATIONS: &[&str] = &[
     "#,
 ];
 
+/// `events.detail` for the ingest event. Stored as JSON so consumers can
+/// parse every `detail` value uniformly.
+const INGEST_DETAIL: &str = r#"{"kind":"ingested"}"#;
+
 /// Columns of `tasks`, in the order [`row_to_task`] reads them.
 const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
      worktree_path, branch, state, priority, title, url, source_payload, \
@@ -194,6 +198,10 @@ impl StateDb {
         if (current as usize) < MIGRATIONS.len() {
             // Back up the DB file before mutating its schema (§10.3).
             if let Some((path, true)) = &backup {
+                // Flush any WAL into the main db first; in WAL mode a plain
+                // file copy would otherwise miss uncheckpointed pages and
+                // produce an unrestorable backup.
+                conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
                 let bak = PathBuf::from(format!("{}.bak", path.display()));
                 fs::copy(path, bak)?;
             }
@@ -222,7 +230,10 @@ impl StateDb {
             .as_ref()
             .map(serde_json::to_string)
             .transpose()?;
-        let changed = self.conn.execute(
+        // Insert + ingest event must be atomic so the audit log invariant
+        // (F-72) holds even if the second write fails.
+        let tx = self.conn.unchecked_transaction()?;
+        let changed = tx.execute(
             "INSERT INTO tasks
                 (source, source_task_id, workflow, mode, repo, state, priority,
                  title, url, source_payload, created_at, updated_at)
@@ -242,19 +253,20 @@ impl StateDb {
                 now,
             ],
         )?;
-        let id: i64 = self.conn.query_row(
+        let id: i64 = tx.query_row(
             "SELECT id FROM tasks WHERE source = ?1 AND source_task_id = ?2",
             params![task.source, task.source_task_id],
             |r| r.get(0),
         )?;
         if changed > 0 {
-            // Ingest event: from_state NULL -> queued (F-72).
-            self.conn.execute(
+            // Ingest event: from_state NULL -> queued (F-72). `detail` is JSON.
+            tx.execute(
                 "INSERT INTO events (task_id, from_state, to_state, occurred_at, detail)
                  VALUES (?1, NULL, ?2, ?3, ?4)",
-                params![id, TaskState::Queued.as_str(), now, "ingested"],
+                params![id, TaskState::Queued.as_str(), now, INGEST_DETAIL],
             )?;
         }
+        tx.commit()?;
         Ok(id)
     }
 
@@ -314,33 +326,43 @@ impl StateDb {
         let finished_at = to.is_terminal().then(|| now.clone());
         let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
 
-        self.conn.execute(
+        // Update + audit event in one transaction: state never advances
+        // without its recorded event (F-72).
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "UPDATE tasks SET state = ?1, updated_at = ?2, finished_at = ?3 WHERE id = ?4",
             params![to.as_str(), now, finished_at, id],
         )?;
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO events (task_id, from_state, to_state, occurred_at, detail)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, record.state.as_str(), to.as_str(), now, detail],
         )?;
+        tx.commit()?;
         Ok(to)
     }
 
     /// Record the selected repository for a task (F-14 confirmation result).
     pub fn set_repo(&self, id: i64, repo: &str) -> Result<(), StateError> {
-        self.conn.execute(
+        let n = self.conn.execute(
             "UPDATE tasks SET repo = ?1, updated_at = ?2 WHERE id = ?3",
             params![repo, now(), id],
         )?;
+        if n == 0 {
+            return Err(StateError::NotFound(id));
+        }
         Ok(())
     }
 
     /// Record the worktree path and branch for a task (#53).
     pub fn set_worktree(&self, id: i64, path: &str, branch: &str) -> Result<(), StateError> {
-        self.conn.execute(
+        let n = self.conn.execute(
             "UPDATE tasks SET worktree_path = ?1, branch = ?2, updated_at = ?3 WHERE id = ?4",
             params![path, branch, now(), id],
         )?;
+        if n == 0 {
+            return Err(StateError::NotFound(id));
+        }
         Ok(())
     }
 
@@ -355,10 +377,14 @@ impl StateDb {
 }
 
 /// Current time as an ISO 8601 (RFC 3339) UTC string.
+///
+/// The format description is a compile-time constant, so formatting a valid
+/// `OffsetDateTime` cannot fail; failing fast avoids writing empty timestamps
+/// into NOT NULL columns.
 fn now() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_default()
+        .expect("RFC3339 formatting of current UTC time is infallible")
 }
 
 /// Map a `tasks` row (in [`TASK_COLUMNS`] order) to a [`TaskRecord`].
@@ -497,5 +523,43 @@ mod tests {
         assert_eq!(queued[0].repo.as_deref(), Some("totsuka"));
         assert_eq!(queued[0].branch.as_deref(), Some("agent/github-42"));
         assert!(db.tasks_in_state(TaskState::Running).unwrap().is_empty());
+    }
+
+    #[test]
+    fn setters_reject_unknown_task() {
+        let db = StateDb::open_in_memory().unwrap();
+        assert!(matches!(
+            db.set_repo(999, "totsuka").unwrap_err(),
+            StateError::NotFound(999)
+        ));
+        assert!(matches!(
+            db.set_worktree(999, "/tmp/wt", "b").unwrap_err(),
+            StateError::NotFound(999)
+        ));
+    }
+
+    #[test]
+    fn every_event_detail_is_valid_json_or_null() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        db.apply_event(id, TaskEvent::Start, Some(serde_json::json!({"pid": 7})))
+            .unwrap();
+
+        // Read raw detail strings back and parse each as JSON (ingest + 2).
+        let mut stmt = db
+            .conn
+            .prepare("SELECT detail FROM events WHERE task_id = ?1")
+            .unwrap();
+        let details: Vec<Option<String>> = stmt
+            .query_map(params![id], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(details.len(), 3);
+        for s in details.into_iter().flatten() {
+            serde_json::from_str::<serde_json::Value>(&s)
+                .unwrap_or_else(|_| panic!("detail not valid JSON: {s:?}"));
+        }
     }
 }

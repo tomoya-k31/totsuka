@@ -5,7 +5,8 @@
 //! dead PID means a stale lock (e.g. after SIGKILL), which is reclaimed; a live
 //! PID means another orchestrator is running. The lock is removed on drop.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use crate::ports::ProcessProbe;
@@ -34,25 +35,44 @@ pub struct RunLock {
 
 impl RunLock {
     /// Acquire the lock at `path`, reclaiming it if the recorded PID is dead.
+    ///
+    /// The create is atomic (`create_new`), so two racing processes cannot both
+    /// win: the loser observes `AlreadyExists` and either reports the live
+    /// holder or removes a stale lock and retries.
     pub fn acquire<P: ProcessProbe>(path: &Path, probe: &P) -> Result<Self, LockError> {
-        if path.exists() {
-            let contents = fs::read_to_string(path)?;
-            if let Ok(pid) = contents.trim().parse::<u32>()
-                && probe.is_alive(pid)
-            {
-                return Err(LockError::AlreadyRunning { pid });
-            }
-            // Dead/absent PID -> stale lock; fall through and reclaim it.
-        }
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, std::process::id().to_string())?;
-        Ok(Self {
-            path: path.to_path_buf(),
-        })
+        loop {
+            match OpenOptions::new().write(true).create_new(true).open(path) {
+                Ok(mut file) => {
+                    write!(file, "{}", std::process::id())?;
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                    });
+                }
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                    // A lock file exists. If its holder is alive, refuse; if it
+                    // is stale (dead/unparseable PID), remove it and retry the
+                    // atomic create so only one racer ultimately wins.
+                    let contents = fs::read_to_string(path)?;
+                    if let Ok(pid) = contents.trim().parse::<u32>()
+                        && probe.is_alive(pid)
+                    {
+                        return Err(LockError::AlreadyRunning { pid });
+                    }
+                    match fs::remove_file(path) {
+                        // Removed it (or a racer already did) -> retry create.
+                        Ok(()) => {}
+                        Err(e) if e.kind() == ErrorKind::NotFound => {}
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 }
 
