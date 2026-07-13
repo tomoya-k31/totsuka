@@ -21,6 +21,11 @@ jobs:
         id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
+          # A fine-grained PAT (not the default GITHUB_TOKEN) so the Release PR
+          # is created under a real identity and therefore triggers CI — the
+          # required `lint` check then reports, and the PR merges without an
+          # admin bypass. See docs/operations/release-runbook.md.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 

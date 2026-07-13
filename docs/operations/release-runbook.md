@@ -22,6 +22,8 @@ release-please は自分で Release PR を作るため、リポジトリ設定�
 
 既定の `GITHUB_TOKEN` で作られた Release PR には**ワークフローが一切走らない**（GitHub の仕様）。そのため必須ステータスチェック（現状 `lint`）が永久に "Expected" になり、ブランチ保護（Ruleset）が **Release PR のマージをブロック**する。回避策は3つ。**org 展開を見据えるなら GitHub App（1）を推奨**。
 
+> **本リポジトリの現状**: 個人リポジトリのため **2（fine-grained PAT）を採用**。secret `RELEASE_PLEASE_TOKEN` を登録済みで、`release-please.yml` の `release-please` ステップに `token:` を配線済み。これにより Release PR に CI（`lint`）が走り、admin 不要で通常マージできる（この構成では「前提: リポジトリ設定」の GITHUB_TOKEN トグルは Release PR 作成には無関係になる）。org へ移す際は 1（GitHub App）へ切り替える。
+
 ## 1. GitHub App（org 所有）— 推奨
 
 App が Release PR を作る → 実 identity 扱いなので CI が走り `lint` を満たす → 人が admin 不要で通常マージできる。人に紐づかず、短命トークンで安全。
