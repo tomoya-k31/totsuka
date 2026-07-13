@@ -12,7 +12,7 @@ use clap::Subcommand;
 use orchestrator_core::adapters::plugin_host;
 use orchestrator_core::config::{self, FindingSeverity};
 
-use crate::common::{CliError, Cx, plugin_init_config, plugin_spec};
+use crate::common::{CliError, Cx, plugin_spec};
 
 /// Config subcommands.
 #[derive(Debug, Subcommand)]
@@ -61,13 +61,16 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
         println!("{label}: {}", finding.message);
     }
 
-    // Online part (F-59): each enabled plugin validates its own config.
+    // Online part (F-59): each enabled plugin validates its own config
+    // (its kind is irrelevant — every kind implements `config/validate`).
     if !offline && !errors {
         let mut specs = Vec::new();
-        for (name, plugin_cfg) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
+        for (name, _) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
+            // `plugin_spec` already read and secret-resolved plugins/{name}.toml
+            // into `init_config`; reuse it rather than resolving secrets twice
+            // (a second Keychain access could trigger a second Touch prompt).
             let spec = plugin_spec(cx, &cfg, name, &env)?;
-            let init_config = plugin_init_config(cx, name, &env)?;
-            let _ = plugin_cfg; // kind is irrelevant here: every kind validates
+            let init_config = spec.init_config.clone();
             specs.push((spec, init_config));
         }
         let runtime = tokio::runtime::Runtime::new()?;
@@ -145,17 +148,28 @@ fn print_toml(contents: &str, redacted: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Whether a key looks secret-bearing (§5.2 masking convention).
+/// Whether a key looks secret-bearing (§5.2 masking convention). Conservative:
+/// `key` matches `api_key` / `access_key` / `private_key` / `apikey` too, so
+/// `--redacted` masks anything the help text promises (token/key/secret/
+/// password) — over-masking is safe, under-masking leaks.
 fn is_secret_key(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
-    ["token", "secret", "password", "api_key", "apikey"]
+    ["token", "key", "secret", "password", "credential"]
         .iter()
         .any(|pat| k.contains(pat))
 }
 
-/// Recursively mask string values under secret-looking keys.
+/// Recursively mask values under secret-looking keys. A secret key's value is
+/// masked **whole**, whatever its shape — a bare string, an array of strings
+/// (`api_keys = ["…", "…"]`), or an inline table — so no secret survives via a
+/// non-string container. Non-secret keys are descended into so nested secrets
+/// are still caught.
 fn redact_table(table: &mut toml::Table) {
     for (key, value) in table.iter_mut() {
+        if is_secret_key(key) {
+            *value = toml::Value::String("***redacted***".to_string());
+            continue;
+        }
         match value {
             toml::Value::Table(inner) => redact_table(inner),
             toml::Value::Array(items) => {
@@ -165,11 +179,7 @@ fn redact_table(table: &mut toml::Table) {
                     }
                 }
             }
-            other => {
-                if is_secret_key(key) {
-                    *other = toml::Value::String("***redacted***".to_string());
-                }
-            }
+            _ => {}
         }
     }
 }
@@ -182,10 +192,16 @@ mod tests {
     fn redacts_secret_keys_recursively() {
         let mut table: toml::Table = r#"
 api_key_ref = "keychain:totsuka/x"
+private_key = "-----BEGIN-----"
+api_keys = ["ghp_one", "ghp_two"]
 name = "visible"
 
 [nested]
 github_token = "ghp_plain"
+
+[[creds]]
+password = "hunter2"
+label = "shown"
 "#
         .parse()
         .unwrap();
@@ -195,10 +211,21 @@ github_token = "ghp_plain"
             "***redacted***",
             "key containing api_key is masked"
         );
+        // A bare `key`-bearing name is masked (help promises it).
+        assert_eq!(table["private_key"].as_str().unwrap(), "***redacted***");
+        // A secret-looking key whose value is an array of strings is masked
+        // whole, not leaked element-by-element.
+        assert_eq!(table["api_keys"].as_str().unwrap(), "***redacted***");
         assert_eq!(table["name"].as_str().unwrap(), "visible");
         assert_eq!(
             table["nested"]["github_token"].as_str().unwrap(),
             "***redacted***"
         );
+        // Array-of-tables: secret keys inside each table are still caught.
+        assert_eq!(
+            table["creds"][0]["password"].as_str().unwrap(),
+            "***redacted***"
+        );
+        assert_eq!(table["creds"][0]["label"].as_str().unwrap(), "shown");
     }
 }

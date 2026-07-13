@@ -95,6 +95,21 @@ fn help_lists_every_command_and_completion_generates() {
             "completion output mentions the binary"
         );
     }
+
+    // No subcommand is a usage error (exit code 2, one message) distinct from
+    // a runtime failure (exit 1).
+    let none = run(&base, &[]);
+    assert_eq!(
+        none.status.code(),
+        Some(2),
+        "no-command usage error exits 2, not 1"
+    );
+    let err = stderr(&none);
+    assert!(err.contains("no command given"));
+    assert!(
+        !err.contains("error:"),
+        "single usage line, not a doubled error: {err}"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 

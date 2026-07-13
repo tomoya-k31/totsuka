@@ -9,10 +9,11 @@ use std::path::PathBuf;
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::plugin_host;
 use orchestrator_core::config::{self, RootConfig};
+use orchestrator_core::ports::git::GitRunner;
 use orchestrator_core::worktree::WorktreeManager;
 use serde::Serialize;
 
-use crate::common::{CliError, Cx, plugin_init_config, plugin_spec, secret_resolver};
+use crate::common::{CliError, Cx, plugin_spec, secret_resolver};
 use crate::init_cmd::git_version;
 
 /// One diagnostic result. `action` follows the "cause + next action" rule (§7).
@@ -47,6 +48,8 @@ impl Check {
 /// Execute `totsuka doctor`.
 pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     let mut checks = Vec::new();
+    // One environment snapshot, threaded through every check that needs it.
+    let env: HashMap<String, String> = std::env::vars().collect();
 
     // git availability (worktrees are mandatory).
     match git_version() {
@@ -61,7 +64,6 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     // Config presence + full offline validation.
     let cfg = match cx.load_config() {
         Ok(cfg) => {
-            let env: HashMap<String, String> = std::env::vars().collect();
             let env_fn = |k: &str| env.get(k).cloned();
             let store = cx.store();
             let findings = config::validate(&cfg, &env_fn, |name| {
@@ -120,9 +122,9 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     };
 
     if let Some(cfg) = &cfg {
-        check_plugins(cx, cfg, &mut checks);
-        check_llm_key(cfg, &mut checks);
-        check_orphans(cx, cfg, db.as_ref(), json, &mut checks)?;
+        check_plugins(cx, cfg, &env, &mut checks);
+        check_llm_key(cfg, &env, &mut checks);
+        check_orphans(cfg, &env, db.as_ref(), json, &mut checks)?;
     }
 
     if json {
@@ -148,7 +150,12 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
 }
 
 /// Installed + protocol-compatible + live-probe for every enabled plugin.
-fn check_plugins(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
+fn check_plugins(
+    cx: &Cx,
+    cfg: &RootConfig,
+    env: &HashMap<String, String>,
+    checks: &mut Vec<Check>,
+) {
     let enabled: Vec<&String> = cfg
         .plugins
         .iter()
@@ -159,18 +166,16 @@ fn check_plugins(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
         checks.push(Check::ok("plugins", "no plugins enabled"));
         return;
     }
-    let env: HashMap<String, String> = std::env::vars().collect();
     let mut specs = Vec::new();
     for name in enabled {
-        match plugin_spec(cx, cfg, name, &env) {
-            Ok(spec) => match plugin_init_config(cx, name, &env) {
-                Ok(init) => specs.push((spec, init)),
-                Err(e) => checks.push(Check::fail(
-                    &format!("plugin:{name}"),
-                    e.to_string(),
-                    "fix the plugin config (secret references must resolve)",
-                )),
-            },
+        match plugin_spec(cx, cfg, name, env) {
+            // `plugin_spec` already resolved plugins/{name}.toml (with secrets)
+            // into `init_config`; reuse it rather than re-reading and hitting
+            // the Keychain a second time.
+            Ok(spec) => {
+                let init = spec.init_config.clone();
+                specs.push((spec, init));
+            }
             Err(e) => checks.push(Check::fail(
                 &format!("plugin:{name}"),
                 e.to_string(),
@@ -213,7 +218,7 @@ fn check_plugins(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
 }
 
 /// The LLM API key reference must resolve (no network call).
-fn check_llm_key(cfg: &RootConfig, checks: &mut Vec<Check>) {
+fn check_llm_key(cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
     let Some(llm) = &cfg.llm else {
         checks.push(Check::ok(
             "llm",
@@ -225,8 +230,7 @@ fn check_llm_key(cfg: &RootConfig, checks: &mut Vec<Check>) {
         checks.push(Check::ok("llm", "[llm] configured without api_key_ref"));
         return;
     };
-    let env: HashMap<String, String> = std::env::vars().collect();
-    match secret_resolver(&env).resolve(reference) {
+    match secret_resolver(env).resolve(reference) {
         Ok(_) => checks.push(Check::ok("llm", "api_key_ref resolves")),
         Err(e) => checks.push(Check::fail(
             "llm",
@@ -238,8 +242,8 @@ fn check_llm_key(cfg: &RootConfig, checks: &mut Vec<Check>) {
 
 /// Detect orphan worktrees (F-24) and, interactively, offer to remove them.
 fn check_orphans(
-    _cx: &Cx,
     cfg: &RootConfig,
+    env: &HashMap<String, String>,
     db: Option<&orchestrator_core::adapters::StateDb>,
     json: bool,
     checks: &mut Vec<Check>,
@@ -247,7 +251,6 @@ fn check_orphans(
     let Some(db) = db else {
         return Ok(());
     };
-    let env: HashMap<String, String> = std::env::vars().collect();
     let env_fn = |k: &str| env.get(k).cloned();
     let known: HashSet<PathBuf> = db
         .list_tasks()?
@@ -291,16 +294,18 @@ fn check_orphans(
             let mut answer = String::new();
             io::stdin().read_line(&mut answer)?;
             if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-                let out = std::process::Command::new("git")
-                    .current_dir(repo_path)
-                    .args(["worktree", "remove", &orphan.display().to_string()])
-                    .output()?;
-                if out.status.success() {
+                // Go through the GitRunner seam like the rest of the codebase
+                // (testable, single place git is invoked).
+                let out = SystemGitRunner.run(
+                    repo_path,
+                    &["worktree", "remove", &orphan.display().to_string()],
+                )?;
+                if out.success() {
                     println!("removed {}", orphan.display());
                 } else {
                     println!(
                         "could not remove (dirty?): {} → remove manually with `git worktree remove --force`",
-                        String::from_utf8_lossy(&out.stderr).trim()
+                        out.stderr.trim()
                     );
                 }
             }

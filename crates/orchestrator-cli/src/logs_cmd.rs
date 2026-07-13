@@ -1,8 +1,8 @@
 //! `totsuka logs` — human-friendly view over the JSON Lines logs (§5.1/§5.2):
 //! formatting, `-f` follow, and `--task <id>` filtering.
 
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use orchestrator_core::logging;
@@ -24,50 +24,52 @@ pub fn run(cx: &Cx, follow: bool, task: Option<i64>) -> Result<(), CliError> {
         .into());
     };
 
-    let mut file = std::fs::File::open(&path)?;
-    let mut reader = BufReader::new(&mut file);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        if reader.read_line(&mut line)? == 0 {
-            break;
-        }
-        print_line(&line, task);
-    }
+    // Print the whole current file, then follow from its end.
+    let mut reader = BufReader::new(std::fs::File::open(&path)?);
+    drain(&mut reader, task)?;
 
     if !follow {
         return Ok(());
     }
-    // Follow: poll for appended bytes (daily rotation means a fresh file may
-    // appear at midnight; re-resolve the newest file on every tick).
-    let mut offset = file.stream_position()?;
+    // Follow with a persistent handle: each tick reads only the bytes appended
+    // since the last read (the reader's own position is the source of truth, so
+    // a line written *during* a drain is not re-printed next tick). The log
+    // directory is re-scanned for a rotated file only on a tick that produced
+    // nothing new — so a steady stream costs no readdir, and the previous
+    // day's tail is fully drained before switching (no lost lines).
     let mut current = path;
     loop {
         std::thread::sleep(FOLLOW_TICK);
-        if let Some(newest) = latest_log_file(&dir)?
+        let advanced = drain(&mut reader, task)?;
+        if !advanced
+            && let Some(newest) = latest_log_file(&dir)?
             && newest != current
         {
             current = newest;
-            offset = 0;
+            reader = BufReader::new(std::fs::File::open(&current)?);
         }
-        let mut file = std::fs::File::open(&current)?;
-        let len = file.metadata()?.len();
-        if len <= offset {
-            continue;
-        }
-        file.seek(SeekFrom::Start(offset))?;
-        let mut reader = BufReader::new(&mut file);
-        let mut line = String::new();
-        while reader.read_line(&mut line)? > 0 {
-            print_line(&line, task);
-            line.clear();
-        }
-        offset = len;
     }
 }
 
+/// Read and print every complete line available from `reader` up to its current
+/// EOF, leaving the reader positioned exactly at the bytes consumed. Returns
+/// whether any line was printed.
+fn drain<R: BufRead>(reader: &mut R, task: Option<i64>) -> Result<bool, CliError> {
+    let mut line = String::new();
+    let mut advanced = false;
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break; // EOF for now; a growing file yields more on the next drain.
+        }
+        print_line(&line, task);
+        advanced = true;
+    }
+    Ok(advanced)
+}
+
 /// The lexically-newest `totsuka.log.*` file (dates sort chronologically).
-fn latest_log_file(dir: &std::path::Path) -> Result<Option<PathBuf>, CliError> {
+fn latest_log_file(dir: &Path) -> Result<Option<PathBuf>, CliError> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Ok(None);
     };

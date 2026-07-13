@@ -94,8 +94,14 @@ enum Command {
 
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
-    let result = execute(cli);
-    match result {
+    // No subcommand is a usage error: exit code 2 (clap's convention, which the
+    // rest of the CLI shares) so scripts can tell it apart from a runtime
+    // failure (exit 1). A single message, no double-print.
+    let Some(command) = cli.command else {
+        eprintln!("totsuka: no command given. Try `totsuka --help`.");
+        return std::process::ExitCode::from(2);
+    };
+    match execute(command, cli.config.as_deref(), cli.debug) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("error: {err}");
@@ -104,12 +110,11 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn execute(cli: Cli) -> Result<(), common::CliError> {
-    let Some(command) = cli.command else {
-        eprintln!("totsuka: no command given. Try `totsuka --help`.");
-        return Err("no command → run `totsuka --help` for the command list".into());
-    };
-
+fn execute(
+    command: Command,
+    config: Option<&std::path::Path>,
+    debug: bool,
+) -> Result<(), common::CliError> {
     // Completion needs no environment at all.
     if let Command::Completion { shell } = command {
         clap_complete::generate(
@@ -121,11 +126,11 @@ fn execute(cli: Cli) -> Result<(), common::CliError> {
         return Ok(());
     }
 
-    let cx = Cx::resolve(cli.config.as_deref())?;
+    let cx = Cx::resolve(config)?;
     match command {
         Command::Completion { .. } => unreachable!("handled above"),
         Command::Init => init_cmd::run(&cx),
-        Command::Run { watch, dry_run } => run_cmd::run(&cx, watch, dry_run, cli.debug),
+        Command::Run { watch, dry_run } => run_cmd::run(&cx, watch, dry_run, debug),
         Command::Status { json } => status_cmd::run(&cx, json),
         Command::Task { cmd } => task_cmd::run(&cx, cmd),
         Command::Plugin { cmd } => plugin_cmd::run(cmd),
