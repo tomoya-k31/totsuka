@@ -49,6 +49,23 @@ pub struct RootConfig {
     /// Logging settings (§5.2).
     #[serde(default)]
     pub log: LogSettings,
+    /// Output policy settings (PR templates, #65).
+    #[serde(default)]
+    pub output: OutputSettings,
+}
+
+/// Output policy settings (F-86 PR templating).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputSettings {
+    /// Pull-request title template; `None` uses the built-in default.
+    /// Placeholders: `{title}` `{task_id}` `{source}`.
+    #[serde(default)]
+    pub pr_title_template: Option<String>,
+    /// Pull-request body template; `None` uses the built-in default.
+    /// Placeholders: `{title}` `{url}` `{source}` `{task_id}` `{summary}`.
+    #[serde(default)]
+    pub pr_body_template: Option<String>,
 }
 
 fn default_version() -> u32 {

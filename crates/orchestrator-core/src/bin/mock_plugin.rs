@@ -11,7 +11,8 @@
 //! - `task/update_status` / `result/publish` → acknowledge (recorded to the
 //!   config's `"notify_log"` file, if set, as `{"method": ..., "params": ...}`).
 //! - `task/dispatch` → replies with the config's `"session_id"` (default
-//!   `sess-mock`).
+//!   `sess-mock`); `"commit_on_dispatch": true` leaves a real commit in the
+//!   worktree so the pull_request output policy has something to push.
 //! - `session/attach` → `attached: false` if the session id contains `gone`,
 //!   otherwise `attached: true` with a state chosen from the id (`waiting`,
 //!   `done`, `fail`, else `running`) so recovery paths are testable (#57).
@@ -117,6 +118,17 @@ fn main() {
                     .and_then(Value::as_str)
                     .unwrap_or("sess-mock")
                     .to_string();
+                // `commit_on_dispatch: true` makes the mock agent leave a real
+                // commit in the worktree, so the pull_request output policy has
+                // something to push (the agent's work ends at the commit, F-86).
+                if config
+                    .get("commit_on_dispatch")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    && let Some(worktree) = params.get("worktree_path").and_then(Value::as_str)
+                {
+                    commit_in(worktree);
+                }
                 Response::result(
                     request_id(&id),
                     serde_json::to_value(TaskDispatchResult { session_id }).unwrap(),
@@ -208,6 +220,36 @@ fn record(config: &Value, method: &str, params: &Value) {
         .open(path)
     {
         let _ = writeln!(file, "{line}");
+    }
+}
+
+/// Leave an empty commit in `worktree` (mock agent "work"). Signing is
+/// disabled and identity is injected so it never blocks in CI. Spawn/exit
+/// failures are logged to stderr (forwarded to the orchestrator log) so a
+/// misconfigured test worktree fails loudly rather than silently proceeding.
+fn commit_in(worktree: &str) {
+    match std::process::Command::new("git")
+        .current_dir(worktree)
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.email=totsuka@test",
+            "-c",
+            "user.name=totsuka",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "agent work",
+        ])
+        .output()
+    {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => eprintln!(
+            "mock_plugin: commit_on_dispatch failed in {worktree}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(e) => eprintln!("mock_plugin: could not run git commit in {worktree}: {e}"),
     }
 }
 

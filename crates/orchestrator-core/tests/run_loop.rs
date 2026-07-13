@@ -20,11 +20,32 @@ use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::state::TaskState;
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::repo_select::SelectConfig;
+use orchestrator_core::run::output::{PrCreator, PrError, PrRequest};
 use orchestrator_core::run::{Engine, EngineSettings, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
 use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_BRANCH_TEMPLATE};
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
+use std::sync::{Arc, Mutex};
+
+/// A pull-request creator that records requests and returns a canned URL, so
+/// the push flow is exercised without a real `gh`/GitHub.
+#[derive(Clone, Default)]
+struct RecordingPrCreator {
+    requests: Arc<Mutex<Vec<PrRequest>>>,
+    fail: bool,
+}
+
+impl PrCreator for RecordingPrCreator {
+    fn create_pr(&self, req: &PrRequest) -> Result<String, PrError> {
+        self.requests.lock().unwrap().push(req.clone());
+        if self.fail {
+            Err(PrError::Failed("mock refused".into()))
+        } else {
+            Ok("https://example.com/pr/1".to_string())
+        }
+    }
+}
 
 /// Path to the compiled mock plugin binary.
 fn mock_plugin() -> PathBuf {
@@ -124,7 +145,7 @@ on_success = { set_status = "レビュー待ち" }
 
 /// Engine settings over one repo, worktrees under `<base>/wt/`, immediate
 /// cleanup.
-fn settings(repo_path: &Path) -> EngineSettings {
+fn engine_settings(repo_path: &Path) -> EngineSettings {
     EngineSettings {
         workflows: workflows(),
         repos: vec![RepoSettings {
@@ -142,7 +163,29 @@ fn settings(repo_path: &Path) -> EngineSettings {
         select: SelectConfig::default(),
         poll_intervals: HashMap::new(),
         readme_cache_dir: None,
+        pr_title_template: "totsuka: {title}".to_string(),
+        pr_body_template: "Task {title} ({url})\n\n{summary}".to_string(),
     }
+}
+
+/// Workflows for one `mode` × `output` combination (source `mock_src`, agent
+/// `mock_agent`).
+fn workflows_with(mode: &str, output: &str) -> Vec<Workflow> {
+    let cfg = RootConfig::from_toml_str(&format!(
+        r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {{}}
+mode = "{mode}"
+agent = "mock_agent"
+output = "{output}"
+on_success = {{ set_status = "レビュー待ち" }}
+on_failure = {{ set_status = "失敗" }}
+"#
+    ))
+    .unwrap();
+    Workflow::from_configs(&cfg.workflows)
 }
 
 /// One fetchable task in the mock source's config shape. The `source` field
@@ -218,7 +261,7 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
     .await;
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
-        settings(&repo),
+        engine_settings(&repo),
         plugins,
         SystemGitRunner,
         no_llm(),
@@ -297,7 +340,7 @@ async fn one_shot_leaves_waiting_task_and_rerun_does_not_double_ingest() {
     .await;
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
-        settings(&repo),
+        engine_settings(&repo),
         plugins,
         SystemGitRunner,
         no_llm(),
@@ -367,7 +410,7 @@ async fn restart_recovers_in_flight_task() {
         .await;
         let mut engine = Engine::new(
             StateDb::open(&db_path).unwrap(),
-            settings(&repo),
+            engine_settings(&repo),
             plugins,
             SystemGitRunner,
             no_llm(),
@@ -393,7 +436,7 @@ async fn restart_recovers_in_flight_task() {
     .await;
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
-        settings(&repo),
+        engine_settings(&repo),
         plugins,
         SystemGitRunner,
         no_llm(),
@@ -431,7 +474,7 @@ async fn dry_run_reports_decisions_with_zero_side_effects() {
     .await;
     let engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
-        settings(&repo),
+        engine_settings(&repo),
         plugins,
         SystemGitRunner,
         no_llm(),
@@ -482,7 +525,7 @@ async fn unrecoverable_task_does_not_wedge_one_shot_exit() {
         .await;
         let mut engine = Engine::new(
             StateDb::open(&db_path).unwrap(),
-            settings(&repo),
+            engine_settings(&repo),
             plugins,
             SystemGitRunner,
             no_llm(),
@@ -497,7 +540,7 @@ async fn unrecoverable_task_does_not_wedge_one_shot_exit() {
     let plugins = plugin_set(json!([]), json!({}), &source_log, &notify_log).await;
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
-        settings(&repo),
+        engine_settings(&repo),
         plugins,
         SystemGitRunner,
         no_llm(),
@@ -547,7 +590,7 @@ async fn task_finished_while_down_is_finalized_on_recovery() {
         .await;
         let mut engine = Engine::new(
             StateDb::open(&db_path).unwrap(),
-            settings(&repo),
+            engine_settings(&repo),
             plugins,
             SystemGitRunner,
             no_llm(),
@@ -562,7 +605,7 @@ async fn task_finished_while_down_is_finalized_on_recovery() {
     let plugins = plugin_set(json!([]), json!({}), &source_log, &notify_log).await;
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
-        settings(&repo),
+        engine_settings(&repo),
         plugins,
         SystemGitRunner,
         no_llm(),
@@ -623,7 +666,7 @@ async fn agent_without_state_stream_fails_dispatch_instead_of_hanging() {
     .await;
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
-        settings(&repo),
+        engine_settings(&repo),
         plugins,
         SystemGitRunner,
         no_llm(),
@@ -656,5 +699,395 @@ async fn agent_without_state_stream_fails_dispatch_instead_of_hanging() {
             .any(|n| n["params"]["event"] == "failed"),
         "failed notification delivered: {notifications:?}"
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn output_pull_request_pushes_branch_and_opens_pr() {
+    let base = scratch("pr");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    // The mock agent commits in the worktree, then reports done.
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({ "stream_states": ["running", "done"], "commit_on_dispatch": true }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.workflows = workflows_with("implement", "pull_request");
+    let pr = RecordingPrCreator::default();
+    let mut engine = Engine::with_pr_creator(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+        Box::new(pr.clone()),
+    )
+    .await;
+
+    let summary = tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("one-shot settles")
+    .unwrap();
+    assert_eq!(summary.stats.done, 1);
+    assert_eq!(summary.stats.failed, 0);
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.state, TaskState::Done);
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    // The branch was pushed to the bare origin.
+    let branches = String::from_utf8(
+        Command::new("git")
+            .current_dir(base.join("origin.git"))
+            .args(["branch", "--list", "agent/*"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(
+        branches.contains("agent/mock_src-1"),
+        "branch pushed to origin: {branches:?}"
+    );
+
+    // The PR was opened with the templated title/body.
+    let requests = pr.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].head_branch, "agent/mock_src-1");
+    assert_eq!(requests[0].title, "totsuka: task 1");
+    assert!(requests[0].body.contains("task 1"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn output_pull_request_with_zero_commits_fails() {
+    let base = scratch("pr_nocommit");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    // Agent reports done WITHOUT committing anything.
+    let plugins = plugin_set(
+        json!([mock_task("2")]),
+        json!({ "stream_states": ["running", "done"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.workflows = workflows_with("implement", "pull_request");
+    let pr = RecordingPrCreator::default();
+    let mut engine = Engine::with_pr_creator(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+        Box::new(pr.clone()),
+    )
+    .await;
+
+    let summary = tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("settles")
+    .unwrap();
+    assert_eq!(summary.stats.failed, 1, "zero-commit PR must fail");
+    assert_eq!(summary.stats.done, 0);
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "2")
+        .unwrap()
+        .unwrap();
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    // No PR attempted, and the worktree is KEPT for retry (issue #65).
+    assert!(pr.requests.lock().unwrap().is_empty());
+    assert_eq!(task.state, TaskState::Failed);
+    let worktree = PathBuf::from(task.worktree_path.unwrap());
+    assert!(worktree.exists(), "worktree kept for retry");
+
+    // A recoverable publish failure must NOT flap the source status: on_failure
+    // is not written back (it would revert on the next successful retry).
+    let source_calls = read_log(&source_log);
+    assert!(
+        !source_calls
+            .iter()
+            .any(|c| c["method"] == "task/update_status"),
+        "no source status write-back on a retryable publish failure: {source_calls:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn output_source_publishes_result_artifact() {
+    let base = scratch("source_out");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    // Plan mode + source output: the agent streams output, which is published.
+    let plugins = plugin_set(
+        json!([mock_task("5")]),
+        json!({ "stream_states": ["running", "done"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.workflows = workflows_with("plan", "source");
+    settings.cleanup_plan = CleanupPolicy::Immediate;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let summary = tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("settles")
+    .unwrap();
+    assert_eq!(summary.stats.done, 1);
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "5")
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.state, TaskState::Done);
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    // The accumulated agent output flowed to result/publish (F-07).
+    let source_calls = read_log(&source_log);
+    let publish = source_calls
+        .iter()
+        .find(|c| c["method"] == "result/publish")
+        .expect("result/publish called");
+    assert_eq!(publish["params"]["task_id"], "5");
+    assert!(
+        publish["params"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("compiling"),
+        "streamed agent output published: {publish}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn pull_request_retry_after_pr_failure_can_reopen() {
+    // A partial publish (push succeeds, PR creation fails) must be retryable:
+    // has_commits_to_publish compares against origin's default branch, so it
+    // stays true even though the task's own branch is now on origin.
+    let base = scratch("pr_retry");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({ "stream_states": ["running", "done"], "commit_on_dispatch": true }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.workflows = workflows_with("implement", "pull_request");
+    // First attempt: PR creation fails after the push succeeds.
+    let failing_pr = RecordingPrCreator {
+        fail: true,
+        ..Default::default()
+    };
+    let mut engine = Engine::with_pr_creator(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+        Box::new(failing_pr.clone()),
+    )
+    .await;
+
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("settles")
+    .unwrap();
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.state, TaskState::Failed, "PR failure fails the task");
+    engine.shutdown(Duration::from_secs(5)).await;
+    // The branch WAS pushed, and the PR was attempted once.
+    assert_eq!(failing_pr.requests.lock().unwrap().len(), 1);
+
+    // Retry: the branch is already on origin. A fresh engine re-dispatches
+    // (reusing the worktree + session) and the agent re-reports done. The
+    // commit check must still see the agent's commit (vs origin/main), so the
+    // PR is attempted again — this time it succeeds.
+    let task_id = task.id;
+    StateDb::open(&db_path)
+        .unwrap()
+        .apply_event(
+            task_id,
+            orchestrator_core::domain::state::TaskEvent::Retry,
+            None,
+        )
+        .unwrap();
+
+    let plugins = plugin_set(
+        json!([]),
+        json!({ "stream_states": ["running", "done"], "commit_on_dispatch": false }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.workflows = workflows_with("implement", "pull_request");
+    let ok_pr = RecordingPrCreator::default();
+    let mut engine = Engine::with_pr_creator(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+        Box::new(ok_pr.clone()),
+    )
+    .await;
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("settles")
+    .unwrap();
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        task.state,
+        TaskState::Done,
+        "retry reopens the PR and completes (not stuck on zero-commit)"
+    );
+    engine.shutdown(Duration::from_secs(5)).await;
+    assert_eq!(
+        ok_pr.requests.lock().unwrap().len(),
+        1,
+        "PR reattempted on retry"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn missing_workflow_at_finalize_keeps_worktree_not_deletes() {
+    // A finished task whose workflow was removed from config must not be
+    // silently completed with its committed worktree deleted.
+    let base = scratch("missing_wf");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    // `sess-done` so the recovery re-attach reports the agent already done →
+    // the Publishing task resumes and finalizes.
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({ "stream_states": [], "session_id": "sess-done", "commit_on_dispatch": true }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.workflows = workflows_with("implement", "pull_request");
+    // Never clean up implement worktrees, so we can assert it survives.
+    settings.cleanup_implement = CleanupPolicy::Manual;
+    let mut engine = Engine::with_pr_creator(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+        Box::new(RecordingPrCreator::default()),
+    )
+    .await;
+
+    // Dispatch (records the session), then drop the engine before finalize.
+    engine.cycle(None).await.unwrap();
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let worktree = PathBuf::from(task.worktree_path.clone().unwrap());
+    // Force the task into Publishing (agent done) directly, then finalize with a
+    // config that no longer has the workflow.
+    db.apply_event(
+        task.id,
+        orchestrator_core::domain::state::TaskEvent::Start,
+        None,
+    )
+    .ok();
+    db.apply_event(
+        task.id,
+        orchestrator_core::domain::state::TaskEvent::BeginPublish,
+        None,
+    )
+    .unwrap();
+
+    let plugins = plugin_set(json!([]), json!({}), &source_log, &notify_log).await;
+    let mut settings = engine_settings(&repo);
+    settings.workflows = Vec::new(); // workflow removed
+    settings.cleanup_implement = CleanupPolicy::Manual;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    // Recovery finalizes the Publishing task; with no workflow it must fail
+    // (keep worktree), not complete+delete.
+    engine.recover().await.unwrap();
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.state, TaskState::Failed);
+    assert!(
+        worktree.exists(),
+        "committed worktree preserved, not deleted"
+    );
+    engine.shutdown(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&base);
 }
