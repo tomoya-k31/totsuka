@@ -8,7 +8,10 @@
       "package-name": "totsuka",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        "Cargo.toml"
+        {
+          "type": "generic",
+          "path": "Cargo.toml"
+        }
       ]
     }
   },

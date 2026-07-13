@@ -9,6 +9,15 @@ status: active
 owner: tomoya-k31
 ---
 
+# 前提: リポジトリ設定（1 回だけ）
+
+release-please は自分で Release PR を作るため、リポジトリ設定で GitHub Actions に PR 作成を許可する必要がある（未設定だと `GitHub Actions is not permitted to create or approve pull requests` で失敗する）。
+
+- **Settings → Actions → General → Workflow permissions** で **「Allow GitHub Actions to create and approve pull requests」を有効化**する。
+- Organization で管理している場合は Org 側の同名設定も有効にする（Repo 設定はそれを上回れない）。
+
+これはコード（ワークフローの `permissions:`）では代替できないリポジトリ/Org のセキュリティトグル。
+
 # リリースの流れ
 
 1. **Release PR**: `main` への push ごとに [release-please](https://github.com/googleapis/release-please)（`.github/workflows/release-please.yml`）が Conventional Commits を集計し、SemVer 版と CHANGELOG（Keep a Changelog 形式）を持つ Release PR を作成・更新する。設定は `release-please-config.json` / `.release-please-manifest.json`。
