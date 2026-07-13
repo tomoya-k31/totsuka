@@ -3,6 +3,8 @@
 環境構築・コーディング規約・ブランチ戦略・レビュー規約。
 
 * [ログ規約（JSON Lines・機密マスキング）](logging-conventions.md) - totsuka の構造化ログ規約。JSON Lines 1行1イベント、task_id 相関、機密マスキング（フィールド denylist＋値パターン）、log_prompts、日次ローテーションと世代保持。
+* [設定リファレンス（config.toml）](config-reference.md) - config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限を含む。
+* [プラグイン開発ガイド](plugin-dev-guide.md) - totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、install/enable の流れ、参照実装。
 
 <!-- concept を追加したら、ここに 1 行追加する:
 * [Title](file.md) - frontmatter の description を転記

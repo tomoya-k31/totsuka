@@ -1,0 +1,86 @@
+> 🌐 [English](README.md) · **日本語**
+> _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
+
+# totsuka
+
+**AI 駆動の開発フロー自動化ツール。** totsuka はタスクソース（GitHub Issues、
+Notion）からタスク指示を検知し、ワークフローにマッチさせ、AI コーディング
+エージェント（herdr、orca）へ — それぞれ専用の git worktree 上で — オーケスト
+レーションします。成果はプルリクエスト作成、またはソースへの書き戻しとして
+publish します。
+
+- **タスクソース**: GitHub Issues / Projects、Notion データベース
+- **エージェント**: herdr、orca（プラグインプロトコル越しに駆動する agent IDE）
+- **隔離**: 1 タスク = 1 リポジトリ = 1 worktree = 1 ブランチ
+- **出力ポリシー**: プルリクエスト作成 / ソースへ書き戻し / なし
+- **ローカルファースト**: 単一の CLI バイナリ、デーモンなし、シークレットは Keychain
+
+> ステータス: v1。現状 macOS のみ。コードは XDG 準拠で、将来の Linux 移植に向け
+> プラットフォーム境界を抽象化済み。
+
+## インストール
+
+### Homebrew（推奨）
+
+```sh
+brew install tomoya-k31/totsuka/totsuka
+```
+
+リリースは ad-hoc 署名済みの macOS ユニバーサルバイナリを配布します。Gatekeeper に
+ブロックされた場合、一度だけ quarantine 属性を除去してください:
+
+```sh
+xattr -d com.apple.quarantine "$(brew --prefix)/bin/totsuka"
+```
+
+### ソースから
+
+```sh
+cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
+```
+
+## クイックスタート（5 分・1 タスク）
+
+```sh
+# 1. 設定ファイルの雛形生成と環境チェック。
+totsuka init
+
+# 2. 必要なプラグイン（task source / agent / notifier）を install して enable。
+totsuka plugin install ./path/to/task-source-github
+totsuka plugin enable github
+
+# 3. シークレットを Keychain に保存し、設定から参照
+#    （例: api_key_ref = "keychain:totsuka/github"）。
+#    ~/.config/totsuka/config.toml を編集 — repositories / workflows / [llm]。
+
+# 4. 配線を検証。
+totsuka doctor
+
+# 5. 1 サイクル実行（常駐ポーリングは --watch）。
+totsuka run --dry-run   # プレビュー: どのタスク -> どのリポジトリ -> どのエージェント
+totsuka run             # 実行: fetch -> dispatch -> 監視 -> publish
+```
+
+進捗は `totsuka status`、個別タスクは `totsuka task show <id>`、ログ追尾は
+`totsuka logs -f` で確認します。
+
+## ドキュメント
+
+このリポジトリの知識はすべて [`docs/`](./docs/)（OKF v0.1 準拠の Knowledge
+Bundle）で管理しています。
+
+- **仕様書**: [docs/product/orchestrator-spec.ja.md](./docs/product/orchestrator-spec.ja.md)
+- **設定リファレンス**: [docs/development/config-reference.md](./docs/development/config-reference.md)
+- **プラグイン開発ガイド**: [docs/development/plugin-dev-guide.md](./docs/development/plugin-dev-guide.md)
+- **運用ガイド**（doctor / worktree 掃除 / FAQ）: [docs/operations/operations-guide.md](./docs/operations/operations-guide.md)
+- **目次**: [docs/index.md](./docs/index.md) · **変更履歴**: [CHANGELOG.md](./CHANGELOG.md)
+
+## コントリビュート
+
+Conventional Commits 必須（`type(scope): description`）。リリースは
+[release-please](https://github.com/googleapis/release-please) の Release PR を
+マージして切ります。docs 変更は `bash scripts/okf-lint.sh docs` で検証されます。
+
+## ライセンス
+
+[MIT](./LICENSE)。

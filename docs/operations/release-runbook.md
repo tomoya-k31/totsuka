@@ -1,0 +1,44 @@
+---
+type: Runbook
+title: リリース手順（release-please / ユニバーサルバイナリ / Homebrew tap）
+description: totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリの自動ビルド、Homebrew tap の formula bump、Gatekeeper（ad-hoc 署名）の扱い。
+resource: https://github.com/tomoya-k31/totsuka/tree/main/.github/workflows
+tags: [release, ci, homebrew, distribution, gatekeeper, semver]
+timestamp: 2026-07-14T03:00:00Z
+status: active
+owner: tomoya-k31
+---
+
+# リリースの流れ
+
+1. **Release PR**: `main` への push ごとに [release-please](https://github.com/googleapis/release-please)（`.github/workflows/release-please.yml`）が Conventional Commits を集計し、SemVer 版と CHANGELOG（Keep a Changelog 形式）を持つ Release PR を作成・更新する。設定は `release-please-config.json` / `.release-please-manifest.json`。
+2. **リリース確定**: Release PR をマージすると release-please が `vX.Y.Z` タグと GitHub Release を作成し、`Cargo.toml` の `[workspace.package] version`（`# x-release-please-version` 注釈行）と `CHANGELOG.md` を bump する。
+3. **バイナリ添付**: Release の `published` イベントで `.github/workflows/release.yml` が起動し、macOS ランナーで `x86_64-apple-darwin` と `aarch64-apple-darwin` をビルド、`lipo` でユニバーサル化、ad-hoc 署名して `totsuka-vX.Y.Z-macos-universal.tar.gz`（+ `.sha256`）を同じ Release に添付する。
+
+> プラグインプロトコルの版はアプリ本体と独立（#50）。totsuka のリリースはプロトコル版の変更を意味しない。CHANGELOG に破壊的プロトコル変更を書く場合は明示する。
+
+# バージョニング（SemVer）
+
+- Conventional Commits の `feat` → minor、`fix` → patch、`feat!`/`BREAKING CHANGE` → major
+- v1（0.x）系では `bump-minor-pre-major` により破壊的変更も minor に留める設定
+
+# Homebrew tap
+
+- tap リポジトリ: `tomoya-k31/homebrew-totsuka`、formula は `Formula/totsuka.rb`。テンプレートは本リポジトリの `packaging/homebrew/totsuka.rb`。
+- **bump 手順**（リリース後）: 新しい Release の tarball の `version` / `url` / `sha256` を formula に反映してコミットする。`.sha256` アセットの値を使う。
+  - 自動化する場合は tap リポジトリへ push できる PAT（例 `HOMEBREW_TAP_TOKEN`）を用意し、release ワークフローに bump ジョブを追加する（tap リポジトリと token が未整備のため v1 は手動運用）。
+- 利用者は `brew install tomoya-k31/totsuka/totsuka`。`cargo install --git ... orchestrator-cli` も併記（README）。
+
+# Gatekeeper（macOS）
+
+- v1 は **ad-hoc 署名**（`codesign --sign -`）。初回起動で Gatekeeper に阻まれた場合、利用者は quarantine 属性を除去する: `xattr -d com.apple.quarantine "$(brew --prefix)/bin/totsuka"`。
+- Developer ID 署名 / notarization は Open Question #5（社外公開判断）の決定後に対応する。決定したら本 runbook と `release.yml` の署名ステップを更新する。
+
+# ロールバック
+
+- 問題のあるリリースは GitHub 上で該当 Release/タグを削除するか、修正版を通常のリリースフローで前に進める。tap の formula も直前の安定版へ戻す。
+- `main` が壊れた場合は PR 規約に従い revert 優先（`type: revert`、元コミットハッシュと理由を body に）。
+
+# 事前確認
+
+タグを切る前に [リリース前手動チェックリスト](/quality/release-checklist.md)（herdr/orca 実機・通知・回復）を実施する。テスト戦略は [テスト戦略](/quality/test-strategy.md)。

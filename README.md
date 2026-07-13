@@ -1,29 +1,86 @@
-# Totsuka
+> 🌐 **English** · [日本語](README.ja.md)
 
-AIを使用した開発フロー自動化ツール
+# totsuka
 
-## 概要
+**AI-driven dev-flow automation.** totsuka detects task instructions from your
+task sources (GitHub Issues, Notion), matches them to workflows, and
+orchestrates them to AI coding agents (herdr, orca) — each in its own git
+worktree — then publishes the result as a pull request or writes it back to the
+source.
 
-Totsuka は、開発フローの半自動化、タスク指示の自動検知、およびそれらを AI Agent にオーケストレーション・割り振りするツールを提供します。
+- **Task sources**: GitHub Issues / Projects, Notion databases
+- **Agents**: herdr, orca (agent IDEs driven over a plugin protocol)
+- **Isolation**: one task = one repo = one worktree = one branch
+- **Output policies**: open a pull request, write back to the source, or none
+- **Local-first**: a single CLI binary, no daemon, secrets stay in the Keychain
 
-Socket API を経由して herdr と連携し、AI Agent を操作・制御することで、タスク実行の自動化を実現します。
+> Status: v1. macOS only for now; the code is XDG-compliant and platform
+> boundaries are abstracted for a future Linux port.
 
-## ステータス
+## Install
 
-- 言語・ディレクトリ構成: 検討中
+### Homebrew (recommended)
 
+```sh
+brew install tomoya-k31/totsuka/totsuka
+```
 
-## ドキュメント
+The release ships an ad-hoc–signed macOS universal binary. If Gatekeeper blocks
+it, clear the quarantine attribute once:
 
-このリポジトリに関する知識（設計・意思決定・運用手順・用語）はすべて
-[`docs/`](./docs/) で管理しています。`docs/` は
+```sh
+xattr -d com.apple.quarantine "$(brew --prefix)/bin/totsuka"
+```
+
+### From source
+
+```sh
+cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
+```
+
+## Quickstart (5 minutes, 1 task)
+
+```sh
+# 1. Scaffold the config and check the environment.
+totsuka init
+
+# 2. Install the plugins you need (task source, agent, notifier), then enable them.
+totsuka plugin install ./path/to/task-source-github
+totsuka plugin enable github
+
+# 3. Store your secrets in the Keychain and reference them from config
+#    (e.g. api_key_ref = "keychain:totsuka/github"); edit
+#    ~/.config/totsuka/config.toml — repositories, workflows, and the [llm] block.
+
+# 4. Verify everything is wired up.
+totsuka doctor
+
+# 5. Run one cycle (add --watch to keep polling).
+totsuka run --dry-run   # preview: which task -> which repo -> which agent
+totsuka run             # execute: fetch -> dispatch -> monitor -> publish
+```
+
+Inspect progress with `totsuka status`, drill into a task with
+`totsuka task show <id>`, and follow logs with `totsuka logs -f`.
+
+## Documentation
+
+All project knowledge lives in [`docs/`](./docs/), an
 [Open Knowledge Format (OKF) v0.1](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)
-準拠の Knowledge Bundle です。
+Knowledge Bundle.
 
-- 目次: [docs/index.md](./docs/index.md)
-- 更新履歴: [docs/log.md](./docs/log.md)
-- 執筆ルール（人間・エージェント共通）: [docs/CLAUDE.md](./docs/CLAUDE.md)
+- **Product spec**: [docs/product/orchestrator-spec.ja.md](./docs/product/orchestrator-spec.ja.md)
+- **Configuration reference**: [docs/development/config-reference.md](./docs/development/config-reference.md)
+- **Plugin development guide**: [docs/development/plugin-dev-guide.md](./docs/development/plugin-dev-guide.md)
+- **Operations guide** (doctor / worktree cleanup / FAQ): [docs/operations/operations-guide.md](./docs/operations/operations-guide.md)
+- **Table of contents**: [docs/index.md](./docs/index.md) · **Changelog**: [CHANGELOG.md](./CHANGELOG.md)
 
-ドキュメントを追加・変更する PR は CI（`okf-lint`）で
-frontmatter・index 掲載・ログ形式が検証されます。ローカルでは
-`bash scripts/okf-lint.sh docs` で事前確認できます。
+## Contributing
+
+Conventional Commits are required (`type(scope): description`). Releases are cut
+by merging the [release-please](https://github.com/googleapis/release-please)
+Release PR. Docs changes are validated by `bash scripts/okf-lint.sh docs`.
+
+## License
+
+[MIT](./LICENSE).
