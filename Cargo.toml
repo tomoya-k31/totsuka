@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0" # x-release-please-version
+version = "0.1.1" # x-release-please-version
 edition = "2024"
 # 1.88 is required transitively by the security-patched `time` 0.3.47
 # (RUSTSEC-2026-0009 fix).
