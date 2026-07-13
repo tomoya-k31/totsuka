@@ -224,9 +224,11 @@ fn record(config: &Value, method: &str, params: &Value) {
 }
 
 /// Leave an empty commit in `worktree` (mock agent "work"). Signing is
-/// disabled and identity is injected so it never blocks in CI.
+/// disabled and identity is injected so it never blocks in CI. Spawn/exit
+/// failures are logged to stderr (forwarded to the orchestrator log) so a
+/// misconfigured test worktree fails loudly rather than silently proceeding.
 fn commit_in(worktree: &str) {
-    let _ = std::process::Command::new("git")
+    match std::process::Command::new("git")
         .current_dir(worktree)
         .args([
             "-c",
@@ -240,7 +242,15 @@ fn commit_in(worktree: &str) {
             "-m",
             "agent work",
         ])
-        .output();
+        .output()
+    {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => eprintln!(
+            "mock_plugin: commit_on_dispatch failed in {worktree}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(e) => eprintln!("mock_plugin: could not run git commit in {worktree}: {e}"),
+    }
 }
 
 /// Convert a JSON id value into a `RequestId` (numbers used by the host).

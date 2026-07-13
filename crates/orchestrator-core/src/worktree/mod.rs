@@ -286,7 +286,13 @@ impl<G: GitRunner> WorktreeManager<G> {
                 stderr: out.stderr,
             });
         }
-        Ok(out.stdout.trim().parse::<u64>().unwrap_or(0) > 0)
+        // Surface an unparseable count as an error rather than silently reading
+        // it as "0 commits" (which would wrongly fail publishing).
+        let count: u64 = out.stdout.trim().parse().map_err(|_| WorktreeError::Git {
+            command: "rev-list".to_string(),
+            stderr: format!("unexpected `rev-list --count` output: {:?}", out.stdout),
+        })?;
+        Ok(count > 0)
     }
 
     /// Push the worktree's branch to `origin`, setting upstream (F-86). The

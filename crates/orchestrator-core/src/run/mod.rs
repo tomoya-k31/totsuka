@@ -1429,9 +1429,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             title: render_template(&self.settings.pr_title_template, &ctx),
             body: render_template(&self.settings.pr_body_template, &ctx),
         };
-        self.pr_creator
-            .create_pr(&req)
-            .map_err(|e| format!("pull-request creation failed: {e}"))
+        // `PrError` already carries a "pull-request creation failed" prefix;
+        // return it as-is rather than doubling the prefix.
+        self.pr_creator.create_pr(&req).map_err(|e| e.to_string())
     }
 
     /// Apply the workflow's `on_success`/`on_failure` status transition on the

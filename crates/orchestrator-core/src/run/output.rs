@@ -49,8 +49,9 @@ pub trait PrCreator: Send + Sync {
 }
 
 /// Opens PRs via the GitHub CLI (`gh pr create`). Falls back to nothing else in
-/// v1 — a missing/unauthenticated `gh` surfaces as a [`PrError::Failed`] whose
-/// message names the fix (§7).
+/// v1 — a `gh` that is not on `PATH` surfaces as [`PrError::Spawn`], and one
+/// that runs but rejects the request (unauthenticated, etc.) as
+/// [`PrError::Failed`] whose message names the fix (§7).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct GhPrCreator;
 
