@@ -351,7 +351,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 
 ### 10.1 Distribution
 
-- **Homebrew tap (recommended)** + universal binaries (arm64 / x86_64) on GitHub Releases. `cargo install` also documented.
+- **Universal binaries (arm64 / x86_64) on GitHub Releases (recommended)** + `cargo install`. Package managers (Homebrew, etc.) are out of scope for v1.
 - macOS Gatekeeper: ad-hoc signing + a procedure document suffices for internal distribution. For public release, plan Developer ID signing + notarization (a decision needed for v1).
 
 ### 10.2 Versioning / compatibility
@@ -361,7 +361,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 
 ### 10.3 Updates / operations
 
-- `--version` and a pointer to release notes. self-update is C (delegating to Homebrew is simplest).
+- `--version` and a pointer to release notes. self-update is out of scope for v1 (re-download the binary or `cargo install` again).
 - State-DB schema migrations (embedded migrations, auto-applied at startup + backup).
 - Watching for changes in dependent APIs (Notion / GitHub / herdr Socket API) is defined as a maintenance task. Plugin separation allows tracking without a core release.
 - Issue template + attaching `doctor --json` output as the reporting flow.
@@ -369,7 +369,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 ### 10.4 Team rollout
 
 - Distribute configuration templates via an internal repository (secrets are per-person Keychain / env).
-- Onboarding: keep it to 5 steps — `brew install` → `init` → set keys → `doctor` → `run`.
+- Onboarding: keep it to 5 steps — install (download / `cargo install`) → `init` → set keys → `doctor` → `run`.
 
 ---
 

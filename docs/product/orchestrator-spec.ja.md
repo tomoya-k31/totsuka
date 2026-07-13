@@ -354,7 +354,7 @@ on_success = { set_status = "レビュー待ち" }
 
 ### 10.1 配布
 
-- **Homebrew tap(推奨)** + GitHub Releases のユニバーサルバイナリ(arm64 / x86_64)。`cargo install` も併記。
+- **GitHub Releases のユニバーサルバイナリ(arm64 / x86_64)(推奨)** + `cargo install`。パッケージマネージャ(Homebrew 等)は v1 では対象外。
 - macOS Gatekeeper 対策: 社内配布なら ad-hoc 署名 + 手順書で可。社外公開するなら Developer ID 署名 + notarization を計画(v1 で判断が必要な項目)。
 
 ### 10.2 バージョニング・互換性
@@ -364,7 +364,7 @@ on_success = { set_status = "レビュー待ち" }
 
 ### 10.3 更新・運用
 
-- `--version` とリリースノートへの導線。self-update は C(Homebrew に委ねるのが簡潔)。
+- `--version` とリリースノートへの導線。self-update は v1 では対象外(バイナリ再取得 or `cargo install` 再実行)。
 - 状態DB のスキーママイグレーション(埋め込みマイグレーション、起動時自動適用 + バックアップ)。
 - 依存 API(Notion / GitHub / herdr Socket API)の変更監視を保守タスクとして定義。プラグイン分離により本体リリースなしで追随可能。
 - Issue テンプレート + `doctor --json` の出力添付を報告フローとする。
@@ -372,7 +372,7 @@ on_success = { set_status = "レビュー待ち" }
 ### 10.4 チーム展開
 
 - 設定ファイルのテンプレートを社内リポジトリで配布(シークレットは各自 Keychain / env)。
-- オンボーディング手順: `brew install` → `init` → キー設定 → `doctor` → `run` の5ステップに収める。
+- オンボーディング手順: インストール(ダウンロード / `cargo install`) → `init` → キー設定 → `doctor` → `run` の5ステップに収める。
 
 ---
 
