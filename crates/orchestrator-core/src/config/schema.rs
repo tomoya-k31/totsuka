@@ -13,6 +13,14 @@ use serde::Deserialize;
 /// The current supported config schema version (§10.2).
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
+/// Default global concurrent-task limit when `max_concurrency` is omitted
+/// (F-40).
+pub const DEFAULT_GLOBAL_CONCURRENCY: u32 = 4;
+
+/// Default task-source polling interval in seconds when `poll_interval_secs`
+/// is omitted (F-06).
+pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
+
 /// Root of `config.toml`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +28,10 @@ pub struct RootConfig {
     /// Schema version, for startup migration (§10.2).
     #[serde(default = "default_version")]
     pub version: u32,
+    /// Global maximum concurrent tasks (F-40). Defaults to
+    /// [`DEFAULT_GLOBAL_CONCURRENCY`] when omitted.
+    #[serde(default)]
+    pub max_concurrency: Option<u32>,
     /// Registered local repositories (F-61).
     #[serde(default)]
     pub repositories: Vec<RepositoryConfig>,
@@ -106,6 +118,10 @@ pub struct PluginConfig {
     /// Plugin log level.
     #[serde(default)]
     pub log_level: Option<String>,
+    /// Polling interval in seconds for `run --watch` (task sources only,
+    /// F-06). Defaults to [`DEFAULT_POLL_INTERVAL_SECS`].
+    #[serde(default)]
+    pub poll_interval_secs: Option<u64>,
 }
 
 /// Execution mode of a workflow (F-80, F-82).
@@ -175,13 +191,45 @@ pub struct LlmConfig {
     pub api_key_ref: Option<String>,
 }
 
-/// worktree placement defaults (F-22).
+/// worktree placement defaults (F-22) and cleanup policies (F-23, F-85).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorktreeConfig {
     /// Global placement template; overridable per repo.
     #[serde(default)]
     pub location: Option<String>,
+    /// Cleanup policy for implement-mode worktrees (F-23). Defaults to
+    /// `manual` (never lose committed-but-unpushed work).
+    #[serde(default)]
+    pub cleanup: Option<CleanupPolicyConfig>,
+    /// Cleanup policy for plan-mode worktrees (F-85). Defaults to `immediate`
+    /// (design-only worktrees carry no unique work).
+    #[serde(default)]
+    pub plan_cleanup: Option<CleanupPolicyConfig>,
+}
+
+/// A worktree cleanup policy as written in config (F-23):
+/// `"immediate"`, `"manual"`, or `{ retention_days = 5 }`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum CleanupPolicyConfig {
+    /// A named policy (`immediate` / `manual`).
+    Named(CleanupPolicyName),
+    /// Keep for N days after the task finished, then remove.
+    Retention {
+        /// Days to keep a finished task's worktree.
+        retention_days: u32,
+    },
+}
+
+/// The named cleanup policies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupPolicyName {
+    /// Remove as soon as the task finishes.
+    Immediate,
+    /// Never auto-remove; a human cleans up.
+    Manual,
 }
 
 /// Logging settings from `[log]` (§5.2).
@@ -323,5 +371,38 @@ on_success = { set_status = "レビュー待ち" }
         assert_eq!(cfg.version, CURRENT_SCHEMA_VERSION);
         assert!(cfg.repositories.is_empty());
         assert!(cfg.plugins.is_empty());
+        assert!(cfg.max_concurrency.is_none());
+        assert!(cfg.worktree.cleanup.is_none());
+    }
+
+    #[test]
+    fn run_loop_fields_parse() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+max_concurrency = 8
+
+[plugins.github]
+enabled = true
+kind = "task_source"
+poll_interval_secs = 30
+
+[worktree]
+cleanup = { retention_days = 5 }
+plan_cleanup = "immediate"
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.max_concurrency, Some(8));
+        assert_eq!(cfg.plugin("github").unwrap().poll_interval_secs, Some(30));
+        assert_eq!(
+            cfg.worktree.cleanup,
+            Some(CleanupPolicyConfig::Retention { retention_days: 5 })
+        );
+        assert_eq!(
+            cfg.worktree.plan_cleanup,
+            Some(CleanupPolicyConfig::Named(CleanupPolicyName::Immediate))
+        );
+        // An unknown policy name is rejected, not silently ignored.
+        assert!(RootConfig::from_toml_str("[worktree]\ncleanup = \"sometimes\"").is_err());
     }
 }

@@ -21,3 +21,4 @@ clap.workspace = true
 orchestrator-core = { path = "../orchestrator-core" }
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
