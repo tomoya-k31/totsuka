@@ -6,56 +6,37 @@
 //! F-65), startup recovery (§5.3), then one-shot / `--watch` / `--dry-run`.
 
 use std::collections::HashMap;
-use std::io;
 use std::time::Duration;
 
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::{OpenAiConfig, OpenAiRouter};
-use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
+use orchestrator_core::adapters::plugin_host::Plugin;
 use orchestrator_core::adapters::{RunLock, StateDb};
-use orchestrator_core::config::{self, PluginKind, PluginRawConfig, RootConfig, SecretResolver};
+use orchestrator_core::config::{self, PluginKind, RootConfig};
 use orchestrator_core::logging::{self, LogConfig};
-use orchestrator_core::paths::Paths;
-use orchestrator_core::platform::{PlatformProcessProbe, PlatformSecretStore};
-use orchestrator_core::plugins::PluginStore;
+use orchestrator_core::platform::PlatformProcessProbe;
 use orchestrator_core::ports::SecretString;
 use orchestrator_core::run::{Engine, PluginSet, RunSummary, settings_from_config};
-use serde_json::Value;
 
-/// A boxed error for CLI operations.
-type CliError = Box<dyn std::error::Error>;
-
-/// Default per-call plugin RPC timeout when `timeout_secs` is omitted.
-const DEFAULT_PLUGIN_TIMEOUT: Duration = Duration::from_secs(120);
+use crate::common::{CliError, Cx, plugin_spec, secret_resolver};
 
 /// Grace period for plugin shutdown at the end of a run.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// Execute `totsuka run`.
-pub fn run(watch: bool, dry_run: bool) -> Result<(), CliError> {
+pub fn run(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(), CliError> {
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(run_async(watch, dry_run))
+    runtime.block_on(run_async(cx, watch, dry_run, debug))
 }
 
-async fn run_async(watch: bool, dry_run: bool) -> Result<(), CliError> {
-    let paths = Paths::from_system()?;
+async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(), CliError> {
+    let paths = &cx.paths;
     let env: HashMap<String, String> = std::env::vars().collect();
     let env_fn = |k: &str| env.get(k).cloned();
 
     // Config load + full validation (static + workflow semantics).
-    let config_path = paths.config_dir().join("config.toml");
-    let cfg = match std::fs::read_to_string(&config_path) {
-        Ok(s) => RootConfig::from_toml_str(&s)?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Err(format!(
-                "config not found at {} → create it (see docs) before running",
-                config_path.display()
-            )
-            .into());
-        }
-        Err(e) => return Err(e.into()),
-    };
-    let store = PluginStore::new(paths.data_dir().join("plugins"));
+    let cfg = cx.load_config()?;
+    let store = cx.store();
     let findings = config::validate(&cfg, &env_fn, |name| {
         store
             .manifest_of(name)
@@ -82,6 +63,10 @@ async fn run_async(watch: bool, dry_run: bool) -> Result<(), CliError> {
     if let Some(max_files) = cfg.log.max_files {
         log_config.max_files = max_files;
     }
+    if debug {
+        // --debug wins over the configured level (§7).
+        log_config.level = logging::parse_level("debug").expect("debug is a valid level");
+    }
     let _log_guard = logging::init(&log_config)?;
 
     // Single-instance lock (F-74). Dry runs are read-only and skip it.
@@ -95,7 +80,7 @@ async fn run_async(watch: bool, dry_run: bool) -> Result<(), CliError> {
     };
 
     let db = StateDb::open(&paths.state_dir().join("state.db"))?;
-    let plugins = launch_plugins(&cfg, &store, paths.config_dir(), &env).await?;
+    let plugins = launch_plugins(cx, &cfg, &env).await?;
 
     // AI Gateway router (F-12), if configured.
     let llm = match &cfg.llm {
@@ -162,28 +147,13 @@ async fn run_async(watch: bool, dry_run: bool) -> Result<(), CliError> {
 /// Launch every enabled plugin from the store (F-58), passing its
 /// secret-resolved `plugins/{name}.toml` as the `initialize` config (F-64/65).
 async fn launch_plugins(
+    cx: &Cx,
     cfg: &RootConfig,
-    store: &PluginStore,
-    config_dir: &std::path::Path,
     env: &HashMap<String, String>,
 ) -> Result<PluginSet, CliError> {
     let mut set = PluginSet::default();
     for (name, plugin_cfg) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
-        let manifest = store.manifest_of(name)?.ok_or_else(|| {
-            format!("plugin `{name}` is enabled but not installed → `totsuka plugin install <dir>`")
-        })?;
-        let init_config = plugin_init_config(config_dir, name, env)?;
-        let spec = PluginSpec {
-            name: name.clone(),
-            program: store.plugin_dir(name).join(&manifest.name),
-            args: vec![],
-            manifest,
-            init_config,
-            timeout: plugin_cfg
-                .timeout_secs
-                .map(Duration::from_secs)
-                .unwrap_or(DEFAULT_PLUGIN_TIMEOUT),
-        };
+        let spec = plugin_spec(cx, cfg, name, env)?;
         let plugin = Plugin::launch(spec).await?;
         match plugin_cfg.kind {
             PluginKind::TaskSource => set.sources.insert(name.clone(), plugin),
@@ -192,61 +162,6 @@ async fn launch_plugins(
         };
     }
     Ok(set)
-}
-
-/// Load `plugins/{name}.toml` (empty object if absent) and resolve secret
-/// references in its string values (F-65).
-fn plugin_init_config(
-    config_dir: &std::path::Path,
-    name: &str,
-    env: &HashMap<String, String>,
-) -> Result<Value, CliError> {
-    let path = config_dir.join("plugins").join(format!("{name}.toml"));
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => PluginRawConfig::from_toml_str(&s)?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => PluginRawConfig::from_toml_str("")?,
-        Err(e) => return Err(e.into()),
-    };
-    let mut value = raw.to_json()?;
-    let resolver = secret_resolver(env);
-    resolve_strings(&mut value, &resolver).map_err(|e| format!("in {}: {e}", path.display()))?;
-    Ok(value)
-}
-
-/// The platform secret resolver over a snapshot of the environment.
-fn secret_resolver(
-    env: &HashMap<String, String>,
-) -> SecretResolver<PlatformSecretStore, impl Fn(&str) -> Option<String> + '_> {
-    SecretResolver::new(PlatformSecretStore::default(), |k: &str| {
-        env.get(k).cloned()
-    })
-}
-
-/// Recursively resolve `${ENV}` / `keychain:` references in every string leaf.
-fn resolve_strings<E>(
-    value: &mut Value,
-    resolver: &SecretResolver<PlatformSecretStore, E>,
-) -> Result<(), config::ResolveError>
-where
-    E: Fn(&str) -> Option<String>,
-{
-    match value {
-        Value::String(s) => {
-            *s = resolver.resolve(s)?.expose().to_string();
-        }
-        Value::Array(items) => {
-            for item in items {
-                resolve_strings(item, resolver)?;
-            }
-        }
-        Value::Object(map) => {
-            for item in map.values_mut() {
-                resolve_strings(item, resolver)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
 }
 
 /// Print the one-shot / watch exit summary (§5.1).

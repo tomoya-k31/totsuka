@@ -1,18 +1,34 @@
-//! totsuka CLI entrypoint.
+//! totsuka CLI entrypoint (§5.1 command tree).
 //!
-//! Wires the `plugin` subcommand (#52) and the `run` main loop (#63). The
-//! remaining command tree (`status`, `task`, `config`, `doctor`, ...) is added
-//! in #64.
+//! `run` (#63) plus the full command surface (#64): init / status / task /
+//! plugin / config / logs / doctor / completion, with the shared flags
+//! `--config` (highest config layer, F-66) and `--debug`.
 
+mod common;
+mod config_cmd;
+mod doctor_cmd;
+mod init_cmd;
+mod logs_cmd;
 mod plugin_cmd;
 mod run_cmd;
+mod status_cmd;
+mod task_cmd;
 
-use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
+use clap::{CommandFactory, Parser, Subcommand};
+use common::Cx;
 
 /// totsuka — local AI-agent orchestrator.
 #[derive(Debug, Parser)]
 #[command(name = "totsuka", version, about, long_about = None)]
 struct Cli {
+    /// Path to config.toml (overrides $XDG_CONFIG_HOME/totsuka/config.toml).
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+    /// Verbose diagnostics (debug-level logging where applicable).
+    #[arg(long, global = true)]
+    debug: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -20,6 +36,8 @@ struct Cli {
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Generate a config skeleton and check the environment.
+    Init,
     /// Run the main loop: fetch → dispatch → monitor (§5.1).
     Run {
         /// Keep polling task sources at their configured intervals (F-06)
@@ -31,29 +49,88 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Show tasks, worktrees, and whether the orchestrator is running.
+    Status {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Operate on individual tasks (list / show / cancel / retry).
+    Task {
+        #[command(subcommand)]
+        cmd: task_cmd::TaskCommand,
+    },
     /// Manage plugins (install / uninstall / enable / disable / list).
     Plugin {
         #[command(subcommand)]
         cmd: plugin_cmd::PluginCommand,
     },
+    /// Validate or display the configuration.
+    Config {
+        #[command(subcommand)]
+        cmd: config_cmd::ConfigCommand,
+    },
+    /// View the orchestrator logs.
+    Logs {
+        /// Keep following appended log lines.
+        #[arg(short = 'f', long)]
+        follow: bool,
+        /// Only show lines for one task id.
+        #[arg(long, value_name = "ID")]
+        task: Option<i64>,
+    },
+    /// Diagnose the environment (git, config, plugins, orphan worktrees).
+    Doctor {
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Generate shell completions (zsh, bash, fish, ...).
+    Completion {
+        /// Target shell.
+        shell: clap_complete::Shell,
+    },
 }
 
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
-    let result = match cli.command {
-        Some(Command::Run { watch, dry_run }) => run_cmd::run(watch, dry_run),
-        Some(Command::Plugin { cmd }) => plugin_cmd::run(cmd),
-        None => {
-            eprintln!("totsuka: no command given. Try `totsuka --help`.");
-            return std::process::ExitCode::from(2);
-        }
-    };
-
+    let result = execute(cli);
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("error: {err}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+fn execute(cli: Cli) -> Result<(), common::CliError> {
+    let Some(command) = cli.command else {
+        eprintln!("totsuka: no command given. Try `totsuka --help`.");
+        return Err("no command → run `totsuka --help` for the command list".into());
+    };
+
+    // Completion needs no environment at all.
+    if let Command::Completion { shell } = command {
+        clap_complete::generate(
+            shell,
+            &mut Cli::command(),
+            "totsuka",
+            &mut std::io::stdout(),
+        );
+        return Ok(());
+    }
+
+    let cx = Cx::resolve(cli.config.as_deref())?;
+    match command {
+        Command::Completion { .. } => unreachable!("handled above"),
+        Command::Init => init_cmd::run(&cx),
+        Command::Run { watch, dry_run } => run_cmd::run(&cx, watch, dry_run, cli.debug),
+        Command::Status { json } => status_cmd::run(&cx, json),
+        Command::Task { cmd } => task_cmd::run(&cx, cmd),
+        Command::Plugin { cmd } => plugin_cmd::run(cmd),
+        Command::Config { cmd } => config_cmd::run(&cx, cmd),
+        Command::Logs { follow, task } => logs_cmd::run(&cx, follow, task),
+        Command::Doctor { json } => doctor_cmd::run(&cx, json),
     }
 }
