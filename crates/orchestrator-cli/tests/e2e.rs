@@ -10,9 +10,12 @@
 //! timing) and wrapped in a wall-clock guard; poll intervals are irrelevant to
 //! one-shot runs.
 
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
+
+use test_support::scratch;
 
 /// Path to the compiled `totsuka` binary.
 fn totsuka() -> PathBuf {
@@ -20,45 +23,24 @@ fn totsuka() -> PathBuf {
 }
 
 /// Path to the `mock_plugin` binary (a bin of `orchestrator-core`, built at the
-/// same target dir). Build it on demand so `cargo test -p orchestrator-cli`
-/// works even when the full workspace wasn't compiled first.
+/// same target dir under the same profile as the tests). Rebuilt every call so
+/// an edit to `mock_plugin.rs` is never silently missed — cargo's dependency
+/// tracking makes it a fast no-op when already fresh.
 fn mock_plugin() -> PathBuf {
-    let path = totsuka()
-        .parent()
-        .expect("target dir")
-        .join(format!("mock_plugin{}", std::env::consts::EXE_SUFFIX));
-    if !path.exists() {
-        let status = Command::new(env!("CARGO"))
-            .args(["build", "-p", "orchestrator-core", "--bin", "mock_plugin"])
-            .status()
-            .expect("build mock_plugin");
-        assert!(status.success(), "failed to build mock_plugin");
+    // `CARGO_BIN_EXE_totsuka` lives in the same profile dir the tests use; its
+    // parent's name is the profile (`debug` / `release`).
+    let bin_dir = totsuka().parent().expect("target dir").to_path_buf();
+    let mut build = Command::new(env!("CARGO"));
+    build.args(["build", "-p", "orchestrator-core", "--bin", "mock_plugin"]);
+    if bin_dir.file_name().and_then(|n| n.to_str()) == Some("release") {
+        build.arg("--release");
     }
+    let status = build.status().expect("spawn cargo build for mock_plugin");
+    assert!(status.success(), "failed to build mock_plugin");
+
+    let path = bin_dir.join(format!("mock_plugin{}", std::env::consts::EXE_SUFFIX));
     assert!(path.exists(), "mock_plugin not found at {}", path.display());
     path
-}
-
-/// A git command helper (signing disabled so seed commits never block).
-fn git(cwd: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .current_dir(cwd)
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-/// A scratch base directory unique to this test process + name.
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("totsuka-e2e-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 /// The XDG-scoped environment for a scratch base.
@@ -82,7 +64,10 @@ impl Env {
     }
 
     /// Run `totsuka <args>` with XDG pointed at the scratch dirs and a wall
-    /// clock guard so a hang fails fast instead of stalling CI.
+    /// clock guard so a hang fails fast instead of stalling CI. stdout/stderr
+    /// are drained by dedicated threads while we poll, so a chatty child can
+    /// never deadlock on a full pipe, and a timed-out child is killed (not
+    /// leaked as an orphan holding the run lock).
     fn run(&self, args: &[&str]) -> Output {
         let start = Instant::now();
         let mut child = Command::new(totsuka())
@@ -96,16 +81,36 @@ impl Env {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
+
+        let mut out_pipe = child.stdout.take().unwrap();
+        let mut err_pipe = child.stderr.take().unwrap();
+        let out_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = out_pipe.read_to_end(&mut buf);
+            buf
+        });
+        let err_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = err_pipe.read_to_end(&mut buf);
+            buf
+        });
+
         // One-shot runs settle quickly; guard against a regression that hangs.
-        loop {
-            if let Some(_status) = child.try_wait().unwrap() {
-                return child.wait_with_output().unwrap();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
             }
-            assert!(
-                start.elapsed() < Duration::from_secs(60),
-                "`totsuka {args:?}` did not finish within 60s"
-            );
+            if start.elapsed() >= Duration::from_secs(60) {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("`totsuka {args:?}` did not finish within 60s (killed)");
+            }
             std::thread::sleep(Duration::from_millis(50));
+        };
+        Output {
+            status,
+            stdout: out_reader.join().unwrap(),
+            stderr: err_reader.join().unwrap(),
         }
     }
 }
@@ -133,34 +138,8 @@ fn setup(name: &str, agent_cfg: &str, output: &str, mode: &str) -> Env {
     let base = scratch(name);
     let repo = base.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
-
-    // bare origin + clone with one commit on main.
-    git(&repo, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
-    let seed = repo.join("seed");
-    std::fs::create_dir_all(&seed).unwrap();
-    git(&seed, &["init", "-q", "-b", "main"]);
-    git(&seed, &["config", "user.email", "t@e.com"]);
-    git(&seed, &["config", "user.name", "T"]);
-    git(&seed, &["commit", "-q", "--allow-empty", "-m", "init"]);
-    git(
-        &seed,
-        &[
-            "remote",
-            "add",
-            "origin",
-            repo.join("origin.git").to_str().unwrap(),
-        ],
-    );
-    git(&seed, &["push", "-q", "origin", "main"]);
-    git(
-        &repo,
-        &[
-            "clone",
-            "-q",
-            repo.join("origin.git").to_str().unwrap(),
-            "clone",
-        ],
-    );
+    // bare origin + clone with one commit on main (shared helper).
+    test_support::bare_origin_and_clone(&repo);
 
     let env = Env {
         source_log: base.join("source.ndjson"),
@@ -240,7 +219,7 @@ fn stdout(out: &Output) -> String {
 }
 
 /// Read a recorded NDJSON log (empty if never written).
-fn read_log(path: &Path) -> Vec<serde_json::Value> {
+fn read_log(path: &std::path::Path) -> Vec<serde_json::Value> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
@@ -357,16 +336,32 @@ fn e2e_dry_run_has_zero_side_effects() {
         "dry-run lists the task"
     );
 
-    // Nothing was ingested, published, or notified.
-    assert!(
-        !env.state_dir().join("state.db").exists()
-            || env
-                .run(&["task", "list", "--json"])
-                .stdout
-                .starts_with(b"[]"),
-        "dry-run created no tasks"
-    );
+    // No task ingested: `task list --json` must be an empty array (the DB may
+    // be created empty by opening it, which is acceptable).
+    let listed = env.run(&["task", "list", "--json"]);
+    let tasks: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap_or(json_empty());
+    assert_eq!(tasks, serde_json::json!([]), "dry-run ingested no task");
+
+    // No source write-back and no notification.
     assert!(read_log(&env.source_log).is_empty());
     assert!(read_log(&env.notify_log).is_empty());
+
+    // No git/worktree side effects: no worktree materialized on disk, and the
+    // bare origin has only `main` (no agent branch pushed).
+    assert!(
+        !env.state_dir().join("wt").exists(),
+        "dry-run created no worktree"
+    );
+    let branches = test_support::git(
+        &env.repo.join("origin.git"),
+        &["branch", "--format=%(refname:short)"],
+    );
+    let branches: Vec<&str> = branches.lines().collect();
+    assert_eq!(branches, ["main"], "dry-run pushed no branch: {branches:?}");
     let _ = std::fs::remove_dir_all(&env.base);
+}
+
+/// An empty JSON array (fallback when `task list --json` printed nothing).
+fn json_empty() -> serde_json::Value {
+    serde_json::json!([])
 }

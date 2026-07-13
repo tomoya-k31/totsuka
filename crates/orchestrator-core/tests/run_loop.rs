@@ -27,6 +27,7 @@ use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_BRANCH_TEMPLATE};
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
+use test_support::{bare_origin_and_clone as setup_repo, scratch};
 
 /// A pull-request creator that records requests and returns a canned URL, so
 /// the push flow is exercised without a real `gh`/GitHub.
@@ -50,56 +51,6 @@ impl PrCreator for RecordingPrCreator {
 /// Path to the compiled mock plugin binary.
 fn mock_plugin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_mock_plugin"))
-}
-
-/// Run a git command, asserting success. Signing is disabled so the seed
-/// commit never blocks on a local signing agent.
-fn git(cwd: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .current_dir(cwd)
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-/// Set up `origin.git` (bare) with one commit on `main`, and a clone of it.
-fn setup_repo(base: &Path) -> PathBuf {
-    let origin = base.join("origin.git");
-    git(
-        base,
-        &["init", "--bare", "-b", "main", origin.to_str().unwrap()],
-    );
-    let seed = base.join("seed");
-    std::fs::create_dir_all(&seed).unwrap();
-    git(&seed, &["init", "-b", "main"]);
-    git(&seed, &["config", "user.email", "t@example.com"]);
-    git(&seed, &["config", "user.name", "T"]);
-    git(&seed, &["commit", "--allow-empty", "-m", "init"]);
-    git(
-        &seed,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    git(&seed, &["push", "origin", "main"]);
-
-    let clone = base.join("clone");
-    git(
-        base,
-        &["clone", origin.to_str().unwrap(), clone.to_str().unwrap()],
-    );
-    clone
-}
-
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("totsuka-run-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 /// Launch the mock plugin under a manifest of the given kind.

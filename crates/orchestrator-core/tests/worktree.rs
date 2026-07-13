@@ -3,7 +3,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::worktree::{
@@ -11,59 +10,7 @@ use orchestrator_core::worktree::{
     DEFAULT_LOCATION_TEMPLATE, WorktreeManager,
 };
 
-/// Run a git command, asserting success, returning trimmed stdout. Signing is
-/// disabled so seed commits never block on a local signing agent.
-fn git(cwd: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .current_dir(cwd)
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
-/// Set up `origin.git` (bare) with one commit on `main`, and a clone of it.
-fn setup(base: &Path) -> PathBuf {
-    let origin = base.join("origin.git");
-    git(
-        base,
-        &["init", "--bare", "-b", "main", origin.to_str().unwrap()],
-    );
-
-    let seed = base.join("seed");
-    std::fs::create_dir_all(&seed).unwrap();
-    git(&seed, &["init", "-b", "main"]);
-    git(&seed, &["config", "user.email", "t@example.com"]);
-    git(&seed, &["config", "user.name", "T"]);
-    git(&seed, &["commit", "--allow-empty", "-m", "init"]);
-    git(
-        &seed,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    git(&seed, &["push", "origin", "main"]);
-
-    let clone = base.join("clone");
-    git(
-        base,
-        &["clone", origin.to_str().unwrap(), clone.to_str().unwrap()],
-    );
-    git(&clone, &["config", "user.email", "t@example.com"]);
-    git(&clone, &["config", "user.name", "T"]);
-    clone
-}
-
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("totsuka-wt-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
+use test_support::{bare_origin_and_clone as setup, git, scratch};
 
 fn env(state_dir: &Path) -> HashMap<String, String> {
     HashMap::from([(

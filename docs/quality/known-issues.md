@@ -25,8 +25,8 @@ Orchestrator が完全停止している間にエージェントが完了した�
 
 ## worktree テストのフレーク要因（解消済み）
 
-`worktree.rs` / `run_loop.rs` の実 git テストは、ローカルの 1Password コミット署名エージェントに seed commit がブロックされてフレークしていた。テストヘルパで `commit.gpgsign=false` / `tag.gpgsign=false` を注入して解消済み。新規に実 git を叩くテストを足す場合も同様に署名を無効化すること。
+`worktree.rs` / `run_loop.rs` の実 git テストは、ローカルの 1Password コミット署名エージェントに seed commit がブロックされてフレークしていた。共有ヘルパ [`test-support`](https://github.com/tomoya-k31/totsuka/tree/main/crates/test-support) が `commit.gpgsign=false` / `tag.gpgsign=false` を注入して解消済み。新規に実 git を叩くテストは `test_support::git` を使うこと（署名無効化が組み込まれている）。
 
-## E2E のモックバイナリ鮮度
+## 共有テストヘルパ
 
-E2E（`orchestrator-cli/tests/e2e.rs`）は `orchestrator-core` の `mock_plugin` バイナリを同一 target から参照する。`cargo test --workspace`（CI）は全 bin を先にビルドするため常に最新だが、`mock_plugin` を編集した直後にローカルで `cargo test -p orchestrator-cli` のみ実行するとバイナリが古いままになりうる。編集時は `cargo build -p orchestrator-core --bin mock_plugin` を先に走らせるか `--workspace` で実行する。
+実 git リポジトリ・scratch ディレクトリの生成は `test-support` クレートに集約済み（`git` / `scratch` / `bare_origin_and_clone`）。worktree・run-loop・CLI E2E の各テストはこれを dev-dependency として共有する。E2E の `mock_plugin` バイナリは毎回 `cargo build`（依存追跡により最新時は no-op、テストと同一プロファイル）で用意するため、編集後の鮮度ずれは起きない。
