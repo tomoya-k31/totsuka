@@ -4,12 +4,14 @@
 //! the full mock plugin suite lands in #66. Behaviour is driven by the
 //! `initialize` config so one binary can play every plugin kind:
 //!
-//! - `initialize` → stores the config; replies with a version and capabilities.
+//! - `initialize` → stores the config; replies with a version and capabilities
+//!   (`"no_state_stream": true` drops the `state_stream` capability).
 //! - `config/validate` → valid unless the config contains `"invalid": true`.
 //! - `tasks/fetch` → returns the config's `"tasks"` array (default: empty).
 //! - `task/update_status` / `result/publish` → acknowledge (recorded to the
 //!   config's `"notify_log"` file, if set, as `{"method": ..., "params": ...}`).
-//! - `task/dispatch` → replies with a fixed `session_id` (`sess-mock`).
+//! - `task/dispatch` → replies with the config's `"session_id"` (default
+//!   `sess-mock`).
 //! - `session/attach` → `attached: false` if the session id contains `gone`,
 //!   otherwise `attached: true` with a state chosen from the id (`waiting`,
 //!   `done`, `fail`, else `running`) so recovery paths are testable (#57).
@@ -60,13 +62,19 @@ fn main() {
         let response = match method {
             "initialize" => {
                 config = params.get("config").cloned().unwrap_or(Value::Null);
+                // `no_state_stream: true` simulates a minimal agent that does
+                // not stream state (the orchestrator must refuse to dispatch).
+                let state_stream = !config
+                    .get("no_state_stream")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 Response::result(
                     request_id(&id),
                     serde_json::to_value(InitializeResult {
                         plugin_version: semver::Version::new(0, 1, 0),
                         capabilities: Capabilities {
                             plan_mode: true,
-                            state_stream: true,
+                            state_stream,
                             outputs: vec![OutputCapability::Source],
                             ..Default::default()
                         },
@@ -101,13 +109,19 @@ fn main() {
                 record(&config, method, &params);
                 Response::result(request_id(&id), Value::Null)
             }
-            "task/dispatch" => Response::result(
-                request_id(&id),
-                serde_json::to_value(TaskDispatchResult {
-                    session_id: "sess-mock".to_string(),
-                })
-                .unwrap(),
-            ),
+            "task/dispatch" => {
+                // Overridable so tests can steer `session/attach` behaviour
+                // (ids containing `gone`/`done`/... choose the attach reply).
+                let session_id = config
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("sess-mock")
+                    .to_string();
+                Response::result(
+                    request_id(&id),
+                    serde_json::to_value(TaskDispatchResult { session_id }).unwrap(),
+                )
+            }
             "session/attach" => {
                 let sid = params
                     .get("session_id")

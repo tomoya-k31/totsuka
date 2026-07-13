@@ -284,6 +284,10 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     worktrees: WorktreeManager<G>,
     llm: Option<L>,
     slots: SlotManager,
+    /// Per-task slot ledger: task id → the exact `(repo, agent)` pair it holds
+    /// a slot under. Releases go through this so a task that never acquired
+    /// (e.g. an over-cap resume) can never release another task's slot.
+    slot_holders: HashMap<i64, (String, String)>,
     /// `(agent plugin, session_id)` → task id, for routing notifications.
     sessions: HashMap<(String, String), i64>,
     events: mpsc::UnboundedReceiver<PluginEvent>,
@@ -331,6 +335,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             worktrees: WorktreeManager::new(git),
             llm,
             slots,
+            slot_holders: HashMap::new(),
             sessions: HashMap::new(),
             events: rx,
             _events_tx: tx,
@@ -345,7 +350,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     }
 
     /// Startup recovery (§5.3): re-attach in-flight sessions, rebuild slot
-    /// usage (F-45), and restore the session→task routing table.
+    /// usage (F-45), restore the session→task routing table, and finish tasks
+    /// whose agent already completed while the orchestrator was down.
     pub async fn recover(&mut self) -> Result<RecoveryReport, EngineError> {
         let report = {
             let attacher = crate::adapters::PluginAgentSession::new(&self.plugins.agents);
@@ -358,6 +364,32 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 (outcome.plugin.clone(), outcome.session_id.clone())
             {
                 self.sessions.insert((plugin, session_id), outcome.task_id);
+            }
+            let Some(record) = self.db.get_task(outcome.task_id)? else {
+                continue;
+            };
+            // Mirror the rebuilt slot usage into the per-task ledger.
+            if counts_toward_slot(record.state)
+                && let (Some(repo), Some(plugin)) = (record.repo.clone(), outcome.plugin.clone())
+            {
+                self.slot_holders.insert(outcome.task_id, (repo, plugin));
+            }
+            match record.state {
+                // The agent finished while we were down. Re-subscribing does
+                // not replay a terminal state (plugins only stream *future*
+                // changes), so finalize now instead of waiting forever.
+                TaskState::Publishing => self.finalize_success(&record).await?,
+                // Surface the open question again (F-35); the agent will not
+                // re-announce it.
+                TaskState::WaitingInput => {
+                    notify_all(
+                        &self.plugins.notifiers,
+                        NotifierEvent::WaitingInput,
+                        &record,
+                        None,
+                    );
+                }
+                _ => {}
             }
         }
         for outcome in report.needs_confirmation() {
@@ -414,12 +446,21 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let mut interrupted = false;
 
         self.cycle(None).await?;
-        let mut next_poll = tokio::time::Instant::now() + self.min_poll_interval();
+        // Per-source next-fetch times (F-06: each source polls at its own
+        // interval, not the global minimum).
+        let mut due: HashMap<String, tokio::time::Instant> = self
+            .poll_sources()
+            .into_iter()
+            .map(|(source, interval)| (source, tokio::time::Instant::now() + interval))
+            .collect();
 
         loop {
             if !watch && self.settled()? {
                 break;
             }
+            let next_poll = due.values().min().copied().unwrap_or_else(|| {
+                tokio::time::Instant::now() + Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS)
+            });
             tokio::select! {
                 _ = &mut shutdown => {
                     interrupted = true;
@@ -432,8 +473,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     }
                 }
                 _ = tokio::time::sleep_until(next_poll), if watch => {
-                    self.cycle(None).await?;
-                    next_poll = tokio::time::Instant::now() + self.min_poll_interval();
+                    let now = tokio::time::Instant::now();
+                    let ready: HashSet<String> = due
+                        .iter()
+                        .filter(|(_, at)| **at <= now)
+                        .map(|(source, _)| source.clone())
+                        .collect();
+                    self.cycle(Some(&ready)).await?;
+                    for source in &ready {
+                        due.insert(source.clone(), now + self.poll_interval_for(source));
+                    }
                 }
                 _ = tokio::time::sleep(SETTLE_TICK), if !watch => {
                     // Safety tick: re-check settling and pick up freed slots.
@@ -474,26 +523,46 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
-    /// The shortest configured poll interval (drives the `--watch` tick).
-    fn min_poll_interval(&self) -> Duration {
+    /// Every source referenced by a workflow (or with a configured interval),
+    /// with its polling interval (F-06).
+    fn poll_sources(&self) -> Vec<(String, Duration)> {
+        let mut sources: HashSet<String> = self
+            .settings
+            .workflows
+            .iter()
+            .map(|w| w.source.clone())
+            .collect();
+        sources.extend(self.settings.poll_intervals.keys().cloned());
+        sources
+            .into_iter()
+            .map(|source| {
+                let interval = self.poll_interval_for(&source);
+                (source, interval)
+            })
+            .collect()
+    }
+
+    /// The polling interval for one source (configured or default, F-06).
+    fn poll_interval_for(&self, source: &str) -> Duration {
         self.settings
             .poll_intervals
-            .values()
-            .min()
+            .get(source)
             .copied()
             .unwrap_or(Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS))
     }
 
-    /// Whether the one-shot loop can exit: nothing is actively executing.
-    /// `waiting_input`/`pending` tasks remain by design (§5.1); `queued`
-    /// leftovers were warned about at dispatch time.
+    /// Whether the one-shot loop can exit: no task **this run is monitoring**
+    /// is actively executing. `waiting_input`/`pending` tasks remain by design
+    /// (§5.1); `queued` leftovers were warned about at dispatch time; a
+    /// leftover active-state row with no live session (recovery left it for
+    /// human confirmation, §5.3) can never progress, so it must not wedge the
+    /// exit.
     fn settled(&self) -> Result<bool, EngineError> {
-        for state in [
-            TaskState::Dispatched,
-            TaskState::Running,
-            TaskState::Publishing,
-        ] {
-            if !self.db.tasks_in_state(state)?.is_empty() {
+        let monitored: HashSet<i64> = self.sessions.values().copied().collect();
+        for task_id in monitored {
+            if let Some(record) = self.db.get_task(task_id)?
+                && counts_toward_slot(record.state)
+            {
                 return Ok(false);
             }
         }
@@ -509,6 +578,25 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         self.fetch_and_ingest(only_sources).await?;
         self.select_repos().await?;
         self.dispatch_ready().await?;
+        self.sweep_finished_worktrees()?;
+        Ok(())
+    }
+
+    /// Re-apply the cleanup policy to finished tasks whose worktree still
+    /// exists (F-23: a `retention_days` policy elapses long after the
+    /// finishing run's immediate cleanup attempt retained the worktree).
+    fn sweep_finished_worktrees(&self) -> Result<(), EngineError> {
+        for state in [TaskState::Done, TaskState::Cancelled] {
+            for record in self.db.tasks_in_state(state)? {
+                if record
+                    .worktree_path
+                    .as_deref()
+                    .is_some_and(|p| Path::new(p).exists())
+                {
+                    self.cleanup_worktree(record.id)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -547,7 +635,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             };
             self.stats.fetched += fetched.tasks.len();
 
-            for task in fetched.tasks {
+            for mut task in fetched.tasks {
+                // Normalize the origin to the plugin *instance* name: workflow
+                // matching and ingest key on the `[plugins.<name>]` key, while
+                // plugins stamp their own notion of a source name (e.g. the
+                // GitHub plugin's `source_name` defaults to "github" whatever
+                // the instance is called).
+                task.source = wf.source.clone();
                 // Defensive re-check (F-81): the plugin filtered on the
                 // trigger, but the *first* matching workflow is authoritative.
                 // A task whose authoritative match is a different workflow is
@@ -623,6 +717,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         Some(serde_json::json!({ "kind": "repo_select", "reason": reason })),
                     )?;
                     self.stats.failed += 1;
+                    self.write_back_status(record, false).await;
                     notify_all(
                         &self.plugins.notifiers,
                         NotifierEvent::Failed,
@@ -681,7 +776,14 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 priority: record.priority,
             });
         }
+        let pair_by_id: HashMap<i64, (String, String)> = ready
+            .iter()
+            .map(|t| (t.task_id, (t.repo.clone(), t.agent.clone())))
+            .collect();
         for task_id in plan_dispatch(&mut self.slots, &ready) {
+            if let Some(pair) = pair_by_id.get(&task_id) {
+                self.slot_holders.insert(task_id, pair.clone());
+            }
             self.dispatch_one(task_id).await?;
         }
         Ok(())
@@ -698,7 +800,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let repo_name = record.repo.clone().unwrap_or_default();
         let workflows = workflows_by_name(&self.settings.workflows);
         let Some(wf) = workflows.get(record.workflow.as_str()).copied() else {
-            self.slots.release(&repo_name, "");
+            self.release_slot(task_id);
             return Ok(()); // warned in dispatch_ready
         };
         let agent_name = wf.agent.clone();
@@ -713,23 +815,36 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             return self
                 .fail_dispatch(
                     &record,
-                    &repo_name,
-                    &agent_name,
                     format!(
                         "selected repository `{repo_name}` is not configured → re-add it to [[repositories]]"
                     ),
                 )
                 .await;
         };
-        if !self.plugins.agents.contains_key(&agent_name) {
-            return self
-                .fail_dispatch(
-                    &record,
-                    &repo_name,
-                    &agent_name,
-                    format!("agent plugin `{agent_name}` is not launched → install and enable it"),
-                )
-                .await;
+        match self.plugins.agents.get(&agent_name) {
+            None => {
+                return self
+                    .fail_dispatch(
+                        &record,
+                        format!(
+                            "agent plugin `{agent_name}` is not launched → install and enable it"
+                        ),
+                    )
+                    .await;
+            }
+            // Without a state stream the task could never progress and its
+            // slot would be held for the life of the process — refuse upfront.
+            Some(agent) if !agent.capabilities().state_stream => {
+                return self
+                    .fail_dispatch(
+                        &record,
+                        format!(
+                            "agent plugin `{agent_name}` does not declare the `state_stream` capability → totsuka cannot track its progress; use a state-streaming agent plugin"
+                        ),
+                    )
+                    .await;
+            }
+            Some(_) => {}
         }
 
         // Retry reuse (F-44): a surviving worktree + session resumes the
@@ -782,9 +897,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         worktree.path
                     }
                     Err(e) => {
-                        return self
-                            .fail_dispatch(&record, &repo_name, &agent_name, e.to_string())
-                            .await;
+                        return self.fail_dispatch(&record, e.to_string()).await;
                     }
                 }
             }
@@ -802,9 +915,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         {
             Ok(result) => result,
             Err(e) => {
-                return self
-                    .fail_dispatch(&record, &repo_name, &agent_name, e.to_string())
-                    .await;
+                return self.fail_dispatch(&record, e.to_string()).await;
             }
         };
         self.db
@@ -829,22 +940,33 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             "dispatched"
         );
 
-        if agent.capabilities().state_stream {
-            let subscribe = plugin_protocol::methods::StateSubscribeParams {
-                session_id: dispatched.session_id.clone(),
-            };
-            if let Err(e) = agent
-                .call::<_, Value>(method::STATE_SUBSCRIBE, &subscribe)
-                .await
-            {
-                tracing::warn!(task_id = record.id, "state/subscribe failed: {e}");
+        let subscribe = plugin_protocol::methods::StateSubscribeParams {
+            session_id: dispatched.session_id.clone(),
+        };
+        let subscribe_error = match agent
+            .call::<_, Value>(method::STATE_SUBSCRIBE, &subscribe)
+            .await
+        {
+            Ok(_) => None,
+            Err(e) => {
+                // No stream means the task could never progress (the loop
+                // would hold its slot forever). Best-effort cancel, then fail.
+                let cancel = plugin_protocol::methods::TaskCancelParams {
+                    session_id: dispatched.session_id.clone(),
+                };
+                let _ = agent.call::<_, Value>(method::TASK_CANCEL, &cancel).await;
+                Some(e.to_string())
             }
-        } else {
-            tracing::warn!(
-                task_id = record.id,
-                agent = %agent_name,
-                "agent does not declare state_stream; progress will not be tracked automatically"
-            );
+        };
+        if let Some(e) = subscribe_error {
+            self.sessions
+                .remove(&(agent_name.clone(), dispatched.session_id.clone()));
+            return self
+                .fail_dispatch(
+                    &record,
+                    format!("state/subscribe failed: {e} → dispatch cancelled; fix the agent plugin and `task retry`"),
+                )
+                .await;
         }
         Ok(())
     }
@@ -864,17 +986,22 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
+    /// Release the slot a task holds, if it holds one (per-task ledger).
+    fn release_slot(&mut self, task_id: i64) {
+        if let Some((repo, agent)) = self.slot_holders.remove(&task_id) {
+            self.slots.release(&repo, &agent);
+        }
+    }
+
     /// Fail a task during dispatch: release its slot, record the reason,
     /// notify (F-90).
     async fn fail_dispatch(
         &mut self,
         record: &TaskRecord,
-        repo: &str,
-        agent: &str,
         reason: String,
     ) -> Result<(), EngineError> {
         tracing::error!(task_id = record.id, "dispatch failed: {reason}");
-        self.slots.release(repo, agent);
+        self.release_slot(record.id);
         self.db.apply_event(
             record.id,
             TaskEvent::Fail,
@@ -926,7 +1053,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .db
             .get_task(task_id)?
             .ok_or(StateError::NotFound(task_id))?;
-        if record.state.is_terminal() || record.state == TaskState::Pending {
+        // Only tasks in the agent-driven pipeline react to agent states; a
+        // stray/late notification for a queued, pending, or finished task is
+        // ignored rather than corrupting the state machine.
+        if !matches!(
+            record.state,
+            TaskState::Dispatched
+                | TaskState::Running
+                | TaskState::WaitingInput
+                | TaskState::Publishing
+        ) {
             return Ok(());
         }
         let repo = record.repo.clone().unwrap_or_default();
@@ -946,8 +1082,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 }
                 if resuming {
                     // F-45: resuming re-acquires a slot. Reality wins over the
-                    // cap: the agent *is* running, so a full tier only logs.
-                    if !self.slots.acquire(&repo, agent_plugin) {
+                    // cap: the agent *is* running, so a full tier only logs —
+                    // but the ledger stays empty, so this task's completion
+                    // will not release a slot another task holds.
+                    if self.slots.acquire(&repo, agent_plugin) {
+                        self.slot_holders
+                            .insert(task_id, (repo.clone(), agent_plugin.to_string()));
+                    } else {
                         tracing::warn!(
                             task_id,
                             "resumed task exceeds a concurrency cap temporarily"
@@ -966,7 +1107,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         self.db.apply_event(task_id, event, Some(detail.clone()))?;
                     }
                     // F-45: a waiting task frees its slot.
-                    self.slots.release(&repo, agent_plugin);
+                    self.release_slot(task_id);
                     tracing::info!(task_id, "agent is waiting for input (F-35)");
                     notify_all(
                         &self.plugins.notifiers,
@@ -986,7 +1127,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 for &event in events {
                     self.db.apply_event(task_id, event, Some(detail.clone()))?;
                 }
-                self.finalize_success(&record, &repo, agent_plugin).await?;
+                self.finalize_success(&record).await?;
             }
             AgentState::Failed => {
                 self.db.apply_event(
@@ -994,9 +1135,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     TaskEvent::Fail,
                     Some(serde_json::json!({ "kind": "agent_state", "state": "failed" })),
                 )?;
-                if counts_toward_slot(record.state) {
-                    self.slots.release(&repo, agent_plugin);
-                }
+                self.release_slot(task_id);
                 self.stats.failed += 1;
                 self.write_back_status(&record, false).await;
                 // The worktree is kept for `task retry` (F-44).
@@ -1014,12 +1153,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
 
     /// Terminal success processing: output policy (#65 stub) → status
     /// write-back (F-84) → complete → worktree cleanup (F-23/F-85) → notify.
-    async fn finalize_success(
-        &mut self,
-        record: &TaskRecord,
-        repo: &str,
-        agent_plugin: &str,
-    ) -> Result<(), EngineError> {
+    /// `record` may be in any pre-`Complete` pipeline state (usually just
+    /// advanced to `Publishing`).
+    async fn finalize_success(&mut self, record: &TaskRecord) -> Result<(), EngineError> {
         // Output policy execution (push/PR or result/publish) lands in #65;
         // v1 of the loop treats it as a no-op and proceeds to completion.
         tracing::debug!(
@@ -1033,9 +1169,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             TaskEvent::Complete,
             Some(serde_json::json!({ "kind": "publish", "output": "deferred(#65)" })),
         )?;
-        if counts_toward_slot(record.state) {
-            self.slots.release(repo, agent_plugin);
-        }
+        self.release_slot(record.id);
         self.stats.done += 1;
         self.cleanup_worktree(record.id)?;
         notify_all(&self.plugins.notifiers, NotifierEvent::Done, record, None);
@@ -1094,6 +1228,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         else {
             return Ok(());
         };
+        // Already removed (earlier run / manual cleanup): nothing to do.
+        if !Path::new(path).exists() {
+            return Ok(());
+        }
         let Some(repo) = self.settings.repos.iter().find(|r| &r.name == repo_name) else {
             return Ok(());
         };
@@ -1110,6 +1248,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             record.finished_at.as_deref(),
             &now_rfc3339(),
         ) {
+            Ok(crate::worktree::CleanupOutcome::Retained) => {
+                // Expected under retention/manual policies; the sweep re-checks
+                // every cycle, so keep this quiet.
+                tracing::debug!(task_id, "worktree retained per policy");
+            }
             Ok(outcome) => {
                 tracing::info!(task_id, ?outcome, "worktree cleanup");
             }
@@ -1142,10 +1285,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 TaskEvent::Fail,
                 Some(serde_json::json!({ "kind": "plugin_crash", "plugin": plugin })),
             )?;
-            if counts_toward_slot(record.state) {
-                self.slots
-                    .release(record.repo.as_deref().unwrap_or_default(), plugin);
-            }
+            self.release_slot(task_id);
             self.stats.failed += 1;
             self.write_back_status(&record, false).await;
             notify_all(
@@ -1177,7 +1317,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     continue;
                 }
             };
-            for task in fetched.tasks {
+            for mut task in fetched.tasks {
+                // Same instance-name normalization as the real ingest path.
+                task.source = wf.source.clone();
                 match match_workflow(&self.settings.workflows, &task) {
                     Some(authoritative) if authoritative.name == wf.name => {}
                     _ => continue,

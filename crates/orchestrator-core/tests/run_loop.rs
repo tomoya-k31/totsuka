@@ -145,16 +145,19 @@ fn settings(repo_path: &Path) -> EngineSettings {
     }
 }
 
-/// One fetchable task in the mock source's config shape.
+/// One fetchable task in the mock source's config shape. The `source` field
+/// deliberately differs from the plugin *instance* name (`mock_src`): real
+/// plugins stamp their own source name (e.g. `github` whatever the instance
+/// is called), and the engine must normalize it before matching.
 fn mock_task(id: &str) -> serde_json::Value {
-    json!({ "id": id, "source": "mock_src", "title": format!("task {id}") })
+    json!({ "id": id, "source": "github", "title": format!("task {id}") })
 }
 
-/// Build a full plugin set: source (with tasks), agent (with a state stream),
+/// Build a full plugin set: source (with tasks), agent (config-driven),
 /// notifier (recording to `notify_log`).
 async fn plugin_set(
     tasks: serde_json::Value,
-    stream_states: serde_json::Value,
+    agent_config: serde_json::Value,
     source_log: &Path,
     notify_log: &Path,
 ) -> PluginSet {
@@ -170,12 +173,7 @@ async fn plugin_set(
     );
     set.agents.insert(
         "mock_agent".to_string(),
-        launch(
-            "agent_ide",
-            "mock_agent",
-            json!({ "stream_states": stream_states }),
-        )
-        .await,
+        launch("agent_ide", "mock_agent", agent_config).await,
     );
     set.notifiers.insert(
         "mock_notify".to_string(),
@@ -213,7 +211,7 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
 
     let plugins = plugin_set(
         json!([mock_task("1")]),
-        json!(["running", "done"]),
+        json!({ "stream_states": ["running", "done"] }),
         &source_log,
         &notify_log,
     )
@@ -292,7 +290,7 @@ async fn one_shot_leaves_waiting_task_and_rerun_does_not_double_ingest() {
 
     let plugins = plugin_set(
         json!([mock_task("7")]),
-        json!(["running", "waiting_input"]),
+        json!({ "stream_states": ["running", "waiting_input"] }),
         &source_log,
         &notify_log,
     )
@@ -362,7 +360,7 @@ async fn restart_recovers_in_flight_task() {
     {
         let plugins = plugin_set(
             json!([mock_task("9")]),
-            json!(["running"]),
+            json!({ "stream_states": ["running"] }),
             &source_log,
             &notify_log,
         )
@@ -386,7 +384,13 @@ async fn restart_recovers_in_flight_task() {
     // Restart: fresh plugins, fresh engine over the same state DB. Recovery
     // re-attaches to `sess-mock` (the mock reports it running) and syncs the
     // state machine forward (§5.3).
-    let plugins = plugin_set(json!([]), json!(["running"]), &source_log, &notify_log).await;
+    let plugins = plugin_set(
+        json!([]),
+        json!({ "stream_states": ["running"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
         settings(&repo),
@@ -420,7 +424,7 @@ async fn dry_run_reports_decisions_with_zero_side_effects() {
 
     let plugins = plugin_set(
         json!([mock_task("3")]),
-        json!(["running", "done"]),
+        json!({ "stream_states": ["running", "done"] }),
         &source_log,
         &notify_log,
     )
@@ -455,5 +459,202 @@ async fn dry_run_reports_decisions_with_zero_side_effects() {
     assert!(read_log(&notify_log).is_empty());
     assert!(read_log(&source_log).is_empty());
 
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn unrecoverable_task_does_not_wedge_one_shot_exit() {
+    let base = scratch("needs_confirmation");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    // First process: dispatch under a session id the mock will report as gone
+    // after restart, then die.
+    {
+        let plugins = plugin_set(
+            json!([mock_task("11")]),
+            json!({ "stream_states": [], "session_id": "sess-gone-11" }),
+            &source_log,
+            &notify_log,
+        )
+        .await;
+        let mut engine = Engine::new(
+            StateDb::open(&db_path).unwrap(),
+            settings(&repo),
+            plugins,
+            SystemGitRunner,
+            no_llm(),
+        )
+        .await;
+        engine.cycle(None).await.unwrap();
+    }
+
+    // Restart: the session is lost → needs confirmation (§5.3), and the
+    // one-shot loop must still exit instead of waiting forever for a
+    // notification that can never arrive.
+    let plugins = plugin_set(json!([]), json!({}), &source_log, &notify_log).await;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let report = engine.recover().await.unwrap();
+    assert_eq!(report.needs_confirmation().count(), 1);
+
+    let summary = tokio::time::timeout(
+        Duration::from_secs(30),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("one-shot must exit despite the unrecoverable task")
+    .unwrap();
+    assert!(!summary.interrupted);
+
+    // The task is left for the human (not auto-failed, §5.3).
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "11")
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.state, TaskState::Dispatched);
+
+    engine.shutdown(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn task_finished_while_down_is_finalized_on_recovery() {
+    let base = scratch("recover_done");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    // First process: dispatch under a session id the mock will report as
+    // `done` on re-attach, then die before any notification is processed.
+    {
+        let plugins = plugin_set(
+            json!([mock_task("13")]),
+            json!({ "stream_states": [], "session_id": "sess-done-13" }),
+            &source_log,
+            &notify_log,
+        )
+        .await;
+        let mut engine = Engine::new(
+            StateDb::open(&db_path).unwrap(),
+            settings(&repo),
+            plugins,
+            SystemGitRunner,
+            no_llm(),
+        )
+        .await;
+        engine.cycle(None).await.unwrap();
+    }
+
+    // Restart: re-attach reports Done. Agents do not replay terminal states on
+    // re-subscribe, so recovery itself must finalize: complete + write-back +
+    // cleanup + notify.
+    let plugins = plugin_set(json!([]), json!({}), &source_log, &notify_log).await;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let report = engine.recover().await.unwrap();
+    assert_eq!(report.resumed().count(), 1);
+
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "13")
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.state, TaskState::Done, "finalized during recovery");
+    let worktree = PathBuf::from(task.worktree_path.clone().unwrap());
+    assert!(!worktree.exists(), "worktree cleaned up during recovery");
+
+    // And the loop exits immediately: nothing is left in flight.
+    let summary = tokio::time::timeout(
+        Duration::from_secs(30),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("one-shot settles right away")
+    .unwrap();
+    assert!(summary.waiting.is_empty() && summary.queued.is_empty());
+
+    engine.shutdown(Duration::from_secs(5)).await;
+    let notifications = read_log(&notify_log);
+    assert!(
+        notifications.iter().any(|n| n["params"]["event"] == "done"),
+        "done notification delivered on recovery finalize: {notifications:?}"
+    );
+    let source_calls = read_log(&source_log);
+    assert!(
+        source_calls
+            .iter()
+            .any(|c| c["method"] == "task/update_status"),
+        "on_success write-back delivered on recovery finalize: {source_calls:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn agent_without_state_stream_fails_dispatch_instead_of_hanging() {
+    let base = scratch("no_stream");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("17")]),
+        json!({ "no_state_stream": true }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    // Progress could never be observed → the dispatch must fail the task and
+    // the one-shot must exit (not hold the slot forever).
+    let summary = tokio::time::timeout(
+        Duration::from_secs(30),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("one-shot must exit")
+    .unwrap();
+    assert_eq!(summary.stats.failed, 1);
+
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "17")
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.state, TaskState::Failed);
+
+    engine.shutdown(Duration::from_secs(5)).await;
+    let notifications = read_log(&notify_log);
+    assert!(
+        notifications
+            .iter()
+            .any(|n| n["params"]["event"] == "failed"),
+        "failed notification delivered: {notifications:?}"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
