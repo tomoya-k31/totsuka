@@ -959,8 +959,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
         };
         if let Some(e) = subscribe_error {
-            self.sessions
-                .remove(&(agent_name.clone(), dispatched.session_id.clone()));
+            self.drop_task_sessions(record.id);
             return self
                 .fail_dispatch(
                     &record,
@@ -991,6 +990,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         if let Some((repo, agent)) = self.slot_holders.remove(&task_id) {
             self.slots.release(&repo, &agent);
         }
+    }
+
+    /// Drop a finished task's session routes so long-running `--watch` does
+    /// not accumulate stale `(plugin, session_id)` entries.
+    fn drop_task_sessions(&mut self, task_id: i64) {
+        self.sessions.retain(|_, &mut id| id != task_id);
     }
 
     /// Fail a task during dispatch: release its slot, record the reason,
@@ -1136,6 +1141,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     Some(serde_json::json!({ "kind": "agent_state", "state": "failed" })),
                 )?;
                 self.release_slot(task_id);
+                self.drop_task_sessions(task_id);
                 self.stats.failed += 1;
                 self.write_back_status(&record, false).await;
                 // The worktree is kept for `task retry` (F-44).
@@ -1170,6 +1176,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             Some(serde_json::json!({ "kind": "publish", "output": "deferred(#65)" })),
         )?;
         self.release_slot(record.id);
+        self.drop_task_sessions(record.id);
         self.stats.done += 1;
         self.cleanup_worktree(record.id)?;
         notify_all(&self.plugins.notifiers, NotifierEvent::Done, record, None);
@@ -1273,6 +1280,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .filter(|((p, _), _)| p == plugin)
             .map(|(_, &task_id)| task_id)
             .collect();
+        // The plugin is gone: its session routes can never fire again.
+        self.sessions.retain(|(p, _), _| p != plugin);
         for task_id in affected {
             let Some(record) = self.db.get_task(task_id)? else {
                 continue;

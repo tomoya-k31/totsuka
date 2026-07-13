@@ -130,7 +130,7 @@ async fn run_async(watch: bool, dry_run: bool) -> Result<(), CliError> {
                     .map(|s| format!(" [already ingested: {s}]"))
                     .unwrap_or_default();
                 println!(
-                    "{}#{} {:?} → workflow `{}` (mode {}) → repo {} → agent `{}`{}",
+                    "{}#{} {} → workflow `{}` (mode {}) → repo {} → agent `{}`{}",
                     e.source, e.task_id, e.title, e.workflow, e.mode, e.repo, e.agent, ingested
                 );
             }
