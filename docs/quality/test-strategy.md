@@ -52,7 +52,7 @@ owner: tomoya-k31
 
 # CI 品質ゲート
 
-`.github/workflows/ci.yml`（#45）で `rustfmt` / `clippy -D warnings` / `test`（全層）/ `cargo-audit` / `cargo-deny` / `coverage(llvm-cov)` / `lint` を実行。マージ前に全て緑を必須とする。
+`.github/workflows/ci.yml`（#45）で `rustfmt` / `clippy -D warnings` / `test`（全層）/ `cargo-audit` / `cargo-deny` / `coverage(llvm-cov)` を実行。docs を変更する PR では `.github/workflows/okf-lint.yml`（`lint` ジョブ）が OKF lint を実行する。マージ前に全て緑を必須とする。
 
 # 手動チェック
 

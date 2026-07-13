@@ -352,12 +352,16 @@ fn e2e_dry_run_has_zero_side_effects() {
         !env.state_dir().join("wt").exists(),
         "dry-run created no worktree"
     );
-    let branches = test_support::git(
+    let branch_output = test_support::git(
         &env.repo.join("origin.git"),
         &["branch", "--format=%(refname:short)"],
     );
-    let branches: Vec<&str> = branches.lines().collect();
-    assert_eq!(branches, ["main"], "dry-run pushed no branch: {branches:?}");
+    let branch_lines: Vec<&str> = branch_output.lines().collect();
+    assert_eq!(
+        branch_lines,
+        ["main"],
+        "dry-run pushed no branch: {branch_lines:?}"
+    );
     let _ = std::fs::remove_dir_all(&env.base);
 }
 
