@@ -1,10 +1,11 @@
 //! totsuka CLI entrypoint.
 //!
-//! For #52 this wires the `plugin` subcommand (install / uninstall / enable /
-//! disable / list). The remaining command tree (`run`, `status`, `config`,
-//! `doctor`, ...) is added in #63/#64.
+//! Wires the `plugin` subcommand (#52) and the `run` main loop (#63). The
+//! remaining command tree (`status`, `task`, `config`, `doctor`, ...) is added
+//! in #64.
 
 mod plugin_cmd;
+mod run_cmd;
 
 use clap::{Parser, Subcommand};
 
@@ -19,6 +20,17 @@ struct Cli {
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run the main loop: fetch → dispatch → monitor (§5.1).
+    Run {
+        /// Keep polling task sources at their configured intervals (F-06)
+        /// instead of exiting after one cycle.
+        #[arg(long)]
+        watch: bool,
+        /// Show which tasks would match, which repository would be selected,
+        /// and which agent would run — without executing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Manage plugins (install / uninstall / enable / disable / list).
     Plugin {
         #[command(subcommand)]
@@ -29,9 +41,9 @@ enum Command {
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
+        Some(Command::Run { watch, dry_run }) => run_cmd::run(watch, dry_run),
         Some(Command::Plugin { cmd }) => plugin_cmd::run(cmd),
         None => {
-            // No subcommand: print help hint (the full run loop is #63).
             eprintln!("totsuka: no command given. Try `totsuka --help`.");
             return std::process::ExitCode::from(2);
         }

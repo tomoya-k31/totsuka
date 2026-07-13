@@ -11,10 +11,12 @@ use orchestrator_core::worktree::{
     DEFAULT_LOCATION_TEMPLATE, WorktreeManager,
 };
 
-/// Run a git command, asserting success, returning trimmed stdout.
+/// Run a git command, asserting success, returning trimmed stdout. Signing is
+/// disabled so seed commits never block on a local signing agent.
 fn git(cwd: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .current_dir(cwd)
+        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
         .args(args)
         .output()
         .unwrap();
