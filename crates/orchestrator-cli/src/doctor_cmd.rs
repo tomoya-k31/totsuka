@@ -176,10 +176,12 @@ fn check_plugins(
                 let init = spec.init_config.clone();
                 specs.push((spec, init));
             }
+            // Failure may be "not installed" or a plugins/{name}.toml
+            // parse/secret-resolution error — point at both.
             Err(e) => checks.push(Check::fail(
                 &format!("plugin:{name}"),
                 e.to_string(),
-                "install it with `totsuka plugin install <dir>`",
+                "install it (`totsuka plugin install <dir>`) or fix plugins/{name}.toml if it is already installed",
             )),
         }
     }

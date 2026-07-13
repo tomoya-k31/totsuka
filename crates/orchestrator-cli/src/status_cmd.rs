@@ -67,16 +67,22 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         });
     }
 
-    match (orchestrator.running, orchestrator.stale_lock) {
-        (true, _) => println!(
-            "orchestrator: running (pid {})",
-            orchestrator.pid.unwrap_or(0)
+    match (
+        orchestrator.running,
+        orchestrator.stale_lock,
+        orchestrator.pid,
+    ) {
+        (true, _, Some(pid)) => println!("orchestrator: running (pid {pid})"),
+        (true, _, None) => println!("orchestrator: running"),
+        // Stale lock with a dead PID: name it so the user can confirm.
+        (false, true, Some(pid)) => println!(
+            "orchestrator: not running (stale lock from pid {pid} → it will be reclaimed on the next `totsuka run`)"
         ),
-        (false, true) => println!(
-            "orchestrator: not running (stale lock from pid {} → it will be reclaimed on the next `totsuka run`)",
-            orchestrator.pid.unwrap_or(0)
+        // Stale lock we could not parse (corrupt/empty file): don't invent a PID.
+        (false, true, None) => println!(
+            "orchestrator: not running (unreadable lock file → it will be reclaimed on the next `totsuka run`)"
         ),
-        (false, false) => println!("orchestrator: not running"),
+        (false, false, _) => println!("orchestrator: not running"),
     }
 
     if tasks.is_empty() {
