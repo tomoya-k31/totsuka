@@ -12,7 +12,8 @@
 //!   config's `"notify_log"` file, if set, as `{"method": ..., "params": ...}`).
 //! - `task/dispatch` → replies with the config's `"session_id"` (default
 //!   `sess-mock`); `"commit_on_dispatch": true` leaves a real commit in the
-//!   worktree so the pull_request output policy has something to push.
+//!   worktree so the pull_request output policy has something to push;
+//!   `"crash_on_dispatch": true` exits mid-dispatch (crash isolation, §5.3).
 //! - `session/attach` → `attached: false` if the session id contains `gone`,
 //!   otherwise `attached: true` with a state chosen from the id (`waiting`,
 //!   `done`, `fail`, else `running`) so recovery paths are testable (#57).
@@ -111,6 +112,16 @@ fn main() {
                 Response::result(request_id(&id), Value::Null)
             }
             "task/dispatch" => {
+                // `crash_on_dispatch: true` self-destructs mid-dispatch to
+                // exercise crash isolation (§5.3) end to end: the host observes
+                // EOF and fails the task without the orchestrator dying.
+                if config
+                    .get("crash_on_dispatch")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    std::process::exit(1);
+                }
                 // Overridable so tests can steer `session/attach` behaviour
                 // (ids containing `gone`/`done`/... choose the attach reply).
                 let session_id = config
