@@ -872,6 +872,7 @@ dependencies = [
  "orchestrator-core",
  "serde",
  "serde_json",
+ "test-support",
  "tokio",
  "toml",
 ]
@@ -890,6 +891,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "test-support",
  "thiserror",
  "time",
  "tokio",
@@ -1349,6 +1351,10 @@ dependencies = [
  "rustix",
  "windows-sys",
 ]
+
+[[package]]
+name = "test-support"
+version = "0.1.0"
 
 [[package]]
 name = "thiserror"

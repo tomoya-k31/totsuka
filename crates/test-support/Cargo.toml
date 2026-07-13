@@ -1,0 +1,13 @@
+[package]
+name = "test-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared test helpers (real git repos, scratch dirs) for totsuka integration tests."
+# Test-only helper crate; never published.
+publish = false
+
+[lints]
+workspace = true

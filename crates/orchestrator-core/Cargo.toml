@@ -37,3 +37,6 @@ libc.workspace = true
 # Keychain-backed secret store is macOS-only (§5.6: platform::macos isolation).
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring.workspace = true
+
+[dev-dependencies]
+test-support = { workspace = true }

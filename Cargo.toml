@@ -4,6 +4,7 @@ members = [
     "crates/orchestrator-core",
     "crates/orchestrator-cli",
     "crates/plugin-protocol",
+    "crates/test-support",
     "plugins/task-source-github",
     "plugins/task-source-notion",
     "plugins/agent-ide-herdr",
@@ -40,6 +41,7 @@ regex = "1"
 semver = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal"] }
 plugin-protocol = { path = "crates/plugin-protocol" }
+test-support = { path = "crates/test-support" }
 sha2 = "0.10"
 toml_edit = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "default-tls"] }

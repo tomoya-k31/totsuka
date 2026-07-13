@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-14
+* **Creation**: 結合テストハーネス（#66、§9）。[テスト戦略](/quality/test-strategy.md)（テスト層・モックプラグインのシナリオ注入キー一覧・自動化済み異常系・フレーク対策・CI ゲート）、[リリース前手動チェックリスト](/quality/release-checklist.md)（herdr/orca 実機・設計プレビュー・通知・回復の目視確認）、[既知の不具合・制約](/quality/known-issues.md)（LLM VCR 未対応・down 中完了の成果物欠落・worktree フレーク解消・mock バイナリ鮮度）を新設。バイナリ E2E（`orchestrator-cli/tests/e2e.rs`）を追加し、実 `totsuka` を XDG scratch で起動して run→status→task show の全経路・waiting_input・クラッシュ隔離・dry-run を検証。mock_plugin に `crash_on_dispatch` を追加。
 * **Update**: 出力ポリシー実装（#65）。[orchestrator-core](/components/orchestrator-core.md) の `run::finalize_success` の no-op スタブを実体化し、NEW サブモジュール `run::output`（`PrCreator` seam + `GhPrCreator`=`gh pr create`、PR テンプレート描画）を追加。`pull_request`=コミット存在検証（NEW `WorktreeManager::has_commits_to_publish`、ゼロなら明示 failed）→Orchestrator が push（NEW `push_branch`、エージェントは push せず F-86）→`PrCreator` で PR 作成、`source`=蓄積したエージェント出力を `result/publish` へ（F-07）、`none`=素通し。plan×pull_request は publish 点でも拒否（F-82）。publish 失敗は worktree・コミット・セッションを保持したまま failed とし `task retry` で再開可能。config に `[output]` PR テンプレート（`pr_title_template`/`pr_body_template`）を追加。`Engine::with_pr_creator` で PR 生成を注入可能にし、実 bare origin への push + モック PR / ゼロコミット failed / source publish を結合テスト。mock_plugin に `commit_on_dispatch` を追加。
 
 ## 2026-07-13
