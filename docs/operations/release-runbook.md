@@ -1,10 +1,10 @@
 ---
 type: Runbook
 title: リリース手順（release-please / ユニバーサルバイナリ / GitHub Releases）
-description: totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリの自動ビルドと GitHub Releases 配布、Gatekeeper（ad-hoc 署名）の扱い。
+description: totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリの自動ビルドと GitHub Releases 配布、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.github/workflows
-tags: [release, ci, distribution, gatekeeper, semver]
-timestamp: 2026-07-14T04:00:00Z
+tags: [release, ci, distribution, gatekeeper, semver, github-app, pat, branch-protection]
+timestamp: 2026-07-14T05:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -17,6 +17,65 @@ release-please は自分で Release PR を作るため、リポジトリ設定�
 - Organization で管理している場合は Org 側の同名設定も有効にする（Repo 設定はそれを上回れない）。
 
 これはコード（ワークフローの `permissions:`）では代替できないリポジトリ/Org のセキュリティトグル。
+
+# トークン運用（Release PR の CI とブランチ保護）
+
+既定の `GITHUB_TOKEN` で作られた Release PR には**ワークフローが一切走らない**（GitHub の仕様）。そのため必須ステータスチェック（現状 `lint`）が永久に "Expected" になり、ブランチ保護（Ruleset）が **Release PR のマージをブロック**する。回避策は3つ。**org 展開を見据えるなら GitHub App（1）を推奨**。
+
+## 1. GitHub App（org 所有）— 推奨
+
+App が Release PR を作る → 実 identity 扱いなので CI が走り `lint` を満たす → 人が admin 不要で通常マージできる。人に紐づかず、短命トークンで安全。
+
+**セットアップ（管理者の 1 回操作）**
+
+1. **App 作成**: Org Settings → Developer settings → GitHub Apps → New。Permissions は **Repository: Contents = Read and write / Pull requests = Read and write** のみ。Webhook は不要（Active を外す）。
+2. **秘密鍵**: App の "Private keys" で 1 つ生成（`.pem` をダウンロード）。App の **App ID** を控える。
+3. **install**: 対象リポジトリ（totsuka）に App を Install。
+4. **secret 登録**: リポジトリ（または Org）Secrets に `RELEASE_APP_ID`（App ID）と `RELEASE_APP_KEY`（`.pem` の中身）を登録。
+
+**ワークフロー配線**（`release-please.yml` の `release-please` ジョブ冒頭に追加）
+
+```yaml
+      - name: Mint app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}   # ← 追加
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+```
+
+> 秘密鍵は「都度トークンを発行する材料」で、実際に露出するのは毎回発行される短命トークン。長寿命 PAT より安全側。App 名義で監査でき、担当者の異動にも影響されない。
+
+## 2. fine-grained PAT — 簡易
+
+手早いが**個人アカウントに紐づく**（作成者の退職・失効で自動化が止まる）。org では PAT を制限/禁止していることも多い。ボット専用 machine user で緩和できるが、それなら App が素直。
+
+**セットアップ**
+
+1. GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate。**Resource owner = 対象 Org**、Repository access = totsuka のみ、Permissions = **Contents: Read and write / Pull requests: Read and write**。有効期限を設定（要ローテーション）。
+2. リポジトリ Secrets に `RELEASE_PLEASE_TOKEN` として登録。
+
+**ワークフロー配線**（`release-please-action` に 1 行）
+
+```yaml
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}   # ← 追加
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+```
+
+## 3. トークンなし（admin マージ）— 現状
+
+トークン管理を増やさない。Release PR は CI が走らないままなので、リリースごとに `gh pr merge <PR番号> --squash --admin`（Ruleset の bypass_actors に RepositoryRole=Admin が既存）。保護は最強のまま、毎回 admin フラグの手間だけ。リリース頻度が低いなら現実的。
+
+> **非推奨**: Ruleset の bypass_actors に `github-actions[bot]` を足す案は避ける。bypass はマージ実行 actor にしか効かず（人間マージには無関係）、bot に自動マージさせると Release PR のレビュー関門が消える。さらに全ワークフローが main 保護をバイパスできる広い攻撃面になる。
 
 # リリースの流れ
 
