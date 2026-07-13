@@ -265,15 +265,21 @@ impl<G: GitRunner> WorktreeManager<G> {
         Ok(Worktree { path, branch })
     }
 
-    /// Whether the worktree's `HEAD` has commits not present on any `origin`
-    /// remote branch — i.e. the agent actually committed work to publish
-    /// (F-86). A fresh branch off `origin/{default}` with no agent commit
-    /// returns `false`.
+    /// Whether the worktree's `HEAD` has commits beyond `origin`'s **default
+    /// branch** — i.e. the agent actually committed work to publish (F-86).
+    ///
+    /// The comparison is against `origin/{default}`, deliberately **not**
+    /// against all origin remote branches: after a `pull_request` retry the
+    /// task's own branch is already on `origin`, so `--remotes=origin` would
+    /// count zero and wrongly report "nothing to publish". Comparing to the
+    /// default branch stays truthful across a push (the agent's commits are
+    /// still not on `main`).
     pub fn has_commits_to_publish(&self, worktree_path: &Path) -> Result<bool, WorktreeError> {
-        let out = self.git.run(
-            worktree_path,
-            &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
-        )?;
+        let default = self.detect_default_branch(worktree_path)?;
+        let range = format!("origin/{default}..HEAD");
+        let out = self
+            .git
+            .run(worktree_path, &["rev-list", "--count", &range])?;
         if !out.success() {
             return Err(WorktreeError::Git {
                 command: "rev-list".to_string(),

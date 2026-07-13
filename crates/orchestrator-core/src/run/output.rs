@@ -15,7 +15,6 @@
 //! Publishing failures are recoverable: the caller keeps the worktree and
 //! commits and fails the task so `task retry` can resume (issue #65).
 
-use std::path::Path;
 use std::process::Command;
 
 /// A pull request to open.
@@ -112,20 +111,39 @@ pub struct PrContext<'a> {
     pub summary: &'a str,
 }
 
-/// Render a PR template by substituting `{placeholder}` tokens.
+/// Render a PR template by substituting `{placeholder}` tokens in a **single
+/// pass**, so a substituted value that itself contains `{token}` text (e.g. a
+/// task title literally containing `{summary}`) is never re-expanded — that
+/// would be template injection from untrusted task data.
 pub fn render_template(template: &str, ctx: &PrContext<'_>) -> String {
-    template
-        .replace("{title}", ctx.title)
-        .replace("{url}", ctx.url)
-        .replace("{source}", ctx.source)
-        .replace("{task_id}", ctx.task_id)
-        .replace("{summary}", ctx.summary)
-}
-
-/// Whether `path` is inside a worktree that git can operate on (cheap guard for
-/// finalize paths where the worktree may already be gone).
-pub fn worktree_exists(path: &Path) -> bool {
-    path.exists()
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            // Unbalanced `{`: emit the rest literally.
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let key = &after[..close];
+        match key {
+            "title" => out.push_str(ctx.title),
+            "url" => out.push_str(ctx.url),
+            "source" => out.push_str(ctx.source),
+            "task_id" => out.push_str(ctx.task_id),
+            "summary" => out.push_str(ctx.summary),
+            // Unknown placeholder: keep it verbatim (helps spot typos).
+            _ => {
+                out.push('{');
+                out.push_str(key);
+                out.push('}');
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -154,5 +172,26 @@ mod tests {
             render_template("{source}#{task_id}: {title}", &ctx),
             "github#1: Fix login"
         );
+    }
+
+    #[test]
+    fn substituted_values_are_not_re_expanded() {
+        // A title containing a placeholder token must be inserted literally,
+        // not treated as another template directive (injection guard).
+        let ctx = PrContext {
+            title: "Handle {summary} field",
+            url: "u",
+            source: "s",
+            task_id: "1",
+            summary: "SECRET",
+        };
+        assert_eq!(
+            render_template("{title}", &ctx),
+            "Handle {summary} field",
+            "the title's literal {{summary}} must not expand to the summary"
+        );
+        // Unknown placeholders are kept verbatim; unbalanced braces are literal.
+        assert_eq!(render_template("{bogus}", &ctx), "{bogus}");
+        assert_eq!(render_template("a { b", &ctx), "a { b");
     }
 }

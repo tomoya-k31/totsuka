@@ -422,7 +422,15 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 // The agent finished while we were down. Re-subscribing does
                 // not replay a terminal state (plugins only stream *future*
                 // changes), so finalize now instead of waiting forever.
-                TaskState::Publishing => self.finalize_success(&record).await?,
+                TaskState::Publishing => {
+                    // Restore the published artifact captured on the
+                    // BeginPublish transition, so a crash *during* the previous
+                    // finalize does not publish a placeholder.
+                    if let Some(artifact) = self.persisted_artifact(outcome.task_id)? {
+                        self.agent_output.insert(outcome.task_id, artifact);
+                    }
+                    self.finalize_success(&record).await?;
+                }
                 // Surface the open question again (F-35); the agent will not
                 // re-announce it.
                 TaskState::WaitingInput => {
@@ -1051,6 +1059,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     ) -> Result<(), EngineError> {
         tracing::error!(task_id = record.id, "dispatch failed: {reason}");
         self.release_slot(record.id);
+        self.agent_output.remove(&record.id);
         self.db.apply_event(
             record.id,
             TaskEvent::Fail,
@@ -1181,7 +1190,18 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     _ => &[],
                 };
                 for &event in events {
-                    self.db.apply_event(task_id, event, Some(detail.clone()))?;
+                    // Persist the accumulated agent output on the BeginPublish
+                    // transition, so a crash before finalize can recover the
+                    // artifact from the audit log (source publish / PR summary).
+                    let event_detail = if event == TaskEvent::BeginPublish {
+                        serde_json::json!({
+                            "kind": "agent_state", "state": state,
+                            "publish_artifact": self.agent_output.get(&task_id),
+                        })
+                    } else {
+                        detail.clone()
+                    };
+                    self.db.apply_event(task_id, event, Some(event_detail))?;
                 }
                 self.finalize_success(&record).await?;
             }
@@ -1193,6 +1213,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 )?;
                 self.release_slot(task_id);
                 self.drop_task_sessions(task_id);
+                self.agent_output.remove(&task_id);
                 self.stats.failed += 1;
                 self.write_back_status(&record, false).await;
                 // The worktree is kept for `task retry` (F-44).
@@ -1215,9 +1236,24 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// On a **publishing failure** the task is failed but its worktree and
     /// commits are kept, so `task retry` can resume from here (issue #65).
     async fn finalize_success(&mut self, record: &TaskRecord) -> Result<(), EngineError> {
-        let policy = workflows_by_name(&self.settings.workflows)
+        // A finished task whose workflow vanished from config still holds the
+        // agent's commits; treat it as a recoverable publish failure rather
+        // than silently completing and deleting the worktree (never confuse a
+        // missing workflow with an explicit `output = none`).
+        let Some(policy) = workflows_by_name(&self.settings.workflows)
             .get(record.workflow.as_str())
-            .map(|w| w.output);
+            .map(|w| w.output)
+        else {
+            return self
+                .fail_publish(
+                    record,
+                    format!(
+                        "workflow `{}` is no longer configured → restore it (worktree and commits are kept) or `totsuka task cancel {}`",
+                        record.workflow, record.id
+                    ),
+                )
+                .await;
+        };
 
         match self.execute_output_policy(record, policy).await {
             Ok(pr_url) => {
@@ -1228,7 +1264,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     TaskEvent::Complete,
                     Some(serde_json::json!({
                         "kind": "publish",
-                        "policy": policy.map(policy_str),
+                        "policy": policy_str(policy),
                         "pr_url": pr_url,
                     })),
                 )?;
@@ -1239,27 +1275,38 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 self.cleanup_worktree(record.id)?;
                 notify_all(&self.plugins.notifiers, NotifierEvent::Done, record, None);
                 tracing::info!(task_id = record.id, "task done");
+                Ok(())
             }
-            Err(reason) => {
-                // Publishing failed: fail the task but KEEP the worktree +
-                // commits + session so `task retry` resumes (issue #65).
-                tracing::error!(task_id = record.id, "output policy failed: {reason}");
-                self.db.apply_event(
-                    record.id,
-                    TaskEvent::Fail,
-                    Some(serde_json::json!({ "kind": "publish", "reason": reason })),
-                )?;
-                self.release_slot(record.id);
-                self.stats.failed += 1;
-                self.write_back_status(record, false).await;
-                notify_all(
-                    &self.plugins.notifiers,
-                    NotifierEvent::Failed,
-                    record,
-                    Some(reason),
-                );
-            }
+            Err(reason) => self.fail_publish(record, reason).await,
         }
+    }
+
+    /// Fail a task at the publishing stage, KEEPING its worktree, commits and
+    /// session so `task retry` can resume (issue #65). The accumulated agent
+    /// output is dropped so a retry re-captures fresh output (no duplication in
+    /// the PR body). The source status is intentionally left unchanged: a
+    /// recoverable publish failure must not flap the source task to
+    /// `on_failure` and back on the next successful retry.
+    async fn fail_publish(
+        &mut self,
+        record: &TaskRecord,
+        reason: String,
+    ) -> Result<(), EngineError> {
+        tracing::error!(task_id = record.id, "output policy failed: {reason}");
+        self.db.apply_event(
+            record.id,
+            TaskEvent::Fail,
+            Some(serde_json::json!({ "kind": "publish", "reason": reason.clone() })),
+        )?;
+        self.release_slot(record.id);
+        self.agent_output.remove(&record.id);
+        self.stats.failed += 1;
+        notify_all(
+            &self.plugins.notifiers,
+            NotifierEvent::Failed,
+            record,
+            Some(reason),
+        );
         Ok(())
     }
 
@@ -1268,12 +1315,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     async fn execute_output_policy(
         &self,
         record: &TaskRecord,
-        policy: Option<OutputPolicy>,
+        policy: OutputPolicy,
     ) -> Result<Option<String>, String> {
         match policy {
-            None | Some(OutputPolicy::None) => Ok(None),
-            Some(OutputPolicy::Source) => self.publish_to_source(record).await.map(|()| None),
-            Some(OutputPolicy::PullRequest) => {
+            OutputPolicy::None => Ok(None),
+            OutputPolicy::Source => self.publish_to_source(record).await.map(|()| None),
+            OutputPolicy::PullRequest => {
                 // F-82: plan mode must never push (config validation blocks
                 // this, but never trust it at the publish point).
                 if record.mode == "plan" {
@@ -1287,6 +1334,24 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
+    /// The agent artifact persisted on the most recent `BeginPublish`
+    /// transition (the `publish_artifact` field of its event `detail`), if any.
+    /// Used to recover the artifact across a restart.
+    fn persisted_artifact(&self, task_id: i64) -> Result<Option<String>, EngineError> {
+        Ok(self
+            .db
+            .list_events(task_id)?
+            .into_iter()
+            .rev()
+            .find_map(|e| {
+                e.detail
+                    .as_ref()
+                    .and_then(|d| d.get("publish_artifact"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            }))
+    }
+
     /// `output = source` (F-07): hand the accumulated artifact to the task
     /// source plugin's `result/publish`.
     async fn publish_to_source(&self, record: &TaskRecord) -> Result<(), String> {
@@ -1295,12 +1360,21 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .sources
             .get(&record.source)
             .ok_or_else(|| format!("task source `{}` is not launched", record.source))?;
+        // The accumulated agent output is the artifact. When it is genuinely
+        // unavailable — an agent that finished while the orchestrator was fully
+        // down streamed nothing to anyone — publish an honest note rather than
+        // pretend a result exists.
         let content = self
             .agent_output
             .get(&record.id)
             .filter(|s| !s.trim().is_empty())
             .cloned()
-            .unwrap_or_else(|| format!("Result for task: {}", record.title));
+            .unwrap_or_else(|| {
+                format!(
+                    "_totsuka: task `{}` completed, but the agent output was not captured (recovered run)._",
+                    record.title
+                )
+            });
         let params = ResultPublishParams {
             task_id: record.source_task_id.clone(),
             content,
@@ -1471,6 +1545,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 Some(serde_json::json!({ "kind": "plugin_crash", "plugin": plugin })),
             )?;
             self.release_slot(task_id);
+            self.agent_output.remove(&task_id);
             self.stats.failed += 1;
             self.write_back_status(&record, false).await;
             notify_all(
