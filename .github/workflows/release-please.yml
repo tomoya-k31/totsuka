@@ -74,7 +74,9 @@ jobs:
         run: |
           cp README.md LICENSE dist/
           tar -czf "totsuka-${TAG}-macos-universal.tar.gz" -C dist totsuka README.md LICENSE
-          shasum -a 256 "totsuka-${TAG}-macos-universal.tar.gz" \
+          # Write only the raw SHA-256 (no filename) so the Homebrew formula bump
+          # can consume it verbatim.
+          shasum -a 256 "totsuka-${TAG}-macos-universal.tar.gz" | awk '{print $1}' \
             | tee "totsuka-${TAG}-macos-universal.tar.gz.sha256"
 
       - name: Attach artifacts to the release

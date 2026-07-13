@@ -1,9 +1,11 @@
 # Homebrew formula template for totsuka.
 #
 # This lives in the tap repository `tomoya-k31/homebrew-totsuka` as
-# `Formula/totsuka.rb`. The release-build workflow (or the manual runbook,
-# docs/operations/release-runbook.md) bumps `version`, `url`, and `sha256` on
-# each release. `VERSION`/`SHA256` are placeholders replaced at bump time.
+# `Formula/totsuka.rb`. On each release the `universal-binary` job in
+# `.github/workflows/release-please.yml` produces the tarball and its raw
+# `.sha256`; bump `version`, `url`, and `sha256` here per the manual runbook,
+# docs/operations/release-runbook.md. `VERSION`/`SHA256` are placeholders
+# replaced at bump time.
 class Totsuka < Formula
   desc "AI-driven dev-flow automation: detect task instructions and orchestrate them to AI agents"
   homepage "https://github.com/tomoya-k31/totsuka"
