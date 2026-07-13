@@ -13,9 +13,73 @@ jobs:
     name: Release Please
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - name: Run release-please
+        id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Build in the SAME workflow run: a Release published with the default
+  # GITHUB_TOKEN does not trigger a separate `on: release` workflow, so the
+  # universal-binary build is gated on release-please's `release_created`
+  # output here instead.
+  universal-binary:
+    name: Build macOS universal binary
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust toolchain (both macOS targets)
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Build both architectures
+        # No --locked: release-please bumps the version in Cargo.toml (not
+        # Cargo.lock), so the lock is intentionally out of sync until the first
+        # build regenerates it.
+        run: |
+          cargo build --release --bin totsuka --target x86_64-apple-darwin
+          cargo build --release --bin totsuka --target aarch64-apple-darwin
+
+      - name: Create universal binary with lipo
+        run: |
+          mkdir -p dist
+          lipo -create -output dist/totsuka \
+            target/x86_64-apple-darwin/release/totsuka \
+            target/aarch64-apple-darwin/release/totsuka
+          # Ad-hoc signature (v1): satisfies Gatekeeper after the user removes
+          # the quarantine attribute. Developer ID signing / notarization is a
+          # later step (see docs/operations/release-runbook.md).
+          codesign --sign - --force dist/totsuka
+          lipo -info dist/totsuka
+
+      - name: Package the tarball
+        run: |
+          cp README.md LICENSE dist/
+          tar -czf "totsuka-${TAG}-macos-universal.tar.gz" -C dist totsuka README.md LICENSE
+          shasum -a 256 "totsuka-${TAG}-macos-universal.tar.gz" \
+            | tee "totsuka-${TAG}-macos-universal.tar.gz.sha256"
+
+      - name: Attach artifacts to the release
+        run: |
+          gh release upload "${TAG}" \
+            "totsuka-${TAG}-macos-universal.tar.gz" \
+            "totsuka-${TAG}-macos-universal.tar.gz.sha256" \
+            --clobber

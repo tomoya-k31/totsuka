@@ -7,18 +7,52 @@
     ".": {
       "package-name": "totsuka",
       "changelog-path": "CHANGELOG.md",
-      "extra-files": ["Cargo.toml"]
+      "extra-files": [
+        "Cargo.toml"
+      ]
     }
   },
   "changelog-sections": [
-    { "type": "feat", "section": "Features" },
-    { "type": "fix", "section": "Bug Fixes" },
-    { "type": "perf", "section": "Performance" },
-    { "type": "revert", "section": "Reverts" },
-    { "type": "refactor", "section": "Refactors" },
-    { "type": "docs", "section": "Documentation" },
-    { "type": "test", "section": "Tests", "hidden": true },
-    { "type": "chore", "section": "Chores", "hidden": true },
-    { "type": "style", "section": "Styles", "hidden": true }
-  ]
+    {
+      "type": "feat",
+      "section": "Features"
+    },
+    {
+      "type": "fix",
+      "section": "Bug Fixes"
+    },
+    {
+      "type": "perf",
+      "section": "Performance"
+    },
+    {
+      "type": "revert",
+      "section": "Reverts"
+    },
+    {
+      "type": "refactor",
+      "section": "Refactors"
+    },
+    {
+      "type": "docs",
+      "section": "Documentation"
+    },
+    {
+      "type": "test",
+      "section": "Tests",
+      "hidden": true
+    },
+    {
+      "type": "chore",
+      "section": "Chores",
+      "hidden": true
+    },
+    {
+      "type": "style",
+      "section": "Styles",
+      "hidden": true
+    }
+  ],
+  "include-component-in-tag": false,
+  "tag-separator": "-"
 }

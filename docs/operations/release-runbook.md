@@ -13,7 +13,7 @@ owner: tomoya-k31
 
 1. **Release PR**: `main` への push ごとに [release-please](https://github.com/googleapis/release-please)（`.github/workflows/release-please.yml`）が Conventional Commits を集計し、SemVer 版と CHANGELOG（Keep a Changelog 形式）を持つ Release PR を作成・更新する。設定は `release-please-config.json` / `.release-please-manifest.json`。
 2. **リリース確定**: Release PR をマージすると release-please が `vX.Y.Z` タグと GitHub Release を作成し、`Cargo.toml` の `[workspace.package] version`（`# x-release-please-version` 注釈行）と `CHANGELOG.md` を bump する。
-3. **バイナリ添付**: Release の `published` イベントで `.github/workflows/release.yml` が起動し、macOS ランナーで `x86_64-apple-darwin` と `aarch64-apple-darwin` をビルド、`lipo` でユニバーサル化、ad-hoc 署名して `totsuka-vX.Y.Z-macos-universal.tar.gz`（+ `.sha256`）を同じ Release に添付する。
+3. **バイナリ添付**: 同じ `release-please.yml` 実行内の `universal-binary` ジョブが（release-please の `release_created` 出力を条件に）起動し、macOS ランナーで `x86_64-apple-darwin` と `aarch64-apple-darwin` をビルド、`lipo` でユニバーサル化、ad-hoc 署名して `totsuka-vX.Y.Z-macos-universal.tar.gz`（+ `.sha256`）を Release に添付する。別ワークフローの `on: release` にしないのは、既定 GITHUB_TOKEN が発行した Release イベントは他ワークフローを起動しないため。ビルドは `--locked` を使わない（release-please は Cargo.toml の版だけ bump し Cargo.lock は更新しないため、初回ビルドでロックを再生成させる）。
 
 > プラグインプロトコルの版はアプリ本体と独立（#50）。totsuka のリリースはプロトコル版の変更を意味しない。CHANGELOG に破壊的プロトコル変更を書く場合は明示する。
 
@@ -32,7 +32,7 @@ owner: tomoya-k31
 # Gatekeeper（macOS）
 
 - v1 は **ad-hoc 署名**（`codesign --sign -`）。初回起動で Gatekeeper に阻まれた場合、利用者は quarantine 属性を除去する: `xattr -d com.apple.quarantine "$(brew --prefix)/bin/totsuka"`。
-- Developer ID 署名 / notarization は Open Question #5（社外公開判断）の決定後に対応する。決定したら本 runbook と `release.yml` の署名ステップを更新する。
+- Developer ID 署名 / notarization は Open Question #5（社外公開判断）の決定後に対応する。決定したら本 runbook と `release-please.yml` の `universal-binary` ジョブの署名ステップを更新する。
 
 # ロールバック
 
