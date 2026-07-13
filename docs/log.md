@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-07-14
+* **Update**: 出力ポリシー実装（#65）。[orchestrator-core](/components/orchestrator-core.md) の `run::finalize_success` の no-op スタブを実体化し、NEW サブモジュール `run::output`（`PrCreator` seam + `GhPrCreator`=`gh pr create`、PR テンプレート描画）を追加。`pull_request`=コミット存在検証（NEW `WorktreeManager::has_commits_to_publish`、ゼロなら明示 failed）→Orchestrator が push（NEW `push_branch`、エージェントは push せず F-86）→`PrCreator` で PR 作成、`source`=蓄積したエージェント出力を `result/publish` へ（F-07）、`none`=素通し。plan×pull_request は publish 点でも拒否（F-82）。publish 失敗は worktree・コミット・セッションを保持したまま failed とし `task retry` で再開可能。config に `[output]` PR テンプレート（`pr_title_template`/`pr_body_template`）を追加。`Engine::with_pr_creator` で PR 生成を注入可能にし、実 bare origin への push + モック PR / ゼロコミット failed / source publish を結合テスト。mock_plugin に `commit_on_dispatch` を追加。
+
 ## 2026-07-13
 * **Update**: CLI コマンド体系（#64）。[orchestrator-cli](/components/orchestrator-cli.md) に `init`（雛形生成・上書きなし）/ `status [--json]`（SQLite 直読 + run.lock の stale 明示 F-74）/ `task list|show|cancel|retry`（show はイベント全履歴 = 新設 `StateDb::list_events`；cancel/retry は状態DB遷移で次回 run が回復/再利用 F-44）/ `config validate [--offline]|show [--redacted]`（F-59/63）/ `logs [-f] [--task]` / `doctor [--json]`（git・config・DB・プラグイン疎通・LLMキー・孤児 worktree F-24 の対話掃除）/ `completion <shell>`（clap_complete 新規依存）と共通フラグ `--config`/`--debug` を実装。エラーは「原因 + 次のアクション」規約（§7）。実バイナリ駆動の snapshot/JSON パーステストを追加。
 * **Creation**: [glossary](/glossary/index.md) にドメイン用語 7 件を新設（#64、§8）: [Task](/glossary/task.md)・[Task Source](/glossary/task-source.md)・[Agent IDE](/glossary/agent-ide.md)・[Notifier](/glossary/notifier.md)・[worktree](/glossary/worktree.md)・[dispatch](/glossary/dispatch.md)・[Workflow](/glossary/workflow.md)。ヘルプ・ログ・コードの用語統一の基準。

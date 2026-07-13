@@ -20,11 +20,32 @@ use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::state::TaskState;
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::repo_select::SelectConfig;
+use orchestrator_core::run::output::{PrCreator, PrError, PrRequest};
 use orchestrator_core::run::{Engine, EngineSettings, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
 use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_BRANCH_TEMPLATE};
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
+use std::sync::{Arc, Mutex};
+
+/// A pull-request creator that records requests and returns a canned URL, so
+/// the push flow is exercised without a real `gh`/GitHub.
+#[derive(Clone, Default)]
+struct RecordingPrCreator {
+    requests: Arc<Mutex<Vec<PrRequest>>>,
+    fail: bool,
+}
+
+impl PrCreator for RecordingPrCreator {
+    fn create_pr(&self, req: &PrRequest) -> Result<String, PrError> {
+        self.requests.lock().unwrap().push(req.clone());
+        if self.fail {
+            Err(PrError::Failed("mock refused".into()))
+        } else {
+            Ok("https://example.com/pr/1".to_string())
+        }
+    }
+}
 
 /// Path to the compiled mock plugin binary.
 fn mock_plugin() -> PathBuf {
@@ -142,7 +163,29 @@ fn settings(repo_path: &Path) -> EngineSettings {
         select: SelectConfig::default(),
         poll_intervals: HashMap::new(),
         readme_cache_dir: None,
+        pr_title_template: "totsuka: {title}".to_string(),
+        pr_body_template: "Task {title} ({url})\n\n{summary}".to_string(),
     }
+}
+
+/// Workflows for one `mode` × `output` combination (source `mock_src`, agent
+/// `mock_agent`).
+fn workflows_with(mode: &str, output: &str) -> Vec<Workflow> {
+    let cfg = RootConfig::from_toml_str(&format!(
+        r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {{}}
+mode = "{mode}"
+agent = "mock_agent"
+output = "{output}"
+on_success = {{ set_status = "レビュー待ち" }}
+on_failure = {{ set_status = "失敗" }}
+"#
+    ))
+    .unwrap();
+    Workflow::from_configs(&cfg.workflows)
 }
 
 /// One fetchable task in the mock source's config shape. The `source` field
@@ -655,6 +698,199 @@ async fn agent_without_state_stream_fails_dispatch_instead_of_hanging() {
             .iter()
             .any(|n| n["params"]["event"] == "failed"),
         "failed notification delivered: {notifications:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn output_pull_request_pushes_branch_and_opens_pr() {
+    let base = scratch("pr");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    // The mock agent commits in the worktree, then reports done.
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({ "stream_states": ["running", "done"], "commit_on_dispatch": true }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = settings(&repo);
+    settings.workflows = workflows_with("implement", "pull_request");
+    let pr = RecordingPrCreator::default();
+    let mut engine = Engine::with_pr_creator(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+        Box::new(pr.clone()),
+    )
+    .await;
+
+    let summary = tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("one-shot settles")
+    .unwrap();
+    assert_eq!(summary.stats.done, 1);
+    assert_eq!(summary.stats.failed, 0);
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.state, TaskState::Done);
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    // The branch was pushed to the bare origin.
+    let branches = String::from_utf8(
+        Command::new("git")
+            .current_dir(base.join("origin.git"))
+            .args(["branch", "--list", "agent/*"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(
+        branches.contains("agent/mock_src-1"),
+        "branch pushed to origin: {branches:?}"
+    );
+
+    // The PR was opened with the templated title/body.
+    let requests = pr.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].head_branch, "agent/mock_src-1");
+    assert_eq!(requests[0].title, "totsuka: task 1");
+    assert!(requests[0].body.contains("task 1"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn output_pull_request_with_zero_commits_fails() {
+    let base = scratch("pr_nocommit");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    // Agent reports done WITHOUT committing anything.
+    let plugins = plugin_set(
+        json!([mock_task("2")]),
+        json!({ "stream_states": ["running", "done"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = settings(&repo);
+    settings.workflows = workflows_with("implement", "pull_request");
+    let pr = RecordingPrCreator::default();
+    let mut engine = Engine::with_pr_creator(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+        Box::new(pr.clone()),
+    )
+    .await;
+
+    let summary = tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("settles")
+    .unwrap();
+    assert_eq!(summary.stats.failed, 1, "zero-commit PR must fail");
+    assert_eq!(summary.stats.done, 0);
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "2")
+        .unwrap()
+        .unwrap();
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    // No PR attempted, and the worktree is KEPT for retry (issue #65).
+    assert!(pr.requests.lock().unwrap().is_empty());
+    assert_eq!(task.state, TaskState::Failed);
+    let worktree = PathBuf::from(task.worktree_path.unwrap());
+    assert!(worktree.exists(), "worktree kept for retry");
+
+    // on_failure status was written back (F-84).
+    let source_calls = read_log(&source_log);
+    assert!(
+        source_calls
+            .iter()
+            .any(|c| c["method"] == "task/update_status" && c["params"]["status"] == "失敗"),
+        "on_failure write-back: {source_calls:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn output_source_publishes_result_artifact() {
+    let base = scratch("source_out");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    // Plan mode + source output: the agent streams output, which is published.
+    let plugins = plugin_set(
+        json!([mock_task("5")]),
+        json!({ "stream_states": ["running", "done"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = settings(&repo);
+    settings.workflows = workflows_with("plan", "source");
+    settings.cleanup_plan = CleanupPolicy::Immediate;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let summary = tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("settles")
+    .unwrap();
+    assert_eq!(summary.stats.done, 1);
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "5")
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.state, TaskState::Done);
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    // The accumulated agent output flowed to result/publish (F-07).
+    let source_calls = read_log(&source_log);
+    let publish = source_calls
+        .iter()
+        .find(|c| c["method"] == "result/publish")
+        .expect("result/publish called");
+    assert_eq!(publish["params"]["task_id"], "5");
+    assert!(
+        publish["params"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("compiling"),
+        "streamed agent output published: {publish}"
     );
     let _ = std::fs::remove_dir_all(&base);
 }

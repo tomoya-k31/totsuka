@@ -265,6 +265,37 @@ impl<G: GitRunner> WorktreeManager<G> {
         Ok(Worktree { path, branch })
     }
 
+    /// Whether the worktree's `HEAD` has commits not present on any `origin`
+    /// remote branch — i.e. the agent actually committed work to publish
+    /// (F-86). A fresh branch off `origin/{default}` with no agent commit
+    /// returns `false`.
+    pub fn has_commits_to_publish(&self, worktree_path: &Path) -> Result<bool, WorktreeError> {
+        let out = self.git.run(
+            worktree_path,
+            &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
+        )?;
+        if !out.success() {
+            return Err(WorktreeError::Git {
+                command: "rev-list".to_string(),
+                stderr: out.stderr,
+            });
+        }
+        Ok(out.stdout.trim().parse::<u64>().unwrap_or(0) > 0)
+    }
+
+    /// Push the worktree's branch to `origin`, setting upstream (F-86). The
+    /// Orchestrator — never the agent — performs the push.
+    pub fn push_branch(&self, worktree_path: &Path, branch: &str) -> Result<(), WorktreeError> {
+        let out = self.run_with_lock_retry(worktree_path, &["push", "-u", "origin", branch])?;
+        if !out.success() {
+            return Err(WorktreeError::Git {
+                command: "push".to_string(),
+                stderr: out.stderr,
+            });
+        }
+        Ok(())
+    }
+
     /// Detect `origin`'s default branch (e.g. `main`), falling back to `main`.
     fn detect_default_branch(&self, repo_path: &Path) -> Result<String, WorktreeError> {
         let out = self

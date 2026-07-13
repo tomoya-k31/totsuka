@@ -20,14 +20,17 @@
 //! polling each source at its interval (F-06) until shutdown. **Dry run**:
 //! [`Engine::dry_run`] reports what would happen with zero side effects.
 
+pub mod output;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use plugin_protocol::method;
 use plugin_protocol::methods::{
-    AgentState, ExecutionMode, NotifierEvent, NotifyParams, StateNotification, TaskDispatchParams,
-    TaskDispatchResult, TaskUpdateStatusParams, TasksFetchParams, TasksFetchResult,
+    AgentState, ExecutionMode, NotifierEvent, NotifyParams, ResultPublishParams, StateNotification,
+    TaskDispatchParams, TaskDispatchResult, TaskUpdateStatusParams, TasksFetchParams,
+    TasksFetchResult,
 };
 use plugin_protocol::{Notification, Task};
 use serde_json::Value;
@@ -37,7 +40,7 @@ use crate::adapters::plugin_host::Plugin;
 use crate::adapters::state_db::{NewTask, StateDb, StateError, TaskRecord};
 use crate::config::{
     CleanupPolicyConfig, CleanupPolicyName, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_POLL_INTERVAL_SECS,
-    PluginKind, RootConfig, WorkflowMode, resolve::ResolveError,
+    OutputPolicy, PluginKind, RootConfig, WorkflowMode, resolve::ResolveError,
 };
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::domain::workflow::{Workflow, match_workflow};
@@ -46,6 +49,10 @@ use crate::ports::git::GitRunner;
 use crate::ports::llm::{ChatRequest, LlmError, LlmRouter};
 use crate::recovery::{self, RecoveryReport, RetryPlan};
 use crate::repo_select::{ReadmeCache, RepoCandidate, RepoDecision, SelectConfig, select_repo};
+use crate::run::output::{
+    DEFAULT_PR_BODY_TEMPLATE, DEFAULT_PR_TITLE_TEMPLATE, GhPrCreator, PrContext, PrCreator,
+    PrRequest, render_template,
+};
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
 use crate::worktree::{
     CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE, DEFAULT_LOCATION_TEMPLATE,
@@ -105,6 +112,10 @@ pub struct EngineSettings {
     pub poll_intervals: HashMap<String, Duration>,
     /// README head cache directory (`$XDG_CACHE_HOME/totsuka`), if any.
     pub readme_cache_dir: Option<PathBuf>,
+    /// Pull-request title template (F-86).
+    pub pr_title_template: String,
+    /// Pull-request body template (F-86).
+    pub pr_body_template: String,
 }
 
 /// Interpret a parsed [`RootConfig`] into [`EngineSettings`].
@@ -175,6 +186,16 @@ pub fn settings_from_config(
         },
         poll_intervals,
         readme_cache_dir: None,
+        pr_title_template: cfg
+            .output
+            .pr_title_template
+            .clone()
+            .unwrap_or_else(|| DEFAULT_PR_TITLE_TEMPLATE.to_string()),
+        pr_body_template: cfg
+            .output
+            .pr_body_template
+            .clone()
+            .unwrap_or_else(|| DEFAULT_PR_BODY_TEMPLATE.to_string()),
     })
 }
 
@@ -294,6 +315,12 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     /// Kept so `events.recv()` never observes a closed channel.
     _events_tx: mpsc::UnboundedSender<PluginEvent>,
     readme_cache: Option<ReadmeCache>,
+    /// Accumulated agent output (streamed `log_chunk`s) per task, used as the
+    /// `output = source` publish artifact (F-07).
+    agent_output: HashMap<i64, String>,
+    /// Opens pull requests for `output = pull_request` (F-86); a seam so the
+    /// push flow is testable without hitting GitHub.
+    pr_creator: Box<dyn PrCreator>,
     stats: RunStats,
 }
 
@@ -302,12 +329,27 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// plugin so `state/notification` streams (F-38) are consumed from the
     /// moment of construction — dispatch must happen after this, never before,
     /// or early notifications would be dropped.
+    /// Build an engine with the production [`GhPrCreator`] (opens PRs via
+    /// `gh`). Tests use [`Engine::with_pr_creator`] to inject a fake.
     pub async fn new(
         db: StateDb,
         settings: EngineSettings,
         plugins: PluginSet,
         git: G,
         llm: Option<L>,
+    ) -> Self {
+        Self::with_pr_creator(db, settings, plugins, git, llm, Box::new(GhPrCreator)).await
+    }
+
+    /// Build an engine with an explicit pull-request creator (the seam tests
+    /// use to exercise the push/PR flow without hitting GitHub).
+    pub async fn with_pr_creator(
+        db: StateDb,
+        settings: EngineSettings,
+        plugins: PluginSet,
+        git: G,
+        llm: Option<L>,
+        pr_creator: Box<dyn PrCreator>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         for (name, plugin) in &plugins.agents {
@@ -340,6 +382,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             events: rx,
             _events_tx: tx,
             readme_cache,
+            agent_output: HashMap::new(),
+            pr_creator,
             stats: RunStats::default(),
         }
     }
@@ -1036,6 +1080,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 };
                 if let Some(chunk) = &note.log_chunk {
                     tracing::debug!(task_id, "agent log: {chunk}");
+                    // Accumulate the streamed output; it is the `output = source`
+                    // publish artifact (F-07) and the PR body `{summary}`.
+                    let buf = self.agent_output.entry(task_id).or_default();
+                    buf.push_str(chunk);
+                    if !chunk.ends_with('\n') {
+                        buf.push('\n');
+                    }
                 }
                 self.apply_agent_state(task_id, &plugin, note.state, note.log_chunk)
                     .await
@@ -1157,31 +1208,156 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 
-    /// Terminal success processing: output policy (#65 stub) → status
-    /// write-back (F-84) → complete → worktree cleanup (F-23/F-85) → notify.
-    /// `record` may be in any pre-`Complete` pipeline state (usually just
-    /// advanced to `Publishing`).
+    /// Terminal processing for a task whose agent finished: run the workflow's
+    /// output policy (#65), then either complete or fail.
+    ///
+    /// `record` is in a pre-`Complete` pipeline state (usually `Publishing`).
+    /// On a **publishing failure** the task is failed but its worktree and
+    /// commits are kept, so `task retry` can resume from here (issue #65).
     async fn finalize_success(&mut self, record: &TaskRecord) -> Result<(), EngineError> {
-        // Output policy execution (push/PR or result/publish) lands in #65;
-        // v1 of the loop treats it as a no-op and proceeds to completion.
-        tracing::debug!(
-            task_id = record.id,
-            "output policy execution is deferred to #65"
-        );
+        let policy = workflows_by_name(&self.settings.workflows)
+            .get(record.workflow.as_str())
+            .map(|w| w.output);
 
-        self.write_back_status(record, true).await;
-        self.db.apply_event(
-            record.id,
-            TaskEvent::Complete,
-            Some(serde_json::json!({ "kind": "publish", "output": "deferred(#65)" })),
-        )?;
-        self.release_slot(record.id);
-        self.drop_task_sessions(record.id);
-        self.stats.done += 1;
-        self.cleanup_worktree(record.id)?;
-        notify_all(&self.plugins.notifiers, NotifierEvent::Done, record, None);
-        tracing::info!(task_id = record.id, "task done");
+        match self.execute_output_policy(record, policy).await {
+            Ok(pr_url) => {
+                // Success: on_success write-back (F-84) → Complete → cleanup.
+                self.write_back_status(record, true).await;
+                self.db.apply_event(
+                    record.id,
+                    TaskEvent::Complete,
+                    Some(serde_json::json!({
+                        "kind": "publish",
+                        "policy": policy.map(policy_str),
+                        "pr_url": pr_url,
+                    })),
+                )?;
+                self.release_slot(record.id);
+                self.drop_task_sessions(record.id);
+                self.agent_output.remove(&record.id);
+                self.stats.done += 1;
+                self.cleanup_worktree(record.id)?;
+                notify_all(&self.plugins.notifiers, NotifierEvent::Done, record, None);
+                tracing::info!(task_id = record.id, "task done");
+            }
+            Err(reason) => {
+                // Publishing failed: fail the task but KEEP the worktree +
+                // commits + session so `task retry` resumes (issue #65).
+                tracing::error!(task_id = record.id, "output policy failed: {reason}");
+                self.db.apply_event(
+                    record.id,
+                    TaskEvent::Fail,
+                    Some(serde_json::json!({ "kind": "publish", "reason": reason })),
+                )?;
+                self.release_slot(record.id);
+                self.stats.failed += 1;
+                self.write_back_status(record, false).await;
+                notify_all(
+                    &self.plugins.notifiers,
+                    NotifierEvent::Failed,
+                    record,
+                    Some(reason),
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// Execute the output policy for a finished task. Returns the PR URL (for
+    /// `pull_request`) or `None`, or an error reason on failure.
+    async fn execute_output_policy(
+        &self,
+        record: &TaskRecord,
+        policy: Option<OutputPolicy>,
+    ) -> Result<Option<String>, String> {
+        match policy {
+            None | Some(OutputPolicy::None) => Ok(None),
+            Some(OutputPolicy::Source) => self.publish_to_source(record).await.map(|()| None),
+            Some(OutputPolicy::PullRequest) => {
+                // F-82: plan mode must never push (config validation blocks
+                // this, but never trust it at the publish point).
+                if record.mode == "plan" {
+                    return Err(
+                        "plan mode must not open a pull request → use output = source or none"
+                            .to_string(),
+                    );
+                }
+                self.open_pull_request(record).await.map(Some)
+            }
+        }
+    }
+
+    /// `output = source` (F-07): hand the accumulated artifact to the task
+    /// source plugin's `result/publish`.
+    async fn publish_to_source(&self, record: &TaskRecord) -> Result<(), String> {
+        let source = self
+            .plugins
+            .sources
+            .get(&record.source)
+            .ok_or_else(|| format!("task source `{}` is not launched", record.source))?;
+        let content = self
+            .agent_output
+            .get(&record.id)
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("Result for task: {}", record.title));
+        let params = ResultPublishParams {
+            task_id: record.source_task_id.clone(),
+            content,
+            format: Some("markdown".to_string()),
+        };
+        source
+            .call::<_, Value>(method::RESULT_PUBLISH, &params)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("result/publish failed: {e}"))
+    }
+
+    /// `output = pull_request` (F-86): verify commits exist, push the branch,
+    /// open the PR. The Orchestrator — never the agent — pushes.
+    async fn open_pull_request(&self, record: &TaskRecord) -> Result<String, String> {
+        let (Some(path), Some(branch)) = (&record.worktree_path, &record.branch) else {
+            return Err("no worktree/branch recorded → cannot push".to_string());
+        };
+        let worktree_path = PathBuf::from(path);
+
+        // Pre-condition: the agent must have committed something (F-86).
+        match self.worktrees.has_commits_to_publish(&worktree_path) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(
+                    "the agent produced no commits to publish → nothing to open a PR for"
+                        .to_string(),
+                );
+            }
+            Err(e) => return Err(format!("could not inspect commits: {e}")),
+        }
+
+        self.worktrees
+            .push_branch(&worktree_path, branch)
+            .map_err(|e| format!("git push failed: {e}"))?;
+
+        let summary = self
+            .agent_output
+            .get(&record.id)
+            .cloned()
+            .unwrap_or_default();
+        let ctx = PrContext {
+            title: &record.title,
+            url: record.url.as_deref().unwrap_or(""),
+            source: &record.source,
+            task_id: &record.source_task_id,
+            summary: &summary,
+        };
+        let req = PrRequest {
+            worktree_path,
+            head_branch: branch.clone(),
+            title: render_template(&self.settings.pr_title_template, &ctx),
+            body: render_template(&self.settings.pr_body_template, &ctx),
+        };
+        self.pr_creator
+            .create_pr(&req)
+            .map_err(|e| format!("pull-request creation failed: {e}"))
     }
 
     /// Apply the workflow's `on_success`/`on_failure` status transition on the
@@ -1426,6 +1602,15 @@ fn mode_str(mode: WorkflowMode) -> &'static str {
     match mode {
         WorkflowMode::Plan => "plan",
         WorkflowMode::Implement => "implement",
+    }
+}
+
+/// The output-policy name, for audit `detail`.
+fn policy_str(policy: OutputPolicy) -> &'static str {
+    match policy {
+        OutputPolicy::PullRequest => "pull_request",
+        OutputPolicy::Source => "source",
+        OutputPolicy::None => "none",
     }
 }
 
