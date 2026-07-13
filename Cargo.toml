@@ -24,6 +24,7 @@ repository = "https://github.com/tomoya-k31/totsuka"
 # `<dep>.workspace = true`. Feature/version bumps happen in one place.
 [workspace.dependencies]
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 thiserror = "2"
 libc = "0.2"
 keyring = { version = "3", features = ["apple-native"] }

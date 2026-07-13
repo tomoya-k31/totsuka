@@ -13,4 +13,4 @@ pub mod state_db;
 pub use agent_session::PluginAgentSession;
 pub use plugin_host::{HostError, Plugin, PluginSpec};
 pub use run_lock::{LockError, RunLock};
-pub use state_db::{NewTask, SessionRecord, StateDb, StateError, TaskRecord};
+pub use state_db::{EventRecord, NewTask, SessionRecord, StateDb, StateError, TaskRecord};

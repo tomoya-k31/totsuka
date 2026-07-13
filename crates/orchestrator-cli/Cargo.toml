@@ -18,7 +18,9 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+clap_complete.workspace = true
 orchestrator-core = { path = "../orchestrator-core" }
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 tokio.workspace = true

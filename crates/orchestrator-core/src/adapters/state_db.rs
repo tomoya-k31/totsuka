@@ -177,6 +177,23 @@ pub struct SessionRecord {
     pub created_at: String,
 }
 
+/// A persisted audit event (F-72), for `task show` history.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventRecord {
+    /// Row id.
+    pub id: i64,
+    /// Owning task id.
+    pub task_id: i64,
+    /// State before the transition (`None` for the ingest event).
+    pub from_state: Option<TaskState>,
+    /// State after the transition.
+    pub to_state: TaskState,
+    /// Timestamp (ISO 8601 UTC).
+    pub occurred_at: String,
+    /// Structured detail, if recorded.
+    pub detail: Option<serde_json::Value>,
+}
+
 /// The SQLite state database.
 pub struct StateDb {
     conn: Connection,
@@ -442,6 +459,40 @@ impl StateDb {
             .map_err(StateError::from)
     }
 
+    /// All audit events for a task, oldest first (F-72; `task show` history).
+    pub fn list_events(&self, task_id: i64) -> Result<Vec<EventRecord>, StateError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, from_state, to_state, occurred_at, detail \
+             FROM events WHERE task_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![task_id], |row| {
+            let from: Option<String> = row.get("from_state")?;
+            let from_state = from
+                .map(|s| s.parse::<TaskState>())
+                .transpose()
+                .map_err(|e| conversion_error(Box::new(e)))?;
+            let to: String = row.get("to_state")?;
+            let to_state = to
+                .parse::<TaskState>()
+                .map_err(|e| conversion_error(Box::new(e)))?;
+            let detail: Option<String> = row.get("detail")?;
+            let detail = detail
+                .map(|s| serde_json::from_str(&s))
+                .transpose()
+                .map_err(|e| conversion_error(Box::new(e)))?;
+            Ok(EventRecord {
+                id: row.get("id")?,
+                task_id: row.get("task_id")?,
+                from_state,
+                to_state,
+                occurred_at: row.get("occurred_at")?,
+                detail,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(StateError::from)
+    }
+
     /// Count of audit events recorded for a task (F-72).
     pub fn event_count(&self, id: i64) -> Result<i64, StateError> {
         Ok(self.conn.query_row(
@@ -682,6 +733,27 @@ mod tests {
         assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Running);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_events_returns_full_history_in_order() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        db.apply_event(id, TaskEvent::Start, Some(serde_json::json!({"k": 1})))
+            .unwrap();
+
+        let events = db.list_events(id).unwrap();
+        assert_eq!(events.len(), 3);
+        // Ingest first: no from_state, lands in queued.
+        assert_eq!(events[0].from_state, None);
+        assert_eq!(events[0].to_state, TaskState::Queued);
+        assert_eq!(events[1].from_state, Some(TaskState::Queued));
+        assert_eq!(events[1].to_state, TaskState::Dispatched);
+        assert_eq!(events[2].to_state, TaskState::Running);
+        assert_eq!(events[2].detail, Some(serde_json::json!({"k": 1})));
+        // Unknown task -> empty history, not an error.
+        assert!(db.list_events(999).unwrap().is_empty());
     }
 
     #[test]
