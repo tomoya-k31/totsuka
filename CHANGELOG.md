@@ -11,4 +11,44 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.1.1](https://github.com/tomoya-k31/totsuka/compare/v0.1.0...v0.1.1) (2026-07-13)
+
+
+### Features
+
+* add okf-search — frontmatter filter search for docs/ ([#41](https://github.com/tomoya-k31/totsuka/issues/41)) ([e3b0c7f](https://github.com/tomoya-k31/totsuka/commit/e3b0c7f112749cf36bc3769460756b5601398370))
+* **cli:** CLI コマンド体系（init / status / task / config / logs / doctor / completion） ([#90](https://github.com/tomoya-k31/totsuka/issues/90)) ([a5d08ec](https://github.com/tomoya-k31/totsuka/commit/a5d08ecfd088d820efd7e98df587680aa9ef87de))
+* **cli:** プラグイン管理コマンド（install / uninstall / enable / disable / list） ([#76](https://github.com/tomoya-k31/totsuka/issues/76)) ([0f2b40c](https://github.com/tomoya-k31/totsuka/commit/0f2b40c6476b7842c13d1f240a2c5b7b04a85905)), closes [#52](https://github.com/tomoya-k31/totsuka/issues/52)
+* **core:** git worktree ライフサイクル管理 ([#77](https://github.com/tomoya-k31/totsuka/issues/77)) ([d6d3d25](https://github.com/tomoya-k31/totsuka/commit/d6d3d25c77f10381ee2e89b962537706dd2145a9)), closes [#53](https://github.com/tomoya-k31/totsuka/issues/53)
+* **core:** SQLite 状態管理とタスクステートマシン ([#72](https://github.com/tomoya-k31/totsuka/issues/72)) ([d49333b](https://github.com/tomoya-k31/totsuka/commit/d49333b488bd997ed1b6fd86fa5d96f900e381af)), closes [#48](https://github.com/tomoya-k31/totsuka/issues/48)
+* **core:** XDG 準拠パス解決と platform 抽象（Keychain・プロセス管理） ([#70](https://github.com/tomoya-k31/totsuka/issues/70)) ([6ba0464](https://github.com/tomoya-k31/totsuka/commit/6ba0464a71585b75a3475f3b14fd79eef96df5a0)), closes [#46](https://github.com/tomoya-k31/totsuka/issues/46)
+* **core:** エージェントセッション管理と再起動回復 ([#81](https://github.com/tomoya-k31/totsuka/issues/81)) ([f356baf](https://github.com/tomoya-k31/totsuka/commit/f356baf0cb4e8f834dce42783b59404f4d9bac8e)), closes [#57](https://github.com/tomoya-k31/totsuka/issues/57)
+* **core:** プラグインホスト（プロセス起動・initialize・クラッシュ検知） ([#75](https://github.com/tomoya-k31/totsuka/issues/75)) ([d248187](https://github.com/tomoya-k31/totsuka/commit/d2481878809bf5b1e2c0f9aa2422867b647bbe75)), closes [#51](https://github.com/tomoya-k31/totsuka/issues/51)
+* **core:** リポジトリ自動選択（ルール + LLM フォールバック） ([#80](https://github.com/tomoya-k31/totsuka/issues/80)) ([a711d0b](https://github.com/tomoya-k31/totsuka/commit/a711d0bca05f0b452307d3ca952fd2fa3e9da943))
+* **core:** ワークフロー定義とトリガーマッチング ([#78](https://github.com/tomoya-k31/totsuka/issues/78)) ([bd57920](https://github.com/tomoya-k31/totsuka/commit/bd579204335e4e313a5b627ffb7c0f0d63b18b43)), closes [#54](https://github.com/tomoya-k31/totsuka/issues/54)
+* **core:** 並列実行制御（スロット管理・優先度キュー・キャンセル/リトライ） ([#79](https://github.com/tomoya-k31/totsuka/issues/79)) ([9c64452](https://github.com/tomoya-k31/totsuka/commit/9c64452411eb58b3aea4449938f219b98cfe2c76)), closes [#55](https://github.com/tomoya-k31/totsuka/issues/55)
+* **core:** 出力ポリシー実装（pull_request / source / none） ([#91](https://github.com/tomoya-k31/totsuka/issues/91)) ([569eb74](https://github.com/tomoya-k31/totsuka/commit/569eb7473e3a2dc3087f4b5c76b64e9e5348a432))
+* **core:** 構造化ログと機密マスキング ([#73](https://github.com/tomoya-k31/totsuka/issues/73)) ([58b48f1](https://github.com/tomoya-k31/totsuka/commit/58b48f156e2e190c7359183864849c54231aefdb)), closes [#49](https://github.com/tomoya-k31/totsuka/issues/49)
+* **core:** 設定ロードとシークレット参照解決 ([#71](https://github.com/tomoya-k31/totsuka/issues/71)) ([6ae3a42](https://github.com/tomoya-k31/totsuka/commit/6ae3a4297e31b1c5e952dfd8535346e850084863)), closes [#47](https://github.com/tomoya-k31/totsuka/issues/47)
+* **plugin:** agent_ide プラグイン — herdr ([#86](https://github.com/tomoya-k31/totsuka/issues/86)) ([2741241](https://github.com/tomoya-k31/totsuka/commit/274124154405d8cc937e357da3c289e9b952cc4a))
+* **plugin:** agent_ide プラグイン — orca ([#87](https://github.com/tomoya-k31/totsuka/issues/87)) ([4c6551f](https://github.com/tomoya-k31/totsuka/commit/4c6551f4a3ed447b7c1b629536d88b49e155a4e9))
+* **plugin:** notifier プラグイン — macOS 通知センター ([#88](https://github.com/tomoya-k31/totsuka/issues/88)) ([f7509ae](https://github.com/tomoya-k31/totsuka/commit/f7509ae4ca02449473228ca249294e4d97dfac7a))
+* **plugin:** task_source プラグイン — GitHub Issues / Projects ([#82](https://github.com/tomoya-k31/totsuka/issues/82)) ([594550c](https://github.com/tomoya-k31/totsuka/commit/594550c7b067da06d81415b959d6410a4ee07414))
+* **plugin:** task_source プラグイン — Notion ([#83](https://github.com/tomoya-k31/totsuka/issues/83)) ([b138fad](https://github.com/tomoya-k31/totsuka/commit/b138fad2903b6a85530beb217e4b89954af2bdba))
+* **protocol:** plugin-protocol クレート（JSON-RPC 2.0 型定義・manifest・capabilities） ([#74](https://github.com/tomoya-k31/totsuka/issues/74)) ([af24456](https://github.com/tomoya-k31/totsuka/commit/af24456cc4c787d076f8135f747a15da2547a917)), closes [#50](https://github.com/tomoya-k31/totsuka/issues/50)
+* **run:** run メインループ(ワンショット / --watch / --dry-run) ([#89](https://github.com/tomoya-k31/totsuka/issues/89)) ([5ae7bdf](https://github.com/tomoya-k31/totsuka/commit/5ae7bdf40b349cc23f8a1c97911feea10b75f958))
+
+
+### Bug Fixes
+
+* **ci:** release-please の Cargo.toml bump を generic updater に修正 ([#94](https://github.com/tomoya-k31/totsuka/issues/94)) ([48cc73f](https://github.com/tomoya-k31/totsuka/commit/48cc73fa684f1194ffed19cf6fa08b3b642f6870))
+
+
+### Documentation
+
+* bootstrap OKF documentation bundle and Claude Code tooling ([#39](https://github.com/tomoya-k31/totsuka/issues/39)) ([55f0c2c](https://github.com/tomoya-k31/totsuka/commit/55f0c2c5f3679b5116ec5c0104ffc9268b67b8c3))
+* **product:** orchestrator 要件定義書を OKF Spec として取り込み ([#44](https://github.com/tomoya-k31/totsuka/issues/44)) ([c13e07f](https://github.com/tomoya-k31/totsuka/commit/c13e07f4f90f5511bcea88fed1dff467477df9d9))
+* **references:** herdr Socket API / 統合 capability を Reference 化 ([#60](https://github.com/tomoya-k31/totsuka/issues/60)) ([#84](https://github.com/tomoya-k31/totsuka/issues/84)) ([cae6b71](https://github.com/tomoya-k31/totsuka/commit/cae6b717be433a245dd0876612efabe7b37eecbe))
+* **references:** orca CLI 制御サーフェスの一次情報ミラー追加（[#61](https://github.com/tomoya-k31/totsuka/issues/61)） ([#85](https://github.com/tomoya-k31/totsuka/issues/85)) ([49047f6](https://github.com/tomoya-k31/totsuka/commit/49047f68aed57609347f42562ce9b7ed7003d4d8))
+
 ## [Unreleased]
