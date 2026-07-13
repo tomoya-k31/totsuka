@@ -1,10 +1,10 @@
 ---
 type: Runbook
-title: リリース手順（release-please / ユニバーサルバイナリ / Homebrew tap）
-description: totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリの自動ビルド、Homebrew tap の formula bump、Gatekeeper（ad-hoc 署名）の扱い。
+title: リリース手順（release-please / ユニバーサルバイナリ / GitHub Releases）
+description: totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリの自動ビルドと GitHub Releases 配布、Gatekeeper（ad-hoc 署名）の扱い。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.github/workflows
-tags: [release, ci, homebrew, distribution, gatekeeper, semver]
-timestamp: 2026-07-14T03:00:00Z
+tags: [release, ci, distribution, gatekeeper, semver]
+timestamp: 2026-07-14T04:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -22,21 +22,19 @@ owner: tomoya-k31
 - Conventional Commits の `feat` → minor、`fix` → patch、`feat!`/`BREAKING CHANGE` → major
 - v1（0.x）系では `bump-minor-pre-major` により破壊的変更も minor に留める設定
 
-# Homebrew tap
+# 配布（GitHub Releases）
 
-- tap リポジトリ: `tomoya-k31/homebrew-totsuka`、formula は `Formula/totsuka.rb`。テンプレートは本リポジトリの `packaging/homebrew/totsuka.rb`。
-- **bump 手順**（リリース後）: 新しい Release の tarball の `version` / `url` / `sha256` を formula に反映してコミットする。`.sha256` アセットの値を使う。
-  - 自動化する場合は tap リポジトリへ push できる PAT（例 `HOMEBREW_TAP_TOKEN`）を用意し、release ワークフローに bump ジョブを追加する（tap リポジトリと token が未整備のため v1 は手動運用）。
-- 利用者は `brew install tomoya-k31/totsuka/totsuka`。`cargo install --git ... orchestrator-cli` も併記（README）。
+- 配布経路は **GitHub Releases のユニバーサルバイナリ** と `cargo install --git ... orchestrator-cli`（README に併記）。パッケージマネージャ（Homebrew 等）は v1 では扱わない。
+- 各 Release には `totsuka-vX.Y.Z-macos-universal.tar.gz` と生の SHA-256（`.sha256`）が添付される。利用者は tarball を展開して `totsuka` を PATH に置く。
 
 # Gatekeeper（macOS）
 
-- v1 は **ad-hoc 署名**（`codesign --sign -`）。初回起動で Gatekeeper に阻まれた場合、利用者は quarantine 属性を除去する: `xattr -d com.apple.quarantine "$(brew --prefix)/bin/totsuka"`。
+- v1 は **ad-hoc 署名**（`codesign --sign -`）。初回起動で Gatekeeper に阻まれた場合、利用者は quarantine 属性を除去する: `xattr -d com.apple.quarantine /usr/local/bin/totsuka`。
 - Developer ID 署名 / notarization は Open Question #5（社外公開判断）の決定後に対応する。決定したら本 runbook と `release-please.yml` の `universal-binary` ジョブの署名ステップを更新する。
 
 # ロールバック
 
-- 問題のあるリリースは GitHub 上で該当 Release/タグを削除するか、修正版を通常のリリースフローで前に進める。tap の formula も直前の安定版へ戻す。
+- 問題のあるリリースは GitHub 上で該当 Release/タグを削除するか、修正版を通常のリリースフローで前に進める。
 - `main` が壊れた場合は PR 規約に従い revert 優先（`type: revert`、元コミットハッシュと理由を body に）。
 
 # 事前確認

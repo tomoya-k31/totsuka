@@ -19,17 +19,22 @@ source.
 
 ## Install
 
-### Homebrew (recommended)
+### Prebuilt binary (GitHub Releases)
+
+Download the macOS universal binary from the
+[latest release](https://github.com/tomoya-k31/totsuka/releases/latest), then
+put `totsuka` on your `PATH`:
 
 ```sh
-brew install tomoya-k31/totsuka/totsuka
+tar -xzf totsuka-*-macos-universal.tar.gz
+install -m 0755 totsuka /usr/local/bin/totsuka
 ```
 
-The release ships an ad-hoc–signed macOS universal binary. If Gatekeeper blocks
-it, clear the quarantine attribute once:
+The binary is ad-hoc–signed. If Gatekeeper blocks it, clear the quarantine
+attribute once:
 
 ```sh
-xattr -d com.apple.quarantine "$(brew --prefix)/bin/totsuka"
+xattr -d com.apple.quarantine /usr/local/bin/totsuka
 ```
 
 ### From source

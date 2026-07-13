@@ -74,8 +74,8 @@ jobs:
         run: |
           cp README.md LICENSE dist/
           tar -czf "totsuka-${TAG}-macos-universal.tar.gz" -C dist totsuka README.md LICENSE
-          # Write only the raw SHA-256 (no filename) so the Homebrew formula bump
-          # can consume it verbatim.
+          # Write only the raw SHA-256 (no filename) so release consumers can
+          # verify the tarball without parsing the filename column.
           shasum -a 256 "totsuka-${TAG}-macos-universal.tar.gz" | awk '{print $1}' \
             | tee "totsuka-${TAG}-macos-universal.tar.gz.sha256"
 

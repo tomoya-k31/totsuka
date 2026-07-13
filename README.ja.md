@@ -20,17 +20,21 @@ publish します。
 
 ## インストール
 
-### Homebrew（推奨）
+### ビルド済みバイナリ（GitHub Releases）
+
+[最新リリース](https://github.com/tomoya-k31/totsuka/releases/latest) から macOS
+ユニバーサルバイナリをダウンロードし、`totsuka` を `PATH` に置きます:
 
 ```sh
-brew install tomoya-k31/totsuka/totsuka
+tar -xzf totsuka-*-macos-universal.tar.gz
+install -m 0755 totsuka /usr/local/bin/totsuka
 ```
 
-リリースは ad-hoc 署名済みの macOS ユニバーサルバイナリを配布します。Gatekeeper に
-ブロックされた場合、一度だけ quarantine 属性を除去してください:
+バイナリは ad-hoc 署名です。Gatekeeper にブロックされた場合、一度だけ quarantine
+属性を除去してください:
 
 ```sh
-xattr -d com.apple.quarantine "$(brew --prefix)/bin/totsuka"
+xattr -d com.apple.quarantine /usr/local/bin/totsuka
 ```
 
 ### ソースから
