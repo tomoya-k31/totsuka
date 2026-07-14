@@ -8,23 +8,47 @@ examples — adjust `<n>` (PR number) and paths as needed.
 
 ## Before opening a PR
 
-- Run the CI-required checks **locally first**, so a red CI is caught before push:
-  - `cargo fmt --all --check`
-  - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-  - `cargo test --workspace --all-features`
+**Scope the checks to what the diff can affect.** Get the changed paths first
+with `git diff --name-only main...HEAD`, then run only the groups whose trigger
+matches. Skipping a group is safe when the diff cannot affect it — e.g. a
+docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 
-  (Mirror the flags the CI workflow uses — this is a 9-crate workspace, so a
-  missing `--workspace` can pass locally yet fail in CI.)
-  - rust-analyzer LSP diagnostics clean — fix type errors / missing imports
-    (rustc + clippy backed, per [CLAUDE.md](../../CLAUDE.md)).
-- Review your own diff before writing the PR: `git diff main...HEAD` and every
-  commit with `git log main..HEAD`.
-- Confirm no unrelated files or stray working-tree changes are included;
-  `git add <explicit files>` only — never `-A` / `.` (→ git-conventions).
+| Changed paths (`git diff --name-only main...HEAD`) | Run |
+|---|---|
+| `**/*.rs`, `**/Cargo.toml`, `Cargo.lock`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | **Rust set** (below) |
+| a dependency change in `Cargo.toml` / `Cargo.lock` | Rust set **plus** `cargo audit` and `cargo deny check` |
+| `docs/**` | **Docs checks** (below) + the docs obligation |
+| a prose `*.md` outside the OKF/vendored exclusions and outside `.claude/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
+| `.github/workflows/**` | read the SHA-pin + `ubuntu-slim` rules, validate YAML (`yq . <file>`); if you changed `ci.yml`'s commands, also run the affected Rust set |
+| `.claude/**` (settings / hooks / rules) | validate JSON (`python3 -m json.tool .claude/settings.json`); no Rust, no `.ja.md` |
+| none of the above touch Rust/Cargo (docs-only, `.claude`-only, …) | **skip the Rust set entirely** |
+
+Note: CI (`ci.yml`) has **no path filter**, so every Rust job and the `lint`
+check run on *every* PR regardless of what changed. Scoping only changes what you
+run **locally** before pushing — post-PR you still monitor all CI checks.
+
+**Rust set** — when Rust/Cargo files changed (mirror CI's flags; this is a
+9-crate workspace, so a missing `--workspace` can pass locally yet fail CI):
+
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace --all-features`
+- rust-analyzer LSP diagnostics clean — fix type errors / missing imports
+  (rustc + clippy backed, per [CLAUDE.md](../../CLAUDE.md)).
+
+**Docs checks** — when `docs/**` changed:
+
+- `bash scripts/okf-lint.sh docs` to zero errors.
 - Docs obligation: if a trigger applies (design decision / new component /
   API·schema·infra change / release), update the relevant `docs/` concept plus
-  its `index.md` / `log.md` in the **same** PR, then
-  `bash scripts/okf-lint.sh docs` to zero errors (→ CLAUDE.md, docs/CLAUDE.md).
+  its `index.md` / `log.md` in the **same** PR (→ CLAUDE.md, docs/CLAUDE.md).
+
+**Always** (any PR, regardless of what changed):
+
+- Review your own diff before writing the PR: `git diff main...HEAD` and every
+  commit with `git log main..HEAD`.
+- No unrelated files or stray working-tree changes are included;
+  `git add <explicit files>` only — never `-A` / `.` (→ git-conventions).
 
 ## After opening a PR — monitor, assess, iterate
 
