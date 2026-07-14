@@ -50,6 +50,20 @@ run **locally** before pushing — post-PR you still monitor all CI checks.
 - No unrelated files or stray working-tree changes are included;
   `git add <explicit files>` only — never `-A` / `.` (→ git-conventions).
 
+**Pre-PR review** (optional, best-effort — must NEVER block the PR):
+
+- Run it **inline in the main session** via the `/code-review` skill at
+  **low or medium** effort. Do NOT wrap it in a subagent that itself spawns
+  finder/fan-out agents — the middle agent parks waiting on its children and
+  the chain stalls in intermediate states ("waiting for finders", "running
+  clippy"), which has repeatedly frozen progress.
+- **Hard cap: 10 minutes** (same ceiling as the post-PR polling policy). If it
+  has not produced a final report by then, **stop it, note that it was cut
+  short, and proceed to opening the PR**. The post-PR gates — CI, the Copilot
+  review, and `/code-review --comment` (step 5) — are the safety net; a stalled
+  pre-PR review must not be the only thing blocking an otherwise-finished
+  change.
+
 ## After opening a PR — monitor, assess, iterate
 
 **Do not merge until BOTH the CI run and the Copilot review have been fetched
