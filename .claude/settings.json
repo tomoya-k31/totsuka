@@ -13,6 +13,7 @@
     ]
   },
   "enabledPlugins": {
-    "rust-analyzer-lsp@claude-plugins-official": true
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true
   }
 }
