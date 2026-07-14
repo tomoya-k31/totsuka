@@ -16,6 +16,7 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      prs_created: ${{ steps.release.outputs.prs_created }}
     steps:
       - name: Run release-please
         id: release
@@ -28,6 +29,65 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # release-please bumps the version in Cargo.toml but never touches
+  # Cargo.lock, so the lockfile is left one version behind on every release
+  # (the next `cargo` run then regenerates it as an unrelated working-tree
+  # diff). Sync it back into the open Release PR here so the merged release
+  # commit already carries a consistent lockfile. Runs on every push while a
+  # Release PR is open; if release-please force-pushed the branch (resetting
+  # the lock), this re-syncs it.
+  sync-lockfile:
+    name: Sync Cargo.lock in the Release PR
+    needs: release-please
+    if: needs.release-please.outputs.prs_created == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Find the open Release PR branch
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          branch=$(gh pr list --state open --label "autorelease: pending" \
+            --json headRefName --jq '.[0].headRefName')
+          if [ -z "$branch" ]; then
+            echo "No open Release PR found; nothing to sync." >&2
+            exit 1
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the Release PR branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          # PAT (not GITHUB_TOKEN) so the follow-up push triggers CI on the PR.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+
+      - name: Sync workspace versions into Cargo.lock
+        # `--workspace` re-resolves only the workspace members, so external
+        # dependencies stay pinned; just the internal crate versions move.
+        run: cargo update --workspace
+
+      - name: Commit and push if Cargo.lock changed
+        env:
+          RELEASE_BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already in sync with the release version."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "chore: sync Cargo.lock to the release version"
+          git push origin "HEAD:${RELEASE_BRANCH}"
 
   # Build in the SAME workflow run: a Release published with the default
   # GITHUB_TOKEN does not trigger a separate `on: release` workflow, so the
@@ -56,9 +116,10 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Build both architectures
-        # No --locked: release-please bumps the version in Cargo.toml (not
-        # Cargo.lock), so the lock is intentionally out of sync until the first
-        # build regenerates it.
+        # The sync-lockfile job keeps Cargo.lock in step with the release
+        # version on the Release PR, so the merged release commit is already
+        # consistent. --locked is still omitted defensively so a stray lock
+        # drift regenerates rather than blocking the release build.
         run: |
           cargo build --release --bin totsuka --target x86_64-apple-darwin
           cargo build --release --bin totsuka --target aarch64-apple-darwin
