@@ -95,7 +95,7 @@ pub fn expect_ok(method: &str, response: Value) -> Result<Value, SlackError> {
 /// the encoding Slack documents for non-scalar form arguments.
 fn form_fields(body: &Value) -> Result<Vec<(String, String)>, SlackError> {
     let Some(object) = body.as_object() else {
-        return Err(SlackError::InvalidResponse(format!(
+        return Err(SlackError::InvalidRequest(format!(
             "Web API arguments must be a JSON object, got: {body}"
         )));
     };
@@ -122,10 +122,24 @@ pub struct ReqwestTransport {
     timeout: Duration,
     max_retries: u32,
     backoff_base: Duration,
+    retry_budget: Duration,
 }
 
-/// Longest single retry delay, whether from backoff or `Retry-After`.
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+/// Ceiling for the *backoff-derived* delay (transient network / 5xx). A 429's
+/// `Retry-After` is honored exactly instead — retrying earlier than asked is
+/// guaranteed to be throttled again — and is bounded by the retry budget.
+const MAX_BACKOFF_DELAY: Duration = Duration::from_secs(60);
+
+/// Total sleep allowed across one call's retries. When honoring the next
+/// delay (e.g. a long `Retry-After`) would exceed it, the call fails fast
+/// with the real cause instead of appearing to hang — `initialize`'s
+/// TokenGuard sits on this path, and the host must see an answer.
+const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(90);
+
+/// The `Retry-After` to assume when the header is missing or unparseable
+/// (e.g. the RFC 9110 HTTP-date form). Conservative on purpose: guessing low
+/// would hammer an endpoint that just told us it is throttled.
+const FALLBACK_RETRY_AFTER_SECS: u64 = 30;
 
 impl ReqwestTransport {
     /// A transport from connection `settings`.
@@ -138,13 +152,56 @@ impl ReqwestTransport {
             timeout: Duration::from_secs(30),
             max_retries: settings.max_retries,
             backoff_base: Duration::from_millis(500),
+            retry_budget: DEFAULT_RETRY_BUDGET,
         }
+    }
+
+    /// Override the retry timing (first backoff delay and total retry budget).
+    /// Intended for tests, which should not pay real production-scale sleeps.
+    pub fn with_retry_timing(mut self, backoff_base: Duration, retry_budget: Duration) -> Self {
+        self.backoff_base = backoff_base;
+        self.retry_budget = retry_budget;
+        self
     }
 
     fn token(&self, kind: TokenKind) -> &str {
         match kind {
             TokenKind::App => &self.app_token,
             TokenKind::User => &self.user_token,
+        }
+    }
+
+    /// Map a reqwest send failure to [`SlackError`].
+    fn send_error(&self, e: reqwest::Error) -> SlackError {
+        if e.is_timeout() {
+            SlackError::Timeout(self.timeout.as_secs())
+        } else {
+            SlackError::Transport(e.to_string())
+        }
+    }
+
+    /// Turn a non-2xx response into the matching [`SlackError`]: 429 becomes
+    /// [`SlackError::RateLimited`] with its `Retry-After`, everything else
+    /// [`SlackError::Http`] with a truncated body. `context` names the call
+    /// for logs (Web API method, or the response_url).
+    async fn status_error(context: &str, response: reqwest::Response) -> SlackError {
+        let status = response.status();
+        if status.as_u16() == 429 {
+            let retry_after_secs = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(FALLBACK_RETRY_AFTER_SECS);
+            return SlackError::RateLimited {
+                method: context.to_string(),
+                retry_after_secs,
+            };
+        }
+        let text = response.text().await.unwrap_or_default();
+        SlackError::Http {
+            status: status.as_u16(),
+            body: text.chars().take(500).collect(),
         }
     }
 
@@ -167,53 +224,31 @@ impl ReqwestTransport {
             req = req.form(&form_fields(body)?);
         }
 
-        let response = req.send().await.map_err(|e| {
-            if e.is_timeout() {
-                SlackError::Timeout(self.timeout.as_secs())
-            } else {
-                SlackError::Transport(e.to_string())
-            }
-        })?;
-
-        let status = response.status();
-        if status.as_u16() == 429 {
-            let retry_after_secs = response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(1);
-            return Err(SlackError::RateLimited {
-                method: method.to_string(),
-                retry_after_secs,
-            });
+        let response = req.send().await.map_err(|e| self.send_error(e))?;
+        if !response.status().is_success() {
+            return Err(Self::status_error(method, response).await);
         }
         let text = response
             .text()
             .await
             .map_err(|e| SlackError::Transport(e.to_string()))?;
-        if !status.is_success() {
-            return Err(SlackError::Http {
-                status: status.as_u16(),
-                body: text.chars().take(500).collect(),
-            });
-        }
         serde_json::from_str(&text).map_err(|e| SlackError::InvalidResponse(e.to_string()))
     }
 
-    /// The wait before retry number `attempt`: what `Retry-After` asked for on
-    /// a 429, capped exponential backoff otherwise.
+    /// The wait before retry number `attempt`: exactly what `Retry-After`
+    /// asked for on a 429 (retrying earlier is guaranteed another 429; the
+    /// retry budget bounds it), capped exponential backoff otherwise.
     fn retry_delay(&self, error: &SlackError, attempt: u32) -> Duration {
         if let SlackError::RateLimited {
             retry_after_secs, ..
         } = error
         {
-            return Duration::from_secs(*retry_after_secs).min(MAX_RETRY_DELAY);
+            return Duration::from_secs(*retry_after_secs);
         }
         let factor = 2u32.saturating_pow(attempt);
         self.backoff_base
             .saturating_mul(factor)
-            .min(MAX_RETRY_DELAY)
+            .min(MAX_BACKOFF_DELAY)
     }
 }
 
@@ -226,6 +261,7 @@ impl SlackTransport for ReqwestTransport {
         idempotent: bool,
     ) -> Result<Value, SlackError> {
         let mut attempt = 0;
+        let mut slept = Duration::ZERO;
         loop {
             match self.attempt(token, method, body.as_ref()).await {
                 Ok(value) => return Ok(value),
@@ -239,6 +275,17 @@ impl SlackTransport for ReqwestTransport {
                         && attempt < self.max_retries =>
                 {
                     let delay = self.retry_delay(&e, attempt);
+                    // Fail fast with the real cause once the budget is spent —
+                    // sleeping minutes inside a call looks like a hang to the
+                    // host (initialize's TokenGuard runs through here).
+                    if slept + delay > self.retry_budget {
+                        tracing::warn!(
+                            method, error = %e, ?delay,
+                            "retry delay would exceed the per-call retry budget; giving up"
+                        );
+                        return Err(e);
+                    }
+                    slept += delay;
                     tracing::warn!(attempt, method, error = %e, "slack call failed; retrying");
                     tokio::time::sleep(delay).await;
                     attempt += 1;
@@ -256,20 +303,9 @@ impl SlackTransport for ReqwestTransport {
             .timeout(self.timeout)
             .send()
             .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    SlackError::Timeout(self.timeout.as_secs())
-                } else {
-                    SlackError::Transport(e.to_string())
-                }
-            })?;
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(SlackError::Http {
-                status: status.as_u16(),
-                body: text.chars().take(500).collect(),
-            });
+            .map_err(|e| self.send_error(e))?;
+        if !response.status().is_success() {
+            return Err(Self::status_error(url, response).await);
         }
         Ok(())
     }
@@ -330,7 +366,9 @@ mod tests {
     }
 
     #[test]
-    fn form_fields_reject_non_object_arguments() {
-        assert!(form_fields(&json!(["not", "an", "object"])).is_err());
+    fn form_fields_reject_non_object_arguments_as_a_request_bug() {
+        let err = form_fields(&json!(["not", "an", "object"])).unwrap_err();
+        assert!(matches!(err, SlackError::InvalidRequest(_)), "{err}");
+        assert!(err.to_string().contains("plugin bug"), "{err}");
     }
 }

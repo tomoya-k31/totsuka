@@ -6,6 +6,7 @@
 //! server dependency, mirroring the workspace's no-new-deps test policy.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -32,9 +33,12 @@ impl CannedHttp {
         }
     }
     fn rate_limited(retry_after_secs: u64) -> Self {
+        Self::rate_limited_header(&retry_after_secs.to_string())
+    }
+    fn rate_limited_header(retry_after: &str) -> Self {
         Self {
             status: "429 Too Many Requests",
-            headers: vec![format!("Retry-After: {retry_after_secs}")],
+            headers: vec![format!("Retry-After: {retry_after}")],
             body: String::new(),
         }
     }
@@ -114,6 +118,9 @@ fn transport(base: &str, max_retries: u32) -> ReqwestTransport {
         user_token: "xoxp-user",
         max_retries,
     })
+    // Fast backoff so retry tests do not pay production-scale sleeps (the
+    // Retry-After waits are still real: the header is whole seconds).
+    .with_retry_timing(Duration::from_millis(10), Duration::from_secs(5))
 }
 
 #[tokio::test]
@@ -239,6 +246,82 @@ async fn retries_exhaust_into_the_last_error() {
         .unwrap_err();
     assert!(matches!(err, SlackError::RateLimited { .. }), "{err}");
     assert_eq!(requests.lock().unwrap().len(), 2, "initial + 1 retry");
+}
+
+#[tokio::test]
+async fn retry_after_beyond_the_budget_fails_fast_instead_of_sleeping() {
+    // Retry-After: 120 exceeds the 5s test budget: the call must surface the
+    // rate limit immediately (one request, no sleep), not appear to hang —
+    // initialize's TokenGuard runs through this path.
+    let (base, requests) = mock_server(vec![CannedHttp::rate_limited(120)]).await;
+
+    let started = std::time::Instant::now();
+    let err = transport(&base, 3)
+        .call(TokenKind::User, "auth.test", None, true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SlackError::RateLimited {
+                retry_after_secs: 120,
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(requests.lock().unwrap().len(), 1, "no premature retry");
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn unparseable_retry_after_falls_back_conservatively() {
+    // An HTTP-date Retry-After (valid per RFC 9110) must not collapse into a
+    // ~1s hammer loop: the fallback is 30s, which exceeds the 5s test budget,
+    // so the call stops after one request.
+    let (base, requests) = mock_server(vec![CannedHttp::rate_limited_header(
+        "Tue, 15 Jul 2026 10:00:00 GMT",
+    )])
+    .await;
+
+    let err = transport(&base, 3)
+        .call(TokenKind::User, "auth.test", None, true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SlackError::RateLimited {
+                retry_after_secs: 30,
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(requests.lock().unwrap().len(), 1, "no hammering");
+}
+
+#[tokio::test]
+async fn post_url_maps_429_to_rate_limited() {
+    // The response_url channel classifies a 429 like the Web API path does
+    // (RateLimited, not a generic Http error) — it is just never auto-retried.
+    let (base, requests) = mock_server(vec![CannedHttp::rate_limited(7)]).await;
+
+    let err = transport(&base, 3)
+        .post_url(&format!("{base}/response-url"), json!({}))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SlackError::RateLimited {
+                retry_after_secs: 7,
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(requests.lock().unwrap().len(), 1, "never auto-retried");
 }
 
 #[tokio::test]

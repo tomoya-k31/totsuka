@@ -54,6 +54,13 @@ pub enum SlackError {
     /// The response was not the JSON shape we expected.
     #[error("Slack returned an unexpected response: {0}")]
     InvalidResponse(String),
+    /// The plugin built a request Slack could not be asked (programmer error,
+    /// e.g. non-object Web API arguments) — distinct from [`InvalidResponse`]
+    /// so the log does not blame Slack for a local bug.
+    ///
+    /// [`InvalidResponse`]: SlackError::InvalidResponse
+    #[error("invalid Slack API request (plugin bug): {0}")]
+    InvalidRequest(String),
 }
 
 impl SlackError {
@@ -115,6 +122,26 @@ pub fn auth_failure(error: &str) -> SlackError {
         }
     };
     SlackError::Auth(message.to_string())
+}
+
+/// Map a credential-class failure of an *App-Level Token* call
+/// (`apps.connections.open`) to a [`SlackError::Auth`] with xapp-specific
+/// recovery guidance — the fix differs from the user token's (regenerate the
+/// xapp- token rather than re-issue the xoxp- one).
+pub fn app_auth_failure(error: &str) -> SlackError {
+    let hint = match error {
+        "account_inactive" => {
+            "the Slack account behind the app is deactivated (account_inactive); from an \
+             active account, "
+        }
+        _ => "",
+    };
+    SlackError::Auth(format!(
+        "Slack rejected the App-Level Token ({error}) → {hint}regenerate the xapp- token \
+         under the Slack app's Basic Information > App-Level Tokens (scope \
+         `connections:write`) and update the secret referenced by `app_token` in \
+         plugins/slack.toml"
+    ))
 }
 
 #[cfg(test)]
@@ -190,6 +217,23 @@ mod tests {
                 body: String::new()
             }
             .is_rejected()
+        );
+    }
+
+    #[test]
+    fn app_auth_failure_points_at_the_xapp_token() {
+        for code in ["invalid_auth", "token_revoked", "account_inactive"] {
+            let err = app_auth_failure(code);
+            assert!(err.is_credential(), "{code}");
+            let message = err.to_string();
+            assert!(message.contains(code), "{message}");
+            assert!(message.contains("xapp-"), "{message}");
+            assert!(message.contains("connections:write"), "{message}");
+        }
+        assert!(
+            app_auth_failure("account_inactive")
+                .to_string()
+                .contains("deactivated")
         );
     }
 

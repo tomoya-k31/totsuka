@@ -59,18 +59,33 @@ async fn apps_connections_open_uses_app_token_and_returns_url() {
 }
 
 #[tokio::test]
-async fn apps_connections_open_invalid_auth_points_at_the_xapp_token() {
-    let shared = Shared::default();
-    shared.push(Canned::Data(
-        json!({ "ok": false, "error": "invalid_auth" }),
-    ));
+async fn apps_connections_open_credential_errors_point_at_the_xapp_token() {
+    for code in ["invalid_auth", "token_revoked", "account_inactive"] {
+        let shared = Shared::default();
+        shared.push(Canned::Data(json!({ "ok": false, "error": code })));
 
-    let err = api(&shared).apps_connections_open().await.unwrap_err();
-    assert!(matches!(err, SlackError::Auth(_)), "{err}");
-    let message = err.to_string();
-    assert!(message.contains("App-Level Token"), "{message}");
-    assert!(message.contains("xapp-"), "{message}");
-    assert!(message.contains("connections:write"), "{message}");
+        let err = api(&shared).apps_connections_open().await.unwrap_err();
+        assert!(err.is_credential(), "{code}: {err}");
+        let message = err.to_string();
+        assert!(message.contains("App-Level Token"), "{code}: {message}");
+        assert!(message.contains("xapp-"), "{code}: {message}");
+        assert!(message.contains("connections:write"), "{code}: {message}");
+    }
+}
+
+#[tokio::test]
+async fn auth_test_treats_any_api_failure_as_credential_class() {
+    // auth.test takes no arguments: whatever code comes back, the problem is
+    // the token. The TokenGuard's config-vs-internal split relies on this.
+    for code in ["token_expired", "not_authed", "org_login_required"] {
+        let shared = Shared::default();
+        shared.push(Canned::Data(json!({ "ok": false, "error": code })));
+        let err = api(&shared).auth_test().await.unwrap_err();
+        assert!(err.is_credential(), "{code}: {err}");
+        let message = err.to_string();
+        assert!(message.contains(code), "{code}: {message}");
+        assert!(message.contains("plugins/slack.toml"), "{code}: {message}");
+    }
 }
 
 // ---------------------------------------------------------------------------

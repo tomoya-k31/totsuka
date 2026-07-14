@@ -9,7 +9,7 @@
 
 use serde_json::{Value, json};
 
-use crate::error::{SlackError, auth_failure};
+use crate::error::{SlackError, app_auth_failure, auth_failure};
 use crate::transport::{SlackTransport, TokenKind, expect_ok};
 
 /// The identity behind a token, from `auth.test`.
@@ -92,9 +92,10 @@ impl<T: SlackTransport> SlackApi<T> {
     }
 
     /// Unwrap the `ok` envelope; a credential-class failure is upgraded to
-    /// [`SlackError::Auth`] with recovery guidance and logged, so mid-run
-    /// token expiry shows up actionably in the host's log.
-    fn checked(method: &str, response: Value) -> Result<Value, SlackError> {
+    /// [`SlackError::Auth`] with recovery guidance for the token that made
+    /// the call (user vs. App-Level) and logged, so a token that expires
+    /// mid-run shows up as actionably in the log as one failing at startup.
+    fn checked(token: TokenKind, method: &str, response: Value) -> Result<Value, SlackError> {
         expect_ok(method, response).map_err(|e| match e {
             SlackError::Api { error, .. }
                 if matches!(
@@ -102,7 +103,10 @@ impl<T: SlackTransport> SlackApi<T> {
                     "invalid_auth" | "token_revoked" | "account_inactive"
                 ) =>
             {
-                let guided = auth_failure(&error);
+                let guided = match token {
+                    TokenKind::User => auth_failure(&error),
+                    TokenKind::App => app_auth_failure(&error),
+                };
                 tracing::error!(method, "{guided}");
                 guided
             }
@@ -120,18 +124,34 @@ impl<T: SlackTransport> SlackApi<T> {
             .transport
             .call(TokenKind::User, method, body, idempotent)
             .await?;
-        Self::checked(method, response)
+        Self::checked(TokenKind::User, method, response)
     }
 
     /// `auth.test` — who the user token authenticates as (TokenGuard).
+    ///
+    /// Stricter than [`checked`](Self::checked): here *every* `ok: false`
+    /// code is credential-class — `auth.test` takes no arguments, so its only
+    /// failure mode is the token itself (`token_expired`, `not_authed`, …) —
+    /// keeping the TokenGuard's config-vs-internal error split intact.
     pub async fn auth_test(&self) -> Result<AuthIdentity, SlackError> {
-        let response = self.call("auth.test", None, true).await?;
+        let response = self
+            .transport
+            .call(TokenKind::User, "auth.test", None, true)
+            .await?;
+        let response = expect_ok("auth.test", response).map_err(|e| match e {
+            SlackError::Api { error, .. } => {
+                let guided = auth_failure(&error);
+                tracing::error!(method = "auth.test", "{guided}");
+                guided
+            }
+            other => other,
+        })?;
         let user_id = string_field(&response, "auth.test", "user_id")?;
         Ok(AuthIdentity { user_id })
     }
 
     /// `apps.connections.open` — a fresh Socket Mode WebSocket URL. The one
-    /// method authenticated by the App-Level Token; an `invalid_auth` here
+    /// method authenticated by the App-Level Token; a credential failure here
     /// means the *xapp* token is bad, so the guidance differs from the user
     /// token's.
     pub async fn apps_connections_open(&self) -> Result<String, SlackError> {
@@ -139,21 +159,7 @@ impl<T: SlackTransport> SlackApi<T> {
             .transport
             .call(TokenKind::App, "apps.connections.open", None, true)
             .await?;
-        let response = expect_ok("apps.connections.open", response).map_err(|e| match e {
-            SlackError::Api { error, .. }
-                if matches!(error.as_str(), "invalid_auth" | "token_revoked") =>
-            {
-                let guided = SlackError::Auth(format!(
-                    "Slack rejected the App-Level Token ({error}) → regenerate the xapp- token \
-                     under the Slack app's Basic Information > App-Level Tokens (scope \
-                     `connections:write`) and update the secret referenced by `app_token` in \
-                     plugins/slack.toml"
-                ));
-                tracing::error!(method = "apps.connections.open", "{guided}");
-                guided
-            }
-            other => other,
-        })?;
+        let response = Self::checked(TokenKind::App, "apps.connections.open", response)?;
         string_field(&response, "apps.connections.open", "url")
     }
 
