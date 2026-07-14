@@ -108,9 +108,10 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
    or the code itself (e.g. `cargo update --help` can disprove a claim about
    what a flag does).
 
-5. **Run `/code-review:code-review --comment` in a subagent** — launch it via
-   the Agent tool so it reviews the diff and posts its findings as a comment on
-   the PR (a single review-summary comment via `gh pr comment`), e.g.:
+5. **Run `/code-review:code-review --comment` in a subagent** — once per PR
+   (it is expensive; see the re-run policy under Handling findings). Launch it
+   via the Agent tool so it reviews the diff and posts its findings as a comment
+   on the PR (a single review-summary comment via `gh pr comment`), e.g.:
 
    ```
    Agent(subagent_type: "general-purpose",
@@ -128,8 +129,13 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
   (→ git-conventions).
 - **Mistaken finding** → do **not** silently ignore it: record the rationale as
   a reply on the PR comment and/or in the fixing commit / PR body.
-- After pushing any fix, **re-run the loop (steps 1–6)** — new commits
-  re-trigger CI and re-invoke Copilot / `code-review`. Iterate until clean.
+- After pushing any fix commit, **always re-monitor CI for it** (steps 1–3): a
+  fix commit re-triggers the full CI run, and Copilot re-reviews automatically
+  (→ fetch and vet, step 4). Iterate until clean.
+- **Do not re-run `/code-review` (step 5) for every fix.** Run it **once per
+  PR**; re-run it only when a later commit adds **substantive new code / logic**
+  (not doc, wording, or trivial diff fixes). CI + Copilot + the human reviewer
+  cover the small fix commits, and a full `/code-review` pass is expensive.
 
 ### If CI is red
 
