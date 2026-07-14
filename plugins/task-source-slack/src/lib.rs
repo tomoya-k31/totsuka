@@ -12,4 +12,5 @@
 pub mod config;
 pub mod error;
 pub mod server;
+pub mod slack_api;
 pub mod transport;

@@ -36,6 +36,15 @@ pub enum SlackError {
         /// Response body (truncated).
         body: String,
     },
+    /// Slack rate-limited the call (HTTP 429). Retryable after the delay the
+    /// `Retry-After` header asked for.
+    #[error("Slack API rate limited `{method}` → retry after {retry_after_secs}s")]
+    RateLimited {
+        /// The Web API method that was throttled.
+        method: String,
+        /// Seconds to wait, from the `Retry-After` header.
+        retry_after_secs: u64,
+    },
     /// A network/transport failure (retryable).
     #[error("Slack API transport error: {0}")]
     Transport(String),
@@ -52,10 +61,19 @@ impl SlackError {
     /// timeouts, rate limiting (429) and 5xx server errors.
     pub fn is_retryable(&self) -> bool {
         match self {
-            SlackError::Transport(_) | SlackError::Timeout(_) => true,
-            SlackError::Http { status, .. } => *status == 429 || (500..=599).contains(status),
+            SlackError::Transport(_) | SlackError::Timeout(_) | SlackError::RateLimited { .. } => {
+                true
+            }
+            SlackError::Http { status, .. } => (500..=599).contains(status),
             _ => false,
         }
+    }
+
+    /// Whether the request is known to have been *rejected* rather than
+    /// possibly applied — a 429 never processed the call, so replaying it is
+    /// safe even for a non-idempotent mutation (a lost 5xx/timeout is not).
+    pub fn is_rejected(&self) -> bool {
+        matches!(self, SlackError::RateLimited { .. })
     }
 
     /// Whether this is a startup-blocking credential/identity problem (the
@@ -132,9 +150,9 @@ mod tests {
         assert!(SlackError::Transport("x".into()).is_retryable());
         assert!(SlackError::Timeout(30).is_retryable());
         assert!(
-            SlackError::Http {
-                status: 429,
-                body: String::new()
+            SlackError::RateLimited {
+                method: "chat.postMessage".into(),
+                retry_after_secs: 5
             }
             .is_retryable()
         );
@@ -153,6 +171,26 @@ mod tests {
             .is_retryable()
         );
         assert!(!auth_failure("invalid_auth").is_retryable());
+    }
+
+    #[test]
+    fn only_rate_limiting_counts_as_rejected() {
+        assert!(
+            SlackError::RateLimited {
+                method: "chat.postMessage".into(),
+                retry_after_secs: 5
+            }
+            .is_rejected()
+        );
+        // A timeout / 5xx may have applied the write; replaying could duplicate.
+        assert!(!SlackError::Timeout(30).is_rejected());
+        assert!(
+            !SlackError::Http {
+                status: 503,
+                body: String::new()
+            }
+            .is_rejected()
+        );
     }
 
     #[test]

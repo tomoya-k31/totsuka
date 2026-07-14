@@ -2,91 +2,14 @@
 //! initialize with the TokenGuard (`auth.test` + identity check), the offline
 //! `config/validate`, the stubbed task_source methods, and shutdown.
 
-use std::collections::VecDeque;
-use std::future::Future;
-use std::sync::{Arc, Mutex};
+mod common;
 
 use serde_json::{Value, json};
 
+use common::{Canned, FakeFactory, Shared};
 use plugin_protocol::jsonrpc::{Response, error_code};
-use task_source_slack::error::SlackError;
-use task_source_slack::server::{Server, TransportFactory};
-use task_source_slack::transport::{SlackTransport, TokenKind, TransportSettings};
-
-/// A canned Web API outcome for one `call`.
-#[derive(Clone)]
-enum Canned {
-    /// A full response body.
-    Data(Value),
-    /// Simulate a network failure.
-    Network,
-}
-
-/// One recorded request: its token kind, method, and body.
-#[derive(Clone, Debug)]
-struct Recorded {
-    token: TokenKind,
-    method: String,
-    #[expect(dead_code, reason = "recorded for future assertions on call bodies")]
-    body: Option<Value>,
-}
-
-/// State shared between the factory, the transports it builds, and the test.
-#[derive(Clone, Default)]
-struct Shared {
-    responses: Arc<Mutex<VecDeque<Canned>>>,
-    requests: Arc<Mutex<Vec<Recorded>>>,
-}
-
-impl Shared {
-    fn push(&self, canned: Canned) {
-        self.responses.lock().unwrap().push_back(canned);
-    }
-    fn requests(&self) -> Vec<Recorded> {
-        self.requests.lock().unwrap().clone()
-    }
-}
-
-struct FakeTransport {
-    shared: Shared,
-}
-
-impl SlackTransport for FakeTransport {
-    fn call(
-        &self,
-        token: TokenKind,
-        method: &str,
-        body: Option<Value>,
-        _idempotent: bool,
-    ) -> impl Future<Output = Result<Value, SlackError>> + Send {
-        self.shared.requests.lock().unwrap().push(Recorded {
-            token,
-            method: method.to_string(),
-            body,
-        });
-        let next = self.shared.responses.lock().unwrap().pop_front();
-        async move {
-            match next {
-                Some(Canned::Data(v)) => Ok(v),
-                Some(Canned::Network) => Err(SlackError::Transport("connection refused".into())),
-                None => Err(SlackError::InvalidResponse("no canned response".into())),
-            }
-        }
-    }
-}
-
-struct FakeFactory {
-    shared: Shared,
-}
-
-impl TransportFactory for FakeFactory {
-    type Transport = FakeTransport;
-    fn build(&self, _settings: TransportSettings<'_>) -> FakeTransport {
-        FakeTransport {
-            shared: self.shared.clone(),
-        }
-    }
-}
+use task_source_slack::server::Server;
+use task_source_slack::transport::TokenKind;
 
 fn server(shared: &Shared) -> Server<FakeFactory> {
     Server::new(FakeFactory {
