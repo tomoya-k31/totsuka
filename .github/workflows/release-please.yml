@@ -50,10 +50,15 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # `// empty` maps a no-match (empty array → null) to an empty string;
+          # without it gh prints the literal "null", defeating the -z guard.
           branch=$(gh pr list --state open --label "autorelease: pending" \
-            --json headRefName --jq '.[0].headRefName')
+            --json headRefName --jq '.[0].headRefName // empty')
           if [ -z "$branch" ]; then
-            echo "No open Release PR found; nothing to sync." >&2
+            # prs_created was true, so a missing Release PR is a real anomaly —
+            # fail fast. sync-lockfile is not a release gate, so a red run here
+            # doesn't block the tag; the next push retries.
+            echo "No open Release PR found despite prs_created=true." >&2
             exit 1
           fi
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
