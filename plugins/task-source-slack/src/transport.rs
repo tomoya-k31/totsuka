@@ -113,6 +113,13 @@ fn form_fields(body: &Value) -> Result<Vec<(String, String)>, SlackError> {
     Ok(fields)
 }
 
+/// Capped exponential backoff delay for retry number `attempt` (0-based):
+/// `base * 2^attempt`, never above `cap`. Shared by the HTTP retry loop and
+/// the Socket Mode reconnect loop so the policy can only diverge on purpose.
+pub(crate) fn capped_backoff(base: Duration, cap: Duration, attempt: u32) -> Duration {
+    base.saturating_mul(2u32.saturating_pow(attempt)).min(cap)
+}
+
 /// The production transport: reqwest against Slack's Web API.
 pub struct ReqwestTransport {
     client: reqwest::Client,
@@ -245,10 +252,7 @@ impl ReqwestTransport {
         {
             return Duration::from_secs(*retry_after_secs);
         }
-        let factor = 2u32.saturating_pow(attempt);
-        self.backoff_base
-            .saturating_mul(factor)
-            .min(MAX_BACKOFF_DELAY)
+        capped_backoff(self.backoff_base, MAX_BACKOFF_DELAY, attempt)
     }
 }
 

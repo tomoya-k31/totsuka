@@ -5,10 +5,15 @@
 //! connect → `hello` → read envelopes. `events_api` / `interactive` envelopes
 //! are **acked immediately on receipt** — Slack redelivers an envelope not
 //! acked within ~3s, so the ack never waits on processing; the payload is
-//! handed to the pipeline through an mpsc channel *after* the ack is on the
-//! wire. A `disconnect` message (Slack refreshing the endpoint) or a dropped
-//! connection triggers a reconnect with capped exponential backoff.
+//! handed to the pipeline through an *unbounded* channel after the ack is on
+//! the wire (a bounded channel could park the reader on a slow consumer and
+//! stall every later ack). A `disconnect` message (Slack refreshing the
+//! endpoint) or a dropped connection triggers a reconnect; sessions that die
+//! before Slack's `hello` count as failures and back off exponentially.
+//! Silence beyond `idle_timeout` is treated as a dead TCP path (Slack pings
+//! every few seconds, so a healthy connection is never quiet that long).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -19,7 +24,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::error::SlackError;
 use crate::slack_api::SlackApi;
-use crate::transport::SlackTransport;
+use crate::transport::{SlackTransport, capped_backoff};
 
 /// A normalized event out of the Socket Mode stream.
 #[derive(Debug, Clone)]
@@ -43,8 +48,10 @@ pub struct SocketModeOptions {
     /// Consecutive connection failures after which each further failure is
     /// logged at `warn` (persistent outage), not just `info`.
     pub warn_after: u32,
-    /// Buffered events between the reader and the pipeline.
-    pub channel_capacity: usize,
+    /// No frame for this long → the TCP path is presumed silently dead and
+    /// the session reconnects. Slack pings every few seconds; a healthy
+    /// connection never goes this quiet.
+    pub idle_timeout: Duration,
 }
 
 impl Default for SocketModeOptions {
@@ -53,42 +60,46 @@ impl Default for SocketModeOptions {
             backoff_base: Duration::from_millis(500),
             backoff_max: Duration::from_secs(32),
             warn_after: 5,
-            channel_capacity: 256,
+            idle_timeout: Duration::from_secs(60),
         }
     }
 }
 
-/// Why one WebSocket session ended (each reason leads to a reconnect).
+/// Why one WebSocket session ended.
 enum SessionEnd {
-    /// Slack asked us to reconnect (`disconnect` message / close frame) or
-    /// the stream ended cleanly — reconnect without backoff growth.
+    /// A healthy session ended (Slack `disconnect` refresh, close frame, or
+    /// clean EOF *after* `hello`) — reconnect without backoff growth.
     Refresh,
-    /// The connection failed — counts toward backoff.
+    /// The connection failed, died silently, or closed before proving itself
+    /// with a `hello` — counts toward backoff.
     Failed(String),
+    /// The event receiver is gone: the plugin is shutting down.
+    Shutdown,
 }
 
-/// Run the Socket Mode loop over `api`, delivering normalized events into the
-/// returned receiver until the receiver is dropped or a fatal
-/// credential/identity error stops the loop (the error is returned by the
-/// task). Transient failures — connection drops, `disconnect` refreshes,
-/// transport errors on `apps.connections.open` — reconnect forever with
-/// capped exponential backoff.
+/// Run the Socket Mode loop over `api` (shared with the mention pipeline,
+/// hence the `Arc`), delivering normalized events into the returned receiver
+/// until the receiver is dropped or a fatal credential/configuration error
+/// stops the loop (the error is returned by the task). Transient failures —
+/// connection drops, `disconnect` refreshes, network errors on
+/// `apps.connections.open` — reconnect forever with capped exponential
+/// backoff.
 pub fn spawn<T: SlackTransport + 'static>(
-    api: SlackApi<T>,
+    api: Arc<SlackApi<T>>,
     options: SocketModeOptions,
 ) -> (
-    mpsc::Receiver<SocketEvent>,
+    mpsc::UnboundedReceiver<SocketEvent>,
     tokio::task::JoinHandle<Result<(), SlackError>>,
 ) {
-    let (tx, rx) = mpsc::channel(options.channel_capacity);
+    let (tx, rx) = mpsc::unbounded_channel();
     let handle = tokio::spawn(async move { run(api, options, tx).await });
     (rx, handle)
 }
 
 async fn run<T: SlackTransport>(
-    api: SlackApi<T>,
+    api: Arc<SlackApi<T>>,
     options: SocketModeOptions,
-    tx: mpsc::Sender<SocketEvent>,
+    tx: mpsc::UnboundedSender<SocketEvent>,
 ) -> Result<(), SlackError> {
     let mut consecutive_failures: u32 = 0;
     loop {
@@ -97,8 +108,10 @@ async fn run<T: SlackTransport>(
         }
         let url = match api.apps_connections_open().await {
             Ok(url) => url,
-            // A bad xapp token never fixes itself — stop with the guidance
-            // (already logged by the API layer) instead of retrying forever.
+            // A bad/underscoped xapp token never fixes itself — stop with the
+            // guidance (already logged by the API layer) instead of retrying
+            // forever. `apps.connections.open` treats every API error as
+            // credential-class, so only network failures reach the arm below.
             Err(e) if e.is_credential() => return Err(e),
             Err(e) => {
                 consecutive_failures += 1;
@@ -112,7 +125,8 @@ async fn run<T: SlackTransport>(
             }
         };
 
-        match session(&url, &tx).await {
+        match session(&url, &tx, options.idle_timeout).await {
+            SessionEnd::Shutdown => return Ok(()),
             SessionEnd::Refresh => {
                 consecutive_failures = 0;
                 tracing::info!("socket mode: reconnecting after endpoint refresh");
@@ -128,11 +142,11 @@ async fn run<T: SlackTransport>(
 /// Wait out the capped exponential backoff for failure number `n`, logging at
 /// `warn` once the outage looks persistent.
 async fn backoff(options: &SocketModeOptions, n: u32, reason: &str) {
-    let factor = 2u32.saturating_pow(n.saturating_sub(1));
-    let delay = options
-        .backoff_base
-        .saturating_mul(factor)
-        .min(options.backoff_max);
+    let delay = capped_backoff(
+        options.backoff_base,
+        options.backoff_max,
+        n.saturating_sub(1),
+    );
     if n >= options.warn_after {
         tracing::warn!(
             consecutive_failures = n,
@@ -150,23 +164,52 @@ async fn backoff(options: &SocketModeOptions, n: u32, reason: &str) {
 }
 
 /// One WebSocket session: connect, ack + forward envelopes, and report how it
-/// ended. Never returns while the connection is healthy.
-async fn session(url: &str, tx: &mpsc::Sender<SocketEvent>) -> SessionEnd {
+/// ended. Never returns while the connection is healthy and the receiver
+/// lives.
+async fn session(
+    url: &str,
+    tx: &mpsc::UnboundedSender<SocketEvent>,
+    idle_timeout: Duration,
+) -> SessionEnd {
     let (mut stream, _) = match connect_async(url).await {
         Ok(ok) => ok,
         Err(e) => return SessionEnd::Failed(format!("websocket connect failed: {e}")),
     };
 
+    // `hello` proves the endpoint actually spoke Socket Mode; a session dying
+    // before it (e.g. a proxy accepting then closing) must not be treated as
+    // a healthy refresh, or a broken endpoint becomes a tight reconnect loop.
+    let mut healthy = false;
+    // A clean close after hello reconnects without backoff.
+    let end_of_stream = |healthy: bool| {
+        if healthy {
+            SessionEnd::Refresh
+        } else {
+            SessionEnd::Failed("connection closed before hello".into())
+        }
+    };
+
     loop {
-        let message = match stream.next().await {
-            Some(Ok(m)) => m,
-            Some(Err(e)) => return SessionEnd::Failed(format!("websocket read failed: {e}")),
-            None => return SessionEnd::Refresh, // clean end of stream
+        let next = tokio::select! {
+            // Without this, a receiver dropped during a quiet session leaves
+            // the loop parked in `stream.next()` forever (shutdown hang).
+            _ = tx.closed() => return SessionEnd::Shutdown,
+            next = tokio::time::timeout(idle_timeout, stream.next()) => next,
+        };
+        let message = match next {
+            Err(_elapsed) => {
+                return SessionEnd::Failed(format!(
+                    "no traffic for {idle_timeout:?} (silent connection loss presumed)"
+                ));
+            }
+            Ok(Some(Ok(m))) => m,
+            Ok(Some(Err(e))) => return SessionEnd::Failed(format!("websocket read failed: {e}")),
+            Ok(None) => return end_of_stream(healthy),
         };
         let text = match message {
             WsMessage::Text(text) => text,
-            WsMessage::Close(_) => return SessionEnd::Refresh,
-            // tungstenite answers pings during read/flush; nothing to do here.
+            WsMessage::Close(_) => return end_of_stream(healthy),
+            // tungstenite answers pings itself during read/flush.
             _ => continue,
         };
         let Ok(value) = serde_json::from_str::<Value>(text.as_str()) else {
@@ -185,6 +228,7 @@ async fn session(url: &str, tx: &mpsc::Sender<SocketEvent>) -> SessionEnd {
 
         match value.get("type").and_then(Value::as_str) {
             Some("hello") => {
+                healthy = true;
                 tracing::info!("socket mode: connected (hello)");
             }
             Some("disconnect") => {
@@ -196,10 +240,10 @@ async fn session(url: &str, tx: &mpsc::Sender<SocketEvent>) -> SessionEnd {
                 return SessionEnd::Refresh;
             }
             _ => {
-                if let Some(event) = normalize(&value)
-                    && tx.send(event).await.is_err()
+                if let Some(event) = normalize(value)
+                    && tx.send(event).is_err()
                 {
-                    return SessionEnd::Refresh; // receiver dropped; run() exits
+                    return SessionEnd::Shutdown; // receiver dropped
                 }
             }
         }
@@ -208,20 +252,23 @@ async fn session(url: &str, tx: &mpsc::Sender<SocketEvent>) -> SessionEnd {
 
 /// Normalize an acked envelope into a [`SocketEvent`]; `None` for envelope
 /// types the plugin does not consume (slash commands, non-message events, …).
-fn normalize(envelope: &Value) -> Option<SocketEvent> {
-    let payload = envelope.get("payload")?;
-    match envelope.get("type").and_then(Value::as_str)? {
+/// Takes the envelope by value: the interesting subtree is moved out, not
+/// deep-cloned, on this per-event hot path.
+fn normalize(mut envelope: Value) -> Option<SocketEvent> {
+    let envelope_type = envelope.get("type").and_then(Value::as_str)?;
+    match envelope_type {
         "events_api" => {
-            let event = payload.get("event")?;
+            let event = envelope.get_mut("payload")?.get_mut("event")?.take();
             if event.get("type").and_then(Value::as_str) == Some("message") {
-                Some(SocketEvent::Message(event.clone()))
+                Some(SocketEvent::Message(event))
             } else {
                 None
             }
         }
         "interactive" => {
+            let payload = envelope.get_mut("payload")?.take();
             if payload.get("type").and_then(Value::as_str) == Some("block_actions") {
-                Some(SocketEvent::BlockActions(payload.clone()))
+                Some(SocketEvent::BlockActions(payload))
             } else {
                 None
             }
@@ -244,7 +291,7 @@ mod tests {
             "envelope_id": "e1",
             "payload": { "event": { "type": "message", "text": "hi", "channel": "C1" } }
         });
-        let Some(SocketEvent::Message(event)) = normalize(&envelope) else {
+        let Some(SocketEvent::Message(event)) = normalize(envelope) else {
             panic!("expected Message");
         };
         assert_eq!(event["channel"], "C1");
@@ -256,7 +303,7 @@ mod tests {
             "type": "events_api",
             "payload": { "event": { "type": "reaction_added" } }
         });
-        assert!(normalize(&envelope).is_none());
+        assert!(normalize(envelope).is_none());
     }
 
     #[test]
@@ -269,7 +316,7 @@ mod tests {
                 "actions": [{ "action_id": "approve_reply" }]
             }
         });
-        let Some(SocketEvent::BlockActions(payload)) = normalize(&envelope) else {
+        let Some(SocketEvent::BlockActions(payload)) = normalize(envelope) else {
             panic!("expected BlockActions");
         };
         assert_eq!(payload["actions"][0]["action_id"], "approve_reply");
@@ -278,14 +325,14 @@ mod tests {
 
     #[test]
     fn other_envelope_types_are_ignored() {
-        assert!(normalize(&json!({ "type": "slash_commands", "payload": {} })).is_none());
+        assert!(normalize(json!({ "type": "slash_commands", "payload": {} })).is_none());
         assert!(
-            normalize(&json!({
+            normalize(json!({
                 "type": "interactive",
                 "payload": { "type": "view_submission" }
             }))
             .is_none()
         );
-        assert!(normalize(&json!({ "type": "hello" })).is_none());
+        assert!(normalize(json!({ "type": "hello" })).is_none());
     }
 }

@@ -71,7 +71,7 @@ fn message_envelope(id: &str, text: &str) -> Value {
     })
 }
 
-async fn next_event(rx: &mut mpsc::Receiver<SocketEvent>) -> SocketEvent {
+async fn next_event(rx: &mut mpsc::UnboundedReceiver<SocketEvent>) -> SocketEvent {
     tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
         .expect("event within 5s")
@@ -84,7 +84,10 @@ async fn envelopes_are_acked_before_the_consumer_reads_them() {
     let shared = Shared::default();
     shared.push(Canned::Data(json!({ "ok": true, "url": url })));
 
-    let (mut rx, _handle) = spawn(SlackApi::new(transport(&shared)), options());
+    let (mut rx, _handle) = spawn(
+        std::sync::Arc::new(SlackApi::new(transport(&shared))),
+        options(),
+    );
     let mut ws = accept_with_hello(&listener).await;
 
     // Both acks arrive while nothing has consumed the event channel yet:
@@ -122,7 +125,10 @@ async fn non_message_envelopes_are_acked_but_not_delivered() {
     let shared = Shared::default();
     shared.push(Canned::Data(json!({ "ok": true, "url": url })));
 
-    let (mut rx, _handle) = spawn(SlackApi::new(transport(&shared)), options());
+    let (mut rx, _handle) = spawn(
+        std::sync::Arc::new(SlackApi::new(transport(&shared))),
+        options(),
+    );
     let mut ws = accept_with_hello(&listener).await;
 
     // A reaction event is acked (Slack must not redeliver) yet filtered out.
@@ -150,7 +156,10 @@ async fn disconnect_message_reconnects_without_losing_events() {
     shared.push(Canned::Data(json!({ "ok": true, "url": url.clone() })));
     shared.push(Canned::Data(json!({ "ok": true, "url": url })));
 
-    let (mut rx, _handle) = spawn(SlackApi::new(transport(&shared)), options());
+    let (mut rx, _handle) = spawn(
+        std::sync::Arc::new(SlackApi::new(transport(&shared))),
+        options(),
+    );
 
     // First connection: one event, then Slack asks us to refresh.
     let mut ws = accept_with_hello(&listener).await;
@@ -193,7 +202,10 @@ async fn dropped_connection_and_transport_errors_back_off_then_recover() {
     shared.push(Canned::Network);
     shared.push(Canned::Data(json!({ "ok": true, "url": url })));
 
-    let (mut rx, _handle) = spawn(SlackApi::new(transport(&shared)), options());
+    let (mut rx, _handle) = spawn(
+        std::sync::Arc::new(SlackApi::new(transport(&shared))),
+        options(),
+    );
 
     let mut ws = accept_with_hello(&listener).await;
     send_and_await_ack(&mut ws, message_envelope("e1", "recovered")).await;
@@ -205,13 +217,85 @@ async fn dropped_connection_and_transport_errors_back_off_then_recover() {
 }
 
 #[tokio::test]
+async fn silent_connection_is_detected_by_the_idle_timeout() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({ "ok": true, "url": url.clone() })));
+    shared.push(Canned::Data(json!({ "ok": true, "url": url })));
+
+    let mut opts = options();
+    opts.idle_timeout = Duration::from_millis(200);
+    let (mut rx, _handle) = spawn(std::sync::Arc::new(SlackApi::new(transport(&shared))), opts);
+
+    // First connection goes silent after hello (dead TCP path simulation:
+    // the server just never writes again).
+    let ws_silent = accept_with_hello(&listener).await;
+
+    // The client must give up on the quiet session and reconnect.
+    let mut ws = accept_with_hello(&listener).await;
+    drop(ws_silent);
+    send_and_await_ack(&mut ws, message_envelope("e1", "after silence")).await;
+    let SocketEvent::Message(event) = next_event(&mut rx).await else {
+        panic!("expected Message");
+    };
+    assert_eq!(event["text"], "after silence");
+}
+
+#[tokio::test]
+async fn dropping_the_receiver_stops_an_idle_session() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({ "ok": true, "url": url })));
+
+    let (rx, handle) = spawn(
+        std::sync::Arc::new(SlackApi::new(transport(&shared))),
+        options(),
+    );
+    let _ws = accept_with_hello(&listener).await;
+
+    // No traffic at all: the loop is parked reading. Dropping the receiver
+    // must still end the task (shutdown), not hang forever.
+    drop(rx);
+    let result = tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("loop stops on receiver drop")
+        .expect("task not panicked");
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[tokio::test]
+async fn permanent_configuration_errors_stop_the_loop() {
+    // missing_scope / not_allowed_token_type never fix themselves: the loop
+    // must fail fast with guidance instead of retrying forever.
+    for code in ["missing_scope", "not_allowed_token_type"] {
+        let shared = Shared::default();
+        shared.push(Canned::Data(json!({ "ok": false, "error": code })));
+
+        let (_rx, handle) = spawn(
+            std::sync::Arc::new(SlackApi::new(transport(&shared))),
+            options(),
+        );
+        let result = tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("loop stops")
+            .expect("task not panicked");
+        let err = result.expect_err("permanent config failure is fatal");
+        assert!(err.to_string().contains(code), "{err}");
+        assert_eq!(shared.requests().len(), 1, "{code}: no retries");
+    }
+}
+
+#[tokio::test]
 async fn bad_app_token_stops_the_loop_with_guidance() {
     let shared = Shared::default();
     shared.push(Canned::Data(
         json!({ "ok": false, "error": "invalid_auth" }),
     ));
 
-    let (mut rx, handle) = spawn(SlackApi::new(transport(&shared)), options());
+    let (mut rx, handle) = spawn(
+        std::sync::Arc::new(SlackApi::new(transport(&shared))),
+        options(),
+    );
     let result = tokio::time::timeout(Duration::from_secs(5), handle)
         .await
         .expect("loop stops")
