@@ -30,6 +30,11 @@ and assessed.** CI-green alone is not enough — merging on CI-only once let two
 Copilot findings slip past review. Step 5 (`/code-review`) does not depend on CI,
 so it may start while CI is still running.
 
+**Write all review output in Japanese** — the `/code-review` comments you post
+(step 5), the finding summaries you report (step 3), and the rationale you leave
+on findings (Handling findings below). (Copilot's own review language is not
+controllable.)
+
 ### Polling policy (applies to every wait below)
 
 Poll every **30 seconds**, for at most **10 minutes**. If it has not completed
