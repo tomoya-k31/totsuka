@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-15
+* **Update**: [task-source-slack プラグイン](/components/task-source-slack.md) に Slack Web API クライアント層（#104 前半）を追加。NEW `slack_api` モジュール = 上位ロジックの唯一の Slack 窓口となる型付きラッパ（auth.test / apps.connections.open / conversations.replies / conversations.open / users.info / chat.getPermalink / chat.postMessage / chat.postEphemeral / chat.update / response_url POST）。失効系エラーはトークン種別（xoxp/xapp）に応じた回復ガイダンス付きで tracing へ。transport は引数フォームエンコード化・`Retry-After` を正確に尊重する 429 リトライ（拒否済み保証により非冪等でも再送、コール毎リトライ待機バジェット 90s 超過は即時失敗）・`response_url` POST（リトライなし）を実装。Socket Mode WebSocket は #104 後半で追加予定。
 * **Creation**: [task-source-slack プラグイン](/components/task-source-slack.md)（#103、エピック #102 の起点）。自分宛の Slack メンションをタスク化し本人名義で代理返信するための公式 task_source プラグインの骨格。crate 構成（config / error / transport / server / main）・設定スキーマ（`deny_unknown_fields`、トークン prefix・`[[repos]]`・channel_groups 参照整合・repos 複数時の `[llm]` 必須の静的検証）・stdio JSON-RPC ディスパッチ・起動時 TokenGuard（`auth.test` の原因別ガイダンス + `user_id == target_user_id` のなりすまし防止）を実装。`config/validate` は意図的にオフライン（TokenGuard は initialize 側）。`tasks/fetch` / `task/update_status` / `result/publish` はスタブ（#105/#107 で実装）。録画トランスポート結合テスト + 実バイナリで install/enable/config validate/doctor を確認。
 
 ## 2026-07-14

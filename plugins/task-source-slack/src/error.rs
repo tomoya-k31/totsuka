@@ -36,6 +36,15 @@ pub enum SlackError {
         /// Response body (truncated).
         body: String,
     },
+    /// Slack rate-limited the call (HTTP 429). Retryable after the delay the
+    /// `Retry-After` header asked for.
+    #[error("Slack API rate limited `{method}` → retry after {retry_after_secs}s")]
+    RateLimited {
+        /// The Web API method that was throttled.
+        method: String,
+        /// Seconds to wait, from the `Retry-After` header.
+        retry_after_secs: u64,
+    },
     /// A network/transport failure (retryable).
     #[error("Slack API transport error: {0}")]
     Transport(String),
@@ -45,6 +54,13 @@ pub enum SlackError {
     /// The response was not the JSON shape we expected.
     #[error("Slack returned an unexpected response: {0}")]
     InvalidResponse(String),
+    /// The plugin built a request Slack could not be asked (programmer error,
+    /// e.g. non-object Web API arguments) — distinct from [`InvalidResponse`]
+    /// so the log does not blame Slack for a local bug.
+    ///
+    /// [`InvalidResponse`]: SlackError::InvalidResponse
+    #[error("invalid Slack API request (plugin bug): {0}")]
+    InvalidRequest(String),
 }
 
 impl SlackError {
@@ -52,10 +68,19 @@ impl SlackError {
     /// timeouts, rate limiting (429) and 5xx server errors.
     pub fn is_retryable(&self) -> bool {
         match self {
-            SlackError::Transport(_) | SlackError::Timeout(_) => true,
-            SlackError::Http { status, .. } => *status == 429 || (500..=599).contains(status),
+            SlackError::Transport(_) | SlackError::Timeout(_) | SlackError::RateLimited { .. } => {
+                true
+            }
+            SlackError::Http { status, .. } => (500..=599).contains(status),
             _ => false,
         }
+    }
+
+    /// Whether the request is known to have been *rejected* rather than
+    /// possibly applied — a 429 never processed the call, so replaying it is
+    /// safe even for a non-idempotent mutation (a lost 5xx/timeout is not).
+    pub fn is_rejected(&self) -> bool {
+        matches!(self, SlackError::RateLimited { .. })
     }
 
     /// Whether this is a startup-blocking credential/identity problem (the
@@ -99,6 +124,26 @@ pub fn auth_failure(error: &str) -> SlackError {
     SlackError::Auth(message.to_string())
 }
 
+/// Map a credential-class failure of an *App-Level Token* call
+/// (`apps.connections.open`) to a [`SlackError::Auth`] with xapp-specific
+/// recovery guidance — the fix differs from the user token's (regenerate the
+/// xapp- token rather than re-issue the xoxp- one).
+pub fn app_auth_failure(error: &str) -> SlackError {
+    let hint = match error {
+        "account_inactive" => {
+            "the Slack account behind the app is deactivated (account_inactive); from an \
+             active account, "
+        }
+        _ => "",
+    };
+    SlackError::Auth(format!(
+        "Slack rejected the App-Level Token ({error}) → {hint}regenerate the xapp- token \
+         under the Slack app's Basic Information > App-Level Tokens (scope \
+         `connections:write`) and update the secret referenced by `app_token` in \
+         plugins/slack.toml"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,9 +177,9 @@ mod tests {
         assert!(SlackError::Transport("x".into()).is_retryable());
         assert!(SlackError::Timeout(30).is_retryable());
         assert!(
-            SlackError::Http {
-                status: 429,
-                body: String::new()
+            SlackError::RateLimited {
+                method: "chat.postMessage".into(),
+                retry_after_secs: 5
             }
             .is_retryable()
         );
@@ -153,6 +198,43 @@ mod tests {
             .is_retryable()
         );
         assert!(!auth_failure("invalid_auth").is_retryable());
+    }
+
+    #[test]
+    fn only_rate_limiting_counts_as_rejected() {
+        assert!(
+            SlackError::RateLimited {
+                method: "chat.postMessage".into(),
+                retry_after_secs: 5
+            }
+            .is_rejected()
+        );
+        // A timeout / 5xx may have applied the write; replaying could duplicate.
+        assert!(!SlackError::Timeout(30).is_rejected());
+        assert!(
+            !SlackError::Http {
+                status: 503,
+                body: String::new()
+            }
+            .is_rejected()
+        );
+    }
+
+    #[test]
+    fn app_auth_failure_points_at_the_xapp_token() {
+        for code in ["invalid_auth", "token_revoked", "account_inactive"] {
+            let err = app_auth_failure(code);
+            assert!(err.is_credential(), "{code}");
+            let message = err.to_string();
+            assert!(message.contains(code), "{message}");
+            assert!(message.contains("xapp-"), "{message}");
+            assert!(message.contains("connections:write"), "{message}");
+        }
+        assert!(
+            app_auth_failure("account_inactive")
+                .to_string()
+                .contains("deactivated")
+        );
     }
 
     #[test]

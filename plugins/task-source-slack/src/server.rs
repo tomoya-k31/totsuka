@@ -17,8 +17,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::config::{SlackConfig, static_config_errors};
-use crate::error::{SlackError, auth_failure};
-use crate::transport::{SlackTransport, TokenKind, TransportSettings, expect_ok};
+use crate::error::SlackError;
+use crate::slack_api::SlackApi;
+use crate::transport::{SlackTransport, TransportSettings};
 
 /// Builds a transport from resolved connection settings. Abstracted so the
 /// server can be tested with a recorded transport.
@@ -69,15 +70,15 @@ pub struct Server<F: TransportFactory> {
     session: Option<Session<F::Transport>>,
 }
 
-/// An initialized plugin session: the validated config and its transport.
+/// An initialized plugin session: the validated config and its Slack client.
 struct Session<T> {
     config: SlackConfig,
     #[expect(
         dead_code,
-        reason = "the skeleton's stubs answer without the network; the Slack client work \
-                  (mention fetch, status write-back, reply publish) will drive it"
+        reason = "the skeleton's stubs answer without the network; the mention pipeline \
+                  (fetch, status write-back, reply publish) will drive it"
     )]
-    transport: T,
+    api: SlackApi<T>,
 }
 
 impl<F: TransportFactory> Server<F> {
@@ -155,8 +156,8 @@ impl<F: TransportFactory> Server<F> {
                 ));
             }
         };
-        let transport = self.factory.build(settings(&config));
-        if let Err(e) = token_guard(&transport, &config).await {
+        let api = SlackApi::new(self.factory.build(settings(&config)));
+        if let Err(e) = token_guard(&api, &config).await {
             // Credential/identity problems are config-class (fix the token or
             // the config); anything else (network down) is an internal error.
             let code = if e.is_credential() {
@@ -166,7 +167,7 @@ impl<F: TransportFactory> Server<F> {
             };
             return Reply::respond(Response::error(id, Error::new(code, e.to_string())));
         }
-        self.session = Some(Session { config, transport });
+        self.session = Some(Session { config, api });
         Reply::respond(Response::result(id, capabilities_result()))
     }
 
@@ -246,26 +247,14 @@ impl<F: TransportFactory> Server<F> {
 /// identity must be `target_user_id` (a reply posted with someone else's
 /// token would impersonate them).
 async fn token_guard<T: SlackTransport>(
-    transport: &T,
+    api: &SlackApi<T>,
     config: &SlackConfig,
 ) -> Result<(), SlackError> {
-    let response = transport
-        .call(TokenKind::User, "auth.test", None, true)
-        .await?;
-    let response = expect_ok("auth.test", response).map_err(|e| match e {
-        SlackError::Api { error, .. } => auth_failure(&error),
-        other => other,
-    })?;
-    let user_id = response
-        .get("user_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            SlackError::InvalidResponse("`auth.test` response has no `user_id`".into())
-        })?;
-    if user_id != config.target_user_id {
+    let identity = api.auth_test().await?;
+    if identity.user_id != config.target_user_id {
         return Err(SlackError::IdentityMismatch {
             expected: config.target_user_id.clone(),
-            actual: user_id.to_string(),
+            actual: identity.user_id,
         });
     }
     Ok(())
