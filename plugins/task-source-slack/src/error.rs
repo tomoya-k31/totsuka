@@ -1,0 +1,170 @@
+//! Errors from the Slack task source.
+
+/// An error talking to the Slack Web API or interpreting its response.
+#[derive(Debug, thiserror::Error)]
+pub enum SlackError {
+    /// `auth.test` rejected the user token. The message carries token-state
+    /// specific recovery guidance (see [`auth_failure`]).
+    #[error("{0}")]
+    Auth(String),
+    /// The token authenticates as someone other than `target_user_id` —
+    /// refused so the plugin can never reply as somebody else.
+    #[error(
+        "the user token belongs to `{actual}` but `target_user_id` is `{expected}` → replies \
+         would be posted as the wrong person; fix `target_user_id` in plugins/slack.toml or \
+         supply that user's own xoxp- token"
+    )]
+    IdentityMismatch {
+        /// The configured `target_user_id`.
+        expected: String,
+        /// The `user_id` reported by `auth.test`.
+        actual: String,
+    },
+    /// A Web API call returned `ok: false` with an error code.
+    #[error("Slack API `{method}` failed: {error} → check the token's scopes and the request")]
+    Api {
+        /// The Web API method (e.g. `auth.test`).
+        method: String,
+        /// Slack's error code (e.g. `missing_scope`).
+        error: String,
+    },
+    /// The API returned a non-success HTTP status.
+    #[error("Slack API returned HTTP {status}: {body}")]
+    Http {
+        /// HTTP status code.
+        status: u16,
+        /// Response body (truncated).
+        body: String,
+    },
+    /// A network/transport failure (retryable).
+    #[error("Slack API transport error: {0}")]
+    Transport(String),
+    /// The request timed out (retryable).
+    #[error("Slack API request timed out after {0}s")]
+    Timeout(u64),
+    /// The response was not the JSON shape we expected.
+    #[error("Slack returned an unexpected response: {0}")]
+    InvalidResponse(String),
+}
+
+impl SlackError {
+    /// Whether retrying with backoff is worthwhile: transient network,
+    /// timeouts, rate limiting (429) and 5xx server errors.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            SlackError::Transport(_) | SlackError::Timeout(_) => true,
+            SlackError::Http { status, .. } => *status == 429 || (500..=599).contains(status),
+            _ => false,
+        }
+    }
+
+    /// Whether this is a startup-blocking credential/identity problem (the
+    /// TokenGuard class of failures), as opposed to a transient runtime error.
+    pub fn is_credential(&self) -> bool {
+        matches!(
+            self,
+            SlackError::Auth(_) | SlackError::IdentityMismatch { .. }
+        )
+    }
+}
+
+/// Map an `auth.test` failure code to a [`SlackError::Auth`] whose message
+/// explains the cause and how to recover (token re-issue / app re-install /
+/// Keychain update).
+pub fn auth_failure(error: &str) -> SlackError {
+    let message = match error {
+        "invalid_auth" => {
+            "Slack rejected the user token (invalid_auth) → the token is wrong or expired; \
+             re-issue the User OAuth Token (xoxp-) from the Slack app's OAuth & Permissions \
+             page and update the secret referenced by `user_token` in plugins/slack.toml \
+             (e.g. the Keychain entry)"
+        }
+        "token_revoked" => {
+            "the user token was revoked (token_revoked) → re-install the Slack app to your \
+             workspace to issue a fresh User OAuth Token (xoxp-), then update the secret \
+             referenced by `user_token` in plugins/slack.toml (e.g. the Keychain entry)"
+        }
+        "account_inactive" => {
+            "the token's Slack account is deactivated (account_inactive) → the workspace \
+             account tied to this token no longer works; ask a workspace admin, or issue the \
+             token from an active account and update plugins/slack.toml"
+        }
+        other => {
+            return SlackError::Auth(format!(
+                "Slack `auth.test` failed: {other} → check the user token and the Slack app's \
+                 configuration, then update plugins/slack.toml"
+            ));
+        }
+    };
+    SlackError::Auth(message.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_failure_carries_recovery_guidance() {
+        assert!(
+            auth_failure("invalid_auth")
+                .to_string()
+                .contains("re-issue")
+        );
+        assert!(
+            auth_failure("token_revoked")
+                .to_string()
+                .contains("re-install")
+        );
+        assert!(
+            auth_failure("account_inactive")
+                .to_string()
+                .contains("deactivated")
+        );
+        assert!(
+            auth_failure("weird_error")
+                .to_string()
+                .contains("weird_error")
+        );
+    }
+
+    #[test]
+    fn retryable_classification() {
+        assert!(SlackError::Transport("x".into()).is_retryable());
+        assert!(SlackError::Timeout(30).is_retryable());
+        assert!(
+            SlackError::Http {
+                status: 429,
+                body: String::new()
+            }
+            .is_retryable()
+        );
+        assert!(
+            SlackError::Http {
+                status: 503,
+                body: String::new()
+            }
+            .is_retryable()
+        );
+        assert!(
+            !SlackError::Http {
+                status: 404,
+                body: String::new()
+            }
+            .is_retryable()
+        );
+        assert!(!auth_failure("invalid_auth").is_retryable());
+    }
+
+    #[test]
+    fn credential_classification() {
+        assert!(auth_failure("invalid_auth").is_credential());
+        assert!(
+            SlackError::IdentityMismatch {
+                expected: "U1".into(),
+                actual: "U2".into()
+            }
+            .is_credential()
+        );
+        assert!(!SlackError::Transport("x".into()).is_credential());
+    }
+}

@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-07-15
+* **Creation**: [task-source-slack プラグイン](/components/task-source-slack.md)（#103、エピック #102 の起点）。自分宛の Slack メンションをタスク化し本人名義で代理返信するための公式 task_source プラグインの骨格。crate 構成（config / error / transport / server / main）・設定スキーマ（`deny_unknown_fields`、トークン prefix・`[[repos]]`・channel_groups 参照整合・repos 複数時の `[llm]` 必須の静的検証）・stdio JSON-RPC ディスパッチ・起動時 TokenGuard（`auth.test` の原因別ガイダンス + `user_id == target_user_id` のなりすまし防止）を実装。`config/validate` は意図的にオフライン（TokenGuard は initialize 側）。`tasks/fetch` / `task/update_status` / `result/publish` はスタブ（#105/#107 で実装）。録画トランスポート結合テスト + 実バイナリで install/enable/config validate/doctor を確認。
+
 ## 2026-07-14
 * **Update**: [リリース手順](/operations/release-runbook.md) に「トークン運用」節を追加。既定 GITHUB_TOKEN 作成の Release PR は CI が走らず必須チェック `lint` を満たせずブランチ保護（Ruleset）でブロックされる問題への対処を 3 案で整理: (1)GitHub App（org 所有・短命トークン・推奨、`actions/create-github-app-token` 配線）、(2)fine-grained PAT、(3)admin マージ（現状）。bot を Ruleset bypass に足す案は非推奨として明記。
 * **Creation**: 配布・リリース体制（#67、§10/§8）。リリース自動化（`.github/workflows/release-please.yml` = Conventional Commits→SemVer タグ+CHANGELOG に加え、同ワークフローの `universal-binary` ジョブが macOS ユニバーサルバイナリを lipo でビルドし Release へ添付）、`release-please-config.json`/`.release-please-manifest.json`、`CHANGELOG.md`/`LICENSE`(MIT)、GitHub Issue テンプレート（`doctor --json` 添付を促す）を追加。配布経路は GitHub Releases のユニバーサルバイナリ + `cargo install`（パッケージマネージャは v1 で扱わない）。ユーザー向けドキュメントを新設: [設定リファレンス](/development/config-reference.md)（config.toml 全キー）、[プラグイン開発ガイド](/development/plugin-dev-guide.md)（protocol/manifest/メソッド一覧）、[運用ガイド](/operations/operations-guide.md)（doctor/worktree 掃除/FAQ）、[リリース手順](/operations/release-runbook.md)（release-please/GitHub Releases/Gatekeeper）。README を英日バイリンガル化（クイックスタート 5 ステップ）。

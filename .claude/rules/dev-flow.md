@@ -50,6 +50,20 @@ run **locally** before pushing — post-PR you still monitor all CI checks.
 - No unrelated files or stray working-tree changes are included;
   `git add <explicit files>` only — never `-A` / `.` (→ git-conventions).
 
+**Pre-PR review** (optional, best-effort — must NEVER block the PR):
+
+- Run it **inline in the main session** via the `/code-review` skill at
+  **low or medium** effort. Do NOT wrap it in a subagent that itself spawns
+  finder/fan-out agents — the middle agent parks waiting on its children and
+  the chain stalls in intermediate states ("waiting for finders", "running
+  clippy"), which has repeatedly frozen progress.
+- **Hard cap: 10 minutes** (same ceiling as the post-PR polling policy). If it
+  has not produced a final report by then, **stop it, note that it was cut
+  short, and proceed to opening the PR**. The post-PR gates — CI, the Copilot
+  review, and `/code-review --comment` (step 5) — are the safety net; a stalled
+  pre-PR review must not be the only thing blocking an otherwise-finished
+  change.
+
 ## After opening a PR — monitor, assess, iterate
 
 **Do not merge until BOTH the CI run and the Copilot review have been fetched
@@ -89,7 +103,10 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
 2. **Monitor the GitHub Copilot auto-review.** It runs in parallel with CI and
    can take a few minutes to appear; poll on the same 30 s / 10 min cap. The
    review author is `copilot-pull-request-reviewer` (inline comment user
-   `Copilot`). Fetch both levels:
+   `Copilot`). **This repo triggers the Copilot review only on PR creation** —
+   later pushes do NOT re-trigger it, so only poll for it once, right after
+   opening the PR (see Handling findings for what to do after fix commits).
+   Fetch both levels:
 
    ```
    # inline review comments
@@ -129,9 +146,11 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
   (→ git-conventions).
 - **Mistaken finding** → do **not** silently ignore it: record the rationale as
   a reply on the PR comment and/or in the fixing commit / PR body.
-- After pushing any fix commit, **always re-monitor CI for it** (steps 1–3): a
-  fix commit re-triggers the full CI run, and Copilot re-reviews automatically
-  (→ fetch and vet, step 4). Iterate until clean.
+- After pushing any fix commit, **always re-monitor CI for it** (steps 1 & 3):
+  a fix commit re-triggers the full CI run. **Copilot does NOT re-review on
+  later pushes** (it only reviews on PR creation, per step 2) — do not poll for
+  a re-review that will never arrive; the fix commits are covered by CI and the
+  human reviewer instead. Iterate until CI is clean.
 - **Do not re-run `/code-review` (step 5) for every fix.** Run it **once per
   PR**; re-run it only when a later commit adds **substantive new code / logic**
   (not doc, wording, or trivial diff fixes). CI + Copilot + the human reviewer

@@ -1,0 +1,346 @@
+//! JSON-RPC dispatch for the stdio server (F-51). Generic over a
+//! [`TransportFactory`] so the whole request/response surface — including
+//! `initialize`'s TokenGuard — is driven in tests with a recorded transport,
+//! no network involved.
+//!
+//! In this skeleton, `tasks/fetch` / `task/update_status` / `result/publish`
+//! are stubs: fetch answers with no tasks, the mutations succeed as no-ops.
+//! The mention pipeline behind them lands with the Slack client work.
+
+use plugin_protocol::jsonrpc::{Error, Response, error_code};
+use plugin_protocol::methods::{
+    ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
+    ResultPublishParams, TaskUpdateStatusParams, TasksFetchParams, TasksFetchResult,
+};
+use plugin_protocol::{Capabilities, OutputCapability, RequestId, method};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+
+use crate::config::{SlackConfig, static_config_errors};
+use crate::error::{SlackError, auth_failure};
+use crate::transport::{SlackTransport, TokenKind, TransportSettings, expect_ok};
+
+/// Builds a transport from resolved connection settings. Abstracted so the
+/// server can be tested with a recorded transport.
+pub trait TransportFactory {
+    /// The transport this factory produces.
+    type Transport: SlackTransport;
+    /// Build a transport from connection `settings`.
+    fn build(&self, settings: TransportSettings<'_>) -> Self::Transport;
+}
+
+/// Connection settings derived from a [`SlackConfig`].
+fn settings(config: &SlackConfig) -> TransportSettings<'_> {
+    TransportSettings {
+        api_url: &config.api_url,
+        app_token: &config.app_token,
+        user_token: &config.user_token,
+        max_retries: config.max_retries,
+    }
+}
+
+/// The result of handling one input line.
+pub struct Reply {
+    /// The response line to write (absent for notifications, which get no reply).
+    pub line: Option<String>,
+    /// Whether the server should exit after this line (`shutdown`).
+    pub shutdown: bool,
+}
+
+impl Reply {
+    fn none() -> Self {
+        Self {
+            line: None,
+            shutdown: false,
+        }
+    }
+    fn respond(response: Response) -> Self {
+        Self {
+            line: plugin_protocol::jsonrpc::to_line(&response).ok(),
+            shutdown: false,
+        }
+    }
+}
+
+/// The Slack task-source stdio server.
+pub struct Server<F: TransportFactory> {
+    factory: F,
+    /// Set by a successful `initialize` (config parsed + TokenGuard passed).
+    session: Option<Session<F::Transport>>,
+}
+
+/// An initialized plugin session: the validated config and its transport.
+struct Session<T> {
+    config: SlackConfig,
+    #[expect(
+        dead_code,
+        reason = "the skeleton's stubs answer without the network; the Slack client work \
+                  (mention fetch, status write-back, reply publish) will drive it"
+    )]
+    transport: T,
+}
+
+impl<F: TransportFactory> Server<F> {
+    /// A fresh, uninitialized server using `factory` to build transports.
+    pub fn new(factory: F) -> Self {
+        Self {
+            factory,
+            session: None,
+        }
+    }
+
+    /// Parse one NDJSON line, dispatch it, and produce a reply. A non-JSON line
+    /// yields a `PARSE_ERROR` response with a null id; blank lines and
+    /// notifications (no `id`) produce no response.
+    pub async fn handle_line(&mut self, line: &str) -> Reply {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Reply::none();
+        }
+        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+            return Reply::respond(Response::error_without_id(Error::new(
+                error_code::PARSE_ERROR,
+                "request was not valid JSON",
+            )));
+        };
+        // A message without an `id` is a notification: never answered.
+        let Some(id) = value.get("id").map(request_id) else {
+            return Reply::none();
+        };
+        let method = value.get("method").and_then(Value::as_str).unwrap_or("");
+        let params = value.get("params").cloned().unwrap_or(Value::Null);
+        self.dispatch(id, method, params).await
+    }
+
+    async fn dispatch(&mut self, id: RequestId, method: &str, params: Value) -> Reply {
+        match method {
+            method::INITIALIZE => self.initialize(id, params).await,
+            method::CONFIG_VALIDATE => self.config_validate(id, params),
+            method::SHUTDOWN => Reply {
+                line: plugin_protocol::jsonrpc::to_line(&Response::result(id, Value::Null)).ok(),
+                shutdown: true,
+            },
+            method::TASKS_FETCH => self.tasks_fetch(id, params),
+            method::TASK_UPDATE_STATUS => self.update_status(id, params),
+            method::RESULT_PUBLISH => self.result_publish(id, params),
+            other => Reply::respond(Response::error(
+                id,
+                Error::new(
+                    error_code::METHOD_NOT_FOUND,
+                    format!("unknown method: {other}"),
+                ),
+            )),
+        }
+    }
+
+    /// `initialize`: deserialize the config, then run the TokenGuard — verify
+    /// the user token via `auth.test` and that its identity is
+    /// `target_user_id` — before accepting the session. A bad token fails
+    /// startup here, with recovery guidance, instead of failing later
+    /// mid-flow.
+    async fn initialize(&mut self, id: RequestId, params: Value) -> Reply {
+        let init: InitializeParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(reply) => return reply.with_id(id),
+        };
+        let config: SlackConfig = match serde_json::from_value(init.config) {
+            Ok(c) => c,
+            Err(e) => {
+                return Reply::respond(Response::error(
+                    id,
+                    Error::new(
+                        error_code::CONFIG_INVALID,
+                        format!("invalid slack plugin config: {e}"),
+                    ),
+                ));
+            }
+        };
+        let transport = self.factory.build(settings(&config));
+        if let Err(e) = token_guard(&transport, &config).await {
+            // Credential/identity problems are config-class (fix the token or
+            // the config); anything else (network down) is an internal error.
+            let code = if e.is_credential() {
+                error_code::CONFIG_INVALID
+            } else {
+                error_code::INTERNAL_ERROR
+            };
+            return Reply::respond(Response::error(id, Error::new(code, e.to_string())));
+        }
+        self.session = Some(Session { config, transport });
+        Reply::respond(Response::result(id, capabilities_result()))
+    }
+
+    /// `config/validate`: schema + static consistency checks only (F-59/F-63).
+    /// Deliberately offline — live token verification is `initialize`'s
+    /// TokenGuard — so `config validate` / `doctor` probes need no network.
+    fn config_validate(&mut self, id: RequestId, params: Value) -> Reply {
+        let parsed: ConfigValidateParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(reply) => return reply.with_id(id),
+        };
+        let config: SlackConfig = match serde_json::from_value(parsed.config) {
+            Ok(c) => c,
+            Err(e) => return ok_validate(id, vec![format!("config does not parse: {e}")]),
+        };
+        ok_validate(id, static_config_errors(&config))
+    }
+
+    /// `tasks/fetch` stub: an initialized plugin answers with no tasks (the
+    /// mention buffer arrives with the detection work).
+    fn tasks_fetch(&mut self, id: RequestId, params: Value) -> Reply {
+        let Some(session) = self.session.as_ref() else {
+            return not_initialized(id);
+        };
+        let _parsed: TasksFetchParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(reply) => return reply.with_id(id),
+        };
+        tracing::debug!(
+            source = session.config.source_name,
+            "tasks/fetch stub: no mention pipeline yet, answering with no tasks"
+        );
+        Reply::respond(Response::result(
+            id,
+            serde_json::to_value(TasksFetchResult { tasks: Vec::new() }).unwrap_or(Value::Null),
+        ))
+    }
+
+    /// `task/update_status` stub: accepted and ignored (Slack has no status
+    /// column; the draft lifecycle arrives with the approval-flow work).
+    fn update_status(&mut self, id: RequestId, params: Value) -> Reply {
+        if self.session.is_none() {
+            return not_initialized(id);
+        }
+        let parsed: TaskUpdateStatusParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(reply) => return reply.with_id(id),
+        };
+        tracing::debug!(
+            task_id = parsed.task_id,
+            status = parsed.status,
+            "task/update_status stub: accepted, no source-side status to move"
+        );
+        Reply::respond(Response::result(id, Value::Null))
+    }
+
+    /// `result/publish` stub: accepted and dropped, with a warning — a draft
+    /// posted here would be lost, and that is worth seeing in the logs until
+    /// the approval flow lands.
+    fn result_publish(&mut self, id: RequestId, params: Value) -> Reply {
+        if self.session.is_none() {
+            return not_initialized(id);
+        }
+        let parsed: ResultPublishParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(reply) => return reply.with_id(id),
+        };
+        tracing::warn!(
+            task_id = parsed.task_id,
+            "result/publish stub: draft discarded (approval flow not implemented yet)"
+        );
+        Reply::respond(Response::result(id, Value::Null))
+    }
+}
+
+/// The TokenGuard: `auth.test` must accept the user token, and the token's
+/// identity must be `target_user_id` (a reply posted with someone else's
+/// token would impersonate them).
+async fn token_guard<T: SlackTransport>(
+    transport: &T,
+    config: &SlackConfig,
+) -> Result<(), SlackError> {
+    let response = transport
+        .call(TokenKind::User, "auth.test", None, true)
+        .await?;
+    let response = expect_ok("auth.test", response).map_err(|e| match e {
+        SlackError::Api { error, .. } => auth_failure(&error),
+        other => other,
+    })?;
+    let user_id = response
+        .get("user_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            SlackError::InvalidResponse("`auth.test` response has no `user_id`".into())
+        })?;
+    if user_id != config.target_user_id {
+        return Err(SlackError::IdentityMismatch {
+            expected: config.target_user_id.clone(),
+            actual: user_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// The capabilities this plugin declares (F-33/F-83): a task source that can
+/// write results back to the source (`result/publish` → the Slack thread).
+fn capabilities_result() -> Value {
+    let result = InitializeResult {
+        plugin_version: plugin_version(),
+        capabilities: Capabilities {
+            outputs: vec![OutputCapability::Source],
+            ..Capabilities::default()
+        },
+    };
+    serde_json::to_value(result).unwrap_or(Value::Null)
+}
+
+/// This plugin's version, from Cargo. Falls back to `0.0.0` if unparseable.
+fn plugin_version() -> semver::Version {
+    semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(semver::Version::new(0, 0, 0))
+}
+
+/// A carrier used before an id is available (params-parse failures).
+struct DeferredError {
+    error: Error,
+}
+
+impl DeferredError {
+    fn with_id(self, id: RequestId) -> Reply {
+        Reply::respond(Response::error(id, self.error))
+    }
+}
+
+/// Deserialize params, returning a deferred INVALID_PARAMS error on failure.
+fn parse_params<T: DeserializeOwned>(params: &Value) -> Result<T, DeferredError> {
+    serde_json::from_value(params.clone()).map_err(|e| DeferredError {
+        error: Error::new(error_code::INVALID_PARAMS, format!("invalid params: {e}")),
+    })
+}
+
+/// A `config/validate` success reply (the RPC itself succeeds; validity is in
+/// the payload).
+fn ok_validate(id: RequestId, errors: Vec<String>) -> Reply {
+    let result = ConfigValidateResult {
+        valid: errors.is_empty(),
+        errors,
+    };
+    Reply::respond(Response::result(
+        id,
+        serde_json::to_value(result).unwrap_or(Value::Null),
+    ))
+}
+
+/// The error for a task_source method invoked before `initialize`.
+fn not_initialized(id: RequestId) -> Reply {
+    Reply::respond(Response::error(
+        id,
+        Error::new(
+            error_code::INVALID_REQUEST,
+            "plugin not initialized → send `initialize` first",
+        ),
+    ))
+}
+
+/// Convert a JSON id value into a [`RequestId`]. The host uses numeric ids; a
+/// string id round-trips as-is, and any other JSON scalar is preserved via its
+/// textual form rather than collapsing to an empty string, so the caller can
+/// still correlate the reply.
+fn request_id(id: &Value) -> RequestId {
+    if let Some(n) = id.as_i64() {
+        RequestId::Number(n)
+    } else if let Some(s) = id.as_str() {
+        RequestId::Str(s.to_string())
+    } else {
+        RequestId::Str(id.to_string())
+    }
+}
