@@ -55,16 +55,15 @@ jobs:
           branch=$(gh pr list --state open --label "autorelease: pending" \
             --json headRefName --jq '.[0].headRefName // empty')
           if [ -z "$branch" ]; then
-            # prs_created was true, so this is an anomaly (e.g. label timing),
-            # but the sync self-heals on the next push — skip rather than fail
-            # the whole release-please run red.
-            echo "No open Release PR found; skipping Cargo.lock sync." >&2
-            exit 0
+            # prs_created was true, so a missing Release PR is a real anomaly —
+            # fail fast. sync-lockfile is not a release gate, so a red run here
+            # doesn't block the tag; the next push retries.
+            echo "No open Release PR found despite prs_created=true." >&2
+            exit 1
           fi
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
       - name: Checkout the Release PR branch
-        if: steps.pr.outputs.branch != ''
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ steps.pr.outputs.branch }}
@@ -72,19 +71,16 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
       - name: Install Rust toolchain
-        if: steps.pr.outputs.branch != ''
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: stable
 
       - name: Sync workspace versions into Cargo.lock
-        if: steps.pr.outputs.branch != ''
         # `--workspace` re-resolves only the workspace members, so external
         # dependencies stay pinned; just the internal crate versions move.
         run: cargo update --workspace
 
       - name: Commit and push if Cargo.lock changed
-        if: steps.pr.outputs.branch != ''
         env:
           RELEASE_BRANCH: ${{ steps.pr.outputs.branch }}
         run: |
