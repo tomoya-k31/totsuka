@@ -9,9 +9,12 @@ examples — adjust `<n>` (PR number) and paths as needed.
 ## Before opening a PR
 
 - Run the CI-required checks **locally first**, so a red CI is caught before push:
-  - `cargo fmt --all -- --check`
-  - `cargo clippy --all-targets --all-features -- -D warnings`
-  - `cargo test`
+  - `cargo fmt --all --check`
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  - `cargo test --workspace --all-features`
+
+  (Mirror the flags the CI workflow uses — this is a 9-crate workspace, so a
+  missing `--workspace` can pass locally yet fail in CI.)
   - rust-analyzer LSP diagnostics clean — fix type errors / missing imports
     (rustc + clippy backed, per [CLAUDE.md](../../CLAUDE.md)).
 - Review your own diff before writing the PR: `git diff main...HEAD` and every
@@ -45,7 +48,7 @@ Run the watch in the background (or wrap it with a `timeout`-style cap) so the
 10-minute ceiling is enforced, e.g.:
 
 ```
-gh pr checks <n> --watch --interval 30   # bound to a 10-min ceiling
+gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch runs until done
 ```
 
 ### Steps
@@ -82,7 +85,8 @@ gh pr checks <n> --watch --interval 30   # bound to a 10-min ceiling
    what a flag does).
 
 5. **Run `/code-review:code-review --comment` in a subagent** — launch it via
-   the Agent tool so it reviews the diff and posts inline comments, e.g.:
+   the Agent tool so it reviews the diff and posts its findings as a comment on
+   the PR (a single review-summary comment via `gh pr comment`), e.g.:
 
    ```
    Agent(subagent_type: "general-purpose",
