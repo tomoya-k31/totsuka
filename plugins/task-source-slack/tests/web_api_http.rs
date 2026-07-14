@@ -321,6 +321,8 @@ async fn post_url_maps_429_to_rate_limited() {
         ),
         "{err}"
     );
+    // The URL is a capability secret: it must not leak into the error text.
+    assert!(!err.to_string().contains(&base), "{err}");
     assert_eq!(requests.lock().unwrap().len(), 1, "never auto-retried");
 }
 

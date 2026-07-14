@@ -305,7 +305,9 @@ impl SlackTransport for ReqwestTransport {
             .await
             .map_err(|e| self.send_error(e))?;
         if !response.status().is_success() {
-            return Err(Self::status_error(url, response).await);
+            // Label, not the URL itself: a response_url is a capability
+            // secret and must never end up in error text or logs.
+            return Err(Self::status_error("response_url", response).await);
         }
         Ok(())
     }
