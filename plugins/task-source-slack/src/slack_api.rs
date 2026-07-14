@@ -151,15 +151,30 @@ impl<T: SlackTransport> SlackApi<T> {
     }
 
     /// `apps.connections.open` — a fresh Socket Mode WebSocket URL. The one
-    /// method authenticated by the App-Level Token; a credential failure here
-    /// means the *xapp* token is bad, so the guidance differs from the user
-    /// token's.
+    /// method authenticated by the App-Level Token.
+    ///
+    /// Like [`auth_test`](Self::auth_test), *every* `ok: false` code is
+    /// credential-class: the method takes no arguments, so `missing_scope`,
+    /// `not_allowed_token_type`, `invalid_auth`, … all mean the xapp token
+    /// (or the app config behind it) is wrong and will not fix itself —
+    /// callers must fail fast with guidance instead of retrying forever.
+    /// Transport-level replays are disabled (`idempotent: false`, except the
+    /// always-safe 429) because the Socket Mode reconnect loop owns the
+    /// retry policy for this call — two stacked backoff layers would make
+    /// its failure counters lie.
     pub async fn apps_connections_open(&self) -> Result<String, SlackError> {
         let response = self
             .transport
-            .call(TokenKind::App, "apps.connections.open", None, true)
+            .call(TokenKind::App, "apps.connections.open", None, false)
             .await?;
-        let response = Self::checked(TokenKind::App, "apps.connections.open", response)?;
+        let response = expect_ok("apps.connections.open", response).map_err(|e| match e {
+            SlackError::Api { error, .. } => {
+                let guided = app_auth_failure(&error);
+                tracing::error!(method = "apps.connections.open", "{guided}");
+                guided
+            }
+            other => other,
+        })?;
         string_field(&response, "apps.connections.open", "url")
     }
 
