@@ -1,10 +1,10 @@
 ---
 type: Component
 title: task-source-slack プラグイン
-description: 自分宛の Slack メンションをタスク化し本人名義で代理返信するための公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・静的 config/validate・起動時 TokenGuard に加え、Slack Web API の型付きクライアント層（失効ガイダンス・Retry-After 尊重のレート制限リトライ）まで実装済み。
+description: 自分宛の Slack メンションをタスク化し本人名義で代理返信するための公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・静的 config/validate・起動時 TokenGuard・Slack Web API の型付きクライアント層・Socket Mode WebSocket クライアント（即時 ack・自動再接続）まで実装済み。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard]
-timestamp: 2026-07-15T12:00:00Z
+timestamp: 2026-07-15T13:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -13,7 +13,7 @@ owner: tomoya-k31
 
 自分（`target_user_id`）宛の Slack メンションを検知して totsuka のタスクへ正規化し、承認後に **本人名義**（ユーザートークン `xoxp-`、Bot なし）でスレッド返信するための公式プラグイン。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、stdio JSON-RPC 2.0（NDJSON）サーバとして起動する。構造は [task-source-notion](/components/task-source-notion.md) / [task-source-github](/components/task-source-github.md) に準拠。orchestrator-core / plugin-protocol への変更なしで成立する（エピック #102 の設計判断）。
 
-現在の実装範囲: crate 構成・設定スキーマ・stdio JSON-RPC ディスパッチ・TokenGuard（#103）に加え、**Slack Web API の型付きクライアント層**（#104 前半）まで。`tasks/fetch`（空応答）・`task/update_status` / `result/publish`（受理して no-op）はまだスタブ。Socket Mode WebSocket（#104 後半）、メンション検知（#105）、リポジトリ解決（#106）、承認フロー（#107）が後続で載る。
+現在の実装範囲: crate 構成・設定スキーマ・stdio JSON-RPC ディスパッチ・TokenGuard（#103）、**Slack Web API の型付きクライアント層** と **Socket Mode WebSocket クライアント**（#104）まで。`tasks/fetch`（空応答）・`task/update_status` / `result/publish`（受理して no-op）はまだスタブ。メンション検知（#105）、リポジトリ解決（#106）、承認フロー（#107）が後続で載る。
 
 # モジュール構成
 
@@ -23,6 +23,7 @@ owner: tomoya-k31
 | `transport` | `SlackTransport` trait（`call(token_kind, method, body, idempotent)` + `post_url`＝`response_url` への POST）＋ reqwest 実装 `ReqwestTransport`。引数は **フォームエンコード** 送信（Slack の read 系 API は JSON body 非対応。`blocks` 等のネスト値は JSON 文字列）。リトライ規律: 通常の一過性エラー（5xx・ネットワーク）は冪等呼び出しのみ指数バックオフ（上限 60s）、**HTTP 429 は `Retry-After` を正確に尊重し非冪等でもリトライ**（429 は拒否済みの保証があるため安全）。コール毎のリトライ総待機バジェット（既定 90s）を超える待機は即時失敗（initialize が無応答に見えないため）。`response_url` POST はリトライなし（発行 30 分・5 回制限）。`expect_ok` で Slack の `{"ok": bool}` エンベロープを解釈。録画レスポンスでテストするための seam |
 | `slack_api` | `SlackApi<T: SlackTransport>` — 上位ロジックが Slack と通信する唯一の窓口となる型付きラッパ: `auth.test` / `apps.connections.open`（App トークン）/ `conversations.replies` / `conversations.open`（self-DM 解決）/ `users.info`（display_name→real_name→name フォールバック）/ `chat.getPermalink` / `chat.postMessage`・`chat.postEphemeral`（非冪等＝自動リトライなし）/ `chat.update`（冪等）/ `response_url` POST。共通エラーハンドラが失効系（`invalid_auth` / `token_revoked` / `account_inactive`）をトークン種別に応じたガイダンス付き `Auth` へ昇格し tracing へ出力。`auth.test` のみ **全** API エラーを credential 扱い（引数がなく失敗要因はトークンのみのため） |
 | `error` | `SlackError`（Auth / IdentityMismatch / Api / RateLimited / Http / Transport / Timeout / InvalidResponse / InvalidRequest）。`is_retryable`（RateLimited・5xx・ネットワーク）/ `is_rejected`（429＝未適用の保証、非冪等でも再送可）/ `is_credential`（TokenGuard 系）を分類。`auth_failure`（user トークン）と `app_auth_failure`（App-Level トークン＝xapp 再生成手順）が原因別の回復手順付きメッセージへ写像 |
+| `socket_mode` | Socket Mode WebSocket クライアント（tokio-tungstenite）。ライフサイクル: `apps.connections.open`（App トークン）→ WSS 接続 → `hello` → envelope 読み取り。**ack 規律**: `events_api` / `interactive` envelope は受信後すぐ ack を送信し（Slack は約 3 秒で再配送するため下流処理を待たせない）、正規化済みイベント `SocketEvent::Message`（message イベントのみ）/ `SocketEvent::BlockActions` を ack 後に mpsc チャネルへ配送。`disconnect` メッセージ / 接続断で自動再接続（接続失敗は上限付き指数バックオフ、連続失敗閾値超で warn）。App-Level Token の失効（credential 系）は自然回復しないため xapp 再生成ガイダンス付きでループを停止 |
 | `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。initialize（TokenGuard 実行）/ config·validate（**静的検証のみ・ネットワーク不要**）/ shutdown / tasks·fetch / task·update_status / result·publish（スタブ）。未初期化メソッドは拒否 |
 | `main` | `#[tokio::main]` の stdio ループ。`ReqwestFactory` を配線。ログは stderr |
 
@@ -46,7 +47,7 @@ manifest（`plugins/task-source-slack/plugin.toml`）と `initialize` 応答で 
 
 # 依存
 
-- `plugin-protocol`（プラグイン境界）、`reqwest`（Web API）、`tokio`、`serde` / `serde_json` / `semver` / `thiserror` / `tracing`。既存 task_source プラグインと同一の依存集合（新規外部クレートなし。Socket Mode の WebSocket 依存は #104 で追加予定）。
+- `plugin-protocol`（プラグイン境界）、`reqwest`（Web API）、`tokio-tungstenite` + `futures-util`（Socket Mode WebSocket。TLS は reqwest の `default-tls` に合わせ native-tls）、`tokio`、`serde` / `serde_json` / `semver` / `thiserror` / `tracing`。
 
 # 関連
 
