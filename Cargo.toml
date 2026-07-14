@@ -46,6 +46,10 @@ test-support = { path = "crates/test-support" }
 sha2 = "0.10"
 toml_edit = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "default-tls"] }
+# TLS matches reqwest's `default-tls` (native-tls) so both HTTP and WebSocket
+# go through the platform TLS stack.
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 # Deny warnings across the whole workspace. Each crate opts in with
 # `[lints] workspace = true`.
