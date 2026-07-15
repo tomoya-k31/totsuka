@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 use plugin_protocol::Task;
 
 use crate::config::SlackConfig;
+use crate::draft::{DRAFT_TTL, Draft, DraftStatus, DraftStore};
 use crate::llm::ChatTransport;
 use crate::mention::{Mention, MentionFilter};
 use crate::repo_resolver::{Resolution, resolve};
@@ -57,11 +58,14 @@ const SELECTION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const SELECTION_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// State shared between the pipeline task and the JSON-RPC server: the task
-/// buffer `tasks/fetch` drains, and the pending-mention index.
+/// buffer `tasks/fetch` drains, the pending-mention index, the draft store
+/// (#107), and the resolved self-DM record channel.
 #[derive(Clone, Default)]
 pub struct SharedState {
     buffer: Arc<Mutex<Vec<Task>>>,
     pending: Arc<Mutex<PendingIndex>>,
+    drafts: Arc<Mutex<DraftStore>>,
+    self_dm: Arc<Mutex<Option<String>>>,
 }
 
 /// The pending-mention map plus its FIFO eviction order.
@@ -118,6 +122,42 @@ impl SharedState {
             index.order.retain(|id| id != task_id);
         }
         taken
+    }
+
+    /// Record the resolved self-DM record channel (set once by the pipeline
+    /// at startup; read by the approval flow).
+    pub fn set_self_dm_channel(&self, channel: String) {
+        *self.self_dm.lock().unwrap() = Some(channel);
+    }
+
+    /// The self-DM record channel, when startup resolution succeeded.
+    pub fn self_dm_channel(&self) -> Option<String> {
+        self.self_dm.lock().unwrap().clone()
+    }
+
+    /// Store a draft, returning its fresh id (#107).
+    pub fn insert_draft(&self, draft: Draft) -> String {
+        self.drafts.lock().unwrap().insert(draft)
+    }
+
+    /// The draft behind `draft_id`, if it is still stored.
+    pub fn draft(&self, draft_id: &str) -> Option<Draft> {
+        self.drafts.lock().unwrap().get(draft_id).cloned()
+    }
+
+    /// Record a draft's self-DM record `ts`.
+    pub fn set_draft_dm_ts(&self, draft_id: &str, dm_ts: String) {
+        self.drafts.lock().unwrap().set_dm_ts(draft_id, dm_ts);
+    }
+
+    /// Move a draft to `status`.
+    pub fn set_draft_status(&self, draft_id: &str, status: DraftStatus) {
+        self.drafts.lock().unwrap().set_status(draft_id, status);
+    }
+
+    /// Drop drafts past [`DRAFT_TTL`], returning the dropped ids.
+    pub fn sweep_drafts(&self, now: Instant) -> Vec<String> {
+        self.drafts.lock().unwrap().sweep(now, DRAFT_TTL)
     }
 }
 
@@ -191,8 +231,8 @@ impl AwaitingSelection {
 
 /// Run the pipeline over `events` until the channel closes: filter each
 /// message event, enrich + resolve + normalize fresh mentions, hand results
-/// to `state`, and answer repository-selection `block_actions`. Approval
-/// interactions (`approve_reply` / `reject_reply`) land with #107.
+/// to `state`, and answer `block_actions` (repository selections and the
+/// approval flow's approve/reject presses).
 pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
     api: Arc<SlackApi<T>>,
     chat: Arc<C>,
@@ -205,7 +245,11 @@ pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
         // Resolve the self-DM record channel up front (filter row 3). Failure
         // is not fatal: row 2 (own posts) already breaks reply loops.
         match api.conversations_open_self(&config.target_user_id).await {
-            Ok(channel) => filter.set_self_dm_channel(channel),
+            Ok(channel) => {
+                filter.set_self_dm_channel(channel.clone());
+                // The approval flow posts its draft records there (#107).
+                state.set_self_dm_channel(channel);
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "could not resolve the self-DM channel; \
                      continuing without that filter row");
@@ -225,14 +269,18 @@ pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
                     None => return,
                 },
                 _ = sweep.tick() => {
-                    let expired = awaiting
-                        .lock()
-                        .unwrap()
-                        .sweep(Instant::now(), SELECTION_TTL);
+                    let now = Instant::now();
+                    let expired = awaiting.lock().unwrap().sweep(now, SELECTION_TTL);
                     for task_id in expired {
                         tracing::info!(
                             task_id,
                             "repository selection expired unanswered; mention dropped"
+                        );
+                    }
+                    for draft_id in state.sweep_drafts(now) {
+                        tracing::info!(
+                            draft_id,
+                            "draft expired unanswered; its buttons now answer as expired"
                         );
                     }
                     continue;
@@ -319,7 +367,9 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport>(
 }
 
 /// Answer a Block Kit interaction: repository picks and skips are consumed
-/// here; approval actions belong to #107.
+/// here; approve/reject presses are delegated to the approval flow. The
+/// action-id spaces are disjoint (`select_repo_*` / `skip_mention` vs.
+/// `approve_reply` / `reject_reply`).
 async fn handle_block_actions<T: SlackTransport>(
     api: &SlackApi<T>,
     config: &SlackConfig,
@@ -378,9 +428,19 @@ async fn handle_block_actions<T: SlackTransport>(
             "このメンションをスキップしました（返信案は作成されません）。",
         )
         .await;
+    } else if action_id == "approve_reply" || action_id == "reject_reply" {
+        crate::approval::handle_approval_action(
+            api,
+            state,
+            &config.source_name,
+            payload,
+            action_id,
+            value,
+            response_url,
+        )
+        .await;
     } else {
-        // approve_reply / reject_reply arrive with the approval flow (#107).
-        tracing::debug!(action_id, "ignoring block action (not a selection)");
+        tracing::debug!(action_id, "ignoring block action (unknown action_id)");
     }
 }
 

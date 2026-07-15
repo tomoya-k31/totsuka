@@ -7,31 +7,18 @@ mod common;
 
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::{WebSocketStream, accept_async};
 
-use common::{Canned, FakeFactory, Shared};
-use plugin_protocol::jsonrpc::Response;
+use common::{
+    Canned, FakeFactory, Shared, accept_with_hello, block_actions_envelope, call,
+    fetch_until_tasks, mention_envelope, send_and_await_ack, ws_listener,
+};
 use task_source_slack::server::Server;
 
 fn server(shared: &Shared) -> Server<FakeFactory> {
     Server::new(FakeFactory {
         shared: shared.clone(),
     })
-}
-
-async fn call(srv: &mut Server<FakeFactory>, id: i64, method: &str, params: Value) -> Value {
-    let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-    let reply = srv.handle_line(&line.to_string()).await;
-    let response: Response =
-        serde_json::from_str(&reply.line.expect("a response line")).expect("valid response");
-    if let Some(error) = &response.error {
-        panic!("{method} failed: {}", error.message);
-    }
-    response.result.unwrap_or(Value::Null)
 }
 
 /// One-repo config (repo_hint short-circuit until #106) pointing the Web API
@@ -104,62 +91,6 @@ fn canned_web_api_in_channel(shared: &Shared, ws_url: &str, channel_name: &str) 
             "permalink": "https://ws.slack.test/archives/C1/p1002"
         })),
     );
-}
-
-async fn ws_listener() -> (TcpListener, String) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("ws://{}", listener.local_addr().unwrap());
-    (listener, url)
-}
-
-async fn accept_with_hello(listener: &TcpListener) -> WebSocketStream<TcpStream> {
-    let (socket, _) = listener.accept().await.unwrap();
-    let mut ws = accept_async(socket).await.unwrap();
-    ws.send(WsMessage::text(json!({ "type": "hello" }).to_string()))
-        .await
-        .unwrap();
-    ws
-}
-
-async fn send_and_await_ack(ws: &mut WebSocketStream<TcpStream>, envelope: Value) {
-    ws.send(WsMessage::text(envelope.to_string()))
-        .await
-        .unwrap();
-    let ack = tokio::time::timeout(Duration::from_secs(2), ws.next())
-        .await
-        .expect("ack within 2s")
-        .expect("stream open")
-        .expect("readable frame");
-    let ack: Value = serde_json::from_str(ack.to_text().unwrap()).unwrap();
-    assert!(ack["envelope_id"].is_string());
-}
-
-fn mention_envelope(envelope_id: &str, ts: &str) -> Value {
-    json!({
-        "type": "events_api",
-        "envelope_id": envelope_id,
-        "payload": { "event": {
-            "type": "message",
-            "channel": "C1",
-            "user": "U_OTHER",
-            "text": "<@U_ME> 原因わかりますか",
-            "ts": ts,
-            "thread_ts": "100.0"
-        }}
-    })
-}
-
-/// Poll `tasks/fetch` until it yields tasks (the pipeline is asynchronous).
-async fn fetch_until_tasks(srv: &mut Server<FakeFactory>, id: i64) -> Vec<Value> {
-    for _ in 0..100 {
-        let result = call(srv, id, "tasks/fetch", json!({ "trigger": {} })).await;
-        let tasks = result["tasks"].as_array().unwrap().clone();
-        if !tasks.is_empty() {
-            return tasks;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("no task showed up within 5s");
 }
 
 #[tokio::test]
@@ -297,18 +228,6 @@ fn chat_verdict(repo: &str, confidence: f64) -> Value {
     }}]})
 }
 
-fn block_actions_envelope(envelope_id: &str, action_id: &str, value: &Value) -> Value {
-    json!({
-        "type": "interactive",
-        "envelope_id": envelope_id,
-        "payload": {
-            "type": "block_actions",
-            "response_url": "https://hooks.slack.test/r/1",
-            "actions": [{ "action_id": action_id, "value": value.to_string() }]
-        }
-    })
-}
-
 /// The selection buttons of the last posted ephemeral (from the recorded
 /// chat.postEphemeral request).
 fn last_ephemeral_buttons(shared: &Shared) -> Vec<Value> {
@@ -420,7 +339,8 @@ async fn low_confidence_asks_via_ephemeral_and_the_answer_submits_the_task() {
         block_actions_envelope(
             "e2",
             web_app["action_id"].as_str().unwrap(),
-            &json!({ "task": "C1:100.2", "repo": "web-app" }),
+            &json!({ "task": "C1:100.2", "repo": "web-app" }).to_string(),
+            "C1",
         ),
     )
     .await;
@@ -451,7 +371,12 @@ async fn skip_discards_the_mention_without_a_task() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     send_and_await_ack(
         &mut ws,
-        block_actions_envelope("e2", "skip_mention", &json!({ "task": "C1:100.2" })),
+        block_actions_envelope(
+            "e2",
+            "skip_mention",
+            &json!({ "task": "C1:100.2" }).to_string(),
+            "C1",
+        ),
     )
     .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -489,7 +414,8 @@ async fn stale_selection_answer_gets_an_expiry_notice() {
         block_actions_envelope(
             "e1",
             "select_repo_0",
-            &json!({ "task": "C1:999.9", "repo": "web-app" }),
+            &json!({ "task": "C1:999.9", "repo": "web-app" }).to_string(),
+            "C1",
         ),
     )
     .await;

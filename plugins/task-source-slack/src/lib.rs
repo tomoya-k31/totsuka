@@ -9,7 +9,9 @@
 //! `target_user_id`, so a wrong or revoked token stops the plugin at startup
 //! with actionable guidance instead of failing later mid-flow.
 
+pub mod approval;
 pub mod config;
+pub mod draft;
 pub mod error;
 pub mod llm;
 pub mod mention;

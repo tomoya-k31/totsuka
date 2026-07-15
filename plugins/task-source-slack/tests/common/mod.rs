@@ -179,3 +179,124 @@ pub fn transport(shared: &Shared) -> FakeTransport {
         shared: shared.clone(),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Runtime-on harness: a local WebSocket mock plays Slack's Socket Mode side,
+// plus JSON-RPC and envelope helpers shared by the flow test crates.
+// ---------------------------------------------------------------------------
+
+use std::time::Duration;
+
+use futures_util::{SinkExt, StreamExt};
+use serde_json::json;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::{WebSocketStream, accept_async};
+
+use plugin_protocol::jsonrpc::Response;
+use task_source_slack::server::Server;
+
+/// Send one JSON-RPC request line and return its (successful) result value.
+pub async fn call(srv: &mut Server<FakeFactory>, id: i64, method: &str, params: Value) -> Value {
+    let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+    let reply = srv.handle_line(&line.to_string()).await;
+    let response: Response =
+        serde_json::from_str(&reply.line.expect("a response line")).expect("valid response");
+    if let Some(error) = &response.error {
+        panic!("{method} failed: {}", error.message);
+    }
+    response.result.unwrap_or(Value::Null)
+}
+
+/// A bound TCP listener for the Socket Mode mock and its `ws://` URL.
+pub async fn ws_listener() -> (TcpListener, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    (listener, url)
+}
+
+/// Accept one WebSocket connection and greet it with Slack's `hello`.
+pub async fn accept_with_hello(listener: &TcpListener) -> WebSocketStream<TcpStream> {
+    let (socket, _) = listener.accept().await.unwrap();
+    let mut ws = accept_async(socket).await.unwrap();
+    ws.send(WsMessage::text(json!({ "type": "hello" }).to_string()))
+        .await
+        .unwrap();
+    ws
+}
+
+/// Push one envelope to the plugin and wait for its ack.
+pub async fn send_and_await_ack(ws: &mut WebSocketStream<TcpStream>, envelope: Value) {
+    ws.send(WsMessage::text(envelope.to_string()))
+        .await
+        .unwrap();
+    let ack = tokio::time::timeout(Duration::from_secs(2), ws.next())
+        .await
+        .expect("ack within 2s")
+        .expect("stream open")
+        .expect("readable frame");
+    let ack: Value = serde_json::from_str(ack.to_text().unwrap()).unwrap();
+    assert!(ack["envelope_id"].is_string());
+}
+
+/// A `message` event envelope: `U_OTHER` mentioning `U_ME` in `C1`, inside
+/// the thread rooted at `100.0`.
+pub fn mention_envelope(envelope_id: &str, ts: &str) -> Value {
+    json!({
+        "type": "events_api",
+        "envelope_id": envelope_id,
+        "payload": { "event": {
+            "type": "message",
+            "channel": "C1",
+            "user": "U_OTHER",
+            "text": "<@U_ME> 原因わかりますか",
+            "ts": ts,
+            "thread_ts": "100.0"
+        }}
+    })
+}
+
+/// A `block_actions` envelope: one button press (`value` as-is) inside
+/// `channel`, carrying the standard test `response_url`.
+pub fn block_actions_envelope(
+    envelope_id: &str,
+    action_id: &str,
+    value: &str,
+    channel: &str,
+) -> Value {
+    json!({
+        "type": "interactive",
+        "envelope_id": envelope_id,
+        "payload": {
+            "type": "block_actions",
+            "response_url": "https://hooks.slack.test/r/1",
+            "container": { "channel_id": channel },
+            "actions": [{ "action_id": action_id, "value": value }]
+        }
+    })
+}
+
+/// Poll `tasks/fetch` until it yields tasks (the pipeline is asynchronous).
+pub async fn fetch_until_tasks(srv: &mut Server<FakeFactory>, id: i64) -> Vec<Value> {
+    for _ in 0..100 {
+        let result = call(srv, id, "tasks/fetch", json!({ "trigger": {} })).await;
+        let tasks = result["tasks"].as_array().unwrap().clone();
+        if !tasks.is_empty() {
+            return tasks;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("no task showed up within 5s");
+}
+
+/// Wait until `condition` holds (the pipeline handles envelopes after the
+/// ack, so effects trail `send_and_await_ack`).
+pub async fn wait_until(what: &str, condition: impl Fn() -> bool) {
+    for _ in 0..100 {
+        if condition() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("timeout waiting for {what}");
+}
