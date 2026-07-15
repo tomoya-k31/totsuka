@@ -34,12 +34,24 @@ pub struct PendingMention {
     pub permalink: Option<String>,
 }
 
+/// Bound on the pending-mention index. `result/publish` (#107) consumes
+/// entries, but until every task round-trips, the oldest entries fall out
+/// FIFO instead of growing without bound in a long-running plugin.
+const PENDING_CAP: usize = 1024;
+
 /// State shared between the pipeline task and the JSON-RPC server: the task
 /// buffer `tasks/fetch` drains, and the pending-mention index.
 #[derive(Clone, Default)]
 pub struct SharedState {
     buffer: Arc<Mutex<Vec<Task>>>,
-    pending: Arc<Mutex<HashMap<String, PendingMention>>>,
+    pending: Arc<Mutex<PendingIndex>>,
+}
+
+/// The pending-mention map plus its FIFO eviction order.
+#[derive(Default)]
+struct PendingIndex {
+    entries: HashMap<String, PendingMention>,
+    order: std::collections::VecDeque<String>,
 }
 
 impl SharedState {
@@ -54,14 +66,41 @@ impl SharedState {
         std::mem::take(&mut *self.buffer.lock().unwrap())
     }
 
-    /// Remember where `task_id`'s reply belongs.
+    /// Remember where `task_id`'s reply belongs (bounded: beyond
+    /// [`PENDING_CAP`], the oldest entry is evicted with a warning).
     pub fn insert_pending(&self, task_id: String, pending: PendingMention) {
-        self.pending.lock().unwrap().insert(task_id, pending);
+        let mut index = self.pending.lock().unwrap();
+        if !index.entries.contains_key(&task_id) {
+            if index.order.len() >= PENDING_CAP
+                && let Some(evicted) = index.order.pop_front()
+            {
+                index.entries.remove(&evicted);
+                tracing::warn!(
+                    task_id = %evicted,
+                    "pending-mention index full; evicted the oldest entry \
+                     (its reply can no longer be placed)"
+                );
+            }
+            index.order.push_back(task_id.clone());
+        }
+        index.entries.insert(task_id, pending);
     }
 
     /// The Slack coordinates for `task_id`, if it is still pending.
     pub fn pending(&self, task_id: &str) -> Option<PendingMention> {
-        self.pending.lock().unwrap().get(task_id).cloned()
+        self.pending.lock().unwrap().entries.get(task_id).cloned()
+    }
+
+    /// Remove and return `task_id`'s coordinates — the terminal consumption
+    /// at `result/publish` time, which also keeps the index from holding
+    /// entries for tasks that already round-tripped.
+    pub fn take_pending(&self, task_id: &str) -> Option<PendingMention> {
+        let mut index = self.pending.lock().unwrap();
+        let taken = index.entries.remove(task_id);
+        if taken.is_some() {
+            index.order.retain(|id| id != task_id);
+        }
+        taken
     }
 }
 

@@ -288,15 +288,17 @@ where
 
     /// `result/publish` stub: accepted and dropped, with a warning — a draft
     /// posted here would be lost, and that is worth seeing in the logs until
-    /// the approval flow lands.
+    /// the approval flow lands. The pending entry is still consumed: publish
+    /// is the task's terminal step, so the index must not keep its entry.
     fn result_publish(&mut self, id: RequestId, params: Value) -> Reply {
-        if self.session.is_none() {
+        let Some(session) = self.session.as_ref() else {
             return not_initialized(id);
-        }
+        };
         let parsed: ResultPublishParams = match parse_params(&params) {
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
+        let _pending = session.state.take_pending(&parsed.task_id);
         tracing::warn!(
             task_id = parsed.task_id,
             "result/publish stub: draft discarded (approval flow not implemented yet)"
