@@ -60,6 +60,16 @@ fn auth_ok() -> Value {
     json!({ "ok": true, "user_id": "U_ME", "user": "me", "team": "T1" })
 }
 
+fn connections_ok() -> Value {
+    json!({ "ok": true, "url": "wss://socket.test/link" })
+}
+
+/// Queue the full TokenGuard exchange (`auth.test` + `apps.connections.open`).
+fn push_guard_ok(shared: &Shared) {
+    shared.push(Canned::Data(auth_ok()));
+    shared.push(Canned::Data(connections_ok()));
+}
+
 /// The error object of an error response.
 fn error_of(response: &Response) -> (i64, String) {
     let error = response.error.as_ref().expect("an error response");
@@ -83,18 +93,38 @@ fn result_of(response: Response) -> Value {
 #[tokio::test]
 async fn initialize_runs_token_guard_and_declares_capabilities() {
     let shared = Shared::default();
-    shared.push(Canned::Data(auth_ok()));
+    push_guard_ok(&shared);
     let mut srv = server(&shared);
 
     let result = result_of(call(&mut srv, 1, "initialize", init_params()).await);
     assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
     assert!(result["plugin_version"].is_string());
 
-    // The guard authenticated with the *user* token via auth.test.
+    // The guard authenticated the *user* token via auth.test, then the
+    // App-Level Token via apps.connections.open.
     let requests = shared.requests();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].method, "auth.test");
     assert_eq!(requests[0].token, TokenKind::User);
+    assert_eq!(requests[1].method, "apps.connections.open");
+    assert_eq!(requests[1].token, TokenKind::App);
+}
+
+#[tokio::test]
+async fn initialize_rejects_a_bad_app_token_with_guidance() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(auth_ok()));
+    shared.push(Canned::Data(
+        json!({ "ok": false, "error": "invalid_auth" }),
+    ));
+    let mut srv = server(&shared);
+
+    let response = call(&mut srv, 1, "initialize", init_params()).await;
+    let (code, message) = error_of(&response);
+    // Every apps.connections.open API error is credential-class → config.
+    assert_eq!(code, error_code::CONFIG_INVALID);
+    assert!(message.contains("invalid_auth"), "{message}");
+    assert!(message.contains("xapp"), "{message}");
 }
 
 #[tokio::test]
@@ -259,7 +289,7 @@ async fn task_source_methods_require_initialize() {
 #[tokio::test]
 async fn task_source_methods_answer_after_initialize() {
     let shared = Shared::default();
-    shared.push(Canned::Data(auth_ok()));
+    push_guard_ok(&shared);
     let mut srv = server(&shared);
     result_of(call(&mut srv, 1, "initialize", init_params()).await);
 
@@ -291,8 +321,8 @@ async fn task_source_methods_answer_after_initialize() {
     assert_eq!(code, error_code::INTERNAL_ERROR);
     assert!(message.contains("C1:1.2"), "{message}");
 
-    // Nothing beyond the TokenGuard's auth.test hit the transport.
-    assert_eq!(shared.requests().len(), 1);
+    // Nothing beyond the TokenGuard's two probes hit the transport.
+    assert_eq!(shared.requests().len(), 2);
 }
 
 // ---------------------------------------------------------------------------

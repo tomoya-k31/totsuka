@@ -176,9 +176,10 @@ where
     }
 
     /// `initialize`: deserialize the config, then run the TokenGuard — verify
-    /// the user token via `auth.test` and that its identity is
-    /// `target_user_id` — before accepting the session. A bad token fails
-    /// startup here, with recovery guidance, instead of failing later
+    /// the user token via `auth.test` (its identity must be
+    /// `target_user_id`) and the App-Level Token via
+    /// `apps.connections.open` — before accepting the session. A bad token
+    /// fails startup here, with recovery guidance, instead of failing later
     /// mid-flow.
     async fn initialize(&mut self, id: RequestId, params: Value) -> Reply {
         let init: InitializeParams = match parse_params(&params) {
@@ -325,9 +326,13 @@ where
     }
 }
 
-/// The TokenGuard: `auth.test` must accept the user token, and the token's
+/// The TokenGuard: `auth.test` must accept the user token, the token's
 /// identity must be `target_user_id` (a reply posted with someone else's
-/// token would impersonate them).
+/// token would impersonate them), and `apps.connections.open` must accept
+/// the App-Level Token. Without the last probe a bad `xapp-` token would
+/// only surface inside the background Socket Mode loop — invisible to
+/// `initialize`'s caller, so `totsuka doctor` would report the plugin
+/// healthy while it can never receive an event.
 async fn token_guard<T: SlackTransport>(
     api: &SlackApi<T>,
     config: &SlackConfig,
@@ -339,6 +344,7 @@ async fn token_guard<T: SlackTransport>(
             actual: identity.user_id,
         });
     }
+    api.apps_connections_open().await?;
     Ok(())
 }
 
