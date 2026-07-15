@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: 設定リファレンス（config.toml）
-description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限を含む。
+description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
-tags: [config, reference, toml, secrets, workflow, worktree]
-timestamp: 2026-07-14T03:00:00Z
+tags: [config, reference, toml, secrets, workflow, worktree, slack]
+timestamp: 2026-07-15T15:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -114,6 +114,33 @@ OpenAI 互換 `/chat/completions` を前提。
 |---|---|---|---|
 | `pr_title_template` | string? | `{title}` | PR タイトルテンプレート。`{title}`/`{task_id}`/`{source}` |
 | `pr_body_template` | string? | 組み込み既定 | PR 本文テンプレート。`{title}`/`{url}`/`{source}`/`{task_id}`/`{summary}` |
+
+# `plugins/slack.toml`（task-source-slack）
+
+config.toml 側の推奨設定。Socket Mode の push はプラグイン内バッファに積まれ `tasks/fetch` で吸い上げるため、既定の 60 秒では体感が遅い — 短周期を推奨（[ADR-0003](/decisions/adr-0003-slack-reply-assistant.md)）:
+
+```toml
+[plugins.slack]
+enabled = true
+kind = "task_source"
+poll_interval_secs = 5
+```
+
+`plugins/slack.toml` の全キー（`deny_unknown_fields`。導入手順は [Slack セットアップ Quickstart](/operations/slack-quickstart.md)、トークンの扱いは [取り扱いポリシー](/security/slack-user-token.md)）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `app_token` | string | 必須 | App-Level Token（`xapp-`、Socket Mode 用）。Keychain 参照推奨 |
+| `user_token` | string | 必須 | User OAuth Token（`xoxp-`、本人名義の読み書き）。Keychain 参照推奨 |
+| `target_user_id` | string | 必須 | 自分の Slack ユーザー ID（`U…`）。このユーザー宛メンションをタスク化し、TokenGuard が `auth.test` の identity と一致検証 |
+| `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
+| `reply_style` | string? | なし | 返信トーンの指示（タスク本文へ注入、例 `"丁寧語で簡潔に"`） |
+| `source_name` | string | `slack` | `Task.source` に刻印するソース名 |
+| `[[repos]]` | 配列 | 必須（1 件以上） | リポジトリ候補。`name`（config.toml の `[[repositories]].name` と一致必須）/ `summary`?（LLM 分類の材料）/ `path`?（README 先頭を分類材料に追加） |
+| `[[channel_groups]]` | 配列 | なし | チャンネル名 prefix → 候補 repos の絞り込みルール（定義順 first-match）。`prefix` / `repos`（`[[repos]]` に存在する名前のみ） |
+| `[llm]` | テーブル | repos 2 件以上で必須 | リポジトリ分類用 OpenAI 互換 LLM（コアの `[llm]` とは独立）。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、未満はエフェメラル選択へ） |
+| `api_url` | string | `https://slack.com/api` | Web API ベース URL（テスト用上書き） |
+| `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
 
 # 例
 

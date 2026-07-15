@@ -3,12 +3,13 @@
 # totsuka
 
 **AI-driven dev-flow automation.** totsuka detects task instructions from your
-task sources (GitHub Issues, Notion), matches them to workflows, and
-orchestrates them to AI coding agents (herdr, orca) — each in its own git
-worktree — then publishes the result as a pull request or writes it back to the
-source.
+task sources (GitHub Issues, Notion, Slack mentions), matches them to
+workflows, and orchestrates them to AI coding agents (herdr, orca) — each in
+its own git worktree — then publishes the result as a pull request or writes
+it back to the source.
 
-- **Task sources**: GitHub Issues / Projects, Notion databases
+- **Task sources**: GitHub Issues / Projects, Notion databases, Slack mentions
+  (drafts replied under your own name after your approval)
 - **Agents**: herdr, orca (agent IDEs driven over a plugin protocol)
 - **Isolation**: one task = one repo = one worktree = one branch
 - **Output policies**: open a pull request, write back to the source, or none

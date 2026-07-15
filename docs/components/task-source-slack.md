@@ -1,10 +1,10 @@
 ---
 type: Component
 title: task-source-slack プラグイン
-description: 自分宛の Slack メンションをタスク化し本人名義で代理返信するための公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決に加え、下書き提示・承認フロー（result/publish → エフェメラル + self-DM 記録 → 承認時のみ本人名義返信）まで実装済み。
+description: 自分宛の Slack メンションをタスク化し本人名義で代理返信する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard（auth.test + apps.connections.open）・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決・下書き提示・承認フローに加え、manifest 雛形・CLI レベル E2E・運用ドキュメントまで完備（エピック #102 完了）。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard]
-timestamp: 2026-07-15T23:00:00Z
+timestamp: 2026-07-15T15:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -13,7 +13,7 @@ owner: tomoya-k31
 
 自分（`target_user_id`）宛の Slack メンションを検知して totsuka のタスクへ正規化し、承認後に **本人名義**（ユーザートークン `xoxp-`、Bot なし）でスレッド返信するための公式プラグイン。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、stdio JSON-RPC 2.0（NDJSON）サーバとして起動する。構造は [task-source-notion](/components/task-source-notion.md) / [task-source-github](/components/task-source-github.md) に準拠。orchestrator-core / plugin-protocol への変更なしで成立する（エピック #102 の設計判断）。
 
-現在の実装範囲: crate 構成・設定スキーマ・stdio JSON-RPC ディスパッチ・TokenGuard（#103）、**Slack Web API の型付きクライアント層** と **Socket Mode WebSocket クライアント**（#104）、**メンション検知 → Task 正規化 → バッファ → `tasks/fetch` 排出のパイプライン**（#105）、**プラグイン内リポジトリ解決**（#106）、**下書き提示・承認フロー**（`result/publish` → スレッド内エフェメラル + self-DM 記録 → 承認/却下ボタン → 承認時のみ本人名義スレッド返信、#107）まで。`task/update_status` は意図的な no-op（Slack に動かすステータス列がなく、下書きのライフサイクルはボタンが駆動する）。残りは運用整備・ドキュメント（#108）。
+現在の実装範囲: crate 構成・設定スキーマ・stdio JSON-RPC ディスパッチ・TokenGuard（#103）、**Slack Web API の型付きクライアント層** と **Socket Mode WebSocket クライアント**（#104）、**メンション検知 → Task 正規化 → バッファ → `tasks/fetch` 排出のパイプライン**（#105）、**プラグイン内リポジトリ解決**（#106）、**下書き提示・承認フロー**（`result/publish` → スレッド内エフェメラル + self-DM 記録 → 承認/却下ボタン → 承認時のみ本人名義スレッド返信、#107）、**運用整備**（Slack アプリの [manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml)・CLI レベル E2E・[Quickstart Runbook](/operations/slack-quickstart.md)・[トークン取り扱いポリシー](/security/slack-user-token.md)、#108）まで — エピック #102 の全実装 issue が完了。`task/update_status` は意図的な no-op（Slack に動かすステータス列がなく、下書きのライフサイクルはボタンが駆動する）。設計判断の記録は [ADR-0003](/decisions/adr-0003-slack-reply-assistant.md)。
 
 # モジュール構成
 
@@ -35,13 +35,14 @@ owner: tomoya-k31
 
 # TokenGuard（起動時検証）
 
-`initialize` 内で `auth.test`（user_token）を実行し、失敗時は原因別ガイダンス付きエラーで初期化を拒否する:
+`initialize` 内で `auth.test`（user_token）→ identity 検証 → `apps.connections.open`（app_token）を実行し、失敗時は原因別ガイダンス付きエラーで初期化を拒否する:
 
 - `invalid_auth` / `token_revoked` / `account_inactive` → トークン再発行・アプリ再インストール・Keychain 更新手順を含むメッセージ（`CONFIG_INVALID`）
-- 成功時は `user_id == target_user_id` を検証。不一致は **なりすまし防止** のためエラー（両 ID と修正手順を明示、`CONFIG_INVALID`）
+- `auth.test` 成功時は `user_id == target_user_id` を検証。不一致は **なりすまし防止** のためエラー（両 ID と修正手順を明示、`CONFIG_INVALID`）
+- `apps.connections.open` で App-Level Token（`xapp-`）も同期検証（#108）。これがないと xapp 失効は背景の Socket Mode ループでしか露見せず、`initialize` の呼び手（= `doctor` プローブ）に見えない
 - ネットワーク障害などクレデンシャル以外の失敗は `INTERNAL_ERROR` として区別
 
-`config/validate` は意図的にオフライン（静的検証のみ）。ホストのプローブ（`totsuka config validate` / `doctor`）は launch ハンドシェイクで `initialize` も呼ぶため、TokenGuard はそこで実行される。
+`config/validate` は意図的にオフライン（静的検証のみ）。ホストのプローブ（`totsuka config validate` / `doctor`）は launch ハンドシェイクで `initialize` も呼ぶため、TokenGuard（両トークンの疎通）はそこで実行される。
 
 # capabilities（F-83）
 
@@ -49,7 +50,7 @@ manifest（`plugins/task-source-slack/plugin.toml`）と `initialize` 応答で 
 
 # テスト
 
-`SlackTransport` を録画レスポンスの fake（`tests/common/`、各テストクレートで共有）に差し替えた 4 系統 + トランスポート実挙動の 1 系統: `tests/slack_api.rs`（全ラッパのリクエスト形状＝メソッド・トークン種別・引数・冪等性クラス、応答パース、失効系の共通ガイダンス、auth.test の全エラー credential 扱い）、`tests/web_api_http.rs`（raw TCP の実 HTTP モック・依存追加なしで、フォームエンコード・bearer 切替・429/Retry-After 尊重・冪等/非冪等リトライ規律・バジェット即時失敗・不正 Retry-After の保守的フォールバックを検証）、`tests/mention_flow.rs`（常駐ランタイム ON: ローカル WebSocket モック + 録画 Web API でメンション → タスク化 → `tasks/fetch`、リポジトリ解決 3 段の分岐）、`tests/approval_flow.rs`（#107 受け入れ: publish での 2 面提示[エフェメラルのスレッド座標・ノイズトリム・confirm 付きボタン・self-DM の unfurl_links: false]、承認 → 本人名義スレッド返信 + 両面 ✅ 化 + 自動返信の再検知なし + 再押下の「処理済み」通知、却下 → 送信なし ❌ 化、送信失敗 → Pending 維持 + エラー通知 + 再押下リトライ成功、再起動後の旧ボタン → 「期限切れ」通知、self-DM 押下時の chat.update 省略、片面投稿失敗の許容）、および JSON-RPC 境界越しの結合テスト（`tests/integration.rs`）: TokenGuard 成功→capabilities 宣言、auth 失敗 3 種の原因別ガイダンス、user_id 不一致拒否、ネットワーク障害の INTERNAL_ERROR 区別、オフライン config/validate（正常系はトランスポート無呼び出しを検証）、未初期化拒否、update_status の no-op と pending 不在 publish のエラー、shutdown・パースエラー・通知の各プロトコル配管。実バイナリでも `plugin install` / `enable` / `config validate`（正常＋未知キー・トークン形式・repos 不整合）/ `doctor` プローブ、およびローカル偽 Slack API と実 Slack API（invalid_auth）双方に対する TokenGuard を確認済み。
+`SlackTransport` を録画レスポンスの fake（`tests/common/`、各テストクレートで共有）に差し替えた 4 系統 + トランスポート実挙動の 1 系統: `tests/slack_api.rs`（全ラッパのリクエスト形状＝メソッド・トークン種別・引数・冪等性クラス、応答パース、失効系の共通ガイダンス、auth.test の全エラー credential 扱い）、`tests/web_api_http.rs`（raw TCP の実 HTTP モック・依存追加なしで、フォームエンコード・bearer 切替・429/Retry-After 尊重・冪等/非冪等リトライ規律・バジェット即時失敗・不正 Retry-After の保守的フォールバックを検証）、`tests/mention_flow.rs`（常駐ランタイム ON: ローカル WebSocket モック + 録画 Web API でメンション → タスク化 → `tasks/fetch`、リポジトリ解決 3 段の分岐）、`tests/approval_flow.rs`（#107 受け入れ: publish での 2 面提示[エフェメラルのスレッド座標・ノイズトリム・confirm 付きボタン・self-DM の unfurl_links: false]、承認 → 本人名義スレッド返信 + 両面 ✅ 化 + 自動返信の再検知なし + 再押下の「処理済み」通知、却下 → 送信なし ❌ 化、送信失敗 → Pending 維持 + エラー通知 + 再押下リトライ成功、再起動後の旧ボタン → 「期限切れ」通知、self-DM 押下時の chat.update 省略、片面投稿失敗の許容）、および JSON-RPC 境界越しの結合テスト（`tests/integration.rs`）: TokenGuard 成功→capabilities 宣言、auth 失敗 3 種の原因別ガイダンス、user_id 不一致拒否、ネットワーク障害の INTERNAL_ERROR 区別、オフライン config/validate（正常系はトランスポート無呼び出しを検証）、未初期化拒否、update_status の no-op と pending 不在 publish のエラー、shutdown・パースエラー・通知の各プロトコル配管。実バイナリでも `plugin install` / `enable` / `config validate`（正常＋未知キー・トークン形式・repos 不整合）/ `doctor` プローブ、およびローカル偽 Slack API と実 Slack API（invalid_auth）双方に対する TokenGuard を確認済み。さらに CLI レベルの E2E（`orchestrator-cli/tests/slack_e2e.rs`、#108）が、実 `totsuka` + 実プラグインバイナリ + モック Slack（raw TCP HTTP + WebSocket）+ mock agent で「メンション envelope → `tasks/fetch` → dispatch → `result/publish` → 承認ボタン → user トークンでのスレッド返信 + 両面 finalize」の全ループと `doctor` プローブ（TokenGuard 両トークン）を CI で検証する（この E2E が Slack task_id `{channel}:{ts}` の `:` が git ブランチ名として不正という組み合わせバグを検出 → コア `render_branch` のサニタイズで修正）。
 
 # 依存
 

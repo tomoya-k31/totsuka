@@ -1,0 +1,43 @@
+# Slack App Manifest for the totsuka task-source-slack plugin.
+#
+# Paste this into https://api.slack.com/apps > "Create New App" >
+# "From a manifest" (YAML), then install the app to your workspace.
+#
+# This app has NO bot user on purpose: the plugin acts entirely as *you*.
+# After installing, copy two tokens into the Keychain referenced by
+# plugins/slack.toml:
+#   - User OAuth Token (`xoxp-…`)  — OAuth & Permissions page
+#   - App-Level Token  (`xapp-…`)  — Basic Information > App-Level Tokens;
+#     create one with scope `connections:write` (Socket Mode)
+#
+# If you ever change the scopes below, Slack requires you to RE-INSTALL the
+# app; the re-install issues a NEW `xoxp-` token, so update the Keychain
+# entry too (`totsuka doctor` will tell you when the stored token went bad).
+display_information:
+  name: totsuka reply assistant
+  description: Turns mentions of you into totsuka tasks and posts approved replies under your own name.
+  background_color: "#1a2b3c"
+oauth_config:
+  scopes:
+    # User scopes only (no bot section): everything is done as the operator.
+    user:
+      - channels:history # read public-channel messages (mention detection / thread context)
+      - groups:history # read private-channel messages
+      - users:read # resolve display names for task context
+      - chat:write # post the approved reply / draft records as you
+      - im:write # open your self-DM to record drafts
+settings:
+  event_subscriptions:
+    # user_events (not bot_events): delivered over Socket Mode for the
+    # channels the *user* is a member of.
+    user_events:
+      - message.channels
+      - message.groups
+  interactivity:
+    # Approve/reject buttons (block_actions) arrive over Socket Mode.
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  # Long-lived tokens by design: rotation would require a refresh-token dance
+  # the plugin deliberately avoids (tokens live in the macOS Keychain).
+  token_rotation_enabled: false
