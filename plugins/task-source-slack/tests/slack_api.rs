@@ -105,7 +105,7 @@ async fn conversations_replies_parses_messages() {
     })));
 
     let messages = api(&shared)
-        .conversations_replies("C1", "1.0", 4)
+        .conversations_replies("C1", "1.0", 4, Some("2.0"))
         .await
         .unwrap();
     assert_eq!(messages.len(), 3);
@@ -123,6 +123,10 @@ async fn conversations_replies_parses_messages() {
     assert_eq!(body["channel"], "C1");
     assert_eq!(body["ts"], "1.0");
     assert_eq!(body["limit"], 4);
+    // The window is bounded from above at `latest` (inclusive) — without it
+    // a long thread would page from its head, not up to the mention.
+    assert_eq!(body["latest"], "2.0");
+    assert_eq!(body["inclusive"], true);
 }
 
 #[tokio::test]
@@ -130,7 +134,7 @@ async fn conversations_replies_without_messages_is_invalid_response() {
     let shared = Shared::default();
     shared.push(Canned::Data(json!({ "ok": true })));
     let err = api(&shared)
-        .conversations_replies("C1", "1.0", 4)
+        .conversations_replies("C1", "1.0", 4, Some("2.0"))
         .await
         .unwrap_err();
     assert!(matches!(err, SlackError::InvalidResponse(_)), "{err}");
@@ -303,7 +307,7 @@ async fn credential_errors_carry_recovery_guidance_on_any_method() {
         let shared = Shared::default();
         shared.push(Canned::Data(json!({ "ok": false, "error": code })));
         let err = api(&shared)
-            .conversations_replies("C1", "1.0", 4)
+            .conversations_replies("C1", "1.0", 4, Some("2.0"))
             .await
             .unwrap_err();
         assert!(err.is_credential(), "{code}: {err}");

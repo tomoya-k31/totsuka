@@ -12,9 +12,13 @@ use task_source_slack::server::Server;
 use task_source_slack::transport::TokenKind;
 
 fn server(shared: &Shared) -> Server<FakeFactory> {
+    // Protocol-level tests: the Socket Mode runtime would consume the canned
+    // transport queue in the background, so it stays off here. The full
+    // mention flow (runtime on) is covered by tests/mention_flow.rs.
     Server::new(FakeFactory {
         shared: shared.clone(),
     })
+    .without_runtime()
 }
 
 /// Send one JSON-RPC request line and return the parsed response.

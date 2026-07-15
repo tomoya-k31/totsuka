@@ -179,17 +179,27 @@ impl<T: SlackTransport> SlackApi<T> {
     }
 
     /// `conversations.replies` — up to `limit` messages of the thread rooted
-    /// at `thread_ts` (oldest first, parent included).
+    /// at `thread_ts` (oldest first, parent included). `latest` bounds the
+    /// window from above (inclusive): without it Slack pages from the *head*
+    /// of the thread, so a long thread would yield its oldest messages, not
+    /// the ones leading up to `latest`.
     pub async fn conversations_replies(
         &self,
         channel: &str,
         thread_ts: &str,
         limit: u32,
+        latest: Option<&str>,
     ) -> Result<Vec<SlackMessage>, SlackError> {
         let response = self
             .call(
                 "conversations.replies",
-                Some(json!({ "channel": channel, "ts": thread_ts, "limit": limit })),
+                Some(json!({
+                    "channel": channel,
+                    "ts": thread_ts,
+                    "limit": limit,
+                    "latest": latest,
+                    "inclusive": latest.map(|_| true),
+                })),
                 true,
             )
             .await?;
@@ -225,6 +235,29 @@ impl<T: SlackTransport> SlackApi<T> {
                 )
             })?;
         Ok(channel.to_string())
+    }
+
+    /// `conversations.info` — the channel's name (`#general` without the
+    /// `#`). Callers cache the result; DMs and other unnamed conversations
+    /// are an [`SlackError::InvalidResponse`], which callers fall back from.
+    pub async fn conversations_info_name(&self, channel: &str) -> Result<String, SlackError> {
+        let response = self
+            .call(
+                "conversations.info",
+                Some(json!({ "channel": channel })),
+                true,
+            )
+            .await?;
+        let name = response
+            .get("channel")
+            .and_then(|c| c.get("name"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                SlackError::InvalidResponse(
+                    "`conversations.info` response has no `channel.name`".into(),
+                )
+            })?;
+        Ok(name.to_string())
     }
 
     /// `users.info` — a human-readable name for `user_id`: the display name
