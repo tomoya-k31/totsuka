@@ -292,11 +292,12 @@ async fn thread_context<T: SlackTransport>(
     let Some(thread_ts) = &mention.thread_ts else {
         return Some(Vec::new());
     };
-    // limit counts messages Slack returns from the head of the thread; ask
-    // for enough to cover the window even after dropping the mention itself.
+    // Window the thread from above at the mention itself (`latest`), so a
+    // long thread yields the messages leading up to the mention, not its
+    // head; +1 covers dropping the mention from the result.
     let fetch_limit = config.thread_context_limit.saturating_add(1).min(200);
     let messages = match api
-        .conversations_replies(&mention.channel, thread_ts, fetch_limit)
+        .conversations_replies(&mention.channel, thread_ts, fetch_limit, Some(&mention.ts))
         .await
     {
         Ok(messages) => messages,

@@ -179,17 +179,27 @@ impl<T: SlackTransport> SlackApi<T> {
     }
 
     /// `conversations.replies` — up to `limit` messages of the thread rooted
-    /// at `thread_ts` (oldest first, parent included).
+    /// at `thread_ts` (oldest first, parent included). `latest` bounds the
+    /// window from above (inclusive): without it Slack pages from the *head*
+    /// of the thread, so a long thread would yield its oldest messages, not
+    /// the ones leading up to `latest`.
     pub async fn conversations_replies(
         &self,
         channel: &str,
         thread_ts: &str,
         limit: u32,
+        latest: Option<&str>,
     ) -> Result<Vec<SlackMessage>, SlackError> {
         let response = self
             .call(
                 "conversations.replies",
-                Some(json!({ "channel": channel, "ts": thread_ts, "limit": limit })),
+                Some(json!({
+                    "channel": channel,
+                    "ts": thread_ts,
+                    "limit": limit,
+                    "latest": latest,
+                    "inclusive": latest.map(|_| true),
+                })),
                 true,
             )
             .await?;
