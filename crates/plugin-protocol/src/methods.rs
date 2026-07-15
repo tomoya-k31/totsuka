@@ -323,7 +323,8 @@ mod tests {
     #[test]
     fn common_methods_round_trip() {
         round_trip(&InitializeParams {
-            protocol_version: Version::new(0, 1, 0),
+            // 0.1.1: the version that started carrying `repositories`.
+            protocol_version: Version::new(0, 1, 1),
             config: serde_json::json!({"socket_path": "/run/herdr.sock"}),
             repositories: vec![RepoInfo {
                 name: "web-app".into(),
