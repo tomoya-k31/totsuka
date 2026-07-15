@@ -197,6 +197,13 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
                     .into(),
             );
         }
+        if group.repos.is_empty() {
+            errors.push(format!(
+                "`[[channel_groups]]` (prefix `{}`) has an empty `repos` list → list the \
+                 candidate repositories that prefix should narrow to",
+                group.prefix
+            ));
+        }
         for repo in &group.repos {
             if !names.contains(&repo.as_str()) {
                 errors.push(format!(

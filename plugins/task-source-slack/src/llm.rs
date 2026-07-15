@@ -109,39 +109,73 @@ impl ChatTransport for ReqwestChat {
 }
 
 /// Classify which of `candidates` the mention concerns. One retry on a
-/// malformed verdict; any terminal failure is a [`ClassifyError`] and the
-/// caller falls through to the ephemeral picker.
+/// malformed verdict — with the malformed answer echoed back and a
+/// corrective instruction appended, since resending an identical body at
+/// temperature 0 to a deterministic provider would only repeat the failure.
+/// Any terminal failure is a [`ClassifyError`] and the caller falls through
+/// to the ephemeral picker.
 pub async fn classify<C: ChatTransport>(
     chat: &C,
     config: &LlmConfig,
     mention_text: &str,
     thread_context: &str,
-    candidates: &[&RepoInfo],
+    candidates: &[RepoInfo],
 ) -> Result<Classification, ClassifyError> {
-    let body = request_body(config, mention_text, thread_context, candidates);
-
-    let mut last_error = String::new();
-    for attempt in 0..2 {
-        if attempt > 0 {
-            tracing::info!("LLM verdict malformed; retrying once");
-        }
-        let response = chat
-            .complete(config, body.clone())
+    // README reads are blocking filesystem I/O; keep them off the async
+    // worker so a slow disk cannot stall the runtime.
+    let body = {
+        let config = config.clone();
+        let mention = mention_text.to_string();
+        let context = thread_context.to_string();
+        let candidates = candidates.to_vec();
+        tokio::task::spawn_blocking(move || request_body(&config, &mention, &context, &candidates))
             .await
-            .map_err(ClassifyError::Request)?;
-        match parse_verdict(&response) {
-            Ok(verdict) => return validate(verdict, config, candidates),
-            Err(e) => last_error = e,
-        }
+            .map_err(|e| ClassifyError::Request(format!("request build failed: {e}")))?
+    };
+
+    let response = chat
+        .complete(config, body.clone())
+        .await
+        .map_err(ClassifyError::Request)?;
+    let (content, first_error) = match parse_verdict(&response) {
+        Ok(verdict) => return validate(verdict, config, candidates),
+        Err((content, error)) => (content, error),
+    };
+
+    tracing::info!(
+        error = first_error,
+        "LLM verdict malformed; retrying with a correction"
+    );
+    let retry_body = with_correction(body, &content);
+    let response = chat
+        .complete(config, retry_body)
+        .await
+        .map_err(ClassifyError::Request)?;
+    match parse_verdict(&response) {
+        Ok(verdict) => validate(verdict, config, candidates),
+        Err((_, error)) => Err(ClassifyError::InvalidResponse(error)),
     }
-    Err(ClassifyError::InvalidResponse(last_error))
+}
+
+/// The retry request: the original conversation plus the model's malformed
+/// answer and an instruction to answer again with only the JSON object.
+fn with_correction(mut body: Value, previous_answer: &str) -> Value {
+    if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
+        messages.push(json!({ "role": "assistant", "content": previous_answer }));
+        messages.push(json!({
+            "role": "user",
+            "content": "That response was not a parseable JSON verdict. Answer again with \
+                        ONLY the JSON object — no prose, no code fences.",
+        }));
+    }
+    body
 }
 
 /// Check the verdict names a real candidate and clears the threshold.
 fn validate(
     verdict: Classification,
     config: &LlmConfig,
-    candidates: &[&RepoInfo],
+    candidates: &[RepoInfo],
 ) -> Result<Classification, ClassifyError> {
     if !candidates.iter().any(|r| r.name == verdict.repo) {
         return Err(ClassifyError::UnknownRepo(verdict.repo));
@@ -162,7 +196,7 @@ fn request_body(
     config: &LlmConfig,
     mention_text: &str,
     thread_context: &str,
-    candidates: &[&RepoInfo],
+    candidates: &[RepoInfo],
 ) -> Value {
     let mut catalog = String::new();
     for repo in candidates {
@@ -214,26 +248,49 @@ fn readme_head(path: &str) -> Option<String> {
 
 /// Extract the verdict object from a chat-completion response, tolerating
 /// code fences and surrounding prose (models add them despite instructions).
-fn parse_verdict(response: &Value) -> Result<Classification, String> {
-    let content = response
+/// The error side carries the raw content so the retry can echo it back.
+fn parse_verdict(response: &Value) -> Result<Classification, (String, String)> {
+    let Some(content) = response
         .get("choices")
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("message"))
         .and_then(|m| m.get("content"))
         .and_then(Value::as_str)
-        .ok_or_else(|| "response has no choices[0].message.content".to_string())?;
-    let json_text = extract_json_object(content)
-        .ok_or_else(|| format!("no JSON object in content: {content:.200}"))?;
-    serde_json::from_str::<Classification>(json_text).map_err(|e| format!("bad verdict: {e}"))
+    else {
+        return Err((
+            String::new(),
+            "response has no choices[0].message.content".to_string(),
+        ));
+    };
+    extract_verdict(content).ok_or_else(|| {
+        (
+            content.to_string(),
+            format!("no JSON verdict in content: {content:.200}"),
+        )
+    })
 }
 
-/// The first balanced `{…}` block in `text`.
-fn extract_json_object(text: &str) -> Option<&str> {
-    let start = text.find('{')?;
+/// Try every `{` in `text` as the start of a balanced JSON object and return
+/// the first one that deserializes as a [`Classification`]. Anchoring on the
+/// *first* brace only would let prose like `the {Button} component` shadow a
+/// perfectly valid verdict later in the answer.
+fn extract_verdict(text: &str) -> Option<Classification> {
+    for (start, _) in text.char_indices().filter(|(_, c)| *c == '{') {
+        if let Some(candidate) = balanced_object(&text[start..])
+            && let Ok(verdict) = serde_json::from_str::<Classification>(candidate)
+        {
+            return Some(verdict);
+        }
+    }
+    None
+}
+
+/// The balanced `{…}` block at the start of `text`, if any.
+fn balanced_object(text: &str) -> Option<&str> {
     let mut depth = 0usize;
     let mut in_string = false;
     let mut escaped = false;
-    for (i, c) in text[start..].char_indices() {
+    for (i, c) in text.char_indices() {
         if escaped {
             escaped = false;
             continue;
@@ -245,7 +302,7 @@ fn extract_json_object(text: &str) -> Option<&str> {
             '}' if !in_string => {
                 depth -= 1;
                 if depth == 0 {
-                    return Some(&text[start..=start + i]);
+                    return Some(&text[..=i]);
                 }
             }
             _ => {}
@@ -307,8 +364,7 @@ mod tests {
 
     #[tokio::test]
     async fn confident_verdict_resolves() {
-        let repos = [repo("web-app"), repo("design-system")];
-        let candidates: Vec<&RepoInfo> = repos.iter().collect();
+        let candidates = [repo("web-app"), repo("design-system")];
         let chat = FakeChat::new(vec![Ok(chat_response(
             r#"{"repo": "web-app", "confidence": 0.9, "reason": "frontend bug"}"#,
         ))]);
@@ -332,8 +388,7 @@ mod tests {
 
     #[tokio::test]
     async fn code_fenced_verdict_is_tolerated() {
-        let repos = [repo("web-app")];
-        let candidates: Vec<&RepoInfo> = repos.iter().collect();
+        let candidates = [repo("web-app")];
         let chat = FakeChat::new(vec![Ok(chat_response(
             "Sure! Here you go:\n```json\n{\"repo\": \"web-app\", \"confidence\": 0.8, \
              \"reason\": \"x\"}\n```",
@@ -346,8 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn low_confidence_is_reported_as_such() {
-        let repos = [repo("web-app")];
-        let candidates: Vec<&RepoInfo> = repos.iter().collect();
+        let candidates = [repo("web-app")];
         let chat = FakeChat::new(vec![Ok(chat_response(
             r#"{"repo": "web-app", "confidence": 0.3, "reason": "unsure"}"#,
         ))]);
@@ -362,8 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_verdict_retries_once_then_fails() {
-        let repos = [repo("web-app")];
-        let candidates: Vec<&RepoInfo> = repos.iter().collect();
+        let candidates = [repo("web-app")];
         let chat = FakeChat::new(vec![
             Ok(chat_response("I think it's the web app.")),
             Ok(chat_response("still prose")),
@@ -377,8 +430,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_then_valid_verdict_succeeds_on_retry() {
-        let repos = [repo("web-app")];
-        let candidates: Vec<&RepoInfo> = repos.iter().collect();
+        let candidates = [repo("web-app")];
         let chat = FakeChat::new(vec![
             Ok(chat_response("prose")),
             Ok(chat_response(
@@ -393,8 +445,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_repo_and_api_failure_fall_through() {
-        let repos = [repo("web-app")];
-        let candidates: Vec<&RepoInfo> = repos.iter().collect();
+        let candidates = [repo("web-app")];
 
         let chat = FakeChat::new(vec![Ok(chat_response(
             r#"{"repo": "ghost", "confidence": 0.9, "reason": "x"}"#,
@@ -415,12 +466,52 @@ mod tests {
     }
 
     #[test]
-    fn json_extraction_handles_nesting_and_strings() {
+    fn balanced_object_handles_nesting_and_strings() {
         assert_eq!(
-            extract_json_object(r#"noise {"a": {"b": "}"}} tail"#),
+            balanced_object(r#"{"a": {"b": "}"}} tail"#),
             Some(r#"{"a": {"b": "}"}}"#)
         );
-        assert!(extract_json_object("no json here").is_none());
-        assert!(extract_json_object("{unbalanced").is_none());
+        assert!(balanced_object("{unbalanced").is_none());
+    }
+
+    #[test]
+    fn extraction_skips_prose_braces_before_the_verdict() {
+        // A brace in prose before the verdict must not shadow it.
+        let verdict = extract_verdict(
+            r#"The {Button} component belongs there. {"repo": "web-app", "confidence": 0.9, "reason": "x"}"#,
+        )
+        .expect("the trailing verdict parses");
+        assert_eq!(verdict.repo, "web-app");
+        assert!(extract_verdict("no json here").is_none());
+        assert!(extract_verdict("{unbalanced").is_none());
+    }
+
+    #[tokio::test]
+    async fn retry_carries_a_correction_message() {
+        let candidates = [repo("web-app")];
+        let chat = FakeChat::new(vec![
+            Ok(chat_response("just prose")),
+            Ok(chat_response(
+                r#"{"repo": "web-app", "confidence": 0.9, "reason": "ok"}"#,
+            )),
+        ]);
+        classify(&chat, &config(), "m", "", &candidates)
+            .await
+            .unwrap();
+
+        let requests = chat.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        // The retry is not a byte-identical resend: it echoes the malformed
+        // answer and appends the corrective instruction.
+        let retry_messages = requests[1]["messages"].as_array().unwrap();
+        assert_eq!(retry_messages.len(), 4, "{retry_messages:?}");
+        assert_eq!(retry_messages[2]["role"], "assistant");
+        assert_eq!(retry_messages[2]["content"], "just prose");
+        assert!(
+            retry_messages[3]["content"]
+                .as_str()
+                .unwrap()
+                .contains("ONLY the JSON object")
+        );
     }
 }

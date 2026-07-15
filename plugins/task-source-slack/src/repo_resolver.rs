@@ -27,18 +27,33 @@ pub enum Resolution {
 
 /// Stage ①: the candidates after applying the channel-prefix rules. The
 /// first `[[channel_groups]]` whose `prefix` matches `channel_name` wins;
-/// with no match every configured repository is a candidate.
-pub fn prefix_candidates<'a>(config: &'a SlackConfig, channel_name: &str) -> Vec<&'a RepoInfo> {
+/// with no match every configured repository is a candidate. A matching
+/// group that narrows to *nothing* (empty `repos`, or names that don't
+/// exist — `config/validate` flags both, but `initialize` does not re-run
+/// it) falls back to every repository rather than stranding the mention
+/// behind a picker with no buttons.
+pub fn prefix_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoInfo> {
     for group in &config.channel_groups {
         if channel_name.starts_with(&group.prefix) {
-            return config
+            let narrowed: Vec<RepoInfo> = config
                 .repos
                 .iter()
                 .filter(|r| group.repos.contains(&r.name))
+                .cloned()
                 .collect();
+            if narrowed.is_empty() {
+                tracing::warn!(
+                    prefix = group.prefix,
+                    channel_name,
+                    "matching [[channel_groups]] entry narrows to no repository \
+                     (fix its `repos` list); using every [[repos]] candidate"
+                );
+                break;
+            }
+            return narrowed;
         }
     }
-    config.repos.iter().collect()
+    config.repos.clone()
 }
 
 /// Run stages ① and ② for one mention. Never errors: every failure mode of
@@ -56,12 +71,6 @@ pub async fn resolve<C: ChatTransport>(
         return Resolution::Resolved(only.name.clone());
     }
     let names: Vec<String> = candidates.iter().map(|r| r.name.clone()).collect();
-    if candidates.is_empty() {
-        // Unreachable with a validated config (`[[repos]]` non-empty, group
-        // refs checked); guard anyway rather than panic in the pipeline.
-        tracing::error!(channel_name, "no candidate repositories; check [[repos]]");
-        return Resolution::NeedsSelection(names);
-    }
 
     let Some(llm) = &config.llm else {
         // Multiple candidates but no classifier (config validation warns
@@ -105,8 +114,8 @@ mod tests {
         .unwrap()
     }
 
-    fn names(candidates: Vec<&RepoInfo>) -> Vec<&str> {
-        candidates.into_iter().map(|r| r.name.as_str()).collect()
+    fn names(candidates: Vec<RepoInfo>) -> Vec<String> {
+        candidates.into_iter().map(|r| r.name).collect()
     }
 
     #[test]
@@ -153,5 +162,22 @@ mod tests {
             names(prefix_candidates(&config, "team-b-dev")),
             vec!["design-system", "backend-api"]
         );
+    }
+
+    #[test]
+    fn group_narrowing_to_nothing_falls_back_to_all_repos() {
+        // An empty `repos` list and one referencing only unknown names both
+        // slip past initialize (which does not re-run config/validate); the
+        // mention must still get a full picker, not a skip-only one.
+        for groups in [
+            json!([{ "prefix": "ops-", "repos": [] }]),
+            json!([{ "prefix": "ops-", "repos": ["ghost"] }]),
+        ] {
+            let config = config(groups);
+            assert_eq!(
+                names(prefix_candidates(&config, "ops-alerts")),
+                vec!["web-app", "design-system", "backend-api"]
+            );
+        }
     }
 }

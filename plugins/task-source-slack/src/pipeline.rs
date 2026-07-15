@@ -122,6 +122,7 @@ impl SharedState {
 }
 
 /// A mention with everything the pipeline looked up for it.
+#[derive(Clone)]
 struct EnrichedMention {
     mention: Mention,
     sender_name: String,
@@ -131,21 +132,45 @@ struct EnrichedMention {
     context_lines: Option<Vec<String>>,
 }
 
+/// Bound on parked selections, mirroring [`PENDING_CAP`]'s rationale: an
+/// LLM outage that degrades every mention to a picker must not grow memory
+/// without bound until the 24h TTL. Evicting loses the mention (same
+/// semantics as TTL expiry), logged as a warning.
+const AWAITING_CAP: usize = 256;
+
 /// Mentions waiting for the operator's repository choice, keyed by task id.
-/// Kept out of [`SharedState`]: only the pipeline touches it.
+/// Kept out of [`SharedState`] (only the pipeline touches it), but shared
+/// with the per-mention resolution tasks, hence used behind a lock.
 #[derive(Default)]
 struct AwaitingSelection {
     entries: HashMap<String, (EnrichedMention, Instant)>,
+    order: std::collections::VecDeque<String>,
 }
 
 impl AwaitingSelection {
     fn insert(&mut self, enriched: EnrichedMention, now: Instant) {
-        self.entries
-            .insert(enriched.mention.task_id(), (enriched, now));
+        let task_id = enriched.mention.task_id();
+        if !self.entries.contains_key(&task_id) {
+            if self.order.len() >= AWAITING_CAP
+                && let Some(evicted) = self.order.pop_front()
+            {
+                self.entries.remove(&evicted);
+                tracing::warn!(
+                    task_id = %evicted,
+                    "awaiting-selection store full; evicted the oldest parked mention"
+                );
+            }
+            self.order.push_back(task_id.clone());
+        }
+        self.entries.insert(task_id, (enriched, now));
     }
 
     fn take(&mut self, task_id: &str) -> Option<EnrichedMention> {
-        self.entries.remove(task_id).map(|(e, _)| e)
+        let taken = self.entries.remove(task_id).map(|(e, _)| e);
+        if taken.is_some() {
+            self.order.retain(|id| id != task_id);
+        }
+        taken
     }
 
     /// Drop entries older than `ttl`, returning the dropped task ids.
@@ -158,6 +183,7 @@ impl AwaitingSelection {
             .collect();
         for id in &expired {
             self.entries.remove(id);
+            self.order.retain(|other| other != id);
         }
         expired
     }
@@ -187,7 +213,7 @@ pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
         }
 
         let mut names = NameCache::default();
-        let mut awaiting = AwaitingSelection::default();
+        let awaiting = Arc::new(Mutex::new(AwaitingSelection::default()));
         let mut sweep = tokio::time::interval(SELECTION_SWEEP_INTERVAL);
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         sweep.tick().await; // the first tick fires immediately; skip it
@@ -199,7 +225,11 @@ pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
                     None => return,
                 },
                 _ = sweep.tick() => {
-                    for task_id in awaiting.sweep(Instant::now(), SELECTION_TTL) {
+                    let expired = awaiting
+                        .lock()
+                        .unwrap()
+                        .sweep(Instant::now(), SELECTION_TTL);
+                    for task_id in expired {
                         tracing::info!(
                             task_id,
                             "repository selection expired unanswered; mention dropped"
@@ -214,19 +244,20 @@ pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
                         continue;
                     };
                     let enriched = enrich(api.as_ref(), &config, &mut names, mention).await;
-                    handle_mention(
-                        api.as_ref(),
-                        chat.as_ref(),
-                        &config,
-                        &state,
-                        &mut awaiting,
+                    // Resolution can block for minutes on a slow LLM; run it
+                    // off the event loop so button clicks and further
+                    // mentions are never head-of-line blocked behind it.
+                    tokio::spawn(handle_mention(
+                        Arc::clone(&api),
+                        Arc::clone(&chat),
+                        Arc::clone(&config),
+                        state.clone(),
+                        Arc::clone(&awaiting),
                         enriched,
-                    )
-                    .await;
+                    ));
                 }
                 SocketEvent::BlockActions(payload) => {
-                    handle_block_actions(api.as_ref(), &config, &state, &mut awaiting, &payload)
-                        .await;
+                    handle_block_actions(api.as_ref(), &config, &state, &awaiting, &payload).await;
                 }
             }
         }
@@ -234,19 +265,20 @@ pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
 }
 
 /// Resolve the repository for an enriched mention and either submit the task
-/// or park it behind an ephemeral selection.
+/// or park it behind an ephemeral selection. Runs as its own task (spawned
+/// per mention), so slow LLM calls never stall the event loop.
 async fn handle_mention<T: SlackTransport, C: ChatTransport>(
-    api: &SlackApi<T>,
-    chat: &C,
-    config: &SlackConfig,
-    state: &SharedState,
-    awaiting: &mut AwaitingSelection,
+    api: Arc<SlackApi<T>>,
+    chat: Arc<C>,
+    config: Arc<SlackConfig>,
+    state: SharedState,
+    awaiting: Arc<Mutex<AwaitingSelection>>,
     enriched: EnrichedMention,
 ) {
     let context_text = enriched.context_lines.as_deref().unwrap_or(&[]).join("\n");
     let resolution = resolve(
-        chat,
-        config,
+        chat.as_ref(),
+        &config,
         &enriched.channel_name,
         &enriched.mention.text,
         &context_text,
@@ -255,14 +287,19 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport>(
 
     match resolution {
         Resolution::Resolved(repo) => {
-            submit(state, config, &enriched, Some(repo));
+            submit(&state, &config, &enriched, Some(repo));
         }
         Resolution::NeedsSelection(candidates) => {
             let task_id = enriched.mention.task_id();
-            match post_selection_ephemeral(api, config, &enriched, &candidates).await {
+            // Park BEFORE posting so an operator answering within
+            // milliseconds cannot race an entry that is not there yet.
+            awaiting
+                .lock()
+                .unwrap()
+                .insert(enriched.clone(), Instant::now());
+            match post_selection_ephemeral(api.as_ref(), &config, &enriched, &candidates).await {
                 Ok(()) => {
                     tracing::info!(task_id, "asked the operator to pick a repository");
-                    awaiting.insert(enriched, Instant::now());
                 }
                 Err(e) => {
                     // Without the ephemeral the operator can never answer;
@@ -273,7 +310,8 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport>(
                         task_id, error = %e,
                         "could not post the repository picker; submitting without a hint"
                     );
-                    submit(state, config, &enriched, None);
+                    awaiting.lock().unwrap().take(&task_id);
+                    submit(&state, &config, &enriched, None);
                 }
             }
         }
@@ -286,7 +324,7 @@ async fn handle_block_actions<T: SlackTransport>(
     api: &SlackApi<T>,
     config: &SlackConfig,
     state: &SharedState,
-    awaiting: &mut AwaitingSelection,
+    awaiting: &Arc<Mutex<AwaitingSelection>>,
     payload: &Value,
 ) {
     let Some(action) = payload.get("actions").and_then(|a| a.get(0)) else {
@@ -307,7 +345,7 @@ async fn handle_block_actions<T: SlackTransport>(
                 return;
             }
         };
-        let Some(enriched) = awaiting.take(&task_id) else {
+        let Some(enriched) = awaiting.lock().unwrap().take(&task_id) else {
             // Restart, TTL expiry, or a double click: nothing to resume.
             tracing::info!(task_id, "selection answered but no mention is waiting");
             replace_ephemeral(
@@ -331,7 +369,7 @@ async fn handle_block_actions<T: SlackTransport>(
             tracing::warn!(value, "skip_mention action with an unparseable value");
             return;
         };
-        if awaiting.take(&task_id).is_some() {
+        if awaiting.lock().unwrap().take(&task_id).is_some() {
             tracing::info!(task_id, "operator skipped the mention; dropped");
         }
         replace_ephemeral(
@@ -387,19 +425,22 @@ async fn post_selection_ephemeral<T: SlackTransport>(
         "value": json!({ "task": task_id }).to_string(),
     }));
 
-    let blocks = json!([
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": format!(
-                    "どのリポジトリについてのメンションですか？\n> {snippet}\n\
-                     選ぶと返信案の作成を開始します。"
-                ),
-            }
-        },
-        { "type": "actions", "elements": elements },
-    ]);
+    let mut blocks = vec![json!({
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": format!(
+                "どのリポジトリについてのメンションですか？\n> {snippet}\n\
+                 選ぶと返信案の作成を開始します。"
+            ),
+        }
+    })];
+    // Slack rejects an `actions` block with more than 25 elements; chunk so
+    // a large [[repos]] catalog still gets a working picker.
+    for chunk in elements.chunks(25) {
+        blocks.push(json!({ "type": "actions", "elements": chunk }));
+    }
+    let blocks = Value::Array(blocks);
 
     api.chat_post_ephemeral(&PostEphemeral {
         channel: &enriched.mention.channel,
@@ -453,15 +494,18 @@ impl NameCache {
         if let Some(hit) = self.users.get(user_id) {
             return hit.clone();
         }
-        let name = match api.users_info(user_id).await {
-            Ok(name) => name,
+        match api.users_info(user_id).await {
+            Ok(name) => {
+                self.users.insert(user_id.to_string(), name.clone());
+                name
+            }
+            // Not cached: a transient failure must not pin the raw id for
+            // the rest of the run.
             Err(e) => {
                 tracing::warn!(user_id, error = %e, "users.info failed; using the raw id");
                 user_id.to_string()
             }
-        };
-        self.users.insert(user_id.to_string(), name.clone());
-        name
+        }
     }
 
     /// Channel name for `channel_id`; falls back to the raw id.
