@@ -1,10 +1,10 @@
 ---
 type: Component
 title: task-source-slack プラグイン
-description: 自分宛の Slack メンションをタスク化し本人名義で代理返信するための公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・静的 config/validate・起動時 TokenGuard・Slack Web API の型付きクライアント層・Socket Mode WebSocket クライアント（即時 ack・自動再接続）まで実装済み。
+description: 自分宛の Slack メンションをタスク化し本人名義で代理返信するための公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard・Web API クライアント・Socket Mode クライアントに加え、メンション検知（判定表 + 冪等化）・スレッド文脈付き Task 正規化・バッファ + tasks/fetch 排出まで実装済み。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard]
-timestamp: 2026-07-15T13:00:00Z
+timestamp: 2026-07-15T15:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -13,7 +13,7 @@ owner: tomoya-k31
 
 自分（`target_user_id`）宛の Slack メンションを検知して totsuka のタスクへ正規化し、承認後に **本人名義**（ユーザートークン `xoxp-`、Bot なし）でスレッド返信するための公式プラグイン。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、stdio JSON-RPC 2.0（NDJSON）サーバとして起動する。構造は [task-source-notion](/components/task-source-notion.md) / [task-source-github](/components/task-source-github.md) に準拠。orchestrator-core / plugin-protocol への変更なしで成立する（エピック #102 の設計判断）。
 
-現在の実装範囲: crate 構成・設定スキーマ・stdio JSON-RPC ディスパッチ・TokenGuard（#103）、**Slack Web API の型付きクライアント層** と **Socket Mode WebSocket クライアント**（#104）まで。`tasks/fetch`（空応答）・`task/update_status` / `result/publish`（受理して no-op）はまだスタブ。メンション検知（#105）、リポジトリ解決（#106）、承認フロー（#107）が後続で載る。
+現在の実装範囲: crate 構成・設定スキーマ・stdio JSON-RPC ディスパッチ・TokenGuard（#103）、**Slack Web API の型付きクライアント層** と **Socket Mode WebSocket クライアント**（#104）、**メンション検知 → Task 正規化 → バッファ → `tasks/fetch` 排出のパイプライン**（#105）まで。`task/update_status` / `result/publish`（受理して no-op）はまだスタブ。リポジトリ解決（#106）、承認フロー（#107）が後続で載る。
 
 # モジュール構成
 
@@ -24,7 +24,9 @@ owner: tomoya-k31
 | `slack_api` | `SlackApi<T: SlackTransport>` — 上位ロジックが Slack と通信する唯一の窓口となる型付きラッパ: `auth.test` / `apps.connections.open`（App トークン）/ `conversations.replies` / `conversations.open`（self-DM 解決）/ `users.info`（display_name→real_name→name フォールバック）/ `chat.getPermalink` / `chat.postMessage`・`chat.postEphemeral`（非冪等＝自動リトライなし）/ `chat.update`（冪等）/ `response_url` POST。共通エラーハンドラが失効系（`invalid_auth` / `token_revoked` / `account_inactive`）をトークン種別に応じたガイダンス付き `Auth` へ昇格し tracing へ出力。`auth.test` のみ **全** API エラーを credential 扱い（引数がなく失敗要因はトークンのみのため） |
 | `error` | `SlackError`（Auth / IdentityMismatch / Api / RateLimited / Http / Transport / Timeout / InvalidResponse / InvalidRequest）。`is_retryable`（RateLimited・5xx・ネットワーク）/ `is_rejected`（429＝未適用の保証、非冪等でも再送可）/ `is_credential`（TokenGuard 系）を分類。`auth_failure`（user トークン）と `app_auth_failure`（App-Level トークン＝xapp 再生成手順）が原因別の回復手順付きメッセージへ写像 |
 | `socket_mode` | Socket Mode WebSocket クライアント（tokio-tungstenite）。ライフサイクル: `apps.connections.open`（App トークン）→ WSS 接続 → `hello` → envelope 読み取り。**ack 規律**: `events_api` / `interactive` envelope は受信後すぐ ack を送信し（Slack は約 3 秒で再配送するため下流処理を待たせない）、正規化済みイベント `SocketEvent::Message`（message イベントのみ）/ `SocketEvent::BlockActions` を ack 後に **unbounded** チャネルへ配送（有界だと遅い消費者が読み取りループを塞ぎ後続 ack が遅延するため）。`disconnect` / Close / クリーン EOF は `hello` 済みセッションのみ即時再接続（`hello` 前に死んだ接続は失敗としてバックオフ）、`idle_timeout`（既定 60s）無通信はサイレント切断とみなし再接続。接続失敗は上限付き指数バックオフ（transport と共有の `capped_backoff`）、連続失敗閾値超で warn。`apps.connections.open` の API エラーは全て設定不備（missing_scope / not_allowed_token_type 含む）として xapp 再生成ガイダンス付きでループを停止。Receiver drop で待機中でも即終了 |
-| `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。initialize（TokenGuard 実行）/ config·validate（**静的検証のみ・ネットワーク不要**）/ shutdown / tasks·fetch / task·update_status / result·publish（スタブ）。未初期化メソッドは拒否 |
+| `mention` | メンション判定表（この順で first-hit）: ①`subtype`/`bot_id` あり ②送信者が本人 ③self-DM チャンネル ④`<@target_user_id>`（`<@U…|label>` 形式も可）不含 ⑤`channel:ts` 処理済み（上限 1024 の LRU、再起動で消失は許容 — orchestrator 側 ingest も冪等）→ すべて通過で `Mention`（task_id=`{channel}:{ts}`、reply_ts=`thread_ts ?? ts`） |
+| `pipeline` | Socket Mode イベントの常駐消費タスク。self-DM チャンネルを起動時に解決（失敗は警告のみ、判定表②が防波堤）。fresh mention を users.info / conversations.info（ラン内キャッシュ）・conversations.replies（直近 `thread_context_limit` 件、話者名付き）・chat.getPermalink で強化し、共通 Task スキーマへ正規化（body=指示文 + reply_style + メンション + スレッド文脈の構造化 Markdown、repo_hint は `[[repos]]` 単一時のみ #106 まで）。強化の失敗は劣化（生 ID・文脈欠落注記・url なし）で吸収しタスクは捨てない。`SharedState` = タスクバッファ + `PendingTaskIndex`（task_id → channel/reply_ts/送信者名/permalink、`result/publish` #107 で使用） |
+| `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。initialize（TokenGuard → Socket Mode + パイプラインの常駐ランタイム起動。`without_runtime()` はプロトコルテスト用）/ config·validate（**静的検証のみ・ネットワーク不要**）/ shutdown / tasks·fetch（バッファ全排出、trigger は v1 未解釈、2 回目は同一 Task を返さない）/ task·update_status / result·publish（スタブ）。未初期化メソッドは拒否。Session drop で常駐タスクを abort |
 | `main` | `#[tokio::main]` の stdio ループ。`ReqwestFactory` を配線。ログは stderr |
 
 # TokenGuard（起動時検証）

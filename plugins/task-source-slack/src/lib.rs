@@ -11,6 +11,8 @@
 
 pub mod config;
 pub mod error;
+pub mod mention;
+pub mod pipeline;
 pub mod server;
 pub mod slack_api;
 pub mod socket_mode;

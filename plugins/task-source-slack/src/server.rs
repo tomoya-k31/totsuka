@@ -16,9 +16,13 @@ use plugin_protocol::{Capabilities, OutputCapability, RequestId, method};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use std::sync::Arc;
+
 use crate::config::{SlackConfig, static_config_errors};
 use crate::error::SlackError;
+use crate::pipeline::{self, SharedState};
 use crate::slack_api::SlackApi;
+use crate::socket_mode::{self, SocketModeOptions};
 use crate::transport::{SlackTransport, TransportSettings};
 
 /// Builds a transport from resolved connection settings. Abstracted so the
@@ -66,28 +70,60 @@ impl Reply {
 /// The Slack task-source stdio server.
 pub struct Server<F: TransportFactory> {
     factory: F,
+    /// Whether `initialize` starts the resident runtime (Socket Mode
+    /// connection + mention pipeline). On for production; protocol-level
+    /// tests turn it off so canned transports are not consumed by the
+    /// background tasks.
+    start_runtime: bool,
     /// Set by a successful `initialize` (config parsed + TokenGuard passed).
     session: Option<Session<F::Transport>>,
 }
 
-/// An initialized plugin session: the validated config and its Slack client.
+/// An initialized plugin session: the validated config, its Slack client,
+/// and the resident runtime.
 struct Session<T> {
     config: SlackConfig,
     #[expect(
         dead_code,
-        reason = "the skeleton's stubs answer without the network; the mention pipeline \
-                  (fetch, status write-back, reply publish) will drive it"
+        reason = "kept for the flows still stubbed (status write-back, reply publish); \
+                  the running pipeline holds its own Arc clone"
     )]
-    api: SlackApi<T>,
+    api: Arc<SlackApi<T>>,
+    /// Task buffer + pending-mention index, shared with the pipeline task.
+    state: SharedState,
+    /// The Socket Mode reader and the mention pipeline (absent when the
+    /// runtime is disabled).
+    runtime: Vec<tokio::task::AbortHandle>,
 }
 
-impl<F: TransportFactory> Server<F> {
+impl<T> Drop for Session<T> {
+    fn drop(&mut self) {
+        // A replaced (re-initialize) or ended session must not leak resident
+        // tasks that keep reading the socket.
+        for handle in &self.runtime {
+            handle.abort();
+        }
+    }
+}
+
+impl<F: TransportFactory> Server<F>
+where
+    F::Transport: 'static,
+{
     /// A fresh, uninitialized server using `factory` to build transports.
     pub fn new(factory: F) -> Self {
         Self {
             factory,
+            start_runtime: true,
             session: None,
         }
+    }
+
+    /// A server whose `initialize` does not start the Socket Mode runtime.
+    /// For protocol-level tests only.
+    pub fn without_runtime(mut self) -> Self {
+        self.start_runtime = false;
+        self
     }
 
     /// Parse one NDJSON line, dispatch it, and produce a reply. A non-JSON line
@@ -156,7 +192,7 @@ impl<F: TransportFactory> Server<F> {
                 ));
             }
         };
-        let api = SlackApi::new(self.factory.build(settings(&config)));
+        let api = Arc::new(SlackApi::new(self.factory.build(settings(&config))));
         if let Err(e) = token_guard(&api, &config).await {
             // Credential/identity problems are config-class (fix the token or
             // the config); anything else (network down) is an internal error.
@@ -167,7 +203,30 @@ impl<F: TransportFactory> Server<F> {
             };
             return Reply::respond(Response::error(id, Error::new(code, e.to_string())));
         }
-        self.session = Some(Session { config, api });
+
+        // The resident runtime: Socket Mode reader → mention pipeline →
+        // SharedState, which tasks/fetch drains.
+        let state = SharedState::default();
+        let mut runtime = Vec::new();
+        if self.start_runtime {
+            let (events, socket) =
+                socket_mode::spawn(Arc::clone(&api), SocketModeOptions::default());
+            let pipeline = pipeline::spawn(
+                Arc::clone(&api),
+                Arc::new(config.clone()),
+                events,
+                state.clone(),
+            );
+            runtime.push(socket.abort_handle());
+            runtime.push(pipeline.abort_handle());
+        }
+
+        self.session = Some(Session {
+            config,
+            api,
+            state,
+            runtime,
+        });
         Reply::respond(Response::result(id, capabilities_result()))
     }
 
@@ -186,8 +245,9 @@ impl<F: TransportFactory> Server<F> {
         ok_validate(id, static_config_errors(&config))
     }
 
-    /// `tasks/fetch` stub: an initialized plugin answers with no tasks (the
-    /// mention buffer arrives with the detection work).
+    /// `tasks/fetch`: drain the mention buffer. The trigger condition is not
+    /// interpreted in v1 (every buffered mention matches); a second fetch
+    /// never sees the same task again.
     fn tasks_fetch(&mut self, id: RequestId, params: Value) -> Reply {
         let Some(session) = self.session.as_ref() else {
             return not_initialized(id);
@@ -196,13 +256,15 @@ impl<F: TransportFactory> Server<F> {
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
+        let tasks = session.state.drain_tasks();
         tracing::debug!(
             source = session.config.source_name,
-            "tasks/fetch stub: no mention pipeline yet, answering with no tasks"
+            count = tasks.len(),
+            "tasks/fetch drained the mention buffer"
         );
         Reply::respond(Response::result(
             id,
-            serde_json::to_value(TasksFetchResult { tasks: Vec::new() }).unwrap_or(Value::Null),
+            serde_json::to_value(TasksFetchResult { tasks }).unwrap_or(Value::Null),
         ))
     }
 

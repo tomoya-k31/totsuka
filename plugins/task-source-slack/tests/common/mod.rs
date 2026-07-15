@@ -44,6 +44,9 @@ pub struct PostedUrl {
 #[derive(Clone, Default)]
 pub struct Shared {
     responses: Arc<Mutex<VecDeque<Canned>>>,
+    /// Method-keyed responses, consulted before the global queue. For tests
+    /// where concurrent background tasks make a single ordered queue racy.
+    keyed: Arc<Mutex<std::collections::HashMap<String, VecDeque<Canned>>>>,
     requests: Arc<Mutex<Vec<Recorded>>>,
     posted_urls: Arc<Mutex<Vec<PostedUrl>>>,
 }
@@ -51,6 +54,26 @@ pub struct Shared {
 impl Shared {
     pub fn push(&self, canned: Canned) {
         self.responses.lock().unwrap().push_back(canned);
+    }
+    /// Queue a response for one specific Web API `method`. The last entry is
+    /// sticky: it keeps answering repeats of the method.
+    pub fn push_for(&self, method: &str, canned: Canned) {
+        self.keyed
+            .lock()
+            .unwrap()
+            .entry(method.to_string())
+            .or_default()
+            .push_back(canned);
+    }
+    fn next_response(&self, method: &str) -> Option<Canned> {
+        if let Some(queue) = self.keyed.lock().unwrap().get_mut(method) {
+            return match queue.len() {
+                0 => None,
+                1 => queue.front().cloned(), // sticky last answer
+                _ => queue.pop_front(),
+            };
+        }
+        self.responses.lock().unwrap().pop_front()
     }
     pub fn requests(&self) -> Vec<Recorded> {
         self.requests.lock().unwrap().clone()
@@ -79,7 +102,7 @@ impl SlackTransport for FakeTransport {
             body,
             idempotent,
         });
-        let next = self.shared.responses.lock().unwrap().pop_front();
+        let next = self.shared.next_response(method);
         async move {
             match next {
                 Some(Canned::Data(v)) => Ok(v),

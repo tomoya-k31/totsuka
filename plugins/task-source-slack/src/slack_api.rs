@@ -227,6 +227,29 @@ impl<T: SlackTransport> SlackApi<T> {
         Ok(channel.to_string())
     }
 
+    /// `conversations.info` — the channel's name (`#general` without the
+    /// `#`). Callers cache the result; DMs and other unnamed conversations
+    /// are an [`SlackError::InvalidResponse`], which callers fall back from.
+    pub async fn conversations_info_name(&self, channel: &str) -> Result<String, SlackError> {
+        let response = self
+            .call(
+                "conversations.info",
+                Some(json!({ "channel": channel })),
+                true,
+            )
+            .await?;
+        let name = response
+            .get("channel")
+            .and_then(|c| c.get("name"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                SlackError::InvalidResponse(
+                    "`conversations.info` response has no `channel.name`".into(),
+                )
+            })?;
+        Ok(name.to_string())
+    }
+
     /// `users.info` — a human-readable name for `user_id`: the display name
     /// when set, else the real name, else the account name.
     pub async fn users_info(&self, user_id: &str) -> Result<String, SlackError> {
