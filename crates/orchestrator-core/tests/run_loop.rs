@@ -70,6 +70,7 @@ protocol_version = "^0.1"
         args: vec![],
         manifest,
         init_config,
+        repositories: vec![],
         timeout: Duration::from_secs(10),
     })
     .await

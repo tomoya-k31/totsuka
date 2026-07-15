@@ -10,7 +10,13 @@
 use semver::{Version, VersionReq};
 
 /// The protocol version this crate implements.
-pub const PROTOCOL_VERSION: &str = "0.1.0";
+///
+/// 0.1.1: `InitializeParams.repositories` (#109) — additive and optional,
+/// so `^0.1` manifests keep matching. In this 0.x scheme the patch level
+/// marks backward-compatible additions (a 0.2 would break every `^0.1`
+/// manifest for a change no plugin is required to adopt); breaking changes
+/// still bump the major/minor per the caret semantics below.
+pub const PROTOCOL_VERSION: &str = "0.1.1";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -34,13 +40,17 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 1, 0));
+        assert_eq!(protocol_version(), Version::new(0, 1, 1));
     }
 
     #[test]
     fn compatible_requirement_matches() {
-        // A plugin supporting ^0.1 works with 0.1.0.
+        // A plugin supporting ^0.1 works with 0.1.x — the additive 0.1.1
+        // (InitializeParams.repositories) must not strand `^0.1` manifests.
         let req = VersionReq::parse("^0.1").unwrap();
+        assert!(is_compatible_with_current(&req));
+        // A plugin that *requires* the repositories supply can say so.
+        let req = VersionReq::parse(">=0.1.1, <0.2").unwrap();
         assert!(is_compatible_with_current(&req));
     }
 

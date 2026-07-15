@@ -31,6 +31,7 @@ protocol_version = "^0.1"
         )
         .unwrap(),
         init_config: serde_json::json!({}),
+        repositories: vec![],
         timeout: Duration::from_secs(10),
     }
 }

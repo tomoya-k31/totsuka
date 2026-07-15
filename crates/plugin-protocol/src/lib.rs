@@ -57,6 +57,7 @@
 //! let params = InitializeParams {
 //!     protocol_version: protocol_version(),
 //!     config: serde_json::json!({ "socket_path": "/run/herdr.sock" }),
+//!     repositories: vec![],
 //! };
 //! let request = Request::new(1, method::INITIALIZE, Some(serde_json::to_value(&params)?));
 //! let line = to_line(&request)?; // send `line + "\n"` to the plugin's stdin
@@ -85,10 +86,10 @@ pub use manifest::{Capabilities, Manifest, ManifestError, OutputCapability, Plug
 pub use methods::method;
 pub use methods::{
     AgentState, ConfigValidateParams, ConfigValidateResult, ExecutionMode, InitializeParams,
-    InitializeResult, NotifierEvent, NotifyParams, ResultPublishParams, SessionAttachParams,
-    SessionAttachResult, StateNotification, StateSubscribeParams, TaskCancelParams,
-    TaskDispatchParams, TaskDispatchResult, TaskUpdateStatusParams, TasksFetchParams,
-    TasksFetchResult,
+    InitializeResult, NotifierEvent, NotifyParams, RepoInfo, ResultPublishParams,
+    SessionAttachParams, SessionAttachResult, StateNotification, StateSubscribeParams,
+    TaskCancelParams, TaskDispatchParams, TaskDispatchResult, TaskUpdateStatusParams,
+    TasksFetchParams, TasksFetchResult,
 };
 pub use task::Task;
 pub use version::{PROTOCOL_VERSION, is_compatible, is_compatible_with_current, protocol_version};

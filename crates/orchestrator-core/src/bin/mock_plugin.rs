@@ -64,6 +64,10 @@ fn main() {
         let response = match method {
             "initialize" => {
                 config = params.get("config").cloned().unwrap_or(Value::Null);
+                // Recorded to its own file (`init_log`), NOT `notify_log`:
+                // tests read notify_log as "observable side effects", and
+                // initialize happens even in a dry run.
+                record_to(config.get("init_log"), "initialize", &params);
                 // `no_state_stream: true` simulates a minimal agent that does
                 // not stream state (the orchestrator must refuse to dispatch).
                 let state_stream = !config
@@ -221,7 +225,12 @@ fn main() {
 /// Append `{"method", "params"}` to the config's `notify_log` file, if set —
 /// the observation channel for fire-and-forget calls in integration tests.
 fn record(config: &Value, method: &str, params: &Value) {
-    let Some(path) = config.get("notify_log").and_then(Value::as_str) else {
+    record_to(config.get("notify_log"), method, params);
+}
+
+/// Append `{"method", "params"}` to the file named by `path`, if set.
+fn record_to(path: Option<&Value>, method: &str, params: &Value) {
+    let Some(path) = path.and_then(Value::as_str) else {
         return;
     };
     let line = serde_json::json!({ "method": method, "params": params });

@@ -65,6 +65,28 @@ pub struct InitializeParams {
     /// The plugin's own settings (from `plugins/{name}.toml`) with secret
     /// references already resolved, passed through uninterpreted (F-64/F-65).
     pub config: serde_json::Value,
+    /// The repositories the Orchestrator is configured with (`config.toml`
+    /// `[[repositories]]`), supplied to **task_source** plugins so they can
+    /// resolve repositories source-side without duplicating the list in
+    /// their own config (#109). Additive since protocol 0.1.1: absent from
+    /// older orchestrators (serde default) and simply ignored by plugins
+    /// that do not use it. Empty for non-task_source plugins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<RepoInfo>,
+}
+
+/// One orchestrator-configured repository, as supplied to task_source
+/// plugins in [`InitializeParams::repositories`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepoInfo {
+    /// Repository name (`[[repositories]].name` — the id `repo_hint` uses).
+    pub name: String,
+    /// One-line description (classifier material, F-11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Local clone path, already `~`/`${ENV}`-expanded by the Orchestrator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// `initialize` result (P→O): the plugin's version and declared capabilities.
@@ -303,6 +325,11 @@ mod tests {
         round_trip(&InitializeParams {
             protocol_version: Version::new(0, 1, 0),
             config: serde_json::json!({"socket_path": "/run/herdr.sock"}),
+            repositories: vec![RepoInfo {
+                name: "web-app".into(),
+                summary: Some("customer web app".into()),
+                path: Some("/repos/web-app".into()),
+            }],
         });
         round_trip(&InitializeResult {
             plugin_version: Version::new(1, 0, 0),
@@ -314,6 +341,26 @@ mod tests {
         round_trip(&ConfigValidateParams {
             config: serde_json::json!({}),
         });
+        // The 0.1.0 ↔ 0.1.1 compatibility contract for `repositories`:
+        // absent in old params (default to empty), omitted when empty (an
+        // old plugin never sees an unknown field from an empty list), and
+        // ignored by a pre-0.1.1 plugin when present.
+        let old: InitializeParams =
+            serde_json::from_str(r#"{"protocol_version":"0.1.0","config":{}}"#).unwrap();
+        assert!(old.repositories.is_empty());
+        let empty = InitializeParams {
+            protocol_version: Version::new(0, 1, 1),
+            config: serde_json::json!({}),
+            repositories: vec![],
+        };
+        assert!(
+            !serde_json::to_string(&empty)
+                .unwrap()
+                .contains("repositories")
+        );
+        let ignored: ConfigValidateParams =
+            serde_json::from_str(r#"{"config":{},"repositories":[{"name":"x"}]}"#).unwrap();
+        assert_eq!(ignored.config, serde_json::json!({}));
         round_trip(&ConfigValidateResult {
             valid: false,
             errors: vec!["missing socket_path → set it".into()],
