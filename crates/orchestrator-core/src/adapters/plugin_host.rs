@@ -54,6 +54,10 @@ pub struct PluginSpec {
     /// (#109). Populated for task_source plugins only; empty otherwise
     /// (the field is omitted from the wire when empty).
     pub repositories: Vec<plugin_protocol::methods::RepoInfo>,
+    /// The orchestrator's `[llm]` settings supplied at `initialize` as a
+    /// source-side classification default (#119). Populated for task_source
+    /// plugins only; `None` otherwise (omitted from the wire when unset).
+    pub llm: Option<plugin_protocol::methods::LlmInfo>,
     /// Per-call RPC timeout.
     pub timeout: Duration,
 }
@@ -263,6 +267,7 @@ impl Plugin {
             protocol_version: orchestrator,
             config: spec.init_config,
             repositories: spec.repositories,
+            llm: spec.llm,
         };
         let result: InitializeResult = plugin
             .call(plugin_protocol::method::INITIALIZE, &init)

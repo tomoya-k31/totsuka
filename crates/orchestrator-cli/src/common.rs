@@ -13,7 +13,7 @@ use orchestrator_core::paths::Paths;
 use orchestrator_core::platform::PlatformSecretStore;
 use orchestrator_core::plugins::PluginStore;
 use plugin_protocol::manifest::PluginKind;
-use plugin_protocol::methods::RepoInfo;
+use plugin_protocol::methods::{LlmInfo, RepoInfo};
 use serde_json::Value;
 
 /// A boxed error for CLI operations.
@@ -106,13 +106,13 @@ pub fn plugin_spec(
         .and_then(|p| p.timeout_secs)
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_PLUGIN_TIMEOUT);
-    // task_source plugins get the orchestrator's repository list at
-    // `initialize` (#109), so source-side repo resolution needs no duplicate
-    // `[[repos]]` in plugins/{name}.toml.
-    let repositories = if manifest.kind == PluginKind::TaskSource {
-        repo_infos(cfg, env)
+    // task_source plugins get the orchestrator's repository list (#109) and
+    // `[llm]` settings (#119) at `initialize`, so source-side repo resolution
+    // needs no duplicate `[[repos]]`/`[llm]` in plugins/{name}.toml.
+    let (repositories, llm) = if manifest.kind == PluginKind::TaskSource {
+        (repo_infos(cfg, env), llm_info(cfg, env))
     } else {
-        vec![]
+        (vec![], None)
     };
     Ok(PluginSpec {
         name: name.to_string(),
@@ -121,6 +121,7 @@ pub fn plugin_spec(
         manifest,
         init_config,
         repositories,
+        llm,
         timeout,
     })
 }
@@ -144,6 +145,30 @@ fn repo_infos(cfg: &RootConfig, env: &HashMap<String, String>) -> Vec<RepoInfo> 
             }
         })
         .collect()
+}
+
+/// `config.toml` `[llm]` mapped to the protocol's [`LlmInfo`] with its
+/// `api_key_ref` resolved (F-65), supplied to task_source plugins as a
+/// source-side classification default (#119). Best effort: an unresolvable
+/// key reference yields `None` (nothing supplied) rather than an error —
+/// `doctor`'s dedicated `llm` check reports the broken reference, and
+/// `totsuka run` fails when building the orchestrator's own router from the
+/// same reference, so the problem surfaces where it can be acted on without
+/// also failing every plugin launch here.
+fn llm_info(cfg: &RootConfig, env: &HashMap<String, String>) -> Option<LlmInfo> {
+    let llm = cfg.llm.as_ref()?;
+    let api_key = match &llm.api_key_ref {
+        Some(reference) => match secret_resolver(env).resolve(reference) {
+            Ok(secret) => Some(secret.expose().to_string()),
+            Err(_) => return None,
+        },
+        None => None,
+    };
+    Some(LlmInfo {
+        base_url: llm.base_url.clone(),
+        model: llm.model.clone(),
+        api_key,
+    })
 }
 
 /// Load `plugins/{name}.toml` (empty object if absent) and resolve secret
@@ -206,4 +231,70 @@ where
 pub fn print_json<T: serde::Serialize>(value: &T) -> Result<(), CliError> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root(toml: &str) -> RootConfig {
+        RootConfig::from_toml_str(toml).unwrap()
+    }
+
+    fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn llm_info_is_none_without_an_llm_table() {
+        assert!(llm_info(&root(""), &env(&[])).is_none());
+    }
+
+    #[test]
+    fn llm_info_resolves_an_env_key_reference() {
+        let cfg = root(
+            r#"
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+model = "anthropic/claude-haiku-4.5"
+api_key_ref = "${OPENROUTER_API_KEY}"
+"#,
+        );
+        let info = llm_info(&cfg, &env(&[("OPENROUTER_API_KEY", "sk-or-test")])).unwrap();
+        assert_eq!(info.base_url, "https://openrouter.ai/api/v1");
+        assert_eq!(info.model, "anthropic/claude-haiku-4.5");
+        assert_eq!(info.api_key.as_deref(), Some("sk-or-test"));
+    }
+
+    #[test]
+    fn llm_info_without_a_key_reference_has_no_key() {
+        let cfg = root(
+            r#"
+[llm]
+base_url = "http://localhost:11434/v1"
+model = "local"
+"#,
+        );
+        let info = llm_info(&cfg, &env(&[])).unwrap();
+        assert!(info.api_key.is_none());
+    }
+
+    #[test]
+    fn llm_info_is_best_effort_on_an_unresolvable_reference() {
+        // Nothing is supplied rather than failing every plugin launch —
+        // doctor's `llm` check and `totsuka run`'s own router construction
+        // surface the broken reference.
+        let cfg = root(
+            r#"
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+model = "m"
+api_key_ref = "${UNSET_VAR_FOR_TEST}"
+"#,
+        );
+        assert!(llm_info(&cfg, &env(&[])).is_none());
+    }
 }

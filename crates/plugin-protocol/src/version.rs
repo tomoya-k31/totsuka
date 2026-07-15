@@ -16,7 +16,11 @@ use semver::{Version, VersionReq};
 /// marks backward-compatible additions (a 0.2 would break every `^0.1`
 /// manifest for a change no plugin is required to adopt); breaking changes
 /// still bump the major/minor per the caret semantics below.
-pub const PROTOCOL_VERSION: &str = "0.1.1";
+///
+/// 0.1.2: `InitializeParams.llm` (#119) — the orchestrator's `[llm]`
+/// supplied to task_source plugins as a classification default; additive
+/// and optional under the same contract as `repositories`.
+pub const PROTOCOL_VERSION: &str = "0.1.2";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -40,17 +44,20 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 1, 1));
+        assert_eq!(protocol_version(), Version::new(0, 1, 2));
     }
 
     #[test]
     fn compatible_requirement_matches() {
         // A plugin supporting ^0.1 works with 0.1.x — the additive 0.1.1
-        // (InitializeParams.repositories) must not strand `^0.1` manifests.
+        // (InitializeParams.repositories) and 0.1.2 (InitializeParams.llm)
+        // must not strand `^0.1` manifests.
         let req = VersionReq::parse("^0.1").unwrap();
         assert!(is_compatible_with_current(&req));
-        // A plugin that *requires* the repositories supply can say so.
+        // A plugin that *requires* one of the additive supplies can say so.
         let req = VersionReq::parse(">=0.1.1, <0.2").unwrap();
+        assert!(is_compatible_with_current(&req));
+        let req = VersionReq::parse(">=0.1.2, <0.2").unwrap();
         assert!(is_compatible_with_current(&req));
     }
 

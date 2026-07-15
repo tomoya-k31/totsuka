@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: manifest からの Slack アプリ作成 → トークン発行 → Keychain 登録 → plugin install/enable → doctor → run --watch までの導入手順と、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, keychain, doctor]
-timestamp: 2026-07-15T16:00:00Z
+timestamp: 2026-07-16T02:30:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -68,7 +68,9 @@ reply_style = "丁寧語で簡潔に"      # 任意
 # name = "web-app"                  # config.toml の [[repositories]].name と一致させる
 # summary = "顧客向け Web アプリ"   # 候補が複数あるときの LLM 分類の材料
 
-# 候補が 2 件以上なら分類用 LLM が必須
+# 候補が 2 件以上なら分類用 LLM が必要。config.toml の [llm]（api_key_ref 付き）が
+# あれば initialize で供給され default になるため省略可（#119）。プラグイン専用の
+# モデル・閾値を使いたいときだけ明示する（明示時はこちらが優先）:
 # [llm]
 # base_url = "https://openrouter.ai/api/v1"
 # model = "…"

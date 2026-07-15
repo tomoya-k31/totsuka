@@ -73,6 +73,15 @@ pub struct InitializeParams {
     /// that do not use it. Empty for non-task_source plugins.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repositories: Vec<RepoInfo>,
+    /// The Orchestrator's `[llm]` (AI Gateway) settings, supplied to
+    /// **task_source** plugins as a *default* for source-side classification
+    /// so `base_url`/`model` need not be duplicated in their own config
+    /// (#119). A plugin's own LLM table always takes precedence. Additive
+    /// since protocol 0.1.2, same contract as `repositories`: absent from
+    /// older orchestrators, omitted when unset, ignored by plugins that do
+    /// not use it. `None` for non-task_source plugins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm: Option<LlmInfo>,
 }
 
 /// One orchestrator-configured repository, as supplied to task_source
@@ -89,6 +98,21 @@ pub struct RepoInfo {
     /// the path as optional material).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+}
+
+/// The Orchestrator's `[llm]` (AI Gateway) settings, as supplied to
+/// task_source plugins in [`InitializeParams::llm`] (#119).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LlmInfo {
+    /// OpenAI-compatible base URL (`/chat/completions`).
+    pub base_url: String,
+    /// Model identifier.
+    pub model: String,
+    /// The API key, already resolved by the Orchestrator (F-65) — never a
+    /// `keychain:`/`${ENV}` reference. `None` when the Orchestrator's `[llm]`
+    /// has no `api_key_ref` (e.g. a keyless local gateway).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 /// `initialize` result (P→O): the plugin's version and declared capabilities.
@@ -325,14 +349,19 @@ mod tests {
     #[test]
     fn common_methods_round_trip() {
         round_trip(&InitializeParams {
-            // 0.1.1: the version that started carrying `repositories`.
-            protocol_version: Version::new(0, 1, 1),
+            // 0.1.2: carries `repositories` (0.1.1, #109) and `llm` (#119).
+            protocol_version: Version::new(0, 1, 2),
             config: serde_json::json!({"socket_path": "/run/herdr.sock"}),
             repositories: vec![RepoInfo {
                 name: "web-app".into(),
                 summary: Some("customer web app".into()),
                 path: Some("/repos/web-app".into()),
             }],
+            llm: Some(LlmInfo {
+                base_url: "https://openrouter.ai/api/v1".into(),
+                model: "anthropic/claude-haiku-4.5".into(),
+                api_key: Some("sk-or-resolved".into()),
+            }),
         });
         round_trip(&InitializeResult {
             plugin_version: Version::new(1, 0, 0),
@@ -344,23 +373,23 @@ mod tests {
         round_trip(&ConfigValidateParams {
             config: serde_json::json!({}),
         });
-        // The 0.1.0 ↔ 0.1.1 compatibility contract for `repositories`:
-        // absent in old params (default to empty), omitted when empty (an
-        // old plugin never sees an unknown field from an empty list), and
-        // ignored by a pre-0.1.1 plugin when present.
+        // The compatibility contract for the additive fields (`repositories`
+        // since 0.1.1, `llm` since 0.1.2): absent in old params (default),
+        // omitted when unset (an old plugin never sees an unknown field),
+        // and ignored by an older plugin when present.
         let old: InitializeParams =
             serde_json::from_str(r#"{"protocol_version":"0.1.0","config":{}}"#).unwrap();
         assert!(old.repositories.is_empty());
+        assert!(old.llm.is_none());
         let empty = InitializeParams {
-            protocol_version: Version::new(0, 1, 1),
+            protocol_version: Version::new(0, 1, 2),
             config: serde_json::json!({}),
             repositories: vec![],
+            llm: None,
         };
-        assert!(
-            !serde_json::to_string(&empty)
-                .unwrap()
-                .contains("repositories")
-        );
+        let wire = serde_json::to_string(&empty).unwrap();
+        assert!(!wire.contains("repositories"));
+        assert!(!wire.contains("llm"));
         let ignored: ConfigValidateParams =
             serde_json::from_str(r#"{"config":{},"repositories":[{"name":"x"}]}"#).unwrap();
         assert_eq!(ignored.config, serde_json::json!({}));

@@ -38,23 +38,29 @@ fn spec(protocol_req: &str) -> PluginSpec {
         manifest: manifest(protocol_req),
         init_config: serde_json::json!({}),
         repositories: vec![],
+        llm: None,
         timeout: Duration::from_secs(10),
     }
 }
 
 #[tokio::test]
-async fn initialize_carries_the_supplied_repositories() {
+async fn initialize_carries_the_supplied_repositories_and_llm() {
     let dir = test_support::scratch("host_init_repos");
     let log = dir.join("init.ndjson");
 
-    let mut with_repos = spec("^0.1");
-    with_repos.init_config = serde_json::json!({ "init_log": log });
-    with_repos.repositories = vec![plugin_protocol::methods::RepoInfo {
+    let mut with_supplies = spec("^0.1");
+    with_supplies.init_config = serde_json::json!({ "init_log": log });
+    with_supplies.repositories = vec![plugin_protocol::methods::RepoInfo {
         name: "web-app".into(),
         summary: Some("customer web app".into()),
         path: Some("/repos/web-app".into()),
     }];
-    let plugin = Plugin::launch(with_repos).await.expect("launch");
+    with_supplies.llm = Some(plugin_protocol::methods::LlmInfo {
+        base_url: "https://openrouter.ai/api/v1".into(),
+        model: "anthropic/claude-haiku-4.5".into(),
+        api_key: Some("sk-or-resolved".into()),
+    });
+    let plugin = Plugin::launch(with_supplies).await.expect("launch");
     let _ = plugin.shutdown(Duration::from_secs(2)).await;
 
     let recorded = std::fs::read_to_string(&log).unwrap();
@@ -62,9 +68,11 @@ async fn initialize_carries_the_supplied_repositories() {
     assert_eq!(line["method"], "initialize");
     assert_eq!(line["params"]["repositories"][0]["name"], "web-app");
     assert_eq!(line["params"]["repositories"][0]["path"], "/repos/web-app");
+    assert_eq!(line["params"]["llm"]["model"], "anthropic/claude-haiku-4.5");
+    assert_eq!(line["params"]["llm"]["api_key"], "sk-or-resolved");
 
-    // An empty list is omitted from the wire entirely — a pre-0.1.1 plugin
-    // never even sees an unknown field.
+    // An empty list / unset llm is omitted from the wire entirely — an older
+    // plugin never even sees an unknown field.
     let log = dir.join("init_empty.ndjson");
     let mut without = spec("^0.1");
     without.init_config = serde_json::json!({ "init_log": log });
@@ -73,6 +81,7 @@ async fn initialize_carries_the_supplied_repositories() {
     let recorded = std::fs::read_to_string(&log).unwrap();
     let line: serde_json::Value = serde_json::from_str(recorded.lines().next().unwrap()).unwrap();
     assert!(line["params"].get("repositories").is_none(), "{line}");
+    assert!(line["params"].get("llm").is_none(), "{line}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

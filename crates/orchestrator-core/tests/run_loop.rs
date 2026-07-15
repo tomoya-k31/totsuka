@@ -71,6 +71,7 @@ protocol_version = "^0.1"
         manifest,
         init_config,
         repositories: vec![],
+        llm: None,
         timeout: Duration::from_secs(10),
     })
     .await
