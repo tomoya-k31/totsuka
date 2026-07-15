@@ -80,7 +80,10 @@ pub struct SlackConfig {
     /// Channel-prefix rules, checked before the LLM (first match wins).
     #[serde(default)]
     pub channel_groups: Vec<ChannelGroup>,
-    /// Candidate repositories.
+    /// Candidate repositories. Optional since #109: when omitted, the
+    /// orchestrator's `[[repositories]]` (supplied at `initialize`) become
+    /// the candidates; an explicit list here always wins.
+    #[serde(default)]
     pub repos: Vec<RepoInfo>,
     /// Slack Web API base URL (overridable for tests).
     #[serde(default = "default_api_url")]
@@ -147,13 +150,10 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
         errors.push("`thread_context_limit` is 0 → set it to 1 or more".into());
     }
 
-    if config.repos.is_empty() {
-        errors.push(
-            "`[[repos]]` is empty → declare at least one candidate repository (name matching \
-             a `[[repositories]].name` in config.toml)"
-                .into(),
-        );
-    }
+    // An empty `[[repos]]` is legal here: the orchestrator supplies its
+    // `[[repositories]]` at `initialize` (#109), where the merged candidate
+    // list is validated (see `server`). Offline validation can only check
+    // an explicit list.
     let names = config.repo_names();
     for (i, name) in names.iter().enumerate() {
         if names[..i].contains(name) {
@@ -203,6 +203,11 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
                  candidate repositories that prefix should narrow to",
                 group.prefix
             ));
+        }
+        // With no explicit `[[repos]]` the candidates are not known until
+        // `initialize` supplies them — the reference check runs there.
+        if names.is_empty() {
+            continue;
         }
         for repo in &group.repos {
             if !names.contains(&repo.as_str()) {
@@ -290,11 +295,14 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_duplicate_repos_are_flagged() {
+    fn empty_repos_defer_to_initialize_but_duplicates_are_flagged() {
+        // Empty is legal offline: the orchestrator supplies its
+        // repositories at initialize (#109), where the merged list is
+        // checked — including channel_groups references.
         let mut value = minimal();
         value["repos"] = json!([]);
-        let errors = static_config_errors(&parse(value));
-        assert!(errors.iter().any(|e| e.contains("[[repos]]")), "{errors:?}");
+        value["channel_groups"] = json!([{ "prefix": "dev-", "repos": ["ghost"] }]);
+        assert!(static_config_errors(&parse(value)).is_empty());
 
         let mut value = minimal();
         value["repos"] = json!([{ "name": "web-app" }, { "name": "web-app" }]);

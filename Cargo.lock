@@ -949,6 +949,7 @@ dependencies = [
  "clap_complete",
  "futures-util",
  "orchestrator-core",
+ "plugin-protocol",
  "serde",
  "serde_json",
  "test-support",

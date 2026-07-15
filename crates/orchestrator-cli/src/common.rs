@@ -8,10 +8,12 @@ use std::time::Duration;
 
 use orchestrator_core::adapters::StateDb;
 use orchestrator_core::adapters::plugin_host::PluginSpec;
-use orchestrator_core::config::{PluginRawConfig, RootConfig, SecretResolver};
+use orchestrator_core::config::{self, PluginRawConfig, RootConfig, SecretResolver};
 use orchestrator_core::paths::Paths;
 use orchestrator_core::platform::PlatformSecretStore;
 use orchestrator_core::plugins::PluginStore;
+use plugin_protocol::manifest::PluginKind;
+use plugin_protocol::methods::RepoInfo;
 use serde_json::Value;
 
 /// A boxed error for CLI operations.
@@ -104,14 +106,44 @@ pub fn plugin_spec(
         .and_then(|p| p.timeout_secs)
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_PLUGIN_TIMEOUT);
+    // task_source plugins get the orchestrator's repository list at
+    // `initialize` (#109), so source-side repo resolution needs no duplicate
+    // `[[repos]]` in plugins/{name}.toml.
+    let repositories = if manifest.kind == PluginKind::TaskSource {
+        repo_infos(cfg, env)
+    } else {
+        vec![]
+    };
     Ok(PluginSpec {
         name: name.to_string(),
         program: store.plugin_dir(name).join(&manifest.name),
         args: vec![],
         manifest,
         init_config,
+        repositories,
         timeout,
     })
+}
+
+/// `config.toml` `[[repositories]]` mapped to the protocol's [`RepoInfo`],
+/// with paths `~`/`${ENV}`-expanded (best effort: an unresolvable path is
+/// passed through raw — the plugin treats paths as optional material).
+fn repo_infos(cfg: &RootConfig, env: &HashMap<String, String>) -> Vec<RepoInfo> {
+    let env_fn = |k: &str| env.get(k).cloned();
+    cfg.repositories
+        .iter()
+        .map(|repo| {
+            let raw = repo.path.to_string_lossy();
+            let path = config::expand_path(&raw, &env_fn)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| raw.into_owned());
+            RepoInfo {
+                name: repo.name.clone(),
+                summary: repo.summary.clone(),
+                path: Some(path),
+            }
+        })
+        .collect()
 }
 
 /// Load `plugins/{name}.toml` (empty object if absent) and resolve secret

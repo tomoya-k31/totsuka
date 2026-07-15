@@ -37,8 +37,44 @@ fn spec(protocol_req: &str) -> PluginSpec {
         args: vec![],
         manifest: manifest(protocol_req),
         init_config: serde_json::json!({}),
+        repositories: vec![],
         timeout: Duration::from_secs(10),
     }
+}
+
+#[tokio::test]
+async fn initialize_carries_the_supplied_repositories() {
+    let dir = test_support::scratch("host_init_repos");
+    let log = dir.join("init.ndjson");
+
+    let mut with_repos = spec("^0.1");
+    with_repos.init_config = serde_json::json!({ "init_log": log });
+    with_repos.repositories = vec![plugin_protocol::methods::RepoInfo {
+        name: "web-app".into(),
+        summary: Some("customer web app".into()),
+        path: Some("/repos/web-app".into()),
+    }];
+    let plugin = Plugin::launch(with_repos).await.expect("launch");
+    let _ = plugin.shutdown(Duration::from_secs(2)).await;
+
+    let recorded = std::fs::read_to_string(&log).unwrap();
+    let line: serde_json::Value = serde_json::from_str(recorded.lines().next().unwrap()).unwrap();
+    assert_eq!(line["method"], "initialize");
+    assert_eq!(line["params"]["repositories"][0]["name"], "web-app");
+    assert_eq!(line["params"]["repositories"][0]["path"], "/repos/web-app");
+
+    // An empty list is omitted from the wire entirely — a pre-0.1.1 plugin
+    // never even sees an unknown field.
+    let log = dir.join("init_empty.ndjson");
+    let mut without = spec("^0.1");
+    without.init_config = serde_json::json!({ "init_log": log });
+    let plugin = Plugin::launch(without).await.expect("launch");
+    let _ = plugin.shutdown(Duration::from_secs(2)).await;
+    let recorded = std::fs::read_to_string(&log).unwrap();
+    let line: serde_json::Value = serde_json::from_str(recorded.lines().next().unwrap()).unwrap();
+    assert!(line["params"].get("repositories").is_none(), "{line}");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

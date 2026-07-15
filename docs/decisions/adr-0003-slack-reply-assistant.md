@@ -43,7 +43,8 @@ Slack アプリは Bot ユーザーを持たず、User OAuth Token（`xoxp-`）�
 - スコープ変更時はアプリの再インストールが必要で、`xoxp-` トークンが再発行される（Keychain 更新 → `totsuka doctor` で検証）。手順は [Slack セットアップ Runbook](/operations/slack-quickstart.md)。
 - プラグイン内 LLM 設定（`plugins/slack.toml` の `[llm]`）はコアの `[llm]` と独立している。リポジトリ候補が 1 件だけなら LLM 不要。
 - 再起動でバッファ・pending index・下書きストアは消える（in-memory）。下書きテキストは self-DM 記録に平文で残るため手動リカバリ可能。
-- 全ループ（メンション → `tasks/fetch` → dispatch → `result/publish` → 承認 → 本人名義返信）はモック Slack + 実バイナリの E2E（`orchestrator-cli/tests/slack_e2e.rs`）で CI 検証される。この E2E が、Slack のタスク ID（`{channel}:{ts}`）が git ブランチ名として不正（`:`）という組み合わせバグを露見させ、コアの `render_branch` にサニタイズを追加した（コア無変更方針の唯一の例外で、ソース非依存の堅牢性修正）。
+- 全ループ（メンション → `tasks/fetch` → dispatch → `result/publish` → 承認 → 本人名義返信）はモック Slack + 実バイナリの E2E（`orchestrator-cli/tests/slack_e2e.rs`）で CI 検証される。この E2E が、Slack のタスク ID（`{channel}:{ts}`）が git ブランチ名として不正（`:`）という組み合わせバグを露見させ、コアの `render_branch` にサニタイズを追加した（ソース非依存の堅牢性修正としてのコア変更）。
+- 「コア無変更」は #103〜#108 のエピック本体に対する判断であり、恒久の禁止ではない。設定重複（`[[repos]]` と `[[repositories]]`）の解消は、当初から任意 issue #109 として切り出したプロトコル拡張（`InitializeParams.repositories`、protocol 0.1.1 の追加的変更）で実施した。
 
 # Citations
 

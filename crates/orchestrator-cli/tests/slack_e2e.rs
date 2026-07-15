@@ -479,13 +479,14 @@ output = "source"
     )
     .unwrap();
 
-    // One candidate repo → the mention resolves without any LLM.
+    // Deliberately no `[[repos]]`: the orchestrator supplies its single
+    // `[[repositories]]` entry at initialize (#109), and one candidate
+    // resolves without any LLM — the acceptance path for the fallback.
     std::fs::write(
         cfg_dir.join("plugins/slack.toml"),
         format!(
             "app_token = \"xapp-1-A1-e2e\"\nuser_token = \"xoxp-e2e-user\"\n\
-             target_user_id = \"U_ME\"\napi_url = \"{mock_api_url}\"\n\n\
-             [[repos]]\nname = \"clone\"\n"
+             target_user_id = \"U_ME\"\napi_url = \"{mock_api_url}\"\n"
         ),
     )
     .unwrap();

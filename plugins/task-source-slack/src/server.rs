@@ -19,7 +19,7 @@ use serde_json::Value;
 
 use std::sync::Arc;
 
-use crate::config::{SlackConfig, static_config_errors};
+use crate::config::{RepoInfo, SlackConfig, static_config_errors};
 use crate::error::SlackError;
 use crate::llm::ChatTransport;
 use crate::pipeline::{self, SharedState};
@@ -175,18 +175,19 @@ where
         }
     }
 
-    /// `initialize`: deserialize the config, then run the TokenGuard — verify
-    /// the user token via `auth.test` (its identity must be
-    /// `target_user_id`) and the App-Level Token via
-    /// `apps.connections.open` — before accepting the session. A bad token
-    /// fails startup here, with recovery guidance, instead of failing later
-    /// mid-flow.
+    /// `initialize`: deserialize the config, adopt the orchestrator-supplied
+    /// repositories when `[[repos]]` is omitted (#109), validate the merged
+    /// candidate list, then run the TokenGuard — verify the user token via
+    /// `auth.test` (its identity must be `target_user_id`) and the
+    /// App-Level Token via `apps.connections.open` — before accepting the
+    /// session. A bad token fails startup here, with recovery guidance,
+    /// instead of failing later mid-flow.
     async fn initialize(&mut self, id: RequestId, params: Value) -> Reply {
         let init: InitializeParams = match parse_params(&params) {
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        let config: SlackConfig = match serde_json::from_value(init.config) {
+        let mut config: SlackConfig = match serde_json::from_value(init.config) {
             Ok(c) => c,
             Err(e) => {
                 return Reply::respond(Response::error(
@@ -198,6 +199,38 @@ where
                 ));
             }
         };
+        // Without an explicit `[[repos]]`, the orchestrator's own
+        // `[[repositories]]` (supplied since protocol 0.1.1, #109) become
+        // the candidates — one list to maintain instead of two.
+        if config.repos.is_empty() {
+            config.repos = init
+                .repositories
+                .into_iter()
+                .map(|repo| RepoInfo {
+                    name: repo.name,
+                    summary: repo.summary,
+                    path: repo.path,
+                })
+                .collect();
+        }
+        // The merged list is what the pipeline will actually run on;
+        // validate it (and the checks `config/validate` had to defer while
+        // the candidates were unknown) before spending network calls on the
+        // TokenGuard.
+        let mut errors = static_config_errors(&config);
+        if config.repos.is_empty() {
+            errors.push(
+                "no repository candidates → declare `[[repos]]` in plugins/slack.toml or \
+                 `[[repositories]]` in the orchestrator's config.toml"
+                    .into(),
+            );
+        }
+        if !errors.is_empty() {
+            return Reply::respond(Response::error(
+                id,
+                Error::new(error_code::CONFIG_INVALID, errors.join("; ")),
+            ));
+        }
         let api = Arc::new(SlackApi::new(self.factory.build(settings(&config))));
         if let Err(e) = token_guard(&api, &config).await {
             // Credential/identity problems are config-class (fix the token or

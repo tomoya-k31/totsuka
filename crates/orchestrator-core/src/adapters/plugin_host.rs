@@ -50,6 +50,10 @@ pub struct PluginSpec {
     pub manifest: Manifest,
     /// Resolved plugin-specific config passed to `initialize` (F-64/F-65).
     pub init_config: Value,
+    /// Orchestrator-configured repositories supplied at `initialize`
+    /// (#109). Populated for task_source plugins only; empty otherwise
+    /// (the field is omitted from the wire when empty).
+    pub repositories: Vec<plugin_protocol::methods::RepoInfo>,
     /// Per-call RPC timeout.
     pub timeout: Duration,
 }
@@ -258,6 +262,7 @@ impl Plugin {
         let init = InitializeParams {
             protocol_version: orchestrator,
             config: spec.init_config,
+            repositories: spec.repositories,
         };
         let result: InitializeResult = plugin
             .call(plugin_protocol::method::INITIALIZE, &init)

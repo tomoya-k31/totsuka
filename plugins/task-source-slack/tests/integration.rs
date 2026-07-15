@@ -127,6 +127,134 @@ async fn initialize_rejects_a_bad_app_token_with_guidance() {
     assert!(message.contains("xapp"), "{message}");
 }
 
+// ---------------------------------------------------------------------------
+// initialize / repositories fallback (#109)
+// ---------------------------------------------------------------------------
+
+/// `initialize` params carrying orchestrator-supplied repositories.
+fn init_params_with_repos(config: Value, repositories: Value) -> Value {
+    json!({
+        "protocol_version": "0.1.1",
+        "config": config,
+        "repositories": repositories,
+    })
+}
+
+#[tokio::test]
+async fn initialize_falls_back_to_supplied_repositories() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    let mut srv = server(&shared);
+
+    // No `[[repos]]` in the plugin config: the orchestrator's list is the
+    // candidate set — its channel_groups references validate against it.
+    let config = json!({
+        "app_token": "xapp-1-A1-test",
+        "user_token": "xoxp-user-test",
+        "target_user_id": "U_ME",
+        "channel_groups": [{ "prefix": "dev-", "repos": ["web-app"] }],
+    });
+    let params = init_params_with_repos(
+        config,
+        json!([{ "name": "web-app", "summary": "customer web app", "path": "/repos/web-app" }]),
+    );
+    let result = result_of(call(&mut srv, 1, "initialize", params).await);
+    assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
+}
+
+#[tokio::test]
+async fn initialize_validates_the_supplied_candidates() {
+    // Two supplied repositories without an `[llm]` cannot be classified —
+    // the deferred static check fires at initialize, before any network.
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let config = json!({
+        "app_token": "xapp-1-A1-test",
+        "user_token": "xoxp-user-test",
+        "target_user_id": "U_ME",
+    });
+    let params = init_params_with_repos(config, json!([{ "name": "a" }, { "name": "b" }]));
+    let response = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&response);
+    assert_eq!(code, error_code::CONFIG_INVALID);
+    assert!(message.contains("[llm]"), "{message}");
+    assert!(shared.requests().is_empty());
+}
+
+#[tokio::test]
+async fn initialize_prefers_explicit_repos_over_supplied() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    let mut srv = server(&shared);
+
+    // The channel rule references the *explicit* repo; were the supplied
+    // list merged in instead, this reference check would not prove
+    // precedence — so the supplied list names something else entirely.
+    let config = json!({
+        "app_token": "xapp-1-A1-test",
+        "user_token": "xoxp-user-test",
+        "target_user_id": "U_ME",
+        "repos": [{ "name": "web-app" }],
+        "channel_groups": [{ "prefix": "dev-", "repos": ["web-app"] }],
+    });
+    let params = init_params_with_repos(config.clone(), json!([{ "name": "design-system" }]));
+    result_of(call(&mut srv, 1, "initialize", params).await);
+
+    // And the converse: with no explicit repos, the same channel rule fails
+    // against the supplied list — proof the fallback is what got validated.
+    let mut config = config;
+    config["repos"] = json!([]);
+    let params = init_params_with_repos(config, json!([{ "name": "design-system" }]));
+    let mut srv = server(&shared);
+    let response = call(&mut srv, 2, "initialize", params).await;
+    let (code, message) = error_of(&response);
+    assert_eq!(code, error_code::CONFIG_INVALID);
+    assert!(message.contains("web-app"), "{message}");
+}
+
+#[tokio::test]
+async fn initialize_without_any_repositories_is_config_invalid() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let config = json!({
+        "app_token": "xapp-1-A1-test",
+        "user_token": "xoxp-user-test",
+        "target_user_id": "U_ME",
+    });
+    let response = call(
+        &mut srv,
+        1,
+        "initialize",
+        json!({
+            "protocol_version": "0.1.0",
+            "config": config,
+        }),
+    )
+    .await;
+    let (code, message) = error_of(&response);
+    assert_eq!(code, error_code::CONFIG_INVALID);
+    assert!(message.contains("[[repos]]"), "{message}");
+    assert!(message.contains("[[repositories]]"), "{message}");
+    // Rejected before the TokenGuard spent a network call.
+    assert!(shared.requests().is_empty());
+}
+
+#[tokio::test]
+async fn config_validate_accepts_an_omitted_repos_list() {
+    // Offline validation cannot know what initialize will supply, so an
+    // omitted `[[repos]]` (and its channel references) defer to initialize.
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let config = json!({
+        "app_token": "xapp-1-A1-test",
+        "user_token": "xoxp-user-test",
+        "target_user_id": "U_ME",
+        "channel_groups": [{ "prefix": "dev-", "repos": ["web-app"] }],
+    });
+    let result = result_of(call(&mut srv, 1, "config/validate", json!({ "config": config })).await);
+    assert_eq!(result["valid"], json!(true));
+}
+
 #[tokio::test]
 async fn initialize_fails_with_guidance_per_auth_error() {
     for (code, expect) in [
