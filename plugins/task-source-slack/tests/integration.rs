@@ -230,7 +230,7 @@ async fn config_validate_reports_unknown_keys() {
 }
 
 // ---------------------------------------------------------------------------
-// task_source stubs
+// task_source methods (runtime off: protocol behavior only)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -257,17 +257,17 @@ async fn task_source_methods_require_initialize() {
 }
 
 #[tokio::test]
-async fn stubs_answer_after_initialize() {
+async fn task_source_methods_answer_after_initialize() {
     let shared = Shared::default();
     shared.push(Canned::Data(auth_ok()));
     let mut srv = server(&shared);
     result_of(call(&mut srv, 1, "initialize", init_params()).await);
 
-    // Fetch: no tasks yet (the mention pipeline is not part of the skeleton).
+    // Fetch: no tasks yet (the runtime is off; nothing feeds the buffer).
     let result = result_of(call(&mut srv, 2, "tasks/fetch", json!({ "trigger": {} })).await);
     assert_eq!(result["tasks"], json!([]));
 
-    // Status update and publish: accepted as no-ops.
+    // Status update: accepted as a no-op (Slack has no status column).
     let result = call(
         &mut srv,
         3,
@@ -276,14 +276,20 @@ async fn stubs_answer_after_initialize() {
     )
     .await;
     assert_eq!(result_of(result), Value::Null);
-    let result = call(
+
+    // Publish for a task nobody is waiting on (e.g. after a restart): the
+    // reply has nowhere to go, so the request fails instead of silently
+    // dropping the draft.
+    let response = call(
         &mut srv,
         4,
         "result/publish",
         json!({ "task_id": "C1:1.2", "content": "draft", "format": "markdown" }),
     )
     .await;
-    assert_eq!(result_of(result), Value::Null);
+    let (code, message) = error_of(&response);
+    assert_eq!(code, error_code::INTERNAL_ERROR);
+    assert!(message.contains("C1:1.2"), "{message}");
 
     // Nothing beyond the TokenGuard's auth.test hit the transport.
     assert_eq!(shared.requests().len(), 1);

@@ -3,9 +3,10 @@
 //! `initialize`'s TokenGuard — is driven in tests with a recorded transport,
 //! no network involved.
 //!
-//! In this skeleton, `tasks/fetch` / `task/update_status` / `result/publish`
-//! are stubs: fetch answers with no tasks, the mutations succeed as no-ops.
-//! The mention pipeline behind them lands with the Slack client work.
+//! `tasks/fetch` drains the mention pipeline's buffer, `result/publish`
+//! presents the agent's reply draft for approval (#107); only
+//! `task/update_status` remains a deliberate no-op (Slack has no status
+//! column to move).
 
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
@@ -89,11 +90,8 @@ pub struct Server<F: TransportFactory> {
 /// and the resident runtime.
 struct Session<T> {
     config: SlackConfig,
-    #[expect(
-        dead_code,
-        reason = "kept for the flows still stubbed (status write-back, reply publish); \
-                  the running pipeline holds its own Arc clone"
-    )]
+    /// The Web API client `result/publish` presents drafts through (the
+    /// running pipeline holds its own Arc clone).
     api: Arc<SlackApi<T>>,
     /// Task buffer + pending-mention index, shared with the pipeline task.
     state: SharedState,
@@ -166,7 +164,7 @@ where
             },
             method::TASKS_FETCH => self.tasks_fetch(id, params),
             method::TASK_UPDATE_STATUS => self.update_status(id, params),
-            method::RESULT_PUBLISH => self.result_publish(id, params),
+            method::RESULT_PUBLISH => self.result_publish(id, params).await,
             other => Reply::respond(Response::error(
                 id,
                 Error::new(
@@ -276,8 +274,9 @@ where
         ))
     }
 
-    /// `task/update_status` stub: accepted and ignored (Slack has no status
-    /// column; the draft lifecycle arrives with the approval-flow work).
+    /// `task/update_status`: accepted and ignored — Slack has no status
+    /// column to move; the draft lifecycle is driven by the approve/reject
+    /// buttons instead.
     fn update_status(&mut self, id: RequestId, params: Value) -> Reply {
         if self.session.is_none() {
             return not_initialized(id);
@@ -294,11 +293,13 @@ where
         Reply::respond(Response::result(id, Value::Null))
     }
 
-    /// `result/publish` stub: accepted and dropped, with a warning — a draft
-    /// posted here would be lost, and that is worth seeing in the logs until
-    /// the approval flow lands. The pending entry is still consumed: publish
-    /// is the task's terminal step, so the index must not keep its entry.
-    fn result_publish(&mut self, id: RequestId, params: Value) -> Reply {
+    /// `result/publish`: the agent's reply draft arrives here. It becomes a
+    /// stored [`Draft`](crate::draft::Draft) presented as an in-thread
+    /// ephemeral + a self-DM record, both carrying approve/reject buttons
+    /// (#107). Fails only when no draft can be made at all (unknown task
+    /// after a restart, empty content); presentation failures are logged and
+    /// tolerated.
+    async fn result_publish(&mut self, id: RequestId, params: Value) -> Reply {
         let Some(session) = self.session.as_ref() else {
             return not_initialized(id);
         };
@@ -306,12 +307,21 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        let _pending = session.state.take_pending(&parsed.task_id);
-        tracing::warn!(
-            task_id = parsed.task_id,
-            "result/publish stub: draft discarded (approval flow not implemented yet)"
-        );
-        Reply::respond(Response::result(id, Value::Null))
+        match crate::approval::publish_draft(
+            session.api.as_ref(),
+            &session.config,
+            &session.state,
+            &parsed.task_id,
+            &parsed.content,
+        )
+        .await
+        {
+            Ok(()) => Reply::respond(Response::result(id, Value::Null)),
+            Err(message) => Reply::respond(Response::error(
+                id,
+                Error::new(error_code::INTERNAL_ERROR, message),
+            )),
+        }
     }
 }
 
