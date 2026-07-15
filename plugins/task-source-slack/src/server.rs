@@ -19,7 +19,9 @@ use serde_json::Value;
 
 use std::sync::Arc;
 
-use crate::config::{RepoInfo, SlackConfig, static_config_errors};
+use crate::config::{
+    LlmConfig, RepoInfo, SlackConfig, default_confidence_threshold, static_config_errors,
+};
 use crate::error::SlackError;
 use crate::llm::ChatTransport;
 use crate::pipeline::{self, SharedState};
@@ -176,7 +178,8 @@ where
     }
 
     /// `initialize`: deserialize the config, adopt the orchestrator-supplied
-    /// repositories when `[[repos]]` is omitted (#109), validate the merged
+    /// repositories when `[[repos]]` is omitted (#109) and the orchestrator's
+    /// `[llm]` when the plugin's own is omitted (#119), validate the merged
     /// candidate list, then run the TokenGuard — verify the user token via
     /// `auth.test` (its identity must be `target_user_id`) and the
     /// App-Level Token via `apps.connections.open` — before accepting the
@@ -213,15 +216,43 @@ where
                 })
                 .collect();
         }
-        // The merged list is what the pipeline will actually run on;
-        // validate it (and the checks `config/validate` had to defer while
-        // the candidates were unknown) before spending network calls on the
-        // TokenGuard.
+        // Without an explicit `[llm]`, the orchestrator's own `[llm]`
+        // (supplied since protocol 0.1.2, #119) becomes the classifier
+        // default — adopted only when usable as-is (non-empty base_url /
+        // model / api_key; the plugin always authenticates its calls), so
+        // a keyless core gateway is treated as "nothing supplied" rather
+        // than failing the config checks below with a misleading message.
+        if config.llm.is_none()
+            && let Some(llm) = init.llm
+            && !llm.base_url.is_empty()
+            && !llm.model.is_empty()
+            && let Some(api_key) = llm.api_key.filter(|k| !k.is_empty())
+        {
+            config.llm = Some(LlmConfig {
+                base_url: llm.base_url,
+                model: llm.model,
+                api_key,
+                confidence_threshold: default_confidence_threshold(),
+            });
+        }
+        // The merged candidates + adopted classifier are what the pipeline
+        // will actually run on; validate them (and the checks
+        // `config/validate` had to defer while they were unknown) before
+        // spending network calls on the TokenGuard.
         let mut errors = static_config_errors(&config);
         if config.repos.is_empty() {
             errors.push(
                 "no repository candidates → declare `[[repos]]` in plugins/slack.toml or \
                  `[[repositories]]` in the orchestrator's config.toml"
+                    .into(),
+            );
+        }
+        if config.repos.len() > 1 && config.llm.is_none() {
+            errors.push(
+                "`[llm]` is required when more than one repository candidate is declared (it \
+                 classifies which repository a mention concerns) → add an `[llm]` table \
+                 (base_url / model / api_key) to plugins/slack.toml, or configure the \
+                 orchestrator's `[llm]` with an `api_key_ref` in config.toml"
                     .into(),
             );
         }

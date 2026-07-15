@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack]
-timestamp: 2026-07-15T16:00:00Z
+timestamp: 2026-07-16T02:30:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -80,7 +80,7 @@ owner: tomoya-k31
 
 # `[llm]`（AI Gateway）
 
-OpenAI 互換 `/chat/completions` を前提。
+OpenAI 互換 `/chat/completions` を前提。repo_hint を持たないタスクのリポジトリ選択（F-11）に使うほか、**task_source プラグインへ initialize 時に分類用 default として供給される**（#119、protocol 0.1.2。`api_key_ref` は解決済みの値で渡る。プラグイン自身の LLM 設定が常に優先）。
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
@@ -138,7 +138,7 @@ poll_interval_secs = 5
 | `source_name` | string | `slack` | `Task.source` に刻印するソース名 |
 | `[[repos]]` | 配列 | なし（省略可、#109） | リポジトリ候補。`name`（config.toml の `[[repositories]].name` と一致必須）/ `summary`?（LLM 分類の材料）/ `path`?（README 先頭を分類材料に追加）。**省略時は config.toml の `[[repositories]]`（name/summary/path）がそのまま候補になる**ため通常は書かなくてよい。明示した場合はそちらが優先（候補の絞り込み・summary の上書きに使う） |
 | `[[channel_groups]]` | 配列 | なし | チャンネル名 prefix → 候補 repos の絞り込みルール（定義順 first-match）。`prefix` / `repos`（`[[repos]]` に存在する名前のみ） |
-| `[llm]` | テーブル | repos 2 件以上で必須 | リポジトリ分類用 OpenAI 互換 LLM（コアの `[llm]` とは独立）。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、未満はエフェメラル選択へ） |
+| `[llm]` | テーブル | なし（省略可、#119） | リポジトリ分類用 OpenAI 互換 LLM。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、未満はエフェメラル選択へ）。**省略時は config.toml の `[llm]`（initialize で供給）が default になる**（`api_key_ref` 必須 — キーなし供給は採用されない。`confidence_threshold` は既定 0.6）。明示した場合はそちらが優先。候補 2 件以上でどちらにも無ければ initialize が `CONFIG_INVALID` |
 | `api_url` | string | `https://slack.com/api` | Web API ベース URL（テスト用上書き） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
 

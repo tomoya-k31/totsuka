@@ -58,6 +58,7 @@
 //!     protocol_version: protocol_version(),
 //!     config: serde_json::json!({ "socket_path": "/run/herdr.sock" }),
 //!     repositories: vec![],
+//!     llm: None,
 //! };
 //! let request = Request::new(1, method::INITIALIZE, Some(serde_json::to_value(&params)?));
 //! let line = to_line(&request)?; // send `line + "\n"` to the plugin's stdin

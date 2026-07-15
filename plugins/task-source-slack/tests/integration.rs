@@ -239,6 +239,106 @@ async fn initialize_without_any_repositories_is_config_invalid() {
     assert!(shared.requests().is_empty());
 }
 
+// ---------------------------------------------------------------------------
+// initialize / llm default + override (#119)
+// ---------------------------------------------------------------------------
+
+/// `initialize` params carrying the orchestrator's `[llm]` alongside its
+/// repositories.
+fn init_params_with_llm(config: Value, repositories: Value, llm: Value) -> Value {
+    json!({
+        "protocol_version": "0.1.2",
+        "config": config,
+        "repositories": repositories,
+        "llm": llm,
+    })
+}
+
+/// A plugin config with no `[llm]` of its own (classification would need one
+/// as soon as there is more than one candidate).
+fn config_without_llm() -> Value {
+    json!({
+        "app_token": "xapp-1-A1-test",
+        "user_token": "xoxp-user-test",
+        "target_user_id": "U_ME",
+    })
+}
+
+#[tokio::test]
+async fn initialize_adopts_the_supplied_llm() {
+    // Two candidates without a plugin `[llm]` would be CONFIG_INVALID (see
+    // initialize_validates_the_supplied_candidates) — the orchestrator's
+    // `[llm]` supplied at initialize fills in and startup succeeds.
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    let mut srv = server(&shared);
+    let params = init_params_with_llm(
+        config_without_llm(),
+        json!([{ "name": "a" }, { "name": "b" }]),
+        json!({
+            "base_url": "https://openrouter.ai/api/v1",
+            "model": "anthropic/claude-haiku-4.5",
+            "api_key": "sk-or-resolved",
+        }),
+    );
+    let result = result_of(call(&mut srv, 1, "initialize", params).await);
+    assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
+}
+
+#[tokio::test]
+async fn initialize_prefers_the_explicit_llm_over_supplied() {
+    // The supplied `[llm]` is unusable (empty base_url). With an explicit
+    // plugin `[llm]` present, initialize must succeed — proof the explicit
+    // table won and the supplied one was never adopted.
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    let mut srv = server(&shared);
+    let mut config = config_without_llm();
+    config["llm"] = json!({ "base_url": "https://llm.test/v1", "model": "m", "api_key": "k" });
+    let broken_supplied = json!({ "base_url": "", "model": "m", "api_key": "k" });
+    let params = init_params_with_llm(
+        config,
+        json!([{ "name": "a" }, { "name": "b" }]),
+        broken_supplied.clone(),
+    );
+    result_of(call(&mut srv, 1, "initialize", params).await);
+
+    // And the converse: without the explicit table, the same unusable
+    // supplied `[llm]` counts as "nothing supplied" and the candidate check
+    // fires — proof the fallback path is what got exercised above.
+    let mut srv = server(&shared);
+    let params = init_params_with_llm(
+        config_without_llm(),
+        json!([{ "name": "a" }, { "name": "b" }]),
+        broken_supplied,
+    );
+    let response = call(&mut srv, 2, "initialize", params).await;
+    let (code, message) = error_of(&response);
+    assert_eq!(code, error_code::CONFIG_INVALID);
+    assert!(message.contains("[llm]"), "{message}");
+}
+
+#[tokio::test]
+async fn keyless_supplied_llm_is_not_adopted() {
+    // The plugin always authenticates its classifier calls, so a supplied
+    // `[llm]` without an api_key is treated as absent — with two candidates
+    // that is CONFIG_INVALID, pointing at both config locations, before any
+    // network call.
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let params = init_params_with_llm(
+        config_without_llm(),
+        json!([{ "name": "a" }, { "name": "b" }]),
+        json!({ "base_url": "https://openrouter.ai/api/v1", "model": "m" }),
+    );
+    let response = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&response);
+    assert_eq!(code, error_code::CONFIG_INVALID);
+    assert!(message.contains("plugins/slack.toml"), "{message}");
+    assert!(message.contains("api_key_ref"), "{message}");
+    assert!(shared.requests().is_empty());
+}
+
 #[tokio::test]
 async fn config_validate_accepts_an_omitted_repos_list() {
     // Offline validation cannot know what initialize will supply, so an
@@ -350,8 +450,10 @@ async fn config_validate_reports_static_errors() {
     let shared = Shared::default();
     let mut srv = server(&shared);
 
-    // Bot token instead of user token, a channel rule referencing an unknown
-    // repo, and two repos without [llm].
+    // Bot token instead of user token, and a channel rule referencing an
+    // unknown repo. Two repos without an `[llm]` are legal offline since
+    // #119 — initialize may adopt the orchestrator's `[llm]`, so that check
+    // fires there (see initialize_prefers_the_explicit_llm_over_supplied).
     let config = json!({
         "app_token": "xapp-1-A1-test",
         "user_token": "xoxb-bot-token",
@@ -369,7 +471,7 @@ async fn config_validate_reports_static_errors() {
         .join("\n");
     assert!(all.contains("xoxp-"), "{all}");
     assert!(all.contains("ghost"), "{all}");
-    assert!(all.contains("[llm]"), "{all}");
+    assert!(!all.contains("[llm]"), "{all}");
 }
 
 #[tokio::test]

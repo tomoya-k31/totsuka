@@ -8,9 +8,11 @@
 use serde::Deserialize;
 
 /// The OpenAI-compatible LLM used for repository classification when channel
-/// rules leave more than one candidate. This is the plugin's own LLM call,
-/// independent of the orchestrator's `[llm]` (repo resolution happens entirely
-/// inside this plugin; tasks are submitted with a resolved `repo_hint`).
+/// rules leave more than one candidate. This is the plugin's own LLM call
+/// (repo resolution happens entirely inside this plugin; tasks are submitted
+/// with a resolved `repo_hint`). An explicit `[llm]` here always wins; when
+/// omitted, the orchestrator's `[llm]` (supplied at `initialize` since
+/// protocol 0.1.2, #119) is adopted as the default — see `server`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LlmConfig {
@@ -73,8 +75,10 @@ pub struct SlackConfig {
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
     pub source_name: String,
-    /// Repository-selection LLM. Required when more than one repository is
-    /// declared (with a single candidate there is nothing to classify).
+    /// Repository-selection LLM. Required when more than one repository
+    /// candidate ends up declared (with a single candidate there is nothing
+    /// to classify) — but optional since #119: when omitted, the
+    /// orchestrator's `[llm]` (supplied at `initialize`) fills in.
     #[serde(default)]
     pub llm: Option<LlmConfig>,
     /// Channel-prefix rules, checked before the LLM (first match wins).
@@ -112,7 +116,7 @@ fn default_api_url() -> String {
 fn default_max_retries() -> u32 {
     3
 }
-fn default_confidence_threshold() -> f64 {
+pub(crate) fn default_confidence_threshold() -> f64 {
     0.6
 }
 
@@ -162,14 +166,10 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
             ));
         }
     }
-    if config.repos.len() > 1 && config.llm.is_none() {
-        errors.push(
-            "`[llm]` is required when more than one `[[repos]]` is declared (it classifies \
-             which repository a mention concerns) → add an `[llm]` table with base_url / \
-             model / api_key"
-                .into(),
-        );
-    }
+    // More than one candidate needs an `[llm]` to classify — but offline
+    // validation cannot know whether `initialize` will supply the
+    // orchestrator's `[llm]` as the default (#119), so that check runs at
+    // `initialize` (see `server`), like the empty-`[[repos]]` case above.
     if let Some(llm) = &config.llm {
         if llm.base_url.is_empty() {
             errors.push("`llm.base_url` is empty → set the OpenAI-compatible base URL".into());
@@ -281,11 +281,13 @@ mod tests {
     }
 
     #[test]
-    fn multiple_repos_require_llm() {
+    fn multiple_repos_without_llm_defer_to_initialize() {
+        // Offline validation cannot know whether initialize will supply the
+        // orchestrator's `[llm]` as the default (#119) — the "more than one
+        // candidate needs an `[llm]`" check fires at initialize instead.
         let mut value = minimal();
         value["repos"] = json!([{ "name": "a" }, { "name": "b" }]);
-        let errors = static_config_errors(&parse(value));
-        assert!(errors.iter().any(|e| e.contains("[llm]")), "{errors:?}");
+        assert!(static_config_errors(&parse(value)).is_empty());
     }
 
     #[test]
