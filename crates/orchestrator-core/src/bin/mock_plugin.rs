@@ -5,7 +5,9 @@
 //! `initialize` config so one binary can play every plugin kind:
 //!
 //! - `initialize` → stores the config; replies with a version and capabilities
-//!   (`"no_state_stream": true` drops the `state_stream` capability).
+//!   (`"no_state_stream": true` drops the `state_stream` capability). The full
+//!   params are recorded to the config's `"init_log"` file, if set — separate
+//!   from `notify_log`, which tests read as "observable side effects".
 //! - `config/validate` → valid unless the config contains `"invalid": true`.
 //! - `tasks/fetch` → returns the config's `"tasks"` array (default: empty).
 //! - `task/update_status` / `result/publish` → acknowledge (recorded to the

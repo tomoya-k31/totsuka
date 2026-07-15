@@ -11,7 +11,7 @@ owner: tomoya-k31
 
 # 責務
 
-自分（`target_user_id`）宛の Slack メンションを検知して totsuka のタスクへ正規化し、承認後に **本人名義**（ユーザートークン `xoxp-`、Bot なし）でスレッド返信するための公式プラグイン。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、stdio JSON-RPC 2.0（NDJSON）サーバとして起動する。構造は [task-source-notion](/components/task-source-notion.md) / [task-source-github](/components/task-source-github.md) に準拠。orchestrator-core / plugin-protocol への変更なしで成立する（エピック #102 の設計判断）。
+自分（`target_user_id`）宛の Slack メンションを検知して totsuka のタスクへ正規化し、承認後に **本人名義**（ユーザートークン `xoxp-`、Bot なし）でスレッド返信するための公式プラグイン。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、stdio JSON-RPC 2.0（NDJSON）サーバとして起動する。構造は [task-source-notion](/components/task-source-notion.md) / [task-source-github](/components/task-source-github.md) に準拠。コア機能は orchestrator-core / plugin-protocol への変更なしで成立した（エピック #102 の設計判断。その後 #109 で、設定重複解消のための追加的なプロトコル拡張 — initialize でのリポジトリ一覧供給、protocol 0.1.1 — を任意 issue として採用）。
 
 現在の実装範囲: crate 構成・設定スキーマ・stdio JSON-RPC ディスパッチ・TokenGuard（#103）、**Slack Web API の型付きクライアント層** と **Socket Mode WebSocket クライアント**（#104）、**メンション検知 → Task 正規化 → バッファ → `tasks/fetch` 排出のパイプライン**（#105）、**プラグイン内リポジトリ解決**（#106）、**下書き提示・承認フロー**（`result/publish` → スレッド内エフェメラル + self-DM 記録 → 承認/却下ボタン → 承認時のみ本人名義スレッド返信、#107）、**運用整備**（Slack アプリの [manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml)・CLI レベル E2E・[Quickstart Runbook](/operations/slack-quickstart.md)・[トークン取り扱いポリシー](/security/slack-user-token.md)、#108）まで — エピック #102 の全実装 issue が完了。`task/update_status` は意図的な no-op（Slack に動かすステータス列がなく、下書きのライフサイクルはボタンが駆動する）。設計判断の記録は [ADR-0003](/decisions/adr-0003-slack-reply-assistant.md)。
 

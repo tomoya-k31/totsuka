@@ -84,7 +84,9 @@ pub struct RepoInfo {
     /// One-line description (classifier material, F-11).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    /// Local clone path, already `~`/`${ENV}`-expanded by the Orchestrator.
+    /// Local clone path, `~`/`${ENV}`-expanded by the Orchestrator (best
+    /// effort: an unresolvable reference is passed through raw, so treat
+    /// the path as optional material).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
