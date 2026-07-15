@@ -20,18 +20,24 @@ use std::sync::Arc;
 
 use crate::config::{SlackConfig, static_config_errors};
 use crate::error::SlackError;
+use crate::llm::ChatTransport;
 use crate::pipeline::{self, SharedState};
 use crate::slack_api::SlackApi;
 use crate::socket_mode::{self, SocketModeOptions};
 use crate::transport::{SlackTransport, TransportSettings};
 
-/// Builds a transport from resolved connection settings. Abstracted so the
-/// server can be tested with a recorded transport.
+/// Builds the plugin's outbound clients: the Slack Web API transport and the
+/// repo-classifier chat transport. Abstracted so the server can be tested
+/// with recorded fakes.
 pub trait TransportFactory {
-    /// The transport this factory produces.
+    /// The Slack transport this factory produces.
     type Transport: SlackTransport;
+    /// The LLM chat transport this factory produces.
+    type Chat: ChatTransport;
     /// Build a transport from connection `settings`.
     fn build(&self, settings: TransportSettings<'_>) -> Self::Transport;
+    /// Build the chat transport for repository classification.
+    fn build_chat(&self) -> Self::Chat;
 }
 
 /// Connection settings derived from a [`SlackConfig`].
@@ -109,6 +115,7 @@ impl<T> Drop for Session<T> {
 impl<F: TransportFactory> Server<F>
 where
     F::Transport: 'static,
+    F::Chat: 'static,
 {
     /// A fresh, uninitialized server using `factory` to build transports.
     pub fn new(factory: F) -> Self {
@@ -213,6 +220,7 @@ where
                 socket_mode::spawn(Arc::clone(&api), SocketModeOptions::default());
             let pipeline = pipeline::spawn(
                 Arc::clone(&api),
+                Arc::new(self.factory.build_chat()),
                 Arc::new(config.clone()),
                 events,
                 state.clone(),

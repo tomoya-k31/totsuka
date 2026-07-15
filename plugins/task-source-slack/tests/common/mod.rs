@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use task_source_slack::config::LlmConfig;
 use task_source_slack::error::SlackError;
+use task_source_slack::llm::ChatTransport;
 use task_source_slack::server::TransportFactory;
 use task_source_slack::transport::{SlackTransport, TokenKind, TransportSettings};
 
@@ -49,6 +51,8 @@ pub struct Shared {
     keyed: Arc<Mutex<std::collections::HashMap<String, VecDeque<Canned>>>>,
     requests: Arc<Mutex<Vec<Recorded>>>,
     posted_urls: Arc<Mutex<Vec<PostedUrl>>>,
+    chat_responses: Arc<Mutex<VecDeque<Result<Value, String>>>>,
+    chat_requests: Arc<Mutex<Vec<Value>>>,
 }
 
 impl Shared {
@@ -80,6 +84,13 @@ impl Shared {
     }
     pub fn posted_urls(&self) -> Vec<PostedUrl> {
         self.posted_urls.lock().unwrap().clone()
+    }
+    /// Queue one chat-completion outcome for the repo classifier.
+    pub fn push_chat(&self, outcome: Result<Value, String>) {
+        self.chat_responses.lock().unwrap().push_back(outcome);
+    }
+    pub fn chat_requests(&self) -> Vec<Value> {
+        self.chat_requests.lock().unwrap().clone()
     }
 }
 
@@ -132,10 +143,33 @@ pub struct FakeFactory {
 
 impl TransportFactory for FakeFactory {
     type Transport = FakeTransport;
+    type Chat = FakeChat;
     fn build(&self, _settings: TransportSettings<'_>) -> FakeTransport {
         FakeTransport {
             shared: self.shared.clone(),
         }
+    }
+    fn build_chat(&self) -> FakeChat {
+        FakeChat {
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+/// A [`ChatTransport`] answering from the shared canned queue.
+pub struct FakeChat {
+    pub shared: Shared,
+}
+
+impl ChatTransport for FakeChat {
+    fn complete(
+        &self,
+        _config: &LlmConfig,
+        body: Value,
+    ) -> impl Future<Output = Result<Value, String>> + Send {
+        self.shared.chat_requests.lock().unwrap().push(body);
+        let next = self.shared.chat_responses.lock().unwrap().pop_front();
+        async move { next.unwrap_or_else(|| Err("no canned chat response".into())) }
     }
 }
 
