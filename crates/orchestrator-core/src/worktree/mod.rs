@@ -96,11 +96,26 @@ pub fn sanitize_branch_for_path(branch: &str) -> String {
 }
 
 /// Render a branch name from a template (F-21). Placeholders: `{source}`,
-/// `{task_id}`.
+/// `{task_id}`. The result is legalized for git: task ids are
+/// source-defined and may carry characters `git check-ref-format` forbids
+/// (Slack ids are `{channel}:{ts}`), so the git-level constraint is
+/// enforced once here at the git boundary rather than in every plugin.
 pub fn render_branch(template: &str, source: &str, task_id: &str) -> String {
-    template
+    let rendered = template
         .replace("{source}", source)
-        .replace("{task_id}", task_id)
+        .replace("{task_id}", task_id);
+    rendered
+        .chars()
+        .map(|c| {
+            // `/` stays (hierarchical branch names are the point of the
+            // template); the rest of git's forbidden set becomes `-`.
+            if c.is_whitespace() || c.is_control() || ":~^?*[\\".contains(c) {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// Context for rendering a worktree location.
@@ -452,6 +467,17 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect()
+    }
+
+    #[test]
+    fn render_branch_legalizes_forbidden_ref_characters() {
+        // Slack task ids are `{channel}:{ts}` — `:` is invalid in a git ref.
+        let branch = render_branch(DEFAULT_BRANCH_TEMPLATE, "slack", "C1:100.1");
+        assert_eq!(branch, "agent/slack-C1-100.1");
+        assert_eq!(
+            render_branch("{task_id}", "s", "a b\t~^?*[\\c"),
+            "a-b-------c"
+        );
     }
 
     #[test]
