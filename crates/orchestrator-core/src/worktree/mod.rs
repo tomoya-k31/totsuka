@@ -104,7 +104,7 @@ pub fn render_branch(template: &str, source: &str, task_id: &str) -> String {
     let rendered = template
         .replace("{source}", source)
         .replace("{task_id}", task_id);
-    rendered
+    let cleaned: String = rendered
         .chars()
         .map(|c| {
             // `/` stays (hierarchical branch names are the point of the
@@ -115,7 +115,41 @@ pub fn render_branch(template: &str, source: &str, task_id: &str) -> String {
                 c
             }
         })
-        .collect()
+        .collect();
+    // Characters alone are not enough: `git check-ref-format` also rejects
+    // sequences and affixes — empty components (`//`, leading/trailing `/`),
+    // `..`, `@{`, a lone `@`, a `.lock` suffix, and components starting or
+    // ending with `.`.
+    let legalized = cleaned
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .map(|component| {
+            let mut c = component.replace("..", "--").replace("@{", "-{");
+            if c == "@" {
+                c = "-".to_string();
+            }
+            if let Some(rest) = c.strip_suffix(".lock") {
+                c = format!("{rest}-lock");
+            }
+            if let Some(rest) = c.strip_prefix('.') {
+                c = format!("-{rest}");
+            }
+            if let Some(rest) = c.strip_suffix('.') {
+                c = format!("{rest}-");
+            }
+            c
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    // Never empty (an all-`/` render) and never dash-led (`git worktree add
+    // -b <branch>` would parse it as an option).
+    if legalized.is_empty() {
+        "task".to_string()
+    } else if legalized.starts_with('-') {
+        format!("b{legalized}")
+    } else {
+        legalized
+    }
 }
 
 /// Context for rendering a worktree location.
@@ -478,6 +512,22 @@ mod tests {
             render_branch("{task_id}", "s", "a b\t~^?*[\\c"),
             "a-b-------c"
         );
+    }
+
+    #[test]
+    fn render_branch_legalizes_forbidden_ref_sequences() {
+        // check-ref-format rejects more than single characters: `..`, `@{`,
+        // a lone `@`, `.lock` suffixes, dot-led/dot-trailed components,
+        // empty components, and a dash-led name (option injection).
+        assert_eq!(render_branch("{task_id}", "s", "a..b...c"), "a--b--.c");
+        assert_eq!(render_branch("{task_id}", "s", "x.lock"), "x-lock");
+        assert_eq!(render_branch("{task_id}", "s", "a@{b/@"), "a-{b/-");
+        // Dot-led becomes dash-led, which then gets the option-injection
+        // guard's `b` prefix (a dash-led *name* is also rejected by git).
+        assert_eq!(render_branch("{task_id}", "s", ".hidden."), "b-hidden-");
+        assert_eq!(render_branch("a//{task_id}/", "s", "1"), "a/1");
+        assert_eq!(render_branch("{task_id}", "s", "///"), "task");
+        assert_eq!(render_branch("{task_id}", "s", "-rf"), "b-rf");
     }
 
     #[test]
