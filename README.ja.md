@@ -4,12 +4,13 @@
 # totsuka
 
 **AI 駆動の開発フロー自動化ツール。** totsuka はタスクソース（GitHub Issues、
-Notion）からタスク指示を検知し、ワークフローにマッチさせ、AI コーディング
-エージェント（herdr、orca）へ — それぞれ専用の git worktree 上で — オーケスト
-レーションします。成果はプルリクエスト作成、またはソースへの書き戻しとして
-publish します。
+Notion、Slack メンション）からタスク指示を検知し、ワークフローにマッチさせ、
+AI コーディングエージェント（herdr、orca）へ — それぞれ専用の git worktree 上
+で — オーケストレーションします。成果はプルリクエスト作成、またはソースへの
+書き戻しとして publish します。
 
-- **タスクソース**: GitHub Issues / Projects、Notion データベース
+- **タスクソース**: GitHub Issues / Projects、Notion データベース、Slack
+  メンション（返信案を承認すると本人名義で返信）
 - **エージェント**: herdr、orca（プラグインプロトコル越しに駆動する agent IDE）
 - **隔離**: 1 タスク = 1 リポジトリ = 1 worktree = 1 ブランチ
 - **出力ポリシー**: プルリクエスト作成 / ソースへ書き戻し / なし

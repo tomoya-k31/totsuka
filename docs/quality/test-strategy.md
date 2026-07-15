@@ -3,8 +3,8 @@ type: Test Strategy
 title: テスト戦略（自動結合テスト / E2E / モックプラグイン）
 description: totsuka のテスト層（ユニット・実プロセス結合・バイナリE2E）とモックプラグインによるシナリオ注入、フレーク対策、CI 品質ゲートの定義。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates
-tags: [testing, e2e, integration, mock, ci, quality]
-timestamp: 2026-07-14T02:00:00Z
+tags: [testing, e2e, integration, mock, ci, quality, slack]
+timestamp: 2026-07-15T15:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -20,6 +20,7 @@ owner: tomoya-k31
 | ユニット | 各モジュール内 `#[cfg(test)]` | 純粋ロジック（ステートマシン、ワークフローマッチング、スロット会計、テンプレート描画、redact 等）。LLM は `MockRouter`（`repo_select`）でスタブ化。 |
 | 実プロセス結合 | [orchestrator-core `tests/`](https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/tests) | `plugin_host.rs`（プラグイン起動・相関・クラッシュ隔離）、`worktree.rs`（実 git・bare origin）、`session_recovery.rs`、`config_e2e.rs`、`run_loop.rs`（`Engine` を実 mock サブプロセス + 実 git で駆動：全経路・再起動回復・出力ポリシー）。 |
 | バイナリ E2E | [orchestrator-cli `tests/e2e.rs`](https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/tests/e2e.rs) | 実 `totsuka` バイナリを XDG scratch 環境で起動し、`run`/`status`/`task show` を通す。config ロード・プラグイン起動・ロック・ログまで含めユーザー視点で検証。 |
+| Slack E2E | [orchestrator-cli `tests/slack_e2e.rs`](https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/tests/slack_e2e.rs) | 実 `totsuka` + 実 `task-source-slack` バイナリ + mock agent を、in-process の **モック Slack**（Web API = raw TCP HTTP、Socket Mode = WebSocket）に対して駆動。メンション envelope → `tasks/fetch` → dispatch → `result/publish` → 承認ボタン → user トークンでのスレッド返信 + 両面 finalize、および `doctor` の TokenGuard プローブ（auth.test + apps.connections.open）を検証（#108）。 |
 
 # モックプラグイン（シナリオ注入）
 
@@ -45,7 +46,8 @@ owner: tomoya-k31
 
 # フレーク対策
 
-- E2E は **ワンショット**（`--watch` を使わずタイミング非依存）。各バイナリ実行に 60 秒の実時計ガードを付け、ハング時は即失敗させる。
+- E2E は原則 **ワンショット**（`--watch` を使わずタイミング非依存）。各バイナリ実行に実時計ガードを付け、ハング時は即失敗させる。例外は Slack E2E: 承認ボタンはタスク完了 *後* に届くため `run --watch` 常駐が必須で、代わりに「観測条件をポーリング + 段階別タイムアウト + 最後に kill」で決定性を担保する。
+- Slack E2E のモック Slack は in-process（ポート 0 バインド）で外部ネットワークに依存しない。Web API はパス別のスティッキー応答 + 全呼び出し記録（フォームデコード済み）で、アサーションは記録に対して行う。
 - 実プロセステストは実 git の bare origin をローカル tempdir に作り、外部ネットワークに依存しない。
 - LLM 呼び出しは、単一リポジトリ経路（LLM 不要）と `MockRouter`（ユニット）でスタブ化。HTTP レベルの VCR 再生は将来対応（[Known Issue](/quality/known-issues.md) 参照）。
 - git のコミット署名はテストヘルパで無効化（ローカル署名エージェントによるブロック回避）。

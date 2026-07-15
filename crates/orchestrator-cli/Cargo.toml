@@ -27,3 +27,8 @@ tokio.workspace = true
 
 [dev-dependencies]
 test-support = { workspace = true }
+# The Slack E2E (tests/slack_e2e.rs) runs an in-process mock Slack: raw-TCP
+# Web API + Socket Mode WebSocket.
+tokio = { workspace = true, features = ["net"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
