@@ -6,6 +6,7 @@
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use task_source_slack::llm::ReqwestChat;
 use task_source_slack::server::{Server, TransportFactory};
 use task_source_slack::transport::{ReqwestTransport, TransportSettings};
 
@@ -14,8 +15,12 @@ struct ReqwestFactory;
 
 impl TransportFactory for ReqwestFactory {
     type Transport = ReqwestTransport;
+    type Chat = ReqwestChat;
     fn build(&self, settings: TransportSettings<'_>) -> Self::Transport {
         ReqwestTransport::new(settings)
+    }
+    fn build_chat(&self) -> Self::Chat {
+        ReqwestChat::new()
     }
 }
 

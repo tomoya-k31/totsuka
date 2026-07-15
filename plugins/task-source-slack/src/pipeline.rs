@@ -1,19 +1,30 @@
 //! The mention pipeline: consumes normalized Socket Mode events, applies the
 //! mention filter, enriches a fresh mention with thread context and names,
-//! normalizes it to the common [`Task`] schema, and buffers it until the
-//! orchestrator's next `tasks/fetch` drains the buffer (pull loop over a
-//! push source, issue #105).
+//! resolves the target repository (issue #106), normalizes to the common
+//! [`Task`] schema, and buffers it until the orchestrator's next
+//! `tasks/fetch` drains the buffer (pull loop over a push source, #105).
+//!
+//! Repository resolution runs entirely in the plugin: channel-prefix rules,
+//! then the plugin's own LLM classifier, then — when neither decides — an
+//! in-thread ephemeral asking the operator. While a selection is pending the
+//! mention is **not** submitted as a task (no dangling pending task in the
+//! orchestrator); the `block_actions` answer resumes it, and unanswered
+//! selections expire after [`SELECTION_TTL`].
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use plugin_protocol::Task;
 
 use crate::config::SlackConfig;
+use crate::llm::ChatTransport;
 use crate::mention::{Mention, MentionFilter};
-use crate::slack_api::SlackApi;
+use crate::repo_resolver::{Resolution, resolve};
+use crate::slack_api::{PostEphemeral, SlackApi};
 use crate::socket_mode::SocketEvent;
 use crate::transport::SlackTransport;
 
@@ -38,6 +49,12 @@ pub struct PendingMention {
 /// entries, but until every task round-trips, the oldest entries fall out
 /// FIFO instead of growing without bound in a long-running plugin.
 const PENDING_CAP: usize = 1024;
+
+/// How long an unanswered repository selection stays alive.
+const SELECTION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How often expired selections are swept.
+const SELECTION_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// State shared between the pipeline task and the JSON-RPC server: the task
 /// buffer `tasks/fetch` drains, and the pending-mention index.
@@ -104,12 +121,55 @@ impl SharedState {
     }
 }
 
+/// A mention with everything the pipeline looked up for it.
+struct EnrichedMention {
+    mention: Mention,
+    sender_name: String,
+    channel_name: String,
+    permalink: Option<String>,
+    /// `name: text` lines, oldest first. `None` = lookup failed.
+    context_lines: Option<Vec<String>>,
+}
+
+/// Mentions waiting for the operator's repository choice, keyed by task id.
+/// Kept out of [`SharedState`]: only the pipeline touches it.
+#[derive(Default)]
+struct AwaitingSelection {
+    entries: HashMap<String, (EnrichedMention, Instant)>,
+}
+
+impl AwaitingSelection {
+    fn insert(&mut self, enriched: EnrichedMention, now: Instant) {
+        self.entries
+            .insert(enriched.mention.task_id(), (enriched, now));
+    }
+
+    fn take(&mut self, task_id: &str) -> Option<EnrichedMention> {
+        self.entries.remove(task_id).map(|(e, _)| e)
+    }
+
+    /// Drop entries older than `ttl`, returning the dropped task ids.
+    fn sweep(&mut self, now: Instant, ttl: Duration) -> Vec<String> {
+        let expired: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, (_, at))| now.duration_since(*at) >= ttl)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &expired {
+            self.entries.remove(id);
+        }
+        expired
+    }
+}
+
 /// Run the pipeline over `events` until the channel closes: filter each
-/// message event, enrich + normalize fresh mentions, and hand the result to
-/// `state`. Block Kit interactions are ignored here (repo selection lands
-/// with #106, the approval flow with #107).
-pub fn spawn<T: SlackTransport + 'static>(
+/// message event, enrich + resolve + normalize fresh mentions, hand results
+/// to `state`, and answer repository-selection `block_actions`. Approval
+/// interactions (`approve_reply` / `reject_reply`) land with #107.
+pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
     api: Arc<SlackApi<T>>,
+    chat: Arc<C>,
     config: Arc<SlackConfig>,
     mut events: mpsc::UnboundedReceiver<SocketEvent>,
     state: SharedState,
@@ -127,26 +187,257 @@ pub fn spawn<T: SlackTransport + 'static>(
         }
 
         let mut names = NameCache::default();
-        while let Some(event) = events.recv().await {
+        let mut awaiting = AwaitingSelection::default();
+        let mut sweep = tokio::time::interval(SELECTION_SWEEP_INTERVAL);
+        sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        sweep.tick().await; // the first tick fires immediately; skip it
+
+        loop {
+            let event = tokio::select! {
+                event = events.recv() => match event {
+                    Some(event) => event,
+                    None => return,
+                },
+                _ = sweep.tick() => {
+                    for task_id in awaiting.sweep(Instant::now(), SELECTION_TTL) {
+                        tracing::info!(
+                            task_id,
+                            "repository selection expired unanswered; mention dropped"
+                        );
+                    }
+                    continue;
+                }
+            };
             match event {
                 SocketEvent::Message(message) => {
                     let Some(mention) = filter.assess(&message) else {
                         continue;
                     };
-                    let (task, pending) =
-                        normalize(api.as_ref(), &config, &mut names, &mention).await;
-                    tracing::info!(task_id = task.id, "mention detected; task buffered");
-                    state.insert_pending(task.id.clone(), pending);
-                    state.push_task(task);
+                    let enriched = enrich(api.as_ref(), &config, &mut names, mention).await;
+                    handle_mention(
+                        api.as_ref(),
+                        chat.as_ref(),
+                        &config,
+                        &state,
+                        &mut awaiting,
+                        enriched,
+                    )
+                    .await;
                 }
-                SocketEvent::BlockActions(_) => {
-                    tracing::debug!(
-                        "ignoring block_actions (repo selection / approval land with #106/#107)"
-                    );
+                SocketEvent::BlockActions(payload) => {
+                    handle_block_actions(api.as_ref(), &config, &state, &mut awaiting, &payload)
+                        .await;
                 }
             }
         }
     })
+}
+
+/// Resolve the repository for an enriched mention and either submit the task
+/// or park it behind an ephemeral selection.
+async fn handle_mention<T: SlackTransport, C: ChatTransport>(
+    api: &SlackApi<T>,
+    chat: &C,
+    config: &SlackConfig,
+    state: &SharedState,
+    awaiting: &mut AwaitingSelection,
+    enriched: EnrichedMention,
+) {
+    let context_text = enriched.context_lines.as_deref().unwrap_or(&[]).join("\n");
+    let resolution = resolve(
+        chat,
+        config,
+        &enriched.channel_name,
+        &enriched.mention.text,
+        &context_text,
+    )
+    .await;
+
+    match resolution {
+        Resolution::Resolved(repo) => {
+            submit(state, config, &enriched, Some(repo));
+        }
+        Resolution::NeedsSelection(candidates) => {
+            let task_id = enriched.mention.task_id();
+            match post_selection_ephemeral(api, config, &enriched, &candidates).await {
+                Ok(()) => {
+                    tracing::info!(task_id, "asked the operator to pick a repository");
+                    awaiting.insert(enriched, Instant::now());
+                }
+                Err(e) => {
+                    // Without the ephemeral the operator can never answer;
+                    // parking the mention would strand it silently. Submit
+                    // without a hint instead — the orchestrator's own repo
+                    // selection handles hintless tasks.
+                    tracing::warn!(
+                        task_id, error = %e,
+                        "could not post the repository picker; submitting without a hint"
+                    );
+                    submit(state, config, &enriched, None);
+                }
+            }
+        }
+    }
+}
+
+/// Answer a Block Kit interaction: repository picks and skips are consumed
+/// here; approval actions belong to #107.
+async fn handle_block_actions<T: SlackTransport>(
+    api: &SlackApi<T>,
+    config: &SlackConfig,
+    state: &SharedState,
+    awaiting: &mut AwaitingSelection,
+    payload: &Value,
+) {
+    let Some(action) = payload.get("actions").and_then(|a| a.get(0)) else {
+        return;
+    };
+    let action_id = action
+        .get("action_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let value = action.get("value").and_then(Value::as_str).unwrap_or("");
+    let response_url = payload.get("response_url").and_then(Value::as_str);
+
+    if action_id.starts_with("select_repo") {
+        let (task_id, repo) = match parse_selection_value(value) {
+            Some(parsed) => parsed,
+            None => {
+                tracing::warn!(value, "select_repo action with an unparseable value");
+                return;
+            }
+        };
+        let Some(enriched) = awaiting.take(&task_id) else {
+            // Restart, TTL expiry, or a double click: nothing to resume.
+            tracing::info!(task_id, "selection answered but no mention is waiting");
+            replace_ephemeral(
+                api,
+                response_url,
+                "この選択は期限切れか処理済みです（再起動などで無効になった可能性があります）。",
+            )
+            .await;
+            return;
+        };
+        tracing::info!(task_id, repo, "operator picked the repository");
+        submit(state, config, &enriched, Some(repo.clone()));
+        replace_ephemeral(
+            api,
+            response_url,
+            &format!("リポジトリ `{repo}` で調査を開始します。"),
+        )
+        .await;
+    } else if action_id == "skip_mention" {
+        let Some(task_id) = parse_skip_value(value) else {
+            tracing::warn!(value, "skip_mention action with an unparseable value");
+            return;
+        };
+        if awaiting.take(&task_id).is_some() {
+            tracing::info!(task_id, "operator skipped the mention; dropped");
+        }
+        replace_ephemeral(
+            api,
+            response_url,
+            "このメンションをスキップしました（返信案は作成されません）。",
+        )
+        .await;
+    } else {
+        // approve_reply / reject_reply arrive with the approval flow (#107).
+        tracing::debug!(action_id, "ignoring block action (not a selection)");
+    }
+}
+
+/// Build the task from an enriched mention and queue it.
+fn submit(
+    state: &SharedState,
+    config: &SlackConfig,
+    enriched: &EnrichedMention,
+    repo_hint: Option<String>,
+) {
+    let (task, pending) = build_task(config, enriched, repo_hint);
+    tracing::info!(task_id = task.id, "mention became a task; buffered");
+    state.insert_pending(task.id.clone(), pending);
+    state.push_task(task);
+}
+
+/// The ephemeral repository picker: one button per candidate plus a skip,
+/// visible only to the operator, inside the mention's thread.
+async fn post_selection_ephemeral<T: SlackTransport>(
+    api: &SlackApi<T>,
+    config: &SlackConfig,
+    enriched: &EnrichedMention,
+    candidates: &[String],
+) -> Result<(), crate::error::SlackError> {
+    let task_id = enriched.mention.task_id();
+    let snippet: String = enriched.mention.text.chars().take(80).collect();
+
+    let mut elements = Vec::new();
+    for (i, name) in candidates.iter().enumerate() {
+        elements.push(json!({
+            "type": "button",
+            "action_id": format!("select_repo_{i}"),
+            "text": { "type": "plain_text", "text": name },
+            "value": json!({ "task": task_id, "repo": name }).to_string(),
+        }));
+    }
+    elements.push(json!({
+        "type": "button",
+        "action_id": "skip_mention",
+        "style": "danger",
+        "text": { "type": "plain_text", "text": "スキップ（返信案を作らない）" },
+        "value": json!({ "task": task_id }).to_string(),
+    }));
+
+    let blocks = json!([
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": format!(
+                    "どのリポジトリについてのメンションですか？\n> {snippet}\n\
+                     選ぶと返信案の作成を開始します。"
+                ),
+            }
+        },
+        { "type": "actions", "elements": elements },
+    ]);
+
+    api.chat_post_ephemeral(&PostEphemeral {
+        channel: &enriched.mention.channel,
+        user: &config.target_user_id,
+        text: "リポジトリを選択してください",
+        thread_ts: Some(enriched.mention.reply_ts()),
+        blocks: Some(blocks),
+    })
+    .await
+}
+
+/// Replace the ephemeral the button lived in (best-effort: the URL is only
+/// valid for 30 minutes / 5 uses, and a failed rewrite costs nothing).
+async fn replace_ephemeral<T: SlackTransport>(
+    api: &SlackApi<T>,
+    response_url: Option<&str>,
+    text: &str,
+) {
+    let Some(url) = response_url else { return };
+    let body = json!({ "replace_original": true, "text": text });
+    if let Err(e) = api.post_response_url(url, body).await {
+        tracing::warn!(error = %e, "could not rewrite the selection ephemeral");
+    }
+}
+
+/// The `{"task": …, "repo": …}` value of a `select_repo` button.
+fn parse_selection_value(value: &str) -> Option<(String, String)> {
+    let parsed: Value = serde_json::from_str(value).ok()?;
+    Some((
+        parsed.get("task")?.as_str()?.to_string(),
+        parsed.get("repo")?.as_str()?.to_string(),
+    ))
+}
+
+/// The `{"task": …}` value of a `skip_mention` button.
+fn parse_skip_value(value: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(value).ok()?;
+    Some(parsed.get("task")?.as_str()?.to_string())
 }
 
 /// Caches for display names and channel names (stable within a run).
@@ -194,17 +485,16 @@ impl NameCache {
 /// Title snippet length, in characters.
 const TITLE_SNIPPET_CHARS: usize = 40;
 
-/// Enrich `mention` (names, thread context, permalink) and normalize it to
-/// the common [`Task`] schema. Enrichment is best-effort: a failed lookup
-/// degrades the task (raw ids, missing context note) instead of dropping the
-/// mention.
-async fn normalize<T: SlackTransport>(
+/// Look up everything a mention needs (names, thread context, permalink).
+/// Best-effort: a failed lookup degrades the result (raw ids, missing
+/// context note) instead of dropping the mention.
+async fn enrich<T: SlackTransport>(
     api: &SlackApi<T>,
     config: &SlackConfig,
     names: &mut NameCache,
-    mention: &Mention,
-) -> (Task, PendingMention) {
-    let sender = names.user(api, &mention.user).await;
+    mention: Mention,
+) -> EnrichedMention {
+    let sender_name = names.user(api, &mention.user).await;
     let channel_name = names.channel(api, &mention.channel).await;
     let permalink = match api.chat_get_permalink(&mention.channel, &mention.ts).await {
         Ok(link) => Some(link),
@@ -213,15 +503,33 @@ async fn normalize<T: SlackTransport>(
             None
         }
     };
-    let context = thread_context(api, config, names, mention).await;
+    let context_lines = thread_context(api, config, names, &mention).await;
+    EnrichedMention {
+        mention,
+        sender_name,
+        channel_name,
+        permalink,
+        context_lines,
+    }
+}
 
+/// Normalize an enriched mention to the common [`Task`] schema.
+fn build_task(
+    config: &SlackConfig,
+    enriched: &EnrichedMention,
+    repo_hint: Option<String>,
+) -> (Task, PendingMention) {
+    let mention = &enriched.mention;
     let snippet: String = mention
         .text
         .replace('\n', " ")
         .chars()
         .take(TITLE_SNIPPET_CHARS)
         .collect();
-    let title = format!("Slack: {sender} in #{channel_name}: {snippet}");
+    let title = format!(
+        "Slack: {} in #{}: {snippet}",
+        enriched.sender_name, enriched.channel_name
+    );
 
     let mut body = String::from(
         "以下の Slack メンションへの返信案を日本語で作成してください。\
@@ -232,10 +540,12 @@ async fn normalize<T: SlackTransport>(
         body.push_str(&format!("返信スタイル: {style}\n"));
     }
     body.push_str(&format!(
-        "\n## メンション\n\n- 送信者: {sender}\n- チャンネル: #{channel_name}\n- 本文:\n\n> {}\n",
+        "\n## メンション\n\n- 送信者: {}\n- チャンネル: #{}\n- 本文:\n\n> {}\n",
+        enriched.sender_name,
+        enriched.channel_name,
         mention.text.replace('\n', "\n> ")
     ));
-    match &context {
+    match &enriched.context_lines {
         Some(lines) if !lines.is_empty() => {
             body.push_str(&format!(
                 "\n## スレッド文脈（直近 {} 件・古い順）\n\n",
@@ -251,13 +561,6 @@ async fn normalize<T: SlackTransport>(
         ),
     }
 
-    // Until repo resolution (#106) lands, a hint is only possible when there
-    // is exactly one candidate.
-    let repo_hint = match config.repos.as_slice() {
-        [only] => Some(only.name.clone()),
-        _ => None,
-    };
-
     let task = Task {
         id: mention.task_id(),
         source: config.source_name.clone(),
@@ -267,15 +570,15 @@ async fn normalize<T: SlackTransport>(
         labels: Vec::new(),
         priority: 0,
         status: None,
-        url: permalink.clone(),
+        url: enriched.permalink.clone(),
         assignee: None,
     };
     let pending = PendingMention {
         channel: mention.channel.clone(),
         reply_ts: mention.reply_ts().to_string(),
         mention_ts: mention.ts.clone(),
-        sender_name: sender,
-        permalink,
+        sender_name: enriched.sender_name.clone(),
+        permalink: enriched.permalink.clone(),
     };
     (task, pending)
 }
@@ -328,4 +631,54 @@ async fn thread_context<T: SlackTransport>(
         lines.push(format!("{speaker}: {}", message.text.replace('\n', " ")));
     }
     Some(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn enriched(task_id_ts: &str) -> EnrichedMention {
+        EnrichedMention {
+            mention: Mention {
+                channel: "C1".into(),
+                user: "U_OTHER".into(),
+                text: "<@U_ME> hi".into(),
+                ts: task_id_ts.into(),
+                thread_ts: None,
+            },
+            sender_name: "alice".into(),
+            channel_name: "general".into(),
+            permalink: None,
+            context_lines: Some(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn awaiting_sweep_drops_only_expired_entries() {
+        let mut awaiting = AwaitingSelection::default();
+        let start = Instant::now();
+        awaiting.insert(enriched("1.0"), start);
+        awaiting.insert(enriched("2.0"), start + Duration::from_secs(60 * 60));
+
+        // 24h after the first insert: the first has hit the TTL, the second
+        // (1h younger) has not.
+        let expired = awaiting.sweep(start + SELECTION_TTL, SELECTION_TTL);
+        assert_eq!(expired, vec!["C1:1.0".to_string()]);
+        assert!(awaiting.take("C1:1.0").is_none(), "expired entry is gone");
+        assert!(awaiting.take("C1:2.0").is_some(), "fresh entry survives");
+    }
+
+    #[test]
+    fn selection_values_round_trip() {
+        let value = json!({ "task": "C1:1.0", "repo": "web-app" }).to_string();
+        assert_eq!(
+            parse_selection_value(&value),
+            Some(("C1:1.0".to_string(), "web-app".to_string()))
+        );
+        assert!(parse_selection_value("not json").is_none());
+
+        let value = json!({ "task": "C1:1.0" }).to_string();
+        assert_eq!(parse_skip_value(&value), Some("C1:1.0".to_string()));
+        assert!(parse_skip_value("{}").is_none());
+    }
 }
