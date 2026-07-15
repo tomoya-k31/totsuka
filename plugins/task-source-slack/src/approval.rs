@@ -37,6 +37,14 @@ pub async fn publish_draft<T: SlackTransport>(
     task_id: &str,
     content: &str,
 ) -> Result<(), String> {
+    // Validate the content BEFORE consuming the pending entry: a rejected
+    // publish must leave the coordinates in place so a retry can still land.
+    let text = extract_reply(content);
+    if text.is_empty() {
+        return Err(format!(
+            "task {task_id} published an empty result → nothing to propose as a reply"
+        ));
+    }
     // Publish is the task's terminal step: consume the pending entry.
     let Some(pending) = state.take_pending(task_id) else {
         return Err(format!(
@@ -44,12 +52,6 @@ pub async fn publish_draft<T: SlackTransport>(
              mention?) → the reply cannot be placed; re-trigger from a fresh mention"
         ));
     };
-    let text = extract_reply(content);
-    if text.is_empty() {
-        return Err(format!(
-            "task {task_id} published an empty result → nothing to propose as a reply"
-        ));
-    }
 
     let draft = Draft {
         task_id: task_id.to_string(),

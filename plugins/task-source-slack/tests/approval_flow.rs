@@ -493,3 +493,45 @@ async fn one_failed_presentation_surface_is_tolerated() {
         "the record still carries the buttons"
     );
 }
+
+#[tokio::test]
+async fn empty_publish_fails_without_consuming_the_pending_entry() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
+    );
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
+    fetch_until_tasks(&mut srv, 2).await;
+
+    // An empty result is rejected…
+    let line = json!({
+        "jsonrpc": "2.0", "id": 3, "method": "result/publish",
+        "params": { "task_id": "C1:100.2", "content": "   \n\n" }
+    });
+    let reply = srv.handle_line(&line.to_string()).await;
+    let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("empty"),
+        "{response}"
+    );
+
+    // …but must NOT have consumed the coordinates: a retry with real
+    // content still presents the draft.
+    call(
+        &mut srv,
+        4,
+        "result/publish",
+        json!({ "task_id": "C1:100.2", "content": PUBLISHED_CONTENT }),
+    )
+    .await;
+    assert_eq!(requests_for(&shared, "chat.postEphemeral").len(), 1);
+}
