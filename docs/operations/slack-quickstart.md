@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: manifest からの Slack アプリ作成 → トークン発行 → Keychain 登録 → plugin install/enable → doctor → run --watch までの導入手順と、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, keychain, doctor]
-timestamp: 2026-07-16T02:30:00Z
+timestamp: 2026-07-17T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -96,6 +96,7 @@ totsuka run --watch       # Socket Mode 常駐 + 5 秒周期の吸い上げ
 | メンションがタスク化されない | ①メンション形式が `@自分` か（`user_events` は本人参加チャンネルのみ）②`run --watch` が起動中か ③subtype 付き（編集・bot 投稿）は対象外 |
 | 返信案は届くがボタンが失効 | プラグイン再起動で下書きが消えた（in-memory、TTL 24h）。self-DM 記録のテキストから手動返信するか、再メンションで再実行 |
 | スコープを変更した | アプリ再インストールが必要 → `xoxp-` が再発行されるので Keychain 更新 → `doctor` で確認（[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) のコメント参照） |
+| prefix ルール（`[[channel_groups]]`）が効かず常に LLM/エフェメラル選択になる | `conversations.info` が `missing_scope` で失敗しチャンネル名が取れていない（ログ WARN 参照）。`channels:read` / `groups:read` を含む manifest でアプリを再インストール → Keychain 更新（上の「スコープを変更した」と同手順） |
 
 # 関連
 

@@ -576,8 +576,14 @@ impl NameCache {
         let name = match api.conversations_info_name(channel_id).await {
             Ok(name) => name,
             Err(e) => {
+                // Without the name, `[[channel_groups]]` prefix rules can never
+                // match, so repo resolution silently degrades to the LLM /
+                // ephemeral fallbacks — say why and how to fix it.
                 tracing::warn!(channel_id, error = %e, "conversations.info failed; \
-                     using the raw id");
+                     using the raw id (prefix rules will not match; if the error \
+                     is `missing_scope`, re-install the app with the \
+                     `channels:read` / `groups:read` user scopes from manifest.yml \
+                     and refresh the Keychain token)");
                 channel_id.to_string()
             }
         };

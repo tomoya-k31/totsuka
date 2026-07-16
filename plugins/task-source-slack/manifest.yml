@@ -22,7 +22,9 @@ oauth_config:
     # User scopes only (no bot section): everything is done as the operator.
     user:
       - channels:history # read public-channel messages (mention detection / thread context)
+      - channels:read # resolve channel names (conversations.info) for [[channel_groups]] prefix rules
       - groups:history # read private-channel messages
+      - groups:read # resolve private-channel names for [[channel_groups]] prefix rules
       - users:read # resolve display names for task context
       - chat:write # post the approved reply / draft records as you
       - im:write # open your self-DM to record drafts
