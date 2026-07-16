@@ -151,13 +151,16 @@ impl FakeHerdr {
             }
 
             // The CLI ignores input until it is ready; once ready, typed text
-            // lands in the input box without being submitted.
+            // lands in the input box without being submitted. Text **appends**
+            // like real keystrokes do — a send that overwrote would hide a
+            // double-typed prompt.
             "agent.send" => {
                 {
                     let mut cli = self.cli.lock().unwrap();
                     cli.sends += 1;
                     if cli.sends > self.deaf_sends {
-                        cli.input = params["text"].as_str().unwrap_or_default().to_string();
+                        cli.input
+                            .push_str(params["text"].as_str().unwrap_or_default());
                     }
                 }
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
@@ -178,7 +181,9 @@ impl FakeHerdr {
                 }
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
-            "pane.close" => reply(&mut write_half, &id, json!({ "type": "ok" })).await,
+            "pane.close" | "workspace.close" => {
+                reply(&mut write_half, &id, json!({ "type": "ok" })).await
+            }
 
             "pane.get" if self.pane_gone => {
                 reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
@@ -400,6 +405,12 @@ async fn dispatch_types_and_submits_the_prompt_through_the_startup_race() {
             cli.input.contains("Draft the reply") && cli.input.contains("multi-line"),
             "the whole multi-line prompt is typed in, not passed as argv"
         );
+        assert_eq!(
+            cli.input.matches("Draft the reply").count(),
+            1,
+            "the retries must not type the prompt in twice: {:?}",
+            cli.input
+        );
         assert!(
             cli.sends >= 2 && cli.enters >= 3,
             "retries must have happened"
@@ -424,7 +435,7 @@ async fn dispatch_types_and_submits_the_prompt_through_the_startup_race() {
 async fn dispatch_fails_loudly_when_the_agent_never_starts() {
     // A CLI that never listens must surface an error, not a session id whose
     // state stream would hang forever.
-    let (socket, _) = FakeHerdr {
+    let (socket, requests) = FakeHerdr {
         deaf_enters: usize::MAX,
         ..FakeHerdr::default()
     }
@@ -439,6 +450,27 @@ async fn dispatch_fails_loudly_when_the_agent_never_starts() {
             .unwrap_or_default()
             .contains("never started"),
         "expected a loud failure: {disp}"
+    );
+
+    // …and it must take its workspace down with it: a failed dispatch reports
+    // no session id, so nothing else could ever close the pane or its CLI.
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r["method"] == "workspace.close")
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(
+        closed.is_ok(),
+        "a failed dispatch must not leak its workspace"
     );
 }
 
