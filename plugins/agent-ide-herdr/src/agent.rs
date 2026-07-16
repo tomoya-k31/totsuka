@@ -112,6 +112,27 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 HerdrError::InvalidResponse("workspace.create returned no workspace_id".into())
             })?;
 
+        // From here on the workspace exists, so every failure path has to take
+        // it back down: a failed dispatch reports no session id, which leaves
+        // the Orchestrator no handle to cancel with — the pane and its CLI
+        // process would run until the operator noticed them (and `task retry`
+        // would strand another one).
+        let started = self
+            .start_agent(&params, workspace_id, program, args)
+            .await
+            .inspect_err(|_| self.abandon(workspace_id))?;
+        Ok(started)
+    }
+
+    /// The part of [`dispatch`](Self::dispatch) that runs with a workspace
+    /// allocated: start the CLI, submit the prompt, and build the handle.
+    async fn start_agent(
+        &self,
+        params: &TaskDispatchParams,
+        workspace_id: &str,
+        program: String,
+        args: Vec<String>,
+    ) -> Result<TaskDispatchResult, HerdrError> {
         let argv: Vec<String> = std::iter::once(program).chain(args).collect();
         let started = self
             .client
@@ -133,7 +154,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .ok_or_else(|| HerdrError::InvalidResponse("agent.start returned no pane_id".into()))?
             .to_string();
 
-        self.submit_prompt(&pane_id, &compose_prompt(&params))
+        self.submit_prompt(&pane_id, &compose_prompt(params))
             .await?;
 
         // The agent's own session id (for `claude --resume`, and for finding its
@@ -152,6 +173,25 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         })
     }
 
+    /// Tear down a workspace a failed dispatch allocated, best-effort: the
+    /// dispatch error is what the caller needs to see, so a cleanup that also
+    /// fails is logged rather than raised.
+    fn abandon(&self, workspace_id: &str) {
+        let client = self.client.clone();
+        let workspace_id = workspace_id.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = client
+                .call("workspace.close", json!({ "workspace_id": workspace_id }))
+                .await
+            {
+                tracing::warn!(
+                    workspace_id, error = %e,
+                    "could not close the workspace of a failed dispatch; it may need closing by hand"
+                );
+            }
+        });
+    }
+
     /// Type `prompt` into the agent's TUI and submit it, confirming both steps.
     ///
     /// Neither write can be fire-and-forget (#124): the CLI renders its input
@@ -164,6 +204,11 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// empty input box is a no-op.
     async fn submit_prompt(&self, pane_id: &str, prompt: &str) -> Result<(), HerdrError> {
         let marker = prompt_marker(prompt);
+        // Retrying past herdr errors is what absorbs a blip — but it also hides
+        // a socket that is simply down, so the last one is kept and reported
+        // with the failure. Without it the caller only learns "it never
+        // started", never that herdr was unreachable all along.
+        let mut last_error: Option<HerdrError> = None;
 
         let mut typed = false;
         for _ in 0..SEND_ATTEMPTS {
@@ -171,9 +216,19 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 typed = true;
                 break;
             }
-            self.client
+            // A blip on the way in is what the retries are for; only a pane
+            // that is truly gone ends this early.
+            if let Err(e) = self
+                .client
                 .call("agent.send", json!({ "target": pane_id, "text": prompt }))
-                .await?;
+                .await
+            {
+                if e.is_missing() {
+                    return Err(e);
+                }
+                tracing::warn!(pane_id, error = %e, "agent.send failed; retrying");
+                last_error = Some(e);
+            }
             if self
                 .wait_for(SEND_RENDER_TIMEOUT, || {
                     self.screen_contains(pane_id, &marker)
@@ -189,29 +244,49 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             );
         }
         if !typed {
-            return Err(HerdrError::InvalidResponse(format!(
-                "the agent CLI never showed the prompt in pane {pane_id} → it may not have started"
-            )));
+            return Err(gave_up(
+                format!("the agent CLI never showed the prompt in pane {pane_id}"),
+                last_error,
+            ));
         }
 
-        for _ in 0..ENTER_ATTEMPTS {
-            if agent_started(&pane_status(&self.client, pane_id).await?) {
-                return Ok(());
+        for _ in 0..=ENTER_ATTEMPTS {
+            match self.agent_is_running(pane_id).await {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(e) if e.is_missing() => return Err(e),
+                Err(e) => {
+                    tracing::warn!(pane_id, error = %e, "could not read the pane's status; retrying");
+                    last_error = Some(e);
+                }
             }
-            self.client
+            if let Err(e) = self
+                .client
                 .call(
                     "pane.send_keys",
                     json!({ "pane_id": pane_id, "keys": ["enter"] }),
                 )
-                .await?;
+                .await
+            {
+                if e.is_missing() {
+                    return Err(e);
+                }
+                tracing::warn!(pane_id, error = %e, "Enter failed; retrying");
+                last_error = Some(e);
+            }
             tokio::time::sleep(ENTER_SETTLE).await;
         }
-        if agent_started(&pane_status(&self.client, pane_id).await?) {
-            return Ok(());
-        }
-        Err(HerdrError::InvalidResponse(format!(
-            "the agent in pane {pane_id} never started after the prompt was submitted"
-        )))
+        Err(gave_up(
+            format!("the agent in pane {pane_id} never started after the prompt was submitted"),
+            last_error,
+        ))
+    }
+
+    /// Whether the agent has acted on the prompt.
+    async fn agent_is_running(&self, pane_id: &str) -> Result<bool, HerdrError> {
+        pane_status(&self.client, pane_id)
+            .await
+            .map(|status| agent_started(&status))
     }
 
     /// Re-attach to a dispatched session (F-37): confirm the pane is alive with
@@ -235,9 +310,10 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         }
     }
 
-    /// Cancel a task: interrupt the agent (`ctrl+c`) then close its pane. The
-    /// interrupt is best-effort — even if it fails the pane is still closed —
-    /// and an already-gone pane is treated as success, so cancel is idempotent.
+    /// Cancel a task: interrupt the agent (`ctrl+c`), then take down the
+    /// workspace `dispatch` created for it. The interrupt is best-effort — even
+    /// if it fails the pane is still closed — and anything already gone counts
+    /// as success, so cancel is idempotent.
     pub async fn cancel(&self, session_id: &str) -> Result<(), HerdrError> {
         let handle = SessionHandle::decode(session_id);
         // Best-effort interrupt: a failure here must not prevent the close,
@@ -258,6 +334,15 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 .call("pane.close", json!({ "pane_id": handle.pane_id }))
                 .await,
         )?;
+        // `dispatch` gives every task its own workspace, so closing the pane
+        // alone would leave an empty one behind on every cancel.
+        if let Some(workspace_id) = workspace_of(&handle.pane_id) {
+            ignore_missing(
+                self.client
+                    .call("workspace.close", json!({ "workspace_id": workspace_id }))
+                    .await,
+            )?;
+        }
         Ok(())
     }
 
@@ -434,6 +519,26 @@ fn agent_started(status: &str) -> bool {
     matches!(status, "working" | "blocked" | "done")
 }
 
+/// The workspace a pane belongs to. herdr ids nest the workspace in the pane
+/// (`w1:p2` lives in `w1`), which is the only handle back to it — the protocol
+/// `session_id` carries the pane, not the workspace.
+fn workspace_of(pane_id: &str) -> Option<&str> {
+    pane_id.split_once(':').map(|(workspace, _)| workspace)
+}
+
+/// The error for a step that exhausted its retries, carrying whatever herdr
+/// last complained about. The retries exist to ride out a blip, so the symptom
+/// alone ("it never started") is what a caller would otherwise see even when
+/// the real story is that the socket was down the whole time.
+fn gave_up(symptom: String, cause: Option<HerdrError>) -> HerdrError {
+    match cause {
+        Some(cause) => {
+            HerdrError::InvalidResponse(format!("{symptom} → last herdr error: {cause}"))
+        }
+        None => HerdrError::InvalidResponse(symptom),
+    }
+}
+
 /// Re-derive the current state after a dropped-event lag: read the pane's
 /// status, or treat a vanished pane as a terminal `failed`. `None` means the
 /// state is currently unknowable (transient error) — hold and retry.
@@ -581,6 +686,15 @@ fn ignore_missing(result: Result<Value, HerdrError>) -> Result<(), HerdrError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_is_read_off_the_pane_id() {
+        assert_eq!(workspace_of("w1:p2"), Some("w1"));
+        assert_eq!(workspace_of("w1T:p10"), Some("w1T"));
+        // A hand-written session id without the herdr shape names no workspace
+        // (the pane still closes; only the workspace sweep is skipped).
+        assert_eq!(workspace_of("bare-pane"), None);
+    }
 
     #[test]
     fn agent_started_covers_every_active_status() {

@@ -135,11 +135,29 @@ fn encode_cwd(cwd: &Path) -> String {
 }
 
 /// The last non-empty assistant message in a Claude JSONL transcript.
+///
+/// Not every `assistant` entry is the agent talking: the CLI logs its own
+/// errors as synthetic assistant turns. A rate limit is written as
+///
+/// ```jsonc
+/// {"type": "assistant", "isApiErrorMessage": true, "error": "rate_limit",
+///  "apiErrorStatus": 429,
+///  "message": {"model": "<synthetic>",
+///              "content": [{"type": "text",
+///                           "text": "You've hit your session limit · resets 4:10pm"}]}}
+/// ```
+///
+/// and the CLI then returns to idle — exactly the completion signal the state
+/// stream watches for. Published unfiltered, that error text would become the
+/// task's answer (a Slack reply reading "You've hit your session limit"), so
+/// synthetic turns are skipped: with no real answer the caller falls back to
+/// the screen rather than publishing the CLI's complaint.
 fn last_assistant_text(transcript: &str) -> Option<String> {
     transcript
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("assistant"))
+        .filter(|entry| !is_synthetic(entry))
         .filter_map(|entry| {
             let content = entry.get("message")?.get("content")?.as_array()?.clone();
             let text = content
@@ -152,6 +170,21 @@ fn last_assistant_text(transcript: &str) -> Option<String> {
             (!text.is_empty()).then_some(text)
         })
         .next_back()
+}
+
+/// Whether a transcript entry is the CLI speaking as the agent rather than the
+/// agent itself: an API error it surfaced (`isApiErrorMessage`), bookkeeping it
+/// injected (`isMeta`), or a turn it generated locally (`model: "<synthetic>"`).
+/// Any of these marks the entry as not an answer.
+fn is_synthetic(entry: &Value) -> bool {
+    let flagged = |key: &str| entry.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let synthetic_model = entry
+        .get("message")
+        .and_then(|m| m.get("model"))
+        .or_else(|| entry.get("model"))
+        .and_then(Value::as_str)
+        .is_some_and(|model| model.starts_with('<'));
+    flagged("isApiErrorMessage") || flagged("isMeta") || synthetic_model
 }
 
 #[cfg(test)]
@@ -214,6 +247,34 @@ mod tests {
             last_assistant_text(&transcript).as_deref(),
             Some("final answer\nsecond line")
         );
+    }
+
+    #[test]
+    fn skips_the_clis_own_error_turns() {
+        // A rate limit is logged as a synthetic assistant turn and the CLI then
+        // goes idle — the same signal a finished answer gives. Publishing it
+        // would put "You've hit your session limit" in the Slack reply.
+        let transcript = [
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"the real answer"}]}}"#,
+            r#"{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You've hit your session limit · resets 4:10pm (Asia/Tokyo)"}]}}"#,
+        ]
+        .join("\n");
+        assert_eq!(
+            last_assistant_text(&transcript).as_deref(),
+            Some("the real answer"),
+            "the CLI's error turn must not shadow the agent's answer"
+        );
+
+        // With no real answer at all, there is nothing to publish — the caller
+        // falls back to the screen instead of publishing the complaint.
+        let only_error = r#"{"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"You've hit your session limit"}]}}"#;
+        assert_eq!(last_assistant_text(only_error), None);
+
+        // The other synthetic markers are skipped the same way.
+        let meta = r#"{"type":"assistant","isMeta":true,"message":{"content":[{"type":"text","text":"caveat: …"}]}}"#;
+        assert_eq!(last_assistant_text(meta), None);
+        let synthetic_model = r#"{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"No conversation found"}]}}"#;
+        assert_eq!(last_assistant_text(synthetic_model), None);
     }
 
     #[test]

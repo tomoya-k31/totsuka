@@ -60,6 +60,9 @@ struct FakeHerdr {
     detection: &'static str,
     /// When set, `workspace.create` fails with an `id: ""` decode-style error.
     empty_id_error_on_create: bool,
+    /// When set, every call the prompt submission makes fails with this herdr
+    /// error code — a herdr that is down rather than momentarily busy.
+    submission_error: Option<&'static str>,
 }
 
 impl Default for FakeHerdr {
@@ -76,6 +79,7 @@ impl Default for FakeHerdr {
             agent_session: None,
             detection: "",
             empty_id_error_on_create: false,
+            submission_error: None,
         }
     }
 }
@@ -117,7 +121,19 @@ impl FakeHerdr {
         log.lock().unwrap().push(req.clone());
         let id = req["id"].clone();
         let params = &req["params"];
-        match req["method"].as_str().unwrap_or("") {
+        let method = req["method"].as_str().unwrap_or("");
+        // A herdr that is down fails every call the submission makes — the
+        // retries must not turn that into a symptom with no cause.
+        if let Some(code) = self.submission_error
+            && matches!(
+                method,
+                "agent.send" | "pane.send_keys" | "pane.get" | "pane.read"
+            )
+        {
+            reply_error(&mut write_half, &id, code, "herdr is not reachable").await;
+            return;
+        }
+        match method {
             "ping" => reply(&mut write_half, &id, json!({ "type": "pong" })).await,
 
             "workspace.create" if self.empty_id_error_on_create => {
@@ -151,13 +167,16 @@ impl FakeHerdr {
             }
 
             // The CLI ignores input until it is ready; once ready, typed text
-            // lands in the input box without being submitted.
+            // lands in the input box without being submitted. Text **appends**
+            // like real keystrokes do — a send that overwrote would hide a
+            // double-typed prompt.
             "agent.send" => {
                 {
                     let mut cli = self.cli.lock().unwrap();
                     cli.sends += 1;
                     if cli.sends > self.deaf_sends {
-                        cli.input = params["text"].as_str().unwrap_or_default().to_string();
+                        cli.input
+                            .push_str(params["text"].as_str().unwrap_or_default());
                     }
                 }
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
@@ -178,7 +197,9 @@ impl FakeHerdr {
                 }
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
-            "pane.close" => reply(&mut write_half, &id, json!({ "type": "ok" })).await,
+            "pane.close" | "workspace.close" => {
+                reply(&mut write_half, &id, json!({ "type": "ok" })).await
+            }
 
             "pane.get" if self.pane_gone => {
                 reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
@@ -400,6 +421,12 @@ async fn dispatch_types_and_submits_the_prompt_through_the_startup_race() {
             cli.input.contains("Draft the reply") && cli.input.contains("multi-line"),
             "the whole multi-line prompt is typed in, not passed as argv"
         );
+        assert_eq!(
+            cli.input.matches("Draft the reply").count(),
+            1,
+            "the retries must not type the prompt in twice: {:?}",
+            cli.input
+        );
         assert!(
             cli.sends >= 2 && cli.enters >= 3,
             "retries must have happened"
@@ -424,7 +451,7 @@ async fn dispatch_types_and_submits_the_prompt_through_the_startup_race() {
 async fn dispatch_fails_loudly_when_the_agent_never_starts() {
     // A CLI that never listens must surface an error, not a session id whose
     // state stream would hang forever.
-    let (socket, _) = FakeHerdr {
+    let (socket, requests) = FakeHerdr {
         deaf_enters: usize::MAX,
         ..FakeHerdr::default()
     }
@@ -439,6 +466,27 @@ async fn dispatch_fails_loudly_when_the_agent_never_starts() {
             .unwrap_or_default()
             .contains("never started"),
         "expected a loud failure: {disp}"
+    );
+
+    // …and it must take its workspace down with it: a failed dispatch reports
+    // no session id, so nothing else could ever close the pane or its CLI.
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r["method"] == "workspace.close")
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(
+        closed.is_ok(),
+        "a failed dispatch must not leak its workspace"
     );
 }
 
@@ -711,5 +759,54 @@ async fn a_closed_subscription_only_fails_its_own_panes() {
     assert_eq!(
         note["params"]["state"], "done",
         "another pane's close notice must not fail this task: {note}"
+    );
+}
+
+#[tokio::test]
+async fn cancel_takes_down_the_whole_workspace() {
+    // `dispatch` gives every task its own workspace, so a cancel that closed
+    // only the pane would leave an empty one behind on every cancelled task.
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call("task/cancel", json!({ "session_id": "w1:p1|sess" }))
+        .await;
+    assert!(resp["error"].is_null(), "cancel failed: {resp}");
+
+    let log = requests.lock().unwrap();
+    let sent = |method: &str| log.iter().any(|r| r["method"] == method);
+    assert!(sent("pane.send_keys"), "the agent must be interrupted");
+    assert!(sent("pane.close"), "the pane must be closed");
+    let closed = log
+        .iter()
+        .find(|r| r["method"] == "workspace.close")
+        .expect("the task's workspace must be closed too");
+    assert_eq!(
+        closed["params"]["workspace_id"], "w1",
+        "the workspace is read off the pane id"
+    );
+}
+
+#[tokio::test]
+async fn a_failing_herdr_is_reported_with_its_cause() {
+    // The retries absorb a blip, but a herdr that is simply down would
+    // otherwise be reported as the symptom alone ("it never started"), with the
+    // real error only in the plugin's stderr — a diagnosability regression the
+    // pre-retry code did not have.
+    let (socket, _) = FakeHerdr {
+        submission_error: Some("internal_error"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T9", "Herdr is down", "plan").await;
+    let message = disp["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("internal_error") && message.contains("not reachable"),
+        "the failure must carry what herdr actually said: {message}"
     );
 }
