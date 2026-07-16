@@ -1,12 +1,15 @@
-//! End-to-end plugin flow over a **real Unix-socket fake herdr** that mimics
-//! the 0.7.4 protocol (#124): NDJSON with **one request per connection** (the
-//! server closes after every response), `events.subscribe` as the only
-//! persistent connection (pushing `{event, data}` envelopes), and the
-//! `agent.start`-based dispatch. Covers initialize → task/dispatch →
-//! state/subscribe → mapped state/notification stream (running →
-//! waiting_input(question) → running → done(final output)), exit-before-done
-//! as `failed`, session/attach success and pane-not-found, and the `id: ""`
-//! error correlation (F-32/F-35/F-37/F-38).
+//! End-to-end plugin flow over a **real Unix-socket fake herdr** modelled on
+//! herdr 0.7.4 as verified live in #124: NDJSON with **one request per
+//! connection** (the server closes after every response), `events.subscribe` as
+//! the only persistent connection (pushing `{event, data}` envelopes), the
+//! `agent.start` dispatch, and — crucially — a CLI that **accepts keystrokes
+//! before it acts on them**, so early `agent.send`/Enter are dropped.
+//!
+//! Covers initialize → task/dispatch (typing + submitting the prompt through
+//! that startup race) → state/subscribe → mapped state/notification stream
+//! (running → waiting_input(question) → running → done(final answer)),
+//! exit-before-done as `failed`, session/attach success and pane-not-found, and
+//! `id: ""` error correlation (F-32/F-35/F-37/F-38).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,37 +25,56 @@ use agent_ide_herdr::error::HerdrError;
 use agent_ide_herdr::server::{Server, TransportFactory};
 use agent_ide_herdr::transport::SocketTransport;
 
-/// How a fake herdr answers `pane.get` (drives attach + idle confirmation).
-#[derive(Clone)]
-enum PaneGet {
-    /// Return a pane record (nested under `pane`) with this `agent_status`.
-    Status(&'static str),
-    /// Return a `pane_not_found` error (the pane is gone).
-    NotFound,
+const PANE: &str = "w1:p1";
+
+/// The fake agent CLI's observable state — the pane's screen and status.
+#[derive(Default)]
+struct Cli {
+    /// What the input box shows (what `agent.send` typed in).
+    input: String,
+    /// herdr's `agent_status` for the pane.
+    status: String,
+    sends: usize,
+    enters: usize,
+    /// `pane.get` calls so far. A subscription waits for the next one before
+    /// pushing, so events land *after* the subscriber seeded its state — as on
+    /// a real run, where an agent's transitions are spread over its work.
+    pane_gets: usize,
 }
 
 /// Scripted fake-herdr behaviour for one test.
 #[derive(Clone)]
 struct FakeHerdr {
+    cli: Arc<Mutex<Cli>>,
     /// Envelope events pushed on the subscription connection after its ACK.
-    events_on_subscribe: Vec<Value>,
-    /// How `pane.get` responds.
-    pane_get: PaneGet,
-    /// `pane.read` text per source (`visible` / `recent`).
-    read_visible: &'static str,
-    read_recent: &'static str,
-    /// When set, `workspace.create` fails with an `id: ""` decode-style error
-    /// (herdr does not echo the id on invalid requests).
+    events_on_subscribe: Arc<Mutex<Vec<Value>>>,
+    /// Startup race: this many `agent.send`/Enter presses are dropped before
+    /// the CLI starts acting on them (0 = a CLI that is ready immediately).
+    deaf_sends: usize,
+    deaf_enters: usize,
+    /// `pane.get` reports a vanished pane.
+    pane_gone: bool,
+    /// The pane's `agent_session` (drives transcript lookup), if reported.
+    agent_session: Option<Value>,
+    /// `pane.read` text for the `detection` source.
+    detection: &'static str,
+    /// When set, `workspace.create` fails with an `id: ""` decode-style error.
     empty_id_error_on_create: bool,
 }
 
 impl Default for FakeHerdr {
     fn default() -> Self {
         Self {
-            events_on_subscribe: vec![],
-            pane_get: PaneGet::Status("idle"),
-            read_visible: "",
-            read_recent: "",
+            cli: Arc::new(Mutex::new(Cli {
+                status: "idle".to_string(),
+                ..Cli::default()
+            })),
+            events_on_subscribe: Arc::default(),
+            deaf_sends: 0,
+            deaf_enters: 0,
+            pane_gone: false,
+            agent_session: None,
+            detection: "",
             empty_id_error_on_create: false,
         }
     }
@@ -94,26 +116,27 @@ impl FakeHerdr {
         let req: Value = serde_json::from_str(&line).expect("fake herdr got valid JSON");
         log.lock().unwrap().push(req.clone());
         let id = req["id"].clone();
-        let method = req["method"].as_str().unwrap_or("");
-        match method {
+        let params = &req["params"];
+        match req["method"].as_str().unwrap_or("") {
             "ping" => reply(&mut write_half, &id, json!({ "type": "pong" })).await,
+
+            "workspace.create" if self.empty_id_error_on_create => {
+                // herdr does not echo the id when it cannot decode a request.
+                reply_error(
+                    &mut write_half,
+                    &json!(""),
+                    "invalid_request",
+                    "invalid request: missing field `cwd`",
+                )
+                .await;
+            }
             "workspace.create" => {
-                if self.empty_id_error_on_create {
-                    reply_error(
-                        &mut write_half,
-                        &json!(""),
-                        "invalid_request",
-                        "invalid request: missing field `cwd`",
-                    )
-                    .await;
-                } else {
-                    reply(
-                        &mut write_half,
-                        &id,
-                        json!({ "type": "workspace_created", "workspace": { "workspace_id": "w1" } }),
-                    )
-                    .await;
-                }
+                reply(
+                    &mut write_half,
+                    &id,
+                    json!({ "type": "workspace_created", "workspace": { "workspace_id": "w1" } }),
+                )
+                .await
             }
             "agent.start" => {
                 reply(
@@ -121,39 +144,80 @@ impl FakeHerdr {
                     &id,
                     json!({
                         "type": "agent_started",
-                        "agent": { "pane_id": "w1:p1", "terminal_id": "t1", "agent_status": "unknown" },
+                        "agent": { "pane_id": PANE, "terminal_id": "t1", "agent_status": "idle" },
                     }),
                 )
                 .await
             }
-            "agent.send" | "pane.send_keys" | "pane.close" => {
+
+            // The CLI ignores input until it is ready; once ready, typed text
+            // lands in the input box without being submitted.
+            "agent.send" => {
+                {
+                    let mut cli = self.cli.lock().unwrap();
+                    cli.sends += 1;
+                    if cli.sends > self.deaf_sends {
+                        cli.input = params["text"].as_str().unwrap_or_default().to_string();
+                    }
+                }
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
-            "pane.get" => match &self.pane_get {
-                PaneGet::Status(status) => {
-                    reply(
-                        &mut write_half,
-                        &id,
-                        json!({ "type": "pane_info", "pane": { "pane_id": "w1:p1", "agent_status": status } }),
-                    )
-                    .await
+            // Enter submits whatever is in the box — once the CLI is listening.
+            // On an empty box it is a no-op, exactly like the real TUI.
+            "pane.send_keys" => {
+                let enter = params["keys"]
+                    .as_array()
+                    .is_some_and(|keys| keys.iter().any(|k| k == "enter"));
+                if enter {
+                    let mut cli = self.cli.lock().unwrap();
+                    cli.enters += 1;
+                    if cli.enters > self.deaf_enters && !cli.input.is_empty() {
+                        cli.status = "working".to_string();
+                    }
+                    drop(cli);
                 }
-                PaneGet::NotFound => {
-                    reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
+                reply(&mut write_half, &id, json!({ "type": "ok" })).await
+            }
+            "pane.close" => reply(&mut write_half, &id, json!({ "type": "ok" })).await,
+
+            "pane.get" if self.pane_gone => {
+                reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
+            }
+            "pane.get" => {
+                let status = {
+                    let mut cli = self.cli.lock().unwrap();
+                    cli.pane_gets += 1;
+                    cli.status.clone()
+                };
+                let mut pane = json!({
+                    "pane_id": PANE,
+                    "cwd": "/wt/agent-1",
+                    "agent_status": status,
+                });
+                if let Some(session) = &self.agent_session {
+                    pane["agent_session"] = session.clone();
                 }
-            },
+                reply(
+                    &mut write_half,
+                    &id,
+                    json!({ "type": "pane_info", "pane": pane }),
+                )
+                .await
+            }
             "pane.read" => {
-                let text = match req["params"]["source"].as_str() {
-                    Some("visible") => self.read_visible,
-                    _ => self.read_recent,
+                let text = match params["source"].as_str() {
+                    // The input box is on the visible screen.
+                    Some("visible") => self.cli.lock().unwrap().input.clone(),
+                    _ => self.detection.to_string(),
                 };
                 reply(
                     &mut write_half,
                     &id,
-                    json!({ "type": "pane_read", "read": { "pane_id": "w1:p1", "text": text } }),
+                    json!({ "type": "pane_read", "read": { "pane_id": PANE, "text": text } }),
                 )
                 .await
             }
+
             "events.subscribe" => {
                 reply(
                     &mut write_half,
@@ -161,8 +225,23 @@ impl FakeHerdr {
                     json!({ "type": "subscription_started" }),
                 )
                 .await;
-                for ev in &self.events_on_subscribe {
-                    write_line(&mut write_half, ev).await;
+                let events = self.events_on_subscribe.lock().unwrap().clone();
+                if !events.is_empty() {
+                    // Let the subscriber seed its state from the pane first;
+                    // pushing everything before it looked would compress the
+                    // whole run into "already finished".
+                    let seeded_at = { self.cli.lock().unwrap().pane_gets };
+                    while { self.cli.lock().unwrap().pane_gets } == seeded_at {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }
+                for ev in events {
+                    // An event herdr pushes also moves the pane's own status,
+                    // which the plugin re-reads to confirm a completion.
+                    if let Some(status) = ev["data"]["agent_status"].as_str() {
+                        self.cli.lock().unwrap().status = status.to_string();
+                    }
+                    write_line(&mut write_half, &ev).await;
                 }
                 // Keep the subscription connection open like the real herdr;
                 // it closes when the test (and its transport) is dropped.
@@ -176,11 +255,13 @@ impl FakeHerdr {
     }
 }
 
-/// An envelope event as herdr 0.7.x pushes them.
+/// An envelope event as herdr 0.7.x pushes them. NB the kind is **dotted** here
+/// while [`exited_event`]'s is underscored — herdr really is inconsistent, and
+/// matching only one form silently drops every status change (#124).
 fn status_event(pane_id: &str, status: &str) -> Value {
     json!({
-        "event": "pane_agent_status_changed",
-        "data": { "pane_id": pane_id, "workspace_id": "w1", "agent_status": status },
+        "event": "pane.agent_status_changed",
+        "data": { "pane_id": pane_id, "workspace_id": "w1", "agent": "claude", "agent_status": status },
     })
 }
 
@@ -256,7 +337,7 @@ impl Driver {
     /// timeout so a missing notification fails fast instead of hanging. The
     /// timeout absorbs the stream's idle-confirmation delay.
     async fn recv(&mut self) -> Option<Value> {
-        let line = tokio::time::timeout(Duration::from_secs(10), self.out.recv())
+        let line = tokio::time::timeout(Duration::from_secs(15), self.out.recv())
             .await
             .expect("timed out waiting for plugin output")?;
         Some(serde_json::from_str(&line).expect("valid JSON line"))
@@ -272,106 +353,188 @@ impl Driver {
         )
         .await
     }
+
+    async fn dispatch(&mut self, id: &str, title: &str, mode: &str) -> Value {
+        self.call(
+            "task/dispatch",
+            json!({
+                "task": { "id": id, "source": "slack", "title": title,
+                          "body": "Answer in the thread.\n\nContext:\n- multi-line, like every Slack task body" },
+                "worktree_path": "/wt/agent-1",
+                "mode": mode
+            }),
+        )
+        .await
+    }
+}
+
+/// The `detection` view herdr renders: chrome-free, `⏺` per agent turn.
+const DETECTION: &str = "\n ▐▛███▜▌   Claude Code\n\n\
+     ❯ Draft the reply\n\n\
+     ⏺ Read(README.md)\n  ⎿ read 40 lines\n\n\
+     ⏺ zsh is managed via GNU Stow.\n  Edit the repo, not the symlink.\n\n\
+     ✻ Cooked for 4s\n";
+
+#[tokio::test]
+async fn dispatch_types_and_submits_the_prompt_through_the_startup_race() {
+    // The CLI ignores the first send and the first two Enters — the real
+    // startup race that left panes idle forever with the prompt unsent (#124).
+    let fake = FakeHerdr {
+        deaf_sends: 1,
+        deaf_enters: 2,
+        ..FakeHerdr::default()
+    };
+    let cli = fake.cli.clone();
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "plan").await;
+
+    assert!(disp["error"].is_null(), "dispatch must recover: {disp}");
+    assert_eq!(disp["result"]["session_id"], "w1:p1|");
+    {
+        let cli = cli.lock().unwrap();
+        assert_eq!(cli.status, "working", "the agent must actually be started");
+        assert!(
+            cli.input.contains("Draft the reply") && cli.input.contains("multi-line"),
+            "the whole multi-line prompt is typed in, not passed as argv"
+        );
+        assert!(
+            cli.sends >= 2 && cli.enters >= 3,
+            "retries must have happened"
+        );
+    }
+    // The prompt is never in argv: a multi-line argv prompt is never submitted.
+    let log = requests.lock().unwrap();
+    let start = log
+        .iter()
+        .find(|r| r["method"] == "agent.start")
+        .expect("an agent.start request");
+    let argv: Vec<&str> = start["params"]["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(argv, vec!["claude", "--permission-mode", "plan"]);
 }
 
 #[tokio::test]
-async fn dispatch_then_state_stream_to_done() {
-    // herdr pushes: a replayed event for ANOTHER pane (must be filtered), then
-    // working → blocked → working → idle. The plugin maps these to running →
-    // waiting_input(question) → running, and finalizes the confirmed idle as
-    // done carrying the final pane output.
-    let (socket, requests) = FakeHerdr {
-        events_on_subscribe: vec![
-            exited_event("w9:p9"), // replayed history for another pane
-            status_event("w1:p1", "working"),
-            status_event("w1:p1", "blocked"),
-            status_event("w1:p1", "working"),
-            status_event("w1:p1", "idle"),
-        ],
-        pane_get: PaneGet::Status("idle"), // the idle re-check confirms
-        read_visible: "working on it...\n\nShould I proceed with the migration? (y/n)",
-        read_recent: "Here is the drafted reply:\nzsh is managed via GNU Stow.",
+async fn dispatch_fails_loudly_when_the_agent_never_starts() {
+    // A CLI that never listens must surface an error, not a session id whose
+    // state stream would hang forever.
+    let (socket, _) = FakeHerdr {
+        deaf_enters: usize::MAX,
         ..FakeHerdr::default()
     }
     .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T2", "Never starts", "plan").await;
+    assert!(
+        disp["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("never started"),
+        "expected a loud failure: {disp}"
+    );
+}
+
+#[tokio::test]
+async fn state_stream_maps_transitions_and_carries_the_answer() {
+    let fake = FakeHerdr {
+        detection: DETECTION,
+        ..FakeHerdr::default()
+    };
+    *fake.events_on_subscribe.lock().unwrap() = vec![
+        exited_event("w9:p9"), // replayed history for another pane: ignored
+        status_event(PANE, "blocked"),
+        status_event(PANE, "working"),
+        status_event(PANE, "idle"), // completion for a `done`-less agent
+    ];
+    let (socket, _) = fake.spawn();
 
     let mut d = Driver::new();
     let init = d.init(&socket).await;
     assert_eq!(init["result"]["capabilities"]["state_stream"], true);
     assert_eq!(init["result"]["capabilities"]["plan_mode"], true);
 
-    // dispatch → session id encodes the pane handle.
-    let disp = d
-        .call(
-            "task/dispatch",
-            json!({
-                "task": { "id": "T1", "source": "slack", "title": "Draft the reply" },
-                "worktree_path": "/wt/agent-1",
-                "mode": "plan"
-            }),
-        )
-        .await;
+    let disp = d.dispatch("T3", "Draft the reply", "plan").await;
     let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
-    assert_eq!(session_id, "w1:p1|");
-
-    // The dispatch went through workspace.create + agent.start with the prompt
-    // riding in argv (plan mode adds the permission-mode flag).
-    {
-        let log = requests.lock().unwrap();
-        let create = log
-            .iter()
-            .find(|r| r["method"] == "workspace.create")
-            .expect("a workspace.create request");
-        assert_eq!(create["params"]["cwd"], "/wt/agent-1");
-        let start = log
-            .iter()
-            .find(|r| r["method"] == "agent.start")
-            .expect("an agent.start request");
-        assert_eq!(start["params"]["workspace_id"], "w1");
-        let argv: Vec<&str> = start["params"]["argv"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        assert_eq!(argv[0], "claude");
-        assert!(
-            argv.contains(&"--permission-mode") && argv.contains(&"plan"),
-            "plan mode must add the permission flag: {argv:?}"
-        );
-        assert!(
-            argv.last().unwrap().contains("Draft the reply"),
-            "the prompt rides in the trailing argv element: {argv:?}"
-        );
-    }
-
-    // subscribe → ACK, then the mapped notification stream.
     let ack = d
         .call("state/subscribe", json!({ "session_id": session_id }))
         .await;
     assert!(ack["error"].is_null(), "subscribe failed: {ack}");
 
-    let notes = collect_notes(&mut d, 4).await;
+    let notes = collect_notes(&mut d, 3).await;
     let states: Vec<&str> = notes
         .iter()
         .map(|n| n["params"]["state"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        states,
-        vec!["running", "waiting_input", "running", "done"],
-        "working/blocked/working/idle maps to the normalized transitions"
+    assert_eq!(states, vec!["waiting_input", "running", "done"]);
+    // F-35: the question is carried best-effort from the visible screen.
+    assert!(
+        notes[0]["params"]["log_chunk"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("multi-line"),
+        "waiting_input must carry the screen question: {}",
+        notes[0]
     );
-    // F-35: the blocked question is carried best-effort from the visible text.
+    // #124: `done` carries the answer — with no transcript reachable, the
+    // detection view is the fallback, and tool turns are not the answer.
     assert_eq!(
-        notes[1]["params"]["log_chunk"], "Should I proceed with the migration? (y/n)",
-        "waiting_input must carry the extracted question"
+        notes[2]["params"]["log_chunk"],
+        "zsh is managed via GNU Stow.\nEdit the repo, not the symlink.",
     );
-    // #124: the terminal done carries the final pane output — the only channel
-    // the reply text reaches the Orchestrator's `output = source` artifact.
+}
+
+#[tokio::test]
+async fn state_stream_reports_done_when_the_answer_landed_before_subscribing() {
+    // A fast agent finishes between dispatch and state/subscribe; seeding from
+    // the pane keeps that from hanging the stream forever.
+    let fake = FakeHerdr {
+        detection: DETECTION,
+        ..FakeHerdr::default()
+    };
+    let cli = fake.cli.clone();
+    let (socket, _) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T4", "Fast answer", "plan").await;
+    let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
+    cli.lock().unwrap().status = "done".to_string(); // finished, no events left to push
+
+    d.call("state/subscribe", json!({ "session_id": session_id }))
+        .await;
+    let note = d.recv().await.expect("a notification");
+    assert_eq!(note["params"]["state"], "done");
     assert_eq!(
-        notes[3]["params"]["log_chunk"], "Here is the drafted reply:\nzsh is managed via GNU Stow.",
-        "done must carry the final output"
+        note["params"]["log_chunk"],
+        "zsh is managed via GNU Stow.\nEdit the repo, not the symlink."
     );
+}
+
+#[tokio::test]
+async fn state_stream_reports_failed_on_exit_before_completion() {
+    // herdr 0.7.x pane_exited carries no exit code: an exit that arrives before
+    // a completion is the `failed` source.
+    let fake = FakeHerdr::default();
+    *fake.events_on_subscribe.lock().unwrap() = vec![exited_event(PANE)];
+    let (socket, _) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T5", "Failing task", "implement").await;
+    let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
+    d.call("state/subscribe", json!({ "session_id": session_id }))
+        .await;
+
+    let failed = d.recv().await.expect("failed notification");
+    assert_eq!(failed["params"]["state"], "failed");
 }
 
 /// Collect `n` state/notification lines from the stream.
@@ -386,45 +549,10 @@ async fn collect_notes(d: &mut Driver, n: usize) -> Vec<Value> {
 }
 
 #[tokio::test]
-async fn state_stream_reports_failed_on_exit_before_completion() {
-    // herdr 0.7.x pane_exited carries no exit code: an exit that arrives
-    // before a confirmed completion is the `failed` source.
-    let (socket, _) = FakeHerdr {
-        events_on_subscribe: vec![status_event("w1:p1", "working"), exited_event("w1:p1")],
-        pane_get: PaneGet::Status("working"),
-        ..FakeHerdr::default()
-    }
-    .spawn();
-
-    let mut d = Driver::new();
-    d.init(&socket).await;
-    let disp = d
-        .call(
-            "task/dispatch",
-            json!({
-                "task": { "id": "T2", "source": "notion", "title": "Failing task" },
-                "worktree_path": "/wt/agent-2",
-                "mode": "implement"
-            }),
-        )
-        .await;
-    let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
-    d.call("state/subscribe", json!({ "session_id": session_id }))
-        .await;
-
-    let running = d.recv().await.expect("running notification");
-    assert_eq!(running["params"]["state"], "running");
-    let failed = d.recv().await.expect("failed notification");
-    assert_eq!(failed["params"]["state"], "failed");
-}
-
-#[tokio::test]
 async fn attach_reports_live_pane_state() {
-    let (socket, _) = FakeHerdr {
-        pane_get: PaneGet::Status("working"),
-        ..FakeHerdr::default()
-    }
-    .spawn();
+    let fake = FakeHerdr::default();
+    fake.cli.lock().unwrap().status = "working".to_string();
+    let (socket, _) = fake.spawn();
 
     let mut d = Driver::new();
     d.init(&socket).await;
@@ -438,7 +566,7 @@ async fn attach_reports_live_pane_state() {
 #[tokio::test]
 async fn attach_reports_not_attached_when_pane_gone() {
     let (socket, _) = FakeHerdr {
-        pane_get: PaneGet::NotFound,
+        pane_gone: true,
         ..FakeHerdr::default()
     }
     .spawn();
@@ -457,6 +585,25 @@ async fn attach_reports_not_attached_when_pane_gone() {
 }
 
 #[tokio::test]
+async fn dispatch_carries_the_agent_session_for_resume_and_transcripts() {
+    let (socket, _) = FakeHerdr {
+        agent_session: Some(
+            json!({ "source": "herdr:claude", "agent": "claude", "kind": "id", "value": "sess-42" }),
+        ),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T6", "Draft the reply", "plan").await;
+    assert_eq!(
+        disp["result"]["session_id"], "w1:p1|sess-42",
+        "the agent's own session id rides in the handle (resume + transcript lookup)"
+    );
+}
+
+#[tokio::test]
 async fn empty_id_error_is_surfaced_to_the_caller() {
     // herdr answers decode failures with `id: ""`; with one request per
     // connection the error still correlates to the in-flight call instead of
@@ -469,15 +616,7 @@ async fn empty_id_error_is_surfaced_to_the_caller() {
 
     let mut d = Driver::new();
     d.init(&socket).await;
-    let resp = d
-        .call(
-            "task/dispatch",
-            json!({
-                "task": { "id": "T3", "source": "slack", "title": "t" },
-                "worktree_path": "/wt", "mode": "plan"
-            }),
-        )
-        .await;
+    let resp = d.dispatch("T7", "t", "plan").await;
     let message = resp["error"]["message"].as_str().unwrap_or_default();
     assert!(
         message.contains("invalid_request") || message.contains("missing field"),
@@ -543,5 +682,34 @@ async fn methods_before_initialize_are_rejected() {
             .as_str()
             .unwrap()
             .contains("initialize")
+    );
+}
+
+#[tokio::test]
+async fn a_closed_subscription_only_fails_its_own_panes() {
+    // The transport's event broadcast is shared by every subscription in the
+    // process, so a close notice that skipped the pane filter would fail
+    // healthy concurrent tasks (#124 review).
+    use agent_ide_herdr::transport::SUBSCRIPTION_CLOSED_EVENT;
+
+    let closed = json!({
+        "event": SUBSCRIPTION_CLOSED_EVENT,
+        "data": { "pane_id": "w1:p9" },   // a *sibling* task's pane
+    });
+    let fake = FakeHerdr::default();
+    *fake.events_on_subscribe.lock().unwrap() = vec![closed, status_event(PANE, "done")];
+    let (socket, _) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T8", "Unaffected task", "plan").await;
+    let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
+    d.call("state/subscribe", json!({ "session_id": session_id }))
+        .await;
+
+    let note = d.recv().await.expect("a notification");
+    assert_eq!(
+        note["params"]["state"], "done",
+        "another pane's close notice must not fail this task: {note}"
     );
 }

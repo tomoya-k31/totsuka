@@ -1,20 +1,27 @@
 //! The herdr adapter logic (F-30〜F-38): translate the Orchestrator's
 //! agent_ide calls into herdr Socket API method calls and event streams.
 //!
-//! Protocol facts this adapter is written against (herdr 0.7.4, #124, mirrored
-//! in `docs/references/herdr-socket-api.md`):
+//! Protocol facts this adapter is written against (herdr 0.7.4, verified live
+//! against real Claude Code in #124, mirrored in
+//! `docs/references/herdr-socket-api.md`):
 //! - the agent CLI is launched with `agent.start {name, argv, cwd, workspace_id}`
-//!   (`workspace.create` has no command params); the task prompt travels in
-//!   `argv` so no separate send/Enter round-trip can race the CLI's startup
-//! - events arrive as `{event: "pane_agent_status_changed"|"pane_exited",
-//!   data: {...}}` envelopes; `pane_exited` carries **no exit code**
-//! - screen-manifest agents (Claude Code) never report `done`, so a
-//!   `working → idle` transition is the completion signal — confirmed with a
-//!   short re-check before it is finalized (`IDLE_CONFIRM_DELAY`)
-//! - the agent's final output is not pushed anywhere; it is read from the
-//!   still-open pane with `pane.read` and attached to the terminal `done`
-//!   notification as its `log_chunk` (the Orchestrator accumulates log chunks
-//!   into the `output = source` publish artifact)
+//!   (`workspace.create` has no command params)
+//! - the prompt **cannot** ride in `argv`: a multi-line prompt passed that way
+//!   is never submitted, and every task body here is multi-line. It is typed in
+//!   with `agent.send` and submitted with Enter — both confirmed, never
+//!   fire-and-forget, because the CLI accepts keystrokes before it acts on them
+//!   (see [`HerdrAgent::submit_prompt`])
+//! - events arrive as `{event, data}` envelopes whose kind separator is
+//!   inconsistent (`pane.agent_status_changed` but `pane_exited`), so kinds are
+//!   compared normalized; `pane_exited` carries **no exit code**
+//! - completion is reported as either `done` or a `working → idle` transition
+//!   (which one depends on how herdr detects the agent), so both are honored —
+//!   the idle path is debounced against screen-manifest flicker
+//! - the pane is **not** a usable answer artifact (`pane.read` returns a copy of
+//!   the screen: no scrollback, TUI chrome, long replies lose their head), so
+//!   the terminal `done` notification carries the answer read from the agent's
+//!   own transcript ([`crate::transcript`]), falling back to the screen only
+//!   when no transcript is available
 
 use std::time::Duration;
 
@@ -27,7 +34,8 @@ use tokio::sync::mpsc;
 
 use crate::config::HerdrConfig;
 use crate::error::HerdrError;
-use crate::state::{SessionHandle, extract_question, map_agent_status};
+use crate::state::{SessionHandle, extract_answer, extract_question, map_agent_status, squash_ws};
+use crate::transcript::{self, AgentSession};
 use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT};
 
 /// How long a `working → idle` transition must hold before it is finalized as
@@ -35,12 +43,26 @@ use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT};
 /// this delay filters transient idles (#124).
 const IDLE_CONFIRM_DELAY: Duration = Duration::from_secs(2);
 
-/// How many trailing lines of pane output the terminal `done` notification
-/// carries (the `output = source` publish artifact).
-const FINAL_OUTPUT_LINES: u64 = 400;
+/// How many screen lines are read when extracting text from a pane.
+const SCREEN_LINES: u64 = 200;
 
-/// How many visible lines are scanned for a blocked agent's question (F-35).
-const QUESTION_LINES: u64 = 60;
+/// How many times the prompt is typed in before giving up, and how long each
+/// attempt waits for it to appear on screen.
+const SEND_ATTEMPTS: usize = 5;
+const SEND_RENDER_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How many times Enter is pressed before giving up, and how long each press is
+/// given to start the agent.
+const ENTER_ATTEMPTS: usize = 10;
+const ENTER_SETTLE: Duration = Duration::from_millis(1200);
+
+/// How long a screen check waits between polls.
+const POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// How much of the prompt's tail identifies it on screen. The input box scrolls
+/// with the cursor, so a long prompt shows its **end** — matching the head
+/// would fail exactly when the prompt is long.
+const PROMPT_MARKER_CHARS: usize = 24;
 
 /// The herdr agent_ide adapter, generic over its [`HerdrTransport`].
 pub struct HerdrAgent<T> {
@@ -55,9 +77,13 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     }
 
     /// Dispatch a task (F-31/F-37): create a herdr workspace on the worktree,
-    /// start the agent CLI in it (plan mode when asked, F-36) with the task
-    /// prompt as the trailing argv element, and return a
-    /// `(pane_id, agent_session_id)` re-attach handle as the session id.
+    /// start the agent CLI in it (plan mode when asked, F-36), submit the task
+    /// prompt, and return a `(pane_id, agent_session_id)` re-attach handle as
+    /// the session id.
+    ///
+    /// Returns only once the agent has actually started working, so a caller
+    /// that subscribes afterwards can trust the pane's status (see
+    /// [`start_state_stream`](Self::start_state_stream)).
     pub async fn dispatch(
         &self,
         params: TaskDispatchParams,
@@ -72,7 +98,10 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .client
             .call(
                 "workspace.create",
-                json!({ "cwd": params.worktree_path, "label": format!("totsuka {}", params.task.id) }),
+                json!({
+                    "cwd": params.worktree_path,
+                    "label": format!("totsuka {}", params.task.id),
+                }),
             )
             .await?;
         let workspace_id = created
@@ -83,12 +112,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 HerdrError::InvalidResponse("workspace.create returned no workspace_id".into())
             })?;
 
-        // The prompt rides in argv (`claude … "<prompt>"`): `agent.send` writes
-        // literal text without submitting it, and racing a send against the
-        // CLI's startup is exactly the kind of flake argv avoids.
-        let mut argv = vec![program];
-        argv.extend(args);
-        argv.push(compose_prompt(&params));
+        let argv: Vec<String> = std::iter::once(program).chain(args).collect();
         let started = self
             .client
             .call(
@@ -108,19 +132,86 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .and_then(Value::as_str)
             .ok_or_else(|| HerdrError::InvalidResponse("agent.start returned no pane_id".into()))?
             .to_string();
-        // The agent's native session id (for `claude --resume`) is reported by
-        // the integration hook after startup; empty until detected (resume
-        // then degrades).
-        let agent_session_id = agent
-            .get("agent_session")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+
+        self.submit_prompt(&pane_id, &compose_prompt(&params))
+            .await?;
+
+        // The agent's own session id (for `claude --resume`, and for finding its
+        // transcript) is reported by its herdr integration hook during startup;
+        // by now it is normally there, and an empty one only degrades resume.
+        let agent_session_id = pane_record(&self.client, &pane_id)
+            .await
+            .ok()
+            .and_then(|pane| AgentSession::from_pane(&pane))
+            .map(|session| session.value)
+            .unwrap_or_default();
 
         let handle = SessionHandle::new(pane_id, agent_session_id);
         Ok(TaskDispatchResult {
             session_id: handle.encode(),
         })
+    }
+
+    /// Type `prompt` into the agent's TUI and submit it, confirming both steps.
+    ///
+    /// Neither write can be fire-and-forget (#124): the CLI renders its input
+    /// box before it accepts input, and accepts input before it acts on Enter,
+    /// so text sent too early is dropped and an early Enter is swallowed —
+    /// leaving a pane that sits idle forever with the prompt unsent. Instead the
+    /// text is re-sent until it shows up on screen, and Enter is re-pressed
+    /// until the agent actually starts. Both retries are safe: `agent.send`
+    /// replaces nothing (the guard re-checks the screen first) and Enter on an
+    /// empty input box is a no-op.
+    async fn submit_prompt(&self, pane_id: &str, prompt: &str) -> Result<(), HerdrError> {
+        let marker = prompt_marker(prompt);
+
+        let mut typed = false;
+        for _ in 0..SEND_ATTEMPTS {
+            if self.screen_contains(pane_id, &marker).await {
+                typed = true;
+                break;
+            }
+            self.client
+                .call("agent.send", json!({ "target": pane_id, "text": prompt }))
+                .await?;
+            if self
+                .wait_for(SEND_RENDER_TIMEOUT, || {
+                    self.screen_contains(pane_id, &marker)
+                })
+                .await
+            {
+                typed = true;
+                break;
+            }
+            tracing::warn!(
+                pane_id,
+                "the prompt did not reach the agent's input box; retrying"
+            );
+        }
+        if !typed {
+            return Err(HerdrError::InvalidResponse(format!(
+                "the agent CLI never showed the prompt in pane {pane_id} → it may not have started"
+            )));
+        }
+
+        for _ in 0..ENTER_ATTEMPTS {
+            if agent_started(&pane_status(&self.client, pane_id).await?) {
+                return Ok(());
+            }
+            self.client
+                .call(
+                    "pane.send_keys",
+                    json!({ "pane_id": pane_id, "keys": ["enter"] }),
+                )
+                .await?;
+            tokio::time::sleep(ENTER_SETTLE).await;
+        }
+        if agent_started(&pane_status(&self.client, pane_id).await?) {
+            return Ok(());
+        }
+        Err(HerdrError::InvalidResponse(format!(
+            "the agent in pane {pane_id} never started after the prompt was submitted"
+        )))
     }
 
     /// Re-attach to a dispatched session (F-37): confirm the pane is alive with
@@ -194,7 +285,32 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let (tx, rx) = mpsc::unbounded_channel();
 
         tokio::spawn(async move {
-            let mut previous = AgentState::Idle;
+            // Seed from the pane's status now: `dispatch` returns only once the
+            // agent started, so whatever it reports here is real progress —
+            // including an answer that already finished, whose transition would
+            // otherwise have been missed between dispatch and this subscribe.
+            let mut previous = match pane_status(&client, &pane_id).await {
+                Ok(status) => map_agent_status(&status, AgentState::Running),
+                Err(_) => AgentState::Running,
+            };
+            if matches!(previous, AgentState::Done | AgentState::Idle) {
+                let log_chunk = fetch_answer(&client, &pane_id).await;
+                let _ = tx.send(StateNotification {
+                    session_id: session_id.clone(),
+                    state: AgentState::Done,
+                    log_chunk,
+                });
+                return;
+            }
+            if previous == AgentState::WaitingInput {
+                let log_chunk = fetch_question(&client, &pane_id).await;
+                let _ = tx.send(StateNotification {
+                    session_id: session_id.clone(),
+                    state: AgentState::WaitingInput,
+                    log_chunk,
+                });
+            }
+
             loop {
                 let candidate = match events.recv().await {
                     Ok(event) => match classify_event(&event, &pane_id, previous) {
@@ -214,14 +330,14 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                     // The transport closed: end the stream.
                     Err(_) => break,
                 };
-                // A `working → idle` transition is the completion signal for
-                // agents that never report `done` (Claude Code); confirm it
-                // still holds after a short delay to filter screen-manifest
-                // flicker, then finalize as `done`.
+                // Agents that herdr watches by screen manifest report no `done`;
+                // for them a `working → idle` transition is the completion
+                // signal. Confirm it still holds after a short delay so screen
+                // flicker cannot fake a completion.
                 let state = if previous == AgentState::Running && candidate == AgentState::Idle {
                     tokio::time::sleep(IDLE_CONFIRM_DELAY).await;
                     match pane_status(&client, &pane_id).await {
-                        Ok(status) if status == "idle" => AgentState::Done,
+                        Ok(status) if status == "idle" || status == "done" => AgentState::Done,
                         Ok(status) => map_agent_status(&status, previous),
                         // The pane vanished between idle and the re-check: the
                         // agent ended without a confirmed completion.
@@ -242,11 +358,10 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 let log_chunk = match state {
                     // On a block, best-effort attach the question (F-35).
                     AgentState::WaitingInput => fetch_question(&client, &pane_id).await,
-                    // On completion, carry the agent's final output — the pane
-                    // is still open (idle-confirmed completion), and this is
-                    // the only channel the answer reaches the Orchestrator's
-                    // `output = source` artifact through.
-                    AgentState::Done => fetch_final_output(&client, &pane_id).await,
+                    // On completion, carry the agent's answer — this is the only
+                    // channel it reaches the Orchestrator's `output = source`
+                    // artifact through.
+                    AgentState::Done => fetch_answer(&client, &pane_id).await,
                     _ => None,
                 };
                 let terminal = matches!(state, AgentState::Done | AgentState::Failed);
@@ -268,15 +383,45 @@ impl<T: HerdrTransport> HerdrAgent<T> {
 
         Ok(rx)
     }
+
+    /// Whether the pane's screen currently shows `marker` (whitespace-insensitive).
+    async fn screen_contains(&self, pane_id: &str, marker: &str) -> bool {
+        match read_pane_text(&self.client, pane_id, "visible", SCREEN_LINES).await {
+            Some(text) => squash_ws(&text).contains(marker),
+            None => false,
+        }
+    }
+
+    /// Poll `check` until it holds or `timeout` elapses.
+    async fn wait_for<F, Fut>(&self, timeout: Duration, check: F) -> bool
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if check().await {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    }
 }
 
-/// The pane's current `agent_status` (from the `pane.get` record, which nests
-/// the pane under `result.pane`).
-async fn pane_status<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<String, HerdrError> {
+/// The pane record (`pane.get` nests it under `result.pane`).
+async fn pane_record<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<Value, HerdrError> {
     let result = client
         .call("pane.get", json!({ "pane_id": pane_id }))
         .await?;
-    let pane = result.get("pane").unwrap_or(&result);
+    Ok(result.get("pane").cloned().unwrap_or(result))
+}
+
+/// The pane's current `agent_status`.
+async fn pane_status<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<String, HerdrError> {
+    let pane = pane_record(client, pane_id).await?;
     Ok(pane
         .get("agent_status")
         .and_then(Value::as_str)
@@ -284,10 +429,14 @@ async fn pane_status<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<Str
         .to_string())
 }
 
-/// Re-derive the current state after a dropped-event lag or a closed
-/// subscription: read the pane's status, or treat a vanished pane as a terminal
-/// `failed`. `None` means the state is currently unknowable (transient error)
-/// — hold and retry.
+/// Whether a herdr `agent_status` means the agent acted on the prompt.
+fn agent_started(status: &str) -> bool {
+    matches!(status, "working" | "blocked" | "done")
+}
+
+/// Re-derive the current state after a dropped-event lag: read the pane's
+/// status, or treat a vanished pane as a terminal `failed`. `None` means the
+/// state is currently unknowable (transient error) — hold and retry.
 async fn resync_state<T: HerdrTransport>(
     client: &T,
     pane_id: &str,
@@ -304,47 +453,66 @@ async fn resync_state<T: HerdrTransport>(
 /// The state a single herdr event envelope implies, or `None` if it is for
 /// another pane or carries no state signal we map.
 ///
-/// Events arrive as `{event: "<kind>", data: {pane_id, …}}` with
-/// underscore kinds; a subscription that herdr replays on connect can include
-/// other panes' history, so the pane filter here is load-bearing.
+/// Events arrive as `{event: "<kind>", data: {pane_id, …}}`. Every envelope —
+/// herdr's own and the transport's synthetic close — is filtered by pane first:
+/// one broadcast carries every subscription in the process, and herdr replays
+/// other panes' history on connect, so an unfiltered event would fail a healthy
+/// task.
 fn classify_event(event: &Value, pane_id: &str, previous: AgentState) -> Option<AgentState> {
     let kind = event.get("event").and_then(Value::as_str)?;
-    if kind == SUBSCRIPTION_CLOSED_EVENT {
-        // The subscription connection died; deliver a failure rather than
-        // hang a stream that will never see another event. (The pane may
-        // still be alive — recovery re-attaches, F-37.)
-        return Some(AgentState::Failed);
-    }
     let data = event.get("data")?;
     if data.get("pane_id").and_then(Value::as_str) != Some(pane_id) {
         return None;
     }
-    match kind {
+    // herdr is inconsistent about the separator in event kinds
+    // (`pane.agent_status_changed` but `pane_exited`), so compare normalized.
+    match kind.replace('.', "_").as_str() {
         "pane_agent_status_changed" => {
             let status = data.get("agent_status").and_then(Value::as_str)?;
             Some(map_agent_status(status, previous))
         }
-        // herdr 0.7.x carries no exit code; completion is signalled by the
-        // idle-confirm path *before* any exit, so an exit that arrives first
-        // means the agent ended without completing.
+        // herdr 0.7.x carries no exit code; completion is signalled by status
+        // *before* any exit, so an exit that arrives first means the agent
+        // ended without completing.
         "pane_exited" => Some(AgentState::Failed),
+        // The subscription connection died; deliver a failure rather than hang
+        // a stream that will never see another event. (The pane may still be
+        // alive — recovery re-attaches, F-37.)
+        SUBSCRIPTION_CLOSED_EVENT => Some(AgentState::Failed),
         _ => None,
     }
 }
 
-/// Best-effort question text for a blocked agent (F-35), from the visible
-/// pane content (herdr has no scrollback field; `pane.read` is the reader).
+/// Best-effort question text for a blocked agent (F-35), from the visible pane
+/// content (herdr has no scrollback field; `pane.read` is the reader).
 async fn fetch_question<T: HerdrTransport>(client: &T, pane_id: &str) -> Option<String> {
-    let text = read_pane_text(client, pane_id, "visible", QUESTION_LINES).await?;
+    let text = read_pane_text(client, pane_id, "visible", SCREEN_LINES).await?;
     extract_question(&text)
 }
 
-/// The agent's final output for the terminal `done` notification, read from
-/// the still-open pane.
-async fn fetch_final_output<T: HerdrTransport>(client: &T, pane_id: &str) -> Option<String> {
-    let text = read_pane_text(client, pane_id, "recent", FINAL_OUTPUT_LINES).await?;
-    let text = text.trim();
-    (!text.is_empty()).then(|| text.to_string())
+/// The agent's final answer for the terminal `done` notification.
+///
+/// Prefers the agent's own transcript — exact and complete. The screen is only
+/// a fallback (`detection` is herdr's chrome-free conversation view, but it is
+/// still screen-sized, so a long answer loses its head): better a truncated
+/// draft the operator can see and fix than none at all.
+async fn fetch_answer<T: HerdrTransport>(client: &T, pane_id: &str) -> Option<String> {
+    if let Ok(pane) = pane_record(client, pane_id).await
+        && let Some(session) = AgentSession::from_pane(&pane)
+        && let Some(reader) = transcript::for_agent(&session.agent)
+    {
+        let cwd = pane.get("cwd").and_then(Value::as_str).unwrap_or_default();
+        if let Some(answer) = reader.last_answer(&session, std::path::Path::new(cwd)) {
+            return Some(answer);
+        }
+        tracing::warn!(
+            pane_id,
+            agent = %session.agent,
+            "no transcript answer; falling back to the screen (the draft may be truncated)"
+        );
+    }
+    let text = read_pane_text(client, pane_id, "detection", SCREEN_LINES).await?;
+    extract_answer(&text)
 }
 
 /// `pane.read` helper: `result.read.text`, ANSI-stripped.
@@ -373,6 +541,20 @@ async fn read_pane_text<T: HerdrTransport>(
         .map(str::to_string)
 }
 
+/// The whitespace-squashed tail of `prompt`, used to recognize it on screen.
+/// Squashed because the input box wraps long lines (and CJK wraps mid-word), so
+/// the raw text is never on one line.
+fn prompt_marker(prompt: &str) -> String {
+    let squashed = squash_ws(prompt);
+    let start = squashed
+        .char_indices()
+        .rev()
+        .nth(PROMPT_MARKER_CHARS - 1)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    squashed[start..].to_string()
+}
+
 /// Compose the agent prompt from the task (title + body + any extra context).
 fn compose_prompt(params: &TaskDispatchParams) -> String {
     let mut prompt = params.task.title.clone();
@@ -393,5 +575,41 @@ fn ignore_missing(result: Result<Value, HerdrError>) -> Result<(), HerdrError> {
         Ok(_) => Ok(()),
         Err(e) if e.is_missing() => Ok(()),
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_started_covers_every_active_status() {
+        assert!(agent_started("working"));
+        assert!(agent_started("blocked"));
+        // Fast answers can be `done` before the first status poll.
+        assert!(agent_started("done"));
+        // Not yet acting on the prompt: Enter must be pressed (again).
+        assert!(!agent_started("idle"));
+        assert!(!agent_started("unknown"));
+    }
+
+    #[test]
+    fn prompt_marker_is_the_squashed_tail() {
+        // The tail identifies the prompt: the input box scrolls to the cursor,
+        // so a long prompt's head is off-screen.
+        let marker = prompt_marker("Reply to this\n\nthread context …\nlast line of the prompt");
+        assert!(marker.len() <= "lastlineoftheprompt".len() + 8);
+        assert!(marker.ends_with("lastlineoftheprompt"));
+        assert!(!marker.contains(' '));
+
+        // A prompt shorter than the marker window is used whole.
+        assert_eq!(prompt_marker("hi there"), "hithere");
+    }
+
+    #[test]
+    fn prompt_marker_handles_multibyte_tails() {
+        // Slicing must land on a char boundary, not mid-codepoint.
+        let marker = prompt_marker("質問です\n\nzsh の設定はどこにありますか？教えてください。");
+        assert!(marker.ends_with("教えてください。"));
     }
 }

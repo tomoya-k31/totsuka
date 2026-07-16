@@ -36,9 +36,11 @@ use crate::error::HerdrError;
 /// drop the oldest events (state is re-derived via `pane.get` on lag).
 const EVENT_BUFFER: usize = 256;
 
-/// Synthetic event broadcast when the `events.subscribe` connection closes, so
-/// state streams can resync instead of waiting forever for events that will
-/// never arrive.
+/// Synthetic event broadcast when an `events.subscribe` connection closes, so
+/// the state streams behind it can resync instead of waiting forever for events
+/// that will never arrive. It is emitted once **per subscribed pane**, shaped
+/// like a herdr envelope (`{event, data: {pane_id}}`), because the broadcast is
+/// shared: only the panes on the dead connection may act on it.
 pub const SUBSCRIPTION_CLOSED_EVENT: &str = "__herdr_subscription_closed";
 
 /// A herdr Socket API client.
@@ -153,6 +155,10 @@ impl HerdrTransport for SocketTransport {
 
     async fn subscribe_events(&self, subscriptions: Value) -> Result<(), HerdrError> {
         let id = self.next_id();
+        // Remembered for the close notice: only these panes are affected when
+        // this connection dies, and the broadcast is shared with every other
+        // subscription in the process.
+        let panes = subscribed_panes(&subscriptions);
         let request = json!({
             "id": id,
             "method": "events.subscribe",
@@ -196,10 +202,16 @@ impl HerdrTransport for SocketTransport {
                         tracing::warn!(error = %e, "skipping an unreadable event line from herdr");
                         continue;
                     }
-                    // EOF: herdr closed the subscription. Tell consumers so
-                    // they can resync rather than wait forever.
+                    // EOF: herdr closed the subscription. Tell this
+                    // connection's panes so they resync rather than wait
+                    // forever — and only them.
                     Ok(None) => {
-                        let _ = events.send(json!({ "event": SUBSCRIPTION_CLOSED_EVENT }));
+                        for pane_id in &panes {
+                            let _ = events.send(json!({
+                                "event": SUBSCRIPTION_CLOSED_EVENT,
+                                "data": { "pane_id": pane_id },
+                            }));
+                        }
                         break;
                     }
                 }
@@ -227,6 +239,23 @@ async fn write_line(
         .flush()
         .await
         .map_err(|e| HerdrError::Io(e.to_string()))
+}
+
+/// The distinct `pane_id`s an `events.subscribe` payload asks about.
+fn subscribed_panes(subscriptions: &Value) -> Vec<String> {
+    let mut panes: Vec<String> = subscriptions
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.get("pane_id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    panes.sort();
+    panes.dedup();
+    panes
 }
 
 /// Turn a raw response into the `result` payload or a typed error.

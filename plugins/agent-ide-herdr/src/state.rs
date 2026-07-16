@@ -1,9 +1,10 @@
-//! State mapping and the dispatch session handle (F-32/F-37).
+//! State mapping, the dispatch session handle (F-32/F-37), and the screen-text
+//! helpers the adapter needs.
 //!
 //! herdr's `agent_status` and pane-exit signals are normalized to totsuka's
 //! [`AgentState`]; the `(pane_id, agent_session_id)` re-attach handle (F-37) is
 //! encoded into the single protocol `session_id` string; and a `blocked`
-//! agent's question is best-effort extracted from pane scrollback (F-35).
+//! agent's question is best-effort extracted from the pane's screen (F-35).
 
 use plugin_protocol::methods::AgentState;
 
@@ -11,10 +12,10 @@ use plugin_protocol::methods::AgentState;
 ///
 /// `unknown` has no totsuka equivalent, so the previous state is retained
 /// (a degraded hold rather than a spurious transition). herdr has no `failed`
-/// status — that is derived from a `pane_exited` before completion — and
-/// screen-manifest agents (Claude Code) never report `done`, so completion is
-/// inferred from a confirmed `working → idle` transition in the state stream
-/// (see `agent::start_state_stream`, #124).
+/// status — that is derived from a `pane_exited` before completion. A run can
+/// end on either `done` or a `working → idle` transition, so completion is also
+/// inferred from a confirmed idle in the state stream (see
+/// `agent::start_state_stream`, #124).
 pub fn map_agent_status(status: &str, previous: AgentState) -> AgentState {
     match status {
         "idle" => AgentState::Idle,
@@ -90,6 +91,47 @@ pub fn extract_question(scrollback: &str) -> Option<String> {
     (!question.is_empty()).then_some(question)
 }
 
+/// `s` with every whitespace run removed.
+///
+/// Screen text is wrapped to the pane width — mid-word for CJK — so a phrase
+/// the plugin wrote is never on one line as written. Comparing both sides
+/// squashed makes "is my text on screen?" independent of where it wrapped.
+pub fn squash_ws(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// The agent's last answer as scraped from herdr's `detection` view — the
+/// **fallback** when the agent's transcript is unavailable ([`crate::transcript`]
+/// is the real source).
+///
+/// The view renders the conversation without TUI chrome: the operator's prompt
+/// on a `❯` line, each agent turn on a `⏺` line with continuation lines
+/// indented. The last `⏺` block is therefore the answer. It is still only the
+/// screen, so a long answer is missing its head (#124) — the caller warns.
+pub fn extract_answer(detection: &str) -> Option<String> {
+    const TURN: char = '⏺';
+    let lines: Vec<&str> = detection.lines().collect();
+    let start = lines
+        .iter()
+        .rposition(|l| l.trim_start().starts_with(TURN))?;
+
+    let mut answer = vec![lines[start].trim_start().trim_start_matches(TURN).trim()];
+    // Continuation lines are indented; the block ends at the next unindented
+    // line (the next turn, a `❯` prompt, or herdr's footer).
+    for line in &lines[start + 1..] {
+        if line.trim().is_empty() {
+            answer.push("");
+            continue;
+        }
+        if !line.starts_with(' ') {
+            break;
+        }
+        answer.push(line.trim());
+    }
+    let answer = answer.join("\n").trim().to_string();
+    (!answer.is_empty()).then_some(answer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +164,33 @@ mod tests {
         // An empty agent session still round-trips.
         let bare = SessionHandle::new("w1:p1", "");
         assert_eq!(SessionHandle::decode(&bare.encode()), bare);
+    }
+
+    #[test]
+    fn squash_ws_makes_wrapped_screen_text_comparable() {
+        // How the input box renders a prompt the plugin sent as one line.
+        let on_screen = "❯ zsh の設定はどこ\n  にありますか？";
+        assert!(squash_ws(on_screen).contains(&squash_ws("zsh の設定はどこにありますか？")));
+    }
+
+    #[test]
+    fn extracts_the_last_turn_from_the_detection_view() {
+        let detection = "\n ▐▛███▜▌   Claude Code v2.1.211\n\n\
+             ❯ zsh 設定の管理方法を教えてください\n\n\
+             ⏺ Read(README.md)\n  ⎿ read 40 lines\n\n\
+             ⏺ zsh の設定は GNU Stow で\n  管理されています。\n\n\
+             ✻ Cooked for 4s\n";
+        assert_eq!(
+            extract_answer(detection).as_deref(),
+            Some("zsh の設定は GNU Stow で\n管理されています。"),
+            "the last turn is the answer; earlier tool turns are not"
+        );
+    }
+
+    #[test]
+    fn detection_without_a_turn_yields_nothing() {
+        assert_eq!(extract_answer(""), None);
+        assert_eq!(extract_answer("❯ a question with no answer yet\n"), None);
     }
 
     #[test]

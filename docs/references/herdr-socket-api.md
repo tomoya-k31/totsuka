@@ -56,25 +56,36 @@ herdr が管理プロセスへ注入する環境変数: `HERDR_SOCKET_PATH` / `H
 | `workspace.create` | `{cwd, label?, env?, focus?}`（**`command`/`args` は無い** — 旧記載は誤り） | `{type:"workspace_created", workspace:{workspace_id, number, label, ...}, tab:{tab_id, ...}}`。初期 pane（シェル）1 枚付き |
 | `agent.start` | `{name, argv, cwd?, workspace_id?, tab_id?, split?, env?, focus?}`（`name`/`argv` 必須）。**エージェント CLI の起動はこれ** | `{type:"agent_started", agent:{pane_id, terminal_id, workspace_id, tab_id, agent_status, cwd, ...}, argv}` |
 | `agent.send` | `{target, text}`。target は terminal id / agent 名 / pane id。**literal text の書き込みのみで Enter は押されない** — 送信確定には `pane.send_keys` で `enter` を送る | ok（不在 target は `agent_not_found`） |
+
+## プロンプト投入の実機作法（重要・#124 で実測）
+
+**`argv` 末尾にプロンプトを渡す方式は使えない**。`claude … "<単一行>"` は動くが、**改行を含むプロンプトは投入されない**（入力欄は空のまま `idle` 固定 → 状態変化ゼロ → 状態ストリームが永久に無通知）。totsuka のタスク本文は常に複数行なので、実運用では必ずこれを踏む。
+
+正しい手順は `agent.start`（プロンプトなし）→ `agent.send` → `pane.send_keys {keys:["enter"]}`。ただし **CLI は「入力を受け取れる状態」と「入力に反応できる状態」がずれている**ため、どちらの書き込みも撃ちっぱなしにはできない:
+
+- 早すぎる `agent.send` は**テキストが失われる**。早すぎる `enter` は**飲み込まれる**（実測で 3 回押して初めて送信された試行あり）
+- `❯` の描画（〜1.2s）も `agent_session` の報告（hook の SessionStart、〜1.2s）も **「入力受付可能」を意味しない**
+- したがって **①テキスト着弾を画面で確認して未着弾なら再送 ②`agent_status ∈ {working, blocked, done}` になるまで `enter` を再押下**（空入力への enter は no-op なので冪等）、という自己修正が必須
+- 画面確認は **空白除去による正規化マッチ**で行う。入力欄は画面幅で折り返され CJK は語中で割れるため、素朴な substring は必ず偽陰性になる。またプロンプトが長いと入力欄はカーソル（＝末尾）側を表示するので、**照合はプロンプトの末尾**で行う
 | `pane.send_keys` | `{pane_id, keys}`。**`keys` は配列**（例 `["ctrl+c"]`、`["enter"]`） | ok |
 | `pane.get` | `{pane_id}` | `{type:"pane_info", pane:{pane_id, terminal_id, workspace_id, tab_id, focused, cwd, foreground_cwd, agent_status, revision, agent_session?, label?, ...}}`。**`scrollback` フィールドは無い**（旧記載は誤り）。不在は `pane_not_found` |
-| `pane.read` | `{pane_id, source, lines?, format?, strip_ansi?}`。`source` ∈ `visible` / `recent` / `recent-unwrapped` / `detection` | `{type:"pane_read", read:{pane_id, workspace_id, tab_id, source, format, text, revision, truncated}}`。**scrollback の代替はこれ**。`strip_ansi: true` で装飾除去（`agent.read {target, ...}` も同形） |
+| `pane.read` | `{pane_id, source, lines?, format?, strip_ansi?}`。`source` ∈ `visible` / `recent` / `recent-unwrapped` / `detection` | `{type:"pane_read", read:{pane_id, workspace_id, tab_id, source, format, text, revision, truncated}}`。`strip_ansi: true` で装飾除去（`agent.read {target, ...}` も同形）。**返るのは画面のコピーのみ**（下記） |
 | `pane.list` / `workspace.list` | `{}` | `{type:"pane_list", panes:[...]}` / `{type:"workspace_list", workspaces:[...]}` |
 | `pane.close` / `workspace.close` | `{pane_id}` / `{workspace_id}` | `{type:"ok"}` |
 | `pane.report_agent_session` | `{pane_id, source, agent, seq, agent_session_id, agent_session_path?}`（公式統合 hook が使用） | ok |
 
 # agent_status と totsuka 正規化状態の対応
 
-herdr の `agent_status` 語彙は **`idle` / `working` / `blocked` / `unknown`**（`agent.wait --status` の受理値）。
-公式ドキュメントは `done` にも言及するが、**screen manifest 検出のエージェント（Claude Code 等）では `done` は発火しない**
-（完了を報告する native 経路が無い）。totsuka 側の正規化（[spec F-32](/product/orchestrator-spec.ja.md)）は以下。
+`agent_status` 語彙は **`idle` / `working` / `blocked` / `done` / `unknown`**（`api schema` の `AgentStatus` enum）。
+**Claude Code でも `done` は発火する**（実測: `working → done`）が、**同じ条件で `working → idle` 終端になる試行もある**ため、
+どちらか一方に賭けてはならない。totsuka 側の正規化（[spec F-32](/product/orchestrator-spec.ja.md)）は以下。
 
 | herdr `agent_status` | totsuka 正規化 | 備考 |
 |---|---|---|
 | `working` | `running` | |
 | `blocked` | `waiting_input` | 人間の入力待ち。質問検知（F-35）は `pane.read`（`visible`）からの best-effort 抽出 |
-| `idle` | `idle`、ただし **`running` からの遷移は実質の完了シグナル** | Claude Code は `done` を報告しないため、`working → idle`（応答終了）を完了として扱うしかない（#124。誤検知緩和に再確認推奨） |
-| `done` | `done` | native 報告できる統合（Kimi/OMP 等）のみ |
+| `done` | `done` | Claude Code でも実測で発火（旧記載の「native 報告できる統合のみ」は誤り） |
+| `idle` | `idle`、ただし **`running` からの遷移は完了シグナル** | `done` が来ない試行があるため、`working → idle` も完了として扱う（#124）。screen manifest 由来のちらつき対策に再確認（デバウンス）推奨 |
 | `unknown` | 前値維持 / 縮退 | 直接対応する totsuka 状態は無い |
 | （native 状態なし） | `failed` | herdr に `failed` は**無い**。完了前の `pane_exited`（下記）等から導出する |
 
@@ -83,22 +94,50 @@ herdr の `agent_status` 語彙は **`idle` / `working` / `blocked` / `unknown`*
 `{"id":"sub_1","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed","pane_id":"w1:p1"}]}}`
 → ACK `{"id":"sub_1","result":{"type":"subscription_started"}}`。以降は**同一接続**へイベントが push され続ける（この接続だけは維持される）。
 
-**イベント配送形式（実測）**: 購読エントリの `type` はドット名だが、配送は
-`{"event":"pane_exited","data":{"pane_id":"w1:p1","workspace_id":"w1","type":"pane_exited", ...}}` という
-**`{event, data}` 封筒 + アンダースコア名**。旧記載のトップレベル `{"type":"pane.exited", ...}` 形ではない。
+**イベント配送形式（実測）**: 購読エントリの `type` はドット名。配送は `{event, data}` 封筒だが、
+**`event` の区切り文字は種別によって混在する**（herdr 側の不統一。片方だけに合わせると無言で取りこぼす）:
+
+```jsonc
+{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p1","workspace_id":"w1","agent":"claude","agent_status":"working"}}  // ドット
+{"event":"pane_exited","data":{"pane_id":"w1:p1","workspace_id":"w1","type":"pane_exited"}}                                      // アンダースコア
+```
+
+購読側は `.` を `_` に正規化してから比較すること（旧記載のトップレベル `{"type":"pane.exited", ...}` 形ではない）。
 
 購読可能な type（実機列挙）: `workspace.created|updated|renamed|closed|focused`, `worktree.created|opened|removed`,
 `tab.created|closed|focused|renamed`, `pane.created|closed|focused|moved|exited|agent_detected|output_matched|agent_status_changed`。
 
 注意点（実測）:
 - **`pane_exited` に `exit_code` は無い**（`data` は `pane_id` / `workspace_id` / `type` のみ）。終了の成否分類はできないため、
-  「完了（`working → idle`）前の exit = 異常」のように**状態履歴から導出**する。
+  「完了前の exit = 異常」のように**状態履歴から導出**する。
 - **購読直後に過去イベントの replay が届くことがある**（他 pane・購読前に終了した pane の `pane_exited` を観測）。
   購読側は必ず `data.pane_id` で自衛フィルタすること。
 - 存在しない pane の購読はエラー（`internal_error: failed to decode pane get error`、応答 `id` は `<id>:sub:<n>:probe` 形式）。
 
+## 【重要】エージェントの最終出力は pane からは回収できない
+
+`pane.read` は **source を問わず「画面のコピー」しか返さない**（スクロールバックは無い）。実測:
+
+| source | 実測 |
+|---|---|
+| `recent` / `visible` | **同一**。画面サイズ分のみ（実測 1063 chars）。長い回答は**先頭が欠落**し、TUI 装飾（`● high · /effort`、`current ●●●●●○○○○○ 58%`、罫線、`✻ Cooked for 4s`）が混入 |
+| `recent-unwrapped` | **常に空文字列** |
+| `detection` | 装飾なしの会話ビュー（`❯ プロンプト` + `⏺ 回答`、`⏺` はツール実行にも付く）。短い回答なら実用可能だが、**長い回答では切り捨て**（30 行超の回答で 3352 chars = 画面サイズ、プロンプトのエコーごと先頭が消失） |
+
+→ **完全な回答本文はエージェント自身の会話ログから取る**。`pane.get` / `agent.get` の `agent_session`
+（`{source, agent, kind:"id", value:"<session id>"}`、統合 hook が報告）でエージェント種別とセッションが分かるので、
+エージェントごとの読み取りにディスパッチする。Claude Code の場合:
+
+```
+agent_session.value = "bc624b3f-…" → ~/.claude/projects/<cwd をエンコード>/bc624b3f-….jsonl の最後の assistant テキスト
+（実測: transcript から 5330 chars / 63 行を欠落なく取得。同じ回答が detection では 3352 chars に切り捨てられていた）
+```
+
+cwd のエンコードは `/` と `.` を `-` に置換（`/w/repo/.worktrees/x` → `-w-repo--worktrees-x`）。
+規約変更に備え、session id（uuid）でのファイル探索をフォールバックに持つとよい。
+
 > **ログ断片（F-38）の限界**: イベントは**生 stdout 全文を運ばない**（状態変化・検出・output match が主）。
-> 実行ログ・最終出力は `pane.read`（`recent` 等）で別途取得するしかない。pane 終了後は読めないため、**取得は pane 生存中に行う**。
+> 途中経過のログが要る場合は pane 生存中に `pane.read` するしかなく、上記の画面サイズ制約を受ける。
 
 # 統合エージェント capability マトリクス
 
@@ -126,13 +165,15 @@ herdr の `agent_status` 語彙は **`idle` / `working` / `blocked` / `unknown`*
 
 agent-ide-herdr は v1 の参照実装だが、対象エージェント Claude Code には次の制約がある。
 
-- **状態の権威を持たない（Lifecycle Authority ✗）**: idle/working/blocked は herdr の **screen manifest 検出（画面スクレイピング）由来**。
-  native 報告（Kimi/Pi/OMP/OpenCode/Kilo/Hermes/MastraCode）より**信頼性が低く、`done` は発火しない**。
+- **状態の権威を持たない（Lifecycle Authority ✗）**: idle/working/blocked/done は herdr の **screen manifest 検出（画面スクレイピング）由来**。
+  native 報告（Kimi/Pi/OMP/OpenCode/Kilo/Hermes/MastraCode）より**信頼性が低い**（遅延・ちらつき・終端が `done` と `idle` で揺れる）。
 - **hook が報告するのは session identity のみ**（integration v7 実機確認済み）: `herdr integration install claude` が
   `hooks/herdr-agent-state.sh` を書き、`pane.report_agent_session`（session ID + transcript path）**だけ**を送る。
   lifecycle 状態は一切報告しない。SubagentStop は idle pane を復活させないため意図的に無視される。
-- **完了検知**: `done` が来ない + `pane_exited` に exit_code が無い + 対話モードの Claude は回答後も終了しない。
-  よって完了は **`working → idle` 遷移**で判定し、最終出力は pane 生存中に `pane.read` で回収する（#124 の設計）。
+- **完了検知**: 終端は `done` のことも `working → idle` のこともあるため**両方を完了として扱う**。`pane_exited` に exit_code が無く、
+  対話モードの Claude は回答後も終了しないため、exit は完了シグナルにならない（完了前の exit = 異常）。
+- **最終出力**: pane からは回収できない（上記）。`agent_session.value` の session id から
+  **transcript（`~/.claude/projects/…/<id>.jsonl`）の最後の assistant メッセージ**を読む。
 - **waiting_input（F-35）**: 「質問中」という構造化 native シグナルは無い。`blocked` 検知＋ `pane.read`（`visible`）からの
   **best-effort 抽出**になる。質問本文は画面抜粋であり、構造化フィールドではない。
 - **session/attach（F-37）は問題なし**: Session Identity ✓ / Resume ✓。hook が session ID を報告し（`pane.get` の
