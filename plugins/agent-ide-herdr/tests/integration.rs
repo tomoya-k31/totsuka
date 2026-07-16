@@ -745,3 +745,30 @@ async fn a_closed_subscription_only_fails_its_own_panes() {
         "another pane's close notice must not fail this task: {note}"
     );
 }
+
+#[tokio::test]
+async fn cancel_takes_down_the_whole_workspace() {
+    // `dispatch` gives every task its own workspace, so a cancel that closed
+    // only the pane would leave an empty one behind on every cancelled task.
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call("task/cancel", json!({ "session_id": "w1:p1|sess" }))
+        .await;
+    assert!(resp["error"].is_null(), "cancel failed: {resp}");
+
+    let log = requests.lock().unwrap();
+    let sent = |method: &str| log.iter().any(|r| r["method"] == method);
+    assert!(sent("pane.send_keys"), "the agent must be interrupted");
+    assert!(sent("pane.close"), "the pane must be closed");
+    let closed = log
+        .iter()
+        .find(|r| r["method"] == "workspace.close")
+        .expect("the task's workspace must be closed too");
+    assert_eq!(
+        closed["params"]["workspace_id"], "w1",
+        "the workspace is read off the pane id"
+    );
+}

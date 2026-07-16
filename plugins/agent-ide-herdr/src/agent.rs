@@ -306,9 +306,10 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         }
     }
 
-    /// Cancel a task: interrupt the agent (`ctrl+c`) then close its pane. The
-    /// interrupt is best-effort — even if it fails the pane is still closed —
-    /// and an already-gone pane is treated as success, so cancel is idempotent.
+    /// Cancel a task: interrupt the agent (`ctrl+c`), then take down the
+    /// workspace `dispatch` created for it. The interrupt is best-effort — even
+    /// if it fails the pane is still closed — and anything already gone counts
+    /// as success, so cancel is idempotent.
     pub async fn cancel(&self, session_id: &str) -> Result<(), HerdrError> {
         let handle = SessionHandle::decode(session_id);
         // Best-effort interrupt: a failure here must not prevent the close,
@@ -329,6 +330,15 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 .call("pane.close", json!({ "pane_id": handle.pane_id }))
                 .await,
         )?;
+        // `dispatch` gives every task its own workspace, so closing the pane
+        // alone would leave an empty one behind on every cancel.
+        if let Some(workspace_id) = workspace_of(&handle.pane_id) {
+            ignore_missing(
+                self.client
+                    .call("workspace.close", json!({ "workspace_id": workspace_id }))
+                    .await,
+            )?;
+        }
         Ok(())
     }
 
@@ -505,6 +515,13 @@ fn agent_started(status: &str) -> bool {
     matches!(status, "working" | "blocked" | "done")
 }
 
+/// The workspace a pane belongs to. herdr ids nest the workspace in the pane
+/// (`w1:p2` lives in `w1`), which is the only handle back to it — the protocol
+/// `session_id` carries the pane, not the workspace.
+fn workspace_of(pane_id: &str) -> Option<&str> {
+    pane_id.split_once(':').map(|(workspace, _)| workspace)
+}
+
 /// Re-derive the current state after a dropped-event lag: read the pane's
 /// status, or treat a vanished pane as a terminal `failed`. `None` means the
 /// state is currently unknowable (transient error) — hold and retry.
@@ -652,6 +669,15 @@ fn ignore_missing(result: Result<Value, HerdrError>) -> Result<(), HerdrError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_is_read_off_the_pane_id() {
+        assert_eq!(workspace_of("w1:p2"), Some("w1"));
+        assert_eq!(workspace_of("w1T:p10"), Some("w1T"));
+        // A hand-written session id without the herdr shape names no workspace
+        // (the pane still closes; only the workspace sweep is skipped).
+        assert_eq!(workspace_of("bare-pane"), None);
+    }
 
     #[test]
     fn agent_started_covers_every_active_status() {
