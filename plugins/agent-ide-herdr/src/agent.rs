@@ -204,6 +204,11 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// empty input box is a no-op.
     async fn submit_prompt(&self, pane_id: &str, prompt: &str) -> Result<(), HerdrError> {
         let marker = prompt_marker(prompt);
+        // Retrying past herdr errors is what absorbs a blip — but it also hides
+        // a socket that is simply down, so the last one is kept and reported
+        // with the failure. Without it the caller only learns "it never
+        // started", never that herdr was unreachable all along.
+        let mut last_error: Option<HerdrError> = None;
 
         let mut typed = false;
         for _ in 0..SEND_ATTEMPTS {
@@ -222,6 +227,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                     return Err(e);
                 }
                 tracing::warn!(pane_id, error = %e, "agent.send failed; retrying");
+                last_error = Some(e);
             }
             if self
                 .wait_for(SEND_RENDER_TIMEOUT, || {
@@ -238,14 +244,21 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             );
         }
         if !typed {
-            return Err(HerdrError::InvalidResponse(format!(
-                "the agent CLI never showed the prompt in pane {pane_id} → it may not have started"
-            )));
+            return Err(gave_up(
+                format!("the agent CLI never showed the prompt in pane {pane_id}"),
+                last_error,
+            ));
         }
 
-        for _ in 0..ENTER_ATTEMPTS {
-            if self.agent_is_running(pane_id).await? {
-                return Ok(());
+        for _ in 0..=ENTER_ATTEMPTS {
+            match self.agent_is_running(pane_id).await {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(e) if e.is_missing() => return Err(e),
+                Err(e) => {
+                    tracing::warn!(pane_id, error = %e, "could not read the pane's status; retrying");
+                    last_error = Some(e);
+                }
             }
             if let Err(e) = self
                 .client
@@ -259,30 +272,21 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                     return Err(e);
                 }
                 tracing::warn!(pane_id, error = %e, "Enter failed; retrying");
+                last_error = Some(e);
             }
             tokio::time::sleep(ENTER_SETTLE).await;
         }
-        if self.agent_is_running(pane_id).await? {
-            return Ok(());
-        }
-        Err(HerdrError::InvalidResponse(format!(
-            "the agent in pane {pane_id} never started after the prompt was submitted"
-        )))
+        Err(gave_up(
+            format!("the agent in pane {pane_id} never started after the prompt was submitted"),
+            last_error,
+        ))
     }
 
-    /// Whether the agent has acted on the prompt. A pane that vanished is a
-    /// real error; any other read failure is transient — report "not yet" so
-    /// the caller presses Enter again instead of abandoning a live agent over
-    /// one bad socket read.
+    /// Whether the agent has acted on the prompt.
     async fn agent_is_running(&self, pane_id: &str) -> Result<bool, HerdrError> {
-        match pane_status(&self.client, pane_id).await {
-            Ok(status) => Ok(agent_started(&status)),
-            Err(e) if e.is_missing() => Err(e),
-            Err(e) => {
-                tracing::warn!(pane_id, error = %e, "could not read the pane's status; retrying");
-                Ok(false)
-            }
-        }
+        pane_status(&self.client, pane_id)
+            .await
+            .map(|status| agent_started(&status))
     }
 
     /// Re-attach to a dispatched session (F-37): confirm the pane is alive with
@@ -520,6 +524,19 @@ fn agent_started(status: &str) -> bool {
 /// `session_id` carries the pane, not the workspace.
 fn workspace_of(pane_id: &str) -> Option<&str> {
     pane_id.split_once(':').map(|(workspace, _)| workspace)
+}
+
+/// The error for a step that exhausted its retries, carrying whatever herdr
+/// last complained about. The retries exist to ride out a blip, so the symptom
+/// alone ("it never started") is what a caller would otherwise see even when
+/// the real story is that the socket was down the whole time.
+fn gave_up(symptom: String, cause: Option<HerdrError>) -> HerdrError {
+    match cause {
+        Some(cause) => {
+            HerdrError::InvalidResponse(format!("{symptom} → last herdr error: {cause}"))
+        }
+        None => HerdrError::InvalidResponse(symptom),
+    }
 }
 
 /// Re-derive the current state after a dropped-event lag: read the pane's

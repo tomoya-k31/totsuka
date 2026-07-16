@@ -60,6 +60,9 @@ struct FakeHerdr {
     detection: &'static str,
     /// When set, `workspace.create` fails with an `id: ""` decode-style error.
     empty_id_error_on_create: bool,
+    /// When set, every call the prompt submission makes fails with this herdr
+    /// error code — a herdr that is down rather than momentarily busy.
+    submission_error: Option<&'static str>,
 }
 
 impl Default for FakeHerdr {
@@ -76,6 +79,7 @@ impl Default for FakeHerdr {
             agent_session: None,
             detection: "",
             empty_id_error_on_create: false,
+            submission_error: None,
         }
     }
 }
@@ -117,7 +121,19 @@ impl FakeHerdr {
         log.lock().unwrap().push(req.clone());
         let id = req["id"].clone();
         let params = &req["params"];
-        match req["method"].as_str().unwrap_or("") {
+        let method = req["method"].as_str().unwrap_or("");
+        // A herdr that is down fails every call the submission makes — the
+        // retries must not turn that into a symptom with no cause.
+        if let Some(code) = self.submission_error
+            && matches!(
+                method,
+                "agent.send" | "pane.send_keys" | "pane.get" | "pane.read"
+            )
+        {
+            reply_error(&mut write_half, &id, code, "herdr is not reachable").await;
+            return;
+        }
+        match method {
             "ping" => reply(&mut write_half, &id, json!({ "type": "pong" })).await,
 
             "workspace.create" if self.empty_id_error_on_create => {
@@ -770,5 +786,27 @@ async fn cancel_takes_down_the_whole_workspace() {
     assert_eq!(
         closed["params"]["workspace_id"], "w1",
         "the workspace is read off the pane id"
+    );
+}
+
+#[tokio::test]
+async fn a_failing_herdr_is_reported_with_its_cause() {
+    // The retries absorb a blip, but a herdr that is simply down would
+    // otherwise be reported as the symptom alone ("it never started"), with the
+    // real error only in the plugin's stderr — a diagnosability regression the
+    // pre-retry code did not have.
+    let (socket, _) = FakeHerdr {
+        submission_error: Some("internal_error"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T9", "Herdr is down", "plan").await;
+    let message = disp["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("internal_error") && message.contains("not reachable"),
+        "the failure must carry what herdr actually said: {message}"
     );
 }
