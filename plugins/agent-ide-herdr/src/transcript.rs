@@ -136,14 +136,21 @@ fn encode_cwd(cwd: &Path) -> String {
 
 /// The last non-empty assistant message in a Claude JSONL transcript.
 ///
-/// Not every `assistant` entry is the agent talking. The CLI logs its own
-/// errors as synthetic assistant turns — a rate limit becomes
-/// `{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit",
-/// content:[{"text":"You've hit your session limit · resets 4:10pm"}]}` — and
-/// the CLI then returns to idle, which is exactly the completion signal the
-/// state stream watches for. Published unfiltered, that error text would become
-/// the task's answer (a Slack reply reading "You've hit your session limit"),
-/// so synthetic turns are skipped: with no real answer the caller falls back to
+/// Not every `assistant` entry is the agent talking: the CLI logs its own
+/// errors as synthetic assistant turns. A rate limit is written as
+///
+/// ```jsonc
+/// {"type": "assistant", "isApiErrorMessage": true, "error": "rate_limit",
+///  "apiErrorStatus": 429,
+///  "message": {"model": "<synthetic>",
+///              "content": [{"type": "text",
+///                           "text": "You've hit your session limit · resets 4:10pm"}]}}
+/// ```
+///
+/// and the CLI then returns to idle — exactly the completion signal the state
+/// stream watches for. Published unfiltered, that error text would become the
+/// task's answer (a Slack reply reading "You've hit your session limit"), so
+/// synthetic turns are skipped: with no real answer the caller falls back to
 /// the screen rather than publishing the CLI's complaint.
 fn last_assistant_text(transcript: &str) -> Option<String> {
     transcript
