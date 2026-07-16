@@ -8,23 +8,26 @@
 //!   `task/cancel`, `session/attach`, `state/subscribe` → streamed
 //!   `state/notification`.
 //! - **herdr side** ([`transport`]): NDJSON over a Unix socket (**not** JSON-RPC),
-//!   dotted methods (`workspace.create`, `pane.send_text`, `agent.send`,
-//!   `events.subscribe`, `session.snapshot`, …) correlated by `id`.
+//!   dotted methods (`workspace.create`, `agent.start`, `agent.send`,
+//!   `pane.read`, `events.subscribe`, …), one request per connection.
 //!
 //! [`agent::HerdrAgent`] holds the mapping logic behind a
 //! [`transport::HerdrTransport`] seam so dispatch/attach/cancel/subscribe are
 //! testable against a fake herdr socket.
 //!
-//! # Claude Code caveat (F-32/F-35)
+//! # Screen-manifest agent caveats (F-32/F-35, #124)
 //!
-//! herdr's target agent Claude Code has **no lifecycle authority**: its
+//! herdr's default target Claude Code has **no lifecycle authority**: its
 //! idle/working/blocked/done come from herdr's screen-manifest scraping, and
-//! `waiting_input` questions are a best-effort scrollback extraction, not a
-//! structured signal. See [`docs/references/herdr-socket-api.md`].
+//! `waiting_input` questions are a best-effort screen extraction, not a
+//! structured signal. The screen is also unusable as the answer artifact
+//! (no scrollback, TUI chrome), so the agent's final output comes from its own
+//! transcript ([`transcript`]). See [`docs/references/herdr-socket-api.md`].
 
 pub mod agent;
 pub mod config;
 pub mod error;
 pub mod server;
 pub mod state;
+pub mod transcript;
 pub mod transport;
