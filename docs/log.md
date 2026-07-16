@@ -1,6 +1,8 @@
 # Bundle Update Log
 
 ## 2026-07-17
+* **Update**: [herdr Socket API ミラー](/references/herdr-socket-api.md) を herdr 0.7.4 (protocol 16) 実機仕様へ全面改訂（#124、実機一気通貫検収 #123 で乖離を検出）。①接続モデルは **1 接続 1 リクエスト**（応答後にサーバがクローズ、`events.subscribe` のみ持続）②エージェント起動は `agent.start {name, argv, cwd, workspace_id}`（`workspace.create` に command は無い）③イベントは `{event, data}` 封筒 + アンダースコア名で `pane_exited` に exit_code 無し④`invalid_request` のエラー応答は `id:""`⑤screen manifest エージェントは `done` を報告しない（claude 統合 hook v7 は session ID のみ報告）⑥scrollback は `pane.read {source, strip_ansi}` へ、を実測で確定。
+* **Update**: [agent-ide-herdr プラグイン](/components/agent-ide-herdr.md) を実機プロトコルへ全面適合（#124）。transport をリクエスト毎接続 + 購読専用持続接続に刷新、dispatch を `workspace.create`→`agent.start`（プロンプトは argv 末尾）へ、attach を `pane.get` 単独へ、完了検知を `working→idle` のデバウンス確定へ変更し、**終端 `done` の log_chunk に `pane.read` の最終出力を載せて `output=source` の publish 本文を供給**（旧実装は実機で dispatch 不能・完了検知不能・下書き空の三重欠陥だった）。fake herdr も実機同等の接続モデルへ更新し回帰を CI 担保。
 * **Update**: [Slack ユーザートークンの取り扱いポリシー](/security/slack-user-token.md) の付与スコープ一覧に `channels:read` / `groups:read` を追記（#125 の追随。トークンの影響半径を列挙する専用ドキュメントとスコープ実体の乖離を解消）。
 * **Update**: [Slack セットアップ Quickstart](/operations/slack-quickstart.md) のトラブルシューティングに「prefix ルールが効かず常に LLM/エフェメラル選択になる」行を追加（#125、実機検収 #123 で発見）。manifest の user scopes に `channels:read` / `groups:read` を追加（`conversations.info` によるチャンネル名解決に必須。無いと `[[channel_groups]]` prefix ルールが一度も成立しない）。
 

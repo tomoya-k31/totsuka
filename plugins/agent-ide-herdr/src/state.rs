@@ -11,7 +11,10 @@ use plugin_protocol::methods::AgentState;
 ///
 /// `unknown` has no totsuka equivalent, so the previous state is retained
 /// (a degraded hold rather than a spurious transition). herdr has no `failed`
-/// status — that is derived from a non-zero pane exit (see [`state_from_exit`]).
+/// status — that is derived from a `pane_exited` before completion — and
+/// screen-manifest agents (Claude Code) never report `done`, so completion is
+/// inferred from a confirmed `working → idle` transition in the state stream
+/// (see `agent::start_state_stream`, #124).
 pub fn map_agent_status(status: &str, previous: AgentState) -> AgentState {
     match status {
         "idle" => AgentState::Idle,
@@ -20,16 +23,6 @@ pub fn map_agent_status(status: &str, previous: AgentState) -> AgentState {
         "done" => AgentState::Done,
         // `unknown` (and any status herdr adds later) holds the last known state.
         _ => previous,
-    }
-}
-
-/// Derive a totsuka state from a `pane.exited` event (F-32): a clean exit is
-/// `done`, a non-zero exit is `failed` (herdr has no native `failed`).
-pub fn state_from_exit(exit_code: i64) -> AgentState {
-    if exit_code == 0 {
-        AgentState::Done
-    } else {
-        AgentState::Failed
     }
 }
 
@@ -72,10 +65,10 @@ impl SessionHandle {
     }
 }
 
-/// Best-effort extraction of a `blocked` agent's question from pane scrollback
-/// (F-35). Claude Code emits no structured "waiting for input" signal, so this
-/// takes the trailing prompt text: the lines after the last blank line, trimmed.
-/// Returns `None` when scrollback is empty.
+/// Best-effort extraction of a `blocked` agent's question from the pane's
+/// visible text (`pane.read`, F-35). Claude Code emits no structured "waiting
+/// for input" signal, so this takes the trailing prompt text: the lines after
+/// the last blank line, trimmed. Returns `None` when the text is empty.
 pub fn extract_question(scrollback: &str) -> Option<String> {
     let trimmed = scrollback.trim_end();
     if trimmed.is_empty() {
@@ -114,13 +107,6 @@ mod tests {
             map_agent_status("unknown", AgentState::Idle),
             AgentState::Idle
         );
-    }
-
-    #[test]
-    fn failed_comes_from_nonzero_exit_only() {
-        assert_eq!(state_from_exit(0), AgentState::Done);
-        assert_eq!(state_from_exit(1), AgentState::Failed);
-        assert_eq!(state_from_exit(130), AgentState::Failed);
     }
 
     #[test]

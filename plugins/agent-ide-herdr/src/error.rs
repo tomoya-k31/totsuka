@@ -43,8 +43,11 @@ impl HerdrError {
     pub fn is_missing(&self) -> bool {
         match self {
             HerdrError::NotFound(_) => true,
-            // herdr signals a vanished pane with a `not_found` code.
-            HerdrError::Protocol { code, .. } => code == "not_found",
+            // herdr scopes its not-found codes per target (`pane_not_found`,
+            // `agent_not_found`, …); older docs used a bare `not_found`.
+            HerdrError::Protocol { code, .. } => {
+                code == "not_found" || code.ends_with("_not_found")
+            }
             _ => false,
         }
     }
