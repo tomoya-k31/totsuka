@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-17
+* **Update**: [Slack ユーザートークンの取り扱いポリシー](/security/slack-user-token.md) の付与スコープ一覧に `channels:read` / `groups:read` を追記（#125 の追随。トークンの影響半径を列挙する専用ドキュメントとスコープ実体の乖離を解消）。
 * **Update**: [Slack セットアップ Quickstart](/operations/slack-quickstart.md) のトラブルシューティングに「prefix ルールが効かず常に LLM/エフェメラル選択になる」行を追加（#125、実機検収 #123 で発見）。manifest の user scopes に `channels:read` / `groups:read` を追加（`conversations.info` によるチャンネル名解決に必須。無いと `[[channel_groups]]` prefix ルールが一度も成立しない）。
 
 ## 2026-07-16

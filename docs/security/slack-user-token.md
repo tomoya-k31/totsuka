@@ -4,7 +4,7 @@ title: Slack ユーザートークンの取り扱いポリシー
 description: task-source-slack が使う User OAuth Token（xoxp）/ App-Level Token（xapp）の保管・権限・漏えい時の Revoke 手順・社用ワークスペースでの確認事項。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [security, slack, token, keychain, incident]
-timestamp: 2026-07-15T15:00:00Z
+timestamp: 2026-07-17T01:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -14,6 +14,7 @@ owner: tomoya-k31
 task-source-slack は Bot ユーザーを持たず、**User OAuth Token（`xoxp-`）で本人として** 動く。このトークンを持つ者は、付与スコープの範囲で **本人になりすませる**:
 
 - `channels:history` / `groups:history` — 本人が参加する公開/プライベートチャンネルの読み取り
+- `channels:read` / `groups:read` — チャンネルの一覧・メタ情報（名前）の読み取り。`[[channel_groups]]` の prefix ルール判定に必要（#125）
 - `users:read` — ワークスペースのユーザー情報読み取り
 - `chat:write` / `im:write` — **本人名義での投稿**・DM 開始
 
