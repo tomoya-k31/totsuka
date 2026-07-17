@@ -682,7 +682,11 @@ fn build_task(
         status: None,
         url: enriched.permalink.clone(),
         assignee: None,
-        thread_key: None,
+        // Conversation-continuation key (#140): every mention in the same
+        // Slack thread carries the same key, so the orchestrator can resume
+        // the prior task's Claude session. A top-level mention's key equals
+        // its task id (a new conversation).
+        thread_key: Some(mention.thread_key()),
     };
     let pending = PendingMention {
         channel: mention.channel.clone(),
@@ -762,6 +766,36 @@ mod tests {
             permalink: None,
             context_lines: Some(Vec::new()),
         }
+    }
+
+    fn slack_config() -> SlackConfig {
+        serde_json::from_value(json!({
+            "app_token": "xapp-1-A1-test",
+            "user_token": "xoxp-user-test",
+            "target_user_id": "U_ME",
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn build_task_sets_thread_key_for_an_in_thread_mention() {
+        // A reply inside a thread: the task carries the thread's key, distinct
+        // from its own (unique) task id, so a follow-up resumes the prior
+        // task's Claude session (#140).
+        let mut enriched = enriched("100.1");
+        enriched.mention.thread_ts = Some("100.0".into());
+        let (task, _pending) = build_task(&slack_config(), &enriched, None);
+        assert_eq!(task.thread_key.as_deref(), Some("C1:100.0"));
+        assert_eq!(task.id, "C1:100.1");
+    }
+
+    #[test]
+    fn build_task_sets_thread_key_for_a_top_level_mention() {
+        // A top-level mention starts a new conversation: thread_key == task id,
+        // but it is still always populated (never `None`).
+        let (task, _pending) = build_task(&slack_config(), &enriched("200.0"), None);
+        assert_eq!(task.thread_key.as_deref(), Some("C1:200.0"));
+        assert_eq!(task.thread_key.as_deref(), Some(task.id.as_str()));
     }
 
     #[test]

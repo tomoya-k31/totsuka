@@ -81,7 +81,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 `version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v2（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`）。
 
-会話継続（E-09）用ストア API: `find_by_thread_key(workflow, thread_key) -> Option<TaskRecord>` — 同一 workflow・同一 `thread_key` の最新（id 最大）先行タスクを返す（Slack 追いメンションの resume 元特定）。
+[会話継続](/glossary/conversation-continuity.md)（E-09）用ストア API: `find_by_thread_key(workflow, thread_key, exclude_id) -> Option<TaskRecord>` — 同一 workflow・同一 `thread_key` の最新（id 最大）先行タスクを返す（Slack 追いメンションの resume 元特定、#140）。`exclude_id` で dispatch 中の自タスクを除外する（追いメンション自身は既に ingest 済みで最新一致になるため、除外しないと「先行」が自分自身に解決してしまう。workflow 一致とあわせ別 workflow の同名スレッド誤紐付けも防ぐ）。
 
 # ステートマシン（F-71）
 

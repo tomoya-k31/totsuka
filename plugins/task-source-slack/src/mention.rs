@@ -49,6 +49,14 @@ impl Mention {
     pub fn reply_ts(&self) -> &str {
         self.thread_ts.as_deref().unwrap_or(&self.ts)
     }
+
+    /// The conversation-continuation key (`{channel}:{thread_ts}`), stable
+    /// across every mention in the same thread (#140). A top-level mention
+    /// uses its own `ts` (via [`reply_ts`](Self::reply_ts)) — it starts a new
+    /// conversation, so its key equals its [`task_id`](Self::task_id).
+    pub fn thread_key(&self) -> String {
+        format!("{}:{}", self.channel, self.reply_ts())
+    }
 }
 
 /// The stateful filter: knows the operator, the self-DM channel, and what has
@@ -173,6 +181,28 @@ mod tests {
         event.as_object_mut().unwrap().remove("thread_ts");
         let mention = filter().assess(&event).expect("a mention");
         assert_eq!(mention.reply_ts(), "100.1");
+    }
+
+    #[test]
+    fn thread_key_is_the_thread_root_for_an_in_thread_mention() {
+        // A reply inside a thread shares the thread's representative ts, so
+        // every follow-up in the thread yields the same conversation key
+        // while its task id stays unique (#140).
+        let mention = filter().assess(&mention_event()).expect("a mention");
+        assert_eq!(mention.thread_key(), "C1:100.0");
+        assert_eq!(mention.task_id(), "C1:100.1");
+        assert_ne!(mention.thread_key(), mention.task_id());
+    }
+
+    #[test]
+    fn thread_key_of_a_top_level_mention_equals_its_task_id() {
+        // A top-level mention starts a new conversation: its key is rooted at
+        // its own ts, so key == task id.
+        let mut event = mention_event();
+        event.as_object_mut().unwrap().remove("thread_ts");
+        let mention = filter().assess(&event).expect("a mention");
+        assert_eq!(mention.thread_key(), "C1:100.1");
+        assert_eq!(mention.thread_key(), mention.task_id());
     }
 
     #[test]
