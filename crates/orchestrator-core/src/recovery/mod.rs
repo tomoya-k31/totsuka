@@ -411,6 +411,8 @@ mod tests {
             title: "t".into(),
             url: None,
             source_payload: None,
+            thread_key: None,
+            last_signal_at: None,
         }
     }
 

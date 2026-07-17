@@ -722,6 +722,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     url: task.url.clone(),
                     // The full normalized task, so dispatch can reconstruct it.
                     source_payload: serde_json::to_value(&task).ok(),
+                    // Carry the source's conversation-continuation key (E-09).
+                    thread_key: task.thread_key.clone(),
+                    last_signal_at: None,
                 };
                 let id = self.db.upsert_task(&new_task)?;
                 if is_new {
@@ -1793,6 +1796,8 @@ plan_cleanup = { retention_days = 2 }
                 title: task.title.clone(),
                 url: task.url.clone(),
                 source_payload: serde_json::to_value(&task).ok(),
+                thread_key: task.thread_key.clone(),
+                last_signal_at: None,
             })
             .unwrap();
         let record = db.get_task(id).unwrap().unwrap();
