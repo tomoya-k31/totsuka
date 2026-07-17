@@ -562,6 +562,19 @@ impl StateDb {
         Ok(())
     }
 
+    /// Delete a session row by id. Used to roll back a
+    /// [`reserve_session`](Self::reserve_session) reservation when the
+    /// subsequent `task/dispatch` fails, so a failed dispatch leaves no
+    /// empty-id row for retry / recovery to trip over. A missing row is not an
+    /// error (the rollback is best-effort).
+    pub fn delete_session(&self, session_row_id: i64) -> Result<(), StateError> {
+        self.conn.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            params![session_row_id],
+        )?;
+        Ok(())
+    }
+
     /// The most recent session for a task — the re-attach target (F-37) — or
     /// `None` if the task was never dispatched.
     pub fn latest_session(&self, task_id: i64) -> Result<Option<SessionRecord>, StateError> {
@@ -1202,6 +1215,23 @@ mod tests {
             db.set_session_native_id(999, "x").unwrap_err(),
             StateError::NotFound(999)
         ));
+    }
+
+    #[test]
+    fn delete_session_rolls_back_a_reservation() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        let row = db.reserve_session(id, "herdr").unwrap();
+        assert!(db.latest_session(id).unwrap().is_some());
+
+        // A failed dispatch rolls the reservation back → no session row remains.
+        db.delete_session(row).unwrap();
+        assert!(
+            db.latest_session(id).unwrap().is_none(),
+            "the reserved row must be gone after rollback"
+        );
+        // Deleting a missing row is a no-op (best-effort rollback), not an error.
+        db.delete_session(row).unwrap();
     }
 
     #[test]

@@ -122,8 +122,11 @@ pub struct EngineSettings {
     pub pr_body_template: String,
     /// Claude Code hook runtime (#131/#138): receiver endpoint, auth token,
     /// spool dir, per-workflow `--settings` paths, and the escalation
-    /// threshold. `None` = no hook-capable agent this run (tests, non-hook
-    /// configs) — the hook receiver never starts and dispatch never sets a
+    /// threshold. A normal `totsuka run` always sets this (the CLI builds it
+    /// even when `[hooks]` is unset — a default socket path is used, so a config
+    /// with no hook-capable agent simply never receives a POST). `None` only for
+    /// `--dry-run` (read-only: no receiver, no dispatch) and hook-disabled
+    /// tests; when `None` the receiver never starts and dispatch never sets a
     /// [`HookLaunchSpec`](plugin_protocol::methods::HookLaunchSpec).
     pub hook: Option<HookRuntime>,
 }
@@ -1102,6 +1105,17 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         {
             Ok(result) => result,
             Err(e) => {
+                // Roll back the pre-dispatch session reservation (hook path) so
+                // a failed dispatch never leaves an empty-id row for retry /
+                // recovery to re-attach to.
+                if let Some(row) = reserved_row
+                    && let Err(err) = self.db.delete_session(row)
+                {
+                    tracing::warn!(
+                        task_id = record.id,
+                        "failed to roll back reserved session row: {err}"
+                    );
+                }
                 return self.fail_dispatch(&record, e.to_string()).await;
             }
         };

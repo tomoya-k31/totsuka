@@ -55,6 +55,8 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 
 冪等性はこの層では持たない。重複 POST（多重発火・スプール再送・curl 再送）はいずれも 200 を返し二重投入されるが、`hook_events` の UNIQUE 制約で DB 層が無害化する（D-05）。
 
+`job_id` の形式が正しくても指す `task_id` が DB に存在しない（未知/失効した）場合、受信は 200 を返すが Engine 側（`Engine::on_signal`）は **warn ログに残すだけで `hook_events` へは永続化しない**（`hook_events.task_id` は NOT NULL FK のため物理的に記録不能。これは意図的で、相関できないシグナルは状態を一切変えない E-09）。相関できたシグナルは、重複であっても生存の証跡として `last_signal_at`（R-10 タイムアウト起点）を先に更新してから冪等判定へ進む（中間 Stop=heartbeat が dedup で潰れてもタイムアウト誤判定しないため）。
+
 # Examples
 
 ```bash

@@ -13,6 +13,7 @@ use std::time::Duration;
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::OpenAiRouter;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
+use orchestrator_core::adapters::state_db::HookEventInsert;
 use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::signal::{
@@ -178,6 +179,17 @@ fn stop(
             transcript_path: Some("/t.jsonl".into()),
         },
         payload: json!({ "hook_event_name": "Stop" }),
+    }
+}
+
+fn heartbeat(task_id: i64, row: i64, prompt_id: &str) -> AgentSignal {
+    AgentSignal {
+        source: SignalSource::ClaudeHook,
+        job_id: JobId::new(task_id, row),
+        claude_session_id: "cc-1".into(),
+        prompt_id: prompt_id.into(),
+        event: SignalEvent::Heartbeat,
+        payload: json!({ "hook_event_name": "Stop", "background_tasks": [{ "id": "bg" }] }),
     }
 }
 
@@ -702,5 +714,205 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         hook["env"]["TOTSUKA_HOOK_SPOOL_DIR"],
         base.join("spool").display().to_string()
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// Review follow-up (#149).
+
+#[tokio::test]
+async fn duplicate_heartbeat_refreshes_liveness_and_prevents_false_escalation() {
+    // Regression: mid-turn Stops all collapse to a single `heartbeat`
+    // idempotency key with a re-used prompt_id, so the 2nd+ delivery is a
+    // Duplicate. The liveness anchor must still refresh, or the timeout sweep
+    // would falsely escalate a task that is very much alive.
+    let base = scratch("hook_hb_liveness");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    // Seed with an ancient anchor (well past the 30-minute default).
+    let id = db
+        .upsert_task(&new_task("1", Some("2000-01-01T00:00:00Z")))
+        .unwrap();
+    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    let row = db.record_session(id, "mock_agent", "sess-1").unwrap();
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    // Pre-seed the exact hook_event so the incoming heartbeat is a Duplicate.
+    engine
+        .db()
+        .record_hook_event(&HookEventInsert {
+            job_id: JobId::new(id, row).to_string(),
+            task_id: id,
+            claude_session_id: "cc-1".into(),
+            prompt_id: "hb".into(),
+            event: "heartbeat".into(),
+            status: None,
+            payload: "{}".into(),
+        })
+        .unwrap();
+
+    // The duplicate heartbeat must STILL refresh last_signal_at.
+    engine.on_signal(heartbeat(id, row, "hb")).await.unwrap();
+    let after = engine.db().get_task(id).unwrap().unwrap();
+    assert_ne!(
+        after.last_signal_at.as_deref(),
+        Some("2000-01-01T00:00:00Z"),
+        "duplicate heartbeat refreshed the timeout anchor"
+    );
+
+    // A task that just proved liveness must not be swept.
+    engine.sweep_signal_timeouts().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Running,
+        "live task must not be falsely escalated"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn failed_hook_dispatch_rolls_back_reserved_session() {
+    // A hook-capable agent that crashes mid-dispatch: the pre-dispatch session
+    // reservation must be rolled back so no empty-id row leaks for retry.
+    let base = scratch("hook_dispatch_fail");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({ "tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "resume_session": true, "crash_on_dispatch": true }),
+        )
+        .await,
+    );
+    plugins.notifiers.insert(
+        "mock_notify".to_string(),
+        launch(
+            "notifier",
+            "mock_notify",
+            json!({ "notify_log": notify_log }),
+        )
+        .await,
+    );
+
+    let hook = HookRuntime {
+        socket_path: base.join("claude.sock"),
+        auth_token: None,
+        spool_dir: None,
+        settings_paths: HashMap::from([("wf".to_string(), base.join("orchestrator-wf.json"))]),
+        block_retry_limit: 3,
+    };
+    let mut settings = engine_settings(workflows("llm", "none"), Some(hook));
+    settings.repos = vec![RepoSettings {
+        name: "clone".to_string(),
+        path: repo.clone(),
+        summary: None,
+        worktree_location: None,
+    }];
+
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine.cycle(None).await.unwrap();
+
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        task.state,
+        TaskState::Failed,
+        "the crashed dispatch fails the task"
+    );
+    assert!(
+        engine.db().latest_session(task.id).unwrap().is_none(),
+        "the reserved session row was rolled back (no empty-id leak)"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn spool_replay_quarantines_file_with_corrupt_line() {
+    // A file with a good line + a corrupt line: the good line is applied, but
+    // the file is quarantined (renamed) rather than deleted, so the corrupt
+    // data is preserved for inspection.
+    let base = scratch("hook_spool_corrupt");
+    let notify_log = base.join("notify.ndjson");
+    let spool_dir = base.join("spool");
+    std::fs::create_dir_all(&spool_dir).unwrap();
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let hook = HookRuntime {
+        socket_path: base.join("sock"),
+        auth_token: None,
+        spool_dir: Some(spool_dir.clone()),
+        settings_paths: HashMap::new(),
+        block_retry_limit: 3,
+    };
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), Some(hook)),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let good = format!(
+        r#"{{"job_id":"{}","hook_event_name":"Stop","status":"COMPLETED","last_assistant_message":"ok <<STATUS:COMPLETED>>","background_tasks":[]}}"#,
+        JobId::new(id, row)
+    );
+    let file = spool_dir.join("1700000000-1.jsonl");
+    std::fs::write(&file, format!("{good}\n{{not json\n")).unwrap();
+
+    engine.replay_spool().await.unwrap();
+
+    // The good line was applied.
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Done,
+        "the clean line is still processed"
+    );
+    // The file is quarantined, not deleted.
+    assert!(!file.exists(), "the original file is renamed away");
+    assert!(
+        spool_dir.join("1700000000-1.jsonl.corrupt").exists(),
+        "the corrupt file is quarantined for inspection"
+    );
+
+    engine.shutdown(GRACE).await;
     let _ = std::fs::remove_dir_all(&base);
 }

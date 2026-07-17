@@ -44,12 +44,23 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // Resolve job_id → task (E-09: never guessed from a session id). An
         // unknown task is accepted at the socket but parked here: no state
         // change, and the `hook_events` FK forbids logging against a task that
-        // does not exist, so a malformed/stale job_id can never corrupt state.
+        // does not exist. A signal that cannot be correlated is left only in the
+        // warn log and NEVER persisted to `hook_events` (its `task_id` is a
+        // NOT NULL FK, #134) — this is intentional, so a malformed/stale job_id
+        // can never corrupt state.
         let task_id = sig.job_id.task_id;
         let Some(record) = self.db.get_task(task_id)? else {
-            tracing::warn!(job_id = %sig.job_id, "hook signal for unknown task → ignored (E-09)");
+            tracing::warn!(job_id = %sig.job_id, "hook signal for unknown task → warn-logged only, not persisted (E-09)");
             return Ok(());
         };
+
+        // The task exists, so this signal proves liveness: bump the R-10 timeout
+        // anchor FIRST, before the dedup short-circuit. A duplicate delivery must
+        // still refresh the anchor — mid-turn Stops all collapse to a single
+        // `heartbeat` idempotency key and re-send the same prompt_id, so gating
+        // the touch behind `New` would let `sweep_signal_timeouts` falsely
+        // escalate a task that is very much alive.
+        self.db.touch_last_signal(task_id)?;
 
         // Idempotent record (D-05): a repeated delivery (multi-fire, spool
         // re-send, curl retry) is dropped before any state change.
@@ -64,12 +75,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             payload: serde_json::to_string(&sig.payload).unwrap_or_else(|_| "{}".to_string()),
         };
         if self.db.record_hook_event(&insert)? == HookEventOutcome::Duplicate {
-            tracing::debug!(job_id = %sig.job_id, event = event_str, "duplicate hook signal dropped (D-05)");
+            tracing::debug!(job_id = %sig.job_id, event = event_str, "duplicate hook signal dropped after refreshing liveness (D-05)");
             return Ok(());
         }
-
-        // Every accepted signal bumps the R-10 timeout anchor.
-        self.db.touch_last_signal(task_id)?;
 
         // The owning agent plugin (for slot resume / diagnostics). Empty when no
         // session was recorded yet — only used where a plugin is truly needed.
@@ -482,6 +490,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     continue;
                 }
             };
+            let mut had_parse_error = false;
             for line in content.lines() {
                 if line.trim().is_empty() {
                     continue;
@@ -489,11 +498,27 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 match hook_uds::parse_signal(line.as_bytes()) {
                     Ok(sig) => self.on_signal(sig).await?,
                     Err(e) => {
-                        tracing::debug!(file = %path.display(), "skipping unparseable spool line: {e}")
+                        had_parse_error = true;
+                        tracing::warn!(file = %path.display(), "unparseable spool line: {e}");
                     }
                 }
             }
-            if let Err(e) = std::fs::remove_file(&path) {
+            if had_parse_error {
+                // A partial write or a corrupt line must not cost the whole
+                // file: quarantine it (rename to `<name>.corrupt`, no longer a
+                // `*.jsonl`) for inspection instead of deleting. Only fully
+                // clean files are removed.
+                let quarantine = PathBuf::from(format!("{}.corrupt", path.display()));
+                if let Err(e) = std::fs::rename(&path, &quarantine) {
+                    tracing::warn!(file = %path.display(), "spool quarantine rename failed: {e} → left in place");
+                } else {
+                    tracing::warn!(
+                        file = %path.display(),
+                        quarantine = %quarantine.display(),
+                        "spool file had unparseable lines → quarantined instead of deleted"
+                    );
+                }
+            } else if let Err(e) = std::fs::remove_file(&path) {
                 tracing::warn!(file = %path.display(), "spool file delete failed: {e}");
             }
         }
