@@ -3,8 +3,8 @@ type: Component
 title: task-source-slack プラグイン
 description: 自分宛の Slack メンションをタスク化し本人名義で代理返信する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard（auth.test + apps.connections.open）・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決・下書き提示・承認フローに加え、manifest 雛形・CLI レベル E2E・運用ドキュメントまで完備（エピック #102 完了）。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
-tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard]
-timestamp: 2026-07-18T00:00:00Z
+tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard, thread-key, conversation-continuity]
+timestamp: 2026-07-18T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -61,4 +61,6 @@ manifest（`plugins/task-source-slack/plugin.toml`）と `initialize` 応答で 
 - [plugin-protocol](/components/plugin-protocol.md)
 - [task-source-github](/components/task-source-github.md)
 - [task-source-notion](/components/task-source-notion.md)
-- [Spec §4.2 タスクソース / F-01・F-07・F-51・F-59・F-64・F-65](/product/orchestrator-spec.ja.md)
+- [会話継続（conversation continuity）](/glossary/conversation-continuity.md)（`thread_key` の供給元。F-105）
+- [フックシグナルフロー](/architecture/hook-signal-flow.md)（メンション → dispatch → 完了 → 検収 → 返信の全体像）
+- [Spec §4.2 タスクソース / F-01・F-07・F-51・F-59・F-64・F-65・§4.11 F-105](/product/orchestrator-spec.ja.md)
