@@ -16,6 +16,11 @@ use serde::Serialize;
 use crate::common::{CliError, Cx, plugin_spec, secret_resolver};
 use crate::init_cmd::git_version;
 
+/// `serde` `skip_serializing_if` predicate: omit a `false` flag from the JSON.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// One diagnostic result. `action` follows the "cause + next action" rule (§7).
 ///
 /// Three severities: an `ok` check passes silently; a `warning` is advisory
@@ -26,7 +31,7 @@ struct Check {
     name: String,
     ok: bool,
     /// Advisory finding: reported with its action but does not fail `doctor`.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(skip_serializing_if = "is_false")]
     warning: bool,
     detail: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -407,10 +412,17 @@ fn check_hook_socket(
             ),
             "check the `totsuka run` logs for the hook receiver",
         )),
-        Err(e) => checks.push(Check::fail(
+        // A socket file that exists but refuses/drops the connection is almost
+        // always a stale socket from a prior `totsuka run` (the file lingers on
+        // Linux after the listener exits). Since `doctor` must pass when the
+        // orchestrator is *not* running, this is advisory, not a failure.
+        Err(e) => checks.push(Check::warn(
             "hook-socket",
-            format!("could not reach the receiver at {}: {e}", socket_path.display()),
-            "confirm `totsuka run` is healthy, or remove a stale socket file",
+            format!(
+                "socket {} exists but is not accepting connections: {e}",
+                socket_path.display()
+            ),
+            "the receiver is not running, or this is a stale socket — ignore if `totsuka run` is not active, else remove the stale socket file and restart",
         )),
     }
 }
