@@ -5,7 +5,9 @@
 //! against real Claude Code in #124, mirrored in
 //! `docs/references/herdr-socket-api.md`):
 //! - the agent CLI is launched with `agent.start {name, argv, cwd, workspace_id}`
-//!   (`workspace.create` has no command params)
+//!   (`workspace.create` has no command params). Both methods accept an optional
+//!   `env` map (herdr 0.7.1+), used to inject the Orchestrator's hook
+//!   environment (`TOTSUKA_JOB_ID`, …) when a [`HookLaunchSpec`] is supplied
 //! - the prompt **cannot** ride in `argv`: a multi-line prompt passed that way
 //!   is never submitted, and every task body here is multi-line. It is typed in
 //!   with `agent.send` and submitted with Enter — both confirmed, never
@@ -13,35 +15,33 @@
 //!   (see [`HerdrAgent::submit_prompt`])
 //! - events arrive as `{event, data}` envelopes whose kind separator is
 //!   inconsistent (`pane.agent_status_changed` but `pane_exited`), so kinds are
-//!   compared normalized; `pane_exited` carries **no exit code**
-//! - completion is reported as either `done` or a `working → idle` transition
-//!   (which one depends on how herdr detects the agent), so both are honored —
-//!   the idle path is debounced against screen-manifest flicker
-//! - the pane is **not** a usable answer artifact (`pane.read` returns a copy of
-//!   the screen: no scrollback, TUI chrome, long replies lose their head), so
-//!   the terminal `done` notification carries the answer read from the agent's
-//!   own transcript ([`crate::transcript`]), falling back to the screen only
-//!   when no transcript is available
-
-use std::time::Duration;
+//!   compared normalized
+//!
+//! # Completion detection is now hook-based (0.1.3, #131 / R-07)
+//!
+//! Task completion is reported out-of-band by Claude Code's Stop/SessionEnd
+//! hooks (POST to the Orchestrator's UDS), **not** by this plugin's state
+//! stream. So the screen-manifest completion path (mapping `working → idle`,
+//! confirming a debounced `done`, scraping the answer off the pane/transcript,
+//! extracting a `waiting_input` question) is **removed**. The state stream is
+//! reduced to a **deadman**: it subscribes only to `pane.exited` and reports
+//! `Failed` on an abnormal exit — the hook already reported a normal end. This
+//! reduction is unconditional (it holds even when no hook spec is supplied); an
+//! orchestrator older than 0.1.3 will therefore not learn of completion, which
+//! `initialize` warns about.
 
 use plugin_protocol::methods::{
-    AgentState, ExecutionMode, SessionAttachResult, StateNotification, TaskDispatchParams,
-    TaskDispatchResult,
+    AgentState, DiagnosticsSnapshotResult, ExecutionMode, SessionAttachResult, StateNotification,
+    TaskDispatchParams, TaskDispatchResult,
 };
 use serde_json::{Value, json};
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::config::HerdrConfig;
 use crate::error::HerdrError;
-use crate::state::{SessionHandle, extract_answer, extract_question, map_agent_status, squash_ws};
-use crate::transcript::{self, AgentSession};
+use crate::state::{SessionHandle, map_agent_status, squash_ws};
 use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT};
-
-/// How long a `working → idle` transition must hold before it is finalized as
-/// `done`. Screen-manifest agent status can flicker; re-reading the pane after
-/// this delay filters transient idles (#124).
-const IDLE_CONFIRM_DELAY: Duration = Duration::from_secs(2);
 
 /// How many screen lines are read when extracting text from a pane.
 const SCREEN_LINES: u64 = 200;
@@ -89,21 +89,28 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         params: TaskDispatchParams,
     ) -> Result<TaskDispatchResult, HerdrError> {
         let plan = params.mode == ExecutionMode::Plan;
-        let (program, args) = self.config.launch_command(plan);
+        // The hook launch spec (0.1.3) is opaque to the plugin: `--settings`
+        // wires Claude Code's hooks, `env` supplies the hook environment
+        // (`TOTSUKA_JOB_ID`, …). `--resume` re-opens a past agent session for
+        // Slack thread continuation.
+        let hook_settings = params.hook.as_ref().map(|h| h.settings_path.as_str());
+        let resume = params.resume_session_id.as_deref();
+        let (program, args) = self.config.launch_command(plan, hook_settings, resume);
+        // herdr injects this env into the launched process (workspace.create +
+        // agent.start both take `env`). Only set when a hook spec is present.
+        let env: Option<Value> = params.hook.as_ref().map(|h| json!(h.env));
 
         // A workspace per task keeps agent panes out of the operator's own
         // workspaces (there is no "start session" method; the workspace is the
         // container).
-        let created = self
-            .client
-            .call(
-                "workspace.create",
-                json!({
-                    "cwd": params.worktree_path,
-                    "label": format!("totsuka {}", params.task.id),
-                }),
-            )
-            .await?;
+        let mut create_params = json!({
+            "cwd": params.worktree_path,
+            "label": format!("totsuka {}", params.task.id),
+        });
+        if let Some(env) = &env {
+            create_params["env"] = env.clone();
+        }
+        let created = self.client.call("workspace.create", create_params).await?;
         let workspace_id = created
             .get("workspace")
             .and_then(|w| w.get("workspace_id"))
@@ -118,7 +125,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // process would run until the operator noticed them (and `task retry`
         // would strand another one).
         let started = self
-            .start_agent(&params, workspace_id, program, args)
+            .start_agent(&params, workspace_id, program, args, env.as_ref())
             .await
             .inspect_err(|_| self.abandon(workspace_id))?;
         Ok(started)
@@ -132,21 +139,20 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         workspace_id: &str,
         program: String,
         args: Vec<String>,
+        env: Option<&Value>,
     ) -> Result<TaskDispatchResult, HerdrError> {
         let argv: Vec<String> = std::iter::once(program).chain(args).collect();
-        let started = self
-            .client
-            .call(
-                "agent.start",
-                json!({
-                    "name": format!("totsuka {}", params.task.id),
-                    "argv": argv,
-                    "cwd": params.worktree_path,
-                    "workspace_id": workspace_id,
-                    "focus": false,
-                }),
-            )
-            .await?;
+        let mut start_params = json!({
+            "name": format!("totsuka {}", params.task.id),
+            "argv": argv,
+            "cwd": params.worktree_path,
+            "workspace_id": workspace_id,
+            "focus": false,
+        });
+        if let Some(env) = env {
+            start_params["env"] = env.clone();
+        }
+        let started = self.client.call("agent.start", start_params).await?;
         let agent = started.get("agent").unwrap_or(&started);
         let pane_id = agent
             .get("pane_id")
@@ -157,14 +163,13 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         self.submit_prompt(&pane_id, &compose_prompt(params))
             .await?;
 
-        // The agent's own session id (for `claude --resume`, and for finding its
-        // transcript) is reported by its herdr integration hook during startup;
-        // by now it is normally there, and an empty one only degrades resume.
+        // The agent's own session id (for `claude --resume`) is reported by its
+        // herdr integration hook during startup; by now it is normally there,
+        // and an empty one only degrades resume.
         let agent_session_id = pane_record(&self.client, &pane_id)
             .await
             .ok()
-            .and_then(|pane| AgentSession::from_pane(&pane))
-            .map(|session| session.value)
+            .and_then(|pane| agent_session_id(&pane))
             .unwrap_or_default();
 
         let handle = SessionHandle::new(pane_id, agent_session_id);
@@ -346,18 +351,34 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         Ok(())
     }
 
-    /// Start streaming state changes for a session (F-38): subscribe to herdr
-    /// pane events, then spawn a task that maps each event to a
-    /// [`StateNotification`] on the returned channel. The stream ends after a
-    /// terminal state (`done`/`failed`).
+    /// Capture the pane's screen for timeout/escalation diagnostics
+    /// (`diagnostics/snapshot`, R-10). Reads the `recent` screen copy; a pane
+    /// that is gone (or otherwise unreadable) is **not** an error — it reports
+    /// `text: None`, so the Orchestrator's escalation path never fails on a
+    /// snapshot it could not take.
+    pub async fn snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<DiagnosticsSnapshotResult, HerdrError> {
+        let handle = SessionHandle::decode(session_id);
+        let text = read_pane_text(&self.client, &handle.pane_id, "recent", SCREEN_LINES).await;
+        Ok(DiagnosticsSnapshotResult { text })
+    }
+
+    /// Start the state stream for a session (F-38), reduced to a **deadman**
+    /// since completion is now reported by Claude Code's hooks (#131 / R-07):
+    /// subscribe to `pane.exited` only and report `Failed` on an abnormal exit.
+    /// A normal exit (code 0) is silent — the SessionEnd hook already reported
+    /// completion out-of-band. The stream ends at the first terminal event.
     pub async fn start_state_stream(
         &self,
         session_id: &str,
     ) -> Result<mpsc::UnboundedReceiver<StateNotification>, HerdrError> {
         let handle = SessionHandle::decode(session_id);
         let pane_id = handle.pane_id.clone();
+        // Only the deadman subscription remains — no `pane.agent_status_changed`,
+        // so screen-manifest status flicker can no longer drive task state.
         let subscriptions = json!([
-            { "type": "pane.agent_status_changed", "pane_id": pane_id },
             { "type": "pane.exited", "pane_id": pane_id },
         ]);
         // Take the event receiver *before* subscribing, so events herdr pushes
@@ -365,103 +386,36 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let mut events = self.client.events();
         self.client.subscribe_events(subscriptions).await?;
 
-        let client = self.client.clone();
         let session_id = session_id.to_string();
         let (tx, rx) = mpsc::unbounded_channel();
 
         tokio::spawn(async move {
-            // Seed from the pane's status now: `dispatch` returns only once the
-            // agent started, so whatever it reports here is real progress —
-            // including an answer that already finished, whose transition would
-            // otherwise have been missed between dispatch and this subscribe.
-            let mut previous = match pane_status(&client, &pane_id).await {
-                Ok(status) => map_agent_status(&status, AgentState::Running),
-                Err(_) => AgentState::Running,
-            };
-            if matches!(previous, AgentState::Done | AgentState::Idle) {
-                let log_chunk = fetch_answer(&client, &pane_id).await;
-                let _ = tx.send(StateNotification {
-                    session_id: session_id.clone(),
-                    state: AgentState::Done,
-                    log_chunk,
-                });
-                return;
-            }
-            if previous == AgentState::WaitingInput {
-                let log_chunk = fetch_question(&client, &pane_id).await;
-                let _ = tx.send(StateNotification {
-                    session_id: session_id.clone(),
-                    state: AgentState::WaitingInput,
-                    log_chunk,
-                });
-            }
-
             loop {
-                let candidate = match events.recv().await {
-                    Ok(event) => match classify_event(&event, &pane_id, previous) {
-                        Some(c) => c,
-                        None => continue,
-                    },
-                    // Lagged past the buffer: a dropped batch might have held
-                    // the terminal event, so re-derive current state from herdr
-                    // rather than risk blocking forever on the next event.
+                let signal = match events.recv().await {
+                    Ok(event) => classify_exit(&event, &pane_id),
+                    // Lagged past the buffer: the deadman only ever emits one
+                    // terminal event, so a dropped batch cannot strand a
+                    // healthy stream — keep waiting for the exit.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(dropped)) => {
-                        tracing::warn!(dropped, "herdr event stream lagged; resyncing state");
-                        match resync_state(&client, &pane_id, previous).await {
-                            Some(s) => s,
-                            None => continue,
-                        }
+                        tracing::warn!(dropped, "herdr event stream lagged; deadman still waiting");
+                        continue;
                     }
                     // The transport closed: end the stream.
                     Err(_) => break,
                 };
-                // Agents that herdr watches by screen manifest report no `done`;
-                // for them a `working → idle` transition is the completion
-                // signal. Confirm it still holds after a short delay so screen
-                // flicker cannot fake a completion.
-                let state = if previous == AgentState::Running && candidate == AgentState::Idle {
-                    tokio::time::sleep(IDLE_CONFIRM_DELAY).await;
-                    match pane_status(&client, &pane_id).await {
-                        Ok(status) if status == "idle" || status == "done" => AgentState::Done,
-                        Ok(status) => map_agent_status(&status, previous),
-                        // The pane vanished between idle and the re-check: the
-                        // agent ended without a confirmed completion.
-                        Err(e) if e.is_missing() => AgentState::Failed,
-                        Err(_) => continue,
+                match signal {
+                    ExitSignal::Failed => {
+                        let _ = tx.send(StateNotification {
+                            session_id: session_id.clone(),
+                            state: AgentState::Failed,
+                            log_chunk: None,
+                        });
+                        break;
                     }
-                } else {
-                    candidate
-                };
-                // A repeated state is deduped here, so a *new* question in a
-                // second consecutive block is not re-delivered (best-effort,
-                // F-35).
-                if state == previous {
-                    continue;
-                }
-                previous = state;
-
-                let log_chunk = match state {
-                    // On a block, best-effort attach the question (F-35).
-                    AgentState::WaitingInput => fetch_question(&client, &pane_id).await,
-                    // On completion, carry the agent's answer — this is the only
-                    // channel it reaches the Orchestrator's `output = source`
-                    // artifact through.
-                    AgentState::Done => fetch_answer(&client, &pane_id).await,
-                    _ => None,
-                };
-                let terminal = matches!(state, AgentState::Done | AgentState::Failed);
-                if tx
-                    .send(StateNotification {
-                        session_id: session_id.clone(),
-                        state,
-                        log_chunk,
-                    })
-                    .is_err()
-                {
-                    break; // the consumer dropped
-                }
-                if terminal {
-                    break;
+                    // A clean exit needs no notification (the hook reported the
+                    // normal end); the pane is gone, so end the stream.
+                    ExitSignal::CleanExit => break,
+                    ExitSignal::Ignore => continue,
                 }
             }
         });
@@ -539,85 +493,64 @@ fn gave_up(symptom: String, cause: Option<HerdrError>) -> HerdrError {
     }
 }
 
-/// Re-derive the current state after a dropped-event lag: read the pane's
-/// status, or treat a vanished pane as a terminal `failed`. `None` means the
-/// state is currently unknowable (transient error) — hold and retry.
-async fn resync_state<T: HerdrTransport>(
-    client: &T,
-    pane_id: &str,
-    previous: AgentState,
-) -> Option<AgentState> {
-    match pane_status(client, pane_id).await {
-        Ok(status) => Some(map_agent_status(&status, previous)),
-        // The pane is gone → the agent ended; surface a terminal state.
-        Err(e) if e.is_missing() => Some(AgentState::Failed),
-        Err(_) => None,
-    }
+/// The agent's native session id from a pane record
+/// (`pane.agent_session.value`), reported by the agent's herdr integration hook
+/// during startup and carried in the [`SessionHandle`] for `claude --resume`.
+/// Absent or empty → `None`.
+fn agent_session_id(pane: &Value) -> Option<String> {
+    let value = pane
+        .get("agent_session")
+        .and_then(|s| s.get("value"))
+        .and_then(Value::as_str)?;
+    (!value.is_empty()).then(|| value.to_string())
 }
 
-/// The state a single herdr event envelope implies, or `None` if it is for
-/// another pane or carries no state signal we map.
+/// What a single herdr event means to the deadman stream.
+enum ExitSignal {
+    /// An abnormal exit (nonzero/absent code) or a dead subscription → `Failed`.
+    Failed,
+    /// A clean exit (code 0) — the SessionEnd hook already reported the normal
+    /// end, so the stream ends without a notification.
+    CleanExit,
+    /// Not for this pane, or not an exit event: ignore.
+    Ignore,
+}
+
+/// Classify a herdr event envelope for the deadman stream.
 ///
 /// Events arrive as `{event: "<kind>", data: {pane_id, …}}`. Every envelope —
 /// herdr's own and the transport's synthetic close — is filtered by pane first:
 /// one broadcast carries every subscription in the process, and herdr replays
 /// other panes' history on connect, so an unfiltered event would fail a healthy
 /// task.
-fn classify_event(event: &Value, pane_id: &str, previous: AgentState) -> Option<AgentState> {
-    let kind = event.get("event").and_then(Value::as_str)?;
-    let data = event.get("data")?;
+///
+/// A `pane_exited` with an explicit `exit_code: 0` is a clean exit (silent); any
+/// other exit — nonzero, or no code at all (herdr 0.7.x carries none, so we
+/// cannot confirm it was clean) — is `Failed`. In interactive mode Claude Code
+/// does not exit on completion, so an unexplained exit really is abnormal.
+fn classify_exit(event: &Value, pane_id: &str) -> ExitSignal {
+    let Some(kind) = event.get("event").and_then(Value::as_str) else {
+        return ExitSignal::Ignore;
+    };
+    let Some(data) = event.get("data") else {
+        return ExitSignal::Ignore;
+    };
     if data.get("pane_id").and_then(Value::as_str) != Some(pane_id) {
-        return None;
+        return ExitSignal::Ignore;
     }
     // herdr is inconsistent about the separator in event kinds
     // (`pane.agent_status_changed` but `pane_exited`), so compare normalized.
     match kind.replace('.', "_").as_str() {
-        "pane_agent_status_changed" => {
-            let status = data.get("agent_status").and_then(Value::as_str)?;
-            Some(map_agent_status(status, previous))
-        }
-        // herdr 0.7.x carries no exit code; completion is signalled by status
-        // *before* any exit, so an exit that arrives first means the agent
-        // ended without completing.
-        "pane_exited" => Some(AgentState::Failed),
+        "pane_exited" => match data.get("exit_code").and_then(Value::as_i64) {
+            Some(0) => ExitSignal::CleanExit,
+            _ => ExitSignal::Failed,
+        },
         // The subscription connection died; deliver a failure rather than hang
         // a stream that will never see another event. (The pane may still be
         // alive — recovery re-attaches, F-37.)
-        SUBSCRIPTION_CLOSED_EVENT => Some(AgentState::Failed),
-        _ => None,
+        SUBSCRIPTION_CLOSED_EVENT => ExitSignal::Failed,
+        _ => ExitSignal::Ignore,
     }
-}
-
-/// Best-effort question text for a blocked agent (F-35), from the visible pane
-/// content (herdr has no scrollback field; `pane.read` is the reader).
-async fn fetch_question<T: HerdrTransport>(client: &T, pane_id: &str) -> Option<String> {
-    let text = read_pane_text(client, pane_id, "visible", SCREEN_LINES).await?;
-    extract_question(&text)
-}
-
-/// The agent's final answer for the terminal `done` notification.
-///
-/// Prefers the agent's own transcript — exact and complete. The screen is only
-/// a fallback (`detection` is herdr's chrome-free conversation view, but it is
-/// still screen-sized, so a long answer loses its head): better a truncated
-/// draft the operator can see and fix than none at all.
-async fn fetch_answer<T: HerdrTransport>(client: &T, pane_id: &str) -> Option<String> {
-    if let Ok(pane) = pane_record(client, pane_id).await
-        && let Some(session) = AgentSession::from_pane(&pane)
-        && let Some(reader) = transcript::for_agent(&session.agent)
-    {
-        let cwd = pane.get("cwd").and_then(Value::as_str).unwrap_or_default();
-        if let Some(answer) = reader.last_answer(&session, std::path::Path::new(cwd)) {
-            return Some(answer);
-        }
-        tracing::warn!(
-            pane_id,
-            agent = %session.agent,
-            "no transcript answer; falling back to the screen (the draft may be truncated)"
-        );
-    }
-    let text = read_pane_text(client, pane_id, "detection", SCREEN_LINES).await?;
-    extract_answer(&text)
 }
 
 /// `pane.read` helper: `result.read.text`, ANSI-stripped.

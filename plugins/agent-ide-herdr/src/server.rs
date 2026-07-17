@@ -12,10 +12,11 @@ use std::time::Duration;
 
 use plugin_protocol::jsonrpc::{Error, Notification, Response, error_code, to_line};
 use plugin_protocol::methods::{
-    ConfigValidateResult, InitializeParams, InitializeResult, SessionAttachParams,
-    StateSubscribeParams, TaskCancelParams, TaskDispatchParams,
+    ConfigValidateResult, DiagnosticsSnapshotParams, InitializeParams, InitializeResult,
+    SessionAttachParams, StateSubscribeParams, TaskCancelParams, TaskDispatchParams,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
+use semver::Version;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -86,6 +87,7 @@ impl<F: TransportFactory> Server<F> {
             method::SESSION_ATTACH => self.session_attach(id, params).await,
             method::TASK_CANCEL => self.task_cancel(id, params).await,
             method::STATE_SUBSCRIBE => self.state_subscribe(id, params).await,
+            method::DIAGNOSTICS_SNAPSHOT => self.diagnostics_snapshot(id, params).await,
             method::SHUTDOWN => {
                 self.send(Response::result(id, Value::Null));
                 return false;
@@ -106,6 +108,18 @@ impl<F: TransportFactory> Server<F> {
             Ok(v) => v,
             Err(e) => return self.send(Response::error(id, e)),
         };
+        // Completion detection is now hook-based (0.1.3, #131): an orchestrator
+        // older than 0.1.3 does not issue the hook launch spec, so tasks would
+        // never be reported complete (the state stream is a deadman only). This
+        // is compatible on the wire (`^0.1`) but operationally broken, so warn.
+        if init.protocol_version < Version::new(0, 1, 3) {
+            tracing::warn!(
+                orchestrator = %init.protocol_version,
+                "orchestrator protocol < 0.1.3: hook-based completion is unavailable, so this \
+                 plugin will not report task completion (only pane.exited failures). Upgrade the \
+                 orchestrator to 0.1.3+."
+            );
+        }
         let config: HerdrConfig = match serde_json::from_value(init.config) {
             Ok(c) => c,
             Err(e) => {
@@ -227,6 +241,20 @@ impl<F: TransportFactory> Server<F> {
         }
     }
 
+    async fn diagnostics_snapshot(&mut self, id: RequestId, params: Value) {
+        let Some(agent) = self.agent.as_ref() else {
+            return self.send(not_initialized(id));
+        };
+        let parsed: DiagnosticsSnapshotParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(e) => return self.send(Response::error(id, e)),
+        };
+        match agent.snapshot(&parsed.session_id).await {
+            Ok(result) => self.send(Response::result(id, to_value(&result))),
+            Err(e) => self.send(rpc_error(id, &e)),
+        }
+    }
+
     /// Connect a transport for `config` (resolving the socket path + timeout).
     async fn connect(&self, config: &HerdrConfig) -> Result<F::Transport, HerdrError> {
         let path = config.resolve_socket_path();
@@ -251,7 +279,8 @@ impl<F: TransportFactory> Server<F> {
 }
 
 /// The capabilities this plugin declares (F-33): plan mode, design preview,
-/// pane control, and a state stream.
+/// pane control, a state stream, plus session resume and pane diagnostics
+/// snapshots (0.1.3, #131). Must mirror `plugin.toml`.
 fn capabilities_result() -> Value {
     to_value(&InitializeResult {
         plugin_version: plugin_version(),
@@ -260,10 +289,11 @@ fn capabilities_result() -> Value {
             design_preview: true,
             pane_control: true,
             state_stream: true,
-            // Flipped to true when the hook epic lands resume/diagnostics
-            // support in this plugin (#131 series).
-            resume_session: false,
-            diagnostics_snapshot: false,
+            // 0.1.3: `--resume` re-opens an agent session (Slack thread
+            // continuation), and `diagnostics/snapshot` captures the pane
+            // screen for escalation diagnostics (R-10).
+            resume_session: true,
+            diagnostics_snapshot: true,
             outputs: Vec::new(),
         },
     })
