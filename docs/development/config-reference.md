@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: 設定リファレンス（config.toml）
-description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、task-source-slack の plugins/slack.toml を含む。
+description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
-tags: [config, reference, toml, secrets, workflow, worktree, slack]
-timestamp: 2026-07-16T02:30:00Z
+tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks]
+timestamp: 2026-07-18T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -38,6 +38,7 @@ owner: tomoya-k31
 | `[worktree]` | テーブル | — | worktree 配置・掃除（下記） |
 | `[log]` | テーブル | — | ログ設定（下記） |
 | `[output]` | テーブル | — | 出力ポリシーの PR テンプレート（下記） |
+| `[hooks]` | テーブル | — | Claude Code フックイベント受信の設定（下記、#131） |
 
 # `[[repositories]]`
 
@@ -75,6 +76,9 @@ owner: tomoya-k31
 | `output` | enum | 必須 | `pull_request` / `source` / `none` |
 | `on_success` | `{ set_status = "..." }`? | なし | 成功時にソース側ステータスを更新（F-84） |
 | `on_failure` | `{ set_status = "..." }`? | なし | 失敗時にソース側ステータスを更新（publish 失敗など retry 可能な失敗では書き戻さない） |
+| `verification` | enum | `llm` | 完了自己申告の検収方式（D-01）: `llm`（prompt 型 Stop フックで in-session 検収）/ `human`（`totsuka task verify` 待ち。有効な notifier が無いと警告）/ `none`（検収なし） |
+| `timeout_secs` | int? | 1800 | 最終フックシグナルからの無応答上限秒。超過でエスカレーション（D-03） |
+| `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告 |
 
 定義順に first-match（F-81）。同一ソース内でトリガーが重なると警告。
 
@@ -114,6 +118,17 @@ OpenAI 互換 `/chat/completions` を前提。repo_hint を持たないタスク
 |---|---|---|---|
 | `pr_title_template` | string? | `{title}` | PR タイトルテンプレート。`{title}`/`{task_id}`/`{source}` |
 | `pr_body_template` | string? | 組み込み既定 | PR 本文テンプレート。`{title}`/`{url}`/`{source}`/`{task_id}`/`{summary}` |
+
+# `[hooks]`
+
+Claude Code フックイベント受信（UDS）の設定（#131。全キー省略可、`deny_unknown_fields`）。値の実使用は UDS サーバ・フックスクリプト側の issue（#136/#137）で配線される。
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `auth_token_ref` | string? | なし | フック POST を認証する Bearer トークンのシークレット参照（E-03、例 `keychain:totsuka/hook-token`）。**運用上は必須**: 未設定のままフック対応 agent を使う workflow があると validate が警告（doctor は fail） |
+| `socket_path` | string? | 組み込み既定 | 受信 UDS のパス（例 `${XDG_RUNTIME_DIR}/totsuka/claude-events.sock`） |
+| `spool_dir` | string? | 組み込み既定 | POST 失敗時にイベントを退避するスプールディレクトリ（E-07、例 `${XDG_STATE_HOME}/totsuka/hooks/spool`） |
+| `block_retry_limit` | int? | 3 | Stop フック block 差し戻しの連続上限。超過でエスカレーション（D-02） |
 
 # `plugins/slack.toml`（task-source-slack）
 

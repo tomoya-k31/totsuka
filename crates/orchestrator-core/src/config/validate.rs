@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use plugin_protocol::manifest::OutputCapability;
 
 use super::resolve::expand_path;
-use super::schema::{CURRENT_SCHEMA_VERSION, PluginKind, RootConfig};
+use super::schema::{CURRENT_SCHEMA_VERSION, PluginKind, RootConfig, VerificationMode};
 use crate::domain::workflow::{self, Severity, Workflow};
 
 /// A single static-validation failure. `Display` gives "cause + next action".
@@ -181,10 +181,19 @@ pub struct Finding {
 ///
 /// `source_outputs` returns a task-source plugin's declared output
 /// capabilities (from its manifest offline, or `None` when unknown).
-pub fn validate<E, F>(cfg: &RootConfig, env: &E, source_outputs: F) -> Vec<Finding>
+/// `agent_hook_capable` returns whether an agent plugin signals completion via
+/// Claude Code hooks (#131), or `None` when unknown — then the
+/// `[hooks].auth_token_ref` advisory is skipped.
+pub fn validate<E, F, H>(
+    cfg: &RootConfig,
+    env: &E,
+    source_outputs: F,
+    agent_hook_capable: H,
+) -> Vec<Finding>
 where
     E: Fn(&str) -> Option<String>,
     F: Fn(&str) -> Option<Vec<OutputCapability>>,
+    H: Fn(&str) -> Option<bool>,
 {
     let mut findings: Vec<Finding> = validate_static(cfg, env)
         .into_iter()
@@ -204,7 +213,56 @@ where
             message: issue.message,
         });
     }
+    hook_findings(cfg, &agent_hook_capable, &mut findings);
     findings
+}
+
+/// Hook/verification advisory checks (#135) — warnings only, in the
+/// "cause + next action" style.
+fn hook_findings<H>(cfg: &RootConfig, agent_hook_capable: &H, findings: &mut Vec<Finding>)
+where
+    H: Fn(&str) -> Option<bool>,
+{
+    let has_notifier = cfg
+        .plugins
+        .values()
+        .any(|p| p.enabled && p.kind == PluginKind::Notifier);
+
+    for wf in &cfg.workflows {
+        // verification = human needs a notifier, or nobody notices the wait.
+        if wf.verification == VerificationMode::Human && !has_notifier {
+            findings.push(Finding {
+                severity: FindingSeverity::Warning,
+                message: format!(
+                    "workflow `{}` uses verification = human but no enabled notifier plugin is configured → add an enabled `[plugins.*]` with kind = \"notifier\" so verification requests are noticed",
+                    wf.name
+                ),
+            });
+        }
+
+        // Hook-capable agents need the Bearer token to authenticate (E-03).
+        if cfg.hooks.auth_token_ref.is_none() && agent_hook_capable(&wf.agent) == Some(true) {
+            findings.push(Finding {
+                severity: FindingSeverity::Warning,
+                message: format!(
+                    "workflow `{}` uses hook-capable agent `{}` but `[hooks].auth_token_ref` is unset → set it (e.g. \"keychain:totsuka/hook-token\") so hook events can be authenticated",
+                    wf.name, wf.agent
+                ),
+            });
+        }
+
+        // rubric only feeds the llm-verification prompt hook.
+        if wf.rubric.is_some() && wf.verification != VerificationMode::Llm {
+            findings.push(Finding {
+                severity: FindingSeverity::Warning,
+                message: format!(
+                    "workflow `{}` sets rubric but verification = {} → rubric only applies to llm verification; set verification = \"llm\" or remove rubric",
+                    wf.name,
+                    wf.verification.as_str()
+                ),
+            });
+        }
+    }
 }
 
 /// Whether any finding is an error (used for the `config validate` exit code).
@@ -453,7 +511,7 @@ agent = "herdr"
 output = "none"
 "#;
         let cfg = RootConfig::from_toml_str(toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
 
         assert!(has_errors(&findings), "plan×pull_request must be an error");
         assert!(findings.iter().any(|f| f.severity == FindingSeverity::Error
@@ -462,6 +520,169 @@ output = "none"
             findings.iter().any(
                 |f| f.severity == FindingSeverity::Warning && f.message.contains("overlapping")
             )
+        );
+    }
+
+    /// A minimal valid plugin pair used by the hook/verification warning tests.
+    const PLUGIN_PAIR: &str = r#"
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+"#;
+
+    fn warnings_of(findings: &[Finding]) -> Vec<&Finding> {
+        findings
+            .iter()
+            .filter(|f| f.severity == FindingSeverity::Warning)
+            .collect()
+    }
+
+    #[test]
+    fn human_verification_without_notifier_warns() {
+        let toml = format!(
+            r#"{PLUGIN_PAIR}
+[[workflows]]
+name = "review"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "human"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("no enabled notifier plugin")),
+            "expected notifier warning: {findings:?}"
+        );
+
+        // An enabled notifier silences the warning.
+        let toml = format!(
+            r#"{PLUGIN_PAIR}
+[plugins.macos]
+enabled = true
+kind = "notifier"
+
+[[workflows]]
+name = "review"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "human"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            !findings.iter().any(|f| f.message.contains("notifier")),
+            "unexpected notifier warning: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_auth_token_ref_with_hook_capable_agent_warns() {
+        let toml = format!(
+            r#"{PLUGIN_PAIR}
+[[workflows]]
+name = "impl"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+
+        // Hook-capable agent + no [hooks].auth_token_ref -> warning.
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |name| Some(name == "herdr"));
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("[hooks].auth_token_ref")),
+            "expected auth_token_ref warning: {findings:?}"
+        );
+
+        // Capability unknown (None) -> the advisory is skipped.
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.message.contains("auth_token_ref")),
+            "unknown capability must not warn: {findings:?}"
+        );
+
+        // Token configured -> no warning.
+        let toml = format!(
+            r#"{PLUGIN_PAIR}
+[hooks]
+auth_token_ref = "keychain:totsuka/hook-token"
+
+[[workflows]]
+name = "impl"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |name| Some(name == "herdr"));
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.message.contains("auth_token_ref")),
+            "configured token must not warn: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn rubric_without_llm_verification_warns() {
+        let toml = format!(
+            r#"{PLUGIN_PAIR}
+[[workflows]]
+name = "no_verify"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "none"
+rubric = "実調査に基づくこと"
+
+[[workflows]]
+name = "llm_verify"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "llm"
+rubric = "実調査に基づくこと"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        // verification = none + rubric -> warning naming the workflow.
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("rubric")
+                    && f.message.contains("`no_verify`")
+                    && f.message.contains("verification = none")),
+            "expected rubric warning: {findings:?}"
+        );
+        // verification = llm + rubric is the intended combination -> no warning.
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.message.contains("`llm_verify`") && f.message.contains("rubric")),
+            "llm + rubric must not warn: {findings:?}"
         );
     }
 }

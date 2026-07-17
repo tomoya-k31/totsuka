@@ -66,13 +66,21 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         Ok(cfg) => {
             let env_fn = |k: &str| env.get(k).cloned();
             let store = cx.store();
-            let findings = config::validate(&cfg, &env_fn, |name| {
-                store
-                    .manifest_of(name)
-                    .ok()
-                    .flatten()
-                    .map(|m| m.capabilities.outputs)
-            });
+            // Hook capability is not yet declared in plugin manifests
+            // (protocol 0.1.3, #132); `None` = unknown skips the
+            // `[hooks].auth_token_ref` advisory until manifests declare it.
+            let findings = config::validate(
+                &cfg,
+                &env_fn,
+                |name| {
+                    store
+                        .manifest_of(name)
+                        .ok()
+                        .flatten()
+                        .map(|m| m.capabilities.outputs)
+                },
+                |_| None,
+            );
             if config::has_errors(&findings) {
                 let first = findings
                     .iter()

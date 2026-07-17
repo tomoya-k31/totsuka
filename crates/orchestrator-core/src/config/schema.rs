@@ -21,6 +21,14 @@ pub const DEFAULT_GLOBAL_CONCURRENCY: u32 = 4;
 /// is omitted (F-06).
 pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
 
+/// Default number of Stop-hook block re-asks before a task escalates, when
+/// `[hooks].block_retry_limit` is omitted (D-02).
+pub const DEFAULT_BLOCK_RETRY_LIMIT: u32 = 3;
+
+/// Default per-workflow silence limit in seconds (since the last hook signal)
+/// before escalation, when `timeout_secs` is omitted (D-03: 30 minutes).
+pub const DEFAULT_WORKFLOW_TIMEOUT_SECS: u64 = 1800;
+
 /// Root of `config.toml`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,6 +60,35 @@ pub struct RootConfig {
     /// Output policy settings (PR templates, #65).
     #[serde(default)]
     pub output: OutputSettings,
+    /// Claude Code hook-event ingestion settings (#131: E-03, D-02, E-07).
+    #[serde(default)]
+    pub hooks: HooksConfig,
+}
+
+/// Hook-event ingestion settings from `[hooks]` (#131).
+///
+/// All fields are optional: the consuming components (UDS server, hook
+/// rendering — later issues) apply the documented defaults.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HooksConfig {
+    /// Secret reference (`${ENV}` or `keychain:`) to the Bearer token that
+    /// authenticates hook POSTs (E-03). Operationally required whenever a
+    /// hook-capable agent is used (validation warns, `doctor` fails).
+    #[serde(default)]
+    pub auth_token_ref: Option<String>,
+    /// Unix domain socket path the hook receiver listens on. `None` uses the
+    /// built-in default path.
+    #[serde(default)]
+    pub socket_path: Option<String>,
+    /// Directory where hook events are spooled when the POST fails (E-07).
+    /// `None` uses the built-in default path.
+    #[serde(default)]
+    pub spool_dir: Option<String>,
+    /// Max consecutive Stop-hook block re-asks before escalation (D-02).
+    /// Defaults to [`DEFAULT_BLOCK_RETRY_LIMIT`].
+    #[serde(default)]
+    pub block_retry_limit: Option<u32>,
 }
 
 /// Output policy settings (F-86 PR templating).
@@ -163,6 +200,31 @@ pub enum OutputPolicy {
     None,
 }
 
+/// How a workflow's completion self-report is verified (D-01).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationMode {
+    /// In-session LLM verification via a prompt-type Stop hook (default).
+    #[default]
+    Llm,
+    /// A human verifies via `totsuka task verify`; the task waits in
+    /// `Verifying` until then.
+    Human,
+    /// No verification; a completion self-report is accepted as-is.
+    None,
+}
+
+impl VerificationMode {
+    /// The stable snake_case config string for this mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VerificationMode::Llm => "llm",
+            VerificationMode::Human => "human",
+            VerificationMode::None => "none",
+        }
+    }
+}
+
 /// A named workflow (F-80). Parsed structurally; trigger/handoff semantics are
 /// validated and matched in #54.
 #[derive(Debug, Clone, Deserialize)]
@@ -187,6 +249,17 @@ pub struct WorkflowConfig {
     /// Source status transition on failure; kept raw (interpreted in #54).
     #[serde(default)]
     pub on_failure: Option<toml::Table>,
+    /// How completion self-reports are verified (D-01). Defaults to `llm`.
+    #[serde(default)]
+    pub verification: VerificationMode,
+    /// Silence limit in seconds since the last hook signal before the task
+    /// escalates (D-03). Defaults to [`DEFAULT_WORKFLOW_TIMEOUT_SECS`].
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    /// Criteria text embedded into the llm-verification prompt hook. Only
+    /// meaningful with `verification = "llm"` (validation warns otherwise).
+    #[serde(default)]
+    pub rubric: Option<String>,
 }
 
 /// AI Gateway (OpenAI-compatible) settings (F-12, F-13).
@@ -380,6 +453,89 @@ on_success = { set_status = "レビュー待ち" }
     fn unknown_top_level_key_is_rejected() {
         let err = RootConfig::from_toml_str("bogus_key = 1").unwrap_err();
         assert!(matches!(err, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn hooks_and_verification_fields_parse() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[hooks]
+auth_token_ref = "keychain:totsuka/hook-token"
+socket_path = "${XDG_RUNTIME_DIR}/totsuka/claude-events.sock"
+spool_dir = "${XDG_STATE_HOME}/totsuka/hooks/spool"
+block_retry_limit = 3
+
+[[workflows]]
+name = "slack-reply"
+source = "slack"
+mode = "implement"
+agent = "herdr"
+output = "source"
+verification = "human"
+timeout_secs = 1800
+rubric = "回答は対象リポジトリの実調査に基づくこと"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.hooks.auth_token_ref.as_deref(),
+            Some("keychain:totsuka/hook-token")
+        );
+        assert_eq!(
+            cfg.hooks.socket_path.as_deref(),
+            Some("${XDG_RUNTIME_DIR}/totsuka/claude-events.sock")
+        );
+        assert_eq!(
+            cfg.hooks.spool_dir.as_deref(),
+            Some("${XDG_STATE_HOME}/totsuka/hooks/spool")
+        );
+        assert_eq!(cfg.hooks.block_retry_limit, Some(3));
+
+        let wf = &cfg.workflows[0];
+        assert_eq!(wf.verification, VerificationMode::Human);
+        assert_eq!(wf.timeout_secs, Some(1800));
+        assert_eq!(
+            wf.rubric.as_deref(),
+            Some("回答は対象リポジトリの実調査に基づくこと")
+        );
+    }
+
+    #[test]
+    fn hooks_and_verification_default_when_omitted() {
+        // The pre-#135 spec example omits every new key -> all defaults.
+        let cfg = RootConfig::from_toml_str(SPEC_EXAMPLE).unwrap();
+        assert!(cfg.hooks.auth_token_ref.is_none());
+        assert!(cfg.hooks.socket_path.is_none());
+        assert!(cfg.hooks.spool_dir.is_none());
+        assert!(cfg.hooks.block_retry_limit.is_none());
+        for wf in &cfg.workflows {
+            assert_eq!(wf.verification, VerificationMode::Llm);
+            assert!(wf.timeout_secs.is_none());
+            assert!(wf.rubric.is_none());
+        }
+    }
+
+    #[test]
+    fn unknown_hooks_key_is_rejected() {
+        // Typo inside [hooks] (auth_token vs auth_token_ref) must not be
+        // silently ignored.
+        let err = RootConfig::from_toml_str("[hooks]\nauth_token = \"x\"").unwrap_err();
+        assert!(matches!(err, ConfigError::Parse(_)));
+        // An unknown verification mode is rejected, not defaulted.
+        assert!(
+            RootConfig::from_toml_str(
+                r#"
+[[workflows]]
+name = "w"
+source = "s"
+mode = "implement"
+agent = "a"
+output = "none"
+verification = "manual"
+"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

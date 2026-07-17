@@ -15,7 +15,7 @@
 use plugin_protocol::Task;
 use plugin_protocol::manifest::OutputCapability;
 
-use crate::config::{OutputPolicy, WorkflowConfig, WorkflowMode};
+use crate::config::{OutputPolicy, VerificationMode, WorkflowConfig, WorkflowMode};
 
 /// A trigger condition: an opaque key-value set the plugin filters on, plus the
 /// status/label keys the Orchestrator re-checks defensively.
@@ -124,6 +124,13 @@ pub struct Workflow {
     pub on_success: Option<OutcomeAction>,
     /// Action on failure.
     pub on_failure: Option<OutcomeAction>,
+    /// How completion self-reports are verified (D-01).
+    pub verification: VerificationMode,
+    /// Silence limit in seconds since the last hook signal before escalation
+    /// (D-03). `None` means the built-in default (30 minutes).
+    pub timeout_secs: Option<u64>,
+    /// Criteria text for the llm-verification prompt hook.
+    pub rubric: Option<String>,
 }
 
 impl Workflow {
@@ -138,6 +145,9 @@ impl Workflow {
             output: config.output,
             on_success: config.on_success.as_ref().map(OutcomeAction::from_table),
             on_failure: config.on_failure.as_ref().map(OutcomeAction::from_table),
+            verification: config.verification,
+            timeout_secs: config.timeout_secs,
+            rubric: config.rubric.clone(),
         }
     }
 
@@ -490,6 +500,37 @@ output = "none"
             !issues.iter().any(|i| i.message.contains("overlapping")),
             "different statuses (status vs project_status) must not warn: {issues:?}"
         );
+    }
+
+    #[test]
+    fn verification_fields_are_wired_from_config() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "verified"
+source = "slack"
+mode = "implement"
+agent = "herdr"
+output = "source"
+verification = "human"
+timeout_secs = 600
+rubric = "実調査に基づくこと"
+
+[[workflows]]
+name = "defaulted"
+source = "slack"
+mode = "implement"
+agent = "herdr"
+output = "none"
+"#,
+        );
+        assert_eq!(workflows[0].verification, VerificationMode::Human);
+        assert_eq!(workflows[0].timeout_secs, Some(600));
+        assert_eq!(workflows[0].rubric.as_deref(), Some("実調査に基づくこと"));
+        // Omitted -> D-01 default llm, no overrides.
+        assert_eq!(workflows[1].verification, VerificationMode::Llm);
+        assert!(workflows[1].timeout_secs.is_none());
+        assert!(workflows[1].rubric.is_none());
     }
 
     #[test]

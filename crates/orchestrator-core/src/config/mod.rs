@@ -21,9 +21,10 @@ pub use raw::PluginRawConfig;
 pub use resolve::{ResolveError, SecretResolver, expand_env, expand_path};
 pub use schema::{
     CURRENT_SCHEMA_VERSION, CleanupPolicyConfig, CleanupPolicyName, ConfigError,
-    DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_POLL_INTERVAL_SECS, LlmConfig, LogSettings, OutputPolicy,
-    OutputSettings, PluginConfig, PluginKind, RepositoryConfig, RootConfig, WorkflowConfig,
-    WorkflowMode, WorktreeConfig,
+    DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_POLL_INTERVAL_SECS,
+    DEFAULT_WORKFLOW_TIMEOUT_SECS, HooksConfig, LlmConfig, LogSettings, OutputPolicy,
+    OutputSettings, PluginConfig, PluginKind, RepositoryConfig, RootConfig, VerificationMode,
+    WorkflowConfig, WorkflowMode, WorktreeConfig,
 };
 pub use validate::{
     Finding, FindingSeverity, ValidationError, has_errors, validate, validate_static,
