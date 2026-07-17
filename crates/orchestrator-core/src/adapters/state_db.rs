@@ -245,7 +245,7 @@ pub struct EventRecord {
 /// re-sends, curl retries).
 #[derive(Debug, Clone)]
 pub struct HookEventInsert {
-    /// The dispatch this event belongs to (`TOOL_A_JOB_ID`, E-09).
+    /// The dispatch this event belongs to (`TOTSUKA_JOB_ID`, E-09).
     pub job_id: String,
     /// Owning task id (resolved from `job_id`, never guessed from a session).
     pub task_id: i64,

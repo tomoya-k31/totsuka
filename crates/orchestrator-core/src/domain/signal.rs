@@ -13,7 +13,7 @@ use std::str::FromStr;
 pub struct AgentSignal {
     /// Where the signal came from.
     pub source: SignalSource,
-    /// The dispatch this signal belongs to (`TOOL_A_JOB_ID`, E-09: never
+    /// The dispatch this signal belongs to (`TOTSUKA_JOB_ID`, E-09: never
     /// guessed from a session id alone).
     pub job_id: JobId,
     /// The hook input's `session_id` (may be empty).
@@ -85,7 +85,7 @@ pub enum StopStatus {
 
 /// Identifies one dispatch of one task: `"job-{task_id}-{session_row}"`.
 ///
-/// Injected into the agent process as `TOOL_A_JOB_ID` and echoed back by
+/// Injected into the agent process as `TOTSUKA_JOB_ID` and echoed back by
 /// every hook, so a signal is correlated to its task without guessing from
 /// session ids (E-09).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
