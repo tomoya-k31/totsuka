@@ -8,3 +8,5 @@ plan_mode = true
 design_preview = true
 pane_control = true
 state_stream = true
+resume_session = true
+diagnostics_snapshot = true

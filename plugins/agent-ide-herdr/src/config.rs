@@ -58,12 +58,32 @@ impl HerdrConfig {
     /// The agent launch command line for `mode` (F-31): the base
     /// [`agent_command`](Self::agent_command) plus [`plan_args`](Self::plan_args)
     /// in plan mode. Returns `(program, args)`.
-    pub fn launch_command(&self, plan: bool) -> (String, Vec<String>) {
+    ///
+    /// When the Orchestrator supplies a hook launch spec (0.1.3), `hook_settings`
+    /// is its settings path and `--settings <path>` is appended so Claude Code
+    /// loads the workflow's hooks (H-03: `--resume` never inherits hooks, so the
+    /// settings must be re-passed on every launch, resume included). When
+    /// resuming a past session, `resume` is its agent-native id and
+    /// `--resume <id>` is appended (both flags coexist).
+    pub fn launch_command(
+        &self,
+        plan: bool,
+        hook_settings: Option<&str>,
+        resume: Option<&str>,
+    ) -> (String, Vec<String>) {
         let mut parts = self.agent_command.split_whitespace().map(str::to_string);
         let program = parts.next().unwrap_or_else(|| "claude".to_string());
         let mut args: Vec<String> = parts.collect();
         if plan {
             args.extend(self.plan_args.iter().cloned());
+        }
+        if let Some(settings) = hook_settings {
+            args.push("--settings".to_string());
+            args.push(settings.to_string());
+        }
+        if let Some(id) = resume {
+            args.push("--resume".to_string());
+            args.push(id.to_string());
         }
         (program, args)
     }
@@ -148,11 +168,11 @@ mod tests {
     fn launch_command_adds_plan_args_only_in_plan_mode() {
         let cfg = parse(serde_json::json!({ "agent_command": "claude --verbose" }));
         assert_eq!(
-            cfg.launch_command(false),
+            cfg.launch_command(false, None, None),
             ("claude".to_string(), vec!["--verbose".to_string()])
         );
         assert_eq!(
-            cfg.launch_command(true),
+            cfg.launch_command(true, None, None),
             (
                 "claude".to_string(),
                 vec![
@@ -160,6 +180,49 @@ mod tests {
                     "--permission-mode".to_string(),
                     "plan".to_string()
                 ]
+            )
+        );
+    }
+
+    #[test]
+    fn launch_command_appends_settings_and_resume() {
+        let cfg = parse(serde_json::json!({}));
+        // The hook settings path rides after any plan args; `--resume` coexists
+        // with `--settings` (H-03: resume must re-pass the hook settings).
+        assert_eq!(
+            cfg.launch_command(false, Some("/data/hooks/orchestrator-implement.json"), None),
+            (
+                "claude".to_string(),
+                vec![
+                    "--settings".to_string(),
+                    "/data/hooks/orchestrator-implement.json".to_string(),
+                ]
+            )
+        );
+        assert_eq!(
+            cfg.launch_command(
+                true,
+                Some("/data/hooks/orchestrator-plan.json"),
+                Some("claude-sess-abc"),
+            ),
+            (
+                "claude".to_string(),
+                vec![
+                    "--permission-mode".to_string(),
+                    "plan".to_string(),
+                    "--settings".to_string(),
+                    "/data/hooks/orchestrator-plan.json".to_string(),
+                    "--resume".to_string(),
+                    "claude-sess-abc".to_string(),
+                ]
+            )
+        );
+        // Resume without a hook spec still passes `--resume` alone.
+        assert_eq!(
+            cfg.launch_command(false, None, Some("sess-1")),
+            (
+                "claude".to_string(),
+                vec!["--resume".to_string(), "sess-1".to_string()]
             )
         );
     }

@@ -6,10 +6,11 @@
 //! before it acts on them**, so early `agent.send`/Enter are dropped.
 //!
 //! Covers initialize → task/dispatch (typing + submitting the prompt through
-//! that startup race) → state/subscribe → mapped state/notification stream
-//! (running → waiting_input(question) → running → done(final answer)),
-//! exit-before-done as `failed`, session/attach success and pane-not-found, and
-//! `id: ""` error correlation (F-32/F-35/F-37/F-38).
+//! that startup race, plus 0.1.3 hook `env` injection + `--settings`/`--resume`
+//! launch) → the reduced state stream (a `pane.exited` **deadman**: status
+//! changes produce no notification, nonzero/absent exit → `failed`, clean exit
+//! is silent), `diagnostics/snapshot`, session/attach success and
+//! pane-not-found, and `id: ""` error correlation (F-32/F-37/F-38, #131).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,10 +37,6 @@ struct Cli {
     status: String,
     sends: usize,
     enters: usize,
-    /// `pane.get` calls so far. A subscription waits for the next one before
-    /// pushing, so events land *after* the subscriber seeded its state — as on
-    /// a real run, where an agent's transitions are spread over its work.
-    pane_gets: usize,
 }
 
 /// Scripted fake-herdr behaviour for one test.
@@ -205,11 +202,7 @@ impl FakeHerdr {
                 reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
             }
             "pane.get" => {
-                let status = {
-                    let mut cli = self.cli.lock().unwrap();
-                    cli.pane_gets += 1;
-                    cli.status.clone()
-                };
+                let status = self.cli.lock().unwrap().status.clone();
                 let mut pane = json!({
                     "pane_id": PANE,
                     "cwd": "/wt/agent-1",
@@ -224,6 +217,11 @@ impl FakeHerdr {
                     json!({ "type": "pane_info", "pane": pane }),
                 )
                 .await
+            }
+            // A vanished pane fails `pane.read` too — `diagnostics/snapshot`
+            // maps that to `text: None`, not an error.
+            "pane.read" if self.pane_gone => {
+                reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
             }
             "pane.read" => {
                 let text = match params["source"].as_str() {
@@ -246,22 +244,11 @@ impl FakeHerdr {
                     json!({ "type": "subscription_started" }),
                 )
                 .await;
+                // The reduced deadman stream takes its event receiver before
+                // subscribing, so the ACK-then-push order is enough — no seeding
+                // wait is needed (it no longer reads the pane on subscribe).
                 let events = self.events_on_subscribe.lock().unwrap().clone();
-                if !events.is_empty() {
-                    // Let the subscriber seed its state from the pane first;
-                    // pushing everything before it looked would compress the
-                    // whole run into "already finished".
-                    let seeded_at = { self.cli.lock().unwrap().pane_gets };
-                    while { self.cli.lock().unwrap().pane_gets } == seeded_at {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                }
                 for ev in events {
-                    // An event herdr pushes also moves the pane's own status,
-                    // which the plugin re-reads to confirm a completion.
-                    if let Some(status) = ev["data"]["agent_status"].as_str() {
-                        self.cli.lock().unwrap().status = status.to_string();
-                    }
                     write_line(&mut write_half, &ev).await;
                 }
                 // Keep the subscription connection open like the real herdr;
@@ -287,10 +274,20 @@ fn status_event(pane_id: &str, status: &str) -> Value {
 }
 
 fn exited_event(pane_id: &str) -> Value {
-    // NB: no exit_code — herdr 0.7.x does not carry one.
+    // NB: no exit_code — herdr 0.7.x does not carry one, so the deadman cannot
+    // confirm a clean exit and treats it as `failed`.
     json!({
         "event": "pane_exited",
         "data": { "pane_id": pane_id, "workspace_id": "w1", "type": "pane_exited" },
+    })
+}
+
+/// A `pane_exited` carrying an explicit exit code (a future/hook-aware herdr):
+/// nonzero → `failed`, zero → a silent clean exit.
+fn exited_event_code(pane_id: &str, code: i64) -> Value {
+    json!({
+        "event": "pane_exited",
+        "data": { "pane_id": pane_id, "workspace_id": "w1", "exit_code": code },
     })
 }
 
@@ -355,12 +352,20 @@ impl Driver {
     }
 
     /// Receive the next output line (response or notification), parsed, with a
-    /// timeout so a missing notification fails fast instead of hanging. The
-    /// timeout absorbs the stream's idle-confirmation delay.
+    /// timeout so a missing notification fails fast instead of hanging.
     async fn recv(&mut self) -> Option<Value> {
         let line = tokio::time::timeout(Duration::from_secs(15), self.out.recv())
             .await
             .expect("timed out waiting for plugin output")?;
+        Some(serde_json::from_str(&line).expect("valid JSON line"))
+    }
+
+    /// Wait up to `ms` for an output line; `None` means none arrived — used for
+    /// negative assertions ("no notification is produced").
+    async fn recv_within(&mut self, ms: u64) -> Option<Value> {
+        let line = tokio::time::timeout(Duration::from_millis(ms), self.out.recv())
+            .await
+            .ok()??;
         Some(serde_json::from_str(&line).expect("valid JSON line"))
     }
 
@@ -491,7 +496,11 @@ async fn dispatch_fails_loudly_when_the_agent_never_starts() {
 }
 
 #[tokio::test]
-async fn state_stream_maps_transitions_and_carries_the_answer() {
+async fn state_stream_ignores_status_changes_after_the_reduction() {
+    // #131: completion is now hook-based, so the state stream is a `pane.exited`
+    // deadman. Screen-manifest `pane.agent_status_changed` events — the old
+    // completion signal — must produce NO state/notification (locking in the
+    // reduction so flicker can never drive task state again).
     let fake = FakeHerdr {
         detection: DETECTION,
         ..FakeHerdr::default()
@@ -500,14 +509,16 @@ async fn state_stream_maps_transitions_and_carries_the_answer() {
         exited_event("w9:p9"), // replayed history for another pane: ignored
         status_event(PANE, "blocked"),
         status_event(PANE, "working"),
-        status_event(PANE, "idle"), // completion for a `done`-less agent
+        status_event(PANE, "idle"), // the old `done`-less completion signal
     ];
     let (socket, _) = fake.spawn();
 
     let mut d = Driver::new();
     let init = d.init(&socket).await;
+    // The 0.1.3 capabilities are declared.
     assert_eq!(init["result"]["capabilities"]["state_stream"], true);
-    assert_eq!(init["result"]["capabilities"]["plan_mode"], true);
+    assert_eq!(init["result"]["capabilities"]["resume_session"], true);
+    assert_eq!(init["result"]["capabilities"]["diagnostics_snapshot"], true);
 
     let disp = d.dispatch("T3", "Draft the reply", "plan").await;
     let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
@@ -516,62 +527,17 @@ async fn state_stream_maps_transitions_and_carries_the_answer() {
         .await;
     assert!(ack["error"].is_null(), "subscribe failed: {ack}");
 
-    let notes = collect_notes(&mut d, 3).await;
-    let states: Vec<&str> = notes
-        .iter()
-        .map(|n| n["params"]["state"].as_str().unwrap())
-        .collect();
-    assert_eq!(states, vec!["waiting_input", "running", "done"]);
-    // F-35: the question is carried best-effort from the visible screen.
     assert!(
-        notes[0]["params"]["log_chunk"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("multi-line"),
-        "waiting_input must carry the screen question: {}",
-        notes[0]
-    );
-    // #124: `done` carries the answer — with no transcript reachable, the
-    // detection view is the fallback, and tool turns are not the answer.
-    assert_eq!(
-        notes[2]["params"]["log_chunk"],
-        "zsh is managed via GNU Stow.\nEdit the repo, not the symlink.",
+        d.recv_within(700).await.is_none(),
+        "status changes must not produce any notification after the deadman reduction"
     );
 }
 
 #[tokio::test]
-async fn state_stream_reports_done_when_the_answer_landed_before_subscribing() {
-    // A fast agent finishes between dispatch and state/subscribe; seeding from
-    // the pane keeps that from hanging the stream forever.
-    let fake = FakeHerdr {
-        detection: DETECTION,
-        ..FakeHerdr::default()
-    };
-    let cli = fake.cli.clone();
-    let (socket, _) = fake.spawn();
-
-    let mut d = Driver::new();
-    d.init(&socket).await;
-    let disp = d.dispatch("T4", "Fast answer", "plan").await;
-    let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
-    cli.lock().unwrap().status = "done".to_string(); // finished, no events left to push
-
-    d.call("state/subscribe", json!({ "session_id": session_id }))
-        .await;
-    let note = d.recv().await.expect("a notification");
-    assert_eq!(note["params"]["state"], "done");
-    assert_eq!(
-        note["params"]["log_chunk"],
-        "zsh is managed via GNU Stow.\nEdit the repo, not the symlink."
-    );
-}
-
-#[tokio::test]
-async fn state_stream_reports_failed_on_exit_before_completion() {
-    // herdr 0.7.x pane_exited carries no exit code: an exit that arrives before
-    // a completion is the `failed` source.
+async fn state_stream_reports_failed_on_nonzero_exit() {
+    // A nonzero `pane.exited` is the deadman's `failed` signal.
     let fake = FakeHerdr::default();
-    *fake.events_on_subscribe.lock().unwrap() = vec![exited_event(PANE)];
+    *fake.events_on_subscribe.lock().unwrap() = vec![exited_event_code(PANE, 1)];
     let (socket, _) = fake.spawn();
 
     let mut d = Driver::new();
@@ -585,15 +551,104 @@ async fn state_stream_reports_failed_on_exit_before_completion() {
     assert_eq!(failed["params"]["state"], "failed");
 }
 
-/// Collect `n` state/notification lines from the stream.
-async fn collect_notes(d: &mut Driver, n: usize) -> Vec<Value> {
-    let mut notes = Vec::new();
-    for _ in 0..n {
-        let note = d.recv().await.expect("a notification");
-        assert_eq!(note["method"], "state/notification");
-        notes.push(note);
+#[tokio::test]
+async fn state_stream_reports_failed_on_exit_without_a_code() {
+    // herdr 0.7.x carries no exit code, so an exit it cannot confirm as clean is
+    // treated as abnormal (`failed`) — Claude in interactive mode does not exit
+    // on completion, so any unexplained exit really is abnormal.
+    let fake = FakeHerdr::default();
+    *fake.events_on_subscribe.lock().unwrap() = vec![exited_event(PANE)];
+    let (socket, _) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T5b", "Failing task", "implement").await;
+    let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
+    d.call("state/subscribe", json!({ "session_id": session_id }))
+        .await;
+
+    let failed = d.recv().await.expect("failed notification");
+    assert_eq!(failed["params"]["state"], "failed");
+}
+
+#[tokio::test]
+async fn state_stream_is_silent_on_a_clean_exit() {
+    // A clean exit (code 0) is the SessionEnd hook's job to report; the deadman
+    // stays silent and simply ends the stream.
+    let fake = FakeHerdr::default();
+    *fake.events_on_subscribe.lock().unwrap() = vec![exited_event_code(PANE, 0)];
+    let (socket, _) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T5c", "Clean exit", "implement").await;
+    let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
+    d.call("state/subscribe", json!({ "session_id": session_id }))
+        .await;
+
+    assert!(
+        d.recv_within(700).await.is_none(),
+        "a clean exit must not produce a notification"
+    );
+}
+
+#[tokio::test]
+async fn diagnostics_snapshot_returns_the_pane_screen() {
+    // R-10: `diagnostics/snapshot` reads the pane screen for escalation.
+    let fake = FakeHerdr {
+        detection: DETECTION,
+        ..FakeHerdr::default()
+    };
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T10", "Diag", "implement").await;
+    let session_id = disp["result"]["session_id"].as_str().unwrap().to_string();
+
+    let resp = d
+        .call("diagnostics/snapshot", json!({ "session_id": session_id }))
+        .await;
+    assert!(resp["error"].is_null(), "snapshot failed: {resp}");
+    assert_eq!(
+        resp["result"]["text"], DETECTION,
+        "the snapshot carries the pane screen text"
+    );
+    // It reads the `recent` screen copy (R-10), not `visible`/`detection`.
+    let log = requests.lock().unwrap();
+    assert!(
+        log.iter()
+            .any(|r| r["method"] == "pane.read" && r["params"]["source"] == "recent"),
+        "snapshot must read the pane with source=recent"
+    );
+}
+
+#[tokio::test]
+async fn diagnostics_snapshot_reports_none_when_pane_gone() {
+    // A vanished pane is not an error: the result carries `text: null` so the
+    // Orchestrator's escalation path never fails on a snapshot it cannot take.
+    let (socket, _) = FakeHerdr {
+        pane_gone: true,
+        ..FakeHerdr::default()
     }
-    notes
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "diagnostics/snapshot",
+            json!({ "session_id": "w9:p9|gone" }),
+        )
+        .await;
+    assert!(
+        resp["error"].is_null(),
+        "a pane-gone snapshot must not be an RPC error: {resp}"
+    );
+    assert!(
+        resp["result"]["text"].is_null(),
+        "a vanished pane reports text: null, not an error: {resp}"
+    );
 }
 
 #[tokio::test]
@@ -648,6 +703,125 @@ async fn dispatch_carries_the_agent_session_for_resume_and_transcripts() {
     assert_eq!(
         disp["result"]["session_id"], "w1:p1|sess-42",
         "the agent's own session id rides in the handle (resume + transcript lookup)"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_injects_hook_env_and_settings_and_resume() {
+    // 0.1.3: a hook launch spec rides `env` onto both workspace.create and
+    // agent.start, appends `--settings <path>` to the argv, and `--resume <id>`
+    // when resuming (Slack thread continuation).
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .call(
+            "task/dispatch",
+            json!({
+                "task": { "id": "TH", "source": "slack", "title": "Resume the thread",
+                          "body": "Answer in the thread.\n\nContext:\n- multi-line body" },
+                "worktree_path": "/wt/agent-1",
+                "mode": "implement",
+                "job_id": "job-7",
+                "resume_session_id": "claude-sess-abc",
+                "hook": {
+                    "settings_path": "/data/totsuka/hooks/orchestrator-implement.json",
+                    "env": {
+                        "TOTSUKA_JOB_ID": "job-7",
+                        "TOTSUKA_HOOK_ENDPOINT": "/run/totsuka/hook.sock",
+                        "TOTSUKA_HOOK_TOKEN": "tok-1"
+                    }
+                }
+            }),
+        )
+        .await;
+    assert!(disp["error"].is_null(), "dispatch must succeed: {disp}");
+
+    let log = requests.lock().unwrap();
+    let expected_env = json!({
+        "TOTSUKA_JOB_ID": "job-7",
+        "TOTSUKA_HOOK_ENDPOINT": "/run/totsuka/hook.sock",
+        "TOTSUKA_HOOK_TOKEN": "tok-1"
+    });
+
+    // env rides on workspace.create.
+    let create = log
+        .iter()
+        .find(|r| r["method"] == "workspace.create")
+        .expect("a workspace.create request");
+    assert_eq!(
+        create["params"]["env"], expected_env,
+        "the hook env must ride on workspace.create"
+    );
+
+    // env rides on agent.start, and `--settings`/`--resume` are in the argv.
+    let start = log
+        .iter()
+        .find(|r| r["method"] == "agent.start")
+        .expect("an agent.start request");
+    assert_eq!(
+        start["params"]["env"], expected_env,
+        "the hook env must ride on agent.start"
+    );
+    let argv: Vec<&str> = start["params"]["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        argv,
+        vec![
+            "claude",
+            "--settings",
+            "/data/totsuka/hooks/orchestrator-implement.json",
+            "--resume",
+            "claude-sess-abc",
+        ],
+        "the argv must carry --settings and --resume: {argv:?}"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_without_a_hook_injects_no_env() {
+    // The reduction is unconditional, but env injection is not: an old
+    // orchestrator that sends no hook spec must not get an `env` key (nor
+    // `--settings`/`--resume`).
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T0", "No hook", "implement").await;
+    assert!(disp["error"].is_null(), "dispatch must succeed: {disp}");
+
+    let log = requests.lock().unwrap();
+    let start = log
+        .iter()
+        .find(|r| r["method"] == "agent.start")
+        .expect("an agent.start request");
+    assert!(
+        start["params"].get("env").is_none(),
+        "no hook spec → no env on agent.start"
+    );
+    let create = log
+        .iter()
+        .find(|r| r["method"] == "workspace.create")
+        .expect("a workspace.create request");
+    assert!(
+        create["params"].get("env").is_none(),
+        "no hook spec → no env on workspace.create"
+    );
+    let argv: Vec<&str> = start["params"]["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        argv,
+        vec!["claude"],
+        "no --settings/--resume without a hook"
     );
 }
 
@@ -710,6 +884,9 @@ fn shipped_manifest_is_valid_agent_ide() {
     assert!(manifest.capabilities.state_stream);
     assert!(manifest.capabilities.design_preview);
     assert!(manifest.capabilities.pane_control);
+    // 0.1.3: session resume + pane diagnostics snapshots (#131).
+    assert!(manifest.capabilities.resume_session);
+    assert!(manifest.capabilities.diagnostics_snapshot);
     assert!(manifest.is_compatible_with(&plugin_protocol::protocol_version()));
 }
 
@@ -737,7 +914,8 @@ async fn methods_before_initialize_are_rejected() {
 async fn a_closed_subscription_only_fails_its_own_panes() {
     // The transport's event broadcast is shared by every subscription in the
     // process, so a close notice that skipped the pane filter would fail
-    // healthy concurrent tasks (#124 review).
+    // healthy concurrent tasks (#124 review). A *sibling* pane's close, followed
+    // by our own clean exit, must therefore produce no notification at all.
     use agent_ide_herdr::transport::SUBSCRIPTION_CLOSED_EVENT;
 
     let closed = json!({
@@ -745,7 +923,7 @@ async fn a_closed_subscription_only_fails_its_own_panes() {
         "data": { "pane_id": "w1:p9" },   // a *sibling* task's pane
     });
     let fake = FakeHerdr::default();
-    *fake.events_on_subscribe.lock().unwrap() = vec![closed, status_event(PANE, "done")];
+    *fake.events_on_subscribe.lock().unwrap() = vec![closed, exited_event_code(PANE, 0)];
     let (socket, _) = fake.spawn();
 
     let mut d = Driver::new();
@@ -755,10 +933,9 @@ async fn a_closed_subscription_only_fails_its_own_panes() {
     d.call("state/subscribe", json!({ "session_id": session_id }))
         .await;
 
-    let note = d.recv().await.expect("a notification");
-    assert_eq!(
-        note["params"]["state"], "done",
-        "another pane's close notice must not fail this task: {note}"
+    assert!(
+        d.recv_within(700).await.is_none(),
+        "another pane's close notice must not fail this task (our own exit was clean)"
     );
 }
 
