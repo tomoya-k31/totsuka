@@ -11,7 +11,7 @@
 * [task-source-slack](task-source-slack.md) - 自分宛の Slack メンションをタスク化し本人名義で代理返信する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard（auth.test + apps.connections.open）・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決・下書き提示・承認フローに加え、manifest 雛形・CLI レベル E2E・運用ドキュメントまで完備（エピック #102 完了）。
 * [agent-ide-herdr](agent-ide-herdr.md) - herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/設計プレビューを担う。
 * [agent-ide-orca](agent-ide-orca.md) - orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。design_preview は非宣言（capability を正直に宣言）。
-* [notifier-macos](notifier-macos.md) - Orchestrator のイベント（waiting_input / done / failed / pending）を macOS 通知センターへ配送する公式 notifier プラグイン。osascript ラップ、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
+* [notifier-macos](notifier-macos.md) - Orchestrator のイベント（waiting_input / done / failed / pending / escalated / verification_pending）を macOS 通知センターへ配送する公式 notifier プラグイン。osascript ラップ、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
 
 <!-- concept を追加したら、ここに 1 行追加する:
 * [Title](file.md) - frontmatter の description を転記

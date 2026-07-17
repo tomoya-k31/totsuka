@@ -35,6 +35,12 @@ pub struct EventToggles {
     /// Toggle for `pending` (F-14).
     #[serde(default)]
     pub pending: Option<bool>,
+    /// Toggle for `escalated` (#131 D-02/D-03: a task handed to a human).
+    #[serde(default)]
+    pub escalated: Option<bool>,
+    /// Toggle for `verification_pending` (#131 D-01: awaiting `task verify`).
+    #[serde(default)]
+    pub verification_pending: Option<bool>,
 }
 
 impl EventToggles {
@@ -45,9 +51,8 @@ impl EventToggles {
             NotifierEvent::Done => self.done,
             NotifierEvent::Failed => self.failed,
             NotifierEvent::Pending => self.pending,
-            // 0.1.3 events have no toggles yet (full support lands with the
-            // hook epic, #131); unspecified means "deliver" per `allows`.
-            NotifierEvent::Escalated | NotifierEvent::VerificationPending => None,
+            NotifierEvent::Escalated => self.escalated,
+            NotifierEvent::VerificationPending => self.verification_pending,
         }
     }
 }
@@ -112,10 +117,34 @@ mod tests {
             NotifierEvent::Done,
             NotifierEvent::Failed,
             NotifierEvent::Pending,
+            NotifierEvent::Escalated,
+            NotifierEvent::VerificationPending,
         ] {
             assert!(cfg.filter.allows(Some("wf"), event));
             assert!(cfg.filter.allows(None, event));
         }
+    }
+
+    #[test]
+    fn hook_event_toggles_are_filter_eligible() {
+        // The two hook-epic events (#131) are now first-class: a global toggle
+        // and a per-workflow override both take effect.
+        let cfg = parse(serde_json::json!({
+            "filter": {
+                "events": { "escalated": false, "verification_pending": false },
+                "workflows": { "reply": { "escalated": true } }
+            }
+        }));
+        // Global off silences both everywhere by default.
+        assert!(!cfg.filter.allows(Some("impl"), NotifierEvent::Escalated));
+        assert!(!cfg.filter.allows(None, NotifierEvent::VerificationPending));
+        // A per-workflow override re-enables escalated for `reply`.
+        assert!(cfg.filter.allows(Some("reply"), NotifierEvent::Escalated));
+        // …without touching verification_pending, which still follows the global off.
+        assert!(
+            !cfg.filter
+                .allows(Some("reply"), NotifierEvent::VerificationPending)
+        );
     }
 
     #[test]

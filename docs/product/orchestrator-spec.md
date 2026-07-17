@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-timestamp: 2026-07-12T00:00:00+09:00
+timestamp: 2026-07-18T00:00:00+09:00
 status: draft
 owner: tomoya-k31
 ---
@@ -116,13 +116,13 @@ Priorities use MoSCoW (M: Must / S: Should / C: Could / W: Won't in v1).
 |---|---|---|
 | F-30 | Abstract Agent IDEs as plugins; the agent to use is switchable per task type and per repository via configuration | M |
 | F-31 | Dispatch interface: pass worktree path, task body, execution mode (`plan` / `implement`), and extra context | M |
-| F-32 | Agent state (idle / running / waiting_input / done / failed) is retrievable. herdr uses its Socket API; orca hides its own mechanism inside the plugin | M |
+| F-32 | Agent state (idle / running / waiting_input / done / failed) is retrievable. herdr uses its Socket API; orca hides its own mechanism inside the plugin. **Note:** herdr + Claude Code completion detection is replaced by the hook mechanism (§4.11, F-100–F-107); the herdr state stream is retained only for `pane.exited` deadman detection | M |
 | F-33 | **Capability negotiation**: plugins declare their supported features (`plan_mode`, `design_preview`, `pane_control`, `state_stream`, etc.) and the orchestrator only requests supported features | M |
 | F-36 | In `plan` mode, the plugin maps to each agent's plan / read-mostly mode and runs it. Artifacts (design documents) are returned to the orchestrator as structured results (used for write-back per the workflow's output policy) | M |
 | F-37 | **Session management**: on dispatch, obtain the agent's session identifier (conversation history ID), associate it with the task, and persist it in the state DB. `session/attach` is a required method of agent_ide plugins; on orchestrator restart / task resume, re-attach to the existing session | M |
-| F-38 | The plugin carries agent execution logs as fragments in `state/subscribe` notifications; the orchestrator persists them tagged with task_id (source for `logs --task <id>`) | M |
+| F-38 | The plugin carries agent execution logs as fragments in `state/subscribe` notifications; the orchestrator persists them tagged with task_id (source for `logs --task <id>`). **Note:** herdr + Claude Code completion detection is replaced by the hook mechanism (§4.11, F-100–F-107); the herdr state stream is retained only for `pane.exited` deadman detection | M |
 | F-34 | In detailed-design mode, request supporting plugins to show a design preview (separate pane / side screen). The display mechanism is the plugin's responsibility | S |
-| F-35 | Detect questions from the agent to a human (waiting_input), show them in `status`, and deliver the event to notifier plugins (§4.10) | M |
+| F-35 | Detect questions from the agent to a human (waiting_input), show them in `status`, and deliver the event to notifier plugins (§4.10). **Note:** herdr + Claude Code completion detection is replaced by the hook mechanism (§4.11, F-100–F-107); the herdr state stream is retained only for `pane.exited` deadman detection | M |
 
 ### 4.5 Parallel execution control
 
@@ -249,6 +249,21 @@ on_success = { set_status = "レビュー待ち" }
 | F-91 | Bundle an official notifier for macOS Notification Center in v1 | M |
 | F-92 | Notifications can be enabled/disabled per workflow and per event kind | S |
 | F-93 | Notification failures must not affect task execution (fire-and-forget; errors logged only) | M |
+
+### 4.11 Deterministic completion signal (Claude Code hooks)
+
+Claude Code has no lifecycle authority, so herdr's screen-manifest completion detection is structurally lossy (latency, missed transitions, false positives). Completion is therefore reported **deterministically through Claude Code hooks**: a herdr pane runs `claude --settings <hooks_dir>/orchestrator-<workflow>.json [--resume <sid>]`, and command-type `Stop` / `Notification` / `SessionStart` / `SessionEnd` hooks POST to the orchestrator over a Unix domain socket (a `verification = "llm"` workflow additionally gets a prompt-type `Stop` hook that applies the rubric in-session). This subsection is the requirements home for that mechanism; the end-to-end flow is diagrammed in `architecture/hook-signal-flow.md`, the placement decision is recorded in ADR-0004, and the config surface is `[hooks]` (`auth_token_ref` / `socket_path` / `spool_dir` / `block_retry_limit`) plus the per-workflow `verification` / `timeout_secs` / `rubric` keys.
+
+| ID | Requirement | Priority |
+|---|---|---|
+| F-100 | **UDS receive**: the orchestrator receives completion signals on a Unix domain socket (mode `0600`) via a core driving adapter (`adapters::hook_uds`, a hand-rolled `UnixListener` + minimal HTTP/1.1). `POST /claude-events` with `Authorization: Bearer` constant-time compared to `[hooks].auth_token_ref`; body capped at 1 MiB; `job_id` required (else `400`). The receiver answers `200` immediately and processes asynchronously, normalizing the JSON body to `domain::signal::AgentSignal` via `ports::SignalPort` | M |
+| F-101 | **Status-marker convention**: completion is self-reported by a marker on the last line of the assistant response (last-occurrence wins): `<<STATUS:COMPLETED>>` / `<<STATUS:NEEDS_INPUT reason="...">>` / `<<STATUS:FAILED reason="...">>`. Marker missing with `stop_hook_active=false` ⇒ the `Stop` hook `block`s to make Claude re-emit; `stop_hook_active=true` ⇒ post `UNKNOWN` without blocking. A non-empty `background_tasks` yields a heartbeat only (intermediate Stop, never a completion) | M |
+| F-102 | **Verification** (`verification = "llm"` (default) / `"human"` / `"none"`): `llm` runs an in-session prompt-type `Stop` hook (rubric) — on a `COMPLETED` receipt the engine goes straight to Publishing; `human` parks the task in `Verifying` awaiting `totsuka task verify --pass/--fail`; `none` publishes directly | M |
+| F-103 | **Escalation**: 3 consecutive `UNKNOWN` stops (recomputed from the DB — the hook self-report is never trusted; `[hooks].block_retry_limit`, default 3) OR 30 min of silence since the last signal (workflow `timeout_secs` override) OR a correlation anomaly ⇒ the task enters `Escalated` (non-terminal) with a notifier notification and a `diagnostics/snapshot` (herdr `pane.read`) | M |
+| F-104 | **Spool + at-least-once + idempotency**: on POST failure the hook retries twice, then appends an NDJSON line under `spool_dir`; the engine's `replay_spool()` re-submits it on `recover()` and each cycle. `hook_events UNIQUE(job_id, claude_session_id, prompt_id, event)` drops duplicate / out-of-order POSTs (multi-fire, spool resend, curl retry). A corrupt spool entry is quarantined (renamed `.corrupt`), not deleted | M |
+| F-105 | **Conversation continuity**: `Task.thread_key` (`channel:thread_ts`) correlates a conversation. A follow-up mention in the same thread is a NEW task that resumes the prior task's `claude_session_id` via `task/dispatch(resume_session_id)` → `claude --resume` (a fresh worktree is recreated if discarded — the session is reused, not the worktree). Latest-session-wins; different threads never cross-resume; a signal is routed by its `job_id`'s task, never guessed from a shared session id (E-09) | M |
+| F-106 | **Deadman**: the herdr `events.subscribe` stream is reduced to `pane.exited` deadman detection only; a herdr process crash surfaces as `Failed` | M |
+| F-107 | **Pane post-processing**: `Done` panes auto-close (idempotent `task/cancel`); `Failed` / `Escalated` panes are retained for diagnosis | M |
 
 ## 5. Non-Functional Requirements
 

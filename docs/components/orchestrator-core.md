@@ -4,7 +4,7 @@ title: orchestrator-core クレート
 description: totsuka のコア。ヘキサゴナルアーキテクチャの domain（ドメイン・ステートマシン）/ ports（TaskSource・AgentIde・LlmRouter・SecretStore 等の trait）/ adapters（JSON-RPC ブリッジ・SQLite・Keychain）を担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin, worktree, git, workflow, scheduler, llm, repo-select, recovery, session, run, output, signal, hook]
-timestamp: 2026-07-18T00:00:00Z
+timestamp: 2026-07-18T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -46,4 +46,7 @@ totsuka のビジネスロジックの中核。外部 I/O を持たず、ports �
 # 関連
 
 - [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)
-- [Spec §6 技術要件](/product/orchestrator-spec.ja.md)
+- [ADR-0004 フック完了シグナルの受信配置（ports::SignalPort + adapters::hook_uds）](/decisions/adr-0004-hook-completion-signal.md)
+- [フックシグナルフロー](/architecture/hook-signal-flow.md) / [フックのセキュリティ](/security/hook-security.md) / [フックのトラブルシューティング](/operations/hook-troubleshooting.md)
+- [POST /claude-events（UDS フック受信）](/apis/claude-events.md) / [state.db スキーマ](/data/state-db.md)
+- [Spec §6 技術要件 / F-100〜F-107](/product/orchestrator-spec.ja.md)

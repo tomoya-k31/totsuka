@@ -156,6 +156,12 @@ fn main() {
                 {
                     commit_in(worktree);
                 }
+                // `hook_post_on_dispatch`: simulate a hook-capable Claude Code
+                // agent self-reporting completion over the *real* UDS socket
+                // (#141 E2E). Reads the launch-spec env the orchestrator injected
+                // (TOTSUKA_HOOK_ENDPOINT / TOTSUKA_HOOK_TOKEN / TOTSUKA_JOB_ID)
+                // and POSTs a synthetic Stop, exactly as `on-stop.sh` would.
+                hook_post_on_dispatch(&config, &params, &session_id);
                 Response::result(
                     request_id(&id),
                     serde_json::to_value(TaskDispatchResult { session_id }).unwrap(),
@@ -246,6 +252,112 @@ fn main() {
         let _ = writeln!(stdout, "{}", serde_json::to_string(&response).unwrap());
         let _ = stdout.flush();
     }
+}
+
+/// Simulate a hook-capable Claude Code agent self-reporting completion over the
+/// real UDS hook socket (#141 E2E). No-op unless `hook_post_on_dispatch` is set
+/// in the init config. The synthetic Stop is shaped exactly like the JSON
+/// `on-stop.sh` emits, and is addressed with the `job_id` / endpoint / token the
+/// orchestrator injected into `params.hook.env` (#132 `HookLaunchSpec`).
+///
+/// Config shape (all fields optional):
+/// ```json
+/// { "hook_post_on_dispatch": {
+///     "status": "COMPLETED",              // COMPLETED | NEEDS_INPUT | FAILED | UNKNOWN
+///     "message": "done <<STATUS:COMPLETED>>",
+///     "prompt_id": "p-1"                  // vary to defeat idempotency dedup
+///   } }
+/// ```
+fn hook_post_on_dispatch(config: &Value, params: &Value, session_id: &str) {
+    let Some(spec) = config.get("hook_post_on_dispatch") else {
+        return;
+    };
+    let env = params.get("hook").and_then(|h| h.get("env"));
+    let field = |key: &str| env.and_then(|e| e.get(key)).and_then(Value::as_str);
+    let Some(endpoint) = field("TOTSUKA_HOOK_ENDPOINT") else {
+        eprintln!(
+            "mock_plugin: hook_post_on_dispatch set but no TOTSUKA_HOOK_ENDPOINT in hook env"
+        );
+        return;
+    };
+    let job_id = field("TOTSUKA_JOB_ID").unwrap_or("");
+    let token = field("TOTSUKA_HOOK_TOKEN");
+
+    let status = spec
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("COMPLETED");
+    let message = spec
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("done <<STATUS:COMPLETED>>");
+    let prompt_id = spec
+        .get("prompt_id")
+        .and_then(Value::as_str)
+        .unwrap_or("p-mock");
+    // `repeat` (default 1): POST the identical signal N times to exercise the
+    // receiver + engine idempotency (D-05) through the real socket.
+    let repeat = spec
+        .get("repeat")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .max(1);
+    let body = serde_json::json!({
+        "job_id": job_id,
+        "session_id": session_id,
+        "prompt_id": prompt_id,
+        "hook_event_name": "Stop",
+        "status": status,
+        "last_assistant_message": message,
+        "background_tasks": [],
+    })
+    .to_string();
+    for _ in 0..repeat {
+        if let Err(e) = post_uds(endpoint, token, &body) {
+            eprintln!("mock_plugin: hook POST to {endpoint} failed: {e}");
+        }
+    }
+}
+
+/// POST `body` to `POST /claude-events` on the UDS at `endpoint` (minimal
+/// HTTP/1.1, `Connection: close`), mirroring `on-stop.sh`'s `curl --unix-socket`.
+#[cfg(unix)]
+fn post_uds(endpoint: &str, token: Option<&str>, body: &str) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    let mut stream = UnixStream::connect(endpoint)?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+    let auth = token
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "POST /claude-events HTTP/1.1\r\n\
+         Host: localhost\r\n\
+         {auth}\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        len = body.len(),
+    );
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+    // Drain the reply so the server sees a clean close.
+    let mut sink = Vec::new();
+    let _ = stream.read_to_end(&mut sink);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn post_uds(_endpoint: &str, _token: Option<&str>, _body: &str) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "UDS hook POST is only supported on Unix",
+    ))
 }
 
 /// Append `{"method", "params"}` to the config's `notify_log` file, if set —
