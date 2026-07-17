@@ -31,7 +31,7 @@
 //!
 //! ```json
 //! {
-//!   "job_id": "job-42-7",              // required; TOOL_A_JOB_ID echoed back
+//!   "job_id": "job-42-7",              // required; TOTSUKA_JOB_ID echoed back
 //!   "session_id": "abc123",            // Claude session id (optional)
 //!   "prompt_id": "p-1",                // idempotency-key component (optional)
 //!   "hook_event_name": "Stop",         // Stop|Notification|SessionStart|SessionEnd

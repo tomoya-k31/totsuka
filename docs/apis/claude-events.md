@@ -33,7 +33,7 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 
 | フィールド | 必須 | 意味 |
 |---|---|---|
-| `job_id` | ✔ | `"job-{task_id}-{session_row}"`。`TOOL_A_JOB_ID` のエコーバック。相関はこれのみで行い session_id からの推測はしない（E-09） |
+| `job_id` | ✔ | `"job-{task_id}-{session_row}"`。`TOTSUKA_JOB_ID` のエコーバック。相関はこれのみで行い session_id からの推測はしない（E-09） |
 | `session_id` | | Claude セッション id（相関補助・冪等キー要素） |
 | `prompt_id` | | 冪等キー要素 |
 | `hook_event_name` | | `Stop` / `Notification` / `SessionStart` / `SessionEnd`。未知/欠落は `Heartbeat`（生存のみ、誤完了を避ける最も非断定な扱い）へ正規化 |
@@ -59,7 +59,7 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 
 ```bash
 curl --unix-socket "${XDG_RUNTIME_DIR}/totsuka/claude-events.sock" \
-  -H "Authorization: Bearer $TOOL_A_TOKEN" \
+  -H "Authorization: Bearer $TOTSUKA_HOOK_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"job_id":"job-42-7","session_id":"abc","hook_event_name":"Stop","status":"completed"}' \
   http://localhost/claude-events
