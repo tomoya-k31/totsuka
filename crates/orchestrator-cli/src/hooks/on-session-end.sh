@@ -23,10 +23,9 @@ reason="$(printf '%s' "$input" | jq -r '.reason // ""')"
 payload="$(jq -cn \
   --arg job_id "${TOTSUKA_JOB_ID:-}" \
   --arg session_id "$session_id" \
-  --arg event "session_end" \
   --arg ts "$(iso_now)" \
   --arg reason "$reason" \
-  '{job_id: $job_id, session_id: $session_id, event: $event, ts: $ts, reason: $reason}')"
+  '{job_id: $job_id, session_id: $session_id, hook_event_name: "SessionEnd", ts: $ts, reason: $reason}')"
 
 post_event "$payload"
 exit 0

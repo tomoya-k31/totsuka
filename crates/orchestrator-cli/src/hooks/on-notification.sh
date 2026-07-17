@@ -22,10 +22,9 @@ message="$(printf '%s' "$input" | jq -r '.message // ""')"
 payload="$(jq -cn \
   --arg job_id "${TOTSUKA_JOB_ID:-}" \
   --arg session_id "$session_id" \
-  --arg event "notification" \
   --arg ts "$(iso_now)" \
   --arg message "$message" \
-  '{job_id: $job_id, session_id: $session_id, event: $event, ts: $ts, message: $message}')"
+  '{job_id: $job_id, session_id: $session_id, hook_event_name: "Notification", ts: $ts, message: $message}')"
 
 post_event "$payload"
 exit 0

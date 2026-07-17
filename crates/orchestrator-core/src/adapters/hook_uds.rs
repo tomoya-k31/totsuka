@@ -349,9 +349,15 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// Normalize a JSON body into an [`AgentSignal`].
 ///
 /// Only `job_id` is mandatory (E-09); everything else is best-effort and the
-/// full body is kept verbatim in `payload` for the audit trail and for #138 to
-/// re-interpret. Rich state-machine interpretation is out of scope here.
-fn parse_signal(body: &[u8]) -> Result<AgentSignal, String> {
+/// full body is kept verbatim in `payload` for the audit trail and for the
+/// engine (#138) to re-interpret. Rich state-machine interpretation is out of
+/// scope here.
+///
+/// `pub(crate)` so the engine's spool-replay path
+/// ([`Engine::replay_spool`](crate::run::Engine)) normalizes a spooled NDJSON
+/// line through the *same* code as a live POST — one canonical wire contract,
+/// no drift.
+pub(crate) fn parse_signal(body: &[u8]) -> Result<AgentSignal, String> {
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|e| format!("invalid JSON body: {e}"))?;
     let obj = value
@@ -471,6 +477,100 @@ async fn write_response(stream: &mut UnixStream, status: u16, reason: &str) -> i
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    /// The wire contract must stay identical on both sides: a payload shaped
+    /// exactly like the one `on-stop.sh` emits (`hook_event_name` + uppercase
+    /// `status` + `background_tasks`) must normalize to the right
+    /// `SignalEvent`/`StopStatus`. This is the cross-issue guard that a rename
+    /// on either side (script or parser) can never silently diverge again.
+    #[test]
+    fn on_stop_sh_completed_payload_deserializes_to_stop_completed() {
+        // Byte-for-byte the object `on-stop.sh`'s `stop_payload COMPLETED` jq
+        // filter produces for a final Stop with a COMPLETED marker.
+        let body = br#"{"job_id":"job-42-7","session_id":"cc-1","prompt_id":"p-1","hook_event_name":"Stop","ts":"2026-07-18T00:00:00Z","status":"COMPLETED","reason":"","last_assistant_message":"done <<STATUS:COMPLETED>>","transcript_path":"/t.jsonl","background_tasks":[]}"#;
+        let sig = parse_signal(body).expect("on-stop.sh payload must parse");
+        assert_eq!(sig.job_id, JobId::new(42, 7));
+        assert_eq!(sig.claude_session_id, "cc-1");
+        assert_eq!(sig.prompt_id, "p-1");
+        match sig.event {
+            SignalEvent::Stop {
+                status: StopStatus::Completed,
+                last_assistant_message,
+                transcript_path,
+                ..
+            } => {
+                assert_eq!(
+                    last_assistant_message.as_deref(),
+                    Some("done <<STATUS:COMPLETED>>")
+                );
+                assert_eq!(transcript_path.as_deref(), Some("/t.jsonl"));
+            }
+            other => panic!("expected Stop/Completed, got {other:?}"),
+        }
+    }
+
+    /// The heartbeat shape `on-stop.sh` emits for an intermediate Stop:
+    /// `hook_event_name: "Stop"` with a non-empty `background_tasks`.
+    #[test]
+    fn on_stop_sh_heartbeat_payload_deserializes_to_heartbeat() {
+        let body = br#"{"job_id":"job-1-2","session_id":"s","prompt_id":"","hook_event_name":"Stop","ts":"t","status":"","reason":"","last_assistant_message":"working <<STATUS:COMPLETED>>","transcript_path":"","background_tasks":[{"id":"bg1"}]}"#;
+        let sig = parse_signal(body).expect("heartbeat payload must parse");
+        assert!(
+            matches!(sig.event, SignalEvent::Heartbeat),
+            "non-empty background_tasks ⇒ heartbeat, got {:?}",
+            sig.event
+        );
+    }
+
+    /// The uppercase `NEEDS_INPUT`/`FAILED`/`UNKNOWN` the script emits map onto
+    /// the right status (the parser lower-cases, so casing never matters).
+    #[test]
+    fn on_stop_sh_status_casing_is_tolerated() {
+        for (raw, want) in [
+            ("NEEDS_INPUT", StopStatus::NeedsInput),
+            ("FAILED", StopStatus::Failed),
+            ("UNKNOWN", StopStatus::Unknown),
+        ] {
+            let body =
+                format!(r#"{{"job_id":"job-3-4","hook_event_name":"Stop","status":"{raw}"}}"#);
+            let sig = parse_signal(body.as_bytes()).unwrap();
+            match sig.event {
+                SignalEvent::Stop { status, .. } => assert_eq!(status, want, "raw {raw}"),
+                other => panic!("expected Stop, got {other:?}"),
+            }
+        }
+    }
+
+    /// The other three scripts' `hook_event_name` values normalize correctly.
+    #[test]
+    fn on_session_and_notification_payloads_deserialize() {
+        let notif = parse_signal(
+            br#"{"job_id":"job-1-1","session_id":"s","hook_event_name":"Notification","message":"grant permission?"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            notif.event,
+            SignalEvent::Notification { message: Some(_) }
+        ));
+        let start = parse_signal(
+            br#"{"job_id":"job-1-1","session_id":"cc-9","hook_event_name":"SessionStart","source":"startup"}"#,
+        )
+        .unwrap();
+        match start.event {
+            SignalEvent::SessionStart { claude_session_id } => {
+                assert_eq!(claude_session_id, "cc-9")
+            }
+            other => panic!("expected SessionStart, got {other:?}"),
+        }
+        let end = parse_signal(
+            br#"{"job_id":"job-1-1","session_id":"cc-9","hook_event_name":"SessionEnd","reason":"clear"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            end.event,
+            SignalEvent::SessionEnd { reason: Some(_) }
+        ));
+    }
 
     /// A [`SignalPort`] fake that records every submitted signal.
     #[derive(Clone, Default)]

@@ -1,0 +1,706 @@
+//! Integration tests for hook-signal handling (#138): `Engine::on_signal`,
+//! verification, escalation, the timeout sweep, spool recovery, and the
+//! dispatch-side hook wiring. Runs against real mock-plugin subprocesses.
+//!
+//! The orca/mock `AgentState::Done` regression and the restart-crossing
+//! `Verifying` safety are covered by the existing `run_loop.rs` /
+//! `recovery` suites, which this PR leaves unchanged.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use orchestrator_core::adapters::git::SystemGitRunner;
+use orchestrator_core::adapters::llm::OpenAiRouter;
+use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
+use orchestrator_core::adapters::{NewTask, StateDb};
+use orchestrator_core::config::RootConfig;
+use orchestrator_core::domain::signal::{
+    AgentSignal, JobId, SignalEvent, SignalSource, StopStatus,
+};
+use orchestrator_core::domain::state::{TaskEvent, TaskState};
+use orchestrator_core::domain::workflow::Workflow;
+use orchestrator_core::ports::SecretString;
+use orchestrator_core::repo_select::SelectConfig;
+use orchestrator_core::run::{Engine, EngineSettings, HookRuntime, PluginSet, RepoSettings};
+use orchestrator_core::scheduler::Limits;
+use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_BRANCH_TEMPLATE};
+use plugin_protocol::manifest::Manifest;
+use serde_json::json;
+use test_support::{bare_origin_and_clone as setup_repo, scratch};
+
+fn mock_plugin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_mock_plugin"))
+}
+
+async fn launch(kind: &str, name: &str, init_config: serde_json::Value) -> Plugin {
+    let manifest = Manifest::from_toml_str(&format!(
+        r#"
+name = "{name}"
+kind = "{kind}"
+version = "0.1.0"
+protocol_version = "^0.1"
+"#
+    ))
+    .unwrap();
+    Plugin::launch(PluginSpec {
+        name: name.to_string(),
+        program: mock_plugin(),
+        args: vec![],
+        manifest,
+        init_config,
+        repositories: vec![],
+        llm: None,
+        timeout: Duration::from_secs(10),
+    })
+    .await
+    .expect("launch mock plugin")
+}
+
+fn no_llm() -> Option<OpenAiRouter> {
+    None
+}
+
+fn read_log(path: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+/// One workflow `wf` (source `mock_src`, agent `mock_agent`) with the given
+/// verification mode and output policy.
+fn workflows(verification: &str, output: &str) -> Vec<Workflow> {
+    let cfg = RootConfig::from_toml_str(&format!(
+        r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {{}}
+mode = "implement"
+agent = "mock_agent"
+output = "{output}"
+verification = "{verification}"
+on_success = {{ set_status = "done" }}
+on_failure = {{ set_status = "failed" }}
+"#
+    ))
+    .unwrap();
+    Workflow::from_configs(&cfg.workflows)
+}
+
+fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSettings {
+    EngineSettings {
+        workflows: wfs,
+        repos: vec![RepoSettings {
+            name: "clone".to_string(),
+            path: PathBuf::from("/nonexistent"),
+            summary: None,
+            worktree_location: None,
+        }],
+        limits: Limits::global(4),
+        branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
+        location_template: "{repo}/../wt/{branch}".to_string(),
+        cleanup_implement: CleanupPolicy::Manual,
+        cleanup_plan: CleanupPolicy::Immediate,
+        env: HashMap::new(),
+        select: SelectConfig::default(),
+        poll_intervals: HashMap::new(),
+        readme_cache_dir: None,
+        pr_title_template: "t: {title}".to_string(),
+        pr_body_template: "{summary}".to_string(),
+        hook,
+    }
+}
+
+/// A minimal plugin set: a config-driven agent + a recording notifier.
+async fn plugin_set(agent_config: serde_json::Value, notify_log: &Path) -> PluginSet {
+    let mut set = PluginSet::default();
+    set.agents.insert(
+        "mock_agent".to_string(),
+        launch("agent_ide", "mock_agent", agent_config).await,
+    );
+    set.notifiers.insert(
+        "mock_notify".to_string(),
+        launch(
+            "notifier",
+            "mock_notify",
+            json!({ "notify_log": notify_log }),
+        )
+        .await,
+    );
+    set
+}
+
+fn new_task(source_task_id: &str, last_signal_at: Option<&str>) -> NewTask {
+    NewTask {
+        source: "mock_src".into(),
+        source_task_id: source_task_id.into(),
+        workflow: "wf".into(),
+        mode: "implement".into(),
+        repo: Some("clone".into()),
+        priority: 0,
+        title: "hook task".into(),
+        url: None,
+        source_payload: None,
+        thread_key: None,
+        last_signal_at: last_signal_at.map(str::to_string),
+    }
+}
+
+/// Seed a task straight to `Running`, recording a session, and return
+/// `(task_id, session_row)`.
+fn seed_running(db: &StateDb, sid: &str) -> (i64, i64) {
+    let id = db.upsert_task(&new_task("1", None)).unwrap();
+    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    let row = db.record_session(id, "mock_agent", sid).unwrap();
+    (id, row)
+}
+
+fn stop(
+    task_id: i64,
+    row: i64,
+    prompt_id: &str,
+    status: StopStatus,
+    msg: Option<&str>,
+) -> AgentSignal {
+    AgentSignal {
+        source: SignalSource::ClaudeHook,
+        job_id: JobId::new(task_id, row),
+        claude_session_id: "cc-1".into(),
+        prompt_id: prompt_id.into(),
+        event: SignalEvent::Stop {
+            status,
+            reason: None,
+            last_assistant_message: msg.map(str::to_string),
+            transcript_path: Some("/t.jsonl".into()),
+        },
+        payload: json!({ "hook_event_name": "Stop" }),
+    }
+}
+
+const GRACE: Duration = Duration::from_secs(5);
+
+#[tokio::test]
+async fn completed_llm_publishes_to_done() {
+    let base = scratch("hook_llm_done");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine
+        .on_signal(stop(
+            id,
+            row,
+            "p1",
+            StopStatus::Completed,
+            Some("all done <<STATUS:COMPLETED>>"),
+        ))
+        .await
+        .unwrap();
+
+    let task = engine.db().get_task(id).unwrap().unwrap();
+    assert_eq!(
+        task.state,
+        TaskState::Done,
+        "llm COMPLETED publishes straight to Done"
+    );
+
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    assert!(
+        notes.iter().any(|n| n["params"]["event"] == "done"),
+        "done notification delivered: {notes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn completed_human_waits_for_verify_then_pass_reaches_done() {
+    let base = scratch("hook_human_verify");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+    let db = StateDb::open(&db_path).unwrap();
+    // `sess-done` so the recovery re-attach reports the agent already done →
+    // the approved (Publishing) task finalizes.
+    let (id, row) = seed_running(&db, "sess-done-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("human", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine
+        .on_signal(stop(
+            id,
+            row,
+            "p1",
+            StopStatus::Completed,
+            Some("draft <<STATUS:COMPLETED>>"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Verifying,
+        "human verification parks the task in Verifying"
+    );
+
+    // Simulate `totsuka task verify --pass`.
+    engine
+        .db()
+        .apply_event(id, TaskEvent::ApproveVerification, None)
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Publishing
+    );
+
+    // The next run's recover cycle finalizes the Publishing task.
+    engine.recover().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Done,
+        "recover finalizes the approved task"
+    );
+
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    assert!(
+        notes
+            .iter()
+            .any(|n| n["params"]["event"] == "verification_pending"),
+        "verification-pending notification delivered: {notes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn verify_fail_returns_to_running() {
+    let base = scratch("hook_verify_fail");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("human", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine
+        .on_signal(stop(
+            id,
+            row,
+            "p1",
+            StopStatus::Completed,
+            Some("x <<STATUS:COMPLETED>>"),
+        ))
+        .await
+        .unwrap();
+    // `totsuka task verify --fail`.
+    engine
+        .db()
+        .apply_event(id, TaskEvent::VerificationFailed, None)
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Running,
+        "rejection returns the task to Running for correction"
+    );
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn three_unknown_stops_escalate_with_snapshot() {
+    let base = scratch("hook_escalate");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        // A diagnostics-capable agent so the escalation captures a pane snapshot.
+        plugin_set(
+            json!({ "diagnostics_snapshot": true, "snapshot_text": "PANE" }),
+            &notify_log,
+        )
+        .await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    // Distinct prompt_ids so the dedup key differs and all three are counted.
+    for (i, p) in ["p1", "p2", "p3"].iter().enumerate() {
+        engine
+            .on_signal(stop(id, row, p, StopStatus::Unknown, None))
+            .await
+            .unwrap();
+        let state = engine.db().get_task(id).unwrap().unwrap().state;
+        if i < 2 {
+            assert_eq!(state, TaskState::Running, "below threshold stays Running");
+        } else {
+            assert_eq!(state, TaskState::Escalated, "3rd UNKNOWN escalates (D-02)");
+        }
+    }
+
+    // The escalation event carries the pane snapshot (R-10).
+    let has_snapshot = engine
+        .db()
+        .list_events(id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| e.detail)
+        .any(|d| d.get("diagnostics").and_then(|v| v.as_str()) == Some("PANE"));
+    assert!(
+        has_snapshot,
+        "diagnostics snapshot recorded in the escalate detail"
+    );
+
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    assert!(
+        notes.iter().any(|n| n["params"]["event"] == "escalated"),
+        "escalated notification delivered: {notes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn needs_input_parks_in_waiting_input() {
+    let base = scratch("hook_needs_input");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine
+        .on_signal(stop(id, row, "p1", StopStatus::NeedsInput, None))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::WaitingInput
+    );
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    assert!(
+        notes
+            .iter()
+            .any(|n| n["params"]["event"] == "waiting_input"),
+        "waiting_input notification delivered: {notes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn duplicate_signal_transitions_once() {
+    let base = scratch("hook_dup");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("human", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let sig = stop(
+        id,
+        row,
+        "p1",
+        StopStatus::Completed,
+        Some("x <<STATUS:COMPLETED>>"),
+    );
+    engine.on_signal(sig.clone()).await.unwrap();
+    // The exact same signal (identical idempotency key) is dropped by the DB.
+    engine.on_signal(sig).await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Verifying,
+        "the duplicate does not re-transition"
+    );
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn timeout_sweep_escalates_silent_task() {
+    let base = scratch("hook_timeout");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    // Seed a task whose last signal is ancient (well past the 30-minute default).
+    let id = db
+        .upsert_task(&new_task("1", Some("2000-01-01T00:00:00Z")))
+        .unwrap();
+    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.record_session(id, "mock_agent", "sess-1").unwrap();
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine.sweep_signal_timeouts().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Escalated,
+        "a silent task past its timeout escalates (D-03)"
+    );
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    assert!(notes.iter().any(|n| n["params"]["event"] == "escalated"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn spool_replay_applies_signal_and_deletes_file() {
+    let base = scratch("hook_spool");
+    let notify_log = base.join("notify.ndjson");
+    let spool_dir = base.join("spool");
+    std::fs::create_dir_all(&spool_dir).unwrap();
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let hook = HookRuntime {
+        socket_path: base.join("sock"),
+        auth_token: None,
+        spool_dir: Some(spool_dir.clone()),
+        settings_paths: HashMap::new(),
+        block_retry_limit: 3,
+    };
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), Some(hook)),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    // A spooled NDJSON line exactly as on-stop.sh would emit it.
+    let line = format!(
+        r#"{{"job_id":"{}","session_id":"cc-1","prompt_id":"sp","hook_event_name":"Stop","status":"COMPLETED","last_assistant_message":"spooled <<STATUS:COMPLETED>>","background_tasks":[]}}"#,
+        JobId::new(id, row)
+    );
+    let spool_file = spool_dir.join("1700000000-1.jsonl");
+    std::fs::write(&spool_file, format!("{line}\n")).unwrap();
+
+    engine.replay_spool().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Done,
+        "the spooled completion is applied"
+    );
+    assert!(
+        !spool_file.exists(),
+        "the spool file is deleted after replay"
+    );
+
+    // Re-spooling the same line is harmless: the idempotency key drops it and
+    // the task stays Done.
+    std::fs::write(&spool_file, format!("{line}\n")).unwrap();
+    engine.replay_spool().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Done
+    );
+    assert!(!spool_file.exists());
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn unknown_task_signal_does_not_corrupt_state() {
+    let base = scratch("hook_unknown_task");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    // A signal for a task that does not exist (job-999-1): accepted at the
+    // boundary, parked here (E-09) — no panic, no state change to the real task.
+    engine
+        .on_signal(stop(
+            999,
+            1,
+            "p1",
+            StopStatus::Completed,
+            Some("x <<STATUS:COMPLETED>>"),
+        ))
+        .await
+        .unwrap();
+    assert!(engine.db().get_task(999).unwrap().is_none());
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Running,
+        "the real task is untouched"
+    );
+    // A well-formed signal for the real task still works afterwards.
+    engine
+        .on_signal(stop(
+            id,
+            row,
+            "p2",
+            StopStatus::Completed,
+            Some("ok <<STATUS:COMPLETED>>"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Done
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn dispatch_wires_job_id_and_hook_launch_spec() {
+    let base = scratch("hook_dispatch");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+
+    // A hook-capable agent (resume_session) records its dispatch params.
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({ "tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "resume_session": true, "stream_states": ["running"], "dispatch_log": dispatch_log }),
+        )
+        .await,
+    );
+    plugins.notifiers.insert(
+        "mock_notify".to_string(),
+        launch(
+            "notifier",
+            "mock_notify",
+            json!({ "notify_log": notify_log }),
+        )
+        .await,
+    );
+
+    let hook = HookRuntime {
+        socket_path: base.join("claude.sock"),
+        auth_token: Some(SecretString::new("tok3n")),
+        spool_dir: Some(base.join("spool")),
+        settings_paths: HashMap::from([("wf".to_string(), base.join("orchestrator-wf.json"))]),
+        block_retry_limit: 3,
+    };
+    let mut settings = engine_settings(workflows("llm", "none"), Some(hook));
+    settings.repos = vec![RepoSettings {
+        name: "clone".to_string(),
+        path: repo.clone(),
+        summary: None,
+        worktree_location: None,
+    }];
+    settings.location_template = "{repo}/../wt/{branch}".to_string();
+
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine.cycle(None).await.unwrap();
+
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap();
+    let row = engine.db().latest_session(task.id).unwrap().unwrap().id;
+    let expected_job = JobId::new(task.id, row).to_string();
+
+    engine.shutdown(GRACE).await;
+
+    let dispatches = read_log(&dispatch_log);
+    let params = &dispatches
+        .iter()
+        .find(|d| d["method"] == "task/dispatch")
+        .expect("dispatch recorded")["params"];
+    assert_eq!(
+        params["job_id"], expected_job,
+        "job_id minted from task + session row"
+    );
+    let hook = &params["hook"];
+    assert_eq!(
+        hook["settings_path"],
+        base.join("orchestrator-wf.json").display().to_string()
+    );
+    assert_eq!(hook["env"]["TOTSUKA_JOB_ID"], expected_job);
+    assert_eq!(
+        hook["env"]["TOTSUKA_HOOK_ENDPOINT"],
+        base.join("claude.sock").display().to_string()
+    );
+    assert_eq!(hook["env"]["TOTSUKA_HOOK_TOKEN"], "tok3n");
+    assert_eq!(
+        hook["env"]["TOTSUKA_HOOK_SPOOL_DIR"],
+        base.join("spool").display().to_string()
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

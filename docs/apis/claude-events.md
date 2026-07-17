@@ -36,8 +36,8 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 | `job_id` | ✔ | `"job-{task_id}-{session_row}"`。`TOTSUKA_JOB_ID` のエコーバック。相関はこれのみで行い session_id からの推測はしない（E-09） |
 | `session_id` | | Claude セッション id（相関補助・冪等キー要素） |
 | `prompt_id` | | 冪等キー要素 |
-| `hook_event_name` | | `Stop` / `Notification` / `SessionStart` / `SessionEnd`。未知/欠落は `Heartbeat`（生存のみ、誤完了を避ける最も非断定な扱い）へ正規化 |
-| `status` | | `Stop` 時: `completed` / `needs_input` / `failed` / `unknown` |
+| `hook_event_name` | | `Stop` / `Notification` / `SessionStart` / `SessionEnd`。未知/欠落は `Heartbeat`（生存のみ、誤完了を避ける最も非断定な扱い）へ正規化。**これが正本のイベント種別キー**（旧 `event` フィールドではない。フックスクリプト `on-stop.sh` 等はこの名で送出する #138） |
+| `status` | | `Stop` 時: `completed` / `needs_input` / `failed` / `unknown`。**大小無視で照合**（`on-stop.sh` はマーカー語 `COMPLETED` 等を大文字のまま送るため） |
 | `reason` | | 補足理由 |
 | `last_assistant_message` / `transcript_path` | | `Stop` 時の補助 |
 | `message` | | `Notification` 時のメッセージ |

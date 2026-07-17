@@ -16,9 +16,7 @@ use orchestrator_core::config::{self, PluginKind, RootConfig};
 use orchestrator_core::logging::{self, LogConfig};
 use orchestrator_core::platform::PlatformProcessProbe;
 use orchestrator_core::ports::SecretString;
-use orchestrator_core::run::{
-    Engine, HookServerSettings, PluginSet, RunSummary, settings_from_config,
-};
+use orchestrator_core::run::{Engine, HookRuntime, PluginSet, RunSummary, settings_from_config};
 
 use crate::common::{CliError, Cx, plugin_spec, secret_resolver};
 
@@ -116,6 +114,51 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
     let mut settings = settings_from_config(&cfg, &env)?;
     settings.readme_cache_dir = Some(paths.cache_dir().to_path_buf());
 
+    // Hook runtime (#131/#138): the UDS receiver endpoint + Bearer token, the
+    // spool directory, and the per-workflow rendered `--settings` paths that
+    // dispatch injects into hook-capable agents. Read-only dry runs skip it
+    // (no dispatch, no receiver). It starts even when `[hooks]` is unset — a
+    // config with no hook-capable agent simply never receives a POST.
+    if !dry_run {
+        let socket_path = match &cfg.hooks.socket_path {
+            Some(p) => config::expand_path(p, &env_fn)?,
+            None => paths.runtime_dir().join("claude-events.sock"),
+        };
+        let auth_token = match &cfg.hooks.auth_token_ref {
+            Some(reference) => Some(secret_resolver(&env).resolve(reference)?),
+            None => {
+                eprintln!(
+                    "hook auth token not configured ([hooks].auth_token_ref) → hook POSTs are accepted without a Bearer token (0600 socket only)"
+                );
+                None
+            }
+        };
+        let spool_dir = Some(match &cfg.hooks.spool_dir {
+            Some(p) => config::expand_path(p, &env_fn)?,
+            None => paths.state_dir().join("hooks").join("spool"),
+        });
+        let settings_paths = cfg
+            .workflows
+            .iter()
+            .map(|wf| {
+                (
+                    wf.name.clone(),
+                    crate::hooks::settings_path(paths, &wf.name),
+                )
+            })
+            .collect();
+        settings.hook = Some(HookRuntime {
+            socket_path,
+            auth_token,
+            spool_dir,
+            settings_paths,
+            block_retry_limit: cfg
+                .hooks
+                .block_retry_limit
+                .unwrap_or(config::DEFAULT_BLOCK_RETRY_LIMIT),
+        });
+    }
+
     let mut engine = Engine::new(db, settings, plugins, SystemGitRunner, llm).await;
 
     if dry_run {
@@ -138,27 +181,6 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
         engine.shutdown(SHUTDOWN_GRACE).await;
         return Ok(());
     }
-
-    // UDS hook receiver (#136). It starts even when `[hooks]` is unset — a
-    // config with no hook-capable agent simply never receives a POST. The
-    // socket path defaults to `${XDG_RUNTIME_DIR}/totsuka/claude-events.sock`.
-    let hook_socket_path = match &cfg.hooks.socket_path {
-        Some(p) => config::expand_path(p, &env_fn)?,
-        None => paths.runtime_dir().join("claude-events.sock"),
-    };
-    let hook_auth_token = match &cfg.hooks.auth_token_ref {
-        Some(reference) => Some(secret_resolver(&env).resolve(reference)?),
-        None => {
-            eprintln!(
-                "hook auth token not configured ([hooks].auth_token_ref) → hook POSTs are accepted without a Bearer token (0600 socket only)"
-            );
-            None
-        }
-    };
-    engine.set_hook_server(HookServerSettings {
-        socket_path: hook_socket_path,
-        auth_token: hook_auth_token,
-    });
 
     // Startup recovery (§5.3) + orphan worktree warning (F-24).
     let report = engine.recover().await?;

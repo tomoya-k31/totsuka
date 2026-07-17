@@ -26,39 +26,44 @@ transcript_path="$(printf '%s' "$input" | jq -r '.transcript_path // ""')"
 prompt_id="$(printf '%s' "$input" | jq -r '.prompt_id // ""')"
 stop_hook_active="$(printf '%s' "$input" | jq -r '.stop_hook_active // false')"
 last_msg="$(printf '%s' "$input" | jq -r '.last_assistant_message // ""')"
-bg_count="$(printf '%s' "$input" | jq -r '(.background_tasks // []) | length')"
+bg_json="$(printf '%s' "$input" | jq -c '(.background_tasks // [])')"
+bg_count="$(printf '%s' "$bg_json" | jq -r 'length')"
 ts="$(iso_now)"
 
-# Build a Stop-family payload (§4.2). Reads the script-local extraction vars.
-# $1 = event, $2 = status, $3 = reason.
+# Build a Stop-family payload matching the canonical wire contract
+# (docs/apis/claude-events.md): the event kind is carried by `hook_event_name`
+# ("Stop"), and a non-empty `background_tasks` array is what the receiver reads
+# to treat an intermediate Stop as a heartbeat (D-12). $1 = status, $2 = reason.
 stop_payload() {
   jq -cn \
     --arg job_id "${TOTSUKA_JOB_ID:-}" \
     --arg session_id "$session_id" \
     --arg prompt_id "$prompt_id" \
-    --arg event "$1" \
     --arg ts "$ts" \
-    --arg status "$2" \
-    --arg reason "$3" \
+    --arg status "$1" \
+    --arg reason "$2" \
     --arg last "$last_msg" \
     --arg transcript "$transcript_path" \
+    --argjson background "$bg_json" \
     '{
       job_id: $job_id,
       session_id: $session_id,
       prompt_id: $prompt_id,
-      event: $event,
+      hook_event_name: "Stop",
       ts: $ts,
       status: $status,
       reason: $reason,
       last_assistant_message: $last,
-      transcript_path: $transcript
+      transcript_path: $transcript,
+      background_tasks: $background
     }'
 }
 
 # Non-empty background_tasks -> intermediate Stop: heartbeat only, no completion
-# judgement, no block (R-02).
+# judgement, no block (R-02). The receiver derives Heartbeat from the non-empty
+# background_tasks array carried in the payload.
 if [ "${bg_count:-0}" -gt 0 ]; then
-  post_event "$(stop_payload heartbeat "" "")"
+  post_event "$(stop_payload "" "")"
   exit 0
 fi
 
@@ -77,13 +82,13 @@ if [ -n "$marker" ]; then
     reason="${reason%%\"*}"
     ;;
   esac
-  post_event "$(stop_payload stop "$status" "$reason")"
+  post_event "$(stop_payload "$status" "$reason")"
   exit 0
 fi
 
 # Marker absent -> always report UNKNOWN so core can count consecutive blanks
 # for escalation (D-02/D-03); core never trusts the hook's own count.
-post_event "$(stop_payload stop UNKNOWN "")"
+post_event "$(stop_payload UNKNOWN "")"
 
 # First blank Stop (stop_hook_active != true) -> block once with the fix (R-03).
 # A re-entrant blank Stop (== true) sends UNKNOWN only, never re-blocks (R-02).
