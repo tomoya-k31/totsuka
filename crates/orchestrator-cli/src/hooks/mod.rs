@@ -110,6 +110,9 @@ fn write_if_changed(path: &Path, content: &[u8], mode: u32) -> io::Result<bool> 
     if let Ok(existing) = std::fs::read(path)
         && Sha256::digest(&existing) == Sha256::digest(content)
     {
+        // Content is unchanged, but still re-apply the mode so a drifted
+        // permission (e.g. a hook script that lost its exec bit) is repaired.
+        set_mode(path, mode)?;
         return Ok(false);
     }
     std::fs::write(path, content)?;
@@ -128,7 +131,10 @@ fn set_mode(_path: &Path, _mode: u32) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+// These tests exercise Unix-only behaviour (file mode bits 0700/0600, symlinked
+// tool shims, shell-script execution), matching `set_mode`'s `#[cfg(not(unix))]`
+// no-op: on non-Unix the hooks feature has no permissions to assert.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::io::Write;
