@@ -1,9 +1,9 @@
 ---
 type: Data Model
 title: 状態DB（SQLite state.db）スキーマ
-description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/schema_migrations スキーマと設計判断。
+description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
-tags: [sqlite, state, schema, statemachine]
+tags: [sqlite, state, schema, statemachine, hooks]
 timestamp: 2026-07-18T00:00:00Z
 status: active
 owner: tomoya-k31
@@ -34,6 +34,8 @@ owner: tomoya-k31
 | source_payload | TEXT NULL | JSON 残余フィールド |
 | finished_at | TEXT NULL | 終端到達時刻（retention 起点） |
 | created_at / updated_at | TEXT | ISO 8601 (UTC) |
+| thread_key | TEXT NULL | 会話継続相関キー `"{channel}:{thread_ts}"`（v2/#134、E-09）。`idx_tasks_thread_key`。Slack 追いメンションの resume 元検索に使う |
+| last_signal_at | TEXT NULL | 最終フックシグナル時刻（v2/#134、R-10 タイムアウト起点）。`touch_last_signal` が更新 |
 
 ## sessions（F-37、#57）
 
@@ -46,6 +48,30 @@ owner: tomoya-k31
 | plugin | TEXT | 所有プラグイン名（"herdr" 等） |
 | session_id | TEXT | エージェントの会話/セッションID |
 | created_at | TEXT | ISO 8601 (UTC)。最新行が attach 対象 |
+| claude_session_id | TEXT NULL | Claude Code 自身の `session_id`（v2/#134、E-09。`--resume` 相関）。フックの SessionStart 観測時に `set_claude_session_id` が記録。`idx_sessions_claude_session` |
+
+追加ストア API（v2/#134）: `set_claude_session_id(session_row_id, cc_sid)`（当該セッション行へ Claude セッション ID を記録）/ `find_session_by_claude_id(cc_sid)`（Claude セッション ID から最新セッション行を逆引き）。
+
+## hook_events（#131/#134、D-05/N-01/E-09）
+
+Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartbeat）を UDS 経由で受信し**冪等に永続化**する監査ログ（N-01）。冪等キー `(job_id, claude_session_id, prompt_id, event)` の `UNIQUE` 制約で、多重発火・スプール再送・curl 再送の重複到着を無害化する（D-05/E-05/E-06）。**UNIQUE 構成列は NULL でなく空文字既定**（`claude_session_id` / `prompt_id` は `NOT NULL DEFAULT ''`）— SQLite は UNIQUE で NULL 同士を区別するため、NULL 既定だと重複排除が効かない。書き込み経路（Engine 統合）は #138。
+
+| 列 | 型 | 備考 |
+|---|---|---|
+| id | INTEGER PK | rowid |
+| job_id | TEXT | 相関キー `"job-{task_id}-{session_row}"`（E-09。session_id 単独推測は禁止） |
+| task_id | INTEGER FK→tasks(id) | 所有タスク |
+| claude_session_id | TEXT NOT NULL DEFAULT '' | Claude Code の `session_id`（無ければ ''） |
+| prompt_id | TEXT NOT NULL DEFAULT '' | フック入力の `prompt_id`（無ければ ''） |
+| event | TEXT | `stop` / `notification` / `session_start` / `session_end` / `heartbeat` |
+| status | TEXT NULL | `stop` の自己申告 `COMPLETED`/`NEEDS_INPUT`/`FAILED`/`UNKNOWN` |
+| payload | TEXT | 受信 JSON 全文（監査 N-01） |
+| received_at | TEXT | ISO 8601 (UTC) |
+
+`idx_hook_events_task (task_id, id)`。追加ストア API:
+
+- `record_hook_event(&HookEventInsert) -> HookEventOutcome` — `INSERT ... ON CONFLICT DO NOTHING`。新規は `New`、冪等キー衝突は `Duplicate`（呼び出し側は黙って捨てる）。
+- `unknown_stop_streak(task_id) -> u32` — stop イベントを id 降順に走査し、最初の非 UNKNOWN stop までの UNKNOWN 連続数（D-02 のエスカレーション計数。**フック自己申告の block_count は信用せず DB から再計算**）。`idx_hook_events_task` + 早期 break で実質 O(streak)。
 
 ## events（F-72）
 
@@ -53,7 +79,9 @@ owner: tomoya-k31
 
 ## schema_migrations（§10.3）
 
-`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。
+`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v2（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`）。
+
+会話継続（E-09）用ストア API: `find_by_thread_key(workflow, thread_key) -> Option<TaskRecord>` — 同一 workflow・同一 `thread_key` の最新（id 最大）先行タスクを返す（Slack 追いメンションの resume 元特定）。
 
 # ステートマシン（F-71）
 

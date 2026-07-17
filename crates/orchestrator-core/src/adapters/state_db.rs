@@ -61,19 +61,47 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX idx_events_task ON events(task_id);
     "#,
+    // v2 — hook signals (#131/#134): idempotent hook-event log (D-05), audit
+    // trail (N-01), and conversation-continuation correlation (E-09).
+    //
+    // The UNIQUE key's optional components default to '' (empty string), never
+    // NULL: SQLite treats NULLs as distinct in UNIQUE constraints, so a NULL
+    // default would let duplicate hook deliveries slip past the dedup.
+    r#"
+    ALTER TABLE sessions ADD COLUMN claude_session_id TEXT;
+    CREATE INDEX idx_sessions_claude_session ON sessions(claude_session_id);
+
+    ALTER TABLE tasks ADD COLUMN thread_key TEXT;
+    ALTER TABLE tasks ADD COLUMN last_signal_at TEXT;
+    CREATE INDEX idx_tasks_thread_key ON tasks(thread_key);
+
+    CREATE TABLE hook_events (
+      id                 INTEGER PRIMARY KEY,
+      job_id             TEXT NOT NULL,
+      task_id            INTEGER NOT NULL REFERENCES tasks(id),
+      claude_session_id  TEXT NOT NULL DEFAULT '',
+      prompt_id          TEXT NOT NULL DEFAULT '',
+      event              TEXT NOT NULL,      -- 'stop'|'notification'|'session_start'|'session_end'|'heartbeat'
+      status             TEXT,               -- for 'stop': COMPLETED|NEEDS_INPUT|FAILED|UNKNOWN
+      payload            TEXT NOT NULL,      -- full received JSON (audit, N-01)
+      received_at        TEXT NOT NULL,
+      UNIQUE (job_id, claude_session_id, prompt_id, event)
+    );
+    CREATE INDEX idx_hook_events_task ON hook_events(task_id, id);
+    "#,
 ];
 
 /// `events.detail` for the ingest event. Stored as JSON so consumers can
 /// parse every `detail` value uniformly.
 const INGEST_DETAIL: &str = r#"{"kind":"ingested"}"#;
 
-/// Columns of `tasks`, in the order [`row_to_task`] reads them.
+/// Columns of `tasks`, read by name in [`row_to_task`].
 const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
      worktree_path, branch, state, priority, title, url, source_payload, \
-     finished_at, created_at, updated_at";
+     finished_at, created_at, updated_at, thread_key, last_signal_at";
 
-/// Columns of `sessions`, in the order [`row_to_session`] reads them.
-const SESSION_COLUMNS: &str = "id, task_id, plugin, session_id, created_at";
+/// Columns of `sessions`, read by name in [`row_to_session`].
+const SESSION_COLUMNS: &str = "id, task_id, plugin, session_id, created_at, claude_session_id";
 
 /// Errors from the state store.
 #[derive(Debug, thiserror::Error)]
@@ -119,6 +147,13 @@ pub struct NewTask {
     pub url: Option<String>,
     /// Residual source fields (labels/assignee/...) as JSON.
     pub source_payload: Option<serde_json::Value>,
+    /// Conversation-continuation key (`"{channel}:{thread_ts}"`, E-09); a later
+    /// task with the same key can resume this one's session. `None` for sources
+    /// without threading.
+    pub thread_key: Option<String>,
+    /// Timestamp of the last hook signal (R-10 timeout anchor). `None` until the
+    /// first signal arrives; normally left unset at ingest.
+    pub last_signal_at: Option<String>,
 }
 
 /// A persisted task row.
@@ -156,6 +191,10 @@ pub struct TaskRecord {
     pub created_at: String,
     /// Last-update timestamp (ISO 8601 UTC).
     pub updated_at: String,
+    /// Conversation-continuation key (`"{channel}:{thread_ts}"`, E-09).
+    pub thread_key: Option<String>,
+    /// Timestamp of the last hook signal (R-10 timeout anchor; ISO 8601 UTC).
+    pub last_signal_at: Option<String>,
 }
 
 /// A persisted agent session (F-37): the `session_id` returned by
@@ -175,6 +214,10 @@ pub struct SessionRecord {
     pub session_id: String,
     /// Creation timestamp (ISO 8601 UTC).
     pub created_at: String,
+    /// Claude Code's own `session_id` for this dispatch, once observed via a
+    /// hook (E-09 correlation / `claude --resume`). `None` until a
+    /// SessionStart-bearing signal records it.
+    pub claude_session_id: Option<String>,
 }
 
 /// A persisted audit event (F-72), for `task show` history.
@@ -192,6 +235,42 @@ pub struct EventRecord {
     pub occurred_at: String,
     /// Structured detail, if recorded.
     pub detail: Option<serde_json::Value>,
+}
+
+/// A hook event to persist idempotently (#131 D-05 / N-01).
+///
+/// The idempotency key is `(job_id, claude_session_id, prompt_id, event)`; the
+/// optional components are empty strings (not `None`) so SQLite's UNIQUE
+/// constraint actually dedups repeated deliveries (multiple hook fires, spool
+/// re-sends, curl retries).
+#[derive(Debug, Clone)]
+pub struct HookEventInsert {
+    /// The dispatch this event belongs to (`TOTSUKA_JOB_ID`, E-09).
+    pub job_id: String,
+    /// Owning task id (resolved from `job_id`, never guessed from a session).
+    pub task_id: i64,
+    /// Claude Code's `session_id` (empty if the hook input lacked one).
+    pub claude_session_id: String,
+    /// The hook input's `prompt_id` (empty if absent).
+    pub prompt_id: String,
+    /// Event kind: `stop` / `notification` / `session_start` / `session_end` /
+    /// `heartbeat`.
+    pub event: String,
+    /// For `stop`: the self-reported outcome
+    /// (`COMPLETED`/`NEEDS_INPUT`/`FAILED`/`UNKNOWN`); `None` otherwise.
+    pub status: Option<String>,
+    /// The full received JSON, verbatim (audit, N-01).
+    pub payload: String,
+}
+
+/// Outcome of [`StateDb::record_hook_event`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookEventOutcome {
+    /// The event was inserted (first time seen).
+    New,
+    /// A row with the same idempotency key already existed; nothing changed and
+    /// the caller drops it silently.
+    Duplicate,
 }
 
 /// The SQLite state database.
@@ -275,8 +354,9 @@ impl StateDb {
         let changed = tx.execute(
             "INSERT INTO tasks
                 (source, source_task_id, workflow, mode, repo, state, priority,
-                 title, url, source_payload, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11)
+                 title, url, source_payload, created_at, updated_at,
+                 thread_key, last_signal_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11,?12,?13)
              ON CONFLICT(source, source_task_id) DO NOTHING",
             params![
                 task.source,
@@ -290,6 +370,8 @@ impl StateDb {
                 task.url,
                 payload,
                 now,
+                task.thread_key,
+                task.last_signal_at,
             ],
         )?;
         let id: i64 = tx.query_row(
@@ -501,6 +583,123 @@ impl StateDb {
             |r| r.get(0),
         )?)
     }
+
+    /// Persist a hook event idempotently (#131 D-05 / N-01).
+    ///
+    /// `INSERT ... ON CONFLICT DO NOTHING` on the idempotency key
+    /// `(job_id, claude_session_id, prompt_id, event)`. A repeat delivery
+    /// (multiple hook fires, spool re-send, curl retry) leaves the log
+    /// unchanged and returns [`HookEventOutcome::Duplicate`], which the caller
+    /// drops silently.
+    pub fn record_hook_event(&self, evt: &HookEventInsert) -> Result<HookEventOutcome, StateError> {
+        let changed = self.conn.execute(
+            "INSERT INTO hook_events
+                (job_id, task_id, claude_session_id, prompt_id, event, status,
+                 payload, received_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+             ON CONFLICT (job_id, claude_session_id, prompt_id, event) DO NOTHING",
+            params![
+                evt.job_id,
+                evt.task_id,
+                evt.claude_session_id,
+                evt.prompt_id,
+                evt.event,
+                evt.status,
+                evt.payload,
+                now(),
+            ],
+        )?;
+        Ok(if changed > 0 {
+            HookEventOutcome::New
+        } else {
+            HookEventOutcome::Duplicate
+        })
+    }
+
+    /// Number of consecutive `UNKNOWN` stops at the tail of a task's stop
+    /// history — the D-02 escalation counter (recomputed from the log; the
+    /// hook's self-reported `block_count` is never trusted).
+    ///
+    /// Scans stop events id-descending and counts the leading `UNKNOWN` run
+    /// until the first non-`UNKNOWN` stop; a `COMPLETED`/`NEEDS_INPUT`/`FAILED`
+    /// stop resets the streak. Backed by `idx_hook_events_task`; the early
+    /// break keeps it ~O(streak) (≈ O(3) at the escalation threshold).
+    pub fn unknown_stop_streak(&self, task_id: i64) -> Result<u32, StateError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT status FROM hook_events \
+             WHERE task_id = ?1 AND event = 'stop' ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map(params![task_id], |r| r.get::<_, Option<String>>(0))?;
+        let mut streak = 0u32;
+        for status in rows {
+            if status?.as_deref() == Some("UNKNOWN") {
+                streak += 1;
+            } else {
+                break;
+            }
+        }
+        Ok(streak)
+    }
+
+    /// Bump a task's `last_signal_at` to now — the R-10 timeout anchor.
+    pub fn touch_last_signal(&self, task_id: i64) -> Result<(), StateError> {
+        let now = now();
+        let n = self.conn.execute(
+            "UPDATE tasks SET last_signal_at = ?1, updated_at = ?1 WHERE id = ?2",
+            params![now, task_id],
+        )?;
+        if n == 0 {
+            return Err(StateError::NotFound(task_id));
+        }
+        Ok(())
+    }
+
+    /// Record Claude Code's own `session_id` on a dispatch's session row
+    /// (E-09 correlation / `claude --resume`).
+    pub fn set_claude_session_id(
+        &self,
+        session_row_id: i64,
+        claude_session_id: &str,
+    ) -> Result<(), StateError> {
+        let n = self.conn.execute(
+            "UPDATE sessions SET claude_session_id = ?1 WHERE id = ?2",
+            params![claude_session_id, session_row_id],
+        )?;
+        if n == 0 {
+            return Err(StateError::NotFound(session_row_id));
+        }
+        Ok(())
+    }
+
+    /// Find the most recent session bearing a given Claude Code `session_id`.
+    pub fn find_session_by_claude_id(
+        &self,
+        claude_session_id: &str,
+    ) -> Result<Option<SessionRecord>, StateError> {
+        let sql = format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions \
+             WHERE claude_session_id = ?1 ORDER BY id DESC LIMIT 1"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![claude_session_id], row_to_session)?;
+        rows.next().transpose().map_err(StateError::from)
+    }
+
+    /// The latest prior task in the same conversation thread (Slack resume): a
+    /// `thread_key` match within `workflow`, newest by id (E-09).
+    pub fn find_by_thread_key(
+        &self,
+        workflow: &str,
+        thread_key: &str,
+    ) -> Result<Option<TaskRecord>, StateError> {
+        let sql = format!(
+            "SELECT {TASK_COLUMNS} FROM tasks \
+             WHERE workflow = ?1 AND thread_key = ?2 ORDER BY id DESC LIMIT 1"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![workflow, thread_key], row_to_task)?;
+        rows.next().transpose().map_err(StateError::from)
+    }
 }
 
 /// Current time as an ISO 8601 (RFC 3339) UTC string.
@@ -543,6 +742,8 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         finished_at: row.get("finished_at")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
+        thread_key: row.get("thread_key")?,
+        last_signal_at: row.get("last_signal_at")?,
     })
 }
 
@@ -554,6 +755,7 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         plugin: row.get("plugin")?,
         session_id: row.get("session_id")?,
         created_at: row.get("created_at")?,
+        claude_session_id: row.get("claude_session_id")?,
     })
 }
 
@@ -577,6 +779,27 @@ mod tests {
             title: "Fix the bug".to_string(),
             url: Some("https://example.com/issues/42".to_string()),
             source_payload: Some(serde_json::json!({"labels": ["bug"]})),
+            thread_key: None,
+            last_signal_at: None,
+        }
+    }
+
+    /// A hook event with empty idempotency components (the common case: the
+    /// `(job_id, event)` pair carries the key).
+    fn hook_event(
+        task_id: i64,
+        job_id: &str,
+        event: &str,
+        status: Option<&str>,
+    ) -> HookEventInsert {
+        HookEventInsert {
+            job_id: job_id.to_string(),
+            task_id,
+            claude_session_id: String::new(),
+            prompt_id: String::new(),
+            event: event.to_string(),
+            status: status.map(str::to_string),
+            payload: "{}".to_string(),
         }
     }
 
@@ -779,5 +1002,203 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&s)
                 .unwrap_or_else(|_| panic!("detail not valid JSON: {s:?}"));
         }
+    }
+
+    #[test]
+    fn migrates_v1_to_v2_backing_up_first() {
+        // A pre-existing v1 DB must be backed up, then migrated to v2 in place,
+        // preserving its rows (§10.3, `survives_reopen_from_disk` style).
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-migrate_v2", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+
+        // Build a v1-only database by hand (schema_migrations pinned at 1).
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations \
+                 (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?1)",
+                params![now()],
+            )
+            .unwrap();
+            // Seed a task so we can prove data survives the schema change.
+            conn.execute(
+                "INSERT INTO tasks
+                    (source, source_task_id, workflow, mode, state, priority,
+                     title, created_at, updated_at)
+                 VALUES ('github','7','implement','implement','queued',0,'legacy',?1,?1)",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        // Reopen through StateDb: v2 applies and the old file is backed up.
+        let db = StateDb::open(&path).unwrap();
+        let bak = PathBuf::from(format!("{}.bak", path.display()));
+        assert!(
+            bak.exists(),
+            "existing DB backed up before migrating (§10.3)"
+        );
+
+        // The v1 row survived; the new columns read back as NULL on it.
+        let task = db.find_by_source("github", "7").unwrap().unwrap();
+        assert_eq!(task.title, "legacy");
+        assert_eq!(task.thread_key, None);
+        assert_eq!(task.last_signal_at, None);
+
+        // v2 objects now exist: a hook event and a session column round-trip.
+        assert_eq!(
+            db.record_hook_event(&hook_event(task.id, "job-7-1", "stop", Some("COMPLETED")))
+                .unwrap(),
+            HookEventOutcome::New
+        );
+        let sess = db.record_session(task.id, "herdr", "sess-1").unwrap();
+        db.set_claude_session_id(sess, "cc-1").unwrap();
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn record_hook_event_dedups_on_conflict() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+
+        // Empty session/prompt ids still dedup — the UNIQUE columns default to
+        // '' so SQLite does not treat repeated deliveries as distinct.
+        let evt = hook_event(id, "job-1-1", "stop", Some("COMPLETED"));
+        assert_eq!(db.record_hook_event(&evt).unwrap(), HookEventOutcome::New);
+        assert_eq!(
+            db.record_hook_event(&evt).unwrap(),
+            HookEventOutcome::Duplicate,
+            "same idempotency key is a Duplicate"
+        );
+
+        let n: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM hook_events WHERE task_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "duplicate must not add a row");
+    }
+
+    #[test]
+    fn unknown_stop_streak_counts_trailing_unknowns() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+
+        // No stops yet.
+        assert_eq!(db.unknown_stop_streak(id).unwrap(), 0);
+
+        // A COMPLETED stop keeps the streak at 0.
+        db.record_hook_event(&hook_event(id, "job-1-1", "stop", Some("COMPLETED")))
+            .unwrap();
+        assert_eq!(db.unknown_stop_streak(id).unwrap(), 0);
+
+        // Two UNKNOWN stops -> 2. A non-stop event in between is ignored.
+        db.record_hook_event(&hook_event(id, "job-1-2", "stop", Some("UNKNOWN")))
+            .unwrap();
+        db.record_hook_event(&hook_event(id, "job-1-3", "notification", None))
+            .unwrap();
+        db.record_hook_event(&hook_event(id, "job-1-4", "stop", Some("UNKNOWN")))
+            .unwrap();
+        assert_eq!(db.unknown_stop_streak(id).unwrap(), 2);
+
+        // A third UNKNOWN -> 3 (the escalation threshold, D-02).
+        db.record_hook_event(&hook_event(id, "job-1-5", "stop", Some("UNKNOWN")))
+            .unwrap();
+        assert_eq!(db.unknown_stop_streak(id).unwrap(), 3);
+
+        // An interleaved COMPLETED resets the streak.
+        db.record_hook_event(&hook_event(id, "job-1-6", "stop", Some("COMPLETED")))
+            .unwrap();
+        assert_eq!(db.unknown_stop_streak(id).unwrap(), 0);
+
+        // Fresh UNKNOWNs after the reset count from zero.
+        db.record_hook_event(&hook_event(id, "job-1-7", "stop", Some("UNKNOWN")))
+            .unwrap();
+        assert_eq!(db.unknown_stop_streak(id).unwrap(), 1);
+    }
+
+    #[test]
+    fn find_by_thread_key_returns_latest_in_thread() {
+        let db = StateDb::open_in_memory().unwrap();
+        let mk = |sid: &str, thread: Option<&str>, wf: &str| NewTask {
+            source: "slack".into(),
+            source_task_id: sid.into(),
+            workflow: wf.into(),
+            mode: "implement".into(),
+            repo: None,
+            priority: 0,
+            title: "t".into(),
+            url: None,
+            source_payload: None,
+            thread_key: thread.map(str::to_string),
+            last_signal_at: None,
+        };
+        let first = db
+            .upsert_task(&mk("m1", Some("C1:100"), "implement"))
+            .unwrap();
+        let second = db
+            .upsert_task(&mk("m2", Some("C1:100"), "implement"))
+            .unwrap();
+        db.upsert_task(&mk("m3", Some("C2:200"), "implement"))
+            .unwrap(); // other thread
+        db.upsert_task(&mk("m4", Some("C1:100"), "plan")).unwrap(); // other workflow
+
+        let found = db
+            .find_by_thread_key("implement", "C1:100")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.id, second, "latest (max id) in the thread wins");
+        assert_ne!(found.id, first);
+
+        // No match -> None (unknown thread, and a NULL thread_key never matches).
+        assert!(
+            db.find_by_thread_key("implement", "C9:999")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn claude_session_id_and_touch_last_signal() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        let sess = db.record_session(id, "herdr", "sess-1").unwrap();
+
+        // A fresh session has no Claude session id yet.
+        assert_eq!(
+            db.latest_session(id).unwrap().unwrap().claude_session_id,
+            None
+        );
+        db.set_claude_session_id(sess, "cc-abc").unwrap();
+        let rec = db.find_session_by_claude_id("cc-abc").unwrap().unwrap();
+        assert_eq!(rec.id, sess);
+        assert_eq!(rec.claude_session_id.as_deref(), Some("cc-abc"));
+        assert!(db.find_session_by_claude_id("nope").unwrap().is_none());
+
+        // last_signal_at starts unset and gets stamped.
+        assert!(db.get_task(id).unwrap().unwrap().last_signal_at.is_none());
+        db.touch_last_signal(id).unwrap();
+        assert!(db.get_task(id).unwrap().unwrap().last_signal_at.is_some());
+
+        // Unknown ids are rejected, matching the other setters' contract.
+        assert!(matches!(
+            db.touch_last_signal(999).unwrap_err(),
+            StateError::NotFound(999)
+        ));
+        assert!(matches!(
+            db.set_claude_session_id(999, "x").unwrap_err(),
+            StateError::NotFound(999)
+        ));
     }
 }

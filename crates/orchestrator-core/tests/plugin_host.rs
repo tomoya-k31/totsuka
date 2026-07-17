@@ -134,6 +134,8 @@ async fn crash_fails_task_and_host_survives() {
             title: "t".into(),
             url: None,
             source_payload: None,
+            thread_key: None,
+            last_signal_at: None,
         })
         .unwrap();
     db.apply_event(task_id, TaskEvent::Dispatch, None).unwrap();

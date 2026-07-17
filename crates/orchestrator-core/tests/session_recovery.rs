@@ -48,6 +48,8 @@ fn new_task(source_task_id: &str) -> NewTask {
         title: "t".into(),
         url: None,
         source_payload: None,
+        thread_key: None,
+        last_signal_at: None,
     }
 }
 
