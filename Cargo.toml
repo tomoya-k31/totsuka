@@ -40,7 +40,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 regex = "1"
 semver = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "sync", "time", "signal"] }
 plugin-protocol = { path = "crates/plugin-protocol" }
 test-support = { path = "crates/test-support" }
 sha2 = "0.10"

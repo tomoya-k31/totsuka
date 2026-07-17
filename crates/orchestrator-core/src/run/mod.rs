@@ -38,15 +38,18 @@ use tokio::sync::mpsc;
 
 use crate::adapters::plugin_host::Plugin;
 use crate::adapters::state_db::{NewTask, StateDb, StateError, TaskRecord};
+use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{
     CleanupPolicyConfig, CleanupPolicyName, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_POLL_INTERVAL_SECS,
     OutputPolicy, PluginKind, RootConfig, WorkflowMode, resolve::ResolveError,
 };
+use crate::domain::signal::AgentSignal;
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::domain::workflow::{Workflow, match_workflow};
 use crate::ports::agent_session::AttachOutcome;
 use crate::ports::git::GitRunner;
 use crate::ports::llm::{ChatRequest, LlmError, LlmRouter};
+use crate::ports::secret::SecretString;
 use crate::recovery::{self, RecoveryReport, RetryPlan};
 use crate::repo_select::{ReadmeCache, RepoCandidate, RepoDecision, SelectConfig, select_repo};
 use crate::run::output::{
@@ -211,6 +214,24 @@ fn cleanup_policy(config: Option<CleanupPolicyConfig>, default: CleanupPolicy) -
     }
 }
 
+/// Configuration for the UDS hook-receiving server (#136, E-03).
+///
+/// Built by the CLI (`run_cmd`), which resolves the Bearer token via the
+/// platform secret store and computes the socket path. The server starts even
+/// when `[hooks]` is unset — a config without a hook-capable agent simply never
+/// receives a POST.
+pub struct HookServerSettings {
+    /// Path of the Unix domain socket to listen on (normally absolute; the CLI
+    /// resolves it from `[hooks].socket_path` via `expand_path`, which may yield
+    /// a path relative to the process CWD). Created `0600`; any stale socket is
+    /// unlinked before bind and on shutdown.
+    pub socket_path: PathBuf,
+    /// Resolved Bearer token every POST must present (`Authorization: Bearer
+    /// <token>`). `None` disables the check (0600 socket only); the CLI logs a
+    /// warning in that case.
+    pub auth_token: Option<SecretString>,
+}
+
 /// The launched plugins, split by kind (enabled entries only, F-58).
 #[derive(Debug, Default)]
 pub struct PluginSet {
@@ -223,11 +244,19 @@ pub struct PluginSet {
 }
 
 /// An event observed by the run loop.
-enum PluginEvent {
+///
+/// `pub(crate)` so the signal-ingress driving adapter
+/// ([`EngineSignalSink`](crate::adapters::EngineSignalSink)) can enqueue a
+/// [`HookSignal`](PluginEvent::HookSignal); the variant is never exposed across
+/// the crate boundary.
+pub(crate) enum PluginEvent {
     /// A `state/notification` from an agent plugin.
     State(String, StateNotification),
     /// An agent plugin's notification stream closed (process exit, §5.3).
     Closed(String),
+    /// A normalized Claude Code hook signal from the UDS receiver (#136).
+    /// Engine interpretation (state transitions, verification) lands in #138.
+    HookSignal(AgentSignal),
 }
 
 /// Counters accumulated over one `run` invocation.
@@ -321,6 +350,9 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     /// Opens pull requests for `output = pull_request` (F-86); a seam so the
     /// push flow is testable without hitting GitHub.
     pr_creator: Box<dyn PrCreator>,
+    /// UDS hook receiver settings (#136); `None` = do not start the server
+    /// (default for tests). Consumed (`take`n) when [`Engine::run`] starts.
+    hook_server: Option<HookServerSettings>,
     stats: RunStats,
 }
 
@@ -384,6 +416,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             readme_cache,
             agent_output: HashMap::new(),
             pr_creator,
+            hook_server: None,
             stats: RunStats::default(),
         }
     }
@@ -391,6 +424,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Borrow the state DB (status queries, tests).
     pub fn db(&self) -> &StateDb {
         &self.db
+    }
+
+    /// Enable the UDS hook-receiving server (#136). [`Engine::run`] binds the
+    /// socket and spawns [`hook_uds::serve`], forwarding each received signal
+    /// onto this engine's event channel. Call before `run`.
+    pub fn set_hook_server(&mut self, settings: HookServerSettings) {
+        self.hook_server = Some(settings);
     }
 
     /// Startup recovery (§5.3): re-attach in-flight sessions, rebuild slot
@@ -497,6 +537,35 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         tokio::pin!(shutdown);
         let mut interrupted = false;
 
+        // Start the UDS hook receiver (#136), if configured. It runs as a
+        // detached task; a `watch` channel signals graceful shutdown so it can
+        // unlink the socket. `take` avoids borrowing `self` across the loop.
+        let hook_handle = match self.hook_server.take() {
+            Some(hs) => match hook_uds::bind(&hs.socket_path) {
+                Ok(listener) => {
+                    tracing::info!(socket = %hs.socket_path.display(), "hook receiver listening");
+                    let sink = EngineSignalSink::new(self._events_tx.clone());
+                    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+                    let handle = tokio::spawn(hook_uds::serve(
+                        listener,
+                        hs.socket_path,
+                        sink,
+                        hs.auth_token,
+                        stop_rx,
+                    ));
+                    Some((stop_tx, handle))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        socket = %hs.socket_path.display(),
+                        "hook receiver failed to bind: {e} → hook-driven completion is unavailable this run"
+                    );
+                    None
+                }
+            },
+            None => None,
+        };
+
         self.cycle(None).await?;
         // Per-source next-fetch times (F-06: each source polls at its own
         // interval, not the global minimum).
@@ -541,6 +610,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     self.dispatch_ready().await?;
                 }
             }
+        }
+
+        // Stop the hook receiver and wait for it to unlink its socket.
+        if let Some((stop_tx, handle)) = hook_handle {
+            let _ = stop_tx.send(true);
+            let _ = handle.await;
         }
 
         let mut summary = RunSummary {
@@ -1107,6 +1182,19 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     .await
             }
             PluginEvent::Closed(plugin) => self.on_plugin_closed(&plugin).await,
+            // #138 wires hook signals into the state machine (idempotent
+            // `hook_events` INSERT → completion/verification/escalation). Until
+            // then, log receipt so the ingest path is observable end-to-end
+            // instead of silently dropping — never `unreachable!()`, the adapter
+            // really does deliver these.
+            PluginEvent::HookSignal(signal) => {
+                tracing::info!(
+                    job_id = %signal.job_id,
+                    event = ?signal.event,
+                    "received hook signal (engine handling arrives in #138)"
+                );
+                Ok(())
+            }
         }
     }
 
