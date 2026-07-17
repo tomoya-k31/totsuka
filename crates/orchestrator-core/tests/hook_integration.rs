@@ -916,3 +916,312 @@ async fn spool_replay_quarantines_file_with_corrupt_line() {
     engine.shutdown(GRACE).await;
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ── Slack thread conversation continuity (#140) ──────────────────────────────
+//
+// A follow-up mention in the same thread is ingested as a new task (unique
+// `source_task_id`) but resumes the prior task's Claude session via
+// `claude --resume`. Correlation lives in the DB (survives restarts). These
+// tests drive a real dispatch through `cycle` against a hook-capable mock
+// agent that records its `task/dispatch` params, and assert the
+// `resume_session_id` wiring plus the E-09 mis-thread protection.
+
+/// A hook-capable agent (records dispatch params to `dispatch_log`), a source
+/// returning `fetched`, and a recording notifier.
+async fn resume_plugins(
+    fetched: serde_json::Value,
+    dispatch_log: &Path,
+    notify_log: &Path,
+) -> PluginSet {
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch("task_source", "mock_src", json!({ "tasks": fetched })).await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "resume_session": true, "stream_states": ["running"], "dispatch_log": dispatch_log }),
+        )
+        .await,
+    );
+    plugins.notifiers.insert(
+        "mock_notify".to_string(),
+        launch(
+            "notifier",
+            "mock_notify",
+            json!({ "notify_log": notify_log }),
+        )
+        .await,
+    );
+    plugins
+}
+
+/// Engine settings for a resume test: the `wf` workflow on a real repo clone,
+/// with a hook runtime so the hook-dispatch path (job_id + resume) is taken.
+fn resume_settings(repo: &Path, base: &Path) -> EngineSettings {
+    let hook = HookRuntime {
+        socket_path: base.join("claude.sock"),
+        auth_token: Some(SecretString::new("tok3n")),
+        spool_dir: Some(base.join("spool")),
+        settings_paths: HashMap::from([("wf".to_string(), base.join("orchestrator-wf.json"))]),
+        block_retry_limit: 3,
+    };
+    let mut settings = engine_settings(workflows("llm", "none"), Some(hook));
+    settings.repos = vec![RepoSettings {
+        name: "clone".to_string(),
+        path: repo.to_path_buf(),
+        summary: None,
+        worktree_location: None,
+    }];
+    settings.location_template = "{repo}/../wt/{branch}".to_string();
+    settings
+}
+
+/// Seed a prior task in `thread_key` with a recorded session, and return its id.
+/// `claude_sid = Some` simulates the SessionStart hook having established the
+/// Claude session id; `None` leaves it unestablished (pre-hook era). Driven to
+/// `Dispatched` so it is inert (never re-dispatched); the far-future signal
+/// anchor keeps the timeout sweep from escalating it.
+fn seed_prior(
+    db: &StateDb,
+    source_task_id: &str,
+    thread_key: &str,
+    claude_sid: Option<&str>,
+) -> i64 {
+    let mut nt = new_task(source_task_id, Some("2099-01-01T00:00:00Z"));
+    nt.thread_key = Some(thread_key.to_string());
+    let id = db.upsert_task(&nt).unwrap();
+    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    let row = db
+        .record_session(id, "mock_agent", &format!("sess-{source_task_id}"))
+        .unwrap();
+    if let Some(sid) = claude_sid {
+        db.set_claude_session_id(row, sid).unwrap();
+    }
+    id
+}
+
+/// The params of the last recorded `task/dispatch` in `dispatch_log`.
+fn last_dispatch_params(dispatch_log: &Path) -> serde_json::Value {
+    read_log(dispatch_log)
+        .into_iter()
+        .rev()
+        .find(|d| d["method"] == "task/dispatch")
+        .expect("a task/dispatch was recorded")["params"]
+        .clone()
+}
+
+/// A fetched follow-up mention with the given id and thread key.
+fn follow_up(id: &str, thread_key: &str) -> serde_json::Value {
+    json!([{ "id": id, "source": "github", "title": "follow-up", "thread_key": thread_key }])
+}
+
+#[tokio::test]
+async fn second_task_in_thread_dispatches_with_resume_and_fresh_worktree() {
+    // ① Same thread_key, prior session established → dispatched WITH
+    // resume_session_id. And ⟨discarded-worktree acceptance⟩: the new task is
+    // a distinct row, so it always gets a fresh worktree — the prior's is never
+    // reused.
+    let base = scratch("resume_second");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    seed_prior(&db, "1", "C1:100", Some("cc-prior"));
+
+    let plugins = resume_plugins(follow_up("2", "C1:100"), &dispatch_log, &notify_log).await;
+    let mut engine = Engine::new(
+        db,
+        resume_settings(&repo, &base),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    engine.cycle(None).await.unwrap();
+
+    let params = last_dispatch_params(&dispatch_log);
+    assert_eq!(
+        params["resume_session_id"], "cc-prior",
+        "the follow-up resumes the prior task's Claude session"
+    );
+
+    // A fresh worktree was created for the new task (D-10: session reused, not
+    // the worktree).
+    let follow = engine
+        .db()
+        .find_by_source("mock_src", "2")
+        .unwrap()
+        .unwrap();
+    let wt = follow.worktree_path.expect("a fresh worktree was recorded");
+    assert!(Path::new(&wt).exists(), "the fresh worktree exists on disk");
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn unestablished_prior_session_falls_back_to_fresh_dispatch() {
+    // ② Prior task never got a claude_session_id (pre-hook era) → no resume,
+    // normal fresh dispatch, no warning.
+    let base = scratch("resume_fallback");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    seed_prior(&db, "1", "C1:100", None); // session, but no claude id
+
+    let plugins = resume_plugins(follow_up("2", "C1:100"), &dispatch_log, &notify_log).await;
+    let mut engine = Engine::new(
+        db,
+        resume_settings(&repo, &base),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    engine.cycle(None).await.unwrap();
+
+    let params = last_dispatch_params(&dispatch_log);
+    assert!(
+        params.get("resume_session_id").is_none(),
+        "no established prior session → no resume (field omitted): {params}"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn third_task_resumes_the_latest_session_in_the_thread() {
+    // ③ Three mentions in one thread: the 3rd resumes the 2nd's session
+    // (latest-wins), never the 1st's.
+    let base = scratch("resume_latest");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    seed_prior(&db, "1", "C1:100", Some("cc-1"));
+    seed_prior(&db, "2", "C1:100", Some("cc-2"));
+
+    let plugins = resume_plugins(follow_up("3", "C1:100"), &dispatch_log, &notify_log).await;
+    let mut engine = Engine::new(
+        db,
+        resume_settings(&repo, &base),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    engine.cycle(None).await.unwrap();
+
+    let params = last_dispatch_params(&dispatch_log);
+    assert_eq!(
+        params["resume_session_id"], "cc-2",
+        "the 3rd task resumes the most recent (2nd) session, not the 1st"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn distinct_threads_do_not_cross_resume() {
+    // ④ A prior task in a *different* thread must not be resumed.
+    let base = scratch("resume_isolation");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    seed_prior(&db, "1", "C1:100", Some("cc-other-thread"));
+
+    // The follow-up is in a *different* thread (C2:999).
+    let plugins = resume_plugins(follow_up("2", "C2:999"), &dispatch_log, &notify_log).await;
+    let mut engine = Engine::new(
+        db,
+        resume_settings(&repo, &base),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    engine.cycle(None).await.unwrap();
+
+    let params = last_dispatch_params(&dispatch_log);
+    assert!(
+        params.get("resume_session_id").is_none(),
+        "a different thread never cross-resumes: {params}"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn reply_destination_is_task_id_origin_never_the_shared_session_id() {
+    // E-09: even when two tasks share the *same* Claude session id (a resumed
+    // conversation), a Stop signal is routed to the task named by its
+    // `job_id` — never guessed from the session id. So the reply destination is
+    // always the completing task's own `source_task_id`, and a resumed session
+    // can never mis-route a reply into the prior task's thread.
+    let base = scratch("resume_e09");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+
+    // Two tasks sharing claude_session_id "cc-shared".
+    let prior = db.upsert_task(&new_task("1", None)).unwrap();
+    db.apply_event(prior, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(prior, TaskEvent::Start, None).unwrap();
+    let prior_row = db.record_session(prior, "mock_agent", "sess-1").unwrap();
+    db.set_claude_session_id(prior_row, "cc-shared").unwrap();
+
+    let follow = db.upsert_task(&new_task("2", None)).unwrap();
+    db.apply_event(follow, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(follow, TaskEvent::Start, None).unwrap();
+    let follow_row = db.record_session(follow, "mock_agent", "sess-2").unwrap();
+    db.set_claude_session_id(follow_row, "cc-shared").unwrap();
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    // A completion for the follow-up: job_id carries the follow-up's task id.
+    engine
+        .on_signal(stop(
+            follow,
+            follow_row,
+            "p1",
+            StopStatus::Completed,
+            Some("done <<STATUS:COMPLETED>>"),
+        ))
+        .await
+        .unwrap();
+
+    // Only the follow-up (the job_id's task) advanced; the prior — which shares
+    // the session id — is untouched.
+    assert_eq!(
+        engine.db().get_task(follow).unwrap().unwrap().state,
+        TaskState::Done,
+        "the job_id's task is the reply destination"
+    );
+    assert_eq!(
+        engine.db().get_task(prior).unwrap().unwrap().state,
+        TaskState::Running,
+        "the other task sharing the session id is never routed to"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}

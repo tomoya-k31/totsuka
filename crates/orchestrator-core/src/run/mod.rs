@@ -1001,6 +1001,17 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             Some(_) => {}
         }
 
+        // Slack thread conversation continuity (#140, D-10): a follow-up
+        // mention in the same thread is a *new* task, but resumes the prior
+        // task's Claude session via `claude --resume` so context carries over.
+        // Decided here, before the retry-reuse block (which only fires for a
+        // retry of *this* task and early-returns); the value threads into
+        // `task/dispatch` below. Best-effort — any unmet precondition yields
+        // `None` and falls back to a normal fresh dispatch, with no warning.
+        // The worktree is created by the normal flow below (recreated fresh if
+        // the prior one was discarded); only the session is reused.
+        let resume_session_id = self.thread_resume_session_id(&record, &agent_name)?;
+
         // Retry reuse (F-44): a surviving worktree + session resumes the
         // existing conversation instead of dispatching anew.
         let latest = self.db.latest_session(record.id)?;
@@ -1079,6 +1090,15 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         {
             Some((settings_path, mut env)) => {
                 let session_row = self.db.reserve_session(record.id, &agent_name)?;
+                // Thread continuity (#140): tentatively stamp the resumed
+                // Claude session id onto the fresh row so a later follow-up can
+                // resume it even before this dispatch's SessionStart hook lands
+                // (best-effort resilience). The hook's SessionStart reconciles
+                // it against the real id (#138: a `--resume` may legitimately
+                // change the id → warn + keep the newest).
+                if let Some(sid) = &resume_session_id {
+                    self.db.set_claude_session_id(session_row, sid)?;
+                }
                 let job_id = JobId::new(record.id, session_row);
                 env.insert("TOTSUKA_JOB_ID".to_string(), job_id.to_string());
                 (
@@ -1098,7 +1118,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             mode: execution_mode(&record.mode),
             extra_context: None,
             job_id,
-            resume_session_id: None,
+            resume_session_id,
             hook: hook_spec,
         };
         let dispatched: TaskDispatchResult = match agent.call(method::TASK_DISPATCH, &params).await
@@ -1176,6 +1196,57 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 .await;
         }
         Ok(())
+    }
+
+    /// The Claude session id a follow-up task should resume (Slack thread
+    /// conversation continuity, #140), or `None` to dispatch fresh.
+    ///
+    /// Returns `Some(claude_sid)` only when **all** hold: the agent declares the
+    /// `resume_session` capability, `record` carries a `thread_key`, a *prior*
+    /// task in the same workflow+thread exists (E-09: matched on `workflow`, and
+    /// `record` excluded so it never resolves to itself), and that prior task's
+    /// latest session has a non-empty Claude session id (established by the
+    /// SessionStart hook, #138). Any miss yields `None` — conversation
+    /// continuity is best-effort and never hard-fails a dispatch.
+    ///
+    /// E-09: the reply destination is always the *new* task's own
+    /// `source_task_id` (task_id-origin routing via `job_id`); nothing here — or
+    /// anywhere — derives a destination from a Claude session id, so a resumed
+    /// session can never mis-route a reply into the prior task's thread.
+    fn thread_resume_session_id(
+        &self,
+        record: &TaskRecord,
+        agent_name: &str,
+    ) -> Result<Option<String>, EngineError> {
+        let Some(agent) = self.plugins.agents.get(agent_name) else {
+            return Ok(None);
+        };
+        let Some(thread_key) = record.thread_key.as_deref() else {
+            return Ok(None);
+        };
+        if !agent.capabilities().resume_session {
+            return Ok(None);
+        }
+        let Some(prior) = self
+            .db
+            .find_by_thread_key(&record.workflow, thread_key, record.id)?
+        else {
+            return Ok(None);
+        };
+        let resume = self
+            .db
+            .latest_session(prior.id)?
+            .and_then(|s| s.claude_session_id)
+            .filter(|sid| !sid.is_empty());
+        if let Some(sid) = &resume {
+            tracing::info!(
+                task_id = record.id,
+                prior_task_id = prior.id,
+                claude_session_id = %sid,
+                "resuming the prior task's Claude session for thread continuity (#140)"
+            );
+        }
+        Ok(resume)
     }
 
     /// Try to re-attach to a session for retry reuse; `None` means dispatch

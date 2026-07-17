@@ -743,19 +743,29 @@ impl StateDb {
         rows.next().transpose().map_err(StateError::from)
     }
 
-    /// The latest prior task in the same conversation thread (Slack resume): a
-    /// `thread_key` match within `workflow`, newest by id (E-09).
+    /// The latest *prior* task in the same conversation thread (Slack resume): a
+    /// `thread_key` match within `workflow`, newest by id, **excluding**
+    /// `exclude_id` (E-09).
+    ///
+    /// The caller dispatching a follow-up passes its own task id as
+    /// `exclude_id`: the follow-up is itself already ingested (its row exists
+    /// and is the newest match), so without the exclusion "newest in thread"
+    /// would resolve to the follow-up itself rather than the prior task whose
+    /// session it must resume. Matching on `workflow` too keeps two workflows
+    /// that happen to share a thread key from mis-linking.
     pub fn find_by_thread_key(
         &self,
         workflow: &str,
         thread_key: &str,
+        exclude_id: i64,
     ) -> Result<Option<TaskRecord>, StateError> {
         let sql = format!(
             "SELECT {TASK_COLUMNS} FROM tasks \
-             WHERE workflow = ?1 AND thread_key = ?2 ORDER BY id DESC LIMIT 1"
+             WHERE workflow = ?1 AND thread_key = ?2 AND id != ?3 \
+             ORDER BY id DESC LIMIT 1"
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(params![workflow, thread_key], row_to_task)?;
+        let mut rows = stmt.query_map(params![workflow, thread_key, exclude_id], row_to_task)?;
         rows.next().transpose().map_err(StateError::from)
     }
 }
@@ -1256,20 +1266,48 @@ mod tests {
         let second = db
             .upsert_task(&mk("m2", Some("C1:100"), "implement"))
             .unwrap();
+        let third = db
+            .upsert_task(&mk("m5", Some("C1:100"), "implement"))
+            .unwrap();
         db.upsert_task(&mk("m3", Some("C2:200"), "implement"))
             .unwrap(); // other thread
         db.upsert_task(&mk("m4", Some("C1:100"), "plan")).unwrap(); // other workflow
 
+        // Dispatching `third`: the newest *other* task in the thread wins.
         let found = db
-            .find_by_thread_key("implement", "C1:100")
+            .find_by_thread_key("implement", "C1:100", third)
             .unwrap()
             .unwrap();
-        assert_eq!(found.id, second, "latest (max id) in the thread wins");
+        assert_eq!(found.id, second, "latest prior (max id, excl. self) wins");
         assert_ne!(found.id, first);
+        assert_ne!(found.id, third);
+
+        // Excluding `second` still returns the newest *remaining* match
+        // (`third`), not an arbitrary older one — self-exclusion only drops the
+        // one row.
+        assert_eq!(
+            db.find_by_thread_key("implement", "C1:100", second)
+                .unwrap()
+                .unwrap()
+                .id,
+            third,
+        );
+
+        // A thread whose only task is the one being dispatched -> None (nothing
+        // prior to resume): self-exclusion, not a spurious self-match.
+        let solo = db
+            .upsert_task(&mk("solo", Some("C3:300"), "implement"))
+            .unwrap();
+        assert!(
+            db.find_by_thread_key("implement", "C3:300", solo)
+                .unwrap()
+                .is_none(),
+            "self-exclusion: the sole task in a thread has no prior"
+        );
 
         // No match -> None (unknown thread, and a NULL thread_key never matches).
         assert!(
-            db.find_by_thread_key("implement", "C9:999")
+            db.find_by_thread_key("implement", "C9:999", third)
                 .unwrap()
                 .is_none()
         );
