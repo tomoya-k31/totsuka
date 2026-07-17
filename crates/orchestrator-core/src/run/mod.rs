@@ -20,6 +20,7 @@
 //! polling each source at its interval (F-06) until shutdown. **Dry run**:
 //! [`Engine::dry_run`] reports what would happen with zero side effects.
 
+pub mod hooks;
 pub mod output;
 
 use std::collections::{HashMap, HashSet};
@@ -28,9 +29,9 @@ use std::time::Duration;
 
 use plugin_protocol::method;
 use plugin_protocol::methods::{
-    AgentState, ExecutionMode, NotifierEvent, NotifyParams, ResultPublishParams, StateNotification,
-    TaskDispatchParams, TaskDispatchResult, TaskUpdateStatusParams, TasksFetchParams,
-    TasksFetchResult,
+    AgentState, ExecutionMode, HookLaunchSpec, NotifierEvent, NotifyParams, ResultPublishParams,
+    StateNotification, TaskDispatchParams, TaskDispatchResult, TaskUpdateStatusParams,
+    TasksFetchParams, TasksFetchResult,
 };
 use plugin_protocol::{Notification, Task};
 use serde_json::Value;
@@ -43,7 +44,7 @@ use crate::config::{
     CleanupPolicyConfig, CleanupPolicyName, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_POLL_INTERVAL_SECS,
     OutputPolicy, PluginKind, RootConfig, WorkflowMode, resolve::ResolveError,
 };
-use crate::domain::signal::AgentSignal;
+use crate::domain::signal::{AgentSignal, JobId};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::domain::workflow::{Workflow, match_workflow};
 use crate::ports::agent_session::AttachOutcome;
@@ -119,6 +120,40 @@ pub struct EngineSettings {
     pub pr_title_template: String,
     /// Pull-request body template (F-86).
     pub pr_body_template: String,
+    /// Claude Code hook runtime (#131/#138): receiver endpoint, auth token,
+    /// spool dir, per-workflow `--settings` paths, and the escalation
+    /// threshold. A normal `totsuka run` always sets this (the CLI builds it
+    /// even when `[hooks]` is unset — a default socket path is used, so a config
+    /// with no hook-capable agent simply never receives a POST). `None` only for
+    /// `--dry-run` (read-only: no receiver, no dispatch) and hook-disabled
+    /// tests; when `None` the receiver never starts and dispatch never sets a
+    /// [`HookLaunchSpec`](plugin_protocol::methods::HookLaunchSpec).
+    pub hook: Option<HookRuntime>,
+}
+
+/// Everything the engine needs to drive hook-based agents for one run
+/// (#131/#138). Assembled by the CLI (`run_cmd`): it resolves the Bearer token
+/// via the platform secret store, expands the socket/spool paths, and looks up
+/// each workflow's rendered settings file. `None` in tests and in configs with
+/// no hook-capable agent.
+#[derive(Debug, Clone)]
+pub struct HookRuntime {
+    /// UDS path the receiver binds and hooks POST to (also injected as
+    /// `TOTSUKA_HOOK_ENDPOINT`). Created `0600`; stale sockets are unlinked.
+    pub socket_path: PathBuf,
+    /// Bearer token every POST must present (`Authorization: Bearer <token>`),
+    /// also injected as `TOTSUKA_HOOK_TOKEN`. `None` disables the check (0600
+    /// socket only); the CLI logs a warning in that case.
+    pub auth_token: Option<SecretString>,
+    /// Directory the hooks spool NDJSON to when a POST fails (E-07), also
+    /// injected as `TOTSUKA_HOOK_SPOOL_DIR`. The engine drains it after
+    /// `recover()` and on every cycle. `None` disables at-least-once recovery.
+    pub spool_dir: Option<PathBuf>,
+    /// Per-workflow rendered `orchestrator-<workflow>.json` path
+    /// (`HookLaunchSpec.settings_path`), keyed by workflow name (H-01/H-03).
+    pub settings_paths: HashMap<String, PathBuf>,
+    /// Consecutive UNKNOWN stops before a task escalates (D-02).
+    pub block_retry_limit: u32,
 }
 
 /// Interpret a parsed [`RootConfig`] into [`EngineSettings`].
@@ -199,6 +234,11 @@ pub fn settings_from_config(
             .pr_body_template
             .clone()
             .unwrap_or_else(|| DEFAULT_PR_BODY_TEMPLATE.to_string()),
+        // The hook runtime needs the resolved token, expanded paths, and the
+        // per-workflow settings files — all CLI-level (secret store, `Paths`,
+        // the `hooks` module). `run_cmd` fills this in before building the
+        // engine; interpreting config alone leaves it unset.
+        hook: None,
     })
 }
 
@@ -212,24 +252,6 @@ fn cleanup_policy(config: Option<CleanupPolicyConfig>, default: CleanupPolicy) -
             CleanupPolicy::RetentionDays(retention_days)
         }
     }
-}
-
-/// Configuration for the UDS hook-receiving server (#136, E-03).
-///
-/// Built by the CLI (`run_cmd`), which resolves the Bearer token via the
-/// platform secret store and computes the socket path. The server starts even
-/// when `[hooks]` is unset — a config without a hook-capable agent simply never
-/// receives a POST.
-pub struct HookServerSettings {
-    /// Path of the Unix domain socket to listen on (normally absolute; the CLI
-    /// resolves it from `[hooks].socket_path` via `expand_path`, which may yield
-    /// a path relative to the process CWD). Created `0600`; any stale socket is
-    /// unlinked before bind and on shutdown.
-    pub socket_path: PathBuf,
-    /// Resolved Bearer token every POST must present (`Authorization: Bearer
-    /// <token>`). `None` disables the check (0600 socket only); the CLI logs a
-    /// warning in that case.
-    pub auth_token: Option<SecretString>,
 }
 
 /// The launched plugins, split by kind (enabled entries only, F-58).
@@ -350,9 +372,6 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     /// Opens pull requests for `output = pull_request` (F-86); a seam so the
     /// push flow is testable without hitting GitHub.
     pr_creator: Box<dyn PrCreator>,
-    /// UDS hook receiver settings (#136); `None` = do not start the server
-    /// (default for tests). Consumed (`take`n) when [`Engine::run`] starts.
-    hook_server: Option<HookServerSettings>,
     stats: RunStats,
 }
 
@@ -416,7 +435,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             readme_cache,
             agent_output: HashMap::new(),
             pr_creator,
-            hook_server: None,
             stats: RunStats::default(),
         }
     }
@@ -424,13 +442,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Borrow the state DB (status queries, tests).
     pub fn db(&self) -> &StateDb {
         &self.db
-    }
-
-    /// Enable the UDS hook-receiving server (#136). [`Engine::run`] binds the
-    /// socket and spawns [`hook_uds::serve`], forwarding each received signal
-    /// onto this engine's event channel. Call before `run`.
-    pub fn set_hook_server(&mut self, settings: HookServerSettings) {
-        self.hook_server = Some(settings);
     }
 
     /// Startup recovery (§5.3): re-attach in-flight sessions, rebuild slot
@@ -492,6 +503,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 outcome.result
             );
         }
+        // Replay any hook signals that were spooled while the orchestrator was
+        // down (E-07): the idempotency key makes a read-all-then-delete safe.
+        self.replay_spool().await?;
         Ok(report)
     }
 
@@ -537,20 +551,23 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         tokio::pin!(shutdown);
         let mut interrupted = false;
 
-        // Start the UDS hook receiver (#136), if configured. It runs as a
-        // detached task; a `watch` channel signals graceful shutdown so it can
-        // unlink the socket. `take` avoids borrowing `self` across the loop.
-        let hook_handle = match self.hook_server.take() {
+        // Start the UDS hook receiver (#136), if a hook runtime is configured.
+        // It runs as a detached task; a `watch` channel signals graceful
+        // shutdown so it can unlink the socket. The runtime stays in
+        // `settings.hook` (dispatch reads it all run long); only the socket
+        // path + token are cloned here for the server.
+        let hook_handle = match self.settings.hook.as_ref() {
             Some(hs) => match hook_uds::bind(&hs.socket_path) {
                 Ok(listener) => {
-                    tracing::info!(socket = %hs.socket_path.display(), "hook receiver listening");
+                    let socket_path = hs.socket_path.clone();
+                    tracing::info!(socket = %socket_path.display(), "hook receiver listening");
                     let sink = EngineSignalSink::new(self._events_tx.clone());
                     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
                     let handle = tokio::spawn(hook_uds::serve(
                         listener,
-                        hs.socket_path,
+                        socket_path,
                         sink,
-                        hs.auth_token,
+                        hs.auth_token.clone(),
                         stop_rx,
                     ));
                     Some((stop_tx, handle))
@@ -702,9 +719,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         &mut self,
         only_sources: Option<&HashSet<String>>,
     ) -> Result<(), EngineError> {
+        // Drain any hook signals a failed POST spooled (E-07) before acting on
+        // state, so a completion that only reached the spool is applied this
+        // cycle rather than a cycle late.
+        self.replay_spool().await?;
         self.fetch_and_ingest(only_sources).await?;
         self.select_repos().await?;
         self.dispatch_ready().await?;
+        // Escalate hook-dispatched tasks that have gone silent past their
+        // workflow timeout (D-03).
+        self.sweep_signal_timeouts().await?;
         self.sweep_finished_worktrees()?;
         Ok(())
     }
@@ -1033,6 +1057,39 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
         };
 
+        // Hook-capable agents (herdr 0.1.3: `resume_session` / `diagnostics_snapshot`)
+        // receive a correlation `job_id` + a [`HookLaunchSpec`] so their Claude
+        // Code hooks POST completion signals back (#131/#138). The job id's
+        // `session_row` must exist *before* launch — it is injected into the
+        // process and echoed by every hook — so the session row is reserved up
+        // front and its native id filled in after `task/dispatch` returns.
+        // Non-hook agents (orca / mock) take the unchanged path below.
+        let hook_capable = self
+            .plugins
+            .agents
+            .get(&agent_name)
+            .map(|a| {
+                let c = a.capabilities();
+                c.resume_session || c.diagnostics_snapshot
+            })
+            .unwrap_or(false);
+        let (job_id, hook_spec, reserved_row) = match hook_capable
+            .then(|| self.hook_launch(&record.workflow))
+            .flatten()
+        {
+            Some((settings_path, mut env)) => {
+                let session_row = self.db.reserve_session(record.id, &agent_name)?;
+                let job_id = JobId::new(record.id, session_row);
+                env.insert("TOTSUKA_JOB_ID".to_string(), job_id.to_string());
+                (
+                    Some(job_id.to_string()),
+                    Some(HookLaunchSpec { settings_path, env }),
+                    Some(session_row),
+                )
+            }
+            None => (None, None, None),
+        };
+
         // task/dispatch (F-31) → session id → persist (F-37) → subscribe (F-38).
         let agent = self.plugins.agents.get(&agent_name).expect("checked above");
         let params = TaskDispatchParams {
@@ -1040,19 +1097,37 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             worktree_path: worktree_path.display().to_string(),
             mode: execution_mode(&record.mode),
             extra_context: None,
-            job_id: None,
+            job_id,
             resume_session_id: None,
-            hook: None,
+            hook: hook_spec,
         };
         let dispatched: TaskDispatchResult = match agent.call(method::TASK_DISPATCH, &params).await
         {
             Ok(result) => result,
             Err(e) => {
+                // Roll back the pre-dispatch session reservation (hook path) so
+                // a failed dispatch never leaves an empty-id row for retry /
+                // recovery to re-attach to.
+                if let Some(row) = reserved_row
+                    && let Err(err) = self.db.delete_session(row)
+                {
+                    tracing::warn!(
+                        task_id = record.id,
+                        "failed to roll back reserved session row: {err}"
+                    );
+                }
                 return self.fail_dispatch(&record, e.to_string()).await;
             }
         };
-        self.db
-            .record_session(record.id, &agent_name, &dispatched.session_id)?;
+        // Persist the native session id (F-37): fill the reserved hook row, or
+        // append a fresh row on the non-hook path.
+        match reserved_row {
+            Some(row) => self.db.set_session_native_id(row, &dispatched.session_id)?,
+            None => {
+                self.db
+                    .record_session(record.id, &agent_name, &dispatched.session_id)?;
+            }
+        }
         self.db.apply_event(
             record.id,
             TaskEvent::Dispatch,
@@ -1182,19 +1257,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     .await
             }
             PluginEvent::Closed(plugin) => self.on_plugin_closed(&plugin).await,
-            // #138 wires hook signals into the state machine (idempotent
-            // `hook_events` INSERT → completion/verification/escalation). Until
-            // then, log receipt so the ingest path is observable end-to-end
-            // instead of silently dropping — never `unreachable!()`, the adapter
-            // really does deliver these.
-            PluginEvent::HookSignal(signal) => {
-                tracing::info!(
-                    job_id = %signal.job_id,
-                    event = ?signal.event,
-                    "received hook signal (engine handling arrives in #138)"
-                );
-                Ok(())
-            }
+            // A normalized Claude Code hook signal from the UDS receiver (#136):
+            // idempotent record → task resolution → state transition →
+            // verification → output (#138, `run::hooks`).
+            PluginEvent::HookSignal(signal) => self.on_signal(signal).await,
         }
     }
 

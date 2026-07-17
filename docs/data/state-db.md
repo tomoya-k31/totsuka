@@ -50,7 +50,7 @@ owner: tomoya-k31
 | created_at | TEXT | ISO 8601 (UTC)。最新行が attach 対象 |
 | claude_session_id | TEXT NULL | Claude Code 自身の `session_id`（v2/#134、E-09。`--resume` 相関）。フックの SessionStart 観測時に `set_claude_session_id` が記録。`idx_sessions_claude_session` |
 
-追加ストア API（v2/#134）: `set_claude_session_id(session_row_id, cc_sid)`（当該セッション行へ Claude セッション ID を記録）/ `find_session_by_claude_id(cc_sid)`（Claude セッション ID から最新セッション行を逆引き）。
+追加ストア API（v2/#134）: `set_claude_session_id(session_row_id, cc_sid)`（当該セッション行へ Claude セッション ID を記録）/ `find_session_by_claude_id(cc_sid)`（Claude セッション ID から最新セッション行を逆引き）。フック dispatch 配線（#138）: `reserve_session(task_id, plugin)` が `session_id` 空でセッション行を先行確保し、その行 id を `job_id = job-{task_id}-{session_row}` の `session_row` に用いる（フックが echo する job_id は起動時に env 注入するため、`task/dispatch` 応答前に行 id が必要）。`task/dispatch` 応答後 `set_session_native_id(session_row_id, session_id)` で実 session_id を埋める。dispatch 失敗時は `delete_session(session_row_id)` で予約行をロールバック（空 id 行を残さず retry/recovery が誤 reattach しない）。
 
 ## hook_events（#131/#134、D-05/N-01/E-09）
 

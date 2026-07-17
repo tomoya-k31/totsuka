@@ -40,6 +40,21 @@ pub enum TaskCommand {
         /// Task id.
         id: i64,
     },
+    /// Approve or reject a task awaiting human verification
+    /// (`verification = "human"`, #131 D-01).
+    Verify {
+        /// Task id (must be in the `verifying` state).
+        id: i64,
+        /// Approve the self-reported completion → publish on the next run.
+        #[arg(long, conflicts_with = "fail")]
+        pass: bool,
+        /// Reject the completion → back to running for correction in the pane.
+        #[arg(long, requires = "reason")]
+        fail: bool,
+        /// Reason for rejection (required with `--fail`).
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 /// A `task show --json` document.
@@ -86,6 +101,12 @@ pub fn run(cx: &Cx, command: TaskCommand) -> Result<(), CliError> {
         TaskCommand::Show { id, json } => show(cx, id, json),
         TaskCommand::Cancel { id } => cancel(cx, id),
         TaskCommand::Retry { id } => retry(cx, id),
+        TaskCommand::Verify {
+            id,
+            pass,
+            fail,
+            reason,
+        } => verify(cx, id, pass, fail, reason),
     }
 }
 
@@ -241,6 +262,54 @@ fn retry(cx: &Cx, id: i64) -> Result<(), CliError> {
     println!(
         "task {id} re-queued → `totsuka run` dispatches it (reusing its worktree/session when possible)"
     );
+    Ok(())
+}
+
+fn verify(
+    cx: &Cx,
+    id: i64,
+    pass: bool,
+    fail: bool,
+    reason: Option<String>,
+) -> Result<(), CliError> {
+    let db = cx.open_state_db()?;
+    let task = db.get_task(id)?.ok_or_else(|| not_found(id))?;
+    if task.state != TaskState::Verifying {
+        return Err(format!(
+            "task {id} is {} → `totsuka task verify` applies only to a task awaiting human verification (state `verifying`)",
+            task.state
+        )
+        .into());
+    }
+    if pass {
+        // ApproveVerification → Publishing; the next `totsuka run` recover cycle
+        // finalizes it via the existing Publishing-restore path (#131 D-01).
+        db.apply_event(
+            id,
+            TaskEvent::ApproveVerification,
+            Some(serde_json::json!({ "kind": "cli", "command": "task verify --pass" })),
+        )?;
+        println!("task {id} verification passed → `totsuka run` publishes it on the next cycle");
+    } else if fail {
+        // VerificationFailed → Running; the human gives corrective instructions
+        // directly in the agent pane (D-07).
+        let reason = reason.unwrap_or_default();
+        db.apply_event(
+            id,
+            TaskEvent::VerificationFailed,
+            Some(serde_json::json!({
+                "kind": "cli", "command": "task verify --fail", "reason": reason,
+            })),
+        )?;
+        println!(
+            "task {id} verification failed → back to running; give corrective instructions in the agent pane"
+        );
+    } else {
+        return Err(
+            "specify --pass to approve, or --fail --reason <text> to reject → see `totsuka task verify --help`"
+                .into(),
+        );
+    }
     Ok(())
 }
 

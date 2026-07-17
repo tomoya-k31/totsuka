@@ -22,10 +22,9 @@ source="$(printf '%s' "$input" | jq -r '.source // ""')"
 payload="$(jq -cn \
   --arg job_id "${TOTSUKA_JOB_ID:-}" \
   --arg session_id "$session_id" \
-  --arg event "session_start" \
   --arg ts "$(iso_now)" \
   --arg source "$source" \
-  '{job_id: $job_id, session_id: $session_id, event: $event, ts: $ts, source: $source}')"
+  '{job_id: $job_id, session_id: $session_id, hook_event_name: "SessionStart", ts: $ts, source: $source}')"
 
 post_event "$payload"
 exit 0

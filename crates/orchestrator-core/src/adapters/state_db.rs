@@ -517,6 +517,64 @@ impl StateDb {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Reserve a session row *before* `task/dispatch`, so its id can seed the
+    /// hook correlation key `job_id = job-{task_id}-{session_row}` (#131 E-09).
+    ///
+    /// The job id must be injected into the agent process **at launch** (it is
+    /// echoed back by every hook), yet the agent-native session id is only known
+    /// once `task/dispatch` returns — so the row is created here with an empty
+    /// native id and filled in afterwards by
+    /// [`set_session_native_id`](Self::set_session_native_id). Returns the new
+    /// row id (the `session_row` component of the job id).
+    pub fn reserve_session(&self, task_id: i64, plugin: &str) -> Result<i64, StateError> {
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1)",
+            params![task_id],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Err(StateError::NotFound(task_id));
+        }
+        self.conn.execute(
+            "INSERT INTO sessions (task_id, plugin, session_id, created_at)
+             VALUES (?1, ?2, '', ?3)",
+            params![task_id, plugin, now()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Fill in the agent-native session id on a row created by
+    /// [`reserve_session`](Self::reserve_session), once `task/dispatch` has
+    /// returned it (the hook-dispatch counterpart of
+    /// [`record_session`](Self::record_session)).
+    pub fn set_session_native_id(
+        &self,
+        session_row_id: i64,
+        session_id: &str,
+    ) -> Result<(), StateError> {
+        let n = self.conn.execute(
+            "UPDATE sessions SET session_id = ?1 WHERE id = ?2",
+            params![session_id, session_row_id],
+        )?;
+        if n == 0 {
+            return Err(StateError::NotFound(session_row_id));
+        }
+        Ok(())
+    }
+
+    /// Delete a session row by id. Used to roll back a
+    /// [`reserve_session`](Self::reserve_session) reservation when the
+    /// subsequent `task/dispatch` fails, so a failed dispatch leaves no
+    /// empty-id row for retry / recovery to trip over. A missing row is not an
+    /// error (the rollback is best-effort).
+    pub fn delete_session(&self, session_row_id: i64) -> Result<(), StateError> {
+        self.conn.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            params![session_row_id],
+        )?;
+        Ok(())
+    }
+
     /// The most recent session for a task — the re-attach target (F-37) — or
     /// `None` if the task was never dispatched.
     pub fn latest_session(&self, task_id: i64) -> Result<Option<SessionRecord>, StateError> {
@@ -1126,6 +1184,54 @@ mod tests {
         db.record_hook_event(&hook_event(id, "job-1-7", "stop", Some("UNKNOWN")))
             .unwrap();
         assert_eq!(db.unknown_stop_streak(id).unwrap(), 1);
+    }
+
+    #[test]
+    fn reserve_session_then_fill_native_id() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+
+        // Reserve returns a real row id (the job_id session_row) with an empty
+        // native id, then the dispatch result fills it in.
+        let row = db.reserve_session(id, "herdr").unwrap();
+        let before = db.latest_session(id).unwrap().unwrap();
+        assert_eq!(before.id, row);
+        assert_eq!(
+            before.session_id, "",
+            "reserved row starts with no native id"
+        );
+
+        db.set_session_native_id(row, "cc-native").unwrap();
+        let after = db.latest_session(id).unwrap().unwrap();
+        assert_eq!(after.session_id, "cc-native");
+        assert_eq!(after.plugin, "herdr");
+
+        // Unknown ids are rejected, matching the other setters' contract.
+        assert!(matches!(
+            db.reserve_session(999, "herdr").unwrap_err(),
+            StateError::NotFound(999)
+        ));
+        assert!(matches!(
+            db.set_session_native_id(999, "x").unwrap_err(),
+            StateError::NotFound(999)
+        ));
+    }
+
+    #[test]
+    fn delete_session_rolls_back_a_reservation() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        let row = db.reserve_session(id, "herdr").unwrap();
+        assert!(db.latest_session(id).unwrap().is_some());
+
+        // A failed dispatch rolls the reservation back → no session row remains.
+        db.delete_session(row).unwrap();
+        assert!(
+            db.latest_session(id).unwrap().is_none(),
+            "the reserved row must be gone after rollback"
+        );
+        // Deleting a missing row is a no-op (best-effort rollback), not an error.
+        db.delete_session(row).unwrap();
     }
 
     #[test]

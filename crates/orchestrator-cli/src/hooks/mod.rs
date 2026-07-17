@@ -229,12 +229,16 @@ mod tests {
         );
         let events = spooled_json(&spool);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["event"], "stop");
+        // Canonical wire contract: the event kind rides `hook_event_name`.
+        assert_eq!(events[0]["hook_event_name"], "Stop");
         assert_eq!(events[0]["status"], "NEEDS_INPUT");
         assert_eq!(events[0]["reason"], "which branch?");
         assert_eq!(events[0]["job_id"], "job-test");
         assert_eq!(events[0]["prompt_id"], "p1");
         assert_eq!(events[0]["transcript_path"], "/t.jsonl");
+        // background_tasks is carried so the receiver can distinguish an
+        // intermediate (heartbeat) Stop from a final one.
+        assert_eq!(events[0]["background_tasks"], serde_json::json!([]));
     }
 
     #[test]
@@ -285,7 +289,14 @@ mod tests {
         assert!(out.stdout.is_empty());
         let events = spooled_json(&spool);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["event"], "heartbeat");
+        // An intermediate Stop stays `hook_event_name: "Stop"`; the non-empty
+        // background_tasks is what makes the receiver treat it as a heartbeat.
+        assert_eq!(events[0]["hook_event_name"], "Stop");
+        assert!(
+            !events[0]["background_tasks"].as_array().unwrap().is_empty(),
+            "heartbeat carries the non-empty background_tasks: {}",
+            events[0]
+        );
     }
 
     #[test]

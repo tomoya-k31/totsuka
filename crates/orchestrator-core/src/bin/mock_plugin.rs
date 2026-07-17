@@ -32,7 +32,8 @@ use std::io::{BufRead, Write};
 
 use plugin_protocol::jsonrpc::{Error, Notification, Response, error_code};
 use plugin_protocol::methods::{
-    AgentState, ConfigValidateResult, InitializeResult, SessionAttachResult, TaskDispatchResult,
+    AgentState, ConfigValidateResult, DiagnosticsSnapshotResult, InitializeResult,
+    SessionAttachResult, TaskDispatchResult,
 };
 use plugin_protocol::{Capabilities, manifest::OutputCapability};
 use serde_json::Value;
@@ -76,6 +77,10 @@ fn main() {
                     .get("no_state_stream")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                // Hook-capability flags (0.1.3): `resume_session` /
+                // `diagnostics_snapshot` make the orchestrator take the
+                // hook-dispatch path (job_id + HookLaunchSpec).
+                let flag = |k: &str| config.get(k).and_then(Value::as_bool).unwrap_or(false);
                 Response::result(
                     request_id(&id),
                     serde_json::to_value(InitializeResult {
@@ -83,6 +88,8 @@ fn main() {
                         capabilities: Capabilities {
                             plan_mode: true,
                             state_stream,
+                            resume_session: flag("resume_session"),
+                            diagnostics_snapshot: flag("diagnostics_snapshot"),
                             outputs: vec![OutputCapability::Source],
                             ..Default::default()
                         },
@@ -118,6 +125,9 @@ fn main() {
                 Response::result(request_id(&id), Value::Null)
             }
             "task/dispatch" => {
+                // Record the dispatch params (job_id / hook launch spec) so
+                // integration tests can assert the hook-dispatch wiring.
+                record_to(config.get("dispatch_log"), "task/dispatch", &params);
                 // `crash_on_dispatch: true` self-destructs mid-dispatch to
                 // exercise crash isolation (§5.3) end to end: the host observes
                 // EOF and fails the task without the orchestrator dying.
@@ -169,6 +179,20 @@ fn main() {
                 Response::result(
                     request_id(&id),
                     serde_json::to_value(SessionAttachResult { attached, state }).unwrap(),
+                )
+            }
+            "diagnostics/snapshot" => {
+                // A pane screen capture for escalation diagnostics (R-10). The
+                // text is config-driven so tests can assert it lands in the
+                // audit detail; `null` simulates an unavailable pane.
+                let text = config
+                    .get("snapshot_text")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or(Some("╭─ mock pane ─╮".to_string()));
+                Response::result(
+                    request_id(&id),
+                    serde_json::to_value(DiagnosticsSnapshotResult { text }).unwrap(),
                 )
             }
             "task/cancel" => Response::result(request_id(&id), Value::Null),

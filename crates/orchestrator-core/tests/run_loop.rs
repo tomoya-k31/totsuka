@@ -118,6 +118,7 @@ fn engine_settings(repo_path: &Path) -> EngineSettings {
         readme_cache_dir: None,
         pr_title_template: "totsuka: {title}".to_string(),
         pr_body_template: "Task {title} ({url})\n\n{summary}".to_string(),
+        hook: None,
     }
 }
 
