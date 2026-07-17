@@ -87,6 +87,11 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
         )?)
     };
 
+    // Refresh the static hook scripts + per-workflow settings under
+    // $XDG_DATA_HOME/totsuka/hooks/ (H-01/H-03, #137). Idempotent by content
+    // hash, so a matching second startup rewrites nothing.
+    crate::hooks::install(paths, &cfg)?;
+
     let db = StateDb::open(&paths.state_dir().join("state.db"))?;
     let plugins = launch_plugins(cx, &cfg, &env).await?;
 
