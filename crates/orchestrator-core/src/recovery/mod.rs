@@ -24,10 +24,12 @@ use crate::scheduler::counts_toward_slot;
 
 /// Task states that hold an in-flight agent session and must be re-attached on
 /// startup (§5.3).
-pub const RECOVERABLE_STATES: [TaskState; 4] = [
+pub const RECOVERABLE_STATES: [TaskState; 6] = [
     TaskState::Dispatched,
     TaskState::Running,
     TaskState::WaitingInput,
+    TaskState::Verifying,
+    TaskState::Escalated,
     TaskState::Publishing,
 ];
 
@@ -180,6 +182,19 @@ fn resume_plan(current: TaskState, agent: AgentState) -> ResumeDecision {
     use TaskEvent as E;
     use TaskState as S;
 
+    // Human-gated states never auto-resume, whatever the agent reports:
+    // verification / escalation must not be skipped across a restart (#133).
+    if current == S::Verifying {
+        return ResumeDecision::Confirm(
+            "task awaits human verification (`totsuka task verify`); not resumed automatically",
+        );
+    }
+    if current == S::Escalated {
+        return ResumeDecision::Confirm(
+            "task was escalated to a human; resolve it before resuming",
+        );
+    }
+
     match agent {
         // A successfully-attached agent that reports failure is a real failure,
         // but recovery still defers to the human (§5.3: never auto-fail here).
@@ -205,7 +220,12 @@ fn resume_plan(current: TaskState, agent: AgentState) -> ResumeDecision {
         A::Done => match current {
             S::Dispatched => ResumeDecision::Apply(&[E::Start, E::BeginPublish]),
             S::Running => ResumeDecision::Apply(&[E::BeginPublish]),
-            S::WaitingInput => ResumeDecision::Apply(&[E::ResumeInput, E::BeginPublish]),
+            // A waiting task whose agent finished may be a human-verification
+            // outcome in disguise: auto-publishing here would skip the review
+            // across a restart, so defer to the human (#133 safety).
+            S::WaitingInput => ResumeDecision::Confirm(
+                "agent finished while the task was waiting for input; verify before publishing",
+            ),
             S::Publishing => ResumeDecision::Synced,
             _ => ResumeDecision::Confirm("agent is done but the task was in an unexpected state"),
         },
@@ -405,6 +425,12 @@ mod tests {
             TaskState::WaitingInput => {
                 &[TaskEvent::Dispatch, TaskEvent::Start, TaskEvent::WaitInput]
             }
+            TaskState::Verifying => &[
+                TaskEvent::Dispatch,
+                TaskEvent::Start,
+                TaskEvent::SelfReportComplete,
+            ],
+            TaskState::Escalated => &[TaskEvent::Dispatch, TaskEvent::Start, TaskEvent::Escalate],
             TaskState::Publishing => &[
                 TaskEvent::Dispatch,
                 TaskEvent::Start,
@@ -518,6 +544,62 @@ mod tests {
         assert_eq!(report.needs_confirmation().count(), 1);
         // Attach succeeded but the agent failed: still defer to the human.
         assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Running);
+    }
+
+    #[tokio::test]
+    async fn done_agent_with_waiting_task_needs_confirmation_not_auto_publish() {
+        // Regression guard (#133 safety): a task that was waiting for input
+        // when the agent finished may be pending human verification — a
+        // restart must not skip the review by auto-publishing.
+        let db = StateDb::open_in_memory().unwrap();
+        let id = task_in(&db, "1", TaskState::WaitingInput, Some("sess-1"));
+        let attacher = FakeAttacher::new(&[("sess-1", Canned::Attached(AgentState::Done))]);
+
+        let report = recover(&db, &attacher).await.unwrap();
+
+        assert_eq!(report.needs_confirmation().count(), 1);
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().state,
+            TaskState::WaitingInput,
+            "must not advance to Publishing without a human"
+        );
+    }
+
+    #[tokio::test]
+    async fn verifying_and_escalated_tasks_are_recovered_but_deferred() {
+        // Both states are in RECOVERABLE_STATES (they hold live sessions) but
+        // never auto-resume, whatever the agent reports.
+        let db = StateDb::open_in_memory().unwrap();
+        let v = task_in(&db, "1", TaskState::Verifying, Some("sess-v"));
+        let e = task_in(&db, "2", TaskState::Escalated, Some("sess-e"));
+        let attacher = FakeAttacher::new(&[
+            ("sess-v", Canned::Attached(AgentState::Done)),
+            ("sess-e", Canned::Attached(AgentState::Running)),
+        ]);
+
+        let report = recover(&db, &attacher).await.unwrap();
+
+        assert_eq!(report.needs_confirmation().count(), 2);
+        assert_eq!(db.get_task(v).unwrap().unwrap().state, TaskState::Verifying);
+        assert_eq!(db.get_task(e).unwrap().unwrap().state, TaskState::Escalated);
+    }
+
+    #[test]
+    fn human_gated_states_always_confirm_in_resume_plan() {
+        for current in [TaskState::Verifying, TaskState::Escalated] {
+            for agent in [
+                AgentState::Idle,
+                AgentState::Running,
+                AgentState::WaitingInput,
+                AgentState::Done,
+                AgentState::Failed,
+            ] {
+                assert!(
+                    matches!(resume_plan(current, agent), ResumeDecision::Confirm(_)),
+                    "{current} + {agent:?} must defer to a human"
+                );
+            }
+        }
     }
 
     #[test]
