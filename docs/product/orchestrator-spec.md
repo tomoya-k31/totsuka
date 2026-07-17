@@ -133,7 +133,7 @@ Priorities use MoSCoW (M: Must / S: Should / C: Could / W: Won't in v1).
 | F-42 | Per-Agent-IDE-plugin limit (matches tool-side session-count constraints) | S |
 | F-43 | Queueing and priority control (respect task priority, FIFO fallback) | S |
 | F-44 | Individual cancel/retry of running tasks. On retry, recreate the worktree if missing; if it exists, keep it and resume the conversation using the task's previous agent session ID (F-37) | M |
-| F-45 | Only the states `dispatched → running → publishing` count toward concurrency limits. Waiting states such as `waiting_input` release their slot and reacquire one on resume (prevents effective deadlock by waiting) | M |
+| F-45 | Only the states `dispatched → running → verifying → publishing` count toward concurrency limits (`verifying` = human-verification pending, agent work done but output not yet confirmed, so it keeps its slot). Waiting states such as `waiting_input` and `escalated` (awaiting human intervention) release their slot and reacquire one on resume (prevents effective deadlock by waiting) | M |
 
 ### 4.6 Plugin system
 
