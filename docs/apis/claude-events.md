@@ -1,0 +1,72 @@
+---
+type: API Endpoint
+title: POST /claude-events（UDS フック受信）
+description: Claude Code フックが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。
+resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/hook_uds.rs
+tags: [api, uds, hook, claude-code, signal, ingress]
+timestamp: 2026-07-18T00:00:00Z
+status: active
+owner: tomoya-k31
+---
+
+# 概要
+
+herdr ペイン上の Claude Code が発火するフック（Stop / Notification / SessionStart / SessionEnd）が、完了自己申告や中間イベントを orchestrator-core へ通知するための受信口（#131 / #136）。screen-manifest 画面検出に代わる決定的な完了判定の入口である。
+
+driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実装し、正規化した [`domain::signal::AgentSignal`](/components/orchestrator-core.md) を `ports::SignalPort` 経由で Engine へ投入する。
+
+# トランスポート
+
+- **Unix domain socket**。既定パス `${XDG_RUNTIME_DIR}/totsuka/claude-events.sock`（`[hooks].socket_path` で上書き可）。パーミッションは **0600**（同一ユーザのみ接続可＝第一の認証層、E-03）。
+- **最小 HTTP/1.1**。ヘッダを `\r\n\r\n` まで読み、`Content-Length` バイト分の body を読む。**chunked 転送は非対応**（フックは固定長 `curl --data` POST）。method / path は検査しない（E-08 前方互換。パスは慣例上 `/claude-events`）。
+- **1 接続 1 リクエスト**で close（keep-alive 非対応）。
+
+# 認証（E-03）
+
+- `Authorization: Bearer <token>`。`token` は起動時に `[hooks].auth_token_ref`（keychain 参照等）を解決した値で、herdr の env 注入経由でフックへ供給される。
+- 比較は定数時間。不一致・欠落は **401 + 警告ログ**のみで listener は落とさない。
+- `[hooks].auth_token_ref` 未設定時は認証チェックを行わず（0600 ソケットのみで保護）、CLI が警告を出す。
+
+# リクエスト（body JSON）
+
+`job_id` のみ必須。未知フィールドは許容し、監査用に body 全体を `AgentSignal.payload` へ温存する（E-08）。
+
+| フィールド | 必須 | 意味 |
+|---|---|---|
+| `job_id` | ✔ | `"job-{task_id}-{session_row}"`。`TOOL_A_JOB_ID` のエコーバック。相関はこれのみで行い session_id からの推測はしない（E-09） |
+| `session_id` | | Claude セッション id（相関補助・冪等キー要素） |
+| `prompt_id` | | 冪等キー要素 |
+| `hook_event_name` | | `Stop` / `Notification` / `SessionStart` / `SessionEnd`。未知/欠落は `Heartbeat`（生存のみ、誤完了を避ける最も非断定な扱い）へ正規化 |
+| `status` | | `Stop` 時: `completed` / `needs_input` / `failed` / `unknown` |
+| `reason` | | 補足理由 |
+| `last_assistant_message` / `transcript_path` | | `Stop` 時の補助 |
+| `message` | | `Notification` 時のメッセージ |
+| `background_tasks` | | `Stop` 時に非空なら中間 Stop＝`Heartbeat` として扱う（#131 D-12） |
+
+# レスポンス
+
+| ステータス | 条件 |
+|---|---|
+| `200 OK` | 正常。`SignalPort::submit` 直後に即返す（検収等の後続処理は非同期、E-04） |
+| `400 Bad Request` | body が不正 JSON / オブジェクトでない / `job_id` 欠落・parse 不能（E-09） |
+| `401 Unauthorized` | Bearer トークン不一致・欠落（E-03） |
+| `413 Payload Too Large` | body が 1 MiB 超 |
+| `503 Service Unavailable` | Engine のイベントチャネルが閉じている（シャットダウン中） |
+
+冪等性はこの層では持たない。重複 POST（多重発火・スプール再送・curl 再送）はいずれも 200 を返し二重投入されるが、`hook_events` の UNIQUE 制約で DB 層が無害化する（D-05）。
+
+# Examples
+
+```bash
+curl --unix-socket "${XDG_RUNTIME_DIR}/totsuka/claude-events.sock" \
+  -H "Authorization: Bearer $TOOL_A_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"job_id":"job-42-7","session_id":"abc","hook_event_name":"Stop","status":"completed"}' \
+  http://localhost/claude-events
+```
+
+# 関連
+
+- [orchestrator-core クレート](/components/orchestrator-core.md) — `adapters::hook_uds` / `ports::SignalPort` / `adapters::engine_signal_sink`
+- [state.db スキーマ](/data/state-db.md) — `hook_events`（冪等 INSERT の受け皿、#134）
+- [Spec §6 技術要件](/product/orchestrator-spec.ja.md)

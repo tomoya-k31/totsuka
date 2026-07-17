@@ -10,9 +10,11 @@ pub mod git;
 pub mod llm;
 pub mod process;
 pub mod secret;
+pub mod signal_ingress;
 
 pub use agent_session::{AgentSession, AgentSessionError, AttachOutcome};
 pub use git::{GitOutput, GitRunner};
 pub use llm::{ChatRequest, LlmError, LlmRouter};
 pub use process::ProcessProbe;
 pub use secret::{SecretError, SecretRef, SecretStore, SecretString};
+pub use signal_ingress::{SignalAck, SignalError, SignalPort};
