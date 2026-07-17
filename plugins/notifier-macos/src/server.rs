@@ -237,8 +237,8 @@ fn event_label(event: NotifierEvent) -> (&'static str, &'static str) {
         NotifierEvent::Done => ("✅", "完了"),
         NotifierEvent::Failed => ("❌", "失敗"),
         NotifierEvent::Pending => ("🔔", "確認待ち"),
-        // Minimal labels for the 0.1.3 events; full notifier support (filter
-        // toggles, wording) lands with the hook epic (#131).
+        // First-class hook-epic events (#131 D-01/D-02): filter-eligible via the
+        // `escalated` / `verification_pending` toggles in `[filter.events]`.
         NotifierEvent::Escalated => ("🚨", "エスカレーション"),
         NotifierEvent::VerificationPending => ("🔍", "検収待ち"),
     }
@@ -303,6 +303,32 @@ mod tests {
         assert_eq!(notice.title, "⏳ 入力待ち");
         assert_eq!(notice.subtitle, "Fix bug · impl");
         assert_eq!(notice.body, "Delete the file? (y/n)");
+    }
+
+    #[test]
+    fn formats_escalated_and_verification_pending_notices() {
+        let esc = format_notice(&NotifyParams {
+            event: NotifierEvent::Escalated,
+            task_id: Some("T5".into()),
+            workflow: Some("reply".into()),
+            title: "Answer the mention".into(),
+            body: Some("3 UNKNOWN stops — needs a human".into()),
+        });
+        assert_eq!(esc.title, "🚨 エスカレーション");
+        assert_eq!(esc.subtitle, "Answer the mention · reply");
+        assert_eq!(esc.body, "3 UNKNOWN stops — needs a human");
+
+        // No explicit body → falls back to the task id.
+        let verify = format_notice(&NotifyParams {
+            event: NotifierEvent::VerificationPending,
+            task_id: Some("T7".into()),
+            workflow: Some("design".into()),
+            title: "Review the plan".into(),
+            body: None,
+        });
+        assert_eq!(verify.title, "🔍 検収待ち");
+        assert_eq!(verify.subtitle, "Review the plan · design");
+        assert_eq!(verify.body, "タスク T7");
     }
 
     #[test]

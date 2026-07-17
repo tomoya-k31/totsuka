@@ -45,6 +45,97 @@ pub fn hooks_dir(paths: &Paths) -> PathBuf {
     paths.data_dir().join("hooks")
 }
 
+/// Number of static hook scripts written under the hooks dir (`doctor` reports
+/// it in the asset check).
+pub fn script_count() -> usize {
+    HOOK_SCRIPTS.len()
+}
+
+/// One hook asset that is missing, mis-permissioned, or content-drifted, found
+/// by [`verify_assets`]. `doctor`'s `check_hook_assets` turns these into
+/// actionable findings without rewriting anything.
+pub struct AssetIssue {
+    /// The offending file.
+    pub path: PathBuf,
+    /// What is wrong (missing / wrong mode / content mismatch).
+    pub problem: String,
+}
+
+/// Verify every hook asset exists with the embedded content and the expected
+/// mode (0700 scripts, 0600 settings) **without** writing anything. Returns the
+/// issues found (empty ⇒ all assets are correct). This is the read-only
+/// counterpart to [`install`]: `doctor` calls `install` first to materialize
+/// and self-heal, then `verify_assets` to surface anything that is still wrong
+/// (e.g. active tampering, or a dir the repair could not write to).
+pub fn verify_assets(paths: &Paths, cfg: &RootConfig) -> Vec<AssetIssue> {
+    let dir = hooks_dir(paths);
+    let mut issues = Vec::new();
+    for (name, content) in HOOK_SCRIPTS {
+        verify_one(&dir.join(name), content.as_bytes(), 0o700, &mut issues);
+    }
+    for wf in &cfg.workflows {
+        let rendered = render_settings(&dir, wf);
+        verify_one(
+            &settings_path(paths, &wf.name),
+            rendered.as_bytes(),
+            0o600,
+            &mut issues,
+        );
+    }
+    issues
+}
+
+/// Check one asset's existence, content hash, and mode, pushing any problem
+/// onto `issues`.
+fn verify_one(path: &Path, expected: &[u8], mode: u32, issues: &mut Vec<AssetIssue>) {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            issues.push(AssetIssue {
+                path: path.to_path_buf(),
+                problem: "missing".to_string(),
+            });
+            return;
+        }
+        Err(e) => {
+            issues.push(AssetIssue {
+                path: path.to_path_buf(),
+                problem: format!("unreadable: {e}"),
+            });
+            return;
+        }
+    };
+    if Sha256::digest(&bytes) != Sha256::digest(expected) {
+        issues.push(AssetIssue {
+            path: path.to_path_buf(),
+            problem: "content does not match the embedded asset".to_string(),
+        });
+    }
+    if let Some(actual) = file_mode(path)
+        && actual != mode
+    {
+        issues.push(AssetIssue {
+            path: path.to_path_buf(),
+            problem: format!("mode {actual:04o}, expected {mode:04o}"),
+        });
+    }
+}
+
+/// The permission bits of `path` (`0o777`-masked), or `None` on non-Unix / stat
+/// failure.
+#[cfg(unix)]
+fn file_mode(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .ok()
+        .map(|m| m.permissions().mode() & 0o777)
+}
+
+#[cfg(not(unix))]
+fn file_mode(_path: &Path) -> Option<u32> {
+    None
+}
+
 /// Absolute path of a workflow's rendered settings file (the value wired into
 /// `--settings` via `HookLaunchSpec.settings_path`).
 pub fn settings_path(paths: &Paths, workflow: &str) -> PathBuf {
@@ -409,6 +500,61 @@ output = "pull_request"
             & 0o777;
         assert_eq!(script_mode, 0o700);
         assert_eq!(settings_mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_assets_passes_after_install_and_flags_tampering() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = unique_dir("verify");
+        let paths = Paths::from_env(|k| match k {
+            "HOME" => Some(base.to_string_lossy().into_owned()),
+            "XDG_DATA_HOME" => Some(base.join("data").to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .unwrap();
+        let cfg = workflows_config(
+            r#"
+[[workflows]]
+name = "implement"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "pull_request"
+"#,
+        );
+        install(&paths, &cfg).unwrap();
+        // A freshly installed set is fully consistent.
+        assert!(
+            verify_assets(&paths, &cfg).is_empty(),
+            "no issues right after install"
+        );
+
+        // Content drift is detected (doctor's N-02 tamper check).
+        let script = hooks_dir(&paths).join("on-stop.sh");
+        std::fs::write(&script, b"#!/bin/sh\necho tampered\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let issues = verify_assets(&paths, &cfg);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.path == script && i.problem.contains("content")),
+            "tampered content flagged: {:?}",
+            issues.iter().map(|i| &i.problem).collect::<Vec<_>>()
+        );
+
+        // A mode drift on the settings file is detected.
+        install(&paths, &cfg).unwrap(); // repair the script first
+        let settings = settings_path(&paths, "implement");
+        std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let issues = verify_assets(&paths, &cfg);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.path == settings && i.problem.contains("mode")),
+            "mode drift flagged: {:?}",
+            issues.iter().map(|i| &i.problem).collect::<Vec<_>>()
+        );
     }
 
     /// Parse a rendered settings string and return its `hooks.Stop` array.

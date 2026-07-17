@@ -26,6 +26,60 @@ pub fn git(cwd: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// Inject a synthetic Claude Code hook signal into a **running** UDS receiver by
+/// POSTing `body` to `POST /claude-events` at `socket_path` (minimal HTTP/1.1,
+/// `Connection: close`), exactly as `on-stop.sh`'s `curl --unix-socket` does.
+/// Returns the HTTP status code the receiver answered.
+///
+/// This is the E2E injection helper (#141): unlike calling `Engine::on_signal`
+/// directly, it exercises the real socket transport, the Bearer check, and the
+/// `SignalPort` → run-loop wiring.
+#[cfg(unix)]
+pub fn post_hook_signal(
+    socket_path: &Path,
+    token: Option<&str>,
+    body: &str,
+) -> std::io::Result<u16> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    let mut stream = UnixStream::connect(socket_path)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let auth = token
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "POST /claude-events HTTP/1.1\r\n\
+         Host: localhost\r\n\
+         {auth}\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        len = body.len(),
+    );
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    let text = String::from_utf8_lossy(&response);
+    let status = text
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse().ok())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "no HTTP status line in reply",
+            )
+        })?;
+    Ok(status)
+}
+
 /// A fresh, empty scratch directory unique to this process and `name`.
 ///
 /// Removed first if it already exists, so a re-run starts clean.
