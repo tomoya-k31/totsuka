@@ -45,6 +45,9 @@ impl EventToggles {
             NotifierEvent::Done => self.done,
             NotifierEvent::Failed => self.failed,
             NotifierEvent::Pending => self.pending,
+            // 0.1.3 events have no toggles yet (full support lands with the
+            // hook epic, #131); unspecified means "deliver" per `allows`.
+            NotifierEvent::Escalated | NotifierEvent::VerificationPending => None,
         }
     }
 }

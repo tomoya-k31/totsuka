@@ -30,7 +30,7 @@
 //! |---|---|
 //! | common | [`initialize`](method::INITIALIZE), [`shutdown`](method::SHUTDOWN), [`config/validate`](method::CONFIG_VALIDATE) |
 //! | `task_source` | [`tasks/fetch`](method::TASKS_FETCH), [`task/update_status`](method::TASK_UPDATE_STATUS), [`result/publish`](method::RESULT_PUBLISH) |
-//! | `agent_ide` | [`task/dispatch`](method::TASK_DISPATCH), [`task/cancel`](method::TASK_CANCEL), [`session/attach`](method::SESSION_ATTACH), [`state/subscribe`](method::STATE_SUBSCRIBE) → [`state/notification`](method::STATE_NOTIFICATION) |
+//! | `agent_ide` | [`task/dispatch`](method::TASK_DISPATCH), [`task/cancel`](method::TASK_CANCEL), [`session/attach`](method::SESSION_ATTACH), [`state/subscribe`](method::STATE_SUBSCRIBE) → [`state/notification`](method::STATE_NOTIFICATION), [`diagnostics/snapshot`](method::DIAGNOSTICS_SNAPSHOT) |
 //! | `notifier` | [`notify`](method::NOTIFY) |
 //!
 //! ## Responsibility boundary (F-86)
@@ -86,11 +86,12 @@ pub use jsonrpc::{Error, Notification, Request, RequestId, Response, error_code}
 pub use manifest::{Capabilities, Manifest, ManifestError, OutputCapability, PluginKind};
 pub use methods::method;
 pub use methods::{
-    AgentState, ConfigValidateParams, ConfigValidateResult, ExecutionMode, InitializeParams,
-    InitializeResult, NotifierEvent, NotifyParams, RepoInfo, ResultPublishParams,
-    SessionAttachParams, SessionAttachResult, StateNotification, StateSubscribeParams,
-    TaskCancelParams, TaskDispatchParams, TaskDispatchResult, TaskUpdateStatusParams,
-    TasksFetchParams, TasksFetchResult,
+    AgentState, ConfigValidateParams, ConfigValidateResult, DiagnosticsSnapshotParams,
+    DiagnosticsSnapshotResult, ExecutionMode, HookLaunchSpec, InitializeParams, InitializeResult,
+    NotifierEvent, NotifyParams, RepoInfo, ResultPublishParams, SessionAttachParams,
+    SessionAttachResult, StateNotification, StateSubscribeParams, TaskCancelParams,
+    TaskDispatchParams, TaskDispatchResult, TaskUpdateStatusParams, TasksFetchParams,
+    TasksFetchResult,
 };
 pub use task::Task;
 pub use version::{PROTOCOL_VERSION, is_compatible, is_compatible_with_current, protocol_version};

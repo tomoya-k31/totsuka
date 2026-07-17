@@ -231,6 +231,8 @@ fn capabilities_result() -> Value {
             state_stream: true,
             design_preview: false,
             pane_control: false,
+            resume_session: false,
+            diagnostics_snapshot: false,
             outputs: Vec::new(),
         },
     })

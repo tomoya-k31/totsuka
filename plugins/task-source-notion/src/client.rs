@@ -197,6 +197,7 @@ impl<T: NotionTransport> NotionClient<T> {
             status: status.map(str::to_string),
             url: page["url"].as_str().map(str::to_string),
             assignee,
+            thread_key: None,
         })
     }
 

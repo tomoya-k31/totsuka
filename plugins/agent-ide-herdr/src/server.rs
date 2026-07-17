@@ -260,6 +260,10 @@ fn capabilities_result() -> Value {
             design_preview: true,
             pane_control: true,
             state_stream: true,
+            // Flipped to true when the hook epic lands resume/diagnostics
+            // support in this plugin (#131 series).
+            resume_session: false,
+            diagnostics_snapshot: false,
             outputs: Vec::new(),
         },
     })

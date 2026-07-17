@@ -682,6 +682,7 @@ fn build_task(
         status: None,
         url: enriched.permalink.clone(),
         assignee: None,
+        thread_key: None,
     };
     let pending = PendingMention {
         channel: mention.channel.clone(),
