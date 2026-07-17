@@ -130,6 +130,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     };
 
     if let Some(cfg) = &cfg {
+        check_hooks(cx, cfg, &mut checks);
         check_plugins(cx, cfg, &env, &mut checks);
         check_llm_key(cfg, &env, &mut checks);
         check_orphans(cfg, &env, db.as_ref(), json, &mut checks)?;
@@ -155,6 +156,31 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         return Err("doctor found problems → follow the actions above".into());
     }
     Ok(())
+}
+
+/// Refresh the static hook scripts + per-workflow settings and report the
+/// hooks directory (#137). Same idempotent writeout as `totsuka run`, so
+/// `doctor` doubles as "materialize the hooks" without a full run.
+fn check_hooks(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
+    match crate::hooks::install(&cx.paths, cfg) {
+        Ok(()) => {
+            let dir = crate::hooks::hooks_dir(&cx.paths);
+            let rendered = cfg.workflows.len();
+            checks.push(Check::ok(
+                "hooks",
+                format!(
+                    "{} scripts + {rendered} workflow settings under {}",
+                    5,
+                    dir.display()
+                ),
+            ));
+        }
+        Err(e) => checks.push(Check::fail(
+            "hooks",
+            format!("could not write hook scripts/settings: {e}"),
+            "check permissions on $XDG_DATA_HOME/totsuka/hooks",
+        )),
+    }
 }
 
 /// Installed + protocol-compatible + live-probe for every enabled plugin.

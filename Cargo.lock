@@ -952,6 +952,7 @@ dependencies = [
  "plugin-protocol",
  "serde",
  "serde_json",
+ "sha2",
  "test-support",
  "tokio",
  "tokio-tungstenite",
