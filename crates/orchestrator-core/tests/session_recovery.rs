@@ -63,6 +63,7 @@ fn dispatch_task() -> Task {
         status: None,
         url: None,
         assignee: None,
+        thread_key: None,
     }
 }
 
@@ -86,6 +87,9 @@ async fn kill9_restart_attach_resumes_running() {
                 worktree_path: "/wt/agent-github-1".into(),
                 mode: ExecutionMode::Implement,
                 extra_context: None,
+                job_id: None,
+                resume_session_id: None,
+                hook: None,
             },
         )
         .await

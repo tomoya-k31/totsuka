@@ -237,6 +237,10 @@ fn event_label(event: NotifierEvent) -> (&'static str, &'static str) {
         NotifierEvent::Done => ("✅", "完了"),
         NotifierEvent::Failed => ("❌", "失敗"),
         NotifierEvent::Pending => ("🔔", "確認待ち"),
+        // Minimal labels for the 0.1.3 events; full notifier support (filter
+        // toggles, wording) lands with the hook epic (#131).
+        NotifierEvent::Escalated => ("🚨", "エスカレーション"),
+        NotifierEvent::VerificationPending => ("🔍", "検収待ち"),
     }
 }
 

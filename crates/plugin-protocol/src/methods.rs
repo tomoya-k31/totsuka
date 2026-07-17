@@ -46,6 +46,10 @@ pub mod method {
     pub const STATE_SUBSCRIBE: &str = "state/subscribe";
     /// State/log fragment notification (P→O, F-38).
     pub const STATE_NOTIFICATION: &str = "state/notification";
+    /// Capture a pane screen snapshot for timeout diagnostics (O→P, R-10).
+    /// Additive since protocol 0.1.3; only called when the plugin declares the
+    /// `diagnostics_snapshot` capability.
+    pub const DIAGNOSTICS_SNAPSHOT: &str = "diagnostics/snapshot";
 
     // notifier.
     /// Deliver an event notification (O→P, notification, F-90).
@@ -227,6 +231,35 @@ pub struct TaskDispatchParams {
     /// Optional extra context for the agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_context: Option<serde_json::Value>,
+    /// 0.1.3: Orchestrator-issued correlation key. The plugin injects it into
+    /// the launched process's environment as `TOTSUKA_JOB_ID`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    /// 0.1.3: the agent-native session id to resume a past session with
+    /// (`claude --resume <id>`). Used for Slack thread conversation
+    /// continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_session_id: Option<String>,
+    /// 0.1.3: hook launch spec. When `Some`, the plugin appends
+    /// `--settings <settings_path>` to the agent CLI argv and injects `env`
+    /// into the process. Knowledge of the hook mechanism stays on the
+    /// Orchestrator side; the plugin does not interpret the contents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook: Option<HookLaunchSpec>,
+}
+
+/// How to launch the agent with the Orchestrator's hook configuration
+/// (additive since protocol 0.1.3), carried in
+/// [`TaskDispatchParams::hook`]. Opaque to the plugin: it only wires the
+/// values through to the agent process.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HookLaunchSpec {
+    /// Absolute path of the settings file passed to `--settings` (managed
+    /// per-workflow by the Orchestrator).
+    pub settings_path: String,
+    /// Environment variables to inject into the launched process
+    /// (`TOTSUKA_JOB_ID` / `TOTSUKA_HOOK_ENDPOINT` / `TOTSUKA_HOOK_TOKEN`, …).
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// `task/dispatch` result (P→O): the session identifier for re-attach (F-37).
@@ -278,11 +311,35 @@ pub struct StateNotification {
     pub log_chunk: Option<String>,
 }
 
+/// `diagnostics/snapshot` params (O→P, R-10): capture the pane screen for a
+/// session, used for timeout/escalation diagnostics. Additive since protocol
+/// 0.1.3 (`diagnostics_snapshot` capability).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagnosticsSnapshotParams {
+    /// Session id returned by `task/dispatch`.
+    pub session_id: String,
+}
+
+/// `diagnostics/snapshot` result (P→O).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagnosticsSnapshotResult {
+    /// The captured screen text. `None` when unavailable (pane gone, …) —
+    /// capture failure is not an error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // notifier
 // ---------------------------------------------------------------------------
 
 /// The kind of event delivered to a notifier (F-90).
+///
+/// The `Escalated` and `VerificationPending` variants are additive since
+/// protocol 0.1.3. A notifier built against an older protocol fails to
+/// deserialize a [`NotifyParams`] carrying them, but `notify` is
+/// fire-and-forget (F-93): the result is a dropped notification plus an error
+/// log, never an effect on task execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotifierEvent {
@@ -294,6 +351,11 @@ pub enum NotifierEvent {
     Failed,
     /// Repository selection needs human confirmation (F-14).
     Pending,
+    /// A task escalated to a human: block-threshold exceeded, timeout, or a
+    /// correlation anomaly (0.1.3, D-02/D-03).
+    Escalated,
+    /// A completed task is waiting for human verification (0.1.3, D-01).
+    VerificationPending,
 }
 
 /// `notify` params (O→P, notification, F-90). Delivery failures must not affect
@@ -343,6 +405,7 @@ mod tests {
             status: None,
             url: None,
             assignee: None,
+            thread_key: None,
         }
     }
 
@@ -425,6 +488,18 @@ mod tests {
             worktree_path: "/wt/agent-github-42".into(),
             mode: ExecutionMode::Implement,
             extra_context: Some(serde_json::json!({"base": "main"})),
+            job_id: Some("job-7".into()),
+            resume_session_id: Some("claude-sess-abc".into()),
+            hook: Some(HookLaunchSpec {
+                settings_path: "/data/totsuka/hooks/orchestrator-implement.json".into(),
+                env: std::collections::BTreeMap::from([
+                    ("TOTSUKA_JOB_ID".to_string(), "job-7".to_string()),
+                    (
+                        "TOTSUKA_HOOK_ENDPOINT".to_string(),
+                        "/run/totsuka/hook.sock".to_string(),
+                    ),
+                ]),
+            }),
         });
         round_trip(&TaskDispatchResult {
             session_id: "sess-1".into(),
@@ -447,6 +522,49 @@ mod tests {
             state: AgentState::Running,
             log_chunk: Some("compiling...".into()),
         });
+        round_trip(&DiagnosticsSnapshotParams {
+            session_id: "sess-1".into(),
+        });
+        round_trip(&DiagnosticsSnapshotResult {
+            text: Some("╭─ claude ─╮\n…".into()),
+        });
+        round_trip(&DiagnosticsSnapshotResult { text: None });
+    }
+
+    /// The 0.1.3 additive fields on `task/dispatch` follow the same contract
+    /// as `InitializeParams.repositories`/`llm`: absent in old wire (default),
+    /// omitted when unset, ignored by an older plugin when present.
+    #[test]
+    fn task_dispatch_additive_fields_are_backward_compatible() {
+        let old: TaskDispatchParams = serde_json::from_str(
+            r#"{"task":{"id":"42","source":"github","title":"t"},
+                "worktree_path":"/wt","mode":"implement"}"#,
+        )
+        .unwrap();
+        assert!(old.job_id.is_none());
+        assert!(old.resume_session_id.is_none());
+        assert!(old.hook.is_none());
+        assert!(old.task.thread_key.is_none());
+        let unset = TaskDispatchParams {
+            task: sample_task(),
+            worktree_path: "/wt".into(),
+            mode: ExecutionMode::Plan,
+            extra_context: None,
+            job_id: None,
+            resume_session_id: None,
+            hook: None,
+        };
+        let wire = serde_json::to_string(&unset).unwrap();
+        assert!(!wire.contains("job_id"));
+        assert!(!wire.contains("resume_session_id"));
+        assert!(!wire.contains("hook"));
+        assert!(!wire.contains("thread_key"));
+        // A `diagnostics/snapshot` result may omit `text` (capture failure is
+        // not an error): absent deserializes to None, None stays off the wire.
+        let missing: DiagnosticsSnapshotResult = serde_json::from_str("{}").unwrap();
+        assert!(missing.text.is_none());
+        let wire = serde_json::to_string(&DiagnosticsSnapshotResult { text: None }).unwrap();
+        assert_eq!(wire, "{}");
     }
 
     #[test]
@@ -458,6 +576,16 @@ mod tests {
             title: "Input needed".into(),
             body: Some("The agent has a question".into()),
         });
+        // The 0.1.3 variants round-trip like the original four.
+        for event in [NotifierEvent::Escalated, NotifierEvent::VerificationPending] {
+            round_trip(&NotifyParams {
+                event,
+                task_id: Some("42".into()),
+                workflow: None,
+                title: "t".into(),
+                body: None,
+            });
+        }
     }
 
     #[test]
@@ -473,6 +601,14 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&NotifierEvent::Pending).unwrap(),
             "\"pending\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NotifierEvent::Escalated).unwrap(),
+            "\"escalated\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NotifierEvent::VerificationPending).unwrap(),
+            "\"verification_pending\""
         );
     }
 }

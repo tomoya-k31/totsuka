@@ -36,6 +36,11 @@ pub struct Task {
     /// Assignee, if any (used for ingest gating, F-08).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
+    /// 0.1.3: conversation-continuation correlation key (Slack:
+    /// `"{channel}:{thread_ts}"`). A later task with the same `thread_key` can
+    /// resume the earlier task's session. `None` for other sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_key: Option<String>,
 }
 
 #[cfg(test)]
@@ -55,6 +60,7 @@ mod tests {
             status: Some("実装待ち".into()),
             url: None,
             assignee: None,
+            thread_key: None,
         };
         // Parse to a JSON object and assert on keys (robust against values
         // that might contain field-name substrings).
@@ -62,8 +68,38 @@ mod tests {
         let obj = value.as_object().unwrap();
         assert!(!obj.contains_key("body"), "empty optionals omitted");
         assert!(!obj.contains_key("labels"));
+        assert!(!obj.contains_key("thread_key"));
         assert!(obj.contains_key("repo_hint"));
         let back: Task = serde_json::from_value(value).unwrap();
         assert_eq!(back, task);
+    }
+
+    /// `thread_key` (0.1.3) round-trips when set and is absent from old wire.
+    #[test]
+    fn thread_key_is_additive() {
+        let task = Task {
+            id: "1718000000.000100".into(),
+            source: "slack".into(),
+            title: "追いメンション".into(),
+            body: None,
+            repo_hint: None,
+            labels: vec![],
+            priority: 0,
+            status: None,
+            url: None,
+            assignee: None,
+            thread_key: Some("C0123456789:1718000000.000100".into()),
+        };
+        let value = serde_json::to_value(&task).unwrap();
+        assert_eq!(
+            value["thread_key"],
+            serde_json::json!("C0123456789:1718000000.000100")
+        );
+        let back: Task = serde_json::from_value(value).unwrap();
+        assert_eq!(back, task);
+        // Old wire without the field still deserializes.
+        let old: Task =
+            serde_json::from_str(r#"{"id":"1","source":"github","title":"t"}"#).unwrap();
+        assert!(old.thread_key.is_none());
     }
 }

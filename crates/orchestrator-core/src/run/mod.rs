@@ -962,6 +962,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             worktree_path: worktree_path.display().to_string(),
             mode: execution_mode(&record.mode),
             extra_context: None,
+            job_id: None,
+            resume_session_id: None,
+            hook: None,
         };
         let dispatched: TaskDispatchResult = match agent.call(method::TASK_DISPATCH, &params).await
         {
@@ -1669,6 +1672,7 @@ fn task_from_record(record: &TaskRecord) -> Task {
             status: None,
             url: record.url.clone(),
             assignee: None,
+            thread_key: None,
         })
 }
 
@@ -1775,6 +1779,7 @@ plan_cleanup = { retention_days = 2 }
             status: Some("実装待ち".into()),
             url: Some("https://example.com".into()),
             assignee: Some("me".into()),
+            thread_key: None,
         };
         let db = StateDb::open_in_memory().unwrap();
         let id = db

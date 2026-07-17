@@ -43,6 +43,13 @@ pub struct Capabilities {
     pub pane_control: bool,
     /// Streams state/log fragments via `state/subscribe` (F-38).
     pub state_stream: bool,
+    /// Can resume a past agent session via
+    /// `task/dispatch(resume_session_id)` (0.1.3). Defaults to `false`, so
+    /// plugins that predate it (orca, mock, …) simply never advertise it.
+    pub resume_session: bool,
+    /// Answers `diagnostics/snapshot` with a pane screen capture (0.1.3,
+    /// R-10). Defaults to `false` like `resume_session`.
+    pub diagnostics_snapshot: bool,
     /// Output policies this (task source) plugin can fulfil.
     pub outputs: Vec<OutputCapability>,
 }
@@ -109,6 +116,28 @@ state_stream = true
         assert!(m.capabilities.plan_mode);
         assert!(m.capabilities.state_stream);
         assert!(!m.capabilities.pane_control);
+        // The 0.1.3 flags default to false when absent (additive).
+        assert!(!m.capabilities.resume_session);
+        assert!(!m.capabilities.diagnostics_snapshot);
+    }
+
+    #[test]
+    fn parses_0_1_3_capability_flags() {
+        let m = Manifest::from_toml_str(
+            r#"
+name = "herdr"
+kind = "agent_ide"
+version = "1.3.0"
+protocol_version = "^0.1"
+
+[capabilities]
+resume_session = true
+diagnostics_snapshot = true
+"#,
+        )
+        .unwrap();
+        assert!(m.capabilities.resume_session);
+        assert!(m.capabilities.diagnostics_snapshot);
     }
 
     #[test]
