@@ -221,8 +221,10 @@ fn cleanup_policy(config: Option<CleanupPolicyConfig>, default: CleanupPolicy) -
 /// when `[hooks]` is unset — a config without a hook-capable agent simply never
 /// receives a POST.
 pub struct HookServerSettings {
-    /// Absolute path of the Unix domain socket to listen on. Created `0600`;
-    /// any stale socket is unlinked before bind and on shutdown.
+    /// Path of the Unix domain socket to listen on (normally absolute; the CLI
+    /// resolves it from `[hooks].socket_path` via `expand_path`, which may yield
+    /// a path relative to the process CWD). Created `0600`; any stale socket is
+    /// unlinked before bind and on shutdown.
     pub socket_path: PathBuf,
     /// Resolved Bearer token every POST must present (`Authorization: Bearer
     /// <token>`). `None` disables the check (0600 socket only); the CLI logs a

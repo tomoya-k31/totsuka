@@ -48,6 +48,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
@@ -64,6 +65,12 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// for our purposes and refused with `413`.
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 
+/// Whole-request deadline (read + submit + reply). A client that connects but
+/// never finishes sending must not pin a task forever, even under the same-user
+/// 0600 threat model (a wedged `curl` or a buggy hook script would otherwise
+/// leak one task per stuck connection).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Bind the hook socket, replacing any stale socket file, with `0600` perms.
 ///
 /// The parent directory is created if missing. Returns the bound listener; the
@@ -73,9 +80,24 @@ pub fn bind(socket_path: &Path) -> io::Result<UnixListener> {
         std::fs::create_dir_all(parent)?;
     }
     // Remove a stale socket left by a previous run so `bind` does not fail with
-    // EADDRINUSE. Absence is fine; any other error is real.
-    match std::fs::remove_file(socket_path) {
-        Ok(()) => {}
+    // EADDRINUSE. Only unlink when the path is *actually* a socket, so a
+    // misconfigured `socket_path` can never delete an unrelated regular file,
+    // directory, or symlink target. Absence is fine; anything else is refused.
+    match std::fs::symlink_metadata(socket_path) {
+        Ok(meta) => {
+            use std::os::unix::fs::FileTypeExt;
+            if meta.file_type().is_socket() {
+                std::fs::remove_file(socket_path)?;
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "hook socket path {} exists and is not a socket; refusing to remove it",
+                        socket_path.display()
+                    ),
+                ));
+            }
+        }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
@@ -112,8 +134,18 @@ pub async fn serve<P>(
                     let sink = sink.clone();
                     let auth_token = auth_token.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream, &sink, auth_token.as_ref()).await {
-                            tracing::warn!("hook connection I/O error: {e}");
+                        let handled = tokio::time::timeout(
+                            REQUEST_TIMEOUT,
+                            handle_connection(stream, &sink, auth_token.as_ref()),
+                        )
+                        .await;
+                        match handled {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => tracing::warn!("hook connection I/O error: {e}"),
+                            Err(_) => tracing::warn!(
+                                "hook connection dropped: no complete request within {}s",
+                                REQUEST_TIMEOUT.as_secs()
+                            ),
                         }
                     });
                 }
@@ -532,6 +564,31 @@ mod tests {
     async fn stop(stop_tx: watch::Sender<bool>, handle: tokio::task::JoinHandle<()>) {
         let _ = stop_tx.send(true);
         let _ = handle.await;
+    }
+
+    #[test]
+    fn bind_refuses_to_remove_a_non_socket_file() {
+        let path = temp_socket();
+        // A regular file (e.g. a misconfigured socket_path) must never be deleted.
+        std::fs::write(&path, b"important").expect("seed file");
+        let err = bind(&path).expect_err("bind must refuse a non-socket path");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read(&path).expect("file still present"),
+            b"important",
+            "bind must not touch a non-socket file"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn bind_replaces_a_stale_socket() {
+        let path = temp_socket();
+        let first = bind(&path).expect("first bind");
+        drop(first); // leaves the socket file on disk
+        // A stale socket left by a previous run is unlinked and rebound cleanly.
+        let _second = bind(&path).expect("second bind replaces the stale socket");
+        std::fs::remove_file(&path).ok();
     }
 
     #[tokio::test]
