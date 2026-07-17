@@ -21,6 +21,13 @@ pub enum TaskState {
     Running,
     /// Agent is blocked on a human question (F-35). Frees its slot (F-45).
     WaitingInput,
+    /// Agent self-reported COMPLETED; waiting for human verification
+    /// (`totsuka task verify`, #131 D-01). Holds its slot like `Publishing`.
+    Verifying,
+    /// Escalated to a human (UNKNOWN stops / timeout / correlation anomaly,
+    /// #131 D-02/D-03). Non-terminal: resolving it in the pane resumes the
+    /// task on the next signal. Frees its slot like `WaitingInput`.
+    Escalated,
     /// Producing output (PR creation or source write-back).
     Publishing,
     /// Completed successfully.
@@ -40,6 +47,8 @@ impl TaskState {
             TaskState::Dispatched => "dispatched",
             TaskState::Running => "running",
             TaskState::WaitingInput => "waiting_input",
+            TaskState::Verifying => "verifying",
+            TaskState::Escalated => "escalated",
             TaskState::Publishing => "publishing",
             TaskState::Done => "done",
             TaskState::Failed => "failed",
@@ -77,6 +86,8 @@ impl FromStr for TaskState {
             "dispatched" => TaskState::Dispatched,
             "running" => TaskState::Running,
             "waiting_input" => TaskState::WaitingInput,
+            "verifying" => TaskState::Verifying,
+            "escalated" => TaskState::Escalated,
             "publishing" => TaskState::Publishing,
             "done" => TaskState::Done,
             "failed" => TaskState::Failed,
@@ -103,6 +114,17 @@ pub enum TaskEvent {
     ResumeInput,
     /// Begin producing output.
     BeginPublish,
+    /// Agent self-reported COMPLETED under `verification = "human"` (#131
+    /// D-01): move to `Verifying` and wait for `totsuka task verify`.
+    SelfReportComplete,
+    /// Human verification passed (`totsuka task verify --pass`).
+    ApproveVerification,
+    /// Human verification failed (`totsuka task verify --fail`); the human
+    /// gives corrective instructions directly in the pane (D-07).
+    VerificationFailed,
+    /// Escalate to a human (UNKNOWN stops / timeout / correlation anomaly,
+    /// #131 D-02/D-03).
+    Escalate,
     /// Output produced successfully.
     Complete,
     /// Something failed.
@@ -136,9 +158,23 @@ pub fn transition(from: TaskState, event: TaskEvent) -> Result<TaskState, Invali
         (S::Running, E::WaitInput) => S::WaitingInput,
         (S::WaitingInput, E::ResumeInput) => S::Running,
         (S::Running, E::BeginPublish) => S::Publishing,
+        // llm/none verification: COMPLETED may arrive while the task sits in
+        // WaitingInput or Escalated (the human resolved it in the pane).
+        (S::WaitingInput | S::Escalated, E::BeginPublish) => S::Publishing,
+        // human verification (#131 D-01): COMPLETED self-report awaits
+        // `totsuka task verify` instead of publishing directly.
+        (S::Running | S::WaitingInput | S::Escalated, E::SelfReportComplete) => S::Verifying,
+        (S::Verifying, E::ApproveVerification) => S::Publishing,
+        (S::Verifying, E::VerificationFailed) => S::Running,
+        // Escalated resumes to Running when the next signal reports plain
+        // activity (Start-equivalent) or a question (WaitInput).
+        (S::Escalated, E::Start) => S::Running,
+        (S::Escalated, E::WaitInput) => S::WaitingInput,
         (S::Publishing, E::Complete) => S::Done,
         // Retry a terminal (non-Done) task: worktree/session handling is #57.
         (S::Failed | S::Cancelled, E::Retry) => S::Queued,
+        // Escalation is reachable from any non-terminal state (#131 D-02).
+        (s, E::Escalate) if !s.is_terminal() => S::Escalated,
         // Failure is reachable from any non-terminal state.
         (s, E::Fail) if !s.is_terminal() => S::Failed,
         // Cancellation is reachable from any non-terminal state.
@@ -185,16 +221,23 @@ mod tests {
         );
     }
 
+    /// Every non-terminal state (kept in sync with the enum).
+    const NON_TERMINAL: [TaskState; 8] = [
+        TaskState::Queued,
+        TaskState::Pending,
+        TaskState::Dispatched,
+        TaskState::Running,
+        TaskState::WaitingInput,
+        TaskState::Verifying,
+        TaskState::Escalated,
+        TaskState::Publishing,
+    ];
+
     #[test]
     fn fail_and_cancel_from_active_states() {
-        for from in [
-            TaskState::Queued,
-            TaskState::Pending,
-            TaskState::Dispatched,
-            TaskState::Running,
-            TaskState::WaitingInput,
-            TaskState::Publishing,
-        ] {
+        // Explicitly includes Verifying and Escalated: the catch-all Fail /
+        // Cancel arms must keep reaching the new non-terminal states.
+        for from in NON_TERMINAL {
             assert_eq!(
                 transition(from, TaskEvent::Fail).unwrap(),
                 TaskState::Failed
@@ -219,6 +262,76 @@ mod tests {
     }
 
     #[test]
+    fn human_verification_round_trip() {
+        // COMPLETED self-report -> Verifying (from every announcing state).
+        for from in [
+            TaskState::Running,
+            TaskState::WaitingInput,
+            TaskState::Escalated,
+        ] {
+            assert_eq!(
+                transition(from, TaskEvent::SelfReportComplete).unwrap(),
+                TaskState::Verifying
+            );
+        }
+        // `totsuka task verify --pass` publishes; `--fail` goes back to work.
+        assert_eq!(
+            transition(TaskState::Verifying, TaskEvent::ApproveVerification).unwrap(),
+            TaskState::Publishing
+        );
+        assert_eq!(
+            transition(TaskState::Verifying, TaskEvent::VerificationFailed).unwrap(),
+            TaskState::Running
+        );
+    }
+
+    #[test]
+    fn escalate_reaches_every_non_terminal_state() {
+        for from in NON_TERMINAL {
+            assert_eq!(
+                transition(from, TaskEvent::Escalate).unwrap(),
+                TaskState::Escalated,
+                "Escalate from {from}"
+            );
+        }
+        for from in [TaskState::Done, TaskState::Failed, TaskState::Cancelled] {
+            assert!(transition(from, TaskEvent::Escalate).is_err());
+        }
+    }
+
+    #[test]
+    fn escalated_recovers_on_every_path() {
+        // Human resolves the pane; the next signal carries the resume path.
+        for (event, expected) in [
+            (TaskEvent::SelfReportComplete, TaskState::Verifying), // human verify
+            (TaskEvent::BeginPublish, TaskState::Publishing),      // llm/none verify
+            (TaskEvent::WaitInput, TaskState::WaitingInput),
+            (TaskEvent::Start, TaskState::Running),
+        ] {
+            assert_eq!(
+                transition(TaskState::Escalated, event).unwrap(),
+                expected,
+                "Escalated + {event:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn begin_publish_from_waiting_input() {
+        // llm/none COMPLETED arriving while the task waits for input.
+        assert_eq!(
+            transition(TaskState::WaitingInput, TaskEvent::BeginPublish).unwrap(),
+            TaskState::Publishing
+        );
+    }
+
+    #[test]
+    fn new_states_are_not_terminal() {
+        assert!(!TaskState::Verifying.is_terminal());
+        assert!(!TaskState::Escalated.is_terminal());
+    }
+
+    #[test]
     fn illegal_transitions_are_rejected() {
         // Cannot start a queued task without dispatching first.
         assert!(transition(TaskState::Queued, TaskEvent::Start).is_err());
@@ -229,6 +342,11 @@ mod tests {
         assert!(transition(TaskState::Done, TaskEvent::Retry).is_err());
         // Cannot publish straight from dispatched.
         assert!(transition(TaskState::Dispatched, TaskEvent::BeginPublish).is_err());
+        // Verification events only apply to the states they belong to.
+        assert!(transition(TaskState::Running, TaskEvent::ApproveVerification).is_err());
+        assert!(transition(TaskState::Running, TaskEvent::VerificationFailed).is_err());
+        assert!(transition(TaskState::Queued, TaskEvent::SelfReportComplete).is_err());
+        assert!(transition(TaskState::Verifying, TaskEvent::SelfReportComplete).is_err());
     }
 
     #[test]
@@ -239,6 +357,8 @@ mod tests {
             TaskState::Dispatched,
             TaskState::Running,
             TaskState::WaitingInput,
+            TaskState::Verifying,
+            TaskState::Escalated,
             TaskState::Publishing,
             TaskState::Done,
             TaskState::Failed,

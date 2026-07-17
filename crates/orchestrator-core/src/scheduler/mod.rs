@@ -16,11 +16,13 @@ use crate::domain::state::TaskState;
 /// Whether a task in `state` occupies a concurrency slot (F-45).
 ///
 /// Only actively-executing states count; `waiting_input`/`pending` free the
-/// slot to prevent wait-induced deadlock.
+/// slot to prevent wait-induced deadlock. `verifying` still holds its slot
+/// (Publishing-equivalent: the agent finished but the output is not final),
+/// while `escalated` frees it (WaitingInput-equivalent: blocked on a human).
 pub fn counts_toward_slot(state: TaskState) -> bool {
     matches!(
         state,
-        TaskState::Dispatched | TaskState::Running | TaskState::Publishing
+        TaskState::Dispatched | TaskState::Running | TaskState::Verifying | TaskState::Publishing
     )
 }
 
@@ -281,9 +283,12 @@ mod tests {
 
     #[test]
     fn counts_only_active_states() {
+        // Verifying holds its slot (output not final yet); Escalated frees it
+        // (blocked on a human, like WaitingInput).
         for s in [
             TaskState::Dispatched,
             TaskState::Running,
+            TaskState::Verifying,
             TaskState::Publishing,
         ] {
             assert!(counts_toward_slot(s), "{s} should count");
@@ -292,6 +297,7 @@ mod tests {
             TaskState::Queued,
             TaskState::Pending,
             TaskState::WaitingInput,
+            TaskState::Escalated,
             TaskState::Done,
             TaskState::Failed,
             TaskState::Cancelled,
