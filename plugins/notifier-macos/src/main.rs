@@ -7,16 +7,17 @@
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use notifier_macos::config::NotifierConfig;
-use notifier_macos::sender::OsascriptSender;
+use notifier_macos::sender::BackendSender;
 use notifier_macos::server::{SenderFactory, Server};
 
-/// Production factory: builds osascript-backed senders.
-struct OsascriptFactory;
+/// Production factory: builds the backend `[notifier].backend` selects —
+/// `osascript` (default) or `terminal-notifier` (click-to-focus, F-94).
+struct BackendFactory;
 
-impl SenderFactory for OsascriptFactory {
-    type Sender = OsascriptSender;
-    fn build(&self, config: &NotifierConfig) -> OsascriptSender {
-        OsascriptSender::new(config.osascript_bin())
+impl SenderFactory for BackendFactory {
+    type Sender = BackendSender;
+    fn build(&self, config: &NotifierConfig) -> BackendSender {
+        BackendSender::from_config(config)
     }
 }
 
@@ -27,7 +28,7 @@ async fn main() {
         .with_writer(std::io::stderr)
         .init();
 
-    let mut server = Server::new(OsascriptFactory);
+    let mut server = Server::new(BackendFactory);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
 
