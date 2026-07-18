@@ -333,6 +333,37 @@ mod tests {
     }
 
     #[test]
+    fn stop_single_bracket_marker_is_accepted() {
+        // Real agents (observed live) normalise the doubled brackets and emit a
+        // single pair `<STATUS:COMPLETED>`. It must still be read as a completion,
+        // not stranded as a missing marker. Also covers a mixed `<<...>` pair.
+        for (msg, want) in [
+            ("調べて直しました\n<STATUS:COMPLETED>", "COMPLETED"),
+            ("done\n<<STATUS:COMPLETED>", "COMPLETED"),
+            (
+                "続けます\n<STATUS:NEEDS_INPUT reason=\"どのブランチ?\">",
+                "NEEDS_INPUT",
+            ),
+        ] {
+            let spool = unique_dir("single-bracket");
+            let input = format!(
+                r#"{{"session_id":"s1","prompt_id":"p1","stop_hook_active":false,"last_assistant_message":{},"background_tasks":[]}}"#,
+                serde_json::Value::from(msg)
+            );
+            let out = run_stop(&input, &spool, None);
+            assert!(out.status.success());
+            assert!(
+                out.stdout.is_empty(),
+                "a single/mixed-bracket marker must not block: {msg}"
+            );
+            let events = spooled_json(&spool);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0]["hook_event_name"], "Stop");
+            assert_eq!(events[0]["status"], want, "parsed status for: {msg}");
+        }
+    }
+
+    #[test]
     fn stop_marker_absent_first_time_blocks_and_posts_unknown() {
         let spool = unique_dir("absent");
         let input = r#"{"session_id":"s1","prompt_id":"p1","stop_hook_active":false,"last_assistant_message":"no marker here","background_tasks":[]}"#;

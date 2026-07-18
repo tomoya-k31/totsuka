@@ -67,13 +67,20 @@ if [ "${bg_count:-0}" -gt 0 ]; then
   exit 0
 fi
 
-# Extract the LAST <<STATUS:...>> marker in the final message (D-12).
-marker="$(printf '%s\n' "$last_msg" | grep -oE '<<STATUS:[^>]*>>' | tail -n 1)"
+# Extract the LAST STATUS marker in the final message (D-12). The canonical form
+# is `<<STATUS:...>>`, but real agents routinely normalise the doubled angle
+# brackets to a single pair (`<STATUS:...>`); accept 1-or-2 brackets on each side
+# so a well-formed completion is never missed over a bracket count.
+marker="$(printf '%s\n' "$last_msg" | grep -oE '<{1,2}STATUS:[^>]*>{1,2}' | tail -n 1)"
 
 if [ -n "$marker" ]; then
-  # Strip the delimiters, then split "KEYWORD [reason=\"...\"]".
-  inner="${marker#<<STATUS:}"
-  inner="${inner%>>}"
+  # Strip up to two leading '<', the STATUS: prefix, and up to two trailing '>',
+  # then split "KEYWORD [reason=\"...\"]".
+  inner="${marker#<}"
+  inner="${inner#<}"
+  inner="${inner#STATUS:}"
+  inner="${inner%>}"
+  inner="${inner%>}"
   status="${inner%% *}"
   reason=""
   case "$inner" in
