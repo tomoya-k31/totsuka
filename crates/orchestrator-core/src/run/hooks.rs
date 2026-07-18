@@ -32,6 +32,24 @@ use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::git::GitRunner;
 use crate::ports::llm::LlmRouter;
 
+/// Completion self-report instruction injected as `extra_context` into every
+/// hook-capable dispatch (D-12; hook knowledge stays in core per H-01, source
+/// plugins never mention markers).
+///
+/// Telling the agent the marker convention UP FRONT makes the FIRST Stop carry a
+/// marker, so `on-stop.sh` never has to `block` and force a full regeneration —
+/// the pane shows the answer once instead of twice (real-machine finding on
+/// #131). The `on-stop.sh` block stays as the safety net for when the agent
+/// still forgets. The marker line is stripped from the publish artifact
+/// ([`strip_status_markers`]), so it never reaches the task source.
+pub(crate) const MARKER_SELF_REPORT_INSTRUCTION: &str = "[orchestrator] Completion \
+    self-report: end your response with exactly one of the following status markers \
+    on its own final line. The marker line is stripped automatically before the \
+    result is delivered, so include it even when instructed to output nothing but \
+    the answer body: <<STATUS:COMPLETED>> (done) / \
+    <<STATUS:NEEDS_INPUT reason=\"...\">> (human input required) / \
+    <<STATUS:FAILED reason=\"...\">> (cannot proceed)";
+
 impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Interpret one normalized hook signal (#138): resolve its task, record it
     /// idempotently, then drive the state machine per the signal's event.
@@ -599,16 +617,39 @@ fn event_and_status_strings(event: &SignalEvent) -> (&'static str, Option<&'stat
     }
 }
 
-/// Remove every `<<STATUS:...>>` marker span from an assistant message, leaving
-/// the human-facing prose to publish (R-07/R-11). Markers may be inline (the
-/// hook greps them anywhere), so spans — not whole lines — are stripped.
+/// Remove every status-marker span from an assistant message, leaving the
+/// human-facing prose to publish (R-07/R-11). Markers may be inline (the hook
+/// greps them anywhere), so spans — not whole lines — are stripped. Mirrors
+/// `on-stop.sh`'s tolerance (#152, real-machine finding): agents routinely
+/// normalise the doubled angle brackets, so `<STATUS:...>` with one bracket on
+/// either side is a marker too — anything on-stop.sh reads as a marker must
+/// never leak into the published reply.
 fn strip_status_markers(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(start) = rest.find("<<STATUS:") {
+    while let Some(pos) = rest.find("STATUS:") {
+        // Consume up to 2 `<` immediately before the keyword; no `<` means this
+        // is prose mentioning STATUS:, not a marker.
+        let mut start = pos;
+        for _ in 0..2 {
+            if rest[..start].ends_with('<') {
+                start -= 1;
+            }
+        }
+        if start == pos {
+            out.push_str(&rest[..pos + "STATUS:".len()]);
+            rest = &rest[pos + "STATUS:".len()..];
+            continue;
+        }
         out.push_str(&rest[..start]);
-        match rest[start..].find(">>") {
-            Some(end) => rest = &rest[start + end + 2..],
+        match rest[pos..].find('>') {
+            Some(gt) => {
+                let mut end = pos + gt + 1;
+                if rest[end..].starts_with('>') {
+                    end += 1;
+                }
+                rest = &rest[end..];
+            }
             // Unterminated marker fragment: drop the remainder.
             None => {
                 rest = "";
@@ -640,6 +681,23 @@ mod tests {
         assert_eq!(strip_status_markers("  plain answer  "), "plain answer");
         // Unterminated fragment → dropped.
         assert_eq!(strip_status_markers("keep <<STATUS:oops"), "keep");
+    }
+
+    #[test]
+    fn strip_status_markers_removes_single_bracket_markers_too() {
+        // Real agents normalise the doubled brackets (#152); whatever on-stop.sh
+        // reads as a marker must not leak into the published reply.
+        assert_eq!(strip_status_markers("done\n<STATUS:COMPLETED>"), "done");
+        assert_eq!(strip_status_markers("done <<STATUS:COMPLETED>"), "done");
+        assert_eq!(
+            strip_status_markers("wait <STATUS:NEEDS_INPUT reason=\"branch?\">"),
+            "wait"
+        );
+        // Prose mentioning STATUS: without brackets is NOT a marker.
+        assert_eq!(
+            strip_status_markers("the STATUS: field is unrelated"),
+            "the STATUS: field is unrelated"
+        );
     }
 
     #[test]

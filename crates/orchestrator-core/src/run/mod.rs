@@ -1112,11 +1112,18 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
 
         // task/dispatch (F-31) → session id → persist (F-37) → subscribe (F-38).
         let agent = self.plugins.agents.get(&agent_name).expect("checked above");
+        // Hook-capable dispatches carry the marker self-report convention as
+        // extra context so the FIRST Stop already has a marker (no block → no
+        // regenerated duplicate answer in the pane). Hook knowledge stays in
+        // core (H-01) — source plugins never compose marker instructions.
+        let extra_context = hook_spec
+            .as_ref()
+            .map(|_| serde_json::Value::String(hooks::MARKER_SELF_REPORT_INSTRUCTION.to_string()));
         let params = TaskDispatchParams {
             task: task_from_record(&record),
             worktree_path: worktree_path.display().to_string(),
             mode: execution_mode(&record.mode),
-            extra_context: None,
+            extra_context,
             job_id,
             resume_session_id,
             hook: hook_spec,

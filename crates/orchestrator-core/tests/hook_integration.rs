@@ -714,6 +714,16 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         hook["env"]["TOTSUKA_HOOK_SPOOL_DIR"],
         base.join("spool").display().to_string()
     );
+    // A hook dispatch tells the agent the marker convention UP FRONT (as plain
+    // string extra_context), so the FIRST Stop carries a marker and on-stop.sh
+    // never blocks into a regenerated duplicate answer (real-machine finding).
+    let extra = params["extra_context"]
+        .as_str()
+        .expect("hook dispatch carries a string extra_context");
+    assert!(
+        extra.contains("<<STATUS:COMPLETED>>") && extra.contains("NEEDS_INPUT"),
+        "extra_context states the marker convention: {extra}"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 

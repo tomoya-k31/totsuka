@@ -423,11 +423,18 @@ async fn dispatch_types_and_submits_the_prompt_through_the_startup_race() {
         let cli = cli.lock().unwrap();
         assert_eq!(cli.status, "working", "the agent must actually be started");
         assert!(
-            cli.input.contains("Draft the reply") && cli.input.contains("multi-line"),
-            "the whole multi-line prompt is typed in, not passed as argv"
+            cli.input.contains("Answer in the thread.") && cli.input.contains("multi-line"),
+            "the whole multi-line body is typed in, not passed as argv"
+        );
+        // The truncated title is NOT typed when a body exists — the body carries
+        // the full task text, so the title would just be a cut-off duplicate.
+        assert!(
+            !cli.input.contains("Draft the reply"),
+            "the snippet title must not be typed above the body: {:?}",
+            cli.input
         );
         assert_eq!(
-            cli.input.matches("Draft the reply").count(),
+            cli.input.matches("Answer in the thread.").count(),
             1,
             "the retries must not type the prompt in twice: {:?}",
             cli.input
