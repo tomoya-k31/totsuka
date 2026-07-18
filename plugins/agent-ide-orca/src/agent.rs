@@ -313,6 +313,12 @@ async fn fetch_question<C: OrcaCli>(cli: &C, terminal: Option<&str>) -> Option<S
 }
 
 /// Compose the agent prompt from the task (title + body + any extra context).
+///
+/// A string `extra_context` is rendered as raw text — `Value::to_string()`
+/// would produce a JSON literal (surrounding quotes, `\n` escapes), which is
+/// what the orchestrator's non-hook instructions fallback would otherwise show
+/// (same fix as the herdr adapter, #158). Non-string values keep their JSON
+/// rendering.
 fn compose_prompt(params: &TaskDispatchParams) -> String {
     let mut prompt = params.task.title.clone();
     if let Some(body) = &params.task.body {
@@ -321,7 +327,10 @@ fn compose_prompt(params: &TaskDispatchParams) -> String {
     }
     if let Some(extra) = &params.extra_context {
         prompt.push_str("\n\n---\n");
-        prompt.push_str(&extra.to_string());
+        match extra {
+            Value::String(s) => prompt.push_str(s),
+            other => prompt.push_str(&other.to_string()),
+        }
     }
     prompt
 }
@@ -376,6 +385,38 @@ fn entry_terminal(entry: &Value) -> Option<&str> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn compose_prompt_renders_string_extra_context_as_raw_text() {
+        // The non-hook instructions fallback arrives as Value::String; it must
+        // be typed as prose, not as a JSON literal with quotes and \n escapes
+        // (mirrors the herdr adapter, #158).
+        let params = plugin_protocol::methods::TaskDispatchParams {
+            task: plugin_protocol::task::Task {
+                id: "t1".into(),
+                source: "slack".into(),
+                title: "title".into(),
+                body: Some("body".into()),
+                repo_hint: None,
+                labels: vec![],
+                priority: 0,
+                status: None,
+                url: None,
+                assignee: None,
+                thread_key: None,
+                instructions: None,
+            },
+            worktree_path: "/wt".into(),
+            mode: plugin_protocol::methods::ExecutionMode::Plan,
+            extra_context: Some(Value::String("line one\nline two".into())),
+            job_id: None,
+            resume_session_id: None,
+            hook: None,
+        };
+        let prompt = compose_prompt(&params);
+        assert!(prompt.ends_with("---\nline one\nline two"), "{prompt}");
+        assert!(!prompt.contains("\\n"), "no JSON escapes: {prompt}");
+    }
 
     #[test]
     fn extracts_worktree_id_from_shapes() {

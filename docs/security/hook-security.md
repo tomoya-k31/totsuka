@@ -56,7 +56,7 @@ POST 失敗時、`on-stop.sh` は送信予定の JSON を NDJSON 1 行として 
 - `check_hook_assets` — スクリプト + `orchestrator-*.json` の存在・**0700/0600 パーミッション**・**内容ハッシュ一致**
 - `check_hook_token` — `[hooks].auth_token_ref` が解決できる
 - `check_hook_socket` — UDS への自己 POST が 200（Bearer/権限の疎通）
-- `check_hook_deps` — `curl` / `jq` の存在（H-14。無いとフックが送信不能で全てスプール行き）
+- `check_hook_deps` — `curl` / `jq` の存在（H-14。無いと送信系フックはスプール退避、`on-user-prompt-submit.sh` は無出力縮退）
 - `check_spool` — `spool_dir` の書き込み可否とバックログ件数（>0 は warning）
 
 # 関連
