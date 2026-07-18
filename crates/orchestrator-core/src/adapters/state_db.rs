@@ -89,6 +89,41 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX idx_hook_events_task ON hook_events(task_id, id);
     "#,
+    // v3 — include `status` in the hook_events idempotency key (#131 follow-up,
+    // found by real-machine acceptance testing).
+    //
+    // A Stop-hook `block` makes the agent re-complete WITHIN THE SAME TURN, so the
+    // re-completion Stop shares (job_id, claude_session_id, prompt_id, event='stop')
+    // with the initial blank Stop but carries a DIFFERENT status
+    // (UNKNOWN → COMPLETED). The v2 key dedup'd it as a mere re-delivery and dropped
+    // the completion, stranding the task in `dispatched`. Adding `status` lets a
+    // status change through while identical re-deliveries (multi-fire / spool
+    // re-send / curl retry — same status) still dedup. `status` also becomes
+    // NOT NULL DEFAULT '' so the (NULL) status of non-stop events is not treated as
+    // distinct under the UNIQUE constraint. SQLite cannot alter a constraint in
+    // place, so the table is rebuilt.
+    r#"
+    ALTER TABLE hook_events RENAME TO hook_events_v2;
+    CREATE TABLE hook_events (
+      id                 INTEGER PRIMARY KEY,
+      job_id             TEXT NOT NULL,
+      task_id            INTEGER NOT NULL REFERENCES tasks(id),
+      claude_session_id  TEXT NOT NULL DEFAULT '',
+      prompt_id          TEXT NOT NULL DEFAULT '',
+      event              TEXT NOT NULL,
+      status             TEXT NOT NULL DEFAULT '',   -- for 'stop': COMPLETED|NEEDS_INPUT|FAILED|UNKNOWN; '' otherwise
+      payload            TEXT NOT NULL,
+      received_at        TEXT NOT NULL,
+      UNIQUE (job_id, claude_session_id, prompt_id, event, status)
+    );
+    INSERT INTO hook_events
+        (id, job_id, task_id, claude_session_id, prompt_id, event, status, payload, received_at)
+      SELECT id, job_id, task_id, claude_session_id, prompt_id, event,
+             COALESCE(status, ''), payload, received_at
+      FROM hook_events_v2;
+    DROP TABLE hook_events_v2;
+    CREATE INDEX idx_hook_events_task ON hook_events(task_id, id);
+    "#,
 ];
 
 /// `events.detail` for the ingest event. Stored as JSON so consumers can
@@ -645,24 +680,29 @@ impl StateDb {
     /// Persist a hook event idempotently (#131 D-05 / N-01).
     ///
     /// `INSERT ... ON CONFLICT DO NOTHING` on the idempotency key
-    /// `(job_id, claude_session_id, prompt_id, event)`. A repeat delivery
-    /// (multiple hook fires, spool re-send, curl retry) leaves the log
-    /// unchanged and returns [`HookEventOutcome::Duplicate`], which the caller
-    /// drops silently.
+    /// `(job_id, claude_session_id, prompt_id, event, status)`. A repeat delivery
+    /// with the *same status* (multiple hook fires, spool re-send, curl retry)
+    /// leaves the log unchanged and returns [`HookEventOutcome::Duplicate`], which
+    /// the caller drops silently. `status` is part of the key so a `block`-driven
+    /// re-completion within the same turn (`UNKNOWN` → `COMPLETED`, same
+    /// `prompt_id`) is recorded rather than dropped as a re-delivery. A `None`
+    /// status is stored as `''` to match the `NOT NULL DEFAULT ''` column (SQLite
+    /// treats NULLs as distinct under UNIQUE, which would defeat the dedup).
     pub fn record_hook_event(&self, evt: &HookEventInsert) -> Result<HookEventOutcome, StateError> {
         let changed = self.conn.execute(
             "INSERT INTO hook_events
                 (job_id, task_id, claude_session_id, prompt_id, event, status,
                  payload, received_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
-             ON CONFLICT (job_id, claude_session_id, prompt_id, event) DO NOTHING",
+             ON CONFLICT (job_id, claude_session_id, prompt_id, event, status)
+                DO NOTHING",
             params![
                 evt.job_id,
                 evt.task_id,
                 evt.claude_session_id,
                 evt.prompt_id,
                 evt.event,
-                evt.status,
+                evt.status.as_deref().unwrap_or(""),
                 evt.payload,
                 now(),
             ],
@@ -1156,6 +1196,51 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1, "duplicate must not add a row");
+    }
+
+    #[test]
+    fn record_hook_event_records_a_block_recompletion_stop() {
+        // Real-machine regression (#131 follow-up): a Stop-hook `block` makes the
+        // agent re-complete WITHIN THE SAME TURN, so the re-completion Stop shares
+        // (job_id, session, prompt_id, event='stop') with the initial blank Stop
+        // but carries a different status (UNKNOWN -> COMPLETED). It must be
+        // recorded — not dropped as a re-delivery — or the completion is lost and
+        // the task strands in `dispatched`.
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+
+        let blank = HookEventInsert {
+            prompt_id: "p1".into(),
+            ..hook_event(id, "job-1-1", "stop", Some("UNKNOWN"))
+        };
+        let done = HookEventInsert {
+            prompt_id: "p1".into(),
+            ..hook_event(id, "job-1-1", "stop", Some("COMPLETED"))
+        };
+
+        assert_eq!(db.record_hook_event(&blank).unwrap(), HookEventOutcome::New);
+        assert_eq!(
+            db.record_hook_event(&done).unwrap(),
+            HookEventOutcome::New,
+            "a status change on the same key is a new signal, not a duplicate"
+        );
+        // But an identical re-delivery of the COMPLETED still dedups (idempotency
+        // — a curl retry / spool re-send must not double-transition, F-#4).
+        assert_eq!(
+            db.record_hook_event(&done).unwrap(),
+            HookEventOutcome::Duplicate,
+            "an identical re-delivery of the same status is still a Duplicate"
+        );
+
+        let n: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM hook_events WHERE task_id = ?1 AND event='stop'",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 2, "the UNKNOWN and the COMPLETED are both recorded");
     }
 
     #[test]
