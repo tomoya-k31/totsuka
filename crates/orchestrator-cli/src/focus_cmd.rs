@@ -35,11 +35,20 @@ pub fn run(cx: &Cx, task_id: i64) -> Result<(), CliError> {
             socket.display()
         ));
     }
-    let token = cfg
-        .hooks
-        .auth_token_ref
-        .as_ref()
-        .and_then(|reference| secret_resolver(&env).resolve(reference).ok());
+    // A configured-but-unresolvable token means the running receiver would
+    // answer an unexplained 401 — name the real cause instead of trying bare.
+    let token = match &cfg.hooks.auth_token_ref {
+        Some(reference) => match secret_resolver(&env).resolve(reference) {
+            Ok(secret) => Some(secret),
+            Err(e) => {
+                return skipped(format!(
+                    "[hooks].auth_token_ref did not resolve ({e}) → fix the reference; \
+                     the control endpoint rejects unauthenticated requests"
+                ));
+            }
+        },
+        None => None,
+    };
     match post_focus(&socket, token.as_ref().map(|t| t.expose()), task_id) {
         Ok((200, body)) => report_outcome(task_id, &body),
         Ok((status, _)) => skipped(format!(

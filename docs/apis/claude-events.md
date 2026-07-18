@@ -1,7 +1,7 @@
 ---
 type: API Endpoint
 title: POST /claude-events（UDS フック受信）
-description: Claude Code フックが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。
+description: Claude Code フックが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。制御エンドポイント POST /focus（click-to-focus、F-94）も同一ソケットに同居。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/hook_uds.rs
 tags: [api, uds, hook, claude-code, signal, ingress]
 timestamp: 2026-07-19T00:00:00Z
@@ -61,7 +61,7 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 
 通知 click-to-focus の制御口。`totsuka focus <task-id>` が同一ソケットへ `{"task_id": 42}`（JSON number または数値文字列）を POST し、Engine が task→最新セッション→agent プラグイン（`pane_control` 宣言時のみ）へ [`session/focus`](/components/plugin-protocol.md) を委譲する（[ADR-0005](/decisions/adr-0005-click-to-focus.md)）。
 
-- **シグナルと違い request-response**: 応答は `200` + JSON body `{"focused": bool, "reason"?: string}`。「フォーカスできなかった」（pane 消失・`pane_control` 非宣言・task 不明・未 dispatch）は **reason 付きの正常応答**でありエラーステータスにしない（タスク終了後のクリックは正常系）。
+- **シグナルと違い request-response**: 応答は `200` + JSON body `{"focused": bool, "reason"?: string}`。「フォーカスできなかった」（pane 消失・`pane_control` 非宣言・task 不明・未 dispatch）は **reason 付きの正常応答**でありエラーステータスにしない（タスク終了後のクリックは正常系）。例外は Engine が応答不能（run ループ停止中）の **503** のみ（シグナル受信の submit 失敗時と同じ）。
 - 認証（Bearer）・body 上限・1 接続 1 リクエストはシグナル受信と同一。`task_id` 欠落・非整数は 400。
 - Engine 側は `PluginEvent::Focus`（oneshot 応答付き）として run ループが処理し、接続の 10 秒 deadline が待ち時間の上限。
 

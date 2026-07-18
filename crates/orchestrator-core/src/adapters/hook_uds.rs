@@ -13,10 +13,11 @@
 //!   sockets are unlinked before bind and on shutdown.
 //! - **Parser**: read headers up to `\r\n\r\n`, then `Content-Length` body
 //!   bytes. Chunked transfer-encoding is rejected by design (the hook scripts
-//!   send fixed-length `curl --data` POSTs). The method is **not** inspected,
-//!   and the path only minimally: the exact path `/focus` is the control
-//!   endpoint (F-94, below); **every other** method/path combination is signal
-//!   ingestion (E-08 forward-compat for the hook scripts is unchanged).
+//!   send fixed-length `curl --data` POSTs). The method is **not** inspected
+//!   (deliberately — same-user 0600 + Bearer make method routing pure surface),
+//!   and the path only minimally: the exact path `/focus` — whatever the
+//!   method — is the control endpoint (F-94, below); **every other path** is
+//!   signal ingestion (E-08 forward-compat for the hook scripts is unchanged).
 //! - **Auth** (E-03): `Authorization: Bearer <token>`, constant-time compared
 //!   to the resolved `[hooks].auth_token_ref`. A mismatch is `401` + a warning;
 //!   the listener stays up.
@@ -55,7 +56,9 @@
 //! agent plugin). Unlike a signal this is request-response: the reply is
 //! `200` with a JSON body `{"focused": bool, "reason"?: string}` — "not
 //! focused" is a normal answer (pane gone, capability missing), never an
-//! error status. Auth and body caps are identical to signal ingestion.
+//! error status. Only an engine that is no longer answering (run loop shut
+//! down) is `503`, same as signal ingestion. Auth and body caps are identical
+//! to signal ingestion.
 
 use std::io;
 use std::path::{Path, PathBuf};
