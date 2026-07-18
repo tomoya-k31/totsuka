@@ -250,15 +250,14 @@ async fn approve_posts_the_reply_and_finalizes_both_views_once() {
     assert_eq!(body["text"], EXPECTED_REPLY);
     assert!(body["blocks"].is_null(), "{body}");
 
-    // The pressed view was replaced with the final ✅ state…
-    wait_until("the final view rewrites", || {
+    // The pressed in-thread ephemeral was deleted outright…
+    wait_until("the ephemeral deletion + record update", || {
         !shared.posted_urls().is_empty() && !requests_for(&shared, "chat.update").is_empty()
     })
     .await;
     let posted = shared.posted_urls();
-    assert_eq!(posted[0].body["replace_original"], true);
-    assert!(posted[0].body["blocks"].to_string().contains("送信済み"));
-    // …and the self-DM record was updated in place.
+    assert_eq!(posted[0].body["delete_original"], true);
+    // …and the self-DM record was updated in place (carrying the ✅ evidence).
     let updates = requests_for(&shared, "chat.update");
     let body = updates[0].body.as_ref().unwrap();
     assert_eq!(body["channel"], "D_SELF");
@@ -336,8 +335,9 @@ async fn reject_finalizes_without_sending() {
 
     // Nothing was posted beyond the self-DM record.
     assert_eq!(requests_for(&shared, "chat.postMessage").len(), 1);
+    // The in-thread ephemeral was deleted; the ❌ evidence lives on the DM record.
     let posted = shared.posted_urls();
-    assert!(posted[0].body["blocks"].to_string().contains("却下済み"));
+    assert_eq!(posted[0].body["delete_original"], true);
     let updates = requests_for(&shared, "chat.update");
     assert!(
         updates[0].body.as_ref().unwrap()["blocks"]

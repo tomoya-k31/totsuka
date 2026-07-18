@@ -210,22 +210,30 @@ pub async fn handle_approval_action<T: SlackTransport>(
     };
     state.set_draft_status(draft_id, status);
 
-    // Re-render both surfaces in their final state (✅/❌, no buttons).
+    // Finalize both surfaces. The self-DM record is a persistent audit trail,
+    // so it keeps the final ✅/❌ view; the in-thread ephemeral is transient, so
+    // pressing either button deletes it outright.
     let finalized = Draft { status, ..draft };
     let blocks = draft_blocks(&finalized, draft_id, source_name);
+    let pressed_in_dm = press_channel(payload) == state.self_dm_channel().as_deref();
     if let Some(url) = response_url {
-        let body = json!({
-            "replace_original": true,
-            "text": final_fallback(status),
-            "blocks": blocks.clone(),
-        });
+        let body = if pressed_in_dm {
+            json!({
+                "replace_original": true,
+                "text": final_fallback(status),
+                "blocks": blocks.clone(),
+            })
+        } else {
+            // Ephemeral messages have no `ts` to `chat.update`; `delete_original`
+            // via the interaction's response_url is the only way to remove them.
+            json!({ "delete_original": true })
+        };
         if let Err(e) = api.post_response_url(url, body).await {
-            tracing::warn!(draft_id, error = %e, "could not rewrite the pressed draft view");
+            tracing::warn!(draft_id, error = %e, "could not finalize the pressed draft view");
         }
     }
     // The self-DM record — unless the press came from it (then the
     // response_url rewrite above already covered it).
-    let pressed_in_dm = press_channel(payload) == state.self_dm_channel().as_deref();
     if let Some(dm_ts) = &finalized.dm_ts
         && let Some(dm_channel) = state.self_dm_channel()
         && !pressed_in_dm
