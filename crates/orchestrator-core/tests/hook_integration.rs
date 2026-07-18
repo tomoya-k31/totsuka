@@ -400,6 +400,118 @@ async fn three_unknown_stops_escalate_with_snapshot() {
 }
 
 #[tokio::test]
+async fn focus_task_delegates_to_a_pane_control_agent() {
+    // F-94: `POST /focus` → `Engine::focus_task` → the agent's `session/focus`
+    // with the opaque session id, gated on `pane_control`.
+    let base = scratch("hook_focus_ok");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, _row) = seed_running(&db, "sess-focus");
+
+    let engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(
+            json!({ "pane_control": true, "dispatch_log": dispatch_log }),
+            &notify_log,
+        )
+        .await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let outcome = engine.focus_task(id).await;
+    assert!(outcome.focused, "outcome was {outcome:?}");
+
+    // The delegation carried the session id verbatim (opaque, F-37).
+    let calls = read_log(&dispatch_log);
+    let focus_call = calls
+        .iter()
+        .find(|c| c["method"] == "session/focus")
+        .expect("a session/focus call");
+    assert_eq!(focus_call["params"]["session_id"], "sess-focus");
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn focus_task_degrades_without_pane_control_or_task() {
+    // No `pane_control` → a reasoned no, not an error; same for an unknown
+    // task and a vanished pane (`focused: false` from the plugin).
+    let base = scratch("hook_focus_degrade");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, _row) = seed_running(&db, "sess-gone");
+
+    let engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        // pane_control defaults to false in the mock.
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let outcome = engine.focus_task(id).await;
+    assert!(!outcome.focused);
+    assert!(
+        outcome
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("pane_control"),
+        "outcome was {outcome:?}"
+    );
+
+    let outcome = engine.focus_task(9999).await;
+    assert!(!outcome.focused);
+    assert!(
+        outcome
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("not found"),
+        "outcome was {outcome:?}"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn focus_task_reports_a_closed_pane_as_not_focused() {
+    // The mock answers `focused: false` for a session id containing `gone`
+    // (the pane vanished after the task finished) — still not an error.
+    let base = scratch("hook_focus_gone");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, _row) = seed_running(&db, "sess-gone");
+
+    let engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({ "pane_control": true }), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let outcome = engine.focus_task(id).await;
+    assert!(!outcome.focused);
+    assert!(
+        outcome.reason.as_deref().unwrap_or("").contains("closed"),
+        "outcome was {outcome:?}"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
 async fn needs_input_parks_in_waiting_input() {
     let base = scratch("hook_needs_input");
     let notify_log = base.join("notify.ndjson");

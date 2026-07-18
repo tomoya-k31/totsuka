@@ -51,6 +51,7 @@ use crate::ports::agent_session::AttachOutcome;
 use crate::ports::git::GitRunner;
 use crate::ports::llm::{ChatRequest, LlmError, LlmRouter};
 use crate::ports::secret::SecretString;
+use crate::ports::signal_ingress::FocusOutcome;
 use crate::recovery::{self, RecoveryReport, RetryPlan};
 use crate::repo_select::{ReadmeCache, RepoCandidate, RepoDecision, SelectConfig, select_repo};
 use crate::run::output::{
@@ -279,6 +280,14 @@ pub(crate) enum PluginEvent {
     /// A normalized Claude Code hook signal from the UDS receiver (#136).
     /// Engine interpretation (state transitions, verification) lands in #138.
     HookSignal(AgentSignal),
+    /// A `POST /focus` control request (F-94): focus the task's pane and
+    /// answer the outcome over `respond` (request-response, unlike a signal).
+    Focus {
+        /// The task whose pane should come to the foreground.
+        task_id: i64,
+        /// Where the adapter awaits the outcome.
+        respond: tokio::sync::oneshot::Sender<FocusOutcome>,
+    },
 }
 
 /// Counters accumulated over one `run` invocation.
@@ -563,9 +572,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     tracing::info!(socket = %socket_path.display(), "hook receiver listening");
                     let sink = EngineSignalSink::new(self._events_tx.clone());
                     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+                    // The sink doubles as the focus port (F-94): both feed the
+                    // same event channel, focus with a response oneshot.
                     let handle = tokio::spawn(hook_uds::serve(
                         listener,
                         socket_path,
+                        sink.clone(),
                         sink,
                         hs.auth_token.clone(),
                         stop_rx,
@@ -1339,6 +1351,14 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             // idempotent record → task resolution → state transition →
             // verification → output (#138, `run::hooks`).
             PluginEvent::HookSignal(signal) => self.on_signal(signal).await,
+            // A control-UDS focus request (F-94): resolve, ask the agent
+            // plugin, and answer the waiting adapter. A dropped receiver just
+            // means the caller gave up (timeout) — not an engine error.
+            PluginEvent::Focus { task_id, respond } => {
+                let outcome = self.focus_task(task_id).await;
+                let _ = respond.send(outcome);
+                Ok(())
+            }
         }
     }
 

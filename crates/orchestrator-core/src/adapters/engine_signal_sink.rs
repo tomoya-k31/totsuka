@@ -8,9 +8,10 @@
 //! is the DB layer's job (D-05), not this adapter's.
 
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
 use crate::domain::signal::AgentSignal;
-use crate::ports::signal_ingress::{SignalAck, SignalError, SignalPort};
+use crate::ports::signal_ingress::{FocusOutcome, FocusPort, SignalAck, SignalError, SignalPort};
 use crate::run::PluginEvent;
 
 /// Submits normalized hook signals onto the engine's event channel.
@@ -45,6 +46,27 @@ impl SignalPort for EngineSignalSink {
             .map(|()| SignalAck)
             .map_err(|_| SignalError::Closed);
         async move { result }
+    }
+}
+
+impl FocusPort for EngineSignalSink {
+    fn focus(
+        &self,
+        task_id: i64,
+    ) -> impl std::future::Future<Output = Result<FocusOutcome, SignalError>> + Send {
+        // Unlike a signal, focus is request-response (F-94): the outcome comes
+        // back over a oneshot the run loop answers when it processes the event.
+        // A dropped sender (engine gone) or dropped responder (loop exited
+        // before answering) both surface as `Closed`.
+        let (respond, outcome) = oneshot::channel();
+        let sent = self
+            .tx
+            .send(PluginEvent::Focus { task_id, respond })
+            .map_err(|_| SignalError::Closed);
+        async move {
+            sent?;
+            outcome.await.map_err(|_| SignalError::Closed)
+        }
     }
 }
 

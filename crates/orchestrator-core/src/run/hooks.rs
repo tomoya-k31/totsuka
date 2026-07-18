@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use plugin_protocol::method;
 use plugin_protocol::methods::{
     AgentState, DiagnosticsSnapshotParams, DiagnosticsSnapshotResult, NotifierEvent,
+    SessionFocusParams, SessionFocusResult,
 };
 
 use super::{Engine, EngineError, notify_all, workflows_by_name};
@@ -31,6 +32,7 @@ use crate::domain::signal::{AgentSignal, SignalEvent, StopStatus};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::git::GitRunner;
 use crate::ports::llm::LlmRouter;
+use crate::ports::signal_ingress::FocusOutcome;
 
 /// Completion self-report instruction injected as `extra_context` into every
 /// hook-capable dispatch (D-12; hook knowledge stays in core per H-01, source
@@ -405,6 +407,59 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         );
         tracing::warn!(task_id = record.id, "task escalated to a human (D-02/D-03)");
         Ok(())
+    }
+
+    /// Bring a task's pane to the foreground (F-94, `POST /focus` → here).
+    ///
+    /// Not a hook signal, but it shares this module's task→session→plugin
+    /// resolution (see [`diagnostics_snapshot`](Self::diagnostics_snapshot)):
+    /// resolve the task's latest session, gate on the agent's `pane_control`
+    /// capability, and delegate `session/focus` — the session id stays opaque
+    /// (F-37). Every "cannot focus" is a normal [`FocusOutcome`] with a
+    /// reason, never an error: clicking a notification for a finished task,
+    /// or one whose agent cannot focus panes, must degrade quietly.
+    pub async fn focus_task(&self, task_id: i64) -> FocusOutcome {
+        let record = match self.db.get_task(task_id) {
+            Ok(Some(record)) => record,
+            Ok(None) => {
+                return FocusOutcome::not(format!(
+                    "task {task_id} not found → `totsuka task list` shows known ids"
+                ));
+            }
+            Err(e) => return FocusOutcome::not(format!("state DB error: {e}")),
+        };
+        let session = match self.db.latest_session(record.id) {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                return FocusOutcome::not(format!(
+                    "task {task_id} has no agent session (never dispatched)"
+                ));
+            }
+            Err(e) => return FocusOutcome::not(format!("state DB error: {e}")),
+        };
+        let Some(agent) = self.plugins.agents.get(&session.plugin) else {
+            return FocusOutcome::not(format!(
+                "agent plugin `{}` is not running in this orchestrator",
+                session.plugin
+            ));
+        };
+        if !agent.capabilities().pane_control {
+            return FocusOutcome::not(format!(
+                "agent plugin `{}` does not support pane focus (no `pane_control` capability)",
+                session.plugin
+            ));
+        }
+        let params = SessionFocusParams {
+            session_id: session.session_id.clone(),
+        };
+        match agent
+            .call::<_, SessionFocusResult>(method::SESSION_FOCUS, &params)
+            .await
+        {
+            Ok(result) if result.focused => FocusOutcome::focused(),
+            Ok(_) => FocusOutcome::not("the pane is already closed"),
+            Err(e) => FocusOutcome::not(format!("session/focus failed: {e}")),
+        }
     }
 
     /// Capture a pane snapshot for escalation diagnostics (R-10), if the task's

@@ -4,7 +4,7 @@ title: POST /claude-events（UDS フック受信）
 description: Claude Code フックが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/hook_uds.rs
 tags: [api, uds, hook, claude-code, signal, ingress]
-timestamp: 2026-07-18T00:00:00Z
+timestamp: 2026-07-19T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -18,7 +18,7 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 # トランスポート
 
 - **Unix domain socket**。既定パス `${XDG_RUNTIME_DIR}/totsuka/claude-events.sock`（`[hooks].socket_path` で上書き可）。パーミッションは **0600**（同一ユーザのみ接続可＝第一の認証層、E-03）。
-- **最小 HTTP/1.1**。ヘッダを `\r\n\r\n` まで読み、`Content-Length` バイト分の body を読む。**chunked 転送は非対応**（フックは固定長 `curl --data` POST）。method / path は検査しない（E-08 前方互換。パスは慣例上 `/claude-events`）。
+- **最小 HTTP/1.1**。ヘッダを `\r\n\r\n` まで読み、`Content-Length` バイト分の body を読む。**chunked 転送は非対応**（フックは固定長 `curl --data` POST）。method は検査せず、path は**完全一致 `/focus`（制御エンドポイント、下記）のみ**ルーティングし、それ以外の全 method/path はシグナル受信として扱う（E-08 前方互換。パスは慣例上 `/claude-events`）。
 - **1 接続 1 リクエスト**で close（keep-alive 非対応）。
 
 # 認証（E-03）
@@ -57,6 +57,14 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 
 `job_id` の形式が正しくても指す `task_id` が DB に存在しない（未知/失効した）場合、受信は 200 を返すが Engine 側（`Engine::on_signal`）は **warn ログに残すだけで `hook_events` へは永続化しない**（`hook_events.task_id` は NOT NULL FK のため物理的に記録不能。これは意図的で、相関できないシグナルは状態を一切変えない E-09）。相関できたシグナルは、重複であっても生存の証跡として `last_signal_at`（R-10 タイムアウト起点）を先に更新してから冪等判定へ進む（中間 Stop=heartbeat が dedup で潰れてもタイムアウト誤判定しないため）。
 
+# 制御エンドポイント POST /focus（F-94, #155）
+
+通知 click-to-focus の制御口。`totsuka focus <task-id>` が同一ソケットへ `{"task_id": 42}`（JSON number または数値文字列）を POST し、Engine が task→最新セッション→agent プラグイン（`pane_control` 宣言時のみ）へ [`session/focus`](/components/plugin-protocol.md) を委譲する（[ADR-0005](/decisions/adr-0005-click-to-focus.md)）。
+
+- **シグナルと違い request-response**: 応答は `200` + JSON body `{"focused": bool, "reason"?: string}`。「フォーカスできなかった」（pane 消失・`pane_control` 非宣言・task 不明・未 dispatch）は **reason 付きの正常応答**でありエラーステータスにしない（タスク終了後のクリックは正常系）。
+- 認証（Bearer）・body 上限・1 接続 1 リクエストはシグナル受信と同一。`task_id` 欠落・非整数は 400。
+- Engine 側は `PluginEvent::Focus`（oneshot 応答付き）として run ループが処理し、接続の 10 秒 deadline が待ち時間の上限。
+
 # Examples
 
 ```bash
@@ -65,6 +73,13 @@ curl --unix-socket "${XDG_RUNTIME_DIR}/totsuka/claude-events.sock" \
   -H "Content-Type: application/json" \
   --data '{"job_id":"job-42-7","session_id":"abc","hook_event_name":"Stop","status":"completed"}' \
   http://localhost/claude-events
+
+# click-to-focus 制御（F-94）
+curl --unix-socket "${XDG_RUNTIME_DIR}/totsuka/claude-events.sock" \
+  -H "Authorization: Bearer $TOTSUKA_HOOK_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"task_id":42}' \
+  http://localhost/focus
 ```
 
 # 関連
