@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agent-ide-herdr"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "plugin-protocol",
  "semver",
@@ -18,7 +18,7 @@ dependencies = [
 
 [[package]]
 name = "agent-ide-orca"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "plugin-protocol",
  "semver",
@@ -859,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "notifier-macos"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "plugin-protocol",
  "semver",
@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrator-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "clap_complete",
@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrator-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "keyring",
  "libc",
@@ -1004,7 +1004,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "plugin-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "semver",
  "serde",
@@ -1421,7 +1421,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-github"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "plugin-protocol",
  "reqwest",
@@ -1436,7 +1436,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-notion"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "plugin-protocol",
  "reqwest",
@@ -1451,7 +1451,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-slack"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures-util",
  "plugin-protocol",
@@ -1481,7 +1481,7 @@ dependencies = [
 
 [[package]]
 name = "test-support"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "thiserror"

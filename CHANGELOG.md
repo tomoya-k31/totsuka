@@ -11,6 +11,44 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.1.2](https://github.com/tomoya-k31/totsuka/compare/v0.1.1...v0.1.2) (2026-07-17)
+
+
+### Features
+
+* **agent-ide-herdr:** env 注入・--settings/--resume 起動・デッドマン縮退・diagnostics/snapshot（0.1.3 適合） ([#146](https://github.com/tomoya-k31/totsuka/issues/146)) ([873a9ea](https://github.com/tomoya-k31/totsuka/commit/873a9eaa1e932b8e45559f24d84b6330a0898efb)), closes [#139](https://github.com/tomoya-k31/totsuka/issues/139)
+* **cli:** フックスクリプト・orchestrator.json の静的レンダリング ([#145](https://github.com/tomoya-k31/totsuka/issues/145)) ([1f85aa9](https://github.com/tomoya-k31/totsuka/commit/1f85aa9f12531b2f9eb88183e29b9b38281b5e3e))
+* **core:** config スキーマ拡張 — [hooks] セクションと workflow 検収設定（[#135](https://github.com/tomoya-k31/totsuka/issues/135)） ([#144](https://github.com/tomoya-k31/totsuka/issues/144)) ([233a423](https://github.com/tomoya-k31/totsuka/commit/233a4230aa05c166a06612319c41a424ba8e0b02))
+* **core:** Engine 統合 — on_signal・検収・エスカレーション・スプール回収・task verify ([#149](https://github.com/tomoya-k31/totsuka/issues/149)) ([689a119](https://github.com/tomoya-k31/totsuka/commit/689a1199301d3445af4816d581ed1d956fc8e56e))
+* **core:** initialize で task_source へ [llm] 設定を供給（default + override） ([#120](https://github.com/tomoya-k31/totsuka/issues/120)) ([3e56efb](https://github.com/tomoya-k31/totsuka/commit/3e56efb4dc4fe55f4133cba2f8e2af4c0f0e3713))
+* **core:** initialize で task_source へリポジトリ一覧を供給（設定重複の解消） ([#118](https://github.com/tomoya-k31/totsuka/issues/118)) ([0bc31ef](https://github.com/tomoya-k31/totsuka/commit/0bc31ef82a0d5338eea4966a0663acfad3781d4e))
+* **core:** state.db v2 マイグレーション（hook_events / thread_key / claude_session_id） ([#147](https://github.com/tomoya-k31/totsuka/issues/147)) ([642e40a](https://github.com/tomoya-k31/totsuka/commit/642e40a7945da00f106e01f7910f104794766529))
+* **core:** UDS フック受信サーバ（SignalPort + POST /claude-events） ([#148](https://github.com/tomoya-k31/totsuka/issues/148)) ([d03d60a](https://github.com/tomoya-k31/totsuka/commit/d03d60ae63bb7f0f1cfb4630571f381fe0786107))
+* **core:** シグナルドメイン型と状態機械拡張（Verifying / Escalated） ([#143](https://github.com/tomoya-k31/totsuka/issues/143)) ([603c72f](https://github.com/tomoya-k31/totsuka/commit/603c72f6c2b70b194d04fb4147a3ca530442302d))
+* **plugin-protocol:** 0.1.3 additive 拡張（job_id / resume_session_id / hook 起動仕様 / diagnostics/snapshot） ([#142](https://github.com/tomoya-k31/totsuka/issues/142)) ([ceee56c](https://github.com/tomoya-k31/totsuka/commit/ceee56c0379073f5de31eaba3802302ffadf7827)), closes [#132](https://github.com/tomoya-k31/totsuka/issues/132)
+* **task-source-slack,core:** Slack スレッド会話継続（thread_key + セッション resume） ([#150](https://github.com/tomoya-k31/totsuka/issues/150)) ([d8b0f54](https://github.com/tomoya-k31/totsuka/commit/d8b0f54f13bbef0bfc058e6149d0892c853b9533)), closes [#140](https://github.com/tomoya-k31/totsuka/issues/140)
+* **task-source-slack:** Slack Web API クライアント（[#104](https://github.com/tomoya-k31/totsuka/issues/104) 前半） ([#112](https://github.com/tomoya-k31/totsuka/issues/112)) ([ceaa0ec](https://github.com/tomoya-k31/totsuka/commit/ceaa0ec5db7a47151826feea4bb0ee9bcfd1307b))
+* **task-source-slack:** Socket Mode WebSocket クライアント（[#104](https://github.com/tomoya-k31/totsuka/issues/104) 後半） ([#113](https://github.com/tomoya-k31/totsuka/issues/113)) ([aa1ede7](https://github.com/tomoya-k31/totsuka/commit/aa1ede72ab4c8fda4a49dd967dfa5ba5436c7c4d))
+* **task-source-slack:** プラグイン内リポジトリ解決（prefix ルール + LLM + エフェメラル選択） ([#115](https://github.com/tomoya-k31/totsuka/issues/115)) ([34980e6](https://github.com/tomoya-k31/totsuka/commit/34980e608c867669a612c9dfacf7130c6ca1c8d7))
+* **task-source-slack:** プラグイン骨格・設定スキーマ・stdio JSON-RPC・TokenGuard ([#111](https://github.com/tomoya-k31/totsuka/issues/111)) ([f1a9cfc](https://github.com/tomoya-k31/totsuka/commit/f1a9cfc7372f3fde7315448f6e7ca9031a59c4fc))
+* **task-source-slack:** メンション検知・スレッド文脈・Task 正規化（buffered tasks/fetch） ([#114](https://github.com/tomoya-k31/totsuka/issues/114)) ([e8ad1e7](https://github.com/tomoya-k31/totsuka/commit/e8ad1e7b9694c867cbdaf0610d7669f05078f607))
+* **task-source-slack:** 下書き提示・承認フロー（result/publish + block_actions + 本人名義返信） ([#116](https://github.com/tomoya-k31/totsuka/issues/116)) ([cb29176](https://github.com/tomoya-k31/totsuka/commit/cb29176815127194735a5c689d98953ff9e2486f))
+
+
+### Bug Fixes
+
+* **agent-ide-herdr:** CLI 自身のエラー文を回答として publish しないように（[#127](https://github.com/tomoya-k31/totsuka/issues/127) レビュー findings 対応） ([#130](https://github.com/tomoya-k31/totsuka/issues/130)) ([8357545](https://github.com/tomoya-k31/totsuka/commit/8357545a2198f7cd13bb5f4bbaa944bf450ccebc))
+* **agent-ide-herdr:** herdr 0.7.x 実機プロトコルへ全面適合（接続モデル・dispatch・完了検知・出力回収） ([#127](https://github.com/tomoya-k31/totsuka/issues/127)) ([bc86710](https://github.com/tomoya-k31/totsuka/commit/bc8671077f6ddce1e2a7d0afd170bda1df05d15c))
+* **release:** sync-lockfile の Release PR 未検出時ガードを堅牢化 ([#100](https://github.com/tomoya-k31/totsuka/issues/100)) ([a6a13f4](https://github.com/tomoya-k31/totsuka/commit/a6a13f4de38dc147ef2a5824d7e42e26781919fa))
+* **task-source-slack:** manifest に channels:read / groups:read を追加 ([#126](https://github.com/tomoya-k31/totsuka/issues/126)) ([59a60d9](https://github.com/tomoya-k31/totsuka/commit/59a60d9918ed45979f192f10d33a8a3e0c463ff2)), closes [#125](https://github.com/tomoya-k31/totsuka/issues/125)
+
+
+### Documentation
+
+* apis/claude-events.md 新設、components/orchestrator-core.md の ([d03d60a](https://github.com/tomoya-k31/totsuka/commit/d03d60ae63bb7f0f1cfb4630571f381fe0786107))
+* **rules:** 開発フロー（PR前チェック / PR後の監視・レビュー・マージ）を定義 ([#110](https://github.com/tomoya-k31/totsuka/issues/110)) ([63abef8](https://github.com/tomoya-k31/totsuka/commit/63abef894ed43fc83130055176396b5bff08f7c9))
+* **security:** トークンポリシーのスコープ一覧に channels:read / groups:read を追記 ([#128](https://github.com/tomoya-k31/totsuka/issues/128)) ([52be16b](https://github.com/tomoya-k31/totsuka/commit/52be16bfeb518c4c69c41c36f959c3e4730ddcb0)), closes [#125](https://github.com/tomoya-k31/totsuka/issues/125)
+
 ## [0.1.1](https://github.com/tomoya-k31/totsuka/compare/v0.1.0...v0.1.1) (2026-07-13)
 
 
