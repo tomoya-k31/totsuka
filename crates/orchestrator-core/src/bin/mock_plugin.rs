@@ -79,7 +79,8 @@ fn main() {
                     .unwrap_or(false);
                 // Hook-capability flags (0.1.3): `resume_session` /
                 // `diagnostics_snapshot` make the orchestrator take the
-                // hook-dispatch path (job_id + HookLaunchSpec).
+                // hook-dispatch path (job_id + HookLaunchSpec). 0.1.4:
+                // `pane_control` gates the `session/focus` control path (F-94).
                 let flag = |k: &str| config.get(k).and_then(Value::as_bool).unwrap_or(false);
                 Response::result(
                     request_id(&id),
@@ -88,6 +89,7 @@ fn main() {
                         capabilities: Capabilities {
                             plan_mode: true,
                             state_stream,
+                            pane_control: flag("pane_control"),
                             resume_session: flag("resume_session"),
                             diagnostics_snapshot: flag("diagnostics_snapshot"),
                             outputs: vec![OutputCapability::Source],
@@ -200,6 +202,20 @@ fn main() {
                     request_id(&id),
                     serde_json::to_value(DiagnosticsSnapshotResult { text }).unwrap(),
                 )
+            }
+            "session/focus" => {
+                // The click-to-focus chain (F-94). Recorded so tests can assert
+                // the orchestrator delegated with the opaque session id; a
+                // session id containing `gone` simulates a vanished pane
+                // (`focused: false`, not an error — same convention as
+                // `session/attach`).
+                record_to(config.get("dispatch_log"), "session/focus", &params);
+                let focused = !params
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .contains("gone");
+                Response::result(request_id(&id), serde_json::json!({ "focused": focused }))
             }
             "task/cancel" => Response::result(request_id(&id), Value::Null),
             "state/subscribe" => {

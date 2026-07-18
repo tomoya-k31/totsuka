@@ -13,8 +13,11 @@
 //!   sockets are unlinked before bind and on shutdown.
 //! - **Parser**: read headers up to `\r\n\r\n`, then `Content-Length` body
 //!   bytes. Chunked transfer-encoding is rejected by design (the hook scripts
-//!   send fixed-length `curl --data` POSTs). The method and path are **not**
-//!   inspected (E-08 forward-compat).
+//!   send fixed-length `curl --data` POSTs). The method is **not** inspected
+//!   (deliberately — same-user 0600 + Bearer make method routing pure surface),
+//!   and the path only minimally: the exact path `/focus` — whatever the
+//!   method — is the control endpoint (F-94, below); **every other path** is
+//!   signal ingestion (E-08 forward-compat for the hook scripts is unchanged).
 //! - **Auth** (E-03): `Authorization: Bearer <token>`, constant-time compared
 //!   to the resolved `[hooks].auth_token_ref`. A mismatch is `401` + a warning;
 //!   the listener stays up.
@@ -45,6 +48,17 @@
 //! ```
 //!
 //! Any additional fields are accepted and kept in the audit payload.
+//!
+//! ## Control endpoint (`POST /focus`, F-94)
+//!
+//! `{"task_id": 42}` (a JSON number or numeric string) asks the engine to
+//! bring the task's pane to the foreground (`session/focus` via the task's
+//! agent plugin). Unlike a signal this is request-response: the reply is
+//! `200` with a JSON body `{"focused": bool, "reason"?: string}` — "not
+//! focused" is a normal answer (pane gone, capability missing), never an
+//! error status. Only an engine that is no longer answering (run loop shut
+//! down) is `503`, same as signal ingestion. Auth and body caps are identical
+//! to signal ingestion.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -56,7 +70,7 @@ use tokio::sync::watch;
 
 use crate::domain::signal::{AgentSignal, JobId, SignalEvent, SignalSource, StopStatus};
 use crate::ports::secret::SecretString;
-use crate::ports::signal_ingress::SignalPort;
+use crate::ports::signal_ingress::{FocusPort, SignalPort};
 
 /// Maximum request-body size (1 MiB). Larger bodies are refused with `413`.
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -116,27 +130,31 @@ fn set_socket_perms_0600(socket_path: &Path) -> io::Result<()> {
 /// Serve hook POSTs until `shutdown` flips to `true` (or its sender drops),
 /// then unlink the socket. Each accepted connection is handled on its own task.
 ///
-/// `sink` receives every valid, authenticated signal. `auth_token` is the
-/// expected Bearer token; `None` disables the check (0600 socket only).
-pub async fn serve<P>(
+/// `sink` receives every valid, authenticated signal; `focus` answers
+/// `POST /focus` control requests (F-94). `auth_token` is the expected Bearer
+/// token; `None` disables the check (0600 socket only).
+pub async fn serve<P, F>(
     listener: UnixListener,
     socket_path: PathBuf,
     sink: P,
+    focus: F,
     auth_token: Option<SecretString>,
     mut shutdown: watch::Receiver<bool>,
 ) where
     P: SignalPort + Clone + Send + 'static,
+    F: FocusPort + Clone + Send + 'static,
 {
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _addr)) => {
                     let sink = sink.clone();
+                    let focus = focus.clone();
                     let auth_token = auth_token.clone();
                     tokio::spawn(async move {
                         let handled = tokio::time::timeout(
                             REQUEST_TIMEOUT,
-                            handle_connection(stream, &sink, auth_token.as_ref()),
+                            handle_connection(stream, &sink, &focus, auth_token.as_ref()),
                         )
                         .await;
                         match handled {
@@ -171,12 +189,13 @@ pub async fn serve<P>(
     tracing::debug!(socket = %socket_path.display(), "hook receiver stopped");
 }
 
-/// Read one request, authenticate, normalize, submit, and reply. Any protocol
-/// problem is answered with the appropriate 4xx and returns `Ok` (the
-/// connection is spent, not an I/O failure).
-async fn handle_connection<P: SignalPort>(
+/// Read one request, authenticate, route, and reply. Any protocol problem is
+/// answered with the appropriate 4xx and returns `Ok` (the connection is
+/// spent, not an I/O failure).
+async fn handle_connection<P: SignalPort, F: FocusPort>(
     mut stream: UnixStream,
     sink: &P,
+    focus: &F,
     auth_token: Option<&SecretString>,
 ) -> io::Result<()> {
     let request = match read_request(&mut stream).await {
@@ -199,6 +218,11 @@ async fn handle_connection<P: SignalPort>(
         return write_response(&mut stream, 401, "Unauthorized").await;
     }
 
+    // The control endpoint (F-94); every other path is signal ingestion (E-08).
+    if request.path == "/focus" {
+        return handle_focus(&mut stream, focus, &request.body).await;
+    }
+
     // Normalize the JSON body → AgentSignal.
     let signal = match parse_signal(&request.body) {
         Ok(signal) => signal,
@@ -218,9 +242,61 @@ async fn handle_connection<P: SignalPort>(
     }
 }
 
-/// A parsed request: lower-cased header names and the raw body bytes. The
-/// request line (method/path/version) is intentionally discarded (E-08).
+/// Answer a `POST /focus` control request (F-94): parse `{"task_id": …}`, ask
+/// the engine through the [`FocusPort`], and reply the outcome as JSON. Waits
+/// for the engine (request-response, unlike signal ingestion) — the
+/// connection-level [`REQUEST_TIMEOUT`] bounds the wait.
+async fn handle_focus<F: FocusPort>(
+    stream: &mut UnixStream,
+    focus: &F,
+    body: &[u8],
+) -> io::Result<()> {
+    let task_id = match parse_focus_task_id(body) {
+        Ok(id) => id,
+        Err(reason) => {
+            tracing::warn!("focus request rejected: {reason}");
+            return write_response(stream, 400, "Bad Request").await;
+        }
+    };
+    match focus.focus(task_id).await {
+        Ok(outcome) => {
+            let body = serde_json::to_string(&outcome)
+                .unwrap_or_else(|_| r#"{"focused":false}"#.to_string());
+            write_json_response(stream, &body).await
+        }
+        Err(e) => {
+            tracing::error!("focus request failed: {e}");
+            write_response(stream, 503, "Service Unavailable").await
+        }
+    }
+}
+
+/// Extract `task_id` from a focus request body. Accepts a JSON number or a
+/// numeric string (`{"task_id": 42}` / `{"task_id": "42"}` — the notifier's
+/// `click_command` template renders it as text).
+fn parse_focus_task_id(body: &[u8]) -> Result<i64, String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| format!("invalid JSON body: {e}"))?;
+    let field = value
+        .get("task_id")
+        .ok_or_else(|| "missing `task_id`".to_string())?;
+    match field {
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| format!("`task_id` is not an integer: {n}")),
+        serde_json::Value::String(s) => s
+            .parse()
+            .map_err(|_| format!("`task_id` is not an integer: {s:?}")),
+        other => Err(format!("`task_id` must be a number or string: {other}")),
+    }
+}
+
+/// A parsed request: the request path, lower-cased header names, and the raw
+/// body bytes. Of the request line only the path is kept, and it is inspected
+/// only for the exact control endpoint `/focus` (F-94) — the method and any
+/// other path stay uninterpreted (E-08).
 struct Request {
+    path: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
 }
@@ -260,10 +336,16 @@ async fn read_request(stream: &mut UnixStream) -> Result<Request, ReadError> {
     let head = std::str::from_utf8(&buf[..header_end])
         .map_err(|_| ReadError::Malformed("non-UTF-8 request head".into()))?;
     let mut lines = head.split("\r\n");
-    // Discard the request line: method/path/version are not inspected (E-08).
-    lines
+    // Keep only the path off the request line (routing the `/focus` control
+    // endpoint, F-94); the method and version are not inspected (E-08).
+    let request_line = lines
         .next()
         .ok_or_else(|| ReadError::Malformed("empty request".into()))?;
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_string();
 
     let mut headers = Vec::new();
     for line in lines {
@@ -317,7 +399,11 @@ async fn read_request(stream: &mut UnixStream) -> Result<Request, ReadError> {
         body.extend_from_slice(&chunk[..n]);
     }
 
-    Ok(Request { headers, body })
+    Ok(Request {
+        path,
+        headers,
+        body,
+    })
 }
 
 /// Whether the `Authorization` header carries the expected Bearer token
@@ -451,6 +537,24 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+/// Write a `200` response with a JSON body (the `/focus` outcome) and close
+/// the write half.
+async fn write_json_response(stream: &mut UnixStream, body: &str) -> io::Result<()> {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        len = body.len(),
+    );
+    stream.write_all(response.as_bytes()).await?;
+    stream.flush().await?;
+    let _ = stream.shutdown().await;
+    Ok(())
 }
 
 /// Write a minimal `Connection: close` HTTP/1.1 response and close the write
@@ -599,6 +703,33 @@ mod tests {
         }
     }
 
+    /// A [`FocusPort`] fake: records the asked task ids and answers a canned
+    /// outcome (`focused: id > 0`, so tests can drive both answers).
+    #[derive(Clone, Default)]
+    struct RecordingFocus {
+        asked: Arc<Mutex<Vec<i64>>>,
+    }
+
+    impl FocusPort for RecordingFocus {
+        fn focus(
+            &self,
+            task_id: i64,
+        ) -> impl std::future::Future<
+            Output = Result<
+                crate::ports::signal_ingress::FocusOutcome,
+                crate::ports::signal_ingress::SignalError,
+            >,
+        > + Send {
+            self.asked.lock().unwrap().push(task_id);
+            let outcome = if task_id > 0 {
+                crate::ports::signal_ingress::FocusOutcome::focused()
+            } else {
+                crate::ports::signal_ingress::FocusOutcome::not("pane is gone")
+            };
+            async move { Ok(outcome) }
+        }
+    }
+
     /// A unique, short socket path under the system temp dir (macOS caps
     /// `sun_path` at ~104 bytes, so the name is kept small).
     fn temp_socket() -> PathBuf {
@@ -608,28 +739,31 @@ mod tests {
         std::env::temp_dir().join(format!("tsk-hook-{}-{}.sock", std::process::id(), n))
     }
 
-    /// Spawn a server bound to a fresh socket; return the socket path, the sink,
-    /// and the shutdown handle.
+    /// Spawn a server bound to a fresh socket; return the socket path, the
+    /// sink, the focus fake, and the shutdown handle.
     fn spawn_server(
         auth_token: Option<SecretString>,
     ) -> (
         PathBuf,
         RecordingSink,
+        RecordingFocus,
         watch::Sender<bool>,
         tokio::task::JoinHandle<()>,
     ) {
         let socket_path = temp_socket();
         let listener = bind(&socket_path).expect("bind");
         let sink = RecordingSink::default();
+        let focus = RecordingFocus::default();
         let (stop_tx, stop_rx) = watch::channel(false);
         let handle = tokio::spawn(serve(
             listener,
             socket_path.clone(),
             sink.clone(),
+            focus.clone(),
             auth_token,
             stop_rx,
         ));
-        (socket_path, sink, stop_tx, handle)
+        (socket_path, sink, focus, stop_tx, handle)
     }
 
     /// Send a raw request over a fresh connection and return the status line.
@@ -693,7 +827,8 @@ mod tests {
 
     #[tokio::test]
     async fn valid_post_returns_200_and_submits() {
-        let (socket, sink, stop_tx, handle) = spawn_server(Some(SecretString::new("t0ken")));
+        let (socket, sink, _focus, stop_tx, handle) =
+            spawn_server(Some(SecretString::new("t0ken")));
         let body = r#"{"job_id":"job-42-7","session_id":"s1","hook_event_name":"Stop","status":"completed"}"#;
         let status = send_raw(&socket, &post(Some("t0ken"), body)).await;
         assert!(status.contains("200"), "status was {status:?}");
@@ -714,7 +849,8 @@ mod tests {
 
     #[tokio::test]
     async fn bearer_mismatch_returns_401_and_does_not_submit() {
-        let (socket, sink, stop_tx, handle) = spawn_server(Some(SecretString::new("right")));
+        let (socket, sink, _focus, stop_tx, handle) =
+            spawn_server(Some(SecretString::new("right")));
         let body = r#"{"job_id":"job-1-1","hook_event_name":"Stop"}"#;
         let status = send_raw(&socket, &post(Some("wrong"), body)).await;
         assert!(status.contains("401"), "status was {status:?}");
@@ -724,7 +860,8 @@ mod tests {
 
     #[tokio::test]
     async fn missing_bearer_returns_401() {
-        let (socket, sink, stop_tx, handle) = spawn_server(Some(SecretString::new("right")));
+        let (socket, sink, _focus, stop_tx, handle) =
+            spawn_server(Some(SecretString::new("right")));
         let body = r#"{"job_id":"job-1-1","hook_event_name":"Stop"}"#;
         let status = send_raw(&socket, &post(None, body)).await;
         assert!(status.contains("401"), "status was {status:?}");
@@ -734,7 +871,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_json_returns_400() {
-        let (socket, sink, stop_tx, handle) = spawn_server(None);
+        let (socket, sink, _focus, stop_tx, handle) = spawn_server(None);
         let status = send_raw(&socket, &post(None, "{not json")).await;
         assert!(status.contains("400"), "status was {status:?}");
         assert!(sink.signals().is_empty());
@@ -743,7 +880,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_job_id_returns_400() {
-        let (socket, sink, stop_tx, handle) = spawn_server(None);
+        let (socket, sink, _focus, stop_tx, handle) = spawn_server(None);
         let status = send_raw(&socket, &post(None, r#"{"hook_event_name":"Stop"}"#)).await;
         assert!(status.contains("400"), "status was {status:?}");
         assert!(sink.signals().is_empty());
@@ -752,7 +889,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_fields_are_accepted_with_200() {
-        let (socket, sink, stop_tx, handle) = spawn_server(None);
+        let (socket, sink, _focus, stop_tx, handle) = spawn_server(None);
         // A future hook adds fields we do not know: E-08 says accept and keep
         // them verbatim in the payload.
         let body = r#"{"job_id":"job-9-9","hook_event_name":"Stop","future_field":{"nested":true},"another":42}"#;
@@ -768,7 +905,7 @@ mod tests {
 
     #[tokio::test]
     async fn oversize_body_returns_413() {
-        let (socket, sink, stop_tx, handle) = spawn_server(None);
+        let (socket, sink, _focus, stop_tx, handle) = spawn_server(None);
         // Declare a Content-Length above the cap; the server refuses before
         // reading the body.
         let request = format!(
@@ -785,7 +922,7 @@ mod tests {
     async fn duplicate_submits_are_stateless() {
         // Idempotency is the DB layer's job (D-05): two identical POSTs both
         // return 200 and both submit — the adapter holds no dedup state.
-        let (socket, sink, stop_tx, handle) = spawn_server(None);
+        let (socket, sink, _focus, stop_tx, handle) = spawn_server(None);
         let body = r#"{"job_id":"job-3-4","hook_event_name":"Stop","status":"completed"}"#;
         assert!(send_raw(&socket, &post(None, body)).await.contains("200"));
         assert!(send_raw(&socket, &post(None, body)).await.contains("200"));
@@ -796,7 +933,7 @@ mod tests {
     #[tokio::test]
     async fn socket_file_is_mode_0600() {
         use std::os::unix::fs::PermissionsExt;
-        let (socket, _sink, stop_tx, handle) = spawn_server(None);
+        let (socket, _sink, _focus, stop_tx, handle) = spawn_server(None);
         let mode = std::fs::metadata(&socket).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "socket mode was {:o}", mode & 0o777);
         stop(stop_tx, handle).await;
@@ -804,10 +941,116 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_unlinks_the_socket() {
-        let (socket, _sink, stop_tx, handle) = spawn_server(None);
+        let (socket, _sink, _focus, stop_tx, handle) = spawn_server(None);
         assert!(socket.exists());
         stop(stop_tx, handle).await;
         assert!(!socket.exists(), "socket should be unlinked on shutdown");
+    }
+
+    /// Send a raw request and return the **whole** response text (status line
+    /// + headers + body), for the `/focus` outcome-body assertions.
+    async fn send_raw_full(socket_path: &Path, request: &[u8]) -> String {
+        let mut stream = UnixStream::connect(socket_path).await.expect("connect");
+        stream.write_all(request).await.expect("write");
+        stream.flush().await.expect("flush");
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.expect("read");
+        String::from_utf8_lossy(&response).into_owned()
+    }
+
+    /// Build a `POST /focus` control request.
+    fn focus_post(bearer: Option<&str>, body: &str) -> Vec<u8> {
+        let auth = bearer
+            .map(|t| format!("Authorization: Bearer {t}\r\n"))
+            .unwrap_or_default();
+        format!(
+            "POST /focus HTTP/1.1\r\n\
+             Host: localhost\r\n\
+             {auth}\
+             Content-Type: application/json\r\n\
+             Content-Length: {len}\r\n\
+             \r\n\
+             {body}",
+            len = body.len(),
+        )
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn focus_route_answers_the_outcome_as_json() {
+        let (socket, sink, focus, stop_tx, handle) = spawn_server(None);
+        let response = send_raw_full(&socket, &focus_post(None, r#"{"task_id":42}"#)).await;
+        assert!(response.contains("200"), "response was {response:?}");
+        assert!(
+            response.contains(r#"{"focused":true}"#),
+            "response was {response:?}"
+        );
+        assert_eq!(focus.asked.lock().unwrap().as_slice(), &[42]);
+        // A control request is never a signal.
+        assert!(sink.signals().is_empty());
+        stop(stop_tx, handle).await;
+    }
+
+    #[tokio::test]
+    async fn focus_route_accepts_a_numeric_string_task_id() {
+        // The notifier's click_command template renders the id as text.
+        let (socket, _sink, focus, stop_tx, handle) = spawn_server(None);
+        let response = send_raw_full(&socket, &focus_post(None, r#"{"task_id":"7"}"#)).await;
+        assert!(response.contains("200"), "response was {response:?}");
+        assert_eq!(focus.asked.lock().unwrap().as_slice(), &[7]);
+        stop(stop_tx, handle).await;
+    }
+
+    #[tokio::test]
+    async fn focus_route_reports_a_degraded_outcome_with_its_reason() {
+        // The fake answers `focused: false` for non-positive ids — the reply is
+        // still 200 (degradation is a normal answer, F-94).
+        let (socket, _sink, _focus, stop_tx, handle) = spawn_server(None);
+        let response = send_raw_full(&socket, &focus_post(None, r#"{"task_id":0}"#)).await;
+        assert!(response.contains("200"), "response was {response:?}");
+        assert!(
+            response.contains(r#""focused":false"#) && response.contains("pane is gone"),
+            "response was {response:?}"
+        );
+        stop(stop_tx, handle).await;
+    }
+
+    #[tokio::test]
+    async fn focus_route_requires_the_bearer_token() {
+        // The control endpoint sits behind the same auth as signal ingestion
+        // (E-03): no token, no focus.
+        let (socket, _sink, focus, stop_tx, handle) =
+            spawn_server(Some(SecretString::new("right")));
+        let status = send_raw(&socket, &focus_post(None, r#"{"task_id":1}"#)).await;
+        assert!(status.contains("401"), "status was {status:?}");
+        assert!(focus.asked.lock().unwrap().is_empty());
+        stop(stop_tx, handle).await;
+    }
+
+    #[tokio::test]
+    async fn focus_route_rejects_a_missing_task_id() {
+        let (socket, _sink, focus, stop_tx, handle) = spawn_server(None);
+        let status = send_raw(&socket, &focus_post(None, r#"{"job_id":"job-1-1"}"#)).await;
+        assert!(status.contains("400"), "status was {status:?}");
+        assert!(focus.asked.lock().unwrap().is_empty());
+        stop(stop_tx, handle).await;
+    }
+
+    #[tokio::test]
+    async fn non_focus_paths_stay_signal_ingestion() {
+        // E-08: the path is inspected only for the exact `/focus`; any other
+        // path (today's `/claude-events`, a future one) is signal ingestion.
+        let (socket, sink, focus, stop_tx, handle) = spawn_server(None);
+        let body = r#"{"job_id":"job-5-6","hook_event_name":"Stop","status":"completed"}"#;
+        let request = format!(
+            "POST /some/future/path HTTP/1.1\r\nContent-Length: {len}\r\n\r\n{body}",
+            len = body.len(),
+        );
+        let status = send_raw(&socket, request.as_bytes()).await;
+        assert!(status.contains("200"), "status was {status:?}");
+        assert_eq!(sink.signals().len(), 1);
+        assert!(focus.asked.lock().unwrap().is_empty());
+        stop(stop_tx, handle).await;
     }
 
     /// Real-client smoke test. Run locally with:
@@ -815,7 +1058,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires the `curl` binary; run manually"]
     async fn curl_unix_socket_smoke() {
-        let (socket, sink, stop_tx, handle) = spawn_server(Some(SecretString::new("smoke")));
+        let (socket, sink, _focus, stop_tx, handle) =
+            spawn_server(Some(SecretString::new("smoke")));
         let output = tokio::process::Command::new("curl")
             .arg("--silent")
             .arg("--show-error")

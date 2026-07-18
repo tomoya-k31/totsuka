@@ -190,6 +190,22 @@ pub fn plugin_init_config(
     Ok(value)
 }
 
+/// The hook/control UDS socket path: `[hooks].socket_path` (with `~`/`${ENV}`
+/// expanded) or the XDG runtime default. Shared by `doctor`'s probe and
+/// `totsuka focus` so both always target the socket `totsuka run` binds.
+pub fn hook_socket_path(
+    cx: &Cx,
+    cfg: &RootConfig,
+    env: &HashMap<String, String>,
+) -> Result<PathBuf, CliError> {
+    let env_fn = |k: &str| env.get(k).cloned();
+    match &cfg.hooks.socket_path {
+        Some(raw) => config::expand_path(raw, &env_fn)
+            .map_err(|e| format!("[hooks].socket_path does not expand: {e}").into()),
+        None => Ok(cx.paths.runtime_dir().join("claude-events.sock")),
+    }
+}
+
 /// The platform secret resolver over a snapshot of the environment.
 pub fn secret_resolver(
     env: &HashMap<String, String>,

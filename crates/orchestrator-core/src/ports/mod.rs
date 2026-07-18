@@ -17,4 +17,4 @@ pub use git::{GitOutput, GitRunner};
 pub use llm::{ChatRequest, LlmError, LlmRouter};
 pub use process::ProcessProbe;
 pub use secret::{SecretError, SecretRef, SecretStore, SecretString};
-pub use signal_ingress::{SignalAck, SignalError, SignalPort};
+pub use signal_ingress::{FocusOutcome, FocusPort, SignalAck, SignalError, SignalPort};

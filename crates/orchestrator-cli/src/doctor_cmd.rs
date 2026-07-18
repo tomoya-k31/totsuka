@@ -360,20 +360,16 @@ fn check_hook_socket(
     env: &HashMap<String, String>,
     checks: &mut Vec<Check>,
 ) {
-    let env_fn = |k: &str| env.get(k).cloned();
-    let socket_path = match &cfg.hooks.socket_path {
-        Some(p) => match config::expand_path(p, &env_fn) {
-            Ok(path) => path,
-            Err(e) => {
-                checks.push(Check::fail(
-                    "hook-socket",
-                    format!("[hooks].socket_path does not expand: {e}"),
-                    "fix the ${{ENV}} reference in [hooks].socket_path",
-                ));
-                return;
-            }
-        },
-        None => cx.paths.runtime_dir().join("claude-events.sock"),
+    let socket_path = match crate::common::hook_socket_path(cx, cfg, env) {
+        Ok(path) => path,
+        Err(e) => {
+            checks.push(Check::fail(
+                "hook-socket",
+                e.to_string(),
+                "fix the ${{ENV}} reference in [hooks].socket_path",
+            ));
+            return;
+        }
     };
     if !is_socket(&socket_path) {
         checks.push(Check::ok(

@@ -7,6 +7,7 @@
 mod common;
 mod config_cmd;
 mod doctor_cmd;
+mod focus_cmd;
 mod hooks;
 mod init_cmd;
 mod logs_cmd;
@@ -60,6 +61,12 @@ enum Command {
     Task {
         #[command(subcommand)]
         cmd: task_cmd::TaskCommand,
+    },
+    /// Bring a task's agent pane to the foreground (the notification's
+    /// click target, F-94). Quietly no-ops when the orchestrator is stopped.
+    Focus {
+        /// Task id (see `totsuka task list`).
+        id: i64,
     },
     /// Manage plugins (install / uninstall / enable / disable / list).
     Plugin {
@@ -134,6 +141,7 @@ fn execute(
         Command::Run { watch, dry_run } => run_cmd::run(&cx, watch, dry_run, debug),
         Command::Status { json } => status_cmd::run(&cx, json),
         Command::Task { cmd } => task_cmd::run(&cx, cmd),
+        Command::Focus { id } => focus_cmd::run(&cx, id),
         Command::Plugin { cmd } => plugin_cmd::run(cmd),
         Command::Config { cmd } => config_cmd::run(&cx, cmd),
         Command::Logs { follow, task } => logs_cmd::run(&cx, follow, task),
