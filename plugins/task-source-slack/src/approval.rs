@@ -210,22 +210,37 @@ pub async fn handle_approval_action<T: SlackTransport>(
     };
     state.set_draft_status(draft_id, status);
 
-    // Re-render both surfaces in their final state (✅/❌, no buttons).
+    // Finalize both surfaces. The self-DM record is a persistent audit trail;
+    // the in-thread ephemeral is transient, so pressing a button deletes it —
+    // *provided* the record survives to carry the ✅/❌ outcome. When the record
+    // is missing (self-DM unresolved at startup, or its post failed so `dm_ts`
+    // is None), the ephemeral is the only surface, so we replace it in place
+    // instead of erasing the outcome — otherwise a reject would leave no trace
+    // anywhere.
     let finalized = Draft { status, ..draft };
     let blocks = draft_blocks(&finalized, draft_id, source_name);
+    let pressed_in_dm = press_channel(payload) == state.self_dm_channel().as_deref();
+    let ephemeral_is_sole_surface = finalized.dm_ts.is_none();
     if let Some(url) = response_url {
-        let body = json!({
-            "replace_original": true,
-            "text": final_fallback(status),
-            "blocks": blocks.clone(),
-        });
+        // Delete the ephemeral only when the press came from it AND a durable
+        // record exists elsewhere; every other case keeps the final view.
+        let body = if pressed_in_dm || ephemeral_is_sole_surface {
+            json!({
+                "replace_original": true,
+                "text": final_fallback(status),
+                "blocks": blocks.clone(),
+            })
+        } else {
+            // Ephemeral messages have no `ts` to `chat.update`; `delete_original`
+            // via the interaction's response_url is the only way to remove them.
+            json!({ "delete_original": true })
+        };
         if let Err(e) = api.post_response_url(url, body).await {
-            tracing::warn!(draft_id, error = %e, "could not rewrite the pressed draft view");
+            tracing::warn!(draft_id, error = %e, "could not finalize the pressed draft view");
         }
     }
     // The self-DM record — unless the press came from it (then the
     // response_url rewrite above already covered it).
-    let pressed_in_dm = press_channel(payload) == state.self_dm_channel().as_deref();
     if let Some(dm_ts) = &finalized.dm_ts
         && let Some(dm_channel) = state.self_dm_channel()
         && !pressed_in_dm
