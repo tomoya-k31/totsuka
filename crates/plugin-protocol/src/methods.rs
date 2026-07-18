@@ -50,6 +50,10 @@ pub mod method {
     /// Additive since protocol 0.1.3; only called when the plugin declares the
     /// `diagnostics_snapshot` capability.
     pub const DIAGNOSTICS_SNAPSHOT: &str = "diagnostics/snapshot";
+    /// Bring a session's pane to the foreground (O→P, F-94: click-to-focus).
+    /// Additive since protocol 0.1.4; only called when the plugin declares the
+    /// `pane_control` capability.
+    pub const SESSION_FOCUS: &str = "session/focus";
 
     // notifier.
     /// Deliver an event notification (O→P, notification, F-90).
@@ -329,6 +333,25 @@ pub struct DiagnosticsSnapshotResult {
     pub text: Option<String>,
 }
 
+/// `session/focus` params (O→P, F-94): focus the pane of an existing session
+/// so a notification click lands the human on the right pane. Additive since
+/// protocol 0.1.4 (`pane_control` capability). The `session_id` stays opaque
+/// to the Orchestrator (F-37): decoding it into a pane handle is the plugin's
+/// job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionFocusParams {
+    /// Session id returned by `task/dispatch`.
+    pub session_id: String,
+}
+
+/// `session/focus` result (P→O).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionFocusResult {
+    /// Whether the pane was focused. `false` when the pane no longer exists
+    /// (task finished, pane closed, …) — a vanished pane is not an error.
+    pub focused: bool,
+}
+
 // ---------------------------------------------------------------------------
 // notifier
 // ---------------------------------------------------------------------------
@@ -529,6 +552,11 @@ mod tests {
             text: Some("╭─ claude ─╮\n…".into()),
         });
         round_trip(&DiagnosticsSnapshotResult { text: None });
+        round_trip(&SessionFocusParams {
+            session_id: "sess-1".into(),
+        });
+        round_trip(&SessionFocusResult { focused: true });
+        round_trip(&SessionFocusResult { focused: false });
     }
 
     /// The 0.1.3 additive fields on `task/dispatch` follow the same contract
