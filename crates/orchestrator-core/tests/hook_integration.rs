@@ -742,7 +742,8 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         launch(
             "task_source",
             "mock_src",
-            json!({ "tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+            json!({ "tasks": [{ "id": "1", "source": "github", "title": "t",
+                                "instructions": "回答は日本語で作成してください。" }] }),
         )
         .await,
     );
@@ -826,15 +827,108 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         hook["env"]["TOTSUKA_HOOK_SPOOL_DIR"],
         base.join("spool").display().to_string()
     );
-    // A hook dispatch tells the agent the marker convention UP FRONT (as plain
-    // string extra_context), so the FIRST Stop carries a marker and on-stop.sh
-    // never blocks into a regenerated duplicate answer (real-machine finding).
-    let extra = params["extra_context"]
-        .as_str()
-        .expect("hook dispatch carries a string extra_context");
+    // A hook dispatch delivers the task's instructions AND the marker
+    // convention invisibly via TOTSUKA_PROMPT_CONTEXT (the UserPromptSubmit
+    // hook turns it into additionalContext) — the marker still reaches the
+    // model UP FRONT, so the FIRST Stop carries a marker and on-stop.sh never
+    // blocks into a regenerated duplicate answer. Nothing rides the visible
+    // extra_context anymore.
     assert!(
-        extra.contains("<<STATUS:COMPLETED>>") && extra.contains("NEEDS_INPUT"),
-        "extra_context states the marker convention: {extra}"
+        params["extra_context"].is_null(),
+        "hook dispatch carries no visible extra_context: {}",
+        params["extra_context"]
+    );
+    let ctx = hook["env"]["TOTSUKA_PROMPT_CONTEXT"]
+        .as_str()
+        .expect("hook env carries the prompt context");
+    assert!(
+        ctx.contains("回答は日本語で作成してください。"),
+        "prompt context carries the task's instructions: {ctx}"
+    );
+    assert!(
+        ctx.contains("<<STATUS:COMPLETED>>") && ctx.contains("NEEDS_INPUT"),
+        "prompt context states the marker convention: {ctx}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn dispatch_without_hook_falls_back_to_visible_extra_context() {
+    // A non-hook agent (no resume_session / diagnostics_snapshot) has no
+    // invisible channel: the task's instructions fall back to plain string
+    // extra_context (and no marker convention — non-hook agents don't report
+    // completion through hooks).
+    let base = scratch("nohook_dispatch");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({ "tasks": [{ "id": "1", "source": "github", "title": "t",
+                                "instructions": "回答は日本語で作成してください。" }] }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "stream_states": ["running"], "dispatch_log": dispatch_log }),
+        )
+        .await,
+    );
+    plugins.notifiers.insert(
+        "mock_notify".to_string(),
+        launch(
+            "notifier",
+            "mock_notify",
+            json!({ "notify_log": notify_log }),
+        )
+        .await,
+    );
+
+    let mut settings = engine_settings(workflows("llm", "none"), None);
+    settings.repos = vec![RepoSettings {
+        name: "clone".to_string(),
+        path: repo.clone(),
+        summary: None,
+        worktree_location: None,
+    }];
+    settings.location_template = "{repo}/../wt/{branch}".to_string();
+
+    let mut engine = Engine::new(
+        StateDb::open(&base.join("state.db")).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    engine.cycle(None).await.unwrap();
+    engine.shutdown(GRACE).await;
+
+    let dispatches = read_log(&dispatch_log);
+    let params = &dispatches
+        .iter()
+        .find(|d| d["method"] == "task/dispatch")
+        .expect("dispatch recorded")["params"];
+    assert!(params["hook"].is_null(), "no hook launch spec");
+    assert_eq!(
+        params["extra_context"], "回答は日本語で作成してください。",
+        "instructions fall back to visible extra_context"
+    );
+    assert!(
+        !params["extra_context"]
+            .as_str()
+            .unwrap()
+            .contains("<<STATUS:"),
+        "no marker convention on the non-hook path"
     );
     let _ = std::fs::remove_dir_all(&base);
 }

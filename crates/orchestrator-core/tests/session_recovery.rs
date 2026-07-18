@@ -66,6 +66,7 @@ fn dispatch_task() -> Task {
         url: None,
         assignee: None,
         thread_key: None,
+        instructions: None,
     }
 }
 

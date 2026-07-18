@@ -655,13 +655,19 @@ fn prompt_marker(prompt: &str) -> String {
 /// in the pane. A string `extra_context` is rendered as raw text (not JSON — no
 /// surrounding quotes); non-string values keep their JSON rendering.
 ///
+/// Hook-capable dispatches usually arrive with no `extra_context` at all: the
+/// orchestrator delivers instructions invisibly via the `UserPromptSubmit`
+/// hook (`TOTSUKA_PROMPT_CONTEXT` env). `extra_context` remains the VISIBLE
+/// fallback for non-hook dispatches (e.g. the task's instructions when no
+/// hook channel exists).
+///
 /// The extra context comes FIRST: [`submit_prompt`](HerdrAgent::submit_prompt)
 /// confirms arrival by matching the prompt's **tail** on screen
-/// ([`prompt_marker`]), and the orchestrator's extra context is a constant
-/// instruction — as a suffix it would make every dispatch's tail identical, so
-/// on a `claude --resume` pane the check could match the PREVIOUS turn's prompt
-/// still rendered on screen and submit before the new prompt was typed. With
-/// the task text last, the tail stays unique per task.
+/// ([`prompt_marker`]), and the extra context can repeat across dispatches —
+/// as a suffix it would make every dispatch's tail identical, so on a `claude
+/// --resume` pane the check could match the PREVIOUS turn's prompt still
+/// rendered on screen and submit before the new prompt was typed. With the
+/// task text last, the tail stays unique per task.
 fn compose_prompt(params: &TaskDispatchParams) -> String {
     let task_text = params.task.body.as_ref().unwrap_or(&params.task.title);
     match &params.extra_context {
@@ -738,6 +744,7 @@ mod tests {
                 url: None,
                 assignee: None,
                 thread_key: None,
+                instructions: None,
             },
             worktree_path: "/wt".into(),
             mode: plugin_protocol::methods::ExecutionMode::Plan,

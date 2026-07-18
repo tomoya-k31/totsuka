@@ -34,9 +34,12 @@ use crate::ports::git::GitRunner;
 use crate::ports::llm::LlmRouter;
 use crate::ports::signal_ingress::FocusOutcome;
 
-/// Completion self-report instruction injected as `extra_context` into every
-/// hook-capable dispatch (D-12; hook knowledge stays in core per H-01, source
-/// plugins never mention markers).
+/// Completion self-report instruction injected into every hook-capable
+/// dispatch via the `TOTSUKA_PROMPT_CONTEXT` env (D-12; hook knowledge stays
+/// in core per H-01, source plugins never mention markers). The
+/// `UserPromptSubmit` hook turns that env into invisible `additionalContext`,
+/// so the convention (and the task's `instructions`, if any) reaches the model
+/// without ever being typed into the pane.
 ///
 /// Telling the agent the marker convention UP FRONT makes the FIRST Stop carry a
 /// marker, so `on-stop.sh` never has to `block` and force a full regeneration —

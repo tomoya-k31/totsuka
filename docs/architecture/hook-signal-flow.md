@@ -35,7 +35,7 @@ sequenceDiagram
     Note over EN: 冪等取り込み → repo 選択 → スロット確保 → worktree 作成
     EN->>EN: dispatch_one — job_id=job-{task_id}-{session_row}<br/>先行 thread_key があれば resume_session_id を解決（F-105）
     EN->>HE: task/dispatch（HookLaunchSpec{settings_path, env}, resume_session_id?）
-    HE->>CC: workspace.create / agent.start（env 注入: TOTSUKA_JOB_ID / HOOK_ENDPOINT / HOOK_TOKEN / HOOK_SPOOL_DIR）<br/>argv: claude --settings orchestrator-<workflow>.json [--resume <sid>]
+    HE->>CC: workspace.create / agent.start（env 注入: TOTSUKA_JOB_ID / HOOK_ENDPOINT / HOOK_TOKEN / HOOK_SPOOL_DIR / PROMPT_CONTEXT）<br/>argv: claude --settings orchestrator-<workflow>.json [--resume <sid>]
     CC->>UDS: SessionStart フック → POST /claude-events
     UDS->>EN: SignalPort::submit（SessionStart）
     EN->>DB: set_claude_session_id（E-09 相関確立）

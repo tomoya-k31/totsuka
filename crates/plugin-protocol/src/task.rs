@@ -41,6 +41,12 @@ pub struct Task {
     /// resume the earlier task's session. `None` for other sources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_key: Option<String>,
+    /// 0.1.5: task-source-owned agent instructions (e.g. reply-crafting
+    /// directions and style), separated from the human-visible `body` so hosts
+    /// can deliver them out-of-band (e.g. invisible prompt-context injection).
+    /// Agents that don't understand the field just see them absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 #[cfg(test)]
@@ -61,6 +67,7 @@ mod tests {
             url: None,
             assignee: None,
             thread_key: None,
+            instructions: None,
         };
         // Parse to a JSON object and assert on keys (robust against values
         // that might contain field-name substrings).
@@ -69,6 +76,7 @@ mod tests {
         assert!(!obj.contains_key("body"), "empty optionals omitted");
         assert!(!obj.contains_key("labels"));
         assert!(!obj.contains_key("thread_key"));
+        assert!(!obj.contains_key("instructions"));
         assert!(obj.contains_key("repo_hint"));
         let back: Task = serde_json::from_value(value).unwrap();
         assert_eq!(back, task);
@@ -89,6 +97,7 @@ mod tests {
             url: None,
             assignee: None,
             thread_key: Some("C0123456789:1718000000.000100".into()),
+            instructions: None,
         };
         let value = serde_json::to_value(&task).unwrap();
         assert_eq!(
@@ -101,5 +110,35 @@ mod tests {
         let old: Task =
             serde_json::from_str(r#"{"id":"1","source":"github","title":"t"}"#).unwrap();
         assert!(old.thread_key.is_none());
+    }
+
+    /// `instructions` (0.1.5) round-trips when set and is absent from old wire.
+    #[test]
+    fn instructions_are_additive() {
+        let task = Task {
+            id: "C1:1.0".into(),
+            source: "slack".into(),
+            title: "reply".into(),
+            body: Some("## メンション\n…".into()),
+            repo_hint: None,
+            labels: vec![],
+            priority: 0,
+            status: None,
+            url: None,
+            assignee: None,
+            thread_key: None,
+            instructions: Some("返信案を日本語で作成してください。".into()),
+        };
+        let value = serde_json::to_value(&task).unwrap();
+        assert_eq!(
+            value["instructions"],
+            serde_json::json!("返信案を日本語で作成してください。")
+        );
+        let back: Task = serde_json::from_value(value).unwrap();
+        assert_eq!(back, task);
+        // Old wire without the field still deserializes.
+        let old: Task =
+            serde_json::from_str(r#"{"id":"1","source":"github","title":"t"}"#).unwrap();
+        assert!(old.instructions.is_none());
     }
 }

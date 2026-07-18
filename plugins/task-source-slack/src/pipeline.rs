@@ -641,20 +641,25 @@ fn build_task(
         enriched.sender_name, enriched.channel_name
     );
 
-    let mut body = String::from(
+    // Reply-crafting directions travel as `instructions` (0.1.5), separated
+    // from the factual `body`, so the host can deliver them out-of-band
+    // (invisible prompt-context injection) while the pane shows only the
+    // mention and its thread context.
+    let mut instructions = String::from(
         "以下の Slack メンションへの返信案を日本語で作成してください。\
          対象リポジトリを調査し、根拠を持って回答してください。\
-         出力は返信文のみとし、前置き・後書き・説明を含めないでください。\n",
+         出力は返信文のみとし、前置き・後書き・説明を含めないでください。",
     );
     if let Some(style) = &config.reply_style {
-        body.push_str(&format!("返信スタイル: {style}\n"));
+        instructions.push_str(&format!("\n返信スタイル: {style}"));
     }
-    body.push_str(&format!(
-        "\n## メンション\n\n- 送信者: {}\n- チャンネル: #{}\n- 本文:\n\n> {}\n",
+
+    let mut body = format!(
+        "## メンション\n\n- 送信者: {}\n- チャンネル: #{}\n- 本文:\n\n> {}\n",
         enriched.sender_name,
         enriched.channel_name,
         mention.text.replace('\n', "\n> ")
-    ));
+    );
     match &enriched.context_lines {
         Some(lines) if !lines.is_empty() => {
             body.push_str(&format!(
@@ -687,6 +692,7 @@ fn build_task(
         // the prior task's Claude session. A top-level mention's key equals
         // its task id (a new conversation).
         thread_key: Some(mention.thread_key()),
+        instructions: Some(instructions),
     };
     let pending = PendingMention {
         channel: mention.channel.clone(),
@@ -796,6 +802,33 @@ mod tests {
         let (task, _pending) = build_task(&slack_config(), &enriched("200.0"), None);
         assert_eq!(task.thread_key.as_deref(), Some("C1:200.0"));
         assert_eq!(task.thread_key.as_deref(), Some(task.id.as_str()));
+    }
+
+    #[test]
+    fn build_task_splits_instructions_from_body() {
+        // The reply-crafting directive (+ reply_style) rides `instructions`
+        // (0.1.5) so the host can inject it invisibly; the body keeps only the
+        // factual content (mention + thread context) shown in the pane.
+        let config: SlackConfig = serde_json::from_value(json!({
+            "app_token": "xapp-1-A1-test",
+            "user_token": "xoxp-user-test",
+            "target_user_id": "U_ME",
+            "reply_style": "簡潔・断定調",
+        }))
+        .unwrap();
+        let (task, _pending) = build_task(&config, &enriched("300.0"), None);
+
+        let instructions = task.instructions.expect("instructions are set");
+        assert!(instructions.contains("返信案を日本語で作成してください"));
+        assert!(instructions.contains("返信スタイル: 簡潔・断定調"));
+
+        let body = task.body.expect("body is set");
+        assert!(body.starts_with("## メンション\n"), "body: {body}");
+        assert!(
+            !body.contains("返信案を日本語で作成"),
+            "no directive in body"
+        );
+        assert!(!body.contains("返信スタイル"), "no style in body");
     }
 
     #[test]

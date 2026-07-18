@@ -4,7 +4,7 @@ title: Claude Code フック機構のセキュリティポリシー
 description: フック完了判定の UDS Bearer トークン管理（keychain 参照・socket 0600 第一層・定数時間比較・herdr env 配送）、スプールファイルの機密保持（N-05: last_assistant_message は機微・$XDG_STATE_HOME 配下・drain 後削除・隔離の注意）、フックアセットの改ざん耐性（N-02: 0700/0600・内容ハッシュ冪等修復・静的埋め込み）を定める。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [security, hook, claude-code, uds, token, keychain, spool, tamper, epic-131]
-timestamp: 2026-07-18T12:00:00Z
+timestamp: 2026-07-19T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -43,11 +43,11 @@ POST 失敗時、`on-stop.sh` は送信予定の JSON を NDJSON 1 行として 
 
 フックスクリプトと `--settings` は pane で実行される = **実効的にコード実行の入口**。改ざんされると偽の完了通知や任意コマンド実行に繋がるため、次の 3 点で耐性を持たせる:
 
-- **パーミッション**: 静的スクリプト 5 本（`hook-common.sh` / `on-stop.sh` / `on-notification.sh` / `on-session-start.sh` / `on-session-end.sh`）は `$XDG_DATA_HOME/totsuka/hooks/` へ **0700**、workflow 別 `orchestrator-<workflow>.json` は **0600** で書き出す。所有ユーザー以外は書き換え・読み取りできない。
+- **パーミッション**: 静的スクリプト 6 本（`hook-common.sh` / `on-stop.sh` / `on-notification.sh` / `on-session-start.sh` / `on-session-end.sh` / `on-user-prompt-submit.sh`）は `$XDG_DATA_HOME/totsuka/hooks/` へ **0700**、workflow 別 `orchestrator-<workflow>.json` は **0600** で書き出す。所有ユーザー以外は書き換え・読み取りできない。
 - **内容ハッシュによる冪等修復**: `run` / `doctor` 起動時に **SHA-256 が一致すれば書き換えず、不一致（ドリフト・改ざん・バージョンアップ）なら上書き**する。起動のたびに正本へ収束するため、外部からの改変は次回起動で自動修復される。
 - **静的埋め込み（repo に置かない）**: スクリプトは CLI バイナリに `include_str!` で同梱される。リポジトリの `.claude/` は**使わない**（H-01）。「リポジトリにチェックインされたフックコード」を持たないため、リポジトリ改変や worktree 経由の注入で乗っ取られる面が無い。
 
-ジョブ固有値（job_id / エンドポイント / トークン / スプール dir）は**ファイルに書かず** env で運ぶ（H-02）。`--settings` は workflow 単位で不変・秘密を含まないため、0600 のまま `--resume` を跨いで安全に再利用できる。
+ジョブ固有値（job_id / エンドポイント / トークン / スプール dir / プロンプトコンテキスト）は**ファイルに書かず** env で運ぶ（H-02）。`--settings` は workflow 単位で不変・秘密を含まないため、0600 のまま `--resume` を跨いで安全に再利用できる。`TOTSUKA_PROMPT_CONTEXT`（不可視プロンプト注入用）は**タスク由来の指示文＝タスク本文と同格のテキスト**を含み得るが、プロンプトとしてペインに打鍵していた内容と同じ信頼ドメイン（本人プロセスの env）に閉じており、新たな機密面は増やさない。
 
 # 検証
 

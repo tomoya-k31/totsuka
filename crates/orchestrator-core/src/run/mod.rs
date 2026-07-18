@@ -1096,6 +1096,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 c.resume_session || c.diagnostics_snapshot
             })
             .unwrap_or(false);
+        let task = task_from_record(&record);
         let (job_id, hook_spec, reserved_row) = match hook_capable
             .then(|| self.hook_launch(&record.workflow))
             .flatten()
@@ -1113,6 +1114,19 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 }
                 let job_id = JobId::new(record.id, session_row);
                 env.insert("TOTSUKA_JOB_ID".to_string(), job_id.to_string());
+                // Invisible prompt context: the task-source's `instructions`
+                // (0.1.5) plus the marker self-report convention ride the
+                // `UserPromptSubmit` hook's `additionalContext` via this env
+                // var — the model sees them, the pane shows only the task
+                // body. Hook knowledge stays in core (H-01): source plugins
+                // never compose marker instructions.
+                let mut prompt_context = String::new();
+                if let Some(instructions) = &task.instructions {
+                    prompt_context.push_str(instructions);
+                    prompt_context.push_str("\n\n");
+                }
+                prompt_context.push_str(hooks::MARKER_SELF_REPORT_INSTRUCTION);
+                env.insert("TOTSUKA_PROMPT_CONTEXT".to_string(), prompt_context);
                 (
                     Some(job_id.to_string()),
                     Some(HookLaunchSpec { settings_path, env }),
@@ -1124,15 +1138,17 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
 
         // task/dispatch (F-31) → session id → persist (F-37) → subscribe (F-38).
         let agent = self.plugins.agents.get(&agent_name).expect("checked above");
-        // Hook-capable dispatches carry the marker self-report convention as
-        // extra context so the FIRST Stop already has a marker (no block → no
-        // regenerated duplicate answer in the pane). Hook knowledge stays in
-        // core (H-01) — source plugins never compose marker instructions.
-        let extra_context = hook_spec
-            .as_ref()
-            .map(|_| serde_json::Value::String(hooks::MARKER_SELF_REPORT_INSTRUCTION.to_string()));
+        // Context routing: hook dispatches deliver everything invisibly via
+        // `TOTSUKA_PROMPT_CONTEXT` above, so no visible extra_context. Non-hook
+        // dispatches (orca / mock) have no invisible channel — fall back to the
+        // task's instructions as visible string extra_context (no marker
+        // convention: non-hook agents don't report completion through hooks).
+        let extra_context = match &hook_spec {
+            Some(_) => None,
+            None => task.instructions.clone().map(serde_json::Value::String),
+        };
         let params = TaskDispatchParams {
-            task: task_from_record(&record),
+            task,
             worktree_path: worktree_path.display().to_string(),
             mode: execution_mode(&record.mode),
             extra_context,
@@ -1928,6 +1944,7 @@ fn task_from_record(record: &TaskRecord) -> Task {
             url: record.url.clone(),
             assignee: None,
             thread_key: None,
+            instructions: None,
         })
 }
 
@@ -2035,6 +2052,7 @@ plan_cleanup = { retention_days = 2 }
             url: Some("https://example.com".into()),
             assignee: Some("me".into()),
             thread_key: None,
+            instructions: None,
         };
         let db = StateDb::open_in_memory().unwrap();
         let id = db
