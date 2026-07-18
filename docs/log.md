@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-07-19
+* **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) に **`session/focus`**（F-94 click-to-focus、#155 PR2）を実装。`HerdrAgent::focus` が `pane.get` 生存確認 → `workspace.focus` → `tab.focus` → `pane.focus` の外→内チェーンで herdr 内フォーカスを移す（コンテナ id は pane record 由来、workspace は pane id 接頭辞へフォールバック）。pane/コンテナ消失はどの段でも `focused: false` でエラーにしない（タスク終了後の通知クリックは正常系）。GUI ターミナル前面化は notifier の責務（[ADR-0005](/decisions/adr-0005-click-to-focus.md)）。fake herdr 結合テストでチェーン順序・params・pane 消失時のフォーカス呼び出しゼロを固定。
+* **Update**: [herdr Socket API リファレンス](/references/herdr-socket-api.md) — `herdr api schema --json`（0.7.4 実機）で **`workspace.focus` / `tab.focus` / `pane.focus` の実在と params（各 id のみ）を確認**し追記（issue #155 の未確定事項の解消。旧記載の pane メソッド列挙に `pane.focus` が漏れていた）。
+
 ## 2026-07-18
 * **Creation**: [ADR-0005 通知 click-to-focus は terminal-notifier + session/focus 委譲で実現する](/decisions/adr-0005-click-to-focus.md)（#155 PR1）。osascript `display notification` がクリック不可（owner = Script Editor）という macOS 仕様上の限界を、terminal-notifier（`-execute 'totsuka focus <task_id>'` + `-activate <bundle-id>`）と agent_ide プラグインへの新 RPC `session/focus` 委譲で解消する機構選定を ADR 化。session_id の不透明契約（F-37）を守るため pane 復号はプラグイン内に閉じ、capability は既存 `pane_control` に相乗り。UNUserNotificationCenter 自前 .app / alerter / NotifyParams への pane_id 追加は不採用。
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) をプロトコル **0.1.4** へ（#155 PR1）。新規 RPC `session/focus`（O→P、F-94: `SessionFocusParams { session_id }` → `SessionFocusResult { focused }`。pane 消失は `focused: false` でエラーにしない）を additive 追加。`pane_control` 宣言プラグインにのみ送る（新 capability フラグは足さない）。

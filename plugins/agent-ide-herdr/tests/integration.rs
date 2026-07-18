@@ -51,6 +51,10 @@ struct FakeHerdr {
     deaf_enters: usize,
     /// `pane.get` reports a vanished pane.
     pane_gone: bool,
+    /// Only the final `pane.focus` reports a vanished pane — the pane
+    /// disappears *between* the liveness check and the focus chain's last
+    /// step (`session/focus` must degrade to `focused: false`, not error).
+    pane_focus_gone: bool,
     /// The pane's `agent_session` (drives transcript lookup), if reported.
     agent_session: Option<Value>,
     /// `pane.read` text for the `detection` source.
@@ -73,6 +77,7 @@ impl Default for FakeHerdr {
             deaf_sends: 0,
             deaf_enters: 0,
             pane_gone: false,
+            pane_focus_gone: false,
             agent_session: None,
             detection: "",
             empty_id_error_on_create: false,
@@ -198,6 +203,18 @@ impl FakeHerdr {
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
 
+            // The focus chain (`session/focus`, F-94). `pane_gone` fails every
+            // pane-scoped call (so the `pane.get` liveness check stops the
+            // chain before it starts); `pane_focus_gone` fails only the final
+            // `pane.focus` — the pane vanished *after* the liveness check.
+            "workspace.focus" | "tab.focus" => {
+                reply(&mut write_half, &id, json!({ "type": "ok" })).await
+            }
+            "pane.focus" if self.pane_gone || self.pane_focus_gone => {
+                reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
+            }
+            "pane.focus" => reply(&mut write_half, &id, json!({ "type": "ok" })).await,
+
             "pane.get" if self.pane_gone => {
                 reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
             }
@@ -205,6 +222,8 @@ impl FakeHerdr {
                 let status = self.cli.lock().unwrap().status.clone();
                 let mut pane = json!({
                     "pane_id": PANE,
+                    "workspace_id": "w1",
+                    "tab_id": "w1:t1",
                     "cwd": "/wt/agent-1",
                     "agent_status": status,
                 });
@@ -692,6 +711,114 @@ async fn attach_reports_not_attached_when_pane_gone() {
         "should not be an RPC error: {resp}"
     );
     assert_eq!(resp["result"]["attached"], false);
+}
+
+#[tokio::test]
+async fn session_focus_focuses_workspace_tab_and_pane_in_order() {
+    // F-94: a notification click lands on the pane — the plugin focuses
+    // outside-in (workspace → tab → pane) after confirming the pane is alive.
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call("session/focus", json!({ "session_id": "w1:p1|agent-xyz" }))
+        .await;
+    assert!(resp["error"].is_null(), "focus failed: {resp}");
+    assert_eq!(resp["result"]["focused"], true);
+
+    let log = requests.lock().unwrap();
+    let focus_calls: Vec<(String, Value)> = log
+        .iter()
+        .filter(|r| r["method"].as_str().is_some_and(|m| m.ends_with(".focus")))
+        .map(|r| {
+            (
+                r["method"].as_str().unwrap().to_string(),
+                r["params"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        focus_calls,
+        vec![
+            (
+                "workspace.focus".to_string(),
+                json!({ "workspace_id": "w1" })
+            ),
+            ("tab.focus".to_string(), json!({ "tab_id": "w1:t1" })),
+            ("pane.focus".to_string(), json!({ "pane_id": "w1:p1" })),
+        ],
+        "the focus chain runs outside-in with the pane record's ids"
+    );
+    // The liveness check runs before any focus call.
+    let get_at = log.iter().position(|r| r["method"] == "pane.get").unwrap();
+    let first_focus = log
+        .iter()
+        .position(|r| r["method"] == "workspace.focus")
+        .unwrap();
+    assert!(
+        get_at < first_focus,
+        "pane.get must precede the focus chain"
+    );
+}
+
+#[tokio::test]
+async fn session_focus_reports_false_when_pane_gone() {
+    let (socket, requests) = FakeHerdr {
+        pane_gone: true,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call("session/focus", json!({ "session_id": "w9:p9|gone" }))
+        .await;
+    // A vanished pane is `focused: false`, not an RPC error (a notification
+    // clicked after the task ended is a normal path).
+    assert!(
+        resp["error"].is_null(),
+        "should not be an RPC error: {resp}"
+    );
+    assert_eq!(resp["result"]["focused"], false);
+    // The liveness check failed, so no focus call was made.
+    let log = requests.lock().unwrap();
+    assert!(
+        !log.iter()
+            .any(|r| { r["method"].as_str().is_some_and(|m| m.ends_with(".focus")) }),
+        "no focus call may follow a failed liveness check"
+    );
+}
+
+#[tokio::test]
+async fn session_focus_reports_false_when_the_pane_vanishes_mid_chain() {
+    // The pane can vanish *between* the liveness check and the final focus
+    // call — the chain must degrade to `focused: false`, not an RPC error.
+    let (socket, requests) = FakeHerdr {
+        pane_focus_gone: true,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call("session/focus", json!({ "session_id": "w1:p1|agent-xyz" }))
+        .await;
+    assert!(
+        resp["error"].is_null(),
+        "should not be an RPC error: {resp}"
+    );
+    assert_eq!(resp["result"]["focused"], false);
+    // The chain ran up to the vanished pane: the containers were focused.
+    let log = requests.lock().unwrap();
+    assert!(
+        log.iter().any(|r| r["method"] == "workspace.focus")
+            && log.iter().any(|r| r["method"] == "tab.focus")
+            && log.iter().any(|r| r["method"] == "pane.focus"),
+        "the whole chain must have been attempted before the degrade"
+    );
 }
 
 #[tokio::test]
