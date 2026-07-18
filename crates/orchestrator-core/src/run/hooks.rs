@@ -32,6 +32,24 @@ use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::git::GitRunner;
 use crate::ports::llm::LlmRouter;
 
+/// Completion self-report instruction injected as `extra_context` into every
+/// hook-capable dispatch (D-12; hook knowledge stays in core per H-01, source
+/// plugins never mention markers).
+///
+/// Telling the agent the marker convention UP FRONT makes the FIRST Stop carry a
+/// marker, so `on-stop.sh` never has to `block` and force a full regeneration —
+/// the pane shows the answer once instead of twice (real-machine finding on
+/// #131). The `on-stop.sh` block stays as the safety net for when the agent
+/// still forgets. The marker line is stripped from the publish artifact
+/// ([`strip_status_markers`]), so it never reaches the task source.
+pub(crate) const MARKER_SELF_REPORT_INSTRUCTION: &str = "[orchestrator] Completion \
+    self-report: end your response with exactly one of the following status markers \
+    on its own final line. The marker line is stripped automatically before the \
+    result is delivered, so include it even when instructed to output nothing but \
+    the answer body: <<STATUS:COMPLETED>> (done) / \
+    <<STATUS:NEEDS_INPUT reason=\"...\">> (human input required) / \
+    <<STATUS:FAILED reason=\"...\">> (cannot proceed)";
+
 impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Interpret one normalized hook signal (#138): resolve its task, record it
     /// idempotently, then drive the state machine per the signal's event.

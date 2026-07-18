@@ -593,16 +593,24 @@ fn prompt_marker(prompt: &str) -> String {
     squashed[start..].to_string()
 }
 
-/// Compose the agent prompt from the task (title + body + any extra context).
+/// Compose the agent prompt from the task (body + any extra context).
+///
+/// The title is typed only when there is no body: sources truncate it to a
+/// snippet (e.g. Slack's `TITLE_SNIPPET_CHARS`) and the body carries the full
+/// task text, so prepending the title would just show a cut-off duplicate line
+/// in the pane. A string `extra_context` is appended as raw text (not JSON — no
+/// surrounding quotes); non-string values keep their JSON rendering.
 fn compose_prompt(params: &TaskDispatchParams) -> String {
-    let mut prompt = params.task.title.clone();
-    if let Some(body) = &params.task.body {
-        prompt.push_str("\n\n");
-        prompt.push_str(body);
-    }
+    let mut prompt = match &params.task.body {
+        Some(body) => body.clone(),
+        None => params.task.title.clone(),
+    };
     if let Some(extra) = &params.extra_context {
         prompt.push_str("\n\n---\n");
-        prompt.push_str(&extra.to_string());
+        match extra {
+            Value::String(s) => prompt.push_str(s),
+            other => prompt.push_str(&other.to_string()),
+        }
     }
     prompt
 }
@@ -658,5 +666,59 @@ mod tests {
         // Slicing must land on a char boundary, not mid-codepoint.
         let marker = prompt_marker("質問です\n\nzsh の設定はどこにありますか？教えてください。");
         assert!(marker.ends_with("教えてください。"));
+    }
+
+    fn dispatch_params(title: &str, body: Option<&str>) -> TaskDispatchParams {
+        TaskDispatchParams {
+            task: plugin_protocol::task::Task {
+                id: "C1:1.0".into(),
+                source: "slack".into(),
+                title: title.into(),
+                body: body.map(str::to_string),
+                repo_hint: None,
+                labels: vec![],
+                priority: 0,
+                status: None,
+                url: None,
+                assignee: None,
+                thread_key: None,
+            },
+            worktree_path: "/wt".into(),
+            mode: plugin_protocol::methods::ExecutionMode::Plan,
+            extra_context: None,
+            job_id: None,
+            resume_session_id: None,
+            hook: None,
+        }
+    }
+
+    #[test]
+    fn compose_prompt_skips_the_truncated_title_when_a_body_exists() {
+        // Sources truncate the title to a snippet; the body carries the full
+        // text. Typing both showed a cut-off duplicate first line in the pane.
+        let params = dispatch_params(
+            "Slack: tomoya in #dev: エイリアスはどのフ",
+            Some("full task body"),
+        );
+        assert_eq!(compose_prompt(&params), "full task body");
+
+        // Title-only tasks still get a prompt.
+        let params = dispatch_params("bare title", None);
+        assert_eq!(compose_prompt(&params), "bare title");
+    }
+
+    #[test]
+    fn compose_prompt_appends_string_extra_context_as_raw_text() {
+        // A string extra_context (e.g. core's marker self-report instruction)
+        // must be typed as prose, not as a JSON literal with quotes.
+        let mut params = dispatch_params("t", Some("body"));
+        params.extra_context = Some(Value::String("最終行にマーカーを付けてください".into()));
+        let prompt = compose_prompt(&params);
+        assert_eq!(prompt, "body\n\n---\n最終行にマーカーを付けてください");
+        assert!(!prompt.contains('"'), "no JSON quoting around the text");
+
+        // Non-string values keep their JSON rendering.
+        params.extra_context = Some(serde_json::json!({"base": "main"}));
+        assert!(compose_prompt(&params).ends_with("---\n{\"base\":\"main\"}"));
     }
 }
