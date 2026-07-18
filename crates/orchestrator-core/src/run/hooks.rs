@@ -617,16 +617,39 @@ fn event_and_status_strings(event: &SignalEvent) -> (&'static str, Option<&'stat
     }
 }
 
-/// Remove every `<<STATUS:...>>` marker span from an assistant message, leaving
-/// the human-facing prose to publish (R-07/R-11). Markers may be inline (the
-/// hook greps them anywhere), so spans — not whole lines — are stripped.
+/// Remove every status-marker span from an assistant message, leaving the
+/// human-facing prose to publish (R-07/R-11). Markers may be inline (the hook
+/// greps them anywhere), so spans — not whole lines — are stripped. Mirrors
+/// `on-stop.sh`'s tolerance (#152, real-machine finding): agents routinely
+/// normalise the doubled angle brackets, so `<STATUS:...>` with one bracket on
+/// either side is a marker too — anything on-stop.sh reads as a marker must
+/// never leak into the published reply.
 fn strip_status_markers(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(start) = rest.find("<<STATUS:") {
+    while let Some(pos) = rest.find("STATUS:") {
+        // Consume up to 2 `<` immediately before the keyword; no `<` means this
+        // is prose mentioning STATUS:, not a marker.
+        let mut start = pos;
+        for _ in 0..2 {
+            if rest[..start].ends_with('<') {
+                start -= 1;
+            }
+        }
+        if start == pos {
+            out.push_str(&rest[..pos + "STATUS:".len()]);
+            rest = &rest[pos + "STATUS:".len()..];
+            continue;
+        }
         out.push_str(&rest[..start]);
-        match rest[start..].find(">>") {
-            Some(end) => rest = &rest[start + end + 2..],
+        match rest[pos..].find('>') {
+            Some(gt) => {
+                let mut end = pos + gt + 1;
+                if rest[end..].starts_with('>') {
+                    end += 1;
+                }
+                rest = &rest[end..];
+            }
             // Unterminated marker fragment: drop the remainder.
             None => {
                 rest = "";
@@ -658,6 +681,23 @@ mod tests {
         assert_eq!(strip_status_markers("  plain answer  "), "plain answer");
         // Unterminated fragment → dropped.
         assert_eq!(strip_status_markers("keep <<STATUS:oops"), "keep");
+    }
+
+    #[test]
+    fn strip_status_markers_removes_single_bracket_markers_too() {
+        // Real agents normalise the doubled brackets (#152); whatever on-stop.sh
+        // reads as a marker must not leak into the published reply.
+        assert_eq!(strip_status_markers("done\n<STATUS:COMPLETED>"), "done");
+        assert_eq!(strip_status_markers("done <<STATUS:COMPLETED>"), "done");
+        assert_eq!(
+            strip_status_markers("wait <STATUS:NEEDS_INPUT reason=\"branch?\">"),
+            "wait"
+        );
+        // Prose mentioning STATUS: without brackets is NOT a marker.
+        assert_eq!(
+            strip_status_markers("the STATUS: field is unrelated"),
+            "the STATUS: field is unrelated"
+        );
     }
 
     #[test]
