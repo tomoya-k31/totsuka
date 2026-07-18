@@ -210,14 +210,21 @@ pub async fn handle_approval_action<T: SlackTransport>(
     };
     state.set_draft_status(draft_id, status);
 
-    // Finalize both surfaces. The self-DM record is a persistent audit trail,
-    // so it keeps the final ✅/❌ view; the in-thread ephemeral is transient, so
-    // pressing either button deletes it outright.
+    // Finalize both surfaces. The self-DM record is a persistent audit trail;
+    // the in-thread ephemeral is transient, so pressing a button deletes it —
+    // *provided* the record survives to carry the ✅/❌ outcome. When the record
+    // is missing (self-DM unresolved at startup, or its post failed so `dm_ts`
+    // is None), the ephemeral is the only surface, so we replace it in place
+    // instead of erasing the outcome — otherwise a reject would leave no trace
+    // anywhere.
     let finalized = Draft { status, ..draft };
     let blocks = draft_blocks(&finalized, draft_id, source_name);
     let pressed_in_dm = press_channel(payload) == state.self_dm_channel().as_deref();
+    let ephemeral_is_sole_surface = finalized.dm_ts.is_none();
     if let Some(url) = response_url {
-        let body = if pressed_in_dm {
+        // Delete the ephemeral only when the press came from it AND a durable
+        // record exists elsewhere; every other case keeps the final view.
+        let body = if pressed_in_dm || ephemeral_is_sole_surface {
             json!({
                 "replace_original": true,
                 "text": final_fallback(status),

@@ -468,6 +468,40 @@ async fn press_from_the_self_dm_record_skips_the_redundant_update() {
 }
 
 #[tokio::test]
+async fn press_replaces_the_ephemeral_when_no_dm_record_exists() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    // The self-DM record fails to post → the in-thread ephemeral is the ONLY
+    // surface carrying the outcome, so a press must not erase it.
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": false, "error": "channel_not_found" })),
+    );
+    let (_srv, mut ws) = publish_draft_flow(&shared, &listener).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    send_and_await_ack(
+        &mut ws,
+        block_actions_envelope("e2", "reject_reply", &draft_id, "C1"),
+    )
+    .await;
+    wait_until("the sole-surface finalization", || {
+        !shared.posted_urls().is_empty()
+    })
+    .await;
+
+    // With no durable record, the ephemeral is replaced in place (❌ visible),
+    // not deleted — otherwise the rejection would leave no trace anywhere.
+    let posted = shared.posted_urls();
+    assert_eq!(posted[0].body["replace_original"], true);
+    assert!(posted[0].body.get("delete_original").is_none());
+    assert!(posted[0].body["blocks"].to_string().contains("却下済み"));
+    // No self-DM record existed, so nothing was chat.update'd.
+    assert!(requests_for(&shared, "chat.update").is_empty());
+}
+
+#[tokio::test]
 async fn one_failed_presentation_surface_is_tolerated() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
