@@ -51,6 +51,10 @@ struct FakeHerdr {
     deaf_enters: usize,
     /// `pane.get` reports a vanished pane.
     pane_gone: bool,
+    /// Only the final `pane.focus` reports a vanished pane — the pane
+    /// disappears *between* the liveness check and the focus chain's last
+    /// step (`session/focus` must degrade to `focused: false`, not error).
+    pane_focus_gone: bool,
     /// The pane's `agent_session` (drives transcript lookup), if reported.
     agent_session: Option<Value>,
     /// `pane.read` text for the `detection` source.
@@ -73,6 +77,7 @@ impl Default for FakeHerdr {
             deaf_sends: 0,
             deaf_enters: 0,
             pane_gone: false,
+            pane_focus_gone: false,
             agent_session: None,
             detection: "",
             empty_id_error_on_create: false,
@@ -198,13 +203,14 @@ impl FakeHerdr {
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
 
-            // The focus chain (`session/focus`, F-94). The pane can vanish
-            // between the liveness check and the final focus call — `pane_gone`
-            // fails the pane step the way the real herdr does.
+            // The focus chain (`session/focus`, F-94). `pane_gone` fails every
+            // pane-scoped call (so the `pane.get` liveness check stops the
+            // chain before it starts); `pane_focus_gone` fails only the final
+            // `pane.focus` — the pane vanished *after* the liveness check.
             "workspace.focus" | "tab.focus" => {
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
-            "pane.focus" if self.pane_gone => {
+            "pane.focus" if self.pane_gone || self.pane_focus_gone => {
                 reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
             }
             "pane.focus" => reply(&mut write_half, &id, json!({ "type": "ok" })).await,
@@ -782,6 +788,36 @@ async fn session_focus_reports_false_when_pane_gone() {
         !log.iter()
             .any(|r| { r["method"].as_str().is_some_and(|m| m.ends_with(".focus")) }),
         "no focus call may follow a failed liveness check"
+    );
+}
+
+#[tokio::test]
+async fn session_focus_reports_false_when_the_pane_vanishes_mid_chain() {
+    // The pane can vanish *between* the liveness check and the final focus
+    // call — the chain must degrade to `focused: false`, not an RPC error.
+    let (socket, requests) = FakeHerdr {
+        pane_focus_gone: true,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call("session/focus", json!({ "session_id": "w1:p1|agent-xyz" }))
+        .await;
+    assert!(
+        resp["error"].is_null(),
+        "should not be an RPC error: {resp}"
+    );
+    assert_eq!(resp["result"]["focused"], false);
+    // The chain ran up to the vanished pane: the containers were focused.
+    let log = requests.lock().unwrap();
+    assert!(
+        log.iter().any(|r| r["method"] == "workspace.focus")
+            && log.iter().any(|r| r["method"] == "tab.focus")
+            && log.iter().any(|r| r["method"] == "pane.focus"),
+        "the whole chain must have been attempted before the degrade"
     );
 }
 
