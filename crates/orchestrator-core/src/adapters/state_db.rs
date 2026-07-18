@@ -1173,6 +1173,99 @@ mod tests {
     }
 
     #[test]
+    fn migrates_v2_to_v3_preserving_hook_events() {
+        // A pre-existing v2 DB (4-col hook_events key, nullable status) must
+        // migrate to v3 in place: rows preserved (ids kept), a NULL status
+        // normalised to '', and the new 5-col key active so a block re-completion
+        // (UNKNOWN → COMPLETED, same key) records instead of being deduped.
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-migrate_v3", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+
+        // Build a v2 database by hand (schema_migrations pinned at 2).
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations \
+                 (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute_batch(MIGRATIONS[1]).unwrap();
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?1), (2, ?1)",
+                params![now()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO tasks
+                    (source, source_task_id, workflow, mode, state, priority,
+                     title, created_at, updated_at)
+                 VALUES ('slack','C:1','slack-reply','plan','dispatched',0,'legacy',?1,?1)",
+                params![now()],
+            )
+            .unwrap();
+            // A stop (status set) and a non-stop event whose status is NULL — v2
+            // allowed NULL for non-stop events.
+            conn.execute(
+                "INSERT INTO hook_events
+                    (id, job_id, task_id, claude_session_id, prompt_id, event, status,
+                     payload, received_at)
+                 VALUES (1,'job-1-1',1,'s','p','stop','UNKNOWN','{}',?1),
+                        (2,'job-1-1',1,'s','','session_start',NULL,'{}',?1)",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        // Reopen through StateDb: v3 applies and the old file is backed up.
+        let db = StateDb::open(&path).unwrap();
+        assert!(
+            PathBuf::from(format!("{}.bak", path.display())).exists(),
+            "existing DB backed up before migrating (§10.3)"
+        );
+
+        // Both v2 rows survive the rebuild; the NULL status is normalised to ''.
+        let (n, blanks): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*), SUM(CASE WHEN status = '' THEN 1 ELSE 0 END) FROM hook_events",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(n, 2, "both v2 rows survive the rebuild");
+        assert_eq!(blanks, 1, "the NULL status is normalised to ''");
+        let unknown_status: String = db
+            .conn
+            .query_row("SELECT status FROM hook_events WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(unknown_status, "UNKNOWN", "the stop status is preserved");
+
+        // The v3 5-col key is active: a COMPLETED re-completion sharing the seeded
+        // UNKNOWN stop's (job, session, prompt) is a NEW row, not a Duplicate.
+        let done = HookEventInsert {
+            job_id: "job-1-1".into(),
+            task_id: 1,
+            claude_session_id: "s".into(),
+            prompt_id: "p".into(),
+            event: "stop".into(),
+            status: Some("COMPLETED".into()),
+            payload: "{}".into(),
+        };
+        assert_eq!(db.record_hook_event(&done).unwrap(), HookEventOutcome::New);
+        assert_eq!(
+            db.record_hook_event(&done).unwrap(),
+            HookEventOutcome::Duplicate
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn record_hook_event_dedups_on_conflict() {
         let db = StateDb::open_in_memory().unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
