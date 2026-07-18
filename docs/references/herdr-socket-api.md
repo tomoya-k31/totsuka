@@ -4,7 +4,7 @@ title: herdr Socket API / 統合エージェント capability（外部一次情�
 description: herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124）設計の根拠。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。
 resource: https://herdr.dev/docs/socket-api/
 tags: [herdr, socket-api, integration, agent-ide, external]
-timestamp: 2026-07-17T00:00:00Z
+timestamp: 2026-07-19T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -48,8 +48,13 @@ herdr が管理プロセスへ注入する環境変数: `HERDR_SOCKET_PATH` / `H
 
 有効メソッド一覧（実機の `unknown variant` エラー列挙より）: `ping`, `server.*`, `notification.show`, `client.window_title.*`,
 `workspace.create|list|get|focus|rename|close`, `worktree.list|create|open|remove`, `tab.*`,
-`agent.list|get|read|explain|send|rename|focus|start`, `pane.split|swap|move|zoom|layout|process_info|neighbor|edges|focus_direction|resize|list|current|get|rename|send_text|send_keys|send_input|read|report_agent|report_agent_session|report_metadata|clear_agent_authority|release_agent|close|wait_for_output`,
+`agent.list|get|read|explain|send|rename|focus|start`, `pane.split|swap|move|zoom|layout|process_info|neighbor|edges|focus|focus_direction|resize|list|current|get|rename|send_text|send_keys|send_input|read|report_agent|report_agent_session|report_metadata|clear_agent_authority|release_agent|close|wait_for_output`,
 `events.subscribe|wait`, `layout.export|apply`, `integration.*`, `plugin.*`。
+
+**focus 系（#155 で `herdr api schema --json`（0.7.4）から確認・追記）**: `workspace.focus {workspace_id}` /
+`tab.focus {tab_id}` / `pane.focus {pane_id}` が存在する（params は各 id のみ、request スキーマの
+`WorkspaceTarget` / `TabTarget` / `PaneTarget`）。旧記載の pane メソッド列挙に `pane.focus` が漏れていた。
+agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3 つを外→内の順に呼ぶ。
 
 | メソッド | params（実測） | result（実測） |
 |---|---|---|

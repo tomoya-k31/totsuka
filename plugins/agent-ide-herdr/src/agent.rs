@@ -31,8 +31,8 @@
 //! `initialize` warns about.
 
 use plugin_protocol::methods::{
-    AgentState, DiagnosticsSnapshotResult, ExecutionMode, SessionAttachResult, StateNotification,
-    TaskDispatchParams, TaskDispatchResult,
+    AgentState, DiagnosticsSnapshotResult, ExecutionMode, SessionAttachResult, SessionFocusResult,
+    StateNotification, TaskDispatchParams, TaskDispatchResult,
 };
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -349,6 +349,59 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             )?;
         }
         Ok(())
+    }
+
+    /// Bring the session's pane to the foreground (`session/focus`, F-94):
+    /// confirm the pane is alive with `pane.get`, then focus outside-in —
+    /// workspace, tab, pane — so herdr lands on the right pane whichever
+    /// container was active. The GUI terminal itself is brought to the front
+    /// separately by the notifier (`-activate`); this only moves herdr's
+    /// focus. A vanished pane (or container) reports `focused: false` — a
+    /// notification clicked after the task's pane closed is a normal path,
+    /// not an error.
+    pub async fn focus(&self, session_id: &str) -> Result<SessionFocusResult, HerdrError> {
+        let handle = SessionHandle::decode(session_id);
+        let pane = match pane_record(&self.client, &handle.pane_id).await {
+            Ok(pane) => pane,
+            Err(e) if e.is_missing() => return Ok(SessionFocusResult { focused: false }),
+            Err(e) => return Err(e),
+        };
+        // Container ids come from the pane record; the workspace also falls
+        // back to the pane-id prefix (`w1:p2` lives in `w1`). A record without
+        // a tab id just skips the tab step — `pane.focus` still lands.
+        let workspace_id = pane
+            .get("workspace_id")
+            .and_then(Value::as_str)
+            .or_else(|| workspace_of(&handle.pane_id));
+        if let Some(workspace_id) = workspace_id
+            && !self
+                .focus_step("workspace.focus", json!({ "workspace_id": workspace_id }))
+                .await?
+        {
+            return Ok(SessionFocusResult { focused: false });
+        }
+        if let Some(tab_id) = pane.get("tab_id").and_then(Value::as_str)
+            && !self
+                .focus_step("tab.focus", json!({ "tab_id": tab_id }))
+                .await?
+        {
+            return Ok(SessionFocusResult { focused: false });
+        }
+        let focused = self
+            .focus_step("pane.focus", json!({ "pane_id": handle.pane_id }))
+            .await?;
+        Ok(SessionFocusResult { focused })
+    }
+
+    /// One focus call: `Ok(true)` on success, `Ok(false)` when the target is
+    /// gone (the pane/tab/workspace closed between the liveness check and this
+    /// call), and the error otherwise.
+    async fn focus_step(&self, method: &str, params: Value) -> Result<bool, HerdrError> {
+        match self.client.call(method, params).await {
+            Ok(_) => Ok(true),
+            Err(e) if e.is_missing() => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Capture the pane's screen for timeout/escalation diagnostics

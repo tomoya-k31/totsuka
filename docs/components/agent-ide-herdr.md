@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/設計プレビューを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman]
-timestamp: 2026-07-18T12:00:00Z
+timestamp: 2026-07-19T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -22,7 +22,7 @@ herdr socket は **JSON-RPC ではなく NDJSON**（1 行 1 メッセージ・`i
 | `config` | `plugins/herdr.toml`（= `InitializeParams.config`）を型付け。`socket_path` / `session`（解決順: `socket_path` > `session` 名 > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定 `~/.config/herdr/herdr.sock`、named session は `sessions/<name>/herdr.sock`）/ `agent_command`（pane で起動する CLI, F-31）/ `plan_args`（plan モードの追加引数, 既定 `--permission-mode plan`）/ `design_preview` / `request_timeout_secs`。`deny_unknown_fields` |
 | `state` | herdr `agent_status`→totsuka 正規化状態の写像（`working→running`・`blocked→waiting_input`・`done→done`・`unknown→前値維持`, F-32。**`session/attach` 専用**の写像で、タスク完了はもはやここを通らない — 完了検知はフックが担う）、`(pane_id, agent_session_id)` 復帰ハンドルの `session_id` 文字列へのエンコード（F-37）、`squash_ws`（`submit_prompt` の着弾確認に使う折り返し非依存の照合ヘルパ）。**質問/回答の画面抽出（旧 `extract_question` / `extract_answer`）は完了判定のフック移行に伴い削除**（#131） |
 | `transport` | `HerdrTransport` trait（`call` / `subscribe_events` / `events`）＋ `SocketTransport`。herdr の接続モデルに合わせ **リクエストごとに新規接続**（`call`）+ `events.subscribe` 専用の持続接続（reader タスクが `{event, data}` 封筒を broadcast へ転送）。broadcast はプロセス内の全購読で共有されるため、EOF 時の合成 close イベントは**購読対象 pane ごとに `data.pane_id` 付きで**発行し、他タスクを巻き込まない。`invalid_request` の `id:""` エラーも接続単位で相関。ロジックを fake herdr でテストするための seam |
-| `agent` | `HerdrAgent<T: HerdrTransport>`。`dispatch`（`workspace.create`→`agent.start`（プロンプトなし）→`submit_prompt`→ハンドル返却, F-31/F-37。**プロンプトは `compose_prompt` = `extra_context`（前文）＋ body（無ければ title）**: source が切り詰めた snippet title は body があるとき打たない（ペイン先頭の切れた重複行をなくす）。string の `extra_context`（core のマーカー自己申告指示など）は JSON 引用符なしの生テキストとして `---` 区切りの**前文**に置く — `submit_prompt` の着弾確認はプロンプト**末尾**の画面照合（`prompt_marker`）であり、定数の指示文を末尾に置くと全 dispatch の末尾が同一化して `--resume` ペインの前ターン描画に誤マッチするため、一意なタスク本文を末尾に保つ。**0.1.3: `hook` 指定時に env を `workspace.create`/`agent.start` へ注入し、argv に `--settings <settings_path>` を付与。`resume_session_id` 指定時は `--resume <id>` も付与**）/ `attach`（`pane.get` で pane 生存確認・消失（`pane_not_found`）は `attached:false`, F-37）/ `cancel`（`pane.send_keys ["ctrl+c"]`→`pane.close`→**タスクの workspace も close**（pane id `w1:p2` の接頭辞が workspace id。dispatch が workspace を作る以上、pane だけ閉じると空の workspace が残る）, 冪等 — Done 時の pane 自動 close は Orchestrator がこの冪等 cancel を呼んで実現する, D-10）/ `snapshot`（**0.1.3: `diagnostics/snapshot`**。`pane.read`（`recent`）で画面テキストを返す。pane 消失は `text: None` でエラーにしない, R-10）/ `start_state_stream`（`events.subscribe`→**`pane.exited` デッドマン専用**に縮退。異常終了→`Failed`, F-38） |
+| `agent` | `HerdrAgent<T: HerdrTransport>`。`dispatch`（`workspace.create`→`agent.start`（プロンプトなし）→`submit_prompt`→ハンドル返却, F-31/F-37。**プロンプトは `compose_prompt` = `extra_context`（前文）＋ body（無ければ title）**: source が切り詰めた snippet title は body があるとき打たない（ペイン先頭の切れた重複行をなくす）。string の `extra_context`（core のマーカー自己申告指示など）は JSON 引用符なしの生テキストとして `---` 区切りの**前文**に置く — `submit_prompt` の着弾確認はプロンプト**末尾**の画面照合（`prompt_marker`）であり、定数の指示文を末尾に置くと全 dispatch の末尾が同一化して `--resume` ペインの前ターン描画に誤マッチするため、一意なタスク本文を末尾に保つ。**0.1.3: `hook` 指定時に env を `workspace.create`/`agent.start` へ注入し、argv に `--settings <settings_path>` を付与。`resume_session_id` 指定時は `--resume <id>` も付与**）/ `attach`（`pane.get` で pane 生存確認・消失（`pane_not_found`）は `attached:false`, F-37）/ `cancel`（`pane.send_keys ["ctrl+c"]`→`pane.close`→**タスクの workspace も close**（pane id `w1:p2` の接頭辞が workspace id。dispatch が workspace を作る以上、pane だけ閉じると空の workspace が残る）, 冪等 — Done 時の pane 自動 close は Orchestrator がこの冪等 cancel を呼んで実現する, D-10）/ `snapshot`（**0.1.3: `diagnostics/snapshot`**。`pane.read`（`recent`）で画面テキストを返す。pane 消失は `text: None` でエラーにしない, R-10）/ `focus`（**0.1.4: `session/focus`**。`pane.get` 生存確認 → `workspace.focus`→`tab.focus`→`pane.focus` の外→内チェーン。pane/コンテナ消失は `focused: false` でエラーにしない, F-94）/ `start_state_stream`（`events.subscribe`→**`pane.exited` デッドマン専用**に縮退。異常終了→`Failed`, F-38） |
 
 | `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。応答と push 通知（`state/notification`）を mpsc ラインチャネルへ送出（main が stdout へ、テストはバッファへ排出）。未初期化メソッドは拒否 |
 | `main` | `#[tokio::main]`。専用 writer タスクが stdout を単独所有し、応答と通知が行途中で交錯しないよう直列化。stdin ループが `SocketFactory`（実ソケット接続）を配線 |
@@ -62,6 +62,10 @@ env 注入・フックの内容は**プラグインにとって不透明**（Orc
 
 `diagnostics/snapshot`（O→P、`diagnostics_snapshot` capability）はタイムアウト/エスカレーション診断のために pane 画面をキャプチャする。`pane.read`（`source = recent`）で画面テキストを返し、pane 消失（や読み取り失敗）は `text: None` で返す — **取得失敗はエラーにしない**ため、Orchestrator のエスカレーション経路がスナップショット不能で失敗することはない。
 
+# session/focus（F-94, 0.1.4）
+
+`session/focus`（O→P、`pane_control` capability。[ADR-0005](/decisions/adr-0005-click-to-focus.md)）は通知 click-to-focus のために対象セッションの pane を herdr 内で前面化する。`pane.get` で生存確認し、pane record の `workspace_id` / `tab_id`（workspace は pane id 接頭辞へフォールバック）を使って **`workspace.focus` → `tab.focus` → `pane.focus` を外→内の順**に呼ぶ（3 メソッドとも herdr 0.7.4 の `herdr api schema --json` で実在確認済み。params は各 id のみ）。pane・コンテナの消失（`*_not_found`）はどの段でも `focused: false` で返し**エラーにしない**（タスク終了後の通知クリックは正常系）。GUI ターミナル自体の前面化は notifier（terminal-notifier `-activate`）の責務で、このプラグインは herdr 内フォーカスのみを担う。
+
 # capabilities（F-33）
 
 manifest（`plugins/agent-ide-herdr/plugin.toml`）と `initialize` 応答で `kind = agent_ide`・`plan_mode` / `design_preview` / `pane_control` / `state_stream` に加え、**0.1.3 で `resume_session`（`--resume` セッション再開）/ `diagnostics_snapshot`（`diagnostics/snapshot`）**を宣言する（両者は一致させる）。
@@ -73,7 +77,7 @@ manifest（`plugins/agent-ide-herdr/plugin.toml`）と `initialize` 応答で `k
 # テスト
 
 - 状態写像・復帰ハンドル・`squash_ws`・プロンプト末尾マーカー・exit 分類は純関数として単体テスト。
-- **実 Unix ソケットの fake herdr サーバ**に対する結合テスト（`tests/integration.rs`）。fake は実機を模す: **応答後に接続を閉じる**接続モデル、`{event, data}` 封筒（**ドット/アンダースコア混在**の実イベント名）、そして**入力に反応できるまで `agent.send` / Enter を落とす CLI**（= 実機の起動レース）。dispatch がその race を自己修正して完走すること・始動しない CLI では**エラーで失敗する**こと・**フック env が `workspace.create`/`agent.start` に乗り `--settings`/`--resume` が argv に入ること**・**`pane.agent_status_changed` を送っても通知が出ないこと（縮退の固定化）**・`pane.exited` 非 0/コード無し→`Failed`・clean exit（0）は通知なし・`diagnostics/snapshot` の正常/pane 消失（`text: null`）両応答・他 pane の replay と close 通知を無視すること・`id:""` エラーの即時相関・session/attach の成功と pane 消失（`pane_not_found`→`attached:false`）・`config/validate` の疎通（ping）を検証。
+- **実 Unix ソケットの fake herdr サーバ**に対する結合テスト（`tests/integration.rs`）。fake は実機を模す: **応答後に接続を閉じる**接続モデル、`{event, data}` 封筒（**ドット/アンダースコア混在**の実イベント名）、そして**入力に反応できるまで `agent.send` / Enter を落とす CLI**（= 実機の起動レース）。dispatch がその race を自己修正して完走すること・始動しない CLI では**エラーで失敗する**こと・**フック env が `workspace.create`/`agent.start` に乗り `--settings`/`--resume` が argv に入ること**・**`pane.agent_status_changed` を送っても通知が出ないこと（縮退の固定化）**・`pane.exited` 非 0/コード無し→`Failed`・clean exit（0）は通知なし・`diagnostics/snapshot` の正常/pane 消失（`text: null`）両応答・**`session/focus` のフォーカスチェーン（`pane.get` 先行 + workspace→tab→pane の順序と params）と pane 消失（`focused:false`・フォーカス呼び出しゼロ）**・他 pane の replay と close 通知を無視すること・`id:""` エラーの即時相関・session/attach の成功と pane 消失（`pane_not_found`→`attached:false`）・`config/validate` の疎通（ping）を検証。
 - **実機手動チェック**（受け入れ #2）: 実 herdr + 実 Claude Code で `--settings` 付き pane 起動 → フック発火 → env（`TOTSUKA_JOB_ID`）がフックスクリプトから見えること（#123 検収環境）は issue #139 のコメントにチェックリストとして整理。
 
 # 依存
