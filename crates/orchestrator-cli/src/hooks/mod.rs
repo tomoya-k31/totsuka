@@ -41,6 +41,14 @@ const HOOK_SCRIPTS: &[(&str, &str)] = &[
 /// "llm"` workflow sets no `rubric` of its own.
 pub const DEFAULT_RUBRIC: &str = "作業が指示された要件を実際に満たしているかを、対象リポジトリの現在のコードと状態に基づいて検証してください。表面的な自己申告ではなく、変更が意図どおり機能し破綻や取りこぼしがないことを確認してください。";
 
+/// Intermediate-Stop exemption for the `prompt`-type hook, mirroring
+/// `on-stop.sh`'s R-02/D-12 rule: a Stop with background tasks still running is
+/// a heartbeat, not a completion claim. Without this the judge blocks every
+/// such Stop — the pane shows a spurious "Stop hook error" and the session is
+/// forced to busy-wait in-turn instead of yielding to the task-notification
+/// re-invoke (real-machine finding on the `slack-reply` workflow).
+const BACKGROUND_EXEMPTION: &str = "ただし、バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止は完了申告ではありません。その場合は検証もブロックも行わず停止を許可してください。完了判定はバックグラウンドタスクが残っていない停止に対してのみ行います。";
+
 /// Appended to the rubric so the verifying model re-emits the status marker the
 /// `on-stop.sh` command hook parses (D-12).
 const MARKER_CONVENTION: &str = "検証結果を踏まえ、応答の最終行に必ず次のいずれかのマーカーを付けてください: <<STATUS:COMPLETED>> / <<STATUS:NEEDS_INPUT reason=\"...\">> / <<STATUS:FAILED reason=\"...\">>";
@@ -175,7 +183,7 @@ pub fn render_settings(dir: &Path, wf: &WorkflowConfig) -> String {
     })];
     if wf.verification == VerificationMode::Llm {
         let rubric = wf.rubric.as_deref().unwrap_or(DEFAULT_RUBRIC);
-        let prompt = format!("{rubric}\n\n{MARKER_CONVENTION}");
+        let prompt = format!("{rubric}\n\n{BACKGROUND_EXEMPTION}\n\n{MARKER_CONVENTION}");
         stop.push(json!({
             "hooks": [{ "type": "prompt", "prompt": prompt, "timeout": 60 }]
         }));
@@ -690,6 +698,10 @@ verification = "llm"
         let text = prompt["prompt"].as_str().unwrap();
         assert!(text.contains(DEFAULT_RUBRIC), "default rubric embedded");
         assert!(
+            text.contains(BACKGROUND_EXEMPTION),
+            "R-02 intermediate-stop exemption embedded"
+        );
+        assert!(
             text.contains("<<STATUS:COMPLETED>>"),
             "marker convention embedded"
         );
@@ -717,6 +729,10 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
         assert!(
             !text.contains(DEFAULT_RUBRIC),
             "custom rubric replaces default"
+        );
+        assert!(
+            text.contains(BACKGROUND_EXEMPTION),
+            "exemption is appended even with a custom rubric"
         );
     }
 
