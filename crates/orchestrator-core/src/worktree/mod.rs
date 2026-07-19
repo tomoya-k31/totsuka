@@ -22,8 +22,8 @@ pub const DEFAULT_LOCATION_TEMPLATE: &str =
 
 /// How many times to retry a git command that hit transient contention
 /// (lock files, mid-creation worktree reads), and the backoff.
-const GIT_LOCK_RETRIES: u32 = 5;
-const GIT_LOCK_BACKOFF_MS: u64 = 50;
+const GIT_TRANSIENT_RETRIES: u32 = 5;
+const GIT_TRANSIENT_BACKOFF_MS: u64 = 50;
 
 /// Errors from worktree operations.
 #[derive(Debug, thiserror::Error)]
@@ -256,7 +256,7 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// absorbed by a short retry (§5.5).
     pub fn create(&self, req: &CreateRequest<'_>) -> Result<Worktree, WorktreeError> {
         // F-25: always fetch first so we branch off fresh remote state.
-        let fetch = self.run_with_lock_retry(req.repo_path, &["fetch", "origin"])?;
+        let fetch = self.run_with_transient_retry(req.repo_path, &["fetch", "origin"])?;
         if !fetch.success() {
             return Err(WorktreeError::Fetch {
                 repo: req.repo_path.display().to_string(),
@@ -297,7 +297,7 @@ impl<G: GitRunner> WorktreeManager<G> {
         }
 
         let path_str = path.display().to_string();
-        let add = self.run_with_lock_retry(
+        let add = self.run_with_transient_retry(
             req.repo_path,
             &["worktree", "add", &path_str, "-b", &branch, &base_commit],
         )?;
@@ -348,7 +348,8 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// Push the worktree's branch to `origin`, setting upstream (F-86). The
     /// Orchestrator — never the agent — performs the push.
     pub fn push_branch(&self, worktree_path: &Path, branch: &str) -> Result<(), WorktreeError> {
-        let out = self.run_with_lock_retry(worktree_path, &["push", "-u", "origin", branch])?;
+        let out =
+            self.run_with_transient_retry(worktree_path, &["push", "-u", "origin", branch])?;
         if !out.success() {
             return Err(WorktreeError::Git {
                 command: "push".to_string(),
@@ -392,7 +393,8 @@ impl<G: GitRunner> WorktreeManager<G> {
         }
 
         let path_str = worktree_path.display().to_string();
-        let remove = self.run_with_lock_retry(repo_path, &["worktree", "remove", &path_str])?;
+        let remove =
+            self.run_with_transient_retry(repo_path, &["worktree", "remove", &path_str])?;
         if !remove.success() {
             return Err(WorktreeError::Git {
                 command: "worktree remove".to_string(),
@@ -459,7 +461,7 @@ impl<G: GitRunner> WorktreeManager<G> {
     }
 
     /// Run a git command, retrying briefly on transient contention (§5.5).
-    fn run_with_lock_retry(
+    fn run_with_transient_retry(
         &self,
         cwd: &Path,
         args: &[&str],
@@ -467,13 +469,15 @@ impl<G: GitRunner> WorktreeManager<G> {
         let mut attempt = 0;
         loop {
             let out = self.git.run(cwd, args)?;
-            if out.success() || !is_transient_git_error(&out.stderr) || attempt >= GIT_LOCK_RETRIES
+            if out.success()
+                || !is_transient_git_error(&out.stderr)
+                || attempt >= GIT_TRANSIENT_RETRIES
             {
                 return Ok(out);
             }
             attempt += 1;
             std::thread::sleep(std::time::Duration::from_millis(
-                GIT_LOCK_BACKOFF_MS * attempt as u64,
+                GIT_TRANSIENT_BACKOFF_MS * attempt as u64,
             ));
         }
     }
