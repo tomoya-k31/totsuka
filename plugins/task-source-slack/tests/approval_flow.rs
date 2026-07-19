@@ -100,6 +100,12 @@ DEBUG: shutting down
 const EXPECTED_REPLY: &str =
     "調査しました。原因は環境変数 FOO の欠落です。\n`.env` に FOO を追加してください。";
 
+/// [`EXPECTED_REPLY`] as actually posted: mechanically prefixed with a
+/// mention of the asker (`U_OTHER`, per [`mention_envelope`]).
+fn expected_posted_reply() -> String {
+    format!("<@U_OTHER> {EXPECTED_REPLY}")
+}
+
 /// Drive initialize → mention → fetch → result/publish, returning the server
 /// (kept alive: dropping it aborts the runtime).
 async fn publish_draft_flow(
@@ -247,7 +253,7 @@ async fn approve_posts_the_reply_and_finalizes_both_views_once() {
     let body = reply.body.as_ref().unwrap();
     assert_eq!(body["channel"], "C1");
     assert_eq!(body["thread_ts"], "100.0");
-    assert_eq!(body["text"], EXPECTED_REPLY);
+    assert_eq!(body["text"], expected_posted_reply());
     assert!(body["blocks"].is_null(), "{body}");
 
     // The pressed in-thread ephemeral was deleted outright…
@@ -399,7 +405,10 @@ async fn send_failure_keeps_the_draft_retryable() {
     })
     .await;
     let reply = &requests_for(&shared, "chat.postMessage")[2];
-    assert_eq!(reply.body.as_ref().unwrap()["text"], EXPECTED_REPLY);
+    assert_eq!(
+        reply.body.as_ref().unwrap()["text"],
+        expected_posted_reply()
+    );
 }
 
 #[tokio::test]

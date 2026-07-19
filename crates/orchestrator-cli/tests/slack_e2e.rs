@@ -572,8 +572,9 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
     });
     assert_eq!(reply.bearer, "xoxp-e2e-user");
     assert_eq!(reply.form["channel"], "C1");
-    // The mock agent streamed exactly one log chunk; publish trims nothing.
-    assert_eq!(reply.form["text"], "compiling...");
+    // The mock agent streamed exactly one log chunk; publish trims nothing
+    // beyond the mechanical `<@asker>` mention prefix.
+    assert_eq!(reply.form["text"], "<@U_OTHER> compiling...");
     assert!(!reply.form.contains_key("blocks"));
 
     // Both draft surfaces were finalized: the pressed ephemeral through its

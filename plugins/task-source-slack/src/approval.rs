@@ -52,6 +52,9 @@ pub async fn publish_draft<T: SlackTransport>(
              mention?) → the reply cannot be placed; re-trigger from a fresh mention"
         ));
     };
+    // Mechanically (not LLM-authored) prefix a mention of the asker, so the
+    // reply notifies them like a normal Slack reply would.
+    let text = format!("<@{}> {text}", pending.sender_id);
 
     let draft = Draft {
         task_id: task_id.to_string(),
