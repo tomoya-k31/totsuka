@@ -1,6 +1,9 @@
 # Bundle Update Log
 
 ## 2026-07-19
+* **Creation**: [ADR-0007 CI 実行タイミングの再設計（Actions コスト最適化）](/decisions/adr-0007-ci-cost-optimization.md)。無料枠 3,000 分/月に対し推計 3,500 分/月に達したため、品質ゲートの内容は変えず実行タイミングを再設計（PR = clippy+rustfmt / test、main push = coverage のみ、audit は `audit.yml` へ分離し日次 cron + 依存ファイル変更 PR、全ワークフローに concurrency）。推計 1,900 分/月へ削減。
+* **Update**: [テスト戦略](/quality/test-strategy.md) — 「CI 品質ゲート」節を ADR-0007 の実行タイミング（毎 PR / main push / 日次 cron の 3 区分）に合わせて更新。
+* **Update**: [ADR-0002](/decisions/adr-0002-rust-workspace-ci.md) — Status に「CI 実行タイミングは ADR-0007 で一部変更（品質ゲートの内容は不変）」の前方参照を追記。
 * **Update**: [task-source-slack](/components/task-source-slack.md) — 承認済み返信の投稿テキストに、送信者への `<@sender_id> ` メンションを機械的に（LLM を介さない決定的コードで）前置するように変更。`Mention.user` を `PendingMention.sender_id` として保持し、`approval::publish_draft` が `result/publish` の抽出済み返信文の先頭に付与してから `Draft` に保存する（下書きプレビューと実送信テキストが一致）。`approval_flow` の関連テストと CLI レベル E2E（`slack_e2e.rs`）を新しい投稿テキストに合わせて更新。
 * **Creation**: [ADR-0006 シークレット参照に 1Password (op://) を第 2 バックエンドとして追加する](/decisions/adr-0006-onepassword-secret-backend.md)（#156）。`op://<vault>/<item>/<field>` を第 3 の参照スキームとして追加し、1Password CLI（`op read --no-newline`）へのシェルアウトで解決する決定を ADR 化（SDK/Connect 不採用、対話アンロック前提・Service Account は後続、eager 検証なしの従来方針踏襲、per-ref 解決のトレードオフ、非 macOS 初の実働バックエンドという副次効果）。
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) / [設定リファレンス](/development/config-reference.md) — `op://` バックエンドの実装（#156）。`SecretRef` を enum 化（`Keychain`/`OnePassword`、URI は verbatim 保持）し `SecretError::BackendUnavailable` を新設、`platform/onepassword.rs`（cfg ゲートなし・runner seam・stderr のみで分類し stdout の平文は決して出さない §5.2）、`PlatformSecretStore` を variant 振り分けの合成ストアへ再定義、`resolve.rs` の参照判定に `op://` を追加。CLI は `resolve_strings` をストアジェネリック化、doctor に設定へ `op://` があるときのみ発火する `op --version`/`op whoami`（非プロンプト）検査、init 雛形に `op://` 例。既存 `keychain:`/`${ENV}` は挙動不変（後方互換テスト維持）。

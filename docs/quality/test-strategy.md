@@ -4,7 +4,7 @@ title: テスト戦略（自動結合テスト / E2E / モックプラグイン�
 description: totsuka のテスト層（ユニット・実プロセス結合・バイナリE2E）とモックプラグインによるシナリオ注入、フレーク対策、CI 品質ゲートの定義。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates
 tags: [testing, e2e, integration, mock, ci, quality, slack]
-timestamp: 2026-07-15T15:00:00Z
+timestamp: 2026-07-19T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -54,7 +54,13 @@ owner: tomoya-k31
 
 # CI 品質ゲート
 
-`.github/workflows/ci.yml`（#45）で `rustfmt` / `clippy -D warnings` / `test`（全層）/ `cargo-audit` / `cargo-deny` / `coverage(llvm-cov)` を実行。docs を変更する PR では `.github/workflows/okf-lint.yml`（`lint` ジョブ）が OKF lint を実行する。マージ前に全て緑を必須とする。
+チェック内容は #45 のまま、実行タイミングはコスト最適化のため [ADR-0007](/decisions/adr-0007-ci-cost-optimization.md) で再設計した。
+
+- **毎 PR**（`ci.yml`）: `clippy / rustfmt`（1 ジョブ）と `test`（全層）。`okf-lint.yml`（`lint` ジョブ、唯一の必須チェック）は全 PR で OKF lint を実行する。
+- **main への push**（`ci.yml`）: `coverage (llvm-cov)` のみ。計装ビルドで全テストスイートを実行するため、マージごとのテスト検証を兼ねる（カバレッジはアーティファクト化のみ、閾値ゲートなし）。
+- **日次 cron + 依存ファイル変更 PR**（`audit.yml`）: `cargo-audit` / `cargo-deny`。
+
+PR で報告されるチェックが全て緑になるまでマージしない。
 
 # 手動チェック
 
