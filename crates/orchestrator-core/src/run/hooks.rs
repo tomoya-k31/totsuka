@@ -47,13 +47,30 @@ use crate::ports::signal_ingress::FocusOutcome;
 /// #131). The `on-stop.sh` block stays as the safety net for when the agent
 /// still forgets. The marker line is stripped from the publish artifact
 /// ([`strip_status_markers`]), so it never reaches the task source.
+///
+/// The instruction also spells out the delivery contract (real-machine finding
+/// on the `slack-reply` workflow): ONLY the marker-bearing final message is
+/// published ([`Engine::on_stop_completed`] stashes that one message as the
+/// artifact — R-07/R-11), so it must be a self-contained answer, never a
+/// reference to an earlier pane message. And while background tasks are still
+/// running, no marker: that Stop is a heartbeat (R-02) and the session is
+/// re-invoked when they finish — an agent that marked the earlier turn
+/// "completed" tends to answer the re-invoke with "already answered above",
+/// which then becomes the published reply.
 pub(crate) const MARKER_SELF_REPORT_INSTRUCTION: &str = "[orchestrator] Completion \
-    self-report: end your response with exactly one of the following status markers \
-    on its own final line. The marker line is stripped automatically before the \
-    result is delivered, so include it even when instructed to output nothing but \
-    the answer body: <<STATUS:COMPLETED>> (done) / \
+    self-report: end your FINAL response with exactly one of the following status \
+    markers on its own final line. The marker line is stripped automatically before \
+    the result is delivered, so include it even when instructed to output nothing \
+    but the answer body: <<STATUS:COMPLETED>> (done) / \
     <<STATUS:NEEDS_INPUT reason=\"...\">> (human input required) / \
-    <<STATUS:FAILED reason=\"...\">> (cannot proceed)";
+    <<STATUS:FAILED reason=\"...\">> (cannot proceed). \
+    Delivery contract: ONLY the message carrying the marker is delivered to the \
+    requester — earlier messages in this session are NEVER delivered. The \
+    marker-bearing message must therefore contain the complete, self-contained \
+    answer; never refer to a previous message (no \"as stated above\" / \"already \
+    answered earlier\"). While background tasks or subagents are still running, do \
+    NOT emit a marker — that turn is intermediate and you will be re-invoked when \
+    they finish; restate the full final answer with the marker then.";
 
 impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Interpret one normalized hook signal (#138): resolve its task, record it

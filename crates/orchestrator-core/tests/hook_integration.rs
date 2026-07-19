@@ -849,6 +849,15 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         ctx.contains("<<STATUS:COMPLETED>>") && ctx.contains("NEEDS_INPUT"),
         "prompt context states the marker convention: {ctx}"
     );
+    // Delivery contract (slack-reply real-machine finding): only the
+    // marker-bearing final message is published, so it must be self-contained,
+    // and no marker may be emitted while background tasks are still running
+    // (that Stop is a heartbeat and the session gets re-invoked).
+    assert!(
+        ctx.contains("ONLY the message carrying the marker")
+            && ctx.contains("do NOT emit a marker"),
+        "prompt context states the delivery contract: {ctx}"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 
