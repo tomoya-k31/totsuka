@@ -158,6 +158,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         check_hooks(cx, cfg, &env, &mut checks);
         check_plugins(cx, cfg, &env, &mut checks);
         check_llm_key(cfg, &env, &mut checks);
+        check_onepassword(cx, &env, &mut checks);
         check_orphans(cfg, &env, db.as_ref(), json, &mut checks)?;
     }
 
@@ -188,6 +189,99 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         return Err("doctor found problems → follow the actions above".into());
     }
     Ok(())
+}
+
+/// 1Password backend probes (#156), fired **only when** `config.toml` or a
+/// `plugins/*.toml` actually contains an `op://` reference: `op --version`
+/// (CLI present) and `op whoami` (session established — unlike `op read`, it
+/// never triggers a biometric prompt). No `op://` in config ⇒ no checks.
+fn check_onepassword(cx: &Cx, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
+    if !config_mentions_onepassword(cx) {
+        return;
+    }
+    let Some(op) = which("op", env) else {
+        checks.push(Check::fail(
+            "1password",
+            "config references op:// secrets but the 1Password CLI (op) is not on PATH",
+            "install it (macOS: `brew install 1password-cli`, other platforms: \
+             https://developer.1password.com/docs/cli) or switch the references to \
+             `keychain:` / `${ENV}`",
+        ));
+        return;
+    };
+    match std::process::Command::new(&op).arg("--version").output() {
+        Ok(out) if out.status.success() => {
+            let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            checks.push(Check::ok("1password", format!("op {version} on PATH")));
+        }
+        Ok(out) => {
+            checks.push(Check::fail(
+                "1password",
+                format!(
+                    "`op --version` exited with {}",
+                    out.status.code().unwrap_or(-1)
+                ),
+                "reinstall the 1Password CLI (macOS: `brew reinstall 1password-cli`)",
+            ));
+            return;
+        }
+        Err(e) => {
+            checks.push(Check::fail(
+                "1password",
+                format!("cannot run `op`: {e}"),
+                "install the 1Password CLI (macOS: `brew install 1password-cli`, \
+                 other platforms: https://developer.1password.com/docs/cli)",
+            ));
+            return;
+        }
+    }
+    // Session check: `op whoami` fails when not signed in, without prompting.
+    match std::process::Command::new(&op).arg("whoami").output() {
+        Ok(out) if out.status.success() => {
+            checks.push(Check::ok("1password-session", "op session is active"));
+        }
+        _ => {
+            checks.push(Check::warn(
+                "1password-session",
+                "no active 1Password session",
+                "run `op signin` before `totsuka run` so op:// references resolve",
+            ));
+        }
+    }
+}
+
+/// Whether `config.toml` or any `plugins/*.toml` contains an `op://` secret
+/// reference in an **actual string value** (resolution stays lazy, this only
+/// gates doctor). Each file is TOML-parsed and its string leaves walked, so a
+/// commented-out example — like the one `totsuka init` generates — never
+/// triggers the 1Password checks.
+fn config_mentions_onepassword(cx: &Cx) -> bool {
+    let mut sources: Vec<PathBuf> = vec![cx.config_path.clone()];
+    if let Ok(entries) = std::fs::read_dir(cx.plugin_config_dir()) {
+        sources.extend(
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "toml")),
+        );
+    }
+    sources.iter().any(|path| {
+        std::fs::read_to_string(path).is_ok_and(|content| {
+            content
+                .parse::<toml::Value>()
+                .is_ok_and(|value| toml_has_op_reference(&value))
+        })
+    })
+}
+
+/// Whether any string leaf of a TOML value starts with `op://`.
+fn toml_has_op_reference(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::String(s) => s.starts_with("op://"),
+        toml::Value::Array(items) => items.iter().any(toml_has_op_reference),
+        toml::Value::Table(table) => table.values().any(toml_has_op_reference),
+        _ => false,
+    }
 }
 
 /// All Claude Code hook-mechanism probes (#141): assets, script dependencies,
@@ -269,12 +363,19 @@ fn check_hook_token(cfg: &RootConfig, env: &HashMap<String, String>, checks: &mu
             "[hooks].auth_token_ref is unset → hook POSTs are accepted on the 0600 socket without a Bearer token",
             "set [hooks].auth_token_ref (e.g. keychain:totsuka/hook-token) before using a hook-capable agent",
         )),
+        // `op://` is deliberately not resolved here (a real `op read` can
+        // prompt for biometrics / hang unattended); the 1password probes
+        // check presence + session without prompting (ADR-0006).
+        Some(reference) if reference.starts_with("op://") => checks.push(Check::ok(
+            "hook-token",
+            "[hooks].auth_token_ref is an op:// reference (checked by the 1password probes, not resolved here)",
+        )),
         Some(reference) => match secret_resolver(env).resolve(reference) {
             Ok(_) => checks.push(Check::ok("hook-token", "[hooks].auth_token_ref resolves")),
             Err(e) => checks.push(Check::fail(
                 "hook-token",
                 format!("[hooks].auth_token_ref does not resolve: {e}"),
-                "export the referenced env var or store the token in the Keychain",
+                "export the referenced env var, store the token in the Keychain, or use an op:// reference",
             )),
         },
     }
@@ -593,12 +694,23 @@ fn check_llm_key(cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut V
         checks.push(Check::ok("llm", "[llm] configured without api_key_ref"));
         return;
     };
+    // An `op://` reference is NOT resolved here: `op read` may pop a
+    // biometric prompt (or hang unattended), and doctor must stay
+    // non-interactive. The dedicated 1password checks cover op presence +
+    // session without prompting (ADR-0006).
+    if reference.starts_with("op://") {
+        checks.push(Check::ok(
+            "llm",
+            "api_key_ref is an op:// reference (checked by the 1password probes, not resolved here)",
+        ));
+        return;
+    }
     match secret_resolver(env).resolve(reference) {
         Ok(_) => checks.push(Check::ok("llm", "api_key_ref resolves")),
         Err(e) => checks.push(Check::fail(
             "llm",
             format!("api_key_ref does not resolve: {e}"),
-            "export the variable or store the key in the Keychain",
+            "export the variable, store the key in the Keychain, or use an op:// reference",
         )),
     }
 }

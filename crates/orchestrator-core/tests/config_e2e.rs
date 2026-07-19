@@ -19,9 +19,24 @@ struct EmptyStore;
 impl SecretStore for EmptyStore {
     fn get(&self, r: &SecretRef) -> Result<SecretString, SecretError> {
         Err(SecretError::NotFound {
-            service: r.service().to_string(),
-            account: r.account().to_string(),
+            reference: r.to_string(),
         })
+    }
+}
+
+/// A store answering one 1Password reference — the e2e stand-in for a fake
+/// `op read` runner (the real wiring is `PlatformSecretStore`'s composite).
+struct OpStore;
+impl SecretStore for OpStore {
+    fn get(&self, r: &SecretRef) -> Result<SecretString, SecretError> {
+        match r {
+            SecretRef::OnePassword { uri } if uri == "op://Dev/Slack/user_token" => {
+                Ok(SecretString::new("xoxp-from-op"))
+            }
+            _ => Err(SecretError::NotFound {
+                reference: r.to_string(),
+            }),
+        }
     }
 }
 
@@ -68,6 +83,7 @@ on_success = {{ set_status = "レビュー待ち" }}
 socket_path = "${XDG_RUNTIME_DIR}/herdr.sock"
 design_preview = "side_pane"
 api_key_ref = "${HERDR_TOKEN}"
+user_token = "op://Dev/Slack/user_token"
 "#;
     let plugin_path = tmp.join("herdr.toml");
     fs::write(&plugin_path, plugin_toml).unwrap();
@@ -96,6 +112,14 @@ api_key_ref = "${HERDR_TOKEN}"
     assert_eq!(token.expose(), "tok_abc123");
     // The secret must not leak through Display.
     assert_eq!(format!("{token}"), "***");
+
+    // Resolve an `op://` secret from an arbitrary plugin string leaf (#156):
+    // same resolver entry point, routed to the store instead of the env.
+    let op_resolver = SecretResolver::new(OpStore, &env);
+    let user_token_ref = raw.as_table().get("user_token").unwrap().as_str().unwrap();
+    let user_token = op_resolver.resolve(user_token_ref).unwrap();
+    assert_eq!(user_token.expose(), "xoxp-from-op");
+    assert_eq!(format!("{user_token}"), "***");
 
     // Expand a plugin socket path template.
     let socket = raw.as_table().get("socket_path").unwrap().as_str().unwrap();

@@ -1,8 +1,11 @@
-//! Fallback [`SecretStore`] for non-macOS platforms.
+//! Fallback for the **`keychain:` scheme** on non-macOS platforms.
 //!
-//! v1 only ships a Keychain backend (macOS). On other platforms every lookup
-//! reports [`SecretError::Unsupported`] rather than failing to compile, so the
-//! crate stays portable (e.g. Linux CI) until a native backend is added.
+//! Only macOS ships a Keychain backend; here every `keychain:` lookup reports
+//! [`SecretError::Unsupported`] rather than failing to compile, so the crate
+//! stays portable (e.g. Linux CI) until a native backend is added. This covers
+//! the `keychain:` scheme only — `op://` references resolve on every platform
+//! via [`onepassword`](super::onepassword) (#156), which the composite
+//! [`PlatformSecretStore`](super::PlatformSecretStore) routes to first.
 
 use crate::ports::{SecretError, SecretRef, SecretStore, SecretString};
 

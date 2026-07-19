@@ -3,7 +3,9 @@
 //! Secrets are never stored in plaintext in config. A string value is either:
 //!
 //! - a `keychain:<service>/<account>` reference, resolved via the
-//!   [`SecretStore`], or
+//!   [`SecretStore`],
+//! - an `op://<vault>/<item>/<field>` 1Password reference, resolved via the
+//!   same store (the composite platform store routes by scheme), or
 //! - an ordinary string containing `${VAR}` placeholders, expanded from the
 //!   environment.
 //!
@@ -17,12 +19,15 @@ use crate::ports::{SecretRef, SecretStore, SecretString};
 /// Prefix marking a Keychain-backed secret reference.
 const KEYCHAIN_PREFIX: &str = "keychain:";
 
+/// Prefix marking a 1Password secret reference (`op read` native URI).
+const ONEPASSWORD_PREFIX: &str = "op://";
+
 /// Errors from resolving/expanding a configuration value.
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
     /// A `${VAR}` referenced an unset environment variable.
     #[error(
-        "environment variable `{0}` is not set → export it, or use a `keychain:<service>/<account>` reference"
+        "environment variable `{0}` is not set → export it, or use a `keychain:<service>/<account>` / `op://<vault>/<item>/<field>` reference"
     )]
     EnvNotSet(String),
     /// A `${` placeholder was not closed with `}`. The offending value is
@@ -97,11 +102,11 @@ where
 
     /// Resolve one configuration value into a [`SecretString`].
     ///
-    /// A `keychain:` value is fetched from the store; anything else has its
-    /// `${VAR}` placeholders expanded. The result is wrapped so it cannot leak
-    /// via `Debug`/`Display` (§5.2).
+    /// A `keychain:` or `op://` value is fetched from the store (which routes
+    /// by scheme); anything else has its `${VAR}` placeholders expanded. The
+    /// result is wrapped so it cannot leak via `Debug`/`Display` (§5.2).
     pub fn resolve(&self, value: &str) -> Result<SecretString, ResolveError> {
-        if value.starts_with(KEYCHAIN_PREFIX) {
+        if value.starts_with(KEYCHAIN_PREFIX) || value.starts_with(ONEPASSWORD_PREFIX) {
             let reference: SecretRef = value.parse()?;
             Ok(self.store.get(&reference)?)
         } else {
@@ -124,17 +129,22 @@ mod tests {
         move |k: &str| map.get(k).cloned()
     }
 
-    /// Fake store returning a fixed secret for one known reference.
+    /// Fake store returning a fixed secret for one known reference per scheme.
     struct FakeStore;
     impl SecretStore for FakeStore {
         fn get(&self, reference: &SecretRef) -> Result<SecretString, SecretError> {
-            if reference.service() == "totsuka" && reference.account() == "gh" {
-                Ok(SecretString::new("ghp_secret"))
-            } else {
-                Err(SecretError::NotFound {
-                    service: reference.service().to_string(),
-                    account: reference.account().to_string(),
-                })
+            match reference {
+                SecretRef::Keychain { service, account }
+                    if service == "totsuka" && account == "gh" =>
+                {
+                    Ok(SecretString::new("ghp_secret"))
+                }
+                SecretRef::OnePassword { uri } if uri == "op://Dev/Openrouter/api_key" => {
+                    Ok(SecretString::new("sk-or-from-op"))
+                }
+                _ => Err(SecretError::NotFound {
+                    reference: reference.to_string(),
+                }),
             }
         }
     }
@@ -211,6 +221,27 @@ mod tests {
         assert!(matches!(
             err,
             ResolveError::Secret(SecretError::NotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn resolves_onepassword_reference_via_store() {
+        // `op://` is the third reference scheme: routed to the store (which
+        // dispatches on the SecretRef variant), never env-expanded.
+        let resolver = SecretResolver::new(FakeStore, env_from(&[]));
+        let secret = resolver.resolve("op://Dev/Openrouter/api_key").unwrap();
+        assert_eq!(secret.expose(), "sk-or-from-op");
+    }
+
+    #[test]
+    fn malformed_onepassword_reference_is_rejected() {
+        // A recognized scheme with a bad shape is an error, not a passthrough
+        // string (it would otherwise reach a plugin as a bogus "secret").
+        let resolver = SecretResolver::new(FakeStore, env_from(&[]));
+        let err = resolver.resolve("op://only-vault").unwrap_err();
+        assert!(matches!(
+            err,
+            ResolveError::Secret(SecretError::InvalidReference(_))
         ));
     }
 }
