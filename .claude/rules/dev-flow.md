@@ -161,6 +161,49 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
 Investigate → fix → push → re-monitor. Never merge on red. If `main` itself
 broke, follow pr-conventions "If `main` breaks" (revert first, root-cause after).
 
+### Conflict check & resolution
+
+**When to check**: right after opening the PR, whenever `main` advances while
+the PR is open (another PR merged first), and always immediately before merge
+(step 7). GitHub computes mergeability asynchronously, so an `UNKNOWN` result
+just means "not computed yet" — re-run after a few seconds.
+
+```
+gh pr view <n> --json mergeStateStatus,mergeable
+# mergeable "MERGEABLE"  / mergeStateStatus "CLEAN" → no conflicts (other
+#   pre-merge gates — CI, reviews — still apply, → Merging below)
+# mergeable "CONFLICTING" / mergeStateStatus "DIRTY" → resolve below
+# mergeable "UNKNOWN" → still computing; wait a few seconds and re-run
+```
+
+**Resolution** — rebase onto `main`, never merge `main` into the branch
+(→ git-conventions):
+
+```
+git worktree list                    # the branch may live in another worktree —
+                                     # run the rebase where it is checked out
+git fetch origin main
+git -c commit.gpgsign=false rebase origin/main
+                                     # unattended runs must disable signing —
+                                     # rebase re-signs every replayed commit
+                                     # (→ unattended-commit-signing.md).
+                                     # on conflict: resolve each file, then
+git add <resolved files>
+GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
+```
+
+- After the rebase completes, re-run the **scoped local checks** for the union
+  of the branch's diff and the conflicted files (Rust set if Rust files are
+  involved — the branch's code has never been built against the new `main`),
+  plus `bash scripts/okf-lint.sh docs` if `docs/**` was conflicted.
+- Only when those checks pass, push:
+  `git push --force-with-lease` (own feature branch only → git-conventions).
+- A force-push re-triggers CI — re-monitor it (steps 1 & 3). Copilot does not
+  re-review (step 2). A mechanical rebase (conflicts resolved by keeping both
+  sides / taking one side verbatim) needs no `/code-review` re-run; if the
+  conflict resolution itself changed behavior, treat it like any substantive
+  commit (step 5's re-run policy applies).
+
 ## Merging (step 7 — only when instructed)
 
 - Default strategy: **Squash and Merge**; delete the branch
@@ -171,7 +214,9 @@ broke, follow pr-conventions "If `main` breaks" (revert first, root-cause after)
   ```
 
 - Pre-merge: `mergeStateStatus` clean, required checks green, no unresolved
-  review threads:
+  review threads. If it reports `mergeStateStatus: DIRTY` /
+  `mergeable: CONFLICTING`, go through "Conflict check & resolution" above
+  first:
 
   ```
   gh pr view <n> --json mergeStateStatus,mergeable,reviewDecision
