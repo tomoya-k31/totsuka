@@ -227,6 +227,9 @@ fn format_notice(notify: &NotifyParams) -> Notice {
         title: format!("{icon} {label}"),
         subtitle,
         body,
+        // The click correlation (F-94): a clickable backend derives its
+        // `-group` and `totsuka focus` target from this.
+        task_id: notify.task_id.clone(),
     }
 }
 
@@ -303,6 +306,11 @@ mod tests {
         assert_eq!(notice.title, "⏳ 入力待ち");
         assert_eq!(notice.subtitle, "Fix bug · impl");
         assert_eq!(notice.body, "Delete the file? (y/n)");
+        assert_eq!(
+            notice.task_id.as_deref(),
+            Some("T1"),
+            "the task id rides along for the clickable backend (F-94)"
+        );
     }
 
     #[test]
