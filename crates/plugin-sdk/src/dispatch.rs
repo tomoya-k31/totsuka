@@ -49,11 +49,16 @@ impl Reply {
     }
 }
 
-/// Convert a JSON id value into a [`RequestId`] (number or string).
+/// Convert a JSON id value into a [`RequestId`]. Non-string scalars (e.g. a
+/// float) fall back to their JSON rendering so correlation stays possible —
+/// the same convention as the in-repo plugin servers.
 pub fn request_id(id: &Value) -> RequestId {
-    match id.as_i64() {
-        Some(n) => RequestId::Number(n),
-        None => RequestId::Str(id.as_str().unwrap_or("").to_string()),
+    if let Some(n) = id.as_i64() {
+        RequestId::Number(n)
+    } else if let Some(s) = id.as_str() {
+        RequestId::Str(s.to_string())
+    } else {
+        RequestId::Str(id.to_string())
     }
 }
 

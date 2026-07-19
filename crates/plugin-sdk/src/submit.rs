@@ -64,6 +64,10 @@ pub trait Submitter: Send + Sync {
     fn submit(&self, task: Task) -> impl Future<Output = SubmitOutcome> + Send;
 }
 
+/// One pending ack slot: resolved with the typed result, or a retryable
+/// error description.
+type PendingAck = oneshot::Sender<Result<TaskSubmitResult, String>>;
+
 /// The `task/submit` client bound to the shared [`Writer`].
 ///
 /// Clonable; all clones share one pending-ack map, which
@@ -71,7 +75,7 @@ pub trait Submitter: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct SubmitClient {
     writer: Writer,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<TaskSubmitResult, String>>>>>,
+    pending: Arc<Mutex<HashMap<String, PendingAck>>>,
     next_id: Arc<AtomicU64>,
     ack_timeout: Duration,
     first_backoff: Duration,
