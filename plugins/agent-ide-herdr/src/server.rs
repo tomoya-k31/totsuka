@@ -310,7 +310,7 @@ fn capabilities_result() -> Value {
             // screen for escalation diagnostics (R-10).
             resume_session: true,
             diagnostics_snapshot: true,
-            outputs: Vec::new(),
+            ..Capabilities::default()
         },
     })
 }

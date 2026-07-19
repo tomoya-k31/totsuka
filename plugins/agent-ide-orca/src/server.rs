@@ -229,11 +229,7 @@ fn capabilities_result() -> Value {
         capabilities: Capabilities {
             plan_mode: true,
             state_stream: true,
-            design_preview: false,
-            pane_control: false,
-            resume_session: false,
-            diagnostics_snapshot: false,
-            outputs: Vec::new(),
+            ..Capabilities::default()
         },
     })
 }

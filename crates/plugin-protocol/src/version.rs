@@ -35,7 +35,13 @@ use semver::{Version, VersionReq};
 /// separated from the human-visible `body` so hosts can deliver them
 /// out-of-band (e.g. invisible prompt-context injection); additive and
 /// optional under the same contract as the fields above.
-pub const PROTOCOL_VERSION: &str = "0.1.5";
+///
+/// 0.1.6: push ingestion — the `task/submit` RPC (P→O), the
+/// `Capabilities.task_submit` flag, and `InitializeParams.triggers` /
+/// `poll_interval_secs` (#183). All additive and `^0.1`-compatible.
+/// `tasks/fetch` is deprecated from this version and scheduled for removal
+/// in 0.2.0 (which will strand `^0.1` manifests by design, F-54).
+pub const PROTOCOL_VERSION: &str = "0.1.6";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -59,15 +65,16 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 1, 5));
+        assert_eq!(protocol_version(), Version::new(0, 1, 6));
     }
 
     #[test]
     fn compatible_requirement_matches() {
         // A plugin supporting ^0.1 works with 0.1.x — the additive 0.1.1
         // (InitializeParams.repositories), 0.1.2 (InitializeParams.llm),
-        // 0.1.3 (hook/resume/diagnostics), 0.1.4 (session/focus) and 0.1.5
-        // (Task.instructions) must not strand `^0.1` manifests.
+        // 0.1.3 (hook/resume/diagnostics), 0.1.4 (session/focus), 0.1.5
+        // (Task.instructions) and 0.1.6 (task/submit) must not strand `^0.1`
+        // manifests.
         let req = VersionReq::parse("^0.1").unwrap();
         assert!(is_compatible_with_current(&req));
         // A plugin that *requires* one of the additive supplies can say so.
@@ -80,6 +87,10 @@ mod tests {
         let req = VersionReq::parse(">=0.1.4, <0.2").unwrap();
         assert!(is_compatible_with_current(&req));
         let req = VersionReq::parse(">=0.1.5, <0.2").unwrap();
+        assert!(is_compatible_with_current(&req));
+        // A push-only plugin declares `>=0.1.6, <0.3` so it (alone) keeps
+        // working across the 0.2.0 fetch removal.
+        let req = VersionReq::parse(">=0.1.6, <0.3").unwrap();
         assert!(is_compatible_with_current(&req));
     }
 

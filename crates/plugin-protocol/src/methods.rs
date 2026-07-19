@@ -29,7 +29,17 @@ pub mod method {
 
     // task_source.
     /// Fetch tasks matching a trigger (O→P).
+    ///
+    /// **Deprecated since protocol 0.1.6** in favour of the push-based
+    /// [`TASK_SUBMIT`]: the Orchestrator still polls sources that do not
+    /// declare the `task_submit` capability, but this method is scheduled for
+    /// removal in protocol 0.2.0. New plugins should push via `task/submit`.
     pub const TASKS_FETCH: &str = "tasks/fetch";
+    /// Submit one task for ingestion (P→O request, 0.1.6). The Orchestrator
+    /// answers only after the task is durably persisted, so the plugin needs
+    /// no buffer of its own (see [`super::TaskSubmitResult`] for the ack
+    /// contract).
+    pub const TASK_SUBMIT: &str = "task/submit";
     /// Transition source-side status (O→P, F-84).
     pub const TASK_UPDATE_STATUS: &str = "task/update_status";
     /// Publish a result back to the source (O→P, F-07).
@@ -90,6 +100,31 @@ pub struct InitializeParams {
     /// not use it. `None` for non-task_source plugins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm: Option<LlmInfo>,
+    /// The workflow triggers targeting this **task_source** plugin, in
+    /// `config.toml` `[[workflows]]` definition order. A push source
+    /// (`task_submit` capability) receives its watch conditions here instead
+    /// of per [`TasksFetchParams`] call. Additive since protocol 0.1.6, same
+    /// contract as `repositories`. Empty for non-task_source plugins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<TriggerInfo>,
+    /// The `[plugins.{name}].poll_interval_secs` value. For a push source
+    /// this is its *internal* fetch cadence (the Orchestrator no longer
+    /// polls it); for a legacy fetch source it stays the Orchestrator-side
+    /// poll interval and this field is merely informative. Additive since
+    /// protocol 0.1.6. `None` for non-task_source plugins or when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_interval_secs: Option<u64>,
+}
+
+/// One workflow trigger, as supplied to task_source plugins in
+/// [`InitializeParams::triggers`] (0.1.6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TriggerInfo {
+    /// The workflow's `name` (`[[workflows]].name`).
+    pub workflow: String,
+    /// Trigger condition; plugin-defined shape (same contract as
+    /// [`TasksFetchParams::trigger`]).
+    pub trigger: serde_json::Value,
 }
 
 /// One orchestrator-configured repository, as supplied to task_source
@@ -155,17 +190,64 @@ pub struct ConfigValidateResult {
 
 /// `tasks/fetch` params (O→P): the workflow trigger condition, passed raw for
 /// the plugin to interpret (e.g. `{ "project_status": "実装待ち" }`).
+///
+/// Deprecated since protocol 0.1.6 (see [`method::TASKS_FETCH`]); removal is
+/// scheduled for 0.2.0.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TasksFetchParams {
     /// Trigger condition; plugin-defined shape.
     pub trigger: serde_json::Value,
 }
 
-/// `tasks/fetch` result (P→O).
+/// `tasks/fetch` result (P→O). Deprecated alongside [`TasksFetchParams`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TasksFetchResult {
     /// Matching tasks in the common schema (F-01).
     pub tasks: Vec<Task>,
+}
+
+/// `task/submit` params (P→O request, 0.1.6): push one task into the
+/// Orchestrator in the common schema (F-01).
+///
+/// `task.source` carries the plugin's own source name; the Orchestrator
+/// overwrites it with the plugin instance name, exactly as it does for
+/// fetched tasks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskSubmitParams {
+    /// The task to ingest.
+    pub task: Task,
+}
+
+/// The final disposition of a `task/submit` (0.1.6). Every variant is
+/// **final** — the plugin must not re-submit on any of them. Retryable
+/// conditions are JSON-RPC *errors* instead:
+/// [`NOT_ACCEPTING`](crate::error_code::NOT_ACCEPTING) (Orchestrator
+/// draining), [`SUBMIT_OVERLOADED`](crate::error_code::SUBMIT_OVERLOADED)
+/// (backpressure) and
+/// [`INTERNAL_ERROR`](crate::error_code::INTERNAL_ERROR) (persistence
+/// failure) all mean "retry with backoff".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskSubmitStatus {
+    /// Persisted and queued. Sent only after the durable write committed, so
+    /// a plugin that received it may forget the task entirely.
+    Accepted,
+    /// The task was already ingested (same `source` + task id) — an
+    /// idempotent re-submit, e.g. a retry after a lost ack. Drop it.
+    Duplicate,
+    /// Permanently unprocessable (e.g. no workflow matches the task).
+    /// `reason` says why; drop and log.
+    Rejected,
+}
+
+/// `task/submit` result (O→P, 0.1.6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskSubmitResult {
+    /// Final disposition (see [`TaskSubmitStatus`]).
+    pub status: TaskSubmitStatus,
+    /// Cause + next action, present for [`TaskSubmitStatus::Rejected`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// `task/update_status` params (O→P, F-84).
@@ -449,6 +531,11 @@ mod tests {
                 model: "anthropic/claude-haiku-4.5".into(),
                 api_key: Some("sk-or-resolved".into()),
             }),
+            triggers: vec![TriggerInfo {
+                workflow: "design".into(),
+                trigger: serde_json::json!({"project_status": "設計待ち"}),
+            }],
+            poll_interval_secs: Some(60),
         });
         round_trip(&InitializeResult {
             plugin_version: Version::new(1, 0, 0),
@@ -461,22 +548,29 @@ mod tests {
             config: serde_json::json!({}),
         });
         // The compatibility contract for the additive fields (`repositories`
-        // since 0.1.1, `llm` since 0.1.2): absent in old params (default),
-        // omitted when unset (an old plugin never sees an unknown field),
-        // and ignored by an older plugin when present.
+        // since 0.1.1, `llm` since 0.1.2, `triggers`/`poll_interval_secs`
+        // since 0.1.6): absent in old params (default), omitted when unset
+        // (an old plugin never sees an unknown field), and ignored by an
+        // older plugin when present.
         let old: InitializeParams =
             serde_json::from_str(r#"{"protocol_version":"0.1.0","config":{}}"#).unwrap();
         assert!(old.repositories.is_empty());
         assert!(old.llm.is_none());
+        assert!(old.triggers.is_empty());
+        assert!(old.poll_interval_secs.is_none());
         let empty = InitializeParams {
             protocol_version: Version::new(0, 1, 2),
             config: serde_json::json!({}),
             repositories: vec![],
             llm: None,
+            triggers: vec![],
+            poll_interval_secs: None,
         };
         let wire = serde_json::to_string(&empty).unwrap();
         assert!(!wire.contains("repositories"));
         assert!(!wire.contains("llm"));
+        assert!(!wire.contains("triggers"));
+        assert!(!wire.contains("poll_interval_secs"));
         let ignored: ConfigValidateParams =
             serde_json::from_str(r#"{"config":{},"repositories":[{"name":"x"}]}"#).unwrap();
         assert_eq!(ignored.config, serde_json::json!({}));
@@ -503,6 +597,37 @@ mod tests {
             content: "# Design".into(),
             format: Some("markdown".into()),
         });
+        round_trip(&TaskSubmitParams {
+            task: sample_task(),
+        });
+        round_trip(&TaskSubmitResult {
+            status: TaskSubmitStatus::Accepted,
+            reason: None,
+        });
+        round_trip(&TaskSubmitResult {
+            status: TaskSubmitStatus::Rejected,
+            reason: Some("no workflow matches source \"github\" → add one".into()),
+        });
+    }
+
+    /// The `task/submit` ack (0.1.6): `reason` stays off the wire when unset,
+    /// and the status enum uses the snake_case wire format like every other
+    /// protocol enum.
+    #[test]
+    fn task_submit_ack_wire_format() {
+        let wire = serde_json::to_string(&TaskSubmitResult {
+            status: TaskSubmitStatus::Duplicate,
+            reason: None,
+        })
+        .unwrap();
+        assert_eq!(wire, r#"{"status":"duplicate"}"#);
+        for (status, expect) in [
+            (TaskSubmitStatus::Accepted, "\"accepted\""),
+            (TaskSubmitStatus::Duplicate, "\"duplicate\""),
+            (TaskSubmitStatus::Rejected, "\"rejected\""),
+        ] {
+            assert_eq!(serde_json::to_string(&status).unwrap(), expect);
+        }
     }
 
     #[test]

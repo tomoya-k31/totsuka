@@ -50,6 +50,10 @@ pub struct Capabilities {
     /// Answers `diagnostics/snapshot` with a pane screen capture (0.1.3,
     /// R-10). Defaults to `false` like `resume_session`.
     pub diagnostics_snapshot: bool,
+    /// This task_source pushes tasks via `task/submit` (0.1.6); the
+    /// Orchestrator stops polling `tasks/fetch` for it entirely. Defaults to
+    /// `false`, so plugins that predate it keep being polled.
+    pub task_submit: bool,
     /// Output policies this (task source) plugin can fulfil.
     pub outputs: Vec<OutputCapability>,
 }
@@ -165,6 +169,32 @@ outputs = ["source"]
         .unwrap();
         assert_eq!(m.kind, PluginKind::TaskSource);
         assert_eq!(m.capabilities.outputs, vec![OutputCapability::Source]);
+        // 0.1.6: absent `task_submit` defaults to false (additive) — the
+        // plugin keeps being polled.
+        assert!(!m.capabilities.task_submit);
+    }
+
+    #[test]
+    fn push_source_declares_task_submit() {
+        let m = Manifest::from_toml_str(
+            r#"
+name = "slack"
+kind = "task_source"
+version = "0.2.0"
+protocol_version = ">=0.1.6, <0.3"
+
+[capabilities]
+task_submit = true
+outputs = ["source"]
+"#,
+        )
+        .unwrap();
+        assert!(m.capabilities.task_submit);
+        assert!(m.is_compatible_with(&Version::new(0, 1, 6)));
+        // A push-only plugin survives the 0.2.0 fetch removal…
+        assert!(m.is_compatible_with(&Version::new(0, 2, 0)));
+        // …while staying honest about a hypothetical 0.3.
+        assert!(!m.is_compatible_with(&Version::new(0, 3, 0)));
     }
 
     #[test]
