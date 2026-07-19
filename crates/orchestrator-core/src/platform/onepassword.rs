@@ -120,7 +120,9 @@ fn first_line(text: &str) -> String {
         .to_string()
 }
 
-#[cfg(test)]
+// Unix-gated: building a fake `ExitStatus` needs `ExitStatusExt::from_raw`,
+// which has no portable equivalent. The backend itself compiles everywhere.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;

@@ -153,7 +153,7 @@ pub enum SecretError {
     Backend(String),
     /// The backend tool for this reference scheme is not installed.
     #[error(
-        "secret backend `{backend}` is not available → install it (1Password: `brew install 1password-cli`)"
+        "secret backend `{backend}` is not available → install it (macOS: `brew install 1password-cli`, other platforms: https://developer.1password.com/docs/cli)"
     )]
     BackendUnavailable { backend: String },
     /// This platform has no supported secret store.

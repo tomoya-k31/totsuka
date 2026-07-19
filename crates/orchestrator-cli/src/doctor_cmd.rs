@@ -203,7 +203,9 @@ fn check_onepassword(cx: &Cx, env: &HashMap<String, String>, checks: &mut Vec<Ch
         checks.push(Check::fail(
             "1password",
             "config references op:// secrets but the 1Password CLI (op) is not on PATH",
-            "install it (`brew install 1password-cli`) or switch the references to keychain:/${ENV}",
+            "install it (macOS: `brew install 1password-cli`, other platforms: \
+             https://developer.1password.com/docs/cli) or switch the references to \
+             `keychain:` / `${ENV}`",
         ));
         return;
     };
@@ -219,7 +221,7 @@ fn check_onepassword(cx: &Cx, env: &HashMap<String, String>, checks: &mut Vec<Ch
                     "`op --version` exited with {}",
                     out.status.code().unwrap_or(-1)
                 ),
-                "reinstall the 1Password CLI (`brew reinstall 1password-cli`)",
+                "reinstall the 1Password CLI (macOS: `brew reinstall 1password-cli`)",
             ));
             return;
         }
@@ -227,7 +229,8 @@ fn check_onepassword(cx: &Cx, env: &HashMap<String, String>, checks: &mut Vec<Ch
             checks.push(Check::fail(
                 "1password",
                 format!("cannot run `op`: {e}"),
-                "install the 1Password CLI (`brew install 1password-cli`)",
+                "install the 1Password CLI (macOS: `brew install 1password-cli`, \
+                 other platforms: https://developer.1password.com/docs/cli)",
             ));
             return;
         }
@@ -248,7 +251,10 @@ fn check_onepassword(cx: &Cx, env: &HashMap<String, String>, checks: &mut Vec<Ch
 }
 
 /// Whether `config.toml` or any `plugins/*.toml` contains an `op://` secret
-/// reference (textual scan — resolution stays lazy, this only gates doctor).
+/// reference in an **actual string value** (resolution stays lazy, this only
+/// gates doctor). Each file is TOML-parsed and its string leaves walked, so a
+/// commented-out example — like the one `totsuka init` generates — never
+/// triggers the 1Password checks.
 fn config_mentions_onepassword(cx: &Cx) -> bool {
     let mut sources: Vec<PathBuf> = vec![cx.config_path.clone()];
     if let Ok(entries) = std::fs::read_dir(cx.plugin_config_dir()) {
@@ -259,9 +265,23 @@ fn config_mentions_onepassword(cx: &Cx) -> bool {
                 .filter(|p| p.extension().is_some_and(|e| e == "toml")),
         );
     }
-    sources
-        .iter()
-        .any(|path| std::fs::read_to_string(path).is_ok_and(|content| content.contains("op://")))
+    sources.iter().any(|path| {
+        std::fs::read_to_string(path).is_ok_and(|content| {
+            content
+                .parse::<toml::Value>()
+                .is_ok_and(|value| toml_has_op_reference(&value))
+        })
+    })
+}
+
+/// Whether any string leaf of a TOML value starts with `op://`.
+fn toml_has_op_reference(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::String(s) => s.starts_with("op://"),
+        toml::Value::Array(items) => items.iter().any(toml_has_op_reference),
+        toml::Value::Table(table) => table.values().any(toml_has_op_reference),
+        _ => false,
+    }
 }
 
 /// All Claude Code hook-mechanism probes (#141): assets, script dependencies,
