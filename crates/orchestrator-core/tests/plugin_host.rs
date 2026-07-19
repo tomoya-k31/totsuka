@@ -337,6 +337,31 @@ async fn plugin_initiated_request_can_be_answered_with_an_error() {
 }
 
 #[tokio::test]
+async fn malformed_plugin_request_gets_a_prompt_invalid_request_error() {
+    let dir = test_support::scratch("host_incoming_malformed");
+    let log = dir.join("notify.ndjson");
+    // No `jsonrpc` field → not a valid `Request`; the host must answer with
+    // INVALID_REQUEST (correlated by id) instead of silently dropping it and
+    // leaving the plugin to wait out its own call timeout.
+    let plugin = Plugin::launch(spec_with_request_on_init(
+        &log,
+        serde_json::json!({ "id": 9, "method": "task/submit" }),
+    ))
+    .await
+    .expect("launch");
+
+    let recorded = recorded_line(&log, "response").await;
+    assert_eq!(recorded["params"]["id"], 9);
+    assert_eq!(
+        recorded["params"]["error"]["code"],
+        plugin_protocol::error_code::INVALID_REQUEST
+    );
+
+    plugin.shutdown(Duration::from_secs(5)).await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn incoming_channel_closes_on_crash_and_late_answer_is_harmless() {
     let dir = test_support::scratch("host_incoming_crash");
     let log = dir.join("notify.ndjson");

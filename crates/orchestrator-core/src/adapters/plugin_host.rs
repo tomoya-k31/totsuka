@@ -152,8 +152,8 @@ pub struct IncomingRequest {
 /// O→P request lines).
 ///
 /// Dropping a `Responder` without answering sends nothing — the plugin's own
-/// call timeout covers that case. After a crash the writer is gone and both
-/// sends become harmless no-ops.
+/// call timeout covers that case. Answering after the plugin exited is a
+/// harmless no-op (the line is enqueued at most briefly, never delivered).
 #[derive(Debug)]
 pub struct Responder {
     id: jsonrpc::RequestId,
@@ -536,6 +536,7 @@ fn spawn_reader(
                 // A plugin-initiated request (P→O, 0.1.6). This branch must
                 // come before the notification one: a `Notification` parse
                 // would silently accept the value and drop its `id`.
+                let raw_id = value.get("id").cloned();
                 match serde_json::from_value::<Request>(value) {
                     Ok(request) => {
                         let _ = incoming_tx.send(IncomingRequest {
@@ -548,7 +549,23 @@ fn spawn_reader(
                         });
                     }
                     Err(e) => {
-                        tracing::warn!(plugin = %name, "ignoring malformed request from plugin: {e}");
+                        tracing::warn!(plugin = %name, "malformed request from plugin: {e}");
+                        // Best-effort INVALID_REQUEST so the plugin fails fast
+                        // instead of waiting out its own call timeout; id=null
+                        // when the id itself is unusable (JSON-RPC 2.0).
+                        let error = jsonrpc::Error::new(
+                            jsonrpc::error_code::INVALID_REQUEST,
+                            format!("malformed request: {e}"),
+                        );
+                        let response = match raw_id
+                            .and_then(|id| serde_json::from_value::<jsonrpc::RequestId>(id).ok())
+                        {
+                            Some(id) => jsonrpc::Response::error(id, error),
+                            None => jsonrpc::Response::error_without_id(error),
+                        };
+                        if let Ok(line) = jsonrpc::to_line(&response) {
+                            let _ = inner.write_tx.send(line);
+                        }
                     }
                 }
             } else if value.get("method").is_some()
