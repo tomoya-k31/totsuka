@@ -27,7 +27,7 @@ const ONEPASSWORD_PREFIX: &str = "op://";
 pub enum ResolveError {
     /// A `${VAR}` referenced an unset environment variable.
     #[error(
-        "environment variable `{0}` is not set → export it, or use a `keychain:<service>/<account>` reference"
+        "environment variable `{0}` is not set → export it, or use a `keychain:<service>/<account>` / `op://<vault>/<item>/<field>` reference"
     )]
     EnvNotSet(String),
     /// A `${` placeholder was not closed with `}`. The offending value is

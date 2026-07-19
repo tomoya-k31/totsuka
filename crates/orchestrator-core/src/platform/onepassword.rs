@@ -96,12 +96,16 @@ fn classify_op_error(stderr: &[u8], uri: &str) -> SecretError {
             first_line(&text)
         ));
     }
-    // Vault/item/field does not exist.
+    // Vault/item/field does not exist. Deliberately no bare `"not found"`
+    // catch-all: it would misclassify unrelated failures (e.g. "server not
+    // found" connection errors) as a missing item — those stay `Backend`,
+    // which quotes the stderr diagnosis anyway.
     if lower.contains("isn't a vault")
         || lower.contains("isn't an item")
         || lower.contains("isn't a field")
         || lower.contains("no item matching")
-        || lower.contains("not found")
+        || lower.contains("item not found")
+        || lower.contains("vault not found")
     {
         return SecretError::NotFound {
             reference: uri.to_string(),

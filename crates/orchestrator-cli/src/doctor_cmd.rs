@@ -363,12 +363,19 @@ fn check_hook_token(cfg: &RootConfig, env: &HashMap<String, String>, checks: &mu
             "[hooks].auth_token_ref is unset → hook POSTs are accepted on the 0600 socket without a Bearer token",
             "set [hooks].auth_token_ref (e.g. keychain:totsuka/hook-token) before using a hook-capable agent",
         )),
+        // `op://` is deliberately not resolved here (a real `op read` can
+        // prompt for biometrics / hang unattended); the 1password probes
+        // check presence + session without prompting (ADR-0006).
+        Some(reference) if reference.starts_with("op://") => checks.push(Check::ok(
+            "hook-token",
+            "[hooks].auth_token_ref is an op:// reference (checked by the 1password probes, not resolved here)",
+        )),
         Some(reference) => match secret_resolver(env).resolve(reference) {
             Ok(_) => checks.push(Check::ok("hook-token", "[hooks].auth_token_ref resolves")),
             Err(e) => checks.push(Check::fail(
                 "hook-token",
                 format!("[hooks].auth_token_ref does not resolve: {e}"),
-                "export the referenced env var or store the token in the Keychain",
+                "export the referenced env var, store the token in the Keychain, or use an op:// reference",
             )),
         },
     }
@@ -687,12 +694,23 @@ fn check_llm_key(cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut V
         checks.push(Check::ok("llm", "[llm] configured without api_key_ref"));
         return;
     };
+    // An `op://` reference is NOT resolved here: `op read` may pop a
+    // biometric prompt (or hang unattended), and doctor must stay
+    // non-interactive. The dedicated 1password checks cover op presence +
+    // session without prompting (ADR-0006).
+    if reference.starts_with("op://") {
+        checks.push(Check::ok(
+            "llm",
+            "api_key_ref is an op:// reference (checked by the 1password probes, not resolved here)",
+        ));
+        return;
+    }
     match secret_resolver(env).resolve(reference) {
         Ok(_) => checks.push(Check::ok("llm", "api_key_ref resolves")),
         Err(e) => checks.push(Check::fail(
             "llm",
             format!("api_key_ref does not resolve: {e}"),
-            "export the variable or store the key in the Keychain",
+            "export the variable, store the key in the Keychain, or use an op:// reference",
         )),
     }
 }
