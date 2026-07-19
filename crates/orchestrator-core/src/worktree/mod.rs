@@ -20,9 +20,10 @@ pub const DEFAULT_BRANCH_TEMPLATE: &str = "agent/{source}-{task_id}";
 pub const DEFAULT_LOCATION_TEMPLATE: &str =
     "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}";
 
-/// How many times to retry a git command that hit a lock, and the backoff.
-const GIT_LOCK_RETRIES: u32 = 5;
-const GIT_LOCK_BACKOFF_MS: u64 = 50;
+/// How many times to retry a git command that hit transient contention
+/// (lock files, mid-creation worktree reads), and the backoff.
+const GIT_TRANSIENT_RETRIES: u32 = 5;
+const GIT_TRANSIENT_BACKOFF_MS: u64 = 50;
 
 /// Errors from worktree operations.
 #[derive(Debug, thiserror::Error)]
@@ -255,7 +256,7 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// absorbed by a short retry (§5.5).
     pub fn create(&self, req: &CreateRequest<'_>) -> Result<Worktree, WorktreeError> {
         // F-25: always fetch first so we branch off fresh remote state.
-        let fetch = self.run_with_lock_retry(req.repo_path, &["fetch", "origin"])?;
+        let fetch = self.run_with_transient_retry(req.repo_path, &["fetch", "origin"])?;
         if !fetch.success() {
             return Err(WorktreeError::Fetch {
                 repo: req.repo_path.display().to_string(),
@@ -296,7 +297,7 @@ impl<G: GitRunner> WorktreeManager<G> {
         }
 
         let path_str = path.display().to_string();
-        let add = self.run_with_lock_retry(
+        let add = self.run_with_transient_retry(
             req.repo_path,
             &["worktree", "add", &path_str, "-b", &branch, &base_commit],
         )?;
@@ -347,7 +348,8 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// Push the worktree's branch to `origin`, setting upstream (F-86). The
     /// Orchestrator — never the agent — performs the push.
     pub fn push_branch(&self, worktree_path: &Path, branch: &str) -> Result<(), WorktreeError> {
-        let out = self.run_with_lock_retry(worktree_path, &["push", "-u", "origin", branch])?;
+        let out =
+            self.run_with_transient_retry(worktree_path, &["push", "-u", "origin", branch])?;
         if !out.success() {
             return Err(WorktreeError::Git {
                 command: "push".to_string(),
@@ -391,7 +393,8 @@ impl<G: GitRunner> WorktreeManager<G> {
         }
 
         let path_str = worktree_path.display().to_string();
-        let remove = self.run_with_lock_retry(repo_path, &["worktree", "remove", &path_str])?;
+        let remove =
+            self.run_with_transient_retry(repo_path, &["worktree", "remove", &path_str])?;
         if !remove.success() {
             return Err(WorktreeError::Git {
                 command: "worktree remove".to_string(),
@@ -457,8 +460,8 @@ impl<G: GitRunner> WorktreeManager<G> {
         Ok(orphans)
     }
 
-    /// Run a git command, retrying briefly on git-lock contention (§5.5).
-    fn run_with_lock_retry(
+    /// Run a git command, retrying briefly on transient contention (§5.5).
+    fn run_with_transient_retry(
         &self,
         cwd: &Path,
         args: &[&str],
@@ -466,25 +469,31 @@ impl<G: GitRunner> WorktreeManager<G> {
         let mut attempt = 0;
         loop {
             let out = self.git.run(cwd, args)?;
-            if out.success() || !is_lock_error(&out.stderr) || attempt >= GIT_LOCK_RETRIES {
+            if out.success()
+                || !is_transient_git_error(&out.stderr)
+                || attempt >= GIT_TRANSIENT_RETRIES
+            {
                 return Ok(out);
             }
             attempt += 1;
             std::thread::sleep(std::time::Duration::from_millis(
-                GIT_LOCK_BACKOFF_MS * attempt as u64,
+                GIT_TRANSIENT_BACKOFF_MS * attempt as u64,
             ));
         }
     }
 }
 
-/// Whether git stderr indicates transient lock contention.
-fn is_lock_error(stderr: &str) -> bool {
+/// Whether git stderr indicates transient contention worth retrying: lock
+/// files, or a parallel `worktree add` reading a sibling worktree's metadata
+/// (`.git/worktrees/<name>/commondir`) before the creator has written it.
+fn is_transient_git_error(stderr: &str) -> bool {
     let s = stderr.to_ascii_lowercase();
     s.contains("index.lock")
         || s.contains("unable to lock")
         || s.contains("cannot lock ref")
         || s.contains("could not lock")
         || s.contains("another git process")
+        || (s.contains("failed to read") && s.contains("commondir"))
 }
 
 /// Canonicalize a path, falling back to the original if it does not exist.
@@ -501,6 +510,20 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect()
+    }
+
+    #[test]
+    fn transient_errors_cover_locks_and_commondir_race() {
+        assert!(is_transient_git_error(
+            "fatal: Unable to create '/r/.git/index.lock': File exists.\nAnother git process seems to be running"
+        ));
+        // Parallel `worktree add` reading a sibling's not-yet-written metadata.
+        assert!(is_transient_git_error(
+            "Preparing worktree (new branch 'agent/github-p3')\nfatal: failed to read .git/worktrees/agent-github-p2/commondir: Success\n"
+        ));
+        assert!(!is_transient_git_error(
+            "fatal: 'bogus' is not a commit and a branch 'b' cannot be created from it"
+        ));
     }
 
     #[test]
