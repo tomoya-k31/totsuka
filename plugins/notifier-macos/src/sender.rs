@@ -273,9 +273,12 @@ fn terminal_notifier_args(
             None => "totsuka".into(),
         },
     ];
-    if let Some(bundle_id) = activate_bundle_id {
+    // An empty bundle id counts as unset (same convention as the empty
+    // `*_bin` fallbacks): `-activate ""` would make terminal-notifier fail
+    // the whole send, and non-NotFound failures do not fall back.
+    if let Some(bundle_id) = activate_bundle_id.as_deref().filter(|s| !s.is_empty()) {
         args.push("-activate".into());
-        args.push(bundle_id.clone());
+        args.push(bundle_id.to_string());
     }
     if let Some(task_id) = &notice.task_id
         && !click_command.is_empty()
@@ -357,6 +360,15 @@ mod tests {
         // An empty click_command disables -execute even with a task id.
         let args = terminal_notifier_args(&notice(Some("7")), &None, "");
         assert!(!args.iter().any(|a| a == "-execute"));
+
+        // An empty bundle id counts as unset: `-activate ""` would fail the
+        // whole send (and non-NotFound failures do not fall back).
+        let args = terminal_notifier_args(
+            &notice(Some("7")),
+            &Some(String::new()),
+            "totsuka focus {task_id}",
+        );
+        assert!(!args.iter().any(|a| a == "-activate"));
     }
 
     #[test]
