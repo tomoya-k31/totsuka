@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
 
+# Serialize runs instead of canceling: a canceled run mid-release (tag
+# created, universal-binary upload pending) would strand a release. With
+# cancel-in-progress off, a newer push waits as the single pending run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write

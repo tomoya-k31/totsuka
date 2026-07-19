@@ -5,28 +5,26 @@ on:
   push:
     branches: [main]
 
+# Actions billing rounds every job UP to the next full minute, so the job
+# count — not just wall-clock — drives cost. Jobs are therefore consolidated
+# and gated by event: PRs run clippy/rustfmt + test, pushes to main run
+# coverage only
+# (llvm-cov executes the same test suite, so main is still tested per merge).
+# None of these jobs is a required status check (the ruleset requires only
+# okf-lint's `lint`), so event gating cannot leave a PR blocked on "Expected".
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
 jobs:
-  fmt:
-    name: rustfmt
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: stable
-          components: rustfmt
-      - name: Check formatting
-        run: cargo fmt --all --check
-
   clippy:
-    name: clippy
+    name: clippy / rustfmt
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -36,14 +34,17 @@ jobs:
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: stable
-          components: clippy
+          components: clippy,rustfmt
       - name: Cache cargo build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Check formatting
+        run: cargo fmt --all --check
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -60,28 +61,16 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-features
 
-  audit:
-    name: cargo-audit / cargo-deny
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: stable
-      - name: Install cargo-audit and cargo-deny
-        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
-        with:
-          tool: cargo-audit,cargo-deny
-      - name: Run cargo-audit
-        run: cargo audit
-      - name: Run cargo-deny
-        run: cargo deny check
+  # cargo-audit / cargo-deny moved to audit.yml (daily cron + dependency-file
+  # PRs): advisories change with time, not with PR content.
 
+  # Runs only on push to main: llvm-cov executes the full test suite under
+  # instrumentation, so this doubles as the per-merge test run for main.
+  # Kept as its own job (not merged into `test`) so the instrumented build
+  # artifacts don't thrash the normal-build rust-cache PR branches restore.
   coverage:
     name: coverage (llvm-cov)
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

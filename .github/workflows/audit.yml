@@ -1,0 +1,42 @@
+name: audit
+
+# Advisory checks (RUSTSEC DB) change with time, not with PR content, so a
+# daily cron catches new advisories faster than the old per-PR run did, while
+# costing ~30 runs/month instead of ~380. PRs that can actually change the
+# dependency graph (manifests, lockfile, deny policy) still get a run.
+# Not a required status check, so the path filter cannot block a PR.
+
+on:
+  schedule:
+    - cron: "17 21 * * *" # 06:17 JST daily
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: cargo-audit / cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - name: Install cargo-audit and cargo-deny
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: Run cargo-audit
+        run: cargo audit
+      - name: Run cargo-deny
+        run: cargo deny check
