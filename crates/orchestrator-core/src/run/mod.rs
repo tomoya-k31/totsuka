@@ -25,19 +25,20 @@ pub mod output;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use plugin_protocol::method;
 use plugin_protocol::methods::{
     AgentState, ExecutionMode, HookLaunchSpec, NotifierEvent, NotifyParams, ResultPublishParams,
-    StateNotification, TaskDispatchParams, TaskDispatchResult, TaskUpdateStatusParams,
-    TasksFetchParams, TasksFetchResult,
+    StateNotification, TaskDispatchParams, TaskDispatchResult, TaskSubmitParams, TaskSubmitResult,
+    TaskSubmitStatus, TaskUpdateStatusParams, TasksFetchParams, TasksFetchResult,
 };
-use plugin_protocol::{Notification, Task};
+use plugin_protocol::{Notification, Task, jsonrpc};
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 
-use crate::adapters::plugin_host::Plugin;
+use crate::adapters::plugin_host::{IncomingRequest, Plugin};
 use crate::adapters::state_db::{NewTask, StateDb, StateError, TaskRecord};
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{
@@ -288,7 +289,37 @@ pub(crate) enum PluginEvent {
         /// Where the adapter awaits the outcome.
         respond: tokio::sync::oneshot::Sender<FocusOutcome>,
     },
+    /// A `task/submit` from a task source (P→O, 0.1.6): persist the task and
+    /// answer the ack over `respond` **after** the durable write committed
+    /// (persist-before-ack). A JSON-RPC error answer means "retry with
+    /// backoff"; a `TaskSubmitResult` is final.
+    TaskSubmit {
+        /// The submitting plugin's instance name (overwrites `task.source`).
+        source: String,
+        /// The task in the common schema.
+        task: Task,
+        /// Where the forwarder awaits the ack.
+        respond: SubmitRespond,
+    },
 }
+
+/// The answer channel for one [`PluginEvent::TaskSubmit`].
+type SubmitRespond = tokio::sync::oneshot::Sender<Result<TaskSubmitResult, jsonrpc::Error>>;
+
+/// Which ingest path persisted a task — the only difference is the audit
+/// `events.detail` (`ingested` vs `submitted`).
+#[derive(Debug, Clone, Copy)]
+enum IngestPath {
+    /// Pulled via `tasks/fetch` (deprecated since 0.1.6).
+    Fetched,
+    /// Pushed via `task/submit` (0.1.6).
+    Submitted,
+}
+
+/// Per-plugin cap on in-flight `task/submit` requests (backpressure; an
+/// exhausted budget answers `SUBMIT_OVERLOADED`, which the plugin retries
+/// with backoff). Persisting is one SQLite upsert, so this rarely binds.
+const SUBMIT_IN_FLIGHT_BUDGET: usize = 64;
 
 /// Counters accumulated over one `run` invocation.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -297,6 +328,9 @@ pub struct RunStats {
     pub fetched: usize,
     /// Newly ingested tasks (F-73: repeats do not count).
     pub ingested: usize,
+    /// Newly ingested tasks that arrived via `task/submit` (0.1.6; a subset
+    /// counted separately from `ingested`, duplicates do not count).
+    pub submitted: usize,
     /// Dispatches performed.
     pub dispatched: usize,
     /// Tasks that reached `done` this run.
@@ -425,6 +459,23 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         }
                     }
                     let _ = tx.send(PluginEvent::Closed(name));
+                });
+            }
+        }
+        // 0.1.6: consume plugin-initiated requests (`task/submit`) from every
+        // task source. Parsing and backpressure happen here; persistence and
+        // the ack decision happen on the engine loop (persist-before-ack).
+        // Ordering per source is preserved: the event-channel send is inline,
+        // only the ack await is spawned off.
+        for (name, plugin) in &plugins.sources {
+            if let Some(mut incoming) = plugin.take_incoming_requests().await {
+                let name = name.clone();
+                let tx = tx.clone();
+                let budget = Arc::new(Semaphore::new(SUBMIT_IN_FLIGHT_BUDGET));
+                tokio::spawn(async move {
+                    while let Some(request) = incoming.recv().await {
+                        forward_submit(&name, request, &tx, &budget);
+                    }
                 });
             }
         }
@@ -679,8 +730,19 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
+    /// Whether `source` declared the `task_submit` capability (0.1.6): it
+    /// pushes tasks itself and must not be polled.
+    fn source_is_push(&self, source: &str) -> bool {
+        self.plugins
+            .sources
+            .get(source)
+            .is_some_and(|p| p.capabilities().task_submit)
+    }
+
     /// Every source referenced by a workflow (or with a configured interval),
-    /// with its polling interval (F-06).
+    /// with its polling interval (F-06). Push sources (`task_submit`, 0.1.6)
+    /// are excluded; each remaining fetch source gets a once-per-run
+    /// deprecation warning (`tasks/fetch` is scheduled for removal in 0.2.0).
     fn poll_sources(&self) -> Vec<(String, Duration)> {
         let mut sources: HashSet<String> = self
             .settings
@@ -691,7 +753,14 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         sources.extend(self.settings.poll_intervals.keys().cloned());
         sources
             .into_iter()
+            .filter(|source| !self.source_is_push(source))
             .map(|source| {
+                tracing::warn!(
+                    source = %source,
+                    "source does not declare the task_submit capability and will be polled \
+                     via tasks/fetch (deprecated; removal planned for protocol 0.2.0) → \
+                     migrate the plugin to task/submit"
+                );
                 let interval = self.poll_interval_for(&source);
                 (source, interval)
             })
@@ -784,6 +853,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 );
                 continue;
             };
+            // A push source (task_submit, 0.1.6) delivers via `task/submit`;
+            // never poll it (this also covers the startup cycle(None) pass,
+            // which ignores the `due` map).
+            if source.capabilities().task_submit {
+                continue;
+            }
             let params = TasksFetchParams {
                 trigger: wf.trigger.to_json(),
             };
@@ -821,23 +896,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         continue;
                     }
                 }
-                let is_new = self.db.find_by_source(&wf.source, &task.id)?.is_none();
-                let new_task = NewTask {
-                    source: wf.source.clone(),
-                    source_task_id: task.id.clone(),
-                    workflow: wf.name.clone(),
-                    mode: mode_str(wf.mode).to_string(),
-                    repo: None,
-                    priority: task.priority,
-                    title: task.title.clone(),
-                    url: task.url.clone(),
-                    // The full normalized task, so dispatch can reconstruct it.
-                    source_payload: serde_json::to_value(&task).ok(),
-                    // Carry the source's conversation-continuation key (E-09).
-                    thread_key: task.thread_key.clone(),
-                    last_signal_at: None,
-                };
-                let id = self.db.upsert_task(&new_task)?;
+                let (id, is_new) = self.ingest_task(wf, &task, IngestPath::Fetched)?;
                 if is_new {
                     self.stats.ingested += 1;
                     tracing::info!(task_id = id, workflow = %wf.name, title = %task.title, "ingested task");
@@ -845,6 +904,38 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
         }
         Ok(())
+    }
+
+    /// Persist one normalized task under `wf`, idempotently (F-73). Shared by
+    /// the fetch and submit ingest paths so they stay behaviorally identical;
+    /// only the audit `events.detail` differs. Returns `(row id, is_new)`.
+    fn ingest_task(
+        &mut self,
+        wf: &Workflow,
+        task: &Task,
+        path: IngestPath,
+    ) -> Result<(i64, bool), EngineError> {
+        let is_new = self.db.find_by_source(&task.source, &task.id)?.is_none();
+        let new_task = NewTask {
+            source: task.source.clone(),
+            source_task_id: task.id.clone(),
+            workflow: wf.name.clone(),
+            mode: mode_str(wf.mode).to_string(),
+            repo: None,
+            priority: task.priority,
+            title: task.title.clone(),
+            url: task.url.clone(),
+            // The full normalized task, so dispatch can reconstruct it.
+            source_payload: serde_json::to_value(task).ok(),
+            // Carry the source's conversation-continuation key (E-09).
+            thread_key: task.thread_key.clone(),
+            last_signal_at: None,
+        };
+        let id = match path {
+            IngestPath::Fetched => self.db.upsert_task(&new_task)?,
+            IngestPath::Submitted => self.db.upsert_submitted_task(&new_task)?,
+        };
+        Ok((id, is_new))
     }
 
     /// Select a repository for every queued task that has none (F-10–F-14).
@@ -1375,6 +1466,69 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 let _ = respond.send(outcome);
                 Ok(())
             }
+            // A pushed task (`task/submit`, 0.1.6): persist, ack only after
+            // the commit, then run repo selection so the loop's dispatch pass
+            // can pick the task up. A persistence error answers the plugin
+            // with the retryable INTERNAL_ERROR and still propagates — the
+            // fetch path treats DB failures as run-fatal, and this path must
+            // not be more forgiving.
+            PluginEvent::TaskSubmit {
+                source,
+                task,
+                respond,
+            } => match self.on_task_submit(source, task) {
+                Ok(result) => {
+                    let _ = respond.send(Ok(result));
+                    self.select_repos().await
+                }
+                Err(e) => {
+                    let _ = respond.send(Err(jsonrpc::Error::new(
+                        plugin_protocol::error_code::INTERNAL_ERROR,
+                        format!("failed to persist task: {e} → retry with backoff"),
+                    )));
+                    Err(e)
+                }
+            },
+        }
+    }
+
+    /// Ingest one pushed task (`task/submit`, 0.1.6) with the same
+    /// normalization and defensive workflow matching as the fetch path.
+    /// Returns the final ack; `Err` is a persistence failure (retryable for
+    /// the plugin, fatal for the run).
+    fn on_task_submit(
+        &mut self,
+        source: String,
+        mut task: Task,
+    ) -> Result<TaskSubmitResult, EngineError> {
+        // Same instance-name normalization as fetch_and_ingest: workflow
+        // matching and the ingest key use the `[plugins.<name>]` key, not the
+        // plugin's own notion of its source name.
+        task.source = source;
+        let workflows = self.settings.workflows.clone();
+        let Some(wf) = match_workflow(&workflows, &task) else {
+            return Ok(TaskSubmitResult {
+                status: TaskSubmitStatus::Rejected,
+                reason: Some(format!(
+                    "no workflow matches source `{}` (status: {:?}, labels: {:?}) → \
+                     add a [[workflows]] entry or fix its trigger",
+                    task.source, task.status, task.labels
+                )),
+            });
+        };
+        let (id, is_new) = self.ingest_task(wf, &task, IngestPath::Submitted)?;
+        if is_new {
+            self.stats.submitted += 1;
+            tracing::info!(task_id = id, workflow = %wf.name, title = %task.title, "task submitted");
+            Ok(TaskSubmitResult {
+                status: TaskSubmitStatus::Accepted,
+                reason: None,
+            })
+        } else {
+            Ok(TaskSubmitResult {
+                status: TaskSubmitStatus::Duplicate,
+                reason: None,
+            })
         }
     }
 
@@ -1841,6 +1995,15 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 tracing::warn!(workflow = %wf.name, source = %wf.source, "task source plugin not launched");
                 continue;
             };
+            if source.capabilities().task_submit {
+                // Push sources cannot be previewed: there is nothing to fetch.
+                tracing::info!(
+                    workflow = %wf.name,
+                    source = %wf.source,
+                    "push source (task_submit) skipped in dry-run"
+                );
+                continue;
+            }
             let params = TasksFetchParams {
                 trigger: wf.trigger.to_json(),
             };
@@ -1881,6 +2044,94 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
         Ok(entries)
     }
+}
+
+/// Route one plugin-initiated request (P→O, 0.1.6) to the engine loop.
+///
+/// `task/submit` is parsed and budgeted here; anything else is answered
+/// `METHOD_NOT_FOUND` immediately. The ack await is spawned off the caller's
+/// loop so one slow ingest never delays the next submission's parsing (per-
+/// source ordering is already fixed by the inline event-channel send).
+fn forward_submit(
+    source: &str,
+    request: IncomingRequest,
+    tx: &mpsc::UnboundedSender<PluginEvent>,
+    budget: &Arc<Semaphore>,
+) {
+    use plugin_protocol::error_code;
+    if request.method != method::TASK_SUBMIT {
+        request.responder.err(jsonrpc::Error::new(
+            error_code::METHOD_NOT_FOUND,
+            format!("unknown plugin-initiated method: {}", request.method),
+        ));
+        return;
+    }
+    let params: TaskSubmitParams = match request
+        .params
+        .clone()
+        .map(serde_json::from_value)
+        .transpose()
+    {
+        Ok(Some(params)) => params,
+        Ok(None) => {
+            request.responder.err(jsonrpc::Error::new(
+                error_code::INVALID_PARAMS,
+                "task/submit requires params → send { \"task\": { … } }",
+            ));
+            return;
+        }
+        Err(e) => {
+            request.responder.err(jsonrpc::Error::new(
+                error_code::INVALID_PARAMS,
+                format!("malformed task/submit params: {e}"),
+            ));
+            return;
+        }
+    };
+    // Backpressure: a bounded in-flight budget per plugin. Exhaustion is the
+    // retryable SUBMIT_OVERLOADED, never a dropped request.
+    let Ok(permit) = budget.clone().try_acquire_owned() else {
+        request.responder.err(jsonrpc::Error::new(
+            error_code::SUBMIT_OVERLOADED,
+            "task/submit in-flight budget exhausted → retry with backoff",
+        ));
+        return;
+    };
+    let (otx, orx) = tokio::sync::oneshot::channel();
+    if tx
+        .send(PluginEvent::TaskSubmit {
+            source: source.to_string(),
+            task: params.task,
+            respond: otx,
+        })
+        .is_err()
+    {
+        request.responder.err(jsonrpc::Error::new(
+            error_code::NOT_ACCEPTING,
+            "orchestrator is not accepting submissions → retry with backoff",
+        ));
+        return;
+    }
+    let responder = request.responder;
+    tokio::spawn(async move {
+        let _permit = permit;
+        match orx.await {
+            Ok(Ok(result)) => match serde_json::to_value(&result) {
+                Ok(value) => responder.ok(value),
+                Err(e) => responder.err(jsonrpc::Error::new(
+                    error_code::INTERNAL_ERROR,
+                    format!("failed to encode task/submit ack: {e}"),
+                )),
+            },
+            Ok(Err(error)) => responder.err(error),
+            // The engine dropped the responder without answering: it is
+            // shutting down before persisting. Retryable, never final.
+            Err(_) => responder.err(jsonrpc::Error::new(
+                error_code::NOT_ACCEPTING,
+                "orchestrator is shutting down → retry with backoff",
+            )),
+        }
+    });
 }
 
 /// Convert a raw plugin notification into a run-loop event, if relevant.

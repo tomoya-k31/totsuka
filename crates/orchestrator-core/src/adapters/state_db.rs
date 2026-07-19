@@ -130,6 +130,9 @@ const MIGRATIONS: &[&str] = &[
 /// parse every `detail` value uniformly.
 const INGEST_DETAIL: &str = r#"{"kind":"ingested"}"#;
 
+/// `events.detail` for a push ingest (`task/submit`, 0.1.6).
+const SUBMIT_DETAIL: &str = r#"{"kind":"submitted"}"#;
+
 /// Columns of `tasks`, read by name in [`row_to_task`].
 const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
      worktree_path, branch, state, priority, title, url, source_payload, \
@@ -377,6 +380,17 @@ impl StateDb {
     /// Ingest a task idempotently (F-73). Returns its id, whether newly
     /// inserted or already present under the same `(source, source_task_id)`.
     pub fn upsert_task(&self, task: &NewTask) -> Result<i64, StateError> {
+        self.upsert_task_inner(task, INGEST_DETAIL)
+    }
+
+    /// [`upsert_task`](Self::upsert_task) for the push path (`task/submit`,
+    /// 0.1.6): identical semantics, but the ingest audit event records
+    /// `{"kind":"submitted"}` so push and fetch ingests stay distinguishable.
+    pub fn upsert_submitted_task(&self, task: &NewTask) -> Result<i64, StateError> {
+        self.upsert_task_inner(task, SUBMIT_DETAIL)
+    }
+
+    fn upsert_task_inner(&self, task: &NewTask, detail: &str) -> Result<i64, StateError> {
         let now = now();
         let payload = task
             .source_payload
@@ -419,7 +433,7 @@ impl StateDb {
             tx.execute(
                 "INSERT INTO events (task_id, from_state, to_state, occurred_at, detail)
                  VALUES (?1, NULL, ?2, ?3, ?4)",
-                params![id, TaskState::Queued.as_str(), now, INGEST_DETAIL],
+                params![id, TaskState::Queued.as_str(), now, detail],
             )?;
         }
         tx.commit()?;

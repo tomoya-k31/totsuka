@@ -229,8 +229,8 @@ fn print_summary(summary: &RunSummary) {
     }
     let s = &summary.stats;
     println!(
-        "run summary: fetched {} / ingested {} / dispatched {} / done {} / failed {}",
-        s.fetched, s.ingested, s.dispatched, s.done, s.failed
+        "run summary: fetched {} / ingested {} / submitted {} / dispatched {} / done {} / failed {}",
+        s.fetched, s.ingested, s.submitted, s.dispatched, s.done, s.failed
     );
     let list = |ids: &[i64]| {
         ids.iter()

@@ -106,6 +106,8 @@ fn main() {
                             pane_control: flag("pane_control"),
                             resume_session: flag("resume_session"),
                             diagnostics_snapshot: flag("diagnostics_snapshot"),
+                            // 0.1.6: a push task source (never polled).
+                            task_submit: flag("task_submit"),
                             outputs: vec![OutputCapability::Source],
                             ..Default::default()
                         },
@@ -285,11 +287,26 @@ fn main() {
         // 0.1.6: after the initialize reply, emit the configured
         // plugin-initiated request (verbatim) so tests can drive the host's
         // incoming-request path.
-        if method == "initialize"
-            && let Some(request) = config.get("request_on_init")
-        {
-            let _ = writeln!(stdout, "{}", serde_json::to_string(request).unwrap());
-            let _ = stdout.flush();
+        if method == "initialize" {
+            if let Some(request) = config.get("request_on_init") {
+                let _ = writeln!(stdout, "{}", serde_json::to_string(request).unwrap());
+                let _ = stdout.flush();
+            }
+            // `submit_tasks`: one `task/submit` request per entry (0.1.6),
+            // ids `submit-0`, `submit-1`, …. Repeating the same task tests
+            // orchestrator-side idempotency (the second ack is `duplicate`).
+            if let Some(tasks) = config.get("submit_tasks").and_then(Value::as_array) {
+                for (i, task) in tasks.iter().enumerate() {
+                    let request = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": format!("submit-{i}"),
+                        "method": "task/submit",
+                        "params": { "task": task },
+                    });
+                    let _ = writeln!(stdout, "{}", serde_json::to_string(&request).unwrap());
+                    let _ = stdout.flush();
+                }
+            }
         }
     }
 }

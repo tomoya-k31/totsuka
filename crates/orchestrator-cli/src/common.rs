@@ -13,7 +13,7 @@ use orchestrator_core::paths::Paths;
 use orchestrator_core::platform::PlatformSecretStore;
 use orchestrator_core::plugins::PluginStore;
 use plugin_protocol::manifest::PluginKind;
-use plugin_protocol::methods::{LlmInfo, RepoInfo};
+use plugin_protocol::methods::{LlmInfo, RepoInfo, TriggerInfo};
 use serde_json::Value;
 
 /// A boxed error for CLI operations.
@@ -106,14 +106,26 @@ pub fn plugin_spec(
         .and_then(|p| p.timeout_secs)
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_PLUGIN_TIMEOUT);
-    // task_source plugins get the orchestrator's repository list (#109) and
-    // `[llm]` settings (#119) at `initialize`, so source-side repo resolution
-    // needs no duplicate `[[repos]]`/`[llm]` in plugins/{name}.toml.
-    let (repositories, llm) = if manifest.kind == PluginKind::TaskSource {
-        (repo_infos(cfg, env), llm_info(cfg, env))
-    } else {
-        (vec![], None)
-    };
+    // task_source plugins get the orchestrator's repository list (#109),
+    // `[llm]` settings (#119), and — 0.1.6 — their workflow triggers plus
+    // `poll_interval_secs` at `initialize`, so a push source knows its watch
+    // conditions and cadence without a `tasks/fetch` call carrying them.
+    let (repositories, llm, triggers, poll_interval_secs) =
+        if manifest.kind == PluginKind::TaskSource {
+            let triggers = cfg
+                .workflows
+                .iter()
+                .filter(|w| w.source == name)
+                .map(|w| TriggerInfo {
+                    workflow: w.name.clone(),
+                    trigger: serde_json::to_value(&w.trigger).unwrap_or(serde_json::Value::Null),
+                })
+                .collect();
+            let poll = cfg.plugin(name).and_then(|p| p.poll_interval_secs);
+            (repo_infos(cfg, env), llm_info(cfg, env), triggers, poll)
+        } else {
+            (vec![], None, vec![], None)
+        };
     Ok(PluginSpec {
         name: name.to_string(),
         program: store.plugin_dir(name).join(&manifest.name),
@@ -122,6 +134,8 @@ pub fn plugin_spec(
         init_config,
         repositories,
         llm,
+        triggers,
+        poll_interval_secs,
         timeout,
     })
 }

@@ -72,6 +72,8 @@ protocol_version = "^0.1"
         init_config,
         repositories: vec![],
         llm: None,
+        triggers: vec![],
+        poll_interval_secs: None,
         timeout: Duration::from_secs(10),
     })
     .await
@@ -1043,5 +1045,343 @@ async fn missing_workflow_at_finalize_keeps_worktree_not_deletes() {
         "committed worktree preserved, not deleted"
     );
     engine.shutdown(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---------------------------------------------------------------------------
+// Push ingestion (`task/submit`, 0.1.6 — #185)
+// ---------------------------------------------------------------------------
+
+/// Drive a watch-mode run until `cond` holds (checked every 100ms, 60s cap),
+/// then stop it and return the summary. Push submissions arrive as events on
+/// their own schedule, so tests wait on observable state instead of relying
+/// on one-shot settling.
+async fn run_watch_until(
+    engine: &mut Engine<SystemGitRunner, OpenAiRouter>,
+    cond: impl Fn() -> bool,
+) -> orchestrator_core::run::RunSummary {
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut stop_tx = Some(stop_tx);
+    let run_fut = engine.run(true, async move {
+        let _ = stop_rx.await;
+    });
+    tokio::pin!(run_fut);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        tokio::select! {
+            summary = &mut run_fut => return summary.unwrap(),
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                if stop_tx.is_some() && cond() {
+                    let _ = stop_tx.take().unwrap().send(());
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "condition not reached within 60s"
+                );
+            }
+        }
+    }
+}
+
+/// The `task/submit` acks the mock source recorded (`{"method":"response"}`
+/// lines in its notify_log), as `(id, status-or-error-code)` pairs.
+fn recorded_acks(source_log: &Path) -> Vec<(String, String)> {
+    read_log(source_log)
+        .into_iter()
+        .filter(|l| l["method"] == "response")
+        .map(|l| {
+            let id = l["params"]["id"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| l["params"]["id"].to_string());
+            let status = l["params"]["result"]["status"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| l["params"]["error"]["code"].to_string());
+            (id, status)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn submitted_task_is_persisted_acked_and_dispatched_without_polling() {
+    let base = scratch("submit_full_path");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let db_path = base.join("state.db");
+
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            // A push source: submits one task at initialize, declares
+            // task_submit, and ALSO carries a fetchable task — which must
+            // never be ingested, because push sources are not polled.
+            json!({
+                "task_submit": true,
+                "submit_tasks": [mock_task("s1")],
+                "tasks": [mock_task("never-fetched")],
+                "notify_log": source_log,
+            }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "stream_states": ["running", "done"] }),
+        )
+        .await,
+    );
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    let summary = run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "s1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+
+    // Persist-before-ack: the source received a final `accepted` ack.
+    assert_eq!(
+        recorded_acks(&source_log),
+        vec![("submit-0".to_string(), "accepted".to_string())]
+    );
+    // Counted as a submission; the fetch path never ran (not polled).
+    assert_eq!(summary.stats.submitted, 1);
+    assert_eq!(summary.stats.fetched, 0);
+    assert_eq!(summary.stats.ingested, 0);
+    assert_eq!(summary.stats.dispatched, 1);
+    let db = StateDb::open(&db_path).unwrap();
+    assert!(
+        db.find_by_source("mock_src", "never-fetched")
+            .unwrap()
+            .is_none(),
+        "a push source must never be polled via tasks/fetch"
+    );
+
+    engine.shutdown(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn duplicate_submit_is_acked_duplicate_and_ingested_once() {
+    let base = scratch("submit_duplicate");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let db_path = base.join("state.db");
+
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            // The same task twice: a re-submit after a lost ack must be
+            // answered `duplicate`, never ingested twice.
+            json!({
+                "task_submit": true,
+                "submit_tasks": [mock_task("d1"), mock_task("d1")],
+                "notify_log": source_log,
+            }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "stream_states": ["running", "done"] }),
+        )
+        .await,
+    );
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let probe = source_log.clone();
+    let summary = run_watch_until(&mut engine, move || recorded_acks(&probe).len() == 2).await;
+
+    assert_eq!(
+        recorded_acks(&source_log),
+        vec![
+            ("submit-0".to_string(), "accepted".to_string()),
+            ("submit-1".to_string(), "duplicate".to_string()),
+        ]
+    );
+    assert_eq!(summary.stats.submitted, 1, "duplicates must not count");
+
+    engine.shutdown(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn submit_without_matching_workflow_is_rejected() {
+    let base = scratch("submit_rejected");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let db_path = base.join("state.db");
+
+    let mut plugins = PluginSet::default();
+    // No [[workflows]] entry references `stray_src`.
+    plugins.sources.insert(
+        "stray_src".to_string(),
+        launch(
+            "task_source",
+            "stray_src",
+            json!({
+                "task_submit": true,
+                "submit_tasks": [mock_task("r1")],
+                "notify_log": source_log,
+            }),
+        )
+        .await,
+    );
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let probe = source_log.clone();
+    let _ = run_watch_until(&mut engine, move || !recorded_acks(&probe).is_empty()).await;
+
+    let acks = recorded_acks(&source_log);
+    assert_eq!(acks.len(), 1);
+    assert_eq!(acks[0], ("submit-0".to_string(), "rejected".to_string()));
+    // Rejected → never persisted.
+    let db = StateDb::open(&db_path).unwrap();
+    assert!(db.find_by_source("stray_src", "r1").unwrap().is_none());
+
+    engine.shutdown(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn restart_dispatches_persisted_but_undispatched_submission() {
+    let base = scratch("submit_replay");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let db_path = base.join("state.db");
+
+    // Engine 1: zero slots — the submission is persisted (and acked) but can
+    // never dispatch, simulating a crash between persist and dispatch.
+    {
+        let mut plugins = PluginSet::default();
+        plugins.sources.insert(
+            "mock_src".to_string(),
+            launch(
+                "task_source",
+                "mock_src",
+                json!({
+                    "task_submit": true,
+                    "submit_tasks": [mock_task("s9")],
+                    "notify_log": source_log,
+                }),
+            )
+            .await,
+        );
+        plugins.agents.insert(
+            "mock_agent".to_string(),
+            launch(
+                "agent_ide",
+                "mock_agent",
+                json!({ "stream_states": ["running", "done"] }),
+            )
+            .await,
+        );
+        let mut settings = engine_settings(&repo);
+        settings.limits = Limits::global(0);
+        let mut engine = Engine::new(
+            StateDb::open(&db_path).unwrap(),
+            settings,
+            plugins,
+            SystemGitRunner,
+            no_llm(),
+        )
+        .await;
+        let db_probe = db_path.clone();
+        let summary = run_watch_until(&mut engine, move || {
+            StateDb::open(&db_probe)
+                .unwrap()
+                .find_by_source("mock_src", "s9")
+                .unwrap()
+                .is_some()
+        })
+        .await;
+        assert_eq!(summary.stats.submitted, 1);
+        assert_eq!(summary.stats.dispatched, 0);
+        engine.shutdown(Duration::from_secs(5)).await;
+    }
+
+    // Engine 2 over the same DB: the startup cycle picks the queued row up
+    // with no re-submission — persist-before-ack means nothing was lost.
+    {
+        let mut plugins = PluginSet::default();
+        plugins.sources.insert(
+            "mock_src".to_string(),
+            launch(
+                "task_source",
+                "mock_src",
+                json!({ "task_submit": true, "notify_log": source_log }),
+            )
+            .await,
+        );
+        plugins.agents.insert(
+            "mock_agent".to_string(),
+            launch(
+                "agent_ide",
+                "mock_agent",
+                json!({ "stream_states": ["running", "done"] }),
+            )
+            .await,
+        );
+        let mut engine = Engine::new(
+            StateDb::open(&db_path).unwrap(),
+            engine_settings(&repo),
+            plugins,
+            SystemGitRunner,
+            no_llm(),
+        )
+        .await;
+        let summary = tokio::time::timeout(
+            Duration::from_secs(60),
+            engine.run(false, std::future::pending()),
+        )
+        .await
+        .expect("one-shot run must settle")
+        .unwrap();
+
+        assert_eq!(summary.stats.submitted, 0);
+        assert_eq!(summary.stats.dispatched, 1);
+        let db = StateDb::open(&db_path).unwrap();
+        let task = db.find_by_source("mock_src", "s9").unwrap().unwrap();
+        assert_eq!(task.state, TaskState::Done);
+        engine.shutdown(Duration::from_secs(5)).await;
+    }
+
     let _ = std::fs::remove_dir_all(&base);
 }

@@ -39,6 +39,8 @@ fn spec(protocol_req: &str) -> PluginSpec {
         init_config: serde_json::json!({}),
         repositories: vec![],
         llm: None,
+        triggers: vec![],
+        poll_interval_secs: None,
         timeout: Duration::from_secs(10),
     }
 }
