@@ -6,19 +6,25 @@ mod common;
 
 use serde_json::{Value, json};
 
-use common::{Canned, FakeFactory, Shared};
+use common::{Canned, FakeFactory, Shared, SubmitHarness};
 use plugin_protocol::jsonrpc::{Response, error_code};
 use task_source_slack::server::Server;
 use task_source_slack::transport::TokenKind;
 
-fn server(shared: &Shared) -> Server<FakeFactory> {
+fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
     // Protocol-level tests: the Socket Mode runtime would consume the canned
     // transport queue in the background, so it stays off here. The full
-    // mention flow (runtime on) is covered by tests/mention_flow.rs.
-    Server::new(FakeFactory {
-        shared: shared.clone(),
-    })
-    .without_runtime()
+    // mention flow (runtime on) is covered by tests/mention_flow.rs. The
+    // harness is returned so its ack channel outlives the server.
+    let harness = SubmitHarness::new();
+    let srv = Server::new(
+        FakeFactory {
+            shared: shared.clone(),
+        },
+        harness.client.clone(),
+    )
+    .without_runtime();
+    (srv, harness)
 }
 
 /// Send one JSON-RPC request line and return the parsed response.
@@ -94,7 +100,7 @@ fn result_of(response: Response) -> Value {
 async fn initialize_runs_token_guard_and_declares_capabilities() {
     let shared = Shared::default();
     push_guard_ok(&shared);
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     let result = result_of(call(&mut srv, 1, "initialize", init_params()).await);
     assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
@@ -117,7 +123,7 @@ async fn initialize_rejects_a_bad_app_token_with_guidance() {
     shared.push(Canned::Data(
         json!({ "ok": false, "error": "invalid_auth" }),
     ));
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     let response = call(&mut srv, 1, "initialize", init_params()).await;
     let (code, message) = error_of(&response);
@@ -144,7 +150,7 @@ fn init_params_with_repos(config: Value, repositories: Value) -> Value {
 async fn initialize_falls_back_to_supplied_repositories() {
     let shared = Shared::default();
     push_guard_ok(&shared);
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     // No `[[repos]]` in the plugin config: the orchestrator's list is the
     // candidate set — its channel_groups references validate against it.
@@ -167,7 +173,7 @@ async fn initialize_validates_the_supplied_candidates() {
     // Two supplied repositories without an `[llm]` cannot be classified —
     // the deferred static check fires at initialize, before any network.
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     let config = json!({
         "app_token": "xapp-1-A1-test",
         "user_token": "xoxp-user-test",
@@ -185,7 +191,7 @@ async fn initialize_validates_the_supplied_candidates() {
 async fn initialize_prefers_explicit_repos_over_supplied() {
     let shared = Shared::default();
     push_guard_ok(&shared);
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     // The channel rule references the *explicit* repo; were the supplied
     // list merged in instead, this reference check would not prove
@@ -205,7 +211,7 @@ async fn initialize_prefers_explicit_repos_over_supplied() {
     let mut config = config;
     config["repos"] = json!([]);
     let params = init_params_with_repos(config, json!([{ "name": "design-system" }]));
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     let response = call(&mut srv, 2, "initialize", params).await;
     let (code, message) = error_of(&response);
     assert_eq!(code, error_code::CONFIG_INVALID);
@@ -215,7 +221,7 @@ async fn initialize_prefers_explicit_repos_over_supplied() {
 #[tokio::test]
 async fn initialize_without_any_repositories_is_config_invalid() {
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     let config = json!({
         "app_token": "xapp-1-A1-test",
         "user_token": "xoxp-user-test",
@@ -271,7 +277,7 @@ async fn initialize_adopts_the_supplied_llm() {
     // `[llm]` supplied at initialize fills in and startup succeeds.
     let shared = Shared::default();
     push_guard_ok(&shared);
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     let params = init_params_with_llm(
         config_without_llm(),
         json!([{ "name": "a" }, { "name": "b" }]),
@@ -292,7 +298,7 @@ async fn initialize_prefers_the_explicit_llm_over_supplied() {
     // table won and the supplied one was never adopted.
     let shared = Shared::default();
     push_guard_ok(&shared);
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     let mut config = config_without_llm();
     config["llm"] = json!({ "base_url": "https://llm.test/v1", "model": "m", "api_key": "k" });
     let broken_supplied = json!({ "base_url": "", "model": "m", "api_key": "k" });
@@ -306,7 +312,7 @@ async fn initialize_prefers_the_explicit_llm_over_supplied() {
     // And the converse: without the explicit table, the same unusable
     // supplied `[llm]` counts as "nothing supplied" and the candidate check
     // fires — proof the fallback path is what got exercised above.
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     let params = init_params_with_llm(
         config_without_llm(),
         json!([{ "name": "a" }, { "name": "b" }]),
@@ -325,7 +331,7 @@ async fn keyless_supplied_llm_is_not_adopted() {
     // that is CONFIG_INVALID, pointing at both config locations, before any
     // network call.
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     let params = init_params_with_llm(
         config_without_llm(),
         json!([{ "name": "a" }, { "name": "b" }]),
@@ -344,7 +350,7 @@ async fn config_validate_accepts_an_omitted_repos_list() {
     // Offline validation cannot know what initialize will supply, so an
     // omitted `[[repos]]` (and its channel references) defer to initialize.
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     let config = json!({
         "app_token": "xapp-1-A1-test",
         "user_token": "xoxp-user-test",
@@ -364,7 +370,7 @@ async fn initialize_fails_with_guidance_per_auth_error() {
     ] {
         let shared = Shared::default();
         shared.push(Canned::Data(json!({ "ok": false, "error": code })));
-        let mut srv = server(&shared);
+        let (mut srv, _harness) = server(&shared);
 
         let response = call(&mut srv, 1, "initialize", init_params()).await;
         let (rpc_code, message) = error_of(&response);
@@ -380,7 +386,7 @@ async fn initialize_rejects_identity_mismatch() {
     shared.push(Canned::Data(
         json!({ "ok": true, "user_id": "U_SOMEONE_ELSE" }),
     ));
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     let response = call(&mut srv, 1, "initialize", init_params()).await;
     let (code, message) = error_of(&response);
@@ -398,7 +404,7 @@ async fn initialize_rejects_identity_mismatch() {
 async fn initialize_network_failure_is_internal_not_config() {
     let shared = Shared::default();
     shared.push(Canned::Network);
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     let response = call(&mut srv, 1, "initialize", init_params()).await;
     let (code, message) = error_of(&response);
@@ -409,7 +415,7 @@ async fn initialize_network_failure_is_internal_not_config() {
 #[tokio::test]
 async fn initialize_rejects_malformed_config() {
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     let mut config = init_config();
     config["typo_field"] = json!(true);
@@ -429,7 +435,7 @@ async fn initialize_rejects_malformed_config() {
 #[tokio::test]
 async fn config_validate_accepts_a_valid_config_without_network() {
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     let result = result_of(
         call(
@@ -448,7 +454,7 @@ async fn config_validate_accepts_a_valid_config_without_network() {
 #[tokio::test]
 async fn config_validate_reports_static_errors() {
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     // Bot token instead of user token, and a channel rule referencing an
     // unknown repo. Two repos without an `[llm]` are legal offline since
@@ -477,7 +483,7 @@ async fn config_validate_reports_static_errors() {
 #[tokio::test]
 async fn config_validate_reports_unknown_keys() {
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     let mut config = init_config();
     config["typo_field"] = json!(true);
@@ -496,7 +502,7 @@ async fn config_validate_reports_unknown_keys() {
 #[tokio::test]
 async fn task_source_methods_require_initialize() {
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     for (method, params) in [
         ("tasks/fetch", json!({ "trigger": {} })),
@@ -520,7 +526,7 @@ async fn task_source_methods_require_initialize() {
 async fn task_source_methods_answer_after_initialize() {
     let shared = Shared::default();
     push_guard_ok(&shared);
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     result_of(call(&mut srv, 1, "initialize", init_params()).await);
 
     // Fetch: no tasks yet (the runtime is off; nothing feeds the buffer).
@@ -562,7 +568,7 @@ async fn task_source_methods_answer_after_initialize() {
 #[tokio::test]
 async fn shutdown_flags_exit() {
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     let line = json!({ "jsonrpc": "2.0", "id": 1, "method": "shutdown" });
     let reply = srv.handle_line(&line.to_string()).await;
     assert!(reply.shutdown);
@@ -572,7 +578,7 @@ async fn shutdown_flags_exit() {
 #[tokio::test]
 async fn malformed_and_notification_lines() {
     let shared = Shared::default();
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
 
     // Non-JSON → PARSE_ERROR with a response line.
     let reply = srv.handle_line("not json").await;

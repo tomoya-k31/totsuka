@@ -1467,6 +1467,7 @@ version = "0.1.2"
 dependencies = [
  "futures-util",
  "plugin-protocol",
+ "plugin-sdk",
  "reqwest",
  "semver",
  "serde",

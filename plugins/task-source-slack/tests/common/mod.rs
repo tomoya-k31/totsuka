@@ -276,17 +276,54 @@ pub fn block_actions_envelope(
     })
 }
 
-/// Poll `tasks/fetch` until it yields tasks (the pipeline is asynchronous).
-pub async fn fetch_until_tasks(srv: &mut Server<FakeFactory>, id: i64) -> Vec<Value> {
-    for _ in 0..100 {
-        let result = call(srv, id, "tasks/fetch", json!({ "trigger": {} })).await;
-        let tasks = result["tasks"].as_array().unwrap().clone();
-        if !tasks.is_empty() {
-            return tasks;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+/// The push-side observation channel (0.1.6): the pipeline's `task/submit`
+/// requests land in `rx`; [`SubmitHarness::next_task`] reads one, acks it
+/// `accepted`, and returns the task — the push analogue of the old
+/// fetch-until-tasks polling.
+pub struct SubmitHarness {
+    /// The client wired into the server under test.
+    pub client: plugin_sdk::SubmitClient,
+    rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+}
+
+impl SubmitHarness {
+    pub fn new() -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // Short timeouts: a test that never acks must not stall for minutes.
+        let client = plugin_sdk::SubmitClient::new(plugin_sdk::Writer::from_channel(tx))
+            .with_timeouts(Duration::from_secs(5), Duration::from_millis(10));
+        Self { client, rx }
     }
-    panic!("no task showed up within 5s");
+
+    /// Await the next `task/submit`, ack it `accepted`, return its task.
+    pub async fn next_task(&mut self) -> Value {
+        let line = tokio::time::timeout(Duration::from_secs(5), self.rx.recv())
+            .await
+            .expect("no task/submit within 5s")
+            .expect("submit channel closed");
+        let request: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "task/submit", "{request}");
+        self.client.resolve(&json!({
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "result": { "status": "accepted" }
+        }));
+        request["params"]["task"].clone()
+    }
+
+    /// Assert nothing is submitted within `window`.
+    pub async fn assert_no_task(&mut self, window: Duration) {
+        match tokio::time::timeout(window, self.rx.recv()).await {
+            Err(_) => {}
+            Ok(line) => panic!("unexpected task/submit: {line:?}"),
+        }
+    }
+}
+
+impl Default for SubmitHarness {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Wait until `condition` holds (the pipeline handles envelopes after the

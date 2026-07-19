@@ -3,8 +3,9 @@
 //! Slack** (Web API over raw-TCP HTTP + Socket Mode over WebSocket) and the
 //! mock agent, through the epic's whole loop:
 //!
-//! mention envelope → mention pipeline → `tasks/fetch` → dispatch (mock
-//! agent) → `result/publish` → draft surfaces (thread ephemeral + self-DM)
+//! mention envelope → mention pipeline → `task/submit` push (0.1.6) →
+//! dispatch (mock agent) → `result/publish` → draft surfaces (thread
+//! ephemeral + self-DM)
 //! → approve button (`block_actions`) → reply posted in the thread under the
 //! operator's own user token — plus `totsuka doctor`'s live probe (TokenGuard
 //! `auth.test` + `apps.connections.open`) against the same mock.
@@ -541,7 +542,7 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
         .expect("accept loop alive");
     rt.block_on(send_and_await_ack(&mut ws, mention_envelope()));
 
-    // watch: fetch → dispatch → done → result/publish → the draft shows up
+    // watch: submit → dispatch → done → result/publish → the draft shows up
     // as a thread ephemeral (and a self-DM record).
     let ephemeral = wait_for("the draft ephemeral", Duration::from_secs(90), || {
         mock.find("/chat.postEphemeral", |_| true)

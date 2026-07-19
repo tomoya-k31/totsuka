@@ -1,8 +1,9 @@
 //! The mention pipeline: consumes normalized Socket Mode events, applies the
 //! mention filter, enriches a fresh mention with thread context and names,
 //! resolves the target repository (issue #106), normalizes to the common
-//! [`Task`] schema, and buffers it until the orchestrator's next
-//! `tasks/fetch` drains the buffer (pull loop over a push source, #105).
+//! [`Task`] schema, and pushes it to the orchestrator via `task/submit`
+//! (protocol 0.1.6, ADR-0008 — the orchestrator persists before acking, so
+//! the plugin holds no task buffer and a restart loses nothing acked).
 //!
 //! Repository resolution runs entirely in the plugin: channel-prefix rules,
 //! then the plugin's own LLM classifier, then — when neither decides — an
@@ -15,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use plugin_sdk::{SubmitOutcome, Submitter};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -59,12 +61,12 @@ const SELECTION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// How often expired selections are swept.
 const SELECTION_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-/// State shared between the pipeline task and the JSON-RPC server: the task
-/// buffer `tasks/fetch` drains, the pending-mention index, the draft store
-/// (#107), and the resolved self-DM record channel.
+/// State shared between the pipeline task and the JSON-RPC server: the
+/// pending-mention index, the draft store (#107), and the resolved self-DM
+/// record channel. (The task buffer is gone — tasks are pushed via
+/// `task/submit` the moment they are built, 0.1.6.)
 #[derive(Clone, Default)]
 pub struct SharedState {
-    buffer: Arc<Mutex<Vec<Task>>>,
     pending: Arc<Mutex<PendingIndex>>,
     drafts: Arc<Mutex<DraftStore>>,
     self_dm: Arc<Mutex<Option<String>>>,
@@ -78,17 +80,6 @@ struct PendingIndex {
 }
 
 impl SharedState {
-    /// Queue a normalized task for the next `tasks/fetch`.
-    pub fn push_task(&self, task: Task) {
-        self.buffer.lock().unwrap().push(task);
-    }
-
-    /// Drain the whole buffer (a fetch returns everything and forgets it; a
-    /// second fetch must not see the same task).
-    pub fn drain_tasks(&self) -> Vec<Task> {
-        std::mem::take(&mut *self.buffer.lock().unwrap())
-    }
-
     /// Remember where `task_id`'s reply belongs (bounded: beyond
     /// [`PENDING_CAP`], the oldest entry is evicted with a warning).
     pub fn insert_pending(&self, task_id: String, pending: PendingMention) {
@@ -232,16 +223,22 @@ impl AwaitingSelection {
 }
 
 /// Run the pipeline over `events` until the channel closes: filter each
-/// message event, enrich + resolve + normalize fresh mentions, hand results
-/// to `state`, and answer `block_actions` (repository selections and the
-/// approval flow's approve/reject presses).
-pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
+/// message event, enrich + resolve + normalize fresh mentions, push results
+/// via `submitter` (`task/submit`, 0.1.6), and answer `block_actions`
+/// (repository selections and the approval flow's approve/reject presses).
+pub fn spawn<T, C, S>(
     api: Arc<SlackApi<T>>,
     chat: Arc<C>,
     config: Arc<SlackConfig>,
     mut events: mpsc::UnboundedReceiver<SocketEvent>,
     state: SharedState,
-) -> tokio::task::JoinHandle<()> {
+    submitter: S,
+) -> tokio::task::JoinHandle<()>
+where
+    T: SlackTransport + 'static,
+    C: ChatTransport + 'static,
+    S: Submitter + Clone + 'static,
+{
     tokio::spawn(async move {
         let mut filter = MentionFilter::new(&config.target_user_id);
         // Resolve the self-DM record channel up front (filter row 3). Failure
@@ -304,10 +301,19 @@ pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
                         state.clone(),
                         Arc::clone(&awaiting),
                         enriched,
+                        submitter.clone(),
                     ));
                 }
                 SocketEvent::BlockActions(payload) => {
-                    handle_block_actions(api.as_ref(), &config, &state, &awaiting, &payload).await;
+                    handle_block_actions(
+                        api.as_ref(),
+                        &config,
+                        &state,
+                        &awaiting,
+                        &payload,
+                        &submitter,
+                    )
+                    .await;
                 }
             }
         }
@@ -317,13 +323,14 @@ pub fn spawn<T: SlackTransport + 'static, C: ChatTransport + 'static>(
 /// Resolve the repository for an enriched mention and either submit the task
 /// or park it behind an ephemeral selection. Runs as its own task (spawned
 /// per mention), so slow LLM calls never stall the event loop.
-async fn handle_mention<T: SlackTransport, C: ChatTransport>(
+async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
     api: Arc<SlackApi<T>>,
     chat: Arc<C>,
     config: Arc<SlackConfig>,
     state: SharedState,
     awaiting: Arc<Mutex<AwaitingSelection>>,
     enriched: EnrichedMention,
+    submitter: S,
 ) {
     let context_text = enriched.context_lines.as_deref().unwrap_or(&[]).join("\n");
     let resolution = resolve(
@@ -337,7 +344,7 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport>(
 
     match resolution {
         Resolution::Resolved(repo) => {
-            submit(&state, &config, &enriched, Some(repo));
+            submit(&state, &config, &enriched, Some(repo), &submitter).await;
         }
         Resolution::NeedsSelection(candidates) => {
             let task_id = enriched.mention.task_id();
@@ -361,7 +368,7 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport>(
                         "could not post the repository picker; submitting without a hint"
                     );
                     awaiting.lock().unwrap().take(&task_id);
-                    submit(&state, &config, &enriched, None);
+                    submit(&state, &config, &enriched, None, &submitter).await;
                 }
             }
         }
@@ -372,12 +379,13 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport>(
 /// here; approve/reject presses are delegated to the approval flow. The
 /// action-id spaces are disjoint (`select_repo_*` / `skip_mention` vs.
 /// `approve_reply` / `reject_reply`).
-async fn handle_block_actions<T: SlackTransport>(
+async fn handle_block_actions<T: SlackTransport, S: Submitter>(
     api: &SlackApi<T>,
     config: &SlackConfig,
     state: &SharedState,
     awaiting: &Arc<Mutex<AwaitingSelection>>,
     payload: &Value,
+    submitter: &S,
 ) {
     let Some(action) = payload.get("actions").and_then(|a| a.get(0)) else {
         return;
@@ -409,7 +417,7 @@ async fn handle_block_actions<T: SlackTransport>(
             return;
         };
         tracing::info!(task_id, repo, "operator picked the repository");
-        submit(state, config, &enriched, Some(repo.clone()));
+        submit(state, config, &enriched, Some(repo.clone()), submitter).await;
         replace_ephemeral(
             api,
             response_url,
@@ -446,17 +454,44 @@ async fn handle_block_actions<T: SlackTransport>(
     }
 }
 
-/// Build the task from an enriched mention and queue it.
-fn submit(
+/// Build the task from an enriched mention and push it via `task/submit`
+/// (0.1.6). The pending entry is inserted **before** submitting so a
+/// lightning-fast `result/publish` can never miss it; a submission that
+/// permanently fails removes it again (the mention stays answerable on
+/// Slack — re-mention to retry).
+async fn submit<S: Submitter>(
     state: &SharedState,
     config: &SlackConfig,
     enriched: &EnrichedMention,
     repo_hint: Option<String>,
+    submitter: &S,
 ) {
     let (task, pending) = build_task(config, enriched, repo_hint);
-    tracing::info!(task_id = task.id, "mention became a task; buffered");
-    state.insert_pending(task.id.clone(), pending);
-    state.push_task(task);
+    let task_id = task.id.clone();
+    state.insert_pending(task_id.clone(), pending);
+    match submitter.submit(task).await {
+        SubmitOutcome::Accepted => {
+            tracing::info!(task_id, "mention became a task; submitted");
+        }
+        SubmitOutcome::Duplicate => {
+            tracing::info!(task_id, "mention already submitted earlier; dropped");
+        }
+        SubmitOutcome::Rejected { reason } => {
+            tracing::warn!(
+                task_id,
+                "orchestrator rejected the task: {}",
+                reason.as_deref().unwrap_or("no reason given")
+            );
+            state.take_pending(&task_id);
+        }
+        SubmitOutcome::GaveUp { error } => {
+            tracing::error!(
+                task_id,
+                "task submission gave up: {error} → re-mention on Slack to retry"
+            );
+            state.take_pending(&task_id);
+        }
+    }
 }
 
 /// The ephemeral repository picker: one button per candidate plus a skip,
