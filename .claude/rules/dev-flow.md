@@ -182,16 +182,21 @@ gh pr view <n> --json mergeStateStatus,mergeable
 git worktree list                    # the branch may live in another worktree —
                                      # run the rebase where it is checked out
 git fetch origin main
-git rebase origin/main               # on conflict: resolve each file, then
+git -c commit.gpgsign=false rebase origin/main
+                                     # unattended runs must disable signing —
+                                     # rebase re-signs every replayed commit
+                                     # (→ unattended-commit-signing.md).
+                                     # on conflict: resolve each file, then
 git add <resolved files>
-GIT_EDITOR=true git rebase --continue
-git push --force-with-lease          # own feature branch only
+GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
 ```
 
-- After resolving, re-run the **scoped local checks** for the union of the
-  branch's diff and the conflicted files (Rust set if Rust files are involved —
-  the branch's code has never been built against the new `main`), plus
-  `bash scripts/okf-lint.sh docs` if `docs/**` was conflicted, before pushing.
+- After the rebase completes, re-run the **scoped local checks** for the union
+  of the branch's diff and the conflicted files (Rust set if Rust files are
+  involved — the branch's code has never been built against the new `main`),
+  plus `bash scripts/okf-lint.sh docs` if `docs/**` was conflicted.
+- Only when those checks pass, push:
+  `git push --force-with-lease` (own feature branch only → git-conventions).
 - A force-push re-triggers CI — re-monitor it (steps 1 & 3). Copilot does not
   re-review (step 2), and a pure rebase adds no new logic, so do not re-run
   `/code-review` (step 5) for it.
