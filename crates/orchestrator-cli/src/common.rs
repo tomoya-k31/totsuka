@@ -215,12 +215,14 @@ pub fn secret_resolver(
     })
 }
 
-/// Recursively resolve `${ENV}` / `keychain:` references in every string leaf.
-pub fn resolve_strings<E>(
+/// Recursively resolve `${ENV}` / `keychain:` / `op://` references in every
+/// string leaf. Generic over the store so tests can inject a fake.
+pub fn resolve_strings<S, E>(
     value: &mut Value,
-    resolver: &SecretResolver<PlatformSecretStore, E>,
+    resolver: &SecretResolver<S, E>,
 ) -> Result<(), orchestrator_core::config::ResolveError>
 where
+    S: orchestrator_core::ports::SecretStore,
     E: Fn(&str) -> Option<String>,
 {
     match value {

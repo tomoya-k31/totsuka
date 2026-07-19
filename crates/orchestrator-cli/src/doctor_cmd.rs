@@ -158,6 +158,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         check_hooks(cx, cfg, &env, &mut checks);
         check_plugins(cx, cfg, &env, &mut checks);
         check_llm_key(cfg, &env, &mut checks);
+        check_onepassword(cx, &env, &mut checks);
         check_orphans(cfg, &env, db.as_ref(), json, &mut checks)?;
     }
 
@@ -188,6 +189,79 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         return Err("doctor found problems → follow the actions above".into());
     }
     Ok(())
+}
+
+/// 1Password backend probes (#156), fired **only when** `config.toml` or a
+/// `plugins/*.toml` actually contains an `op://` reference: `op --version`
+/// (CLI present) and `op whoami` (session established — unlike `op read`, it
+/// never triggers a biometric prompt). No `op://` in config ⇒ no checks.
+fn check_onepassword(cx: &Cx, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
+    if !config_mentions_onepassword(cx) {
+        return;
+    }
+    let Some(op) = which("op", env) else {
+        checks.push(Check::fail(
+            "1password",
+            "config references op:// secrets but the 1Password CLI (op) is not on PATH",
+            "install it (`brew install 1password-cli`) or switch the references to keychain:/${ENV}",
+        ));
+        return;
+    };
+    match std::process::Command::new(&op).arg("--version").output() {
+        Ok(out) if out.status.success() => {
+            let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            checks.push(Check::ok("1password", format!("op {version} on PATH")));
+        }
+        Ok(out) => {
+            checks.push(Check::fail(
+                "1password",
+                format!(
+                    "`op --version` exited with {}",
+                    out.status.code().unwrap_or(-1)
+                ),
+                "reinstall the 1Password CLI (`brew reinstall 1password-cli`)",
+            ));
+            return;
+        }
+        Err(e) => {
+            checks.push(Check::fail(
+                "1password",
+                format!("cannot run `op`: {e}"),
+                "install the 1Password CLI (`brew install 1password-cli`)",
+            ));
+            return;
+        }
+    }
+    // Session check: `op whoami` fails when not signed in, without prompting.
+    match std::process::Command::new(&op).arg("whoami").output() {
+        Ok(out) if out.status.success() => {
+            checks.push(Check::ok("1password-session", "op session is active"));
+        }
+        _ => {
+            checks.push(Check::warn(
+                "1password-session",
+                "no active 1Password session",
+                "run `op signin` before `totsuka run` so op:// references resolve",
+            ));
+        }
+    }
+}
+
+/// Whether `config.toml` or any `plugins/*.toml` contains an `op://` secret
+/// reference (textual scan — resolution stays lazy, this only gates doctor).
+fn config_mentions_onepassword(cx: &Cx) -> bool {
+    let mut sources: Vec<PathBuf> = vec![cx.config_path.clone()];
+    if let Ok(entries) = std::fs::read_dir(cx.plugin_config_dir()) {
+        sources.extend(
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "toml")),
+        );
+    }
+    sources
+        .iter()
+        .any(|path| std::fs::read_to_string(path).is_ok_and(|content| content.contains("op://")))
 }
 
 /// All Claude Code hook-mechanism probes (#141): assets, script dependencies,

@@ -12,6 +12,9 @@ use std::str::FromStr;
 /// Prefix identifying a Keychain-backed secret reference.
 const KEYCHAIN_PREFIX: &str = "keychain:";
 
+/// Prefix identifying a 1Password secret reference (`op read` native URI).
+const ONEPASSWORD_PREFIX: &str = "op://";
+
 /// A secret value that never exposes itself through `Debug`/`Display`.
 ///
 /// Wrapping secrets in this newtype prevents accidental leakage into logs or
@@ -53,34 +56,59 @@ impl fmt::Display for SecretString {
     }
 }
 
-/// A parsed reference to a secret held in the OS Keychain.
+/// A parsed reference to an externally-held secret.
 ///
-/// Textual form: `keychain:<service>/<account>`. The `<service>` segment runs
-/// up to the first `/`; everything after it is the `<account>` (which may
-/// itself contain `/`).
+/// Two schemes exist:
+///
+/// - `keychain:<service>/<account>` — the OS Keychain (macOS). The
+///   `<service>` segment runs up to the first `/`; everything after it is the
+///   `<account>` (which may itself contain `/`).
+/// - `op://<vault>/<item>/<field>` — 1Password, resolved by shelling out to
+///   `op read`. The URI is kept verbatim (`op read` accepts it natively);
+///   parsing only requires the `vault/item/field` shape, existence is the
+///   CLI's job.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SecretRef {
-    service: String,
-    account: String,
+pub enum SecretRef {
+    /// An OS-Keychain item (`keychain:<service>/<account>`).
+    Keychain {
+        /// The Keychain service (item name).
+        service: String,
+        /// The Keychain account (item account).
+        account: String,
+    },
+    /// A 1Password item field (`op://<vault>/<item>/<field>`), kept verbatim.
+    OnePassword {
+        /// The full `op://…` URI as written in config.
+        uri: String,
+    },
 }
 
 impl SecretRef {
-    /// Build a reference from its two components.
+    /// Build a Keychain reference from its two components.
     pub fn keychain(service: impl Into<String>, account: impl Into<String>) -> Self {
-        Self {
+        Self::Keychain {
             service: service.into(),
             account: account.into(),
         }
     }
 
-    /// The Keychain service (item name).
-    pub fn service(&self) -> &str {
-        &self.service
+    /// Build a 1Password reference from its `op://…` URI.
+    pub fn onepassword(uri: impl Into<String>) -> Self {
+        Self::OnePassword { uri: uri.into() }
     }
+}
 
-    /// The Keychain account (item account).
-    pub fn account(&self) -> &str {
-        &self.account
+/// The textual form the reference was written in (`keychain:…` / `op://…`).
+/// The reference names *where* a secret lives, never the secret itself, so
+/// displaying it is safe (error messages, doctor output).
+impl fmt::Display for SecretRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Keychain { service, account } => {
+                write!(f, "{KEYCHAIN_PREFIX}{service}/{account}")
+            }
+            Self::OnePassword { uri } => f.write_str(uri),
+        }
     }
 }
 
@@ -88,31 +116,46 @@ impl FromStr for SecretRef {
     type Err = SecretError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let rest = s
-            .strip_prefix(KEYCHAIN_PREFIX)
-            .ok_or_else(|| SecretError::InvalidReference(s.to_string()))?;
-        let (service, account) = rest
-            .split_once('/')
-            .ok_or_else(|| SecretError::InvalidReference(s.to_string()))?;
-        if service.is_empty() || account.is_empty() {
-            return Err(SecretError::InvalidReference(s.to_string()));
+        if let Some(rest) = s.strip_prefix(KEYCHAIN_PREFIX) {
+            let (service, account) = rest
+                .split_once('/')
+                .ok_or_else(|| SecretError::InvalidReference(s.to_string()))?;
+            if service.is_empty() || account.is_empty() {
+                return Err(SecretError::InvalidReference(s.to_string()));
+            }
+            return Ok(Self::keychain(service, account));
         }
-        Ok(Self::keychain(service, account))
+        if let Some(rest) = s.strip_prefix(ONEPASSWORD_PREFIX) {
+            // `op read` needs at least `vault/item/field`; deeper validation
+            // (existence, extra segments like `?attribute=…`) is `op`'s job.
+            let segments: Vec<&str> = rest.split('/').collect();
+            if segments.len() < 3 || segments.iter().take(3).any(|s| s.is_empty()) {
+                return Err(SecretError::InvalidReference(s.to_string()));
+            }
+            return Ok(Self::onepassword(s));
+        }
+        Err(SecretError::InvalidReference(s.to_string()))
     }
 }
 
 /// Errors from resolving a secret reference.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
-    /// The reference string was not a well-formed `keychain:<service>/<account>`.
+    /// The reference string was not a well-formed `keychain:<service>/<account>`
+    /// or `op://<vault>/<item>/<field>`.
     #[error("invalid secret reference: {0}")]
     InvalidReference(String),
     /// No secret exists for the reference.
-    #[error("secret not found: {service}/{account}")]
-    NotFound { service: String, account: String },
+    #[error("secret not found: {reference}")]
+    NotFound { reference: String },
     /// The underlying secret backend failed.
     #[error("secret backend error: {0}")]
     Backend(String),
+    /// The backend tool for this reference scheme is not installed.
+    #[error(
+        "secret backend `{backend}` is not available → install it (1Password: `brew install 1password-cli`)"
+    )]
+    BackendUnavailable { backend: String },
     /// This platform has no supported secret store.
     #[error("secret store is not supported on this platform")]
     Unsupported,
@@ -145,15 +188,24 @@ mod tests {
     #[test]
     fn parses_keychain_reference() {
         let r: SecretRef = "keychain:totsuka/github-token".parse().unwrap();
-        assert_eq!(r.service(), "totsuka");
-        assert_eq!(r.account(), "github-token");
+        assert_eq!(r, SecretRef::keychain("totsuka", "github-token"));
+        assert_eq!(r.to_string(), "keychain:totsuka/github-token");
     }
 
     #[test]
     fn account_may_contain_slashes() {
         let r: SecretRef = "keychain:svc/a/b/c".parse().unwrap();
-        assert_eq!(r.service(), "svc");
-        assert_eq!(r.account(), "a/b/c");
+        assert_eq!(r, SecretRef::keychain("svc", "a/b/c"));
+    }
+
+    #[test]
+    fn parses_onepassword_reference_verbatim() {
+        // The `op read` native URI is kept whole — `op` interprets it.
+        let r: SecretRef = "op://Dev/Openrouter/api_key".parse().unwrap();
+        assert_eq!(r, SecretRef::onepassword("op://Dev/Openrouter/api_key"));
+        assert_eq!(r.to_string(), "op://Dev/Openrouter/api_key");
+        // Extra segments (e.g. a section) stay the CLI's business.
+        assert!("op://Dev/Item/section/field".parse::<SecretRef>().is_ok());
     }
 
     #[test]
@@ -163,6 +215,11 @@ mod tests {
             "keychain:noslash",
             "keychain:/account",
             "keychain:svc/",
+            // op:// needs at least vault/item/field, all non-empty.
+            "op://",
+            "op://only-vault",
+            "op://Dev/item-only",
+            "op://Dev//field",
         ] {
             assert!(
                 bad.parse::<SecretRef>().is_err(),

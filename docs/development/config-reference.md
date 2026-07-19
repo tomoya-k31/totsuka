@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks]
-timestamp: 2026-07-18T00:00:00Z
+timestamp: 2026-07-19T15:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -22,6 +22,7 @@ owner: tomoya-k31
 文字列値は次のいずれか。プレーンなシークレットは設定に書かない。
 
 - `keychain:<service>/<account>` — macOS Keychain から解決
+- `op://<vault>/<item>/<field>` — 1Password から解決（#156、[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md)）。1Password CLI（`op read --no-newline`）へのシェルアウトで、事前に `op signin` 済みの対話セッションが前提。`config.toml` / `plugins/{name}.toml` の**任意の文字列 leaf** で使える（例 `api_key_ref = "op://Dev/Openrouter/api_key"`、Slack の `user_token = "op://Dev/Slack/user_token"`）。`op` は cross-platform のため **非 macOS でも動く唯一の実働バックエンド**。未導入は「`brew install 1password-cli`」、item 不在は not found、未サインインは「`op signin` を実行」の actionable エラーになり、`totsuka doctor` は設定に `op://` があるときのみ `op --version` / `op whoami`（非プロンプト）を検査する
 - `${ENV_VAR}` を含む文字列 — 環境変数から展開
 - `~` / `${ENV}` はパスでも展開される
 
