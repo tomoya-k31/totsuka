@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-07-20
+* **Creation**: [plugin-sdk](/components/plugin-sdk.md)（#186、ADR-0008）。task_source プラグイン作成用ヘルパークレート `crates/plugin-sdk` を新設 — `runtime`（単一 writer タスクで stdout を専有し行交錯を構造的に排除、response 行は SubmitClient へ配路）/ `dispatch`（`TaskSourceHandler` trait + `TaskSourceServer` で wire protocol 全体をカバー）/ `submit`（`SubmitClient`: ack 3 値は最終、retryable error・timeout は指数バックオフ最大 5 回、pending map は serve が解決）/ `poll`（`poll_loop`: triggers × interval の非重複 jitter 付き fetch→submit、seen-set なし）。
+
 ## 2026-07-19
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) / [設定リファレンス](/development/config-reference.md) — engine に `task/submit` push 取り込みを統合（#185、ADR-0008）。source ごとの forwarder（parse → Semaphore 64 → `PluginEvent::TaskSubmit`）、`ingest_task()` で fetch/submit 経路を共通化し **persist-before-ack**（audit detail は `ingested`/`submitted` で区別、state.db schema 変更なし）、`task_submit` 宣言 source のポーリング全面停止 + 未宣言 source への deprecation warn、`RunStats.submitted`。CLI は `[[workflows]]` の triggers と `poll_interval_secs` を `initialize` へ配線（push source の内部周期として再定義）。mock_plugin に `task_submit`/`submit_tasks` を追加し、run_loop に push 経路の統合テスト 4 件（ack 相関・重複・Rejected・再起動リプレイ）。
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — plugin host にプラグイン起点 request（P→O、0.1.6 `task/submit` 等）の受信を追加（#184）。reader に `method`+`id` の第 3 分岐を Notification 判定より前に挿入し `IncomingRequest`/`Responder` として `take_incoming_requests()` へ配路（従来はプラグイン起点 request が Notification として黙って破棄されていた）。応答は共有 writer 経由で行アトミックに書き戻し。mock_plugin に `request_on_init`（検証用のプラグイン起点 request 発行）と受信 response の記録を追加。
