@@ -1,8 +1,9 @@
 //! The approval flow (#107): `result/publish` turns an agent-generated reply
-//! into a [`Draft`] presented twice — an ephemeral inside the mention's
-//! thread and a persistent self-DM record — and the approve/reject
-//! `block_actions` finish it. Only an approval posts to the thread, under
-//! the operator's own name (user token).
+//! (mechanically prefixed with a `<@sender_id>` mention of the asker) into a
+//! [`Draft`] presented twice — an ephemeral inside the mention's thread and a
+//! persistent self-DM record — and the approve/reject `block_actions` finish
+//! it. Only an approval posts to the thread, under the operator's own name
+//! (user token).
 //!
 //! Failure posture:
 //! - one presentation surface failing to post is logged and tolerated (the
