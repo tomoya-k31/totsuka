@@ -250,10 +250,42 @@ async fn ack_timeout_retries_and_duplicate_resolves() {
 }
 
 #[tokio::test]
-async fn closed_writer_gives_up() {
+async fn closed_writer_gives_up_immediately() {
     let (client, rx) = client_and_requests(Duration::from_millis(50));
-    drop(rx); // host gone
+    drop(rx); // host gone — permanent, no backoff
+    let start = std::time::Instant::now();
     let outcome = client.submit_task(sample_task("g1")).await;
+    assert!(
+        matches!(outcome, SubmitOutcome::GaveUp { .. }),
+        "{outcome:?}"
+    );
+    assert!(
+        start.elapsed() < Duration::from_millis(40),
+        "a permanent failure must not sit through backoff"
+    );
+}
+
+#[tokio::test]
+async fn non_contract_error_code_gives_up_without_retry() {
+    // METHOD_NOT_FOUND is a protocol violation, not load: retrying cannot
+    // help, so the client gives up after the single attempt.
+    let (client, mut rx) = client_and_requests(Duration::from_secs(5));
+    let responder = client.clone();
+    tokio::spawn(async move {
+        let (id, _) = next_request(&mut rx).await;
+        responder.resolve(&json!({
+            "jsonrpc": "2.0", "id": id,
+            "error": { "code": error_code::METHOD_NOT_FOUND, "message": "unknown method" }
+        }));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), rx.recv())
+                .await
+                .is_err(),
+            "a protocol violation must not be re-submitted"
+        );
+    });
+
+    let outcome = client.submit_task(sample_task("m1")).await;
     assert!(
         matches!(outcome, SubmitOutcome::GaveUp { .. }),
         "{outcome:?}"

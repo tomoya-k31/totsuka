@@ -3,10 +3,11 @@
 //!
 //! Retry contract (ADR-0008): the three result statuses
 //! (`accepted`/`duplicate`/`rejected`) are **final** — never re-submitted.
-//! JSON-RPC errors `NOT_ACCEPTING(-32004)` / `SUBMIT_OVERLOADED(-32005)` /
-//! `INTERNAL_ERROR(-32603)`, a lost writer, and an ack timeout are retried
-//! with exponential backoff; a re-submit after a lost ack is answered
-//! `duplicate` by the Orchestrator, so retrying is always safe.
+//! The [`RETRYABLE_CODES`] JSON-RPC errors and an ack timeout are retried
+//! with exponential backoff (a re-submit after a lost ack is answered
+//! `duplicate` by the Orchestrator, so retrying is always safe). Any other
+//! error code is a protocol violation, and a closed writer means the host is
+//! gone — both fail the submission immediately, no pointless backoff.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -64,9 +65,33 @@ pub trait Submitter: Send + Sync {
     fn submit(&self, task: Task) -> impl Future<Output = SubmitOutcome> + Send;
 }
 
-/// One pending ack slot: resolved with the typed result, or a retryable
-/// error description.
-type PendingAck = oneshot::Sender<Result<TaskSubmitResult, String>>;
+/// A failed attempt: whether backing off and re-submitting can help, plus a
+/// human-readable description.
+#[derive(Debug)]
+struct AttemptError {
+    retryable: bool,
+    message: String,
+}
+
+impl AttemptError {
+    fn retryable(message: impl std::fmt::Display) -> Self {
+        Self {
+            retryable: true,
+            message: message.to_string(),
+        }
+    }
+
+    fn permanent(message: impl std::fmt::Display) -> Self {
+        Self {
+            retryable: false,
+            message: message.to_string(),
+        }
+    }
+}
+
+/// One pending ack slot: resolved with the typed result, or a classified
+/// attempt error.
+type PendingAck = oneshot::Sender<Result<TaskSubmitResult, AttemptError>>;
 
 /// The `task/submit` client bound to the shared [`Writer`].
 ///
@@ -115,13 +140,27 @@ impl SubmitClient {
                         },
                     };
                 }
+                // A permanent failure (protocol violation, host gone):
+                // backing off cannot help, give up now.
+                Err(error) if !error.retryable => {
+                    tracing::error!(
+                        task = %task.id,
+                        "task/submit failed permanently: {} → \
+                         the source system remains the durable origin",
+                        error.message
+                    );
+                    return SubmitOutcome::GaveUp {
+                        error: error.message,
+                    };
+                }
                 Err(error) => {
                     tracing::warn!(
                         task = %task.id,
                         attempt,
-                        "task/submit attempt failed (will retry): {error}"
+                        "task/submit attempt failed (will retry): {}",
+                        error.message
                     );
-                    last_error = error;
+                    last_error = error.message;
                 }
             }
             if attempt < MAX_ATTEMPTS {
@@ -137,17 +176,18 @@ impl SubmitClient {
         SubmitOutcome::GaveUp { error: last_error }
     }
 
-    /// One attempt: send the request, await its ack (or time out). `Err` is
-    /// always retryable — final statuses come back as `Ok`.
-    async fn submit_once(&self, task: &Task) -> Result<TaskSubmitResult, String> {
+    /// One attempt: send the request, await its ack (or time out). Final
+    /// statuses come back as `Ok`; an `Err` carries whether backing off and
+    /// re-submitting can help.
+    async fn submit_once(&self, task: &Task) -> Result<TaskSubmitResult, AttemptError> {
         let id = format!("submit-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let params = TaskSubmitParams { task: task.clone() };
         let request = Request::new(
             RequestId::Str(id.clone()),
             method::TASK_SUBMIT,
-            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+            Some(serde_json::to_value(&params).map_err(AttemptError::permanent)?),
         );
-        let line = to_line(&request).map_err(|e| e.to_string())?;
+        let line = to_line(&request).map_err(AttemptError::permanent)?;
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()
@@ -155,17 +195,20 @@ impl SubmitClient {
             .insert(id.clone(), tx);
         if !self.writer.send_line(line) {
             self.pending.lock().expect("pending lock").remove(&id);
-            return Err("writer closed (host gone)".to_string());
+            // The writer channel only closes when the writer task ended —
+            // the host is gone for good, not busy.
+            return Err(AttemptError::permanent("writer closed (host gone)"));
         }
         match tokio::time::timeout(self.ack_timeout, rx).await {
             Ok(Ok(Ok(result))) => Ok(result),
-            // Retryable JSON-RPC error (the resolver pre-filters final ones —
-            // there are none: every error code is retryable by contract).
             Ok(Ok(Err(error))) => Err(error),
-            Ok(Err(_)) => Err("ack channel dropped".to_string()),
+            Ok(Err(_)) => Err(AttemptError::retryable("ack channel dropped")),
             Err(_) => {
                 self.pending.lock().expect("pending lock").remove(&id);
-                Err(format!("no ack within {:?}", self.ack_timeout))
+                Err(AttemptError::retryable(format!(
+                    "no ack within {:?}",
+                    self.ack_timeout
+                )))
             }
         }
     }
@@ -188,13 +231,23 @@ impl SubmitClient {
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown error");
-            Err(format!("orchestrator answered {code}: {message}"))
+            let rendered = format!("orchestrator answered {code}: {message}");
+            // Only the ADR-0008 contract codes are worth a backoff; anything
+            // else (INVALID_PARAMS, METHOD_NOT_FOUND, …) is a protocol
+            // violation a retry cannot fix.
+            if RETRYABLE_CODES.contains(&code) {
+                Err(AttemptError::retryable(rendered))
+            } else {
+                Err(AttemptError::permanent(rendered))
+            }
         } else {
             match serde_json::from_value::<TaskSubmitResult>(
                 response.get("result").cloned().unwrap_or(Value::Null),
             ) {
                 Ok(result) => Ok(result),
-                Err(e) => Err(format!("malformed task/submit ack: {e}")),
+                Err(e) => Err(AttemptError::retryable(format!(
+                    "malformed task/submit ack: {e}"
+                ))),
             }
         };
         let _ = tx.send(outcome);
@@ -207,12 +260,12 @@ impl Submitter for SubmitClient {
     }
 }
 
-/// The retryable error codes, re-exported for reference: every JSON-RPC
-/// error on `task/submit` means "retry with backoff" —
+/// The JSON-RPC error codes worth a backoff (ADR-0008):
 /// [`NOT_ACCEPTING`](error_code::NOT_ACCEPTING),
 /// [`SUBMIT_OVERLOADED`](error_code::SUBMIT_OVERLOADED),
-/// [`INTERNAL_ERROR`](error_code::INTERNAL_ERROR) — while final dispositions
-/// ride the result. See [`TaskSubmitStatus`].
+/// [`INTERNAL_ERROR`](error_code::INTERNAL_ERROR). Any other error code is a
+/// protocol violation and fails the submission immediately; final
+/// dispositions ride the result instead ([`TaskSubmitStatus`]).
 pub const RETRYABLE_CODES: [i64; 3] = [
     error_code::NOT_ACCEPTING,
     error_code::SUBMIT_OVERLOADED,
