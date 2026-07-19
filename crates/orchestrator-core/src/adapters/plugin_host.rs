@@ -18,6 +18,16 @@
 //! with [`HostError::Crashed`] and marks the plugin closed. The host itself is
 //! unaffected — the caller decides how to fail the affected tasks (#63). v1
 //! does not auto-restart.
+//!
+//! # Plugin-initiated requests (0.1.6)
+//!
+//! A plugin may itself issue a request over the same stdio (P→O, e.g.
+//! `task/submit`). The reader routes any line carrying both `method` and `id`
+//! to the [`IncomingRequest`] channel ([`Plugin::take_incoming_requests`]);
+//! the consumer answers through the carried [`Responder`], which serializes
+//! the reply onto the shared writer. Lines with `method` and no `id` remain
+//! notifications; lines with `id` and `result`/`error` remain responses to
+//! our own calls.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -124,6 +134,53 @@ pub enum HostError {
 /// Outcome delivered to a waiting call: RPC success value or RPC error.
 type PendingOutcome = Result<Value, jsonrpc::Error>;
 
+/// A request initiated by the plugin (P→O, 0.1.6 — e.g. `task/submit`),
+/// surfaced to the consumer of [`Plugin::take_incoming_requests`] together
+/// with the [`Responder`] that answers it.
+#[derive(Debug)]
+pub struct IncomingRequest {
+    /// Method name (e.g. `task/submit`).
+    pub method: String,
+    /// Raw params, if any (the consumer parses the typed shape).
+    pub params: Option<Value>,
+    /// Answer channel; consume with [`Responder::ok`] / [`Responder::err`].
+    pub responder: Responder,
+}
+
+/// Writes the JSON-RPC response for one plugin-initiated request back onto
+/// the plugin's shared writer (so replies never interleave with concurrent
+/// O→P request lines).
+///
+/// Dropping a `Responder` without answering sends nothing — the plugin's own
+/// call timeout covers that case. After a crash the writer is gone and both
+/// sends become harmless no-ops.
+#[derive(Debug)]
+pub struct Responder {
+    id: jsonrpc::RequestId,
+    write_tx: mpsc::UnboundedSender<String>,
+}
+
+impl Responder {
+    /// Answer the request with a success result.
+    pub fn ok(self, result: Value) {
+        self.send(jsonrpc::Response::result(self.id.clone(), result));
+    }
+
+    /// Answer the request with a JSON-RPC error.
+    pub fn err(self, error: jsonrpc::Error) {
+        self.send(jsonrpc::Response::error(self.id.clone(), error));
+    }
+
+    fn send(&self, response: jsonrpc::Response) {
+        match jsonrpc::to_line(&response) {
+            Ok(line) => {
+                let _ = self.write_tx.send(line);
+            }
+            Err(e) => tracing::warn!("failed to encode response to plugin request: {e}"),
+        }
+    }
+}
+
 /// Shared, cloneable inner state used by the transport tasks and callers.
 struct Inner {
     name: String,
@@ -195,6 +252,8 @@ pub struct Plugin {
     child: Mutex<Child>,
     /// Notifications streamed by the plugin (`state/subscribe`, F-38).
     notifications: Mutex<Option<mpsc::UnboundedReceiver<Notification>>>,
+    /// Requests initiated by the plugin (P→O, 0.1.6 — `task/submit`).
+    incoming: Mutex<Option<mpsc::UnboundedReceiver<IncomingRequest>>>,
     capabilities: Capabilities,
     plugin_version: semver::Version,
 }
@@ -241,6 +300,7 @@ impl Plugin {
 
         let (write_tx, write_rx) = mpsc::unbounded_channel::<String>();
         let (notif_tx, notif_rx) = mpsc::unbounded_channel::<Notification>();
+        let (incoming_tx, incoming_rx) = mpsc::unbounded_channel::<IncomingRequest>();
         let inner = Arc::new(Inner {
             name: spec.name.clone(),
             write_tx,
@@ -251,13 +311,20 @@ impl Plugin {
         });
 
         spawn_writer(stdin, write_rx);
-        spawn_reader(spec.name.clone(), stdout, inner.clone(), notif_tx);
+        spawn_reader(
+            spec.name.clone(),
+            stdout,
+            inner.clone(),
+            notif_tx,
+            incoming_tx,
+        );
         spawn_stderr_logger(spec.name.clone(), stderr);
 
         let plugin = Self {
             inner,
             child: Mutex::new(child),
             notifications: Mutex::new(Some(notif_rx)),
+            incoming: Mutex::new(Some(incoming_rx)),
             capabilities: Capabilities::default(),
             plugin_version: semver::Version::new(0, 0, 0),
         };
@@ -339,6 +406,13 @@ impl Plugin {
     /// Take the notification receiver (once) to consume the plugin's stream.
     pub async fn take_notifications(&self) -> Option<mpsc::UnboundedReceiver<Notification>> {
         self.notifications.lock().await.take()
+    }
+
+    /// Take the incoming-request receiver (once) to consume the plugin's
+    /// P→O requests (0.1.6, `task/submit`). The channel closes when the
+    /// plugin exits (the reader task drops the sender).
+    pub async fn take_incoming_requests(&self) -> Option<mpsc::UnboundedReceiver<IncomingRequest>> {
+        self.incoming.lock().await.take()
     }
 
     /// Ask the plugin to validate a plugin-specific config (F-59).
@@ -432,14 +506,17 @@ fn spawn_writer(mut stdin: tokio::process::ChildStdin, mut rx: mpsc::UnboundedRe
     });
 }
 
-/// Reader task: parse NDJSON from stdout, routing responses to waiting calls
-/// and notifications to the notification channel. On EOF (child exit) it drains
-/// all pending calls so they resolve as [`HostError::Crashed`] (§5.3).
+/// Reader task: parse NDJSON from stdout, routing responses to waiting calls,
+/// plugin-initiated requests (`method` + `id`, 0.1.6) to the incoming-request
+/// channel, and notifications to the notification channel. On EOF (child exit)
+/// it drains all pending calls so they resolve as [`HostError::Crashed`]
+/// (§5.3) and drops both channel senders so consumers observe the close.
 fn spawn_reader(
     name: String,
     stdout: tokio::process::ChildStdout,
     inner: Arc<Inner>,
     notif_tx: mpsc::UnboundedSender<Notification>,
+    incoming_tx: mpsc::UnboundedSender<IncomingRequest>,
 ) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
@@ -455,6 +532,25 @@ fn spawn_reader(
                 && (value.get("result").is_some() || value.get("error").is_some());
             if is_response {
                 deliver_response(&inner, value).await;
+            } else if value.get("method").is_some() && value.get("id").is_some() {
+                // A plugin-initiated request (P→O, 0.1.6). This branch must
+                // come before the notification one: a `Notification` parse
+                // would silently accept the value and drop its `id`.
+                match serde_json::from_value::<Request>(value) {
+                    Ok(request) => {
+                        let _ = incoming_tx.send(IncomingRequest {
+                            method: request.method,
+                            params: request.params,
+                            responder: Responder {
+                                id: request.id,
+                                write_tx: inner.write_tx.clone(),
+                            },
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(plugin = %name, "ignoring malformed request from plugin: {e}");
+                    }
+                }
             } else if value.get("method").is_some()
                 && let Ok(note) = serde_json::from_value::<Notification>(value)
             {

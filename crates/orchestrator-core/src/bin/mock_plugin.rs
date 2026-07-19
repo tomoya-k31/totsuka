@@ -27,6 +27,13 @@
 //! - `crash` → exits immediately with code 1 (to test crash isolation).
 //! - `shutdown` → replies, then exits 0.
 //! - anything else → method-not-found error.
+//!
+//! Plugin-initiated requests (0.1.6): if the config has a `"request_on_init"`
+//! object, it is emitted **verbatim** as one NDJSON line right after the
+//! `initialize` reply (tests supply a full JSON-RPC request, e.g.
+//! `task/submit`). Any incoming line with an `id` but no `method` — the
+//! orchestrator's response to that request — is recorded to `notify_log` as
+//! `{"method": "response", "params": <the response object>}`.
 
 use std::io::{BufRead, Write};
 
@@ -60,6 +67,13 @@ fn main() {
             if method == "notify" {
                 record(&config, "notify", &params);
             }
+            continue;
+        }
+        // A line with an `id` but no `method` is the orchestrator's response
+        // to a request this mock initiated (0.1.6 `request_on_init`); record
+        // it for tests instead of answering it.
+        if request.get("method").is_none() {
+            record(&config, "response", &request);
             continue;
         }
         let id = request.get("id").cloned().unwrap_or(Value::Null);
@@ -267,6 +281,16 @@ fn main() {
 
         let _ = writeln!(stdout, "{}", serde_json::to_string(&response).unwrap());
         let _ = stdout.flush();
+
+        // 0.1.6: after the initialize reply, emit the configured
+        // plugin-initiated request (verbatim) so tests can drive the host's
+        // incoming-request path.
+        if method == "initialize"
+            && let Some(request) = config.get("request_on_init")
+        {
+            let _ = writeln!(stdout, "{}", serde_json::to_string(request).unwrap());
+            let _ = stdout.flush();
+        }
     }
 }
 
