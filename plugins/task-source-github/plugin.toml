@@ -1,7 +1,10 @@
 name = "github"
 kind = "task_source"
-version = "0.1.0"
-protocol_version = "^0.1"
+version = "0.2.0"
+# 0.1.6 introduced `task/submit` (push ingestion); `<0.3` keeps this manifest
+# valid across the planned 0.2.0 `tasks/fetch` removal (ADR-0008).
+protocol_version = ">=0.1.6, <0.3"
 
 [capabilities]
+task_submit = true
 outputs = ["source"]
