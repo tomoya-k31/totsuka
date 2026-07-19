@@ -268,6 +268,10 @@ impl Plugin {
             config: spec.init_config,
             repositories: spec.repositories,
             llm: spec.llm,
+            // 0.1.6: workflow triggers + cadence for push sources; wired from
+            // the orchestrator config in a follow-up (#185), empty until then.
+            triggers: vec![],
+            poll_interval_secs: None,
         };
         let result: InitializeResult = plugin
             .call(plugin_protocol::method::INITIALIZE, &init)

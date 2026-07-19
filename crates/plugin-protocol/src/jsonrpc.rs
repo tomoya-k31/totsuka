@@ -202,6 +202,14 @@ pub mod error_code {
     pub const CAPABILITY_UNSUPPORTED: i64 = -32002;
     /// The plugin-specific configuration is invalid (F-59).
     pub const CONFIG_INVALID: i64 = -32003;
+    /// The Orchestrator is draining/shutting down and not accepting
+    /// `task/submit` (0.1.6). Retryable: back off and re-submit — the
+    /// submission is idempotent, so a re-submit after a lost ack is answered
+    /// with `duplicate`, never ingested twice.
+    pub const NOT_ACCEPTING: i64 = -32004;
+    /// The per-plugin in-flight `task/submit` budget is exhausted (0.1.6).
+    /// Retryable with backoff, same contract as [`NOT_ACCEPTING`].
+    pub const SUBMIT_OVERLOADED: i64 = -32005;
 }
 
 /// Encode a serializable message as one NDJSON line (no trailing newline).

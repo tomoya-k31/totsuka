@@ -11,6 +11,8 @@ status: accepted
 
 Accepted — 2026-07-15（エピック [#102](https://github.com/tomoya-k31/totsuka/issues/102)、実装 #103〜#108）
 
+Decision §2（バッファ + 短周期 `tasks/fetch`）は [ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)（protocol 0.1.6 の `task/submit` push 取り込み）で amend された。
+
 # Context
 
 「自分宛の Slack メンションを totsuka のタスクにし、AI エージェントの返信案を自分の承認後に本人名義で返信する」機能（[task-source-slack](/components/task-source-slack.md)）を追加するにあたり、3 つの構造判断が必要だった:
