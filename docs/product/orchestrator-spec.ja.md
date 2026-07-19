@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-timestamp: 2026-07-18T00:00:00+09:00
+timestamp: 2026-07-19T12:00:00+09:00
 status: draft
 owner: tomoya-k31
 ---
@@ -250,6 +250,7 @@ on_success = { set_status = "レビュー待ち" }
 | F-91 | 公式プラグインとして macOS 通知センター向け Notifier を v1 で同梱する | M |
 | F-92 | ワークフローごと・イベント種別ごとに通知の有効/無効を設定できる | S |
 | F-93 | 通知の失敗は本体のタスク実行に影響させない(fire-and-forget、エラーはログのみ) | M |
+| F-94 | **クリック可能な通知 → pane フォーカス(click-to-focus)**: 通知をクリックすると GUI ターミナルが前面化し、その通知を出したタスクの pane がフォーカスされる。送出は `terminal-notifier` バックエンド(`-activate <bundle-id>` + `-execute 'totsuka focus <task_id>'` + `-group totsuka-<task_id>`。Sequoia 15.x+ で壊れるため `-sender` は `-activate` と併用しない)。フォーカス経路は `totsuka focus` → 制御 UDS `POST /focus` → 当該タスクの agent_ide プラグインの `session/focus`(プロトコル 0.1.4、`pane_control` 宣言時のみ。session id は不透明のまま、F-37)。縮退はすべて静か: terminal-notifier 未導入は osascript へフォールバック、Orchestrator 停止中・pane 消失はアプリ前面化のみ成立(ADR-0005 参照) | S |
 
 ### 4.11 決定的な完了シグナル(Claude Code フック)
 
