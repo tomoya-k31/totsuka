@@ -170,7 +170,8 @@ just means "not computed yet" — re-run after a few seconds.
 
 ```
 gh pr view <n> --json mergeStateStatus,mergeable
-# mergeable "MERGEABLE"  / mergeStateStatus "CLEAN" → OK to merge
+# mergeable "MERGEABLE"  / mergeStateStatus "CLEAN" → no conflicts (other
+#   pre-merge gates — CI, reviews — still apply, → Merging below)
 # mergeable "CONFLICTING" / mergeStateStatus "DIRTY" → resolve below
 # mergeable "UNKNOWN" → still computing; wait a few seconds and re-run
 ```
@@ -198,8 +199,10 @@ GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
 - Only when those checks pass, push:
   `git push --force-with-lease` (own feature branch only → git-conventions).
 - A force-push re-triggers CI — re-monitor it (steps 1 & 3). Copilot does not
-  re-review (step 2), and a pure rebase adds no new logic, so do not re-run
-  `/code-review` (step 5) for it.
+  re-review (step 2). A mechanical rebase (conflicts resolved by keeping both
+  sides / taking one side verbatim) needs no `/code-review` re-run; if the
+  conflict resolution itself changed behavior, treat it like any substantive
+  commit (step 5's re-run policy applies).
 
 ## Merging (step 7 — only when instructed)
 
@@ -211,8 +214,9 @@ GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
   ```
 
 - Pre-merge: `mergeStateStatus` clean, required checks green, no unresolved
-  review threads. If it reports `DIRTY` / `CONFLICTING`, go through "Conflict
-  check & resolution" above first:
+  review threads. If it reports `mergeStateStatus: DIRTY` /
+  `mergeable: CONFLICTING`, go through "Conflict check & resolution" above
+  first:
 
   ```
   gh pr view <n> --json mergeStateStatus,mergeable,reviewDecision
