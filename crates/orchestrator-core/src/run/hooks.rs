@@ -58,19 +58,21 @@ use crate::ports::signal_ingress::FocusOutcome;
 /// "completed" tends to answer the re-invoke with "already answered above",
 /// which then becomes the published reply.
 pub(crate) const MARKER_SELF_REPORT_INSTRUCTION: &str = "[orchestrator] Completion \
-    self-report: end your FINAL response with exactly one of the following status \
-    markers on its own final line. The marker line is stripped automatically before \
-    the result is delivered, so include it even when instructed to output nothing \
-    but the answer body: <<STATUS:COMPLETED>> (done) / \
+    self-report: EVERY time you end your turn, end your response with exactly one \
+    of the following status markers on its own final line — with one exception: \
+    while background tasks or subagents are still running, do NOT emit a marker \
+    (that stop is an intermediate heartbeat; you will be re-invoked when they \
+    finish — restate the full final answer with the marker then). The marker line \
+    is stripped automatically before the result is delivered, so include it even \
+    when instructed to output nothing but the answer body: \
+    <<STATUS:COMPLETED>> (done) / \
     <<STATUS:NEEDS_INPUT reason=\"...\">> (human input required) / \
     <<STATUS:FAILED reason=\"...\">> (cannot proceed). \
     Delivery contract: ONLY the message carrying the marker is delivered to the \
     requester — earlier messages in this session are NEVER delivered. The \
     marker-bearing message must therefore contain the complete, self-contained \
     answer; never refer to a previous message (no \"as stated above\" / \"already \
-    answered earlier\"). While background tasks or subagents are still running, do \
-    NOT emit a marker — that turn is intermediate and you will be re-invoked when \
-    they finish; restate the full final answer with the marker then.";
+    answered earlier\").";
 
 impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Interpret one normalized hook signal (#138): resolve its task, record it
