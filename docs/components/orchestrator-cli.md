@@ -4,7 +4,7 @@ title: orchestrator-cli クレート
 description: totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（init / run / status / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [rust, crate, cli, plugin, run, status, doctor, hooks]
-timestamp: 2026-07-19T12:00:00Z
+timestamp: 2026-07-19T08:30:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -32,7 +32,7 @@ owner: tomoya-k31
 Claude Code の完了判定を screen-manifest からフック機構へ置換する基盤（エピック #131）の CLI 側実装。`src/hooks/` に module 化。
 
 - **静的スクリプト 6 本**（`hook-common.sh` / `on-stop.sh` / `on-notification.sh` / `on-session-start.sh` / `on-session-end.sh` / `on-user-prompt-submit.sh`）を `include_str!` でバイナリ同梱し、`run` / `doctor` 起動時に `$XDG_DATA_HOME/totsuka/hooks/` へ **0700・内容ハッシュ冪等**で書き出す（SHA-256 一致なら書き換えず、バージョンアップ時のみリフレッシュ）。
-- **workflow 別 `orchestrator-<workflow>.json`** を同ディレクトリへ **0600** でレンダリング。`Stop` には常に `on-stop.sh`（command 型）を配線し、`verification = "llm"` の workflow のみ `prompt` 型フック（`workflow.rubric` か既定 rubric + マーカー規約）を追加する（D-01）。`Notification` / `SessionStart` / `SessionEnd` / `UserPromptSubmit` は各 command 型フック（`UserPromptSubmit` は全 workflow 共通に配線 — スクリプトが env 未設定時に no-op するため常時登録して安全）。
+- **workflow 別 `orchestrator-<workflow>.json`** を同ディレクトリへ **0600** でレンダリング。`Stop` には常に `on-stop.sh`（command 型）を配線し、`verification = "llm"` の workflow のみ `prompt` 型フック（`workflow.rubric` か既定 rubric + **中間停止免除文** + マーカー規約）を追加する（D-01）。免除文は `on-stop.sh` の R-02（`background_tasks` 非空 = ハートビート）と対で、バックグラウンドタスク実行中の中間 Stop を判定 LLM が検証・ブロックしないよう機械的に付加する — これが無いと中間 Stop のたびに「Stop hook error」表示でブロックされ、task-notification 再起動に譲るべき場面でセッション内待機を強制していた（`slack-reply` 実機検収の運用フィードバック）。`Notification` / `SessionStart` / `SessionEnd` / `UserPromptSubmit` は各 command 型フック（`UserPromptSubmit` は全 workflow 共通に配線 — スクリプトが env 未設定時に no-op するため常時登録して安全）。
 - **ジョブ固有値はファイルに書かない**。job_id / エンドポイント / トークン / スプールディレクトリ / プロンプトコンテキストは env（`TOTSUKA_JOB_ID` / `TOTSUKA_HOOK_ENDPOINT` / `TOTSUKA_HOOK_TOKEN` / `TOTSUKA_HOOK_SPOOL_DIR` / `TOTSUKA_PROMPT_CONTEXT`）で [agent-ide-herdr](/components/agent-ide-herdr.md) が注入する（[plugin-protocol](/components/plugin-protocol.md) 0.1.3 `HookLaunchSpec`）。これにより同一の `--settings` パスが `claude --resume` を跨いで再利用できる（H-03）。
 - `on-stop.sh` は `set -uo pipefail`（`-e` は使わない = fail-open D-09）。①`jq`/`curl` 欠落 → 生 JSON をスプールへ追記し exit 0 ②`background_tasks` 非空 → `heartbeat` を POST し exit 0（中間 Stop、R-02）③`last_assistant_message` の**最後の** `<<STATUS:...>>` マーカー（`reason="..."` 属性込み、D-12。**山カッコは単一/二重どちらも許容** — 実エージェントが `<<...>>` を単一 `<...>` に正規化して出力するため、カッコ数の差で完了を取りこぼさない）を抽出し `stop`/該当 status を POST ④マーカー欠落 & `stop_hook_active != true` → `UNKNOWN` を POST の上、stdout に `{"decision":"block",...}`（是正方法つき、R-03）⑤マーカー欠落 & `stop_hook_active == true` → `UNKNOWN` の POST のみ（再 block しない）。POST は `hook-common.sh` の `post_event`（`curl --unix-socket` + Bearer + `--max-time 5 --retry 2`）で行い、失敗時は NDJSON 1 行を `$TOTSUKA_HOOK_SPOOL_DIR/<epoch>-<pid>.jsonl` へ追記（E-07/H-11）。ペイロードは常に compact JSON（`jq -c`）で NDJSON 1 行 = 1 オブジェクトを保つ。stdout は block JSON 以外を出さない（H-13）。
 - `on-user-prompt-submit.sh` は **不可視プロンプトコンテキスト注入**（Claude Code `UserPromptSubmit` フック）: env `TOTSUKA_PROMPT_CONTEXT`（core が組み立てるタスク指示文 + マーカー自己申告規約）が設定されていれば `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":...}}` を **1 行だけ** stdout へ出力し、モデルには全文が見えるがペインには何も描画されない（実機検証済み）。env 未設定・空、または `jq` 欠落時は無出力で exit 0（fail-open D-09 — そのターンの注入は失われるがプロンプト自体は通り、`on-stop.sh` の block がセーフティネットになる）。stdout 規律は H-13 準拠。
