@@ -16,7 +16,7 @@ docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 | Changed paths (`git diff --name-only main...HEAD`) | Run |
 |---|---|
 | `**/*.rs`, `**/Cargo.toml`, `Cargo.lock`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | **Rust set** (below) |
-| a dependency change in `Cargo.toml` / `Cargo.lock` | Rust set **plus** `cargo audit` and `cargo deny check` |
+| a dependency change in `Cargo.toml` / `Cargo.lock` | Rust set **plus** `cargo audit` and `cargo deny check`. If the tools are missing, install them once (`cargo install cargo-audit cargo-deny`); if that is not possible, do NOT silently skip — state it in the PR body and treat the `cargo-audit / cargo-deny` check (`audit.yml`, which fires on these paths) as the gate in post-PR monitoring |
 | `docs/**` | **Docs checks** (below) + the docs obligation |
 | a prose `*.md` outside the OKF/vendored exclusions and outside `.claude/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
 | `.github/workflows/**` | read the SHA-pin + `ubuntu-slim` rules, validate YAML (`yq . <file>`); if you changed `ci.yml`'s commands, also run the affected Rust set |
@@ -31,11 +31,18 @@ to `main`. Scoping only changes what you run **locally** before pushing —
 post-PR you still monitor all checks that report on your PR.
 
 **Rust set** — when Rust/Cargo files changed (mirror CI's flags; this is a
-9-crate workspace, so a missing `--workspace` can pass locally yet fail CI):
+10-crate workspace, so a missing `--workspace` can pass locally yet fail CI):
 
+- **Toolchain parity first**: CI installs the **latest stable**
+  (`dtolnay/rust-toolchain@stable`), so before trusting any local result run
+  `rustup check` and, if an update is available, `rustup update stable`.
+  Clippy's lint set grows between releases — an outdated local stable passed
+  clean while CI failed on `clippy::type_complexity` (PR #197).
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- `cargo test --workspace --all-features`
+- `RUSTFLAGS="-D warnings" cargo test --workspace --all-features` — CI
+  (`ci.yml`) exports `RUSTFLAGS: -D warnings` job-wide, so a plain
+  `cargo test` can pass locally on a warning that fails CI's build/test.
 - rust-analyzer LSP diagnostics clean — fix type errors / missing imports
   (rustc + clippy backed, per [CLAUDE.md](../../CLAUDE.md)).
 
