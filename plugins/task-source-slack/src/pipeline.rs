@@ -40,6 +40,8 @@ pub struct PendingMention {
     pub reply_ts: String,
     /// The mention message itself.
     pub mention_ts: String,
+    /// Sender's Slack user id (for the `<@…>` mention prefix on the reply).
+    pub sender_id: String,
     /// Sender display name (for the draft header).
     pub sender_name: String,
     /// Permalink to the mention (for the record), when resolvable.
@@ -698,6 +700,7 @@ fn build_task(
         channel: mention.channel.clone(),
         reply_ts: mention.reply_ts().to_string(),
         mention_ts: mention.ts.clone(),
+        sender_id: mention.user.clone(),
         sender_name: enriched.sender_name.clone(),
         permalink: enriched.permalink.clone(),
     };

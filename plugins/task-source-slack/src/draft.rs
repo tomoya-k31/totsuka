@@ -44,7 +44,8 @@ pub struct Draft {
     pub sender_name: String,
     /// Permalink to the mention, when resolvable.
     pub permalink: Option<String>,
-    /// The agent-generated reply text (sent verbatim on approval).
+    /// The reply text (agent-generated, prefixed with a mechanical
+    /// `<@sender_id>` mention of the asker), sent verbatim on approval.
     pub text: String,
     /// `ts` of the self-DM record, once posted (`chat.update` target).
     pub dm_ts: Option<String>,
