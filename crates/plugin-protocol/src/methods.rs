@@ -37,7 +37,8 @@ pub mod method {
     pub const TASKS_FETCH: &str = "tasks/fetch";
     /// Submit one task for ingestion (P→O request, 0.1.6). The Orchestrator
     /// answers only after the task is durably persisted, so the plugin needs
-    /// no buffer of its own (see [`TaskSubmitResult`] for the ack contract).
+    /// no buffer of its own (see [`super::TaskSubmitResult`] for the ack
+    /// contract).
     pub const TASK_SUBMIT: &str = "task/submit";
     /// Transition source-side status (O→P, F-84).
     pub const TASK_UPDATE_STATUS: &str = "task/update_status";

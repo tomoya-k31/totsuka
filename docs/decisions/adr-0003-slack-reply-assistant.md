@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0003 Slack メンション代理返信アシスタントの設計
 description: task-source-slack をコア無変更のプラグイン内完結で実装する決定。リポジトリ解決はプラグイン内 3 段階、イベントはバッファ + 短周期 tasks/fetch、トークンはユーザートークン（xoxp）のみで本人名義返信 + 承認フロー必須。
 tags: [slack, plugin, task-source, socket-mode, token, architecture]
-timestamp: 2026-07-16T02:30:00Z
+timestamp: 2026-07-19T00:00:00Z
 status: accepted
 ---
 
