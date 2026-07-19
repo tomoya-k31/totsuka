@@ -1,7 +1,7 @@
 //! The full mention path over the JSON-RPC boundary with the resident
 //! runtime ON: a local WebSocket mock plays Slack's Socket Mode side, the
 //! keyed recorded transport plays the Web API, and the test drives
-//! `initialize` → mention envelope → `tasks/fetch` (issue #105 acceptance).
+//! `initialize` → mention envelope → `task/submit` push (0.1.6, ADR-0008).
 
 mod common;
 
@@ -10,15 +10,20 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use common::{
-    Canned, FakeFactory, Shared, accept_with_hello, block_actions_envelope, call,
-    fetch_until_tasks, mention_envelope, send_and_await_ack, ws_listener,
+    Canned, FakeFactory, Shared, SubmitHarness, accept_with_hello, block_actions_envelope, call,
+    mention_envelope, send_and_await_ack, wait_until, ws_listener,
 };
 use task_source_slack::server::Server;
 
-fn server(shared: &Shared) -> Server<FakeFactory> {
-    Server::new(FakeFactory {
-        shared: shared.clone(),
-    })
+fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
+    let harness = SubmitHarness::new();
+    let srv = Server::new(
+        FakeFactory {
+            shared: shared.clone(),
+        },
+        harness.client.clone(),
+    );
+    (srv, harness)
 }
 
 /// One-repo config (repo_hint short-circuit until #106) pointing the Web API
@@ -94,19 +99,17 @@ fn canned_web_api_in_channel(shared: &Shared, ws_url: &str, channel_name: &str) 
 }
 
 #[tokio::test]
-async fn mention_becomes_a_task_and_fetch_drains_the_buffer() {
+async fn mention_becomes_a_task_and_is_submitted() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &url);
-    let mut srv = server(&shared);
+    let (mut srv, mut harness) = server(&shared);
 
     call(&mut srv, 1, "initialize", init_params()).await;
     let mut ws = accept_with_hello(&listener).await;
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
 
-    let tasks = fetch_until_tasks(&mut srv, 2).await;
-    assert_eq!(tasks.len(), 1);
-    let task = &tasks[0];
+    let task = harness.next_task().await;
 
     // Stable id, source, title shape.
     assert_eq!(task["id"], "C1:100.2");
@@ -143,20 +146,19 @@ async fn mention_becomes_a_task_and_fetch_drains_the_buffer() {
     assert_eq!(task["repo_hint"], "web-app");
     assert_eq!(task["url"], "https://ws.slack.test/archives/C1/p1002");
 
-    // A second fetch never sees the same task again.
+    // The deprecated `tasks/fetch` stub answers empty for an old
+    // orchestrator that polls anyway (removed in protocol 0.2.0).
     let result = call(&mut srv, 3, "tasks/fetch", json!({ "trigger": {} })).await;
     assert_eq!(result["tasks"], json!([]));
 
-    // A redelivery of the same envelope must not create another task.
+    // A redelivery of the same envelope must not submit another task.
     send_and_await_ack(&mut ws, mention_envelope("e1-redelivery", "100.2")).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let result = call(&mut srv, 4, "tasks/fetch", json!({ "trigger": {} })).await;
-    assert_eq!(result["tasks"], json!([]), "duplicate must be deduped");
+    harness.assert_no_task(Duration::from_millis(300)).await;
 
     // A different mention is a different task.
     send_and_await_ack(&mut ws, mention_envelope("e2", "100.9")).await;
-    let tasks = fetch_until_tasks(&mut srv, 5).await;
-    assert_eq!(tasks[0]["id"], "C1:100.9");
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.9");
 }
 
 #[tokio::test]
@@ -182,14 +184,13 @@ async fn enrichment_failures_degrade_the_task_instead_of_dropping_it() {
     shared.push_for("conversations.info", Canned::Network);
     shared.push_for("conversations.replies", Canned::Network);
     shared.push_for("chat.getPermalink", Canned::Network);
-    let mut srv = server(&shared);
+    let (mut srv, mut harness) = server(&shared);
 
     call(&mut srv, 1, "initialize", init_params()).await;
     let mut ws = accept_with_hello(&listener).await;
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
 
-    let tasks = fetch_until_tasks(&mut srv, 2).await;
-    let task = &tasks[0];
+    let task = harness.next_task().await;
     assert_eq!(task["id"], "C1:100.2");
     let title = task["title"].as_str().unwrap();
     assert!(title.starts_with("Slack: U_OTHER in #C1:"), "{title}");
@@ -266,14 +267,14 @@ async fn confident_llm_verdict_resolves_the_repo_without_asking() {
     let shared = Shared::default();
     canned_web_api(&shared, &url);
     shared.push_chat(Ok(chat_verdict("design-system", 0.9)));
-    let mut srv = server(&shared);
+    let (mut srv, mut harness) = server(&shared);
 
     call(&mut srv, 1, "initialize", init_params_multi_repo()).await;
     let mut ws = accept_with_hello(&listener).await;
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
 
-    let tasks = fetch_until_tasks(&mut srv, 2).await;
-    assert_eq!(tasks[0]["repo_hint"], "design-system");
+    let task = harness.next_task().await;
+    assert_eq!(task["repo_hint"], "design-system");
 
     // The classifier saw the mention and both candidates; no ephemeral.
     let chat_requests = shared.chat_requests();
@@ -297,14 +298,14 @@ async fn channel_prefix_rule_short_circuits_the_llm() {
     let shared = Shared::default();
     // The mention arrives in a channel matching the `team-b-` rule.
     canned_web_api_in_channel(&shared, &url, "team-b-general");
-    let mut srv = server(&shared);
+    let (mut srv, mut harness) = server(&shared);
 
     call(&mut srv, 1, "initialize", init_params_multi_repo()).await;
     let mut ws = accept_with_hello(&listener).await;
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
 
-    let tasks = fetch_until_tasks(&mut srv, 2).await;
-    assert_eq!(tasks[0]["repo_hint"], "design-system");
+    let task = harness.next_task().await;
+    assert_eq!(task["repo_hint"], "design-system");
     assert!(
         shared.chat_requests().is_empty(),
         "rule resolved; no LLM call"
@@ -317,20 +318,14 @@ async fn low_confidence_asks_via_ephemeral_and_the_answer_submits_the_task() {
     let shared = Shared::default();
     canned_web_api(&shared, &url);
     shared.push_chat(Ok(chat_verdict("web-app", 0.2)));
-    let mut srv = server(&shared);
+    let (mut srv, mut harness) = server(&shared);
 
     call(&mut srv, 1, "initialize", init_params_multi_repo()).await;
     let mut ws = accept_with_hello(&listener).await;
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
 
     // Low confidence → no task yet, an ephemeral picker instead.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let result = call(&mut srv, 2, "tasks/fetch", json!({ "trigger": {} })).await;
-    assert_eq!(
-        result["tasks"],
-        json!([]),
-        "no task while selection is pending"
-    );
+    harness.assert_no_task(Duration::from_millis(300)).await;
 
     let buttons = last_ephemeral_buttons(&shared);
     // One button per candidate plus the skip.
@@ -353,13 +348,14 @@ async fn low_confidence_asks_via_ephemeral_and_the_answer_submits_the_task() {
         ),
     )
     .await;
-    let tasks = fetch_until_tasks(&mut srv, 3).await;
-    assert_eq!(tasks[0]["id"], "C1:100.2");
-    assert_eq!(tasks[0]["repo_hint"], "web-app");
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.2");
+    assert_eq!(task["repo_hint"], "web-app");
 
-    // The ephemeral was rewritten via its response_url.
+    // The ephemeral was rewritten via its response_url (the rewrite runs
+    // after the submit ack, so wait for it).
+    wait_until("ephemeral rewrite", || shared.posted_urls().len() == 1).await;
     let posted = shared.posted_urls();
-    assert_eq!(posted.len(), 1, "{posted:?}");
     assert_eq!(posted[0].url, "https://hooks.slack.test/r/1");
     assert_eq!(posted[0].body["replace_original"], true);
 }
@@ -370,7 +366,7 @@ async fn skip_discards_the_mention_without_a_task() {
     let shared = Shared::default();
     canned_web_api(&shared, &url);
     shared.push_chat(Err("connection refused".into()));
-    let mut srv = server(&shared);
+    let (mut srv, mut harness) = server(&shared);
 
     call(&mut srv, 1, "initialize", init_params_multi_repo()).await;
     let mut ws = accept_with_hello(&listener).await;
@@ -390,12 +386,7 @@ async fn skip_discards_the_mention_without_a_task() {
     .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let result = call(&mut srv, 2, "tasks/fetch", json!({ "trigger": {} })).await;
-    assert_eq!(
-        result["tasks"],
-        json!([]),
-        "skipped mention never becomes a task"
-    );
+    harness.assert_no_task(Duration::from_millis(100)).await; // skipped mention never becomes a task
     // The picker was posted, then rewritten to the skip confirmation.
     assert!(
         shared
@@ -411,7 +402,7 @@ async fn stale_selection_answer_gets_an_expiry_notice() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &url);
-    let mut srv = server(&shared);
+    let (mut srv, mut harness) = server(&shared);
 
     call(&mut srv, 1, "initialize", init_params_multi_repo()).await;
     let mut ws = accept_with_hello(&listener).await;
@@ -430,8 +421,7 @@ async fn stale_selection_answer_gets_an_expiry_notice() {
     .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let result = call(&mut srv, 2, "tasks/fetch", json!({ "trigger": {} })).await;
-    assert_eq!(result["tasks"], json!([]));
+    harness.assert_no_task(Duration::from_millis(100)).await;
     let posted = shared.posted_urls();
     assert_eq!(posted.len(), 1, "{posted:?}");
     let text = posted[0].body["text"].as_str().unwrap();

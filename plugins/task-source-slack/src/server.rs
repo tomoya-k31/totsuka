@@ -3,10 +3,12 @@
 //! `initialize`'s TokenGuard — is driven in tests with a recorded transport,
 //! no network involved.
 //!
-//! `tasks/fetch` drains the mention pipeline's buffer, `result/publish`
-//! presents the agent's reply draft for approval (#107); only
-//! `task/update_status` remains a deliberate no-op (Slack has no status
-//! column to move).
+//! Since protocol 0.1.6 this is a **push source** (`task_submit`): the
+//! mention pipeline submits tasks via the SDK [`SubmitClient`] and
+//! `tasks/fetch` is a deprecated empty stub (the orchestrator never calls it
+//! for a `task_submit` source). `result/publish` presents the agent's reply
+//! draft for approval (#107); only `task/update_status` remains a deliberate
+//! no-op (Slack has no status column to move).
 
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
@@ -14,6 +16,7 @@ use plugin_protocol::methods::{
     ResultPublishParams, TaskUpdateStatusParams, TasksFetchParams, TasksFetchResult,
 };
 use plugin_protocol::{Capabilities, OutputCapability, RequestId, method};
+use plugin_sdk::{LineHandler, Reply, SubmitClient};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -53,32 +56,11 @@ fn settings(config: &SlackConfig) -> TransportSettings<'_> {
     }
 }
 
-/// The result of handling one input line.
-pub struct Reply {
-    /// The response line to write (absent for notifications, which get no reply).
-    pub line: Option<String>,
-    /// Whether the server should exit after this line (`shutdown`).
-    pub shutdown: bool,
-}
-
-impl Reply {
-    fn none() -> Self {
-        Self {
-            line: None,
-            shutdown: false,
-        }
-    }
-    fn respond(response: Response) -> Self {
-        Self {
-            line: plugin_protocol::jsonrpc::to_line(&response).ok(),
-            shutdown: false,
-        }
-    }
-}
-
 /// The Slack task-source stdio server.
 pub struct Server<F: TransportFactory> {
     factory: F,
+    /// The `task/submit` client the mention pipeline pushes through (0.1.6).
+    submit: SubmitClient,
     /// Whether `initialize` starts the resident runtime (Socket Mode
     /// connection + mention pipeline). On for production; protocol-level
     /// tests turn it off so canned transports are not consumed by the
@@ -117,10 +99,12 @@ where
     F::Transport: 'static,
     F::Chat: 'static,
 {
-    /// A fresh, uninitialized server using `factory` to build transports.
-    pub fn new(factory: F) -> Self {
+    /// A fresh, uninitialized server using `factory` to build transports and
+    /// `submit` to push tasks (0.1.6).
+    pub fn new(factory: F, submit: SubmitClient) -> Self {
         Self {
             factory,
+            submit,
             start_runtime: true,
             session: None,
         }
@@ -275,7 +259,7 @@ where
         }
 
         // The resident runtime: Socket Mode reader → mention pipeline →
-        // SharedState, which tasks/fetch drains.
+        // `task/submit` push (0.1.6).
         let state = SharedState::default();
         let mut runtime = Vec::new();
         if self.start_runtime {
@@ -287,6 +271,7 @@ where
                 Arc::new(config.clone()),
                 events,
                 state.clone(),
+                self.submit.clone(),
             );
             runtime.push(socket.abort_handle());
             runtime.push(pipeline.abort_handle());
@@ -316,26 +301,22 @@ where
         ok_validate(id, static_config_errors(&config))
     }
 
-    /// `tasks/fetch`: drain the mention buffer. The trigger condition is not
-    /// interpreted in v1 (every buffered mention matches); a second fetch
-    /// never sees the same task again.
+    /// `tasks/fetch`: a deprecated empty stub. This plugin declares the
+    /// `task_submit` capability (0.1.6), so the orchestrator never polls it;
+    /// an older orchestrator calling anyway gets an empty answer (mentions
+    /// are pushed, never buffered). Removed with the method in protocol
+    /// 0.2.0 (ADR-0008).
     fn tasks_fetch(&mut self, id: RequestId, params: Value) -> Reply {
-        let Some(session) = self.session.as_ref() else {
+        if self.session.is_none() {
             return not_initialized(id);
-        };
+        }
         let _parsed: TasksFetchParams = match parse_params(&params) {
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        let tasks = session.state.drain_tasks();
-        tracing::debug!(
-            source = session.config.source_name,
-            count = tasks.len(),
-            "tasks/fetch drained the mention buffer"
-        );
         Reply::respond(Response::result(
             id,
-            serde_json::to_value(TasksFetchResult { tasks }).unwrap_or(Value::Null),
+            serde_json::to_value(TasksFetchResult { tasks: vec![] }).unwrap_or(Value::Null),
         ))
     }
 
@@ -390,6 +371,19 @@ where
     }
 }
 
+/// Drive the server from the SDK stdio runtime (`plugin_sdk::serve`), which
+/// also routes `task/submit` acks back to the shared [`SubmitClient`].
+impl<F> LineHandler for Server<F>
+where
+    F: TransportFactory + Send,
+    F::Transport: Send + Sync + 'static,
+    F::Chat: Send + Sync + 'static,
+{
+    async fn handle_line(&mut self, line: &str) -> Reply {
+        Server::handle_line(self, line).await
+    }
+}
+
 /// The TokenGuard: `auth.test` must accept the user token, the token's
 /// identity must be `target_user_id` (a reply posted with someone else's
 /// token would impersonate them), and `apps.connections.open` must accept
@@ -412,12 +406,14 @@ async fn token_guard<T: SlackTransport>(
     Ok(())
 }
 
-/// The capabilities this plugin declares (F-33/F-83): a task source that can
-/// write results back to the source (`result/publish` → the Slack thread).
+/// The capabilities this plugin declares (F-33/F-83): a **push** task source
+/// (`task_submit`, 0.1.6 — never polled) that can write results back to the
+/// source (`result/publish` → the Slack thread).
 fn capabilities_result() -> Value {
     let result = InitializeResult {
         plugin_version: plugin_version(),
         capabilities: Capabilities {
+            task_submit: true,
             outputs: vec![OutputCapability::Source],
             ..Capabilities::default()
         },

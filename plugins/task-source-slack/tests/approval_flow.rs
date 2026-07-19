@@ -10,15 +10,20 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use common::{
-    Canned, FakeFactory, Recorded, Shared, accept_with_hello, block_actions_envelope, call,
-    fetch_until_tasks, mention_envelope, send_and_await_ack, wait_until, ws_listener,
+    Canned, FakeFactory, Recorded, Shared, SubmitHarness, accept_with_hello,
+    block_actions_envelope, call, mention_envelope, send_and_await_ack, wait_until, ws_listener,
 };
 use task_source_slack::server::Server;
 
-fn server(shared: &Shared) -> Server<FakeFactory> {
-    Server::new(FakeFactory {
-        shared: shared.clone(),
-    })
+fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
+    let harness = SubmitHarness::new();
+    let srv = Server::new(
+        FakeFactory {
+            shared: shared.clone(),
+        },
+        harness.client.clone(),
+    );
+    (srv, harness)
 }
 
 /// One-repo config: repository resolution short-circuits, so the only
@@ -106,8 +111,8 @@ fn expected_posted_reply() -> String {
     format!("<@U_OTHER> {EXPECTED_REPLY}")
 }
 
-/// Drive initialize → mention → fetch → result/publish, returning the server
-/// (kept alive: dropping it aborts the runtime).
+/// Drive initialize → mention → submit → result/publish, returning the
+/// server (kept alive: dropping it aborts the runtime).
 async fn publish_draft_flow(
     shared: &Shared,
     listener: &tokio::net::TcpListener,
@@ -115,12 +120,12 @@ async fn publish_draft_flow(
     Server<FakeFactory>,
     tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
 ) {
-    let mut srv = server(shared);
+    let (mut srv, mut harness) = server(shared);
     call(&mut srv, 1, "initialize", init_params()).await;
     let mut ws = accept_with_hello(listener).await;
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
-    let tasks = fetch_until_tasks(&mut srv, 2).await;
-    assert_eq!(tasks[0]["id"], "C1:100.2");
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.2");
 
     call(
         &mut srv,
@@ -290,7 +295,7 @@ async fn approve_posts_the_reply_and_finalizes_both_views_once() {
     .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     let result = call(&mut srv, 4, "tasks/fetch", json!({ "trigger": {} })).await;
-    assert_eq!(result["tasks"], json!([]), "own reply must not re-trigger");
+    assert_eq!(result["tasks"], json!([]), "fetch stays an empty stub");
 
     // A second press is the double-send guard: a "handled" notice, no
     // second chat.postMessage.
@@ -416,7 +421,7 @@ async fn stale_button_press_gets_an_expiry_notice() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &url);
-    let mut srv = server(&shared);
+    let (mut srv, _harness) = server(&shared);
     call(&mut srv, 1, "initialize", init_params()).await;
     let mut ws = accept_with_hello(&listener).await;
 
@@ -546,11 +551,11 @@ async fn empty_publish_fails_without_consuming_the_pending_entry() {
         "chat.postMessage",
         Canned::Data(json!({ "ok": true, "ts": "555.1" })),
     );
-    let mut srv = server(&shared);
+    let (mut srv, mut harness) = server(&shared);
     call(&mut srv, 1, "initialize", init_params()).await;
     let mut ws = accept_with_hello(&listener).await;
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
-    fetch_until_tasks(&mut srv, 2).await;
+    harness.next_task().await;
 
     // An empty result is rejected…
     let line = json!({

@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-20
+* **Update**: [task-source-slack](/components/task-source-slack.md) — push 移行（#187、ADR-0008 Phase B）。パイプラインが build 直後に SDK `SubmitClient` で `task/submit` 送信（バッファ・drain 削除、pending は送信前登録・rejected/GaveUp で取り消し）、`tasks/fetch` は deprecated 空スタブ化、manifest は `task_submit = true` + `protocol_version = ">=0.1.6, <0.3"`（0.2.0 の fetch 削除をまたいで有効）。main.rs は SDK stdio ランタイム（単一 writer）+ `LineHandler` 実装で駆動。ADR-0003 のバッファ喪失窓は poll 間隔→submit 往復ミリ秒に縮小。テストは `SubmitHarness`（push 観測）へ移行し、CLI E2E は**無変更でパス**（push 一気通貫の実証）。
 * **Creation**: [plugin-sdk](/components/plugin-sdk.md)（#186、ADR-0008）。task_source プラグイン作成用ヘルパークレート `crates/plugin-sdk` を新設 — `runtime`（単一 writer タスクで stdout を専有し行交錯を構造的に排除、response 行は SubmitClient へ配路）/ `dispatch`（`TaskSourceHandler` trait + `TaskSourceServer` で wire protocol 全体をカバー）/ `submit`（`SubmitClient`: ack 3 値は最終、retryable error・timeout は指数バックオフ最大 5 回、pending map は serve が解決）/ `poll`（`poll_loop`: triggers × interval の非重複 jitter 付き fetch→submit、seen-set なし）。
 
 ## 2026-07-19
