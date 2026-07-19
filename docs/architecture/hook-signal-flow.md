@@ -1,10 +1,10 @@
 ---
 type: Diagram
 title: フックシグナルフロー（Slack メンション → 完了検知 → 検収 → 出力）
-description: Claude Code フック完了判定のエンドツーエンド経路。Slack メンションの dispatch から herdr pane 起動・env 注入・claude --settings、Stop フックのマーカー抽出・UDS POST、hook_uds の Bearer/冪等検証、SignalPort→Engine::on_signal の検収分岐（llm/human/none）と Publishing/Verifying/Escalated、スプールフォールバックと pane.exited デッドマンまでを図示する。
+description: Claude Code フック完了判定のエンドツーエンド経路。Slack メンションの dispatch から herdr pane 起動・env 注入・claude --settings、Stop フックのマーカー抽出・UDS POST、hook_uds の Bearer/冪等検証、SignalPort→Engine::on_signal の検収分岐（llm/human/none）と Publishing/Verifying/Escalated、スプールフォールバックと pane.exited デッドマン、通知クリック → pane フォーカス（click-to-focus、F-94）までを図示する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
-tags: [architecture, diagram, hook, claude-code, uds, signal, verification, deadman, spool, epic-131]
-timestamp: 2026-07-18T12:00:00Z
+tags: [architecture, diagram, hook, claude-code, uds, signal, verification, deadman, spool, click-to-focus, epic-131]
+timestamp: 2026-07-19T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -90,6 +90,45 @@ flowchart TD
     DEAD -->|"exit_code 0（clean）"| NOP["通知なし（SessionEnd が既報）"]
 ```
 
+# 通知クリック → pane フォーカス（click-to-focus、F-94）
+
+中間イベント（`waiting_input` / `escalated` / `verification_pending` / `failed`）の通知に気づいた本人が**クリックひとつで対象タスクの pane へ着地する**経路（#155、[ADR-0005](/decisions/adr-0005-click-to-focus.md)）。GUI 前面化（terminal-notifier ネイティブ）と herdr 内フォーカス（`session/focus` 委譲）の 2 段で実現する。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant EN as Engine (orchestrator-core)
+    participant NO as notifier-macos
+    participant TN as terminal-notifier
+    participant U as 本人
+    participant CLI as totsuka focus <task>
+    participant CTL as 制御 UDS (POST /focus)
+    participant HE as agent-ide-herdr
+    participant HD as herdr socket
+    participant AL as GUI ターミナル (Alacritty 等)
+
+    EN->>NO: notify(waiting_input, task_id=42, …)
+    NO->>TN: -title … -message …<br/>-execute 'totsuka focus 42'<br/>-activate <bundle-id> -group totsuka-42
+    Note over TN: 通知センターに表示
+    U->>TN: 通知をクリック
+    par ネイティブ前面化
+        TN->>AL: -activate → GUI ターミナルを前面化
+    and コマンド実行
+        TN->>CLI: -execute → totsuka focus 42
+    end
+    CLI->>CTL: POST /focus {task_id:42}（hook UDS 同居・Bearer）
+    CTL->>EN: PluginEvent::Focus（oneshot 応答付き）
+    EN->>HE: session/focus { session_id }（0.1.4、pane_control 宣言時のみ）
+    HE->>HD: pane.get（生存確認）→ workspace.focus → tab.focus → pane.focus
+    HD-->>HE: ok
+    HE-->>EN: { focused: true }
+    EN-->>CTL: FocusOutcome（oneshot）
+    CTL-->>CLI: {"focused": true}
+    Note over U,AL: GUI 前面 + 対象 pane フォーカス済み
+```
+
+縮退（すべて静か・クリック経路を壊さない）: terminal-notifier 未導入 → notifier が osascript へフォールバック（クリック不可だが通知は出る）。Orchestrator 停止中のクリック → `-activate` の前面化のみ成立し `totsuka focus` は exit 0 の no-op。pane 消失・`pane_control` 非宣言 → `focused: false` + 理由の正常応答。
+
 # 要点
 
 - **受信はコア側**（`ports::SignalPort` + `adapters::hook_uds`）。プラグインは env 注入と `--settings`/`--resume` 起動だけを不透明に配線する（[ADR-0004](/decisions/adr-0004-hook-completion-signal.md)）。
@@ -100,8 +139,9 @@ flowchart TD
 
 # 関連
 
-- [F-100〜F-107 決定的な完了シグナル](/product/orchestrator-spec.ja.md)
-- [ADR-0004 フック完了シグナルの受信配置](/decisions/adr-0004-hook-completion-signal.md)
-- [POST /claude-events（UDS フック受信）](/apis/claude-events.md)
+- [F-100〜F-107 決定的な完了シグナル / F-94 click-to-focus](/product/orchestrator-spec.ja.md)
+- [ADR-0004 フック完了シグナルの受信配置](/decisions/adr-0004-hook-completion-signal.md) / [ADR-0005 click-to-focus の機構選定](/decisions/adr-0005-click-to-focus.md)
+- [POST /claude-events（UDS フック受信・POST /focus 制御）](/apis/claude-events.md)
+- [click-to-focus セットアップ](/operations/click-to-focus-setup.md)
 - [orchestrator-core](/components/orchestrator-core.md) / [agent-ide-herdr](/components/agent-ide-herdr.md) / [task-source-slack](/components/task-source-slack.md) / [notifier-macos](/components/notifier-macos.md)
 - [フックのセキュリティ](/security/hook-security.md) / [フックのトラブルシューティング](/operations/hook-troubleshooting.md)

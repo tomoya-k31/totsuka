@@ -11,6 +11,7 @@
 * [Workflow（ワークフロー）](workflow.md) - source × trigger × mode × agent × output の名前付き束ね（F-80）。タスクは定義順の first-match で最大1つのワークフローに割り当てられる（F-81）。
 * [エフェメラル承認フロー](ephemeral-approval.md) - エージェントの返信案をスレッド内エフェメラル + self-DM 記録の 2 面に提示し、承認ボタン押下時のみ本人名義で送信する task-source-slack の仕組み。勝手に送信しないための防波堤。
 * [会話継続（conversation continuity）](conversation-continuity.md) - 同一 Slack スレッドへの追いメンションを新タスクとして取り込みつつ、先行タスクの Claude セッションを claude --resume で再開して文脈を引き継ぐ仕組み。thread_key で永続相関する。
+* [click-to-focus（クリックで pane を開く）](click-to-focus.md) - 通知をクリックすると、その通知を出したタスクの herdr pane が前面に来る機能（F-94）。terminal-notifier の -activate（GUI 前面化）+ -execute（totsuka focus → 制御 UDS /focus → agent_ide の session/focus 委譲）の 2 段で実現し、縮退はすべて静か。
 
 <!-- concept を追加したら、ここに 1 行追加する:
 * [Title](file.md) - frontmatter の description を転記

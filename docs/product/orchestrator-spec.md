@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-timestamp: 2026-07-18T00:00:00+09:00
+timestamp: 2026-07-19T12:00:00+09:00
 status: draft
 owner: tomoya-k31
 ---
@@ -249,6 +249,7 @@ on_success = { set_status = "レビュー待ち" }
 | F-91 | Bundle an official notifier for macOS Notification Center in v1 | M |
 | F-92 | Notifications can be enabled/disabled per workflow and per event kind | S |
 | F-93 | Notification failures must not affect task execution (fire-and-forget; errors logged only) | M |
+| F-94 | **Clickable notifications → pane focus (click-to-focus)**: clicking a notification brings the GUI terminal to the front and focuses the pane of the task that raised it. Delivery uses the `terminal-notifier` backend (`-activate <bundle-id>` + `-execute 'totsuka focus <task_id>'` + `-group totsuka-<task_id>`; `-sender` is never combined with `-activate` — broken on Sequoia 15.x+). The focus path is `totsuka focus` → control UDS `POST /focus` → the task's agent_ide plugin's `session/focus` (protocol 0.1.4, gated on `pane_control`; the session id stays opaque, F-37). Every degradation is quiet: missing terminal-notifier falls back to osascript, a stopped orchestrator or vanished pane leaves only the app activation (see ADR-0005) | S |
 
 ### 4.11 Deterministic completion signal (Claude Code hooks)
 
