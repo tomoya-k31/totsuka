@@ -30,11 +30,12 @@ filter) and the `lint` check (`okf-lint.yml`) regardless of what changed.
 to `main`. Scoping only changes what you run **locally** before pushing —
 post-PR you still monitor all checks that report on your PR.
 
-**Rust set** — when Rust/Cargo files changed (mirror CI's flags; this is a
-10-crate workspace, so a missing `--workspace` can pass locally yet fail CI):
+**Rust set** — when Rust/Cargo files changed (mirror CI's flags; this is an
+11-member workspace, so a missing `--workspace` can pass locally yet fail CI):
 
-- **Toolchain parity first**: CI installs the **latest stable**
-  (`dtolnay/rust-toolchain@stable`), so before trusting any local result run
+- **Toolchain parity first**: CI installs the **latest stable** (the
+  SHA-pinned `dtolnay/rust-toolchain` action with `toolchain: stable`), so
+  before trusting any local result run
   `rustup check` and, if an update is available, `rustup update stable`.
   Clippy's lint set grows between releases — an outdated local stable passed
   clean while CI failed on `clippy::type_complexity` (PR #197).
