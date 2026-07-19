@@ -276,7 +276,6 @@ pub fn block_actions_envelope(
     })
 }
 
-/// Poll `tasks/fetch` until it yields tasks (the pipeline is asynchronous).
 /// The push-side observation channel (0.1.6): the pipeline's `task/submit`
 /// requests land in `rx`; [`SubmitHarness::next_task`] reads one, acks it
 /// `accepted`, and returns the task — the push analogue of the old
