@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-19
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — plugin host にプラグイン起点 request（P→O、0.1.6 `task/submit` 等）の受信を追加（#184）。reader に `method`+`id` の第 3 分岐を Notification 判定より前に挿入し `IncomingRequest`/`Responder` として `take_incoming_requests()` へ配路（従来はプラグイン起点 request が Notification として黙って破棄されていた）。応答は共有 writer 経由で行アトミックに書き戻し。mock_plugin に `request_on_init`（検証用のプラグイン起点 request 発行）と受信 response の記録を追加。
 * **Creation**: [ADR-0008 task/submit による push 型タスク取り込みと tasks/fetch の段階的廃止](/decisions/adr-0008-task-submit-push-ingestion.md)（エピック #182、実装 #183〜#190）。プラグイン→Orchestrator の push RPC `task/submit`（persist-before-ack・ack 3 値は最終・リトライは JSON-RPC error）を protocol 0.1.6 で追加し、`tasks/fetch` を deprecated 化して 0.2.0 で削除する決定。ADR-0003 Decision §2（バッファ + 短周期 tasks/fetch）を amend。
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) をプロトコル **0.1.6** へ（#183）— P→O request **`task/submit`**（`TaskSubmitParams` / `TaskSubmitResult{accepted|duplicate|rejected}`）、`Capabilities.task_submit`、`InitializeParams.triggers`（`TriggerInfo` の Vec）/ `poll_interval_secs`、エラーコード `NOT_ACCEPTING(-32004)` / `SUBMIT_OVERLOADED(-32005)` を追加。`tasks/fetch` は deprecated（0.2.0 削除予定を doc に明記）。
 * **Update**: [ADR-0003](/decisions/adr-0003-slack-reply-assistant.md) — Status に「Decision §2 は ADR-0008 で amend」の前方参照を追記。

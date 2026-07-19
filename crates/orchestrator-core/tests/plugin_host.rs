@@ -219,6 +219,187 @@ async fn receives_plugin_notifications() {
     plugin.shutdown(Duration::from_secs(5)).await.unwrap();
 }
 
+/// Poll `path` until it records a `{"method": <method>, ...}` NDJSON line
+/// (the mock's observation channel), failing after 5s.
+async fn recorded_line(path: &std::path::Path, method: &str) -> serde_json::Value {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            for line in text.lines() {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                    && v["method"] == method
+                {
+                    return v;
+                }
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no `{method}` line recorded in {path:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// A spec whose mock emits the given plugin-initiated request right after
+/// `initialize` (0.1.6) and records responses to `log`.
+fn spec_with_request_on_init(log: &std::path::Path, request: serde_json::Value) -> PluginSpec {
+    let mut s = spec("^0.1");
+    s.init_config = serde_json::json!({ "notify_log": log, "request_on_init": request });
+    s
+}
+
+#[tokio::test]
+async fn plugin_initiated_request_is_surfaced_and_answered() {
+    let dir = test_support::scratch("host_incoming_ok");
+    let log = dir.join("notify.ndjson");
+    let plugin = Plugin::launch(spec_with_request_on_init(
+        &log,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "submit-1",
+            "method": "task/submit",
+            "params": { "task": { "id": "42", "source": "slack", "title": "t" } }
+        }),
+    ))
+    .await
+    .expect("launch");
+    let mut notifications = plugin.take_notifications().await.expect("notif rx");
+    let mut incoming = plugin.take_incoming_requests().await.expect("incoming rx");
+
+    // The request is surfaced with method, params and a responder.
+    let request = tokio::time::timeout(Duration::from_secs(5), incoming.recv())
+        .await
+        .expect("incoming request did not arrive")
+        .expect("incoming channel closed");
+    assert_eq!(request.method, "task/submit");
+    assert_eq!(request.params.as_ref().expect("params")["task"]["id"], "42");
+
+    // Bidirectional interleaving: an O→P call round-trips while the plugin's
+    // own request is still unanswered.
+    let ok = plugin.config_validate(serde_json::json!({})).await.unwrap();
+    assert!(ok.valid);
+
+    // Answer; the mock records the response it received, correlated by id.
+    request
+        .responder
+        .ok(serde_json::json!({ "status": "accepted" }));
+    let recorded = recorded_line(&log, "response").await;
+    assert_eq!(recorded["params"]["id"], "submit-1");
+    assert_eq!(recorded["params"]["result"]["status"], "accepted");
+
+    // Pin the routing fix: a request (method + id) must never be misrouted
+    // to the notification channel (the pre-0.1.6 behavior silently accepted
+    // it as a `Notification` and dropped the id).
+    assert!(
+        notifications.try_recv().is_err(),
+        "request must not appear as a notification"
+    );
+
+    plugin.shutdown(Duration::from_secs(5)).await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn plugin_initiated_request_can_be_answered_with_an_error() {
+    let dir = test_support::scratch("host_incoming_err");
+    let log = dir.join("notify.ndjson");
+    let plugin = Plugin::launch(spec_with_request_on_init(
+        &log,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "task/submit",
+            "params": { "task": { "id": "43", "source": "slack", "title": "t" } }
+        }),
+    ))
+    .await
+    .expect("launch");
+    let mut incoming = plugin.take_incoming_requests().await.expect("incoming rx");
+    let request = tokio::time::timeout(Duration::from_secs(5), incoming.recv())
+        .await
+        .expect("incoming request did not arrive")
+        .expect("incoming channel closed");
+
+    request.responder.err(plugin_protocol::jsonrpc::Error::new(
+        plugin_protocol::error_code::SUBMIT_OVERLOADED,
+        "submit budget exhausted → retry with backoff",
+    ));
+    let recorded = recorded_line(&log, "response").await;
+    assert_eq!(recorded["params"]["id"], 7);
+    assert_eq!(
+        recorded["params"]["error"]["code"],
+        plugin_protocol::error_code::SUBMIT_OVERLOADED
+    );
+
+    plugin.shutdown(Duration::from_secs(5)).await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn malformed_plugin_request_gets_a_prompt_invalid_request_error() {
+    let dir = test_support::scratch("host_incoming_malformed");
+    let log = dir.join("notify.ndjson");
+    // No `jsonrpc` field → not a valid `Request`; the host must answer with
+    // INVALID_REQUEST (correlated by id) instead of silently dropping it and
+    // leaving the plugin to wait out its own call timeout.
+    let plugin = Plugin::launch(spec_with_request_on_init(
+        &log,
+        serde_json::json!({ "id": 9, "method": "task/submit" }),
+    ))
+    .await
+    .expect("launch");
+
+    let recorded = recorded_line(&log, "response").await;
+    assert_eq!(recorded["params"]["id"], 9);
+    assert_eq!(
+        recorded["params"]["error"]["code"],
+        plugin_protocol::error_code::INVALID_REQUEST
+    );
+
+    plugin.shutdown(Duration::from_secs(5)).await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn incoming_channel_closes_on_crash_and_late_answer_is_harmless() {
+    let dir = test_support::scratch("host_incoming_crash");
+    let log = dir.join("notify.ndjson");
+    let plugin = Plugin::launch(spec_with_request_on_init(
+        &log,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "submit-2",
+            "method": "task/submit",
+            "params": { "task": { "id": "44", "source": "slack", "title": "t" } }
+        }),
+    ))
+    .await
+    .expect("launch");
+    let mut incoming = plugin.take_incoming_requests().await.expect("incoming rx");
+    let request = tokio::time::timeout(Duration::from_secs(5), incoming.recv())
+        .await
+        .expect("incoming request did not arrive")
+        .expect("incoming channel closed");
+
+    // The plugin dies before its request is answered.
+    let result: Result<serde_json::Value, _> = plugin.call("crash", &()).await;
+    assert!(matches!(result, Err(HostError::Crashed(_))));
+
+    // The reader task ended, so the incoming channel closes for its consumer…
+    let next = tokio::time::timeout(Duration::from_secs(5), incoming.recv())
+        .await
+        .expect("channel close not observed");
+    assert!(next.is_none(), "channel must close when the plugin exits");
+
+    // …and answering the orphaned request is a harmless no-op, not a panic.
+    request
+        .responder
+        .ok(serde_json::json!({ "status": "accepted" }));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn disabled_plugins_are_not_launchable() {
     let cfg = RootConfig::from_toml_str(
