@@ -64,6 +64,8 @@ protocol_version = "^0.1"
         init_config,
         repositories: vec![],
         llm: None,
+        triggers: vec![],
+        poll_interval_secs: None,
         timeout: Duration::from_secs(10),
     })
     .await

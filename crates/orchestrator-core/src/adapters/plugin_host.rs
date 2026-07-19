@@ -68,6 +68,14 @@ pub struct PluginSpec {
     /// source-side classification default (#119). Populated for task_source
     /// plugins only; `None` otherwise (omitted from the wire when unset).
     pub llm: Option<plugin_protocol::methods::LlmInfo>,
+    /// The workflow triggers targeting this task_source plugin, in
+    /// `[[workflows]]` definition order (0.1.6): a push source's watch
+    /// conditions. Empty for other kinds (omitted from the wire).
+    pub triggers: Vec<plugin_protocol::methods::TriggerInfo>,
+    /// `[plugins.{name}].poll_interval_secs`, forwarded at `initialize`
+    /// (0.1.6) as a push source's internal fetch cadence. `None` when unset
+    /// or for non-source kinds (omitted from the wire).
+    pub poll_interval_secs: Option<u64>,
     /// Per-call RPC timeout.
     pub timeout: Duration,
 }
@@ -335,10 +343,8 @@ impl Plugin {
             config: spec.init_config,
             repositories: spec.repositories,
             llm: spec.llm,
-            // 0.1.6: workflow triggers + cadence for push sources; wired from
-            // the orchestrator config in a follow-up (#185), empty until then.
-            triggers: vec![],
-            poll_interval_secs: None,
+            triggers: spec.triggers,
+            poll_interval_secs: spec.poll_interval_secs,
         };
         let result: InitializeResult = plugin
             .call(plugin_protocol::method::INITIALIZE, &init)
