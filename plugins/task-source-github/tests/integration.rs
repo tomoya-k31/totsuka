@@ -1,10 +1,12 @@
 //! End-to-end plugin flow over a recorded GraphQL transport (no network):
-//! initialize → tasks/fetch → normalize → task/update_status → result/publish,
+//! initialize → poll_loop → `task/submit` push (0.1.6), the deprecated
+//! tasks/fetch delegate, normalize → task/update_status → result/publish,
 //! plus ingest gating (F-08) and invalid-token config/validate (F-59).
 
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -74,10 +76,66 @@ impl TransportFactory for FakeFactory {
     }
 }
 
+/// Receives the server's outbound `task/submit` requests and acks them —
+/// the push analogue of calling `tasks/fetch` (same shape as the slack
+/// plugin's SubmitHarness).
+struct SubmitHarness {
+    client: plugin_sdk::SubmitClient,
+    rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+}
+
+impl SubmitHarness {
+    fn new() -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // Short timeouts: a test that never acks must not stall for minutes.
+        let client = plugin_sdk::SubmitClient::new(plugin_sdk::Writer::from_channel(tx))
+            .with_timeouts(Duration::from_secs(5), Duration::from_millis(10));
+        Self { client, rx }
+    }
+
+    /// Await the next `task/submit`, ack it `accepted`, return its task.
+    async fn next_task(&mut self) -> Value {
+        let line = tokio::time::timeout(Duration::from_secs(5), self.rx.recv())
+            .await
+            .expect("no task/submit within 5s")
+            .expect("submit channel closed");
+        let request: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "task/submit", "{request}");
+        self.client.resolve(&json!({
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "result": { "status": "accepted" }
+        }));
+        request["params"]["task"].clone()
+    }
+
+    /// Assert nothing is submitted within `window`.
+    async fn assert_no_task(&mut self, window: Duration) {
+        match tokio::time::timeout(window, self.rx.recv()).await {
+            Err(_) => {}
+            Ok(line) => panic!("unexpected task/submit: {line:?}"),
+        }
+    }
+}
+
 fn server(shared: &Shared) -> Server<FakeFactory> {
-    Server::new(FakeFactory {
-        shared: shared.clone(),
-    })
+    Server::new(
+        FakeFactory {
+            shared: shared.clone(),
+        },
+        SubmitHarness::new().client,
+    )
+}
+
+fn server_with_harness(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
+    let harness = SubmitHarness::new();
+    let srv = Server::new(
+        FakeFactory {
+            shared: shared.clone(),
+        },
+        harness.client.clone(),
+    );
+    (srv, harness)
 }
 
 /// Send one JSON-RPC request line and return the parsed response.
@@ -131,12 +189,14 @@ async fn full_flow_initialize_fetch_update_publish() {
     let shared = Shared::default();
     let mut srv = server(&shared);
 
-    // initialize → declares outputs = ["source"].
+    // initialize → declares task_submit (push, 0.1.6) + outputs = ["source"].
     let resp = call(&mut srv, 1, "initialize", init_params()).await;
     let result = resp.result.expect("initialize result");
+    assert_eq!(result["capabilities"]["task_submit"], json!(true));
     assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
 
-    // tasks/fetch → only the ingestable issue survives gating (F-08).
+    // tasks/fetch (deprecated delegate) → only the ingestable issue survives
+    // gating (F-08).
     shared.push(Canned::Data(fetch_response()));
     let resp = call(
         &mut srv,
@@ -347,14 +407,58 @@ async fn update_status_finds_item_on_a_later_page() {
     assert_eq!(vars["option"], "OPT_review");
 }
 
+/// The resident poll loop (0.1.6): `initialize` with triggers fetches each
+/// trigger immediately and pushes the surviving tasks via `task/submit`.
+#[tokio::test]
+async fn initialize_with_triggers_polls_and_submits() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    // The first tick runs before any sleep, consuming this canned page.
+    shared.push(Canned::Data(fetch_response()));
+    let params = json!({
+        "protocol_version": "0.1.6",
+        "config": init_config(),
+        "triggers": [
+            { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
+        ],
+        "poll_interval_secs": 60
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
+
+    // The same gating as tasks/fetch applies: only I_1 survives (F-08).
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "I_1");
+    assert_eq!(task["source"], "github");
+    assert_eq!(task["title"], "Task one");
+    harness.assert_no_task(Duration::from_millis(200)).await;
+}
+
+/// Without triggers there is nothing to watch: no poll loop, no submissions,
+/// and no canned responses consumed by a background task.
+#[tokio::test]
+async fn initialize_without_triggers_never_submits() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+    harness.assert_no_task(Duration::from_millis(200)).await;
+    assert!(
+        shared.requests.lock().unwrap().is_empty(),
+        "no fetch without triggers"
+    );
+}
+
 #[test]
-fn shipped_manifest_is_valid_and_declares_source_output() {
-    // The on-disk plugin.toml must parse and declare kind=task_source with the
-    // `source` output capability (F-83) so the orchestrator accepts it.
+fn shipped_manifest_is_valid_and_declares_push_source() {
+    // The on-disk plugin.toml must parse and declare kind=task_source with
+    // `task_submit` (push ingestion, 0.1.6) and the `source` output
+    // capability (F-83) so the orchestrator accepts it and never polls it.
     let manifest = plugin_protocol::Manifest::from_toml_str(include_str!("../plugin.toml"))
         .expect("plugin.toml parses");
     assert_eq!(manifest.name, "github");
     assert_eq!(manifest.kind, plugin_protocol::PluginKind::TaskSource);
+    assert!(manifest.capabilities.task_submit);
     assert_eq!(
         manifest.capabilities.outputs,
         vec![plugin_protocol::OutputCapability::Source]
