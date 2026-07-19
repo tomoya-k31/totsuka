@@ -3,13 +3,15 @@ type: Decision
 title: ADR-0002 Rust workspace 構成と CI 品質ゲート
 description: totsuka を Rust edition 2024 のヘキサゴナル workspace（core/cli/plugin-protocol）として構成し、clippy deny warnings・rustfmt・cargo-audit/deny・llvm-cov を CI 品質ゲートに据える決定。
 tags: [rust, workspace, ci, architecture, quality-gate]
-timestamp: 2026-07-12T00:00:00Z
+timestamp: 2026-07-19T12:00:00Z
 status: accepted
 ---
 
 # Status
 
 Accepted — 2026-07-12（[#45](https://github.com/tomoya-k31/totsuka/issues/45)）
+
+一部変更 — 2026-07-19: CI ジョブの**実行タイミング**（イベントゲート・audit の分離・concurrency）は [ADR-0007](/decisions/adr-0007-ci-cost-optimization.md) で再設計した。品質ゲートの内容（rustfmt / clippy / test / audit / coverage の各基準）は本 ADR のまま。
 
 # Context
 

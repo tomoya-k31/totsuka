@@ -13,9 +13,12 @@ on:
 # None of these jobs is a required status check (the ruleset requires only
 # okf-lint's `lint`), so event gating cannot leave a PR blocked on "Expected".
 
+# Cancel superseded runs on PR branches only. On main, coverage doubles as
+# the per-merge test run, so a rapid follow-up merge must queue behind it,
+# not cancel it — otherwise the earlier merge is never verified on its own.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always

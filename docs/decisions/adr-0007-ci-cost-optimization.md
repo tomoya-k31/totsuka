@@ -15,7 +15,7 @@ Accepted — 2026-07-19（[ADR-0002](/decisions/adr-0002-rust-workspace-ci.md) �
 
 private リポジトリのため Actions は Pro プランの無料枠 3,000 分/月で運用しているが、直近 30 日の推計使用量は約 3,500 分に達し上限を超過した。実測の内訳から、コストの主因はジョブの実行時間そのものではなく次の3点だった。
 
-1. **課金は 1 ジョブごとに 1 分未満切り上げ**のため、実働 0.3〜0.5 分の rustfmt / audit ジョブが毎回 1 分課金される（実働の 3〜6 倍）
+1. **課金は 1 ジョブごとに 1 分未満切り上げ**のため、実働 0.3〜0.5 分の rustfmt / audit ジョブが毎回 1 分課金される（実働の 2〜3 倍）
 2. **coverage(llvm-cov) が毎 PR 実行**（推計 約1,000 分/月、全体の 3 割）だが、結果はアーティファクト化のみで閾値ゲートなし（[#45](https://github.com/tomoya-k31/totsuka/issues/45) の決定どおり）であり、PR ごとに走らせる価値がない
 3. **main への push（マージ）ごとに全 5 ジョブを再実行**（110 回/月 × 約 8 分）。PR で直前に通した内容とほぼ同一
 
@@ -28,7 +28,7 @@ private リポジトリのため Actions は Pro プランの無料枠 3,000 分
 - **PR（pull_request）**: `clippy / rustfmt`（1 ジョブに統合）と `test` を実行。rustfmt の独立ジョブは切り上げ課金の固定費でしかないため clippy ジョブへ吸収する。
 - **main への push**: `coverage (llvm-cov)` のみ実行。llvm-cov は計装ビルドで全テストスイートを実行するため、マージごとのテスト検証を兼ねる（「main が壊れたら revert」フローの検知網は維持）。通常ビルドと計装ビルドで rust-cache が奪い合いにならないよう、test ジョブへは統合せず別ジョブのままイベントで振り分ける。
 - **audit（cargo-audit / cargo-deny）**: `audit.yml` に分離し、日次 cron + `**/Cargo.toml` / `Cargo.lock` / `deny.toml` を触る PR + 手動起動で実行。advisory は時間経過で増えるものであり、毎 PR 実行より日次実行のほうが検知も早い。
-- **concurrency**: 全ワークフローに `group: workflow-ref` を導入。ci / okf-lint / audit は `cancel-in-progress: true`（同一 PR への連続 push で古い実行を打ち切り）、release-please のみ `false`（リリース途中の打ち切りはタグと成果物の不整合を招くため直列化）。
+- **concurrency**: 全ワークフローに `group: workflow-ref` を導入。okf-lint / audit は `cancel-in-progress: true`（同一 PR への連続 push で古い実行を打ち切り）、ci は **PR イベントのみキャンセル**（`cancel-in-progress: ${{ github.event_name == 'pull_request' }}`。main の coverage 実行を連続マージで打ち切ると先行マージが単独検証されず「マージ毎検証」の保証が崩れるため、main では直列化）、release-please は `false`（リリース途中の打ち切りはタグと成果物の不整合を招くため直列化）。
 
 推計効果: 約 3,500 分/月 → 約 1,900 分/月（無料枠内）。
 
