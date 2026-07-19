@@ -1,7 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-19
-* **Creation**: [click-to-focus セットアップ](/operations/click-to-focus-setup.md)（#155 PR5、`Playbook`）。terminal-notifier 導入 → bundle id の調べ方 → `plugins/macos.toml`（`backend` / `activate_bundle_id` / `click_command`）→ 検証（`config validate` / 実通知クリック / `totsuka focus` 手動）の導入手順と、「クリックしても pane が変わらない」「通知が出ない」「401」等の切り分け表を整理。
+* **Creation**: [click-to-focus セットアップ](/operations/click-to-focus-setup.md)（#155 PR5、`Playbook`）。terminal-notifier 導入 → bundle id の調べ方 → `plugins/notifier-macos.toml`（`backend` / `activate_bundle_id` / `click_command`）→ 検証（`config validate` / 実通知クリック / `totsuka focus` 手動）の導入手順と、「クリックしても pane が変わらない」「通知が出ない」「401」等の切り分け表を整理。
 * **Creation**: [click-to-focus（クリックで pane を開く）](/glossary/click-to-focus.md)（#155 PR5、`Term`）。GUI 前面化（terminal-notifier `-activate`）+ herdr 内フォーカス（`totsuka focus` → `POST /focus` → `session/focus` 委譲）の 2 段構成と静かな縮退を用語として定義。
 * **Update**: [フックシグナルフロー](/architecture/hook-signal-flow.md) に「通知クリック → pane フォーカス（click-to-focus、F-94）」節を追加（#155 PR5）。notifier → terminal-notifier → クリック →（-activate 前面化 ‖ -execute `totsuka focus`）→ 制御 UDS → `PluginEvent::Focus` → `session/focus` → herdr focus チェーンの sequenceDiagram と縮退 3 系を図示。
 * **Update**: [Spec](/product/orchestrator-spec.md) / [Spec(ja)](/product/orchestrator-spec.ja.md) §4.10 に **F-94（クリック可能な通知 → pane フォーカス）** を追加（#155 PR5、英日ペア同期）。terminal-notifier 送出（`-sender` 非使用）・`totsuka focus` → `POST /focus` → `session/focus`（0.1.4、`pane_control` ゲート、F-37 不透明契約）・静かな縮退を要件化。エピック #155（PR #160/#161/#163/#164 + 本 PR）はこれで完了。
