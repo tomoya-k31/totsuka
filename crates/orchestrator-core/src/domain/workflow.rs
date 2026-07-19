@@ -287,6 +287,7 @@ mod tests {
             url: None,
             assignee: None,
             thread_key: None,
+            instructions: None,
         }
     }
 

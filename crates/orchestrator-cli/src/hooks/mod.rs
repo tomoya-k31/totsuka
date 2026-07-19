@@ -1,17 +1,18 @@
 //! Static hook scripts + per-workflow `orchestrator-<workflow>.json` rendering
 //! (#131 H-01/H-03, #137).
 //!
-//! The five hook scripts are baked into the binary with [`include_str!`] and
+//! The six hook scripts are baked into the binary with [`include_str!`] and
 //! written to `$XDG_DATA_HOME/totsuka/hooks/` at `totsuka run` / `totsuka
 //! doctor` startup (0700, idempotent by content hash so a version bump refreshes
 //! them but an unchanged run touches nothing). Per-workflow settings are
 //! rendered next to them (0600), with the `prompt`-type Stop hook added only for
 //! `verification = "llm"` workflows.
 //!
-//! Job-specific values (job_id / endpoint / token / spool dir) are deliberately
-//! kept **out** of these files: `agent-ide-herdr` injects them as env
-//! (`TOTSUKA_JOB_ID` / `TOTSUKA_HOOK_ENDPOINT` / `TOTSUKA_HOOK_TOKEN` /
-//! `TOTSUKA_HOOK_SPOOL_DIR`, #132 `HookLaunchSpec`), so a single rendered
+//! Job-specific values (job_id / endpoint / token / spool dir / prompt
+//! context) are deliberately kept **out** of these files: `agent-ide-herdr`
+//! injects them as env (`TOTSUKA_JOB_ID` / `TOTSUKA_HOOK_ENDPOINT` /
+//! `TOTSUKA_HOOK_TOKEN` / `TOTSUKA_HOOK_SPOOL_DIR` /
+//! `TOTSUKA_PROMPT_CONTEXT`, #132 `HookLaunchSpec`), so a single rendered
 //! `--settings` path is reusable across `claude --resume` (H-03).
 
 use std::io;
@@ -30,6 +31,10 @@ const HOOK_SCRIPTS: &[(&str, &str)] = &[
     ("on-notification.sh", include_str!("on-notification.sh")),
     ("on-session-start.sh", include_str!("on-session-start.sh")),
     ("on-session-end.sh", include_str!("on-session-end.sh")),
+    (
+        "on-user-prompt-submit.sh",
+        include_str!("on-user-prompt-submit.sh"),
+    ),
 ];
 
 /// Rubric embedded into the `prompt`-type Stop hook when a `verification =
@@ -188,6 +193,11 @@ pub fn render_settings(dir: &Path, wf: &WorkflowConfig) -> String {
             }],
             "SessionEnd": [{
                 "hooks": [{ "type": "command", "command": script("on-session-end.sh"), "timeout": 10 }]
+            }],
+            // Invisible prompt-context injection: rendered for every workflow;
+            // the script no-ops when TOTSUKA_PROMPT_CONTEXT is unset.
+            "UserPromptSubmit": [{
+                "hooks": [{ "type": "command", "command": script("on-user-prompt-submit.sh"), "timeout": 10 }]
             }]
         }
     });
@@ -439,6 +449,71 @@ mod tests {
         assert_eq!(lines[0], input);
     }
 
+    // --- on-user-prompt-submit.sh branch tests ---
+
+    /// Run `on-user-prompt-submit.sh` with `context` as TOTSUKA_PROMPT_CONTEXT
+    /// (`None` ⇒ unset). When `restricted_path` is set, the child runs with a
+    /// PATH that excludes `jq` (fail-open branch).
+    fn run_prompt_submit(
+        context: Option<&str>,
+        restricted_path: Option<&Path>,
+    ) -> std::process::Output {
+        let mut cmd = Command::new(tool("bash"));
+        cmd.arg(script_dir().join("on-user-prompt-submit.sh"))
+            .env_remove("TOTSUKA_PROMPT_CONTEXT")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(ctx) = context {
+            cmd.env("TOTSUKA_PROMPT_CONTEXT", ctx);
+        }
+        if let Some(path) = restricted_path {
+            cmd.env("PATH", path);
+        }
+        let mut child = cmd.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(br#"{"session_id":"s1","prompt":"user prompt"}"#)
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    #[test]
+    fn prompt_submit_emits_one_additional_context_line() {
+        // A multi-line context with quotes must round-trip through the single
+        // emitted JSON line (jq handles all escaping).
+        let ctx = "返信スタイル: \"簡潔\"\n\n[orchestrator] end with <<STATUS:COMPLETED>>";
+        let out = run_prompt_submit(Some(ctx), None);
+        assert!(out.status.success());
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(stdout.trim_end().lines().count(), 1, "exactly one line");
+        let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
+        assert_eq!(v["hookSpecificOutput"]["additionalContext"], ctx);
+    }
+
+    #[test]
+    fn prompt_submit_without_context_env_is_silent() {
+        for ctx in [None, Some("")] {
+            let out = run_prompt_submit(ctx, None);
+            assert!(out.status.success());
+            assert!(out.stdout.is_empty(), "no output without a context");
+        }
+    }
+
+    #[test]
+    fn prompt_submit_without_jq_is_silent_and_exits_zero() {
+        // PATH with the coreutils the script needs but NOT jq: fail-open, the
+        // prompt submits without the injected context (D-09).
+        let bin = unique_dir("ps-nojq-bin");
+        std::os::unix::fs::symlink(tool("cat"), bin.join("cat")).unwrap();
+        let out = run_prompt_submit(Some("some context"), Some(&bin));
+        assert!(out.status.success());
+        assert!(out.stdout.is_empty());
+    }
+
     // --- Rendering / idempotency / permission tests ---
 
     fn workflows_config(body: &str) -> RootConfig {
@@ -667,6 +742,37 @@ verification = "{mode}"
                 "only the command hook for verification={mode}"
             );
             assert_eq!(stop[0]["hooks"][0]["type"], "command");
+        }
+    }
+
+    #[test]
+    fn all_workflows_get_the_user_prompt_submit_hook() {
+        // The invisible-context hook is rendered unconditionally (llm and
+        // non-llm alike): the script no-ops when TOTSUKA_PROMPT_CONTEXT is
+        // unset, so it is always safe to register.
+        for verification in ["llm", "human", "none"] {
+            let cfg = workflows_config(&format!(
+                r#"
+[[workflows]]
+name = "wf"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "pull_request"
+verification = "{verification}"
+"#
+            ));
+            let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
+            let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+            let entry = &v["hooks"]["UserPromptSubmit"][0];
+            assert!(
+                entry.get("matcher").is_none(),
+                "no matcher for verification={verification}"
+            );
+            let hook = &entry["hooks"][0];
+            assert_eq!(hook["type"], "command");
+            assert_eq!(hook["command"], "/hooks/on-user-prompt-submit.sh");
+            assert_eq!(hook["timeout"], 10);
         }
     }
 

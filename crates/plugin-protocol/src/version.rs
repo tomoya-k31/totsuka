@@ -30,7 +30,12 @@ use semver::{Version, VersionReq};
 /// 0.1.4: the `session/focus` RPC (F-94 click-to-focus, #155) — additive,
 /// gated on the existing `pane_control` capability (no new flag), so plugins
 /// that never declare it are simply never called.
-pub const PROTOCOL_VERSION: &str = "0.1.4";
+///
+/// 0.1.5: `Task.instructions` — task-source-owned agent instructions,
+/// separated from the human-visible `body` so hosts can deliver them
+/// out-of-band (e.g. invisible prompt-context injection); additive and
+/// optional under the same contract as the fields above.
+pub const PROTOCOL_VERSION: &str = "0.1.5";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -54,15 +59,15 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 1, 4));
+        assert_eq!(protocol_version(), Version::new(0, 1, 5));
     }
 
     #[test]
     fn compatible_requirement_matches() {
         // A plugin supporting ^0.1 works with 0.1.x — the additive 0.1.1
         // (InitializeParams.repositories), 0.1.2 (InitializeParams.llm),
-        // 0.1.3 (hook/resume/diagnostics) and 0.1.4 (session/focus) must not
-        // strand `^0.1` manifests.
+        // 0.1.3 (hook/resume/diagnostics), 0.1.4 (session/focus) and 0.1.5
+        // (Task.instructions) must not strand `^0.1` manifests.
         let req = VersionReq::parse("^0.1").unwrap();
         assert!(is_compatible_with_current(&req));
         // A plugin that *requires* one of the additive supplies can say so.
@@ -73,6 +78,8 @@ mod tests {
         let req = VersionReq::parse(">=0.1.3, <0.2").unwrap();
         assert!(is_compatible_with_current(&req));
         let req = VersionReq::parse(">=0.1.4, <0.2").unwrap();
+        assert!(is_compatible_with_current(&req));
+        let req = VersionReq::parse(">=0.1.5, <0.2").unwrap();
         assert!(is_compatible_with_current(&req));
     }
 

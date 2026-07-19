@@ -429,6 +429,7 @@ mod tests {
             url: None,
             assignee: None,
             thread_key: None,
+            instructions: None,
         }
     }
 
@@ -573,6 +574,7 @@ mod tests {
         assert!(old.resume_session_id.is_none());
         assert!(old.hook.is_none());
         assert!(old.task.thread_key.is_none());
+        assert!(old.task.instructions.is_none());
         let unset = TaskDispatchParams {
             task: sample_task(),
             worktree_path: "/wt".into(),
@@ -587,6 +589,7 @@ mod tests {
         assert!(!wire.contains("resume_session_id"));
         assert!(!wire.contains("hook"));
         assert!(!wire.contains("thread_key"));
+        assert!(!wire.contains("instructions"));
         // A `diagnostics/snapshot` result may omit `text` (capture failure is
         // not an error): absent deserializes to None, None stays off the wire.
         let missing: DiagnosticsSnapshotResult = serde_json::from_str("{}").unwrap();
