@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-19
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `MARKER_SELF_REPORT_INSTRUCTION` に**配信契約**を追記。公開されるのはマーカー付き最終メッセージのみ（自己完結の全文必須・過去メッセージ参照禁止）、バックグラウンドタスク実行中はマーカーを出さない（R-02 ハートビート、完了後の再起動ターンで全文＋マーカーを再掲）。`slack-reply` 実機で、回答済みセッションがバックグラウンドエージェント完了で再起動された際に「前のメッセージで提示済み」というメタ発言＋2 個目の `<STATUS:COMPLETED>` を出し、そのメタ発言が Slack へ公開されてスレッドの会話が壊れていた問題への対処。
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `verification = "llm"` の `prompt` 型 Stop フックに**中間停止免除文**を機械的に付加。`on-stop.sh` は R-02 で `background_tasks` 非空の中間 Stop をハートビート扱い（ブロックしない）するのに対し、prompt 型フックには免除が無く、バックグラウンドエージェント実行中の中間 Stop を毎回判定 LLM がブロックしていた（ペインに「Stop hook error」表示・判定コスト・セッション内待機の強制。`slack-reply` 実機の運用フィードバック）。rubric とマーカー規約の間に免除文を挿入し、command 型と prompt 型の中間 Stop の扱いを整合させた。
 * **Creation**: [ADR-0007 CI 実行タイミングの再設計（Actions コスト最適化）](/decisions/adr-0007-ci-cost-optimization.md)。無料枠 3,000 分/月に対し推計 3,500 分/月に達したため、品質ゲートの内容は変えず実行タイミングを再設計（PR = clippy+rustfmt / test、main push = coverage のみ、audit は `audit.yml` へ分離し日次 cron + 依存ファイル変更 PR、全ワークフローに concurrency）。推計 1,900 分/月へ削減。
 * **Update**: [テスト戦略](/quality/test-strategy.md) — 「CI 品質ゲート」節を ADR-0007 の実行タイミング（毎 PR / main push / 日次 cron の 3 区分）に合わせて更新。
