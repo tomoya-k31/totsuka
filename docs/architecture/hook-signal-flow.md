@@ -122,7 +122,8 @@ sequenceDiagram
     HE->>HD: pane.get（生存確認）→ workspace.focus → tab.focus → pane.focus
     HD-->>HE: ok
     HE-->>EN: { focused: true }
-    EN-->>CLI: {"focused": true}
+    EN-->>CTL: FocusOutcome（oneshot）
+    CTL-->>CLI: {"focused": true}
     Note over U,AL: GUI 前面 + 対象 pane フォーカス済み
 ```
 
