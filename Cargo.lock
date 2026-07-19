@@ -1014,6 +1014,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-sdk"
+version = "0.1.2"
+dependencies = [
+ "plugin-protocol",
+ "semver",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
