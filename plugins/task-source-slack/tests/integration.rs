@@ -396,7 +396,13 @@ async fn initialize_rejects_identity_mismatch() {
     assert!(message.contains("target_user_id"), "{message}");
 
     // A failed guard leaves the server uninitialized.
-    let response = call(&mut srv, 2, "tasks/fetch", json!({ "trigger": {} })).await;
+    let response = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "1", "status": "実装待ち" }),
+    )
+    .await;
     assert_eq!(error_of(&response).0, error_code::INVALID_REQUEST);
 }
 
@@ -505,7 +511,6 @@ async fn task_source_methods_require_initialize() {
     let (mut srv, _harness) = server(&shared);
 
     for (method, params) in [
-        ("tasks/fetch", json!({ "trigger": {} })),
         (
             "task/update_status",
             json!({ "task_id": "C1:1.2", "status": "done" }),
@@ -528,10 +533,6 @@ async fn task_source_methods_answer_after_initialize() {
     push_guard_ok(&shared);
     let (mut srv, _harness) = server(&shared);
     result_of(call(&mut srv, 1, "initialize", init_params()).await);
-
-    // Fetch: no tasks yet (the runtime is off; nothing feeds the buffer).
-    let result = result_of(call(&mut srv, 2, "tasks/fetch", json!({ "trigger": {} })).await);
-    assert_eq!(result["tasks"], json!([]));
 
     // Status update: accepted as a no-op (Slack has no status column).
     let result = call(
@@ -586,7 +587,7 @@ async fn malformed_and_notification_lines() {
     assert_eq!(error_of(&response).0, error_code::PARSE_ERROR);
 
     // A notification (no id) and a blank line get no reply.
-    let notification = json!({ "jsonrpc": "2.0", "method": "tasks/fetch" });
+    let notification = json!({ "jsonrpc": "2.0", "method": "task/update_status" });
     assert!(
         srv.handle_line(&notification.to_string())
             .await

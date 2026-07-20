@@ -9,7 +9,6 @@
 //!   params are recorded to the config's `"init_log"` file, if set — separate
 //!   from `notify_log`, which tests read as "observable side effects".
 //! - `config/validate` → valid unless the config contains `"invalid": true`.
-//! - `tasks/fetch` → returns the config's `"tasks"` array (default: empty).
 //! - `task/update_status` / `result/publish` → acknowledge (recorded to the
 //!   config's `"notify_log"` file, if set, as `{"method": ..., "params": ...}`).
 //! - `task/dispatch` → replies with the config's `"session_id"` (default
@@ -133,10 +132,6 @@ fn main() {
                     })
                     .unwrap(),
                 )
-            }
-            "tasks/fetch" => {
-                let tasks = config.get("tasks").cloned().unwrap_or(Value::Array(vec![]));
-                Response::result(request_id(&id), serde_json::json!({ "tasks": tasks }))
             }
             "task/update_status" | "result/publish" => {
                 record(&config, method, &params);

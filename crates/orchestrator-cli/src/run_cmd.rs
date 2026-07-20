@@ -162,22 +162,14 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
     let mut engine = Engine::new(db, settings, plugins, SystemGitRunner, llm).await;
 
     if dry_run {
-        let entries = engine.dry_run().await?;
-        if entries.is_empty() {
-            println!("dry-run: no tasks match any workflow trigger.");
-        } else {
-            for e in &entries {
-                let ingested = e
-                    .already_ingested
-                    .as_deref()
-                    .map(|s| format!(" [already ingested: {s}]"))
-                    .unwrap_or_default();
-                println!(
-                    "{}#{} {} → workflow `{}` (mode {}) → repo {} → agent `{}`{}",
-                    e.source, e.task_id, e.title, e.workflow, e.mode, e.repo, e.agent, ingested
-                );
-            }
-        }
+        // Every task_source is push-only since protocol 0.2.0, so there is
+        // nothing to fetch ahead of time — `dry_run` always reports no
+        // preview available.
+        engine.dry_run().await?;
+        println!(
+            "dry-run: push sources (task/submit) cannot be previewed — nothing is fetched \
+             ahead of time. Run without --dry-run to see live ingestion."
+        );
         engine.shutdown(SHUTDOWN_GRACE).await;
         return Ok(());
     }
@@ -229,8 +221,8 @@ fn print_summary(summary: &RunSummary) {
     }
     let s = &summary.stats;
     println!(
-        "run summary: fetched {} / ingested {} / submitted {} / dispatched {} / done {} / failed {}",
-        s.fetched, s.ingested, s.submitted, s.dispatched, s.done, s.failed
+        "run summary: submitted {} / dispatched {} / done {} / failed {}",
+        s.submitted, s.dispatched, s.done, s.failed
     );
     let list = |ids: &[i64]| {
         ids.iter()

@@ -239,7 +239,7 @@ async fn approve_posts_the_reply_and_finalizes_both_views_once() {
         "chat.postMessage",
         Canned::Data(json!({ "ok": true, "ts": "777.7" })),
     );
-    let (mut srv, mut ws) = publish_draft_flow(&shared, &listener).await;
+    let (_srv, mut ws) = publish_draft_flow(&shared, &listener).await;
     let (draft_id, ..) = draft_buttons(&shared);
 
     // Approve from the in-thread ephemeral.
@@ -294,8 +294,6 @@ async fn approve_posts_the_reply_and_finalizes_both_views_once() {
     )
     .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let result = call(&mut srv, 4, "tasks/fetch", json!({ "trigger": {} })).await;
-    assert_eq!(result["tasks"], json!([]), "fetch stays an empty stub");
 
     // A second press is the double-send guard: a "handled" notice, no
     // second chat.postMessage.

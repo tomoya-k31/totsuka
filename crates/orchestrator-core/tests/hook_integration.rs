@@ -40,7 +40,7 @@ async fn launch(kind: &str, name: &str, init_config: serde_json::Value) -> Plugi
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = "^0.1"
+protocol_version = ">=0.1.6, <0.3"
 "#
     ))
     .unwrap();
@@ -70,6 +70,43 @@ fn read_log(path: &Path) -> Vec<serde_json::Value> {
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect()
+}
+
+/// A safety-net ceiling so a wiring regression fails the test instead of
+/// hanging CI.
+const RUN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Drive a watch-mode run until `cond` holds (checked every 100ms, capped by
+/// `RUN_TIMEOUT`), then stop it. The mock source pushes its task via
+/// `task/submit`, arriving as an event on its own schedule, so `cond`
+/// observes durable state (e.g. re-opening the state DB) rather than
+/// borrowing `engine`, which `run` holds mutably for the loop's duration.
+async fn run_until(engine: &mut Engine<SystemGitRunner, OpenAiRouter>, cond: impl Fn() -> bool) {
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut stop_tx = Some(stop_tx);
+    let run_fut = engine.run(true, async move {
+        let _ = stop_rx.await;
+    });
+    tokio::pin!(run_fut);
+    let deadline = tokio::time::Instant::now() + RUN_TIMEOUT;
+    loop {
+        tokio::select! {
+            result = &mut run_fut => {
+                result.expect("run loop error");
+                break;
+            }
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                if stop_tx.is_some() && cond() {
+                    let _ = stop_tx.take().unwrap().send(());
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "condition not reached within {}s — the socket→engine wiring may be broken",
+                    RUN_TIMEOUT.as_secs()
+                );
+            }
+        }
+    }
 }
 
 /// One workflow `wf` (source `mock_src`, agent `mock_agent`) with the given
@@ -109,7 +146,6 @@ fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSetti
         cleanup_plan: CleanupPolicy::Immediate,
         env: HashMap::new(),
         select: SelectConfig::default(),
-        poll_intervals: HashMap::new(),
         readme_cache_dir: None,
         pr_title_template: "t: {title}".to_string(),
         pr_body_template: "{summary}".to_string(),
@@ -744,7 +780,7 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         launch(
             "task_source",
             "mock_src",
-            json!({ "tasks": [{ "id": "1", "source": "github", "title": "t",
+            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
                                 "instructions": "回答は日本語で作成してください。" }] }),
         )
         .await,
@@ -793,7 +829,8 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
     )
     .await;
 
-    engine.cycle(None).await.unwrap();
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
 
     let task = engine
         .db()
@@ -880,7 +917,7 @@ async fn dispatch_without_hook_falls_back_to_visible_extra_context() {
         launch(
             "task_source",
             "mock_src",
-            json!({ "tasks": [{ "id": "1", "source": "github", "title": "t",
+            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
                                 "instructions": "回答は日本語で作成してください。" }] }),
         )
         .await,
@@ -921,7 +958,8 @@ async fn dispatch_without_hook_falls_back_to_visible_extra_context() {
         no_llm(),
     )
     .await;
-    engine.cycle(None).await.unwrap();
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
     engine.shutdown(GRACE).await;
 
     let dispatches = read_log(&dispatch_log);
@@ -1022,7 +1060,7 @@ async fn failed_hook_dispatch_rolls_back_reserved_session() {
         launch(
             "task_source",
             "mock_src",
-            json!({ "tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
         )
         .await,
     );
@@ -1069,7 +1107,15 @@ async fn failed_hook_dispatch_rolls_back_reserved_session() {
     )
     .await;
 
-    engine.cycle(None).await.unwrap();
+    let db_probe = db_path.clone();
+    run_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Failed)
+    })
+    .await;
 
     let task = engine
         .db()
@@ -1163,7 +1209,12 @@ async fn resume_plugins(
     let mut plugins = PluginSet::default();
     plugins.sources.insert(
         "mock_src".to_string(),
-        launch("task_source", "mock_src", json!({ "tasks": fetched })).await,
+        launch(
+            "task_source",
+            "mock_src",
+            json!({ "task_submit": true, "submit_tasks": fetched }),
+        )
+        .await,
     );
     plugins.agents.insert(
         "mock_agent".to_string(),
@@ -1269,7 +1320,8 @@ async fn second_task_in_thread_dispatches_with_resume_and_fresh_worktree() {
         no_llm(),
     )
     .await;
-    engine.cycle(None).await.unwrap();
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
 
     let params = last_dispatch_params(&dispatch_log);
     assert_eq!(
@@ -1312,7 +1364,8 @@ async fn unestablished_prior_session_falls_back_to_fresh_dispatch() {
         no_llm(),
     )
     .await;
-    engine.cycle(None).await.unwrap();
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
 
     let params = last_dispatch_params(&dispatch_log);
     assert!(
@@ -1346,7 +1399,8 @@ async fn third_task_resumes_the_latest_session_in_the_thread() {
         no_llm(),
     )
     .await;
-    engine.cycle(None).await.unwrap();
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
 
     let params = last_dispatch_params(&dispatch_log);
     assert_eq!(
@@ -1379,7 +1433,8 @@ async fn distinct_threads_do_not_cross_resume() {
         no_llm(),
     )
     .await;
-    engine.cycle(None).await.unwrap();
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
 
     let params = last_dispatch_params(&dispatch_log);
     assert!(

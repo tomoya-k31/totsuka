@@ -50,9 +50,12 @@ pub struct Capabilities {
     /// Answers `diagnostics/snapshot` with a pane screen capture (0.1.3,
     /// R-10). Defaults to `false` like `resume_session`.
     pub diagnostics_snapshot: bool,
-    /// This task_source pushes tasks via `task/submit` (0.1.6); the
-    /// Orchestrator stops polling `tasks/fetch` for it entirely. Defaults to
-    /// `false`, so plugins that predate it keep being polled.
+    /// This task_source pushes tasks via `task/submit` (0.1.6). Since
+    /// protocol 0.2.0 `tasks/fetch` no longer exists, so every task_source
+    /// that can launch at all effectively declares this `true`; a manifest
+    /// requiring only `^0.1` is rejected before this field is even
+    /// consulted (F-54). Defaults to `false` for the historical case of a
+    /// pre-0.1.6 manifest parsed by an older orchestrator.
     pub task_submit: bool,
     /// Output policies this (task source) plugin can fulfil.
     pub outputs: Vec<OutputCapability>,

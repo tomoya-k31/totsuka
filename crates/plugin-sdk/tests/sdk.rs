@@ -112,16 +112,6 @@ async fn typed_dispatch_covers_the_wire_protocol() {
     let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
     assert_eq!(response["error"]["code"], error_code::INVALID_PARAMS);
 
-    // tasks/fetch default: empty (push sources are never polled anyway).
-    let reply = server
-        .handle_line(&line(json!({
-            "jsonrpc": "2.0", "id": 4, "method": "tasks/fetch",
-            "params": { "trigger": {} }
-        })))
-        .await;
-    let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
-    assert_eq!(response["result"]["tasks"], json!([]));
-
     // Notifications and blank lines are silent; junk is PARSE_ERROR.
     assert!(
         server

@@ -314,7 +314,7 @@ protocol_version = "{protocol_req}"
         let base = scratch("store_install");
         let src = base.join("src");
         fs::create_dir_all(&src).unwrap();
-        fake_source(&src, "github", "^0.1", b"#!/bin/sh\necho hi\n");
+        fake_source(&src, "github", ">=0.1.6, <0.3", b"#!/bin/sh\necho hi\n");
 
         let store = PluginStore::new(base.join("plugins"));
         assert!(!store.is_installed("github"));
@@ -363,10 +363,10 @@ protocol_version = "{protocol_req}"
         let src = base.join("src");
         fs::create_dir_all(&src).unwrap();
         // A manifest name that would escape the plugins root on commit.
-        fake_source(&src, "x", "^0.1", b"bin");
+        fake_source(&src, "x", ">=0.1.6, <0.3", b"bin");
         fs::write(
             src.join(MANIFEST_FILE),
-            "name = \"../evil\"\nkind = \"notifier\"\nversion = \"0.1.0\"\nprotocol_version = \"^0.1\"\n",
+            "name = \"../evil\"\nkind = \"notifier\"\nversion = \"0.1.0\"\nprotocol_version = \">=0.1.0, <0.3\"\n",
         )
         .unwrap();
         let store = PluginStore::new(base.join("plugins"));
@@ -392,7 +392,7 @@ protocol_version = "{protocol_req}"
         let base = scratch("store_kind");
         let src = base.join("src");
         fs::create_dir_all(&src).unwrap();
-        fake_source(&src, "github", "^0.1", b"bin");
+        fake_source(&src, "github", ">=0.1.6, <0.3", b"bin");
         let store = PluginStore::new(base.join("plugins"));
         let plan = store.prepare_install(&src).unwrap();
         store.commit_install(&plan).unwrap();
@@ -419,7 +419,7 @@ protocol_version = "{protocol_req}"
         fs::create_dir_all(&no_bin).unwrap();
         fs::write(
             no_bin.join(MANIFEST_FILE),
-            "name = \"x\"\nkind = \"notifier\"\nversion = \"0.1.0\"\nprotocol_version = \"^0.1\"\n",
+            "name = \"x\"\nkind = \"notifier\"\nversion = \"0.1.0\"\nprotocol_version = \">=0.1.0, <0.3\"\n",
         )
         .unwrap();
         assert!(matches!(

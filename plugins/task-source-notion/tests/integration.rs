@@ -235,7 +235,7 @@ fn query_response() -> Value {
 }
 
 #[tokio::test]
-async fn full_flow_initialize_fetch_update_publish() {
+async fn full_flow_initialize_update_publish() {
     let shared = Shared::default();
     let mut srv = server(&shared);
 
@@ -244,50 +244,6 @@ async fn full_flow_initialize_fetch_update_publish() {
     let result = resp.result.expect("initialize result");
     assert_eq!(result["capabilities"]["task_submit"], json!(true));
     assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
-
-    // tasks/fetch (deprecated delegate) → only the ingestable page survives
-    // gating (F-08); its body is the converted page blocks (a second,
-    // per-task request).
-    shared.push(Canned::Data(query_response()));
-    shared.push(Canned::Data(json!({
-        "has_more": false,
-        "results": [
-            { "type": "heading_2", "heading_2": { "rich_text": [{ "plain_text": "背景" }] } },
-            { "type": "paragraph", "paragraph": { "rich_text": [{ "plain_text": "やること" }] } }
-        ]
-    })));
-    let resp = call(
-        &mut srv,
-        2,
-        "tasks/fetch",
-        json!({ "trigger": { "status": "実装待ち" } }),
-    )
-    .await;
-    let tasks = resp.result.expect("fetch result")["tasks"].clone();
-    let tasks = tasks.as_array().unwrap();
-    assert_eq!(
-        tasks.len(),
-        1,
-        "other-assignee, in-progress, wrong-status excluded"
-    );
-    let t = &tasks[0];
-    assert_eq!(t["id"], "P_1");
-    assert_eq!(t["source"], "notion");
-    assert_eq!(t["title"], "Task one");
-    assert_eq!(t["body"], "## 背景\nやること"); // page blocks → Markdown
-    assert_eq!(t["repo_hint"], "totsuka"); // enables F-10
-    assert_eq!(t["status"], "実装待ち");
-    assert_eq!(t["priority"], 10); // High → 10 via priority_map
-    assert_eq!(t["assignee"], "Me"); // my name surfaced even as 2nd assignee
-
-    // The server-side query carried the status filter (efficiency).
-    let query = shared.requests()[0].clone();
-    assert_eq!(query.method, HttpMethod::Post);
-    assert_eq!(query.path, "/databases/DB1/query");
-    assert_eq!(
-        query.body.unwrap()["filter"],
-        json!({ "property": "Status", "status": { "equals": "実装待ち" } })
-    );
 
     // task/update_status → maps レビュー待ち → "In Review", verifies the option
     // exists (DB fetch), then PATCHes the page property.
@@ -336,8 +292,7 @@ async fn fetch_excludes_in_progress_on_statusless_trigger() {
     // gating relies on `in_progress_statuses` (F-08). This is the production
     // path that exercises the `is_in_progress` branch directly.
     let shared = Shared::default();
-    let mut srv = server(&shared);
-    call(&mut srv, 1, "initialize", init_params()).await;
+    let (mut srv, mut harness) = server_with_harness(&shared);
 
     shared.push(Canned::Data(json!({
         "has_more": false, "next_cursor": null,
@@ -356,11 +311,22 @@ async fn fetch_excludes_in_progress_on_statusless_trigger() {
     // todo page survives, so exactly one block fetch follows.
     shared.push(Canned::Data(json!({ "has_more": false, "results": [] })));
 
-    let resp = call(&mut srv, 2, "tasks/fetch", json!({ "trigger": {} })).await;
-    let tasks = resp.result.unwrap()["tasks"].clone();
-    let tasks = tasks.as_array().unwrap();
-    assert_eq!(tasks.len(), 1, "the in-progress page is gated out (F-08)");
-    assert_eq!(tasks[0]["id"], "P_todo");
+    let params = json!({
+        "protocol_version": "0.1.6",
+        "config": init_config(),
+        "triggers": [
+            { "workflow": "design", "trigger": {} }
+        ],
+        "poll_interval_secs": 60
+    });
+    call(&mut srv, 1, "initialize", params).await;
+
+    let task = harness.next_task().await;
+    assert_eq!(
+        task["id"], "P_todo",
+        "the in-progress page is gated out (F-08)"
+    );
+    harness.assert_no_task(Duration::from_millis(200)).await;
     // No status filter was sent on a status-less trigger.
     assert!(
         shared.requests()[0]
@@ -507,7 +473,13 @@ async fn initialize_with_triggers_polls_and_submits() {
     // The first tick runs before any sleep: the DB query page plus the
     // page-block fetch for the single surviving task (body_source = page).
     shared.push(Canned::Data(query_response()));
-    shared.push(Canned::Data(json!({ "has_more": false, "results": [] })));
+    shared.push(Canned::Data(json!({
+        "has_more": false,
+        "results": [
+            { "type": "heading_2", "heading_2": { "rich_text": [{ "plain_text": "背景" }] } },
+            { "type": "paragraph", "paragraph": { "rich_text": [{ "plain_text": "やること" }] } }
+        ]
+    })));
     let params = json!({
         "protocol_version": "0.1.6",
         "config": init_config(),
@@ -519,12 +491,27 @@ async fn initialize_with_triggers_polls_and_submits() {
     let resp = call(&mut srv, 1, "initialize", params).await;
     assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
 
-    // The same gating as tasks/fetch applies: only P_1 survives (F-08).
+    // Ingest gating (F-08): only the ingestable page survives (other-assignee,
+    // in-progress, wrong-status excluded).
     let task = harness.next_task().await;
     assert_eq!(task["id"], "P_1");
     assert_eq!(task["source"], "notion");
     assert_eq!(task["title"], "Task one");
+    assert_eq!(task["body"], "## 背景\nやること"); // page blocks → Markdown
+    assert_eq!(task["repo_hint"], "totsuka"); // enables F-10
+    assert_eq!(task["status"], "実装待ち");
+    assert_eq!(task["priority"], 10); // High → 10 via priority_map
+    assert_eq!(task["assignee"], "Me"); // my name surfaced even as 2nd assignee
     harness.assert_no_task(Duration::from_millis(200)).await;
+
+    // The server-side query carried the status filter (efficiency).
+    let query = shared.requests()[0].clone();
+    assert_eq!(query.method, HttpMethod::Post);
+    assert_eq!(query.path, "/databases/DB1/query");
+    assert_eq!(
+        query.body.unwrap()["filter"],
+        json!({ "property": "Status", "status": { "equals": "実装待ち" } })
+    );
 }
 
 /// Without triggers there is nothing to watch: no poll loop, no submissions,
@@ -562,7 +549,13 @@ fn shipped_manifest_is_valid_and_declares_push_source() {
 async fn methods_before_initialize_are_rejected() {
     let shared = Shared::default();
     let mut srv = server(&shared);
-    let resp = call(&mut srv, 1, "tasks/fetch", json!({ "trigger": {} })).await;
+    let resp = call(
+        &mut srv,
+        1,
+        "task/update_status",
+        json!({ "task_id": "P_1", "status": "実装待ち" }),
+    )
+    .await;
     assert!(
         resp.error
             .expect("must error")

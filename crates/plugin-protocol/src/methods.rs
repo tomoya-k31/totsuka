@@ -28,13 +28,6 @@ pub mod method {
     pub const CONFIG_VALIDATE: &str = "config/validate";
 
     // task_source.
-    /// Fetch tasks matching a trigger (O→P).
-    ///
-    /// **Deprecated since protocol 0.1.6** in favour of the push-based
-    /// [`TASK_SUBMIT`]: the Orchestrator still polls sources that do not
-    /// declare the `task_submit` capability, but this method is scheduled for
-    /// removal in protocol 0.2.0. New plugins should push via `task/submit`.
-    pub const TASKS_FETCH: &str = "tasks/fetch";
     /// Submit one task for ingestion (P→O request, 0.1.6). The Orchestrator
     /// answers only after the task is durably persisted, so the plugin needs
     /// no buffer of its own (see [`super::TaskSubmitResult`] for the ack
@@ -101,17 +94,16 @@ pub struct InitializeParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm: Option<LlmInfo>,
     /// The workflow triggers targeting this **task_source** plugin, in
-    /// `config.toml` `[[workflows]]` definition order. A push source
-    /// (`task_submit` capability) receives its watch conditions here instead
-    /// of per [`TasksFetchParams`] call. Additive since protocol 0.1.6, same
-    /// contract as `repositories`. Empty for non-task_source plugins.
+    /// `config.toml` `[[workflows]]` definition order — a push source's
+    /// watch conditions, supplied once at `initialize` instead of a per-call
+    /// argument. Additive since protocol 0.1.6, same contract as
+    /// `repositories`. Empty for non-task_source plugins.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<TriggerInfo>,
-    /// The `[plugins.{name}].poll_interval_secs` value. For a push source
-    /// this is its *internal* fetch cadence (the Orchestrator no longer
-    /// polls it); for a legacy fetch source it stays the Orchestrator-side
-    /// poll interval and this field is merely informative. Additive since
-    /// protocol 0.1.6. `None` for non-task_source plugins or when unset.
+    /// The `[plugins.{name}].poll_interval_secs` value: a push source's
+    /// *internal* fetch cadence (the Orchestrator itself never polls).
+    /// Additive since protocol 0.1.6. `None` for non-task_source plugins or
+    /// when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_interval_secs: Option<u64>,
 }
@@ -122,8 +114,7 @@ pub struct InitializeParams {
 pub struct TriggerInfo {
     /// The workflow's `name` (`[[workflows]].name`).
     pub workflow: String,
-    /// Trigger condition; plugin-defined shape (same contract as
-    /// [`TasksFetchParams::trigger`]).
+    /// Trigger condition; plugin-defined shape.
     pub trigger: serde_json::Value,
 }
 
@@ -187,24 +178,6 @@ pub struct ConfigValidateResult {
 // ---------------------------------------------------------------------------
 // task_source
 // ---------------------------------------------------------------------------
-
-/// `tasks/fetch` params (O→P): the workflow trigger condition, passed raw for
-/// the plugin to interpret (e.g. `{ "project_status": "実装待ち" }`).
-///
-/// Deprecated since protocol 0.1.6 (see [`method::TASKS_FETCH`]); removal is
-/// scheduled for 0.2.0.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TasksFetchParams {
-    /// Trigger condition; plugin-defined shape.
-    pub trigger: serde_json::Value,
-}
-
-/// `tasks/fetch` result (P→O). Deprecated alongside [`TasksFetchParams`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TasksFetchResult {
-    /// Matching tasks in the common schema (F-01).
-    pub tasks: Vec<Task>,
-}
 
 /// `task/submit` params (P→O request, 0.1.6): push one task into the
 /// Orchestrator in the common schema (F-01).
@@ -582,12 +555,6 @@ mod tests {
 
     #[test]
     fn task_source_methods_round_trip() {
-        round_trip(&TasksFetchParams {
-            trigger: serde_json::json!({"project_status": "実装待ち"}),
-        });
-        round_trip(&TasksFetchResult {
-            tasks: vec![sample_task()],
-        });
         round_trip(&TaskUpdateStatusParams {
             task_id: "42".into(),
             status: "レビュー待ち".into(),

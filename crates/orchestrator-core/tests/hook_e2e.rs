@@ -52,7 +52,7 @@ async fn launch(kind: &str, name: &str, init_config: serde_json::Value) -> Plugi
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = "^0.1"
+protocol_version = ">=0.1.6, <0.3"
 "#
     ))
     .unwrap();
@@ -129,7 +129,6 @@ fn settings(repo: &Path, socket: &Path, base: &Path) -> EngineSettings {
         cleanup_plan: CleanupPolicy::Immediate,
         env: HashMap::new(),
         select: SelectConfig::default(),
-        poll_intervals: HashMap::new(),
         readme_cache_dir: None,
         pr_title_template: "t: {title}".to_string(),
         pr_body_template: "{summary}".to_string(),
@@ -139,15 +138,27 @@ fn settings(repo: &Path, socket: &Path, base: &Path) -> EngineSettings {
 
 /// A hook-capable agent (`resume_session` takes the hook-dispatch path) that
 /// POSTs the given synthetic Stop over the socket on dispatch, a source that
-/// hands back one task, and a recording notifier.
-async fn plugins(hook_spec: serde_json::Value, notify_log: &Path) -> PluginSet {
+/// hands back one task, and a recording notifier. `stream_states` is the
+/// mock agent's `state/subscribe` sequence — pass `[]` when the test only
+/// cares about the hook-signal path, so a delayed `running` notification
+/// can never race a hook signal that already parked/finished the task (a
+/// `running` report legitimately resumes `WaitingInput`, so an
+/// out-of-order one after a real hook signal would spuriously undo it).
+async fn plugins(
+    hook_spec: serde_json::Value,
+    stream_states: &[&str],
+    notify_log: &Path,
+) -> PluginSet {
     let mut set = PluginSet::default();
     set.sources.insert(
         "mock_src".to_string(),
         launch(
             "task_source",
             "mock_src",
-            json!({ "tasks": [{ "id": "1", "source": "github", "title": "hook task" }] }),
+            json!({
+                "task_submit": true,
+                "submit_tasks": [{ "id": "1", "source": "github", "title": "hook task" }],
+            }),
         )
         .await,
     );
@@ -158,7 +169,7 @@ async fn plugins(hook_spec: serde_json::Value, notify_log: &Path) -> PluginSet {
             "mock_agent",
             json!({
                 "resume_session": true,
-                "stream_states": ["running"],
+                "stream_states": stream_states,
                 "hook_post_on_dispatch": hook_spec,
             }),
         )
@@ -176,24 +187,38 @@ async fn plugins(hook_spec: serde_json::Value, notify_log: &Path) -> PluginSet {
     set
 }
 
-/// Drive one-shot `run` to completion (with a hard timeout guarding against a
-/// hang) and return the finished engine for state assertions.
-async fn run_once(
-    mut engine: Engine<SystemGitRunner, OpenAiRouter>,
-) -> Engine<SystemGitRunner, OpenAiRouter> {
-    let result = tokio::time::timeout(RUN_TIMEOUT, async {
-        engine
-            .run(false, std::future::pending::<()>())
-            .await
-            .expect("run loop error")
-    })
-    .await;
-    assert!(
-        result.is_ok(),
-        "one-shot run did not settle within {}s — the socket→engine wiring may be broken",
-        RUN_TIMEOUT.as_secs()
-    );
-    engine
+/// Drive a watch-mode run until `cond` holds (checked every 100ms, capped by
+/// `RUN_TIMEOUT`), then stop it and return the engine for state assertions.
+/// The task is pushed via `task/submit`, arriving as an event on its own
+/// schedule, so `cond` observes durable state (e.g. re-opening the state DB)
+/// rather than borrowing `engine`, which `run` holds mutably for the loop's
+/// duration.
+async fn run_until(engine: &mut Engine<SystemGitRunner, OpenAiRouter>, cond: impl Fn() -> bool) {
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut stop_tx = Some(stop_tx);
+    let run_fut = engine.run(true, async move {
+        let _ = stop_rx.await;
+    });
+    tokio::pin!(run_fut);
+    let deadline = tokio::time::Instant::now() + RUN_TIMEOUT;
+    loop {
+        tokio::select! {
+            result = &mut run_fut => {
+                result.expect("run loop error");
+                break;
+            }
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                if stop_tx.is_some() && cond() {
+                    let _ = stop_tx.take().unwrap().send(());
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "condition not reached within {}s — the socket→engine wiring may be broken",
+                    RUN_TIMEOUT.as_secs()
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]
@@ -206,11 +231,13 @@ async fn e2e_socket_completion_dispatches_to_done() {
     let notify_log = base.join("notify.ndjson");
     let db = StateDb::open(&base.join("state.db")).unwrap();
 
-    let engine = Engine::new(
+    let db_path = base.join("state.db");
+    let mut engine = Engine::new(
         db,
         settings(&repo, &socket, &base),
         plugins(
             json!({ "status": "COMPLETED", "message": "shipped <<STATUS:COMPLETED>>" }),
+            &["running"],
             &notify_log,
         )
         .await,
@@ -219,7 +246,15 @@ async fn e2e_socket_completion_dispatches_to_done() {
     )
     .await;
 
-    let engine = run_once(engine).await;
+    let db_probe = db_path.clone();
+    run_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
 
     let task = engine
         .db()
@@ -250,13 +285,15 @@ async fn e2e_socket_duplicate_delivery_transitions_once() {
     let repo = setup_repo(&base);
     let socket = base.join("claude.sock");
     let notify_log = base.join("notify.ndjson");
-    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let db_path = base.join("state.db");
+    let db = StateDb::open(&db_path).unwrap();
 
-    let engine = Engine::new(
+    let mut engine = Engine::new(
         db,
         settings(&repo, &socket, &base),
         plugins(
             json!({ "status": "COMPLETED", "message": "done <<STATUS:COMPLETED>>", "repeat": 2 }),
+            &["running"],
             &notify_log,
         )
         .await,
@@ -265,7 +302,15 @@ async fn e2e_socket_duplicate_delivery_transitions_once() {
     )
     .await;
 
-    let engine = run_once(engine).await;
+    let db_probe = db_path.clone();
+    run_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
 
     let task = engine
         .db()
@@ -288,19 +333,24 @@ async fn e2e_socket_duplicate_delivery_transitions_once() {
 
 #[tokio::test]
 async fn e2e_socket_needs_input_parks_in_waiting() {
-    // A NEEDS_INPUT Stop over the socket parks the task in WaitingInput (a
-    // settled/waiting state, so one-shot run still exits) and notifies.
+    // A NEEDS_INPUT Stop over the socket parks the task in WaitingInput and
+    // notifies. `stream_states: []` (no state/subscribe traffic) so a
+    // delayed `running` report can never race the hook signal and undo it
+    // (`apply_agent_state`'s `Running` branch legitimately resumes
+    // `WaitingInput`, since that's how a real post-answer resume works).
     let base = scratch("e2e_needs_input");
     let repo = setup_repo(&base);
     let socket = base.join("claude.sock");
     let notify_log = base.join("notify.ndjson");
-    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let db_path = base.join("state.db");
+    let db = StateDb::open(&db_path).unwrap();
 
-    let engine = Engine::new(
+    let mut engine = Engine::new(
         db,
         settings(&repo, &socket, &base),
         plugins(
             json!({ "status": "NEEDS_INPUT", "message": "which branch? <<STATUS:NEEDS_INPUT reason=\"branch?\">>" }),
+            &[],
             &notify_log,
         )
         .await,
@@ -309,7 +359,15 @@ async fn e2e_socket_needs_input_parks_in_waiting() {
     )
     .await;
 
-    let engine = run_once(engine).await;
+    let db_probe = db_path.clone();
+    run_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::WaitingInput)
+    })
+    .await;
 
     let task = engine
         .db()

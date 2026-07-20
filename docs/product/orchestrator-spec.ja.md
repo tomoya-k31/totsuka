@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-timestamp: 2026-07-19T12:00:00+09:00
+timestamp: 2026-07-20T18:00:00+09:00
 status: draft
 owner: tomoya-k31
 ---
@@ -398,10 +398,10 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 
 | メソッド | 方向 | 対象種別 | 用途 |
 |---|---|---|---|
-| `initialize` | O→P | 共通 | 固有設定(解決済みシークレット含む)と capability の交換 |
+| `initialize` | O→P | 共通 | 固有設定(解決済みシークレット含む)と capability の交換。task_source には `triggers`/`poll_interval_secs` も渡す(protocol 0.1.6) |
 | `shutdown` | O→P | 共通 | 終了要求 |
 | `config/validate` | O→P | 共通 | 固有設定の検証(F-59) |
-| `tasks/fetch` | O→P | task_source | トリガー条件に合致するタスク取得 |
+| `task/submit` | **P→O request** | task_source | プラグインが見つけたタスクを push(persist-before-ack、protocol 0.1.6)。protocol 0.2.0 で削除された `tasks/fetch` の後継 — task_source は全て push 専用 |
 | `task/update_status` | O→P | task_source | ソース側ステータス遷移(F-84) |
 | `result/publish` | O→P | task_source | 設計結果等の書き戻し(F-07) |
 | `task/dispatch` | O→P | agent_ide | worktree・タスク・mode を渡し実行開始。セッション ID を返す |

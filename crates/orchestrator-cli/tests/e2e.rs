@@ -124,7 +124,7 @@ fn install_plugin(env: &Env, name: &str, kind: &str) {
         dir.join("plugin.toml"),
         format!(
             "name = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.1.0\"\n\
-             protocol_version = \"^0.1\"\n\n[capabilities]\nstate_stream = true\n\
+             protocol_version = \">=0.1.6, <0.3\"\n\n[capabilities]\nstate_stream = true\n\
              outputs = [\"source\"]\n"
         ),
     )
@@ -199,7 +199,7 @@ on_success = {{ set_status = "レビュー待ち" }}
     std::fs::write(
         cfg_dir.join("plugins/mock_src.toml"),
         format!(
-            "notify_log = \"{}\"\n[[tasks]]\nid = \"1\"\nsource = \"mock_src\"\ntitle = \"e2e task\"\n",
+            "notify_log = \"{}\"\ntask_submit = true\n[[submit_tasks]]\nid = \"1\"\nsource = \"mock_src\"\ntitle = \"e2e task\"\n",
             env.source_log.display()
         ),
     )
@@ -331,9 +331,12 @@ fn e2e_dry_run_has_zero_side_effects() {
     );
     let out = env.run(&["run", "--dry-run"]);
     assert!(out.status.success());
+    // Every source is push-only (0.2.0): nothing is fetched ahead of time,
+    // so `--dry-run` has no preview to show.
     assert!(
-        stdout(&out).contains("mock_src#1"),
-        "dry-run lists the task"
+        stdout(&out).contains("cannot be previewed"),
+        "dry-run reports no preview available: {}",
+        stdout(&out)
     );
 
     // No task ingested: `task list --json` must be an empty array (the DB may

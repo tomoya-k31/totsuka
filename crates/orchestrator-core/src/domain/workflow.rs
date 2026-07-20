@@ -6,11 +6,11 @@
 //! plan → human review → implement handoff via [`OutcomeAction`] status
 //! transitions (F-84).
 //!
-//! Trigger *meaning* is owned by the task source plugin (it filters at
-//! `tasks/fetch`), so the Orchestrator treats the trigger as an opaque filter
-//! but additionally **re-checks** the returned task's `status`/`labels`
-//! defensively. Matching evaluates workflows in definition order and takes the
-//! **first** match (F-81).
+//! Trigger *meaning* is owned by the task source plugin (it filters on the
+//! trigger it receives at `initialize`), so the Orchestrator treats the
+//! trigger as an opaque filter but additionally **re-checks** the pushed
+//! task's `status`/`labels` defensively. Matching evaluates workflows in
+//! definition order and takes the **first** match (F-81).
 
 use plugin_protocol::Task;
 use plugin_protocol::manifest::OutputCapability;
@@ -28,14 +28,15 @@ impl Trigger {
         Self(table)
     }
 
-    /// The raw table, for passing to `tasks/fetch` and for JSON conversion.
+    /// The raw table, for passing to `initialize`'s `triggers` and for JSON
+    /// conversion.
     pub fn as_table(&self) -> &toml::Table {
         &self.0
     }
 
-    /// Convert to JSON for the `tasks/fetch` RPC params. A `toml::Table` always
-    /// serializes to a JSON object; the fallback is an empty object (never
-    /// `null`) so the RPC always receives an object.
+    /// Convert to JSON for `initialize`'s `triggers` param. A `toml::Table`
+    /// always serializes to a JSON object; the fallback is an empty object
+    /// (never `null`) so the plugin always receives an object.
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(&self.0)
             .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
@@ -49,8 +50,8 @@ impl Trigger {
     /// - `status` / `project_status` → compared to `task.status`
     /// - `label` (string) / `labels` (array) → looked up in `task.labels`
     ///
-    /// All other keys are opaque: the plugin already filtered on them at
-    /// `tasks/fetch`, so they are trusted. Non-string values on reserved keys
+    /// All other keys are opaque: the plugin already filtered on them before
+    /// pushing the task, so they are trusted. Non-string values on reserved keys
     /// are also treated as opaque (skipped). An empty trigger matches every
     /// task (a catch-all).
     pub fn matches(&self, task: &Task) -> bool {
@@ -79,7 +80,7 @@ impl Trigger {
                         }
                     }
                 }
-                _ => {} // opaque; the plugin filtered on it at tasks/fetch
+                _ => {} // opaque; the plugin already filtered on it before pushing
             }
         }
         true
