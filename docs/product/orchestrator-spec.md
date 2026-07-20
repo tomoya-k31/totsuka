@@ -278,7 +278,7 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 | Command | Purpose |
 |---|---|
 | `init` | Generate configuration scaffolding, environment check |
-| `run [--watch]` | Main loop from task fetch to dispatch (one-shot by default; `--watch` polls continuously — see Open Question #2, resolved) |
+| `run [--watch]` | Main loop from task intake (push, `task/submit`) to dispatch (one-shot by default; `--watch` stays up receiving pushes until shutdown — see Open Question #2, resolved) |
 | `status [--json]` | List running / queued / waiting tasks and worktrees |
 | `task list / show <id> / cancel <id> / retry <id>` | Individual task operations |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
@@ -288,7 +288,7 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 | `completion <shell>` | Shell completion generation |
 | Common flags | `--debug`, `--json`, `--dry-run`, `--config <path>` |
 
-`--json` is available on all read-only commands to enable use from other tools (jq, CI, a future TUI). `--dry-run` shows which repository would be selected and what would be passed to which agent, without executing.
+`--json` is available on all read-only commands to enable use from other tools (jq, CI, a future TUI). `--dry-run` is a zero-side-effect no-op as of protocol 0.2.0: since every task_source pushes rather than being fetched on demand, there is nothing to preview ahead of time — run without `--dry-run` to see live ingestion.
 
 ### 5.2 Logging
 

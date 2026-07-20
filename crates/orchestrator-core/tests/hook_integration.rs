@@ -653,6 +653,76 @@ async fn timeout_sweep_escalates_silent_task() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Same workflow as [`workflows`] but with a short, explicit `timeout_secs`
+/// so a test can observe a task crossing its timeout *during* the run,
+/// rather than seeding it already-expired (which the initial startup
+/// `cycle()` would sweep regardless of whether periodic re-ticking works).
+fn workflows_with_timeout(timeout_secs: u64) -> Vec<Workflow> {
+    let cfg = RootConfig::from_toml_str(&format!(
+        r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {{}}
+mode = "implement"
+agent = "mock_agent"
+output = "none"
+verification = "llm"
+timeout_secs = {timeout_secs}
+on_success = {{ set_status = "done" }}
+on_failure = {{ set_status = "failed" }}
+"#
+    ))
+    .unwrap();
+    Workflow::from_configs(&cfg.workflows)
+}
+
+#[tokio::test]
+async fn watch_mode_periodic_tick_escalates_silent_task_without_events() {
+    // Regression test (0.2.0, #190): the old poll-driven `cycle()` call used
+    // to double as a periodic maintenance heartbeat before Orchestrator-side
+    // polling was removed. Without a replacement heartbeat, a long-running
+    // `--watch` process would never re-check signal timeouts (D-03) or
+    // worktree retention (F-23) unless a push event happened to arrive.
+    //
+    // The task is seeded with a *fresh* `last_signal_at` and a 1-second
+    // workflow timeout — not yet timed out when the startup `cycle()` runs,
+    // only becoming so a moment later. No event is ever sent, so only a
+    // periodic re-check (not the startup sweep) can catch it.
+    let base = scratch("hook_watch_tick");
+    let db_path = base.join("state.db");
+    let notify_log = base.join("notify.ndjson");
+    let now = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let id = {
+        let db = StateDb::open(&db_path).unwrap();
+        let id = db.upsert_task(&new_task("1", Some(&now))).unwrap();
+        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        db.apply_event(id, TaskEvent::Start, None).unwrap();
+        db.record_session(id, "mock_agent", "sess-1").unwrap();
+        id
+    };
+
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(workflows_with_timeout(1), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    run_until(&mut engine, move || {
+        let db = StateDb::open(&db_probe).unwrap();
+        db.get_task(id).unwrap().unwrap().state == TaskState::Escalated
+    })
+    .await;
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn spool_replay_applies_signal_and_deletes_file() {
     let base = scratch("hook_spool");

@@ -74,7 +74,8 @@ use crate::worktree::{
 /// Lines of a repository README shown to the LLM as selection context (F-11).
 const README_HEAD_LINES: usize = 30;
 
-/// How long the one-shot drain loop sleeps between settle checks.
+/// How long the run loop sleeps between periodic maintenance ticks (settle
+/// checks in one-shot, timeout/retention sweeps in both modes).
 const SETTLE_TICK: Duration = Duration::from_millis(200);
 
 /// One-shot's quiet-period floor before an empty `settled()` is trusted
@@ -596,7 +597,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// keeps the loop alive, receiving `task/submit` pushes as they arrive,
     /// until `shutdown` resolves (SIGINT → graceful: in-flight tasks stay in
     /// the state DB for next-start recovery). There is no Orchestrator-side
-    /// polling to schedule.
+    /// polling to schedule tasks with, but a short heartbeat tick still
+    /// re-runs [`cycle`](Self::cycle) periodically in both modes so signal
+    /// timeouts (D-03) and worktree retention (F-23) are re-checked even when
+    /// no push event happens to arrive.
     pub async fn run<F>(&mut self, watch: bool, shutdown: F) -> Result<RunSummary, EngineError>
     where
         F: std::future::Future<Output = ()>,
@@ -664,9 +668,14 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         self.dispatch_ready().await?;
                     }
                 }
-                _ = tokio::time::sleep(SETTLE_TICK), if !watch => {
-                    // Safety tick: re-check settling and pick up freed slots.
-                    self.dispatch_ready().await?;
+                _ = tokio::time::sleep(SETTLE_TICK) => {
+                    // Periodic maintenance tick (both modes, D-03/F-23): the
+                    // old poll-driven `cycle()` call used to double as this
+                    // heartbeat before 0.2.0 removed Orchestrator-side
+                    // polling — without it, a long-running `--watch` process
+                    // would never re-check signal timeouts or worktree
+                    // retention unless a push event happened to arrive.
+                    self.cycle().await?;
                 }
             }
         }
@@ -1318,9 +1327,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             // A pushed task (`task/submit`, 0.1.6): persist, ack only after
             // the commit, then run repo selection so the loop's dispatch pass
             // can pick the task up. A persistence error answers the plugin
-            // with the retryable INTERNAL_ERROR and still propagates — the
-            // fetch path treats DB failures as run-fatal, and this path must
-            // not be more forgiving.
+            // with the retryable INTERNAL_ERROR and still propagates — DB
+            // failures are run-fatal, and this path must not be forgiving.
             PluginEvent::TaskSubmit {
                 source,
                 task,
@@ -1341,18 +1349,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
-    /// Ingest one pushed task (`task/submit`, 0.1.6) with the same
-    /// normalization and defensive workflow matching as the fetch path.
-    /// Returns the final ack; `Err` is a persistence failure (retryable for
-    /// the plugin, fatal for the run).
+    /// Ingest one pushed task (`task/submit`, 0.1.6): normalize and
+    /// defensively re-match the workflow. Returns the final ack; `Err` is a
+    /// persistence failure (retryable for the plugin, fatal for the run).
     fn on_task_submit(
         &mut self,
         source: String,
         mut task: Task,
     ) -> Result<TaskSubmitResult, EngineError> {
-        // Same instance-name normalization as fetch_and_ingest: workflow
-        // matching and the ingest key use the `[plugins.<name>]` key, not the
-        // plugin's own notion of its source name.
+        // Workflow matching and the ingest key use the `[plugins.<name>]`
+        // key, not the plugin's own notion of its source name.
         task.source = source;
         let workflows = self.settings.workflows.clone();
         let Some(wf) = match_workflow(&workflows, &task) else {

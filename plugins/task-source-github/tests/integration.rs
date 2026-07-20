@@ -1,7 +1,8 @@
 //! End-to-end plugin flow over a recorded GraphQL transport (no network):
-//! initialize → poll_loop → `task/submit` push (0.1.6), the deprecated
-//! tasks/fetch delegate, normalize → task/update_status → result/publish,
-//! plus ingest gating (F-08) and invalid-token config/validate (F-59).
+//! initialize → poll_loop → `task/submit` push (0.1.6), normalize →
+//! task/update_status → result/publish, plus ingest gating (F-08) and
+//! invalid-token config/validate (F-59). `tasks/fetch` no longer exists as
+//! of protocol 0.2.0 (#190).
 
 use std::collections::VecDeque;
 use std::future::Future;

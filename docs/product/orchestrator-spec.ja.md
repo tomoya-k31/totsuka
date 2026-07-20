@@ -279,7 +279,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | コマンド | 用途 |
 |---|---|
 | `init` | 設定ファイルの雛形生成、環境チェック |
-| `run [--watch]` | タスク取得〜ディスパッチのメインループ実行(デフォルトはワンショット、`--watch` で常駐ポーリング — 未決事項 #2 は解決済み) |
+| `run [--watch]` | タスク取り込み（push、`task/submit`）〜ディスパッチのメインループ実行(デフォルトはワンショット、`--watch` は push を受け続けたまま shutdown まで常駐 — 未決事項 #2 は解決済み) |
 | `status [--json]` | 実行中 / キュー / 待機中タスクと worktree の一覧 |
 | `task list / show <id> / cancel <id> / retry <id>` | タスク個別操作 |
 | `plugin list / install / uninstall / enable / disable` | プラグイン管理 |
@@ -289,7 +289,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | `completion <shell>` | シェル補完生成 |
 | 共通フラグ | `--debug`, `--json`, `--dry-run`, `--config <path>` |
 
-`--json` は全読み取り系コマンドに用意し、他ツール(jq、CI、将来のTUI)からの利用を可能にする。`--dry-run` は「どのリポジトリが選択され、どのエージェントに何が渡るか」を実行せずに表示する。
+`--json` は全読み取り系コマンドに用意し、他ツール(jq、CI、将来のTUI)からの利用を可能にする。`--dry-run` は protocol 0.2.0 以降、副作用ゼロの no-op になった: task_source は必要時に取得されるのではなく自ら push するため、事前にプレビューできる対象が無い — 実行結果を見るには `--dry-run` なしで起動する。
 
 ### 5.2 ログ
 

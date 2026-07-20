@@ -1,11 +1,17 @@
 //! Integration tests for the run main loop (#63) against real mock-plugin
 //! subprocesses and a real git repository.
 //!
-//! Covers the issue's acceptance criteria:
-//! 1. fetch → worktree → dispatch → done → cleanup, end to end.
-//! 2. One-shot leaves waiting tasks and re-running does not double-ingest.
+//! Covers the issue's acceptance criteria (updated for 0.2.0's push-only
+//! ingestion, #190 — every source pushes via `task/submit` instead of the
+//! removed `tasks/fetch`):
+//! 1. push → worktree → dispatch → done → cleanup, end to end.
+//! 2. One-shot leaves waiting tasks in place (double-ingest is covered
+//!    separately by `duplicate_submit_is_acked_duplicate_and_ingested_once`,
+//!    since push re-delivery — not a fetch rerun — is how a duplicate can
+//!    arrive).
 //! 3. A restart after an interrupted run recovers the in-flight task (§5.3).
-//! 4. `--dry-run` reports decisions with zero side effects.
+//! 4. `--dry-run` is a zero-side-effect no-op (push sources have nothing to
+//!    preview ahead of time).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

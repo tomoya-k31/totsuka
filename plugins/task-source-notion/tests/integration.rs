@@ -1,9 +1,9 @@
 //! End-to-end plugin flow over a recorded REST transport (no network):
-//! initialize → poll_loop → `task/submit` push (0.1.6), the deprecated
-//! tasks/fetch delegate, normalize via the property map → page-body fetch
-//! → task/update_status → result/publish (with block splitting), plus ingest
-//! gating (F-08), unknown-status rejection (F-84), and config/validate against
-//! the database schema (F-59).
+//! initialize → poll_loop → `task/submit` push (0.1.6), normalize via the
+//! property map → page-body fetch → task/update_status → result/publish
+//! (with block splitting), plus ingest gating (F-08), unknown-status
+//! rejection (F-84), and config/validate against the database schema
+//! (F-59). `tasks/fetch` no longer exists as of protocol 0.2.0 (#190).
 
 use std::collections::VecDeque;
 use std::future::Future;
