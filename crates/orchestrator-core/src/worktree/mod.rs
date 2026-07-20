@@ -3,7 +3,7 @@
 //! Implements the "1 task = 1 repo = 1 worktree = 1 branch" normalization:
 //! creating worktrees (fetch → branch from `origin/{default}` → `worktree
 //! add`), cleaning them up per policy (skipping dirty ones), and detecting
-//! orphans. All git access goes through [`GitRunner`](crate::ports::git::GitRunner)
+//! orphans. All git access goes through [`GitRunner`]
 //! so the pure rendering logic is unit-tested and the git-touching paths are
 //! integration-tested against a real repo.
 

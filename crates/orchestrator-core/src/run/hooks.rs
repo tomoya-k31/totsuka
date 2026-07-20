@@ -5,10 +5,10 @@
 //! into a state transition. [`Engine::on_signal`] is the entry point — an
 //! idempotent record → task resolution → state transition → verification →
 //! output pipeline — plus the escalation, timeout-sweep, and spool-recovery
-//! machinery, and the [`Engine::hook_launch`] dispatch helper.
+//! machinery, and the `Engine::hook_launch` dispatch helper.
 //!
-//! The existing terminal machinery ([`apply_agent_state`](Engine::apply_agent_state),
-//! [`finalize_success`](Engine::finalize_success), the output policy) is reused
+//! The existing terminal machinery (`apply_agent_state`,
+//! `finalize_success`, the output policy) is reused
 //! **unchanged**: a hook `Stop{Completed}` for an `llm`/`none` workflow is just
 //! an `AgentState::Done` from a different source, so it flows through the same
 //! publish path. The hook-specific parts are verification (`human` →
@@ -79,7 +79,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// idempotently, then drive the state machine per the signal's event.
     ///
     /// Delivered from the UDS receiver via
-    /// [`PluginEvent::HookSignal`](super::PluginEvent::HookSignal) and from
+    /// `PluginEvent::HookSignal` and from
     /// [`replay_spool`](Self::replay_spool). Public so integration tests can
     /// feed signals directly.
     pub async fn on_signal(&mut self, sig: AgentSignal) -> Result<(), EngineError> {
@@ -434,7 +434,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Bring a task's pane to the foreground (F-94, `POST /focus` → here).
     ///
     /// Not a hook signal, but it shares this module's task→session→plugin
-    /// resolution (see [`diagnostics_snapshot`](Self::diagnostics_snapshot)):
+    /// resolution (see `diagnostics_snapshot`):
     /// resolve the task's latest session, gate on the agent's `pane_control`
     /// capability, and delegate `session/focus` — the session id stays opaque
     /// (F-37). Every "cannot focus" is a normal [`FocusOutcome`] with a

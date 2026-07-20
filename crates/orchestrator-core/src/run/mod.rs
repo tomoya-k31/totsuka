@@ -129,7 +129,7 @@ pub struct EngineSettings {
     /// with no hook-capable agent simply never receives a POST). `None` only for
     /// `--dry-run` (read-only: no receiver, no dispatch) and hook-disabled
     /// tests; when `None` the receiver never starts and dispatch never sets a
-    /// [`HookLaunchSpec`](plugin_protocol::methods::HookLaunchSpec).
+    /// [`HookLaunchSpec`].
     pub hook: Option<HookRuntime>,
 }
 

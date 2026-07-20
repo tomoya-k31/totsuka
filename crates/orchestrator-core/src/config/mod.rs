@@ -5,7 +5,7 @@
 //! - [`raw`]: uninterpreted `plugins/{name}.toml` (F-64).
 //! - [`resolve`]: `${ENV}` / `keychain:` secret resolution and path expansion.
 //! - [`layered`]: CLI > env > plugin-file > config-default precedence (F-66).
-//! - [`validate`]: static (offline) validation (F-63, F-58).
+//! - [`mod@validate`]: static (offline) validation (F-63, F-58).
 
 pub mod edit;
 pub mod layered;
