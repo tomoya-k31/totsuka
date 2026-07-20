@@ -4,7 +4,7 @@ title: テスト戦略（自動結合テスト / E2E / モックプラグイン�
 description: totsuka のテスト層（ユニット・実プロセス結合・バイナリE2E）とモックプラグインによるシナリオ注入、フレーク対策、CI 品質ゲートの定義。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates
 tags: [testing, e2e, integration, mock, ci, quality, slack]
-timestamp: 2026-07-19T12:00:00Z
+timestamp: 2026-07-20T18:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -20,7 +20,7 @@ owner: tomoya-k31
 | ユニット | 各モジュール内 `#[cfg(test)]` | 純粋ロジック（ステートマシン、ワークフローマッチング、スロット会計、テンプレート描画、redact 等）。LLM は `MockRouter`（`repo_select`）でスタブ化。 |
 | 実プロセス結合 | [orchestrator-core `tests/`](https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/tests) | `plugin_host.rs`（プラグイン起動・相関・クラッシュ隔離）、`worktree.rs`（実 git・bare origin）、`session_recovery.rs`、`config_e2e.rs`、`run_loop.rs`（`Engine` を実 mock サブプロセス + 実 git で駆動：全経路・再起動回復・出力ポリシー）。 |
 | バイナリ E2E | [orchestrator-cli `tests/e2e.rs`](https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/tests/e2e.rs) | 実 `totsuka` バイナリを XDG scratch 環境で起動し、`run`/`status`/`task show` を通す。config ロード・プラグイン起動・ロック・ログまで含めユーザー視点で検証。 |
-| Slack E2E | [orchestrator-cli `tests/slack_e2e.rs`](https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/tests/slack_e2e.rs) | 実 `totsuka` + 実 `task-source-slack` バイナリ + mock agent を、in-process の **モック Slack**（Web API = raw TCP HTTP、Socket Mode = WebSocket）に対して駆動。メンション envelope → `tasks/fetch` → dispatch → `result/publish` → 承認ボタン → user トークンでのスレッド返信 + 両面 finalize、および `doctor` の TokenGuard プローブ（auth.test + apps.connections.open）を検証（#108）。 |
+| Slack E2E | [orchestrator-cli `tests/slack_e2e.rs`](https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/tests/slack_e2e.rs) | 実 `totsuka` + 実 `task-source-slack` バイナリ + mock agent を、in-process の **モック Slack**（Web API = raw TCP HTTP、Socket Mode = WebSocket）に対して駆動。メンション envelope → `task/submit`（push）→ dispatch → `result/publish` → 承認ボタン → user トークンでのスレッド返信 + 両面 finalize、および `doctor` の TokenGuard プローブ（auth.test + apps.connections.open）を検証（#108）。 |
 
 # モックプラグイン（シナリオ注入）
 
@@ -28,7 +28,7 @@ owner: tomoya-k31
 
 | config キー | 効果 |
 |---|---|
-| `tasks` | `tasks/fetch` が返す固定タスク集合（task_source） |
+| `task_submit` / `submit_tasks` | `task_submit: true` で push 型 task_source を演じ、`initialize` 応答直後に `submit_tasks` の各エントリを `task/submit` として push（1 タスクの重複投入で orchestrator 側 dedup=`duplicate` ack の検証にも使える） |
 | `stream_states` | `state/subscribe` 後に再生する状態列（例 `["running","done"]` / `["running","waiting_input"]`）（agent_ide, F-38） |
 | `session_id` | `task/dispatch` が返すセッション ID。`gone`/`done`/`waiting`/`fail` を含めると `session/attach` の応答を制御（回復シナリオ #57） |
 | `commit_on_dispatch` | dispatch 時に worktree へ実コミット（pull_request 出力の検証 #65） |

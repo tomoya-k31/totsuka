@@ -1,7 +1,8 @@
 //! End-to-end plugin flow over a recorded GraphQL transport (no network):
-//! initialize → poll_loop → `task/submit` push (0.1.6), the deprecated
-//! tasks/fetch delegate, normalize → task/update_status → result/publish,
-//! plus ingest gating (F-08) and invalid-token config/validate (F-59).
+//! initialize → poll_loop → `task/submit` push (0.1.6), normalize →
+//! task/update_status → result/publish, plus ingest gating (F-08) and
+//! invalid-token config/validate (F-59). `tasks/fetch` no longer exists as
+//! of protocol 0.2.0 (#190).
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -185,7 +186,7 @@ fn fetch_response() -> Value {
 }
 
 #[tokio::test]
-async fn full_flow_initialize_fetch_update_publish() {
+async fn full_flow_initialize_update_publish() {
     let shared = Shared::default();
     let mut srv = server(&shared);
 
@@ -194,33 +195,6 @@ async fn full_flow_initialize_fetch_update_publish() {
     let result = resp.result.expect("initialize result");
     assert_eq!(result["capabilities"]["task_submit"], json!(true));
     assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
-
-    // tasks/fetch (deprecated delegate) → only the ingestable issue survives
-    // gating (F-08).
-    shared.push(Canned::Data(fetch_response()));
-    let resp = call(
-        &mut srv,
-        2,
-        "tasks/fetch",
-        json!({ "trigger": { "project_status": "実装待ち" } }),
-    )
-    .await;
-    let tasks = resp.result.expect("fetch result")["tasks"].clone();
-    let tasks = tasks.as_array().unwrap();
-    assert_eq!(
-        tasks.len(),
-        1,
-        "assignee-other, in-progress, and PR excluded"
-    );
-    let t = &tasks[0];
-    assert_eq!(t["id"], "I_1");
-    assert_eq!(t["source"], "github");
-    assert_eq!(t["title"], "Task one");
-    assert_eq!(t["body"], "please do it");
-    assert_eq!(t["repo_hint"], "totsuka"); // enables F-10
-    assert_eq!(t["status"], "実装待ち");
-    assert_eq!(t["labels"], json!(["bug"]));
-    assert!(t.get("assignee").is_none() || t["assignee"].is_null());
 
     // task/update_status → maps レビュー待ち → "In Review", resolves ids, mutates.
     shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
@@ -338,8 +312,7 @@ async fn config_validate_flags_static_problem_without_network() {
 #[tokio::test]
 async fn ingests_task_assigned_to_me_among_multiple_assignees() {
     let shared = Shared::default();
-    let mut srv = server(&shared);
-    call(&mut srv, 1, "initialize", init_params()).await;
+    let (mut srv, mut harness) = server_with_harness(&shared);
 
     // I ("me") am the *second* assignee — ingest must not depend on ordering.
     shared.push(Canned::Data(
@@ -352,17 +325,20 @@ async fn ingests_task_assigned_to_me_among_multiple_assignees() {
             "labels": { "nodes": [] } } } ]
     } } } } }),
     ));
-    let resp = call(
-        &mut srv,
-        2,
-        "tasks/fetch",
-        json!({ "trigger": { "project_status": "実装待ち" } }),
-    )
-    .await;
-    let tasks = resp.result.unwrap()["tasks"].clone();
-    let tasks = tasks.as_array().unwrap();
-    assert_eq!(tasks.len(), 1, "a task I co-own must be ingested");
-    assert_eq!(tasks[0]["assignee"], "me");
+    let params = json!({
+        "protocol_version": "0.1.6",
+        "config": init_config(),
+        "triggers": [
+            { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
+        ],
+        "poll_interval_secs": 60
+    });
+    call(&mut srv, 1, "initialize", params).await;
+
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "I_7", "a task I co-own must be ingested");
+    assert_eq!(task["assignee"], "me");
+    harness.assert_no_task(Duration::from_millis(200)).await;
 }
 
 #[tokio::test]
@@ -427,11 +403,17 @@ async fn initialize_with_triggers_polls_and_submits() {
     let resp = call(&mut srv, 1, "initialize", params).await;
     assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
 
-    // The same gating as tasks/fetch applies: only I_1 survives (F-08).
+    // Ingest gating (F-08): only the ingestable issue survives (assignee-other,
+    // in-progress, and the PR are excluded).
     let task = harness.next_task().await;
     assert_eq!(task["id"], "I_1");
     assert_eq!(task["source"], "github");
     assert_eq!(task["title"], "Task one");
+    assert_eq!(task["body"], "please do it");
+    assert_eq!(task["repo_hint"], "totsuka"); // enables F-10
+    assert_eq!(task["status"], "実装待ち");
+    assert_eq!(task["labels"], json!(["bug"]));
+    assert!(task.get("assignee").is_none() || task["assignee"].is_null());
     harness.assert_no_task(Duration::from_millis(200)).await;
 }
 
@@ -473,7 +455,13 @@ fn shipped_manifest_is_valid_and_declares_push_source() {
 async fn methods_before_initialize_are_rejected() {
     let shared = Shared::default();
     let mut srv = server(&shared);
-    let resp = call(&mut srv, 1, "tasks/fetch", json!({ "trigger": {} })).await;
+    let resp = call(
+        &mut srv,
+        1,
+        "task/update_status",
+        json!({ "task_id": "I_1", "status": "実装待ち" }),
+    )
+    .await;
     assert!(
         resp.error
             .expect("must error")

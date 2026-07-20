@@ -76,7 +76,7 @@ fn fake_source(dir: &Path, name: &str, protocol_req: &str) {
 fn full_lifecycle_install_list_enable_disable_uninstall() {
     let env = Env::new("lifecycle");
     let src = env.root.join("src");
-    fake_source(&src, "github", "^0.1");
+    fake_source(&src, "github", ">=0.1.6, <0.3");
 
     // install --yes shows source + checksum.
     let (ok, out, _) = env.run(&["plugin", "install", src.to_str().unwrap(), "--yes"], None);
@@ -133,7 +133,7 @@ fn install_then_enable_produces_loadable_config() {
     // the resulting config.toml is schema-valid and later commands still work.
     let env = Env::new("install_enable");
     let src = env.root.join("src");
-    fake_source(&src, "github", "^0.1");
+    fake_source(&src, "github", ">=0.1.6, <0.3");
     // A config exists (as after `init`) but has no [plugins.github] section yet.
     fs::write(env.config_toml(), "version = 1\n").unwrap();
 
@@ -168,7 +168,7 @@ fn install_then_enable_produces_loadable_config() {
 fn install_requires_confirmation() {
     let env = Env::new("confirm");
     let src = env.root.join("src");
-    fake_source(&src, "notion", "^0.1");
+    fake_source(&src, "notion", ">=0.1.6, <0.3");
 
     // Answer "n": nothing is installed.
     let (ok, out, _) = env.run(&["plugin", "install", src.to_str().unwrap()], Some("n\n"));

@@ -3,17 +3,16 @@
 //! `initialize`'s TokenGuard — is driven in tests with a recorded transport,
 //! no network involved.
 //!
-//! Since protocol 0.1.6 this is a **push source** (`task_submit`): the
-//! mention pipeline submits tasks via the SDK [`SubmitClient`] and
-//! `tasks/fetch` is a deprecated empty stub (the orchestrator never calls it
-//! for a `task_submit` source). `result/publish` presents the agent's reply
-//! draft for approval (#107); only `task/update_status` remains a deliberate
-//! no-op (Slack has no status column to move).
+//! This is a **push source** (`task_submit`, since protocol 0.1.6): the
+//! mention pipeline submits tasks via the SDK [`SubmitClient`].
+//! `result/publish` presents the agent's reply draft for approval (#107);
+//! only `task/update_status` remains a deliberate no-op (Slack has no status
+//! column to move). `tasks/fetch` no longer exists as of protocol 0.2.0.
 
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskUpdateStatusParams, TasksFetchParams, TasksFetchResult,
+    ResultPublishParams, TaskUpdateStatusParams,
 };
 use plugin_protocol::{Capabilities, OutputCapability, RequestId, method};
 use plugin_sdk::{LineHandler, Reply, SubmitClient};
@@ -148,7 +147,6 @@ where
                 line: plugin_protocol::jsonrpc::to_line(&Response::result(id, Value::Null)).ok(),
                 shutdown: true,
             },
-            method::TASKS_FETCH => self.tasks_fetch(id, params),
             method::TASK_UPDATE_STATUS => self.update_status(id, params),
             method::RESULT_PUBLISH => self.result_publish(id, params).await,
             other => Reply::respond(Response::error(
@@ -299,25 +297,6 @@ where
             Err(e) => return ok_validate(id, vec![format!("config does not parse: {e}")]),
         };
         ok_validate(id, static_config_errors(&config))
-    }
-
-    /// `tasks/fetch`: a deprecated empty stub. This plugin declares the
-    /// `task_submit` capability (0.1.6), so the orchestrator never polls it;
-    /// an older orchestrator calling anyway gets an empty answer (mentions
-    /// are pushed, never buffered). Removed with the method in protocol
-    /// 0.2.0 (ADR-0008).
-    fn tasks_fetch(&mut self, id: RequestId, params: Value) -> Reply {
-        if self.session.is_none() {
-            return not_initialized(id);
-        }
-        let _parsed: TasksFetchParams = match parse_params(&params) {
-            Ok(v) => v,
-            Err(reply) => return reply.with_id(id),
-        };
-        Reply::respond(Response::result(
-            id,
-            serde_json::to_value(TasksFetchResult { tasks: vec![] }).unwrap_or(Value::Null),
-        ))
     }
 
     /// `task/update_status`: accepted and ignored — Slack has no status

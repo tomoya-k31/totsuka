@@ -1,11 +1,13 @@
-//! `run` main loop (#63, §5.1): fetch → match → ingest → repo select →
-//! worktree → dispatch → monitor → finalize.
+//! `run` main loop (#63, §5.1): match → ingest → repo select → worktree →
+//! dispatch → monitor → finalize.
 //!
 //! The [`Engine`] integrates the pieces built by earlier tasks — plugin host
 //! (#51), worktree lifecycle (#53), workflow matching (#54), scheduler (#55),
-//! repo selection (#56), and restart recovery (#57) — into one cycle:
+//! repo selection (#56), and restart recovery (#57) — into one event-driven
+//! loop:
 //!
-//! 1. `tasks/fetch` per workflow trigger; ingest idempotently (F-73).
+//! 1. `task/submit` (push, ADR-0008): every task_source plugin pushes its own
+//!    tasks; ingest idempotently (F-73).
 //! 2. Repository selection (F-10–F-14); ambiguity → `pending` + Notifier.
 //! 3. Slot-gated dispatch (F-40–F-43): worktree create → `task/dispatch` →
 //!    `state/subscribe`.
@@ -15,10 +17,14 @@
 //!    (F-23/F-85). `waiting_input`/`pending`/`done`/`failed` are delivered to
 //!    Notifier plugins (F-35/F-90).
 //!
-//! **One-shot** (default): a single cycle, then the loop drains until every
-//! dispatched task reaches a terminal or waiting state. **`--watch`**: keeps
-//! polling each source at its interval (F-06) until shutdown. **Dry run**:
-//! [`Engine::dry_run`] reports what would happen with zero side effects.
+//! **One-shot** (default): an initial recovery cycle, then the loop drains
+//! until every dispatched task reaches a terminal or waiting state and no
+//! push has arrived for its quiet-period floor — every source is push-only since
+//! protocol 0.2.0, so a task submitted moments after launch needs a real
+//! chance to arrive before the run gives up. **`--watch`**: stays up
+//! indefinitely, dispatching every push as it arrives, until shutdown.
+//! **Dry run**: [`Engine::dry_run`] is a no-op with zero side effects — push
+//! sources have nothing to preview ahead of time.
 
 pub mod hooks;
 pub mod output;
@@ -32,7 +38,7 @@ use plugin_protocol::method;
 use plugin_protocol::methods::{
     AgentState, ExecutionMode, HookLaunchSpec, NotifierEvent, NotifyParams, ResultPublishParams,
     StateNotification, TaskDispatchParams, TaskDispatchResult, TaskSubmitParams, TaskSubmitResult,
-    TaskSubmitStatus, TaskUpdateStatusParams, TasksFetchParams, TasksFetchResult,
+    TaskSubmitStatus, TaskUpdateStatusParams,
 };
 use plugin_protocol::{Notification, Task, jsonrpc};
 use serde_json::Value;
@@ -42,8 +48,8 @@ use crate::adapters::plugin_host::{IncomingRequest, Plugin};
 use crate::adapters::state_db::{NewTask, StateDb, StateError, TaskRecord};
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{
-    CleanupPolicyConfig, CleanupPolicyName, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_POLL_INTERVAL_SECS,
-    OutputPolicy, PluginKind, RootConfig, WorkflowMode, resolve::ResolveError,
+    CleanupPolicyConfig, CleanupPolicyName, DEFAULT_GLOBAL_CONCURRENCY, OutputPolicy, PluginKind,
+    RootConfig, WorkflowMode, resolve::ResolveError,
 };
 use crate::domain::signal::{AgentSignal, JobId};
 use crate::domain::state::{TaskEvent, TaskState};
@@ -68,8 +74,18 @@ use crate::worktree::{
 /// Lines of a repository README shown to the LLM as selection context (F-11).
 const README_HEAD_LINES: usize = 30;
 
-/// How long the one-shot drain loop sleeps between settle checks.
+/// How long the run loop sleeps between periodic maintenance ticks (settle
+/// checks in one-shot, timeout/retention sweeps in both modes).
 const SETTLE_TICK: Duration = Duration::from_millis(200);
+
+/// One-shot's quiet-period floor before an empty `settled()` is trusted
+/// (0.2.0): every source is push-only, so a task submitted moments after
+/// launch (plugin spawn → `initialize` → `task/submit`) has not necessarily
+/// arrived yet when the loop's very first iteration starts. One-shot keeps
+/// the loop alive until this much time has passed since the last event
+/// (submit, hook signal, …), so a source that is still mid-handshake gets a
+/// real chance before the run gives up and reports nothing to do.
+const ONE_SHOT_GRACE: Duration = Duration::from_secs(2);
 
 /// Errors that abort the run loop (per-task failures are handled in-loop).
 #[derive(Debug, thiserror::Error)]
@@ -114,8 +130,6 @@ pub struct EngineSettings {
     pub env: HashMap<String, String>,
     /// Repo-selection tuning (F-14).
     pub select: SelectConfig,
-    /// Per-source polling intervals for `--watch` (F-06).
-    pub poll_intervals: HashMap<String, Duration>,
     /// README head cache directory (`$XDG_CACHE_HOME/totsuka`), if any.
     pub readme_cache_dir: Option<PathBuf>,
     /// Pull-request title template (F-86).
@@ -193,16 +207,6 @@ pub fn settings_from_config(
             .collect(),
     };
 
-    let poll_intervals = cfg
-        .plugins
-        .iter()
-        .filter(|(_, p)| p.enabled && p.kind == PluginKind::TaskSource)
-        .map(|(name, p)| {
-            let secs = p.poll_interval_secs.unwrap_or(DEFAULT_POLL_INTERVAL_SECS);
-            (name.clone(), Duration::from_secs(secs.max(1)))
-        })
-        .collect();
-
     Ok(EngineSettings {
         workflows: Workflow::from_configs(&cfg.workflows),
         repos,
@@ -224,7 +228,6 @@ pub fn settings_from_config(
             max_tokens: cfg.llm.as_ref().and_then(|l| l.max_tokens),
             ..SelectConfig::default()
         },
-        poll_intervals,
         readme_cache_dir: None,
         pr_title_template: cfg
             .output
@@ -306,16 +309,6 @@ pub(crate) enum PluginEvent {
 /// The answer channel for one [`PluginEvent::TaskSubmit`].
 type SubmitRespond = tokio::sync::oneshot::Sender<Result<TaskSubmitResult, jsonrpc::Error>>;
 
-/// Which ingest path persisted a task — the only difference is the audit
-/// `events.detail` (`ingested` vs `submitted`).
-#[derive(Debug, Clone, Copy)]
-enum IngestPath {
-    /// Pulled via `tasks/fetch` (deprecated since 0.1.6).
-    Fetched,
-    /// Pushed via `task/submit` (0.1.6).
-    Submitted,
-}
-
 /// Per-plugin cap on in-flight `task/submit` requests (backpressure; an
 /// exhausted budget answers `SUBMIT_OVERLOADED`, which the plugin retries
 /// with backoff). Persisting is one SQLite upsert, so this rarely binds.
@@ -324,12 +317,8 @@ const SUBMIT_IN_FLIGHT_BUDGET: usize = 64;
 /// Counters accumulated over one `run` invocation.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RunStats {
-    /// Tasks returned by `tasks/fetch` (before dedup).
-    pub fetched: usize,
-    /// Newly ingested tasks (F-73: repeats do not count).
-    pub ingested: usize,
-    /// Newly ingested tasks that arrived via `task/submit` (0.1.6; a subset
-    /// counted separately from `ingested`, duplicates do not count).
+    /// Newly ingested tasks that arrived via `task/submit` (0.1.6;
+    /// duplicates do not count, F-73).
     pub submitted: usize,
     /// Dispatches performed.
     pub dispatched: usize,
@@ -601,9 +590,17 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
 
     /// Run the loop: an initial cycle, then event-driven monitoring. One-shot
     /// (`watch = false`) exits once every dispatched task reaches a terminal or
-    /// waiting state (§5.1); `--watch` keeps polling each source at its
-    /// interval (F-06) until `shutdown` resolves (SIGINT → graceful: in-flight
-    /// tasks stay in the state DB for next-start recovery).
+    /// waiting state AND its quiet-period floor has passed (§5.1, 0.2.0:
+    /// every source pushes, so a just-launched source's first submission may
+    /// not have landed on the loop's first iteration — the grace period gives
+    /// it a real chance instead of exiting on an empty snapshot); `--watch`
+    /// keeps the loop alive, receiving `task/submit` pushes as they arrive,
+    /// until `shutdown` resolves (SIGINT → graceful: in-flight tasks stay in
+    /// the state DB for next-start recovery). There is no Orchestrator-side
+    /// polling to schedule tasks with, but a short heartbeat tick still
+    /// re-runs [`cycle`](Self::cycle) periodically in both modes so signal
+    /// timeouts (D-03) and worktree retention (F-23) are re-checked even when
+    /// no push event happens to arrive.
     pub async fn run<F>(&mut self, watch: bool, shutdown: F) -> Result<RunSummary, EngineError>
     where
         F: std::future::Future<Output = ()>,
@@ -646,22 +643,19 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             None => None,
         };
 
-        self.cycle(None).await?;
-        // Per-source next-fetch times (F-06: each source polls at its own
-        // interval, not the global minimum).
-        let mut due: HashMap<String, tokio::time::Instant> = self
-            .poll_sources()
-            .into_iter()
-            .map(|(source, interval)| (source, tokio::time::Instant::now() + interval))
-            .collect();
+        self.cycle().await?;
+
+        // One-shot's quiet-period floor: every source is push-only, so a
+        // task submitted right after launch may not have arrived by the
+        // loop's very first iteration. Reset on every event so the loop
+        // keeps giving a still-arriving submission a chance instead of
+        // exiting the instant nothing happens to be monitored yet.
+        let mut last_activity = tokio::time::Instant::now();
 
         loop {
-            if !watch && self.settled()? {
+            if !watch && self.settled()? && last_activity.elapsed() >= ONE_SHOT_GRACE {
                 break;
             }
-            let next_poll = due.values().min().copied().unwrap_or_else(|| {
-                tokio::time::Instant::now() + Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS)
-            });
             tokio::select! {
                 _ = &mut shutdown => {
                     interrupted = true;
@@ -669,25 +663,19 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 }
                 event = self.events.recv() => {
                     if let Some(event) = event {
+                        last_activity = tokio::time::Instant::now();
                         self.on_event(event).await?;
                         self.dispatch_ready().await?;
                     }
                 }
-                _ = tokio::time::sleep_until(next_poll), if watch => {
-                    let now = tokio::time::Instant::now();
-                    let ready: HashSet<String> = due
-                        .iter()
-                        .filter(|(_, at)| **at <= now)
-                        .map(|(source, _)| source.clone())
-                        .collect();
-                    self.cycle(Some(&ready)).await?;
-                    for source in &ready {
-                        due.insert(source.clone(), now + self.poll_interval_for(source));
-                    }
-                }
-                _ = tokio::time::sleep(SETTLE_TICK), if !watch => {
-                    // Safety tick: re-check settling and pick up freed slots.
-                    self.dispatch_ready().await?;
+                _ = tokio::time::sleep(SETTLE_TICK) => {
+                    // Periodic maintenance tick (both modes, D-03/F-23): the
+                    // old poll-driven `cycle()` call used to double as this
+                    // heartbeat before 0.2.0 removed Orchestrator-side
+                    // polling — without it, a long-running `--watch` process
+                    // would never re-check signal timeouts or worktree
+                    // retention unless a push event happened to arrive.
+                    self.cycle().await?;
                 }
             }
         }
@@ -730,52 +718,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
-    /// Whether `source` declared the `task_submit` capability (0.1.6): it
-    /// pushes tasks itself and must not be polled.
-    fn source_is_push(&self, source: &str) -> bool {
-        self.plugins
-            .sources
-            .get(source)
-            .is_some_and(|p| p.capabilities().task_submit)
-    }
-
-    /// Every source referenced by a workflow (or with a configured interval),
-    /// with its polling interval (F-06). Push sources (`task_submit`, 0.1.6)
-    /// are excluded; each remaining fetch source gets a once-per-run
-    /// deprecation warning (`tasks/fetch` is scheduled for removal in 0.2.0).
-    fn poll_sources(&self) -> Vec<(String, Duration)> {
-        let mut sources: HashSet<String> = self
-            .settings
-            .workflows
-            .iter()
-            .map(|w| w.source.clone())
-            .collect();
-        sources.extend(self.settings.poll_intervals.keys().cloned());
-        sources
-            .into_iter()
-            .filter(|source| !self.source_is_push(source))
-            .map(|source| {
-                tracing::warn!(
-                    source = %source,
-                    "source does not declare the task_submit capability and will be polled \
-                     via tasks/fetch (deprecated; removal planned for protocol 0.2.0) → \
-                     migrate the plugin to task/submit"
-                );
-                let interval = self.poll_interval_for(&source);
-                (source, interval)
-            })
-            .collect()
-    }
-
-    /// The polling interval for one source (configured or default, F-06).
-    fn poll_interval_for(&self, source: &str) -> Duration {
-        self.settings
-            .poll_intervals
-            .get(source)
-            .copied()
-            .unwrap_or(Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS))
-    }
-
     /// Whether the one-shot loop can exit: no task **this run is monitoring**
     /// is actively executing. `waiting_input`/`pending` tasks remain by design
     /// (§5.1); `queued` leftovers were warned about at dispatch time; a
@@ -794,17 +736,15 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(true)
     }
 
-    /// One full cycle: fetch + ingest, repo selection, dispatch. `only_sources`
-    /// restricts fetching (per-source watch pacing); `None` fetches all.
-    pub async fn cycle(
-        &mut self,
-        only_sources: Option<&HashSet<String>>,
-    ) -> Result<(), EngineError> {
+    /// One full cycle: repo selection for already-ingested tasks, dispatch,
+    /// and the timeout/cleanup sweeps. All ingestion since 0.2.0 arrives
+    /// asynchronously via `task/submit`, so this is the startup/recovery
+    /// sweep, not a fetch pass.
+    pub async fn cycle(&mut self) -> Result<(), EngineError> {
         // Drain any hook signals a failed POST spooled (E-07) before acting on
         // state, so a completion that only reached the spool is applied this
         // cycle rather than a cycle late.
         self.replay_spool().await?;
-        self.fetch_and_ingest(only_sources).await?;
         self.select_repos().await?;
         self.dispatch_ready().await?;
         // Escalate hook-dispatched tasks that have gone silent past their
@@ -832,89 +772,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 
-    /// Fetch tasks per workflow trigger and ingest them idempotently (F-73).
-    async fn fetch_and_ingest(
-        &mut self,
-        only_sources: Option<&HashSet<String>>,
-    ) -> Result<(), EngineError> {
-        // Clone the workflow list so `self` stays free for ingest below.
-        let workflows = self.settings.workflows.clone();
-        for wf in &workflows {
-            if let Some(only) = only_sources
-                && !only.contains(&wf.source)
-            {
-                continue;
-            }
-            let Some(source) = self.plugins.sources.get(&wf.source) else {
-                tracing::warn!(
-                    workflow = %wf.name,
-                    source = %wf.source,
-                    "task source plugin not launched → enable and install it"
-                );
-                continue;
-            };
-            // A push source (task_submit, 0.1.6) delivers via `task/submit`;
-            // never poll it (this also covers the startup cycle(None) pass,
-            // which ignores the `due` map).
-            if source.capabilities().task_submit {
-                continue;
-            }
-            let params = TasksFetchParams {
-                trigger: wf.trigger.to_json(),
-            };
-            let fetched: TasksFetchResult = match source.call(method::TASKS_FETCH, &params).await {
-                Ok(result) => result,
-                Err(e) => {
-                    // Transient source failures skip the cycle, not the run
-                    // (retries with backoff live inside the plugin, §5.3).
-                    tracing::warn!(workflow = %wf.name, "tasks/fetch failed: {e}");
-                    continue;
-                }
-            };
-            self.stats.fetched += fetched.tasks.len();
-
-            for mut task in fetched.tasks {
-                // Normalize the origin to the plugin *instance* name: workflow
-                // matching and ingest key on the `[plugins.<name>]` key, while
-                // plugins stamp their own notion of a source name (e.g. the
-                // GitHub plugin's `source_name` defaults to "github" whatever
-                // the instance is called).
-                task.source = wf.source.clone();
-                // Defensive re-check (F-81): the plugin filtered on the
-                // trigger, but the *first* matching workflow is authoritative.
-                // A task whose authoritative match is a different workflow is
-                // ingested by that workflow's fetch instead.
-                match match_workflow(&workflows, &task) {
-                    Some(authoritative) if authoritative.name == wf.name => {}
-                    Some(_) => continue,
-                    None => {
-                        tracing::debug!(
-                            task = %task.id,
-                            workflow = %wf.name,
-                            "fetched task does not match its trigger; skipped"
-                        );
-                        continue;
-                    }
-                }
-                let (id, is_new) = self.ingest_task(wf, &task, IngestPath::Fetched)?;
-                if is_new {
-                    self.stats.ingested += 1;
-                    tracing::info!(task_id = id, workflow = %wf.name, title = %task.title, "ingested task");
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Persist one normalized task under `wf`, idempotently (F-73). Shared by
-    /// the fetch and submit ingest paths so they stay behaviorally identical;
-    /// only the audit `events.detail` differs. Returns `(row id, is_new)`.
-    fn ingest_task(
-        &mut self,
-        wf: &Workflow,
-        task: &Task,
-        path: IngestPath,
-    ) -> Result<(i64, bool), EngineError> {
+    /// Persist one normalized task under `wf`, idempotently (F-73). Returns
+    /// `(row id, is_new)`. Every ingest since 0.2.0 arrives via
+    /// `task/submit` (see [`Self::on_task_submit`]).
+    fn ingest_task(&mut self, wf: &Workflow, task: &Task) -> Result<(i64, bool), EngineError> {
         let is_new = self.db.find_by_source(&task.source, &task.id)?.is_none();
         let new_task = NewTask {
             source: task.source.clone(),
@@ -931,10 +792,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             thread_key: task.thread_key.clone(),
             last_signal_at: None,
         };
-        let id = match path {
-            IngestPath::Fetched => self.db.upsert_task(&new_task)?,
-            IngestPath::Submitted => self.db.upsert_submitted_task(&new_task)?,
-        };
+        let id = self.db.upsert_submitted_task(&new_task)?;
         Ok((id, is_new))
     }
 
@@ -1469,9 +1327,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             // A pushed task (`task/submit`, 0.1.6): persist, ack only after
             // the commit, then run repo selection so the loop's dispatch pass
             // can pick the task up. A persistence error answers the plugin
-            // with the retryable INTERNAL_ERROR and still propagates — the
-            // fetch path treats DB failures as run-fatal, and this path must
-            // not be more forgiving.
+            // with the retryable INTERNAL_ERROR and still propagates — DB
+            // failures are run-fatal, and this path must not be forgiving.
             PluginEvent::TaskSubmit {
                 source,
                 task,
@@ -1492,18 +1349,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
-    /// Ingest one pushed task (`task/submit`, 0.1.6) with the same
-    /// normalization and defensive workflow matching as the fetch path.
-    /// Returns the final ack; `Err` is a persistence failure (retryable for
-    /// the plugin, fatal for the run).
+    /// Ingest one pushed task (`task/submit`, 0.1.6): normalize and
+    /// defensively re-match the workflow. Returns the final ack; `Err` is a
+    /// persistence failure (retryable for the plugin, fatal for the run).
     fn on_task_submit(
         &mut self,
         source: String,
         mut task: Task,
     ) -> Result<TaskSubmitResult, EngineError> {
-        // Same instance-name normalization as fetch_and_ingest: workflow
-        // matching and the ingest key use the `[plugins.<name>]` key, not the
-        // plugin's own notion of its source name.
+        // Workflow matching and the ingest key use the `[plugins.<name>]`
+        // key, not the plugin's own notion of its source name.
         task.source = source;
         let workflows = self.settings.workflows.clone();
         let Some(wf) = match_workflow(&workflows, &task) else {
@@ -1516,7 +1371,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 )),
             });
         };
-        let (id, is_new) = self.ingest_task(wf, &task, IngestPath::Submitted)?;
+        let (id, is_new) = self.ingest_task(wf, &task)?;
         if is_new {
             self.stats.submitted += 1;
             tracing::info!(task_id = id, workflow = %wf.name, title = %task.title, "task submitted");
@@ -1986,63 +1841,21 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 
-    /// Report what a run would do, with zero side effects (§5.1 `--dry-run`):
-    /// no ingest, no worktree, no dispatch, no state changes.
+    /// Report what a run would do, with zero side effects (§5.1 `--dry-run`).
+    ///
+    /// Since 0.2.0 every task_source is push-only: nothing is fetched ahead
+    /// of time, so there is nothing to preview. Always returns an empty
+    /// list; the signature and [`DryRunEntry`] type are kept for the CLI's
+    /// existing `--dry-run` contract.
     pub async fn dry_run(&self) -> Result<Vec<DryRunEntry>, EngineError> {
-        let mut entries = Vec::new();
         for wf in &self.settings.workflows {
-            let Some(source) = self.plugins.sources.get(&wf.source) else {
-                tracing::warn!(workflow = %wf.name, source = %wf.source, "task source plugin not launched");
-                continue;
-            };
-            if source.capabilities().task_submit {
-                // Push sources cannot be previewed: there is nothing to fetch.
-                tracing::info!(
-                    workflow = %wf.name,
-                    source = %wf.source,
-                    "push source (task_submit) skipped in dry-run"
-                );
-                continue;
-            }
-            let params = TasksFetchParams {
-                trigger: wf.trigger.to_json(),
-            };
-            let fetched: TasksFetchResult = match source.call(method::TASKS_FETCH, &params).await {
-                Ok(result) => result,
-                Err(e) => {
-                    tracing::warn!(workflow = %wf.name, "tasks/fetch failed: {e}");
-                    continue;
-                }
-            };
-            for mut task in fetched.tasks {
-                // Same instance-name normalization as the real ingest path.
-                task.source = wf.source.clone();
-                match match_workflow(&self.settings.workflows, &task) {
-                    Some(authoritative) if authoritative.name == wf.name => {}
-                    _ => continue,
-                }
-                let already_ingested = self
-                    .db
-                    .find_by_source(&wf.source, &task.id)?
-                    .map(|t| t.state.to_string());
-                let repo = match self.decide_repo(&task).await {
-                    RepoDecision::Selected { repo, reason } => format!("{repo} ({reason})"),
-                    RepoDecision::Pending { reason } => format!("pending: {reason}"),
-                    RepoDecision::Failed { reason } => format!("failed: {reason}"),
-                };
-                entries.push(DryRunEntry {
-                    source: wf.source.clone(),
-                    task_id: task.id.clone(),
-                    title: task.title.clone(),
-                    workflow: wf.name.clone(),
-                    mode: mode_str(wf.mode),
-                    agent: wf.agent.clone(),
-                    repo,
-                    already_ingested,
-                });
-            }
+            tracing::info!(
+                workflow = %wf.name,
+                source = %wf.source,
+                "push source (task/submit) cannot be previewed: nothing is fetched ahead of time"
+            );
         }
-        Ok(entries)
+        Ok(Vec::new())
     }
 }
 
@@ -2237,7 +2050,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_interpret_limits_polls_and_cleanup() {
+    fn settings_interpret_limits_and_cleanup() {
         let cfg = RootConfig::from_toml_str(
             r#"
 max_concurrency = 2
@@ -2245,7 +2058,6 @@ max_concurrency = 2
 [plugins.github]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 15
 
 [plugins.herdr]
 enabled = true
@@ -2270,10 +2082,6 @@ plan_cleanup = { retention_days = 2 }
         assert_eq!(settings.limits.per_repo.get("web"), Some(&1));
         assert_eq!(settings.limits.per_agent.get("herdr"), Some(&3));
         assert_eq!(settings.repos[0].path, PathBuf::from("/home/t/repos/web"));
-        assert_eq!(
-            settings.poll_intervals.get("github"),
-            Some(&Duration::from_secs(15))
-        );
         assert_eq!(settings.cleanup_implement, CleanupPolicy::Immediate);
         assert_eq!(settings.cleanup_plan, CleanupPolicy::RetentionDays(2));
     }

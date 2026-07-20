@@ -6,7 +6,7 @@
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskUpdateStatusParams, TasksFetchParams, TasksFetchResult,
+    ResultPublishParams, TaskUpdateStatusParams,
 };
 use plugin_protocol::{RequestId, method};
 use serde::de::DeserializeOwned;
@@ -74,10 +74,6 @@ pub fn parse_params<T: DeserializeOwned>(params: &Value) -> Result<T, Error> {
 
 /// The typed surface a task_source plugin implements; [`TaskSourceServer`]
 /// turns it into a [`LineHandler`] covering the whole wire protocol.
-///
-/// `tasks_fetch` has a default empty implementation: push sources
-/// (`task_submit` capability) are never polled, and the method is deprecated
-/// since protocol 0.1.6 anyway.
 pub trait TaskSourceHandler: Send {
     /// `initialize`: store config, answer version + capabilities.
     fn initialize(
@@ -103,15 +99,6 @@ pub trait TaskSourceHandler: Send {
         &mut self,
         params: ResultPublishParams,
     ) -> impl Future<Output = Result<Value, Error>> + Send;
-
-    /// `tasks/fetch` (deprecated since 0.1.6). Push sources keep the default
-    /// empty answer; legacy sources may override during migration.
-    fn tasks_fetch(
-        &mut self,
-        _params: TasksFetchParams,
-    ) -> impl Future<Output = Result<TasksFetchResult, Error>> + Send {
-        async { Ok(TasksFetchResult { tasks: vec![] }) }
-    }
 }
 
 /// Adapter: drive a [`TaskSourceHandler`] as a [`LineHandler`].
@@ -160,7 +147,6 @@ impl<H: TaskSourceHandler> LineHandler for TaskSourceServer<H> {
             method::CONFIG_VALIDATE => call!(ConfigValidateParams, config_validate),
             method::TASK_UPDATE_STATUS => call!(TaskUpdateStatusParams, update_status),
             method::RESULT_PUBLISH => call!(ResultPublishParams, result_publish),
-            method::TASKS_FETCH => call!(TasksFetchParams, tasks_fetch),
             method::SHUTDOWN => Reply::shutdown_ack(id),
             other => Reply::respond(Response::error(
                 id,

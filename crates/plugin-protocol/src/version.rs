@@ -41,7 +41,14 @@ use semver::{Version, VersionReq};
 /// `poll_interval_secs` (#183). All additive and `^0.1`-compatible.
 /// `tasks/fetch` is deprecated from this version and scheduled for removal
 /// in 0.2.0 (which will strand `^0.1` manifests by design, F-54).
-pub const PROTOCOL_VERSION: &str = "0.1.6";
+///
+/// 0.2.0: **breaking** — `tasks/fetch` (and its `TasksFetchParams`/
+/// `TasksFetchResult` types) is removed, ending ADR-0008 Phase C. Every
+/// task_source is now push-only (`task/submit`); the Orchestrator no longer
+/// polls at all. A `^0.1` manifest is rejected at launch by design (F-54);
+/// a push-only plugin declaring `>=0.1.6, <0.3` keeps working across this
+/// boundary.
+pub const PROTOCOL_VERSION: &str = "0.2.0";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -65,39 +72,46 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 1, 6));
+        assert_eq!(protocol_version(), Version::new(0, 2, 0));
     }
 
     #[test]
     fn compatible_requirement_matches() {
-        // A plugin supporting ^0.1 works with 0.1.x — the additive 0.1.1
-        // (InitializeParams.repositories), 0.1.2 (InitializeParams.llm),
-        // 0.1.3 (hook/resume/diagnostics), 0.1.4 (session/focus), 0.1.5
-        // (Task.instructions) and 0.1.6 (task/submit) must not strand `^0.1`
-        // manifests.
-        let req = VersionReq::parse("^0.1").unwrap();
-        assert!(is_compatible_with_current(&req));
-        // A plugin that *requires* one of the additive supplies can say so.
-        let req = VersionReq::parse(">=0.1.1, <0.2").unwrap();
-        assert!(is_compatible_with_current(&req));
-        let req = VersionReq::parse(">=0.1.2, <0.2").unwrap();
-        assert!(is_compatible_with_current(&req));
-        let req = VersionReq::parse(">=0.1.3, <0.2").unwrap();
-        assert!(is_compatible_with_current(&req));
-        let req = VersionReq::parse(">=0.1.4, <0.2").unwrap();
-        assert!(is_compatible_with_current(&req));
-        let req = VersionReq::parse(">=0.1.5, <0.2").unwrap();
-        assert!(is_compatible_with_current(&req));
-        // A push-only plugin declares `>=0.1.6, <0.3` so it (alone) keeps
-        // working across the 0.2.0 fetch removal.
+        // Only a plugin that declared a range reaching past the 0.2.0
+        // boundary survives it — the push-only requirement introduced
+        // alongside `task/submit` (0.1.6) for exactly this purpose.
         let req = VersionReq::parse(">=0.1.6, <0.3").unwrap();
         assert!(is_compatible_with_current(&req));
     }
 
     #[test]
     fn incompatible_requirement_is_rejected() {
-        // A plugin requiring >=1.0 does not work with 0.1.0.
+        // A plugin requiring >=1.0 does not work with 0.2.0.
         let req = VersionReq::parse(">=1.0.0").unwrap();
         assert!(!is_compatible_with_current(&req));
+    }
+
+    #[test]
+    fn zero_one_manifests_are_stranded_by_the_zero_two_boundary() {
+        // F-54, by design (ADR-0008 Phase C): every `^0.1`-family
+        // requirement — including one bounded past an individual 0.1.x
+        // feature — excludes 0.2.0 and is now rejected at launch. A plugin
+        // that never adopted `task/submit` must upgrade, not silently keep
+        // running against a fetch path that no longer exists.
+        for req in [
+            "^0.1",
+            ">=0.1.1, <0.2",
+            ">=0.1.2, <0.2",
+            ">=0.1.3, <0.2",
+            ">=0.1.4, <0.2",
+            ">=0.1.5, <0.2",
+            ">=0.1.6, <0.2",
+        ] {
+            let req = VersionReq::parse(req).unwrap();
+            assert!(
+                !is_compatible_with_current(&req),
+                "{req} must be rejected by protocol 0.2.0"
+            );
+        }
     }
 }

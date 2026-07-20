@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks]
-timestamp: 2026-07-19T16:00:00Z
+timestamp: 2026-07-20T18:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -71,7 +71,7 @@ owner: tomoya-k31
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source インスタンス名 |
-| `trigger` | テーブル | `{}`（全マッチ） | トリガー条件。`status`/`project_status`/`label`/`labels` は Orchestrator が防御的に再判定、他キーはプラグインが `tasks/fetch` で解釈 |
+| `trigger` | テーブル | `{}`（全マッチ） | トリガー条件。`status`/`project_status`/`label`/`labels` は Orchestrator が防御的に再判定、他キーはプラグインが `initialize` の `triggers` として受け取り解釈する |
 | `mode` | enum | 必須 | `plan`（push/PR 禁止 F-82）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
 | `output` | enum | 必須 | `pull_request` / `source` / `none` |
@@ -133,13 +133,12 @@ Claude Code フックイベント受信（UDS）の設定（#131。全キー省�
 
 # `plugins/slack.toml`（task-source-slack）
 
-config.toml 側の推奨設定。Socket Mode の push はプラグイン内バッファに積まれ `tasks/fetch` で吸い上げるため、既定の 60 秒では体感が遅い — 短周期を推奨（[ADR-0003](/decisions/adr-0003-slack-reply-assistant.md)）:
+config.toml 側の推奨設定。task-source-slack は Socket Mode で受けたイベントを即座に `task/submit` で push するイベント駆動ソースで、`poll_interval_secs` は使わない（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)。旧: プラグイン内バッファに積み `tasks/fetch` で吸い上げていたため短周期ポーリングを推奨していたが、#187 の push 移行で不要になった）:
 
 ```toml
 [plugins.slack]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 5
 ```
 
 `plugins/slack.toml` の全キー（`deny_unknown_fields`。導入手順は [Slack セットアップ Quickstart](/operations/slack-quickstart.md)、トークンの扱いは [取り扱いポリシー](/security/slack-user-token.md)）:

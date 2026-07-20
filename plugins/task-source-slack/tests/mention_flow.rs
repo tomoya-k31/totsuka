@@ -146,11 +146,6 @@ async fn mention_becomes_a_task_and_is_submitted() {
     assert_eq!(task["repo_hint"], "web-app");
     assert_eq!(task["url"], "https://ws.slack.test/archives/C1/p1002");
 
-    // The deprecated `tasks/fetch` stub answers empty for an old
-    // orchestrator that polls anyway (removed in protocol 0.2.0).
-    let result = call(&mut srv, 3, "tasks/fetch", json!({ "trigger": {} })).await;
-    assert_eq!(result["tasks"], json!([]));
-
     // A redelivery of the same envelope must not submit another task.
     send_and_await_ack(&mut ws, mention_envelope("e1-redelivery", "100.2")).await;
     harness.assert_no_task(Duration::from_millis(300)).await;

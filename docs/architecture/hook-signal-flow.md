@@ -4,7 +4,7 @@ title: フックシグナルフロー（Slack メンション → 完了検知 �
 description: Claude Code フック完了判定のエンドツーエンド経路。Slack メンションの dispatch から herdr pane 起動・env 注入・claude --settings、Stop フックのマーカー抽出・UDS POST、hook_uds の Bearer/冪等検証、SignalPort→Engine::on_signal の検収分岐（llm/human/none）と Publishing/Verifying/Escalated、スプールフォールバックと pane.exited デッドマン、通知クリック → pane フォーカス（click-to-focus、F-94）までを図示する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [architecture, diagram, hook, claude-code, uds, signal, verification, deadman, spool, click-to-focus, epic-131]
-timestamp: 2026-07-19T12:00:00Z
+timestamp: 2026-07-20T18:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -31,7 +31,7 @@ sequenceDiagram
     participant NO as notifier-macos
 
     U->>TS: @mention（スレッド）
-    TS->>EN: tasks/fetch（Task, thread_key=channel:thread_ts）
+    TS->>EN: task/submit（Task, thread_key=channel:thread_ts）— push, persist-before-ack
     Note over EN: 冪等取り込み → repo 選択 → スロット確保 → worktree 作成
     EN->>EN: dispatch_one — job_id=job-{task_id}-{session_row}<br/>先行 thread_key があれば resume_session_id を解決（F-105）
     EN->>HE: task/dispatch（HookLaunchSpec{settings_path, env}, resume_session_id?）

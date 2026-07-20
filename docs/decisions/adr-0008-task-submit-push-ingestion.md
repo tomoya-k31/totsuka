@@ -3,13 +3,15 @@ type: Decision
 title: ADR-0008 task/submit による push 型タスク取り込みと tasks/fetch の段階的廃止
 description: プラグイン→Orchestrator の push RPC task/submit（persist-before-ack・冪等）を protocol 0.1.6 で追加し、tasks/fetch を deprecated 化して 0.2.0 で削除する決定。ADR-0003 の「バッファ + 短周期 tasks/fetch」判断を amend し、ポーリング型ソースは plugin-sdk の PollSource で自前タイマー化する。
 tags: [plugin, protocol, task-source, push, ingestion, architecture]
-timestamp: 2026-07-19T00:00:00Z
+timestamp: 2026-07-20T00:00:00Z
 status: accepted
 ---
 
 # Status
 
-Accepted — 2026-07-19（エピック [#182](https://github.com/tomoya-k31/totsuka/issues/182)、実装 #183〜#190）
+Accepted — 2026-07-19（エピック [#182](https://github.com/tomoya-k31/totsuka/issues/182)、実装 #183〜#190）。
+Phase C（#190）実装済み — 2026-07-20、protocol `0.2.0` で `tasks/fetch` と
+Orchestrator 側ポーリング機構を削除し、この ADR は完全実施状態になった。
 
 [ADR-0003](/decisions/adr-0003-slack-reply-assistant.md) の Decision §2（バッファ + 短周期 `tasks/fetch`）を amend する。同 ADR 自身が「コア無変更はエピック本体に対する判断であり、恒久の禁止ではない」と明記していた将来 F 案件の実施にあたる。
 
@@ -40,7 +42,17 @@ Accepted — 2026-07-19（エピック [#182](https://github.com/tomoya-k31/tots
 
 - **Phase A（0.1.6）**: 両経路併存。`tasks/fetch` は doc 上 deprecated。
 - **Phase B（同リリース内）**: 同梱 3 ソース（slack / github / notion）を push 移行。`task_submit` 未宣言 source をポーリングするたび 1 回/run の deprecation warn。
-- **Phase C（0.2.0、最低 1 minor リリース後）**: `tasks/fetch` と Orchestrator 側ポーリング機構を削除。`^0.1` manifest は F-54 の想定動作として起動拒否される（0.1.6→0.2.0 が猶予窓）。push-only プラグインは `>=0.1.6, <0.3` を宣言して削除をまたいで動作する。
+- **Phase C（0.2.0、最低 1 minor リリース後、実施済み）**: `tasks/fetch`
+  （`TasksFetchParams`/`TasksFetchResult` 含む）と Orchestrator 側ポーリング
+  機構（`fetch_and_ingest`/`poll_sources`/`poll_interval_for`/
+  `EngineSettings.poll_intervals`）を削除。`^0.1` manifest は F-54 の想定動作
+  として起動拒否される（0.1.6→0.2.0 が猶予窓、v0.1.4 で満たした）。
+  push-only プラグインは `>=0.1.6, <0.3` を宣言して削除をまたいで動作する。
+  `one-shot`（`--watch` なしの `totsuka run`）は全 source が push 専用になった
+  ことで、起動直後の未着 push を待たず即終了する潜在バグが露呈したため、
+  `settled()` が空でも直近イベントから 2 秒（`ONE_SHOT_GRACE`）の静穏期間が
+  経過するまでループを維持するよう修正した
+  （`crates/orchestrator-core/src/run/mod.rs`）。
 - ポーリングが自然な source（github / notion）は、`crates/plugin-sdk` の `PollSource` ヘルパー（trigger × 周期 → fetch → submit のタイマーループ）で自前タイマー化し、実装負担を SDK に吸収させる。
 
 ## 4. 併せて `crates/plugin-sdk` を新設
@@ -54,6 +66,7 @@ stdio runtime（単一 writer タスクによる行アトミック化 — プラ
 - Engine はプラグイン起点 request を受ける必要がある（plugin host の reader に第 3 分岐、`PluginEvent::TaskSubmit`）。現状 reader はプラグイン起点 request を Notification として黙って破棄しており、この修正はそれ自体が堅牢性改善。
 - 0.2.0 でサードパーティの `^0.1` プラグインは起動拒否される（意図的・F-54）。移行手順は [plugin-dev-guide](/development/plugin-dev-guide.md) に記載する。
 - タスク取り込みの順序性は per-source FIFO（単一 channel → 単一イベントループ）となり、バッファ drain 方式より弱くならない。
+- `--dry-run` は push source に対しては原理的にプレビュー対象がない（fetch する対象が無い）ため、常に空の結果を返す no-op になった。
 
 # Citations
 

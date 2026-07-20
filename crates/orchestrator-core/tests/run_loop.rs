@@ -1,11 +1,17 @@
 //! Integration tests for the run main loop (#63) against real mock-plugin
 //! subprocesses and a real git repository.
 //!
-//! Covers the issue's acceptance criteria:
-//! 1. fetch → worktree → dispatch → done → cleanup, end to end.
-//! 2. One-shot leaves waiting tasks and re-running does not double-ingest.
+//! Covers the issue's acceptance criteria (updated for 0.2.0's push-only
+//! ingestion, #190 — every source pushes via `task/submit` instead of the
+//! removed `tasks/fetch`):
+//! 1. push → worktree → dispatch → done → cleanup, end to end.
+//! 2. One-shot leaves waiting tasks in place (double-ingest is covered
+//!    separately by `duplicate_submit_is_acked_duplicate_and_ingested_once`,
+//!    since push re-delivery — not a fetch rerun — is how a duplicate can
+//!    arrive).
 //! 3. A restart after an interrupted run recovers the in-flight task (§5.3).
-//! 4. `--dry-run` reports decisions with zero side effects.
+//! 4. `--dry-run` is a zero-side-effect no-op (push sources have nothing to
+//!    preview ahead of time).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -60,7 +66,7 @@ async fn launch(kind: &str, name: &str, init_config: serde_json::Value) -> Plugi
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = "^0.1"
+protocol_version = ">=0.1.6, <0.3"
 "#
     ))
     .unwrap();
@@ -116,7 +122,6 @@ fn engine_settings(repo_path: &Path) -> EngineSettings {
         cleanup_plan: CleanupPolicy::Immediate,
         env: HashMap::new(),
         select: SelectConfig::default(),
-        poll_intervals: HashMap::new(),
         readme_cache_dir: None,
         pr_title_template: "totsuka: {title}".to_string(),
         pr_body_template: "Task {title} ({url})\n\n{summary}".to_string(),
@@ -144,7 +149,7 @@ on_failure = {{ set_status = "失敗" }}
     Workflow::from_configs(&cfg.workflows)
 }
 
-/// One fetchable task in the mock source's config shape. The `source` field
+/// One pushable task in the mock source's config shape. The `source` field
 /// deliberately differs from the plugin *instance* name (`mock_src`): real
 /// plugins stamp their own source name (e.g. `github` whatever the instance
 /// is called), and the engine must normalize it before matching.
@@ -152,8 +157,9 @@ fn mock_task(id: &str) -> serde_json::Value {
     json!({ "id": id, "source": "github", "title": format!("task {id}") })
 }
 
-/// Build a full plugin set: source (with tasks), agent (config-driven),
-/// notifier (recording to `notify_log`).
+/// Build a full plugin set: source (pushing `tasks` via `task/submit` right
+/// after `initialize`, 0.1.6+), agent (config-driven), notifier (recording
+/// to `notify_log`). `tasks` may be empty — a source that submits nothing.
 async fn plugin_set(
     tasks: serde_json::Value,
     agent_config: serde_json::Value,
@@ -166,7 +172,7 @@ async fn plugin_set(
         launch(
             "task_source",
             "mock_src",
-            json!({ "tasks": tasks, "notify_log": source_log }),
+            json!({ "task_submit": true, "submit_tasks": tasks, "notify_log": source_log }),
         )
         .await,
     );
@@ -224,16 +230,17 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
     )
     .await;
 
-    let summary = tokio::time::timeout(
-        Duration::from_secs(60),
-        engine.run(false, std::future::pending()),
-    )
-    .await
-    .expect("one-shot run must settle")
-    .unwrap();
+    let db_probe = db_path.clone();
+    let summary = run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
 
-    assert_eq!(summary.stats.fetched, 1);
-    assert_eq!(summary.stats.ingested, 1);
+    assert_eq!(summary.stats.submitted, 1);
     assert_eq!(summary.stats.dispatched, 1);
     assert_eq!(summary.stats.done, 1);
     assert_eq!(summary.stats.failed, 0);
@@ -279,8 +286,13 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// The loop settles once a dispatched task reaches `waiting_input`: it is
+/// not "actively executing" (§5.1), so the run stops with it still listed
+/// in `summary.waiting`, and the notifier fires. Idempotent re-submission
+/// of the same task id is covered separately by
+/// `duplicate_submit_is_acked_duplicate_and_ingested_once`.
 #[tokio::test]
-async fn one_shot_leaves_waiting_task_and_rerun_does_not_double_ingest() {
+async fn run_settles_with_waiting_task_left_in_place() {
     let base = scratch("waiting");
     let repo = setup_repo(&base);
     let source_log = base.join("source.ndjson");
@@ -303,28 +315,18 @@ async fn one_shot_leaves_waiting_task_and_rerun_does_not_double_ingest() {
     )
     .await;
 
-    let summary = tokio::time::timeout(
-        Duration::from_secs(60),
-        engine.run(false, std::future::pending()),
-    )
-    .await
-    .expect("one-shot must exit once the task is waiting")
-    .unwrap();
+    let db_probe = db_path.clone();
+    let summary = run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "7")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::WaitingInput)
+    })
+    .await;
+    assert_eq!(summary.stats.submitted, 1);
     assert_eq!(summary.stats.dispatched, 1);
     assert_eq!(summary.waiting.len(), 1, "waiting task remains (§5.1)");
-
-    // Re-run: the same task is fetched again but not re-ingested (F-73) nor
-    // re-dispatched (it is waiting, not queued).
-    let summary2 = tokio::time::timeout(
-        Duration::from_secs(60),
-        engine.run(false, std::future::pending()),
-    )
-    .await
-    .expect("second one-shot settles immediately")
-    .unwrap();
-    assert_eq!(summary2.stats.ingested, 1, "no second ingest");
-    assert_eq!(summary2.stats.dispatched, 1, "no second dispatch");
-    assert_eq!(summary2.waiting.len(), 1);
 
     engine.shutdown(Duration::from_secs(5)).await;
 
@@ -355,7 +357,8 @@ async fn restart_recovers_in_flight_task() {
     let db_path = base.join("state.db");
 
     // First process: dispatch, then die before the task finishes (the mock
-    // agent only ever reports `running`).
+    // agent only ever reports `running`, so waiting for that state is
+    // non-racy — it is the last thing the mock will ever report).
     {
         let plugins = plugin_set(
             json!([mock_task("9")]),
@@ -372,12 +375,20 @@ async fn restart_recovers_in_flight_task() {
             no_llm(),
         )
         .await;
-        // One cycle dispatches; dropping the engine simulates SIGKILL (no
-        // graceful shutdown, no event processing).
-        engine.cycle(None).await.unwrap();
+        let db_probe = db_path.clone();
+        // Dropping the engine right after simulates SIGKILL (no graceful
+        // shutdown).
+        run_watch_until(&mut engine, move || {
+            StateDb::open(&db_probe)
+                .unwrap()
+                .find_by_source("mock_src", "9")
+                .unwrap()
+                .is_some_and(|t| t.state == TaskState::Running)
+        })
+        .await;
         let db = StateDb::open(&db_path).unwrap();
         let task = db.find_by_source("mock_src", "9").unwrap().unwrap();
-        assert_eq!(task.state, TaskState::Dispatched);
+        assert_eq!(task.state, TaskState::Running);
     }
 
     // Restart: fresh plugins, fresh engine over the same state DB. Recovery
@@ -413,8 +424,13 @@ async fn restart_recovers_in_flight_task() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// `--dry-run` never touches the event loop, so a push source's pending
+/// `task/submit` (already queued by the time the plugin's `initialize`
+/// returns) is simply never consumed: nothing is fetched ahead of time
+/// since every source is push-only (0.2.0), so `dry_run` always reports an
+/// empty preview with zero side effects.
 #[tokio::test]
-async fn dry_run_reports_decisions_with_zero_side_effects() {
+async fn dry_run_has_no_preview_and_zero_side_effects() {
     let base = scratch("dry_run");
     let repo = setup_repo(&base);
     let source_log = base.join("source.ndjson");
@@ -438,20 +454,10 @@ async fn dry_run_reports_decisions_with_zero_side_effects() {
     .await;
 
     let entries = engine.dry_run().await.unwrap();
-    assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
-    assert_eq!(entry.workflow, "implement");
-    assert_eq!(entry.agent, "mock_agent");
-    assert_eq!(entry.mode, "implement");
-    assert!(
-        entry.repo.contains("clone") && entry.repo.contains("only one configured repository"),
-        "repo decision must carry its rationale: {}",
-        entry.repo
-    );
-    assert!(entry.already_ingested.is_none());
+    assert!(entries.is_empty(), "push sources cannot be previewed");
 
     // Zero side effects: nothing ingested, no worktree, no notifications, no
-    // source write-backs.
+    // source write-backs — the queued task/submit is never consumed.
     assert!(engine.db().list_tasks().unwrap().is_empty());
     assert!(!base.join("wt").exists());
     engine.shutdown(Duration::from_secs(5)).await;
@@ -487,7 +493,17 @@ async fn unrecoverable_task_does_not_wedge_one_shot_exit() {
             no_llm(),
         )
         .await;
-        engine.cycle(None).await.unwrap();
+        let db_probe = db_path.clone();
+        // `stream_states: []` means the mock never reports past dispatch, so
+        // waiting for `Dispatched` is non-racy.
+        run_watch_until(&mut engine, move || {
+            StateDb::open(&db_probe)
+                .unwrap()
+                .find_by_source("mock_src", "11")
+                .unwrap()
+                .is_some_and(|t| t.state == TaskState::Dispatched)
+        })
+        .await;
     }
 
     // Restart: the session is lost → needs confirmation (§5.3), and the
@@ -552,7 +568,17 @@ async fn task_finished_while_down_is_finalized_on_recovery() {
             no_llm(),
         )
         .await;
-        engine.cycle(None).await.unwrap();
+        let db_probe = db_path.clone();
+        // `stream_states: []` means the mock never reports past dispatch, so
+        // waiting for `Dispatched` is non-racy.
+        run_watch_until(&mut engine, move || {
+            StateDb::open(&db_probe)
+                .unwrap()
+                .find_by_source("mock_src", "13")
+                .unwrap()
+                .is_some_and(|t| t.state == TaskState::Dispatched)
+        })
+        .await;
     }
 
     // Restart: re-attach reports Done. Agents do not replay terminal states on
@@ -630,14 +656,16 @@ async fn agent_without_state_stream_fails_dispatch_instead_of_hanging() {
     .await;
 
     // Progress could never be observed → the dispatch must fail the task and
-    // the one-shot must exit (not hold the slot forever).
-    let summary = tokio::time::timeout(
-        Duration::from_secs(30),
-        engine.run(false, std::future::pending()),
-    )
-    .await
-    .expect("one-shot must exit")
-    .unwrap();
+    // the run must exit (not hold the slot forever).
+    let db_probe = db_path.clone();
+    let summary = run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "17")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Failed)
+    })
+    .await;
     assert_eq!(summary.stats.failed, 1);
 
     let task = engine
@@ -687,13 +715,15 @@ async fn output_pull_request_pushes_branch_and_opens_pr() {
     )
     .await;
 
-    let summary = tokio::time::timeout(
-        Duration::from_secs(60),
-        engine.run(false, std::future::pending()),
-    )
-    .await
-    .expect("one-shot settles")
-    .unwrap();
+    let db_probe = db_path.clone();
+    let summary = run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
     assert_eq!(summary.stats.done, 1);
     assert_eq!(summary.stats.failed, 0);
     let task = engine
@@ -757,13 +787,15 @@ async fn output_pull_request_with_zero_commits_fails() {
     )
     .await;
 
-    let summary = tokio::time::timeout(
-        Duration::from_secs(60),
-        engine.run(false, std::future::pending()),
-    )
-    .await
-    .expect("settles")
-    .unwrap();
+    let db_probe = db_path.clone();
+    let summary = run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "2")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Failed)
+    })
+    .await;
     assert_eq!(summary.stats.failed, 1, "zero-commit PR must fail");
     assert_eq!(summary.stats.done, 0);
     let task = engine
@@ -819,13 +851,15 @@ async fn output_source_publishes_result_artifact() {
     )
     .await;
 
-    let summary = tokio::time::timeout(
-        Duration::from_secs(60),
-        engine.run(false, std::future::pending()),
-    )
-    .await
-    .expect("settles")
-    .unwrap();
+    let db_probe = db_path.clone();
+    let summary = run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "5")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
     assert_eq!(summary.stats.done, 1);
     let task = engine
         .db()
@@ -887,13 +921,15 @@ async fn pull_request_retry_after_pr_failure_can_reopen() {
     )
     .await;
 
-    tokio::time::timeout(
-        Duration::from_secs(60),
-        engine.run(false, std::future::pending()),
-    )
-    .await
-    .expect("settles")
-    .unwrap();
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Failed)
+    })
+    .await;
     let task = engine
         .db()
         .find_by_source("mock_src", "1")
@@ -997,8 +1033,18 @@ async fn missing_workflow_at_finalize_keeps_worktree_not_deletes() {
     )
     .await;
 
-    // Dispatch (records the session), then drop the engine before finalize.
-    engine.cycle(None).await.unwrap();
+    // Dispatch (records the session), then shut down before finalize.
+    // `stream_states: []` means the mock never reports past dispatch, so
+    // waiting for `Dispatched` is non-racy.
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Dispatched)
+    })
+    .await;
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
@@ -1117,12 +1163,10 @@ async fn submitted_task_is_persisted_acked_and_dispatched_without_polling() {
             "task_source",
             "mock_src",
             // A push source: submits one task at initialize, declares
-            // task_submit, and ALSO carries a fetchable task — which must
-            // never be ingested, because push sources are not polled.
+            // task_submit.
             json!({
                 "task_submit": true,
                 "submit_tasks": [mock_task("s1")],
-                "tasks": [mock_task("never-fetched")],
                 "notify_log": source_log,
             }),
         )
@@ -1161,18 +1205,9 @@ async fn submitted_task_is_persisted_acked_and_dispatched_without_polling() {
         recorded_acks(&source_log),
         vec![("submit-0".to_string(), "accepted".to_string())]
     );
-    // Counted as a submission; the fetch path never ran (not polled).
+    // Counted as a submission; there is no fetch path to run (not polled).
     assert_eq!(summary.stats.submitted, 1);
-    assert_eq!(summary.stats.fetched, 0);
-    assert_eq!(summary.stats.ingested, 0);
     assert_eq!(summary.stats.dispatched, 1);
-    let db = StateDb::open(&db_path).unwrap();
-    assert!(
-        db.find_by_source("mock_src", "never-fetched")
-            .unwrap()
-            .is_none(),
-        "a push source must never be polled via tasks/fetch"
-    );
 
     engine.shutdown(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&base);
