@@ -1,4 +1,4 @@
-//! Hook signal domain types (#131, F-xx[hook]).
+//! Hook signal domain types (#131, F-xx\[hook\]).
 //!
 //! Claude Code hooks (Stop / Notification / SessionStart / SessionEnd) POST
 //! their JSON to the orchestrator over UDS; the driving adapter (#136)

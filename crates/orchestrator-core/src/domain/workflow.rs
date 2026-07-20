@@ -2,7 +2,7 @@
 //!
 //! A workflow is a named `source × trigger × mode × agent × output` binding
 //! ([`Workflow`]), interpreted from the parsed `[[workflows]]` config
-//! ([`WorkflowConfig`](crate::config::WorkflowConfig)). It drives the
+//! ([`WorkflowConfig`]). It drives the
 //! plan → human review → implement handoff via [`OutcomeAction`] status
 //! transitions (F-84).
 //!

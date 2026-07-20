@@ -2,7 +2,7 @@
 //!
 //! Per §5.6, OS-specific code is isolated here so the rest of the crate stays
 //! portable. The Keychain-backed secret store is macOS-only; a fallback that
-//! reports [`SecretError::Unsupported`](crate::ports::SecretError::Unsupported)
+//! reports [`SecretError::Unsupported`]
 //! keeps the crate compiling on other platforms (e.g. Linux CI) without
 //! `#[cfg]` leaking into callers. The 1Password backend
 //! ([`onepassword`]) shells out to the cross-platform `op` CLI and therefore
@@ -29,7 +29,7 @@ type KeychainBackend = macos::KeychainSecretStore;
 #[cfg(not(target_os = "macos"))]
 type KeychainBackend = fallback::UnsupportedSecretStore;
 
-/// The [`SecretStore`](crate::ports::SecretStore) for the current platform:
+/// The [`SecretStore`] for the current platform:
 /// a composite that routes each [`SecretRef`] to its scheme's backend —
 /// `keychain:` to the OS Keychain (or the non-macOS fallback), `op://` to the
 /// 1Password CLI ([`onepassword::OnePasswordCli`], every platform).
