@@ -11,6 +11,43 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.1.3](https://github.com/tomoya-k31/totsuka/compare/v0.1.2...v0.1.3) (2026-07-20)
+
+
+### Features
+
+* **agent-ide-herdr:** session/focus を実装（F-94 click-to-focus、workspace→tab→pane チェーン） ([#161](https://github.com/tomoya-k31/totsuka/issues/161)) ([227b31f](https://github.com/tomoya-k31/totsuka/commit/227b31fc512fa8f78a58e524f2eb07ae6bec9515))
+* **core,cli:** 制御 UDS の /focus エンドポイントと totsuka focus サブコマンドを追加（F-94） ([#163](https://github.com/tomoya-k31/totsuka/issues/163)) ([d2bb77e](https://github.com/tomoya-k31/totsuka/commit/d2bb77e37bba695a5507de24483c527b17924c5a))
+* **core:** engine に task/submit 取り込みを統合（persist-before-ack・poll 抑止） ([#195](https://github.com/tomoya-k31/totsuka/issues/195)) ([f51689d](https://github.com/tomoya-k31/totsuka/commit/f51689d7bf8e66e5e7d65cb3377cd1f4742d8247))
+* **core:** plugin host にプラグイン起点 request の受信を追加（IncomingRequest/Responder） ([#194](https://github.com/tomoya-k31/totsuka/issues/194)) ([63eb5d5](https://github.com/tomoya-k31/totsuka/commit/63eb5d5e8fcf925d316d7ebdb54dc91067db950f))
+* **notifier-macos:** terminal-notifier バックエンドを追加（F-94 click-to-focus） ([#164](https://github.com/tomoya-k31/totsuka/issues/164)) ([2e4b4ef](https://github.com/tomoya-k31/totsuka/commit/2e4b4ef82e2ab664e467c91c866620d28519234d))
+* **plugin-protocol:** session/focus RPC を追加しプロトコルを 0.1.4 へ（F-94 click-to-focus） ([#160](https://github.com/tomoya-k31/totsuka/issues/160)) ([8e17ba0](https://github.com/tomoya-k31/totsuka/commit/8e17ba0a1012b41cac91a40cb7d3a3ca6e9457fb))
+* **plugin-sdk:** 新規 crates/plugin-sdk（runtime/dispatch/submit/poll） ([#197](https://github.com/tomoya-k31/totsuka/issues/197)) ([f92b636](https://github.com/tomoya-k31/totsuka/commit/f92b636b3098b5909255cd4a44dc93cbe1b4bcad))
+* **protocol,task-source-slack,core,cli:** 指示文の不可視注入（Task.instructions + UserPromptSubmit additionalContext） ([#162](https://github.com/tomoya-k31/totsuka/issues/162)) ([51cbbde](https://github.com/tomoya-k31/totsuka/commit/51cbbdee2bff288be4288b33a57aebf7547fdd1a))
+* **protocol:** 0.1.6 — task/submit push 取り込み・Capabilities.task_submit・InitializeParams.triggers/poll_interval_secs ([#191](https://github.com/tomoya-k31/totsuka/issues/191)) ([c116b57](https://github.com/tomoya-k31/totsuka/commit/c116b57a897d0c8c5f85e6bf012ff0250140f31c))
+* **task-source-github:** PollSource 化（push 移行） ([#200](https://github.com/tomoya-k31/totsuka/issues/200)) ([2ac1c12](https://github.com/tomoya-k31/totsuka/commit/2ac1c12c95c952496cef25e175d285af71daf0e4))
+* **task-source-notion:** PollSource 化（task/submit push 移行） ([#201](https://github.com/tomoya-k31/totsuka/issues/201)) ([1852337](https://github.com/tomoya-k31/totsuka/commit/1852337914b0093482953585851460eb7ed6dcfe)), closes [#189](https://github.com/tomoya-k31/totsuka/issues/189)
+* **task-source-slack:** task/submit push 移行（タスクバッファ削除） ([#199](https://github.com/tomoya-k31/totsuka/issues/199)) ([4d7e0f5](https://github.com/tomoya-k31/totsuka/commit/4d7e0f57b32780ccca662b77b7f5fd43f3ced0ee))
+* **task-source-slack:** 承認/却下ボタン押下時にスレッド内エフェメラルを削除する ([#157](https://github.com/tomoya-k31/totsuka/issues/157)) ([0050d43](https://github.com/tomoya-k31/totsuka/commit/0050d431d4981c3ead51c2ed27971fa47ed13ea6))
+* **task-source-slack:** 承認済み返信に送信者メンションを機械的に前置 ([#170](https://github.com/tomoya-k31/totsuka/issues/170)) ([0664051](https://github.com/tomoya-k31/totsuka/commit/066405188b863014330511d72da1107e4c9a26bf))
+
+
+### Bug Fixes
+
+* **cli:** on-stop.sh のマーカーを単一/二重カッコ両対応へ（実機検収バグ） ([#152](https://github.com/tomoya-k31/totsuka/issues/152)) ([5da3acb](https://github.com/tomoya-k31/totsuka/commit/5da3acb95302a97e83bdcc2e9d727d3f6fc25f3f))
+* **cli:** prompt 型 Stop フックに中間停止免除を注入し on-stop.sh の R-02 と整合させる ([#180](https://github.com/tomoya-k31/totsuka/issues/180)) ([0fb24e0](https://github.com/tomoya-k31/totsuka/commit/0fb24e038e99d52c313c5297cb575326dadcabc0))
+* **core,agent-ide-herdr:** ペインの二重出力と切れタイトル行を解消（マーカー指示の事前注入） ([#158](https://github.com/tomoya-k31/totsuka/issues/158)) ([f27bfc2](https://github.com/tomoya-k31/totsuka/commit/f27bfc2fe56a0904a60d03104514445f8189e0de))
+* **core:** hook_events 冪等キーに status を追加し block→再完了を取りこぼさない（v3・実機検収） ([#154](https://github.com/tomoya-k31/totsuka/issues/154)) ([cc5e659](https://github.com/tomoya-k31/totsuka/commit/cc5e659002d540d8496cb2a535c058087501ce1e))
+* **core:** マーカー自己申告指示に配信契約を明記（再起動ターンのメタ発言が Slack へ公開される問題の修正） ([#181](https://github.com/tomoya-k31/totsuka/issues/181)) ([774724e](https://github.com/tomoya-k31/totsuka/commit/774724e961c45f819d52f2eedc6e503358c4a480))
+* **core:** 並列 worktree add の commondir 読み取り競合をリトライで吸収 ([#166](https://github.com/tomoya-k31/totsuka/issues/166)) ([50c33ef](https://github.com/tomoya-k31/totsuka/commit/50c33efbea163b252e83e3fb4853755338beec0c))
+
+
+### Documentation
+
+* click-to-focus のドキュメント一式を整備（F-94、エピック [#155](https://github.com/tomoya-k31/totsuka/issues/155) 完了） ([#167](https://github.com/tomoya-k31/totsuka/issues/167)) ([fec68e2](https://github.com/tomoya-k31/totsuka/commit/fec68e25aeb75ea6ff7223fde18e2f1eab7e49c1))
+* **dev-flow:** コンフリクトのチェックと解消手順を追記 ([#168](https://github.com/tomoya-k31/totsuka/issues/168)) ([b2ccb94](https://github.com/tomoya-k31/totsuka/commit/b2ccb947f964e9d4312386395a2bc5f6f87f7a2c))
+* **rules:** dev-flow のプレ PR チェックを CI と完全パリティ化 ([#198](https://github.com/tomoya-k31/totsuka/issues/198)) ([29462da](https://github.com/tomoya-k31/totsuka/commit/29462da04105f7184b4d1a5c17230c8eea39e1c0))
+
 ## [0.1.2](https://github.com/tomoya-k31/totsuka/compare/v0.1.1...v0.1.2) (2026-07-17)
 
 
