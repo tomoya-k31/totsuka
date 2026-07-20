@@ -11,6 +11,13 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.1.4](https://github.com/tomoya-k31/totsuka/compare/v0.1.3...v0.1.4) (2026-07-20)
+
+
+### Bug Fixes
+
+* **core:** orchestrator-core の rustdoc intra-doc リンク切れを解消 ([#202](https://github.com/tomoya-k31/totsuka/issues/202)) ([662972d](https://github.com/tomoya-k31/totsuka/commit/662972d1cb1557d644248811dcf3b599ffbf788c)), closes [#193](https://github.com/tomoya-k31/totsuka/issues/193)
+
 ## [0.1.3](https://github.com/tomoya-k31/totsuka/compare/v0.1.2...v0.1.3) (2026-07-20)
 
 
