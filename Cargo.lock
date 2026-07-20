@@ -1452,6 +1452,7 @@ name = "task-source-notion"
 version = "0.1.2"
 dependencies = [
  "plugin-protocol",
+ "plugin-sdk",
  "reqwest",
  "semver",
  "serde",
