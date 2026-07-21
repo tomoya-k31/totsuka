@@ -14,6 +14,8 @@
 //! - `task/dispatch` → replies with the config's `"session_id"` (default
 //!   `sess-mock`); `"commit_on_dispatch": true` leaves a real commit in the
 //!   worktree so the pull_request output policy has something to push;
+//!   `"dirty_on_dispatch": true` leaves an uncommitted file so cleanup's
+//!   data-loss guard (F-23 DirtySkipped) is exercisable;
 //!   `"crash_on_dispatch": true` exits mid-dispatch (crash isolation, §5.3).
 //! - `session/attach` → `attached: false` if the session id contains `gone`,
 //!   otherwise `attached: true` with a state chosen from the id (`waiting`,
@@ -21,6 +23,8 @@
 //! - `state/subscribe` → emits one `state/notification` per entry of the
 //!   config's `"stream_states"` array (default `["running"]`) for the
 //!   subscribed session, then acknowledges.
+//! - `session/release` → recorded to `"dispatch_log"`; `released: false` when
+//!   the session id contains `gone` (pane already closed), else `true`.
 //! - `notify` (notification) → appended to the `"notify_log"` file, if set.
 //! - `task/cancel` → acknowledges.
 //! - `crash` → exits immediately with code 1 (to test crash isolation).

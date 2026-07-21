@@ -1813,8 +1813,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         else {
             return Ok(());
         };
-        // Already removed (earlier run / manual cleanup): nothing to do.
+        // Already removed (earlier run / manual cleanup): nothing to do. The
+        // task will never be swept again, so drop its release memo too.
         if !Path::new(path).exists() {
+            self.released_panes.remove(&task_id);
             return Ok(());
         }
         // Owned copy: `release_pane` below needs `&mut self`, which a borrow
@@ -1883,6 +1885,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 );
             }
             Ok(outcome) => {
+                // Removed: this task is done being swept — drop its release
+                // memo so `released_panes` stays bounded by the worktrees
+                // still awaiting removal, not by every task a long `--watch`
+                // run ever completed (same hygiene as `drop_task_sessions`).
+                self.released_panes.remove(&task_id);
                 tracing::info!(task_id, ?outcome, "worktree cleanup");
             }
             Err(e) => {

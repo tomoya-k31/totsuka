@@ -62,7 +62,7 @@ sweep は `Retained` / `DirtySkipped` の worktree 1件につき `git status --p
 # Consequences
 
 - 正常完了時、削除すると決まった worktree の pane が閉じられ、pane の寿命が worktree の掃除ポリシーに連動する。`DirtySkipped` / `Retained` / `manual` では pane が保持され、人間の導線が残る。
-- Cancelled タスクの sweep では `cancel()` が既に pane を閉じているため release は `released: false` を返す（無害・テストで固定）。
+- Cancelled タスクの sweep では `cancel()` が既に pane を閉じているため release は `released: false` を返す（無害。pane 消失時に何も閉じず `released: false` を返す挙動は herdr プラグインの fake transport テストで固定）。
 - orca は `pane_control` 非宣言のため release は呼ばれず、従来どおり worktree だけ削除される（変更なし）。
 - pane を閉じても Claude セッションは消えないため、`claude --resume` による[会話継続](/glossary/conversation-continuity.md)は影響を受けない。
 - release の transport 失敗や degrade 判定で pane が残るケースは残存する — 孤児 pane の検出・解放は #211（doctor）が `session/release` を再利用して担う。
