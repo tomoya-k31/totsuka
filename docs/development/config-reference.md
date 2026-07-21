@@ -9,6 +9,9 @@ status: active
 owner: tomoya-k31
 ---
 
+本ドキュメントはキーの一覧・型・既定値を扱う。実際に貼って動く設定例、選択肢を持つキーの選び分け基準、
+シナリオ別レシピは [設定例集](/development/config-examples.md) を参照。
+
 # 場所
 
 - 共通設定: `$XDG_CONFIG_HOME/totsuka/config.toml`（既定 `~/.config/totsuka/config.toml`）
