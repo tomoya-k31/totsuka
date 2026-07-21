@@ -4,11 +4,12 @@
 //! - [`schema`]: `config.toml` types and parsing.
 //! - [`raw`]: uninterpreted `plugins/{name}.toml` (F-64).
 //! - [`resolve`]: `${ENV}` / `keychain:` secret resolution and path expansion.
-//! - [`layered`]: CLI > env > plugin-file > config-default precedence (F-66).
+//! - [`env_overrides`]: `TOTSUKA_*` overrides, layer 2 of the CLI > env >
+//!   plugin-file > config-default precedence (F-66).
 //! - [`mod@validate`]: static (offline) validation (F-63, F-58).
 
 pub mod edit;
-pub mod layered;
+pub mod env_overrides;
 pub mod raw;
 pub mod resolve;
 pub mod schema;
@@ -16,7 +17,7 @@ pub mod validate;
 
 pub use edit::{EditError, set_plugin_enabled};
 
-pub use layered::ConfigResolver;
+pub use env_overrides::{ENV_PREFIX, apply_env_overrides, override_keys};
 pub use raw::PluginRawConfig;
 pub use resolve::{ResolveError, SecretResolver, expand_env, expand_path};
 pub use schema::{

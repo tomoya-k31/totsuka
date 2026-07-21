@@ -23,15 +23,36 @@ fn scratch(name: &str) -> PathBuf {
 
 /// Run `totsuka <args>` with XDG dirs under `base`.
 fn run(base: &Path, args: &[&str]) -> Output {
-    Command::new(totsuka())
-        .args(args)
-        .env("XDG_CONFIG_HOME", base.join("cfg"))
+    base_cmd(base).args(args).output().unwrap()
+}
+
+/// Run `totsuka <args>` with XDG dirs under `base` plus `TOTSUKA_*` overrides.
+///
+/// Inherited `TOTSUKA_*` vars are stripped first: an agent session running
+/// these tests exports `TOTSUKA_JOB_ID` and friends, which would otherwise
+/// leak into assertions about the env-override layer.
+fn run_env(base: &Path, args: &[&str], vars: &[(&str, &str)]) -> Output {
+    let mut cmd = base_cmd(base);
+    cmd.args(args);
+    for (key, _) in std::env::vars() {
+        if key.starts_with("TOTSUKA_") {
+            cmd.env_remove(key);
+        }
+    }
+    for (key, value) in vars {
+        cmd.env(key, value);
+    }
+    cmd.output().unwrap()
+}
+
+fn base_cmd(base: &Path) -> Command {
+    let mut cmd = Command::new(totsuka());
+    cmd.env("XDG_CONFIG_HOME", base.join("cfg"))
         .env("XDG_DATA_HOME", base.join("data"))
         .env("XDG_STATE_HOME", base.join("state"))
         .env("XDG_CACHE_HOME", base.join("cache"))
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap()
+        .env("NO_COLOR", "1");
+    cmd
 }
 
 fn stdout(out: &Output) -> String {
@@ -278,5 +299,120 @@ fn config_show_redacts_secret_keys() {
     assert!(!text.contains("ghp_secret_value"), "secret masked: {text}");
     assert!(text.contains("***redacted***"));
     assert!(text.contains("visible"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Seed a `base` with an empty `config.toml` so config-reading commands work.
+fn seed_empty_config(base: &Path, contents: &str) {
+    let cfg_dir = base.join("cfg/totsuka");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(cfg_dir.join("config.toml"), contents).unwrap();
+}
+
+/// #208: `TOTSUKA_*` must actually reach the config a command consumes — the
+/// bug was that it was parsed nowhere and silently ignored.
+#[test]
+fn env_override_reaches_a_downstream_consumer() {
+    let base = scratch("env-override");
+    seed_empty_config(&base, "[hooks]\nsocket_path = \"/from/file.sock\"\n");
+
+    // doctor's hook-socket check resolves [hooks].socket_path; with no
+    // orchestrator running it reports the path it looked at.
+    let out = run_env(
+        &base,
+        &["doctor", "--json"],
+        &[("TOTSUKA_HOOKS_SOCKET_PATH", "/from/env.sock")],
+    );
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
+    let detail = doc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "hook-socket")
+        .expect("hook-socket check present")["detail"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        detail.contains("/from/env.sock") && !detail.contains("/from/file.sock"),
+        "env layer must beat config.toml: {detail}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A bad value aborts with the variable named — the point of #208 is that a
+/// broken override is never silent.
+#[test]
+fn invalid_env_override_fails_loudly() {
+    let base = scratch("env-invalid");
+    seed_empty_config(&base, "max_concurrency = 4\n");
+
+    let out = run_env(
+        &base,
+        &["config", "validate", "--offline"],
+        &[("TOTSUKA_MAX_CONCURRENCY", "abc")],
+    );
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("TOTSUKA_MAX_CONCURRENCY") && err.contains("abc"),
+        "error names the variable and the value: {err}"
+    );
+
+    // An unknown name only warns; the run continues.
+    let out = run_env(
+        &base,
+        &["config", "validate", "--offline"],
+        &[("TOTSUKA_MAX_CONCURENCY", "5")],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("TOTSUKA_MAX_CONCURENCY"),
+        "typo is warned about: {}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `config show` prints the files, so it must also disclose the env layer —
+/// otherwise it misreports what the daemon will use.
+#[test]
+fn config_show_lists_active_env_overrides() {
+    let base = scratch("env-show");
+    seed_empty_config(&base, "");
+
+    let out = run_env(
+        &base,
+        &["config", "show", "--redacted"],
+        &[
+            ("TOTSUKA_MAX_CONCURRENCY", "9"),
+            ("TOTSUKA_HOOKS_AUTH_TOKEN_REF", "keychain:totsuka/hook"),
+            // Reserved injection var: a different mechanism, not an override.
+            ("TOTSUKA_JOB_ID", "job-1-2"),
+            // Empty = unset, so it is not in effect and must not be listed.
+            ("TOTSUKA_LOG_LEVEL", ""),
+        ],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("active env overrides"), "{text}");
+    assert!(text.contains("TOTSUKA_MAX_CONCURRENCY=9"), "{text}");
+    assert!(
+        !text.contains("TOTSUKA_JOB_ID"),
+        "reserved var listed: {text}"
+    );
+    assert!(
+        !text.contains("TOTSUKA_LOG_LEVEL"),
+        "an empty value is ignored by apply_env_overrides, so listing it as \
+         active would misreport the effective config: {text}"
+    );
+    assert!(
+        !text.contains("keychain:totsuka/hook"),
+        "--redacted masks a secret-looking name: {text}"
+    );
+
+    // Nothing set → no section at all.
+    let out = run_env(&base, &["config", "show"], &[]);
+    assert!(!stdout(&out).contains("active env overrides"));
     let _ = std::fs::remove_dir_all(&base);
 }
