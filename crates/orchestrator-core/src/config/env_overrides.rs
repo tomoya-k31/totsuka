@@ -13,7 +13,7 @@
 //! `config.toml` is read, and CLI flags are applied afterwards — so a CLI flag
 //! always wins over an env var, which always wins over the file.
 //!
-//! The mapping is an explicit whitelist ([`OVERRIDES`]): each variable names
+//! The mapping is an explicit whitelist (`OVERRIDES`): each variable names
 //! exactly one typed field. A generic "TOML overlay from env" was rejected
 //! because `TOTSUKA_MAX_CONCURRENCY` cannot tell a word separator from a table
 //! separator, and `RootConfig` is `deny_unknown_fields` (see ADR-0009).
