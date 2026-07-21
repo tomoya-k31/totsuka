@@ -31,12 +31,17 @@ owner: tomoya-k31
 
 優先順位（上が強い）:
 
-1. CLI フラグ（`--config`、`--debug` など）
-2. 環境変数 `TOTSUKA_*`（`TOTSUKA_MAX_CONCURRENCY=5` → `max_concurrency`）
+1. CLI フラグ（`--config`、`--debug`）
+2. 環境変数 `TOTSUKA_*` — **設計・単体テスト済みだが未配線。現時点では効果がない**（`TOTSUKA_MAX_CONCURRENCY=5` を設定しても無視される）。`TOTSUKA_HOOK_*` などフック関連の環境変数は別系統で、こちらは実際に使われる
 3. `plugins/{name}.toml`
 4. `config.toml`
 
-すべての設定テーブルは `deny_unknown_fields`。**キーを 1 文字打ち間違えると既定値へのフォールバックではなくパースエラーになる**（これは意図的な設計で、typo が黙って無視される事故を防ぐ）。
+設定テーブルはいずれも `deny_unknown_fields`。**キーを 1 文字打ち間違えると既定値へのフォールバックではなくパースエラーになる**（これは意図的な設計で、typo が黙って無視される事故を防ぐ）。
+
+ただし次の 3 つは例外で、**typo が黙って無視される**ので注意すること:
+
+- `trigger` / `on_success` / `on_failure` — 中身は無検査の TOML テーブル。`on_success = { set_statuss = "..." }` はパースを通り、実行時に黙って捨てられる
+- `cleanup` / `plan_cleanup` の `{ retention_days = N }` 形式 — untagged なので余分なキーを書いてもエラーにならない
 
 # Part 1: 完全版 config.toml
 
@@ -252,7 +257,11 @@ plan の結果を人に見せたいなら `output = "source"`（ソース側に�
 ## `[hooks].auth_token_ref` — 設定すべきか
 
 **すべき。**未設定でもフック POST は受理されるが、その場合の防御は 0600 の UDS パーミッションのみになる。
-フック対応 agent を使う workflow がある状態で未設定だと `config validate` が警告し、`totsuka doctor` は fail する。
+
+**ただし現時点でツールは未設定を実質的に咎めない**ので、自分で気をつけるしかない:
+
+- `config validate` の警告（`validate.rs`）は、agent プラグインのフック対応 capability が判定できるようになるまで無効化されており**発火しない**（protocol 0.1.3 / #132 待ち）
+- `totsuka doctor` は未設定を **warn** として表示するだけで、終了コードは成功のまま。doctor が fail するのは「参照を設定したのに解決できない」場合のみ
 
 ```bash
 # 例: ランダムトークンを Keychain に入れて参照する
@@ -319,7 +328,8 @@ repos = ["totsuka"]
   候補を絞りたい、または Slack 文脈用に別の `summary` を与えたいときだけ書く。
 - `[llm]` — 省略すると `config.toml` の `[llm]` が `initialize` 経由で供給される。
   書く場合はキー名が `api_key_ref` ではなく **`api_key`** である点に注意（`base_url` / `model` / `api_key` が必須、
-  `confidence_threshold` は既定 0.6）。両方に無いと `initialize` が `CONFIG_INVALID` で失敗する。
+  `confidence_threshold` は既定 0.6）。両方に無い場合、**リポジトリ候補が 2 件以上あるときだけ** `initialize` が
+  `CONFIG_INVALID` で失敗する（候補が 0 件か 1 件なら分類の必要が無いので起動する）。
 
 `poll_interval_secs` は使わない。Socket Mode のイベント駆動で即 push するため（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。
 
@@ -327,9 +337,10 @@ repos = ["totsuka"]
 
 ```toml
 # ソケットの決定順: socket_path > session > $HERDR_SOCKET_PATH > $HERDR_SESSION
-#                  > ~/.config/herdr/herdr.sock
+#                  > $XDG_CONFIG_HOME/herdr/herdr.sock
+#                    （XDG_CONFIG_HOME 未設定時のみ ~/.config/herdr/herdr.sock）
 # 通常はどちらも書かず、既定パスに任せてよい
-# socket_path = "~/.config/herdr/herdr.sock"
+# socket_path = "${XDG_CONFIG_HOME}/herdr/herdr.sock"
 # session = "main"
 
 agent_command = "claude"                        # 起動するエージェント（空白区切りで引数も可）
@@ -498,6 +509,7 @@ totsuka doctor                     # 依存コマンド・ソケット・シー�
 | 環境変数未設定 | `${VAR}` 参照先が export されていない |
 
 **警告**（実行は止まらない）の代表例: トリガーの重複、`verification = "human"` なのに notifier が無い、
-`verification != "llm"` なのに `rubric` がある、フック対応 agent があるのに `[hooks].auth_token_ref` が無い。
+`verification != "llm"` なのに `rubric` がある。
+（`[hooks].auth_token_ref` 未設定の警告も実装されているが、前述のとおり現時点では発火しない。）
 
 `totsuka run` はエラーがあると起動を中止し、警告は表示した上で続行する。
