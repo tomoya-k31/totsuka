@@ -37,8 +37,9 @@ use std::time::Duration;
 use plugin_protocol::method;
 use plugin_protocol::methods::{
     AgentState, ExecutionMode, HookLaunchSpec, NotifierEvent, NotifyParams, ResultPublishParams,
-    StateNotification, TaskDispatchParams, TaskDispatchResult, TaskSubmitParams, TaskSubmitResult,
-    TaskSubmitStatus, TaskUpdateStatusParams,
+    SessionReleaseParams, SessionReleaseResult, StateNotification, TaskDispatchParams,
+    TaskDispatchResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus,
+    TaskUpdateStatusParams,
 };
 use plugin_protocol::{Notification, Task, jsonrpc};
 use serde_json::Value;
@@ -67,8 +68,8 @@ use crate::run::output::{
 };
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
 use crate::worktree::{
-    CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE, DEFAULT_LOCATION_TEMPLATE,
-    WorktreeManager,
+    CleanupDecision, CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE,
+    DEFAULT_LOCATION_TEMPLATE, WorktreeManager,
 };
 
 /// Lines of a repository README shown to the LLM as selection context (F-11).
@@ -77,6 +78,14 @@ const README_HEAD_LINES: usize = 30;
 /// How long the run loop sleeps between periodic maintenance ticks (settle
 /// checks in one-shot, timeout/retention sweeps in both modes).
 const SETTLE_TICK: Duration = Duration::from_millis(200);
+
+/// Minimum interval between worktree-retention sweeps (#210). The sweep runs
+/// `git status --porcelain` per retained worktree, so re-running it every
+/// [`SETTLE_TICK`] would cost a process spawn 5×/s per `Retained`/
+/// `DirtySkipped` worktree — and the `keep_7d`/`keep_28d` presets *retain by
+/// design* for days. 60s granularity is meaningless against day-scale
+/// retention; the done-time cleanup (`finalize_success`) stays immediate.
+const WORKTREE_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// One-shot's quiet-period floor before an empty `settled()` is trusted
 /// (0.2.0): every source is push-only, so a task submitted moments after
@@ -136,6 +145,10 @@ pub struct EngineSettings {
     pub pr_title_template: String,
     /// Pull-request body template (F-86).
     pub pr_body_template: String,
+    /// Minimum interval between worktree-retention sweeps (#210). Not exposed
+    /// in config (no user knob); tests set [`Duration::ZERO`] to sweep every
+    /// cycle.
+    pub worktree_sweep_interval: Duration,
     /// Claude Code hook runtime (#131/#138): receiver endpoint, auth token,
     /// spool dir, per-workflow `--settings` paths, and the escalation
     /// threshold. A normal `totsuka run` always sets this (the CLI builds it
@@ -239,6 +252,7 @@ pub fn settings_from_config(
             .pr_body_template
             .clone()
             .unwrap_or_else(|| DEFAULT_PR_BODY_TEMPLATE.to_string()),
+        worktree_sweep_interval: WORKTREE_SWEEP_INTERVAL,
         // The hook runtime needs the resolved token, expanded paths, and the
         // per-workflow settings files — all CLI-level (secret store, `Paths`,
         // the `hooks` module). `run_cmd` fills this in before building the
@@ -247,12 +261,20 @@ pub fn settings_from_config(
     })
 }
 
-/// Map a config cleanup policy to the worktree policy, with a default.
+/// Map a config cleanup policy to the worktree policy, with a default. The
+/// `keep_*` presets (#210) desugar to `RetentionDays` here — [`CleanupPolicy`]
+/// never learns about them.
 fn cleanup_policy(config: Option<CleanupPolicyConfig>, default: CleanupPolicy) -> CleanupPolicy {
     match config {
         None => default,
         Some(CleanupPolicyConfig::Named(CleanupPolicyName::Immediate)) => CleanupPolicy::Immediate,
         Some(CleanupPolicyConfig::Named(CleanupPolicyName::Manual)) => CleanupPolicy::Manual,
+        Some(CleanupPolicyConfig::Named(CleanupPolicyName::Keep7d)) => {
+            CleanupPolicy::RetentionDays(7)
+        }
+        Some(CleanupPolicyConfig::Named(CleanupPolicyName::Keep28d)) => {
+            CleanupPolicy::RetentionDays(28)
+        }
         Some(CleanupPolicyConfig::Retention { retention_days }) => {
             CleanupPolicy::RetentionDays(retention_days)
         }
@@ -404,6 +426,14 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     /// Opens pull requests for `output = pull_request` (F-86); a seam so the
     /// push flow is testable without hitting GitHub.
     pr_creator: Box<dyn PrCreator>,
+    /// Tasks whose pane release has already been settled this run (#210):
+    /// the `session/release` RPC answered, or release is impossible (no
+    /// pane-controlling plugin). Without it, a worktree whose removal keeps
+    /// failing would be re-released on every sweep.
+    released_panes: HashSet<i64>,
+    /// When the last worktree-retention sweep ran (#210); `None` at startup so
+    /// the first `cycle()` always sweeps (startup recovery stays immediate).
+    last_worktree_sweep: Option<tokio::time::Instant>,
     stats: RunStats,
 }
 
@@ -484,6 +514,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             readme_cache,
             agent_output: HashMap::new(),
             pr_creator,
+            released_panes: HashSet::new(),
+            last_worktree_sweep: None,
             stats: RunStats::default(),
         }
     }
@@ -750,14 +782,24 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // Escalate hook-dispatched tasks that have gone silent past their
         // workflow timeout (D-03).
         self.sweep_signal_timeouts().await?;
-        self.sweep_finished_worktrees()?;
+        // The worktree sweep spawns `git status` per retained worktree, so it
+        // runs on its own (longer) interval, not every 200ms tick (#210). The
+        // startup cycle (`last_worktree_sweep == None`) always sweeps.
+        let sweep_due = self
+            .last_worktree_sweep
+            .is_none_or(|last| last.elapsed() >= self.settings.worktree_sweep_interval);
+        if sweep_due {
+            self.sweep_finished_worktrees().await?;
+            self.last_worktree_sweep = Some(tokio::time::Instant::now());
+        }
         Ok(())
     }
 
     /// Re-apply the cleanup policy to finished tasks whose worktree still
     /// exists (F-23: a `retention_days` policy elapses long after the
     /// finishing run's immediate cleanup attempt retained the worktree).
-    fn sweep_finished_worktrees(&self) -> Result<(), EngineError> {
+    async fn sweep_finished_worktrees(&mut self) -> Result<(), EngineError> {
+        let mut candidates = Vec::new();
         for state in [TaskState::Done, TaskState::Cancelled] {
             for record in self.db.tasks_in_state(state)? {
                 if record
@@ -765,9 +807,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     .as_deref()
                     .is_some_and(|p| Path::new(p).exists())
                 {
-                    self.cleanup_worktree(record.id)?;
+                    candidates.push(record.id);
                 }
             }
+        }
+        for task_id in candidates {
+            self.cleanup_worktree(task_id).await?;
         }
         Ok(())
     }
@@ -1552,7 +1597,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 self.drop_task_sessions(record.id);
                 self.agent_output.remove(&record.id);
                 self.stats.done += 1;
-                self.cleanup_worktree(record.id)?;
+                self.cleanup_worktree(record.id).await?;
                 notify_all(&self.plugins.notifiers, NotifierEvent::Done, record, None);
                 tracing::info!(task_id = record.id, "task done");
                 Ok(())
@@ -1754,8 +1799,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
-    /// Apply the cleanup policy to a finished task's worktree (F-23/F-85).
-    fn cleanup_worktree(&self, task_id: i64) -> Result<(), EngineError> {
+    /// Apply the cleanup policy to a finished task's worktree, in three stages
+    /// (#210): decide → release the pane → remove. The pane is released only
+    /// on a `Remove` decision, so `Retained`/`DirtySkipped` worktrees keep
+    /// their pane as the human's entry point (F-23/F-85).
+    async fn cleanup_worktree(&mut self, task_id: i64) -> Result<(), EngineError> {
         // Re-fetch: `finished_at` was just set by the terminal transition.
         let Some(record) = self.db.get_task(task_id)? else {
             return Ok(());
@@ -1769,7 +1817,15 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         if !Path::new(path).exists() {
             return Ok(());
         }
-        let Some(repo) = self.settings.repos.iter().find(|r| &r.name == repo_name) else {
+        // Owned copy: `release_pane` below needs `&mut self`, which a borrow
+        // into `self.settings` would block.
+        let Some(repo_path) = self
+            .settings
+            .repos
+            .iter()
+            .find(|r| &r.name == repo_name)
+            .map(|r| r.path.clone())
+        else {
             return Ok(());
         };
         let policy = if record.mode == "plan" {
@@ -1777,18 +1833,54 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         } else {
             self.settings.cleanup_implement
         };
-        match self.worktrees.cleanup(
-            &repo.path,
+        let decision = match self.worktrees.decide_cleanup(
             Path::new(path),
-            branch,
             policy,
             record.finished_at.as_deref(),
             &now_rfc3339(),
         ) {
-            Ok(crate::worktree::CleanupOutcome::Retained) => {
+            Ok(decision) => decision,
+            Err(e) => {
+                tracing::warn!(task_id, "worktree cleanup failed: {e}");
+                return Ok(());
+            }
+        };
+        match decision {
+            CleanupDecision::Retain => {
                 // Expected under retention/manual policies; the sweep re-checks
-                // every cycle, so keep this quiet.
+                // periodically, so keep this quiet.
                 tracing::debug!(task_id, "worktree retained per policy");
+                return Ok(());
+            }
+            CleanupDecision::Dirty => {
+                // Data-loss guard (F-23): keep the worktree AND its pane — the
+                // pane is the human's way in to the uncommitted work.
+                tracing::info!(
+                    task_id,
+                    outcome = ?CleanupOutcome::DirtySkipped,
+                    "worktree cleanup"
+                );
+                return Ok(());
+            }
+            CleanupDecision::Remove => {}
+        }
+        // The worktree is going away → its pane has nothing left to show.
+        // Close it before the removal so the pane's lifetime tracks the
+        // worktree's; at most once per task (a removal that keeps failing
+        // must not re-release every sweep).
+        if !self.released_panes.contains(&task_id) {
+            self.release_pane(&record).await;
+        }
+        match self.worktrees.remove(&repo_path, Path::new(path), branch) {
+            Ok(CleanupOutcome::DirtySkipped) => {
+                // Turned dirty between decision and removal: the pane is
+                // already gone, but data loss (irreversible) outranks a lost
+                // pane (minor). The sweep retries the removal later.
+                tracing::warn!(
+                    task_id,
+                    worktree = %path,
+                    "worktree turned dirty after its pane was released; kept (F-23)"
+                );
             }
             Ok(outcome) => {
                 tracing::info!(task_id, ?outcome, "worktree cleanup");
@@ -1798,6 +1890,74 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
         }
         Ok(())
+    }
+
+    /// Release (close) a finished task's pane via `session/release` (#210).
+    /// Best-effort: every failure only logs — a pane that could not be
+    /// released must never block the worktree removal (an orphaned pane is
+    /// `doctor`'s job, #211). Marks the task released once the RPC answered
+    /// (whatever `released` says — `false` means "already gone or refused",
+    /// both final) or when release is impossible for this run; a transport
+    /// error leaves it unmarked so the next sweep retries.
+    async fn release_pane(&mut self, record: &TaskRecord) {
+        let session = match self.db.latest_session(record.id) {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                // Never dispatched → no pane to release.
+                self.released_panes.insert(record.id);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    task_id = record.id,
+                    "cannot resolve session for pane release: {e}"
+                );
+                return;
+            }
+        };
+        let Some(agent) = self.plugins.agents.get(&session.plugin) else {
+            // The owning plugin is not launched this run; that cannot change
+            // until restart, so do not retry every sweep.
+            tracing::debug!(
+                task_id = record.id,
+                plugin = %session.plugin,
+                "pane release skipped: agent plugin not launched"
+            );
+            self.released_panes.insert(record.id);
+            return;
+        };
+        if !agent.capabilities().pane_control {
+            // No pane to control (e.g. orca): nothing to release, ever.
+            self.released_panes.insert(record.id);
+            return;
+        }
+        let params = SessionReleaseParams {
+            session_id: session.session_id.clone(),
+            // Identity guard against pane-id reuse: the worktree path is
+            // unique per task and the DB is its source of truth. The label is
+            // plugin-internal, so the orchestrator never composes one.
+            expect_cwd: record.worktree_path.clone(),
+            expect_label: None,
+        };
+        match agent
+            .call::<_, SessionReleaseResult>(method::SESSION_RELEASE, &params)
+            .await
+        {
+            Ok(result) => {
+                self.released_panes.insert(record.id);
+                if result.released {
+                    tracing::info!(task_id = record.id, "pane released before worktree removal");
+                } else {
+                    tracing::debug!(
+                        task_id = record.id,
+                        "pane not released (already gone or identity mismatch)"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(task_id = record.id, "session/release failed: {e}");
+            }
+        }
     }
 
     /// An agent plugin's process exited (§5.3): fail its in-flight tasks; the
@@ -2089,9 +2249,87 @@ plan_cleanup = { retention_days = 2 }
         let settings = settings_from_config(&cfg, &HashMap::new()).unwrap();
         assert_eq!(settings.limits.global, DEFAULT_GLOBAL_CONCURRENCY);
         // Implement keeps work (manual); plan cleans immediately (F-85).
+        // #210 deliberately did NOT change these defaults.
         assert_eq!(settings.cleanup_implement, CleanupPolicy::Manual);
         assert_eq!(settings.cleanup_plan, CleanupPolicy::Immediate);
         assert_eq!(settings.location_template, DEFAULT_LOCATION_TEMPLATE);
+        assert_eq!(settings.worktree_sweep_interval, WORKTREE_SWEEP_INTERVAL);
+    }
+
+    #[test]
+    fn cleanup_presets_map_to_retention_days() {
+        // `keep_7d` / `keep_28d` (#210) are config-layer sugar: they desugar
+        // to `RetentionDays` here and `CleanupPolicy` never sees them.
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[worktree]
+cleanup = "keep_7d"
+plan_cleanup = "keep_28d"
+"#,
+        )
+        .unwrap();
+        let settings = settings_from_config(&cfg, &HashMap::new()).unwrap();
+        assert_eq!(settings.cleanup_implement, CleanupPolicy::RetentionDays(7));
+        assert_eq!(settings.cleanup_plan, CleanupPolicy::RetentionDays(28));
+    }
+
+    /// A minimal engine (no plugins, no repos) whose only observable behavior
+    /// is the sweep-throttle bookkeeping.
+    async fn sweep_test_engine(
+        interval: Duration,
+    ) -> Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter> {
+        let settings = EngineSettings {
+            workflows: Vec::new(),
+            repos: Vec::new(),
+            limits: Limits::global(1),
+            branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
+            location_template: DEFAULT_LOCATION_TEMPLATE.to_string(),
+            cleanup_implement: CleanupPolicy::Manual,
+            cleanup_plan: CleanupPolicy::Immediate,
+            env: HashMap::new(),
+            select: SelectConfig::default(),
+            readme_cache_dir: None,
+            pr_title_template: "t".to_string(),
+            pr_body_template: "b".to_string(),
+            worktree_sweep_interval: interval,
+            hook: None,
+        };
+        Engine::new(
+            StateDb::open_in_memory().unwrap(),
+            settings,
+            PluginSet::default(),
+            crate::adapters::git::SystemGitRunner,
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn worktree_sweep_is_throttled_by_its_interval() {
+        // A long interval: the startup cycle (None) always sweeps, later
+        // cycles within the interval do not.
+        let mut engine = sweep_test_engine(Duration::from_secs(3600)).await;
+        engine.cycle().await.unwrap();
+        let first = engine
+            .last_worktree_sweep
+            .expect("the startup cycle sweeps");
+        engine.cycle().await.unwrap();
+        assert_eq!(
+            engine.last_worktree_sweep,
+            Some(first),
+            "a cycle inside the interval must not re-sweep"
+        );
+
+        // Duration::ZERO restores the pre-#210 behavior: every cycle sweeps.
+        let mut engine = sweep_test_engine(Duration::ZERO).await;
+        engine.cycle().await.unwrap();
+        let first = engine.last_worktree_sweep.unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        engine.cycle().await.unwrap();
+        assert!(
+            engine.last_worktree_sweep.unwrap() > first,
+            "a zero interval sweeps every cycle"
+        );
     }
 
     #[test]

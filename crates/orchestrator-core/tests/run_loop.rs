@@ -33,7 +33,7 @@ use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_BRANCH_TEMPLATE};
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
-use test_support::{bare_origin_and_clone as setup_repo, scratch};
+use test_support::{bare_origin_and_clone as setup_repo, git, scratch};
 
 /// A pull-request creator that records requests and returns a canned URL, so
 /// the push flow is exercised without a real `gh`/GitHub.
@@ -125,6 +125,8 @@ fn engine_settings(repo_path: &Path) -> EngineSettings {
         readme_cache_dir: None,
         pr_title_template: "totsuka: {title}".to_string(),
         pr_body_template: "Task {title} ({url})\n\n{summary}".to_string(),
+        // Sweep every cycle, as before the interval existed (#210).
+        worktree_sweep_interval: Duration::ZERO,
         hook: None,
     }
 }
@@ -1417,6 +1419,377 @@ async fn restart_dispatches_persisted_but_undispatched_submission() {
         assert_eq!(task.state, TaskState::Done);
         engine.shutdown(Duration::from_secs(5)).await;
     }
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---------------------------------------------------------------------------
+// Worktree cleanup 3-stage: decide → pane release → remove (#210)
+// ---------------------------------------------------------------------------
+
+/// The `session/release` calls recorded in a mock agent's dispatch_log.
+fn recorded_releases(dispatch_log: &Path) -> Vec<serde_json::Value> {
+    read_log(dispatch_log)
+        .into_iter()
+        .filter(|l| l["method"] == "session/release")
+        .collect()
+}
+
+/// Backdate every task's `finished_at` so a retention policy is elapsed.
+fn backdate_finished_at(db_path: &Path) {
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    conn.execute("UPDATE tasks SET finished_at = '2026-01-01T00:00:00Z'", [])
+        .unwrap();
+}
+
+#[tokio::test]
+async fn done_task_releases_its_pane_before_immediate_worktree_removal() {
+    let base = scratch("release_on_done");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({
+            "stream_states": ["running", "done"],
+            "pane_control": true,
+            "dispatch_log": dispatch_log,
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let worktree = task.worktree_path.clone().unwrap();
+    assert!(
+        !PathBuf::from(&worktree).exists(),
+        "immediate cleanup removed the worktree"
+    );
+    let releases = recorded_releases(&dispatch_log);
+    assert_eq!(releases.len(), 1, "one release per removal: {releases:?}");
+    assert_eq!(releases[0]["params"]["session_id"], "sess-mock");
+    assert_eq!(
+        releases[0]["params"]["expect_cwd"], worktree,
+        "the identity guard carries the task's worktree path"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn elapsed_retention_sweep_releases_pane_and_removes_worktree() {
+    // The startup sweep of a later run: the worktree was retained under
+    // `keep_7d` (= RetentionDays(7)); once the retention elapses, the sweep
+    // must release the pane and then remove the worktree.
+    let base = scratch("release_on_sweep");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log1 = base.join("dispatch1.ndjson");
+    let dispatch_log2 = base.join("dispatch2.ndjson");
+    let db_path = base.join("state.db");
+
+    // Run 1: complete the task; retention keeps worktree AND pane.
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({
+            "stream_states": ["running", "done"],
+            "pane_control": true,
+            "dispatch_log": dispatch_log1,
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.cleanup_implement = CleanupPolicy::RetentionDays(7);
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let worktree = task.worktree_path.clone().unwrap();
+    assert!(
+        PathBuf::from(&worktree).exists(),
+        "retention keeps the worktree"
+    );
+    assert!(
+        recorded_releases(&dispatch_log1).is_empty(),
+        "a retained worktree keeps its pane"
+    );
+
+    // Run 2, after the retention elapsed: the startup sweep cleans up.
+    backdate_finished_at(&db_path);
+    let plugins = plugin_set(
+        json!([]),
+        json!({ "pane_control": true, "dispatch_log": dispatch_log2 }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.cleanup_implement = CleanupPolicy::RetentionDays(7);
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    engine.cycle().await.unwrap();
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    assert!(
+        !PathBuf::from(&worktree).exists(),
+        "elapsed retention removes the worktree"
+    );
+    let releases = recorded_releases(&dispatch_log2);
+    assert_eq!(releases.len(), 1, "the pane was released: {releases:?}");
+    assert_eq!(releases[0]["params"]["expect_cwd"], worktree);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn dirty_worktree_keeps_both_worktree_and_pane() {
+    // F-23's human entry point: a dirty worktree is DirtySkipped, and its pane
+    // must stay open — the decision runs BEFORE any pane close.
+    let base = scratch("dirty_keeps_pane");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({
+            "stream_states": ["running", "done"],
+            "pane_control": true,
+            "dispatch_log": dispatch_log,
+            "dirty_on_dispatch": true,
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    assert!(
+        PathBuf::from(task.worktree_path.unwrap()).exists(),
+        "a dirty worktree is preserved (F-23)"
+    );
+    assert!(
+        recorded_releases(&dispatch_log).is_empty(),
+        "a dirty worktree keeps its pane"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn manual_policy_never_releases_the_pane() {
+    let base = scratch("manual_keeps_pane");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({
+            "stream_states": ["running", "done"],
+            "pane_control": true,
+            "dispatch_log": dispatch_log,
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.cleanup_implement = CleanupPolicy::Manual;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    assert!(
+        PathBuf::from(task.worktree_path.unwrap()).exists(),
+        "manual policy keeps the worktree"
+    );
+    assert!(
+        recorded_releases(&dispatch_log).is_empty(),
+        "manual policy keeps the pane too"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn release_is_sent_once_even_when_removal_keeps_failing() {
+    // `released_panes`: a worktree whose removal keeps failing (here: locked)
+    // is re-decided `Remove` on every sweep, but the pane release must go out
+    // exactly once.
+    let base = scratch("release_once");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log1 = base.join("dispatch1.ndjson");
+    let dispatch_log2 = base.join("dispatch2.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({
+            "stream_states": ["running", "done"],
+            "pane_control": true,
+            "dispatch_log": dispatch_log1,
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.cleanup_implement = CleanupPolicy::RetentionDays(7);
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let worktree = task.worktree_path.clone().unwrap();
+    backdate_finished_at(&db_path);
+    // `git worktree remove` refuses a locked worktree — a deterministic,
+    // repeatable removal failure.
+    git(&repo, &["worktree", "lock", &worktree]);
+
+    let plugins = plugin_set(
+        json!([]),
+        json!({ "pane_control": true, "dispatch_log": dispatch_log2 }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.cleanup_implement = CleanupPolicy::RetentionDays(7);
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    for _ in 0..5 {
+        engine.cycle().await.unwrap();
+    }
+    assert!(
+        PathBuf::from(&worktree).exists(),
+        "the locked worktree could not be removed"
+    );
+    assert_eq!(
+        recorded_releases(&dispatch_log2).len(),
+        1,
+        "release must not be re-sent on every failing sweep"
+    );
+
+    // Unlock → the next sweep finishes the removal without another release.
+    git(&repo, &["worktree", "unlock", &worktree]);
+    engine.cycle().await.unwrap();
+    engine.shutdown(Duration::from_secs(5)).await;
+    assert!(!PathBuf::from(&worktree).exists(), "removed after unlock");
+    assert_eq!(recorded_releases(&dispatch_log2).len(), 1);
 
     let _ = std::fs::remove_dir_all(&base);
 }

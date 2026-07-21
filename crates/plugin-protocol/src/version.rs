@@ -48,7 +48,13 @@ use semver::{Version, VersionReq};
 /// polls at all. A `^0.1` manifest is rejected at launch by design (F-54);
 /// a push-only plugin declaring `>=0.1.6, <0.3` keeps working across this
 /// boundary.
-pub const PROTOCOL_VERSION: &str = "0.2.0";
+///
+/// 0.2.1: the `session/release` RPC (#210) — close a finished session's pane
+/// when the worktree cleanup decided to remove its worktree. Additive, gated
+/// on the existing `pane_control` capability (no new flag, same contract as
+/// `session/focus` in 0.1.4): plugins that never declare it are simply never
+/// called, and every `<0.3`-bounded manifest keeps matching.
+pub const PROTOCOL_VERSION: &str = "0.2.1";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -72,7 +78,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 2, 0));
+        assert_eq!(protocol_version(), Version::new(0, 2, 1));
     }
 
     #[test]

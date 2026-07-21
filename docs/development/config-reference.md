@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks]
-timestamp: 2026-07-22T12:00:00Z
+timestamp: 2026-07-22T13:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -106,7 +106,16 @@ OpenAI 互換 `/chat/completions` を前提。repo_hint を持たないタスク
 | `cleanup` | policy? | `manual` | implement モードの掃除ポリシー（F-23） |
 | `plan_cleanup` | policy? | `immediate` | plan モードの掃除ポリシー（F-85） |
 
-掃除ポリシー値: `"immediate"` / `"manual"` / `{ retention_days = 5 }`。未コミット変更のある worktree は決して削除しない。
+掃除ポリシー値: `"immediate"` / `"manual"` / `{ retention_days = 5 }` / `"keep_7d"` / `"keep_28d"`（#210。`keep_*` は `{ retention_days = 7 }` / `{ retention_days = 28 }` の糖衣。他の日数は従来どおり明示形式で）。未コミット変更のある worktree は決して削除しない。
+
+```toml
+[worktree]
+cleanup      = "keep_7d"              # implement: 7日保持ののち削除
+plan_cleanup = "immediate"            # plan: 即削除（既定）
+# cleanup    = { retention_days = 3 } # 任意日数は明示形式
+```
+
+**pane との連動（#210, [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）**: worktree を「削除する」と判定したとき、その前にタスクの herdr pane が自動で閉じられる（`session/release`）。保持中（retention 未経過 / `manual`）や未コミット変更で削除を見送った worktree の pane は残る。**既定の `cleanup = "manual"` では worktree も pane も自動では消えず、タスクごとに pane が増えていく**点に注意 — コミット済み未 push の作業を pane で確認したい運用でなければ `keep_7d` を推奨する。
 
 # `[log]`
 

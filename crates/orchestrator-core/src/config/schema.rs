@@ -313,6 +313,13 @@ pub enum CleanupPolicyConfig {
 }
 
 /// The named cleanup policies.
+///
+/// `keep_7d` / `keep_28d` (#210) are pure sugar for `{ retention_days = 7 }`
+/// / `{ retention_days = 28 }` — the mapping happens at config interpretation
+/// and nothing downstream knows the presets exist. `keep_` names the behavior;
+/// `7d`/`28d` are exact where `week`/`month` would be ambiguous (28 days ≠ one
+/// month). NB the explicit `rename`s: `rename_all = "snake_case"` would turn
+/// `Keep7d` into `keep7d`, not `keep_7d`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupPolicyName {
@@ -320,6 +327,12 @@ pub enum CleanupPolicyName {
     Immediate,
     /// Never auto-remove; a human cleans up.
     Manual,
+    /// Keep for 7 days after the task finished, then remove.
+    #[serde(rename = "keep_7d")]
+    Keep7d,
+    /// Keep for 28 days after the task finished, then remove.
+    #[serde(rename = "keep_28d")]
+    Keep28d,
 }
 
 /// Logging settings from `[log]` (§5.2).
@@ -586,5 +599,30 @@ plan_cleanup = "immediate"
         );
         // An unknown policy name is rejected, not silently ignored.
         assert!(RootConfig::from_toml_str("[worktree]\ncleanup = \"sometimes\"").is_err());
+    }
+
+    #[test]
+    fn cleanup_presets_parse() {
+        // The `keep_*` retention presets (#210) — note the explicit serde
+        // renames: plain snake_case would demand `keep7d`.
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[worktree]
+cleanup = "keep_7d"
+plan_cleanup = "keep_28d"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.worktree.cleanup,
+            Some(CleanupPolicyConfig::Named(CleanupPolicyName::Keep7d))
+        );
+        assert_eq!(
+            cfg.worktree.plan_cleanup,
+            Some(CleanupPolicyConfig::Named(CleanupPolicyName::Keep28d))
+        );
+        // Only the two presets exist — other durations use the explicit form.
+        assert!(RootConfig::from_toml_str("[worktree]\ncleanup = \"keep_14d\"").is_err());
+        assert!(RootConfig::from_toml_str("[worktree]\ncleanup = \"keep7d\"").is_err());
     }
 }
