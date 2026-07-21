@@ -145,11 +145,17 @@ fn show(cx: &Cx, redacted: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-/// List the `TOTSUKA_*` overrides that are actually set (F-66 layer 2), so
-/// `show` cannot imply the files are the whole story.
+/// List the `TOTSUKA_*` overrides that are actually in effect (F-66 layer 2),
+/// so `show` cannot imply the files are the whole story.
+///
+/// "In effect" must match `apply_env_overrides` exactly, so an empty value is
+/// skipped here too: it is warned about and treated as unset there, and
+/// listing it as active would misreport the effective config — the same
+/// silence this section exists to break.
 fn print_active_env_overrides(env: &HashMap<String, String>, redacted: bool) {
     let active: Vec<(&str, &String)> = config::override_keys()
         .filter_map(|key| env.get_key_value(key).map(|(k, v)| (k.as_str(), v)))
+        .filter(|(_, value)| !value.is_empty())
         .collect();
     if active.is_empty() {
         return;

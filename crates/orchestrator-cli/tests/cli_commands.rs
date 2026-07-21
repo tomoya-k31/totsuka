@@ -389,6 +389,8 @@ fn config_show_lists_active_env_overrides() {
             ("TOTSUKA_HOOKS_AUTH_TOKEN_REF", "keychain:totsuka/hook"),
             // Reserved injection var: a different mechanism, not an override.
             ("TOTSUKA_JOB_ID", "job-1-2"),
+            // Empty = unset, so it is not in effect and must not be listed.
+            ("TOTSUKA_LOG_LEVEL", ""),
         ],
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -398,6 +400,11 @@ fn config_show_lists_active_env_overrides() {
     assert!(
         !text.contains("TOTSUKA_JOB_ID"),
         "reserved var listed: {text}"
+    );
+    assert!(
+        !text.contains("TOTSUKA_LOG_LEVEL"),
+        "an empty value is ignored by apply_env_overrides, so listing it as \
+         active would misreport the effective config: {text}"
     );
     assert!(
         !text.contains("keychain:totsuka/hook"),
