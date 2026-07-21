@@ -21,7 +21,7 @@ use crate::common::{CliError, Cx, hook_socket_path, secret_resolver};
 /// degraded outcome is a printed note and a clean exit (see module docs).
 pub fn run(cx: &Cx, task_id: i64) -> Result<(), CliError> {
     let env: HashMap<String, String> = std::env::vars().collect();
-    let cfg = match cx.load_config() {
+    let cfg = match cx.load_config(&env) {
         Ok(cfg) => cfg,
         Err(e) => return skipped(format!("{e}")),
     };

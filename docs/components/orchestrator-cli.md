@@ -4,7 +4,7 @@ title: orchestrator-cli クレート
 description: totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（init / run / status / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [rust, crate, cli, plugin, run, status, doctor, hooks]
-timestamp: 2026-07-19T08:30:00Z
+timestamp: 2026-07-22T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -49,6 +49,7 @@ Claude Code の完了判定を screen-manifest からフック機構へ置換す
 - `check_spool` — `spool_dir` の書き込み可否と**バックログ件数**（backlog > 0 は warning、[hook-security](/security/hook-security.md) N-05 の滞留検出）。
 
 - 共通フラグ: `--config <path>`（設定ファイル上書き = F-66 の最上位レイヤ）、`--debug`（run のログレベルを debug に引き上げ）。`--json` は全読み取り系コマンドに用意。
+- **設定ロードの一元化（#208、[ADR-0009](/decisions/adr-0009-env-override-whitelist.md)）**: `Cx::load_config(&env)` が `config.toml` パース → core の `apply_env_overrides`（F-66 第 2 層 `TOTSUKA_*`）まで行い、`run` / `config` / `focus` / `doctor` の 4 コマンドすべてがここを通る。**片方だけに適用しない**理由は `focus` / `doctor` が `[hooks].socket_path` から `run` のバインドしたソケットを解決するためで、`run` のみだと `TOTSUKA_HOOKS_SOCKET_PATH` 設定時に別のソケットを見る。警告は stderr（`--json` の stdout 契約を壊さない）。CLI フラグ（`--debug`）は**この後**に適用されるため「CLI > env」が適用順で成立する。例外は `plugin enable`/`disable` のローカルローダで、ファイル編集用のため raw のまま維持（env で編集結果を汚染しない）。`config show` はファイル内容表示を維持しつつ、有効な env オーバーライドを末尾に一覧表示する（`--redacted` 時は `is_secret_key` で値をマスク）。
 - UX 規約（§7）: エラーは「原因 + 次のアクション」（`→` 区切り）。用語は [glossary](/glossary/index.md) に準拠。
 
 # 依存

@@ -87,7 +87,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     }
 
     // Config presence + full offline validation.
-    let cfg = match cx.load_config() {
+    let cfg = match cx.load_config(&env) {
         Ok(cfg) => {
             let env_fn = |k: &str| env.get(k).cloned();
             let store = cx.store();

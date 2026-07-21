@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: 設定例集（config.toml / plugins/*.toml）
-description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
+description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
-tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr]
-timestamp: 2026-07-22T09:00:00Z
+tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
+timestamp: 2026-07-22T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -32,7 +32,7 @@ owner: tomoya-k31
 優先順位（上が強い）:
 
 1. CLI フラグ（`--config`、`--debug`）
-2. 環境変数 `TOTSUKA_*` — **設計・単体テスト済みだが未配線。現時点では効果がない**（`TOTSUKA_MAX_CONCURRENCY=5` を設定しても無視される）。`TOTSUKA_HOOK_*` などフック関連の環境変数は別系統で、こちらは実際に使われる
+2. 環境変数 `TOTSUKA_*`（[対応表は後述](#環境変数によるオーバーライド)）
 3. `plugins/{name}.toml`
 4. `config.toml`
 
@@ -42,6 +42,87 @@ owner: tomoya-k31
 
 - `trigger` / `on_success` / `on_failure` — 中身は無検査の TOML テーブル。`on_success = { set_statuss = "..." }` はパースを通り、実行時に黙って捨てられる
 - `cleanup` / `plan_cleanup` の `{ retention_days = N }` 形式 — untagged なので余分なキーを書いてもエラーにならない
+
+# 環境変数によるオーバーライド
+
+`config.toml` を書き換えずに値を差し替えたいとき（CI・コンテナ実行など）は `TOTSUKA_*` を使う。
+対応表にある変数だけが解釈され、`config.toml` の値に勝つ。CLI フラグには負ける。
+ホワイトリスト方式を採った理由と fail-loud 方針の背景は [ADR-0009](/decisions/adr-0009-env-override-whitelist.md) を参照。
+
+対応する変数（これ以外の `TOTSUKA_*` は解釈されない）:
+
+| 環境変数 | 適用先 | 型・検証 |
+|---|---|---|
+| `TOTSUKA_MAX_CONCURRENCY` | `max_concurrency` | 非負整数 |
+| `TOTSUKA_LOG_LEVEL` | `[log].level` | `error`/`warn`/`info`/`debug`/`trace` |
+| `TOTSUKA_LOG_PROMPTS` | `[log].log_prompts` | `true` / `false` のみ |
+| `TOTSUKA_LOG_MAX_FILES` | `[log].max_files` | 非負整数 |
+| `TOTSUKA_WORKTREE_LOCATION` | `[worktree].location` | 文字列（`~` / `${ENV}` 展開は従来どおり後段で行われる） |
+| `TOTSUKA_HOOKS_AUTH_TOKEN_REF` | `[hooks].auth_token_ref` | 文字列（**シークレット参照**。値そのものではない） |
+| `TOTSUKA_HOOKS_SOCKET_PATH` | `[hooks].socket_path` | 文字列 |
+| `TOTSUKA_HOOKS_SPOOL_DIR` | `[hooks].spool_dir` | 文字列 |
+| `TOTSUKA_HOOKS_BLOCK_RETRY_LIMIT` | `[hooks].block_retry_limit` | 非負整数 |
+| `TOTSUKA_LLM_BASE_URL` | `[llm].base_url` | 文字列 ※ |
+| `TOTSUKA_LLM_MODEL` | `[llm].model` | 文字列 ※ |
+| `TOTSUKA_LLM_MAX_TOKENS` | `[llm].max_tokens` | 非負整数 ※ |
+| `TOTSUKA_LLM_TIMEOUT_SECS` | `[llm].timeout_secs` | 非負整数 ※ |
+| `TOTSUKA_LLM_API_KEY_REF` | `[llm].api_key_ref` | 文字列（シークレット参照）※ |
+
+※ `[llm]` は `base_url` + `model` が必須のテーブルなので、**env だけからは合成しない**。
+`config.toml` に `[llm]` が無い状態で `TOTSUKA_LLM_*` を設定すると起動エラーになる（黙って無視はしない）。
+
+**スコープ外**: 配列・動的キー（`[[repositories]]` / `[[workflows]]` / `[plugins.{name}]`）は
+環境変数名で一意に指し示せないため対象外。`plugins/{name}.toml` の中身も Orchestrator が解釈しない
+領域（優先順位の第 3 層）なので対象外で、そこへの env 適用はプラグイン側の責務。
+
+## 不正値・typo の扱い
+
+| ケース | 挙動 |
+|---|---|
+| 対応表の変数の値が型変換・検証に失敗（`TOTSUKA_MAX_CONCURRENCY=abc`） | **起動エラー**（変数名・値・期待型を表示） |
+| `TOTSUKA_LLM_*` を設定したが `[llm]` が無い | **起動エラー** |
+| 対応表に無い `TOTSUKA_*`（typo した `TOTSUKA_MAX_CONCURENCY` 等） | **警告**（stderr）。起動は継続 |
+| 値が空文字列（`TOTSUKA_MAX_CONCURRENCY=`） | **警告 + 未設定扱い**（シェルの「空 = unset」慣習） |
+
+いま有効になっているオーバーライドは `totsuka config show` の末尾に一覧表示される
+（`--redacted` を付けると `..._TOKEN_REF` / `..._KEY_REF` の値はマスクされる）。
+
+## 注入系の環境変数との違い（混同注意）
+
+`TOTSUKA_` で始まる環境変数には**逆向きの別系統**がある。Orchestrator がエージェント／フック
+プロセスへ**注入する**もので、設定オーバーライドではない（対応表にも無く、警告も出ない）。
+
+| 系統 | 変数 | 向き | 役割 |
+|---|---|---|---|
+| 設定オーバーライド | 上の対応表の 14 個 | 人／CI → Orchestrator | `config.toml` の値を差し替える |
+| 注入（フック） | `TOTSUKA_JOB_ID` / `TOTSUKA_HOOK_ENDPOINT` / `TOTSUKA_HOOK_TOKEN` / `TOTSUKA_HOOK_SPOOL_DIR` / `TOTSUKA_PROMPT_CONTEXT` | Orchestrator → エージェント pane | フックスクリプトへジョブ固有値を渡す（[フックシグナルフロー](/architecture/hook-signal-flow.md)） |
+
+特に紛らわしいのが 1 字違いのこの 2 つ:
+
+- `TOTSUKA_HOOK_SPOOL_DIR`（単数 `HOOK_`）— **注入**。フックスクリプトが POST 失敗時の書き出し先として読む
+- `TOTSUKA_HOOKS_SPOOL_DIR`（複数 `HOOKS_`）— **オーバーライド**。`[hooks].spool_dir` を差し替える
+
+## Examples
+
+CI で並列度を落とし、ログを冗長にする:
+
+```bash
+TOTSUKA_MAX_CONCURRENCY=1 TOTSUKA_LOG_LEVEL=debug totsuka run
+```
+
+コンテナ実行でパス類を差し替える（イメージ内の `config.toml` は共通のまま）:
+
+```bash
+docker run \
+  -e TOTSUKA_WORKTREE_LOCATION=/work/worktrees/{repo_name}/{branch} \
+  -e TOTSUKA_HOOKS_SOCKET_PATH=/run/totsuka/claude-events.sock \
+  -e TOTSUKA_HOOKS_SPOOL_DIR=/var/lib/totsuka/spool \
+  totsuka run --watch
+```
+
+`[hooks].socket_path` を上書きした場合、`totsuka focus` / `totsuka doctor` も**同じ変数を見せて**
+実行すること。これらは同じキーから `run` がバインドしたソケットを解決するため、片方だけに
+設定すると別のソケットを見に行く。
 
 # Part 1: 完全版 config.toml
 

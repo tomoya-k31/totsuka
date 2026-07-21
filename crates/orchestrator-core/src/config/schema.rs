@@ -360,6 +360,15 @@ pub enum ConfigError {
     /// Converting a raw plugin config to JSON failed (F-64).
     #[error("failed to convert plugin config to JSON: {0}")]
     Convert(#[from] serde_json::Error),
+    /// A `TOTSUKA_*` override could not be applied (F-66 layer 2; see
+    /// [`env_overrides`](crate::config::env_overrides)).
+    #[error("invalid environment override {var}: {reason}")]
+    EnvOverride {
+        /// The environment variable name, e.g. `TOTSUKA_MAX_CONCURRENCY`.
+        var: String,
+        /// Why it could not be applied (expected type, or missing table).
+        reason: String,
+    },
 }
 
 impl RootConfig {

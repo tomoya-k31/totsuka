@@ -34,8 +34,9 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
     let env: HashMap<String, String> = std::env::vars().collect();
     let env_fn = |k: &str| env.get(k).cloned();
 
-    // Config load + full validation (static + workflow semantics).
-    let cfg = cx.load_config()?;
+    // Config load (incl. `TOTSUKA_*` overrides, F-66 layer 2) + full
+    // validation (static + workflow semantics).
+    let cfg = cx.load_config(&env)?;
     let store = cx.store();
     // Hook capability is not yet declared in plugin manifests (protocol
     // 0.1.3, #132); `None` = unknown skips the `[hooks].auth_token_ref`
@@ -72,7 +73,9 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
         log_config.max_files = max_files;
     }
     if debug {
-        // --debug wins over the configured level (§7).
+        // --debug wins over the configured level (§7). Applied after
+        // `load_config`, so it also wins over `TOTSUKA_LOG_LEVEL` — that
+        // ordering *is* the "CLI > env" guarantee of F-66.
         log_config.level = logging::parse_level("debug").expect("debug is a valid level");
     }
     let _log_guard = logging::init(&log_config)?;

@@ -40,8 +40,8 @@ pub fn run(cx: &Cx, command: ConfigCommand) -> Result<(), CliError> {
 }
 
 fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
-    let cfg = cx.load_config()?;
     let env: HashMap<String, String> = std::env::vars().collect();
+    let cfg = cx.load_config(&env)?;
     let env_fn = |k: &str| env.get(k).cloned();
     let store = cx.store();
 
@@ -136,7 +136,35 @@ fn show(cx: &Cx, redacted: bool) -> Result<(), CliError> {
             print_toml(&std::fs::read_to_string(&path)?, redacted)?;
         }
     }
+
+    // `show` prints the *files*, so the env layer is not folded into the TOML
+    // above — but leaving it out entirely would misrepresent what the daemon
+    // will actually use, which is the very silence this command should break.
+    let env: HashMap<String, String> = std::env::vars().collect();
+    print_active_env_overrides(&env, redacted);
     Ok(())
+}
+
+/// List the `TOTSUKA_*` overrides that are actually set (F-66 layer 2), so
+/// `show` cannot imply the files are the whole story.
+fn print_active_env_overrides(env: &HashMap<String, String>, redacted: bool) {
+    let active: Vec<(&str, &String)> = config::override_keys()
+        .filter_map(|key| env.get_key_value(key).map(|(k, v)| (k.as_str(), v)))
+        .collect();
+    if active.is_empty() {
+        return;
+    }
+    println!("\n# active env overrides (TOTSUKA_*)");
+    for (key, value) in active {
+        // Same masking rule as the TOML bodies above, applied to the variable
+        // name (`..._AUTH_TOKEN_REF`, `..._API_KEY_REF`).
+        let shown = if redacted && is_secret_key(key) {
+            "***redacted***"
+        } else {
+            value.as_str()
+        };
+        println!("# {key}={shown}");
+    }
 }
 
 /// Print a TOML document, optionally masking secret-looking keys.

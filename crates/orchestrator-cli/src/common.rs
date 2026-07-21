@@ -42,10 +42,31 @@ impl Cx {
         Ok(Self { paths, config_path })
     }
 
-    /// Load and parse `config.toml`, with an actionable error when absent.
-    pub fn load_config(&self) -> Result<RootConfig, CliError> {
+    /// Load and parse `config.toml` and apply the `TOTSUKA_*` overrides
+    /// (F-66 layer 2), with an actionable error when the file is absent.
+    ///
+    /// Every command that reads config goes through here so the layers stay
+    /// consistent: `totsuka focus` / `doctor` resolve `[hooks].socket_path` to
+    /// find the socket `totsuka run` bound, so applying the env layer in `run`
+    /// alone would leave them looking at a different socket. CLI flags are
+    /// applied by the individual commands *after* this call, which is what
+    /// makes "CLI > env" hold.
+    ///
+    /// Warnings (unknown `TOTSUKA_*` names, empty values) go to stderr so the
+    /// `--json` commands' stdout contract stays parseable.
+    pub fn load_config(&self, env: &HashMap<String, String>) -> Result<RootConfig, CliError> {
         match std::fs::read_to_string(&self.config_path) {
-            Ok(s) => Ok(RootConfig::from_toml_str(&s)?),
+            Ok(s) => {
+                let mut cfg = RootConfig::from_toml_str(&s)?;
+                let warnings = config::apply_env_overrides(
+                    &mut cfg,
+                    env.iter().map(|(k, v)| (k.clone(), v.clone())),
+                )?;
+                for warning in warnings {
+                    eprintln!("config warning: {warning}");
+                }
+                Ok(cfg)
+            }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Err(format!(
                 "config not found at {} → run `totsuka init` to create it",
                 self.config_path.display()
