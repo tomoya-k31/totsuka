@@ -91,9 +91,6 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         Ok(cfg) => {
             let env_fn = |k: &str| env.get(k).cloned();
             let store = cx.store();
-            // Hook capability is not yet declared in plugin manifests
-            // (protocol 0.1.3, #132); `None` = unknown skips the
-            // `[hooks].auth_token_ref` advisory until manifests declare it.
             let findings = config::validate(
                 &cfg,
                 &env_fn,
@@ -104,7 +101,16 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
                         .flatten()
                         .map(|m| m.capabilities.outputs)
                 },
-                |_| None,
+                // `None` (manifest missing or unparsable) skips the
+                // `[hooks].auth_token_ref` advisory; a missing plugin is
+                // already reported by the `plugin:*` checks.
+                |name| {
+                    store
+                        .manifest_of(name)
+                        .ok()
+                        .flatten()
+                        .map(|m| m.capabilities.hook_capable())
+                },
             );
             if config::has_errors(&findings) {
                 let first = findings
@@ -290,7 +296,23 @@ fn toml_has_op_reference(value: &toml::Value) -> bool {
 fn check_hooks(cx: &Cx, cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
     check_hook_assets(cx, cfg, checks);
     check_hook_deps(env, checks);
-    check_hook_token(cfg, env, checks);
+    // Which workflows actually need the Bearer token, decided from the static
+    // manifests alone (plugin enablement / reference integrity belong to
+    // `config validate` and the `plugin:*` checks, not here).
+    let store = cx.store();
+    let hook_workflows: Vec<(&str, &str)> = cfg
+        .workflows
+        .iter()
+        .filter(|wf| {
+            store
+                .manifest_of(&wf.agent)
+                .ok()
+                .flatten()
+                .is_some_and(|m| m.capabilities.hook_capable())
+        })
+        .map(|wf| (wf.name.as_str(), wf.agent.as_str()))
+        .collect();
+    check_hook_token(cfg, env, &hook_workflows, checks);
     check_spool(cx, cfg, env, checks);
     check_hook_socket(cx, cfg, env, checks);
 }
@@ -353,11 +375,36 @@ fn check_hook_deps(env: &HashMap<String, String>, checks: &mut Vec<Check>) {
     }
 }
 
-/// The Bearer token that authenticates hook POSTs (E-03) must resolve. An unset
-/// `auth_token_ref` is advisory (the 0600 socket is still a barrier), not a hard
-/// failure, since a config with no hook-capable agent never needs it.
-fn check_hook_token(cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
+/// The Bearer token that authenticates hook POSTs (E-03) must resolve. Unlike
+/// every other check, the severity of an *unset* `auth_token_ref` depends on
+/// the config: it is a hard failure once some workflow uses a hook-capable
+/// agent (that config would accept unauthenticated POSTs in production), and
+/// merely advisory otherwise, since such a config never needs the token and
+/// the 0600 socket is still a barrier.
+///
+/// `hook_workflows` is the `(workflow, agent)` list of workflows whose agent
+/// declares `Capabilities::hook_capable()`.
+fn check_hook_token(
+    cfg: &RootConfig,
+    env: &HashMap<String, String>,
+    hook_workflows: &[(&str, &str)],
+    checks: &mut Vec<Check>,
+) {
     match &cfg.hooks.auth_token_ref {
+        None if !hook_workflows.is_empty() => {
+            let users = hook_workflows
+                .iter()
+                .map(|(wf, agent)| format!("`{wf}` uses hook-capable agent `{agent}`"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            checks.push(Check::fail(
+                "hook-token",
+                format!(
+                    "[hooks].auth_token_ref is unset but {users} → hook POSTs would be accepted without a Bearer token (E-03)"
+                ),
+                "set [hooks].auth_token_ref (e.g. keychain:totsuka/hook-token)",
+            ))
+        }
         None => checks.push(Check::warn(
             "hook-token",
             "[hooks].auth_token_ref is unset → hook POSTs are accepted on the 0600 socket without a Bearer token",

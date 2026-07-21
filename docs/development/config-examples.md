@@ -339,10 +339,12 @@ plan の結果を人に見せたいなら `output = "source"`（ソース側に�
 
 **すべき。**未設定でもフック POST は受理されるが、その場合の防御は 0600 の UDS パーミッションのみになる。
 
-**ただし現時点でツールは未設定を実質的に咎めない**ので、自分で気をつけるしかない:
+未設定はツール側が検出する（#209）。判定材料は agent プラグインのマニフェストで、`resume_session` または
+`diagnostics_snapshot` を宣言していれば「フック対応 agent」とみなす（herdr が該当。orca / mock は非該当）:
 
-- `config validate` の警告（`validate.rs`）は、agent プラグインのフック対応 capability が判定できるようになるまで無効化されており**発火しない**（protocol 0.1.3 / #132 待ち）
-- `totsuka doctor` は未設定を **warn** として表示するだけで、終了コードは成功のまま。doctor が fail するのは「参照を設定したのに解決できない」場合のみ
+- `config validate` / `totsuka run` — フック対応 agent を使う workflow ごとに**警告**（終了コードは変わらない。`run` は表示して続行）
+- `totsuka doctor` — 同じ条件で **fail**（終了コード非 0）。フック対応 agent を使わない構成では warn 表示のみで成功のまま。
+  参照を設定したのに解決できない場合は構成によらず fail
 
 ```bash
 # 例: ランダムトークンを Keychain に入れて参照する
@@ -590,7 +592,7 @@ totsuka doctor                     # 依存コマンド・ソケット・シー�
 | 環境変数未設定 | `${VAR}` 参照先が export されていない |
 
 **警告**（実行は止まらない）の代表例: トリガーの重複、`verification = "human"` なのに notifier が無い、
-`verification != "llm"` なのに `rubric` がある。
-（`[hooks].auth_token_ref` 未設定の警告も実装されているが、前述のとおり現時点では発火しない。）
+`verification != "llm"` なのに `rubric` がある、
+フック対応 agent を使う workflow があるのに `[hooks].auth_token_ref` が未設定（最後の 1 つは `doctor` では fail 扱い。前述）。
 
 `totsuka run` はエラーがあると起動を中止し、警告は表示した上で続行する。

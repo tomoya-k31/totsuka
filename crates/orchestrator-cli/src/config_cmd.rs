@@ -45,9 +45,6 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
     let env_fn = |k: &str| env.get(k).cloned();
     let store = cx.store();
 
-    // Hook capability is not yet declared in plugin manifests (protocol
-    // 0.1.3, #132); `None` = unknown skips the `[hooks].auth_token_ref`
-    // advisory until manifests can declare it.
     let findings = config::validate(
         &cfg,
         &env_fn,
@@ -58,7 +55,16 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
                 .flatten()
                 .map(|m| m.capabilities.outputs)
         },
-        |_| None,
+        // `None` (manifest missing or unparsable) skips the
+        // `[hooks].auth_token_ref` advisory; a missing plugin is already
+        // reported by the `plugin:*` checks.
+        |name| {
+            store
+                .manifest_of(name)
+                .ok()
+                .flatten()
+                .map(|m| m.capabilities.hook_capable())
+        },
     );
     let mut errors = config::has_errors(&findings);
     for finding in &findings {

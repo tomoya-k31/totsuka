@@ -61,6 +61,17 @@ pub struct Capabilities {
     pub outputs: Vec<OutputCapability>,
 }
 
+impl Capabilities {
+    /// Whether this agent reports completion through Claude Code hooks (#131).
+    /// There is no dedicated flag: the 0.1.3 `resume_session` /
+    /// `diagnostics_snapshot` pair is the de-facto signal, and this is the
+    /// single source of that rule — the runtime launch decision and the
+    /// `[hooks].auth_token_ref` config advisory must agree on it.
+    pub fn hook_capable(&self) -> bool {
+        self.resume_session || self.diagnostics_snapshot
+    }
+}
+
 /// A parsed `plugin.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -145,6 +156,21 @@ diagnostics_snapshot = true
         .unwrap();
         assert!(m.capabilities.resume_session);
         assert!(m.capabilities.diagnostics_snapshot);
+    }
+
+    #[test]
+    fn hook_capable_follows_the_0_1_3_flags() {
+        let cap = |resume_session, diagnostics_snapshot| Capabilities {
+            resume_session,
+            diagnostics_snapshot,
+            ..Default::default()
+        };
+        assert!(cap(true, false).hook_capable());
+        assert!(cap(false, true).hook_capable());
+        assert!(cap(true, true).hook_capable());
+        // orca / mock declare neither.
+        assert!(!cap(false, false).hook_capable());
+        assert!(!Capabilities::default().hook_capable());
     }
 
     #[test]

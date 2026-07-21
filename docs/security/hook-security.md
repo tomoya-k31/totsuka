@@ -4,7 +4,7 @@ title: Claude Code フック機構のセキュリティポリシー
 description: フック完了判定の UDS Bearer トークン管理（keychain 参照・socket 0600 第一層・定数時間比較・herdr env 配送）、スプールファイルの機密保持（N-05: last_assistant_message は機微・$XDG_STATE_HOME 配下・drain 後削除・隔離の注意）、フックアセットの改ざん耐性（N-02: 0700/0600・内容ハッシュ冪等修復・静的埋め込み）を定める。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [security, hook, claude-code, uds, token, keychain, spool, tamper, epic-131]
-timestamp: 2026-07-19T12:00:00Z
+timestamp: 2026-07-22T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -54,7 +54,7 @@ POST 失敗時、`on-stop.sh` は送信予定の JSON を NDJSON 1 行として 
 `totsuka doctor` のフック系プローブがポリシーの実効性を点検する（[orchestrator-cli](/components/orchestrator-cli.md) / [hook-troubleshooting](/operations/hook-troubleshooting.md)）:
 
 - `check_hook_assets` — スクリプト + `orchestrator-*.json` の存在・**0700/0600 パーミッション**・**内容ハッシュ一致**
-- `check_hook_token` — `[hooks].auth_token_ref` が解決できる
+- `check_hook_token` — `[hooks].auth_token_ref` が解決できる。あわせて**未設定**も検出する（#209）: フック対応 agent（マニフェストが `resume_session` / `diagnostics_snapshot` を宣言 = `Capabilities::hook_capable()`）を使う workflow が 1 つでもあれば **fail**（そのまま運用すると第二層が無効のまま POST を受理するため）、フック対応 agent を使わない構成なら warning に留める。doctor で唯一、構成によって severity が変わるチェック
 - `check_hook_socket` — UDS への自己 POST が 200（Bearer/権限の疎通）
 - `check_hook_deps` — `curl` / `jq` の存在（H-14。無いと送信系フックはスプール退避、`on-user-prompt-submit.sh` は無出力縮退）
 - `check_spool` — `spool_dir` の書き込み可否とバックログ件数（>0 は warning）

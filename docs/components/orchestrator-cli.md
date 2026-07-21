@@ -44,7 +44,7 @@ Claude Code の完了判定を screen-manifest からフック機構へ置換す
 
 - `check_hook_socket` — UDS への**自己 POST → 200**（受信サーバ・Bearer・0600 権限の疎通）。
 - `check_hook_assets` — スクリプト + `orchestrator-*.json` の存在・**0700/0600 パーミッション**・**内容ハッシュ一致**（既存の `hooks` アセットチェックを拡張）。
-- `check_hook_token` — `[hooks].auth_token_ref` が解決できる（keychain/env 参照切れの検出）。
+- `check_hook_token` — `[hooks].auth_token_ref` が解決できる（keychain/env 参照切れの検出）。**#209 で未設定の扱いを条件付きに変更**: `cfg.workflows` の `agent` を静的マニフェストで引き、`Capabilities::hook_capable()`（= `resume_session || diagnostics_snapshot`）な agent を使う workflow が 1 つでもあれば **`Check::fail`**（該当 workflow / agent 名を detail に列挙）、無ければ従来どおり `Check::warn`。doctor で唯一、構成によって severity が変わるチェック。plugin の enabled 状態や参照整合性は既存の validate / `plugin:*` チェックの責務としてここでは重ねない。
 - `check_hook_deps` — `curl` + `jq` の存在（H-14。無いとフックが送信不能で全て spool 行き）。
 - `check_spool` — `spool_dir` の書き込み可否と**バックログ件数**（backlog > 0 は warning、[hook-security](/security/hook-security.md) N-05 の滞留検出）。
 

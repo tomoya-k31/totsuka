@@ -416,3 +416,106 @@ fn config_show_lists_active_env_overrides() {
     assert!(!stdout(&out).contains("active env overrides"));
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Install a manifest into the plugin store. Only `plugin.toml` is written —
+/// the hook-capability verdict is read from the static manifest, so no binary
+/// is needed for the checks under test (the live `plugin:*` probes fail
+/// without one, which is why the assertions below target the `hook-token`
+/// check rather than doctor's overall exit code where it is not the point).
+fn seed_manifest(base: &Path, name: &str, capabilities: &str) {
+    let dir = base.join("data/totsuka/plugins").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("plugin.toml"),
+        format!(
+            "name = \"{name}\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
+             protocol_version = \"^0.2\"\n\n[capabilities]\n{capabilities}\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// A config whose single workflow drives `agent`, with `[hooks]` left without
+/// an `auth_token_ref`.
+fn hook_config(agent: &str) -> String {
+    format!(
+        "[plugins.src]\nenabled = true\nkind = \"task_source\"\n\n\
+         [plugins.{agent}]\nenabled = true\nkind = \"agent_ide\"\n\n\
+         [[workflows]]\nname = \"wf\"\nsource = \"src\"\nmode = \"implement\"\n\
+         agent = \"{agent}\"\noutput = \"none\"\nverification = \"none\"\n"
+    )
+}
+
+/// #209: an unset `[hooks].auth_token_ref` used to pass silently — the
+/// validate warning was unreachable (`|_| None`) and doctor only warned. With
+/// a hook-capable agent in play it must now fail doctor outright.
+#[test]
+fn unset_hook_token_fails_doctor_when_an_agent_is_hook_capable() {
+    let base = scratch("hook-token-fail");
+    seed_empty_config(&base, &hook_config("herdr"));
+    seed_manifest(&base, "herdr", "resume_session = true");
+
+    let out = run(&base, &["doctor", "--json"]);
+    assert!(!out.status.success(), "doctor must exit non-zero");
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
+    let check = doc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "hook-token")
+        .expect("hook-token check present")
+        .clone();
+    assert_eq!(check["ok"], false, "{check}");
+    let detail = check["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("`wf`") && detail.contains("`herdr`"),
+        "detail names the offending workflow and agent: {detail}"
+    );
+    assert!(check["action"].as_str().unwrap().contains("auth_token_ref"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The same omission stays advisory when no workflow uses a hook-capable
+/// agent: that config never needs the token, and the 0600 socket still guards
+/// the receiver.
+#[test]
+fn unset_hook_token_stays_advisory_without_a_hook_capable_agent() {
+    let base = scratch("hook-token-warn");
+    seed_empty_config(&base, &hook_config("orca"));
+    // orca declares neither 0.1.3 flag.
+    seed_manifest(&base, "orca", "plan_mode = true");
+
+    let out = run(&base, &["doctor", "--json"]);
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
+    let check = doc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "hook-token")
+        .expect("hook-token check present")
+        .clone();
+    assert_eq!(check["ok"], true, "{check}");
+    assert_eq!(check["warning"], true, "{check}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `config validate` keeps exiting 0, but the warning that #209 found
+/// unreachable now actually prints.
+#[test]
+fn unset_hook_token_warns_in_config_validate() {
+    let base = scratch("hook-token-validate");
+    seed_empty_config(&base, &hook_config("herdr"));
+    seed_manifest(&base, "herdr", "diagnostics_snapshot = true");
+
+    let out = run(&base, &["config", "validate", "--offline"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("warning:")
+            && text.contains("auth_token_ref")
+            && text.contains("`wf`")
+            && text.contains("`herdr`"),
+        "the hook-token warning must fire: {text}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
