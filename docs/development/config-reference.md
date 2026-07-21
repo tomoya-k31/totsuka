@@ -9,6 +9,9 @@ status: active
 owner: tomoya-k31
 ---
 
+本ドキュメントはキーの一覧・型・既定値を扱う。実際に貼って動く設定例、選択肢を持つキーの選び分け基準、
+シナリオ別レシピは [設定例集](/development/config-examples.md) を参照。
+
 # 場所
 
 - 共通設定: `$XDG_CONFIG_HOME/totsuka/config.toml`（既定 `~/.config/totsuka/config.toml`）
@@ -126,7 +129,7 @@ Claude Code フックイベント受信（UDS）の設定（#131。全キー省�
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `auth_token_ref` | string? | なし | フック POST を認証する Bearer トークンのシークレット参照（E-03、例 `keychain:totsuka/hook-token`）。**運用上は必須**: 未設定のままフック対応 agent を使う workflow があると validate が警告（doctor は fail） |
+| `auth_token_ref` | string? | なし | フック POST を認証する Bearer トークンのシークレット参照（E-03、例 `keychain:totsuka/hook-token`）。**運用上は必須**（未設定時の防御は 0600 の UDS パーミッションのみ）。ただし現時点でツールは未設定を実質的に咎めない: validate の警告は agent の capability 判定が入るまで無効化されており発火せず（#132 待ち）、doctor は warn 表示のみで終了コードは成功のまま（doctor が fail するのは参照を設定したのに解決できない場合） |
 | `socket_path` | string? | 組み込み既定 | 受信 UDS のパス（例 `${XDG_RUNTIME_DIR}/totsuka/claude-events.sock`） |
 | `spool_dir` | string? | 組み込み既定 | POST 失敗時にイベントを退避するスプールディレクトリ（E-07、例 `${XDG_STATE_HOME}/totsuka/hooks/spool`） |
 | `block_retry_limit` | int? | 3 | Stop フック block 差し戻しの連続上限。超過でエスカレーション（D-02） |

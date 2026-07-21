@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-07-22
+* **Creation**: [設定例集（config.toml / plugins/*.toml）](/development/config-examples.md) — 既存の [設定リファレンス](/development/config-reference.md) がキー一覧（型・既定値）に特化しているのに対し、「実際に何をどう書くか」を扱う実例中心の concept を新設。(1) 全キーを含み `config validate` を通る完全版 `config.toml` の注釈付き例、(2) 選択肢を持つキーの選び分け基準を判断表で提示 — シークレット参照 3 方式（`op://` 推奨 / `keychain:` は macOS 専用 / `${ENV}` は CI 向け・未設定即エラー）、`kind`、`mode`、`output`、`verification`（`rubric` は llm 限定）、`trigger`（予約キーと first-match、`labels` は AND）、`cleanup`／`plan_cleanup`（未コミット変更は削除されない）、`max_concurrency` の 3 階層、`[hooks].auth_token_ref` を設定すべき理由、(3) 主要 3 プラグインの `plugins/{name}.toml` 全キー例（github / slack / herdr。slack の `[llm]` はキー名が `api_key_ref` ではなく `api_key`、`[[repos]]`／`[llm]` とも省略時は config.toml から供給される点を明記）、(4) シナリオ別レシピ 5 本（最小構成 / 設計→実装ハンドオフ / Slack 起点の本人名義返信 / 人間検収必須 / 複数リポジトリ並列制御）、(5) `config validate` のエラー・警告の代表例と原因対応表。`deny_unknown_fields` により typo が既定値フォールバックではなくパースエラーになる点、`enabled` 既定 false のため `kind` だけ書いたプラグインは「妥当だが動作せず、workflow から参照するとエラー」になる点など、リファレンス表からは読み取りにくい落とし穴を明示した。設定リファレンス側にも相互リンクを追加。
+
+* **Update**: [設定リファレンス](/development/config-reference.md) — [設定例集](/development/config-examples.md) への相互リンクを追加。あわせて `[hooks].auth_token_ref` の記述の事実誤りを訂正した（旧: 「未設定だと validate が警告、doctor は fail」）。実際には validate の警告（`validate.rs`）は agent プラグインのフック対応 capability 判定が入るまで無効化されており発火せず（`config_cmd.rs` / `run_cmd.rs` がともに `|_| None` を渡すため、#132 待ち）、`doctor` も未設定は warn 表示のみで終了コードは成功のまま（fail するのは参照を設定したのに解決できない場合のみ）。実装と突き合わせて確認。
+
 ## 2026-07-21
 * **Update**: [プラグイン開発ガイド](/development/plugin-dev-guide.md) — 「ビルド」節を新設。ワークスペースルートからの `cargo build --release -p <crate>` 手順に加え、`totsuka plugin install <dir>` が要求するバイナリ名は Cargo パッケージ名ではなく `plugin.toml` の `name` フィールドと一致していなければならない点（不一致だと install 失敗）を明記し、`task-source-github`（Cargo バイナリ名）↔ `github`（`plugin.toml` の `name`）のようなケースでのリネーム/コピー手順を追加した。
 
