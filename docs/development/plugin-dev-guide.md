@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: プラグイン開発ガイド
-description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、install/enable の流れ、参照実装。
+description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、ビルド手順（Cargo バイナリ名と plugin.toml の name 不一致時の対処）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-timestamp: 2026-07-20T18:00:00Z
+timestamp: 2026-07-21T10:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -83,6 +83,25 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 # 状態の対応（F-32）
 
 エージェントの状態 `AgentState` は Orchestrator のステートマシンへ写像される（dispatched→running は `Start`、blocked は `waiting_input` でスロット解放、done は publishing へ）。プラグインは自分のツールの状態を 5 値へ正直に写像する。
+
+# ビルド
+
+各プラグインはリポジトリルートの Cargo ワークスペースの通常メンバー（`plugins/{crate}/`）。ワークスペースルートから対象クレートを指定してビルドする。
+
+```sh
+cargo build --release -p task-source-github
+```
+
+生成物はクレート単体の `target/` ではなく、ワークスペース共有の `target/release/{Cargoパッケージ名}` に置かれる。
+
+**注意: `totsuka plugin install <dir>` が探すバイナリ名は Cargo パッケージ名ではなく `plugin.toml` の `name` フィールドと一致していなければならない。** インストーラは `<dir>` 直下に `name` と**同名**のファイルが存在することを要求し（無ければ「plugin binary not found」で失敗）、`$XDG_DATA_HOME/totsuka/plugins/{name}/{name}` としてコピーする。実行時も同じ名前でプロセスを起動するため、Cargo のバイナリ名と `plugin.toml` の `name` が異なるプラグイン（例: `task-source-github` の Cargo バイナリ名に対し `plugin.toml` は `name = "github"`）では、install に渡す前にリネーム/コピーしてまとめる必要がある。
+
+```sh
+mkdir -p dist/github
+cp target/release/task-source-github dist/github/github
+cp plugins/task-source-github/plugin.toml dist/github/
+totsuka plugin install ./dist/github
+```
 
 # install / enable の流れ
 
