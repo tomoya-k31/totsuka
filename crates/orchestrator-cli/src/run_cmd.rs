@@ -38,9 +38,6 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
     // validation (static + workflow semantics).
     let cfg = cx.load_config(&env)?;
     let store = cx.store();
-    // Hook capability is not yet declared in plugin manifests (protocol
-    // 0.1.3, #132); `None` = unknown skips the `[hooks].auth_token_ref`
-    // advisory until manifests can declare it.
     let findings = config::validate(
         &cfg,
         &env_fn,
@@ -51,7 +48,16 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
                 .flatten()
                 .map(|m| m.capabilities.outputs)
         },
-        |_| None,
+        // `None` (manifest missing or unparsable) skips the
+        // `[hooks].auth_token_ref` advisory; a missing plugin is already
+        // reported by the `plugin:*` checks.
+        |name| {
+            store
+                .manifest_of(name)
+                .ok()
+                .flatten()
+                .map(|m| m.capabilities.hook_capable())
+        },
     );
     if config::has_errors(&findings) {
         for finding in &findings {

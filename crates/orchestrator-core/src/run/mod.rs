@@ -1040,10 +1040,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .plugins
             .agents
             .get(&agent_name)
-            .map(|a| {
-                let c = a.capabilities();
-                c.resume_session || c.diagnostics_snapshot
-            })
+            .map(|a| a.capabilities().hook_capable())
             .unwrap_or(false);
         let task = task_from_record(&record);
         let (job_id, hook_spec, reserved_row) = match hook_capable
