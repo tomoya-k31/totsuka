@@ -32,7 +32,8 @@
 
 use plugin_protocol::methods::{
     AgentState, DiagnosticsSnapshotResult, ExecutionMode, SessionAttachResult, SessionFocusResult,
-    StateNotification, TaskDispatchParams, TaskDispatchResult,
+    SessionReleaseParams, SessionReleaseResult, StateNotification, TaskDispatchParams,
+    TaskDispatchResult,
 };
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -334,13 +335,79 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         {
             tracing::warn!(error = %e, "pane.send_keys failed during cancel; closing anyway");
         }
+        self.close_pane_and_workspace(&handle).await
+    }
+
+    /// Release a **finished** session's pane (`session/release`, #210): close
+    /// the pane and its workspace, without the interrupt `cancel` sends —
+    /// there is nothing left to interrupt.
+    ///
+    /// Unlike cancel's blind close (which runs moments after dispatch),
+    /// release can run days later under a retention policy, and herdr pane
+    /// ids are position-based — the id may name a *different* pane by now. So
+    /// the live pane is fetched and compared against the caller's `expect_*`
+    /// fields first: any comparable pair that mismatches refuses the close
+    /// (`released: false`); if no pair is comparable the close proceeds
+    /// (degrade-open — refusing on missing data would leak a pane on every
+    /// task to guard against a rare reused id).
+    pub async fn release(
+        &self,
+        params: &SessionReleaseParams,
+    ) -> Result<SessionReleaseResult, HerdrError> {
+        let handle = SessionHandle::decode(&params.session_id);
+        let pane = match pane_record(&self.client, &handle.pane_id).await {
+            Ok(pane) => pane,
+            // Already gone (e.g. cancel closed it): nothing to release. The
+            // workspace is intentionally left alone too — with the pane
+            // unverifiable, `workspace_of` might name someone else's.
+            Err(e) if e.is_missing() => return Ok(SessionReleaseResult { released: false }),
+            Err(e) => return Err(e),
+        };
+        let checks = [
+            ("cwd", params.expect_cwd.as_deref(), pane_str(&pane, "cwd")),
+            (
+                "label",
+                params.expect_label.as_deref(),
+                pane_str(&pane, "label"),
+            ),
+        ];
+        let mut comparable = false;
+        for (field, expected, actual) in checks {
+            let (Some(expected), Some(actual)) = (expected, actual) else {
+                continue;
+            };
+            comparable = true;
+            if expected != actual {
+                tracing::warn!(
+                    pane_id = %handle.pane_id,
+                    field,
+                    expected,
+                    actual,
+                    "release refused: the pane id names a different pane now"
+                );
+                return Ok(SessionReleaseResult { released: false });
+            }
+        }
+        if !comparable && (params.expect_cwd.is_some() || params.expect_label.is_some()) {
+            tracing::debug!(
+                pane_id = %handle.pane_id,
+                "identity unverifiable (pane reports none of the expected fields); closing anyway"
+            );
+        }
+        self.close_pane_and_workspace(&handle).await?;
+        Ok(SessionReleaseResult { released: true })
+    }
+
+    /// Close a session's pane and the task-private workspace `dispatch`
+    /// created for it. `dispatch` gives every task its own workspace, so
+    /// closing the pane alone would leave an empty one behind. Idempotent:
+    /// anything already gone counts as success.
+    async fn close_pane_and_workspace(&self, handle: &SessionHandle) -> Result<(), HerdrError> {
         ignore_missing(
             self.client
                 .call("pane.close", json!({ "pane_id": handle.pane_id }))
                 .await,
         )?;
-        // `dispatch` gives every task its own workspace, so closing the pane
-        // alone would leave an empty one behind on every cancel.
         if let Some(workspace_id) = workspace_of(&handle.pane_id) {
             ignore_missing(
                 self.client
@@ -509,6 +576,12 @@ async fn pane_record<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<Val
         .call("pane.get", json!({ "pane_id": pane_id }))
         .await?;
     Ok(result.get("pane").cloned().unwrap_or(result))
+}
+
+/// A string field off a pane record, `None` when absent or null (herdr's
+/// `PaneInfo.cwd`/`label` are both optional-and-nullable).
+fn pane_str<'a>(pane: &'a Value, field: &str) -> Option<&'a str> {
+    pane.get(field).and_then(Value::as_str)
 }
 
 /// The pane's current `agent_status`.

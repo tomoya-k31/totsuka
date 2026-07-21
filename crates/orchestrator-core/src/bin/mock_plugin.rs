@@ -14,6 +14,8 @@
 //! - `task/dispatch` → replies with the config's `"session_id"` (default
 //!   `sess-mock`); `"commit_on_dispatch": true` leaves a real commit in the
 //!   worktree so the pull_request output policy has something to push;
+//!   `"dirty_on_dispatch": true` leaves an uncommitted file so cleanup's
+//!   data-loss guard (F-23 DirtySkipped) is exercisable;
 //!   `"crash_on_dispatch": true` exits mid-dispatch (crash isolation, §5.3).
 //! - `session/attach` → `attached: false` if the session id contains `gone`,
 //!   otherwise `attached: true` with a state chosen from the id (`waiting`,
@@ -21,6 +23,8 @@
 //! - `state/subscribe` → emits one `state/notification` per entry of the
 //!   config's `"stream_states"` array (default `["running"]`) for the
 //!   subscribed session, then acknowledges.
+//! - `session/release` → recorded to `"dispatch_log"`; `released: false` when
+//!   the session id contains `gone` (pane already closed), else `true`.
 //! - `notify` (notification) → appended to the `"notify_log"` file, if set.
 //! - `task/cancel` → acknowledges.
 //! - `crash` → exits immediately with code 1 (to test crash isolation).
@@ -169,6 +173,19 @@ fn main() {
                 {
                     commit_in(worktree);
                 }
+                // `dirty_on_dispatch: true` leaves an uncommitted file in the
+                // worktree, so cleanup's data-loss guard (F-23 DirtySkipped)
+                // is exercisable end to end.
+                if config
+                    .get("dirty_on_dispatch")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    && let Some(worktree) = params.get("worktree_path").and_then(Value::as_str)
+                    && let Err(e) =
+                        std::fs::write(std::path::Path::new(worktree).join("wip.txt"), b"wip")
+                {
+                    eprintln!("mock_plugin: dirty_on_dispatch failed in {worktree}: {e}");
+                }
                 // `hook_post_on_dispatch`: simulate a hook-capable Claude Code
                 // agent self-reporting completion over the *real* UDS socket
                 // (#141 E2E). Reads the launch-spec env the orchestrator injected
@@ -227,6 +244,20 @@ fn main() {
                     .unwrap_or("")
                     .contains("gone");
                 Response::result(request_id(&id), serde_json::json!({ "focused": focused }))
+            }
+            "session/release" => {
+                // The cleanup pane-release chain (#210). Recorded so tests can
+                // assert the orchestrator released the pane before removing the
+                // worktree; a session id containing `gone` simulates a pane
+                // that is already closed (`released: false`, not an error —
+                // same convention as `session/focus`).
+                record_to(config.get("dispatch_log"), "session/release", &params);
+                let released = !params
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .contains("gone");
+                Response::result(request_id(&id), serde_json::json!({ "released": released }))
             }
             "task/cancel" => Response::result(request_id(&id), Value::Null),
             "state/subscribe" => {

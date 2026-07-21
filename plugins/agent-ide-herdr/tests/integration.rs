@@ -57,6 +57,11 @@ struct FakeHerdr {
     pane_focus_gone: bool,
     /// The pane's `agent_session` (drives transcript lookup), if reported.
     agent_session: Option<Value>,
+    /// The pane's `cwd` as `pane.get` reports it (`None` = the nullable field
+    /// is absent — drives `session/release`'s degrade-open path).
+    pane_cwd: Option<&'static str>,
+    /// The pane's `label` as `pane.get` reports it, if any.
+    pane_label: Option<&'static str>,
     /// `pane.read` text for the `detection` source.
     detection: &'static str,
     /// When set, `workspace.create` fails with an `id: ""` decode-style error.
@@ -79,6 +84,8 @@ impl Default for FakeHerdr {
             pane_gone: false,
             pane_focus_gone: false,
             agent_session: None,
+            pane_cwd: Some("/wt/agent-1"),
+            pane_label: None,
             detection: "",
             empty_id_error_on_create: false,
             submission_error: None,
@@ -224,9 +231,14 @@ impl FakeHerdr {
                     "pane_id": PANE,
                     "workspace_id": "w1",
                     "tab_id": "w1:t1",
-                    "cwd": "/wt/agent-1",
                     "agent_status": status,
                 });
+                if let Some(cwd) = self.pane_cwd {
+                    pane["cwd"] = json!(cwd);
+                }
+                if let Some(label) = self.pane_label {
+                    pane["label"] = json!(label);
+                }
                 if let Some(session) = &self.agent_session {
                     pane["agent_session"] = session.clone();
                 }
@@ -1097,6 +1109,151 @@ async fn cancel_takes_down_the_whole_workspace() {
     assert_eq!(
         closed["params"]["workspace_id"], "w1",
         "the workspace is read off the pane id"
+    );
+}
+
+#[tokio::test]
+async fn release_closes_pane_and_workspace_without_interrupting() {
+    // `session/release` (#210) closes a *finished* session's pane: unlike
+    // cancel there is nothing to interrupt, so no ctrl+c may be sent.
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess", "expect_cwd": "/wt/agent-1" }),
+        )
+        .await;
+    assert_eq!(resp["result"]["released"], true, "release failed: {resp}");
+
+    let log = requests.lock().unwrap();
+    let sent = |method: &str| log.iter().any(|r| r["method"] == method);
+    assert!(
+        !sent("pane.send_keys"),
+        "release must not interrupt (no ctrl+c): {log:?}"
+    );
+    assert!(sent("pane.close"), "the pane must be closed");
+    assert!(
+        sent("workspace.close"),
+        "the task's workspace must be closed too"
+    );
+}
+
+#[tokio::test]
+async fn release_refuses_on_identity_mismatch() {
+    // Position-based pane ids can be reused; a live pane whose cwd is not the
+    // expected worktree is someone else's pane — nothing may be closed.
+    let (socket, requests) = FakeHerdr {
+        pane_cwd: Some("/wt/someone-else"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess", "expect_cwd": "/wt/agent-1" }),
+        )
+        .await;
+    assert_eq!(resp["result"]["released"], false);
+
+    let log = requests.lock().unwrap();
+    assert!(
+        !log.iter()
+            .any(|r| r["method"] == "pane.close" || r["method"] == "workspace.close"),
+        "a mismatched pane must not be touched: {log:?}"
+    );
+}
+
+#[tokio::test]
+async fn release_refuses_on_label_mismatch_even_when_cwd_matches() {
+    // One comparable pair mismatching is enough to refuse — the fields are
+    // checked all-must-match, not any-may-match.
+    let (socket, requests) = FakeHerdr {
+        pane_label: Some("totsuka OTHER"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({
+                "session_id": "w1:p1|sess",
+                "expect_cwd": "/wt/agent-1",
+                "expect_label": "totsuka T1",
+            }),
+        )
+        .await;
+    assert_eq!(resp["result"]["released"], false);
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r["method"] == "pane.close" || r["method"] == "workspace.close"),
+    );
+}
+
+#[tokio::test]
+async fn release_degrades_open_when_identity_is_unverifiable() {
+    // The pane reports none of the expected fields (herdr's cwd/label are
+    // nullable): degrade-open and close anyway — refusing here would leak a
+    // pane on every task to guard against a rare reused id.
+    let (socket, requests) = FakeHerdr {
+        pane_cwd: None,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess", "expect_cwd": "/wt/agent-1" }),
+        )
+        .await;
+    assert_eq!(resp["result"]["released"], true);
+    let log = requests.lock().unwrap();
+    let sent = |method: &str| log.iter().any(|r| r["method"] == method);
+    assert!(sent("pane.close") && sent("workspace.close"));
+}
+
+#[tokio::test]
+async fn release_reports_false_when_pane_already_gone() {
+    // A cancelled task's pane was already closed by `cancel` (#210 risk 4):
+    // release finds nothing and answers `released: false` — harmless, and it
+    // must not blind-close the workspace either (identity unverified).
+    let (socket, requests) = FakeHerdr {
+        pane_gone: true,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess", "expect_cwd": "/wt/agent-1" }),
+        )
+        .await;
+    assert!(resp["error"].is_null(), "a vanished pane is not an error");
+    assert_eq!(resp["result"]["released"], false);
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r["method"] == "pane.close" || r["method"] == "workspace.close"),
+        "nothing may be closed when the pane is unverifiable"
     );
 }
 

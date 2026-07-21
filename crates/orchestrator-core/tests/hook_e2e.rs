@@ -132,6 +132,8 @@ fn settings(repo: &Path, socket: &Path, base: &Path) -> EngineSettings {
         readme_cache_dir: None,
         pr_title_template: "t: {title}".to_string(),
         pr_body_template: "{summary}".to_string(),
+        // Sweep every cycle, as before the interval existed (#210).
+        worktree_sweep_interval: Duration::ZERO,
         hook: Some(hook),
     }
 }

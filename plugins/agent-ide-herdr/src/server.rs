@@ -13,8 +13,8 @@ use std::time::Duration;
 use plugin_protocol::jsonrpc::{Error, Notification, Response, error_code, to_line};
 use plugin_protocol::methods::{
     ConfigValidateResult, DiagnosticsSnapshotParams, InitializeParams, InitializeResult,
-    SessionAttachParams, SessionFocusParams, StateSubscribeParams, TaskCancelParams,
-    TaskDispatchParams,
+    SessionAttachParams, SessionFocusParams, SessionReleaseParams, StateSubscribeParams,
+    TaskCancelParams, TaskDispatchParams,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
 use semver::Version;
@@ -90,6 +90,7 @@ impl<F: TransportFactory> Server<F> {
             method::STATE_SUBSCRIBE => self.state_subscribe(id, params).await,
             method::DIAGNOSTICS_SNAPSHOT => self.diagnostics_snapshot(id, params).await,
             method::SESSION_FOCUS => self.session_focus(id, params).await,
+            method::SESSION_RELEASE => self.session_release(id, params).await,
             method::SHUTDOWN => {
                 self.send(Response::result(id, Value::Null));
                 return false;
@@ -266,6 +267,20 @@ impl<F: TransportFactory> Server<F> {
             Err(e) => return self.send(Response::error(id, e)),
         };
         match agent.focus(&parsed.session_id).await {
+            Ok(result) => self.send(Response::result(id, to_value(&result))),
+            Err(e) => self.send(rpc_error(id, &e)),
+        }
+    }
+
+    async fn session_release(&mut self, id: RequestId, params: Value) {
+        let Some(agent) = self.agent.as_ref() else {
+            return self.send(not_initialized(id));
+        };
+        let parsed: SessionReleaseParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(e) => return self.send(Response::error(id, e)),
+        };
+        match agent.release(&parsed).await {
             Ok(result) => self.send(Response::result(id, to_value(&result))),
             Err(e) => self.send(rpc_error(id, &e)),
         }

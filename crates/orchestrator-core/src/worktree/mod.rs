@@ -80,6 +80,19 @@ pub enum CleanupOutcome {
     DirtySkipped,
 }
 
+/// The decision phase of a cleanup (#210): computed before any side effect so
+/// the caller can close the task's pane between deciding and removing —
+/// `Remove` is the only decision the pane close may act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupDecision {
+    /// Policy allows removal and the worktree is clean.
+    Remove,
+    /// Kept per policy (retention not elapsed, or manual).
+    Retain,
+    /// Uncommitted changes present (data-loss guard, F-23).
+    Dirty,
+}
+
 /// A created worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {
@@ -374,7 +387,9 @@ impl<G: GitRunner> WorktreeManager<G> {
     }
 
     /// Clean up a worktree per policy. A worktree with uncommitted changes is
-    /// skipped regardless of policy (data-loss guard).
+    /// skipped regardless of policy (data-loss guard). Thin wrapper over
+    /// [`decide_cleanup`](Self::decide_cleanup) + [`remove`](Self::remove) for
+    /// callers with nothing to do between the two.
     pub fn cleanup(
         &self,
         repo_path: &Path,
@@ -384,12 +399,48 @@ impl<G: GitRunner> WorktreeManager<G> {
         finished_at: Option<&str>,
         now: &str,
     ) -> Result<CleanupOutcome, WorktreeError> {
-        // Data-loss guard first: never remove a dirty worktree (F-23).
+        match self.decide_cleanup(worktree_path, policy, finished_at, now)? {
+            CleanupDecision::Dirty => Ok(CleanupOutcome::DirtySkipped),
+            CleanupDecision::Retain => Ok(CleanupOutcome::Retained),
+            CleanupDecision::Remove => self.remove(repo_path, worktree_path, branch),
+        }
+    }
+
+    /// Decide what a cleanup would do, without doing it: dirty check (I/O)
+    /// first (F-23), then the pure policy judgment ([`policy_allows_removal`]).
+    pub fn decide_cleanup(
+        &self,
+        worktree_path: &Path,
+        policy: CleanupPolicy,
+        finished_at: Option<&str>,
+        now: &str,
+    ) -> Result<CleanupDecision, WorktreeError> {
         if self.has_uncommitted_changes(worktree_path)? {
-            return Ok(CleanupOutcome::DirtySkipped);
+            return Ok(CleanupDecision::Dirty);
         }
         if !policy_allows_removal(policy, finished_at, now) {
-            return Ok(CleanupOutcome::Retained);
+            return Ok(CleanupDecision::Retain);
+        }
+        Ok(CleanupDecision::Remove)
+    }
+
+    /// Remove a worktree (and best-effort its branch). Re-checks dirtiness
+    /// first: the caller may have closed the task's pane since
+    /// [`decide_cleanup`](Self::decide_cleanup), and a worktree that turned
+    /// dirty in that window must still be kept — data loss (irreversible)
+    /// outranks a lost pane (minor). The next sweep retries.
+    pub fn remove(
+        &self,
+        repo_path: &Path,
+        worktree_path: &Path,
+        branch: &str,
+    ) -> Result<CleanupOutcome, WorktreeError> {
+        if self.has_uncommitted_changes(worktree_path)? {
+            tracing::warn!(
+                worktree = %worktree_path.display(),
+                "worktree turned dirty between the cleanup decision and removal; kept (F-23)"
+            );
+            return Ok(CleanupOutcome::DirtySkipped);
         }
 
         let path_str = worktree_path.display().to_string();
@@ -637,6 +688,123 @@ mod tests {
             None,
             "2026-07-07T00:00:00Z"
         ));
+    }
+
+    /// A scripted [`GitRunner`]: `status --porcelain` pops the next canned
+    /// output (so cleanliness can flip between calls), every other command
+    /// succeeds and is logged.
+    struct ScriptedGit {
+        statuses: std::cell::RefCell<Vec<&'static str>>,
+        commands: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl ScriptedGit {
+        fn new(statuses: &[&'static str]) -> Self {
+            let mut statuses: Vec<&'static str> = statuses.to_vec();
+            statuses.reverse(); // pop() yields them in the given order
+            Self {
+                statuses: std::cell::RefCell::new(statuses),
+                commands: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+
+        fn ran(&self, subcommand: &str) -> bool {
+            self.commands
+                .borrow()
+                .iter()
+                .any(|c| c.starts_with(subcommand))
+        }
+    }
+
+    impl GitRunner for &ScriptedGit {
+        fn run(&self, _cwd: &Path, args: &[&str]) -> std::io::Result<crate::ports::git::GitOutput> {
+            self.commands.borrow_mut().push(args.join(" "));
+            let stdout = if args.first() == Some(&"status") {
+                self.statuses
+                    .borrow_mut()
+                    .pop()
+                    .expect("more `git status` calls than scripted outputs")
+                    .to_string()
+            } else {
+                String::new()
+            };
+            Ok(crate::ports::git::GitOutput {
+                status: Some(0),
+                stdout,
+                stderr: String::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn decide_cleanup_covers_the_policy_table() {
+        let now = "2026-07-12T00:00:00Z";
+        let finished = Some("2026-07-01T00:00:00Z");
+        // (clean?, policy, expected decision)
+        let cases: &[(&'static str, CleanupPolicy, CleanupDecision)] = &[
+            ("", CleanupPolicy::Immediate, CleanupDecision::Remove),
+            ("", CleanupPolicy::Manual, CleanupDecision::Retain),
+            // 30 days retention, 11 days elapsed → keep.
+            (
+                "",
+                CleanupPolicy::RetentionDays(30),
+                CleanupDecision::Retain,
+            ),
+            // 7 days retention, 11 days elapsed → remove.
+            ("", CleanupPolicy::RetentionDays(7), CleanupDecision::Remove),
+            // Dirty wins over every policy (F-23).
+            (" M file", CleanupPolicy::Immediate, CleanupDecision::Dirty),
+            (
+                " M file",
+                CleanupPolicy::RetentionDays(7),
+                CleanupDecision::Dirty,
+            ),
+        ];
+        for (status, policy, expected) in cases {
+            let git = ScriptedGit::new(&[status]);
+            let mgr = WorktreeManager::new(&git);
+            let decision = mgr
+                .decide_cleanup(Path::new("/wt"), *policy, finished, now)
+                .unwrap();
+            assert_eq!(decision, *expected, "policy {policy:?}, status {status:?}");
+        }
+    }
+
+    #[test]
+    fn remove_rechecks_dirtiness_and_skips_when_it_flipped() {
+        // TOCTOU guard: clean at decide time, dirty by removal time (the pane
+        // close in between is exactly such a window) → DirtySkipped, and the
+        // worktree is never touched.
+        let git = ScriptedGit::new(&["", " M file"]);
+        let mgr = WorktreeManager::new(&git);
+        assert_eq!(
+            mgr.decide_cleanup(
+                Path::new("/wt"),
+                CleanupPolicy::Immediate,
+                None,
+                "2026-07-12T00:00:00Z"
+            )
+            .unwrap(),
+            CleanupDecision::Remove
+        );
+        let outcome = mgr
+            .remove(Path::new("/repo"), Path::new("/wt"), "b")
+            .unwrap();
+        assert_eq!(outcome, CleanupOutcome::DirtySkipped);
+        assert!(
+            !git.ran("worktree remove"),
+            "a dirty worktree is never removed"
+        );
+
+        // Still clean at removal time → removed (worktree + branch commands ran).
+        let git = ScriptedGit::new(&[""]);
+        let mgr = WorktreeManager::new(&git);
+        let outcome = mgr
+            .remove(Path::new("/repo"), Path::new("/wt"), "b")
+            .unwrap();
+        assert_eq!(outcome, CleanupOutcome::Removed);
+        assert!(git.ran("worktree remove"));
+        assert!(git.ran("branch -d"));
     }
 
     #[test]

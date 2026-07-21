@@ -57,6 +57,11 @@ pub mod method {
     /// Additive since protocol 0.1.4; only called when the plugin declares the
     /// `pane_control` capability.
     pub const SESSION_FOCUS: &str = "session/focus";
+    /// Release (close) a finished session's pane without cancelling (O→P,
+    /// #210: worktree cleanup closes the pane before removal). Additive since
+    /// protocol 0.2.1; gated on the same `pane_control` capability as
+    /// `session/focus` — both are "control this pane" operations.
+    pub const SESSION_RELEASE: &str = "session/release";
 
     // notifier.
     /// Deliver an event notification (O→P, notification, F-90).
@@ -407,6 +412,39 @@ pub struct SessionFocusResult {
     pub focused: bool,
 }
 
+/// `session/release` params (O→P, #210): close the pane of a **finished**
+/// session, without the interrupt `task/cancel` sends first. Called when the
+/// worktree cleanup decided to remove the task's worktree, so the pane's
+/// lifetime tracks the worktree's. Additive since protocol 0.2.1
+/// (`pane_control` capability).
+///
+/// The `expect_*` fields guard against pane-id reuse: a retention policy can
+/// release days after the dispatch, by which time the (position-based) pane id
+/// may name a different pane. The plugin compares every present pair against
+/// the live pane and refuses to close on any mismatch; if **no** pair is
+/// comparable it closes anyway (degrade-open — a certain leak on every task
+/// is worse than a rare reused id).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionReleaseParams {
+    /// Session id returned by `task/dispatch`.
+    pub session_id: String,
+    /// Expected pane working directory (= the task's worktree path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_cwd: Option<String>,
+    /// Expected pane label. Reserved extension point — the orchestrator does
+    /// not currently send it (the label format is plugin-internal).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_label: Option<String>,
+}
+
+/// `session/release` result (P→O).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionReleaseResult {
+    /// Whether the pane was closed. `false` when it no longer exists or an
+    /// identity check refused the close — both are normal, not errors.
+    pub released: bool,
+}
+
 // ---------------------------------------------------------------------------
 // notifier
 // ---------------------------------------------------------------------------
@@ -650,6 +688,32 @@ mod tests {
         });
         round_trip(&SessionFocusResult { focused: true });
         round_trip(&SessionFocusResult { focused: false });
+        round_trip(&SessionReleaseParams {
+            session_id: "w1:p1|sess".into(),
+            expect_cwd: Some("/state/worktrees/agent-slack-1".into()),
+            expect_label: Some("totsuka C1:1.0".into()),
+        });
+        round_trip(&SessionReleaseResult { released: true });
+        round_trip(&SessionReleaseResult { released: false });
+    }
+
+    /// `session/release` (0.2.1): the `expect_*` identity fields follow the
+    /// additive-field contract — absent in old wire (default), omitted when
+    /// unset.
+    #[test]
+    fn session_release_expect_fields_are_optional_on_the_wire() {
+        let old: SessionReleaseParams =
+            serde_json::from_str(r#"{"session_id":"w1:p1|sess"}"#).unwrap();
+        assert!(old.expect_cwd.is_none());
+        assert!(old.expect_label.is_none());
+        let wire = serde_json::to_string(&SessionReleaseParams {
+            session_id: "w1:p1|sess".into(),
+            expect_cwd: None,
+            expect_label: None,
+        })
+        .unwrap();
+        assert!(!wire.contains("expect_cwd"));
+        assert!(!wire.contains("expect_label"));
     }
 
     /// The 0.1.3 additive fields on `task/dispatch` follow the same contract

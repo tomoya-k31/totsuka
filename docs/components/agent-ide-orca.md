@@ -4,7 +4,7 @@ title: agent-ide-orca プラグイン
 description: orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。design_preview は非宣言（capability を正直に宣言）。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [rust, crate, plugin, agent-ide, orca, cli, worktree]
-timestamp: 2026-07-13T00:00:00Z
+timestamp: 2026-07-22T13:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -35,7 +35,7 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 
 # capability negotiation（F-33）
 
-orca CLI で確実に対応できる `plan_mode` / `state_stream` のみを宣言し、**`design_preview` / `pane_control` は宣言しない**（orca は構造化 plan/preview API を持たない）。Orchestrator は宣言された機能のみ要求するため、未対応機能があってもワークフローは成立する。
+orca CLI で確実に対応できる `plan_mode` / `state_stream` のみを宣言し、**`design_preview` / `pane_control` は宣言しない**（orca は構造化 plan/preview API を持たない）。Orchestrator は宣言された機能のみ要求するため、未対応機能があってもワークフローは成立する。`pane_control` 非宣言のため、0.1.4 の `session/focus` に加え **0.2.1 の `session/release`（worktree 掃除時の pane 解放, #210, [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）も呼ばれない** — Orchestrator は pane 解放をスキップして worktree だけ削除する（本プラグイン変更なし）。
 
 # Claude Code / orca 固有の制約
 
