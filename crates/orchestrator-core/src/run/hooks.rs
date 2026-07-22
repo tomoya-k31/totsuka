@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use plugin_protocol::method;
 use plugin_protocol::methods::{
@@ -28,7 +29,9 @@ use super::{Engine, EngineError, notify_all, workflows_by_name};
 use crate::adapters::hook_uds;
 use crate::adapters::state_db::{HookEventInsert, HookEventOutcome, StateError, TaskRecord};
 use crate::config::{DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_WORKFLOW_TIMEOUT_SECS, VerificationMode};
-use crate::domain::signal::{AgentSignal, SignalEvent, StopStatus};
+use crate::domain::signal::{
+    AgentSignal, MARKER_COMPLETED, MARKER_FAILED, MARKER_NEEDS_INPUT, SignalEvent, StopStatus,
+};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::git::GitRunner;
 use crate::ports::llm::LlmRouter;
@@ -57,22 +60,26 @@ use crate::ports::signal_ingress::FocusOutcome;
 /// re-invoked when they finish — an agent that marked the earlier turn
 /// "completed" tends to answer the re-invoke with "already answered above",
 /// which then becomes the published reply.
-pub(crate) const MARKER_SELF_REPORT_INSTRUCTION: &str = "[orchestrator] Completion \
-    self-report: EVERY time you end your turn, end your response with exactly one \
-    of the following status markers on its own final line — with one exception: \
-    while background tasks or subagents are still running, do NOT emit a marker \
-    (that stop is an intermediate heartbeat; you will be re-invoked when they \
-    finish — restate the full final answer with the marker then). The marker line \
-    is stripped automatically before the result is delivered, so include it even \
-    when instructed to output nothing but the answer body: \
-    <<STATUS:COMPLETED>> (done) / \
-    <<STATUS:NEEDS_INPUT reason=\"...\">> (human input required) / \
-    <<STATUS:FAILED reason=\"...\">> (cannot proceed). \
-    Delivery contract: ONLY the message carrying the marker is delivered to the \
-    requester — earlier messages in this session are NEVER delivered. The \
-    marker-bearing message must therefore contain the complete, self-contained \
-    answer; never refer to a previous message (no \"as stated above\" / \"already \
-    answered earlier\").";
+pub(crate) static MARKER_SELF_REPORT_INSTRUCTION: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "[orchestrator] Completion self-report: EVERY time you end your turn, end \
+         your response with exactly one of the following status markers on its own \
+         final line — with one exception: while background tasks or subagents are \
+         still running, do NOT emit a marker (that stop is an intermediate \
+         heartbeat; you will be re-invoked when they finish — restate the full \
+         final answer with the marker then). The marker line is stripped \
+         automatically before the result is delivered, so include it even when \
+         instructed to output nothing but the answer body: \
+         {MARKER_COMPLETED} (done) / \
+         {MARKER_NEEDS_INPUT} (human input required) / \
+         {MARKER_FAILED} (cannot proceed). \
+         Delivery contract: ONLY the message carrying the marker is delivered to \
+         the requester — earlier messages in this session are NEVER delivered. The \
+         marker-bearing message must therefore contain the complete, \
+         self-contained answer; never refer to a previous message (no \"as stated \
+         above\" / \"already answered earlier\")."
+    )
+});
 
 impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Interpret one normalized hook signal (#138): resolve its task, record it

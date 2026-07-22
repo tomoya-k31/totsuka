@@ -18,8 +18,9 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use orchestrator_core::config::{RootConfig, VerificationMode, WorkflowConfig};
-use orchestrator_core::paths::Paths;
+use crate::config::{RootConfig, VerificationMode, WorkflowConfig};
+use crate::domain::signal::{MARKER_COMPLETED, MARKER_FAILED, MARKER_NEEDS_INPUT};
+use crate::paths::Paths;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -50,8 +51,15 @@ pub const DEFAULT_RUBRIC: &str = "作業が指示された要件を実際に満�
 const BACKGROUND_EXEMPTION: &str = "ただし、バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止は完了申告ではありません。その場合は検証もブロックも行わず停止を許可してください。完了判定はバックグラウンドタスクが残っていない停止に対してのみ行います。";
 
 /// Appended to the rubric so the verifying model re-emits the status marker the
-/// `on-stop.sh` command hook parses (D-12).
-const MARKER_CONVENTION: &str = "検証結果を踏まえ、応答の最終行に必ず次のいずれかのマーカーを付けてください: <<STATUS:COMPLETED>> / <<STATUS:NEEDS_INPUT reason=\"...\">> / <<STATUS:FAILED reason=\"...\">>";
+/// `on-stop.sh` command hook parses (D-12). Built from the shared marker
+/// constants in [`crate::domain::signal`] so the rendered convention cannot
+/// drift from the receiver's
+/// [`MARKER_SELF_REPORT_INSTRUCTION`](crate::run::hooks) counterpart.
+fn marker_convention() -> String {
+    format!(
+        "検証結果を踏まえ、応答の最終行に必ず次のいずれかのマーカーを付けてください: {MARKER_COMPLETED} / {MARKER_NEEDS_INPUT} / {MARKER_FAILED}"
+    )
+}
 
 /// Directory holding the scripts and rendered settings.
 pub fn hooks_dir(paths: &Paths) -> PathBuf {
@@ -183,7 +191,8 @@ pub fn render_settings(dir: &Path, wf: &WorkflowConfig) -> String {
     })];
     if wf.verification == VerificationMode::Llm {
         let rubric = wf.rubric.as_deref().unwrap_or(DEFAULT_RUBRIC);
-        let prompt = format!("{rubric}\n\n{BACKGROUND_EXEMPTION}\n\n{MARKER_CONVENTION}");
+        let convention = marker_convention();
+        let prompt = format!("{rubric}\n\n{BACKGROUND_EXEMPTION}\n\n{convention}");
         stop.push(json!({
             "hooks": [{ "type": "prompt", "prompt": prompt, "timeout": 60 }]
         }));

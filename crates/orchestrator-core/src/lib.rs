@@ -14,6 +14,7 @@
 pub mod adapters;
 pub mod config;
 pub mod domain;
+pub mod hooks;
 pub mod logging;
 pub mod paths;
 pub mod platform;
