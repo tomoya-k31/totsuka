@@ -92,7 +92,8 @@ impl Cx {
         PluginStore::new(self.paths.data_dir().join("plugins"))
     }
 
-    /// Directory holding `plugins/{name}.toml` files (next to config.toml).
+    /// The `plugins/` directory itself (next to config.toml), holding one
+    /// `{name}.toml` per plugin.
     pub fn plugin_config_dir(&self) -> PathBuf {
         self.config_path
             .parent()

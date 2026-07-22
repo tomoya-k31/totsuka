@@ -57,7 +57,8 @@ pub enum SpecError {
 
 /// Build the [`PluginSpec`] for one enabled plugin from the store and its
 /// secret-resolved `plugins/{name}.toml` (F-58/64/65). `plugin_config_dir` is
-/// the directory holding `plugins/{name}.toml` (next to `config.toml`).
+/// the `plugins/` directory itself (next to `config.toml`); the file read is
+/// `{plugin_config_dir}/{name}.toml`.
 pub fn plugin_spec(
     store: &PluginStore,
     plugin_config_dir: &Path,
