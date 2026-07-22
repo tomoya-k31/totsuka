@@ -115,6 +115,45 @@ where
     }
 }
 
+/// The platform secret resolver over a snapshot of the environment.
+pub fn secret_resolver(
+    env: &std::collections::HashMap<String, String>,
+) -> SecretResolver<crate::platform::PlatformSecretStore, impl Fn(&str) -> Option<String> + '_> {
+    SecretResolver::new(
+        crate::platform::PlatformSecretStore::default(),
+        |k: &str| env.get(k).cloned(),
+    )
+}
+
+/// Recursively resolve `${ENV}` / `keychain:` / `op://` references in every
+/// string leaf. Generic over the store so tests can inject a fake.
+pub fn resolve_strings<S, E>(
+    value: &mut serde_json::Value,
+    resolver: &SecretResolver<S, E>,
+) -> Result<(), ResolveError>
+where
+    S: SecretStore,
+    E: Fn(&str) -> Option<String>,
+{
+    match value {
+        serde_json::Value::String(s) => {
+            *s = resolver.resolve(s)?.expose().to_string();
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                resolve_strings(item, resolver)?;
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values_mut() {
+                resolve_strings(item, resolver)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

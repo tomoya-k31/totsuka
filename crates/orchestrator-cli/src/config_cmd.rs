@@ -12,7 +12,9 @@ use clap::Subcommand;
 use orchestrator_core::adapters::plugin_host;
 use orchestrator_core::config::{self, FindingSeverity};
 
-use crate::common::{CliError, Cx, plugin_spec};
+use orchestrator_core::plugins::plugin_spec;
+
+use crate::common::{CliError, Cx};
 
 /// Config subcommands.
 #[derive(Debug, Subcommand)]
@@ -83,7 +85,7 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
             // `plugin_spec` already read and secret-resolved plugins/{name}.toml
             // into `init_config`; reuse it rather than resolving secrets twice
             // (a second Keychain access could trigger a second Touch prompt).
-            let spec = plugin_spec(cx, &cfg, name, &env)?;
+            let spec = plugin_spec(&cx.store(), &cx.plugin_config_dir(), &cfg, name, &env)?;
             let init_config = spec.init_config.clone();
             specs.push((spec, init_config));
         }
