@@ -225,6 +225,29 @@ fn missing_config_and_db_errors_have_cause_and_action() {
         "cause+action for missing db: {err}"
     );
 
+    // 同じ失敗を --json で: stderr は 1 行の JSON エンベロープになり、
+    // 「原因 → アクション」が message / action フィールドに分かれる (#177)。
+    let out = run(&base, &["status", "--json"]);
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(1), "runtime failure stays exit 1");
+    let err = stderr(&out);
+    let envelope: serde_json::Value =
+        serde_json::from_str(err.trim()).expect("json error envelope parses");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("state database not found"),
+        "{envelope}"
+    );
+    assert!(
+        envelope["error"]["action"]
+            .as_str()
+            .unwrap()
+            .contains("run"),
+        "action field carries the next action: {envelope}"
+    );
+
     // プラグイン不在 (enabled but not installed) via config validate --offline
     // then doctor --json.
     let cfg_dir = base.join("cfg/totsuka");
@@ -235,7 +258,11 @@ fn missing_config_and_db_errors_have_cause_and_action() {
     )
     .unwrap();
     let out = run(&base, &["doctor", "--json"]);
-    assert!(!out.status.success());
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "diagnostics that found problems exit 3, not the generic 1 (#177)"
+    );
     let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
     let ghost = doc
         .as_array()
@@ -247,6 +274,19 @@ fn missing_config_and_db_errors_have_cause_and_action() {
     assert!(
         ghost["detail"].as_str().unwrap().contains("not installed"),
         "{ghost}"
+    );
+    // stderr は --json なので JSON エンベロープ。
+    let envelope: serde_json::Value =
+        serde_json::from_str(stderr(&out).trim()).expect("doctor json error envelope parses");
+    assert_eq!(envelope["error"]["message"], "doctor found problems");
+
+    // 非 --json でも exit code の意味は同じ（3）で、stderr は従来の平文。
+    let out = run(&base, &["doctor"]);
+    assert_eq!(out.status.code(), Some(3));
+    assert!(
+        stderr(&out).contains("error: doctor found problems → follow the actions above"),
+        "human-facing error keeps the → convention: {}",
+        stderr(&out)
     );
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -456,7 +496,7 @@ fn unset_hook_token_fails_doctor_when_an_agent_is_hook_capable() {
     seed_manifest(&base, "herdr", "resume_session = true");
 
     let out = run(&base, &["doctor", "--json"]);
-    assert!(!out.status.success(), "doctor must exit non-zero");
+    assert_eq!(out.status.code(), Some(3), "problems found exit 3 (#177)");
     let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
     let check = doc
         .as_array()

@@ -24,7 +24,7 @@ owner: tomoya-k31
 - `focus <task-id>`（#155, F-94）: 通知クリックの実行先（terminal-notifier `-execute` が呼ぶ）。実行中 Orchestrator の hook/制御 UDS へ [`POST /focus`](/apis/claude-events.md) し、対象タスクの pane を前面化する（pane フォーカスは Orchestrator 所有のプラグイン経由が唯一の整合経路 = session_id 不透明契約 F-37、[ADR-0005](/decisions/adr-0005-click-to-focus.md)）。**縮退は常に静か（exit 0）**: 設定なし・Orchestrator 停止中（socket 無し）・pane 消失はいずれも短い note を出して正常終了する — クリック経路を壊さない（アプリ前面化は `-activate` が別途担う）。socket パス解決は doctor のプローブと共通ヘルパ（`common::hook_socket_path`）。
 - `config validate [--offline] / show [--redacted]`（#64）: validate はオフライン検証（schema/静的参照/ワークフロー意味論）+ `--offline` でなければ enabled プラグインを一時起動して `config/validate` を委譲（F-59/63）。show は config.toml と plugins/*.toml を表示し、`--redacted` で token/secret/password/api_key を含むキーの値をマスク。
 - `logs [-f] [--task <id>]`（#64): JSON Lines ログ（§5.2）の整形表示・追尾（日次ローテーション追随）・タスク別フィルタ。
-- `doctor [--json]`（#64/#141）: git / config / state DB / **hooks（core の `hooks::install` によるアセット書き出し + フック系プローブ一式、後述）** / プラグイン（インストール+ライブ疎通 probe）/ LLM キー解決 / 孤児 worktree（F-24、TTY では対話確認つき掃除提案）。失敗チェックは「原因 + 次のアクション」で報告し非ゼロ終了。`doctor` は `run` と同じ書き出しを実行するため、フル run なしでフック一式をマテリアライズする手段も兼ねる。
+- `doctor [--json]`（#64/#141）: git / config / state DB / **hooks（core の `hooks::install` によるアセット書き出し + フック系プローブ一式、後述）** / プラグイン（インストール+ライブ疎通 probe）/ LLM キー解決 / 孤児 worktree（F-24、TTY では対話確認つき掃除提案）。失敗チェックは「原因 + 次のアクション」で報告し **exit 3**（問題検出。doctor 自体の実行失敗 = 1 と区別、#177）で終了。`doctor` は `run` と同じ書き出しを実行するため、フル run なしでフック一式をマテリアライズする手段も兼ねる。
 - `completion <shell>`: clap_complete によるシェル補完生成（zsh / bash / fish 等）。
 
 # フックアセットの書き出し（#137、#178 で core へ移動）
@@ -45,9 +45,10 @@ owner: tomoya-k31
 - `check_hook_deps` — `curl` + `jq` の存在（H-14。無いとフックが送信不能で全て spool 行き）。
 - `check_spool` — `spool_dir` の書き込み可否と**バックログ件数**（backlog > 0 は warning、[hook-security](/security/hook-security.md) N-05 の滞留検出）。
 
-- 共通フラグ: `--config <path>`（設定ファイル上書き = F-66 の最上位レイヤ）、`--debug`（run のログレベルを debug に引き上げ）。`--json` は全読み取り系コマンドに用意。
+- 共通フラグ: `--config <path>`（設定ファイル上書き = F-66 の最上位レイヤ）、`--debug`（run のログレベルを debug に引き上げ）。`--json` は主要読み取り系コマンド（status / task list / task show / plugin list / doctor）に用意し、宣言は `common::JsonFlag`（`#[command(flatten)]`）で一元化（#177）。
 - **設定ロードの一元化（#208、[ADR-0009](/decisions/adr-0009-env-override-whitelist.md)）**: `Cx::load_config(&env)` が `config.toml` パース → core の `apply_env_overrides`（F-66 第 2 層 `TOTSUKA_*`）まで行い、`run` / `config` / `focus` / `doctor` の 4 コマンドすべてがここを通る。**片方だけに適用しない**理由は `focus` / `doctor` が `[hooks].socket_path` から `run` のバインドしたソケットを解決するためで、`run` のみだと `TOTSUKA_HOOKS_SOCKET_PATH` 設定時に別のソケットを見る。警告は stderr（`--json` の stdout 契約を壊さない）。CLI フラグ（`--debug`）は**この後**に適用されるため「CLI > env」が適用順で成立する。例外は `plugin enable`/`disable` のローカルローダで、ファイル編集用のため raw のまま維持（env で編集結果を汚染しない）。`config show` はファイル内容表示を維持しつつ、有効な env オーバーライドを末尾に一覧表示する（`--redacted` 時は `is_secret_key` で値をマスク）。
 - UX 規約（§7）: エラーは「原因 + 次のアクション」（`→` 区切り）。用語は [glossary](/glossary/index.md) に準拠。
+- **exit code 体系と機械可読エラー（#177、[ADR-0012](/decisions/adr-0012-cli-exit-codes-json-errors.md)）**: exit code は名前付き定数（`common.rs`）で 4 値 — **0** = 成功 / **1** = 実行時エラー（`EXIT_ERROR`）/ **2** = usage エラー（`EXIT_USAGE`。サブコマンド無し + clap 自身のパース失敗）/ **3** = 診断完走で問題検出（`EXIT_PROBLEMS_FOUND`、現状 `doctor` のみ — 「doctor 自体の失敗 = 1」と区別）。特定 code は `ExitWith { code, message }` を `main` が downcast して取り出す。`--json` 指定時のエラーは stderr へ 1 行 compact JSON `{"error":{"message":"<原因>","action":"<次のアクション>"|null}}`（既存文言の最初の ` → ` で分割）、非 `--json` は従来の `error: 原因 → アクション` 平文。stdout の「parseable output, nothing else」契約はエラー時も不変。`focus` は従来どおり常に exit 0（クリック経路を壊さない）。
 
 # 依存
 

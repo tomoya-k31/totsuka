@@ -10,24 +10,22 @@ use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::common::{CliError, Cx, print_json};
+use crate::common::{CliError, Cx, JsonFlag, print_json};
 
 /// Task subcommands.
 #[derive(Debug, Subcommand)]
 pub enum TaskCommand {
     /// List all tasks.
     List {
-        /// Emit JSON instead of a table.
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        json: JsonFlag,
     },
     /// Show one task: state, sessions, worktree, and full event history.
     Show {
         /// Task id (see `totsuka status`).
         id: i64,
-        /// Emit JSON instead of text.
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        json: JsonFlag,
     },
     /// Cancel a task (any non-finished state).
     Cancel {
@@ -55,6 +53,17 @@ pub enum TaskCommand {
         #[arg(long)]
         reason: Option<String>,
     },
+}
+
+impl TaskCommand {
+    /// Whether this subcommand was invoked with `--json` (drives the JSON
+    /// error envelope in `main`).
+    pub fn wants_json(&self) -> bool {
+        matches!(
+            self,
+            Self::List { json } | Self::Show { json, .. } if json.json
+        )
+    }
 }
 
 /// A `task show --json` document.
@@ -97,8 +106,8 @@ struct EventRow {
 /// Dispatch a task subcommand.
 pub fn run(cx: &Cx, command: TaskCommand) -> Result<(), CliError> {
     match command {
-        TaskCommand::List { json } => list(cx, json),
-        TaskCommand::Show { id, json } => show(cx, id, json),
+        TaskCommand::List { json } => list(cx, json.json),
+        TaskCommand::Show { id, json } => show(cx, id, json.json),
         TaskCommand::Cancel { id } => cancel(cx, id),
         TaskCommand::Retry { id } => retry(cx, id),
         TaskCommand::Verify {

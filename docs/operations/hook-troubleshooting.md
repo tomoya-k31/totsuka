@@ -4,7 +4,7 @@ title: フック完了判定のトラブルシューティング
 description: Claude Code フック方式の運用手引き。スプールバックログ（doctor check_spool での検出・drain/確認・corrupt 隔離ファイル）、Escalated タスクの対応手順（pane スナップショット確認・herdr pane での解消・次 Stop での自然復帰・fail アウト）、human 検収での totsuka task verify --pass/--fail 操作を、doctor のフックプローブ参照つきで整理する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [operations, playbook, hook, claude-code, spool, escalation, verify, doctor, epic-131]
-timestamp: 2026-07-18T12:00:00Z
+timestamp: 2026-07-23T13:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -34,12 +34,12 @@ Claude Code のフック完了判定（[F-100〜F-107](/product/orchestrator-spe
 ## 検出
 
 ```bash
-totsuka doctor --json | jq '.checks[] | select(.name=="check_spool")'
+totsuka doctor --json | jq '.[] | select(.name=="hook-spool")'
 # もしくは直接
 ls -l "${XDG_STATE_HOME:-$HOME/.local/state}/totsuka/hooks/spool"
 ```
 
-`check_spool` のバックログ > 0 は warning（致命ではない）。冪等 UNIQUE 制約（D-05）があるため、滞留していても再投入で重複は無害に落ちる — 問題は「なぜ POST が失敗したか」。
+`hook-spool` のバックログ > 0 は warning（致命ではない）。冪等 UNIQUE 制約（D-05）があるため、滞留していても再投入で重複は無害に落ちる — 問題は「なぜ POST が失敗したか」。
 
 ## 切り分けと対処
 

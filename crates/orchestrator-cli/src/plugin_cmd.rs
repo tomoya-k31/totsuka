@@ -9,8 +9,7 @@ use orchestrator_core::paths::Paths;
 use orchestrator_core::plugins::PluginStore;
 use serde::Serialize;
 
-/// A boxed error for CLI operations.
-type CliError = Box<dyn std::error::Error>;
+use crate::common::{CliError, JsonFlag, print_json};
 
 /// Plugin management subcommands.
 #[derive(Debug, Subcommand)]
@@ -41,10 +40,17 @@ pub enum PluginCommand {
     },
     /// List installed and configured plugins.
     List {
-        /// Emit JSON instead of a table.
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        json: JsonFlag,
     },
+}
+
+impl PluginCommand {
+    /// Whether this subcommand was invoked with `--json` (drives the JSON
+    /// error envelope in `main`).
+    pub fn wants_json(&self) -> bool {
+        matches!(self, Self::List { json } if json.json)
+    }
 }
 
 /// Resolved locations the plugin commands operate on.
@@ -80,7 +86,7 @@ pub fn run(command: PluginCommand) -> Result<(), CliError> {
         PluginCommand::Uninstall { name } => uninstall(&loc, &name),
         PluginCommand::Enable { name } => set_enabled(&loc, &name, true),
         PluginCommand::Disable { name } => set_enabled(&loc, &name, false),
-        PluginCommand::List { json } => list(&loc, json),
+        PluginCommand::List { json } => list(&loc, json.json),
     }
 }
 
@@ -223,7 +229,7 @@ fn list(loc: &Locations, json: bool) -> Result<(), CliError> {
         .collect();
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
+        print_json(&rows)?;
     } else if rows.is_empty() {
         println!("No plugins installed or configured.");
     } else {

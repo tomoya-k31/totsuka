@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use orchestrator_core::plugins::plugin_spec;
 
-use crate::common::{CliError, Cx};
+use crate::common::{self, CliError, Cx};
 use crate::init_cmd::git_version;
 
 /// `serde` `skip_serializing_if` predicate: omit a `false` flag from the JSON.
@@ -171,7 +171,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     }
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&checks)?);
+        common::print_json(&checks)?;
     } else {
         for check in &checks {
             if !check.ok {
@@ -194,7 +194,14 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         }
     }
     if checks.iter().any(|c| !c.ok) {
-        return Err("doctor found problems → follow the actions above".into());
+        // Diagnostics ran to completion and found issues: exit 3, distinct
+        // from a doctor execution failure (exit 1, any earlier `?`) so
+        // scripts can tell the two apart (#177).
+        return Err(common::ExitWith::new(
+            common::EXIT_PROBLEMS_FOUND,
+            "doctor found problems → follow the actions above",
+        )
+        .into());
     }
     Ok(())
 }
