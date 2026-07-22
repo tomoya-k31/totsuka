@@ -40,6 +40,10 @@ post-PR you still monitor all checks that report on your PR.
   Clippy's lint set grows between releases — an outdated local stable passed
   clean while CI failed on `clippy::type_complexity` (PR #197).
 - `cargo fmt --all --check`
+- `bash scripts/arch-lint.sh` — workspace dependency-boundary fitness function
+  (plugins → protocol/sdk only, protocol is a leaf, no cycles). Cheap
+  (`cargo metadata --no-deps`, seconds); especially relevant when a
+  `Cargo.toml` changed. CI runs it as a step inside the `clippy / rustfmt` job.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - `RUSTFLAGS="-D warnings" cargo test --workspace --all-features` — CI
   (`ci.yml`) exports `RUSTFLAGS: -D warnings` job-wide, so a plain
