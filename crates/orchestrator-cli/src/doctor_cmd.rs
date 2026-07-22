@@ -322,7 +322,7 @@ fn check_hooks(cx: &Cx, cfg: &RootConfig, env: &HashMap<String, String>, checks:
 /// then verify every asset exists with the embedded content and the expected
 /// mode (0700 scripts / 0600 settings, N-02 tamper resistance).
 fn check_hook_assets(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
-    if let Err(e) = crate::hooks::install(&cx.paths, cfg) {
+    if let Err(e) = orchestrator_core::hooks::install(&cx.paths, cfg) {
         checks.push(Check::fail(
             "hooks",
             format!("could not write hook scripts/settings: {e}"),
@@ -330,14 +330,14 @@ fn check_hook_assets(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
         ));
         return;
     }
-    let issues = crate::hooks::verify_assets(&cx.paths, cfg);
+    let issues = orchestrator_core::hooks::verify_assets(&cx.paths, cfg);
     if issues.is_empty() {
-        let dir = crate::hooks::hooks_dir(&cx.paths);
+        let dir = orchestrator_core::hooks::hooks_dir(&cx.paths);
         checks.push(Check::ok(
             "hooks",
             format!(
                 "{} scripts (0700) + {} workflow settings (0600) under {}",
-                crate::hooks::script_count(),
+                orchestrator_core::hooks::script_count(),
                 cfg.workflows.len(),
                 dir.display()
             ),

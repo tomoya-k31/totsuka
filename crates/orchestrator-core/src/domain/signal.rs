@@ -70,6 +70,19 @@ pub enum SignalEvent {
     Heartbeat,
 }
 
+/// The status-marker forms shown to agents (#131 D-12), exactly as they appear
+/// in every instruction that teaches the convention: the settings renderer's
+/// prompt-hook text ([`hooks`](crate::hooks)) and the dispatch-time
+/// self-report instruction (`run::hooks`) are both built from these constants,
+/// so the wire convention is defined once. `reason="..."` is a placeholder the
+/// agent fills in. The parsing side (`on-stop.sh`) is bash and must be kept in
+/// sync manually.
+pub const MARKER_COMPLETED: &str = "<<STATUS:COMPLETED>>";
+/// See [`MARKER_COMPLETED`].
+pub const MARKER_NEEDS_INPUT: &str = "<<STATUS:NEEDS_INPUT reason=\"...\">>";
+/// See [`MARKER_COMPLETED`].
+pub const MARKER_FAILED: &str = "<<STATUS:FAILED reason=\"...\">>";
+
 /// The outcome an agent self-reports in a [`SignalEvent::Stop`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopStatus {

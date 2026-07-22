@@ -8,7 +8,6 @@ mod common;
 mod config_cmd;
 mod doctor_cmd;
 mod focus_cmd;
-mod hooks;
 mod init_cmd;
 mod logs_cmd;
 mod plugin_cmd;

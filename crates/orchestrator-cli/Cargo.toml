@@ -23,7 +23,6 @@ orchestrator-core = { path = "../orchestrator-core" }
 plugin-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 toml.workspace = true
 tokio.workspace = true
 

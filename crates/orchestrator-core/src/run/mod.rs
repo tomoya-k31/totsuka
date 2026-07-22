@@ -1116,7 +1116,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     prompt_context.push_str(instructions);
                     prompt_context.push_str("\n\n");
                 }
-                prompt_context.push_str(hooks::MARKER_SELF_REPORT_INSTRUCTION);
+                prompt_context.push_str(&hooks::MARKER_SELF_REPORT_INSTRUCTION);
                 env.insert("TOTSUKA_PROMPT_CONTEXT".to_string(), prompt_context);
                 (
                     Some(job_id.to_string()),
