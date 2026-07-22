@@ -411,25 +411,26 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// accepts the bare form).
     pub async fn list_sessions(&self) -> Result<SessionListResult, HerdrError> {
         let result = self.client.call("pane.list", json!({})).await?;
-        let panes = result
+        let sessions = result
             .get("panes")
             .and_then(Value::as_array)
-            .cloned()
+            .map(|panes| {
+                panes
+                    .iter()
+                    .filter(|pane| {
+                        pane_str(pane, "label").is_some_and(|label| label.starts_with("totsuka "))
+                    })
+                    .filter_map(|pane| {
+                        let pane_id = pane_str(pane, "pane_id")?;
+                        Some(SessionInfo {
+                            session_id: SessionHandle::new(pane_id, "").encode(),
+                            label: pane_str(pane, "label").map(str::to_string),
+                            cwd: pane_str(pane, "cwd").map(str::to_string),
+                        })
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
-        let sessions = panes
-            .iter()
-            .filter(|pane| {
-                pane_str(pane, "label").is_some_and(|label| label.starts_with("totsuka "))
-            })
-            .filter_map(|pane| {
-                let pane_id = pane_str(pane, "pane_id")?;
-                Some(SessionInfo {
-                    session_id: SessionHandle::new(pane_id, "").encode(),
-                    label: pane_str(pane, "label").map(str::to_string),
-                    cwd: pane_str(pane, "cwd").map(str::to_string),
-                })
-            })
-            .collect();
         Ok(SessionListResult { sessions })
     }
 
