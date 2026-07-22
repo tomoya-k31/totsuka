@@ -25,6 +25,9 @@
 //!   subscribed session, then acknowledges.
 //! - `session/release` → recorded to `"dispatch_log"`; `released: false` when
 //!   the session id contains `gone` (pane already closed), else `true`.
+//! - `session/list` → recorded to `"dispatch_log"`; returns the config's
+//!   `"list_sessions"` array verbatim as `sessions` (default `[]`), so tests
+//!   can stage orphan panes (#211).
 //! - `notify` (notification) → appended to the `"notify_log"` file, if set.
 //! - `task/cancel` → acknowledges.
 //! - `crash` → exits immediately with code 1 (to test crash isolation).
@@ -258,6 +261,17 @@ fn main() {
                     .unwrap_or("")
                     .contains("gone");
                 Response::result(request_id(&id), serde_json::json!({ "released": released }))
+            }
+            "session/list" => {
+                // Orphan-pane detection (#211): the staged pane inventory
+                // comes straight from config so tests control what doctor
+                // sees.
+                record_to(config.get("dispatch_log"), "session/list", &params);
+                let sessions = config
+                    .get("list_sessions")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([]));
+                Response::result(request_id(&id), serde_json::json!({ "sessions": sessions }))
             }
             "task/cancel" => Response::result(request_id(&id), Value::Null),
             "state/subscribe" => {

@@ -54,7 +54,12 @@ use semver::{Version, VersionReq};
 /// on the existing `pane_control` capability (no new flag, same contract as
 /// `session/focus` in 0.1.4): plugins that never declare it are simply never
 /// called, and every `<0.3`-bounded manifest keeps matching.
-pub const PROTOCOL_VERSION: &str = "0.2.1";
+///
+/// 0.2.2: the `session/list` RPC (#211) — enumerate the plugin's own live
+/// panes so `doctor` can detect orphans (#210's cleanup linkage can break:
+/// manual `git worktree remove`, refused releases, crashes). Additive, gated
+/// on the same `pane_control` capability; `<0.3` manifests keep matching.
+pub const PROTOCOL_VERSION: &str = "0.2.2";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -78,7 +83,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 2, 1));
+        assert_eq!(protocol_version(), Version::new(0, 2, 2));
     }
 
     #[test]
