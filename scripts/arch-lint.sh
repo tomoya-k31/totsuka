@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# arch-lint.sh — ワークスペース依存境界の Fitness Function（依存: cargo, jq, POSIX awk）
+# arch-lint.sh — ワークスペース依存境界の Fitness Function（依存: cargo, jq, POSIX awk/grep）
 #
 # ヘキサゴナル構成の不変条件を `cargo metadata --no-deps` の出力から機械検証する。
 # 対象は「ワークスペース内クレート間」の依存のみ（crates.io 等の外部依存は対象外）。
@@ -8,13 +8,18 @@
 #   [E] plugin-deps   : plugins/* の [dependencies] は plugin-protocol / plugin-sdk のみ
 #   [E] plugin-dev    : plugins/* の [dev-dependencies] は 上記 + test-support のみ
 #   [E] plugin-build  : plugins/* の [build-dependencies] にワークスペース内依存なし
-#   [E] sdk-deps      : plugin-sdk の依存は plugin-protocol（dev は + test-support）のみ
+#   [E] sdk-deps      : plugin-sdk の依存は plugin-protocol（dev は + test-support）のみ、
+#                       [build-dependencies] にワークスペース内依存なし
 #   [E] protocol-leaf : plugin-protocol はワークスペース内クレートに一切依存しない
 #   [E] cycle         : ワークスペース内に依存循環がない
 #
 # 使い方: scripts/arch-lint.sh
-# 終了コード: 違反 1 件以上で 1、前提ツール欠如で 2
-set -u
+# 終了コード: 違反 1 件以上で 1、前提ツール欠如・検査自体の失敗で 2
+#
+# フェイルクローズ: 検査パイプライン（jq / awk）自体の失敗は「違反なし」ではなく
+# エラー終了にする（-e / pipefail + 明示ハンドラ）。素通りしたら Fitness Function
+# の意味がない。
+set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # 許可リスト（宣言的ルール）
@@ -38,6 +43,10 @@ command -v jq >/dev/null 2>&1 || {
 }
 command -v cargo >/dev/null 2>&1 || {
   echo "arch-lint: cargo が必要です" >&2
+  exit 2
+}
+command -v awk >/dev/null 2>&1 || {
+  echo "arch-lint: awk が必要です" >&2
   exit 2
 }
 
@@ -65,7 +74,10 @@ DEPS="$(jq -r --arg root "$ROOT/" '
   | $p.dependencies[]
   | select(.name as $n | $members | index($n))
   | [$p.name, (.kind // "normal"), .name, ($p.manifest_path | ltrimstr($root))]
-  | @tsv' <<<"$META")"
+  | @tsv' <<<"$META")" || {
+  echo "arch-lint: cargo metadata の解析（jq）に失敗" >&2
+  exit 2
+}
 
 # 許可リスト（空白区切り）に依存名が含まれるか (0=含まれる)
 allowed() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac }
@@ -118,7 +130,8 @@ CYCLE_NODES="$(
       next
     }
     # 次数 0 のノードを繰り返し除去。残るのは「循環から到達できる集合」（順方向）
-    # と「循環へ到達できる集合」（逆方向）で、両者の交差が循環の実メンバー。
+    # と「循環へ到達できる集合」（逆方向）で、両者の交差が循環メンバー
+    # （循環が複数ある場合は循環間の経路上のノードも含む。pass/fail 判定は不変）。
     function peel(adj, deg, removed,   changed, n, cnt, tos, i) {
       changed = 1
       while (changed) {
@@ -140,7 +153,10 @@ CYCLE_NODES="$(
         rem = rem (rem == "" ? "" : " ") n
       print rem
     }'
-)"
+)" || {
+  echo "arch-lint: 循環検査（awk）に失敗" >&2
+  exit 2
+}
 [ -z "$CYCLE_NODES" ] || error cycle workspace "依存循環に含まれるクレート: $CYCLE_NODES"
 
 # ---------- サマリ ----------

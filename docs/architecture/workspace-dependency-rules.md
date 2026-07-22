@@ -28,7 +28,7 @@ graph BT
     cli --> core
     cli --> protocol
     plugins --> protocol
-    plugins -. "task-source-* のみ" .-> sdk
+    plugins -. "現状の利用は task-source-* のみ（許可は全 plugins/*）" .-> sdk
     core -. dev .-> ts
     cli -. dev .-> ts
 ```
