@@ -42,6 +42,10 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Check formatting
         run: cargo fmt --all --check
+      # ワークスペース依存境界の fitness function (#172)。cargo metadata --no-deps
+      # ベースで数秒で終わるため、重い clippy より先に fail-fast させる。
+      - name: Check architecture invariants
+        run: bash scripts/arch-lint.sh
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
