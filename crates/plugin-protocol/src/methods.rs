@@ -62,6 +62,10 @@ pub mod method {
     /// protocol 0.2.1; gated on the same `pane_control` capability as
     /// `session/focus` — both are "control this pane" operations.
     pub const SESSION_RELEASE: &str = "session/release";
+    /// Enumerate the panes this plugin recognizes as its own (O→P, #211:
+    /// `doctor`'s orphan-pane detection). Additive since protocol 0.2.2;
+    /// gated on the same `pane_control` capability as `session/release`.
+    pub const SESSION_LIST: &str = "session/list";
 
     // notifier.
     /// Deliver an event notification (O→P, notification, F-90).
@@ -445,6 +449,38 @@ pub struct SessionReleaseResult {
     pub released: bool,
 }
 
+/// `session/list` params (O→P, #211): enumerate the live panes the plugin
+/// recognizes as **its own** (for herdr: panes whose label carries the
+/// plugin's task marker). The plugin must never list panes a human opened for
+/// unrelated work — the ownership filter lives plugin-side, where the label
+/// convention is known. Additive since protocol 0.2.2 (`pane_control`
+/// capability, same gate as `session/release`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionListParams {}
+
+/// One live pane in a `session/list` result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    /// Session id in the same opaque format `task/dispatch` returns, so it
+    /// can be passed straight back to `session/release`.
+    pub session_id: String,
+    /// The pane's label, when the backend reports one (for herdr:
+    /// `totsuka {task_id}` — the orchestrator correlates panes to tasks
+    /// through this).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The pane's working directory, when the backend reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+/// `session/list` result (P→O).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionListResult {
+    /// The plugin-owned live panes. Empty when none exist (not an error).
+    pub sessions: Vec<SessionInfo>,
+}
+
 // ---------------------------------------------------------------------------
 // notifier
 // ---------------------------------------------------------------------------
@@ -695,6 +731,39 @@ mod tests {
         });
         round_trip(&SessionReleaseResult { released: true });
         round_trip(&SessionReleaseResult { released: false });
+        round_trip(&SessionListParams {});
+        round_trip(&SessionListResult {
+            sessions: vec![
+                SessionInfo {
+                    session_id: "w1:p1|sess".into(),
+                    label: Some("totsuka 7".into()),
+                    cwd: Some("/state/worktrees/agent-slack-7".into()),
+                },
+                SessionInfo {
+                    session_id: "w2:p1|".into(),
+                    label: None,
+                    cwd: None,
+                },
+            ],
+        });
+        round_trip(&SessionListResult { sessions: vec![] });
+    }
+
+    /// `session/list` (0.2.2): `label`/`cwd` follow the additive-field
+    /// contract — absent in old wire (default), omitted when unset.
+    #[test]
+    fn session_list_optional_fields_are_optional_on_the_wire() {
+        let bare: SessionInfo = serde_json::from_str(r#"{"session_id":"w1:p1|s"}"#).unwrap();
+        assert!(bare.label.is_none());
+        assert!(bare.cwd.is_none());
+        let wire = serde_json::to_string(&SessionInfo {
+            session_id: "w1:p1|s".into(),
+            label: None,
+            cwd: None,
+        })
+        .unwrap();
+        assert!(!wire.contains("label"));
+        assert!(!wire.contains("cwd"));
     }
 
     /// `session/release` (0.2.1): the `expect_*` identity fields follow the

@@ -372,3 +372,110 @@ fn e2e_dry_run_has_zero_side_effects() {
 fn json_empty() -> serde_json::Value {
     serde_json::json!([])
 }
+
+/// `doctor` の孤児 pane 検出（#211、protocol 0.2.2 `session/list`）。
+/// mock agent が pane 一覧を返し、doctor が DB と突き合わせて「終端タスクかつ
+/// worktree 消滅の pane と DB 未知の pane を候補にし、非終端タスクの pane は
+/// 候補にしない」ことを、非 TTY（`--json`）の検出のみ経路で固定する。
+#[test]
+fn doctor_detects_orphan_panes_via_session_list() {
+    use orchestrator_core::adapters::{NewTask, StateDb};
+    use orchestrator_core::domain::state::TaskEvent;
+
+    let base = scratch("orphan-panes");
+    let env = Env {
+        source_log: base.join("source.ndjson"),
+        notify_log: base.join("notify.ndjson"),
+        base,
+        repo: PathBuf::new(),
+    };
+    let cfg_dir = env.cfg_dir();
+    std::fs::create_dir_all(cfg_dir.join("plugins")).unwrap();
+    std::fs::create_dir_all(env.state_dir()).unwrap();
+
+    // pane_control 宣言つき agent_ide として mock を install（既定の
+    // install_plugin は pane_control を宣言しないため手書き）。
+    let dir = env.plugins_store().join("mock_agent");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(mock_plugin(), dir.join("mock_agent")).unwrap();
+    std::fs::write(
+        dir.join("plugin.toml"),
+        "name = \"mock_agent\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
+         protocol_version = \">=0.1.6, <0.3\"\n\n[capabilities]\nstate_stream = true\n\
+         pane_control = true\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        cfg_dir.join("config.toml"),
+        "[plugins.mock_agent]\nenabled = true\nkind = \"agent_ide\"\n",
+    )
+    .unwrap();
+    // mock の `session/list` 応答を plugins/{name}.toml で staging する。
+    std::fs::write(
+        cfg_dir.join("plugins/mock_agent.toml"),
+        r#"list_sessions = [
+  { session_id = "w1:p1|", label = "totsuka C9:9.9" },
+  { session_id = "w2:p1|", label = "totsuka C1:1.0" },
+  { session_id = "w3:p1|", label = "totsuka 99" },
+]
+"#,
+    )
+    .unwrap();
+
+    // DB: task 1 = cancelled（終端）で worktree 記録なし → 候補。
+    //     task 2 = running（非終端）→ 候補にしない。
+    let db = StateDb::open(&env.state_dir().join("state.db")).unwrap();
+    let new = |sid: &str| NewTask {
+        source: "mock_src".into(),
+        source_task_id: sid.into(),
+        workflow: "wf".into(),
+        mode: "implement".into(),
+        repo: None,
+        priority: 0,
+        title: format!("task {sid}"),
+        url: None,
+        source_payload: None,
+        thread_key: None,
+        last_signal_at: None,
+    };
+    let cancelled = db.upsert_task(&new("C9:9.9")).unwrap();
+    db.apply_event(cancelled, TaskEvent::Cancel, None).unwrap();
+    let running = db.upsert_task(&new("C1:1.0")).unwrap();
+    db.apply_event(running, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(running, TaskEvent::Start, None).unwrap();
+    drop(db);
+
+    let out = env.run(&["doctor", "--json"]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "orphan panes are found-problems (exit 3): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
+    let panes = doc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "panes")
+        .expect("panes check present");
+    assert_eq!(panes["ok"], false, "{panes}");
+    let detail = panes["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("totsuka C9:9.9"),
+        "terminal+gone-worktree pane listed: {detail}"
+    );
+    assert!(
+        detail.contains("totsuka 99"),
+        "DB-unknown pane listed: {detail}"
+    );
+    assert!(
+        !detail.contains("totsuka C1:1.0"),
+        "running task's pane must be kept: {detail}"
+    );
+    assert!(
+        panes["action"].as_str().unwrap().contains("terminal"),
+        "action points at the interactive path: {panes}"
+    );
+}

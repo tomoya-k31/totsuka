@@ -62,6 +62,8 @@ struct FakeHerdr {
     pane_cwd: Option<&'static str>,
     /// The pane's `label` as `pane.get` reports it, if any.
     pane_label: Option<&'static str>,
+    /// The full pane inventory `pane.list` reports (#211).
+    list_panes: Vec<Value>,
     /// `pane.read` text for the `detection` source.
     detection: &'static str,
     /// When set, `workspace.create` fails with an `id: ""` decode-style error.
@@ -86,6 +88,7 @@ impl Default for FakeHerdr {
             agent_session: None,
             pane_cwd: Some("/wt/agent-1"),
             pane_label: None,
+            list_panes: Vec::new(),
             detection: "",
             empty_id_error_on_create: false,
             submission_error: None,
@@ -249,6 +252,16 @@ impl FakeHerdr {
                 )
                 .await
             }
+            // The pane inventory (`session/list`, #211).
+            "pane.list" => {
+                reply(
+                    &mut write_half,
+                    &id,
+                    json!({ "type": "pane_list", "panes": self.list_panes.clone() }),
+                )
+                .await
+            }
+
             // A vanished pane fails `pane.read` too — `diagnostics/snapshot`
             // maps that to `text: None`, not an error.
             "pane.read" if self.pane_gone => {
@@ -1139,6 +1152,52 @@ async fn release_closes_pane_and_workspace_without_interrupting() {
         sent("workspace.close"),
         "the task's workspace must be closed too"
     );
+}
+
+#[tokio::test]
+async fn session_list_returns_only_totsuka_labeled_panes() {
+    // `session/list` (#211) is the orphan-pane inventory. The `totsuka `
+    // label filter is the ownership boundary: herdr serves human-opened
+    // panes too, and those must never become release candidates.
+    let fake = FakeHerdr {
+        list_panes: vec![
+            json!({ "pane_id": "w1:p1", "label": "totsuka 7", "cwd": "/wt/7" }),
+            json!({ "pane_id": "w2:p1", "label": "my scratch pane", "cwd": "/home" }),
+            json!({ "pane_id": "w3:p1", "cwd": "/home" }),
+            json!({ "pane_id": "w4:p1", "label": "totsuka 9" }),
+        ],
+        ..FakeHerdr::default()
+    };
+    let (socket, _requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d.call("session/list", json!({})).await;
+    assert!(resp["error"].is_null(), "list failed: {resp}");
+    let sessions = resp["result"]["sessions"].as_array().unwrap();
+    assert_eq!(
+        sessions.len(),
+        2,
+        "only totsuka-labeled panes: {sessions:?}"
+    );
+    // The session id encodes the pane with an empty agent session — the bare
+    // form `session/release` decodes.
+    assert_eq!(sessions[0]["session_id"], "w1:p1|");
+    assert_eq!(sessions[0]["label"], "totsuka 7");
+    assert_eq!(sessions[0]["cwd"], "/wt/7");
+    assert_eq!(sessions[1]["session_id"], "w4:p1|");
+    assert!(sessions[1]["cwd"].is_null(), "absent cwd stays absent");
+}
+
+#[tokio::test]
+async fn session_list_is_empty_without_totsuka_panes() {
+    let (socket, _requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d.call("session/list", json!({})).await;
+    assert!(resp["error"].is_null(), "list failed: {resp}");
+    assert_eq!(resp["result"]["sessions"].as_array().unwrap().len(), 0);
 }
 
 #[tokio::test]

@@ -168,6 +168,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         check_llm_key(cfg, &env, &mut checks);
         check_onepassword(cx, &env, &mut checks);
         check_orphans(cfg, &env, db.as_ref(), json, &mut checks)?;
+        check_orphan_panes(cx, cfg, &env, db.as_ref(), json, &mut checks)?;
     }
 
     if json {
@@ -853,4 +854,346 @@ fn check_orphans(
         ));
     }
     Ok(())
+}
+
+/// One orphan-pane candidate (#211): a live, totsuka-labeled pane no task
+/// should still be holding.
+struct OrphanPane {
+    /// The owning agent plugin (the one to send `session/release` to).
+    plugin: String,
+    /// The listed pane.
+    session: plugin_protocol::methods::SessionInfo,
+    /// Why it is a candidate (shown in the prompt / listing).
+    reason: String,
+}
+
+/// Classify one plugin's `session/list` result against the task DB (#211).
+///
+/// The label carries the **source task id**: `totsuka {task.id}` where
+/// `task.id` is the protocol `Task.id` = `TaskRecord.source_task_id` — the
+/// source's own identifier (a Slack `"C1:1.0"`, a GitHub issue number), NOT
+/// the DB row id. Correlation is therefore a string match on
+/// `source_task_id`, which is only unique per source — so a pane is matched
+/// against **every** task carrying that id and the conservative side wins.
+///
+/// A totsuka-labeled pane is an orphan candidate when:
+/// - its label's id matches no task in the DB (a true orphan: crashed
+///   dispatch, deleted DB row, pre-#210 leftovers), or
+/// - every matching task is **terminal** and none still has a live worktree
+///   (the #210 release linkage failed: manual `git worktree remove`, refused
+///   release, crash) — `worktree_exists` reports whether a recorded path
+///   still exists.
+///
+/// Deliberately NOT candidates: panes with any non-terminal matching task
+/// (the pane is in use) and terminal tasks whose worktree is retained
+/// (`keep_7d` etc. — the pane's lifetime tracks the worktree's, ADR-0010).
+fn classify_orphan_panes(
+    plugin: &str,
+    sessions: Vec<plugin_protocol::methods::SessionInfo>,
+    tasks: &[orchestrator_core::adapters::TaskRecord],
+    worktree_exists: impl Fn(&str) -> bool,
+) -> Vec<OrphanPane> {
+    sessions
+        .into_iter()
+        .filter_map(|session| {
+            // The plugin only lists panes with its `totsuka ` marker; the
+            // source task id after the marker correlates the pane to tasks.
+            let matches: Vec<_> = session
+                .label
+                .as_deref()
+                .and_then(|l| l.strip_prefix("totsuka "))
+                .map(|id| tasks.iter().filter(|t| t.source_task_id == id).collect())
+                .unwrap_or_default();
+            let reason = if matches.is_empty() {
+                "no matching task in the DB".to_string()
+            } else if matches.iter().any(|t| {
+                // A live task, or a worktree still held by a retention
+                // policy, keeps the pane.
+                !t.state.is_terminal() || t.worktree_path.as_deref().is_some_and(&worktree_exists)
+            }) {
+                return None;
+            } else {
+                let task = matches[0];
+                format!(
+                    "task {} is {} and its worktree is gone",
+                    task.id, task.state
+                )
+            };
+            Some(OrphanPane {
+                plugin: plugin.to_string(),
+                session,
+                reason,
+            })
+        })
+        .collect()
+}
+
+/// Detect orphan agent panes (#211) and, interactively, offer to release
+/// them. The counterpart of [`check_orphans`] for panes: enumerate via
+/// `session/list` (protocol 0.2.2, `pane_control` agents only), diff against
+/// the task DB, and release via `session/release` with the listed label as
+/// the `expect_label` identity guard (the enumerate→confirm→release window
+/// could see the position-based pane id reassigned).
+fn check_orphan_panes(
+    cx: &Cx,
+    cfg: &RootConfig,
+    env: &HashMap<String, String>,
+    db: Option<&orchestrator_core::adapters::StateDb>,
+    json: bool,
+    checks: &mut Vec<Check>,
+) -> Result<(), CliError> {
+    use plugin_protocol::manifest::PluginKind;
+    use plugin_protocol::methods::{
+        SessionListParams, SessionListResult, SessionReleaseParams, SessionReleaseResult,
+    };
+
+    let Some(db) = db else {
+        return Ok(());
+    };
+    let store = cx.store();
+    // Only agents that can control panes are asked; a config with none (orca,
+    // mock) gets no check at all rather than noise.
+    let agents: Vec<String> = cfg
+        .plugins
+        .iter()
+        .filter(|(_, p)| p.enabled)
+        .filter(|(name, _)| {
+            store
+                .manifest_of(name)
+                .ok()
+                .flatten()
+                .is_some_and(|m| m.kind == PluginKind::AgentIde && m.capabilities.pane_control)
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    if agents.is_empty() {
+        return Ok(());
+    }
+
+    let tasks = db.list_tasks()?;
+    let Ok(runtime) = tokio::runtime::Runtime::new() else {
+        checks.push(Check::fail(
+            "panes",
+            "could not start an async runtime for the pane probe",
+            "re-run; report if it persists",
+        ));
+        return Ok(());
+    };
+
+    let mut orphans: Vec<OrphanPane> = Vec::new();
+    let mut probed = 0usize;
+    for name in &agents {
+        let spec = match plugin_spec(&store, &cx.plugin_config_dir(), cfg, name, env) {
+            Ok(spec) => spec,
+            // plugin_spec failures are already reported per-plugin by
+            // check_plugins; don't fail the pane check on top.
+            Err(_) => continue,
+        };
+        let listed = runtime.block_on(async {
+            let plugin = plugin_host::Plugin::launch(spec).await?;
+            let result: Result<SessionListResult, _> = plugin
+                .call(plugin_protocol::method::SESSION_LIST, &SessionListParams {})
+                .await;
+            let _ = plugin.shutdown(std::time::Duration::from_secs(5)).await;
+            result
+        });
+        match listed {
+            Ok(result) => {
+                probed += 1;
+                orphans.extend(classify_orphan_panes(name, result.sessions, &tasks, |p| {
+                    Path::new(p).exists()
+                }));
+            }
+            // The plugin launched but the probe failed (herdr down, old
+            // plugin): advisory only — plugin health is check_plugins' job.
+            Err(e) => checks.push(Check::warn(
+                "panes",
+                format!("pane listing via `{name}` failed: {e}"),
+                "check that the agent backend (herdr) is running",
+            )),
+        }
+    }
+
+    if orphans.is_empty() {
+        if probed > 0 {
+            checks.push(Check::ok("panes", "no orphan panes"));
+        }
+        return Ok(());
+    }
+
+    let listing = orphans
+        .iter()
+        .map(|o| {
+            format!(
+                "{}: {} ({})",
+                o.plugin,
+                o.session.label.as_deref().unwrap_or(&o.session.session_id),
+                o.reason
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Interactive release proposal — only on a TTY and never in --json,
+    // mirroring the orphan-worktree flow (doctor proposes, never auto-frees).
+    if !json && io::stdin().is_terminal() {
+        for orphan in &orphans {
+            let name = orphan.session.label.as_deref().unwrap_or("(no label)");
+            print!(
+                "release orphan pane {name} via {} — {}? [y/N]: ",
+                orphan.plugin, orphan.reason
+            );
+            io::stdout().flush()?;
+            let mut answer = String::new();
+            io::stdin().read_line(&mut answer)?;
+            if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                continue;
+            }
+            let Ok(spec) = plugin_spec(&store, &cx.plugin_config_dir(), cfg, &orphan.plugin, env)
+            else {
+                continue;
+            };
+            let released = runtime.block_on(async {
+                let plugin = plugin_host::Plugin::launch(spec).await?;
+                let result: Result<SessionReleaseResult, _> = plugin
+                    .call(
+                        plugin_protocol::method::SESSION_RELEASE,
+                        &SessionReleaseParams {
+                            session_id: orphan.session.session_id.clone(),
+                            expect_cwd: None,
+                            // The label we just enumerated is the identity
+                            // guard against the pane id being reassigned
+                            // between listing and this release.
+                            expect_label: orphan.session.label.clone(),
+                        },
+                    )
+                    .await;
+                let _ = plugin.shutdown(std::time::Duration::from_secs(5)).await;
+                result
+            });
+            match released {
+                Ok(SessionReleaseResult { released: true }) => println!("released {name}"),
+                Ok(SessionReleaseResult { released: false }) => {
+                    println!("not released (already gone, or the pane changed identity)")
+                }
+                Err(e) => println!("release failed: {e}"),
+            }
+        }
+        checks.push(Check::ok("panes", format!("orphans handled: {listing}")));
+    } else {
+        checks.push(Check::fail(
+            "panes",
+            format!("orphan panes: {listing}"),
+            "run `totsuka doctor` in a terminal to release them interactively",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orchestrator_core::adapters::TaskRecord;
+    use orchestrator_core::domain::state::TaskState;
+    use plugin_protocol::methods::SessionInfo;
+
+    /// A task whose **source task id** (what the pane label carries — e.g. a
+    /// Slack thread key, never the DB row id) is `source_task_id`.
+    fn task(source_task_id: &str, state: TaskState, worktree_path: Option<&str>) -> TaskRecord {
+        TaskRecord {
+            id: 1000,
+            source: "slack".into(),
+            source_task_id: source_task_id.into(),
+            workflow: "reply".into(),
+            mode: "implement".into(),
+            repo: Some("web".into()),
+            worktree_path: worktree_path.map(str::to_string),
+            branch: None,
+            state,
+            priority: 0,
+            title: format!("task {source_task_id}"),
+            url: None,
+            source_payload: None,
+            finished_at: None,
+            created_at: "2026-07-23T00:00:00Z".into(),
+            updated_at: "2026-07-23T00:00:00Z".into(),
+            thread_key: None,
+            last_signal_at: None,
+        }
+    }
+
+    fn pane(label: &str) -> SessionInfo {
+        SessionInfo {
+            session_id: format!("w1:p1|{label}"),
+            label: Some(label.to_string()),
+            cwd: None,
+        }
+    }
+
+    #[test]
+    fn unknown_task_id_is_an_orphan() {
+        // The DB knows no task with source id "gone-9": crashed dispatch,
+        // pre-#210 leftovers, or a deleted row — a true orphan.
+        let tasks = vec![task("C1:1.0", TaskState::Running, Some("/wt/1"))];
+        let orphans =
+            classify_orphan_panes("herdr", vec![pane("totsuka gone-9")], &tasks, |_| true);
+        assert_eq!(orphans.len(), 1);
+        assert!(orphans[0].reason.contains("no matching task"));
+    }
+
+    #[test]
+    fn non_terminal_task_pane_is_not_an_orphan() {
+        // The pane is in use — never a candidate, even with the worktree
+        // gone. The label carries the source task id, which for Slack is a
+        // non-numeric thread key: correlation must be a string match on
+        // source_task_id, never a parse against the DB row id.
+        for state in [
+            TaskState::Running,
+            TaskState::WaitingInput,
+            TaskState::Verifying,
+            TaskState::Escalated,
+        ] {
+            let tasks = vec![task("C1:1.0", state, None)];
+            let orphans =
+                classify_orphan_panes("herdr", vec![pane("totsuka C1:1.0")], &tasks, |_| false);
+            assert!(orphans.is_empty(), "state {state} must be kept");
+        }
+    }
+
+    #[test]
+    fn terminal_task_with_missing_worktree_is_an_orphan() {
+        // The #210 linkage failed (manual `git worktree remove`, refused
+        // release, crash): terminal + worktree gone ⇒ candidate.
+        let tasks = vec![task("42", TaskState::Done, Some("/wt/7"))];
+        let orphans = classify_orphan_panes("herdr", vec![pane("totsuka 42")], &tasks, |_| false);
+        assert_eq!(orphans.len(), 1);
+        assert!(orphans[0].reason.contains("worktree is gone"));
+
+        // A terminal task that never had a worktree recorded counts too.
+        let tasks = vec![task("C2:9.9", TaskState::Cancelled, None)];
+        let orphans =
+            classify_orphan_panes("herdr", vec![pane("totsuka C2:9.9")], &tasks, |_| true);
+        assert_eq!(orphans.len(), 1);
+    }
+
+    #[test]
+    fn terminal_task_with_retained_worktree_is_kept() {
+        // Retention policies (keep_7d etc.) hold the worktree on purpose; the
+        // pane's lifetime tracks the worktree's (ADR-0010).
+        let tasks = vec![task("42", TaskState::Done, Some("/wt/7"))];
+        let orphans = classify_orphan_panes("herdr", vec![pane("totsuka 42")], &tasks, |_| true);
+        assert!(orphans.is_empty());
+    }
+
+    #[test]
+    fn any_non_terminal_match_wins_when_source_ids_collide() {
+        // source_task_id is only unique per source: with several matching
+        // tasks (retry rows, cross-source collision) the conservative side
+        // wins — one live task keeps the pane.
+        let tasks = vec![
+            task("42", TaskState::Done, None),
+            task("42", TaskState::Running, None),
+        ];
+        let orphans = classify_orphan_panes("herdr", vec![pane("totsuka 42")], &tasks, |_| false);
+        assert!(orphans.is_empty(), "the running match must keep the pane");
+    }
 }

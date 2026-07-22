@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, worktree, faq, troubleshooting]
-timestamp: 2026-07-14T03:00:00Z
+timestamp: 2026-07-23T14:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -21,6 +21,7 @@ owner: tomoya-k31
 | `plugin:{name}` | 起動 + `config/validate` 疎通 | install 済みか / `plugins/{name}.toml` を修正 |
 | `llm` | `api_key_ref` が解決する | 環境変数 export / Keychain 登録 |
 | `worktrees` | 孤児 worktree なし | 対話的に掃除を提案（TTY） |
+| `panes` | 孤児 agent pane なし（#211） | 対話的に解放を提案（TTY）。`pane_control` 宣言 agent が無い構成では出ない |
 
 `--json` 出力は不具合報告に添付する（Issue テンプレートが要求、§10.3）。
 
@@ -33,7 +34,15 @@ owner: tomoya-k31
 - `retention_days` は完了後 N 日で削除。`run` の各サイクルで再評価される
 - どのタスクにも属さない **孤児 worktree** は `totsuka doctor` が検出し、TTY 上で対話的に `git worktree remove` を提案する（F-24）。dirty なものは skip
 
-手動で消す場合は `git worktree remove <path>`（committed-but-unpushed があるなら `--force` は慎重に）。
+手動で消す場合は `git worktree remove <path>`（committed-but-unpushed があるなら `--force` は慎重に）。**手動削除では pane 解放の連動（#210）が働かない**ため、残った pane は次の `totsuka doctor` の孤児 pane チェックで回収する（下記）。
+
+# 孤児 pane の掃除（#211）
+
+worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）が破れると herdr に totsuka の pane だけが残る（手動 `git worktree remove`・解放拒否・クラッシュ・#210 以前の残骸）。`totsuka doctor` が worktree と対称の受け皿になる（[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）:
+
+- `pane_control` 宣言の agent プラグインに `session/list`（protocol 0.2.2）で自分の pane を列挙させ、DB と突き合わせる。候補 = 「対応するタスクが DB に無い」または「タスクが終端かつ worktree も既に無い」。実行中タスクや保持ポリシー（`keep_7d` 等）で worktree が残っているタスクの pane は候補にならない
+- TTY では 1 件ずつ `[y/N]` で解放（`session/release`）を提案。`--json` / 非 TTY は検出のみ（`panes` チェックの FAIL）。**無人自動解放はしない**（孤児 worktree と同方針）
+- herdr が落ちている等で列挙できないときは warning に留まり、他のチェックは続行する
 
 # 停止・回復
 

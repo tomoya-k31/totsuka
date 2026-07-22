@@ -32,8 +32,8 @@
 
 use plugin_protocol::methods::{
     AgentState, DiagnosticsSnapshotResult, ExecutionMode, SessionAttachResult, SessionFocusResult,
-    SessionReleaseParams, SessionReleaseResult, StateNotification, TaskDispatchParams,
-    TaskDispatchResult,
+    SessionInfo, SessionListResult, SessionReleaseParams, SessionReleaseResult, StateNotification,
+    TaskDispatchParams, TaskDispatchResult,
 };
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -396,6 +396,41 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         }
         self.close_pane_and_workspace(&handle).await?;
         Ok(SessionReleaseResult { released: true })
+    }
+
+    /// Enumerate the live panes this plugin owns (`session/list`, #211):
+    /// `pane.list` filtered to panes whose `label` carries the `totsuka `
+    /// marker `dispatch` sets on `workspace.create`. The label filter is the
+    /// ownership boundary — herdr serves human-opened panes too, and those
+    /// must never be listed as release candidates. A pane without a label
+    /// (or with someone else's) is simply not ours.
+    ///
+    /// The returned `session_id` encodes the pane with an **empty** agent
+    /// session id: `pane.list` does not say which Claude session runs inside,
+    /// and `session/release` only needs the pane (`SessionHandle::decode`
+    /// accepts the bare form).
+    pub async fn list_sessions(&self) -> Result<SessionListResult, HerdrError> {
+        let result = self.client.call("pane.list", json!({})).await?;
+        let panes = result
+            .get("panes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let sessions = panes
+            .iter()
+            .filter(|pane| {
+                pane_str(pane, "label").is_some_and(|label| label.starts_with("totsuka "))
+            })
+            .filter_map(|pane| {
+                let pane_id = pane_str(pane, "pane_id")?;
+                Some(SessionInfo {
+                    session_id: SessionHandle::new(pane_id, "").encode(),
+                    label: pane_str(pane, "label").map(str::to_string),
+                    cwd: pane_str(pane, "cwd").map(str::to_string),
+                })
+            })
+            .collect();
+        Ok(SessionListResult { sessions })
     }
 
     /// Close a session's pane and the task-private workspace `dispatch`

@@ -91,6 +91,7 @@ impl<F: TransportFactory> Server<F> {
             method::DIAGNOSTICS_SNAPSHOT => self.diagnostics_snapshot(id, params).await,
             method::SESSION_FOCUS => self.session_focus(id, params).await,
             method::SESSION_RELEASE => self.session_release(id, params).await,
+            method::SESSION_LIST => self.session_list(id).await,
             method::SHUTDOWN => {
                 self.send(Response::result(id, Value::Null));
                 return false;
@@ -281,6 +282,16 @@ impl<F: TransportFactory> Server<F> {
             Err(e) => return self.send(Response::error(id, e)),
         };
         match agent.release(&parsed).await {
+            Ok(result) => self.send(Response::result(id, to_value(&result))),
+            Err(e) => self.send(rpc_error(id, &e)),
+        }
+    }
+
+    async fn session_list(&mut self, id: RequestId) {
+        let Some(agent) = self.agent.as_ref() else {
+            return self.send(not_initialized(id));
+        };
+        match agent.list_sessions().await {
             Ok(result) => self.send(Response::result(id, to_value(&result))),
             Err(e) => self.send(rpc_error(id, &e)),
         }

@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/設計プレビューを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman]
-timestamp: 2026-07-22T13:00:00Z
+timestamp: 2026-07-23T14:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -72,6 +72,10 @@ env 注入・フックの内容は**プラグインにとって不透明**（Orc
 
 1. **ctrl+c を送らない** — 完了済みで中断すべきものが無い。close の対（`pane.close` → workspace 接頭辞の `workspace.close`）は `cancel` と共通の `close_pane_and_workspace` に抽出。
 2. **同一性を検証してから閉じる** — `cancel` の盲目クローズは dispatch 直後に走るが、release は保持ポリシー次第で完了から日単位で後に走り、位置ベースの pane id（`w34:p2`）が別の pane に再発番されている窓がある。`pane.get` で live pane を取得し、`expect_cwd`（= worktree パス）/ `expect_label` と `PaneInfo.cwd` / `label` を突き合わせる。**比較可能なペアが1つでも不一致 → 閉じずに `released: false` + warn。全ペア比較不能（nullable フィールドが全部欠落）→ 閉じる（degrade-open）**。pane が既に無い（cancel 済みタスク等）は `released: false` で、**workspace も閉じない**（同一性未検証のまま閉じない）。
+
+# session/list（#211, 0.2.2）
+
+`session/list`（O→P、`pane_control` capability。[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）は `doctor` の孤児 pane 検出のための**自分の所有物の列挙**: herdr の `pane.list`（本プラグイン初使用）を呼び、`label` が **`totsuka ` で始まる pane だけ**を返す。この label フィルタが所有権境界 — herdr はユーザーが手で開いた pane も持ち、それを列挙・解放候補にしてはならない。label は `dispatch` が `workspace.create` に設定する `totsuka {task.id}`（`task.id` はプロトコル `Task.id` = **source task id**。Slack のスレッドキー等の文字列で、orchestrator DB の行 id ではない）で、doctor はこの source task id を `source_task_id` と文字列照合して DB と突き合わせる。返す `session_id` は pane_id + **空 agent_session** の縮退形（`pane.list` は中の Claude セッションを知らないが、`SessionHandle::decode` は bare 形式を受け付け `session/release` は pane さえ分かれば良い）。label / cwd は pane record から取れる範囲でそのまま添える。
 
 # capabilities（F-33）
 
