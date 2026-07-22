@@ -1,7 +1,7 @@
 ---
 type: Playbook
 title: フック完了判定のトラブルシューティング
-description: Claude Code フック方式の運用手引き。スプールバックログ（doctor check_spool での検出・drain/確認・corrupt 隔離ファイル）、Escalated タスクの対応手順（pane スナップショット確認・herdr pane での解消・次 Stop での自然復帰・fail アウト）、human 検収での totsuka task verify --pass/--fail 操作を、doctor のフックプローブ参照つきで整理する。
+description: Claude Code フック方式の運用手引き。スプールバックログ（doctor hook-spool チェックでの検出・drain/確認・corrupt 隔離ファイル）、Escalated タスクの対応手順（pane スナップショット確認・herdr pane での解消・次 Stop での自然復帰・fail アウト）、human 検収での totsuka task verify --pass/--fail 操作を、doctor のフックプローブ参照つきで整理する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [operations, playbook, hook, claude-code, spool, escalation, verify, doctor, epic-131]
 timestamp: 2026-07-23T13:00:00Z
@@ -13,17 +13,17 @@ owner: tomoya-k31
 
 Claude Code のフック完了判定（[F-100〜F-107](/product/orchestrator-spec.ja.md)、フロー: [hook-signal-flow](/architecture/hook-signal-flow.md)）を使う運用でのトラブル対応。前提知識は [ADR-0004](/decisions/adr-0004-hook-completion-signal.md) と、セキュリティ面は [hook-security](/security/hook-security.md)。日常運用の総合手引きは [運用ガイド](/operations/operations-guide.md)。
 
-まず疑ったら `totsuka doctor`（`--json` 可）。フック系プローブが一次切り分けになる（[orchestrator-cli](/components/orchestrator-cli.md)）:
+まず疑ったら `totsuka doctor`（`--json` 可）。フック系プローブが一次切り分けになる（[orchestrator-cli](/components/orchestrator-cli.md)）。プローブ名は `doctor --json` の `.name` に出るチェック名で表記する:
 
-| プローブ | 見るもの | 失敗が示すこと |
+| プローブ（チェック名） | 見るもの | 失敗が示すこと |
 |---|---|---|
-| `check_hook_socket` | UDS への自己 POST が 200 か | 受信サーバ不達・Bearer/権限不整合 |
-| `check_hook_assets` | スクリプト + `orchestrator-*.json` の存在・0700/0600・内容ハッシュ | アセット未生成・パーミッションドリフト・改ざん |
-| `check_hook_token` | `[hooks].auth_token_ref` が解決するか | keychain/env 参照切れ |
-| `check_hook_deps` | `curl` / `jq` の存在（H-14） | Stop 等の送信系フックは生 JSON を spool へ退避。`on-user-prompt-submit.sh` は無出力で縮退（そのターンの不可視コンテキスト注入が失われ、マーカー欠落は `on-stop.sh` の block が是正） |
-| `check_spool` | `spool_dir` の書込可否とバックログ件数（>0 は warning） | POST 失敗が継続・回収が回っていない |
+| `hook-socket` | UDS への自己 POST が 200 か | 受信サーバ不達・Bearer/権限不整合 |
+| `hooks` | スクリプト + `orchestrator-*.json` の存在・0700/0600・内容ハッシュ | アセット未生成・パーミッションドリフト・改ざん |
+| `hook-token` | `[hooks].auth_token_ref` が解決するか | keychain/env 参照切れ |
+| `hook-deps` | `curl` / `jq` の存在（H-14） | Stop 等の送信系フックは生 JSON を spool へ退避。`on-user-prompt-submit.sh` は無出力で縮退（そのターンの不可視コンテキスト注入が失われ、マーカー欠落は `on-stop.sh` の block が是正） |
+| `hook-spool` | `spool_dir` の書込可否とバックログ件数（>0 は warning） | POST 失敗が継続・回収が回っていない |
 
-`check_hook_assets` / `check_hook_token` の失敗は多くが `totsuka run` または `totsuka doctor` の再実行で自己修復する（アセットは内容ハッシュ冪等で正本へ収束、N-02）。
+`hooks` / `hook-token` の失敗は多くが `totsuka run` または `totsuka doctor` の再実行で自己修復する（アセットは内容ハッシュ冪等で正本へ収束、N-02）。
 
 # 1. スプールバックログ
 
@@ -44,8 +44,8 @@ ls -l "${XDG_STATE_HOME:-$HOME/.local/state}/totsuka/hooks/spool"
 ## 切り分けと対処
 
 1. **run が動いているか**: `totsuka status` で orchestrator 生存を確認。停止中なら `totsuka run`（または `--watch`）で回収が走る。
-2. **依存欠落**: `check_hook_deps` が赤なら `curl` / `jq` を入れる。無いと送信系フック（Stop 等）は生 JSON を spool へ退避し、`on-user-prompt-submit.sh` は無出力で縮退する（不可視コンテキスト注入がそのターンだけ失われる）。
-3. **受信不達**: `check_hook_socket` が赤なら socket パス・Bearer・0600 権限を確認（[hook-security](/security/hook-security.md)）。`check_hook_token` も併せて見る。
+2. **依存欠落**: `hook-deps` が赤なら `curl` / `jq` を入れる。無いと送信系フック（Stop 等）は生 JSON を spool へ退避し、`on-user-prompt-submit.sh` は無出力で縮退する（不可視コンテキスト注入がそのターンだけ失われる）。
+3. **受信不達**: `hook-socket` が赤なら socket パス・Bearer・0600 権限を確認（[hook-security](/security/hook-security.md)）。`hook-token` も併せて見る。
 4. **中身を見たいとき**（1 行 1 JSON）:
 
    ```bash

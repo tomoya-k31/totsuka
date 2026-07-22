@@ -39,11 +39,13 @@ owner: tomoya-k31
 
 `doctor` に**フック機構専用のプローブ**を追加する（既存の `hooks` アセットチェックを複製せず**拡張**する形。既存の `Check::ok`/`Check::fail`「原因 + 次のアクション」パターンに従う）。詳細な切り分け手順は [フックのトラブルシューティング](/operations/hook-troubleshooting.md)。
 
-- `check_hook_socket` — UDS への**自己 POST → 200**（受信サーバ・Bearer・0600 権限の疎通）。
-- `check_hook_assets` — スクリプト + `orchestrator-*.json` の存在・**0700/0600 パーミッション**・**内容ハッシュ一致**（既存の `hooks` アセットチェックを拡張。実体は core の `hooks::install` / `hooks::verify_assets` 呼び出し、#178）。
-- `check_hook_token` — `[hooks].auth_token_ref` が解決できる（keychain/env 参照切れの検出）。**#209 で未設定の扱いを条件付きに変更**: `cfg.workflows` の `agent` を静的マニフェストで引き、`Capabilities::hook_capable()`（= `resume_session || diagnostics_snapshot`）な agent を使う workflow が 1 つでもあれば **`Check::fail`**（該当 workflow / agent 名を detail に列挙）、無ければ従来どおり `Check::warn`。doctor で唯一、構成によって severity が変わるチェック。plugin の enabled 状態や参照整合性は既存の validate / `plugin:*` チェックの責務としてここでは重ねない。
-- `check_hook_deps` — `curl` + `jq` の存在（H-14。無いとフックが送信不能で全て spool 行き）。
-- `check_spool` — `spool_dir` の書き込み可否と**バックログ件数**（backlog > 0 は warning、[hook-security](/security/hook-security.md) N-05 の滞留検出）。
+プローブの実装は `check_*` 関数、`doctor --json` の `.name` に出るチェック名は括弧内:
+
+- `check_hook_socket`（`hook-socket`） — UDS への**自己 POST → 200**（受信サーバ・Bearer・0600 権限の疎通）。
+- `check_hook_assets`（`hooks`） — スクリプト + `orchestrator-*.json` の存在・**0700/0600 パーミッション**・**内容ハッシュ一致**（既存の `hooks` アセットチェックを拡張。実体は core の `hooks::install` / `hooks::verify_assets` 呼び出し、#178）。
+- `check_hook_token`（`hook-token`） — `[hooks].auth_token_ref` が解決できる（keychain/env 参照切れの検出）。**#209 で未設定の扱いを条件付きに変更**: `cfg.workflows` の `agent` を静的マニフェストで引き、`Capabilities::hook_capable()`（= `resume_session || diagnostics_snapshot`）な agent を使う workflow が 1 つでもあれば **`Check::fail`**（該当 workflow / agent 名を detail に列挙）、無ければ従来どおり `Check::warn`。doctor で唯一、構成によって severity が変わるチェック。plugin の enabled 状態や参照整合性は既存の validate / `plugin:*` チェックの責務としてここでは重ねない。
+- `check_hook_deps`（`hook-deps`） — `curl` + `jq` の存在（H-14。無いとフックが送信不能で全て spool 行き）。
+- `check_spool`（`hook-spool`） — `spool_dir` の書き込み可否と**バックログ件数**（backlog > 0 は warning、[hook-security](/security/hook-security.md) N-05 の滞留検出）。
 
 - 共通フラグ: `--config <path>`（設定ファイル上書き = F-66 の最上位レイヤ）、`--debug`（run のログレベルを debug に引き上げ）。`--json` は主要読み取り系コマンド（status / task list / task show / plugin list / doctor）に用意し、宣言は `common::JsonFlag`（`#[command(flatten)]`）で一元化（#177）。
 - **設定ロードの一元化（#208、[ADR-0009](/decisions/adr-0009-env-override-whitelist.md)）**: `Cx::load_config(&env)` が `config.toml` パース → core の `apply_env_overrides`（F-66 第 2 層 `TOTSUKA_*`）まで行い、`run` / `config` / `focus` / `doctor` の 4 コマンドすべてがここを通る。**片方だけに適用しない**理由は `focus` / `doctor` が `[hooks].socket_path` から `run` のバインドしたソケットを解決するためで、`run` のみだと `TOTSUKA_HOOKS_SOCKET_PATH` 設定時に別のソケットを見る。警告は stderr（`--json` の stdout 契約を壊さない）。CLI フラグ（`--debug`）は**この後**に適用されるため「CLI > env」が適用順で成立する。例外は `plugin enable`/`disable` のローカルローダで、ファイル編集用のため raw のまま維持（env で編集結果を汚染しない）。`config show` はファイル内容表示を維持しつつ、有効な env オーバーライドを末尾に一覧表示する（`--redacted` 時は `is_secret_key` で値をマスク）。
