@@ -8,12 +8,14 @@ use std::path::{Path, PathBuf};
 
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::plugin_host;
-use orchestrator_core::config::{self, RootConfig};
+use orchestrator_core::config::{self, RootConfig, secret_resolver};
 use orchestrator_core::ports::git::GitRunner;
 use orchestrator_core::worktree::WorktreeManager;
 use serde::Serialize;
 
-use crate::common::{CliError, Cx, plugin_spec, secret_resolver};
+use orchestrator_core::plugins::plugin_spec;
+
+use crate::common::{CliError, Cx};
 use crate::init_cmd::git_version;
 
 /// `serde` `skip_serializing_if` predicate: omit a `false` flag from the JSON.
@@ -677,7 +679,7 @@ fn check_plugins(
     }
     let mut specs = Vec::new();
     for name in enabled {
-        match plugin_spec(cx, cfg, name, env) {
+        match plugin_spec(&cx.store(), &cx.plugin_config_dir(), cfg, name, env) {
             // `plugin_spec` already resolved plugins/{name}.toml (with secrets)
             // into `init_config`; reuse it rather than re-reading and hitting
             // the Keychain a second time.

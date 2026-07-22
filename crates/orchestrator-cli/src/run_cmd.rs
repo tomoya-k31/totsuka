@@ -12,13 +12,14 @@ use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::{OpenAiConfig, OpenAiRouter};
 use orchestrator_core::adapters::plugin_host::Plugin;
 use orchestrator_core::adapters::{RunLock, StateDb};
-use orchestrator_core::config::{self, PluginKind, RootConfig};
+use orchestrator_core::config::{self, PluginKind, RootConfig, secret_resolver};
 use orchestrator_core::logging::{self, LogConfig};
 use orchestrator_core::platform::PlatformProcessProbe;
+use orchestrator_core::plugins::plugin_spec;
 use orchestrator_core::ports::SecretString;
 use orchestrator_core::run::{Engine, HookRuntime, PluginSet, RunSummary, settings_from_config};
 
-use crate::common::{CliError, Cx, plugin_spec, secret_resolver};
+use crate::common::{CliError, Cx};
 
 /// Grace period for plugin shutdown at the end of a run.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -212,7 +213,7 @@ async fn launch_plugins(
 ) -> Result<PluginSet, CliError> {
     let mut set = PluginSet::default();
     for (name, plugin_cfg) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
-        let spec = plugin_spec(cx, cfg, name, env)?;
+        let spec = plugin_spec(&cx.store(), &cx.plugin_config_dir(), cfg, name, env)?;
         let plugin = Plugin::launch(spec).await?;
         match plugin_cfg.kind {
             PluginKind::TaskSource => set.sources.insert(name.clone(), plugin),

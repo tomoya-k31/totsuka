@@ -19,7 +19,9 @@ pub use edit::{EditError, set_plugin_enabled};
 
 pub use env_overrides::{ENV_PREFIX, apply_env_overrides, override_keys};
 pub use raw::PluginRawConfig;
-pub use resolve::{ResolveError, SecretResolver, expand_env, expand_path};
+pub use resolve::{
+    ResolveError, SecretResolver, expand_env, expand_path, resolve_strings, secret_resolver,
+};
 pub use schema::{
     CURRENT_SCHEMA_VERSION, CleanupPolicyConfig, CleanupPolicyName, ConfigError,
     DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_POLL_INTERVAL_SECS,

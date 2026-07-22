@@ -15,7 +15,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::common::{CliError, Cx, hook_socket_path, secret_resolver};
+use orchestrator_core::config::secret_resolver;
+
+use crate::common::{CliError, Cx, hook_socket_path};
 
 /// Ask the running orchestrator to focus the task's pane. Never fails: every
 /// degraded outcome is a printed note and a clean exit (see module docs).
