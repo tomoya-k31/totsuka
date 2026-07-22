@@ -14,6 +14,60 @@ use orchestrator_core::plugins::PluginStore;
 /// A boxed error for CLI operations.
 pub type CliError = Box<dyn std::error::Error>;
 
+// Process exit codes (#177; the table lives in
+// docs/components/orchestrator-cli.md). 0 = success is expressed as
+// `ExitCode::SUCCESS` at the call site; 2 also covers clap's own parse
+// failures, which exit before `main`'s mapping is reached.
+
+/// A runtime failure (any error without a more specific code).
+pub const EXIT_ERROR: u8 = 1;
+/// A usage error (no/unknown subcommand, bad flags).
+pub const EXIT_USAGE: u8 = 2;
+/// Diagnostics ran to completion and found problems (`totsuka doctor`).
+/// Distinct from [`EXIT_ERROR`] so scripts can tell "doctor itself failed"
+/// from "doctor worked and the environment has issues".
+pub const EXIT_PROBLEMS_FOUND: u8 = 3;
+
+/// A failure that maps to a specific process exit code. `main` downcasts the
+/// returned [`CliError`] to this; any other error exits [`EXIT_ERROR`]. The
+/// message keeps the "cause → next action" convention (§7) like every other
+/// CLI error.
+#[derive(Debug)]
+pub struct ExitWith {
+    /// The process exit code to return.
+    pub code: u8,
+    /// The "cause → next action" message.
+    pub message: String,
+}
+
+impl ExitWith {
+    /// A failure exiting with `code` and the conventional message.
+    pub fn new(code: u8, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for ExitWith {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ExitWith {}
+
+/// The shared `--json` flag (machine-readable contract: parseable output on
+/// stdout, nothing else). Flattened into every command that supports JSON
+/// output so the flag is declared once.
+#[derive(Debug, Default, clap::Args)]
+pub struct JsonFlag {
+    /// Emit JSON instead of human-readable text.
+    #[arg(long)]
+    pub json: bool,
+}
+
 /// Resolved locations every command operates on. `--config` overrides the
 /// config file path (highest layer of F-66); everything else stays XDG.
 pub struct Cx {

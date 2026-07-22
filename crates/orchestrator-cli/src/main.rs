@@ -52,9 +52,8 @@ enum Command {
     },
     /// Show tasks, worktrees, and whether the orchestrator is running.
     Status {
-        /// Emit JSON instead of a table.
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        json: common::JsonFlag,
     },
     /// Operate on individual tasks (list / show / cancel / retry).
     Task {
@@ -88,9 +87,8 @@ enum Command {
     },
     /// Diagnose the environment (git, config, plugins, orphan worktrees).
     Doctor {
-        /// Emit JSON instead of text.
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        json: common::JsonFlag,
     },
     /// Generate shell completions (zsh, bash, fish, ...).
     Completion {
@@ -106,14 +104,51 @@ fn main() -> std::process::ExitCode {
     // failure (exit 1). A single message, no double-print.
     let Some(command) = cli.command else {
         eprintln!("totsuka: no command given. Try `totsuka --help`.");
-        return std::process::ExitCode::from(2);
+        return std::process::ExitCode::from(common::EXIT_USAGE);
     };
+    let json = wants_json(&command);
     match execute(command, cli.config.as_deref(), cli.debug) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("error: {err}");
-            std::process::ExitCode::FAILURE
+            emit_error(&err, json);
+            let code = err
+                .downcast_ref::<common::ExitWith>()
+                .map(|e| e.code)
+                .unwrap_or(common::EXIT_ERROR);
+            std::process::ExitCode::from(code)
         }
+    }
+}
+
+/// Whether this invocation asked for machine-readable output: its error (if
+/// any) is then emitted as a JSON envelope on stderr instead of plain text.
+fn wants_json(command: &Command) -> bool {
+    match command {
+        Command::Status { json } | Command::Doctor { json } => json.json,
+        Command::Task { cmd } => cmd.wants_json(),
+        Command::Plugin { cmd } => cmd.wants_json(),
+        _ => false,
+    }
+}
+
+/// Print one error to stderr. Plain text keeps the human-facing
+/// `error: <cause> → <next action>` line (§7); `--json` invocations instead
+/// get a one-line JSON envelope `{"error":{"message":...,"action":...}}` so
+/// callers can parse failures the same way they parse stdout (#177). The
+/// first ` → ` splits cause from action; without one, `action` is null.
+fn emit_error(err: &common::CliError, json: bool) {
+    if json {
+        let text = err.to_string();
+        let (message, action) = match text.split_once(" → ") {
+            Some((cause, action)) => (cause.to_string(), Some(action.to_string())),
+            None => (text, None),
+        };
+        eprintln!(
+            "{}",
+            serde_json::json!({"error": {"message": message, "action": action}})
+        );
+    } else {
+        eprintln!("error: {err}");
     }
 }
 
@@ -138,12 +173,12 @@ fn execute(
         Command::Completion { .. } => unreachable!("handled above"),
         Command::Init => init_cmd::run(&cx),
         Command::Run { watch, dry_run } => run_cmd::run(&cx, watch, dry_run, debug),
-        Command::Status { json } => status_cmd::run(&cx, json),
+        Command::Status { json } => status_cmd::run(&cx, json.json),
         Command::Task { cmd } => task_cmd::run(&cx, cmd),
         Command::Focus { id } => focus_cmd::run(&cx, id),
         Command::Plugin { cmd } => plugin_cmd::run(cmd),
         Command::Config { cmd } => config_cmd::run(&cx, cmd),
         Command::Logs { follow, task } => logs_cmd::run(&cx, follow, task),
-        Command::Doctor { json } => doctor_cmd::run(&cx, json),
+        Command::Doctor { json } => doctor_cmd::run(&cx, json.json),
     }
 }
