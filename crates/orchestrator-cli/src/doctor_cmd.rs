@@ -496,7 +496,7 @@ fn check_opencode_assets(
             checks.push(Check::fail(
                 "opencode-assets",
                 "the config references an opencode-kind tool but no opencode config dir was found",
-                "install opencode and run it once ($XDG_CONFIG_HOME/opencode must exist) or drop the opencode tool reference",
+                "install opencode and run it once (its config dir — $XDG_CONFIG_HOME/opencode, default ~/.config/opencode — must exist) or drop the opencode tool reference",
             ));
             return;
         }
@@ -505,7 +505,7 @@ fn check_opencode_assets(
             checks.push(Check::fail(
                 "opencode-assets",
                 format!("could not write the opencode assets: {e}"),
-                "check permissions on $XDG_CONFIG_HOME/opencode",
+                "check permissions on the opencode config dir ($XDG_CONFIG_HOME/opencode, default ~/.config/opencode)",
             ));
             return;
         }

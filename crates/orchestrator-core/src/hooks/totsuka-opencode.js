@@ -78,11 +78,13 @@ export const TotsukaOpencode = async ({ client }) => {
   // the receiver's idempotency key makes the duplicate harmless).
   async function onIdle(sessionID) {
     let last = null
+    let lastAny = null
     try {
       const res = await client.session.messages({ path: { id: sessionID } })
       const data = res?.data ?? res
       if (Array.isArray(data)) {
         last = [...data].reverse().find((m) => (m.info?.role ?? m.role) === "assistant") ?? null
+        lastAny = data.length > 0 ? data[data.length - 1] : null
       }
     } catch {}
     const text = last
@@ -91,7 +93,11 @@ export const TotsukaOpencode = async ({ client }) => {
           .map((p) => p.text)
           .join("")
       : ""
-    const promptId = last?.info?.id ?? last?.id ?? ""
+    // Idempotency-key element: prefer the assistant message id; fall back to
+    // any message id so distinct stops rarely share an empty prompt_id (an
+    // empty one would collapse same-status stops into one DB row).
+    const promptId =
+      last?.info?.id ?? last?.id ?? lastAny?.info?.id ?? lastAny?.id ?? ""
     const marker = parseMarker(text)
     await postEvent({
       job_id: JOB_ID,
@@ -99,7 +105,9 @@ export const TotsukaOpencode = async ({ client }) => {
       prompt_id: promptId,
       hook_event_name: "Stop",
       ts: isoNow(),
-      status: marker ? marker.status : "UNKNOWN",
+      // Uppercase mirrors on-stop.sh (the receiver compares case-insensitively
+      // either way).
+      status: marker ? marker.status.toUpperCase() : "UNKNOWN",
       reason: marker ? marker.reason : "",
       last_assistant_message: text,
       background_tasks: [],
