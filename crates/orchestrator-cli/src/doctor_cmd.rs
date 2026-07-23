@@ -88,7 +88,11 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         )),
     }
 
-    // Config presence + full offline validation.
+    // Config presence + full offline validation. `config_ok` gates the checks
+    // with side effects outside totsuka's own dirs (codex hooks.json sync) —
+    // a config that validation rejects must not cause writes `run` would
+    // never perform (it aborts on errors before dispatch).
+    let mut config_ok = false;
     let cfg = match cx.load_config(&env) {
         Ok(cfg) => {
             let env_fn = |k: &str| env.get(k).cloned();
@@ -126,6 +130,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
                     "run `totsuka config validate` for the full list",
                 ));
             } else {
+                config_ok = true;
                 checks.push(Check::ok(
                     "config",
                     format!("{} is valid", cx.config_path.display()),
@@ -163,7 +168,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     };
 
     if let Some(cfg) = &cfg {
-        check_hooks(cx, cfg, &env, &mut checks);
+        check_hooks(cx, cfg, config_ok, &env, &mut checks);
         check_plugins(cx, cfg, &env, &mut checks);
         check_llm_key(cfg, &env, &mut checks);
         check_onepassword(cx, &env, &mut checks);
@@ -303,8 +308,15 @@ fn toml_has_op_reference(value: &toml::Value) -> bool {
 /// All Claude Code hook-mechanism probes (#141): assets, script dependencies,
 /// the Bearer token, the spool backlog, and (when a receiver is live) UDS
 /// connectivity. Extends the single asset check that shipped with #137.
-fn check_hooks(cx: &Cx, cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
+fn check_hooks(
+    cx: &Cx,
+    cfg: &RootConfig,
+    config_ok: bool,
+    env: &HashMap<String, String>,
+    checks: &mut Vec<Check>,
+) {
     check_hook_assets(cx, cfg, checks);
+    check_codex_hooks(cx, cfg, config_ok, env, checks);
     check_hook_deps(env, checks);
     // Which workflows actually need the Bearer token, decided from the static
     // manifests alone (plugin enablement / reference integrity belong to
@@ -363,6 +375,94 @@ fn check_hook_assets(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
             format!("hook assets are inconsistent after a repair attempt: {detail}"),
             "a persistent mismatch on a writable dir means the asset is being tampered with (N-02) → investigate",
         ));
+    }
+}
+
+/// Codex hook registration (#196 Phase 2), only when the config references a
+/// codex-kind tool (silent otherwise — a claude-only setup has nothing to
+/// check). Mirrors `check_hook_assets`: sync (self-heal) then verify, plus the
+/// codex-specific trust probe — codex **silently skips** untrusted hook
+/// entries, which would strand every codex task in a timeout escalation, so an
+/// untrusted entry is surfaced with the one-time TUI approval as the action.
+fn check_codex_hooks(
+    cx: &Cx,
+    cfg: &RootConfig,
+    config_ok: bool,
+    env: &HashMap<String, String>,
+    checks: &mut Vec<Check>,
+) {
+    use orchestrator_core::hooks::codex;
+    if !codex::references_codex(cfg) {
+        return;
+    }
+    // A config that validation rejects (e.g. a tool kind without an adapter)
+    // must not trigger writes into the user's $CODEX_HOME — `run` would abort
+    // on the same config before ever syncing. The failing `config` check
+    // above already carries the fix; this row just explains the skip.
+    if !config_ok {
+        checks.push(Check::warn(
+            "codex-hooks",
+            "skipped: the config has validation errors, so the hooks.json sync did not run",
+            "fix the config errors, then re-run doctor",
+        ));
+        return;
+    }
+    let home = codex::codex_home(|k| env.get(k).cloned());
+    match codex::sync_registration(home.as_deref(), &cx.paths, cfg) {
+        Ok(codex::SyncOutcome::NoCodexHome) => {
+            checks.push(Check::fail(
+                "codex-hooks",
+                "the config references a codex-kind tool but no codex home was found",
+                "install the codex CLI (its home is $CODEX_HOME, default ~/.codex) or drop the codex tool reference",
+            ));
+            return;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            checks.push(Check::fail(
+                "codex-hooks",
+                format!("could not sync the totsuka entries in hooks.json: {e}"),
+                "fix $CODEX_HOME/hooks.json (it is never overwritten when unparseable) and re-run doctor",
+            ));
+            return;
+        }
+    }
+    let home = home.expect("NoCodexHome returned above");
+    let issues = codex::verify_registration(&home, &cx.paths);
+    if !issues.is_empty() {
+        let detail = issues
+            .iter()
+            .map(|i| format!("{}: {}", i.path.display(), i.problem))
+            .collect::<Vec<_>>()
+            .join("; ");
+        checks.push(Check::fail(
+            "codex-hooks",
+            format!("hooks.json is inconsistent after a sync attempt: {detail}"),
+            "a persistent mismatch on a writable file means it is being tampered with (N-02) → investigate",
+        ));
+        return;
+    }
+    match codex::untrusted_events(&home, &cx.paths) {
+        Ok(untrusted) if untrusted.is_empty() => checks.push(Check::ok(
+            "codex-hooks",
+            format!(
+                "totsuka entries registered and trusted in {}",
+                codex::hooks_json_path(&home).display()
+            ),
+        )),
+        Ok(untrusted) => checks.push(Check::warn(
+            "codex-hooks",
+            format!(
+                "codex will silently skip the untrusted totsuka entries: {}",
+                untrusted.join(", ")
+            ),
+            "run `codex` once and choose \"Trust all and continue\" in the startup hooks review (re-needed only when the entries themselves change)",
+        )),
+        Err(e) => checks.push(Check::warn(
+            "codex-hooks",
+            format!("could not read the codex trust state: {e}"),
+            "check $CODEX_HOME/config.toml is readable",
+        )),
     }
 }
 

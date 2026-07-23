@@ -102,6 +102,12 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
     // hash, so a matching second startup rewrites nothing.
     orchestrator_core::hooks::install(paths, &cfg)?;
 
+    // Codex hook registration (#196 Phase 2): keep the totsuka entries in
+    // $CODEX_HOME/hooks.json in sync. Internally a no-op unless the config
+    // references a codex-kind tool, so claude-only setups never touch it.
+    let codex_home = orchestrator_core::hooks::codex::codex_home(env_fn);
+    orchestrator_core::hooks::codex::sync_registration(codex_home.as_deref(), paths, &cfg)?;
+
     let db = StateDb::open(&paths.state_dir().join("state.db"))?;
     let plugins = launch_plugins(cx, &cfg, &env).await?;
 

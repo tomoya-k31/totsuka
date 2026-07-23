@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# on-session-start.sh — Claude Code SessionStart hook (#131/#137, E-09).
+# on-session-start.sh — SessionStart hook for Claude Code and Codex
+# (#131/#137/#196, E-09).
 #
-# Establishes the job_id -> real claude session_id correlation, which is what
-# lets `--resume` reattach to the right task. Fail-open (no -e); stdout empty.
+# Establishes the job_id -> native tool session_id correlation, which is what
+# lets resume reattach to the right task. Fail-open (no -e); stdout empty.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,6 +11,10 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/hook-common.sh"
 
 input="$(cat)"
+
+# Codex registers hooks globally — no TOTSUKA_JOB_ID means a personal session,
+# not an orchestrator pane (see on-stop.sh).
+[ -n "${TOTSUKA_JOB_ID:-}" ] || exit 0
 
 if tools_missing; then
   spool_line "$input"
