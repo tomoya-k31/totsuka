@@ -1050,7 +1050,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 .fail_dispatch(
                     &record,
                     format!(
-                        "tool `{tool_name}` (kind `{}`) has no completion-detection adapter yet → use a claude-kind tool",
+                        "tool `{tool_name}` (kind `{}`) has no completion-detection adapter yet → use a claude/codex-kind tool",
                         tool_profile.kind.as_str()
                     ),
                 )

@@ -1,6 +1,11 @@
 # Bundle Update Log
 
 ## 2026-07-24
+* **Creation**: [Codex ツールのセットアップと hooks trust 運用](/operations/codex-tool-setup.md) — #196 Phase 2（`kind = "codex"` 有効化）の一回きりセットアップ（hooks trust・リポジトリ trust）と復旧手順。検証済み codex-cli 0.145.0、既知の縮退（plan mode 不在・heartbeat 無し・llm 検収不可・SessionEnd 3s クランプ）を記録。
+* **Update**: [ADR-0014](/decisions/adr-0014-tool-abstraction.md) — Consequences に Phase 2 完了（実機スパイク [V1]〜[V3] の結果、専用 on-codex-*.sh 不要・notify フォールバック見送りの実装時判断）を追記。
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `tool`: codex の `has_adapter` ✓・組み込み `codex`・launch_spec の codex argv（sandbox 既定 / `resume <id>` サブコマンド / settings 不使用）とケイパビリティ確定。`hooks`: スクリプトのツール非依存化（`TOTSUKA_JOB_ID` ゲート・`turn_id` フォールバック・PermissionRequest 正規化）と `hooks::codex`（`$CODEX_HOME/hooks.json` の構造マージ・trust プローブ・doctor `codex-hooks` チェック）を追記。
+* **Update**: [POST /agent-events](/apis/agent-events.md) — 送出元に Codex を追加（`turn_id` → `prompt_id` 載せ替え、PermissionRequest → Notification 合成。ワイヤ形は不変）。
+* **Update**: [設定リファレンス](/development/config-reference.md) / [設定例集](/development/config-examples.md) — 組み込み `codex`・kind 別の mode_args/plan_args 既定・resume サブコマンドの差分・セットアップ手順への導線を追記。
 * **Creation**: [ADR-0014 AI ツール抽象は「単一 pane runner + core 側ツールレジストリ + 解決済み ToolLaunchSpec」で行う](/decisions/adr-0014-tool-abstraction.md) — リポジトリ/ワークフローごとの AI ツール切り替え（[#196](https://github.com/tomoya-k31/totsuka/issues/196) Phase 1）の設計判断を記録。agent（pane runner）と tool（pane 内 CLI）の直交 2 軸、`[tools]` レジストリ + `default_tool` / `repo.tool` / `workflow.tool`（優先順位 workflow > repo > default > 組み込み claude）、protocol 0.2.3 の `ToolLaunchSpec`（完全解決済み argv/env の opaque contract）、アダプタ無し kind の dispatch 拒否、`verification = "llm"` × tool の静的検証、ランタイム未消費だった `default_agent` の削除。ツール別 agent プラグイン案・herdr 側プロファイル解決案は不採用。
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) — 0.2.3: `TaskDispatchParams.tool_launch`（`ToolLaunchSpec { program, args, env }`）を追記、`hook: Option<HookLaunchSpec>` の deprecated 化（移行窓は併送）、現行バージョンを 0.2.3 に更新。
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — 新設 `tool` モジュール（ToolKind/ToolCapabilities/ToolProfile/launch_spec/レジストリ、herdr `launch_command` の移設 + golden テスト移植）の行を追加し、`run` の dispatch_one にツール解決（fail_dispatch 防御・resume のケイパビリティゲート）と `tool_launch` 送出を追記。

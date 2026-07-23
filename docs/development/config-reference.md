@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks]
-timestamp: 2026-07-23T00:00:00Z
+timestamp: 2026-07-24T10:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -91,14 +91,18 @@ owner: tomoya-k31
 
 # `[tools.{name}]`（AI ツールレジストリ、#196）
 
-pane 内で起動する AI ツール CLI の定義。`{name}` は `default_tool` / `[[repositories]].tool` / `[[workflows]].tool` から参照する任意の名前。組み込み既定として `claude`（`command = "claude"`）が常に存在し、同名エントリで上書きできる。同一 kind の別プロファイル（例 `claude-fast`）も定義可能。**現バージョンで dispatch できるのは `kind = "claude"` のみ**（codex / opencode はパースは通るが参照すると validate エラー。アダプタは #196 Phase 2/3 で追加予定）。
+pane 内で起動する AI ツール CLI の定義。`{name}` は `default_tool` / `[[repositories]].tool` / `[[workflows]].tool` から参照する任意の名前。組み込み既定として `claude`（`command = "claude"`）と `codex`（`command = "codex"`、#196 Phase 2）が常に存在し、同名エントリで上書きできる。同一 kind の別プロファイル（例 `claude-fast`）も定義可能。**現バージョンで dispatch できるのは `kind = "claude"` / `kind = "codex"`**（opencode はパースは通るが参照すると validate エラー。アダプタは #196 Phase 3 で追加予定）。
+
+`kind = "codex"` の利用には一回きりのセットアップ（hooks trust・対象リポジトリ trust）が必要 → [Codex ツールのセットアップと hooks trust 運用](/operations/codex-tool-setup.md)。
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `kind` | enum | 必須 | アダプタ種別: `claude` / `codex` / `opencode`。argv 組立と完了検知方式を決める |
 | `command` | string? | kind 名 | 空白区切りのコマンドライン。先頭 = プログラム、残り = 基本引数（例 `"claude --model haiku"`） |
-| `mode_args` | string[]? | kind 既定 | implement モードで追加する引数 |
-| `plan_args` | string[]? | kind 既定 | plan モードで追加する引数（claude 既定: `["--permission-mode", "plan"]`） |
+| `mode_args` | string[]? | kind 既定 | implement モードで追加する引数（codex 既定: `["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]`、claude 既定: なし） |
+| `plan_args` | string[]? | kind 既定 | plan モードで追加する引数（claude 既定: `["--permission-mode", "plan"]`、codex 既定: `["--sandbox", "read-only"]` — codex に plan permission mode は無くサンドボックス縮退で代替） |
+
+kind ごとの argv 組立の差分: claude はフック設定を `--settings <path>` で受け、resume は `--resume <id>` フラグ。codex はフックがグローバル登録（`~/.codex/hooks.json`、`TOTSUKA_*` env でゲート）のため `--settings` 相当は付かず、resume は `resume <id>` **サブコマンド**（基本引数の直後・モード引数の前に挿入）。
 
 ツール解決はディスパッチ時に workflow ピン > repo 既定 > `default_tool` > 組み込み `claude` の順。解決結果は core が完全な argv/env（`ToolLaunchSpec`）へ組み立てて agent プラグインに渡すため、herdr.toml の `agent_command` / `plan_args` は後方互換フォールバック（deprecated）になった。
 
