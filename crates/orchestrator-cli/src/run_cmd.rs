@@ -108,6 +108,12 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
     let codex_home = orchestrator_core::hooks::codex::codex_home(env_fn);
     orchestrator_core::hooks::codex::sync_registration(codex_home.as_deref(), paths, &cfg)?;
 
+    // OpenCode assets (#196 Phase 3): the completion-detection JS plugin and
+    // the totsuka-plan agent under $XDG_CONFIG_HOME/opencode/. Same gating —
+    // untouched unless an opencode-kind tool is referenced.
+    let opencode_dir = orchestrator_core::hooks::opencode::opencode_config_dir(env_fn);
+    orchestrator_core::hooks::opencode::sync_assets(opencode_dir.as_deref(), &cfg)?;
+
     let db = StateDb::open(&paths.state_dir().join("state.db"))?;
     let plugins = launch_plugins(cx, &cfg, &env).await?;
 
