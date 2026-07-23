@@ -312,8 +312,38 @@ pub struct TaskDispatchParams {
     /// `--settings <settings_path>` to the agent CLI argv and injects `env`
     /// into the process. Knowledge of the hook mechanism stays on the
     /// Orchestrator side; the plugin does not interpret the contents.
+    ///
+    /// **Deprecated since 0.2.3** (#196): superseded by
+    /// [`tool_launch`](Self::tool_launch), which carries the *fully assembled*
+    /// argv instead of leaving CLI-flag knowledge (`--settings`, `--resume`)
+    /// in the plugin. Both are sent during the deprecation window — an old
+    /// plugin reads `hook`, a new plugin prefers `tool_launch` — and `hook`
+    /// is removed at the next breaking bump (0.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook: Option<HookLaunchSpec>,
+    /// 0.2.3 (#196): the fully-resolved tool launch spec. When `Some`, the
+    /// plugin launches exactly this argv/env in the pane — plan flags, hook
+    /// settings, and resume syntax are already baked in by the Orchestrator's
+    /// tool registry. Takes precedence over [`hook`](Self::hook) +
+    /// plugin-local command assembly when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_launch: Option<ToolLaunchSpec>,
+}
+
+/// A fully-resolved agent-CLI launch command (additive since protocol 0.2.3,
+/// #196), carried in [`TaskDispatchParams::tool_launch`]. Opaque to the
+/// plugin — it starts `program` with `args` and `env` in the pane, exactly as
+/// given (same contract style as [`HookLaunchSpec`]: tool knowledge stays on
+/// the Orchestrator side).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolLaunchSpec {
+    /// The program to launch (e.g. `claude`).
+    pub program: String,
+    /// Arguments, fully resolved: mode flags, hook settings, resume id.
+    pub args: Vec<String>,
+    /// Environment variables to inject into the launched process
+    /// (`TOTSUKA_*`; a superset of the deprecated [`HookLaunchSpec::env`]).
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// How to launch the agent with the Orchestrator's hook configuration
@@ -690,6 +720,19 @@ mod tests {
                     ),
                 ]),
             }),
+            tool_launch: Some(ToolLaunchSpec {
+                program: "claude".into(),
+                args: vec![
+                    "--settings".into(),
+                    "/data/totsuka/hooks/orchestrator-implement.json".into(),
+                    "--resume".into(),
+                    "claude-sess-abc".into(),
+                ],
+                env: std::collections::BTreeMap::from([(
+                    "TOTSUKA_JOB_ID".to_string(),
+                    "job-7".to_string(),
+                )]),
+            }),
         });
         round_trip(&TaskDispatchResult {
             session_id: "sess-1".into(),
@@ -808,6 +851,7 @@ mod tests {
             job_id: None,
             resume_session_id: None,
             hook: None,
+            tool_launch: None,
         };
         let wire = serde_json::to_string(&unset).unwrap();
         assert!(!wire.contains("job_id"));

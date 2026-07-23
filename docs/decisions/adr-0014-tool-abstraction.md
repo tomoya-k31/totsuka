@@ -1,0 +1,40 @@
+---
+type: Decision
+title: ADR-0014 AI ツール抽象は「単一 pane runner + core 側ツールレジストリ + 解決済み ToolLaunchSpec」で行う
+description: リポジトリ/ワークフローごとの AI ツール切り替え（#196、Claude Code / Codex / OpenCode）のため、agent プラグイン（pane runner）と AI ツール（pane 内 CLI）を直交 2 軸に分離し、ツール知識（argv 組立・ケイパビリティ・完了検知アダプタ）を orchestrator-core の [tools] レジストリに集約、protocol 0.2.3 の ToolLaunchSpec で完全解決済み argv/env をプラグインへ渡す決定。ツール別 agent プラグイン案と herdr 側プロファイル解決案は不採用。
+tags: [tool, protocol, herdr, codex, opencode, registry, dispatch]
+timestamp: 2026-07-24T00:00:00Z
+status: accepted
+---
+
+# Status
+
+Accepted — 2026-07-24（[#196](https://github.com/tomoya-k31/totsuka/issues/196)。Phase 1 = 抽象と配線・claude のみ・挙動不変。先行 rename は #222）
+
+# Context
+
+herdr プラグインが `claude … --settings <path> [--resume <id>]` の CLI フラグをハードコードしており、pane 内で走る AI ツールが Claude Code に固定されていた。リポジトリやワークフローごとに Codex / OpenCode を使い分けたいが、「agent プラグイン（pane を管理する runner: herdr/orca）」と「AI ツール（pane 内で走る CLI）」の区別が config 上に存在しなかった。旧 `[[repositories]].default_agent` はこの 2 軸を混同した名残で、validate されるだけのランタイム未消費フィールドだった。
+
+# Decision
+
+1. **2 軸モデル**を導入する。`[[workflows]].agent` は従来どおり pane runner（agent_ide プラグイン）を選ぶ。新設の `tool` 軸（`[[workflows]].tool` > `[[repositories]].tool` > `default_tool` > 組み込み `claude`）が pane 内で起動する AI ツールを選ぶ。両者は直交し、herdr は全ツール共通の pane runner のまま。
+2. **ツール知識は core に集約する**（`orchestrator-core::tool`）。`[tools.<name>]` レジストリ（`kind` / `command` / `mode_args` / `plan_args`）を `ToolProfile` に解決し、kind ごとの `ToolCapabilities`（不可視注入・marker block・prompt 検証・resume・plan・heartbeat・session id 捕捉）と argv 組立（`launch_spec`）を持たせる。herdr の `launch_command`（旧ハードコード）はここへ移設・一般化した（golden テストも移植）。
+3. **protocol 0.2.3 の `TaskDispatchParams.tool_launch: Option<ToolLaunchSpec>`**（`program` / `args` / `env`、additive）で**完全解決済み** argv/env をプラグインへ渡す。プラグインは内容を解釈せず pane で起動するだけ（`HookLaunchSpec` / H-01 と同じ opaque contract 流儀）。`hook: Option<HookLaunchSpec>` は 0.2.3 から deprecated（移行窓の間は併送、次の breaking で削除）。herdr は `tool_launch` を優先し、無ければ旧 `launch_command` フォールバック（herdr.toml の `agent_command` / `plan_args` も deprecated）。
+4. **完了検知は既存 UDS 契約に正規化するアダプタで吸収する**。`POST /agent-events` → `AgentSignal` → `Engine::on_signal` のワイヤ形は全ツール共通のまま（#222 の rename で名称も一般化済み）。アダプタを持たない kind（Phase 1 の codex / opencode、および任意 CLI）は全タスクが timeout エスカレーション終わりになるため、**validate で参照を拒否**し dispatch でも防御する（`ToolKind::has_adapter`）。`kind = "custom"`（アダプタ無し任意 CLI）は見送り確定 — ツール追加の正規ルートは「core に ToolAdapter 実装 1 つ + `[tools]` 設定 + 完了検知アセット」。
+5. **`verification = "llm"` × tool は静的検証する**。llm 検収は Claude の prompt 型 Stop フック専用のため、非 claude 系へ解決されうる llm ワークフローには `tool = "claude"` のピンを警告で提案し、ピン済み不一致も警告する（実行時フォールバックは保険）。workflow レベル `tool` を v1 から導入した決め手はこの静的保証。
+6. **`default_agent` は削除する**。ランタイム消費が無く、`tool` の隣に「agent」名のフィールドが残ると 2 軸が再び混同されるため。`deny_unknown_fields` によりフィールド名入りのパースエラーになり移行は自明（pre-1.0・利用者ローカル設定のみ）。
+
+## 不採用案
+
+| 案 | 理由 |
+|---|---|
+| (A) ツールごとに agent プラグインを作る（agent-ide-codex 等） | pane 管理・deadman・snapshot 等の herdr 連携コードが 3 重化。pane runner × tool の N×M 爆発。`default_agent` と同じ軸の混同 |
+| (B) herdr 側でツールプロファイル解決（protocol はツール名だけ渡す） | ツール知識（plan フラグ・resume 構文・hooks 注入）がプラグイン側に散り、別 runner が出るたび再実装。縮退制御用のケイパビリティ表は core に必須なので知識が二重管理になる |
+
+# Consequences
+
+- リポジトリ/ワークフロー単位で AI ツールを宣言的に切り替えられる基盤ができた。Phase 1 は claude のみ（挙動不変 — e2e で argv の従前同一性を固定）。Codex（hooks 方式）は Phase 2、OpenCode（JS プラグイン方式）は Phase 3 で、各フェーズ冒頭の実機検証スパイク（[V1]〜[V3], [U]）の結果を `ToolCapabilities` のフラグに反映して追加する。
+- 将来の pane runner（orca 等）にもツール対応が自動で波及する（runner は `tool_launch` を起動するだけ）。
+- thread 継続の resume は `caps.resume && caps.session_id_capture` でゲートされ、非対応ツールは常に新規 dispatch に縮退する。
+- herdr.toml の `agent_command` / `plan_args` は後方互換フォールバックとなり、次の breaking protocol バンプで `hook` フィールドとともに削除予定。
+- 検証済みツールバージョンの記録（#196 決定 9）は Phase 2/3 の実機スパイク時に `docs/operations/` へ残す。

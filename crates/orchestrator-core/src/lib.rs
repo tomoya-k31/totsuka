@@ -24,4 +24,5 @@ pub mod recovery;
 pub mod repo_select;
 pub mod run;
 pub mod scheduler;
+pub mod tool;
 pub mod worktree;

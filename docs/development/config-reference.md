@@ -42,7 +42,9 @@ owner: tomoya-k31
 | `[worktree]` | テーブル | — | worktree 配置・掃除（下記） |
 | `[log]` | テーブル | — | ログ設定（下記） |
 | `[output]` | テーブル | — | 出力ポリシーの PR テンプレート（下記） |
-| `[hooks]` | テーブル | — | Claude Code フックイベント受信の設定（下記、#131） |
+| `[hooks]` | テーブル | — | エージェント CLI フックイベント受信の設定（下記、#131） |
+| `default_tool` | string? | `"claude"` | グローバル既定の AI ツール名（#196）。workflow / repo が指定しない場合に適用 |
+| `[tools.{name}]` | テーブル | — | AI ツールレジストリ（下記、#196）。組み込み既定 `claude` を上書き・拡張 |
 
 # `[[repositories]]`
 
@@ -51,7 +53,7 @@ owner: tomoya-k31
 | `name` | string | 必須 | ブランチ名・ログで使う安定 ID |
 | `path` | string | 必須 | ローカルクローンのパス（`~`/`${ENV}` 展開） |
 | `summary` | string? | なし | LLM リポジトリ選択の説明（F-11） |
-| `default_agent` | string? | なし | 既定 agent_ide プラグイン |
+| `tool` | string? | `default_tool` | このリポジトリへディスパッチされるタスクの既定 AI ツール（#196）。`[[workflows]].tool` のピンが優先。旧 `default_agent`（未消費のまま削除）とは別軸: agent = pane runner、tool = pane 内 CLI |
 | `max_concurrency` | int? | 無制限 | リポジトリ単位の同時実行上限（F-41） |
 | `worktree_location` | string? | `[worktree].location` | このリポジトリの worktree 配置テンプレート上書き |
 
@@ -83,8 +85,22 @@ owner: tomoya-k31
 | `verification` | enum | `llm` | 完了自己申告の検収方式（D-01）: `llm`（prompt 型 Stop フックで in-session 検収）/ `human`（`totsuka task verify` 待ち。有効な notifier が無いと警告）/ `none`（検収なし） |
 | `timeout_secs` | int? | 1800 | 最終フックシグナルからの無応答上限秒。超過でエスカレーション（D-03） |
 | `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告 |
+| `tool` | string? | なし | AI ツールの明示ピン（#196）。優先順位は workflow > repo > `default_tool`。`verification = "llm"` は Claude の prompt 型 Stop フックが必要なので、非 claude 系へ解決されうる構成では `tool = "claude"` のピンを警告で提案 |
 
 定義順に first-match（F-81）。同一ソース内でトリガーが重なると警告。
+
+# `[tools.{name}]`（AI ツールレジストリ、#196）
+
+pane 内で起動する AI ツール CLI の定義。`{name}` は `default_tool` / `[[repositories]].tool` / `[[workflows]].tool` から参照する任意の名前。組み込み既定として `claude`（`command = "claude"`）が常に存在し、同名エントリで上書きできる。同一 kind の別プロファイル（例 `claude-fast`）も定義可能。**現バージョンで dispatch できるのは `kind = "claude"` のみ**（codex / opencode はパースは通るが参照すると validate エラー。アダプタは #196 Phase 2/3 で追加予定）。
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `kind` | enum | 必須 | アダプタ種別: `claude` / `codex` / `opencode`。argv 組立と完了検知方式を決める |
+| `command` | string? | kind 名 | 空白区切りのコマンドライン。先頭 = プログラム、残り = 基本引数（例 `"claude --model haiku"`） |
+| `mode_args` | string[]? | kind 既定 | implement モードで追加する引数 |
+| `plan_args` | string[]? | kind 既定 | plan モードで追加する引数（claude 既定: `["--permission-mode", "plan"]`） |
+
+ツール解決はディスパッチ時に workflow ピン > repo 既定 > `default_tool` > 組み込み `claude` の順。解決結果は core が完全な argv/env（`ToolLaunchSpec`）へ組み立てて agent プラグインに渡すため、herdr.toml の `agent_command` / `plan_args` は後方互換フォールバック（deprecated）になった。
 
 # `[llm]`（AI Gateway）
 

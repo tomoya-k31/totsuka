@@ -10,6 +10,8 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::tool::ToolKind;
+
 /// The current supported config schema version (§10.2).
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
@@ -46,6 +48,15 @@ pub struct RootConfig {
     /// Plugin roster + common fields, keyed by plugin instance name (F-56).
     #[serde(default)]
     pub plugins: BTreeMap<String, PluginConfig>,
+    /// Global default AI tool name when neither the workflow nor the selected
+    /// repository picks one (#196). `None` means the built-in `"claude"`.
+    #[serde(default)]
+    pub default_tool: Option<String>,
+    /// AI-tool registry, keyed by tool name (#196). Built-in defaults exist
+    /// for `claude`; an entry overrides/extends them (e.g. a
+    /// `[tools.claude-fast]` profile with a different model flag).
+    #[serde(default)]
+    pub tools: BTreeMap<String, ToolConfig>,
     /// Named workflows (parsed structurally here; semantics validated in #54).
     #[serde(default)]
     pub workflows: Vec<WorkflowConfig>,
@@ -120,9 +131,10 @@ pub struct RepositoryConfig {
     /// Free-text summary used for LLM repo selection (F-11).
     #[serde(default)]
     pub summary: Option<String>,
-    /// Default agent plugin for this repo (must be an enabled `agent_ide`).
+    /// Default AI tool for tasks dispatched into this repo (#196). Overrides
+    /// `default_tool`; overridden by an explicit `[[workflows]].tool` pin.
     #[serde(default)]
-    pub default_agent: Option<String>,
+    pub tool: Option<String>,
     /// Per-repository concurrency cap (F-41).
     #[serde(default)]
     pub max_concurrency: Option<u32>,
@@ -260,6 +272,33 @@ pub struct WorkflowConfig {
     /// meaningful with `verification = "llm"` (validation warns otherwise).
     #[serde(default)]
     pub rubric: Option<String>,
+    /// Explicit AI-tool pin for this workflow (#196) — the strongest level of
+    /// the tool precedence (workflow > repo > `default_tool`). Use it when the
+    /// flow's shape demands a specific tool (e.g. `verification = "llm"`
+    /// needs Claude's prompt-type Stop hook). `None` falls through to the
+    /// repository/global defaults.
+    #[serde(default)]
+    pub tool: Option<String>,
+}
+
+/// A `[tools.<name>]` registry entry (#196): how to launch one AI tool CLI.
+/// Interpreted into a [`ToolProfile`](crate::tool::ToolProfile).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolConfig {
+    /// Adapter family (`claude` | `codex` | `opencode`) — determines argv
+    /// assembly and completion detection.
+    pub kind: ToolKind,
+    /// Whitespace-split command line (first token = program, rest = base
+    /// args). `None` uses the kind's name as the program.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Extra args appended in implement mode (overrides the kind default).
+    #[serde(default)]
+    pub mode_args: Option<Vec<String>>,
+    /// Extra args appended in plan mode (overrides the kind default).
+    #[serde(default)]
+    pub plan_args: Option<Vec<String>>,
 }
 
 /// AI Gateway (OpenAI-compatible) settings (F-12, F-13).
@@ -393,6 +432,14 @@ impl RootConfig {
     /// Look up a plugin's common config by instance name.
     pub fn plugin(&self, name: &str) -> Option<&PluginConfig> {
         self.plugins.get(name)
+    }
+
+    /// Look up a `[tools.<name>]` entry by tool name (#196). Built-in
+    /// defaults are resolved separately
+    /// ([`ToolProfile::builtin`](crate::tool::ToolProfile::builtin)); an
+    /// entry here overrides the built-in of the same name.
+    pub fn tool(&self, name: &str) -> Option<&ToolConfig> {
+        self.tools.get(name)
     }
 }
 
@@ -599,6 +646,72 @@ plan_cleanup = "immediate"
         );
         // An unknown policy name is rejected, not silently ignored.
         assert!(RootConfig::from_toml_str("[worktree]\ncleanup = \"sometimes\"").is_err());
+    }
+
+    #[test]
+    fn tool_fields_parse() {
+        // #196: the tool registry + the three levels of tool selection.
+        let cfg = RootConfig::from_toml_str(
+            r#"
+default_tool = "claude"
+
+[tools.codex]
+kind = "codex"
+command = "codex"
+
+[tools.claude-fast]
+kind = "claude"
+command = "claude --model haiku"
+plan_args = ["--permission-mode", "plan"]
+
+[[repositories]]
+name = "totsuka"
+path = "/tmp"
+tool = "codex"
+
+[[workflows]]
+name = "reply"
+source = "slack"
+mode = "plan"
+agent = "herdr"
+output = "source"
+tool = "claude"
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.default_tool.as_deref(), Some("claude"));
+        assert_eq!(
+            cfg.tool("codex").unwrap().kind,
+            crate::tool::ToolKind::Codex
+        );
+        assert_eq!(
+            cfg.tool("claude-fast").unwrap().command.as_deref(),
+            Some("claude --model haiku")
+        );
+        assert_eq!(cfg.repositories[0].tool.as_deref(), Some("codex"));
+        assert_eq!(cfg.workflows[0].tool.as_deref(), Some("claude"));
+        // Omitted everywhere -> None (built-in claude applies downstream).
+        let cfg = RootConfig::from_toml_str(SPEC_EXAMPLE).unwrap();
+        assert!(cfg.default_tool.is_none());
+        assert!(cfg.tools.is_empty());
+        assert!(cfg.repositories[0].tool.is_none());
+        assert!(cfg.workflows[0].tool.is_none());
+    }
+
+    #[test]
+    fn unknown_tool_key_and_removed_default_agent_are_rejected() {
+        // Typos inside [tools.*] must not be silently ignored.
+        assert!(RootConfig::from_toml_str("[tools.x]\nkind = \"claude\"\ncomand = \"c\"").is_err());
+        // An unknown kind is rejected, not defaulted.
+        assert!(RootConfig::from_toml_str("[tools.x]\nkind = \"cursor\"").is_err());
+        // #196: `default_agent` was removed (never consumed at runtime; the
+        // `tool` axis replaces it) — deny_unknown_fields turns a leftover
+        // entry into a named parse error rather than silent dead config.
+        let err = RootConfig::from_toml_str(
+            "[[repositories]]\nname = \"r\"\npath = \"/tmp\"\ndefault_agent = \"herdr\"",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("default_agent"), "got {err}");
     }
 
     #[test]

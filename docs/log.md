@@ -1,5 +1,12 @@
 # Bundle Update Log
 
+## 2026-07-24
+* **Creation**: [ADR-0014 AI ツール抽象は「単一 pane runner + core 側ツールレジストリ + 解決済み ToolLaunchSpec」で行う](/decisions/adr-0014-tool-abstraction.md) — リポジトリ/ワークフローごとの AI ツール切り替え（[#196](https://github.com/tomoya-k31/totsuka/issues/196) Phase 1）の設計判断を記録。agent（pane runner）と tool（pane 内 CLI）の直交 2 軸、`[tools]` レジストリ + `default_tool` / `repo.tool` / `workflow.tool`（優先順位 workflow > repo > default > 組み込み claude）、protocol 0.2.3 の `ToolLaunchSpec`（完全解決済み argv/env の opaque contract）、アダプタ無し kind の dispatch 拒否、`verification = "llm"` × tool の静的検証、ランタイム未消費だった `default_agent` の削除。ツール別 agent プラグイン案・herdr 側プロファイル解決案は不採用。
+* **Update**: [plugin-protocol](/components/plugin-protocol.md) — 0.2.3: `TaskDispatchParams.tool_launch`（`ToolLaunchSpec { program, args, env }`）を追記、`hook: Option<HookLaunchSpec>` の deprecated 化（移行窓は併送）、現行バージョンを 0.2.3 に更新。
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — 新設 `tool` モジュール（ToolKind/ToolCapabilities/ToolProfile/launch_spec/レジストリ、herdr `launch_command` の移設 + golden テスト移植）の行を追加し、`run` の dispatch_one にツール解決（fail_dispatch 防御・resume のケイパビリティゲート）と `tool_launch` 送出を追記。
+* **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) — `dispatch` の `tool_launch` 優先（`resolve_launch`、argv/env をそのまま起動）と、`agent_command`/`plan_args`/`launch_command` の deprecated フォールバック化を追記。
+* **Update**: [設定リファレンス](/development/config-reference.md) / [設定例集](/development/config-examples.md) — `default_tool` / `[tools.{name}]`（kind/command/mode_args/plan_args）/ `[[repositories]].tool` / `[[workflows]].tool` を追加し、`default_agent` を削除（#196。現バージョンで dispatch 可能なのは claude 系のみの注記つき）。
+
 ## 2026-07-23
 * **Creation**: [POST /agent-events（UDS フック受信）](/apis/agent-events.md) — ツール抽象化（[#196](https://github.com/tomoya-k31/totsuka/issues/196)）Phase 1 の先行 rename（挙動不変）: `/claude-events` → `/agent-events`、ソケット `claude-events.sock` → `agent-events.sock`（旧 stale ソケットは起動時掃除）、`SignalSource::ClaudeHook` → `AgentHook`、state.db v4 で `claude_session_id` → `tool_session_id`（`RENAME COLUMN`、冪等キー UNIQUE は再構築不要）。受信側は `/focus` 以外の全パスをシグナル受信として扱うため（E-08）旧パスも引き続き受理され、ワイヤ上の JSON ペイロード形は無変更。
 * **Deprecation**: [POST /claude-events（旧名）](/apis/claude-events.md) — 上記 rename に伴い deprecated 化し、後継 [agent-events](/apis/agent-events.md) へリンク（新旧対応表つき）。

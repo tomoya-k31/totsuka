@@ -138,6 +138,7 @@ fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSetti
             path: PathBuf::from("/nonexistent"),
             summary: None,
             worktree_location: None,
+            tool: None,
         }],
         limits: Limits::global(4),
         branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
@@ -151,6 +152,8 @@ fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSetti
         pr_body_template: "{summary}".to_string(),
         // Sweep every cycle, as before the interval existed (#210).
         worktree_sweep_interval: Duration::ZERO,
+        tools: orchestrator_core::tool::builtin_registry(),
+        default_tool: "claude".to_string(),
         hook,
     }
 }
@@ -889,6 +892,7 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         path: repo.clone(),
         summary: None,
         worktree_location: None,
+        tool: None,
     }];
     settings.location_template = "{repo}/../wt/{branch}".to_string();
 
@@ -969,6 +973,24 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
             && ctx.contains("do NOT emit a marker"),
         "prompt context states the delivery contract: {ctx}"
     );
+    // #196: the fully-resolved tool launch rides alongside the deprecated
+    // hook spec. Its argv must equal what herdr's `launch_command` built for
+    // the same inputs before the tool registry existed (Phase 1 behavior
+    // invariance: base `claude` + `--settings <workflow settings>`), and its
+    // env must carry the exact hook env.
+    let tool = &params["tool_launch"];
+    assert_eq!(tool["program"], "claude");
+    assert_eq!(
+        tool["args"],
+        json!([
+            "--settings",
+            base.join("orchestrator-wf.json").display().to_string()
+        ])
+    );
+    assert_eq!(
+        tool["env"], hook["env"],
+        "tool_launch env matches the hook env verbatim"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -1019,6 +1041,7 @@ async fn dispatch_without_hook_falls_back_to_visible_extra_context() {
         path: repo.clone(),
         summary: None,
         worktree_location: None,
+        tool: None,
     }];
     settings.location_template = "{repo}/../wt/{branch}".to_string();
 
@@ -1168,6 +1191,7 @@ async fn failed_hook_dispatch_rolls_back_reserved_session() {
         path: repo.clone(),
         summary: None,
         worktree_location: None,
+        tool: None,
     }];
 
     let mut engine = Engine::new(
@@ -1325,6 +1349,7 @@ fn resume_settings(repo: &Path, base: &Path) -> EngineSettings {
         path: repo.to_path_buf(),
         summary: None,
         worktree_location: None,
+        tool: None,
     }];
     settings.location_template = "{repo}/../wt/{branch}".to_string();
     settings

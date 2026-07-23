@@ -412,6 +412,7 @@ mod tests {
             job_id: None,
             resume_session_id: None,
             hook: None,
+            tool_launch: None,
         };
         let prompt = compose_prompt(&params);
         assert!(prompt.ends_with("---\nline one\nline two"), "{prompt}");
