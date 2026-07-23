@@ -994,6 +994,91 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// #196 Phase 2: a repo pinned to the built-in `codex` tool dispatches a
+/// codex argv — sandbox/approval flags instead of `--settings` (codex hooks
+/// are registered globally and reached via the `TOTSUKA_*` env, which must
+/// still ride the launch spec verbatim).
+#[tokio::test]
+async fn dispatch_with_codex_tool_builds_codex_argv() {
+    let base = scratch("codex_dispatch");
+    let repo = setup_repo(&base);
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "resume_session": true, "stream_states": ["running"], "dispatch_log": dispatch_log }),
+        )
+        .await,
+    );
+
+    let hook = HookRuntime {
+        socket_path: base.join("agent-events.sock"),
+        auth_token: None,
+        spool_dir: None,
+        settings_paths: HashMap::from([("wf".to_string(), base.join("orchestrator-wf.json"))]),
+        block_retry_limit: 3,
+    };
+    let mut settings = engine_settings(workflows("none", "none"), Some(hook));
+    settings.repos = vec![RepoSettings {
+        name: "clone".to_string(),
+        path: repo.clone(),
+        summary: None,
+        worktree_location: None,
+        tool: Some("codex".to_string()),
+    }];
+    settings.location_template = "{repo}/../wt/{branch}".to_string();
+
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
+    engine.shutdown(GRACE).await;
+
+    let dispatches = read_log(&dispatch_log);
+    let params = &dispatches
+        .iter()
+        .find(|d| d["method"] == "task/dispatch")
+        .expect("dispatch recorded")["params"];
+    let tool = &params["tool_launch"];
+    assert_eq!(tool["program"], "codex");
+    assert_eq!(
+        tool["args"],
+        json!([
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "on-request"
+        ]),
+        "codex implement argv: sandbox flags, no --settings"
+    );
+    assert_eq!(
+        tool["env"], params["hook"]["env"],
+        "TOTSUKA_* env still rides the codex launch (global hooks are env-gated)"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn dispatch_without_hook_falls_back_to_visible_extra_context() {
     // A non-hook agent (no resume_session / diagnostics_snapshot) has no

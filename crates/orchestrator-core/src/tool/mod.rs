@@ -15,10 +15,12 @@
 //! `[[repositories]].tool` (repo default) > `default_tool` (global) >
 //! built-in `"claude"`.
 //!
-//! Phase 1 (#196) ships the Claude adapter only: [`ToolKind::Codex`] /
-//! [`ToolKind::Opencode`] parse in config but have no completion-detection
-//! adapter yet, so validation rejects configs that reference them and
-//! `launch_spec` returns `None` ([`ToolKind::has_adapter`]).
+//! Phase 1 (#196) shipped the Claude adapter; Phase 2 added Codex (hooks
+//! adapter — global `hooks.json` registration lives in
+//! [`crate::hooks::codex`]). [`ToolKind::Opencode`] parses in config but has
+//! no completion-detection adapter yet, so validation rejects configs that
+//! reference it and `launch_spec` returns `None`
+//! ([`ToolKind::has_adapter`]).
 
 use std::collections::BTreeMap;
 
@@ -56,7 +58,7 @@ impl ToolKind {
     /// timeout escalation — so validation refuses such configs upfront
     /// (#196 decision 8: no `kind = "custom"` escape hatch).
     pub fn has_adapter(self) -> bool {
-        matches!(self, ToolKind::Claude)
+        matches!(self, ToolKind::Claude | ToolKind::Codex)
     }
 }
 
@@ -117,14 +119,23 @@ pub struct LaunchInputs<'a> {
 }
 
 impl ToolProfile {
-    /// The built-in profile for `name`, if one exists. Phase 1: `"claude"`
-    /// only; `[tools.<name>]` entries override/extend these.
+    /// The built-in profile for `name`, if one exists (`"claude"` and, since
+    /// Phase 2, `"codex"` — usable via `tool = "codex"` without a `[tools]`
+    /// entry); `[tools.<name>]` entries override/extend these. No `"opencode"`
+    /// built-in until its adapter lands (Phase 3).
     pub fn builtin(name: &str) -> Option<Self> {
         match name {
             "claude" => Some(Self {
                 name: "claude".to_string(),
                 kind: ToolKind::Claude,
                 command: "claude".to_string(),
+                mode_args: None,
+                plan_args: None,
+            }),
+            "codex" => Some(Self {
+                name: "codex".to_string(),
+                kind: ToolKind::Codex,
+                command: "codex".to_string(),
                 mode_args: None,
                 plan_args: None,
             }),
@@ -158,9 +169,13 @@ impl ToolProfile {
                 heartbeat: true,
                 session_id_capture: true,
             },
-            // Provisional (#196 縮退表); confirmed/adjusted by the Phase 2/3
-            // real-machine spikes ([V1]–[V3], [U]) before these kinds gain an
-            // adapter.
+            // Confirmed by the Phase 2 real-machine spike (2026-07-24,
+            // codex-cli 0.145.0): Stop block via exit 2 / decision JSON,
+            // `last_assistant_message` on Stop stdin, UserPromptSubmit
+            // `additionalContext` injection, `codex resume <id>`, SessionStart
+            // session-id capture. No prompt-type hooks (command only), no
+            // background-task heartbeat. `plan_mode` is the `--sandbox
+            // read-only` degradation — codex has no plan *permission* mode.
             ToolKind::Codex => ToolCapabilities {
                 invisible_injection: true,
                 marker_block: true,
@@ -170,6 +185,8 @@ impl ToolProfile {
                 heartbeat: false,
                 session_id_capture: true,
             },
+            // Provisional (#196 縮退表); confirmed/adjusted by the Phase 3
+            // real-machine spike ([U]) before this kind gains an adapter.
             ToolKind::Opencode => ToolCapabilities {
                 invisible_injection: false,
                 marker_block: false,
@@ -191,12 +208,22 @@ impl ToolProfile {
     /// mode (default `--permission-mode plan`), `--settings <path>` whenever a
     /// hook settings path is supplied (H-03: `--resume` never inherits hooks,
     /// so the settings ride every launch), and `--resume <id>` when resuming.
+    ///
+    /// Codex argv (#196 Phase 2): base command, then the `resume <id>`
+    /// subcommand when resuming (codex resumes via a subcommand, not a flag),
+    /// then the mode flags — implement default `--sandbox workspace-write
+    /// --ask-for-approval on-request`, plan default `--sandbox read-only`
+    /// (codex has no plan permission mode — spike [V3]); `codex resume`
+    /// accepts the same flags. `settings_path` is ignored: codex hooks are
+    /// registered globally ([`crate::hooks::codex`]) and gated per pane via
+    /// the `TOTSUKA_*` env this spec carries.
     pub fn launch_spec(&self, inp: &LaunchInputs<'_>) -> Option<ToolLaunchSpec> {
+        let fallback_program = self.kind.as_str().to_string();
+        let mut parts = self.command.split_whitespace().map(str::to_string);
+        let program = parts.next().unwrap_or(fallback_program);
+        let mut args: Vec<String> = parts.collect();
         match self.kind {
             ToolKind::Claude => {
-                let mut parts = self.command.split_whitespace().map(str::to_string);
-                let program = parts.next().unwrap_or_else(|| "claude".to_string());
-                let mut args: Vec<String> = parts.collect();
                 if inp.plan {
                     match &self.plan_args {
                         Some(extra) => args.extend(extra.iter().cloned()),
@@ -213,15 +240,37 @@ impl ToolProfile {
                     args.push("--resume".to_string());
                     args.push(id.to_string());
                 }
-                Some(ToolLaunchSpec {
-                    program,
-                    args,
-                    env: inp.env.clone(),
-                })
             }
-            // No adapter yet (Phase 2/3).
-            ToolKind::Codex | ToolKind::Opencode => None,
+            ToolKind::Codex => {
+                if let Some(id) = inp.resume_session_id {
+                    args.push("resume".to_string());
+                    args.push(id.to_string());
+                }
+                if inp.plan {
+                    match &self.plan_args {
+                        Some(extra) => args.extend(extra.iter().cloned()),
+                        None => args.extend(["--sandbox".to_string(), "read-only".to_string()]),
+                    }
+                } else {
+                    match &self.mode_args {
+                        Some(extra) => args.extend(extra.iter().cloned()),
+                        None => args.extend([
+                            "--sandbox".to_string(),
+                            "workspace-write".to_string(),
+                            "--ask-for-approval".to_string(),
+                            "on-request".to_string(),
+                        ]),
+                    }
+                }
+            }
+            // No adapter yet (Phase 3).
+            ToolKind::Opencode => return None,
         }
+        Some(ToolLaunchSpec {
+            program,
+            args,
+            env: inp.env.clone(),
+        })
     }
 }
 
@@ -231,9 +280,11 @@ pub fn registry_from_config(
     tools: &BTreeMap<String, ToolConfig>,
 ) -> std::collections::HashMap<String, ToolProfile> {
     let mut registry = std::collections::HashMap::new();
-    // Built-ins first (Phase 1: claude only); [tools] entries overlay them.
-    let claude = ToolProfile::builtin("claude").expect("built-in profile exists");
-    registry.insert(claude.name.clone(), claude);
+    // Built-ins first; [tools] entries overlay them.
+    for builtin in ["claude", "codex"] {
+        let profile = ToolProfile::builtin(builtin).expect("built-in profile exists");
+        registry.insert(profile.name.clone(), profile);
+    }
     for (name, config) in tools {
         registry.insert(name.clone(), ToolProfile::from_config(name, config));
     }
@@ -395,11 +446,102 @@ mod tests {
 
     #[test]
     fn kinds_without_an_adapter_produce_no_spec() {
-        for kind in [ToolKind::Codex, ToolKind::Opencode] {
-            let profile = ToolProfile { kind, ..claude() };
-            assert!(!kind.has_adapter());
-            assert!(profile.launch_spec(&inputs(false, None, None)).is_none());
-        }
+        let kind = ToolKind::Opencode;
+        let profile = ToolProfile { kind, ..claude() };
+        assert!(!kind.has_adapter());
+        assert!(profile.launch_spec(&inputs(false, None, None)).is_none());
+    }
+
+    fn codex() -> ToolProfile {
+        ToolProfile::builtin("codex").unwrap()
+    }
+
+    // Codex argv contract (#196 Phase 2) — flags verified on the real CLI
+    // (codex-cli 0.145.0 spike, 2026-07-24).
+
+    #[test]
+    fn codex_implement_and_plan_use_sandbox_defaults() {
+        assert_eq!(
+            argv(&codex(), &inputs(false, None, None)),
+            (
+                "codex".to_string(),
+                vec![
+                    "--sandbox".to_string(),
+                    "workspace-write".to_string(),
+                    "--ask-for-approval".to_string(),
+                    "on-request".to_string(),
+                ]
+            )
+        );
+        // No plan permission mode exists ([V3]); plan degrades to the
+        // read-only sandbox.
+        assert_eq!(
+            argv(&codex(), &inputs(true, None, None)),
+            (
+                "codex".to_string(),
+                vec!["--sandbox".to_string(), "read-only".to_string()]
+            )
+        );
+    }
+
+    #[test]
+    fn codex_resume_is_a_subcommand_before_mode_flags() {
+        assert_eq!(
+            argv(&codex(), &inputs(false, None, Some("019f8fc5-abc"))),
+            (
+                "codex".to_string(),
+                vec![
+                    "resume".to_string(),
+                    "019f8fc5-abc".to_string(),
+                    "--sandbox".to_string(),
+                    "workspace-write".to_string(),
+                    "--ask-for-approval".to_string(),
+                    "on-request".to_string(),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn codex_ignores_settings_path_and_honors_custom_args() {
+        // No `--settings` equivalent: hooks are registered globally and
+        // env-gated, so the settings path must leave no trace in the argv.
+        let spec = codex()
+            .launch_spec(&inputs(
+                false,
+                Some("/data/hooks/orchestrator-x.json"),
+                None,
+            ))
+            .unwrap();
+        assert!(!spec.args.iter().any(|a| a.contains("orchestrator-x")));
+        // Custom base command / mode args / plan args override the defaults.
+        let profile = ToolProfile {
+            command: "codex --model gpt-5.6-sol".to_string(),
+            mode_args: Some(vec!["--full-auto".to_string()]),
+            plan_args: Some(vec!["--sandbox".to_string(), "read-only".to_string()]),
+            ..codex()
+        };
+        assert_eq!(
+            argv(&profile, &inputs(false, None, Some("sess-1"))),
+            (
+                "codex".to_string(),
+                vec![
+                    "--model".to_string(),
+                    "gpt-5.6-sol".to_string(),
+                    "resume".to_string(),
+                    "sess-1".to_string(),
+                    "--full-auto".to_string(),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn codex_is_a_builtin_in_the_registry() {
+        let registry = builtin_registry();
+        assert_eq!(registry["codex"].kind, ToolKind::Codex);
+        assert_eq!(registry["codex"].command, "codex");
+        assert!(ToolKind::Codex.has_adapter());
     }
 
     #[test]

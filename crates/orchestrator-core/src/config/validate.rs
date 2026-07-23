@@ -82,9 +82,9 @@ pub enum ValidationError {
     UnknownToolRef { referrer: String, tool: String },
 
     /// A referenced tool's kind has no completion-detection adapter yet
-    /// (#196 Phase 1: only `claude`).
+    /// (#196: `claude` and `codex` since Phase 2).
     #[error(
-        "{referrer} tool `{tool}` has kind `{kind}` which has no adapter yet → only `claude`-kind tools are dispatchable in this version"
+        "{referrer} tool `{tool}` has kind `{kind}` which has no adapter yet → only `claude`/`codex`-kind tools are dispatchable in this version"
     )]
     UnsupportedToolKind {
         referrer: String,
@@ -754,13 +754,13 @@ output = "none"
     fn tool_references_are_validated() {
         let dir = env!("CARGO_MANIFEST_DIR");
         // Unknown names at every level; a [tools] entry with an adapterless
-        // kind (#196 Phase 1: codex/opencode parse but cannot dispatch).
+        // kind (#196: opencode parses but cannot dispatch until Phase 3).
         let toml = format!(
             r#"
 default_tool = "nope"
 
-[tools.codex]
-kind = "codex"
+[tools.opencode]
+kind = "opencode"
 
 [plugins.github]
 enabled = true
@@ -773,7 +773,7 @@ kind = "agent_ide"
 [[repositories]]
 name = "totsuka"
 path = "{dir}"
-tool = "codex"
+tool = "opencode"
 
 [[workflows]]
 name = "impl"
@@ -796,7 +796,7 @@ tool = "typo"
         )));
         assert!(errors.iter().any(|e| matches!(
             e,
-            ValidationError::UnsupportedToolKind { tool, kind, .. } if tool == "codex" && kind == "codex"
+            ValidationError::UnsupportedToolKind { tool, kind, .. } if tool == "opencode" && kind == "opencode"
         )));
 
         // The built-in `claude` and a claude-kind [tools] profile are fine.
@@ -841,7 +841,7 @@ tool = "claude"
         // the built-in's kind; with default_tool and every `tool` field
         // omitted, the *implicit* default "claude" must still be statically
         // rejected instead of surfacing only as a dispatch-time failure.
-        let cfg = RootConfig::from_toml_str("[tools.claude]\nkind = \"codex\"").unwrap();
+        let cfg = RootConfig::from_toml_str("[tools.claude]\nkind = \"opencode\"").unwrap();
         let errors = validate_static(&cfg, &env_from(&[]));
         assert!(
             errors.iter().any(|e| matches!(

@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0014 AI ツール抽象は「単一 pane runner + core 側ツールレジストリ + 解決済み ToolLaunchSpec」で行う
 description: リポジトリ/ワークフローごとの AI ツール切り替え（#196、Claude Code / Codex / OpenCode）のため、agent プラグイン（pane runner）と AI ツール（pane 内 CLI）を直交 2 軸に分離し、ツール知識（argv 組立・ケイパビリティ・完了検知アダプタ）を orchestrator-core の [tools] レジストリに集約、protocol 0.2.3 の ToolLaunchSpec で完全解決済み argv/env をプラグインへ渡す決定。ツール別 agent プラグイン案と herdr 側プロファイル解決案は不採用。
 tags: [tool, protocol, herdr, codex, opencode, registry, dispatch]
-timestamp: 2026-07-24T00:00:00Z
+timestamp: 2026-07-24T10:00:00Z
 status: accepted
 ---
 
@@ -33,7 +33,8 @@ herdr プラグインが `claude … --settings <path> [--resume <id>]` の CLI 
 
 # Consequences
 
-- リポジトリ/ワークフロー単位で AI ツールを宣言的に切り替えられる基盤ができた。Phase 1 は claude のみ（挙動不変 — e2e で argv の従前同一性を固定）。Codex（hooks 方式）は Phase 2、OpenCode（JS プラグイン方式）は Phase 3 で、各フェーズ冒頭の実機検証スパイク（[V1]〜[V3], [U]）の結果を `ToolCapabilities` のフラグに反映して追加する。
+- リポジトリ/ワークフロー単位で AI ツールを宣言的に切り替えられる基盤ができた。Phase 1 は claude のみ（挙動不変 — e2e で argv の従前同一性を固定）。OpenCode（JS プラグイン方式）は Phase 3 で、冒頭の実機検証スパイク（[U]）の結果を `ToolCapabilities` のフラグに反映して追加する。
+- **Phase 2 完了（2026-07-24、codex-cli 0.145.0 実機スパイク済み）**: [V1] Stop hook の exit 2 / `{"decision":"block"}` ブロック成立（R-03 同等）、[V2] Stop stdin に `last_assistant_message` 直載（ターンキーは `turn_id` → 送信スクリプトが `prompt_id` へ載せ替え）、[V3] plan permission mode は CLI に存在せず `--sandbox read-only` 縮退で代替、を確認して `kind = "codex"` を有効化。フックは既存スクリプト群の一般化（`TOTSUKA_JOB_ID` 早期ゲート）+ `$CODEX_HOME/hooks.json` グローバル登録（`hooks::codex` が構造マージで自己管理、trust は codex 側で一回きり承認 — [運用手順](/operations/codex-tool-setup.md)）で実現し、設計時想定の専用 on-codex-*.sh 群は不要だった。notify フォールバックスクリプト（設計 Phase 2 項目）は [V1] 成立により不要と判断し見送り。
 - 将来の pane runner（orca 等）にもツール対応が自動で波及する（runner は `tool_launch` を起動するだけ）。
 - thread 継続の resume は `caps.resume && caps.session_id_capture` でゲートされ、非対応ツールは常に新規 dispatch に縮退する。
 - herdr.toml の `agent_command` / `plan_args` は後方互換フォールバックとなり、次の breaking protocol バンプで `hook` フィールドとともに削除予定。
