@@ -208,9 +208,9 @@ fn stop(
     msg: Option<&str>,
 ) -> AgentSignal {
     AgentSignal {
-        source: SignalSource::ClaudeHook,
+        source: SignalSource::AgentHook,
         job_id: JobId::new(task_id, row),
-        claude_session_id: "cc-1".into(),
+        tool_session_id: "cc-1".into(),
         prompt_id: prompt_id.into(),
         event: SignalEvent::Stop {
             status,
@@ -224,9 +224,9 @@ fn stop(
 
 fn heartbeat(task_id: i64, row: i64, prompt_id: &str) -> AgentSignal {
     AgentSignal {
-        source: SignalSource::ClaudeHook,
+        source: SignalSource::AgentHook,
         job_id: JobId::new(task_id, row),
-        claude_session_id: "cc-1".into(),
+        tool_session_id: "cc-1".into(),
         prompt_id: prompt_id.into(),
         event: SignalEvent::Heartbeat,
         payload: json!({ "hook_event_name": "Stop", "background_tasks": [{ "id": "bg" }] }),
@@ -1088,7 +1088,7 @@ async fn duplicate_heartbeat_refreshes_liveness_and_prevents_false_escalation() 
         .record_hook_event(&HookEventInsert {
             job_id: JobId::new(id, row).to_string(),
             task_id: id,
-            claude_session_id: "cc-1".into(),
+            tool_session_id: "cc-1".into(),
             prompt_id: "hb".into(),
             event: "heartbeat".into(),
             status: None,
@@ -1331,16 +1331,11 @@ fn resume_settings(repo: &Path, base: &Path) -> EngineSettings {
 }
 
 /// Seed a prior task in `thread_key` with a recorded session, and return its id.
-/// `claude_sid = Some` simulates the SessionStart hook having established the
-/// Claude session id; `None` leaves it unestablished (pre-hook era). Driven to
+/// `tool_sid = Some` simulates the SessionStart hook having established the
+/// tool session id; `None` leaves it unestablished (pre-hook era). Driven to
 /// `Dispatched` so it is inert (never re-dispatched); the far-future signal
 /// anchor keeps the timeout sweep from escalating it.
-fn seed_prior(
-    db: &StateDb,
-    source_task_id: &str,
-    thread_key: &str,
-    claude_sid: Option<&str>,
-) -> i64 {
+fn seed_prior(db: &StateDb, source_task_id: &str, thread_key: &str, tool_sid: Option<&str>) -> i64 {
     let mut nt = new_task(source_task_id, Some("2099-01-01T00:00:00Z"));
     nt.thread_key = Some(thread_key.to_string());
     let id = db.upsert_task(&nt).unwrap();
@@ -1348,8 +1343,8 @@ fn seed_prior(
     let row = db
         .record_session(id, "mock_agent", &format!("sess-{source_task_id}"))
         .unwrap();
-    if let Some(sid) = claude_sid {
-        db.set_claude_session_id(row, sid).unwrap();
+    if let Some(sid) = tool_sid {
+        db.set_tool_session_id(row, sid).unwrap();
     }
     id
 }
@@ -1417,7 +1412,7 @@ async fn second_task_in_thread_dispatches_with_resume_and_fresh_worktree() {
 
 #[tokio::test]
 async fn unestablished_prior_session_falls_back_to_fresh_dispatch() {
-    // ② Prior task never got a claude_session_id (pre-hook era) → no resume,
+    // ② Prior task never got a tool_session_id (pre-hook era) → no resume,
     // normal fresh dispatch, no warning.
     let base = scratch("resume_fallback");
     let repo = setup_repo(&base);
@@ -1529,18 +1524,18 @@ async fn reply_destination_is_task_id_origin_never_the_shared_session_id() {
     let notify_log = base.join("notify.ndjson");
     let db = StateDb::open(&base.join("state.db")).unwrap();
 
-    // Two tasks sharing claude_session_id "cc-shared".
+    // Two tasks sharing tool_session_id "cc-shared".
     let prior = db.upsert_task(&new_task("1", None)).unwrap();
     db.apply_event(prior, TaskEvent::Dispatch, None).unwrap();
     db.apply_event(prior, TaskEvent::Start, None).unwrap();
     let prior_row = db.record_session(prior, "mock_agent", "sess-1").unwrap();
-    db.set_claude_session_id(prior_row, "cc-shared").unwrap();
+    db.set_tool_session_id(prior_row, "cc-shared").unwrap();
 
     let follow = db.upsert_task(&new_task("2", None)).unwrap();
     db.apply_event(follow, TaskEvent::Dispatch, None).unwrap();
     db.apply_event(follow, TaskEvent::Start, None).unwrap();
     let follow_row = db.record_session(follow, "mock_agent", "sess-2").unwrap();
-    db.set_claude_session_id(follow_row, "cc-shared").unwrap();
+    db.set_tool_session_id(follow_row, "cc-shared").unwrap();
 
     let mut engine = Engine::new(
         db,

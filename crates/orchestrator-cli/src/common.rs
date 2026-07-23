@@ -168,7 +168,7 @@ pub fn hook_socket_path(
     match &cfg.hooks.socket_path {
         Some(raw) => config::expand_path(raw, &env_fn)
             .map_err(|e| format!("[hooks].socket_path does not expand: {e}").into()),
-        None => Ok(cx.paths.runtime_dir().join("claude-events.sock")),
+        None => Ok(cx.paths.runtime_dir().join("agent-events.sock")),
     }
 }
 

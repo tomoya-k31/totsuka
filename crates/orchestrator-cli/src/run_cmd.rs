@@ -132,8 +132,14 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
     if !dry_run {
         let socket_path = match &cfg.hooks.socket_path {
             Some(p) => config::expand_path(p, &env_fn)?,
-            None => paths.runtime_dir().join("claude-events.sock"),
+            None => paths.runtime_dir().join("agent-events.sock"),
         };
+        // The default socket was `claude-events.sock` before the #196 rename;
+        // a stale one left by an older orchestrator would linger forever.
+        let legacy_socket = paths.runtime_dir().join("claude-events.sock");
+        if legacy_socket != socket_path {
+            let _ = std::fs::remove_file(&legacy_socket);
+        }
         let auth_token = match &cfg.hooks.auth_token_ref {
             Some(reference) => Some(secret_resolver(&env).resolve(reference)?),
             None => {

@@ -4,7 +4,7 @@ title: click-to-focus セットアップ（terminal-notifier / bundle id / 切�
 description: 通知クリックで対象タスクの herdr pane を開く F-94 の導入手順。terminal-notifier の導入、plugins/notifier-macos.toml の backend / activate_bundle_id / click_command 設定、bundle id の調べ方、動作確認、クリックが効かない・通知が出ないときの切り分け表。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/notifier-macos
 tags: [operations, playbook, notifier, terminal-notifier, click-to-focus, macos]
-timestamp: 2026-07-19T12:00:00Z
+timestamp: 2026-07-23T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -65,4 +65,4 @@ owner: tomoya-k31
 
 - [フックシグナルフロー — 通知クリック → pane フォーカス](/architecture/hook-signal-flow.md)
 - [ADR-0005 click-to-focus の機構選定](/decisions/adr-0005-click-to-focus.md)
-- [notifier-macos](/components/notifier-macos.md) / [orchestrator-cli（totsuka focus）](/components/orchestrator-cli.md) / [POST /focus](/apis/claude-events.md)
+- [notifier-macos](/components/notifier-macos.md) / [orchestrator-cli（totsuka focus）](/components/orchestrator-cli.md) / [POST /focus](/apis/agent-events.md)

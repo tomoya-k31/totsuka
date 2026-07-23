@@ -117,7 +117,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let insert = HookEventInsert {
             job_id: sig.job_id.to_string(),
             task_id,
-            claude_session_id: sig.claude_session_id.clone(),
+            tool_session_id: sig.tool_session_id.clone(),
             prompt_id: sig.prompt_id.clone(),
             event: event_str.to_string(),
             status: status_str.map(str::to_string),
@@ -171,8 +171,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     message,
                 );
             }
-            SignalEvent::SessionStart { claude_session_id } => {
-                self.on_session_start(&record, sig.job_id.session_row, &claude_session_id)?;
+            SignalEvent::SessionStart { tool_session_id } => {
+                self.on_session_start(&record, sig.job_id.session_row, &tool_session_id)?;
             }
             SignalEvent::SessionEnd { reason } => self.on_session_end(&record, reason),
             // Liveness only: the anchor was already bumped above.
@@ -359,9 +359,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         &self,
         record: &TaskRecord,
         session_row: i64,
-        claude_session_id: &str,
+        tool_session_id: &str,
     ) -> Result<(), EngineError> {
-        if claude_session_id.is_empty() {
+        if tool_session_id.is_empty() {
             return Ok(());
         }
         let prior = self
@@ -369,19 +369,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .list_sessions(record.id)?
             .into_iter()
             .find(|s| s.id == session_row)
-            .and_then(|s| s.claude_session_id);
+            .and_then(|s| s.tool_session_id);
         if let Some(existing) = &prior
-            && existing != claude_session_id
+            && existing != tool_session_id
         {
             tracing::warn!(
                 task_id = record.id,
-                "SessionStart reported claude session id differs from the recorded one (correlation anomaly, E-09); keeping the newest"
+                "SessionStart reported tool session id differs from the recorded one (correlation anomaly, E-09); keeping the newest"
             );
         }
-        match self
-            .db
-            .set_claude_session_id(session_row, claude_session_id)
-        {
+        match self.db.set_tool_session_id(session_row, tool_session_id) {
             Ok(()) => {}
             // The job_id's session_row does not exist: a stale/anomalous
             // correlation. Record nothing, do not fail.

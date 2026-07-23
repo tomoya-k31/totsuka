@@ -78,9 +78,9 @@ mod tests {
 
     fn sample_signal() -> AgentSignal {
         AgentSignal {
-            source: SignalSource::ClaudeHook,
+            source: SignalSource::AgentHook,
             job_id: JobId::new(1, 2),
-            claude_session_id: String::new(),
+            tool_session_id: String::new(),
             prompt_id: String::new(),
             event: SignalEvent::Heartbeat,
             payload: serde_json::json!({}),

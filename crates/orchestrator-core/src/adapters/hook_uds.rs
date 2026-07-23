@@ -1,6 +1,8 @@
 //! UDS hook-receiving server (#136): a driving adapter that accepts
-//! `POST /claude-events` from Claude Code hooks and normalizes each request
-//! into an [`AgentSignal`] submitted through a [`SignalPort`].
+//! `POST /agent-events` from agent-CLI hooks (Claude Code today) and
+//! normalizes each request into an [`AgentSignal`] submitted through a
+//! [`SignalPort`]. The pre-rename `/claude-events` path (≤0.2.2, #196) is
+//! still accepted: every non-`/focus` path is signal ingestion (E-08).
 //!
 //! # Why a hand-rolled server
 //!
@@ -9,7 +11,7 @@
 //! what the hook scripts need:
 //!
 //! - **Socket**: [`UnixListener`] at `[hooks].socket_path` (default
-//!   `${XDG_RUNTIME_DIR}/totsuka/claude-events.sock`), created `0600`. Stale
+//!   `${XDG_RUNTIME_DIR}/totsuka/agent-events.sock`), created `0600`. Stale
 //!   sockets are unlinked before bind and on shutdown.
 //! - **Parser**: read headers up to `\r\n\r\n`, then `Content-Length` body
 //!   bytes. Chunked transfer-encoding is rejected by design (the hook scripts
@@ -30,12 +32,12 @@
 //!   `200` immediately (E-04).
 //! - **Lifecycle**: one request per connection, then close (no keep-alive).
 //!
-//! ## Wire contract (`POST /claude-events`)
+//! ## Wire contract (`POST /agent-events`)
 //!
 //! ```json
 //! {
 //!   "job_id": "job-42-7",              // required; TOTSUKA_JOB_ID echoed back
-//!   "session_id": "abc123",            // Claude session id (optional)
+//!   "session_id": "abc123",            // tool-native session id (optional)
 //!   "prompt_id": "p-1",                // idempotency-key component (optional)
 //!   "hook_event_name": "Stop",         // Stop|Notification|SessionStart|SessionEnd
 //!   "status": "completed",             // Stop: completed|needs_input|failed|unknown
@@ -458,14 +460,14 @@ pub(crate) fn parse_signal(body: &[u8]) -> Result<AgentSignal, String> {
         .parse()
         .map_err(|e| format!("unparseable `job_id`: {e}"))?;
 
-    let claude_session_id = str_field(obj, "session_id").unwrap_or_default();
+    let tool_session_id = str_field(obj, "session_id").unwrap_or_default();
     let prompt_id = str_field(obj, "prompt_id").unwrap_or_default();
-    let event = normalize_event(obj, &claude_session_id);
+    let event = normalize_event(obj, &tool_session_id);
 
     Ok(AgentSignal {
-        source: SignalSource::ClaudeHook,
+        source: SignalSource::AgentHook,
         job_id,
-        claude_session_id,
+        tool_session_id,
         prompt_id,
         event,
         payload: value,
@@ -501,7 +503,7 @@ fn normalize_event(
             message: str_field(obj, "message"),
         },
         Some("SessionStart") => SignalEvent::SessionStart {
-            claude_session_id: session_id.to_string(),
+            tool_session_id: session_id.to_string(),
         },
         Some("SessionEnd") => SignalEvent::SessionEnd {
             reason: str_field(obj, "reason"),
@@ -594,7 +596,7 @@ mod tests {
         let body = br#"{"job_id":"job-42-7","session_id":"cc-1","prompt_id":"p-1","hook_event_name":"Stop","ts":"2026-07-18T00:00:00Z","status":"COMPLETED","reason":"","last_assistant_message":"done <<STATUS:COMPLETED>>","transcript_path":"/t.jsonl","background_tasks":[]}"#;
         let sig = parse_signal(body).expect("on-stop.sh payload must parse");
         assert_eq!(sig.job_id, JobId::new(42, 7));
-        assert_eq!(sig.claude_session_id, "cc-1");
+        assert_eq!(sig.tool_session_id, "cc-1");
         assert_eq!(sig.prompt_id, "p-1");
         match sig.event {
             SignalEvent::Stop {
@@ -661,8 +663,8 @@ mod tests {
         )
         .unwrap();
         match start.event {
-            SignalEvent::SessionStart { claude_session_id } => {
-                assert_eq!(claude_session_id, "cc-9")
+            SignalEvent::SessionStart { tool_session_id } => {
+                assert_eq!(tool_session_id, "cc-9")
             }
             other => panic!("expected SessionStart, got {other:?}"),
         }
@@ -783,7 +785,7 @@ mod tests {
             .map(|t| format!("Authorization: Bearer {t}\r\n"))
             .unwrap_or_default();
         format!(
-            "POST /claude-events HTTP/1.1\r\n\
+            "POST /agent-events HTTP/1.1\r\n\
              Host: localhost\r\n\
              {auth}\
              Content-Type: application/json\r\n\
@@ -836,7 +838,7 @@ mod tests {
         let signals = sink.signals();
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0].job_id, JobId::new(42, 7));
-        assert_eq!(signals[0].claude_session_id, "s1");
+        assert_eq!(signals[0].tool_session_id, "s1");
         assert!(matches!(
             signals[0].event,
             SignalEvent::Stop {
@@ -909,7 +911,7 @@ mod tests {
         // Declare a Content-Length above the cap; the server refuses before
         // reading the body.
         let request = format!(
-            "POST /claude-events HTTP/1.1\r\nContent-Length: {len}\r\n\r\n",
+            "POST /agent-events HTTP/1.1\r\nContent-Length: {len}\r\n\r\n",
             len = MAX_BODY_BYTES + 1,
         );
         let status = send_raw(&socket, request.as_bytes()).await;
@@ -1039,7 +1041,7 @@ mod tests {
     #[tokio::test]
     async fn non_focus_paths_stay_signal_ingestion() {
         // E-08: the path is inspected only for the exact `/focus`; any other
-        // path (today's `/claude-events`, a future one) is signal ingestion.
+        // path (today's `/agent-events`, a future one) is signal ingestion.
         let (socket, sink, focus, stop_tx, handle) = spawn_server(None);
         let body = r#"{"job_id":"job-5-6","hook_event_name":"Stop","status":"completed"}"#;
         let request = format!(
@@ -1071,7 +1073,7 @@ mod tests {
             .arg("Content-Type: application/json")
             .arg("--data")
             .arg(r#"{"job_id":"job-7-1","hook_event_name":"Stop","status":"completed"}"#)
-            .arg("http://localhost/claude-events")
+            .arg("http://localhost/agent-events")
             .output()
             .await
             .expect("run curl");

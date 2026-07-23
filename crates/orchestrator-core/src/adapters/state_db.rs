@@ -124,6 +124,19 @@ const MIGRATIONS: &[&str] = &[
     DROP TABLE hook_events_v2;
     CREATE INDEX idx_hook_events_task ON hook_events(task_id, id);
     "#,
+    // v4 — generalize the "claude" naming ahead of multi-tool support (#196):
+    // the column holds whichever AI tool CLI's native session id (Claude Code
+    // today; Codex/OpenCode adapters send the same payload shape), so it is
+    // renamed `claude_session_id` → `tool_session_id`. RENAME COLUMN rewrites
+    // the column references inside table constraints and index definitions
+    // in place (SQLite ≥3.25), so the hook_events UNIQUE idempotency key
+    // survives untouched; only the sessions index is recreated for its name.
+    r#"
+    ALTER TABLE sessions RENAME COLUMN claude_session_id TO tool_session_id;
+    ALTER TABLE hook_events RENAME COLUMN claude_session_id TO tool_session_id;
+    DROP INDEX idx_sessions_claude_session;
+    CREATE INDEX idx_sessions_tool_session ON sessions(tool_session_id);
+    "#,
 ];
 
 /// `events.detail` for the ingest event. Stored as JSON so consumers can
@@ -139,7 +152,7 @@ const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
      finished_at, created_at, updated_at, thread_key, last_signal_at";
 
 /// Columns of `sessions`, read by name in [`row_to_session`].
-const SESSION_COLUMNS: &str = "id, task_id, plugin, session_id, created_at, claude_session_id";
+const SESSION_COLUMNS: &str = "id, task_id, plugin, session_id, created_at, tool_session_id";
 
 /// Errors from the state store.
 #[derive(Debug, thiserror::Error)]
@@ -252,10 +265,10 @@ pub struct SessionRecord {
     pub session_id: String,
     /// Creation timestamp (ISO 8601 UTC).
     pub created_at: String,
-    /// Claude Code's own `session_id` for this dispatch, once observed via a
-    /// hook (E-09 correlation / `claude --resume`). `None` until a
-    /// SessionStart-bearing signal records it.
-    pub claude_session_id: Option<String>,
+    /// The tool's own native `session_id` for this dispatch (Claude Code
+    /// today), once observed via a hook (E-09 correlation / resume). `None`
+    /// until a SessionStart-bearing signal records it.
+    pub tool_session_id: Option<String>,
 }
 
 /// A persisted audit event (F-72), for `task show` history.
@@ -277,7 +290,7 @@ pub struct EventRecord {
 
 /// A hook event to persist idempotently (#131 D-05 / N-01).
 ///
-/// The idempotency key is `(job_id, claude_session_id, prompt_id, event)`; the
+/// The idempotency key is `(job_id, tool_session_id, prompt_id, event)`; the
 /// optional components are empty strings (not `None`) so SQLite's UNIQUE
 /// constraint actually dedups repeated deliveries (multiple hook fires, spool
 /// re-sends, curl retries).
@@ -287,8 +300,8 @@ pub struct HookEventInsert {
     pub job_id: String,
     /// Owning task id (resolved from `job_id`, never guessed from a session).
     pub task_id: i64,
-    /// Claude Code's `session_id` (empty if the hook input lacked one).
-    pub claude_session_id: String,
+    /// The tool-native `session_id` (empty if the hook input lacked one).
+    pub tool_session_id: String,
     /// The hook input's `prompt_id` (empty if absent).
     pub prompt_id: String,
     /// Event kind: `stop` / `notification` / `session_start` / `session_end` /
@@ -694,7 +707,7 @@ impl StateDb {
     /// Persist a hook event idempotently (#131 D-05 / N-01).
     ///
     /// `INSERT ... ON CONFLICT DO NOTHING` on the idempotency key
-    /// `(job_id, claude_session_id, prompt_id, event, status)`. A repeat delivery
+    /// `(job_id, tool_session_id, prompt_id, event, status)`. A repeat delivery
     /// with the *same status* (multiple hook fires, spool re-send, curl retry)
     /// leaves the log unchanged and returns [`HookEventOutcome::Duplicate`], which
     /// the caller drops silently. `status` is part of the key so a `block`-driven
@@ -705,15 +718,15 @@ impl StateDb {
     pub fn record_hook_event(&self, evt: &HookEventInsert) -> Result<HookEventOutcome, StateError> {
         let changed = self.conn.execute(
             "INSERT INTO hook_events
-                (job_id, task_id, claude_session_id, prompt_id, event, status,
+                (job_id, task_id, tool_session_id, prompt_id, event, status,
                  payload, received_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
-             ON CONFLICT (job_id, claude_session_id, prompt_id, event, status)
+             ON CONFLICT (job_id, tool_session_id, prompt_id, event, status)
                 DO NOTHING",
             params![
                 evt.job_id,
                 evt.task_id,
-                evt.claude_session_id,
+                evt.tool_session_id,
                 evt.prompt_id,
                 evt.event,
                 evt.status.as_deref().unwrap_or(""),
@@ -766,16 +779,16 @@ impl StateDb {
         Ok(())
     }
 
-    /// Record Claude Code's own `session_id` on a dispatch's session row
-    /// (E-09 correlation / `claude --resume`).
-    pub fn set_claude_session_id(
+    /// Record the tool's own native `session_id` on a dispatch's session row
+    /// (E-09 correlation / resume).
+    pub fn set_tool_session_id(
         &self,
         session_row_id: i64,
-        claude_session_id: &str,
+        tool_session_id: &str,
     ) -> Result<(), StateError> {
         let n = self.conn.execute(
-            "UPDATE sessions SET claude_session_id = ?1 WHERE id = ?2",
-            params![claude_session_id, session_row_id],
+            "UPDATE sessions SET tool_session_id = ?1 WHERE id = ?2",
+            params![tool_session_id, session_row_id],
         )?;
         if n == 0 {
             return Err(StateError::NotFound(session_row_id));
@@ -783,17 +796,17 @@ impl StateDb {
         Ok(())
     }
 
-    /// Find the most recent session bearing a given Claude Code `session_id`.
-    pub fn find_session_by_claude_id(
+    /// Find the most recent session bearing a given tool-native `session_id`.
+    pub fn find_session_by_tool_session_id(
         &self,
-        claude_session_id: &str,
+        tool_session_id: &str,
     ) -> Result<Option<SessionRecord>, StateError> {
         let sql = format!(
             "SELECT {SESSION_COLUMNS} FROM sessions \
-             WHERE claude_session_id = ?1 ORDER BY id DESC LIMIT 1"
+             WHERE tool_session_id = ?1 ORDER BY id DESC LIMIT 1"
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(params![claude_session_id], row_to_session)?;
+        let mut rows = stmt.query_map(params![tool_session_id], row_to_session)?;
         rows.next().transpose().map_err(StateError::from)
     }
 
@@ -877,7 +890,7 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         plugin: row.get("plugin")?,
         session_id: row.get("session_id")?,
         created_at: row.get("created_at")?,
-        claude_session_id: row.get("claude_session_id")?,
+        tool_session_id: row.get("tool_session_id")?,
     })
 }
 
@@ -917,7 +930,7 @@ mod tests {
         HookEventInsert {
             job_id: job_id.to_string(),
             task_id,
-            claude_session_id: String::new(),
+            tool_session_id: String::new(),
             prompt_id: String::new(),
             event: event.to_string(),
             status: status.map(str::to_string),
@@ -1181,7 +1194,7 @@ mod tests {
             HookEventOutcome::New
         );
         let sess = db.record_session(task.id, "herdr", "sess-1").unwrap();
-        db.set_claude_session_id(sess, "cc-1").unwrap();
+        db.set_tool_session_id(sess, "cc-1").unwrap();
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1221,7 +1234,8 @@ mod tests {
             )
             .unwrap();
             // A stop (status set) and a non-stop event whose status is NULL — v2
-            // allowed NULL for non-stop events.
+            // allowed NULL for non-stop events. The column still bears its
+            // pre-v4 name `claude_session_id` at this schema version.
             conn.execute(
                 "INSERT INTO hook_events
                     (id, job_id, task_id, claude_session_id, prompt_id, event, status,
@@ -1264,7 +1278,7 @@ mod tests {
         let done = HookEventInsert {
             job_id: "job-1-1".into(),
             task_id: 1,
-            claude_session_id: "s".into(),
+            tool_session_id: "s".into(),
             prompt_id: "p".into(),
             event: "stop".into(),
             status: Some("COMPLETED".into()),
@@ -1274,6 +1288,104 @@ mod tests {
         assert_eq!(
             db.record_hook_event(&done).unwrap(),
             HookEventOutcome::Duplicate
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrates_v3_to_v4_renaming_session_columns() {
+        // A pre-existing v3 DB must migrate to v4 in place: the
+        // `claude_session_id` columns come back as `tool_session_id` with data
+        // intact, and the rebuilt-by-rename UNIQUE idempotency key still
+        // dedups (#196 rename).
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-migrate_v4", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+
+        // Build a v3 database by hand (schema_migrations pinned at 3).
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations \
+                 (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute_batch(MIGRATIONS[1]).unwrap();
+            conn.execute_batch(MIGRATIONS[2]).unwrap();
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) \
+                 VALUES (1, ?1), (2, ?1), (3, ?1)",
+                params![now()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO tasks
+                    (source, source_task_id, workflow, mode, state, priority,
+                     title, created_at, updated_at)
+                 VALUES ('github','9','implement','implement','dispatched',0,'legacy',?1,?1)",
+                params![now()],
+            )
+            .unwrap();
+            // A session and a hook event under the pre-v4 column name.
+            conn.execute(
+                "INSERT INTO sessions (task_id, plugin, session_id, created_at, claude_session_id)
+                 VALUES (1, 'herdr', 'sess-1', ?1, 'cc-old')",
+                params![now()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO hook_events
+                    (id, job_id, task_id, claude_session_id, prompt_id, event, status,
+                     payload, received_at)
+                 VALUES (1,'job-1-1',1,'cc-old','p','stop','COMPLETED','{}',?1)",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        // Reopen through StateDb: v4 applies and the old file is backed up.
+        let db = StateDb::open(&path).unwrap();
+        assert!(
+            PathBuf::from(format!("{}.bak", path.display())).exists(),
+            "existing DB backed up before migrating (§10.3)"
+        );
+
+        // The session row reads back through the renamed column.
+        let rec = db.latest_session(1).unwrap().unwrap();
+        assert_eq!(rec.tool_session_id.as_deref(), Some("cc-old"));
+        assert_eq!(
+            db.find_session_by_tool_session_id("cc-old")
+                .unwrap()
+                .unwrap()
+                .id,
+            rec.id
+        );
+
+        // The idempotency key survived the rename: a same-key re-delivery
+        // still dedups, a different status still records.
+        let redelivery = HookEventInsert {
+            job_id: "job-1-1".into(),
+            task_id: 1,
+            tool_session_id: "cc-old".into(),
+            prompt_id: "p".into(),
+            event: "stop".into(),
+            status: Some("COMPLETED".into()),
+            payload: "{}".into(),
+        };
+        assert_eq!(
+            db.record_hook_event(&redelivery).unwrap(),
+            HookEventOutcome::Duplicate
+        );
+        let changed = HookEventInsert {
+            status: Some("NEEDS_INPUT".into()),
+            ..redelivery
+        };
+        assert_eq!(
+            db.record_hook_event(&changed).unwrap(),
+            HookEventOutcome::New
         );
 
         let _ = fs::remove_dir_all(&dir);
@@ -1506,21 +1618,28 @@ mod tests {
     }
 
     #[test]
-    fn claude_session_id_and_touch_last_signal() {
+    fn tool_session_id_and_touch_last_signal() {
         let db = StateDb::open_in_memory().unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
         let sess = db.record_session(id, "herdr", "sess-1").unwrap();
 
         // A fresh session has no Claude session id yet.
         assert_eq!(
-            db.latest_session(id).unwrap().unwrap().claude_session_id,
+            db.latest_session(id).unwrap().unwrap().tool_session_id,
             None
         );
-        db.set_claude_session_id(sess, "cc-abc").unwrap();
-        let rec = db.find_session_by_claude_id("cc-abc").unwrap().unwrap();
+        db.set_tool_session_id(sess, "cc-abc").unwrap();
+        let rec = db
+            .find_session_by_tool_session_id("cc-abc")
+            .unwrap()
+            .unwrap();
         assert_eq!(rec.id, sess);
-        assert_eq!(rec.claude_session_id.as_deref(), Some("cc-abc"));
-        assert!(db.find_session_by_claude_id("nope").unwrap().is_none());
+        assert_eq!(rec.tool_session_id.as_deref(), Some("cc-abc"));
+        assert!(
+            db.find_session_by_tool_session_id("nope")
+                .unwrap()
+                .is_none()
+        );
 
         // last_signal_at starts unset and gets stamped.
         assert!(db.get_task(id).unwrap().unwrap().last_signal_at.is_none());
@@ -1533,7 +1652,7 @@ mod tests {
             StateError::NotFound(999)
         ));
         assert!(matches!(
-            db.set_claude_session_id(999, "x").unwrap_err(),
+            db.set_tool_session_id(999, "x").unwrap_err(),
             StateError::NotFound(999)
         ));
     }

@@ -4,7 +4,7 @@ title: Claude Code フック機構のセキュリティポリシー
 description: フック完了判定の UDS Bearer トークン管理（keychain 参照・socket 0600 第一層・定数時間比較・herdr env 配送）、スプールファイルの機密保持（N-05: last_assistant_message は機微・$XDG_STATE_HOME 配下・drain 後削除・隔離の注意）、フックアセットの改ざん耐性（N-02: 0700/0600・内容ハッシュ冪等修復・静的埋め込み）を定める。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [security, hook, claude-code, uds, token, keychain, spool, tamper, epic-131]
-timestamp: 2026-07-23T13:00:00Z
+timestamp: 2026-07-23T15:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -19,8 +19,8 @@ Claude Code の完了判定は、pane 内の `claude` が発火するフック�
 
 ローカルの UDS だが、同一ホスト上の他プロセス（別ユーザー・悪性プロセス）からの偽シグナル注入を防ぐため **2 層で認証**する:
 
-- **第一層 = socket パーミッション 0600**: `adapters::hook_uds` は stale ソケットを unlink → bind 後、**0600** を設定する。所有ユーザー以外はそもそも connect できない。socket は既定で `${XDG_RUNTIME_DIR}/totsuka/claude-events.sock`（ユーザー専用の runtime dir）。
-- **第二層 = Bearer トークンの定数時間比較（E-03）**: `POST /claude-events` の `Authorization: Bearer <token>` を `[hooks].auth_token_ref` が解決した値と**定数時間で比較**する（タイミング攻撃防止）。不一致は 401。`job_id` 欠落/不正は 400。
+- **第一層 = socket パーミッション 0600**: `adapters::hook_uds` は stale ソケットを unlink → bind 後、**0600** を設定する。所有ユーザー以外はそもそも connect できない。socket は既定で `${XDG_RUNTIME_DIR}/totsuka/agent-events.sock`（ユーザー専用の runtime dir）。
+- **第二層 = Bearer トークンの定数時間比較（E-03）**: `POST /agent-events` の `Authorization: Bearer <token>` を `[hooks].auth_token_ref` が解決した値と**定数時間で比較**する（タイミング攻撃防止）。不一致は 401。`job_id` 欠落/不正は 400。
 
 トークンの供給と保管:
 
