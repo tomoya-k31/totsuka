@@ -141,7 +141,9 @@ export const TotsukaOpencode = async ({ client }) => {
           await postEvent({
             job_id: JOB_ID,
             session_id: sessionID,
-            prompt_id: "",
+            // No message context here; a per-occurrence id keeps repeated
+            // errors from collapsing into one row via the idempotency key.
+            prompt_id: `error-${Date.now()}`,
             hook_event_name: "Stop",
             ts: isoNow(),
             status: "FAILED",
