@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 
 use crate::config::RootConfig;
 use crate::paths::Paths;
-use crate::tool::{ToolKind, ToolProfile};
+use crate::tool::ToolKind;
 
 use super::AssetIssue;
 
@@ -71,17 +71,7 @@ pub fn hooks_json_path(codex_home: &Path) -> PathBuf {
 /// [`sync_registration`] touches `$CODEX_HOME` at all — a claude-only setup
 /// must never write there.
 pub fn references_codex(cfg: &RootConfig) -> bool {
-    let kind_of = |name: &str| {
-        cfg.tool(name)
-            .map(|t| t.kind)
-            .or_else(|| ToolProfile::builtin(name).map(|p| p.kind))
-    };
-    cfg.default_tool
-        .as_deref()
-        .into_iter()
-        .chain(cfg.repositories.iter().filter_map(|r| r.tool.as_deref()))
-        .chain(cfg.workflows.iter().filter_map(|w| w.tool.as_deref()))
-        .any(|name| kind_of(name) == Some(ToolKind::Codex))
+    super::config_references_kind(cfg, ToolKind::Codex)
 }
 
 /// What [`sync_registration`] did.

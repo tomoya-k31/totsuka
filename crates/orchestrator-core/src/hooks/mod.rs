@@ -16,6 +16,7 @@
 //! `--settings` path is reusable across `claude --resume` (H-03).
 
 pub mod codex;
+pub mod opencode;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -23,8 +24,27 @@ use std::path::{Path, PathBuf};
 use crate::config::{RootConfig, VerificationMode, WorkflowConfig};
 use crate::domain::signal::{MARKER_COMPLETED, MARKER_FAILED, MARKER_NEEDS_INPUT};
 use crate::paths::Paths;
+use crate::tool::{ToolKind, ToolProfile};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+
+/// Whether the config can resolve any task to a tool of `kind`: the global
+/// default, a repository default, or a workflow pin. Shared by the per-tool
+/// asset installers ([`codex`], [`opencode`]) to decide whether they may touch
+/// anything outside totsuka's own dirs.
+pub(crate) fn config_references_kind(cfg: &RootConfig, kind: ToolKind) -> bool {
+    let kind_of = |name: &str| {
+        cfg.tool(name)
+            .map(|t| t.kind)
+            .or_else(|| ToolProfile::builtin(name).map(|p| p.kind))
+    };
+    cfg.default_tool
+        .as_deref()
+        .into_iter()
+        .chain(cfg.repositories.iter().filter_map(|r| r.tool.as_deref()))
+        .chain(cfg.workflows.iter().filter_map(|w| w.tool.as_deref()))
+        .any(|name| kind_of(name) == Some(kind))
+}
 
 /// The static hook scripts, embedded in file order (`hook-common.sh` first so a
 /// reader sees the shared helpers before the entry points that source them).
@@ -110,7 +130,7 @@ pub fn verify_assets(paths: &Paths, cfg: &RootConfig) -> Vec<AssetIssue> {
 
 /// Check one asset's existence, content hash, and mode, pushing any problem
 /// onto `issues`.
-fn verify_one(path: &Path, expected: &[u8], mode: u32, issues: &mut Vec<AssetIssue>) {
+pub(crate) fn verify_one(path: &Path, expected: &[u8], mode: u32, issues: &mut Vec<AssetIssue>) {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -226,7 +246,7 @@ pub fn render_settings(dir: &Path, wf: &WorkflowConfig) -> String {
 /// Write `content` only when the on-disk bytes differ (content-hash compare),
 /// then apply `mode`. Returns whether a write happened (drives the idempotency
 /// tests).
-fn write_if_changed(path: &Path, content: &[u8], mode: u32) -> io::Result<bool> {
+pub(crate) fn write_if_changed(path: &Path, content: &[u8], mode: u32) -> io::Result<bool> {
     if let Ok(existing) = std::fs::read(path)
         && Sha256::digest(&existing) == Sha256::digest(content)
     {

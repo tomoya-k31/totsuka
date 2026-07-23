@@ -317,6 +317,7 @@ fn check_hooks(
 ) {
     check_hook_assets(cx, cfg, checks);
     check_codex_hooks(cx, cfg, config_ok, env, checks);
+    check_opencode_assets(cx, cfg, config_ok, env, checks);
     check_hook_deps(env, checks);
     // Which workflows actually need the Bearer token, decided from the static
     // manifests alone (plugin enablement / reference integrity belong to
@@ -463,6 +464,73 @@ fn check_codex_hooks(
             format!("could not read the codex trust state: {e}"),
             "check $CODEX_HOME/config.toml is readable",
         )),
+    }
+}
+
+/// OpenCode asset installation (#196 Phase 3), only when the config references
+/// an opencode-kind tool. Mirrors `check_codex_hooks` (sync then verify, and
+/// nothing runs on an invalid config), minus the trust probe — opencode has no
+/// trust step, so a synced asset set is already fully active.
+fn check_opencode_assets(
+    cx: &Cx,
+    cfg: &RootConfig,
+    config_ok: bool,
+    env: &HashMap<String, String>,
+    checks: &mut Vec<Check>,
+) {
+    use orchestrator_core::hooks::opencode;
+    if !opencode::references_opencode(cfg) {
+        return;
+    }
+    if !config_ok {
+        checks.push(Check::warn(
+            "opencode-assets",
+            "skipped: the config has validation errors, so the asset sync did not run",
+            "fix the config errors, then re-run doctor",
+        ));
+        return;
+    }
+    let dir = opencode::opencode_config_dir(|k| env.get(k).cloned());
+    match opencode::sync_assets(dir.as_deref(), cfg) {
+        Ok(opencode::SyncOutcome::NoConfigDir) => {
+            checks.push(Check::fail(
+                "opencode-assets",
+                "the config references an opencode-kind tool but no opencode config dir was found",
+                "install opencode and run it once ($XDG_CONFIG_HOME/opencode must exist) or drop the opencode tool reference",
+            ));
+            return;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            checks.push(Check::fail(
+                "opencode-assets",
+                format!("could not write the opencode assets: {e}"),
+                "check permissions on $XDG_CONFIG_HOME/opencode",
+            ));
+            return;
+        }
+    }
+    let dir = dir.expect("NoConfigDir returned above");
+    let issues = opencode::verify_assets(&dir, &cx.paths);
+    if issues.is_empty() {
+        checks.push(Check::ok(
+            "opencode-assets",
+            format!(
+                "totsuka plugin + plan agent installed under {}",
+                dir.display()
+            ),
+        ));
+    } else {
+        let detail = issues
+            .iter()
+            .map(|i| format!("{}: {}", i.path.display(), i.problem))
+            .collect::<Vec<_>>()
+            .join("; ");
+        checks.push(Check::fail(
+            "opencode-assets",
+            format!("assets are inconsistent after a sync attempt: {detail}"),
+            "a persistent mismatch on a writable dir means the asset is being tampered with (N-02) → investigate",
+        ));
     }
 }
 
