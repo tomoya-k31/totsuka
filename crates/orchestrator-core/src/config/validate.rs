@@ -180,10 +180,15 @@ where
         }
     }
 
-    // Global default tool (#196).
-    if let Some(tool) = &cfg.default_tool {
-        check_tool_ref(cfg, "default_tool", tool, &mut errors);
-    }
+    // Global default tool (#196). Checked even when unset: the implicit
+    // default is the built-in `claude`, whose kind a `[tools.claude]` entry
+    // can override — an adapterless override must fail here, not at dispatch.
+    check_tool_ref(
+        cfg,
+        "default_tool",
+        cfg.default_tool.as_deref().unwrap_or("claude"),
+        &mut errors,
+    );
 
     errors
 }
@@ -826,6 +831,28 @@ tool = "claude"
 "#
         );
         let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(errors.is_empty(), "unexpected: {errors:?}");
+    }
+
+    #[test]
+    fn implicit_default_tool_is_checked_against_overridden_builtin() {
+        // /code-review finding on #223: a [tools.claude] entry can override
+        // the built-in's kind; with default_tool and every `tool` field
+        // omitted, the *implicit* default "claude" must still be statically
+        // rejected instead of surfacing only as a dispatch-time failure.
+        let cfg = RootConfig::from_toml_str("[tools.claude]\nkind = \"codex\"").unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::UnsupportedToolKind { referrer, tool, .. }
+                    if referrer == "default_tool" && tool == "claude"
+            )),
+            "expected implicit-default error: {errors:?}"
+        );
+        // An untouched built-in stays silent.
+        let cfg = RootConfig::from_toml_str("").unwrap();
         let errors = validate_static(&cfg, &env_from(&[]));
         assert!(errors.is_empty(), "unexpected: {errors:?}");
     }
