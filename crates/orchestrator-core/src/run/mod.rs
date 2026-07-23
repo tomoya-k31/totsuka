@@ -1050,7 +1050,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 .fail_dispatch(
                     &record,
                     format!(
-                        "tool `{tool_name}` (kind `{}`) has no completion-detection adapter yet → use a claude/codex-kind tool",
+                        "tool `{tool_name}` (kind `{}`) has no completion-detection adapter yet → use a kind with an adapter",
                         tool_profile.kind.as_str()
                     ),
                 )
@@ -1146,7 +1146,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .map(|a| a.capabilities().hook_capable())
             .unwrap_or(false);
         let task = task_from_record(&record);
-        let (job_id, hook_spec, reserved_row) = match hook_capable
+        let (job_id, hook_spec, reserved_row, visible_hook_context) = match hook_capable
             .then(|| self.hook_launch(&record.workflow))
             .flatten()
         {
@@ -1175,26 +1175,42 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     prompt_context.push_str("\n\n");
                 }
                 prompt_context.push_str(&hooks::MARKER_SELF_REPORT_INSTRUCTION);
-                env.insert("TOTSUKA_PROMPT_CONTEXT".to_string(), prompt_context);
+                // Context routing per tool capability (#196 Phase 3): a tool
+                // without invisible injection (opencode — no UserPromptSubmit
+                // additionalContext channel) gets the same instructions +
+                // marker convention as *visible* extra_context instead, so
+                // the completion contract still reaches the model up front.
+                let visible_hook_context = if tool_profile.capabilities().invisible_injection {
+                    env.insert("TOTSUKA_PROMPT_CONTEXT".to_string(), prompt_context);
+                    None
+                } else {
+                    Some(prompt_context)
+                };
                 (
                     Some(job_id.to_string()),
                     Some(HookLaunchSpec { settings_path, env }),
                     Some(session_row),
+                    visible_hook_context,
                 )
             }
-            None => (None, None, None),
+            None => (None, None, None, None),
         };
 
         // task/dispatch (F-31) → session id → persist (F-37) → subscribe (F-38).
         let agent = self.plugins.agents.get(&agent_name).expect("checked above");
         // Context routing: hook dispatches deliver everything invisibly via
-        // `TOTSUKA_PROMPT_CONTEXT` above, so no visible extra_context. Non-hook
-        // dispatches (orca / mock) have no invisible channel — fall back to the
-        // task's instructions as visible string extra_context (no marker
-        // convention: non-hook agents don't report completion through hooks).
-        let extra_context = match &hook_spec {
-            Some(_) => None,
-            None => task.instructions.clone().map(serde_json::Value::String),
+        // `TOTSUKA_PROMPT_CONTEXT` above when the tool supports it; a tool
+        // without invisible injection got the same content as
+        // `visible_hook_context` instead. Non-hook dispatches (orca / mock)
+        // have no invisible channel — fall back to the task's instructions as
+        // visible string extra_context (no marker convention: non-hook agents
+        // don't report completion through hooks).
+        let extra_context = match (&hook_spec, visible_hook_context) {
+            // Hook dispatch, tool without invisible injection: the context is
+            // delivered visibly (see above).
+            (Some(_), Some(ctx)) => Some(serde_json::Value::String(ctx)),
+            (Some(_), None) => None,
+            (None, _) => task.instructions.clone().map(serde_json::Value::String),
         };
         let mode = execution_mode(&record.mode);
         // Fully-resolved tool launch (#196): the argv (base command, mode

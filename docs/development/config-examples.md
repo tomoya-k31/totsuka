@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-timestamp: 2026-07-24T10:00:00Z
+timestamp: 2026-07-24T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -136,10 +136,10 @@ max_concurrency = 4      # 全体の同時実行タスク上限（省略時 4）
 default_tool = "claude"  # グローバル既定の AI ツール（#196。省略時も claude）
 
 # ── AI ツールレジストリ（#196） ──────────────────────────────
-# 組み込み既定 `claude` / `codex` があるため、通常このセクションは不要。
+# 組み込み既定 `claude` / `codex` / `opencode` があるため、通常このセクションは不要。
 # コマンドを上書きしたい・別プロファイルを作りたい場合のみ書く。
-# 現バージョンで dispatch できるのは kind = "claude" / "codex"（opencode は Phase 3）。
 # codex は一回きりのセットアップが必要 → /operations/codex-tool-setup.md
+# opencode はアセット自動配置のみ（縮退に注意）→ /operations/opencode-tool-setup.md
 [tools.claude-fast]
 kind = "claude"                        # アダプタ種別: claude | codex | opencode
 command = "claude --model haiku"       # 空白区切り: 先頭 = プログラム、残り = 基本引数

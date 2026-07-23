@@ -1,17 +1,17 @@
 ---
 type: API Endpoint
 title: POST /agent-events（UDS フック受信）
-description: エージェント CLI（Claude Code / Codex）のフックが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。制御エンドポイント POST /focus（click-to-focus、F-94）も同一ソケットに同居。
+description: エージェント CLI（Claude Code / Codex / OpenCode）のフック/プラグインが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。制御エンドポイント POST /focus（click-to-focus、F-94）も同一ソケットに同居。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/hook_uds.rs
-tags: [api, uds, hook, claude-code, codex, signal, ingress]
-timestamp: 2026-07-24T10:00:00Z
+tags: [api, uds, hook, claude-code, codex, opencode, signal, ingress]
+timestamp: 2026-07-24T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
 
 # 概要
 
-herdr ペイン上のエージェント CLI（Claude Code、および #196 Phase 2 以降は Codex — 同一スクリプト群が両対応。OpenCode も同一契約で送出予定）が発火するフック（Stop / Notification / SessionStart / SessionEnd）が、完了自己申告や中間イベントを orchestrator-core へ通知するための受信口（#131 / #136）。screen-manifest 画面検出に代わる決定的な完了判定の入口である。
+herdr ペイン上のエージェント CLI（Claude Code / Codex は共有フックスクリプト群、OpenCode は JS プラグイン `totsuka-opencode.js` — いずれも同一契約で送出、#196）が発火するフック（Stop / Notification / SessionStart / SessionEnd）が、完了自己申告や中間イベントを orchestrator-core へ通知するための受信口（#131 / #136）。screen-manifest 画面検出に代わる決定的な完了判定の入口である。
 
 driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実装し、正規化した [`domain::signal::AgentSignal`](/components/orchestrator-core.md) を `ports::SignalPort` 経由で Engine へ投入する。
 
@@ -37,7 +37,7 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 |---|---|---|
 | `job_id` | ✔ | `"job-{task_id}-{session_row}"`。`TOTSUKA_JOB_ID` のエコーバック。相関はこれのみで行い session_id からの推測はしない（E-09） |
 | `session_id` | | ツールネイティブのセッション id（相関補助・冪等キー要素。DB では `tool_session_id`） |
-| `prompt_id` | | 冪等キー要素（codex では送信スクリプトが stdin の `turn_id` をこのフィールドへ載せ替える — ワイヤ形は不変、#196 Phase 2） |
+| `prompt_id` | | 冪等キー要素（codex では stdin の `turn_id`、opencode では最終メッセージ id を送信側がこのフィールドへ載せ替える — ワイヤ形は不変、#196） |
 | `hook_event_name` | | `Stop` / `Notification` / `SessionStart` / `SessionEnd`。未知/欠落は `Heartbeat`（生存のみ、誤完了を避ける最も非断定な扱い）へ正規化。**これが正本のイベント種別キー**（旧 `event` フィールドではない。フックスクリプト `on-stop.sh` 等はこの名で送出する #138） |
 | `status` | | `Stop` 時: `completed` / `needs_input` / `failed` / `unknown`。**大小無視で照合**（`on-stop.sh` はマーカー語 `COMPLETED` 等を大文字のまま送るため） |
 | `reason` | | 補足理由 |

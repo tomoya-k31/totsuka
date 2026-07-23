@@ -82,9 +82,10 @@ pub enum ValidationError {
     UnknownToolRef { referrer: String, tool: String },
 
     /// A referenced tool's kind has no completion-detection adapter yet
-    /// (#196: `claude` and `codex` since Phase 2).
+    /// (#196; unreachable since Phase 3 gave every kind an adapter — kept as
+    /// the gate a future adapterless kind would trip).
     #[error(
-        "{referrer} tool `{tool}` has kind `{kind}` which has no adapter yet → only `claude`/`codex`-kind tools are dispatchable in this version"
+        "{referrer} tool `{tool}` has kind `{kind}` which has no adapter yet → this kind is not dispatchable in this version"
     )]
     UnsupportedToolKind {
         referrer: String,
@@ -794,10 +795,9 @@ tool = "typo"
             e,
             ValidationError::UnknownToolRef { tool, .. } if tool == "typo"
         )));
-        assert!(errors.iter().any(|e| matches!(
-            e,
-            ValidationError::UnsupportedToolKind { tool, kind, .. } if tool == "opencode" && kind == "opencode"
-        )));
+        // Since Phase 3 every kind has an adapter, so the opencode reference
+        // above is valid — only the unknown names error.
+        assert_eq!(errors.len(), 2, "unexpected extra errors: {errors:?}");
 
         // The built-in `claude` and a claude-kind [tools] profile are fine.
         let toml = format!(
@@ -839,19 +839,14 @@ tool = "claude"
     fn implicit_default_tool_is_checked_against_overridden_builtin() {
         // /code-review finding on #223: a [tools.claude] entry can override
         // the built-in's kind; with default_tool and every `tool` field
-        // omitted, the *implicit* default "claude" must still be statically
-        // rejected instead of surfacing only as a dispatch-time failure.
+        // omitted, the *implicit* default "claude" must still pass through
+        // `check_tool_ref` statically. Since Phase 3 every kind has an
+        // adapter, an overridden built-in is simply valid — the check now
+        // only guards a future adapterless kind (and unknown names).
         let cfg = RootConfig::from_toml_str("[tools.claude]\nkind = \"opencode\"").unwrap();
         let errors = validate_static(&cfg, &env_from(&[]));
-        assert!(
-            errors.iter().any(|e| matches!(
-                e,
-                ValidationError::UnsupportedToolKind { referrer, tool, .. }
-                    if referrer == "default_tool" && tool == "claude"
-            )),
-            "expected implicit-default error: {errors:?}"
-        );
-        // An untouched built-in stays silent.
+        assert!(errors.is_empty(), "unexpected: {errors:?}");
+        // An untouched built-in stays silent too.
         let cfg = RootConfig::from_toml_str("").unwrap();
         let errors = validate_static(&cfg, &env_from(&[]));
         assert!(errors.is_empty(), "unexpected: {errors:?}");
