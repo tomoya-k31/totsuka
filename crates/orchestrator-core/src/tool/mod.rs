@@ -16,11 +16,11 @@
 //! built-in `"claude"`.
 //!
 //! Phase 1 (#196) shipped the Claude adapter; Phase 2 added Codex (hooks
-//! adapter — global `hooks.json` registration lives in
-//! [`crate::hooks::codex`]). [`ToolKind::Opencode`] parses in config but has
-//! no completion-detection adapter yet, so validation rejects configs that
-//! reference it and `launch_spec` returns `None`
-//! ([`ToolKind::has_adapter`]).
+//! adapter — global `hooks.json` registration in [`crate::hooks::codex`]);
+//! Phase 3 added OpenCode (JS-plugin adapter — asset installation in
+//! [`crate::hooks::opencode`]). Every current kind has an adapter;
+//! [`ToolKind::has_adapter`] stays as the gate a future adapterless kind
+//! would trip (validation rejects references, `launch_spec` returns `None`).
 
 use std::collections::BTreeMap;
 
@@ -58,7 +58,10 @@ impl ToolKind {
     /// timeout escalation — so validation refuses such configs upfront
     /// (#196 decision 8: no `kind = "custom"` escape hatch).
     pub fn has_adapter(self) -> bool {
-        matches!(self, ToolKind::Claude | ToolKind::Codex)
+        matches!(
+            self,
+            ToolKind::Claude | ToolKind::Codex | ToolKind::Opencode
+        )
     }
 }
 
@@ -119,10 +122,9 @@ pub struct LaunchInputs<'a> {
 }
 
 impl ToolProfile {
-    /// The built-in profile for `name`, if one exists (`"claude"` and, since
-    /// Phase 2, `"codex"` — usable via `tool = "codex"` without a `[tools]`
-    /// entry); `[tools.<name>]` entries override/extend these. No `"opencode"`
-    /// built-in until its adapter lands (Phase 3).
+    /// The built-in profile for `name`, if one exists (`"claude"`, `"codex"`,
+    /// `"opencode"` — each usable via `tool = "<name>"` without a `[tools]`
+    /// entry); `[tools.<name>]` entries override/extend these.
     pub fn builtin(name: &str) -> Option<Self> {
         match name {
             "claude" => Some(Self {
@@ -136,6 +138,13 @@ impl ToolProfile {
                 name: "codex".to_string(),
                 kind: ToolKind::Codex,
                 command: "codex".to_string(),
+                mode_args: None,
+                plan_args: None,
+            }),
+            "opencode" => Some(Self {
+                name: "opencode".to_string(),
+                kind: ToolKind::Opencode,
+                command: "opencode".to_string(),
                 mode_args: None,
                 plan_args: None,
             }),
@@ -185,8 +194,14 @@ impl ToolProfile {
                 heartbeat: false,
                 session_id_capture: true,
             },
-            // Provisional (#196 縮退表); confirmed/adjusted by the Phase 3
-            // real-machine spike ([U]) before this kind gains an adapter.
+            // Confirmed by the Phase 3 real-machine spike (2026-07-24,
+            // opencode 1.14.39): `-s <id>` resume with retained context,
+            // `session.created` id capture, last-message fetch via the SDK.
+            // No invisible injection (instructions ride the visible
+            // extra_context), no stop block (UNKNOWN streak escalation
+            // instead), no prompt-type hooks, no heartbeat. `plan_mode` is
+            // the `--agent totsuka-plan` full-deny agent (a partial
+            // permission deny leaks via subagent delegation — spike finding).
             ToolKind::Opencode => ToolCapabilities {
                 invisible_injection: false,
                 marker_block: false,
@@ -217,6 +232,12 @@ impl ToolProfile {
     /// accepts the same flags. `settings_path` is ignored: codex hooks are
     /// registered globally ([`crate::hooks::codex`]) and gated per pane via
     /// the `TOTSUKA_*` env this spec carries.
+    ///
+    /// OpenCode argv (#196 Phase 3): base command, plan default
+    /// `--agent totsuka-plan` (the full-deny plan agent installed by
+    /// [`crate::hooks::opencode`]), implement default = no extra flags, and
+    /// `-s <id>` when resuming. `settings_path` is ignored — completion
+    /// detection is the globally installed JS plugin, env-gated like codex.
     pub fn launch_spec(&self, inp: &LaunchInputs<'_>) -> Option<ToolLaunchSpec> {
         let fallback_program = self.kind.as_str().to_string();
         let mut parts = self.command.split_whitespace().map(str::to_string);
@@ -263,8 +284,22 @@ impl ToolProfile {
                     }
                 }
             }
-            // No adapter yet (Phase 3).
-            ToolKind::Opencode => return None,
+            ToolKind::Opencode => {
+                if inp.plan {
+                    match &self.plan_args {
+                        Some(extra) => args.extend(extra.iter().cloned()),
+                        None => {
+                            args.extend(["--agent".to_string(), "totsuka-plan".to_string()]);
+                        }
+                    }
+                } else if let Some(extra) = &self.mode_args {
+                    args.extend(extra.iter().cloned());
+                }
+                if let Some(id) = inp.resume_session_id {
+                    args.push("-s".to_string());
+                    args.push(id.to_string());
+                }
+            }
         }
         Some(ToolLaunchSpec {
             program,
@@ -281,7 +316,7 @@ pub fn registry_from_config(
 ) -> std::collections::HashMap<String, ToolProfile> {
     let mut registry = std::collections::HashMap::new();
     // Built-ins first; [tools] entries overlay them.
-    for builtin in ["claude", "codex"] {
+    for builtin in ["claude", "codex", "opencode"] {
         let profile = ToolProfile::builtin(builtin).expect("built-in profile exists");
         registry.insert(profile.name.clone(), profile);
     }
@@ -445,11 +480,76 @@ mod tests {
     }
 
     #[test]
-    fn kinds_without_an_adapter_produce_no_spec() {
-        let kind = ToolKind::Opencode;
-        let profile = ToolProfile { kind, ..claude() };
-        assert!(!kind.has_adapter());
-        assert!(profile.launch_spec(&inputs(false, None, None)).is_none());
+    fn all_kinds_have_adapters_since_phase_3() {
+        // `has_adapter` stays as the gate a future adapterless kind would
+        // trip; today every kind is dispatchable.
+        for kind in [ToolKind::Claude, ToolKind::Codex, ToolKind::Opencode] {
+            assert!(kind.has_adapter());
+        }
+    }
+
+    fn opencode() -> ToolProfile {
+        ToolProfile::builtin("opencode").unwrap()
+    }
+
+    // OpenCode argv contract (#196 Phase 3) — flags verified on the real CLI
+    // (opencode 1.14.39 spike, 2026-07-24).
+
+    #[test]
+    fn opencode_plan_uses_totsuka_plan_agent_and_resume_is_a_flag() {
+        assert_eq!(
+            argv(&opencode(), &inputs(false, None, None)),
+            ("opencode".to_string(), vec![]),
+            "implement mode launches the plain TUI"
+        );
+        assert_eq!(
+            argv(&opencode(), &inputs(true, None, None)),
+            (
+                "opencode".to_string(),
+                vec!["--agent".to_string(), "totsuka-plan".to_string()]
+            )
+        );
+        assert_eq!(
+            argv(&opencode(), &inputs(true, None, Some("ses_abc"))),
+            (
+                "opencode".to_string(),
+                vec![
+                    "--agent".to_string(),
+                    "totsuka-plan".to_string(),
+                    "-s".to_string(),
+                    "ses_abc".to_string()
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn opencode_ignores_settings_path_and_honors_custom_args() {
+        let spec = opencode()
+            .launch_spec(&inputs(
+                false,
+                Some("/data/hooks/orchestrator-x.json"),
+                None,
+            ))
+            .unwrap();
+        assert!(!spec.args.iter().any(|a| a.contains("orchestrator-x")));
+        let profile = ToolProfile {
+            command: "opencode --mini".to_string(),
+            mode_args: Some(vec!["--auto".to_string()]),
+            ..opencode()
+        };
+        assert_eq!(
+            argv(&profile, &inputs(false, None, Some("ses_1"))),
+            (
+                "opencode".to_string(),
+                vec![
+                    "--mini".to_string(),
+                    "--auto".to_string(),
+                    "-s".to_string(),
+                    "ses_1".to_string()
+                ]
+            )
+        );
     }
 
     fn codex() -> ToolProfile {

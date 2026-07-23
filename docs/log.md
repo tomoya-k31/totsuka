@@ -1,6 +1,12 @@
 # Bundle Update Log
 
 ## 2026-07-24
+* **Creation**: [OpenCode ツールのセットアップと運用](/operations/opencode-tool-setup.md) — #196 Phase 3（`kind = "opencode"` 有効化）のセットアップ（アセット自動配置・trust 不要）と縮退一覧（block 不可・指示が可視・llm 検収不可・heartbeat 無し）、plan agent 全 deny の根拠（部分 deny はサブエージェント委譲で貫通）を記録。検証済み opencode 1.14.39。
+* **Creation**: [AI Tool（AI ツール）と 2 軸モデル](/glossary/ai-tool.md) — agent プラグイン（pane runner）と AI ツール（pane 内 CLI）の直交 2 軸の用語定義。
+* **Update**: [ADR-0014](/decisions/adr-0014-tool-abstraction.md) — Consequences に Phase 3 完了（スパイク [U] の結果、plan agent 全 deny と可視 extra_context 分岐の実装時発見）を追記。
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `tool`: opencode の `has_adapter` ✓・組み込み `opencode`・launch_spec（`--agent totsuka-plan` / `-s <id>`）とケイパビリティ確定。`hooks`: `hooks::opencode`（JS プラグイン + plan agent の SHA 冪等配置）。`run`: ケイパビリティ駆動のコンテキスト経路（不可視注入なし → 可視 extra_context）を追記。
+* **Update**: [POST /agent-events](/apis/agent-events.md) — 送出元に OpenCode（JS プラグイン、prompt_id = メッセージ id）を追加。
+* **Update**: [設定リファレンス](/development/config-reference.md) / [設定例集](/development/config-examples.md) — 組み込み `opencode`・kind 別既定（plan `--agent totsuka-plan` / resume `-s`）・全 kind dispatch 可能の注記。
 * **Creation**: [Codex ツールのセットアップと hooks trust 運用](/operations/codex-tool-setup.md) — #196 Phase 2（`kind = "codex"` 有効化）の一回きりセットアップ（hooks trust・リポジトリ trust）と復旧手順。検証済み codex-cli 0.145.0、既知の縮退（plan mode 不在・heartbeat 無し・llm 検収不可・SessionEnd 3s クランプ）を記録。
 * **Update**: [ADR-0014](/decisions/adr-0014-tool-abstraction.md) — Consequences に Phase 2 完了（実機スパイク [V1]〜[V3] の結果、専用 on-codex-*.sh 不要・notify フォールバック見送りの実装時判断）を追記。
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `tool`: codex の `has_adapter` ✓・組み込み `codex`・launch_spec の codex argv（sandbox 既定 / `resume <id>` サブコマンド / settings 不使用）とケイパビリティ確定。`hooks`: スクリプトのツール非依存化（`TOTSUKA_JOB_ID` ゲート・`turn_id` フォールバック・PermissionRequest 正規化）と `hooks::codex`（`$CODEX_HOME/hooks.json` の構造マージ・trust プローブ・doctor `codex-hooks` チェック）を追記。
