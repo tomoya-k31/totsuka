@@ -331,13 +331,15 @@ fn managed_group(hooks_dir: &Path, script: &str, timeout: u64) -> Value {
 }
 
 /// Whether a matcher group is totsuka-managed: any of its hooks' command
-/// strings references the totsuka hooks dir.
+/// strings references a path **inside** the totsuka hooks dir. The trailing
+/// separator anchors the match so a sibling dir sharing the prefix (e.g.
+/// `…/hooks-mine/`) is never mistaken for ours.
 fn is_managed(group: &Value, hooks_dir: &Path) -> bool {
-    let dir = hooks_dir.to_string_lossy();
+    let dir = format!("{}/", hooks_dir.display());
     group["hooks"].as_array().into_iter().flatten().any(|hook| {
         hook["command"]
             .as_str()
-            .is_some_and(|cmd| cmd.contains(dir.as_ref()))
+            .is_some_and(|cmd| cmd.contains(&dir))
     })
 }
 

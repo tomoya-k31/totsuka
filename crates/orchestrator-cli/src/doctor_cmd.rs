@@ -88,7 +88,11 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         )),
     }
 
-    // Config presence + full offline validation.
+    // Config presence + full offline validation. `config_ok` gates the checks
+    // with side effects outside totsuka's own dirs (codex hooks.json sync) —
+    // a config that validation rejects must not cause writes `run` would
+    // never perform (it aborts on errors before dispatch).
+    let mut config_ok = false;
     let cfg = match cx.load_config(&env) {
         Ok(cfg) => {
             let env_fn = |k: &str| env.get(k).cloned();
@@ -126,6 +130,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
                     "run `totsuka config validate` for the full list",
                 ));
             } else {
+                config_ok = true;
                 checks.push(Check::ok(
                     "config",
                     format!("{} is valid", cx.config_path.display()),
@@ -163,7 +168,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     };
 
     if let Some(cfg) = &cfg {
-        check_hooks(cx, cfg, &env, &mut checks);
+        check_hooks(cx, cfg, config_ok, &env, &mut checks);
         check_plugins(cx, cfg, &env, &mut checks);
         check_llm_key(cfg, &env, &mut checks);
         check_onepassword(cx, &env, &mut checks);
@@ -303,9 +308,15 @@ fn toml_has_op_reference(value: &toml::Value) -> bool {
 /// All Claude Code hook-mechanism probes (#141): assets, script dependencies,
 /// the Bearer token, the spool backlog, and (when a receiver is live) UDS
 /// connectivity. Extends the single asset check that shipped with #137.
-fn check_hooks(cx: &Cx, cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
+fn check_hooks(
+    cx: &Cx,
+    cfg: &RootConfig,
+    config_ok: bool,
+    env: &HashMap<String, String>,
+    checks: &mut Vec<Check>,
+) {
     check_hook_assets(cx, cfg, checks);
-    check_codex_hooks(cx, cfg, env, checks);
+    check_codex_hooks(cx, cfg, config_ok, env, checks);
     check_hook_deps(env, checks);
     // Which workflows actually need the Bearer token, decided from the static
     // manifests alone (plugin enablement / reference integrity belong to
@@ -376,11 +387,24 @@ fn check_hook_assets(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
 fn check_codex_hooks(
     cx: &Cx,
     cfg: &RootConfig,
+    config_ok: bool,
     env: &HashMap<String, String>,
     checks: &mut Vec<Check>,
 ) {
     use orchestrator_core::hooks::codex;
     if !codex::references_codex(cfg) {
+        return;
+    }
+    // A config that validation rejects (e.g. a tool kind without an adapter)
+    // must not trigger writes into the user's $CODEX_HOME — `run` would abort
+    // on the same config before ever syncing. The failing `config` check
+    // above already carries the fix; this row just explains the skip.
+    if !config_ok {
+        checks.push(Check::warn(
+            "codex-hooks",
+            "skipped: the config has validation errors, so the hooks.json sync did not run",
+            "fix the config errors, then re-run doctor",
+        ));
         return;
     }
     let home = codex::codex_home(|k| env.get(k).cloned());
