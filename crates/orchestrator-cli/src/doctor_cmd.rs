@@ -634,7 +634,7 @@ fn self_post(socket_path: &Path, token: Option<&str>) -> io::Result<u16> {
         .map(|t| format!("Authorization: Bearer {t}\r\n"))
         .unwrap_or_default();
     let request = format!(
-        "POST /claude-events HTTP/1.1\r\n\
+        "POST /agent-events HTTP/1.1\r\n\
          Host: localhost\r\n\
          {auth}\
          Content-Type: application/json\r\n\

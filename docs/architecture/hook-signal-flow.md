@@ -4,14 +4,14 @@ title: フックシグナルフロー（Slack メンション → 完了検知 �
 description: Claude Code フック完了判定のエンドツーエンド経路。Slack メンションの dispatch から herdr pane 起動・env 注入・claude --settings、Stop フックのマーカー抽出・UDS POST、hook_uds の Bearer/冪等検証、SignalPort→Engine::on_signal の検収分岐（llm/human/none）と Publishing/Verifying/Escalated、スプールフォールバックと pane.exited デッドマン、通知クリック → pane フォーカス（click-to-focus、F-94）までを図示する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [architecture, diagram, hook, claude-code, uds, signal, verification, deadman, spool, click-to-focus, epic-131]
-timestamp: 2026-07-20T18:00:00Z
+timestamp: 2026-07-23T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
 
 # 概要
 
-Claude Code の完了検知を screen-manifest からフック機構へ移した後の、タスク 1 本のエンドツーエンド経路。要件は [F-100〜F-107](/product/orchestrator-spec.ja.md)、配置の意思決定は [ADR-0004](/decisions/adr-0004-hook-completion-signal.md)、受信契約は [POST /claude-events](/apis/claude-events.md)。登場コンポーネントは [task-source-slack](/components/task-source-slack.md) / [orchestrator-core](/components/orchestrator-core.md) / [agent-ide-herdr](/components/agent-ide-herdr.md) / [notifier-macos](/components/notifier-macos.md)。
+Claude Code の完了検知を screen-manifest からフック機構へ移した後の、タスク 1 本のエンドツーエンド経路。要件は [F-100〜F-107](/product/orchestrator-spec.ja.md)、配置の意思決定は [ADR-0004](/decisions/adr-0004-hook-completion-signal.md)、受信契約は [POST /agent-events](/apis/agent-events.md)。登場コンポーネントは [task-source-slack](/components/task-source-slack.md) / [orchestrator-core](/components/orchestrator-core.md) / [agent-ide-herdr](/components/agent-ide-herdr.md) / [notifier-macos](/components/notifier-macos.md)。
 
 正常系（Slack メンション → 完了 → 検収 → 出力）を主線とし、スプールフォールバックと `pane.exited` デッドマンを分岐で示す。
 
@@ -36,14 +36,14 @@ sequenceDiagram
     EN->>EN: dispatch_one — job_id=job-{task_id}-{session_row}<br/>先行 thread_key があれば resume_session_id を解決（F-105）
     EN->>HE: task/dispatch（HookLaunchSpec{settings_path, env}, resume_session_id?）
     HE->>CC: workspace.create / agent.start（env 注入: TOTSUKA_JOB_ID / HOOK_ENDPOINT / HOOK_TOKEN / HOOK_SPOOL_DIR / PROMPT_CONTEXT）<br/>argv: claude --settings orchestrator-<workflow>.json [--resume <sid>]
-    CC->>UDS: SessionStart フック → POST /claude-events
+    CC->>UDS: SessionStart フック → POST /agent-events
     UDS->>EN: SignalPort::submit（SessionStart）
-    EN->>DB: set_claude_session_id（E-09 相関確立）
+    EN->>DB: set_tool_session_id（E-09 相関確立）
 
     Note over CC: エージェント作業（応答末尾に <<STATUS:...>> マーカー）
     CC->>OS: Stop フック発火
     OS->>OS: last_assistant_message から最後の <<STATUS:...>> を抽出（D-12）<br/>background_tasks 非空なら heartbeat のみ
-    OS->>UDS: curl --unix-socket / Authorization: Bearer / POST /claude-events（compact JSON）
+    OS->>UDS: curl --unix-socket / Authorization: Bearer / POST /agent-events（compact JSON）
     UDS->>UDS: 0600 socket（第一層）+ Bearer 定数時間比較（第二層）<br/>job_id 検証・body<=1MiB → 即 200
     UDS->>EN: SignalPort::submit → PluginEvent::HookSignal → Engine::on_signal
     EN->>DB: touch_last_signal（冪等判定前）→ record_hook_event（UNIQUE で重複 drop, D-05）
@@ -141,7 +141,7 @@ sequenceDiagram
 
 - [F-100〜F-107 決定的な完了シグナル / F-94 click-to-focus](/product/orchestrator-spec.ja.md)
 - [ADR-0004 フック完了シグナルの受信配置](/decisions/adr-0004-hook-completion-signal.md) / [ADR-0005 click-to-focus の機構選定](/decisions/adr-0005-click-to-focus.md)
-- [POST /claude-events（UDS フック受信・POST /focus 制御）](/apis/claude-events.md)
+- [POST /agent-events（UDS フック受信・POST /focus 制御）](/apis/agent-events.md)
 - [click-to-focus セットアップ](/operations/click-to-focus-setup.md)
 - [orchestrator-core](/components/orchestrator-core.md) / [agent-ide-herdr](/components/agent-ide-herdr.md) / [task-source-slack](/components/task-source-slack.md) / [notifier-macos](/components/notifier-macos.md)
 - [フックのセキュリティ](/security/hook-security.md) / [フックのトラブルシューティング](/operations/hook-troubleshooting.md)

@@ -4,7 +4,7 @@ title: notifier-macos プラグイン
 description: Orchestrator のイベント（waiting_input / done / failed / pending / escalated / verification_pending）を macOS 通知センターへ配送する公式 notifier プラグイン。バックエンド選択（osascript / terminal-notifier click-to-focus）、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/notifier-macos
 tags: [rust, crate, plugin, notifier, macos, osascript, terminal-notifier, click-to-focus, hook, escalation, verification]
-timestamp: 2026-07-19T12:00:00Z
+timestamp: 2026-07-23T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -38,7 +38,7 @@ Claude Code フック完了判定（[F-100〜F-107](/product/orchestrator-spec.j
 
 # click-to-focus（F-94, #155）
 
-`backend = "terminal_notifier"` のとき、通知クリックは (a) `-activate <activate_bundle_id>` による GUI ターミナルのネイティブ前面化と (b) `-execute` による `totsuka focus <task_id>` 実行（[orchestrator-cli](/components/orchestrator-cli.md) → 制御 UDS [`POST /focus`](/apis/claude-events.md) → [agent-ide-herdr](/components/agent-ide-herdr.md) の `session/focus`）の 2 段で対象 pane を開く。**task_id を知っているのは notifier**（`NotifyParams.task_id`）であり、pane_id をプロトコルへ足す必要はない（F-37 不透明契約の維持、[ADR-0005](/decisions/adr-0005-click-to-focus.md)）。縮退: terminal-notifier 未導入は osascript へ自動フォールバック、Orchestrator 停止中のクリックは `totsuka focus` が静かに no-op（アプリ前面化のみ成立）、`activate_bundle_id` 未設定は pane フォーカスのみ。
+`backend = "terminal_notifier"` のとき、通知クリックは (a) `-activate <activate_bundle_id>` による GUI ターミナルのネイティブ前面化と (b) `-execute` による `totsuka focus <task_id>` 実行（[orchestrator-cli](/components/orchestrator-cli.md) → 制御 UDS [`POST /focus`](/apis/agent-events.md) → [agent-ide-herdr](/components/agent-ide-herdr.md) の `session/focus`）の 2 段で対象 pane を開く。**task_id を知っているのは notifier**（`NotifyParams.task_id`）であり、pane_id をプロトコルへ足す必要はない（F-37 不透明契約の維持、[ADR-0005](/decisions/adr-0005-click-to-focus.md)）。縮退: terminal-notifier 未導入は osascript へ自動フォールバック、Orchestrator 停止中のクリックは `totsuka focus` が静かに no-op（アプリ前面化のみ成立）、`activate_bundle_id` 未設定は pane フォーカスのみ。
 
 # capabilities
 

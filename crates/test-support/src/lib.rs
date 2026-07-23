@@ -27,7 +27,7 @@ pub fn git(cwd: &Path, args: &[&str]) -> String {
 }
 
 /// Inject a synthetic Claude Code hook signal into a **running** UDS receiver by
-/// POSTing `body` to `POST /claude-events` at `socket_path` (minimal HTTP/1.1,
+/// POSTing `body` to `POST /agent-events` at `socket_path` (minimal HTTP/1.1,
 /// `Connection: close`), exactly as `on-stop.sh`'s `curl --unix-socket` does.
 /// Returns the HTTP status code the receiver answered.
 ///
@@ -51,7 +51,7 @@ pub fn post_hook_signal(
         .map(|t| format!("Authorization: Bearer {t}\r\n"))
         .unwrap_or_default();
     let request = format!(
-        "POST /claude-events HTTP/1.1\r\n\
+        "POST /agent-events HTTP/1.1\r\n\
          Host: localhost\r\n\
          {auth}\
          Content-Type: application/json\r\n\

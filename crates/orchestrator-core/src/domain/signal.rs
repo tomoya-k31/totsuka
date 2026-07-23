@@ -17,7 +17,7 @@ pub struct AgentSignal {
     /// guessed from a session id alone).
     pub job_id: JobId,
     /// The hook input's `session_id` (may be empty).
-    pub claude_session_id: String,
+    pub tool_session_id: String,
     /// The hook input's `prompt_id`, an idempotency-key component (may be
     /// empty).
     pub prompt_id: String,
@@ -30,8 +30,9 @@ pub struct AgentSignal {
 /// The mechanism that produced a signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalSource {
-    /// A Claude Code hook (Stop / Notification / SessionStart / SessionEnd).
-    ClaudeHook,
+    /// An agent-CLI hook (Stop / Notification / SessionStart / SessionEnd).
+    /// Claude Code today; other tool adapters (#196) POST the same shape.
+    AgentHook,
     // Future: HeadlessWrapper, ...
 }
 
@@ -58,7 +59,7 @@ pub enum SignalEvent {
     /// A session started (also carries the fresh session id for correlation).
     SessionStart {
         /// The new session's id.
-        claude_session_id: String,
+        tool_session_id: String,
     },
     /// A session ended.
     SessionEnd {

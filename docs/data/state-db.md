@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-timestamp: 2026-07-18T00:00:00Z
+timestamp: 2026-07-23T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -48,20 +48,20 @@ owner: tomoya-k31
 | plugin | TEXT | 所有プラグイン名（"herdr" 等） |
 | session_id | TEXT | エージェントの会話/セッションID |
 | created_at | TEXT | ISO 8601 (UTC)。最新行が attach 対象 |
-| claude_session_id | TEXT NULL | Claude Code 自身の `session_id`（v2/#134、E-09。`--resume` 相関）。フックの SessionStart 観測時に `set_claude_session_id` が記録。`idx_sessions_claude_session` |
+| tool_session_id | TEXT NULL | ツール（Claude Code 等）ネイティブの `session_id`（v2/#134、E-09。`--resume` 相関）。フックの SessionStart 観測時に `set_tool_session_id` が記録。`idx_sessions_tool_session`。v4/#196 で `claude_session_id` から改名 |
 
-追加ストア API（v2/#134）: `set_claude_session_id(session_row_id, cc_sid)`（当該セッション行へ Claude セッション ID を記録）/ `find_session_by_claude_id(cc_sid)`（Claude セッション ID から最新セッション行を逆引き）。フック dispatch 配線（#138）: `reserve_session(task_id, plugin)` が `session_id` 空でセッション行を先行確保し、その行 id を `job_id = job-{task_id}-{session_row}` の `session_row` に用いる（フックが echo する job_id は起動時に env 注入するため、`task/dispatch` 応答前に行 id が必要）。`task/dispatch` 応答後 `set_session_native_id(session_row_id, session_id)` で実 session_id を埋める。dispatch 失敗時は `delete_session(session_row_id)` で予約行をロールバック（空 id 行を残さず retry/recovery が誤 reattach しない）。
+追加ストア API（v2/#134）: `set_tool_session_id(session_row_id, sid)`（当該セッション行へツールネイティブのセッション ID を記録）/ `find_session_by_tool_session_id(sid)`（ツールセッション ID から最新セッション行を逆引き）。フック dispatch 配線（#138）: `reserve_session(task_id, plugin)` が `session_id` 空でセッション行を先行確保し、その行 id を `job_id = job-{task_id}-{session_row}` の `session_row` に用いる（フックが echo する job_id は起動時に env 注入するため、`task/dispatch` 応答前に行 id が必要）。`task/dispatch` 応答後 `set_session_native_id(session_row_id, session_id)` で実 session_id を埋める。dispatch 失敗時は `delete_session(session_row_id)` で予約行をロールバック（空 id 行を残さず retry/recovery が誤 reattach しない）。
 
 ## hook_events（#131/#134、D-05/N-01/E-09）
 
-Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartbeat）を UDS 経由で受信し**冪等に永続化**する監査ログ（N-01）。冪等キー `(job_id, claude_session_id, prompt_id, event, status)` の `UNIQUE` 制約で、多重発火・スプール再送・curl 再送の重複到着（**同一 status**）を無害化する（D-05/E-05/E-06）。**UNIQUE 構成列は NULL でなく空文字既定**（`claude_session_id` / `prompt_id` / `status` は `NOT NULL DEFAULT ''`）— SQLite は UNIQUE で NULL 同士を区別するため、NULL 既定だと重複排除が効かない。**`status` を冪等キーに含める理由（v3/#131 実機検収）**: Stop フックの `block` 差し戻しはエージェントを**同一ターン内で再完了**させるため、再完了 Stop は初回の空 Stop と `(job_id, session, prompt_id, event='stop')` を共有しつつ **status が変わる（UNKNOWN → COMPLETED）**。status を鍵に含めないと再完了が「再送」として dedup で捨てられ、完了が届かずタスクが `dispatched` で滞留する。status を含めることで status 変化は通し、同一 status の再送は従来どおり弾く（受け入れ #4 の二重遷移防止を維持）。書き込み経路（Engine 統合）は #138。
+Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartbeat）を UDS 経由で受信し**冪等に永続化**する監査ログ（N-01）。冪等キー `(job_id, tool_session_id, prompt_id, event, status)` の `UNIQUE` 制約で、多重発火・スプール再送・curl 再送の重複到着（**同一 status**）を無害化する（D-05/E-05/E-06）。**UNIQUE 構成列は NULL でなく空文字既定**（`tool_session_id` / `prompt_id` / `status` は `NOT NULL DEFAULT ''`）— SQLite は UNIQUE で NULL 同士を区別するため、NULL 既定だと重複排除が効かない。**`status` を冪等キーに含める理由（v3/#131 実機検収）**: Stop フックの `block` 差し戻しはエージェントを**同一ターン内で再完了**させるため、再完了 Stop は初回の空 Stop と `(job_id, session, prompt_id, event='stop')` を共有しつつ **status が変わる（UNKNOWN → COMPLETED）**。status を鍵に含めないと再完了が「再送」として dedup で捨てられ、完了が届かずタスクが `dispatched` で滞留する。status を含めることで status 変化は通し、同一 status の再送は従来どおり弾く（受け入れ #4 の二重遷移防止を維持）。書き込み経路（Engine 統合）は #138。
 
 | 列 | 型 | 備考 |
 |---|---|---|
 | id | INTEGER PK | rowid |
 | job_id | TEXT | 相関キー `"job-{task_id}-{session_row}"`（E-09。session_id 単独推測は禁止） |
 | task_id | INTEGER FK→tasks(id) | 所有タスク |
-| claude_session_id | TEXT NOT NULL DEFAULT '' | Claude Code の `session_id`（無ければ ''） |
+| tool_session_id | TEXT NOT NULL DEFAULT '' | ツールネイティブの `session_id`（無ければ ''。v4/#196 で `claude_session_id` から改名） |
 | prompt_id | TEXT NOT NULL DEFAULT '' | フック入力の `prompt_id`（無ければ ''） |
 | event | TEXT | `stop` / `notification` / `session_start` / `session_end` / `heartbeat` |
 | status | TEXT NOT NULL DEFAULT '' | `stop` の自己申告 `COMPLETED`/`NEEDS_INPUT`/`FAILED`/`UNKNOWN`、それ以外は `''`（v3 で冪等キーに参加。#131） |
@@ -79,7 +79,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 ## schema_migrations（§10.3）
 
-`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v3（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全）。
+`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v4（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し）。
 
 [会話継続](/glossary/conversation-continuity.md)（E-09）用ストア API: `find_by_thread_key(workflow, thread_key, exclude_id) -> Option<TaskRecord>` — 同一 workflow・同一 `thread_key` の最新（id 最大）先行タスクを返す（Slack 追いメンションの resume 元特定、#140）。`exclude_id` で dispatch 中の自タスクを除外する（追いメンション自身は既に ingest 済みで最新一致になるため、除外しないと「先行」が自分自身に解決してしまう。workflow 一致とあわせ別 workflow の同名スレッド誤紐付けも防ぐ）。
 

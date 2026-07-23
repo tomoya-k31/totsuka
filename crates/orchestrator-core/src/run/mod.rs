@@ -1101,7 +1101,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 // it against the real id (#138: a `--resume` may legitimately
                 // change the id → warn + keep the newest).
                 if let Some(sid) = &resume_session_id {
-                    self.db.set_claude_session_id(session_row, sid)?;
+                    self.db.set_tool_session_id(session_row, sid)?;
                 }
                 let job_id = JobId::new(record.id, session_row);
                 env.insert("TOTSUKA_JOB_ID".to_string(), job_id.to_string());
@@ -1262,14 +1262,14 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let resume = self
             .db
             .latest_session(prior.id)?
-            .and_then(|s| s.claude_session_id)
+            .and_then(|s| s.tool_session_id)
             .filter(|sid| !sid.is_empty());
         if let Some(sid) = &resume {
             tracing::info!(
                 task_id = record.id,
                 prior_task_id = prior.id,
-                claude_session_id = %sid,
-                "resuming the prior task's Claude session for thread continuity (#140)"
+                tool_session_id = %sid,
+                "resuming the prior task's tool session for thread continuity (#140)"
             );
         }
         Ok(resume)

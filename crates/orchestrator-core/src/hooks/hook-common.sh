@@ -51,7 +51,7 @@ post_event() {
       -H "Authorization: Bearer $token" \
       -H "Content-Type: application/json" \
       --data-binary "$payload" \
-      "http://localhost/claude-events" 2>/dev/null; then
+      "http://localhost/agent-events" 2>/dev/null; then
       return 0
     fi
   fi

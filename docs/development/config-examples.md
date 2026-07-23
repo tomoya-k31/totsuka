@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-timestamp: 2026-07-22T12:00:00Z
+timestamp: 2026-07-23T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -115,7 +115,7 @@ TOTSUKA_MAX_CONCURRENCY=1 TOTSUKA_LOG_LEVEL=debug totsuka run
 ```bash
 docker run \
   -e TOTSUKA_WORKTREE_LOCATION=/work/worktrees/{repo_name}/{branch} \
-  -e TOTSUKA_HOOKS_SOCKET_PATH=/run/totsuka/claude-events.sock \
+  -e TOTSUKA_HOOKS_SOCKET_PATH=/run/totsuka/agent-events.sock \
   -e TOTSUKA_HOOKS_SPOOL_DIR=/var/lib/totsuka/spool \
   totsuka run --watch
 ```
@@ -207,7 +207,7 @@ Source: {url}
 # ── Claude Code フック受信 ───────────────────────────────────
 [hooks]
 auth_token_ref = "keychain:totsuka/hook-token"                    # 運用上ほぼ必須（後述）
-socket_path = "${XDG_RUNTIME_DIR}/totsuka/claude-events.sock"     # 省略時は組み込み既定
+socket_path = "${XDG_RUNTIME_DIR}/totsuka/agent-events.sock"     # 省略時は組み込み既定
 spool_dir = "${XDG_STATE_HOME}/totsuka/hooks/spool"               # POST 失敗時の退避先
 block_retry_limit = 3                                             # Stop フック差し戻しの連続上限
 

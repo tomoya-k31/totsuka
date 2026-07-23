@@ -416,7 +416,7 @@ fn hook_post_on_dispatch(config: &Value, params: &Value, session_id: &str) {
     }
 }
 
-/// POST `body` to `POST /claude-events` on the UDS at `endpoint` (minimal
+/// POST `body` to `POST /agent-events` on the UDS at `endpoint` (minimal
 /// HTTP/1.1, `Connection: close`), mirroring `on-stop.sh`'s `curl --unix-socket`.
 #[cfg(unix)]
 fn post_uds(endpoint: &str, token: Option<&str>, body: &str) -> std::io::Result<()> {
@@ -431,7 +431,7 @@ fn post_uds(endpoint: &str, token: Option<&str>, body: &str) -> std::io::Result<
         .map(|t| format!("Authorization: Bearer {t}\r\n"))
         .unwrap_or_default();
     let request = format!(
-        "POST /claude-events HTTP/1.1\r\n\
+        "POST /agent-events HTTP/1.1\r\n\
          Host: localhost\r\n\
          {auth}\
          Content-Type: application/json\r\n\

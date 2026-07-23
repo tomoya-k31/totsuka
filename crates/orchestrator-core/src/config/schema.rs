@@ -483,7 +483,7 @@ on_success = { set_status = "レビュー待ち" }
             r#"
 [hooks]
 auth_token_ref = "keychain:totsuka/hook-token"
-socket_path = "${XDG_RUNTIME_DIR}/totsuka/claude-events.sock"
+socket_path = "${XDG_RUNTIME_DIR}/totsuka/agent-events.sock"
 spool_dir = "${XDG_STATE_HOME}/totsuka/hooks/spool"
 block_retry_limit = 3
 
@@ -505,7 +505,7 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
         );
         assert_eq!(
             cfg.hooks.socket_path.as_deref(),
-            Some("${XDG_RUNTIME_DIR}/totsuka/claude-events.sock")
+            Some("${XDG_RUNTIME_DIR}/totsuka/agent-events.sock")
         );
         assert_eq!(
             cfg.hooks.spool_dir.as_deref(),
