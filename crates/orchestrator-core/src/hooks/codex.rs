@@ -9,8 +9,11 @@
 //! - This module owns only its own entries inside `hooks.json`. A managed
 //!   entry is recognized **structurally** — its command path lives under the
 //!   totsuka hooks dir (`hooks.json` is strict JSON, so there are no marker
-//!   comments to lean on). Everything else in the file is preserved verbatim,
-//!   and a file that fails to parse is never overwritten.
+//!   comments to lean on). Every other entry and field is preserved
+//!   *semantically* — the file is re-serialized, so formatting and object key
+//!   order may change, but no foreign value is altered and no array index
+//!   shifts (codex keys its trust records by index). A file that fails to
+//!   parse is never overwritten.
 //!
 //! Trust: codex persists per-entry trust in `$CODEX_HOME/config.toml` as
 //! `[hooks.state."<hooks.json path>:<event>:<group>:<hook>"] trusted_hash`.
@@ -96,8 +99,9 @@ pub enum SyncOutcome {
 }
 
 /// Ensure the totsuka entries in `$CODEX_HOME/hooks.json` match the current
-/// script set, preserving every non-managed entry byte-for-byte. Idempotent;
-/// errors rather than overwriting a file it cannot parse.
+/// script set, preserving every non-managed entry semantically and at its
+/// existing index (the rewrite may still normalize formatting/key order).
+/// Idempotent; errors rather than overwriting a file it cannot parse.
 pub fn sync_registration(
     codex_home: Option<&Path>,
     paths: &Paths,
@@ -270,9 +274,12 @@ fn read_hooks_json(path: &Path) -> io::Result<Option<Value>> {
     Ok(Some(value))
 }
 
-/// Drop every managed entry and append the current one, per event. Appending
-/// (rather than prepending) keeps pre-existing user entries at their indices,
-/// so *their* codex trust records survive a totsuka (re)registration.
+/// Bring each event's managed entry up to date **in place**: an existing
+/// managed group is replaced at its current position (extras from tampering
+/// are dropped); only a missing one is appended. Codex trust records are keyed
+/// by position inside the event array, so shifting *any* group's index — ours
+/// or a user's — invalidates its trust; in-place replacement keeps every
+/// index stable across a (re)registration.
 fn apply_managed_entries(root: &mut Value, hooks_dir: &Path) -> io::Result<()> {
     let obj = root.as_object_mut().expect("checked by read_hooks_json");
     let hooks = obj.entry("hooks").or_insert_with(|| json!({}));
@@ -290,8 +297,23 @@ fn apply_managed_entries(root: &mut Value, hooks_dir: &Path) -> io::Result<()> {
                 format!("`hooks.{event}` is not a JSON array — refusing to rewrite it"),
             ));
         };
-        groups.retain(|group| !is_managed(group, hooks_dir));
-        groups.push(managed_group(hooks_dir, script, *timeout));
+        let desired = managed_group(hooks_dir, script, *timeout);
+        match groups.iter().position(|g| is_managed(g, hooks_dir)) {
+            Some(first) => {
+                groups[first] = desired;
+                // Duplicates only exist after manual tampering; dropping them
+                // shifts later indices, but that state was already broken.
+                let mut idx = first + 1;
+                while idx < groups.len() {
+                    if is_managed(&groups[idx], hooks_dir) {
+                        groups.remove(idx);
+                    } else {
+                        idx += 1;
+                    }
+                }
+            }
+            None => groups.push(desired),
+        }
     }
     Ok(())
 }
@@ -437,6 +459,48 @@ tool = "cdx"
             SyncOutcome::Unchanged
         );
         assert!(verify_registration(&home, &paths).is_empty());
+    }
+
+    #[test]
+    fn sync_replaces_in_place_keeping_later_user_entries_at_their_index() {
+        // A user group AFTER the managed one: the stale managed entry must be
+        // replaced at index 0 (not removed-and-appended), or the user group's
+        // index — and with it their codex trust record — would shift.
+        let base = unique_dir("inplace");
+        let paths = paths_under(&base);
+        let home = base.join(".codex");
+        std::fs::create_dir_all(&home).unwrap();
+        let hooks_dir = crate::hooks::hooks_dir(&paths);
+        let existing = json!({
+            "hooks": {
+                "Stop": [
+                    { "hooks": [{ "type": "command", "command": hooks_dir.join("on-stop.sh").to_string_lossy(), "timeout": 99 }] },
+                    { "hooks": [{ "type": "command", "command": "/usr/local/bin/after-totsuka" }] }
+                ]
+            }
+        });
+        std::fs::write(
+            hooks_json_path(&home),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            sync_registration(Some(&home), &paths, &codex_cfg()).unwrap(),
+            SyncOutcome::Updated
+        );
+        let root: Value =
+            serde_json::from_str(&std::fs::read_to_string(hooks_json_path(&home)).unwrap())
+                .unwrap();
+        let stop = root["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(
+            stop[0]["hooks"][0]["timeout"], 30,
+            "managed entry refreshed at its original index 0"
+        );
+        assert_eq!(
+            stop[1]["hooks"][0]["command"], "/usr/local/bin/after-totsuka",
+            "the user entry after ours keeps index 1"
+        );
     }
 
     #[test]
