@@ -26,7 +26,7 @@ pub fn git(cwd: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-/// Inject a synthetic Claude Code hook signal into a **running** UDS receiver by
+/// Inject a synthetic agent-CLI hook signal into a **running** UDS receiver by
 /// POSTing `body` to `POST /agent-events` at `socket_path` (minimal HTTP/1.1,
 /// `Connection: close`), exactly as `on-stop.sh`'s `curl --unix-socket` does.
 /// Returns the HTTP status code the receiver answered.

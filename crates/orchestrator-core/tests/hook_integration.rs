@@ -1331,16 +1331,11 @@ fn resume_settings(repo: &Path, base: &Path) -> EngineSettings {
 }
 
 /// Seed a prior task in `thread_key` with a recorded session, and return its id.
-/// `claude_sid = Some` simulates the SessionStart hook having established the
-/// Claude session id; `None` leaves it unestablished (pre-hook era). Driven to
+/// `tool_sid = Some` simulates the SessionStart hook having established the
+/// tool session id; `None` leaves it unestablished (pre-hook era). Driven to
 /// `Dispatched` so it is inert (never re-dispatched); the far-future signal
 /// anchor keeps the timeout sweep from escalating it.
-fn seed_prior(
-    db: &StateDb,
-    source_task_id: &str,
-    thread_key: &str,
-    claude_sid: Option<&str>,
-) -> i64 {
+fn seed_prior(db: &StateDb, source_task_id: &str, thread_key: &str, tool_sid: Option<&str>) -> i64 {
     let mut nt = new_task(source_task_id, Some("2099-01-01T00:00:00Z"));
     nt.thread_key = Some(thread_key.to_string());
     let id = db.upsert_task(&nt).unwrap();
@@ -1348,7 +1343,7 @@ fn seed_prior(
     let row = db
         .record_session(id, "mock_agent", &format!("sess-{source_task_id}"))
         .unwrap();
-    if let Some(sid) = claude_sid {
+    if let Some(sid) = tool_sid {
         db.set_tool_session_id(row, sid).unwrap();
     }
     id

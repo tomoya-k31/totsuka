@@ -265,9 +265,9 @@ pub struct SessionRecord {
     pub session_id: String,
     /// Creation timestamp (ISO 8601 UTC).
     pub created_at: String,
-    /// Claude Code's own `session_id` for this dispatch, once observed via a
-    /// hook (E-09 correlation / `claude --resume`). `None` until a
-    /// SessionStart-bearing signal records it.
+    /// The tool's own native `session_id` for this dispatch (Claude Code
+    /// today), once observed via a hook (E-09 correlation / resume). `None`
+    /// until a SessionStart-bearing signal records it.
     pub tool_session_id: Option<String>,
 }
 
@@ -300,7 +300,7 @@ pub struct HookEventInsert {
     pub job_id: String,
     /// Owning task id (resolved from `job_id`, never guessed from a session).
     pub task_id: i64,
-    /// Claude Code's `session_id` (empty if the hook input lacked one).
+    /// The tool-native `session_id` (empty if the hook input lacked one).
     pub tool_session_id: String,
     /// The hook input's `prompt_id` (empty if absent).
     pub prompt_id: String,
@@ -779,8 +779,8 @@ impl StateDb {
         Ok(())
     }
 
-    /// Record Claude Code's own `session_id` on a dispatch's session row
-    /// (E-09 correlation / `claude --resume`).
+    /// Record the tool's own native `session_id` on a dispatch's session row
+    /// (E-09 correlation / resume).
     pub fn set_tool_session_id(
         &self,
         session_row_id: i64,
@@ -796,7 +796,7 @@ impl StateDb {
         Ok(())
     }
 
-    /// Find the most recent session bearing a given Claude Code `session_id`.
+    /// Find the most recent session bearing a given tool-native `session_id`.
     pub fn find_session_by_tool_session_id(
         &self,
         tool_session_id: &str,
