@@ -133,13 +133,23 @@ docker run \
 # ── トップレベル ────────────────────────────────────────────
 version = 1              # 設定スキーマ版。現在 1 のみ。1 以外はエラー
 max_concurrency = 4      # 全体の同時実行タスク上限（省略時 4）
+default_tool = "claude"  # グローバル既定の AI ツール（#196。省略時も claude）
+
+# ── AI ツールレジストリ（#196） ──────────────────────────────
+# 組み込み既定 `claude` があるため、通常このセクションは不要。
+# コマンドを上書きしたい・別プロファイルを作りたい場合のみ書く。
+# 現バージョンで dispatch できるのは kind = "claude" のみ（codex/opencode は Phase 2/3）。
+[tools.claude-fast]
+kind = "claude"                        # アダプタ種別: claude | codex | opencode
+command = "claude --model haiku"       # 空白区切り: 先頭 = プログラム、残り = 基本引数
+# plan_args = ["--permission-mode", "plan"]   # plan モード引数の上書き（claude 既定と同じ）
 
 # ── リポジトリ ────────────────────────────────────────────
 [[repositories]]
 name = "totsuka"                       # 必須。ブランチ名・ログで使う安定 ID
 path = "~/Workspace/github/tomoya-k31/totsuka"  # 必須。`~` / `${ENV}` 展開可。実在必須
 summary = "AI 駆動の開発フロー自動化ツール。Rust ワークスペース。"  # LLM のリポジトリ選択材料
-default_agent = "herdr"                # 既定の agent_ide（enabled な agent_ide 名であること）
+tool = "claude"                        # このリポジトリの既定 AI ツール（#196。省略時 default_tool → 組み込み claude）
 max_concurrency = 2                    # このリポジトリの同時実行上限（省略時は無制限）
 worktree_location = "~/work/wt/{repo_name}/{branch}"  # [worktree].location をこのリポジトリだけ上書き
 
@@ -225,6 +235,7 @@ on_failure = { set_status = "設計失敗" }
 verification = "llm"                         # llm | human | none（省略時 llm）
 rubric = "設計方針・影響範囲・代替案の比較が明示されていること"
 timeout_secs = 1800                          # 無応答上限秒。超過でエスカレーション
+tool = "claude"                              # AI ツールの明示ピン（#196。llm 検収は claude 必須のため静的に保証。省略時 repo → default_tool）
 
 [[workflows]]
 name = "implement"

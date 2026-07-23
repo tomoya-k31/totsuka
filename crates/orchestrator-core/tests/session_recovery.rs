@@ -95,6 +95,7 @@ async fn kill9_restart_attach_resumes_running() {
                 job_id: None,
                 resume_session_id: None,
                 hook: None,
+                tool_launch: None,
             },
         )
         .await

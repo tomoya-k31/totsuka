@@ -59,6 +59,12 @@ impl HerdrConfig {
     /// [`agent_command`](Self::agent_command) plus [`plan_args`](Self::plan_args)
     /// in plan mode. Returns `(program, args)`.
     ///
+    /// **Deprecated fallback** (#196): since protocol 0.2.3 the Orchestrator
+    /// resolves the full argv itself (`TaskDispatchParams.tool_launch`) and
+    /// this is only used when dispatching from an older orchestrator that
+    /// sends no `tool_launch`. Scheduled for removal at the next breaking
+    /// protocol bump, together with `agent_command`/`plan_args`.
+    ///
     /// When the Orchestrator supplies a hook launch spec (0.1.3), `hook_settings`
     /// is its settings path and `--settings <path>` is appended so Claude Code
     /// loads the workflow's hooks (H-03: `--resume` never inherits hooks, so the

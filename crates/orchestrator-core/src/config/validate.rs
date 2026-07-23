@@ -12,6 +12,7 @@ use plugin_protocol::manifest::OutputCapability;
 use super::resolve::expand_path;
 use super::schema::{CURRENT_SCHEMA_VERSION, PluginKind, RootConfig, VerificationMode};
 use crate::domain::workflow::{self, Severity, Workflow};
+use crate::tool::{ToolKind, ToolProfile};
 
 /// A single static-validation failure. `Display` gives "cause + next action".
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -72,6 +73,24 @@ pub enum ValidationError {
         plugin: String,
         expected: PluginKind,
     },
+
+    /// A `tool` reference names neither a built-in nor a `[tools]` entry
+    /// (#196).
+    #[error(
+        "{referrer} references unknown tool `{tool}` → add `[tools.{tool}]` or use the built-in `claude`"
+    )]
+    UnknownToolRef { referrer: String, tool: String },
+
+    /// A referenced tool's kind has no completion-detection adapter yet
+    /// (#196 Phase 1: only `claude`).
+    #[error(
+        "{referrer} tool `{tool}` has kind `{kind}` which has no adapter yet → only `claude`-kind tools are dispatchable in this version"
+    )]
+    UnsupportedToolKind {
+        referrer: String,
+        tool: String,
+        kind: String,
+    },
 }
 
 /// Placeholders permitted in worktree location templates (F-22 addendum).
@@ -114,12 +133,11 @@ where
                 reason: e.to_string(),
             }),
         }
-        if let Some(agent) = &repo.default_agent {
-            check_plugin_ref(
+        if let Some(tool) = &repo.tool {
+            check_tool_ref(
                 cfg,
-                &format!("repository `{}` default_agent", repo.name),
-                agent,
-                PluginKind::AgentIde,
+                &format!("repository `{}` tool", repo.name),
+                tool,
                 &mut errors,
             );
         }
@@ -152,6 +170,19 @@ where
             PluginKind::AgentIde,
             &mut errors,
         );
+        if let Some(tool) = &wf.tool {
+            check_tool_ref(
+                cfg,
+                &format!("workflow `{}` tool", wf.name),
+                tool,
+                &mut errors,
+            );
+        }
+    }
+
+    // Global default tool (#196).
+    if let Some(tool) = &cfg.default_tool {
+        check_tool_ref(cfg, "default_tool", tool, &mut errors);
     }
 
     errors
@@ -251,6 +282,52 @@ where
             });
         }
 
+        // verification = llm needs Claude's prompt-type Stop hook (#196):
+        // a workflow pinned to a non-claude tool would silently degrade to
+        // human verification at dispatch; an unpinned workflow whose
+        // repo/global default could resolve to a non-claude tool is fragile —
+        // suggest the explicit pin so the constraint is statically guaranteed.
+        if wf.verification == VerificationMode::Llm {
+            match &wf.tool {
+                Some(tool) => {
+                    if matches!(
+                        resolve_tool_kind(cfg, tool),
+                        Some(kind) if kind != ToolKind::Claude
+                    ) {
+                        findings.push(Finding {
+                            severity: FindingSeverity::Warning,
+                            message: format!(
+                                "workflow `{}` uses verification = llm but pins tool `{}` (non-claude kind) → llm verification needs Claude's prompt-type Stop hook and will fall back to human at dispatch; pin a claude-kind tool or set verification = \"human\"",
+                                wf.name, tool
+                            ),
+                        });
+                    }
+                }
+                None => {
+                    let non_claude_default = cfg
+                        .default_tool
+                        .as_deref()
+                        .into_iter()
+                        .chain(cfg.repositories.iter().filter_map(|r| r.tool.as_deref()))
+                        .find(|t| {
+                            matches!(
+                                resolve_tool_kind(cfg, t),
+                                Some(kind) if kind != ToolKind::Claude
+                            )
+                        });
+                    if let Some(tool) = non_claude_default {
+                        findings.push(Finding {
+                            severity: FindingSeverity::Warning,
+                            message: format!(
+                                "workflow `{}` uses verification = llm without a tool pin, but `{}` (non-claude kind) is a reachable repo/global default → add `tool = \"claude\"` to the workflow so llm verification is statically guaranteed",
+                                wf.name, tool
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
         // rubric only feeds the llm-verification prompt hook.
         if wf.rubric.is_some() && wf.verification != VerificationMode::Llm {
             findings.push(Finding {
@@ -270,6 +347,31 @@ pub fn has_errors(findings: &[Finding]) -> bool {
     findings
         .iter()
         .any(|f| f.severity == FindingSeverity::Error)
+}
+
+/// Validate one tool reference (#196): the name must resolve (built-in or
+/// `[tools]` entry) and its kind must have an adapter (Phase 1: `claude`).
+fn check_tool_ref(cfg: &RootConfig, referrer: &str, tool: &str, errors: &mut Vec<ValidationError>) {
+    match resolve_tool_kind(cfg, tool) {
+        None => errors.push(ValidationError::UnknownToolRef {
+            referrer: referrer.to_string(),
+            tool: tool.to_string(),
+        }),
+        Some(kind) if !kind.has_adapter() => errors.push(ValidationError::UnsupportedToolKind {
+            referrer: referrer.to_string(),
+            tool: tool.to_string(),
+            kind: kind.as_str().to_string(),
+        }),
+        Some(_) => {}
+    }
+}
+
+/// The kind a tool name resolves to: the `[tools]` entry wins over the
+/// built-in of the same name; `None` when the name matches neither.
+fn resolve_tool_kind(cfg: &RootConfig, tool: &str) -> Option<ToolKind> {
+    cfg.tool(tool)
+        .map(|t| t.kind)
+        .or_else(|| ToolProfile::builtin(tool).map(|p| p.kind))
 }
 
 /// Validate one plugin reference: it must exist, be enabled (F-58), and be of
@@ -356,7 +458,7 @@ kind = "agent_ide"
 [[repositories]]
 name = "totsuka"
 path = "{dir}"
-default_agent = "herdr"
+tool = "claude"
 
 [[workflows]]
 name = "impl"
@@ -640,6 +742,168 @@ output = "none"
                 .iter()
                 .any(|f| f.message.contains("auth_token_ref")),
             "configured token must not warn: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn tool_references_are_validated() {
+        let dir = env!("CARGO_MANIFEST_DIR");
+        // Unknown names at every level; a [tools] entry with an adapterless
+        // kind (#196 Phase 1: codex/opencode parse but cannot dispatch).
+        let toml = format!(
+            r#"
+default_tool = "nope"
+
+[tools.codex]
+kind = "codex"
+
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[repositories]]
+name = "totsuka"
+path = "{dir}"
+tool = "codex"
+
+[[workflows]]
+name = "impl"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+tool = "typo"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(errors.iter().any(|e| matches!(
+            e,
+            ValidationError::UnknownToolRef { referrer, tool } if referrer == "default_tool" && tool == "nope"
+        )));
+        assert!(errors.iter().any(|e| matches!(
+            e,
+            ValidationError::UnknownToolRef { tool, .. } if tool == "typo"
+        )));
+        assert!(errors.iter().any(|e| matches!(
+            e,
+            ValidationError::UnsupportedToolKind { tool, kind, .. } if tool == "codex" && kind == "codex"
+        )));
+
+        // The built-in `claude` and a claude-kind [tools] profile are fine.
+        let toml = format!(
+            r#"
+default_tool = "claude"
+
+[tools.claude-fast]
+kind = "claude"
+command = "claude --model haiku"
+
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[repositories]]
+name = "totsuka"
+path = "{dir}"
+tool = "claude-fast"
+
+[[workflows]]
+name = "impl"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+tool = "claude"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(errors.is_empty(), "unexpected: {errors:?}");
+    }
+
+    #[test]
+    fn llm_verification_with_non_claude_tool_warns() {
+        // A workflow pinned to a non-claude tool with verification = llm
+        // degrades at dispatch -> warning (the adapterless-kind hard error
+        // also fires in Phase 1, separately).
+        let toml = format!(
+            r#"{PLUGIN_PAIR}
+[tools.codex]
+kind = "codex"
+
+[[workflows]]
+name = "pinned"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "llm"
+tool = "codex"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("`pinned`")
+                    && f.message.contains("verification = llm")
+                    && f.message.contains("pins tool `codex`")),
+            "expected pinned-mismatch warning: {findings:?}"
+        );
+
+        // Unpinned llm workflow + a non-claude default in reach -> suggest
+        // the explicit pin.
+        let toml = format!(
+            r#"default_tool = "codex"
+{PLUGIN_PAIR}
+[tools.codex]
+kind = "codex"
+
+[[workflows]]
+name = "unpinned"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "llm"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings).iter().any(
+                |f| f.message.contains("`unpinned`") && f.message.contains("tool = \"claude\"")
+            ),
+            "expected pin suggestion: {findings:?}"
+        );
+
+        // All-claude resolution -> no tool warning.
+        let toml = format!(
+            r#"{PLUGIN_PAIR}
+[[workflows]]
+name = "fine"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "llm"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            !findings.iter().any(|f| f.message.contains("tool")),
+            "claude-only must not warn: {findings:?}"
         );
     }
 

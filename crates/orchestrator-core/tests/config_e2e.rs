@@ -63,7 +63,7 @@ max_concurrency = 3
 [[repositories]]
 name = "totsuka"
 path = "{repo}"
-default_agent = "herdr"
+tool = "claude"
 
 [[workflows]]
 name = "implement"

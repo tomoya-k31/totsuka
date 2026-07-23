@@ -132,6 +132,9 @@ pub struct Workflow {
     pub timeout_secs: Option<u64>,
     /// Criteria text for the llm-verification prompt hook.
     pub rubric: Option<String>,
+    /// Explicit AI-tool pin (#196); `None` falls through to the repository /
+    /// global defaults at dispatch.
+    pub tool: Option<String>,
 }
 
 impl Workflow {
@@ -149,6 +152,7 @@ impl Workflow {
             verification: config.verification,
             timeout_secs: config.timeout_secs,
             rubric: config.rubric.clone(),
+            tool: config.tool.clone(),
         }
     }
 

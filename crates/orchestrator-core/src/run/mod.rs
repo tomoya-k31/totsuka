@@ -67,6 +67,7 @@ use crate::run::output::{
     PrRequest, render_template,
 };
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
+use crate::tool::{LaunchInputs, ToolProfile};
 use crate::worktree::{
     CleanupDecision, CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE,
     DEFAULT_LOCATION_TEMPLATE, WorktreeManager,
@@ -115,6 +116,10 @@ pub struct RepoSettings {
     pub summary: Option<String>,
     /// Per-repo worktree location template override (F-22).
     pub worktree_location: Option<String>,
+    /// Per-repo default AI tool (#196); resolved at dispatch time
+    /// (workflow pin > this > global default), same carry-unresolved pattern
+    /// as `worktree_location`.
+    pub tool: Option<String>,
 }
 
 /// Interpreted engine configuration, assembled from [`RootConfig`] by
@@ -149,6 +154,13 @@ pub struct EngineSettings {
     /// in config (no user knob); tests set [`Duration::ZERO`] to sweep every
     /// cycle.
     pub worktree_sweep_interval: Duration,
+    /// Resolved AI-tool registry (#196): built-ins overlaid with `[tools]`
+    /// entries, keyed by tool name. Dispatch resolves each task's tool here
+    /// and sends the assembled [`ToolLaunchSpec`] to the agent plugin.
+    pub tools: std::collections::HashMap<String, ToolProfile>,
+    /// Global default tool name (#196) when neither the workflow nor the
+    /// selected repository picks one. `"claude"` unless `default_tool` is set.
+    pub default_tool: String,
     /// Claude Code hook runtime (#131/#138): receiver endpoint, auth token,
     /// spool dir, per-workflow `--settings` paths, and the escalation
     /// threshold. A normal `totsuka run` always sets this (the CLI builds it
@@ -202,6 +214,7 @@ pub fn settings_from_config(
             path: crate::config::expand_path(&repo.path.to_string_lossy(), &env_fn)?,
             summary: repo.summary.clone(),
             worktree_location: repo.worktree_location.clone(),
+            tool: repo.tool.clone(),
         });
     }
 
@@ -253,6 +266,11 @@ pub fn settings_from_config(
             .clone()
             .unwrap_or_else(|| DEFAULT_PR_BODY_TEMPLATE.to_string()),
         worktree_sweep_interval: WORKTREE_SWEEP_INTERVAL,
+        tools: crate::tool::registry_from_config(&cfg.tools),
+        default_tool: cfg
+            .default_tool
+            .clone()
+            .unwrap_or_else(|| "claude".to_string()),
         // The hook runtime needs the resolved token, expanded paths, and the
         // per-workflow settings files — all CLI-level (secret store, `Paths`,
         // the `hooks` module). `run_cmd` fills this in before building the
@@ -1007,16 +1025,56 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             Some(_) => {}
         }
 
+        // AI-tool resolution (#196): workflow pin > repo default > global
+        // default. The registry always contains the built-ins, so an unknown
+        // name here is a config-drift error (validation catches it upfront);
+        // a kind without an adapter could never signal completion, so both
+        // are refused before any side effect (no worktree, no session row).
+        let tool_name = crate::tool::resolve_tool_name(
+            wf.tool.as_deref(),
+            repo.tool.as_deref(),
+            &self.settings.default_tool,
+        );
+        let Some(tool_profile) = self.settings.tools.get(&tool_name).cloned() else {
+            return self
+                .fail_dispatch(
+                    &record,
+                    format!(
+                        "resolved tool `{tool_name}` is not configured → add `[tools.{tool_name}]` or fix the `tool`/`default_tool` reference"
+                    ),
+                )
+                .await;
+        };
+        if !tool_profile.kind.has_adapter() {
+            return self
+                .fail_dispatch(
+                    &record,
+                    format!(
+                        "tool `{tool_name}` (kind `{}`) has no completion-detection adapter yet → use a claude-kind tool",
+                        tool_profile.kind.as_str()
+                    ),
+                )
+                .await;
+        }
+
         // Slack thread conversation continuity (#140, D-10): a follow-up
         // mention in the same thread is a *new* task, but resumes the prior
-        // task's Claude session via `claude --resume` so context carries over.
+        // task's session via the tool's resume mechanism so context carries
+        // over.
         // Decided here, before the retry-reuse block (which only fires for a
         // retry of *this* task and early-returns); the value threads into
         // `task/dispatch` below. Best-effort — any unmet precondition yields
         // `None` and falls back to a normal fresh dispatch, with no warning.
         // The worktree is created by the normal flow below (recreated fresh if
-        // the prior one was discarded); only the session is reused.
-        let resume_session_id = self.thread_resume_session_id(&record, &agent_name)?;
+        // the prior one was discarded); only the session is reused. Gated on
+        // the tool's capabilities (#196): a tool that cannot resume, or whose
+        // native session id is never captured, always dispatches fresh.
+        let tool_caps = tool_profile.capabilities();
+        let resume_session_id = if tool_caps.resume && tool_caps.session_id_capture {
+            self.thread_resume_session_id(&record, &agent_name)?
+        } else {
+            None
+        };
 
         // Retry reuse (F-44): a surviving worktree + session resumes the
         // existing conversation instead of dispatching anew.
@@ -1138,14 +1196,29 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             Some(_) => None,
             None => task.instructions.clone().map(serde_json::Value::String),
         };
+        let mode = execution_mode(&record.mode);
+        // Fully-resolved tool launch (#196): the argv (base command, mode
+        // flags, hook settings, resume id) is assembled in core from the
+        // resolved profile; the plugin launches it verbatim. The deprecated
+        // `hook` spec rides along for plugins predating protocol 0.2.3.
+        let tool_launch = tool_profile.launch_spec(&LaunchInputs {
+            plan: mode == plugin_protocol::methods::ExecutionMode::Plan,
+            settings_path: hook_spec.as_ref().map(|h| h.settings_path.as_str()),
+            resume_session_id: resume_session_id.as_deref(),
+            env: hook_spec
+                .as_ref()
+                .map(|h| h.env.clone())
+                .unwrap_or_default(),
+        });
         let params = TaskDispatchParams {
             task,
             worktree_path: worktree_path.display().to_string(),
-            mode: execution_mode(&record.mode),
+            mode,
             extra_context,
             job_id,
             resume_session_id,
             hook: hook_spec,
+            tool_launch,
         };
         let dispatched: TaskDispatchResult = match agent.call(method::TASK_DISPATCH, &params).await
         {
@@ -2299,6 +2372,8 @@ plan_cleanup = "keep_28d"
             pr_title_template: "t".to_string(),
             pr_body_template: "b".to_string(),
             worktree_sweep_interval: interval,
+            tools: crate::tool::builtin_registry(),
+            default_tool: "claude".to_string(),
             hook: None,
         };
         Engine::new(

@@ -89,17 +89,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         &self,
         params: TaskDispatchParams,
     ) -> Result<TaskDispatchResult, HerdrError> {
-        let plan = params.mode == ExecutionMode::Plan;
-        // The hook launch spec (0.1.3) is opaque to the plugin: `--settings`
-        // wires Claude Code's hooks, `env` supplies the hook environment
-        // (`TOTSUKA_JOB_ID`, …). `--resume` re-opens a past agent session for
-        // Slack thread continuation.
-        let hook_settings = params.hook.as_ref().map(|h| h.settings_path.as_str());
-        let resume = params.resume_session_id.as_deref();
-        let (program, args) = self.config.launch_command(plan, hook_settings, resume);
-        // herdr injects this env into the launched process (workspace.create +
-        // agent.start both take `env`). Only set when a hook spec is present.
-        let env: Option<Value> = params.hook.as_ref().map(|h| json!(h.env));
+        let (program, args, env) = resolve_launch(&self.config, &params);
 
         // A workspace per task keeps agent panes out of the operator's own
         // workspaces (there is no "start session" method; the workspace is the
@@ -786,6 +776,34 @@ fn compose_prompt(params: &TaskDispatchParams) -> String {
     }
 }
 
+/// The `(program, args, env)` to launch in the pane. Since protocol 0.2.3
+/// (#196) the Orchestrator sends a fully-resolved `tool_launch` (argv + env,
+/// opaque to the plugin) which is used verbatim — no CLI-flag knowledge here.
+/// The deprecated `hook`-driven [`HerdrConfig::launch_command`] path remains
+/// as a fallback for older orchestrators only.
+fn resolve_launch(
+    config: &HerdrConfig,
+    params: &TaskDispatchParams,
+) -> (String, Vec<String>, Option<Value>) {
+    match &params.tool_launch {
+        Some(tool) => (
+            tool.program.clone(),
+            tool.args.clone(),
+            (!tool.env.is_empty()).then(|| json!(tool.env)),
+        ),
+        None => {
+            let plan = params.mode == ExecutionMode::Plan;
+            let hook_settings = params.hook.as_ref().map(|h| h.settings_path.as_str());
+            let resume = params.resume_session_id.as_deref();
+            let (program, args) = config.launch_command(plan, hook_settings, resume);
+            // herdr injects this env into the launched process
+            // (workspace.create + agent.start both take `env`). Only set when
+            // a hook spec is present.
+            (program, args, params.hook.as_ref().map(|h| json!(h.env)))
+        }
+    }
+}
+
 /// Treat a "missing pane" error as success (for idempotent teardown).
 fn ignore_missing(result: Result<Value, HerdrError>) -> Result<(), HerdrError> {
     match result {
@@ -861,6 +879,7 @@ mod tests {
             job_id: None,
             resume_session_id: None,
             hook: None,
+            tool_launch: None,
         }
     }
 
@@ -908,5 +927,67 @@ mod tests {
         // Non-string values keep their JSON rendering (still as preamble).
         params.extra_context = Some(serde_json::json!({"base": "main"}));
         assert!(compose_prompt(&params).starts_with("{\"base\":\"main\"}\n\n---\n"));
+    }
+
+    #[test]
+    fn resolve_launch_prefers_tool_launch_verbatim() {
+        // #196: a 0.2.3 orchestrator's fully-resolved argv/env is launched
+        // as-is — the plugin-local launch_command must NOT re-append
+        // `--settings`/`--resume` even though hook/resume fields are set.
+        let config: HerdrConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        let mut params = dispatch_params("t", None);
+        params.resume_session_id = Some("sess-9".into());
+        params.hook = Some(plugin_protocol::methods::HookLaunchSpec {
+            settings_path: "/hooks/orchestrator-wf.json".into(),
+            env: std::collections::BTreeMap::from([(
+                "TOTSUKA_JOB_ID".to_string(),
+                "job-1-2".to_string(),
+            )]),
+        });
+        params.tool_launch = Some(plugin_protocol::methods::ToolLaunchSpec {
+            program: "claude".into(),
+            args: vec!["--resolved".into()],
+            env: std::collections::BTreeMap::from([(
+                "TOTSUKA_JOB_ID".to_string(),
+                "job-1-2".to_string(),
+            )]),
+        });
+        let (program, args, env) = resolve_launch(&config, &params);
+        assert_eq!(program, "claude");
+        assert_eq!(args, vec!["--resolved".to_string()]);
+        assert_eq!(env, Some(serde_json::json!({"TOTSUKA_JOB_ID": "job-1-2"})));
+
+        // An empty tool_launch env stays absent (parity with the old
+        // hookless launch: no env key sent to herdr at all).
+        params.tool_launch.as_mut().unwrap().env.clear();
+        let (_, _, env) = resolve_launch(&config, &params);
+        assert_eq!(env, None);
+    }
+
+    #[test]
+    fn resolve_launch_falls_back_to_launch_command() {
+        // Pre-0.2.3 orchestrator: no tool_launch — the deprecated hook path
+        // assembles the argv exactly as before.
+        let config: HerdrConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        let mut params = dispatch_params("t", None); // mode: Plan
+        params.resume_session_id = Some("sess-9".into());
+        params.hook = Some(plugin_protocol::methods::HookLaunchSpec {
+            settings_path: "/hooks/orchestrator-wf.json".into(),
+            env: std::collections::BTreeMap::new(),
+        });
+        let (program, args, env) = resolve_launch(&config, &params);
+        assert_eq!(program, "claude");
+        assert_eq!(
+            args,
+            vec![
+                "--permission-mode".to_string(),
+                "plan".to_string(),
+                "--settings".to_string(),
+                "/hooks/orchestrator-wf.json".to_string(),
+                "--resume".to_string(),
+                "sess-9".to_string(),
+            ]
+        );
+        assert_eq!(env, Some(serde_json::json!({})));
     }
 }

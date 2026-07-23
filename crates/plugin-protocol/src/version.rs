@@ -59,7 +59,13 @@ use semver::{Version, VersionReq};
 /// panes so `doctor` can detect orphans (#210's cleanup linkage can break:
 /// manual `git worktree remove`, refused releases, crashes). Additive, gated
 /// on the same `pane_control` capability; `<0.3` manifests keep matching.
-pub const PROTOCOL_VERSION: &str = "0.2.2";
+///
+/// 0.2.3: `TaskDispatchParams.tool_launch` (`ToolLaunchSpec`, #196) — the
+/// Orchestrator-resolved agent-CLI argv/env, replacing plugin-side command
+/// assembly so the AI tool (Claude/Codex/OpenCode) is selected per
+/// repo/workflow in core. Additive; `TaskDispatchParams.hook` is deprecated
+/// from this version (still sent) and removed at the next breaking bump.
+pub const PROTOCOL_VERSION: &str = "0.2.3";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -83,7 +89,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 2, 2));
+        assert_eq!(protocol_version(), Version::new(0, 2, 3));
     }
 
     #[test]

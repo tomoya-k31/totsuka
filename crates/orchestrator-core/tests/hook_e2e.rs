@@ -121,6 +121,7 @@ fn settings(repo: &Path, socket: &Path, base: &Path) -> EngineSettings {
             path: repo.to_path_buf(),
             summary: None,
             worktree_location: None,
+            tool: None,
         }],
         limits: Limits::global(4),
         branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
@@ -134,6 +135,8 @@ fn settings(repo: &Path, socket: &Path, base: &Path) -> EngineSettings {
         pr_body_template: "{summary}".to_string(),
         // Sweep every cycle, as before the interval existed (#210).
         worktree_sweep_interval: Duration::ZERO,
+        tools: orchestrator_core::tool::builtin_registry(),
+        default_tool: "claude".to_string(),
         hook: Some(hook),
     }
 }
