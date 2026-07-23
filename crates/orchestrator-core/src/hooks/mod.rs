@@ -15,6 +15,8 @@
 //! `TOTSUKA_PROMPT_CONTEXT`, #132 `HookLaunchSpec`), so a single rendered
 //! `--settings` path is reusable across `claude --resume` (H-03).
 
+pub mod codex;
+
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -333,6 +335,86 @@ mod tests {
     }
 
     // --- Script branch tests (受け入れ条件: ①〜⑤) ---
+
+    #[test]
+    fn stop_without_job_id_is_inert() {
+        // Codex hooks are registered globally and fire for personal sessions
+        // too; without TOTSUKA_JOB_ID the script must do nothing — no block
+        // JSON, no POST, no spool (#196 Phase 2 env gate).
+        let spool = unique_dir("nojob");
+        let input = r#"{"session_id":"s1","turn_id":"t1","stop_hook_active":false,"last_assistant_message":"no marker here"}"#;
+        let mut cmd = Command::new(tool("bash"));
+        cmd.arg(script_dir().join("on-stop.sh"))
+            .env_remove("TOTSUKA_JOB_ID")
+            .env("TOTSUKA_HOOK_SPOOL_DIR", &spool)
+            .env_remove("TOTSUKA_HOOK_ENDPOINT")
+            .env_remove("TOTSUKA_HOOK_TOKEN")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        assert!(out.stdout.is_empty(), "a personal session is never blocked");
+        assert!(
+            spooled_lines(&spool).is_empty(),
+            "nothing is posted/spooled"
+        );
+    }
+
+    #[test]
+    fn stop_codex_turn_id_rides_as_prompt_id() {
+        // Codex names the turn key `turn_id` and has no `background_tasks`;
+        // the payload must still carry it as `prompt_id` (idempotency key).
+        let spool = unique_dir("turnid");
+        let input = r#"{"session_id":"s1","turn_id":"turn-42","stop_hook_active":false,"last_assistant_message":"done <<STATUS:COMPLETED>>"}"#;
+        let out = run_stop(input, &spool, None);
+        assert!(out.status.success());
+        assert!(out.stdout.is_empty());
+        let events = spooled_json(&spool);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["prompt_id"], "turn-42");
+        assert_eq!(events[0]["status"], "COMPLETED");
+        assert_eq!(events[0]["background_tasks"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn notification_synthesizes_message_for_codex_permission_request() {
+        // on-notification.sh doubles as the codex PermissionRequest hook: no
+        // `message` field, so one is synthesized from `tool_name` — and stdout
+        // must stay empty (any output would decide the approval).
+        let spool = unique_dir("permreq");
+        let input = r#"{"session_id":"s1","turn_id":"t1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_use_id":"tu1","tool_input":{"command":"rm -rf /tmp/x"}}"#;
+        let mut cmd = Command::new(tool("bash"));
+        cmd.arg(script_dir().join("on-notification.sh"))
+            .env("TOTSUKA_JOB_ID", "job-test")
+            .env("TOTSUKA_HOOK_SPOOL_DIR", &spool)
+            .env_remove("TOTSUKA_HOOK_ENDPOINT")
+            .env_remove("TOTSUKA_HOOK_TOKEN")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        assert!(out.stdout.is_empty(), "stdout would decide the approval");
+        let events = spooled_json(&spool);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["hook_event_name"], "Notification");
+        assert_eq!(events[0]["message"], "permission_prompt: Bash");
+    }
 
     #[test]
     fn stop_marker_present_posts_stop_status_and_does_not_block() {
