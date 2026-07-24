@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use orchestrator_core::adapters::StateDb;
-use orchestrator_core::config::{self, RootConfig};
+use orchestrator_core::config::{self, Finding, FindingSeverity, RootConfig};
 use orchestrator_core::paths::Paths;
 use orchestrator_core::plugins::PluginStore;
 
@@ -144,6 +144,54 @@ impl Cx {
     /// The plugin store under the data directory.
     pub fn store(&self) -> PluginStore {
         PluginStore::new(self.paths.data_dir().join("plugins"))
+    }
+
+    /// Run the full offline config validation (static checks, workflow
+    /// semantics, hook advisories) against the installed plugin manifests.
+    /// Shared by `config validate`, `run`, and `doctor` so all three agree on
+    /// what a broken config means.
+    ///
+    /// Manifest health comes first (#214): an enabled plugin whose
+    /// `plugin.toml` exists but does not parse is an **error** finding, even
+    /// offline — reading the manifest launches nothing, so F-63 holds. The
+    /// capability closures below still fold `Err` into `None` ("unknown",
+    /// which skips the capability-based advisories); that stays safe only
+    /// because the error above already fails validation — without it, a broken
+    /// manifest would silently disable those checks.
+    pub fn validate_config(&self, cfg: &RootConfig, env: &HashMap<String, String>) -> Vec<Finding> {
+        let env_fn = |k: &str| env.get(k).cloned();
+        let store = self.store();
+        let mut findings: Vec<Finding> = cfg
+            .plugins
+            .iter()
+            .filter(|(_, p)| p.enabled)
+            .filter_map(|(name, _)| store.manifest_of(name).err().map(|e| (name, e)))
+            .map(|(name, e)| Finding {
+                severity: FindingSeverity::Error,
+                message: format!(
+                    "plugin `{name}`: invalid plugin.toml: {e} → reinstall it (`totsuka plugin install <dir>`)"
+                ),
+            })
+            .collect();
+        findings.extend(config::validate(
+            cfg,
+            &env_fn,
+            |name| {
+                store
+                    .manifest_of(name)
+                    .ok()
+                    .flatten()
+                    .map(|m| m.capabilities.outputs)
+            },
+            |name| {
+                store
+                    .manifest_of(name)
+                    .ok()
+                    .flatten()
+                    .map(|m| m.capabilities.hook_capable())
+            },
+        ));
+        findings
     }
 
     /// The `plugins/` directory itself (next to config.toml), holding one

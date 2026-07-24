@@ -95,29 +95,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     let mut config_ok = false;
     let cfg = match cx.load_config(&env) {
         Ok(cfg) => {
-            let env_fn = |k: &str| env.get(k).cloned();
-            let store = cx.store();
-            let findings = config::validate(
-                &cfg,
-                &env_fn,
-                |name| {
-                    store
-                        .manifest_of(name)
-                        .ok()
-                        .flatten()
-                        .map(|m| m.capabilities.outputs)
-                },
-                // `None` (manifest missing or unparsable) skips the
-                // `[hooks].auth_token_ref` advisory; a missing plugin is
-                // already reported by the `plugin:*` checks.
-                |name| {
-                    store
-                        .manifest_of(name)
-                        .ok()
-                        .flatten()
-                        .map(|m| m.capabilities.hook_capable())
-                },
-            );
+            let findings = cx.validate_config(&cfg, &env);
             if config::has_errors(&findings) {
                 let first = findings
                     .iter()
@@ -321,21 +299,24 @@ fn check_hooks(
     check_hook_deps(env, checks);
     // Which workflows actually need the Bearer token, decided from the static
     // manifests alone (plugin enablement / reference integrity belong to
-    // `config validate` and the `plugin:*` checks, not here).
+    // `config validate` and the `plugin:*` checks, not here). An unparsable
+    // manifest (`Err`) leaves the capability *unknown*, which must not read as
+    // "not hook-capable" — those workflows are surfaced separately so the
+    // check cannot be silenced by breaking a manifest (#214).
     let store = cx.store();
-    let hook_workflows: Vec<(&str, &str)> = cfg
-        .workflows
-        .iter()
-        .filter(|wf| {
-            store
-                .manifest_of(&wf.agent)
-                .ok()
-                .flatten()
-                .is_some_and(|m| m.capabilities.hook_capable())
-        })
-        .map(|wf| (wf.name.as_str(), wf.agent.as_str()))
-        .collect();
-    check_hook_token(cfg, env, &hook_workflows, checks);
+    let mut hook_workflows: Vec<(&str, &str)> = Vec::new();
+    let mut unknown_workflows: Vec<(&str, &str)> = Vec::new();
+    for wf in &cfg.workflows {
+        match store.manifest_of(&wf.agent) {
+            Ok(Some(m)) if m.capabilities.hook_capable() => {
+                hook_workflows.push((wf.name.as_str(), wf.agent.as_str()));
+            }
+            // Not installed (`plugin:*` reports that) or not hook-capable.
+            Ok(_) => {}
+            Err(_) => unknown_workflows.push((wf.name.as_str(), wf.agent.as_str())),
+        }
+    }
+    check_hook_token(cfg, env, &hook_workflows, &unknown_workflows, checks);
     check_spool(cx, cfg, env, checks);
     check_hook_socket(cx, cfg, env, checks);
 }
@@ -561,11 +542,15 @@ fn check_hook_deps(env: &HashMap<String, String>, checks: &mut Vec<Check>) {
 /// the 0600 socket is still a barrier.
 ///
 /// `hook_workflows` is the `(workflow, agent)` list of workflows whose agent
-/// declares `Capabilities::hook_capable()`.
+/// declares `Capabilities::hook_capable()`; `unknown_workflows` holds those
+/// whose agent's capability could not be determined (unparsable manifest), so
+/// the advisory can say *why* it might be under-reporting instead of silently
+/// treating them as not hook-capable (#214).
 fn check_hook_token(
     cfg: &RootConfig,
     env: &HashMap<String, String>,
     hook_workflows: &[(&str, &str)],
+    unknown_workflows: &[(&str, &str)],
     checks: &mut Vec<Check>,
 ) {
     match &cfg.hooks.auth_token_ref {
@@ -583,11 +568,27 @@ fn check_hook_token(
                 "set [hooks].auth_token_ref (e.g. keychain:totsuka/hook-token)",
             ))
         }
-        None => checks.push(Check::warn(
-            "hook-token",
-            "[hooks].auth_token_ref is unset → hook POSTs are accepted on the 0600 socket without a Bearer token",
-            "set [hooks].auth_token_ref (e.g. keychain:totsuka/hook-token) before using a hook-capable agent",
-        )),
+        None => {
+            let mut detail = "[hooks].auth_token_ref is unset → hook POSTs are accepted on the \
+                 0600 socket without a Bearer token"
+                .to_string();
+            if !unknown_workflows.is_empty() {
+                let unknown = unknown_workflows
+                    .iter()
+                    .map(|(wf, agent)| format!("`{wf}` uses `{agent}`"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                detail.push_str(&format!(
+                    "; hook capability is unknown for {unknown} (invalid plugin.toml, see the \
+                     `plugin:*` checks), so this could actually be a failure (E-03)"
+                ));
+            }
+            checks.push(Check::warn(
+                "hook-token",
+                detail,
+                "set [hooks].auth_token_ref (e.g. keychain:totsuka/hook-token) before using a hook-capable agent",
+            ))
+        }
         // `op://` is deliberately not resolved here (a real `op read` can
         // prompt for biometrics / hang unattended); the 1password probes
         // check presence + session without prompting (ADR-0006).
