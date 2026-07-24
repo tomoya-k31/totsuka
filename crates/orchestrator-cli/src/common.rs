@@ -168,8 +168,10 @@ impl Cx {
             .filter_map(|(name, _)| store.manifest_of(name).err().map(|e| (name, e)))
             .map(|(name, e)| Finding {
                 severity: FindingSeverity::Error,
+                // `e` already says what is wrong ("invalid plugin.toml: …"
+                // for a parse failure), so no prefix beyond the plugin name.
                 message: format!(
-                    "plugin `{name}`: invalid plugin.toml: {e} → reinstall it (`totsuka plugin install <dir>`)"
+                    "plugin `{name}`: {e} → reinstall it (`totsuka plugin install <dir>`)"
                 ),
             })
             .collect();
