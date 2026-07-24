@@ -27,7 +27,8 @@ struct Cli {
     /// Path to config.toml (overrides $XDG_CONFIG_HOME/totsuka/config.toml).
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
-    /// Verbose diagnostics (debug-level logging where applicable).
+    /// Verbose diagnostics: debug-level logging on stderr for every command
+    /// (`run` additionally raises its file log level).
     #[arg(long, global = true)]
     debug: bool,
     #[command(subcommand)]
@@ -166,6 +167,16 @@ fn execute(
             &mut std::io::stdout(),
         );
         return Ok(());
+    }
+
+    // `--debug` on any command but `run`: a stderr-only debug subscriber, no
+    // log files (#176). `run` owns the file logging and applies `--debug` on
+    // top of its config-driven level itself — installing a subscriber here
+    // would make its own `logging::init` fail (the global subscriber can only
+    // be set once).
+    if debug && !matches!(command, Command::Run { .. }) {
+        orchestrator_core::logging::init_stderr(tracing::Level::DEBUG, true)?;
+        tracing::debug!("--debug: verbose diagnostics enabled");
     }
 
     let cx = Cx::resolve(config)?;

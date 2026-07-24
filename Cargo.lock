@@ -956,6 +956,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "toml",
+ "tracing",
 ]
 
 [[package]]

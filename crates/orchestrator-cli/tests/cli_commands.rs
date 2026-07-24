@@ -475,6 +475,37 @@ fn seed_manifest(base: &Path, name: &str, capabilities: &str) {
     .unwrap();
 }
 
+/// #176: `--debug` is a global flag, so it must have an effect on every
+/// command, not just `run` — a debug-level stderr subscriber, while the
+/// stdout `--json` contract stays parseable (no log lines on stdout).
+#[test]
+fn debug_flag_enables_stderr_diagnostics_on_non_run_commands() {
+    let base = scratch("debug-flag");
+    seed_db(&base);
+
+    let out = run(&base, &["status", "--json", "--debug"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    serde_json::from_str::<serde_json::Value>(&stdout(&out))
+        .expect("stdout stays parseable JSON with --debug");
+    assert!(
+        stderr(&out).contains("verbose diagnostics enabled"),
+        "--debug installs the stderr subscriber: {}",
+        stderr(&out)
+    );
+
+    // Without the flag nothing changes.
+    let out = run(&base, &["status", "--json"]);
+    assert!(out.status.success());
+    assert!(!stderr(&out).contains("verbose diagnostics enabled"));
+
+    // No log files are created for non-run commands (file logging is `run`'s).
+    assert!(
+        !base.join("state/totsuka/logs").exists(),
+        "--debug on a non-run command must not create log files"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Install a `plugin.toml` that does not parse (#214).
 fn seed_broken_manifest(base: &Path, name: &str) {
     let dir = base.join("data/totsuka/plugins").join(name);

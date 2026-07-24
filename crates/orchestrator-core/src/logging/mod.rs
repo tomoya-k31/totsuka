@@ -121,6 +121,21 @@ pub fn init(config: &LogConfig) -> Result<LogGuard, LogError> {
     Ok(LogGuard { _appender: guard })
 }
 
+/// Install a stderr-only subscriber: the human-readable redacting layer at
+/// `level`, no log files. For CLI commands other than `run` honoring
+/// `--debug` (#176) — they diagnose to the terminal without creating or
+/// rotating files under the state directory. Respects `NO_COLOR` and non-TTY
+/// output like [`init`].
+pub fn init_stderr(level: Level, log_prompts: bool) -> Result<(), LogError> {
+    let ansi = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let term_layer = RedactingLayer::new(StderrWriter, LogFormat::Human, log_prompts, ansi)
+        .with_filter(LevelFilter::from_level(level));
+    tracing_subscriber::registry()
+        .with(term_layer)
+        .try_init()
+        .map_err(|e| LogError::Install(e.to_string()))
+}
+
 /// Parse a level name (`error`/`warn`/`info`/`debug`/`trace`), case-insensitive.
 pub fn parse_level(name: &str) -> Option<Level> {
     match name.to_ascii_lowercase().as_str() {
