@@ -475,6 +475,13 @@ fn seed_manifest(base: &Path, name: &str, capabilities: &str) {
     .unwrap();
 }
 
+/// Install a `plugin.toml` that does not parse (#214).
+fn seed_broken_manifest(base: &Path, name: &str) {
+    let dir = base.join("data/totsuka/plugins").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("plugin.toml"), "this is not valid toml {{{\n").unwrap();
+}
+
 /// A config whose single workflow drives `agent`, with `[hooks]` left without
 /// an `auth_token_ref`.
 fn hook_config(agent: &str) -> String {
@@ -556,6 +563,67 @@ fn unset_hook_token_warns_in_config_validate() {
             && text.contains("`wf`")
             && text.contains("`herdr`"),
         "the hook-token warning must fire: {text}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #214: an installed-but-unparsable `plugin.toml` used to pass
+/// `config validate --offline` without a single diagnostic — and, worse,
+/// silently skipped the capability-based advisories. It must now be an error
+/// (exit non-zero), offline included.
+#[test]
+fn broken_manifest_fails_config_validate_offline() {
+    let base = scratch("broken-manifest-validate");
+    seed_empty_config(&base, &hook_config("herdr"));
+    seed_broken_manifest(&base, "herdr");
+
+    let out = run(&base, &["config", "validate", "--offline"]);
+    assert!(
+        !out.status.success(),
+        "a broken manifest must fail validation: {}",
+        stdout(&out)
+    );
+    let text = stdout(&out);
+    assert!(
+        text.contains("error:") && text.contains("`herdr`") && text.contains("plugin.toml"),
+        "the error names the plugin and the manifest: {text}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #214 (doctor side): when an agent's manifest cannot be parsed, its hook
+/// capability is *unknown*, not "no" — the `hook-token` advisory must say so
+/// instead of silently downgrading what would be a failure with a readable
+/// manifest.
+#[test]
+fn broken_manifest_marks_hook_capability_unknown_in_doctor() {
+    let base = scratch("broken-manifest-doctor");
+    seed_empty_config(&base, &hook_config("herdr"));
+    seed_broken_manifest(&base, "herdr");
+
+    let out = run(&base, &["doctor", "--json"]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "the broken manifest fails doctor"
+    );
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
+    let check = doc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "hook-token")
+        .expect("hook-token check present")
+        .clone();
+    assert_eq!(
+        check["ok"], true,
+        "still advisory, not a hard fail: {check}"
+    );
+    assert_eq!(check["warning"], true, "{check}");
+    let detail = check["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("unknown") && detail.contains("`wf`") && detail.contains("`herdr`"),
+        "the warn names the workflow whose agent capability is unknown: {detail}"
     );
     let _ = std::fs::remove_dir_all(&base);
 }

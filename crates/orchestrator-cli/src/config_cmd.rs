@@ -44,30 +44,8 @@ pub fn run(cx: &Cx, command: ConfigCommand) -> Result<(), CliError> {
 fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
     let env: HashMap<String, String> = std::env::vars().collect();
     let cfg = cx.load_config(&env)?;
-    let env_fn = |k: &str| env.get(k).cloned();
-    let store = cx.store();
 
-    let findings = config::validate(
-        &cfg,
-        &env_fn,
-        |name| {
-            store
-                .manifest_of(name)
-                .ok()
-                .flatten()
-                .map(|m| m.capabilities.outputs)
-        },
-        // `None` (manifest missing or unparsable) skips the
-        // `[hooks].auth_token_ref` advisory; a missing plugin is already
-        // reported by the `plugin:*` checks.
-        |name| {
-            store
-                .manifest_of(name)
-                .ok()
-                .flatten()
-                .map(|m| m.capabilities.hook_capable())
-        },
-    );
+    let findings = cx.validate_config(&cfg, &env);
     let mut errors = config::has_errors(&findings);
     for finding in &findings {
         let label = match finding.severity {

@@ -38,28 +38,7 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
     // Config load (incl. `TOTSUKA_*` overrides, F-66 layer 2) + full
     // validation (static + workflow semantics).
     let cfg = cx.load_config(&env)?;
-    let store = cx.store();
-    let findings = config::validate(
-        &cfg,
-        &env_fn,
-        |name| {
-            store
-                .manifest_of(name)
-                .ok()
-                .flatten()
-                .map(|m| m.capabilities.outputs)
-        },
-        // `None` (manifest missing or unparsable) skips the
-        // `[hooks].auth_token_ref` advisory; a missing plugin is already
-        // reported by the `plugin:*` checks.
-        |name| {
-            store
-                .manifest_of(name)
-                .ok()
-                .flatten()
-                .map(|m| m.capabilities.hook_capable())
-        },
-    );
+    let findings = cx.validate_config(&cfg, &env);
     if config::has_errors(&findings) {
         for finding in &findings {
             eprintln!("config error: {}", finding.message);
