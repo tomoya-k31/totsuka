@@ -23,8 +23,11 @@ docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 | `.claude/**` (settings / hooks / rules) | validate JSON (`python3 -m json.tool .claude/settings.json`); no Rust, no `.ja.md` |
 | none of the above touch Rust/Cargo (docs-only, `.claude`-only, …) | **skip the Rust set entirely** |
 
-Note: on every PR, CI runs `clippy / rustfmt` + `test` (`ci.yml`, no path
-filter) and the `lint` check (`okf-lint.yml`) regardless of what changed.
+Note: on every PR, CI runs `clippy / rustfmt` + `test` + `machete (unused
+deps)` (`ci.yml`, no path filter) and the `lint` check (`okf-lint.yml`)
+regardless of what changed. If `machete` fails, remove the unused dependency
+or suppress a false positive per
+[dependency-hygiene](../../docs/development/dependency-hygiene.md).
 `audit` (`audit.yml`) additionally runs on PRs touching `**/Cargo.toml` /
 `Cargo.lock` / `deny.toml` (plus a daily cron); `coverage` runs only on push
 to `main`. Scoping only changes what you run **locally** before pushing —

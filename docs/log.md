@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-25
+* **Creation**: [依存関係ハイジーン（未使用依存の検出）](/development/dependency-hygiene.md) — #171: cargo-machete を CI（`ci.yml` `machete` ジョブ、毎 PR・ubuntu-slim）に常設。誤検知の ignore 手順と、cargo-shear / cargo-udeps の定期手動実行手順を記載。
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) — #173: golden wire fixture による contract test を新設（`tests/fixtures/` に全メソッドのエンベロープ JSON をコミット、往復一致・forward compat・enum ピン留めを検証）。fixture 差分レビュー = 互換性レビューの運用と `PROTOCOL_VERSION` の上げ方（追加的=パッチ / 破壊的=マイナー）を記載。
 * **Update**: [task-source-slack](/components/task-source-slack.md) — #129: 名前キャッシュ（users.info / conversations.info）は成功のみキャッシュし、失敗時の生 ID フォールバックをピン留めしない（`channel()` の修正漏れを `user()` と対称化。一時障害や missing_scope 修正後に再起動なしで回復）。
 * **Update**: [ADR-0009](/decisions/adr-0009-env-override-whitelist.md) — #175 改訂: env レイヤの呼び出し元に plugin install/uninstall/list を追加（`Locations` 廃止）。残る例外は enable/disable のファイル編集のみ。fail-loud が plugin コマンドに及ぶ帰結と副作用前ロードの順序を追記。
