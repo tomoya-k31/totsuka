@@ -610,8 +610,13 @@ impl NameCache {
         if let Some(hit) = self.channels.get(channel_id) {
             return hit.clone();
         }
-        let name = match api.conversations_info_name(channel_id).await {
-            Ok(name) => name,
+        match api.conversations_info_name(channel_id).await {
+            Ok(name) => {
+                self.channels.insert(channel_id.to_string(), name.clone());
+                name
+            }
+            // Not cached: a transient failure must not pin the raw id for
+            // the rest of the run (same rule as `user()`, #129).
             Err(e) => {
                 // Without the name, `[[channel_groups]]` prefix rules can never
                 // match, so repo resolution silently degrades to the LLM /
@@ -623,9 +628,7 @@ impl NameCache {
                      and refresh the Keychain token)");
                 channel_id.to_string()
             }
-        };
-        self.channels.insert(channel_id.to_string(), name.clone());
-        name
+        }
     }
 }
 
@@ -795,6 +798,76 @@ async fn thread_context<T: SlackTransport>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::SlackError;
+    use crate::transport::TokenKind;
+    use std::collections::VecDeque;
+
+    /// A transport that replays a fixed script of responses, one per call.
+    /// An exhausted script errors, so a test can prove a value came from the
+    /// cache rather than another API call.
+    struct ScriptedTransport {
+        responses: Mutex<VecDeque<Result<Value, SlackError>>>,
+    }
+
+    impl SlackTransport for ScriptedTransport {
+        async fn call(
+            &self,
+            _token: TokenKind,
+            _method: &str,
+            _body: Option<Value>,
+            _idempotent: bool,
+        ) -> Result<Value, SlackError> {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Err(SlackError::Transport("script exhausted".into())))
+        }
+
+        async fn post_url(&self, _url: &str, _body: Value) -> Result<(), SlackError> {
+            unreachable!("name lookups never use the response_url channel")
+        }
+    }
+
+    fn scripted(responses: Vec<Result<Value, SlackError>>) -> SlackApi<ScriptedTransport> {
+        SlackApi::new(ScriptedTransport {
+            responses: Mutex::new(responses.into()),
+        })
+    }
+
+    /// #129: a failed `conversations.info` must not pin the raw id in the
+    /// cache — the next lookup retries and can recover (e.g. after the
+    /// operator fixes a `missing_scope` mid-run).
+    #[tokio::test]
+    async fn channel_lookup_failure_is_not_cached() {
+        let api = scripted(vec![
+            Err(SlackError::Transport("boom".into())),
+            Ok(json!({"ok": true, "channel": {"name": "general"}})),
+        ]);
+        let mut names = NameCache::default();
+        assert_eq!(names.channel(&api, "C1").await, "C1", "fallback on failure");
+        assert_eq!(
+            names.channel(&api, "C1").await,
+            "general",
+            "retried instead of serving the pinned raw id"
+        );
+        // The script is exhausted: a third call would fail, so "general"
+        // proves the success (and only the success) was cached.
+        assert_eq!(names.channel(&api, "C1").await, "general");
+    }
+
+    /// The `user()` twin of the test above (its fix predates #129, a997d3c).
+    #[tokio::test]
+    async fn user_lookup_failure_is_not_cached() {
+        let api = scripted(vec![
+            Err(SlackError::Transport("boom".into())),
+            Ok(json!({"ok": true, "user": {"profile": {"display_name": "alice"}}})),
+        ]);
+        let mut names = NameCache::default();
+        assert_eq!(names.user(&api, "U1").await, "U1", "fallback on failure");
+        assert_eq!(names.user(&api, "U1").await, "alice", "retried");
+        assert_eq!(names.user(&api, "U1").await, "alice", "cached");
+    }
 
     fn enriched(task_id_ts: &str) -> EnrichedMention {
         EnrichedMention {
