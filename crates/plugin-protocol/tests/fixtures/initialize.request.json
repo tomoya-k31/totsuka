@@ -1,0 +1,21 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocol_version": "0.2.3",
+    "config": { "socket_path": "/run/herdr.sock" },
+    "repositories": [
+      { "name": "web-app", "summary": "customer web app", "path": "/repos/web-app" }
+    ],
+    "llm": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "anthropic/claude-haiku-4.5",
+      "api_key": "sk-or-resolved"
+    },
+    "triggers": [
+      { "workflow": "design", "trigger": { "project_status": "設計待ち" } }
+    ],
+    "poll_interval_secs": 60
+  }
+}

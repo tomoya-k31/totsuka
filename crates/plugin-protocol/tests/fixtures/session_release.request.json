@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": 12,
+  "method": "session/release",
+  "params": {
+    "session_id": "w1:p1|claude-sess-abc",
+    "expect_cwd": "/state/worktrees/agent-github-42",
+    "expect_label": "totsuka C1:1.0"
+  }
+}
