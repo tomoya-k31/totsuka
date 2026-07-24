@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-07-25
+* **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — #214: `config validate` にマニフェスト健全性検査を追加（enabled プラグインの `plugin.toml` パース不能は `--offline` でも error）。オフライン検証を `Cx::validate_config` に集約（config validate / run / doctor で共有）。doctor `hook-token` の warn に capability 判定不能（マニフェスト破損）の workflow を明示。
+
 ## 2026-07-24
 * **Creation**: [OpenCode ツールのセットアップと運用](/operations/opencode-tool-setup.md) — #196 Phase 3（`kind = "opencode"` 有効化）のセットアップ（アセット自動配置・trust 不要）と縮退一覧（block 不可・指示が可視・llm 検収不可・heartbeat 無し）、plan agent 全 deny の根拠（部分 deny はサブエージェント委譲で貫通）を記録。検証済み opencode 1.14.39。
 * **Creation**: [AI Tool（AI ツール）と 2 軸モデル](/glossary/ai-tool.md) — agent プラグイン（pane runner）と AI ツール（pane 内 CLI）の直交 2 軸の用語定義。
