@@ -84,6 +84,9 @@ fn install(
         .into());
     }
 
+    // Config first: a broken `TOTSUKA_*` override must fail here, before the
+    // store is touched — not after "Installed" has already been printed.
+    let config = cx.load_config_or_default(env)?;
     let source_dir = Path::new(source);
     let store = cx.store();
     let plan = store.prepare_install(source_dir)?;
@@ -106,11 +109,7 @@ fn install(
         plan.name,
         store.plugin_dir(&plan.name).display()
     );
-    if !cx
-        .load_config_or_default(env)?
-        .plugins
-        .contains_key(&plan.name)
-    {
+    if !config.plugins.contains_key(&plan.name) {
         println!(
             "Note: `{}` is installed but not enabled. Run `totsuka plugin enable {}`.",
             plan.name, plan.name
@@ -120,13 +119,16 @@ fn install(
 }
 
 fn uninstall(cx: &Cx, env: &HashMap<String, String>, name: &str) -> Result<(), CliError> {
+    // Config first, for the same reason as `install`: fail on a broken env
+    // override before the store is mutated.
+    let still_declared = cx.load_config_or_default(env)?.plugins.contains_key(name);
     if cx.store().uninstall(name)? {
         println!("Uninstalled `{name}`.");
     } else {
         println!("`{name}` was not installed; nothing to do.");
     }
     // Warn if config still declares it (config is the source of truth, F-56).
-    if cx.load_config_or_default(env)?.plugins.contains_key(name) {
+    if still_declared {
         eprintln!(
             "warning: `{name}` is still declared in config.toml (it stays listed and possibly enabled) → remove `[plugins.{name}]` if you no longer want it"
         );

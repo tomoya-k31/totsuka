@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-25
+* **Update**: [ADR-0009](/decisions/adr-0009-env-override-whitelist.md) — #175 改訂: env レイヤの呼び出し元に plugin install/uninstall/list を追加（`Locations` 廃止）。残る例外は enable/disable のファイル編集のみ。fail-loud が plugin コマンドに及ぶ帰結と副作用前ロードの順序を追記。
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — #175: 設定ロードを `Cx` に一本化（`plugin_cmd::Locations` 廃止。plugin コマンドも `--config` / `TOTSUKA_*` を尊重）。欠落時セマンティクスを 2 API で明示（`load_config` = エラー / `load_config_or_default` = 空設定続行、plugin install/uninstall/list のみ）。
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) / [orchestrator-core](/components/orchestrator-core.md) — #176: グローバル `--debug` を全コマンドで尊重（`run` 以外は core 新設の `logging::init_stderr` による stderr のみの debug 診断・ログファイル生成なし。`run` は従来どおりファイルログも debug 化）。
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — #214: `config validate` にマニフェスト健全性検査を追加（enabled プラグインの `plugin.toml` パース不能は `--offline` でも error）。オフライン検証を `Cx::validate_config` に集約（config validate / run / doctor で共有）。doctor `hook-token` の warn に capability 判定不能（マニフェスト破損）の workflow を明示。

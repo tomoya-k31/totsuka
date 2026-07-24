@@ -4,7 +4,7 @@ title: ADR-0009 TOTSUKA_* 環境変数オーバーライドはホワイトリス
 description: F-66 第 2 層（TOTSUKA_* 環境変数）の配線にあたり、汎用 TOML オーバーレイではなく明示的なキー対応表（ホワイトリスト）を採用し、不正値は起動エラー・未知キーは警告とする fail-loud 方針を採る決定。フラット文字列 map の ConfigResolver は削除し、RootConfig へ直接適用する型付き関数に置き換える。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/env_overrides.rs
 tags: [config, environment, precedence, f-66, fail-loud]
-timestamp: 2026-07-22T12:00:00Z
+timestamp: 2026-07-25T01:40:00Z
 status: accepted
 owner: tomoya-k31
 ---
@@ -78,9 +78,9 @@ Orchestrator がエージェント/フックプロセスへ**注入する** env�
 
 ## 5. 適用は CLI の設定ロード経路で一元化する
 
-`Cx::load_config` が env スナップショットを受け取り、そこで適用する（呼び出し元は `run` / `config` / `focus` / `doctor`）。`run` だけに適用しないのは、`totsuka focus` / `doctor` が `[hooks].socket_path` から `run` がバインドしたソケットを解決するためで、片方だけに効かせると**別のソケットを見る**不整合が生じる。
+`Cx::load_config` が env スナップショットを受け取り、そこで適用する（当初の呼び出し元は `run` / `config` / `focus` / `doctor`）。`run` だけに適用しないのは、`totsuka focus` / `doctor` が `[hooks].socket_path` から `run` がバインドしたソケットを解決するためで、片方だけに効かせると**別のソケットを見る**不整合が生じる。
 
-例外は `plugin_cmd.rs` のローカルローダ（`plugin enable`/`disable` の**ファイル編集用**）で、env を見せると編集結果が env 値で汚染されるため raw のまま維持する。
+**改訂（2026-07-25、[#175](https://github.com/tomoya-k31/totsuka/issues/175)）**: `plugin_cmd.rs` の独自ローダ（`Locations`）は廃止され、`plugin install` / `uninstall` / `list` も `Cx::load_config_or_default`（欠落 = 空設定で続行）経由で **env レイヤを通る**ようになった。当初の例外のうち残るのは `plugin enable`/`disable` の**ファイル編集そのもの**だけで、raw テキストを読んで `set_plugin_enabled` で書き戻す（env を見せると編集結果が env 値で汚染されるため。宣言済みチェックも同じ raw テキストのパースで行う）。
 
 # Consequences
 
@@ -89,6 +89,7 @@ Orchestrator がエージェント/フックプロセスへ**注入する** env�
 - `ConfigResolver` / `env_layer_from` は削除された。優先順位を固定する意図は `env_overrides.rs` のテストが引き継いでいる
 - **既知の非対称**: `config.toml` 側の `log.level` 不正値は現状 silent fallback のまま（`run_cmd.rs` の `.and_then(parse_level)`）。env 経由は本 ADR でエラーになるため、同じ typo でも経路によって挙動が違う。ファイル経路の改善は別途
 - `totsuka config show` は引き続き**ファイルの内容**を表示するが、有効な env オーバーライドがある場合は末尾に一覧を追記する。表示しないと「ファイルが全て」と誤読させ、本 issue と同種の沈黙を再生産するため
+- **#175 以降**: fail-loud は plugin コマンドにも及ぶ — 不正な `TOTSUKA_*` 値があると `plugin install` / `uninstall` / `list` もエラーになる（従来は env を読まないため免疫だった）。副作用（store への install/uninstall）より**前**に設定ロードを行い、部分成功で終わらない順序にしている
 
 # Citations
 
