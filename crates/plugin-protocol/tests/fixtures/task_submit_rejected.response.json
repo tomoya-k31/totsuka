@@ -1,0 +1,8 @@
+{
+  "jsonrpc": "2.0",
+  "id": "submit-7",
+  "result": {
+    "status": "rejected",
+    "reason": "no workflow matches source \"slack\" → add one"
+  }
+}

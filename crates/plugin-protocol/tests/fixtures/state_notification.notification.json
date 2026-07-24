@@ -1,0 +1,9 @@
+{
+  "jsonrpc": "2.0",
+  "method": "state/notification",
+  "params": {
+    "session_id": "w1:p1|claude-sess-abc",
+    "state": "running",
+    "log_chunk": "compiling web-app v1.2.0 …"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "jsonrpc": "2.0",
+  "id": 11,
+  "method": "session/focus",
+  "params": { "session_id": "w1:p1|claude-sess-abc" }
+}

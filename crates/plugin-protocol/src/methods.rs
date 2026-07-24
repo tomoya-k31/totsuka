@@ -681,25 +681,8 @@ mod tests {
         });
     }
 
-    /// The `task/submit` ack (0.1.6): `reason` stays off the wire when unset,
-    /// and the status enum uses the snake_case wire format like every other
-    /// protocol enum.
-    #[test]
-    fn task_submit_ack_wire_format() {
-        let wire = serde_json::to_string(&TaskSubmitResult {
-            status: TaskSubmitStatus::Duplicate,
-            reason: None,
-        })
-        .unwrap();
-        assert_eq!(wire, r#"{"status":"duplicate"}"#);
-        for (status, expect) in [
-            (TaskSubmitStatus::Accepted, "\"accepted\""),
-            (TaskSubmitStatus::Duplicate, "\"duplicate\""),
-            (TaskSubmitStatus::Rejected, "\"rejected\""),
-        ] {
-            assert_eq!(serde_json::to_string(&status).unwrap(), expect);
-        }
-    }
+    // The literal wire shapes (ack format, enum snake_case values) are pinned
+    // by the golden fixtures in `tests/wire_contract.rs`.
 
     #[test]
     fn agent_ide_methods_round_trip() {
@@ -886,29 +869,5 @@ mod tests {
                 body: None,
             });
         }
-    }
-
-    #[test]
-    fn enums_use_snake_case_wire_format() {
-        assert_eq!(
-            serde_json::to_string(&ExecutionMode::Implement).unwrap(),
-            "\"implement\""
-        );
-        assert_eq!(
-            serde_json::to_string(&AgentState::WaitingInput).unwrap(),
-            "\"waiting_input\""
-        );
-        assert_eq!(
-            serde_json::to_string(&NotifierEvent::Pending).unwrap(),
-            "\"pending\""
-        );
-        assert_eq!(
-            serde_json::to_string(&NotifierEvent::Escalated).unwrap(),
-            "\"escalated\""
-        );
-        assert_eq!(
-            serde_json::to_string(&NotifierEvent::VerificationPending).unwrap(),
-            "\"verification_pending\""
-        );
     }
 }

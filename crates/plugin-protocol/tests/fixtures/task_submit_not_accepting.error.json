@@ -1,0 +1,9 @@
+{
+  "jsonrpc": "2.0",
+  "id": "submit-7",
+  "error": {
+    "code": -32004,
+    "message": "orchestrator is draining → retry with backoff",
+    "data": { "retry_after_secs": 5 }
+  }
+}

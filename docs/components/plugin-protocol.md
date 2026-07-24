@@ -4,7 +4,7 @@ title: plugin-protocol クレート
 description: プラグイン開発者向けに公開する型定義クレート。JSON-RPC 2.0（NDJSON）エンベロープ・plugin.toml マニフェスト・capabilities・§11 メソッド型・Task 共通スキーマ・プロトコルバージョニングを提供する、プラグイン境界の単一の正。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [rust, crate, plugin, protocol, json-rpc]
-timestamp: 2026-07-24T00:00:00Z
+timestamp: 2026-07-25T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -30,6 +30,24 @@ Orchestrator と別プロセスのプラグイン（`task_source` / `agent_ide` 
 # バージョニング（§10.2）
 
 プロトコルは独立した SemVer（`PROTOCOL_VERSION`）を持つ。プラグインは manifest で対応範囲を semver 要件として宣言し、Orchestrator は範囲外のプラグインを拒否する（破壊的変更でメジャーを上げ旧世代を 1 世代サポート）。0.1 系では caret 意味論（`^0.1` = `<0.2.0`）に合わせ、**後方互換の追加はパッチレベル**で刻んでいた（例: 0.1.1 の `InitializeParams.repositories`、0.1.2 の `InitializeParams.llm`、0.1.3 のフック起動・resume・診断スナップショット一式（#132）、0.1.4 の `session/focus`（#155）、0.1.5 の `Task.instructions`、0.1.6 の `task/submit` push 取り込み（#183））。**0.2.0（#190、[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md) Phase C）は `tasks/fetch` 削除の破壊的変更**として実施済み — `^0.1` を宣言する manifest は F-54 により起動拒否される（0.1.6→0.2.0 が猶予窓、意図された動作）。push-only プラグインは `>=0.1.6, <0.3` を宣言することで削除をまたいで動作する（同梱 3 プラグインは全て対応済み。herdr/orca/notifier-macos は tasks/fetch を使っていなかったため `>=0.1.0, <0.3` へ広げるだけで済んだ）。**0.2.1（#210）は 0.2 系初の追加的変更**（`session/release`）で、全同梱 manifest の上限 `<0.3` にそのまま収まるため manifest 変更は不要。**0.2.2（#211）も同様の追加的変更**（`session/list`）で manifest 変更不要。**0.2.3（#196）も追加的変更**（`TaskDispatchParams.tool_launch` + `ToolLaunchSpec`、`hook` の deprecated 化）で manifest 変更不要。
+
+# Contract test（golden wire fixture、#173）
+
+`crates/plugin-protocol/tests/fixtures/` に**全メソッドの request / response / notification の wire JSON**（JSON-RPC エンベロープ全体、可読性のため pretty-print）を golden fixture としてコミットし、`tests/wire_contract.rs` が各 fixture を 4 点で検証する（依存追加なし、`serde_json::Value` 構造比較）:
+
+1. エンベロープ（`Request` / `Response` / `Notification`）のデシリアライズ → 再シリアライズが fixture と完全一致
+2. `params` / `result` の型付きデシリアライズ → 再シリアライズが fixture と完全一致（フィールド rename / serde 属性変更はここで必ず fail）
+3. 未知フィールドを注入した変異版もデシリアライズ成功（forward compat: 新しい相手からの未知フィールドは無視する契約）
+4. 全プロトコル enum の全 variant の snake_case wire 値をピン留め（`enum_wire_values_are_pinned`）
+
+null-ack（`shutdown` / `task/update_status` 等の `"result": null`）は writer 側（`Response::result(id, Value::Null)` がこの形を生成）と reader 側（`Option<Value>` が null を `None` に正規化するため往復非対称）の両方向を明示的にピン留めしている。
+
+## 運用: fixture の差分レビュー = 互換性レビュー
+
+wire 形状に影響する変更は必ず fixture の差分として PR に現れる（現れない wire 変更はテストが fail する）。fixture 差分を含む PR では次を判定する:
+
+- **追加的変更**（新フィールドは `#[serde(default, skip_serializing_if = …)]` の Option/Vec、新メソッドは既存 capability にゲート、enum variant 追加）→ `PROTOCOL_VERSION` の**パッチ**を上げる（0.x 系の慣行、上記バージョニング節）。`version.rs` の doc comment・本ドキュメント・対応する fixture を同一 PR で更新し、enum variant 追加は `enum_wire_values_are_pinned` にも追加する。
+- **破壊的変更**（フィールド / メソッド / variant の rename・削除、optional の必須化、既存 wire の形が変わる serde 属性変更）→ `PROTOCOL_VERSION` の**マイナー**を上げる（0.2 → 0.3。caret 意味論により範囲外 manifest は F-54 で起動拒否）。0.1.6 → 0.2.0（`tasks/fetch` 削除）の前例に従い、可能なら deprecated 併送の猶予窓を挟み、削除予定を `version.rs` と本ドキュメントに明記する。同梱プラグイン manifest の `protocol_version` 上限も同一 PR で見直す。
 
 # 依存
 

@@ -1,0 +1,6 @@
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "method": "state/subscribe",
+  "params": { "session_id": "w1:p1|claude-sess-abc" }
+}

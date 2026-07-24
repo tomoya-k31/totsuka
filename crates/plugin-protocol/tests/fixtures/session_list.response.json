@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "id": 13,
+  "result": {
+    "sessions": [
+      {
+        "session_id": "w1:p1|claude-sess-abc",
+        "label": "totsuka 7",
+        "cwd": "/state/worktrees/agent-slack-7"
+      },
+      { "session_id": "w2:p1|" }
+    ]
+  }
+}

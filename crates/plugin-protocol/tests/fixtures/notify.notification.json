@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "method": "notify",
+  "params": {
+    "event": "waiting_input",
+    "task_id": "42",
+    "workflow": "implement-issue",
+    "title": "Input needed",
+    "body": "The agent has a question"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "task/update_status",
+  "params": {
+    "task_id": "42",
+    "status": "レビュー待ち"
+  }
+}

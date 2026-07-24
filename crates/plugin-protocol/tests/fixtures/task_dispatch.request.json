@@ -1,0 +1,43 @@
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "task/dispatch",
+  "params": {
+    "task": {
+      "id": "42",
+      "source": "github",
+      "title": "Fix bug",
+      "body": "再現手順は…",
+      "repo_hint": "web-app",
+      "labels": ["bug"],
+      "priority": 1,
+      "status": "実装待ち",
+      "url": "https://github.com/example/web-app/issues/42",
+      "assignee": "tomoya",
+      "thread_key": "C0123456789:1718000000.000100",
+      "instructions": "コミットまでで止めてください。"
+    },
+    "worktree_path": "/state/worktrees/agent-github-42",
+    "mode": "implement",
+    "extra_context": { "base": "main" },
+    "job_id": "job-7",
+    "resume_session_id": "claude-sess-abc",
+    "hook": {
+      "settings_path": "/data/totsuka/hooks/orchestrator-implement.json",
+      "env": {
+        "TOTSUKA_HOOK_ENDPOINT": "/run/totsuka/hook.sock",
+        "TOTSUKA_JOB_ID": "job-7"
+      }
+    },
+    "tool_launch": {
+      "program": "claude",
+      "args": [
+        "--settings",
+        "/data/totsuka/hooks/orchestrator-implement.json",
+        "--resume",
+        "claude-sess-abc"
+      ],
+      "env": { "TOTSUKA_JOB_ID": "job-7" }
+    }
+  }
+}

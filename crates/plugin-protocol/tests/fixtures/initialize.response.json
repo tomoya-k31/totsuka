@@ -1,0 +1,17 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "plugin_version": "1.2.0",
+    "capabilities": {
+      "plan_mode": true,
+      "design_preview": true,
+      "pane_control": true,
+      "state_stream": true,
+      "resume_session": true,
+      "diagnostics_snapshot": true,
+      "task_submit": false,
+      "outputs": []
+    }
+  }
+}

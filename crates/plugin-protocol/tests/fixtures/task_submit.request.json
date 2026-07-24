@@ -1,0 +1,21 @@
+{
+  "jsonrpc": "2.0",
+  "id": "submit-7",
+  "method": "task/submit",
+  "params": {
+    "task": {
+      "id": "C0123456789:1718000000.000100",
+      "source": "slack",
+      "title": "返信ドラフト作成",
+      "body": "## メンション\n…",
+      "repo_hint": "web-app",
+      "labels": ["bug", "urgent"],
+      "priority": 2,
+      "status": "実装待ち",
+      "url": "https://example.slack.com/archives/C0123456789/p1718000000000100",
+      "assignee": "tomoya",
+      "thread_key": "C0123456789:1718000000.000100",
+      "instructions": "返信案を日本語で作成してください。"
+    }
+  }
+}
