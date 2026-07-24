@@ -65,10 +65,23 @@ fn no_llm() -> Option<OpenAiRouter> {
 }
 
 fn read_log(path: &Path) -> Vec<serde_json::Value> {
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| match serde_json::from_str(l) {
+            Ok(value) => Some(value),
+            // The writer is a live mock-plugin process, and `run_until`'s
+            // polling closures read concurrently — a truncated *final* line
+            // just means "not flushed yet" and is skipped; the next poll sees
+            // it whole (#229). If the line is genuinely corrupt rather than
+            // in-flight, the caller's assertions on the entries catch it. A
+            // malformed line mid-file has no in-flight excuse: that is real
+            // corruption and must keep failing the test.
+            Err(_) if i == lines.len() - 1 => None,
+            Err(e) => panic!("malformed log line {} ({e}): {l}", i + 1),
+        })
         .collect()
 }
 
