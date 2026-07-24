@@ -191,7 +191,7 @@ fn execute(
         Command::Status { json } => status_cmd::run(&cx, json.json),
         Command::Task { cmd } => task_cmd::run(&cx, cmd),
         Command::Focus { id } => focus_cmd::run(&cx, id),
-        Command::Plugin { cmd } => plugin_cmd::run(cmd),
+        Command::Plugin { cmd } => plugin_cmd::run(&cx, cmd),
         Command::Config { cmd } => config_cmd::run(&cx, cmd),
         Command::Logs { follow, task } => logs_cmd::run(&cx, follow, task),
         Command::Doctor { json } => doctor_cmd::run(&cx, json.json),

@@ -4,7 +4,7 @@ title: orchestrator-cli クレート
 description: totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（init / run / status / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [rust, crate, cli, plugin, run, status, doctor, hooks]
-timestamp: 2026-07-25T00:40:00Z
+timestamp: 2026-07-25T01:10:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -16,7 +16,7 @@ owner: tomoya-k31
 # 公開インターフェース
 
 - bin 名: `totsuka`
-- `plugin`（#52）: `install <dir> [--yes]` / `uninstall <name>` / `enable <name>` / `disable <name>` / `list [--json]`。install は取得元と SHA-256 を表示し確認を要求（§5.4）、GitHub Release からの取得は v1 未対応（ローカルディレクトリからの install に案内）。
+- `plugin`（#52）: `install <dir> [--yes]` / `uninstall <name>` / `enable <name>` / `disable <name>` / `list [--json]`。install は取得元と SHA-256 を表示し確認を要求（§5.4）、GitHub Release からの取得は v1 未対応（ローカルディレクトリからの install に案内）。**#175: パス解決・設定ロードは他コマンドと同じ `Cx` 経由**（独自の `Locations` は廃止。`--config` / `TOTSUKA_*` env オーバーライドが plugin コマンドにも効く）。設定欠落時: `install` / `uninstall` / `list` は**空設定で続行**（`Cx::load_config_or_default` — 宣言の照合にしか使わないため `totsuka init` 前でも動く）、`enable` / `disable` は**エラー**（編集対象ファイルが無いため。`→ run totsuka init` を案内）。
 - `run [--watch] [--dry-run]`（#63）: メインループの CLI 表面。設定ロード→`config::validate`（Error があれば起動拒否）→ログ初期化（§5.2）→単一インスタンスロック（F-74、dry-run は読み取り専用のため取得しない）→**フックアセットの書き出し**（core の `hooks::install` 呼び出し、後述、#137/#178）→enabled プラグインを store から起動（起動スペック組み立てとシークレット解決は core の `plugins::spec::plugin_spec` 呼び出し、F-58/64/65、#217）→起動時回復（§5.3、再開不能タスクは `task retry/cancel` を案内）→孤児 worktree 警告（F-24）→[orchestrator-core の run Engine](/components/orchestrator-core.md) に委譲。終了時に summary（fetched/ingested/dispatched/done/failed と waiting/pending/queued の残タスク）を表示。SIGINT は graceful（実行中タスクは状態DBに残し次回回復）。
 - `init`（#64）: config.toml 雛形（コメントアウト済みテンプレート）と XDG ディレクトリの生成 + git バージョン確認。既存ファイルは決して上書きしない。
 - `status [--json]`（#64）: タスク/worktree 一覧と orchestrator 生存表示。SQLite 直読でプラグインを起動しない（§5.5）。run.lock の PID 生存確認で「not running (stale lock)」を明示（F-74）。
@@ -48,7 +48,7 @@ owner: tomoya-k31
 - `check_spool`（`hook-spool`） — `spool_dir` の書き込み可否と**バックログ件数**（backlog > 0 は warning、[hook-security](/security/hook-security.md) N-05 の滞留検出）。
 
 - 共通フラグ: `--config <path>`（設定ファイル上書き = F-66 の最上位レイヤ）、`--debug`（**#176: 全コマンドで有効** — `run` 以外は stderr のみの debug 診断（`logging::init_stderr`、ログファイルは作らない）、`run` は従来どおりファイルログのレベルも debug に引き上げ。global フラグが `run` 以外で無視される clig.dev アンチパターンの解消）。`--json` は主要読み取り系コマンド（status / task list / task show / plugin list / doctor）に用意し、宣言は `common::JsonFlag`（`#[command(flatten)]`）で一元化（#177）。
-- **設定ロードの一元化（#208、[ADR-0009](/decisions/adr-0009-env-override-whitelist.md)）**: `Cx::load_config(&env)` が `config.toml` パース → core の `apply_env_overrides`（F-66 第 2 層 `TOTSUKA_*`）まで行い、`run` / `config` / `focus` / `doctor` の 4 コマンドすべてがここを通る。**片方だけに適用しない**理由は `focus` / `doctor` が `[hooks].socket_path` から `run` のバインドしたソケットを解決するためで、`run` のみだと `TOTSUKA_HOOKS_SOCKET_PATH` 設定時に別のソケットを見る。警告は stderr（`--json` の stdout 契約を壊さない）。CLI フラグ（`--debug`）は**この後**に適用されるため「CLI > env」が適用順で成立する。例外は `plugin enable`/`disable` のローカルローダで、ファイル編集用のため raw のまま維持（env で編集結果を汚染しない）。`config show` はファイル内容表示を維持しつつ、有効な env オーバーライドを末尾に一覧表示する（`--redacted` 時は `is_secret_key` で値をマスク）。
+- **設定ロードの一元化（#208 → #175、[ADR-0009](/decisions/adr-0009-env-override-whitelist.md)）**: `Cx::load_config(&env)` が `config.toml` パース → core の `apply_env_overrides`（F-66 第 2 層 `TOTSUKA_*`）まで行う。**#175 で `plugin` サブコマンド群の独自ローダ（`Locations`）を廃止**し、設定を読むコマンドはすべてここを通る。**片方だけに適用しない**理由は `focus` / `doctor` が `[hooks].socket_path` から `run` のバインドしたソケットを解決するためで、`run` のみだと `TOTSUKA_HOOKS_SOCKET_PATH` 設定時に別のソケットを見る。警告は stderr（`--json` の stdout 契約を壊さない）。CLI フラグ（`--debug`）は**この後**に適用されるため「CLI > env」が適用順で成立する。**設定欠落時のセマンティクスは 2 API で明示的に選ぶ**: `load_config`（欠落 = 「原因 + 次のアクション」エラー。run / config / focus / doctor）と `load_config_or_default`（欠落 = 空設定で続行。plugin install / uninstall / list — `init` 前でも動くべきコマンドのみ。`TOTSUKA_*` レイヤは欠落時も適用されるため、不正なオーバーライド値はファイル有無によらずエラー）。なお `plugin enable`/`disable` は編集対象ファイルの raw テキスト読み（欠落 = エラー）+ `set_plugin_enabled` のまま（コメント・整形を維持し、env レイヤを書き戻さない。宣言済みチェックも同じ raw テキストのパースで行う）。`config show` はファイル内容表示を維持しつつ、有効な env オーバーライドを末尾に一覧表示する（`--redacted` 時は `is_secret_key` で値をマスク）。
 - UX 規約（§7）: エラーは「原因 + 次のアクション」（`→` 区切り）。用語は [glossary](/glossary/index.md) に準拠。
 - **exit code 体系と機械可読エラー（#177、[ADR-0012](/decisions/adr-0012-cli-exit-codes-json-errors.md)）**: exit code は名前付き定数（`common.rs`）で 4 値 — **0** = 成功 / **1** = 実行時エラー（`EXIT_ERROR`）/ **2** = usage エラー（`EXIT_USAGE`。サブコマンド無し + clap 自身のパース失敗）/ **3** = 診断完走で問題検出（`EXIT_PROBLEMS_FOUND`、現状 `doctor` のみ — 「doctor 自体の失敗 = 1」と区別）。特定 code は `ExitWith { code, message }` を `main` が downcast して取り出す。`--json` 指定時のエラーは stderr へ 1 行 compact JSON `{"error":{"message":"<原因>","action":"<次のアクション>"|null}}`（既存文言の最初の ` → ` で分割）、非 `--json` は従来の `error: 原因 → アクション` 平文。stdout の「parseable output, nothing else」契約はエラー時も不変。`focus` は従来どおり常に exit 0（クリック経路を壊さない）。
 
