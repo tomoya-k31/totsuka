@@ -112,8 +112,10 @@ impl Cx {
         }
     }
 
-    /// Like [`Cx::load_config`], but a missing file yields the empty default
-    /// config instead of an error (#175). For the commands that must work
+    /// Like [`Cx::load_config`], but a missing file is not an error: the
+    /// empty default config is used instead (#175). The `TOTSUKA_*` env layer
+    /// still applies on top — so an invalid override value fails here exactly
+    /// like it does with a present file. For the commands that must work
     /// before `totsuka init` — `plugin install` / `uninstall` / `list` only
     /// consult the config to cross-check declarations, so an absent file
     /// simply means "nothing declared". Every other command errors via

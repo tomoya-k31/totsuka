@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use clap::Subcommand;
-use orchestrator_core::config::set_plugin_enabled;
+use orchestrator_core::config::{RootConfig, set_plugin_enabled};
 use serde::Serialize;
 
 use crate::common::{CliError, Cx, JsonFlag, print_json};
@@ -63,8 +63,8 @@ pub fn run(cx: &Cx, command: PluginCommand) -> Result<(), CliError> {
     match command {
         PluginCommand::Install { source, yes } => install(cx, &env, &source, yes),
         PluginCommand::Uninstall { name } => uninstall(cx, &env, &name),
-        PluginCommand::Enable { name } => set_enabled(cx, &env, &name, true),
-        PluginCommand::Disable { name } => set_enabled(cx, &env, &name, false),
+        PluginCommand::Enable { name } => set_enabled(cx, &name, true),
+        PluginCommand::Disable { name } => set_enabled(cx, &name, false),
         PluginCommand::List { json } => list(cx, &env, json.json),
     }
 }
@@ -134,12 +134,7 @@ fn uninstall(cx: &Cx, env: &HashMap<String, String>, name: &str) -> Result<(), C
     Ok(())
 }
 
-fn set_enabled(
-    cx: &Cx,
-    env: &HashMap<String, String>,
-    name: &str,
-    enabled: bool,
-) -> Result<(), CliError> {
+fn set_enabled(cx: &Cx, name: &str, enabled: bool) -> Result<(), CliError> {
     // The edit works on the raw file text (comments and formatting must
     // survive `set_plugin_enabled`), so the env layer is deliberately not
     // folded into what gets written back.
@@ -158,8 +153,12 @@ fn set_enabled(
     // If a new `[plugins.{name}]` section will be created, it needs `kind` to be
     // schema-valid. Take it from the installed manifest; if the plugin is
     // neither declared nor installed, we cannot know its kind — refuse rather
-    // than write an unloadable config.
-    let already_declared = cx.load_config(env)?.plugins.contains_key(name);
+    // than write an unloadable config. Parsed from `current` (already read):
+    // the check guards the raw-text edit above, so the env layer — which
+    // cannot declare plugins anyway — has no business here.
+    let already_declared = RootConfig::from_toml_str(&current)?
+        .plugins
+        .contains_key(name);
     let kind_if_new = if already_declared {
         None
     } else {
