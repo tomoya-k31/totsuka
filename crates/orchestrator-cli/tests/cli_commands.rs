@@ -498,6 +498,20 @@ fn debug_flag_enables_stderr_diagnostics_on_non_run_commands() {
     assert!(out.status.success());
     assert!(!stderr(&out).contains("verbose diagnostics enabled"));
 
+    // Even `completion` (which needs no environment and returns early)
+    // honors the flag — "every command" means every command.
+    let out = run(&base, &["completion", "zsh", "--debug"]);
+    assert!(out.status.success());
+    assert!(
+        stdout(&out).contains("totsuka"),
+        "completion script still lands on stdout"
+    );
+    assert!(
+        stderr(&out).contains("verbose diagnostics enabled"),
+        "--debug takes effect on completion too: {}",
+        stderr(&out)
+    );
+
     // No log files are created for non-run commands (file logging is `run`'s).
     assert!(
         !base.join("state/totsuka/logs").exists(),

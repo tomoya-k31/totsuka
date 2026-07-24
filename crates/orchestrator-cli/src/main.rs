@@ -158,6 +158,20 @@ fn execute(
     config: Option<&std::path::Path>,
     debug: bool,
 ) -> Result<(), common::CliError> {
+    // `--debug` on any command but `run`: a stderr-only debug subscriber, no
+    // log files (#176). Installed before the completion early-return so the
+    // flag has an effect on *every* command, as its help promises. `run` owns
+    // the file logging and applies `--debug` on top of its config-driven level
+    // itself — installing a subscriber here would make its own `logging::init`
+    // fail (the global subscriber can only be set once). Prompt/payload
+    // fields stay off: `[logging].log_prompts` governs `run`'s file logs and
+    // is not loaded yet here, so the ad-hoc terminal stream defaults closed
+    // rather than overriding a `log_prompts = false` config.
+    if debug && !matches!(command, Command::Run { .. }) {
+        orchestrator_core::logging::init_stderr(tracing::Level::DEBUG, false)?;
+        tracing::debug!("--debug: verbose diagnostics enabled");
+    }
+
     // Completion needs no environment at all.
     if let Command::Completion { shell } = command {
         clap_complete::generate(
@@ -167,16 +181,6 @@ fn execute(
             &mut std::io::stdout(),
         );
         return Ok(());
-    }
-
-    // `--debug` on any command but `run`: a stderr-only debug subscriber, no
-    // log files (#176). `run` owns the file logging and applies `--debug` on
-    // top of its config-driven level itself — installing a subscriber here
-    // would make its own `logging::init` fail (the global subscriber can only
-    // be set once).
-    if debug && !matches!(command, Command::Run { .. }) {
-        orchestrator_core::logging::init_stderr(tracing::Level::DEBUG, true)?;
-        tracing::debug!("--debug: verbose diagnostics enabled");
     }
 
     let cx = Cx::resolve(config)?;
