@@ -201,3 +201,45 @@ fn github_source_reports_not_yet_supported() {
     assert!(!ok);
     assert!(stderr.contains("not yet available"), "stderr: {stderr}");
 }
+
+/// #175: plugin commands resolve paths through `Cx` like every other command,
+/// so `--config` (F-66's highest layer) applies to them too — `Locations` used
+/// to silently ignore it.
+#[test]
+fn plugin_list_honors_config_override() {
+    let env = Env::new("config-override");
+    // A config *outside* the XDG config dir, declaring one plugin.
+    let alt = env.root.join("elsewhere.toml");
+    fs::write(
+        &alt,
+        "[plugins.github]\nenabled = true\nkind = \"task_source\"\n",
+    )
+    .unwrap();
+
+    let (ok, out, stderr) = env.run(
+        &[
+            "plugin",
+            "list",
+            "--json",
+            "--config",
+            alt.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(ok, "stderr: {stderr}");
+    let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "github")
+        .expect("the declaration from the overridden config path appears");
+    assert_eq!(row["enabled"], true, "{row}");
+
+    // The default XDG location has no config at all: without the override the
+    // declaration must not be visible (or-default semantics, not an error).
+    let (ok, out, _) = env.run(&["plugin", "list", "--json"], None);
+    assert!(ok, "list works before `totsuka init`");
+    let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(rows.as_array().unwrap().is_empty(), "{rows}");
+}

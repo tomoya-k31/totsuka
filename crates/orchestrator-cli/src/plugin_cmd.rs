@@ -1,15 +1,14 @@
 //! `totsuka plugin ...` subcommands (F-52/F-55/F-56/F-57).
 
+use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use clap::Subcommand;
-use orchestrator_core::config::{RootConfig, set_plugin_enabled};
-use orchestrator_core::paths::Paths;
-use orchestrator_core::plugins::PluginStore;
+use orchestrator_core::config::set_plugin_enabled;
 use serde::Serialize;
 
-use crate::common::{CliError, JsonFlag, print_json};
+use crate::common::{CliError, Cx, JsonFlag, print_json};
 
 /// Plugin management subcommands.
 #[derive(Debug, Subcommand)]
@@ -53,44 +52,29 @@ impl PluginCommand {
     }
 }
 
-/// Resolved locations the plugin commands operate on.
-struct Locations {
-    store: PluginStore,
-    config_path: PathBuf,
-}
-
-impl Locations {
-    fn resolve() -> Result<Self, CliError> {
-        let paths = Paths::from_system()?;
-        Ok(Self {
-            store: PluginStore::new(paths.data_dir().join("plugins")),
-            config_path: paths.config_dir().join("config.toml"),
-        })
-    }
-
-    /// Load config.toml (an empty config if the file does not exist).
-    fn load_config(&self) -> Result<RootConfig, CliError> {
-        match std::fs::read_to_string(&self.config_path) {
-            Ok(s) => Ok(RootConfig::from_toml_str(&s)?),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(RootConfig::from_toml_str("")?),
-            Err(e) => Err(e.into()),
-        }
-    }
-}
-
-/// Dispatch a plugin subcommand.
-pub fn run(command: PluginCommand) -> Result<(), CliError> {
-    let loc = Locations::resolve()?;
+/// Dispatch a plugin subcommand. Paths and config loading go through [`Cx`]
+/// like every other command (#175), so `--config` and the `TOTSUKA_*` env
+/// layer apply here too. `install` / `uninstall` / `list` load the config
+/// with [`Cx::load_config_or_default`] — they only cross-check declarations,
+/// and must work before `totsuka init`. `enable` / `disable` edit the file
+/// and error when it is missing.
+pub fn run(cx: &Cx, command: PluginCommand) -> Result<(), CliError> {
+    let env: HashMap<String, String> = std::env::vars().collect();
     match command {
-        PluginCommand::Install { source, yes } => install(&loc, &source, yes),
-        PluginCommand::Uninstall { name } => uninstall(&loc, &name),
-        PluginCommand::Enable { name } => set_enabled(&loc, &name, true),
-        PluginCommand::Disable { name } => set_enabled(&loc, &name, false),
-        PluginCommand::List { json } => list(&loc, json.json),
+        PluginCommand::Install { source, yes } => install(cx, &env, &source, yes),
+        PluginCommand::Uninstall { name } => uninstall(cx, &env, &name),
+        PluginCommand::Enable { name } => set_enabled(cx, &env, &name, true),
+        PluginCommand::Disable { name } => set_enabled(cx, &env, &name, false),
+        PluginCommand::List { json } => list(cx, &env, json.json),
     }
 }
 
-fn install(loc: &Locations, source: &str, yes: bool) -> Result<(), CliError> {
+fn install(
+    cx: &Cx,
+    env: &HashMap<String, String>,
+    source: &str,
+    yes: bool,
+) -> Result<(), CliError> {
     if let Some(rest) = source.strip_prefix("github:") {
         return Err(format!(
             "GitHub Release install (`github:{rest}`) is not yet available in v1 → download the \
@@ -101,7 +85,8 @@ fn install(loc: &Locations, source: &str, yes: bool) -> Result<(), CliError> {
     }
 
     let source_dir = Path::new(source);
-    let plan = loc.store.prepare_install(source_dir)?;
+    let store = cx.store();
+    let plan = store.prepare_install(source_dir)?;
 
     // Show the source and checksum, and require confirmation (§5.4).
     println!(
@@ -115,13 +100,17 @@ fn install(loc: &Locations, source: &str, yes: bool) -> Result<(), CliError> {
         return Ok(());
     }
 
-    loc.store.commit_install(&plan)?;
+    store.commit_install(&plan)?;
     println!(
         "Installed `{}` to {}",
         plan.name,
-        loc.store.plugin_dir(&plan.name).display()
+        store.plugin_dir(&plan.name).display()
     );
-    if !loc.load_config()?.plugins.contains_key(&plan.name) {
+    if !cx
+        .load_config_or_default(env)?
+        .plugins
+        .contains_key(&plan.name)
+    {
         println!(
             "Note: `{}` is installed but not enabled. Run `totsuka plugin enable {}`.",
             plan.name, plan.name
@@ -130,14 +119,14 @@ fn install(loc: &Locations, source: &str, yes: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn uninstall(loc: &Locations, name: &str) -> Result<(), CliError> {
-    if loc.store.uninstall(name)? {
+fn uninstall(cx: &Cx, env: &HashMap<String, String>, name: &str) -> Result<(), CliError> {
+    if cx.store().uninstall(name)? {
         println!("Uninstalled `{name}`.");
     } else {
         println!("`{name}` was not installed; nothing to do.");
     }
     // Warn if config still declares it (config is the source of truth, F-56).
-    if loc.load_config()?.plugins.contains_key(name) {
+    if cx.load_config_or_default(env)?.plugins.contains_key(name) {
         eprintln!(
             "warning: `{name}` is still declared in config.toml (it stays listed and possibly enabled) → remove `[plugins.{name}]` if you no longer want it"
         );
@@ -145,12 +134,20 @@ fn uninstall(loc: &Locations, name: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-fn set_enabled(loc: &Locations, name: &str, enabled: bool) -> Result<(), CliError> {
-    let current = std::fs::read_to_string(&loc.config_path).map_err(|e| {
+fn set_enabled(
+    cx: &Cx,
+    env: &HashMap<String, String>,
+    name: &str,
+    enabled: bool,
+) -> Result<(), CliError> {
+    // The edit works on the raw file text (comments and formatting must
+    // survive `set_plugin_enabled`), so the env layer is deliberately not
+    // folded into what gets written back.
+    let current = std::fs::read_to_string(&cx.config_path).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
             format!(
-                "config.toml not found at {} → create it first (`totsuka init` in a later release)",
-                loc.config_path.display()
+                "config.toml not found at {} → run `totsuka init` to create it",
+                cx.config_path.display()
             )
             .into()
         } else {
@@ -162,11 +159,11 @@ fn set_enabled(loc: &Locations, name: &str, enabled: bool) -> Result<(), CliErro
     // schema-valid. Take it from the installed manifest; if the plugin is
     // neither declared nor installed, we cannot know its kind — refuse rather
     // than write an unloadable config.
-    let already_declared = loc.load_config()?.plugins.contains_key(name);
+    let already_declared = cx.load_config(env)?.plugins.contains_key(name);
     let kind_if_new = if already_declared {
         None
     } else {
-        match loc.store.kind_str_of(name)? {
+        match cx.store().kind_str_of(name)? {
             Some(kind) => Some(kind),
             None => {
                 return Err(format!(
@@ -179,10 +176,10 @@ fn set_enabled(loc: &Locations, name: &str, enabled: bool) -> Result<(), CliErro
     };
 
     let updated = set_plugin_enabled(&current, name, enabled, kind_if_new.as_deref())?;
-    std::fs::write(&loc.config_path, updated)?;
+    std::fs::write(&cx.config_path, updated)?;
 
     let verb = if enabled { "Enabled" } else { "Disabled" };
-    println!("{verb} `{name}` in {}", loc.config_path.display());
+    println!("{verb} `{name}` in {}", cx.config_path.display());
     Ok(())
 }
 
@@ -197,9 +194,9 @@ struct PluginRow {
     protocol: Option<String>,
 }
 
-fn list(loc: &Locations, json: bool) -> Result<(), CliError> {
-    let installed = loc.store.list()?;
-    let config = loc.load_config()?;
+fn list(cx: &Cx, env: &HashMap<String, String>, json: bool) -> Result<(), CliError> {
+    let installed = cx.store().list()?;
+    let config = cx.load_config_or_default(env)?;
 
     // Union of installed and configured plugin names.
     let mut names: Vec<String> = installed.iter().map(|p| p.name.clone()).collect();

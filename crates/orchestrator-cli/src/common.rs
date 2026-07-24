@@ -102,17 +102,7 @@ impl Cx {
     /// `--json` commands' stdout contract stays parseable.
     pub fn load_config(&self, env: &HashMap<String, String>) -> Result<RootConfig, CliError> {
         match std::fs::read_to_string(&self.config_path) {
-            Ok(s) => {
-                let mut cfg = RootConfig::from_toml_str(&s)?;
-                let warnings = config::apply_env_overrides(
-                    &mut cfg,
-                    env.iter().map(|(k, v)| (k.clone(), v.clone())),
-                )?;
-                for warning in warnings {
-                    eprintln!("config warning: {warning}");
-                }
-                Ok(cfg)
-            }
+            Ok(s) => self.parse_and_overlay(&s, env),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Err(format!(
                 "config not found at {} → run `totsuka init` to create it",
                 self.config_path.display()
@@ -120,6 +110,39 @@ impl Cx {
             .into()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Like [`Cx::load_config`], but a missing file yields the empty default
+    /// config instead of an error (#175). For the commands that must work
+    /// before `totsuka init` — `plugin install` / `uninstall` / `list` only
+    /// consult the config to cross-check declarations, so an absent file
+    /// simply means "nothing declared". Every other command errors via
+    /// [`Cx::load_config`]; which command gets which behavior is documented
+    /// in docs/components/orchestrator-cli.md.
+    pub fn load_config_or_default(
+        &self,
+        env: &HashMap<String, String>,
+    ) -> Result<RootConfig, CliError> {
+        match std::fs::read_to_string(&self.config_path) {
+            Ok(s) => self.parse_and_overlay(&s, env),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => self.parse_and_overlay("", env),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Parse a config body and apply the `TOTSUKA_*` overrides (F-66 layer 2).
+    fn parse_and_overlay(
+        &self,
+        s: &str,
+        env: &HashMap<String, String>,
+    ) -> Result<RootConfig, CliError> {
+        let mut cfg = RootConfig::from_toml_str(s)?;
+        let warnings =
+            config::apply_env_overrides(&mut cfg, env.iter().map(|(k, v)| (k.clone(), v.clone())))?;
+        for warning in warnings {
+            eprintln!("config warning: {warning}");
+        }
+        Ok(cfg)
     }
 
     /// Path of the state database.
