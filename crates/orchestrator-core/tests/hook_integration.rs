@@ -80,7 +80,7 @@ fn read_log(path: &Path) -> Vec<serde_json::Value> {
             // malformed line mid-file has no in-flight excuse: that is real
             // corruption and must keep failing the test.
             Err(_) if i == lines.len() - 1 => None,
-            Err(e) => panic!("malformed log line {i} ({e}): {l}"),
+            Err(e) => panic!("malformed log line {} ({e}): {l}", i + 1),
         })
         .collect()
 }
