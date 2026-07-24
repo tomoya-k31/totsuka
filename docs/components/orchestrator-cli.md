@@ -4,7 +4,7 @@ title: orchestrator-cli クレート
 description: totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（init / run / status / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [rust, crate, cli, plugin, run, status, doctor, hooks]
-timestamp: 2026-07-25T00:20:00Z
+timestamp: 2026-07-25T00:40:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -47,7 +47,7 @@ owner: tomoya-k31
 - `check_hook_deps`（`hook-deps`） — `curl` + `jq` の存在（H-14。無いとフックが送信不能で全て spool 行き）。
 - `check_spool`（`hook-spool`） — `spool_dir` の書き込み可否と**バックログ件数**（backlog > 0 は warning、[hook-security](/security/hook-security.md) N-05 の滞留検出）。
 
-- 共通フラグ: `--config <path>`（設定ファイル上書き = F-66 の最上位レイヤ）、`--debug`（run のログレベルを debug に引き上げ）。`--json` は主要読み取り系コマンド（status / task list / task show / plugin list / doctor）に用意し、宣言は `common::JsonFlag`（`#[command(flatten)]`）で一元化（#177）。
+- 共通フラグ: `--config <path>`（設定ファイル上書き = F-66 の最上位レイヤ）、`--debug`（**#176: 全コマンドで有効** — `run` 以外は stderr のみの debug 診断（`logging::init_stderr`、ログファイルは作らない）、`run` は従来どおりファイルログのレベルも debug に引き上げ。global フラグが `run` 以外で無視される clig.dev アンチパターンの解消）。`--json` は主要読み取り系コマンド（status / task list / task show / plugin list / doctor）に用意し、宣言は `common::JsonFlag`（`#[command(flatten)]`）で一元化（#177）。
 - **設定ロードの一元化（#208、[ADR-0009](/decisions/adr-0009-env-override-whitelist.md)）**: `Cx::load_config(&env)` が `config.toml` パース → core の `apply_env_overrides`（F-66 第 2 層 `TOTSUKA_*`）まで行い、`run` / `config` / `focus` / `doctor` の 4 コマンドすべてがここを通る。**片方だけに適用しない**理由は `focus` / `doctor` が `[hooks].socket_path` から `run` のバインドしたソケットを解決するためで、`run` のみだと `TOTSUKA_HOOKS_SOCKET_PATH` 設定時に別のソケットを見る。警告は stderr（`--json` の stdout 契約を壊さない）。CLI フラグ（`--debug`）は**この後**に適用されるため「CLI > env」が適用順で成立する。例外は `plugin enable`/`disable` のローカルローダで、ファイル編集用のため raw のまま維持（env で編集結果を汚染しない）。`config show` はファイル内容表示を維持しつつ、有効な env オーバーライドを末尾に一覧表示する（`--redacted` 時は `is_secret_key` で値をマスク）。
 - UX 規約（§7）: エラーは「原因 + 次のアクション」（`→` 区切り）。用語は [glossary](/glossary/index.md) に準拠。
 - **exit code 体系と機械可読エラー（#177、[ADR-0012](/decisions/adr-0012-cli-exit-codes-json-errors.md)）**: exit code は名前付き定数（`common.rs`）で 4 値 — **0** = 成功 / **1** = 実行時エラー（`EXIT_ERROR`）/ **2** = usage エラー（`EXIT_USAGE`。サブコマンド無し + clap 自身のパース失敗）/ **3** = 診断完走で問題検出（`EXIT_PROBLEMS_FOUND`、現状 `doctor` のみ — 「doctor 自体の失敗 = 1」と区別）。特定 code は `ExitWith { code, message }` を `main` が downcast して取り出す。`--json` 指定時のエラーは stderr へ 1 行 compact JSON `{"error":{"message":"<原因>","action":"<次のアクション>"|null}}`（既存文言の最初の ` → ` で分割）、非 `--json` は従来の `error: 原因 → アクション` 平文。stdout の「parseable output, nothing else」契約はエラー時も不変。`focus` は従来どおり常に exit 0（クリック経路を壊さない）。
