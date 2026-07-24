@@ -72,9 +72,9 @@ jobs:
   # (no compilation, no Rust toolchain), so it runs on every PR in seconds.
   # False positives (macro / re-export driven) are suppressed per crate via
   # `[package.metadata.cargo-machete] ignored = [...]` with a reason comment.
-  # ubuntu-slim qualifies here: no Docker/privileged steps, single-core text
-  # scan, and this is not a required status check (→
-  # .claude/rules/github-action-ubuntu-slim.md).
+  # Runner: ubuntu-slim — no Docker/privileged steps, a single-core text scan
+  # that finishes in seconds, and not a required status check, so a slim
+  # failure cannot block a merge or release.
   machete:
     name: machete (unused deps)
     if: github.event_name == 'pull_request'
