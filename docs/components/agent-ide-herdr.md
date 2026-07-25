@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/設計プレビューを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman]
-timestamp: 2026-07-24T00:00:00Z
+timestamp: 2026-07-26T00:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -77,6 +77,19 @@ env 注入・フックの内容は**プラグインにとって不透明**（Orc
 
 `session/list`（O→P、`pane_control` capability。[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）は `doctor` の孤児 pane 検出のための**自分の所有物の列挙**: herdr の `pane.list`（本プラグイン初使用）を呼び、`label` が **`totsuka ` で始まる pane だけ**を返す。この label フィルタが所有権境界 — herdr はユーザーが手で開いた pane も持ち、それを列挙・解放候補にしてはならない。label は `dispatch` が `workspace.create` に設定する `totsuka {task.id}`（`task.id` はプロトコル `Task.id` = **source task id**。Slack のスレッドキー等の文字列で、orchestrator DB の行 id ではない）で、doctor はこの source task id を `source_task_id` と文字列照合して DB と突き合わせる。返す `session_id` は pane_id + **空 agent_session** の縮退形（`pane.list` は中の Claude セッションを知らないが、`SessionHandle::decode` は bare 形式を受け付け `session/release` は pane さえ分かれば良い）。label / cwd は pane record から取れる範囲でそのまま添える。
 
+# エラー写像 — `SESSION_UNRESUMABLE`（#261, 0.2.4）
+
+herdr 固有のエラー語彙を**プロトコルの語彙へ翻訳するのはこのプラグインの責務**である。herdr は `agent_not_found` と言い、プロトコルは「そのセッションは再開できない」と言う。Orchestrator は後者だけを見て `resume_session_id` なしで 1 回だけ再送する（[orchestrator-core](/components/orchestrator-core.md) #259）ので、マルチプレクサや `--resume` というフラグの存在を知らずに済む（#196 でツール知識を追い出した設計を保つ）。将来 herdr 以外の agent プラグインが増えても、同じ写像責務をそれぞれが負えば core は無改修で動く。
+
+判定条件は**意図的に狭い**（`resume_failure`）:
+
+- `agent.start` が成功した**後**の失敗に限る。そもそも起動していない pane が resume のせいで死ぬことはなく、それは herdr 側の問題として自分のエラーコードのまま返す
+- pane が**消えた**場合に限る（`is_missing()` = `pane_not_found` / `agent_not_found` / `not_found`）。これは実機で観測したバグそのものの形で、`claude --resume <消えた id>` が「該当セッション無し」で即終了し pane ごと落ちた結果 herdr が `agent_not_found` を返していた
+
+厳密にはヒューリスティック（即死の原因が resume だと断定はできない）だが、**誤検知の代償は resume なしの起動 1 回**に限られる。逆に条件を広げる（例: pane は生きているがプロンプトが着弾しない `gave_up` 系も含める）と、単に遅いだけの CLI に対して resume を捨てることになり、**resume が守るはずだった会話文脈を落とす**——狭さはこの損失を避けるためであって、無駄な起動を惜しんでいるのではない。
+
+なお `SESSION_UNRESUMABLE` を返す側は「再送が成功しうる状態」を残す義務がある（プロトコルの契約）。dispatch 失敗時に `abandon` が workspace を畳んでいるため、この条件は既に満たされている。
+
 # capabilities（F-33）
 
 manifest（`plugins/agent-ide-herdr/plugin.toml`）と `initialize` 応答で `kind = agent_ide`・`plan_mode` / `design_preview` / `pane_control` / `state_stream` に加え、**0.1.3 で `resume_session`（`--resume` セッション再開）/ `diagnostics_snapshot`（`diagnostics/snapshot`）**を宣言する（両者は一致させる）。
@@ -88,7 +101,7 @@ manifest（`plugins/agent-ide-herdr/plugin.toml`）と `initialize` 応答で `k
 # テスト
 
 - 状態写像・復帰ハンドル・`squash_ws`・プロンプト末尾マーカー・exit 分類は純関数として単体テスト。
-- **実 Unix ソケットの fake herdr サーバ**に対する結合テスト（`tests/integration.rs`）。fake は実機を模す: **応答後に接続を閉じる**接続モデル、`{event, data}` 封筒（**ドット/アンダースコア混在**の実イベント名）、そして**入力に反応できるまで `agent.send` / Enter を落とす CLI**（= 実機の起動レース）。dispatch がその race を自己修正して完走すること・始動しない CLI では**エラーで失敗する**こと・**フック env が `workspace.create`/`agent.start` に乗り `--settings`/`--resume` が argv に入ること**・**`pane.agent_status_changed` を送っても通知が出ないこと（縮退の固定化）**・`pane.exited` 非 0/コード無し→`Failed`・clean exit（0）は通知なし・`diagnostics/snapshot` の正常/pane 消失（`text: null`）両応答・**`session/focus` のフォーカスチェーン（`pane.get` 先行 + workspace→tab→pane の順序と params）と pane 消失（`focused:false`・フォーカス呼び出しゼロ）**・**`session/release` の各分岐（ctrl+c を送らず close 対を送る正常系・`expect_cwd`/`expect_label` 不一致で両 close をスキップ・`cwd` 欠落時の degrade-open・pane 消失で `released:false` かつ close ゼロ）**・他 pane の replay と close 通知を無視すること・`id:""` エラーの即時相関・session/attach の成功と pane 消失（`pane_not_found`→`attached:false`）・`config/validate` の疎通（ping）を検証。
+- **実 Unix ソケットの fake herdr サーバ**に対する結合テスト（`tests/integration.rs`）。fake は実機を模す: **応答後に接続を閉じる**接続モデル、`{event, data}` 封筒（**ドット/アンダースコア混在**の実イベント名）、そして**入力に反応できるまで `agent.send` / Enter を落とす CLI**（= 実機の起動レース）。dispatch がその race を自己修正して完走すること・始動しない CLI では**エラーで失敗する**こと・**フック env が `workspace.create`/`agent.start` に乗り `--settings`/`--resume` が argv に入ること**・**`pane.agent_status_changed` を送っても通知が出ないこと（縮退の固定化）**・`pane.exited` 非 0/コード無し→`Failed`・clean exit（0）は通知なし・`diagnostics/snapshot` の正常/pane 消失（`text: null`）両応答・**`session/focus` のフォーカスチェーン（`pane.get` 先行 + workspace→tab→pane の順序と params）と pane 消失（`focused:false`・フォーカス呼び出しゼロ）**・**`session/release` の各分岐（ctrl+c を送らず close 対を送る正常系・`expect_cwd`/`expect_label` 不一致で両 close をスキップ・`cwd` 欠落時の degrade-open・pane 消失で `released:false` かつ close ゼロ）**・他 pane の replay と close 通知を無視すること・`id:""` エラーの即時相関・session/attach の成功と pane 消失（`pane_not_found`→`attached:false`）・`config/validate` の疎通（ping）を検証。**#261 で `SESSION_UNRESUMABLE` 写像の 3 分岐**（resume 指定 + pane 消失 → `-32006`／resume なし + pane 消失 → 従来の `-32603`／resume 指定 + pane 生存の別エラー → `-32603`）を固定した — 後ろ 2 本は「新コードを返しすぎない」ための負の固定で、写像が広がると会話文脈を落とす。
 - **実機手動チェック**（受け入れ #2）: 実 herdr + 実 Claude Code で `--settings` 付き pane 起動 → フック発火 → env（`TOTSUKA_JOB_ID`）がフックスクリプトから見えること（#123 検収環境）は issue #139 のコメントにチェックリストとして整理。
 
 # 依存

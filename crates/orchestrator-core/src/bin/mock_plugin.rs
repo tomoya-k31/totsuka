@@ -16,7 +16,9 @@
 //!   worktree so the pull_request output policy has something to push;
 //!   `"dirty_on_dispatch": true` leaves an uncommitted file so cleanup's
 //!   data-loss guard (F-23 DirtySkipped) is exercisable;
-//!   `"crash_on_dispatch": true` exits mid-dispatch (crash isolation, §5.3).
+//!   `"crash_on_dispatch": true` exits mid-dispatch (crash isolation, §5.3);
+//!   `"dispatch_error": { code, message, only_when_resuming }` answers with an
+//!   arbitrary JSON-RPC error instead (see `forces_dispatch_error`).
 //! - `session/attach` → `attached: false` if the session id contains `gone`,
 //!   otherwise `attached: true` with a state chosen from the id (`waiting`,
 //!   `done`, `fail`, else `running`) so recovery paths are testable (#57).
@@ -143,6 +145,16 @@ fn main() {
             "task/update_status" | "result/publish" => {
                 record(&config, method, &params);
                 Response::result(request_id(&id), Value::Null)
+            }
+            // `dispatch_error` (#261): answer with an arbitrary JSON-RPC error
+            // instead of a session id — the only way to drive the
+            // orchestrator's *code-specific* dispatch paths from a test. The
+            // attempt is still recorded, because what those tests assert is the
+            // sequence (a failed dispatch with `resume_session_id`, then the
+            // retry without it).
+            "task/dispatch" if forces_dispatch_error(&config, &params) => {
+                record_to(config.get("dispatch_log"), "task/dispatch", &params);
+                Response::error(request_id(&id), forced_dispatch_error(&config))
             }
             "task/dispatch" => {
                 // Record the dispatch params (job_id / hook launch spec) so
@@ -455,6 +467,46 @@ fn post_uds(_endpoint: &str, _token: Option<&str>, _body: &str) -> std::io::Resu
         std::io::ErrorKind::Unsupported,
         "UDS hook POST is only supported on Unix",
     ))
+}
+
+/// Whether this `task/dispatch` should be answered with a canned error
+/// (`dispatch_error` in the init config).
+///
+/// Config shape (all fields optional):
+/// ```json
+/// { "dispatch_error": {
+///     "code": -32006,                 // default -32603 (INTERNAL_ERROR)
+///     "message": "session is gone",
+///     "only_when_resuming": true      // default false = fail every dispatch
+///   } }
+/// ```
+///
+/// `only_when_resuming` is what makes the orchestrator's `SESSION_UNRESUMABLE`
+/// retry testable (#242/#261): the attempt carrying `resume_session_id` fails,
+/// and the retry — which names no session — falls through to the normal
+/// dispatch and succeeds.
+fn forces_dispatch_error(config: &Value, params: &Value) -> bool {
+    let Some(spec) = config.get("dispatch_error") else {
+        return false;
+    };
+    let only_when_resuming = spec
+        .get("only_when_resuming")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    !only_when_resuming || params.get("resume_session_id").is_some()
+}
+
+/// The error [`forces_dispatch_error`] asked for.
+fn forced_dispatch_error(config: &Value) -> Error {
+    let field = |key: &str| config.get("dispatch_error").and_then(|s| s.get(key));
+    Error::new(
+        field("code")
+            .and_then(Value::as_i64)
+            .unwrap_or(error_code::INTERNAL_ERROR),
+        field("message")
+            .and_then(Value::as_str)
+            .unwrap_or("mock plugin was configured to fail this dispatch"),
+    )
 }
 
 /// Append `{"method", "params"}` to the config's `notify_log` file, if set —
