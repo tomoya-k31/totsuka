@@ -11,9 +11,11 @@
 //!   the error log, so the reply is never silently lost;
 //! - a failed approval send keeps the draft `Pending` and tells the operator
 //!   via an ephemeral notice, so the button can simply be pressed again;
-//! - stale buttons (restart, TTL, eviction) degrade to an "expired" notice,
-//!   and non-`Pending` drafts to an "already handled" notice — the
-//!   double-send guard.
+//! - stale buttons (restart, TTL, eviction) degrade to an "expired" notice —
+//!   posted inside the original mention thread when the button value carries
+//!   the thread coordinates (#121), at the pressed surface otherwise — and
+//!   non-`Pending` drafts to an "already handled" notice — the double-send
+//!   guard.
 
 use serde_json::{Value, json};
 
@@ -138,26 +140,57 @@ pub async fn publish_draft<T: SlackTransport>(
     Ok(())
 }
 
-/// An approve/reject `block_actions` press (`value` = draft id).
+/// An approve/reject `block_actions` press (`value` = [`button_value`] JSON,
+/// or a bare draft id from a pre-#121 button).
 pub async fn handle_approval_action<T: SlackTransport>(
     api: &SlackApi<T>,
     state: &SharedState,
-    source_name: &str,
+    config: &SlackConfig,
     payload: &Value,
     action_id: &str,
-    draft_id: &str,
+    value: &str,
     response_url: Option<&str>,
 ) {
+    let (draft_id, coords) = parse_button_value(value);
+    let draft_id = draft_id.as_str();
     let Some(draft) = state.draft(draft_id) else {
         // Restart, TTL expiry, or eviction: the button outlived its draft.
         tracing::info!(draft_id, action_id, "button pressed for an unknown draft");
-        notice(
-            api,
-            response_url,
-            "この下書きは期限切れです（再起動などで失われた可能性があります）。\
-             必要なら新しいメンションから再実行してください。",
-        )
-        .await;
+        let text = "この下書きは期限切れです（再起動などで失われた可能性があります）。\
+                    必要なら新しいメンションから再実行してください。";
+        let mut thread_notified = false;
+        if let Some((channel, ts)) = &coords {
+            // #121: answer inside the original mention thread, where the
+            // conversation lives — not only at the surface the press came from.
+            let posted = api
+                .chat_post_ephemeral(&PostEphemeral {
+                    channel,
+                    user: &config.target_user_id,
+                    text,
+                    thread_ts: Some(ts),
+                    blocks: None,
+                })
+                .await;
+            match posted {
+                Ok(()) => thread_notified = true,
+                Err(e) => tracing::warn!(draft_id, error = %e, "could not post the expiry \
+                     notice into the thread; falling back to the pressed surface"),
+            }
+        }
+        if !thread_notified {
+            // Old-format value (no coordinates) or the thread post failed.
+            notice(api, response_url, text).await;
+        } else if press_channel(payload) != coords.as_ref().map(|(c, _)| c.as_str()) {
+            // Pressed away from the thread (the self-DM record): without this
+            // the press would look dead there, since the ephemeral above is
+            // only visible inside the thread.
+            notice(
+                api,
+                response_url,
+                "この下書きは期限切れです。元のスレッドに案内を投稿しました。",
+            )
+            .await;
+        }
         return;
     };
     if draft.status != DraftStatus::Pending {
@@ -222,7 +255,7 @@ pub async fn handle_approval_action<T: SlackTransport>(
     // instead of erasing the outcome — otherwise a reject would leave no trace
     // anywhere.
     let finalized = Draft { status, ..draft };
-    let blocks = draft_blocks(&finalized, draft_id, source_name);
+    let blocks = draft_blocks(&finalized, draft_id, &config.source_name);
     let pressed_in_dm = press_channel(payload) == state.self_dm_channel().as_deref();
     let ephemeral_is_sole_surface = finalized.dm_ts.is_none();
     if let Some(url) = response_url {
@@ -259,6 +292,32 @@ pub async fn handle_approval_action<T: SlackTransport>(
             tracing::warn!(draft_id, error = %e, "could not update the self-DM draft record");
         }
     }
+}
+
+/// The approve/reject button `value`: the draft id plus the mention thread's
+/// coordinates, so a stale press can still be answered inside that thread
+/// (#121 — the draft itself may be long gone by press time).
+fn button_value(draft_id: &str, draft: &Draft) -> String {
+    json!({ "d": draft_id, "c": draft.channel, "ts": draft.reply_ts }).to_string()
+}
+
+/// Parse a button `value` into `(draft_id, thread coordinates)`. Pre-#121
+/// buttons carry the bare draft id (they outlive deploys on old messages),
+/// so anything that isn't `{"d": …}` JSON is taken as a draft id verbatim.
+fn parse_button_value(value: &str) -> (String, Option<(String, String)>) {
+    if let Ok(parsed) = serde_json::from_str::<Value>(value)
+        && let Some(d) = parsed.get("d").and_then(Value::as_str)
+    {
+        let coords = match (
+            parsed.get("c").and_then(Value::as_str),
+            parsed.get("ts").and_then(Value::as_str),
+        ) {
+            (Some(c), Some(ts)) => Some((c.to_string(), ts.to_string())),
+            _ => None,
+        };
+        return (d.to_string(), coords);
+    }
+    (value.to_string(), None)
 }
 
 /// The channel a `block_actions` press happened in.
@@ -322,7 +381,7 @@ fn draft_blocks(draft: &Draft, draft_id: &str, source_name: &str) -> Value {
                     "action_id": "approve_reply",
                     "style": "primary",
                     "text": { "type": "plain_text", "text": "承認して返信" },
-                    "value": draft_id,
+                    "value": button_value(draft_id, draft),
                     "confirm": {
                         "title": { "type": "plain_text", "text": "返信を送信" },
                         "text": {
@@ -338,7 +397,7 @@ fn draft_blocks(draft: &Draft, draft_id: &str, source_name: &str) -> Value {
                     "action_id": "reject_reply",
                     "style": "danger",
                     "text": { "type": "plain_text", "text": "却下" },
-                    "value": draft_id,
+                    "value": button_value(draft_id, draft),
                 }
             ]
         })),
@@ -466,6 +525,48 @@ DEBUG: shutting down
         let clip = clipped(&long);
         assert!(clip.contains("省略"), "{clip}");
         assert!(clip.chars().count() < long.chars().count() + 40);
+    }
+
+    #[test]
+    fn button_value_round_trips_through_parse() {
+        let draft = Draft {
+            task_id: "C1:100.0".into(),
+            channel: "C1".into(),
+            reply_ts: "100.0".into(),
+            mention_ts: "100.0".into(),
+            sender_name: "sender".into(),
+            permalink: None,
+            text: "返信案".into(),
+            dm_ts: None,
+            status: DraftStatus::Pending,
+            created_at: std::time::SystemTime::now(),
+        };
+        let value = button_value("18f3-1", &draft);
+        assert_eq!(
+            parse_button_value(&value),
+            (
+                "18f3-1".to_string(),
+                Some(("C1".to_string(), "100.0".to_string()))
+            )
+        );
+    }
+
+    #[test]
+    fn parse_button_value_accepts_the_pre_121_bare_draft_id() {
+        assert_eq!(parse_button_value("ffff-1"), ("ffff-1".to_string(), None));
+        // JSON without "d" is not ours either: treat it as an opaque draft id.
+        assert_eq!(
+            parse_button_value(r#"{"task":"x"}"#),
+            (r#"{"task":"x"}"#.to_string(), None)
+        );
+    }
+
+    #[test]
+    fn parse_button_value_tolerates_missing_coordinates() {
+        assert_eq!(
+            parse_button_value(r#"{"d":"18f3-1","c":"C1"}"#),
+            ("18f3-1".to_string(), None)
+        );
     }
 
     #[test]

@@ -218,11 +218,15 @@ async fn publish_presents_the_draft_in_thread_and_self_dm() {
         "{blocks_text}"
     );
 
-    // Both buttons carry the same draft id; approve requires confirmation.
-    let (draft_id, approve, reject) = draft_buttons(&shared);
-    assert!(!draft_id.is_empty());
-    assert_eq!(reject["value"], json!(draft_id));
+    // Both buttons carry the same value; approve requires confirmation. The
+    // value embeds the thread coordinates next to the draft id (#121).
+    let (value, approve, reject) = draft_buttons(&shared);
+    assert_eq!(reject["value"], json!(value));
     assert!(approve["confirm"].is_object(), "{approve}");
+    let parsed: Value = serde_json::from_str(&value).expect("a JSON button value");
+    assert!(!parsed["d"].as_str().unwrap().is_empty(), "{parsed}");
+    assert_eq!(parsed["c"], "C1");
+    assert_eq!(parsed["ts"], "100.0");
 
     // Surface 2: the self-DM record, unfurling off.
     let messages = requests_for(&shared, "chat.postMessage");
@@ -230,7 +234,12 @@ async fn publish_presents_the_draft_in_thread_and_self_dm() {
     let body = messages[0].body.as_ref().unwrap();
     assert_eq!(body["channel"], "D_SELF");
     assert_eq!(body["unfurl_links"], false);
-    assert!(body["blocks"].to_string().contains(&draft_id));
+    assert!(
+        body["blocks"]
+            .to_string()
+            .contains(parsed["d"].as_str().unwrap()),
+        "the record carries the same draft id"
+    );
 }
 
 #[tokio::test]
@@ -528,7 +537,9 @@ async fn stale_button_press_gets_an_expiry_notice() {
     call(&mut srv, 1, "initialize", init_params()).await;
     let mut ws = accept_with_hello(&listener).await;
 
-    // A press whose draft nobody knows (e.g. after a restart).
+    // A press whose draft nobody knows, from a pre-#121 button: the bare
+    // draft-id value is a compatibility contract (old buttons outlive
+    // deploys), so this test pins it.
     send_and_await_ack(
         &mut ws,
         block_actions_envelope("e1", "approve_reply", "ffff-1", "C1"),
@@ -541,9 +552,119 @@ async fn stale_button_press_gets_an_expiry_notice() {
     let text = posted[0].body["text"].as_str().unwrap();
     assert!(text.contains("期限切れ"), "{text}");
     assert!(
+        requests_for(&shared, "chat.postEphemeral").is_empty(),
+        "no coordinates in the old format → nowhere to post a thread notice"
+    );
+    assert!(
         requests_for(&shared, "chat.postMessage").is_empty(),
         "nothing is ever sent for a stale press"
     );
+}
+
+#[tokio::test]
+async fn stale_press_with_coordinates_notifies_the_original_thread() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    let (mut srv, _harness) = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+    let mut ws = accept_with_hello(&listener).await;
+
+    // A stale press from a #121 button: the value carries the thread
+    // coordinates, so the notice lands inside the original mention thread.
+    let value = json!({ "d": "ffff-1", "c": "C1", "ts": "100.0" }).to_string();
+    send_and_await_ack(
+        &mut ws,
+        block_actions_envelope("e1", "approve_reply", &value, "C1"),
+    )
+    .await;
+    wait_until("the in-thread expiry notice", || {
+        !requests_for(&shared, "chat.postEphemeral").is_empty()
+    })
+    .await;
+
+    let ephemerals = requests_for(&shared, "chat.postEphemeral");
+    let body = ephemerals[0].body.as_ref().unwrap();
+    assert_eq!(body["channel"], "C1");
+    assert_eq!(body["user"], "U_ME");
+    assert_eq!(body["thread_ts"], "100.0");
+    let text = body["text"].as_str().unwrap();
+    assert!(text.contains("期限切れ"), "{text}");
+    assert!(text.contains("メンション"), "the re-run guidance: {text}");
+    // Pressed inside the thread itself → the ephemeral above already sits at
+    // the pressed surface; no extra response_url notice.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(shared.posted_urls().is_empty());
+    assert!(
+        requests_for(&shared, "chat.postMessage").is_empty(),
+        "nothing is ever sent for a stale press"
+    );
+}
+
+#[tokio::test]
+async fn stale_press_falls_back_to_the_response_url_when_the_thread_post_fails() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api_without_ephemeral(&shared, &url);
+    shared.push_for(
+        "chat.postEphemeral",
+        Canned::Data(json!({ "ok": false, "error": "channel_not_found" })),
+    );
+    let (mut srv, _harness) = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+    let mut ws = accept_with_hello(&listener).await;
+
+    let value = json!({ "d": "ffff-1", "c": "C_GONE", "ts": "100.0" }).to_string();
+    send_and_await_ack(
+        &mut ws,
+        block_actions_envelope("e1", "approve_reply", &value, "C_GONE"),
+    )
+    .await;
+    wait_until("the fallback expiry notice", || {
+        !shared.posted_urls().is_empty()
+    })
+    .await;
+
+    // The thread post was attempted, failed, and degraded to the pre-#121
+    // response_url notice.
+    assert_eq!(requests_for(&shared, "chat.postEphemeral").len(), 1);
+    let posted = shared.posted_urls();
+    assert_eq!(posted[0].body["replace_original"], false);
+    let text = posted[0].body["text"].as_str().unwrap();
+    assert!(text.contains("期限切れ"), "{text}");
+}
+
+#[tokio::test]
+async fn stale_press_in_the_dm_also_notices_the_pressed_surface() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    let (mut srv, _harness) = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+    let mut ws = accept_with_hello(&listener).await;
+
+    // Pressed on the self-DM record: the thread gets the guidance, and the
+    // DM gets a short notice so the button does not look dead there.
+    let value = json!({ "d": "ffff-1", "c": "C1", "ts": "100.0" }).to_string();
+    send_and_await_ack(
+        &mut ws,
+        block_actions_envelope("e1", "approve_reply", &value, "D_SELF"),
+    )
+    .await;
+    wait_until("the pressed-surface notice", || {
+        !shared.posted_urls().is_empty()
+    })
+    .await;
+
+    let ephemerals = requests_for(&shared, "chat.postEphemeral");
+    assert_eq!(ephemerals.len(), 1);
+    let body = ephemerals[0].body.as_ref().unwrap();
+    assert_eq!(body["channel"], "C1");
+    assert_eq!(body["thread_ts"], "100.0");
+    let posted = shared.posted_urls();
+    assert_eq!(posted[0].body["replace_original"], false);
+    let text = posted[0].body["text"].as_str().unwrap();
+    assert!(text.contains("元のスレッド"), "{text}");
 }
 
 #[tokio::test]
