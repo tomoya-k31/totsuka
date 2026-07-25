@@ -1,0 +1,9 @@
+{
+  "jsonrpc": "2.0",
+  "id": "lookup-3",
+  "method": "task/lookup",
+  "params": {
+    "source": "slack",
+    "task_id": "C0123456789:1718000000.000100"
+  }
+}

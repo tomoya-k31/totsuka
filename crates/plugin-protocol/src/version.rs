@@ -65,7 +65,17 @@ use semver::{Version, VersionReq};
 /// assembly so the AI tool (Claude/Codex/OpenCode) is selected per
 /// repo/workflow in core. Additive; `TaskDispatchParams.hook` is deprecated
 /// from this version (still sent) and removed at the next breaking bump.
-pub const PROTOCOL_VERSION: &str = "0.2.3";
+///
+/// 0.2.4: task identity becomes conversation identity (#242). `Task.id` is a
+/// *conversation*, `Task.message_key` identifies one delivery within it, the
+/// `task/lookup` RPC lets a source ask whether a conversation is already known
+/// before submitting to it, and
+/// [`SESSION_UNRESUMABLE`](crate::error_code::SESSION_UNRESUMABLE) lets an
+/// agent report an unusable session so the Orchestrator can retry without
+/// resuming. All additive: `message_key` absent means "one message = one
+/// task", `task/lookup` is optional for both sides, and the new error code is
+/// only ever returned, never required. `<0.3` manifests keep matching.
+pub const PROTOCOL_VERSION: &str = "0.2.4";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -89,7 +99,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 2, 3));
+        assert_eq!(protocol_version(), Version::new(0, 2, 4));
     }
 
     #[test]

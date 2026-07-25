@@ -210,6 +210,20 @@ pub mod error_code {
     /// The per-plugin in-flight `task/submit` budget is exhausted (0.1.6).
     /// Retryable with backoff, same contract as [`NOT_ACCEPTING`].
     pub const SUBMIT_OVERLOADED: i64 = -32005;
+    /// The session named by `resume_session_id` could not be resumed (0.2.4,
+    /// #242) — it is gone, expired, or otherwise unusable.
+    ///
+    /// The contract is deliberately about **the session**, not about any
+    /// backend's mechanism for resuming one: an agent plugin decides this from
+    /// what it can observe on its own side, so a different multiplexer or CLI
+    /// reports it the same way. Dispatching the *same* request without
+    /// `resume_session_id` is expected to succeed, and the Orchestrator retries
+    /// once that way — so a plugin returning this must leave nothing behind
+    /// that would make the retry fail.
+    ///
+    /// Not retryable as-is: re-sending the identical request would fail
+    /// identically.
+    pub const SESSION_UNRESUMABLE: i64 = -32006;
 }
 
 /// Encode a serializable message as one NDJSON line (no trailing newline).

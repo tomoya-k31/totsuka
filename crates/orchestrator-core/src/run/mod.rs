@@ -2361,6 +2361,7 @@ fn task_from_record(record: &TaskRecord) -> Task {
             url: record.url.clone(),
             assignee: None,
             thread_key: None,
+            message_key: None,
             instructions: None,
         })
 }
@@ -2593,6 +2594,7 @@ plan_cleanup = "keep_28d"
             url: Some("https://example.com".into()),
             assignee: Some("me".into()),
             thread_key: None,
+            message_key: None,
             instructions: None,
         };
         let db = StateDb::open_in_memory().unwrap();

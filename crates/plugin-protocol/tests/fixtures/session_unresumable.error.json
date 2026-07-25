@@ -1,0 +1,8 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dispatch-9",
+  "error": {
+    "code": -32006,
+    "message": "session 6e3515d5-f1a1-4165-8a82-9d76a46a8a33 cannot be resumed → dispatch again without resume_session_id"
+  }
+}
