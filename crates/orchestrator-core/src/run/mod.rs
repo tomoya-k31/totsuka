@@ -73,7 +73,7 @@ use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_
 use crate::tool::{LaunchInputs, ToolProfile};
 use crate::worktree::{
     CleanupDecision, CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE,
-    WorktreeManager, default_location_template,
+    WorktreeError, WorktreeManager, default_location_template,
 };
 
 /// Lines of a repository README shown to the LLM as selection context (F-11).
@@ -1171,8 +1171,17 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
 
         // Worktree: reuse a recorded one (retry without a live session), else
         // create fresh (F-20–F-22).
+        //
+        // The recorded path must still be **on disk** (#254). Cleanup removes
+        // it at completion under `plan_cleanup = "immediate"`, and an operator
+        // may remove it by hand, so a recorded path is not evidence of a usable
+        // worktree; handing a missing directory to the agent fails the dispatch
+        // for a reason the operator cannot act on. Re-creating renders the same
+        // branch and path (both are pure functions of source + task id), and
+        // the agent session survives it: Claude Code keys sessions by working
+        // directory, storing them outside the worktree.
         let worktree_path = match (&record.worktree_path, &record.branch) {
-            (Some(path), Some(_)) => PathBuf::from(path),
+            (Some(path), Some(_)) if Path::new(path).is_dir() => PathBuf::from(path),
             _ => {
                 let location_template = repo
                     .worktree_location
@@ -1193,6 +1202,27 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         let path = worktree.path.display().to_string();
                         self.db.set_worktree(record.id, &path, &worktree.branch)?;
                         worktree.path
+                    }
+                    // `AlreadyExists` means the rendered path is claimed by a
+                    // worktree this task does not own — a leftover from an
+                    // interrupted run, or an operator's own checkout. Say so
+                    // and name the remedy instead of surfacing raw git stderr:
+                    // re-creation (#254) already absorbs every case totsuka
+                    // caused itself, so reaching here needs a human.
+                    Err(WorktreeError::AlreadyExists { branch, path }) => {
+                        return self
+                            .fail_dispatch(
+                                &record,
+                                format!(
+                                    "`{}` is already occupied (branch `{branch}`) but is not \
+                                     recorded for this task; remove it — `git worktree remove {}`, \
+                                     or the cleanup `totsuka doctor` offers, or plain `rm -rf` if \
+                                     it is not a worktree at all — and retry",
+                                    path.display(),
+                                    path.display(),
+                                ),
+                            )
+                            .await;
                     }
                     Err(e) => {
                         return self.fail_dispatch(&record, e.to_string()).await;
