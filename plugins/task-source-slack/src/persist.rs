@@ -30,9 +30,23 @@ fn xdg_state_dir(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
 /// This plugin instance's draft-store file:
 /// `{state_dir}/plugins/{source_name}/drafts.json`, where `{state_dir}` is
 /// the `state_dir` config override (tests) or the XDG default. `None` means
-/// no state directory could be resolved — the caller degrades to an
+/// no persistable path could be resolved — the caller degrades to an
 /// in-memory store rather than failing startup.
 pub fn drafts_path(state_dir: Option<&Path>, source_name: &str) -> Option<PathBuf> {
+    // `source_name` is operator-supplied config; as defense in depth, refuse
+    // anything that is not a single plain path segment so the store can
+    // never land outside `{state_dir}/plugins/` (e.g. `..`, `a/b`).
+    if source_name.is_empty()
+        || source_name == "."
+        || source_name == ".."
+        || source_name.contains(['/', '\\'])
+    {
+        tracing::warn!(
+            source_name,
+            "source_name is not a plain directory name; the draft store stays in-memory"
+        );
+        return None;
+    }
     let base = match state_dir {
         Some(dir) => dir.to_path_buf(),
         None => xdg_state_dir(|key| std::env::var(key).ok())?,
@@ -112,6 +126,16 @@ mod tests {
             path,
             PathBuf::from("/custom/state/plugins/slack/drafts.json")
         );
+    }
+
+    #[test]
+    fn drafts_path_rejects_non_segment_source_names() {
+        // Defense in depth: a source_name that is not a single plain path
+        // segment must not resolve (the store degrades to in-memory).
+        let base = Some(Path::new("/custom/state"));
+        for bad in ["", ".", "..", "a/b", "a\\b", "../escape"] {
+            assert_eq!(drafts_path(base, bad), None, "{bad:?} must be refused");
+        }
     }
 
     #[test]

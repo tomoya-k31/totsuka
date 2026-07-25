@@ -265,9 +265,12 @@ where
         let drafts = match persist::drafts_path(config.state_dir.as_deref(), &config.source_name) {
             Some(path) => DraftStore::load(path),
             None => {
+                // Unresolvable state dir (HOME/XDG_STATE_HOME unset) or a
+                // source_name that is not a plain directory name — the
+                // specific cause was already logged by `drafts_path`.
                 tracing::warn!(
-                    "no state directory could be resolved (HOME and XDG_STATE_HOME unset); \
-                     drafts are in-memory only and their buttons will not survive a restart"
+                    "no persistable draft-store path; drafts are in-memory only and their \
+                     buttons will not survive a restart"
                 );
                 DraftStore::default()
             }
