@@ -944,6 +944,68 @@ impl StateDb {
         Ok((TaskMessageOutcome::New, reopened))
     }
 
+    /// Requeue a task **and** put the batch of messages its failed run was
+    /// given back on the queue, in one transaction (#242).
+    ///
+    /// Without the requeue, a retry after the agent failed would dispatch with
+    /// nothing to say: the messages were stamped processed when they were
+    /// handed over, and `task retry` is precisely the case where that handover
+    /// did not work out. Atomic for the same reason as
+    /// [`append_task_message_reopening`](Self::append_task_message_reopening) —
+    /// a task requeued without its messages is a dispatch with an empty
+    /// prompt, and nothing would ever notice.
+    ///
+    /// A conversation that *already* has unsent messages gets none back: the
+    /// run being retried never received a batch (it died before dispatch), so
+    /// there is nothing to take back — and the batch before it was answered
+    /// already. Reviving that one would replay an answered instruction
+    /// alongside the new one.
+    ///
+    /// Returns the new state and how many messages came back.
+    pub fn retry_task(
+        &self,
+        id: i64,
+        detail: Option<serde_json::Value>,
+    ) -> Result<(TaskState, usize), StateError> {
+        let now = self.clock.now_rfc3339();
+        let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
+        let tx = self.conn.unchecked_transaction()?;
+        let to = apply_event_tx(&tx, &now, id, TaskEvent::Retry, detail.as_deref())?;
+        let already_queued: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM task_messages WHERE task_id = ?1 AND processed_at IS NULL",
+            params![id],
+            |r| r.get(0),
+        )?;
+        let requeued = if already_queued > 0 {
+            0
+        } else {
+            unprocess_last_batch_tx(&tx, id)?
+        };
+        tx.commit()?;
+        Ok((to, requeued))
+    }
+
+    /// Ids of tasks in `state` that still have messages nobody has sent
+    /// (#242).
+    ///
+    /// One query rather than "list the tasks, then ask each about its ledger":
+    /// the run loop calls this on every 200 ms tick, and the number of
+    /// finished conversations only grows.
+    pub fn conversations_with_unsent_messages(
+        &self,
+        state: TaskState,
+    ) -> Result<Vec<i64>, StateError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT t.id FROM tasks t \
+             JOIN task_messages m ON m.task_id = t.id \
+             WHERE t.state = ?1 AND m.processed_at IS NULL \
+             ORDER BY t.id",
+        )?;
+        let rows = stmt.query_map(params![state.as_str()], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(StateError::from)
+    }
+
     /// The conversation's undispatched messages, oldest first — its queue.
     ///
     /// Ordered by `id` rather than `received_at`: arrival order is what the
@@ -1000,16 +1062,7 @@ impl StateDb {
     /// requeued together; that needs a clock that did not advance between
     /// dispatches, which only a frozen test clock does.
     pub fn unprocess_last_batch(&self, task_id: i64) -> Result<usize, StateError> {
-        let changed = self.conn.execute(
-            "UPDATE task_messages SET processed_at = NULL \
-             WHERE task_id = ?1 AND processed_at = ( \
-                 SELECT processed_at FROM task_messages \
-                 WHERE task_id = ?1 AND processed_at IS NOT NULL \
-                 ORDER BY id DESC LIMIT 1 \
-             )",
-            params![task_id],
-        )?;
-        Ok(changed)
+        unprocess_last_batch_tx(&self.conn, task_id)
     }
 
     /// Number of consecutive `UNKNOWN` stops at the tail of a task's stop
@@ -1080,32 +1133,6 @@ impl StateDb {
         let mut rows = stmt.query_map(params![tool_session_id], row_to_session)?;
         rows.next().transpose().map_err(StateError::from)
     }
-
-    /// The latest *prior* task in the same conversation thread (Slack resume): a
-    /// `thread_key` match within `workflow`, newest by id, **excluding**
-    /// `exclude_id` (E-09).
-    ///
-    /// The caller dispatching a follow-up passes its own task id as
-    /// `exclude_id`: the follow-up is itself already ingested (its row exists
-    /// and is the newest match), so without the exclusion "newest in thread"
-    /// would resolve to the follow-up itself rather than the prior task whose
-    /// session it must resume. Matching on `workflow` too keeps two workflows
-    /// that happen to share a thread key from mis-linking.
-    pub fn find_by_thread_key(
-        &self,
-        workflow: &str,
-        thread_key: &str,
-        exclude_id: i64,
-    ) -> Result<Option<TaskRecord>, StateError> {
-        let sql = format!(
-            "SELECT {TASK_COLUMNS} FROM tasks \
-             WHERE workflow = ?1 AND thread_key = ?2 AND id != ?3 \
-             ORDER BY id DESC LIMIT 1"
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(params![workflow, thread_key, exclude_id], row_to_task)?;
-        rows.next().transpose().map_err(StateError::from)
-    }
 }
 
 /// Map a `tasks` row (in [`TASK_COLUMNS`] order) to a [`TaskRecord`].
@@ -1152,6 +1179,20 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         created_at: row.get("created_at")?,
         tool_session_id: row.get("tool_session_id")?,
     })
+}
+
+/// Put the newest dispatched batch of a conversation back on the queue.
+/// See [`StateDb::unprocess_last_batch`] for why the batch is found by id.
+fn unprocess_last_batch_tx(conn: &Connection, task_id: i64) -> Result<usize, StateError> {
+    Ok(conn.execute(
+        "UPDATE task_messages SET processed_at = NULL \
+         WHERE task_id = ?1 AND processed_at = ( \
+             SELECT processed_at FROM task_messages \
+             WHERE task_id = ?1 AND processed_at IS NOT NULL \
+             ORDER BY id DESC LIMIT 1 \
+         )",
+        params![task_id],
+    )?)
 }
 
 /// Insert one ledger row, ignoring a `(task_id, message_key)` collision.
@@ -2233,75 +2274,6 @@ mod tests {
         );
         // Deleting a missing row is a no-op (best-effort rollback), not an error.
         db.delete_session(row).unwrap();
-    }
-
-    #[test]
-    fn find_by_thread_key_returns_latest_in_thread() {
-        let db = StateDb::open_in_memory().unwrap();
-        let mk = |sid: &str, thread: Option<&str>, wf: &str| NewTask {
-            source: "slack".into(),
-            source_task_id: sid.into(),
-            workflow: wf.into(),
-            mode: "implement".into(),
-            repo: None,
-            priority: 0,
-            title: "t".into(),
-            url: None,
-            source_payload: None,
-            thread_key: thread.map(str::to_string),
-            last_signal_at: None,
-        };
-        let first = db
-            .upsert_task(&mk("m1", Some("C1:100"), "implement"))
-            .unwrap();
-        let second = db
-            .upsert_task(&mk("m2", Some("C1:100"), "implement"))
-            .unwrap();
-        let third = db
-            .upsert_task(&mk("m5", Some("C1:100"), "implement"))
-            .unwrap();
-        db.upsert_task(&mk("m3", Some("C2:200"), "implement"))
-            .unwrap(); // other thread
-        db.upsert_task(&mk("m4", Some("C1:100"), "plan")).unwrap(); // other workflow
-
-        // Dispatching `third`: the newest *other* task in the thread wins.
-        let found = db
-            .find_by_thread_key("implement", "C1:100", third)
-            .unwrap()
-            .unwrap();
-        assert_eq!(found.id, second, "latest prior (max id, excl. self) wins");
-        assert_ne!(found.id, first);
-        assert_ne!(found.id, third);
-
-        // Excluding `second` still returns the newest *remaining* match
-        // (`third`), not an arbitrary older one — self-exclusion only drops the
-        // one row.
-        assert_eq!(
-            db.find_by_thread_key("implement", "C1:100", second)
-                .unwrap()
-                .unwrap()
-                .id,
-            third,
-        );
-
-        // A thread whose only task is the one being dispatched -> None (nothing
-        // prior to resume): self-exclusion, not a spurious self-match.
-        let solo = db
-            .upsert_task(&mk("solo", Some("C3:300"), "implement"))
-            .unwrap();
-        assert!(
-            db.find_by_thread_key("implement", "C3:300", solo)
-                .unwrap()
-                .is_none(),
-            "self-exclusion: the sole task in a thread has no prior"
-        );
-
-        // No match -> None (unknown thread, and a NULL thread_key never matches).
-        assert!(
-            db.find_by_thread_key("implement", "C9:999", third)
-                .unwrap()
-                .is_none()
-        );
     }
 
     #[test]

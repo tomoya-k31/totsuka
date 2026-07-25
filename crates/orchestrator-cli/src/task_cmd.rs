@@ -263,14 +263,18 @@ fn retry(cx: &Cx, id: i64) -> Result<(), CliError> {
         };
         return Err(format!("task {id} is {} → {action}", task.state).into());
     }
-    db.apply_event(
+    // `retry_task`, not `apply_event(Retry)`: requeueing the task without the
+    // messages its failed run was given would dispatch an empty prompt (#242).
+    let (_, requeued) = db.retry_task(
         id,
-        TaskEvent::Retry,
         Some(serde_json::json!({ "kind": "cli", "command": "task retry" })),
     )?;
     println!(
         "task {id} re-queued → `totsuka run` dispatches it (reusing its worktree/session when possible)"
     );
+    if requeued > 0 {
+        println!("  {requeued} message(s) from the last dispatch will be sent again");
+    }
     Ok(())
 }
 

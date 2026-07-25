@@ -15,7 +15,7 @@ use orchestrator_core::adapters::clock::ManualClock;
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::OpenAiRouter;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
-use orchestrator_core::adapters::state_db::HookEventInsert;
+use orchestrator_core::adapters::state_db::{HookEventInsert, TaskMessageInsert};
 use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::signal::{
@@ -1572,22 +1572,50 @@ fn resume_settings(repo: &Path, base: &Path) -> EngineSettings {
     settings
 }
 
-/// Seed a prior task in `thread_key` with a recorded session, and return its id.
+/// Seed a conversation that has already run once and finished: a task, a
+/// delivered first message, a recorded session, and a terminal state — the
+/// shape a Slack thread has after its opening message was answered.
+///
 /// `tool_sid = Some` simulates the SessionStart hook having established the
-/// tool session id; `None` leaves it unestablished (pre-hook era). Driven to
-/// `Dispatched` so it is inert (never re-dispatched); the resume tests run on
-/// a clock frozen at [`T0`] and anchor the signal there, so the timeout sweep
-/// (`now - last == 0`) provably never escalates it (#174).
-fn seed_prior(db: &StateDb, source_task_id: &str, thread_key: &str, tool_sid: Option<&str>) -> i64 {
-    let mut nt = new_task(source_task_id, Some(T0));
-    nt.thread_key = Some(thread_key.to_string());
-    let id = db.upsert_task(&nt).unwrap();
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+/// tool session id; `None` leaves it unestablished (pre-hook era).
+fn seed_finished_conversation(db: &StateDb, source_task_id: &str, tool_sid: Option<&str>) -> i64 {
+    let id = db.upsert_task(&new_task(source_task_id, Some(T0))).unwrap();
+    db.append_task_message(&TaskMessageInsert {
+        task_id: id,
+        message_key: source_task_id.to_string(),
+        author: None,
+        body: "the opening message".to_string(),
+        url: None,
+        payload: "{}".to_string(),
+    })
+    .unwrap();
+    db.mark_messages_processed(id).unwrap();
     let row = db
         .record_session(id, "mock_agent", &format!("sess-{source_task_id}"))
         .unwrap();
     if let Some(sid) = tool_sid {
         db.set_tool_session_id(row, sid).unwrap();
+    }
+    // The earlier run left a worktree and branch recorded, as every real one
+    // does. That matters: `recovery::retry_plan` reads exactly
+    // (worktree_path, branch, session) and never the task's state, so a
+    // reopened conversation always *looks* reusable — the case a follow-up
+    // message must not be swallowed by (#242). The path is deliberately gone
+    // from disk, the state a cleaned-up worktree leaves behind; #254
+    // re-creates it.
+    db.set_worktree(
+        id,
+        &format!("/nonexistent/wt/agent-mock_src-{source_task_id}"),
+        &format!("agent/mock_src-{source_task_id}"),
+    )
+    .unwrap();
+    for event in [
+        TaskEvent::Dispatch,
+        TaskEvent::Start,
+        TaskEvent::BeginPublish,
+        TaskEvent::Complete,
+    ] {
+        db.apply_event(id, event, None).unwrap();
     }
     id
 }
@@ -1602,17 +1630,21 @@ fn last_dispatch_params(dispatch_log: &Path) -> serde_json::Value {
         .clone()
 }
 
-/// A fetched follow-up mention with the given id and thread key.
-fn follow_up(id: &str, thread_key: &str) -> serde_json::Value {
-    json!([{ "id": id, "source": "github", "title": "follow-up", "thread_key": thread_key }])
+/// A follow-up message *inside* an existing conversation: since #242 it
+/// carries the conversation's own id and a distinct `message_key`, so ingest
+/// reopens that task instead of creating a new one.
+fn follow_up(conversation_id: &str, message_key: &str) -> serde_json::Value {
+    json!([{
+        "id": conversation_id, "source": "github", "title": "follow-up",
+        "message_key": message_key, "body": "and one more thing",
+    }])
 }
 
 #[tokio::test]
-async fn second_task_in_thread_dispatches_with_resume_and_fresh_worktree() {
-    // ① Same thread_key, prior session established → dispatched WITH
-    // resume_session_id. And ⟨discarded-worktree acceptance⟩: the new task is
-    // a distinct row, so it always gets a fresh worktree — the prior's is never
-    // reused.
+async fn a_follow_up_message_reopens_the_conversation_and_resumes_its_session() {
+    // ① A second message in a finished conversation reopens *that task* and
+    // dispatches WITH `resume_session_id` — the session to resume is the
+    // task's own latest, not another task's (#242 supersedes #140's D-10).
     let base = scratch("resume_second");
     let repo = setup_repo(&base);
     let notify_log = base.join("notify.ndjson");
@@ -1620,9 +1652,10 @@ async fn second_task_in_thread_dispatches_with_resume_and_fresh_worktree() {
 
     let clock = manual_clock();
     let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
-    seed_prior(&db, "1", "C1:100", Some("cc-prior"));
+    let conversation = seed_finished_conversation(&db, "1", Some("cc-prior"));
 
-    let plugins = resume_plugins(follow_up("2", "C1:100"), &dispatch_log, &notify_log).await;
+    // The follow-up carries the conversation's own id (#242).
+    let plugins = resume_plugins(follow_up("1", "1:reply"), &dispatch_log, &notify_log).await;
     let mut engine = Engine::with_clock(
         db,
         resume_settings(&repo, &base),
@@ -1638,18 +1671,24 @@ async fn second_task_in_thread_dispatches_with_resume_and_fresh_worktree() {
     let params = last_dispatch_params(&dispatch_log);
     assert_eq!(
         params["resume_session_id"], "cc-prior",
-        "the follow-up resumes the prior task's Claude session"
+        "the reopened conversation resumes its own session"
     );
+    // The agent is asked only about the new message: the resumed session
+    // already holds everything before it.
+    assert_eq!(params["task"]["body"], "and one more thing");
 
-    // A fresh worktree was created for the new task (D-10: session reused, not
-    // the worktree).
+    // Still one task, not two — and it has a worktree on disk (re-created by
+    // #254 if the earlier run's was cleaned up).
+    let tasks = engine.db().list_tasks().unwrap();
+    assert_eq!(tasks.len(), 1, "a reply is the same conversation");
     let follow = engine
         .db()
-        .find_by_source("mock_src", "2")
+        .find_by_source("mock_src", "1")
         .unwrap()
         .unwrap();
-    let wt = follow.worktree_path.expect("a fresh worktree was recorded");
-    assert!(Path::new(&wt).exists(), "the fresh worktree exists on disk");
+    assert_eq!(follow.id, conversation);
+    let wt = follow.worktree_path.expect("a worktree was recorded");
+    assert!(Path::new(&wt).exists(), "the worktree exists on disk");
 
     engine.shutdown(GRACE).await;
     let _ = std::fs::remove_dir_all(&base);
@@ -1666,9 +1705,9 @@ async fn unestablished_prior_session_falls_back_to_fresh_dispatch() {
 
     let clock = manual_clock();
     let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
-    seed_prior(&db, "1", "C1:100", None); // session, but no claude id
+    seed_finished_conversation(&db, "1", None); // session, but no tool id
 
-    let plugins = resume_plugins(follow_up("2", "C1:100"), &dispatch_log, &notify_log).await;
+    let plugins = resume_plugins(follow_up("1", "1:reply"), &dispatch_log, &notify_log).await;
     let mut engine = Engine::with_clock(
         db,
         resume_settings(&repo, &base),
@@ -1692,9 +1731,9 @@ async fn unestablished_prior_session_falls_back_to_fresh_dispatch() {
 }
 
 #[tokio::test]
-async fn third_task_resumes_the_latest_session_in_the_thread() {
-    // ③ Three mentions in one thread: the 3rd resumes the 2nd's session
-    // (latest-wins), never the 1st's.
+async fn a_reopened_conversation_resumes_its_latest_session() {
+    // ③ A conversation dispatched more than once has several session rows;
+    // the reopen resumes the newest, never an earlier one.
     let base = scratch("resume_latest");
     let repo = setup_repo(&base);
     let notify_log = base.join("notify.ndjson");
@@ -1702,10 +1741,14 @@ async fn third_task_resumes_the_latest_session_in_the_thread() {
 
     let clock = manual_clock();
     let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
-    seed_prior(&db, "1", "C1:100", Some("cc-1"));
-    seed_prior(&db, "2", "C1:100", Some("cc-2"));
+    let conversation = seed_finished_conversation(&db, "1", Some("cc-1"));
+    // A second run of the same conversation left a newer session behind.
+    let newer = db
+        .record_session(conversation, "mock_agent", "sess-2")
+        .unwrap();
+    db.set_tool_session_id(newer, "cc-2").unwrap();
 
-    let plugins = resume_plugins(follow_up("3", "C1:100"), &dispatch_log, &notify_log).await;
+    let plugins = resume_plugins(follow_up("1", "1:reply"), &dispatch_log, &notify_log).await;
     let mut engine = Engine::with_clock(
         db,
         resume_settings(&repo, &base),
@@ -1721,7 +1764,7 @@ async fn third_task_resumes_the_latest_session_in_the_thread() {
     let params = last_dispatch_params(&dispatch_log);
     assert_eq!(
         params["resume_session_id"], "cc-2",
-        "the 3rd task resumes the most recent (2nd) session, not the 1st"
+        "the newest session wins, not the first one"
     );
 
     engine.shutdown(GRACE).await;
@@ -1729,8 +1772,11 @@ async fn third_task_resumes_the_latest_session_in_the_thread() {
 }
 
 #[tokio::test]
-async fn distinct_threads_do_not_cross_resume() {
-    // ④ A prior task in a *different* thread must not be resumed.
+async fn distinct_conversations_do_not_cross_resume() {
+    // ④ Another conversation's session is never resumed. Since #242 this is
+    // structural — the session is looked up on the task itself, and there is
+    // no cross-task search left to go wrong — so the test guards against
+    // reintroducing one.
     let base = scratch("resume_isolation");
     let repo = setup_repo(&base);
     let notify_log = base.join("notify.ndjson");
@@ -1738,10 +1784,10 @@ async fn distinct_threads_do_not_cross_resume() {
 
     let clock = manual_clock();
     let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
-    seed_prior(&db, "1", "C1:100", Some("cc-other-thread"));
+    seed_finished_conversation(&db, "1", Some("cc-other-conversation"));
 
-    // The follow-up is in a *different* thread (C2:999).
-    let plugins = resume_plugins(follow_up("2", "C2:999"), &dispatch_log, &notify_log).await;
+    // A message opening a *different* conversation.
+    let plugins = resume_plugins(follow_up("2", "2:first"), &dispatch_log, &notify_log).await;
     let mut engine = Engine::with_clock(
         db,
         resume_settings(&repo, &base),
@@ -1757,7 +1803,7 @@ async fn distinct_threads_do_not_cross_resume() {
     let params = last_dispatch_params(&dispatch_log);
     assert!(
         params.get("resume_session_id").is_none(),
-        "a different thread never cross-resumes: {params}"
+        "a different conversation never cross-resumes: {params}"
     );
 
     engine.shutdown(GRACE).await;
