@@ -24,8 +24,10 @@ use std::sync::Arc;
 use crate::config::{
     LlmConfig, RepoInfo, SlackConfig, default_confidence_threshold, static_config_errors,
 };
+use crate::draft::DraftStore;
 use crate::error::SlackError;
 use crate::llm::ChatTransport;
+use crate::persist;
 use crate::pipeline::{self, SharedState};
 use crate::slack_api::SlackApi;
 use crate::socket_mode::{self, SocketModeOptions};
@@ -256,9 +258,23 @@ where
             return Reply::respond(Response::error(id, Error::new(code, e.to_string())));
         }
 
+        // The draft store persists across restarts (#122) so approval
+        // buttons survive a `run --watch` restart. When no state directory
+        // can be resolved (HOME/XDG_STATE_HOME unset), degrade to the
+        // in-memory store instead of failing startup.
+        let drafts = match persist::drafts_path(config.state_dir.as_deref(), &config.source_name) {
+            Some(path) => DraftStore::load(path),
+            None => {
+                tracing::warn!(
+                    "no state directory could be resolved (HOME and XDG_STATE_HOME unset); \
+                     drafts are in-memory only and their buttons will not survive a restart"
+                );
+                DraftStore::default()
+            }
+        };
         // The resident runtime: Socket Mode reader → mention pipeline →
         // `task/submit` push (0.1.6).
-        let state = SharedState::default();
+        let state = SharedState::new(drafts);
         let mut runtime = Vec::new();
         if self.start_runtime {
             let (events, socket) =

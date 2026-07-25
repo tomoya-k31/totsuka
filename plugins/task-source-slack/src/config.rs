@@ -92,6 +92,10 @@ pub struct SlackConfig {
     /// Slack Web API base URL (overridable for tests).
     #[serde(default = "default_api_url")]
     pub api_url: String,
+    /// State-directory root for the persisted draft store (#122), replacing
+    /// `${XDG_STATE_HOME:-~/.local/state}/totsuka` (overridable for tests).
+    #[serde(default)]
+    pub state_dir: Option<std::path::PathBuf>,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,

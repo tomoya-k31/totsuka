@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use common::{
     Canned, FakeFactory, Shared, SubmitHarness, accept_with_hello, block_actions_envelope, call,
-    mention_envelope, send_and_await_ack, wait_until, ws_listener,
+    mention_envelope, scratch_state_dir, send_and_await_ack, wait_until, ws_listener,
 };
 use task_source_slack::server::Server;
 
@@ -32,6 +32,7 @@ fn init_params() -> Value {
     json!({
         "protocol_version": "0.1.0",
         "config": {
+            "state_dir": scratch_state_dir(),
             "app_token": "xapp-1-A1-test",
             "user_token": "xoxp-user-test",
             "target_user_id": "U_ME",
@@ -205,6 +206,7 @@ fn init_params_multi_repo() -> Value {
     json!({
         "protocol_version": "0.1.0",
         "config": {
+            "state_dir": scratch_state_dir(),
             "app_token": "xapp-1-A1-test",
             "user_token": "xoxp-user-test",
             "target_user_id": "U_ME",

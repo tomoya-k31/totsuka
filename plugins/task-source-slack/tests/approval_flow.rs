@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 
 use common::{
     Canned, FakeFactory, Recorded, Shared, SubmitHarness, accept_with_hello,
-    block_actions_envelope, call, mention_envelope, send_and_await_ack, wait_until, ws_listener,
+    block_actions_envelope, call, mention_envelope, scratch_state_dir, send_and_await_ack,
+    wait_until, ws_listener,
 };
 use task_source_slack::server::Server;
 
@@ -29,9 +30,16 @@ fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
 /// One-repo config: repository resolution short-circuits, so the only
 /// ephemeral in these tests is the draft presentation.
 fn init_params() -> Value {
+    init_params_in(&scratch_state_dir())
+}
+
+/// [`init_params`] with an explicit `state_dir`, for the tests that "restart"
+/// the plugin and must reload the same persisted draft store (#122).
+fn init_params_in(state_dir: &std::path::Path) -> Value {
     json!({
         "protocol_version": "0.1.0",
         "config": {
+            "state_dir": state_dir,
             "app_token": "xapp-1-A1-test",
             "user_token": "xoxp-user-test",
             "target_user_id": "U_ME",
@@ -411,6 +419,103 @@ async fn send_failure_keeps_the_draft_retryable() {
     assert_eq!(
         reply.body.as_ref().unwrap()["text"],
         expected_posted_reply()
+    );
+}
+
+#[tokio::test]
+async fn drafts_survive_a_restart() {
+    // #122 acceptance: present → restart → approve posts under the
+    // operator's name; and after yet another restart, a second press is
+    // still the double-send guard ("処理済み"), because Sent persisted too.
+    let state_dir = scratch_state_dir();
+
+    // ---- Run 1: publish the draft, then "crash" (drop the server). ----
+    let (listener, url) = ws_listener().await;
+    let shared1 = Shared::default();
+    canned_web_api(&shared1, &url);
+    shared1.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
+    );
+    let (mut srv1, mut harness1) = server(&shared1);
+    call(&mut srv1, 1, "initialize", init_params_in(&state_dir)).await;
+    let mut ws1 = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws1, mention_envelope("e1", "100.2")).await;
+    harness1.next_task().await;
+    call(
+        &mut srv1,
+        3,
+        "result/publish",
+        json!({ "task_id": "C1:100.2", "content": PUBLISHED_CONTENT, "format": "markdown" }),
+    )
+    .await;
+    let (draft_id, ..) = draft_buttons(&shared1);
+    drop(srv1); // the restart: runtime aborted, only drafts.json survives
+
+    // ---- Run 2: same state_dir — the pre-restart button still works. ----
+    let (listener, url) = ws_listener().await;
+    let shared2 = Shared::default();
+    canned_web_api(&shared2, &url);
+    shared2.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "777.7" })),
+    );
+    let (mut srv2, _harness2) = server(&shared2);
+    call(&mut srv2, 1, "initialize", init_params_in(&state_dir)).await;
+    let mut ws2 = accept_with_hello(&listener).await;
+    send_and_await_ack(
+        &mut ws2,
+        block_actions_envelope("e2", "approve_reply", &draft_id, "C1"),
+    )
+    .await;
+    wait_until("the approved reply post after the restart", || {
+        requests_for(&shared2, "chat.postMessage").len() == 1
+    })
+    .await;
+    let body = requests_for(&shared2, "chat.postMessage")[0]
+        .body
+        .clone()
+        .unwrap();
+    assert_eq!(body["channel"], "C1");
+    assert_eq!(body["thread_ts"], "100.0");
+    assert_eq!(body["text"], expected_posted_reply());
+    // The persisted dm_ts still points finalization at the run-1 record.
+    wait_until("the self-DM record update", || {
+        !requests_for(&shared2, "chat.update").is_empty()
+    })
+    .await;
+    let update = requests_for(&shared2, "chat.update")[0]
+        .body
+        .clone()
+        .unwrap();
+    assert_eq!(update["ts"], "555.1");
+    drop(srv2);
+
+    // ---- Run 3: another restart — Sent persisted, so a second press is
+    // the double-send guard, not a second post. ----
+    let (listener, url) = ws_listener().await;
+    let shared3 = Shared::default();
+    canned_web_api(&shared3, &url);
+    let (mut srv3, _harness3) = server(&shared3);
+    call(&mut srv3, 1, "initialize", init_params_in(&state_dir)).await;
+    let mut ws3 = accept_with_hello(&listener).await;
+    send_and_await_ack(
+        &mut ws3,
+        block_actions_envelope("e3", "approve_reply", &draft_id, "C1"),
+    )
+    .await;
+    wait_until("the already-handled notice after the restart", || {
+        !shared3.posted_urls().is_empty()
+    })
+    .await;
+    let notice = &shared3.posted_urls()[0].body;
+    assert!(
+        notice["text"].as_str().unwrap().contains("処理済み"),
+        "{notice}"
+    );
+    assert!(
+        requests_for(&shared3, "chat.postMessage").is_empty(),
+        "no double send across restarts"
     );
 }
 
