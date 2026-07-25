@@ -23,11 +23,13 @@
 //! [ADR-0008]: https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0008-task-submit-push-ingestion.md
 
 pub mod dispatch;
+pub mod lookup;
 pub mod poll;
 pub mod runtime;
 pub mod submit;
 
 pub use dispatch::{Reply, TaskSourceHandler, TaskSourceServer, parse_params, request_id};
+pub use lookup::{Lookup, LookupClient};
 pub use poll::poll_loop;
 pub use runtime::{LineHandler, Stdio, Writer, serve};
 pub use submit::{SubmitClient, SubmitOutcome, Submitter};

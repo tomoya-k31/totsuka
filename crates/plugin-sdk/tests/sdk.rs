@@ -10,8 +10,8 @@ use plugin_protocol::methods::{
     ResultPublishParams, TaskUpdateStatusParams, TriggerInfo,
 };
 use plugin_sdk::{
-    LineHandler, SubmitClient, SubmitOutcome, Submitter, TaskSourceHandler, TaskSourceServer,
-    Writer, poll_loop,
+    LineHandler, Lookup, LookupClient, SubmitClient, SubmitOutcome, Submitter, TaskSourceHandler,
+    TaskSourceServer, Writer, poll_loop,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -345,4 +345,125 @@ async fn poll_loop_fetches_every_trigger_and_survives_fetch_errors() {
     // The broken trigger never produced a submission and never killed the
     // healthy one.
     assert!(submitted.iter().all(|id| id.starts_with('p')));
+}
+
+// ---------------------------------------------------------------------------
+// lookup (0.2.4, #242)
+// ---------------------------------------------------------------------------
+
+fn lookup_client(timeout: Duration) -> (LookupClient, mpsc::UnboundedReceiver<String>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let client = LookupClient::new(Writer::from_channel(tx)).with_timeout(timeout);
+    (client, rx)
+}
+
+#[tokio::test]
+async fn lookup_reports_a_known_conversation_and_its_repository() {
+    let (client, mut rx) = lookup_client(Duration::from_secs(5));
+    let responder = client.clone();
+    let driver = tokio::spawn(async move {
+        let (id, request) = next_request(&mut rx).await;
+        assert_eq!(request["method"], "task/lookup");
+        assert_eq!(request["params"]["source"], "slack");
+        assert_eq!(request["params"]["task_id"], "C1:100");
+        responder.resolve(&json!({
+            "jsonrpc": "2.0", "id": id,
+            "result": { "known": true, "repo": "totsuka" }
+        }));
+    });
+
+    let answer = client.lookup("slack", "C1:100").await;
+    assert_eq!(
+        answer,
+        Lookup::Known {
+            repo: Some("totsuka".into())
+        }
+    );
+    assert!(answer.skips_resolution(), "a reply needs no repo hint");
+    driver.await.unwrap();
+}
+
+#[tokio::test]
+async fn lookup_reports_an_unknown_conversation_as_new() {
+    let (client, mut rx) = lookup_client(Duration::from_secs(5));
+    let responder = client.clone();
+    let driver = tokio::spawn(async move {
+        let (id, _) = next_request(&mut rx).await;
+        responder.resolve(&json!({
+            "jsonrpc": "2.0", "id": id, "result": { "known": false }
+        }));
+    });
+
+    let answer = client.lookup("slack", "C9:999").await;
+    assert_eq!(answer, Lookup::New);
+    assert!(
+        !answer.skips_resolution(),
+        "a new conversation still needs resolving"
+    );
+    driver.await.unwrap();
+}
+
+/// The degradation contract: an unanswerable lookup must resolve to a value
+/// the caller can act on, in bounded time, and must never look "known".
+#[tokio::test]
+async fn an_unanswered_lookup_degrades_instead_of_hanging() {
+    // Nobody answers: the timeout fires and the caller falls back.
+    let (client, _rx) = lookup_client(Duration::from_millis(30));
+    let answer = client.lookup("slack", "C1:100").await;
+    assert!(matches!(answer, Lookup::Unknown { .. }), "{answer:?}");
+    assert!(
+        !answer.skips_resolution(),
+        "a timeout must never be read as `known` — the conversation would \
+         dispatch with no repository at all"
+    );
+
+    // An error answer degrades the same way, without retrying: a second
+    // request would mean waiting again for the same fallback.
+    let (client, mut rx) = lookup_client(Duration::from_secs(5));
+    let responder = client.clone();
+    let driver = tokio::spawn(async move {
+        let (id, _) = next_request(&mut rx).await;
+        responder.resolve(&json!({
+            "jsonrpc": "2.0", "id": id,
+            "error": { "code": error_code::INTERNAL_ERROR, "message": "db locked" }
+        }));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), rx.recv())
+                .await
+                .is_err(),
+            "a lookup is never retried"
+        );
+    });
+    let answer = client.lookup("slack", "C1:100").await;
+    assert!(matches!(answer, Lookup::Unknown { .. }), "{answer:?}");
+    driver.await.unwrap();
+}
+
+/// The two clients share the response stream, so each must ignore the other's
+/// ids rather than swallowing them.
+#[tokio::test]
+async fn lookup_and_submit_clients_do_not_steal_each_other_s_answers() {
+    let (lookup, mut lrx) = lookup_client(Duration::from_secs(5));
+    let (submit, _srx) = client_and_requests(Duration::from_secs(5));
+    let responder = lookup.clone();
+    let stealer = submit.clone();
+    let driver = tokio::spawn(async move {
+        let (id, _) = next_request(&mut lrx).await;
+        // `serve` hands every response to both clients; the submit client
+        // must leave this one alone.
+        stealer.resolve(&json!({
+            "jsonrpc": "2.0", "id": id.clone(), "result": { "known": true }
+        }));
+        responder.resolve(&json!({
+            "jsonrpc": "2.0", "id": id, "result": { "known": true, "repo": "totsuka" }
+        }));
+    });
+
+    assert_eq!(
+        lookup.lookup("slack", "C1:100").await,
+        Lookup::Known {
+            repo: Some("totsuka".into())
+        }
+    );
+    driver.await.unwrap();
 }
