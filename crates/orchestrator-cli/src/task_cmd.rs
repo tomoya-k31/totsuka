@@ -20,7 +20,8 @@ pub enum TaskCommand {
         #[command(flatten)]
         json: JsonFlag,
     },
-    /// Show one task: state, sessions, worktree, and full event history.
+    /// Show one task: state, its conversation, sessions, worktree, and full
+    /// event history.
     Show {
         /// Task id (see `totsuka status`).
         id: i64,
