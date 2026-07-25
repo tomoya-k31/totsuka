@@ -45,6 +45,13 @@ pub struct Task {
     /// 0.1.3: conversation-continuation correlation key (Slack:
     /// `"{channel}:{thread_ts}"`). A later task with the same `thread_key` can
     /// resume the earlier task's session. `None` for other sources.
+    ///
+    /// **Superseded in 0.2.4 by [`id`](Self::id)** (#242), and removed once the
+    /// epic lands. Its whole job was to say "these two tasks are one
+    /// conversation" — which is now what `id` itself means, so in Slack the two
+    /// carry the identical value and the "later task" this field describes no
+    /// longer exists: the second delivery is the *same* task. Still accepted on
+    /// the wire so plugins can drop it independently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_key: Option<String>,
     /// 0.2.4: identity of **this delivery**, as distinct from
