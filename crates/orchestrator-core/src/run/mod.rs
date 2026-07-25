@@ -983,7 +983,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // collide exactly as before, so GitHub and Notion keep their old
         // at-most-once behaviour without knowing this field exists.
         let message_key = task.message_key.clone().unwrap_or_else(|| task.id.clone());
-        let appended = self.db.append_task_message(&TaskMessageInsert {
+        let insert = TaskMessageInsert {
             task_id: id,
             message_key: message_key.clone(),
             // The normalized schema has no author field; whoever the source
@@ -992,29 +992,30 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             author: None,
             body: task.body.clone().unwrap_or_default(),
             url: task.url.clone(),
-            payload: serde_json::to_string(task).unwrap_or_default(),
-        })?;
+            // Not `unwrap_or_default()`: an empty payload would silently
+            // destroy the audit record (N-01) and anything reading the message
+            // back. A failure here is a persistence failure like any other.
+            payload: serde_json::to_string(task).map_err(StateError::from)?,
+        };
+        // Appending and reopening are one transaction: see
+        // `append_task_message_reopening` for why splitting them can strand a
+        // message forever.
+        let (appended, reopened) = self.db.append_task_message_reopening(
+            &insert,
+            Some(serde_json::json!({ "kind": "reopen", "message_key": message_key })),
+        )?;
 
-        let outcome = match (existing, appended) {
-            (None, _) => IngestOutcome::Created,
+        let outcome = match (existing, appended, reopened) {
+            (None, ..) => IngestOutcome::Created,
             // The ledger already had this delivery: a Socket Mode re-send, or
             // a restart replaying an unacked message. This is the last line of
             // defence — plugin-side dedup lives in memory and dies with the
             // process — so it must change nothing at all.
-            (Some(_), TaskMessageOutcome::Duplicate) => IngestOutcome::Duplicate,
-            (Some(record), TaskMessageOutcome::New) if record.state.is_terminal() => {
-                self.db.apply_event(
-                    id,
-                    TaskEvent::Reopen,
-                    Some(serde_json::json!({
-                        "kind": "reopen", "message_key": message_key,
-                    })),
-                )?;
-                IngestOutcome::Reopened
-            }
+            (Some(_), TaskMessageOutcome::Duplicate, _) => IngestOutcome::Duplicate,
+            (Some(_), TaskMessageOutcome::New, Some(_)) => IngestOutcome::Reopened,
             // Still in flight: the message waits in the ledger and the
             // in-progress dispatch picks it up when it finishes.
-            (Some(_), TaskMessageOutcome::New) => IngestOutcome::Appended,
+            (Some(_), TaskMessageOutcome::New, None) => IngestOutcome::Appended,
         };
         Ok((id, outcome))
     }
