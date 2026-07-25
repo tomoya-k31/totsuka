@@ -370,11 +370,17 @@ fn not_initialized(id: RequestId) -> Response {
 }
 
 /// Map a [`HerdrError`] to a JSON-RPC error carrying its actionable message.
+///
+/// Everything herdr can go wrong with is an internal error to the caller —
+/// except a session it could not resume, which the protocol gives its own code
+/// so the Orchestrator can retry without it (0.2.4 `SESSION_UNRESUMABLE`,
+/// #242).
 fn rpc_error(id: RequestId, error: &HerdrError) -> Response {
-    Response::error(
-        id,
-        Error::new(error_code::INTERNAL_ERROR, error.to_string()),
-    )
+    let code = match error {
+        HerdrError::SessionUnresumable(_) => error_code::SESSION_UNRESUMABLE,
+        _ => error_code::INTERNAL_ERROR,
+    };
+    Response::error(id, Error::new(code, error.to_string()))
 }
 
 /// Convert a JSON id value into a [`RequestId`].

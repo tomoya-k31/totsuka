@@ -152,7 +152,8 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .to_string();
 
         self.submit_prompt(&pane_id, &compose_prompt(params))
-            .await?;
+            .await
+            .map_err(|e| resume_failure(params, e))?;
 
         // The agent's own session id (for `claude --resume`) is reported by its
         // herdr integration hook during startup; by now it is normally there,
@@ -802,6 +803,38 @@ fn resolve_launch(
             (program, args, params.hook.as_ref().map(|h| json!(h.env)))
         }
     }
+}
+
+/// Classify a post-start dispatch failure: a pane that **vanished** while we
+/// were handing it a prompt, on a dispatch that asked to resume a session,
+/// becomes [`HerdrError::SessionUnresumable`] → the protocol's
+/// `SESSION_UNRESUMABLE` (#242, #261).
+///
+/// This is the plugin absorbing its own backend's vocabulary: herdr says
+/// `agent_not_found`, the protocol says "that session is not resumable", and
+/// the Orchestrator acts on the latter (one retry without `resume_session_id`)
+/// without knowing what a multiplexer or a `--resume` flag is (#196 keeps tool
+/// knowledge out of here). The retry is safe to promise because a failed
+/// dispatch already takes its workspace back down (`abandon`).
+///
+/// **It is a heuristic**, and deliberately a narrow one:
+///
+/// - Only *after* `agent.start` succeeded. A pane that never existed cannot
+///   have died of the resume; that is a herdr problem and keeps its own error.
+/// - Only when the pane is *gone* ([`HerdrError::is_missing`]) — the shape the
+///   real bug had, where `claude --resume <id>` found no such conversation,
+///   exited, and took its pane with it. A pane that is alive but slow keeps
+///   its own error: the retry drops the session, and with it the conversation
+///   the resume existed to preserve, so widening this trades a real cost for a
+///   guess.
+///
+/// A false positive still costs only one extra launch, so the narrowness is
+/// about **not** losing context, not about avoiding wasted work.
+fn resume_failure(params: &TaskDispatchParams, error: HerdrError) -> HerdrError {
+    if params.resume_session_id.is_some() && error.is_missing() {
+        return HerdrError::SessionUnresumable(error.to_string());
+    }
+    error
 }
 
 /// Treat a "missing pane" error as success (for idempotent teardown).

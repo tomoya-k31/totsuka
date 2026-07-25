@@ -34,6 +34,12 @@ pub enum HerdrError {
     /// The response was not the shape we expected.
     #[error("herdr returned an unexpected response: {0}")]
     InvalidResponse(String),
+    /// A dispatch that asked to resume a session died with its pane, so the
+    /// session could not be resumed (protocol `SESSION_UNRESUMABLE`, #242).
+    /// Carries the herdr error underneath, which is what a human debugging it
+    /// needs.
+    #[error("the agent session could not be resumed: {0}")]
+    SessionUnresumable(String),
 }
 
 impl HerdrError {

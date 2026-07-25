@@ -1337,3 +1337,78 @@ async fn a_failing_herdr_is_reported_with_its_cause() {
         "the failure must carry what herdr actually said: {message}"
     );
 }
+
+/// A dispatch that asks to resume `claude-sess-abc`, against a herdr whose
+/// calls fail with `code` once the pane is up. Returns the error response.
+async fn dispatch_resuming_against(code: &'static str) -> Value {
+    let (socket, _) = FakeHerdr {
+        submission_error: Some(code),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    d.call(
+        "task/dispatch",
+        json!({
+            "task": { "id": "TR", "source": "slack", "title": "Continue the thread" },
+            "worktree_path": "/wt/agent-1",
+            "mode": "implement",
+            "resume_session_id": "claude-sess-abc",
+        }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_resumed_dispatch_whose_pane_vanished_is_session_unresumable() {
+    // #261: `claude --resume <id>` finding no such conversation exits at once
+    // and takes its pane with it — herdr then answers `agent_not_found` to
+    // everything the prompt submission tries. The plugin translates its own
+    // backend's vocabulary into the protocol's: the Orchestrator retries once
+    // without the session (#242) instead of failing the task.
+    let disp = dispatch_resuming_against("agent_not_found").await;
+    assert_eq!(
+        disp["error"]["code"], -32006,
+        "a vanished pane on a resumed dispatch is SESSION_UNRESUMABLE: {disp}"
+    );
+    let message = disp["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("agent_not_found"),
+        "the herdr error stays in the message for whoever debugs it: {message}"
+    );
+}
+
+#[tokio::test]
+async fn a_vanished_pane_without_resume_keeps_its_own_error() {
+    // The other half of the contract: nothing about a dispatch that named no
+    // session can be blamed on resuming one. Answering SESSION_UNRESUMABLE
+    // here would send the Orchestrator into a retry that changes nothing.
+    let (socket, _) = FakeHerdr {
+        submission_error: Some("agent_not_found"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("TN", "A fresh task", "implement").await;
+    assert_eq!(
+        disp["error"]["code"], -32603,
+        "no resume was asked for → the ordinary internal error: {disp}"
+    );
+}
+
+#[tokio::test]
+async fn a_resumed_dispatch_failing_for_another_reason_keeps_its_own_error() {
+    // The classification is narrow on purpose: a pane that is alive but
+    // failing (herdr busy, socket flaky) is not evidence that the session is
+    // unusable, and the retry would drop the very conversation the resume
+    // exists to preserve.
+    let disp = dispatch_resuming_against("internal_error").await;
+    assert_eq!(
+        disp["error"]["code"], -32603,
+        "only a *vanished* pane means the session could not be resumed: {disp}"
+    );
+}

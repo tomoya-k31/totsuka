@@ -1519,6 +1519,17 @@ async fn resume_plugins(
     dispatch_log: &Path,
     notify_log: &Path,
 ) -> PluginSet {
+    resume_plugins_with(fetched, dispatch_log, notify_log, json!({})).await
+}
+
+/// [`resume_plugins`] with `agent_extra`'s fields merged into the agent's init
+/// config (e.g. `dispatch_error`, to script a failing dispatch).
+async fn resume_plugins_with(
+    fetched: serde_json::Value,
+    dispatch_log: &Path,
+    notify_log: &Path,
+    agent_extra: serde_json::Value,
+) -> PluginSet {
     let mut plugins = PluginSet::default();
     plugins.sources.insert(
         "mock_src".to_string(),
@@ -1529,14 +1540,18 @@ async fn resume_plugins(
         )
         .await,
     );
+    let mut agent_config = json!({
+        "resume_session": true, "stream_states": ["running"], "dispatch_log": dispatch_log,
+    });
+    if let Some(extra) = agent_extra.as_object() {
+        let base = agent_config.as_object_mut().expect("an object literal");
+        for (key, value) in extra {
+            base.insert(key.clone(), value.clone());
+        }
+    }
     plugins.agents.insert(
         "mock_agent".to_string(),
-        launch(
-            "agent_ide",
-            "mock_agent",
-            json!({ "resume_session": true, "stream_states": ["running"], "dispatch_log": dispatch_log }),
-        )
-        .await,
+        launch("agent_ide", "mock_agent", agent_config).await,
     );
     plugins.notifiers.insert(
         "mock_notify".to_string(),
@@ -1866,6 +1881,110 @@ async fn reply_destination_is_task_id_origin_never_the_shared_session_id() {
         engine.db().get_task(prior).unwrap().unwrap().state,
         TaskState::Running,
         "the other task sharing the session id is never routed to"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Every recorded `task/dispatch`, oldest first.
+fn dispatches(dispatch_log: &Path) -> Vec<serde_json::Value> {
+    read_log(dispatch_log)
+        .into_iter()
+        .filter(|d| d["method"] == "task/dispatch")
+        .collect()
+}
+
+#[tokio::test]
+async fn an_unresumable_session_is_dispatched_once_more_without_it() {
+    // #242/#261: resuming can always fail (the tool's session store is outside
+    // the worktree and outside our control). When the agent plugin says so with
+    // `SESSION_UNRESUMABLE`, the task must still go out — resuming is an
+    // optimization, not a precondition — so core drops the session and
+    // dispatches once more. The conversation's context is lost with it; the
+    // work is not.
+    let base = scratch("resume_unresumable");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+    seed_finished_conversation(&db, "1", Some("cc-gone"));
+
+    // The agent refuses exactly the dispatches that name a session — the shape
+    // a real `claude --resume <missing id>` produces (agent-ide-herdr maps its
+    // vanished pane to this code, #261).
+    let plugins = resume_plugins_with(
+        follow_up("1", "1:reply"),
+        &dispatch_log,
+        &notify_log,
+        json!({ "dispatch_error": {
+            "code": plugin_protocol::error_code::SESSION_UNRESUMABLE,
+            "message": "the agent session could not be resumed",
+            "only_when_resuming": true,
+        }}),
+    )
+    .await;
+    let mut engine = Engine::with_clock(
+        db,
+        resume_settings(&repo, &base),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+        clock,
+    )
+    .await;
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || dispatches(&dispatch_probe).len() >= 2).await;
+
+    let attempts = dispatches(&dispatch_log);
+    assert_eq!(
+        attempts.len(),
+        2,
+        "one refused attempt, then one retry — and no more: naming no session, \
+         the retry cannot fail the same way, so this must never loop: {attempts:#?}"
+    );
+    assert_eq!(
+        attempts[0]["params"]["resume_session_id"], "cc-gone",
+        "the first attempt is the ordinary resume"
+    );
+    assert!(
+        attempts[1]["params"].get("resume_session_id").is_none(),
+        "the retry names no session: {}",
+        attempts[1]["params"]
+    );
+    // The whole launch spec is rebuilt, not just the field: the resume id is
+    // baked into the argv (#196), so a retry that only cleared the field would
+    // still launch `--resume <gone>` and fail identically.
+    let argv = |attempt: &serde_json::Value| {
+        attempt["params"]["tool_launch"]["args"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert!(
+        argv(&attempts[0]).iter().any(|a| a == "--resume"),
+        "the first attempt's argv resumes: {:?}",
+        argv(&attempts[0])
+    );
+    assert!(
+        !argv(&attempts[1]).iter().any(|a| a == "--resume"),
+        "the retry's argv must not: {:?}",
+        argv(&attempts[1])
+    );
+
+    // The task moved on rather than failing, and the message it was carrying
+    // went out with it (a failed dispatch would have left it queued).
+    let task = engine
+        .db()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(task.state, TaskState::Dispatched | TaskState::Running),
+        "the task is under way, not failed: {}",
+        task.state
     );
 
     engine.shutdown(GRACE).await;
