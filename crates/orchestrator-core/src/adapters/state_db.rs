@@ -140,6 +140,49 @@ const MIGRATIONS: &[&str] = &[
     DROP INDEX idx_sessions_claude_session;
     CREATE INDEX idx_sessions_tool_session ON sessions(tool_session_id);
     "#,
+    // v5 — the conversation's message ledger (#242/#257). A task is a
+    // *conversation*, so it can receive more than one message; each row is one
+    // delivery, and `processed_at IS NULL` is the queue of messages the agent
+    // has not been told about yet.
+    //
+    // Purely additive: nothing reads or writes it until the ingest/dispatch
+    // work lands, so an interrupted migration to this version leaves a fully
+    // working database (dropping `tasks.thread_key` is deliberately left to a
+    // later version for the same reason).
+    //
+    // Shaped after `hook_events` (v2/v3) because the problem is the same one —
+    // idempotently absorbing at-least-once delivery — and that shape is
+    // already proven here. `payload` keeps the whole normalized Task verbatim
+    // for the audit trail (N-01); the denormalized `author`/`body`/`url`
+    // columns exist so reads never have to parse it (this schema has no
+    // `json_extract` anywhere, and this is not the place to start).
+    //
+    // The UNIQUE key is chosen conservatively because SQLite cannot alter a
+    // constraint in place — v3 had to rebuild `hook_events` to widen one:
+    //
+    // - No `revision`/edit timestamp. Including it would turn a typo fix into
+    //   an expensive re-run and a second reply; excluding it means an edit
+    //   does nothing, which is cheap and obvious. Widening later is the
+    //   rebuild; narrowing is not.
+    // - No `kind`. What counts as "added to the conversation" is a comment
+    //   everywhere (Slack reply, GitHub issue comment); labels and status are
+    //   the workflow trigger's concern. A column can still be added later with
+    //   plain `ALTER TABLE ADD COLUMN`.
+    r#"
+    CREATE TABLE task_messages (
+      id           INTEGER PRIMARY KEY,
+      task_id      INTEGER NOT NULL REFERENCES tasks(id),
+      message_key  TEXT NOT NULL,   -- identity of this delivery (Slack: {channel}:{ts}; GitHub: comment id)
+      author       TEXT,            -- denormalized for display
+      body         TEXT NOT NULL,   -- prompt material
+      url          TEXT,            -- permalink
+      payload      TEXT NOT NULL,   -- the whole normalized Task as JSON (audit, N-01)
+      received_at  TEXT NOT NULL,
+      processed_at TEXT,            -- NULL = not yet dispatched; a batch shares one value
+      UNIQUE (task_id, message_key)
+    );
+    CREATE INDEX idx_task_messages_pending ON task_messages(task_id, processed_at);
+    "#,
 ];
 
 /// `events.detail` for the ingest event. Stored as JSON so consumers can
@@ -326,6 +369,61 @@ pub enum HookEventOutcome {
     /// the caller drops it silently.
     Duplicate,
 }
+
+/// One message to append to a conversation's ledger (#242).
+#[derive(Debug, Clone)]
+pub struct TaskMessageInsert {
+    /// The conversation this delivery belongs to.
+    pub task_id: i64,
+    /// Identity of *this* delivery within the conversation — `Task.message_key`
+    /// (the source falls back to `Task.id` when it has only one message).
+    pub message_key: String,
+    /// Display-only author, denormalized out of `payload`.
+    pub author: Option<String>,
+    /// The message text the agent will be prompted with.
+    pub body: String,
+    /// Permalink to the message in the source system.
+    pub url: Option<String>,
+    /// The whole normalized `Task` as JSON, verbatim (audit, N-01).
+    pub payload: String,
+}
+
+/// A stored conversation message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskMessage {
+    /// Row id; also the arrival order within a conversation.
+    pub id: i64,
+    /// Owning conversation.
+    pub task_id: i64,
+    /// Identity of this delivery.
+    pub message_key: String,
+    /// Display-only author.
+    pub author: Option<String>,
+    /// The message text.
+    pub body: String,
+    /// Permalink.
+    pub url: Option<String>,
+    /// The whole normalized `Task` as JSON.
+    pub payload: String,
+    /// When the message was appended.
+    pub received_at: String,
+    /// When it was dispatched to the agent; `None` while it is still queued.
+    /// Every message dispatched together carries the same value.
+    pub processed_at: Option<String>,
+}
+
+/// Outcome of [`StateDb::append_task_message`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskMessageOutcome {
+    /// The message was appended (first time seen).
+    New,
+    /// The conversation already had this `message_key`; nothing changed.
+    Duplicate,
+}
+
+/// Columns of `task_messages`, read by name in [`row_to_task_message`].
+const TASK_MESSAGE_COLUMNS: &str = "id, task_id, message_key, author, body, url, \
+     payload, received_at, processed_at";
 
 /// The SQLite state database.
 pub struct StateDb {
@@ -761,6 +859,106 @@ impl StateDb {
         })
     }
 
+    /// Append a message to a conversation, idempotently (#242).
+    ///
+    /// `INSERT ... ON CONFLICT DO NOTHING` on `(task_id, message_key)`, the
+    /// same shape as [`record_hook_event`](Self::record_hook_event) and for the
+    /// same reason: sources deliver at-least-once (a Socket Mode reconnect, a
+    /// restart mid-ack), and a re-delivery must not queue the work twice.
+    pub fn append_task_message(
+        &self,
+        msg: &TaskMessageInsert,
+    ) -> Result<TaskMessageOutcome, StateError> {
+        let changed = self.conn.execute(
+            "INSERT INTO task_messages
+                (task_id, message_key, author, body, url, payload, received_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)
+             ON CONFLICT (task_id, message_key) DO NOTHING",
+            params![
+                msg.task_id,
+                msg.message_key,
+                msg.author,
+                msg.body,
+                msg.url,
+                msg.payload,
+                self.clock.now_rfc3339(),
+            ],
+        )?;
+        Ok(if changed > 0 {
+            TaskMessageOutcome::New
+        } else {
+            TaskMessageOutcome::Duplicate
+        })
+    }
+
+    /// The conversation's undispatched messages, oldest first — its queue.
+    ///
+    /// Ordered by `id` rather than `received_at`: arrival order is what the
+    /// agent should read them in, and `id` gives it without depending on
+    /// timestamp resolution.
+    pub fn pending_task_messages(&self, task_id: i64) -> Result<Vec<TaskMessage>, StateError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {TASK_MESSAGE_COLUMNS} FROM task_messages \
+             WHERE task_id = ?1 AND processed_at IS NULL ORDER BY id"
+        ))?;
+        let rows = stmt.query_map(params![task_id], row_to_task_message)?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(StateError::from)
+    }
+
+    /// Every message of a conversation, oldest first (display).
+    pub fn list_task_messages(&self, task_id: i64) -> Result<Vec<TaskMessage>, StateError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {TASK_MESSAGE_COLUMNS} FROM task_messages \
+             WHERE task_id = ?1 ORDER BY id"
+        ))?;
+        let rows = stmt.query_map(params![task_id], row_to_task_message)?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(StateError::from)
+    }
+
+    /// Mark every pending message of a conversation as dispatched, stamping
+    /// them all with **one** timestamp, and return it.
+    ///
+    /// The shared stamp is what makes a batch identifiable afterwards without
+    /// a batch-id column — see
+    /// [`unprocess_last_batch`](Self::unprocess_last_batch).
+    pub fn mark_messages_processed(&self, task_id: i64) -> Result<String, StateError> {
+        let at = self.clock.now_rfc3339();
+        self.conn.execute(
+            "UPDATE task_messages SET processed_at = ?1 \
+             WHERE task_id = ?2 AND processed_at IS NULL",
+            params![at, task_id],
+        )?;
+        Ok(at)
+    }
+
+    /// Put the most recently dispatched batch back on the queue (`task retry`).
+    ///
+    /// The batch is found by the **highest-id processed row** and then matched
+    /// by its exact `processed_at` string. Picking it by id rather than by
+    /// `MAX(processed_at)` is deliberate: RFC 3339 with optional fractional
+    /// seconds does not sort lexicographically (`…:00.5Z` < `…:00Z`), while
+    /// ids are integers and messages are appended in arrival order, so the
+    /// newest processed row always belongs to the newest batch.
+    ///
+    /// Returns how many messages were requeued (0 when nothing was ever
+    /// dispatched). Two batches stamped with the *same* timestamp would be
+    /// requeued together; that needs a clock that did not advance between
+    /// dispatches, which only a frozen test clock does.
+    pub fn unprocess_last_batch(&self, task_id: i64) -> Result<usize, StateError> {
+        let changed = self.conn.execute(
+            "UPDATE task_messages SET processed_at = NULL \
+             WHERE task_id = ?1 AND processed_at = ( \
+                 SELECT processed_at FROM task_messages \
+                 WHERE task_id = ?1 AND processed_at IS NOT NULL \
+                 ORDER BY id DESC LIMIT 1 \
+             )",
+            params![task_id],
+        )?;
+        Ok(changed)
+    }
+
     /// Number of consecutive `UNKNOWN` stops at the tail of a task's stop
     /// history — the D-02 escalation counter (recomputed from the log; the
     /// hook's self-reported `block_count` is never trusted).
@@ -903,6 +1101,21 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
     })
 }
 
+/// Map a `task_messages` row (selected via [`TASK_MESSAGE_COLUMNS`]).
+fn row_to_task_message(row: &Row<'_>) -> rusqlite::Result<TaskMessage> {
+    Ok(TaskMessage {
+        id: row.get("id")?,
+        task_id: row.get("task_id")?,
+        message_key: row.get("message_key")?,
+        author: row.get("author")?,
+        body: row.get("body")?,
+        url: row.get("url")?,
+        payload: row.get("payload")?,
+        received_at: row.get("received_at")?,
+        processed_at: row.get("processed_at")?,
+    })
+}
+
 /// Wrap a domain error as a rusqlite column-conversion failure.
 fn conversion_error(e: Box<dyn std::error::Error + Send + Sync>) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, e)
@@ -962,6 +1175,151 @@ mod tests {
             status: status.map(str::to_string),
             payload: "{}".to_string(),
         }
+    }
+
+    fn message(task_id: i64, key: &str, body: &str) -> TaskMessageInsert {
+        TaskMessageInsert {
+            task_id,
+            message_key: key.to_string(),
+            author: Some("tomoya".to_string()),
+            body: body.to_string(),
+            url: Some(format!("https://example.com/{key}")),
+            payload: format!(r#"{{"id":"conv","message_key":"{key}"}}"#),
+        }
+    }
+
+    fn keys(messages: &[TaskMessage]) -> Vec<&str> {
+        messages.iter().map(|m| m.message_key.as_str()).collect()
+    }
+
+    /// At-least-once delivery must not queue the same message twice (#242).
+    #[test]
+    fn appending_a_message_twice_is_a_no_op() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+
+        assert_eq!(
+            db.append_task_message(&message(id, "m1", "first")).unwrap(),
+            TaskMessageOutcome::New
+        );
+        assert_eq!(
+            db.append_task_message(&message(id, "m1", "re-delivered"))
+                .unwrap(),
+            TaskMessageOutcome::Duplicate
+        );
+
+        let all = db.list_task_messages(id).unwrap();
+        assert_eq!(keys(&all), ["m1"], "the duplicate must not add a row");
+        assert_eq!(all[0].body, "first", "and must not overwrite the original");
+    }
+
+    /// The pending set is the queue: undispatched only, in arrival order.
+    #[test]
+    fn pending_messages_are_unprocessed_ones_in_arrival_order() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        for key in ["m1", "m2", "m3"] {
+            db.append_task_message(&message(id, key, key)).unwrap();
+        }
+        assert_eq!(
+            keys(&db.pending_task_messages(id).unwrap()),
+            ["m1", "m2", "m3"]
+        );
+
+        db.mark_messages_processed(id).unwrap();
+        assert!(db.pending_task_messages(id).unwrap().is_empty());
+        // A message arriving after the dispatch is pending on its own.
+        db.append_task_message(&message(id, "m4", "m4")).unwrap();
+        assert_eq!(keys(&db.pending_task_messages(id).unwrap()), ["m4"]);
+        // ...while the full history still shows everything.
+        assert_eq!(
+            keys(&db.list_task_messages(id).unwrap()),
+            ["m1", "m2", "m3", "m4"]
+        );
+    }
+
+    /// A dispatched batch shares one `processed_at`, and `task retry` puts
+    /// exactly that batch — not the ones before it — back on the queue (D7).
+    #[test]
+    fn unprocess_last_batch_requeues_only_the_newest_batch() {
+        let clock = manual_clock();
+        let db = StateDb::open_in_memory_with_clock(clock.clone()).unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+
+        // Batch 1.
+        db.append_task_message(&message(id, "m1", "m1")).unwrap();
+        db.append_task_message(&message(id, "m2", "m2")).unwrap();
+        let first = db.mark_messages_processed(id).unwrap();
+
+        // Batch 2, at a later instant.
+        clock.advance(time::Duration::seconds(60));
+        db.append_task_message(&message(id, "m3", "m3")).unwrap();
+        let second = db.mark_messages_processed(id).unwrap();
+        assert_ne!(first, second);
+
+        let stamps: Vec<Option<String>> = db
+            .list_task_messages(id)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.processed_at)
+            .collect();
+        assert_eq!(
+            stamps,
+            [
+                Some(first.clone()),
+                Some(first.clone()),
+                Some(second.clone())
+            ],
+            "a batch is exactly the rows sharing one stamp"
+        );
+
+        assert_eq!(db.unprocess_last_batch(id).unwrap(), 1);
+        assert_eq!(
+            keys(&db.pending_task_messages(id).unwrap()),
+            ["m3"],
+            "only the newest batch comes back"
+        );
+        // Doing it again reaches the batch before it — one step per retry.
+        assert_eq!(db.unprocess_last_batch(id).unwrap(), 2);
+        assert_eq!(
+            keys(&db.pending_task_messages(id).unwrap()),
+            ["m1", "m2", "m3"]
+        );
+        // Nothing left to requeue.
+        assert_eq!(db.unprocess_last_batch(id).unwrap(), 0);
+    }
+
+    /// Ledgers are per-conversation: one task's queue never leaks into
+    /// another's, and the UNIQUE key is scoped to the task so two
+    /// conversations may legitimately carry the same `message_key`.
+    #[test]
+    fn message_ledgers_are_isolated_per_task() {
+        let db = StateDb::open_in_memory().unwrap();
+        let a = db.upsert_task(&sample_task()).unwrap();
+        let b = db
+            .upsert_task(&NewTask {
+                source_task_id: "43".to_string(),
+                ..sample_task()
+            })
+            .unwrap();
+        assert_ne!(a, b);
+
+        db.append_task_message(&message(a, "shared", "for a"))
+            .unwrap();
+        assert_eq!(
+            db.append_task_message(&message(b, "shared", "for b"))
+                .unwrap(),
+            TaskMessageOutcome::New,
+            "the same key in another conversation is a different message"
+        );
+
+        db.mark_messages_processed(a).unwrap();
+        assert!(db.pending_task_messages(a).unwrap().is_empty());
+        assert_eq!(
+            keys(&db.pending_task_messages(b).unwrap()),
+            ["shared"],
+            "the other conversation's queue is untouched"
+        );
     }
 
     #[test]
@@ -1420,6 +1778,77 @@ mod tests {
             db.record_hook_event(&changed).unwrap(),
             HookEventOutcome::New
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrates_v4_to_v5_adding_task_messages_without_touching_anything_else() {
+        // v5 is purely additive (#257): an existing database gains the
+        // `task_messages` table and keeps every row it already had, so an
+        // upgrade that stops here still runs the old code paths correctly.
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-migrate_v5", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+
+        // Build a v4 database by hand (schema_migrations pinned at 4).
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations \
+                 (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for m in &MIGRATIONS[0..4] {
+                conn.execute_batch(m).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) \
+                 VALUES (1, ?1), (2, ?1), (3, ?1), (4, ?1)",
+                params![now()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO tasks
+                    (source, source_task_id, workflow, mode, state, priority,
+                     title, created_at, updated_at)
+                 VALUES ('github','9','implement','implement','done',0,'legacy',?1,?1)",
+                params![now()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sessions (task_id, plugin, session_id, created_at, tool_session_id)
+                 VALUES (1, 'herdr', 'sess-1', ?1, 'cc-1')",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        let db = StateDb::open(&path).unwrap();
+        assert!(
+            PathBuf::from(format!("{}.bak", path.display())).exists(),
+            "existing DB backed up before migrating (§10.3)"
+        );
+
+        // Pre-existing rows are untouched.
+        let rec = db.get_task(1).unwrap().unwrap();
+        assert_eq!(rec.title, "legacy");
+        assert_eq!(rec.state, TaskState::Done);
+        assert_eq!(
+            db.latest_session(1).unwrap().unwrap().tool_session_id,
+            Some("cc-1".to_string())
+        );
+
+        // The new ledger exists and starts empty for a task that predates it —
+        // which is what lets the old single-message flow keep working.
+        assert!(db.list_task_messages(1).unwrap().is_empty());
+        assert!(db.pending_task_messages(1).unwrap().is_empty());
+        assert_eq!(
+            db.append_task_message(&message(1, "m1", "hello")).unwrap(),
+            TaskMessageOutcome::New
+        );
+        assert_eq!(keys(&db.list_task_messages(1).unwrap()), ["m1"]);
 
         let _ = fs::remove_dir_all(&dir);
     }
