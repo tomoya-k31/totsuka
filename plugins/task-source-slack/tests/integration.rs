@@ -6,7 +6,7 @@ mod common;
 
 use serde_json::{Value, json};
 
-use common::{Canned, FakeFactory, Shared, SubmitHarness, scratch_state_dir};
+use common::{Canned, FakeFactory, LookupHarness, Shared, SubmitHarness, scratch_state_dir};
 use plugin_protocol::jsonrpc::{Response, error_code};
 use task_source_slack::server::Server;
 use task_source_slack::transport::TokenKind;
@@ -22,6 +22,7 @@ fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
             shared: shared.clone(),
         },
         harness.client.clone(),
+        LookupHarness::new().client,
     )
     .without_runtime();
     (srv, harness)

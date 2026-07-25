@@ -33,6 +33,6 @@ async fn main() {
         .init();
 
     let stdio = plugin_sdk::runtime::stdio();
-    let server = Server::new(ReqwestFactory, stdio.submit.clone());
+    let server = Server::new(ReqwestFactory, stdio.submit.clone(), stdio.lookup.clone());
     plugin_sdk::runtime::serve(server, &stdio).await;
 }

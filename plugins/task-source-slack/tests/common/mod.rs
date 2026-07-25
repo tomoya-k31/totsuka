@@ -257,17 +257,28 @@ pub async fn send_and_await_ack(ws: &mut WebSocketStream<TcpStream>, envelope: V
 /// A `message` event envelope: `U_OTHER` mentioning `U_ME` in `C1`, inside
 /// the thread rooted at `100.0`.
 pub fn mention_envelope(envelope_id: &str, ts: &str) -> Value {
+    mention_envelope_in(envelope_id, ts, Some("100.0"))
+}
+
+/// [`mention_envelope`] with an explicit enclosing thread; `None` posts it
+/// top-level. Since #242 the thread decides the **task id**, so a test that
+/// wants a second *conversation* (rather than a second message of the same
+/// one) has to vary this.
+pub fn mention_envelope_in(envelope_id: &str, ts: &str, thread_ts: Option<&str>) -> Value {
+    let mut event = json!({
+        "type": "message",
+        "channel": "C1",
+        "user": "U_OTHER",
+        "text": "<@U_ME> 原因わかりますか",
+        "ts": ts,
+    });
+    if let Some(thread_ts) = thread_ts {
+        event["thread_ts"] = json!(thread_ts);
+    }
     json!({
         "type": "events_api",
         "envelope_id": envelope_id,
-        "payload": { "event": {
-            "type": "message",
-            "channel": "C1",
-            "user": "U_OTHER",
-            "text": "<@U_ME> 原因わかりますか",
-            "ts": ts,
-            "thread_ts": "100.0"
-        }}
+        "payload": { "event": event }
     })
 }
 
@@ -351,4 +362,89 @@ pub async fn wait_until(what: &str, condition: impl Fn() -> bool) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("timeout waiting for {what}");
+}
+
+/// The lookup-side harness (0.2.4, #242): answers every `task/lookup` the
+/// pipeline sends, from a table of conversations the orchestrator "knows".
+///
+/// Uses the real [`plugin_sdk::LookupClient`] over a channel writer, so the
+/// request/response correlation under test is the production one. Anything
+/// not in the table answers `known: false` — the default a test wants, since
+/// most mentions open a new conversation.
+pub struct LookupHarness {
+    /// The client wired into the server under test.
+    pub client: plugin_sdk::LookupClient,
+    known: Arc<Mutex<std::collections::HashMap<String, Option<String>>>>,
+    seen: Arc<Mutex<Vec<Value>>>,
+}
+
+impl LookupHarness {
+    /// A harness that answers every lookup.
+    pub fn new() -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let client = plugin_sdk::LookupClient::new(plugin_sdk::Writer::from_channel(tx));
+        let known: Arc<Mutex<std::collections::HashMap<String, Option<String>>>> = Arc::default();
+        let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let responder = client.clone();
+        let table = Arc::clone(&known);
+        let log = Arc::clone(&seen);
+        tokio::spawn(async move {
+            while let Some(line) = rx.recv().await {
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"], "task/lookup", "{request}");
+                let params = request["params"].clone();
+                let task_id = params["task_id"].as_str().unwrap_or_default().to_string();
+                log.lock().unwrap().push(params);
+                let answer = match table.lock().unwrap().get(&task_id) {
+                    Some(repo) => json!({ "known": true, "repo": repo }),
+                    None => json!({ "known": false }),
+                };
+                responder.resolve(&json!({
+                    "jsonrpc": "2.0", "id": request["id"], "result": answer,
+                }));
+            }
+        });
+        Self {
+            client,
+            known,
+            seen,
+        }
+    }
+
+    /// A harness that **never answers** — the degradation path, where the
+    /// orchestrator's event loop is busy. The timeout is squeezed to keep the
+    /// test quick; production waits 10s.
+    pub fn unanswered() -> Self {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        // `_rx` is dropped, so `send_line` fails immediately and the client
+        // reports "writer closed" — the same `Lookup::Unknown` a timeout
+        // produces, without the wait.
+        let client = plugin_sdk::LookupClient::new(plugin_sdk::Writer::from_channel(tx))
+            .with_timeout(Duration::from_millis(50));
+        Self {
+            client,
+            known: Arc::default(),
+            seen: Arc::default(),
+        }
+    }
+
+    /// Declare `task_id` an existing conversation, bound to `repo` (or to
+    /// none, when repository selection has not settled yet).
+    pub fn mark_known(&self, task_id: &str, repo: Option<&str>) {
+        self.known
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), repo.map(str::to_string));
+    }
+
+    /// The params of every `task/lookup` asked so far.
+    pub fn requests(&self) -> Vec<Value> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl Default for LookupHarness {
+    fn default() -> Self {
+        Self::new()
+    }
 }

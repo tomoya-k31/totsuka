@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use common::{
-    Canned, FakeFactory, Recorded, Shared, SubmitHarness, accept_with_hello,
+    Canned, FakeFactory, LookupHarness, Recorded, Shared, SubmitHarness, accept_with_hello,
     block_actions_envelope, call, mention_envelope, scratch_state_dir, send_and_await_ack,
     wait_until, ws_listener,
 };
@@ -23,6 +23,9 @@ fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
             shared: shared.clone(),
         },
         harness.client.clone(),
+        // Every mention here opens a new conversation, so the lookup answers
+        // `known: false` and the flow is the pre-#242 one.
+        LookupHarness::new().client,
     );
     (srv, harness)
 }
@@ -133,13 +136,13 @@ async fn publish_draft_flow(
     let mut ws = accept_with_hello(listener).await;
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
     let task = harness.next_task().await;
-    assert_eq!(task["id"], "C1:100.2");
+    assert_eq!(task["id"], "C1:100.0");
 
     call(
         &mut srv,
         3,
         "result/publish",
-        json!({ "task_id": "C1:100.2", "content": PUBLISHED_CONTENT, "format": "markdown" }),
+        json!({ "task_id": "C1:100.0", "content": PUBLISHED_CONTENT, "format": "markdown" }),
     )
     .await;
     (srv, ws)
@@ -455,7 +458,7 @@ async fn drafts_survive_a_restart() {
         &mut srv1,
         3,
         "result/publish",
-        json!({ "task_id": "C1:100.2", "content": PUBLISHED_CONTENT, "format": "markdown" }),
+        json!({ "task_id": "C1:100.0", "content": PUBLISHED_CONTENT, "format": "markdown" }),
     )
     .await;
     let (draft_id, ..) = draft_buttons(&shared1);
@@ -784,7 +787,7 @@ async fn empty_publish_fails_without_consuming_the_pending_entry() {
     // An empty result is rejected…
     let line = json!({
         "jsonrpc": "2.0", "id": 3, "method": "result/publish",
-        "params": { "task_id": "C1:100.2", "content": "   \n\n" }
+        "params": { "task_id": "C1:100.0", "content": "   \n\n" }
     });
     let reply = srv.handle_line(&line.to_string()).await;
     let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
@@ -802,7 +805,7 @@ async fn empty_publish_fails_without_consuming_the_pending_entry() {
         &mut srv,
         4,
         "result/publish",
-        json!({ "task_id": "C1:100.2", "content": PUBLISHED_CONTENT }),
+        json!({ "task_id": "C1:100.0", "content": PUBLISHED_CONTENT }),
     )
     .await;
     assert_eq!(requests_for(&shared, "chat.postEphemeral").len(), 1);
