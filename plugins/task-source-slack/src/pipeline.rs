@@ -453,7 +453,7 @@ async fn handle_block_actions<T: SlackTransport, S: Submitter>(
         crate::approval::handle_approval_action(
             api,
             state,
-            &config.source_name,
+            config,
             payload,
             action_id,
             value,
