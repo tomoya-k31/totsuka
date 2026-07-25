@@ -1209,14 +1209,17 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     // and name the remedy instead of surfacing raw git stderr:
                     // re-creation (#254) already absorbs every case totsuka
                     // caused itself, so reaching here needs a human.
-                    Err(WorktreeError::AlreadyExists { branch }) => {
+                    Err(WorktreeError::AlreadyExists { branch, path }) => {
                         return self
                             .fail_dispatch(
                                 &record,
                                 format!(
-                                    "a worktree for branch `{branch}` exists but is not recorded \
-                                     for this task; remove it (`git worktree remove`, or accept \
-                                     the cleanup `totsuka doctor` offers) and retry"
+                                    "`{}` is already occupied (branch `{branch}`) but is not \
+                                     recorded for this task; remove it — `git worktree remove {}`, \
+                                     or the cleanup `totsuka doctor` offers, or plain `rm -rf` if \
+                                     it is not a worktree at all — and retry",
+                                    path.display(),
+                                    path.display(),
                                 ),
                             )
                             .await;

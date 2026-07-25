@@ -59,10 +59,19 @@ pub enum WorktreeError {
         stderr: String,
     },
     /// The target branch/worktree already exists (retry reuse is #55/#57).
-    #[error("worktree or branch `{branch}` already exists → cancel/retry the owning task instead")]
+    ///
+    /// The path is carried alongside the branch because git reports "already
+    /// exists" for a *plain directory* at the target too — where the remedy is
+    /// removing that directory, not `git worktree remove` — and the operator
+    /// cannot act on either without knowing which path is meant.
+    #[error(
+        "worktree or branch `{branch}` already exists at {path} → cancel/retry the owning task instead"
+    )]
     AlreadyExists {
         /// Branch name.
         branch: String,
+        /// The worktree path that could not be created.
+        path: PathBuf,
     },
     /// A git command failed for another reason.
     #[error("git {command} failed: {stderr}")]
@@ -110,6 +119,16 @@ pub enum CleanupDecision {
     Retain,
     /// Uncommitted changes present (data-loss guard, F-23).
     Dirty,
+}
+
+/// Where `git worktree add` should get its branch from (#254). See
+/// [`branch_source`](WorktreeManager::branch_source) for the priority order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BranchSource {
+    /// The branch already exists locally — check it out untouched (no `-b`).
+    Existing,
+    /// Create the branch at this commit.
+    CreateAt(String),
 }
 
 /// A created worktree.
@@ -338,20 +357,9 @@ impl<G: GitRunner> WorktreeManager<G> {
         let path_str = path.display().to_string();
         // Re-creation must work, not just first creation (#254): a task whose
         // worktree was cleaned up is dispatched again on retry or on a new
-        // message in the same conversation. `remove` deletes the branch only
-        // best-effort (`branch -d` refuses unmerged commits), so the branch
-        // routinely outlives its directory — and `-b` on an existing branch is
-        // a hard error. Check first and reuse the branch as-is; deliberately
-        // *not* resetting it to `base_commit`, which would destroy exactly the
-        // committed-but-unpushed work that made `-d` refuse.
-        let branch_exists = self.local_branch_exists(req.repo_path, &branch)?;
-        let mut add = self.worktree_add(
-            req.repo_path,
-            &path_str,
-            &branch,
-            &base_commit,
-            branch_exists,
-        )?;
+        // message in the same conversation.
+        let mut source = self.branch_source(req.repo_path, &branch, &base_commit)?;
+        let mut add = self.worktree_add(req.repo_path, &path_str, &branch, &source)?;
         if !add.success() && is_stale_registration(&add.stdout, &add.stderr) {
             // The directory vanished without `git worktree remove` (a manual
             // `rm -rf`, or a crash mid-cleanup), leaving the registration in
@@ -359,19 +367,36 @@ impl<G: GitRunner> WorktreeManager<G> {
             // registrations whose directory is already gone — and add again.
             let prune = self.run_with_transient_retry(req.repo_path, &["worktree", "prune"])?;
             if prune.success() {
-                add = self.worktree_add(
-                    req.repo_path,
-                    &path_str,
-                    &branch,
-                    &base_commit,
-                    branch_exists,
-                )?;
+                add = self.worktree_add(req.repo_path, &path_str, &branch, &source)?;
+            } else {
+                // `prune` acts on the whole repository, so a failure here is
+                // worth seeing even though the `worktree add` error below is
+                // what the caller ultimately gets.
+                tracing::warn!(
+                    repo = %req.repo_path.display(),
+                    stderr = %prune.stderr,
+                    "`git worktree prune` failed while recovering a stale registration"
+                );
             }
+        }
+        if !add.success()
+            && source != BranchSource::Existing
+            && self.ref_exists(req.repo_path, &format!("refs/heads/{branch}"))?
+        {
+            // `git worktree add -b` is **not atomic**: it can create the branch
+            // and then fail. `run_with_transient_retry` re-runs the whole
+            // command, so a parallel creation losing the `commondir` race
+            // (§5.5) leaves the second attempt dying on the branch its own
+            // first attempt just made — "a branch named `X` already exists".
+            // The branch state we read before the add is therefore stale;
+            // re-read it and check out what is actually there.
+            source = BranchSource::Existing;
+            add = self.worktree_add(req.repo_path, &path_str, &branch, &source)?;
         }
         if !add.success() {
             let combined = format!("{}{}", add.stdout, add.stderr);
             if combined.contains("already exists") || combined.contains("already used") {
-                return Err(WorktreeError::AlreadyExists { branch });
+                return Err(WorktreeError::AlreadyExists { branch, path });
             }
             return Err(WorktreeError::Git {
                 command: "worktree add".to_string(),
@@ -382,30 +407,70 @@ impl<G: GitRunner> WorktreeManager<G> {
         Ok(Worktree { path, branch })
     }
 
-    /// `git worktree add`, with (`-b <branch> <commit>`) or without (`<branch>`)
-    /// branch creation.
+    /// Where the branch for a (re-)created worktree comes from (#254).
+    ///
+    /// Priority, and why each step exists:
+    ///
+    /// 1. **A surviving local branch** → check it out untouched. `remove`
+    ///    deletes branches only best-effort, and `git branch -d` refuses one
+    ///    with unmerged commits — precisely the branch worth keeping. Resetting
+    ///    it to `base_commit` would destroy the work that made `-d` refuse.
+    /// 2. **A surviving remote branch** → re-create at `origin/{branch}`. This
+    ///    is not hypothetical: [`push_branch`](Self::push_branch) sets an
+    ///    upstream, and `git branch -d` *does* delete a branch that is merged
+    ///    into its **upstream** — so cleanup succeeds on exactly the branches
+    ///    that were already published, leaving their commits only on the
+    ///    remote. Branching from `origin/{default}` here would strand the
+    ///    published work and make the next `push -u` fail as non-fast-forward.
+    /// 3. **Neither** → the fresh `origin/{default}` commit (first creation).
+    fn branch_source(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        base_commit: &str,
+    ) -> Result<BranchSource, WorktreeError> {
+        if self.ref_exists(repo_path, &format!("refs/heads/{branch}"))? {
+            return Ok(BranchSource::Existing);
+        }
+        // Resolve to a commit rather than passing `origin/{branch}`: branching
+        // off a remote-tracking ref sets up upstream tracking, which writes
+        // `.git/config` and contends under parallel creation (§5.5) — the same
+        // reason `base_commit` is pre-resolved above.
+        let remote = format!("refs/remotes/origin/{branch}");
+        if self.ref_exists(repo_path, &remote)? {
+            let rev = self.git.run(
+                repo_path,
+                &["rev-parse", "--verify", &format!("{remote}^{{commit}}")],
+            )?;
+            if rev.success() {
+                return Ok(BranchSource::CreateAt(rev.stdout.trim().to_string()));
+            }
+        }
+        Ok(BranchSource::CreateAt(base_commit.to_string()))
+    }
+
+    /// `git worktree add`, creating the branch or checking out an existing one.
     fn worktree_add(
         &self,
         repo_path: &Path,
         path_str: &str,
         branch: &str,
-        base_commit: &str,
-        branch_exists: bool,
+        source: &BranchSource,
     ) -> Result<crate::ports::git::GitOutput, WorktreeError> {
-        let args: Vec<&str> = if branch_exists {
-            vec!["worktree", "add", path_str, branch]
-        } else {
-            vec!["worktree", "add", path_str, "-b", branch, base_commit]
+        let args: Vec<&str> = match source {
+            BranchSource::Existing => vec!["worktree", "add", path_str, branch],
+            BranchSource::CreateAt(commit) => {
+                vec!["worktree", "add", path_str, "-b", branch, commit]
+            }
         };
         self.run_with_transient_retry(repo_path, &args)
     }
 
-    /// Whether `refs/heads/{branch}` exists in the repo.
-    fn local_branch_exists(&self, repo_path: &Path, branch: &str) -> Result<bool, WorktreeError> {
-        let refname = format!("refs/heads/{branch}");
+    /// Whether a fully-qualified ref exists in the repo.
+    fn ref_exists(&self, repo_path: &Path, refname: &str) -> Result<bool, WorktreeError> {
         let out = self
             .git
-            .run(repo_path, &["show-ref", "--verify", "--quiet", &refname])?;
+            .run(repo_path, &["show-ref", "--verify", "--quiet", refname])?;
         Ok(out.success())
     }
 
@@ -637,13 +702,16 @@ fn is_transient_git_error(stderr: &str) -> bool {
 /// use 'add -f' to override, or 'prune' or 'remove' to clear
 /// ```
 ///
-/// Matched narrowly on "missing" + "registered" so a *live* worktree at the
-/// same path (an operator's own, or another task's) still errors out instead of
-/// being pruned away.
+/// Matched on git's exact phrasing rather than on looser combinations of
+/// "missing" and "registered": a *live* worktree at the same path (an
+/// operator's own, or another task's) must error out instead of being pruned
+/// away, so a false positive is far worse than a false negative. Should git
+/// ever reword this, recovery simply stops happening and the caller gets the
+/// plain `worktree add` error — the safe direction to fail in.
 fn is_stale_registration(stdout: &str, stderr: &str) -> bool {
-    let s = format!("{stdout}{stderr}").to_ascii_lowercase();
-    s.contains("missing but already registered")
-        || (s.contains("missing") && s.contains("registered worktree"))
+    format!("{stdout}{stderr}")
+        .to_ascii_lowercase()
+        .contains("missing but already registered")
 }
 
 /// Canonicalize a path, falling back to the original if it does not exist.

@@ -205,6 +205,50 @@ fn recreates_over_a_surviving_branch_without_losing_its_commits() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// The nastiest re-creation case, and the one a `pull_request` workflow hits
+/// every time: once `push_branch` has set an upstream, `git branch -d` *does*
+/// delete the branch (it is merged into its upstream), so cleanup succeeds on
+/// exactly the branches whose commits matter. Re-creating from
+/// `origin/{default}` there would strand the published work and make the next
+/// `push -u` a non-fast-forward rejection (#254).
+#[test]
+fn recreates_from_the_remote_branch_after_a_published_branch_was_cleaned_up() {
+    let base = scratch("recreate-published");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let first = mgr.create(&request(&clone, "45", &env)).unwrap();
+    git(
+        &first.path,
+        &["commit", "--allow-empty", "-m", "published work"],
+    );
+    let published = git(&first.path, &["rev-parse", "HEAD"]);
+    mgr.push_branch(&first.path, &first.branch).unwrap();
+
+    mgr.remove(&clone, &first.path, &first.branch).unwrap();
+    assert!(
+        git(&clone, &["branch", "--list", &first.branch]).is_empty(),
+        "the local branch really is deleted once published — that is the hazard"
+    );
+
+    let second = mgr.create(&request(&clone, "45", &env)).unwrap();
+    assert_eq!(
+        git(&second.path, &["rev-parse", "HEAD"]),
+        published,
+        "must re-create at the remote branch, not at origin/main"
+    );
+    // ...so the next publish fast-forwards instead of being rejected.
+    git(
+        &second.path,
+        &["commit", "--allow-empty", "-m", "more work"],
+    );
+    mgr.push_branch(&second.path, &second.branch).unwrap();
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A directory removed *without* `git worktree remove` (a manual `rm -rf`, or a
 /// crash mid-cleanup) leaves the registration behind, and git then refuses to
 /// add at that path. Re-creation prunes the stale entry and proceeds (#254).
