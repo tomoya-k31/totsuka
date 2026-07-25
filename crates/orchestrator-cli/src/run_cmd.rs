@@ -112,7 +112,7 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
         None => None,
     };
 
-    let mut settings = settings_from_config(&cfg, &env)?;
+    let mut settings = settings_from_config(&cfg, &env, paths)?;
     settings.readme_cache_dir = Some(paths.cache_dir().to_path_buf());
 
     // Hook runtime (#131/#138): the UDS receiver endpoint + Bearer token, the

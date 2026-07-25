@@ -146,6 +146,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     };
 
     if let Some(cfg) = &cfg {
+        check_worktree_location(cfg, &env, &mut checks);
         check_hooks(cx, cfg, config_ok, &env, &mut checks);
         check_plugins(cx, cfg, &env, &mut checks);
         check_llm_key(cfg, &env, &mut checks);
@@ -661,6 +662,60 @@ fn check_spool(cx: &Cx, cfg: &RootConfig, env: &HashMap<String, String>, checks:
                 dir.display()
             ),
             "run `totsuka run` to drain the spool (idempotent); inspect any *.corrupt files by hand",
+        ));
+    }
+}
+
+/// Operator-supplied worktree location templates must expand (F-22).
+///
+/// An unset `${VAR}` is a hard error in `expand_env`, and worktree creation
+/// happens per dispatch — so a bad template does not surface at startup, it
+/// fails every task at `fail_dispatch`. Catching it here mirrors `check_spool`.
+///
+/// Only explicit values are checked: the built-in default is pre-resolved from
+/// [`Paths`](orchestrator_core::paths::Paths) and always expands. The rendered
+/// value is discarded — `{repo_name}` / `{branch}` are still unresolved at this
+/// point, so there is no directory to probe for writability.
+fn check_worktree_location(
+    cfg: &RootConfig,
+    env: &HashMap<String, String>,
+    checks: &mut Vec<Check>,
+) {
+    let env_fn = |k: &str| env.get(k).cloned();
+    let templates = std::iter::once((None, cfg.worktree.location.as_deref())).chain(
+        cfg.repositories
+            .iter()
+            .map(|r| (Some(r.name.as_str()), r.worktree_location.as_deref())),
+    );
+
+    let mut checked = 0usize;
+    let mut failed = false;
+    for (repo, template) in templates {
+        let Some(template) = template else { continue };
+        checked += 1;
+        if let Err(e) = config::expand_path(template, &env_fn) {
+            failed = true;
+            let referrer = match repo {
+                Some(name) => format!("[[repositories]] `{name}`.worktree_location"),
+                None => "[worktree].location".to_string(),
+            };
+            checks.push(Check::fail(
+                "worktree-location",
+                format!("{referrer} does not expand: {e}"),
+                format!(
+                    "fix the ${{ENV}} reference in {referrer}, or drop the key to use the default under $XDG_STATE_HOME/totsuka (falling back to $HOME/.local/state)"
+                ),
+            ));
+        }
+    }
+
+    if !failed {
+        checks.push(Check::ok(
+            "worktree-location",
+            match checked {
+                0 => "using the built-in default location".to_string(),
+                n => format!("{n} configured location template(s) expand"),
+            },
         ));
     }
 }
@@ -1264,6 +1319,80 @@ mod tests {
     use orchestrator_core::adapters::TaskRecord;
     use orchestrator_core::domain::state::TaskState;
     use plugin_protocol::methods::SessionInfo;
+
+    fn worktree_location_checks(toml: &str, env: &[(&str, &str)]) -> Vec<Check> {
+        let cfg = RootConfig::from_toml_str(toml).unwrap();
+        let env: HashMap<String, String> = env
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        let mut checks = Vec::new();
+        check_worktree_location(&cfg, &env, &mut checks);
+        checks
+    }
+
+    #[test]
+    fn worktree_location_default_needs_no_env() {
+        // No `[worktree]` at all — the default is pre-resolved from `Paths`,
+        // so doctor has nothing to expand and must not fail on an empty env.
+        let checks = worktree_location_checks("", &[]);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].ok);
+        assert_eq!(checks[0].name, "worktree-location");
+    }
+
+    #[test]
+    fn worktree_location_flags_an_unset_env_reference() {
+        let checks = worktree_location_checks(
+            r#"
+[worktree]
+location = "${TOTSUKA_DOCTOR_UNSET_VAR}/wt/{branch}"
+"#,
+            &[],
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(!checks[0].ok);
+        assert!(
+            checks[0].detail.contains("[worktree].location"),
+            "message names the offending key: {}",
+            checks[0].detail
+        );
+    }
+
+    #[test]
+    fn worktree_location_flags_a_per_repo_override() {
+        // The per-repo override (`run/mod.rs` prefers it over the global one)
+        // must be checked too, and reported by repository name.
+        let checks = worktree_location_checks(
+            r#"
+[[repositories]]
+name = "web"
+path = "/repos/web"
+worktree_location = "${TOTSUKA_DOCTOR_UNSET_VAR}/wt/{branch}"
+"#,
+            &[],
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(!checks[0].ok);
+        assert!(
+            checks[0].detail.contains("`web`"),
+            "message names the repository: {}",
+            checks[0].detail
+        );
+    }
+
+    #[test]
+    fn worktree_location_accepts_a_resolvable_env_reference() {
+        let checks = worktree_location_checks(
+            r#"
+[worktree]
+location = "${MY_ROOT}/wt/{branch}"
+"#,
+            &[("MY_ROOT", "/tmp/root")],
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].ok, "{}", checks[0].detail);
+    }
 
     /// A task whose **source task id** (what the pane label carries — e.g. a
     /// Slack thread key, never the DB row id) is `source_task_id`.

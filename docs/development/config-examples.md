@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-timestamp: 2026-07-24T12:00:00Z
+timestamp: 2026-07-25T09:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -195,7 +195,11 @@ api_key_ref = "op://Dev/Openrouter/api_key"    # シークレット参照（後�
 
 # ── worktree ──────────────────────────────────────────────
 [worktree]
-location = "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}"  # 既定値と同じ
+# 既定はこのキーを書かないこと。既定値は `$XDG_STATE_HOME/totsuka`（未設定時は
+# `$HOME/.local/state/totsuka`）を解決済みのパスとして埋めた
+# `<state dir>/worktrees/{repo_name}/{branch}`。下は明示的に別の場所へ置く例で、
+# `${ENV}` は展開されるが未設定変数はエラーになる（`totsuka doctor` が検出する）。
+location = "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}"
 cleanup = "manual"          # implement モードの掃除: "immediate" | "manual" | { retention_days = 5 }
 plan_cleanup = "immediate"  # plan モードの掃除（既定 immediate）
 
