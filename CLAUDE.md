@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Totsuka is an AI-driven dev-flow automation tool (detects task instructions and orchestrates them to AI agents via a Socket API, working with `herdr`). The repo is currently a fresh scaffold: **no source code exists yet** — language and directory structure are still undecided. The only established structure right now is the `docs/` knowledge bundle and its tooling.
+Totsuka is an AI-driven dev-flow automation tool (detects task instructions and orchestrates them to AI agents via a Socket API, working with `herdr`). The repo is a Rust workspace (see the root `Cargo.toml` for the member crates); all project knowledge lives in the `docs/` OKF bundle.
 
 ## Code Intelligence (Rust / rust-analyzer)
 

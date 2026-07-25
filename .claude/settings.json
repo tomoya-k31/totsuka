@@ -14,6 +14,8 @@
   },
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": true,
-    "code-review@claude-plugins-official": true
+    "code-review@claude-plugins-official": true,
+    "mattpocock-skills@mattpocock": true,
+    "context7@claude-plugins-official": true
   }
 }
