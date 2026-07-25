@@ -99,19 +99,23 @@ impl SharedState {
     /// should address whoever asked it.
     pub fn insert_pending(&self, task_id: String, pending: PendingMention) {
         let mut index = self.pending.lock().unwrap();
-        if !index.entries.contains_key(&task_id) {
-            if index.order.len() >= PENDING_CAP
-                && let Some(evicted) = index.order.pop_front()
-            {
-                index.entries.remove(&evicted);
-                tracing::warn!(
-                    task_id = %evicted,
-                    "pending-mention index full; evicted the oldest entry \
-                     (its reply can no longer be placed)"
-                );
-            }
-            index.order.push_back(task_id.clone());
+        // Overwriting refreshes the eviction position. Before #242 an
+        // overwrite was practically unreachable (one task per message), so
+        // leaving the order alone was the same as appending; now a live
+        // conversation would keep the position of its *first* message and be
+        // evicted ahead of threads nobody has touched in weeks.
+        index.order.retain(|id| id != &task_id);
+        if index.order.len() >= PENDING_CAP
+            && let Some(evicted) = index.order.pop_front()
+        {
+            index.entries.remove(&evicted);
+            tracing::warn!(
+                task_id = %evicted,
+                "pending-mention index full; evicted the oldest entry \
+                 (its reply can no longer be placed)"
+            );
         }
+        index.order.push_back(task_id.clone());
         index.entries.insert(task_id, pending);
     }
 
@@ -130,6 +134,26 @@ impl SharedState {
             index.order.retain(|id| id != task_id);
         }
         taken
+    }
+
+    /// Drop `task_id`'s coordinates **only if they are still the ones this
+    /// delivery installed** (identified by `mention_ts`).
+    ///
+    /// The rollback path for a submission that permanently failed. Since #242
+    /// the key is the conversation, so a blind removal is a live hazard: a
+    /// second message whose submit fails would take down the coordinates the
+    /// *first* one installed, and that first task — running happily — would
+    /// find nothing at `result/publish` time and lose its reply.
+    fn discard_pending_delivery(&self, task_id: &str, mention_ts: &str) {
+        let mut index = self.pending.lock().unwrap();
+        if index
+            .entries
+            .get(task_id)
+            .is_some_and(|p| p.mention_ts == mention_ts)
+        {
+            index.entries.remove(task_id);
+            index.order.retain(|id| id != task_id);
+        }
     }
 
     /// Record the resolved self-DM record channel (set once by the pipeline
@@ -541,8 +565,8 @@ async fn handle_block_actions<T: SlackTransport, S: Submitter>(
 /// Build the task from an enriched mention and push it via `task/submit`
 /// (0.1.6). The pending entry is inserted **before** submitting so a
 /// lightning-fast `result/publish` can never miss it; a submission that
-/// permanently fails removes it again (the mention stays answerable on
-/// Slack — re-mention to retry).
+/// permanently fails withdraws **its own** entry again (the mention stays
+/// answerable on Slack — re-mention to retry).
 async fn submit<S: Submitter>(
     state: &SharedState,
     config: &SlackConfig,
@@ -552,6 +576,10 @@ async fn submit<S: Submitter>(
 ) {
     let (task, pending) = build_task(config, enriched, repo_hint);
     let task_id = task.id.clone();
+    // Identifies *this* delivery's entry on the rollback paths below: since
+    // #242 the pending index is keyed by conversation, and a sibling message
+    // may have installed (or may yet install) coordinates under the same key.
+    let mention_ts = pending.mention_ts.clone();
     state.insert_pending(task_id.clone(), pending);
     match submitter.submit(task).await {
         SubmitOutcome::Accepted => {
@@ -566,14 +594,14 @@ async fn submit<S: Submitter>(
                 "orchestrator rejected the task: {}",
                 reason.as_deref().unwrap_or("no reason given")
             );
-            state.take_pending(&task_id);
+            state.discard_pending_delivery(&task_id, &mention_ts);
         }
         SubmitOutcome::GaveUp { error } => {
             tracing::error!(
                 task_id,
                 "task submission gave up: {error} → re-mention on Slack to retry"
             );
-            state.take_pending(&task_id);
+            state.discard_pending_delivery(&task_id, &mention_ts);
         }
     }
 }
@@ -1066,5 +1094,65 @@ mod tests {
         let value = json!({ "task": "C1:1.0" }).to_string();
         assert_eq!(parse_skip_value(&value), Some("C1:1.0".to_string()));
         assert!(parse_skip_value("{}").is_none());
+    }
+
+    fn coords(mention_ts: &str) -> PendingMention {
+        PendingMention {
+            channel: "C1".into(),
+            reply_ts: "100.0".into(),
+            mention_ts: mention_ts.into(),
+            sender_id: "U_OTHER".into(),
+            sender_name: "アリス".into(),
+            permalink: None,
+        }
+    }
+
+    #[test]
+    fn a_failed_submit_only_withdraws_its_own_coordinates() {
+        // #242 made the pending index conversation-keyed, which turns a blind
+        // rollback into a live hazard: the first message's task is running
+        // fine, a second message in the same thread fails to submit, and a
+        // blind `take_pending` would delete the only entry — leaving the
+        // finished first task with nowhere to put its reply.
+        let state = SharedState::default();
+        state.insert_pending("C1:100.0".into(), coords("100.1"));
+
+        // A sibling delivery that never became the current entry.
+        state.discard_pending_delivery("C1:100.0", "100.2");
+        assert_eq!(
+            state.pending("C1:100.0").map(|p| p.mention_ts),
+            Some("100.1".to_string()),
+            "another delivery's failure must not take these coordinates down"
+        );
+
+        // Its own failure does withdraw them.
+        state.discard_pending_delivery("C1:100.0", "100.1");
+        assert!(state.pending("C1:100.0").is_none());
+    }
+
+    #[test]
+    fn overwriting_a_conversation_refreshes_its_eviction_position() {
+        // Since #242 a follow-up overwrites its conversation's entry. If the
+        // order were left alone, a live conversation would keep the position
+        // of its *first* message and be evicted ahead of threads nobody has
+        // touched since.
+        let state = SharedState::default();
+        state.insert_pending("old".into(), coords("1"));
+        state.insert_pending("other".into(), coords("2"));
+        // `old` gets a new message: it is now the most recently touched.
+        state.insert_pending("old".into(), coords("3"));
+
+        let order: Vec<String> = state
+            .pending
+            .lock()
+            .unwrap()
+            .order
+            .iter()
+            .cloned()
+            .collect();
+        assert_eq!(order, vec!["other".to_string(), "old".to_string()]);
+        // Overwriting must not duplicate the key either, or the index would
+        // evict a live entry while a stale name for it lingers.
+        assert_eq!(state.pending.lock().unwrap().entries.len(), 2);
     }
 }
