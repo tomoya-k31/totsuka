@@ -46,9 +46,9 @@ use serde_json::Value;
 use tokio::sync::{Semaphore, mpsc};
 
 use crate::adapters::clock::SystemClock;
-use crate::adapters::plugin_host::{IncomingRequest, Plugin};
+use crate::adapters::plugin_host::{HostError, IncomingRequest, Plugin};
 use crate::adapters::state_db::{
-    NewTask, StateDb, StateError, TaskMessageInsert, TaskMessageOutcome, TaskRecord,
+    NewTask, StateDb, StateError, TaskMessage, TaskMessageInsert, TaskMessageOutcome, TaskRecord,
 };
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{
@@ -902,6 +902,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // state, so a completion that only reached the spool is applied this
         // cycle rather than a cycle late.
         self.replay_spool().await?;
+        // Before dispatching: a conversation that finished with messages still
+        // queued goes back to `Queued`, so `dispatch_ready` picks it up in the
+        // same cycle rather than the next one (#242).
+        self.requeue_conversations_with_unsent_messages().await?;
         self.select_repos().await?;
         self.dispatch_ready().await?;
         // Escalate hook-dispatched tasks that have gone silent past their
@@ -1218,28 +1222,33 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 .await;
         }
 
-        // Slack thread conversation continuity (#140, D-10): a follow-up
-        // mention in the same thread is a *new* task, but resumes the prior
-        // task's session via the tool's resume mechanism so context carries
-        // over.
-        // Decided here, before the retry-reuse block (which only fires for a
-        // retry of *this* task and early-returns); the value threads into
-        // `task/dispatch` below. Best-effort — any unmet precondition yields
-        // `None` and falls back to a normal fresh dispatch, with no warning.
-        // The worktree is created by the normal flow below (recreated fresh if
-        // the prior one was discarded); only the session is reused. Gated on
-        // the tool's capabilities (#196): a tool that cannot resume, or whose
-        // native session id is never captured, always dispatches fresh.
+        // Conversation continuity (#242, superseding #140's D-10): a follow-up
+        // message reopens *this* task, so the session to resume is simply this
+        // task's own most recent one — no cross-task search. Read before
+        // `reserve_session` below, which would otherwise make the empty row it
+        // creates the "latest".
+        //
+        // Best-effort: a missing or empty id yields `None` and dispatches
+        // fresh, with no warning. Gated on the tool's capabilities (#196): a
+        // tool that cannot resume, or whose native session id is never
+        // captured, always dispatches fresh.
+        //
+        // E-09: the reply destination is always the task's own
+        // `source_task_id` (task_id-origin routing via `job_id`); nothing here
+        // — or anywhere — derives a destination from a tool session id.
+        let latest = self.db.latest_session(record.id)?;
         let tool_caps = tool_profile.capabilities();
         let resume_session_id = if tool_caps.resume && tool_caps.session_id_capture {
-            self.thread_resume_session_id(&record, &agent_name)?
+            latest
+                .as_ref()
+                .and_then(|s| s.tool_session_id.clone())
+                .filter(|sid| !sid.is_empty())
         } else {
             None
         };
 
         // Retry reuse (F-44): a surviving worktree + session resumes the
         // existing conversation instead of dispatching anew.
-        let latest = self.db.latest_session(record.id)?;
         if let RetryPlan::ReuseSession {
             plugin, session_id, ..
         } = recovery::retry_plan(&record, latest.as_ref())
@@ -1336,7 +1345,20 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .get(&agent_name)
             .map(|a| a.capabilities().hook_capable())
             .unwrap_or(false);
-        let task = task_from_record(&record);
+        // Message-driven prompt (#242): what the agent is asked to do is the
+        // messages nobody has sent it yet, concatenated oldest-first, so a
+        // burst of three replies produces one dispatch and one answer rather
+        // than three panes. A resumed session already holds everything before
+        // them, so only the new ones go.
+        //
+        // An empty ledger falls back to the record's own body — the shape
+        // pre-#242 tasks were stored in, and what v6's backfilled rows leave
+        // behind.
+        let pending = self.db.pending_task_messages(record.id)?;
+        let mut task = task_from_record(&record);
+        if let Some(body) = conversation_prompt(&pending) {
+            task.body = Some(body);
+        }
         let (job_id, hook_spec, reserved_row, visible_hook_context) = match hook_capable
             .then(|| self.hook_launch(&record.workflow))
             .flatten()
@@ -1408,27 +1430,46 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // flags, hook settings, resume id) is assembled in core from the
         // resolved profile; the plugin launches it verbatim. The deprecated
         // `hook` spec rides along for plugins predating protocol 0.2.3.
-        let tool_launch = tool_profile.launch_spec(&LaunchInputs {
-            plan: mode == plugin_protocol::methods::ExecutionMode::Plan,
-            settings_path: hook_spec.as_ref().map(|h| h.settings_path.as_str()),
-            resume_session_id: resume_session_id.as_deref(),
-            env: hook_spec
-                .as_ref()
-                .map(|h| h.env.clone())
-                .unwrap_or_default(),
-        });
-        let params = TaskDispatchParams {
-            task,
+        // `tool_launch` bakes the resume flag into the argv, so a retry
+        // without resume has to rebuild the whole spec — hence a closure
+        // rather than a mutated struct.
+        let build_params = |resume: Option<String>| TaskDispatchParams {
+            task: task.clone(),
             worktree_path: worktree_path.display().to_string(),
             mode,
-            extra_context,
-            job_id,
-            resume_session_id,
-            hook: hook_spec,
-            tool_launch,
+            extra_context: extra_context.clone(),
+            job_id: job_id.clone(),
+            hook: hook_spec.clone(),
+            tool_launch: tool_profile.launch_spec(&LaunchInputs {
+                plan: mode == plugin_protocol::methods::ExecutionMode::Plan,
+                settings_path: hook_spec.as_ref().map(|h| h.settings_path.as_str()),
+                resume_session_id: resume.as_deref(),
+                env: hook_spec
+                    .as_ref()
+                    .map(|h| h.env.clone())
+                    .unwrap_or_default(),
+            }),
+            resume_session_id: resume,
         };
-        let dispatched: TaskDispatchResult = match agent.call(method::TASK_DISPATCH, &params).await
+        let params = build_params(resume_session_id.clone());
+        let mut attempt = agent.call(method::TASK_DISPATCH, &params).await;
+        // `SESSION_UNRESUMABLE` (0.2.4, #242): the session we asked to resume
+        // is gone. Resuming is an optimization — the work itself does not
+        // depend on it — so drop it and dispatch once more. The retry cannot
+        // fail the same way (it names no session), so this never loops.
+        if let (Err(HostError::Rpc { code, message, .. }), Some(sid)) =
+            (&attempt, &resume_session_id)
+            && *code == plugin_protocol::error_code::SESSION_UNRESUMABLE
         {
+            tracing::warn!(
+                task_id = record.id,
+                tool_session_id = %sid,
+                "session could not be resumed ({message}); dispatching fresh — \
+                 the agent starts without the earlier conversation"
+            );
+            attempt = agent.call(method::TASK_DISPATCH, &build_params(None)).await;
+        }
+        let dispatched: TaskDispatchResult = match attempt {
             Ok(result) => result,
             Err(e) => {
                 // Roll back the pre-dispatch session reservation (hook path) so
@@ -1461,6 +1502,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 "kind": "dispatch", "plugin": agent_name, "session_id": dispatched.session_id,
             })),
         )?;
+        // The messages are in the agent's hands now. Stamped only after the
+        // dispatch succeeded, so a failed one leaves them queued for the
+        // retry; every message in this batch gets the same timestamp, which is
+        // what lets `task retry` later put exactly this batch back (#257).
+        if !pending.is_empty() {
+            self.db.mark_messages_processed(record.id)?;
+        }
         self.sessions.insert(
             (agent_name.clone(), dispatched.session_id.clone()),
             record.id,
@@ -1504,55 +1552,38 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 
-    /// The Claude session id a follow-up task should resume (Slack thread
-    /// conversation continuity, #140), or `None` to dispatch fresh.
+    /// Requeue conversations that finished while messages were still unsent
+    /// (#242).
     ///
-    /// Returns `Some(claude_sid)` only when **all** hold: the agent declares the
-    /// `resume_session` capability, `record` carries a `thread_key`, a *prior*
-    /// task in the same workflow+thread exists (E-09: matched on `workflow`, and
-    /// `record` excluded so it never resolves to itself), and that prior task's
-    /// latest session has a non-empty Claude session id (established by the
-    /// SessionStart hook, #138). Any miss yields `None` — conversation
-    /// continuity is best-effort and never hard-fails a dispatch.
+    /// Ingest deliberately leaves a message alone when the conversation is
+    /// mid-flight — interrupting a working agent to hand it one more line
+    /// would mean a second pane and a second answer. Something has to notice
+    /// once that dispatch is over, and this is that something.
     ///
-    /// E-09: the reply destination is always the *new* task's own
-    /// `source_task_id` (task_id-origin routing via `job_id`); nothing here — or
-    /// anywhere — derives a destination from a Claude session id, so a resumed
-    /// session can never mis-route a reply into the prior task's thread.
-    fn thread_resume_session_id(
-        &self,
-        record: &TaskRecord,
-        agent_name: &str,
-    ) -> Result<Option<String>, EngineError> {
-        let Some(agent) = self.plugins.agents.get(agent_name) else {
-            return Ok(None);
-        };
-        let Some(thread_key) = record.thread_key.as_deref() else {
-            return Ok(None);
-        };
-        if !agent.capabilities().resume_session {
-            return Ok(None);
+    /// `Cancelled` is excluded on purpose. Ingest still reopens a cancelled
+    /// conversation when a message arrives *after* the cancel — that is a
+    /// fresh instruction — but a message that was already sitting in the
+    /// ledger when a human cancelled must not undo them.
+    async fn requeue_conversations_with_unsent_messages(&mut self) -> Result<(), EngineError> {
+        for state in [TaskState::Done, TaskState::Failed] {
+            for record in self.db.tasks_in_state(state)? {
+                if self.db.pending_task_messages(record.id)?.is_empty() {
+                    continue;
+                }
+                self.db.apply_event(
+                    record.id,
+                    TaskEvent::Reopen,
+                    Some(serde_json::json!({
+                        "kind": "reopen", "cause": "messages_arrived_while_working",
+                    })),
+                )?;
+                tracing::info!(
+                    task_id = record.id,
+                    "conversation requeued: messages arrived while it was working"
+                );
+            }
         }
-        let Some(prior) = self
-            .db
-            .find_by_thread_key(&record.workflow, thread_key, record.id)?
-        else {
-            return Ok(None);
-        };
-        let resume = self
-            .db
-            .latest_session(prior.id)?
-            .and_then(|s| s.tool_session_id)
-            .filter(|sid| !sid.is_empty());
-        if let Some(sid) = &resume {
-            tracing::info!(
-                task_id = record.id,
-                prior_task_id = prior.id,
-                tool_session_id = %sid,
-                "resuming the prior task's tool session for thread continuity (#140)"
-            );
-        }
-        Ok(resume)
+        Ok(())
     }
 
     /// Try to re-attach to a session for retry reuse; `None` means dispatch
@@ -2448,6 +2479,26 @@ fn workflows_by_name(workflows: &[Workflow]) -> HashMap<&str, &Workflow> {
 
 /// Reconstruct the normalized [`Task`] from a stored record: the full ingest
 /// payload when present, else a minimal task from the columns.
+/// The prompt for one dispatch: the messages nobody has sent the agent yet,
+/// oldest first (#242).
+///
+/// `None` when there is nothing to say — an empty ledger (a task from before
+/// #242, or a row v6 backfilled), or messages that carried no text — so the
+/// caller keeps the body it already had rather than replacing it with "".
+///
+/// Several messages are joined by a blank line and nothing else. They are
+/// consecutive messages from one person in one conversation, which is exactly
+/// what a blank line separates in the source they came from; numbering or
+/// labelling them would put words in the human's mouth.
+fn conversation_prompt(pending: &[TaskMessage]) -> Option<String> {
+    let bodies: Vec<&str> = pending
+        .iter()
+        .map(|m| m.body.trim())
+        .filter(|b| !b.is_empty())
+        .collect();
+    (!bodies.is_empty()).then(|| bodies.join("\n\n"))
+}
+
 fn task_from_record(record: &TaskRecord) -> Task {
     record
         .source_payload
@@ -2946,6 +2997,198 @@ plan_cleanup = "keep_28d"
         // The payload keeps the whole normalized task for the audit trail.
         let payload: Task = serde_json::from_str(&messages[0].payload).unwrap();
         assert_eq!(payload.message_key.as_deref(), Some("C1:100"));
+    }
+
+    /// The prompt is the unsent messages, oldest first — and an empty ledger
+    /// leaves the caller's existing body alone rather than blanking it.
+    #[test]
+    fn conversation_prompt_joins_unsent_messages_and_leaves_nothing_to_say_alone() {
+        fn msg(id: i64, body: &str) -> TaskMessage {
+            TaskMessage {
+                id,
+                task_id: 1,
+                message_key: format!("m{id}"),
+                author: None,
+                body: body.to_string(),
+                url: None,
+                payload: "{}".to_string(),
+                received_at: "2026-01-01T00:00:00Z".to_string(),
+                processed_at: None,
+            }
+        }
+
+        assert_eq!(conversation_prompt(&[]), None, "nothing to say");
+        assert_eq!(
+            conversation_prompt(&[msg(1, "X を調べて")]),
+            Some("X を調べて".to_string()),
+            "a single message is its own body, unchanged"
+        );
+        assert_eq!(
+            conversation_prompt(&[msg(1, "X を調べて"), msg(2, "あと Y も"), msg(3, "急ぎで")]),
+            Some("X を調べて\n\nあと Y も\n\n急ぎで".to_string()),
+            "a burst arrives as one prompt, in order"
+        );
+        // Blank bodies (a bare mention, an attachment-only message) contribute
+        // nothing rather than blank lines...
+        assert_eq!(
+            conversation_prompt(&[msg(1, "  "), msg(2, "本題")]),
+            Some("本題".to_string())
+        );
+        // ...and a batch of only those is "nothing to say", so the record's
+        // own body survives.
+        assert_eq!(conversation_prompt(&[msg(1, ""), msg(2, "   ")]), None);
+    }
+
+    /// `task retry` after an agent failure must resend what the failed run was
+    /// given; requeueing the task alone would dispatch an empty prompt.
+    #[tokio::test]
+    async fn retry_puts_the_failed_dispatch_s_messages_back_on_the_queue() {
+        let mut engine = ingest_test_engine().await;
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        // Dispatched (messages handed over), then the agent failed.
+        engine
+            .db
+            .apply_event(id, TaskEvent::Dispatch, None)
+            .unwrap();
+        engine.db.mark_messages_processed(id).unwrap();
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        assert!(engine.db.pending_task_messages(id).unwrap().is_empty());
+
+        let (state, requeued) = engine.db.retry_task(id, None).unwrap();
+        assert_eq!(state, TaskState::Queued);
+        assert_eq!(requeued, 1);
+        assert_eq!(
+            conversation_prompt(&engine.db.pending_task_messages(id).unwrap()),
+            Some("one".to_string()),
+            "the retry has something to say again"
+        );
+    }
+
+    /// Messages that arrived while the agent was working are collected once it
+    /// is done — that is what makes ingest's "leave a running task alone"
+    /// safe.
+    #[tokio::test]
+    async fn a_finished_conversation_with_unsent_messages_is_requeued() {
+        let mut engine = ingest_test_engine().await;
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        engine
+            .db
+            .apply_event(id, TaskEvent::Dispatch, None)
+            .unwrap();
+        engine.db.mark_messages_processed(id).unwrap();
+        engine.db.apply_event(id, TaskEvent::Start, None).unwrap();
+
+        // A message lands mid-flight: ingest leaves the running task alone.
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:200"), "two"))
+            .unwrap();
+        engine
+            .requeue_conversations_with_unsent_messages()
+            .await
+            .unwrap();
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().state,
+            TaskState::Running,
+            "a working conversation is never interrupted"
+        );
+
+        // Once it finishes, the sweep picks the message up.
+        engine
+            .db
+            .apply_event(id, TaskEvent::BeginPublish, None)
+            .unwrap();
+        engine
+            .db
+            .apply_event(id, TaskEvent::Complete, None)
+            .unwrap();
+        engine
+            .requeue_conversations_with_unsent_messages()
+            .await
+            .unwrap();
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().state,
+            TaskState::Queued
+        );
+        assert_eq!(
+            conversation_prompt(&engine.db.pending_task_messages(id).unwrap()),
+            Some("two".to_string()),
+            "only the unsent message is resent"
+        );
+
+        // Idempotent: with nothing unsent, a finished conversation stays put.
+        engine.db.mark_messages_processed(id).unwrap();
+        engine
+            .db
+            .apply_event(id, TaskEvent::Dispatch, None)
+            .unwrap();
+        engine.db.apply_event(id, TaskEvent::Start, None).unwrap();
+        engine
+            .db
+            .apply_event(id, TaskEvent::BeginPublish, None)
+            .unwrap();
+        engine
+            .db
+            .apply_event(id, TaskEvent::Complete, None)
+            .unwrap();
+        engine
+            .requeue_conversations_with_unsent_messages()
+            .await
+            .unwrap();
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().state,
+            TaskState::Done
+        );
+    }
+
+    /// A human's `task cancel` outranks messages that were already waiting:
+    /// only a message arriving *after* the cancel reopens it (through ingest).
+    #[tokio::test]
+    async fn a_cancelled_conversation_is_not_revived_by_leftover_messages() {
+        let mut engine = ingest_test_engine().await;
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        engine.db.apply_event(id, TaskEvent::Cancel, None).unwrap();
+
+        engine
+            .requeue_conversations_with_unsent_messages()
+            .await
+            .unwrap();
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().state,
+            TaskState::Cancelled
+        );
+
+        // ...but a message arriving now is a fresh instruction.
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:200"), "two"))
+            .unwrap();
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().state,
+            TaskState::Queued
+        );
     }
 
     #[test]
