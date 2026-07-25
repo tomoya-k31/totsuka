@@ -84,8 +84,25 @@ struct TaskDetail {
     finished_at: Option<String>,
     created_at: String,
     updated_at: String,
+    /// The conversation, oldest first (#242). Empty for a task from a source
+    /// that has one message per task.
+    messages: Vec<MessageRow>,
     sessions: Vec<SessionRow>,
     events: Vec<EventRow>,
+}
+
+/// One message of the conversation. The body is **not** truncated here — the
+/// JSON document is what an audit reads; only the terminal rendering clips.
+#[derive(Debug, Serialize)]
+struct MessageRow {
+    message_key: String,
+    author: Option<String>,
+    body: String,
+    url: Option<String>,
+    received_at: String,
+    /// When the message was handed to the agent; `null` while it is still
+    /// queued. Messages dispatched together share one timestamp.
+    processed_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -171,6 +188,18 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
         finished_at: task.finished_at,
         created_at: task.created_at,
         updated_at: task.updated_at,
+        messages: db
+            .list_task_messages(id)?
+            .into_iter()
+            .map(|m| MessageRow {
+                message_key: m.message_key,
+                author: m.author,
+                body: m.body,
+                url: m.url,
+                received_at: m.received_at,
+                processed_at: m.processed_at,
+            })
+            .collect(),
         sessions: db
             .list_sessions(id)?
             .into_iter()
@@ -208,6 +237,37 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
             detail.branch.as_deref().unwrap_or("-")
         );
     }
+    if !detail.messages.is_empty() {
+        let queued = detail
+            .messages
+            .iter()
+            .filter(|m| m.processed_at.is_none())
+            .count();
+        println!(
+            "  conversation ({} message(s){}):",
+            detail.messages.len(),
+            if queued > 0 {
+                format!(", {queued} not yet sent to the agent")
+            } else {
+                String::new()
+            }
+        );
+        for m in &detail.messages {
+            // `→` = handed to the agent, `·` = still queued. The marker leads
+            // the line so a long conversation can be scanned down one column.
+            let mark = if m.processed_at.is_some() {
+                "→"
+            } else {
+                "·"
+            };
+            println!(
+                "    {mark} {} {} {}",
+                m.received_at,
+                m.author.as_deref().unwrap_or("-"),
+                one_line(&m.body, BODY_PREVIEW_CHARS)
+            );
+        }
+    }
     if !detail.sessions.is_empty() {
         println!("  sessions (newest first):");
         for s in &detail.sessions {
@@ -226,8 +286,16 @@ fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
     let task = db.get_task(id)?.ok_or_else(|| not_found(id))?;
     if task.state.is_terminal() {
+        // The advice has to match what `retry` actually accepts: it refuses a
+        // `done` task, and since #242 the way to carry a finished conversation
+        // forward is another message in it, not a re-run of the old one.
+        let next = if task.state == TaskState::Done {
+            "it finished; send another message in the conversation (the reply in its thread/issue) to continue it".to_string()
+        } else {
+            format!("use `totsuka task retry {id}` to re-run it")
+        };
         return Err(format!(
-            "task {id} is already {} → nothing to cancel; use `totsuka task retry {id}` to re-run it",
+            "task {id} is already {} → nothing to cancel; {next}",
             task.state
         )
         .into());
@@ -257,7 +325,11 @@ fn retry(cx: &Cx, id: i64) -> Result<(), CliError> {
     let task = db.get_task(id)?.ok_or_else(|| not_found(id))?;
     if !matches!(task.state, TaskState::Failed | TaskState::Cancelled) {
         let action = if task.state == TaskState::Done {
-            "completed tasks are not re-run; create a new task at the source instead"
+            // Since #242 `done` means "no unprocessed messages", not "closed
+            // forever": a new message reopens the conversation. Re-running the
+            // same instructions is a different thing, and not what anyone
+            // asking about a finished task wants.
+            "it finished; send another message in the conversation (the reply in its thread/issue) to continue it — a re-run of the same instructions is not what `retry` is for"
         } else {
             "only failed/cancelled tasks can be retried; `totsuka task cancel` it first if you want a re-run"
         };
@@ -324,6 +396,21 @@ fn verify(
         );
     }
     Ok(())
+}
+
+/// How much of a message body the terminal listing shows. The whole text is
+/// always in `--json`.
+const BODY_PREVIEW_CHARS: usize = 72;
+
+/// `body` as one line, clipped to `limit` **characters** (not bytes — Slack
+/// bodies are routinely Japanese, and slicing by byte would panic mid-glyph).
+fn one_line(body: &str, limit: usize) -> String {
+    let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= limit {
+        return flat;
+    }
+    let head: String = flat.chars().take(limit).collect();
+    format!("{head}…")
 }
 
 fn not_found(id: i64) -> CliError {
