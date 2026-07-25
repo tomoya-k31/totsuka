@@ -995,7 +995,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             url: task.url.clone(),
             // The full normalized task, so dispatch can reconstruct it.
             source_payload: serde_json::to_value(task).ok(),
-            // Carry the source's conversation-continuation key (E-09).
+            // The R-10 timeout anchor starts unset; the first hook signal
+            // stamps it.
             last_signal_at: None,
         };
         // Existing conversations are left untouched by this (`DO NOTHING`):

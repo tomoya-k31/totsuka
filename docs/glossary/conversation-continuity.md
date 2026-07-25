@@ -46,7 +46,7 @@ No conversation found with session ID: 6e3515d5-f1a1-4165-8a82-9d76a46a8a33
 
 ## 旧方式（#140、protocol 0.1.3〜0.2.4。**撤去済み**）
 
-追いメンションを**別タスク**として ingest し、`Task.thread_key`（`{channel}:{thread_ts}`）で同一 workflow の先行タスクを検索して、そのセッション ID を `task/dispatch(resume_session_id)` に渡していた。`thread_key` 列と `find_by_thread_key` は #264（protocol 0.3.0 / state.db v7）で撤去した — `Task.id` 自体が会話を指すようになり、相関すべき「先行タスク」が存在しなくなったため。
+追いメンションを**別タスク**として ingest し、`Task.thread_key`（`{channel}:{thread_ts}`）で同一 workflow の先行タスクを検索して、そのセッション ID を `task/dispatch(resume_session_id)` に渡していた。`find_by_thread_key` は #259 で（同一タスクになり横断検索が不要になったため）、`Task.thread_key` と `tasks.thread_key` 列は #264（protocol 0.3.0 / state.db v7）で撤去した — `Task.id` 自体が会話を指すようになり、相関すべき「先行タスク」が存在しなくなったため。
 
 ## E-09（誤スレッド送信防止）
 

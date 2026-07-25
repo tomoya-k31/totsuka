@@ -31,9 +31,9 @@ sequenceDiagram
     participant NO as notifier-macos
 
     U->>TS: @mention（スレッド）
-    TS->>EN: task/submit（Task, thread_key=channel:thread_ts）— push, persist-before-ack
+    TS->>EN: task/submit（Task, id=channel:thread_ts=会話, message_key=この配送）— push, persist-before-ack
     Note over EN: 冪等取り込み → repo 選択 → スロット確保 → worktree 作成
-    EN->>EN: dispatch_one — job_id=job-{task_id}-{session_row}<br/>先行 thread_key があれば resume_session_id を解決（F-105）
+    EN->>EN: dispatch_one — job_id=job-{task_id}-{session_row}<br/>自タスクの最新セッションから resume_session_id を解決（F-105）
     EN->>HE: task/dispatch（HookLaunchSpec{settings_path, env}, resume_session_id?）
     HE->>CC: workspace.create / agent.start（env 注入: TOTSUKA_JOB_ID / HOOK_ENDPOINT / HOOK_TOKEN / HOOK_SPOOL_DIR / PROMPT_CONTEXT）<br/>argv: claude --settings orchestrator-<workflow>.json [--resume <sid>]
     CC->>UDS: SessionStart フック → POST /agent-events
@@ -135,7 +135,7 @@ sequenceDiagram
 - **冪等の正本は DB**（`hook_events` UNIQUE, D-05）。多重発火・スプール再送・curl リトライは同一冪等キーで無害化される。
 - **生存アンカー**（`touch_last_signal`）は冪等判定より前に更新する。中間 Stop=heartbeat が同一冪等キーに潰れても、`sweep_signal_timeouts` の誤エスカレーションを防ぐ。
 - **中間イベント**（WaitingInput / Escalated / VerificationPending / Failed）は notifier のみへ配送し、ソーススレッドへは返さない（R-08/D-07）。
-- 会話継続（F-105）は `thread_key` 相関で先行セッションを `claude --resume` するが、シグナルは常に自タスクの `job_id` 起点で配路し、共有セッション id から宛先を推測しない（E-09）。
+- 会話継続（F-105）は #242 以降**同一タスク**なので相関自体が不要（`latest_session(task_id)` を `claude --resume` する）。シグナルは常に自タスクの `job_id` 起点で配路し、セッション id から宛先を推測しない（E-09）。
 
 # 関連
 
