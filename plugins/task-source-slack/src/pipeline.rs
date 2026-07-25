@@ -743,6 +743,7 @@ fn build_task(
         // the prior task's Claude session. A top-level mention's key equals
         // its task id (a new conversation).
         thread_key: Some(mention.thread_key()),
+        message_key: None,
         instructions: Some(instructions),
     };
     let pending = PendingMention {

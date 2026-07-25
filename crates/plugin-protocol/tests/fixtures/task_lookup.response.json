@@ -1,0 +1,5 @@
+{
+  "jsonrpc": "2.0",
+  "id": "lookup-3",
+  "result": { "known": true, "repo": "web-app" }
+}

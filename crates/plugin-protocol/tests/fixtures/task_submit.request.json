@@ -15,6 +15,7 @@
       "url": "https://example.slack.com/archives/C0123456789/p1718000000000100",
       "assignee": "tomoya",
       "thread_key": "C0123456789:1718000000.000100",
+      "message_key": "C0123456789:1718000000.000300",
       "instructions": "返信案を日本語で作成してください。"
     }
   }

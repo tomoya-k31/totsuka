@@ -3,7 +3,7 @@
   "id": 1,
   "method": "initialize",
   "params": {
-    "protocol_version": "0.2.3",
+    "protocol_version": "0.2.4",
     "config": { "socket_path": "/run/herdr.sock" },
     "repositories": [
       { "name": "web-app", "summary": "customer web app", "path": "/repos/web-app" }

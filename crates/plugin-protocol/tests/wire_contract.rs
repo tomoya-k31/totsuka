@@ -40,8 +40,8 @@ use plugin_protocol::methods::{
     NotifyParams, ResultPublishParams, SessionAttachParams, SessionAttachResult,
     SessionFocusParams, SessionFocusResult, SessionListParams, SessionListResult,
     SessionReleaseParams, SessionReleaseResult, StateNotification, StateSubscribeParams,
-    TaskCancelParams, TaskDispatchParams, TaskDispatchResult, TaskSubmitParams, TaskSubmitResult,
-    TaskSubmitStatus, TaskUpdateStatusParams,
+    TaskCancelParams, TaskDispatchParams, TaskDispatchResult, TaskLookupParams, TaskLookupResult,
+    TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus, TaskUpdateStatusParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -242,6 +242,26 @@ fn task_submit_wire() {
     check_error_response(
         "task_submit_not_accepting.error.json",
         error_code::NOT_ACCEPTING,
+    );
+}
+
+#[test]
+fn task_lookup_wire() {
+    check_request::<TaskLookupParams>("task_lookup.request.json", method::TASK_LOOKUP);
+    check_response::<TaskLookupResult>("task_lookup.response.json");
+    // `known: false` omits `repo` entirely — the shape a source sees for a
+    // conversation it must resolve from scratch.
+    check_response::<TaskLookupResult>("task_lookup_unknown.response.json");
+}
+
+/// An agent reporting an unusable session (0.2.4, #242). It is an *error*, not
+/// a `TaskDispatchResult` variant: the dispatch did not happen, and the
+/// Orchestrator's answer is to send it again without `resume_session_id`.
+#[test]
+fn session_unresumable_wire() {
+    check_error_response(
+        "session_unresumable.error.json",
+        error_code::SESSION_UNRESUMABLE,
     );
 }
 

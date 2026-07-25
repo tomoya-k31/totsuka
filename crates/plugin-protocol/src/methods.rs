@@ -33,6 +33,13 @@ pub mod method {
     /// no buffer of its own (see [`super::TaskSubmitResult`] for the ack
     /// contract).
     pub const TASK_SUBMIT: &str = "task/submit";
+    /// Ask whether a conversation is already known, before submitting to it
+    /// (P→O request, 0.2.4, #242). Lets a source skip work it only needs to do
+    /// for a *new* conversation — repository resolution above all, which may
+    /// mean an LLM call or a question put to a human. Read-only and
+    /// side-effect-free; a plugin that cannot reach it must degrade to
+    /// treating the conversation as new, never to dropping the task.
+    pub const TASK_LOOKUP: &str = "task/lookup";
     /// Transition source-side status (O→P, F-84).
     pub const TASK_UPDATE_STATUS: &str = "task/update_status";
     /// Publish a result back to the source (O→P, F-07).
@@ -230,6 +237,38 @@ pub struct TaskSubmitResult {
     /// Cause + next action, present for [`TaskSubmitStatus::Rejected`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// `task/lookup` params (P→O request, 0.2.4, #242).
+///
+/// `task_id` is the **conversation** identity — the value the plugin would put
+/// in [`Task::id`](crate::Task) — not an Orchestrator row id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskLookupParams {
+    /// Source plugin instance name, as in [`Task::source`](crate::Task).
+    pub source: String,
+    /// The conversation identity to look up.
+    pub task_id: String,
+}
+
+/// `task/lookup` result (O→P, 0.2.4).
+///
+/// Deliberately narrow: it answers "have you seen this conversation, and which
+/// repository did it settle on" and nothing else. Task state, worktree paths
+/// and session ids are the Orchestrator's business — a plugin that branched on
+/// them would be duplicating orchestration logic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskLookupResult {
+    /// Whether a task with this `source` + `task_id` exists.
+    pub known: bool,
+    /// The repository the conversation is bound to, when one was chosen.
+    ///
+    /// `None` alongside `known: true` is a real state, not an oversight: the
+    /// task exists but repository selection has not settled (pending human
+    /// input, or an inconclusive classification). A plugin must treat it as
+    /// "no hint available", not as "no repository".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 
 /// `task/update_status` params (O→P, F-84).
@@ -588,6 +627,7 @@ mod tests {
             url: None,
             assignee: None,
             thread_key: None,
+            message_key: None,
             instructions: None,
         }
     }
