@@ -146,10 +146,16 @@ pub enum TaskEvent {
     ///
     /// Deliberately **not** [`Retry`](Self::Retry), even though both land in
     /// `Queued`. `Retry` means "run the same instruction again" — a human
-    /// reacting to a failure — while `Reopen` means "there is new
-    /// instruction", which is also why it is the only one of the two that may
-    /// follow `Done`. Keeping them apart keeps the event log truthful about
-    /// which of the two happened.
+    /// reacting to a failure — while `Reopen` means "there is a new
+    /// instruction". That difference is what makes `Done` reachable by exactly
+    /// one of them: a successful task has nothing to re-run, but it can very
+    /// well be continued.
+    ///
+    /// Note that the two are *not* distinguishable from the `events` table
+    /// alone: it records `from_state` / `to_state`, so both look like
+    /// `failed → queued`. Callers that need the provenance must put it in
+    /// `apply_event`'s `detail`, as `totsuka task retry` already does with
+    /// `{"kind": "cli", ...}`.
     Reopen,
 }
 
