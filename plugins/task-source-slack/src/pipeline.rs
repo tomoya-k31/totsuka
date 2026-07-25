@@ -845,11 +845,6 @@ fn build_task(
         status: None,
         url: enriched.permalink.clone(),
         assignee: None,
-        // #242 replaced the conversation-continuation key with the task id
-        // itself: `id` names the thread, so a follow-up mention *is* another
-        // message of the same task and there is nothing left to correlate.
-        // (The field itself goes away in #264.)
-        thread_key: None,
         // This delivery's identity, which the orchestrator dedups
         // re-deliveries on. Two mentions in one thread share a task id and
         // differ here — that difference is what makes the second one a new
@@ -1021,13 +1016,12 @@ mod tests {
     fn an_in_thread_mention_is_another_message_of_the_thread_s_task() {
         // #242: a reply carries the *thread's* id and its own message key, so
         // the orchestrator appends it to that conversation instead of opening
-        // a second task. `thread_key` is dead (it goes away in #264).
+        // a second task.
         let mut enriched = enriched("100.1");
         enriched.mention.thread_ts = Some("100.0".into());
         let (task, _pending) = build_task(&slack_config(), &enriched, None);
         assert_eq!(task.id, "C1:100.0");
         assert_eq!(task.message_key.as_deref(), Some("C1:100.1"));
-        assert_eq!(task.thread_key, None);
     }
 
     #[test]

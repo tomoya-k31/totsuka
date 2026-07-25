@@ -127,7 +127,6 @@ async fn mention_becomes_a_task_and_is_submitted() {
     // The id names the *thread* (#242); this delivery names itself.
     assert_eq!(task["id"], "C1:100.0");
     assert_eq!(task["message_key"], "C1:100.2");
-    assert!(task["thread_key"].is_null(), "superseded by the id: {task}");
     assert_eq!(task["source"], "slack");
     let title = task["title"].as_str().unwrap();
     assert!(

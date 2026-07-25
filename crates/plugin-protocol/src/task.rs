@@ -42,18 +42,6 @@ pub struct Task {
     /// Assignee, if any (used for ingest gating, F-08).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
-    /// 0.1.3: conversation-continuation correlation key (Slack:
-    /// `"{channel}:{thread_ts}"`). A later task with the same `thread_key` can
-    /// resume the earlier task's session. `None` for other sources.
-    ///
-    /// **Superseded in 0.2.4 by [`id`](Self::id)** (#242), and removed once the
-    /// epic lands. Its whole job was to say "these two tasks are one
-    /// conversation" — which is now what `id` itself means, so in Slack the two
-    /// carry the identical value and the "later task" this field describes no
-    /// longer exists: the second delivery is the *same* task. Still accepted on
-    /// the wire so plugins can drop it independently.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_key: Option<String>,
     /// 0.2.4: identity of **this delivery**, as distinct from
     /// [`id`](Self::id) — the conversation it belongs to (#242). A Slack
     /// thread reply carries the thread's `id` and its own message's
@@ -90,7 +78,6 @@ mod tests {
             status: Some("実装待ち".into()),
             url: None,
             assignee: None,
-            thread_key: None,
             message_key: None,
             instructions: None,
         };
@@ -100,43 +87,11 @@ mod tests {
         let obj = value.as_object().unwrap();
         assert!(!obj.contains_key("body"), "empty optionals omitted");
         assert!(!obj.contains_key("labels"));
-        assert!(!obj.contains_key("thread_key"));
         assert!(!obj.contains_key("message_key"));
         assert!(!obj.contains_key("instructions"));
         assert!(obj.contains_key("repo_hint"));
         let back: Task = serde_json::from_value(value).unwrap();
         assert_eq!(back, task);
-    }
-
-    /// `thread_key` (0.1.3) round-trips when set and is absent from old wire.
-    #[test]
-    fn thread_key_is_additive() {
-        let task = Task {
-            id: "1718000000.000100".into(),
-            source: "slack".into(),
-            title: "追いメンション".into(),
-            body: None,
-            repo_hint: None,
-            labels: vec![],
-            priority: 0,
-            status: None,
-            url: None,
-            assignee: None,
-            thread_key: Some("C0123456789:1718000000.000100".into()),
-            message_key: None,
-            instructions: None,
-        };
-        let value = serde_json::to_value(&task).unwrap();
-        assert_eq!(
-            value["thread_key"],
-            serde_json::json!("C0123456789:1718000000.000100")
-        );
-        let back: Task = serde_json::from_value(value).unwrap();
-        assert_eq!(back, task);
-        // Old wire without the field still deserializes.
-        let old: Task =
-            serde_json::from_str(r#"{"id":"1","source":"github","title":"t"}"#).unwrap();
-        assert!(old.thread_key.is_none());
     }
 
     /// `message_key` (0.2.4) round-trips when set and is absent from old wire.
@@ -156,7 +111,6 @@ mod tests {
             status: None,
             url: None,
             assignee: None,
-            thread_key: None,
             message_key: Some("C0123456789:1718000000.000300".into()),
             instructions: None,
         };
@@ -189,7 +143,6 @@ mod tests {
             status: None,
             url: None,
             assignee: None,
-            thread_key: None,
             message_key: None,
             instructions: Some("返信案を日本語で作成してください。".into()),
         };

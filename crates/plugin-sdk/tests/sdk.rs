@@ -28,7 +28,6 @@ fn sample_task(id: &str) -> Task {
         status: None,
         url: None,
         assignee: None,
-        thread_key: None,
         message_key: None,
         instructions: None,
     }

@@ -1448,7 +1448,6 @@ location = "${MY_ROOT}/wt/{branch}"
             finished_at: None,
             created_at: "2026-07-23T00:00:00Z".into(),
             updated_at: "2026-07-23T00:00:00Z".into(),
-            thread_key: None,
             last_signal_at: None,
         }
     }

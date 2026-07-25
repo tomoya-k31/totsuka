@@ -124,7 +124,7 @@ fn install_plugin(env: &Env, name: &str, kind: &str) {
         dir.join("plugin.toml"),
         format!(
             "name = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.1.0\"\n\
-             protocol_version = \">=0.1.6, <0.3\"\n\n[capabilities]\nstate_stream = true\n\
+             protocol_version = \">=0.1.6, <0.4\"\n\n[capabilities]\nstate_stream = true\n\
              outputs = [\"source\"]\n"
         ),
     )
@@ -401,7 +401,7 @@ fn doctor_detects_orphan_panes_via_session_list() {
     std::fs::write(
         dir.join("plugin.toml"),
         "name = \"mock_agent\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
-         protocol_version = \">=0.1.6, <0.3\"\n\n[capabilities]\nstate_stream = true\n\
+         protocol_version = \">=0.1.6, <0.4\"\n\n[capabilities]\nstate_stream = true\n\
          pane_control = true\n",
     )
     .unwrap();
@@ -436,7 +436,6 @@ fn doctor_detects_orphan_panes_via_session_list() {
         title: format!("task {sid}"),
         url: None,
         source_payload: None,
-        thread_key: None,
         last_signal_at: None,
     };
     let cancelled = db.upsert_task(&new("C9:9.9")).unwrap();

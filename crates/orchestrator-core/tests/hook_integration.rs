@@ -42,7 +42,7 @@ async fn launch(kind: &str, name: &str, init_config: serde_json::Value) -> Plugi
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = ">=0.1.6, <0.3"
+protocol_version = ">=0.1.6, <0.4"
 "#
     ))
     .unwrap();
@@ -203,7 +203,6 @@ fn new_task(source_task_id: &str, last_signal_at: Option<&str>) -> NewTask {
         title: "hook task".into(),
         url: None,
         source_payload: None,
-        thread_key: None,
         last_signal_at: last_signal_at.map(str::to_string),
     }
 }

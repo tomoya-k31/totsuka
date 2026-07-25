@@ -43,7 +43,6 @@ erDiagram
         TEXT finished_at "終端到達時刻（retention 起点）"
         TEXT created_at "NN — ISO 8601 UTC"
         TEXT updated_at "NN — ISO 8601 UTC"
-        TEXT thread_key "v2 — idx_tasks_thread_key"
         TEXT last_signal_at "v2 — R-10 タイムアウト起点"
     }
 
@@ -90,7 +89,7 @@ erDiagram
     }
 
     schema_migrations {
-        INTEGER version PK "index+1 = version（現行 v6）"
+        INTEGER version PK "index+1 = version（現行 v7）"
         TEXT applied_at "NN"
     }
 ```
@@ -114,7 +113,6 @@ erDiagram
 | source_payload | TEXT NULL | JSON 残余フィールド |
 | finished_at | TEXT NULL | 終端到達時刻（retention 起点） |
 | created_at / updated_at | TEXT | ISO 8601 (UTC) |
-| thread_key | TEXT NULL | 会話継続相関キー `"{channel}:{thread_ts}"`（v2/#134、E-09）。`idx_tasks_thread_key`。Slack 追いメンションの resume 元検索に使う |
 | last_signal_at | TEXT NULL | 最終フックシグナル時刻（v2/#134、R-10 タイムアウト起点）。`touch_last_signal` が更新 |
 
 ## sessions（F-37、#57）
@@ -191,9 +189,9 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 ## schema_migrations（§10.3）
 
-`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v5（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し。v5 = #257 で `task_messages` を新設（**純追加**。既存の読み書きを一切変えないため、エピック #242 の途中でアップグレードが止まっても壊れた状態にならない。`tasks.thread_key` の DROP は後続バージョンに分離してある）。v6 = #258 で v5 以前の全タスクに台帳 1 行をバックフィル。**v5 が純追加だったことの裏返しで既存タスクの台帳が空のままになり**、ingest が「新着メッセージか」を台帳から判定するようになると**既存の終端タスクが最初の再配送で reopen され再実行される**（返信ソースなら二重返信）。再配送は例外ではなく定常で、`plugin_sdk::poll_loop` は自前 dedup を持たず毎 tick 全件を再 submit し orchestrator の `duplicate` ack だけに依存している。`message_key = source_task_id` は `message_key` 未設定ソースの ingest 側フォールバックと一致するため、それらの再配送は v5 以前と同じく dedup される。バックフィル行はタスクの状態によらず処理済みとして入れる — 指示内容は既に `tasks.source_payload` にあり（現行 dispatch が読む経路）、**未処理のプロンプト素材として提示してはならない**ため。`body` を空にしているのも同じ理由で、復元するには SQL で `source_payload` を JSON 走査する必要がありこのスキーマは意図的に JSON 走査を持たない）。
+`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v7（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し。v5 = #257 で `task_messages` を新設（**純追加**。既存の読み書きを一切変えないため、エピック #242 の途中でアップグレードが止まっても壊れた状態にならない。`tasks.thread_key` の DROP は後続バージョンに分離してある）。v6 = #258 で v5 以前の全タスクに台帳 1 行をバックフィル。**v5 が純追加だったことの裏返しで既存タスクの台帳が空のままになり**、ingest が「新着メッセージか」を台帳から判定するようになると**既存の終端タスクが最初の再配送で reopen され再実行される**（返信ソースなら二重返信）。再配送は例外ではなく定常で、`plugin_sdk::poll_loop` は自前 dedup を持たず毎 tick 全件を再 submit し orchestrator の `duplicate` ack だけに依存している。`message_key = source_task_id` は `message_key` 未設定ソースの ingest 側フォールバックと一致するため、それらの再配送は v5 以前と同じく dedup される。バックフィル行はタスクの状態によらず処理済みとして入れる — 指示内容は既に `tasks.source_payload` にあり（現行 dispatch が読む経路）、**未処理のプロンプト素材として提示してはならない**ため。`body` を空にしているのも同じ理由で、復元するには SQL で `source_payload` を JSON 走査する必要がありこのスキーマは意図的に JSON 走査を持たない）。v7 = #264 で `tasks.thread_key` と `idx_tasks_thread_key` を DROP（#242 で `Task.id` 自体が会話を指すようになり、相関すべき「先行タスク」が存在しなくなったため役目を終えた列。ingest / dispatch の作業が入り切ってから独立したバージョンとして落とすことで、v5〜v6 の途中で resume を壊さない。死んだ列は「設定しても何も起きない」罠として残るため放置しない。`DROP COLUMN` は SQLite ≥3.35 が必要だが `rusqlite` の bundled ビルドは十分に新しく、本プロジェクトは常に同梱の SQLite としか話さない）。
 
-[会話継続](/glossary/conversation-continuity.md)（E-09）用ストア API: `find_by_thread_key(workflow, thread_key, exclude_id) -> Option<TaskRecord>` — 同一 workflow・同一 `thread_key` の最新（id 最大）先行タスクを返す（Slack 追いメンションの resume 元特定、#140）。`exclude_id` で dispatch 中の自タスクを除外する（追いメンション自身は既に ingest 済みで最新一致になるため、除外しないと「先行」が自分自身に解決してしまう。workflow 一致とあわせ別 workflow の同名スレッド誤紐付けも防ぐ）。
+[会話継続](/glossary/conversation-continuity.md)（E-09）用のストア API `find_by_thread_key` と `tasks.thread_key` 列は **#242/#264 で撤去した**（v7）。「この 2 つのタスクは同じ会話だ」と言うための相関キーだったが、`Task.id` 自体が会話を指すようになり、追いメンションは**同じタスクの別メッセージ**になったため、相関すべき「先行タスク」がそもそも存在しない。resume 元は `latest_session(task_id)` で自明に決まる。
 
 # ステートマシン（F-71）
 

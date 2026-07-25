@@ -1,9 +1,10 @@
 name = "github"
 kind = "task_source"
 version = "0.2.0"
-# 0.1.6 introduced `task/submit` (push ingestion); `<0.3` keeps this manifest
-# valid across the planned 0.2.0 `tasks/fetch` removal (ADR-0008).
-protocol_version = ">=0.1.6, <0.3"
+# 0.1.6 introduced `task/submit` (push ingestion), which carried this plugin
+# across the 0.2.0 `tasks/fetch` removal (ADR-0008); `<0.4` carries it across
+# the 0.3.0 removal of `Task.thread_key` (#242/#264).
+protocol_version = ">=0.1.6, <0.4"
 
 [capabilities]
 task_submit = true
