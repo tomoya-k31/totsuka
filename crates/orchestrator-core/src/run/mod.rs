@@ -2500,7 +2500,7 @@ fn forward_lookup(
     {
         request.responder.err(jsonrpc::Error::new(
             error_code::NOT_ACCEPTING,
-            "orchestrator is not accepting requests → retry with backoff",
+            "orchestrator is not accepting requests → resolve without the hint",
         ));
         return;
     }
@@ -2518,7 +2518,7 @@ fn forward_lookup(
             Ok(Err(error)) => responder.err(error),
             Err(_) => responder.err(jsonrpc::Error::new(
                 error_code::NOT_ACCEPTING,
-                "orchestrator is shutting down → retry with backoff",
+                "orchestrator is shutting down → resolve without the hint",
             )),
         }
     });

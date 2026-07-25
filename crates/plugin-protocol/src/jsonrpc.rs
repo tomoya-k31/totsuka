@@ -207,8 +207,15 @@ pub mod error_code {
     /// submission is idempotent, so a re-submit after a lost ack is answered
     /// with `duplicate`, never ingested twice.
     pub const NOT_ACCEPTING: i64 = -32004;
-    /// The per-plugin in-flight `task/submit` budget is exhausted (0.1.6).
-    /// Retryable with backoff, same contract as [`NOT_ACCEPTING`].
+    /// A per-plugin in-flight budget for plugin-initiated requests is
+    /// exhausted (0.1.6).
+    ///
+    /// The name predates `task/lookup` (0.2.4), which has its own separate
+    /// budget and answers with this code too. **What to do about it is the
+    /// method's contract, not this code's**: `task/submit` retries with
+    /// backoff, same as [`NOT_ACCEPTING`], because the task must eventually
+    /// get in; `task/lookup` degrades to resolving without the hint, because
+    /// an unanswered lookup costs nothing but the work it would have saved.
     pub const SUBMIT_OVERLOADED: i64 = -32005;
     /// The session named by `resume_session_id` could not be resumed (0.2.4,
     /// #242) — it is gone, expired, or otherwise unusable.
