@@ -195,11 +195,13 @@ api_key_ref = "op://Dev/Openrouter/api_key"    # シークレット参照（後�
 
 # ── worktree ──────────────────────────────────────────────
 [worktree]
-# 既定はこのキーを書かないこと。既定値は `$XDG_STATE_HOME/totsuka`（未設定時は
+# 既定でよければこのキーは書かないこと。既定値は `$XDG_STATE_HOME/totsuka`（未設定時は
 # `$HOME/.local/state/totsuka`）を解決済みのパスとして埋めた
-# `<state dir>/worktrees/{repo_name}/{branch}`。下は明示的に別の場所へ置く例で、
-# `${ENV}` は展開されるが未設定変数はエラーになる（`totsuka doctor` が検出する）。
-location = "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}"
+# `<state dir>/worktrees/{repo_name}/{branch}`。下は既定とは別の場所へ置く例。
+# `${ENV}` は展開されるが未設定変数はエラーになる（`totsuka doctor` が検出する）ので、
+# `${XDG_STATE_HOME}` を明示的に書くのは避ける — 既定と同じ場所になるうえ、
+# `XDG_STATE_HOME` 未設定機（macOS の既定）では worktree 作成が失敗する。
+location = "~/.worktrees/{repo_name}/{branch}"
 cleanup = "manual"          # implement モードの掃除: "immediate" | "manual" | { retention_days = 5 }
 plan_cleanup = "immediate"  # plan モードの掃除（既定 immediate）
 

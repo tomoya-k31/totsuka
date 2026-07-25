@@ -269,7 +269,7 @@ pub struct CreateRequest<'a> {
     pub task_id: &'a str,
     /// Branch template (use [`DEFAULT_BRANCH_TEMPLATE`]).
     pub branch_template: &'a str,
-    /// Location template (use [`DEFAULT_LOCATION_TEMPLATE`]).
+    /// Location template (use [`default_location_template`] for the default).
     pub location_template: &'a str,
     /// Base branch override; `None` detects `origin`'s default (F-25).
     pub base_branch: Option<&'a str>,
