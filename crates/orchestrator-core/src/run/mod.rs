@@ -47,7 +47,9 @@ use tokio::sync::{Semaphore, mpsc};
 
 use crate::adapters::clock::SystemClock;
 use crate::adapters::plugin_host::{IncomingRequest, Plugin};
-use crate::adapters::state_db::{NewTask, StateDb, StateError, TaskRecord};
+use crate::adapters::state_db::{
+    NewTask, StateDb, StateError, TaskMessageInsert, TaskMessageOutcome, TaskRecord,
+};
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{
     CleanupPolicyConfig, CleanupPolicyName, DEFAULT_GLOBAL_CONCURRENCY, OutputPolicy, PluginKind,
@@ -360,6 +362,42 @@ type SubmitRespond = tokio::sync::oneshot::Sender<Result<TaskSubmitResult, jsonr
 /// exhausted budget answers `SUBMIT_OVERLOADED`, which the plugin retries
 /// with backoff). Persisting is one SQLite upsert, so this rarely binds.
 const SUBMIT_IN_FLIGHT_BUDGET: usize = 64;
+
+/// What one ingest did to the conversation it belongs to (#242).
+///
+/// Only [`Duplicate`](Self::Duplicate) is a no-op; the other three all
+/// accepted new work, and the difference between them is what the
+/// conversation looked like beforehand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IngestOutcome {
+    /// The conversation did not exist; it was created with this as its first
+    /// message.
+    Created,
+    /// Appended to a finished conversation, which was requeued
+    /// ([`TaskEvent::Reopen`]).
+    Reopened,
+    /// Appended to a conversation still in flight; its state is unchanged and
+    /// the running dispatch collects the message when it finishes.
+    Appended,
+    /// The ledger already held this `message_key` — a re-delivery. Nothing
+    /// changed.
+    Duplicate,
+}
+
+impl IngestOutcome {
+    /// The ack the source gets back.
+    ///
+    /// Everything that accepted the message answers `Accepted`, including a
+    /// reopen: from the source's side "we took it" is the same statement
+    /// regardless of what the conversation was doing. Only a re-delivery is
+    /// `Duplicate`, and both are final — the plugin must not re-submit either.
+    fn ack(self) -> TaskSubmitStatus {
+        match self {
+            Self::Created | Self::Reopened | Self::Appended => TaskSubmitStatus::Accepted,
+            Self::Duplicate => TaskSubmitStatus::Duplicate,
+        }
+    }
+}
 
 /// Counters accumulated over one `run` invocation.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -904,11 +942,22 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 
-    /// Persist one normalized task under `wf`, idempotently (F-73). Returns
-    /// `(row id, is_new)`. Every ingest since 0.2.0 arrives via
-    /// `task/submit` (see [`Self::on_task_submit`]).
-    fn ingest_task(&mut self, wf: &Workflow, task: &Task) -> Result<(i64, bool), EngineError> {
-        let is_new = self.db.find_by_source(&task.source, &task.id)?.is_none();
+    /// Persist one normalized task under `wf`, idempotently (F-73), appending
+    /// the delivery to the conversation's message ledger. Returns
+    /// `(row id, outcome)`. Every ingest since 0.2.0 arrives via `task/submit`
+    /// (see [`Self::on_task_submit`]).
+    ///
+    /// Since #242 a task is a **conversation**, so `source_task_id` no longer
+    /// distinguishes deliveries — every message in a Slack thread carries the
+    /// same one. Dedup therefore moves to the ledger's `message_key`, and the
+    /// task row's `ON CONFLICT DO NOTHING` goes back to meaning only "this
+    /// conversation already exists" rather than "drop this message".
+    fn ingest_task(
+        &mut self,
+        wf: &Workflow,
+        task: &Task,
+    ) -> Result<(i64, IngestOutcome), EngineError> {
+        let existing = self.db.find_by_source(&task.source, &task.id)?;
         let new_task = NewTask {
             source: task.source.clone(),
             source_task_id: task.id.clone(),
@@ -924,8 +973,50 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             thread_key: task.thread_key.clone(),
             last_signal_at: None,
         };
+        // Existing conversations are left untouched by this (`DO NOTHING`):
+        // the title stays the one the conversation opened with, which is what
+        // a thread's subject should be.
         let id = self.db.upsert_submitted_task(&new_task)?;
-        Ok((id, is_new))
+
+        // A source that sends one message per task omits `message_key`;
+        // falling back to the conversation id makes its second delivery
+        // collide exactly as before, so GitHub and Notion keep their old
+        // at-most-once behaviour without knowing this field exists.
+        let message_key = task.message_key.clone().unwrap_or_else(|| task.id.clone());
+        let appended = self.db.append_task_message(&TaskMessageInsert {
+            task_id: id,
+            message_key: message_key.clone(),
+            // The normalized schema has no author field; whoever the source
+            // named is preserved in `payload`. Left NULL rather than filled
+            // with `assignee`, which is a different person in every source.
+            author: None,
+            body: task.body.clone().unwrap_or_default(),
+            url: task.url.clone(),
+            payload: serde_json::to_string(task).unwrap_or_default(),
+        })?;
+
+        let outcome = match (existing, appended) {
+            (None, _) => IngestOutcome::Created,
+            // The ledger already had this delivery: a Socket Mode re-send, or
+            // a restart replaying an unacked message. This is the last line of
+            // defence — plugin-side dedup lives in memory and dies with the
+            // process — so it must change nothing at all.
+            (Some(_), TaskMessageOutcome::Duplicate) => IngestOutcome::Duplicate,
+            (Some(record), TaskMessageOutcome::New) if record.state.is_terminal() => {
+                self.db.apply_event(
+                    id,
+                    TaskEvent::Reopen,
+                    Some(serde_json::json!({
+                        "kind": "reopen", "message_key": message_key,
+                    })),
+                )?;
+                IngestOutcome::Reopened
+            }
+            // Still in flight: the message waits in the ledger and the
+            // in-progress dispatch picks it up when it finishes.
+            (Some(_), TaskMessageOutcome::New) => IngestOutcome::Appended,
+        };
+        Ok((id, outcome))
     }
 
     /// Select a repository for every queued task that has none (F-10–F-14).
@@ -1601,20 +1692,32 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 )),
             });
         };
-        let (id, is_new) = self.ingest_task(wf, &task)?;
-        if is_new {
-            self.stats.submitted += 1;
-            tracing::info!(task_id = id, workflow = %wf.name, title = %task.title, "task submitted");
-            Ok(TaskSubmitResult {
-                status: TaskSubmitStatus::Accepted,
-                reason: None,
-            })
-        } else {
-            Ok(TaskSubmitResult {
-                status: TaskSubmitStatus::Duplicate,
-                reason: None,
-            })
+        let (id, outcome) = self.ingest_task(wf, &task)?;
+        match outcome {
+            IngestOutcome::Created => {
+                self.stats.submitted += 1;
+                tracing::info!(task_id = id, workflow = %wf.name, title = %task.title, "task submitted");
+            }
+            IngestOutcome::Reopened => {
+                tracing::info!(
+                    task_id = id, workflow = %wf.name,
+                    "conversation reopened by a new message"
+                );
+            }
+            IngestOutcome::Appended => {
+                tracing::info!(
+                    task_id = id, workflow = %wf.name,
+                    "message appended to a conversation still in progress"
+                );
+            }
+            IngestOutcome::Duplicate => {
+                tracing::debug!(task_id = id, "message already ingested; dropped");
+            }
         }
+        Ok(TaskSubmitResult {
+            status: outcome.ack(),
+            reason: None,
+        })
     }
 
     /// Advance a task's state machine to match the agent's reported state
@@ -2615,6 +2718,233 @@ plan_cleanup = "keep_28d"
             .unwrap();
         let record = db.get_task(id).unwrap().unwrap();
         assert_eq!(task_from_record(&record), task);
+    }
+
+    // -----------------------------------------------------------------
+    // Conversation ingest (#242/#258)
+    // -----------------------------------------------------------------
+
+    /// An engine with one catch-all workflow, so `on_task_submit` always
+    /// matches and the ingest path is what the test observes.
+    async fn ingest_test_engine() -> Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter> {
+        let mut engine = sweep_test_engine(Duration::from_secs(3600)).await;
+        engine.settings.workflows = vec![Workflow {
+            name: "implement".to_string(),
+            source: "slack".to_string(),
+            trigger: crate::domain::workflow::Trigger::new(toml::Table::new()),
+            mode: WorkflowMode::Implement,
+            agent: "mock_agent".to_string(),
+            output: crate::config::OutputPolicy::None,
+            on_success: None,
+            on_failure: None,
+            verification: crate::config::VerificationMode::None,
+            timeout_secs: None,
+            rubric: None,
+            tool: None,
+        }];
+        engine
+    }
+
+    /// One delivery in the conversation `conv`, identified by `message_key`.
+    fn delivery(conv: &str, message_key: Option<&str>, body: &str) -> Task {
+        Task {
+            id: conv.to_string(),
+            source: "slack".into(),
+            title: "会話".into(),
+            body: Some(body.to_string()),
+            repo_hint: None,
+            labels: vec![],
+            priority: 0,
+            status: None,
+            url: None,
+            assignee: None,
+            thread_key: None,
+            message_key: message_key.map(str::to_string),
+            instructions: None,
+        }
+    }
+
+    /// The whole point of #242: a second message in the same conversation is
+    /// accepted rather than silently dropped, and a finished conversation goes
+    /// back to work.
+    #[tokio::test]
+    async fn a_second_message_reopens_a_finished_conversation() {
+        let mut engine = ingest_test_engine().await;
+
+        let ack = engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        assert_eq!(ack.status, TaskSubmitStatus::Accepted);
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+
+        // Drive it to a terminal state.
+        for event in [
+            TaskEvent::Dispatch,
+            TaskEvent::Start,
+            TaskEvent::BeginPublish,
+            TaskEvent::Complete,
+        ] {
+            engine.db.apply_event(id, event, None).unwrap();
+        }
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().state,
+            TaskState::Done
+        );
+
+        // A new message in the same thread.
+        let ack = engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:300"), "two"))
+            .unwrap();
+        assert_eq!(ack.status, TaskSubmitStatus::Accepted);
+        let record = engine.db.get_task(id).unwrap().unwrap();
+        assert_eq!(record.state, TaskState::Queued, "the conversation reopened");
+        assert_eq!(
+            engine.db.list_tasks().unwrap().len(),
+            1,
+            "a reply is the same task, not a new one"
+        );
+        // Both messages are in the ledger, and the new one is queued for the
+        // next dispatch while the first stays marked as delivered-or-not on
+        // its own terms (nothing has dispatched yet here, so both are pending).
+        let messages = engine.db.list_task_messages(id).unwrap();
+        assert_eq!(
+            messages.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+    }
+
+    /// At-least-once delivery: the same `message_key` twice must change
+    /// nothing — not the ledger, not the state.
+    #[tokio::test]
+    async fn a_redelivered_message_is_a_duplicate_and_changes_nothing() {
+        let mut engine = ingest_test_engine().await;
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        for event in [
+            TaskEvent::Dispatch,
+            TaskEvent::Start,
+            TaskEvent::BeginPublish,
+            TaskEvent::Complete,
+        ] {
+            engine.db.apply_event(id, event, None).unwrap();
+        }
+
+        let ack = engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        assert_eq!(ack.status, TaskSubmitStatus::Duplicate);
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().state,
+            TaskState::Done,
+            "a re-delivery must not reopen the conversation"
+        );
+        assert_eq!(engine.db.list_task_messages(id).unwrap().len(), 1);
+    }
+
+    /// A message arriving mid-flight waits in the ledger; requeueing a running
+    /// task would throw away the work in progress.
+    #[tokio::test]
+    async fn a_message_for_a_running_conversation_is_queued_without_touching_its_state() {
+        let mut engine = ingest_test_engine().await;
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        engine
+            .db
+            .apply_event(id, TaskEvent::Dispatch, None)
+            .unwrap();
+        engine.db.apply_event(id, TaskEvent::Start, None).unwrap();
+
+        let ack = engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:200"), "two"))
+            .unwrap();
+        assert_eq!(ack.status, TaskSubmitStatus::Accepted);
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().state,
+            TaskState::Running,
+            "an in-flight conversation keeps running"
+        );
+        assert_eq!(engine.db.pending_task_messages(id).unwrap().len(), 2);
+    }
+
+    /// Sources that send one message per task (GitHub issues, Notion pages)
+    /// omit `message_key`. They must behave exactly as before: ingested once,
+    /// every re-delivery a `Duplicate`.
+    #[tokio::test]
+    async fn a_source_without_message_keys_keeps_its_at_most_once_behaviour() {
+        let mut engine = ingest_test_engine().await;
+        let issue = delivery("42", None, "fix the bug");
+
+        assert_eq!(
+            engine
+                .on_task_submit("slack".into(), issue.clone())
+                .unwrap()
+                .status,
+            TaskSubmitStatus::Accepted
+        );
+        let id = engine.db.find_by_source("slack", "42").unwrap().unwrap().id;
+        for event in [
+            TaskEvent::Dispatch,
+            TaskEvent::Start,
+            TaskEvent::BeginPublish,
+            TaskEvent::Complete,
+        ] {
+            engine.db.apply_event(id, event, None).unwrap();
+        }
+
+        assert_eq!(
+            engine.on_task_submit("slack".into(), issue).unwrap().status,
+            TaskSubmitStatus::Duplicate,
+            "without a message_key the conversation id is the dedup key"
+        );
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().state,
+            TaskState::Done,
+            "and a finished task is not reopened by a re-delivery"
+        );
+        assert_eq!(engine.db.list_task_messages(id).unwrap().len(), 1);
+    }
+
+    /// Even a brand-new conversation gets a ledger row, so the ledger is the
+    /// whole history rather than "everything after the first message".
+    #[tokio::test]
+    async fn a_new_conversation_starts_its_ledger_with_the_first_message() {
+        let mut engine = ingest_test_engine().await;
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        let messages = engine.db.list_task_messages(id).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].message_key, "C1:100");
+        assert_eq!(messages[0].body, "one");
+        assert!(messages[0].processed_at.is_none(), "queued for dispatch");
+        // The payload keeps the whole normalized task for the audit trail.
+        let payload: Task = serde_json::from_str(&messages[0].payload).unwrap();
+        assert_eq!(payload.message_key.as_deref(), Some("C1:100"));
     }
 
     #[test]
