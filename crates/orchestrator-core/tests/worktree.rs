@@ -140,6 +140,96 @@ fn create_cleanup_and_orphan_detection() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// After a full cleanup (directory *and* branch gone) the very same request
+/// must produce the very same worktree again (#254). This is the path a task
+/// takes when it is dispatched a second time — `task retry`, or a follow-up
+/// message in the same conversation — under `plan_cleanup = "immediate"`.
+#[test]
+fn recreates_a_cleaned_up_worktree_at_the_same_path() {
+    let base = scratch("recreate-clean");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let first = mgr.create(&request(&clone, "42", &env)).unwrap();
+    mgr.remove(&clone, &first.path, &first.branch).unwrap();
+    assert!(!first.path.exists());
+
+    let second = mgr.create(&request(&clone, "42", &env)).unwrap();
+    assert_eq!(second.path, first.path, "same task → same path");
+    assert_eq!(second.branch, first.branch, "same task → same branch");
+    assert!(second.path.is_dir());
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The branch routinely outlives its directory: `remove` deletes it only
+/// best-effort, and `branch -d` refuses a branch with unmerged commits — which
+/// is precisely the branch worth keeping. Re-creation must check that branch
+/// out (no `-b`) and must **not** reset it back to `origin/{default}`, or the
+/// agent's committed work would be destroyed by the recovery path (#254).
+#[test]
+fn recreates_over_a_surviving_branch_without_losing_its_commits() {
+    let base = scratch("recreate-branch");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let first = mgr.create(&request(&clone, "43", &env)).unwrap();
+    git(
+        &first.path,
+        &["commit", "--allow-empty", "-m", "agent work"],
+    );
+    let agent_commit = git(&first.path, &["rev-parse", "HEAD"]);
+    // Drop the directory only — `git worktree remove` leaves the branch.
+    git(
+        &clone,
+        &["worktree", "remove", &first.path.display().to_string()],
+    );
+    assert!(!first.path.exists());
+    assert!(
+        !git(&clone, &["branch", "--list", &first.branch]).is_empty(),
+        "the branch must survive for this test to mean anything"
+    );
+
+    let second = mgr.create(&request(&clone, "43", &env)).unwrap();
+    assert_eq!(second.branch, first.branch);
+    assert_eq!(
+        git(&second.path, &["rev-parse", "HEAD"]),
+        agent_commit,
+        "re-creation must keep the branch's commits, not reset it to origin"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A directory removed *without* `git worktree remove` (a manual `rm -rf`, or a
+/// crash mid-cleanup) leaves the registration behind, and git then refuses to
+/// add at that path. Re-creation prunes the stale entry and proceeds (#254).
+#[test]
+fn recreates_after_a_manual_directory_removal_leaves_a_stale_registration() {
+    let base = scratch("recreate-stale");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let first = mgr.create(&request(&clone, "44", &env)).unwrap();
+    std::fs::remove_dir_all(&first.path).unwrap();
+    assert!(
+        git(&clone, &["worktree", "list", "--porcelain"]).contains("prunable"),
+        "the registration must still be there for this test to mean anything"
+    );
+
+    let second = mgr.create(&request(&clone, "44", &env)).unwrap();
+    assert_eq!(second.path, first.path);
+    assert!(second.path.is_dir());
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn branches_from_origin_even_with_stale_local_default() {
     let base = scratch("stale");

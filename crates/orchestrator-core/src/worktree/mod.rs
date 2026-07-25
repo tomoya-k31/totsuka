@@ -286,6 +286,13 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// Create a worktree: `git fetch` (F-25), branch from `origin/{default}`,
     /// then `git worktree add`. Serialization-free; git-lock contention is
     /// absorbed by a short retry (§5.5).
+    ///
+    /// Also handles **re-creation** after a cleanup (#254): an already-existing
+    /// branch is checked out rather than re-created, and a stale registration
+    /// left by a manual directory removal is pruned. Re-creating at the same
+    /// path does not break agent resume — Claude Code stores sessions outside
+    /// the worktree, under `~/.claude/projects/<encoded-cwd>/`, keyed by the
+    /// working directory — which is why the caller re-renders the *same* path.
     pub fn create(&self, req: &CreateRequest<'_>) -> Result<Worktree, WorktreeError> {
         // F-25: always fetch first so we branch off fresh remote state.
         let fetch = self.run_with_transient_retry(req.repo_path, &["fetch", "origin"])?;
@@ -329,10 +336,38 @@ impl<G: GitRunner> WorktreeManager<G> {
         }
 
         let path_str = path.display().to_string();
-        let add = self.run_with_transient_retry(
+        // Re-creation must work, not just first creation (#254): a task whose
+        // worktree was cleaned up is dispatched again on retry or on a new
+        // message in the same conversation. `remove` deletes the branch only
+        // best-effort (`branch -d` refuses unmerged commits), so the branch
+        // routinely outlives its directory — and `-b` on an existing branch is
+        // a hard error. Check first and reuse the branch as-is; deliberately
+        // *not* resetting it to `base_commit`, which would destroy exactly the
+        // committed-but-unpushed work that made `-d` refuse.
+        let branch_exists = self.local_branch_exists(req.repo_path, &branch)?;
+        let mut add = self.worktree_add(
             req.repo_path,
-            &["worktree", "add", &path_str, "-b", &branch, &base_commit],
+            &path_str,
+            &branch,
+            &base_commit,
+            branch_exists,
         )?;
+        if !add.success() && is_stale_registration(&add.stdout, &add.stderr) {
+            // The directory vanished without `git worktree remove` (a manual
+            // `rm -rf`, or a crash mid-cleanup), leaving the registration in
+            // `.git/worktrees`. Drop those stale entries — `prune` only touches
+            // registrations whose directory is already gone — and add again.
+            let prune = self.run_with_transient_retry(req.repo_path, &["worktree", "prune"])?;
+            if prune.success() {
+                add = self.worktree_add(
+                    req.repo_path,
+                    &path_str,
+                    &branch,
+                    &base_commit,
+                    branch_exists,
+                )?;
+            }
+        }
         if !add.success() {
             let combined = format!("{}{}", add.stdout, add.stderr);
             if combined.contains("already exists") || combined.contains("already used") {
@@ -345,6 +380,33 @@ impl<G: GitRunner> WorktreeManager<G> {
         }
 
         Ok(Worktree { path, branch })
+    }
+
+    /// `git worktree add`, with (`-b <branch> <commit>`) or without (`<branch>`)
+    /// branch creation.
+    fn worktree_add(
+        &self,
+        repo_path: &Path,
+        path_str: &str,
+        branch: &str,
+        base_commit: &str,
+        branch_exists: bool,
+    ) -> Result<crate::ports::git::GitOutput, WorktreeError> {
+        let args: Vec<&str> = if branch_exists {
+            vec!["worktree", "add", path_str, branch]
+        } else {
+            vec!["worktree", "add", path_str, "-b", branch, base_commit]
+        };
+        self.run_with_transient_retry(repo_path, &args)
+    }
+
+    /// Whether `refs/heads/{branch}` exists in the repo.
+    fn local_branch_exists(&self, repo_path: &Path, branch: &str) -> Result<bool, WorktreeError> {
+        let refname = format!("refs/heads/{branch}");
+        let out = self
+            .git
+            .run(repo_path, &["show-ref", "--verify", "--quiet", &refname])?;
+        Ok(out.success())
     }
 
     /// Whether the worktree's `HEAD` has commits beyond `origin`'s **default
@@ -566,6 +628,24 @@ fn is_transient_git_error(stderr: &str) -> bool {
         || (s.contains("failed to read") && s.contains("commondir"))
 }
 
+/// Whether git refused the `worktree add` because the target path is still
+/// registered while its directory is gone — recoverable with `worktree prune`
+/// (#254). git's own message names the remedy:
+///
+/// ```text
+/// fatal: '<path>' is a missing but already registered worktree;
+/// use 'add -f' to override, or 'prune' or 'remove' to clear
+/// ```
+///
+/// Matched narrowly on "missing" + "registered" so a *live* worktree at the
+/// same path (an operator's own, or another task's) still errors out instead of
+/// being pruned away.
+fn is_stale_registration(stdout: &str, stderr: &str) -> bool {
+    let s = format!("{stdout}{stderr}").to_ascii_lowercase();
+    s.contains("missing but already registered")
+        || (s.contains("missing") && s.contains("registered worktree"))
+}
+
 /// Canonicalize a path, falling back to the original if it does not exist.
 fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
@@ -593,6 +673,24 @@ mod tests {
         ));
         assert!(!is_transient_git_error(
             "fatal: 'bogus' is not a commit and a branch 'b' cannot be created from it"
+        ));
+    }
+
+    #[test]
+    fn stale_registration_is_distinguished_from_a_live_one() {
+        assert!(is_stale_registration(
+            "Preparing worktree\n",
+            "fatal: '/s/wt/agent-slack-C1-1.2' is a missing but already registered worktree;\nuse 'add -f' to override, or 'prune' or 'remove' to clear\n"
+        ));
+        // A *live* worktree at that path is not prunable — it belongs to
+        // someone, so it must surface as an error instead.
+        assert!(!is_stale_registration(
+            "",
+            "fatal: '/s/wt/agent-slack-C1-1.2' already exists\n"
+        ));
+        assert!(!is_stale_registration(
+            "",
+            "fatal: 'agent/slack-C1-1.2' is already used by worktree at '/s/wt/other'\n"
         ));
     }
 
