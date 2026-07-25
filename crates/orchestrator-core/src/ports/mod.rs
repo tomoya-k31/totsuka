@@ -6,6 +6,7 @@
 //! tasks.
 
 pub mod agent_session;
+pub mod clock;
 pub mod git;
 pub mod llm;
 pub mod process;
@@ -13,6 +14,7 @@ pub mod secret;
 pub mod signal_ingress;
 
 pub use agent_session::{AgentSession, AgentSessionError, AttachOutcome};
+pub use clock::Clock;
 pub use git::{GitOutput, GitRunner};
 pub use llm::{ChatRequest, LlmError, LlmRouter};
 pub use process::ProcessProbe;

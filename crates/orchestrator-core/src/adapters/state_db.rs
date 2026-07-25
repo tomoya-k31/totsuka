@@ -12,10 +12,13 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use rusqlite::{Connection, Row, params};
 
+use crate::adapters::clock::SystemClock;
 use crate::domain::state::{InvalidTransition, TaskEvent, TaskState, UnknownState, transition};
+use crate::ports::clock::Clock;
 
 /// Ordered, immutable schema migrations. Index + 1 is the version number.
 const MIGRATIONS: &[&str] = &[
@@ -327,11 +330,18 @@ pub enum HookEventOutcome {
 /// The SQLite state database.
 pub struct StateDb {
     conn: Connection,
+    clock: Arc<dyn Clock>,
 }
 
 impl StateDb {
     /// Open (creating if needed) a file-backed state DB and run migrations.
     pub fn open(path: &Path) -> Result<Self, StateError> {
+        Self::open_with_clock(path, Arc::new(SystemClock))
+    }
+
+    /// [`open`](Self::open) with an injected [`Clock`] (#174) — the seam
+    /// deterministic tests use to control every persisted timestamp.
+    pub fn open_with_clock(path: &Path, clock: Arc<dyn Clock>) -> Result<Self, StateError> {
         let preexisting = path.exists();
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -340,16 +350,26 @@ impl StateDb {
         }
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        Self::init(conn, Some((path.to_path_buf(), preexisting)))
+        Self::init(conn, Some((path.to_path_buf(), preexisting)), clock)
     }
 
     /// Open an ephemeral in-memory DB (tests).
     pub fn open_in_memory() -> Result<Self, StateError> {
-        Self::init(Connection::open_in_memory()?, None)
+        Self::open_in_memory_with_clock(Arc::new(SystemClock))
+    }
+
+    /// [`open_in_memory`](Self::open_in_memory) with an injected [`Clock`]
+    /// (#174).
+    pub fn open_in_memory_with_clock(clock: Arc<dyn Clock>) -> Result<Self, StateError> {
+        Self::init(Connection::open_in_memory()?, None, clock)
     }
 
     /// Shared init: enable FKs, run migrations (with backup if pending).
-    fn init(mut conn: Connection, backup: Option<(PathBuf, bool)>) -> Result<Self, StateError> {
+    fn init(
+        mut conn: Connection,
+        backup: Option<(PathBuf, bool)>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, StateError> {
         // rusqlite defaults foreign_keys OFF; the schema declares FKs.
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(
@@ -381,13 +401,13 @@ impl StateDb {
                     tx.execute_batch(sql)?;
                     tx.execute(
                         "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-                        params![version, now()],
+                        params![version, clock.now_rfc3339()],
                     )?;
                     tx.commit()?;
                 }
             }
         }
-        Ok(Self { conn })
+        Ok(Self { conn, clock })
     }
 
     /// Ingest a task idempotently (F-73). Returns its id, whether newly
@@ -404,7 +424,7 @@ impl StateDb {
     }
 
     fn upsert_task_inner(&self, task: &NewTask, detail: &str) -> Result<i64, StateError> {
-        let now = now();
+        let now = self.clock.now_rfc3339();
         let payload = task
             .source_payload
             .as_ref()
@@ -505,7 +525,7 @@ impl StateDb {
     ) -> Result<TaskState, StateError> {
         let record = self.get_task(id)?.ok_or(StateError::NotFound(id))?;
         let to = transition(record.state, event)?;
-        let now = now();
+        let now = self.clock.now_rfc3339();
         let finished_at = to.is_terminal().then(|| now.clone());
         let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
 
@@ -529,7 +549,7 @@ impl StateDb {
     pub fn set_repo(&self, id: i64, repo: &str) -> Result<(), StateError> {
         let n = self.conn.execute(
             "UPDATE tasks SET repo = ?1, updated_at = ?2 WHERE id = ?3",
-            params![repo, now(), id],
+            params![repo, self.clock.now_rfc3339(), id],
         )?;
         if n == 0 {
             return Err(StateError::NotFound(id));
@@ -541,7 +561,7 @@ impl StateDb {
     pub fn set_worktree(&self, id: i64, path: &str, branch: &str) -> Result<(), StateError> {
         let n = self.conn.execute(
             "UPDATE tasks SET worktree_path = ?1, branch = ?2, updated_at = ?3 WHERE id = ?4",
-            params![path, branch, now(), id],
+            params![path, branch, self.clock.now_rfc3339(), id],
         )?;
         if n == 0 {
             return Err(StateError::NotFound(id));
@@ -574,7 +594,7 @@ impl StateDb {
         self.conn.execute(
             "INSERT INTO sessions (task_id, plugin, session_id, created_at)
              VALUES (?1, ?2, ?3, ?4)",
-            params![task_id, plugin, session_id, now()],
+            params![task_id, plugin, session_id, self.clock.now_rfc3339()],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -600,7 +620,7 @@ impl StateDb {
         self.conn.execute(
             "INSERT INTO sessions (task_id, plugin, session_id, created_at)
              VALUES (?1, ?2, '', ?3)",
-            params![task_id, plugin, now()],
+            params![task_id, plugin, self.clock.now_rfc3339()],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -731,7 +751,7 @@ impl StateDb {
                 evt.event,
                 evt.status.as_deref().unwrap_or(""),
                 evt.payload,
-                now(),
+                self.clock.now_rfc3339(),
             ],
         )?;
         Ok(if changed > 0 {
@@ -768,7 +788,7 @@ impl StateDb {
 
     /// Bump a task's `last_signal_at` to now — the R-10 timeout anchor.
     pub fn touch_last_signal(&self, task_id: i64) -> Result<(), StateError> {
-        let now = now();
+        let now = self.clock.now_rfc3339();
         let n = self.conn.execute(
             "UPDATE tasks SET last_signal_at = ?1, updated_at = ?1 WHERE id = ?2",
             params![now, task_id],
@@ -837,17 +857,6 @@ impl StateDb {
     }
 }
 
-/// Current time as an ISO 8601 (RFC 3339) UTC string.
-///
-/// The format description is a compile-time constant, so formatting a valid
-/// `OffsetDateTime` cannot fail; failing fast avoids writing empty timestamps
-/// into NOT NULL columns.
-fn now() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .expect("RFC3339 formatting of current UTC time is infallible")
-}
-
 /// Map a `tasks` row (in [`TASK_COLUMNS`] order) to a [`TaskRecord`].
 fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
     let state_str: String = row.get("state")?;
@@ -902,6 +911,23 @@ fn conversion_error(e: Box<dyn std::error::Error + Send + Sync>) -> rusqlite::Er
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::clock::ManualClock;
+
+    /// Real-clock RFC 3339 timestamp for direct-INSERT helpers whose exact
+    /// value is irrelevant.
+    fn now() -> String {
+        SystemClock.now_rfc3339()
+    }
+
+    /// Fixed test epoch (#174).
+    const T0: &str = "2026-01-01T00:00:00Z";
+
+    /// A manually driven clock frozen at [`T0`], for exact-timestamp asserts.
+    fn manual_clock() -> Arc<ManualClock> {
+        let t0 = time::OffsetDateTime::parse(T0, &time::format_description::well_known::Rfc3339)
+            .unwrap();
+        Arc::new(ManualClock::new(t0))
+    }
 
     fn sample_task() -> NewTask {
         NewTask {
@@ -951,7 +977,8 @@ mod tests {
 
     #[test]
     fn event_transitions_and_audit_log() {
-        let db = StateDb::open_in_memory().unwrap();
+        let clock = manual_clock();
+        let db = StateDb::open_in_memory_with_clock(clock.clone()).unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
 
         assert_eq!(
@@ -960,6 +987,7 @@ mod tests {
         );
         db.apply_event(id, TaskEvent::Start, None).unwrap();
         db.apply_event(id, TaskEvent::BeginPublish, None).unwrap();
+        clock.advance(time::Duration::seconds(90));
         let final_state = db
             .apply_event(id, TaskEvent::Complete, Some(serde_json::json!({"pr": 7})))
             .unwrap();
@@ -967,7 +995,12 @@ mod tests {
 
         let rec = db.get_task(id).unwrap().unwrap();
         assert_eq!(rec.state, TaskState::Done);
-        assert!(rec.finished_at.is_some(), "terminal state sets finished_at");
+        assert_eq!(
+            rec.finished_at.as_deref(),
+            Some("2026-01-01T00:01:30Z"),
+            "the terminal transition stamps finished_at from the clock"
+        );
+        assert_eq!(rec.created_at, T0);
         // 1 ingest + 4 transitions.
         assert_eq!(db.event_count(id).unwrap(), 5);
     }
@@ -1619,7 +1652,8 @@ mod tests {
 
     #[test]
     fn tool_session_id_and_touch_last_signal() {
-        let db = StateDb::open_in_memory().unwrap();
+        let clock = manual_clock();
+        let db = StateDb::open_in_memory_with_clock(clock.clone()).unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
         let sess = db.record_session(id, "herdr", "sess-1").unwrap();
 
@@ -1641,10 +1675,20 @@ mod tests {
                 .is_none()
         );
 
-        // last_signal_at starts unset and gets stamped.
+        // last_signal_at starts unset and gets stamped from the clock; a
+        // later touch moves the anchor forward.
         assert!(db.get_task(id).unwrap().unwrap().last_signal_at.is_none());
         db.touch_last_signal(id).unwrap();
-        assert!(db.get_task(id).unwrap().unwrap().last_signal_at.is_some());
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().last_signal_at.as_deref(),
+            Some(T0)
+        );
+        clock.advance(time::Duration::seconds(60));
+        db.touch_last_signal(id).unwrap();
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().last_signal_at.as_deref(),
+            Some("2026-01-01T00:01:00Z")
+        );
 
         // Unknown ids are rejected, matching the other setters' contract.
         assert!(matches!(

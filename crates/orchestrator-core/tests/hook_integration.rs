@@ -8,8 +8,10 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
+use orchestrator_core::adapters::clock::ManualClock;
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::OpenAiRouter;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
@@ -21,7 +23,7 @@ use orchestrator_core::domain::signal::{
 };
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::domain::workflow::Workflow;
-use orchestrator_core::ports::SecretString;
+use orchestrator_core::ports::{Clock, SecretString};
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, HookRuntime, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
@@ -250,6 +252,17 @@ fn heartbeat(task_id: i64, row: i64, prompt_id: &str) -> AgentSignal {
 }
 
 const GRACE: Duration = Duration::from_secs(5);
+
+/// Fixed epoch for deterministic-clock tests (#174).
+const T0: &str = "2026-01-01T00:00:00Z";
+
+/// A manually driven clock frozen at [`T0`]; timeout-sweep tests advance it
+/// across the workflow timeout instead of seeding magic ancient anchors.
+fn manual_clock() -> Arc<ManualClock> {
+    let t0 =
+        time::OffsetDateTime::parse(T0, &time::format_description::well_known::Rfc3339).unwrap();
+    Arc::new(ManualClock::new(t0))
+}
 
 #[tokio::test]
 async fn completed_llm_publishes_to_done() {
@@ -641,24 +654,37 @@ async fn duplicate_signal_transitions_once() {
 async fn timeout_sweep_escalates_silent_task() {
     let base = scratch("hook_timeout");
     let notify_log = base.join("notify.ndjson");
-    let db = StateDb::open(&base.join("state.db")).unwrap();
-    // Seed a task whose last signal is ancient (well past the 30-minute default).
-    let id = db
-        .upsert_task(&new_task("1", Some("2000-01-01T00:00:00Z")))
-        .unwrap();
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+    // Seed a task whose last signal is "now" on the manual clock; the test
+    // then drives the clock across the 30-minute default timeout (#174).
+    let id = db.upsert_task(&new_task("1", Some(T0))).unwrap();
     db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
     db.apply_event(id, TaskEvent::Start, None).unwrap();
     db.record_session(id, "mock_agent", "sess-1").unwrap();
 
-    let mut engine = Engine::new(
+    let mut engine = Engine::with_clock(
         db,
         engine_settings(workflows("llm", "none"), None),
         plugin_set(json!({}), &notify_log).await,
         SystemGitRunner,
         no_llm(),
+        clock.clone(),
     )
     .await;
 
+    // Exactly at the timeout boundary: the comparison is strict (`>`), so the
+    // task is still within its window.
+    clock.advance(time::Duration::seconds(1800));
+    engine.sweep_signal_timeouts().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Running,
+        "exactly at the timeout is not yet silent"
+    );
+
+    // One second past the boundary: escalate.
+    clock.advance(time::Duration::seconds(1));
     engine.sweep_signal_timeouts().await.unwrap();
     assert_eq!(
         engine.db().get_task(id).unwrap().unwrap().state,
@@ -1275,23 +1301,25 @@ async fn duplicate_heartbeat_refreshes_liveness_and_prevents_false_escalation() 
     // would falsely escalate a task that is very much alive.
     let base = scratch("hook_hb_liveness");
     let notify_log = base.join("notify.ndjson");
-    let db = StateDb::open(&base.join("state.db")).unwrap();
-    // Seed with an ancient anchor (well past the 30-minute default).
-    let id = db
-        .upsert_task(&new_task("1", Some("2000-01-01T00:00:00Z")))
-        .unwrap();
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+    // Seed the anchor at T0, then move past the 30-minute default timeout:
+    // without the refresh below, the sweep WOULD escalate (#174).
+    let id = db.upsert_task(&new_task("1", Some(T0))).unwrap();
     db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
     db.apply_event(id, TaskEvent::Start, None).unwrap();
     let row = db.record_session(id, "mock_agent", "sess-1").unwrap();
 
-    let mut engine = Engine::new(
+    let mut engine = Engine::with_clock(
         db,
         engine_settings(workflows("llm", "none"), None),
         plugin_set(json!({}), &notify_log).await,
         SystemGitRunner,
         no_llm(),
+        clock.clone(),
     )
     .await;
+    clock.advance(time::Duration::seconds(1801));
 
     // Pre-seed the exact hook_event so the incoming heartbeat is a Duplicate.
     engine
@@ -1307,12 +1335,13 @@ async fn duplicate_heartbeat_refreshes_liveness_and_prevents_false_escalation() 
         })
         .unwrap();
 
-    // The duplicate heartbeat must STILL refresh last_signal_at.
+    // The duplicate heartbeat must STILL refresh last_signal_at — to the
+    // injected clock's current instant, exactly.
     engine.on_signal(heartbeat(id, row, "hb")).await.unwrap();
     let after = engine.db().get_task(id).unwrap().unwrap();
-    assert_ne!(
-        after.last_signal_at.as_deref(),
-        Some("2000-01-01T00:00:00Z"),
+    assert_eq!(
+        after.last_signal_at,
+        Some(clock.now_rfc3339()),
         "duplicate heartbeat refreshed the timeout anchor"
     );
 
@@ -1546,10 +1575,11 @@ fn resume_settings(repo: &Path, base: &Path) -> EngineSettings {
 /// Seed a prior task in `thread_key` with a recorded session, and return its id.
 /// `tool_sid = Some` simulates the SessionStart hook having established the
 /// tool session id; `None` leaves it unestablished (pre-hook era). Driven to
-/// `Dispatched` so it is inert (never re-dispatched); the far-future signal
-/// anchor keeps the timeout sweep from escalating it.
+/// `Dispatched` so it is inert (never re-dispatched); the resume tests run on
+/// a clock frozen at [`T0`] and anchor the signal there, so the timeout sweep
+/// (`now - last == 0`) provably never escalates it (#174).
 fn seed_prior(db: &StateDb, source_task_id: &str, thread_key: &str, tool_sid: Option<&str>) -> i64 {
-    let mut nt = new_task(source_task_id, Some("2099-01-01T00:00:00Z"));
+    let mut nt = new_task(source_task_id, Some(T0));
     nt.thread_key = Some(thread_key.to_string());
     let id = db.upsert_task(&nt).unwrap();
     db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
@@ -1588,16 +1618,18 @@ async fn second_task_in_thread_dispatches_with_resume_and_fresh_worktree() {
     let notify_log = base.join("notify.ndjson");
     let dispatch_log = base.join("dispatch.ndjson");
 
-    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
     seed_prior(&db, "1", "C1:100", Some("cc-prior"));
 
     let plugins = resume_plugins(follow_up("2", "C1:100"), &dispatch_log, &notify_log).await;
-    let mut engine = Engine::new(
+    let mut engine = Engine::with_clock(
         db,
         resume_settings(&repo, &base),
         plugins,
         SystemGitRunner,
         no_llm(),
+        clock,
     )
     .await;
     let dispatch_probe = dispatch_log.clone();
@@ -1632,16 +1664,18 @@ async fn unestablished_prior_session_falls_back_to_fresh_dispatch() {
     let notify_log = base.join("notify.ndjson");
     let dispatch_log = base.join("dispatch.ndjson");
 
-    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
     seed_prior(&db, "1", "C1:100", None); // session, but no claude id
 
     let plugins = resume_plugins(follow_up("2", "C1:100"), &dispatch_log, &notify_log).await;
-    let mut engine = Engine::new(
+    let mut engine = Engine::with_clock(
         db,
         resume_settings(&repo, &base),
         plugins,
         SystemGitRunner,
         no_llm(),
+        clock,
     )
     .await;
     let dispatch_probe = dispatch_log.clone();
@@ -1666,17 +1700,19 @@ async fn third_task_resumes_the_latest_session_in_the_thread() {
     let notify_log = base.join("notify.ndjson");
     let dispatch_log = base.join("dispatch.ndjson");
 
-    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
     seed_prior(&db, "1", "C1:100", Some("cc-1"));
     seed_prior(&db, "2", "C1:100", Some("cc-2"));
 
     let plugins = resume_plugins(follow_up("3", "C1:100"), &dispatch_log, &notify_log).await;
-    let mut engine = Engine::new(
+    let mut engine = Engine::with_clock(
         db,
         resume_settings(&repo, &base),
         plugins,
         SystemGitRunner,
         no_llm(),
+        clock,
     )
     .await;
     let dispatch_probe = dispatch_log.clone();
@@ -1700,17 +1736,19 @@ async fn distinct_threads_do_not_cross_resume() {
     let notify_log = base.join("notify.ndjson");
     let dispatch_log = base.join("dispatch.ndjson");
 
-    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
     seed_prior(&db, "1", "C1:100", Some("cc-other-thread"));
 
     // The follow-up is in a *different* thread (C2:999).
     let plugins = resume_plugins(follow_up("2", "C2:999"), &dispatch_log, &notify_log).await;
-    let mut engine = Engine::new(
+    let mut engine = Engine::with_clock(
         db,
         resume_settings(&repo, &base),
         plugins,
         SystemGitRunner,
         no_llm(),
+        clock,
     )
     .await;
     let dispatch_probe = dispatch_log.clone();
