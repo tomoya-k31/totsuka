@@ -19,6 +19,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use orchestrator_core::adapters::StateDb;
+use orchestrator_core::adapters::clock::ManualClock;
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::OpenAiRouter;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
@@ -1438,11 +1439,15 @@ fn recorded_releases(dispatch_log: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Backdate every task's `finished_at` so a retention policy is elapsed.
-fn backdate_finished_at(db_path: &Path) {
-    let conn = rusqlite::Connection::open(db_path).unwrap();
-    conn.execute("UPDATE tasks SET finished_at = '2026-01-01T00:00:00Z'", [])
-        .unwrap();
+/// A manually driven clock frozen at a fixed epoch (#174); retention tests
+/// advance it past the policy window instead of backdating rows in the DB.
+fn manual_clock() -> Arc<ManualClock> {
+    let t0 = time::OffsetDateTime::parse(
+        "2026-01-01T00:00:00Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    Arc::new(ManualClock::new(t0))
 }
 
 #[tokio::test]
@@ -1515,7 +1520,9 @@ async fn elapsed_retention_sweep_releases_pane_and_removes_worktree() {
     let dispatch_log2 = base.join("dispatch2.ndjson");
     let db_path = base.join("state.db");
 
-    // Run 1: complete the task; retention keeps worktree AND pane.
+    // Run 1: complete the task; retention keeps worktree AND pane. The
+    // injected clock stamps `finished_at` with the frozen epoch (#174).
+    let clock = manual_clock();
     let plugins = plugin_set(
         json!([mock_task("1")]),
         json!({
@@ -1529,12 +1536,13 @@ async fn elapsed_retention_sweep_releases_pane_and_removes_worktree() {
     .await;
     let mut settings = engine_settings(&repo);
     settings.cleanup_implement = CleanupPolicy::RetentionDays(7);
-    let mut engine = Engine::new(
-        StateDb::open(&db_path).unwrap(),
+    let mut engine = Engine::with_clock(
+        StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
         settings,
         plugins,
         SystemGitRunner,
         no_llm(),
+        clock.clone(),
     )
     .await;
     let db_probe = db_path.clone();
@@ -1561,7 +1569,7 @@ async fn elapsed_retention_sweep_releases_pane_and_removes_worktree() {
     );
 
     // Run 2, after the retention elapsed: the startup sweep cleans up.
-    backdate_finished_at(&db_path);
+    clock.advance(time::Duration::days(8));
     let plugins = plugin_set(
         json!([]),
         json!({ "pane_control": true, "dispatch_log": dispatch_log2 }),
@@ -1571,12 +1579,13 @@ async fn elapsed_retention_sweep_releases_pane_and_removes_worktree() {
     .await;
     let mut settings = engine_settings(&repo);
     settings.cleanup_implement = CleanupPolicy::RetentionDays(7);
-    let mut engine = Engine::new(
-        StateDb::open(&db_path).unwrap(),
+    let mut engine = Engine::with_clock(
+        StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
         settings,
         plugins,
         SystemGitRunner,
         no_llm(),
+        clock.clone(),
     )
     .await;
     engine.cycle().await.unwrap();
@@ -1728,14 +1737,16 @@ async fn release_is_sent_once_even_when_removal_keeps_failing() {
         &notify_log,
     )
     .await;
+    let clock = manual_clock();
     let mut settings = engine_settings(&repo);
     settings.cleanup_implement = CleanupPolicy::RetentionDays(7);
-    let mut engine = Engine::new(
-        StateDb::open(&db_path).unwrap(),
+    let mut engine = Engine::with_clock(
+        StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
         settings,
         plugins,
         SystemGitRunner,
         no_llm(),
+        clock.clone(),
     )
     .await;
     let db_probe = db_path.clone();
@@ -1752,7 +1763,7 @@ async fn release_is_sent_once_even_when_removal_keeps_failing() {
     let db = StateDb::open(&db_path).unwrap();
     let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
     let worktree = task.worktree_path.clone().unwrap();
-    backdate_finished_at(&db_path);
+    clock.advance(time::Duration::days(8));
     // `git worktree remove` refuses a locked worktree — a deterministic,
     // repeatable removal failure.
     git(&repo, &["worktree", "lock", &worktree]);
@@ -1766,12 +1777,13 @@ async fn release_is_sent_once_even_when_removal_keeps_failing() {
     .await;
     let mut settings = engine_settings(&repo);
     settings.cleanup_implement = CleanupPolicy::RetentionDays(7);
-    let mut engine = Engine::new(
-        StateDb::open(&db_path).unwrap(),
+    let mut engine = Engine::with_clock(
+        StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
         settings,
         plugins,
         SystemGitRunner,
         no_llm(),
+        clock.clone(),
     )
     .await;
     for _ in 0..5 {

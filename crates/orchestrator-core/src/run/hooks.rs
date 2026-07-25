@@ -518,7 +518,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// on a human, not silent agents — and only tasks that have received at
     /// least one signal (a set `last_signal_at` is the anchor).
     pub async fn sweep_signal_timeouts(&mut self) -> Result<(), EngineError> {
-        let now = time::OffsetDateTime::now_utc();
+        let now = self.clock.now_utc();
         let mut timed_out: Vec<TaskRecord> = Vec::new();
         for state in [
             TaskState::Dispatched,

@@ -45,6 +45,7 @@ use plugin_protocol::{Notification, Task, jsonrpc};
 use serde_json::Value;
 use tokio::sync::{Semaphore, mpsc};
 
+use crate::adapters::clock::SystemClock;
 use crate::adapters::plugin_host::{IncomingRequest, Plugin};
 use crate::adapters::state_db::{NewTask, StateDb, StateError, TaskRecord};
 use crate::adapters::{EngineSignalSink, hook_uds};
@@ -56,6 +57,7 @@ use crate::domain::signal::{AgentSignal, JobId};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::domain::workflow::{Workflow, match_workflow};
 use crate::ports::agent_session::AttachOutcome;
+use crate::ports::clock::Clock;
 use crate::ports::git::GitRunner;
 use crate::ports::llm::{ChatRequest, LlmError, LlmRouter};
 use crate::ports::secret::SecretString;
@@ -452,6 +454,9 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     /// When the last worktree-retention sweep ran (#210); `None` at startup so
     /// the first `cycle()` always sweeps (startup recovery stays immediate).
     last_worktree_sweep: Option<tokio::time::Instant>,
+    /// Wall-clock source for retention decisions and timeout sweeps (#174);
+    /// a seam so time-dependent behavior is testable deterministically.
+    clock: Arc<dyn Clock>,
     stats: RunStats,
 }
 
@@ -469,7 +474,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         git: G,
         llm: Option<L>,
     ) -> Self {
-        Self::with_pr_creator(db, settings, plugins, git, llm, Box::new(GhPrCreator)).await
+        Self::build(
+            db,
+            settings,
+            plugins,
+            git,
+            llm,
+            Box::new(GhPrCreator),
+            Arc::new(SystemClock),
+        )
+        .await
     }
 
     /// Build an engine with an explicit pull-request creator (the seam tests
@@ -481,6 +495,55 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         git: G,
         llm: Option<L>,
         pr_creator: Box<dyn PrCreator>,
+    ) -> Self {
+        Self::build(
+            db,
+            settings,
+            plugins,
+            git,
+            llm,
+            pr_creator,
+            Arc::new(SystemClock),
+        )
+        .await
+    }
+
+    /// Build an engine with an explicit [`Clock`] (#174) — the seam
+    /// deterministic tests use to control retention and timeout decisions.
+    ///
+    /// Callers that also injected a clock into [`StateDb`] must pass the
+    /// **same `Arc`** here, or DB timestamps and engine decisions would run
+    /// on two different timelines.
+    pub async fn with_clock(
+        db: StateDb,
+        settings: EngineSettings,
+        plugins: PluginSet,
+        git: G,
+        llm: Option<L>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        Self::build(
+            db,
+            settings,
+            plugins,
+            git,
+            llm,
+            Box::new(GhPrCreator),
+            clock,
+        )
+        .await
+    }
+
+    /// Shared constructor body behind [`new`](Self::new) and the seam
+    /// variants.
+    async fn build(
+        db: StateDb,
+        settings: EngineSettings,
+        plugins: PluginSet,
+        git: G,
+        llm: Option<L>,
+        pr_creator: Box<dyn PrCreator>,
+        clock: Arc<dyn Clock>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         for (name, plugin) in &plugins.agents {
@@ -534,6 +597,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             pr_creator,
             released_panes: HashSet::new(),
             last_worktree_sweep: None,
+            clock,
             stats: RunStats::default(),
         }
     }
@@ -1924,11 +1988,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         } else {
             self.settings.cleanup_implement
         };
+        let now = self.clock.now_rfc3339();
         let decision = match self.worktrees.decide_cleanup(
             Path::new(path),
             policy,
             record.finished_at.as_deref(),
-            &now_rfc3339(),
+            &now,
         ) {
             Ok(decision) => decision,
             Err(e) => {
@@ -2289,13 +2354,6 @@ fn execution_mode(mode: &str) -> ExecutionMode {
     } else {
         ExecutionMode::Implement
     }
-}
-
-/// Current time as RFC 3339 UTC (worktree retention comparison).
-fn now_rfc3339() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .expect("RFC3339 formatting of current UTC time is infallible")
 }
 
 #[cfg(test)]

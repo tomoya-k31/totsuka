@@ -4,6 +4,7 @@
 //! Filled in incrementally by feature tasks.
 
 pub mod agent_session;
+pub mod clock;
 pub mod engine_signal_sink;
 pub mod git;
 pub mod hook_uds;
@@ -13,6 +14,7 @@ pub mod run_lock;
 pub mod state_db;
 
 pub use agent_session::PluginAgentSession;
+pub use clock::{ManualClock, SystemClock};
 pub use engine_signal_sink::EngineSignalSink;
 pub use plugin_host::{HostError, Plugin, PluginSpec};
 pub use run_lock::{LockError, RunLock};

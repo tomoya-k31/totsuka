@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-07-25
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — #174: `Clock` port（`now_utc()` + 既定 `now_rfc3339()`）と adapter（本番 `SystemClock` / テスト用 `ManualClock`）を新設し、StateDb の永続タイムスタンプ・worktree リテンション判定・シグナルタイムアウト sweep の時刻取得を `Arc<dyn Clock>` 注入に seam 化。既存コンストラクタはシグネチャ不変（既定 `SystemClock`）、注入口は `open_with_clock` / `open_in_memory_with_clock` / `Engine::with_clock`。raw-SQL backdate ハックと 2000-01-01 / 2099-01-01 のマジック日付アンカーを全廃し固定時刻の決定的テストへ書き換え。
 * **Creation**: [依存関係ハイジーン（未使用依存の検出）](/development/dependency-hygiene.md) — #171: cargo-machete を CI（`ci.yml` `machete` ジョブ、毎 PR・ubuntu-slim）に常設。誤検知の ignore 手順と、cargo-shear / cargo-udeps の定期手動実行手順を記載。
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) — #173: golden wire fixture による contract test を新設（`tests/fixtures/` に全メソッドのエンベロープ JSON をコミット、往復一致・forward compat・enum ピン留めを検証）。fixture 差分レビュー = 互換性レビューの運用と `PROTOCOL_VERSION` の上げ方（追加的=パッチ / 破壊的=マイナー）を記載。
 * **Update**: [task-source-slack](/components/task-source-slack.md) — #129: 名前キャッシュ（users.info / conversations.info）は成功のみキャッシュし、失敗時の生 ID フォールバックをピン留めしない（`channel()` の修正漏れを `user()` と対称化。一時障害や missing_scope 修正後に再起動なしで回復）。
