@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use orchestrator_core::adapters::state_db::TaskMessageInsert;
 use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::domain::state::TaskEvent;
 
@@ -63,8 +64,9 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// Seed a state DB with one task in each interesting state.
-fn seed_db(base: &Path) -> (i64, i64) {
+/// Seed a state DB with one task in each interesting state: running (with a
+/// conversation), failed, and done.
+fn seed_db(base: &Path) -> (i64, i64, i64) {
     let state_dir = base.join("state").join("totsuka");
     std::fs::create_dir_all(&state_dir).unwrap();
     let db = StateDb::open(&state_dir.join("state.db")).unwrap();
@@ -85,9 +87,41 @@ fn seed_db(base: &Path) -> (i64, i64) {
     db.apply_event(running, TaskEvent::Dispatch, None).unwrap();
     db.apply_event(running, TaskEvent::Start, None).unwrap();
     db.record_session(running, "herdr", "sess-1").unwrap();
+    // A conversation on the running task (#242): one message already handed
+    // to the agent, one that arrived while it was working and is still queued.
+    for (key, body, processed) in [
+        ("1", "最初の質問です", true),
+        (
+            "1:reply",
+            "追記: ログはこちらです\n\n    2026-07-26T00:00:00Z ERROR ...",
+            false,
+        ),
+    ] {
+        db.append_task_message(&TaskMessageInsert {
+            task_id: running,
+            message_key: key.to_string(),
+            author: Some("アリス".to_string()),
+            body: body.to_string(),
+            url: Some(format!("https://slack.test/{key}")),
+            payload: "{}".to_string(),
+        })
+        .unwrap();
+        if processed {
+            db.mark_messages_processed(running).unwrap();
+        }
+    }
     let failed = db.upsert_task(&new("2")).unwrap();
     db.apply_event(failed, TaskEvent::Fail, None).unwrap();
-    (running, failed)
+    let done = db.upsert_task(&new("3")).unwrap();
+    for event in [
+        TaskEvent::Dispatch,
+        TaskEvent::Start,
+        TaskEvent::BeginPublish,
+        TaskEvent::Complete,
+    ] {
+        db.apply_event(done, event, None).unwrap();
+    }
+    (running, failed, done)
 }
 
 #[test]
@@ -139,7 +173,7 @@ fn help_lists_every_command_and_completion_generates() {
 #[test]
 fn status_reports_stale_lock_and_parseable_json() {
     let base = scratch("status");
-    let (running_id, _) = seed_db(&base);
+    let (running_id, _, _) = seed_db(&base);
     // A lock file with a certainly-dead PID → stale (F-74).
     std::fs::write(base.join("state/totsuka/run.lock"), "999999").unwrap();
 
@@ -170,7 +204,7 @@ fn status_reports_stale_lock_and_parseable_json() {
 #[test]
 fn task_show_json_and_retry_cancel_rules() {
     let base = scratch("task");
-    let (running_id, failed_id) = seed_db(&base);
+    let (running_id, failed_id, done_id) = seed_db(&base);
 
     let out = run(&base, &["task", "show", &running_id.to_string(), "--json"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -181,6 +215,51 @@ fn task_show_json_and_retry_cancel_rules() {
         doc["events"].as_array().unwrap().len() >= 3,
         "ingest + dispatch + start history: {doc}"
     );
+
+    // The conversation (#242): every message, oldest first, with the whole
+    // body (only the terminal rendering clips) and its processed state.
+    let messages = doc["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2, "{doc}");
+    assert_eq!(messages[0]["message_key"], "1");
+    assert_eq!(messages[0]["author"], "アリス");
+    assert_eq!(messages[0]["body"], "最初の質問です");
+    assert!(
+        !messages[0]["processed_at"].is_null(),
+        "the first message went to the agent: {doc}"
+    );
+    assert_eq!(messages[1]["message_key"], "1:reply");
+    assert!(
+        messages[1]["body"]
+            .as_str()
+            .unwrap()
+            .contains("2026-07-26T00:00:00Z ERROR"),
+        "the JSON carries the full body, unclipped: {doc}"
+    );
+    assert!(
+        messages[1]["processed_at"].is_null(),
+        "the follow-up is still queued: {doc}"
+    );
+
+    // The human rendering shows the same conversation, flagging what is
+    // still queued.
+    let out = run(&base, &["task", "show", &running_id.to_string()]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("conversation (2 message(s)"), "{text}");
+    assert!(text.contains("1 not yet sent to the agent"), "{text}");
+    assert!(text.contains("最初の質問です"), "{text}");
+    // Multi-line bodies collapse to one line each.
+    assert!(
+        text.lines().filter(|l| l.contains("追記:")).count() == 1
+            && !text.contains("    2026-07-26T00:00:00Z"),
+        "a multi-line body is flattened into its one row: {text}"
+    );
+
+    // A task with no ledger rows (a source with one message per task) still
+    // renders — the section is simply absent.
+    let out = run(&base, &["task", "show", &failed_id.to_string()]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(!stdout(&out).contains("conversation ("), "{}", stdout(&out));
 
     // Retry only re-queues failed/cancelled tasks.
     let out = run(&base, &["task", "retry", &running_id.to_string()]);
@@ -195,6 +274,26 @@ fn task_show_json_and_retry_cancel_rules() {
     let out = run(&base, &["task", "cancel", &failed_id.to_string()]);
     assert!(!out.status.success());
     assert!(stderr(&out).contains("→"));
+
+    // A finished conversation is continued by another message, not by a
+    // re-run — and `cancel` must give the same advice `retry` enforces,
+    // which it did not before #242 (it pointed at a `retry` that refuses).
+    for command in ["retry", "cancel"] {
+        let out = run(&base, &["task", command, &done_id.to_string()]);
+        assert!(
+            !out.status.success(),
+            "`task {command}` refuses a done task"
+        );
+        let err = stderr(&out);
+        assert!(
+            err.contains("another message in the conversation"),
+            "`task {command}` must point at the way forward that works: {err}"
+        );
+        assert!(
+            !err.contains("totsuka task retry"),
+            "`task {command}` must not send a done task to a command that refuses it: {err}"
+        );
+    }
 
     // Unknown id → cause + action.
     let out = run(&base, &["task", "show", "999"]);

@@ -20,7 +20,8 @@ pub enum TaskCommand {
         #[command(flatten)]
         json: JsonFlag,
     },
-    /// Show one task: state, sessions, worktree, and full event history.
+    /// Show one task: state, its conversation, sessions, worktree, and full
+    /// event history.
     Show {
         /// Task id (see `totsuka status`).
         id: i64,
@@ -84,8 +85,25 @@ struct TaskDetail {
     finished_at: Option<String>,
     created_at: String,
     updated_at: String,
+    /// The conversation, oldest first (#242). Empty for a task from a source
+    /// that has one message per task.
+    messages: Vec<MessageRow>,
     sessions: Vec<SessionRow>,
     events: Vec<EventRow>,
+}
+
+/// One message of the conversation. The body is **not** truncated here — the
+/// JSON document is what an audit reads; only the terminal rendering clips.
+#[derive(Debug, Serialize)]
+struct MessageRow {
+    message_key: String,
+    author: Option<String>,
+    body: String,
+    url: Option<String>,
+    received_at: String,
+    /// When the message was handed to the agent; `null` while it is still
+    /// queued. Messages dispatched together share one timestamp.
+    processed_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -171,6 +189,18 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
         finished_at: task.finished_at,
         created_at: task.created_at,
         updated_at: task.updated_at,
+        messages: db
+            .list_task_messages(id)?
+            .into_iter()
+            .map(|m| MessageRow {
+                message_key: m.message_key,
+                author: m.author,
+                body: m.body,
+                url: m.url,
+                received_at: m.received_at,
+                processed_at: m.processed_at,
+            })
+            .collect(),
         sessions: db
             .list_sessions(id)?
             .into_iter()
@@ -208,6 +238,37 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
             detail.branch.as_deref().unwrap_or("-")
         );
     }
+    if !detail.messages.is_empty() {
+        let queued = detail
+            .messages
+            .iter()
+            .filter(|m| m.processed_at.is_none())
+            .count();
+        println!(
+            "  conversation ({} message(s){}):",
+            detail.messages.len(),
+            if queued > 0 {
+                format!(", {queued} not yet sent to the agent")
+            } else {
+                String::new()
+            }
+        );
+        for m in &detail.messages {
+            // `→` = handed to the agent, `·` = still queued. The marker leads
+            // the line so a long conversation can be scanned down one column.
+            let mark = if m.processed_at.is_some() {
+                "→"
+            } else {
+                "·"
+            };
+            println!(
+                "    {mark} {} {} {}",
+                m.received_at,
+                m.author.as_deref().unwrap_or("-"),
+                one_line(&m.body, BODY_PREVIEW_CHARS)
+            );
+        }
+    }
     if !detail.sessions.is_empty() {
         println!("  sessions (newest first):");
         for s in &detail.sessions {
@@ -226,8 +287,16 @@ fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
     let task = db.get_task(id)?.ok_or_else(|| not_found(id))?;
     if task.state.is_terminal() {
+        // The advice has to match what `retry` actually accepts: it refuses a
+        // `done` task, and since #242 the way to carry a finished conversation
+        // forward is another message in it, not a re-run of the old one.
+        let next = if task.state == TaskState::Done {
+            "it finished; send another message in the conversation (the reply in its thread/issue) to continue it".to_string()
+        } else {
+            format!("use `totsuka task retry {id}` to re-run it")
+        };
         return Err(format!(
-            "task {id} is already {} → nothing to cancel; use `totsuka task retry {id}` to re-run it",
+            "task {id} is already {} → nothing to cancel; {next}",
             task.state
         )
         .into());
@@ -257,7 +326,11 @@ fn retry(cx: &Cx, id: i64) -> Result<(), CliError> {
     let task = db.get_task(id)?.ok_or_else(|| not_found(id))?;
     if !matches!(task.state, TaskState::Failed | TaskState::Cancelled) {
         let action = if task.state == TaskState::Done {
-            "completed tasks are not re-run; create a new task at the source instead"
+            // Since #242 `done` means "no unprocessed messages", not "closed
+            // forever": a new message reopens the conversation. Re-running the
+            // same instructions is a different thing, and not what anyone
+            // asking about a finished task wants.
+            "it finished; send another message in the conversation (the reply in its thread/issue) to continue it — a re-run of the same instructions is not what `retry` is for"
         } else {
             "only failed/cancelled tasks can be retried; `totsuka task cancel` it first if you want a re-run"
         };
@@ -326,6 +399,60 @@ fn verify(
     Ok(())
 }
 
+/// How much of a message body the terminal listing shows. The whole text is
+/// always in `--json`.
+const BODY_PREVIEW_CHARS: usize = 72;
+
+/// `body` as one line, clipped to `limit` **characters** (not bytes — Slack
+/// bodies are routinely Japanese, and slicing by byte would panic mid-glyph).
+fn one_line(body: &str, limit: usize) -> String {
+    let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    // One pass: take the head, then ask the *same* iterator whether anything
+    // is left. Counting the whole string first would walk a long body twice
+    // only to learn it is long.
+    let mut chars = flat.chars();
+    let head: String = chars.by_ref().take(limit).collect();
+    match chars.next() {
+        Some(_) => format!("{head}…"),
+        None => head,
+    }
+}
+
 fn not_found(id: i64) -> CliError {
     format!("task {id} not found → `totsuka task list` shows known ids").into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_line_clips_by_character_and_survives_odd_bodies() {
+        // Multibyte throughout: clipping by byte would panic mid-glyph, and
+        // Slack bodies are routinely Japanese.
+        let body = "日本語".repeat(40);
+        let clipped = one_line(&body, 5);
+        assert_eq!(clipped, "日本語日本…");
+
+        // Exactly at the limit is not clipped — the ellipsis must mean
+        // "there is more", never "there was exactly this much".
+        assert_eq!(one_line("あいうえお", 5), "あいうえお");
+        assert_eq!(one_line("あいうえおか", 5), "あいうえお…");
+
+        // A long unbroken token has no whitespace to fold, and still clips.
+        assert_eq!(one_line(&"x".repeat(100), 3), "xxx…");
+
+        // Nothing to show: an empty or whitespace-only body renders as an
+        // empty cell rather than a stray ellipsis.
+        assert_eq!(one_line("", 5), "");
+        assert_eq!(one_line("   \n\t ", 5), "");
+    }
+
+    #[test]
+    fn one_line_folds_a_multi_line_body_into_one_row() {
+        assert_eq!(
+            one_line("追記: ログです\n\n    ERROR foo\n    ERROR bar", 72),
+            "追記: ログです ERROR foo ERROR bar"
+        );
+    }
 }
