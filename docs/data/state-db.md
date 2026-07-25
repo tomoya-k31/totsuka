@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-timestamp: 2026-07-23T00:00:00Z
+timestamp: 2026-07-25T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -14,6 +14,73 @@ owner: tomoya-k31
 タスク実行状態を SQLite（`$XDG_STATE_HOME/totsuka/state.db`、WAL・`foreign_keys=ON`）へ永続化し、アプリ再起動後に実行中タスクを復元する（F-70）。埋め込みマイグレーションを起動時に自動適用し、適用前に DB ファイルをバックアップ（`{path}.bak`）する（§10.3）。
 
 # Schema
+
+## ER 図（v4 時点）
+
+`tasks` を中心に `sessions` / `events` / `hook_events` が `task_id` で 1:N にぶら下がる。**worktree に専用テーブルはなく**、タスクと 1:1 のため `tasks.repo` / `worktree_path` / `branch` の 3 列で表現する（実体の状態は git を直接参照）。tmux の pane も永続化せず、`session list` / `doctor` は tmux を実走査して DB と突き合わせる。`schema_migrations` は FK を持たない独立テーブル。
+
+```mermaid
+erDiagram
+    tasks ||--o{ sessions : "task_id（リトライで追記、最新行が re-attach 対象）"
+    tasks ||--o{ events : "task_id（全状態遷移の監査ログ）"
+    tasks ||--o{ hook_events : "task_id（job_id から解決、推測しない）"
+
+    tasks {
+        INTEGER id PK
+        TEXT source "NN — プラグイン名"
+        TEXT source_task_id "NN — UNIQUE(source, source_task_id)"
+        TEXT workflow "NN"
+        TEXT mode "NN — plan / implement"
+        TEXT repo "選択済みリポジトリ（pending 中 NULL）"
+        TEXT worktree_path "worktree（#53 が設定）"
+        TEXT branch "worktree（#53 が設定）"
+        TEXT state "NN — idx_tasks_state"
+        INTEGER priority "NN default 0"
+        TEXT title "NN"
+        TEXT url
+        TEXT source_payload "JSON 残余フィールド"
+        TEXT finished_at "終端到達時刻（retention 起点）"
+        TEXT created_at "NN — ISO 8601 UTC"
+        TEXT updated_at "NN — ISO 8601 UTC"
+        TEXT thread_key "v2 — idx_tasks_thread_key"
+        TEXT last_signal_at "v2 — R-10 タイムアウト起点"
+    }
+
+    sessions {
+        INTEGER id PK
+        INTEGER task_id FK "NN → tasks(id)"
+        TEXT plugin "NN — 所有プラグイン名"
+        TEXT session_id "NN — task/dispatch が返す ID"
+        TEXT created_at "NN — idx(task_id, created_at DESC)"
+        TEXT tool_session_id "v2/v4 — ツールネイティブ ID（idx）"
+    }
+
+    events {
+        INTEGER id PK
+        INTEGER task_id FK "NN → tasks(id)"
+        TEXT from_state "取り込み時のみ NULL"
+        TEXT to_state "NN"
+        TEXT occurred_at "NN — ISO 8601 UTC"
+        TEXT detail "JSON"
+    }
+
+    hook_events {
+        INTEGER id PK
+        TEXT job_id "NN — job-{task_id}-{session_row}"
+        INTEGER task_id FK "NN → tasks(id)"
+        TEXT tool_session_id "NN default ''（v4 改名）"
+        TEXT prompt_id "NN default ''"
+        TEXT event "NN — stop / notification / session_start / session_end / heartbeat"
+        TEXT status "NN default ''（v3 で冪等キーに参加）"
+        TEXT payload "NN — 受信 JSON 全文（監査 N-01）"
+        TEXT received_at "NN — ISO 8601 UTC"
+    }
+
+    schema_migrations {
+        INTEGER version PK "index+1 = version（現行 v4）"
+        TEXT applied_at "NN"
+    }
+```
 
 ## tasks（F-70/F-73）
 
