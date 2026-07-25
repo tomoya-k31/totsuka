@@ -676,6 +676,13 @@ fn check_spool(cx: &Cx, cfg: &RootConfig, env: &HashMap<String, String>, checks:
 /// [`Paths`](orchestrator_core::paths::Paths) and always expands. The rendered
 /// value is discarded — `{repo_name}` / `{branch}` are still unresolved at this
 /// point, so there is no directory to probe for writability.
+///
+/// Several templates can be broken at once (the global one plus any per-repo
+/// override), but they are reported as **one** `worktree-location` entry: the
+/// rest of `doctor` keeps one check per name (a loop over many items varies the
+/// name instead, as `plugin:{name}` does), and `--json` consumers look checks up
+/// by name. Every offender is still named in the detail, so one `doctor` run is
+/// enough to fix them all.
 fn check_worktree_location(
     cfg: &RootConfig,
     env: &HashMap<String, String>,
@@ -689,33 +696,34 @@ fn check_worktree_location(
     );
 
     let mut checked = 0usize;
-    let mut failed = false;
+    let mut failures = Vec::new();
     for (repo, template) in templates {
         let Some(template) = template else { continue };
         checked += 1;
         if let Err(e) = config::expand_path(template, &env_fn) {
-            failed = true;
             let referrer = match repo {
                 Some(name) => format!("[[repositories]] `{name}`.worktree_location"),
                 None => "[worktree].location".to_string(),
             };
-            checks.push(Check::fail(
-                "worktree-location",
-                format!("{referrer} does not expand: {e}"),
-                format!(
-                    "fix the ${{ENV}} reference in {referrer}, or drop the key to use the default under $XDG_STATE_HOME/totsuka (falling back to $HOME/.local/state)"
-                ),
-            ));
+            failures.push(format!("{referrer} does not expand: {e}"));
         }
     }
 
-    if !failed {
+    if failures.is_empty() {
         checks.push(Check::ok(
             "worktree-location",
             match checked {
                 0 => "using the built-in default location".to_string(),
                 n => format!("{n} configured location template(s) expand"),
             },
+        ));
+    } else {
+        checks.push(Check::fail(
+            "worktree-location",
+            failures.join("; "),
+            "export the missing variable, or drop the key to fall back to the built-in default \
+             ($XDG_STATE_HOME/totsuka/worktrees/..., or $HOME/.local/state/totsuka/worktrees/... \
+             when XDG_STATE_HOME is unset)",
         ));
     }
 }
@@ -1377,6 +1385,32 @@ worktree_location = "${TOTSUKA_DOCTOR_UNSET_VAR}/wt/{branch}"
         assert!(
             checks[0].detail.contains("`web`"),
             "message names the repository: {}",
+            checks[0].detail
+        );
+    }
+
+    /// Several broken templates collapse into one check entry that names them
+    /// all — `doctor --json` consumers look checks up by name, so a duplicated
+    /// name would hide every offender but the first.
+    #[test]
+    fn worktree_location_reports_every_offender_in_one_check() {
+        let checks = worktree_location_checks(
+            r#"
+[worktree]
+location = "${TOTSUKA_DOCTOR_UNSET_A}/wt/{branch}"
+
+[[repositories]]
+name = "web"
+path = "/repos/web"
+worktree_location = "${TOTSUKA_DOCTOR_UNSET_B}/wt/{branch}"
+"#,
+            &[],
+        );
+        assert_eq!(checks.len(), 1, "one entry per check name");
+        assert!(!checks[0].ok);
+        assert!(
+            checks[0].detail.contains("[worktree].location") && checks[0].detail.contains("`web`"),
+            "both offenders named: {}",
             checks[0].detail
         );
     }
