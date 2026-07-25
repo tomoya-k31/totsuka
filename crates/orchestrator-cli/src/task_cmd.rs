@@ -406,13 +406,52 @@ const BODY_PREVIEW_CHARS: usize = 72;
 /// bodies are routinely Japanese, and slicing by byte would panic mid-glyph).
 fn one_line(body: &str, limit: usize) -> String {
     let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() <= limit {
-        return flat;
+    // One pass: take the head, then ask the *same* iterator whether anything
+    // is left. Counting the whole string first would walk a long body twice
+    // only to learn it is long.
+    let mut chars = flat.chars();
+    let head: String = chars.by_ref().take(limit).collect();
+    match chars.next() {
+        Some(_) => format!("{head}…"),
+        None => head,
     }
-    let head: String = flat.chars().take(limit).collect();
-    format!("{head}…")
 }
 
 fn not_found(id: i64) -> CliError {
     format!("task {id} not found → `totsuka task list` shows known ids").into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_line_clips_by_character_and_survives_odd_bodies() {
+        // Multibyte throughout: clipping by byte would panic mid-glyph, and
+        // Slack bodies are routinely Japanese.
+        let body = "日本語".repeat(40);
+        let clipped = one_line(&body, 5);
+        assert_eq!(clipped, "日本語日本…");
+
+        // Exactly at the limit is not clipped — the ellipsis must mean
+        // "there is more", never "there was exactly this much".
+        assert_eq!(one_line("あいうえお", 5), "あいうえお");
+        assert_eq!(one_line("あいうえおか", 5), "あいうえお…");
+
+        // A long unbroken token has no whitespace to fold, and still clips.
+        assert_eq!(one_line(&"x".repeat(100), 3), "xxx…");
+
+        // Nothing to show: an empty or whitespace-only body renders as an
+        // empty cell rather than a stray ellipsis.
+        assert_eq!(one_line("", 5), "");
+        assert_eq!(one_line("   \n\t ", 5), "");
+    }
+
+    #[test]
+    fn one_line_folds_a_multi_line_body_into_one_row() {
+        assert_eq!(
+            one_line("追記: ログです\n\n    ERROR foo\n    ERROR bar", 72),
+            "追記: ログです ERROR foo ERROR bar"
+        );
+    }
 }
