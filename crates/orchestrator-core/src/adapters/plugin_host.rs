@@ -179,6 +179,15 @@ impl Responder {
         self.send(jsonrpc::Response::error(self.id.clone(), error));
     }
 
+    /// Build a responder writing into `write_tx` (tests only).
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        id: jsonrpc::RequestId,
+        write_tx: mpsc::UnboundedSender<String>,
+    ) -> Self {
+        Self { id, write_tx }
+    }
+
     fn send(&self, response: jsonrpc::Response) {
         match jsonrpc::to_line(&response) {
             Ok(line) => {

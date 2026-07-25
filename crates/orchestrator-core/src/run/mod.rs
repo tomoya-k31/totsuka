@@ -38,8 +38,8 @@ use plugin_protocol::method;
 use plugin_protocol::methods::{
     AgentState, ExecutionMode, HookLaunchSpec, NotifierEvent, NotifyParams, ResultPublishParams,
     SessionReleaseParams, SessionReleaseResult, StateNotification, TaskDispatchParams,
-    TaskDispatchResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus,
-    TaskUpdateStatusParams,
+    TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams, TaskSubmitResult,
+    TaskSubmitStatus, TaskUpdateStatusParams,
 };
 use plugin_protocol::{Notification, Task, jsonrpc};
 use serde_json::Value;
@@ -353,15 +353,34 @@ pub(crate) enum PluginEvent {
         /// Where the forwarder awaits the ack.
         respond: SubmitRespond,
     },
+    /// A `task/lookup` from a task source (P→O, 0.2.4, #242): answer whether
+    /// the conversation is already known, and which repository it settled on.
+    /// Read-only — nothing about the task changes.
+    TaskLookup {
+        /// The asking plugin's instance name (authoritative over the params').
+        source: String,
+        /// The conversation identity to look up.
+        task_id: String,
+        /// Where the forwarder awaits the answer.
+        respond: LookupRespond,
+    },
 }
 
 /// The answer channel for one [`PluginEvent::TaskSubmit`].
 type SubmitRespond = tokio::sync::oneshot::Sender<Result<TaskSubmitResult, jsonrpc::Error>>;
 
+/// The answer channel for one [`PluginEvent::TaskLookup`].
+type LookupRespond = tokio::sync::oneshot::Sender<Result<TaskLookupResult, jsonrpc::Error>>;
+
 /// Per-plugin cap on in-flight `task/submit` requests (backpressure; an
 /// exhausted budget answers `SUBMIT_OVERLOADED`, which the plugin retries
 /// with backoff). Persisting is one SQLite upsert, so this rarely binds.
 const SUBMIT_IN_FLIGHT_BUDGET: usize = 64;
+
+/// The same cap for `task/lookup`, kept **separate** from the submit budget
+/// so a burst of one can never starve the other. A lookup is one indexed
+/// `SELECT` answered from the engine loop, so this rarely binds either.
+const LOOKUP_IN_FLIGHT_BUDGET: usize = 64;
 
 /// What one ingest did to the conversation it belongs to (#242).
 ///
@@ -614,10 +633,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             if let Some(mut incoming) = plugin.take_incoming_requests().await {
                 let name = name.clone();
                 let tx = tx.clone();
-                let budget = Arc::new(Semaphore::new(SUBMIT_IN_FLIGHT_BUDGET));
+                let budgets = PluginRequestBudgets {
+                    submit: Arc::new(Semaphore::new(SUBMIT_IN_FLIGHT_BUDGET)),
+                    lookup: Arc::new(Semaphore::new(LOOKUP_IN_FLIGHT_BUDGET)),
+                };
                 tokio::spawn(async move {
                     while let Some(request) = incoming.recv().await {
-                        forward_submit(&name, request, &tx, &budget);
+                        forward_plugin_request(&name, request, &tx, &budgets);
                     }
                 });
             }
@@ -1716,6 +1738,33 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     Err(e)
                 }
             },
+            // `task/lookup` (#242): read-only, so a failure is answered and
+            // dropped rather than being run-fatal the way a lost write is.
+            // The plugin's fallback — resolve the repository as it always did
+            // — is correct behaviour, just more work.
+            PluginEvent::TaskLookup {
+                source,
+                task_id,
+                respond,
+            } => {
+                let answer = self.db.find_by_source(&source, &task_id).map(|found| {
+                    // `repo: None` on a known task is a real state, not a
+                    // miss: selection has not settled (a human is being
+                    // asked, or classification was inconclusive). The plugin
+                    // reads it as "no hint", never as "no repository".
+                    TaskLookupResult {
+                        known: found.is_some(),
+                        repo: found.and_then(|t| t.repo),
+                    }
+                });
+                let _ = respond.send(answer.map_err(|e| {
+                    jsonrpc::Error::new(
+                        plugin_protocol::error_code::INTERNAL_ERROR,
+                        format!("task/lookup failed: {e} → resolve without the hint"),
+                    )
+                }));
+                Ok(())
+            }
         }
     }
 
@@ -2364,12 +2413,118 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     }
 }
 
-/// Route one plugin-initiated request (P→O, 0.1.6) to the engine loop.
+/// The per-plugin in-flight budgets, one per plugin-initiated method.
+struct PluginRequestBudgets {
+    submit: Arc<Semaphore>,
+    lookup: Arc<Semaphore>,
+}
+
+/// Route one plugin-initiated request (P→O) to the engine loop.
 ///
-/// `task/submit` is parsed and budgeted here; anything else is answered
-/// `METHOD_NOT_FOUND` immediately. The ack await is spawned off the caller's
-/// loop so one slow ingest never delays the next submission's parsing (per-
-/// source ordering is already fixed by the inline event-channel send).
+/// `task/submit` (0.1.6) and `task/lookup` (0.2.4) are parsed and budgeted
+/// here; anything else is answered `METHOD_NOT_FOUND` immediately. The answer
+/// await is spawned off the caller's loop so one slow ingest never delays the
+/// next request's parsing (per-source ordering is already fixed by the inline
+/// event-channel send).
+fn forward_plugin_request(
+    source: &str,
+    request: IncomingRequest,
+    tx: &mpsc::UnboundedSender<PluginEvent>,
+    budgets: &PluginRequestBudgets,
+) {
+    use plugin_protocol::error_code;
+    match request.method.as_str() {
+        method::TASK_SUBMIT => forward_submit(source, request, tx, &budgets.submit),
+        method::TASK_LOOKUP => forward_lookup(source, request, tx, &budgets.lookup),
+        other => request.responder.err(jsonrpc::Error::new(
+            error_code::METHOD_NOT_FOUND,
+            format!("unknown plugin-initiated method: {other}"),
+        )),
+    }
+}
+
+/// Answer `task/lookup` (P→O, 0.2.4, #242) from the engine loop.
+///
+/// The plugin asks this *before* submitting, to skip work only a new
+/// conversation needs — repository resolution, which may mean an LLM call or
+/// a question put to a human. It is read-only, so a failure here costs the
+/// plugin nothing beyond falling back to resolving as it always did; that
+/// degradation is part of the contract, and the client enforces a timeout for
+/// exactly this reason (the engine loop can be busy creating a worktree).
+fn forward_lookup(
+    source: &str,
+    request: IncomingRequest,
+    tx: &mpsc::UnboundedSender<PluginEvent>,
+    budget: &Arc<Semaphore>,
+) {
+    use plugin_protocol::error_code;
+    let params: TaskLookupParams = match request
+        .params
+        .clone()
+        .map(serde_json::from_value)
+        .transpose()
+    {
+        Ok(Some(params)) => params,
+        Ok(None) => {
+            request.responder.err(jsonrpc::Error::new(
+                error_code::INVALID_PARAMS,
+                "task/lookup requires params → send { \"source\": …, \"task_id\": … }",
+            ));
+            return;
+        }
+        Err(e) => {
+            request.responder.err(jsonrpc::Error::new(
+                error_code::INVALID_PARAMS,
+                format!("malformed task/lookup params: {e}"),
+            ));
+            return;
+        }
+    };
+    let Ok(permit) = budget.clone().try_acquire_owned() else {
+        request.responder.err(jsonrpc::Error::new(
+            error_code::SUBMIT_OVERLOADED,
+            "task/lookup in-flight budget exhausted → resolve without the hint",
+        ));
+        return;
+    };
+    let (otx, orx) = tokio::sync::oneshot::channel();
+    // `source` comes from the connection, not from `params.source`: a plugin
+    // must not be able to read another source's conversations by naming it.
+    if tx
+        .send(PluginEvent::TaskLookup {
+            source: source.to_string(),
+            task_id: params.task_id,
+            respond: otx,
+        })
+        .is_err()
+    {
+        request.responder.err(jsonrpc::Error::new(
+            error_code::NOT_ACCEPTING,
+            "orchestrator is not accepting requests → resolve without the hint",
+        ));
+        return;
+    }
+    let responder = request.responder;
+    tokio::spawn(async move {
+        let _permit = permit;
+        match orx.await {
+            Ok(Ok(result)) => match serde_json::to_value(&result) {
+                Ok(value) => responder.ok(value),
+                Err(e) => responder.err(jsonrpc::Error::new(
+                    error_code::INTERNAL_ERROR,
+                    format!("failed to encode task/lookup answer: {e}"),
+                )),
+            },
+            Ok(Err(error)) => responder.err(error),
+            Err(_) => responder.err(jsonrpc::Error::new(
+                error_code::NOT_ACCEPTING,
+                "orchestrator is shutting down → resolve without the hint",
+            )),
+        }
+    });
+}
+
+/// Route one `task/submit` to the engine loop (0.1.6).
 fn forward_submit(
     source: &str,
     request: IncomingRequest,
@@ -2377,13 +2532,6 @@ fn forward_submit(
     budget: &Arc<Semaphore>,
 ) {
     use plugin_protocol::error_code;
-    if request.method != method::TASK_SUBMIT {
-        request.responder.err(jsonrpc::Error::new(
-            error_code::METHOD_NOT_FOUND,
-            format!("unknown plugin-initiated method: {}", request.method),
-        ));
-        return;
-    }
     let params: TaskSubmitParams = match request
         .params
         .clone()
@@ -3257,6 +3405,156 @@ plan_cleanup = "keep_28d"
             conversation_prompt(&engine.db.pending_task_messages(id).unwrap()),
             Some("two".to_string()),
             "the answered message must not be replayed alongside the new one"
+        );
+    }
+
+    /// `task/lookup` (#242) tells a source whether it is about to open a new
+    /// conversation, so it can skip resolving a repository for a reply.
+    #[tokio::test]
+    async fn task_lookup_answers_what_the_orchestrator_knows() {
+        let mut engine = ingest_test_engine().await;
+
+        async fn ask(
+            engine: &mut Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter>,
+            source: &str,
+            task_id: &str,
+        ) -> TaskLookupResult {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            engine
+                .on_event(PluginEvent::TaskLookup {
+                    source: source.to_string(),
+                    task_id: task_id.to_string(),
+                    respond: tx,
+                })
+                .await
+                .unwrap();
+            rx.await.unwrap().unwrap()
+        }
+
+        // Nothing ingested yet: a new conversation.
+        assert_eq!(
+            ask(&mut engine, "slack", "C1:100").await,
+            TaskLookupResult {
+                known: false,
+                repo: None
+            }
+        );
+
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+
+        // Known, but repository selection has not settled: `repo: None` means
+        // "no hint", not "no repository".
+        assert_eq!(
+            ask(&mut engine, "slack", "C1:100").await,
+            TaskLookupResult {
+                known: true,
+                repo: None
+            }
+        );
+
+        engine.db.set_repo(id, "totsuka").unwrap();
+        assert_eq!(
+            ask(&mut engine, "slack", "C1:100").await,
+            TaskLookupResult {
+                known: true,
+                repo: Some("totsuka".to_string())
+            }
+        );
+
+        // Conversations are scoped to their source: another plugin naming the
+        // same id learns nothing.
+        assert_eq!(
+            ask(&mut engine, "github", "C1:100").await,
+            TaskLookupResult {
+                known: false,
+                repo: None
+            }
+        );
+    }
+
+    /// The forwarder — not the engine — is where a plugin's claim about which
+    /// source it is gets discarded. A plugin must not be able to read another
+    /// source's conversations by naming it in the params, so pin the
+    /// enforcement at the three lines that do it.
+    #[tokio::test]
+    async fn task_lookup_takes_its_source_from_the_connection_not_the_params() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (write_tx, _write_rx) = mpsc::unbounded_channel();
+        let budgets = PluginRequestBudgets {
+            submit: Arc::new(Semaphore::new(1)),
+            lookup: Arc::new(Semaphore::new(1)),
+        };
+
+        forward_plugin_request(
+            "slack",
+            IncomingRequest {
+                method: method::TASK_LOOKUP.to_string(),
+                // The plugin claims to be `github`.
+                params: Some(serde_json::json!({
+                    "source": "github", "task_id": "C1:100",
+                })),
+                responder: crate::adapters::plugin_host::Responder::for_test(
+                    plugin_protocol::RequestId::Str("lookup-0".into()),
+                    write_tx,
+                ),
+            },
+            &event_tx,
+            &budgets,
+        );
+
+        let event = event_rx.recv().await.expect("an event was forwarded");
+        let PluginEvent::TaskLookup {
+            source, task_id, ..
+        } = event
+        else {
+            panic!("expected a TaskLookup event");
+        };
+        assert_eq!(source, "slack", "the connection wins over the params");
+        assert_eq!(task_id, "C1:100");
+    }
+
+    /// A plugin-initiated method the Orchestrator does not implement is still
+    /// answered `METHOD_NOT_FOUND`, unchanged by the forwarder's split.
+    #[tokio::test]
+    async fn an_unknown_plugin_initiated_method_is_still_method_not_found() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (write_tx, mut write_rx) = mpsc::unbounded_channel();
+        let budgets = PluginRequestBudgets {
+            submit: Arc::new(Semaphore::new(1)),
+            lookup: Arc::new(Semaphore::new(1)),
+        };
+
+        forward_plugin_request(
+            "slack",
+            IncomingRequest {
+                method: "task/invent".to_string(),
+                params: None,
+                responder: crate::adapters::plugin_host::Responder::for_test(
+                    plugin_protocol::RequestId::Str("x-1".into()),
+                    write_tx,
+                ),
+            },
+            &event_tx,
+            &budgets,
+        );
+
+        let line = write_rx.recv().await.expect("an answer was written");
+        let answer: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            answer["error"]["code"],
+            plugin_protocol::error_code::METHOD_NOT_FOUND
+        );
+        assert!(
+            event_rx.try_recv().is_err(),
+            "an unknown method never reaches the engine loop"
         );
     }
 

@@ -15,6 +15,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::dispatch::Reply;
+use crate::lookup::LookupClient;
 use crate::submit::SubmitClient;
 
 /// A clonable handle onto the shared writer task; each `send` is one NDJSON
@@ -46,6 +47,8 @@ pub struct Stdio {
     pub writer: Writer,
     /// The `task/submit` client bound to this writer.
     pub submit: SubmitClient,
+    /// The `task/lookup` client bound to this writer (0.2.4, #242).
+    pub lookup: LookupClient,
 }
 
 /// Spawn the stdout writer task and build the runtime handles.
@@ -64,7 +67,12 @@ pub fn stdio() -> Stdio {
     });
     let writer = Writer { tx };
     let submit = SubmitClient::new(writer.clone());
-    Stdio { writer, submit }
+    let lookup = LookupClient::new(writer.clone());
+    Stdio {
+        writer,
+        submit,
+        lookup,
+    }
 }
 
 /// One line of the host-driven protocol, answered with a [`Reply`].
@@ -76,8 +84,9 @@ pub trait LineHandler: Send {
 /// Run the read loop until EOF or a `shutdown` reply.
 ///
 /// Responses to this plugin's own requests (`id` present, no `method`) are
-/// resolved against `stdio.submit`; every other line goes to `handler` and
-/// its reply is written through the shared writer.
+/// resolved against the request clients (`stdio.submit` / `stdio.lookup`);
+/// every other line goes to `handler` and its reply is written through the
+/// shared writer.
 pub async fn serve<H: LineHandler>(mut handler: H, stdio: &Stdio) {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     loop {
@@ -97,7 +106,10 @@ pub async fn serve<H: LineHandler>(mut handler: H, stdio: &Stdio) {
             && value.get("id").is_some()
             && (value.get("result").is_some() || value.get("error").is_some())
         {
+            // Both clients see every response and ignore ids they did not
+            // issue; the id prefixes (`submit-` / `lookup-`) keep them apart.
             stdio.submit.resolve(&value);
+            stdio.lookup.resolve(&value);
             continue;
         }
         let reply = handler.handle_line(&line).await;

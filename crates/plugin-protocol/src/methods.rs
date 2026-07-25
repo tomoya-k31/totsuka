@@ -246,6 +246,13 @@ pub struct TaskSubmitResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskLookupParams {
     /// Source plugin instance name, as in [`Task::source`](crate::Task).
+    ///
+    /// **Informational.** The Orchestrator answers about the *connection's*
+    /// source, ignoring this field, so a plugin cannot read another source's
+    /// conversations by naming it. It is not rejected on mismatch either:
+    /// `task/submit` already establishes that a plugin's own notion of its
+    /// source name may differ from its instance name, and overwrites rather
+    /// than refuses — the same convention applies here.
     pub source: String,
     /// The conversation identity to look up.
     pub task_id: String,
