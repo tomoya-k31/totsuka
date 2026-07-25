@@ -1596,6 +1596,19 @@ fn seed_finished_conversation(db: &StateDb, source_task_id: &str, tool_sid: Opti
     if let Some(sid) = tool_sid {
         db.set_tool_session_id(row, sid).unwrap();
     }
+    // The earlier run left a worktree and branch recorded, as every real one
+    // does. That matters: `recovery::retry_plan` reads exactly
+    // (worktree_path, branch, session) and never the task's state, so a
+    // reopened conversation always *looks* reusable — the case a follow-up
+    // message must not be swallowed by (#242). The path is deliberately gone
+    // from disk, the state a cleaned-up worktree leaves behind; #254
+    // re-creates it.
+    db.set_worktree(
+        id,
+        &format!("/nonexistent/wt/agent-mock_src-{source_task_id}"),
+        &format!("agent/mock_src-{source_task_id}"),
+    )
+    .unwrap();
     for event in [
         TaskEvent::Dispatch,
         TaskEvent::Start,

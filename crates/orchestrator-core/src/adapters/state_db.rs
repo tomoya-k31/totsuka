@@ -955,6 +955,12 @@ impl StateDb {
     /// a task requeued without its messages is a dispatch with an empty
     /// prompt, and nothing would ever notice.
     ///
+    /// A conversation that *already* has unsent messages gets none back: the
+    /// run being retried never received a batch (it died before dispatch), so
+    /// there is nothing to take back — and the batch before it was answered
+    /// already. Reviving that one would replay an answered instruction
+    /// alongside the new one.
+    ///
     /// Returns the new state and how many messages came back.
     pub fn retry_task(
         &self,
@@ -965,9 +971,39 @@ impl StateDb {
         let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
         let tx = self.conn.unchecked_transaction()?;
         let to = apply_event_tx(&tx, &now, id, TaskEvent::Retry, detail.as_deref())?;
-        let requeued = unprocess_last_batch_tx(&tx, id)?;
+        let already_queued: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM task_messages WHERE task_id = ?1 AND processed_at IS NULL",
+            params![id],
+            |r| r.get(0),
+        )?;
+        let requeued = if already_queued > 0 {
+            0
+        } else {
+            unprocess_last_batch_tx(&tx, id)?
+        };
         tx.commit()?;
         Ok((to, requeued))
+    }
+
+    /// Ids of tasks in `state` that still have messages nobody has sent
+    /// (#242).
+    ///
+    /// One query rather than "list the tasks, then ask each about its ledger":
+    /// the run loop calls this on every 200 ms tick, and the number of
+    /// finished conversations only grows.
+    pub fn conversations_with_unsent_messages(
+        &self,
+        state: TaskState,
+    ) -> Result<Vec<i64>, StateError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT t.id FROM tasks t \
+             JOIN task_messages m ON m.task_id = t.id \
+             WHERE t.state = ?1 AND m.processed_at IS NULL \
+             ORDER BY t.id",
+        )?;
+        let rows = stmt.query_map(params![state.as_str()], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(StateError::from)
     }
 
     /// The conversation's undispatched messages, oldest first — its queue.

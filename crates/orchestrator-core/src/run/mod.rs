@@ -1247,11 +1247,31 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             None
         };
 
+        // Message-driven prompt (#242): what the agent is asked to do is the
+        // messages nobody has sent it yet, concatenated oldest-first, so a
+        // burst of three replies produces one dispatch and one answer rather
+        // than three panes. A resumed session already holds everything before
+        // them, so only the new ones go.
+        //
+        // An empty ledger falls back to the record's own body — the shape
+        // pre-#242 tasks were stored in, and what v6's backfilled rows leave
+        // behind.
+        let pending = self.db.pending_task_messages(record.id)?;
+
         // Retry reuse (F-44): a surviving worktree + session resumes the
         // existing conversation instead of dispatching anew.
-        if let RetryPlan::ReuseSession {
-            plugin, session_id, ..
-        } = recovery::retry_plan(&record, latest.as_ref())
+        //
+        // Only when there is nothing new to say. Re-attaching hands the agent
+        // no prompt, and since #242 a reopened conversation *always* looks
+        // reusable (`retry_plan` reads worktree + branch + session, never the
+        // task's state), so without this guard a follow-up message would be
+        // swallowed: no dispatch, nothing marked processed, and the agent
+        // never told. Before #242 a follow-up was a different row with no
+        // worktree of its own, which is why this never bit.
+        if pending.is_empty()
+            && let RetryPlan::ReuseSession {
+                plugin, session_id, ..
+            } = recovery::retry_plan(&record, latest.as_ref())
             && plugin == agent_name
             && let Some(state) = self.try_reattach(&plugin, &session_id).await
         {
@@ -1345,16 +1365,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .get(&agent_name)
             .map(|a| a.capabilities().hook_capable())
             .unwrap_or(false);
-        // Message-driven prompt (#242): what the agent is asked to do is the
-        // messages nobody has sent it yet, concatenated oldest-first, so a
-        // burst of three replies produces one dispatch and one answer rather
-        // than three panes. A resumed session already holds everything before
-        // them, so only the new ones go.
-        //
-        // An empty ledger falls back to the record's own body — the shape
-        // pre-#242 tasks were stored in, and what v6's backfilled rows leave
-        // behind.
-        let pending = self.db.pending_task_messages(record.id)?;
         let mut task = task_from_record(&record);
         if let Some(body) = conversation_prompt(&pending) {
             task.body = Some(body);
@@ -1552,36 +1562,43 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 
-    /// Requeue conversations that finished while messages were still unsent
-    /// (#242).
+    /// Requeue conversations that **completed** while messages were still
+    /// unsent (#242).
     ///
     /// Ingest deliberately leaves a message alone when the conversation is
     /// mid-flight — interrupting a working agent to hand it one more line
     /// would mean a second pane and a second answer. Something has to notice
     /// once that dispatch is over, and this is that something.
     ///
-    /// `Cancelled` is excluded on purpose. Ingest still reopens a cancelled
-    /// conversation when a message arrives *after* the cancel — that is a
-    /// fresh instruction — but a message that was already sitting in the
-    /// ledger when a human cancelled must not undo them.
+    /// Only `Done`. The two other terminal states are a human's business:
+    ///
+    /// - `Failed` would be a **loop**. A dispatch that fails leaves its
+    ///   messages unsent (they are stamped only on success), so requeueing on
+    ///   failure would re-dispatch, fail the same way, and go round again
+    ///   every tick — with a notification each time — for exactly the errors
+    ///   that need a person (no repository, agent plugin down, unknown tool).
+    ///   `totsuka task retry` is the deliberate way back, and it brings the
+    ///   messages with it.
+    /// - `Cancelled` would override the human. A message arriving *after* a
+    ///   cancel still reopens the conversation through ingest — that is a
+    ///   fresh instruction — but one that was already sitting in the ledger
+    ///   when they cancelled must not undo them.
     async fn requeue_conversations_with_unsent_messages(&mut self) -> Result<(), EngineError> {
-        for state in [TaskState::Done, TaskState::Failed] {
-            for record in self.db.tasks_in_state(state)? {
-                if self.db.pending_task_messages(record.id)?.is_empty() {
-                    continue;
-                }
-                self.db.apply_event(
-                    record.id,
-                    TaskEvent::Reopen,
-                    Some(serde_json::json!({
-                        "kind": "reopen", "cause": "messages_arrived_while_working",
-                    })),
-                )?;
-                tracing::info!(
-                    task_id = record.id,
-                    "conversation requeued: messages arrived while it was working"
-                );
-            }
+        for task_id in self
+            .db
+            .conversations_with_unsent_messages(TaskState::Done)?
+        {
+            self.db.apply_event(
+                task_id,
+                TaskEvent::Reopen,
+                Some(serde_json::json!({
+                    "kind": "reopen", "cause": "messages_arrived_while_working",
+                })),
+            )?;
+            tracing::info!(
+                task_id,
+                "conversation requeued: messages arrived while it was working"
+            );
         }
         Ok(())
     }
@@ -3153,6 +3170,93 @@ plan_cleanup = "keep_28d"
         assert_eq!(
             engine.db.get_task(id).unwrap().unwrap().state,
             TaskState::Done
+        );
+    }
+
+    /// A dispatch that fails leaves its messages unsent, so requeueing on
+    /// failure would re-dispatch, fail identically, and go round again every
+    /// tick — with a notification each time — for exactly the errors that need
+    /// a person. `Failed` is therefore not swept.
+    #[tokio::test]
+    async fn a_failed_conversation_is_not_requeued_by_the_sweep() {
+        let mut engine = ingest_test_engine().await;
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        // A dispatch failure: the message stays unsent (it is stamped only on
+        // success) and the task lands in Failed.
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        assert_eq!(engine.db.pending_task_messages(id).unwrap().len(), 1);
+
+        for _ in 0..3 {
+            engine
+                .requeue_conversations_with_unsent_messages()
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().state,
+            TaskState::Failed,
+            "sweeping Failed would loop on any permanent dispatch error"
+        );
+        // `task retry` is the deliberate way back, and it brings the message.
+        let (state, _) = engine.db.retry_task(id, None).unwrap();
+        assert_eq!(state, TaskState::Queued);
+        assert_eq!(engine.db.pending_task_messages(id).unwrap().len(), 1);
+    }
+
+    /// `task retry` on a run that failed *before* dispatch must not drag the
+    /// previous, already-answered batch back in alongside the waiting one.
+    #[tokio::test]
+    async fn retry_does_not_revive_an_already_answered_batch() {
+        let mut engine = ingest_test_engine().await;
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        // First message dispatched and answered.
+        engine
+            .db
+            .apply_event(id, TaskEvent::Dispatch, None)
+            .unwrap();
+        engine.db.mark_messages_processed(id).unwrap();
+        engine.db.apply_event(id, TaskEvent::Start, None).unwrap();
+        engine
+            .db
+            .apply_event(id, TaskEvent::BeginPublish, None)
+            .unwrap();
+        engine
+            .db
+            .apply_event(id, TaskEvent::Complete, None)
+            .unwrap();
+
+        // A second message reopens it, but this dispatch fails before it is
+        // handed over — so "two" is still unsent.
+        engine
+            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:200"), "two"))
+            .unwrap();
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+
+        let (_, requeued) = engine.db.retry_task(id, None).unwrap();
+        assert_eq!(
+            requeued, 0,
+            "nothing was handed over, so nothing to reclaim"
+        );
+        assert_eq!(
+            conversation_prompt(&engine.db.pending_task_messages(id).unwrap()),
+            Some("two".to_string()),
+            "the answered message must not be replayed alongside the new one"
         );
     }
 
