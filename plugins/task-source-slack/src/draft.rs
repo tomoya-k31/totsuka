@@ -8,7 +8,7 @@
 //! ("already handled") across restarts. Persistence failures degrade to the
 //! pre-#122 in-memory behavior (warn + continue), never stop the flow.
 //! Entries expire after [`DRAFT_TTL`] (swept on the pipeline's hourly tick,
-//! pruned again at load) and the store is bounded by [`DRAFT_CAP`] with FIFO
+//! pruned again at load) and the store is bounded by `DRAFT_CAP` with FIFO
 //! eviction, mirroring the pending-mention index.
 
 use std::collections::{HashMap, VecDeque};
@@ -165,7 +165,7 @@ impl DraftStore {
         store
     }
 
-    /// Store `draft` and return its fresh id. Beyond [`DRAFT_CAP`] the
+    /// Store `draft` and return its fresh id. Beyond `DRAFT_CAP` the
     /// oldest draft is evicted with a warning (its buttons degrade to the
     /// "expired" notice).
     pub fn insert(&mut self, draft: Draft) -> String {

@@ -1,6 +1,6 @@
 //! `totsuka run` — the main loop (#63, §5.1).
 //!
-//! Assembles the [`Engine`](orchestrator_core::run::Engine) from the system
+//! Assembles the [`Engine`] from the system
 //! environment: config load + validation, logging, the single-instance lock
 //! (F-74), plugin launch (enabled entries only, F-58, with secrets resolved
 //! F-65), startup recovery (§5.3), then one-shot / `--watch` / `--dry-run`.
@@ -112,7 +112,7 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
         None => None,
     };
 
-    let mut settings = settings_from_config(&cfg, &env)?;
+    let mut settings = settings_from_config(&cfg, &env, paths)?;
     settings.readme_cache_dir = Some(paths.cache_dir().to_path_buf());
 
     // Hook runtime (#131/#138): the UDS receiver endpoint + Bearer token, the

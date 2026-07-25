@@ -56,6 +56,7 @@ use crate::config::{
 use crate::domain::signal::{AgentSignal, JobId};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::domain::workflow::{Workflow, match_workflow};
+use crate::paths::Paths;
 use crate::ports::agent_session::AttachOutcome;
 use crate::ports::clock::Clock;
 use crate::ports::git::GitRunner;
@@ -72,7 +73,7 @@ use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_
 use crate::tool::{LaunchInputs, ToolProfile};
 use crate::worktree::{
     CleanupDecision, CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE,
-    DEFAULT_LOCATION_TEMPLATE, WorktreeManager,
+    WorktreeManager, default_location_template,
 };
 
 /// Lines of a repository README shown to the LLM as selection context (F-11).
@@ -158,7 +159,7 @@ pub struct EngineSettings {
     pub worktree_sweep_interval: Duration,
     /// Resolved AI-tool registry (#196): built-ins overlaid with `[tools]`
     /// entries, keyed by tool name. Dispatch resolves each task's tool here
-    /// and sends the assembled [`ToolLaunchSpec`] to the agent plugin.
+    /// and sends the assembled [`ToolLaunchSpec`](plugin_protocol::methods::ToolLaunchSpec) to the agent plugin.
     pub tools: std::collections::HashMap<String, ToolProfile>,
     /// Global default tool name (#196) when neither the workflow nor the
     /// selected repository picks one. `"claude"` unless `default_tool` is set.
@@ -202,10 +203,14 @@ pub struct HookRuntime {
 /// Interpret a parsed [`RootConfig`] into [`EngineSettings`].
 ///
 /// `env` supplies `${ENV}`/`~` expansion for repository paths and worktree
-/// templates (injectable for tests).
+/// templates (injectable for tests). `paths` supplies the XDG-resolved bases
+/// for defaults the operator did not configure; it is passed in rather than
+/// re-resolved here so the engine and the CLI (state DB, logs, hook spool)
+/// always agree on one set of directories.
 pub fn settings_from_config(
     cfg: &RootConfig,
     env: &HashMap<String, String>,
+    paths: &Paths,
 ) -> Result<EngineSettings, ResolveError> {
     let env_fn = |k: &str| env.get(k).cloned();
 
@@ -244,7 +249,7 @@ pub fn settings_from_config(
             .worktree
             .location
             .clone()
-            .unwrap_or_else(|| DEFAULT_LOCATION_TEMPLATE.to_string()),
+            .unwrap_or_else(|| default_location_template(paths)),
         // Implement-mode default is `manual`: a worktree may hold committed but
         // unpushed work until the output policy (#65) publishes it.
         cleanup_implement: cleanup_policy(cfg.worktree.cleanup, CleanupPolicy::Manual),
@@ -2360,6 +2365,16 @@ fn execution_mode(mode: &str) -> ExecutionMode {
 mod tests {
     use super::*;
 
+    /// XDG bases resolved from a fake environment, mirroring what the CLI
+    /// hands to [`settings_from_config`].
+    fn test_paths(pairs: &[(&str, &str)]) -> Paths {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        Paths::from_env(|k| map.get(k).cloned()).unwrap()
+    }
+
     #[test]
     fn settings_interpret_limits_and_cleanup() {
         let cfg = RootConfig::from_toml_str(
@@ -2387,7 +2402,8 @@ plan_cleanup = { retention_days = 2 }
         )
         .unwrap();
         let env = HashMap::from([("HOME".to_string(), "/home/t".to_string())]);
-        let settings = settings_from_config(&cfg, &env).unwrap();
+        let settings =
+            settings_from_config(&cfg, &env, &test_paths(&[("HOME", "/home/t")])).unwrap();
 
         assert_eq!(settings.limits.global, 2);
         assert_eq!(settings.limits.per_repo.get("web"), Some(&1));
@@ -2400,14 +2416,57 @@ plan_cleanup = { retention_days = 2 }
     #[test]
     fn settings_defaults_are_safe() {
         let cfg = RootConfig::from_toml_str("").unwrap();
-        let settings = settings_from_config(&cfg, &HashMap::new()).unwrap();
+        let paths = test_paths(&[("HOME", "/home/t"), ("XDG_STATE_HOME", "/xdg/state")]);
+        let settings = settings_from_config(&cfg, &HashMap::new(), &paths).unwrap();
         assert_eq!(settings.limits.global, DEFAULT_GLOBAL_CONCURRENCY);
         // Implement keeps work (manual); plan cleans immediately (F-85).
         // #210 deliberately did NOT change these defaults.
         assert_eq!(settings.cleanup_implement, CleanupPolicy::Manual);
         assert_eq!(settings.cleanup_plan, CleanupPolicy::Immediate);
-        assert_eq!(settings.location_template, DEFAULT_LOCATION_TEMPLATE);
+        assert_eq!(
+            settings.location_template,
+            "/xdg/state/totsuka/worktrees/{repo_name}/{branch}"
+        );
         assert_eq!(settings.worktree_sweep_interval, WORKTREE_SWEEP_INTERVAL);
+    }
+
+    /// The default worktree location must resolve on a machine with no
+    /// `XDG_STATE_HOME` (the macOS norm). It used to be the literal template
+    /// `"${XDG_STATE_HOME}/totsuka/worktrees/..."`, which `expand_env` rejects
+    /// when the variable is unset — `totsuka run` started fine and then failed
+    /// *every* dispatch at worktree creation.
+    #[test]
+    fn default_location_falls_back_to_home_without_xdg_state_home() {
+        let cfg = RootConfig::from_toml_str("").unwrap();
+        // Deliberately no XDG_STATE_HOME, in `paths` or in the expansion env.
+        let env = HashMap::from([("HOME".to_string(), "/home/t".to_string())]);
+        let settings =
+            settings_from_config(&cfg, &env, &test_paths(&[("HOME", "/home/t")])).unwrap();
+
+        assert_eq!(
+            settings.location_template,
+            "/home/t/.local/state/totsuka/worktrees/{repo_name}/{branch}"
+        );
+        // The template no longer carries a `${ENV}` reference, so rendering
+        // cannot fail on an unset variable.
+        assert!(!settings.location_template.contains("${"));
+    }
+
+    /// An operator-supplied `[worktree].location` keeps full `${ENV}` support —
+    /// only the *default* stopped going through env expansion.
+    #[test]
+    fn explicit_location_still_wins_over_the_default() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[worktree]
+location = "${MY_ROOT}/wt/{branch}"
+"#,
+        )
+        .unwrap();
+        let settings =
+            settings_from_config(&cfg, &HashMap::new(), &test_paths(&[("HOME", "/home/t")]))
+                .unwrap();
+        assert_eq!(settings.location_template, "${MY_ROOT}/wt/{branch}");
     }
 
     #[test]
@@ -2422,7 +2481,9 @@ plan_cleanup = "keep_28d"
 "#,
         )
         .unwrap();
-        let settings = settings_from_config(&cfg, &HashMap::new()).unwrap();
+        let settings =
+            settings_from_config(&cfg, &HashMap::new(), &test_paths(&[("HOME", "/home/t")]))
+                .unwrap();
         assert_eq!(settings.cleanup_implement, CleanupPolicy::RetentionDays(7));
         assert_eq!(settings.cleanup_plan, CleanupPolicy::RetentionDays(28));
     }
@@ -2437,7 +2498,7 @@ plan_cleanup = "keep_28d"
             repos: Vec::new(),
             limits: Limits::global(1),
             branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
-            location_template: DEFAULT_LOCATION_TEMPLATE.to_string(),
+            location_template: "/tmp/totsuka-sweep/{repo_name}/{branch}".to_string(),
             cleanup_implement: CleanupPolicy::Manual,
             cleanup_plan: CleanupPolicy::Immediate,
             env: HashMap::new(),

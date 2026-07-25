@@ -51,6 +51,21 @@ post-PR you still monitor all checks that report on your PR.
 - `RUSTFLAGS="-D warnings" cargo test --workspace --all-features` — CI
   (`ci.yml`) exports `RUSTFLAGS: -D warnings` job-wide, so a plain
   `cargo test` can pass locally on a warning that fails CI's build/test.
+- `cargo doc --workspace --no-deps` — rustdoc link integrity. `[workspace.lints.rust]
+  warnings = "deny"` already makes a broken intra-doc link a hard error
+  (exit 101), but **CI never runs `cargo doc`**, so nothing fires it: 18
+  broken links accumulated on `main` undetected until PR #240 cleaned them
+  up. This is the only check here with no CI counterpart — if you skip it,
+  nothing else will catch it. The usual causes and their fixes:
+  - link to a **private** item from public docs (`[`CONST`]` where `CONST`
+    is not `pub`) → drop the link, use a plain code span `` `CONST` ``
+  - item **not in scope** in that file (`[`ToolLaunchSpec`]`) → fully
+    qualify it: ``[`ToolLaunchSpec`](plugin_protocol::methods::ToolLaunchSpec)``
+  - **redundant** explicit target (the shorthand already resolves) → drop
+    the target: ``[`Engine`](orchestrator_core::run::Engine)`` → ``[`Engine`]``
+  - a **file path** or a citation marker that is not an item at all
+    (``[`docs/references/foo.md`]``, `[V3]`) → code span, or escape the
+    brackets (`\[V3\]`)
 - rust-analyzer LSP diagnostics clean — fix type errors / missing imports
   (rustc + clippy backed, per [CLAUDE.md](../../CLAUDE.md)).
 

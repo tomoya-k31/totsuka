@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, worktree, faq, troubleshooting]
-timestamp: 2026-07-23T14:00:00Z
+timestamp: 2026-07-25T09:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -18,6 +18,7 @@ owner: tomoya-k31
 | `git` | git が PATH 上にある | git を導入 |
 | `config` | config.toml が検証を通る | `totsuka config validate` で全エラー確認 |
 | `state-db` | 状態 DB が開ける | 一度 `totsuka run` |
+| `worktree-location` | 明示した `[worktree].location` / `[[repositories]].worktree_location` が展開できる | `${ENV}` の未設定変数を export、またはキーを削って既定値（`$XDG_STATE_HOME/totsuka` 配下、未設定なら `$HOME/.local/state/totsuka`）に戻す。**worktree 作成はディスパッチ時**なので、これを放置すると run は正常起動したまま全タスクが失敗する |
 | `plugin:{name}` | 起動 + `config/validate` 疎通 | install 済みか / `plugins/{name}.toml` を修正 |
 | `llm` | `api_key_ref` が解決する | 環境変数 export / Keychain 登録 |
 | `worktrees` | 孤児 worktree なし | 対話的に掃除を提案（TTY） |

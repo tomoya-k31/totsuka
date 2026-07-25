@@ -5,7 +5,7 @@
 //! the pane — Claude Code / Codex / OpenCode, `[tools]` + `tool` fields). The
 //! orchestrator resolves the tool here — command line, mode flags, resume
 //! syntax — and hands the plugin a fully-resolved
-//! [`ToolLaunchSpec`](plugin_protocol::methods::ToolLaunchSpec) (argv + env)
+//! [`ToolLaunchSpec`] (argv + env)
 //! over the protocol, following the opaque-contract style of
 //! `HookLaunchSpec`/H-01: tool knowledge lives on the orchestrator side, the
 //! plugin just launches what it is given.
@@ -228,7 +228,7 @@ impl ToolProfile {
     /// subcommand when resuming (codex resumes via a subcommand, not a flag),
     /// then the mode flags — implement default `--sandbox workspace-write
     /// --ask-for-approval on-request`, plan default `--sandbox read-only`
-    /// (codex has no plan permission mode — spike [V3]); `codex resume`
+    /// (codex has no plan permission mode — spike \[V3\]); `codex resume`
     /// accepts the same flags. `settings_path` is ignored: codex hooks are
     /// registered globally ([`crate::hooks::codex`]) and gated per pane via
     /// the `TOTSUKA_*` env this spec carries.

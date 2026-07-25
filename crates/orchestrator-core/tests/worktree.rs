@@ -5,12 +5,19 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use orchestrator_core::adapters::git::SystemGitRunner;
+use orchestrator_core::paths::Paths;
 use orchestrator_core::worktree::{
-    CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE,
-    DEFAULT_LOCATION_TEMPLATE, WorktreeManager,
+    CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE, WorktreeManager,
+    default_location_template,
 };
 
 use test_support::{bare_origin_and_clone as setup, git, scratch};
+
+/// An operator-written location template with a `${ENV}` reference. The
+/// built-in default no longer has this shape (it is pre-resolved from
+/// [`Paths`]), but user config still supports it, so the lifecycle tests keep
+/// exercising the expansion path.
+const ENV_LOCATION_TEMPLATE: &str = "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}";
 
 fn env(state_dir: &Path) -> HashMap<String, String> {
     HashMap::from([(
@@ -30,10 +37,50 @@ fn request<'a>(
         source: "github",
         task_id,
         branch_template: DEFAULT_BRANCH_TEMPLATE,
-        location_template: DEFAULT_LOCATION_TEMPLATE,
+        location_template: ENV_LOCATION_TEMPLATE,
         base_branch: None,
         env,
     }
+}
+
+/// The built-in default must create a real worktree on a machine that does not
+/// set `XDG_STATE_HOME` — the macOS norm. Before the default was pre-resolved
+/// from [`Paths`], `expand_env` rejected the unset variable and every dispatch
+/// failed at worktree creation.
+#[test]
+fn default_location_creates_a_worktree_without_xdg_state_home() {
+    let base = scratch("default-location-no-xdg");
+    let clone = setup(&base);
+    // `HOME` only: no XDG_STATE_HOME anywhere, in `Paths` or in the render env.
+    let home = base.join("home");
+    let paths = Paths::from_env(|k| match k {
+        "HOME" => Some(home.display().to_string()),
+        _ => None,
+    })
+    .unwrap();
+    let template = default_location_template(&paths);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let wt = mgr
+        .create(&CreateRequest {
+            repo_path: &clone,
+            repo_name: "myrepo",
+            source: "slack",
+            task_id: "C0ABCDEF12:1720000000.123456",
+            branch_template: DEFAULT_BRANCH_TEMPLATE,
+            location_template: &template,
+            base_branch: None,
+            env: &HashMap::new(),
+        })
+        .unwrap();
+
+    assert_eq!(wt.branch, "agent/slack-C0ABCDEF12-1720000000.123456");
+    assert!(wt.path.is_dir(), "worktree dir must exist");
+    assert_eq!(
+        wt.path,
+        home.join(".local/state/totsuka/worktrees/myrepo")
+            .join("agent-slack-C0ABCDEF12-1720000000.123456")
+    );
 }
 
 #[test]

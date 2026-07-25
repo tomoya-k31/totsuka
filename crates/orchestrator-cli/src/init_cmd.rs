@@ -31,7 +31,11 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # summary = "What lives in this repository (used for LLM repo selection)"
 
 # [worktree]
-# location = "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}"
+# Default: <state dir>/worktrees/{repo_name}/{branch}, where <state dir> is
+# $XDG_STATE_HOME/totsuka (or $HOME/.local/state/totsuka when XDG_STATE_HOME is
+# unset). Set this only to override it; ${ENV} references are expanded, and an
+# unset variable is an error.
+# location = "~/.worktrees/{repo_name}/{branch}"
 # cleanup = "manual"            # or "immediate" / { retention_days = 5 }
 # plan_cleanup = "immediate"
 

@@ -12,13 +12,32 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::resolve::{ResolveError, expand_env};
+use crate::paths::Paths;
 use crate::ports::git::GitRunner;
 
 /// Default branch-name template (F-21).
 pub const DEFAULT_BRANCH_TEMPLATE: &str = "agent/{source}-{task_id}";
+
 /// Default worktree location template — centralized under XDG state (F-22).
-pub const DEFAULT_LOCATION_TEMPLATE: &str =
-    "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}";
+///
+/// Built from the already-resolved [`Paths`] rather than from a
+/// `"${XDG_STATE_HOME}/..."` literal: [`expand_env`] treats an unset variable
+/// as an error, so a literal template made the default location unresolvable
+/// on any machine without `XDG_STATE_HOME` (the macOS norm), failing every
+/// dispatch at worktree creation. [`Paths`] carries the XDG `$HOME/.local/state`
+/// fallback, and this mirrors how the other state-directory defaults
+/// (`[hooks].socket_path` / `spool_dir`) are already built in the CLI.
+///
+/// `{repo_name}` / `{branch}` stay as placeholders for [`render_location`];
+/// only the base is pre-resolved. `Paths::state_dir()` already ends in
+/// `totsuka`, so the rendered path is byte-identical to the previous default
+/// whenever `XDG_STATE_HOME` *is* set — no migration for existing worktrees.
+pub fn default_location_template(paths: &Paths) -> String {
+    format!(
+        "{}/worktrees/{{repo_name}}/{{branch}}",
+        paths.state_dir().display()
+    )
+}
 
 /// How many times to retry a git command that hit transient contention
 /// (lock files, mid-creation worktree reads), and the backoff.
@@ -250,7 +269,7 @@ pub struct CreateRequest<'a> {
     pub task_id: &'a str,
     /// Branch template (use [`DEFAULT_BRANCH_TEMPLATE`]).
     pub branch_template: &'a str,
-    /// Location template (use [`DEFAULT_LOCATION_TEMPLATE`]).
+    /// Location template (use [`default_location_template`] for the default).
     pub location_template: &'a str,
     /// Base branch override; `None` detects `origin`'s default (F-25).
     pub base_branch: Option<&'a str>,
@@ -615,8 +634,11 @@ mod tests {
             source: "github",
             task_id: "123",
         };
+        // An operator-written template with a `${ENV}` reference — the shape
+        // the built-in default used to have, kept here because user config
+        // still supports it.
         let loc = render_location(
-            DEFAULT_LOCATION_TEMPLATE,
+            "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}",
             &ctx,
             &branch,
             &env(&[("XDG_STATE_HOME", "/state")]),
@@ -627,6 +649,72 @@ mod tests {
             loc,
             PathBuf::from("/state/totsuka/worktrees/totsuka/agent-github-123")
         );
+    }
+
+    #[test]
+    fn default_location_template_is_preresolved_and_needs_no_env() {
+        let paths = Paths::from_env(|k| match k {
+            "HOME" => Some("/home/t".to_string()),
+            _ => None,
+        })
+        .unwrap();
+        let template = default_location_template(&paths);
+        // No `${ENV}` left to expand — this is the whole point: `expand_env`
+        // errors on an unset variable, so a `${XDG_STATE_HOME}` default broke
+        // every dispatch on a machine that does not set it.
+        assert_eq!(
+            template,
+            "/home/t/.local/state/totsuka/worktrees/{repo_name}/{branch}"
+        );
+
+        let ctx = LocationContext {
+            repo_path: Path::new("/repos/totsuka"),
+            repo_name: "totsuka",
+            source: "slack",
+            task_id: "C1:100.1",
+        };
+        let branch = render_branch(DEFAULT_BRANCH_TEMPLATE, ctx.source, ctx.task_id);
+        // Rendering succeeds against an *empty* environment.
+        let loc = render_location(&template, &ctx, &branch, &HashMap::new()).unwrap();
+        assert_eq!(
+            loc,
+            PathBuf::from("/home/t/.local/state/totsuka/worktrees/totsuka/agent-slack-C1-100.1")
+        );
+    }
+
+    #[test]
+    fn default_location_template_is_unchanged_when_xdg_state_home_is_set() {
+        // Regression guard for existing installs: with `XDG_STATE_HOME` set,
+        // the resolved path must be byte-identical to the old literal default,
+        // so no worktree needs migrating.
+        let paths = Paths::from_env(|k| match k {
+            "HOME" => Some("/home/t".to_string()),
+            "XDG_STATE_HOME" => Some("/state".to_string()),
+            _ => None,
+        })
+        .unwrap();
+        let ctx = LocationContext {
+            repo_path: Path::new("/repos/totsuka"),
+            repo_name: "totsuka",
+            source: "github",
+            task_id: "123",
+        };
+        let branch = render_branch(DEFAULT_BRANCH_TEMPLATE, ctx.source, ctx.task_id);
+        let new = render_location(
+            &default_location_template(&paths),
+            &ctx,
+            &branch,
+            &HashMap::new(),
+        )
+        .unwrap();
+        let old = render_location(
+            "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}",
+            &ctx,
+            &branch,
+            &env(&[("XDG_STATE_HOME", "/state")]),
+        )
+        .unwrap();
+        assert_eq!(new, old);
     }
 
     #[test]

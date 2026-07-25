@@ -7,12 +7,12 @@
 //! - the agent CLI is launched with `agent.start {name, argv, cwd, workspace_id}`
 //!   (`workspace.create` has no command params). Both methods accept an optional
 //!   `env` map (herdr 0.7.1+), used to inject the Orchestrator's hook
-//!   environment (`TOTSUKA_JOB_ID`, …) when a [`HookLaunchSpec`] is supplied
+//!   environment (`TOTSUKA_JOB_ID`, …) when a [`HookLaunchSpec`](plugin_protocol::methods::HookLaunchSpec) is supplied
 //! - the prompt **cannot** ride in `argv`: a multi-line prompt passed that way
 //!   is never submitted, and every task body here is multi-line. It is typed in
 //!   with `agent.send` and submitted with Enter — both confirmed, never
 //!   fire-and-forget, because the CLI accepts keystrokes before it acts on them
-//!   (see [`HerdrAgent::submit_prompt`])
+//!   (see `HerdrAgent::submit_prompt`)
 //! - events arrive as `{event, data}` envelopes whose kind separator is
 //!   inconsistent (`pane.agent_status_changed` but `pane_exited`), so kinds are
 //!   compared normalized

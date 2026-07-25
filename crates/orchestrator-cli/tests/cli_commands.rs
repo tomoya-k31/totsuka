@@ -349,6 +349,59 @@ fn seed_empty_config(base: &Path, contents: &str) {
     std::fs::write(cfg_dir.join("config.toml"), contents).unwrap();
 }
 
+/// A machine with no `XDG_STATE_HOME` — the macOS default — must still resolve
+/// every state path from the XDG `$HOME/.local/state` fallback.
+///
+/// The regression this guards: the built-in worktree location used to be the
+/// literal `"${XDG_STATE_HOME}/totsuka/worktrees/..."`, and `expand_env` treats
+/// an unset variable as an error. `totsuka run` started fine and then failed
+/// *every* dispatch at worktree creation, with nothing surfacing at startup.
+#[test]
+fn state_paths_resolve_without_xdg_state_home() {
+    let base = scratch("no-xdg-state-home");
+    seed_empty_config(&base, "");
+
+    let mut cmd = Command::new(totsuka());
+    // Deliberately no XDG_STATE_HOME. `HOME` points into the scratch dir so
+    // the fallback cannot touch the developer's real home.
+    cmd.env("XDG_CONFIG_HOME", base.join("cfg"))
+        .env("XDG_DATA_HOME", base.join("data"))
+        .env("XDG_CACHE_HOME", base.join("cache"))
+        .env_remove("XDG_STATE_HOME")
+        .env("HOME", &base)
+        .env("NO_COLOR", "1")
+        .args(["doctor", "--json"]);
+    for (key, _) in std::env::vars() {
+        if key.starts_with("TOTSUKA_") {
+            cmd.env_remove(key);
+        }
+    }
+    let out = cmd.output().unwrap();
+
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
+    let checks = doc.as_array().unwrap();
+    let check = |name: &str| {
+        checks
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("{name} check present"))
+    };
+
+    let worktree = check("worktree-location");
+    assert_eq!(
+        worktree["ok"], true,
+        "default location must resolve: {}",
+        worktree["detail"]
+    );
+    // The state dir itself landed under the HOME fallback, not somewhere else.
+    let state_db = check("state-db")["detail"].as_str().unwrap();
+    assert!(
+        state_db.contains(&base.join(".local/state/totsuka").display().to_string()),
+        "state db must sit under the $HOME/.local/state fallback: {state_db}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// #208: `TOTSUKA_*` must actually reach the config a command consumes — the
 /// bug was that it was parsed nowhere and silently ignored.
 #[test]

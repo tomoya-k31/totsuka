@@ -140,7 +140,7 @@ pub async fn publish_draft<T: SlackTransport>(
     Ok(())
 }
 
-/// An approve/reject `block_actions` press (`value` = [`button_value`] JSON,
+/// An approve/reject `block_actions` press (`value` = `button_value` JSON,
 /// or a bare draft id from a pre-#121 button).
 pub async fn handle_approval_action<T: SlackTransport>(
     api: &SlackApi<T>,
