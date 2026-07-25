@@ -56,8 +56,10 @@ impl TaskState {
         }
     }
 
-    /// Whether this is a terminal state — no further transitions except
-    /// [`Retry`](TaskEvent::Retry) / [`Reopen`](TaskEvent::Reopen).
+    /// Whether this is a terminal state — the only events that leave one are
+    /// [`Reopen`](TaskEvent::Reopen) (from any of the three) and
+    /// [`Retry`](TaskEvent::Retry) (from `Failed` / `Cancelled` only; a
+    /// successful task has nothing to run again).
     ///
     /// "Terminal" is about *this* run of the task, not about the task's whole
     /// life: since #242 a conversation may reopen from any of these states, so
@@ -137,7 +139,8 @@ pub enum TaskEvent {
     Fail,
     /// Human cancelled the task.
     Cancel,
-    /// Retry a finished task (F-44): requeue from failed/cancelled.
+    /// Retry a finished task (F-44): requeue from `Failed` / `Cancelled`.
+    /// **Not** from `Done` — see [`Reopen`](Self::Reopen).
     Retry,
     /// A new message arrived for a finished conversation (#242): requeue it.
     ///
