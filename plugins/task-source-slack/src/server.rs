@@ -15,7 +15,7 @@ use plugin_protocol::methods::{
     ResultPublishParams, TaskUpdateStatusParams,
 };
 use plugin_protocol::{Capabilities, OutputCapability, RequestId, method};
-use plugin_sdk::{LineHandler, Reply, SubmitClient};
+use plugin_sdk::{LineHandler, LookupClient, Reply, SubmitClient};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -62,6 +62,9 @@ pub struct Server<F: TransportFactory> {
     factory: F,
     /// The `task/submit` client the mention pipeline pushes through (0.1.6).
     submit: SubmitClient,
+    /// The `task/lookup` client the pipeline asks before resolving a
+    /// repository (0.2.4, #242).
+    lookup: LookupClient,
     /// Whether `initialize` starts the resident runtime (Socket Mode
     /// connection + mention pipeline). On for production; protocol-level
     /// tests turn it off so canned transports are not consumed by the
@@ -100,12 +103,14 @@ where
     F::Transport: 'static,
     F::Chat: 'static,
 {
-    /// A fresh, uninitialized server using `factory` to build transports and
-    /// `submit` to push tasks (0.1.6).
-    pub fn new(factory: F, submit: SubmitClient) -> Self {
+    /// A fresh, uninitialized server using `factory` to build transports,
+    /// `submit` to push tasks (0.1.6), and `lookup` to ask whether a
+    /// conversation is already known before resolving one (0.2.4).
+    pub fn new(factory: F, submit: SubmitClient, lookup: LookupClient) -> Self {
         Self {
             factory,
             submit,
+            lookup,
             start_runtime: true,
             session: None,
         }
@@ -289,6 +294,7 @@ where
                 events,
                 state.clone(),
                 self.submit.clone(),
+                self.lookup.clone(),
             );
             runtime.push(socket.abort_handle());
             runtime.push(pipeline.abort_handle());

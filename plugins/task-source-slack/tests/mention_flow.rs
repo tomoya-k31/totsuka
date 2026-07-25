@@ -10,20 +10,32 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use common::{
-    Canned, FakeFactory, Shared, SubmitHarness, accept_with_hello, block_actions_envelope, call,
-    mention_envelope, scratch_state_dir, send_and_await_ack, wait_until, ws_listener,
+    Canned, FakeFactory, LookupHarness, Shared, SubmitHarness, accept_with_hello,
+    block_actions_envelope, call, mention_envelope, mention_envelope_in, scratch_state_dir,
+    send_and_await_ack, wait_until, ws_listener,
 };
 use task_source_slack::server::Server;
 
 fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
+    let (srv, harness, _lookup) = server_with_lookup(shared, LookupHarness::new());
+    (srv, harness)
+}
+
+/// [`server`] with a caller-supplied lookup harness, for the #242 paths
+/// (a known conversation, or a lookup that never gets answered).
+fn server_with_lookup(
+    shared: &Shared,
+    lookup: LookupHarness,
+) -> (Server<FakeFactory>, SubmitHarness, LookupHarness) {
     let harness = SubmitHarness::new();
     let srv = Server::new(
         FakeFactory {
             shared: shared.clone(),
         },
         harness.client.clone(),
+        lookup.client.clone(),
     );
-    (srv, harness)
+    (srv, harness, lookup)
 }
 
 /// One-repo config (repo_hint short-circuit until #106) pointing the Web API
@@ -112,8 +124,10 @@ async fn mention_becomes_a_task_and_is_submitted() {
 
     let task = harness.next_task().await;
 
-    // Stable id, source, title shape.
-    assert_eq!(task["id"], "C1:100.2");
+    // The id names the *thread* (#242); this delivery names itself.
+    assert_eq!(task["id"], "C1:100.0");
+    assert_eq!(task["message_key"], "C1:100.2");
+    assert!(task["thread_key"].is_null(), "superseded by the id: {task}");
     assert_eq!(task["source"], "slack");
     let title = task["title"].as_str().unwrap();
     assert!(
@@ -151,10 +165,20 @@ async fn mention_becomes_a_task_and_is_submitted() {
     send_and_await_ack(&mut ws, mention_envelope("e1-redelivery", "100.2")).await;
     harness.assert_no_task(Duration::from_millis(300)).await;
 
-    // A different mention is a different task.
+    // #242: another mention in the SAME thread is another *message* of the
+    // same conversation — same task id, its own message key. (What used to
+    // be a second task is now the continuation that made the whole epic
+    // necessary.)
     send_and_await_ack(&mut ws, mention_envelope("e2", "100.9")).await;
     let task = harness.next_task().await;
-    assert_eq!(task["id"], "C1:100.9");
+    assert_eq!(task["id"], "C1:100.0");
+    assert_eq!(task["message_key"], "C1:100.9");
+
+    // A mention in a different thread is a different conversation.
+    send_and_await_ack(&mut ws, mention_envelope_in("e3", "200.0", None)).await;
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:200.0");
+    assert_eq!(task["message_key"], "C1:200.0", "it opens its own thread");
 }
 
 #[tokio::test]
@@ -187,7 +211,7 @@ async fn enrichment_failures_degrade_the_task_instead_of_dropping_it() {
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
 
     let task = harness.next_task().await;
-    assert_eq!(task["id"], "C1:100.2");
+    assert_eq!(task["id"], "C1:100.0");
     let title = task["title"].as_str().unwrap();
     assert!(title.starts_with("Slack: U_OTHER in #C1:"), "{title}");
     let body = task["body"].as_str().unwrap();
@@ -332,6 +356,9 @@ async fn low_confidence_asks_via_ephemeral_and_the_answer_submits_the_task() {
         .find(|b| b["text"]["text"] == "web-app")
         .expect("a web-app button");
     let value: Value = serde_json::from_str(web_app["value"].as_str().unwrap()).unwrap();
+    // The button hands back the *message* key, not the task id: since #242
+    // the task id names the whole thread, and two mentions parked from one
+    // thread must stay tellable apart.
     assert_eq!(value["task"], "C1:100.2");
 
     // The operator picks web-app; the task appears with that hint.
@@ -346,7 +373,8 @@ async fn low_confidence_asks_via_ephemeral_and_the_answer_submits_the_task() {
     )
     .await;
     let task = harness.next_task().await;
-    assert_eq!(task["id"], "C1:100.2");
+    assert_eq!(task["id"], "C1:100.0");
+    assert_eq!(task["message_key"], "C1:100.2");
     assert_eq!(task["repo_hint"], "web-app");
 
     // The ephemeral was rewritten via its response_url (the rewrite runs
@@ -423,4 +451,105 @@ async fn stale_selection_answer_gets_an_expiry_notice() {
     assert_eq!(posted.len(), 1, "{posted:?}");
     let text = posted[0].body["text"].as_str().unwrap();
     assert!(text.contains("期限切れ"), "{text}");
+}
+
+// ---------------------------------------------------------------------------
+// conversation continuation (`task/lookup`, #242)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_known_conversation_skips_repository_resolution_entirely() {
+    // The point of the RPC: a reply in a thread the orchestrator already
+    // knows must not pay for resolution again. Resolution here means an LLM
+    // call and — worse — a picker in front of an operator who already chose
+    // once for this thread.
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    // A verdict is queued but must go unused; a picker would otherwise
+    // follow from the low confidence.
+    shared.push_chat(Ok(chat_verdict("web-app", 0.2)));
+    let lookup = LookupHarness::new();
+    lookup.mark_known("C1:100.0", Some("web-app"));
+    let (mut srv, mut harness, lookup) = server_with_lookup(&shared, lookup);
+
+    call(&mut srv, 1, "initialize", init_params_multi_repo()).await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
+
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.0");
+    assert_eq!(task["message_key"], "C1:100.2");
+    // No hint: the conversation is already bound to a repository and the
+    // orchestrator is the one that knows it.
+    assert!(task["repo_hint"].is_null(), "{task}");
+
+    assert!(
+        shared.chat_requests().is_empty(),
+        "no LLM for a known thread"
+    );
+    assert!(
+        !shared
+            .requests()
+            .iter()
+            .any(|r| r.method == "chat.postEphemeral"),
+        "no picker for a known thread"
+    );
+    // Asked about the conversation, under this plugin's own source name.
+    let asked = lookup.requests();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert_eq!(asked[0]["task_id"], "C1:100.0");
+    assert_eq!(asked[0]["source"], "slack");
+}
+
+#[tokio::test]
+async fn a_known_conversation_still_skips_resolution_when_no_repo_is_settled() {
+    // `known: true, repo: null` = the conversation exists but its repository
+    // has not settled (an operator is looking at a picker right now).
+    // Resolving again would put a *second* picker in front of them.
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_chat(Ok(chat_verdict("web-app", 0.2)));
+    let lookup = LookupHarness::new();
+    lookup.mark_known("C1:100.0", None);
+    let (mut srv, mut harness, _lookup) = server_with_lookup(&shared, lookup);
+
+    call(&mut srv, 1, "initialize", init_params_multi_repo()).await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
+
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.0");
+    assert!(task["repo_hint"].is_null(), "{task}");
+    assert!(shared.chat_requests().is_empty(), "still no LLM");
+    assert!(
+        !shared
+            .requests()
+            .iter()
+            .any(|r| r.method == "chat.postEphemeral"),
+        "still no picker"
+    );
+}
+
+#[tokio::test]
+async fn an_unanswered_lookup_degrades_to_the_ordinary_resolution() {
+    // The orchestrator answers from its event loop, which can be busy
+    // creating a worktree. An unanswerable lookup must cost nothing but the
+    // work it would have saved: the mention takes exactly the path it took
+    // before this RPC existed.
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    let (mut srv, mut harness, _lookup) = server_with_lookup(&shared, LookupHarness::unanswered());
+
+    call(&mut srv, 1, "initialize", init_params()).await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
+
+    // Single-repo config → resolution short-circuits to that repo, exactly
+    // as it does with no lookup in the picture at all.
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.0");
+    assert_eq!(task["repo_hint"], "web-app");
 }

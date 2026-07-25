@@ -38,9 +38,23 @@ pub struct Mention {
 }
 
 impl Mention {
-    /// The stable task id (`{channel}:{ts}`) — the orchestrator's idempotent
-    /// ingest key.
+    /// The task id — **the conversation**, not this message (`#242`).
+    ///
+    /// `{channel}:{reply_ts}`, so every mention in one Slack thread names the
+    /// same task and the orchestrator continues it (same worktree, same
+    /// branch, same agent session) instead of opening a second one. A
+    /// top-level mention has no `thread_ts`, so its `reply_ts` is its own
+    /// `ts` — its task id is unchanged from before #242, which is why no
+    /// existing data had to migrate.
     pub fn task_id(&self) -> String {
+        format!("{}:{}", self.channel, self.reply_ts())
+    }
+
+    /// This one delivery's identity (`{channel}:{ts}`), which the
+    /// orchestrator dedups re-deliveries on (`Task.message_key`, #242). It is
+    /// what [`task_id`](Self::task_id) used to be — the split is exactly the
+    /// point: a conversation now has many messages.
+    pub fn message_key(&self) -> String {
         format!("{}:{}", self.channel, self.ts)
     }
 
@@ -48,14 +62,6 @@ impl Mention {
     /// rooted at the mention itself.
     pub fn reply_ts(&self) -> &str {
         self.thread_ts.as_deref().unwrap_or(&self.ts)
-    }
-
-    /// The conversation-continuation key (`{channel}:{thread_ts}`), stable
-    /// across every mention in the same thread (#140). A top-level mention
-    /// uses its own `ts` (via [`reply_ts`](Self::reply_ts)) — it starts a new
-    /// conversation, so its key equals its [`task_id`](Self::task_id).
-    pub fn thread_key(&self) -> String {
-        format!("{}:{}", self.channel, self.reply_ts())
     }
 }
 
@@ -170,7 +176,8 @@ mod tests {
     #[test]
     fn a_fresh_mention_passes_with_its_coordinates() {
         let mention = filter().assess(&mention_event()).expect("a mention");
-        assert_eq!(mention.task_id(), "C1:100.1");
+        assert_eq!(mention.task_id(), "C1:100.0");
+        assert_eq!(mention.message_key(), "C1:100.1");
         assert_eq!(mention.reply_ts(), "100.0");
         assert_eq!(mention.user, "U_OTHER");
     }
@@ -184,25 +191,26 @@ mod tests {
     }
 
     #[test]
-    fn thread_key_is_the_thread_root_for_an_in_thread_mention() {
-        // A reply inside a thread shares the thread's representative ts, so
-        // every follow-up in the thread yields the same conversation key
-        // while its task id stays unique (#140).
+    fn an_in_thread_mention_is_a_message_of_the_thread_s_conversation() {
+        // #242: the task id names the *thread*, the message key names this
+        // one delivery. A reply therefore lands on the conversation the
+        // thread already opened instead of starting a second one.
         let mention = filter().assess(&mention_event()).expect("a mention");
-        assert_eq!(mention.thread_key(), "C1:100.0");
-        assert_eq!(mention.task_id(), "C1:100.1");
-        assert_ne!(mention.thread_key(), mention.task_id());
+        assert_eq!(mention.task_id(), "C1:100.0");
+        assert_eq!(mention.message_key(), "C1:100.1");
+        assert_ne!(mention.task_id(), mention.message_key());
     }
 
     #[test]
-    fn thread_key_of_a_top_level_mention_equals_its_task_id() {
-        // A top-level mention starts a new conversation: its key is rooted at
-        // its own ts, so key == task id.
+    fn a_top_level_mention_is_the_first_message_of_its_own_conversation() {
+        // No thread yet: the conversation is rooted at this mention, so task
+        // id == message key. That equality is why #242 needed no data
+        // migration — a first mention's task id is what it always was.
         let mut event = mention_event();
         event.as_object_mut().unwrap().remove("thread_ts");
         let mention = filter().assess(&event).expect("a mention");
-        assert_eq!(mention.thread_key(), "C1:100.1");
-        assert_eq!(mention.thread_key(), mention.task_id());
+        assert_eq!(mention.task_id(), "C1:100.1");
+        assert_eq!(mention.task_id(), mention.message_key());
     }
 
     #[test]

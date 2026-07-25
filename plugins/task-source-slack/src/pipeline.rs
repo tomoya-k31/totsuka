@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use plugin_sdk::{SubmitOutcome, Submitter};
+use plugin_sdk::{LookupClient, SubmitOutcome, Submitter};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -92,21 +92,30 @@ impl SharedState {
 
     /// Remember where `task_id`'s reply belongs (bounded: beyond
     /// `PENDING_CAP`, the oldest entry is evicted with a warning).
+    ///
+    /// Since #242 the key is the **conversation**, so a follow-up mention
+    /// overwrites the thread's entry rather than adding one. That is the
+    /// wanted behaviour: the agent answers the latest turn, and the reply
+    /// should address whoever asked it.
     pub fn insert_pending(&self, task_id: String, pending: PendingMention) {
         let mut index = self.pending.lock().unwrap();
-        if !index.entries.contains_key(&task_id) {
-            if index.order.len() >= PENDING_CAP
-                && let Some(evicted) = index.order.pop_front()
-            {
-                index.entries.remove(&evicted);
-                tracing::warn!(
-                    task_id = %evicted,
-                    "pending-mention index full; evicted the oldest entry \
-                     (its reply can no longer be placed)"
-                );
-            }
-            index.order.push_back(task_id.clone());
+        // Overwriting refreshes the eviction position. Before #242 an
+        // overwrite was practically unreachable (one task per message), so
+        // leaving the order alone was the same as appending; now a live
+        // conversation would keep the position of its *first* message and be
+        // evicted ahead of threads nobody has touched in weeks.
+        index.order.retain(|id| id != &task_id);
+        if index.order.len() >= PENDING_CAP
+            && let Some(evicted) = index.order.pop_front()
+        {
+            index.entries.remove(&evicted);
+            tracing::warn!(
+                task_id = %evicted,
+                "pending-mention index full; evicted the oldest entry \
+                 (its reply can no longer be placed)"
+            );
         }
+        index.order.push_back(task_id.clone());
         index.entries.insert(task_id, pending);
     }
 
@@ -125,6 +134,26 @@ impl SharedState {
             index.order.retain(|id| id != task_id);
         }
         taken
+    }
+
+    /// Drop `task_id`'s coordinates **only if they are still the ones this
+    /// delivery installed** (identified by `mention_ts`).
+    ///
+    /// The rollback path for a submission that permanently failed. Since #242
+    /// the key is the conversation, so a blind removal is a live hazard: a
+    /// second message whose submit fails would take down the coordinates the
+    /// *first* one installed, and that first task — running happily — would
+    /// find nothing at `result/publish` time and lose its reply.
+    fn discard_pending_delivery(&self, task_id: &str, mention_ts: &str) {
+        let mut index = self.pending.lock().unwrap();
+        if index
+            .entries
+            .get(task_id)
+            .is_some_and(|p| p.mention_ts == mention_ts)
+        {
+            index.entries.remove(task_id);
+            index.order.retain(|id| id != task_id);
+        }
     }
 
     /// Record the resolved self-DM record channel (set once by the pipeline
@@ -182,7 +211,14 @@ struct EnrichedMention {
 /// semantics as TTL expiry), logged as a warning.
 const AWAITING_CAP: usize = 256;
 
-/// Mentions waiting for the operator's repository choice, keyed by task id.
+/// Mentions waiting for the operator's repository choice, keyed by
+/// **message key** — one entry per parked *mention*.
+///
+/// Not by task id: since #242 that names the whole thread, so two mentions
+/// posted into one thread before either was answered would collide and the
+/// second would evict the first, dropping a message the operator never got
+/// to answer.
+///
 /// Kept out of [`SharedState`] (only the pipeline touches it), but shared
 /// with the per-mention resolution tasks, hence used behind a lock.
 #[derive(Default)]
@@ -193,31 +229,31 @@ struct AwaitingSelection {
 
 impl AwaitingSelection {
     fn insert(&mut self, enriched: EnrichedMention, now: Instant) {
-        let task_id = enriched.mention.task_id();
-        if !self.entries.contains_key(&task_id) {
+        let key = enriched.mention.message_key();
+        if !self.entries.contains_key(&key) {
             if self.order.len() >= AWAITING_CAP
                 && let Some(evicted) = self.order.pop_front()
             {
                 self.entries.remove(&evicted);
                 tracing::warn!(
-                    task_id = %evicted,
+                    message_key = %evicted,
                     "awaiting-selection store full; evicted the oldest parked mention"
                 );
             }
-            self.order.push_back(task_id.clone());
+            self.order.push_back(key.clone());
         }
-        self.entries.insert(task_id, (enriched, now));
+        self.entries.insert(key, (enriched, now));
     }
 
-    fn take(&mut self, task_id: &str) -> Option<EnrichedMention> {
-        let taken = self.entries.remove(task_id).map(|(e, _)| e);
+    fn take(&mut self, message_key: &str) -> Option<EnrichedMention> {
+        let taken = self.entries.remove(message_key).map(|(e, _)| e);
         if taken.is_some() {
-            self.order.retain(|id| id != task_id);
+            self.order.retain(|key| key != message_key);
         }
         taken
     }
 
-    /// Drop entries older than `ttl`, returning the dropped task ids.
+    /// Drop entries older than `ttl`, returning the dropped message keys.
     fn sweep(&mut self, now: Instant, ttl: Duration) -> Vec<String> {
         let expired: Vec<String> = self
             .entries
@@ -233,6 +269,25 @@ impl AwaitingSelection {
     }
 }
 
+/// The plugin's two channels to the Orchestrator: push a task in
+/// (`task/submit`, 0.1.6) and ask whether a conversation is already known
+/// (`task/lookup`, 0.2.4). Bundled because every per-mention task needs both.
+struct Orchestrator<S> {
+    submit: S,
+    lookup: LookupClient,
+}
+
+// Derived `Clone` would demand `S: Clone` on the *struct*, which is stricter
+// than what the pipeline needs.
+impl<S: Clone> Clone for Orchestrator<S> {
+    fn clone(&self) -> Self {
+        Self {
+            submit: self.submit.clone(),
+            lookup: self.lookup.clone(),
+        }
+    }
+}
+
 /// Run the pipeline over `events` until the channel closes: filter each
 /// message event, enrich + resolve + normalize fresh mentions, push results
 /// via `submitter` (`task/submit`, 0.1.6), and answer `block_actions`
@@ -244,6 +299,7 @@ pub fn spawn<T, C, S>(
     mut events: mpsc::UnboundedReceiver<SocketEvent>,
     state: SharedState,
     submitter: S,
+    lookup: LookupClient,
 ) -> tokio::task::JoinHandle<()>
 where
     T: SlackTransport + 'static,
@@ -267,6 +323,10 @@ where
         }
 
         let mut names = NameCache::default();
+        let orchestrator = Orchestrator {
+            submit: submitter,
+            lookup,
+        };
         let awaiting = Arc::new(Mutex::new(AwaitingSelection::default()));
         let mut sweep = tokio::time::interval(SELECTION_SWEEP_INTERVAL);
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -281,9 +341,9 @@ where
                 _ = sweep.tick() => {
                     let now = Instant::now();
                     let expired = awaiting.lock().unwrap().sweep(now, SELECTION_TTL);
-                    for task_id in expired {
+                    for message_key in expired {
                         tracing::info!(
-                            task_id,
+                            message_key,
                             "repository selection expired unanswered; mention dropped"
                         );
                     }
@@ -312,7 +372,7 @@ where
                         state.clone(),
                         Arc::clone(&awaiting),
                         enriched,
-                        submitter.clone(),
+                        orchestrator.clone(),
                     ));
                 }
                 SocketEvent::BlockActions(payload) => {
@@ -322,7 +382,7 @@ where
                         &state,
                         &awaiting,
                         &payload,
-                        &submitter,
+                        &orchestrator.submit,
                     )
                     .await;
                 }
@@ -341,8 +401,45 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
     state: SharedState,
     awaiting: Arc<Mutex<AwaitingSelection>>,
     enriched: EnrichedMention,
-    submitter: S,
+    orchestrator: Orchestrator<S>,
 ) {
+    // Ask first whether this conversation already exists (#242). Resolution
+    // is a *new* conversation's business: for a reply the orchestrator
+    // already knows the repository, and resolving anyway would spend an LLM
+    // call — or put a picker in front of an operator who already chose.
+    //
+    // An unanswerable lookup (timeout, transport, error) is deliberately
+    // indistinguishable from "new" in effect: the mention takes the path it
+    // took before this RPC existed. The orchestrator answers from its event
+    // loop, which can be busy creating a worktree, so this must never be
+    // load-bearing.
+    let answer = orchestrator
+        .lookup
+        .lookup(&config.source_name, &enriched.mention.task_id())
+        .await;
+    if answer.skips_resolution() {
+        tracing::info!(
+            task_id = enriched.mention.task_id(),
+            repo = tracing::field::debug(match &answer {
+                plugin_sdk::Lookup::Known { repo } => repo.as_deref(),
+                _ => None,
+            }),
+            "a message in a conversation the orchestrator already knows; \
+             submitting without resolving a repository"
+        );
+        // No `repo_hint`: the conversation is already bound to a repository
+        // (or is in the middle of settling one), and the orchestrator
+        // finishes that job. A hint here could only disagree with it.
+        submit(&state, &config, &enriched, None, &orchestrator.submit).await;
+        return;
+    }
+
+    // Known race: `handle_mention` is spawned per mention, so two mentions
+    // posted into the *same new* thread at once can both see `known: false`
+    // and both resolve — two pickers for one thread. Harmless: each parks
+    // under its own message key and each submit carries its own
+    // `message_key`, so the orchestrator ingests them as two messages of one
+    // conversation. Only the resolution work is duplicated.
     let context_text = enriched.context_lines.as_deref().unwrap_or(&[]).join("\n");
     let resolution = resolve(
         chat.as_ref(),
@@ -355,10 +452,10 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
 
     match resolution {
         Resolution::Resolved(repo) => {
-            submit(&state, &config, &enriched, Some(repo), &submitter).await;
+            submit(&state, &config, &enriched, Some(repo), &orchestrator.submit).await;
         }
         Resolution::NeedsSelection(candidates) => {
-            let task_id = enriched.mention.task_id();
+            let message_key = enriched.mention.message_key();
             // Park BEFORE posting so an operator answering within
             // milliseconds cannot race an entry that is not there yet.
             awaiting
@@ -367,7 +464,7 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
                 .insert(enriched.clone(), Instant::now());
             match post_selection_ephemeral(api.as_ref(), &config, &enriched, &candidates).await {
                 Ok(()) => {
-                    tracing::info!(task_id, "asked the operator to pick a repository");
+                    tracing::info!(message_key, "asked the operator to pick a repository");
                 }
                 Err(e) => {
                     // Without the ephemeral the operator can never answer;
@@ -375,11 +472,11 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
                     // without a hint instead — the orchestrator's own repo
                     // selection handles hintless tasks.
                     tracing::warn!(
-                        task_id, error = %e,
+                        message_key, error = %e,
                         "could not post the repository picker; submitting without a hint"
                     );
-                    awaiting.lock().unwrap().take(&task_id);
-                    submit(&state, &config, &enriched, None, &submitter).await;
+                    awaiting.lock().unwrap().take(&message_key);
+                    submit(&state, &config, &enriched, None, &orchestrator.submit).await;
                 }
             }
         }
@@ -409,16 +506,16 @@ async fn handle_block_actions<T: SlackTransport, S: Submitter>(
     let response_url = payload.get("response_url").and_then(Value::as_str);
 
     if action_id.starts_with("select_repo") {
-        let (task_id, repo) = match parse_selection_value(value) {
+        let (message_key, repo) = match parse_selection_value(value) {
             Some(parsed) => parsed,
             None => {
                 tracing::warn!(value, "select_repo action with an unparseable value");
                 return;
             }
         };
-        let Some(enriched) = awaiting.lock().unwrap().take(&task_id) else {
+        let Some(enriched) = awaiting.lock().unwrap().take(&message_key) else {
             // Restart, TTL expiry, or a double click: nothing to resume.
-            tracing::info!(task_id, "selection answered but no mention is waiting");
+            tracing::info!(message_key, "selection answered but no mention is waiting");
             replace_ephemeral(
                 api,
                 response_url,
@@ -427,7 +524,7 @@ async fn handle_block_actions<T: SlackTransport, S: Submitter>(
             .await;
             return;
         };
-        tracing::info!(task_id, repo, "operator picked the repository");
+        tracing::info!(message_key, repo, "operator picked the repository");
         submit(state, config, &enriched, Some(repo.clone()), submitter).await;
         replace_ephemeral(
             api,
@@ -436,12 +533,12 @@ async fn handle_block_actions<T: SlackTransport, S: Submitter>(
         )
         .await;
     } else if action_id == "skip_mention" {
-        let Some(task_id) = parse_skip_value(value) else {
+        let Some(message_key) = parse_skip_value(value) else {
             tracing::warn!(value, "skip_mention action with an unparseable value");
             return;
         };
-        if awaiting.lock().unwrap().take(&task_id).is_some() {
-            tracing::info!(task_id, "operator skipped the mention; dropped");
+        if awaiting.lock().unwrap().take(&message_key).is_some() {
+            tracing::info!(message_key, "operator skipped the mention; dropped");
         }
         replace_ephemeral(
             api,
@@ -468,8 +565,8 @@ async fn handle_block_actions<T: SlackTransport, S: Submitter>(
 /// Build the task from an enriched mention and push it via `task/submit`
 /// (0.1.6). The pending entry is inserted **before** submitting so a
 /// lightning-fast `result/publish` can never miss it; a submission that
-/// permanently fails removes it again (the mention stays answerable on
-/// Slack — re-mention to retry).
+/// permanently fails withdraws **its own** entry again (the mention stays
+/// answerable on Slack — re-mention to retry).
 async fn submit<S: Submitter>(
     state: &SharedState,
     config: &SlackConfig,
@@ -479,6 +576,10 @@ async fn submit<S: Submitter>(
 ) {
     let (task, pending) = build_task(config, enriched, repo_hint);
     let task_id = task.id.clone();
+    // Identifies *this* delivery's entry on the rollback paths below: since
+    // #242 the pending index is keyed by conversation, and a sibling message
+    // may have installed (or may yet install) coordinates under the same key.
+    let mention_ts = pending.mention_ts.clone();
     state.insert_pending(task_id.clone(), pending);
     match submitter.submit(task).await {
         SubmitOutcome::Accepted => {
@@ -493,14 +594,14 @@ async fn submit<S: Submitter>(
                 "orchestrator rejected the task: {}",
                 reason.as_deref().unwrap_or("no reason given")
             );
-            state.take_pending(&task_id);
+            state.discard_pending_delivery(&task_id, &mention_ts);
         }
         SubmitOutcome::GaveUp { error } => {
             tracing::error!(
                 task_id,
                 "task submission gave up: {error} → re-mention on Slack to retry"
             );
-            state.take_pending(&task_id);
+            state.discard_pending_delivery(&task_id, &mention_ts);
         }
     }
 }
@@ -513,7 +614,13 @@ async fn post_selection_ephemeral<T: SlackTransport>(
     enriched: &EnrichedMention,
     candidates: &[String],
 ) -> Result<(), crate::error::SlackError> {
-    let task_id = enriched.mention.task_id();
+    // What the button hands back is the parked mention's key — its
+    // **message key**, matching `AwaitingSelection`. The JSON field is still
+    // named `task` on purpose: a picker posted by an older build and clicked
+    // after an upgrade then still parses, and answers "expired" instead of
+    // "unparseable value" (the parked entry is gone across a restart either
+    // way).
+    let key = enriched.mention.message_key();
     let snippet: String = enriched.mention.text.chars().take(80).collect();
 
     let mut elements = Vec::new();
@@ -522,7 +629,7 @@ async fn post_selection_ephemeral<T: SlackTransport>(
             "type": "button",
             "action_id": format!("select_repo_{i}"),
             "text": { "type": "plain_text", "text": name },
-            "value": json!({ "task": task_id, "repo": name }).to_string(),
+            "value": json!({ "task": key, "repo": name }).to_string(),
         }));
     }
     elements.push(json!({
@@ -530,7 +637,7 @@ async fn post_selection_ephemeral<T: SlackTransport>(
         "action_id": "skip_mention",
         "style": "danger",
         "text": { "type": "plain_text", "text": "スキップ（返信案を作らない）" },
-        "value": json!({ "task": task_id }).to_string(),
+        "value": json!({ "task": key }).to_string(),
     }));
 
     let mut blocks = vec![json!({
@@ -738,12 +845,16 @@ fn build_task(
         status: None,
         url: enriched.permalink.clone(),
         assignee: None,
-        // Conversation-continuation key (#140): every mention in the same
-        // Slack thread carries the same key, so the orchestrator can resume
-        // the prior task's Claude session. A top-level mention's key equals
-        // its task id (a new conversation).
-        thread_key: Some(mention.thread_key()),
-        message_key: None,
+        // #242 replaced the conversation-continuation key with the task id
+        // itself: `id` names the thread, so a follow-up mention *is* another
+        // message of the same task and there is nothing left to correlate.
+        // (The field itself goes away in #264.)
+        thread_key: None,
+        // This delivery's identity, which the orchestrator dedups
+        // re-deliveries on. Two mentions in one thread share a task id and
+        // differ here — that difference is what makes the second one a new
+        // message rather than a duplicate.
+        message_key: Some(mention.message_key()),
         instructions: Some(instructions),
     };
     let pending = PendingMention {
@@ -907,24 +1018,26 @@ mod tests {
     }
 
     #[test]
-    fn build_task_sets_thread_key_for_an_in_thread_mention() {
-        // A reply inside a thread: the task carries the thread's key, distinct
-        // from its own (unique) task id, so a follow-up resumes the prior
-        // task's Claude session (#140).
+    fn an_in_thread_mention_is_another_message_of_the_thread_s_task() {
+        // #242: a reply carries the *thread's* id and its own message key, so
+        // the orchestrator appends it to that conversation instead of opening
+        // a second task. `thread_key` is dead (it goes away in #264).
         let mut enriched = enriched("100.1");
         enriched.mention.thread_ts = Some("100.0".into());
         let (task, _pending) = build_task(&slack_config(), &enriched, None);
-        assert_eq!(task.thread_key.as_deref(), Some("C1:100.0"));
-        assert_eq!(task.id, "C1:100.1");
+        assert_eq!(task.id, "C1:100.0");
+        assert_eq!(task.message_key.as_deref(), Some("C1:100.1"));
+        assert_eq!(task.thread_key, None);
     }
 
     #[test]
-    fn build_task_sets_thread_key_for_a_top_level_mention() {
-        // A top-level mention starts a new conversation: thread_key == task id,
-        // but it is still always populated (never `None`).
+    fn a_top_level_mention_opens_a_task_whose_id_is_unchanged_by_242() {
+        // No thread: id == message key. This equality is why the change of
+        // meaning needed no data migration — an opening mention's task id (and
+        // therefore its branch name and worktree path) is what it always was.
         let (task, _pending) = build_task(&slack_config(), &enriched("200.0"), None);
-        assert_eq!(task.thread_key.as_deref(), Some("C1:200.0"));
-        assert_eq!(task.thread_key.as_deref(), Some(task.id.as_str()));
+        assert_eq!(task.id, "C1:200.0");
+        assert_eq!(task.message_key.as_deref(), Some(task.id.as_str()));
     }
 
     #[test]
@@ -981,5 +1094,65 @@ mod tests {
         let value = json!({ "task": "C1:1.0" }).to_string();
         assert_eq!(parse_skip_value(&value), Some("C1:1.0".to_string()));
         assert!(parse_skip_value("{}").is_none());
+    }
+
+    fn coords(mention_ts: &str) -> PendingMention {
+        PendingMention {
+            channel: "C1".into(),
+            reply_ts: "100.0".into(),
+            mention_ts: mention_ts.into(),
+            sender_id: "U_OTHER".into(),
+            sender_name: "アリス".into(),
+            permalink: None,
+        }
+    }
+
+    #[test]
+    fn a_failed_submit_only_withdraws_its_own_coordinates() {
+        // #242 made the pending index conversation-keyed, which turns a blind
+        // rollback into a live hazard: the first message's task is running
+        // fine, a second message in the same thread fails to submit, and a
+        // blind `take_pending` would delete the only entry — leaving the
+        // finished first task with nowhere to put its reply.
+        let state = SharedState::default();
+        state.insert_pending("C1:100.0".into(), coords("100.1"));
+
+        // A sibling delivery that never became the current entry.
+        state.discard_pending_delivery("C1:100.0", "100.2");
+        assert_eq!(
+            state.pending("C1:100.0").map(|p| p.mention_ts),
+            Some("100.1".to_string()),
+            "another delivery's failure must not take these coordinates down"
+        );
+
+        // Its own failure does withdraw them.
+        state.discard_pending_delivery("C1:100.0", "100.1");
+        assert!(state.pending("C1:100.0").is_none());
+    }
+
+    #[test]
+    fn overwriting_a_conversation_refreshes_its_eviction_position() {
+        // Since #242 a follow-up overwrites its conversation's entry. If the
+        // order were left alone, a live conversation would keep the position
+        // of its *first* message and be evicted ahead of threads nobody has
+        // touched since.
+        let state = SharedState::default();
+        state.insert_pending("old".into(), coords("1"));
+        state.insert_pending("other".into(), coords("2"));
+        // `old` gets a new message: it is now the most recently touched.
+        state.insert_pending("old".into(), coords("3"));
+
+        let order: Vec<String> = state
+            .pending
+            .lock()
+            .unwrap()
+            .order
+            .iter()
+            .cloned()
+            .collect();
+        assert_eq!(order, vec!["other".to_string(), "old".to_string()]);
+        // Overwriting must not duplicate the key either, or the index would
+        // evict a live entry while a stale name for it lingers.
+        assert_eq!(state.pending.lock().unwrap().entries.len(), 2);
     }
 }
