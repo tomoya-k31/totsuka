@@ -24,7 +24,7 @@
 //! to the Orchestrator's UDS), launched via `--settings` with an injected `env`.
 //! This plugin's state stream is reduced to a `pane.exited` **deadman** (abnormal
 //! exit → `Failed`); it no longer scrapes status, questions, or answers off the
-//! screen. See [`docs/references/herdr-socket-api.md`].
+//! screen. See `docs/references/herdr-socket-api.md`.
 
 pub mod agent;
 pub mod config;

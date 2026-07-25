@@ -8,7 +8,7 @@
 //! orca exposes no public socket/REST API — wrapping the `orca` CLI with
 //! `--json` is the officially recommended integration. The execution unit is a
 //! git worktree; the agent runs as a TUI process in that worktree's terminal.
-//! See [`docs/references/orca-cli-control.md`].
+//! See `docs/references/orca-cli-control.md`.
 //!
 //! # Method mapping ([`agent::OrcaAgent`])
 //!

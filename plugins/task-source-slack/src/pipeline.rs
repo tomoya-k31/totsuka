@@ -10,7 +10,7 @@
 //! in-thread ephemeral asking the operator. While a selection is pending the
 //! mention is **not** submitted as a task (no dangling pending task in the
 //! orchestrator); the `block_actions` answer resumes it, and unanswered
-//! selections expire after [`SELECTION_TTL`].
+//! selections expire after `SELECTION_TTL`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -91,7 +91,7 @@ impl SharedState {
     }
 
     /// Remember where `task_id`'s reply belongs (bounded: beyond
-    /// [`PENDING_CAP`], the oldest entry is evicted with a warning).
+    /// `PENDING_CAP`, the oldest entry is evicted with a warning).
     pub fn insert_pending(&self, task_id: String, pending: PendingMention) {
         let mut index = self.pending.lock().unwrap();
         if !index.entries.contains_key(&task_id) {
@@ -176,7 +176,7 @@ struct EnrichedMention {
     context_lines: Option<Vec<String>>,
 }
 
-/// Bound on parked selections, mirroring [`PENDING_CAP`]'s rationale: an
+/// Bound on parked selections, mirroring `PENDING_CAP`'s rationale: an
 /// LLM outage that degrades every mention to a picker must not grow memory
 /// without bound until the 24h TTL. Evicting loses the mention (same
 /// semantics as TTL expiry), logged as a warning.

@@ -1,6 +1,6 @@
 //! `totsuka run` — the main loop (#63, §5.1).
 //!
-//! Assembles the [`Engine`](orchestrator_core::run::Engine) from the system
+//! Assembles the [`Engine`] from the system
 //! environment: config load + validation, logging, the single-instance lock
 //! (F-74), plugin launch (enabled entries only, F-58, with secrets resolved
 //! F-65), startup recovery (§5.3), then one-shot / `--watch` / `--dry-run`.

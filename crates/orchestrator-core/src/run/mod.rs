@@ -159,7 +159,7 @@ pub struct EngineSettings {
     pub worktree_sweep_interval: Duration,
     /// Resolved AI-tool registry (#196): built-ins overlaid with `[tools]`
     /// entries, keyed by tool name. Dispatch resolves each task's tool here
-    /// and sends the assembled [`ToolLaunchSpec`] to the agent plugin.
+    /// and sends the assembled [`ToolLaunchSpec`](plugin_protocol::methods::ToolLaunchSpec) to the agent plugin.
     pub tools: std::collections::HashMap<String, ToolProfile>,
     /// Global default tool name (#196) when neither the workflow nor the
     /// selected repository picks one. `"claude"` unless `default_tool` is set.

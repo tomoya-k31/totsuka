@@ -129,7 +129,7 @@ impl<T: SlackTransport> SlackApi<T> {
 
     /// `auth.test` — who the user token authenticates as (TokenGuard).
     ///
-    /// Stricter than [`checked`](Self::checked): here *every* `ok: false`
+    /// Stricter than `Self::checked`: here *every* `ok: false`
     /// code is credential-class — `auth.test` takes no arguments, so its only
     /// failure mode is the token itself (`token_expired`, `not_authed`, …) —
     /// keeping the TokenGuard's config-vs-internal error split intact.

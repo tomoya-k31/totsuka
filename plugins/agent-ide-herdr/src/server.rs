@@ -2,7 +2,7 @@
 //! `state/notification` push (F-38).
 //!
 //! Responses and notifications are written as NDJSON lines to an
-//! [`mpsc`](tokio::sync::mpsc) channel — [`main`](../main.rs) drains it to
+//! [`mpsc`] channel — `main` drains it to
 //! stdout, tests drain it to a buffer. Generic over a [`TransportFactory`] so
 //! the whole surface is driven against a fake herdr.
 
