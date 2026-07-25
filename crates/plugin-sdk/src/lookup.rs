@@ -61,10 +61,17 @@ pub enum Lookup {
 impl Lookup {
     /// Whether the caller may skip resolving a repository for this delivery.
     ///
-    /// True only for a conversation the Orchestrator confirmed it knows: the
-    /// repository is already recorded against it, so the plugin has nothing
-    /// to contribute. Both [`New`](Self::New) and [`Unknown`](Self::Unknown)
-    /// are false — an unanswered lookup must never be read as "known".
+    /// True for any conversation the Orchestrator confirmed it knows —
+    /// **including `repo: None`**. Resolution is a *new conversation's*
+    /// business: an existing one either has its repository already or is in
+    /// the middle of settling it (a human is being asked), and in both cases
+    /// the Orchestrator finishes the job. A plugin resolving again would at
+    /// best duplicate work and at worst put a second picker in front of
+    /// someone who is already looking at one.
+    ///
+    /// Both [`New`](Self::New) and [`Unknown`](Self::Unknown) are false — an
+    /// unanswered lookup must never be read as "known", or a conversation the
+    /// Orchestrator has never seen would arrive with no repository at all.
     pub fn skips_resolution(&self) -> bool {
         matches!(self, Self::Known { .. })
     }

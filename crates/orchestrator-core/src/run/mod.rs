@@ -2483,7 +2483,7 @@ fn forward_lookup(
     let Ok(permit) = budget.clone().try_acquire_owned() else {
         request.responder.err(jsonrpc::Error::new(
             error_code::SUBMIT_OVERLOADED,
-            "task/lookup in-flight budget exhausted → retry with backoff",
+            "task/lookup in-flight budget exhausted → resolve without the hint",
         ));
         return;
     };
@@ -3477,6 +3477,84 @@ plan_cleanup = "keep_28d"
                 known: false,
                 repo: None
             }
+        );
+    }
+
+    /// The forwarder — not the engine — is where a plugin's claim about which
+    /// source it is gets discarded. A plugin must not be able to read another
+    /// source's conversations by naming it in the params, so pin the
+    /// enforcement at the three lines that do it.
+    #[tokio::test]
+    async fn task_lookup_takes_its_source_from_the_connection_not_the_params() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (write_tx, _write_rx) = mpsc::unbounded_channel();
+        let budgets = PluginRequestBudgets {
+            submit: Arc::new(Semaphore::new(1)),
+            lookup: Arc::new(Semaphore::new(1)),
+        };
+
+        forward_plugin_request(
+            "slack",
+            IncomingRequest {
+                method: method::TASK_LOOKUP.to_string(),
+                // The plugin claims to be `github`.
+                params: Some(serde_json::json!({
+                    "source": "github", "task_id": "C1:100",
+                })),
+                responder: crate::adapters::plugin_host::Responder::for_test(
+                    plugin_protocol::RequestId::Str("lookup-0".into()),
+                    write_tx,
+                ),
+            },
+            &event_tx,
+            &budgets,
+        );
+
+        let event = event_rx.recv().await.expect("an event was forwarded");
+        let PluginEvent::TaskLookup {
+            source, task_id, ..
+        } = event
+        else {
+            panic!("expected a TaskLookup event");
+        };
+        assert_eq!(source, "slack", "the connection wins over the params");
+        assert_eq!(task_id, "C1:100");
+    }
+
+    /// A plugin-initiated method the Orchestrator does not implement is still
+    /// answered `METHOD_NOT_FOUND`, unchanged by the forwarder's split.
+    #[tokio::test]
+    async fn an_unknown_plugin_initiated_method_is_still_method_not_found() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (write_tx, mut write_rx) = mpsc::unbounded_channel();
+        let budgets = PluginRequestBudgets {
+            submit: Arc::new(Semaphore::new(1)),
+            lookup: Arc::new(Semaphore::new(1)),
+        };
+
+        forward_plugin_request(
+            "slack",
+            IncomingRequest {
+                method: "task/invent".to_string(),
+                params: None,
+                responder: crate::adapters::plugin_host::Responder::for_test(
+                    plugin_protocol::RequestId::Str("x-1".into()),
+                    write_tx,
+                ),
+            },
+            &event_tx,
+            &budgets,
+        );
+
+        let line = write_rx.recv().await.expect("an answer was written");
+        let answer: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            answer["error"]["code"],
+            plugin_protocol::error_code::METHOD_NOT_FOUND
+        );
+        assert!(
+            event_rx.try_recv().is_err(),
+            "an unknown method never reaches the engine loop"
         );
     }
 
