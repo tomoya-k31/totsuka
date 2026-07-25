@@ -56,7 +56,13 @@ impl TaskState {
         }
     }
 
-    /// Whether this is a terminal state (no further transitions except retry).
+    /// Whether this is a terminal state — no further transitions except
+    /// [`Retry`](TaskEvent::Retry) / [`Reopen`](TaskEvent::Reopen).
+    ///
+    /// "Terminal" is about *this* run of the task, not about the task's whole
+    /// life: since #242 a conversation may reopen from any of these states, so
+    /// terminal means "nothing left to do right now" rather than "immutable
+    /// forever". The guards below rely only on the former.
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -133,6 +139,15 @@ pub enum TaskEvent {
     Cancel,
     /// Retry a finished task (F-44): requeue from failed/cancelled.
     Retry,
+    /// A new message arrived for a finished conversation (#242): requeue it.
+    ///
+    /// Deliberately **not** [`Retry`](Self::Retry), even though both land in
+    /// `Queued`. `Retry` means "run the same instruction again" — a human
+    /// reacting to a failure — while `Reopen` means "there is new
+    /// instruction", which is also why it is the only one of the two that may
+    /// follow `Done`. Keeping them apart keeps the event log truthful about
+    /// which of the two happened.
+    Reopen,
 }
 
 /// An illegal `(state, event)` combination.
@@ -173,6 +188,10 @@ pub fn transition(from: TaskState, event: TaskEvent) -> Result<TaskState, Invali
         (S::Publishing, E::Complete) => S::Done,
         // Retry a terminal (non-Done) task: worktree/session handling is #57.
         (S::Failed | S::Cancelled, E::Retry) => S::Queued,
+        // A finished conversation that receives a new message goes back to
+        // work (#242). `Done` is included on purpose: it now means "no
+        // unprocessed messages", not "finished forever".
+        (S::Done | S::Failed | S::Cancelled, E::Reopen) => S::Queued,
         // Escalation is reachable from any non-terminal state (#131 D-02).
         (s, E::Escalate) if !s.is_terminal() => S::Escalated,
         // Failure is reachable from any non-terminal state.
@@ -261,6 +280,36 @@ mod tests {
         );
     }
 
+    /// A new message reopens a finished conversation (#242), including from
+    /// `Done` — which `Retry` deliberately cannot reach.
+    #[test]
+    fn reopen_requeues_every_terminal_state() {
+        for from in [TaskState::Done, TaskState::Failed, TaskState::Cancelled] {
+            assert_eq!(
+                transition(from, TaskEvent::Reopen).unwrap(),
+                TaskState::Queued,
+                "Reopen from {from}"
+            );
+        }
+    }
+
+    /// Reopen is for finished conversations only. A task still in flight
+    /// already has somewhere to put the new message, so requeueing it would
+    /// throw away the work in progress.
+    #[test]
+    fn reopen_is_rejected_while_a_task_is_still_running() {
+        for from in NON_TERMINAL {
+            assert_eq!(
+                transition(from, TaskEvent::Reopen).unwrap_err(),
+                InvalidTransition {
+                    from,
+                    event: TaskEvent::Reopen
+                },
+                "Reopen from {from}"
+            );
+        }
+    }
+
     #[test]
     fn human_verification_round_trip() {
         // COMPLETED self-report -> Verifying (from every announcing state).
@@ -338,7 +387,9 @@ mod tests {
         // Cannot fail/cancel a terminal task.
         assert!(transition(TaskState::Done, TaskEvent::Fail).is_err());
         assert!(transition(TaskState::Done, TaskEvent::Cancel).is_err());
-        // Cannot retry a successful task.
+        // Cannot retry a successful task — there is nothing to run again.
+        // `Reopen` (#242) is the only way back out of `Done`, and it is a
+        // different event precisely because it carries a new instruction.
         assert!(transition(TaskState::Done, TaskEvent::Retry).is_err());
         // Cannot publish straight from dispatched.
         assert!(transition(TaskState::Dispatched, TaskEvent::BeginPublish).is_err());
