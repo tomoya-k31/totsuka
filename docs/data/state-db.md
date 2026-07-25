@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-timestamp: 2026-07-25T00:00:00Z
+timestamp: 2026-07-26T02:30:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -15,15 +15,16 @@ owner: tomoya-k31
 
 # Schema
 
-## ER 図（v4 時点）
+## ER 図（v5 時点）
 
-`tasks` を中心に `sessions` / `events` / `hook_events` が `task_id` で 1:N にぶら下がる。**worktree に専用テーブルはなく**、タスクと 1:1 のため `tasks.repo` / `worktree_path` / `branch` の 3 列で表現する（実体の状態は git を直接参照）。tmux の pane も永続化せず、`session list` / `doctor` は tmux を実走査して DB と突き合わせる。`schema_migrations` は FK を持たない独立テーブル。
+`tasks` を中心に `sessions` / `events` / `hook_events` / `task_messages` が `task_id` で 1:N にぶら下がる。**worktree に専用テーブルはなく**、タスクと 1:1 のため `tasks.repo` / `worktree_path` / `branch` の 3 列で表現する（実体の状態は git を直接参照）。tmux の pane も永続化せず、`session list` / `doctor` は tmux を実走査して DB と突き合わせる。`schema_migrations` は FK を持たない独立テーブル。
 
 ```mermaid
 erDiagram
     tasks ||--o{ sessions : "task_id（リトライで追記、最新行が re-attach 対象）"
     tasks ||--o{ events : "task_id（全状態遷移の監査ログ）"
     tasks ||--o{ hook_events : "task_id（job_id から解決、推測しない）"
+    tasks ||--o{ task_messages : "task_id（v5 — 1 会話に届いた各メッセージ）"
 
     tasks {
         INTEGER id PK
@@ -76,8 +77,20 @@ erDiagram
         TEXT received_at "NN — ISO 8601 UTC"
     }
 
+    task_messages {
+        INTEGER id PK "到着順を兼ねる"
+        INTEGER task_id FK "NN → tasks(id)"
+        TEXT message_key "NN — UNIQUE(task_id, message_key)"
+        TEXT author "表示用の非正規化"
+        TEXT body "NN — プロンプト素材"
+        TEXT url "permalink"
+        TEXT payload "NN — 正規化済み Task 全文 JSON（監査 N-01）"
+        TEXT received_at "NN — ISO 8601 UTC"
+        TEXT processed_at "NULL = 未ディスパッチ（＝キュー）。同一バッチは同値"
+    }
+
     schema_migrations {
-        INTEGER version PK "index+1 = version（現行 v4）"
+        INTEGER version PK "index+1 = version（現行 v5）"
         TEXT applied_at "NN"
     }
 ```
@@ -140,13 +153,44 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 - `record_hook_event(&HookEventInsert) -> HookEventOutcome` — `INSERT ... ON CONFLICT DO NOTHING`。新規は `New`、冪等キー衝突は `Duplicate`（呼び出し側は黙って捨てる）。
 - `unknown_stop_streak(task_id) -> u32` — stop イベントを id 降順に走査し、最初の非 UNKNOWN stop までの UNKNOWN 連続数（D-02 のエスカレーション計数。**フック自己申告の block_count は信用せず DB から再計算**）。`idx_hook_events_task` + 早期 break で実質 O(streak)。
 
+## task_messages（v5、#242/#257）
+
+1 タスク = 1 **会話**であることの帰結として、1 タスクは複数のメッセージを受け取りうる。各行が 1 配送で、`processed_at IS NULL` の集合が「まだエージェントに渡していないメッセージ」= キューになる。
+
+| カラム | 型 | 意味 |
+|---|---|---|
+| id | INTEGER PK | 会話内の到着順を兼ねる |
+| task_id | INTEGER NOT NULL | → `tasks(id)` |
+| message_key | TEXT NOT NULL | この配送の同一性（Slack `{channel}:{ts}` / GitHub コメント id）。`Task.message_key`、未設定のソースは `Task.id` にフォールバック |
+| author | TEXT | 表示用の非正規化 |
+| body | TEXT NOT NULL | プロンプト素材 |
+| url | TEXT | permalink |
+| payload | TEXT NOT NULL | 正規化済み `Task` 全文 JSON（監査 N-01） |
+| received_at | TEXT NOT NULL | ISO 8601 (UTC) |
+| processed_at | TEXT NULL | ディスパッチ時刻。NULL = 未処理。**同時にディスパッチした集合は同一値**を持つ |
+
+`UNIQUE (task_id, message_key)` + `idx_task_messages_pending (task_id, processed_at)`。`hook_events`(v2/v3) と同形なのは、**at-least-once 配送の冪等化**という問題の形が同一だから。`payload` に全文を持ちつつ `author`/`body`/`url` を非正規化しているのは、読み出しで JSON を開かないため（このスキーマに `json_extract` は 1 件も無く、ここで第 1 号を作らない）。
+
+**UNIQUE キーの選定**（SQLite は制約を in-place 変更できず、v3 は `hook_events` の再構築を要した。最初から狭く決める）:
+
+- `revision`（編集時刻）は**含めない**。含めると誤字修正が高価な再実行と二重返信を招く。含めない失敗は「編集しても何も起きない」で害が小さい。後から広げるには再構築が要るが、狭めることはできない
+- `kind` は**置かない**。会話への追加に相当するのはどのソースでもコメント（Slack 返信 / GitHub issue コメント）で、label・status は workflow trigger の関心事。必要になれば `ALTER TABLE ADD COLUMN` で後付けできる（UNIQUE と違い容易）
+
+ストア API:
+
+- `append_task_message(&TaskMessageInsert) -> TaskMessageOutcome` — `INSERT ... ON CONFLICT DO NOTHING`。新規は `New`、`(task_id, message_key)` 衝突は `Duplicate`
+- `pending_task_messages(task_id) -> Vec<TaskMessage>` — 未処理のみ `id` 昇順（到着順。`received_at` ではなく `id` 順なのはタイムスタンプ解像度に依存しないため）
+- `mark_messages_processed(task_id) -> String` — 未処理行に**バッチ共通の時刻**を打ち、その時刻を返す。バッチ ID 列を持たずにバッチを識別できるのはこの共通値のおかげ
+- `unprocess_last_batch(task_id) -> usize` — 最新バッチのみをキューへ戻す（`task retry` 用）。バッチの特定は **`processed_at` の最大値ではなく id 最大の処理済み行**から行う（RFC 3339 は小数秒が可変長で辞書順に並ばない: `…:00.5Z` < `…:00Z`。id は整数で到着順）
+- `list_task_messages(task_id) -> Vec<TaskMessage>` — 全件（表示用）
+
 ## events（F-72）
 
 全状態遷移を記録する監査ログ。`from_state`（取り込み時 NULL）→ `to_state`、`occurred_at`、`detail`（JSON）。実行ログ断片（F-38）は含めず JSONL ログ側（#49）に置く。
 
 ## schema_migrations（§10.3）
 
-`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v4（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し）。
+`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v4（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し。v5 = #257 で `task_messages` を新設（**純追加**。既存の読み書きを一切変えないため、エピック #242 の途中でアップグレードが止まっても壊れた状態にならない。`tasks.thread_key` の DROP は後続バージョンに分離してある））。
 
 [会話継続](/glossary/conversation-continuity.md)（E-09）用ストア API: `find_by_thread_key(workflow, thread_key, exclude_id) -> Option<TaskRecord>` — 同一 workflow・同一 `thread_key` の最新（id 最大）先行タスクを返す（Slack 追いメンションの resume 元特定、#140）。`exclude_id` で dispatch 中の自タスクを除外する（追いメンション自身は既に ingest 済みで最新一致になるため、除外しないと「先行」が自分自身に解決してしまう。workflow 一致とあわせ別 workflow の同名スレッド誤紐付けも防ぐ）。
 
