@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-timestamp: 2026-07-26T02:30:00+09:00
+timestamp: 2026-07-26T03:30:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -15,7 +15,7 @@ owner: tomoya-k31
 
 # Schema
 
-## ER 図（v5 時点）
+## ER 図（v6 時点）
 
 `tasks` を中心に `sessions` / `events` / `hook_events` / `task_messages` が `task_id` で 1:N にぶら下がる。**worktree に専用テーブルはなく**、タスクと 1:1 のため `tasks.repo` / `worktree_path` / `branch` の 3 列で表現する（実体の状態は git を直接参照）。tmux の pane も永続化せず、`session list` / `doctor` は tmux を実走査して DB と突き合わせる。`schema_migrations` は FK を持たない独立テーブル。
 
@@ -90,7 +90,7 @@ erDiagram
     }
 
     schema_migrations {
-        INTEGER version PK "index+1 = version（現行 v5）"
+        INTEGER version PK "index+1 = version（現行 v6）"
         TEXT applied_at "NN"
     }
 ```
@@ -179,6 +179,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 ストア API:
 
 - `append_task_message(&TaskMessageInsert) -> TaskMessageOutcome` — `INSERT ... ON CONFLICT DO NOTHING`。新規は `New`、`(task_id, message_key)` 衝突は `Duplicate`
+- `append_task_message_reopening(&TaskMessageInsert, detail) -> (TaskMessageOutcome, Option<TaskState>)` — 追記と、会話が終端だった場合の `Reopen` を**同一トランザクション**で行う（#258）。分けると、追記後 reopen 前の失敗で「タスクは終端のまま・未処理メッセージが台帳にある」状態が固定され、**以降の再配送は `Duplicate` になって reopen を再試行する経路が無く、そのメッセージが恒久的に埋もれる**。クラッシュ限定ではなく `SQLITE_BUSY` 等の通常エラー経路でも起こる。`upsert_task` との間に同じ結合が要らないのは、そこで失敗しても「台帳が空のタスク」が残るだけで再配送が普通に追記できるため
 - `pending_task_messages(task_id) -> Vec<TaskMessage>` — 未処理のみ `id` 昇順（到着順。`received_at` ではなく `id` 順なのはタイムスタンプ解像度に依存しないため）
 - `mark_messages_processed(task_id) -> String` — 未処理行に**バッチ共通の時刻**を打ち、その時刻を返す。バッチ ID 列を持たずにバッチを識別できるのはこの共通値のおかげ
 - `unprocess_last_batch(task_id) -> usize` — 最新バッチのみをキューへ戻す（`task retry` 用）。バッチの特定は **`processed_at` の最大値ではなく id 最大の処理済み行**から行う（RFC 3339 は小数秒が可変長で辞書順に並ばない: `…:00.5Z` < `…:00Z`。id は整数で到着順）
@@ -190,7 +191,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 ## schema_migrations（§10.3）
 
-`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v5（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し。v5 = #257 で `task_messages` を新設（**純追加**。既存の読み書きを一切変えないため、エピック #242 の途中でアップグレードが止まっても壊れた状態にならない。`tasks.thread_key` の DROP は後続バージョンに分離してある））。
+`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v5（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し。v5 = #257 で `task_messages` を新設（**純追加**。既存の読み書きを一切変えないため、エピック #242 の途中でアップグレードが止まっても壊れた状態にならない。`tasks.thread_key` の DROP は後続バージョンに分離してある）。v6 = #258 で v5 以前の全タスクに台帳 1 行をバックフィル。**v5 が純追加だったことの裏返しで既存タスクの台帳が空のままになり**、ingest が「新着メッセージか」を台帳から判定するようになると**既存の終端タスクが最初の再配送で reopen され再実行される**（返信ソースなら二重返信）。再配送は例外ではなく定常で、`plugin_sdk::poll_loop` は自前 dedup を持たず毎 tick 全件を再 submit し orchestrator の `duplicate` ack だけに依存している。`message_key = source_task_id` は `message_key` 未設定ソースの ingest 側フォールバックと一致するため、それらの再配送は v5 以前と同じく dedup される。バックフィル行はタスクの状態によらず処理済みとして入れる — 指示内容は既に `tasks.source_payload` にあり（現行 dispatch が読む経路）、**未処理のプロンプト素材として提示してはならない**ため。`body` を空にしているのも同じ理由で、復元するには SQL で `source_payload` を JSON 走査する必要がありこのスキーマは意図的に JSON 走査を持たない）。
 
 [会話継続](/glossary/conversation-continuity.md)（E-09）用ストア API: `find_by_thread_key(workflow, thread_key, exclude_id) -> Option<TaskRecord>` — 同一 workflow・同一 `thread_key` の最新（id 最大）先行タスクを返す（Slack 追いメンションの resume 元特定、#140）。`exclude_id` で dispatch 中の自タスクを除外する（追いメンション自身は既に ingest 済みで最新一致になるため、除外しないと「先行」が自分自身に解決してしまう。workflow 一致とあわせ別 workflow の同名スレッド誤紐付けも防ぐ）。
 

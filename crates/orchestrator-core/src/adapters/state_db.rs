@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::adapters::clock::SystemClock;
 use crate::domain::state::{InvalidTransition, TaskEvent, TaskState, UnknownState, transition};
@@ -182,6 +182,35 @@ const MIGRATIONS: &[&str] = &[
       UNIQUE (task_id, message_key)
     );
     CREATE INDEX idx_task_messages_pending ON task_messages(task_id, processed_at);
+    "#,
+    // v6 — backfill a ledger row for every task that predates v5 (#258).
+    //
+    // v5 was purely additive, which left existing tasks with an *empty*
+    // ledger. That is not a harmless gap: ingest now decides "is this a new
+    // message?" from the ledger, so the first re-delivery of any pre-v5 task
+    // would look like a brand-new message and reopen a finished task —
+    // re-running it and, for a reply-writing source, replying twice.
+    // Re-delivery is routine, not exceptional: `plugin_sdk::poll_loop` has no
+    // dedup of its own and re-submits everything each tick, relying entirely
+    // on the Orchestrator's `duplicate` ack.
+    //
+    // `message_key = source_task_id` matches what ingest falls back to when a
+    // source sends no `message_key`, so those re-deliveries dedup exactly as
+    // they did before v5.
+    //
+    // Backfilled rows are marked processed regardless of the task's state:
+    // their instruction is already in `tasks.source_payload`, which is the
+    // path dispatch reads today, so they must not be offered as *pending*
+    // prompt material. `body` is left empty for the same reason — recovering
+    // it would mean parsing `source_payload` in SQL, and this schema
+    // deliberately has no JSON traversal anywhere.
+    r#"
+    INSERT INTO task_messages
+        (task_id, message_key, author, body, url, payload, received_at, processed_at)
+      SELECT id, source_task_id, NULL, '', url,
+             COALESCE(source_payload, '{}'), created_at, updated_at
+      FROM tasks
+      WHERE id NOT IN (SELECT task_id FROM task_messages);
     "#,
 ];
 
@@ -621,24 +650,12 @@ impl StateDb {
         event: TaskEvent,
         detail: Option<serde_json::Value>,
     ) -> Result<TaskState, StateError> {
-        let record = self.get_task(id)?.ok_or(StateError::NotFound(id))?;
-        let to = transition(record.state, event)?;
         let now = self.clock.now_rfc3339();
-        let finished_at = to.is_terminal().then(|| now.clone());
         let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
-
         // Update + audit event in one transaction: state never advances
         // without its recorded event (F-72).
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE tasks SET state = ?1, updated_at = ?2, finished_at = ?3 WHERE id = ?4",
-            params![to.as_str(), now, finished_at, id],
-        )?;
-        tx.execute(
-            "INSERT INTO events (task_id, from_state, to_state, occurred_at, detail)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, record.state.as_str(), to.as_str(), now, detail],
-        )?;
+        let to = apply_event_tx(&tx, &now, id, event, detail.as_deref())?;
         tx.commit()?;
         Ok(to)
     }
@@ -869,26 +886,62 @@ impl StateDb {
         &self,
         msg: &TaskMessageInsert,
     ) -> Result<TaskMessageOutcome, StateError> {
-        let changed = self.conn.execute(
-            "INSERT INTO task_messages
-                (task_id, message_key, author, body, url, payload, received_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)
-             ON CONFLICT (task_id, message_key) DO NOTHING",
-            params![
-                msg.task_id,
-                msg.message_key,
-                msg.author,
-                msg.body,
-                msg.url,
-                msg.payload,
-                self.clock.now_rfc3339(),
-            ],
-        )?;
+        let changed = insert_task_message_tx(&self.conn, msg, &self.clock.now_rfc3339())?;
         Ok(if changed > 0 {
             TaskMessageOutcome::New
         } else {
             TaskMessageOutcome::Duplicate
         })
+    }
+
+    /// Append a message and, **in the same transaction**, requeue the
+    /// conversation if it had already finished (#242).
+    ///
+    /// The two must be atomic. Done separately, a crash in between leaves the
+    /// task terminal with an unprocessed message in its ledger — and because
+    /// the message *is* recorded, the source's re-delivery dedups to
+    /// [`TaskMessageOutcome::Duplicate`] and never reopens it, so that message
+    /// is stranded forever with nothing to notice it. (`upsert_task` before
+    /// this call needs no such coupling: a crash there leaves a task with an
+    /// empty ledger, and the re-delivery simply appends.)
+    ///
+    /// Returns the append outcome and the state the conversation ended up in
+    /// when it was reopened (`None` when nothing was reopened — either the
+    /// message was a duplicate, or the conversation was still in flight).
+    pub fn append_task_message_reopening(
+        &self,
+        msg: &TaskMessageInsert,
+        detail: Option<serde_json::Value>,
+    ) -> Result<(TaskMessageOutcome, Option<TaskState>), StateError> {
+        let now = self.clock.now_rfc3339();
+        let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
+        let tx = self.conn.unchecked_transaction()?;
+        let changed = insert_task_message_tx(&tx, msg, &now)?;
+        if changed == 0 {
+            tx.commit()?;
+            return Ok((TaskMessageOutcome::Duplicate, None));
+        }
+        let state: Option<String> = tx
+            .query_row(
+                "SELECT state FROM tasks WHERE id = ?1",
+                params![msg.task_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let state: TaskState = state.ok_or(StateError::NotFound(msg.task_id))?.parse()?;
+        let reopened = if state.is_terminal() {
+            Some(apply_event_tx(
+                &tx,
+                &now,
+                msg.task_id,
+                TaskEvent::Reopen,
+                detail.as_deref(),
+            )?)
+        } else {
+            None
+        };
+        tx.commit()?;
+        Ok((TaskMessageOutcome::New, reopened))
     }
 
     /// The conversation's undispatched messages, oldest first — its queue.
@@ -1099,6 +1152,62 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         created_at: row.get("created_at")?,
         tool_session_id: row.get("tool_session_id")?,
     })
+}
+
+/// Insert one ledger row, ignoring a `(task_id, message_key)` collision.
+/// Returns the number of rows written (0 = the message was already there).
+fn insert_task_message_tx(
+    conn: &Connection,
+    msg: &TaskMessageInsert,
+    now: &str,
+) -> Result<usize, StateError> {
+    Ok(conn.execute(
+        "INSERT INTO task_messages
+            (task_id, message_key, author, body, url, payload, received_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7)
+         ON CONFLICT (task_id, message_key) DO NOTHING",
+        params![
+            msg.task_id,
+            msg.message_key,
+            msg.author,
+            msg.body,
+            msg.url,
+            msg.payload,
+            now,
+        ],
+    )?)
+}
+
+/// Apply a state-machine transition inside a caller-owned transaction.
+///
+/// Shared by [`StateDb::apply_event`] and
+/// [`StateDb::append_task_message_reopening`] so the two can never disagree
+/// about what a transition writes (state, `finished_at`, audit event).
+fn apply_event_tx(
+    conn: &Connection,
+    now: &str,
+    id: i64,
+    event: TaskEvent,
+    detail: Option<&str>,
+) -> Result<TaskState, StateError> {
+    let from: Option<String> = conn
+        .query_row("SELECT state FROM tasks WHERE id = ?1", params![id], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    let from: TaskState = from.ok_or(StateError::NotFound(id))?.parse()?;
+    let to = transition(from, event)?;
+    let finished_at = to.is_terminal().then(|| now.to_string());
+    conn.execute(
+        "UPDATE tasks SET state = ?1, updated_at = ?2, finished_at = ?3 WHERE id = ?4",
+        params![to.as_str(), now, finished_at, id],
+    )?;
+    conn.execute(
+        "INSERT INTO events (task_id, from_state, to_state, occurred_at, detail)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, from.as_str(), to.as_str(), now, detail],
+    )?;
+    Ok(to)
 }
 
 /// Map a `task_messages` row (selected via [`TASK_MESSAGE_COLUMNS`]).
@@ -1840,17 +1949,133 @@ mod tests {
             Some("cc-1".to_string())
         );
 
-        // The new ledger exists and starts empty for a task that predates it —
-        // which is what lets the old single-message flow keep working.
-        assert!(db.list_task_messages(1).unwrap().is_empty());
+        // The ledger is usable, and v6 has given this pre-existing task its
+        // backfilled row (see `migrates_v5_to_v6_...` for why that matters).
+        assert_eq!(keys(&db.list_task_messages(1).unwrap()), ["9"]);
         assert!(db.pending_task_messages(1).unwrap().is_empty());
         assert_eq!(
             db.append_task_message(&message(1, "m1", "hello")).unwrap(),
             TaskMessageOutcome::New
         );
-        assert_eq!(keys(&db.list_task_messages(1).unwrap()), ["m1"]);
+        assert_eq!(keys(&db.list_task_messages(1).unwrap()), ["9", "m1"]);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Tasks that predate the ledger must come out of the migration with one
+    /// already-processed row each (#258). Without it, ingest would read their
+    /// empty ledger as "never seen a message" and reopen finished tasks on the
+    /// first re-delivery — and `poll_loop` re-delivers everything every tick.
+    #[test]
+    fn migrates_v5_to_v6_backfilling_a_ledger_row_per_existing_task() {
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-migrate_v6", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations \
+                 (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for m in &MIGRATIONS[0..5] {
+                conn.execute_batch(m).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) \
+                 VALUES (1, ?1), (2, ?1), (3, ?1), (4, ?1), (5, ?1)",
+                params![now()],
+            )
+            .unwrap();
+            // A finished task and a still-queued one, both with empty ledgers.
+            conn.execute(
+                "INSERT INTO tasks
+                    (id, source, source_task_id, workflow, mode, state, priority,
+                     title, url, source_payload, created_at, updated_at)
+                 VALUES (1,'github','9','implement','implement','done',0,'done one',
+                         'https://example.com/9', '{\"id\":\"9\"}', ?1, ?1)",
+                params![now()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO tasks
+                    (id, source, source_task_id, workflow, mode, state, priority,
+                     title, created_at, updated_at)
+                 VALUES (2,'github','10','implement','implement','queued',0,'queued one',?1,?1)",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        let db = StateDb::open(&path).unwrap();
+
+        for (task_id, key) in [(1, "9"), (2, "10")] {
+            let ledger = db.list_task_messages(task_id).unwrap();
+            assert_eq!(keys(&ledger), [key], "one row per pre-existing task");
+            assert!(
+                ledger[0].processed_at.is_some(),
+                "backfilled rows must not look like queued prompt material"
+            );
+            assert!(db.pending_task_messages(task_id).unwrap().is_empty());
+            // ...so the source's next re-delivery dedups instead of reopening.
+            assert_eq!(
+                db.append_task_message_reopening(&message(task_id, key, "re-delivered"), None)
+                    .unwrap(),
+                (TaskMessageOutcome::Duplicate, None)
+            );
+        }
+        assert_eq!(db.get_task(1).unwrap().unwrap().state, TaskState::Done);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Appending to a finished conversation requeues it, and the two writes
+    /// are one transaction so a message can never be recorded without the
+    /// reopen that makes it reachable.
+    #[test]
+    fn append_reopens_a_finished_conversation_atomically() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        for event in [
+            TaskEvent::Dispatch,
+            TaskEvent::Start,
+            TaskEvent::BeginPublish,
+            TaskEvent::Complete,
+        ] {
+            db.apply_event(id, event, None).unwrap();
+        }
+        let before = db.get_task(id).unwrap().unwrap();
+        assert!(before.finished_at.is_some());
+
+        let (outcome, reopened) = db
+            .append_task_message_reopening(
+                &message(id, "m2", "a follow-up"),
+                Some(serde_json::json!({"kind": "reopen"})),
+            )
+            .unwrap();
+        assert_eq!(outcome, TaskMessageOutcome::New);
+        assert_eq!(reopened, Some(TaskState::Queued));
+
+        let after = db.get_task(id).unwrap().unwrap();
+        assert_eq!(after.state, TaskState::Queued);
+        assert!(
+            after.finished_at.is_none(),
+            "leaving a terminal state clears the retention anchor"
+        );
+        assert_eq!(keys(&db.pending_task_messages(id).unwrap()), ["m2"]);
+
+        // A conversation still in flight is appended to, never transitioned.
+        let (outcome, reopened) = db
+            .append_task_message_reopening(&message(id, "m3", "another"), None)
+            .unwrap();
+        assert_eq!((outcome, reopened), (TaskMessageOutcome::New, None));
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().state,
+            TaskState::Queued,
+            "a non-terminal conversation is left alone"
+        );
     }
 
     #[test]
