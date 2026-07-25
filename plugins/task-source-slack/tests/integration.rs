@@ -6,7 +6,7 @@ mod common;
 
 use serde_json::{Value, json};
 
-use common::{Canned, FakeFactory, Shared, SubmitHarness};
+use common::{Canned, FakeFactory, Shared, SubmitHarness, scratch_state_dir};
 use plugin_protocol::jsonrpc::{Response, error_code};
 use task_source_slack::server::Server;
 use task_source_slack::transport::TokenKind;
@@ -37,6 +37,7 @@ async fn call(srv: &mut Server<FakeFactory>, id: i64, method: &str, params: Valu
 /// A config with two repos, channel rules, and the LLM table — the full shape.
 fn init_config() -> Value {
     json!({
+        "state_dir": scratch_state_dir(),
         "app_token": "xapp-1-A1-test",
         "user_token": "xoxp-user-test",
         "target_user_id": "U_ME",
@@ -155,6 +156,7 @@ async fn initialize_falls_back_to_supplied_repositories() {
     // No `[[repos]]` in the plugin config: the orchestrator's list is the
     // candidate set — its channel_groups references validate against it.
     let config = json!({
+        "state_dir": scratch_state_dir(),
         "app_token": "xapp-1-A1-test",
         "user_token": "xoxp-user-test",
         "target_user_id": "U_ME",
@@ -197,6 +199,7 @@ async fn initialize_prefers_explicit_repos_over_supplied() {
     // list merged in instead, this reference check would not prove
     // precedence — so the supplied list names something else entirely.
     let config = json!({
+        "state_dir": scratch_state_dir(),
         "app_token": "xapp-1-A1-test",
         "user_token": "xoxp-user-test",
         "target_user_id": "U_ME",
@@ -264,6 +267,7 @@ fn init_params_with_llm(config: Value, repositories: Value, llm: Value) -> Value
 /// as soon as there is more than one candidate).
 fn config_without_llm() -> Value {
     json!({
+        "state_dir": scratch_state_dir(),
         "app_token": "xapp-1-A1-test",
         "user_token": "xoxp-user-test",
         "target_user_id": "U_ME",

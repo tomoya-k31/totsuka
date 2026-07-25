@@ -67,7 +67,7 @@ pub async fn publish_draft<T: SlackTransport>(
         text,
         dm_ts: None,
         status: DraftStatus::Pending,
-        created_at: std::time::Instant::now(),
+        created_at: std::time::SystemTime::now(),
     };
     let draft_id = state.insert_draft(draft.clone());
     let blocks = draft_blocks(&draft, &draft_id, &config.source_name);

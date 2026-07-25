@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use plugin_sdk::{SubmitOutcome, Submitter};
 use serde_json::{Value, json};
@@ -80,6 +80,16 @@ struct PendingIndex {
 }
 
 impl SharedState {
+    /// A state whose draft store was loaded from — and mirrors to — disk
+    /// (#122). `Default` keeps the in-memory-only store (tests, or an
+    /// environment where no state directory could be resolved).
+    pub fn new(drafts: DraftStore) -> Self {
+        Self {
+            drafts: Arc::new(Mutex::new(drafts)),
+            ..Self::default()
+        }
+    }
+
     /// Remember where `task_id`'s reply belongs (bounded: beyond
     /// [`PENDING_CAP`], the oldest entry is evicted with a warning).
     pub fn insert_pending(&self, task_id: String, pending: PendingMention) {
@@ -148,8 +158,9 @@ impl SharedState {
         self.drafts.lock().unwrap().set_status(draft_id, status);
     }
 
-    /// Drop drafts past [`DRAFT_TTL`], returning the dropped ids.
-    pub fn sweep_drafts(&self, now: Instant) -> Vec<String> {
+    /// Drop drafts past [`DRAFT_TTL`], returning the dropped ids. Wall-clock
+    /// (`SystemTime`): draft ages span restarts (#122).
+    pub fn sweep_drafts(&self, now: SystemTime) -> Vec<String> {
         self.drafts.lock().unwrap().sweep(now, DRAFT_TTL)
     }
 }
@@ -276,7 +287,7 @@ where
                             "repository selection expired unanswered; mention dropped"
                         );
                     }
-                    for draft_id in state.sweep_drafts(now) {
+                    for draft_id in state.sweep_drafts(SystemTime::now()) {
                         tracing::info!(
                             draft_id,
                             "draft expired unanswered; its buttons now answer as expired"

@@ -180,6 +180,21 @@ pub fn transport(shared: &Shared) -> FakeTransport {
     }
 }
 
+/// A fresh scratch `state_dir` for one test server, so the persisted draft
+/// store (#122) never touches the developer's real XDG state and tests never
+/// share a `drafts.json`. Each call returns a distinct directory.
+pub fn scratch_state_dir() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "totsuka-slack-state-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
 // ---------------------------------------------------------------------------
 // Runtime-on harness: a local WebSocket mock plays Slack's Socket Mode side,
 // plus JSON-RPC and envelope helpers shared by the flow test crates.
