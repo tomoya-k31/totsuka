@@ -403,7 +403,6 @@ mod tests {
                 status: None,
                 url: None,
                 assignee: None,
-                thread_key: None,
                 message_key: None,
                 instructions: None,
             },

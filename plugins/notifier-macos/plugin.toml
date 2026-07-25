@@ -1,7 +1,7 @@
 name = "macos"
 kind = "notifier"
 version = "0.1.0"
-protocol_version = ">=0.1.0, <0.3"
+protocol_version = ">=0.1.0, <0.4"
 
 # A notifier declares no feature capabilities; it only receives `notify`.
 [capabilities]

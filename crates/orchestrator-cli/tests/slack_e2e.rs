@@ -410,7 +410,7 @@ fn install_plugin(env: &Env, name: &str, kind: &str, binary: &PathBuf) {
         dir.join("plugin.toml"),
         format!(
             "name = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.1.0\"\n\
-             protocol_version = \">=0.1.6, <0.3\"\n\n[capabilities]\nstate_stream = true\n\
+             protocol_version = \">=0.1.6, <0.4\"\n\n[capabilities]\nstate_stream = true\n\
              outputs = [\"source\"]\n"
         ),
     )

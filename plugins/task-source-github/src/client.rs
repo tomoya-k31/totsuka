@@ -175,7 +175,6 @@ impl<T: GithubTransport> GithubClient<T> {
             status: status.map(str::to_string),
             url: content["url"].as_str().map(str::to_string),
             assignee,
-            thread_key: None,
             message_key: None,
             instructions: None,
         })

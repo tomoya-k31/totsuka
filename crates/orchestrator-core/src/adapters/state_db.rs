@@ -212,6 +212,26 @@ const MIGRATIONS: &[&str] = &[
       FROM tasks
       WHERE id NOT IN (SELECT task_id FROM task_messages);
     "#,
+    // v7 — drop `tasks.thread_key` (#242/#264).
+    //
+    // It correlated a follow-up message's *new* task with the prior task of
+    // the same Slack thread. #242 removed the premise: a follow-up is another
+    // message of the *same* task, so there is nothing left to correlate and
+    // the only production reader (`thread_resume_session_id`) is gone.
+    //
+    // Deliberately its own version, after the ingest and dispatch work
+    // landed: dropping it in v5 would have broken resume for every version
+    // between there and #259.
+    //
+    // A dead column is not free — it reads as a supported field, and a source
+    // plugin setting it would silently get nothing.
+    //
+    // `DROP COLUMN` needs SQLite ≥3.35; `rusqlite`'s bundled build is well
+    // past that, and this project only ever talks to its own bundled copy.
+    r#"
+    DROP INDEX idx_tasks_thread_key;
+    ALTER TABLE tasks DROP COLUMN thread_key;
+    "#,
 ];
 
 /// `events.detail` for the ingest event. Stored as JSON so consumers can
@@ -224,7 +244,7 @@ const SUBMIT_DETAIL: &str = r#"{"kind":"submitted"}"#;
 /// Columns of `tasks`, read by name in [`row_to_task`].
 const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
      worktree_path, branch, state, priority, title, url, source_payload, \
-     finished_at, created_at, updated_at, thread_key, last_signal_at";
+     finished_at, created_at, updated_at, last_signal_at";
 
 /// Columns of `sessions`, read by name in [`row_to_session`].
 const SESSION_COLUMNS: &str = "id, task_id, plugin, session_id, created_at, tool_session_id";
@@ -273,10 +293,6 @@ pub struct NewTask {
     pub url: Option<String>,
     /// Residual source fields (labels/assignee/...) as JSON.
     pub source_payload: Option<serde_json::Value>,
-    /// Conversation-continuation key (`"{channel}:{thread_ts}"`, E-09); a later
-    /// task with the same key can resume this one's session. `None` for sources
-    /// without threading.
-    pub thread_key: Option<String>,
     /// Timestamp of the last hook signal (R-10 timeout anchor). `None` until the
     /// first signal arrives; normally left unset at ingest.
     pub last_signal_at: Option<String>,
@@ -317,8 +333,6 @@ pub struct TaskRecord {
     pub created_at: String,
     /// Last-update timestamp (ISO 8601 UTC).
     pub updated_at: String,
-    /// Conversation-continuation key (`"{channel}:{thread_ts}"`, E-09).
-    pub thread_key: Option<String>,
     /// Timestamp of the last hook signal (R-10 timeout anchor; ISO 8601 UTC).
     pub last_signal_at: Option<String>,
 }
@@ -564,8 +578,8 @@ impl StateDb {
             "INSERT INTO tasks
                 (source, source_task_id, workflow, mode, repo, state, priority,
                  title, url, source_payload, created_at, updated_at,
-                 thread_key, last_signal_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11,?12,?13)
+                 last_signal_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11,?12)
              ON CONFLICT(source, source_task_id) DO NOTHING",
             params![
                 task.source,
@@ -579,7 +593,6 @@ impl StateDb {
                 task.url,
                 payload,
                 now,
-                task.thread_key,
                 task.last_signal_at,
             ],
         )?;
@@ -1164,7 +1177,6 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         finished_at: row.get("finished_at")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
-        thread_key: row.get("thread_key")?,
         last_signal_at: row.get("last_signal_at")?,
     })
 }
@@ -1303,7 +1315,6 @@ mod tests {
             title: "Fix the bug".to_string(),
             url: Some("https://example.com/issues/42".to_string()),
             source_payload: Some(serde_json::json!({"labels": ["bug"]})),
-            thread_key: None,
             last_signal_at: None,
         }
     }
@@ -1725,7 +1736,6 @@ mod tests {
         // The v1 row survived; the new columns read back as NULL on it.
         let task = db.find_by_source("github", "7").unwrap().unwrap();
         assert_eq!(task.title, "legacy");
-        assert_eq!(task.thread_key, None);
         assert_eq!(task.last_signal_at, None);
 
         // v2 objects now exist: a hook event and a session column round-trip.
@@ -2068,6 +2078,66 @@ mod tests {
             );
         }
         assert_eq!(db.get_task(1).unwrap().unwrap().state, TaskState::Done);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrates_v6_to_v7_dropping_thread_key_without_touching_the_rows() {
+        // The column is dead (#242 made `Task.id` the conversation), but the
+        // tasks that carried it are not: dropping it must leave every row and
+        // every other column exactly as they were.
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-migrate_v7", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations \
+                 (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for m in &MIGRATIONS[0..6] {
+                conn.execute_batch(m).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) \
+                 VALUES (1, ?1), (2, ?1), (3, ?1), (4, ?1), (5, ?1), (6, ?1)",
+                params![now()],
+            )
+            .unwrap();
+            // A Slack task from the thread_key era, with the column populated.
+            conn.execute(
+                "INSERT INTO tasks
+                    (id, source, source_task_id, workflow, mode, state, priority,
+                     title, url, created_at, updated_at, thread_key, last_signal_at)
+                 VALUES (1,'slack','C1:100.1','slack-reply','plan','done',3,'legacy',
+                         'https://slack.test/1', ?1, ?1, 'C1:100.0', ?1)",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        let db = StateDb::open(&path).unwrap();
+
+        let task = db.find_by_source("slack", "C1:100.1").unwrap().unwrap();
+        assert_eq!(task.title, "legacy");
+        assert_eq!(task.state, TaskState::Done);
+        assert_eq!(task.priority, 3);
+        assert_eq!(task.url.as_deref(), Some("https://slack.test/1"));
+        // Its neighbour in the same v2 migration must not have gone with it.
+        assert!(task.last_signal_at.is_some());
+
+        // The column is really gone, not merely unread — a stale query against
+        // it must fail rather than quietly keep working.
+        let conn = Connection::open(&path).unwrap();
+        assert!(
+            conn.query_row("SELECT thread_key FROM tasks", [], |_| Ok(()))
+                .is_err(),
+            "thread_key must no longer exist as a column"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

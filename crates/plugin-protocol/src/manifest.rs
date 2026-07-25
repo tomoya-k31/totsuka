@@ -210,7 +210,7 @@ outputs = ["source"]
 name = "slack"
 kind = "task_source"
 version = "0.2.0"
-protocol_version = ">=0.1.6, <0.3"
+protocol_version = ">=0.1.6, <0.4"
 
 [capabilities]
 task_submit = true
@@ -220,10 +220,12 @@ outputs = ["source"]
         .unwrap();
         assert!(m.capabilities.task_submit);
         assert!(m.is_compatible_with(&Version::new(0, 1, 6)));
-        // A push-only plugin survives the 0.2.0 fetch removal…
+        // A push-only plugin survives the 0.2.0 fetch removal and, with the
+        // bound raised to `<0.4`, the 0.3.0 removal of `Task.thread_key`…
         assert!(m.is_compatible_with(&Version::new(0, 2, 0)));
-        // …while staying honest about a hypothetical 0.3.
-        assert!(!m.is_compatible_with(&Version::new(0, 3, 0)));
+        assert!(m.is_compatible_with(&Version::new(0, 3, 0)));
+        // …while staying honest about a hypothetical 0.4.
+        assert!(!m.is_compatible_with(&Version::new(0, 4, 0)));
     }
 
     #[test]

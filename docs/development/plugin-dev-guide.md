@@ -30,7 +30,7 @@ plugin-protocol = { git = "https://github.com/tomoya-k31/totsuka" }
 name = "github"                 # インスタンスバイナリ名と一致
 kind = "task_source"            # task_source | agent_ide | notifier
 version = "0.1.0"               # プラグイン自身の版
-protocol_version = ">=0.2.0, <0.3"  # 対応する Orchestrator プロトコル範囲(F-54)
+protocol_version = ">=0.2.0, <0.4"  # 対応する Orchestrator プロトコル範囲(F-54)
 
 [capabilities]                  # 実際に対応する機能だけ宣言(F-33)
 plan_mode = true                # agent: plan モード対応
@@ -40,7 +40,7 @@ outputs = ["source"]            # task_source: result/publish 対応(F-83)
 task_submit = true              # task_source: push 型ソース宣言（必須。[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）
 ```
 
-Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push（`task_submit = true`）専用**（`tasks/fetch` は削除済み）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に起動拒否される — 0.1 系を引き続きサポートする場合は `>=0.1.6, <0.3` のように 0.2 をまたぐ範囲で宣言する（0.1.6 より前は `task_submit` capability 自体が無いので、その場合は `push` 対応版を新たにリリースしてから範囲を広げること）。
+Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push（`task_submit = true`）専用**（`tasks/fetch` は削除済み）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に、`<0.3` を上限とする manifest は **0.3.0**（#264 の `Task.thread_key` 削除）の Orchestrator に、それぞれ起動拒否される — 上限は超えたい破壊的バンプの**次**のメジャー/マイナーに置く（現行なら `<0.4`）。0.1 系も引き続きサポートする場合は `>=0.1.6, <0.4` のように両方の境界をまたぐ範囲で宣言する（0.1.6 より前は `task_submit` capability 自体が無いので、その場合は `push` 対応版を新たにリリースしてから範囲を広げること）。
 
 # メソッド（§11 付録 A）
 

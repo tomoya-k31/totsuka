@@ -50,7 +50,7 @@ async fn initialize_carries_the_supplied_repositories_and_llm() {
     let dir = test_support::scratch("host_init_repos");
     let log = dir.join("init.ndjson");
 
-    let mut with_supplies = spec(">=0.1.6, <0.3");
+    let mut with_supplies = spec(">=0.1.6, <0.4");
     with_supplies.init_config = serde_json::json!({ "init_log": log });
     with_supplies.repositories = vec![plugin_protocol::methods::RepoInfo {
         name: "web-app".into(),
@@ -76,7 +76,7 @@ async fn initialize_carries_the_supplied_repositories_and_llm() {
     // An empty list / unset llm is omitted from the wire entirely — an older
     // plugin never even sees an unknown field.
     let log = dir.join("init_empty.ndjson");
-    let mut without = spec(">=0.1.6, <0.3");
+    let mut without = spec(">=0.1.6, <0.4");
     without.init_config = serde_json::json!({ "init_log": log });
     let plugin = Plugin::launch(without).await.expect("launch");
     let _ = plugin.shutdown(Duration::from_secs(2)).await;
@@ -90,7 +90,7 @@ async fn initialize_carries_the_supplied_repositories_and_llm() {
 
 #[tokio::test]
 async fn lifecycle_initialize_shutdown_and_config_validate() {
-    let plugin = Plugin::launch(spec(">=0.1.6, <0.3")).await.expect("launch");
+    let plugin = Plugin::launch(spec(">=0.1.6, <0.4")).await.expect("launch");
 
     // initialize recorded the plugin's capabilities and version.
     assert!(plugin.capabilities().plan_mode);
@@ -136,14 +136,13 @@ async fn crash_fails_task_and_host_survives() {
             title: "t".into(),
             url: None,
             source_payload: None,
-            thread_key: None,
             last_signal_at: None,
         })
         .unwrap();
     db.apply_event(task_id, TaskEvent::Dispatch, None).unwrap();
     db.apply_event(task_id, TaskEvent::Start, None).unwrap();
 
-    let plugin = Plugin::launch(spec(">=0.1.6, <0.3")).await.expect("launch");
+    let plugin = Plugin::launch(spec(">=0.1.6, <0.4")).await.expect("launch");
 
     // The `crash` method makes the plugin exit without responding.
     let result: Result<serde_json::Value, _> = plugin.call("crash", &()).await;
@@ -164,7 +163,7 @@ async fn crash_fails_task_and_host_survives() {
     assert_eq!(state, TaskState::Failed);
 
     // The host process is unaffected: a fresh plugin still launches and works.
-    let plugin2 = Plugin::launch(spec(">=0.1.6, <0.3"))
+    let plugin2 = Plugin::launch(spec(">=0.1.6, <0.4"))
         .await
         .expect("relaunch");
     assert!(
@@ -181,7 +180,7 @@ async fn crash_fails_task_and_host_survives() {
 async fn call_after_close_returns_promptly_not_after_timeout() {
     // A very long per-call timeout: if a call after close ever fell through to
     // the timeout path, this test would take ~30s. It must return quickly.
-    let mut s = spec(">=0.1.6, <0.3");
+    let mut s = spec(">=0.1.6, <0.4");
     s.timeout = Duration::from_secs(30);
     let plugin = Plugin::launch(s).await.expect("launch");
     plugin.shutdown(Duration::from_secs(5)).await.unwrap();
@@ -199,7 +198,7 @@ async fn call_after_close_returns_promptly_not_after_timeout() {
 
 #[tokio::test]
 async fn receives_plugin_notifications() {
-    let plugin = Plugin::launch(spec(">=0.1.6, <0.3")).await.expect("launch");
+    let plugin = Plugin::launch(spec(">=0.1.6, <0.4")).await.expect("launch");
     let mut notifications = plugin
         .take_notifications()
         .await
@@ -248,7 +247,7 @@ async fn recorded_line(path: &std::path::Path, method: &str) -> serde_json::Valu
 /// A spec whose mock emits the given plugin-initiated request right after
 /// `initialize` (0.1.6) and records responses to `log`.
 fn spec_with_request_on_init(log: &std::path::Path, request: serde_json::Value) -> PluginSpec {
-    let mut s = spec(">=0.1.6, <0.3");
+    let mut s = spec(">=0.1.6, <0.4");
     s.init_config = serde_json::json!({ "notify_log": log, "request_on_init": request });
     s
 }

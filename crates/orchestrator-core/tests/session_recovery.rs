@@ -26,7 +26,7 @@ fn spec() -> PluginSpec {
 name = "mock"
 kind = "agent_ide"
 version = "0.1.0"
-protocol_version = ">=0.1.6, <0.3"
+protocol_version = ">=0.1.6, <0.4"
 "#,
         )
         .unwrap(),
@@ -50,7 +50,6 @@ fn new_task(source_task_id: &str) -> NewTask {
         title: "t".into(),
         url: None,
         source_payload: None,
-        thread_key: None,
         last_signal_at: None,
     }
 }
@@ -67,7 +66,6 @@ fn dispatch_task() -> Task {
         status: None,
         url: None,
         assignee: None,
-        thread_key: None,
         message_key: None,
         instructions: None,
     }

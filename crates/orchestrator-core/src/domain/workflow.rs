@@ -291,7 +291,6 @@ mod tests {
             status: status.map(str::to_string),
             url: None,
             assignee: None,
-            thread_key: None,
             message_key: None,
             instructions: None,
         }

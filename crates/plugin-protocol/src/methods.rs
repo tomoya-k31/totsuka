@@ -633,7 +633,6 @@ mod tests {
             status: None,
             url: None,
             assignee: None,
-            thread_key: None,
             message_key: None,
             instructions: None,
         }
@@ -871,7 +870,6 @@ mod tests {
         assert!(old.job_id.is_none());
         assert!(old.resume_session_id.is_none());
         assert!(old.hook.is_none());
-        assert!(old.task.thread_key.is_none());
         assert!(old.task.instructions.is_none());
         let unset = TaskDispatchParams {
             task: sample_task(),
@@ -887,7 +885,6 @@ mod tests {
         assert!(!wire.contains("job_id"));
         assert!(!wire.contains("resume_session_id"));
         assert!(!wire.contains("hook"));
-        assert!(!wire.contains("thread_key"));
         assert!(!wire.contains("instructions"));
         // A `diagnostics/snapshot` result may omit `text` (capture failure is
         // not an error): absent deserializes to None, None stays off the wire.

@@ -995,8 +995,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             url: task.url.clone(),
             // The full normalized task, so dispatch can reconstruct it.
             source_payload: serde_json::to_value(task).ok(),
-            // Carry the source's conversation-continuation key (E-09).
-            thread_key: task.thread_key.clone(),
+            // The R-10 timeout anchor starts unset; the first hook signal
+            // stamps it.
             last_signal_at: None,
         };
         // Existing conversations are left untouched by this (`DO NOTHING`):
@@ -2680,7 +2680,6 @@ fn task_from_record(record: &TaskRecord) -> Task {
             status: None,
             url: record.url.clone(),
             assignee: None,
-            thread_key: None,
             message_key: None,
             instructions: None,
         })
@@ -2913,7 +2912,6 @@ plan_cleanup = "keep_28d"
             status: Some("実装待ち".into()),
             url: Some("https://example.com".into()),
             assignee: Some("me".into()),
-            thread_key: None,
             message_key: None,
             instructions: None,
         };
@@ -2929,7 +2927,6 @@ plan_cleanup = "keep_28d"
                 title: task.title.clone(),
                 url: task.url.clone(),
                 source_payload: serde_json::to_value(&task).ok(),
-                thread_key: task.thread_key.clone(),
                 last_signal_at: None,
             })
             .unwrap();
@@ -2975,7 +2972,6 @@ plan_cleanup = "keep_28d"
             status: None,
             url: None,
             assignee: None,
-            thread_key: None,
             message_key: message_key.map(str::to_string),
             instructions: None,
         }

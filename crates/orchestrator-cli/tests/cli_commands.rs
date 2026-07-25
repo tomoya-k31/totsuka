@@ -80,7 +80,6 @@ fn seed_db(base: &Path) -> (i64, i64, i64) {
         title: format!("task {id}"),
         url: None,
         source_payload: None,
-        thread_key: None,
         last_signal_at: None,
     };
     let running = db.upsert_task(&new("1")).unwrap();

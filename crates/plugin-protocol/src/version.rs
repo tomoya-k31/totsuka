@@ -22,7 +22,7 @@ use semver::{Version, VersionReq};
 /// and optional under the same contract as `repositories`.
 ///
 /// 0.1.3: `TaskDispatchParams.job_id`/`resume_session_id`/`hook`,
-/// `Task.thread_key`, the `diagnostics/snapshot` RPC, two `NotifierEvent`
+/// `Task.thread_key` (removed in 0.3.0), the `diagnostics/snapshot` RPC, two `NotifierEvent`
 /// variants (`escalated`, `verification_pending`), and two `Capabilities`
 /// flags (`resume_session`, `diagnostics_snapshot`) (#132) — all additive,
 /// `^0.1`-compatible.
@@ -75,7 +75,19 @@ use semver::{Version, VersionReq};
 /// resuming. All additive: `message_key` absent means "one message = one
 /// task", `task/lookup` is optional for both sides, and the new error code is
 /// only ever returned, never required. `<0.3` manifests keep matching.
-pub const PROTOCOL_VERSION: &str = "0.2.4";
+///
+/// 0.3.0: **breaking** — `Task.thread_key` is removed (#242/#264). It said
+/// "these two tasks are one conversation"; since 0.2.4 that is what
+/// [`Task.id`](crate::task::Task::id) itself means, so the field described a
+/// relationship that no longer exists. Nothing breaks *on the wire* — `Task`
+/// has no `deny_unknown_fields`, so a plugin that still sends it is accepted
+/// and the value ignored — but a plugin that **reads** it no longer compiles,
+/// and a plugin that relied on receiving it in `task/dispatch` now gets
+/// nothing. That is a break in the type, so the version says so rather than
+/// leaving third parties to discover it: a `<0.3` manifest is rejected at
+/// launch by design (F-54), exactly as `^0.1` was at 0.2.0. The bundled
+/// plugins move to `<0.4`.
+pub const PROTOCOL_VERSION: &str = "0.3.0";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -99,23 +111,37 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 2, 4));
+        assert_eq!(protocol_version(), Version::new(0, 3, 0));
     }
 
     #[test]
     fn compatible_requirement_matches() {
-        // Only a plugin that declared a range reaching past the 0.2.0
-        // boundary survives it — the push-only requirement introduced
-        // alongside `task/submit` (0.1.6) for exactly this purpose.
-        let req = VersionReq::parse(">=0.1.6, <0.3").unwrap();
+        // A range reaching past the 0.3.0 boundary — where `Task.thread_key`
+        // was removed (#264) — is what the bundled plugins now declare.
+        let req = VersionReq::parse(">=0.1.6, <0.4").unwrap();
         assert!(is_compatible_with_current(&req));
     }
 
     #[test]
     fn incompatible_requirement_is_rejected() {
-        // A plugin requiring >=1.0 does not work with 0.2.0.
+        // A plugin requiring >=1.0 does not work with a 0.x orchestrator.
         let req = VersionReq::parse(">=1.0.0").unwrap();
         assert!(!is_compatible_with_current(&req));
+    }
+
+    #[test]
+    fn zero_two_manifests_are_stranded_by_the_zero_three_boundary() {
+        // F-54 again (#264): removing `Task.thread_key` is a break in the
+        // type, so every `<0.3`-bounded manifest — the whole 0.2 family, and
+        // the 0.1.6 push-only range that survived the 0.2.0 boundary — is
+        // rejected at launch rather than left to fail at a field access.
+        for req in ["^0.2", ">=0.1.6, <0.3", ">=0.2.4, <0.3"] {
+            let parsed = VersionReq::parse(req).unwrap();
+            assert!(
+                !is_compatible_with_current(&parsed),
+                "{req} must be rejected by protocol 0.3.0"
+            );
+        }
     }
 
     #[test]
