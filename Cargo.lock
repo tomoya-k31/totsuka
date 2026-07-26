@@ -1497,6 +1497,9 @@ dependencies = [
 [[package]]
 name = "test-support"
 version = "0.1.4"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "thiserror"
