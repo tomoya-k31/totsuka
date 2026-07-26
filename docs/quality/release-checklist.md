@@ -4,7 +4,7 @@ title: リリース前手動チェックリスト（実機結合）
 description: CI で自動化できない実機（herdr / orca）・設計プレビュー・通知・waiting_input 応答の目視確認手順。リリース前に実施する。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [release, manual-test, checklist, herdr, orca, e2e]
-timestamp: 2026-07-14T02:00:00Z
+timestamp: 2026-07-26T18:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -17,7 +17,8 @@ CI（[テスト戦略](/quality/test-strategy.md)）は実 mock プラグイン�
 
 - [ ] `totsuka init` 済み、`config.toml` に実リポジトリ・実プラグインを設定
 - [ ] `totsuka config validate` が緑（オンライン、プラグイン疎通含む）
-- [ ] `totsuka doctor` が全項目 ok（git / DB / プラグイン / LLM キー / 孤児 worktree）
+- [ ] `totsuka doctor` が全項目 ok（git / DB / プラグイン / LLM キー参照 / 孤児 worktree）
+- [ ] `totsuka doctor --online` の `llm-online` が ok（#267。`llm` チェックは参照の**解決可否**しか見ないため、失効した鍵はここでしか出ない。生体認証プロンプトが出うるので手元で実行する）
 
 # task_source（GitHub / Notion）
 
