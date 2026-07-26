@@ -278,10 +278,16 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 if self.started(pane_id, &mut last_error).await? {
                     return Ok(());
                 }
-                if tokio::time::Instant::now() >= deadline {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
                     break;
                 }
-                tokio::time::sleep(POLL_INTERVAL).await;
+                // Cap the poll at what is left of the window, or a settle that
+                // is not a whole number of POLL_INTERVALs would overshoot by up
+                // to one interval per attempt — which is what makes the
+                // worst-case-unchanged guarantee above exact rather than
+                // approximate.
+                tokio::time::sleep(POLL_INTERVAL.min(deadline - now)).await;
             }
         }
         Err(gave_up(
