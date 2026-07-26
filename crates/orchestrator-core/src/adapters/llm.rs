@@ -104,7 +104,13 @@ impl OpenAiRouter {
         let text = response.text().await.unwrap_or_default();
         Err(LlmError::Status {
             status: status.as_u16(),
-            body: text.chars().take(500).collect(),
+            // Narrower than [`attempt`] deliberately: this body is *printed*
+            // by `doctor` (stdout, not tracing), so the redacting logging
+            // layer never sees it. A gateway that echoes the offending
+            // credential in a 401 would land it on the operator's terminal
+            // and in whatever they paste into an issue. An unrecognised
+            // shape still falls back to the truncated raw body.
+            body: error_message(&text).unwrap_or_else(|| text.chars().take(500).collect()),
         })
     }
 
@@ -140,6 +146,22 @@ impl OpenAiRouter {
 
         parse_chat_content(&text)
     }
+}
+
+/// `error.message` out of an OpenAI-compatible error envelope, truncated.
+/// `None` when the body is not that shape (HTML error page, bare text, a
+/// proxy's own format), leaving the caller to decide on a fallback.
+fn error_message(body: &str) -> Option<String> {
+    let envelope: Value = serde_json::from_str(body).ok()?;
+    Some(
+        envelope
+            .get("error")?
+            .get("message")?
+            .as_str()?
+            .chars()
+            .take(500)
+            .collect(),
+    )
 }
 
 /// Extract and parse `choices[0].message.content` (a JSON string, per structured
@@ -231,6 +253,27 @@ mod tests {
             parse_chat_content(&body).unwrap_err(),
             LlmError::InvalidResponse(_)
         ));
+    }
+
+    #[test]
+    fn probe_error_body_keeps_only_the_provider_message() {
+        assert_eq!(
+            error_message(
+                r#"{"error":{"message":"User not found.","code":401},"key":"sk-live-nope"}"#
+            )
+            .as_deref(),
+            Some("User not found.")
+        );
+        // Shapes we do not recognise get no answer, so the caller falls back
+        // to the raw body rather than swallowing the diagnosis.
+        for body in [
+            "<html>502</html>",
+            r#"{"detail":"nope"}"#,
+            r#"{"error":"bare string"}"#,
+            "",
+        ] {
+            assert_eq!(error_message(body), None, "{body}");
+        }
     }
 
     #[test]

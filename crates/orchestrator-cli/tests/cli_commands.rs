@@ -834,7 +834,16 @@ fn broken_manifest_marks_hook_capability_unknown_in_doctor() {
 fn mock_llm_gateway(status: u16, reason: &str, body: &'static str) -> (String, Arc<AtomicUsize>) {
     use std::io::{Read, Write};
 
+    /// How long a mock keeps listening. Generous next to the sub-second
+    /// probe, but bounded so no mock outlives the test that made it.
+    const MOCK_GATEWAY_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
+
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    // Non-blocking + a deadline rather than a blocking `incoming()`: the
+    // opt-in assertion below deliberately sends *nothing*, and a blocking
+    // accept would park this thread (holding the port) for the rest of the
+    // test binary's run.
+    listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
     let served = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&served);
@@ -845,8 +854,21 @@ fn mock_llm_gateway(status: u16, reason: &str, body: &'static str) -> (String, A
     );
 
     std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { break };
+        let deadline = std::time::Instant::now() + MOCK_GATEWAY_LIFETIME;
+        while std::time::Instant::now() < deadline {
+            let mut stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            // The accepted socket inherits O_NONBLOCK on BSD/macOS but not on
+            // Linux, so pin it explicitly; a read timeout keeps a client that
+            // connects and says nothing from stalling the thread.
+            let _ = stream.set_nonblocking(false);
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
             // The probe request is a few hundred bytes; one read drains it,
             // so closing the socket cannot reset the client mid-response.
             let mut buf = [0u8; 4096];

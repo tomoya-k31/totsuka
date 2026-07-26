@@ -57,13 +57,23 @@ impl ChatError {
     }
 
     /// The provider answered with a non-success `status`.
+    ///
+    /// The body is not carried verbatim when it parses as the standard
+    /// OpenAI-compatible error envelope — only `error.message` survives.
+    /// This error is logged, and #267 raised the auth case to `warn!`; the
+    /// plugin has no redacting layer of its own (the workspace boundary
+    /// keeps `orchestrator_core::logging` out of reach of plugins), so a
+    /// gateway that echoes the offending credential back in a 401 body
+    /// would put it straight in the log. Narrowing to the provider's own
+    /// sentence closes the likely path without losing the diagnosis. An
+    /// unrecognised shape still falls back to the truncated raw body —
+    /// that is precisely when the operator needs to see it.
     pub fn http(status: u16, body: &str) -> Self {
+        let detail = provider_message(body)
+            .unwrap_or_else(|| body.chars().take(ERROR_BODY_HEAD_CHARS).collect());
         Self {
             status: Some(status),
-            message: format!(
-                "HTTP {status}: {}",
-                body.chars().take(ERROR_BODY_HEAD_CHARS).collect::<String>()
-            ),
+            message: format!("HTTP {status}: {detail}"),
         }
     }
 
@@ -71,6 +81,15 @@ impl ChatError {
     pub fn is_auth_failure(&self) -> bool {
         matches!(self.status, Some(401 | 403))
     }
+}
+
+/// `error.message` out of an OpenAI-compatible error envelope, truncated.
+/// `None` when the body is not that shape (HTML error page, bare text, a
+/// proxy's own format), leaving the caller to decide on a fallback.
+fn provider_message(body: &str) -> Option<String> {
+    let envelope: Value = serde_json::from_str(body).ok()?;
+    let message = envelope.get("error")?.get("message")?.as_str()?;
+    Some(message.chars().take(ERROR_BODY_HEAD_CHARS).collect())
 }
 
 /// Why classification did not produce a usable verdict; every variant falls
@@ -573,6 +592,44 @@ mod tests {
             "HTTP 401: ".len() + ERROR_BODY_HEAD_CHARS
         );
         assert_eq!(err.status, Some(401));
+    }
+
+    /// A recognised error envelope is narrowed to the provider's own
+    /// sentence: the rest of the body never reaches the log, where the
+    /// plugin has no redacting layer to catch an echoed credential.
+    #[test]
+    fn a_recognised_error_envelope_keeps_only_the_provider_message() {
+        let err = ChatError::http(
+            401,
+            r#"{"error":{"message":"User not found.","code":401},"request":{"api_key":"sk-live-should-not-be-logged"}}"#,
+        );
+        assert_eq!(err.message, "HTTP 401: User not found.");
+        assert!(!err.message.contains("sk-live"), "{err}");
+
+        // Truncation still applies to a very long provider message.
+        let long = format!(
+            r#"{{"error":{{"message":"{}"}}}}"#,
+            "y".repeat(ERROR_BODY_HEAD_CHARS + 50)
+        );
+        assert_eq!(
+            ChatError::http(500, &long).message.len(),
+            "HTTP 500: ".len() + ERROR_BODY_HEAD_CHARS
+        );
+
+        // Shapes we do not recognise fall back to the raw body — an
+        // unexpected format is exactly when the operator needs to see it.
+        for body in [
+            "<html>502 Bad Gateway</html>",
+            r#"{"detail":"nope"}"#,
+            r#"{"error":"a bare string"}"#,
+            "not json at all",
+        ] {
+            assert_eq!(
+                ChatError::http(502, body).message,
+                format!("HTTP 502: {body}"),
+                "{body}"
+            );
+        }
     }
 
     #[test]
