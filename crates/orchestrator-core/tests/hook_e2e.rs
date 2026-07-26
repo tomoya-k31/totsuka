@@ -77,11 +77,7 @@ fn no_llm() -> Option<OpenAiRouter> {
 }
 
 fn read_log(path: &Path) -> Vec<serde_json::Value> {
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
-        .collect()
+    test_support::read_ndjson_log(path)
 }
 
 /// One workflow `wf` (source `mock_src`, agent `mock_agent`) at the given

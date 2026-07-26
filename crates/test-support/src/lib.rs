@@ -121,3 +121,27 @@ pub fn bare_origin_and_clone(base: &Path) -> PathBuf {
     git(&clone, &["config", "user.name", "T"]);
     clone
 }
+
+/// Read a recorded NDJSON log file as one JSON value per line (empty when the
+/// file was never written).
+///
+/// **Tolerant of a truncated final line, strict about everything else.** The
+/// writer is usually a live mock-plugin process appending with a plain
+/// `writeln!` — not atomic — and `run_until`-style polling closures read the
+/// file *while* it is being written. A half-written last line means "not
+/// flushed yet"; the next poll sees it whole. A malformed line in the middle
+/// of the file has no such excuse: that is real corruption and must keep
+/// failing the test (#229).
+pub fn read_ndjson_log(path: &Path) -> Vec<serde_json::Value> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| match serde_json::from_str(line) {
+            Ok(value) => Some(value),
+            Err(_) if i + 1 == lines.len() => None,
+            Err(e) => panic!("malformed log line {} ({e}): {line}", i + 1),
+        })
+        .collect()
+}
