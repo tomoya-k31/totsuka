@@ -8,7 +8,7 @@ use orchestrator_core::platform::PlatformProcessProbe;
 use orchestrator_core::ports::ProcessProbe;
 use serde::Serialize;
 
-use crate::common::{CliError, Cx, print_json};
+use crate::common::{CliError, Cx, print_json, safe};
 
 /// Liveness of the `run` process, from the lock file (F-74).
 #[derive(Debug, Serialize)]
@@ -95,13 +95,14 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         "ID", "STATE", "WORKFLOW", "REPO"
     );
     for t in &tasks {
+        // Source-controlled text must not be able to repaint the table (#280).
         println!(
             "{:<5} {:<14} {:<12} {:<12} {}",
             t.id,
             t.state,
             t.workflow,
             t.repo.as_deref().unwrap_or("-"),
-            t.title
+            safe(&t.title)
         );
     }
 
@@ -121,8 +122,8 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
             println!(
                 "  task {} [{}] {}",
                 t.id,
-                t.branch.as_deref().unwrap_or("-"),
-                t.worktree_path.as_deref().unwrap_or("-")
+                safe(t.branch.as_deref().unwrap_or("-")),
+                safe(t.worktree_path.as_deref().unwrap_or("-"))
             );
         }
     }

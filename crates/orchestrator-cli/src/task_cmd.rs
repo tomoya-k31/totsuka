@@ -10,7 +10,7 @@ use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::common::{CliError, Cx, JsonFlag, print_json};
+use crate::common::{CliError, Cx, JsonFlag, print_json, safe};
 
 /// Task subcommands.
 #[derive(Debug, Subcommand)]
@@ -162,9 +162,16 @@ fn list(cx: &Cx, json: bool) -> Result<(), CliError> {
         "ID", "STATE", "SOURCE", "WORKFLOW"
     );
     for t in &tasks {
+        // `title` is whatever the source let someone type (#280) — it is the
+        // last column precisely so it cannot push the others around, but it
+        // still has to be stripped of its ability to move the cursor.
         println!(
             "{:<5} {:<14} {:<10} {:<12} {}",
-            t.id, t.state, t.source, t.workflow, t.title
+            t.id,
+            t.state,
+            t.source,
+            t.workflow,
+            safe(&t.title)
         );
     }
     Ok(())
@@ -224,18 +231,34 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
     if json {
         return print_json(&detail);
     }
-    println!("task {}: {}", detail.id, detail.title);
+    // Everything the source controls goes through `safe` (#280): `title`,
+    // `source_task_id`, `url`, and the conversation rows below. `state` /
+    // `workflow` / `mode` / `repo` are ours or the config's, so they stay
+    // verbatim — running them through would only risk mangling our own text.
+    println!("task {}: {}", detail.id, safe(&detail.title));
     println!("  state:     {}", detail.state);
-    println!("  source:    {}#{}", detail.source, detail.source_task_id);
+    println!(
+        "  source:    {}#{}",
+        detail.source,
+        safe(&detail.source_task_id)
+    );
     println!("  workflow:  {} (mode {})", detail.workflow, detail.mode);
     println!("  repo:      {}", detail.repo.as_deref().unwrap_or("-"));
     if let Some(url) = &detail.url {
-        println!("  url:       {url}");
+        // A URL is the one field where a forged OSC 8 hyperlink would be most
+        // convincing, since the operator is about to click it.
+        println!("  url:       {}", safe(url));
     }
     if let Some(path) = &detail.worktree_path {
+        // Both are fed by the external `source_task_id`. `render_branch`
+        // folds `char::is_control()` to `-` on the way in, but that is `Cc`
+        // only — a bidi override is `Cf` and goes straight through it, and
+        // the path is built from the branch. So neither is sanitised at the
+        // source, and this call is load-bearing rather than belt-and-braces.
         println!(
-            "  worktree:  {path} [{}]",
-            detail.branch.as_deref().unwrap_or("-")
+            "  worktree:  {} [{}]",
+            safe(path),
+            safe(detail.branch.as_deref().unwrap_or("-"))
         );
     }
     if !detail.messages.is_empty() {
@@ -264,7 +287,7 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
             println!(
                 "    {mark} {} {} {}",
                 m.received_at,
-                m.author.as_deref().unwrap_or("-"),
+                safe(m.author.as_deref().unwrap_or("-")),
                 one_line(&m.body, BODY_PREVIEW_CHARS)
             );
         }
@@ -272,7 +295,14 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
     if !detail.sessions.is_empty() {
         println!("  sessions (newest first):");
         for s in &detail.sessions {
-            println!("    {} @ {} ({})", s.session_id, s.plugin, s.created_at);
+            // The session id is minted by the agent plugin, not by us — a
+            // narrower door than the task source, but still not our text.
+            println!(
+                "    {} @ {} ({})",
+                safe(&s.session_id),
+                s.plugin,
+                s.created_at
+            );
         }
     }
     println!("  history:");
@@ -405,8 +435,20 @@ const BODY_PREVIEW_CHARS: usize = 72;
 
 /// `body` as one line, clipped to `limit` **characters** (not bytes — Slack
 /// bodies are routinely Japanese, and slicing by byte would panic mid-glyph).
+///
+/// The three steps are ordered, not interchangeable (#280):
+///
+/// 1. **fold whitespace** — `split_whitespace` disposes of `\n`, `\r` and
+///    `\t` by turning them into the single space that joins the tokens, so
+///    they never reach step 2 and never need escaping.
+/// 2. **escape what is left** — ESC, BEL and friends are not whitespace, so
+///    step 1 passes them straight through; [`safe`] is what stops them.
+/// 3. **clip** — last, so `limit` bounds the width actually painted on the
+///    terminal. Clipping before escaping would let 72 ESC bytes expand into
+///    432 characters of `\u{1b}` afterwards and wrap the row anyway.
 fn one_line(body: &str, limit: usize) -> String {
     let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let flat = safe(&flat);
     // One pass: take the head, then ask the *same* iterator whether anything
     // is left. Counting the whole string first would walk a long body twice
     // only to learn it is long.
@@ -446,6 +488,29 @@ mod tests {
         // empty cell rather than a stray ellipsis.
         assert_eq!(one_line("", 5), "");
         assert_eq!(one_line("   \n\t ", 5), "");
+    }
+
+    /// A message body is the most attacker-controlled string the CLI prints
+    /// (#280): anyone who can post in the channel writes it. The escaping has
+    /// to happen *between* the whitespace fold and the clip — see `one_line`.
+    #[test]
+    fn one_line_defuses_a_body_that_tries_to_repaint_the_row() {
+        let esc = char::from_u32(0x1b).unwrap();
+
+        // Whitespace controls are folded away by step 1, so they never show
+        // up as escapes — the row just becomes one line.
+        assert_eq!(one_line("real\rFORGED", 72), "real FORGED");
+        assert_eq!(one_line("a\nb\tc", 72), "a b c");
+
+        // ESC is not whitespace, so step 2 is what stops it.
+        assert_eq!(one_line(&format!("hi{esc}[2J"), 72), r"hi\u{1b}[2J");
+
+        // Clipping happens after escaping, so the printed width still obeys
+        // the limit even when the body is nothing but escape sequences.
+        let hostile = format!("{esc}[1A").repeat(40);
+        let clipped = one_line(&hostile, 20);
+        assert_eq!(clipped.chars().count(), 21, "{clipped:?}"); // 20 + ellipsis
+        assert!(!clipped.chars().any(char::is_control), "{clipped:?}");
     }
 
     #[test]

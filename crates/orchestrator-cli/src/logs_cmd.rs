@@ -8,7 +8,7 @@ use std::time::Duration;
 use orchestrator_core::logging;
 use serde_json::Value;
 
-use crate::common::{CliError, Cx};
+use crate::common::{CliError, Cx, safe};
 
 /// Poll interval for `-f`.
 const FOLLOW_TICK: Duration = Duration::from_millis(500);
@@ -94,7 +94,10 @@ fn print_line(line: &str, task: Option<i64>) {
         return;
     }
     let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-        println!("{trimmed}");
+        // Not our JSON — a partially flushed write, or something else
+        // appending to the file. Least trustworthy line in the whole command,
+        // so it is the last one that should reach the terminal raw (#280).
+        println!("{}", safe(trimmed));
         return;
     };
     if let Some(wanted) = task {
@@ -117,5 +120,21 @@ fn print_line(line: &str, task: Option<i64>) {
             extras.push_str(&format!(" {key}={val}"));
         }
     }
-    println!("{timestamp} {level:<5} {message}{extras}");
+    // `message` is the one that matters: the log *file* holds control
+    // characters safely escaped (serde_json wrote each line, so an ESC is
+    // stored as the six ASCII characters of a unicode escape), and `as_str`
+    // above decodes them back into a live byte. Reading a log must not be the
+    // step that re-arms them (#280).
+    //
+    // `extras` is already safe by construction — it formats each `Value` with
+    // `Display`, i.e. re-serialises to JSON, which re-escapes. That is a
+    // property of how it is built, not a guarantee, so it is re-checked here
+    // rather than trusted; `safe` borrows when there is nothing to do.
+    println!(
+        "{} {:<5} {}{}",
+        safe(timestamp),
+        safe(level),
+        safe(message),
+        safe(&extras)
+    );
 }
