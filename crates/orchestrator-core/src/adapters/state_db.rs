@@ -687,30 +687,15 @@ impl StateDb {
         allow_migrate: bool,
     ) -> Result<Self, StateError> {
         // rusqlite defaults foreign_keys OFF; the schema declares FKs.
+        // Connection-scoped, so this is not a file write.
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        if allow_migrate {
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version    INTEGER PRIMARY KEY,
-                    applied_at TEXT NOT NULL,
-                    applied_by TEXT
-                );",
-            )?;
-            // Widen a ledger created before `applied_by` existed. This has to
-            // happen here, in bootstrap, *before* the apply loop — never as a
-            // `MIGRATIONS` entry. `schema_migrations` is the table that
-            // versions those entries, so an ALTER expressed as version N
-            // would run after the INSERT of every version below N, and those
-            // INSERTs write the column: upgrading a v5 DB straight to v8
-            // would fail with `no such column: applied_by`. Bootstrapping it
-            // breaks the cycle.
-            ensure_applied_by_column(&conn)?;
-        }
-        // Tolerant of a missing ledger: the non-migrating path never creates
-        // it, and "no ledger" means version 0 (which then reports as
-        // outdated) rather than `no such table`.
-        let current = current_schema_version(&conn)?;
 
+        // Read the version and settle compatibility *before* touching
+        // anything. Both reads tolerate a ledger that does not exist yet
+        // (version 0) or predates `applied_by` (no attribution), so nothing
+        // has to be created first — which is what lets a DB we are about to
+        // refuse stay completely untouched.
+        let current = current_schema_version(&conn)?;
         // Compatibility is judged on the *schema* version, never the app
         // version: a patch release that changes no schema must not refuse a
         // DB written by its neighbour.
@@ -735,6 +720,25 @@ impl StateDb {
                 found: current,
                 expected: supported,
             });
+        }
+
+        if allow_migrate {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version    INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL,
+                    applied_by TEXT
+                );",
+            )?;
+            // Widen a ledger created before `applied_by` existed. This has to
+            // happen here, in bootstrap, *before* the apply loop — never as a
+            // `MIGRATIONS` entry. `schema_migrations` is the table that
+            // versions those entries, so an ALTER expressed as version N
+            // would run after the INSERT of every version below N, and those
+            // INSERTs write the column: upgrading a v5 DB straight to v8
+            // would fail with `no such column: applied_by`. Bootstrapping it
+            // breaks the cycle.
+            ensure_applied_by_column(&conn)?;
         }
 
         if (current as usize) < MIGRATIONS.len() {
@@ -2694,6 +2698,44 @@ mod tests {
 
         assert!(StateDb::open_no_migrate(&path).is_err());
         assert!(!path.exists(), "no state.db conjured out of nothing");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A DB we refuse must come out untouched — including on the *migrating*
+    /// path, where the compatibility verdict is settled before the ledger
+    /// bootstrap so the ALTER never lands on a database we then reject.
+    #[test]
+    fn a_refused_db_is_left_untouched_by_the_migrating_open() {
+        let (dir, path) = migrated_db_dir("too_new_untouched");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at, applied_by) \
+                 VALUES (?1, ?2, '9.9.9')",
+                params![MIGRATIONS.len() as i64 + 1, now()],
+            )
+            .unwrap();
+            // Strip the column so a premature bootstrap ALTER would be visible.
+            conn.execute_batch(
+                "PRAGMA wal_checkpoint(TRUNCATE); \
+                 ALTER TABLE schema_migrations DROP COLUMN applied_by;",
+            )
+            .unwrap();
+        }
+        let before = fs::read(&path).unwrap();
+
+        assert!(StateDb::open(&path).is_err());
+
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "refusing a too-new DB must not write to it"
+        );
+        assert!(
+            !has_applied_by_column(&Connection::open(&path).unwrap()).unwrap(),
+            "the bootstrap ALTER must not run on a DB we reject"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
