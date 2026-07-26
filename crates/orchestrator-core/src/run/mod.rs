@@ -159,6 +159,14 @@ pub struct EngineSettings {
     /// in config (no user knob); tests set [`Duration::ZERO`] to sweep every
     /// cycle.
     pub worktree_sweep_interval: Duration,
+    /// One-shot's quiet-period floor before an empty `settled()` is trusted:
+    /// every source is push-only, so a task submitted moments after launch may
+    /// not have arrived yet. Not exposed in config (no user knob), same as
+    /// [`worktree_sweep_interval`](Self::worktree_sweep_interval);
+    /// tests that drive submissions in-process set [`Duration::ZERO`] so a
+    /// one-shot run does not spend the grace waiting for a task that has
+    /// already arrived.
+    pub one_shot_grace: Duration,
     /// Resolved AI-tool registry (#196): built-ins overlaid with `[tools]`
     /// entries, keyed by tool name. Dispatch resolves each task's tool here
     /// and sends the assembled [`ToolLaunchSpec`](plugin_protocol::methods::ToolLaunchSpec) to the agent plugin.
@@ -275,6 +283,7 @@ pub fn settings_from_config(
             .clone()
             .unwrap_or_else(|| DEFAULT_PR_BODY_TEMPLATE.to_string()),
         worktree_sweep_interval: WORKTREE_SWEEP_INTERVAL,
+        one_shot_grace: ONE_SHOT_GRACE,
         tools: crate::tool::registry_from_config(&cfg.tools),
         default_tool: cfg
             .default_tool
@@ -832,7 +841,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let mut last_activity = tokio::time::Instant::now();
 
         loop {
-            if !watch && self.settled()? && last_activity.elapsed() >= ONE_SHOT_GRACE {
+            if !watch && self.settled()? && last_activity.elapsed() >= self.settings.one_shot_grace
+            {
                 break;
             }
             tokio::select! {
@@ -2778,6 +2788,10 @@ plan_cleanup = { retention_days = 2 }
             "/xdg/state/totsuka/worktrees/{repo_name}/{branch}"
         );
         assert_eq!(settings.worktree_sweep_interval, WORKTREE_SWEEP_INTERVAL);
+        // Promoting this from a const to a settings field must not change what
+        // production runs with: tests shrink it, `settings_from_config` must
+        // not.
+        assert_eq!(settings.one_shot_grace, ONE_SHOT_GRACE);
     }
 
     /// The default worktree location must resolve on a machine with no
@@ -2857,6 +2871,7 @@ plan_cleanup = "keep_28d"
             pr_title_template: "t".to_string(),
             pr_body_template: "b".to_string(),
             worktree_sweep_interval: interval,
+            one_shot_grace: ONE_SHOT_GRACE,
             tools: crate::tool::builtin_registry(),
             default_tool: "claude".to_string(),
             hook: None,

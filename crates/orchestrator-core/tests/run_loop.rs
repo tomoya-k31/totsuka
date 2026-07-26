@@ -129,6 +129,11 @@ fn engine_settings(repo_path: &Path) -> EngineSettings {
         pr_body_template: "Task {title} ({url})\n\n{summary}".to_string(),
         // Sweep every cycle, as before the interval existed (#210).
         worktree_sweep_interval: Duration::ZERO,
+        // Nothing arrives asynchronously here: the mock source's `task/submit`
+        // is driven in-process and every one-shot `run(false, ..)` below is
+        // preceded by an explicit seed, so production's 2s quiet-period floor
+        // would be pure waiting (#281). `settled()` still has to hold.
+        one_shot_grace: Duration::ZERO,
         tools: orchestrator_core::tool::builtin_registry(),
         default_tool: "claude".to_string(),
         hook: None,
