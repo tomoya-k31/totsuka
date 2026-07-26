@@ -53,6 +53,42 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "def
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
+# Build-time tuning for a workspace whose `cargo test` links ~50 binaries
+# (24 integration-test targets + 8 bins + a unit-test binary per lib and per
+# bin). Only *debuginfo* is dialled down; opt-level, debug-assertions and
+# overflow-checks keep their dev defaults for our own code, so the tests catch
+# exactly what they caught before.
+[profile.dev]
+# Line tables only: `panic!` / `assert!` backtraces still name function, file
+# and line — the entirety of what a failing test report shows. What is lost is
+# stepping in a debugger with full variable/type info; get it back for a
+# session with `cargo build --config 'profile.dev.debug=2'`.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+# Dependencies are not what the tests are debugging, and this graph's heaviest
+# debuginfo producers are third-party (`rusqlite`'s bundled SQLite
+# amalgamation, `reqwest`/native-tls, `tokio`).
+#
+# Deliberately *only* debuginfo: `opt-level = 1` on dependencies was measured
+# and rejected (#281). Cold `cargo build --workspace --all-targets`, this
+# workspace, warm rebuild = touch one core source then relink:
+#
+#   baseline (debug=2, opt-level=0)   cold 46s   warm 7s   target/ 2.5G
+#   + opt-level = 1                   cold 93s   warm 3s   target/ 1.6G
+#   debuginfo only (this)             cold 33s   warm 2s   target/ 1.7G
+#
+# Optimising ~200 dependency crates costs far more than the debuginfo saves,
+# and CI cold-builds whenever the rust-cache entry is stale or evicted.
+debug = false
+
+# `cargo test` builds the tested target under `test`, which inherits `dev`.
+# Spelled out so a future `[profile.dev] debug = 2` for a debugging session
+# does not silently re-inflate all ~50 test binaries.
+[profile.test]
+inherits = "dev"
+debug = "line-tables-only"
+
 # Deny warnings across the whole workspace. Each crate opts in with
 # `[lints] workspace = true`.
 [workspace.lints.clippy]
