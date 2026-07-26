@@ -75,9 +75,8 @@ impl Check {
     }
 }
 
-/// Execute `totsuka doctor`. `online` opts into the live probes (#267),
-/// which are the only checks here that touch the network or may raise a
-/// biometric prompt.
+/// Execute `totsuka doctor`. `online` opts into the live probes (#267) —
+/// the only checks here that reach the network.
 pub fn run(cx: &Cx, json: bool, online: bool) -> Result<(), CliError> {
     let mut checks = Vec::new();
     // One environment snapshot, threaded through every check that needs it.
@@ -1024,11 +1023,16 @@ fn check_llm_key(
 
 /// `--online` only: one live request proving the gateway accepts the key.
 ///
-/// Unlike every other doctor check this one resolves the reference for real
-/// — including `op://`, which may raise a biometric prompt — and makes a
-/// network call. Only a 401/403 fails the check: a timeout or a 5xx says the
-/// provider is unreachable or unwell, not that the key is wrong, so those
-/// stay advisory rather than turning a flaky network into a red `doctor`.
+/// The only doctor check that makes a network call. It also resolves the
+/// reference for real, including `op://` — which may raise a biometric
+/// prompt, though it is not alone in that: `check_plugins` already resolves
+/// `op://` today via `plugin_spec`'s `llm_info` + `plugin_init_config`, so
+/// `doctor` is not as unconditionally non-interactive as ADR-0006 implies.
+/// That gap is pre-existing and out of scope here.
+///
+/// Only a 401/403 fails the check: a timeout or a 5xx says the provider is
+/// unreachable or unwell, not that the key is wrong, so those stay advisory
+/// rather than turning a flaky network into a red `doctor`.
 fn check_llm_online(
     llm: &config::LlmConfig,
     env: &HashMap<String, String>,
@@ -1050,10 +1054,12 @@ fn check_llm_online(
         None => SecretString::new(""),
     };
 
+    // `probe_auth` deliberately bypasses the retry loop — a probe answers now
+    // or not at all, and retrying a 5xx would only make `doctor` hang on an
+    // unwell provider — so `max_retries` is left at its default rather than
+    // zeroed here: an assignment the probe never reads would only suggest it
+    // is what disables retrying. Only `timeout` is honoured.
     let mut openai = OpenAiConfig::new(&llm.base_url, &llm.model);
-    // A probe answers now or not at all: retrying a 5xx would only make
-    // `doctor` hang on an unwell provider.
-    openai.max_retries = 0;
     if let Some(secs) = llm.timeout_secs {
         openai.timeout = Duration::from_secs(secs);
     }

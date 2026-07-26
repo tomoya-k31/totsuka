@@ -37,10 +37,12 @@ totsuka doctor --online
 
 を付けると `[llm]` へ 1 回だけ最小リクエスト（`max_tokens: 1`・リトライなし・本文は破棄）を投げ、`llm-online` チェックとして結果を出す。**既定では実行しない**（`doctor` はオフライン・非対話が原則、[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md)）。`--online` が明示的に買うコスト:
 
-- ネットワークに出る（わずかに課金される）
+- ネットワークに出る（わずかに課金される）— `doctor` でネットワークに触れるのはこのチェックだけ
 - `op://` 参照を**実際に解決する** → 1Password の生体認証プロンプトが出うる
 
-したがって **CI や cron からは使わない**。手元で「鍵を差し替えた直後」「リポジトリ選択 UI が毎回出る」ときの切り分けに使う。
+したがって **CI や cron からは使わない**。
+
+> **注**: 生体認証プロンプトは `--online` 固有ではない。プラグインが 1 つでも enabled なら `plugin:{name}` チェックがプラグインを起動するために `plugin_spec` 経由で `[llm].api_key_ref` と `plugins/{name}.toml` のシークレットを `op://` 含めて実解決するため、**フラグ無しの `doctor` でもプロンプトは出うる**。[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md) の「doctor は非対話」は `llm` チェック単体の話で、doctor 全体では既に成立していない（#267 以前からの既存挙動）。手元で「鍵を差し替えた直後」「リポジトリ選択 UI が毎回出る」ときの切り分けに使う。
 
 **鍵が失効すると何が起きるか**: 候補リポジトリが 2 件以上ある構成では分類に LLM が要るため、鍵が無効だと [task-source-slack](/components/task-source-slack.md) の解決が毎回 picker へ縮退する。縮退自体は設計どおり安全なので、**設定不備が「少し不便な正常動作」に見える**のが厄介な点。run のログに次の `warn` が出ていたらこれ:
 

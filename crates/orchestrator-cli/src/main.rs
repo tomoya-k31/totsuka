@@ -89,9 +89,9 @@ enum Command {
     /// Diagnose the environment (git, config, plugins, orphan worktrees).
     Doctor {
         /// Additionally verify the configured `[llm]` gateway accepts the
-        /// API key, with one minimal live request. Opt-in: it talks to the
-        /// network and resolves the key reference, so an `op://` reference
-        /// may raise a biometric prompt.
+        /// API key, with one minimal live request. Opt-in: it is the only
+        /// check that goes to the network, and it resolves the key
+        /// reference, so an `op://` reference may raise a biometric prompt.
         #[arg(long)]
         online: bool,
         #[command(flatten)]
