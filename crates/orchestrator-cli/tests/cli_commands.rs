@@ -202,6 +202,107 @@ fn status_reports_stale_lock_and_parseable_json() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// #280: a task source lets a third party choose `title` / `body` / `author`
+/// / `url` / `source_task_id`. Printed verbatim those can repaint the
+/// operator's screen, so every human rendering has to defuse them — while
+/// `--json` keeps the value byte-exact, because that is what an audit reads.
+#[test]
+fn external_text_cannot_repaint_the_terminal_yet_json_stays_verbatim() {
+    let base = scratch("control_sequences");
+    let state_dir = base.join("state").join("totsuka");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let db = StateDb::open(&state_dir.join("state.db")).unwrap();
+
+    let esc = char::from_u32(0x1b).unwrap();
+    // ESC[2J clears the screen; ESC[1A walks the cursor back over the row
+    // already printed, which is how one task's row forges another's.
+    let title = format!("{esc}[2Jinnocent{esc}[1A{esc}[2Kforged");
+    // OSC 8: the text says one thing, the link goes somewhere else.
+    let url = format!("{esc}]8;;https://evil.test{esc}\\https://slack.test/ok{esc}]8;;{esc}\\");
+    // A bare CR rewrites the current row from column 0.
+    let body = format!("please review\rTASK COMPLETED{esc}[2J");
+    let author = format!("alice{esc}[31m");
+    let source_task_id = format!("C123:{esc}[5m1700000000.000100");
+
+    let id = db
+        .upsert_task(&NewTask {
+            source: "github".into(),
+            source_task_id: source_task_id.clone(),
+            workflow: "implement".into(),
+            mode: "implement".into(),
+            repo: Some("web".into()),
+            priority: 0,
+            title: title.clone(),
+            url: Some(url.clone()),
+            source_payload: None,
+            last_signal_at: None,
+        })
+        .unwrap();
+    db.append_task_message(&TaskMessageInsert {
+        task_id: id,
+        message_key: "m1".to_string(),
+        author: Some(author.clone()),
+        body: body.clone(),
+        url: Some("https://slack.test/m1".to_string()),
+        payload: "{}".to_string(),
+    })
+    .unwrap();
+
+    // --- the human renderings must not carry a live escape ---------------
+    for args in [
+        vec!["task", "show", &id.to_string()],
+        vec!["task", "list"],
+        vec!["status"],
+    ] {
+        let out = run(&base, &args);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(!text.contains(esc), "{args:?} emitted a live ESC: {text:?}");
+        assert!(!text.contains('\r'), "{args:?} emitted a bare CR: {text:?}");
+        // Neutralised, not deleted: the operator can still see what was sent.
+        assert!(
+            text.contains("innocent") && text.contains("forged"),
+            "{args:?} swallowed the payload text: {text}"
+        );
+    }
+
+    // One task seeded, so `task list` prints exactly one row under the
+    // header — an escape must not be able to invent or erase rows.
+    let listed = stdout(&run(&base, &["task", "list"]));
+    assert_eq!(
+        listed.lines().count(),
+        2,
+        "header + exactly one row: {listed:?}"
+    );
+
+    // --- --json keeps the original bytes, escaped once by serde_json -----
+    let out = run(&base, &["task", "show", &id.to_string(), "--json"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let raw = stdout(&out);
+    // The document itself is transport-safe: no live control byte on the
+    // wire, because serde_json wrote them as \uXXXX escapes.
+    assert!(!raw.contains(esc), "raw JSON carried a live ESC: {raw:?}");
+
+    let doc: serde_json::Value = serde_json::from_str(&raw).expect("jq-parseable JSON");
+    // Decoded, every value is exactly what the source sent — no truncation,
+    // no double-escaping, no sanitiser leaking across from the human path.
+    assert_eq!(doc["title"].as_str().unwrap(), title);
+    assert_eq!(doc["url"].as_str().unwrap(), url);
+    assert_eq!(doc["source_task_id"].as_str().unwrap(), source_task_id);
+    assert_eq!(doc["messages"][0]["body"].as_str().unwrap(), body);
+    assert_eq!(doc["messages"][0]["author"].as_str().unwrap(), author);
+
+    let listed: serde_json::Value =
+        serde_json::from_str(&stdout(&run(&base, &["task", "list", "--json"]))).unwrap();
+    assert_eq!(listed[0]["title"].as_str().unwrap(), title);
+
+    let status: serde_json::Value =
+        serde_json::from_str(&stdout(&run(&base, &["status", "--json"]))).unwrap();
+    assert_eq!(status["tasks"][0]["title"].as_str().unwrap(), title);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn task_show_json_and_retry_cancel_rules() {
     let base = scratch("task");
