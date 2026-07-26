@@ -598,12 +598,83 @@ impl<G: GitRunner> WorktreeManager<G> {
                 stderr: remove.stderr,
             });
         }
-        // Safe branch delete: `-d` refuses to drop a branch with unmerged
-        // commits, so committed-but-unpushed work is never force-destroyed
-        // (extends the dirty guard to the committed case). Best-effort: a
-        // missing or retained branch is not an error.
-        let _ = self.git.run(repo_path, &["branch", "-d", branch])?;
+        self.delete_branch_if_published(repo_path, branch)?;
         Ok(CleanupOutcome::Removed)
+    }
+
+    /// Delete the task's branch, but only once every commit on it also exists
+    /// on `origin` — best-effort, and never at the cost of unpushed work.
+    ///
+    /// **Why not `git branch -d`** (what this replaced, #266): `-d` decides
+    /// "fully merged" against the *local* `HEAD` (or the branch's upstream).
+    /// But [`create`](Self::create) deliberately branches from
+    /// `origin/{default}`, not from the local default branch — so the moment
+    /// the local default is even one commit behind its remote, the task's
+    /// branch is not an ancestor of `HEAD` and `-d` refuses. **A local branch
+    /// lagging its remote is the normal state**, so cleanup failed almost
+    /// every time and `agent/*` branches accumulated without bound (5 of them
+    /// on the real machine). Nothing surfaced it: the caller discarded the
+    /// result, and the unit test only asserted that the command *ran*.
+    ///
+    /// The replacement asks the question that actually matters — **is
+    /// anything here only local?** — with `rev-list --count <branch> --not
+    /// --remotes=origin`:
+    ///
+    /// - `0` → every commit is reachable from some `origin` ref, so `-D`
+    ///   destroys nothing. This covers both real cases: a branch whose work
+    ///   was merged into the default branch, and a `pull_request` branch that
+    ///   was pushed and still has its PR open (the case `-d` got right via the
+    ///   upstream rule — a narrower `merge-base --is-ancestor origin/{default}`
+    ///   test would have started *keeping* those).
+    /// - `> 0` → committed-but-unpushed work exists. Keep the branch. That is
+    ///   the guard `-d` was there for, and the only reason it is preserved.
+    ///
+    /// A repository with no `origin` refs at all counts every commit as
+    /// unpushed and therefore keeps the branch — the conservative answer.
+    fn delete_branch_if_published(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+    ) -> Result<(), WorktreeError> {
+        let unpublished = self.git.run(
+            repo_path,
+            &["rev-list", "--count", branch, "--not", "--remotes=origin"],
+        )?;
+        let count = unpublished
+            .success()
+            .then(|| unpublished.stdout.trim().parse::<u64>().ok())
+            .flatten();
+        let Some(count) = count else {
+            // Could not tell — keep the branch. Being unable to prove the work
+            // is safe is not permission to destroy it.
+            tracing::debug!(
+                branch,
+                stderr = %unpublished.stderr.trim(),
+                "could not count unpublished commits; keeping the branch"
+            );
+            return Ok(());
+        };
+        if count > 0 {
+            tracing::info!(
+                branch,
+                unpublished = count,
+                "branch kept: it has commits that are not on origin"
+            );
+            return Ok(());
+        }
+        let deleted = self.git.run(repo_path, &["branch", "-D", branch])?;
+        if deleted.success() {
+            tracing::debug!(branch, "branch deleted with its worktree");
+        } else {
+            // Already gone, or something is holding it. Not an error — the
+            // worktree, which is what cleanup is about, is already removed.
+            tracing::debug!(
+                branch,
+                stderr = %deleted.stderr.trim(),
+                "branch not deleted; it may already be gone"
+            );
+        }
+        Ok(())
     }
 
     /// Whether a worktree has uncommitted (staged/unstaged/untracked) changes.
@@ -950,6 +1021,9 @@ mod tests {
     struct ScriptedGit {
         statuses: std::cell::RefCell<Vec<&'static str>>,
         commands: std::cell::RefCell<Vec<String>>,
+        /// What `rev-list --count` reports: the number of commits on the
+        /// branch that are on no `origin` ref. `"0"` = fully published.
+        unpublished: std::cell::RefCell<&'static str>,
     }
 
     impl ScriptedGit {
@@ -959,7 +1033,14 @@ mod tests {
             Self {
                 statuses: std::cell::RefCell::new(statuses),
                 commands: std::cell::RefCell::new(Vec::new()),
+                unpublished: std::cell::RefCell::new("0"),
             }
+        }
+
+        /// The branch has `count` commits that are not on origin.
+        fn with_unpublished(self, count: &'static str) -> Self {
+            *self.unpublished.borrow_mut() = count;
+            self
         }
 
         fn ran(&self, subcommand: &str) -> bool {
@@ -979,6 +1060,8 @@ mod tests {
                     .pop()
                     .expect("more `git status` calls than scripted outputs")
                     .to_string()
+            } else if args.first() == Some(&"rev-list") {
+                self.unpublished.borrow().to_string()
             } else {
                 String::new()
             };
@@ -1058,7 +1141,43 @@ mod tests {
             .unwrap();
         assert_eq!(outcome, CleanupOutcome::Removed);
         assert!(git.ran("worktree remove"));
-        assert!(git.ran("branch -d"));
+        assert!(git.ran("branch -D b"));
+    }
+
+    #[test]
+    fn a_branch_with_unpushed_commits_is_kept() {
+        // The guard the old `-d` existed for, and the only reason the new
+        // check is not an unconditional `-D`: work that lives nowhere but
+        // this branch must survive the worktree it was written in (#266).
+        let git = ScriptedGit::new(&[""]).with_unpublished("2");
+        let mgr = WorktreeManager::new(&git);
+        assert_eq!(
+            mgr.remove(Path::new("/repo"), Path::new("/wt"), "b")
+                .unwrap(),
+            CleanupOutcome::Removed,
+            "the worktree still goes — only the branch is spared"
+        );
+        assert!(git.ran("worktree remove"));
+        assert!(
+            !git.ran("branch -D"),
+            "unpushed commits must not be force-deleted: {:?}",
+            git.commands.borrow()
+        );
+    }
+
+    #[test]
+    fn an_uncountable_branch_is_kept() {
+        // `rev-list` answered something unparseable (a broken ref, a git that
+        // failed). Not being able to prove the work is safe is not permission
+        // to destroy it.
+        let git = ScriptedGit::new(&[""]).with_unpublished("not a number");
+        let mgr = WorktreeManager::new(&git);
+        assert_eq!(
+            mgr.remove(Path::new("/repo"), Path::new("/wt"), "b")
+                .unwrap(),
+            CleanupOutcome::Removed
+        );
+        assert!(!git.ran("branch -D"), "{:?}", git.commands.borrow());
     }
 
     #[test]
