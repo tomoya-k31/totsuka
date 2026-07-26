@@ -22,25 +22,11 @@ fn totsuka() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_totsuka"))
 }
 
-/// Path to the `mock_plugin` binary (a bin of `orchestrator-core`, built at the
-/// same target dir under the same profile as the tests). Rebuilt every call so
-/// an edit to `mock_plugin.rs` is never silently missed — cargo's dependency
-/// tracking makes it a fast no-op when already fresh.
+/// Path to the `mock_plugin` binary (a bin of `orchestrator-core`, so
+/// `CARGO_BIN_EXE_*` does not cover it). Built once per test process, or not at
+/// all when CI has pre-built the workspace (#281).
 fn mock_plugin() -> PathBuf {
-    // `CARGO_BIN_EXE_totsuka` lives in the same profile dir the tests use; its
-    // parent's name is the profile (`debug` / `release`).
-    let bin_dir = totsuka().parent().expect("target dir").to_path_buf();
-    let mut build = Command::new(env!("CARGO"));
-    build.args(["build", "-p", "orchestrator-core", "--bin", "mock_plugin"]);
-    if bin_dir.file_name().and_then(|n| n.to_str()) == Some("release") {
-        build.arg("--release");
-    }
-    let status = build.status().expect("spawn cargo build for mock_plugin");
-    assert!(status.success(), "failed to build mock_plugin");
-
-    let path = bin_dir.join(format!("mock_plugin{}", std::env::consts::EXE_SUFFIX));
-    assert!(path.exists(), "mock_plugin not found at {}", path.display());
-    path
+    test_support::sibling_bin(&totsuka(), "orchestrator-core", "mock_plugin")
 }
 
 /// The XDG-scoped environment for a scratch base.

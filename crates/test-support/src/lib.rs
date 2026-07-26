@@ -4,8 +4,10 @@
 //! run-loop, and CLI E2E tests all need, so the git-signing workaround and the
 //! bare-origin bootstrap live in one place.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 /// Run a `git` command in `cwd`, asserting success, returning trimmed stdout.
 ///
@@ -144,4 +146,56 @@ pub fn read_ndjson_log(path: &Path) -> Vec<serde_json::Value> {
             Err(e) => panic!("malformed log line {} ({e}): {line}", i + 1),
         })
         .collect()
+}
+
+/// Locate a **sibling** workspace binary — one that is not a bin target of the
+/// crate under test, so `CARGO_BIN_EXE_*` does not exist for it — under the
+/// same target profile directory as `anchor` (pass the calling crate's own
+/// `CARGO_BIN_EXE_<bin>`).
+///
+/// Freshness is guaranteed by `cargo build -p <package> --bin <bin>`, run at
+/// most **once per test process**. The previous per-call build made 15 nested
+/// cargo invocations per `cargo test` run, every one of them contending on the
+/// target-directory lock — and under a process-per-test runner it would be one
+/// per *test* (#281).
+///
+/// Set `TOTSUKA_TEST_PREBUILT_BINS=1` to skip the build and trust what is
+/// already in the target dir. CI sets it right after
+/// `cargo build --workspace --all-targets`, which has necessarily just built
+/// every workspace bin.
+pub fn sibling_bin(anchor: &Path, package: &str, bin: &str) -> PathBuf {
+    static BUILT: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+    let mut cache = BUILT
+        .get_or_init(Mutex::default)
+        .lock()
+        .expect("sibling_bin cache poisoned");
+    if let Some(path) = cache.get(bin) {
+        return path.clone();
+    }
+
+    // `anchor` lives in the profile dir the tests use; its parent's name is the
+    // profile (`debug` / `release`).
+    let bin_dir = anchor.parent().expect("target profile dir").to_path_buf();
+    let path = bin_dir.join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
+
+    if std::env::var_os("TOTSUKA_TEST_PREBUILT_BINS").is_none() {
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let mut build = Command::new(cargo);
+        build.args(["build", "-p", package, "--bin", bin]);
+        if bin_dir.file_name().and_then(|n| n.to_str()) == Some("release") {
+            build.arg("--release");
+        }
+        let status = build
+            .status()
+            .unwrap_or_else(|e| panic!("spawn cargo build for {bin}: {e}"));
+        assert!(status.success(), "failed to build {bin}");
+    }
+    assert!(
+        path.exists(),
+        "{bin} not found at {} — run `cargo build -p {package} --bin {bin}`, \
+         or unset TOTSUKA_TEST_PREBUILT_BINS to let the test build it",
+        path.display()
+    );
+    cache.insert(bin.to_string(), path.clone());
+    path
 }
