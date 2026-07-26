@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use crate::agent::HerdrAgent;
+use crate::agent::{HerdrAgent, RetryPolicy};
 use crate::config::HerdrConfig;
 use crate::error::HerdrError;
 use crate::transport::HerdrTransport;
@@ -45,15 +45,29 @@ pub struct Server<F: TransportFactory> {
     factory: F,
     agent: Option<HerdrAgent<F::Transport>>,
     out: mpsc::UnboundedSender<String>,
+    retry: RetryPolicy,
 }
 
 impl<F: TransportFactory> Server<F> {
-    /// A fresh, uninitialized server writing NDJSON lines to `out`.
+    /// A fresh, uninitialized server writing NDJSON lines to `out`, whose agent
+    /// uses the production [`RetryPolicy`].
     pub fn new(factory: F, out: mpsc::UnboundedSender<String>) -> Self {
+        Self::with_retry_policy(factory, out, RetryPolicy::default())
+    }
+
+    /// As [`new`](Self::new), with an explicit [`RetryPolicy`] for the agent it
+    /// builds at `initialize`. Only the fake-herdr integration tests pass
+    /// anything but the default.
+    pub fn with_retry_policy(
+        factory: F,
+        out: mpsc::UnboundedSender<String>,
+        retry: RetryPolicy,
+    ) -> Self {
         Self {
             factory,
             agent: None,
             out,
+            retry,
         }
     }
 
@@ -138,7 +152,7 @@ impl<F: TransportFactory> Server<F> {
         };
         match self.connect(&config).await {
             Ok(transport) => {
-                self.agent = Some(HerdrAgent::new(transport, config));
+                self.agent = Some(HerdrAgent::with_retry_policy(transport, config, self.retry));
                 self.send(Response::result(id, capabilities_result()));
             }
             Err(e) => self.send(Response::error(

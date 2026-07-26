@@ -47,18 +47,44 @@ use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT};
 /// How many screen lines are read when extracting text from a pane.
 const SCREEN_LINES: u64 = 200;
 
-/// How many times the prompt is typed in before giving up, and how long each
-/// attempt waits for it to appear on screen.
-const SEND_ATTEMPTS: usize = 5;
-const SEND_RENDER_TIMEOUT: Duration = Duration::from_secs(3);
+/// How prompt submission retries: attempt counts and the waits between them
+/// (#281).
+///
+/// [`Default`] **is** the production policy, tuned against a real agent CLI:
+/// the CLI renders its input box before it accepts input, and accepts input
+/// before it acts on Enter, so both writes are confirmed rather than
+/// fire-and-forget. It is a value rather than a set of `const`s only so a
+/// caller driving a *simulated* CLI (the fake-herdr integration tests, whose
+/// pane reacts within one poll) can collapse the waits without changing
+/// **what** is retried. No production path constructs anything but
+/// [`RetryPolicy::default`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetryPolicy {
+    /// How many times the prompt is typed in before giving up.
+    pub send_attempts: usize,
+    /// How long each `agent.send` is given to appear on screen.
+    pub send_render_timeout: Duration,
+    /// How many *re*-presses of Enter before giving up (the first press is not
+    /// a retry, so the loop body runs `enter_attempts + 1` times).
+    pub enter_attempts: usize,
+    /// How long each Enter is given to start the agent. An upper bound, not a
+    /// fixed cost: the wait ends the moment the pane reports `working`.
+    pub enter_settle: Duration,
+    /// How long a screen/status check waits between polls.
+    pub poll_interval: Duration,
+}
 
-/// How many times Enter is pressed before giving up, and how long each press is
-/// given to start the agent.
-const ENTER_ATTEMPTS: usize = 10;
-const ENTER_SETTLE: Duration = Duration::from_millis(1200);
-
-/// How long a screen check waits between polls.
-const POLL_INTERVAL: Duration = Duration::from_millis(200);
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            send_attempts: 5,
+            send_render_timeout: Duration::from_secs(3),
+            enter_attempts: 10,
+            enter_settle: Duration::from_millis(1200),
+            poll_interval: Duration::from_millis(200),
+        }
+    }
+}
 
 /// How much of the prompt's tail identifies it on screen. The input box scrolls
 /// with the cursor, so a long prompt shows its **end** — matching the head
@@ -69,12 +95,24 @@ const PROMPT_MARKER_CHARS: usize = 24;
 pub struct HerdrAgent<T> {
     client: T,
     config: HerdrConfig,
+    retry: RetryPolicy,
 }
 
 impl<T: HerdrTransport> HerdrAgent<T> {
-    /// A new adapter over `client` using `config`.
+    /// A new adapter over `client` using `config` and the production
+    /// [`RetryPolicy`].
     pub fn new(client: T, config: HerdrConfig) -> Self {
-        Self { client, config }
+        Self::with_retry_policy(client, config, RetryPolicy::default())
+    }
+
+    /// As [`new`](Self::new), with an explicit retry policy. Only the
+    /// fake-herdr integration tests pass anything but the default.
+    pub fn with_retry_policy(client: T, config: HerdrConfig, retry: RetryPolicy) -> Self {
+        Self {
+            client,
+            config,
+            retry,
+        }
     }
 
     /// Dispatch a task (F-31/F-37): create a herdr workspace on the worktree,
@@ -208,7 +246,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let mut last_error: Option<HerdrError> = None;
 
         let mut typed = false;
-        for _ in 0..SEND_ATTEMPTS {
+        for _ in 0..self.retry.send_attempts {
             if self.screen_contains(pane_id, &marker).await {
                 typed = true;
                 break;
@@ -227,7 +265,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 last_error = Some(e);
             }
             if self
-                .wait_for(SEND_RENDER_TIMEOUT, || {
+                .wait_for(self.retry.send_render_timeout, || {
                     self.screen_contains(pane_id, &marker)
                 })
                 .await
@@ -252,7 +290,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         if self.started(pane_id, &mut last_error).await? {
             return Ok(());
         }
-        for _ in 0..=ENTER_ATTEMPTS {
+        for _ in 0..=self.retry.enter_attempts {
             if let Err(e) = self
                 .client
                 .call(
@@ -267,13 +305,13 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 tracing::warn!(pane_id, error = %e, "Enter failed; retrying");
                 last_error = Some(e);
             }
-            // ENTER_SETTLE is a *deadline*, not a fixed cost. Sleeping it out
+            // `enter_settle` is a *deadline*, not a fixed cost. Sleeping it out
             // unconditionally meant the press that actually worked was still
             // followed by a full 1.2s, because success was only observed at the
             // top of the next iteration — every successful dispatch paid it.
-            // The give-up path is unchanged: all ENTER_ATTEMPTS + 1 presses
+            // The give-up path is unchanged: all `enter_attempts` + 1 presses
             // still happen, each still gets the full window.
-            let deadline = tokio::time::Instant::now() + ENTER_SETTLE;
+            let deadline = tokio::time::Instant::now() + self.retry.enter_settle;
             loop {
                 if self.started(pane_id, &mut last_error).await? {
                     return Ok(());
@@ -283,11 +321,11 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                     break;
                 }
                 // Cap the poll at what is left of the window, or a settle that
-                // is not a whole number of POLL_INTERVALs would overshoot by up
+                // is not a whole number of poll intervals would overshoot by up
                 // to one interval per attempt — which is what makes the
                 // worst-case-unchanged guarantee above exact rather than
                 // approximate.
-                tokio::time::sleep(POLL_INTERVAL.min(deadline - now)).await;
+                tokio::time::sleep(self.retry.poll_interval.min(deadline - now)).await;
             }
         }
         Err(gave_up(
@@ -628,7 +666,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             if tokio::time::Instant::now() >= deadline {
                 return false;
             }
-            tokio::time::sleep(POLL_INTERVAL).await;
+            tokio::time::sleep(self.retry.poll_interval).await;
         }
     }
 }
@@ -1058,5 +1096,20 @@ mod tests {
             ]
         );
         assert_eq!(env, Some(serde_json::json!({})));
+    }
+
+    /// The retry policy became injectable so the integration tests could
+    /// collapse their waits (#281); this pins the production side of that trade
+    /// so a future edit to the test values cannot quietly retune the real CLI's
+    /// submission behaviour. These are the values verified live against Claude
+    /// Code in #124 — changing one is a deliberate act, not a refactor.
+    #[test]
+    fn default_retry_policy_is_the_production_policy() {
+        let p = RetryPolicy::default();
+        assert_eq!(p.send_attempts, 5);
+        assert_eq!(p.send_render_timeout, Duration::from_secs(3));
+        assert_eq!(p.enter_attempts, 10);
+        assert_eq!(p.enter_settle, Duration::from_millis(1200));
+        assert_eq!(p.poll_interval, Duration::from_millis(200));
     }
 }

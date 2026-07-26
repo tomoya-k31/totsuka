@@ -22,6 +22,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 
+use agent_ide_herdr::agent::RetryPolicy;
 use agent_ide_herdr::error::HerdrError;
 use agent_ide_herdr::server::{Server, TransportFactory};
 use agent_ide_herdr::transport::SocketTransport;
@@ -373,11 +374,27 @@ struct Driver {
     next_id: i64,
 }
 
+/// The fake herdr's CLI has no startup latency of its own — `deaf_sends` /
+/// `deaf_enters` model the race explicitly — so production's settle windows
+/// would be spent entirely in `sleep` here (#281).
+///
+/// The **counts** stay at production values on purpose: the give-up tests
+/// assert that all 5 sends and all 11 Enter presses really happen, so shrinking
+/// them would hollow out the assertions. Only the waits collapse.
+fn fast_retries() -> RetryPolicy {
+    RetryPolicy {
+        send_render_timeout: Duration::from_millis(200),
+        enter_settle: Duration::from_millis(100),
+        poll_interval: Duration::from_millis(2),
+        ..RetryPolicy::default()
+    }
+}
+
 impl Driver {
     fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         Self {
-            server: Server::new(SocketFactory, tx),
+            server: Server::with_retry_policy(SocketFactory, tx, fast_retries()),
             out: rx,
             next_id: 0,
         }
