@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-timestamp: 2026-07-23T00:00:00Z
+timestamp: 2026-07-26T12:00:00Z
 status: draft
 owner: tomoya-k31
 ---
@@ -376,7 +376,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 ### 10.2 バージョニング・互換性
 
 - アプリ本体は semver。**プラグインプロトコルは独立したバージョン**を持ち、manifest で互換範囲を宣言。破壊的変更時はメジャーを上げ、旧プロトコルを1世代サポート。
-- 設定スキーマにバージョンキーを持たせ、起動時マイグレーション(または `config migrate`)を提供。
+- 設定スキーマはバージョンキーを持つ。不一致は起動時検証(`totsuka config validate` / `totsuka run` / `totsuka doctor` が共有する)が検出するだけで、設定を自動で書き換えることはない。前 2 者はエラーで停止し、`doctor` は失敗チェックとして報告して残りの診断を続行する。スキーマは v1 のままで移行すべき差分が無いため、マイグレーションは提供しない。v2 を切る前に決めるべきことは [設定リファレンス](/development/config-reference.md) を参照（日本語版のみ）。
 
 ### 10.3 更新・運用
 

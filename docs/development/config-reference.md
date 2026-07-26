@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: 設定リファレンス（config.toml）
-description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
+description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
-tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks]
-timestamp: 2026-07-25T09:00:00Z
+tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
+timestamp: 2026-07-26T12:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -33,7 +33,7 @@ owner: tomoya-k31
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `version` | int | 1 | 設定スキーマ版（起動時マイグレーション用） |
+| `version` | int | 1 | 設定スキーマ版。不一致は起動時検証でエラーになる（[バージョニング方針](#設定スキーマのバージョニング方針)。自動マイグレーションは無い） |
 | `max_concurrency` | int? | 4 | グローバル同時実行上限（F-40） |
 | `[[repositories]]` | 配列 | — | 対象リポジトリ（下記） |
 | `[plugins.{name}]` | テーブル | — | プラグインのロスター + 共通項目（下記） |
@@ -45,6 +45,37 @@ owner: tomoya-k31
 | `[hooks]` | テーブル | — | エージェント CLI フックイベント受信の設定（下記、#131） |
 | `default_tool` | string? | `"claude"` | グローバル既定の AI ツール名（#196）。workflow / repo が指定しない場合に適用 |
 | `[tools.{name}]` | テーブル | — | AI ツールレジストリ（下記、#196）。組み込み既定 `claude` を上書き・拡張 |
+
+# 設定スキーマのバージョニング方針
+
+現行のスキーマは **v1 のみ**（`CURRENT_SCHEMA_VERSION = 1`。一度も上がっていない）。
+
+`version` が `CURRENT_SCHEMA_VERSION` と一致しない config.toml は起動時検証でエラーになり、
+**totsuka が設定を書き換えることはない**。`config validate` / `run` / `doctor` は同じ検証
+（`Cx::validate_config`）を共有するため 3 つとも同じ不一致を検出するが、扱いは異なる:
+`config validate` と `run` は**エラーで停止**（exit 1）、`doctor` は `config` チェックの
+**失敗として報告**する（exit 3。診断コマンドなので他のチェックは続行する）。
+
+エラーは向きによって案内が逆になる（#276）:
+
+- `version` が新しい → totsuka 側が古い。「そのスキーマ版に対応した totsuka へ更新しろ」
+- `version` が古い → config 側が古い。「config.toml を現行版へ更新し `version` を書き換えろ」
+
+**`totsuka config migrate` は存在しない。** 移行すべき差分がゼロの段階で移行フレームワークだけ先に
+建てても、使われないコードパスが増えるだけで、v2 の移行方式も今は決められないため。
+
+## v2 を切るときに決めること
+
+1. **移行方式** — 起動時自動マイグレーション / 明示コマンド（`config migrate`）/ 手動編集の案内、のいずれか。
+   state.db 側は #275 で「`run` だけが移行を適用し、他の入口は `SchemaOutdated` で止める」を選んでいる
+   （[ADR-0017](/decisions/adr-0017-state-db-compatibility-policy.md)）。config でも同じ線を採るかを先例として判断する。
+2. **`version` 省略時のデフォルト** — 現在 `#[serde(default)]` は `CURRENT_SCHEMA_VERSION` を返す。
+   つまり **`version` を書いていない config.toml は常に「現行版」として読まれる**。
+   v1 時代に書かれた `version` 無しの config.toml は、totsuka が v2 になった瞬間に v2 の設定として
+   黙って解釈され、バージョンガードを素通りする。v2 を切る時点で既定値を 1 に固定するか、
+   `version` を必須キーにするかを決める必要がある。
+
+この 2 点を決めるまで `config migrate` は実装しない。
 
 # `[[repositories]]`
 
