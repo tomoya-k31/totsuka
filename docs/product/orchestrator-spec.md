@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-timestamp: 2026-07-23T00:00:00Z
+timestamp: 2026-07-26T12:00:00Z
 status: draft
 owner: tomoya-k31
 ---
@@ -373,7 +373,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 ### 10.2 Versioning / compatibility
 
 - The app itself uses semver. **The plugin protocol is versioned independently**; manifests declare the compatible range. Breaking changes bump the major version, and the previous protocol is supported for one generation.
-- The config schema carries a version key; migration happens at startup (or via `config migrate`).
+- The config schema carries a version key. A mismatch is an error raised by startup validation (`totsuka config validate`, and the same check on `totsuka run`); the config is never rewritten automatically. No migration is offered — the schema is still at v1, so there is nothing to migrate. See [config reference](/development/config-reference.md) for what has to be decided before v2 can be cut.
 
 ### 10.3 Updates / operations
 

@@ -17,11 +17,20 @@ use crate::tool::{ToolKind, ToolProfile};
 /// A single static-validation failure. `Display` gives "cause + next action".
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ValidationError {
-    /// Config schema version is newer/older than supported.
+    /// The config declares a schema this binary predates — the operator is
+    /// running an old totsuka against a config written for a newer one (#276).
     #[error(
-        "unsupported config schema version {found} (supported: {expected}) → upgrade totsuka or run `totsuka config migrate`"
+        "config schema version {found} is newer than this totsuka supports (v{expected}) → upgrade totsuka to a version that supports config schema v{found}"
     )]
-    UnsupportedVersion { found: u32, expected: u32 },
+    SchemaTooNew { found: u32, expected: u32 },
+
+    /// The config predates this binary. There is no automatic migration and
+    /// deliberately no `config migrate` command — see the versioning policy in
+    /// `docs/development/config-reference.md` (#276).
+    #[error(
+        "config schema version {found} is older than this totsuka requires (v{expected}) → update config.toml to schema v{expected} (see docs/development/config-reference.md) and set `version = {expected}`"
+    )]
+    SchemaOutdated { found: u32, expected: u32 },
 
     /// A repository path does not exist on disk.
     #[error(
@@ -105,11 +114,20 @@ where
 {
     let mut errors = Vec::new();
 
-    if cfg.version != CURRENT_SCHEMA_VERSION {
-        errors.push(ValidationError::UnsupportedVersion {
+    // Both directions are a hard stop, but the action they call for is the
+    // opposite one — upgrade the binary vs. edit the config — so they are
+    // separate variants (#276), mirroring `StateError::SchemaTooNew` /
+    // `SchemaOutdated` on the state.db side (#275).
+    match cfg.version.cmp(&CURRENT_SCHEMA_VERSION) {
+        std::cmp::Ordering::Greater => errors.push(ValidationError::SchemaTooNew {
             found: cfg.version,
             expected: CURRENT_SCHEMA_VERSION,
-        });
+        }),
+        std::cmp::Ordering::Less => errors.push(ValidationError::SchemaOutdated {
+            found: cfg.version,
+            expected: CURRENT_SCHEMA_VERSION,
+        }),
+        std::cmp::Ordering::Equal => {}
     }
 
     // Global worktree template (F-22).
@@ -570,15 +588,31 @@ worktree_location = "{{repo}}/../.worktrees/{{bogus}}"
         )));
     }
 
+    /// A config from the future and a config from the past both stop the run,
+    /// but the fix is the opposite one each way, so the messages must point in
+    /// opposite directions (#276) — and neither may name `config migrate`,
+    /// which does not exist.
     #[test]
-    fn unsupported_version_is_reported() {
-        let cfg = RootConfig::from_toml_str("version = 999").unwrap();
-        let errors = validate_static(&cfg, &env_from(&[]));
-        assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, ValidationError::UnsupportedVersion { found: 999, .. }))
-        );
+    fn a_version_mismatch_points_at_the_side_that_has_to_change() {
+        let too_new = RootConfig::from_toml_str("version = 999").unwrap();
+        let errors = validate_static(&too_new, &env_from(&[]));
+        let err = errors
+            .iter()
+            .find(|e| matches!(e, ValidationError::SchemaTooNew { found: 999, .. }))
+            .unwrap_or_else(|| panic!("no SchemaTooNew in {errors:?}"));
+        let text = err.to_string();
+        assert!(text.contains("upgrade totsuka"), "{text}");
+        assert!(!text.contains("config migrate"), "{text}");
+
+        let outdated = RootConfig::from_toml_str("version = 0").unwrap();
+        let errors = validate_static(&outdated, &env_from(&[]));
+        let err = errors
+            .iter()
+            .find(|e| matches!(e, ValidationError::SchemaOutdated { found: 0, .. }))
+            .unwrap_or_else(|| panic!("no SchemaOutdated in {errors:?}"));
+        let text = err.to_string();
+        assert!(text.contains("update config.toml"), "{text}");
+        assert!(!text.contains("config migrate"), "{text}");
     }
 
     #[test]
