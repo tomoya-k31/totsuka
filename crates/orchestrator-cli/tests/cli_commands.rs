@@ -4,6 +4,7 @@
 //! Covers the acceptance criteria: help/completion presence, `status` stale
 //! reporting, cause+action error messages, and jq-parseable `--json` output.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Arc;
@@ -727,6 +728,189 @@ fn seed_manifest(base: &Path, name: &str, capabilities: &str) {
         ),
     )
     .unwrap();
+}
+
+/// Install a fake `op` on PATH and return `(bin_dir, read_marker)`.
+///
+/// `--version` succeeds, `whoami` reports the session state `signed_in` asks
+/// for, and **`read` touches `read_marker`** — which is what lets a test
+/// assert that doctor never resolved anything, rather than merely that it
+/// did not hang.
+fn fake_op(base: &Path, signed_in: bool) -> (PathBuf, PathBuf) {
+    let bin = base.join("fakebin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let marker = base.join("op-read-was-called");
+    let whoami_exit = if signed_in { 0 } else { 1 };
+    let script = format!(
+        "#!/bin/sh\n\
+         case \"$1\" in\n\
+         --version) echo 2.30.0; exit 0 ;;\n\
+         whoami) exit {whoami_exit} ;;\n\
+         read) : > '{marker}'; echo secret-value; exit 0 ;;\n\
+         *) exit 1 ;;\n\
+         esac\n",
+        marker = marker.display()
+    );
+    let op = bin.join("op");
+    std::fs::write(&op, script).unwrap();
+    let mut perms = std::fs::metadata(&op).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&op, perms).unwrap();
+    (bin, marker)
+}
+
+/// A config whose plugin config holds an `op://` reference, with the plugin
+/// installed so `plugin_spec` gets far enough to resolve it.
+fn seed_op_plugin(base: &Path) {
+    seed_empty_config(
+        base,
+        "[plugins.herdr]\nenabled = true\nkind = \"agent_ide\"\n",
+    );
+    seed_manifest(base, "herdr", "pane_control = false\n");
+    let plugin_cfg = base.join("cfg/totsuka/plugins");
+    std::fs::create_dir_all(&plugin_cfg).unwrap();
+    std::fs::write(
+        plugin_cfg.join("herdr.toml"),
+        "token = \"op://Dev/Herdr/token\"\n",
+    )
+    .unwrap();
+}
+
+fn path_with(bin: &Path) -> String {
+    format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+/// #289: `doctor` promises to stay non-interactive (ADR-0006), but
+/// `check_plugins` resolved `op://` through `plugin_spec` before the `llm` /
+/// `hook-token` checks ever announced they would not. With no 1Password
+/// session, `op read` prompts — or hangs forever when nobody is watching.
+///
+/// The marker file is the whole point: it proves `op read` was never spawned,
+/// which "doctor exited" alone would not.
+#[test]
+fn doctor_does_not_resolve_op_references_without_a_session() {
+    let base = scratch("doctor_op_no_session");
+    seed_op_plugin(&base);
+    let (bin, marker) = fake_op(&base, false);
+
+    let out = run_env(&base, &["doctor", "--json"], &[("PATH", &path_with(&bin))]);
+
+    assert!(
+        !marker.exists(),
+        "doctor ran `op read` without a session — the ADR-0006 promise is broken"
+    );
+
+    // The session probe says why, as a warning (a missing session is not a
+    // broken machine).
+    let session = doctor_check(&out, "1password-session").expect("1password-session check");
+    assert_eq!(session["warning"], true, "{session}");
+
+    // The plugin probe is reported as *skipped*, not passed and not failed:
+    // "we did not look" must not read as "it is fine".
+    let plugin = doctor_check(&out, "plugin:herdr").expect("plugin:herdr check");
+    assert_eq!(plugin["skipped"], true, "{plugin}");
+    assert_eq!(plugin["ok"], true, "a skip is not a failure: {plugin}");
+    assert!(
+        plugin["action"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("op signin"),
+        "the skip must say how to make it runnable: {plugin}"
+    );
+}
+
+/// With a live session `op read` cannot prompt, so the probes run exactly as
+/// they did before — the fix must not turn 1Password users into permanently
+/// half-diagnosed ones.
+#[test]
+fn doctor_probes_normally_when_a_session_is_active() {
+    let base = scratch("doctor_op_session");
+    seed_op_plugin(&base);
+    let (bin, _marker) = fake_op(&base, true);
+
+    let out = run_env(&base, &["doctor", "--json"], &[("PATH", &path_with(&bin))]);
+
+    let session = doctor_check(&out, "1password-session").expect("1password-session check");
+    assert_eq!(session["ok"], true, "{session}");
+    assert!(session["warning"].is_null(), "{session}");
+
+    // Probed for real: the fake plugin has no runnable binary, so this fails —
+    // the point is that it was *attempted*, not skipped.
+    let plugin = doctor_check(&out, "plugin:herdr").expect("plugin:herdr check");
+    assert!(
+        plugin["skipped"].is_null(),
+        "a live session must not skip the probe: {plugin}"
+    );
+}
+
+/// The gate keys off the 1Password *session*, not off `op://` being present
+/// anywhere: a plugin that needs no secret must still be probed while another
+/// plugin's reference is unresolvable.
+#[test]
+fn a_plugin_that_needs_no_secret_is_still_probed() {
+    let base = scratch("doctor_op_mixed");
+    seed_empty_config(
+        &base,
+        "[plugins.herdr]\nenabled = true\nkind = \"agent_ide\"\n\
+         [plugins.orca]\nenabled = true\nkind = \"agent_ide\"\n",
+    );
+    seed_manifest(&base, "herdr", "pane_control = false\n");
+    seed_manifest(&base, "orca", "pane_control = false\n");
+    let plugin_cfg = base.join("cfg/totsuka/plugins");
+    std::fs::create_dir_all(&plugin_cfg).unwrap();
+    // Only herdr needs 1Password.
+    std::fs::write(
+        plugin_cfg.join("herdr.toml"),
+        "token = \"op://Dev/Herdr/token\"\n",
+    )
+    .unwrap();
+    std::fs::write(plugin_cfg.join("orca.toml"), "token = \"plain\"\n").unwrap();
+    let (bin, marker) = fake_op(&base, false);
+
+    let out = run_env(&base, &["doctor", "--json"], &[("PATH", &path_with(&bin))]);
+
+    assert!(!marker.exists(), "doctor ran `op read` without a session");
+    assert_eq!(
+        doctor_check(&out, "plugin:herdr").expect("plugin:herdr check")["skipped"],
+        true
+    );
+    assert!(
+        doctor_check(&out, "plugin:orca").expect("plugin:orca check")["skipped"].is_null(),
+        "orca needs no secret and must still be probed"
+    );
+}
+
+/// The 1Password probes have to run *before* anything that resolves, or their
+/// verdict cannot gate it. This pins the ordering itself, since a later
+/// refactor could reinstate the bug without changing any single check.
+#[test]
+fn the_onepassword_probes_run_before_the_checks_they_gate() {
+    let base = scratch("doctor_op_order");
+    seed_op_plugin(&base);
+    let (bin, _) = fake_op(&base, true);
+
+    let out = run_env(&base, &["doctor", "--json"], &[("PATH", &path_with(&bin))]);
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let names: Vec<&str> = doc
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    let pos = |n: &str| names.iter().position(|x| *x == n);
+    let session = pos("1password-session").expect("1password-session present");
+    for gated in ["plugin:herdr", "hook-socket", "llm"] {
+        if let Some(i) = pos(gated) {
+            assert!(
+                session < i,
+                "1password-session must precede {gated}: {names:?}"
+            );
+        }
+    }
 }
 
 /// #176: `--debug` is a global flag, so it must have an effect on every

@@ -4,7 +4,7 @@ title: orchestrator-cli クレート
 description: totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（init / run / status / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [rust, crate, cli, plugin, run, status, doctor, hooks, security]
-timestamp: 2026-07-26T21:00:00+09:00
+timestamp: 2026-07-26T22:30:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -26,6 +26,8 @@ owner: tomoya-k31
 - `logs [-f] [--task <id>]`（#64): JSON Lines ログ（§5.2）の整形表示・追尾（日次ローテーション追随）・タスク別フィルタ。
 - `doctor [--json] [--online]`（#64/#141/#267）: git / config / state DB / **worktree 配置テンプレート（`worktree-location`。明示された `[worktree].location` と `[[repositories]].worktree_location` の `${ENV}` 展開可否のみを検査。既定値は `Paths` 由来で常に解決するのでスキップ。worktree 作成はディスパッチ時なので、未設定変数を放置すると run は正常起動したまま全タスクが `fail_dispatch` する — `check_spool` と同型の事前検出）** / **hooks（core の `hooks::install` によるアセット書き出し + フック系プローブ一式、後述）** / プラグイン（インストール+ライブ疎通 probe）/ **LLM キー（`llm` = 参照の解決可否のみ。`--online` 時のみ `llm-online` = プロバイダが鍵を受理するかの実測。後述）** / 孤児 worktree（F-24、TTY では対話確認つき掃除提案）/ **孤児 pane（#211、[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)。`pane_control` 宣言の agent_ide プラグインを launch → protocol 0.2.2 `session/list` → shutdown で列挙し、`classify_orphan_panes`（純関数・ユニットテスト済み）が label の **source task id**（プロトコル `Task.id` = `source_task_id`、DB 行 id ではない）を文字列照合で DB と突き合わせ — 候補 = 「DB 未知」または「一致する全タスクが終端かつ live worktree なし」、非終端と保持中 worktree の pane は除外（複数一致は保守側に倒す）。TTY では 1 件ずつ `session/release`（列挙した label を `expect_label` の同一性ガードに使用）による解放を提案、`--json`/非 TTY は `panes` チェックの fail で検出のみ報告。対象プラグインが無い構成ではチェック自体を出さず、列挙失敗は warning に留める）**。失敗チェックは「原因 + 次のアクション」で報告し **exit 3**（問題検出。doctor 自体の実行失敗 = 1 と区別、#177）で終了。`doctor` は `run` と同じ書き出しを実行するため、フル run なしでフック一式をマテリアライズする手段も兼ねる。
 - `completion <shell>`: clap_complete によるシェル補完生成（zsh / bash / fish 等）。
+
+**doctor の非対話ゲート（#289、[ADR-0019](/decisions/adr-0019-doctor-onepassword-gating.md)）**: `check_onepassword` が**最初に**走り、`op whoami`（プロンプトを出さない）の結果を `OpReadiness`（`NotUsed` / `Ready` / `WouldPrompt`）として後続へ渡す。`WouldPrompt`（`op` が無い・セッション無し）のとき、`op://` の実解決を要する probe — `plugin:{name}`（`plugin_spec` が `plugins/{name}.toml` の全文字列 leaf と task_source の `[llm].api_key_ref` を解決する）、`hook-socket`（`auth_token_ref`）、`panes`（プラグイン起動）— は**実行せず `skipped` として報告**する。判定は**プラグイン単位**（1 つのプラグインの `op://` が他を巻き添えにしない）で、kind はマニフェストではなく config のロスターから読む（プラグインに触れる前に決める必要があるため）。`Check` の 4 つ目の重大度 `skipped` は `ok: true`（exit code に影響しない）かつ `skip_serializing_if` なので `--json` は後方互換。**セッションがあれば従来どおり全て走る。**
 
 **外部由来テキストの無害化（#280）**: `task list` / `task show` / `status` / `logs` の **human 出力**は、第三者が内容を決められるフィールド（`title` / `body` / `author` / `url` / `source_task_id` / `branch` / `worktree_path` / `session_id` / ログの `message`）を `common::safe()` に通してから印字する。制御文字を**除去ではなく可視のエスケープへ**置き換えるため、`ESC[2J` による画面消去も `ESC[1A` による既印字行の上書き（別タスクの state の偽装）も OSC 8 によるリンク偽装も成立しない。**`--json` は通さない** — `serde_json` が既に `\u00xx` へエスケープしており、重ねると二重エスケープで機械可読値が壊れる。`TaskDetail` / `TaskRow` の構築は JSON 分岐より前にあるので、無害化は**分岐より後の print サイトだけ**に置く（構造体側でやると `--json` を巻き込む）。詳細は [端末出力の信頼境界](/security/terminal-output-sanitization.md)。
 
