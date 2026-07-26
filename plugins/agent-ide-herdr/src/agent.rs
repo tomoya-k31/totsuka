@@ -247,16 +247,12 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             ));
         }
 
+        // The prompt may already have been acted on (a resumed pane, a CLI that
+        // auto-submits), so check once before pressing anything.
+        if self.started(pane_id, &mut last_error).await? {
+            return Ok(());
+        }
         for _ in 0..=ENTER_ATTEMPTS {
-            match self.agent_is_running(pane_id).await {
-                Ok(true) => return Ok(()),
-                Ok(false) => {}
-                Err(e) if e.is_missing() => return Err(e),
-                Err(e) => {
-                    tracing::warn!(pane_id, error = %e, "could not read the pane's status; retrying");
-                    last_error = Some(e);
-                }
-            }
             if let Err(e) = self
                 .client
                 .call(
@@ -271,12 +267,46 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 tracing::warn!(pane_id, error = %e, "Enter failed; retrying");
                 last_error = Some(e);
             }
-            tokio::time::sleep(ENTER_SETTLE).await;
+            // ENTER_SETTLE is a *deadline*, not a fixed cost. Sleeping it out
+            // unconditionally meant the press that actually worked was still
+            // followed by a full 1.2s, because success was only observed at the
+            // top of the next iteration — every successful dispatch paid it.
+            // The give-up path is unchanged: all ENTER_ATTEMPTS + 1 presses
+            // still happen, each still gets the full window.
+            let deadline = tokio::time::Instant::now() + ENTER_SETTLE;
+            loop {
+                if self.started(pane_id, &mut last_error).await? {
+                    return Ok(());
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+                tokio::time::sleep(POLL_INTERVAL).await;
+            }
         }
         Err(gave_up(
             format!("the agent in pane {pane_id} never started after the prompt was submitted"),
             last_error,
         ))
+    }
+
+    /// Whether the agent has started, folding a transient read failure into
+    /// `last_error` and re-raising only a pane that is truly gone — the same
+    /// three-way handling the Enter loop used to do inline.
+    async fn started(
+        &self,
+        pane_id: &str,
+        last_error: &mut Option<HerdrError>,
+    ) -> Result<bool, HerdrError> {
+        match self.agent_is_running(pane_id).await {
+            Ok(v) => Ok(v),
+            Err(e) if e.is_missing() => Err(e),
+            Err(e) => {
+                tracing::warn!(pane_id, error = %e, "could not read the pane's status; retrying");
+                *last_error = Some(e);
+                Ok(false)
+            }
+        }
     }
 
     /// Whether the agent has acted on the prompt.
