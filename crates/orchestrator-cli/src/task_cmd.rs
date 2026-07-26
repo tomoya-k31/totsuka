@@ -250,9 +250,11 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
         println!("  url:       {}", safe(url));
     }
     if let Some(path) = &detail.worktree_path {
-        // `branch` is already control-free (`render_branch` folds controls to
-        // `-`) and the path derives from it, but both are ultimately fed by
-        // the external `source_task_id`, so neither is trusted here.
+        // Both are fed by the external `source_task_id`. `render_branch`
+        // folds `char::is_control()` to `-` on the way in, but that is `Cc`
+        // only — a bidi override is `Cf` and goes straight through it, and
+        // the path is built from the branch. So neither is sanitised at the
+        // source, and this call is load-bearing rather than belt-and-braces.
         println!(
             "  worktree:  {} [{}]",
             safe(path),

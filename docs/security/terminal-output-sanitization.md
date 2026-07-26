@@ -92,8 +92,13 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 - **`totsuka run` 自身の stderr ログ層** — `orchestrator-core/src/logging/layer.rs` は
   フィールド値を生で追記し、`run` は `title` をそこへ出す。`--debug` は全コマンドでこの層を通る。
   CLI クレートの外なので #280 の対象外とした
-- `main.rs` の `error:` 行、`focus` の `reason`、`doctor` の detail — git の stderr やプラグインの
-  エラー文が乗る。外部由来度は低いが無検査
+- **`doctor` の孤児 pane / 孤児 worktree の報告** — `doctor_cmd.rs` の pane label
+  （`session.label` は外部由来の `source_task_id` を含む）と worktree パスを無検査で印字する。
+  `task show` / `status` と**同じ外部由来度**なので、ここは実質的な穴。#280 の完了条件は
+  4 コマンド（`task show` / `task list` / `status` / `logs`）だったため対象外としたが、
+  別 issue で塞ぐべき
+- `main.rs` の `error:` 行、`focus` の `reason`、`doctor` のその他 detail — git の stderr や
+  プラグインのエラー文が乗る。外部由来度は低いが無検査
 
 # 検証
 
