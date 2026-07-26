@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-timestamp: 2026-07-26T18:00:00+09:00
+timestamp: 2026-07-26T19:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -197,6 +197,12 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 この ALTER は **`MIGRATIONS` に載せず `StateDb::init` のブートストラップ段階**（適用ループの前）で条件付きに行う。`schema_migrations` は `MIGRATIONS` の各エントリを**採番している側**のテーブルなので、ALTER を仮に version N として書くと N 未満の INSERT が ALTER より先に走り、それらの INSERT が書く列がまだ無い（例: v5 の DB を v8 まで一気に上げると `no such column: applied_by`）。台帳テーブル自身をその台帳のバージョン番号で管理すると順序が循環する。ブートストラップに置くことで、適用ループ内の INSERT は常に `applied_by` を書ける。
 
 バックアップ名にスキーマ版数を入れる（`state.db.v5.bak`）のは、固定名 `.bak` だと **アップグレードのたびに上書きされ、2 世代分を一気に上げたとき中間地点に戻れない**ため。またディスク上の `.bak` がどのスキーマ版か外から分からない問題も解消する。旧命名 `state.db.bak` は削除せず残置する。
+
+**適用するのは `totsuka run` だけ**（#275、[ADR-0017](/decisions/adr-0017-state-db-compatibility-policy.md)）。`StateDb::open` は従来どおり適用するが、CLI の読み取り系（`status` / `task` / `focus` / `doctor` が通る `Cx::open_state_db`）は **`StateDb::open_no_migrate`** を使う。これらは `run.lock` を取らないため、適用契機をそこに残すとバージョンアップ直後に `run` と `status` を同時に叩いたとき**単一ロック下でないスキーマ変更**が起きうる（`busy_timeout` はワークスペース全体で未設定）。非適用オープンはスキーマ・台帳への書き込みを一切行わず、SQLite の `CREATE` フラグも落としてあるので `state.db` が無いときに空 DB を作ることもない（最終接続クローズ時の WAL チェックポイントは、どの接続でも起きるコミット済みページの畳み込みなので別）。未適用のスキーマは `SchemaOutdated` で `totsuka run` を案内する。
+
+**対応範囲より新しい DB は両入口で起動拒否する**（`SchemaTooNew`）。従来 `if (current as usize) < MIGRATIONS.len()` は `current > len` のとき単に false になり `init` が `Ok` を返していたため、**知らないスキーマのまま動き続けていた**（追記のみの差分ならエラーすら出ず静かに食い違う）。エラー文は対応範囲の 1 つ先（`supported + 1`）を導入したアプリ版数を `applied_by` から引いて名指す — それが「最低これに上げろ」の答えだから。列を持たない旧台帳では `applied_by_of` が `None` に倒れ、案内句が落ちるだけで `no such column` にはならない。**互換判定の権威はスキーマ版数**で、アプリ版数を権威にするとスキーマ不変のパッチリリース間でも弾いてしまう。なお**ガードのコードを持たない 0.1.4 以前へのダウングレードは救えない**（→ [アップグレードとロールバック](/releases/upgrade-and-rollback.md)）。
+
+`schema_version() -> (i64, Option<String>)` はスキーマ版数と `applied_by` を返す読み取り API で、`doctor` の `state-db` 行が使う。
 
 [会話継続](/glossary/conversation-continuity.md)（E-09）用のストア API `find_by_thread_key` と `tasks.thread_key` 列は **#242/#264 で撤去した**（v7）。「この 2 つのタスクは同じ会話だ」と言うための相関キーだったが、`Task.id` 自体が会話を指すようになり、追いメンションは**同じタスクの別メッセージ**になったため、相関すべき「先行タスク」がそもそも存在しない。resume 元は `latest_session(task_id)` で自明に決まる。
 

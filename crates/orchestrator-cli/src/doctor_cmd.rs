@@ -7,6 +7,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use orchestrator_core::adapters::StateError;
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::{OpenAiConfig, OpenAiRouter};
 use orchestrator_core::adapters::plugin_host;
@@ -133,18 +134,39 @@ pub fn run(cx: &Cx, json: bool, online: bool) -> Result<(), CliError> {
     // State DB.
     let db = match cx.open_state_db() {
         Ok(db) => {
+            // Report the schema version and who applied it (#275): after an
+            // upgrade or a rollback, "which schema is this DB on" is the
+            // first thing worth knowing, and it is otherwise only visible by
+            // running sqlite3 by hand.
+            let schema = match db.schema_version() {
+                Ok((version, applied_by)) => format!(
+                    " — schema v{version} (applied by {})",
+                    applied_by.as_deref().unwrap_or("unknown")
+                ),
+                Err(e) => format!(" — schema version unreadable: {e}"),
+            };
             checks.push(Check::ok(
                 "state-db",
-                format!("{} opens", cx.state_db_path().display()),
+                format!("{} opens{schema}", cx.state_db_path().display()),
             ));
             Some(db)
         }
         Err(e) => {
-            checks.push(Check::fail(
-                "state-db",
-                e.to_string(),
-                "run `totsuka run` once to create it",
-            ));
+            let schema_mismatch = e.downcast_ref::<StateError>().is_some_and(|s| {
+                matches!(
+                    s,
+                    StateError::SchemaTooNew { .. } | StateError::SchemaOutdated { .. }
+                )
+            });
+            let msg = e.to_string();
+            // The schema errors already carry their own `→ <action>` clause
+            // (ADR-0012). Split it back out instead of appending a second
+            // hint, which would render as two arrows on one line.
+            let (detail, action) = match (schema_mismatch, msg.rsplit_once(" → ")) {
+                (true, Some((cause, action))) => (cause.to_string(), action.to_string()),
+                _ => (msg, "run `totsuka run` once to create it".to_string()),
+            };
+            checks.push(Check::fail("state-db", detail, action));
             None
         }
     };

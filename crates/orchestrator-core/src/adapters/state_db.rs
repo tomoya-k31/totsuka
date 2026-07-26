@@ -14,12 +14,17 @@
 //! - `schema_migrations.applied_by` records the totsuka version that applied
 //!   each row (#275). It is display/diagnostic only — schema version, not app
 //!   version, is what compatibility is judged on.
+//! - Only [`StateDb::open`] migrates; read-only commands use
+//!   [`StateDb::open_no_migrate`] so schema changes happen exclusively under
+//!   the `run.lock` that `totsuka run` holds (#275). A DB newer than this
+//!   binary is refused at both entry points; forward compatibility is not
+//!   offered, and the guard can only help between releases that have it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
 
 use crate::adapters::clock::SystemClock;
 use crate::domain::state::{InvalidTransition, TaskEvent, TaskState, UnknownState, transition};
@@ -275,6 +280,37 @@ pub enum StateError {
     /// No task with the given id.
     #[error("task not found: {0}")]
     NotFound(i64),
+    /// The DB's schema is newer than this binary understands — a downgrade
+    /// (#275). Refusing beats running against a schema we cannot reason
+    /// about: a purely additive version difference would otherwise not even
+    /// raise an error, it would just quietly disagree.
+    #[error(
+        "state.db のスキーマバージョン v{found} は、この totsuka {app}（対応 v{supported}）\
+         では扱えません{introduced_by} → totsuka を更新してください"
+    )]
+    SchemaTooNew {
+        /// Schema version found in the ledger.
+        found: i64,
+        /// Highest version this binary knows how to apply.
+        supported: i64,
+        /// This binary's version, for the operator to compare against.
+        app: String,
+        /// Pre-rendered `。v{n} を導入したのは {version} です` clause, empty
+        /// when the ledger has no `applied_by` for that version.
+        introduced_by: String,
+    },
+    /// The DB's schema predates this binary and the caller opened it through
+    /// an entry point that does not migrate (#275).
+    #[error(
+        "state.db のスキーマは v{found}、この totsuka は v{expected} を必要とします \
+         → `totsuka run` を一度実行してマイグレーションを適用してください"
+    )]
+    SchemaOutdated {
+        /// Schema version found in the ledger.
+        found: i64,
+        /// Version this binary needs.
+        expected: i64,
+    },
 }
 
 /// A task to ingest (F-01). Starts life in [`TaskState::Queued`].
@@ -483,14 +519,63 @@ const TASK_MESSAGE_COLUMNS: &str = "id, task_id, message_key, author, body, url,
 /// Called from bootstrap, not from `MIGRATIONS` — see the comment at the call
 /// site for why the ledger table cannot be versioned by its own ledger.
 fn ensure_applied_by_column(conn: &Connection) -> Result<(), StateError> {
+    if !has_applied_by_column(conn)? {
+        conn.execute_batch("ALTER TABLE schema_migrations ADD COLUMN applied_by TEXT;")?;
+    }
+    Ok(())
+}
+
+/// The totsuka version that applied schema `version`, if the ledger records
+/// one (#275).
+///
+/// Returns `None` both when no such row exists and when the row's
+/// `applied_by` is NULL — and, crucially, when the ledger has no `applied_by`
+/// column at all. That last case is why this tolerates a missing column
+/// rather than propagating: it runs inside the "DB is too new" error path,
+/// where failing to read a *diagnostic* must not replace an actionable
+/// message with `no such column`.
+fn applied_by_of(conn: &Connection, version: i64) -> Result<Option<String>, StateError> {
+    if !has_applied_by_column(conn)? {
+        return Ok(None);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT applied_by FROM schema_migrations WHERE version = ?1",
+            params![version],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+/// Highest applied schema version, or 0 when the ledger table does not exist
+/// yet (#275) — the non-migrating open never creates it.
+fn current_schema_version(conn: &Connection) -> Result<i64, StateError> {
+    let has_ledger = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !has_ledger {
+        return Ok(0);
+    }
+    Ok(conn.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
+/// Whether `schema_migrations` already has the `applied_by` column (#275).
+fn has_applied_by_column(conn: &Connection) -> Result<bool, StateError> {
     let mut stmt = conn.prepare("PRAGMA table_info(schema_migrations)")?;
     let names = stmt
         .query_map([], |r| r.get::<_, String>(1))?
         .collect::<Result<Vec<String>, _>>()?;
-    if !names.iter().any(|n| n == "applied_by") {
-        conn.execute_batch("ALTER TABLE schema_migrations ADD COLUMN applied_by TEXT;")?;
-    }
-    Ok(())
+    Ok(names.iter().any(|n| n == "applied_by"))
 }
 
 /// The SQLite state database.
@@ -516,7 +601,50 @@ impl StateDb {
         }
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        Self::init(conn, Some((path.to_path_buf(), preexisting)), clock)
+        Self::init(conn, Some((path.to_path_buf(), preexisting)), clock, true)
+    }
+
+    /// Open a file-backed state DB **without** applying migrations (#275).
+    ///
+    /// Every read-only command goes through here so that schema changes only
+    /// ever happen under `run.lock`, which only `totsuka run` holds. Before
+    /// this existed, `status` and `run` racing right after an upgrade could
+    /// both start migrating the same file with no lock between them.
+    ///
+    /// Makes no schema or ledger write of its own — not even the
+    /// `applied_by` bootstrap ALTER, and it never creates the file. (SQLite
+    /// may still checkpoint the WAL when the last connection closes, as it
+    /// does for any connection; that folds already-committed pages in and
+    /// changes no logical content.)
+    ///
+    /// Fails with [`StateError::SchemaOutdated`] if migrations are pending,
+    /// and (like [`open`](Self::open)) with [`StateError::SchemaTooNew`] if
+    /// the DB is from a newer totsuka.
+    pub fn open_no_migrate(path: &Path) -> Result<Self, StateError> {
+        Self::open_no_migrate_with_clock(path, Arc::new(SystemClock))
+    }
+
+    /// [`open_no_migrate`](Self::open_no_migrate) with an injected [`Clock`]
+    /// (#174).
+    pub fn open_no_migrate_with_clock(
+        path: &Path,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, StateError> {
+        // Deliberately not `Connection::open`: its default flags include
+        // `CREATE`, which would turn "no state.db yet" into a silently
+        // created empty one. Read-write (the caller may still `task cancel`),
+        // just never conjuring the file.
+        //
+        // No `journal_mode` pragma either — WAL is persistent in the file, so
+        // a DB totsuka created already has it, and issuing the pragma on a
+        // non-WAL file would be a write on a path that promises none.
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_URI
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        Self::init(conn, None, clock, false)
     }
 
     /// Open an ephemeral in-memory DB (tests).
@@ -527,37 +655,82 @@ impl StateDb {
     /// [`open_in_memory`](Self::open_in_memory) with an injected [`Clock`]
     /// (#174).
     pub fn open_in_memory_with_clock(clock: Arc<dyn Clock>) -> Result<Self, StateError> {
-        Self::init(Connection::open_in_memory()?, None, clock)
+        Self::init(Connection::open_in_memory()?, None, clock, true)
     }
 
-    /// Shared init: enable FKs, run migrations (with backup if pending).
-    fn init(
-        mut conn: Connection,
-        backup: Option<(PathBuf, bool)>,
-        clock: Arc<dyn Clock>,
-    ) -> Result<Self, StateError> {
-        // rusqlite defaults foreign_keys OFF; the schema declares FKs.
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS schema_migrations (
-                version    INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL,
-                applied_by TEXT
-            );",
-        )?;
-        // Widen a ledger created before `applied_by` existed. This has to
-        // happen here, in bootstrap, *before* the apply loop — never as a
-        // `MIGRATIONS` entry. `schema_migrations` is the table that versions
-        // those entries, so an ALTER expressed as version N would run after
-        // the INSERT of every version below N, and those INSERTs write the
-        // column: upgrading a v5 DB straight to v8 would fail with
-        // `no such column: applied_by`. Bootstrapping it breaks the cycle.
-        ensure_applied_by_column(&conn)?;
-        let current: i64 = conn.query_row(
+    /// The DB's schema version and the totsuka version that applied it
+    /// (#275). `None` for the second element means the ledger predates
+    /// `applied_by` — "unknown", not "this binary".
+    pub fn schema_version(&self) -> Result<(i64, Option<String>), StateError> {
+        let version: i64 = self.conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
             [],
             |r| r.get(0),
         )?;
+        Ok((version, applied_by_of(&self.conn, version)?))
+    }
+
+    /// Shared init: enable FKs, check schema compatibility, and — when
+    /// `allow_migrate` — run pending migrations (with backup first).
+    ///
+    /// `allow_migrate` is false for [`open_no_migrate`](Self::open_no_migrate),
+    /// which must not write to the DB at all.
+    fn init(
+        mut conn: Connection,
+        backup: Option<(PathBuf, bool)>,
+        clock: Arc<dyn Clock>,
+        allow_migrate: bool,
+    ) -> Result<Self, StateError> {
+        // rusqlite defaults foreign_keys OFF; the schema declares FKs.
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        if allow_migrate {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version    INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL,
+                    applied_by TEXT
+                );",
+            )?;
+            // Widen a ledger created before `applied_by` existed. This has to
+            // happen here, in bootstrap, *before* the apply loop — never as a
+            // `MIGRATIONS` entry. `schema_migrations` is the table that
+            // versions those entries, so an ALTER expressed as version N
+            // would run after the INSERT of every version below N, and those
+            // INSERTs write the column: upgrading a v5 DB straight to v8
+            // would fail with `no such column: applied_by`. Bootstrapping it
+            // breaks the cycle.
+            ensure_applied_by_column(&conn)?;
+        }
+        // Tolerant of a missing ledger: the non-migrating path never creates
+        // it, and "no ledger" means version 0 (which then reports as
+        // outdated) rather than `no such table`.
+        let current = current_schema_version(&conn)?;
+
+        // Compatibility is judged on the *schema* version, never the app
+        // version: a patch release that changes no schema must not refuse a
+        // DB written by its neighbour.
+        let supported = MIGRATIONS.len() as i64;
+        if current > supported {
+            // The version one past what we support is the first one we cannot
+            // apply, so whoever introduced *it* is the release the operator
+            // needs. The ledger may predate `applied_by`, hence the Option.
+            let introduced_by = match applied_by_of(&conn, supported + 1)? {
+                Some(v) => format!("。v{} を導入したのは {v} です", supported + 1),
+                None => String::new(),
+            };
+            return Err(StateError::SchemaTooNew {
+                found: current,
+                supported,
+                app: env!("CARGO_PKG_VERSION").to_string(),
+                introduced_by,
+            });
+        }
+        if !allow_migrate && current < supported {
+            return Err(StateError::SchemaOutdated {
+                found: current,
+                expected: supported,
+            });
+        }
 
         if (current as usize) < MIGRATIONS.len() {
             // Back up the DB file before mutating its schema (§10.3).
@@ -2333,6 +2506,200 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Build a fully-migrated DB at `path` and return its dir, for the guard
+    /// tests below to then tamper with.
+    fn migrated_db_dir(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+        StateDb::open(&path).unwrap();
+        (dir, path)
+    }
+
+    /// A DB from a newer totsuka must stop *both* entry points (#275). The
+    /// migrating path would otherwise skip its `current < len` branch and
+    /// return Ok, running happily against a schema it does not know.
+    #[test]
+    fn refuses_a_db_newer_than_the_binary() {
+        let (dir, path) = migrated_db_dir("too_new");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at, applied_by) \
+                 VALUES (?1, ?2, '9.9.9')",
+                params![MIGRATIONS.len() as i64 + 1, now()],
+            )
+            .unwrap();
+        }
+
+        for (label, err) in [
+            (
+                "open",
+                StateDb::open(&path).err().expect("open must refuse"),
+            ),
+            (
+                "open_no_migrate",
+                StateDb::open_no_migrate(&path)
+                    .err()
+                    .expect("open_no_migrate must refuse"),
+            ),
+        ] {
+            assert!(
+                matches!(err, StateError::SchemaTooNew { .. }),
+                "{label} must refuse a newer schema, got {err:?}"
+            );
+            let msg = err.to_string();
+            // The whole point is telling the operator where to go.
+            assert!(
+                msg.contains("9.9.9"),
+                "{label} message must name the release that introduced the \
+                 unknown version, got: {msg}"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The too-new guard reads `applied_by` for its hint. On a ledger old
+    /// enough to lack the column, that read must degrade to "no hint" — never
+    /// replace the actionable error with `no such column`.
+    #[test]
+    fn too_new_guard_survives_a_ledger_without_applied_by() {
+        let (dir, path) = migrated_db_dir("too_new_legacy");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("ALTER TABLE schema_migrations DROP COLUMN applied_by;")
+                .unwrap();
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                params![MIGRATIONS.len() as i64 + 1, now()],
+            )
+            .unwrap();
+        }
+
+        let err = StateDb::open_no_migrate(&path)
+            .err()
+            .expect("a newer schema must be refused");
+        assert!(matches!(err, StateError::SchemaTooNew { .. }), "{err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("v8") || msg.contains(&format!("v{}", MIGRATIONS.len() + 1)));
+        assert!(
+            !msg.contains("no such column"),
+            "a missing diagnostic column must not leak as the error: {msg}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A DB behind the binary is an error on the non-migrating path — that is
+    /// what sends the operator to `totsuka run` instead of letting a
+    /// lock-less command migrate.
+    #[test]
+    fn open_no_migrate_refuses_an_outdated_db() {
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-outdated", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations \
+                 (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (i, m) in MIGRATIONS[..MIGRATIONS.len() - 1].iter().enumerate() {
+                conn.execute_batch(m).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![(i + 1) as i64, now()],
+                )
+                .unwrap();
+            }
+        }
+
+        let err = StateDb::open_no_migrate(&path)
+            .err()
+            .expect("a pending migration must be refused");
+        assert!(matches!(err, StateError::SchemaOutdated { .. }), "{err:?}");
+        assert!(err.to_string().contains("totsuka run"), "{err}");
+
+        // …while the migrating path still upgrades it.
+        StateDb::open(&path).unwrap();
+        assert_eq!(
+            StateDb::open_no_migrate(&path)
+                .unwrap()
+                .schema_version()
+                .unwrap()
+                .0,
+            MIGRATIONS.len() as i64
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The non-migrating open must not touch the file — no ledger rows, no
+    /// bootstrap ALTER, no backup. This is the property that makes it safe to
+    /// run outside `run.lock`.
+    #[test]
+    fn open_no_migrate_does_not_write() {
+        let (dir, path) = migrated_db_dir("no_write");
+        // Drop the column so a stray `ensure_applied_by_column` would show up.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "PRAGMA wal_checkpoint(TRUNCATE); \
+                 ALTER TABLE schema_migrations DROP COLUMN applied_by;",
+            )
+            .unwrap();
+        }
+        let before = fs::read(&path).unwrap();
+
+        let db = StateDb::open_no_migrate(&path).unwrap();
+        let (version, applied_by) = db.schema_version().unwrap();
+        assert_eq!(version, MIGRATIONS.len() as i64);
+        assert_eq!(applied_by, None, "no column, so no attribution");
+        drop(db);
+
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "open_no_migrate must leave the file byte-identical"
+        );
+        assert!(!has_applied_by_column(&Connection::open(&path).unwrap()).unwrap());
+        assert!(
+            !dir.join("state.db.v7.bak").exists()
+                && !PathBuf::from(format!("{}.v{}.bak", path.display(), MIGRATIONS.len())).exists(),
+            "no backup from a non-migrating open"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A missing file must not become a silently created empty DB — the
+    /// non-migrating path drops SQLite's `CREATE` flag for exactly this.
+    #[test]
+    fn open_no_migrate_does_not_create_the_file() {
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-no_create", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+
+        assert!(StateDb::open_no_migrate(&path).is_err());
+        assert!(!path.exists(), "no state.db conjured out of nothing");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `schema_version` is what `doctor` prints.
+    #[test]
+    fn schema_version_reports_the_applying_release() {
+        let db = StateDb::open_in_memory().unwrap();
+        let (version, applied_by) = db.schema_version().unwrap();
+        assert_eq!(version, MIGRATIONS.len() as i64);
+        assert_eq!(applied_by.as_deref(), Some(env!("CARGO_PKG_VERSION")));
     }
 
     /// Appending to a finished conversation requeues it, and the two writes

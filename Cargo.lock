@@ -950,6 +950,7 @@ dependencies = [
  "futures-util",
  "orchestrator-core",
  "plugin-protocol",
+ "rusqlite",
  "serde",
  "serde_json",
  "test-support",

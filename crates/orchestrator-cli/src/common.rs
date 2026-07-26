@@ -154,6 +154,12 @@ impl Cx {
 
     /// Open the state DB for reading, with an actionable error when it does
     /// not exist yet (opening would silently create an empty one).
+    ///
+    /// Uses the **non-migrating** entry point (#275): `status` / `task` /
+    /// `focus` / `doctor` take no `run.lock`, so letting them migrate meant
+    /// two processes could start changing the schema of the same file at
+    /// once right after an upgrade. Pending migrations now surface as
+    /// `SchemaOutdated`, pointing the operator at `totsuka run`.
     pub fn open_state_db(&self) -> Result<StateDb, CliError> {
         let path = self.state_db_path();
         if !path.exists() {
@@ -163,7 +169,7 @@ impl Cx {
             )
             .into());
         }
-        Ok(StateDb::open(&path)?)
+        Ok(StateDb::open_no_migrate(&path)?)
     }
 
     /// The plugin store under the data directory.
