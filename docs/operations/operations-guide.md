@@ -71,6 +71,8 @@ worktree を削除するとき、その `agent/*` ブランチも一緒に消す
 - 全コミットが origin のどこかのリファレンスから辿れる → `git branch -D` で削除（失うものが無い）
 - 1 つでも origin に無い → **ブランチを残す**（未 push の成果物がそこにしか無い）。`totsuka run` のログに `branch kept: it has commits that are not on origin` が出る
 
+> squash merge されたブランチは、元のコミットハッシュが origin に存在しない。`origin/{branch}` が prune されると「未 push」と数えられ、以後は保持され続ける（totsuka 自身は prune しないが、グローバル設定 `fetch.prune = true` があると踏む）。失敗方向は保持なので失うものは無く、下記のワンライナーで手動削除できる。
+
 **#266 より前は `git branch -d` を使っており、ほぼ常に失敗していた。** `-d` の「マージ済み」判定はローカルの `HEAD` が基準だが、worktree のブランチは `origin/{default}` から切られる。**ローカルの既定ブランチが origin より遅れているのは常態**なので、判定が通らず削除が拒否され、しかも結果が握り潰されていたためログにも出なかった。
 
 すでに溜まってしまった `agent/*` ブランチは、同じ基準で手動掃除できる:
