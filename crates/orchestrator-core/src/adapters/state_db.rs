@@ -14,9 +14,11 @@
 //! - `schema_migrations.applied_by` records the totsuka version that applied
 //!   each row (#275). It is display/diagnostic only — schema version, not app
 //!   version, is what compatibility is judged on.
-//! - Only [`StateDb::open`] migrates; read-only commands use
-//!   [`StateDb::open_no_migrate`] so schema changes happen exclusively under
-//!   the `run.lock` that `totsuka run` holds (#275). A DB newer than this
+//! - Only [`StateDb::open`] migrates; every command that does not hold
+//!   `run.lock` uses [`StateDb::open_no_migrate`], so schema changes happen
+//!   exclusively under the lock that `totsuka run` holds (#275). The split
+//!   is by lock, not by read vs write — `task cancel` writes, and still must
+//!   not migrate. A DB newer than this
 //!   binary is refused at both entry points; forward compatibility is not
 //!   offered, and the guard can only help between releases that have it.
 
@@ -606,10 +608,13 @@ impl StateDb {
 
     /// Open a file-backed state DB **without** applying migrations (#275).
     ///
-    /// Every read-only command goes through here so that schema changes only
-    /// ever happen under `run.lock`, which only `totsuka run` holds. Before
-    /// this existed, `status` and `run` racing right after an upgrade could
-    /// both start migrating the same file with no lock between them.
+    /// Every command that does not hold `run.lock` goes through here, so
+    /// schema changes only ever happen under that lock — which only
+    /// `totsuka run` takes. Note the criterion is the lock, not read vs
+    /// write: `task cancel` / `retry` mutate rows through this entry point
+    /// and still must not migrate. Before it existed, `status` and `run`
+    /// racing right after an upgrade could both start migrating the same
+    /// file with no lock between them.
     ///
     /// Makes no schema or ledger write of its own — not even the
     /// `applied_by` bootstrap ALTER, and it never creates the file. (SQLite

@@ -40,7 +40,7 @@ error: state.db のスキーマバージョン v8 は、この totsuka 0.1.4（�
 
 ## 2. 適用は `totsuka run` のみ（`run.lock` 保持下）
 
-`StateDb::open` は従来どおり適用する。読み取り系のための `StateDb::open_no_migrate` を新設し、CLI の `Cx::open_state_db`（`status` / `task` / `focus` / `doctor` が通る唯一の入口）をそちらへ差し替えた。未適用のスキーマは `SchemaOutdated` として `totsuka run` を案内する。
+`StateDb::open` は従来どおり適用する。**`run.lock` を持たないコマンドのための** `StateDb::open_no_migrate` を新設し、CLI の `Cx::open_state_db`（`status` / `task` / `focus` / `doctor` が通る唯一の入口）をそちらへ差し替えた。未適用のスキーマは `SchemaOutdated` として `totsuka run` を案内する。
 
 非適用オープンは**スキーマ・台帳への書き込みを一切行わない**（`applied_by` のブートストラップ ALTER も含む）。SQLite の `CREATE` フラグも落としてあり、`state.db` が無いときに空 DB を作ってしまうこともない。ただし最終接続のクローズ時に SQLite が WAL をチェックポイントすることはある（どの接続でも起きる、コミット済みページの畳み込み）。
 
@@ -82,8 +82,8 @@ error: state.db のスキーマバージョン v8 は、この totsuka 0.1.4（�
 
 # Consequences
 
-- 古いバイナリが新しい DB を開くと、`run` でも読み取り系でも「どの版に上げればよいか」を含むエラーで止まる。
-- スキーマ変更は `run.lock` を保持した `totsuka run` の中だけで起きる。読み取り系コマンドは DB のスキーマを触らない。
+- 古いバイナリが新しい DB を開くと、`run` でも他のコマンドでも「どの版に上げればよいか」を含むエラーで止まる。
+- スキーマ変更は `run.lock` を保持した `totsuka run` の中だけで起きる。**分岐の基準はロックであって読み書きではない** — `task cancel` / `retry` / `verify` は同じ非適用オープンを通って行を書き換えるが、スキーマは触らない。
 - `totsuka doctor` がスキーマ版数と `applied_by` を表示する（`state-db — … opens — schema v7 (applied by 0.1.4)`）。不整合時は exit 3。
 - アップグレード直後の初回は `totsuka run` を一度走らせる必要がある。それまで `status` 等は `SchemaOutdated` で止まる — 黙って古いスキーマを読むより、これを望ましい挙動とみなす。
 - `--json` 出力にスキーマ版数のフィールドは**足していない**。現時点で消費者がいないため。必要になった時点で追加する。
