@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、ビルド手順（Cargo バイナリ名と plugin.toml の name 不一致時の対処）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-timestamp: 2026-07-21T10:00:00Z
+timestamp: 2026-07-26T09:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -105,7 +105,8 @@ totsuka plugin install ./dist/github
 
 # install / enable の流れ
 
-- `totsuka plugin install <dir>`: `plugin.toml` + バイナリを含むディレクトリを検証（SHA-256 表示・確認）し `$XDG_DATA_HOME/totsuka/plugins/{name}/` へコピー（§5.4）
+- `totsuka plugin install <dir>`: `plugin.toml` + バイナリを含むディレクトリを検証（SHA-256 表示・確認）し `$XDG_DATA_HOME/totsuka/plugins/{name}/` へ配置（§5.4）
+  - **再インストール（新しいビルドで入れ替える）でも、インストール先のバイナリを上書きすることはない。** 同じディレクトリに一時ファイルを作って `rename` で差し替えるため、インストール先は毎回新しい inode になる。macOS がコード署名の検証結果を vnode 単位でキャッシュするため、中身だけを書き換えると次回起動が無言で `SIGKILL` される（#292）
 - `totsuka plugin enable {name}`: `config.toml` の `[plugins.{name}] enabled = true` を書き換え
 - **install（バイナリの存在）と enable（設定の宣言）は分離**（F-56）
 

@@ -157,13 +157,34 @@ impl PluginStore {
     }
 
     /// Copy the binary and manifest into the store (the confirmed step).
+    ///
+    /// The binary is staged next to its destination and moved into place, never
+    /// written over the live path. macOS caches a code-signature verdict per
+    /// vnode, so rewriting an installed binary in place leaves the cached
+    /// signature describing bytes that are no longer there and the *next* exec
+    /// dies on `SIGKILL` — with no output, no error, and a `doctor` that can
+    /// only report "crashed or exited" (#292). `rename` gives the path a fresh
+    /// inode, so no stale verdict can attach to it.
     pub fn commit_install(&self, plan: &InstallPlan) -> Result<(), StoreError> {
         let dir = self.plugin_dir(&plan.name);
         fs::create_dir_all(&dir)?;
         let dest_binary = dir.join(&plan.name);
-        fs::copy(&plan.binary, &dest_binary)?;
+        // Staged inside `dir` so the rename stays on one filesystem, which is
+        // what makes it atomic. The leading dot keeps a leftover out of the way
+        // of `list`, which only walks directories.
+        let staged = dir.join(format!(".{}.incoming", plan.name));
+        fs::copy(&plan.binary, &staged)?;
+        // Before the rename: the destination must never be observable in a
+        // non-executable state.
+        if let Err(e) = set_executable(&staged) {
+            let _ = fs::remove_file(&staged);
+            return Err(e);
+        }
+        if let Err(e) = fs::rename(&staged, &dest_binary) {
+            let _ = fs::remove_file(&staged);
+            return Err(e.into());
+        }
         fs::copy(plan.source.join(MANIFEST_FILE), dir.join(MANIFEST_FILE))?;
-        set_executable(&dest_binary)?;
         Ok(())
     }
 
@@ -340,6 +361,54 @@ protocol_version = "{protocol_req}"
             !store.uninstall("github").unwrap(),
             "second uninstall is a no-op"
         );
+    }
+
+    /// #292: upgrading a plugin is a *re*install, and the binary it replaces
+    /// may be one the OS has already executed. Replacing it in place is what
+    /// made macOS `SIGKILL` the next launch, so the property to hold is that
+    /// the destination gets a new inode rather than new bytes.
+    #[test]
+    fn reinstalling_replaces_the_binary_instead_of_rewriting_it() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let base = scratch("store_reinstall");
+        let src = base.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 0\n");
+
+        let store = PluginStore::new(base.join("plugins"));
+        let plan = store.prepare_install(&src).unwrap();
+        store.commit_install(&plan).unwrap();
+
+        let installed = store.plugin_dir("github").join("github");
+        let first = fs::metadata(&installed).unwrap().ino();
+
+        // A new build of the same plugin, installed over the old one.
+        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 1\n");
+        let plan = store.prepare_install(&src).unwrap();
+        store.commit_install(&plan).unwrap();
+
+        let second = fs::metadata(&installed).unwrap().ino();
+        assert_ne!(
+            first, second,
+            "the reinstall rewrote the live binary in place instead of replacing it (#292)"
+        );
+        assert_eq!(
+            fs::read(&installed).unwrap(),
+            b"#!/bin/sh\nexit 1\n",
+            "the new build is what ended up installed"
+        );
+        assert_eq!(
+            fs::metadata(&installed).unwrap().permissions().mode() & 0o777,
+            0o755,
+            "the replacement is executable"
+        );
+        assert!(
+            !store.plugin_dir("github").join(".github.incoming").exists(),
+            "no staging file is left behind"
+        );
+        // The staging file must not be mistaken for an installed plugin.
+        assert_eq!(store.list().unwrap().len(), 1);
     }
 
     #[test]
