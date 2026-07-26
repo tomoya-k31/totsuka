@@ -3,14 +3,14 @@ type: Term
 title: 会話継続（conversation continuity）
 description: 1 スレッド = 1 会話を 1 タスクとして扱い、追いメンションを同じタスクへの追加メッセージとして取り込むことで worktree・ブランチ・エージェントセッションを共有する仕組み。#242 でタスク同一性そのものを会話単位に変えた。
 tags: [glossary, domain, slack, hook, conversation-identity]
-timestamp: 2026-07-26T00:00:00+09:00
+timestamp: 2026-07-26T18:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
 
 # 会話継続（conversation continuity）
 
-同一 Slack スレッドへの追いメンションが、前回までの文脈を保ったまま処理される仕組み。**エピック #242 で実現方法が根本から変わった**ため、#140（エピック #131 の設計判断 D-10）の方式は下記「旧方式」に履歴として残す。
+同一 Slack スレッドへの追いメンションが、前回までの文脈を保ったまま処理される仕組み。**エピック #242 で実現方法が根本から変わった**（[ADR-0015](/decisions/adr-0015-conversation-task-identity.md)）ため、#140（エピック #131 の設計判断 D-10）の方式は下記「旧方式」に履歴として残す。
 
 ## 現行: タスク同一性が会話同一性（#242）
 
@@ -27,7 +27,7 @@ owner: tomoya-k31
 
 タスクが終端に達していれば `TaskEvent::Reopen` で `Queued` へ戻る。これは `Done` の意味を「永久に完了」から**「未処理メッセージが無い」**へ変える意図的な設計判断で、「終端は不可逆」という不変条件を手放している。
 
-新規会話でしか必要のないリポジトリ解決は `task/lookup`（P→O）で省く。既知の会話ならソースプラグインは LLM 分類も選択 UI も出さない（詳細は [task-source-slack](/components/task-source-slack.md)）。
+新規会話でしか必要のないリポジトリ解決は [`task/lookup`](/apis/task-lookup.md)（P→O）で省く。既知の会話ならソースプラグインは LLM 分類も選択 UI も出さない（詳細は [task-source-slack](/components/task-source-slack.md)）。
 
 `message_key` を持たないソース（GitHub Issue / Notion ページ）は `Task.id` にフォールバックするため、**1 メッセージ = 1 タスクのソースは無改修で従来どおり**動く。
 

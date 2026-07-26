@@ -220,11 +220,7 @@ fn stdout(out: &Output) -> String {
 
 /// Read a recorded NDJSON log (empty if never written).
 fn read_log(path: &std::path::Path) -> Vec<serde_json::Value> {
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
-        .collect()
+    test_support::read_ndjson_log(path)
 }
 
 #[test]
