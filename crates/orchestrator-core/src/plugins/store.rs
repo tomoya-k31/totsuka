@@ -170,8 +170,9 @@ impl PluginStore {
         fs::create_dir_all(&dir)?;
         let dest_binary = dir.join(&plan.name);
         // Staged inside `dir` so the rename stays on one filesystem, which is
-        // what makes it atomic. The leading dot keeps a leftover out of the way
-        // of `list`, which only walks directories.
+        // what makes it atomic. (`list` never sees it either way — it walks the
+        // plugins root, not each plugin's own directory — so the leading dot is
+        // only there to mark it as not-a-plugin to a human reading the dir.)
         let staged = dir.join(format!(".{}.incoming", plan.name));
         // Every failure before the rename must take the staging file with it —
         // including a `fs::copy` that dies partway (a full disk leaves a
@@ -308,6 +309,8 @@ fn set_executable(_path: &Path) -> Result<(), StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::MetadataExt;
+    use std::process::Command;
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("totsuka-{}-{name}", std::process::id()));
@@ -372,7 +375,7 @@ protocol_version = "{protocol_req}"
     /// the destination gets a new inode rather than new bytes.
     #[test]
     fn reinstalling_replaces_the_binary_instead_of_rewriting_it() {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        use std::os::unix::fs::PermissionsExt;
 
         let base = scratch("store_reinstall");
         let src = base.join("src");
@@ -385,11 +388,27 @@ protocol_version = "{protocol_req}"
 
         let installed = store.plugin_dir("github").join("github");
         let first = fs::metadata(&installed).unwrap().ino();
+        assert_eq!(
+            Command::new(&installed).status().unwrap().code(),
+            Some(0),
+            "the freshly installed binary runs"
+        );
 
         // A new build of the same plugin, installed over the old one.
         fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 1\n");
         let plan = store.prepare_install(&src).unwrap();
         store.commit_install(&plan).unwrap();
+
+        // The property #292 is really about: the binary that replaced a
+        // previously *executed* one still launches. (A shell script carries no
+        // code signature, so this cannot reproduce the macOS SIGKILL itself —
+        // it pins the replacement strategy, and the inode assertion below is
+        // what actually rules the in-place rewrite out.)
+        assert_eq!(
+            Command::new(&installed).status().unwrap().code(),
+            Some(1),
+            "the reinstalled binary runs, and it is the new build"
+        );
 
         let second = fs::metadata(&installed).unwrap().ino();
         assert_ne!(
@@ -414,26 +433,43 @@ protocol_version = "{protocol_req}"
         assert_eq!(store.list().unwrap().len(), 1);
     }
 
-    /// A failed install must not leave the staging file behind: it would sit
-    /// next to a working plugin forever, and the next attempt would have to
-    /// overwrite whatever partial binary it holds.
+    /// Staging exists so a failed *upgrade* is a no-op rather than a
+    /// half-replaced binary: the plugin that was working before the attempt
+    /// must still be the one installed, still runnable, and no staging file
+    /// may be left for the next attempt to trip over.
     #[test]
-    fn a_failed_commit_leaves_no_staging_file() {
+    fn a_failed_upgrade_leaves_the_working_plugin_intact() {
         let base = scratch("store_failed_commit");
         let src = base.join("src");
         fs::create_dir_all(&src).unwrap();
-        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 0\n");
+        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 7\n");
 
         let store = PluginStore::new(base.join("plugins"));
-        let mut plan = store.prepare_install(&src).unwrap();
-        // The source binary disappears between `prepare` and `commit` — the
-        // copy is then the step that fails.
-        plan.binary = src.join("gone");
+        let plan = store.prepare_install(&src).unwrap();
+        store.commit_install(&plan).unwrap();
+        let installed = store.plugin_dir("github").join("github");
+        let before = fs::metadata(&installed).unwrap().ino();
 
+        // A second install that cannot complete: the source binary disappears
+        // between `prepare` and `commit`, so the copy is the step that fails.
+        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 8\n");
+        let mut plan = store.prepare_install(&src).unwrap();
+        plan.binary = src.join("gone");
         assert!(store.commit_install(&plan).is_err());
+
         assert!(
             !store.plugin_dir("github").join(".github.incoming").exists(),
             "a failed copy left its staging file behind"
+        );
+        assert_eq!(
+            fs::metadata(&installed).unwrap().ino(),
+            before,
+            "the failed upgrade replaced the installed binary anyway"
+        );
+        assert_eq!(
+            Command::new(&installed).status().unwrap().code(),
+            Some(7),
+            "the previously working plugin still runs, and is still the old build"
         );
     }
 
