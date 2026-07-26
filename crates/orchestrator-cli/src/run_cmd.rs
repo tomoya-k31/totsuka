@@ -25,12 +25,24 @@ use crate::common::{CliError, Cx};
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// Execute `totsuka run`.
-pub fn run(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(), CliError> {
+pub fn run(
+    cx: &Cx,
+    watch: bool,
+    dry_run: bool,
+    debug: bool,
+    one_shot_grace_ms: Option<u64>,
+) -> Result<(), CliError> {
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(run_async(cx, watch, dry_run, debug))
+    runtime.block_on(run_async(cx, watch, dry_run, debug, one_shot_grace_ms))
 }
 
-async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(), CliError> {
+async fn run_async(
+    cx: &Cx,
+    watch: bool,
+    dry_run: bool,
+    debug: bool,
+    one_shot_grace_ms: Option<u64>,
+) -> Result<(), CliError> {
     let paths = &cx.paths;
     let env: HashMap<String, String> = std::env::vars().collect();
     let env_fn = |k: &str| env.get(k).cloned();
@@ -114,6 +126,11 @@ async fn run_async(cx: &Cx, watch: bool, dry_run: bool, debug: bool) -> Result<(
 
     let mut settings = settings_from_config(&cfg, &env, paths)?;
     settings.readme_cache_dir = Some(paths.cache_dir().to_path_buf());
+    // CLI flags are layer 1 of the precedence stack (see config/env_overrides),
+    // so a value that is neither config nor environment belongs here (#281).
+    if let Some(ms) = one_shot_grace_ms {
+        settings.one_shot_grace = Duration::from_millis(ms);
+    }
 
     // Hook runtime (#131/#138): the UDS receiver endpoint + Bearer token, the
     // spool directory, and the per-workflow rendered `--settings` paths that

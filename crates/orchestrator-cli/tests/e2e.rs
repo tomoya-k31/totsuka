@@ -51,6 +51,16 @@ struct Env {
     notify_log: PathBuf,
 }
 
+/// One-shot's quiet-period floor for the E2Es (#281). Production is 2s; these
+/// runs drive a mock source whose `task/submit` lands in the first cycle, so
+/// 250ms is still a real cushion — and four `run` invocations stop costing 8s
+/// of pure waiting.
+///
+/// Deliberately not 0: the grace exists because `task/submit` arrives
+/// asynchronously from a freshly spawned plugin subprocess, and 0 would race
+/// the handshake and flake on a loaded runner.
+const GRACE: &[&str] = &["--one-shot-grace-ms", "250"];
+
 impl Env {
     /// XDG dirs get a `totsuka` suffix; place files accordingly.
     fn cfg_dir(&self) -> PathBuf {
@@ -233,7 +243,7 @@ fn e2e_full_path_source_output_binary() {
     );
 
     // One-shot run drives fetch → dispatch → done → publish → cleanup.
-    let out = env.run(&["run"]);
+    let out = env.run(&[&["run"], GRACE].concat());
     assert!(out.status.success(), "run failed: {}", stdout(&out));
     assert!(
         stdout(&out).contains("done 1"),
@@ -278,7 +288,7 @@ fn e2e_waiting_input_leaves_task_and_status_shows_it() {
         "none",
         "implement",
     );
-    let out = env.run(&["run"]);
+    let out = env.run(&[&["run"], GRACE].concat());
     assert!(out.status.success());
     assert!(
         stdout(&out).contains("waiting for input"),
@@ -303,7 +313,7 @@ fn e2e_agent_crash_fails_task_and_orchestrator_survives() {
     let env = setup("crash", "crash_on_dispatch = true\n", "none", "implement");
     // The agent self-destructs on dispatch; the run must still exit cleanly
     // (crash isolation, §5.3), failing the affected task.
-    let out = env.run(&["run"]);
+    let out = env.run(&[&["run"], GRACE].concat());
     assert!(out.status.success(), "orchestrator survived the crash");
     assert!(
         stdout(&out).contains("failed 1"),
