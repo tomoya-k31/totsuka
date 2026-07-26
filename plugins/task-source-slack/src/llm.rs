@@ -27,13 +27,59 @@ pub struct Classification {
     pub reason: String,
 }
 
+/// How much of a non-2xx response body is kept in the error message.
+const ERROR_BODY_HEAD_CHARS: usize = 300;
+
+/// A failed chat-completion call.
+///
+/// `status` is the HTTP status when the provider answered at all; it is
+/// `None` for transport-level failures (DNS, refused connection, timeout,
+/// unparseable body), which say nothing about the credentials. Keeping the
+/// status as a field rather than baking it into a string is what lets
+/// callers separate "the key is rejected" from "the answer was
+/// inconclusive" (#267).
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{message}")]
+pub struct ChatError {
+    /// The HTTP status, when the provider answered.
+    pub status: Option<u16>,
+    /// Human-readable detail; the body head for a non-2xx.
+    pub message: String,
+}
+
+impl ChatError {
+    /// A transport-level failure with no HTTP status to attribute it to.
+    pub fn transport(message: impl Into<String>) -> Self {
+        Self {
+            status: None,
+            message: message.into(),
+        }
+    }
+
+    /// The provider answered with a non-success `status`.
+    pub fn http(status: u16, body: &str) -> Self {
+        Self {
+            status: Some(status),
+            message: format!(
+                "HTTP {status}: {}",
+                body.chars().take(ERROR_BODY_HEAD_CHARS).collect::<String>()
+            ),
+        }
+    }
+
+    /// Whether the provider rejected our credentials (401/403).
+    pub fn is_auth_failure(&self) -> bool {
+        matches!(self.status, Some(401 | 403))
+    }
+}
+
 /// Why classification did not produce a usable verdict; every variant falls
 /// through to the ephemeral picker (stage ③).
 #[derive(Debug, thiserror::Error)]
 pub enum ClassifyError {
     /// The HTTP call failed (network, non-2xx, timeout).
     #[error("LLM request failed: {0}")]
-    Request(String),
+    Request(ChatError),
     /// The response did not contain the JSON verdict we asked for, even
     /// after the retry.
     #[error("LLM returned an unusable response: {0}")]
@@ -51,6 +97,18 @@ pub enum ClassifyError {
     },
 }
 
+impl ClassifyError {
+    /// Whether the provider rejected the API key (HTTP 401/403).
+    ///
+    /// Every variant degrades to the same picker, but this one is not an
+    /// inconclusive answer — it is a broken configuration that will keep
+    /// failing (and keep costing a round-trip per mention) until the key is
+    /// fixed, so callers surface it louder (#267).
+    pub fn is_auth_failure(&self) -> bool {
+        matches!(self, ClassifyError::Request(e) if e.is_auth_failure())
+    }
+}
+
 /// Sends one chat-completion request. Seam for tests; production is
 /// [`ReqwestChat`].
 pub trait ChatTransport: Send + Sync {
@@ -60,7 +118,7 @@ pub trait ChatTransport: Send + Sync {
         &self,
         config: &LlmConfig,
         body: Value,
-    ) -> impl Future<Output = Result<Value, String>> + Send;
+    ) -> impl Future<Output = Result<Value, ChatError>> + Send;
 }
 
 /// Production transport over reqwest.
@@ -84,7 +142,7 @@ impl Default for ReqwestChat {
 }
 
 impl ChatTransport for ReqwestChat {
-    async fn complete(&self, config: &LlmConfig, body: Value) -> Result<Value, String> {
+    async fn complete(&self, config: &LlmConfig, body: Value) -> Result<Value, ChatError> {
         let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
         let response = self
             .client
@@ -94,17 +152,16 @@ impl ChatTransport for ReqwestChat {
             .timeout(std::time::Duration::from_secs(60))
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ChatError::transport(e.to_string()))?;
         let status = response.status();
-        let text = response.text().await.map_err(|e| e.to_string())?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| ChatError::transport(e.to_string()))?;
         if !status.is_success() {
-            return Err(format!(
-                "HTTP {}: {}",
-                status.as_u16(),
-                text.chars().take(300).collect::<String>()
-            ));
+            return Err(ChatError::http(status.as_u16(), &text));
         }
-        serde_json::from_str(&text).map_err(|e| e.to_string())
+        serde_json::from_str(&text).map_err(|e| ChatError::transport(e.to_string()))
     }
 }
 
@@ -130,7 +187,9 @@ pub async fn classify<C: ChatTransport>(
         let candidates = candidates.to_vec();
         tokio::task::spawn_blocking(move || request_body(&config, &mention, &context, &candidates))
             .await
-            .map_err(|e| ClassifyError::Request(format!("request build failed: {e}")))?
+            .map_err(|e| {
+                ClassifyError::Request(ChatError::transport(format!("request build failed: {e}")))
+            })?
     };
 
     let response = chat
@@ -338,12 +397,12 @@ mod tests {
 
     /// A ChatTransport answering from a queue; records request bodies.
     struct FakeChat {
-        responses: std::sync::Mutex<std::collections::VecDeque<Result<Value, String>>>,
+        responses: std::sync::Mutex<std::collections::VecDeque<Result<Value, ChatError>>>,
         requests: std::sync::Mutex<Vec<Value>>,
     }
 
     impl FakeChat {
-        fn new(responses: Vec<Result<Value, String>>) -> Self {
+        fn new(responses: Vec<Result<Value, ChatError>>) -> Self {
             Self {
                 responses: std::sync::Mutex::new(responses.into()),
                 requests: std::sync::Mutex::new(Vec::new()),
@@ -352,13 +411,13 @@ mod tests {
     }
 
     impl ChatTransport for FakeChat {
-        async fn complete(&self, _config: &LlmConfig, body: Value) -> Result<Value, String> {
+        async fn complete(&self, _config: &LlmConfig, body: Value) -> Result<Value, ChatError> {
             self.requests.lock().unwrap().push(body);
             self.responses
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or_else(|| Err("no canned response".into()))
+                .unwrap_or_else(|| Err(ChatError::transport("no canned response")))
         }
     }
 
@@ -458,11 +517,62 @@ mod tests {
             "{err}"
         );
 
-        let chat = FakeChat::new(vec![Err("connection refused".into())]);
+        let chat = FakeChat::new(vec![Err(ChatError::transport("connection refused"))]);
         let err = classify(&chat, &config(), "m", "", &candidates)
             .await
             .unwrap_err();
         assert!(matches!(err, ClassifyError::Request(_)), "{err}");
+        // A transport failure carries no status, so it is not an auth failure.
+        assert!(!err.is_auth_failure(), "{err}");
+    }
+
+    #[tokio::test]
+    async fn rejected_api_key_is_flagged_as_an_auth_failure() {
+        let candidates = [repo("web-app")];
+        for status in [401, 403] {
+            let chat = FakeChat::new(vec![Err(ChatError::http(
+                status,
+                r#"{"error":{"message":"User not found.","code":401}}"#,
+            ))]);
+            let err = classify(&chat, &config(), "m", "", &candidates)
+                .await
+                .unwrap_err();
+            assert!(err.is_auth_failure(), "{status}: {err}");
+            // The body head survives into the message the operator reads.
+            assert!(err.to_string().contains("User not found."), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn other_http_failures_are_not_auth_failures() {
+        let candidates = [repo("web-app")];
+        // 429 and 5xx are the provider being busy or broken, not a bad key.
+        for status in [429, 500, 503] {
+            let chat = FakeChat::new(vec![Err(ChatError::http(status, "busy"))]);
+            let err = classify(&chat, &config(), "m", "", &candidates)
+                .await
+                .unwrap_err();
+            assert!(!err.is_auth_failure(), "{status}: {err}");
+        }
+        // Neither is a verdict we simply could not use.
+        let chat = FakeChat::new(vec![Ok(chat_response(
+            r#"{"repo": "web-app", "confidence": 0.1, "reason": "unsure"}"#,
+        ))]);
+        let err = classify(&chat, &config(), "m", "", &candidates)
+            .await
+            .unwrap_err();
+        assert!(!err.is_auth_failure(), "{err}");
+    }
+
+    #[test]
+    fn error_body_is_truncated() {
+        let err = ChatError::http(401, &"x".repeat(ERROR_BODY_HEAD_CHARS + 50));
+        // "HTTP 401: " prefix plus exactly the head of the body.
+        assert_eq!(
+            err.message.len(),
+            "HTTP 401: ".len() + ERROR_BODY_HEAD_CHARS
+        );
+        assert_eq!(err.status, Some(401));
     }
 
     #[test]

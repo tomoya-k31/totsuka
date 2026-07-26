@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use task_source_slack::config::LlmConfig;
 use task_source_slack::error::SlackError;
-use task_source_slack::llm::ChatTransport;
+use task_source_slack::llm::{ChatError, ChatTransport};
 use task_source_slack::server::TransportFactory;
 use task_source_slack::transport::{SlackTransport, TokenKind, TransportSettings};
 
@@ -51,7 +51,7 @@ pub struct Shared {
     keyed: Arc<Mutex<std::collections::HashMap<String, VecDeque<Canned>>>>,
     requests: Arc<Mutex<Vec<Recorded>>>,
     posted_urls: Arc<Mutex<Vec<PostedUrl>>>,
-    chat_responses: Arc<Mutex<VecDeque<Result<Value, String>>>>,
+    chat_responses: Arc<Mutex<VecDeque<Result<Value, ChatError>>>>,
     chat_requests: Arc<Mutex<Vec<Value>>>,
 }
 
@@ -86,7 +86,7 @@ impl Shared {
         self.posted_urls.lock().unwrap().clone()
     }
     /// Queue one chat-completion outcome for the repo classifier.
-    pub fn push_chat(&self, outcome: Result<Value, String>) {
+    pub fn push_chat(&self, outcome: Result<Value, ChatError>) {
         self.chat_responses.lock().unwrap().push_back(outcome);
     }
     pub fn chat_requests(&self) -> Vec<Value> {
@@ -166,10 +166,10 @@ impl ChatTransport for FakeChat {
         &self,
         _config: &LlmConfig,
         body: Value,
-    ) -> impl Future<Output = Result<Value, String>> + Send {
+    ) -> impl Future<Output = Result<Value, ChatError>> + Send {
         self.shared.chat_requests.lock().unwrap().push(body);
         let next = self.shared.chat_responses.lock().unwrap().pop_front();
-        async move { next.unwrap_or_else(|| Err("no canned chat response".into())) }
+        async move { next.unwrap_or_else(|| Err(ChatError::transport("no canned chat response"))) }
     }
 }
 

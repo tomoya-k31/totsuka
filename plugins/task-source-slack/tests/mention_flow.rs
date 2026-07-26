@@ -14,6 +14,7 @@ use common::{
     block_actions_envelope, call, mention_envelope, mention_envelope_in, scratch_state_dir,
     send_and_await_ack, wait_until, ws_listener,
 };
+use task_source_slack::llm::ChatError;
 use task_source_slack::server::Server;
 
 fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
@@ -389,7 +390,7 @@ async fn skip_discards_the_mention_without_a_task() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &url);
-    shared.push_chat(Err("connection refused".into()));
+    shared.push_chat(Err(ChatError::transport("connection refused")));
     let (mut srv, mut harness) = server(&shared);
 
     call(&mut srv, 1, "initialize", init_params_multi_repo()).await;
