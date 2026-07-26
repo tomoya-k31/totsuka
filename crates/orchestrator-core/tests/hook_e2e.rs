@@ -149,6 +149,9 @@ fn settings_with(
         pr_body_template: "{summary}".to_string(),
         // Sweep every cycle, as before the interval existed (#210).
         worktree_sweep_interval: Duration::ZERO,
+        // These tests drive the loop in watch mode, where the one-shot grace is
+        // never consulted (#281).
+        one_shot_grace: Duration::ZERO,
         tools: orchestrator_core::tool::builtin_registry(),
         default_tool: "claude".to_string(),
         hook: Some(hook),
