@@ -4,7 +4,7 @@ title: 依存関係ハイジーン（未使用依存の検出）
 description: cargo-machete による毎 PR の未使用依存チェックの運用、誤検知の抑制手順（package.metadata.cargo-machete）、および高精度な cargo-shear / cargo-udeps の定期手動実行手順。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/.github/workflows/ci.yml
 tags: [rust, ci, dependencies, cargo-machete, cargo-shear, cargo-udeps]
-timestamp: 2026-07-25T00:00:00Z
+timestamp: 2026-07-26T20:30:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -15,7 +15,9 @@ owner: tomoya-k31
 
 # 第1層: cargo-machete（毎 PR、CI 常設）
 
-`.github/workflows/ci.yml` の `machete` ジョブが毎 PR で実行する。machete はテキストレベルのスキャンでコンパイル不要（Rust toolchain も不要）なため数秒で終わり、`ubuntu-slim` runner で走る。未使用依存を混入させた PR は CI が fail する。
+`.github/workflows/ci.yml` の **`clippy / rustfmt` ジョブのステップ**として毎 PR で実行する。machete はテキストレベルのスキャンでコンパイル不要（Rust toolchain も不要）なため数秒で終わる。未使用依存を混入させた PR は CI が fail する。
+
+> 0.2.4 まで（#171）は `ubuntu-slim` の独立 `machete` ジョブだったが、Actions がジョブ単位で 1 分未満を切り上げ課金するため、実働 7 秒でも丸 1 分の固定費になっていた。`clippy` ジョブは 35〜45 秒でクリティカルパス（`test` は 100 秒前後）でもないので、[ADR-0018](/decisions/adr-0018-ci-test-time.md) でステップとして吸収した — wall-clock は変わらず課金だけ 1 分減る。**CI ログで machete の失敗を探すときは `clippy / rustfmt` ジョブを見ること。**
 
 ローカルでの事前確認:
 
@@ -66,4 +68,5 @@ cargo +nightly udeps --workspace --all-targets --all-features
 # 関連
 
 - [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)
-- CI 定義: `.github/workflows/ci.yml`（`machete` ジョブ）、`.github/workflows/audit.yml`（cargo-audit / cargo-deny）
+- [ADR-0018 CI テスト時間の削減](/decisions/adr-0018-ci-test-time.md)（machete のジョブ→ステップ統合）
+- CI 定義: `.github/workflows/ci.yml`（`clippy / rustfmt` ジョブ内の `Run cargo-machete` ステップ）、`.github/workflows/audit.yml`（cargo-audit / cargo-deny）

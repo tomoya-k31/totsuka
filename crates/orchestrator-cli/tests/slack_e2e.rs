@@ -37,7 +37,7 @@ fn totsuka() -> PathBuf {
 }
 
 /// Build (once per test process, or not at all under
-/// `TOTSUKA_TEST_PREBUILT_BINS`) and locate a sibling workspace binary under
+/// `TEST_SUPPORT_PREBUILT_BINS`) and locate a sibling workspace binary under
 /// the same target profile dir as the test binary (#281).
 fn build_bin(package: &str, bin: &str) -> PathBuf {
     test_support::sibling_bin(&totsuka(), package, bin)
