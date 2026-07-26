@@ -11,7 +11,13 @@ use orchestrator_core::adapters::StateError;
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::{OpenAiConfig, OpenAiRouter};
 use orchestrator_core::adapters::plugin_host;
-use orchestrator_core::config::{self, RootConfig, secret_resolver};
+// Aliased on purpose: `plugin_protocol::manifest::PluginKind` (the manifest's
+// declaration) also appears in this file, and the two are different types.
+// This one is the config roster's, which is readable without touching the
+// plugin — the property #289 needs.
+use orchestrator_core::config::{
+    self, PluginKind as ConfigPluginKind, RootConfig, secret_resolver,
+};
 use orchestrator_core::ports::SecretString;
 use orchestrator_core::ports::git::GitRunner;
 use orchestrator_core::worktree::WorktreeManager;
@@ -29,9 +35,15 @@ fn is_false(b: &bool) -> bool {
 
 /// One diagnostic result. `action` follows the "cause + next action" rule (§7).
 ///
-/// Three severities: an `ok` check passes silently; a `warning` is advisory
-/// (`ok` stays true, so it never fails `doctor`) yet still carries an action; a
-/// failure (`ok = false`) is what makes `doctor` exit non-zero.
+/// Four severities: an `ok` check passes silently; a `warning` is advisory
+/// (`ok` stays true, so it never fails `doctor`) yet still carries an action;
+/// a `skipped` check **did not run at all** and says why; a failure
+/// (`ok = false`) is what makes `doctor` exit non-zero.
+///
+/// `skipped` exists because "passed" and "never ran" were previously
+/// indistinguishable (#289). Both `warning` and `skipped` are
+/// `skip_serializing_if`, so a consumer that never saw them still parses the
+/// `--json` document unchanged.
 #[derive(Debug, Serialize)]
 struct Check {
     name: String,
@@ -39,6 +51,11 @@ struct Check {
     /// Advisory finding: reported with its action but does not fail `doctor`.
     #[serde(skip_serializing_if = "is_false")]
     warning: bool,
+    /// The check did not run. `ok` stays true — not running is not a failure —
+    /// but the operator (and `--json`) must be able to tell it apart from a
+    /// check that ran and passed.
+    #[serde(skip_serializing_if = "is_false")]
+    skipped: bool,
     detail: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     action: Option<String>,
@@ -50,6 +67,7 @@ impl Check {
             name: name.to_string(),
             ok: true,
             warning: false,
+            skipped: false,
             detail: detail.into(),
             action: None,
         }
@@ -59,6 +77,7 @@ impl Check {
             name: name.to_string(),
             ok: false,
             warning: false,
+            skipped: false,
             detail: detail.into(),
             action: Some(action.into()),
         }
@@ -70,9 +89,56 @@ impl Check {
             name: name.to_string(),
             ok: true,
             warning: true,
+            skipped: false,
             detail: detail.into(),
             action: Some(action.into()),
         }
+    }
+    /// The check was deliberately not run. `detail` says why, `action` says how
+    /// to make it runnable — reporting nothing at all would read as "fine"
+    /// (#289).
+    fn skip(name: &str, detail: impl Into<String>, action: impl Into<String>) -> Self {
+        Self {
+            name: name.to_string(),
+            ok: true,
+            warning: false,
+            skipped: true,
+            detail: detail.into(),
+            action: Some(action.into()),
+        }
+    }
+}
+
+/// Whether resolving an `op://` reference can happen without a prompt (#289).
+///
+/// [ADR-0006](../../docs/decisions/adr-0006-onepassword-secret-backend.md)
+/// requires `doctor` to stay non-interactive, but `op read` only prompts when
+/// no session is established. So rather than approximating with "is there a
+/// TTY", doctor asks the question directly — `op whoami` answers it and never
+/// prompts itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpReadiness {
+    /// No `op://` reference anywhere in config: nothing can prompt, so no
+    /// check needs gating.
+    NotUsed,
+    /// A session is established — `op read` answers from it. Probes that need
+    /// a secret run exactly as before.
+    Ready,
+    /// `op` is missing, broken, or has no session. Resolving would pop a
+    /// biometric prompt, or hang forever when nobody is watching.
+    WouldPrompt,
+}
+
+impl OpReadiness {
+    /// Whether a probe that must resolve an `op://` reference may proceed.
+    fn may_resolve(self) -> bool {
+        !matches!(self, Self::WouldPrompt)
+    }
+
+    /// The reason to put on a check skipped because of this state.
+    fn skip_reason(self) -> &'static str {
+        "resolving its op:// reference would prompt for 1Password unlock \
+         (doctor stays non-interactive)"
     }
 }
 
@@ -172,13 +238,19 @@ pub fn run(cx: &Cx, json: bool, online: bool) -> Result<(), CliError> {
     };
 
     if let Some(cfg) = &cfg {
+        // 1Password goes **first** (#289). Several checks below resolve
+        // secrets, and `op read` prompts (or hangs unattended) without a
+        // session — so the answer to "may we resolve?" has to exist before
+        // anything acts on it. Running this last, as it used to, meant
+        // `check_plugins` had already resolved the very references the `llm`
+        // and `hook-token` checks claimed the probes would cover.
+        let op = check_onepassword(cx, &env, &mut checks);
         check_worktree_location(cfg, &env, &mut checks);
-        check_hooks(cx, cfg, config_ok, &env, &mut checks);
-        check_plugins(cx, cfg, &env, &mut checks);
-        check_llm_key(cfg, &env, online, &mut checks);
-        check_onepassword(cx, &env, &mut checks);
+        check_hooks(cx, cfg, config_ok, &env, op, &mut checks);
+        check_plugins(cx, cfg, &env, op, &mut checks);
+        check_llm_key(cfg, &env, online, op, &mut checks);
         check_orphans(cfg, &env, db.as_ref(), json, &mut checks)?;
-        check_orphan_panes(cx, cfg, &env, db.as_ref(), json, &mut checks)?;
+        check_orphan_panes(cx, cfg, &env, db.as_ref(), json, op, &mut checks)?;
     }
 
     if json {
@@ -188,6 +260,13 @@ pub fn run(cx: &Cx, json: bool, online: bool) -> Result<(), CliError> {
             if !check.ok {
                 println!(
                     "FAIL: {} — {} → {}",
+                    check.name,
+                    check.detail,
+                    check.action.as_deref().unwrap_or("see docs")
+                );
+            } else if check.skipped {
+                println!(
+                    "skip: {} — {} → {}",
                     check.name,
                     check.detail,
                     check.action.as_deref().unwrap_or("see docs")
@@ -221,9 +300,15 @@ pub fn run(cx: &Cx, json: bool, online: bool) -> Result<(), CliError> {
 /// `plugins/*.toml` actually contains an `op://` reference: `op --version`
 /// (CLI present) and `op whoami` (session established — unlike `op read`, it
 /// never triggers a biometric prompt). No `op://` in config ⇒ no checks.
-fn check_onepassword(cx: &Cx, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
+/// Returns whether the rest of `doctor` may resolve `op://` references
+/// without prompting (#289).
+fn check_onepassword(
+    cx: &Cx,
+    env: &HashMap<String, String>,
+    checks: &mut Vec<Check>,
+) -> OpReadiness {
     if !config_mentions_onepassword(cx) {
-        return;
+        return OpReadiness::NotUsed;
     }
     let Some(op) = which("op", env) else {
         checks.push(Check::fail(
@@ -233,7 +318,9 @@ fn check_onepassword(cx: &Cx, env: &HashMap<String, String>, checks: &mut Vec<Ch
              https://developer.1password.com/docs/cli) or switch the references to \
              `keychain:` / `${ENV}`",
         ));
-        return;
+        // No `op` binary: every resolution would fail anyway, and the probes
+        // that need one must not pretend otherwise.
+        return OpReadiness::WouldPrompt;
     };
     match std::process::Command::new(&op).arg("--version").output() {
         Ok(out) if out.status.success() => {
@@ -249,7 +336,7 @@ fn check_onepassword(cx: &Cx, env: &HashMap<String, String>, checks: &mut Vec<Ch
                 ),
                 "reinstall the 1Password CLI (macOS: `brew reinstall 1password-cli`)",
             ));
-            return;
+            return OpReadiness::WouldPrompt;
         }
         Err(e) => {
             checks.push(Check::fail(
@@ -258,22 +345,85 @@ fn check_onepassword(cx: &Cx, env: &HashMap<String, String>, checks: &mut Vec<Ch
                 "install the 1Password CLI (macOS: `brew install 1password-cli`, \
                  other platforms: https://developer.1password.com/docs/cli)",
             ));
-            return;
+            return OpReadiness::WouldPrompt;
         }
     }
     // Session check: `op whoami` fails when not signed in, without prompting.
+    // This is also the answer to "may the checks below resolve?" — `op read`
+    // prompts only when there is no session, so asking `whoami` measures the
+    // real condition instead of approximating it with a TTY test (#289).
     match std::process::Command::new(&op).arg("whoami").output() {
         Ok(out) if out.status.success() => {
             checks.push(Check::ok("1password-session", "op session is active"));
+            OpReadiness::Ready
         }
         _ => {
             checks.push(Check::warn(
                 "1password-session",
-                "no active 1Password session",
-                "run `op signin` before `totsuka run` so op:// references resolve",
+                "no active 1Password session — probes that need an op:// secret are skipped",
+                "run `op signin`, then re-run `totsuka doctor` for the full picture",
             ));
+            OpReadiness::WouldPrompt
         }
     }
+}
+
+/// Whether `[llm].api_key_ref` is an `op://` reference — the one secret
+/// `plugin_spec` resolves for a task-source plugin that does *not* live in
+/// that plugin's own config file.
+fn llm_key_is_onepassword(cfg: &RootConfig) -> bool {
+    cfg.llm
+        .as_ref()
+        .and_then(|llm| llm.api_key_ref.as_deref())
+        .is_some_and(|reference| reference.starts_with("op://"))
+}
+
+/// Whether `plugins/{name}.toml` holds an `op://` reference in a real string
+/// value. Per-plugin counterpart of [`config_mentions_onepassword`], so one
+/// plugin's 1Password usage does not gate the probes of every other plugin.
+fn plugin_config_mentions_onepassword(cx: &Cx, name: &str) -> bool {
+    let path = cx.plugin_config_dir().join(format!("{name}.toml"));
+    std::fs::read_to_string(&path).is_ok_and(|content| {
+        // `Table` for the same reason as `config_mentions_onepassword`: in
+        // toml 0.9 `parse::<Value>()` cannot parse a document.
+        content
+            .parse::<toml::Table>()
+            .is_ok_and(|table| table.values().any(toml_has_op_reference))
+    })
+}
+
+/// Whether launching `name` would make `plugin_spec` resolve an `op://`
+/// reference (#289).
+///
+/// Two independent doors, both inside `plugin_spec`: `plugin_init_config`
+/// resolves **every string leaf** of `plugins/{name}.toml`, and `llm_info`
+/// resolves `[llm].api_key_ref` — but only for a task source.
+///
+/// "Task source" is asked of **both** the manifest and the config roster, and
+/// either one saying yes is enough. `plugin_spec` itself branches on
+/// `manifest.kind`, so the manifest is the authority — but the two can
+/// disagree and nothing repairs it: `config validate` never reads
+/// `manifest.kind` (it only checks the config's self-declared kind against
+/// what a referencing workflow expects, and only when a workflow references
+/// the plugin at all), and `plugin install` never writes config. A plugin
+/// upgrade that changes its manifest kind therefore leaves the roster stale
+/// indefinitely. Trusting either side alone would let that divergence reopen
+/// the unattended hang, so this errs toward skipping.
+///
+/// An unreadable manifest needs no special case: `plugin_spec` reads it first
+/// and fails before resolving anything.
+fn plugin_needs_onepassword(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
+    let declared_task_source = cfg
+        .plugin(name)
+        .is_some_and(|p| p.kind == ConfigPluginKind::TaskSource);
+    let manifest_task_source = cx
+        .store()
+        .manifest_of(name)
+        .ok()
+        .flatten()
+        .is_some_and(|m| m.kind == plugin_protocol::manifest::PluginKind::TaskSource);
+    let is_task_source = declared_task_source || manifest_task_source;
+    plugin_config_mentions_onepassword(cx, name) || (is_task_source && llm_key_is_onepassword(cfg))
 }
 
 /// Whether `config.toml` or any `plugins/*.toml` contains an `op://` secret
@@ -293,9 +443,15 @@ fn config_mentions_onepassword(cx: &Cx) -> bool {
     }
     sources.iter().any(|path| {
         std::fs::read_to_string(path).is_ok_and(|content| {
+            // `toml::Table`, not `toml::Value`: in toml 0.9 `FromStr for Value`
+            // parses a *single value*, so `"a = 1".parse::<Value>()` is an
+            // error ("unexpected content, expected nothing") for every real
+            // config file. This helper silently answered "no op:// anywhere"
+            // for its whole life, which meant the 1Password checks below never
+            // ran at all (#289). `Table` is the document parser.
             content
-                .parse::<toml::Value>()
-                .is_ok_and(|value| toml_has_op_reference(&value))
+                .parse::<toml::Table>()
+                .is_ok_and(|table| table.values().any(toml_has_op_reference))
         })
     })
 }
@@ -318,6 +474,7 @@ fn check_hooks(
     cfg: &RootConfig,
     config_ok: bool,
     env: &HashMap<String, String>,
+    op: OpReadiness,
     checks: &mut Vec<Check>,
 ) {
     check_hook_assets(cx, cfg, checks);
@@ -345,7 +502,7 @@ fn check_hooks(
     }
     check_hook_token(cfg, env, &hook_workflows, &unknown_workflows, checks);
     check_spool(cx, cfg, env, checks);
-    check_hook_socket(cx, cfg, env, checks);
+    check_hook_socket(cx, cfg, env, op, checks);
 }
 
 /// Refresh the static hook scripts + per-workflow settings (idempotent, same
@@ -621,7 +778,8 @@ fn check_hook_token(
         // check presence + session without prompting (ADR-0006).
         Some(reference) if reference.starts_with("op://") => checks.push(Check::ok(
             "hook-token",
-            "[hooks].auth_token_ref is an op:// reference (checked by the 1password probes, not resolved here)",
+            "[hooks].auth_token_ref is an op:// reference, left unresolved here \
+             (doctor stays non-interactive; see the 1password checks above)",
         )),
         Some(reference) => match secret_resolver(env).resolve(reference) {
             Ok(_) => checks.push(Check::ok("hook-token", "[hooks].auth_token_ref resolves")),
@@ -774,6 +932,7 @@ fn check_hook_socket(
     cx: &Cx,
     cfg: &RootConfig,
     env: &HashMap<String, String>,
+    op: OpReadiness,
     checks: &mut Vec<Check>,
 ) {
     let socket_path = match crate::common::hook_socket_path(cx, cfg, env) {
@@ -798,11 +957,26 @@ fn check_hook_socket(
         return;
     }
     // A receiver is live: prove connectivity + auth with a self-POST.
-    let token = cfg
-        .hooks
-        .auth_token_ref
-        .as_ref()
-        .and_then(|reference| secret_resolver(env).resolve(reference).ok());
+    //
+    // This resolves `auth_token_ref` for real — the second `op://` door in
+    // doctor, and one the `hook-token` check's "not resolved here" message
+    // does not cover (#289). Probing without the token would be worse than
+    // not probing: the receiver would answer 401 and the check would report a
+    // token mismatch that does not exist.
+    let token_ref = cfg.hooks.auth_token_ref.as_deref();
+    if !op.may_resolve() && token_ref.is_some_and(|r| r.starts_with("op://")) {
+        checks.push(Check::skip(
+            "hook-socket",
+            format!(
+                "a receiver is live at {} but {}",
+                socket_path.display(),
+                op.skip_reason()
+            ),
+            "run `op signin`, then re-run `totsuka doctor` to probe the receiver",
+        ));
+        return;
+    }
+    let token = token_ref.and_then(|reference| secret_resolver(env).resolve(reference).ok());
     match self_post(&socket_path, token.as_ref().map(|t| t.expose())) {
         Ok(200) => checks.push(Check::ok(
             "hook-socket",
@@ -931,6 +1105,7 @@ fn check_plugins(
     cx: &Cx,
     cfg: &RootConfig,
     env: &HashMap<String, String>,
+    op: OpReadiness,
     checks: &mut Vec<Check>,
 ) {
     let enabled: Vec<&String> = cfg
@@ -945,6 +1120,18 @@ fn check_plugins(
     }
     let mut specs = Vec::new();
     for name in enabled {
+        // `plugin_spec` resolves secrets, so a plugin that needs 1Password
+        // cannot be probed while `op read` would prompt (#289). Decided per
+        // plugin: one plugin's op:// reference must not silence the probes of
+        // plugins that need no secret at all.
+        if !op.may_resolve() && plugin_needs_onepassword(cx, cfg, name) {
+            checks.push(Check::skip(
+                &format!("plugin:{name}"),
+                op.skip_reason(),
+                "run `op signin`, then re-run `totsuka doctor` to probe this plugin",
+            ));
+            continue;
+        }
         match plugin_spec(&cx.store(), &cx.plugin_config_dir(), cfg, name, env) {
             // `plugin_spec` already resolved plugins/{name}.toml (with secrets)
             // into `init_config`; reuse it rather than re-reading and hitting
@@ -1004,6 +1191,7 @@ fn check_llm_key(
     cfg: &RootConfig,
     env: &HashMap<String, String>,
     online: bool,
+    op: OpReadiness,
     checks: &mut Vec<Check>,
 ) {
     let Some(llm) = &cfg.llm else {
@@ -1017,12 +1205,26 @@ fn check_llm_key(
         None => checks.push(Check::ok("llm", "[llm] configured without api_key_ref")),
         // An `op://` reference is NOT resolved here: `op read` may pop a
         // biometric prompt (or hang unattended), and doctor must stay
-        // non-interactive. The dedicated 1password checks cover op presence +
-        // session without prompting (ADR-0006). `--online` is the opt-in that
-        // accepts the prompt in exchange for a real answer.
+        // non-interactive (ADR-0006). `--online` is the opt-in that accepts
+        // the prompt in exchange for a real answer.
+        //
+        // The wording matters (#289). This used to claim the reference was
+        // "checked by the 1password probes", which those probes never did —
+        // they check that `op` exists and a session is live, not that this
+        // particular item resolves. Now that they also run *first* and gate
+        // the checks that do resolve, the honest statement is the narrow one.
         Some(reference) if reference.starts_with("op://") => checks.push(Check::ok(
             "llm",
-            "api_key_ref is an op:// reference (checked by the 1password probes, not resolved here)",
+            match op {
+                OpReadiness::Ready => {
+                    "api_key_ref is an op:// reference, left unresolved here \
+                     (a 1Password session is active, so `totsuka run` will resolve it)"
+                }
+                _ => {
+                    "api_key_ref is an op:// reference, left unresolved here \
+                     (doctor stays non-interactive; see the 1password checks above)"
+                }
+            },
         )),
         Some(reference) => match secret_resolver(env).resolve(reference) {
             Ok(_) => checks.push(Check::ok("llm", "api_key_ref resolves")),
@@ -1045,12 +1247,12 @@ fn check_llm_key(
 
 /// `--online` only: one live request proving the gateway accepts the key.
 ///
-/// The only doctor check that makes a network call. It also resolves the
-/// reference for real, including `op://` — which may raise a biometric
-/// prompt, though it is not alone in that: `check_plugins` already resolves
-/// `op://` today via `plugin_spec`'s `llm_info` + `plugin_init_config`, so
-/// `doctor` is not as unconditionally non-interactive as ADR-0006 implies.
-/// That gap is pre-existing and out of scope here.
+/// The only doctor check that makes a network call, and the only one that
+/// still resolves `op://` unconditionally — so `--online` is also the opt-in
+/// to a possible biometric prompt. That is now the *whole* of the exception:
+/// #289 closed the paths that used to resolve behind the operator's back
+/// (`check_plugins` via `plugin_spec`, `check_hook_socket`, `check_orphan_panes`),
+/// which are gated on [`OpReadiness`] and reported as skipped instead.
 ///
 /// Only a 401/403 fails the check: a timeout or a 5xx says the provider is
 /// unreachable or unwell, not that the key is wrong, so those stay advisory
@@ -1281,6 +1483,7 @@ fn check_orphan_panes(
     env: &HashMap<String, String>,
     db: Option<&orchestrator_core::adapters::StateDb>,
     json: bool,
+    op: OpReadiness,
     checks: &mut Vec<Check>,
 ) -> Result<(), CliError> {
     use plugin_protocol::manifest::PluginKind;
@@ -1323,7 +1526,16 @@ fn check_orphan_panes(
 
     let mut orphans: Vec<OrphanPane> = Vec::new();
     let mut probed = 0usize;
+    let mut skipped: Vec<&str> = Vec::new();
     for name in &agents {
+        // Same gate as `check_plugins` (#289): launching the agent resolves
+        // its secrets. Tracked separately so the check can say it saw only
+        // part of the picture — silently probing fewer agents would under-
+        // report orphans and read as "none found".
+        if !op.may_resolve() && plugin_needs_onepassword(cx, cfg, name) {
+            skipped.push(name.as_str());
+            continue;
+        }
         let spec = match plugin_spec(&store, &cx.plugin_config_dir(), cfg, name, env) {
             Ok(spec) => spec,
             // plugin_spec failures are already reported per-plugin by
@@ -1355,9 +1567,30 @@ fn check_orphan_panes(
         }
     }
 
+    if !skipped.is_empty() {
+        // Say so before any "no orphan panes" line below, so the two are read
+        // together: the clean result only covers the agents we could reach.
+        checks.push(Check::skip(
+            "panes",
+            format!(
+                "did not list panes via {} — {}",
+                skipped.join(", "),
+                op.skip_reason()
+            ),
+            "run `op signin`, then re-run `totsuka doctor` to see orphan panes for those agents",
+        ));
+    }
+
     if orphans.is_empty() {
         if probed > 0 {
-            checks.push(Check::ok("panes", "no orphan panes"));
+            checks.push(Check::ok(
+                "panes",
+                if skipped.is_empty() {
+                    "no orphan panes".to_string()
+                } else {
+                    format!("no orphan panes among the {probed} agent(s) probed")
+                },
+            ));
         }
         return Ok(());
     }
@@ -1567,6 +1800,71 @@ location = "${MY_ROOT}/wt/{branch}"
             label: Some(label.to_string()),
             cwd: None,
         }
+    }
+
+    /// The trap that made the 1Password probes dead code for their whole life
+    /// (#289): in toml 0.9 `FromStr for Value` parses a **single value**, not a
+    /// document, so `"a = 1".parse::<Value>()` is an error. The detection
+    /// helper used it and therefore always answered "no op:// anywhere" — with
+    /// the probes gated on that answer, they never ran.
+    #[test]
+    fn a_toml_document_needs_the_table_parser_not_the_value_parser() {
+        let doc = "token = \"op://Dev/Herdr/token\"\n";
+        assert!(
+            doc.parse::<toml::Value>().is_err(),
+            "if Value ever parses a document, the comments explaining Table are stale"
+        );
+        let table = doc.parse::<toml::Table>().expect("Table parses a document");
+        assert!(table.values().any(toml_has_op_reference));
+    }
+
+    /// Only a real string value counts — the commented-out example `totsuka
+    /// init` writes must not switch the 1Password probes on.
+    #[test]
+    fn only_a_live_op_reference_counts() {
+        let commented = "# api_key_ref = \"op://Dev/Openrouter/api_key\"\n"
+            .parse::<toml::Table>()
+            .unwrap();
+        assert!(!commented.values().any(toml_has_op_reference));
+
+        // Nested and inside an array, both of which `plugin_init_config`
+        // would resolve.
+        let nested = "[a.b]\nk = \"op://v/i/f\"\n"
+            .parse::<toml::Table>()
+            .unwrap();
+        assert!(nested.values().any(toml_has_op_reference));
+        let array = "k = [\"plain\", \"op://v/i/f\"]\n"
+            .parse::<toml::Table>()
+            .unwrap();
+        assert!(array.values().any(toml_has_op_reference));
+    }
+
+    /// A skip is not a pass and not a failure: it must leave `doctor` green
+    /// (exit 0 is decided by `ok`) while still being distinguishable.
+    #[test]
+    fn a_skipped_check_does_not_fail_doctor_but_is_marked() {
+        let check = Check::skip("plugin:x", "would prompt", "run `op signin`");
+        assert!(check.ok, "a skip must not turn doctor red");
+        assert!(check.skipped);
+        assert!(!check.warning, "skipped and warning are different states");
+        let json = serde_json::to_value(&check).unwrap();
+        assert_eq!(json["skipped"], true);
+        // `warning` stays absent, so consumers written before #289 see the
+        // same document shape they always did.
+        assert!(json["warning"].is_null(), "{json}");
+
+        let passed = Check::ok("plugin:x", "fine");
+        assert!(
+            serde_json::to_value(&passed).unwrap()["skipped"].is_null(),
+            "a passing check must not grow a skipped field"
+        );
+    }
+
+    #[test]
+    fn readiness_only_blocks_when_a_prompt_is_possible() {
+        assert!(OpReadiness::NotUsed.may_resolve());
+        assert!(OpReadiness::Ready.may_resolve());
+        assert!(!OpReadiness::WouldPrompt.may_resolve());
     }
 
     #[test]
