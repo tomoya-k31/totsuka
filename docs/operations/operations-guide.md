@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, worktree, faq, troubleshooting]
-timestamp: 2026-07-25T09:00:00Z
+timestamp: 2026-07-26T18:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -20,11 +20,38 @@ owner: tomoya-k31
 | `state-db` | 状態 DB が開ける | 一度 `totsuka run` |
 | `worktree-location` | 明示した `[worktree].location` / `[[repositories]].worktree_location` が展開できる | `${ENV}` の未設定変数を export、またはキーを削って既定値（`$XDG_STATE_HOME/totsuka` 配下、未設定なら `$HOME/.local/state/totsuka`）に戻す。**worktree 作成はディスパッチ時**なので、これを放置すると run は正常起動したまま全タスクが失敗する |
 | `plugin:{name}` | 起動 + `config/validate` 疎通 | install 済みか / `plugins/{name}.toml` を修正 |
-| `llm` | `api_key_ref` が解決する | 環境変数 export / Keychain 登録 |
+| `llm` | `api_key_ref` が**解決する**（鍵が有効かは見ない） | 環境変数 export / Keychain 登録 |
+| `llm-online` | プロバイダが API キーを**受理した**（`--online` 時のみ） | 401/403 = 鍵をプロバイダで再発行し `[llm].api_key_ref` を更新。到達不能・5xx は warning 止まり（鍵が悪いとは限らない） |
 | `worktrees` | 孤児 worktree なし | 対話的に掃除を提案（TTY） |
 | `panes` | 孤児 agent pane なし（#211） | 対話的に解放を提案（TTY）。`pane_control` 宣言 agent が無い構成では出ない |
 
 `--json` 出力は不具合報告に添付する（Issue テンプレートが要求、§10.3）。
+
+## `--online`（鍵の有効性検査、#267）
+
+`llm` チェックが見るのは**参照が解決できるか**だけで、**その鍵が API に受理されるか**は見ない。両者は無関係で、実機では `op://` 参照が正しく解決する一方でプロバイダが全リクエストに 401 を返し続けている状態を `doctor` が `ok` と報告していた（[ADR-0016](/decisions/adr-0016-doctor-online-probe.md)）。
+
+```
+totsuka doctor --online
+```
+
+を付けると `[llm]` へ 1 回だけ最小リクエスト（`max_tokens: 1`・リトライなし・本文は破棄）を投げ、`llm-online` チェックとして結果を出す。**既定では実行しない**（`doctor` はオフライン・非対話が原則、[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md)）。`--online` が明示的に買うコスト:
+
+- ネットワークに出る（わずかに課金される）— `doctor` でネットワークに触れるのはこのチェックだけ
+- `op://` 参照を**実際に解決する** → 1Password の生体認証プロンプトが出うる
+
+したがって **CI や cron からは使わない**。
+
+> **注**: 生体認証プロンプトは `--online` 固有ではない。プラグインが 1 つでも enabled なら `plugin:{name}` チェックがプラグインを起動するために `plugin_spec` 経由で `[llm].api_key_ref` と `plugins/{name}.toml` のシークレットを `op://` 含めて実解決するため、**フラグ無しの `doctor` でもプロンプトは出うる**。[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md) の「doctor は非対話」は `llm` チェック単体の話で、doctor 全体では既に成立していない（#267 以前からの既存挙動）。手元で「鍵を差し替えた直後」「リポジトリ選択 UI が毎回出る」ときの切り分けに使う。
+
+**鍵が失効すると何が起きるか**: 候補リポジトリが 2 件以上ある構成では分類に LLM が要るため、鍵が無効だと [task-source-slack](/components/task-source-slack.md) の解決が毎回 picker へ縮退する。縮退自体は設計どおり安全なので、**設定不備が「少し不便な正常動作」に見える**のが厄介な点。run のログに次の `warn` が出ていたらこれ:
+
+```
+WARN the LLM provider rejected the API key; repository selection falls back to
+     the operator picker for every new conversation until it is fixed
+```
+
+（[task/lookup](/components/orchestrator-core.md) により 2 通目以降は LLM を呼ばないため、影響は新規会話に限られる。）
 
 # worktree 掃除
 

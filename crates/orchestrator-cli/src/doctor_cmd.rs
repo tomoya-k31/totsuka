@@ -5,10 +5,13 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use orchestrator_core::adapters::git::SystemGitRunner;
+use orchestrator_core::adapters::llm::{OpenAiConfig, OpenAiRouter};
 use orchestrator_core::adapters::plugin_host;
 use orchestrator_core::config::{self, RootConfig, secret_resolver};
+use orchestrator_core::ports::SecretString;
 use orchestrator_core::ports::git::GitRunner;
 use orchestrator_core::worktree::WorktreeManager;
 use serde::Serialize;
@@ -72,8 +75,9 @@ impl Check {
     }
 }
 
-/// Execute `totsuka doctor`.
-pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
+/// Execute `totsuka doctor`. `online` opts into the live probes (#267) —
+/// the only checks here that reach the network.
+pub fn run(cx: &Cx, json: bool, online: bool) -> Result<(), CliError> {
     let mut checks = Vec::new();
     // One environment snapshot, threaded through every check that needs it.
     let env: HashMap<String, String> = std::env::vars().collect();
@@ -149,7 +153,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         check_worktree_location(cfg, &env, &mut checks);
         check_hooks(cx, cfg, config_ok, &env, &mut checks);
         check_plugins(cx, cfg, &env, &mut checks);
-        check_llm_key(cfg, &env, &mut checks);
+        check_llm_key(cfg, &env, online, &mut checks);
         check_onepassword(cx, &env, &mut checks);
         check_orphans(cfg, &env, db.as_ref(), json, &mut checks)?;
         check_orphan_panes(cx, cfg, &env, db.as_ref(), json, &mut checks)?;
@@ -970,8 +974,16 @@ fn check_plugins(
     }
 }
 
-/// The LLM API key reference must resolve (no network call).
-fn check_llm_key(cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
+/// The LLM API key reference must resolve (no network call). With `online`,
+/// a second check additionally proves the key is *accepted* (#267) — the
+/// resolution alone never could, which is how a dead OpenRouter key stayed
+/// invisible until the run log happened to be read.
+fn check_llm_key(
+    cfg: &RootConfig,
+    env: &HashMap<String, String>,
+    online: bool,
+    checks: &mut Vec<Check>,
+) {
     let Some(llm) = &cfg.llm else {
         checks.push(Check::ok(
             "llm",
@@ -979,27 +991,102 @@ fn check_llm_key(cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut V
         ));
         return;
     };
-    let Some(reference) = &llm.api_key_ref else {
-        checks.push(Check::ok("llm", "[llm] configured without api_key_ref"));
-        return;
-    };
-    // An `op://` reference is NOT resolved here: `op read` may pop a
-    // biometric prompt (or hang unattended), and doctor must stay
-    // non-interactive. The dedicated 1password checks cover op presence +
-    // session without prompting (ADR-0006).
-    if reference.starts_with("op://") {
-        checks.push(Check::ok(
+    match &llm.api_key_ref {
+        None => checks.push(Check::ok("llm", "[llm] configured without api_key_ref")),
+        // An `op://` reference is NOT resolved here: `op read` may pop a
+        // biometric prompt (or hang unattended), and doctor must stay
+        // non-interactive. The dedicated 1password checks cover op presence +
+        // session without prompting (ADR-0006). `--online` is the opt-in that
+        // accepts the prompt in exchange for a real answer.
+        Some(reference) if reference.starts_with("op://") => checks.push(Check::ok(
             "llm",
             "api_key_ref is an op:// reference (checked by the 1password probes, not resolved here)",
+        )),
+        Some(reference) => match secret_resolver(env).resolve(reference) {
+            Ok(_) => checks.push(Check::ok("llm", "api_key_ref resolves")),
+            Err(e) => {
+                checks.push(Check::fail(
+                    "llm",
+                    format!("api_key_ref does not resolve: {e}"),
+                    "export the variable, store the key in the Keychain, or use an op:// reference",
+                ));
+                // No key to probe with; the online check would only restate
+                // this failure.
+                return;
+            }
+        },
+    }
+    if online {
+        check_llm_online(llm, env, checks);
+    }
+}
+
+/// `--online` only: one live request proving the gateway accepts the key.
+///
+/// The only doctor check that makes a network call. It also resolves the
+/// reference for real, including `op://` — which may raise a biometric
+/// prompt, though it is not alone in that: `check_plugins` already resolves
+/// `op://` today via `plugin_spec`'s `llm_info` + `plugin_init_config`, so
+/// `doctor` is not as unconditionally non-interactive as ADR-0006 implies.
+/// That gap is pre-existing and out of scope here.
+///
+/// Only a 401/403 fails the check: a timeout or a 5xx says the provider is
+/// unreachable or unwell, not that the key is wrong, so those stay advisory
+/// rather than turning a flaky network into a red `doctor`.
+fn check_llm_online(
+    llm: &config::LlmConfig,
+    env: &HashMap<String, String>,
+    checks: &mut Vec<Check>,
+) {
+    let api_key = match &llm.api_key_ref {
+        Some(reference) => match secret_resolver(env).resolve(reference) {
+            Ok(key) => key,
+            Err(e) => {
+                checks.push(Check::fail(
+                    "llm-online",
+                    format!("api_key_ref does not resolve: {e}"),
+                    "check the reference (an op:// read needs an unlocked 1Password session)",
+                ));
+                return;
+            }
+        },
+        // Matches what `run` sends for a keyless gateway.
+        None => SecretString::new(""),
+    };
+
+    // `probe_auth` deliberately bypasses the retry loop — a probe answers now
+    // or not at all, and retrying a 5xx would only make `doctor` hang on an
+    // unwell provider — so `max_retries` is left at its default rather than
+    // zeroed here: an assignment the probe never reads would only suggest it
+    // is what disables retrying. Only `timeout` is honoured.
+    let mut openai = OpenAiConfig::new(&llm.base_url, &llm.model);
+    if let Some(secs) = llm.timeout_secs {
+        openai.timeout = Duration::from_secs(secs);
+    }
+    let router = OpenAiRouter::new(openai, api_key);
+
+    let Ok(runtime) = tokio::runtime::Runtime::new() else {
+        checks.push(Check::fail(
+            "llm-online",
+            "could not start a tokio runtime for the probe",
+            "re-run doctor; if it persists, report it",
         ));
         return;
-    }
-    match secret_resolver(env).resolve(reference) {
-        Ok(_) => checks.push(Check::ok("llm", "api_key_ref resolves")),
-        Err(e) => checks.push(Check::fail(
-            "llm",
-            format!("api_key_ref does not resolve: {e}"),
-            "export the variable, store the key in the Keychain, or use an op:// reference",
+    };
+    match runtime.block_on(router.probe_auth()) {
+        Ok(()) => checks.push(Check::ok(
+            "llm-online",
+            format!("{} accepted the API key", llm.base_url),
+        )),
+        Err(e) if e.is_auth_failure() => checks.push(Check::fail(
+            "llm-online",
+            format!("the provider rejected the API key: {e}"),
+            "reissue the key at the provider and update [llm].api_key_ref",
+        )),
+        Err(e) => checks.push(Check::warn(
+            "llm-online",
+            format!("could not verify the API key: {e}"),
+            "the provider was unreachable or unwell — this does not mean the key is bad; re-run later",
         )),
     }
 }

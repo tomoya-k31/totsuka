@@ -87,6 +87,22 @@ pub async fn resolve<C: ChatTransport>(
             );
             Resolution::Resolved(verdict.repo)
         }
+        // A rejected API key is not an inconclusive answer: it is a broken
+        // configuration that degrades *every* new conversation to the picker
+        // and spends a doomed round-trip each time. Left at `info!` it reads
+        // as mildly inconvenient normal operation — which is exactly how a
+        // dead OpenRouter key went unnoticed until someone happened to read
+        // the log (#267). `totsuka doctor --online` catches it up front.
+        Err(e) if e.is_auth_failure() => {
+            tracing::warn!(
+                error = %e,
+                "the LLM provider rejected the API key; repository selection \
+                 falls back to the operator picker for every new conversation \
+                 until it is fixed — check [llm].api_key_ref and run \
+                 `totsuka doctor --online`"
+            );
+            Resolution::NeedsSelection(names)
+        }
         Err(e) => {
             tracing::info!(error = %e, "LLM classification inconclusive; asking the operator");
             Resolution::NeedsSelection(names)
@@ -116,6 +132,53 @@ mod tests {
 
     fn names(candidates: Vec<RepoInfo>) -> Vec<String> {
         candidates.into_iter().map(|r| r.name).collect()
+    }
+
+    /// A [`ChatTransport`] that always fails the same way.
+    struct FailingChat(crate::llm::ChatError);
+
+    impl ChatTransport for FailingChat {
+        async fn complete(
+            &self,
+            _config: &crate::config::LlmConfig,
+            _body: serde_json::Value,
+        ) -> Result<serde_json::Value, crate::llm::ChatError> {
+            Err(self.0.clone())
+        }
+    }
+
+    /// The same config plus an `[llm]` table, so stage ② actually runs.
+    fn config_with_llm() -> SlackConfig {
+        let mut config = config(json!([]));
+        config.llm = Some(crate::config::LlmConfig {
+            base_url: "https://llm.test/v1".into(),
+            model: "test-model".into(),
+            api_key: "sk-dead".into(),
+            confidence_threshold: 0.6,
+        });
+        config
+    }
+
+    #[tokio::test]
+    async fn a_rejected_key_still_degrades_to_the_picker() {
+        // The louder log (#267) must not change the behaviour: an unusable
+        // classifier always falls through to the operator, never strands or
+        // guesses at the mention.
+        let config = config_with_llm();
+        for error in [
+            crate::llm::ChatError::http(401, r#"{"error":{"message":"User not found."}}"#),
+            crate::llm::ChatError::transport("connection refused"),
+        ] {
+            let chat = FailingChat(error);
+            assert_eq!(
+                resolve(&chat, &config, "random-talk", "fix the button", "").await,
+                Resolution::NeedsSelection(vec![
+                    "web-app".to_string(),
+                    "design-system".to_string(),
+                    "backend-api".to_string(),
+                ])
+            );
+        }
     }
 
     #[test]

@@ -46,6 +46,21 @@ pub enum LlmError {
 }
 
 impl LlmError {
+    /// Whether the gateway rejected our credentials (401/403).
+    ///
+    /// Distinct from every other failure: a bad key does not get better on
+    /// its own, so `doctor --online` reports it as a failed check while a
+    /// timeout or a 5xx is only advisory (#267).
+    pub fn is_auth_failure(&self) -> bool {
+        matches!(
+            self,
+            LlmError::Status {
+                status: 401 | 403,
+                ..
+            }
+        )
+    }
+
     /// Whether the error is worth retrying with backoff (§5.3).
     pub fn is_retryable(&self) -> bool {
         matches!(
