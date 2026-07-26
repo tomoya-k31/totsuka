@@ -36,22 +36,11 @@ fn totsuka() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_totsuka"))
 }
 
-/// Build (freshness no-op when unchanged) and locate a sibling workspace
-/// binary under the same target profile dir as the test binary.
+/// Build (once per test process, or not at all under
+/// `TEST_SUPPORT_PREBUILT_BINS`) and locate a sibling workspace binary under
+/// the same target profile dir as the test binary (#281).
 fn build_bin(package: &str, bin: &str) -> PathBuf {
-    let bin_dir = totsuka().parent().expect("target dir").to_path_buf();
-    let mut build = Command::new(env!("CARGO"));
-    build.args(["build", "-p", package, "--bin", bin]);
-    if bin_dir.file_name().and_then(|n| n.to_str()) == Some("release") {
-        build.arg("--release");
-    }
-    let status = build
-        .status()
-        .unwrap_or_else(|e| panic!("spawn cargo build for {bin}: {e}"));
-    assert!(status.success(), "failed to build {bin}");
-    let path = bin_dir.join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
-    assert!(path.exists(), "{bin} not found at {}", path.display());
-    path
+    test_support::sibling_bin(&totsuka(), package, bin)
 }
 
 // ---------------------------------------------------------------------------

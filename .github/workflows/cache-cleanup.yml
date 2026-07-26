@@ -1,0 +1,80 @@
+name: cache-cleanup
+
+# Actions キャッシュはリポジトリあたり 10 GB が上限で、超えると GitHub が
+# LRU で退避する。このリポジトリは PR ごとに `v0-rust-test` (約 240 MB) と
+# `v0-rust-clippy` (約 110 MB) を **PR スコープ** (`refs/pull/<N>/merge`) で
+# 作り、他の PR からは再利用できない。放っておくと常時上限に張り付き、
+# main のベースラインまで退避されて毎 PR のビルドが温まらなくなる (#281)。
+#
+# クローズ済み PR のキャッシュはもう誰も読まないので回収する。PR クローズ
+# 契機ではなく週次 cron にしているのは課金のため: ジョブは 1 分未満でも
+# 1 分に切り上げられるので、PR ごとに 1 ジョブ足すと PR 数ぶんの固定費に
+# なる。週次なら月 4 分で済む。
+#
+# Runner: ubuntu-slim — gh/jq の API 呼び出しだけで Docker も特権操作も
+# 使わず、失敗してもリリースを止めない (キャッシュが減らないだけ)。
+
+on:
+  schedule:
+    - cron: "23 20 * * 0" # 日曜 05:23 JST
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write # キャッシュの削除に必要
+  pull-requests: read # PR の open/closed 判定に必要
+
+jobs:
+  cleanup:
+    name: purge caches of closed PRs
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - name: Delete caches belonging to closed PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # ref ごとに 1 度だけ PR 状態を引くためのメモ。
+          declare -A pr_state
+
+          before=$(gh api "repos/${GH_REPO}/actions/caches?per_page=100" --paginate \
+            --jq '.actions_caches[].size_in_bytes' | awk '{s+=$1} END {printf "%.2f", s/1073741824}')
+          echo "before: ${before} GB"
+
+          deleted=0
+          freed=0
+          # id / ref / size をタブ区切りで取り出す。ref は GitHub 生成の
+          # `refs/pull/<N>/merge` 等で、シェルへ展開せず read で受ける。
+          while IFS=$'\t' read -r id ref size; do
+            case "$ref" in
+              refs/pull/*/merge)
+                num="${ref#refs/pull/}"
+                num="${num%/merge}"
+                ;;
+              *) continue ;;  # main 等のブランチスコープは残す
+            esac
+
+            if [ -z "${pr_state[$num]+set}" ]; then
+              pr_state[$num]=$(gh api "repos/${GH_REPO}/pulls/${num}" --jq '.state' 2>/dev/null || echo "unknown")
+            fi
+            [ "${pr_state[$num]}" = "closed" ] || continue
+
+            if gh api -X DELETE "repos/${GH_REPO}/actions/caches/${id}" >/dev/null 2>&1; then
+              deleted=$((deleted + 1))
+              freed=$((freed + size))
+              echo "deleted cache ${id} (PR #${num}, $((size / 1048576)) MB)"
+            fi
+          done < <(gh api "repos/${GH_REPO}/actions/caches?per_page=100" --paginate \
+                     --jq '.actions_caches[] | [.id, .ref, .size_in_bytes] | @tsv')
+
+          echo "---"
+          echo "deleted ${deleted} caches, freed $((freed / 1048576)) MB"
+          after=$(gh api "repos/${GH_REPO}/actions/caches?per_page=100" --paginate \
+            --jq '.actions_caches[].size_in_bytes' | awk '{s+=$1} END {printf "%.2f", s/1073741824}')
+          echo "after: ${after:-0} GB (上限 10 GB)"

@@ -22,25 +22,11 @@ fn totsuka() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_totsuka"))
 }
 
-/// Path to the `mock_plugin` binary (a bin of `orchestrator-core`, built at the
-/// same target dir under the same profile as the tests). Rebuilt every call so
-/// an edit to `mock_plugin.rs` is never silently missed — cargo's dependency
-/// tracking makes it a fast no-op when already fresh.
+/// Path to the `mock_plugin` binary (a bin of `orchestrator-core`, so
+/// `CARGO_BIN_EXE_*` does not cover it). Built once per test process, or not at
+/// all when CI has pre-built the workspace (#281).
 fn mock_plugin() -> PathBuf {
-    // `CARGO_BIN_EXE_totsuka` lives in the same profile dir the tests use; its
-    // parent's name is the profile (`debug` / `release`).
-    let bin_dir = totsuka().parent().expect("target dir").to_path_buf();
-    let mut build = Command::new(env!("CARGO"));
-    build.args(["build", "-p", "orchestrator-core", "--bin", "mock_plugin"]);
-    if bin_dir.file_name().and_then(|n| n.to_str()) == Some("release") {
-        build.arg("--release");
-    }
-    let status = build.status().expect("spawn cargo build for mock_plugin");
-    assert!(status.success(), "failed to build mock_plugin");
-
-    let path = bin_dir.join(format!("mock_plugin{}", std::env::consts::EXE_SUFFIX));
-    assert!(path.exists(), "mock_plugin not found at {}", path.display());
-    path
+    test_support::sibling_bin(&totsuka(), "orchestrator-core", "mock_plugin")
 }
 
 /// The XDG-scoped environment for a scratch base.
@@ -50,6 +36,16 @@ struct Env {
     source_log: PathBuf,
     notify_log: PathBuf,
 }
+
+/// One-shot's quiet-period floor for the E2Es (#281). Production is 2s; these
+/// runs drive a mock source whose `task/submit` lands in the first cycle, so
+/// 250ms is still a real cushion — and four `run` invocations stop costing 8s
+/// of pure waiting.
+///
+/// Deliberately not 0: the grace exists because `task/submit` arrives
+/// asynchronously from a freshly spawned plugin subprocess, and 0 would race
+/// the handshake and flake on a loaded runner.
+const GRACE: &[&str] = &["--one-shot-grace-ms", "250"];
 
 impl Env {
     /// XDG dirs get a `totsuka` suffix; place files accordingly.
@@ -233,7 +229,7 @@ fn e2e_full_path_source_output_binary() {
     );
 
     // One-shot run drives fetch → dispatch → done → publish → cleanup.
-    let out = env.run(&["run"]);
+    let out = env.run(&[&["run"], GRACE].concat());
     assert!(out.status.success(), "run failed: {}", stdout(&out));
     assert!(
         stdout(&out).contains("done 1"),
@@ -278,7 +274,7 @@ fn e2e_waiting_input_leaves_task_and_status_shows_it() {
         "none",
         "implement",
     );
-    let out = env.run(&["run"]);
+    let out = env.run(&[&["run"], GRACE].concat());
     assert!(out.status.success());
     assert!(
         stdout(&out).contains("waiting for input"),
@@ -303,7 +299,7 @@ fn e2e_agent_crash_fails_task_and_orchestrator_survives() {
     let env = setup("crash", "crash_on_dispatch = true\n", "none", "implement");
     // The agent self-destructs on dispatch; the run must still exit cleanly
     // (crash isolation, §5.3), failing the affected task.
-    let out = env.run(&["run"]);
+    let out = env.run(&[&["run"], GRACE].concat());
     assert!(out.status.success(), "orchestrator survived the crash");
     assert!(
         stdout(&out).contains("failed 1"),

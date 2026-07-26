@@ -4,7 +4,7 @@ title: テスト戦略（自動結合テスト / E2E / モックプラグイン�
 description: totsuka のテスト層（ユニット・実プロセス結合・バイナリE2E）とモックプラグインによるシナリオ注入、フレーク対策、CI 品質ゲートの定義。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates
 tags: [testing, e2e, integration, mock, ci, quality, slack]
-timestamp: 2026-07-20T18:00:00Z
+timestamp: 2026-07-26T20:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -44,6 +44,16 @@ owner: tomoya-k31
 - **down 中に完了 / finalize 途中クラッシュ**: 回復時 finalize と成果物復元（`run_loop.rs`）。
 - **出力ポリシー失敗**: ゼロコミット PR、PR 作成失敗→retry 再開、ワークフロー消失時の worktree 保持（`run_loop.rs`）。
 
+# テストの待ち時間（[ADR-0018](/decisions/adr-0018-ci-test-time.md)）
+
+テストが実時間を待つ箇所は、定数ではなく**型付きの値**として注入可能にする。既定値は本番値のままで、テストは**待ち時間だけ**を縮め、**回数は本番値のまま維持する**（諦め系テストは回数そのものを検証しているため）。
+
+- `agent-ide-herdr`: `RetryPolicy`（`Server::with_retry_policy` 経由）。`Default` が実機検証値と一致することを unit test で固定している。
+- `orchestrator-core`: `EngineSettings.one_shot_grace` / `worktree_sweep_interval`（config 非露出、テストは `Duration::ZERO`）。
+- CLI バイナリを起動する E2E は構造体を触れないため、`run --one-shot-grace-ms`（hidden）を使う。0 ではなく 250ms を渡す — この猶予は `task/submit` が新規 spawn したプラグインから非同期に届くことへの備えで、0 にすると負荷の高いランナーでハンドシェイクと競合してフレークする。
+
+テスト実行中に `cargo build` を呼ばない。兄弟クレートのバイナリは `test_support::sibling_bin` で解決し、CI は `TEST_SUPPORT_PREBUILT_BINS=1` でビルド自体を飛ばす（この env が `TOTSUKA_` 接頭辞を避けている理由は ADR-0018 §3）。
+
 # フレーク対策
 
 - E2E は原則 **ワンショット**（`--watch` を使わずタイミング非依存）。各バイナリ実行に実時計ガードを付け、ハング時は即失敗させる。例外は Slack E2E: 承認ボタンはタスク完了 *後* に届くため `run --watch` 常駐が必須で、代わりに「観測条件をポーリング + 段階別タイムアウト + 最後に kill」で決定性を担保する。
@@ -54,9 +64,10 @@ owner: tomoya-k31
 
 # CI 品質ゲート
 
-チェック内容は #45 のまま、実行タイミングはコスト最適化のため [ADR-0007](/decisions/adr-0007-ci-cost-optimization.md) で再設計した。
+チェック内容は #45 のまま、実行タイミングはコスト最適化のため [ADR-0007](/decisions/adr-0007-ci-cost-optimization.md) で再設計し、実行時間そのものは [ADR-0018](/decisions/adr-0018-ci-test-time.md) で削減した。
 
-- **毎 PR**（`ci.yml`）: `clippy / rustfmt`（1 ジョブ）と `test`（全層）。`okf-lint.yml`（`lint` ジョブ、唯一の必須チェック）は全 PR で OKF lint を実行する。
+- **毎 PR**（`ci.yml`）: `clippy / rustfmt`（rustfmt・arch-lint・`cargo-machete` をステップとして含む 1 ジョブ。7 秒の machete を独立ジョブにすると切り上げ課金 1 分が固定費になるため #281 で吸収した）と `test`（全層）。`okf-lint.yml`（`lint` ジョブ、唯一の必須チェック）は全 PR で OKF lint を実行する。
+- **週次 cron**（`cache-cleanup.yml`）: クローズ済み PR の Actions キャッシュを回収する。PR ごとに約 350 MB を PR スコープで作り捨てるため放置すると 10 GB 上限に張り付き、main のベースラインまで退避されてビルドが温まらなくなる。
 - **main への push**（`ci.yml`）: `coverage (llvm-cov)` のみ。計装ビルドで全テストスイートを実行するため、マージごとのテスト検証を兼ねる（カバレッジはアーティファクト化のみ、閾値ゲートなし）。
 - **日次 cron + 依存ファイル変更 PR**（`audit.yml`）: `cargo-audit` / `cargo-deny`。
 

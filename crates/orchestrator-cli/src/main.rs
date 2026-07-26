@@ -50,6 +50,14 @@ enum Command {
         /// and which agent would run — without executing anything.
         #[arg(long)]
         dry_run: bool,
+        /// One-shot's quiet-period floor in milliseconds (default 2000) before
+        /// an empty run is allowed to exit.
+        ///
+        /// Hidden: it exists so the E2E suite does not pay 2s of pure waiting
+        /// per `totsuka run` (#281). Lowering it in anger only makes a run give
+        /// up on a source that is still mid-handshake.
+        #[arg(long, hide = true, value_name = "MS")]
+        one_shot_grace_ms: Option<u64>,
     },
     /// Show tasks, worktrees, and whether the orchestrator is running.
     Status {
@@ -193,7 +201,11 @@ fn execute(
     match command {
         Command::Completion { .. } => unreachable!("handled above"),
         Command::Init => init_cmd::run(&cx),
-        Command::Run { watch, dry_run } => run_cmd::run(&cx, watch, dry_run, debug),
+        Command::Run {
+            watch,
+            dry_run,
+            one_shot_grace_ms,
+        } => run_cmd::run(&cx, watch, dry_run, debug, one_shot_grace_ms),
         Command::Status { json } => status_cmd::run(&cx, json.json),
         Command::Task { cmd } => task_cmd::run(&cx, cmd),
         Command::Focus { id } => focus_cmd::run(&cx, id),

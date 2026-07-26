@@ -7,8 +7,9 @@ on:
 
 # Actions billing rounds every job UP to the next full minute, so the job
 # count — not just wall-clock — drives cost. Jobs are therefore consolidated
-# and gated by event: PRs run clippy/rustfmt + test + machete, pushes to main
-# run coverage only
+# and gated by event: PRs run `clippy / rustfmt` (which also carries rustfmt,
+# arch-lint and cargo-machete as steps, #281) and `test`; pushes to main run
+# coverage only
 # (llvm-cov executes the same test suite, so main is still tested per merge).
 # None of these jobs is a required status check (the ruleset requires only
 # okf-lint's `lint`), so event gating cannot leave a PR blocked on "Expected".
@@ -48,6 +49,18 @@ jobs:
         run: bash scripts/arch-lint.sh
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # 未使用依存ドリフトの検出 (#171)。cargo-machete はテキスト走査
+      # (コンパイル不要・数秒) なので、独立ジョブだと切り上げ課金 1 分がまるごと
+      # 固定費になる。clippy ジョブは 35 秒前後でクリティカルパスでもないため、
+      # ここへ吸収しても wall-clock は変わらず課金だけ 1 分減る (#281)。
+      # 誤検知はクレートごとに `[package.metadata.cargo-machete] ignored = [...]`
+      # で理由コメント付きに抑止する。
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-machete
+      - name: Run cargo-machete
+        run: cargo-machete
 
   test:
     name: test
@@ -65,30 +78,15 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Build
         run: cargo build --workspace --all-targets
+      # CLI の E2E が起動する兄弟バイナリ (mock_plugin / task-source-slack) は
+      # 上の Build で必ず出来ているので、テストごとに `cargo build` を
+      # 呼び直させない (#281)。名前が TOTSUKA_ 始まりでないのは意図的で、
+      # 未知の TOTSUKA_* は子プロセスの stderr へ警告を出し (ADR-0009)、
+      # stderr を JSON として読むテストを壊すため。
       - name: Test
+        env:
+          TEST_SUPPORT_PREBUILT_BINS: "1"
         run: cargo test --workspace --all-features
-
-  # Unused-dependency drift guard (#171). cargo-machete is a text-level scan
-  # (no compilation, no Rust toolchain), so it runs on every PR in seconds.
-  # False positives (macro / re-export driven) are suppressed per crate via
-  # `[package.metadata.cargo-machete] ignored = [...]` with a reason comment.
-  # Runner: ubuntu-slim — no Docker/privileged steps, a single-core text scan
-  # that finishes in seconds, and not a required status check, so a slim
-  # failure cannot block a merge or release.
-  machete:
-    name: machete (unused deps)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install cargo-machete
-        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
-        with:
-          tool: cargo-machete
-      - name: Run cargo-machete
-        run: cargo-machete
 
   # cargo-audit / cargo-deny moved to audit.yml (daily cron + dependency-file
   # PRs): advisories change with time, not with PR content.

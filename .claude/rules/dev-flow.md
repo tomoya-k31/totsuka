@@ -51,6 +51,14 @@ post-PR you still monitor all checks that report on your PR.
 - `RUSTFLAGS="-D warnings" cargo test --workspace --all-features` — CI
   (`ci.yml`) exports `RUSTFLAGS: -D warnings` job-wide, so a plain
   `cargo test` can pass locally on a warning that fails CI's build/test.
+  CI additionally sets `TEST_SUPPORT_PREBUILT_BINS=1` (it has just run
+  `cargo build --workspace --all-targets`), which makes the CLI E2Es use the
+  already-built sibling binaries instead of shelling out to `cargo build` per
+  test. **Do not set that variable locally** unless you have just built the
+  workspace — the E2Es would then test stale binaries. Never rename it into the
+  `TOTSUKA_` namespace: unrecognised `TOTSUKA_*` variables print a warning to
+  the child's stderr (ADR-0009) and break the tests that parse stderr as JSON
+  (→ [ADR-0018](../../docs/decisions/adr-0018-ci-test-time.md)).
 - `cargo doc --workspace --no-deps` — rustdoc link integrity. `[workspace.lints.rust]
   warnings = "deny"` already makes a broken intra-doc link a hard error
   (exit 101), but **CI never runs `cargo doc`**, so nothing fires it: 18
