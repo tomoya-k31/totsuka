@@ -80,6 +80,20 @@ error: cannot update the lock file /.../Cargo.lock because --locked was passed t
 
 より厳格な `cargo build --locked` / `cargo test --locked` は**採らない**。CI が lock を直せなくなり、依存更新 PR（Renovate）や release-please の `sync-lockfile` ジョブとの相互作用が変わる。`release-please.yml` は「stray lock drift がリリースビルドを止めないよう」**意図的に `--locked` を外している**。ここは**検出専用**に留める。
 
+## `--all-features` は要らない
+
+clippy / test は `--all-features` を付けているのに、このステップは付けていない。**`Cargo.lock` の解決は feature フラグに非依存**（潜在的な依存グラフ全体をロックする）なので、optional / feature ゲート付きの依存を足して lock を再生成しなかった場合も、`--all-features` の有無に関わらず同じように `--locked` が落ちる。実際に検証済み。
+
+なお、**逆方向のドリフト**（lock に使われていない古いエントリが残っている）は `--locked` では落ちない。cargo はそれをエラーにしないため。本ステップの対象は「宣言があるのに lock に無い」方向だけである。
+
+## release-please の Release PR では一時的に赤くなる（仕様どおり）
+
+`release-please` は `Cargo.toml` のバージョンを上げるが `Cargo.lock` は 1 バージョン遅れたままにする（`release-please.yml` にその旨のコメントがある）。したがって **Release PR の最初の push では本ステップが落ちる**。
+
+これは誤検出ではなく**正しい検出**で、`sync-lockfile` ジョブの追従コミットが次の run で解消する。加えて `clippy / rustfmt` は**必須チェックではない**（ruleset が要求するのは `okf-lint` の `lint` のみ）ため、リリースがブロックされることはない。
+
+Renovate の PR は `Cargo.toml` と `Cargo.lock` を同時に更新するので影響を受けない。
+
 ## 罠
 
 - **workspace member 間の依存追加は見落としやすい。** 外部 crate の追加は `Cargo.lock` に大きな差分を生むので気づくが、#283 のケース（`test-support` への依存追加）は **3 行しか動かない**。
