@@ -422,6 +422,7 @@ async fn conversation_plugins(
     tasks: serde_json::Value,
     hook_spec: Option<serde_json::Value>,
     dispatch_log: &Path,
+    source_log: &Path,
     notify_log: &Path,
 ) -> PluginSet {
     let mut set = PluginSet::default();
@@ -430,7 +431,11 @@ async fn conversation_plugins(
         launch(
             "task_source",
             "mock_src",
-            json!({ "task_submit": true, "submit_tasks": tasks }),
+            // `notify_log` on a *source* records the orchestrator's answers to
+            // the requests it made — i.e. the `task/submit` ack. That is the
+            // only positive evidence that a submission was processed, which a
+            // test asserting "nothing else happened" needs to wait for.
+            json!({ "task_submit": true, "submit_tasks": tasks, "notify_log": source_log }),
         )
         .await,
     );
@@ -486,6 +491,7 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
     let socket = base.join("claude.sock");
     let notify_log = base.join("notify.ndjson");
     let dispatch_log = base.join("dispatch.ndjson");
+    let source_log = base.join("source.ndjson");
     let db_path = base.join("state.db");
     let conversation = "C1:100.0";
 
@@ -506,6 +512,7 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
                 "session_start": true,
             })),
             &dispatch_log,
+            &source_log,
             &notify_log,
         )
         .await,
@@ -562,6 +569,7 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
             // No self-report this time: the test is about the dispatch.
             None,
             &dispatch_log,
+            &source_log,
             &notify_log,
         )
         .await,
@@ -632,6 +640,7 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
             }]),
             None,
             &dispatch_log,
+            &source_log,
             &notify_log,
         )
         .await,
@@ -639,15 +648,16 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
         no_llm(),
     )
     .await;
-    // Nothing to wait *for* — the assertion is that nothing happens — so run
-    // until the engine has certainly seen the submission and settled.
-    let probe = db_path.clone();
+    // Wait for the *ack*, not for the task to exist: it already does, so
+    // that condition is true on the first tick and the run would stop before
+    // the re-delivery was ever processed — the assertions below would then
+    // hold vacuously. A `duplicate` ack is positive evidence that ingest saw
+    // this message and rejected it as one it already has.
+    let probe = source_log.clone();
     run_until(&mut engine, move || {
-        StateDb::open(&probe)
-            .unwrap()
-            .find_by_source("mock_src", conversation)
-            .unwrap()
-            .is_some()
+        read_log(&probe).iter().any(|entry| {
+            entry["method"] == "response" && entry["params"]["result"]["status"] == "duplicate"
+        })
     })
     .await;
     assert_eq!(
