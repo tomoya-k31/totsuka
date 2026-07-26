@@ -64,6 +64,50 @@ impl OpenAiRouter {
         )
     }
 
+    /// One minimal live request asking only whether the gateway accepts our
+    /// API key (`totsuka doctor --online`, #267).
+    ///
+    /// Deliberately not the [`LlmRouter`] path. No `response_format` schema:
+    /// providers differ in what structured-output shapes they accept, and a
+    /// rejected schema (400) would masquerade as a credentials problem. No
+    /// retries: a probe answers now or not at all. `max_tokens: 1` so a
+    /// healthy provider bills a rounding error. The response body is
+    /// discarded — a 2xx has already proven the key was accepted, which is
+    /// the entire question.
+    pub async fn probe_auth(&self) -> Result<(), LlmError> {
+        let body = json!({
+            "model": self.config.model,
+            "messages": [{ "role": "user", "content": "ping" }],
+            "max_tokens": 1,
+        });
+        let response = self
+            .client
+            .post(self.endpoint())
+            .bearer_auth(self.api_key.expose())
+            .timeout(self.config.timeout)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LlmError::Timeout(self.config.timeout.as_secs())
+                } else {
+                    LlmError::Transport(e.to_string())
+                }
+            })?;
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        // Body read failures must not mask the status we came for.
+        let text = response.text().await.unwrap_or_default();
+        Err(LlmError::Status {
+            status: status.as_u16(),
+            body: text.chars().take(500).collect(),
+        })
+    }
+
     /// One request attempt, mapping transport/status errors to [`LlmError`].
     async fn attempt(&self, body: &Value) -> Result<Value, LlmError> {
         let response = self
@@ -187,6 +231,24 @@ mod tests {
             parse_chat_content(&body).unwrap_err(),
             LlmError::InvalidResponse(_)
         ));
+    }
+
+    #[test]
+    fn only_401_and_403_are_auth_failures() {
+        let status = |status| LlmError::Status {
+            status,
+            body: String::new(),
+        };
+        assert!(status(401).is_auth_failure());
+        assert!(status(403).is_auth_failure());
+        // Busy, broken, or malformed — none of them say the key is bad.
+        for other in [400, 404, 429, 500, 503] {
+            assert!(!status(other).is_auth_failure(), "{other}");
+        }
+        assert!(!LlmError::Timeout(30).is_auth_failure());
+        assert!(!LlmError::Transport("refused".into()).is_auth_failure());
+        // An auth failure is terminal, never retried.
+        assert!(!status(401).is_retryable());
     }
 
     #[test]

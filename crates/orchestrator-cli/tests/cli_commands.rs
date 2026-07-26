@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use orchestrator_core::adapters::state_db::TaskMessageInsert;
 use orchestrator_core::adapters::{NewTask, StateDb};
@@ -821,5 +823,140 @@ fn broken_manifest_marks_hook_capability_unknown_in_doctor() {
         detail.contains("unknown") && detail.contains("`wf`") && detail.contains("`herdr`"),
         "the warn names the workflow whose agent capability is unknown: {detail}"
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A canned HTTP endpoint standing in for an OpenAI-compatible gateway.
+///
+/// Returns its base URL and a counter of the requests it served, so a test
+/// can assert not only what `doctor` reported but whether it called out at
+/// all — the whole point of `--online` being opt-in.
+fn mock_llm_gateway(status: u16, reason: &str, body: &'static str) -> (String, Arc<AtomicUsize>) {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let served = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&served);
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            // The probe request is a few hundred bytes; one read drains it,
+            // so closing the socket cannot reset the client mid-response.
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            counter.fetch_add(1, Ordering::SeqCst);
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}/v1"), served)
+}
+
+/// Read one check out of `doctor --json` output.
+fn doctor_check(out: &Output, name: &str) -> Option<serde_json::Value> {
+    let doc: serde_json::Value = serde_json::from_str(&stdout(out)).expect("doctor --json parses");
+    doc.as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == name)
+        .cloned()
+}
+
+/// `doctor` alone can only say the key *reference* resolves; `--online` is
+/// what proves the provider accepts it (#267). A rejected key must fail the
+/// check — that is the whole gap the flag closes.
+#[test]
+fn doctor_online_reports_a_rejected_llm_key() {
+    let base = scratch("doctor-online-401");
+    let (url, served) = mock_llm_gateway(
+        401,
+        "Unauthorized",
+        r#"{"error":{"message":"User not found.","code":401}}"#,
+    );
+    seed_empty_config(
+        &base,
+        &format!(
+            "[llm]\nbase_url = \"{url}\"\nmodel = \"probe-model\"\n\
+             api_key_ref = \"${{DOCTOR_TEST_LLM_KEY}}\"\n"
+        ),
+    );
+    let env = [("DOCTOR_TEST_LLM_KEY", "sk-dead")];
+
+    // Offline: the reference resolves, so doctor is happy — and silent about
+    // the key being dead. No request left the process.
+    let offline = run_env(&base, &["doctor", "--json"], &env);
+    let llm = doctor_check(&offline, "llm").expect("llm check present");
+    assert_eq!(llm["ok"], true, "{llm}");
+    assert!(
+        doctor_check(&offline, "llm-online").is_none(),
+        "the live probe must not run without --online"
+    );
+    assert_eq!(
+        served.load(Ordering::SeqCst),
+        0,
+        "plain doctor stays offline"
+    );
+
+    // Online: the same config now fails, naming the provider's own words.
+    let online = run_env(&base, &["doctor", "--json", "--online"], &env);
+    let probe = doctor_check(&online, "llm-online").expect("llm-online check present");
+    assert_eq!(probe["ok"], false, "a rejected key fails doctor: {probe}");
+    assert!(
+        probe["detail"]
+            .as_str()
+            .unwrap()
+            .contains("User not found."),
+        "the provider's message reaches the operator: {probe}"
+    );
+    assert!(
+        probe["action"].as_str().unwrap().contains("api_key_ref"),
+        "cause + next action (§7): {probe}"
+    );
+    assert_eq!(
+        served.load(Ordering::SeqCst),
+        1,
+        "exactly one probe, no retries"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// An accepted key passes, and a provider that is merely unwell stays
+/// advisory: a 5xx says nothing about the credentials, so it must not turn
+/// `doctor` red.
+#[test]
+fn doctor_online_passes_on_2xx_and_only_warns_on_5xx() {
+    let base = scratch("doctor-online-2xx");
+    let (ok_url, _) = mock_llm_gateway(200, "OK", r#"{"choices":[{"message":{"content":"x"}}]}"#);
+    seed_empty_config(
+        &base,
+        &format!("[llm]\nbase_url = \"{ok_url}\"\nmodel = \"probe-model\"\n"),
+    );
+
+    // No `api_key_ref` at all — a keyless local gateway still gets probed.
+    let out = run(&base, &["doctor", "--json", "--online"]);
+    let probe = doctor_check(&out, "llm-online").expect("llm-online check present");
+    assert_eq!(probe["ok"], true, "{probe}");
+    assert!(
+        probe["detail"].as_str().unwrap().contains(&ok_url),
+        "the probed endpoint is named: {probe}"
+    );
+
+    let (bad_url, _) = mock_llm_gateway(503, "Service Unavailable", "upstream is down");
+    seed_empty_config(
+        &base,
+        &format!("[llm]\nbase_url = \"{bad_url}\"\nmodel = \"probe-model\"\n"),
+    );
+    let out = run(&base, &["doctor", "--json", "--online"]);
+    let probe = doctor_check(&out, "llm-online").expect("llm-online check present");
+    assert_eq!(probe["ok"], true, "a 5xx must not fail doctor: {probe}");
+    assert_eq!(probe["warning"], true, "{probe}");
     let _ = std::fs::remove_dir_all(&base);
 }

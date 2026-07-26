@@ -88,6 +88,12 @@ enum Command {
     },
     /// Diagnose the environment (git, config, plugins, orphan worktrees).
     Doctor {
+        /// Additionally verify the configured `[llm]` gateway accepts the
+        /// API key, with one minimal live request. Opt-in: it talks to the
+        /// network and resolves the key reference, so an `op://` reference
+        /// may raise a biometric prompt.
+        #[arg(long)]
+        online: bool,
         #[command(flatten)]
         json: common::JsonFlag,
     },
@@ -125,7 +131,7 @@ fn main() -> std::process::ExitCode {
 /// any) is then emitted as a JSON envelope on stderr instead of plain text.
 fn wants_json(command: &Command) -> bool {
     match command {
-        Command::Status { json } | Command::Doctor { json } => json.json,
+        Command::Status { json } | Command::Doctor { json, .. } => json.json,
         Command::Task { cmd } => cmd.wants_json(),
         Command::Plugin { cmd } => cmd.wants_json(),
         _ => false,
@@ -194,6 +200,6 @@ fn execute(
         Command::Plugin { cmd } => plugin_cmd::run(&cx, cmd),
         Command::Config { cmd } => config_cmd::run(&cx, cmd),
         Command::Logs { follow, task } => logs_cmd::run(&cx, follow, task),
-        Command::Doctor { json } => doctor_cmd::run(&cx, json.json),
+        Command::Doctor { json, online } => doctor_cmd::run(&cx, json.json, online),
     }
 }
