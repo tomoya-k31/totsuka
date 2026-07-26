@@ -11,11 +11,11 @@ owner: tomoya-k31
 
 # 概要
 
-タスク実行状態を SQLite（`$XDG_STATE_HOME/totsuka/state.db`、WAL・`foreign_keys=ON`）へ永続化し、アプリ再起動後に実行中タスクを復元する（F-70）。埋め込みマイグレーションを起動時に自動適用し、適用前に DB ファイルをバックアップ（`{path}.bak`）する（§10.3）。
+タスク実行状態を SQLite（`$XDG_STATE_HOME/totsuka/state.db`、WAL・`foreign_keys=ON`）へ永続化し、アプリ再起動後に実行中タスクを復元する（F-70）。埋め込みマイグレーションを起動時に自動適用し、適用前に DB ファイルをバックアップ（`{path}.v{適用前バージョン}.bak`）する（§10.3）。
 
 # Schema
 
-## ER 図（v6 時点）
+## ER 図（v7 時点）
 
 `tasks` を中心に `sessions` / `events` / `hook_events` / `task_messages` が `task_id` で 1:N にぶら下がる。**worktree に専用テーブルはなく**、タスクと 1:1 のため `tasks.repo` / `worktree_path` / `branch` の 3 列で表現する（実体の状態は git を直接参照）。tmux の pane も永続化せず、`session list` / `doctor` は tmux を実走査して DB と突き合わせる。`schema_migrations` は FK を持たない独立テーブル。
 
@@ -91,6 +91,7 @@ erDiagram
     schema_migrations {
         INTEGER version PK "index+1 = version（現行 v7）"
         TEXT applied_at "NN"
+        TEXT applied_by "導入したアプリ版数（旧 DB は NULL = 不明）"
     }
 ```
 
@@ -189,7 +190,13 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 ## schema_migrations（§10.3）
 
-`version` / `applied_at`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを `{path}.bak` へバックアップ。現行 v7（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し。v5 = #257（[ADR-0015](/decisions/adr-0015-conversation-task-identity.md)）で `task_messages` を新設（**純追加**。既存の読み書きを一切変えないため、エピック #242 の途中でアップグレードが止まっても壊れた状態にならない。`tasks.thread_key` の DROP は後続バージョンに分離してある）。v6 = #258 で v5 以前の全タスクに台帳 1 行をバックフィル。**v5 が純追加だったことの裏返しで既存タスクの台帳が空のままになり**、ingest が「新着メッセージか」を台帳から判定するようになると**既存の終端タスクが最初の再配送で reopen され再実行される**（返信ソースなら二重返信）。再配送は例外ではなく定常で、`plugin_sdk::poll_loop` は自前 dedup を持たず毎 tick 全件を再 submit し orchestrator の `duplicate` ack だけに依存している。`message_key = source_task_id` は `message_key` 未設定ソースの ingest 側フォールバックと一致するため、それらの再配送は v5 以前と同じく dedup される。バックフィル行はタスクの状態によらず処理済みとして入れる — 指示内容は既に `tasks.source_payload` にあり（現行 dispatch が読む経路）、**未処理のプロンプト素材として提示してはならない**ため。`body` を空にしているのも同じ理由で、復元するには SQL で `source_payload` を JSON 走査する必要がありこのスキーマは意図的に JSON 走査を持たない）。v7 = #264 で `tasks.thread_key` と `idx_tasks_thread_key` を DROP（#242 で `Task.id` 自体が会話を指すようになり、相関すべき「先行タスク」が存在しなくなったため役目を終えた列。ingest / dispatch の作業が入り切ってから独立したバージョンとして落とすことで、v5〜v6 の途中で resume を壊さない。死んだ列は「設定しても何も起きない」罠として残るため放置しない。`DROP COLUMN` は SQLite ≥3.35 が必要だが `rusqlite` の bundled ビルドは十分に新しく、本プロジェクトは常に同梱の SQLite としか話さない）。
+`version` / `applied_at` / `applied_by`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを **`{path}.v{適用前バージョン}.bak`** へバックアップし、適用時のみ INFO ログ（`from` / `to` / `backup`）を残す。現行 v7（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し。v5 = #257（[ADR-0015](/decisions/adr-0015-conversation-task-identity.md)）で `task_messages` を新設（**純追加**。既存の読み書きを一切変えないため、エピック #242 の途中でアップグレードが止まっても壊れた状態にならない。`tasks.thread_key` の DROP は後続バージョンに分離してある）。v6 = #258 で v5 以前の全タスクに台帳 1 行をバックフィル。**v5 が純追加だったことの裏返しで既存タスクの台帳が空のままになり**、ingest が「新着メッセージか」を台帳から判定するようになると**既存の終端タスクが最初の再配送で reopen され再実行される**（返信ソースなら二重返信）。再配送は例外ではなく定常で、`plugin_sdk::poll_loop` は自前 dedup を持たず毎 tick 全件を再 submit し orchestrator の `duplicate` ack だけに依存している。`message_key = source_task_id` は `message_key` 未設定ソースの ingest 側フォールバックと一致するため、それらの再配送は v5 以前と同じく dedup される。バックフィル行はタスクの状態によらず処理済みとして入れる — 指示内容は既に `tasks.source_payload` にあり（現行 dispatch が読む経路）、**未処理のプロンプト素材として提示してはならない**ため。`body` を空にしているのも同じ理由で、復元するには SQL で `source_payload` を JSON 走査する必要がありこのスキーマは意図的に JSON 走査を持たない）。v7 = #264 で `tasks.thread_key` と `idx_tasks_thread_key` を DROP（#242 で `Task.id` 自体が会話を指すようになり、相関すべき「先行タスク」が存在しなくなったため役目を終えた列。ingest / dispatch の作業が入り切ってから独立したバージョンとして落とすことで、v5〜v6 の途中で resume を壊さない。死んだ列は「設定しても何も起きない」罠として残るため放置しない。`DROP COLUMN` は SQLite ≥3.35 が必要だが `rusqlite` の bundled ビルドは十分に新しく、本プロジェクトは常に同梱の SQLite としか話さない）。
+
+`applied_by`（#275）は **その version を導入した totsuka のアプリ版数**（`CARGO_PKG_VERSION`。ワークスペース共通 version なので totsuka 本体の版数と一致する）。「この DB を上げたのはどの版か」を事後に追うための台帳であり、**互換判定の権威ではない**（権威はスキーマ版数）。nullable で、列を持たなかった旧バイナリが書いた行は NULL のまま = 「不明」。バックフィルはしない（その版が実際に適用したわけではないため）。
+
+この ALTER は **`MIGRATIONS` に載せず `StateDb::init` のブートストラップ段階**（適用ループの前）で条件付きに行う。`schema_migrations` は `MIGRATIONS` の各エントリを**採番している側**のテーブルなので、ALTER を仮に version N として書くと N 未満の INSERT が ALTER より先に走り、それらの INSERT が書く列がまだ無い（例: v5 の DB を v8 まで一気に上げると `no such column: applied_by`）。台帳テーブル自身をその台帳のバージョン番号で管理すると順序が循環する。ブートストラップに置くことで、適用ループ内の INSERT は常に `applied_by` を書ける。
+
+バックアップ名にスキーマ版数を入れる（`state.db.v5.bak`）のは、固定名 `.bak` だと **アップグレードのたびに上書きされ、2 世代分を一気に上げたとき中間地点に戻れない**ため。またディスク上の `.bak` がどのスキーマ版か外から分からない問題も解消する。旧命名 `state.db.bak` は削除せず残置する。
 
 [会話継続](/glossary/conversation-continuity.md)（E-09）用のストア API `find_by_thread_key` と `tasks.thread_key` 列は **#242/#264 で撤去した**（v7）。「この 2 つのタスクは同じ会話だ」と言うための相関キーだったが、`Task.id` 自体が会話を指すようになり、追いメンションは**同じタスクの別メッセージ**になったため、相関すべき「先行タスク」がそもそも存在しない。resume 元は `latest_session(task_id)` で自明に決まる。
 

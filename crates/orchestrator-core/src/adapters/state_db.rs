@@ -8,7 +8,12 @@
 //!   as JSON rather than per-column, absorbing source differences.
 //! - `tasks.finished_at` is the retention anchor for worktree cleanup (#53).
 //! - Migrations run on open inside a transaction; the DB file is backed up
-//!   first when there are pending migrations (§10.3).
+//!   first when there are pending migrations, to `{path}.v{current}.bak` —
+//!   the pre-migration schema version, so a two-version upgrade still leaves
+//!   a way back to the intermediate one (§10.3, #275).
+//! - `schema_migrations.applied_by` records the totsuka version that applied
+//!   each row (#275). It is display/diagnostic only — schema version, not app
+//!   version, is what compatibility is judged on.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -468,6 +473,26 @@ pub enum TaskMessageOutcome {
 const TASK_MESSAGE_COLUMNS: &str = "id, task_id, message_key, author, body, url, \
      payload, received_at, processed_at";
 
+/// Add `schema_migrations.applied_by` to a ledger created before the column
+/// existed (#275).
+///
+/// Nullable on purpose: rows written by binaries that predate the column stay
+/// NULL, which reads as "unknown" rather than being backfilled with a version
+/// that did not actually apply them.
+///
+/// Called from bootstrap, not from `MIGRATIONS` — see the comment at the call
+/// site for why the ledger table cannot be versioned by its own ledger.
+fn ensure_applied_by_column(conn: &Connection) -> Result<(), StateError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(schema_migrations)")?;
+    let names = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<Result<Vec<String>, _>>()?;
+    if !names.iter().any(|n| n == "applied_by") {
+        conn.execute_batch("ALTER TABLE schema_migrations ADD COLUMN applied_by TEXT;")?;
+    }
+    Ok(())
+}
+
 /// The SQLite state database.
 pub struct StateDb {
     conn: Connection,
@@ -516,9 +541,18 @@ impl StateDb {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_migrations (
                 version    INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL
+                applied_at TEXT NOT NULL,
+                applied_by TEXT
             );",
         )?;
+        // Widen a ledger created before `applied_by` existed. This has to
+        // happen here, in bootstrap, *before* the apply loop — never as a
+        // `MIGRATIONS` entry. `schema_migrations` is the table that versions
+        // those entries, so an ALTER expressed as version N would run after
+        // the INSERT of every version below N, and those INSERTs write the
+        // column: upgrading a v5 DB straight to v8 would fail with
+        // `no such column: applied_by`. Bootstrapping it breaks the cycle.
+        ensure_applied_by_column(&conn)?;
         let current: i64 = conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
             [],
@@ -527,22 +561,38 @@ impl StateDb {
 
         if (current as usize) < MIGRATIONS.len() {
             // Back up the DB file before mutating its schema (§10.3).
+            let mut backup_path = None;
             if let Some((path, true)) = &backup {
                 // Flush any WAL into the main db first; in WAL mode a plain
                 // file copy would otherwise miss uncheckpointed pages and
                 // produce an unrestorable backup.
                 conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
-                let bak = PathBuf::from(format!("{}.bak", path.display()));
-                fs::copy(path, bak)?;
+                // The pre-migration schema version is part of the name: a
+                // single fixed `.bak` is overwritten on every upgrade, so a
+                // run that spans two versions leaves no way back to the
+                // intermediate one, and a `.bak` sitting on disk says nothing
+                // about which schema it holds.
+                let bak = PathBuf::from(format!("{}.v{current}.bak", path.display()));
+                fs::copy(path, &bak)?;
+                backup_path = Some(bak);
             }
+            tracing::info!(
+                from = current,
+                to = MIGRATIONS.len() as i64,
+                backup = backup_path
+                    .as_ref()
+                    .map_or_else(|| "none".to_string(), |p| p.display().to_string()),
+                "applying state.db migrations"
+            );
             for (i, sql) in MIGRATIONS.iter().enumerate() {
                 let version = (i + 1) as i64;
                 if version > current {
                     let tx = conn.transaction()?;
                     tx.execute_batch(sql)?;
                     tx.execute(
-                        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-                        params![version, clock.now_rfc3339()],
+                        "INSERT INTO schema_migrations (version, applied_at, applied_by) \
+                         VALUES (?1, ?2, ?3)",
+                        params![version, clock.now_rfc3339(), env!("CARGO_PKG_VERSION")],
                     )?;
                     tx.commit()?;
                 }
@@ -1727,10 +1777,11 @@ mod tests {
 
         // Reopen through StateDb: v2 applies and the old file is backed up.
         let db = StateDb::open(&path).unwrap();
-        let bak = PathBuf::from(format!("{}.bak", path.display()));
+        let bak = PathBuf::from(format!("{}.v1.bak", path.display()));
         assert!(
             bak.exists(),
-            "existing DB backed up before migrating (§10.3)"
+            "existing DB backed up before migrating, named for the schema \
+             version it holds (§10.3, #275)"
         );
 
         // The v1 row survived; the new columns read back as NULL on it.
@@ -1801,7 +1852,7 @@ mod tests {
         // Reopen through StateDb: v3 applies and the old file is backed up.
         let db = StateDb::open(&path).unwrap();
         assert!(
-            PathBuf::from(format!("{}.bak", path.display())).exists(),
+            PathBuf::from(format!("{}.v2.bak", path.display())).exists(),
             "existing DB backed up before migrating (§10.3)"
         );
 
@@ -1900,7 +1951,7 @@ mod tests {
         // Reopen through StateDb: v4 applies and the old file is backed up.
         let db = StateDb::open(&path).unwrap();
         assert!(
-            PathBuf::from(format!("{}.bak", path.display())).exists(),
+            PathBuf::from(format!("{}.v3.bak", path.display())).exists(),
             "existing DB backed up before migrating (§10.3)"
         );
 
@@ -1987,7 +2038,7 @@ mod tests {
 
         let db = StateDb::open(&path).unwrap();
         assert!(
-            PathBuf::from(format!("{}.bak", path.display())).exists(),
+            PathBuf::from(format!("{}.v4.bak", path.display())).exists(),
             "existing DB backed up before migrating (§10.3)"
         );
 
@@ -2138,6 +2189,148 @@ mod tests {
                 .is_err(),
             "thread_key must no longer exist as a column"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Every row this binary writes carries the version that wrote it (#275),
+    /// so "which totsuka introduced schema vN" is answerable after the fact.
+    #[test]
+    fn records_applied_by_for_newly_applied_migrations() {
+        let db = StateDb::open_in_memory().unwrap();
+        let rows: Vec<(i64, Option<String>)> = db
+            .conn
+            .prepare("SELECT version, applied_by FROM schema_migrations ORDER BY version")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert_eq!(rows.len(), MIGRATIONS.len(), "every version is recorded");
+        for (version, applied_by) in rows {
+            assert_eq!(
+                applied_by.as_deref(),
+                Some(env!("CARGO_PKG_VERSION")),
+                "v{version} was applied by this binary"
+            );
+        }
+    }
+
+    /// A ledger from before the column existed must be widened in place, not
+    /// rejected, and its pre-existing rows must stay NULL — this binary did
+    /// not apply them and must not claim it did.
+    #[test]
+    fn adds_applied_by_to_a_legacy_ledger_lacking_the_column() {
+        let dir =
+            std::env::temp_dir().join(format!("totsuka-{}-applied_by_alter", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+
+        // Fully migrated, but with the two-column ledger older binaries wrote:
+        // nothing to apply, so only the bootstrap ALTER can add the column.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations \
+                 (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (i, m) in MIGRATIONS.iter().enumerate() {
+                conn.execute_batch(m).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![(i + 1) as i64, now()],
+                )
+                .unwrap();
+            }
+        }
+
+        let db = StateDb::open(&path).unwrap();
+        let unknown: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE applied_by IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unknown,
+            MIGRATIONS.len() as i64,
+            "pre-existing rows read as unknown, not as applied by this binary"
+        );
+        assert!(
+            !PathBuf::from(format!("{}.v{}.bak", path.display(), MIGRATIONS.len())).exists(),
+            "an up-to-date DB has nothing to migrate, so nothing to back up"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Regression for the ordering trap that keeps `applied_by` out of
+    /// `MIGRATIONS` (#275): applying more than one version in a single open
+    /// must not hit `no such column: applied_by`. Were the ALTER expressed as
+    /// a migration, the older version's INSERT would run before it.
+    #[test]
+    fn applies_two_versions_at_once_over_a_legacy_ledger() {
+        let last = MIGRATIONS.len();
+        assert!(last >= 2, "the trap needs at least two versions to span");
+        let behind = last - 2;
+
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-two_versions", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations \
+                 (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (i, m) in MIGRATIONS[..behind].iter().enumerate() {
+                conn.execute_batch(m).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![(i + 1) as i64, now()],
+                )
+                .unwrap();
+            }
+        }
+
+        let db = StateDb::open(&path).unwrap();
+
+        // The backup is named for the schema it holds — the version we came
+        // *from*, so a rollback can pick the right generation.
+        assert!(
+            PathBuf::from(format!("{}.v{behind}.bak", path.display())).exists(),
+            "backup names the pre-migration version"
+        );
+
+        let stamped: Vec<(i64, Option<String>)> = db
+            .conn
+            .prepare("SELECT version, applied_by FROM schema_migrations ORDER BY version")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(stamped.len(), last);
+        for (version, applied_by) in stamped {
+            let expected = if version as usize > behind {
+                Some(env!("CARGO_PKG_VERSION"))
+            } else {
+                None
+            };
+            assert_eq!(
+                applied_by.as_deref(),
+                expected,
+                "v{version}: only the versions this open applied are stamped"
+            );
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }
