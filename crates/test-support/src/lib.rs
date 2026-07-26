@@ -159,10 +159,16 @@ pub fn read_ndjson_log(path: &Path) -> Vec<serde_json::Value> {
 /// target-directory lock — and under a process-per-test runner it would be one
 /// per *test* (#281).
 ///
-/// Set `TOTSUKA_TEST_PREBUILT_BINS=1` to skip the build and trust what is
+/// Set `TEST_SUPPORT_PREBUILT_BINS=1` to skip the build and trust what is
 /// already in the target dir. CI sets it right after
 /// `cargo build --workspace --all-targets`, which has necessarily just built
 /// every workspace bin.
+///
+/// The name deliberately avoids the `TOTSUKA_` prefix: `apply_env_overrides`
+/// warns to **stderr** for any unrecognised `TOTSUKA_*` variable (ADR-0009),
+/// and the E2Es spawn `totsuka` as a child that inherits this env — so a
+/// `TOTSUKA_`-prefixed name prepends a warning line to every child's stderr and
+/// breaks the tests that parse stderr as a JSON error envelope.
 pub fn sibling_bin(anchor: &Path, package: &str, bin: &str) -> PathBuf {
     static BUILT: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
     let mut cache = BUILT
@@ -178,7 +184,7 @@ pub fn sibling_bin(anchor: &Path, package: &str, bin: &str) -> PathBuf {
     let bin_dir = anchor.parent().expect("target profile dir").to_path_buf();
     let path = bin_dir.join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
 
-    if std::env::var_os("TOTSUKA_TEST_PREBUILT_BINS").is_none() {
+    if std::env::var_os("TEST_SUPPORT_PREBUILT_BINS").is_none() {
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let mut build = Command::new(cargo);
         build.args(["build", "-p", package, "--bin", bin]);
@@ -193,7 +199,7 @@ pub fn sibling_bin(anchor: &Path, package: &str, bin: &str) -> PathBuf {
     assert!(
         path.exists(),
         "{bin} not found at {} — run `cargo build -p {package} --bin {bin}`, \
-         or unset TOTSUKA_TEST_PREBUILT_BINS to let the test build it",
+         or unset TEST_SUPPORT_PREBUILT_BINS to let the test build it",
         path.display()
     );
     cache.insert(bin.to_string(), path.clone());
