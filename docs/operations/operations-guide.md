@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, worktree, faq, troubleshooting]
-timestamp: 2026-07-26T18:00:00+09:00
+timestamp: 2026-07-26T20:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -63,6 +63,29 @@ WARN the LLM provider rejected the API key; repository selection falls back to
 - どのタスクにも属さない **孤児 worktree** は `totsuka doctor` が検出し、TTY 上で対話的に `git worktree remove` を提案する（F-24）。dirty なものは skip
 
 手動で消す場合は `git worktree remove <path>`（committed-but-unpushed があるなら `--force` は慎重に）。**手動削除では pane 解放の連動（#210）が働かない**ため、残った pane は次の `totsuka doctor` の孤児 pane チェックで回収する（下記）。
+
+## ブランチの後始末（#266）
+
+worktree を削除するとき、その `agent/*` ブランチも一緒に消す。判定は **「origin に無いコミットを持っているか」** の一点:
+
+- 全コミットが origin のどこかのリファレンスから辿れる → `git branch -D` で削除（失うものが無い）
+- 1 つでも origin に無い → **ブランチを残す**（未 push の成果物がそこにしか無い）。`totsuka run` のログに `branch kept: it has commits that are not on origin` が出る
+
+**#266 より前は `git branch -d` を使っており、ほぼ常に失敗していた。** `-d` の「マージ済み」判定はローカルの `HEAD` が基準だが、worktree のブランチは `origin/{default}` から切られる。**ローカルの既定ブランチが origin より遅れているのは常態**なので、判定が通らず削除が拒否され、しかも結果が握り潰されていたためログにも出なかった。
+
+すでに溜まってしまった `agent/*` ブランチは、同じ基準で手動掃除できる:
+
+```bash
+# 削除して安全なもの（origin に無いコミットがゼロ）を一覧
+for b in $(git branch --format='%(refname:short)' --list 'agent/*'); do
+  [ "$(git rev-list --count "$b" --not --remotes=origin)" = 0 ] && echo "$b"
+done
+
+# 確認したうえで削除
+for b in $(git branch --format='%(refname:short)' --list 'agent/*'); do
+  [ "$(git rev-list --count "$b" --not --remotes=origin)" = 0 ] && git branch -D "$b"
+done
+```
 
 # 孤児 pane の掃除（#211）
 

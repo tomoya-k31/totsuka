@@ -410,3 +410,129 @@ fn parallel_creation_does_not_deadlock() {
 fn canon(p: &Path) -> PathBuf {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
 }
+
+/// The exact shape of the real-machine bug (#266): the local default branch
+/// lags `origin`, which is its normal state, and cleanup silently fails to
+/// delete the task's branch. Five `agent/*` branches had accumulated.
+#[test]
+fn cleanup_deletes_the_branch_even_when_the_local_default_lags_origin() {
+    let base = scratch("branch_cleanup_stale");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    // Advance `origin/main` and leave the local `main` behind it — the
+    // ordinary state of any clone that has not pulled lately.
+    git(&clone, &["commit", "--allow-empty", "-m", "upstream work"]);
+    git(&clone, &["push", "origin", "main"]);
+    git(&clone, &["reset", "--hard", "HEAD~1"]);
+    assert_ne!(
+        git(&clone, &["rev-parse", "main"]),
+        git(&clone, &["rev-parse", "origin/main"]),
+        "the local default must lag origin for this test to mean anything"
+    );
+
+    let wt = mgr.create(&request(&clone, "11", &env)).unwrap();
+    let branch = wt.branch.clone();
+    assert!(
+        git(&clone, &["branch", "--list", &branch]).contains(&branch),
+        "the branch exists before cleanup"
+    );
+    // `git branch -d` — what this used to do — refuses here, because it
+    // judges against the lagging local HEAD.
+    assert_eq!(
+        mgr.cleanup(
+            &clone,
+            &wt.path,
+            &branch,
+            CleanupPolicy::Immediate,
+            None,
+            "2026-07-12T00:00:00Z",
+        )
+        .unwrap(),
+        CleanupOutcome::Removed
+    );
+    assert!(
+        git(&clone, &["branch", "--list", &branch]).is_empty(),
+        "the branch must be gone: it holds nothing that origin does not"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The other half of the contract: a branch carrying commits that exist
+/// nowhere else survives its worktree.
+#[test]
+fn cleanup_keeps_a_branch_whose_commits_are_not_on_origin() {
+    let base = scratch("branch_cleanup_unpushed");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let wt = mgr.create(&request(&clone, "12", &env)).unwrap();
+    let branch = wt.branch.clone();
+    // The agent committed, and nothing pushed it.
+    std::fs::write(wt.path.join("work.txt"), b"the agent's output").unwrap();
+    git(&wt.path, &["add", "work.txt"]);
+    git(&wt.path, &["commit", "-m", "agent work"]);
+
+    assert_eq!(
+        mgr.cleanup(
+            &clone,
+            &wt.path,
+            &branch,
+            CleanupPolicy::Immediate,
+            None,
+            "2026-07-12T00:00:00Z",
+        )
+        .unwrap(),
+        CleanupOutcome::Removed,
+        "the worktree is clean, so it still goes"
+    );
+    assert!(
+        git(&clone, &["branch", "--list", &branch]).contains(&branch),
+        "the branch must survive — its commit exists nowhere else"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A pushed branch with an open PR is published, so cleanup may take the
+/// local copy. `git branch -d` got this right via the upstream rule, and a
+/// narrower "is it merged into origin/main?" test would have regressed it.
+#[test]
+fn cleanup_deletes_a_pushed_branch_that_is_not_merged_into_the_default() {
+    let base = scratch("branch_cleanup_pushed");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let wt = mgr.create(&request(&clone, "13", &env)).unwrap();
+    let branch = wt.branch.clone();
+    std::fs::write(wt.path.join("work.txt"), b"the agent's output").unwrap();
+    git(&wt.path, &["add", "work.txt"]);
+    git(&wt.path, &["commit", "-m", "agent work"]);
+    mgr.push_branch(&wt.path, &branch).unwrap();
+
+    assert_eq!(
+        mgr.cleanup(
+            &clone,
+            &wt.path,
+            &branch,
+            CleanupPolicy::Immediate,
+            None,
+            "2026-07-12T00:00:00Z",
+        )
+        .unwrap(),
+        CleanupOutcome::Removed
+    );
+    assert!(
+        git(&clone, &["branch", "--list", &branch]).is_empty(),
+        "published work is safe to drop locally, even before the PR merges"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
