@@ -4,7 +4,7 @@ title: task-source-slack プラグイン
 description: 自分宛の Slack メンションをタスク化し本人名義で代理返信する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard（auth.test + apps.connections.open）・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決・下書き提示・承認フローに加え、manifest 雛形・CLI レベル E2E・運用ドキュメントまで完備（エピック #102 完了）。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard, conversation-identity, conversation-continuity]
-timestamp: 2026-07-26T12:00:00+09:00
+timestamp: 2026-07-26T18:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -47,11 +47,11 @@ owner: tomoya-k31
 
 # 会話同一性とリポジトリ解決のスキップ（#242, 0.2.4）
 
-タスクの同一性は「1 メンション」ではなく **「1 スレッド = 1 会話」**（[ADR は #265 で起票予定](/glossary/conversation-continuity.md)）。`Task.id = {channel}:{reply_ts}`、`Task.message_key = {channel}:{ts}` の 2 本立てで、スレッドへの追いメンションは新規タスクではなく**同じ会話への追加メッセージ**になる。worktree・ブランチ・エージェントセッションが自動的に共有されるので、Claude Code のセッションが cwd 単位で保存される制約（= 2 通目が必ず別ディレクトリになり `--resume` が効かない）を構造的に回避する。
+タスクの同一性は「1 メンション」ではなく **「1 スレッド = 1 会話」**（[ADR-0015](/decisions/adr-0015-conversation-task-identity.md)）。`Task.id = {channel}:{reply_ts}`、`Task.message_key = {channel}:{ts}` の 2 本立てで、スレッドへの追いメンションは新規タスクではなく**同じ会話への追加メッセージ**になる。worktree・ブランチ・エージェントセッションが自動的に共有されるので、Claude Code のセッションが cwd 単位で保存される制約（= 2 通目が必ず別ディレクトリになり `--resume` が効かない）を構造的に回避する。
 
 ## `task/lookup` による解決スキップ
 
-`handle_mention` は解決の**前に** `task/lookup`（P→O、0.2.4）で会話が既知かを問い合わせる:
+`handle_mention` は解決の**前に** [`task/lookup`](/apis/task-lookup.md)（P→O、0.2.4）で会話が既知かを問い合わせる:
 
 | 応答 | 挙動 |
 |---|---|

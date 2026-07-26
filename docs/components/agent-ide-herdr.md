@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/設計プレビューを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman]
-timestamp: 2026-07-26T00:00:00+09:00
+timestamp: 2026-07-26T18:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -79,7 +79,7 @@ env 注入・フックの内容は**プラグインにとって不透明**（Orc
 
 # エラー写像 — `SESSION_UNRESUMABLE`（#261, 0.2.4）
 
-herdr 固有のエラー語彙を**プロトコルの語彙へ翻訳するのはこのプラグインの責務**である。herdr は `agent_not_found` と言い、プロトコルは「そのセッションは再開できない」と言う。Orchestrator は後者だけを見て `resume_session_id` なしで 1 回だけ再送する（[orchestrator-core](/components/orchestrator-core.md) #259）ので、マルチプレクサや `--resume` というフラグの存在を知らずに済む（#196 でツール知識を追い出した設計を保つ）。将来 herdr 以外の agent プラグインが増えても、同じ写像責務をそれぞれが負えば core は無改修で動く。
+herdr 固有のエラー語彙を**プロトコルの語彙へ翻訳するのはこのプラグインの責務**である。herdr は `agent_not_found` と言い、プロトコルは「そのセッションは再開できない」と言う。Orchestrator は後者だけを見て `resume_session_id` なしで 1 回だけ再送する（[orchestrator-core](/components/orchestrator-core.md) #259、[ADR-0015](/decisions/adr-0015-conversation-task-identity.md)）ので、マルチプレクサや `--resume` というフラグの存在を知らずに済む（#196 でツール知識を追い出した設計を保つ）。将来 herdr 以外の agent プラグインが増えても、同じ写像責務をそれぞれが負えば core は無改修で動く。
 
 判定条件は**意図的に狭い**（`resume_failure`）:
 

@@ -87,13 +87,21 @@ fn read_log(path: &Path) -> Vec<serde_json::Value> {
 /// One workflow `wf` (source `mock_src`, agent `mock_agent`) at the given
 /// verification mode; output `none` so a COMPLETED finalizes without a PR.
 fn workflows(verification: &str) -> Vec<Workflow> {
+    workflows_in_mode(verification, "implement")
+}
+
+/// [`workflows`] at an explicit execution mode. `plan` matters because the
+/// cleanup policy is per-mode: `cleanup_plan` is `Immediate`, so a finished
+/// plan task's worktree is really removed — the state a conversation's second
+/// message actually arrives to (#242/#254).
+fn workflows_in_mode(verification: &str, mode: &str) -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(&format!(
         r#"
 [[workflows]]
 name = "wf"
 source = "mock_src"
 trigger = {{}}
-mode = "implement"
+mode = "{mode}"
 agent = "mock_agent"
 output = "none"
 verification = "{verification}"
@@ -107,6 +115,16 @@ on_failure = {{ set_status = "failed" }}
 
 /// Engine settings on a real repo clone with a hook runtime bound to `socket`.
 fn settings(repo: &Path, socket: &Path, base: &Path) -> EngineSettings {
+    settings_with(repo, socket, base, workflows("llm"))
+}
+
+/// [`settings`] with a caller-supplied workflow set.
+fn settings_with(
+    repo: &Path,
+    socket: &Path,
+    base: &Path,
+    workflows: Vec<Workflow>,
+) -> EngineSettings {
     let hook = HookRuntime {
         socket_path: socket.to_path_buf(),
         auth_token: Some(SecretString::new("e2e-token")),
@@ -115,7 +133,7 @@ fn settings(repo: &Path, socket: &Path, base: &Path) -> EngineSettings {
         block_retry_limit: 3,
     };
     EngineSettings {
-        workflows: workflows("llm"),
+        workflows,
         repos: vec![RepoSettings {
             name: "clone".to_string(),
             path: repo.to_path_buf(),
@@ -392,5 +410,263 @@ async fn e2e_socket_needs_input_parks_in_waiting() {
             .any(|n| n["params"]["event"] == "waiting_input"),
         "waiting_input notification delivered end-to-end: {notes:?}"
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ── conversation identity, end to end (#242) ────────────────────────────────
+
+/// Plugins for the conversation test: a source that submits `tasks`, and an
+/// agent that records its `task/dispatch` params (so the test can assert the
+/// resume wiring) and optionally self-reports over the socket.
+async fn conversation_plugins(
+    tasks: serde_json::Value,
+    hook_spec: Option<serde_json::Value>,
+    dispatch_log: &Path,
+    notify_log: &Path,
+) -> PluginSet {
+    let mut set = PluginSet::default();
+    set.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({ "task_submit": true, "submit_tasks": tasks }),
+        )
+        .await,
+    );
+    let mut agent = json!({
+        "resume_session": true,
+        "stream_states": [],
+        "dispatch_log": dispatch_log,
+    });
+    if let Some(spec) = hook_spec {
+        agent["hook_post_on_dispatch"] = spec;
+    }
+    set.agents.insert(
+        "mock_agent".to_string(),
+        launch("agent_ide", "mock_agent", agent).await,
+    );
+    set.notifiers.insert(
+        "mock_notify".to_string(),
+        launch(
+            "notifier",
+            "mock_notify",
+            json!({ "notify_log": notify_log }),
+        )
+        .await,
+    );
+    set
+}
+
+/// The params of the last recorded `task/dispatch`.
+fn last_dispatch(dispatch_log: &Path) -> serde_json::Value {
+    read_log(dispatch_log)
+        .into_iter()
+        .rev()
+        .find(|d| d["method"] == "task/dispatch")
+        .expect("a task/dispatch was recorded")["params"]
+        .clone()
+}
+
+#[tokio::test]
+async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() {
+    // **The regression test for the bug that started epic #242.** The whole
+    // failure needed a finished task whose worktree had already been cleaned
+    // up, so every part of it is driven for real here: the first message runs
+    // to Done over the socket, `cleanup_plan = Immediate` deletes its
+    // worktree, and only then does the second message arrive.
+    //
+    // What used to happen: the follow-up became a *second* task that resumed
+    // the first one's Claude session from a *different* worktree — and Claude
+    // Code stores sessions per cwd, so `--resume` found nothing and dispatch
+    // failed. What must happen now: the same task reopens, its worktree is
+    // re-created at the same path, and the resume names its own session.
+    let base = scratch("e2e_conversation");
+    let repo = setup_repo(&base);
+    let socket = base.join("claude.sock");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+    let conversation = "C1:100.0";
+
+    // ── the opening message: dispatch → SessionStart → COMPLETED → cleanup ──
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings_with(&repo, &socket, &base, workflows_in_mode("none", "plan")),
+        conversation_plugins(
+            json!([{
+                "id": conversation, "source": "github", "title": "opening question",
+                "message_key": conversation, "body": "最初の質問です",
+            }]),
+            // `session_start` establishes `tool_session_id` — without it the
+            // conversation finishes with nothing to resume.
+            Some(json!({
+                "status": "COMPLETED",
+                "message": "answered <<STATUS:COMPLETED>>",
+                "session_start": true,
+            })),
+            &dispatch_log,
+            &notify_log,
+        )
+        .await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let probe = db_path.clone();
+    run_until(&mut engine, move || {
+        StateDb::open(&probe)
+            .unwrap()
+            .find_by_source("mock_src", conversation)
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+
+    let opened = engine
+        .db()
+        .find_by_source("mock_src", conversation)
+        .unwrap()
+        .unwrap();
+    let worktree = PathBuf::from(opened.worktree_path.clone().expect("a worktree"));
+    let branch = opened.branch.clone().expect("a branch");
+    let session = engine.db().latest_session(opened.id).unwrap().unwrap();
+    assert_eq!(
+        session.tool_session_id.as_deref(),
+        Some("sess-mock"),
+        "SessionStart established the tool session id"
+    );
+    assert!(
+        !worktree.exists(),
+        "the plan task's worktree was cleaned up (Immediate) — this is the \
+         state the follow-up arrives to: {}",
+        worktree.display()
+    );
+    let first_dispatch = last_dispatch(&dispatch_log);
+    assert!(
+        first_dispatch.get("resume_session_id").is_none(),
+        "an opening message resumes nothing: {first_dispatch}"
+    );
+    engine.shutdown(GRACE).await;
+
+    // ── the follow-up, after a restart (the same DB, a fresh process) ──
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings_with(&repo, &socket, &base, workflows_in_mode("none", "plan")),
+        conversation_plugins(
+            json!([{
+                "id": conversation, "source": "github", "title": "follow-up",
+                "message_key": "C1:100.1", "body": "追記: ログはこちらです",
+            }]),
+            // No self-report this time: the test is about the dispatch.
+            None,
+            &dispatch_log,
+            &notify_log,
+        )
+        .await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let probe = dispatch_log.clone();
+    run_until(&mut engine, move || {
+        read_log(&probe)
+            .iter()
+            .filter(|d| d["method"] == "task/dispatch")
+            .count()
+            >= 2
+    })
+    .await;
+
+    // Still one task — the conversation reopened rather than forking.
+    let tasks = engine.db().list_tasks().unwrap();
+    assert_eq!(
+        tasks.len(),
+        1,
+        "a reply is the same conversation: {tasks:?}"
+    );
+    let reopened = engine
+        .db()
+        .find_by_source("mock_src", conversation)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened.id, opened.id);
+    assert_ne!(
+        reopened.state,
+        TaskState::Done,
+        "the follow-up took it out of Done"
+    );
+
+    // The worktree is back, at the same path and on the same branch: both are
+    // derived from (source, task id) and the templates, so they reproduce
+    // exactly — which is what makes the agent's session findable again.
+    assert_eq!(
+        reopened.worktree_path.as_deref(),
+        Some(worktree.to_str().unwrap())
+    );
+    assert_eq!(reopened.branch.as_deref(), Some(branch.as_str()));
+    assert!(worktree.is_dir(), "re-created: {}", worktree.display());
+
+    // The agent is asked to resume the conversation's own session, and is
+    // given only the new message — the resumed session holds the rest.
+    let follow_up = last_dispatch(&dispatch_log);
+    assert_eq!(follow_up["resume_session_id"], "sess-mock");
+    assert_eq!(follow_up["task"]["body"], "追記: ログはこちらです");
+    assert_eq!(follow_up["worktree_path"], worktree.to_str().unwrap());
+    engine.shutdown(GRACE).await;
+
+    // ── the same message again (at-least-once delivery across a restart) ──
+    // Socket Mode re-delivers, and `plugin_sdk::poll_loop` has no dedup of its
+    // own, so a restart re-submitting everything is routine rather than
+    // exceptional. The ledger's UNIQUE key must absorb it: no third dispatch,
+    // and nothing re-run.
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings_with(&repo, &socket, &base, workflows_in_mode("none", "plan")),
+        conversation_plugins(
+            json!([{
+                "id": conversation, "source": "github", "title": "follow-up",
+                "message_key": "C1:100.1", "body": "追記: ログはこちらです",
+            }]),
+            None,
+            &dispatch_log,
+            &notify_log,
+        )
+        .await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    // Nothing to wait *for* — the assertion is that nothing happens — so run
+    // until the engine has certainly seen the submission and settled.
+    let probe = db_path.clone();
+    run_until(&mut engine, move || {
+        StateDb::open(&probe)
+            .unwrap()
+            .find_by_source("mock_src", conversation)
+            .unwrap()
+            .is_some()
+    })
+    .await;
+    assert_eq!(
+        read_log(&dispatch_log)
+            .iter()
+            .filter(|d| d["method"] == "task/dispatch")
+            .count(),
+        2,
+        "a re-delivered message must not dispatch again"
+    );
+    assert_eq!(engine.db().list_tasks().unwrap().len(), 1);
+    let ledger = engine.db().list_task_messages(opened.id).unwrap();
+    assert_eq!(
+        ledger.len(),
+        2,
+        "two messages, each stored once: {:?}",
+        ledger.iter().map(|m| &m.message_key).collect::<Vec<_>>()
+    );
+    engine.shutdown(GRACE).await;
+
     let _ = std::fs::remove_dir_all(&base);
 }

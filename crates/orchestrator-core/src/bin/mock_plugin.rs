@@ -374,7 +374,8 @@ fn main() {
 /// { "hook_post_on_dispatch": {
 ///     "status": "COMPLETED",              // COMPLETED | NEEDS_INPUT | FAILED | UNKNOWN
 ///     "message": "done <<STATUS:COMPLETED>>",
-///     "prompt_id": "p-1"                  // vary to defeat idempotency dedup
+///     "prompt_id": "p-1",                 // vary to defeat idempotency dedup
+///     "session_start": true               // fire SessionStart first (#242)
 ///   } }
 /// ```
 fn hook_post_on_dispatch(config: &Value, params: &Value, session_id: &str) {
@@ -411,6 +412,25 @@ fn hook_post_on_dispatch(config: &Value, params: &Value, session_id: &str) {
         .and_then(Value::as_u64)
         .unwrap_or(1)
         .max(1);
+    // `session_start` (default false): fire the SessionStart hook first, as a
+    // real agent CLI does. That is what establishes `sessions.tool_session_id`
+    // — without it a task finishes with an unestablished session and nothing
+    // downstream can resume it (#242).
+    if spec
+        .get("session_start")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let start = serde_json::json!({
+            "job_id": job_id,
+            "session_id": session_id,
+            "hook_event_name": "SessionStart",
+        })
+        .to_string();
+        if let Err(e) = post_uds(endpoint, token, &start) {
+            eprintln!("mock_plugin: SessionStart POST to {endpoint} failed: {e}");
+        }
+    }
     let body = serde_json::json!({
         "job_id": job_id,
         "session_id": session_id,
