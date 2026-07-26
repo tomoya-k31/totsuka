@@ -173,16 +173,19 @@ impl PluginStore {
         // what makes it atomic. The leading dot keeps a leftover out of the way
         // of `list`, which only walks directories.
         let staged = dir.join(format!(".{}.incoming", plan.name));
-        fs::copy(&plan.binary, &staged)?;
-        // Before the rename: the destination must never be observable in a
-        // non-executable state.
-        if let Err(e) = set_executable(&staged) {
+        // Every failure before the rename must take the staging file with it —
+        // including a `fs::copy` that dies partway (a full disk leaves a
+        // truncated binary behind), which is exactly when a leftover is most
+        // likely and least welcome.
+        let staged_result = fs::copy(&plan.binary, &staged)
+            .map_err(StoreError::from)
+            // Before the rename: the destination must never be observable in a
+            // non-executable state.
+            .and_then(|_| set_executable(&staged))
+            .and_then(|_| fs::rename(&staged, &dest_binary).map_err(StoreError::from));
+        if let Err(e) = staged_result {
             let _ = fs::remove_file(&staged);
             return Err(e);
-        }
-        if let Err(e) = fs::rename(&staged, &dest_binary) {
-            let _ = fs::remove_file(&staged);
-            return Err(e.into());
         }
         fs::copy(plan.source.join(MANIFEST_FILE), dir.join(MANIFEST_FILE))?;
         Ok(())
@@ -409,6 +412,29 @@ protocol_version = "{protocol_req}"
         );
         // The staging file must not be mistaken for an installed plugin.
         assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    /// A failed install must not leave the staging file behind: it would sit
+    /// next to a working plugin forever, and the next attempt would have to
+    /// overwrite whatever partial binary it holds.
+    #[test]
+    fn a_failed_commit_leaves_no_staging_file() {
+        let base = scratch("store_failed_commit");
+        let src = base.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 0\n");
+
+        let store = PluginStore::new(base.join("plugins"));
+        let mut plan = store.prepare_install(&src).unwrap();
+        // The source binary disappears between `prepare` and `commit` — the
+        // copy is then the step that fails.
+        plan.binary = src.join("gone");
+
+        assert!(store.commit_install(&plan).is_err());
+        assert!(
+            !store.plugin_dir("github").join(".github.incoming").exists(),
+            "a failed copy left its staging file behind"
+        );
     }
 
     #[test]
