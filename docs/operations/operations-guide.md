@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, worktree, faq, troubleshooting]
-timestamp: 2026-07-26T20:00:00+09:00
+timestamp: 2026-07-26T21:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -17,7 +17,7 @@ owner: tomoya-k31
 |---|---|---|
 | `git` | git が PATH 上にある | git を導入 |
 | `config` | config.toml が検証を通る | `totsuka config validate` で全エラー確認 |
-| `state-db` | 状態 DB が開ける | 一度 `totsuka run` |
+| `state-db` | 状態 DB が開け、**スキーマ版数と適用したアプリ版数**を表示（`… opens — schema v7 (applied by 0.1.4)`。`applied by unknown` は `applied_by` 列を持たない旧版が適用したもので異常ではない） | まだ無いなら一度 `totsuka run`。**DB が新しすぎる**（ダウングレード）ならメッセージが名指す版以降へ totsuka を更新。**DB が古い**（アップグレード直後で未適用）なら一度 `totsuka run` — 適用するのは `run` だけで、`status` / `task` / `focus` / `doctor` は適用しない（→ [アップグレードとロールバック](/releases/upgrade-and-rollback.md)、[ADR-0017](/decisions/adr-0017-state-db-compatibility-policy.md)） |
 | `worktree-location` | 明示した `[worktree].location` / `[[repositories]].worktree_location` が展開できる | `${ENV}` の未設定変数を export、またはキーを削って既定値（`$XDG_STATE_HOME/totsuka` 配下、未設定なら `$HOME/.local/state/totsuka`）に戻す。**worktree 作成はディスパッチ時**なので、これを放置すると run は正常起動したまま全タスクが失敗する |
 | `plugin:{name}` | 起動 + `config/validate` 疎通 | install 済みか / `plugins/{name}.toml` を修正 |
 | `llm` | `api_key_ref` が**解決する**（鍵が有効かは見ない） | 環境変数 export / Keychain 登録 |

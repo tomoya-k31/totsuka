@@ -29,6 +29,9 @@ tracing.workspace = true
 
 [dev-dependencies]
 test-support = { workspace = true }
+# The state.db downgrade guard test (#275) forges a schema version no binary
+# can know; there is deliberately no public API for writing the ledger.
+rusqlite.workspace = true
 # The Slack E2E (tests/slack_e2e.rs) runs an in-process mock Slack: raw-TCP
 # Web API + Socket Mode WebSocket.
 tokio = { workspace = true, features = ["net"] }

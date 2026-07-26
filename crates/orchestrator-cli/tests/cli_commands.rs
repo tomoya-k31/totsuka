@@ -982,3 +982,90 @@ fn doctor_online_passes_on_2xx_and_only_warns_on_5xx() {
     assert_eq!(probe["warning"], true, "{probe}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// `doctor` surfaces the schema version and the release that applied it
+/// (#275) — otherwise it takes a manual `sqlite3` to answer "which schema is
+/// this DB on" after an upgrade or a rollback.
+#[test]
+fn doctor_reports_the_state_db_schema_version() {
+    let base = scratch("doctor_schema");
+    seed_db(&base);
+
+    let out = run(&base, &["doctor", "--json"]);
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
+    let check = doc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "state-db")
+        .expect("state-db check present")
+        .clone();
+    assert_eq!(check["ok"], true, "{check}");
+    let detail = check["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("schema v"),
+        "the schema version is on the state-db line: {detail}"
+    );
+    assert!(
+        detail.contains(&format!("applied by {}", env!("CARGO_PKG_VERSION"))),
+        "…along with the release that applied it: {detail}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A state.db from a newer totsuka stops the read-only commands too, with an
+/// error naming the release to upgrade to (#275). Before the guard, the
+/// unknown schema was simply used as-is.
+#[test]
+fn a_newer_state_db_is_refused_with_an_upgrade_hint() {
+    let base = scratch("downgrade");
+    seed_db(&base);
+
+    // Forge a version this binary cannot know, attributed to a future release.
+    let db_path = base.join("state/totsuka/state.db");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let next: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM schema_migrations",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at, applied_by) \
+             VALUES (?1, '2026-08-10T00:00:00Z', '9.9.9')",
+            rusqlite::params![next],
+        )
+        .unwrap();
+    }
+
+    // Read-only path: `status` must stop rather than read an unknown schema.
+    let out = run(&base, &["status"]);
+    assert_ne!(out.status.code(), Some(0), "status must not succeed");
+    assert!(
+        stderr(&out).contains("9.9.9"),
+        "the error names the release to upgrade to: {}",
+        stderr(&out)
+    );
+
+    // And doctor reports it as a failing check with exit 3, not a crash.
+    let out = run(&base, &["doctor", "--json"]);
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
+    let check = doc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "state-db")
+        .expect("state-db check present")
+        .clone();
+    assert_eq!(check["ok"], false, "{check}");
+    assert!(
+        check["detail"].as_str().unwrap().contains("9.9.9"),
+        "{check}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
