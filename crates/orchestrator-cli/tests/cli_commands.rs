@@ -884,6 +884,48 @@ fn a_plugin_that_needs_no_secret_is_still_probed() {
     );
 }
 
+/// The config roster and the manifest can disagree about `kind`, and nothing
+/// in the workspace repairs it: `config validate` never reads `manifest.kind`
+/// (it only checks the roster's own declaration against what a referencing
+/// workflow expects), and `plugin install` never writes config. But
+/// `plugin_spec` branches on the **manifest**, so a gate that trusted only the
+/// roster would let `llm_info` resolve `[llm].api_key_ref` anyway — reopening
+/// the unattended hang on exactly the configs that drifted.
+#[test]
+fn a_stale_roster_kind_cannot_reopen_the_hang() {
+    let base = scratch("doctor_op_kind_drift");
+    // The roster says agent_ide; the installed manifest says task_source.
+    seed_empty_config(
+        &base,
+        "[plugins.gh]\nenabled = true\nkind = \"agent_ide\"\n\n\
+         [llm]\nbase_url = \"https://example.test/v1\"\nmodel = \"m\"\n\
+         api_key_ref = \"op://Dev/Openrouter/api_key\"\n",
+    );
+    let dir = base.join("data/totsuka/plugins/gh");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("plugin.toml"),
+        "name = \"gh\"\nkind = \"task_source\"\nversion = \"0.1.0\"\n\
+         protocol_version = \"^0.2\"\n\n[capabilities]\n",
+    )
+    .unwrap();
+    // No plugins/gh.toml at all: the only op:// door is `[llm].api_key_ref`,
+    // which `plugin_spec` opens solely because the *manifest* is a task source.
+    let (bin, marker) = fake_op(&base, false);
+
+    let out = run_env(&base, &["doctor", "--json"], &[("PATH", &path_with(&bin))]);
+
+    assert!(
+        !marker.exists(),
+        "the roster said agent_ide, the manifest said task_source, and doctor \
+         resolved op:// anyway"
+    );
+    assert_eq!(
+        doctor_check(&out, "plugin:gh").expect("plugin:gh check")["skipped"],
+        true
+    );
+}
+
 /// The 1Password probes have to run *before* anything that resolves, or their
 /// verdict cannot gate it. This pins the ordering itself, since a later
 /// refactor could reinstate the bug without changing any single check.

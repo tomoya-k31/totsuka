@@ -397,14 +397,32 @@ fn plugin_config_mentions_onepassword(cx: &Cx, name: &str) -> bool {
 ///
 /// Two independent doors, both inside `plugin_spec`: `plugin_init_config`
 /// resolves **every string leaf** of `plugins/{name}.toml`, and `llm_info`
-/// resolves `[llm].api_key_ref` — but only for a task source. The kind comes
-/// from the config roster rather than the manifest, which is what lets this be
-/// decided *before* touching the plugin at all; `config validate` already
-/// fails when the two disagree.
+/// resolves `[llm].api_key_ref` — but only for a task source.
+///
+/// "Task source" is asked of **both** the manifest and the config roster, and
+/// either one saying yes is enough. `plugin_spec` itself branches on
+/// `manifest.kind`, so the manifest is the authority — but the two can
+/// disagree and nothing repairs it: `config validate` never reads
+/// `manifest.kind` (it only checks the config's self-declared kind against
+/// what a referencing workflow expects, and only when a workflow references
+/// the plugin at all), and `plugin install` never writes config. A plugin
+/// upgrade that changes its manifest kind therefore leaves the roster stale
+/// indefinitely. Trusting either side alone would let that divergence reopen
+/// the unattended hang, so this errs toward skipping.
+///
+/// An unreadable manifest needs no special case: `plugin_spec` reads it first
+/// and fails before resolving anything.
 fn plugin_needs_onepassword(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
-    let is_task_source = cfg
+    let declared_task_source = cfg
         .plugin(name)
         .is_some_and(|p| p.kind == ConfigPluginKind::TaskSource);
+    let manifest_task_source = cx
+        .store()
+        .manifest_of(name)
+        .ok()
+        .flatten()
+        .is_some_and(|m| m.kind == plugin_protocol::manifest::PluginKind::TaskSource);
+    let is_task_source = declared_task_source || manifest_task_source;
     plugin_config_mentions_onepassword(cx, name) || (is_task_source && llm_key_is_onepassword(cfg))
 }
 
@@ -1229,12 +1247,12 @@ fn check_llm_key(
 
 /// `--online` only: one live request proving the gateway accepts the key.
 ///
-/// The only doctor check that makes a network call. It also resolves the
-/// reference for real, including `op://` — which may raise a biometric
-/// prompt, though it is not alone in that: `check_plugins` already resolves
-/// `op://` today via `plugin_spec`'s `llm_info` + `plugin_init_config`, so
-/// `doctor` is not as unconditionally non-interactive as ADR-0006 implies.
-/// That gap is pre-existing and out of scope here.
+/// The only doctor check that makes a network call, and the only one that
+/// still resolves `op://` unconditionally — so `--online` is also the opt-in
+/// to a possible biometric prompt. That is now the *whole* of the exception:
+/// #289 closed the paths that used to resolve behind the operator's back
+/// (`check_plugins` via `plugin_spec`, `check_hook_socket`, `check_orphan_panes`),
+/// which are gated on [`OpReadiness`] and reported as skipped instead.
 ///
 /// Only a 401/403 fails the check: a timeout or a 5xx says the provider is
 /// unreachable or unwell, not that the key is wrong, so those stay advisory

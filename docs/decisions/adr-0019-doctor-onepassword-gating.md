@@ -4,7 +4,7 @@ title: ADR-0019 doctor の op:// 解決は「TTY があるか」ではなく「o
 description: doctor が ADR-0006 の非対話原則を自分で破っていた問題（#289）に対し、check_onepassword を最初に動かして op whoami の結果を可否判定に使い、セッションが無いときだけ op:// を要する probe を skipped として報告する決定。TTY 判定（案 D）ではなくプロンプトが実際に出る条件を直接見る（案 E）。plugin probe を --online の裏に隠す案 B と、挙動を変えず約束だけ直す案 C は不採用。あわせて Check に skipped 重大度を追加し、検出ヘルパが toml 0.9 の Value パーサ誤用で常に false を返していた（＝1Password 検査が一度も走っていなかった）バグを修正した。
 resource: https://github.com/tomoya-k31/totsuka/issues/289
 tags: [doctor, onepassword, secret, non-interactive, cli, adr-0006]
-timestamp: 2026-07-26T22:00:00Z
+timestamp: 2026-07-26T23:00:00Z
 status: accepted
 owner: tomoya-k31
 ---
@@ -64,7 +64,16 @@ Accepted — 2026-07-26（[#289](https://github.com/tomoya-k31/totsuka/issues/28
 
 `plugin_needs_onepassword()` が「`plugins/{name}.toml` に `op://` があるか」または「task_source かつ `[llm].api_key_ref` が `op://`」で判定する。**1 つのプラグインの `op://` が、シークレットを必要としない他のプラグインの probe まで黙らせてはいけない。**
 
-kind は**マニフェストではなく config のロスター**から読む。プラグインに触れる前に決められる必要があるためで、両者の不一致は `config validate` が既にエラーにしている。
+kind は**マニフェストと config のロスターの両方**に尋ね、**どちらか一方でも task_source と言えばゲートする**。
+
+当初はロスターだけを見ていたが、これは**穴になる**。`plugin_spec` が `llm_info()` を呼ぶかどうかは **`manifest.kind`** で分岐するのに対し、両者の不一致を修復する仕組みがどこにも無い:
+
+- `config validate` は **`manifest.kind` を一度も読まない**。ロスターの自己申告 kind を「参照している workflow が期待する kind」と突き合わせるだけで、しかも workflow から参照されている場合にしか働かない
+- `plugin install` は config を書かない。`set_plugin_enabled` も既存エントリには `kind_if_new = None` を渡す
+
+したがって、**マニフェストの kind が変わるプラグイン更新を挟むとロスターは古いまま固定される**。片側だけを信じると、その不一致が無人ハングを再び開く。安全側（skip する側）に倒す。
+
+マニフェストが読めない場合の特別扱いは要らない。`plugin_spec` はマニフェストを最初に読み、失敗すれば何も解決する前にエラーを返すため。
 
 ## 4. `Check` に `skipped` を足す
 
