@@ -39,6 +39,20 @@ jobs:
         with:
           toolchain: stable
           components: clippy,rustfmt
+      # Cargo.lock ドリフトの検出 (#290)。--locked は「lock の更新が必要なら
+      # エラーで止まる」ので、これだけで Cargo.toml と食い違った lock を PR で
+      # 捕まえられる。ビルドを伴わないため数秒。
+      #
+      # キャッシュ復元より前に置くのは意図的で、rust-cache は Cargo.lock を
+      # キャッシュキーに含むため、ドリフトしたままのキーでエントリを作らせない。
+      # 代償として登録レジストリ索引の取得がキャッシュに乗らないが、clippy
+      # ジョブはクリティカルパスではない (#281)。
+      #
+      # ビルド/テスト側を --locked にはしない。CI が lock を直せなくなり、
+      # Renovate PR や release-please の sync-lockfile と相互作用するため
+      # (release-please は意図的に --locked を外している)。ここは検出専用。
+      - name: Cargo.lock is in sync
+        run: cargo metadata --locked --format-version 1 > /dev/null
       - name: Cache cargo build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Check formatting

@@ -1,10 +1,10 @@
 ---
 type: Guide
-title: 依存関係ハイジーン（未使用依存の検出）
-description: cargo-machete による毎 PR の未使用依存チェックの運用、誤検知の抑制手順（package.metadata.cargo-machete）、および高精度な cargo-shear / cargo-udeps の定期手動実行手順。
+title: 依存関係ハイジーン（未使用依存と Cargo.lock ドリフトの検出）
+description: cargo-machete による毎 PR の未使用依存チェックの運用、誤検知の抑制手順（package.metadata.cargo-machete）、高精度な cargo-shear / cargo-udeps の定期手動実行手順、および cargo metadata --locked による Cargo.lock ドリフト検出（宣言はあるが lock に無い、という逆方向のドリフト）。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/.github/workflows/ci.yml
-tags: [rust, ci, dependencies, cargo-machete, cargo-shear, cargo-udeps]
-timestamp: 2026-07-26T20:30:00+09:00
+tags: [rust, ci, dependencies, cargo-machete, cargo-shear, cargo-udeps, cargo-lock, drift]
+timestamp: 2026-07-26T23:30:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -37,6 +37,68 @@ ignored = ["serde_derive"]
 ```
 
 理由コメントのない ignore を追加しない（レビューで「本当に使っているのか」を判断できなくなるため）。依存を削除した際に ignore が残っていないかも合わせて確認する。
+
+# Cargo.lock のドリフト検出（#290）
+
+上の 2 層が見るのは「`Cargo.toml` に宣言があるが**使われていない**」方向のドリフト。**逆方向** — 「`Cargo.toml` に宣言があるが `Cargo.lock` に反映されていない」 — は別のガードが要る。
+
+## 何が起きていたか
+
+PR #283 が `crates/test-support/Cargo.toml` に `serde_json` を足したが `Cargo.lock` を再生成せずにマージされ、`main` の lock に `test-support` の `dependencies` エントリが無い状態が残った。症状は「**checkout して `cargo` を何か走らせるだけで `Cargo.lock` が dirty になる**」で、無関係な差分が毎回作業ツリーに現れる。
+
+**CI はこれを検出できなかった。** どのワークフローも `--locked` / `--frozen` を使っておらず、`cargo` は lock の更新が必要なら**黙って再生成して成功する**:
+
+```
+$ cargo metadata --format-version 1 > /dev/null   # --locked なし
+（成功）
+$ git diff --stat Cargo.lock
+ Cargo.lock | 1 +
+```
+
+ローカルでも同じことが起きるので、`git status` を見ない限り誰も気づかない。[#240 の rustdoc ギャップ](https://github.com/tomoya-k31/totsuka/issues/240)と同型で、「壊れていても何も鳴らないので `main` に静かに溜まる」。
+
+## ガード
+
+`.github/workflows/ci.yml` の **`clippy / rustfmt` ジョブのステップ**として毎 PR で実行する:
+
+```yaml
+- name: Cargo.lock is in sync
+  run: cargo metadata --locked --format-version 1 > /dev/null
+```
+
+`--locked` は「lock の更新が必要なら**エラーで止まる**」ので、これだけでドリフトを PR で捕まえられる:
+
+```
+error: cannot update the lock file /.../Cargo.lock because --locked was passed to prevent this
+```
+
+ビルドを伴わないため数秒で終わる（`scripts/arch-lint.sh` が既に `cargo metadata --no-deps` を使っている前例がある。ドリフト検出は依存解決が要るので `--no-deps` は使えない）。
+
+**キャッシュ復元より前に置く。** `Swatinem/rust-cache` は `Cargo.lock` をキャッシュキーに含むため、ドリフトしたままのキーでエントリを作らせない。代償として登録レジストリ索引の取得がキャッシュに乗らないが、`clippy` ジョブはクリティカルパスではない（[ADR-0018](/decisions/adr-0018-ci-test-time.md)）。
+
+## ビルド/テストは `--locked` にしない
+
+より厳格な `cargo build --locked` / `cargo test --locked` は**採らない**。CI が lock を直せなくなり、依存更新 PR（Renovate）や release-please の `sync-lockfile` ジョブとの相互作用が変わる。`release-please.yml` は「stray lock drift がリリースビルドを止めないよう」**意図的に `--locked` を外している**。ここは**検出専用**に留める。
+
+## `--all-features` は要らない
+
+clippy / test は `--all-features` を付けているのに、このステップは付けていない。**`Cargo.lock` の解決は feature フラグに非依存**（潜在的な依存グラフ全体をロックする）なので、optional / feature ゲート付きの依存を足して lock を再生成しなかった場合も、`--all-features` の有無に関わらず同じように `--locked` が落ちる。実際に検証済み。
+
+なお、**逆方向のドリフト**（lock に使われていない古いエントリが残っている）は `--locked` では落ちない。cargo はそれをエラーにしないため。本ステップの対象は「宣言があるのに lock に無い」方向だけである。
+
+## release-please の Release PR では一時的に赤くなる（仕様どおり）
+
+`release-please` は `Cargo.toml` のバージョンを上げるが `Cargo.lock` は 1 バージョン遅れたままにする（`release-please.yml` にその旨のコメントがある）。したがって **Release PR の最初の push では本ステップが落ちる**。
+
+これは誤検出ではなく**正しい検出**で、`sync-lockfile` ジョブの追従コミットが次の run で解消する。加えて `clippy / rustfmt` は**必須チェックではない**（ruleset が要求するのは `okf-lint` の `lint` のみ）ため、リリースがブロックされることはない。
+
+Renovate の PR は `Cargo.toml` と `Cargo.lock` を同時に更新するので影響を受けない。
+
+## 罠
+
+- **workspace member 間の依存追加は見落としやすい。** 外部 crate の追加は `Cargo.lock` に大きな差分を生むので気づくが、#283 のケース（`test-support` への依存追加）は **3 行しか動かない**。
+- `cargo audit` / `cargo deny` は `Cargo.lock` を入力にする。lock が実際の依存グラフとずれていれば**監査対象もずれる**。今回は workspace 内 crate なので実害はなかったが、外部依存で同じことが起きれば脆弱性を見落とす。
+- `cargo build --locked` を使う経路（再現ビルド・SBOM 生成・オフラインビルド・vendoring）が入った瞬間に壊れる。
 
 # 第2層: cargo-shear / cargo-udeps（定期の手動実行）
 
