@@ -373,7 +373,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 ### 10.2 Versioning / compatibility
 
 - The app itself uses semver. **The plugin protocol is versioned independently**; manifests declare the compatible range. Breaking changes bump the major version, and the previous protocol is supported for one generation.
-- The config schema carries a version key. A mismatch is an error raised by startup validation (`totsuka config validate`, and the same check on `totsuka run`); the config is never rewritten automatically. No migration is offered — the schema is still at v1, so there is nothing to migrate. See [config reference](/development/config-reference.md) for what has to be decided before v2 can be cut.
+- The config schema carries a version key. A mismatch is raised by startup validation — shared by `totsuka config validate`, `totsuka run`, and `totsuka doctor` — and the config is never rewritten automatically. The first two stop with an error; `doctor` reports it as a failed check and carries on with the remaining diagnostics. No migration is offered — the schema is still at v1, so there is nothing to migrate. See [config reference](/development/config-reference.md) for what has to be decided before v2 can be cut.
 
 ### 10.3 Updates / operations
 

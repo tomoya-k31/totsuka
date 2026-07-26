@@ -35,7 +35,15 @@ pub const DEFAULT_WORKFLOW_TIMEOUT_SECS: u64 = 1800;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RootConfig {
-    /// Schema version, for startup migration (§10.2).
+    /// Schema version (§10.2). Startup validation rejects a mismatch; the
+    /// config is never migrated automatically (#276).
+    ///
+    /// Note the default: omitting `version` yields whatever
+    /// [`CURRENT_SCHEMA_VERSION`] happens to be, so a `version`-less
+    /// config.toml written for v1 would be read as v2 the moment this binary
+    /// bumps — silently, since the guard above never fires. Deciding that
+    /// default is a prerequisite for cutting v2; see the versioning policy in
+    /// `docs/development/config-reference.md`.
     #[serde(default = "default_version")]
     pub version: u32,
     /// Global maximum concurrent tasks (F-40). Defaults to

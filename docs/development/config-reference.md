@@ -50,8 +50,12 @@ owner: tomoya-k31
 
 現行のスキーマは **v1 のみ**（`CURRENT_SCHEMA_VERSION = 1`。一度も上がっていない）。
 
-`version` が `CURRENT_SCHEMA_VERSION` と一致しない config.toml は `totsuka config validate` と
-`totsuka run` の起動時検証でエラーになり、**totsuka が設定を書き換えることはない**。
+`version` が `CURRENT_SCHEMA_VERSION` と一致しない config.toml は起動時検証でエラーになり、
+**totsuka が設定を書き換えることはない**。`config validate` / `run` / `doctor` は同じ検証
+（`Cx::validate_config`）を共有するため 3 つとも同じ不一致を検出するが、扱いは異なる:
+`config validate` と `run` は**エラーで停止**（exit 1）、`doctor` は `config` チェックの
+**失敗として報告**する（exit 3。診断コマンドなので他のチェックは続行する）。
+
 エラーは向きによって案内が逆になる（#276）:
 
 - `version` が新しい → totsuka 側が古い。「そのスキーマ版に対応した totsuka へ更新しろ」
