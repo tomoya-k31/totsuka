@@ -3,23 +3,39 @@
 # Paste this into https://api.slack.com/apps > "Create New App" >
 # "From a manifest" (YAML), then install the app to your workspace.
 #
-# This app has NO bot user on purpose: the plugin acts entirely as *you*.
-# After installing, copy two tokens into the Keychain referenced by
+# The app acts as *you* for everything visible in a conversation: mention
+# detection, the approved reply, and the self-DM draft record all use the
+# user token. The bot user exists for exactly ONE thing — DM-ing you a
+# notification nudge when a draft/picker arrives (#305), because ephemerals
+# and your own self-DM posts generate no Slack notification. It never posts
+# a reply.
+# After installing, copy three tokens into the Keychain referenced by
 # plugins/slack.toml:
-#   - User OAuth Token (`xoxp-…`)  — OAuth & Permissions page
-#   - App-Level Token  (`xapp-…`)  — Basic Information > App-Level Tokens;
+#   - User OAuth Token (`xoxp-…`)      — OAuth & Permissions page
+#   - Bot User OAuth Token (`xoxb-…`)  — same page (optional: omit
+#     `bot_token` from plugins/slack.toml to run without nudges)
+#   - App-Level Token  (`xapp-…`)      — Basic Information > App-Level Tokens;
 #     create one with scope `connections:write` (Socket Mode)
 #
 # If you ever change the scopes below, Slack requires you to RE-INSTALL the
-# app; the re-install issues a NEW `xoxp-` token, so update the Keychain
-# entry too (`totsuka doctor` will tell you when the stored token went bad).
+# app; the re-install issues a NEW `xoxp-` token AND a NEW `xoxb-` token, so
+# update BOTH Keychain entries (`totsuka doctor` will tell you when a stored
+# token went bad).
 display_information:
   name: totsuka reply assistant
   description: Turns mentions of you into totsuka tasks and posts approved replies under your own name.
   background_color: "#1a2b3c"
+features:
+  bot_user:
+    display_name: totsuka reply assistant
+    always_online: true
 oauth_config:
   scopes:
-    # User scopes only (no bot section): everything is done as the operator.
+    # Bot scopes: the notification nudge DM only (#305).
+    bot:
+      - chat:write # post the nudge into the bot<->operator DM
+      - im:write # open that DM (conversations.open)
+    # User scopes: everything conversation-visible is done as the operator.
     user:
       - channels:history # read public-channel messages (mention detection / thread context)
       - channels:read # resolve channel names (conversations.info) for [[channel_groups]] prefix rules
@@ -31,7 +47,8 @@ oauth_config:
 settings:
   event_subscriptions:
     # user_events (not bot_events): delivered over Socket Mode for the
-    # channels the *user* is a member of.
+    # channels the *user* is a member of. Deliberately NO `message.im`:
+    # bot-DM nudges must never re-enter the mention pipeline.
     user_events:
       - message.channels
       - message.groups

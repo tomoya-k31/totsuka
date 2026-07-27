@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: manifest からの Slack アプリ作成 → トークン発行 → Keychain 登録 → plugin install/enable → doctor → run --watch までの導入手順と、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, keychain, doctor]
-timestamp: 2026-07-25T12:00:00Z
+timestamp: 2026-07-28T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -16,8 +16,8 @@ owner: tomoya-k31
 # 1. Slack アプリを作成（manifest 貼り付け）
 
 1. <https://api.slack.com/apps> → **Create New App** → **From a manifest** → 対象ワークスペースを選択。
-2. リポジトリの [`plugins/task-source-slack/manifest.yml`](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) を YAML タブに貼り付けて作成（Bot ユーザーなし・user scopes のみ・Socket Mode 有効の構成）。
-3. **Install App**（OAuth & Permissions → Install to Workspace）を実行し、**User OAuth Token**（`xoxp-…`）を控える。
+2. リポジトリの [`plugins/task-source-slack/manifest.yml`](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) を YAML タブに貼り付けて作成（会話に見える投稿はすべて user scopes = 本人名義。bot user は通知ナッジ DM 専用 — [ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)・#305。Socket Mode 有効の構成）。
+3. **Install App**(OAuth & Permissions → Install to Workspace)を実行し、**User OAuth Token**（`xoxp-…`）と **Bot User OAuth Token**（`xoxb-…`、同じページ）を控える。
 4. **Basic Information → App-Level Tokens → Generate Token and Scopes** で `connections:write` スコープのトークン（`xapp-…`）を生成して控える。
 
 # 2. トークンを Keychain へ登録
@@ -25,6 +25,7 @@ owner: tomoya-k31
 ```sh
 security add-generic-password -U -s totsuka -a slack-user -w 'xoxp-…'
 security add-generic-password -U -s totsuka -a slack-app  -w 'xapp-…'
+security add-generic-password -U -s totsuka -a slack-bot  -w 'xoxb-…'   # 通知ナッジを使う場合
 ```
 
 自分の Slack ユーザー ID（`U…`）も控える: Slack のプロフィール → **…** → **メンバー ID をコピー**。
@@ -58,6 +59,8 @@ output = "source"        # result/publish → 承認フローへ
 ```toml
 app_token = "keychain:totsuka/slack-app"
 user_token = "keychain:totsuka/slack-user"
+bot_token = "keychain:totsuka/slack-bot"    # 任意: 返信案/ピッカー到着の通知 DM（#305）。
+                                            # 省略するとナッジなし（それ以外は同じ動作）
 target_user_id = "U012AB3CD"        # 自分のメンバー ID
 reply_style = "丁寧語で簡潔に"      # 任意
 
@@ -82,10 +85,11 @@ reply_style = "丁寧語で簡潔に"      # 任意
 ```sh
 totsuka config validate   # 静的検証（オフライン）
 totsuka doctor            # TokenGuard: auth.test（本人一致）+ apps.connections.open（xapp）
+                          # + bot_token 設定時は auth.test（xoxb）も probe
 totsuka run --watch       # Socket Mode 常駐 + 5 秒周期の吸い上げ
 ```
 
-動作確認: 別アカウント（または同僚）に自分宛メンションをしてもらう → エージェント完了後、スレッド内エフェメラル + self-DM に返信案が届く → **承認して返信** で本人名義のスレッド返信、**却下** で破棄（[エフェメラル承認フロー](/glossary/ephemeral-approval.md)）。
+動作確認: 別アカウント（または同僚）に自分宛メンションをしてもらう → エージェント完了後、スレッド内エフェメラル + self-DM に返信案が届く（`bot_token` 設定時は bot からの通知 DM も届く — エフェメラル/self-DM 自体は Slack 通知を発生させないため、これが唯一の push） → **承認して返信** で本人名義のスレッド返信、**却下** で破棄（[エフェメラル承認フロー](/glossary/ephemeral-approval.md)）。
 
 # トラブルシューティング
 
@@ -95,7 +99,8 @@ totsuka run --watch       # Socket Mode 常駐 + 5 秒周期の吸い上げ
 | `doctor` が identity mismatch（`target_user_id`） | 他人のトークン、または `target_user_id` の誤記。なりすまし防止で意図的に拒否している |
 | メンションがタスク化されない | ①メンション形式が `@自分` か（`user_events` は本人参加チャンネルのみ）②`run --watch` が起動中か ③subtype 付き（編集・bot 投稿）は対象外 |
 | 返信案は届くがボタンが失効 | TTL 24h 超過、または FIFO 追い出し（上限 1024 件）。self-DM 記録のテキストから手動返信するか、再メンションで再実行（#122 以降、下書きは `~/.local/state/totsuka/plugins/{source_name}/drafts.json` に永続化されるため再起動ではボタンは失効しない） |
-| スコープを変更した | アプリ再インストールが必要 → `xoxp-` が再発行されるので Keychain 更新 → `doctor` で確認（[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) のコメント参照） |
+| スコープを変更した | アプリ再インストールが必要 → **`xoxp-` と `xoxb-` の両方が再発行される**ので Keychain を両方更新 → `doctor` で確認（[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) のコメント参照）。既存アプリへ bot user を後から足す場合（#305）も同じ — `slack-bot` を追加するだけだと再発行済みの `xoxp-` が死んだままになる |
+| 通知ナッジ（bot DM）が届かない | ① `bot_token` が未設定/失効（`doctor` の bot probe を確認）② 起動ログに bot DM 解決失敗の WARN がないか ③ Slack 側でこのアプリの DM をミュートしていると push は出ない（コードでは解決不能） |
 | prefix ルール（`[[channel_groups]]`）が効かず常に LLM/エフェメラル選択になる | `conversations.info` が `missing_scope` で失敗しチャンネル名が取れていない（ログ WARN 参照）。`channels:read` / `groups:read` を含む manifest でアプリを再インストール → Keychain 更新（上の「スコープを変更した」と同手順） |
 
 # 関連

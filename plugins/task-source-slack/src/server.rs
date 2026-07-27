@@ -53,6 +53,7 @@ fn settings(config: &SlackConfig) -> TransportSettings<'_> {
         api_url: &config.api_url,
         app_token: &config.app_token,
         user_token: &config.user_token,
+        bot_token: config.bot_token.as_deref(),
         max_retries: config.max_retries,
     }
 }
@@ -170,10 +171,11 @@ where
     /// repositories when `[[repos]]` is omitted (#109) and the orchestrator's
     /// `[llm]` when the plugin's own is omitted (#119), validate the merged
     /// candidate list, then run the TokenGuard — verify the user token via
-    /// `auth.test` (its identity must be `target_user_id`) and the
-    /// App-Level Token via `apps.connections.open` — before accepting the
-    /// session. A bad token fails startup here, with recovery guidance,
-    /// instead of failing later mid-flow.
+    /// `auth.test` (its identity must be `target_user_id`), the
+    /// App-Level Token via `apps.connections.open`, and, when configured,
+    /// the bot token via a bot-authenticated `auth.test` (#305) — before
+    /// accepting the session. A bad token fails startup here, with recovery
+    /// guidance, instead of failing later mid-flow.
     async fn initialize(&mut self, id: RequestId, params: Value) -> Reply {
         let init: InitializeParams = match parse_params(&params) {
             Ok(v) => v,
@@ -390,11 +392,13 @@ where
 
 /// The TokenGuard: `auth.test` must accept the user token, the token's
 /// identity must be `target_user_id` (a reply posted with someone else's
-/// token would impersonate them), and `apps.connections.open` must accept
-/// the App-Level Token. Without the last probe a bad `xapp-` token would
-/// only surface inside the background Socket Mode loop — invisible to
-/// `initialize`'s caller, so `totsuka doctor` would report the plugin
-/// healthy while it can never receive an event.
+/// token would impersonate them), `apps.connections.open` must accept
+/// the App-Level Token, and — only when a `bot_token` is configured — a
+/// bot-authenticated `auth.test` must accept it too (#305). Without the
+/// xapp probe a bad `xapp-` token would only surface inside the background
+/// Socket Mode loop — invisible to `initialize`'s caller, so `totsuka
+/// doctor` would report the plugin healthy while it can never receive an
+/// event.
 async fn token_guard<T: SlackTransport>(
     api: &SlackApi<T>,
     config: &SlackConfig,
@@ -407,6 +411,13 @@ async fn token_guard<T: SlackTransport>(
         });
     }
     api.apps_connections_open().await?;
+    // An explicitly configured `bot_token` gets the same treatment as the
+    // xapp token: probe it here so a dead one fails startup with guidance
+    // (visible to `doctor`) instead of silently dropping every nudge (#305).
+    // Absent = nudges off by choice; nothing to probe.
+    if config.bot_token.is_some() {
+        api.auth_test_bot().await?;
+    }
     Ok(())
 }
 

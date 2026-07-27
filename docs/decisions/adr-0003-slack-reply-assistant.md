@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0003 Slack メンション代理返信アシスタントの設計
 description: task-source-slack をコア無変更のプラグイン内完結で実装する決定。リポジトリ解決はプラグイン内 3 段階、イベントはバッファ + 短周期 tasks/fetch、トークンはユーザートークン（xoxp）のみで本人名義返信 + 承認フロー必須。
 tags: [slack, plugin, task-source, socket-mode, token, architecture]
-timestamp: 2026-07-25T12:00:00Z
+timestamp: 2026-07-28T00:00:00Z
 status: accepted
 ---
 
@@ -12,6 +12,8 @@ status: accepted
 Accepted — 2026-07-15（エピック [#102](https://github.com/tomoya-k31/totsuka/issues/102)、実装 #103〜#108）
 
 Decision §2（バッファ + 短周期 `tasks/fetch`）は [ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)（protocol 0.1.6 の `task/submit` push 取り込み）で amend された。
+
+Decision §3 の「Bot なし」は [ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)（#305）で部分改訂された: 通知ナッジ DM 専用の bot user を追加する（エフェメラルと自分名義 self-DM は Slack 通知を発生させないため）。会話に見える投稿の主体は従来どおり user token（本人名義）で、承認フローの防波堤は不変。
 
 # Context
 

@@ -136,6 +136,18 @@ pub async fn publish_draft<T: SlackTransport>(
             draft_text = %draft.text,
             "both draft presentations failed; the reply is only recoverable from this log"
         );
+    } else {
+        // Neither surface generates a Slack notification (ephemerals never
+        // do; the self-DM record is the operator's own message) — nudge via
+        // the bot DM so the draft is noticed (#305). Never finalized on
+        // approve/reject: the bot DM is a notification feed, not a record.
+        crate::notify::send_nudge(
+            api,
+            state,
+            &format!("{} さんへの返信案が届きました", draft.sender_name),
+            draft.permalink.as_deref(),
+        )
+        .await;
     }
     Ok(())
 }

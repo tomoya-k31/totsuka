@@ -119,6 +119,45 @@ async fn initialize_runs_token_guard_and_declares_capabilities() {
 }
 
 #[tokio::test]
+async fn initialize_probes_the_bot_token_when_configured() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    shared.push(Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })));
+    let (mut srv, _harness) = server(&shared);
+
+    let mut params = init_params();
+    params["config"]["bot_token"] = json!("xoxb-bot-test");
+    result_of(call(&mut srv, 1, "initialize", params).await);
+
+    // User probe, app probe, then the bot probe (#305) — no identity check
+    // on the bot: it is its own identity.
+    let requests = shared.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[2].method, "auth.test");
+    assert_eq!(requests[2].token, TokenKind::Bot);
+}
+
+#[tokio::test]
+async fn initialize_rejects_a_bad_bot_token_with_guidance() {
+    // A configured-but-dead bot token must fail startup visibly (like the
+    // xapp token), not silently drop every notification nudge (#305).
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    shared.push(Canned::Data(
+        json!({ "ok": false, "error": "invalid_auth" }),
+    ));
+    let (mut srv, _harness) = server(&shared);
+
+    let mut params = init_params();
+    params["config"]["bot_token"] = json!("xoxb-bot-test");
+    let response = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&response);
+    assert_eq!(code, error_code::CONFIG_INVALID);
+    assert!(message.contains("invalid_auth"), "{message}");
+    assert!(message.contains("xoxb"), "{message}");
+}
+
+#[tokio::test]
 async fn initialize_rejects_a_bad_app_token_with_guidance() {
     let shared = Shared::default();
     shared.push(Canned::Data(auth_ok()));

@@ -15,6 +15,7 @@ pub mod draft;
 pub mod error;
 pub mod llm;
 pub mod mention;
+pub mod notify;
 pub mod persist;
 pub mod pipeline;
 pub mod repo_resolver;
