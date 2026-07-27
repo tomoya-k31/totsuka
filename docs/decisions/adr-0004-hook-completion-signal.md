@@ -4,7 +4,7 @@ title: ADR-0004 Claude Code フック完了シグナルの受信をコア drivin
 description: Claude Code の完了検知を screen-manifest からフック機構へ移すにあたり、UDS 受信サーバを orchestrator-core の driving adapter（ports::SignalPort + adapters::hook_uds）側に置き、herdr プラグイン内には置かない決定。llm 検収はセッション内 prompt 型 Stop フックで行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [hook, claude-code, uds, socket, verification, signal, architecture, epic-131]
-timestamp: 2026-07-18T12:00:00Z
+timestamp: 2026-07-28T14:00:00Z
 status: accepted
 owner: tomoya-k31
 ---
@@ -56,6 +56,11 @@ Accepted — 2026-07-18（エピック [#131](https://github.com/tomoya-k31/tots
 - 旧 Orchestrator（0.1.3 未満）+ 新プラグインの組合せは `^0.1` 互換上は成立するが、env・`--settings` が付かず**完了を検知しなくなる**ため、プラグインは `protocol_version` 0.1.3 未満で警告ログを出す。
 - 完了検知のフック移行に伴い、herdr の状態ストリームは `pane.exited` デッドマン専用へ縮退した（F-106）。エンドツーエンドの流れは [フックシグナルフロー](/architecture/hook-signal-flow.md) を参照。
 - llm 検収の実現が Claude Code のフック仕様（prompt 型 Stop の挙動）に依存するため、Claude Code 側の仕様変化は保守タスク（§10.3）として監視対象に加える。
+- **決定 2 の適用範囲は Claude 系ツールに限られる**（後日判明、#159）。[#196](https://github.com/tomoya-k31/totsuka/issues/196) /
+  [ADR-0014](/decisions/adr-0014-tool-abstraction.md) で Codex（`hooks.json` は command 型のみ）と
+  OpenCode（JS プラグイン）が加わったが、どちらも prompt 型フックを持たない。3 ツールが共有できているのは
+  **ステータスマーカーの規約だけ**である。マーカーを廃してエンジン側 LLM 検収へ移す案は
+  [ADR-0020](/decisions/adr-0020-status-marker-stays.md) で再評価し、改めて不採用とした（本 ADR は supersede されない）。
 
 # Citations
 
