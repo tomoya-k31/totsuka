@@ -1,7 +1,7 @@
 ---
 type: Policy
 title: 端末出力の信頼境界（外部由来テキストの無害化）
-totsuka が第三者の書いたテキスト（Slack 本文・GitHub issue タイトル・author・url・source_task_id）を端末へ出す際の制御シーケンス無害化ポリシー。safe() の置き場所と適用範囲、エスケープであって除去ではない理由、--json とJSON ログを通さない理由、one_line の 3 段の順序、未カバー経路を定める。
+description: totsuka が第三者の書いたテキスト（Slack 本文・GitHub issue タイトル・author・url・source_task_id）を端末へ出す際の制御シーケンス無害化ポリシー。safe() の置き場所（core の terminal モジュール）と適用範囲、エスケープであって除去ではない理由、--json と JSON ログを通さない理由、one_line の 3 段の順序、未カバー経路を定める。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/terminal.rs
 tags: [security, cli, terminal, ansi, escape-sequence, sanitization, output]
 timestamp: 2026-07-28T03:00:00Z
