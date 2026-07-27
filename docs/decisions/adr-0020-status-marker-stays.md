@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0020 ステータスマーカーは wire 信号として存置する（エンジン側 LLM 検収への移行は不採用）
-description: ステータスマーカー（<<STATUS:COMPLETED>> 等、F-101）を廃止してエンジン側 LLM 検収へ移す案（#159 Option A）を評価し、現時点では不採用として現状維持する決定。マーカーは #196 のマルチツール化以降ツール非依存の唯一の完了信号になっており、廃止は 3 ツールのアダプタ・state.db の冪等キー・エスカレーション計数・publish 成果物の全経路に波及する。廃止する場合の改修一式と、その際に必要な前提条件も記録する。
+description: ステータスマーカー（<<STATUS:COMPLETED>> 等、F-101）を廃止してエンジン側 LLM 検収へ移す案（Option A、#159）を評価し、現時点では不採用として現状維持する決定。マーカーはマルチツール化（#196）以降ツール非依存の唯一の完了信号になっており、廃止は 3 ツールのアダプタ・state.db の冪等キー・エスカレーション計数・publish 成果物の全経路に波及する。廃止する場合の改修一式と、その際に必要な前提条件も記録する。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/domain/signal.rs
 tags: [hook, marker, verification, llm, completion, claude-code, codex, opencode, epic-131, tool-abstraction]
 timestamp: 2026-07-28T14:00:00Z
@@ -76,8 +76,9 @@ Accepted — 2026-07-28（[#159](https://github.com/tomoya-k31/totsuka/issues/15
 
 ### 3. 数字の更新
 
-state.db は #159 起票時の v3 から **v7** まで進んだ（`tool_session_id` へのリネーム v4、
-`task_messages` v5、`thread_key` DROP v6、`schema_migrations.applied_by` v7）。
+state.db は #159 起票時の v3 から **v7** まで進んだ（v4 = `tool_session_id` へのリネーム、
+v5 = `task_messages` 新設、v6 = v5 以前のタスクへの台帳バックフィル、v7 = `tasks.thread_key` DROP。
+`schema_migrations.applied_by` はスキーマ版数を上げない bootstrap 側の追加なので、この数には入らない）。
 #159 が「v4」と書いている冪等キーの再設計は、実際には **v8 相当のテーブル再構築**になる。
 また [#242](https://github.com/tomoya-k31/totsuka/issues/242) / [ADR-0015](/decisions/adr-0015-conversation-task-identity.md) で
 dispatch がメッセージ駆動になり、終端が可逆（`Reopen`）になったため、
