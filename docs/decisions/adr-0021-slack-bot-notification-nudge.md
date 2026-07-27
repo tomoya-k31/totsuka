@@ -52,6 +52,7 @@ bot DM は Slack ネイティブの push・バッジがデスクトップ+モバ
 - トークンが 3 本になる（`xoxp-` / `xapp-` / `xoxb-`）。**最大の運用罠**: 既存アプリへの bot user 追加は再インストール必須で、その再インストールは **`xoxp-` も再発行する**。`slack-bot` の Keychain エントリを足すだけだと user token が死ぬ（`doctor` が検出する）。[Quickstart](/operations/slack-quickstart.md) とmanifest コメントに「xoxp/xoxb 両方更新」を明記した。
 - アプリの DM をユーザーがミュートしていると push は出ない（コードで解決不能。Quickstart のトラブルシュートに記載）。
 - `publish_draft` の RPC 応答前に Slack 呼び出しが 1 本増える（既存の inline 提示面 post と同じ 30s timeout 境界。問題化したら `tokio::spawn` へ逃がす余地を残す）。
+- ピッカーの既知レース（同一の新規スレッドへ同時に 2 メンション → ピッカー 2 つ、#242 で受容済み）では、ナッジも投稿されたピッカーごとに 1 通ずつ = 2 通飛ぶ。**受容する**: 各ピッカーは別々に回答可能な UI であり「回答可能な UI 1 つにつきナッジ 1 通」という規則は一貫している。重複排除には稀なレースのためにタスク間協調が必要で、コストは push 1 通に見合わない。
 - xoxb の影響半径は bot 名義投稿 + IM 開始のみで、xoxp より小さい（[トークンポリシー](/security/slack-user-token.md)）。
 
 # Citations

@@ -62,9 +62,10 @@ const SELECTION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const SELECTION_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// State shared between the pipeline task and the JSON-RPC server: the
-/// pending-mention index, the draft store (#107), and the resolved self-DM
-/// record channel. (The task buffer is gone — tasks are pushed via
-/// `task/submit` the moment they are built, 0.1.6.)
+/// pending-mention index, the draft store (#107), the resolved self-DM
+/// record channel, and the resolved bot-DM nudge channel (#305). (The task
+/// buffer is gone — tasks are pushed via `task/submit` the moment they are
+/// built, 0.1.6.)
 #[derive(Clone, Default)]
 pub struct SharedState {
     pending: Arc<Mutex<PendingIndex>>,
@@ -473,7 +474,11 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
     // and both resolve — two pickers for one thread. Harmless: each parks
     // under its own message key and each submit carries its own
     // `message_key`, so the orchestrator ingests them as two messages of one
-    // conversation. Only the resolution work is duplicated.
+    // conversation. Only the resolution work is duplicated — and, since
+    // #305, the bot nudge with it (one per posted picker). Accepted: each
+    // picker is separately answerable, so "one nudge per answerable picker"
+    // stays consistent; deduplicating would need cross-task coordination for
+    // a rare race whose cost is one extra push notification.
     let context_text = enriched.context_lines.as_deref().unwrap_or(&[]).join("\n");
     let resolution = resolve(
         chat.as_ref(),
