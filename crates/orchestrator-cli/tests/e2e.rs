@@ -470,3 +470,100 @@ fn doctor_detects_orphan_panes_via_session_list() {
         "action points at the interactive path: {panes}"
     );
 }
+
+/// `doctor` の human 出力の無害化（#297）。pane label は
+/// `totsuka {source_task_id}`（ADR-0013）＝**外部が内容を決める id** を含むので、
+/// `task show` / `status` と同じ攻撃がそのまま通る。しかも `doctor` は
+/// 「何かが既におかしい」ときにこそ読まれる。
+///
+/// human 出力に生の `ESC` / `CR` が無いこと・ペイロードが消えていないこと・
+/// panes の行が 1 行のままであること、そして `--json` の値が **投稿された
+/// ものとバイト単位で一致する**（二重エスケープしない）ことを固定する。
+#[test]
+fn doctor_human_output_cannot_repaint_the_terminal_yet_json_stays_verbatim() {
+    use orchestrator_core::adapters::StateDb;
+
+    let base = scratch("doctor-control-sequences");
+    let env = Env {
+        source_log: base.join("source.ndjson"),
+        notify_log: base.join("notify.ndjson"),
+        base,
+        repo: PathBuf::new(),
+    };
+    let cfg_dir = env.cfg_dir();
+    std::fs::create_dir_all(cfg_dir.join("plugins")).unwrap();
+    std::fs::create_dir_all(env.state_dir()).unwrap();
+
+    let dir = env.plugins_store().join("mock_agent");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(mock_plugin(), dir.join("mock_agent")).unwrap();
+    std::fs::write(
+        dir.join("plugin.toml"),
+        "name = \"mock_agent\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
+         protocol_version = \">=0.1.6, <0.4\"\n\n[capabilities]\nstate_stream = true\n\
+         pane_control = true\n",
+    )
+    .unwrap();
+    std::fs::write(
+        cfg_dir.join("config.toml"),
+        "[plugins.mock_agent]\nenabled = true\nkind = \"agent_ide\"\n",
+    )
+    .unwrap();
+
+    // ESC[2J clears the screen, ESC[1A walks the cursor back over the row
+    // already printed, and the bare CR rewrites the current row from column 0
+    // — the pane listing is the last place an operator should be reading a
+    // forged screen, since the next thing they do is release panes.
+    let esc = char::from_u32(0x1b).unwrap();
+    let label = format!("totsuka C9:{esc}[2Jinnocent{esc}[1A\rforged");
+    std::fs::write(
+        cfg_dir.join("plugins/mock_agent.toml"),
+        // Written with TOML's own escapes so the staging file itself
+        // stays printable; the plugin reports the decoded bytes.
+        "list_sessions = [\n  { session_id = \"w1:p1|\", \
+         label = \"totsuka C9:\\u001B[2Jinnocent\\u001B[1A\\rforged\" },\n]\n",
+    )
+    .unwrap();
+
+    // An empty DB is enough: the label matches no task, which is the plain
+    // "true orphan" case.
+    StateDb::open(&env.state_dir().join("state.db")).unwrap();
+
+    let out = env.run(&["doctor"]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "orphan panes are found-problems (exit 3): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = stdout(&out);
+    assert!(!text.contains(esc), "doctor emitted a live ESC: {text:?}");
+    assert!(!text.contains('\r'), "doctor emitted a bare CR: {text:?}");
+    // Neutralised, not deleted: what the pane actually carries is readable.
+    assert!(
+        text.contains("innocent") && text.contains("forged"),
+        "doctor swallowed the payload text: {text}"
+    );
+    // A check is a line: an escape must not be able to invent or erase rows.
+    assert_eq!(
+        text.lines().filter(|l| l.contains("panes")).count(),
+        1,
+        "the panes check split rows: {text:?}"
+    );
+
+    // --json keeps the bytes the pane reported, escaped once by serde_json.
+    let out = env.run(&["doctor", "--json"]);
+    let raw = stdout(&out);
+    assert!(!raw.contains(esc), "raw JSON carried a live ESC: {raw:?}");
+    let doc: serde_json::Value = serde_json::from_str(&raw).expect("doctor --json parses");
+    let panes = doc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "panes")
+        .expect("panes check present");
+    assert!(
+        panes["detail"].as_str().unwrap().contains(&label),
+        "--json must carry the label verbatim, not the escaped form: {panes}"
+    );
+}

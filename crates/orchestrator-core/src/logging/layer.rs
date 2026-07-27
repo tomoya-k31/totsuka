@@ -5,6 +5,13 @@
 //! guarantees valid JSON Lines (one object per line, `jq`-parseable); the human
 //! format is for the terminal. Prompt/payload fields are only recorded at
 //! debug+ and only when `log_prompts` is enabled; otherwise they are dropped.
+//!
+//! Redaction and terminal escaping are deliberately two separate stages
+//! (#297): redaction is about *who may read the value* and applies to both
+//! formats, escaping via [`terminal::safe`](crate::terminal::safe) is about
+//! *what the value can do to a screen* and applies to the human format only —
+//! the JSON file is read by `jq`, which needs the value `serde_json` wrote,
+//! not a second escaping of it.
 
 use std::fmt::Debug;
 use std::io::Write;
@@ -16,6 +23,7 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::{Context, Layer};
 
 use super::redact::{is_prompt_field, redact_field};
+use crate::terminal::safe;
 
 /// Output format of a [`RedactingLayer`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,13 +136,19 @@ where
             LogFormat::Human => {
                 let level = level_label(meta.level(), self.ansi);
                 let mut line = format!("{ts} {level} {}", meta.target());
+                // Field values carry externally-authored text (`run` logs
+                // `title = %task.title`, #297) and this stream goes straight
+                // to a terminal, so every value is escaped on the way out.
+                // Only the values: the timestamp, level, target and field
+                // names are ours, and running our own ANSI colour through
+                // `safe` would print the escape instead of applying it.
                 if let Some(message) = &collector.message {
                     line.push_str(": ");
-                    line.push_str(message);
+                    line.push_str(&safe(message));
                 }
                 for (k, v) in &collector.fields {
                     if let Value::String(s) = v {
-                        line.push_str(&format!(" {k}={s}"));
+                        line.push_str(&format!(" {k}={}", safe(s)));
                     }
                 }
                 line
@@ -199,13 +213,16 @@ mod tests {
         }
     }
 
-    fn capture(log_prompts: bool, emit: impl FnOnce()) -> String {
+    fn capture_as(format: LogFormat, log_prompts: bool, emit: impl FnOnce()) -> String {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        let layer =
-            RedactingLayer::new(BufWriter(buf.clone()), LogFormat::Json, log_prompts, false);
+        let layer = RedactingLayer::new(BufWriter(buf.clone()), format, log_prompts, false);
         let subscriber = Registry::default().with(layer);
         with_default(subscriber, emit);
         String::from_utf8(buf.lock().unwrap().clone()).unwrap()
+    }
+
+    fn capture(log_prompts: bool, emit: impl FnOnce()) -> String {
+        capture_as(LogFormat::Json, log_prompts, emit)
     }
 
     #[test]
@@ -266,6 +283,55 @@ mod tests {
             tracing::debug!(prompt = "visible prompt", "dispatching");
         });
         assert!(out.contains("visible prompt"));
+    }
+
+    /// The human stream is stderr, and `run` logs the task title, which the
+    /// person who filed the issue wrote (#297). It must reach the terminal as
+    /// text, not as instructions to the terminal — while the JSON file, read
+    /// by `jq` and not by a screen, keeps the value exactly as sent.
+    #[test]
+    fn human_stream_escapes_external_text_while_json_keeps_it_verbatim() {
+        let esc = char::from_u32(0x1b).unwrap();
+        // ESC[2J clears the screen; the bare CR rewrites the row from column
+        // 0, so the operator sees only what came after it.
+        let title = format!("{esc}[2Jinnocent\rFORGED");
+
+        let out = capture_as(LogFormat::Human, true, || {
+            tracing::info!(title = %title, "task ingested");
+        });
+        assert!(
+            !out.contains(esc),
+            "a live ESC reached the terminal: {out:?}"
+        );
+        assert!(
+            !out.contains('\r'),
+            "a bare CR reached the terminal: {out:?}"
+        );
+        // Neutralised, not deleted: the operator can still read what arrived.
+        assert!(
+            out.contains("innocent") && out.contains("FORGED"),
+            "the payload was swallowed: {out:?}"
+        );
+        // One event stays one line, so a log line cannot forge another.
+        assert_eq!(out.lines().count(), 1, "the event split rows: {out:?}");
+
+        // A message field is external text too (it is formatted from one).
+        let out = capture_as(LogFormat::Human, true, || {
+            tracing::info!("ingested {title}");
+        });
+        assert!(
+            !out.contains(esc),
+            "a live ESC reached the terminal: {out:?}"
+        );
+        assert_eq!(out.lines().count(), 1, "the event split rows: {out:?}");
+
+        // The file format is untouched: `serde_json` already escaped the
+        // control characters, and escaping again would corrupt the value.
+        let out = capture_as(LogFormat::Json, true, || {
+            tracing::info!(title = %title, "task ingested");
+        });
+        let v: Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
+        assert_eq!(v["title"].as_str().unwrap(), title, "double-escaped: {out}");
     }
 
     #[test]

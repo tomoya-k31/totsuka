@@ -25,7 +25,7 @@ use serde::Serialize;
 
 use orchestrator_core::plugins::plugin_spec;
 
-use crate::common::{self, CliError, Cx};
+use crate::common::{self, CliError, Cx, safe};
 use crate::init_cmd::git_version;
 
 /// `serde` `skip_serializing_if` predicate: omit a `false` flag from the JSON.
@@ -256,30 +256,25 @@ pub fn run(cx: &Cx, json: bool, online: bool) -> Result<(), CliError> {
     if json {
         common::print_json(&checks)?;
     } else {
+        // Every human line goes through `safe` *here*, after the `--json`
+        // branch (#297). A `Check` can carry externally-authored text — a
+        // pane label holds the source task id, an orphan worktree path holds
+        // the branch built from the title, and git / tmux / plugin errors
+        // quote whatever they were given — and doctor is read precisely when
+        // something is already wrong. Sanitising the `Check` fields instead
+        // would drag `--json` in with them, which must stay byte-exact.
         for check in &checks {
+            let name = safe(&check.name);
+            let detail = safe(&check.detail);
+            let action = safe(check.action.as_deref().unwrap_or("see docs"));
             if !check.ok {
-                println!(
-                    "FAIL: {} — {} → {}",
-                    check.name,
-                    check.detail,
-                    check.action.as_deref().unwrap_or("see docs")
-                );
+                println!("FAIL: {name} — {detail} → {action}");
             } else if check.skipped {
-                println!(
-                    "skip: {} — {} → {}",
-                    check.name,
-                    check.detail,
-                    check.action.as_deref().unwrap_or("see docs")
-                );
+                println!("skip: {name} — {detail} → {action}");
             } else if check.warning {
-                println!(
-                    "warn: {} — {} → {}",
-                    check.name,
-                    check.detail,
-                    check.action.as_deref().unwrap_or("see docs")
-                );
+                println!("warn: {name} — {detail} → {action}");
             } else {
-                println!("ok:   {} — {}", check.name, check.detail);
+                println!("ok:   {name} — {detail}");
             }
         }
     }
@@ -1361,9 +1356,13 @@ fn check_orphans(
     // Interactive cleanup proposal (§5.1) — only on a TTY and never in --json.
     if !json && io::stdin().is_terminal() {
         for (repo_name, repo_path, orphan) in &orphans {
+            // The path carries the branch built from the task title, and
+            // `render_branch` only folds `Cc` — bidi overrides survive it
+            // (#297). This is the line the operator answers y/N to, so it is
+            // exactly the one that must not be able to lie.
             print!(
                 "remove orphan worktree {} (repo {repo_name})? [y/N]: ",
-                orphan.display()
+                safe(&orphan.display().to_string())
             );
             io::stdout().flush()?;
             let mut answer = String::new();
@@ -1376,11 +1375,12 @@ fn check_orphans(
                     &["worktree", "remove", &orphan.display().to_string()],
                 )?;
                 if out.success() {
-                    println!("removed {}", orphan.display());
+                    println!("removed {}", safe(&orphan.display().to_string()));
                 } else {
+                    // git quotes the path back at us in its own message.
                     println!(
                         "could not remove (dirty?): {} → remove manually with `git worktree remove --force`",
-                        out.stderr.trim()
+                        safe(out.stderr.trim())
                     );
                 }
             }
@@ -1611,10 +1611,14 @@ fn check_orphan_panes(
     // mirroring the orphan-worktree flow (doctor proposes, never auto-frees).
     if !json && io::stdin().is_terminal() {
         for orphan in &orphans {
-            let name = orphan.session.label.as_deref().unwrap_or("(no label)");
+            // The label is `totsuka {source_task_id}` (ADR-0013) — the id the
+            // source chose, so external text on the prompt the operator is
+            // about to answer y/N to (#297).
+            let name = safe(orphan.session.label.as_deref().unwrap_or("(no label)"));
             print!(
                 "release orphan pane {name} via {} — {}? [y/N]: ",
-                orphan.plugin, orphan.reason
+                safe(&orphan.plugin),
+                safe(&orphan.reason)
             );
             io::stdout().flush()?;
             let mut answer = String::new();
@@ -1649,7 +1653,7 @@ fn check_orphan_panes(
                 Ok(SessionReleaseResult { released: false }) => {
                     println!("not released (already gone, or the pane changed identity)")
                 }
-                Err(e) => println!("release failed: {e}"),
+                Err(e) => println!("release failed: {}", safe(&e.to_string())),
             }
         }
         checks.push(Check::ok("panes", format!("orphans handled: {listing}")));

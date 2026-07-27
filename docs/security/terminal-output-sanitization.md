@@ -1,10 +1,10 @@
 ---
 type: Policy
 title: 端末出力の信頼境界（外部由来テキストの無害化）
-description: CLI が第三者の書いたテキスト（Slack 本文・GitHub issue タイトル・author・url・source_task_id）を端末へ出す際の制御シーケンス無害化ポリシー。safe() の適用範囲、エスケープであって除去ではない理由、--json を通さない理由、one_line の 3 段の順序、未カバー経路を定める。
-resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/common.rs
+description: totsuka が第三者の書いたテキスト（Slack 本文・GitHub issue タイトル・author・url・source_task_id）を端末へ出す際の制御シーケンス無害化ポリシー。safe() の置き場所（core の terminal モジュール）と適用範囲、エスケープであって除去ではない理由、--json と JSON ログを通さない理由、one_line の 3 段の順序、未カバー経路を定める。
+resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/terminal.rs
 tags: [security, cli, terminal, ansi, escape-sequence, sanitization, output]
-timestamp: 2026-07-26T21:00:00Z
+timestamp: 2026-07-28T03:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -37,8 +37,12 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 
 ## 1. 外部由来フィールドは端末へ出す直前に `safe()` を通す
 
-`crates/orchestrator-cli/src/common.rs` の `safe(&str) -> Cow<str>` が唯一の入口。
-`print_json` の隣に置いてあるのは、**JSON 経路と人間経路の分岐が 1 ファイルで見える**ようにするため。
+`crates/orchestrator-core/src/terminal.rs` の `safe(&str) -> Cow<str>` が唯一の実装。
+#280 では CLI の `common.rs` に置いていたが、**印字側が 2 クレートに跨がる**ため
+（[orchestrator-cli](/components/orchestrator-cli.md) の human 出力と
+[orchestrator-core](/components/orchestrator-core.md) 自身の stderr ログ層）、#297 で core へ移した。
+`orchestrator_cli::common::safe` はその **re-export** で、`print_json` の隣に置いたままにしてある
+（**JSON 経路と人間経路の分岐が 1 ファイルで見える**ようにするため）。
 
 対象は [orchestrator-cli](/components/orchestrator-cli.md) の human 出力のうち:
 
@@ -48,9 +52,27 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 | `task show` | `title` / `source_task_id` / `url` / `worktree_path` / `branch` / `author` / `body` / `session_id` |
 | `status` | `title` / `branch` / `worktree_path` |
 | `logs` | `message` / `extras` / `timestamp` / `level` / JSON としてパースできない行 |
+| `doctor`（#297） | **すべての `Check`** の `name` / `detail` / `action`、および TTY 時の対話プロンプト（孤児 worktree の削除確認・孤児 pane の解放確認と、その結果行） |
+
+加えて [orchestrator-core](/components/orchestrator-core.md) の human ログ層（stderr、#297）:
+
+| 経路 | フィールド |
+|---|---|
+| `logging::layer`（`LogFormat::Human`） | イベントの `message` と**全フィールド値**（`run` の `title = %task.title` 等）。`--debug` は全コマンドでこの層を通る |
+
+`doctor` だけ「特定フィールド」ではなく `Check` 全部を通すのは、外部由来テキストが乗る経路が
+pane label（`totsuka {source_task_id}`、[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）と
+孤児 worktree パスだけでなく、git の stderr・tmux / プラグインのエラー文にも散っているため。
+レンダリングループ 1 箇所に置けば全部覆え、置き場所も 1 つで済む。
+
+ログ層で **redact と escape を別段にしている**のも同じ理屈の裏返しで、
+redact は「誰が読んでよいか」（両形式に効く）、escape は「画面に何ができるか」（human だけ）で
+守る対象が違う。同じ関数に混ぜると JSON ログまで巻き込む。
 
 `state` / `workflow` / `mode` / `repo` / `source` は **totsuka 自身か config が決める**ので通さない。
 自前のテキストまで通すと、将来装飾（色付け）を入れたときに自分のエスケープを自分で壊す。
+ログ層の timestamp / level / target / フィールド**名**を通さないのも同じ理由で、
+level の ANSI 色を `safe()` に通せば色が付かずエスケープが印字される。
 
 ## 2. 除去ではなく**エスケープ**する
 
@@ -67,11 +89,13 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 しかし読み順の偽装は**同じ画面に対する同じ攻撃**なので、`is_screen_control()` が
 `U+202A..U+202E` と `U+2066..U+2069` を明示的に足している。
 
-## 4. `--json` は**通さない**
+## 4. `--json` と JSON ログは**通さない**
 
 `--json` は `print_json` → `serde_json` であり、制御文字は既に `\u00xx` へエスケープ済み。
 ここに `safe()` を重ねると**二重エスケープ**になり、機械が読む値が壊れる。
 `--json` の値はソースが送ったものと**バイト単位で一致する**（切り詰めもしない）。
+`$XDG_STATE_HOME/totsuka/logs/` の JSON Lines も同じ（読むのは `jq` であって端末ではない）ので、
+`logging::layer` の無害化は `LogFormat::Human` の分岐の中だけに置く。
 
 構造上これは守られている: `TaskDetail` / `TaskRow` の**構築は JSON 分岐より前**にあり、
 `safe()` は**分岐より後の print サイトだけ**に置かれている。
@@ -89,20 +113,19 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 
 # カバーしていない経路（既知）
 
-- **`totsuka run` 自身の stderr ログ層** — `orchestrator-core/src/logging/layer.rs` は
-  フィールド値を生で追記し、`run` は `title` をそこへ出す。`--debug` は全コマンドでこの層を通る。
-  CLI クレートの外なので #280 の対象外とした
-- **`doctor` の孤児 pane / 孤児 worktree の報告** — `doctor_cmd.rs` の pane label
-  （`session.label` は外部由来の `source_task_id` を含む）と worktree パスを無検査で印字する。
-  `task show` / `status` と**同じ外部由来度**なので、ここは実質的な穴。#280 の完了条件は
-  4 コマンド（`task show` / `task list` / `status` / `logs`）だったため対象外としたが、
-  別 issue で塞ぐべき
-- `main.rs` の `error:` 行、`focus` の `reason`、`doctor` のその他 detail — git の stderr や
-  プラグインのエラー文が乗る。外部由来度は低いが無検査
+- `main.rs` の `error:` 行、`focus` の `reason` — git の stderr やプラグインのエラー文が乗る。
+  外部由来度は低いが無検査（`doctor` の同種の経路は #297 で `Check` ごと覆われた）
+
+塞いだもの:
+
+- **`totsuka run` 自身の stderr ログ層**（#297）— `logging::layer` の human 形式で
+  `message` と全フィールド値を通すようにした
+- **`doctor` の孤児 pane / 孤児 worktree の報告**（#297）— `--json` 分岐より後の
+  human レンダリングループと対話プロンプトで通すようにした
 
 # 検証
 
-`safe()` のユニットテスト（`common.rs`）が、①通常テキストが不変で `Cow::Borrowed` であること
+`safe()` のユニットテスト（`orchestrator-core/src/terminal.rs`）が、①通常テキストが不変で `Cow::Borrowed` であること
 ②`ESC[2J` / `ESC[1A` / OSC 8 / `CR` / bidi / `BEL` / `NUL` が**消えずに**無害化されること
 ③出力が常に 1 行であることを固定する。
 
@@ -112,3 +135,16 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 の human 出力に生の `ESC` も `CR` も無いこと・ペイロードの可読部分が消えていないこと・
 `task list` の行数が「ヘッダ + 1 行」のままであること、そして **`--json` の値が投稿されたものと
 完全一致すること**を検証する。
+
+`doctor` は同型の E2E `doctor_human_output_cannot_repaint_the_terminal_yet_json_stays_verbatim`
+（`crates/orchestrator-cli/tests/e2e.rs`）が、敵対的な label を返す mock agent の pane を
+孤児として報告させ、human 出力に生の `ESC` も `CR` も無いこと・ペイロードが消えていないこと・
+panes の行が 1 行のままであること・`--json` の `detail` が label をそのまま含むことを検証する。
+
+ログ層は `logging::layer` のユニットテスト
+`human_stream_escapes_external_text_while_json_keeps_it_verbatim` が、同じ入力に対して
+human 形式は無害化され JSON 形式は不変であることを 1 つのテストで並べて固定する。
+
+**どのテストも `safe()` を no-op に潰すと実際に FAILED になることを確認してからマージしている**
+（#280 / #297）。修正が無くても通るセキュリティテストは無価値なので、この経路を触るときは
+同じ確認をすること。

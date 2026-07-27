@@ -4,7 +4,7 @@ title: orchestrator-cli クレート
 description: totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（init / run / status / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [rust, crate, cli, plugin, run, status, doctor, hooks, security]
-timestamp: 2026-07-26T22:30:00+09:00
+timestamp: 2026-07-28T12:00:00+09:00
 status: active
 owner: tomoya-k31
 ---
@@ -29,7 +29,9 @@ owner: tomoya-k31
 
 **doctor の非対話ゲート（#289、[ADR-0019](/decisions/adr-0019-doctor-onepassword-gating.md)）**: `check_onepassword` が**最初に**走り、`op whoami`（プロンプトを出さない）の結果を `OpReadiness`（`NotUsed` / `Ready` / `WouldPrompt`）として後続へ渡す。`WouldPrompt`（`op` が無い・セッション無し）のとき、`op://` の実解決を要する probe — `plugin:{name}`（`plugin_spec` が `plugins/{name}.toml` の全文字列 leaf と task_source の `[llm].api_key_ref` を解決する）、`hook-socket`（`auth_token_ref`）、`panes`（プラグイン起動）— は**実行せず `skipped` として報告**する。判定は**プラグイン単位**（1 つのプラグインの `op://` が他を巻き添えにしない）で、kind はマニフェストではなく config のロスターから読む（プラグインに触れる前に決める必要があるため）。`Check` の 4 つ目の重大度 `skipped` は `ok: true`（exit code に影響しない）かつ `skip_serializing_if` なので `--json` は後方互換。**セッションがあれば従来どおり全て走る。**
 
-**外部由来テキストの無害化（#280）**: `task list` / `task show` / `status` / `logs` の **human 出力**は、第三者が内容を決められるフィールド（`title` / `body` / `author` / `url` / `source_task_id` / `branch` / `worktree_path` / `session_id` / ログの `message`）を `common::safe()` に通してから印字する。制御文字を**除去ではなく可視のエスケープへ**置き換えるため、`ESC[2J` による画面消去も `ESC[1A` による既印字行の上書き（別タスクの state の偽装）も OSC 8 によるリンク偽装も成立しない。**`--json` は通さない** — `serde_json` が既に `\u00xx` へエスケープしており、重ねると二重エスケープで機械可読値が壊れる。`TaskDetail` / `TaskRow` の構築は JSON 分岐より前にあるので、無害化は**分岐より後の print サイトだけ**に置く（構造体側でやると `--json` を巻き込む）。詳細は [端末出力の信頼境界](/security/terminal-output-sanitization.md)。
+**外部由来テキストの無害化（#280 / #297）**: `task list` / `task show` / `status` / `logs` / `doctor` の **human 出力**は、第三者が内容を決められるフィールド（`title` / `body` / `author` / `url` / `source_task_id` / `branch` / `worktree_path` / `session_id` / ログの `message`）を `common::safe()` に通してから印字する。制御文字を**除去ではなく可視のエスケープへ**置き換えるため、`ESC[2J` による画面消去も `ESC[1A` による既印字行の上書き（別タスクの state の偽装）も OSC 8 によるリンク偽装も成立しない。**`--json` は通さない** — `serde_json` が既に `\u00xx` へエスケープしており、重ねると二重エスケープで機械可読値が壊れる。`TaskDetail` / `TaskRow` の構築は JSON 分岐より前にあるので、無害化は**分岐より後の print サイトだけ**に置く（構造体側でやると `--json` を巻き込む）。詳細は [端末出力の信頼境界](/security/terminal-output-sanitization.md)。
+
+**#297 で `doctor` を追加**: pane label は `totsuka {source_task_id}`（[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）＝外部が決める id を含み、孤児 worktree のパスは title 由来のブランチ名を含む（`render_branch` が畳むのは `Cc` だけで bidi override は素通りする）。`doctor` は障害調査でこそ読まれるコマンドなので出力を信じたい場面で使われる。適用は **`--json` 分岐より後の human レンダリングループ 1 箇所**（`Check` の `name`/`detail`/`action`）と、TTY 時の対話プロンプト（削除/解放の y/N を答える行そのもの）に置く。これにより git の stderr・tmux / プラグインのエラー文が乗る他の `Check` も同時に覆われる。`safe()` の実体は #297 で `orchestrator_core::terminal` へ移り、`common::safe` はその re-export になった（core 自身の stderr ログ層も同じ関数を使うため）。
 
 # フックアセットの書き出し（#137、#178 で core へ移動）
 
