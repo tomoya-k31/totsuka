@@ -13,13 +13,16 @@ use serde_json::Value;
 
 use crate::error::SlackError;
 
-/// Which of the two configured tokens authenticates a Web API call.
+/// Which of the configured tokens authenticates a Web API call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     /// The App-Level Token (`xapp-`) — Socket Mode connection management.
     App,
     /// The user token (`xoxp-`) — everything posted as the operator.
     User,
+    /// The optional bot token (`xoxb-`) — notification nudges only, never a
+    /// reply. Callers must gate on the token being configured.
+    Bot,
 }
 
 /// Connection settings for building a transport. Grouped so factories and
@@ -32,6 +35,8 @@ pub struct TransportSettings<'a> {
     pub app_token: &'a str,
     /// User token (`xoxp-`).
     pub user_token: &'a str,
+    /// Bot token (`xoxb-`), when the notification nudge is configured.
+    pub bot_token: Option<&'a str>,
     /// Max retry attempts for retryable failures.
     pub max_retries: u32,
 }
@@ -126,6 +131,7 @@ pub struct ReqwestTransport {
     base_url: String,
     app_token: String,
     user_token: String,
+    bot_token: Option<String>,
     timeout: Duration,
     max_retries: u32,
     backoff_base: Duration,
@@ -156,6 +162,7 @@ impl ReqwestTransport {
             base_url: settings.api_url.trim_end_matches('/').to_string(),
             app_token: settings.app_token.to_string(),
             user_token: settings.user_token.to_string(),
+            bot_token: settings.bot_token.map(str::to_string),
             timeout: Duration::from_secs(30),
             max_retries: settings.max_retries,
             backoff_base: Duration::from_millis(500),
@@ -171,10 +178,17 @@ impl ReqwestTransport {
         self
     }
 
-    fn token(&self, kind: TokenKind) -> &str {
+    fn token(&self, kind: TokenKind) -> Result<&str, SlackError> {
         match kind {
-            TokenKind::App => &self.app_token,
-            TokenKind::User => &self.user_token,
+            TokenKind::App => Ok(&self.app_token),
+            TokenKind::User => Ok(&self.user_token),
+            // Reachable only through a plugin bug: every bot call site must
+            // gate on `bot_token` being configured before asking for it.
+            TokenKind::Bot => self.bot_token.as_deref().ok_or_else(|| {
+                SlackError::InvalidRequest(
+                    "a bot-token call was made but no `bot_token` is configured".into(),
+                )
+            }),
         }
     }
 
@@ -223,7 +237,7 @@ impl ReqwestTransport {
         let mut req = self
             .client
             .post(&url)
-            .bearer_auth(self.token(token))
+            .bearer_auth(self.token(token)?)
             .timeout(self.timeout);
         // Slack's Web API accepts an empty POST for no-argument methods
         // (`auth.test`); arguments go as form fields (see [`form_fields`]).

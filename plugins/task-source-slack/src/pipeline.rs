@@ -70,6 +70,7 @@ pub struct SharedState {
     pending: Arc<Mutex<PendingIndex>>,
     drafts: Arc<Mutex<DraftStore>>,
     self_dm: Arc<Mutex<Option<String>>>,
+    bot_dm: Arc<Mutex<Option<String>>>,
 }
 
 /// The pending-mention map plus its FIFO eviction order.
@@ -165,6 +166,19 @@ impl SharedState {
     /// The self-DM record channel, when startup resolution succeeded.
     pub fn self_dm_channel(&self) -> Option<String> {
         self.self_dm.lock().unwrap().clone()
+    }
+
+    /// Record the resolved bot↔operator DM channel the notification nudges
+    /// go to (#305; set once by the pipeline at startup when a `bot_token`
+    /// is configured).
+    pub fn set_bot_dm_channel(&self, channel: String) {
+        *self.bot_dm.lock().unwrap() = Some(channel);
+    }
+
+    /// The bot↔operator DM channel — `None` when the nudge is disabled (no
+    /// `bot_token`) or startup resolution failed.
+    pub fn bot_dm_channel(&self) -> Option<String> {
+        self.bot_dm.lock().unwrap().clone()
     }
 
     /// Store a draft, returning its fresh id (#107).
@@ -321,6 +335,26 @@ where
                      continuing without that filter row");
             }
         }
+        // Resolve the bot↔operator DM the notification nudges go to (#305).
+        // Also once, also non-fatal: without it the nudges are skipped and
+        // the draft/picker surfaces still work — the operator just gets no
+        // push. (No mention-filter row needed: `message.im` is not
+        // subscribed, so bot-DM posts never enter the pipeline.)
+        match &config.bot_token {
+            None => {
+                tracing::warn!(
+                    "`bot_token` is not configured; drafts and pickers will generate no \
+                     Slack push notification (see plugins/slack.toml to enable the nudge)"
+                );
+            }
+            Some(_) => match api.conversations_open_bot(&config.target_user_id).await {
+                Ok(channel) => state.set_bot_dm_channel(channel),
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not resolve the bot DM channel; \
+                         notification nudges are disabled for this run");
+                }
+            },
+        }
 
         let mut names = NameCache::default();
         let orchestrator = Orchestrator {
@@ -465,6 +499,15 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
             match post_selection_ephemeral(api.as_ref(), &config, &enriched, &candidates).await {
                 Ok(()) => {
                     tracing::info!(message_key, "asked the operator to pick a repository");
+                    // The picker is an ephemeral, which generates no Slack
+                    // notification of its own — nudge via the bot DM (#305).
+                    crate::notify::send_nudge(
+                        api.as_ref(),
+                        &state,
+                        "リポジトリ選択の確認が届きました",
+                        enriched.permalink.as_deref(),
+                    )
+                    .await;
                 }
                 Err(e) => {
                     // Without the ephemeral the operator can never answer;

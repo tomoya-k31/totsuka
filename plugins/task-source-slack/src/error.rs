@@ -144,6 +144,27 @@ pub fn app_auth_failure(error: &str) -> SlackError {
     ))
 }
 
+/// Map a credential-class failure of a *bot token* call (the notification
+/// nudge) to a [`SlackError::Auth`] with xoxb-specific recovery guidance —
+/// the fix differs from both other tokens' (copy the Bot User OAuth Token,
+/// which a re-install re-issues alongside the xoxp- one).
+pub fn bot_auth_failure(error: &str) -> SlackError {
+    let hint = match error {
+        "token_revoked" => "the bot token was revoked (token_revoked); ",
+        "account_inactive" => {
+            "the Slack account behind the app is deactivated (account_inactive); from an \
+             active account, "
+        }
+        _ => "",
+    };
+    SlackError::Auth(format!(
+        "Slack rejected the bot token ({error}) → {hint}re-install the Slack app if needed, \
+         copy the Bot User OAuth Token (xoxb-) from its OAuth & Permissions page, and update \
+         the secret referenced by `bot_token` in plugins/slack.toml (a re-install also \
+         re-issues the xoxp- user token — update both)"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +255,24 @@ mod tests {
             app_auth_failure("account_inactive")
                 .to_string()
                 .contains("deactivated")
+        );
+    }
+
+    #[test]
+    fn bot_auth_failure_points_at_the_xoxb_token() {
+        for code in ["invalid_auth", "token_revoked", "account_inactive"] {
+            let err = bot_auth_failure(code);
+            assert!(err.is_credential(), "{code}");
+            let message = err.to_string();
+            assert!(message.contains(code), "{message}");
+            assert!(message.contains("xoxb-"), "{message}");
+            assert!(message.contains("bot_token"), "{message}");
+        }
+        // A re-install re-issues the user token too; the guidance must say so.
+        assert!(
+            bot_auth_failure("token_revoked")
+                .to_string()
+                .contains("xoxp-")
         );
     }
 

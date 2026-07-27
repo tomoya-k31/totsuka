@@ -53,6 +53,7 @@ fn settings(config: &SlackConfig) -> TransportSettings<'_> {
         api_url: &config.api_url,
         app_token: &config.app_token,
         user_token: &config.user_token,
+        bot_token: config.bot_token.as_deref(),
         max_retries: config.max_retries,
     }
 }
@@ -407,6 +408,13 @@ async fn token_guard<T: SlackTransport>(
         });
     }
     api.apps_connections_open().await?;
+    // An explicitly configured `bot_token` gets the same treatment as the
+    // xapp token: probe it here so a dead one fails startup with guidance
+    // (visible to `doctor`) instead of silently dropping every nudge (#305).
+    // Absent = nudges off by choice; nothing to probe.
+    if config.bot_token.is_some() {
+        api.auth_test_bot().await?;
+    }
     Ok(())
 }
 

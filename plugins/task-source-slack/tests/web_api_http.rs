@@ -112,10 +112,15 @@ async fn mock_server(responses: Vec<CannedHttp>) -> (String, Arc<Mutex<Vec<Strin
 }
 
 fn transport(base: &str, max_retries: u32) -> ReqwestTransport {
+    transport_with_bot(base, max_retries, None)
+}
+
+fn transport_with_bot(base: &str, max_retries: u32, bot_token: Option<&str>) -> ReqwestTransport {
     ReqwestTransport::new(TransportSettings {
         api_url: base,
         app_token: "xapp-1-A1-app",
         user_token: "xoxp-user",
+        bot_token,
         max_retries,
     })
     // Fast backoff so retry tests do not pay production-scale sleeps (the
@@ -163,6 +168,40 @@ async fn app_token_authenticates_app_calls() {
 
     let raw = requests.lock().unwrap()[0].clone();
     assert!(raw.contains("authorization: Bearer xapp-1-A1-app"), "{raw}");
+}
+
+#[tokio::test]
+async fn bot_token_authenticates_bot_calls() {
+    let (base, requests) =
+        mock_server(vec![CannedHttp::ok(json!({ "ok": true, "ts": "1.0" }))]).await;
+
+    transport_with_bot(&base, 0, Some("xoxb-bot"))
+        .call(
+            TokenKind::Bot,
+            "chat.postMessage",
+            Some(json!({ "channel": "D_BOT", "text": "🔔" })),
+            false,
+        )
+        .await
+        .unwrap();
+
+    let raw = requests.lock().unwrap()[0].clone();
+    assert!(raw.contains("authorization: Bearer xoxb-bot"), "{raw}");
+}
+
+#[tokio::test]
+async fn bot_call_without_a_configured_token_fails_as_a_plugin_bug() {
+    // No HTTP request may leave the process: the failure is local
+    // (InvalidRequest), not a Slack error blamed on the network.
+    let (base, requests) = mock_server(vec![]).await;
+
+    let err = transport(&base, 3)
+        .call(TokenKind::Bot, "chat.postMessage", None, false)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SlackError::InvalidRequest(_)), "{err}");
+    assert!(err.to_string().contains("bot_token"), "{err}");
+    assert!(requests.lock().unwrap().is_empty(), "no request sent");
 }
 
 #[tokio::test]

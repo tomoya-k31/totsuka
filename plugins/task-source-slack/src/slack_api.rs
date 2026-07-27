@@ -9,7 +9,7 @@
 
 use serde_json::{Value, json};
 
-use crate::error::{SlackError, app_auth_failure, auth_failure};
+use crate::error::{SlackError, app_auth_failure, auth_failure, bot_auth_failure};
 use crate::transport::{SlackTransport, TokenKind, expect_ok};
 
 /// The identity behind a token, from `auth.test`.
@@ -106,6 +106,7 @@ impl<T: SlackTransport> SlackApi<T> {
                 let guided = match token {
                     TokenKind::User => auth_failure(&error),
                     TokenKind::App => app_auth_failure(&error),
+                    TokenKind::Bot => bot_auth_failure(&error),
                 };
                 tracing::error!(method, "{guided}");
                 guided
@@ -120,11 +121,19 @@ impl<T: SlackTransport> SlackApi<T> {
         body: Option<Value>,
         idempotent: bool,
     ) -> Result<Value, SlackError> {
-        let response = self
-            .transport
-            .call(TokenKind::User, method, body, idempotent)
-            .await?;
-        Self::checked(TokenKind::User, method, response)
+        self.call_with(TokenKind::User, method, body, idempotent)
+            .await
+    }
+
+    async fn call_with(
+        &self,
+        token: TokenKind,
+        method: &str,
+        body: Option<Value>,
+        idempotent: bool,
+    ) -> Result<Value, SlackError> {
+        let response = self.transport.call(token, method, body, idempotent).await?;
+        Self::checked(token, method, response)
     }
 
     /// `auth.test` — who the user token authenticates as (TokenGuard).
@@ -225,16 +234,43 @@ impl<T: SlackTransport> SlackApi<T> {
                 true,
             )
             .await?;
-        let channel = response
-            .get("channel")
-            .and_then(|c| c.get("id"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                SlackError::InvalidResponse(
-                    "`conversations.open` response has no `channel.id`".into(),
-                )
-            })?;
-        Ok(channel.to_string())
+        opened_channel_id(&response)
+    }
+
+    /// `conversations.open` with the **bot token**: the bot↔operator DM the
+    /// notification nudges go to (#305). Idempotent like
+    /// [`conversations_open_self`](Self::conversations_open_self).
+    pub async fn conversations_open_bot(&self, user_id: &str) -> Result<String, SlackError> {
+        let response = self
+            .call_with(
+                TokenKind::Bot,
+                "conversations.open",
+                Some(json!({ "users": user_id })),
+                true,
+            )
+            .await?;
+        opened_channel_id(&response)
+    }
+
+    /// `auth.test` with the **bot token** (TokenGuard probe when `bot_token`
+    /// is configured, #305). No identity comparison: the bot is its own
+    /// identity, unlike the user token whose holder must be
+    /// `target_user_id`. Every `ok: false` is credential-class, exactly as
+    /// in [`auth_test`](Self::auth_test).
+    pub async fn auth_test_bot(&self) -> Result<(), SlackError> {
+        let response = self
+            .transport
+            .call(TokenKind::Bot, "auth.test", None, true)
+            .await?;
+        expect_ok("auth.test", response).map_err(|e| match e {
+            SlackError::Api { error, .. } => {
+                let guided = bot_auth_failure(&error);
+                tracing::error!(method = "auth.test", "{guided}");
+                guided
+            }
+            other => other,
+        })?;
+        Ok(())
     }
 
     /// `conversations.info` — the channel's name (`#general` without the
@@ -323,6 +359,30 @@ impl<T: SlackTransport> SlackApi<T> {
         string_field(&response, "chat.postMessage", "ts")
     }
 
+    /// `chat.postMessage` as the **bot** — the notification nudge, and
+    /// nothing else (#305): a reply must never be posted with this token.
+    /// Non-idempotent, like [`chat_post_message`](Self::chat_post_message).
+    pub async fn chat_post_message_bot(
+        &self,
+        message: &PostMessage<'_>,
+    ) -> Result<String, SlackError> {
+        let response = self
+            .call_with(
+                TokenKind::Bot,
+                "chat.postMessage",
+                Some(json!({
+                    "channel": message.channel,
+                    "text": message.text,
+                    "thread_ts": message.thread_ts,
+                    "unfurl_links": message.unfurl_links,
+                    "blocks": message.blocks,
+                })),
+                false,
+            )
+            .await?;
+        string_field(&response, "chat.postMessage", "ts")
+    }
+
     /// `chat.postEphemeral` — visible only to `user`. Non-idempotent.
     pub async fn chat_post_ephemeral(&self, message: &PostEphemeral<'_>) -> Result<(), SlackError> {
         self.call(
@@ -363,6 +423,18 @@ impl<T: SlackTransport> SlackApi<T> {
     pub async fn post_response_url(&self, url: &str, body: Value) -> Result<(), SlackError> {
         self.transport.post_url(url, body).await
     }
+}
+
+/// The `channel.id` of a `conversations.open` response.
+fn opened_channel_id(response: &Value) -> Result<String, SlackError> {
+    response
+        .get("channel")
+        .and_then(|c| c.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            SlackError::InvalidResponse("`conversations.open` response has no `channel.id`".into())
+        })
 }
 
 /// A required top-level string field of a Web API response.

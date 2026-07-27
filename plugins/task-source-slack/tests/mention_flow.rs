@@ -16,6 +16,7 @@ use common::{
 };
 use task_source_slack::llm::ChatError;
 use task_source_slack::server::Server;
+use task_source_slack::transport::TokenKind;
 
 fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
     let (srv, harness, _lookup) = server_with_lookup(shared, LookupHarness::new());
@@ -65,6 +66,16 @@ fn canned_web_api(shared: &Shared, ws_url: &str) {
 /// Like [`canned_web_api`] but the mention channel resolves to `channel_name`
 /// (drives the `[[channel_groups]]` prefix rules).
 fn canned_web_api_in_channel(shared: &Shared, ws_url: &str, channel_name: &str) {
+    canned_web_api_without_ephemeral(shared, ws_url, channel_name);
+    shared.push_for(
+        "chat.postEphemeral",
+        Canned::Data(json!({ "ok": true, "message_ts": "9.1" })),
+    );
+}
+
+/// Like [`canned_web_api_in_channel`] but without a `chat.postEphemeral`
+/// answer, so a test can make the picker post fail.
+fn canned_web_api_without_ephemeral(shared: &Shared, ws_url: &str, channel_name: &str) {
     shared.push_for(
         "auth.test",
         Canned::Data(json!({ "ok": true, "user_id": "U_ME" })),
@@ -87,10 +98,6 @@ fn canned_web_api_in_channel(shared: &Shared, ws_url: &str, channel_name: &str) 
     shared.push_for(
         "conversations.info",
         Canned::Data(json!({ "ok": true, "channel": { "name": channel_name } })),
-    );
-    shared.push_for(
-        "chat.postEphemeral",
-        Canned::Data(json!({ "ok": true, "message_ts": "9.1" })),
     );
     shared.push_for(
         "conversations.replies",
@@ -383,6 +390,97 @@ async fn low_confidence_asks_via_ephemeral_and_the_answer_submits_the_task() {
     let posted = shared.posted_urls();
     assert_eq!(posted[0].url, "https://hooks.slack.test/r/1");
     assert_eq!(posted[0].body["replace_original"], true);
+}
+
+#[tokio::test]
+async fn picker_posts_a_bot_nudge_when_configured() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    // Bot-token answers (#305), after the user entries in the keyed queues:
+    // the TokenGuard's bot probe and the startup bot-DM open.
+    shared.push_for(
+        "auth.test",
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
+    );
+    shared.push_for(
+        "conversations.open",
+        Canned::Data(json!({ "ok": true, "channel": { "id": "D_BOT" } })),
+    );
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "888.8" })),
+    );
+    shared.push_chat(Ok(chat_verdict("web-app", 0.2)));
+    let (mut srv, mut harness) = server(&shared);
+
+    let mut params = init_params_multi_repo();
+    params["config"]["bot_token"] = json!("xoxb-bot-test");
+    call(&mut srv, 1, "initialize", params).await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
+
+    // Low confidence → picker, still no task; the picker is an ephemeral
+    // (no Slack notification), so a bot nudge follows it (#305).
+    harness.assert_no_task(Duration::from_millis(300)).await;
+    wait_until("the bot nudge", || {
+        shared
+            .requests()
+            .iter()
+            .any(|r| r.method == "chat.postMessage" && r.token == TokenKind::Bot)
+    })
+    .await;
+    let requests = shared.requests();
+    let nudge = requests
+        .iter()
+        .find(|r| r.method == "chat.postMessage" && r.token == TokenKind::Bot)
+        .unwrap();
+    let body = nudge.body.as_ref().unwrap();
+    assert_eq!(body["channel"], "D_BOT");
+    let text = body["text"].as_str().unwrap();
+    assert!(text.contains("リポジトリ選択"), "{text}");
+    assert!(
+        text.contains("https://ws.slack.test/archives/C1/p1002"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn picker_post_failure_submits_hintless_without_a_nudge() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api_without_ephemeral(&shared, &url, "dev-frontend");
+    shared.push_for("chat.postEphemeral", Canned::Network);
+    shared.push_for(
+        "auth.test",
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
+    );
+    shared.push_for(
+        "conversations.open",
+        Canned::Data(json!({ "ok": true, "channel": { "id": "D_BOT" } })),
+    );
+    shared.push_chat(Ok(chat_verdict("web-app", 0.2)));
+    let (mut srv, mut harness) = server(&shared);
+
+    let mut params = init_params_multi_repo();
+    params["config"]["bot_token"] = json!("xoxb-bot-test");
+    call(&mut srv, 1, "initialize", params).await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
+
+    // The picker could not be posted: the mention is submitted without a
+    // hint (pre-#305 behavior), and there is nothing to nudge about — a
+    // nudge without an answerable picker would just be noise.
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.0");
+    assert!(task["repo_hint"].is_null(), "{task}");
+    assert!(
+        !shared
+            .requests()
+            .iter()
+            .any(|r| r.method == "chat.postMessage" && r.token == TokenKind::Bot),
+        "no nudge for a failed picker"
+    );
 }
 
 #[tokio::test]

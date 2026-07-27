@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-timestamp: 2026-07-26T12:00:00Z
+timestamp: 2026-07-28T00:00:00Z
 status: active
 owner: tomoya-k31
 ---
@@ -212,6 +212,7 @@ kind = "task_source"
 |---|---|---|---|
 | `app_token` | string | 必須 | App-Level Token（`xapp-`、Socket Mode 用）。Keychain 参照推奨 |
 | `user_token` | string | 必須 | User OAuth Token（`xoxp-`、本人名義の読み書き）。Keychain 参照推奨 |
+| `bot_token` | string? | なし | Bot User OAuth Token（`xoxb-`、[ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)・#305）。設定すると返信案・ピッカー到着時に bot が本人へ通知 DM（ナッジ）を送る。**未設定なら機能 off**（起動時 warn 1 回）。設定時は TokenGuard が `auth.test` で probe。Keychain 参照推奨 |
 | `target_user_id` | string | 必須 | 自分の Slack ユーザー ID（`U…`）。このユーザー宛メンションをタスク化し、TokenGuard が `auth.test` の identity と一致検証 |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
 | `reply_style` | string? | なし | 返信トーンの指示（タスク本文へ注入、例 `"丁寧語で簡潔に"`） |

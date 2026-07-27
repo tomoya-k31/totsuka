@@ -1,9 +1,11 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
 //! `plugins/slack.toml` as JSON with secrets already expanded (F-64/F-65).
 //!
-//! Two Slack tokens are involved: the App-Level Token (`xapp-`) opens the
-//! Socket Mode WebSocket, and the *user* token (`xoxp-`) calls the Web API so
-//! replies are posted under the operator's own name — there is no bot user.
+//! Slack tokens involved: the App-Level Token (`xapp-`) opens the Socket
+//! Mode WebSocket, and the *user* token (`xoxp-`) calls the Web API so
+//! replies are posted under the operator's own name. The optional *bot*
+//! token (`xoxb-`) powers only the notification nudge DM (#305) — never a
+//! reply.
 
 use serde::Deserialize;
 
@@ -63,6 +65,11 @@ pub struct SlackConfig {
     pub app_token: String,
     /// User OAuth Token (`xoxp-`); replies are posted as the operator.
     pub user_token: String,
+    /// Bot User OAuth Token (`xoxb-`); when set, the bot DMs the operator a
+    /// notification nudge for drafts and pickers — surfaces that generate no
+    /// Slack notification of their own. Absent = nudges disabled (#305).
+    #[serde(default)]
+    pub bot_token: Option<String>,
     /// The operator's own Slack user id (`U…`). Mentions of this user become
     /// tasks, and the TokenGuard refuses a token belonging to anyone else.
     pub target_user_id: String,
@@ -144,6 +151,17 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
             "`user_token` is not a User OAuth Token (must start with `xoxp-`; a bot token \
              `xoxb-` cannot post as you) → copy the User OAuth Token from the Slack app's \
              OAuth & Permissions page and update plugins/slack.toml"
+                .into(),
+        );
+    }
+    if let Some(bot_token) = &config.bot_token
+        && !bot_token.starts_with("xoxb-")
+    {
+        errors.push(
+            "`bot_token` is not a Bot User OAuth Token (must start with `xoxb-`; an `xoxp-` \
+             user token cannot send the notification nudge) → copy the Bot User OAuth Token \
+             from the Slack app's OAuth & Permissions page and update plugins/slack.toml, or \
+             remove `bot_token` to disable the nudge"
                 .into(),
         );
     }
@@ -255,7 +273,21 @@ mod tests {
         assert!(cfg.reply_style.is_none());
         assert!(cfg.llm.is_none());
         assert!(cfg.channel_groups.is_empty());
+        // The nudge is opt-in: no `bot_token` is a valid config (#305).
+        assert!(cfg.bot_token.is_none());
         assert!(static_config_errors(&cfg).is_empty());
+    }
+
+    #[test]
+    fn bot_token_prefix_is_checked() {
+        let mut value = minimal();
+        value["bot_token"] = json!("xoxp-not-a-bot-token");
+        let errors = static_config_errors(&parse(value));
+        assert!(errors.iter().any(|e| e.contains("xoxb-")), "{errors:?}");
+
+        let mut value = minimal();
+        value["bot_token"] = json!("xoxb-bot-token");
+        assert!(static_config_errors(&parse(value)).is_empty());
     }
 
     #[test]

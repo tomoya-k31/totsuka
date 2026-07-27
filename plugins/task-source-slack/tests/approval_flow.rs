@@ -52,6 +52,14 @@ fn init_params_in(state_dir: &std::path::Path) -> Value {
     })
 }
 
+/// [`init_params`] plus a configured `bot_token`, enabling the notification
+/// nudge (#305).
+fn init_params_with_bot() -> Value {
+    let mut params = init_params();
+    params["config"]["bot_token"] = json!("xoxb-bot-test");
+    params
+}
+
 /// Canned Web API surface up to the draft presentation. `chat.postMessage`
 /// is NOT canned here — each test queues its own sequence (DM record, reply).
 fn canned_web_api(shared: &Shared, ws_url: &str) {
@@ -122,6 +130,20 @@ fn expected_posted_reply() -> String {
     format!("<@U_OTHER> {EXPECTED_REPLY}")
 }
 
+/// Canned answers for the bot-token calls (#305): the TokenGuard's bot
+/// `auth.test` and the startup bot-DM `conversations.open`. Push AFTER
+/// [`canned_web_api`]: the keyed queues answer in order (user first).
+fn canned_bot_ok(shared: &Shared) {
+    shared.push_for(
+        "auth.test",
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
+    );
+    shared.push_for(
+        "conversations.open",
+        Canned::Data(json!({ "ok": true, "channel": { "id": "D_BOT" } })),
+    );
+}
+
 /// Drive initialize → mention → submit → result/publish, returning the
 /// server (kept alive: dropping it aborts the runtime).
 async fn publish_draft_flow(
@@ -131,8 +153,21 @@ async fn publish_draft_flow(
     Server<FakeFactory>,
     tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
 ) {
+    publish_draft_flow_with(shared, listener, init_params()).await
+}
+
+/// [`publish_draft_flow`] with explicit initialize params (the bot-nudge
+/// tests configure a `bot_token`).
+async fn publish_draft_flow_with(
+    shared: &Shared,
+    listener: &tokio::net::TcpListener,
+    params: Value,
+) -> (
+    Server<FakeFactory>,
+    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+) {
     let (mut srv, mut harness) = server(shared);
-    call(&mut srv, 1, "initialize", init_params()).await;
+    call(&mut srv, 1, "initialize", params).await;
     let mut ws = accept_with_hello(listener).await;
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
     let task = harness.next_task().await;
@@ -242,6 +277,107 @@ async fn publish_presents_the_draft_in_thread_and_self_dm() {
             .to_string()
             .contains(parsed["d"].as_str().unwrap()),
         "the record carries the same draft id"
+    );
+
+    // Without a `bot_token`, no bot-authenticated call is ever made — the
+    // pre-#305 behavior, byte for byte.
+    assert!(
+        !shared
+            .requests()
+            .iter()
+            .any(|r| r.token == task_source_slack::transport::TokenKind::Bot),
+        "no bot calls without a configured bot_token"
+    );
+}
+
+#[tokio::test]
+async fn publish_sends_a_bot_nudge_when_configured() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    canned_bot_ok(&shared);
+    // First postMessage: the self-DM record (user). Then: the nudge (bot).
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
+    );
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "888.8" })),
+    );
+    let (_srv, _ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
+
+    // The nudge went to the bot↔operator DM, as the bot, linking the thread.
+    let messages = requests_for(&shared, "chat.postMessage");
+    assert_eq!(messages.len(), 2, "record + nudge");
+    let nudge = &messages[1];
+    assert_eq!(nudge.token, task_source_slack::transport::TokenKind::Bot);
+    let body = nudge.body.as_ref().unwrap();
+    assert_eq!(body["channel"], "D_BOT");
+    assert_eq!(body["unfurl_links"], false);
+    let text = body["text"].as_str().unwrap();
+    assert!(text.contains("返信案が届きました"), "{text}");
+    assert!(
+        text.contains("https://ws.slack.test/archives/C1/p1002"),
+        "{text}"
+    );
+    // The record itself still went out as the operator (user token).
+    assert_eq!(
+        messages[0].token,
+        task_source_slack::transport::TokenKind::User
+    );
+}
+
+#[tokio::test]
+async fn nudge_failure_does_not_fail_result_publish() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    canned_bot_ok(&shared);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
+    );
+    shared.push_for("chat.postMessage", Canned::Network);
+    // `call` (inside the flow) panics on an RPC error: completing the flow
+    // IS the assertion that a dead nudge never fails `result/publish`.
+    let (_srv, _ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
+
+    // Both draft surfaces are intact.
+    assert_eq!(requests_for(&shared, "chat.postEphemeral").len(), 1);
+    let messages = requests_for(&shared, "chat.postMessage");
+    assert_eq!(messages.len(), 2, "record + attempted nudge");
+    assert_eq!(
+        messages[0].body.as_ref().unwrap()["channel"],
+        "D_SELF",
+        "the record was posted before the nudge failed"
+    );
+}
+
+#[tokio::test]
+async fn bot_dm_resolution_failure_degrades_to_no_nudge() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    // Bot probe passes, but opening the bot DM fails at startup: nudges are
+    // skipped for the run — the draft flow itself must be untouched.
+    shared.push_for(
+        "auth.test",
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
+    );
+    shared.push_for("conversations.open", Canned::Network);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
+    );
+    let (_srv, _ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
+
+    assert_eq!(requests_for(&shared, "chat.postEphemeral").len(), 1);
+    let messages = requests_for(&shared, "chat.postMessage");
+    assert_eq!(messages.len(), 1, "the record only; no nudge attempt");
+    assert_eq!(
+        messages[0].token,
+        task_source_slack::transport::TokenKind::User
     );
 }
 
