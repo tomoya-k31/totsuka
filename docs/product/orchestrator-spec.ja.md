@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-timestamp: 2026-07-26T12:00:00Z
+timestamp: 2026-07-28T12:00:00Z
 status: draft
 owner: tomoya-k31
 ---
@@ -262,7 +262,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | F-101 | **ステータスマーカー規約**: 完了はアシスタント応答の最終行のマーカーで自己申告する(同一行に複数あれば最後が勝つ): `<<STATUS:COMPLETED>>` / `<<STATUS:NEEDS_INPUT reason="...">>` / `<<STATUS:FAILED reason="...">>`(正準形は二重カッコだが、実エージェントが区切りを正規化するためパーサは単一 `<STATUS:...>` も受理する)。マーカー欠落 & `stop_hook_active=false` ⇒ `Stop` フックが `block` して Claude に再出力させる。`stop_hook_active=true` ⇒ block せず `UNKNOWN` を POST。`background_tasks` が非空なら heartbeat のみ(中間 Stop、完了ではない) | M |
 | F-102 | **検収**(`verification = "llm"`(既定) / `"human"` / `"none"`): `llm` はセッション内 prompt 型 `Stop` フック(rubric)を実行 — `COMPLETED` 受信で Engine は直ちに Publishing へ進む。`human` はタスクを `Verifying` に留め `totsuka task verify --pass/--fail` を待つ。`none` は直接 publish する | M |
 | F-103 | **エスカレーション**: 連続 3 回の `UNKNOWN` stop(DB から再計算 — フックの自己申告は信用しない。`[hooks].block_retry_limit`、既定 3) OR 最後のシグナルから 30 分の沈黙(ワークフロー `timeout_secs` で上書き) OR 相関の異常 ⇒ タスクを `Escalated`(非終端)へ遷移し、notifier 通知と `diagnostics/snapshot`(herdr `pane.read`)を伴う | M |
-| F-104 | **スプール + at-least-once + 冪等**: POST 失敗時、フックは 2 回リトライ後 `spool_dir` へ NDJSON 1 行を追記する。Engine の `replay_spool()` が `recover()` 時と各サイクルで再投入する。`hook_events UNIQUE(job_id, tool_session_id, prompt_id, event)` が重複/順序前後の POST(多重発火・スプール再送・curl リトライ)を落とす。壊れたスプール行は削除せず `.corrupt` へ隔離する | M |
+| F-104 | **スプール + at-least-once + 冪等**: POST 失敗時、フックは 2 回リトライ後 `spool_dir` へ NDJSON 1 行を追記する。Engine の `replay_spool()` が `recover()` 時と各サイクルで再投入する。`hook_events UNIQUE(job_id, tool_session_id, prompt_id, event, status)` が重複/順序前後の POST(多重発火・スプール再送・curl リトライ)を落とす。`status` が鍵に入っているのは、block → 再完了サイクルの連続 2 通の `Stop`(`UNKNOWN` → `COMPLETED`)を別イベントとして通すためで、これが無いと 2 通目が重複として落ち完了を取りこぼす(#154、state.db v3 — SQLite は UNIQUE 制約を in-place 変更できないため、マイグレーションはテーブルを再構築する)。壊れたスプール行は削除せず `.corrupt` へ隔離する | M |
 | F-105 | **会話継続**: 会話がタスクそのもの。`Task.id` が会話(Slack: `channel:thread_ts`)を、`Task.message_key` がその中の 1 配送を識別するので、追いメンションは 2 つのタスクを相関させるのではなく**同じタスクへ追記**され、worktree・ブランチ・エージェントセッションを共有する。未処理メッセージは連結して 1 回 dispatch し、終端タスクは再オープン(`Reopen`)する。使えないセッションは `SESSION_UNRESUMABLE` として報告され、resume なしで 1 回だけ再試行する。シグナルは自身の `job_id` のタスクへ配路され、セッション id から宛先を推測しない(E-09)。#140 の `thread_key` 相関を置き換え、同フィールドは protocol 0.3.0 (#242/#264) で削除 | M |
 | F-106 | **デッドマン**: herdr の `events.subscribe` ストリームは `pane.exited` デッドマン検知のみへ縮退する。herdr プロセスのクラッシュは `Failed` として表面化する | M |
 | F-107 | **pane の後処理**: `Done` の pane は自動クローズ(冪等な `task/cancel`)、`Failed` / `Escalated` の pane は診断のため保持する | M |
