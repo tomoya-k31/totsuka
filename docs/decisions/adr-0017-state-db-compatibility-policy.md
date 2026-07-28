@@ -3,9 +3,22 @@ type: Decision
 title: ADR-0017 state.db の互換性ポリシー（前方互換のみ・適用は run のみ）
 description: state.db の互換判定をスキーマ版数で行い、対応範囲より新しい DB は起動拒否する決定。マイグレーションの適用は run.lock を持つ totsuka run だけに限定し、読み取り系は非適用オープンにする。適用したアプリ版数は schema_migrations.applied_by に残すが、互換判定の権威にはしない。
 tags: [state-db, migration, compatibility, versioning, sqlite]
-timestamp: 2026-07-26T15:00:00+09:00
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-26T15:00:00+09:00 }
+status: stable
 owner: tomoya-k31
+sources:
+  - id: ref-1
+    resource: /data/state-db.md
+    title: "状態DB（SQLite state.db）スキーマ — `schema_migrations` と `MIGRATIONS` の詳細"
+  - id: ref-2
+    resource: /releases/upgrade-and-rollback.md
+    title: "アップグレードとロールバック — 実際の手順"
+  - id: ref-3
+    resource: /decisions/adr-0012-cli-exit-codes-json-errors.md
+    title: "ADR-0012 CLI の exit code 体系と JSON エラーエンベロープ — 「原因 → 次のアクション」のエラー文規約"
+  - id: ref-4
+    resource: https://github.com/tomoya-k31/totsuka/issues/275
+    title: "#275 — 調査と設計"
 ---
 
 # Status
@@ -33,7 +46,7 @@ Accepted — 2026-07-26（[#275](https://github.com/tomoya-k31/totsuka/issues/27
 
 アプリ版数は「どの版に上げればよいか」を**案内**するためだけに使う。エラー文は対応範囲の 1 つ先（`supported + 1`）を導入したアプリ版数を名指す — それが「最低これに上げろ」の答えだから。
 
-```
+```text
 error: state.db のスキーマバージョン v8 は、この totsuka 0.1.4（対応 v7）では
        扱えません。v8 を導入したのは 0.2.0 です → totsuka を更新してください
 ```
@@ -87,10 +100,3 @@ error: state.db のスキーマバージョン v8 は、この totsuka 0.1.4（�
 - `totsuka doctor` がスキーマ版数と `applied_by` を表示する（`state-db — … opens — schema v7 (applied by 0.1.4)`）。不整合時は exit 3。
 - アップグレード直後の初回は `totsuka run` を一度走らせる必要がある。それまで `status` 等は `SchemaOutdated` で止まる — 黙って古いスキーマを読むより、これを望ましい挙動とみなす。
 - `--json` 出力にスキーマ版数のフィールドは**足していない**。現時点で消費者がいないため。必要になった時点で追加する。
-
-# Citations
-
-1. [状態DB（SQLite state.db）スキーマ](/data/state-db.md) — `schema_migrations` と `MIGRATIONS` の詳細
-2. [アップグレードとロールバック](/releases/upgrade-and-rollback.md) — 実際の手順
-3. [ADR-0012 CLI の exit code 体系と JSON エラーエンベロープ](/decisions/adr-0012-cli-exit-codes-json-errors.md) — 「原因 → 次のアクション」のエラー文規約
-4. [#275](https://github.com/tomoya-k31/totsuka/issues/275) — 調査と設計

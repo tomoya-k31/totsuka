@@ -4,8 +4,8 @@ title: 端末出力の信頼境界（外部由来テキストの無害化）
 description: totsuka が第三者の書いたテキスト（Slack 本文・GitHub issue タイトル・author・url・source_task_id）を端末へ出す際の制御シーケンス無害化ポリシー。safe() の置き場所（core の terminal モジュール）と適用範囲、エスケープであって除去ではない理由、--json と JSON ログを通さない理由、one_line の 3 段の順序、未カバー経路を定める。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/terminal.rs
 tags: [security, cli, terminal, ansi, escape-sequence, sanitization, output]
-timestamp: 2026-07-28T03:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-28T03:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 
@@ -38,7 +38,9 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 ## 1. 外部由来フィールドは端末へ出す直前に `safe()` を通す
 
 `crates/orchestrator-core/src/terminal.rs` の `safe(&str) -> Cow<str>` が唯一の実装。
-#280 では CLI の `common.rs` に置いていたが、**印字側が 2 クレートに跨がる**ため
+
+# 280 では CLI の `common.rs` に置いていたが、**印字側が 2 クレートに跨がる**ため
+
 （[orchestrator-cli](/components/orchestrator-cli.md) の human 出力と
 [orchestrator-core](/components/orchestrator-core.md) 自身の stderr ログ層）、#297 で core へ移した。
 `orchestrator_cli::common::safe` はその **re-export** で、`print_json` の隣に置いたままにしてある

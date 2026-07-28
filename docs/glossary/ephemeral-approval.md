@@ -3,8 +3,8 @@ type: Term
 title: エフェメラル承認フロー
 description: エージェントの返信案をスレッド内エフェメラル + self-DM 記録の 2 面に提示し、承認ボタン押下時のみ本人名義で送信する task-source-slack の仕組み。勝手に送信しないための防波堤。
 tags: [glossary, slack, approval, ephemeral]
-timestamp: 2026-07-28T00:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-28T00:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

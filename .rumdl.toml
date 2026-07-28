@@ -1,0 +1,48 @@
+[global]
+# ref/ は参照用に他リポジトリのコピーを置くための枠（現状このリポジトリには無い。
+# 置く場合は .gitignore にも足すこと — 他人のコードを我々の規約で矯正しない）。
+# CHANGELOG.md は release-please の生成物。手で整形しても次のリリースで書き戻される。
+exclude = ["ref", "CHANGELOG.md"]
+respect-gitignore = true
+
+disable = [
+  # 行長制限。日本語の散文を機械的に折り返すと可読性が落ちるため無効化する。
+  "MD013",
+  # 単一H1。OKF は本文で `# Schema` `# Computation` のような H1 セクションを使い、
+  # index.md も複数の H1 でグループ分けする規約なので、このルールとは正面衝突する。
+  "MD025",
+  # コードスパン内の空白除去。本リポジトリは YAML の空白依存な落とし穴を
+  # ` #`（コメント開始）`: `（マッピング開始）のように**空白ごと**コードスパンで
+  # 示す。herdr の pane label 前置 `totsuka ` のように末尾空白が仕様の値もある。
+  # 自動修正すると意味が反転するため無効化する（scripts/okf-lint.sh の fm-yaml が
+  # 存在する理由そのものが、この空白の取り違えによる事故＝PR #303 である）。
+  "MD038",
+  # 相対リンクの存在検査。rumdl 0.2.43 の MD057 は相対リンクを「そのファイルのある
+  # ディレクトリ」ではなく「プロセスの CWD」基準で解決するため、リポジトリルートから
+  # `rumdl check .` すると実在するリンクを軒並み存在しないと誤検知する
+  # （`cd docs/operations && rumdl check index.md` では同じリンクが通ることを確認済み）。
+  # リンク検査は lychee に一本化する（scripts/okf-lint.sh と CI の lychee ステップ）。
+  "MD057",
+]
+
+# 注: MD041（先頭行が見出し）はグローバルには無効化していない。rumdl は YAML
+# frontmatter を正しく読み飛ばすため、frontmatter 付きの concept では発火しない。
+
+[per-file-ignores]
+# .claude/ 配下はエージェント向けのプロンプトファイルであって散文ドキュメントではない。
+# frontmatter の直後が見出しである必然性がないため MD041 のみ除外する。
+".claude/**/*.md" = ["MD041"]
+
+# エージェントへ渡すプロンプト本体（frontmatter + 地の文）。上と同じ理由。
+"crates/orchestrator-core/src/hooks/*.md" = ["MD041"]
+
+# README は 1 行目が言語スイッチャ（`> 🌐 **English** · [日本語](README.ja.md)`）で
+# 始まる規約（.claude/rules/documentation-i18n.md）。H1 はその次の行に置く。
+"README.md" = ["MD041"]
+"README.ja.md" = ["MD041"]
+
+# 要件定義書は F-NN の要件表を主構造とし、その合間の補足を `**ラベル**` で置いている。
+# 見出しに変換すると要件表の間に見出しが割り込み、F 番号で辿る構造が壊れるため
+# MD036 のみ除外する。
+"docs/product/orchestrator-spec.md" = ["MD036"]
+"docs/product/orchestrator-spec.ja.md" = ["MD036"]

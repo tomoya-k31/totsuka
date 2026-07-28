@@ -4,8 +4,8 @@ title: POST /agent-events（UDS フック受信）
 description: エージェント CLI（Claude Code / Codex / OpenCode）のフック/プラグインが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。制御エンドポイント POST /focus（click-to-focus、F-94）も同一ソケットに同居。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/hook_uds.rs
 tags: [api, uds, hook, claude-code, codex, opencode, signal, ingress]
-timestamp: 2026-07-24T12:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-24T12:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

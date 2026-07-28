@@ -7,7 +7,7 @@ tags: [meta, okf]
 
 # docs/ — Knowledge Bundle
 
-このディレクトリは [Open Knowledge Format (OKF) v0.1](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md) に準拠した Knowledge Bundle です。人間とAIエージェントの両方が読み書きすることを前提にしています。
+このディレクトリは [Open Knowledge Format (OKF) v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md) に準拠した Knowledge Bundle です。人間とAIエージェントの両方が読み書きすることを前提にしています。
 
 ## 読み始める場所
 

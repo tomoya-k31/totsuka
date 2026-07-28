@@ -4,8 +4,8 @@ title: Claude Code フック機構のセキュリティポリシー
 description: "フック完了判定の UDS Bearer トークン管理（keychain 参照・socket 0600 第一層・定数時間比較・herdr env 配送）、スプールファイルの機密保持（N-05: last_assistant_message は機微・$XDG_STATE_HOME 配下・drain 後削除・隔離の注意）、フックアセットの改ざん耐性（N-02: 0700/0600・内容ハッシュ冪等修復・静的埋め込み）を定める。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [security, hook, claude-code, uds, token, keychain, spool, tamper, epic-131]
-timestamp: 2026-07-23T15:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-23T15:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

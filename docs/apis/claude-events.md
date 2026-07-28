@@ -4,7 +4,7 @@ title: POST /claude-events（旧名・deprecated）
 description: agent-events への改名（#196）前の旧 concept。実装解説は後継 agent-events.md を参照（旧パスへの POST は引き続き受理される）。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/hook_uds.rs
 tags: [api, uds, hook, claude-code, signal, ingress]
-timestamp: 2026-07-23T00:00:00Z
+generated: { by: human:tomoya-k31, at: 2026-07-23T00:00:00Z }
 status: deprecated
 owner: tomoya-k31
 ---

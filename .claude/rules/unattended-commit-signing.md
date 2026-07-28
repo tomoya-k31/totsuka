@@ -3,7 +3,7 @@
 When Claude creates a commit on its own (unattended / background execution),
 always pass the signing-off flags on the command itself:
 
-```
+```bash
 git -c commit.gpgsign=false -c tag.gpgsign=false commit -m "..."
 ```
 

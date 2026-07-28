@@ -4,9 +4,22 @@ title: ADR-0006 シークレット参照に 1Password (op://) を第 2 バック
 description: 設定のシークレット参照へ op://<vault>/<item>/<field> を第 3 のスキームとして追加し、解決は 1Password CLI（op read）へのシェルアウトで行う決定。SDK/Connect は不採用、v1 は対話アンロック前提（Service Account は後続）、SecretRef の enum 化 + 合成ストアでスキーム振り分け。op は cross-platform のため非 macOS 初の実働バックエンドにもなる。
 resource: https://github.com/tomoya-k31/totsuka/issues/156
 tags: [secret, 1password, op, keychain, config, backend, cross-platform]
-timestamp: 2026-07-19T15:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-19T15:00:00Z }
+status: stable
 owner: tomoya-k31
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/156
+    title: "Issue #156 シークレット参照に 1Password (op://) バックエンドを追加"
+  - id: ref-2
+    resource: https://developer.1password.com/docs/cli/reference/commands/read/
+    title: "1Password CLI — op read / secret reference syntax"
+  - id: ref-3
+    resource: /development/config-reference.md
+    title: "設定リファレンス — シークレット参照"
+  - id: ref-3b
+    resource: /components/orchestrator-core.md
+    title: orchestrator-core
 ---
 
 # Status
@@ -41,9 +54,3 @@ Accepted — 2026-07-19（[#156](https://github.com/tomoya-k31/totsuka/issues/15
 - 解決は参照ごとに `op read` を起動する（per-ref のプロセス起動コスト）。実運用のシークレット数は少数のため許容し、バッチ解決/キャッシュは将来の最適化とする。
 - 対話セッションが切れていると解決は失敗する（エラーが `op signin` を案内）。無人運用は Service Account 対応（後続 issue）まで `keychain:` / `${ENV}` を使う。
 - `SecretRef` の enum 化により、既存の `service()`/`account()` アクセサは variant マッチへ置き換わった（`NotFound` エラーも参照文字列ベースへ）。
-
-# Citations
-
-[1] [Issue #156 シークレット参照に 1Password (op://) バックエンドを追加](https://github.com/tomoya-k31/totsuka/issues/156)
-[2] [1Password CLI — op read / secret reference syntax](https://developer.1password.com/docs/cli/reference/commands/read/)
-[3] [設定リファレンス — シークレット参照](/development/config-reference.md) / [orchestrator-core](/components/orchestrator-core.md)

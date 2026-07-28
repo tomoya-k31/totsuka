@@ -4,9 +4,28 @@ title: ADR-0020 ステータスマーカーは wire 信号として存置する�
 description: ステータスマーカー（<<STATUS:COMPLETED>> 等、F-101）を廃止してエンジン側 LLM 検収へ移す案（Option A、#159）を評価し、現時点では不採用として現状維持する決定。マーカーはマルチツール化（#196）以降ツール非依存の唯一の完了信号になっており、廃止は 3 ツールのアダプタ・state.db の冪等キー・エスカレーション計数・publish 成果物の全経路に波及する。廃止する場合の改修一式と、その際に必要な前提条件も記録する。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/domain/signal.rs
 tags: [hook, marker, verification, llm, completion, claude-code, codex, opencode, epic-131, tool-abstraction]
-timestamp: 2026-07-28T16:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-28T16:00:00Z }
+status: stable
 owner: tomoya-k31
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/159
+    title: "Issue #159 マーカー廃止に必要な改修一式の洗い出し"
+  - id: ref-2
+    resource: /decisions/adr-0004-hook-completion-signal.md
+    title: "ADR-0004 フック完了シグナルの受信配置"
+  - id: ref-3
+    resource: /decisions/adr-0014-tool-abstraction.md
+    title: "ADR-0014 AI ツール抽象 / ADR-0015 タスク同一性を 1 会話へ"
+  - id: ref-4
+    resource: /product/orchestrator-spec.md
+    title: "F-100〜F-107 決定的な完了シグナル"
+  - id: ref-5
+    resource: /architecture/hook-signal-flow.md
+    title: "フックシグナルフロー / POST /agent-events"
+  - id: ref-6
+    resource: https://github.com/tomoya-k31/totsuka/pull/152
+    title: "PR #152 マーカー単一カッコ許容 / PR #154 冪等キーへ status 追加 / PR #158 マーカー指示の事前注入"
 ---
 
 # Status
@@ -44,7 +63,8 @@ Accepted — 2026-07-28（[#159](https://github.com/tomoya-k31/totsuka/issues/15
 
 ### 1. マーカーはツール非依存の唯一の完了信号になった（[#196](https://github.com/tomoya-k31/totsuka/issues/196) / [ADR-0014](/decisions/adr-0014-tool-abstraction.md)）
 
-#159 は Claude Code 1 ツールを前提に書かれているが、現在は 3 ツールが同じマーカー規約を共有する。
+# 159 は Claude Code 1 ツールを前提に書かれているが、現在は 3 ツールが同じマーカー規約を共有する。
+
 **フック機構は 3 者でまったく異なるのに、マーカーだけが共通**である:
 
 | ツール | 完了検知の実装 | マーカー解析箇所 |
@@ -57,7 +77,7 @@ Accepted — 2026-07-28（[#159](https://github.com/tomoya-k31/totsuka/issues/15
 これは偶然ではなく、この規約が生き残っている理由そのものである。廃止するなら
 「ツールごとに別の完了信号を作る」ことになり、コストは #159 の見積もりの 3 倍側に振れる。
 
-### 2. `verification = "llm"` は実質 Claude 専用で、しかも縮退が実装されていない
+## 2. `verification = "llm"` は実質 Claude 専用で、しかも縮退が実装されていない
 
 `ToolCapabilities.prompt_verification` は Claude だけ `true`、Codex / OpenCode は `false`
 （`tool/mod.rs`）。`config/validate.rs` は非 claude ツールを pin した `verification = "llm"` に対し
@@ -79,7 +99,9 @@ Accepted — 2026-07-28（[#159](https://github.com/tomoya-k31/totsuka/issues/15
 state.db は #159 起票時の v3 から **v7** まで進んだ（v4 = `tool_session_id` へのリネーム、
 v5 = `task_messages` 新設、v6 = v5 以前のタスクへの台帳バックフィル、v7 = `tasks.thread_key` DROP。
 `schema_migrations.applied_by` はスキーマ版数を上げない bootstrap 側の追加なので、この数には入らない）。
-#159 が「v4」と書いている冪等キーの再設計は、実際には **v8 相当のテーブル再構築**になる。
+
+# 159 が「v4」と書いている冪等キーの再設計は、実際には **v8 相当のテーブル再構築**になる。
+
 また [#242](https://github.com/tomoya-k31/totsuka/issues/242) / [ADR-0015](/decisions/adr-0015-conversation-task-identity.md) で
 dispatch がメッセージ駆動になり、終端が可逆（`Reopen`）になったため、
 「判定待ち状態を足す」設計は会話の再オープンとも整合を取る必要がある。
@@ -159,12 +181,3 @@ permission 設定で特定コマンドだけ許可する回避は各ツールの
 - [ADR-0004](/decisions/adr-0004-hook-completion-signal.md) の決定 2（セッション内 prompt 型 Stop
   フックでの llm 検収）は有効なまま。ただし**その適用範囲は Claude 系ツールに限られる**ことが
   本検討で明確になった
-
-# Citations
-
-[1] [Issue #159 マーカー廃止に必要な改修一式の洗い出し](https://github.com/tomoya-k31/totsuka/issues/159)
-[2] [ADR-0004 フック完了シグナルの受信配置](/decisions/adr-0004-hook-completion-signal.md)
-[3] [ADR-0014 AI ツール抽象](/decisions/adr-0014-tool-abstraction.md) / [ADR-0015 タスク同一性を 1 会話へ](/decisions/adr-0015-conversation-task-identity.md)
-[4] [F-100〜F-107 決定的な完了シグナル](/product/orchestrator-spec.md)
-[5] [フックシグナルフロー](/architecture/hook-signal-flow.md) / [POST /agent-events](/apis/agent-events.md)
-[6] [PR #152 マーカー単一カッコ許容](https://github.com/tomoya-k31/totsuka/pull/152) / [PR #154 冪等キーへ status 追加](https://github.com/tomoya-k31/totsuka/pull/154) / [PR #158 マーカー指示の事前注入](https://github.com/tomoya-k31/totsuka/pull/158)

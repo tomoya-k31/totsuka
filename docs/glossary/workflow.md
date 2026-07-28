@@ -3,8 +3,8 @@ type: Term
 title: Workflow（ワークフロー）
 description: source × trigger × mode × agent × output の名前付き束ね（F-80）。タスクは定義順の first-match で最大1つのワークフローに割り当てられる（F-81）。
 tags: [glossary, domain]
-timestamp: 2026-07-13T04:30:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-13T04:30:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

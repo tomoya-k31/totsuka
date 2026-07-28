@@ -3,8 +3,8 @@ type: Term
 title: click-to-focus（クリックで pane を開く）
 description: 通知をクリックすると、その通知を出したタスクの herdr pane が前面に来る機能（F-94）。terminal-notifier の -activate（GUI 前面化）+ -execute（totsuka focus → 制御 UDS /focus → agent_ide の session/focus 委譲）の 2 段で実現し、縮退はすべて静か。
 tags: [glossary, notifier, terminal-notifier, focus, pane, f-94]
-timestamp: 2026-07-23T00:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-23T00:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

@@ -4,8 +4,8 @@ title: ログ規約（JSON Lines・機密マスキング）
 description: totsuka の構造化ログ規約。JSON Lines 1行1イベント、task_id 相関、機密マスキング（フィールド denylist＋値パターン）、log_prompts、日次ローテーションと世代保持。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/logging
 tags: [logging, tracing, security, convention]
-timestamp: 2026-07-12T00:40:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-12T00:40:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

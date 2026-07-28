@@ -4,8 +4,8 @@ title: 依存関係ハイジーン（未使用依存と Cargo.lock ドリフト�
 description: cargo-machete による毎 PR の未使用依存チェックの運用、誤検知の抑制手順（package.metadata.cargo-machete）、高精度な cargo-shear / cargo-udeps の定期手動実行手順、および cargo metadata --locked による Cargo.lock ドリフト検出（宣言はあるが lock に無い、という逆方向のドリフト）。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/.github/workflows/ci.yml
 tags: [rust, ci, dependencies, cargo-machete, cargo-shear, cargo-udeps, cargo-lock, drift]
-timestamp: 2026-07-26T23:30:00+09:00
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-26T23:30:00+09:00 }
+status: stable
 owner: tomoya-k31
 ---
 
@@ -48,7 +48,7 @@ PR #283 が `crates/test-support/Cargo.toml` に `serde_json` を足したが `C
 
 **CI はこれを検出できなかった。** どのワークフローも `--locked` / `--frozen` を使っておらず、`cargo` は lock の更新が必要なら**黙って再生成して成功する**:
 
-```
+```console
 $ cargo metadata --format-version 1 > /dev/null   # --locked なし
 （成功）
 $ git diff --stat Cargo.lock
@@ -68,7 +68,7 @@ $ git diff --stat Cargo.lock
 
 `--locked` は「lock の更新が必要なら**エラーで止まる**」ので、これだけでドリフトを PR で捕まえられる:
 
-```
+```text
 error: cannot update the lock file /.../Cargo.lock because --locked was passed to prevent this
 ```
 

@@ -3,8 +3,8 @@ type: Term
 title: AI Tool（AI ツール）と 2 軸モデル
 description: pane 内で起動する AI エージェント CLI（Claude Code / Codex / OpenCode）。pane を管理する agent プラグイン（herdr 等）とは直交する軸で、[tools] レジストリと tool フィールド（workflow > repo > default_tool > 組み込み claude）で選択される。
 tags: [tool, agent, glossary, 2-axis]
-timestamp: 2026-07-24T12:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-24T12:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

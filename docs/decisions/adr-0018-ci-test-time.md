@@ -4,9 +4,25 @@ title: ADR-0018 CI テスト時間の削減（待ちの構造化・profile・計
 description: CI の test ジョブ短縮にあたり、テスト用のタイミングノブを型付きの値（RetryPolicy / EngineSettings フィールド）として持たせ、profile はデバッグ情報のみを絞り、性能変更は必ず CI 実測で検証するという決定。依存への opt-level 引き上げと cargo-nextest は計測に基づいて不採用とする。
 resource: https://github.com/tomoya-k31/totsuka/issues/281
 tags: [ci, cost, testing, performance, build-profile]
-timestamp: 2026-07-26T20:00:00+09:00
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-26T20:00:00+09:00 }
+status: stable
 owner: tomoya-k31
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/281
+    title: "Issue #281"
+  - id: ref-2
+    resource: /decisions/adr-0007-ci-cost-optimization.md
+    title: "ADR-0007 CI 実行タイミングの再設計"
+  - id: ref-3
+    resource: /decisions/adr-0009-env-override-whitelist.md
+    title: "ADR-0009 TOTSUKA_* 環境変数オーバーライド"
+  - id: ref-4
+    resource: /decisions/adr-0010-worktree-cleanup-pane-release.md
+    title: "ADR-0010 worktree 掃除と pane 解放"
+  - id: ref-5
+    resource: /quality/test-strategy.md
+    title: "テスト戦略"
 ---
 
 # Status
@@ -96,11 +112,3 @@ Actions キャッシュは 10.19 GB と上限 10 GB を超過し常時 LRU 退�
 - デバッグ情報を絞ったため、ローカルでデバッガの変数情報が必要なときは `cargo build --config 'profile.dev.debug=2'` で一時的に戻す必要がある。バックトレースの file:line は保持される。
 - **herdr のリトライ経路は実機検証でしか守れない**。`Default` の unit test は値の取り違えを防ぐが、実 CLI との競合は [リリース前チェックリスト](/quality/release-checklist.md) の herdr 項目に依存する。
 - `TEST_SUPPORT_PREBUILT_BINS` を立てたまま `cargo test` を回すと、バイナリが古いまま検証される。CI は必ず直前に `cargo build --workspace --all-targets` を走らせる前提。
-
-# Citations
-
-[1] [Issue #281](https://github.com/tomoya-k31/totsuka/issues/281)
-[2] [ADR-0007 CI 実行タイミングの再設計](/decisions/adr-0007-ci-cost-optimization.md)
-[3] [ADR-0009 TOTSUKA_* 環境変数オーバーライド](/decisions/adr-0009-env-override-whitelist.md)
-[4] [ADR-0010 worktree 掃除と pane 解放](/decisions/adr-0010-worktree-cleanup-pane-release.md)
-[5] [テスト戦略](/quality/test-strategy.md)

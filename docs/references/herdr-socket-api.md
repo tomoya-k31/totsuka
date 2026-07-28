@@ -4,9 +4,18 @@ title: herdr Socket API / 統合エージェント capability（外部一次情�
 description: herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124）設計の根拠。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。
 resource: https://herdr.dev/docs/socket-api/
 tags: [herdr, socket-api, integration, agent-ide, external]
-timestamp: 2026-07-19T00:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-19T00:00:00Z }
+status: stable
 owner: tomoya-k31
+sources:
+  - id: ref-1
+    resource: https://herdr.dev/docs/socket-api/
+    title: "herdr — Socket API. （2026-07-13 / 2026-07-17 参照）"
+  - id: ref-2
+    resource: https://herdr.dev/docs/integrations/
+    title: "herdr — Integrations. （2026-07-13 参照）"
+  - id: ref-3
+    resource: "herdr 0.7.1 (protocol 14) / 0.7.4 (protocol 16) 実機プローブ記録（socket 直叩き + `herdr api schema --json`）: #123 / #124 のコメント（2026-07-17）"
 ---
 
 # このドキュメントについて
@@ -61,6 +70,12 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 | `workspace.create` | `{cwd, label?, env?, focus?}`（**`command`/`args` は無い** — 旧記載は誤り） | `{type:"workspace_created", workspace:{workspace_id, number, label, ...}, tab:{tab_id, ...}}`。初期 pane（シェル）1 枚付き |
 | `agent.start` | `{name, argv, cwd?, workspace_id?, tab_id?, split?, env?, focus?}`（`name`/`argv` 必須）。**エージェント CLI の起動はこれ** | `{type:"agent_started", agent:{pane_id, terminal_id, workspace_id, tab_id, agent_status, cwd, ...}, argv}` |
 | `agent.send` | `{target, text}`。target は terminal id / agent 名 / pane id。**literal text の書き込みのみで Enter は押されない** — 送信確定には `pane.send_keys` で `enter` を送る | ok（不在 target は `agent_not_found`） |
+| `pane.send_keys` | `{pane_id, keys}`。**`keys` は配列**（例 `["ctrl+c"]`、`["enter"]`） | ok |
+| `pane.get` | `{pane_id}` | `{type:"pane_info", pane:{pane_id, terminal_id, workspace_id, tab_id, focused, cwd, foreground_cwd, agent_status, revision, agent_session?, label?, ...}}`。**`scrollback` フィールドは無い**（旧記載は誤り）。不在は `pane_not_found` |
+| `pane.read` | `{pane_id, source, lines?, format?, strip_ansi?}`。`source` ∈ `visible` / `recent` / `recent-unwrapped` / `detection` | `{type:"pane_read", read:{pane_id, workspace_id, tab_id, source, format, text, revision, truncated}}`。`strip_ansi: true` で装飾除去（`agent.read {target, ...}` も同形）。**返るのは画面のコピーのみ**（下記） |
+| `pane.list` / `workspace.list` | `{}` | `{type:"pane_list", panes:[...]}` / `{type:"workspace_list", workspaces:[...]}` |
+| `pane.close` / `workspace.close` | `{pane_id}` / `{workspace_id}` | `{type:"ok"}` |
+| `pane.report_agent_session` | `{pane_id, source, agent, seq, agent_session_id, agent_session_path?}`（公式統合 hook が使用） | ok |
 
 ## プロンプト投入の実機作法（重要・#124 で実測）
 
@@ -72,12 +87,6 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 - `❯` の描画（〜1.2s）も `agent_session` の報告（hook の SessionStart、〜1.2s）も **「入力受付可能」を意味しない**
 - したがって **①テキスト着弾を画面で確認して未着弾なら再送 ②`agent_status ∈ {working, blocked, done}` になるまで `enter` を再押下**（空入力への enter は no-op なので冪等）、という自己修正が必須
 - 画面確認は **空白除去による正規化マッチ**で行う。入力欄は画面幅で折り返され CJK は語中で割れるため、素朴な substring は必ず偽陰性になる。またプロンプトが長いと入力欄はカーソル（＝末尾）側を表示するので、**照合はプロンプトの末尾**で行う
-| `pane.send_keys` | `{pane_id, keys}`。**`keys` は配列**（例 `["ctrl+c"]`、`["enter"]`） | ok |
-| `pane.get` | `{pane_id}` | `{type:"pane_info", pane:{pane_id, terminal_id, workspace_id, tab_id, focused, cwd, foreground_cwd, agent_status, revision, agent_session?, label?, ...}}`。**`scrollback` フィールドは無い**（旧記載は誤り）。不在は `pane_not_found` |
-| `pane.read` | `{pane_id, source, lines?, format?, strip_ansi?}`。`source` ∈ `visible` / `recent` / `recent-unwrapped` / `detection` | `{type:"pane_read", read:{pane_id, workspace_id, tab_id, source, format, text, revision, truncated}}`。`strip_ansi: true` で装飾除去（`agent.read {target, ...}` も同形）。**返るのは画面のコピーのみ**（下記） |
-| `pane.list` / `workspace.list` | `{}` | `{type:"pane_list", panes:[...]}` / `{type:"workspace_list", workspaces:[...]}` |
-| `pane.close` / `workspace.close` | `{pane_id}` / `{workspace_id}` | `{type:"ok"}` |
-| `pane.report_agent_session` | `{pane_id, source, agent, seq, agent_session_id, agent_session_path?}`（公式統合 hook が使用） | ok |
 
 # agent_status と totsuka 正規化状態の対応
 
@@ -113,6 +122,7 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 `tab.created|closed|focused|renamed`, `pane.created|closed|focused|moved|exited|agent_detected|output_matched|agent_status_changed`。
 
 注意点（実測）:
+
 - **`pane_exited` に `exit_code` は無い**（`data` は `pane_id` / `workspace_id` / `type` のみ）。終了の成否分類はできないため、
   「完了前の exit = 異常」のように**状態履歴から導出**する。
 - **購読直後に過去イベントの replay が届くことがある**（他 pane・購読前に終了した pane の `pane_exited` を観測）。
@@ -133,7 +143,7 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 （`{source, agent, kind:"id", value:"<session id>"}`、統合 hook が報告）でエージェント種別とセッションが分かるので、
 エージェントごとの読み取りにディスパッチする。Claude Code の場合:
 
-```
+```text
 agent_session.value = "bc624b3f-…" → ~/.claude/projects/<cwd をエンコード>/bc624b3f-….jsonl の最後の assistant テキスト
 （実測: transcript から 5330 chars / 63 行を欠落なく取得。同じ回答が detection では 3352 chars に切り捨てられていた）
 ```
@@ -185,9 +195,3 @@ agent-ide-herdr は v1 の参照実装だが、対象エージェント Claude C
   `pane.agent_session` に反映）、`claude --resume <id>` で会話再開可能。
 - **design_preview / pane_control（F-34）**: Claude 統合自体は提供しないが、**herdr の pane/tab/layout API 経由**で totsuka プラグインが実現できる（エージェント非依存の herdr 機能）。
 - **plan モード（F-36）は herdr socket の機能ではない**: herdr はプロセスのホストのみ。plan は Claude CLI 側の plan/permission-mode を pane 起動時に付与して実現する。
-
-# Citations
-
-1. herdr — Socket API. https://herdr.dev/docs/socket-api/ （2026-07-13 / 2026-07-17 参照）
-2. herdr — Integrations. https://herdr.dev/docs/integrations/ （2026-07-13 参照）
-3. herdr 0.7.1 (protocol 14) / 0.7.4 (protocol 16) 実機プローブ記録（socket 直叩き + `herdr api schema --json`）: #123 / #124 のコメント（2026-07-17）

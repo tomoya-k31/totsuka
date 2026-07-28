@@ -4,8 +4,8 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、Issue コメント publish を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-timestamp: 2026-07-26T12:00:00+09:00
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-26T12:00:00+09:00 }
+status: stable
 owner: tomoya-k31
 ---
 

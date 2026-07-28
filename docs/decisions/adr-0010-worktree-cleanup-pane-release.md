@@ -3,8 +3,18 @@ type: Decision
 title: ADR-0010 worktree 掃除の3段化（判定→pane→worktree）と session/release の追加
 description: 正常完了時に herdr pane を閉じる経路が無く pane が単調増加する問題（#210）に対し、cleanup を「判定→pane 解放→worktree 削除」の3段に分割し、protocol 0.2.1 で session/release RPC（pane_control 相乗り・expect_cwd による同一性検証・degrade-open）を追加、保持プリセット keep_7d/keep_28d と worktree sweep 間隔の分離（60s・config 非露出）を併せて導入する決定。
 tags: [worktree, cleanup, pane, protocol, herdr, retention, architecture]
-timestamp: 2026-07-22T00:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-22T00:00:00Z }
+status: stable
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/210
+    title: "Issue #210 — 本文（要件）と詳細設計コメント（実機観測・確定仕様）"
+  - id: ref-2
+    resource: /decisions/adr-0005-click-to-focus.md
+    title: "ADR-0005 通知 click-to-focus — `pane_control` 相乗りの先行判断"
+  - id: ref-3
+    resource: /references/herdr-socket-api.md
+    title: "herdr Socket API リファレンス — `pane.get` の `cwd`/`label`"
 ---
 
 # Status
@@ -66,9 +76,3 @@ sweep は `Retained` / `DirtySkipped` の worktree 1件につき `git status --p
 - orca は `pane_control` 非宣言のため release は呼ばれず、従来どおり worktree だけ削除される（変更なし）。
 - pane を閉じても Claude セッションは消えないため、`claude --resume` による[会話継続](/glossary/conversation-continuity.md)は影響を受けない。
 - release の transport 失敗や degrade 判定で pane が残るケースは残存する — 孤児 pane の検出・解放は #211（doctor）が `session/release` を再利用して担う。
-
-# Citations
-
-[1] [Issue #210](https://github.com/tomoya-k31/totsuka/issues/210) — 本文（要件）と詳細設計コメント（実機観測・確定仕様）
-[2] [ADR-0005 通知 click-to-focus](/decisions/adr-0005-click-to-focus.md) — `pane_control` 相乗りの先行判断
-[3] [herdr Socket API リファレンス](/references/herdr-socket-api.md) — `pane.get` の `cwd`/`label`

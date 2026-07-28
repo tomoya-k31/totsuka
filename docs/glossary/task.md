@@ -3,8 +3,8 @@ type: Term
 title: Task（タスク）
 description: タスクソース由来の作業単位。共通スキーマ（plugin-protocol の Task 型）に正規化され、状態DBの1行として9状態のステートマシン（F-71）を遷移する。
 tags: [glossary, domain]
-timestamp: 2026-07-13T04:30:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-13T04:30:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

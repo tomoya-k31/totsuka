@@ -4,9 +4,25 @@ title: ADR-0009 TOTSUKA_* 環境変数オーバーライドはホワイトリス
 description: F-66 第 2 層（TOTSUKA_* 環境変数）の配線にあたり、汎用 TOML オーバーレイではなく明示的なキー対応表（ホワイトリスト）を採用し、不正値は起動エラー・未知キーは警告とする fail-loud 方針を採る決定。フラット文字列 map の ConfigResolver は削除し、RootConfig へ直接適用する型付き関数に置き換える。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/env_overrides.rs
 tags: [config, environment, precedence, f-66, fail-loud]
-timestamp: 2026-07-25T01:40:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-25T01:40:00Z }
+status: stable
 owner: tomoya-k31
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/208
+    title: "Issue #208"
+  - id: ref-2
+    resource: /product/orchestrator-spec.md
+    title: "Spec F-66（設定の優先順位）、§4.6（二層設定モデル）"
+  - id: ref-3
+    resource: /development/config-examples.md
+    title: "設定例集 — 対応環境変数の一覧と使用例"
+  - id: ref-4
+    resource: /development/config-reference.md
+    title: "設定リファレンス"
+  - id: ref-5
+    resource: /decisions/adr-0004-hook-completion-signal.md
+    title: "ADR-0004 — 注入系 env（`HookLaunchSpec`）の出自"
 ---
 
 # Status
@@ -34,7 +50,7 @@ Accepted — 2026-07-22（[#208](https://github.com/tomoya-k31/totsuka/issues/20
 
 `layered.rs` を削除し、`config/env_overrides.rs` を新設する。マージ器は作らず、**適用順で優先順位を実現する**:
 
-```
+```text
 config.toml パース (RootConfig::from_toml_str)
         ↓
 apply_env_overrides(&mut cfg, env)      ← 第 2 層
@@ -90,11 +106,3 @@ Orchestrator がエージェント/フックプロセスへ**注入する** env�
 - **既知の非対称**: `config.toml` 側の `log.level` 不正値は現状 silent fallback のまま（`run_cmd.rs` の `.and_then(parse_level)`）。env 経由は本 ADR でエラーになるため、同じ typo でも経路によって挙動が違う。ファイル経路の改善は別途
 - `totsuka config show` は引き続き**ファイルの内容**を表示するが、有効な env オーバーライドがある場合は末尾に一覧を追記する。表示しないと「ファイルが全て」と誤読させ、本 issue と同種の沈黙を再生産するため
 - **#175 以降**: fail-loud は plugin コマンドにも及ぶ — 不正な `TOTSUKA_*` 値があると `plugin install` / `uninstall` / `list` もエラーになる（従来は env を読まないため免疫だった）。副作用（store への install/uninstall）より**前**に設定ロードを行い、部分成功で終わらない順序にしている
-
-# Citations
-
-[1] [Issue #208](https://github.com/tomoya-k31/totsuka/issues/208)
-[2] [Spec](/product/orchestrator-spec.md) F-66（設定の優先順位）、§4.6（二層設定モデル）
-[3] [設定例集](/development/config-examples.md) — 対応環境変数の一覧と使用例
-[4] [設定リファレンス](/development/config-reference.md)
-[5] [ADR-0004](/decisions/adr-0004-hook-completion-signal.md) — 注入系 env（`HookLaunchSpec`）の出自

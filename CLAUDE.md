@@ -9,6 +9,7 @@ Totsuka is an AI-driven dev-flow automation tool (detects task instructions and 
 ## Code Intelligence (Rust / rust-analyzer)
 
 Prefer LSP over Grep/Glob/Read for code navigation:
+
 - `goToDefinition` / `goToImplementation` — jump to source
 - `findReferences` — find all usages (required before renaming or changing a function signature)
 - `workspaceSymbol` — find where something is defined by name
@@ -26,7 +27,7 @@ If rust-analyzer becomes slow or unstable on this workspace (large monorepo), it
 
 ## Documentation (`docs/` = OKF Knowledge Bundle)
 
-All knowledge about this repository lives in `docs/`, an [OKF v0.1](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)-compliant Knowledge Bundle.
+All knowledge about this repository lives in `docs/`, an [OKF v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)-compliant Knowledge Bundle.
 
 ### Reading (progressive disclosure)
 

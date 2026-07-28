@@ -2,7 +2,7 @@
 
 アーキテクチャ上の意思決定記録。1決定=1ファイル、`adr-NNNN-<slug>.md` 形式。
 
-* [ADR-0001 OKFによるドキュメント管理の採用](adr-0001-adopt-okf.md) - リポジトリ内ドキュメントをOKF v0.1準拠のKnowledge Bundleとして管理する決定。
+* [ADR-0001 OKFによるドキュメント管理の採用](adr-0001-adopt-okf.md) - リポジトリ内ドキュメントをOKF準拠のKnowledge Bundleとして管理する決定。採用時点の準拠バージョンはv0.1で、v0.2への追従はADR-0022で決めた。
 * [ADR-0002 Rust workspace 構成と CI 品質ゲート](adr-0002-rust-workspace-ci.md) - totsuka を Rust edition 2024 のヘキサゴナル workspace（core/cli/plugin-protocol）として構成し、clippy deny warnings・rustfmt・cargo-audit/deny・llvm-cov を CI 品質ゲートに据える決定。
 * [ADR-0003 Slack メンション代理返信アシスタントの設計](adr-0003-slack-reply-assistant.md) - task-source-slack をコア無変更のプラグイン内完結で実装する決定。リポジトリ解決はプラグイン内 3 段階、イベントはバッファ + 短周期 tasks/fetch、トークンはユーザートークン（xoxp）のみで本人名義返信 + 承認フロー必須。
 * [ADR-0004 Claude Code フック完了シグナルの受信をコア driving adapter に置く](adr-0004-hook-completion-signal.md) - Claude Code の完了検知を screen-manifest からフック機構へ移すにあたり、UDS 受信サーバを orchestrator-core の driving adapter（ports::SignalPort + adapters::hook_uds）側に置き、herdr プラグイン内には置かない決定。llm 検収はセッション内 prompt 型 Stop フックで行う。
@@ -23,3 +23,4 @@
 * [ADR-0019 doctor の op:// 解決は「TTY があるか」ではなく「op セッションがあるか」で出し分け、走らなかった検査は skipped として報告する](adr-0019-doctor-onepassword-gating.md) - doctor が ADR-0006 の非対話原則を自分で破っていた問題（#289）に対し、check_onepassword を最初に動かして op whoami の結果を可否判定に使い、セッションが無いときだけ op:// を要する probe を skipped として報告する決定。TTY 判定（案 D）ではなくプロンプトが実際に出る条件を直接見る（案 E）。plugin probe を --online の裏に隠す案 B と、挙動を変えず約束だけ直す案 C は不採用。あわせて Check に skipped 重大度を追加し、検出ヘルパが toml 0.9 の Value パーサ誤用で常に false を返していた（＝1Password 検査が一度も走っていなかった）バグを修正した。
 * [ADR-0020 ステータスマーカーは wire 信号として存置する（エンジン側 LLM 検収への移行は不採用）](adr-0020-status-marker-stays.md) - ステータスマーカー（<<STATUS:COMPLETED>> 等、F-101）を廃止してエンジン側 LLM 検収へ移す案（Option A、#159）を評価し、現時点では不採用として現状維持する決定。マーカーはマルチツール化（#196）以降ツール非依存の唯一の完了信号になっており、廃止は 3 ツールのアダプタ・state.db の冪等キー・エスカレーション計数・publish 成果物の全経路に波及する。廃止する場合の改修一式と、その際に必要な前提条件も記録する。
 * [ADR-0021 Slack 返信案・ピッカーの通知は「ナッジ専用 bot」の DM で行う](adr-0021-slack-bot-notification-nudge.md) - エフェメラルと自分名義 self-DM は Slack 通知を一切発生させず、オペレーターが返信案の到着に気づけない問題（#305）に対し、通知ナッジ専用の bot user を追加して bot→本人 DM で push 通知を出す決定。投稿主体は user token のまま不変で、ADR-0003 の「Bot なし」前提を部分改訂する。reminders.add ハックと macOS 通知強化のみの案は不採用。
+* [ADR-0022 docs バンドルを OKF v0.2 へ移行する](adr-0022-okf-v02-migration.md) - docs/ の準拠バージョンを OKF v0.1 から v0.2 へ上げる決定。破壊的変更2件（timestamp→generated.at、本文 # Citations→frontmatter sources）をスクリプトで一括変換し、status 語彙を draft/stable/deprecated へ寄せ、okf-lint の YAML 部分集合をネスト対応へ広げる。verified と stale_after は運用ルールだけ定義して既存ファイルへの一括付与はしない。

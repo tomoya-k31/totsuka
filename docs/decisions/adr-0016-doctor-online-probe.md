@@ -4,9 +4,19 @@ title: ADR-0016 鍵の「解決できる」と「使える」を分け、後者�
 description: doctor が api_key_ref の解決可否しか見ず無効な LLM キーを実行時まで露見させなかった問題（#267）に対し、既定のオフライン・非対話（ADR-0006）は一切変えずオプトインの --online で 1 回の最小ライブリクエストを投げる決定。プローブは json_schema なし・リトライなし・max_tokens 1・本文破棄で、401/403 のみ fail・その他の失敗は warning に留める。実行時側は HTTP ステータスを型として持ち回り 401/403 だけ warn! へ上げる。GET /models 方式・doctor の既定オンライン化・連続失敗カウンタは不採用。
 resource: https://github.com/tomoya-k31/totsuka/issues/267
 tags: [doctor, llm, secret, probe, observability, cli]
-timestamp: 2026-07-26T00:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-26T00:00:00Z }
+status: stable
 owner: tomoya-k31
+sources:
+  - id: ref-1
+    resource: /decisions/adr-0006-onepassword-secret-backend.md
+    title: "ADR-0006 シークレット参照に 1Password (op://) を第 2 バックエンドとして追加する — doctor の非対話原則"
+  - id: ref-2
+    resource: /decisions/adr-0012-cli-exit-codes-json-errors.md
+    title: "ADR-0012 CLI の exit code 体系と --json エラーエンベロープ — exit 3（問題検出）の意味"
+  - id: ref-3
+    resource: /operations/operations-guide.md
+    title: "運用ガイド（doctor / worktree 掃除 / FAQ） — doctor の読み方"
 ---
 
 # Status
@@ -21,13 +31,13 @@ Accepted — 2026-07-26（[#267](https://github.com/tomoya-k31/totsuka/issues/26
 
 結果、実機で OpenRouter が全リクエストに HTTP 401（`User not found.`）を返し続けている状態で、`doctor` は次のように報告していた。
 
-```
+```text
 ok:   llm — api_key_ref is an op:// reference (checked by the 1password probes, not resolved here)
 ```
 
 一方 run のログでは毎メンション:
 
-```
+```text
 INFO task_source_slack::repo_resolver: LLM classification inconclusive; asking the operator
   error=LLM request failed: HTTP 401: {"error":{"message":"User not found.","code":401}}
 ```
@@ -47,7 +57,7 @@ INFO task_source_slack::repo_resolver: LLM classification inconclusive; asking t
 
 `repo_resolver` の縮退経路を分岐し、認証拒否のときだけ `warn!` へ上げて actionable な文言にする:
 
-```
+```text
 WARN the LLM provider rejected the API key; repository selection falls back to
      the operator picker for every new conversation until it is fixed — check
      [llm].api_key_ref and run `totsuka doctor --online`
@@ -104,9 +114,3 @@ severity の対応は **401/403 だけが fail**、それ以外の失敗（タ�
 - `doctor`（フラグなし）の出力・exit code・非対話性は不変。既存のスクリプトへの影響は無い。
 - `ChatTransport::complete` のエラー型が変わるため、`task-source-slack` のテストダブルは `ChatError` を返すよう追随が必要（プラグイン内に閉じた seam なので外部影響なし）。
 - 「参照が解決できる」と「鍵が使える」が別チェックとして分かれたことで、以後 `[llm]` 以外の外部依存にも同じ 2 段構え（オフライン検査 + `--online` プローブ）を追加できる。
-
-# Citations
-
-1. [ADR-0006 シークレット参照に 1Password (op://) を第 2 バックエンドとして追加する](/decisions/adr-0006-onepassword-secret-backend.md) — doctor の非対話原則
-2. [ADR-0012 CLI の exit code 体系と --json エラーエンベロープ](/decisions/adr-0012-cli-exit-codes-json-errors.md) — exit 3（問題検出）の意味
-3. [運用ガイド（doctor / worktree 掃除 / FAQ）](/operations/operations-guide.md) — doctor の読み方

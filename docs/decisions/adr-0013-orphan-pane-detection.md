@@ -3,8 +3,8 @@ type: Decision
 title: ADR-0013 孤児 pane の検出は session/list（label 所有権フィルタ）+ doctor の対話的解放で行う
 description: doctor の孤児 pane 検出（#211）のため protocol 0.2.2 で列挙 RPC session/list を追加し、所有権はプラグイン側の label 前置（totsuka {task_id}）フィルタで絞る決定。孤児判定は「DB 未知」+「終端タスクかつ worktree 消滅」の 2 基準、解放は session/release を列挙した label を expect_label に詰めて呼ぶ。生存確認方式（DB 既知 id の照会）は DB 未知 pane を原理的に見つけられないため不採用。
 tags: [protocol, pane, doctor, orphan, herdr, pane-control]
-timestamp: 2026-07-23T14:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-23T14:00:00Z }
+status: stable
 ---
 
 # Status
@@ -13,7 +13,7 @@ Accepted — 2026-07-23（[#211](https://github.com/tomoya-k31/totsuka/issues/21
 
 # Context
 
-#210（ADR-0010）で「worktree を削除するときに pane も閉じる」連動を導入したが、この連動は破れる経路が複数ある: 運用ガイドが案内する手動 `git worktree remove`（totsuka が関与せず pane が残る）、`session/release` の同一性検証不一致による skip（degrade 規則）、プラグインのクラッシュ、#210 以前に完了したタスクの残骸（実機で複数確認済み）。
+# 210（ADR-0010）で「worktree を削除するときに pane も閉じる」連動を導入したが、この連動は破れる経路が複数ある: 運用ガイドが案内する手動 `git worktree remove`（totsuka が関与せず pane が残る）、`session/release` の同一性検証不一致による skip（degrade 規則）、プラグインのクラッシュ、#210 以前に完了したタスクの残骸（実機で複数確認済み）。
 
 worktree 側には `doctor` の `check_orphans`（F-24）という受け皿があるが、pane には無い。そして worktree と違い「ファイルシステム側の真実」に相当する列挙手段がプロトコルに存在しなかった — orchestrator は agent プラグインに「持っている pane を全部教えろ」と聞けない。一方、調査の結果 herdr 自体は `pane.list` / `workspace.list` を公開していることが確認済みで（[herdr-socket-api](/references/herdr-socket-api.md)、0.7.4 実機）、プラグインが呼んでいないだけだった。
 

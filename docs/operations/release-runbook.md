@@ -4,8 +4,8 @@ title: リリース手順（release-please / ユニバーサルバイナリ / Gi
 description: totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリの自動ビルドと GitHub Releases 配布、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.github/workflows
 tags: [release, ci, distribution, gatekeeper, semver, github-app, pat, branch-protection]
-timestamp: 2026-07-14T05:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-14T05:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 
@@ -28,7 +28,7 @@ release-please は自分で Release PR を作るため、リポジトリ設定�
 
 App が Release PR を作る → 実 identity 扱いなので CI が走り `lint` を満たす → 人が admin 不要で通常マージできる。人に紐づかず、短命トークンで安全。
 
-**セットアップ（管理者の 1 回操作）**
+### セットアップ（管理者の 1 回操作）
 
 1. **App 作成**: Org Settings → Developer settings → GitHub Apps → New。Permissions は **Repository: Contents = Read and write / Pull requests = Read and write** のみ。Webhook は不要（Active を外す）。
 2. **秘密鍵**: App の "Private keys" で 1 つ生成（`.pem` をダウンロード）。App の **App ID** を控える。
@@ -59,7 +59,7 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
 
 手早いが**個人アカウントに紐づく**（作成者の退職・失効で自動化が止まる）。org では PAT を制限/禁止していることも多い。ボット専用 machine user で緩和できるが、それなら App が素直。
 
-**セットアップ**
+### セットアップ
 
 1. GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate。**Resource owner = 対象 Org**、Repository access = totsuka のみ、Permissions = **Contents: Read and write / Pull requests: Read and write**。有効期限を設定（要ローテーション）。
 2. リポジトリ Secrets に `RELEASE_PLEASE_TOKEN` として登録。

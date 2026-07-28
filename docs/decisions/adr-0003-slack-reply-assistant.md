@@ -3,8 +3,18 @@ type: Decision
 title: ADR-0003 Slack メンション代理返信アシスタントの設計
 description: task-source-slack をコア無変更のプラグイン内完結で実装する決定。リポジトリ解決はプラグイン内 3 段階、イベントはバッファ + 短周期 tasks/fetch、トークンはユーザートークン（xoxp）のみで本人名義返信 + 承認フロー必須。
 tags: [slack, plugin, task-source, socket-mode, token, architecture]
-timestamp: 2026-07-28T00:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-28T00:00:00Z }
+status: stable
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/102
+    title: "Issue #102 エピック / #108 運用整備"
+  - id: ref-2
+    resource: /components/task-source-slack.md
+    title: "task-source-slack コンポーネント"
+  - id: ref-3
+    resource: https://api.slack.com/apis/connections/socket
+    title: "Slack: Socket Mode / App manifest"
 ---
 
 # Status
@@ -49,9 +59,3 @@ Slack アプリは Bot ユーザーを持たず、User OAuth Token（`xoxp-`）�
 - 再起動で pending index は消える（in-memory。受信バッファ自体は [ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md) の push 化で廃止）。下書きストアも当初は in-memory だったが、#122 で `${XDG_STATE_HOME:-~/.local/state}/totsuka/plugins/{source_name}/drafts.json` へのプラグインローカル永続化（mutation 毎の全量 atomic 書き出し・0600、`initialize` でロード + TTL prune）に変更され、承認/却下ボタンと二重押下ガード（Sent/Rejected 保持）は再起動を跨いで有効。下書きテキストは self-DM 記録にも平文で残る。
 - 全ループ（メンション → `tasks/fetch` → dispatch → `result/publish` → 承認 → 本人名義返信）はモック Slack + 実バイナリの E2E（`orchestrator-cli/tests/slack_e2e.rs`）で CI 検証される。この E2E が、Slack のタスク ID（`{channel}:{ts}`）が git ブランチ名として不正（`:`）という組み合わせバグを露見させ、コアの `render_branch` にサニタイズを追加した（ソース非依存の堅牢性修正としてのコア変更）。
 - 「コア無変更」は #103〜#108 のエピック本体に対する判断であり、恒久の禁止ではない。設定重複（`[[repos]]` と `[[repositories]]`）の解消は、当初から任意 issue #109 として切り出したプロトコル拡張（`InitializeParams.repositories`、protocol 0.1.1 の追加的変更）で実施した。`[llm]` の重複（base_url / model）も同型の #119（`InitializeParams.llm`、protocol 0.1.2、default + override）で解消した。
-
-# Citations
-
-[1] [Issue #102 エピック / #108 運用整備](https://github.com/tomoya-k31/totsuka/issues/102)
-[2] [task-source-slack コンポーネント](/components/task-source-slack.md)
-[3] [Slack: Socket Mode / App manifest](https://api.slack.com/apis/connections/socket)
