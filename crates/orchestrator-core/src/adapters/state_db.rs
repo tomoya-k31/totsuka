@@ -422,10 +422,11 @@ pub struct EventRecord {
 
 /// A hook event to persist idempotently (#131 D-05 / N-01).
 ///
-/// The idempotency key is `(job_id, tool_session_id, prompt_id, event)`; the
-/// optional components are empty strings (not `None`) so SQLite's UNIQUE
+/// The idempotency key is `(job_id, tool_session_id, prompt_id, event, status)`;
+/// the optional components are empty strings (not `None`) so SQLite's UNIQUE
 /// constraint actually dedups repeated deliveries (multiple hook fires, spool
-/// re-sends, curl retries).
+/// re-sends, curl retries). `status` joined the key in v3 so a block →
+/// re-completion pair of `Stop`s is not collapsed into one (#154).
 #[derive(Debug, Clone)]
 pub struct HookEventInsert {
     /// The dispatch this event belongs to (`TOTSUKA_JOB_ID`, E-09).

@@ -31,7 +31,7 @@ Accepted — 2026-07-18（エピック [#131](https://github.com/tomoya-k31/tots
 **なぜプラグイン内配置を却下したか**: フックシグナルの処理は、以下 3 つを **core の状態DB（[state.db](/data/state-db.md)）と突き合わせて**初めて成立する。プラグインローカルの受信サーバはこれらを再起動を跨いで保持できない:
 
 - **`(plugin, session_id) → task_id` の相関**: シグナルは `job_id = job-{task_id}-{session_row}` を起点にタスクへ配路する（E-09。共有セッション id から宛先を推測しない）。この索引の正本は core の `sessions` / `tasks` テーブルであり、プラグインは再起動で揮発する in-memory 状態しか持てない（Slack プラグインでバッファ・pending index が揮発するのと同型の制約）。
-- **冪等キー**: 多重発火・スプール再送・curl リトライの無害化は `hook_events UNIQUE(job_id, claude_session_id, prompt_id, event)`（D-05）に依存する。冪等の真実は DB にあり、プラグインローカルでは担保できない。
+- **冪等キー**: 多重発火・スプール再送・curl リトライの無害化は `hook_events UNIQUE(job_id, tool_session_id, prompt_id, event, status)`（D-05）に依存する。冪等の真実は DB にあり、プラグインローカルでは担保できない。（本 ADR 執筆時点の鍵は 4 列 `(job_id, claude_session_id, prompt_id, event)` だったが、`status` が v3 で加わり[#154](https://github.com/tomoya-k31/totsuka/issues/154)、列名が v4 で `tool_session_id` へ改名された。判断の中身は変わらないため、現行の鍵を指すよう追随させている）
 - **監査ログ**: 受信 JSON 全文の監査（N-01）と、UNKNOWN 連続数の DB 再計算（D-02。フック自己申告は不使用）は core のイベント永続化と一体。
 
 さらに Orchestrator は複数の agent_ide プラグイン（herdr / orca / 将来）を扱うが、フック完了判定は Claude Code に固有で agent 非依存の**横断的関心事**である。受信を特定プラグインに埋めると、他 agent や再起動回復（§5.3）から再利用できない。`SignalPort` を Engine から独立させ、`hook_uds` を driving adapter として隔離することで、UDS サーバ・スプール回収（`replay_spool`）・タイムアウト掃引（`sweep_signal_timeouts`）がすべて同じ DB 真実の上に乗る。
