@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0014 AI ツール抽象は「単一 pane runner + core 側ツールレジストリ + 解決済み ToolLaunchSpec」で行う
 description: リポジトリ/ワークフローごとの AI ツール切り替え（#196、Claude Code / Codex / OpenCode）のため、agent プラグイン（pane runner）と AI ツール（pane 内 CLI）を直交 2 軸に分離し、ツール知識（argv 組立・ケイパビリティ・完了検知アダプタ）を orchestrator-core の [tools] レジストリに集約、protocol 0.2.3 の ToolLaunchSpec で完全解決済み argv/env をプラグインへ渡す決定。ツール別 agent プラグイン案と herdr 側プロファイル解決案は不採用。
 tags: [tool, protocol, herdr, codex, opencode, registry, dispatch]
-timestamp: 2026-07-24T12:00:00Z
+timestamp: 2026-07-28T16:00:00Z
 status: accepted
 ---
 
@@ -22,6 +22,9 @@ herdr プラグインが `claude … --settings <path> [--resume <id>]` の CLI 
 3. **protocol 0.2.3 の `TaskDispatchParams.tool_launch: Option<ToolLaunchSpec>`**（`program` / `args` / `env`、additive）で**完全解決済み** argv/env をプラグインへ渡す。プラグインは内容を解釈せず pane で起動するだけ（`HookLaunchSpec` / H-01 と同じ opaque contract 流儀）。`hook: Option<HookLaunchSpec>` は 0.2.3 から deprecated（移行窓の間は併送、次の breaking で削除）。herdr は `tool_launch` を優先し、無ければ旧 `launch_command` フォールバック（herdr.toml の `agent_command` / `plan_args` も deprecated）。
 4. **完了検知は既存 UDS 契約に正規化するアダプタで吸収する**。`POST /agent-events` → `AgentSignal` → `Engine::on_signal` のワイヤ形は全ツール共通のまま（#222 の rename で名称も一般化済み）。アダプタを持たない kind（Phase 1 の codex / opencode、および任意 CLI）は全タスクが timeout エスカレーション終わりになるため、**validate で参照を拒否**し dispatch でも防御する（`ToolKind::has_adapter`）。`kind = "custom"`（アダプタ無し任意 CLI）は見送り確定 — ツール追加の正規ルートは「core に ToolAdapter 実装 1 つ + `[tools]` 設定 + 完了検知アセット」。
 5. **`verification = "llm"` × tool は静的検証する**。llm 検収は Claude の prompt 型 Stop フック専用のため、非 claude 系へ解決されうる llm ワークフローには `tool = "claude"` のピンを警告で提案し、ピン済み不一致も警告する（実行時フォールバックは保険）。workflow レベル `tool` を v1 から導入した決め手はこの静的保証。
+   - **実行時フォールバックの実体（[#301](https://github.com/tomoya-k31/totsuka/issues/301)、2026-07-28 に実装）**: `prompt_verification = false` のツールでは、完了信号の受信時に実効 verification を **`human` へ縮退**する（タスクは `Verifying` で止まり `totsuka task verify` を待つ）。縮退した回は run ログに warn を 1 回出す。
+     この「保険」は ADR 制定時には**実装されていなかった** — `ToolCapabilities.prompt_verification` は宣言されただけでどこからも読まれず、`on_stop_completed` が `Llm` と `None` を同じ腕で扱っていたため、実際の縮退先は `human` ではなく **`none` 相当（未検証のまま publish）**だった。ケイパビリティは「宣言しただけでは縮退しない」ことの実例。
+     実効値は永続化せず完了時にツールを引き直す（解決入力は `EngineSettings` にあり起動時から不変なので、同一プロセス内では dispatch 時の解決と一致する）。
 6. **`default_agent` は削除する**。ランタイム消費が無く、`tool` の隣に「agent」名のフィールドが残ると 2 軸が再び混同されるため。`deny_unknown_fields` によりフィールド名入りのパースエラーになり移行は自明（pre-1.0・利用者ローカル設定のみ）。
 
 ## 不採用案
