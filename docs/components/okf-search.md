@@ -4,7 +4,7 @@ title: okf-search
 description: docs/ の frontmatter（type/status/owner/resource/tags/timestamp）でconceptを絞り込むCLIスクリプトと、絞り込み結果をAIが読んで抽出するokf-searchスキル。
 resource: /scripts/okf-search.sh
 tags: [okf, search, tooling]
-timestamp: 2026-07-11T00:00:00Z
+timestamp: 2026-07-28T13:00:00Z
 status: active
 ---
 
@@ -23,6 +23,9 @@ scripts/okf-search.sh [bundleDir=docs] [フィルタ...] [出力オプション]
 - フィルタ（すべて AND）: `--type` `--status` `--owner` `--resource` `--resource-like` `--tag`（繰り返し可） `--field KEY=VALUE`（繰り返し可） `--after` `--before`
 - 出力: 既定は `path / type / status / timestamp / title — description` の表。`--paths-only` でパスのみ。`--list-values FIELD` で distinct 値と件数の一覧。
 - 依存: bash 3.2+, POSIX awk/grep/sed のみ（`scripts/okf-lint.sh` と同方針。追加の外部依存なし）。
+- 値の引用符は YAML の構文であって値の一部ではないので、**外してから比較・表示する**。`description` は
+  ` #` や `: ` を含む場合に引用が必須（`docs/CLAUDE.md`）で、外さないと表示に `"` が混ざり、
+  `--field KEY=VALUE` の完全一致も引用符の有無で外れる（#304）。
 
 # Examples
 

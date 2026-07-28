@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0015 タスクの同一性を「1 メッセージ」から「1 会話」へ変える
-description: Slack スレッドの 2 通目以降が必ず dispatch failed になる実機バグ（Claude Code はセッションを cwd 単位で保存する一方 totsuka は 1 タスク = 1 worktree）に対し、追いメンションを別タスクにして thread_key で相関する #140 の方式をやめ、Task.id 自体を会話（スレッド）の識別子にする決定。個々の配送は Task.message_key で識別し、メッセージは task_messages 台帳に積む。終端は可逆になる。
+description: "Slack スレッドの 2 通目以降が必ず dispatch failed になる実機バグ（Claude Code はセッションを cwd 単位で保存する一方 totsuka は 1 タスク = 1 worktree）に対し、追いメンションを別タスクにして thread_key で相関する #140 の方式をやめ、Task.id 自体を会話（スレッド）の識別子にする決定。個々の配送は Task.message_key で識別し、メッセージは task_messages 台帳に積む。終端は可逆になる。"
 tags: [conversation, identity, slack, protocol, state-db, resume]
 timestamp: 2026-07-26T00:00:00+09:00
 status: accepted

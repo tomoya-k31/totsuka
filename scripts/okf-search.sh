@@ -208,6 +208,16 @@ state == 1 {
     key = substr(line, 1, RSTART + RLENGTH - 2)
     val = substr(line, RSTART + RLENGTH)
     gsub(/^[ \t]+|[ \t]+$/, "", val)
+    # 引用符は YAML の構文であって値の一部ではない（`: ` や ` #` を含む
+    # description は引用が必須 — docs/CLAUDE.md）。外してから比較・表示する。
+    n = length(val)
+    if (n >= 2 && substr(val, 1, 1) == "\"" && substr(val, n, 1) == "\"") {
+      val = substr(val, 2, n - 2)
+      gsub(/\\"/, "\"", val); gsub(/\\\\/, "\\", val)
+    } else if (n >= 2 && substr(val, 1, 1) == "'" && substr(val, n, 1) == "'") {
+      val = substr(val, 2, n - 2)
+      gsub(/''/, "'", val)
+    }
     fmval[key] = val
   }
   next
