@@ -137,8 +137,13 @@ fm_lint() {
         print "fm-yaml\t" NR " 行目: `" key "` の値の ` #` 以降が YAML コメントとして捨てられる（引用符で囲む）"
       else if (index(val, ": ") > 0 || last == ":")
         print "fm-yaml\t" NR " 行目: `" key "` の平文スカラーに `: ` があり YAML がマッピングとして解釈して失敗する（引用符で囲む）"
-      else if (head=="&" || head=="*" || head=="!" || head=="|" || head==">" || head=="%" || head=="@" || head=="`")
+      else if (head=="&" || head=="*" || head=="!" || head=="|" || head==">" || head=="%" || head=="@" || head=="`" || head==",")
         print "fm-yaml\t" NR " 行目: `" key "` の値が YAML の指示文字 `" head "` で始まる（引用符で囲む）"
+      # `-` と `?` は「直後に空白があるとき」だけ指示文字（ブロックシーケンス
+      # 項目 / 明示キー）になる。`-1` や `?foo` は正しい平文スカラーなので、
+      # 上の一覧に混ぜると誤検出になる。
+      else if ((head=="-" || head=="?") && (length(val)==1 || substr(val, 2, 1) == " "))
+        print "fm-yaml\t" NR " 行目: `" key "` の値が `" head " ` で始まりブロック構造として解釈される（引用符で囲む）"
     }
     # 終端 `---` の欠落は pass1 では has_frontmatter が先に [frontmatter] で
     # 落とすが、pass2 の index-desc ガードは has_frontmatter を通さずここを
