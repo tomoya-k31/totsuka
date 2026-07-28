@@ -30,7 +30,9 @@ index.md を1つずつ辿る代わりに `okf-search` スキル（`scripts/okf-s
 
 1. `index.md` / `log.md` 以外のすべての `.md` は、先頭に YAML frontmatter ブロック（`---` で囲む）を持つ
 2. frontmatter は空でない `type` フィールドを必ず含む
-3. `index.md` / `log.md` は予約ファイル名。concept をこの名前で作らない
+3. frontmatter は空でない `description` フィールドを必ず含む（index の転記元）
+4. frontmatter は YAML として正しくパースできる（下の「引用符が要るケース」を参照）
+5. `index.md` / `log.md` は予約ファイル名。concept をこの名前で作らない
 
 ## frontmatter テンプレート
 
@@ -46,6 +48,20 @@ status: <拡張キー: draft | active | deprecated | superseded>
 owner: <拡張キー: 担当チーム>
 ---
 ```
+
+### 引用符が要るケース
+
+frontmatter は **1 行 1 キーの平坦なマッピング**に限る（ネスト・複数行スカラー・ブロックシーケンスは使わない）。
+値が次のいずれかを含むときは、**引用符で囲む**:
+
+| 値に含まれるもの | 引用符なしだとどうなるか |
+|---|---|
+| 半角スペース + `#`（例: `マーカーは #196 で入った`） | `#` 以降が YAML コメントとして捨てられ、`description` が途中で切れる |
+| コロン + 半角スペース（例: `（bin: totsuka）`） | YAML がマッピングとして解釈しようとしてパースに失敗する |
+| 先頭が `#` `&` `*` `!` `%` `@` などの指示文字 | YAML の構文要素と衝突する |
+
+`#` を全角の `＃` に置き換えるといった回避はしない — 引用符で囲む。
+いずれも `bash scripts/okf-lint.sh docs` の `fm-yaml` が検出する。
 
 ## クロスリンク
 
@@ -103,6 +119,9 @@ owner: <拡張キー: 担当チーム>
 - **すべてのディレクトリ**に `index.md` を置く（progressive disclosure の要）
 - concept ファイルまたはサブディレクトリを追加・改名・削除したら、**同じコミットで**そのディレクトリの `index.md` を更新する
 - エントリ形式: `* [Title](file.md) - frontmatter の description をそのまま転記`
+  - **全文をそのまま**転記する（要約・省略・追記をしない）。lint の `index-desc` が
+    frontmatter との一致を検査するので、description を書き換えたら index も同じコミットで直す
+  - description を引用符で囲んでいる場合、index には**引用符を外した中身**を転記する
 - ルート `/index.md` のみ frontmatter（`okf_version` 宣言）を持つ。他の index.md に frontmatter を書かない
 - `README.md` / `CLAUDE.md` は index への掲載対象外（linter も除外している）
 
@@ -120,8 +139,20 @@ owner: <拡張キー: 担当チーム>
 ドキュメントを変更したら必ず lint を通すこと:
 
 ```bash
-bash scripts/okf-lint.sh docs          # エラー: frontmatter欠落・type欠落・index未掲載
+bash scripts/okf-lint.sh docs          # 下記チェックをエラーとして報告
 bash scripts/okf-lint.sh docs --strict # 加えてリンク切れもエラー化
 ```
+
+| チェック | 内容 |
+|---|---|
+| `frontmatter` | frontmatter ブロックがある |
+| `fm-yaml` | frontmatter が YAML として壊れていない（引用符・`: `・` #`・重複キー・タブ・インデント） |
+| `type` | 空でない `type` がある |
+| `description` | 空でない `description` がある |
+| `index-fm` | ルート以外の `index.md` に frontmatter が無い |
+| `index-exists` | concept を含むディレクトリに `index.md` がある |
+| `index-listed` | 各 concept / サブディレクトリが `index.md` から張られている |
+| `index-desc` | `index.md` の転記が frontmatter の `description` と一致する |
+| `log-format` | `log.md` の日付見出しが `## YYYY-MM-DD` |
 
 PostToolUse hook（`.claude/settings.json`）により、docs 配下の編集後に自動で lint が走る。エラーが返った場合は必ず修正してから作業を完了すること。
