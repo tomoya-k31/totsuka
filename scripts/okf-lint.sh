@@ -140,11 +140,16 @@ fm_lint() {
       else if (head=="&" || head=="*" || head=="!" || head=="|" || head==">" || head=="%" || head=="@" || head=="`")
         print "fm-yaml\t" NR " 行目: `" key "` の値が YAML の指示文字 `" head "` で始まる（引用符で囲む）"
     }
-    # 終端 `---` の欠落は has_frontmatter が先に [frontmatter] で落とすので、
-    # ここに来る時点で seen_end は必ず立っている。
+    # 終端 `---` の欠落は pass1 では has_frontmatter が先に [frontmatter] で
+    # 落とすが、pass2 の index-desc ガードは has_frontmatter を通さずここを
+    # 直接呼ぶ。自己完結させておかないと、本文を frontmatter と誤読したまま
+    # 「壊れていない」と判定してしまう。
     END {
-      if (fm && seen_end && need_desc == 1 && !("description" in keys))
+      if (fm && !seen_end) {
+        print "fm-yaml\tfrontmatter の終端 `---` がない（本文が frontmatter として読まれる）"
+      } else if (fm && need_desc == 1 && !("description" in keys)) {
         print "description\tfrontmatter に空でない `description` がない（index 生成に使うため必須 / docs/CLAUDE.md）"
+      }
     }
   ' "$1"
 }
