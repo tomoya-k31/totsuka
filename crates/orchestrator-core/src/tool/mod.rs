@@ -77,8 +77,11 @@ pub struct ToolCapabilities {
     /// A blank Stop can be blocked to re-ask for the status marker (R-03).
     /// Without it, an UNKNOWN stop escalates immediately (no D-02 retry loop).
     pub marker_block: bool,
-    /// Prompt-type Stop hooks exist (`verification = "llm"`). Without it, llm
-    /// verification falls back to `human` at dispatch.
+    /// Prompt-type Stop hooks exist (`verification = "llm"`). Without it, a
+    /// workflow's `llm` verification degrades to `human` when the completion
+    /// arrives: the task parks in `Verifying` awaiting `totsuka task verify`
+    /// rather than publishing unverified output (read by
+    /// `run::hooks::Engine::verification_for`, #301).
     pub prompt_verification: bool,
     /// A past session can be resumed by native id.
     pub resume: bool,
