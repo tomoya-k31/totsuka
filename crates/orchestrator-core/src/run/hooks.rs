@@ -212,7 +212,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 .insert(record.id, strip_status_markers(msg));
         }
 
-        match self.verification_for(&record.workflow) {
+        match self.verification_for(record) {
             VerificationMode::Llm | VerificationMode::None => {
                 // `Escalated` is outside `apply_agent_state`'s supported set, so
                 // drive that one transition explicitly; every other
@@ -649,14 +649,66 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Some((settings_path.display().to_string(), env))
     }
 
-    /// The verification mode of a task's workflow (default `llm` if the workflow
-    /// vanished from config — the publish path then fails safe via
-    /// `finalize_success`).
-    fn verification_for(&self, workflow: &str) -> VerificationMode {
-        workflows_by_name(&self.settings.workflows)
-            .get(workflow)
-            .map(|w| w.verification)
-            .unwrap_or_default()
+    /// The **effective** verification mode for a task: its workflow's
+    /// configured mode (default `llm` if the workflow vanished from config —
+    /// the publish path then fails safe via `finalize_success`), degraded to
+    /// `human` when the task's AI tool cannot run llm verification.
+    ///
+    /// `llm` verification is an in-session prompt-type `Stop` hook running the
+    /// rubric ([ADR-0004](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0004-hook-completion-signal.md)
+    /// decision 2), and only Claude-kind tools have prompt-type hooks —
+    /// `hooks::render_settings` emits the rubric hook into Claude's
+    /// `--settings` file, while Codex registers command-type hooks only and
+    /// OpenCode runs a JS plugin. Without this degradation the `Llm` arm of
+    /// [`on_stop_completed`](Self::on_stop_completed) shares its branch with
+    /// `None` and publishes straight away, so a non-claude tool silently
+    /// produced *unverified* output while the config still claimed `llm`
+    /// (#301). `ToolCapabilities::prompt_verification` declared the constraint
+    /// but nothing read it.
+    ///
+    /// The tool is re-resolved here rather than persisted at dispatch: the
+    /// inputs (`[[workflows]].tool` > `[[repositories]].tool` > `default_tool`)
+    /// all live in `EngineSettings`, which is built once at startup and never
+    /// mutated, so within one run this resolves exactly as `dispatch_one` did.
+    /// Across a restart with an edited config, the *current* config is the
+    /// right answer anyway.
+    fn verification_for(&self, record: &TaskRecord) -> VerificationMode {
+        let workflows = workflows_by_name(&self.settings.workflows);
+        let Some(wf) = workflows.get(record.workflow.as_str()).copied() else {
+            return VerificationMode::default();
+        };
+        if wf.verification != VerificationMode::Llm {
+            return wf.verification;
+        }
+
+        let repo_tool = record.repo.as_deref().and_then(|name| {
+            self.settings
+                .repos
+                .iter()
+                .find(|r| r.name == name)
+                .and_then(|r| r.tool.as_deref())
+        });
+        let tool_name = crate::tool::resolve_tool_name(
+            wf.tool.as_deref(),
+            repo_tool,
+            &self.settings.default_tool,
+        );
+        // An unknown tool name cannot happen for a dispatched task
+        // (`dispatch_one` fails the dispatch first), so leave the configured
+        // mode alone rather than degrading on a lookup miss.
+        match self.settings.tools.get(&tool_name) {
+            Some(tool) if !tool.capabilities().prompt_verification => {
+                tracing::warn!(
+                    task_id = record.id,
+                    workflow = %record.workflow,
+                    tool = %tool_name,
+                    kind = tool.kind.as_str(),
+                    "verification = llm needs a prompt-type Stop hook, which this tool does not have → falling back to human verification (#301); pin a claude-kind tool or set verification = \"human\""
+                );
+                VerificationMode::Human
+            }
+            _ => VerificationMode::Llm,
+        }
     }
 
     /// The configured UNKNOWN-stop escalation threshold (D-02).

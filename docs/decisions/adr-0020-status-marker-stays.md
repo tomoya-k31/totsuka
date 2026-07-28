@@ -4,7 +4,7 @@ title: ADR-0020 ステータスマーカーは wire 信号として存置する�
 description: ステータスマーカー（<<STATUS:COMPLETED>> 等、F-101）を廃止してエンジン側 LLM 検収へ移す案（Option A、#159）を評価し、現時点では不採用として現状維持する決定。マーカーはマルチツール化（#196）以降ツール非依存の唯一の完了信号になっており、廃止は 3 ツールのアダプタ・state.db の冪等キー・エスカレーション計数・publish 成果物の全経路に波及する。廃止する場合の改修一式と、その際に必要な前提条件も記録する。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/domain/signal.rs
 tags: [hook, marker, verification, llm, completion, claude-code, codex, opencode, epic-131, tool-abstraction]
-timestamp: 2026-07-28T14:00:00Z
+timestamp: 2026-07-28T16:00:00Z
 status: accepted
 owner: tomoya-k31
 ---
@@ -151,9 +151,11 @@ permission 設定で特定コマンドだけ許可する回避は各ツールの
   - [#301](https://github.com/tomoya-k31/totsuka/issues/301): `verification = "llm"` × 非 claude ツールが
     human ではなく `none` 相当へ黙示的に縮退する（`ToolCapabilities.prompt_verification` が
     どこからも読まれていない）。`validate.rs` の警告文と実挙動が食い違っている
+    — **解消済み（2026-07-28）**。完了信号の受信時に実効 verification を `human` へ
+    縮退させ、警告文どおりの挙動にした（→ [ADR-0014](/decisions/adr-0014-tool-abstraction.md) 決定 5）
   - [#302](https://github.com/tomoya-k31/totsuka/issues/302): [Spec](/product/orchestrator-spec.md) F-104 の
     `hook_events` UNIQUE 記述が 4 列のままで、実装（v3 以降の 5 列 = `status` を含む）と
-    ドリフトしている
+    ドリフトしている — **解消済み（2026-07-28）**
 - [ADR-0004](/decisions/adr-0004-hook-completion-signal.md) の決定 2（セッション内 prompt 型 Stop
   フックでの llm 検収）は有効なまま。ただし**その適用範囲は Claude 系ツールに限られる**ことが
   本検討で明確になった

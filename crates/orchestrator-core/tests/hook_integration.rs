@@ -292,6 +292,72 @@ async fn completed_llm_publishes_to_done() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// `verification = "llm"` on a tool without prompt-type Stop hooks must park
+/// the task in `Verifying` (human), not publish it (#301).
+///
+/// llm verification is an in-session prompt-type hook that only Claude-kind
+/// tools have. Before this, the `Llm` arm shared its branch with `None`, so a
+/// codex/opencode task published **unverified** output while the config still
+/// said `llm` — the config warning promised a fallback to human that nothing
+/// implemented. The sibling `completed_llm_publishes_to_done` above is the
+/// control: same signal, claude tool, straight to `Done`.
+#[tokio::test]
+async fn completed_llm_on_tool_without_prompt_hooks_parks_in_verifying() {
+    for tool in ["codex", "opencode"] {
+        let base = scratch(&format!("hook_llm_degrade_{tool}"));
+        let notify_log = base.join("notify.ndjson");
+        let db = StateDb::open(&base.join("state.db")).unwrap();
+        let (id, row) = seed_running(&db, "sess-1");
+
+        // Resolution order is workflow pin > repo > global, and the fixture
+        // workflow pins nothing — so the global default decides.
+        let mut settings = engine_settings(workflows("llm", "none"), None);
+        settings.default_tool = tool.to_string();
+
+        let mut engine = Engine::new(
+            db,
+            settings,
+            plugin_set(json!({}), &notify_log).await,
+            SystemGitRunner,
+            no_llm(),
+        )
+        .await;
+
+        engine
+            .on_signal(stop(
+                id,
+                row,
+                "p1",
+                StopStatus::Completed,
+                Some("all done <<STATUS:COMPLETED>>"),
+            ))
+            .await
+            .unwrap();
+
+        let task = engine.db().get_task(id).unwrap().unwrap();
+        assert_eq!(
+            task.state,
+            TaskState::Verifying,
+            "`{tool}` has no prompt-type Stop hook → llm degrades to human, \
+             so COMPLETED must park in Verifying instead of publishing"
+        );
+
+        engine.shutdown(GRACE).await;
+        let notes = read_log(&notify_log);
+        assert!(
+            notes
+                .iter()
+                .any(|n| n["params"]["event"] == "verification_pending"),
+            "`{tool}`: the degraded path must still ask a human to verify: {notes:?}"
+        );
+        assert!(
+            !notes.iter().any(|n| n["params"]["event"] == "done"),
+            "`{tool}`: nothing may be published before verification: {notes:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
 #[tokio::test]
 async fn completed_human_waits_for_verify_then_pass_reaches_done() {
     let base = scratch("hook_human_verify");

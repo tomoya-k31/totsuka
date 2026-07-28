@@ -307,10 +307,11 @@ where
         }
 
         // verification = llm needs Claude's prompt-type Stop hook (#196):
-        // a workflow pinned to a non-claude tool would silently degrade to
-        // human verification at dispatch; an unpinned workflow whose
-        // repo/global default could resolve to a non-claude tool is fragile —
-        // suggest the explicit pin so the constraint is statically guaranteed.
+        // a workflow pinned to a non-claude tool degrades to human
+        // verification when the completion arrives (`Engine::verification_for`,
+        // #301); an unpinned workflow whose repo/global default could resolve
+        // to a non-claude tool is fragile — suggest the explicit pin so the
+        // constraint is statically guaranteed.
         if wf.verification == VerificationMode::Llm {
             match &wf.tool {
                 Some(tool) => {
@@ -321,7 +322,7 @@ where
                         findings.push(Finding {
                             severity: FindingSeverity::Warning,
                             message: format!(
-                                "workflow `{}` uses verification = llm but pins tool `{}` (non-claude kind) → llm verification needs Claude's prompt-type Stop hook and will fall back to human at dispatch; pin a claude-kind tool or set verification = \"human\"",
+                                "workflow `{}` uses verification = llm but pins tool `{}` (non-claude kind) → llm verification needs Claude's prompt-type Stop hook, so completions will fall back to human verification (the task parks in Verifying awaiting `totsuka task verify`); pin a claude-kind tool or set verification = \"human\"",
                                 wf.name, tool
                             ),
                         });
