@@ -154,6 +154,7 @@ fn settings_with(
         one_shot_grace: Duration::ZERO,
         tools: orchestrator_core::tool::builtin_registry(),
         default_tool: "claude".to_string(),
+        prompts: Default::default(),
         hook: Some(hook),
     }
 }

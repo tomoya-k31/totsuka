@@ -174,6 +174,10 @@ pub struct EngineSettings {
     /// Global default tool name (#196) when neither the workflow nor the
     /// selected repository picks one. `"claude"` unless `default_tool` is set.
     pub default_tool: String,
+    /// Resolved prompt sets (#314): built-in defaults overlaid with
+    /// `[prompts]` and each workflow's `prompts` / legacy `rubric`. Resolved
+    /// once here so dispatch never re-reads config per task.
+    pub prompts: crate::prompts::PromptSet,
     /// Claude Code hook runtime (#131/#138): receiver endpoint, auth token,
     /// spool dir, per-workflow `--settings` paths, and the escalation
     /// threshold. A normal `totsuka run` always sets this (the CLI builds it
@@ -289,6 +293,7 @@ pub fn settings_from_config(
             .default_tool
             .clone()
             .unwrap_or_else(|| "claude".to_string()),
+        prompts: crate::prompts::PromptSet::from_config(cfg),
         // The hook runtime needs the resolved token, expanded paths, and the
         // per-workflow settings files — all CLI-level (secret store, `Paths`,
         // the `hooks` module). `run_cmd` fills this in before building the
@@ -1429,7 +1434,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     prompt_context.push_str(instructions);
                     prompt_context.push_str("\n\n");
                 }
-                prompt_context.push_str(crate::prompts::Prompts::builtin().marker_self_report());
+                prompt_context.push_str(
+                    self.settings
+                        .prompts
+                        .for_workflow(&record.workflow)
+                        .marker_self_report(),
+                );
                 // Context routing per tool capability (#196 Phase 3): a tool
                 // without invisible injection (opencode — no UserPromptSubmit
                 // additionalContext channel) gets the same instructions +
@@ -2874,6 +2884,7 @@ plan_cleanup = "keep_28d"
             one_shot_grace: ONE_SHOT_GRACE,
             tools: crate::tool::builtin_registry(),
             default_tool: "claude".to_string(),
+            prompts: Default::default(),
             hook: None,
         };
         Engine::new(

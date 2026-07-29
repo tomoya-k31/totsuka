@@ -22,10 +22,12 @@
 //!
 //! [`defaults.toml`]: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/prompts/defaults.toml
 
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use serde::Deserialize;
 
+use crate::config::{PromptsConfig, RootConfig, WorkflowConfig, WorkflowPromptsConfig};
 use crate::domain::signal::{MARKER_COMPLETED, MARKER_FAILED, MARKER_NEEDS_INPUT};
 use crate::template;
 
@@ -160,6 +162,120 @@ impl Prompts {
         }
         .finish()
     }
+
+    /// Apply the global `[prompts]` table. Every `None` leaves the current
+    /// value, so this composes with the workflow layer below.
+    fn overlay_global(mut self, o: &PromptsConfig) -> Self {
+        set(&mut self.marker_self_report, &o.marker_self_report);
+        set(&mut self.verification_rubric, &o.verification_rubric);
+        set(
+            &mut self.verification_background_exemption,
+            &o.verification_background_exemption,
+        );
+        set(
+            &mut self.verification_marker_convention,
+            &o.verification_marker_convention,
+        );
+        set(&mut self.verification_prompt, &o.verification_prompt);
+        self
+    }
+
+    /// Apply a `[[workflows]].prompts` table — the strongest layer.
+    fn overlay_workflow(mut self, o: &WorkflowPromptsConfig) -> Self {
+        set(&mut self.marker_self_report, &o.marker_self_report);
+        set(&mut self.verification_rubric, &o.verification_rubric);
+        set(
+            &mut self.verification_background_exemption,
+            &o.verification_background_exemption,
+        );
+        set(
+            &mut self.verification_marker_convention,
+            &o.verification_marker_convention,
+        );
+        set(&mut self.verification_prompt, &o.verification_prompt);
+        self
+    }
+
+    /// Global scope: built-ins overlaid with `[prompts]`.
+    pub fn resolve(cfg: &RootConfig) -> Prompts {
+        Self::builtin()
+            .clone()
+            .overlay_global(&cfg.prompts)
+            .finish()
+    }
+
+    /// Workflow scope. Precedence, strongest first:
+    ///
+    /// 1. `[[workflows]].prompts.*`
+    /// 2. `[[workflows]].rubric` (legacy, rubric leaf only)
+    /// 3. `[prompts].*`
+    /// 4. the built-in default
+    ///
+    /// 2 beating 3 is deliberate — both are about this workflow, so ordering it
+    /// the other way would mean adding a global `verification_rubric` silently
+    /// overrides every existing per-workflow `rubric`.
+    pub fn resolve_for(cfg: &RootConfig, wf: &WorkflowConfig) -> Prompts {
+        let mut p = Self::builtin().clone().overlay_global(&cfg.prompts);
+        if let Some(rubric) = wf.rubric.as_deref() {
+            p.verification_rubric = rubric.to_string();
+        }
+        p.overlay_workflow(&wf.prompts).finish()
+    }
+}
+
+/// Overwrite `dst` when the override is present, leave it otherwise.
+fn set(dst: &mut String, src: &Option<String>) {
+    if let Some(v) = src {
+        dst.clone_from(v);
+    }
+}
+
+/// Every workflow's resolved prompt set, plus the global one (#314).
+///
+/// Built once at startup and carried on
+/// [`EngineSettings`](crate::run::EngineSettings), mirroring the resolved
+/// `tools` registry: dispatch looks its workflow up here instead of
+/// re-resolving config per task.
+#[derive(Debug, Clone)]
+pub struct PromptSet {
+    global: Prompts,
+    by_workflow: HashMap<String, Prompts>,
+}
+
+impl Default for PromptSet {
+    fn default() -> Self {
+        Self {
+            global: Prompts::builtin().clone(),
+            by_workflow: HashMap::new(),
+        }
+    }
+}
+
+impl PromptSet {
+    /// Resolve the global set and one set per configured workflow.
+    pub fn from_config(cfg: &RootConfig) -> Self {
+        Self {
+            global: Prompts::resolve(cfg),
+            by_workflow: cfg
+                .workflows
+                .iter()
+                .map(|wf| (wf.name.clone(), Prompts::resolve_for(cfg, wf)))
+                .collect(),
+        }
+    }
+
+    /// The set for `name`, falling back to the global set when the workflow is
+    /// unknown. Never panics: a task can outlive the workflow that created it
+    /// (dispatch already tolerates that), and losing the marker convention
+    /// there would strand the task instead of merely mis-wording a prompt.
+    pub fn for_workflow(&self, name: &str) -> &Prompts {
+        self.by_workflow.get(name).unwrap_or(&self.global)
+    }
+
+    /// The global set (`[prompts]` applied, no workflow layer).
+    pub fn global(&self) -> &Prompts {
+        &self.global
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +364,138 @@ mod tests {
         assert!(
             rendered.contains(MARKER_COMPLETED),
             "the marker convention survives a custom rubric"
+        );
+    }
+
+    /// One workflow, with whatever `[prompts]` / workflow keys the caller adds.
+    fn cfg(extra: &str) -> RootConfig {
+        RootConfig::from_toml_str(&format!(
+            r#"
+[[workflows]]
+name = "reply"
+source = "slack"
+mode = "implement"
+agent = "herdr"
+output = "source"
+verification = "llm"
+{extra}
+"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn workflow_prompts_override_global_override_defaults() {
+        // Layer 4 only.
+        let c = cfg("");
+        assert_eq!(
+            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
+            Prompts::builtin().verification_rubric()
+        );
+
+        // Layer 3: `[prompts]` beats the built-in.
+        let c = cfg("\n[prompts]\nverification_rubric = \"グローバル\"\n");
+        assert_eq!(
+            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
+            "グローバル"
+        );
+        assert_eq!(Prompts::resolve(&c).verification_rubric(), "グローバル");
+
+        // Layer 1: the workflow table beats `[prompts]`.
+        let c = cfg(
+            "  [workflows.prompts]\n  verification_rubric = \"ワークフロー\"\n\n[prompts]\nverification_rubric = \"グローバル\"\n",
+        );
+        assert_eq!(
+            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
+            "ワークフロー"
+        );
+        // …and the global set is untouched by the workflow layer.
+        assert_eq!(Prompts::resolve(&c).verification_rubric(), "グローバル");
+    }
+
+    #[test]
+    fn legacy_rubric_still_feeds_the_verification_prompt() {
+        let c = cfg("rubric = \"レガシー\"\n");
+        let p = Prompts::resolve_for(&c, &c.workflows[0]);
+        assert_eq!(p.verification_rubric(), "レガシー");
+        // Identical to what `with_rubric` produced before #314.
+        assert_eq!(
+            p.verification_prompt(),
+            Prompts::builtin()
+                .with_rubric("レガシー")
+                .verification_prompt()
+        );
+    }
+
+    #[test]
+    fn legacy_rubric_beats_the_global_key_but_loses_to_the_workflow_key() {
+        // Both are workflow-scoped, so a newly-added global key must not
+        // silently override an existing per-workflow `rubric`.
+        let c = cfg("rubric = \"レガシー\"\n\n[prompts]\nverification_rubric = \"グローバル\"\n");
+        assert_eq!(
+            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
+            "レガシー"
+        );
+
+        // The new workflow key is the strongest layer.
+        let c = cfg(
+            "rubric = \"レガシー\"\n  [workflows.prompts]\n  verification_rubric = \"ワークフロー\"\n",
+        );
+        assert_eq!(
+            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
+            "ワークフロー"
+        );
+    }
+
+    #[test]
+    fn every_key_is_overridable_at_both_scopes() {
+        let keys = "\
+marker_self_report = \"A {marker_completed}\"
+verification_rubric = \"B\"
+verification_background_exemption = \"C\"
+verification_marker_convention = \"D {marker_failed}\"
+verification_prompt = \"{rubric}|{background_exemption}|{marker_convention}\"
+";
+        for (scope, extra) in [
+            ("global", format!("\n[prompts]\n{keys}")),
+            (
+                "workflow",
+                format!("  [workflows.prompts]\n{}", keys.replace('\n', "\n  ")),
+            ),
+        ] {
+            let c = cfg(&extra);
+            let p = Prompts::resolve_for(&c, &c.workflows[0]);
+            assert_eq!(
+                p.marker_self_report(),
+                format!("A {MARKER_COMPLETED}"),
+                "marker_self_report at {scope} scope"
+            );
+            assert_eq!(
+                p.verification_prompt(),
+                format!("B|C|D {MARKER_FAILED}"),
+                "verification_prompt at {scope} scope"
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_set_falls_back_to_global_for_an_unknown_workflow() {
+        let c = cfg("\n[prompts]\nverification_rubric = \"グローバル\"\n");
+        let set = PromptSet::from_config(&c);
+        assert_eq!(
+            set.for_workflow("reply").verification_rubric(),
+            "グローバル"
+        );
+        // A task can outlive its workflow; that must not panic or lose the
+        // marker convention.
+        assert_eq!(
+            set.for_workflow("消えた").verification_rubric(),
+            "グローバル"
+        );
+        assert!(
+            set.for_workflow("消えた")
+                .marker_self_report()
+                .contains(MARKER_COMPLETED)
         );
     }
 

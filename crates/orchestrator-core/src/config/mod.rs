@@ -26,8 +26,9 @@ pub use schema::{
     CURRENT_SCHEMA_VERSION, CleanupPolicyConfig, CleanupPolicyName, ConfigError,
     DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_POLL_INTERVAL_SECS,
     DEFAULT_WORKFLOW_TIMEOUT_SECS, HooksConfig, LlmConfig, LogSettings, OutputPolicy,
-    OutputSettings, PluginConfig, PluginKind, RepositoryConfig, RootConfig, ToolConfig,
-    VerificationMode, WorkflowConfig, WorkflowMode, WorktreeConfig,
+    OutputSettings, PluginConfig, PluginKind, PromptsConfig, RepositoryConfig, RootConfig,
+    ToolConfig, VerificationMode, WorkflowConfig, WorkflowMode, WorkflowPromptsConfig,
+    WorktreeConfig,
 };
 pub use validate::{
     Finding, FindingSeverity, ValidationError, has_errors, validate, validate_static,
