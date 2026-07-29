@@ -12,6 +12,7 @@ use plugin_protocol::manifest::OutputCapability;
 use super::resolve::expand_path;
 use super::schema::{CURRENT_SCHEMA_VERSION, PluginKind, RootConfig, VerificationMode};
 use crate::domain::workflow::{self, Severity, Workflow};
+use crate::template;
 use crate::tool::{ToolKind, ToolProfile};
 
 /// A single static-validation failure. `Display` gives "cause + next action".
@@ -432,24 +433,13 @@ fn check_plugin_ref(
 /// part of `${...}` expansion (handled at resolve time), not a worktree
 /// placeholder.
 fn check_worktree_placeholders(referrer: &str, template: &str, errors: &mut Vec<ValidationError>) {
-    let bytes = template.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'{'
-            && (i == 0 || bytes[i - 1] != b'$')
-            && let Some(rel) = template[i + 1..].find('}')
-        {
-            let name = &template[i + 1..i + 1 + rel];
-            if !ALLOWED_WORKTREE_PLACEHOLDERS.contains(&name) {
-                errors.push(ValidationError::UnknownWorktreePlaceholder {
-                    referrer: referrer.to_string(),
-                    placeholder: name.to_string(),
-                });
-            }
-            i = i + 1 + rel + 1;
-            continue;
+    for name in template::scan(template, true) {
+        if !ALLOWED_WORKTREE_PLACEHOLDERS.contains(&name) {
+            errors.push(ValidationError::UnknownWorktreePlaceholder {
+                referrer: referrer.to_string(),
+                placeholder: name.to_string(),
+            });
         }
-        i += 1;
     }
 }
 
