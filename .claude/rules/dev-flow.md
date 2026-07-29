@@ -96,6 +96,16 @@ post-PR you still monitor all checks that report on your PR.
     (`` ` #` ``, `` `: ` ``, the pane-label prefix `` `totsuka ` ``).
 - It is a **local check only** — there is no CI job for it, so nothing else will
   catch a Markdown regression if you skip it.
+- Run it **after resolving a conflict in any `*.md`**, not just after authoring
+  one. `rumdl` is what catches a leftover conflict marker; `okf-lint` does not
+  look for markers at all, so a docs-only conflict can be committed with one
+  still in it and pass every other gate. Which rule fires depends on what
+  surrounds the marker — `MD032` when it sits directly before a list, but
+  `MD003`/`MD022` when it sits between plain paragraphs (a lone `=======` parses
+  as a setext `H2` underline). Do not pattern-match on the rule id; treat *any*
+  unexpected finding in a file you just resolved as "look for a marker". A
+  `git grep` for all three forms (`<<<<<<<`, `=======`, `>>>>>>>`) across the
+  worktree is the cheap belt-and-braces check.
 
 **Docs checks** — when `docs/**` changed:
 
@@ -196,6 +206,21 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
          prompt: "Run /code-review:code-review --comment on PR <n> and report the findings")
    ```
 
+   **Why this runs at all when CI is green and Copilot has reviewed.** The
+   three gates fail differently, and the gap `/code-review` covers is the
+   repo's own written obligations — nothing in CI encodes them. The concrete
+   case: PR #320 commit `5a8c465` added a new `pub mod` to
+   `crates/orchestrator-core/src/lib.rs` with no row added to
+   `docs/components/orchestrator-core.md`. CI was green on it and Copilot
+   reviewed it and reported no comments; `/code-review` is what found the docs
+   obligation, and `6c4f8d7` added the row. **Check the commits, not
+   `gh pr diff 320`** — the merged diff contains the fix, so the violation is
+   only visible in the interim state. `okf-lint` cannot catch this by
+   construction: it validates the docs that exist and has no way to know a
+   module was added. Do not reason "CI is green, so the diff is fine"; CI
+   answers "does it build and pass tests", which is a strictly smaller
+   question.
+
 6. **Vet each `/code-review` finding the same way** (valid vs mistaken).
 
 7. **Merge only on explicit instruction; otherwise wait.**
@@ -216,6 +241,17 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
   PR**; re-run it only when a later commit adds **substantive new code / logic**
   (not doc, wording, or trivial diff fixes). CI + Copilot + the human reviewer
   cover the small fix commits, and a full `/code-review` pass is expensive.
+  Explicitly **not** re-run triggers: a fix commit answering a finding, a
+  force-push that only replays existing work, and **a merge conflict plus a
+  mechanical rebase resolving it** (conflicts resolved by keeping both sides or
+  taking one side verbatim) — a conflict says `main` moved, not that the diff
+  became riskier. The **carve-out is load-bearing**: if the conflict resolution
+  itself changed behavior, or the force-push carries substantive new logic, it
+  is a substantive commit and the rule above applies. (This restates Conflict
+  check & resolution below, because that is not where anyone looks when
+  deciding whether to re-run. Keep the carve-out in both copies — an
+  unconditional version of this rule was already shipped once and corrected
+  after review, in `29161af`.)
 
 ### If CI is red
 
@@ -256,7 +292,9 @@ GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
 - After the rebase completes, re-run the **scoped local checks** for the union
   of the branch's diff and the conflicted files (Rust set if Rust files are
   involved — the branch's code has never been built against the new `main`),
-  plus `bash scripts/okf-lint.sh docs` if `docs/**` was conflicted.
+  plus `bash scripts/okf-lint.sh docs` if `docs/**` was conflicted and
+  `rumdl check .` if **any** `*.md` was conflicted (the marker check — see
+  Markdown lint above).
 - Only when those checks pass, push:
   `git push --force-with-lease` (own feature branch only → git-conventions).
 - A force-push re-triggers CI — re-monitor it (steps 1 & 3). Copilot does not
