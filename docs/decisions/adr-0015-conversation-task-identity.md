@@ -21,7 +21,7 @@ sources:
 
 Accepted — 2026-07-26（[#242](https://github.com/tomoya-k31/totsuka/issues/242)。子 issue #254〜#265 で実装完了）
 
-# 140（エピック #131 の設計判断 D-10）の「追いメンションは新タスク + `thread_key` 相関」を **supersede** する。同方式は protocol 0.1.3〜0.2.4 に存在し、0.3.0（#264）で撤去した。
+#140（エピック #131 の設計判断 D-10）の「追いメンションは新タスク + `thread_key` 相関」を **supersede** する。同方式は protocol 0.1.3〜0.2.4 に存在し、0.3.0（#264）で撤去した。
 
 # Context
 
@@ -38,7 +38,7 @@ ERROR dispatch failed: herdr error (agent_not_found): agent target w39:p2 not fo
 - **Claude Code はセッションを cwd 単位で保存する**（`~/.claude/projects/<cwd をエンコードしたディレクトリ>/<id>.jsonl`）
 - **totsuka は 1 タスク = 1 worktree**
 
-# 140 は「追いメンションは別タスクだが、worktree は新規作成しつつ**セッションだけ使い回す**」という設計だった（D-10）。しかし同一スレッドの 2 通目は必ず別ディレクトリになるため、`claude --resume <id>` はセッションを見つけられない。実験で確定させた
+#140 は「追いメンションは別タスクだが、worktree は新規作成しつつ**セッションだけ使い回す**」という設計だった（D-10）。しかし同一スレッドの 2 通目は必ず別ディレクトリになるため、`claude --resume <id>` はセッションを見つけられない。実験で確定させた:
 
 ```console
 $ cd <task 16 の worktree> && claude --resume 6e3515d5-...

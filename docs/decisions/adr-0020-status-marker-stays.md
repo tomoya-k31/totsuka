@@ -63,7 +63,7 @@ Accepted — 2026-07-28（[#159](https://github.com/tomoya-k31/totsuka/issues/15
 
 ### 1. マーカーはツール非依存の唯一の完了信号になった（[#196](https://github.com/tomoya-k31/totsuka/issues/196) / [ADR-0014](/decisions/adr-0014-tool-abstraction.md)）
 
-# 159 は Claude Code 1 ツールを前提に書かれているが、現在は 3 ツールが同じマーカー規約を共有する。
+#159 は Claude Code 1 ツールを前提に書かれているが、現在は 3 ツールが同じマーカー規約を共有する。
 
 **フック機構は 3 者でまったく異なるのに、マーカーだけが共通**である:
 
@@ -77,7 +77,7 @@ Accepted — 2026-07-28（[#159](https://github.com/tomoya-k31/totsuka/issues/15
 これは偶然ではなく、この規約が生き残っている理由そのものである。廃止するなら
 「ツールごとに別の完了信号を作る」ことになり、コストは #159 の見積もりの 3 倍側に振れる。
 
-## 2. `verification = "llm"` は実質 Claude 専用で、しかも縮退が実装されていない
+### 2. `verification = "llm"` は実質 Claude 専用で、しかも縮退が実装されていない
 
 `ToolCapabilities.prompt_verification` は Claude だけ `true`、Codex / OpenCode は `false`
 （`tool/mod.rs`）。`config/validate.rs` は非 claude ツールを pin した `verification = "llm"` に対し
@@ -100,7 +100,7 @@ state.db は #159 起票時の v3 から **v7** まで進んだ（v4 = `tool_ses
 v5 = `task_messages` 新設、v6 = v5 以前のタスクへの台帳バックフィル、v7 = `tasks.thread_key` DROP。
 `schema_migrations.applied_by` はスキーマ版数を上げない bootstrap 側の追加なので、この数には入らない）。
 
-# 159 が「v4」と書いている冪等キーの再設計は、実際には **v8 相当のテーブル再構築**になる。
+#159 が「v4」と書いている冪等キーの再設計は、実際には **v8 相当のテーブル再構築**になる。
 
 また [#242](https://github.com/tomoya-k31/totsuka/issues/242) / [ADR-0015](/decisions/adr-0015-conversation-task-identity.md) で
 dispatch がメッセージ駆動になり、終端が可逆（`Reopen`）になったため、

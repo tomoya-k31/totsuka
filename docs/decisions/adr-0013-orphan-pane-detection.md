@@ -13,7 +13,7 @@ Accepted — 2026-07-23（[#211](https://github.com/tomoya-k31/totsuka/issues/21
 
 # Context
 
-# 210（ADR-0010）で「worktree を削除するときに pane も閉じる」連動を導入したが、この連動は破れる経路が複数ある: 運用ガイドが案内する手動 `git worktree remove`（totsuka が関与せず pane が残る）、`session/release` の同一性検証不一致による skip（degrade 規則）、プラグインのクラッシュ、#210 以前に完了したタスクの残骸（実機で複数確認済み）。
+#210（ADR-0010）で「worktree を削除するときに pane も閉じる」連動を導入したが、この連動は破れる経路が複数ある: 運用ガイドが案内する手動 `git worktree remove`（totsuka が関与せず pane が残る）、`session/release` の同一性検証不一致による skip（degrade 規則）、プラグインのクラッシュ、#210 以前に完了したタスクの残骸（実機で複数確認済み）。
 
 worktree 側には `doctor` の `check_orphans`（F-24）という受け皿があるが、pane には無い。そして worktree と違い「ファイルシステム側の真実」に相当する列挙手段がプロトコルに存在しなかった — orchestrator は agent プラグインに「持っている pane を全部教えろ」と聞けない。一方、調査の結果 herdr 自体は `pane.list` / `workspace.list` を公開していることが確認済みで（[herdr-socket-api](/references/herdr-socket-api.md)、0.7.4 実機）、プラグインが呼んでいないだけだった。
 

@@ -260,14 +260,25 @@ TMPOUT="${TMPDIR:-/tmp}/okf-migrate-out.$$"
 TMPERR="${TMPDIR:-/tmp}/okf-migrate-err.$$"
 trap 'rm -f "$TMPOUT" "$TMPERR"' EXIT INT TERM
 
-# `find | while` はサブシェルになりカウンタが失われるため、一覧を変数に取る
-FILES="$(find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -type f -name '*.md' -print | sort)"
+# `find | while` はパイプでサブシェルになりカウンタが失われる。一覧を変数に入れて
+# `for` で回すとパスの空白で単語分割されるので、一時ファイル経由の `while read` に
+# する（リダイレクトなのでサブシェルにならず、カウンタもパスの空白も両立する）。
+TMPLIST="${TMPDIR:-/tmp}/okf-migrate-list.$$"
+trap 'rm -f "$TMPOUT" "$TMPERR" "$TMPLIST"' EXIT INT TERM
+find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -type f -name '*.md' -print |
+  sort >"$TMPLIST"
 
-for file in $FILES; do
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
   migrate_one "$file" >"$TMPOUT" 2>"$TMPERR"
   rc=$?
 
-  grep '^WARN' "$TMPERR" | sed 's/^WARN	/WARN  /' && WARNED=1
+  # `grep | sed` の終了状態は sed のもので、入力が空でも 0 になる。`&&` で繋ぐと
+  # WARN が 1 件も無くても WARNED=1 が立つため、有無の判定は grep -q で行う。
+  if grep -q '^WARN' "$TMPERR"; then
+    sed -n 's/^WARN	/WARN  /p' "$TMPERR"
+    WARNED=1
+  fi
 
   if [ "$rc" -eq 3 ]; then
     continue # frontmatter を持たない予約ファイル等
@@ -292,7 +303,7 @@ for file in $FILES; do
     cat "$TMPOUT" >"$file"
     echo "migrated: $file"
   fi
-done
+done <"$TMPLIST"
 
 echo ""
 echo "okf-migrate: ${CHANGED} file(s) $([ "$DRY_RUN" -eq 1 ] && echo 'would change' || echo 'changed'), ${FAILED} failure(s)"

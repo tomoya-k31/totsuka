@@ -39,7 +39,7 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 
 `crates/orchestrator-core/src/terminal.rs` の `safe(&str) -> Cow<str>` が唯一の実装。
 
-# 280 では CLI の `common.rs` に置いていたが、**印字側が 2 クレートに跨がる**ため
+#280 では CLI の `common.rs` に置いていたが、**印字側が 2 クレートに跨がる**ため
 
 （[orchestrator-cli](/components/orchestrator-cli.md) の human 出力と
 [orchestrator-core](/components/orchestrator-core.md) 自身の stderr ログ層）、#297 で core へ移した。
