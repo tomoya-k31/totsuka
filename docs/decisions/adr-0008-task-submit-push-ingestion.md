@@ -3,8 +3,18 @@ type: Decision
 title: ADR-0008 task/submit による push 型タスク取り込みと tasks/fetch の段階的廃止
 description: プラグイン→Orchestrator の push RPC task/submit（persist-before-ack・冪等）を protocol 0.1.6 で追加し、tasks/fetch を deprecated 化して 0.2.0 で削除する決定。ADR-0003 の「バッファ + 短周期 tasks/fetch」判断を amend し、ポーリング型ソースは plugin-sdk の PollSource で自前タイマー化する。
 tags: [plugin, protocol, task-source, push, ingestion, architecture]
-timestamp: 2026-07-20T00:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-20T00:00:00Z }
+status: stable
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/182
+    title: "Issue #182 エピック"
+  - id: ref-2
+    resource: /decisions/adr-0003-slack-reply-assistant.md
+    title: "ADR-0003 Slack メンション代理返信アシスタントの設計"
+  - id: ref-3
+    resource: /components/plugin-protocol.md
+    title: "plugin-protocol コンポーネント"
 ---
 
 # Status
@@ -67,9 +77,3 @@ stdio runtime（単一 writer タスクによる行アトミック化 — プラ
 - 0.2.0 でサードパーティの `^0.1` プラグインは起動拒否される（意図的・F-54）。移行手順は [plugin-dev-guide](/development/plugin-dev-guide.md) に記載する。
 - タスク取り込みの順序性は per-source FIFO（単一 channel → 単一イベントループ）となり、バッファ drain 方式より弱くならない。
 - `--dry-run` は push source に対しては原理的にプレビュー対象がない（fetch する対象が無い）ため、常に空の結果を返す no-op になった。
-
-# Citations
-
-[1] [Issue #182 エピック](https://github.com/tomoya-k31/totsuka/issues/182)
-[2] [ADR-0003 Slack メンション代理返信アシスタントの設計](/decisions/adr-0003-slack-reply-assistant.md)
-[3] [plugin-protocol コンポーネント](/components/plugin-protocol.md)

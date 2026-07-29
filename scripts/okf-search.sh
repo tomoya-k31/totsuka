@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# okf-search.sh — OKF frontmatter フィルタ検索（依存: bash 3.2+, POSIX awk/grep/sed のみ）
+# okf-search.sh — OKF v0.2 frontmatter フィルタ検索（依存: bash 3.2+, POSIX awk/grep/sed のみ）
 #
-# concept の本文ではなく frontmatter（type/resource/tags/timestamp/status/owner 等）を
+# concept の本文ではなく frontmatter（type/resource/tags/status/generated/verified 等）を
 # クエリキーとして絞り込む。本文の全文検索は行わない — 絞り込んだファイル一覧を
 # 呼び出し元（Claude / okf-search スキル）が読み、実際の抽出・要約は AI 側で行う設計。
 #
@@ -10,31 +10,45 @@
 #
 # フィルタ（すべて AND。未指定のキーはフィルタしない）:
 #   --type VALUE          type の完全一致
-#   --status VALUE        status の完全一致
-#   --owner VALUE         owner の完全一致
+#   --status VALUE        status の完全一致（v0.2 §5.4: draft | stable | deprecated）
+#   --owner VALUE         owner の完全一致（本バンドルの拡張キー）
 #   --resource VALUE      resource の完全一致
 #   --resource-like TEXT  resource の部分一致
 #   --tag TAG             tags にこのタグを含む（繰り返し指定 or カンマ区切りで複数、AND）
-#   --field KEY=VALUE     任意の frontmatter キーの完全一致（繰り返し指定可、AND）
-#   --after TIMESTAMP     timestamp >= TIMESTAMP（ISO 8601 文字列比較）
-#   --before TIMESTAMP    timestamp <= TIMESTAMP（ISO 8601 文字列比較）
+#   --field KEY=VALUE     任意のトップレベル frontmatter キーの完全一致（繰り返し可、AND）
+#   --after TIMESTAMP     generated.at >= TIMESTAMP（ISO 8601 文字列比較）
+#   --before TIMESTAMP    generated.at <= TIMESTAMP（ISO 8601 文字列比較）
+#   --generated-by ACTOR  generated.by の完全一致（§7 の actor 記法）
+#   --trust-tier TIER     verified から導出した信頼段階 (§5.3):
+#                         unverified | machine-confirmed | human-reviewed
+#   --stale               stale_after を過ぎている concept だけ (§5.5)
+#   --source-like TEXT    sources[].resource のいずれかに部分一致 (§5.1)
 #
 # 出力オプション:
 #   --paths-only          パスのみを1行1件で出力（xargs 等にパイプしやすい）
-#   --list-values FIELD   FIELD（tags 含む）の distinct 値と件数の一覧を出力し、他のフィルタは無視する
+#   --list-values FIELD   FIELD の distinct 値と件数を出力し、他のフィルタは無視する。
+#                         tags のほか擬似フィールド trust / generated.by / generated.at /
+#                         sources.resource も指定できる
 #
 # 例:
 #   scripts/okf-search.sh --type Decision
 #   scripts/okf-search.sh --status deprecated --paths-only
 #   scripts/okf-search.sh --tag okf --after 2026-01-01
-#   scripts/okf-search.sh --field owner=platform-team
-#   scripts/okf-search.sh --list-values type
+#   scripts/okf-search.sh --trust-tier unverified --type Reference
+#   scripts/okf-search.sh --stale
+#   scripts/okf-search.sh --source-like herdr.dev
+#   scripts/okf-search.sh --list-values trust
+#
+# v0.1 互換: `generated` が無く旧 `timestamp` だけを持つ concept は、--after/--before と
+# 出力列で timestamp を generated.at の代わりに読む（SPEC §13.1 が許すフォールバック）。
 #
 # 終了コード: マッチ0件でも 0。引数エラー時のみ 2。bundleDir が存在しない場合は 1。
 set -u
 
+# シェバン直後の連続するコメントブロックをそのままヘルプとして出す
+# （行番号を焼き込むと説明を足すたびにずれるため）
 usage() {
-  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+  awk 'NR>1 && /^#/ { sub(/^#[ ]?/, ""); print; next } NR>1 { exit }' "$0"
 }
 
 BUNDLE=""
@@ -45,6 +59,10 @@ OPT_RESOURCE=""
 OPT_RESOURCE_LIKE=""
 OPT_AFTER=""
 OPT_BEFORE=""
+OPT_GENERATED_BY=""
+OPT_TRUST=""
+OPT_SOURCE_LIKE=""
+OPT_STALE=0
 TAGS_REQ=""
 FIELDS_REQ=""
 PATHS_ONLY=0
@@ -80,6 +98,29 @@ while [ $# -gt 0 ]; do
   --before)
     OPT_BEFORE="$2"
     shift 2
+    ;;
+  --generated-by)
+    OPT_GENERATED_BY="$2"
+    shift 2
+    ;;
+  --trust-tier)
+    case "$2" in
+    unverified | machine-confirmed | human-reviewed) ;;
+    *)
+      echo "okf-search: --trust-tier は unverified | machine-confirmed | human-reviewed のいずれか: $2" >&2
+      exit 2
+      ;;
+    esac
+    OPT_TRUST="$2"
+    shift 2
+    ;;
+  --source-like)
+    OPT_SOURCE_LIKE="$2"
+    shift 2
+    ;;
+  --stale)
+    OPT_STALE=1
+    shift
     ;;
   --tag)
     old_ifs="$IFS"
@@ -137,11 +178,49 @@ BUNDLE="${BUNDLE:-docs}"
 }
 BUNDLE="${BUNDLE%/}"
 
+TODAY="$(date +%Y-%m-%d)"
+
 AWK_PROG="/tmp/okf-search-filter.$$.awk"
 RESULTS="/tmp/okf-search-results.$$"
 trap 'rm -f "$AWK_PROG" "$RESULTS"' EXIT
 
 cat >"$AWK_PROG" <<'AWK'
+function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+
+# 引用符は YAML の構文であって値の一部ではない（`: ` や ` #` を含む
+# description は引用が必須 — docs/CLAUDE.md）。外してから比較・表示する。
+function unquote(s,   n) {
+  n = length(s)
+  if (n >= 2 && substr(s, 1, 1) == "\"" && substr(s, n, 1) == "\"") {
+    s = substr(s, 2, n - 2)
+    gsub(/\\"/, "\"", s); gsub(/\\\\/, "\\", s)
+  } else if (n >= 2 && substr(s, 1, 1) == "'" && substr(s, n, 1) == "'") {
+    s = substr(s, 2, n - 2)
+    gsub(/''/, "'", s)
+  }
+  return s
+}
+
+# 1 行の中から `key:` の値を取り出す。フローマッピング内 (`{ by: x, at: y }`)
+# とブロック行 (`    by: x`) の両方に効く。無ければ ""。
+function kv(line, key,   re, v, p) {
+  re = "(^|[ \t{,])" key ":[ \t]"
+  if (!match(line, re)) return ""
+  v = substr(line, RSTART + RLENGTH)
+  # フロー内なら次の `,` / `}` まで、ブロック行なら行末まで
+  p = 0
+  if (match(v, /[,}]/)) p = RSTART
+  if (p > 0) v = substr(v, 1, p - 1)
+  return unquote(trim(v))
+}
+
+# §5.3 の信頼段階を verified から導出する（保存はしない）
+function trust_tier(   i) {
+  if (nver == 0) return "unverified"
+  for (i = 1; i <= nver; i++) if (ver_by[i] ~ /^human:/) return "human-reviewed"
+  return "machine-confirmed"
+}
+
 BEGIN {
   state = 0
   ntagreq = 0
@@ -149,21 +228,29 @@ BEGIN {
   nfieldreq = 0
   if (fields_req != "") nfieldreq = split(fields_req, fieldreq_arr, "\037")
 }
+
 NR == 1 {
   if ($0 == "---") { state = 1; next }
   exit 1
 }
+
 state == 1 && $0 == "---" {
+  # `generated` が無ければ v0.1 の `timestamp` にフォールバックする (§13.1)
+  gen_at = (gen_at != "") ? gen_at : fmval["timestamp"]
+  tier = trust_tier()
+
   if (list_field != "") {
     if (list_field == "tags") {
-      tagstr = fmval["tags"]
-      gsub(/^\[/, "", tagstr); gsub(/\]$/, "", tagstr)
-      ntags = split(tagstr, tagarr, ",")
-      for (i = 1; i <= ntags; i++) {
-        t = tagarr[i]
-        gsub(/^[ \t]+|[ \t]+$/, "", t)
-        if (t != "") print t
-      }
+      ntags = split(tagstr_raw, tagarr, ",")
+      for (i = 1; i <= ntags; i++) { t = trim(tagarr[i]); if (t != "") print t }
+    } else if (list_field == "trust") {
+      print tier
+    } else if (list_field == "generated.by") {
+      if (gen_by != "") print gen_by
+    } else if (list_field == "generated.at") {
+      if (gen_at != "") print gen_at
+    } else if (list_field == "sources.resource") {
+      for (i = 1; i <= nsrc; i++) if (src_res[i] != "") print src_res[i]
     } else if (fmval[list_field] != "") {
       print fmval[list_field]
     }
@@ -175,17 +262,20 @@ state == 1 && $0 == "---" {
   if (owner_f != "" && fmval["owner"] != owner_f) exit 1
   if (resource_f != "" && fmval["resource"] != resource_f) exit 1
   if (resource_like != "" && index(fmval["resource"], resource_like) == 0) exit 1
-  if (after_f != "" && (fmval["timestamp"] == "" || fmval["timestamp"] < after_f)) exit 1
-  if (before_f != "" && (fmval["timestamp"] == "" || fmval["timestamp"] > before_f)) exit 1
+  if (after_f != "" && (gen_at == "" || gen_at < after_f)) exit 1
+  if (before_f != "" && (gen_at == "" || gen_at > before_f)) exit 1
+  if (genby_f != "" && gen_by != genby_f) exit 1
+  if (trust_f != "" && tier != trust_f) exit 1
+  if (stale_only == 1 && (fmval["stale_after"] == "" || today < fmval["stale_after"])) exit 1
 
-  tagstr = fmval["tags"]
-  gsub(/^\[/, "", tagstr); gsub(/\]$/, "", tagstr)
-  ntags = split(tagstr, tagarr, ",")
-  for (i = 1; i <= ntags; i++) {
-    t = tagarr[i]
-    gsub(/^[ \t]+|[ \t]+$/, "", t)
-    if (t != "") have_tag[t] = 1
+  if (source_like != "") {
+    hit = 0
+    for (i = 1; i <= nsrc; i++) if (index(src_res[i], source_like) > 0) { hit = 1; break }
+    if (!hit) exit 1
   }
+
+  ntags = split(tagstr_raw, tagarr, ",")
+  for (i = 1; i <= ntags; i++) { t = trim(tagarr[i]); if (t != "") have_tag[t] = 1 }
   for (i = 1; i <= ntagreq; i++) {
     if (tagreq_arr[i] == "") continue
     if (!(tagreq_arr[i] in have_tag)) exit 1
@@ -199,26 +289,43 @@ state == 1 && $0 == "---" {
     if (fmval[k] != v) exit 1
   }
 
-  printf "%s\t%s\t%s\t%s\t%s — %s\n", FILENAME, fmval["type"], fmval["status"], fmval["timestamp"], fmval["title"], fmval["description"]
+  printf "%s\t%s\t%s\t%s\t%s\t%s — %s\n", FILENAME, fmval["type"], fmval["status"], \
+    gen_at, tier, fmval["title"], fmval["description"]
   exit 0
 }
+
 state == 1 {
   line = $0
+
+  # 字下げ行は直前のトップレベルキーの続き（ブロックシーケンス / ネストマッピング）。
+  # v0.2 で sources / verified / generated がここに来る。
+  if (line ~ /^[ \t]/) {
+    if (cur_top == "verified") {
+      v = kv(line, "by")
+      if (v != "") { nver++; ver_by[nver] = v }
+    } else if (cur_top == "sources") {
+      if (line ~ /^[ \t]*-[ \t]/) nsrc++
+      v = kv(line, "resource")
+      if (v != "" && nsrc > 0) src_res[nsrc] = v
+    } else if (cur_top == "generated") {
+      v = kv(line, "by"); if (v != "") gen_by = v
+      v = kv(line, "at"); if (v != "") gen_at = v
+    }
+    next
+  }
+
   if (match(line, /^[A-Za-z_][A-Za-z0-9_]*:/)) {
     key = substr(line, 1, RSTART + RLENGTH - 2)
-    val = substr(line, RSTART + RLENGTH)
-    gsub(/^[ \t]+|[ \t]+$/, "", val)
-    # 引用符は YAML の構文であって値の一部ではない（`: ` や ` #` を含む
-    # description は引用が必須 — docs/CLAUDE.md）。外してから比較・表示する。
-    n = length(val)
-    if (n >= 2 && substr(val, 1, 1) == "\"" && substr(val, n, 1) == "\"") {
-      val = substr(val, 2, n - 2)
-      gsub(/\\"/, "\"", val); gsub(/\\\\/, "\\", val)
-    } else if (n >= 2 && substr(val, 1, 1) == "'" && substr(val, n, 1) == "'") {
-      val = substr(val, 2, n - 2)
-      gsub(/''/, "'", val)
-    }
+    val = unquote(trim(substr(line, RSTART + RLENGTH)))
+    cur_top = key
     fmval[key] = val
+
+    if (key == "tags") { tagstr_raw = val; gsub(/^\[/, "", tagstr_raw); gsub(/\]$/, "", tagstr_raw) }
+    else if (key == "generated" && substr(val, 1, 1) == "{") {
+      gen_by = kv(val, "by"); gen_at = kv(val, "at")
+    } else if (key == "verified" && substr(val, 1, 1) == "{") {
+      v = kv(val, "by"); if (v != "") { nver++; ver_by[nver] = v }
+    }
   }
   next
 }
@@ -233,6 +340,8 @@ find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -type f -name '
     awk -v type_f="$OPT_TYPE" -v status_f="$OPT_STATUS" -v owner_f="$OPT_OWNER" \
       -v resource_f="$OPT_RESOURCE" -v resource_like="$OPT_RESOURCE_LIKE" \
       -v after_f="$OPT_AFTER" -v before_f="$OPT_BEFORE" \
+      -v genby_f="$OPT_GENERATED_BY" -v trust_f="$OPT_TRUST" \
+      -v source_like="$OPT_SOURCE_LIKE" -v stale_only="$OPT_STALE" -v today="$TODAY" \
       -v tags_req="$TAGS_REQ" -v fields_req="$FIELDS_REQ" -v list_field="$LIST_FIELD" \
       -f "$AWK_PROG" "$file"
   done >"$RESULTS"
@@ -246,7 +355,7 @@ fi
 if [ "$PATHS_ONLY" -eq 1 ]; then
   cut -f1 "$RESULTS"
 else
-  echo -e "path\ttype\tstatus\ttimestamp\ttitle — description"
+  echo -e "path\ttype\tstatus\tgenerated.at\ttrust\ttitle — description"
   cat "$RESULTS"
 fi
 

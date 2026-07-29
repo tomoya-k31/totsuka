@@ -3,8 +3,8 @@ type: Term
 title: worktree（ワークツリー）
 description: タスク専用の git 作業ディレクトリ。「1 task = 1 repo = 1 worktree = 1 branch」の正規化単位で、完了後は掃除ポリシー（immediate / retention_days / keep_7d / keep_28d / manual）が「判定 → pane 解放 → 削除」の3段で適用される。
 tags: [glossary, git]
-timestamp: 2026-07-22T13:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-22T13:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

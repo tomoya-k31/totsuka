@@ -4,9 +4,22 @@ title: ADR-0004 Claude Code フック完了シグナルの受信をコア drivin
 description: Claude Code の完了検知を screen-manifest からフック機構へ移すにあたり、UDS 受信サーバを orchestrator-core の driving adapter（ports::SignalPort + adapters::hook_uds）側に置き、herdr プラグイン内には置かない決定。llm 検収はセッション内 prompt 型 Stop フックで行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [hook, claude-code, uds, socket, verification, signal, architecture, epic-131]
-timestamp: 2026-07-28T14:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-28T14:00:00Z }
+status: stable
 owner: tomoya-k31
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/131
+    title: "Issue #131 エピック（Claude Code フック完了判定）"
+  - id: ref-2
+    resource: /product/orchestrator-spec.ja.md
+    title: "F-100〜F-107 決定的な完了シグナル"
+  - id: ref-3
+    resource: /apis/claude-events.md
+    title: "POST /claude-events（UDS フック受信）"
+  - id: ref-4
+    resource: /architecture/hook-signal-flow.md
+    title: "フックシグナルフロー図"
 ---
 
 # Status
@@ -61,10 +74,3 @@ Accepted — 2026-07-18（エピック [#131](https://github.com/tomoya-k31/tots
   OpenCode（JS プラグイン）が加わったが、どちらも prompt 型フックを持たない。3 ツールが共有できているのは
   **ステータスマーカーの規約だけ**である。マーカーを廃してエンジン側 LLM 検収へ移す案は
   [ADR-0020](/decisions/adr-0020-status-marker-stays.md) で再評価し、改めて不採用とした（本 ADR は supersede されない）。
-
-# Citations
-
-[1] [Issue #131 エピック（Claude Code フック完了判定）](https://github.com/tomoya-k31/totsuka/issues/131)
-[2] [F-100〜F-107 決定的な完了シグナル](/product/orchestrator-spec.ja.md)
-[3] [POST /claude-events（UDS フック受信）](/apis/claude-events.md)
-[4] [フックシグナルフロー図](/architecture/hook-signal-flow.md)

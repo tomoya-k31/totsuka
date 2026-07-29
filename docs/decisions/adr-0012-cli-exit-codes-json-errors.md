@@ -3,8 +3,8 @@ type: Decision
 title: ADR-0012 CLI の exit code 体系と --json エラーエンベロープ
 description: CLI の exit code を 0/1/2/3（成功/実行時エラー/usage/doctor 問題検出）の名前付き定数として確定し、--json 指定時のエラーを stderr の 1 行 JSON エンベロープ {"error":{"message","action"}} で機械可読化する決定。特定 exit code は ExitWith 型の downcast で運び、既存の「原因 → 次のアクション」文字列規約をフィールド分割に再利用する。
 tags: [cli, exit-code, json, error-handling, ux]
-timestamp: 2026-07-23T13:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-23T13:00:00Z }
+status: stable
 ---
 
 # Status

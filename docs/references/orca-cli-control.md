@@ -4,9 +4,34 @@ title: orca CLI 制御サーフェス / エージェント capability（外部�
 description: orca（onorca.dev / stablyai/orca ADE）を CLI から制御する手段（worktree/terminal/automations、tui-idle 状態検知、セレクタ、permission-bypass フラグ、resume/hibernation）の要約。agent_ide プラグイン（#61）設計の根拠。Claude Code は状態が status-line hook 由来の OSC state dots に依存し、構造化 plan/preview API を持たないという制約を含む。
 resource: https://www.onorca.dev/docs/cli/reference
 tags: [orca, cli, ade, worktree, integration, agent-ide, external]
-timestamp: 2026-07-13T00:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-13T00:00:00Z }
+status: stable
 owner: tomoya-k31
+sources:
+  - id: ref-1
+    resource: https://www.onorca.dev/docs/cli/reference
+    title: "Orca — CLI reference. （2026-07-13 参照）"
+  - id: ref-2
+    resource: https://www.onorca.dev/docs/cli/overview
+    title: "Orca — CLI overview. （2026-07-13 参照）"
+  - id: ref-3
+    resource: https://www.onorca.dev/docs/agents/claude-code
+    title: "Orca — Claude Code in Orca. （2026-07-13 参照）"
+  - id: ref-4
+    resource: https://www.onorca.dev/docs/agents/supported
+    title: "Orca — Supported agents（permission-bypass フラグ・capability 一覧）. （2026-07-13 参照）"
+  - id: ref-5
+    resource: https://www.onorca.dev/docs/settings
+    title: "Orca — Settings（Agent Permissions: Yolo/Manual）. （2026-07-13 参照）"
+  - id: ref-6
+    resource: https://www.onorca.dev/docs/model/worktrees
+    title: "Orca — Worktrees（worktree モデル・start-from・rm）. （2026-07-13 参照）"
+  - id: ref-7
+    resource: https://www.onorca.dev/docs/agents/hibernation
+    title: "Orca — Agent hibernation（resume 対象・idle 窓）. （2026-07-13 参照）"
+  - id: ref-8
+    resource: https://www.onorca.dev/docs/agents/hooks-memory
+    title: "Orca — Agent hooks & memory. （2026-07-13 参照）"
 ---
 
 # このドキュメントについて
@@ -101,14 +126,3 @@ Yolo は各 CLI の permission-bypass フラグを**事前入力**する — **C
 | 結果取得 | worktree 実体ファイルを直接読む（scrollback パースより堅牢） |
 | capability | `design_preview` は非宣言。宣言するのは orca CLI で確実に対応できるものだけ（F-33） |
 | バージョン変動 | 日次リリース。`--json` パースは薄いアダプタに分離 |
-
-# Citations
-
-1. Orca — CLI reference. https://www.onorca.dev/docs/cli/reference （2026-07-13 参照）
-2. Orca — CLI overview. https://www.onorca.dev/docs/cli/overview （2026-07-13 参照）
-3. Orca — Claude Code in Orca. https://www.onorca.dev/docs/agents/claude-code （2026-07-13 参照）
-4. Orca — Supported agents（permission-bypass フラグ・capability 一覧）. https://www.onorca.dev/docs/agents/supported （2026-07-13 参照）
-5. Orca — Settings（Agent Permissions: Yolo/Manual）. https://www.onorca.dev/docs/settings （2026-07-13 参照）
-6. Orca — Worktrees（worktree モデル・start-from・rm）. https://www.onorca.dev/docs/model/worktrees （2026-07-13 参照）
-7. Orca — Agent hibernation（resume 対象・idle 窓）. https://www.onorca.dev/docs/agents/hibernation （2026-07-13 参照）
-8. Orca — Agent hooks & memory. https://www.onorca.dev/docs/agents/hooks-memory （2026-07-13 参照）

@@ -17,6 +17,7 @@ docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 |---|---|
 | `**/*.rs`, `**/Cargo.toml`, `Cargo.lock`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | **Rust set** (below) |
 | a dependency change in `Cargo.toml` / `Cargo.lock` | Rust set **plus** `cargo audit` and `cargo deny check`. If the tools are missing, install them once (`cargo install cargo-audit cargo-deny`); if that is not possible, do NOT silently skip — state it in the PR body and treat the `cargo-audit / cargo-deny` check (`audit.yml`, which fires on these paths) as the gate in post-PR monitoring |
+| any `*.md` anywhere | `rumdl check .` — Markdown lint (below) |
 | `docs/**` | **Docs checks** (below) + the docs obligation |
 | a prose `*.md` outside the OKF/vendored exclusions and outside `.claude/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
 | `.github/workflows/**` | read the SHA-pin + `ubuntu-slim` rules, validate YAML (`yq . <file>`); if you changed `ci.yml`'s commands, also run the affected Rust set |
@@ -77,6 +78,25 @@ post-PR you still monitor all checks that report on your PR.
 - rust-analyzer LSP diagnostics clean — fix type errors / missing imports
   (rustc + clippy backed, per [CLAUDE.md](../../CLAUDE.md)).
 
+**Markdown lint** — when any `*.md` changed, anywhere in the repo (not just
+`docs/**` — this covers `README*.md`, `.claude/**`, and prompt files under
+`crates/`):
+
+- `rumdl check .` to zero issues. Configuration is `.rumdl.toml` at the repo
+  root; every disabled rule and per-file ignore carries its rationale inline, so
+  read it before adding an ignore of your own.
+- `rumdl check --fix .` auto-fixes most formatting findings. **Read the diff
+  before accepting it** — the autofix is not always the right answer:
+  - `MD040` (missing code-fence language) is filled in as `text` regardless of
+    content. Downgrade-proof it by hand: `bash` for command-only blocks,
+    `console` for `$`-prompt-plus-output blocks, `text` only for genuine output,
+    logs, diagrams, and usage synopses.
+  - `MD038` (spaces inside code spans) is disabled precisely because the
+    autofix would silently invert meaning where the space *is* the point
+    (`` ` #` ``, `` `: ` ``, the pane-label prefix `` `totsuka ` ``).
+- It is a **local check only** — there is no CI job for it, so nothing else will
+  catch a Markdown regression if you skip it.
+
 **Docs checks** — when `docs/**` changed:
 
 - `bash scripts/okf-lint.sh docs` to zero errors.
@@ -126,7 +146,7 @@ do not keep waiting and do not merge.
 Run the watch in the background (or wrap it with a `timeout`-style cap) so the
 10-minute ceiling is enforced, e.g.:
 
-```
+```bash
 gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch runs until done
 ```
 
@@ -135,7 +155,7 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
 1. **Monitor CI** (the GitHub Actions workflows defined for the repo), on the
    30 s / 10 min policy above:
 
-   ```
+   ```bash
    gh pr checks <n> --watch --interval 30
    ```
 
@@ -149,7 +169,7 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
    opening the PR (see Handling findings for what to do after fix commits).
    Fetch both levels:
 
-   ```
+   ```bash
    # inline review comments
    gh api repos/{owner}/{repo}/pulls/<n>/comments \
      --jq '.[] | {user: .user.login, path, line, body}'
@@ -171,7 +191,7 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
    via the Agent tool so it reviews the diff and posts its findings as a comment
    on the PR (a single review-summary comment via `gh pr comment`), e.g.:
 
-   ```
+   ```text
    Agent(subagent_type: "general-purpose",
          prompt: "Run /code-review:code-review --comment on PR <n> and report the findings")
    ```
@@ -209,7 +229,7 @@ the PR is open (another PR merged first), and always immediately before merge
 (step 7). GitHub computes mergeability asynchronously, so an `UNKNOWN` result
 just means "not computed yet" — re-run after a few seconds.
 
-```
+```bash
 gh pr view <n> --json mergeStateStatus,mergeable
 # mergeable "MERGEABLE"  / mergeStateStatus "CLEAN" → no conflicts (other
 #   pre-merge gates — CI, reviews — still apply, → Merging below)
@@ -220,7 +240,7 @@ gh pr view <n> --json mergeStateStatus,mergeable
 **Resolution** — rebase onto `main`, never merge `main` into the branch
 (→ git-conventions):
 
-```
+```bash
 git worktree list                    # the branch may live in another worktree —
                                      # run the rebase where it is checked out
 git fetch origin main
@@ -250,7 +270,7 @@ GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
 - Default strategy: **Squash and Merge**; delete the branch
   (→ pr-conventions for when a non-default strategy is allowed):
 
-  ```
+  ```bash
   gh pr merge <n> --squash --delete-branch
   ```
 
@@ -259,7 +279,7 @@ GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
   `mergeable: CONFLICTING`, go through "Conflict check & resolution" above
   first:
 
-  ```
+  ```bash
   gh pr view <n> --json mergeStateStatus,mergeable,reviewDecision
   ```
 

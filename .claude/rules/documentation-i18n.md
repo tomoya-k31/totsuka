@@ -26,7 +26,8 @@ paths:
 
 - English file: `> 🌐 **English** · [日本語](<name>.ja.md)`
 - Japanese file:
-  ```
+
+  ```markdown
   > 🌐 [English](<name>.md) · **日本語**
   > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
   ```

@@ -3,8 +3,8 @@ type: Term
 title: 会話継続（conversation continuity）
 description: 1 スレッド = 1 会話を 1 タスクとして扱い、追いメンションを同じタスクへの追加メッセージとして取り込むことで worktree・ブランチ・エージェントセッションを共有する仕組み。#242 でタスク同一性そのものを会話単位に変えた。
 tags: [glossary, domain, slack, hook, conversation-identity]
-timestamp: 2026-07-26T18:00:00+09:00
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-26T18:00:00+09:00 }
+status: stable
 owner: tomoya-k31
 ---
 
@@ -35,7 +35,7 @@ owner: tomoya-k31
 
 Claude Code はセッションを **cwd 単位**で保存する（`~/.claude/projects/<cwd をエンコードしたディレクトリ>/<id>.jsonl`）。一方 totsuka は「1 タスク = 1 worktree」なので、旧方式では同一スレッドの 2 通目が必ず**別ディレクトリ**になり、`claude --resume` がセッションを見つけられなかった。実機で確認済み:
 
-```
+```console
 $ cd <2 通目の worktree> && claude --resume 6e3515d5-...
 No conversation found with session ID: 6e3515d5-f1a1-4165-8a82-9d76a46a8a33
 ```

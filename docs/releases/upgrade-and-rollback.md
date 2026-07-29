@@ -4,8 +4,8 @@ title: アップグレードとロールバック（state.db）
 description: totsuka のバージョンアップ時に state.db のマイグレーションを適用する手順と、バックアップから戻すロールバック手順。schema v7 時点。バージョン不整合エラー（SchemaTooNew / SchemaOutdated）の読み方も含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [migration, state-db, upgrade, rollback, operations]
-timestamp: 2026-07-26T15:00:00+09:00
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-26T15:00:00+09:00 }
+status: stable
 owner: tomoya-k31
 ---
 
@@ -21,13 +21,13 @@ owner: tomoya-k31
 2. totsuka を新しい版に入れ替える。
 3. **`totsuka run` を一度実行する。** これがマイグレーションの適用契機。適用前に `state.db.v{適用前バージョン}.bak` が自動で作られ、適用時に INFO ログが残る。
 
-   ```
+   ```text
    INFO applying state.db migrations backup=…/state.db.v7.bak from=7 to=8
    ```
 
 4. `totsuka doctor` で結果を確認する。
 
-   ```
+   ```console
    $ totsuka doctor
    ok:   state-db — ~/.local/state/totsuka/state.db opens — schema v8 (applied by 0.2.0)
    ```
@@ -56,7 +56,7 @@ owner: tomoya-k31
 
 2. 戻したいスキーマ版数のバックアップを確認する。ファイル名の `vN` は**そのファイルが保持しているスキーマ版数**（＝ 適用直前の版数）。
 
-   ```
+   ```console
    $ ls ~/.local/state/totsuka/
    state.db          # 現行 v8
    state.db.v7.bak   # 0.1.4 時代のスナップショット

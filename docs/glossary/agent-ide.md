@@ -3,8 +3,8 @@ type: Term
 title: Agent IDE（エージェントIDE）
 description: コーディングエージェントを動かす実行環境（herdr / orca 等）。agent_ide プラグインが task/dispatch・session/attach・state/subscribe を実装して接続する。
 tags: [glossary, plugin]
-timestamp: 2026-07-13T04:30:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-13T04:30:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

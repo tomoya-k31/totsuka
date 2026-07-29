@@ -4,8 +4,8 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, worktree, faq, troubleshooting]
-timestamp: 2026-07-26T21:00:00+09:00
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-26T21:00:00+09:00 }
+status: stable
 owner: tomoya-k31
 ---
 
@@ -31,7 +31,7 @@ owner: tomoya-k31
 
 `llm` チェックが見るのは**参照が解決できるか**だけで、**その鍵が API に受理されるか**は見ない。両者は無関係で、実機では `op://` 参照が正しく解決する一方でプロバイダが全リクエストに 401 を返し続けている状態を `doctor` が `ok` と報告していた（[ADR-0016](/decisions/adr-0016-doctor-online-probe.md)）。
 
-```
+```bash
 totsuka doctor --online
 ```
 
@@ -46,7 +46,7 @@ totsuka doctor --online
 
 **鍵が失効すると何が起きるか**: 候補リポジトリが 2 件以上ある構成では分類に LLM が要るため、鍵が無効だと [task-source-slack](/components/task-source-slack.md) の解決が毎回 picker へ縮退する。縮退自体は設計どおり安全なので、**設定不備が「少し不便な正常動作」に見える**のが厄介な点。run のログに次の `warn` が出ていたらこれ:
 
-```
+```text
 WARN the LLM provider rejected the API key; repository selection falls back to
      the operator picker for every new conversation until it is fixed
 ```

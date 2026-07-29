@@ -3,8 +3,15 @@ type: Decision
 title: ADR-0002 Rust workspace 構成と CI 品質ゲート
 description: totsuka を Rust edition 2024 のヘキサゴナル workspace（core/cli/plugin-protocol）として構成し、clippy deny warnings・rustfmt・cargo-audit/deny・llvm-cov を CI 品質ゲートに据える決定。
 tags: [rust, workspace, ci, architecture, quality-gate]
-timestamp: 2026-07-19T12:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-19T12:00:00Z }
+status: stable
+sources:
+  - id: ref-1
+    resource: /product/orchestrator-spec.ja.md
+    title: "orchestrator 要件定義書 §6 / §9"
+  - id: ref-2
+    resource: https://github.com/tomoya-k31/totsuka/issues/45
+    title: "Issue #45"
 ---
 
 # Status
@@ -35,8 +42,3 @@ Accepted — 2026-07-12（[#45](https://github.com/tomoya-k31/totsuka/issues/45)
 - 新規 crate 追加時は workspace members・`[workspace.dependencies]`・`lints.workspace = true` の3点を揃える。
 - clippy/fmt を CI が deny するため、ローカルでも `cargo clippy --workspace --all-targets -- -D warnings` と `cargo fmt --all --check` を実装完了の条件とする。
 - actions はリポジトリ規約に従い commit SHA ピン留め。
-
-# Citations
-
-[1] [orchestrator 要件定義書 §6 / §9](/product/orchestrator-spec.ja.md)
-[2] [Issue #45](https://github.com/tomoya-k31/totsuka/issues/45)

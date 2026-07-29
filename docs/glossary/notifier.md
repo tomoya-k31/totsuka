@@ -3,8 +3,8 @@ type: Term
 title: Notifier（ノーティファイア）
 description: waiting_input / done / failed / pending イベントを人間へ届ける通知プラグイン。配送は fire-and-forget でタスク実行に影響しない（F-93）。
 tags: [glossary, plugin]
-timestamp: 2026-07-13T04:30:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-13T04:30:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

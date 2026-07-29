@@ -71,7 +71,7 @@ totsuka run             # 実行: fetch -> dispatch -> 監視 -> publish
 
 ## ドキュメント
 
-このリポジトリの知識はすべて [`docs/`](./docs/)（OKF v0.1 準拠の Knowledge
+このリポジトリの知識はすべて [`docs/`](./docs/)（OKF v0.2 準拠の Knowledge
 Bundle）で管理しています。
 
 - **仕様書**: [docs/product/orchestrator-spec.ja.md](./docs/product/orchestrator-spec.ja.md)

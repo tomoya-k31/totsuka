@@ -3,8 +3,18 @@ type: Decision
 title: ADR-0021 Slack 返信案・ピッカーの通知は「ナッジ専用 bot」の DM で行う
 description: エフェメラルと自分名義 self-DM は Slack 通知を一切発生させず、オペレーターが返信案の到着に気づけない問題（#305）に対し、通知ナッジ専用の bot user を追加して bot→本人 DM で push 通知を出す決定。投稿主体は user token のまま不変で、ADR-0003 の「Bot なし」前提を部分改訂する。reminders.add ハックと macOS 通知強化のみの案は不採用。
 tags: [slack, plugin, task-source, notification, bot, token, approval]
-timestamp: 2026-07-28T00:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-28T00:00:00Z }
+status: stable
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/305
+    title: "Issue #305"
+  - id: ref-2
+    resource: /decisions/adr-0003-slack-reply-assistant.md
+    title: "ADR-0003 Slack メンション代理返信アシスタントの設計"
+  - id: ref-3
+    resource: https://docs.slack.dev/reference/methods/chat.postEphemeral
+    title: "Slack: chat.postEphemeral — エフェメラルは通知を発生させない"
 ---
 
 # Status
@@ -54,9 +64,3 @@ bot DM は Slack ネイティブの push・バッジがデスクトップ+モバ
 - `publish_draft` の RPC 応答前に Slack 呼び出しが 1 本増える（既存の inline 提示面 post と同じ 30s timeout 境界。問題化したら `tokio::spawn` へ逃がす余地を残す）。
 - ピッカーの既知レース（同一の新規スレッドへ同時に 2 メンション → ピッカー 2 つ、#242 で受容済み）では、ナッジも投稿されたピッカーごとに 1 通ずつ = 2 通飛ぶ。**受容する**: 各ピッカーは別々に回答可能な UI であり「回答可能な UI 1 つにつきナッジ 1 通」という規則は一貫している。重複排除には稀なレースのためにタスク間協調が必要で、コストは push 1 通に見合わない。
 - xoxb の影響半径は bot 名義投稿 + IM 開始のみで、xoxp より小さい（[トークンポリシー](/security/slack-user-token.md)）。
-
-# Citations
-
-[1] [Issue #305](https://github.com/tomoya-k31/totsuka/issues/305)
-[2] [ADR-0003 Slack メンション代理返信アシスタントの設計](/decisions/adr-0003-slack-reply-assistant.md)
-[3] [Slack: chat.postEphemeral — エフェメラルは通知を発生させない](https://docs.slack.dev/reference/methods/chat.postEphemeral)

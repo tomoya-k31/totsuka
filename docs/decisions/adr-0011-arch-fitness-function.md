@@ -3,8 +3,21 @@ type: Decision
 title: ADR-0011 アーキテクチャ Fitness Function は cargo metadata + 自前スクリプトで CI 検証する
 description: ワークスペースの依存境界不変条件（plugins → plugin-protocol / plugin-sdk のみ、plugin-protocol は leaf、依存循環なし）を cargo metadata --no-deps ベースの自前スクリプト scripts/arch-lint.sh で機械検証し、ci.yml の clippy ジョブ内 step として毎 PR 実行する決定。cargo-deny bans / cargo-modules は不採用。許可リストには issue 起票後に追加された plugin-sdk を含める。
 tags: [architecture, fitness-function, ci, workspace, dependency]
-timestamp: 2026-07-23T12:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-23T12:00:00Z }
+status: stable
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/172
+    title: "Issue #172"
+  - id: ref-2
+    resource: /architecture/workspace-dependency-rules.md
+    title: "ワークスペース依存境界ルール"
+  - id: ref-3
+    resource: /decisions/adr-0007-ci-cost-optimization.md
+    title: "ADR-0007 CI 実行タイミングの再設計（Actions コスト最適化）"
+  - id: ref-4
+    resource: /decisions/adr-0002-rust-workspace-ci.md
+    title: "ADR-0002 Rust workspace 構成と CI 品質ゲート"
 ---
 
 # Status
@@ -39,10 +52,3 @@ totsuka のヘキサゴナル構成では「プラグインはプロトコル層
 - 正当な依存追加時はスクリプト冒頭の許可リストと [ワークスペース依存境界ルール](/architecture/workspace-dependency-rules.md) を同一 PR で更新する必要がある（手順は同ドキュメント）。
 - cargo-deny bans を使わないため、依存境界ルールが `deny.toml` ではなくスクリプト内の変数として宣言される。ルールの表現力と引き換えに、検証ロジック自体の保守は自前になる。
 - jq が前提ツールに加わる（GitHub ホストランナーにはプリインストール済み。ローカルに無い場合は明確なメッセージで exit 2）。
-
-# Citations
-
-[1] [Issue #172](https://github.com/tomoya-k31/totsuka/issues/172)
-[2] [ワークスペース依存境界ルール](/architecture/workspace-dependency-rules.md)
-[3] [ADR-0007 CI 実行タイミングの再設計（Actions コスト最適化）](/decisions/adr-0007-ci-cost-optimization.md)
-[4] [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)

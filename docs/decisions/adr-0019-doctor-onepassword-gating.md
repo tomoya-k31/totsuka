@@ -4,8 +4,8 @@ title: ADR-0019 doctor の op:// 解決は「TTY があるか」ではなく「o
 description: doctor が ADR-0006 の非対話原則を自分で破っていた問題（#289）に対し、check_onepassword を最初に動かして op whoami の結果を可否判定に使い、セッションが無いときだけ op:// を要する probe を skipped として報告する決定。TTY 判定（案 D）ではなくプロンプトが実際に出る条件を直接見る（案 E）。plugin probe を --online の裏に隠す案 B と、挙動を変えず約束だけ直す案 C は不採用。あわせて Check に skipped 重大度を追加し、検出ヘルパが toml 0.9 の Value パーサ誤用で常に false を返していた（＝1Password 検査が一度も走っていなかった）バグを修正した。
 resource: https://github.com/tomoya-k31/totsuka/issues/289
 tags: [doctor, onepassword, secret, non-interactive, cli, adr-0006]
-timestamp: 2026-07-26T23:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-26T23:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

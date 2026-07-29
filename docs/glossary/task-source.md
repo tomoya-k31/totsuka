@@ -3,8 +3,8 @@ type: Term
 title: Task Source（タスクソース）
 description: タスクの供給元（GitHub / Notion 等）。task_source プラグインが task/submit（push）・task/update_status・result/publish を実装して接続する。
 tags: [glossary, plugin]
-timestamp: 2026-07-20T18:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-20T18:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

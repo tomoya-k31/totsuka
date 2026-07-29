@@ -4,8 +4,8 @@ title: 既知の不具合・制約パターン
 description: テスト・運用で判明した既知の制約（LLM VCR 未対応、recovery 時の成果物欠落、worktree テストのフレーク要因など）と回避策。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [known-issue, testing, recovery, llm, flake]
-timestamp: 2026-07-14T02:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-14T02:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

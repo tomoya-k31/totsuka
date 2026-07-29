@@ -4,8 +4,8 @@ title: orchestrator-cli クレート
 description: "totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（init / run / status / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [rust, crate, cli, plugin, run, status, doctor, hooks, security]
-timestamp: 2026-07-28T12:00:00+09:00
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-28T12:00:00+09:00 }
+status: stable
 owner: tomoya-k31
 ---
 
@@ -62,7 +62,6 @@ owner: tomoya-k31
 - severity は **401/403 のみ `Check::fail`**。タイムアウト・トランスポート・429・5xx は `Check::warn` に留める — ネットワークの不調で exit 3（[ADR-0012](/decisions/adr-0012-cli-exit-codes-json-errors.md)）になると赤信号が「設定が壊れている」の意味を失う。
 - オフラインの `llm` が解決に失敗している場合はプローブしない（投げる鍵が無く、同じ失敗を言い直すだけ）。
 - **`--online` は `op://` を実際に解決する**ため生体認証プロンプトが出うる。`--help` にも明記しており、CI / cron からは使わない。
-
 - 共通フラグ: `--config <path>`（設定ファイル上書き = F-66 の最上位レイヤ）、`--debug`（**#176: 全コマンドで有効** — `run` 以外は stderr のみの debug 診断（`logging::init_stderr`、ログファイルは作らない）、`run` は従来どおりファイルログのレベルも debug に引き上げ。global フラグが `run` 以外で無視される clig.dev アンチパターンの解消）。`--json` は主要読み取り系コマンド（status / task list / task show / plugin list / doctor）に用意し、宣言は `common::JsonFlag`（`#[command(flatten)]`）で一元化（#177）。
 - **設定ロードの一元化（#208 → #175、[ADR-0009](/decisions/adr-0009-env-override-whitelist.md)）**: `Cx::load_config(&env)` が `config.toml` パース → core の `apply_env_overrides`（F-66 第 2 層 `TOTSUKA_*`）まで行う。**#175 で `plugin` サブコマンド群の独自ローダ（`Locations`）を廃止**し、設定を読むコマンドはすべてここを通る。**片方だけに適用しない**理由は `focus` / `doctor` が `[hooks].socket_path` から `run` のバインドしたソケットを解決するためで、`run` のみだと `TOTSUKA_HOOKS_SOCKET_PATH` 設定時に別のソケットを見る。警告は stderr（`--json` の stdout 契約を壊さない）。CLI フラグ（`--debug`）は**この後**に適用されるため「CLI > env」が適用順で成立する。**設定欠落時のセマンティクスは 2 API で明示的に選ぶ**: `load_config`（欠落 = 「原因 + 次のアクション」エラー。run / config / focus / doctor）と `load_config_or_default`（欠落 = 空設定で続行。plugin install / uninstall / list — `init` 前でも動くべきコマンドのみ。`TOTSUKA_*` レイヤは欠落時も適用されるため、不正なオーバーライド値はファイル有無によらずエラー）。なお `plugin enable`/`disable` は編集対象ファイルの raw テキスト読み（欠落 = エラー）+ `set_plugin_enabled` のまま（コメント・整形を維持し、env レイヤを書き戻さない。宣言済みチェックも同じ raw テキストのパースで行う）。`config show` はファイル内容表示を維持しつつ、有効な env オーバーライドを末尾に一覧表示する（`--redacted` 時は `is_secret_key` で値をマスク）。
 - UX 規約（§7）: エラーは「原因 + 次のアクション」（`→` 区切り）。用語は [glossary](/glossary/index.md) に準拠。

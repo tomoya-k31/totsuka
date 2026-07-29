@@ -4,8 +4,8 @@ title: ワークスペース依存境界ルール（Fitness Function）
 description: ヘキサゴナル構成の依存不変条件（plugins → plugin-protocol / plugin-sdk のみ、plugin-protocol は leaf、依存循環なし）と、それを CI で機械検証する scripts/arch-lint.sh の仕組み・正当な依存追加時の更新手順。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/scripts/arch-lint.sh
 tags: [architecture, fitness-function, ci, workspace, dependency]
-timestamp: 2026-07-23T12:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-23T12:00:00Z }
+status: stable
 ---
 
 # ワークスペース依存境界ルール（Fitness Function）

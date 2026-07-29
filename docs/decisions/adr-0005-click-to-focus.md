@@ -4,9 +4,28 @@ title: ADR-0005 通知 click-to-focus は terminal-notifier + session/focus 委�
 description: 通知クリックで対象タスクの herdr pane を開く F-94 を、terminal-notifier（-execute/-activate）+ `totsuka focus` + 制御 UDS + agent_ide への `session/focus` 委譲（0.1.4 additive、pane_control 相乗り）で実現する決定。UNUserNotificationCenter 自前 .app・alerter・NotifyParams への pane_id 追加は不採用。
 resource: https://github.com/tomoya-k31/totsuka/issues/155
 tags: [notifier, terminal-notifier, click-to-focus, pane, herdr, plugin-protocol, f-94]
-timestamp: 2026-07-18T15:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-18T15:00:00Z }
+status: stable
 owner: tomoya-k31
+sources:
+  - id: ref-1
+    resource: https://github.com/tomoya-k31/totsuka/issues/155
+    title: "Issue #155 click-to-focus 詳細設計（F-94）"
+  - id: ref-2
+    resource: https://github.com/sst/opencode/issues/23446
+    title: "opencode #23446 — macOS 通知 owner が Script Editor になり click-to-focus できない"
+  - id: ref-3
+    resource: https://github.com/julienXX/terminal-notifier
+    title: "terminal-notifier（-execute / -activate / -group）"
+  - id: ref-4
+    resource: /components/notifier-macos.md
+    title: notifier-macos
+  - id: ref-4b
+    resource: /components/agent-ide-herdr.md
+    title: agent-ide-herdr
+  - id: ref-4c
+    resource: /references/herdr-socket-api.md
+    title: herdr Socket API
 ---
 
 # Status
@@ -53,10 +72,3 @@ Accepted — 2026-07-18（[#155](https://github.com/tomoya-k31/totsuka/issues/15
 - `-execute` はシェル文字列を実行するため、`click_command` テンプレへの `{task_id}` 埋め込みは必ずクォート/サニタイズする（インジェクション防止）。
 - Orchestrator 停止中のクリックは `-activate` によるアプリ前面化のみ成立し、`totsuka focus` は静かに no-op（クリック経路を壊さない）。
 - 縮退系（terminal-notifier 未導入 / pane 消失 / `pane_control` 非宣言 / Orchestrator 停止中）はいずれもクラッシュせず、最低限アプリ前面化 or 通知表示のみに落ちる。
-
-# Citations
-
-[1] [Issue #155 click-to-focus 詳細設計（F-94）](https://github.com/tomoya-k31/totsuka/issues/155)
-[2] [opencode #23446 — macOS 通知 owner が Script Editor になり click-to-focus できない](https://github.com/sst/opencode/issues/23446)
-[3] [terminal-notifier（-execute / -activate / -group）](https://github.com/julienXX/terminal-notifier)
-[4] [notifier-macos](/components/notifier-macos.md) / [agent-ide-herdr](/components/agent-ide-herdr.md) / [herdr Socket API](/references/herdr-socket-api.md)

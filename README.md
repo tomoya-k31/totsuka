@@ -72,7 +72,7 @@ Inspect progress with `totsuka status`, drill into a task with
 ## Documentation
 
 All project knowledge lives in [`docs/`](./docs/), an
-[Open Knowledge Format (OKF) v0.1](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)
+[Open Knowledge Format (OKF) v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)
 Knowledge Bundle.
 
 - **Product spec**: [docs/product/orchestrator-spec.ja.md](./docs/product/orchestrator-spec.ja.md)

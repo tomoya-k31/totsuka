@@ -4,8 +4,8 @@ title: OpenCode ツールのセットアップと運用
 description: リポジトリ/ワークフローを OpenCode で動かすためのセットアップ（インストール確認・config 設定・アセット自動配置）と、Codex/Claude と異なる縮退（block 不可・指示が可視・llm 検収不可）の運用上の注意。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/hooks
 tags: [operations, runbook, opencode, tool, plugin, doctor]
-timestamp: 2026-07-24T12:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-24T12:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

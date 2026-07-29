@@ -4,8 +4,8 @@ title: リリース前手動チェックリスト（実機結合）
 description: CI で自動化できない実機（herdr / orca）・設計プレビュー・通知・waiting_input 応答の目視確認手順。リリース前に実施する。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [release, manual-test, checklist, herdr, orca, e2e]
-timestamp: 2026-07-26T18:00:00+09:00
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-26T18:00:00+09:00 }
+status: stable
 owner: tomoya-k31
 ---
 

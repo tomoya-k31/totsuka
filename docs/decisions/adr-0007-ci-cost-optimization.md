@@ -3,8 +3,18 @@ type: Decision
 title: ADR-0007 CI 実行タイミングの再設計（Actions コスト最適化）
 description: GitHub Actions の無料枠超過を受け、品質ゲートの内容は変えずに実行タイミングを再設計する決定。PR は clippy+rustfmt / test、main への push は coverage(llvm-cov) のみ、audit は日次 cron + 依存ファイル変更 PR に移し、全ワークフローへ concurrency を導入する。
 tags: [ci, cost, quality-gate, github-actions]
-timestamp: 2026-07-19T12:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-19T12:00:00Z }
+status: stable
+sources:
+  - id: ref-1
+    resource: /decisions/adr-0002-rust-workspace-ci.md
+    title: "ADR-0002 Rust workspace 構成と CI 品質ゲート"
+  - id: ref-2
+    resource: /quality/test-strategy.md
+    title: "テスト戦略"
+  - id: ref-3
+    resource: https://github.com/tomoya-k31/totsuka/issues/45
+    title: "Issue #45"
 ---
 
 # Status
@@ -38,9 +48,3 @@ private リポジトリのため Actions は Pro プランの無料枠 3,000 分
 - audit は PR 必須ではなくなるため、依存を触らない PR に古い advisory が混ざる余地があるが、日次 cron が翌朝までに検知する。
 - ci.yml のジョブを増やす際は「1 分切り上げ × ジョブ数 × 実行回数」が固定費になることを考慮し、既存ジョブへのステップ追加を優先する。
 - ローカルの実装完了条件（`cargo fmt --all --check` / `cargo clippy --workspace --all-targets --all-features -- -D warnings` / `cargo test --workspace --all-features`）は変更なし（ADR-0002 のまま）。
-
-# Citations
-
-[1] [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)
-[2] [テスト戦略](/quality/test-strategy.md)
-[3] [Issue #45](https://github.com/tomoya-k31/totsuka/issues/45)

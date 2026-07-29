@@ -3,8 +3,8 @@ type: Term
 title: dispatch（ディスパッチ）
 description: キュー済みタスクをエージェントに割り当てる操作。スロット確保 → worktree 準備 → task/dispatch RPC → セッションID永続化までを指す。
 tags: [glossary, domain]
-timestamp: 2026-07-13T04:30:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-13T04:30:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

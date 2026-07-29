@@ -4,8 +4,8 @@ title: フック完了判定のトラブルシューティング
 description: Claude Code フック方式の運用手引き。スプールバックログ（doctor hook-spool チェックでの検出・drain/確認・corrupt 隔離ファイル）、Escalated タスクの対応手順（pane スナップショット確認・herdr pane での解消・次 Stop での自然復帰・fail アウト）、human 検収での totsuka task verify --pass/--fail 操作を、doctor のフックプローブ参照つきで整理する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [operations, playbook, hook, claude-code, spool, escalation, verify, doctor, epic-131]
-timestamp: 2026-07-23T13:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-23T13:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

@@ -4,8 +4,8 @@ title: Slack ユーザートークンの取り扱いポリシー
 description: task-source-slack が使う User OAuth Token（xoxp）/ App-Level Token（xapp）/ Bot User OAuth Token（xoxb、通知ナッジ専用・任意）の保管・権限・漏えい時の Revoke 手順・社用ワークスペースでの確認事項。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [security, slack, token, keychain, incident]
-timestamp: 2026-07-28T00:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-28T00:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

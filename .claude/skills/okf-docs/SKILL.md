@@ -5,7 +5,7 @@ description: docs/ 配下（OKF Knowledge Bundle）へのドキュメント作�
 
 # OKF Docs Skill
 
-`docs/` は OKF v0.1 準拠の Knowledge Bundle。詳細ルールの正本は `docs/CLAUDE.md`。
+`docs/` は OKF v0.2 準拠の Knowledge Bundle。詳細ルールの正本は `docs/CLAUDE.md`。
 このスキルは「いつ・どこに・何を・どの順で」書くかの手順を定義する。
 
 ## 手順（必ずこの順で）
@@ -19,7 +19,12 @@ description: docs/ 配下（OKF Knowledge Bundle）へのドキュメント作�
 4. **concept を作成/更新**: frontmatter テンプレート（`docs/CLAUDE.md` 参照）に従う
    - `type` は必須。語彙表から選び、新設したら `docs/CLAUDE.md` の表に追記
    - `description` は必ず1文で書く（index 転記に使うため）
-   - `timestamp` を現在時刻（ISO 8601）に更新
+   - `generated: { by: <actor>, at: <ISO 8601> }` の `at` を現在時刻に更新する
+     （v0.2 で旧 `timestamp` を置き換えたキー。`by` は actor 記法 = `human:<id>` /
+     `process:<id>` / `<producer>/<version>`）
+   - `status` は `draft` / `stable` / `deprecated` の 3 値のみ（省略時 `stable`）
+   - 出典があれば本文ではなく frontmatter の `sources` に書く（`# Citations` は v0.2 で廃止）
+   - 実機で確認が取れた事実があれば `verified: { by: human:<id>, at: ... }` を足す
    - 他 concept への言及はバンドルルート相対リンク `[title](/dir/file.md)` にする
 5. **index.md を更新**: 新規作成・改名・削除をした場合、同ディレクトリの `index.md` に
    `* [Title](file.md) - description転記` 形式で追記/修正する
@@ -47,3 +52,5 @@ description: docs/ 配下（OKF Knowledge Bundle）へのドキュメント作�
 - ルート以外の `index.md` に frontmatter を書かない
 - 廃止された concept を削除しない（`status: deprecated` にして後継へリンク）
 - `docs/` 全体を無差別に読み込まない（index.md からの progressive disclosure で辿る）
+- 検証していない事実に `verified` を書かない（実機で確認した事実だけを記録する）
+- 出典の信頼シグナル（`author` / `usage_count` / `last_modified`）を推測で埋めない

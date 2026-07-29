@@ -4,8 +4,8 @@ title: notifier-macos プラグイン
 description: Orchestrator のイベント（waiting_input / done / failed / pending / escalated / verification_pending）を macOS 通知センターへ配送する公式 notifier プラグイン。バックエンド選択（osascript / terminal-notifier click-to-focus）、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/notifier-macos
 tags: [rust, crate, plugin, notifier, macos, osascript, terminal-notifier, click-to-focus, hook, escalation, verification]
-timestamp: 2026-07-23T00:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-23T00:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

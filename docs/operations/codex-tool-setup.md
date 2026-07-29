@@ -4,8 +4,8 @@ title: Codex ツールのセットアップと hooks trust 運用
 description: リポジトリ/ワークフローを Codex CLI で動かすための一回きりのセットアップ手順（インストール確認・config 設定・hooks trust・対象リポジトリの trust）と、trust が壊れた場合の復旧手順。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/hooks
 tags: [operations, runbook, codex, tool, hooks, trust, doctor]
-timestamp: 2026-07-24T10:00:00Z
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-24T10:00:00Z }
+status: stable
 owner: tomoya-k31
 ---
 

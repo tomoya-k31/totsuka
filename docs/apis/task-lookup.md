@@ -4,8 +4,8 @@ title: task/lookup（プラグイン → Orchestrator）
 description: 会話が既に Orchestrator に存在するかを submit 前に問い合わせる読み取り専用 JSON-RPC（protocol 0.2.4、P→O）。既知なら task_source は新規会話でしか必要のないリポジトリ解決（LLM 分類・人間への選択 UI）を省ける。到達不能時は「未知」とみなして従来の解決へ縮退する契約。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-sdk/src/lookup.rs
 tags: [api, json-rpc, plugin-protocol, task-source, conversation, lookup]
-timestamp: 2026-07-26T00:00:00+09:00
-status: active
+generated: { by: human:tomoya-k31, at: 2026-07-26T00:00:00+09:00 }
+status: stable
 owner: tomoya-k31
 ---
 
@@ -42,7 +42,7 @@ owner: tomoya-k31
 
 # 呼び出し側の契約
 
-```
+```text
 known: true  → repo_hint なしで即 submit（LLM も picker も呼ばない）
 known: false → 従来どおり解決（rule → LLM → 必要なら picker）
 無応答・タイムアウト・エラー → known: false と同じ扱い

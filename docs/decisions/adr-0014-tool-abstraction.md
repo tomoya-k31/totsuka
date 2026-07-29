@@ -3,8 +3,8 @@ type: Decision
 title: ADR-0014 AI ツール抽象は「単一 pane runner + core 側ツールレジストリ + 解決済み ToolLaunchSpec」で行う
 description: リポジトリ/ワークフローごとの AI ツール切り替え（#196、Claude Code / Codex / OpenCode）のため、agent プラグイン（pane runner）と AI ツール（pane 内 CLI）を直交 2 軸に分離し、ツール知識（argv 組立・ケイパビリティ・完了検知アダプタ）を orchestrator-core の [tools] レジストリに集約、protocol 0.2.3 の ToolLaunchSpec で完全解決済み argv/env をプラグインへ渡す決定。ツール別 agent プラグイン案と herdr 側プロファイル解決案は不採用。
 tags: [tool, protocol, herdr, codex, opencode, registry, dispatch]
-timestamp: 2026-07-28T16:00:00Z
-status: accepted
+generated: { by: human:tomoya-k31, at: 2026-07-28T16:00:00Z }
+status: stable
 ---
 
 # Status
