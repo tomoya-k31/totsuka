@@ -85,10 +85,52 @@ pub struct Prompts {
     rendered_marker_self_report: String,
 }
 
+/// Placeholders that resolve to the wire marker constants.
+const MARKER_PLACEHOLDERS: &[&str] = &["marker_completed", "marker_needs_input", "marker_failed"];
+
+/// Which `{placeholder}` each prompt key may reference (#315).
+///
+/// [`config::validate`](mod@crate::config::validate) rejects anything else as
+/// an **error**, unlike the PR templates which pass an unknown key through
+/// silently. A typo like `{marker_completd}` deletes the completion convention,
+/// and the symptom — every Stop parsing as UNKNOWN until the task escalates —
+/// gives no hint about its cause.
+pub const ALLOWED_PLACEHOLDERS: &[(&str, &[&str])] = &[
+    ("marker_self_report", MARKER_PLACEHOLDERS),
+    ("verification_rubric", &[]),
+    ("verification_background_exemption", &[]),
+    ("verification_marker_convention", MARKER_PLACEHOLDERS),
+    (
+        "verification_prompt",
+        &["rubric", "background_exemption", "marker_convention"],
+    ),
+];
+
+/// The placeholders `key` may use, or `None` when the key is unknown.
+pub fn allowed_placeholders(key: &str) -> Option<&'static [&'static str]> {
+    ALLOWED_PLACEHOLDERS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| *v)
+}
+
 impl Prompts {
     /// The built-in set, with no configuration applied.
     pub fn builtin() -> &'static Prompts {
         &DEFAULTS
+    }
+
+    /// Whether the rendered text still teaches at least one status marker.
+    ///
+    /// The guard behind the ADR-0020 validation checks: the marker is the only
+    /// completion signal shared by claude, codex, and opencode, so an override
+    /// that drops it silently disables completion detection. Checked on the
+    /// **composed** output so it catches both a leaf that lost its
+    /// `{marker_*}` and an assembly that dropped `{marker_convention}`.
+    pub fn mentions_a_marker(rendered: &str) -> bool {
+        [MARKER_COMPLETED, MARKER_NEEDS_INPUT, MARKER_FAILED]
+            .iter()
+            .any(|m| rendered.contains(m))
     }
 
     /// Compute the derived fields. **Every** constructor must end with this —

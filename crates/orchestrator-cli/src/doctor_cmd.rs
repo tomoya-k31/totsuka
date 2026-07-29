@@ -516,10 +516,24 @@ fn check_hook_assets(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
     let issues = orchestrator_core::hooks::verify_assets(&cx.paths, cfg);
     if issues.is_empty() {
         let dir = orchestrator_core::hooks::hooks_dir(&cx.paths);
+        // Surface non-stock prompts here (#315): an operator debugging a task
+        // that never completes needs to know the rendered settings came from an
+        // override before they compare the text against the docs.
+        let overrides = cfg.prompts.entries().len()
+            + cfg
+                .workflows
+                .iter()
+                .map(|wf| wf.prompts.entries().len())
+                .sum::<usize>();
+        let prompt_note = if overrides == 0 {
+            String::new()
+        } else {
+            format!(" ({overrides} prompt override(s) active)")
+        };
         checks.push(Check::ok(
             "hooks",
             format!(
-                "{} scripts (0700) + {} workflow settings (0600) under {}",
+                "{} scripts (0700) + {} workflow settings (0600) under {}{prompt_note}",
                 orchestrator_core::hooks::script_count(),
                 cfg.workflows.len(),
                 dir.display()
