@@ -97,12 +97,15 @@ post-PR you still monitor all checks that report on your PR.
 - It is a **local check only** — there is no CI job for it, so nothing else will
   catch a Markdown regression if you skip it.
 - Run it **after resolving a conflict in any `*.md`**, not just after authoring
-  one. `rumdl` is what catches a leftover `<<<<<<< HEAD` / `=======` marker (as
-  `MD032`, since the marker line reads as a paragraph before the list);
-  `okf-lint` does not look for markers at all, so a docs-only conflict can be
-  committed with a marker still in it and pass every other gate. A `git grep`
-  for the three marker forms across the whole worktree is the cheap
-  belt-and-braces check.
+  one. `rumdl` is what catches a leftover conflict marker; `okf-lint` does not
+  look for markers at all, so a docs-only conflict can be committed with one
+  still in it and pass every other gate. Which rule fires depends on what
+  surrounds the marker — `MD032` when it sits directly before a list, but
+  `MD003`/`MD022` when it sits between plain paragraphs (a lone `=======` parses
+  as a setext `H2` underline). Do not pattern-match on the rule id; treat *any*
+  unexpected finding in a file you just resolved as "look for a marker". A
+  `git grep` for all three forms (`<<<<<<<`, `=======`, `>>>>>>>`) across the
+  worktree is the cheap belt-and-braces check.
 
 **Docs checks** — when `docs/**` changed:
 
@@ -206,10 +209,14 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
    **Why this runs at all when CI is green and Copilot has reviewed.** The
    three gates fail differently, and the gap `/code-review` covers is the
    repo's own written obligations — nothing in CI encodes them. The concrete
-   case: PR #320 was CI-green with **zero** Copilot findings while violating
-   the docs obligation (a new `pub mod` in `lib.rs` with no row added to
-   `docs/components/orchestrator-core.md`). `okf-lint` cannot catch that by
-   construction — it validates the docs that exist and has no way to know a
+   case: PR #320 commit `5a8c465` added a new `pub mod` to
+   `crates/orchestrator-core/src/lib.rs` with no row added to
+   `docs/components/orchestrator-core.md`. CI was green on it and Copilot
+   reviewed it and reported no comments; `/code-review` is what found the docs
+   obligation, and `6c4f8d7` added the row. **Check the commits, not
+   `gh pr diff 320`** — the merged diff contains the fix, so the violation is
+   only visible in the interim state. `okf-lint` cannot catch this by
+   construction: it validates the docs that exist and has no way to know a
    module was added. Do not reason "CI is green, so the diff is fine"; CI
    answers "does it build and pass tests", which is a strictly smaller
    question.
@@ -235,10 +242,16 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
   (not doc, wording, or trivial diff fixes). CI + Copilot + the human reviewer
   cover the small fix commits, and a full `/code-review` pass is expensive.
   Explicitly **not** re-run triggers: a fix commit answering a finding, a
-  force-push, and **a merge conflict or the rebase that resolves it** — a
-  conflict says `main` moved, not that the diff became riskier (the rebase rule
-  lives in Conflict check & resolution below; it is repeated here because that
-  is not where anyone looks when deciding whether to re-run).
+  force-push that only replays existing work, and **a merge conflict plus a
+  mechanical rebase resolving it** (conflicts resolved by keeping both sides or
+  taking one side verbatim) — a conflict says `main` moved, not that the diff
+  became riskier. The **carve-out is load-bearing**: if the conflict resolution
+  itself changed behavior, or the force-push carries substantive new logic, it
+  is a substantive commit and the rule above applies. (This restates Conflict
+  check & resolution below, because that is not where anyone looks when
+  deciding whether to re-run. Keep the carve-out in both copies — an
+  unconditional version of this rule was already shipped once and corrected
+  after review, in `29161af`.)
 
 ### If CI is red
 
@@ -279,7 +292,9 @@ GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
 - After the rebase completes, re-run the **scoped local checks** for the union
   of the branch's diff and the conflicted files (Rust set if Rust files are
   involved — the branch's code has never been built against the new `main`),
-  plus `bash scripts/okf-lint.sh docs` if `docs/**` was conflicted.
+  plus `bash scripts/okf-lint.sh docs` if `docs/**` was conflicted and
+  `rumdl check .` if **any** `*.md` was conflicted (the marker check — see
+  Markdown lint above).
 - Only when those checks pass, push:
   `git push --force-with-lease` (own feature branch only → git-conventions).
 - A force-push re-triggers CI — re-monitor it (steps 1 & 3). Copilot does not
