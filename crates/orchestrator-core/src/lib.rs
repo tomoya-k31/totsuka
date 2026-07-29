@@ -20,6 +20,7 @@ pub mod paths;
 pub mod platform;
 pub mod plugins;
 pub mod ports;
+pub mod prompts;
 pub mod recovery;
 pub mod repo_select;
 pub mod run;

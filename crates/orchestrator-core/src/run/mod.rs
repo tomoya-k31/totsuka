@@ -1429,7 +1429,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     prompt_context.push_str(instructions);
                     prompt_context.push_str("\n\n");
                 }
-                prompt_context.push_str(&hooks::MARKER_SELF_REPORT_INSTRUCTION);
+                prompt_context.push_str(&crate::prompts::Prompts::builtin().marker_self_report());
                 // Context routing per tool capability (#196 Phase 3): a tool
                 // without invisible injection (opencode — no UserPromptSubmit
                 // additionalContext channel) gets the same instructions +
