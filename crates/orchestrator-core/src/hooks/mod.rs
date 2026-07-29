@@ -94,7 +94,7 @@ pub fn verify_assets(paths: &Paths, cfg: &RootConfig) -> Vec<AssetIssue> {
         verify_one(&dir.join(name), content.as_bytes(), 0o700, &mut issues);
     }
     for wf in &cfg.workflows {
-        let rendered = render_settings(&dir, wf);
+        let rendered = render_settings(&dir, cfg, wf);
         verify_one(
             &settings_path(paths, &wf.name),
             rendered.as_bytes(),
@@ -173,7 +173,7 @@ pub fn install(paths: &Paths, cfg: &RootConfig) -> io::Result<()> {
         write_if_changed(&dir.join(name), content.as_bytes(), 0o700)?;
     }
     for wf in &cfg.workflows {
-        let rendered = render_settings(&dir, wf);
+        let rendered = render_settings(&dir, cfg, wf);
         write_if_changed(&settings_path(paths, &wf.name), rendered.as_bytes(), 0o600)?;
     }
     Ok(())
@@ -182,7 +182,7 @@ pub fn install(paths: &Paths, cfg: &RootConfig) -> io::Result<()> {
 /// Render a workflow's `orchestrator-<workflow>.json`. The `Stop` array always
 /// carries the `on-stop.sh` command hook; `verification = "llm"` workflows also
 /// get a `prompt`-type hook running the rubric in-session (D-01).
-pub fn render_settings(dir: &Path, wf: &WorkflowConfig) -> String {
+pub fn render_settings(dir: &Path, cfg: &RootConfig, wf: &WorkflowConfig) -> String {
     let script = |name: &str| dir.join(name).to_string_lossy().into_owned();
 
     let mut stop = vec![json!({
@@ -192,11 +192,7 @@ pub fn render_settings(dir: &Path, wf: &WorkflowConfig) -> String {
         // The workflow's own `rubric` replaces just that leaf; the exemption,
         // the marker convention, and how the three are assembled come from the
         // prompt registry (#313).
-        let prompts = match wf.rubric.as_deref() {
-            Some(rubric) => Prompts::builtin().with_rubric(rubric),
-            None => Prompts::builtin().clone(),
-        };
-        let prompt = prompts.verification_prompt();
+        let prompt = Prompts::resolve_for(cfg, wf).verification_prompt();
         stop.push(json!({
             "hooks": [{ "type": "prompt", "prompt": prompt, "timeout": 60 }]
         }));
@@ -811,7 +807,7 @@ output = "source"
 verification = "llm"
 "#,
         );
-        let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
         let stop = stop_hooks(&rendered);
         assert_eq!(stop.len(), 2, "command + prompt hook");
         let prompt = &stop[1]["hooks"][0];
@@ -850,7 +846,7 @@ verification = "llm"
 rubric = "回答は対象リポジトリの実調査に基づくこと"
 "#,
         );
-        let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
         let stop = stop_hooks(&rendered);
         assert_eq!(stop.len(), 2);
         let text = stop[1]["hooks"][0]["prompt"].as_str().unwrap();
@@ -883,7 +879,7 @@ output = "none"
 verification = "{mode}"
 "#
             ));
-            let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
+            let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
             let stop = stop_hooks(&rendered);
             assert_eq!(
                 stop.len(),
@@ -911,7 +907,7 @@ output = "pull_request"
 verification = "{verification}"
 "#
             ));
-            let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
+            let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
             let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
             let entry = &v["hooks"]["UserPromptSubmit"][0];
             assert!(
@@ -937,7 +933,11 @@ agent = "herdr"
 output = "pull_request"
 "#,
         );
-        let rendered = render_settings(Path::new("/xdg/data/totsuka/hooks"), &cfg.workflows[0]);
+        let rendered = render_settings(
+            Path::new("/xdg/data/totsuka/hooks"),
+            &cfg,
+            &cfg.workflows[0],
+        );
         let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(
             v["hooks"]["Stop"][0]["hooks"][0]["command"],

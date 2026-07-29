@@ -82,6 +82,77 @@ pub struct RootConfig {
     /// Claude Code hook-event ingestion settings (#131: E-03, D-02, E-07).
     #[serde(default)]
     pub hooks: HooksConfig,
+    /// Prompt-text overrides (#314). Every key is optional and falls back to
+    /// the built-in default embedded in
+    /// [`prompts`](crate::prompts); a workflow can narrow them further via
+    /// [`WorkflowConfig::prompts`].
+    #[serde(default)]
+    pub prompts: PromptsConfig,
+}
+
+/// `[prompts]` — global overrides for the text injected into the AI tool
+/// (#314, epic #311).
+///
+/// Interpreted by [`prompts`](crate::prompts), not here: this struct only
+/// records what the operator wrote. Every field is `None` by default, meaning
+/// "use the built-in".
+///
+/// The markers themselves (`<<STATUS:COMPLETED>>` and friends) are **not**
+/// configurable — see the module docs of [`prompts`](crate::prompts).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PromptsConfig {
+    /// Completion self-report instruction injected into every hook-capable
+    /// dispatch. Placeholders: `{marker_completed}` `{marker_needs_input}`
+    /// `{marker_failed}`.
+    #[serde(default)]
+    pub marker_self_report: Option<String>,
+    /// Judging criteria of the llm-verification prompt hook. The per-workflow
+    /// [`rubric`](WorkflowConfig::rubric) key predates this and still wins for
+    /// the workflow that sets it.
+    #[serde(default)]
+    pub verification_rubric: Option<String>,
+    /// Intermediate-Stop exemption appended to the rubric.
+    #[serde(default)]
+    pub verification_background_exemption: Option<String>,
+    /// Marker convention appended to the rubric. Placeholders:
+    /// `{marker_completed}` `{marker_needs_input}` `{marker_failed}`.
+    #[serde(default)]
+    pub verification_marker_convention: Option<String>,
+    /// How the three keys above are assembled. Placeholders: `{rubric}`
+    /// `{background_exemption}` `{marker_convention}`.
+    #[serde(default)]
+    pub verification_prompt: Option<String>,
+}
+
+/// `[[workflows]].prompts` — the workflow-scoped subset of
+/// [`PromptsConfig`] (#314).
+///
+/// A separate type rather than a reuse of [`PromptsConfig`] because the two
+/// diverge: prompts that describe a shared on-disk asset (the opencode plan
+/// agent, #316) are global-only, since one file backs every session. Keeping
+/// them distinct means `deny_unknown_fields` rejects a global-only key written
+/// under a workflow, naming it — no extra validation needed. `serde(flatten)`
+/// would have deduplicated the fields but silently disables
+/// `deny_unknown_fields`, turning a typo into a silent no-op.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowPromptsConfig {
+    /// See [`PromptsConfig::marker_self_report`].
+    #[serde(default)]
+    pub marker_self_report: Option<String>,
+    /// See [`PromptsConfig::verification_rubric`].
+    #[serde(default)]
+    pub verification_rubric: Option<String>,
+    /// See [`PromptsConfig::verification_background_exemption`].
+    #[serde(default)]
+    pub verification_background_exemption: Option<String>,
+    /// See [`PromptsConfig::verification_marker_convention`].
+    #[serde(default)]
+    pub verification_marker_convention: Option<String>,
+    /// See [`PromptsConfig::verification_prompt`].
+    #[serde(default)]
+    pub verification_prompt: Option<String>,
 }
 
 /// Hook-event ingestion settings from `[hooks]` (#131).
@@ -278,8 +349,19 @@ pub struct WorkflowConfig {
     pub timeout_secs: Option<u64>,
     /// Criteria text embedded into the llm-verification prompt hook. Only
     /// meaningful with `verification = "llm"` (validation warns otherwise).
+    ///
+    /// Predates `[prompts]` (#314) and is kept working: it outranks
+    /// [`PromptsConfig::verification_rubric`] because both are about this
+    /// workflow, and letting a newly-added global key silently override every
+    /// existing per-workflow `rubric` would be a real regression. It loses only
+    /// to [`prompts.verification_rubric`](WorkflowPromptsConfig::verification_rubric)
+    /// on the same workflow.
     #[serde(default)]
     pub rubric: Option<String>,
+    /// Prompt overrides scoped to this workflow (#314) — the strongest layer,
+    /// above `[prompts]` and above [`rubric`](Self::rubric).
+    #[serde(default)]
+    pub prompts: WorkflowPromptsConfig,
     /// Explicit AI-tool pin for this workflow (#196) — the strongest level of
     /// the tool precedence (workflow > repo > `default_tool`). Use it when the
     /// flow's shape demands a specific tool (e.g. `verification = "llm"`

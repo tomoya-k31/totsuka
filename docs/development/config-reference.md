@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: human:tomoya-k31, at: 2026-07-28T00:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-07-30T21:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -45,6 +45,7 @@ owner: tomoya-k31
 | `[hooks]` | テーブル | — | エージェント CLI フックイベント受信の設定（下記、#131） |
 | `default_tool` | string? | `"claude"` | グローバル既定の AI ツール名（#196）。workflow / repo が指定しない場合に適用 |
 | `[tools.{name}]` | テーブル | — | AI ツールレジストリ（下記、#196）。組み込み既定 `claude` を上書き・拡張 |
+| `[prompts]` | テーブル | — | AI ツールへ差し込むプロンプト文の上書き（下記、#314） |
 
 # 設定スキーマのバージョニング方針
 
@@ -115,7 +116,8 @@ owner: tomoya-k31
 | `on_failure` | `{ set_status = "..." }`? | なし | 失敗時にソース側ステータスを更新（publish 失敗など retry 可能な失敗では書き戻さない） |
 | `verification` | enum | `llm` | 完了自己申告の検収方式（D-01）: `llm`（prompt 型 Stop フックで in-session 検収）/ `human`（`totsuka task verify` 待ち。有効な notifier が無いと警告）/ `none`（検収なし） |
 | `timeout_secs` | int? | 1800 | 最終フックシグナルからの無応答上限秒。超過でエスカレーション（D-03） |
-| `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告 |
+| `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告。`[prompts]`（#314）より前からあるキーで、動作は維持される — 同じワークフローの `[workflows.prompts].verification_rubric` にのみ負け、グローバルの `[prompts].verification_rubric` には勝つ |
+| `[workflows.prompts]` | テーブル | — | このワークフロー専用のプロンプト上書き（下記 `[prompts]` の 5 キー。最優先層） |
 | `tool` | string? | なし | AI ツールの明示ピン（#196）。優先順位は workflow > repo > `default_tool`。`verification = "llm"` は Claude の prompt 型 Stop フックが必要なので、非 claude 系へ解決されうる構成では `tool = "claude"` のピンを警告で提案 |
 
 定義順に first-match（F-81）。同一ソース内でトリガーが重なると警告。
@@ -136,6 +138,61 @@ pane 内で起動する AI ツール CLI の定義。`{name}` は `default_tool`
 kind ごとの argv 組立の差分: claude はフック設定を `--settings <path>` で受け、resume は `--resume <id>` フラグ。codex はフックがグローバル登録（`~/.codex/hooks.json`、`TOTSUKA_*` env でゲート）のため `--settings` 相当は付かず、resume は `resume <id>` **サブコマンド**（基本引数の直後・モード引数の前に挿入）。 opencode もグローバル配置の JS プラグイン（env ゲート）で完了検知するため `--settings` 相当は無く、resume は `-s <id>` フラグ。opencode は不可視注入が無いため、タスク指示 + マーカー規約は**可視の extra_context** として pane に渡る。
 
 ツール解決はディスパッチ時に workflow ピン > repo 既定 > `default_tool` > 組み込み `claude` の順。解決結果は core が完全な argv/env（`ToolLaunchSpec`）へ組み立てて agent プラグインに渡すため、herdr.toml の `agent_command` / `plan_args` は後方互換フォールバック（deprecated）になった。
+
+# `[prompts]`（AI ツールへ差し込むプロンプト、#314）
+
+claude / codex / opencode に差し込むプロンプト文の上書き。組み込みデフォルトは
+`crates/orchestrator-core/src/prompts/defaults.toml` にバイナリ埋め込みされており、
+このテーブルは**キー単位の上書き**である（未指定キーは組み込みのまま）。値はインライン文字列のみで、
+ファイルパス指定の形式は無い。
+
+| キー | 型 | 既定 | 説明 | プレースホルダ |
+|---|---|---|---|---|
+| `marker_self_report` | string? | 組み込み | 全ディスパッチに注入される完了自己申告指示。invisible injection 対応ツールは env `TOTSUKA_PROMPT_CONTEXT` 経由、非対応（opencode）は可視 `extra_context` | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |
+| `verification_rubric` | string? | 組み込み | llm 検収の判定基準文 | — |
+| `verification_background_exemption` | string? | 組み込み | バックグラウンドタスク実行中の中間停止を検収対象から外す文 | — |
+| `verification_marker_convention` | string? | 組み込み | 検収後にマーカーを再掲させる文 | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |
+| `verification_prompt` | string? | `"{rubric}\n\n{background_exemption}\n\n{marker_convention}"` | 上記 3 つの組み立て方。節の並べ替え・省略ができる | `{rubric}` `{background_exemption}` `{marker_convention}` |
+
+`verification_*` の 4 キーは `verification = "llm"` のワークフローでのみ使われる（prompt 型 Stop フックを持つのは claude だけで、他ツールでは `human` へ縮退する）。
+
+**マーカー自体（`<<STATUS:COMPLETED>>` など）は設定できない。** `on-stop.sh`（bash）と `totsuka-opencode.js` がリテラルをパースし、[ADR-0020](/decisions/adr-0020-status-marker-stays.md) が 3 ツール共通の唯一の完了信号と定めているため。ここで編集できるのは規約を**教える散文**であって規約そのものではない。`{marker_*}` はそのワイヤ定数へ解決される。
+
+## 優先順位
+
+強い順に 4 層。
+
+1. `[[workflows]].prompts.<key>` — ワークフロー専用
+2. `[[workflows]].rubric` — レガシー（rubric の葉のみ）
+3. `[prompts].<key>` — グローバル
+4. 組み込みデフォルト
+
+**2 が 3 より強いのは意図的**である。どちらもワークフロー単位の設定なので、逆順にすると `[prompts].verification_rubric` を新たに足した瞬間に既存の per-workflow `rubric` が黙って上書きされる。
+
+## 展開規則
+
+- `{placeholder}` の置換は**シングルパス**。置換された値の中に `{token}` があっても再展開されない
+- 組み立ては 2 段階（葉 → `verification_prompt`）。各段がシングルなので、rubric 内に書いたリテラル `{marker_convention}` は挿入されるだけで展開されない
+- 未知のプレースホルダはそのまま出力される（レンダリング時は fail-soft）
+- プロンプトの変更は**次のディスパッチから有効**。稼働中セッションの `--settings` は書き換わるが、既に起動しているエージェントには届かない
+
+## 例
+
+```toml
+[prompts]
+verification_rubric = "変更が意図どおり動くことを、実際にテストを走らせて確認してください。"
+
+[[workflows]]
+name = "slack-reply"
+source = "slack"
+mode = "implement"
+agent = "herdr"
+output = "source"
+verification = "llm"
+
+  [workflows.prompts]
+  verification_rubric = "返信案が質問に直接答えているか、根拠が示されているかを検証してください。"
+```
 
 # `[llm]`（AI Gateway）
 
