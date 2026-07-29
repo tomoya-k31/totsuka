@@ -60,7 +60,11 @@ claude / codex / opencode に差し込むプロンプト文が Rust の文字列
 
 ## 4. マーカー規約を失う上書きは検証エラーにする
 
-`config validate` / `run` / `doctor` が、**組み立て後**の `marker_self_report` を検査し、マーカーへの言及が 1 つも無ければ**エラー**として起動を止める。プレースホルダのタイポ（`{marker_completd}` 等）も同じくエラーにする。
+`config validate` / `run` / `doctor` が、**組み立て後**の出力を検査する。組み立て後を見るのは、葉が `{marker_*}` を失った場合と組み立てが節を落とした場合の両方を捕まえるためである。
+
+- `marker_self_report` にマーカーへの言及が 1 つも無ければ **エラー**（起動を止める）
+- `verification = "llm"` のワークフローで、組み立て後の `verification_prompt` にマーカーへの言及が無ければ **警告**
+- プレースホルダのタイポ（`{marker_completd}` 等）は **エラー**
 
 ## 5. `TOTSUKA_PROMPTS_*` env override は追加しない
 
@@ -115,20 +119,22 @@ claude / codex / opencode に差し込むプロンプト文が Rust の文字列
 ## 受け入れるコスト・リスク
 
 - **上書きミスで完了検知が壊れうる。** 緩和は決定 4 の検証エラーと、決定「`on-stop.sh` は固定」による第 2 のチャンス
-- **アセットの意味論が変わる。** `orchestrator-<workflow>.json` と `agents/totsuka-plan.md` は config 由来のレンダリング結果になる。ドリフト検知は嘘にならない（`verify_one` は毎回 config から再レンダリングした期待値と比較する）が、[フックのセキュリティ](/security/hook-security.md) §3 の「静的埋め込み」の主張は**プロンプト文には当てはまらなくなる**
+- **アセットの意味論が変わる。** `orchestrator-<workflow>.json` と `agents/totsuka-plan.md` は config 由来のレンダリング結果になる。ドリフト検知は嘘にならない（`verify_assets` が毎回 config から再レンダリングした期待値を作って `verify_one` に渡す）が、[フックのセキュリティ](/security/hook-security.md) §3 の「静的埋め込み」の主張は**プロンプト文には当てはまらなくなる**
 - **稼働中セッションには届かない。** `[prompts]` を編集すると次の `run` / `doctor` が settings ファイルを書き換えるが、既に起動しているエージェントには反映されない。プロンプト変更は**次のディスパッチから有効**
 - 信頼境界は変わらない。`config.toml` はユーザー自身の XDG config 配下にあり、ペインに直接打ち込むのと同じ信頼領域である。決定 2 の一線を守る限り、攻撃面は増えない
 
 # 実装
 
-エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311) の子 issue として段階的に実装した。
+エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311) の子 issue として段階的に実装する。本 ADR を書いた時点（2026-07-30）の状況は次のとおりで、**未完の行は決定であって現状ではない**。
 
-| PR | 内容 |
-|---|---|
-| #312 | `template` モジュール抽出（シングルパスレンダラの共通化） |
-| #313 | `prompts` レジストリ + 埋め込み `defaults.toml`（挙動保存） |
-| #314 | `[prompts]` / `[[workflows]].prompts` の設定面 |
-| #315 | 検証（決定 4）+ doctor の上書き数表示 + 本 ADR |
-| #316 | opencode plan エージェント（frontmatter は固定） |
-| #317 | agent-ide-orca |
-| #318 | task-source-slack |
+| issue | 内容 | 状態 |
+|---|---|---|
+| [#312](https://github.com/tomoya-k31/totsuka/issues/312) | `template` モジュール抽出（シングルパスレンダラの共通化） | 完了 |
+| [#313](https://github.com/tomoya-k31/totsuka/issues/313) | `prompts` レジストリ + 埋め込み `defaults.toml`（挙動保存） | 完了 |
+| [#314](https://github.com/tomoya-k31/totsuka/issues/314) | `[prompts]` / `[[workflows]].prompts` の設定面 | 完了 |
+| [#317](https://github.com/tomoya-k31/totsuka/issues/317) | agent-ide-orca | 完了 |
+| [#315](https://github.com/tomoya-k31/totsuka/issues/315) | 検証（決定 4）+ doctor の上書き数表示 + 本 ADR | 本 ADR と同時 |
+| [#316](https://github.com/tomoya-k31/totsuka/issues/316) | opencode plan エージェント（frontmatter は固定） | **未着手** |
+| [#318](https://github.com/tomoya-k31/totsuka/issues/318) | task-source-slack | **未着手** |
+
+決定 2 の表のうち **plan エージェントの frontmatter の行は #316 で実現する**。現時点では `totsuka-plan.md` 全体が埋め込みなので、そもそも設定できる面が無い（＝一線は破られていないが、実現の仕方はまだ入っていない）。決定 4 の検証も、`opencode_plan_agent` キーに対する frontmatter 検査は #316 でキー本体と同時に入る。

@@ -519,11 +519,14 @@ fn check_hook_assets(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
         // Surface non-stock prompts here (#315): an operator debugging a task
         // that never completes needs to know the rendered settings came from an
         // override before they compare the text against the docs.
+        // The legacy `[[workflows]].rubric` counts too: it lives on a different
+        // struct but resolves into the same `verification_rubric`, so a config
+        // using only it is just as non-stock.
         let overrides = cfg.prompts.entries().len()
             + cfg
                 .workflows
                 .iter()
-                .map(|wf| wf.prompts.entries().len())
+                .map(|wf| wf.prompts.entries().len() + usize::from(wf.rubric.is_some()))
                 .sum::<usize>();
         let prompt_note = if overrides == 0 {
             String::new()

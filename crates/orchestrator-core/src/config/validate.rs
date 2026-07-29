@@ -436,15 +436,43 @@ where
             });
         }
 
-        prompt_findings(wf, findings);
+        prompt_findings(cfg, wf, findings);
     }
 }
 
 /// Advisories for a workflow's prompt overrides (#315). Errors live in
 /// [`validate_static`]; these are the "it parses but probably isn't what you
 /// meant" cases.
-fn prompt_findings(wf: &crate::config::WorkflowConfig, findings: &mut Vec<Finding>) {
+fn prompt_findings(
+    cfg: &RootConfig,
+    wf: &crate::config::WorkflowConfig,
+    findings: &mut Vec<Finding>,
+) {
     let entries = wf.prompts.entries();
+
+    // ADR-0020 guard, warning half. The composed verification prompt is the
+    // `prompt`-type Stop hook's body, and the judging model has to re-emit a
+    // marker for `on-stop.sh` to parse; without one every Stop reads as
+    // UNKNOWN. A warning rather than an error (unlike `marker_self_report`)
+    // because restructuring the verification text — dropping the convention
+    // section on purpose, say, when the up-front instruction already carries
+    // it — is a legitimate thing to want.
+    //
+    // Composed, so it catches both a `verification_marker_convention` that
+    // lost its `{marker_*}` and a `verification_prompt` assembly that dropped
+    // `{marker_convention}`. Only for llm workflows: nothing else renders it.
+    if wf.verification == VerificationMode::Llm {
+        let rendered = crate::prompts::Prompts::resolve_for(cfg, wf).verification_prompt();
+        if !crate::prompts::Prompts::mentions_a_marker(&rendered) {
+            findings.push(Finding {
+                severity: FindingSeverity::Warning,
+                message: format!(
+                    "workflow `{}` renders an llm-verification prompt that never mentions a status marker → the verifying model will not re-emit one, so the Stop parses as UNKNOWN; keep {{marker_convention}} in prompts.verification_prompt and the markers in prompts.verification_marker_convention",
+                    wf.name
+                ),
+            });
+        }
+    }
 
     // The `verification_*` family only feeds the llm prompt hook, same as the
     // legacy `rubric` above. Its message is left untouched so the wording the
@@ -1228,6 +1256,70 @@ verification = "llm"
                 .iter()
                 .any(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. }))
         );
+    }
+
+    #[test]
+    fn a_verification_prompt_without_any_marker_warns() {
+        // The warning half of the ADR-0020 guard: the judging model has to
+        // re-emit a marker for `on-stop.sh` to parse. A warning rather than an
+        // error, because dropping the convention section on purpose is a
+        // legitimate restructuring.
+        let cfg = prompts_cfg("  [workflows.prompts]\n  verification_prompt = \"{rubric}\"\n");
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("`reply`")
+                    && f.message.contains("never mentions a status marker")),
+            "got {findings:?}"
+        );
+        // Not an error — the config still starts.
+        assert!(
+            !validate_static(&cfg, &env_from(&[]))
+                .iter()
+                .any(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. })),
+            "the verification prompt half must not block startup"
+        );
+
+        // A marker-free convention leaf is caught too (composed check).
+        let cfg = prompts_cfg(
+            "  [workflows.prompts]\n  verification_marker_convention = \"最後に一言そえてください\"\n",
+        );
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("never mentions a status marker")),
+            "got {findings:?}"
+        );
+
+        // Stock config, and non-llm workflows, produce nothing.
+        for extra in ["", "verification = \"none\"\n"] {
+            let cfg = RootConfig::from_toml_str(&format!(
+                r#"{PLUGIN_PAIR}
+[[workflows]]
+name = "reply"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+{}
+"#,
+                if extra.is_empty() {
+                    "verification = \"llm\"\n"
+                } else {
+                    extra
+                }
+            ))
+            .unwrap();
+            let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+            assert!(
+                !warnings_of(&findings)
+                    .iter()
+                    .any(|f| f.message.contains("never mentions a status marker")),
+                "unexpected warning for {extra:?}: {findings:?}"
+            );
+        }
     }
 
     #[test]
