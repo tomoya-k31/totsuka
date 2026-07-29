@@ -1,0 +1,36 @@
+# Built-in prompt defaults for the orca agent_ide plugin (#317).
+#
+# Embedded in the binary with `include_str!` and parsed once at first use, so
+# the prompt text is edited here rather than in Rust source.
+#
+# These are DEFAULTS, not the live values: editing this file changes what a
+# freshly built totsuka ships with, not what an existing installation uses.
+#
+# The keys here are NOT the config keys. `plugins/orca.toml` is a flat table of
+# `OrcaConfig` fields, so each default below is overridden under a different
+# name — the mapping is spelled out per key. Copying a key name from this file
+# into `plugins/orca.toml` fails `initialize` with CONFIG_INVALID, because
+# `OrcaConfig` is `deny_unknown_fields`.
+#
+#   defaults.toml            plugins/orca.toml
+#   ---------------------    ---------------------
+#   [prompts].plan_prefix →  plan_prompt_prefix
+
+[prompts]
+# Prepended to the launch prompt in plan mode (F-36). orca has no structured
+# plan API — unlike claude's `--permission-mode plan` or codex's
+# `--sandbox read-only`, plan intent can only be conveyed to the agent in the
+# prompt itself, so this text is the entire enforcement mechanism.
+#
+# Overridden per installation with `plan_prompt_prefix` in `plugins/orca.toml`
+# (note the different key name — see the mapping above).
+#
+# This must stay a TOML *basic* string (double quotes): `\n\n` below is an
+# escape that has to become two real newlines. In a literal string ('single
+# quotes') it would stay the four characters `\n\n` and leak into the agent's
+# prompt, taking the blank-line separator with it.
+#
+# The trailing blank line matters: the task prompt is concatenated directly
+# after this string, and without the separation the directive runs into the
+# first line of the task.
+plan_prefix = "【設計のみ / plan mode】まず設計・計画を提示し、コードの実装や変更はしないでください。\n\n"
