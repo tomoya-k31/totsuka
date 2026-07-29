@@ -17,6 +17,8 @@
 
 use std::process::Command;
 
+use crate::template;
+
 /// A pull request to open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrRequest {
@@ -116,35 +118,20 @@ pub struct PrContext<'a> {
 /// pass**, so a substituted value that itself contains `{token}` text (e.g. a
 /// task title literally containing `{summary}`) is never re-expanded — that
 /// would be template injection from untrusted task data.
+///
+/// The substitution itself lives in [`template::render`]; this only names the
+/// fields a PR template may reference.
 pub fn render_template(template: &str, ctx: &PrContext<'_>) -> String {
-    let mut out = String::with_capacity(template.len());
-    let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        out.push_str(&rest[..open]);
-        let after = &rest[open + 1..];
-        let Some(close) = after.find('}') else {
-            // Unbalanced `{`: emit the rest literally.
-            out.push_str(&rest[open..]);
-            return out;
-        };
-        let key = &after[..close];
-        match key {
-            "title" => out.push_str(ctx.title),
-            "url" => out.push_str(ctx.url),
-            "source" => out.push_str(ctx.source),
-            "task_id" => out.push_str(ctx.task_id),
-            "summary" => out.push_str(ctx.summary),
-            // Unknown placeholder: keep it verbatim (helps spot typos).
-            _ => {
-                out.push('{');
-                out.push_str(key);
-                out.push('}');
-            }
-        }
-        rest = &after[close + 1..];
-    }
-    out.push_str(rest);
-    out
+    template::render(
+        template,
+        &[
+            ("title", ctx.title),
+            ("url", ctx.url),
+            ("source", ctx.source),
+            ("task_id", ctx.task_id),
+            ("summary", ctx.summary),
+        ],
+    )
 }
 
 #[cfg(test)]
