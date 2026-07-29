@@ -3,12 +3,13 @@
 //! Built-in defaults live in the embedded [`defaults.toml`], not in Rust string
 //! literals, so rewording what an agent is told is an edit to a data file
 //! rather than a code change (epic #311). This module parses that file once and
-//! renders each template on demand.
+//! resolves each template when a set is built.
 //!
-//! It sits alongside [`tool`](crate::tool) rather than under
-//! [`config`](crate::config) because it needs both the config schema (once
-//! overrides land) and [`domain::signal`](crate::domain::signal)'s marker
-//! constants, and `config` deliberately knows nothing about `domain`.
+//! It sits alongside [`tool`](crate::tool) and [`worktree`](crate::worktree)
+//! rather than under [`config`](crate::config) because it is an
+//! *interpretation* layer: `config` owns parse / secret-resolve / validate /
+//! edit, and the modules that turn a parsed config into runtime values live at
+//! the top level. `tool::registry_from_config` is the same shape.
 //!
 //! # What is configurable and what is not
 //!
@@ -38,6 +39,7 @@ static DEFAULTS: LazyLock<Prompts> = LazyLock::new(|| {
     toml::from_str::<Embedded>(include_str!("defaults.toml"))
         .expect("embedded defaults.toml must parse")
         .prompts
+        .finish()
 });
 
 /// Top level of `defaults.toml`.
@@ -68,12 +70,32 @@ pub struct Prompts {
     verification_marker_convention: String,
     /// How the three keys above are assembled.
     verification_prompt: String,
+    /// [`marker_self_report`](Self::marker_self_report) with its placeholders
+    /// already substituted.
+    ///
+    /// Rendered once by [`finish`](Self::finish) when the set is built, not per
+    /// call: this one is on the dispatch path, and the pre-#313 code had it as
+    /// a `LazyLock<String>` that every dispatch merely copied from. Deriving it
+    /// here keeps that property while the *template* stays editable for the
+    /// config overrides landing in #314 — which resolve per workflow at
+    /// startup, so a global cache would be wrong.
+    #[serde(skip)]
+    rendered_marker_self_report: String,
 }
 
 impl Prompts {
     /// The built-in set, with no configuration applied.
     pub fn builtin() -> &'static Prompts {
         &DEFAULTS
+    }
+
+    /// Compute the derived fields. **Every** constructor must end with this —
+    /// a set that skips it renders an empty self-report instruction, which
+    /// would silently disable completion detection.
+    fn finish(mut self) -> Self {
+        self.rendered_marker_self_report =
+            template::render(&self.marker_self_report, &Self::marker_vars());
+        self
     }
 
     /// The wire marker constants, as template variables.
@@ -93,8 +115,11 @@ impl Prompts {
     /// marker, so `on-stop.sh` rarely has to `block` and force a regeneration.
     /// The rationale for each clause is recorded above the key in
     /// `defaults.toml`, where anyone overriding the text will read it.
-    pub fn marker_self_report(&self) -> String {
-        template::render(&self.marker_self_report, &Self::marker_vars())
+    ///
+    /// Borrowed, not rendered: the substitution happened once when this set was
+    /// built, so the dispatch path does no work per task.
+    pub fn marker_self_report(&self) -> &str {
+        &self.rendered_marker_self_report
     }
 
     /// The `prompt`-type Stop hook body for a `verification = "llm"` workflow.
@@ -119,8 +144,9 @@ impl Prompts {
         )
     }
 
-    /// The rubric alone, before assembly. Used by the settings renderer's
-    /// per-workflow override path.
+    /// The rubric leaf, unassembled. Lets a caller distinguish "this set uses
+    /// the built-in rubric" from "this set was given one"; the renderer itself
+    /// goes through [`with_rubric`](Self::with_rubric).
     pub fn verification_rubric(&self) -> &str {
         &self.verification_rubric
     }
@@ -132,6 +158,7 @@ impl Prompts {
             verification_rubric: rubric.to_string(),
             ..self.clone()
         }
+        .finish()
     }
 }
 

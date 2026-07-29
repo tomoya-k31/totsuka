@@ -772,6 +772,11 @@ output = "pull_request"
     /// the only place the literal markers still reach a session that overrode
     /// the prompts). Pin it so the copy cannot silently drift from the source
     /// of truth in `domain::signal`.
+    ///
+    /// Limitation: the list below is hand-written, so this catches a renamed or
+    /// re-valued constant but not a *new* `MARKER_*` the script was never
+    /// taught. Adding one is a wire-protocol change (ADR-0020) that lands with
+    /// its own `on-stop.sh` edit anyway.
     #[test]
     fn on_stop_script_names_every_marker_const() {
         let script = include_str!("on-stop.sh");
