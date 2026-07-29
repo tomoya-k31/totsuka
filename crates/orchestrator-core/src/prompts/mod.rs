@@ -119,7 +119,7 @@ impl Prompts {
     /// Borrowed, not rendered: the substitution happened once when this set was
     /// built, so the dispatch path does no work per task.
     pub fn marker_self_report(&self) -> &str {
-        &self.rendered_marker_self_report
+        self.rendered_marker_self_report.as_str()
     }
 
     /// The `prompt`-type Stop hook body for a `verification = "llm"` workflow.
