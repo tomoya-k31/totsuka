@@ -22,8 +22,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::config::{RootConfig, VerificationMode, WorkflowConfig};
-use crate::domain::signal::{MARKER_COMPLETED, MARKER_FAILED, MARKER_NEEDS_INPUT};
 use crate::paths::Paths;
+use crate::prompts::Prompts;
 use crate::tool::{ToolKind, ToolProfile};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -59,29 +59,6 @@ const HOOK_SCRIPTS: &[(&str, &str)] = &[
         include_str!("on-user-prompt-submit.sh"),
     ),
 ];
-
-/// Rubric embedded into the `prompt`-type Stop hook when a `verification =
-/// "llm"` workflow sets no `rubric` of its own.
-pub const DEFAULT_RUBRIC: &str = "作業が指示された要件を実際に満たしているかを、対象リポジトリの現在のコードと状態に基づいて検証してください。表面的な自己申告ではなく、変更が意図どおり機能し破綻や取りこぼしがないことを確認してください。";
-
-/// Intermediate-Stop exemption for the `prompt`-type hook, mirroring
-/// `on-stop.sh`'s R-02/D-12 rule: a Stop with background tasks still running is
-/// a heartbeat, not a completion claim. Without this the judge blocks every
-/// such Stop — the pane shows a spurious "Stop hook error" and the session is
-/// forced to busy-wait in-turn instead of yielding to the task-notification
-/// re-invoke (real-machine finding on the `slack-reply` workflow).
-const BACKGROUND_EXEMPTION: &str = "ただし、バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止は完了申告ではありません。その場合は検証もブロックも行わず停止を許可してください。完了判定はバックグラウンドタスクが残っていない停止に対してのみ行います。";
-
-/// Appended to the rubric so the verifying model re-emits the status marker the
-/// `on-stop.sh` command hook parses (D-12). Built from the shared marker
-/// constants in [`crate::domain::signal`] so the rendered convention cannot
-/// drift from the receiver's
-/// [`MARKER_SELF_REPORT_INSTRUCTION`](crate::run::hooks) counterpart.
-fn marker_convention() -> String {
-    format!(
-        "検証結果を踏まえ、応答の最終行に必ず次のいずれかのマーカーを付けてください: {MARKER_COMPLETED} / {MARKER_NEEDS_INPUT} / {MARKER_FAILED}"
-    )
-}
 
 /// Directory holding the scripts and rendered settings.
 pub fn hooks_dir(paths: &Paths) -> PathBuf {
@@ -212,9 +189,14 @@ pub fn render_settings(dir: &Path, wf: &WorkflowConfig) -> String {
         "hooks": [{ "type": "command", "command": script("on-stop.sh"), "timeout": 30 }]
     })];
     if wf.verification == VerificationMode::Llm {
-        let rubric = wf.rubric.as_deref().unwrap_or(DEFAULT_RUBRIC);
-        let convention = marker_convention();
-        let prompt = format!("{rubric}\n\n{BACKGROUND_EXEMPTION}\n\n{convention}");
+        // The workflow's own `rubric` replaces just that leaf; the exemption,
+        // the marker convention, and how the three are assembled come from the
+        // prompt registry (#313).
+        let prompts = match wf.rubric.as_deref() {
+            Some(rubric) => Prompts::builtin().with_rubric(rubric),
+            None => Prompts::builtin().clone(),
+        };
+        let prompt = prompts.verification_prompt();
         stop.push(json!({
             "hooks": [{ "type": "prompt", "prompt": prompt, "timeout": 60 }]
         }));
@@ -277,6 +259,7 @@ fn set_mode(_path: &Path, _mode: u32) -> io::Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::domain::signal::{MARKER_COMPLETED, MARKER_FAILED, MARKER_NEEDS_INPUT};
     use std::io::Write;
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -782,6 +765,33 @@ output = "pull_request"
         );
     }
 
+    /// `on-stop.sh` hand-writes the marker text into its `block` reason, in
+    /// bash, where the Rust constants cannot be interpolated. That duplication
+    /// is deliberate (#313 kept the block reason fixed: it is the safety net
+    /// for when the up-front instruction is missing or misconfigured, and it is
+    /// the only place the literal markers still reach a session that overrode
+    /// the prompts). Pin it so the copy cannot silently drift from the source
+    /// of truth in `domain::signal`.
+    ///
+    /// Limitation: the list below is hand-written, so this catches a renamed or
+    /// re-valued constant but not a *new* `MARKER_*` the script was never
+    /// taught. Adding one is a wire-protocol change (ADR-0020) that lands with
+    /// its own `on-stop.sh` edit anyway.
+    #[test]
+    fn on_stop_script_names_every_marker_const() {
+        let script = include_str!("on-stop.sh");
+        for marker in [MARKER_COMPLETED, MARKER_NEEDS_INPUT, MARKER_FAILED] {
+            // The script embeds the markers inside a JSON string literal, so
+            // its `"` are backslash-escaped; compare against that form.
+            let escaped = marker.replace('"', "\\\"");
+            assert!(
+                script.contains(&escaped),
+                "on-stop.sh no longer names `{marker}` — the block reason drifted \
+                 from domain::signal"
+            );
+        }
+    }
+
     /// Parse a rendered settings string and return its `hooks.Stop` array.
     fn stop_hooks(rendered: &str) -> Vec<serde_json::Value> {
         let v: serde_json::Value = serde_json::from_str(rendered).unwrap();
@@ -807,9 +817,17 @@ verification = "llm"
         let prompt = &stop[1]["hooks"][0];
         assert_eq!(prompt["type"], "prompt");
         let text = prompt["prompt"].as_str().unwrap();
-        assert!(text.contains(DEFAULT_RUBRIC), "default rubric embedded");
+        assert_eq!(
+            text,
+            Prompts::builtin().verification_prompt(),
+            "a workflow with no `rubric` renders the built-in set verbatim"
+        );
         assert!(
-            text.contains(BACKGROUND_EXEMPTION),
+            text.contains(Prompts::builtin().verification_rubric()),
+            "default rubric embedded"
+        );
+        assert!(
+            text.contains("バックグラウンドタスク"),
             "R-02 intermediate-stop exemption embedded"
         );
         assert!(
@@ -838,12 +856,16 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
         let text = stop[1]["hooks"][0]["prompt"].as_str().unwrap();
         assert!(text.contains("回答は対象リポジトリの実調査に基づくこと"));
         assert!(
-            !text.contains(DEFAULT_RUBRIC),
+            !text.contains(Prompts::builtin().verification_rubric()),
             "custom rubric replaces default"
         );
         assert!(
-            text.contains(BACKGROUND_EXEMPTION),
+            text.contains("バックグラウンドタスク"),
             "exemption is appended even with a custom rubric"
+        );
+        assert!(
+            text.contains("<<STATUS:COMPLETED>>"),
+            "the marker convention survives a custom rubric"
         );
     }
 

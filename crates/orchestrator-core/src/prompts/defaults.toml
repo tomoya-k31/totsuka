@@ -1,0 +1,109 @@
+# Built-in prompt defaults for the orchestrator core (#313).
+#
+# Embedded in the binary with `include_str!` and parsed once at first use, so
+# the text an agent is shown is edited here rather than in Rust source
+# (epic #311).
+#
+# These are DEFAULTS, not the live values: editing this file changes what a
+# freshly built totsuka ships with, not what an existing installation uses.
+#
+# `{placeholder}` substitution is single-pass (`crate::template`), so a value
+# that itself contains `{token}` text is inserted, never re-expanded. The
+# allowed placeholders differ per key and are stated with each one; an unknown
+# placeholder is emitted verbatim at render time.
+#
+# The `{marker_*}` placeholders resolve to the wire constants in
+# `crate::domain::signal`. Those are NOT configurable — `on-stop.sh` and
+# `totsuka-opencode.js` parse the literal marker text, and ADR-0020 keeps the
+# marker as the one completion signal shared by claude, codex, and opencode.
+# What is editable here is the prose that teaches the convention, not the
+# convention.
+
+[prompts]
+
+# Injected into EVERY hook-capable dispatch via `TOTSUKA_PROMPT_CONTEXT`
+# (D-12; hook knowledge stays in core per H-01, so source plugins never mention
+# markers). The `UserPromptSubmit` hook turns that env into invisible
+# `additionalContext`, so this reaches the model without being typed into the
+# pane. For a tool without invisible injection (opencode) the same text is
+# delivered as visible `extra_context` instead.
+#
+# Placeholders: {marker_completed} {marker_needs_input} {marker_failed}
+#
+# Three things here were learned on real hardware and cost a debugging cycle
+# each. Do not drop them when rewording:
+#
+#  1. Teaching the convention UP FRONT makes the FIRST Stop carry a marker, so
+#     `on-stop.sh` never has to `block` and force a full regeneration — the
+#     pane shows the answer once instead of twice (#131). The `on-stop.sh`
+#     block stays as the safety net for when the agent still forgets.
+#  2. The delivery contract (found on the `slack-reply` workflow): ONLY the
+#     marker-bearing message is published, so it must be a self-contained
+#     answer and never a reference to an earlier pane message.
+#  3. No marker while background tasks run: that Stop is a heartbeat (R-02)
+#     and the session is re-invoked when they finish. An agent that marked the
+#     earlier turn "completed" tends to answer the re-invoke with "already
+#     answered above", which then becomes the published reply.
+#
+# The marker line is stripped from the publish artifact (`strip_status_markers`),
+# so it never reaches the task source.
+marker_self_report = """
+[orchestrator] Completion self-report: EVERY time you end your turn, end \
+your response with exactly one of the following status markers on its own \
+final line — with one exception: while background tasks or subagents are \
+still running, do NOT emit a marker (that stop is an intermediate \
+heartbeat; you will be re-invoked when they finish — restate the full \
+final answer with the marker then). The marker line is stripped \
+automatically before the result is delivered, so include it even when \
+instructed to output nothing but the answer body: \
+{marker_completed} (done) / \
+{marker_needs_input} (human input required) / \
+{marker_failed} (cannot proceed). \
+Delivery contract: ONLY the message carrying the marker is delivered to \
+the requester — earlier messages in this session are NEVER delivered. The \
+marker-bearing message must therefore contain the complete, \
+self-contained answer; never refer to a previous message (no "as stated \
+above" / "already answered earlier").\
+"""
+
+# The judging criteria of the `prompt`-type Stop hook, rendered into
+# `orchestrator-<workflow>.json` for `verification = "llm"` workflows only
+# (D-01). Claude is the only tool with `prompt_verification`; elsewhere the
+# workflow degrades to `human` and none of the `verification_*` keys are used.
+#
+# Placeholders: none.
+verification_rubric = """
+作業が指示された要件を実際に満たしているかを、対象リポジトリの現在のコードと状態に基づいて検証してください。表面的な自己申告ではなく、変更が意図どおり機能し破綻や取りこぼしがないことを確認してください。\
+"""
+
+# Intermediate-Stop exemption, mirroring `on-stop.sh`'s R-02/D-12 rule: a Stop
+# with background tasks still running is a heartbeat, not a completion claim.
+#
+# Without this the judge blocks every such Stop — the pane shows a spurious
+# "Stop hook error" and the session is forced to busy-wait in-turn instead of
+# yielding to the task-notification re-invoke (real-machine finding on the
+# `slack-reply` workflow).
+#
+# Placeholders: none.
+verification_background_exemption = """
+ただし、バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止は完了申告ではありません。その場合は検証もブロックも行わず停止を許可してください。完了判定はバックグラウンドタスクが残っていない停止に対してのみ行います。\
+"""
+
+# Appended to the rubric so the verifying model re-emits the status marker that
+# the `on-stop.sh` command hook parses (D-12). Drop the markers from here and
+# every Stop parses as UNKNOWN.
+#
+# Placeholders: {marker_completed} {marker_needs_input} {marker_failed}
+verification_marker_convention = """
+検証結果を踏まえ、応答の最終行に必ず次のいずれかのマーカーを付けてください: {marker_completed} / {marker_needs_input} / {marker_failed}\
+"""
+
+# How the three keys above are assembled into the hook's `prompt` field.
+#
+# The assembly is itself a template so the sections can be reordered or dropped
+# without losing the pieces. Rendering is two staged single passes — the leaves
+# first (markers substituted), then this over the results — so a literal
+# `{marker_convention}` written inside the rubric is inserted, not expanded.
+#
+# Placeholders: {rubric} {background_exemption} {marker_convention}
+verification_prompt = "{rubric}\n\n{background_exemption}\n\n{marker_convention}"
