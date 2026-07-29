@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-07-30
+
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `template` モジュールを新設した（#312、エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311) の第 1 段）。`[prompts]` でプロンプトを上書き可能にするには `{placeholder}` 展開が要るが、`run::output::render_template` が既にそれを持っていた（シングルパス・未知キーはそのまま出力）ため、新規に書かず `PrContext` へのハードコードを外して汎用化した。あわせて `config::validate::check_worktree_placeholders` が抱えていた走査ループを `scan(template, skip_dollar)` として切り出し、`${ENV}` を飛ばすかどうかだけを引数化している。**挙動は変えていない** — 抽出の合格条件を「`run::output` の既存テスト 2 件（`templates_substitute_every_placeholder` / `substituted_values_are_not_re_expanded`）が無改変で通ること」に置いた。シングルパス性は #91 のレビュー指摘（タスクタイトルに `{summary}` が含まれるとテンプレート注入になる）由来の性質なので、`render_is_single_pass` として明示的なテストに固定した。**`worktree` の `render_location`/`render_branch` は統一しない** — `.replace()` 連鎖でマルチパス（置換値を再走査する）かつ git ref 正規化と結合しており、統一すると worktree 側の契約が変わる。将来「共通化」で潰されないよう理由をモジュール doc に残した。
+
 ## 2026-07-29
 
 * **Creation**: [ADR-0022 docs バンドルを OKF v0.2 へ移行する](/decisions/adr-0022-okf-v02-migration.md) — OKF v0.2 公開に伴い、バンドル全体を v0.2 準拠へ移行した。破壊的変更 2 件（`timestamp` → `generated: { by, at }` / 本文 `# Citations` → frontmatter `sources`）と、拡張キーから標準キーになった `status` の語彙ずれ（`active` 48 件・`accepted` 21 件 → `stable`）を、新設した冪等な変換スクリプト `scripts/okf-migrate-v02.sh` で 73 ファイル一括変換した。複数リンクを含む引用行 5 箇所はスクリプトが WARN で列挙し、手で `sources` エントリへ分割した。

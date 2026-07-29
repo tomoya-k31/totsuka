@@ -30,8 +30,9 @@
 ///
 /// Unknown keys and an unbalanced `{` are emitted verbatim, which makes a
 /// typo'd placeholder visible in the output instead of silently deleting text.
-/// Callers that cannot tolerate a silent typo (the prompt keys, which carry the
-/// completion-marker convention) pair this with [`scan`] at validation time.
+/// That is fail-soft, not a substitute for validation: a caller whose template
+/// carries load-bearing text is expected to reject the typo up front with
+/// [`scan`], the way the worktree templates already do.
 ///
 /// `vars` is a slice rather than a map because every call site has a handful of
 /// keys; the linear scan is cheaper than hashing.
