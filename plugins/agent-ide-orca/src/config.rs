@@ -1,7 +1,50 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
 //! `plugins/orca.toml` as JSON (F-64/F-65).
+//!
+//! Prompt text lives in the sibling `defaults.toml` rather than in Rust string
+//! literals (#317), so adjusting the wording is an edit to a data file instead
+//! of a code change. Every prompt default there is still just a
+//! `#[serde(default = "...")]` fallback: the live value comes from
+//! `plugins/orca.toml` whenever the operator sets it. Note the two files use
+//! different key names — `defaults.toml` groups prompts under `[prompts]`,
+//! while `plugins/orca.toml` is a flat table of [`OrcaConfig`] fields.
+
+use std::sync::LazyLock;
 
 use serde::Deserialize;
+
+/// The embedded prompt defaults, parsed once on first use.
+///
+/// A malformed `defaults.toml` is a build-time authoring error, not a runtime
+/// condition — it ships inside the binary and no input can change it — so this
+/// panics rather than degrading. The first use is deserializing `initialize`'s
+/// config, so without a test the panic would land there; `embedded_defaults_parse`
+/// forces it in CI instead.
+static DEFAULTS: LazyLock<Defaults> = LazyLock::new(|| {
+    toml::from_str(include_str!("defaults.toml")).expect("embedded defaults.toml must parse")
+});
+
+/// Top level of `defaults.toml`.
+///
+/// `deny_unknown_fields`, like [`OrcaConfig`]: a key that no longer backs
+/// anything is dead prompt text that still reads as live, so a rename must
+/// fail the build rather than leave the stale copy sitting in the file.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Defaults {
+    prompts: DefaultPrompts,
+}
+
+/// The `[prompts]` table of `defaults.toml`. Field names are the TOML keys, and
+/// are deliberately *not* the `plugins/orca.toml` override keys — each one names
+/// its counterpart below.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DefaultPrompts {
+    /// Backs [`OrcaConfig::plan_prompt_prefix`] (overridden as
+    /// `plan_prompt_prefix`, not `plan_prefix`).
+    plan_prefix: String,
+}
 
 /// orca agent_ide settings.
 #[derive(Debug, Clone, Deserialize)]
@@ -60,8 +103,7 @@ fn default_setup() -> String {
     "inherit".to_string()
 }
 fn default_plan_prefix() -> String {
-    "【設計のみ / plan mode】まず設計・計画を提示し、コードの実装や変更はしないでください。\n\n"
-        .to_string()
+    DEFAULTS.prompts.plan_prefix.clone()
 }
 fn default_poll_interval() -> u64 {
     2000
@@ -121,6 +163,27 @@ mod tests {
         assert_eq!(cfg.repo_selector_for("/wt/x"), "path:/wt/x");
         let explicit = parse(serde_json::json!({ "repo_selector": "id:abc" }));
         assert_eq!(explicit.repo_selector_for("/wt/x"), "id:abc");
+    }
+
+    #[test]
+    fn embedded_defaults_parse() {
+        // Force the LazyLock so a malformed `defaults.toml` fails here rather
+        // than on the first dispatch in a real pane.
+        assert!(!DEFAULTS.prompts.plan_prefix.is_empty());
+    }
+
+    #[test]
+    fn default_plan_prefix_matches_todays_literal() {
+        // Pinned against the literal as it stood in Rust before #317 moved it
+        // into `defaults.toml` — deliberately spelled out here rather than
+        // re-derived from `DEFAULTS`, which would make the assertion vacuous.
+        assert_eq!(
+            default_plan_prefix(),
+            "【設計のみ / plan mode】まず設計・計画を提示し、コードの実装や変更はしないでください。\n\n"
+        );
+        // The trailing blank line separates the directive from the task prompt
+        // that `compose_prompt` concatenates onto it.
+        assert!(default_plan_prefix().ends_with("\n\n"));
     }
 
     #[test]

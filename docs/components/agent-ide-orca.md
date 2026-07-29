@@ -4,7 +4,7 @@ title: agent-ide-orca プラグイン
 description: orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。design_preview は非宣言（capability を正直に宣言）。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [rust, crate, plugin, agent-ide, orca, cli, worktree]
-generated: { by: human:tomoya-k31, at: 2026-07-23T14:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-07-30T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -19,7 +19,7 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `plugins/orca.toml`（= `InitializeParams.config`）を型付け。`orca_bin` / `agent`（既定 claude）/ `setup`（run\|skip\|inherit）/ `repo_selector`（未設定時は dispatch の worktree_path を `path:` セレクタ化）/ `plan_prompt_prefix`（plan モードでプロンプト前置, F-36）/ `poll_interval_ms`。`worktree_name` で task id を orca 安全名に正規化。`deny_unknown_fields` |
+| `config` | `plugins/orca.toml`（= `InitializeParams.config`）を型付け。`orca_bin` / `agent`（既定 claude）/ `setup`（run\|skip\|inherit）/ `repo_selector`（未設定時は dispatch の worktree_path を `path:` セレクタ化）/ `plan_prompt_prefix`（plan モードでプロンプト前置, F-36）/ `poll_interval_ms`。`worktree_name` で task id を orca 安全名に正規化。`deny_unknown_fields`。**#317: プロンプト文の組み込みデフォルトは Rust の文字列リテラルではなく `plugins/agent-ide-orca/src/defaults.toml`（`include_str!` で埋め込み、`LazyLock` で初回参照時に parse）に置く** — 文言調整をコード変更ではなくデータファイルの編集にするため（エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311)）。上書き口は従来どおり `plugins/orca.toml` の `plan_prompt_prefix` で、キーもシグネチャも `compose_prompt` の挙動も不変。orca は claude の `--permission-mode plan` や codex の `--sandbox read-only` に相当する構造的な plan API を持たないため、**この前置きテキストが plan 意図の唯一の強制手段**である点に注意（末尾の空行は後続のタスクプロンプトとの区切りとして意味を持つ） |
 | `state` | orca の粗い3値状態（OSC state dots 由来）→ totsuka 正規化状態の写像（`working→running`・`waiting→waiting_input`・`done`/`idle`(tui-idle)→`done`・異常終了/timeout→`failed`・不明は前値維持, F-32）、`blocked` 時の terminal 出力からの質問 best-effort 抽出（F-35） |
 | `cli` | `OrcaCli` trait（`run(args)→JSON`）＋ `ProcessCli`（`orca` サブプロセスを spawn し `--json` を parse）。ロジックを fake orca でテストするための seam |
 | `agent` | `OrcaAgent<C: OrcaCli>`。`dispatch`（`worktree create --agent … --prompt … --json`→worktree id を session_id に, F-31/F-37）/ `attach`（`worktree show` で生存確認・消失は `attached:false`, 弱い吸収）/ `cancel`（`worktree rm --force`, 冪等）/ `start_state_stream`（`worktree ps` を poll し state dot を写像、`terminal wait --for tui-idle` で pacing, F-38） |
@@ -50,7 +50,8 @@ orca CLI で確実に対応できる `plan_mode` / `state_stream` のみを宣�
 
 # 依存
 
-- `plugin-protocol`（プラグイン境界）、`tokio`（`process`/`io-std`）、`serde` / `serde_json` / `semver` / `thiserror` / `tracing`。新規外部クレートなし。
+- `plugin-protocol`（プラグイン境界）、`tokio`（`process`/`io-std`）、`serde` / `serde_json` / `semver` / `thiserror` / `tracing`。
+- `toml`（#317）— 埋め込みの `src/defaults.toml`（プロンプトのデフォルト）を読むためだけに使う。プラグインが受け取る実際の設定は `initialize` 経由の JSON のままで、この依存はバイナリに焼き込まれたフォールバック用。ワークスペースに既にある crate（`plugin-protocol` 等が使用）なので新しいライセンス面・監査面は増えない。
 
 # 関連
 

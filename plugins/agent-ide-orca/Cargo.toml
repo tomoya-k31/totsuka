@@ -26,5 +26,9 @@ semver = { workspace = true, features = ["serde"] }
 # already includes `process` for spawning the orca CLI).
 tokio = { workspace = true, features = ["io-std"] }
 thiserror.workspace = true
+# Parses the embedded `src/defaults.toml` (prompt defaults, #317). The plugin
+# still receives its live config as JSON via `initialize`; this is only for the
+# built-in fallbacks baked into the binary.
+toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
