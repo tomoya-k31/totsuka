@@ -147,14 +147,20 @@ impl Prompts {
     }
 
     /// The rubric leaf, unassembled. Lets a caller distinguish "this set uses
-    /// the built-in rubric" from "this set was given one"; the renderer itself
-    /// goes through [`with_rubric`](Self::with_rubric).
+    /// the built-in rubric" from "this set was given one".
     pub fn verification_rubric(&self) -> &str {
         &self.verification_rubric
     }
 
     /// Build a set whose rubric is replaced, leaving every other template at
-    /// this set's value (the `[[workflows]].rubric` path).
+    /// this set's value.
+    ///
+    /// This was the whole of the `[[workflows]].rubric` path before #314;
+    /// [`resolve_for`](Self::resolve_for) now assigns the field directly,
+    /// because the workflow's `prompts` table has to be able to override it
+    /// afterwards. Kept as the reference the back-compat test compares
+    /// against — it is the pre-#314 shape, so an equality assertion against it
+    /// proves the legacy path still renders identically.
     pub fn with_rubric(&self, rubric: &str) -> Prompts {
         Prompts {
             verification_rubric: rubric.to_string(),
