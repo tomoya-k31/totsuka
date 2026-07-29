@@ -96,6 +96,13 @@ post-PR you still monitor all checks that report on your PR.
     (`` ` #` ``, `` `: ` ``, the pane-label prefix `` `totsuka ` ``).
 - It is a **local check only** — there is no CI job for it, so nothing else will
   catch a Markdown regression if you skip it.
+- Run it **after resolving a conflict in any `*.md`**, not just after authoring
+  one. `rumdl` is what catches a leftover `<<<<<<< HEAD` / `=======` marker (as
+  `MD032`, since the marker line reads as a paragraph before the list);
+  `okf-lint` does not look for markers at all, so a docs-only conflict can be
+  committed with a marker still in it and pass every other gate. A `git grep`
+  for the three marker forms across the whole worktree is the cheap
+  belt-and-braces check.
 
 **Docs checks** — when `docs/**` changed:
 
@@ -196,6 +203,17 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
          prompt: "Run /code-review:code-review --comment on PR <n> and report the findings")
    ```
 
+   **Why this runs at all when CI is green and Copilot has reviewed.** The
+   three gates fail differently, and the gap `/code-review` covers is the
+   repo's own written obligations — nothing in CI encodes them. The concrete
+   case: PR #320 was CI-green with **zero** Copilot findings while violating
+   the docs obligation (a new `pub mod` in `lib.rs` with no row added to
+   `docs/components/orchestrator-core.md`). `okf-lint` cannot catch that by
+   construction — it validates the docs that exist and has no way to know a
+   module was added. Do not reason "CI is green, so the diff is fine"; CI
+   answers "does it build and pass tests", which is a strictly smaller
+   question.
+
 6. **Vet each `/code-review` finding the same way** (valid vs mistaken).
 
 7. **Merge only on explicit instruction; otherwise wait.**
@@ -216,6 +234,11 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
   PR**; re-run it only when a later commit adds **substantive new code / logic**
   (not doc, wording, or trivial diff fixes). CI + Copilot + the human reviewer
   cover the small fix commits, and a full `/code-review` pass is expensive.
+  Explicitly **not** re-run triggers: a fix commit answering a finding, a
+  force-push, and **a merge conflict or the rebase that resolves it** — a
+  conflict says `main` moved, not that the diff became riskier (the rebase rule
+  lives in Conflict check & resolution below; it is repeated here because that
+  is not where anyone looks when deciding whether to re-run).
 
 ### If CI is red
 
