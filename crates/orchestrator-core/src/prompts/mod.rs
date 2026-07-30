@@ -124,17 +124,26 @@ impl Prompts {
         &DEFAULTS
     }
 
-    /// Whether the rendered text still teaches at least one status marker.
+    /// The status markers `rendered` fails to teach, if any.
     ///
     /// The guard behind the ADR-0020 validation checks: the marker is the only
     /// completion signal shared by claude, codex, and opencode, so an override
-    /// that drops it silently disables completion detection. Checked on the
+    /// that drops one silently disables that outcome. Checked on the
     /// **composed** output so it catches both a leaf that lost its
     /// `{marker_*}` and an assembly that dropped `{marker_convention}`.
-    pub fn mentions_a_marker(rendered: &str) -> bool {
+    ///
+    /// **Every** marker is required, not merely one of them (#328). An agent
+    /// taught only COMPLETED and FAILED has no way to say it needs input, so
+    /// that turn parses as UNKNOWN and the task escalates on a timeout. The
+    /// finding's message always named all three; only the check was weaker.
+    /// A partial loss is also the shape a typo produces — `{marker-needs-input}`
+    /// is not a placeholder name, so it is neither substituted nor reported,
+    /// and the other two markers would have satisfied an "any" test.
+    pub fn missing_markers(rendered: &str) -> Vec<&'static str> {
         [MARKER_COMPLETED, MARKER_NEEDS_INPUT, MARKER_FAILED]
-            .iter()
-            .any(|m| rendered.contains(m))
+            .into_iter()
+            .filter(|m| !rendered.contains(m))
+            .collect()
     }
 
     /// Compute the derived fields. **Every** constructor must end with this —
