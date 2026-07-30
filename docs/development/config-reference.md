@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: human:tomoya-k31, at: 2026-07-31T02:00:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-31T03:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -176,7 +176,9 @@ claude / codex / opencode に差し込むプロンプト文の上書き。組み
 
 - `{placeholder}` の置換は**シングルパス**。置換された値の中に `{token}` があっても再展開されない
 - 組み立ては 2 段階（葉 → `verification_prompt`）。各段がシングルなので、rubric 内に書いたリテラル `{marker_convention}` は挿入されるだけで展開されない
-- プレースホルダ名は識別子（`[A-Za-z_][A-Za-z0-9_]*`）に限られる。それ以外の波括弧は**中身**として素通しされるので、`{"ok": true}` のような JSON の形をプロンプトに書いてよい（#328）
+- プレースホルダ名は識別子（`[A-Za-z_][A-Za-z0-9_]*`）に限られる。それ以外の波括弧は**中身**として素通しされるので、`{"ok": true}` のような JSON の形をプロンプトに書いてよい（#328）。**その裏返しとして、識別子でない綴りのタイポ（`{marker-needs-input}` など）はプレースホルダ検査では捕まらない** — マーカーについては 3 つすべてが組み立て後の出力に現れることを別途直接検査するので、この経路で漏れても検出される
+- 波括弧の中にさらに `{` があると、その範囲全体が 1 つの未知の名前として素通しされ、中の本物のプレースホルダが展開されない（`{ {rubric}` は rubric を落とす）。この形は警告として報告される
+- なお `[worktree]` の `location` / ブランチテンプレートは置換方式が異なる（`str::replace` 連鎖）ため、**波括弧の中身は identifier に限らずすべて検査される**。`{repo-name}` のようなタイポはエラーのままである
 - 未知のプレースホルダはそのまま出力される（レンダリング時は fail-soft）
 - プロンプトの変更は**次のディスパッチから有効**。稼働中セッションの `--settings` は書き換わるが、既に起動しているエージェントには届かない
 

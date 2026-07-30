@@ -2,7 +2,11 @@
 
 ## 2026-07-31
 
-* **Update**: [orchestrator-core](/components/orchestrator-core.md) / [設定リファレンス（config.toml）](/development/config-reference.md) — `template::scan` がプレースホルダ名を識別子（`[A-Za-z_][A-Za-z0-9_]*`）に限定するようにした（#328）。波括弧は**中身**としても現れる — プロンプトがモデルに `{"ok": true}` のような JSON 出力形を示すのは自然な書き方である。`render` は元々そうした中身を素通ししていた（`vars` に一致する名前が無いため）のに `scan` だけが未知プレースホルダとして報告し、呼び出し側（worktree テンプレート検証・`[prompts]` 検証）は**どちらも Error 化する**ため、**描画結果が正しい config が `run` の起動を拒否されていた**。[#318](https://github.com/tomoya-k31/totsuka/issues/318) のプラグイン側複製で同型の問題が表面化して発覚したもので、あちらは警告止まりだったが core は起動阻止なので実害が大きい。**`render` 側を狭めて揃える修正は誤り** — 未知キーをそのまま出力する挙動は意図的な fail-soft で、module doc に根拠が記録されている。`scan` を `render` の*実効的な*意味論に合わせる形にした。あわせて module doc の「`scan` は `render` の走査規則を写すので両者は食い違えない」という主張が破れていたので、何について一致し何について意図的に一致しないか（未知名の扱い）を明記した。修正を無効化すると新規テスト 2 件だけが落ちることを確認済み。
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) / [設定リファレンス（config.toml）](/development/config-reference.md) / [ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md) — `template::scan` に `ScanMode` を導入し、置換エンジンごとに「何をプレースホルダと見なすか」を分けた（#328）。発端は、波括弧が**中身**としても現れること — プロンプトがモデルに `{"ok": true}` のような JSON 出力形を示すのは自然な書き方である。`render` はそうした中身を素通ししていた（`vars` に一致する名前が無いため）のに `scan` だけが未知プレースホルダとして報告し、呼び出し側は Error 化するため、**描画結果が正しい config が `run` の起動を拒否されていた**。[#318](https://github.com/tomoya-k31/totsuka/issues/318) のプラグイン側複製で同型が表面化して発覚した。**`render` 側を狭めて揃える修正は誤り** — 未知キー素通しは意図的な fail-soft で module doc に根拠がある。`scan` を `render` の*実効的な*意味論へ寄せる形にした。
+
+  ただし識別子限定は**そのままでは検出を弱める方向にも効く**ので、同じ変更で 3 点を手当てした。①`worktree` の `location` / ブランチテンプレートは `render` ではなく `str::replace` 連鎖で置換されるため `ScanMode::Replaced` として**全ブレース範囲**を検査し続ける — `.replace("{branch}", …)` は `{a{branch}` のような大きい範囲の中の `{branch}` も置換するので、絞ると**置換されるのに検査されない**プレースホルダができ、`{repo-name}` のタイポもリテラル名のディレクトリを黙って作る。②マーカーは**3 つすべてが組み立て後の出力に現れること**を直接検査するようにした（`missing_markers`）。`{marker-needs-input}` のようなハイフン誤りは識別子でないため検査されず、従来の「どれか 1 つでもあれば良い」判定では**残り 2 つが条件を満たしてしまい両方のガードをすり抜けていた**。エラーメッセージは元々「3 つとも残せ」と書いており、検査だけが約束より弱かった。③波括弧の入れ子（`{ {rubric}` — 範囲全体が 1 つの未知の名前になり中の本物が展開されない）を `has_swallowed_brace` が警告する。
+
+  module doc の「`scan` は `render` の走査規則を写すので両者は食い違えない」という主張が破れていたので、何について一致し何について意図的に一致しないか（未知名の扱い — `render` は fail-soft、`scan` の呼び出し側は fail-fast）を明記した。`config-examples.md` の worktree プレースホルダに関する記述は `ScanMode::Replaced` により正確なままなので変更していない。修正を無効化すると新規テストだけが落ちることを確認済み。
 
 ## 2026-07-30
 

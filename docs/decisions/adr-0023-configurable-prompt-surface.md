@@ -4,7 +4,7 @@ title: ADR-0023 AI ツールへ差し込むプロンプトは設定可能にし�
 description: claude/codex/opencode へ注入するプロンプト文をコードから外出しし config.toml から上書き可能にする一方、スクリプト・argv・permission ブロック・ステータスマーカーは設定不可のまま残す決定。上書きはインライン文字列のみで、ファイルパス指定と TOTSUKA_PROMPTS_* env は不採用。マーカー規約を失う上書きは検証エラーで止める。
 resource: https://github.com/tomoya-k31/totsuka/issues/311
 tags: [decision, prompt, config, security, marker, adr]
-generated: { by: human:tomoya-k31, at: 2026-07-31T01:30:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-31T03:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -65,6 +65,8 @@ claude / codex / opencode に差し込むプロンプト文が Rust の文字列
 - `marker_self_report` にマーカーへの言及が 1 つも無ければ **エラー**（起動を止める）
 - `verification = "llm"` のワークフローで、組み立て後の `verification_prompt` にマーカーへの言及が無ければ **警告**
 - プレースホルダのタイポ（`{marker_completd}` 等）は **エラー**
+
+ただし**タイポが常に捕まるわけではない**（#328）。`{marker-needs-input}` のように名前が識別子でないものは「中身」として扱われ、レンダリング時にそのまま出力される — プロンプトがモデルに `{"ok": true}` のような JSON 出力形を示すのを許すための扱いである。この形のタイポは*その*経路では検出されないので、マーカーについては**3 つすべてが組み立て後の出力に現れること**を直接検査する（1 つでも欠けたら Error）。「どれか 1 つでもあれば良い」では、2 つ残った状態のタイポを見逃す。
 
 ## 5. `TOTSUKA_PROMPTS_*` env override は追加しない
 

@@ -9,12 +9,11 @@
 //!   [`config::validate`](mod@crate::config::validate) can reject the typo up
 //!   front instead of leaving it to be discovered in a pane.
 //!
-//! The two must agree on **what counts as a placeholder**, or validation
-//! rejects text that renders perfectly well. They agree on braces being
-//! identifier-named (#328) and on an unbalanced `{` ending the scan, exactly as
-//! it makes `render` emit the remainder literally. They deliberately do *not*
-//! agree on unknown names: `render` is fail-soft there, `scan`'s callers are
-//! fail-fast.
+//! [`scan`] must not report a name the caller's substitution engine would
+//! never treat as one, or validation rejects text that renders perfectly well
+//! (#328). Since the two engines differ, [`scan`] takes a [`ScanMode`] saying
+//! which one it is scanning for. They deliberately do *not* agree on unknown
+//! names: `render` is fail-soft there, `scan`'s callers are fail-fast.
 //!
 //! # Not used by the worktree templates
 //!
@@ -70,46 +69,57 @@ pub fn render(template: &str, vars: &[(&str, &str)]) -> String {
     out
 }
 
-/// Every `{name}` token in `template` whose name is a bare identifier, in
-/// order.
+/// Which substitution engine [`scan`] is enumerating placeholders for (#328).
 ///
-/// With `skip_dollar`, a `{` immediately preceded by `$` is not a placeholder
-/// but the start of a `${...}` env reference (expanded at resolve time, not
-/// here) — worktree templates need that, prompt templates do not.
+/// The two engines disagree about what a brace span means, so a single scan
+/// rule would either over-report for one caller or under-report for the other.
+/// Over-reporting blocks a valid config; under-reporting lets a typo through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanMode {
+    /// Templates rendered by [`render`]: prompts, PR templates.
+    ///
+    /// Only bare identifiers count. Braces are also **content** here — a
+    /// prompt may show a model the JSON shape it must answer with:
+    ///
+    /// ```text
+    /// Answer with ONLY an object of the exact shape {"ok": bool}
+    /// ```
+    ///
+    /// [`render`] already emits that verbatim (nothing in `vars` is named
+    /// `"ok": bool`), but before #328 `scan` reported it and every caller turns
+    /// an unrecognised name into a hard error — a config whose *rendered output
+    /// was correct* could not start.
+    Rendered,
+    /// Worktree location/branch templates, substituted by chained
+    /// [`str::replace`] in [`worktree`](crate::worktree) rather than by
+    /// [`render`].
+    ///
+    /// **Every** brace span counts, and `${ENV}` references are skipped (they
+    /// are expanded at resolve time, not here). The identifier restriction
+    /// must NOT be applied: `.replace("{branch}", …)` substitutes a `{branch}`
+    /// occurring *inside* a larger span such as `{a{branch}`, so narrowing the
+    /// scan here would leave a live substitution unvalidated — and a
+    /// `{repo-name}` typo would silently create a literally-named directory
+    /// instead of erroring.
+    Replaced,
+}
+
+/// Every placeholder `template` references, in order, per `mode`.
 ///
-/// # Why identifiers only (#328)
-///
-/// Braces also appear as **content**. A prompt may legitimately show a model
-/// the JSON shape it must answer with:
-///
-/// ```text
-/// Answer with ONLY an object of the exact shape {"ok": bool, "why": string}
-/// ```
-///
-/// [`render`] already leaves that alone — nothing in `vars` is named
-/// `"ok": bool, "why": string`, so it is emitted verbatim — but before #328
-/// `scan` reported it, and every caller turns an unrecognised name into a hard
-/// error. A config whose *rendered output was correct* could not start.
-///
-/// Restricting to `[A-Za-z_][A-Za-z0-9_]*` is what makes this function agree
-/// with [`render`]'s *effective* semantics rather than its literal brace
-/// scanning. No real placeholder is affected: every key in
-/// [`prompts`](crate::prompts) and every worktree placeholder is an
-/// identifier.
-///
-/// **Do not "fix" this by narrowing [`render`] to match.** Its
-/// unknown-key-verbatim behaviour is a deliberate fail-soft, documented above.
-pub fn scan(template: &str, skip_dollar: bool) -> Vec<&str> {
+/// **Do not "fix" [`ScanMode::Rendered`] by narrowing [`render`] to match.**
+/// `render`'s unknown-key-verbatim behaviour is a deliberate fail-soft,
+/// documented above it.
+pub fn scan(template: &str, mode: ScanMode) -> Vec<&str> {
     let bytes = template.as_bytes();
     let mut found = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'{'
-            && !(skip_dollar && i > 0 && bytes[i - 1] == b'$')
+            && !(mode == ScanMode::Replaced && i > 0 && bytes[i - 1] == b'$')
             && let Some(rel) = template[i + 1..].find('}')
         {
             let name = &template[i + 1..i + 1 + rel];
-            if is_identifier(name) {
+            if mode == ScanMode::Replaced || is_identifier(name) {
                 found.push(name);
             }
             i = i + 1 + rel + 1;
@@ -118,6 +128,19 @@ pub fn scan(template: &str, skip_dollar: bool) -> Vec<&str> {
         i += 1;
     }
     found
+}
+
+/// Whether `template` has a brace span that **contains another `{`** (#328).
+///
+/// The signature of a stray brace swallowing a real placeholder:
+/// `"{ {rubric}"` makes [`render`] treat `" {rubric"` as one unknown key and
+/// emit it verbatim, so the rubric never lands. With
+/// [`ScanMode::Rendered`] that span is not a name either, so nothing else
+/// would notice. Callers surface this as an advisory.
+pub fn has_swallowed_brace(template: &str) -> bool {
+    scan(template, ScanMode::Replaced)
+        .iter()
+        .any(|name| name.contains('{'))
 }
 
 /// Whether `s` looks like a placeholder name rather than braced content.
@@ -160,10 +183,10 @@ mod tests {
 
     #[test]
     fn scan_finds_every_placeholder_in_order() {
-        assert_eq!(scan("{a} and {b}", false), vec!["a", "b"]);
-        assert_eq!(scan("none here", false), Vec::<&str>::new());
+        assert_eq!(scan("{a} and {b}", ScanMode::Rendered), vec!["a", "b"]);
+        assert_eq!(scan("none here", ScanMode::Rendered), Vec::<&str>::new());
         // An unbalanced `{` ends the scan, mirroring `render`'s behavior.
-        assert_eq!(scan("{a} then { b", false), vec!["a"]);
+        assert_eq!(scan("{a} then { b", ScanMode::Rendered), vec!["a"]);
     }
 
     #[test]
@@ -171,22 +194,37 @@ mod tests {
         // A prompt may show the model the JSON shape it must answer with.
         // `render` emits that verbatim, so `scan` must not report it (#328).
         assert_eq!(
-            scan(r#"shape {"ok": bool, "why": string} then {rubric}"#, false),
+            scan(
+                r#"shape {"ok": bool, "why": string} then {rubric}"#,
+                ScanMode::Rendered
+            ),
             vec!["rubric"]
         );
         // Whatever `scan` skips, `render` leaves alone — the two agree.
         assert_eq!(render(r#"{"ok": bool}"#, &[("ok", "X")]), r#"{"ok": bool}"#);
         // Digits-first, dots, spaces and hyphens are content, not names.
-        assert_eq!(scan("{1st} {a.b} {a b} {a-b}", false), Vec::<&str>::new());
+        assert_eq!(
+            scan("{1st} {a.b} {a b} {a-b}", ScanMode::Rendered),
+            Vec::<&str>::new()
+        );
         // Underscores and digits after the first char are fine.
-        assert_eq!(scan("{_x} {a1} {A_B2}", false), vec!["_x", "a1", "A_B2"]);
+        assert_eq!(
+            scan("{_x} {a1} {A_B2}", ScanMode::Rendered),
+            vec!["_x", "a1", "A_B2"]
+        );
         // An empty name is content too.
-        assert_eq!(scan("{}", false), Vec::<&str>::new());
+        assert_eq!(scan("{}", ScanMode::Rendered), Vec::<&str>::new());
     }
 
     #[test]
     fn scan_skips_env_references_only_when_asked() {
-        assert_eq!(scan("${HOME}/{task_id}", true), vec!["task_id"]);
-        assert_eq!(scan("${HOME}/{task_id}", false), vec!["HOME", "task_id"]);
+        assert_eq!(
+            scan("${HOME}/{task_id}", ScanMode::Replaced),
+            vec!["task_id"]
+        );
+        assert_eq!(
+            scan("${HOME}/{task_id}", ScanMode::Rendered),
+            vec!["HOME", "task_id"]
+        );
     }
 }

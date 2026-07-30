@@ -125,9 +125,13 @@ pub enum ValidationError {
     /// A prompt override that must teach the status-marker convention does not
     /// mention any marker (#315, ADR-0020).
     #[error(
-        "{referrer} prompt `{key}` never mentions a status marker → the agent is never taught the completion convention, so every Stop parses as UNKNOWN and the task escalates on timeout; keep {{marker_completed}} / {{marker_needs_input}} / {{marker_failed}} in the text"
+        "{referrer} prompt `{key}` never teaches these status markers: {missing} → an outcome the agent cannot report parses as UNKNOWN and the task escalates on timeout; keep {{marker_completed}} / {{marker_needs_input}} / {{marker_failed}} in the text (a name that is not a bare identifier, such as `{{marker-needs-input}}`, is treated as content and silently dropped)"
     )]
-    PromptDropsMarkerConvention { referrer: String, key: String },
+    PromptDropsMarkerConvention {
+        referrer: String,
+        key: String,
+        missing: String,
+    },
 
     /// A referenced tool's kind has no completion-detection adapter yet
     /// (#196; unreachable since Phase 3 gave every kind an adapter — kept as
@@ -216,10 +220,12 @@ where
             .collect::<Vec<_>>(),
     ) {
         let rendered = prompts.marker_self_report().to_string();
-        if !crate::prompts::Prompts::mentions_a_marker(&rendered) && reported.insert(rendered) {
+        let missing = crate::prompts::Prompts::missing_markers(&rendered);
+        if !missing.is_empty() && reported.insert(rendered) {
             errors.push(ValidationError::PromptDropsMarkerConvention {
                 referrer: referrer.clone(),
                 key: "marker_self_report".to_string(),
+                missing: missing.join(" / "),
             });
         }
     }
@@ -358,6 +364,12 @@ where
         });
     }
     hook_findings(cfg, &agent_hook_capable, &mut findings);
+    for message in swallowed_brace_warnings("[prompts]", &cfg.prompts.entries()) {
+        findings.push(Finding {
+            severity: FindingSeverity::Warning,
+            message,
+        });
+    }
     // Same empty-override advisory as the per-workflow one, for `[prompts]`.
     for (key, value) in cfg.prompts.entries() {
         if value.trim().is_empty() {
@@ -492,12 +504,14 @@ fn prompt_findings(
     // `{marker_convention}`. Only for llm workflows: nothing else renders it.
     if wf.verification == VerificationMode::Llm {
         let rendered = crate::prompts::Prompts::resolve_for(cfg, wf).verification_prompt();
-        if !crate::prompts::Prompts::mentions_a_marker(&rendered) {
+        let missing = crate::prompts::Prompts::missing_markers(&rendered);
+        if !missing.is_empty() {
             findings.push(Finding {
                 severity: FindingSeverity::Warning,
                 message: format!(
-                    "workflow `{}` renders an llm-verification prompt that never mentions a status marker → the verifying model will not re-emit one, so the Stop parses as UNKNOWN; keep {{marker_convention}} in prompts.verification_prompt and the markers in prompts.verification_marker_convention",
-                    wf.name
+                    "workflow `{}` renders an llm-verification prompt that never teaches these status markers: {} → the verifying model cannot re-emit one it was not shown, so that Stop parses as UNKNOWN; keep {{marker_convention}} in prompts.verification_prompt and all three markers in prompts.verification_marker_convention",
+                    wf.name,
+                    missing.join(" / ")
                 ),
             });
         }
@@ -535,6 +549,13 @@ fn prompt_findings(
                 "workflow `{}` sets both rubric and prompts.verification_rubric → prompts.verification_rubric wins; remove the now-ignored rubric",
                 wf.name
             ),
+        });
+    }
+
+    for message in swallowed_brace_warnings(&format!("workflow `{}`", wf.name), &entries) {
+        findings.push(Finding {
+            severity: FindingSeverity::Warning,
+            message,
         });
     }
 
@@ -613,6 +634,23 @@ fn check_plugin_ref(
     }
 }
 
+/// Advisory messages for prompt templates whose braces are malformed in a way
+/// that silently swallows a real placeholder (#328).
+///
+/// Separate from [`check_prompt_placeholders`] because it is a Warning: the
+/// pattern also occurs in legitimate nested JSON shown to a model.
+fn swallowed_brace_warnings(referrer: &str, entries: &[(&'static str, &str)]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|(_, value)| template::has_swallowed_brace(value))
+        .map(|(key, _)| {
+            format!(
+                "{referrer} prompt `{key}` has a `{{` inside another `{{…}}` span → the whole span is treated as one unknown name and emitted verbatim, so any real placeholder inside it never expands (e.g. `{{ {{rubric}}` drops the rubric); if the braces are literal content this is harmless, otherwise balance them"
+            )
+        })
+        .collect()
+}
+
 /// Report any `{placeholder}` a prompt override uses outside its key's set
 /// (#315). `${ENV}` is **not** skipped: prompts get no env expansion, so a
 /// `${…}` in one is a literal, and `{…}` inside it is still a placeholder.
@@ -626,7 +664,7 @@ fn check_prompt_placeholders(
             // `deny_unknown_fields` already rejected unknown keys at parse.
             continue;
         };
-        for name in template::scan(value, false) {
+        for name in template::scan(value, template::ScanMode::Rendered) {
             if !allowed.contains(&name) {
                 errors.push(ValidationError::UnknownPromptPlaceholder {
                     referrer: referrer.to_string(),
@@ -653,7 +691,7 @@ fn check_prompt_placeholders(
 /// part of `${...}` expansion (handled at resolve time), not a worktree
 /// placeholder.
 fn check_worktree_placeholders(referrer: &str, template: &str, errors: &mut Vec<ValidationError>) {
-    for name in template::scan(template, true) {
+    for name in template::scan(template, template::ScanMode::Replaced) {
         if !ALLOWED_WORKTREE_PLACEHOLDERS.contains(&name) {
             errors.push(ValidationError::UnknownWorktreePlaceholder {
                 referrer: referrer.to_string(),
@@ -1272,6 +1310,96 @@ verification = "llm"
     }
 
     #[test]
+    fn a_hyphen_typo_in_a_marker_placeholder_is_still_caught() {
+        // #328 regression guard. `{marker-needs-input}` is not an identifier,
+        // so `scan` treats it as content and reports nothing — the marker just
+        // vanishes from the instruction. Before the all-markers check this
+        // slipped through both guards, because the other two markers satisfied
+        // the old `any` test.
+        let cfg = prompts_cfg(
+            "\n[prompts]\nmarker_self_report = \"{marker_completed} / {marker-needs-input} / {marker_failed}\"\n",
+        );
+        let errors = validate_static(&cfg, &env_from(&[]));
+        let found = errors
+            .iter()
+            .find(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. }));
+        assert!(found.is_some(), "got {errors:?}");
+        // The message names which marker is missing, not just "a marker".
+        let msg = found.unwrap().to_string();
+        assert!(msg.contains("NEEDS_INPUT"), "got {msg}");
+        assert!(
+            !msg.contains("<<STATUS:COMPLETED>>"),
+            "only the missing one: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_stray_brace_that_swallows_a_placeholder_warns() {
+        // `"{ {rubric}"` renders as one unknown key emitted verbatim, so the
+        // rubric never lands and nothing else notices (#328).
+        let cfg = prompts_cfg(
+            "\n[prompts]\nverification_prompt = \"{ {rubric}\\n{marker_convention}\"\n",
+        );
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("verification_prompt")
+                    && f.message.contains("inside another")),
+            "got {findings:?}"
+        );
+        // The stock config is clean.
+        let cfg = prompts_cfg("");
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            !warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("inside another")),
+            "got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn worktree_templates_keep_scanning_every_brace_span() {
+        // #328's identifier restriction must NOT reach worktree templates:
+        // they are substituted by chained `str::replace`, so `{branch}` inside
+        // a larger span really is substituted and must stay validated.
+        let cfg = RootConfig::from_toml_str(&format!(
+            r#"{PLUGIN_PAIR}
+[worktree]
+location = "/tmp/{{a{{branch}}"
+"#
+        ))
+        .unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::UnknownWorktreePlaceholder { .. })),
+            "got {errors:?}"
+        );
+
+        // A hyphen typo in a worktree placeholder is an error too — otherwise
+        // it silently creates a literally-named directory.
+        let cfg = RootConfig::from_toml_str(&format!(
+            r#"{PLUGIN_PAIR}
+[worktree]
+location = "/tmp/{{repo-name}}"
+"#
+        ))
+        .unwrap();
+        assert!(
+            validate_static(&cfg, &env_from(&[]))
+                .iter()
+                .any(|e| matches!(
+                    e,
+                    ValidationError::UnknownWorktreePlaceholder { placeholder, .. }
+                        if placeholder == "repo-name"
+                ))
+        );
+    }
+
+    #[test]
     fn a_valid_placeholder_is_accepted() {
         let cfg = prompts_cfg(
             "\n[prompts]\nmarker_self_report = \"{marker_completed} / {marker_needs_input} / {marker_failed}\"\nverification_prompt = \"{rubric}|{background_exemption}|{marker_convention}\"\n",
@@ -1402,7 +1530,7 @@ verification = "llm"
             warnings_of(&findings)
                 .iter()
                 .any(|f| f.message.contains("`reply`")
-                    && f.message.contains("never mentions a status marker")),
+                    && f.message.contains("never teaches these status markers")),
             "got {findings:?}"
         );
         // Not an error — the config still starts.
@@ -1421,7 +1549,7 @@ verification = "llm"
         assert!(
             warnings_of(&findings)
                 .iter()
-                .any(|f| f.message.contains("never mentions a status marker")),
+                .any(|f| f.message.contains("never teaches these status markers")),
             "got {findings:?}"
         );
 
@@ -1448,7 +1576,7 @@ output = "none"
             assert!(
                 !warnings_of(&findings)
                     .iter()
-                    .any(|f| f.message.contains("never mentions a status marker")),
+                    .any(|f| f.message.contains("never teaches these status markers")),
                 "unexpected warning for {extra:?}: {findings:?}"
             );
         }
