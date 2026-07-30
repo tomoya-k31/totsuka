@@ -10,7 +10,8 @@ use std::future::Future;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::{LlmConfig, RepoInfo};
+use crate::config::{LlmConfig, RepoInfo, SlackPrompts};
+use crate::template;
 
 /// How much of a candidate's README is offered to the classifier.
 const README_HEAD_LINES: usize = 30;
@@ -193,6 +194,7 @@ impl ChatTransport for ReqwestChat {
 pub async fn classify<C: ChatTransport>(
     chat: &C,
     config: &LlmConfig,
+    prompts: &SlackPrompts,
     mention_text: &str,
     thread_context: &str,
     candidates: &[RepoInfo],
@@ -204,11 +206,14 @@ pub async fn classify<C: ChatTransport>(
         let mention = mention_text.to_string();
         let context = thread_context.to_string();
         let candidates = candidates.to_vec();
-        tokio::task::spawn_blocking(move || request_body(&config, &mention, &context, &candidates))
-            .await
-            .map_err(|e| {
-                ClassifyError::Request(ChatError::transport(format!("request build failed: {e}")))
-            })?
+        let prompts = prompts.clone();
+        tokio::task::spawn_blocking(move || {
+            request_body(&config, &prompts, &mention, &context, &candidates)
+        })
+        .await
+        .map_err(|e| {
+            ClassifyError::Request(ChatError::transport(format!("request build failed: {e}")))
+        })?
     };
 
     let response = chat
@@ -224,7 +229,7 @@ pub async fn classify<C: ChatTransport>(
         error = first_error,
         "LLM verdict malformed; retrying with a correction"
     );
-    let retry_body = with_correction(body, &content);
+    let retry_body = with_correction(body, &content, &prompts.classifier_correction);
     let response = chat
         .complete(config, retry_body)
         .await
@@ -237,14 +242,10 @@ pub async fn classify<C: ChatTransport>(
 
 /// The retry request: the original conversation plus the model's malformed
 /// answer and an instruction to answer again with only the JSON object.
-fn with_correction(mut body: Value, previous_answer: &str) -> Value {
+fn with_correction(mut body: Value, previous_answer: &str, correction: &str) -> Value {
     if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
         messages.push(json!({ "role": "assistant", "content": previous_answer }));
-        messages.push(json!({
-            "role": "user",
-            "content": "That response was not a parseable JSON verdict. Answer again with \
-                        ONLY the JSON object — no prose, no code fences.",
-        }));
+        messages.push(json!({ "role": "user", "content": correction }));
     }
     body
 }
@@ -272,6 +273,7 @@ fn validate(
 /// material (summary + README head when a path is configured).
 fn request_body(
     config: &LlmConfig,
+    prompts: &SlackPrompts,
     mention_text: &str,
     thread_context: &str,
     candidates: &[RepoInfo],
@@ -289,17 +291,20 @@ fn request_body(
     }
 
     let names: Vec<&str> = candidates.iter().map(|r| r.name.as_str()).collect();
-    let system = format!(
-        "You classify which local repository a Slack mention is about. \
-         Answer with ONLY a JSON object of the exact shape \
-         {{\"repo\": string, \"confidence\": number, \"reason\": string}} — \
-         no prose, no code fences. `repo` MUST be one of: {}. `confidence` \
-         is 0.0-1.0, your own estimate of how sure you are.",
-        names.join(", ")
+    let system = template::render(
+        &prompts.classifier_system,
+        &[("repo_names", names.join(", ").as_str())],
     );
-    let user = format!(
-        "## Mention\n{mention_text}\n\n## Thread context\n{thread_context}\n\n\
-         ## Candidate repositories\n{catalog}"
+    // Every one of these is Slack content the message author chose. Rendering
+    // is single-pass, so a mention containing the literal text `{catalog}` is
+    // inserted rather than splicing the candidate list in.
+    let user = template::render(
+        &prompts.classifier_user,
+        &[
+            ("mention_text", mention_text),
+            ("thread_context", thread_context),
+            ("catalog", catalog.as_str()),
+        ],
     );
 
     json!({
@@ -410,6 +415,10 @@ mod tests {
         }
     }
 
+    fn prompts() -> SlackPrompts {
+        SlackPrompts::default()
+    }
+
     fn chat_response(content: &str) -> Value {
         json!({ "choices": [{ "message": { "role": "assistant", "content": content } }] })
     }
@@ -447,9 +456,16 @@ mod tests {
             r#"{"repo": "web-app", "confidence": 0.9, "reason": "frontend bug"}"#,
         ))]);
 
-        let verdict = classify(&chat, &config(), "the button is broken", "", &candidates)
-            .await
-            .unwrap();
+        let verdict = classify(
+            &chat,
+            &config(),
+            &prompts(),
+            "the button is broken",
+            "",
+            &candidates,
+        )
+        .await
+        .unwrap();
         assert_eq!(verdict.repo, "web-app");
 
         // The request carried the model, the contract, and the candidates.
@@ -471,7 +487,7 @@ mod tests {
             "Sure! Here you go:\n```json\n{\"repo\": \"web-app\", \"confidence\": 0.8, \
              \"reason\": \"x\"}\n```",
         ))]);
-        let verdict = classify(&chat, &config(), "m", "", &candidates)
+        let verdict = classify(&chat, &config(), &prompts(), "m", "", &candidates)
             .await
             .unwrap();
         assert_eq!(verdict.repo, "web-app");
@@ -483,7 +499,7 @@ mod tests {
         let chat = FakeChat::new(vec![Ok(chat_response(
             r#"{"repo": "web-app", "confidence": 0.3, "reason": "unsure"}"#,
         ))]);
-        let err = classify(&chat, &config(), "m", "", &candidates)
+        let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
             .await
             .unwrap_err();
         assert!(matches!(
@@ -499,7 +515,7 @@ mod tests {
             Ok(chat_response("I think it's the web app.")),
             Ok(chat_response("still prose")),
         ]);
-        let err = classify(&chat, &config(), "m", "", &candidates)
+        let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
             .await
             .unwrap_err();
         assert!(matches!(err, ClassifyError::InvalidResponse(_)), "{err}");
@@ -515,7 +531,7 @@ mod tests {
                 r#"{"repo": "web-app", "confidence": 0.9, "reason": "ok"}"#,
             )),
         ]);
-        let verdict = classify(&chat, &config(), "m", "", &candidates)
+        let verdict = classify(&chat, &config(), &prompts(), "m", "", &candidates)
             .await
             .unwrap();
         assert_eq!(verdict.repo, "web-app");
@@ -528,7 +544,7 @@ mod tests {
         let chat = FakeChat::new(vec![Ok(chat_response(
             r#"{"repo": "ghost", "confidence": 0.9, "reason": "x"}"#,
         ))]);
-        let err = classify(&chat, &config(), "m", "", &candidates)
+        let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
             .await
             .unwrap_err();
         assert!(
@@ -537,7 +553,7 @@ mod tests {
         );
 
         let chat = FakeChat::new(vec![Err(ChatError::transport("connection refused"))]);
-        let err = classify(&chat, &config(), "m", "", &candidates)
+        let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
             .await
             .unwrap_err();
         assert!(matches!(err, ClassifyError::Request(_)), "{err}");
@@ -553,7 +569,7 @@ mod tests {
                 status,
                 r#"{"error":{"message":"User not found.","code":401}}"#,
             ))]);
-            let err = classify(&chat, &config(), "m", "", &candidates)
+            let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
                 .await
                 .unwrap_err();
             assert!(err.is_auth_failure(), "{status}: {err}");
@@ -568,7 +584,7 @@ mod tests {
         // 429 and 5xx are the provider being busy or broken, not a bad key.
         for status in [429, 500, 503] {
             let chat = FakeChat::new(vec![Err(ChatError::http(status, "busy"))]);
-            let err = classify(&chat, &config(), "m", "", &candidates)
+            let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
                 .await
                 .unwrap_err();
             assert!(!err.is_auth_failure(), "{status}: {err}");
@@ -577,7 +593,7 @@ mod tests {
         let chat = FakeChat::new(vec![Ok(chat_response(
             r#"{"repo": "web-app", "confidence": 0.1, "reason": "unsure"}"#,
         ))]);
-        let err = classify(&chat, &config(), "m", "", &candidates)
+        let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
             .await
             .unwrap_err();
         assert!(!err.is_auth_failure(), "{err}");
@@ -662,7 +678,7 @@ mod tests {
                 r#"{"repo": "web-app", "confidence": 0.9, "reason": "ok"}"#,
             )),
         ]);
-        classify(&chat, &config(), "m", "", &candidates)
+        classify(&chat, &config(), &prompts(), "m", "", &candidates)
             .await
             .unwrap();
 

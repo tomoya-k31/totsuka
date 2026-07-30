@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: human:tomoya-k31, at: 2026-07-30T23:30:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-31T01:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -276,12 +276,37 @@ kind = "task_source"
 | `target_user_id` | string | 必須 | 自分の Slack ユーザー ID（`U…`）。このユーザー宛メンションをタスク化し、TokenGuard が `auth.test` の identity と一致検証 |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
 | `reply_style` | string? | なし | 返信トーンの指示（タスク本文へ注入、例 `"丁寧語で簡潔に"`） |
+| `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#318） |
 | `source_name` | string | `slack` | `Task.source` に刻印するソース名 |
 | `[[repos]]` | 配列 | なし（省略可、#109） | リポジトリ候補。`name`（config.toml の `[[repositories]].name` と一致必須）/ `summary`?（LLM 分類の材料）/ `path`?（README 先頭を分類材料に追加）。**省略時は config.toml の `[[repositories]]`（name/summary/path）がそのまま候補になる**ため通常は書かなくてよい。明示した場合はそちらが優先（候補の絞り込み・summary の上書きに使う） |
 | `[[channel_groups]]` | 配列 | なし | チャンネル名 prefix → 候補 repos の絞り込みルール（定義順 first-match）。`prefix` / `repos`（`[[repos]]` に存在する名前のみ） |
 | `[llm]` | テーブル | なし（省略可、#119） | リポジトリ分類用 OpenAI 互換 LLM。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、未満はエフェメラル選択へ）。**省略時は config.toml の `[llm]`（initialize で供給）が default になる**（`api_key_ref` 必須 — キーなし供給は採用されない。`confidence_threshold` は既定 0.6）。明示した場合はそちらが優先。候補 2 件以上でどちらにも無ければ initialize が `CONFIG_INVALID` |
 | `api_url` | string | `https://slack.com/api` | Web API ベース URL（テスト用上書き） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
+
+## `[prompts]`（task-source-slack、#318）
+
+このプラグインが送るプロンプト文の上書き。組み込みデフォルトは `plugins/task-source-slack/src/defaults.toml` にバイナリ埋め込みされており、このテーブルは**キー単位の上書き**である（未指定キーは組み込みのまま）。**キー名がそのまま設定キー**である。
+
+| キー | 用途 | プレースホルダ |
+|---|---|---|
+| `reply_instructions` | 返信案作成の指示（`Task.instructions` として帯域外配送される） | — |
+| `reply_style_suffix` | `reply_style` が設定されているときだけ `reply_instructions` に追記される | `{style}` |
+| `body_template` | ペインに表示されるタスク本文 | `{sender}` `{channel}` `{text}` |
+| `body_thread_header` | スレッド文脈セクションの見出し | `{count}` |
+| `body_thread_line` | スレッド文脈 1 行ぶん | `{line}` |
+| `body_thread_unavailable` | 文脈取得に失敗したときにセクションごと差し替わる文 | — |
+| `classifier_system` | リポジトリ分類 LLM の system プロンプト | `{repo_names}` |
+| `classifier_user` | 同 user メッセージ | `{mention_text}` `{thread_context}` `{catalog}` |
+| `classifier_correction` | 応答が JSON として壊れていたときの再試行ターン | — |
+
+注意点:
+
+- **`{text}` は `>` 引用済みで渡る。** 改行から `\n> ` への書き換えは展開**前**に Rust 側で行うので、先頭の `> ` を落としたテンプレートを書いても継続行は壊れないし、`> ` を残すテンプレートが二重引用になることもない。
+- **`{text}` `{thread_context}` `{catalog}` は Slack の投稿者が内容を決められる。** 展開はシングルパスなので、本文に `{catalog}` と書かれたメンションはその文字列として挿入されるだけで、候補リスト差し込みにはならない。
+- `classifier_system` の既定値は JSON 出力形の `{"repo": string, ...}` をリテラルに含む。プレースホルダ名は識別子（`[A-Za-z_][A-Za-z0-9_]*`）に限られるので、これは中身として素通しされる。
+- 未知のプレースホルダはそのまま出力され、`initialize` 時に警告としてログに出る。**エラーにしないのは意図的である**（このプラグインは `config/validate` フックを持っているのでエラーにもできる）— 未知キーはそのまま描画されるので症状はドラフト中に見える `{token}` であり、core の `[prompts]` がエラーにするのは、あちらで消えるのが完了マーカー規約で症状がタイムアウトでのエスカレーションだけだからである。
+- ここは **LLM 向けのプロンプトのみ**である。悪い上書きは分類の劣化（スレッド内ピッカーへフォールバックする）や返信案の質低下に留まり、core の `[prompts]` と違って完了検知は壊せない。
 
 # 例
 

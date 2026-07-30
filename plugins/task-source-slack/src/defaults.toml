@@ -1,0 +1,124 @@
+# Built-in prompt defaults for the Slack task_source plugin (#318).
+#
+# Embedded in the binary with `include_str!` and parsed once at first use, so
+# the prompt text is edited here rather than in Rust source (epic #311).
+#
+# These are DEFAULTS, not the live values: editing this file changes what a
+# freshly built totsuka ships with, not what an existing installation uses.
+# Override per installation under `[prompts]` in `plugins/slack.toml` — the key
+# names here ARE the config keys (unlike the orca plugin, whose defaults are
+# keyed differently from its flat config).
+#
+# `{placeholder}` substitution is single-pass, so a value containing `{token}`
+# text is inserted, never re-expanded. That matters here more than anywhere
+# else in totsuka: `{text}`, `{thread_context}` and `{catalog}` carry Slack
+# content chosen by whoever wrote the message.
+#
+# Risk note: everything below is LLM-facing only. A bad override degrades
+# classification (which falls back to the in-thread picker) or produces a
+# weaker draft — it cannot break completion detection, unlike the core prompts.
+
+[prompts]
+
+# Reply-crafting directions, delivered as `Task.instructions` (protocol 0.1.5)
+# rather than in the body, so the host can inject them out-of-band while the
+# pane shows only the mention and its thread context.
+#
+# Placeholders: none.
+reply_instructions = """
+以下の Slack メンションへの返信案を日本語で作成してください。対象リポジトリを調査し、根拠を持って回答してください。出力は返信文のみとし、前置き・後書き・説明を含めないでください。\
+"""
+
+# Appended to `reply_instructions` only when `reply_style` is set in
+# `plugins/slack.toml`. `reply_style` itself stays a plain user string — it is
+# content, not a template.
+#
+# Placeholders: {style}
+reply_style_suffix = """
+
+返信スタイル: {style}\
+"""
+
+# The visible task body: what the pane shows.
+#
+# Placeholders: {sender} {channel} {text}
+#
+# `{text}` arrives ALREADY `>`-quoted — the newline-to-`\n> ` rewrite happens in
+# Rust before substitution. So a template that drops the leading `> ` still
+# gets sane continuation lines, and one that keeps it must not add a second
+# level of quoting.
+body_template = """
+## メンション
+
+- 送信者: {sender}
+- チャンネル: #{channel}
+- 本文:
+
+> {text}
+"""
+
+# Header for the thread-context section, emitted only when context lines were
+# fetched.
+#
+# Placeholders: {count}
+body_thread_header = """
+
+## スレッド文脈（直近 {count} 件・古い順）
+
+"""
+
+# One thread-context line. Rendered once per line.
+#
+# Placeholders: {line}
+body_thread_line = """
+- {line}
+"""
+
+# Substituted for the whole thread-context section when the fetch failed.
+# Distinct from "the thread has no other messages", which emits nothing.
+#
+# Placeholders: none.
+body_thread_unavailable = """
+
+## スレッド文脈
+
+（スレッド文脈の取得に失敗したため省略されています）
+"""
+
+# System prompt for the repository classifier, used when channel rules leave
+# more than one candidate.
+#
+# Placeholders: {repo_names}
+#
+# The literal `{"repo": string, ...}` below is JSON output shape, not a
+# placeholder: `"repo"` is not a bare identifier, so the single-pass renderer
+# emits it verbatim. (In Rust this had to be written `{{"repo": ...}}` to
+# escape `format!`; here it is literal.)
+classifier_system = """
+You classify which local repository a Slack mention is about. Answer with ONLY a JSON object of the exact shape {"repo": string, "confidence": number, "reason": string} — no prose, no code fences. `repo` MUST be one of: {repo_names}. `confidence` is 0.0-1.0, your own estimate of how sure you are.\
+"""
+
+# User message for the classifier.
+#
+# Placeholders: {mention_text} {thread_context} {catalog}
+#
+# All three are attacker-controllable Slack content. Single-pass rendering is
+# what keeps a mention containing the literal text `{catalog}` from splicing
+# the candidate list in.
+classifier_user = """
+## Mention
+{mention_text}
+
+## Thread context
+{thread_context}
+
+## Candidate repositories
+{catalog}\
+"""
+
+# Retry turn appended after a malformed answer.
+#
+# Placeholders: none.
+classifier_correction = """
+That response was not a parseable JSON verdict. Answer again with ONLY the JSON object — no prose, no code fences.\
+"""

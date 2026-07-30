@@ -77,7 +77,16 @@ pub async fn resolve<C: ChatTransport>(
         // about this shape) — fall through to the operator.
         return Resolution::NeedsSelection(names);
     };
-    match classify(chat, llm, mention_text, thread_context, &candidates).await {
+    match classify(
+        chat,
+        llm,
+        &config.prompts,
+        mention_text,
+        thread_context,
+        &candidates,
+    )
+    .await
+    {
         Ok(verdict) => {
             tracing::info!(
                 repo = verdict.repo,

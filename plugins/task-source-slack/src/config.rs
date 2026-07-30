@@ -7,6 +7,8 @@
 //! token (`xoxb-`) powers only the notification nudge DM (#305) — never a
 //! reply.
 
+use std::sync::LazyLock;
+
 use serde::Deserialize;
 
 /// The OpenAI-compatible LLM used for repository classification when channel
@@ -55,6 +57,201 @@ pub struct RepoInfo {
     /// material.
     #[serde(default)]
     pub path: Option<String>,
+}
+
+/// The embedded prompt defaults, parsed once on first use.
+///
+/// A malformed `defaults.toml` is an authoring error in a file that ships
+/// inside the binary — no input can change it — so this panics rather than
+/// degrading. `embedded_defaults_parse` forces it in CI instead of at
+/// `initialize`.
+static DEFAULTS: LazyLock<EmbeddedPrompts> = LazyLock::new(|| {
+    toml::from_str::<Defaults>(include_str!("defaults.toml"))
+        .expect("embedded defaults.toml must parse")
+        .prompts
+});
+
+/// Top level of `defaults.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Defaults {
+    prompts: EmbeddedPrompts,
+}
+
+/// The embedded defaults, with **every field required**.
+///
+/// A separate type from [`SlackPrompts`] on purpose, and the duplication is the
+/// point. `SlackPrompts` fills omitted keys from `DEFAULTS`; if `DEFAULTS` were
+/// also a `SlackPrompts`, then deleting a key from `defaults.toml` would make
+/// its `#[serde(default)]` read `DEFAULTS` **while `DEFAULTS` is still
+/// initialising** — a re-entrant `LazyLock`, which **deadlocks rather than
+/// panicking**. The failure would be a CI job hanging to its timeout instead of
+/// a test failing with a readable message.
+///
+/// With the fields required here, a deleted key is an ordinary "missing field"
+/// parse error that `embedded_defaults_parse` reports immediately. (A
+/// *misspelled* key was always safe — `deny_unknown_fields` catches it — but
+/// genuine absence was not.)
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmbeddedPrompts {
+    reply_instructions: String,
+    reply_style_suffix: String,
+    body_template: String,
+    body_thread_header: String,
+    body_thread_line: String,
+    body_thread_unavailable: String,
+    classifier_system: String,
+    classifier_user: String,
+    classifier_correction: String,
+}
+
+/// Prompt text this plugin sends to the model (#318, epic #311).
+///
+/// Built-in values live in the embedded `defaults.toml`, not in Rust string
+/// literals, so rewording is a data edit. Every field is overridden per
+/// installation under `[prompts]` in `plugins/slack.toml`, and the field names
+/// here are the config keys.
+///
+/// Everything here is LLM-facing: a bad override degrades classification or
+/// produces a weaker draft, but cannot break completion detection the way the
+/// core prompts can.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlackPrompts {
+    /// Reply-crafting directions carried as `Task.instructions`.
+    #[serde(default = "default_reply_instructions")]
+    pub reply_instructions: String,
+    /// Appended to [`reply_instructions`](Self::reply_instructions) only when
+    /// [`SlackConfig::reply_style`] is set. Placeholder: `{style}`.
+    #[serde(default = "default_reply_style_suffix")]
+    pub reply_style_suffix: String,
+    /// The visible task body. Placeholders: `{sender}` `{channel}` `{text}`.
+    #[serde(default = "default_body_template")]
+    pub body_template: String,
+    /// Thread-context section header. Placeholder: `{count}`.
+    #[serde(default = "default_body_thread_header")]
+    pub body_thread_header: String,
+    /// One thread-context line. Placeholder: `{line}`.
+    #[serde(default = "default_body_thread_line")]
+    pub body_thread_line: String,
+    /// Emitted instead of the thread-context section when the fetch failed.
+    #[serde(default = "default_body_thread_unavailable")]
+    pub body_thread_unavailable: String,
+    /// Classifier system prompt. Placeholder: `{repo_names}`.
+    #[serde(default = "default_classifier_system")]
+    pub classifier_system: String,
+    /// Classifier user message. Placeholders: `{mention_text}`
+    /// `{thread_context}` `{catalog}`.
+    #[serde(default = "default_classifier_user")]
+    pub classifier_user: String,
+    /// Retry turn after a malformed answer.
+    #[serde(default = "default_classifier_correction")]
+    pub classifier_correction: String,
+}
+
+impl Default for SlackPrompts {
+    fn default() -> Self {
+        Self {
+            reply_instructions: DEFAULTS.reply_instructions.clone(),
+            reply_style_suffix: DEFAULTS.reply_style_suffix.clone(),
+            body_template: DEFAULTS.body_template.clone(),
+            body_thread_header: DEFAULTS.body_thread_header.clone(),
+            body_thread_line: DEFAULTS.body_thread_line.clone(),
+            body_thread_unavailable: DEFAULTS.body_thread_unavailable.clone(),
+            classifier_system: DEFAULTS.classifier_system.clone(),
+            classifier_user: DEFAULTS.classifier_user.clone(),
+            classifier_correction: DEFAULTS.classifier_correction.clone(),
+        }
+    }
+}
+
+impl SlackPrompts {
+    /// Placeholders each key may reference. Used to warn at `initialize` about
+    /// tokens an overridden template names but nothing supplies.
+    const ALLOWED: &'static [(&'static str, &'static [&'static str])] = &[
+        ("reply_instructions", &[]),
+        ("reply_style_suffix", &["style"]),
+        ("body_template", &["sender", "channel", "text"]),
+        ("body_thread_header", &["count"]),
+        ("body_thread_line", &["line"]),
+        ("body_thread_unavailable", &[]),
+        ("classifier_system", &["repo_names"]),
+        (
+            "classifier_user",
+            &["mention_text", "thread_context", "catalog"],
+        ),
+        ("classifier_correction", &[]),
+    ];
+
+    /// `(key, unknown placeholder)` pairs across every template.
+    ///
+    /// Advisory only — `server` logs it at `initialize`. The plugin *does*
+    /// have a `config/validate` hook (`server::config_validate`), so this
+    /// could be a hard error; it deliberately is not. Rendering keeps an
+    /// unknown key verbatim, so the symptom is a visible `{token}` in a draft
+    /// rather than a silent deletion, and every key here is LLM-facing. Core's
+    /// `[prompts]` treats the same typo class as an error because there the
+    /// deleted text is the completion-marker convention and the only symptom
+    /// is tasks escalating on a timeout.
+    pub fn unknown_placeholders(&self) -> Vec<(&'static str, String)> {
+        let values: &[(&str, &String)] = &[
+            ("reply_instructions", &self.reply_instructions),
+            ("reply_style_suffix", &self.reply_style_suffix),
+            ("body_template", &self.body_template),
+            ("body_thread_header", &self.body_thread_header),
+            ("body_thread_line", &self.body_thread_line),
+            ("body_thread_unavailable", &self.body_thread_unavailable),
+            ("classifier_system", &self.classifier_system),
+            ("classifier_user", &self.classifier_user),
+            ("classifier_correction", &self.classifier_correction),
+        ];
+        let mut out = Vec::new();
+        for (key, value) in values {
+            let allowed = Self::ALLOWED
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, a)| *a)
+                .unwrap_or(&[]);
+            for name in crate::template::scan(value) {
+                let entry = (*key, name.to_string());
+                // A template that repeats `{bogus}` should log once, not once
+                // per occurrence.
+                if !allowed.contains(&name) && !out.contains(&entry) {
+                    out.push(entry);
+                }
+            }
+        }
+        out
+    }
+}
+
+fn default_reply_instructions() -> String {
+    DEFAULTS.reply_instructions.clone()
+}
+fn default_reply_style_suffix() -> String {
+    DEFAULTS.reply_style_suffix.clone()
+}
+fn default_body_template() -> String {
+    DEFAULTS.body_template.clone()
+}
+fn default_body_thread_header() -> String {
+    DEFAULTS.body_thread_header.clone()
+}
+fn default_body_thread_line() -> String {
+    DEFAULTS.body_thread_line.clone()
+}
+fn default_body_thread_unavailable() -> String {
+    DEFAULTS.body_thread_unavailable.clone()
+}
+fn default_classifier_system() -> String {
+    DEFAULTS.classifier_system.clone()
+}
+fn default_classifier_user() -> String {
+    DEFAULTS.classifier_user.clone()
+}
+fn default_classifier_correction() -> String {
+    DEFAULTS.classifier_correction.clone()
 }
 
 /// Slack task-source settings.
@@ -106,6 +303,10 @@ pub struct SlackConfig {
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Prompt text overrides (#318). Every key falls back to the embedded
+    /// default when omitted.
+    #[serde(default)]
+    pub prompts: SlackPrompts,
 }
 
 impl SlackConfig {
@@ -261,6 +462,157 @@ mod tests {
             "target_user_id": "U012345",
             "repos": [{ "name": "web-app" }]
         })
+    }
+
+    #[test]
+    fn embedded_defaults_parse() {
+        // Force the LazyLock so a malformed `defaults.toml` fails here rather
+        // than at `initialize` in a real run.
+        let p = SlackPrompts::default();
+        assert!(!p.reply_instructions.trim().is_empty());
+        assert!(!p.classifier_system.trim().is_empty());
+        assert!(
+            p.unknown_placeholders().is_empty(),
+            "the built-ins must only use placeholders their key supplies: {:?}",
+            p.unknown_placeholders()
+        );
+    }
+
+    /// The behavior-preservation proof for #318: every default must render
+    /// byte-identically to the pre-#318 `format!`s.
+    ///
+    /// Expectations are transcribed from the pre-#318 source, NOT re-derived
+    /// from `defaults.toml` — deriving them would make this vacuous.
+    #[test]
+    fn defaults_reproduce_todays_prompt_bytes() {
+        let p = SlackPrompts::default();
+
+        // Was the `String::from(...)` in `pipeline::build_task`.
+        assert_eq!(
+            p.reply_instructions,
+            "以下の Slack メンションへの返信案を日本語で作成してください。\
+             対象リポジトリを調査し、根拠を持って回答してください。\
+             出力は返信文のみとし、前置き・後書き・説明を含めないでください。"
+        );
+        // Was `format!("\n返信スタイル: {style}")`.
+        assert_eq!(
+            crate::template::render(&p.reply_style_suffix, &[("style", "簡潔に")]),
+            "\n返信スタイル: 簡潔に"
+        );
+        // Was the body `format!`.
+        assert_eq!(
+            crate::template::render(
+                &p.body_template,
+                &[
+                    ("sender", "太郎"),
+                    ("channel", "dev"),
+                    ("text", "こんにちは")
+                ],
+            ),
+            "## メンション\n\n- 送信者: 太郎\n- チャンネル: #dev\n- 本文:\n\n> こんにちは\n"
+        );
+        assert_eq!(
+            crate::template::render(&p.body_thread_header, &[("count", "3")]),
+            "\n## スレッド文脈（直近 3 件・古い順）\n\n"
+        );
+        assert_eq!(
+            crate::template::render(&p.body_thread_line, &[("line", "発言")]),
+            "- 発言\n"
+        );
+        assert_eq!(
+            p.body_thread_unavailable,
+            "\n## スレッド文脈\n\n（スレッド文脈の取得に失敗したため省略されています）\n"
+        );
+        // Was the classifier `format!`s in `llm::request_body`.
+        assert_eq!(
+            crate::template::render(&p.classifier_system, &[("repo_names", "a, b")]),
+            "You classify which local repository a Slack mention is about. \
+             Answer with ONLY a JSON object of the exact shape \
+             {\"repo\": string, \"confidence\": number, \"reason\": string} — \
+             no prose, no code fences. `repo` MUST be one of: a, b. `confidence` \
+             is 0.0-1.0, your own estimate of how sure you are."
+        );
+        assert_eq!(
+            crate::template::render(
+                &p.classifier_user,
+                &[
+                    ("mention_text", "M"),
+                    ("thread_context", "T"),
+                    ("catalog", "C"),
+                ],
+            ),
+            "## Mention\nM\n\n## Thread context\nT\n\n## Candidate repositories\nC"
+        );
+        assert_eq!(
+            p.classifier_correction,
+            "That response was not a parseable JSON verdict. Answer again with \
+             ONLY the JSON object — no prose, no code fences."
+        );
+    }
+
+    /// The `{"repo": ...}` shape in the system prompt is JSON output contract,
+    /// not a placeholder — `"repo"` is not a bare identifier, so the
+    /// single-pass renderer emits it verbatim. This was `{{...}}` in Rust to
+    /// escape `format!`; in TOML it is literal, so it needs pinning.
+    #[test]
+    fn classifier_system_json_shape_survives_rendering() {
+        let rendered = crate::template::render(
+            &SlackPrompts::default().classifier_system,
+            &[("repo_names", "x")],
+        );
+        assert!(
+            rendered.contains(r#"{"repo": string, "confidence": number, "reason": string}"#),
+            "got {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_repeated_unknown_placeholder_is_reported_once() {
+        let p: SlackPrompts = serde_json::from_value(serde_json::json!({
+            "body_template": "{bogus} と {bogus} と {sender}",
+        }))
+        .unwrap();
+        assert_eq!(
+            p.unknown_placeholders(),
+            vec![("body_template", "bogus".to_string())]
+        );
+    }
+
+    #[test]
+    fn unknown_placeholders_are_reported() {
+        let p: SlackPrompts = serde_json::from_value(serde_json::json!({
+            "body_template": "{sender} と {bogus}",
+            "reply_instructions": "{style} はここでは使えない",
+        }))
+        .unwrap();
+        let found = p.unknown_placeholders();
+        assert!(
+            found.contains(&("body_template", "bogus".to_string())),
+            "{found:?}"
+        );
+        assert!(
+            found.contains(&("reply_instructions", "style".to_string())),
+            "{found:?}"
+        );
+        // The keys that were not overridden stay clean.
+        assert_eq!(found.len(), 2, "{found:?}");
+    }
+
+    #[test]
+    fn prompt_overrides_parse_from_the_plugin_config() {
+        let cfg: SlackConfig = serde_json::from_value(serde_json::json!({
+            "app_token": "xapp-x",
+            "user_token": "xoxp-x",
+            "target_user_id": "U1",
+            "prompts": { "reply_instructions": "短く返して" },
+        }))
+        .unwrap();
+        assert_eq!(cfg.prompts.reply_instructions, "短く返して");
+        // Unset keys keep the built-in.
+        assert_eq!(
+            cfg.prompts.classifier_correction,
+            SlackPrompts::default().classifier_correction
+        );
     }
 
     #[test]

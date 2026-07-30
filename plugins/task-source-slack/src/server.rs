@@ -193,6 +193,19 @@ where
                 ));
             }
         };
+        // Prompt overrides are advisory-checked here (#318). This could be a
+        // hard error — `config_validate` below exists — but it deliberately is
+        // not: an unknown placeholder renders verbatim, so the symptom is a
+        // visible `{token}` in a draft, and every prompt here is LLM-facing.
+        // Core's `[prompts]` errors on the same typo class because there the
+        // deleted text is the completion-marker convention.
+        for (key, placeholder) in config.prompts.unknown_placeholders() {
+            tracing::warn!(
+                key,
+                placeholder,
+                "slack prompt override references an unknown placeholder → it will be rendered literally; check the key's allowed placeholders in docs/development/config-reference.md"
+            );
+        }
         // Without an explicit `[[repos]]`, the orchestrator's own
         // `[[repositories]]` (supplied since protocol 0.1.1, #109) become
         // the candidates — one list to maintain instead of two.

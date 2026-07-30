@@ -29,6 +29,7 @@ use crate::mention::{Mention, MentionFilter};
 use crate::repo_resolver::{Resolution, resolve};
 use crate::slack_api::{PostEphemeral, SlackApi};
 use crate::socket_mode::SocketEvent;
+use crate::template;
 use crate::transport::SlackTransport;
 
 /// Slack coordinates a task needs again at `result/publish` time (where the
@@ -851,35 +852,42 @@ fn build_task(
     // from the factual `body`, so the host can deliver them out-of-band
     // (invisible prompt-context injection) while the pane shows only the
     // mention and its thread context.
-    let mut instructions = String::from(
-        "以下の Slack メンションへの返信案を日本語で作成してください。\
-         対象リポジトリを調査し、根拠を持って回答してください。\
-         出力は返信文のみとし、前置き・後書き・説明を含めないでください。",
-    );
+    let p = &config.prompts;
+    let mut instructions = p.reply_instructions.clone();
     if let Some(style) = &config.reply_style {
-        instructions.push_str(&format!("\n返信スタイル: {style}"));
+        instructions.push_str(&template::render(
+            &p.reply_style_suffix,
+            &[("style", style.as_str())],
+        ));
     }
 
-    let mut body = format!(
-        "## メンション\n\n- 送信者: {}\n- チャンネル: #{}\n- 本文:\n\n> {}\n",
-        enriched.sender_name,
-        enriched.channel_name,
-        mention.text.replace('\n', "\n> ")
+    // `{text}` is handed over already `>`-quoted: the newline rewrite happens
+    // here, before substitution, so an override that drops the leading `> `
+    // still gets sane continuation lines.
+    let quoted = mention.text.replace('\n', "\n> ");
+    let mut body = template::render(
+        &p.body_template,
+        &[
+            ("sender", enriched.sender_name.as_str()),
+            ("channel", enriched.channel_name.as_str()),
+            ("text", quoted.as_str()),
+        ],
     );
     match &enriched.context_lines {
         Some(lines) if !lines.is_empty() => {
-            body.push_str(&format!(
-                "\n## スレッド文脈（直近 {} 件・古い順）\n\n",
-                lines.len()
+            body.push_str(&template::render(
+                &p.body_thread_header,
+                &[("count", lines.len().to_string().as_str())],
             ));
             for line in lines {
-                body.push_str(&format!("- {line}\n"));
+                body.push_str(&template::render(
+                    &p.body_thread_line,
+                    &[("line", line.as_str())],
+                ));
             }
         }
         Some(_) => {}
-        None => body.push_str(
-            "\n## スレッド文脈\n\n（スレッド文脈の取得に失敗したため省略されています）\n",
-        ),
+        None => body.push_str(&p.body_thread_unavailable),
     }
 
     let task = Task {
