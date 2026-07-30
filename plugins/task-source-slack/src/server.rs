@@ -193,6 +193,17 @@ where
                 ));
             }
         };
+        // Prompt overrides are advisory-checked here (#318): this plugin has
+        // no `config/validate` hook of its own, and an unknown placeholder is
+        // emitted verbatim at render time rather than erroring, so without
+        // this the only symptom would be a stray `{token}` in a draft.
+        for (key, placeholder) in config.prompts.unknown_placeholders() {
+            tracing::warn!(
+                key,
+                placeholder,
+                "slack prompt override references an unknown placeholder → it will be rendered literally; check the key's allowed placeholders in docs/development/config-reference.md"
+            );
+        }
         // Without an explicit `[[repos]]`, the orchestrator's own
         // `[[repositories]]` (supplied since protocol 0.1.1, #109) become
         // the candidates — one list to maintain instead of two.

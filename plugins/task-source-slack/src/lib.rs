@@ -22,4 +22,5 @@ pub mod repo_resolver;
 pub mod server;
 pub mod slack_api;
 pub mod socket_mode;
+pub mod template;
 pub mod transport;
