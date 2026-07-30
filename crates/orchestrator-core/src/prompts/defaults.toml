@@ -107,3 +107,29 @@ verification_marker_convention = """
 #
 # Placeholders: {rubric} {background_exemption} {marker_convention}
 verification_prompt = "{rubric}\n\n{background_exemption}\n\n{marker_convention}"
+
+# The prose body of the opencode plan-mode agent (`agents/totsuka-plan.md`),
+# selected at launch with `--agent totsuka-plan`.
+#
+# Placeholders: none.
+#
+# This is the BODY ONLY. The YAML frontmatter — `mode: primary` plus
+# `permission: {edit: deny, bash: deny, task: deny}` — is fixed in Rust
+# (`hooks::opencode::PLAN_AGENT_FRONTMATTER`) and deliberately NOT configurable:
+# that deny map *is* plan mode's read-only guarantee, and a key that reads like
+# prose must never be able to grant `bash: allow`. Validation rejects a body
+# starting with `---` for the same reason (it would also produce two
+# frontmatter blocks, which opencode parses in an undefined way).
+#
+# Global only — there is one `agents/totsuka-plan.md` on disk shared by every
+# opencode session, and `--agent totsuka-plan` has no per-workflow dimension.
+# Writing this under `[[workflows]].prompts` is a parse error naming the key.
+#
+# opencode is the tool without invisible injection, so unlike claude
+# (`--permission-mode plan`) and codex (`--sandbox read-only`) the plan intent
+# has no structural channel: this agent file is the whole mechanism.
+opencode_plan_agent = """
+あなたは設計・計画立案モードで動作しています。ファイルの編集・コマンド実行・
+サブエージェントへの委譲は権限で拒否されます（サブエージェント経由の編集も
+不可）。読み取りと分析に基づいて、計画・設計を文章で提示してください。
+"""
