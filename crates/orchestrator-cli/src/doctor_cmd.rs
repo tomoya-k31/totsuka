@@ -474,7 +474,7 @@ fn check_hooks(
 ) {
     check_hook_assets(cx, cfg, checks);
     check_codex_hooks(cx, cfg, config_ok, env, checks);
-    check_opencode_assets(cx, cfg, config_ok, env, checks);
+    check_opencode_assets(cfg, config_ok, env, checks);
     check_hook_deps(env, checks);
     // Which workflows actually need the Bearer token, decided from the static
     // manifests alone (plugin enablement / reference integrity belong to
@@ -649,7 +649,6 @@ fn check_codex_hooks(
 /// nothing runs on an invalid config), minus the trust probe — opencode has no
 /// trust step, so a synced asset set is already fully active.
 fn check_opencode_assets(
-    cx: &Cx,
     cfg: &RootConfig,
     config_ok: bool,
     env: &HashMap<String, String>,
@@ -688,7 +687,7 @@ fn check_opencode_assets(
         }
     }
     let dir = dir.expect("NoConfigDir returned above");
-    let issues = opencode::verify_assets(&dir, &cx.paths);
+    let issues = opencode::verify_assets(&dir, cfg);
     if issues.is_empty() {
         checks.push(Check::ok(
             "opencode-assets",

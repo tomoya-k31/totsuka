@@ -123,6 +123,18 @@ pub struct PromptsConfig {
     /// `{background_exemption}` `{marker_convention}`.
     #[serde(default)]
     pub verification_prompt: Option<String>,
+    /// Prose body of the opencode plan-mode agent file (#316). No
+    /// placeholders.
+    ///
+    /// **Global only** — one `agents/totsuka-plan.md` on disk backs every
+    /// opencode session, and `--agent totsuka-plan` has no per-workflow
+    /// dimension, which is why [`WorkflowPromptsConfig`] omits it.
+    ///
+    /// Body only: the YAML frontmatter carrying `permission: {edit: deny,
+    /// bash: deny, task: deny}` is fixed in Rust. Validation rejects a value
+    /// starting with `---`.
+    #[serde(default)]
+    pub opencode_plan_agent: Option<String>,
 }
 
 impl PromptsConfig {
@@ -141,6 +153,7 @@ impl PromptsConfig {
                 &self.verification_marker_convention,
             ),
             ("verification_prompt", &self.verification_prompt),
+            ("opencode_plan_agent", &self.opencode_plan_agent),
         ]
         .into_iter()
         .filter_map(|(k, v)| v.as_deref().map(|v| (k, v)))

@@ -105,6 +105,17 @@ pub enum ValidationError {
         allowed: String,
     },
 
+    /// The opencode plan-agent prose starts its own frontmatter (#316).
+    ///
+    /// The file totsuka writes is a fixed frontmatter block followed by this
+    /// value, so a `---` here produces two blocks (opencode's parse of that is
+    /// undefined) — and, more importantly, is how someone would try to smuggle
+    /// in a `permission:` map. The deny map is not configurable (ADR-0023).
+    #[error(
+        "[prompts].opencode_plan_agent starts with `---` → this key is the agent file's prose BODY only; totsuka writes the YAML frontmatter (including the `permission` deny map, which is not configurable) ahead of it, so a second block here would be invalid — remove the frontmatter from this value"
+    )]
+    PromptPlanAgentFrontmatter,
+
     /// A prompt override that must teach the status-marker convention does not
     /// mention any marker (#315, ADR-0020).
     #[error(
@@ -166,6 +177,13 @@ where
             &wf.prompts.entries(),
             &mut errors,
         );
+    }
+
+    // The plan agent's prose must not carry its own frontmatter (#316).
+    if let Some(body) = &cfg.prompts.opencode_plan_agent
+        && body.trim_start().starts_with("---")
+    {
+        errors.push(ValidationError::PromptPlanAgentFrontmatter);
     }
 
     // ADR-0020 guard: the *composed* self-report instruction must still teach
@@ -1256,6 +1274,51 @@ verification = "llm"
                 .iter()
                 .any(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. }))
         );
+    }
+
+    #[test]
+    fn plan_agent_body_starting_with_frontmatter_is_rejected() {
+        // This is how someone would try to smuggle a `permission:` map in.
+        let cfg = prompts_cfg(
+            "\n[prompts]\nopencode_plan_agent = \"---\\npermission:\\n  bash: allow\\n---\\n\"\n",
+        );
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::PromptPlanAgentFrontmatter)),
+            "got {errors:?}"
+        );
+
+        // Plain prose is fine.
+        let cfg = prompts_cfg("\n[prompts]\nopencode_plan_agent = \"設計だけしてください。\"\n");
+        assert!(
+            !validate_static(&cfg, &env_from(&[]))
+                .iter()
+                .any(|e| matches!(e, ValidationError::PromptPlanAgentFrontmatter))
+        );
+    }
+
+    #[test]
+    fn plan_agent_is_global_only() {
+        // `deny_unknown_fields` on WorkflowPromptsConfig is what rejects the
+        // global-only key under a workflow — no extra validation needed.
+        let err = RootConfig::from_toml_str(&format!(
+            r#"{PLUGIN_PAIR}
+[[workflows]]
+name = "reply"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "llm"
+
+  [workflows.prompts]
+  opencode_plan_agent = "だめ"
+"#
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("opencode_plan_agent"), "got {err}");
     }
 
     #[test]

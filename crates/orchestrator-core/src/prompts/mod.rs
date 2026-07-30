@@ -72,6 +72,9 @@ pub struct Prompts {
     verification_marker_convention: String,
     /// How the three keys above are assembled.
     verification_prompt: String,
+    /// Prose body of the opencode plan-mode agent file. Global-only: one file
+    /// on disk backs every session.
+    opencode_plan_agent: String,
     /// [`marker_self_report`](Self::marker_self_report) with its placeholders
     /// already substituted.
     ///
@@ -104,6 +107,7 @@ pub const ALLOWED_PLACEHOLDERS: &[(&str, &[&str])] = &[
         "verification_prompt",
         &["rubric", "background_exemption", "marker_convention"],
     ),
+    ("opencode_plan_agent", &[]),
 ];
 
 /// The placeholders `key` may use, or `None` when the key is unknown.
@@ -188,6 +192,16 @@ impl Prompts {
         )
     }
 
+    /// The prose body of the opencode plan-mode agent file (#316).
+    ///
+    /// Body only — the YAML frontmatter that carries the `permission` deny map
+    /// is fixed in [`hooks::opencode`](crate::hooks::opencode) and is not part
+    /// of this value. Prompt text changes what the model is told; it never
+    /// changes what it is allowed to do.
+    pub fn opencode_plan_agent(&self) -> &str {
+        &self.opencode_plan_agent
+    }
+
     /// The rubric leaf, unassembled. Lets a caller distinguish "this set uses
     /// the built-in rubric" from "this set was given one".
     pub fn verification_rubric(&self) -> &str {
@@ -225,10 +239,14 @@ impl Prompts {
             &o.verification_marker_convention,
         );
         set(&mut self.verification_prompt, &o.verification_prompt);
+        set(&mut self.opencode_plan_agent, &o.opencode_plan_agent);
         self
     }
 
     /// Apply a `[[workflows]].prompts` table — the strongest layer.
+    ///
+    /// `opencode_plan_agent` is absent here on purpose: it describes a single
+    /// shared on-disk file, so it has no per-workflow meaning.
     fn overlay_workflow(mut self, o: &WorkflowPromptsConfig) -> Self {
         set(&mut self.marker_self_report, &o.marker_self_report);
         set(&mut self.verification_rubric, &o.verification_rubric);

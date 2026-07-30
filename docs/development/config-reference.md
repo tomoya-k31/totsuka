@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: human:tomoya-k31, at: 2026-07-30T21:00:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-30T23:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -153,8 +153,11 @@ claude / codex / opencode に差し込むプロンプト文の上書き。組み
 | `verification_background_exemption` | string? | 組み込み | バックグラウンドタスク実行中の中間停止を検収対象から外す文 | — |
 | `verification_marker_convention` | string? | 組み込み | 検収後にマーカーを再掲させる文 | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |
 | `verification_prompt` | string? | `"{rubric}\n\n{background_exemption}\n\n{marker_convention}"` | 上記 3 つの組み立て方。節の並べ替え・省略ができる | `{rubric}` `{background_exemption}` `{marker_convention}` |
+| `opencode_plan_agent` | string? | 組み込み | opencode plan モードのエージェントファイル（`agents/totsuka-plan.md`）の**散文本体**。**グローバル専用**（ディスク上の 1 枚を全セッションが共有するため。`[[workflows]].prompts` に書くとパースエラー） | — |
 
 `verification_*` の 4 キーは `verification = "llm"` のワークフローでのみ使われる（prompt 型 Stop フックを持つのは claude だけで、他ツールでは `human` へ縮退する）。
+
+`opencode_plan_agent` は**散文本体のみ**である。YAML frontmatter（`mode: primary` と `permission: {edit: deny, bash: deny, task: deny}`）は Rust 側で固定されており設定できない — この deny マップが plan モードの読み取り専用保証そのもので、散文に見えるキーから `bash: allow` を注入できると権限昇格になるためである（[ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md)）。値が `---` で始まる場合は検証エラーになる。opencode は claude の `--permission-mode plan` や codex の `--sandbox read-only` に相当する構造的な plan フラグを持たないため、**このエージェントファイルが plan 意図の唯一の強制手段**である。
 
 **マーカー自体（`<<STATUS:COMPLETED>>` など）は設定できない。** `on-stop.sh`（bash）と `totsuka-opencode.js` がリテラルをパースし、[ADR-0020](/decisions/adr-0020-status-marker-stays.md) が 3 ツール共通の唯一の完了信号と定めているため。ここで編集できるのは規約を**教える散文**であって規約そのものではない。`{marker_*}` はそのワイヤ定数へ解決される。
 
@@ -162,7 +165,7 @@ claude / codex / opencode に差し込むプロンプト文の上書き。組み
 
 強い順に 4 層。
 
-1. `[[workflows]].prompts.<key>` — ワークフロー専用
+1. `[[workflows]].prompts.<key>` — ワークフロー専用（`opencode_plan_agent` を除く。グローバル専用のため）
 2. `[[workflows]].rubric` — レガシー（rubric の葉のみ）
 3. `[prompts].<key>` — グローバル
 4. 組み込みデフォルト
