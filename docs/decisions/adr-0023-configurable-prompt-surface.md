@@ -4,7 +4,7 @@ title: ADR-0023 AI ツールへ差し込むプロンプトは設定可能にし�
 description: claude/codex/opencode へ注入するプロンプト文をコードから外出しし config.toml から上書き可能にする一方、スクリプト・argv・permission ブロック・ステータスマーカーは設定不可のまま残す決定。上書きはインライン文字列のみで、ファイルパス指定と TOTSUKA_PROMPTS_* env は不採用。マーカー規約を失う上書きは検証エラーで止める。
 resource: https://github.com/tomoya-k31/totsuka/issues/311
 tags: [decision, prompt, config, security, marker, adr]
-generated: { by: human:tomoya-k31, at: 2026-07-30T23:30:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-31T01:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -125,7 +125,7 @@ claude / codex / opencode に差し込むプロンプト文が Rust の文字列
 
 # 実装
 
-エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311) の子 issue として段階的に実装する。本 ADR を書いた時点（2026-07-30）の状況は次のとおりで、**未完の行は決定であって現状ではない**。
+エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311) の子 issue として段階的に実装する。全段が完了している（本 ADR は #315 と同時に書かれ、以降の PR が状態列を更新してきた）。
 
 | issue | 内容 | 状態 |
 |---|---|---|
@@ -135,6 +135,6 @@ claude / codex / opencode に差し込むプロンプト文が Rust の文字列
 | [#317](https://github.com/tomoya-k31/totsuka/issues/317) | agent-ide-orca | 完了 |
 | [#315](https://github.com/tomoya-k31/totsuka/issues/315) | 検証（決定 4）+ doctor の上書き数表示 + 本 ADR | 本 ADR と同時 |
 | [#316](https://github.com/tomoya-k31/totsuka/issues/316) | opencode plan エージェント（frontmatter は固定） | 完了 |
-| [#318](https://github.com/tomoya-k31/totsuka/issues/318) | task-source-slack | **未着手** |
+| [#318](https://github.com/tomoya-k31/totsuka/issues/318) | task-source-slack | 完了 |
 
-決定 2 の表のうち plan エージェントの frontmatter の行、および決定 4 の `opencode_plan_agent` に対する frontmatter 検査は #316 で実装済みである。残るは #318（task-source-slack）のみで、こちらはプラグイン側の `plugins/slack.toml` を使うため core の `[prompts]` とは独立している。
+決定 2 の表のうち plan エージェントの frontmatter の行、および決定 4 の `opencode_plan_agent` に対する frontmatter 検査は #316 で実装済みである。#318（task-source-slack）はプラグイン側の `plugins/slack.toml` を使うため core の `[prompts]` とは独立しており、これでエピックの全段が入った。

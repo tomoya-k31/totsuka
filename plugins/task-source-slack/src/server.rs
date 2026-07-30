@@ -193,10 +193,12 @@ where
                 ));
             }
         };
-        // Prompt overrides are advisory-checked here (#318): this plugin has
-        // no `config/validate` hook of its own, and an unknown placeholder is
-        // emitted verbatim at render time rather than erroring, so without
-        // this the only symptom would be a stray `{token}` in a draft.
+        // Prompt overrides are advisory-checked here (#318). This could be a
+        // hard error — `config_validate` below exists — but it deliberately is
+        // not: an unknown placeholder renders verbatim, so the symptom is a
+        // visible `{token}` in a draft, and every prompt here is LLM-facing.
+        // Core's `[prompts]` errors on the same typo class because there the
+        // deleted text is the completion-marker convention.
         for (key, placeholder) in config.prompts.unknown_placeholders() {
             tracing::warn!(
                 key,

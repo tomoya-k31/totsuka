@@ -65,7 +65,7 @@ pub struct RepoInfo {
 /// inside the binary — no input can change it — so this panics rather than
 /// degrading. `embedded_defaults_parse` forces it in CI instead of at
 /// `initialize`.
-static DEFAULTS: LazyLock<SlackPrompts> = LazyLock::new(|| {
+static DEFAULTS: LazyLock<EmbeddedPrompts> = LazyLock::new(|| {
     toml::from_str::<Defaults>(include_str!("defaults.toml"))
         .expect("embedded defaults.toml must parse")
         .prompts
@@ -75,7 +75,35 @@ static DEFAULTS: LazyLock<SlackPrompts> = LazyLock::new(|| {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Defaults {
-    prompts: SlackPrompts,
+    prompts: EmbeddedPrompts,
+}
+
+/// The embedded defaults, with **every field required**.
+///
+/// A separate type from [`SlackPrompts`] on purpose, and the duplication is the
+/// point. `SlackPrompts` fills omitted keys from `DEFAULTS`; if `DEFAULTS` were
+/// also a `SlackPrompts`, then deleting a key from `defaults.toml` would make
+/// its `#[serde(default)]` read `DEFAULTS` **while `DEFAULTS` is still
+/// initialising** — a re-entrant `LazyLock`, which **deadlocks rather than
+/// panicking**. The failure would be a CI job hanging to its timeout instead of
+/// a test failing with a readable message.
+///
+/// With the fields required here, a deleted key is an ordinary "missing field"
+/// parse error that `embedded_defaults_parse` reports immediately. (A
+/// *misspelled* key was always safe — `deny_unknown_fields` catches it — but
+/// genuine absence was not.)
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmbeddedPrompts {
+    reply_instructions: String,
+    reply_style_suffix: String,
+    body_template: String,
+    body_thread_header: String,
+    body_thread_line: String,
+    body_thread_unavailable: String,
+    classifier_system: String,
+    classifier_user: String,
+    classifier_correction: String,
 }
 
 /// Prompt text this plugin sends to the model (#318, epic #311).
@@ -124,7 +152,17 @@ pub struct SlackPrompts {
 
 impl Default for SlackPrompts {
     fn default() -> Self {
-        DEFAULTS.clone()
+        Self {
+            reply_instructions: DEFAULTS.reply_instructions.clone(),
+            reply_style_suffix: DEFAULTS.reply_style_suffix.clone(),
+            body_template: DEFAULTS.body_template.clone(),
+            body_thread_header: DEFAULTS.body_thread_header.clone(),
+            body_thread_line: DEFAULTS.body_thread_line.clone(),
+            body_thread_unavailable: DEFAULTS.body_thread_unavailable.clone(),
+            classifier_system: DEFAULTS.classifier_system.clone(),
+            classifier_user: DEFAULTS.classifier_user.clone(),
+            classifier_correction: DEFAULTS.classifier_correction.clone(),
+        }
     }
 }
 
@@ -148,10 +186,14 @@ impl SlackPrompts {
 
     /// `(key, unknown placeholder)` pairs across every template.
     ///
-    /// The plugin has no `config/validate` hook of its own, so this is
-    /// advisory only — `server` logs it at `initialize`. Rendering keeps an
-    /// unknown key verbatim, so the symptom is visible text rather than a
-    /// silent deletion.
+    /// Advisory only — `server` logs it at `initialize`. The plugin *does*
+    /// have a `config/validate` hook (`server::config_validate`), so this
+    /// could be a hard error; it deliberately is not. Rendering keeps an
+    /// unknown key verbatim, so the symptom is a visible `{token}` in a draft
+    /// rather than a silent deletion, and every key here is LLM-facing. Core's
+    /// `[prompts]` treats the same typo class as an error because there the
+    /// deleted text is the completion-marker convention and the only symptom
+    /// is tasks escalating on a timeout.
     pub fn unknown_placeholders(&self) -> Vec<(&'static str, String)> {
         let values: &[(&str, &String)] = &[
             ("reply_instructions", &self.reply_instructions),
@@ -172,8 +214,11 @@ impl SlackPrompts {
                 .map(|(_, a)| *a)
                 .unwrap_or(&[]);
             for name in crate::template::scan(value) {
-                if !allowed.contains(&name) {
-                    out.push((*key, name.to_string()));
+                let entry = (*key, name.to_string());
+                // A template that repeats `{bogus}` should log once, not once
+                // per occurrence.
+                if !allowed.contains(&name) && !out.contains(&entry) {
+                    out.push(entry);
                 }
             }
         }
@@ -518,6 +563,18 @@ mod tests {
         assert!(
             rendered.contains(r#"{"repo": string, "confidence": number, "reason": string}"#),
             "got {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_repeated_unknown_placeholder_is_reported_once() {
+        let p: SlackPrompts = serde_json::from_value(serde_json::json!({
+            "body_template": "{bogus} と {bogus} と {sender}",
+        }))
+        .unwrap();
+        assert_eq!(
+            p.unknown_placeholders(),
+            vec![("body_template", "bogus".to_string())]
         );
     }
 
