@@ -519,10 +519,20 @@ fn check_hook_assets(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
         // Surface non-stock prompts here (#315): an operator debugging a task
         // that never completes needs to know the rendered settings came from an
         // override before they compare the text against the docs.
-        // The legacy `[[workflows]].rubric` counts too: it lives on a different
-        // struct but resolves into the same `verification_rubric`, so a config
-        // using only it is just as non-stock.
-        let overrides = cfg.prompts.entries().len()
+        // Count only what lands *in this dir*. `opencode_plan_agent` renders
+        // to the opencode config dir instead, and is reported by
+        // `check_opencode_assets`; counting it here would claim an override on
+        // a hooks dir that is entirely stock.
+        //
+        // The legacy `[[workflows]].rubric` does count: it lives on a
+        // different struct but resolves into the same `verification_rubric`,
+        // so a config using only it is just as non-stock.
+        let overrides = cfg
+            .prompts
+            .entries()
+            .iter()
+            .filter(|(k, _)| *k != "opencode_plan_agent")
+            .count()
             + cfg
                 .workflows
                 .iter()
@@ -689,10 +699,18 @@ fn check_opencode_assets(
     let dir = dir.expect("NoConfigDir returned above");
     let issues = opencode::verify_assets(&dir, cfg);
     if issues.is_empty() {
+        // Same reason as the `hooks` check: an operator debugging a plan-mode
+        // task needs to know the agent file's prose is not stock. The
+        // frontmatter never is overridden, so this only ever refers to prose.
+        let plan_note = if cfg.prompts.opencode_plan_agent.is_some() {
+            " (plan agent prose overridden)"
+        } else {
+            ""
+        };
         checks.push(Check::ok(
             "opencode-assets",
             format!(
-                "totsuka plugin + plan agent installed under {}",
+                "totsuka plugin + plan agent installed under {}{plan_note}",
                 dir.display()
             ),
         ));

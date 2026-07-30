@@ -4,7 +4,11 @@
 //! `hooks.json`: completion detection is a **JS plugin** auto-loaded from the
 //! user-global `$XDG_CONFIG_HOME/opencode/plugins/`, and plan mode is a
 //! custom **agent markdown** under `agents/` (launched via
-//! `--agent totsuka-plan`). Both are embedded in the binary and synced here.
+//! `--agent totsuka-plan`). Both are synced here, but they are not the same
+//! kind of asset: the JS plugin is embedded in the binary and not
+//! configurable (it is executed code), while the agent file is a fixed
+//! frontmatter block — carrying the `permission` deny map — concatenated with
+//! prose that comes from `[prompts].opencode_plan_agent` (#316, ADR-0023).
 //!
 //! Safety mirrors the codex module: the plugin fires for every opencode
 //! session, so it registers no hooks unless `TOTSUKA_HOOK_ENDPOINT` /
