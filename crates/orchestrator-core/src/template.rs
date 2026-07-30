@@ -9,6 +9,13 @@
 //!   [`config::validate`](mod@crate::config::validate) can reject the typo up
 //!   front instead of leaving it to be discovered in a pane.
 //!
+//! The two must agree on **what counts as a placeholder**, or validation
+//! rejects text that renders perfectly well. They agree on braces being
+//! identifier-named (#328) and on an unbalanced `{` ending the scan, exactly as
+//! it makes `render` emit the remainder literally. They deliberately do *not*
+//! agree on unknown names: `render` is fail-soft there, `scan`'s callers are
+//! fail-fast.
+//!
 //! # Not used by the worktree templates
 //!
 //! [`worktree::render_location`](crate::worktree::render_location) and
@@ -63,15 +70,35 @@ pub fn render(template: &str, vars: &[(&str, &str)]) -> String {
     out
 }
 
-/// Every `{name}` token in `template`, in order.
+/// Every `{name}` token in `template` whose name is a bare identifier, in
+/// order.
 ///
 /// With `skip_dollar`, a `{` immediately preceded by `$` is not a placeholder
 /// but the start of a `${...}` env reference (expanded at resolve time, not
 /// here) — worktree templates need that, prompt templates do not.
 ///
-/// Mirrors [`render`]'s scanning rules so validation and rendering cannot
-/// disagree about what counts as a placeholder: an unbalanced `{` terminates
-/// the scan, exactly as it makes `render` emit the remainder literally.
+/// # Why identifiers only (#328)
+///
+/// Braces also appear as **content**. A prompt may legitimately show a model
+/// the JSON shape it must answer with:
+///
+/// ```text
+/// Answer with ONLY an object of the exact shape {"ok": bool, "why": string}
+/// ```
+///
+/// [`render`] already leaves that alone — nothing in `vars` is named
+/// `"ok": bool, "why": string`, so it is emitted verbatim — but before #328
+/// `scan` reported it, and every caller turns an unrecognised name into a hard
+/// error. A config whose *rendered output was correct* could not start.
+///
+/// Restricting to `[A-Za-z_][A-Za-z0-9_]*` is what makes this function agree
+/// with [`render`]'s *effective* semantics rather than its literal brace
+/// scanning. No real placeholder is affected: every key in
+/// [`prompts`](crate::prompts) and every worktree placeholder is an
+/// identifier.
+///
+/// **Do not "fix" this by narrowing [`render`] to match.** Its
+/// unknown-key-verbatim behaviour is a deliberate fail-soft, documented above.
 pub fn scan(template: &str, skip_dollar: bool) -> Vec<&str> {
     let bytes = template.as_bytes();
     let mut found = Vec::new();
@@ -81,13 +108,23 @@ pub fn scan(template: &str, skip_dollar: bool) -> Vec<&str> {
             && !(skip_dollar && i > 0 && bytes[i - 1] == b'$')
             && let Some(rel) = template[i + 1..].find('}')
         {
-            found.push(&template[i + 1..i + 1 + rel]);
+            let name = &template[i + 1..i + 1 + rel];
+            if is_identifier(name) {
+                found.push(name);
+            }
             i = i + 1 + rel + 1;
             continue;
         }
         i += 1;
     }
     found
+}
+
+/// Whether `s` looks like a placeholder name rather than braced content.
+fn is_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 #[cfg(test)]
@@ -127,6 +164,24 @@ mod tests {
         assert_eq!(scan("none here", false), Vec::<&str>::new());
         // An unbalanced `{` ends the scan, mirroring `render`'s behavior.
         assert_eq!(scan("{a} then { b", false), vec!["a"]);
+    }
+
+    #[test]
+    fn scan_ignores_braced_content_that_is_not_an_identifier() {
+        // A prompt may show the model the JSON shape it must answer with.
+        // `render` emits that verbatim, so `scan` must not report it (#328).
+        assert_eq!(
+            scan(r#"shape {"ok": bool, "why": string} then {rubric}"#, false),
+            vec!["rubric"]
+        );
+        // Whatever `scan` skips, `render` leaves alone — the two agree.
+        assert_eq!(render(r#"{"ok": bool}"#, &[("ok", "X")]), r#"{"ok": bool}"#);
+        // Digits-first, dots, spaces and hyphens are content, not names.
+        assert_eq!(scan("{1st} {a.b} {a b} {a-b}", false), Vec::<&str>::new());
+        // Underscores and digits after the first char are fine.
+        assert_eq!(scan("{_x} {a1} {A_B2}", false), vec!["_x", "a1", "A_B2"]);
+        // An empty name is content too.
+        assert_eq!(scan("{}", false), Vec::<&str>::new());
     }
 
     #[test]

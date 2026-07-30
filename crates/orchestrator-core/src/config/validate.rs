@@ -1242,6 +1242,36 @@ verification = "llm"
     }
 
     #[test]
+    fn a_json_shape_in_a_prompt_is_content_not_a_placeholder() {
+        // #328: `render` emits `{"ok": true}` verbatim (nothing in `vars` is
+        // named that), so validation must not reject it. Showing a model the
+        // shape it must answer with is an ordinary thing to write, and before
+        // the fix it made `run` refuse to start.
+        let cfg = prompts_cfg(
+            "\n[prompts]\nverification_rubric = \"出力は {\\\"ok\\\": true} の形にしてください\"\n",
+        );
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::UnknownPromptPlaceholder { .. })),
+            "got {errors:?}"
+        );
+        // A real typo alongside it is still caught.
+        let cfg =
+            prompts_cfg("\n[prompts]\nverification_prompt = \"{\\\"ok\\\": true} {rubrik}\"\n");
+        assert!(
+            validate_static(&cfg, &env_from(&[]))
+                .iter()
+                .any(|e| matches!(
+                    e,
+                    ValidationError::UnknownPromptPlaceholder { placeholder, .. }
+                        if placeholder == "rubrik"
+                ))
+        );
+    }
+
+    #[test]
     fn a_valid_placeholder_is_accepted() {
         let cfg = prompts_cfg(
             "\n[prompts]\nmarker_self_report = \"{marker_completed} / {marker_needs_input} / {marker_failed}\"\nverification_prompt = \"{rubric}|{background_exemption}|{marker_convention}\"\n",
