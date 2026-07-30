@@ -125,6 +125,29 @@ pub struct PromptsConfig {
     pub verification_prompt: Option<String>,
 }
 
+impl PromptsConfig {
+    /// The keys the operator actually set, as `(key name, value)` pairs.
+    /// Validation walks this instead of hard-coding the field list twice.
+    pub fn entries(&self) -> Vec<(&'static str, &str)> {
+        [
+            ("marker_self_report", &self.marker_self_report),
+            ("verification_rubric", &self.verification_rubric),
+            (
+                "verification_background_exemption",
+                &self.verification_background_exemption,
+            ),
+            (
+                "verification_marker_convention",
+                &self.verification_marker_convention,
+            ),
+            ("verification_prompt", &self.verification_prompt),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| v.as_deref().map(|v| (k, v)))
+        .collect()
+    }
+}
+
 /// `[[workflows]].prompts` — the workflow-scoped subset of
 /// [`PromptsConfig`] (#314).
 ///
@@ -153,6 +176,28 @@ pub struct WorkflowPromptsConfig {
     /// See [`PromptsConfig::verification_prompt`].
     #[serde(default)]
     pub verification_prompt: Option<String>,
+}
+
+impl WorkflowPromptsConfig {
+    /// The keys this workflow actually set — see [`PromptsConfig::entries`].
+    pub fn entries(&self) -> Vec<(&'static str, &str)> {
+        [
+            ("marker_self_report", &self.marker_self_report),
+            ("verification_rubric", &self.verification_rubric),
+            (
+                "verification_background_exemption",
+                &self.verification_background_exemption,
+            ),
+            (
+                "verification_marker_convention",
+                &self.verification_marker_convention,
+            ),
+            ("verification_prompt", &self.verification_prompt),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| v.as_deref().map(|v| (k, v)))
+        .collect()
+    }
 }
 
 /// Hook-event ingestion settings from `[hooks]` (#131).

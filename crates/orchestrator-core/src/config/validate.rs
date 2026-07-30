@@ -91,6 +91,27 @@ pub enum ValidationError {
     )]
     UnknownToolRef { referrer: String, tool: String },
 
+    /// A prompt override uses a `{placeholder}` the key does not define
+    /// (#315). An **error**, not a passthrough: the typo silently deletes the
+    /// text it was meant to insert, and when that text is the marker
+    /// convention the only symptom is tasks escalating on a timeout.
+    #[error(
+        "{referrer} prompt `{key}` uses unknown placeholder `{{{placeholder}}}` → allowed for this key: {allowed} (unknown placeholders are emitted verbatim at render time, so this would ship as literal text)"
+    )]
+    UnknownPromptPlaceholder {
+        referrer: String,
+        key: String,
+        placeholder: String,
+        allowed: String,
+    },
+
+    /// A prompt override that must teach the status-marker convention does not
+    /// mention any marker (#315, ADR-0020).
+    #[error(
+        "{referrer} prompt `{key}` never mentions a status marker → the agent is never taught the completion convention, so every Stop parses as UNKNOWN and the task escalates on timeout; keep {{marker_completed}} / {{marker_needs_input}} / {{marker_failed}} in the text"
+    )]
+    PromptDropsMarkerConvention { referrer: String, key: String },
+
     /// A referenced tool's kind has no completion-detection adapter yet
     /// (#196; unreachable since Phase 3 gave every kind an adapter — kept as
     /// the gate a future adapterless kind would trip).
@@ -134,6 +155,44 @@ where
     // Global worktree template (F-22).
     if let Some(location) = &cfg.worktree.location {
         check_worktree_placeholders("[worktree].location", location, &mut errors);
+    }
+
+    // Prompt overrides (#315). Placeholder typos are errors here rather than
+    // render-time passthroughs — see `UnknownPromptPlaceholder`.
+    check_prompt_placeholders("[prompts]", &cfg.prompts.entries(), &mut errors);
+    for wf in &cfg.workflows {
+        check_prompt_placeholders(
+            &format!("workflow `{}` prompts", wf.name),
+            &wf.prompts.entries(),
+            &mut errors,
+        );
+    }
+
+    // ADR-0020 guard: the *composed* self-report instruction must still teach
+    // the marker convention. Composed, not per-key, so it catches both a leaf
+    // that lost its `{marker_*}` and an assembly that dropped the section.
+    // Reported per distinct resolved text so one bad global key does not
+    // produce one finding per workflow.
+    let mut reported: HashSet<String> = HashSet::new();
+    let global = crate::prompts::Prompts::resolve(cfg);
+    for (referrer, prompts) in std::iter::once(("[prompts]".to_string(), global)).chain(
+        cfg.workflows
+            .iter()
+            .map(|wf| {
+                (
+                    format!("workflow `{}` prompts", wf.name),
+                    crate::prompts::Prompts::resolve_for(cfg, wf),
+                )
+            })
+            .collect::<Vec<_>>(),
+    ) {
+        let rendered = prompts.marker_self_report().to_string();
+        if !crate::prompts::Prompts::mentions_a_marker(&rendered) && reported.insert(rendered) {
+            errors.push(ValidationError::PromptDropsMarkerConvention {
+                referrer: referrer.clone(),
+                key: "marker_self_report".to_string(),
+            });
+        }
     }
 
     // Repositories: unique names + path existence.
@@ -270,6 +329,17 @@ where
         });
     }
     hook_findings(cfg, &agent_hook_capable, &mut findings);
+    // Same empty-override advisory as the per-workflow one, for `[prompts]`.
+    for (key, value) in cfg.prompts.entries() {
+        if value.trim().is_empty() {
+            findings.push(Finding {
+                severity: FindingSeverity::Warning,
+                message: format!(
+                    "[prompts].{key} is an empty string → this replaces the built-in text with nothing rather than falling back to it; remove the key to use the default"
+                ),
+            });
+        }
+    }
     findings
 }
 
@@ -365,6 +435,93 @@ where
                 ),
             });
         }
+
+        prompt_findings(cfg, wf, findings);
+    }
+}
+
+/// Advisories for a workflow's prompt overrides (#315). Errors live in
+/// [`validate_static`]; these are the "it parses but probably isn't what you
+/// meant" cases.
+fn prompt_findings(
+    cfg: &RootConfig,
+    wf: &crate::config::WorkflowConfig,
+    findings: &mut Vec<Finding>,
+) {
+    let entries = wf.prompts.entries();
+
+    // ADR-0020 guard, warning half. The composed verification prompt is the
+    // `prompt`-type Stop hook's body, and the judging model has to re-emit a
+    // marker for `on-stop.sh` to parse; without one every Stop reads as
+    // UNKNOWN. A warning rather than an error (unlike `marker_self_report`)
+    // because restructuring the verification text — dropping the convention
+    // section on purpose, say, when the up-front instruction already carries
+    // it — is a legitimate thing to want.
+    //
+    // Composed, so it catches both a `verification_marker_convention` that
+    // lost its `{marker_*}` and a `verification_prompt` assembly that dropped
+    // `{marker_convention}`. Only for llm workflows: nothing else renders it.
+    if wf.verification == VerificationMode::Llm {
+        let rendered = crate::prompts::Prompts::resolve_for(cfg, wf).verification_prompt();
+        if !crate::prompts::Prompts::mentions_a_marker(&rendered) {
+            findings.push(Finding {
+                severity: FindingSeverity::Warning,
+                message: format!(
+                    "workflow `{}` renders an llm-verification prompt that never mentions a status marker → the verifying model will not re-emit one, so the Stop parses as UNKNOWN; keep {{marker_convention}} in prompts.verification_prompt and the markers in prompts.verification_marker_convention",
+                    wf.name
+                ),
+            });
+        }
+    }
+
+    // The `verification_*` family only feeds the llm prompt hook, same as the
+    // legacy `rubric` above. Its message is left untouched so the wording the
+    // existing test pins does not move.
+    if wf.verification != VerificationMode::Llm {
+        let unused: Vec<&str> = entries
+            .iter()
+            .map(|(k, _)| *k)
+            .filter(|k| k.starts_with("verification_"))
+            .collect();
+        if !unused.is_empty() {
+            findings.push(Finding {
+                severity: FindingSeverity::Warning,
+                message: format!(
+                    "workflow `{}` sets prompts.{} but verification = {} → these only apply to llm verification; set verification = \"llm\" or remove them",
+                    wf.name,
+                    unused.join(", prompts."),
+                    wf.verification.as_str()
+                ),
+            });
+        }
+    }
+
+    // Both spellings of the rubric on one workflow: the newer key wins, so the
+    // older one is dead text that still reads as live. A warning, not an error
+    // — a config caught mid-migration must keep working.
+    if wf.rubric.is_some() && wf.prompts.verification_rubric.is_some() {
+        findings.push(Finding {
+            severity: FindingSeverity::Warning,
+            message: format!(
+                "workflow `{}` sets both rubric and prompts.verification_rubric → prompts.verification_rubric wins; remove the now-ignored rubric",
+                wf.name
+            ),
+        });
+    }
+
+    // An empty override reads as "leave it out", but it replaces the built-in
+    // with nothing. Called out separately from the marker guard because the
+    // cause is much clearer here.
+    for (key, value) in &entries {
+        if value.trim().is_empty() {
+            findings.push(Finding {
+                severity: FindingSeverity::Warning,
+                message: format!(
+                    "workflow `{}` sets prompts.{key} to an empty string → this replaces the built-in text with nothing rather than falling back to it; remove the key to use the default",
+                    wf.name
+                ),
+            });
+        }
     }
 }
 
@@ -424,6 +581,40 @@ fn check_plugin_ref(
             expected,
         }),
         Some(_) => {}
+    }
+}
+
+/// Report any `{placeholder}` a prompt override uses outside its key's set
+/// (#315). `${ENV}` is **not** skipped: prompts get no env expansion, so a
+/// `${…}` in one is a literal, and `{…}` inside it is still a placeholder.
+fn check_prompt_placeholders(
+    referrer: &str,
+    entries: &[(&'static str, &str)],
+    errors: &mut Vec<ValidationError>,
+) {
+    for (key, value) in entries {
+        let Some(allowed) = crate::prompts::allowed_placeholders(key) else {
+            // `deny_unknown_fields` already rejected unknown keys at parse.
+            continue;
+        };
+        for name in template::scan(value, false) {
+            if !allowed.contains(&name) {
+                errors.push(ValidationError::UnknownPromptPlaceholder {
+                    referrer: referrer.to_string(),
+                    key: (*key).to_string(),
+                    placeholder: name.to_string(),
+                    allowed: if allowed.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        allowed
+                            .iter()
+                            .map(|a| format!("{{{a}}}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    },
+                });
+            }
+        }
     }
 }
 
@@ -951,6 +1142,237 @@ verification = "llm"
         assert!(
             !findings.iter().any(|f| f.message.contains("tool")),
             "claude-only must not warn: {findings:?}"
+        );
+    }
+
+    /// A workflow plus whatever prompt keys the caller adds.
+    fn prompts_cfg(extra: &str) -> RootConfig {
+        RootConfig::from_toml_str(&format!(
+            r#"{PLUGIN_PAIR}
+[[workflows]]
+name = "reply"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "llm"
+{extra}
+"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn unknown_prompt_placeholder_is_a_validation_error() {
+        // A typo must not be a render-time passthrough: `{marker_completd}`
+        // would ship as literal text and delete the convention it meant to
+        // insert.
+        let cfg = prompts_cfg(
+            "\n[prompts]\nmarker_self_report = \"完了時は {marker_completd} を付けてください\"\n",
+        );
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::UnknownPromptPlaceholder { key, placeholder, .. }
+                    if key == "marker_self_report" && placeholder == "marker_completd"
+            )),
+            "got {errors:?}"
+        );
+        // The message names the key and what it may use.
+        let msg = errors
+            .iter()
+            .find(|e| matches!(e, ValidationError::UnknownPromptPlaceholder { .. }))
+            .unwrap()
+            .to_string();
+        assert!(msg.contains("marker_self_report"), "got {msg}");
+        assert!(msg.contains("{marker_completed}"), "got {msg}");
+
+        // A key that takes no placeholders rejects every one.
+        let cfg = prompts_cfg("\n[prompts]\nverification_rubric = \"{rubric} を見てください\"\n");
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::UnknownPromptPlaceholder { key, .. } if key == "verification_rubric"
+            )),
+            "got {errors:?}"
+        );
+
+        // The workflow scope is checked too, and names the workflow.
+        let cfg = prompts_cfg("  [workflows.prompts]\n  verification_prompt = \"{rubrik}\"\n");
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::UnknownPromptPlaceholder { referrer, placeholder, .. }
+                    if referrer.contains("`reply`") && placeholder == "rubrik"
+            )),
+            "got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_valid_placeholder_is_accepted() {
+        let cfg = prompts_cfg(
+            "\n[prompts]\nmarker_self_report = \"{marker_completed} / {marker_needs_input} / {marker_failed}\"\nverification_prompt = \"{rubric}|{background_exemption}|{marker_convention}\"\n",
+        );
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::UnknownPromptPlaceholder { .. })),
+            "got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_self_report_without_any_marker_is_rejected() {
+        // ADR-0020: the marker is the only completion signal shared by all
+        // three tools. Losing it strands every task on the escalation timeout.
+        let cfg = prompts_cfg("\n[prompts]\nmarker_self_report = \"終わったら教えてください\"\n");
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { key, .. } if key == "marker_self_report")),
+            "got {errors:?}"
+        );
+
+        // Only reported once even though a workflow resolves to the same text.
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. }))
+                .count(),
+            1,
+            "one finding per distinct resolved text, got {errors:?}"
+        );
+
+        // The stock config is clean.
+        let cfg = prompts_cfg("");
+        assert!(
+            !validate_static(&cfg, &env_from(&[]))
+                .iter()
+                .any(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. }))
+        );
+    }
+
+    #[test]
+    fn a_verification_prompt_without_any_marker_warns() {
+        // The warning half of the ADR-0020 guard: the judging model has to
+        // re-emit a marker for `on-stop.sh` to parse. A warning rather than an
+        // error, because dropping the convention section on purpose is a
+        // legitimate restructuring.
+        let cfg = prompts_cfg("  [workflows.prompts]\n  verification_prompt = \"{rubric}\"\n");
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("`reply`")
+                    && f.message.contains("never mentions a status marker")),
+            "got {findings:?}"
+        );
+        // Not an error — the config still starts.
+        assert!(
+            !validate_static(&cfg, &env_from(&[]))
+                .iter()
+                .any(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. })),
+            "the verification prompt half must not block startup"
+        );
+
+        // A marker-free convention leaf is caught too (composed check).
+        let cfg = prompts_cfg(
+            "  [workflows.prompts]\n  verification_marker_convention = \"最後に一言そえてください\"\n",
+        );
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("never mentions a status marker")),
+            "got {findings:?}"
+        );
+
+        // Stock config, and non-llm workflows, produce nothing.
+        for extra in ["", "verification = \"none\"\n"] {
+            let cfg = RootConfig::from_toml_str(&format!(
+                r#"{PLUGIN_PAIR}
+[[workflows]]
+name = "reply"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+{}
+"#,
+                if extra.is_empty() {
+                    "verification = \"llm\"\n"
+                } else {
+                    extra
+                }
+            ))
+            .unwrap();
+            let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+            assert!(
+                !warnings_of(&findings)
+                    .iter()
+                    .any(|f| f.message.contains("never mentions a status marker")),
+                "unexpected warning for {extra:?}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn both_rubric_spellings_on_one_workflow_warn() {
+        let cfg = prompts_cfg(
+            "rubric = \"レガシー\"\n  [workflows.prompts]\n  verification_rubric = \"新しい\"\n",
+        );
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings).iter().any(|f| f
+                .message
+                .contains("both rubric and prompts.verification_rubric")),
+            "got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn verification_prompts_without_llm_verification_warn() {
+        let toml = format!(
+            r#"{PLUGIN_PAIR}
+[[workflows]]
+name = "no_verify"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "none"
+
+  [workflows.prompts]
+  verification_rubric = "実調査に基づくこと"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("prompts.verification_rubric")
+                    && f.message.contains("`no_verify`")),
+            "got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_prompt_override_warns() {
+        let cfg = prompts_cfg("\n[prompts]\nverification_rubric = \"\"\n");
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            warnings_of(&findings)
+                .iter()
+                .any(|f| f.message.contains("[prompts].verification_rubric")
+                    && f.message.contains("empty string")),
+            "got {findings:?}"
         );
     }
 
