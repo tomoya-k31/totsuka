@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: プラグイン開発ガイド
-description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、ビルド手順（Cargo バイナリ名と plugin.toml の name 不一致時の対処）、install/enable の流れ、参照実装。
+description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、ビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-01T01:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -96,7 +96,7 @@ cargo build --release -p task-source-github
 
 **バイナリ名は Cargo パッケージ名ではなく `plugin.toml` の `name` である。** 各プラグインの `Cargo.toml` は `[[bin]] name` を `plugin.toml` の `name` に一致させており（`task-source-github` パッケージの bin は `github`）、`totsuka plugin install <dir>` が要求するのもこの名前なので、**リネームは不要**。上のコマンドの出力は `target/release/github` になる。
 
-この一致は `scripts/arch-lint.sh` の `plugin-bin-name` チェックが機械検証する（[ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md)）。新しいプラグインを追加するときは `[[bin]] name` を `plugin.toml` の `name` に合わせること。合っていないと install は「plugin binary not found」で失敗する。
+この一致は `scripts/arch-lint.sh` の `plugin-bin-name` チェックが機械検証する（[ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md)）。新しいプラグインを追加するときは `[[bin]] name` を `plugin.toml` の `name` に合わせること。合っていないと install は `plugin binary <name> not found in <dir> → expected a file named after the plugin` で失敗する。
 
 install には `plugin.toml` とバイナリを同じディレクトリに置いて渡す。
 
