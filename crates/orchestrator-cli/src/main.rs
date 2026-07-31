@@ -4,6 +4,7 @@
 //! plugin / config / logs / doctor / completion, with the shared flags
 //! `--config` (highest config layer, F-66) and `--debug`.
 
+mod bundled;
 mod common;
 mod config_cmd;
 mod doctor_cmd;

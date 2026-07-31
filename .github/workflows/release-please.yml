@@ -217,9 +217,10 @@ jobs:
 
           "${totsuka}" --version
 
-          for dir in "${work}/${PREFIX}"/plugins/*/; do
-            "${totsuka}" plugin install "${dir}" --yes
-          done
+          # `--bundled` with no path: the same command the README gives, which
+          # also exercises the discovery that has to find the tree next to the
+          # binary.
+          "${totsuka}" plugin install --bundled --all --yes
 
           installed="$("${totsuka}" plugin list --json)"
           echo "${installed}"

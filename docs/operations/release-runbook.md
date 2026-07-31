@@ -111,10 +111,10 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
   └── LICENSE
   ```
 
-  利用者はツリーごと `/usr/local/lib/totsuka` へ置き、`/usr/local/bin` から symlink する（README のインストール手順）。バイナリだけを移すと同梱プラグインが置き去りになる。プラグインはこのツリーから `totsuka plugin install /usr/local/lib/totsuka/plugins/<name>` で入れるので、ツリーを残しておけば後から追加・再インストールするときに再ダウンロードが要らない。
+  利用者はツリーごと `/usr/local/lib/totsuka` へ置き、`/usr/local/bin` から symlink する（README のインストール手順）。バイナリだけを移すと同梱プラグインが置き去りになる。プラグインは `totsuka plugin install --bundled <name>` で入れる（#345）。
 
-  > **現時点ではパス指定が必要。** バイナリの隣を自動探索する `totsuka plugin install --bundled` は [#345](https://github.com/tomoya-k31/totsuka/issues/345) で入る。それまで README は明示パスを案内する。
-- **スモークテスト**: 添付の直前に、展開した tarball からスクラッチな XDG 環境へ全プラグインを `totsuka plugin install <dir> --yes` し、`plugin list --json` の件数が `plugins/*/plugin.toml` の数と一致することを検証する。**README の Quickstart が案内するのと同じコマンドを、利用者が実際にダウンロードする成果物に対して実行する**ので、ドキュメントの約束が嘘になっていないことをここで担保できる（かつては存在しないディレクトリを指していて必ず失敗する状態が放置されていた）。
+  > **`--bundled` の探索は symlink 先も見る。** `std::env::current_exe` は macOS で symlink を解決しない（`_NSGetExecutablePath` は起動に使われたパスを返す）ため、CLI は `fs::canonicalize` の結果も明示的に探索する。上記のインストール形はプラグインが**リンク先**の隣にあるので、これが無いと 1 つも見つからない。詳細は [orchestrator-cli](/components/orchestrator-cli.md)。
+- **スモークテスト**: 添付の直前に、展開した tarball からスクラッチな XDG 環境へ全プラグインを install し、`plugin list --json` の件数が `plugins/*/plugin.toml` の数と一致することを検証する。**利用者が実際にダウンロードする成果物に対して実行する**ので、ドキュメントの約束が嘘になっていないことをここで担保できる（かつては README が存在しないディレクトリを指していて必ず失敗する状態が放置されていた）。
 
 # Gatekeeper（macOS）
 

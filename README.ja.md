@@ -34,10 +34,10 @@ sudo mv totsuka-*-macos-universal /usr/local/lib/totsuka
 sudo ln -sf /usr/local/lib/totsuka/totsuka /usr/local/bin/totsuka
 ```
 
-バイナリだけでなくディレクトリごと移動します。プラグインは
-`/usr/local/lib/totsuka/plugins/` に入っており、必要なものをそこから
-インストールします（クイックスタートの手順 2）。ツリーを残しておけば、後から
-プラグインを追加・再インストールするときに再ダウンロードが要りません。
+バイナリだけでなくディレクトリごと移動します。`totsuka` は同梱プラグインを
+自分自身の隣から探すため、`plugin install --bundled` がパス指定なしで動きます
+（クイックスタートの手順 2）。ツリーを残しておけば、後からプラグインを追加・
+再インストールするときに再ダウンロードも要りません。
 
 すべて ad-hoc 署名です。Gatekeeper にブロックされた場合、ツリー全体に対して一度
 だけ quarantine 属性を除去してください:
@@ -62,9 +62,9 @@ cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
 totsuka init
 
 # 2. 必要なプラグイン（task source / agent / notifier）を install して enable。
-#    プラグインは tarball 同梱で /usr/local/lib/totsuka/plugins/ 配下にある。
-totsuka plugin install /usr/local/lib/totsuka/plugins/github
-totsuka plugin enable github
+#    tarball 同梱なので --bundled がパス指定なしで見つける。
+totsuka plugin install --bundled github --enable
+#    …まとめて入れるなら: totsuka plugin install --bundled --all --enable
 
 # 3. シークレットを Keychain に保存し、設定から参照
 #    （例: api_key_ref = "keychain:totsuka/github"）。

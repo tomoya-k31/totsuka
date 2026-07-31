@@ -39,7 +39,20 @@ impl Env {
         vars: &[(&str, &str)],
         stdin: Option<&str>,
     ) -> (bool, String, String) {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_totsuka"));
+        self.run_bin(Path::new(env!("CARGO_BIN_EXE_totsuka")), args, vars, stdin)
+    }
+
+    /// Like [`Env::run_with_env`], but launches a specific `totsuka` path —
+    /// used to exercise bundled-plugin discovery, which is relative to the
+    /// running executable.
+    fn run_bin(
+        &self,
+        bin: &Path,
+        args: &[&str],
+        vars: &[(&str, &str)],
+        stdin: Option<&str>,
+    ) -> (bool, String, String) {
+        let mut cmd = Command::new(bin);
         cmd.args(args)
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
@@ -288,4 +301,199 @@ fn broken_env_override_fails_before_install_side_effects() {
         !env.root.join("data/totsuka/plugins/github").exists(),
         "nothing may be installed when the env layer is broken"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Bundled plugins (F-52): the release tarball ships `plugins/<name>/…` next to
+// the binary, so `--bundled` needs no path from the user.
+// ---------------------------------------------------------------------------
+
+/// Lay out a bundled tree: `<root>/plugins/<name>/{plugin.toml, <name>}`.
+fn fake_bundle(root: &Path, names: &[&str]) {
+    for name in names {
+        fake_source(&root.join("plugins").join(name), name, ">=0.1.6, <0.4");
+    }
+}
+
+#[test]
+fn bundled_all_installs_and_enables_every_plugin() {
+    let env = Env::new("bundled-all");
+    let tree = env.root.join("tree");
+    fake_bundle(&tree, &["github", "slack"]);
+    // A directory without a manifest must be ignored, not fail the run.
+    fs::create_dir_all(tree.join("plugins/not-a-plugin")).unwrap();
+    fs::write(
+        env.config_toml(),
+        "# hand-written comment\nmax_concurrency = 2\n",
+    )
+    .unwrap();
+
+    let bundled_dir = tree.join("plugins");
+    let (ok, out, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            "--bundled",
+            "--all",
+            "--yes",
+            "--enable",
+            "--bundled-dir",
+            bundled_dir.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(ok, "install failed: {out}{err}");
+    // The chosen tree is reported — with several install shapes in play,
+    // "it installed something" is not enough to know what.
+    assert!(out.contains(bundled_dir.to_str().unwrap()), "{out}");
+
+    let (ok, listed, _) = env.run(&["plugin", "list", "--json"], None);
+    assert!(ok);
+    let rows: serde_json::Value = serde_json::from_str(&listed).unwrap();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{listed}");
+    for row in rows {
+        assert_eq!(row["installed"], true, "{listed}");
+        assert_eq!(row["enabled"], true, "{listed}");
+    }
+
+    // `--enable` goes through the same raw-text edit as `plugin enable`, so
+    // hand-written config must survive it.
+    let config = fs::read_to_string(env.config_toml()).unwrap();
+    assert!(config.contains("# hand-written comment"), "{config}");
+    assert!(config.contains("max_concurrency = 2"), "{config}");
+}
+
+#[test]
+fn bundled_by_name_installs_only_that_plugin() {
+    let env = Env::new("bundled-one");
+    let tree = env.root.join("tree");
+    fake_bundle(&tree, &["github", "slack"]);
+
+    let (ok, out, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            "--bundled",
+            "slack",
+            "--yes",
+            "--bundled-dir",
+            tree.join("plugins").to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(ok, "{out}{err}");
+
+    let (_, listed, _) = env.run(&["plugin", "list", "--json"], None);
+    let rows: serde_json::Value = serde_json::from_str(&listed).unwrap();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{listed}");
+    assert_eq!(rows[0]["name"], "slack", "{listed}");
+    // Without `--enable`, install and enable stay separate (F-56).
+    assert_eq!(rows[0]["enabled"], false, "{listed}");
+}
+
+#[test]
+fn unknown_bundled_name_lists_what_is_available() {
+    let env = Env::new("bundled-unknown");
+    let tree = env.root.join("tree");
+    fake_bundle(&tree, &["github", "slack"]);
+
+    let (ok, _, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            "--bundled",
+            "notion",
+            "--yes",
+            "--bundled-dir",
+            tree.join("plugins").to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(!ok);
+    assert!(err.contains("github"), "{err}");
+    assert!(err.contains("slack"), "{err}");
+}
+
+#[test]
+fn bundled_discovery_follows_the_symlink_to_the_real_tree() {
+    // The documented install shape is `/usr/local/bin/totsuka` symlinked to
+    // `/usr/local/lib/totsuka/totsuka`, with the plugins next to the *target*.
+    // `current_exe` resolves the symlink on macOS, which is the whole reason
+    // the tarball keeps binary and plugins together.
+    let env = Env::new("bundled-symlink");
+    let tree = env.root.join("lib/totsuka");
+    fs::create_dir_all(&tree).unwrap();
+    fake_bundle(&tree, &["github"]);
+    let real_bin = tree.join("totsuka");
+    fs::copy(env!("CARGO_BIN_EXE_totsuka"), &real_bin).unwrap();
+
+    let bin_dir = env.root.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let link = bin_dir.join("totsuka");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real_bin, &link).unwrap();
+
+    // No `--bundled-dir`: the tree must be found from the executable alone.
+    let (ok, out, err) = env.run_bin(
+        &link,
+        &["plugin", "install", "--bundled", "--all", "--yes"],
+        &[],
+        None,
+    );
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("Installed `github`"), "{out}");
+
+    let (_, listed, _) = env.run(&["plugin", "list", "--json"], None);
+    let rows: serde_json::Value = serde_json::from_str(&listed).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "{listed}");
+}
+
+#[test]
+fn no_bundled_tree_says_so_instead_of_failing_obscurely() {
+    let env = Env::new("bundled-absent");
+    // The test binary lives in target/<profile>/deps-adjacent dirs with no
+    // `plugins/` next to it, so discovery must come up empty.
+    let (ok, _, err) = env.run(&["plugin", "install", "--bundled", "--all", "--yes"], None);
+    assert!(!ok);
+    assert!(err.contains("cargo install"), "{err}");
+}
+
+#[test]
+fn bundled_only_flags_are_rejected_without_bundled() {
+    let env = Env::new("bundled-flags");
+
+    let (ok, _, err) = env.run(&["plugin", "install", "--all", "--yes"], None);
+    assert!(!ok);
+    assert!(err.contains("--bundled"), "{err}");
+
+    // A bare `plugin install` with no directory must say what to pass.
+    let (ok, _, err) = env.run(&["plugin", "install"], None);
+    assert!(!ok);
+    assert!(err.contains("--bundled"), "{err}");
+}
+
+#[test]
+fn enable_flag_works_for_a_plain_directory_install_too() {
+    let env = Env::new("enable-flag-dir");
+    let src = env.root.join("src");
+    fake_source(&src, "github", ">=0.1.6, <0.4");
+    fs::write(env.config_toml(), "").unwrap();
+
+    let (ok, out, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            src.to_str().unwrap(),
+            "--yes",
+            "--enable",
+        ],
+        None,
+    );
+    assert!(ok, "{out}{err}");
+
+    let (_, listed, _) = env.run(&["plugin", "list", "--json"], None);
+    let rows: serde_json::Value = serde_json::from_str(&listed).unwrap();
+    assert_eq!(rows[0]["enabled"], true, "{listed}");
 }
