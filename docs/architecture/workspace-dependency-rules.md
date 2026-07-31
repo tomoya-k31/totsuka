@@ -48,9 +48,19 @@ graph BT
 - `plugins/*` の判定はクレート名の列挙ではなく **manifest パス（`plugins/` 配下）** で行うため、新プラグインを追加してもスクリプトの更新は不要。
 - dev-dependencies だけの循環は cargo 的には合法だが、本ワークスペースでは意図しない結合とみなしエラーにする。
 
+### プラグイン成果物の命名
+
+依存境界とは別軸だが、同じスクリプトが検査するもう 1 つの不変条件。
+
+| 対象 | 不変条件 |
+|---|---|
+| `plugins/*` | bin ターゲットをちょうど 1 つ持ち、その名前が同ディレクトリの `plugin.toml` の `name` と一致する |
+
+`totsuka plugin install` は「`plugin.toml` の `name` と同名のバイナリ」を要求し、ストアも `<plugin dir>/<name>` として配置する。ここが食い違っていると導入のたびに手作業のリネームと dist ディレクトリ組み立てが要る（実際に長らくそうなっていた: `task-source-slack` vs `slack`）。揃えておくと `target/{profile}/<name>` がそのまま install 可能・配布可能になる（[ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md)）。
+
 ## ガードの仕組み
 
-- **スクリプト**: `scripts/arch-lint.sh`。`cargo metadata --no-deps`（依存解決なし・ネットワーク不要・数秒）の出力を jq で抽出し、許可リスト照合と Kahn 法による循環検査を行う。違反 1 件以上で exit 1。
+- **スクリプト**: `scripts/arch-lint.sh`。`cargo metadata --no-deps`（依存解決なし・ネットワーク不要・数秒）の出力を jq で抽出し、許可リスト照合・Kahn 法による循環検査・プラグイン成果物の命名検査を行う。違反 1 件以上で exit 1。
 - **CI**: `ci.yml` の `clippy / rustfmt` ジョブ内の step `Check architecture invariants` として毎 PR 実行（ジョブは増やさない — [ADR-0007](/decisions/adr-0007-ci-cost-optimization.md) の「既存ジョブへのステップ追加を優先」に従う）。
 - **ローカル**: pre-PR チェックの Rust set（`.claude/rules/dev-flow.md`）に含まれる。
 

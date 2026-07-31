@@ -92,7 +92,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Build
         run: cargo build --workspace --all-targets
-      # CLI の E2E が起動する兄弟バイナリ (mock_plugin / task-source-slack) は
+      # CLI の E2E が起動する兄弟バイナリ (mock_plugin / slack) は
       # 上の Build で必ず出来ているので、テストごとに `cargo build` を
       # 呼び直させない (#281)。名前が TOTSUKA_ 始まりでないのは意図的で、
       # 未知の TOTSUKA_* は子プロセスの stderr へ警告を出し (ADR-0009)、

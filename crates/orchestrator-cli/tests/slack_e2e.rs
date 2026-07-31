@@ -424,7 +424,7 @@ fn setup(mock_api_url: &str) -> Env {
         &env,
         "slack",
         "task_source",
-        &build_bin("task-source-slack", "task-source-slack"),
+        &build_bin("task-source-slack", "slack"),
     );
     install_plugin(
         &env,

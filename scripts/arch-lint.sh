@@ -12,6 +12,8 @@
 #                       [build-dependencies] にワークスペース内依存なし
 #   [E] protocol-leaf : plugin-protocol はワークスペース内クレートに一切依存しない
 #   [E] cycle         : ワークスペース内に依存循環がない
+#   [E] plugin-bin-name : plugins/* は bin ターゲットをちょうど 1 つ持ち、その名前が
+#                       同ディレクトリの plugin.toml の `name` と一致する
 #
 # 使い方: scripts/arch-lint.sh
 # 終了コード: 違反 1 件以上で 1、前提ツール欠如・検査自体の失敗で 2
@@ -159,11 +161,58 @@ CYCLE_NODES="$(
 }
 [ -z "$CYCLE_NODES" ] || error cycle workspace "依存循環に含まれるクレート: $CYCLE_NODES"
 
+# ---------- 3) プラグイン成果物の命名 ----------
+# bin 名 = plugin.toml の `name` を強制する。この 2 つは長らく食い違っており
+# （`task-source-slack` vs `slack`）、`plugin install` は後者と同名のバイナリを
+# 要求するため、導入のたびに手作業のリネームと dist ディレクトリ組み立てが必要
+# だった。揃えておくと `target/{profile}/<name>` がそのまま install 可能・配布可能
+# になる（ADR-0027）。新しいプラグインで再発させないための Fitness Function。
+#
+# <クレート名> <plugins/ からの相対ディレクトリ> <bin ターゲット名をカンマ区切り>
+PLUGIN_BINS="$(jq -r --arg root "$ROOT/" '
+  .packages[]
+  | select(.manifest_path | ltrimstr($root) | startswith("plugins/"))
+  | [ .name,
+      (.manifest_path | ltrimstr($root) | sub("/Cargo\\.toml$"; "")),
+      ([.targets[] | select(.kind | index("bin")) | .name] | join(",")) ]
+  | @tsv' <<<"$META")" || {
+  echo "arch-lint: プラグイン bin ターゲットの解析（jq）に失敗" >&2
+  exit 2
+}
+
+N_PLUGINS=0
+while IFS="$(printf '\t')" read -r pkg dir bins; do
+  [ -n "$pkg" ] || continue
+  N_PLUGINS=$((N_PLUGINS + 1))
+  manifest="$ROOT/$dir/plugin.toml"
+  if [ ! -f "$manifest" ]; then
+    error plugin-bin-name "$pkg" "$dir/plugin.toml が存在しない（プラグインは manifest を同梱すること）"
+    continue
+  fi
+  # トップレベルの `name = "..."` だけを読む（最初のテーブル見出しで打ち切る）。
+  want="$(awk -F '"' '
+    /^[[:space:]]*\[/ { exit }
+    /^[[:space:]]*name[[:space:]]*=/ { print $2; exit }' "$manifest")" || {
+    echo "arch-lint: $dir/plugin.toml の解析（awk）に失敗" >&2
+    exit 2
+  }
+  if [ -z "$want" ]; then
+    error plugin-bin-name "$pkg" "$dir/plugin.toml にトップレベルの name が無い"
+    continue
+  fi
+  case "$bins" in
+  "") error plugin-bin-name "$pkg" "bin ターゲットが無い（'$want' という名前で 1 つ必要）" ;;
+  *,*) error plugin-bin-name "$pkg" "bin ターゲットが複数ある（$bins）: プラグインは '$want' 1 つだけを持つこと" ;;
+  "$want") ;;
+  *) error plugin-bin-name "$pkg" "[[bin]] name = '$bins' が $dir/plugin.toml の name = '$want' と不一致（install は '$want' という名前のバイナリを要求する）" ;;
+  esac
+done <<<"$PLUGIN_BINS"
+
 # ---------- サマリ ----------
 N_PKGS="$(jq -r '.packages | length' <<<"$META")"
 N_DEPS=0
 [ -z "$DEPS" ] || N_DEPS="$(printf '%s\n' "$DEPS" | grep -c .)"
 echo ""
-echo "arch-lint: ${ERRORS} error(s)（${N_PKGS} crates / ワークスペース内依存 ${N_DEPS} 本を検査）"
+echo "arch-lint: ${ERRORS} error(s)（${N_PKGS} crates / ワークスペース内依存 ${N_DEPS} 本 / プラグイン ${N_PLUGINS} 個を検査）"
 [ "$ERRORS" -eq 0 ] || exit 1
 exit 0

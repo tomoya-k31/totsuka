@@ -13,8 +13,10 @@ publish = false
 [lints]
 workspace = true
 
+# The bin name must equal `plugin.toml`'s `name` — see the note in
+# plugins/task-source-github/Cargo.toml. Enforced by `scripts/arch-lint.sh`.
 [[bin]]
-name = "notifier-macos"
+name = "macos"
 path = "src/main.rs"
 
 [dependencies]

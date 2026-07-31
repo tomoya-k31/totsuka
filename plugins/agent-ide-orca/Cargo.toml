@@ -13,8 +13,14 @@ publish = false
 [lints]
 workspace = true
 
+# The bin name must equal `plugin.toml`'s `name` — see the note in
+# plugins/task-source-github/Cargo.toml. Enforced by `scripts/arch-lint.sh`.
+# Caveat: this plugin spawns the external `orca` CLI by PATH lookup
+# (`orca_bin`, default `orca`), and `target/{profile}/orca` now has the same
+# name. Adding the target dir to PATH would make it invoke itself — override
+# `orca_bin` with an absolute path if you ever do that.
 [[bin]]
-name = "agent-ide-orca"
+name = "orca"
 path = "src/main.rs"
 
 [dependencies]

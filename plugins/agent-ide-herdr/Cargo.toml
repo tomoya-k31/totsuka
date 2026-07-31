@@ -13,8 +13,13 @@ publish = false
 [lints]
 workspace = true
 
+# The bin name must equal `plugin.toml`'s `name` — see the note in
+# plugins/task-source-github/Cargo.toml. Enforced by `scripts/arch-lint.sh`.
+# This shadows the external `herdr` CLI inside `target/{profile}/`; harmless
+# here because the plugin reaches herdr over its Unix socket and never spawns
+# it, but see plugins/agent-ide-orca/Cargo.toml for the case that does.
 [[bin]]
-name = "agent-ide-herdr"
+name = "herdr"
 path = "src/main.rs"
 
 [dependencies]

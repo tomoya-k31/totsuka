@@ -92,14 +92,17 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 cargo build --release -p task-source-github
 ```
 
-生成物はクレート単体の `target/` ではなく、ワークスペース共有の `target/release/{Cargoパッケージ名}` に置かれる。
+生成物はクレート単体の `target/` ではなく、ワークスペース共有の `target/release/` に置かれる。
 
-**注意: `totsuka plugin install <dir>` が探すバイナリ名は Cargo パッケージ名ではなく `plugin.toml` の `name` フィールドと一致していなければならない。** インストーラは `<dir>` 直下に `name` と**同名**のファイルが存在することを要求し（無ければ「plugin binary not found」で失敗）、`$XDG_DATA_HOME/totsuka/plugins/{name}/{name}` としてコピーする。実行時も同じ名前でプロセスを起動するため、Cargo のバイナリ名と `plugin.toml` の `name` が異なるプラグイン（例: `task-source-github` の Cargo バイナリ名に対し `plugin.toml` は `name = "github"`）では、install に渡す前にリネーム/コピーしてまとめる必要がある。
+**バイナリ名は Cargo パッケージ名ではなく `plugin.toml` の `name` である。** 各プラグインの `Cargo.toml` は `[[bin]] name` を `plugin.toml` の `name` に一致させており（`task-source-github` パッケージの bin は `github`）、`totsuka plugin install <dir>` が要求するのもこの名前なので、**リネームは不要**。上のコマンドの出力は `target/release/github` になる。
+
+この一致は `scripts/arch-lint.sh` の `plugin-bin-name` チェックが機械検証する（[ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md)）。新しいプラグインを追加するときは `[[bin]] name` を `plugin.toml` の `name` に合わせること。合っていないと install は「plugin binary not found」で失敗する。
+
+install には `plugin.toml` とバイナリを同じディレクトリに置いて渡す。
 
 ```sh
 mkdir -p dist/github
-cp target/release/task-source-github dist/github/github
-cp plugins/task-source-github/plugin.toml dist/github/
+cp target/release/github plugins/task-source-github/plugin.toml dist/github/
 totsuka plugin install ./dist/github
 ```
 
