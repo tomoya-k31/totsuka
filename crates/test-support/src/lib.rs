@@ -160,9 +160,17 @@ pub fn read_ndjson_log(path: &Path) -> Vec<serde_json::Value> {
 /// per *test* (#281).
 ///
 /// Set `TEST_SUPPORT_PREBUILT_BINS=1` to skip the build and trust what is
-/// already in the target dir. CI sets it right after
-/// `cargo build --workspace --all-targets`, which has necessarily just built
-/// every workspace bin.
+/// already in the target dir. The precondition is "every workspace bin has just
+/// been built"; CI satisfies it two different ways (#341):
+///
+/// - the PR `test` job runs `cargo build --workspace --all-targets` as the step
+///   immediately before `cargo test`;
+/// - the `coverage` job on main has no such step, but `cargo llvm-cov` finishes
+///   its own build phase — which includes every selected package's bin targets —
+///   before it runs any test binary.
+///
+/// Either way a violated precondition surfaces as the `path.exists()` assertion
+/// below, never as a silently stale binary.
 ///
 /// The name deliberately avoids the `TOTSUKA_` prefix: `apply_env_overrides`
 /// warns to **stderr** for any unrecognised `TOTSUKA_*` variable (ADR-0009),
