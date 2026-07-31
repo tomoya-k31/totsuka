@@ -42,6 +42,60 @@ impl Env {
         path
     }
 
+    /// A fake bundled plugins tree: `<root>/bundled/<name>/{plugin.toml,<name>}`.
+    ///
+    /// Every `--yes` run pins this. Without it the wizard would notice that the
+    /// test's working directory is inside a totsuka checkout and shell out to
+    /// `cargo build`, which tests must not do (ADR-0018) — and which would also
+    /// make every one of these tests take minutes.
+    fn bundled(&self, names: &[&str]) -> PathBuf {
+        let root = self.root.join("bundled");
+        for name in names {
+            let dir = root.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            // The manifests mirror the real ones closely enough for
+            // `config validate`, which cross-checks a workflow's `output`
+            // against the source plugin's declared capabilities — a task
+            // source without `outputs = ["source"]` makes every recipe here
+            // invalid, so the fixture cannot skip it.
+            let (kind, capabilities) = match *name {
+                "herdr" => ("agent_ide", "plan_mode = true\ndesign_preview = true\n"),
+                "macos" => ("notifier", ""),
+                _ => (
+                    "task_source",
+                    "task_submit = true\noutputs = [\"source\"]\n",
+                ),
+            };
+            fs::write(
+                dir.join("plugin.toml"),
+                format!(
+                    "name = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.2.0\"\n\
+                     protocol_version = \">=0.1.6, <0.4\"\n\n[capabilities]\n{capabilities}"
+                ),
+            )
+            .unwrap();
+            fs::write(dir.join(name), b"#!/bin/sh\necho hi\n").unwrap();
+        }
+        root
+    }
+
+    /// `totsuka setup --answers <file> --yes`, with the plugin source pinned.
+    ///
+    /// The exit code is whatever `doctor` decided: `setup` now ends by running
+    /// it in-process and propagating exit 3, and a scratch environment has no
+    /// registered secrets, so 3 is the expected outcome here. What each test
+    /// asserts is what `setup` *wrote*; the doctor contract has its own test.
+    fn setup_yes(&self, answers: &Path, bundled: &Path) -> (Option<i32>, String, String) {
+        self.run(&[
+            "setup",
+            "--answers",
+            answers.to_str().unwrap(),
+            "--bundled-dir",
+            bundled.to_str().unwrap(),
+            "--yes",
+        ])
+    }
+
     /// Run `totsuka <args>` with stdin closed (so it is never a terminal).
     fn run(&self, args: &[&str]) -> (Option<i32>, String, String) {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_totsuka"));
@@ -81,7 +135,9 @@ impl Drop for Env {
 fn minimal(repo: &Path) -> String {
     format!(
         "version = 1\nrecipe = 0\nsecret_backend = \"keychain\"\n\n\
-         [[repositories]]\nname = \"totsuka\"\npath = \"{}\"\n",
+         [[repositories]]\nname = \"totsuka\"\npath = \"{}\"\n\n\
+         [github]\nowner = \"tomoya-k31\"\nowner_type = \"user\"\n\
+         project_number = 1\ngithub_login = \"tomoya-k31\"\n",
         repo.display()
     )
 }
@@ -140,11 +196,14 @@ fn the_written_config_passes_config_validate() {
             slack(&env.repo())
         };
         let answers = env.answers(&body);
+        let bundled = env.bundled(&["github", "slack", "herdr", "macos"]);
         let _ = fs::remove_file(env.config_toml());
 
-        let (code, out, err) = env.run(&["setup", "--answers", answers.to_str().unwrap(), "--yes"]);
-        assert_eq!(code, Some(0), "{name}: {out}{err}");
-        assert!(env.config_toml().exists(), "{name}: no config written");
+        let (_, out, err) = env.setup_yes(&answers, &bundled);
+        assert!(
+            env.config_toml().exists(),
+            "{name}: no config written\n{out}{err}"
+        );
 
         let (code, out, err) = env.run(&["config", "validate", "--offline"]);
         assert_eq!(
@@ -160,10 +219,11 @@ fn the_written_config_passes_config_validate() {
 fn secret_references_are_written_but_never_values() {
     let env = Env::new("secrets");
     let answers = env.answers(&slack(&env.repo()));
+    let bundled = env.bundled(&["slack", "herdr", "macos"]);
     let _ = fs::remove_file(env.config_toml());
 
-    let (code, out, err) = env.run(&["setup", "--answers", answers.to_str().unwrap(), "--yes"]);
-    assert_eq!(code, Some(0), "{out}{err}");
+    let (_, out, err) = env.setup_yes(&answers, &bundled);
+    assert!(env.config_toml().exists(), "{out}{err}");
 
     let config = fs::read_to_string(env.config_toml()).unwrap();
     assert!(
@@ -188,17 +248,28 @@ fn secret_references_are_written_but_never_values() {
 fn an_existing_config_is_skipped_not_overwritten() {
     let env = Env::new("skip-existing");
     let answers = env.answers(&minimal(&env.repo()));
+    let bundled = env.bundled(&["github", "herdr"]);
     let hand_written = "# mine\nmax_concurrency = 9\n";
     fs::write(env.config_toml(), hand_written).unwrap();
 
-    let (code, out, err) = env.run(&["setup", "--answers", answers.to_str().unwrap(), "--yes"]);
-    assert_eq!(code, Some(0), "{out}{err}");
-    assert!(out.contains("skipped"), "{out}");
-    assert_eq!(
-        fs::read_to_string(env.config_toml()).unwrap(),
-        hand_written,
-        "an existing config must not be touched"
-    );
+    let (_, out, err) = env.setup_yes(&answers, &bundled);
+    assert!(out.contains("skipped"), "{out}{err}");
+
+    // The recipe is not written over what the user wrote: their settings stay,
+    // and none of the wizard's own content appears.
+    let after = fs::read_to_string(env.config_toml()).unwrap();
+    assert!(after.starts_with(hand_written), "{after}");
+    for absent in ["[[workflows]]", "[[repositories]]", "[llm]"] {
+        assert!(
+            !after.contains(absent),
+            "the recipe was written into an existing config: {after}"
+        );
+    }
+    // Enabling what it installed is not "overwriting the config" — it is the
+    // same edit `plugin install --enable` makes, and it is what makes
+    // re-running `setup` on a configured machine the de-facto repair
+    // (ADR-0028: no separate `--repair`).
+    assert!(after.contains("[plugins.github]"), "{after}");
 }
 
 #[test]
@@ -217,8 +288,9 @@ fn the_commented_skeleton_init_writes_is_filled_in() {
     );
 
     let answers = env.answers(&minimal(&env.repo()));
-    let (code, out, err) = env.run(&["setup", "--answers", answers.to_str().unwrap(), "--yes"]);
-    assert_eq!(code, Some(0), "{out}{err}");
+    let bundled = env.bundled(&["github", "herdr"]);
+    let (_, out, err) = env.setup_yes(&answers, &bundled);
+    assert!(env.config_toml().exists(), "{out}{err}");
 
     let filled = fs::read_to_string(env.config_toml()).unwrap();
     assert!(filled.contains("name = \"totsuka\""), "{filled}");
@@ -228,6 +300,101 @@ fn the_commented_skeleton_init_writes_is_filled_in() {
 
     let (code, out, err) = env.run(&["config", "validate", "--offline"]);
     assert_eq!(code, Some(0), "{out}{err}\n---\n{filled}");
+}
+
+#[test]
+fn one_run_goes_from_nothing_to_installed_enabled_and_diagnosed() {
+    // #349's contract: `setup` is not finished when the config is written. It
+    // installs the recipe's plugins, writes each plugin's own config, and hands
+    // over to `doctor` — so a fresh machine needs one command, not four.
+    let env = Env::new("full-flow");
+    let answers = env.answers(&minimal(&env.repo()));
+    let bundled = env.bundled(&["github", "herdr"]);
+    let _ = fs::remove_file(env.config_toml());
+
+    let (code, out, err) = env.setup_yes(&answers, &bundled);
+    assert!(out.contains("Installed `github`"), "{out}{err}");
+    assert!(out.contains("Installed `herdr`"), "{out}{err}");
+    assert!(out.contains("Running `totsuka doctor`"), "{out}{err}");
+
+    // `plugins/github.toml` exists, holds a reference rather than a token, and
+    // carries the coordinates the plugin cannot default.
+    let plugin_toml = env.root.join("config/totsuka/plugins/github.toml");
+    let body = fs::read_to_string(&plugin_toml)
+        .unwrap_or_else(|e| panic!("{} missing: {e}\n{out}", plugin_toml.display()));
+    assert!(body.contains("keychain:totsuka/github-token"), "{body}");
+    assert!(!body.contains("ghp_"), "a token value was written: {body}");
+    assert!(body.contains("project_number = 1"), "{body}");
+
+    // Both plugins are installed *and* enabled — the two are separate concepts
+    // (F-56), and setup opts into both.
+    let (_, listing, _) = env.run(&["plugin", "list", "--json"]);
+    let rows: serde_json::Value = serde_json::from_str(&listing).unwrap();
+    for name in ["github", "herdr"] {
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap_or_else(|| panic!("{name} not listed: {listing}"));
+        assert_eq!(row["installed"], true, "{name}: {listing}");
+        assert_eq!(row["enabled"], true, "{name}: {listing}");
+    }
+
+    // `doctor`'s verdict is propagated, not swallowed: unregistered secrets are
+    // a real problem and exit 3 is how a script learns about it.
+    assert_eq!(
+        code,
+        Some(3),
+        "doctor found nothing to report in an environment with no secrets registered"
+    );
+
+    // …and what it reports is only work left for a human. Asserting the exact
+    // set, not just "config is not in it": naming checks individually is how a
+    // typo turns into an assertion that can never fire, and the check names
+    // here (`config`, `plugin:<name>`) are not guessable from the flag names.
+    let (_, report, _) = env.run(&["doctor", "--json"]);
+    let checks: Vec<serde_json::Value> = serde_json::from_str(&report).unwrap();
+    let names: Vec<&str> = checks.iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert!(
+        names.contains(&"config"),
+        "no `config` check ran, so the assertion below proves nothing: {names:?}"
+    );
+
+    let failed: Vec<&str> = checks
+        .iter()
+        .filter(|c| c["ok"] == false)
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    for name in &failed {
+        // `state-db` needs a `totsuka run`, and the `plugin:*` probes launch
+        // the fixture's shell stubs against real secrets neither of which
+        // exists here. Anything else means setup wrote something broken.
+        assert!(
+            *name == "state-db" || name.starts_with("plugin:"),
+            "setup left `{name}` failing: {failed:?}"
+        );
+    }
+    assert!(
+        !failed.contains(&"config"),
+        "the config setup wrote does not pass doctor: {failed:?}"
+    );
+
+    // Re-running converges: the second pass writes nothing new.
+    let config_before = fs::read_to_string(env.config_toml()).unwrap();
+    let plugin_before = fs::read_to_string(&plugin_toml).unwrap();
+    let (_, out, err) = env.setup_yes(&answers, &bundled);
+    assert!(out.contains("skipped"), "{out}{err}");
+    assert_eq!(
+        fs::read_to_string(env.config_toml()).unwrap(),
+        config_before,
+        "a second run changed config.toml"
+    );
+    assert_eq!(
+        fs::read_to_string(&plugin_toml).unwrap(),
+        plugin_before,
+        "a second run changed plugins/github.toml"
+    );
 }
 
 #[test]
@@ -306,10 +473,10 @@ fn save_answers_round_trips_into_a_second_run() {
         "an answers file must never hold a token"
     );
 
-    let (code, out, err) = env.run(&["setup", "--answers", saved.to_str().unwrap(), "--yes"]);
-    assert_eq!(
-        code,
-        Some(0),
+    let bundled = env.bundled(&["slack", "herdr", "macos"]);
+    let (_, out, err) = env.setup_yes(&saved, &bundled);
+    assert!(
+        env.config_toml().exists(),
         "saved answers were not accepted back: {out}{err}"
     );
     let (code, _, _) = env.run(&["config", "validate", "--offline"]);

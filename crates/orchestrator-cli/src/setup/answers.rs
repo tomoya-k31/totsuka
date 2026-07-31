@@ -72,6 +72,45 @@ pub struct RepositoryAnswer {
     pub summary: Option<String>,
 }
 
+/// Which GitHub account owns the Project board, since the two GraphQL roots
+/// differ (`user(login:)` vs `organization(login:)`) and guessing wrong makes
+/// every poll fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitHubOwnerType {
+    /// A personal account.
+    User,
+    /// An organization.
+    Organization,
+}
+
+impl GitHubOwnerType {
+    /// The value `plugins/github.toml` uses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GitHubOwnerType::User => "user",
+            GitHubOwnerType::Organization => "organization",
+        }
+    }
+}
+
+/// What `plugins/github.toml` needs beyond the token.
+///
+/// The GitHub plugin requires all of these — none has a default — so a recipe
+/// that installs it cannot produce a working setup without asking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitHubAnswer {
+    /// Account or organization that owns the Project board.
+    pub owner: String,
+    /// Which of the two GraphQL roots `owner` lives under.
+    pub owner_type: GitHubOwnerType,
+    /// Project number, as it appears in the board's URL.
+    pub project_number: i64,
+    /// The login whose assigned cards are picked up.
+    pub github_login: String,
+}
+
 /// The `[llm]` block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +143,9 @@ pub struct Answers {
     /// Slack member id, when the recipe asks for it.
     #[serde(default)]
     pub slack_user_id: Option<String>,
+    /// GitHub Project coordinates, when the recipe asks for them.
+    #[serde(default)]
+    pub github: Option<GitHubAnswer>,
 }
 
 /// The version this build writes and accepts.
@@ -209,6 +251,7 @@ impl Answers {
             let filled = match blank {
                 Blank::Llm => answers.llm.is_some(),
                 Blank::SlackUserId => answers.slack_user_id.is_some(),
+                Blank::GitHub => answers.github.is_some(),
             };
             if !filled {
                 return Err(AnswersError::MissingBlank {
@@ -244,6 +287,12 @@ mod tests {
             secret_backend: SecretBackend::Keychain,
             llm: None,
             slack_user_id: None,
+            github: Some(GitHubAnswer {
+                owner: "tomoya-k31".to_string(),
+                owner_type: GitHubOwnerType::User,
+                project_number: 1,
+                github_login: "tomoya-k31".to_string(),
+            }),
         }
     }
 

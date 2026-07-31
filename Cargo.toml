@@ -45,6 +45,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io
 plugin-protocol = { path = "crates/plugin-protocol" }
 plugin-sdk = { path = "crates/plugin-sdk" }
 test-support = { path = "crates/test-support" }
+# Dev-only, for orchestrator-cli: the setup wizard generates `plugins/<name>.toml`
+# and its test asserts the plugins' own deserializers accept it.
+task-source-github = { path = "plugins/task-source-github" }
+task-source-slack = { path = "plugins/task-source-slack" }
 sha2 = "0.10"
 toml_edit = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "default-tls"] }

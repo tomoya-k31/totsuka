@@ -4,7 +4,7 @@ title: ADR-0028 totsuka setup は対話ウィザードにし、機密は一切�
 description: "init が全行コメントの雛形しか書かず config を手書きするしかなかった問題に対し、対話ウィザード totsuka setup を追加する決定。init は非対話・CI 用として残す。既存の設定ファイルは上書きせずスキップし、全行コメントの雛形だけを未設定として扱う。setup は機密の値を一切扱わず参照だけを書いて登録コマンドを印字する。宣言ファイル駆動・SecretWriter ポート・setup --repair・doctor --fix は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/348
 tags: [decision, cli, setup, onboarding, secrets, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-01T09:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-01T19:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -102,11 +102,12 @@ apply の各ステップは冪等にし、途中で失敗したらどこまで�
 
 - **レシピは「よくある形」でしかない。** 5 番目のシナリオ（複数リポジトリ + 並列制御）のように、リポジトリごとの `max_concurrency` や `tool` を要するものは表現していない。ウィザードは出発点を作るだけで、細かい調整は手編集に戻る
 - **対話部分は CLI の E2E で覆えない。** 端末が無いため、プロンプト自体の挙動は `setup::interview` の単体テスト（reader/writer 注入）でしか検証されない
-- `plugins/<name>.toml` の生成とプラグイン導入・doctor 実行は本 ADR の範囲外で、[#349](https://github.com/tomoya-k31/totsuka/issues/349) が引き受ける。それまで `setup` の最後は「次にこれを実行」と案内して終わる
+- **`setup` は `doctor` の終了コードを持つ。** [#349](https://github.com/tomoya-k31/totsuka/issues/349) で末尾に `doctor` のインプロセス実行が入り、exit 3 を伝播する。シークレットを登録していない初回は**成功しても exit 3 で終わる**のが正常で、これは意図した設計（登録は人間の仕事で、`setup` はそれを黙って成功と報告してはいけない）だが、`setup` を `&&` で繋いだスクリプトは止まる
+- **レシピが増えるほど質問が増える。** #349 で `github` プラグインの必須フィールド（`owner` / `owner_type` / `project_number` / `github_login`）が `Blank` になった。「穴だけ聞く」の穴は**プラグインの必須フィールドが決める**ので、プラグインが必須キーを足せばウィザードの質問も増える
 
 # 実装
 
-- `crates/orchestrator-cli/src/setup/`（`mod` / `interview` / `recipes` / `answers`）
+- `crates/orchestrator-cli/src/setup/`（`mod` / `interview` / `recipes` / `answers` / `plugin_config`）
 - `crates/orchestrator-cli/src/init_cmd.rs` — `ensure_dirs` の切り出しと案内文
 - `crates/orchestrator-cli/src/main.rs` — `Setup` サブコマンド
 - 編集そのものは [#347](https://github.com/tomoya-k31/totsuka/issues/347) の `config::edit` ヘルパが行う

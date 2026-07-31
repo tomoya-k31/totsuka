@@ -38,6 +38,7 @@
 
 mod answers;
 mod interview;
+mod plugin_config;
 mod recipes;
 
 use std::io::IsTerminal;
@@ -48,9 +49,11 @@ use orchestrator_core::config::{
 };
 
 use crate::common::{CliError, Cx, EXIT_USAGE, ExitWith};
-use crate::init_cmd;
+use crate::{bundled, doctor_cmd, from_source, init_cmd, plugin_cmd};
 
-pub use answers::{Answers, LlmAnswer, RepositoryAnswer, SecretBackend};
+pub use answers::{
+    Answers, GitHubAnswer, GitHubOwnerType, LlmAnswer, RepositoryAnswer, SecretBackend,
+};
 use interview::Prompt;
 use recipes::{Blank, RECIPES, Recipe};
 
@@ -65,6 +68,15 @@ pub struct SetupArgs {
     pub dry_run: bool,
     /// Skip the final confirmation.
     pub yes: bool,
+    /// Pin where bundled plugins are looked up, instead of detecting.
+    ///
+    /// Hidden, and the same affordance `plugin install --bundled-dir` provides,
+    /// for the same reason: an E2E runs `totsuka` as a child process whose
+    /// working directory is inside this checkout, so without a pin the wizard
+    /// would detect a checkout and shell out to `cargo build` — which tests are
+    /// not allowed to do (ADR-0018). An env var is not an option either
+    /// (ADR-0009).
+    pub bundled_dir: Option<PathBuf>,
 }
 
 /// Run the wizard.
@@ -99,7 +111,7 @@ pub fn run(cx: &Cx, args: &SetupArgs) -> Result<(), CliError> {
         println!("Saved answers to {}", path.display());
     }
 
-    let plan = Plan::new(cx, &answers)?;
+    let plan = Plan::new(cx, &answers, args)?;
     print!("{}", plan.render());
     if args.dry_run {
         match &args.save_answers {
@@ -187,9 +199,44 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
 
     let mut llm = None;
     let mut slack_user_id = None;
+    let mut github = None;
     for blank in recipe.blanks {
         prompt.say("")?;
         match blank {
+            Blank::GitHub => {
+                prompt.say("Which GitHub Project board should tasks come from?")?;
+                let owner = prompt.ask("  Owner (user or org that owns the board)", None)?;
+                let owner_type = match prompt.choose(
+                    "  Is that a user or an organization?",
+                    &[
+                        ("User", "a personal account"),
+                        ("Organization", "a GitHub organization"),
+                    ],
+                    0,
+                )? {
+                    0 => GitHubOwnerType::User,
+                    _ => GitHubOwnerType::Organization,
+                };
+                // Free text rather than a number prompt: re-asking is the
+                // interview's job, and `ask` already loops until non-empty.
+                let project_number = loop {
+                    let typed = prompt.ask("  Project number (from the board's URL)", None)?;
+                    match typed.trim().parse::<i64>() {
+                        Ok(n) => break n,
+                        Err(_) => prompt.say("  → that is not a number; try again")?,
+                    }
+                };
+                let github_login = prompt.ask(
+                    "  Your GitHub login (whose cards get picked up)",
+                    Some(&owner),
+                )?;
+                github = Some(GitHubAnswer {
+                    owner,
+                    owner_type,
+                    project_number,
+                    github_login,
+                });
+            }
             Blank::Llm => {
                 prompt
                     .say("This setup needs an LLM to pick which repository a task belongs to.")?;
@@ -212,6 +259,7 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
         secret_backend,
         llm,
         slack_user_id,
+        github,
     })
 }
 
@@ -224,6 +272,40 @@ fn default_repo_name(path: &str) -> String {
         .to_string()
 }
 
+/// Where the recipe's plugins will come from.
+///
+/// Decided once, up front, so the plan shown is the plan run. The order is
+/// "what this machine already has": a release tarball carries its plugins next
+/// to the binary, a developer has a checkout to build from, and a bare
+/// `cargo install` has neither — which is not an error, just a setup that
+/// cannot finish the last step by itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PluginSource {
+    /// A bundled tree next to the binary (#345).
+    Bundled(PathBuf),
+    /// A totsuka checkout to `cargo build` in (#346).
+    Checkout(PathBuf),
+    /// Neither; the user is told what to run.
+    Unavailable,
+}
+
+impl PluginSource {
+    fn detect(explicit: Option<&Path>) -> PluginSource {
+        // An explicit root is taken as given — never falling through to a
+        // checkout build, which is the whole point of pinning it.
+        if let Some(root) = bundled::locate(explicit) {
+            return PluginSource::Bundled(root);
+        }
+        if explicit.is_none()
+            && let Ok(cwd) = std::env::current_dir()
+            && let Some(root) = from_source::find_checkout_root(&cwd, &from_source::is_checkout)
+        {
+            return PluginSource::Checkout(root);
+        }
+        PluginSource::Unavailable
+    }
+}
+
 /// What apply will do, decided before anything is written so it can be shown
 /// and so `--dry-run` and the real run cannot disagree.
 struct Plan<'a> {
@@ -232,15 +314,26 @@ struct Plan<'a> {
     /// `config.toml` is written only when absent or still a bare skeleton.
     write_config: bool,
     config_path: PathBuf,
+    /// `plugins/<name>.toml` files to write, minus the ones already there.
+    plugin_configs: Vec<PathBuf>,
+    plugin_source: PluginSource,
 }
 
 impl<'a> Plan<'a> {
-    fn new(cx: &Cx, answers: &'a Answers) -> Result<Plan<'a>, CliError> {
+    fn new(cx: &Cx, answers: &'a Answers, args: &SetupArgs) -> Result<Plan<'a>, CliError> {
+        let recipe = &RECIPES[answers.recipe];
+        let plugin_dir = cx.plugin_config_dir();
         Ok(Plan {
-            recipe: &RECIPES[answers.recipe],
+            recipe,
             answers,
             write_config: is_unconfigured(&cx.config_path)?,
             config_path: cx.config_path.clone(),
+            plugin_configs: plugin_config::drafts_for(answers, recipe)
+                .into_iter()
+                .map(|d| plugin_dir.join(format!("{}.toml", d.name)))
+                .filter(|p| !p.exists())
+                .collect(),
+            plugin_source: PluginSource::detect(args.bundled_dir.as_deref()),
         })
     }
 
@@ -271,6 +364,21 @@ impl<'a> Plan<'a> {
                 self.config_path.display()
             ));
         }
+        for path in &self.plugin_configs {
+            out.push_str(&format!("Write:    {}\n", path.display()));
+        }
+        out.push_str(&match &self.plugin_source {
+            PluginSource::Bundled(root) => {
+                format!("Install:  from the plugins bundled at {}\n", root.display())
+            }
+            PluginSource::Checkout(root) => {
+                format!("Install:  by building from {}\n", root.display())
+            }
+            PluginSource::Unavailable => {
+                "Install:  nothing to install from → the commands will be printed\n".to_string()
+            }
+        });
+        out.push_str("Then:     totsuka doctor\n");
         out
     }
 }
@@ -317,9 +425,91 @@ fn apply(cx: &Cx, answers: &Answers, plan: &Plan) -> Result<(), CliError> {
         );
     }
 
+    write_plugin_configs(cx, answers, plan.recipe)?;
+    install_plugins(cx, plan)?;
     print_secret_checklist(answers, plan.recipe);
+
+    // `doctor` last, and in-process. It is the only step that can tell the user
+    // whether the setup they just ran actually works, and its exit code 3 is
+    // the contract scripts read — swallowing it here would make `setup` report
+    // success over a config `doctor` has already found problems with.
     println!();
-    println!("next: install the plugins, then run `totsuka doctor`");
+    println!("Running `totsuka doctor` …");
+    println!();
+    doctor_cmd::run(cx, false, false)
+}
+
+/// Write each `plugins/<name>.toml` the recipe needs, skipping ones that exist.
+///
+/// Same rule as `config.toml`, minus the skeleton exception: nothing generates
+/// a commented placeholder for these, so a file that exists was written by a
+/// human or by an earlier `setup`, and either way it is theirs.
+fn write_plugin_configs(cx: &Cx, answers: &Answers, recipe: &Recipe) -> Result<(), CliError> {
+    let dir = cx.plugin_config_dir();
+    for draft in plugin_config::drafts_for(answers, recipe) {
+        let path = dir.join(format!("{}.toml", draft.name));
+        if path.exists() {
+            println!("skipped: {} already exists", path.display());
+            continue;
+        }
+        std::fs::create_dir_all(&dir)?;
+        write_atomically(&path, &draft.body)?;
+        println!("wrote: {}", path.display());
+    }
+    Ok(())
+}
+
+/// Install and enable the recipe's plugins from whichever source this build has.
+fn install_plugins(cx: &Cx, plan: &Plan) -> Result<(), CliError> {
+    let names: Vec<&str> = plan.recipe.plugins.iter().map(|p| p.name).collect();
+    match &plan.plugin_source {
+        PluginSource::Bundled(root) => {
+            println!();
+            println!("Installing plugins from {}", root.display());
+        }
+        PluginSource::Checkout(root) => {
+            println!();
+            println!("Building plugins from {}", root.display());
+        }
+        PluginSource::Unavailable => {
+            println!();
+            println!("No plugins to install from: this `totsuka` ships none and you are not in");
+            println!("a checkout. Install them, then re-run `totsuka setup`:");
+            for name in &names {
+                println!("  totsuka plugin install <dir-with-{name}> --enable");
+            }
+            return Ok(());
+        }
+    }
+
+    for name in names {
+        // One at a time rather than `--all`: a recipe asks for a specific set,
+        // and installing whatever else happens to be bundled would enable
+        // plugins nobody chose.
+        plugin_cmd::run(
+            cx,
+            plugin_cmd::PluginCommand::Install {
+                source: Some(name.to_string()),
+                bundled: matches!(plan.plugin_source, PluginSource::Bundled(_)),
+                from_source: matches!(plan.plugin_source, PluginSource::Checkout(_)),
+                repo: match &plan.plugin_source {
+                    PluginSource::Checkout(root) => Some(root.clone()),
+                    _ => None,
+                },
+                bundled_dir: match &plan.plugin_source {
+                    PluginSource::Bundled(root) => Some(root.clone()),
+                    _ => None,
+                },
+                all: false,
+                // The plan was already confirmed; a second prompt per plugin
+                // would ask the same question up to three more times.
+                enable: true,
+                yes: true,
+                profile: plugin_cmd::BuildProfile::Release,
+                print_plan: false,
+            },
+        )?;
+    }
     Ok(())
 }
 
@@ -447,6 +637,15 @@ mod tests {
                 .blanks
                 .contains(&Blank::SlackUserId)
                 .then(|| "U123456".to_string()),
+            github: RECIPES[recipe]
+                .blanks
+                .contains(&Blank::GitHub)
+                .then(|| GitHubAnswer {
+                    owner: "tomoya-k31".to_string(),
+                    owner_type: GitHubOwnerType::User,
+                    project_number: 1,
+                    github_login: "tomoya-k31".to_string(),
+                }),
         }
     }
 
