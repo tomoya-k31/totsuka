@@ -98,7 +98,8 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
 
 # 配布（GitHub Releases）
 
-- 配布経路は **GitHub Releases のユニバーサルバイナリ** と `cargo install --git ... orchestrator-cli`（README に併記）。パッケージマネージャ（Homebrew 等）は v1 では扱わない。
+- 配布経路は **GitHub Releases の tarball（ユニバーサルバイナリ + 同梱プラグイン）** と `cargo install --git ... orchestrator-cli`（README に併記）。後者は CLI のみでプラグインは付かない。パッケージマネージャ（Homebrew 等）は v1 では扱わない。
+- **「バイナリを配る」ではなく「ツリーを配る」。** 単一バイナリを置けばよいと読めると、利用者が `totsuka` だけを移して同梱プラグインを置き去りにする。本 runbook でも README でも配布物は tarball と呼ぶ。
 - 各 Release には `totsuka-vX.Y.Z-macos-universal.tar.gz` と生の SHA-256（`.sha256`）が添付される。**成果物のファイル名と `.sha256` サイドカーの形式は変えない**（ファイル名で取得している自動化を壊さないため）。
 - tarball はプレフィックス付きディレクトリ構成で、`totsuka` の隣に同梱プラグインが並ぶ:
 

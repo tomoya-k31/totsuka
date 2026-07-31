@@ -20,7 +20,7 @@ it back to the source.
 
 ## Install
 
-### Prebuilt binary (GitHub Releases)
+### Prebuilt tarball (GitHub Releases)
 
 Download the macOS universal tarball from the
 [latest release](https://github.com/tomoya-k31/totsuka/releases/latest). It

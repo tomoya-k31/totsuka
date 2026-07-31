@@ -21,7 +21,7 @@ AI コーディングエージェント（herdr、orca）へ — それぞれ専
 
 ## インストール
 
-### ビルド済みバイナリ（GitHub Releases）
+### ビルド済み tarball（GitHub Releases）
 
 [最新リリース](https://github.com/tomoya-k31/totsuka/releases/latest) から macOS
 ユニバーサル tarball をダウンロードします。`totsuka` **と同梱プラグイン**が入って
