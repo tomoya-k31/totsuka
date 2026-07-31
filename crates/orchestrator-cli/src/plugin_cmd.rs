@@ -15,8 +15,9 @@ use crate::from_source;
 /// Plugin management subcommands.
 #[derive(Debug, Subcommand)]
 pub enum PluginCommand {
-    /// Install a plugin: from a local directory (plugin.toml + binary), or with
-    /// `--bundled` from the plugins shipped alongside this binary.
+    /// Install a plugin: from a local directory (plugin.toml + binary), with
+    /// `--bundled` from the plugins shipped alongside this binary, or with
+    /// `--from-source` by building it out of a totsuka checkout.
     Install {
         /// Source: a local directory path, or — with `--bundled` — the name of
         /// a plugin shipped alongside this binary. (`github:owner/repo` is not
@@ -235,28 +236,37 @@ fn resolve_sources(args: &InstallArgs) -> Result<Option<Vec<InstallSource>>, Cli
     if args.bundled && args.from_source {
         return Err("`--bundled` and `--from-source` are different sources → pick one".into());
     }
+
+    // Mode-specific flags are validated here, in one place, **before** any mode
+    // dispatch — a flag that belongs elsewhere is rejected, never ignored,
+    // because silently accepting one looks like it did something. Keeping these
+    // together (rather than inside each branch, and before the early return for
+    // `--from-source`) is what stops the next one from being forgotten: they
+    // were scattered, and both `--repo` on a directory install and
+    // `--print-plan` on `--bundled` slipped through as no-ops.
+    if args.bundled_dir.is_some() && !args.bundled {
+        return Err("`--bundled-dir` only applies to `--bundled`".into());
+    }
+    if args.repo.is_some() && !args.from_source {
+        return Err("`--repo` only applies to `--from-source`".into());
+    }
+    if args.print_plan && !args.from_source {
+        return Err("`--print-plan` only applies to `--from-source`".into());
+    }
+    if args.all && !(args.bundled || args.from_source) {
+        return Err("`--all` only applies to `--bundled` or `--from-source`".into());
+    }
+
     if args.from_source {
         return from_source_sources(args);
     }
 
     if !args.bundled {
-        if args.all {
-            return Err("`--all` only applies to `--bundled` or `--from-source`".into());
-        }
-        if args.bundled_dir.is_some() {
-            return Err("`--bundled-dir` only applies to `--bundled`".into());
-        }
-        if args.print_plan {
-            return Err("`--print-plan` only applies to `--from-source`".into());
-        }
         let source = args.source.as_deref().ok_or(
             "`totsuka plugin install` needs a directory → pass one, or use `--bundled <name>` \
              to install a plugin shipped with this binary",
         )?;
         return Ok(Some(vec![InstallSource::dir(PathBuf::from(source))]));
-    }
-    if args.repo.is_some() {
-        return Err("`--repo` only applies to `--from-source`".into());
     }
 
     let Some(root) = bundled::locate(args.bundled_dir.as_deref()) else {
@@ -320,10 +330,6 @@ fn resolve_sources(args: &InstallArgs) -> Result<Option<Vec<InstallSource>>, Cli
 /// putting it here rather than in `scripts/` keeps the name→package mapping and
 /// the config edit with the code that owns the store.
 fn from_source_sources(args: &InstallArgs) -> Result<Option<Vec<InstallSource>>, CliError> {
-    if args.bundled_dir.is_some() {
-        return Err("`--bundled-dir` only applies to `--bundled`".into());
-    }
-
     let requested: Vec<&str> = match (&args.source, args.all) {
         (Some(_), true) => {
             return Err("pass either a plugin name or `--all` to `--from-source`, not both".into());

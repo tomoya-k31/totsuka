@@ -792,22 +792,75 @@ fn from_source_and_bundled_are_mutually_exclusive() {
 }
 
 #[test]
-fn print_plan_only_applies_to_from_source() {
-    let env = Env::new("print-plan-misuse");
+fn mode_specific_flags_are_rejected_outside_their_mode() {
+    // Every flag that belongs to one mode must be *rejected* elsewhere, never
+    // silently ignored — accepting it looks like it did something. Table-driven
+    // because the omissions come one at a time: `--repo` was accepted on a
+    // directory install, and `--print-plan` on `--bundled`, for exactly this
+    // reason.
+    let env = Env::new("flag-misuse");
     let src = env.root.join("src");
     fake_source(&src, "github", ">=0.1.6, <0.4");
+    let dir = src.to_str().unwrap().to_string();
 
-    let (ok, _, err) = env.run(
-        &[
-            "plugin",
-            "install",
-            src.to_str().unwrap(),
+    let cases: Vec<(Vec<&str>, &str)> = vec![
+        (
+            vec!["plugin", "install", &dir, "--repo", "/tmp", "--yes"],
+            "--repo",
+        ),
+        (
+            vec!["plugin", "install", &dir, "--print-plan", "--yes"],
             "--print-plan",
-            "--yes",
-        ],
-        None,
-    );
-    assert!(!ok);
-    assert!(err.contains("--from-source"), "{err}");
-    assert!(!env.installed());
+        ),
+        (
+            vec!["plugin", "install", &dir, "--bundled-dir", "/tmp", "--yes"],
+            "--bundled-dir",
+        ),
+        (vec!["plugin", "install", &dir, "--all", "--yes"], "--all"),
+        (
+            vec![
+                "plugin",
+                "install",
+                "--bundled",
+                "--all",
+                "--repo",
+                "/tmp",
+                "--yes",
+            ],
+            "--repo",
+        ),
+        (
+            vec![
+                "plugin",
+                "install",
+                "--bundled",
+                "--all",
+                "--print-plan",
+                "--yes",
+            ],
+            "--print-plan",
+        ),
+        (
+            vec![
+                "plugin",
+                "install",
+                "--from-source",
+                "--all",
+                "--bundled-dir",
+                "/tmp",
+                "--yes",
+            ],
+            "--bundled-dir",
+        ),
+    ];
+
+    for (args, expected) in cases {
+        let (ok, _, err) = env.run(&args, None);
+        assert!(!ok, "{args:?} was accepted but should be rejected");
+        assert!(
+            err.contains(expected),
+            "{args:?} → error should name {expected}, got: {err}"
+        );
+        assert!(!env.installed(), "{args:?} wrote to the store");
+    }
 }
