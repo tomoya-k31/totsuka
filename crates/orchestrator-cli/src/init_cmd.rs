@@ -54,9 +54,12 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # on_success = { set_status = "レビュー待ち" }
 "#;
 
-/// Execute `totsuka init`.
-pub fn run(cx: &Cx) -> Result<(), CliError> {
-    // 1. Directories (XDG, §5.6).
+/// Create the XDG directories totsuka writes into (§5.6).
+///
+/// Shared with `totsuka setup`, which needs the same directories to exist
+/// before it writes anything — so a fresh machine does not have to run `init`
+/// first just to make `setup` work.
+pub fn ensure_dirs(cx: &Cx) -> Result<(), CliError> {
     for (label, dir) in [
         ("config", cx.config_path.parent().unwrap_or(Path::new("."))),
         ("plugin config", &cx.plugin_config_dir()),
@@ -67,6 +70,13 @@ pub fn run(cx: &Cx) -> Result<(), CliError> {
         std::fs::create_dir_all(dir)?;
         println!("ok: {label} directory {}", dir.display());
     }
+    Ok(())
+}
+
+/// Execute `totsuka init`.
+pub fn run(cx: &Cx) -> Result<(), CliError> {
+    // 1. Directories (XDG, §5.6).
+    ensure_dirs(cx)?;
 
     // 2. config.toml skeleton — never overwrite.
     if cx.config_path.exists() {
@@ -86,7 +96,8 @@ pub fn run(cx: &Cx) -> Result<(), CliError> {
     }
 
     println!(
-        "next: edit the config, install plugins (`totsuka plugin install <dir>`), then `totsuka run --dry-run`"
+        "next: `totsuka setup` fills the config in interactively — or edit it by hand, install \
+         plugins (`totsuka plugin install --bundled --all --enable`), then `totsuka run --dry-run`"
     );
     Ok(())
 }
