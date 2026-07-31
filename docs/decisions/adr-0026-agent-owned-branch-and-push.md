@@ -28,6 +28,7 @@ stable。[#338](https://github.com/tomoya-k31/totsuka/pull/338) /
 | `base_commit` 記録 | ✓ `dotfiles` の `origin/master` と一致 | ✓ `origin/main` と一致 |
 | **エージェントが規約に従って命名** | — （plan は git を実行できない） | ✓ **`docs/glossary-pane`** |
 | ブランチ作成 → コミットの順序 | — | ✓ コミット 1 件がブランチ上（detached には無い） |
+| **push と PR 作成もエージェントが行う（F-86 撤回）** | — | ✓ エージェントが自分で push し [#352](https://github.com/tomoya-k31/totsuka/pull/352) を作成した |
 | HEAD 同期が記録 | ✓ NULL のまま（正しい） | ✓ `recorded the agent's branch` |
 | 再作成経路（#254） | ✓ 掃除済み worktree を同一パスで再作成、`existing_branch: None` で再び detached | — |
 | 掃除 | ✓ `outcome=Removed` | ✓ `Retained`（`cleanup = "manual"`） |
@@ -41,6 +42,11 @@ stable。[#338](https://github.com/tomoya-k31/totsuka/pull/338) /
 選んだ。コミットメッセージも Conventional Commits になっており、規約を読んで
 従っていることが二重に確認できた。**旧実装が生成していた
 `agent/slack-C0AGK11DMM4-1785491581.396559` では到達しえない名前**である。
+
+**エージェントはさらに push と PR 作成まで自分で完走した**（09:56:36 に
+[#352](https://github.com/tomoya-k31/totsuka/pull/352) を作成）。F-86 を撤回して
+「push と PR 作成はエージェントの責務」に変えた判断そのものが、Orchestrator 側の
+コードを一行も通さずに成立したことになる。
 
 # Context
 

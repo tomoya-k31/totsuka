@@ -2,7 +2,7 @@
 
 ## 2026-07-31
 
-* **Update**: [ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) — 実機検収の結果を `verified` と `# Status` に記録した。plan / implement 両モードを本物の Slack メンションで通し、**唯一プロンプト遵守に依存していた「エージェントがリポジトリの規約に従ってブランチを命名する」が実機で成立することを確認**した。エージェントは `.claude/rules/git-conventions.md` の `<type>/<slug>` を読み、「`docs/glossary/` に用語を 1 つ追加」という依頼に対して **`docs/glossary-pane`** を選び、**コミットより前に**切っている（コミットは 1 件ともブランチ上にあり、detached には残っていない）。コミットメッセージも Conventional Commits で、規約を読んでいることが二重に確認できた。旧実装が生成していた `agent/slack-C0AGK11DMM4-1785491581.396559` では到達しえない名前である。
+* **Update**: [ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) — 実機検収の結果を `verified` と `# Status` に記録した。plan / implement 両モードを本物の Slack メンションで通し、**唯一プロンプト遵守に依存していた「エージェントがリポジトリの規約に従ってブランチを命名する」が実機で成立することを確認**した。エージェントは `.claude/rules/git-conventions.md` の `<type>/<slug>` を読み、「`docs/glossary/` に用語を 1 つ追加」という依頼に対して **`docs/glossary-pane`** を選び、**コミットより前に**切っている（コミットは 1 件ともブランチ上にあり、detached には残っていない）。コミットメッセージも Conventional Commits で、規約を読んでいることが二重に確認できた。旧実装が生成していた `agent/slack-C0AGK11DMM4-1785491581.396559` では到達しえない名前である。**さらにエージェントは push と PR 作成まで自分で完走した**（[#352](https://github.com/tomoya-k31/totsuka/pull/352)）ので、F-86 を撤回して「push と PR 作成はエージェントの責務」に変えた判断そのものも、Orchestrator 側のコードを一行も通さずに成立している。
 
   あわせて確認したもの: detached での引き渡し（ディスパッチ直後に `rev-parse --abbrev-ref HEAD` = `HEAD` を実測）、`base_commit` が各リポジトリの `origin/HEAD` 既定ブランチと一致すること（`dotfiles` は `master`、`totsuka` は `main` — 既定ブランチ検出が両方で正しい）、**#254 の再作成経路**（掃除済み worktree を同一パスで再作成し、`branch` が NULL なので `existing_branch: None` → 再び detached）、掃除の分岐（plan は `Removed`、implement は `cleanup = "manual"` で `Retained`）、state.db v7 → v8 のマイグレーション（既存 18 行を保全、`state.db.v7.bak` 生成）。
 
