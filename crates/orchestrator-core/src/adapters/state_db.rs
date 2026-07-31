@@ -974,6 +974,23 @@ impl StateDb {
         Ok(())
     }
 
+    /// Record the branch a task's worktree turned out to be on.
+    ///
+    /// Separate from [`set_worktree`](Self::set_worktree) because the branch is
+    /// no longer known when the worktree is created: it is read back from
+    /// `HEAD` after the agent has chosen and created it, which can be any
+    /// number of ticks later.
+    pub fn set_branch(&self, id: i64, branch: &str) -> Result<(), StateError> {
+        let n = self.conn.execute(
+            "UPDATE tasks SET branch = ?1, updated_at = ?2 WHERE id = ?3",
+            params![branch, self.clock.now_rfc3339(), id],
+        )?;
+        if n == 0 {
+            return Err(StateError::NotFound(id));
+        }
+        Ok(())
+    }
+
     /// Persist the session id returned by `task/dispatch` (F-37), linking it to
     /// its task and the owning plugin.
     ///

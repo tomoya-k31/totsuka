@@ -21,6 +21,45 @@
 
 [prompts]
 
+# Injected alongside `marker_self_report` when the worktree is handed over
+# without a branch — i.e. implement-mode dispatches that are not resuming onto
+# a branch a previous run already made.
+#
+# Placeholders: none.
+#
+# Why the orchestrator asks instead of naming the branch itself: most
+# repositories carry their own branch-naming convention (`<type>/<slug>` and
+# friends), and a name totsuka generates can never follow one. The convention
+# is written down inside the repository, and the worktree IS a checkout of it,
+# so the agent is the only party in a position to read it.
+#
+# Three things here are load-bearing. Do not drop them when rewording:
+#
+#  1. Say the worktree is DETACHED. Without it an agent that means to comply
+#     often just commits, and commits on a detached HEAD are reachable from
+#     nothing once the worktree is removed.
+#  2. No start-point argument on `git switch -c`. The worktree is already at
+#     the intended base commit; passing one re-points HEAD and silently
+#     discards any work already done in the worktree.
+#  3. Branch BEFORE the first commit. Branching afterwards works, but only if
+#     the agent remembers — and the orchestrator's periodic HEAD read is what
+#     notices the branch, so the earlier it exists the less state is at risk.
+#
+# This text is NOT emitted in plan mode. Plan-mode panes cannot run git at all
+# (claude `--permission-mode plan`, codex `--sandbox read-only`, opencode's
+# `bash: deny`), so the instruction would be unfollowable — and on claude it
+# would provoke a permission prompt that an unattended pane has nobody to
+# answer, turning a no-op into a timeout escalation.
+branch_convention = """
+[orchestrator] Branch: this worktree is on a DETACHED HEAD at the commit your \
+work should start from. Before your first commit, decide a branch name from \
+the task at hand and this repository's own naming convention (check its \
+CLAUDE.md / AGENTS.md / CONTRIBUTING.md / .claude/rules or the names of \
+existing branches), then switch to it with `git switch -c <name>` — with NO \
+start-point argument, so the branch is created exactly where HEAD already is. \
+Commit only after that.\
+"""
+
 # Injected into EVERY hook-capable dispatch via `TOTSUKA_PROMPT_CONTEXT`
 # (D-12; hook knowledge stays in core per H-01, so source plugins never mention
 # markers). The `UserPromptSubmit` hook turns that env into invisible

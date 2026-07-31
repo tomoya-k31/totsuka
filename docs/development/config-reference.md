@@ -149,6 +149,7 @@ claude / codex / opencode に差し込むプロンプト文の上書き。組み
 | キー | 型 | 既定 | 説明 | プレースホルダ |
 |---|---|---|---|---|
 | `marker_self_report` | string? | 組み込み | 全ディスパッチに注入される完了自己申告指示。invisible injection 対応ツールは env `TOTSUKA_PROMPT_CONTEXT` 経由、非対応（opencode）は可視 `extra_context` | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |
+| `branch_convention` | string? | 組み込み | ブランチ作成指示。worktree は detached で引き渡されるので、エージェントがリポジトリの命名規約を読んで `git switch -c` する。**plan モードでは注入しない**（plan ペインは git を実行できず、claude では無人ペインが答えられない承認プロンプトを誘発してタイムアウトになる）。既にブランチ上のタスク（再開）にも注入しない | なし |
 | `verification_rubric` | string? | 組み込み | llm 検収の判定基準文 | — |
 | `verification_background_exemption` | string? | 組み込み | バックグラウンドタスク実行中の中間停止を検収対象から外す文 | — |
 | `verification_marker_convention` | string? | 組み込み | 検収後にマーカーを再掲させる文 | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |

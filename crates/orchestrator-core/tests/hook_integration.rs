@@ -27,9 +27,7 @@ use orchestrator_core::ports::{Clock, SecretString};
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, HookRuntime, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::{
-    CleanupPolicy, DEFAULT_BRANCH_TEMPLATE, DEFAULT_WORKTREE_NAME_TEMPLATE,
-};
+use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_WORKTREE_NAME_TEMPLATE};
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use test_support::{bare_origin_and_clone as setup_repo, scratch};
@@ -141,7 +139,6 @@ fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSetti
             tool: None,
         }],
         limits: Limits::global(4),
-        branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
         worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
         location_template: "{repo}/../wt/{worktree_name}".to_string(),
         cleanup_implement: CleanupPolicy::Manual,
@@ -1057,6 +1054,17 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
     assert!(
         ctx.contains("<<STATUS:COMPLETED>>") && ctx.contains("NEEDS_INPUT"),
         "prompt context states the marker convention: {ctx}"
+    );
+    // ...and, for an implement-mode dispatch into a freshly created (therefore
+    // detached) worktree, the instruction to create the branch. The condition
+    // guarding this is read from the worktree's own HEAD rather than from the
+    // task record, because the record is fetched once per dispatch and is
+    // stale in exactly the case that matters: a re-creation whose recorded
+    // branch no longer exists gets a detached worktree while the in-memory
+    // copy still names one.
+    assert!(
+        ctx.contains("DETACHED HEAD") && ctx.contains("git switch -c"),
+        "prompt context tells the agent to create the branch: {ctx}"
     );
     // Delivery contract (slack-reply real-machine finding): only the
     // marker-bearing final message is published, so it must be self-contained,

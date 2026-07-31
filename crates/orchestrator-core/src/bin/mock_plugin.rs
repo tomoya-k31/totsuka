@@ -12,8 +12,10 @@
 //! - `task/update_status` / `result/publish` → acknowledge (recorded to the
 //!   config's `"notify_log"` file, if set, as `{"method": ..., "params": ...}`).
 //! - `task/dispatch` → replies with the config's `"session_id"` (default
-//!   `sess-mock`); `"commit_on_dispatch": true` leaves a real commit in the
-//!   worktree so the pull_request output policy has something to push;
+//!   `sess-mock`); `"commit_on_dispatch": true` makes the mock agent branch
+//!   (`"branch_on_dispatch"`, default `feat/mock-agent-work`) and leave a real
+//!   commit on it, so the pull_request output policy has something to push —
+//!   the worktree arrives detached, so the branch has to come first;
 //!   `"dirty_on_dispatch": true` leaves an uncommitted file so cleanup's
 //!   data-loss guard (F-23 DirtySkipped) is exercisable;
 //!   `"crash_on_dispatch": true` exits mid-dispatch (crash isolation, §5.3);
@@ -177,15 +179,23 @@ fn main() {
                     .and_then(Value::as_str)
                     .unwrap_or("sess-mock")
                     .to_string();
-                // `commit_on_dispatch: true` makes the mock agent leave a real
-                // commit in the worktree, so the pull_request output policy has
-                // something to push (the agent's work ends at the commit, F-86).
+                // `commit_on_dispatch: true` makes the mock agent do what a
+                // real one is asked to: name a branch, switch to it, and
+                // commit. The worktree arrives detached, so the branch has to
+                // come first — without it the commits land on a detached HEAD
+                // and the orchestrator has nothing to push (the agent's work
+                // ends at the commit, F-86).
                 if config
                     .get("commit_on_dispatch")
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
                     && let Some(worktree) = params.get("worktree_path").and_then(Value::as_str)
                 {
+                    let branch = config
+                        .get("branch_on_dispatch")
+                        .and_then(Value::as_str)
+                        .unwrap_or(MOCK_BRANCH);
+                    branch_in(worktree, branch);
                     commit_in(worktree);
                 }
                 // `dirty_on_dispatch: true` leaves an uncommitted file in the
@@ -547,6 +557,32 @@ fn record_to(path: Option<&Value>, method: &str, params: &Value) {
         .open(path)
     {
         let _ = writeln!(file, "{line}");
+    }
+}
+
+/// The branch the mock agent picks when the config does not name one. Chosen
+/// to look like something a repository convention would produce, because that
+/// is what the real instruction asks for.
+const MOCK_BRANCH: &str = "feat/mock-agent-work";
+
+/// Stand in for the agent's own `git switch -c <name>`: the worktree is handed
+/// over detached and naming the branch is the agent's job (it is the only
+/// party that can read the repository's convention). Idempotent across a
+/// re-dispatch into the same worktree — a second `-c` fails, and switching to
+/// the branch that is already checked out succeeds trivially.
+fn branch_in(worktree: &str, branch: &str) {
+    let switched = std::process::Command::new("git")
+        .current_dir(worktree)
+        .args(["switch", "-c", branch])
+        .output();
+    match switched {
+        Ok(out) if out.status.success() => {}
+        _ => {
+            let _ = std::process::Command::new("git")
+                .current_dir(worktree)
+                .args(["switch", branch])
+                .output();
+        }
     }
 }
 
