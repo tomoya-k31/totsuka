@@ -208,6 +208,15 @@ while IFS="$(printf '\t')" read -r pkg dir bins; do
   esac
 done <<<"$PLUGIN_BINS"
 
+# フェイルクローズ: 抽出が 0 件になったら「違反なし」ではなく検査の失敗として扱う。
+# 上の select は manifest_path から $ROOT/ を剥がして plugins/ 判定しており、両者は
+# 同じ根（$ROOT/Cargo.toml を cargo に渡している）から導かれるので通常ずれないが、
+# ずれれば全プラグインが黙って対象外になる。ワークスペースには必ずプラグインがある。
+[ "$N_PLUGINS" -gt 0 ] || {
+  echo "arch-lint: plugins/* を 1 つも抽出できなかった（cargo metadata のパス表現と ROOT=$ROOT が食い違っている可能性）" >&2
+  exit 2
+}
+
 # ---------- サマリ ----------
 N_PKGS="$(jq -r '.packages | length' <<<"$META")"
 N_DEPS=0
