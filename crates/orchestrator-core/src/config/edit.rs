@@ -15,6 +15,18 @@
 //! test — and the property that matters most is tested directly: whatever they
 //! produce must load through the real schema and pass `config::validate` with
 //! no errors.
+//!
+//! # What a draft owns
+//!
+//! **A draft is authoritative for exactly the fields it models, and blind to
+//! every other key.** A `None` optional field therefore means *absent* — the
+//! key is removed if it is there — while a key the draft has no field for
+//! (`max_concurrency` on a repository, say) is never touched.
+//!
+//! Leaving a stale `verification` or `on_success` behind instead would break
+//! the convergence these helpers exist to provide: re-applying a draft has to
+//! produce the config the draft describes, not that config merged with
+//! whatever an earlier draft happened to write.
 
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
@@ -92,7 +104,7 @@ pub struct RepositoryDraft<'a> {
     pub name: &'a str,
     /// Repository path (`~` and `${ENV}` are resolved at load time, not here).
     pub path: &'a str,
-    /// One-line summary used for LLM repository selection.
+    /// One-line summary used for LLM repository selection. `None` removes it.
     pub summary: Option<&'a str>,
 }
 
@@ -121,24 +133,22 @@ pub struct WorkflowDraft<'a> {
     pub output: OutputPolicy,
     /// Omitted when `None`, so the schema default applies.
     pub verification: Option<VerificationMode>,
-    /// Inline-table fragment.
+    /// Inline-table fragment, or `None` for no success hook.
     pub on_success: Option<&'a str>,
-    /// Inline-table fragment.
+    /// Inline-table fragment, or `None` for no failure hook.
     pub on_failure: Option<&'a str>,
 }
 
 /// Insert or update `[[repositories]]` matched by `name`.
 ///
-/// Only the fields the draft carries are written: an entry a human has extended
+/// Only the fields the draft models are touched: an entry a human has extended
 /// with `tool` or `max_concurrency` keeps them.
 pub fn upsert_repository(config_toml: &str, draft: &RepositoryDraft) -> Result<String, EditError> {
     let mut doc: DocumentMut = config_toml.parse()?;
     let entry = array_entry(&mut doc, "repositories", draft.name)?;
     set_value(entry, "name", draft.name);
     set_value(entry, "path", draft.path);
-    if let Some(summary) = draft.summary {
-        set_value(entry, "summary", summary);
-    }
+    put_value(entry, "summary", draft.summary);
     Ok(doc.to_string())
 }
 
@@ -157,17 +167,17 @@ pub fn upsert_workflow(config_toml: &str, draft: &WorkflowDraft) -> Result<Strin
     set_value(entry, "mode", draft.mode.as_str());
     set_value(entry, "agent", draft.agent);
     set_value(entry, "output", draft.output.as_str());
-    if let Some(mode) = draft.verification {
-        set_value(entry, "verification", mode.as_str());
-    }
+    put_value(
+        entry,
+        "verification",
+        draft.verification.map(VerificationMode::as_str),
+    );
     for (key, table) in [
         ("trigger", trigger),
         ("on_success", on_success),
         ("on_failure", on_failure),
     ] {
-        if let Some(table) = table {
-            set_value(entry, key, Value::InlineTable(table));
-        }
+        put_value(entry, key, table.map(Value::InlineTable));
     }
     Ok(doc.to_string())
 }
@@ -176,6 +186,8 @@ pub fn upsert_workflow(config_toml: &str, draft: &WorkflowDraft) -> Result<Strin
 ///
 /// The schema treats `[llm]` as all-or-nothing (`base_url` + `model` are both
 /// required), so this writes the complete table rather than individual keys.
+/// `api_key_ref: None` removes the key — a backend that injects the key through
+/// the environment needs the stale reference gone, not merely unmentioned.
 pub fn set_llm(
     config_toml: &str,
     base_url: &str,
@@ -186,9 +198,7 @@ pub fn set_llm(
     let llm = table_at(&mut doc, "llm")?;
     set_value(llm, "base_url", base_url);
     set_value(llm, "model", model);
-    if let Some(reference) = api_key_ref {
-        set_value(llm, "api_key_ref", reference);
-    }
+    put_value(llm, "api_key_ref", api_key_ref);
     Ok(doc.to_string())
 }
 
@@ -196,7 +206,8 @@ pub fn set_llm(
 ///
 /// `claude` / `codex` / `opencode` are built in, so most configs need no
 /// `[tools]` section at all; this exists for overriding a command or adding a
-/// second profile of the same kind.
+/// second profile of the same kind. `command: None` removes any override,
+/// restoring the built-in command for that `kind`.
 pub fn set_tool(
     config_toml: &str,
     name: &str,
@@ -212,9 +223,7 @@ pub fn set_tool(
         .as_table_mut()
         .ok_or_else(|| EditError::NotATable(format!("tools.{name}")))?;
     set_value(section, "kind", kind);
-    if let Some(command) = command {
-        set_value(section, "command", command);
-    }
+    put_value(section, "command", command);
     Ok(doc.to_string())
 }
 
@@ -257,16 +266,43 @@ fn set_value<V: Into<Value>>(table: &mut Table, key: &str, new: V) {
     }
 }
 
+/// Assign `key = new`, or remove `key` when the draft has no value for it.
+///
+/// See the module docs: a draft owns the fields it models, so `None` means the
+/// key should be absent, not that the existing one should survive.
+fn put_value<V: Into<Value>>(table: &mut Table, key: &str, new: Option<V>) {
+    match new {
+        Some(new) => set_value(table, key, new),
+        None => {
+            table.remove(key);
+        }
+    }
+}
+
 /// Whether two TOML values are equal ignoring formatting.
+///
+/// Every variant is compared, not just the ones today's callers happen to
+/// write. An incomplete match here does not fail loudly — it silently answers
+/// "different", which makes [`set_value`] rewrite an identical value and
+/// discard the formatting inside it. `trigger = { labels = ["migration"] }`
+/// (an array, from the docs' own example) is exactly that case.
 fn same_value(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::String(x), Value::String(y)) => x.value() == y.value(),
+        (Value::Integer(x), Value::Integer(y)) => x.value() == y.value(),
+        (Value::Float(x), Value::Float(y)) => x.value() == y.value(),
         (Value::Boolean(x), Value::Boolean(y)) => x.value() == y.value(),
+        (Value::Datetime(x), Value::Datetime(y)) => x.value() == y.value(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(xv, yv)| same_value(xv, yv))
+        }
         (Value::InlineTable(x), Value::InlineTable(y)) => {
             x.len() == y.len()
                 && x.iter()
                     .all(|(k, xv)| y.get(k).is_some_and(|yv| same_value(xv, yv)))
         }
+        // Genuinely different types. Not a fallback for unhandled variants —
+        // every variant above is matched.
         _ => false,
     }
 }
@@ -667,6 +703,117 @@ path = "/dotfiles"
         // The schema default applies when the key is absent.
         let cfg = crate::config::RootConfig::from_toml_str(&out).unwrap();
         assert_eq!(cfg.workflows[0].verification, VerificationMode::Llm);
+    }
+
+    #[test]
+    fn a_none_optional_clears_a_key_a_previous_draft_wrote() {
+        // Convergence: re-applying a draft has to produce the config the draft
+        // describes. Leaving the old `verification` / `on_success` / `summary`
+        // behind would merge two drafts into a config neither one describes,
+        // and the difference is behavioural — a stale `verification = "human"`
+        // parks every task waiting for a sign-off nobody knows to give.
+        let with_extras = upsert_workflow(
+            "",
+            &WorkflowDraft {
+                name: "w",
+                source: "s",
+                trigger: Some(r#"{ project_status = "実装待ち" }"#),
+                mode: WorkflowMode::Implement,
+                agent: "a",
+                output: OutputPolicy::Source,
+                verification: Some(VerificationMode::Human),
+                on_success: Some(r#"{ set_status = "done" }"#),
+                on_failure: None,
+            },
+        )
+        .unwrap();
+        assert!(with_extras.contains("verification"), "{with_extras}");
+
+        let cleared = upsert_workflow(
+            &with_extras,
+            &WorkflowDraft {
+                name: "w",
+                source: "s",
+                trigger: None,
+                mode: WorkflowMode::Implement,
+                agent: "a",
+                output: OutputPolicy::Source,
+                verification: None,
+                on_success: None,
+                on_failure: None,
+            },
+        )
+        .unwrap();
+        for key in ["verification", "trigger", "on_success"] {
+            assert!(!cleared.contains(key), "`{key}` survived: {cleared}");
+        }
+        let cfg = crate::config::RootConfig::from_toml_str(&cleared).unwrap();
+        assert_eq!(cfg.workflows.len(), 1, "{cleared}");
+        assert_eq!(cfg.workflows[0].verification, VerificationMode::Llm);
+
+        // Same rule for the other drafts' optionals.
+        let repo = upsert_repository(
+            "",
+            &RepositoryDraft {
+                name: "r",
+                path: "/r",
+                summary: Some("was here"),
+            },
+        )
+        .unwrap();
+        let repo = upsert_repository(
+            &repo,
+            &RepositoryDraft {
+                name: "r",
+                path: "/r",
+                summary: None,
+            },
+        )
+        .unwrap();
+        assert!(!repo.contains("summary"), "{repo}");
+
+        let llm = set_llm("", "https://x/v1", "m", Some("keychain:totsuka/k")).unwrap();
+        let llm = set_llm(&llm, "https://x/v1", "m", None).unwrap();
+        assert!(!llm.contains("api_key_ref"), "{llm}");
+
+        let tool = set_tool("", "t", "claude", Some("/bin/claude")).unwrap();
+        let tool = set_tool(&tool, "t", "claude", None).unwrap();
+        assert!(!tool.contains("command"), "{tool}");
+    }
+
+    #[test]
+    fn an_unchanged_fragment_containing_an_array_is_left_alone() {
+        // `same_value` decides whether a value is rewritten. Any variant it
+        // cannot compare answers "different", so an identical value gets
+        // replaced and the formatting inside it is lost — silently, because
+        // nothing errors. Arrays reach this path from the docs' own example
+        // (`trigger = { labels = ["migration", "high-risk"] }`).
+        let hand_written = concat!(
+            "[[workflows]]\n",
+            "name = \"migration\"\n",
+            "source = \"github\"\n",
+            "mode = \"implement\"\n",
+            "agent = \"herdr\"\n",
+            "output = \"source\"\n",
+            // Spacing a human chose, and a comment attached to the value.
+            "trigger = { labels = [ \"migration\",  \"high-risk\" ] }  # mine\n",
+        );
+        let draft = WorkflowDraft {
+            name: "migration",
+            source: "github",
+            trigger: Some(r#"{ labels = ["migration", "high-risk"] }"#),
+            mode: WorkflowMode::Implement,
+            agent: "herdr",
+            output: OutputPolicy::Source,
+            verification: None,
+            on_success: None,
+            on_failure: None,
+        };
+        let out = upsert_workflow(hand_written, &draft).unwrap();
+        assert_eq!(
+            out, hand_written,
+            "an equal value was rewritten, losing the formatting inside it"
+        );
     }
 
     #[test]
