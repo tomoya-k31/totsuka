@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-08-01
+
+* **Update**: [リリース Runbook](/operations/release-runbook.md) — リリース tarball に同梱プラグインを載せた（[#344](https://github.com/tomoya-k31/totsuka/issues/344)）。`universal-binary` ジョブを `--workspace --bins` に広げ、**本体だけでなく全プラグインバイナリに ad-hoc 署名**し（本体だけ署名するとプラグインが Gatekeeper に殺されて doctor は「crashed or exited」としか言えない）、`totsuka` の隣に `plugins/<name>/{<name>,plugin.toml}` を並べたプレフィックス付きディレクトリ構成で固める。同梱名は `plugins/*/plugin.toml` から抜くのでプラグイン追加時のワークフロー編集は不要（[ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md) の bin 名不変条件が前提）。添付直前に「展開した tarball から全プラグインを install できる」スモークテストを挟んだ — README が約束するコマンドが実際に動くことを守る唯一の自動ガードで、これまでは必ず失敗する状態が放置されていた。成果物のファイル名と `.sha256` の形式は据え置き。
+
 ## 2026-07-31
 
 * **Creation**: [ADR-0027 プラグインの bin 名は plugin.toml の name に一致させる](/decisions/adr-0027-plugin-artifact-naming.md) / **Update**: [ワークスペース依存境界ルール（Fitness Function）](/architecture/workspace-dependency-rules.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) — 同梱プラグイン 6 個すべてで Cargo の bin 名と `plugin.toml` の `name` が食い違っており（`task-source-slack` vs `slack`）、`prepare_install` が後者と同名のバイナリを要求するため、導入のたびに手作業のリネームと dist ディレクトリ組み立てが必要だった。**その結果 README の Quickstart `totsuka plugin install ./path/to/task-source-github` は必ず失敗する状態だった**。`[[bin]] name` を `name` 側へ揃え、`target/{profile}/<name>` がそのまま install 可能・配布可能になるようにした。再発防止として `scripts/arch-lint.sh` に `plugin-bin-name` チェック（bin ターゲットがちょうど 1 つ・名前が `plugin.toml` の `name` と一致）を追加。エピック [#342](https://github.com/tomoya-k31/totsuka/issues/342) の第 1 段（[#343](https://github.com/tomoya-k31/totsuka/issues/343)）で、後続の同梱配布・`--bundled` / `--from-source` はすべてこれを前提にする。

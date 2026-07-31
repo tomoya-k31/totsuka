@@ -110,10 +110,15 @@ jobs:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.release-please.outputs.tag_name }}
+      # Top-level directory inside the tarball. Extracting yields this one
+      # directory, so the whole tree can be moved to /usr/local/lib/totsuka and
+      # symlinked from /usr/local/bin — which is what keeps the bundled plugins
+      # next to the binary that has to find them.
+      PREFIX: totsuka-${{ needs.release-please.outputs.tag_name }}-macos-universal
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -128,38 +133,105 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Build both architectures
+        # The whole workspace, not just `--bin totsuka`: the bundled plugins
+        # ship in the same tarball so a fresh machine needs no Rust toolchain
+        # and no checkout. `--workspace --bins` also builds `mock_plugin`,
+        # which is cheap and never packaged — cheaper to maintain than an
+        # explicit `-p` list that has to grow with every new plugin.
+        #
         # The sync-lockfile job keeps Cargo.lock in step with the release
         # version on the Release PR, so the merged release commit is already
         # consistent. --locked is still omitted defensively so a stray lock
         # drift regenerates rather than blocking the release build.
         run: |
-          cargo build --release --bin totsuka --target x86_64-apple-darwin
-          cargo build --release --bin totsuka --target aarch64-apple-darwin
+          cargo build --release --workspace --bins --target x86_64-apple-darwin
+          cargo build --release --workspace --bins --target aarch64-apple-darwin
 
-      - name: Create universal binary with lipo
+      - name: Assemble the universal tree
+        # Plugin names come from `plugins/*/plugin.toml`, so adding a plugin
+        # needs no edit here. `scripts/arch-lint.sh` guarantees the Cargo bin
+        # name equals that `name` (ADR-0027), which is why the same string
+        # works as both the build artifact and the installed filename.
         run: |
-          mkdir -p dist
-          lipo -create -output dist/totsuka \
-            target/x86_64-apple-darwin/release/totsuka \
-            target/aarch64-apple-darwin/release/totsuka
+          set -euo pipefail
+          root="dist/${PREFIX}"
+          mkdir -p "${root}/plugins"
+
           # Ad-hoc signature (v1): satisfies Gatekeeper after the user removes
           # the quarantine attribute. Developer ID signing / notarization is a
           # later step (see docs/operations/release-runbook.md).
-          codesign --sign - --force dist/totsuka
-          lipo -info dist/totsuka
+          # EVERY binary needs it — an unsigned plugin is killed on launch and
+          # `totsuka doctor` can only report "crashed or exited".
+          fatten() {
+            lipo -create -output "$2" \
+              "target/x86_64-apple-darwin/release/$1" \
+              "target/aarch64-apple-darwin/release/$1"
+            codesign --sign - --force "$2"
+            lipo -info "$2"
+          }
+
+          fatten totsuka "${root}/totsuka"
+
+          for manifest in plugins/*/plugin.toml; do
+            name="$(awk -F '"' '
+              /^[[:space:]]*\[/ { exit }
+              /^[[:space:]]*name[[:space:]]*=/ { print $2; exit }' "${manifest}")"
+            if [ -z "${name}" ]; then
+              echo "no top-level name in ${manifest}" >&2
+              exit 1
+            fi
+            mkdir -p "${root}/plugins/${name}"
+            fatten "${name}" "${root}/plugins/${name}/${name}"
+            cp "${manifest}" "${root}/plugins/${name}/"
+          done
+
+          cp README.md LICENSE "${root}/"
+          find "${root}" -type f | sort
 
       - name: Package the tarball
         run: |
-          cp README.md LICENSE dist/
-          tar -czf "totsuka-${TAG}-macos-universal.tar.gz" -C dist totsuka README.md LICENSE
+          set -euo pipefail
+          tar -czf "${PREFIX}.tar.gz" -C dist "${PREFIX}"
           # Write only the raw SHA-256 (no filename) so release consumers can
           # verify the tarball without parsing the filename column.
-          shasum -a 256 "totsuka-${TAG}-macos-universal.tar.gz" | awk '{print $1}' \
-            | tee "totsuka-${TAG}-macos-universal.tar.gz.sha256"
+          shasum -a 256 "${PREFIX}.tar.gz" | awk '{print $1}' \
+            | tee "${PREFIX}.tar.gz.sha256"
+
+      - name: Smoke-test the tarball
+        # Guards the exact regression this release change exists to fix: the
+        # README used to tell people to run `totsuka plugin install <dir>` on a
+        # directory that held no binary, so the documented command always
+        # failed. Install a bundled plugin straight out of the extracted
+        # tarball, in a scratch XDG home, and assert it shows up.
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          tar -xzf "${PREFIX}.tar.gz" -C "${work}"
+          export XDG_CONFIG_HOME="${work}/xdg/config"
+          export XDG_DATA_HOME="${work}/xdg/data"
+          export XDG_STATE_HOME="${work}/xdg/state"
+          export XDG_CACHE_HOME="${work}/xdg/cache"
+          totsuka="${work}/${PREFIX}/totsuka"
+
+          "${totsuka}" --version
+
+          for dir in "${work}/${PREFIX}"/plugins/*/; do
+            "${totsuka}" plugin install "${dir}" --yes
+          done
+
+          installed="$("${totsuka}" plugin list --json)"
+          echo "${installed}"
+          count="$(echo "${installed}" | jq '[.[] | select(.installed)] | length')"
+          expected="$(find plugins -name plugin.toml | wc -l | tr -d ' ')"
+          if [ "${count}" != "${expected}" ]; then
+            echo "expected ${expected} installed plugins, got ${count}" >&2
+            exit 1
+          fi
+          rm -rf "${work}"
 
       - name: Attach artifacts to the release
         run: |
           gh release upload "${TAG}" \
-            "totsuka-${TAG}-macos-universal.tar.gz" \
-            "totsuka-${TAG}-macos-universal.tar.gz.sha256" \
+            "${PREFIX}.tar.gz" \
+            "${PREFIX}.tar.gz.sha256" \
             --clobber

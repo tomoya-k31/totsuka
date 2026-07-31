@@ -22,20 +22,27 @@ it back to the source.
 
 ### Prebuilt binary (GitHub Releases)
 
-Download the macOS universal binary from the
-[latest release](https://github.com/tomoya-k31/totsuka/releases/latest), then
-put `totsuka` on your `PATH`:
+Download the macOS universal tarball from the
+[latest release](https://github.com/tomoya-k31/totsuka/releases/latest). It
+contains `totsuka` **and the bundled plugins**, so keep the tree together and
+symlink the binary onto your `PATH`:
 
 ```sh
 tar -xzf totsuka-*-macos-universal.tar.gz
-install -m 0755 totsuka /usr/local/bin/totsuka
+sudo rm -rf /usr/local/lib/totsuka
+sudo mv totsuka-*-macos-universal /usr/local/lib/totsuka
+sudo ln -sf /usr/local/lib/totsuka/totsuka /usr/local/bin/totsuka
 ```
 
-The binary is ad-hoc–signed. If Gatekeeper blocks it, clear the quarantine
-attribute once:
+`totsuka` finds the bundled plugins next to itself, which is why the whole
+directory moves rather than just the binary. The symlink is fine — the lookup
+resolves it.
+
+Everything is ad-hoc–signed. If Gatekeeper blocks it, clear the quarantine
+attribute on the whole tree once:
 
 ```sh
-xattr -d com.apple.quarantine /usr/local/bin/totsuka
+sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 ```
 
 ### From source
@@ -43,6 +50,9 @@ xattr -d com.apple.quarantine /usr/local/bin/totsuka
 ```sh
 cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
 ```
+
+This installs the CLI only. Plugins are built from a checkout — see
+[the plugin development guide](docs/development/plugin-dev-guide.md).
 
 ## Quickstart (5 minutes, 1 task)
 
