@@ -12,6 +12,7 @@
 * [エフェメラル承認フロー](ephemeral-approval.md) - エージェントの返信案をスレッド内エフェメラル + self-DM 記録の 2 面に提示し、承認ボタン押下時のみ本人名義で送信する task-source-slack の仕組み。勝手に送信しないための防波堤。
 * [会話継続（conversation continuity）](conversation-continuity.md) - 1 スレッド = 1 会話を 1 タスクとして扱い、追いメンションを同じタスクへの追加メッセージとして取り込むことで worktree・ブランチ・エージェントセッションを共有する仕組み。#242 でタスク同一性そのものを会話単位に変えた。
 * [AI Tool（AI ツール）と 2 軸モデル](ai-tool.md) - pane 内で起動する AI エージェント CLI（Claude Code / Codex / OpenCode）。pane を管理する agent プラグイン（herdr 等）とは直交する軸で、[tools] レジストリと tool フィールド（workflow > repo > default_tool > 組み込み claude）で選択される。
+* [pane（ペイン）](pane.md) - エージェント CLI が実際に動くターミナル区画（herdr の pane）。dispatch 時に worktree を cwd、label を totsuka + source task id として作られ、pane_control capability 越しの session/focus・session/release・session/list で制御され、寿命は worktree の掃除ポリシーに連動する。
 * [click-to-focus（クリックで pane を開く）](click-to-focus.md) - 通知をクリックすると、その通知を出したタスクの herdr pane が前面に来る機能（F-94）。terminal-notifier の -activate（GUI 前面化）+ -execute（totsuka focus → 制御 UDS /focus → agent_ide の session/focus 委譲）の 2 段で実現し、縮退はすべて静か。
 
 <!-- concept を追加したら、ここに 1 行追加する:

@@ -2,6 +2,8 @@
 
 ## 2026-07-31
 
+* **Creation**: [pane（ペイン）](/glossary/pane.md) — 40 ファイルで使われながら定義が無かった用語を glossary に追加した。ADR-0005 / ADR-0010 / ADR-0013 と herdr Socket API リファレンスに散っていた「pane とは何か」（dispatch 時の `workspace.create` + `agent.start` による生成、`totsuka ` 前置 label が所有権境界、`pane_control` 相乗りの `session/focus`・`session/release`・`session/list`、位置ベース pane id ゆえの `expect_cwd` / `expect_label` 同一性ガード、worktree 掃除ポリシー連動の寿命と孤児 pane、`pane.read` では最終出力を回収できない制約）を 1 ファイルに集約した参照点。
+
 * **Creation**: [ADR-0026 ブランチ命名と push・PR 作成をエージェントの責務にする](/decisions/adr-0026-agent-owned-branch-and-push.md) / **Update**: [orchestrator-core](/components/orchestrator-core.md) / [オーケストレータ機能仕様](/product/orchestrator-spec.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) / [リリース前手動チェックリスト](/quality/release-checklist.md) / [設定リファレンス（config.toml）](/development/config-reference.md) / [設定例](/development/config-examples.md) / [ワークフロー](/glossary/workflow.md) / [運用ガイド](/operations/operations-guide.md) / [テスト戦略](/quality/test-strategy.md) / [フックシグナルの流れ](/architecture/hook-signal-flow.md) / [plugin-protocol](/components/plugin-protocol.md) / [Agent IDE（エージェントIDE）](/glossary/agent-ide.md) / [ADR-0024](/decisions/adr-0024-agent-instruction-layers.md) — **F-86 を全面撤回**し、push と PR 作成をエージェントの責務にした。規約に沿った push・PR 手順はリポジトリ側の CLAUDE.md や hooks が既に持っており、ブランチ命名権を移した以上 Orchestrator が肩代わりする理由が無くなったため。`OutputPolicy::PullRequest` / `run::output`（`PrCreator` / `GhPrCreator` / `PrContext`）/ `[output]` の PR テンプレート / `WorktreeManager::{push_branch, has_commits_to_publish}` / `Engine::with_pr_creator` を削除した。
 
   **`pull_request` は enum ごと削除**し、受理して `source` 相当に降格させる案は採らなかった — **PR が作られなくなったことに気付かないまま運用される**方が、起動時に `unknown variant` で落ちるより悪い。
