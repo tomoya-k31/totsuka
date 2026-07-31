@@ -18,6 +18,7 @@ pub mod mention;
 pub mod notify;
 pub mod persist;
 pub mod pipeline;
+pub mod reaction;
 pub mod repo_resolver;
 pub mod server;
 pub mod slack_api;

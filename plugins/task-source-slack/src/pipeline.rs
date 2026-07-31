@@ -26,6 +26,7 @@ use crate::config::SlackConfig;
 use crate::draft::{DRAFT_TTL, Draft, DraftStatus, DraftStore};
 use crate::llm::ChatTransport;
 use crate::mention::{Mention, MentionFilter};
+use crate::reaction::{reaction_target, to_mention};
 use crate::repo_resolver::{Resolution, resolve};
 use crate::slack_api::{PostEphemeral, SlackApi};
 use crate::socket_mode::SocketEvent;
@@ -324,6 +325,10 @@ where
 {
     tokio::spawn(async move {
         let mut filter = MentionFilter::new(&config.target_user_id);
+        // Normalized once: the colon-stripping is config-shaped work, not
+        // per-event work, and an empty set means the reaction trigger is off
+        // (the default — an install that has not opted in is unaffected).
+        let trigger_reactions = config.normalized_trigger_reactions();
         // Resolve the self-DM record channel up front (filter row 3). Failure
         // is not fatal: row 2 (own posts) already breaks reply loops.
         match api.conversations_open_self(&config.target_user_id).await {
@@ -411,25 +416,77 @@ where
                         orchestrator.clone(),
                     ));
                 }
-                // #319 lands the trigger in stages: the event is normalized and
-                // observable here, but nothing consumes it until the message
-                // re-fetch and the operator-only filter exist. Logging the
-                // emoji makes "did my reaction even arrive?" answerable with
-                // `--debug` while the rest is still landing.
+                // #319: a trigger reaction the operator added becomes a task
+                // the same way a mention does. The event carries no message
+                // body, so the filter runs either side of a re-fetch.
                 SocketEvent::Reaction(event) => {
-                    // Bound outside the macro: `tracing`'s field syntax brings
-                    // its own `Value` trait into scope, which shadows
-                    // `serde_json::Value` inside the expansion.
-                    let reaction = event.get("reaction").and_then(Value::as_str).unwrap_or("");
-                    let channel = event
-                        .pointer("/item/channel")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    tracing::debug!(
-                        reaction,
-                        channel,
-                        "reaction event received; the trigger is not wired up yet"
-                    );
+                    let Some(target) =
+                        reaction_target(&event, filter.target_user_id(), &trigger_reactions)
+                    else {
+                        continue;
+                    };
+                    if filter.is_self_dm_channel(&target.channel) {
+                        continue;
+                    }
+                    // Skip a known duplicate without paying for the round trip,
+                    // but do **not** record anything yet: recording here would
+                    // burn the key on a transient fetch failure, and the
+                    // envelope was already acked (`socket_mode`: ack first),
+                    // so Slack never redelivers it. Worse, the operator's
+                    // natural retry — remove the reaction and add it again —
+                    // keys on the *message* ts, so it would be deduped away
+                    // too. The trigger would be unrecoverable until a restart
+                    // cleared the LRU.
+                    let dedup_key = target.dedup_key();
+                    if filter.already_processed(&dedup_key) {
+                        continue;
+                    }
+                    let fetched = match api.fetch_message(&target.channel, &target.ts).await {
+                        Ok(Some(message)) => message,
+                        Ok(None) => {
+                            tracing::warn!(
+                                channel = target.channel,
+                                ts = target.ts,
+                                "reacted-to message not found; ignoring the trigger"
+                            );
+                            continue;
+                        }
+                        // One unreachable message must not take the plugin
+                        // down, so this is a warn-and-drop rather than an
+                        // error path.
+                        Err(e) => {
+                            tracing::warn!(
+                                channel = target.channel,
+                                ts = target.ts,
+                                error = %e,
+                                "could not fetch the reacted-to message; ignoring the trigger"
+                            );
+                            continue;
+                        }
+                    };
+                    let Some(mention) = to_mention(&target, fetched) else {
+                        continue;
+                    };
+                    // Only now is the trigger definitely going to produce a
+                    // task, so this is where the key is spent. The re-check is
+                    // not redundant with the one above: `remember` is what
+                    // actually records it, and returning early on `false`
+                    // keeps the mention path's contract (one message, one
+                    // task) even if the two ever race.
+                    if !filter.remember(dedup_key) {
+                        continue;
+                    }
+                    // From here the two triggers are the same code path.
+                    let enriched = enrich(api.as_ref(), &config, &mut names, mention).await;
+                    tokio::spawn(handle_mention(
+                        Arc::clone(&api),
+                        Arc::clone(&chat),
+                        Arc::clone(&config),
+                        state.clone(),
+                        Arc::clone(&awaiting),
+                        enriched,
+                        orchestrator.clone(),
+                    ));
                 }
                 SocketEvent::BlockActions(payload) => {
                     handle_block_actions(
