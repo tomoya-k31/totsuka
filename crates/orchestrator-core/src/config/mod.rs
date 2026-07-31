@@ -15,7 +15,10 @@ pub mod resolve;
 pub mod schema;
 pub mod validate;
 
-pub use edit::{EditError, set_plugin_enabled};
+pub use edit::{
+    EditError, RepositoryDraft, WorkflowDraft, set_default_tool, set_hooks_auth_token_ref, set_llm,
+    set_plugin_enabled, set_tool, upsert_repository, upsert_workflow,
+};
 
 pub use env_overrides::{ENV_PREFIX, apply_env_overrides, override_keys};
 pub use raw::PluginRawConfig;

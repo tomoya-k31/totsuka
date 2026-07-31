@@ -333,6 +333,16 @@ pub enum WorkflowMode {
     Implement,
 }
 
+impl WorkflowMode {
+    /// The stable snake_case config string for this mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowMode::Plan => "plan",
+            WorkflowMode::Implement => "implement",
+        }
+    }
+}
+
 /// Output policy of a workflow (F-83).
 ///
 /// `pull_request` was a third variant until push and PR creation became the
@@ -346,6 +356,16 @@ pub enum OutputPolicy {
     Source,
     /// No output.
     None,
+}
+
+impl OutputPolicy {
+    /// The stable snake_case config string for this policy.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OutputPolicy::Source => "source",
+            OutputPolicy::None => "none",
+        }
+    }
 }
 
 /// How a workflow's completion self-report is verified (D-01).
