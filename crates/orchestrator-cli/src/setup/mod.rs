@@ -89,7 +89,7 @@ pub fn run(cx: &Cx, args: &SetupArgs) -> Result<(), CliError> {
         println!("Saved answers to {}", path.display());
     }
 
-    let plan = Plan::new(cx, &answers);
+    let plan = Plan::new(cx, &answers)?;
     print!("{}", plan.render());
     if args.dry_run {
         println!("\n--dry-run: nothing was written.");
@@ -120,8 +120,7 @@ fn load_answers(path: &Path) -> Result<Answers, CliError> {
             .to_string(),
         )
     })?;
-    Answers::from_toml_str(&display, &text, RECIPES.len())
-        .map_err(|e| CliError::from(e.to_string()))
+    Answers::from_toml_str(&display, &text, RECIPES).map_err(|e| CliError::from(e.to_string()))
 }
 
 /// The pure phase: ask everything, write nothing.
@@ -220,13 +219,13 @@ struct Plan<'a> {
 }
 
 impl<'a> Plan<'a> {
-    fn new(cx: &Cx, answers: &'a Answers) -> Plan<'a> {
-        Plan {
+    fn new(cx: &Cx, answers: &'a Answers) -> Result<Plan<'a>, CliError> {
+        Ok(Plan {
             recipe: &RECIPES[answers.recipe],
             answers,
-            write_config: is_unconfigured(&cx.config_path),
+            write_config: is_unconfigured(&cx.config_path)?,
             config_path: cx.config_path.clone(),
-        }
+        })
     }
 
     fn render(&self) -> String {
@@ -266,12 +265,22 @@ impl<'a> Plan<'a> {
 /// "already configured" would make `setup` a no-op for everyone who ran `init`
 /// first — which the docs told them to do. Anything with real content is left
 /// alone.
-fn is_unconfigured(path: &Path) -> bool {
+///
+/// Only *absent* counts as unconfigured. Any other read failure — a permission
+/// error, a directory in the way — is reported rather than assumed empty: the
+/// answer decides whether `setup` overwrites the file, and the rename in
+/// [`write_atomically`] only needs the *directory* to be writable, so a config
+/// that cannot be read can still be clobbered.
+fn is_unconfigured(path: &Path) -> Result<bool, CliError> {
     match std::fs::read_to_string(path) {
-        Err(_) => true,
-        Ok(text) => text
+        Ok(text) => Ok(text
             .lines()
-            .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#')),
+            .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(e) => Err(CliError::from(format!(
+            "cannot read {} ({e}) → refusing to overwrite a config it cannot inspect",
+            path.display()
+        ))),
     }
 }
 
@@ -482,18 +491,26 @@ mod tests {
         let path = dir.join("config.toml");
 
         // Absent.
-        assert!(is_unconfigured(&path));
+        assert!(is_unconfigured(&path).unwrap());
 
         // What `init` writes: comments and blank lines only.
         std::fs::write(&path, "# totsuka configuration\n\n# max_concurrency = 4\n").unwrap();
         assert!(
-            is_unconfigured(&path),
+            is_unconfigured(&path).unwrap(),
             "an untouched skeleton must not block setup"
         );
 
         // One real key is enough to mean "hands off".
         std::fs::write(&path, "# comment\nmax_concurrency = 4\n").unwrap();
-        assert!(!is_unconfigured(&path));
+        assert!(!is_unconfigured(&path).unwrap());
+
+        // Unreadable is not the same as absent. Reporting it beats assuming
+        // "empty" and overwriting — the rename only needs a writable
+        // directory, so an unreadable config is still clobberable.
+        let blocked = dir.join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        let err = is_unconfigured(&blocked).unwrap_err().to_string();
+        assert!(err.contains("blocked"), "{err}");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

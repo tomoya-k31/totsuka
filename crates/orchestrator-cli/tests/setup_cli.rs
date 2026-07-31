@@ -249,6 +249,18 @@ fn a_bad_answers_file_is_rejected_with_the_reason() {
     assert_ne!(code, Some(0));
     assert!(err.contains("recipe"), "{err}");
 
+    // A recipe whose blanks are unfilled. Writing the config anyway would
+    // produce one that loads (so `setup` reports success) and then fails at run
+    // time — `verification = "llm"` with no `[llm]` block.
+    let answers = env.answers(&format!(
+        "version = 1\nrecipe = 2\nsecret_backend = \"keychain\"\n\n\
+         [[repositories]]\nname = \"totsuka\"\npath = \"{}\"\n",
+        env.repo().display()
+    ));
+    let (code, _, err) = env.run(&["setup", "--answers", answers.to_str().unwrap(), "--yes"]);
+    assert_ne!(code, Some(0));
+    assert!(err.contains("slack_user_id"), "{err}");
+
     // A missing file names the path.
     let (code, _, err) = env.run(&["setup", "--answers", "/nonexistent/answers.toml", "--yes"]);
     assert_ne!(code, Some(0));

@@ -52,6 +52,17 @@ pub enum Blank {
     Llm,
 }
 
+impl Blank {
+    /// The field an answers file fills this blank with. Used to name the
+    /// missing key when a hand-written file omits one.
+    pub fn field(self) -> &'static str {
+        match self {
+            Blank::SlackUserId => "slack_user_id",
+            Blank::Llm => "llm",
+        }
+    }
+}
+
 /// One selectable starting point.
 #[derive(Debug, Clone, Copy)]
 pub struct Recipe {

@@ -14,6 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::recipes::{Blank, Recipe};
+
 /// Where secret references point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -155,6 +157,16 @@ pub enum AnswersError {
         /// Path that was tried.
         path: String,
     },
+    /// The chosen recipe needs a field the file does not set.
+    #[error("{path} selects `{recipe}`, which needs `{field}` → add it to the answers file")]
+    MissingBlank {
+        /// Path that was tried.
+        path: String,
+        /// Label of the recipe that requires it.
+        recipe: &'static str,
+        /// Key that is missing.
+        field: &'static str,
+    },
 }
 
 impl Answers {
@@ -162,11 +174,14 @@ impl Answers {
     ///
     /// The checks here are the ones whose failure would otherwise surface much
     /// later as a confusing config error.
-    pub fn from_toml_str(
-        path: &str,
-        text: &str,
-        recipe_count: usize,
-    ) -> Result<Self, AnswersError> {
+    ///
+    /// The interview cannot leave a blank unfilled — it asks for exactly the
+    /// ones its recipe declares — but a hand-written file can, so the recipe's
+    /// blanks are checked here too. Skipping that check produces a config that
+    /// loads with, say, `verification = "llm"` and no `[llm]` block, or a Slack
+    /// setup with nobody to act for: a wizard that reported success and left
+    /// the failure for run time.
+    pub fn from_toml_str(path: &str, text: &str, recipes: &[Recipe]) -> Result<Self, AnswersError> {
         let answers: Answers = toml::from_str(text).map_err(|source| AnswersError::Parse {
             path: path.to_string(),
             source,
@@ -178,17 +193,30 @@ impl Answers {
                 expected: ANSWERS_VERSION,
             });
         }
-        if answers.recipe >= recipe_count {
+        let Some(recipe) = recipes.get(answers.recipe) else {
             return Err(AnswersError::UnknownRecipe {
                 path: path.to_string(),
                 found: answers.recipe,
-                count: recipe_count,
+                count: recipes.len(),
             });
-        }
+        };
         if answers.repositories.is_empty() {
             return Err(AnswersError::NoRepositories {
                 path: path.to_string(),
             });
+        }
+        for blank in recipe.blanks {
+            let filled = match blank {
+                Blank::Llm => answers.llm.is_some(),
+                Blank::SlackUserId => answers.slack_user_id.is_some(),
+            };
+            if !filled {
+                return Err(AnswersError::MissingBlank {
+                    path: path.to_string(),
+                    recipe: recipe.label,
+                    field: blank.field(),
+                });
+            }
         }
         Ok(answers)
     }
@@ -202,6 +230,7 @@ impl Answers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::setup::recipes::RECIPES;
 
     fn sample() -> Answers {
         Answers {
@@ -221,7 +250,7 @@ mod tests {
     #[test]
     fn round_trips_through_toml() {
         let original = sample();
-        let parsed = Answers::from_toml_str("x", &original.to_toml(), 4).unwrap();
+        let parsed = Answers::from_toml_str("x", &original.to_toml(), RECIPES).unwrap();
         assert_eq!(parsed, original);
     }
 
@@ -229,7 +258,7 @@ mod tests {
     fn a_typo_is_rejected_rather_than_ignored() {
         let text = "version = 1\nrecipe = 0\nsecret_backend = \"keychain\"\n\
                     repositorys = []\n";
-        let err = Answers::from_toml_str("x", text, 4).unwrap_err();
+        let err = Answers::from_toml_str("x", text, RECIPES).unwrap_err();
         assert!(matches!(err, AnswersError::Parse { .. }), "{err}");
     }
 
@@ -237,7 +266,7 @@ mod tests {
     fn a_future_version_is_refused_with_a_way_out() {
         let mut answers = sample();
         answers.version = 99;
-        let err = Answers::from_toml_str("x", &answers.to_toml(), 4).unwrap_err();
+        let err = Answers::from_toml_str("x", &answers.to_toml(), RECIPES).unwrap_err();
         assert!(
             matches!(err, AnswersError::Version { found: 99, .. }),
             "{err}"
@@ -249,7 +278,7 @@ mod tests {
     fn an_out_of_range_recipe_is_refused() {
         let mut answers = sample();
         answers.recipe = 42;
-        let err = Answers::from_toml_str("x", &answers.to_toml(), 4).unwrap_err();
+        let err = Answers::from_toml_str("x", &answers.to_toml(), RECIPES).unwrap_err();
         assert!(
             matches!(err, AnswersError::UnknownRecipe { found: 42, .. }),
             "{err}"
@@ -260,8 +289,39 @@ mod tests {
     fn no_repositories_is_refused() {
         let mut answers = sample();
         answers.repositories.clear();
-        let err = Answers::from_toml_str("x", &answers.to_toml(), 4).unwrap_err();
+        let err = Answers::from_toml_str("x", &answers.to_toml(), RECIPES).unwrap_err();
         assert!(matches!(err, AnswersError::NoRepositories { .. }), "{err}");
+    }
+
+    #[test]
+    fn a_recipe_whose_blanks_are_unfilled_is_refused() {
+        // Only a hand-written file can get here — the interview asks for
+        // exactly the blanks its recipe declares. Accepting it would write a
+        // config that loads and then fails at run time, which is the failure
+        // mode the wizard exists to prevent.
+        let slack = RECIPES
+            .iter()
+            .position(|r| r.blanks.contains(&Blank::SlackUserId))
+            .expect("a recipe with blanks");
+
+        let mut answers = sample();
+        answers.recipe = slack;
+        let err = Answers::from_toml_str("x", &answers.to_toml(), RECIPES).unwrap_err();
+        assert!(
+            matches!(err, AnswersError::MissingBlank { .. }),
+            "unfilled blanks were accepted: {err}"
+        );
+        // The message has to name the key so it can be fixed without reading
+        // the recipe table.
+        assert!(err.to_string().contains("slack_user_id"), "{err}");
+
+        // Filling every blank the recipe declares makes it acceptable.
+        answers.slack_user_id = Some("U123456".to_string());
+        answers.llm = Some(LlmAnswer {
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            model: "anthropic/claude-haiku-4-5".to_string(),
+        });
+        Answers::from_toml_str("x", &answers.to_toml(), RECIPES).unwrap();
     }
 
     #[test]
@@ -298,7 +358,7 @@ mod tests {
         let text = "version = 1\nrecipe = 0\nsecret_backend = \"keychain\"\n\
                     slack_token = \"xoxp-secret\"\n\
                     [[repositories]]\nname = \"r\"\npath = \"/r\"\n";
-        let err = Answers::from_toml_str("x", text, 4).unwrap_err();
+        let err = Answers::from_toml_str("x", text, RECIPES).unwrap_err();
         assert!(matches!(err, AnswersError::Parse { .. }), "{err}");
     }
 }
