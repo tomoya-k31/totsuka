@@ -225,7 +225,7 @@ log_prompts = true
 max_files = 7
 
 [worktree]
-location = "/from/file/{branch}"
+location = "/from/file/{worktree_name}"
 
 [hooks]
 auth_token_ref = "keychain:file"
@@ -238,7 +238,7 @@ block_retry_limit = 3
                 ("TOTSUKA_LOG_LEVEL", "debug"),
                 ("TOTSUKA_LOG_PROMPTS", "false"),
                 ("TOTSUKA_LOG_MAX_FILES", "14"),
-                ("TOTSUKA_WORKTREE_LOCATION", "/from/env/{branch}"),
+                ("TOTSUKA_WORKTREE_LOCATION", "/from/env/{worktree_name}"),
                 ("TOTSUKA_HOOKS_AUTH_TOKEN_REF", "keychain:env"),
                 ("TOTSUKA_HOOKS_SOCKET_PATH", "/from/env.sock"),
                 ("TOTSUKA_HOOKS_SPOOL_DIR", "/from/env/spool"),
@@ -251,7 +251,10 @@ block_retry_limit = 3
         assert_eq!(cfg.log.level.as_deref(), Some("debug"));
         assert!(!cfg.log.log_prompts);
         assert_eq!(cfg.log.max_files, Some(14));
-        assert_eq!(cfg.worktree.location.as_deref(), Some("/from/env/{branch}"));
+        assert_eq!(
+            cfg.worktree.location.as_deref(),
+            Some("/from/env/{worktree_name}")
+        );
         assert_eq!(cfg.hooks.auth_token_ref.as_deref(), Some("keychain:env"));
         assert_eq!(cfg.hooks.socket_path.as_deref(), Some("/from/env.sock"));
         assert_eq!(cfg.hooks.spool_dir.as_deref(), Some("/from/env/spool"));

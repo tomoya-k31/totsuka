@@ -244,6 +244,26 @@ const MIGRATIONS: &[&str] = &[
     DROP INDEX idx_tasks_thread_key;
     ALTER TABLE tasks DROP COLUMN thread_key;
     "#,
+    // v8 — record the commit a task's worktree was branched from.
+    //
+    // Cleanup deletes a task's branch once every commit on it is also on
+    // `origin`. That test says nothing about *whose* branch it is, which was
+    // fine only because the name was orchestrator-generated and therefore
+    // could not collide with anything a human made. Once the agent picks the
+    // name from the repository's own convention, the name lands in the same
+    // namespace the operator uses, and "fully pushed" describes plenty of
+    // branches cleanup has no business deleting.
+    //
+    // The base commit is what distinguishes them: a branch cut from an older
+    // default branch does not contain this task's starting point. It is
+    // already computed during creation and was simply discarded.
+    //
+    // Nullable, and rows written before this version stay NULL — cleanup
+    // treats an absent base commit as "cannot prove ownership" and keeps the
+    // branch, matching how it already handles an uncountable commit count.
+    r#"
+    ALTER TABLE tasks ADD COLUMN base_commit TEXT;
+    "#,
 ];
 
 /// `events.detail` for the ingest event. Stored as JSON so consumers can
@@ -255,7 +275,7 @@ const SUBMIT_DETAIL: &str = r#"{"kind":"submitted"}"#;
 
 /// Columns of `tasks`, read by name in [`row_to_task`].
 const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
-     worktree_path, branch, state, priority, title, url, source_payload, \
+     worktree_path, branch, base_commit, state, priority, title, url, source_payload, \
      finished_at, created_at, updated_at, last_signal_at";
 
 /// Columns of `sessions`, read by name in [`row_to_session`].
@@ -360,6 +380,8 @@ pub struct TaskRecord {
     pub worktree_path: Option<String>,
     /// Branch name once created.
     pub branch: Option<String>,
+    /// The commit the worktree was branched from, once created (v8).
+    pub base_commit: Option<String>,
     /// Current state.
     pub state: TaskState,
     /// Priority.
@@ -918,11 +940,23 @@ impl StateDb {
         Ok(())
     }
 
-    /// Record the worktree path and branch for a task (#53).
-    pub fn set_worktree(&self, id: i64, path: &str, branch: &str) -> Result<(), StateError> {
+    /// Record the worktree path, branch and base commit for a task (#53, v8).
+    ///
+    /// `branch` is optional: a worktree can exist without one, and the caller
+    /// must be able to say so rather than inventing a name. `base_commit` is
+    /// not — creation always resolves one, and cleanup needs it to tell this
+    /// task's branch apart from the operator's.
+    pub fn set_worktree(
+        &self,
+        id: i64,
+        path: &str,
+        branch: Option<&str>,
+        base_commit: &str,
+    ) -> Result<(), StateError> {
         let n = self.conn.execute(
-            "UPDATE tasks SET worktree_path = ?1, branch = ?2, updated_at = ?3 WHERE id = ?4",
-            params![path, branch, self.clock.now_rfc3339(), id],
+            "UPDATE tasks SET worktree_path = ?1, branch = ?2, base_commit = ?3, \
+             updated_at = ?4 WHERE id = ?5",
+            params![path, branch, base_commit, self.clock.now_rfc3339(), id],
         )?;
         if n == 0 {
             return Err(StateError::NotFound(id));
@@ -1402,6 +1436,7 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         repo: row.get("repo")?,
         worktree_path: row.get("worktree_path")?,
         branch: row.get("branch")?,
+        base_commit: row.get("base_commit")?,
         state,
         priority: row.get("priority")?,
         title: row.get("title")?,
@@ -1797,13 +1832,30 @@ mod tests {
         let db = StateDb::open_in_memory().unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
         db.set_repo(id, "totsuka").unwrap();
-        db.set_worktree(id, "/tmp/wt", "agent/github-42").unwrap();
+        db.set_worktree(id, "/tmp/wt", Some("agent/github-42"), "c0ffee")
+            .unwrap();
 
         let queued = db.tasks_in_state(TaskState::Queued).unwrap();
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].repo.as_deref(), Some("totsuka"));
         assert_eq!(queued[0].branch.as_deref(), Some("agent/github-42"));
+        assert_eq!(queued[0].base_commit.as_deref(), Some("c0ffee"));
         assert!(db.tasks_in_state(TaskState::Running).unwrap().is_empty());
+    }
+
+    /// A worktree can exist without being on a branch, and the record has to
+    /// be able to say so — writing a placeholder name instead would hand
+    /// cleanup a branch to go looking for (and possibly delete).
+    #[test]
+    fn a_worktree_can_be_recorded_without_a_branch() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.set_worktree(id, "/tmp/wt", None, "c0ffee").unwrap();
+
+        let task = db.get_task(id).unwrap().unwrap();
+        assert_eq!(task.worktree_path.as_deref(), Some("/tmp/wt"));
+        assert_eq!(task.branch, None);
+        assert_eq!(task.base_commit.as_deref(), Some("c0ffee"));
     }
 
     #[test]
@@ -1814,7 +1866,8 @@ mod tests {
             StateError::NotFound(999)
         ));
         assert!(matches!(
-            db.set_worktree(999, "/tmp/wt", "b").unwrap_err(),
+            db.set_worktree(999, "/tmp/wt", Some("b"), "c0ffee")
+                .unwrap_err(),
             StateError::NotFound(999)
         ));
     }

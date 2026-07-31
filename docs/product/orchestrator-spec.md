@@ -105,7 +105,7 @@ Priorities use MoSCoW (M: Must / S: Should / C: Could / W: Won't in v1).
 |---|---|---|
 | F-20 | Create a worktree in the target repository when a task starts (1 task = 1 worktree = 1 branch) | M |
 | F-21 | Branch naming convention configurable (default: `agent/{source}-{task_id}`) | M |
-| F-22 | Worktree location configurable (default: `{repo}/../.worktrees/{branch}` or under XDG_STATE_HOME) | M |
+| F-22 | Worktree location configurable (default: `<state dir>/worktrees/{repo_name}/{worktree_name}`, where `{worktree_name}` renders `{source}-{task_id}`). The directory name is derived from the task, never from the branch — the branch does not exist yet when the worktree is created | M |
 | F-23 | Worktree cleanup on task completion/cancellation configurable as a policy (immediate / retention period / manual) | M |
 | F-24 | Detect orphan worktrees at startup (those with no corresponding task in the state DB) and offer cleanup via the `doctor` command | S |
 | F-25 | Run `git fetch` immediately before worktree creation and branch from `origin/{default_branch}` (prevents branching from stale local branches). Base branch overridable per repository | M |

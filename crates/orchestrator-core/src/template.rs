@@ -96,8 +96,8 @@ pub enum ScanMode {
     ///
     /// **Every** brace span counts, and `${ENV}` references are skipped (they
     /// are expanded at resolve time, not here). The identifier restriction
-    /// must NOT be applied: `.replace("{branch}", …)` substitutes a `{branch}`
-    /// occurring *inside* a larger span such as `{a{branch}`, so narrowing the
+    /// must NOT be applied: `.replace("{worktree_name}", …)` substitutes a `{worktree_name}`
+    /// occurring *inside* a larger span such as `{a{worktree_name}`, so narrowing the
     /// scan here would leave a live substitution unvalidated — and a
     /// `{repo-name}` typo would silently create a literally-named directory
     /// instead of erroring.

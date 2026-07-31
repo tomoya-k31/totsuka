@@ -47,12 +47,26 @@ pub enum ValidationError {
 
     /// A worktree location template uses an unknown `{placeholder}` (F-22).
     #[error(
-        "{referrer} uses unknown placeholder `{{{placeholder}}}` → allowed: {{repo}}, {{repo_name}}, {{branch}}, {{task_id}}, {{source}}"
+        "{referrer} uses unknown placeholder `{{{placeholder}}}` → allowed: {{repo}}, {{repo_name}}, {{worktree_name}}, {{task_id}}, {{source}}"
     )]
     UnknownWorktreePlaceholder {
         referrer: String,
         placeholder: String,
     },
+
+    /// A worktree location template still uses the retired `{branch}`
+    /// placeholder (F-22 addendum).
+    ///
+    /// Its own variant rather than an `UnknownWorktreePlaceholder`: the name
+    /// was valid until the branch stopped being something the orchestrator
+    /// knows at creation time, so "unknown placeholder" would read as a typo
+    /// and send the operator looking for one.
+    #[error(
+        "{referrer} uses `{{branch}}`, which is no longer available: the branch is chosen by the agent \
+         after the worktree exists, so it cannot name the directory the worktree is created at → \
+         use `{{worktree_name}}` (rendered as `{{source}}-{{task_id}}`) instead"
+    )]
+    RetiredWorktreeBranchPlaceholder { referrer: String },
 
     /// Two repositories share a name.
     #[error("duplicate repository name `{0}` → repository names must be unique")]
@@ -148,7 +162,7 @@ pub enum ValidationError {
 
 /// Placeholders permitted in worktree location templates (F-22 addendum).
 const ALLOWED_WORKTREE_PLACEHOLDERS: &[&str] =
-    &["repo", "repo_name", "branch", "task_id", "source"];
+    &["repo", "repo_name", "worktree_name", "task_id", "source"];
 
 /// Run all static checks, returning every problem found (empty = valid).
 pub fn validate_static<E>(cfg: &RootConfig, env: &E) -> Vec<ValidationError>
@@ -692,7 +706,11 @@ fn check_prompt_placeholders(
 /// placeholder.
 fn check_worktree_placeholders(referrer: &str, template: &str, errors: &mut Vec<ValidationError>) {
     for name in template::scan(template, template::ScanMode::Replaced) {
-        if !ALLOWED_WORKTREE_PLACEHOLDERS.contains(&name) {
+        if name == "branch" {
+            errors.push(ValidationError::RetiredWorktreeBranchPlaceholder {
+                referrer: referrer.to_string(),
+            });
+        } else if !ALLOWED_WORKTREE_PLACEHOLDERS.contains(&name) {
             errors.push(ValidationError::UnknownWorktreePlaceholder {
                 referrer: referrer.to_string(),
                 placeholder: name.to_string(),
@@ -807,13 +825,13 @@ output = "none"
 
     #[test]
     fn worktree_templates_reject_unknown_placeholders() {
-        // `${XDG_STATE_HOME}` env ref + valid `{repo_name}`/`{branch}` are OK;
-        // `{bogus}` in the per-repo override is rejected.
+        // `${XDG_STATE_HOME}` env ref + valid `{repo_name}`/`{worktree_name}`
+        // are OK; `{bogus}` in the per-repo override is rejected.
         let dir = env!("CARGO_MANIFEST_DIR");
         let toml = format!(
             r#"
 [worktree]
-location = "${{XDG_STATE_HOME}}/totsuka/worktrees/{{repo_name}}/{{branch}}"
+location = "${{XDG_STATE_HOME}}/totsuka/worktrees/{{repo_name}}/{{worktree_name}}"
 
 [[repositories]]
 name = "totsuka"
@@ -835,6 +853,42 @@ worktree_location = "{{repo}}/../.worktrees/{{bogus}}"
             e,
             ValidationError::UnknownWorktreePlaceholder { referrer, .. } if referrer == "[worktree].location"
         )));
+    }
+
+    /// `{branch}` was a valid placeholder until the branch stopped being known
+    /// at worktree-creation time. Silently rendering it empty would put every
+    /// worktree of a repository at the same path; reporting it as an unknown
+    /// placeholder would read as a typo. It gets its own message naming the
+    /// replacement.
+    #[test]
+    fn worktree_templates_reject_the_retired_branch_placeholder() {
+        let toml = r#"
+[worktree]
+location = "/state/worktrees/{repo_name}/{branch}"
+"#;
+        let cfg = RootConfig::from_toml_str(toml).unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::RetiredWorktreeBranchPlaceholder { referrer } if referrer == "[worktree].location"
+            )),
+            "expected the retired-placeholder error, got: {errors:?}"
+        );
+        // Not also reported as a typo — one finding, one remedy.
+        assert!(!errors.iter().any(|e| matches!(
+            e,
+            ValidationError::UnknownWorktreePlaceholder { placeholder, .. } if placeholder == "branch"
+        )));
+        let message = errors
+            .iter()
+            .find(|e| matches!(e, ValidationError::RetiredWorktreeBranchPlaceholder { .. }))
+            .map(|e| e.to_string())
+            .unwrap();
+        assert!(
+            message.contains("{worktree_name}"),
+            "the message must name the replacement: {message}"
+        );
     }
 
     /// A config from the future and a config from the past both stop the run,

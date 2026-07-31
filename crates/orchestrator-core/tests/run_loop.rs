@@ -30,7 +30,9 @@ use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::output::{PrCreator, PrError, PrRequest};
 use orchestrator_core::run::{Engine, EngineSettings, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_BRANCH_TEMPLATE};
+use orchestrator_core::worktree::{
+    CleanupPolicy, DEFAULT_BRANCH_TEMPLATE, DEFAULT_WORKTREE_NAME_TEMPLATE,
+};
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -119,7 +121,8 @@ fn engine_settings(repo_path: &Path) -> EngineSettings {
         }],
         limits: Limits::global(2),
         branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
-        location_template: "{repo}/../wt/{branch}".to_string(),
+        worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
+        location_template: "{repo}/../wt/{worktree_name}".to_string(),
         cleanup_implement: CleanupPolicy::Immediate,
         cleanup_plan: CleanupPolicy::Immediate,
         env: HashMap::new(),

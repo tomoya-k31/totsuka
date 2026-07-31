@@ -173,7 +173,7 @@ name = "clone"
 path = "{clone}"
 
 [worktree]
-location = "{state}/wt/{{repo_name}}/{{branch}}"
+location = "{state}/wt/{{repo_name}}/{{worktree_name}}"
 cleanup = "immediate"
 plan_cleanup = "immediate"
 

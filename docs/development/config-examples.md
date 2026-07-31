@@ -114,7 +114,7 @@ TOTSUKA_MAX_CONCURRENCY=1 TOTSUKA_LOG_LEVEL=debug totsuka run
 
 ```bash
 docker run \
-  -e TOTSUKA_WORKTREE_LOCATION=/work/worktrees/{repo_name}/{branch} \
+  -e TOTSUKA_WORKTREE_LOCATION=/work/worktrees/{repo_name}/{worktree_name} \
   -e TOTSUKA_HOOKS_SOCKET_PATH=/run/totsuka/agent-events.sock \
   -e TOTSUKA_HOOKS_SPOOL_DIR=/var/lib/totsuka/spool \
   totsuka run --watch
@@ -152,7 +152,7 @@ path = "~/Workspace/github/tomoya-k31/totsuka"  # 必須。`~` / `${ENV}` 展開
 summary = "AI 駆動の開発フロー自動化ツール。Rust ワークスペース。"  # LLM のリポジトリ選択材料
 tool = "claude"                        # このリポジトリの既定 AI ツール（#196。省略時 default_tool → 組み込み claude）
 max_concurrency = 2                    # このリポジトリの同時実行上限（省略時は無制限）
-worktree_location = "~/work/wt/{repo_name}/{branch}"  # [worktree].location をこのリポジトリだけ上書き
+worktree_location = "~/work/wt/{repo_name}/{worktree_name}"  # [worktree].location をこのリポジトリだけ上書き
 
 [[repositories]]
 name = "dotfiles"
@@ -197,11 +197,11 @@ api_key_ref = "op://Dev/Openrouter/api_key"    # シークレット参照（後�
 [worktree]
 # 既定でよければこのキーは書かないこと。既定値は `$XDG_STATE_HOME/totsuka`（未設定時は
 # `$HOME/.local/state/totsuka`）を解決済みのパスとして埋めた
-# `<state dir>/worktrees/{repo_name}/{branch}`。下は既定とは別の場所へ置く例。
+# `<state dir>/worktrees/{repo_name}/{worktree_name}`。下は既定とは別の場所へ置く例。
 # `${ENV}` は展開されるが未設定変数はエラーになる（`totsuka doctor` が検出する）ので、
 # `${XDG_STATE_HOME}` を明示的に書くのは避ける — 既定と同じ場所になるうえ、
 # `XDG_STATE_HOME` 未設定機（macOS の既定）では worktree 作成が失敗する。
-location = "~/.worktrees/{repo_name}/{branch}"
+location = "~/.worktrees/{repo_name}/{worktree_name}"
 cleanup = "manual"          # implement モードの掃除: "immediate" | "manual" | { retention_days = 5 }
 plan_cleanup = "immediate"  # plan モードの掃除（既定 immediate）
 
@@ -340,7 +340,7 @@ plan の結果を人に見せたいなら `output = "source"`（ソース側に�
 
 いずれの場合も**未コミット変更のある worktree は決して削除されない**ので、作業中のものを失う心配はない。
 
-`location` テンプレートで使えるプレースホルダは `{repo}` / `{repo_name}` / `{branch}` / `{task_id}` / `{source}` のみ。
+`location` テンプレートで使えるプレースホルダは `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` / `{source}` のみ。`{worktree_name}` は `{source}-{task_id}` を git ref 規則で正規化し `/` を潰したもの（Slack なら `slack-C0ABCDEF12-1720000000.123456`）。**`{branch}` は廃止された** — worktree を作る時点でブランチ名はまだ存在しない（エージェントがリポジトリの規約に従って後から決める）ため、ディレクトリ名には使えない。残っていると専用のエラーで起動を止める。
 それ以外を書くとバリデーションエラーになる（`${ENV}` と `~` はプレースホルダとは別枠で展開される）。
 ブランチ名テンプレートは設定不可で、`agent/{source}-{task_id}` 固定。
 
@@ -615,7 +615,7 @@ totsuka doctor                     # 依存コマンド・ソケット・シー�
 | プラグイン参照エラー | workflow の `source` / `agent` が未定義、`enabled = false`、または `kind` 違い |
 | `mode = plan` × `output = pull_request` | plan は push しないので PR を作れない |
 | リポジトリパス不在 | `path` の展開結果がディスク上に存在しない |
-| プレースホルダエラー | `worktree_location` に `{repo}` / `{repo_name}` / `{branch}` / `{task_id}` / `{source}` 以外を使った |
+| プレースホルダエラー | `worktree_location` に `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` / `{source}` 以外を使った（`{branch}` は廃止済みで専用のエラーになる） |
 | 環境変数未設定 | `${VAR}` 参照先が export されていない |
 
 **警告**（実行は止まらない）の代表例: トリガーの重複、`verification = "human"` なのに notifier が無い、
