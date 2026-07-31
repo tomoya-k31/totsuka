@@ -1,10 +1,10 @@
 ---
 type: Runbook
 title: リリース手順（release-please / ユニバーサルバイナリ / GitHub Releases）
-description: totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリの自動ビルドと GitHub Releases 配布、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。
+description: totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリと同梱プラグインの自動ビルド・署名・GitHub Releases 配布、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.github/workflows
 tags: [release, ci, distribution, gatekeeper, semver, github-app, pat, branch-protection]
-generated: { by: human:tomoya-k31, at: 2026-07-14T05:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-01T03:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -83,7 +83,11 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
 
 1. **Release PR**: `main` への push ごとに [release-please](https://github.com/googleapis/release-please)（`.github/workflows/release-please.yml`）が Conventional Commits を集計し、SemVer 版と CHANGELOG（Keep a Changelog 形式）を持つ Release PR を作成・更新する。設定は `release-please-config.json` / `.release-please-manifest.json`。
 2. **リリース確定**: Release PR をマージすると release-please が `vX.Y.Z` タグと GitHub Release を作成し、`Cargo.toml` の `[workspace.package] version`（`# x-release-please-version` 注釈行）と `CHANGELOG.md` を bump する。
-3. **バイナリ添付**: 同じ `release-please.yml` 実行内の `universal-binary` ジョブが（release-please の `release_created` 出力を条件に）起動し、macOS ランナーで `x86_64-apple-darwin` と `aarch64-apple-darwin` をビルド、`lipo` でユニバーサル化、ad-hoc 署名して `totsuka-vX.Y.Z-macos-universal.tar.gz`（+ `.sha256`）を Release に添付する。別ワークフローの `on: release` にしないのは、既定 GITHUB_TOKEN が発行した Release イベントは他ワークフローを起動しないため。ビルドは `--locked` を使わない（release-please は Cargo.toml の版だけ bump し Cargo.lock は更新しないため、初回ビルドでロックを再生成させる）。
+3. **バイナリ添付**: 同じ `release-please.yml` 実行内の `universal-binary` ジョブが（release-please の `release_created` 出力を条件に）起動し、macOS ランナーで `x86_64-apple-darwin` と `aarch64-apple-darwin` を **`--workspace --bins` で**ビルド、`lipo` でユニバーサル化、**本体と同梱プラグインの全バイナリに** ad-hoc 署名して `totsuka-vX.Y.Z-macos-universal.tar.gz`（+ `.sha256`）を Release に添付する。別ワークフローの `on: release` にしないのは、既定 GITHUB_TOKEN が発行した Release イベントは他ワークフローを起動しないため。ビルドは `--locked` を使わない（release-please は Cargo.toml の版だけ bump し Cargo.lock は更新しないため、初回ビルドでロックを再生成させる）。
+
+   同梱するプラグイン名は `plugins/*/plugin.toml` の `name` を舐めて決めるので、プラグインを追加してもワークフローの編集は要らない。ビルド成果物名がそのまま配布名になるのは [ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md) の不変条件（bin 名 = `plugin.toml` の `name`）が `scripts/arch-lint.sh` で担保されているため。
+
+   **プラグインにも署名すること。** 本体だけ署名すると、プラグインが Gatekeeper に殺されて `totsuka doctor` は「crashed or exited」としか言えない（原因が署名だと分からない）。
 
 > プラグインプロトコルの版はアプリ本体と独立（#50）。totsuka のリリースはプロトコル版の変更を意味しない。CHANGELOG に破壊的プロトコル変更を書く場合は明示する。
 
@@ -94,12 +98,27 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
 
 # 配布（GitHub Releases）
 
-- 配布経路は **GitHub Releases のユニバーサルバイナリ** と `cargo install --git ... orchestrator-cli`（README に併記）。パッケージマネージャ（Homebrew 等）は v1 では扱わない。
-- 各 Release には `totsuka-vX.Y.Z-macos-universal.tar.gz` と生の SHA-256（`.sha256`）が添付される。利用者は tarball を展開して `totsuka` を PATH に置く。
+- 配布経路は **GitHub Releases の tarball（ユニバーサルバイナリ + 同梱プラグイン）** と `cargo install --git ... orchestrator-cli`（README に併記）。後者は CLI のみでプラグインは付かない。パッケージマネージャ（Homebrew 等）は v1 では扱わない。
+- **「バイナリを配る」ではなく「ツリーを配る」。** 単一バイナリを置けばよいと読めると、利用者が `totsuka` だけを移して同梱プラグインを置き去りにする。本 runbook でも README でも配布物は tarball と呼ぶ。
+- 各 Release には `totsuka-vX.Y.Z-macos-universal.tar.gz` と生の SHA-256（`.sha256`）が添付される。**成果物のファイル名と `.sha256` サイドカーの形式は変えない**（ファイル名で取得している自動化を壊さないため）。
+- tarball はプレフィックス付きディレクトリ構成で、`totsuka` の隣に同梱プラグインが並ぶ:
+
+  ```text
+  totsuka-vX.Y.Z-macos-universal/
+  ├── totsuka
+  ├── plugins/<name>/{<name>, plugin.toml}
+  ├── README.md
+  └── LICENSE
+  ```
+
+  利用者はツリーごと `/usr/local/lib/totsuka` へ置き、`/usr/local/bin` から symlink する（README のインストール手順）。バイナリだけを移すと同梱プラグインが置き去りになる。プラグインはこのツリーから `totsuka plugin install /usr/local/lib/totsuka/plugins/<name>` で入れるので、ツリーを残しておけば後から追加・再インストールするときに再ダウンロードが要らない。
+
+  > **現時点ではパス指定が必要。** バイナリの隣を自動探索する `totsuka plugin install --bundled` は [#345](https://github.com/tomoya-k31/totsuka/issues/345) で入る。それまで README は明示パスを案内する。
+- **スモークテスト**: 添付の直前に、展開した tarball からスクラッチな XDG 環境へ全プラグインを `totsuka plugin install <dir> --yes` し、`plugin list --json` の件数が `plugins/*/plugin.toml` の数と一致することを検証する。**README の Quickstart が案内するのと同じコマンドを、利用者が実際にダウンロードする成果物に対して実行する**ので、ドキュメントの約束が嘘になっていないことをここで担保できる（かつては存在しないディレクトリを指していて必ず失敗する状態が放置されていた）。
 
 # Gatekeeper（macOS）
 
-- v1 は **ad-hoc 署名**（`codesign --sign -`）。初回起動で Gatekeeper に阻まれた場合、利用者は quarantine 属性を除去する: `xattr -d com.apple.quarantine /usr/local/bin/totsuka`。
+- v1 は **ad-hoc 署名**（`codesign --sign -`）。本体だけでなく**同梱プラグインの全バイナリ**に打つ。初回起動で Gatekeeper に阻まれた場合、利用者はツリー全体の quarantine 属性を除去する: `xattr -dr com.apple.quarantine /usr/local/lib/totsuka`。
 - Developer ID 署名 / notarization は Open Question #5（社外公開判断）の決定後に対応する。決定したら本 runbook と `release-please.yml` の `universal-binary` ジョブの署名ステップを更新する。
 
 # ロールバック

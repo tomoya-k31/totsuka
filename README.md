@@ -20,22 +20,30 @@ it back to the source.
 
 ## Install
 
-### Prebuilt binary (GitHub Releases)
+### Prebuilt tarball (GitHub Releases)
 
-Download the macOS universal binary from the
-[latest release](https://github.com/tomoya-k31/totsuka/releases/latest), then
-put `totsuka` on your `PATH`:
+Download the macOS universal tarball from the
+[latest release](https://github.com/tomoya-k31/totsuka/releases/latest). It
+contains `totsuka` **and the bundled plugins**, so keep the tree together and
+symlink the binary onto your `PATH`:
 
 ```sh
 tar -xzf totsuka-*-macos-universal.tar.gz
-install -m 0755 totsuka /usr/local/bin/totsuka
+sudo rm -rf /usr/local/lib/totsuka
+sudo mv totsuka-*-macos-universal /usr/local/lib/totsuka
+sudo ln -sf /usr/local/lib/totsuka/totsuka /usr/local/bin/totsuka
 ```
 
-The binary is ad-hoc–signed. If Gatekeeper blocks it, clear the quarantine
-attribute once:
+The whole directory moves, not just the binary: the plugins live in
+`/usr/local/lib/totsuka/plugins/` and you install the ones you want from there
+(Quickstart step 2). Keeping the tree in place means adding or reinstalling a
+plugin later needs no second download.
+
+Everything is ad-hoc–signed. If Gatekeeper blocks it, clear the quarantine
+attribute on the whole tree once:
 
 ```sh
-xattr -d com.apple.quarantine /usr/local/bin/totsuka
+sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 ```
 
 ### From source
@@ -44,14 +52,18 @@ xattr -d com.apple.quarantine /usr/local/bin/totsuka
 cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
 ```
 
+This installs the CLI only. Plugins are built from a checkout — see
+[the plugin development guide](docs/development/plugin-dev-guide.md).
+
 ## Quickstart (5 minutes, 1 task)
 
 ```sh
 # 1. Scaffold the config and check the environment.
 totsuka init
 
-# 2. Install the plugins you need (task source, agent, notifier), then enable them.
-totsuka plugin install ./path/to/task-source-github
+# 2. Install the plugins you need (task source, agent, notifier), then enable
+#    them. They ship in the tarball, under /usr/local/lib/totsuka/plugins/.
+totsuka plugin install /usr/local/lib/totsuka/plugins/github
 totsuka plugin enable github
 
 # 3. Store your secrets in the Keychain and reference them from config

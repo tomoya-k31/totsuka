@@ -21,21 +21,29 @@ AI コーディングエージェント（herdr、orca）へ — それぞれ専
 
 ## インストール
 
-### ビルド済みバイナリ（GitHub Releases）
+### ビルド済み tarball（GitHub Releases）
 
 [最新リリース](https://github.com/tomoya-k31/totsuka/releases/latest) から macOS
-ユニバーサルバイナリをダウンロードし、`totsuka` を `PATH` に置きます:
+ユニバーサル tarball をダウンロードします。`totsuka` **と同梱プラグイン**が入って
+いるので、ツリーごと配置してバイナリを `PATH` に symlink します:
 
 ```sh
 tar -xzf totsuka-*-macos-universal.tar.gz
-install -m 0755 totsuka /usr/local/bin/totsuka
+sudo rm -rf /usr/local/lib/totsuka
+sudo mv totsuka-*-macos-universal /usr/local/lib/totsuka
+sudo ln -sf /usr/local/lib/totsuka/totsuka /usr/local/bin/totsuka
 ```
 
-バイナリは ad-hoc 署名です。Gatekeeper にブロックされた場合、一度だけ quarantine
-属性を除去してください:
+バイナリだけでなくディレクトリごと移動します。プラグインは
+`/usr/local/lib/totsuka/plugins/` に入っており、必要なものをそこから
+インストールします（クイックスタートの手順 2）。ツリーを残しておけば、後から
+プラグインを追加・再インストールするときに再ダウンロードが要りません。
+
+すべて ad-hoc 署名です。Gatekeeper にブロックされた場合、ツリー全体に対して一度
+だけ quarantine 属性を除去してください:
 
 ```sh
-xattr -d com.apple.quarantine /usr/local/bin/totsuka
+sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 ```
 
 ### ソースから
@@ -44,6 +52,9 @@ xattr -d com.apple.quarantine /usr/local/bin/totsuka
 cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
 ```
 
+こちらは CLI のみです。プラグインはチェックアウトからビルドします —
+[プラグイン開発ガイド](docs/development/plugin-dev-guide.md) を参照してください。
+
 ## クイックスタート（5 分・1 タスク）
 
 ```sh
@@ -51,7 +62,8 @@ cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
 totsuka init
 
 # 2. 必要なプラグイン（task source / agent / notifier）を install して enable。
-totsuka plugin install ./path/to/task-source-github
+#    プラグインは tarball 同梱で /usr/local/lib/totsuka/plugins/ 配下にある。
+totsuka plugin install /usr/local/lib/totsuka/plugins/github
 totsuka plugin enable github
 
 # 3. シークレットを Keychain に保存し、設定から参照
