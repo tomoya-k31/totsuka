@@ -35,6 +35,18 @@ pub enum SocketEvent {
     /// A Block Kit interaction — the full `block_actions` payload (actions /
     /// user / container / response_url …).
     BlockActions(Value),
+    /// An Events API `reaction_added` event (#319) — the payload's `event`
+    /// object (`user` / `reaction` / `item: {type, channel, ts}` /
+    /// `item_user` / `event_ts`).
+    ///
+    /// **The message body is not in here.** `item.channel` + `item.ts` have to
+    /// be re-fetched before the event can be assessed, which is why this stays
+    /// a raw payload rather than a parsed struct.
+    ///
+    /// `reaction_removed` is deliberately not subscribed to: removing a
+    /// reaction is not a cancel signal (that would add a second way to stop a
+    /// running agent, competing with the approval flow).
+    Reaction(Value),
 }
 
 /// Tuning knobs for the connection loop. [`Default`] is production; tests
@@ -259,10 +271,10 @@ fn normalize(mut envelope: Value) -> Option<SocketEvent> {
     match envelope_type {
         "events_api" => {
             let event = envelope.get_mut("payload")?.get_mut("event")?.take();
-            if event.get("type").and_then(Value::as_str) == Some("message") {
-                Some(SocketEvent::Message(event))
-            } else {
-                None
+            match event.get("type").and_then(Value::as_str) {
+                Some("message") => Some(SocketEvent::Message(event)),
+                Some("reaction_added") => Some(SocketEvent::Reaction(event)),
+                _ => None,
             }
         }
         "interactive" => {
@@ -298,12 +310,41 @@ mod tests {
     }
 
     #[test]
-    fn non_message_events_are_dropped() {
+    fn events_api_reaction_added_normalizes_to_reaction() {
+        // #319: this envelope used to be the example of a *dropped* event.
         let envelope = json!({
             "type": "events_api",
-            "payload": { "event": { "type": "reaction_added" } }
+            "envelope_id": "e2",
+            "payload": { "event": {
+                "type": "reaction_added",
+                "user": "U_ME",
+                "reaction": "eyes",
+                "item": { "type": "message", "channel": "C1", "ts": "1.1" },
+                "item_user": "U_OTHER",
+                "event_ts": "2.2"
+            }}
         });
-        assert!(normalize(envelope).is_none());
+        let Some(SocketEvent::Reaction(event)) = normalize(envelope) else {
+            panic!("expected Reaction");
+        };
+        assert_eq!(event["reaction"], "eyes");
+        assert_eq!(event["item"]["ts"], "1.1");
+    }
+
+    #[test]
+    fn unconsumed_events_api_types_are_dropped() {
+        // `reaction_removed` is deliberately not subscribed to, and events
+        // like `team_join` are simply not ours. Both must stay dropped.
+        for event_type in ["reaction_removed", "team_join"] {
+            let envelope = json!({
+                "type": "events_api",
+                "payload": { "event": { "type": event_type } }
+            });
+            assert!(
+                normalize(envelope).is_none(),
+                "{event_type} should be dropped"
+            );
+        }
     }
 
     #[test]

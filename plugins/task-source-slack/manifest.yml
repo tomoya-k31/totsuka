@@ -44,6 +44,7 @@ oauth_config:
       - users:read # resolve display names for task context
       - chat:write # post the approved reply / draft records as you
       - im:write # open your self-DM to record drafts
+      - reactions:read # receive reaction_added for the :eyes: task trigger (#319)
 settings:
   event_subscriptions:
     # user_events (not bot_events): delivered over Socket Mode for the
@@ -52,6 +53,11 @@ settings:
     user_events:
       - message.channels
       - message.groups
+      # #319: reactions the *operator* adds start a task like a mention does.
+      # `reaction_removed` is deliberately NOT subscribed to — removing a
+      # reaction is not a cancel signal, and not subscribing is clearer than
+      # receiving the event and dropping it.
+      - reaction_added
   interactivity:
     # Approve/reject buttons (block_actions) arrive over Socket Mode.
     is_enabled: true

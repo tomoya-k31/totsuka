@@ -411,6 +411,26 @@ where
                         orchestrator.clone(),
                     ));
                 }
+                // #319 lands the trigger in stages: the event is normalized and
+                // observable here, but nothing consumes it until the message
+                // re-fetch and the operator-only filter exist. Logging the
+                // emoji makes "did my reaction even arrive?" answerable with
+                // `--debug` while the rest is still landing.
+                SocketEvent::Reaction(event) => {
+                    // Bound outside the macro: `tracing`'s field syntax brings
+                    // its own `Value` trait into scope, which shadows
+                    // `serde_json::Value` inside the expansion.
+                    let reaction = event.get("reaction").and_then(Value::as_str).unwrap_or("");
+                    let channel = event
+                        .pointer("/item/channel")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    tracing::debug!(
+                        reaction,
+                        channel,
+                        "reaction event received; the trigger is not wired up yet"
+                    );
+                }
                 SocketEvent::BlockActions(payload) => {
                     handle_block_actions(
                         api.as_ref(),
