@@ -954,6 +954,8 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "task-source-github",
+ "task-source-slack",
  "test-support",
  "thiserror",
  "tokio",

@@ -58,6 +58,11 @@ enum Command {
         /// Skip the confirmation prompt.
         #[arg(long)]
         yes: bool,
+        /// Override where bundled plugins are looked up, and never fall back
+        /// to building from a checkout. Testing affordance, mirroring
+        /// `plugin install --bundled-dir`.
+        #[arg(long, hide = true)]
+        bundled_dir: Option<PathBuf>,
     },
     /// Run the main loop: fetch → dispatch → monitor (§5.1).
     Run {
@@ -225,6 +230,7 @@ fn execute(
             save_answers,
             dry_run,
             yes,
+            bundled_dir,
         } => setup::run(
             &cx,
             &setup::SetupArgs {
@@ -232,6 +238,7 @@ fn execute(
                 save_answers,
                 dry_run,
                 yes,
+                bundled_dir,
             },
         ),
         Command::Run {

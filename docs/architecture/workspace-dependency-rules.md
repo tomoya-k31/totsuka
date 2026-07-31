@@ -31,7 +31,12 @@ graph BT
     plugins -. "現状の利用は task-source-* のみ（許可は全 plugins/*）" .-> sdk
     core -. dev .-> ts
     cli -. dev .-> ts
+    cli -. "dev（#349・生成した plugins/*.toml の検証用）" .-> plugins
 ```
+
+`cli -. dev .-> plugins` は**このグラフで唯一「上位が下位ではなく横を向く」エッジ**なので、意図を書き残しておく。`totsuka setup` が生成する `plugins/<name>.toml` を、プラグイン自身のデシリアライザ（`GithubConfig` / `SlackConfig`）が受理することをテストで固定するためだけに存在する（[#349](https://github.com/tomoya-k31/totsuka/issues/349)）。「TOML としてパースできる」までしか見ないと、キー名を 1 つ間違えても実行時まで露見しない。
+
+**実行時のリンクは無い**（`[dev-dependencies]` なので `totsuka` バイナリには入らない）。プラグインはプロセス境界の向こうで動く（[ADR-0011](/decisions/adr-0011-arch-fitness-function.md) が守っている前提）という点は変わらず、`plugins/*` 側の許可リストにも影響しない — 向きが逆なので `plugin-deps` / `plugin-dev` の検査対象外である。
 
 ## 不変条件（検証ルール）
 
@@ -44,7 +49,7 @@ graph BT
 | `plugin-protocol` | なし（leaf） | なし | なし |
 | 全クレート | 依存循環なし（normal + build + dev の全エッジで検査） | | |
 
-- `orchestrator-core` / `orchestrator-cli` / `test-support` に個別の許可リストはない（循環検査のみ対象）。
+- `orchestrator-core` / `orchestrator-cli` / `test-support` に個別の許可リストはない（循環検査のみ対象）。**したがって `cli → plugins`（dev）のようなエッジは arch-lint では検出できず、本ドキュメントのグラフが唯一の記録になる** — 追加したら必ずここに書く。
 - `plugins/*` の判定はクレート名の列挙ではなく **manifest パス（`plugins/` 配下）** で行うため、新プラグインを追加してもスクリプトの更新は不要。
 - dev-dependencies だけの循環は cargo 的には合法だが、本ワークスペースでは意図しない結合とみなしエラーにする。
 

@@ -44,10 +44,17 @@ pub struct RecipeWorkflow {
 }
 
 /// A blank the interview has to fill for a recipe.
+///
+/// A blank exists when a plugin's own config has a **required** field that
+/// nothing else can supply — not for every knob it exposes. `herdr` and `macos`
+/// default every field, so they need no file and no questions; `github` and
+/// `slack` do not, and a missing one is a plugin that refuses to initialise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Blank {
     /// The Slack member ID to act for (`plugins/slack.toml`).
     SlackUserId,
+    /// Which GitHub Project to poll, and as whom (`plugins/github.toml`).
+    GitHub,
     /// `[llm]` base URL + model + key reference.
     Llm,
 }
@@ -58,6 +65,7 @@ impl Blank {
     pub fn field(self) -> &'static str {
         match self {
             Blank::SlackUserId => "slack_user_id",
+            Blank::GitHub => "github",
             Blank::Llm => "llm",
         }
     }
@@ -111,7 +119,7 @@ pub const RECIPES: &[Recipe] = &[
             verification: None,
             on_success: Some(r#"{ set_status = "レビュー待ち" }"#),
         }],
-        blanks: &[],
+        blanks: &[Blank::GitHub],
     },
     Recipe {
         label: "Design → implement handoff",
@@ -139,7 +147,7 @@ pub const RECIPES: &[Recipe] = &[
                 on_success: Some(r#"{ set_status = "レビュー待ち" }"#),
             },
         ],
-        blanks: &[],
+        blanks: &[Blank::GitHub],
     },
     Recipe {
         label: "Slack — reply as yourself",
@@ -171,7 +179,7 @@ pub const RECIPES: &[Recipe] = &[
             verification: Some(VerificationMode::Human),
             on_success: None,
         }],
-        blanks: &[],
+        blanks: &[Blank::GitHub],
     },
 ];
 

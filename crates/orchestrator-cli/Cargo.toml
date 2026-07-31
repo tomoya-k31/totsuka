@@ -30,6 +30,11 @@ tracing.workspace = true
 
 [dev-dependencies]
 test-support = { workspace = true }
+# `setup::plugin_config` writes each plugin's own config file; the test that
+# matters asserts the plugin's real deserializer accepts what it wrote, not
+# merely that it is TOML. Dev-only — the CLI never links a plugin at run time.
+task-source-github.workspace = true
+task-source-slack.workspace = true
 # The state.db downgrade guard test (#275) forges a schema version no binary
 # can know; there is deliberately no public API for writing the ledger.
 rusqlite.workspace = true
