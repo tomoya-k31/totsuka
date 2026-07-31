@@ -576,50 +576,6 @@ impl<G: GitRunner> WorktreeManager<G> {
         Ok(out.success())
     }
 
-    /// Whether the worktree's `HEAD` has commits beyond `origin`'s **default
-    /// branch** — i.e. the agent actually committed work to publish (F-86).
-    ///
-    /// The comparison is against `origin/{default}`, deliberately **not**
-    /// against all origin remote branches: after a `pull_request` retry the
-    /// task's own branch is already on `origin`, so `--remotes=origin` would
-    /// count zero and wrongly report "nothing to publish". Comparing to the
-    /// default branch stays truthful across a push (the agent's commits are
-    /// still not on `main`).
-    pub fn has_commits_to_publish(&self, worktree_path: &Path) -> Result<bool, WorktreeError> {
-        let default = self.detect_default_branch(worktree_path)?;
-        let range = format!("origin/{default}..HEAD");
-        let out = self
-            .git
-            .run(worktree_path, &["rev-list", "--count", &range])?;
-        if !out.success() {
-            return Err(WorktreeError::Git {
-                command: "rev-list".to_string(),
-                stderr: out.stderr,
-            });
-        }
-        // Surface an unparseable count as an error rather than silently reading
-        // it as "0 commits" (which would wrongly fail publishing).
-        let count: u64 = out.stdout.trim().parse().map_err(|_| WorktreeError::Git {
-            command: "rev-list".to_string(),
-            stderr: format!("unexpected `rev-list --count` output: {:?}", out.stdout),
-        })?;
-        Ok(count > 0)
-    }
-
-    /// Push the worktree's branch to `origin`, setting upstream (F-86). The
-    /// Orchestrator — never the agent — performs the push.
-    pub fn push_branch(&self, worktree_path: &Path, branch: &str) -> Result<(), WorktreeError> {
-        let out =
-            self.run_with_transient_retry(worktree_path, &["push", "-u", "origin", branch])?;
-        if !out.success() {
-            return Err(WorktreeError::Git {
-                command: "push".to_string(),
-                stderr: out.stderr,
-            });
-        }
-        Ok(())
-    }
-
     /// The branch a worktree currently has checked out, or `None` when it is
     /// detached (or the question could not be answered).
     ///

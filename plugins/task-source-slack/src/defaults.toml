@@ -27,6 +27,7 @@
 # Placeholders: none.
 reply_instructions = """
 以下の Slack メンションへの返信案を日本語で作成してください。対象リポジトリを調査し、根拠を持って回答してください。出力は返信文のみとし、前置き・後書き・説明を含めないでください。\
+Pull Request を作成した場合は、その URL を返信文に必ず含めてください（Orchestrator は PR を作らないため、URL を知る手段がこの返信文以外にありません）。\
 """
 
 # Appended to `reply_instructions` only when `reply_style` is set in

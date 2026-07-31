@@ -245,12 +245,11 @@ fn recreates_over_a_surviving_branch_without_losing_its_commits() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// The nastiest re-creation case, and the one a `pull_request` workflow hits
-/// every time: once `push_branch` has set an upstream, `git branch -d` *does*
-/// delete the branch (it is merged into its upstream), so cleanup succeeds on
-/// exactly the branches whose commits matter. Re-creating from
-/// `origin/{default}` there would strand the published work and make the next
-/// `push -u` a non-fast-forward rejection (#254).
+/// The nastiest re-creation case: cleanup deletes a branch once every commit on
+/// it is also on `origin`, so it succeeds on exactly the branches whose commits
+/// have been published — leaving those commits on the remote only. Re-creating
+/// from `origin/{default}` there would strand the published work and make the
+/// next push a non-fast-forward rejection (#254).
 #[test]
 fn recreates_from_the_remote_branch_after_a_published_branch_was_cleaned_up() {
     let base = scratch("recreate-published");
@@ -266,7 +265,7 @@ fn recreates_from_the_remote_branch_after_a_published_branch_was_cleaned_up() {
         &["commit", "--allow-empty", "-m", "published work"],
     );
     let published = git(&first.path, &["rev-parse", "HEAD"]);
-    mgr.push_branch(&first.path, &branch).unwrap();
+    git(&first.path, &["push", "-u", "origin", &branch]);
 
     mgr.remove(&clone, &first.path, Some(&branch), Some(&first.base_commit))
         .unwrap();
@@ -286,7 +285,7 @@ fn recreates_from_the_remote_branch_after_a_published_branch_was_cleaned_up() {
         &second.path,
         &["commit", "--allow-empty", "-m", "more work"],
     );
-    mgr.push_branch(&second.path, &branch).unwrap();
+    git(&second.path, &["push", "-u", "origin", &branch]);
 
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -564,7 +563,7 @@ fn cleanup_deletes_a_pushed_branch_that_is_not_merged_into_the_default() {
     std::fs::write(wt.path.join("work.txt"), b"the agent's output").unwrap();
     git(&wt.path, &["add", "work.txt"]);
     git(&wt.path, &["commit", "-m", "agent work"]);
-    mgr.push_branch(&wt.path, &branch).unwrap();
+    git(&wt.path, &["push", "-u", "origin", &branch]);
 
     assert_eq!(
         mgr.cleanup(&CleanupRequest {

@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、ビルド手順（Cargo バイナリ名と plugin.toml の name 不一致時の対処）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: human:tomoya-k31, at: 2026-07-26T09:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -68,7 +68,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 
 | メソッド | 方向 | 内容 |
 |---|---|---|
-| `task/dispatch` | O→P | worktree 上で作業開始 → セッション ID を返す（F-31）。**責務はコミットまで。push/PR は行わない（F-86）** |
+| `task/dispatch` | O→P | worktree 上で作業開始 → セッション ID を返す（F-31）。worktree は **detached HEAD** で渡る — ブランチ作成・コミット・push・PR 作成はすべてエージェント側の責務（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)） |
 | `task/cancel` | O→P | 実行中タスクのキャンセル |
 | `session/attach` | O→P | 既存セッションへ再接続（F-37）。attached + 現在状態を返す |
 | `state/subscribe` | O→P | 状態/ログのストリーム購読（応答後に通知を流す） |

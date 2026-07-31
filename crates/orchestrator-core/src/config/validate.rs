@@ -764,7 +764,7 @@ source = "github"
 trigger = {{ project_status = "todo" }}
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 "#
         );
         let cfg = RootConfig::from_toml_str(&toml).unwrap();
@@ -958,8 +958,10 @@ location = "/state/{branch}/{branch}/{bogus}/{bogus}"
 
     #[test]
     fn unified_validate_surfaces_workflow_errors_and_warnings() {
-        // Two enabled plugins so plugin-ref checks pass; a plan×pull_request
-        // workflow (error) and an overlapping pair (warning).
+        // Two enabled plugins so plugin-ref checks pass; an `output = source`
+        // workflow whose source declares no `source` output (error, F-83) and
+        // an overlapping pair (warning, F-81). Both must appear in one pass —
+        // an error must not stop the warnings from being reported.
         let toml = r#"
 [plugins.github]
 enabled = true
@@ -970,12 +972,12 @@ enabled = true
 kind = "agent_ide"
 
 [[workflows]]
-name = "bad_plan"
+name = "cannot_publish"
 source = "github"
 trigger = { label = "x" }
-mode = "plan"
+mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 
 [[workflows]]
 name = "overlap_a"
@@ -994,11 +996,15 @@ agent = "herdr"
 output = "none"
 "#;
         let cfg = RootConfig::from_toml_str(toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| Some(vec![]), |_| None);
 
-        assert!(has_errors(&findings), "plan×pull_request must be an error");
-        assert!(findings.iter().any(|f| f.severity == FindingSeverity::Error
-            && f.message.contains("plan with output = pull_request")));
+        assert!(has_errors(&findings), "{findings:?}");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.severity == FindingSeverity::Error
+                    && f.message.contains("output = source"))
+        );
         assert!(
             findings.iter().any(
                 |f| f.severity == FindingSeverity::Warning && f.message.contains("overlapping")

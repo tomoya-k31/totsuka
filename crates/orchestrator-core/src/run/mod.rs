@@ -27,7 +27,6 @@
 //! sources have nothing to preview ahead of time.
 
 pub mod hooks;
-pub mod output;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -67,10 +66,6 @@ use crate::ports::secret::SecretString;
 use crate::ports::signal_ingress::FocusOutcome;
 use crate::recovery::{self, RecoveryReport, RetryPlan};
 use crate::repo_select::{ReadmeCache, RepoCandidate, RepoDecision, SelectConfig, select_repo};
-use crate::run::output::{
-    DEFAULT_PR_BODY_TEMPLATE, DEFAULT_PR_TITLE_TEMPLATE, GhPrCreator, PrContext, PrCreator,
-    PrRequest, render_template,
-};
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
 use crate::tool::{LaunchInputs, ToolProfile};
 use crate::worktree::{
@@ -152,10 +147,6 @@ pub struct EngineSettings {
     pub select: SelectConfig,
     /// README head cache directory (`$XDG_CACHE_HOME/totsuka`), if any.
     pub readme_cache_dir: Option<PathBuf>,
-    /// Pull-request title template (F-86).
-    pub pr_title_template: String,
-    /// Pull-request body template (F-86).
-    pub pr_body_template: String,
     /// Minimum interval between worktree-retention sweeps (#210). Not exposed
     /// in config (no user knob); tests set [`Duration::ZERO`] to sweep every
     /// cycle.
@@ -277,16 +268,6 @@ pub fn settings_from_config(
             ..SelectConfig::default()
         },
         readme_cache_dir: None,
-        pr_title_template: cfg
-            .output
-            .pr_title_template
-            .clone()
-            .unwrap_or_else(|| DEFAULT_PR_TITLE_TEMPLATE.to_string()),
-        pr_body_template: cfg
-            .output
-            .pr_body_template
-            .clone()
-            .unwrap_or_else(|| DEFAULT_PR_BODY_TEMPLATE.to_string()),
         worktree_sweep_interval: WORKTREE_SWEEP_INTERVAL,
         one_shot_grace: ONE_SHOT_GRACE,
         tools: crate::tool::registry_from_config(&cfg.tools),
@@ -520,9 +501,6 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     /// Accumulated agent output (streamed `log_chunk`s) per task, used as the
     /// `output = source` publish artifact (F-07).
     agent_output: HashMap<i64, String>,
-    /// Opens pull requests for `output = pull_request` (F-86); a seam so the
-    /// push flow is testable without hitting GitHub.
-    pr_creator: Box<dyn PrCreator>,
     /// Tasks whose pane release has already been settled this run (#210):
     /// the `session/release` RPC answered, or release is impossible (no
     /// pane-controlling plugin). Without it, a worktree whose removal keeps
@@ -542,8 +520,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// plugin so `state/notification` streams (F-38) are consumed from the
     /// moment of construction — dispatch must happen after this, never before,
     /// or early notifications would be dropped.
-    /// Build an engine with the production [`GhPrCreator`] (opens PRs via
-    /// `gh`). Tests use [`Engine::with_pr_creator`] to inject a fake.
     pub async fn new(
         db: StateDb,
         settings: EngineSettings,
@@ -551,38 +527,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         git: G,
         llm: Option<L>,
     ) -> Self {
-        Self::build(
-            db,
-            settings,
-            plugins,
-            git,
-            llm,
-            Box::new(GhPrCreator),
-            Arc::new(SystemClock),
-        )
-        .await
-    }
-
-    /// Build an engine with an explicit pull-request creator (the seam tests
-    /// use to exercise the push/PR flow without hitting GitHub).
-    pub async fn with_pr_creator(
-        db: StateDb,
-        settings: EngineSettings,
-        plugins: PluginSet,
-        git: G,
-        llm: Option<L>,
-        pr_creator: Box<dyn PrCreator>,
-    ) -> Self {
-        Self::build(
-            db,
-            settings,
-            plugins,
-            git,
-            llm,
-            pr_creator,
-            Arc::new(SystemClock),
-        )
-        .await
+        Self::build(db, settings, plugins, git, llm, Arc::new(SystemClock)).await
     }
 
     /// Build an engine with an explicit [`Clock`] (#174) — the seam
@@ -599,16 +544,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         llm: Option<L>,
         clock: Arc<dyn Clock>,
     ) -> Self {
-        Self::build(
-            db,
-            settings,
-            plugins,
-            git,
-            llm,
-            Box::new(GhPrCreator),
-            clock,
-        )
-        .await
+        Self::build(db, settings, plugins, git, llm, clock).await
     }
 
     /// Shared constructor body behind [`new`](Self::new) and the seam
@@ -619,7 +555,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         plugins: PluginSet,
         git: G,
         llm: Option<L>,
-        pr_creator: Box<dyn PrCreator>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -674,7 +609,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             _events_tx: tx,
             readme_cache,
             agent_output: HashMap::new(),
-            pr_creator,
             released_panes: HashSet::new(),
             last_worktree_sweep: None,
             clock,
@@ -1822,7 +1756,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 if let Some(chunk) = &note.log_chunk {
                     tracing::debug!(task_id, "agent log: {chunk}");
                     // Accumulate the streamed output; it is the `output = source`
-                    // publish artifact (F-07) and the PR body `{summary}`.
+                    // publish artifact (F-07).
                     let buf = self.agent_output.entry(task_id).or_default();
                     buf.push_str(chunk);
                     if !chunk.ends_with('\n') {
@@ -2137,7 +2071,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Fail a task at the publishing stage, KEEPING its worktree, commits and
     /// session so `task retry` can resume (issue #65). The accumulated agent
     /// output is dropped so a retry re-captures fresh output (no duplication in
-    /// the PR body). The source status is intentionally left unchanged: a
+    /// the publish artifact). The source status is intentionally left unchanged: a
     /// recoverable publish failure must not flap the source task to
     /// `on_failure` and back on the next successful retry.
     async fn fail_publish(
@@ -2163,8 +2097,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 
-    /// Execute the output policy for a finished task. Returns the PR URL (for
-    /// `pull_request`) or `None`, or an error reason on failure.
+    /// Execute the output policy for a finished task, or an error reason on
+    /// failure.
     async fn execute_output_policy(
         &self,
         record: &TaskRecord,
@@ -2173,17 +2107,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         match policy {
             OutputPolicy::None => Ok(None),
             OutputPolicy::Source => self.publish_to_source(record).await.map(|()| None),
-            OutputPolicy::PullRequest => {
-                // F-82: plan mode must never push (config validation blocks
-                // this, but never trust it at the publish point).
-                if record.mode == "plan" {
-                    return Err(
-                        "plan mode must not open a pull request → use output = source or none"
-                            .to_string(),
-                    );
-                }
-                self.open_pull_request(record).await.map(Some)
-            }
         }
     }
 
@@ -2238,53 +2161,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .await
             .map(|_| ())
             .map_err(|e| format!("result/publish failed: {e}"))
-    }
-
-    /// `output = pull_request` (F-86): verify commits exist, push the branch,
-    /// open the PR. The Orchestrator — never the agent — pushes.
-    async fn open_pull_request(&self, record: &TaskRecord) -> Result<String, String> {
-        let (Some(path), Some(branch)) = (&record.worktree_path, &record.branch) else {
-            return Err("no worktree/branch recorded → cannot push".to_string());
-        };
-        let worktree_path = PathBuf::from(path);
-
-        // Pre-condition: the agent must have committed something (F-86).
-        match self.worktrees.has_commits_to_publish(&worktree_path) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(
-                    "the agent produced no commits to publish → nothing to open a PR for"
-                        .to_string(),
-                );
-            }
-            Err(e) => return Err(format!("could not inspect commits: {e}")),
-        }
-
-        self.worktrees
-            .push_branch(&worktree_path, branch)
-            .map_err(|e| format!("git push failed: {e}"))?;
-
-        let summary = self
-            .agent_output
-            .get(&record.id)
-            .cloned()
-            .unwrap_or_default();
-        let ctx = PrContext {
-            title: &record.title,
-            url: record.url.as_deref().unwrap_or(""),
-            source: &record.source,
-            task_id: &record.source_task_id,
-            summary: &summary,
-        };
-        let req = PrRequest {
-            worktree_path,
-            head_branch: branch.clone(),
-            title: render_template(&self.settings.pr_title_template, &ctx),
-            body: render_template(&self.settings.pr_body_template, &ctx),
-        };
-        // `PrError` already carries a "pull-request creation failed" prefix;
-        // return it as-is rather than doubling the prefix.
-        self.pr_creator.create_pr(&req).map_err(|e| e.to_string())
     }
 
     /// Apply the workflow's `on_success`/`on_failure` status transition on the
@@ -2849,7 +2725,6 @@ fn mode_str(mode: WorkflowMode) -> &'static str {
 /// The output-policy name, for audit `detail`.
 fn policy_str(policy: OutputPolicy) -> &'static str {
     match policy {
-        OutputPolicy::PullRequest => "pull_request",
         OutputPolicy::Source => "source",
         OutputPolicy::None => "none",
     }
@@ -3015,8 +2890,6 @@ plan_cleanup = "keep_28d"
             env: HashMap::new(),
             select: SelectConfig::default(),
             readme_cache_dir: None,
-            pr_title_template: "t".to_string(),
-            pr_body_template: "b".to_string(),
             worktree_sweep_interval: interval,
             one_shot_grace: ONE_SHOT_GRACE,
             tools: crate::tool::builtin_registry(),

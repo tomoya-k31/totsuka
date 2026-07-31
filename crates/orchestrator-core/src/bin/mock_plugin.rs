@@ -11,11 +11,14 @@
 //! - `config/validate` → valid unless the config contains `"invalid": true`.
 //! - `task/update_status` / `result/publish` → acknowledge (recorded to the
 //!   config's `"notify_log"` file, if set, as `{"method": ..., "params": ...}`).
+//!   `"publish_error": true` makes `result/publish` answer with an error
+//!   instead, so the publish-failure path (task failed, worktree and session
+//!   kept for `task retry`) is exercisable.
 //! - `task/dispatch` → replies with the config's `"session_id"` (default
 //!   `sess-mock`); `"commit_on_dispatch": true` makes the mock agent branch
 //!   (`"branch_on_dispatch"`, default `feat/mock-agent-work`) and leave a real
-//!   commit on it, so the pull_request output policy has something to push —
-//!   the worktree arrives detached, so the branch has to come first;
+//!   commit on it — the worktree arrives detached, so the branch has to come
+//!   first or the commits land where nothing can reach them;
 //!   `"dirty_on_dispatch": true` leaves an uncommitted file so cleanup's
 //!   data-loss guard (F-23 DirtySkipped) is exercisable;
 //!   `"crash_on_dispatch": true` exits mid-dispatch (crash isolation, §5.3);
@@ -144,6 +147,27 @@ fn main() {
                     .unwrap(),
                 )
             }
+            // `publish_error: true` refuses the publish, which is the only way
+            // to drive the orchestrator's publish-failure path from a test: the
+            // task fails but keeps its worktree, commits and session so
+            // `task retry` can resume from there (#65). The attempt is still
+            // recorded — what those tests assert is the sequence.
+            "result/publish"
+                if config
+                    .get("publish_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false) =>
+            {
+                record(&config, method, &params);
+                Response::error(
+                    request_id(&id),
+                    Error {
+                        code: error_code::INTERNAL_ERROR,
+                        message: "mock refused to publish".to_string(),
+                        data: None,
+                    },
+                )
+            }
             "task/update_status" | "result/publish" => {
                 record(&config, method, &params);
                 Response::result(request_id(&id), Value::Null)
@@ -183,8 +207,7 @@ fn main() {
                 // real one is asked to: name a branch, switch to it, and
                 // commit. The worktree arrives detached, so the branch has to
                 // come first — without it the commits land on a detached HEAD
-                // and the orchestrator has nothing to push (the agent's work
-                // ends at the commit, F-86).
+                // and are reachable from nothing once the worktree is removed.
                 if config
                     .get("commit_on_dispatch")
                     .and_then(Value::as_bool)

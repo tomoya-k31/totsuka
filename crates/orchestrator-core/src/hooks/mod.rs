@@ -649,7 +649,7 @@ name = "implement"
 source = "github"
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 "#,
         );
         install(&paths, &cfg).unwrap();
@@ -688,7 +688,7 @@ name = "implement"
 source = "github"
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 "#,
         );
         install(&paths, &cfg).unwrap();
@@ -724,7 +724,7 @@ name = "implement"
 source = "github"
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 "#,
         );
         install(&paths, &cfg).unwrap();
@@ -903,7 +903,7 @@ name = "wf"
 source = "github"
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 verification = "{verification}"
 "#
             ));
@@ -930,7 +930,7 @@ name = "implement"
 source = "github"
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 "#,
         );
         let rendered = render_settings(

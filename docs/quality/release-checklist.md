@@ -4,7 +4,7 @@ title: リリース前手動チェックリスト（実機結合）
 description: CI で自動化できない実機（herdr / orca）・設計プレビュー・通知・waiting_input 応答の目視確認手順。リリース前に実施する。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [release, manual-test, checklist, herdr, orca, e2e]
-generated: { by: human:tomoya-k31, at: 2026-07-26T18:00:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -31,7 +31,7 @@ CI（[テスト戦略](/quality/test-strategy.md)）は実 mock プラグイン�
 - [ ] dispatch でエージェントが worktree 上で起動し、`running` が `status` に反映される
 - [ ] **設計プレビュー**（plan モード）がサイドペイン / 画面に表示される（F-34）
 - [ ] エージェントが人間に質問すると `waiting_input` になり、通知が届く（F-35）→ 応答後に `run` で再開する（F-44）
-- [ ] 完了後、`output = pull_request` で Orchestrator が push + PR 作成する（エージェントは push しない、F-86）
+- [ ] worktree が detached HEAD で作られ、エージェントがリポジトリの規約に沿ったブランチを切る。完了後 `totsuka task show` にそのブランチ名が出る（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）
 
 # agent_ide（orca）
 

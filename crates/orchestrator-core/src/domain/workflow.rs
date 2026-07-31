@@ -188,10 +188,8 @@ pub struct WorkflowIssue {
     pub message: String,
 }
 
-/// Validate workflows (F-81, F-82, F-83).
+/// Validate workflows (F-81, F-83).
 ///
-/// - `mode = plan` with `output = pull_request` is an error (plan must not
-///   push/PR, F-82).
 /// - `output = source` requires the source plugin to declare the `source`
 ///   output capability (F-83). `source_outputs` returns a plugin's declared
 ///   outputs, or `None` when unknown (then the check is skipped — an unknown
@@ -205,17 +203,6 @@ where
     let mut issues = Vec::new();
 
     for wf in workflows {
-        // F-82: plan mode cannot push/PR.
-        if wf.mode == WorkflowMode::Plan && wf.output == OutputPolicy::PullRequest {
-            issues.push(WorkflowIssue {
-                severity: Severity::Error,
-                message: format!(
-                    "workflow `{}` uses mode = plan with output = pull_request → plan must not push/PR; use output = source or none",
-                    wf.name
-                ),
-            });
-        }
-
         // F-83: output = source needs the plugin to declare it.
         if wf.output == OutputPolicy::Source
             && let Some(outputs) = source_outputs(&wf.source)
@@ -301,7 +288,7 @@ mod tests {
         Workflow::from_configs(&cfg.workflows)
     }
 
-    /// The §4.9 example: design (plan/source) + implement (implement/pull_request).
+    /// The §4.9 example: design (plan/source) + implement (implement/source).
     const SPEC_EXAMPLE: &str = r#"
 [[workflows]]
 name = "design"
@@ -318,7 +305,7 @@ source = "github"
 trigger = { project_status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 on_success = { set_status = "レビュー待ち" }
 "#;
 
@@ -337,7 +324,7 @@ on_success = { set_status = "レビュー待ち" }
 
         let implement = match_workflow(&workflows, &task("github", Some("実装待ち"), &[])).unwrap();
         assert_eq!(implement.name, "implement");
-        assert_eq!(implement.output, OutputPolicy::PullRequest);
+        assert_eq!(implement.output, OutputPolicy::Source);
 
         // No matching status -> no workflow.
         assert!(match_workflow(&workflows, &task("github", Some("完了"), &[])).is_none());
@@ -537,24 +524,6 @@ output = "none"
         assert_eq!(workflows[1].verification, VerificationMode::Llm);
         assert!(workflows[1].timeout_secs.is_none());
         assert!(workflows[1].rubric.is_none());
-    }
-
-    #[test]
-    fn plan_with_pull_request_is_an_error() {
-        let workflows = workflows_from_toml(
-            r#"
-[[workflows]]
-name = "bad"
-source = "github"
-trigger = { project_status = "設計待ち" }
-mode = "plan"
-agent = "herdr"
-output = "pull_request"
-"#,
-        );
-        let issues = validate_workflows(&workflows, |_| None);
-        assert!(issues.iter().any(|i| i.severity == Severity::Error
-            && i.message.contains("plan with output = pull_request")));
     }
 
     #[test]

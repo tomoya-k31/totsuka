@@ -6,10 +6,11 @@
 //!
 //! ## Responsibility boundary (F-86)
 //!
-//! For `agent_ide` plugins, the agent's responsibility ends **at the commit**.
-//! Pushing the branch and opening the pull request is the **Orchestrator's**
-//! job (via `gh`/GitHub API), never the plugin's. Plugins must not push or open
-//! PRs.
+//! The worktree arrives on a **detached `HEAD`**: naming and creating the
+//! branch, committing, pushing and opening the pull request are the agent's,
+//! following the repository's own conventions. The orchestrator never pushes.
+//! This reverses the earlier boundary (agent stops at the commit, orchestrator
+//! pushes) — see ADR-0026.
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -310,7 +311,8 @@ pub struct ResultPublishParams {
 pub enum ExecutionMode {
     /// Design/plan mode: read-oriented, produces a design document (F-36).
     Plan,
-    /// Implementation mode: the agent's work ends at the commit (F-86).
+    /// Implementation mode: the agent branches, commits, and publishes its own
+    /// work (F-86).
     Implement,
 }
 
@@ -332,8 +334,8 @@ pub enum AgentState {
 
 /// `task/dispatch` params (O→P): run a task in a worktree (F-31).
 ///
-/// The plugin drives the agent up to a **commit**; it must not push or open a
-/// PR (F-86).
+/// `worktree_path` is on a **detached `HEAD`** — the agent creates the branch
+/// itself, from the repository's own naming convention (F-86, ADR-0026).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskDispatchParams {
     /// The task to work on.

@@ -76,9 +76,6 @@ pub struct RootConfig {
     /// Logging settings (§5.2).
     #[serde(default)]
     pub log: LogSettings,
-    /// Output policy settings (PR templates, #65).
-    #[serde(default)]
-    pub output: OutputSettings,
     /// Claude Code hook-event ingestion settings (#131: E-03, D-02, E-07).
     #[serde(default)]
     pub hooks: HooksConfig,
@@ -252,20 +249,6 @@ pub struct HooksConfig {
     pub block_retry_limit: Option<u32>,
 }
 
-/// Output policy settings (F-86 PR templating).
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OutputSettings {
-    /// Pull-request title template; `None` uses the built-in default.
-    /// Placeholders: `{title}` `{task_id}` `{source}`.
-    #[serde(default)]
-    pub pr_title_template: Option<String>,
-    /// Pull-request body template; `None` uses the built-in default.
-    /// Placeholders: `{title}` `{url}` `{source}` `{task_id}` `{summary}`.
-    #[serde(default)]
-    pub pr_body_template: Option<String>,
-}
-
 fn default_version() -> u32 {
     CURRENT_SCHEMA_VERSION
 }
@@ -351,11 +334,14 @@ pub enum WorkflowMode {
 }
 
 /// Output policy of a workflow (F-83).
+///
+/// `pull_request` was a third variant until push and PR creation became the
+/// agent's responsibility. Removing it rather than accepting-and-ignoring it is
+/// deliberate: silently treating it as `source` would keep the run going while
+/// no PR was ever opened, and that is not a failure anyone notices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputPolicy {
-    /// Push + open a pull request.
-    PullRequest,
     /// Write back to the task source (`result/publish`).
     Source,
     /// No output.
@@ -648,7 +634,7 @@ source = "github"
 trigger = { project_status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 on_success = { set_status = "レビュー待ち" }
 "#;
 
@@ -670,7 +656,7 @@ on_success = { set_status = "レビュー待ち" }
             design.trigger.get("project_status").unwrap().as_str(),
             Some("設計待ち")
         );
-        assert_eq!(cfg.workflows[1].output, OutputPolicy::PullRequest);
+        assert_eq!(cfg.workflows[1].output, OutputPolicy::Source);
 
         let llm = cfg.llm.as_ref().unwrap();
         assert_eq!(

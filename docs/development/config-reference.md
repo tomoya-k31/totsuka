@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: human:tomoya-k31, at: 2026-07-31T17:00:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -41,7 +41,6 @@ owner: tomoya-k31
 | `[llm]` | テーブル | なし | AI Gateway 設定（下記）。無い場合、LLM が必要なリポジトリ選択は `pending` にフォールバック |
 | `[worktree]` | テーブル | — | worktree 配置・掃除（下記） |
 | `[log]` | テーブル | — | ログ設定（下記） |
-| `[output]` | テーブル | — | 出力ポリシーの PR テンプレート（下記） |
 | `[hooks]` | テーブル | — | エージェント CLI フックイベント受信の設定（下記、#131） |
 | `default_tool` | string? | `"claude"` | グローバル既定の AI ツール名（#196）。workflow / repo が指定しない場合に適用 |
 | `[tools.{name}]` | テーブル | — | AI ツールレジストリ（下記、#196）。組み込み既定 `claude` を上書き・拡張 |
@@ -109,9 +108,9 @@ owner: tomoya-k31
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source インスタンス名 |
 | `trigger` | テーブル | `{}`（全マッチ） | トリガー条件。`status`/`project_status`/`label`/`labels` は Orchestrator が防御的に再判定、他キーはプラグインが `initialize` の `triggers` として受け取り解釈する |
-| `mode` | enum | 必須 | `plan`（push/PR 禁止 F-82）/ `implement` |
+| `mode` | enum | 必須 | `plan`（ペインが git を実行できないので、ブランチ作成もコミットも push も起きない。F-82）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
-| `output` | enum | 必須 | `pull_request` / `source` / `none` |
+| `output` | enum | 必須 | `source` / `none`。**`pull_request` は廃止** — push と PR 作成はエージェントの責務になった（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、PR 作成手順はリポジトリの規約と `[prompts]` で指示する |
 | `on_success` | `{ set_status = "..." }`? | なし | 成功時にソース側ステータスを更新（F-84） |
 | `on_failure` | `{ set_status = "..." }`? | なし | 失敗時にソース側ステータスを更新（publish 失敗など retry 可能な失敗では書き戻さない） |
 | `verification` | enum | `llm` | 完了自己申告の検収方式（D-01）: `llm`（prompt 型 Stop フックで in-session 検収）/ `human`（`totsuka task verify` 待ち。有効な notifier が無いと警告）/ `none`（検収なし） |
@@ -242,13 +241,6 @@ plan_cleanup = "immediate"            # plan: 即削除（既定）
 | `log_prompts` | bool | true | プロンプト/ペイロードを記録（debug 以上でのみ実出力、§5.2） |
 | `max_files` | int? | 7 | 日次ログの保持世代数 |
 
-# `[output]`
-
-| キー | 型 | 既定 | 意味 |
-|---|---|---|---|
-| `pr_title_template` | string? | `{title}` | PR タイトルテンプレート。`{title}`/`{task_id}`/`{source}` |
-| `pr_body_template` | string? | 組み込み既定 | PR 本文テンプレート。`{title}`/`{url}`/`{source}`/`{task_id}`/`{summary}` |
-
 # `[hooks]`
 
 Claude Code フックイベント受信（UDS）の設定（#131。全キー省略可、`deny_unknown_fields`）。値の実使用は UDS サーバ・フックスクリプト側の issue（#136/#137）で配線される。
@@ -333,6 +325,6 @@ source = "github"
 trigger = { project_status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 on_success = { set_status = "レビュー待ち" }
 ```

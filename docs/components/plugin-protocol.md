@@ -4,7 +4,7 @@ title: plugin-protocol クレート
 description: プラグイン開発者向けに公開する型定義クレート。JSON-RPC 2.0（NDJSON）エンベロープ・plugin.toml マニフェスト・capabilities・§11 メソッド型・Task 共通スキーマ・プロトコルバージョニングを提供する、プラグイン境界の単一の正。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [rust, crate, plugin, protocol, json-rpc]
-generated: { by: human:tomoya-k31, at: 2026-07-26T18:00:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -25,7 +25,7 @@ Orchestrator と別プロセスのプラグイン（`task_source` / `agent_ide` 
 
 # 責務境界（F-86）
 
-`agent_ide` プラグインの成果は**コミットまで**。push / PR 作成は **Orchestrator** の責務であり、プラグインは push・PR 作成を行わない。`task/dispatch` の doc comment に明記。
+`task/dispatch` が渡す worktree は **detached HEAD**。ブランチの命名・作成、コミット、push、PR 作成はすべて**エージェント**の責務で、リポジトリ自身の規約（その手順が書かれている場所）に従う。Orchestrator は worktree とタスクのライフサイクルを持ち、push は行わない。**これは以前の境界（エージェントはコミットまで、push は Orchestrator）の反転**で、経緯と失うものは [ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) にある。`lib.rs` / `methods.rs` の doc comment に明記。
 
 # バージョニング（§10.2）
 

@@ -4,7 +4,7 @@ title: フックシグナルフロー（Slack メンション → 完了検知 �
 description: Claude Code フック完了判定のエンドツーエンド経路。Slack メンションの dispatch から herdr pane 起動・env 注入・claude --settings、Stop フックのマーカー抽出・UDS POST、hook_uds の Bearer/冪等検証、SignalPort→Engine::on_signal の検収分岐（llm/human/none）と Publishing/Verifying/Escalated、スプールフォールバックと pane.exited デッドマン、通知クリック → pane フォーカス（click-to-focus、F-94）までを図示する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [architecture, diagram, hook, claude-code, uds, signal, verification, deadman, spool, click-to-focus, epic-131]
-generated: { by: human:tomoya-k31, at: 2026-07-23T00:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -52,7 +52,7 @@ sequenceDiagram
     alt verification = "none" または "llm"（COMPLETED 受信）
         Note over EN,CC: llm は orchestrator-<workflow>.json のセッション内 prompt 型 Stop フック（rubric）が判定
         EN->>EN: finalize_success（マーカー除去済み last_assistant_message を成果物へ）
-        EN->>HE: 出力ポリシー（pull_request=push+PR / source=result/publish / none）
+        EN->>HE: 出力ポリシー（source=result/publish / none）
         HE->>TS: result/publish（source の場合 → 本人名義スレッド返信の下書き・承認フロー）
         EN->>HE: task/cancel（冪等 → Done pane 自動クローズ, F-107）
         EN->>NO: notify(done)

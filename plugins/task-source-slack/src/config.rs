@@ -536,12 +536,24 @@ mod tests {
     fn defaults_reproduce_todays_prompt_bytes() {
         let p = SlackPrompts::default();
 
-        // Was the `String::from(...)` in `pipeline::build_task`.
-        assert_eq!(
-            p.reply_instructions,
-            "以下の Slack メンションへの返信案を日本語で作成してください。\
+        // Was the `String::from(...)` in `pipeline::build_task`. The moved
+        // text has to survive intact, but it is no longer the *whole* value:
+        // ADR-0026 appended the PR-URL request, because the orchestrator stopped
+        // creating pull requests and this reply became the only channel the URL
+        // can travel on. Assert the original as a prefix so a mangled move
+        // still fails while a deliberate addition does not.
+        let original = "以下の Slack メンションへの返信案を日本語で作成してください。\
              対象リポジトリを調査し、根拠を持って回答してください。\
-             出力は返信文のみとし、前置き・後書き・説明を含めないでください。"
+             出力は返信文のみとし、前置き・後書き・説明を含めないでください。";
+        assert!(
+            p.reply_instructions.starts_with(original),
+            "the pre-#318 text must survive verbatim: {}",
+            p.reply_instructions
+        );
+        assert!(
+            p.reply_instructions.contains("URL"),
+            "the PR URL request must be there — nothing else can carry it: {}",
+            p.reply_instructions
         );
         // Was `format!("\n返信スタイル: {style}")`.
         assert_eq!(
