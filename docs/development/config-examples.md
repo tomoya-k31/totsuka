@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: human:tomoya-k31, at: 2026-07-25T09:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-07-31T17:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -412,6 +412,13 @@ Socket Mode で自分宛メンションを受け、本人名義で返信する�
 app_token = "op://Dev/Slack/app_token"     # 必須。App-Level Token（xapp- で始まる）
 user_token = "op://Dev/Slack/user_token"   # 必須。User OAuth Token（xoxp- で始まる）
 target_user_id = "U01ABCDEF"               # 必須。自分の Slack ユーザー ID
+
+# 自分が付けるとタスクを起こす絵文字（#319）。既定は [] = 無効。
+# 自分宛でないメッセージを、会話にノイズを足さずタスク化できる。
+# 他人が同じ絵文字を付けても起動しない（緩和する設定は無い）。
+# reactions:read スコープが必要 → 追加後はアプリ再インストール + Keychain 2 本更新。
+trigger_reactions = ["eyes"]
+
 thread_context_limit = 6                   # タスク本文に含めるスレッド直近メッセージ数（既定 6）
 reply_style = "丁寧語で簡潔に。箇条書きを多用しない。"   # 返信トーンの指示
 source_name = "slack"

@@ -4,7 +4,7 @@ title: Slack ユーザートークンの取り扱いポリシー
 description: task-source-slack が使う User OAuth Token（xoxp）/ App-Level Token（xapp）/ Bot User OAuth Token（xoxb、通知ナッジ専用・任意）の保管・権限・漏えい時の Revoke 手順・社用ワークスペースでの確認事項。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [security, slack, token, keychain, incident]
-generated: { by: human:tomoya-k31, at: 2026-07-28T00:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-07-31T17:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -17,6 +17,15 @@ task-source-slack は **User OAuth Token（`xoxp-`）で本人として** 動く
 - `channels:read` / `groups:read` — チャンネルの一覧・メタ情報（名前）の読み取り。`[[channel_groups]]` の prefix ルール判定に必要（#125）
 - `users:read` — ワークスペースのユーザー情報読み取り
 - `chat:write` / `im:write` — **本人名義での投稿**・DM 開始
+- `reactions:read` — リアクションイベントの受信（#319、[ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）。**可視範囲は広がらない**（本人が参加しているチャンネルのまま）
+
+## リアクショントリガが本人限定である理由（#319）
+
+`trigger_reactions` を設定すると、**本人が付けたリアクション**がタスクを起こす。この「本人が」は設定ではなくコード上の不変条件で、**緩和する設定は存在しない**。
+
+user token での購読では**他人が付けたリアクションも同じイベントとして届く**ため、フィルタするのはこちら側の責務である。他人のリアクションを受理すると、チャンネルに居る誰でも絵文字 1 つでこのマシンに worktree を作らせ、エージェントを起動させ、コマンドを実行させられる——実質的なリモート実行トリガになる。
+
+`reaction_added` の `user` は Slack が発行する識別子でクライアント由来の文字列ではないため、この判定は偽装できない。開く必要が生じたら、設定を足すのではなく ADR を書く。
 
 Bot トークンより影響半径が大きい前提で扱うこと。App-Level Token（`xapp-`）は Socket Mode 接続専用（`connections:write`）で単体では読み書きできないが、イベントの受信（= 傍受）が可能になるため同様に秘匿する。任意の Bot User OAuth Token（`xoxb-`、#305）の bot scopes は `chat:write` + `im:write` のみ — できるのは **bot 名義**の投稿と IM 開始だけで、履歴の読み取りも本人へのなりすましもできない（3 本の中で影響半径が最小）。それでも保管ルールは同一に扱う。
 
