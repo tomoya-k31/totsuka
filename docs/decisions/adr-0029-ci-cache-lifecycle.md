@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0029 main スコープの rust-cache を push 時に再生し、キャッシュ鍵に workspace root の Cargo.toml を含める
-description: ADR-0007 で clippy/test を pull_request 限定にした結果 main スコープの rust-cache を書く主体が消え、全 PR の初回 run が依存 215 中 186 クレートを再ビルドしていた問題に対し、main への push で専用の warm ジョブがキャッシュを再生する決定。あわせて virtual manifest ゆえ鍵に入らなかった workspace root の Cargo.toml を明示的に鍵へ加え、coverage にも TEST_SUPPORT_PREBUILT_BINS を立てる。リンカ差し替え・単一 shared-key の共有・パスフィルタ・テストバイナリ統合は不採用とする。
+description: ADR-0007 で clippy/test を pull_request 限定にした結果 main スコープの rust-cache を書く主体が消え、全 PR の初回 run が依存 215 中 186 クレートを再ビルドしていた問題に対し、main への push で専用の warm ジョブがキャッシュを再生する決定。あわせて virtual manifest ゆえ鍵に入らなかった workspace root の Cargo.toml を明示的に鍵へ加え、coverage にも TEST_SUPPORT_PREBUILT_BINS を立てる。リンカ差し替え・単一 shared-key の共有・テストバイナリ統合は不採用とする。
 resource: https://github.com/tomoya-k31/totsuka/issues/341
 tags: [decision, ci, cost, cache, performance, build, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-01T07:00:00+09:00 }
@@ -98,11 +98,20 @@ cold run が消えれば重複エントリの生成も止まるので、欠陥 A
 
 # Decision
 
-## 1. main への push で warm ジョブがキャッシュを再生する
+## 1. main への push で warm ワークフローがキャッシュを再生する
 
-`warm-cache` ジョブを `if: github.event_name == 'push'` で追加する。matrix 2 本で、
-`test` レグが `cargo build --workspace --all-targets`、`clippy` レグが
+`.github/workflows/warm-cache.yml` を新設する。matrix 2 本で、`test` レグが
+`cargo build --workspace --all-targets`、`clippy` レグが
 `cargo clippy --workspace --all-targets --all-features -- -D warnings` を実行する。
+
+**`ci.yml` のジョブではなく独立したワークフローにする。** パスフィルタ（Decision 3）は
+`on:` 単位でしか書けず、`ci.yml` の `push` に `paths` を足すと `coverage` まで止まる。
+`coverage` は main の per-merge テストを兼ねるので全 merge で走らねばならない。
+
+**`env` は `ci.yml` と一字一句同じでなければならない。** rust-cache は `CARGO` /
+`CC` / `CFLAGS` / `CXX` / `CMAKE` / `RUST` 接頭辞の環境変数を鍵に含めるので、
+ワークフローを分けた結果 `env` がずれると別の鍵ができ、温めたキャッシュが永久に
+使われない。**しかも CI は緑のままなので気付けない。**
 
 **コマンドは消費側ジョブと完全一致させる。** 違うとフィンガープリントが揃わず、
 温めたつもりのキャッシュが効かない。
@@ -147,14 +156,24 @@ README の「`key` は自動ジョブキーと併存する」は `shared-key` �
 出ないため、CI ログの Cache Key を実際に読むまで気付けない。ドキュメントではなく
 出力で確認すること。
 
-## 3. warm ジョブにパスフィルタを付けない
+## 3. warm はパスフィルタ + 週次 cron で走らせる
 
 鍵は `Cargo.lock` / 各 `Cargo.toml` / `rust-toolchain.toml` / rustc バージョン /
-`RUSTFLAGS` に依存し、`.rs` の変更では変わらない。docs のみの merge をスキップすれば
-課金は半減するが、**rustc の新リリース（6 週ごと）はリポジトリに変更が無いまま鍵を壊す**
-（`dtolnay/rust-toolchain` が `toolchain: stable` で最新安定版を入れるため）。
-パスフィルタではこれを検知できない。フィルタ無しなら full match 時は
-`Cache up-to-date` で実質 no-op（約 40 秒 = 課金 1 分）なので、堅牢性を取る。
+`RUSTFLAGS` に依存し、`.rs` の変更では変わらない。よって warm はキャッシュ鍵が
+依存するファイルを触った merge のときだけ走ればよい。実測で **main への merge
+178 件のうち Cargo 系を触るのは 46 件（25%）** なので、warm は週 45 → 約 11 回になる。
+
+当初はフィルタ無しを採る予定だった。**rustc の新リリース（6 週ごと）はリポジトリに
+変更が無いまま鍵を壊す**（`dtolnay/rust-toolchain` が `toolchain: stable` で最新
+安定版を入れるため）のに、パスフィルタではそれを検知できないからである。この判断は
+「フィルタ無しなら full match 時は実質 no-op（課金 1 分）」という**誤った見積もり**に
+基づいていた。実測すると `warm cache (test)` は 65 秒＝課金 2 分で、no-op ではない。
+rust-cache は既定で workspace クレートをキャッシュしない（`cache-workspace-crates:
+false`）ため、full match でも 11 クレートを毎回建て直すからである。
+
+そのためフィルタ無しでは課金が週 835 → 846 分と**増えて**しまい、前提を満たせない。
+フィルタを入れ、rustc リリースの穴は週次 cron（3 分/週）で塞ぐ。なお Cargo 系を
+触る merge が週約 11 回あるので、実際には穴は半日程度で自然に閉じる。
 
 ## 4. coverage にも TEST_SUPPORT_PREBUILT_BINS を立てる
 
@@ -179,12 +198,15 @@ lint / test 対象から漏れる方が損なので残す。`--all-targets` も�
 
 ## 課金
 
+すべて CI の実測値（ジョブ単位で分に切り上げ）。
+
 | | 週次 |
 |---|---|
 | 現状 | 62 cold × 5 分 + 175 warm × 3 分 = **835 分** |
-| 変更後 | 237 run × 3 分 + 45 merge × 2 ジョブ × 1 分 = **801 分** |
+| 変更後 | 237 run × 3 分 + 11 merge × 3 分 + cron 3 分 = **747 分** |
 
-**課金は増えない。** wall clock は PR 初回 run で `test` 177s → 96s、`clippy` 93s → 45s。
+**課金は週 88 分減る。** wall clock は PR 初回 run で `test` 177s → 96s、
+`clippy` 93s → 45s。
 
 # 不採用案
 
@@ -250,7 +272,8 @@ wall clock は悪化し、ADR-0007 / ADR-0018 が意図的に分離した構成�
 # Consequences
 
 - 全 PR run が warm になる。従来は「2 回目以降だけ warm」で、初回 run 分は捨てていた。
-- main への merge ごとに warm ジョブ 2 本（各 1 分）が増えるが、PR 側の削減が上回る。
+- Cargo 系ファイルを触る merge のたびに warm 2 ジョブ（実測 65s + 32s = 課金 3 分）が
+  増えるが、PR 側の削減が上回る。
 - **キャッシュ鍵が全部変わるため、この変更を入れた直後の 1 回だけ全ジョブが cold になる。**
   既存の open PR は rebase するまで古い鍵のまま化石にフォールバックし続ける。
 - 化石キャッシュ（`*-e721b7e7`、2026-07-17 作成）は参照されなくなるが自動削除はされない。
@@ -268,12 +291,23 @@ base ブランチ（main）だけで、feature ブランチに保存したキャ
 
 そこで 2 段階で計測する。
 
-- **段階 1（マージ前）**: warm ジョブと `test` ジョブを一時的に feature ブランチの
-  `push` でも走らせ、同一ブランチスコープ内で 2 回 push する。1 回目で warm が
-  キャッシュを保存し、2 回目の `test` が `full match: true` / `Compiling` 11 前後 /
-  `Build` 60s 前後になることを確認する。この一時トリガはマージ前に外す。
-- **段階 2（マージ後）**: main の warm ジョブ成功 → main スコープに当日付エントリ生成
-  → 次に開く PR の初回 run が warm であることを確認する。
+- **段階 1（マージ前）**: warm と `test` / `clippy` を一時的に feature ブランチの
+  `push` でも走らせ、同一ブランチスコープ内で連続 push する。**実施済み**:
+
+  | | cold | warm |
+  |---|---|---|
+  | `test` の `Compiling` | 186 | **11** |
+  | `test` の `Build` | 115s | **65s** |
+  | `test` のジョブ課金 | 3 分 | **2 分** |
+  | `clippy` の `Compiling` / `Checking` | 38 / 149 | **0 / 12** |
+  | `clippy` の `Run clippy` | 52s | **22s** |
+  | `clippy` のジョブ課金 | 2 分 | **1 分** |
+
+  あわせて `warm-cache.yml` が出力する鍵が `ci.yml` の消費側と 1 バイト違わず
+  一致することを CI ログで確認した（機械照合だけで済ませない — Decision 2 の罠を
+  一度踏んでいる）。この一時トリガはマージ前に外す。
+- **段階 2（マージ後）**: main の warm ワークフロー成功 → main スコープに当日付
+  エントリ生成 → 次に開く PR の初回 run が warm であることを確認する。
 
 [ADR-0018](/decisions/adr-0018-ci-test-time.md) の「性能変更は必ず CI 実測で検証する。
 ローカル計測は CI の代理にならない」に従う。
