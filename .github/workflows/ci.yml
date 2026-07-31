@@ -9,8 +9,9 @@ on:
 # count — not just wall-clock — drives cost. Jobs are therefore consolidated
 # and gated by event: PRs run `clippy / rustfmt` (which also carries rustfmt,
 # arch-lint and cargo-machete as steps, #281) and `test`; pushes to main run
-# coverage only
-# (llvm-cov executes the same test suite, so main is still tested per merge).
+# coverage (llvm-cov executes the same test suite, so main is still tested per
+# merge) plus `warm cache`, which exists only to keep the main-scoped rust-cache
+# entries that every PR's first run restores from (#341 / ADR-0029).
 # None of these jobs is a required status check (the ruleset requires only
 # okf-lint's `lint`), so event gating cannot leave a PR blocked on "Expected".
 
@@ -53,8 +54,20 @@ jobs:
       # (release-please は意図的に --locked を外している)。ここは検出専用。
       - name: Cargo.lock is in sync
         run: cargo metadata --locked --format-version 1 > /dev/null
+      # shared-key: 既定のキャッシュキーはジョブ id 由来なので、ジョブを改名すると
+      # キャッシュが無言で孤児化する。warm-cache ジョブがこの鍵空間へ書き込む前提も
+      # あるため明示する (#341)。
+      #
+      # key: rust-cache が鍵に含めるマニフェストは cargo metadata のパッケージ由来で、
+      # workspace root の Cargo.toml は virtual manifest ゆえに含まれない。そこに
+      # [profile.*] が置かれているため、#281 の `debug = false` は鍵を 1 ビットも
+      # 変えないまま全成果物のフィンガープリントを無効化した。root を明示的に
+      # 鍵へ入れて同じ事故を構造的に防ぐ (#341 / ADR-0029)。
       - name: Cache cargo build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: clippy
+          key: ${{ hashFiles('Cargo.toml') }}
       - name: Check formatting
         run: cargo fmt --all --check
       # ワークスペース依存境界の fitness function (#172)。cargo metadata --no-deps
@@ -88,8 +101,18 @@ jobs:
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: stable
+      # shared-key / key の意図は clippy ジョブのコメントを参照 (#341)。
       - name: Cache cargo build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: test
+          key: ${{ hashFiles('Cargo.toml') }}
+      # --all-targets はこのワークスペースでは --lib --bins --tests と等価。
+      # examples/ も benches/ も無く、[[example]] / [[bench]] 宣言も無いため
+      # (#341 で列挙して確認)。つまり直後の `cargo test` がどのみち作る集合と同じで、
+      # このステップは「重複した仕事」ではない。存在理由は下の
+      # TEST_SUPPORT_PREBUILT_BINS が前提とする順序保証であり、消すと同じ作業が
+      # Test ステップへ移動するだけで速くならない。
       - name: Build
         run: cargo build --workspace --all-targets
       # CLI の E2E が起動する兄弟バイナリ (mock_plugin / slack) は
@@ -122,17 +145,85 @@ jobs:
         with:
           toolchain: stable
           components: llvm-tools-preview
+      # shared-key / key の意図は clippy ジョブのコメントを参照 (#341)。
+      # 計装済み成果物は通常ビルドと混ぜられないので、鍵は独立のままにする。
       - name: Cache cargo build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: coverage
+          key: ${{ hashFiles('Cargo.toml') }}
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
         with:
           tool: cargo-llvm-cov
       # Coverage is measured and reported only; no threshold gate (per #45).
+      #
+      # cargo llvm-cov は内部で `cargo test --workspace` 相当を走らせるため、
+      # テスト実行前に workspace の全 bin をビルド済み。test_support::sibling_bin は
+      # anchor (env!("CARGO_BIN_EXE_totsuka")) の親ディレクトリからパスを導くので、
+      # llvm-cov が CARGO_TARGET_DIR を差し替えても自動追従する。これを立てないと
+      # main への merge のたびに E2E が cargo build をシェルアウトし、ADR-0018 §3 の
+      # 「CI では 0 回」が main で成立していなかった (#341)。仮定が外れた場合は
+      # sibling_bin の assert!(path.exists(), ...) で落ちるので、黙って古いバイナリを
+      # 検証する経路はない。
       - name: Collect coverage
+        env:
+          TEST_SUPPORT_PREBUILT_BINS: "1"
         run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
       - name: Upload coverage artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-lcov
           path: lcov.info
+
+  # main スコープの rust-cache を再生するためだけのジョブ (#341 / ADR-0029)。
+  #
+  # ADR-0007 で clippy / test を pull_request 限定にした結果、main では両ジョブが
+  # 走らなくなり、main スコープのキャッシュを書く主体が消えた。GitHub のキャッシュは
+  # ブランチスコープで、PR スコープ (refs/pull/N/merge) のエントリは他の PR から
+  # 読めないため、新しい PR は必ず「最後に main で test が走った時点」の化石へ
+  # フォールバックする。実際 2026-07-17 のエントリが 2 週間使われ続け、全 PR の
+  # 初回 run が依存 215 中 186 クレートを再ビルドしていた。
+  #
+  # パスフィルタは意図的に付けない。鍵は Cargo.lock / 各 Cargo.toml /
+  # rust-toolchain.toml / rustc バージョン / RUSTFLAGS に依存し、rustc の新リリースは
+  # リポジトリに変更が無いまま鍵を壊す。フィルタではそれを検知できないが、
+  # フィルタ無しなら full match 時は Cache up-to-date で実質 no-op (約 40 秒 = 課金
+  # 1 分) なので、堅牢性を取る。
+  #
+  # clippy と test で鍵を分けるのは必須。cargo clippy は check ベースで依存を .rmeta
+  # としてしか emit しないため、1 つの shared-key を共有すると先に保存した側が勝ち、
+  # clippy が勝つと test は rlib の無いキャッシュを復元して結局ビルドし直す。
+  warm-cache:
+    name: warm cache (${{ matrix.key }})
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # 片方が落ちてももう片方のキャッシュは温めたい。
+      fail-fast: false
+      matrix:
+        include:
+          - key: test
+            cmd: cargo build --workspace --all-targets
+          - key: clippy
+            cmd: cargo clippy --workspace --all-targets --all-features -- -D warnings
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          # clippy leg でのみ必要。test leg では不要だが、空文字を渡す分岐を避けるため
+          # 両方に入れる（コンポーネントの有無はビルド成果物に影響しない）。
+          components: clippy
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ${{ matrix.key }}
+          key: ${{ hashFiles('Cargo.toml') }}
+      # 消費側ジョブと完全に同じコマンドであること。違うとフィンガープリントが
+      # 揃わず、温めたつもりのキャッシュが効かない。
+      - name: Warm
+        run: ${{ matrix.cmd }}
