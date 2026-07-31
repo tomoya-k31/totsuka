@@ -5,14 +5,24 @@
 //! leaves `plugins/github.toml` unwritten produces a setup that looks finished
 //! and fails at the first poll, so the wizard writes both.
 //!
-//! # Only what has no default
+//! # What gets written
 //!
-//! Every key written here is one the plugin **requires**. `herdr` and `macos`
-//! default every field of their config, so they get no file at all — an empty
-//! file would be indistinguishable from one a human wrote and then emptied, and
-//! [`crate::setup`] would stop offering to fill it in. `github` and `slack` do
-//! have required fields, and those are exactly the questions
-//! [`super::recipes::Blank`] declares.
+//! Two kinds of key, and no third: what the plugin **requires**, plus what the
+//! chosen **recipe's behaviour depends on**. Nothing that is merely available.
+//!
+//! `herdr` and `macos` default every field of their config, so they get no file
+//! at all — an empty file would be indistinguishable from one a human wrote and
+//! then emptied, and [`crate::setup`] would stop offering to fill it in.
+//! `github` and `slack` do have required fields, and those are exactly the
+//! questions [`super::recipes::Blank`] declares.
+//!
+//! `slack`'s `bot_token` is the one key of the second kind. The plugin treats it
+//! as opt-in (absent = no nudge), but the reply-as-yourself recipe writes it,
+//! because a reply posted under your own name raises **no Slack notification at
+//! all** — the bot nudge is what makes the whole flow noticeable (ADR-0021).
+//! The cost is that skipping its registration now fails the plugin's launch
+//! rather than quietly disabling one feature, which is why
+//! [`super::required_secrets`] lists it and the checklist says what it buys.
 //!
 //! # No secret values
 //!

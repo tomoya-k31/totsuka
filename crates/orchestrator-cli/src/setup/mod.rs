@@ -323,16 +323,19 @@ impl<'a> Plan<'a> {
     fn new(cx: &Cx, answers: &'a Answers, args: &SetupArgs) -> Result<Plan<'a>, CliError> {
         let recipe = &RECIPES[answers.recipe];
         let plugin_dir = cx.plugin_config_dir();
+        let mut plugin_configs = Vec::new();
+        for draft in plugin_config::drafts_for(answers, recipe) {
+            let path = plugin_dir.join(format!("{}.toml", draft.name));
+            if is_absent(&path)? {
+                plugin_configs.push(path);
+            }
+        }
         Ok(Plan {
             recipe,
             answers,
             write_config: is_unconfigured(&cx.config_path)?,
             config_path: cx.config_path.clone(),
-            plugin_configs: plugin_config::drafts_for(answers, recipe)
-                .into_iter()
-                .map(|d| plugin_dir.join(format!("{}.toml", d.name)))
-                .filter(|p| !p.exists())
-                .collect(),
+            plugin_configs,
             plugin_source: PluginSource::detect(args.bundled_dir.as_deref()),
         })
     }
@@ -408,6 +411,24 @@ fn is_unconfigured(path: &Path) -> Result<bool, CliError> {
     }
 }
 
+/// Whether `path` is absent, refusing to guess when the answer is unclear.
+///
+/// The counterpart of [`is_unconfigured`] for files that have no skeleton form,
+/// and it exists for the same reason: `Path::exists` folds *every* failure —
+/// permission denied, a symlink loop, a directory in the way — into `false`,
+/// which here reads as "safe to create". It is not. [`write_atomically`]'s
+/// `rename` only needs the **directory** to be writable, so a `plugins/*.toml`
+/// that cannot be examined can still be replaced, and these files hold the
+/// user's secret references.
+fn is_absent(path: &Path) -> Result<bool, CliError> {
+    path.try_exists().map(|exists| !exists).map_err(|e| {
+        CliError::from(format!(
+            "cannot examine {} ({e}) → refusing to overwrite a file it cannot inspect",
+            path.display()
+        ))
+    })
+}
+
 /// The effecting phase. Every step is idempotent so a failure part-way can be
 /// recovered by running the command again.
 fn apply(cx: &Cx, answers: &Answers, plan: &Plan) -> Result<(), CliError> {
@@ -443,12 +464,14 @@ fn apply(cx: &Cx, answers: &Answers, plan: &Plan) -> Result<(), CliError> {
 ///
 /// Same rule as `config.toml`, minus the skeleton exception: nothing generates
 /// a commented placeholder for these, so a file that exists was written by a
-/// human or by an earlier `setup`, and either way it is theirs.
+/// human or by an earlier `setup`, and either way it is theirs. "Exists" is
+/// decided by [`is_absent`], which errors rather than guessing — the same
+/// hazard [`is_unconfigured`] guards against.
 fn write_plugin_configs(cx: &Cx, answers: &Answers, recipe: &Recipe) -> Result<(), CliError> {
     let dir = cx.plugin_config_dir();
     for draft in plugin_config::drafts_for(answers, recipe) {
         let path = dir.join(format!("{}.toml", draft.name));
-        if path.exists() {
+        if !is_absent(&path)? {
             println!(
                 "skipped: {} already exists (left untouched)",
                 path.display()
@@ -585,15 +608,42 @@ fn print_secret_checklist(answers: &Answers, recipe: &Recipe) {
     println!("Secrets to register (setup never handles the values):");
     for account in accounts {
         let reference = answers.secret_backend.reference(&account);
-        println!("  {reference}");
+        println!("  {reference}  — {}", purpose_of(&account));
         if let Some(command) = answers.secret_backend.register_command(&account) {
             println!("    {command}");
         }
     }
-    println!("  `totsuka doctor` verifies these once they exist.");
+    println!("  Every one of these is required: the config references it, so a");
+    println!("  missing one stops the plugin from starting. `totsuka doctor`");
+    println!("  verifies them once they exist.");
+}
+
+/// What each account is for, so the checklist is not four opaque names.
+///
+/// `slack-bot` in particular looks skippable — the plugin treats `bot_token` as
+/// opt-in — but the recipe writes it, so leaving it unregistered breaks the
+/// whole source rather than just the nudge. Saying what it buys is what makes
+/// that a choice instead of a surprise.
+fn purpose_of(account: &str) -> &'static str {
+    match account {
+        "slack-user" => "posts the reply under your own name",
+        "slack-app" => "opens the Socket Mode connection",
+        "slack-bot" => "sends the notification nudge (self-replies raise none)",
+        "github-token" => "reads the Project board and writes results back",
+        "notion-token" => "reads the database and writes results back",
+        "llm-api-key" => "picks which repository a task belongs to",
+        _ => "used by the config setup just wrote",
+    }
 }
 
 /// Which secret accounts the chosen recipe needs, in a stable order.
+///
+/// "Needs" means the generated config **references** it, which is a stronger
+/// condition than the plugin's own required-field list: `slack`'s `bot_token`
+/// is optional to the plugin, but the reply-as-yourself recipe writes it
+/// because a self-reply produces no Slack notification at all without the nudge
+/// (ADR-0021). Once written, an unregistered reference fails the plugin's
+/// launch — so it belongs on this list, not in a footnote.
 pub(crate) fn required_secrets(answers: &Answers, recipe: &Recipe) -> Vec<String> {
     let mut accounts: Vec<String> = Vec::new();
     for plugin in recipe.plugins {
@@ -729,6 +779,32 @@ mod tests {
         std::fs::create_dir(&blocked).unwrap();
         let err = is_unconfigured(&blocked).unwrap_err().to_string();
         assert!(err.contains("blocked"), "{err}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_unexaminable_plugin_config_is_reported_not_assumed_absent() {
+        // The same hazard `is_unconfigured` guards for `config.toml`, and it
+        // was reintroduced here once by reaching for `Path::exists` — which
+        // folds every failure into `false`, i.e. "safe to create". These files
+        // hold the user's secret references, and `write_atomically`'s rename
+        // only needs the *directory* to be writable.
+        let dir = std::env::temp_dir().join(format!("totsuka-absent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(is_absent(&dir.join("nope.toml")).unwrap());
+        std::fs::write(dir.join("there.toml"), "x = 1\n").unwrap();
+        assert!(!is_absent(&dir.join("there.toml")).unwrap());
+
+        // A path whose *parent* is a file, not a directory: `try_exists` reports
+        // the error instead of claiming the file is not there.
+        let err = is_absent(&dir.join("there.toml/child.toml"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("child.toml"), "{err}");
+        assert!(err.contains("refusing to overwrite"), "{err}");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
