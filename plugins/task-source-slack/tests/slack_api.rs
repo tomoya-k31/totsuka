@@ -257,8 +257,11 @@ async fn fetch_message_falls_back_to_replies_for_a_thread_reply() {
     assert_eq!(requests[1].method, "conversations.replies");
     let body = requests[1].body.as_ref().unwrap();
     assert_eq!(body["ts"], "2.0");
-    // No `latest`: the lookup key *is* the message's own ts, so the page has
-    // to come from the head of the thread.
+    // `latest` is passed as `None` — the lookup key *is* the message's own ts,
+    // so the page has to come from the head of the thread. What the fake
+    // transport records is the wrapper's JSON, where `None` is still a
+    // literal null; the real transport (`transport::form_fields`) is what
+    // drops null arguments, so Slack receives `latest` omitted.
     assert!(body["latest"].is_null());
 }
 
