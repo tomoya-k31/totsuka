@@ -211,12 +211,6 @@ level = "info"        # error | warn | info | debug | trace（`--debug` で debu
 log_prompts = true    # プロンプト/ペイロードを記録（実出力は debug 以上のときのみ）
 max_files = 7         # 日次ログの保持世代数
 
-# ── PR 出力テンプレート ─────────────────────────────────────
-[output]
-pr_title_template = "{title}"
-pr_body_template = """
-Automated by totsuka for task **{title}**.
-
 Source: {url}
 
 {summary}
@@ -237,7 +231,7 @@ source = "github"                            # 必須。enabled な task_source 
 trigger = { project_status = "設計待ち" }     # 省略すると全タスクにマッチ
 mode = "plan"                                # plan | implement
 agent = "herdr"                              # 必須。enabled な agent_ide 名
-output = "source"                            # pull_request | source | none
+output = "source"                            # source | none
 on_success = { set_status = "設計レビュー待ち" }
 on_failure = { set_status = "設計失敗" }
 verification = "llm"                         # llm | human | none（省略時 llm）
@@ -251,7 +245,7 @@ source = "github"
 trigger = { project_status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 on_success = { set_status = "レビュー待ち" }
 verification = "llm"
 rubric = "テストが追加されており、cargo clippy / cargo fmt が通っていること"
@@ -289,19 +283,24 @@ rubric = "テストが追加されており、cargo clippy / cargo fmt が通っ
 
 | 値 | 挙動 | 選ぶ場面 |
 |---|---|---|
-| `plan` | worktree を作って設計させるが、**push / PR 作成は禁止** | 設計レビューを人間が挟みたい。実装前に方針を固めたい |
+| `plan` | worktree を作って設計させる。ペインが git を実行できないので、ブランチ作成もコミットも push も起きない | 設計レビューを人間が挟みたい。実装前に方針を固めたい |
 | `implement` | 実装してコミットまで行う | タスクが十分に具体化されている |
 
-`mode = "plan"` と `output = "pull_request"` の**組み合わせはバリデーションエラー**（plan は push しないため PR を作れない）。
 plan の結果を人に見せたいなら `output = "source"`（ソース側に書き戻す）を使う。
 
-## `[[workflows]].output` — pull_request / source / none
+## `[[workflows]].output` — source / none
 
 | 値 | 挙動 | 選ぶ場面 |
 |---|---|---|
-| `pull_request` | ブランチを push して PR を作る | 通常の実装タスク |
-| `source` | 結果をタスクソース側へ書き戻す（GitHub Issue コメント、Slack スレッド返信など） | 設計案の提示、Slack での応答。**プラグインが `source` 出力 capability を宣言していないとエラー** |
+| `source` | 結果をタスクソース側へ書き戻す（GitHub Issue コメント、Slack スレッド返信など） | 設計案の提示、Slack での応答、実装タスクの報告。**プラグインが `source` 出力 capability を宣言していないとエラー** |
 | `none` | 何も出力しない（worktree に成果物が残るだけ） | 手元で結果を確認してから自分で処理したい |
+
+**`pull_request` は廃止された。** push と PR 作成はエージェントの責務になり
+（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）、Orchestrator は
+push しない。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、
+PR 作成手順はリポジトリの規約（CLAUDE.md / CONTRIBUTING.md など）と `[prompts]` で指示する。
+PR の URL を Slack 返信に載せたい場合は、エージェントの最終メッセージに含めさせる
+（`plugins/slack.toml` の `[prompts].reply_instructions`）。
 
 ## `[[workflows]].verification` — llm / human / none
 
@@ -484,7 +483,7 @@ source = "github"
 trigger = { project_status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 on_success = { set_status = "レビュー待ち" }
 ```
 
@@ -509,7 +508,7 @@ source = "github"
 trigger = { project_status = "実装待ち" }        # 人がレビュー後に手で移す
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 on_success = { set_status = "レビュー待ち" }
 ```
 
@@ -564,7 +563,7 @@ source = "github"
 trigger = { labels = ["migration", "high-risk"] }   # 両方のラベルが必要（AND）
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 verification = "human"      # totsuka task verify を待って止まる
 timeout_secs = 3600
 ```
@@ -613,7 +612,6 @@ totsuka doctor                     # 依存コマンド・ソケット・シー�
 |---|---|
 | `unknown field` | キーの typo（`deny_unknown_fields`） |
 | プラグイン参照エラー | workflow の `source` / `agent` が未定義、`enabled = false`、または `kind` 違い |
-| `mode = plan` × `output = pull_request` | plan は push しないので PR を作れない |
 | リポジトリパス不在 | `path` の展開結果がディスク上に存在しない |
 | プレースホルダエラー | `worktree_location` に `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` / `{source}` 以外を使った（`{branch}` は廃止済みで専用のエラーになる） |
 | 環境変数未設定 | `${VAR}` 参照先が export されていない |

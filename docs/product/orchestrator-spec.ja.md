@@ -215,10 +215,10 @@ design_preview = "side_pane"
 | F-80 | ワークフロー = `source(タスクソースインスタンス) × trigger(取り込み条件) × mode(plan / implement) × agent × output(出力ポリシー)` の名前付き設定。config.toml に `[[workflows]]` として任意個定義できる | M |
 | F-81 | trigger は Issue / Projects のステータス列・ラベル、Notion のプロパティ値等で指定する。1タスクは同時に1ワークフローにのみマッチすること(複数マッチは `config validate` で警告、優先順位は定義順) | M |
 | F-82 | `mode = "plan"`(詳細設計): worktree は作成する(コードベース参照のため)が、**push・PR 作成は行わない**。エージェントは plan モードで実行し、成果物として設計ドキュメントを返す | M |
-| F-83 | 出力ポリシー `output`: `pull_request`(push + PR 作成)/ `source`(タスクソースプラグインの `result/publish` で Issue コメント・Notion ページ等へ記載)/ `none`。タスクソースプラグインは対応可能な出力を capability として宣言し、実現方法はプラグイン側で実装する | M |
+| F-83 | 出力ポリシー `output`: `source`(タスクソースプラグインの `result/publish` で Issue コメント・Notion ページ等へ記載)/ `none`。タスクソースプラグインは対応可能な出力を capability として宣言し、実現方法はプラグイン側で実装する。`pull_request` は push・PR 作成がエージェントの責務になるまで存在した(F-86) | M |
 | F-84 | `on_success` / `on_failure`: 完了時にソース側のステータスを遷移させる(例: 「設計待ち → 設計レビュー待ち」)。この**ソース上のステータス遷移が plan → 人間レビュー → implement のハンドオフ機構**となり、設計と実装の間に人間のレビューが自然に挟まる | M |
 | F-85 | plan モードの worktree 掃除ポリシーは implement と別に設定可能(設計のみなら即時掃除がデフォルト) | S |
-| F-86 | `output = "pull_request"` 時の push・PR 作成は **Orchestrator の責務**(gh CLI または GitHub API)。エージェントの責務はコミットまでとし、この境界をプラグインプロトコル仕様に明記する | M |
+| F-86 | **push・PR 作成はエージェントの責務**とし、リポジトリ自身の規約(その手順が書かれている場所)に従わせる。Orchestrator は worktree とタスクのライフサイクルを持ち、push は行わない。`output = "pull_request"` はこの境界とともに廃止した — 失うものは [ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) を参照 | M |
 
 **設定例**
 
@@ -238,7 +238,7 @@ source = "github"
 trigger = { project_status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 on_success = { set_status = "レビュー待ち" }
 ```
 

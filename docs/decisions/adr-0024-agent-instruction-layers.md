@@ -85,11 +85,13 @@ totsuka が `--settings` で渡すファイル（`crates/orchestrator-core/src/h
 | 守るもの | 保証 | 種類 |
 |---|---|---|
 | 本体リポジトリが汚れない | worktree で作業する | 構造的 |
-| リモートが汚れない | `output = "source"` + F-86 + `Bash(git push:*)` deny | 構造的 |
+| リモートが汚れない | worktree のブランチにしか push されない（本体のブランチは checkout していない） | 部分的 |
 | 破壊的な GitHub 操作をしない | `Bash(gh api:*)` / `gh issue delete` 等の deny | 構造的（サブコマンド単位） |
 | worktree 内のファイルを編集しない | 散文のみ。worktree ごと捨てるので実害なし | 散文 + 使い捨て |
 
-保証の本体は **隔離**（worktree ≠ 本体リポジトリ、push は構造的に不可能）であって、廃棄ではない。廃棄はディスク衛生の問題として `[worktree].cleanup` で扱う。
+保証の本体は **隔離**（worktree ≠ 本体リポジトリ）であって、廃棄ではない。廃棄はディスク衛生の問題として `[worktree].cleanup` で扱う。
+
+> **改訂（[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）**: 「リモートが汚れない」行は当初 `output = "source"` + F-86 + `Bash(git push:*)` deny を根拠に**構造的**と主張していたが、F-86 を撤回して push をエージェントの責務にしたため成り立たない。`Bash(git push:*)` deny はそもそも実装されておらず（コードにも同梱 config にも無かった）、F-86 が唯一の実体だった。残る保証は worktree 隔離だけで、押し先が worktree のブランチに限られる点に留まる。
 
 ## 5. F-86 の適用範囲は「成果物の公開」に限る
 

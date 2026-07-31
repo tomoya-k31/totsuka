@@ -31,7 +31,7 @@ CI（[テスト戦略](/quality/test-strategy.md)）は実 mock プラグイン�
 - [ ] dispatch でエージェントが worktree 上で起動し、`running` が `status` に反映される
 - [ ] **設計プレビュー**（plan モード）がサイドペイン / 画面に表示される（F-34）
 - [ ] エージェントが人間に質問すると `waiting_input` になり、通知が届く（F-35）→ 応答後に `run` で再開する（F-44）
-- [ ] 完了後、`output = pull_request` で Orchestrator が push + PR 作成する（エージェントは push しない、F-86）
+- [ ] worktree が detached HEAD で作られ、エージェントがリポジトリの規約に沿ったブランチを切る。完了後 `totsuka task show` にそのブランチ名が出る（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）
 
 # agent_ide（orca）
 

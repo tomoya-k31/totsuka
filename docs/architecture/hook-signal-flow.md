@@ -52,7 +52,7 @@ sequenceDiagram
     alt verification = "none" または "llm"（COMPLETED 受信）
         Note over EN,CC: llm は orchestrator-<workflow>.json のセッション内 prompt 型 Stop フック（rubric）が判定
         EN->>EN: finalize_success（マーカー除去済み last_assistant_message を成果物へ）
-        EN->>HE: 出力ポリシー（pull_request=push+PR / source=result/publish / none）
+        EN->>HE: 出力ポリシー（source=result/publish / none）
         HE->>TS: result/publish（source の場合 → 本人名義スレッド返信の下書き・承認フロー）
         EN->>HE: task/cancel（冪等 → Done pane 自動クローズ, F-107）
         EN->>NO: notify(done)

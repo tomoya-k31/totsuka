@@ -117,7 +117,7 @@ worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane
 - **プラグインが `enabled but not installed`**: `totsuka plugin install <dir>`
 - **タスクが取り込まれない**: `totsuka run --dry-run` でトリガーマッチ・リポジトリ選択・エージェント割当を副作用ゼロで確認。ワークフローの `source` は `[plugins.{name}]` のインスタンス名と一致させる
 - **リポジトリ選択が `pending`**: `[llm]` 未設定 or 確信度が低い。単一リポジトリなら自動選択、複数なら `[llm]` を設定するか `repo_hint` を付与
-- **pull_request が「コミットゼロ」で失敗**: エージェントがコミットしていない（agent の責務はコミットまで、F-86）。retry で再開可能
+- **`totsuka task show` にブランチが出ない**: エージェントがブランチを切っていない（worktree は detached HEAD で渡る）。コミットがあれば掃除は worktree を残すので、そこで作業を拾える。plan モードは常にこの状態が正常
 - **通知が来ない**: `[plugins.{notifier}] enabled` と `notifier` プラグイン疎通を `doctor` で確認。配送失敗はタスク実行を止めない（F-93）
 
 リリース前の実機確認は [リリース前手動チェックリスト](/quality/release-checklist.md) を参照。

@@ -71,7 +71,7 @@ source = "github"
 trigger = {{ project_status = "実装待ち" }}
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 on_success = {{ set_status = "レビュー待ち" }}
 "#,
         repo = repo_dir.display()

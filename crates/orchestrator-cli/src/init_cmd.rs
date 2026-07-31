@@ -50,7 +50,7 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # trigger = { project_status = "実装待ち" }
 # mode = "implement"
 # agent = "herdr"
-# output = "pull_request"
+# output = "source"
 # on_success = { set_status = "レビュー待ち" }
 "#;
 

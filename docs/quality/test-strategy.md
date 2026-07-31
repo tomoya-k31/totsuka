@@ -31,7 +31,7 @@ owner: tomoya-k31
 | `task_submit` / `submit_tasks` | `task_submit: true` で push 型 task_source を演じ、`initialize` 応答直後に `submit_tasks` の各エントリを `task/submit` として push（1 タスクの重複投入で orchestrator 側 dedup=`duplicate` ack の検証にも使える） |
 | `stream_states` | `state/subscribe` 後に再生する状態列（例 `["running","done"]` / `["running","waiting_input"]`）（agent_ide, F-38） |
 | `session_id` | `task/dispatch` が返すセッション ID。`gone`/`done`/`waiting`/`fail` を含めると `session/attach` の応答を制御（回復シナリオ #57） |
-| `commit_on_dispatch` | dispatch 時に worktree へ実コミット（pull_request 出力の検証 #65） |
+| `commit_on_dispatch` | dispatch 時に worktree でブランチを切って実コミット（`branch_on_dispatch` で名前を指定、既定 `feat/mock-agent-work`）。worktree は detached で渡るので、ブランチが先 |
 | `crash_on_dispatch` | dispatch 中に自殺（クラッシュ隔離 §5.3） |
 | `no_state_stream` | `state_stream` capability を落とす（非対応エージェント拒否 #63） |
 | `notify_log` | 受信した `notify` / `task/update_status` / `result/publish` を JSON Lines で記録（テスト側でアサート） |

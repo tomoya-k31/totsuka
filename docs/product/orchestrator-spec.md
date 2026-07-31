@@ -213,11 +213,11 @@ On top of the same plugin binaries, any number of **named configurations — wor
 |---|---|---|
 | F-80 | Workflow = a named configuration of `source (task-source instance) × trigger (intake condition) × mode (plan / implement) × agent × output (output policy)`. Any number definable as `[[workflows]]` in config.toml | M |
 | F-81 | Triggers are specified via Issue / Projects status columns or labels, Notion property values, etc. One task must match at most one workflow at a time (multiple matches produce a `config validate` warning; precedence is definition order) | M |
-| F-82 | `mode = "plan"` (detailed design): a worktree IS created (for codebase reference) but **no push and no PR creation**. The agent runs in plan mode and returns a design document as the artifact | M |
-| F-83 | Output policy `output`: `pull_request` (push + create PR) / `source` (write to Issue comment, Notion page, etc. via the task-source plugin's `result/publish`) / `none`. Task-source plugins declare supported outputs as capabilities; realization is plugin-side | M |
+| F-82 | `mode = "plan"` (detailed design): a worktree IS created (for codebase reference) but the pane cannot run git at all, so it never branches, commits, pushes or opens a PR. The agent runs in plan mode and returns a design document as the artifact | M |
+| F-83 | Output policy `output`: `source` (write to Issue comment, Notion page, etc. via the task-source plugin's `result/publish`) / `none`. Task-source plugins declare supported outputs as capabilities; realization is plugin-side. A `pull_request` policy existed until push and PR creation became the agent's responsibility (F-86) | M |
 | F-84 | `on_success` / `on_failure`: transition the source-side status on completion (e.g. "awaiting design → awaiting design review"). This **source-side status transition is the handoff mechanism for plan → human review → implement**, naturally inserting human review between design and implementation | M |
 | F-85 | Worktree cleanup policy for plan mode configurable separately from implement (immediate cleanup is the default for design-only) | S |
-| F-86 | With `output = "pull_request"`, push and PR creation are the **orchestrator's responsibility** (gh CLI or GitHub API). The agent's responsibility ends at committing; this boundary is stated in the plugin protocol spec | M |
+| F-86 | **Push and PR creation are the agent's responsibility**, following the repository's own conventions (which is where those procedures are written down). The orchestrator owns the worktree and the task lifecycle, and never pushes. `output = "pull_request"` was retired with this boundary — see [ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) for what this gives up | M |
 
 **Configuration example**
 
@@ -237,7 +237,7 @@ source = "github"
 trigger = { project_status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
-output = "pull_request"
+output = "source"
 on_success = { set_status = "レビュー待ち" }
 ```
 

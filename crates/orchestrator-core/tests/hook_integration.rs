@@ -146,8 +146,6 @@ fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSetti
         env: HashMap::new(),
         select: SelectConfig::default(),
         readme_cache_dir: None,
-        pr_title_template: "t: {title}".to_string(),
-        pr_body_template: "{summary}".to_string(),
         // Sweep every cycle, as before the interval existed (#210).
         worktree_sweep_interval: Duration::ZERO,
         // These tests drive the loop in watch mode (`run_until`), where the

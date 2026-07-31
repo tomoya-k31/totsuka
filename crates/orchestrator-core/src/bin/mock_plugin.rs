@@ -11,6 +11,9 @@
 //! - `config/validate` → valid unless the config contains `"invalid": true`.
 //! - `task/update_status` / `result/publish` → acknowledge (recorded to the
 //!   config's `"notify_log"` file, if set, as `{"method": ..., "params": ...}`).
+//!   `"publish_error": true` makes `result/publish` answer with an error
+//!   instead, so the publish-failure path (task failed, worktree and session
+//!   kept for `task retry`) is exercisable.
 //! - `task/dispatch` → replies with the config's `"session_id"` (default
 //!   `sess-mock`); `"commit_on_dispatch": true` makes the mock agent branch
 //!   (`"branch_on_dispatch"`, default `feat/mock-agent-work`) and leave a real
@@ -142,6 +145,27 @@ fn main() {
                         },
                     })
                     .unwrap(),
+                )
+            }
+            // `publish_error: true` refuses the publish, which is the only way
+            // to drive the orchestrator's publish-failure path from a test: the
+            // task fails but keeps its worktree, commits and session so
+            // `task retry` can resume from there (#65). The attempt is still
+            // recorded — what those tests assert is the sequence.
+            "result/publish"
+                if config
+                    .get("publish_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false) =>
+            {
+                record(&config, method, &params);
+                Response::error(
+                    request_id(&id),
+                    Error {
+                        code: error_code::INTERNAL_ERROR,
+                        message: "mock refused to publish".to_string(),
+                        data: None,
+                    },
                 )
             }
             "task/update_status" | "result/publish" => {

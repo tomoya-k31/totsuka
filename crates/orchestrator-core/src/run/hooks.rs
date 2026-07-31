@@ -1,6 +1,6 @@
 //! Hook-signal handling for the run loop (#131/#138).
 //!
-//! Split out of [`run`](super) in the same style as [`output`](super::output):
+//! Split out of [`run`](super):
 //! this module owns everything that turns a normalized Claude Code hook signal
 //! into a state transition. [`Engine::on_signal`] is the entry point — an
 //! idempotent record → task resolution → state transition → verification →
