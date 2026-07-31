@@ -30,7 +30,8 @@ env:
 jobs:
   clippy:
     name: clippy / rustfmt
-    if: github.event_name == 'pull_request'
+    # TEMPORARY(#341): ref_name の OR は段階 1 の実測用。マージ前に外す。
+    if: github.event_name == 'pull_request' || github.ref_name == 'perf/ci-cache-lifecycle'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
