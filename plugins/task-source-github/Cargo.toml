@@ -13,8 +13,13 @@ publish = false
 [lints]
 workspace = true
 
+# The bin name must equal `plugin.toml`'s `name`: that is the filename
+# `plugin install` requires inside the source directory, and the one the store
+# lays down as `<plugin dir>/<name>`. Keeping them equal makes
+# `target/{profile}/<name>` directly installable and distributable, with no
+# rename step. `scripts/arch-lint.sh` enforces the invariant.
 [[bin]]
-name = "task-source-github"
+name = "github"
 path = "src/main.rs"
 
 [dependencies]
