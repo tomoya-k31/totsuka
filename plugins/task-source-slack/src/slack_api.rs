@@ -12,6 +12,14 @@ use serde_json::{Value, json};
 use crate::error::{SlackError, app_auth_failure, auth_failure, bot_auth_failure};
 use crate::transport::{SlackTransport, TokenKind, expect_ok};
 
+/// How many thread messages [`SlackApi::fetch_message`] pulls when falling
+/// back to `conversations.replies`. The target is somewhere in the thread and
+/// `latest` is not usable here (the lookup key *is* the message's own `ts`),
+/// so this bounds a single page rather than naming a position. Slack's own
+/// ceiling for the method is 1000; 200 keeps one page enough for any thread a
+/// human is realistically reacting inside.
+const THREAD_LOOKUP_LIMIT: u32 = 200;
+
 /// The identity behind a token, from `auth.test`.
 #[derive(Debug, Clone)]
 pub struct AuthIdentity {
@@ -221,6 +229,89 @@ impl<T: SlackTransport> SlackApi<T> {
                 )
             })?;
         Ok(messages.iter().map(parse_message).collect())
+    }
+
+    /// `conversations.history` narrowed to the single message at `ts`
+    /// (`latest = oldest = ts`, `inclusive`, `limit = 1`).
+    ///
+    /// [`conversations_replies`](Self::conversations_replies) cannot do this:
+    /// it takes a *thread* root, so it returns nothing for a message that
+    /// isn't one. A `reaction_added` event carries only `item.channel` +
+    /// `item.ts`, which is exactly what this fetches back.
+    ///
+    /// `Ok(None)` means "the window matched nothing", which is a **routine**
+    /// answer, not a failure: `conversations.history` does not return replies
+    /// inside a thread unless they were also broadcast to the channel. See
+    /// [`fetch_message`](Self::fetch_message) for the fallback that covers it.
+    pub async fn conversations_history_one(
+        &self,
+        channel: &str,
+        ts: &str,
+    ) -> Result<Option<SlackMessage>, SlackError> {
+        let response = self
+            .call(
+                "conversations.history",
+                Some(json!({
+                    "channel": channel,
+                    "latest": ts,
+                    "oldest": ts,
+                    "inclusive": true,
+                    "limit": 1,
+                })),
+                true,
+            )
+            .await?;
+        let messages = response
+            .get("messages")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                SlackError::InvalidResponse(
+                    "`conversations.history` response has no `messages` array".into(),
+                )
+            })?;
+        // Slack bounds the window by ts, but an off-by-one on either edge
+        // would silently hand back a neighbouring message and the caller
+        // would build a task from the wrong text. Match `ts` explicitly.
+        Ok(messages
+            .iter()
+            .map(parse_message)
+            .find(|message| message.ts == ts))
+    }
+
+    /// One message by `(channel, ts)`, whether it sits at channel level or
+    /// inside a thread (#319).
+    ///
+    /// `conversations.history` is tried first — one round trip covers the
+    /// common case — and `conversations.replies` is the fallback for a
+    /// message that only exists as a thread reply. **Skipping the fallback
+    /// produces "reacting to a message inside a thread does nothing", which
+    /// looks like a dropped event rather than a missing lookup.**
+    ///
+    /// `Ok(None)` means the message could not be found by either route. The
+    /// caller drops the trigger; it must not be an error, or one reaction to
+    /// an unreachable message would take the plugin down.
+    pub async fn fetch_message(
+        &self,
+        channel: &str,
+        ts: &str,
+    ) -> Result<Option<SlackMessage>, SlackError> {
+        if let Some(message) = self.conversations_history_one(channel, ts).await? {
+            return Ok(Some(message));
+        }
+        // A thread reply: `ts` is its own id, and passing it as the thread
+        // root returns the enclosing thread (Slack resolves it to the parent).
+        // `latest = None` pages from the head, so the target may sit anywhere
+        // in the page — match on `ts` rather than assuming a position.
+        //
+        // This is the first caller to pass `latest = None`, which puts
+        // `latest`/`inclusive` into the request body as JSON nulls.
+        // `transport::form_fields` drops null-valued arguments before the
+        // request is built (pinned by its own test), so Slack sees the
+        // arguments omitted rather than set to an invalid value.
+        let thread = self
+            .conversations_replies(channel, ts, THREAD_LOOKUP_LIMIT, None)
+            .await?;
+        Ok(thread.into_iter().find(|message| message.ts == ts))
     }
 
     /// `conversations.open` with the operator's own user id — the self-DM
