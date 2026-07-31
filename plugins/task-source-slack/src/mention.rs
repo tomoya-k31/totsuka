@@ -95,6 +95,18 @@ impl MentionFilter {
         self.self_dm_channel = Some(channel);
     }
 
+    /// The operator's own user id — the identity the reaction trigger
+    /// requires the *reacting* user to match (#319).
+    pub fn target_user_id(&self) -> &str {
+        &self.target_user_id
+    }
+
+    /// Filter row 3, exposed so the reaction trigger applies the same
+    /// exclusion before spending an API call re-fetching the message.
+    pub fn is_self_dm_channel(&self, channel: &str) -> bool {
+        self.self_dm_channel.as_deref() == Some(channel)
+    }
+
     /// Run one raw `message` event through the filter table. `Some` means a
     /// fresh mention (and the event is now remembered as processed).
     pub fn assess(&mut self, event: &Value) -> Option<Mention> {
@@ -136,7 +148,11 @@ impl MentionFilter {
     }
 
     /// Record `key` as processed; `false` when it already was.
-    fn remember(&mut self, key: String) -> bool {
+    ///
+    /// Public because the reaction trigger (#319) shares this one set: a
+    /// message reached by both a mention and an `:eyes:` reaction must become
+    /// **one** task, so both paths have to dedup against the same keys.
+    pub fn remember(&mut self, key: String) -> bool {
         if self.processed.contains(&key) {
             return false;
         }
