@@ -74,8 +74,8 @@ use crate::run::output::{
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
 use crate::tool::{LaunchInputs, ToolProfile};
 use crate::worktree::{
-    CleanupDecision, CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE,
-    DEFAULT_WORKTREE_NAME_TEMPLATE, WorktreeError, WorktreeManager, default_location_template,
+    CleanupDecision, CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_WORKTREE_NAME_TEMPLATE,
+    WorktreeError, WorktreeManager, default_location_template,
 };
 
 /// Lines of a repository README shown to the LLM as selection context (F-11).
@@ -137,8 +137,6 @@ pub struct EngineSettings {
     pub repos: Vec<RepoSettings>,
     /// Concurrency limits (F-40–F-42).
     pub limits: Limits,
-    /// Branch-name template (F-21).
-    pub branch_template: String,
     /// Worktree directory-name template, filling `{worktree_name}` in
     /// `location_template` (F-22 addendum).
     pub worktree_name_template: String,
@@ -261,7 +259,6 @@ pub fn settings_from_config(
         workflows: Workflow::from_configs(&cfg.workflows),
         repos,
         limits,
-        branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
         worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
         location_template: cfg
             .worktree
@@ -959,9 +956,71 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .last_worktree_sweep
             .is_none_or(|last| last.elapsed() >= self.settings.worktree_sweep_interval);
         if sweep_due {
+            self.sync_branches_of_active_tasks()?;
             self.sweep_finished_worktrees().await?;
             self.last_worktree_sweep = Some(tokio::time::Instant::now());
         }
+        Ok(())
+    }
+
+    /// Read `HEAD` in the worktree of every in-flight task and record the
+    /// branch the agent put it on.
+    ///
+    /// The periodic half of branch discovery. [`sync_branch`](Self::sync_branch)
+    /// also runs on every Stop, which is the timely path — but a Stop is not
+    /// guaranteed to arrive. A crash, a `SIGTERM`, an operator killing the
+    /// pane, and `sweep_signal_timeouts`' own escalation all end a task without
+    /// one, and codex and opencode send no intermediate heartbeat at all
+    /// (`on-stop.sh` only emits one when `background_tasks` is non-empty, which
+    /// opencode hardcodes empty). Leaving the branch unrecorded in those cases
+    /// costs the branch cleanup and the re-creation path that reuses it.
+    ///
+    /// Rides the existing worktree-sweep throttle rather than the 200ms tick:
+    /// this is one `git rev-parse` per running task, which is the same order of
+    /// cost as the `git status` the sweep already throttles for.
+    fn sync_branches_of_active_tasks(&mut self) -> Result<(), EngineError> {
+        let mut candidates = Vec::new();
+        for state in [TaskState::Dispatched, TaskState::Running] {
+            for record in self.db.tasks_in_state(state)? {
+                candidates.push(record.id);
+            }
+        }
+        for task_id in candidates {
+            self.sync_branch(task_id)?;
+        }
+        Ok(())
+    }
+
+    /// Record which branch a task's worktree is on, if it is on one.
+    ///
+    /// Creation hands the worktree over detached and the agent names the
+    /// branch, so this read is how the orchestrator learns the name at all —
+    /// there is no channel from the agent back to totsuka other than the status
+    /// marker and the final message, and adding one would have to be
+    /// implemented three times over (claude / codex / opencode) and trusted to
+    /// report accurately. `HEAD` is the ground truth by construction.
+    ///
+    fn sync_branch(&mut self, task_id: i64) -> Result<(), EngineError> {
+        let Some(record) = self.db.get_task(task_id)? else {
+            return Ok(());
+        };
+        let Some(path) = record
+            .worktree_path
+            .as_deref()
+            .filter(|p| Path::new(p).is_dir())
+        else {
+            return Ok(());
+        };
+        // Detached is left unrecorded rather than cleared: the agent may simply
+        // not have branched yet, and this runs repeatedly.
+        let Some(head) = self.worktrees.head_branch(Path::new(path)) else {
+            return Ok(());
+        };
+        if record.branch.as_deref() == Some(head.as_str()) {
+            return Ok(());
+        }
+        tracing::info!(task_id, branch = %head, "recorded the agent's branch");
+        self.db.set_branch(task_id, &head)?;
         Ok(())
     }
 
@@ -1339,9 +1398,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // may remove it by hand, so a recorded path is not evidence of a usable
         // worktree; handing a missing directory to the agent fails the dispatch
         // for a reason the operator cannot act on. Re-creating renders the same
-        // branch and path (both are pure functions of source + task id), and
-        // the agent session survives it: Claude Code keys sessions by working
-        // directory, storing them outside the worktree.
+        // path (a pure function of source + task id) and puts the worktree back
+        // on the branch this task was last seen on, and the agent session
+        // survives it: Claude Code keys sessions by working directory, storing
+        // them outside the worktree.
         //
         // Keyed on the path alone: a recorded worktree is reusable whether or
         // not a branch was ever recorded for it, and requiring both would send
@@ -1359,7 +1419,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     repo_name: &repo.name,
                     source: &record.source,
                     task_id: &record.source_task_id,
-                    branch_template: &self.settings.branch_template,
+                    existing_branch: record.branch.as_deref(),
                     name_template: &self.settings.worktree_name_template,
                     location_template: &location_template,
                     base_branch: None,
@@ -1371,7 +1431,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         self.db.set_worktree(
                             record.id,
                             &path,
-                            Some(&worktree.branch),
+                            worktree.branch.as_deref(),
                             &worktree.base_commit,
                         )?;
                         worktree.path
@@ -1382,15 +1442,15 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     // and name the remedy instead of surfacing raw git stderr:
                     // re-creation (#254) already absorbs every case totsuka
                     // caused itself, so reaching here needs a human.
-                    Err(WorktreeError::AlreadyExists { branch, path }) => {
+                    Err(WorktreeError::AlreadyExists { path }) => {
                         return self
                             .fail_dispatch(
                                 &record,
                                 format!(
-                                    "`{}` is already occupied (branch `{branch}`) but is not \
-                                     recorded for this task; remove it — `git worktree remove {}`, \
-                                     or the cleanup `totsuka doctor` offers, or plain `rm -rf` if \
-                                     it is not a worktree at all — and retry",
+                                    "`{}` is already occupied but is not recorded for this task; \
+                                     remove it — `git worktree remove {}`, or the cleanup \
+                                     `totsuka doctor` offers, or plain `rm -rf` if it is not a \
+                                     worktree at all — and retry",
                                     path.display(),
                                     path.display(),
                                 ),
@@ -1444,17 +1504,26 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 // var — the model sees them, the pane shows only the task
                 // body. Hook knowledge stays in core (H-01): source plugins
                 // never compose marker instructions.
+                let prompts = self.settings.prompts.for_workflow(&record.workflow);
                 let mut prompt_context = String::new();
                 if let Some(instructions) = &task.instructions {
                     prompt_context.push_str(instructions);
                     prompt_context.push_str("\n\n");
                 }
-                prompt_context.push_str(
-                    self.settings
-                        .prompts
-                        .for_workflow(&record.workflow)
-                        .marker_self_report(),
-                );
+                // Ask the agent to branch, but only where the ask is both
+                // actionable and needed. Plan mode cannot run git at all
+                // (claude `--permission-mode plan`, codex `--sandbox
+                // read-only`, opencode's `bash: deny`), and on claude the
+                // instruction would provoke a permission prompt an unattended
+                // pane has nobody to answer — turning an unfollowable ask into
+                // a timeout escalation. A task already on a branch is resuming
+                // onto one this task made earlier, and re-asking would invite
+                // a second branch mid-conversation.
+                if record.mode != "plan" && record.branch.is_none() {
+                    prompt_context.push_str(prompts.branch_convention());
+                    prompt_context.push_str("\n\n");
+                }
+                prompt_context.push_str(prompts.marker_self_report());
                 // Context routing per tool capability (#196 Phase 3): a tool
                 // without invisible injection (opencode — no UserPromptSubmit
                 // additionalContext channel) gets the same instructions +
@@ -1985,6 +2054,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// On a **publishing failure** the task is failed but its worktree and
     /// commits are kept, so `task retry` can resume from here (issue #65).
     async fn finalize_success(&mut self, record: &TaskRecord) -> Result<(), EngineError> {
+        // Last chance to learn the branch before anything consumes it. The
+        // Stop handler already syncs, but only hook-capable agents send a
+        // Stop — a non-hook agent (orca, the mock) reports completion through
+        // `state/notification` and reaches here having produced no signal at
+        // all. Re-reading is cheap and idempotent.
+        self.sync_branch(record.id)?;
+        let record = &self
+            .db
+            .get_task(record.id)?
+            .unwrap_or_else(|| record.clone());
         // A finished task whose workflow vanished from config still holds the
         // agent's commits; treat it as a recoverable publish failure rather
         // than silently completing and deleting the worktree (never confuse a
@@ -2228,6 +2307,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// on a `Remove` decision, so `Retained`/`DirtySkipped` worktrees keep
     /// their pane as the human's entry point (F-23/F-85).
     async fn cleanup_worktree(&mut self, task_id: i64) -> Result<(), EngineError> {
+        // The other consumer of the branch, and the one reached by paths that
+        // never publish at all (a cancel, a sweep of a task finished by an
+        // earlier process). Deleting the branch is the only thing that needs
+        // it, and it is the thing that silently does not happen otherwise.
+        self.sync_branch(task_id)?;
         // Re-fetch: `finished_at` was just set by the terminal transition.
         let Some(record) = self.db.get_task(task_id)? else {
             return Ok(());
@@ -2241,6 +2325,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             return Ok(());
         };
         let branch = record.branch.as_deref();
+        let base_commit = record.base_commit.as_deref();
         // Already removed (earlier run / manual cleanup): nothing to do. The
         // task will never be swept again, so drop its release memo too.
         if !Path::new(path).exists() {
@@ -2266,6 +2351,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let now = self.clock.now_rfc3339();
         let decision = match self.worktrees.decide_cleanup(
             Path::new(path),
+            base_commit,
             policy,
             record.finished_at.as_deref(),
             &now,
@@ -2302,7 +2388,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         if !self.released_panes.contains(&task_id) {
             self.release_pane(&record).await;
         }
-        match self.worktrees.remove(&repo_path, Path::new(path), branch) {
+        match self
+            .worktrees
+            .remove(&repo_path, Path::new(path), branch, base_commit)
+        {
             Ok(CleanupOutcome::DirtySkipped) => {
                 // Turned dirty between decision and removal: the pane is
                 // already gone, but data loss (irreversible) outranks a lost
@@ -2894,7 +2983,6 @@ plan_cleanup = "keep_28d"
             workflows: Vec::new(),
             repos: Vec::new(),
             limits: Limits::global(1),
-            branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
             worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
             location_template: "/tmp/totsuka-sweep/{repo_name}/{worktree_name}".to_string(),
             cleanup_implement: CleanupPolicy::Manual,

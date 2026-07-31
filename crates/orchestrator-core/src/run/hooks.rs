@@ -95,23 +95,32 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 reason,
                 last_assistant_message,
                 transcript_path,
-            } => match status {
-                StopStatus::Completed => {
-                    self.on_stop_completed(
-                        &record,
-                        &agent_plugin,
-                        last_assistant_message,
-                        transcript_path,
-                    )
-                    .await?
-                }
-                StopStatus::NeedsInput => {
-                    self.on_stop_needs_input(&record, &agent_plugin, reason)
+            } => {
+                // Every Stop, whatever it says: this is the last moment before
+                // the task can be published, cleaned up, or retried, and all
+                // three read the recorded branch. A `NeedsInput` stop matters
+                // most — it is followed by a human reply and a re-dispatch,
+                // which is exactly when a stale record would send the task
+                // back through worktree creation.
+                self.sync_branch(task_id)?;
+                match status {
+                    StopStatus::Completed => {
+                        self.on_stop_completed(
+                            &record,
+                            &agent_plugin,
+                            last_assistant_message,
+                            transcript_path,
+                        )
                         .await?
+                    }
+                    StopStatus::NeedsInput => {
+                        self.on_stop_needs_input(&record, &agent_plugin, reason)
+                            .await?
+                    }
+                    StopStatus::Failed => self.on_stop_failed(&record, reason).await?,
+                    StopStatus::Unknown => self.on_stop_unknown(&record).await?,
                 }
-                StopStatus::Failed => self.on_stop_failed(&record, reason).await?,
-                StopStatus::Unknown => self.on_stop_unknown(&record).await?,
-            },
+            }
             // A permission / idle prompt: surface it to the human but keep the
             // task running and holding its slot. Approval-waiting is distinct
             // from question-waiting (R-08) — only `Stop{NeedsInput}` moves the

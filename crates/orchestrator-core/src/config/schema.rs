@@ -107,6 +107,14 @@ pub struct PromptsConfig {
     /// `{marker_failed}`.
     #[serde(default)]
     pub marker_self_report: Option<String>,
+    /// Instruction to create the task's branch, injected when the worktree is
+    /// handed over detached (implement mode, not resuming onto an existing
+    /// branch). No placeholders.
+    ///
+    /// Not emitted in plan mode at all — a plan-mode pane cannot run git, so
+    /// the text would be unfollowable there regardless of what it says.
+    #[serde(default)]
+    pub branch_convention: Option<String>,
     /// Judging criteria of the llm-verification prompt hook. The per-workflow
     /// [`rubric`](WorkflowConfig::rubric) key predates this and still wins for
     /// the workflow that sets it.
@@ -143,6 +151,7 @@ impl PromptsConfig {
     pub fn entries(&self) -> Vec<(&'static str, &str)> {
         [
             ("marker_self_report", &self.marker_self_report),
+            ("branch_convention", &self.branch_convention),
             ("verification_rubric", &self.verification_rubric),
             (
                 "verification_background_exemption",
@@ -177,6 +186,9 @@ pub struct WorkflowPromptsConfig {
     /// See [`PromptsConfig::marker_self_report`].
     #[serde(default)]
     pub marker_self_report: Option<String>,
+    /// See [`PromptsConfig::branch_convention`].
+    #[serde(default)]
+    pub branch_convention: Option<String>,
     /// See [`PromptsConfig::verification_rubric`].
     #[serde(default)]
     pub verification_rubric: Option<String>,
@@ -196,6 +208,7 @@ impl WorkflowPromptsConfig {
     pub fn entries(&self) -> Vec<(&'static str, &str)> {
         [
             ("marker_self_report", &self.marker_self_report),
+            ("branch_convention", &self.branch_convention),
             ("verification_rubric", &self.verification_rubric),
             (
                 "verification_background_exemption",

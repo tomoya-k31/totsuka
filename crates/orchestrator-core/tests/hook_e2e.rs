@@ -32,9 +32,7 @@ use orchestrator_core::ports::SecretString;
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, HookRuntime, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::{
-    CleanupPolicy, DEFAULT_BRANCH_TEMPLATE, DEFAULT_WORKTREE_NAME_TEMPLATE,
-};
+use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_WORKTREE_NAME_TEMPLATE};
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use test_support::{bare_origin_and_clone as setup_repo, scratch};
@@ -140,7 +138,6 @@ fn settings_with(
             tool: None,
         }],
         limits: Limits::global(4),
-        branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
         worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
         location_template: "{repo}/../wt/{worktree_name}".to_string(),
         cleanup_implement: CleanupPolicy::Manual,
@@ -540,7 +537,11 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
         .unwrap()
         .unwrap();
     let worktree = PathBuf::from(opened.worktree_path.clone().expect("a worktree"));
-    let branch = opened.branch.clone().expect("a branch");
+    // Plan mode records no branch, and permanently: the pane cannot run git
+    // (`--permission-mode plan` / `--sandbox read-only` / opencode's `bash:
+    // deny`), so nothing ever moves `HEAD` off the detached base commit. The
+    // orchestrator does not name one either — that is the agent's to do.
+    assert_eq!(opened.branch, None);
     let session = engine.db().latest_session(opened.id).unwrap().unwrap();
     assert_eq!(
         session.tool_session_id.as_deref(),
@@ -610,14 +611,15 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
         "the follow-up took it out of Done"
     );
 
-    // The worktree is back, at the same path and on the same branch: both are
-    // derived from (source, task id) and the templates, so they reproduce
-    // exactly — which is what makes the agent's session findable again.
+    // The worktree is back at the same path — derived from (source, task id)
+    // and the templates, so it reproduces exactly, which is what makes the
+    // agent's session findable again. Still branchless, for the same reason as
+    // the first dispatch.
     assert_eq!(
         reopened.worktree_path.as_deref(),
         Some(worktree.to_str().unwrap())
     );
-    assert_eq!(reopened.branch.as_deref(), Some(branch.as_str()));
+    assert_eq!(reopened.branch, None);
     assert!(worktree.is_dir(), "re-created: {}", worktree.display());
 
     // The agent is asked to resume the conversation's own session, and is

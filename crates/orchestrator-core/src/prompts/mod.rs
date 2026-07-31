@@ -64,6 +64,9 @@ struct Embedded {
 pub struct Prompts {
     /// Dispatch-time completion self-report instruction.
     marker_self_report: String,
+    /// Dispatch-time instruction to create the task's branch. Emitted only
+    /// when the worktree is handed over detached.
+    branch_convention: String,
     /// Judging criteria of the `prompt`-type Stop hook.
     verification_rubric: String,
     /// Intermediate-Stop exemption appended to the rubric.
@@ -100,6 +103,7 @@ const MARKER_PLACEHOLDERS: &[&str] = &["marker_completed", "marker_needs_input",
 /// gives no hint about its cause.
 pub const ALLOWED_PLACEHOLDERS: &[(&str, &[&str])] = &[
     ("marker_self_report", MARKER_PLACEHOLDERS),
+    ("branch_convention", &[]),
     ("verification_rubric", &[]),
     ("verification_background_exemption", &[]),
     ("verification_marker_convention", MARKER_PLACEHOLDERS),
@@ -211,6 +215,15 @@ impl Prompts {
         &self.opencode_plan_agent
     }
 
+    /// The instruction telling the agent to create the task's branch.
+    ///
+    /// The caller decides *whether* to send it — it is meaningless in plan
+    /// mode (no git) and on a resume that already has a branch. This accessor
+    /// only supplies the text.
+    pub fn branch_convention(&self) -> &str {
+        &self.branch_convention
+    }
+
     /// The rubric leaf, unassembled. Lets a caller distinguish "this set uses
     /// the built-in rubric" from "this set was given one".
     pub fn verification_rubric(&self) -> &str {
@@ -238,6 +251,7 @@ impl Prompts {
     /// value, so this composes with the workflow layer below.
     fn overlay_global(mut self, o: &PromptsConfig) -> Self {
         set(&mut self.marker_self_report, &o.marker_self_report);
+        set(&mut self.branch_convention, &o.branch_convention);
         set(&mut self.verification_rubric, &o.verification_rubric);
         set(
             &mut self.verification_background_exemption,
@@ -258,6 +272,7 @@ impl Prompts {
     /// shared on-disk file, so it has no per-workflow meaning.
     fn overlay_workflow(mut self, o: &WorkflowPromptsConfig) -> Self {
         set(&mut self.marker_self_report, &o.marker_self_report);
+        set(&mut self.branch_convention, &o.branch_convention);
         set(&mut self.verification_rubric, &o.verification_rubric);
         set(
             &mut self.verification_background_exemption,
@@ -364,6 +379,7 @@ mod tests {
         let p = Prompts::builtin();
         for (name, value) in [
             ("marker_self_report", &p.marker_self_report),
+            ("branch_convention", &p.branch_convention),
             ("verification_rubric", &p.verification_rubric),
             (
                 "verification_background_exemption",
@@ -377,6 +393,57 @@ mod tests {
         ] {
             assert!(!value.trim().is_empty(), "`{name}` is empty");
         }
+    }
+
+    /// The branch instruction is prose, so it is overridable — but the three
+    /// things it has to say are what make it work, and a reword that drops one
+    /// of them fails silently (the agent commits somewhere the orchestrator
+    /// cannot see). Assert the built-in still says them.
+    #[test]
+    fn the_builtin_branch_convention_states_what_it_has_to() {
+        let text = Prompts::builtin().branch_convention();
+        assert!(
+            text.contains("DETACHED"),
+            "must say the worktree is detached — an agent that just commits \
+             leaves the work reachable from nothing: {text}"
+        );
+        assert!(
+            text.contains("git switch -c"),
+            "must name the command, so the branch is created where HEAD \
+             already is: {text}"
+        );
+        assert!(
+            text.contains("NO start-point") || text.contains("no start-point"),
+            "must forbid a start-point argument — passing one re-points HEAD \
+             and discards work already in the worktree: {text}"
+        );
+    }
+
+    #[test]
+    fn branch_convention_is_overridable_at_both_scopes() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+version = 1
+
+[prompts]
+branch_convention = "global text"
+
+[[workflows]]
+name = "wf"
+source = "s"
+agent = "a"
+mode = "implement"
+output = "none"
+trigger = {}
+prompts = { branch_convention = "workflow text" }
+"#,
+        )
+        .unwrap();
+        assert_eq!(Prompts::resolve(&cfg).branch_convention(), "global text");
+        assert_eq!(
+            Prompts::resolve_for(&cfg, &cfg.workflows[0]).branch_convention(),
+            "workflow text"
+        );
     }
 
     /// The behavior-preservation proof for #313: the text moved out of Rust

@@ -30,9 +30,7 @@ use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::output::{PrCreator, PrError, PrRequest};
 use orchestrator_core::run::{Engine, EngineSettings, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::{
-    CleanupPolicy, DEFAULT_BRANCH_TEMPLATE, DEFAULT_WORKTREE_NAME_TEMPLATE,
-};
+use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_WORKTREE_NAME_TEMPLATE};
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -120,7 +118,6 @@ fn engine_settings(repo_path: &Path) -> EngineSettings {
             tool: None,
         }],
         limits: Limits::global(2),
-        branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
         worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
         location_template: "{repo}/../wt/{worktree_name}".to_string(),
         cleanup_implement: CleanupPolicy::Immediate,
@@ -745,25 +742,28 @@ async fn output_pull_request_pushes_branch_and_opens_pr() {
     assert_eq!(task.state, TaskState::Done);
     engine.shutdown(Duration::from_secs(5)).await;
 
-    // The branch was pushed to the bare origin.
+    // The branch the *agent* named — read back from the worktree's HEAD, since
+    // the orchestrator never picked it — was recorded and pushed to the bare
+    // origin.
+    assert_eq!(task.branch.as_deref(), Some("feat/mock-agent-work"));
     let branches = String::from_utf8(
         Command::new("git")
             .current_dir(base.join("origin.git"))
-            .args(["branch", "--list", "agent/*"])
+            .args(["branch", "--list", "feat/*"])
             .output()
             .unwrap()
             .stdout,
     )
     .unwrap();
     assert!(
-        branches.contains("agent/mock_src-1"),
+        branches.contains("feat/mock-agent-work"),
         "branch pushed to origin: {branches:?}"
     );
 
     // The PR was opened with the templated title/body.
     let requests = pr.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].head_branch, "agent/mock_src-1");
+    assert_eq!(requests[0].head_branch, "feat/mock-agent-work");
     assert_eq!(requests[0].title, "totsuka: task 1");
     assert!(requests[0].body.contains("task 1"));
     let _ = std::fs::remove_dir_all(&base);

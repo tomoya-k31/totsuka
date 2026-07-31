@@ -27,9 +27,7 @@ use orchestrator_core::ports::{Clock, SecretString};
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, HookRuntime, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::{
-    CleanupPolicy, DEFAULT_BRANCH_TEMPLATE, DEFAULT_WORKTREE_NAME_TEMPLATE,
-};
+use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_WORKTREE_NAME_TEMPLATE};
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use test_support::{bare_origin_and_clone as setup_repo, scratch};
@@ -141,7 +139,6 @@ fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSetti
             tool: None,
         }],
         limits: Limits::global(4),
-        branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
         worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
         location_template: "{repo}/../wt/{worktree_name}".to_string(),
         cleanup_implement: CleanupPolicy::Manual,
