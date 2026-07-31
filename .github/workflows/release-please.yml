@@ -116,8 +116,9 @@ jobs:
       TAG: ${{ needs.release-please.outputs.tag_name }}
       # Top-level directory inside the tarball. Extracting yields this one
       # directory, so the whole tree can be moved to /usr/local/lib/totsuka and
-      # symlinked from /usr/local/bin — which is what keeps the bundled plugins
-      # next to the binary that has to find them.
+      # symlinked from /usr/local/bin — which keeps the bundled plugins around
+      # as an install source (`totsuka plugin install <dir>`) instead of
+      # scattering them into whatever directory the user happened to unpack in.
       PREFIX: totsuka-${{ needs.release-please.outputs.tag_name }}-macos-universal
     steps:
       - name: Checkout
@@ -199,10 +200,11 @@ jobs:
 
       - name: Smoke-test the tarball
         # Guards the exact regression this release change exists to fix: the
-        # README used to tell people to run `totsuka plugin install <dir>` on a
-        # directory that held no binary, so the documented command always
-        # failed. Install a bundled plugin straight out of the extracted
-        # tarball, in a scratch XDG home, and assert it shows up.
+        # README's Quickstart told people to run `totsuka plugin install <dir>`
+        # on a source directory that held no binary, so the documented command
+        # always failed. It now points at the bundled plugins, and this step is
+        # what keeps that promise honest — it runs the same command the README
+        # does, against the artifact users actually download.
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
@@ -222,7 +224,9 @@ jobs:
           installed="$("${totsuka}" plugin list --json)"
           echo "${installed}"
           count="$(echo "${installed}" | jq '[.[] | select(.installed)] | length')"
-          expected="$(find plugins -name plugin.toml | wc -l | tr -d ' ')"
+          # Same non-recursive glob the assemble step packages from, so the two
+          # cannot drift if a nested plugin.toml ever shows up under plugins/.
+          expected="$(ls -d plugins/*/plugin.toml | wc -l | tr -d ' ')"
           if [ "${count}" != "${expected}" ]; then
             echo "expected ${expected} installed plugins, got ${count}" >&2
             exit 1

@@ -34,9 +34,10 @@ sudo mv totsuka-*-macos-universal /usr/local/lib/totsuka
 sudo ln -sf /usr/local/lib/totsuka/totsuka /usr/local/bin/totsuka
 ```
 
-`totsuka` finds the bundled plugins next to itself, which is why the whole
-directory moves rather than just the binary. The symlink is fine — the lookup
-resolves it.
+The whole directory moves, not just the binary: the plugins live in
+`/usr/local/lib/totsuka/plugins/` and you install the ones you want from there
+(Quickstart step 2). Keeping the tree in place means adding or reinstalling a
+plugin later needs no second download.
 
 Everything is ad-hoc–signed. If Gatekeeper blocks it, clear the quarantine
 attribute on the whole tree once:
@@ -60,8 +61,9 @@ This installs the CLI only. Plugins are built from a checkout — see
 # 1. Scaffold the config and check the environment.
 totsuka init
 
-# 2. Install the plugins you need (task source, agent, notifier), then enable them.
-totsuka plugin install ./path/to/task-source-github
+# 2. Install the plugins you need (task source, agent, notifier), then enable
+#    them. They ship in the tarball, under /usr/local/lib/totsuka/plugins/.
+totsuka plugin install /usr/local/lib/totsuka/plugins/github
 totsuka plugin enable github
 
 # 3. Store your secrets in the Keychain and reference them from config

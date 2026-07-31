@@ -34,8 +34,10 @@ sudo mv totsuka-*-macos-universal /usr/local/lib/totsuka
 sudo ln -sf /usr/local/lib/totsuka/totsuka /usr/local/bin/totsuka
 ```
 
-`totsuka` は同梱プラグインを自分自身の隣から探すため、バイナリだけでなく
-ディレクトリごと移動します。symlink 経由で問題ありません（探索時に解決されます）。
+バイナリだけでなくディレクトリごと移動します。プラグインは
+`/usr/local/lib/totsuka/plugins/` に入っており、必要なものをそこから
+インストールします（クイックスタートの手順 2）。ツリーを残しておけば、後から
+プラグインを追加・再インストールするときに再ダウンロードが要りません。
 
 すべて ad-hoc 署名です。Gatekeeper にブロックされた場合、ツリー全体に対して一度
 だけ quarantine 属性を除去してください:
@@ -60,7 +62,8 @@ cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
 totsuka init
 
 # 2. 必要なプラグイン（task source / agent / notifier）を install して enable。
-totsuka plugin install ./path/to/task-source-github
+#    プラグインは tarball 同梱で /usr/local/lib/totsuka/plugins/ 配下にある。
+totsuka plugin install /usr/local/lib/totsuka/plugins/github
 totsuka plugin enable github
 
 # 3. シークレットを Keychain に保存し、設定から参照
