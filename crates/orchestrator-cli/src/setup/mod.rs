@@ -449,7 +449,10 @@ fn write_plugin_configs(cx: &Cx, answers: &Answers, recipe: &Recipe) -> Result<(
     for draft in plugin_config::drafts_for(answers, recipe) {
         let path = dir.join(format!("{}.toml", draft.name));
         if path.exists() {
-            println!("skipped: {} already exists", path.display());
+            println!(
+                "skipped: {} already exists (left untouched)",
+                path.display()
+            );
             continue;
         }
         std::fs::create_dir_all(&dir)?;
