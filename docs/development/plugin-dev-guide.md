@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: プラグイン開発ガイド
-description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、ビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
+description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5, at: 2026-08-01T01:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-01T06:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -84,7 +84,19 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 
 エージェントの状態 `AgentState` は Orchestrator のステートマシンへ写像される（dispatched→running は `Start`、blocked は `waiting_input` でスロット解放、done は publishing へ）。プラグインは自分のツールの状態を 5 値へ正直に写像する。
 
-# ビルド
+# ビルドと install（開発ループ）
+
+チェックアウトからの導入は 1 コマンドで済む。ビルド → install → enable までまとめて行う（#346）。
+
+```sh
+totsuka plugin install --from-source github --enable      # 1 つだけ
+totsuka plugin install --from-source --all --enable       # 全部
+totsuka plugin install --from-source --all --profile dev  # デバッグビルドで
+```
+
+チェックアウトは cwd から上へ辿って自動検出する（`--repo <dir>` で明示も可）。判定は「Cargo ワークスペースのルート**かつ** `plugins/` を持つ」で、`git rev-parse --show-toplevel` は使わない — 無関係なクローンでも答えてしまうため。`cargo build ... --bins` は全対象パッケージをまとめて **1 回**だけ起動する。何が起きるか先に見たいときは `--print-plan`（cargo を起動せず計画だけ印字）。
+
+以下は手作業で同じことをする場合の内訳。
 
 各プラグインはリポジトリルートの Cargo ワークスペースの通常メンバー（`plugins/{crate}/`）。ワークスペースルートから対象クレートを指定してビルドする。
 
@@ -98,13 +110,15 @@ cargo build --release -p task-source-github
 
 この一致は `scripts/arch-lint.sh` の `plugin-bin-name` チェックが機械検証する（[ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md)）。新しいプラグインを追加するときは `[[bin]] name` を `plugin.toml` の `name` に合わせること。合っていないと install は `plugin binary <name> not found in <dir> → expected a file named after the plugin` で失敗する。
 
-install には `plugin.toml` とバイナリを同じディレクトリに置いて渡す。
+install に `<dir>` を渡す形では、`plugin.toml` とバイナリを同じディレクトリに置く必要がある。
 
 ```sh
 mkdir -p dist/github
 cp target/release/github plugins/task-source-github/plugin.toml dist/github/
 totsuka plugin install ./dist/github
 ```
+
+`--from-source` はこの staging ディレクトリを作らない。core の `prepare_install_from(manifest_path, binary_dir)` が manifest とバイナリを別々の場所から取れるので、manifest は `plugins/<pkg>/` のまま、バイナリは `target/<profile>/` から直接読む。
 
 # install / enable の流れ
 

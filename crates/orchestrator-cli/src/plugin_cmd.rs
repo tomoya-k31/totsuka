@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::Subcommand;
 use orchestrator_core::config::{RootConfig, set_plugin_enabled};
@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::bundled;
 use crate::common::{CliError, Cx, JsonFlag, print_json};
+use crate::from_source;
 
 /// Plugin management subcommands.
 #[derive(Debug, Subcommand)]
@@ -40,6 +41,21 @@ pub enum PluginCommand {
         /// stderr per ADR-0009 and breaks E2Es that parse it).
         #[arg(long, hide = true)]
         bundled_dir: Option<PathBuf>,
+        /// Build the plugin from a totsuka checkout and install it. Development
+        /// affordance: requires a clone, not just the CLI.
+        #[arg(long)]
+        from_source: bool,
+        /// With `--from-source`: the checkout to build in (default: search
+        /// upwards from the current directory).
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// With `--from-source`: which Cargo profile to build.
+        #[arg(long, value_enum, default_value_t = BuildProfile::Release)]
+        profile: BuildProfile,
+        /// With `--from-source`: print the cargo invocation and what would be
+        /// installed, then stop without building.
+        #[arg(long)]
+        print_plan: bool,
     },
     /// Uninstall a plugin (removes its binary; the config declaration remains).
     Uninstall {
@@ -87,6 +103,10 @@ pub fn run(cx: &Cx, command: PluginCommand) -> Result<(), CliError> {
             enable,
             yes,
             bundled_dir,
+            from_source,
+            repo,
+            profile,
+            print_plan,
         } => install(
             cx,
             &env,
@@ -97,6 +117,10 @@ pub fn run(cx: &Cx, command: PluginCommand) -> Result<(), CliError> {
                 enable,
                 yes,
                 bundled_dir,
+                from_source,
+                repo,
+                profile,
+                print_plan,
             },
         ),
         PluginCommand::Uninstall { name } => uninstall(cx, &env, &name),
@@ -115,6 +139,40 @@ struct InstallArgs {
     enable: bool,
     yes: bool,
     bundled_dir: Option<PathBuf>,
+    from_source: bool,
+    repo: Option<PathBuf>,
+    profile: BuildProfile,
+    print_plan: bool,
+}
+
+/// Which Cargo profile `--from-source` builds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum BuildProfile {
+    /// `cargo build --release` → `target/release`.
+    Release,
+    /// `cargo build` → `target/debug`.
+    Dev,
+}
+
+/// Where a plugin's manifest and binary are read from. Kept as two paths
+/// rather than one directory because `--from-source` reads the manifest from
+/// `plugins/<pkg>/` and the binary from `target/<profile>/` (#345's parts API).
+struct InstallSource {
+    manifest_path: PathBuf,
+    binary_dir: PathBuf,
+    /// What to show as "Source:" — the directory a human would look in.
+    label: PathBuf,
+}
+
+impl InstallSource {
+    /// A plain directory holding both `plugin.toml` and the binary.
+    fn dir(dir: PathBuf) -> Self {
+        Self {
+            manifest_path: dir.join("plugin.toml"),
+            binary_dir: dir.clone(),
+            label: dir,
+        }
+    }
 }
 
 fn install(cx: &Cx, env: &HashMap<String, String>, args: InstallArgs) -> Result<(), CliError> {
@@ -130,9 +188,12 @@ fn install(cx: &Cx, env: &HashMap<String, String>, args: InstallArgs) -> Result<
         read_config_for_edit(cx)?;
     }
 
-    let sources = resolve_sources(&args)?;
-    for dir in &sources {
-        install_one(cx, &config, dir, &args)?;
+    let Some(sources) = resolve_sources(&args)? else {
+        // `--print-plan` printed what it would do and stops here.
+        return Ok(());
+    };
+    for source in &sources {
+        install_one(cx, &config, source, &args)?;
     }
     Ok(())
 }
@@ -156,9 +217,10 @@ fn read_config_for_edit(cx: &Cx) -> Result<String, CliError> {
     Ok(text)
 }
 
-/// Turn the flag combination into the list of source directories to install
-/// from. Every rejection names the flag that is wrong and what to do instead.
-fn resolve_sources(args: &InstallArgs) -> Result<Vec<PathBuf>, CliError> {
+/// Turn the flag combination into what to install. `Ok(None)` means
+/// `--print-plan` already reported and nothing should be installed. Every
+/// rejection names the flag that is wrong and what to do instead.
+fn resolve_sources(args: &InstallArgs) -> Result<Option<Vec<InstallSource>>, CliError> {
     if let Some(source) = &args.source
         && let Some(rest) = source.strip_prefix("github:")
     {
@@ -170,18 +232,31 @@ fn resolve_sources(args: &InstallArgs) -> Result<Vec<PathBuf>, CliError> {
         .into());
     }
 
+    if args.bundled && args.from_source {
+        return Err("`--bundled` and `--from-source` are different sources → pick one".into());
+    }
+    if args.from_source {
+        return from_source_sources(args);
+    }
+
     if !args.bundled {
         if args.all {
-            return Err("`--all` only applies to `--bundled` → run `totsuka plugin install --bundled --all`".into());
+            return Err("`--all` only applies to `--bundled` or `--from-source`".into());
         }
         if args.bundled_dir.is_some() {
             return Err("`--bundled-dir` only applies to `--bundled`".into());
+        }
+        if args.print_plan {
+            return Err("`--print-plan` only applies to `--from-source`".into());
         }
         let source = args.source.as_deref().ok_or(
             "`totsuka plugin install` needs a directory → pass one, or use `--bundled <name>` \
              to install a plugin shipped with this binary",
         )?;
-        return Ok(vec![PathBuf::from(source)]);
+        return Ok(Some(vec![InstallSource::dir(PathBuf::from(source))]));
+    }
+    if args.repo.is_some() {
+        return Err("`--repo` only applies to `--from-source`".into());
     }
 
     let Some(root) = bundled::locate(args.bundled_dir.as_deref()) else {
@@ -217,13 +292,18 @@ fn resolve_sources(args: &InstallArgs) -> Result<Vec<PathBuf>, CliError> {
             available
                 .into_iter()
                 .find(|p| &p.name == name)
-                .map(|p| vec![p.dir])
+                .map(|p| Some(vec![InstallSource::dir(p.dir)]))
                 .ok_or_else(|| {
                     format!("`{name}` is not bundled with this `totsuka` → available: {names}")
                         .into()
                 })
         }
-        (None, true) => Ok(available.into_iter().map(|p| p.dir).collect()),
+        (None, true) => Ok(Some(
+            available
+                .into_iter()
+                .map(|p| InstallSource::dir(p.dir))
+                .collect(),
+        )),
         (Some(_), true) => {
             Err("pass either a plugin name or `--all` to `--bundled`, not both".into())
         }
@@ -233,21 +313,140 @@ fn resolve_sources(args: &InstallArgs) -> Result<Vec<PathBuf>, CliError> {
     }
 }
 
+/// Resolve (and build) plugins out of a totsuka checkout.
+///
+/// This is the one place in `plugin install` that shells out to `cargo`. The
+/// CLI already shells out to `git` and `op`, so the dependency is not new, and
+/// putting it here rather than in `scripts/` keeps the name→package mapping and
+/// the config edit with the code that owns the store.
+fn from_source_sources(args: &InstallArgs) -> Result<Option<Vec<InstallSource>>, CliError> {
+    if args.bundled_dir.is_some() {
+        return Err("`--bundled-dir` only applies to `--bundled`".into());
+    }
+
+    let requested: Vec<&str> = match (&args.source, args.all) {
+        (Some(_), true) => {
+            return Err("pass either a plugin name or `--all` to `--from-source`, not both".into());
+        }
+        (None, false) => {
+            return Err(
+                "`--from-source` needs a plugin name, or `--all` to build every plugin in the \
+                 checkout"
+                    .into(),
+            );
+        }
+        (Some(name), false) => vec![name.as_str()],
+        (None, true) => Vec::new(),
+    };
+
+    let root = match &args.repo {
+        Some(dir) => {
+            if !from_source::is_checkout(dir) {
+                return Err(format!(
+                    "{} is not a totsuka checkout → expected a Cargo workspace root with a \
+                     `plugins/` directory",
+                    dir.display()
+                )
+                .into());
+            }
+            dir.clone()
+        }
+        None => {
+            let cwd = std::env::current_dir()?;
+            from_source::find_checkout_root(&cwd, &from_source::is_checkout).ok_or(
+                "`--from-source` needs a totsuka checkout → cd into your clone, or pass \
+                 `--repo <dir>`",
+            )?
+        }
+    };
+
+    let available = from_source::resolve_plugins(&root);
+    if available.is_empty() {
+        return Err(format!(
+            "no plugins under {}/plugins → expected `<dir>/plugin.toml` + `<dir>/Cargo.toml`",
+            root.display()
+        )
+        .into());
+    }
+
+    let selected: Vec<&from_source::SourcePlugin> = if requested.is_empty() {
+        available.values().collect()
+    } else {
+        let names = available.keys().cloned().collect::<Vec<_>>().join(", ");
+        requested
+            .iter()
+            .map(|name| {
+                available.get(*name).ok_or_else(|| {
+                    CliError::from(format!(
+                        "`{name}` is not a plugin in {} → available: {names}",
+                        root.display()
+                    ))
+                })
+            })
+            .collect::<Result<_, _>>()?
+    };
+
+    let release = args.profile == BuildProfile::Release;
+    let packages: Vec<&str> = selected.iter().map(|p| p.package.as_str()).collect();
+    let argv = from_source::cargo_argv(release, &packages);
+    let binary_dir = root.join("target").join(from_source::profile_dir(release));
+
+    let sources: Vec<InstallSource> = selected
+        .iter()
+        .map(|p| InstallSource {
+            manifest_path: p.manifest_path.clone(),
+            binary_dir: binary_dir.clone(),
+            label: root.join("plugins"),
+        })
+        .collect();
+
+    if args.print_plan {
+        // Exists so the wiring can be tested without invoking Cargo — running
+        // `cargo build` inside a test is forbidden (ADR-0018).
+        println!("Checkout: {}", root.display());
+        println!("Build:    cargo {}", argv.join(" "));
+        println!("Binaries: {}", binary_dir.display());
+        for plugin in &selected {
+            println!(
+                "Install:  {} ({}) from {}",
+                plugin.name,
+                plugin.package,
+                plugin.manifest_path.display()
+            );
+        }
+        return Ok(None);
+    }
+
+    println!("Checkout: {}", root.display());
+    println!("Building: cargo {}", argv.join(" "));
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let status = std::process::Command::new(&cargo)
+        .args(&argv)
+        .current_dir(&root)
+        .status()
+        .map_err(|e| CliError::from(format!("failed to run cargo: {e} → is cargo on PATH?")))?;
+    if !status.success() {
+        return Err("cargo build failed → fix the build before installing".into());
+    }
+
+    Ok(Some(sources))
+}
+
 fn install_one(
     cx: &Cx,
     config: &RootConfig,
-    source_dir: &Path,
+    source: &InstallSource,
     args: &InstallArgs,
 ) -> Result<(), CliError> {
     let store = cx.store();
-    let plan = store.prepare_install(source_dir)?;
+    let plan = store.prepare_install_from(&source.manifest_path, &source.binary_dir)?;
 
     // Show the source and checksum, and require confirmation (§5.4).
     println!(
         "Plugin:   {} v{} ({:?})",
         plan.name, plan.manifest.version, plan.manifest.kind
     );
-    println!("Source:   {}", source_dir.display());
+    println!("Source:   {}", source.label.display());
     println!("SHA-256:  {}", plan.checksum);
     if !args.yes && !confirm("Install this plugin?")? {
         println!("Aborted; nothing was installed.");

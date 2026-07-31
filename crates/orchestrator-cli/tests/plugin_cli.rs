@@ -60,7 +60,24 @@ impl Env {
         vars: &[(&str, &str)],
         stdin: Option<&str>,
     ) -> (bool, String, String) {
+        self.run_bin_in(bin, None, args, vars, stdin)
+    }
+
+    /// Like [`Env::run_bin`], with an explicit working directory — needed for
+    /// `--from-source`, which searches upwards from the cwd and would otherwise
+    /// find the real totsuka checkout this test is running inside.
+    fn run_bin_in(
+        &self,
+        bin: &Path,
+        cwd: Option<&Path>,
+        args: &[&str],
+        vars: &[(&str, &str)],
+        stdin: Option<&str>,
+    ) -> (bool, String, String) {
         let mut cmd = Command::new(bin);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
         cmd.args(args)
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
@@ -562,4 +579,235 @@ fn enable_flag_rejects_an_unparseable_config_before_installing() {
         !env.installed(),
         "the store was written to despite the failure"
     );
+}
+
+// ---------------------------------------------------------------------------
+// --from-source (#346): build out of a checkout and install in one command.
+//
+// These never invoke Cargo. `docs/quality/test-strategy.md` (ADR-0018) forbids
+// calling `cargo build` from a test, so the wiring is exercised through
+// `--print-plan`, which resolves everything and stops before building.
+// ---------------------------------------------------------------------------
+
+/// Lay out a fake totsuka checkout: a workspace root with `plugins/<pkg>/`
+/// holding a `plugin.toml` and a `Cargo.toml`.
+fn fake_checkout(root: &Path, plugins: &[(&str, &str)]) {
+    fs::create_dir_all(root).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    for (package, name) in plugins {
+        let dir = root.join("plugins").join(package);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("plugin.toml"),
+            format!(
+                "name = \"{name}\"\nkind = \"task_source\"\nversion = \"0.2.0\"\nprotocol_version = \">=0.1.6, <0.4\"\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            format!("[package]\nname = \"{package}\"\nversion = \"0.1.0\"\n"),
+        )
+        .unwrap();
+    }
+}
+
+/// A directory that is definitely not inside any Cargo workspace.
+fn outside_any_checkout(env: &Env) -> PathBuf {
+    let dir = env.root.join("elsewhere");
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn from_source_plan_maps_names_to_packages_and_one_cargo_invocation() {
+    let env = Env::new("from-source-plan");
+    let repo = env.root.join("checkout");
+    fake_checkout(
+        &repo,
+        &[
+            ("task-source-slack", "slack"),
+            ("task-source-github", "github"),
+        ],
+    );
+
+    let (ok, out, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            "--from-source",
+            "--all",
+            "--print-plan",
+            "--repo",
+            repo.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(ok, "{out}{err}");
+
+    // One cargo invocation for every package — not one per plugin, which would
+    // take the target-directory lock repeatedly.
+    let build = out
+        .lines()
+        .find(|l| l.starts_with("Build:"))
+        .unwrap_or_default();
+    assert!(build.contains("-p task-source-github"), "{out}");
+    assert!(build.contains("-p task-source-slack"), "{out}");
+    assert!(build.contains("--bins"), "{out}");
+    assert!(
+        build.contains("--release"),
+        "default profile is release: {out}"
+    );
+    assert_eq!(out.matches("Build:").count(), 1, "{out}");
+
+    // The binary comes from target/<profile>, the manifest from plugins/<pkg>.
+    assert!(out.contains("target/release"), "{out}");
+    assert!(
+        out.contains("plugins/task-source-slack/plugin.toml"),
+        "{out}"
+    );
+
+    // Nothing was installed.
+    assert!(!env.installed());
+}
+
+#[test]
+fn from_source_dev_profile_targets_debug() {
+    let env = Env::new("from-source-dev");
+    let repo = env.root.join("checkout");
+    fake_checkout(&repo, &[("task-source-slack", "slack")]);
+
+    let (ok, out, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            "--from-source",
+            "slack",
+            "--print-plan",
+            "--profile",
+            "dev",
+            "--repo",
+            repo.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(ok, "{out}{err}");
+    assert!(!out.contains("--release"), "{out}");
+    assert!(out.contains("target/debug"), "{out}");
+}
+
+#[test]
+fn from_source_unknown_name_lists_what_the_checkout_has() {
+    let env = Env::new("from-source-unknown");
+    let repo = env.root.join("checkout");
+    fake_checkout(
+        &repo,
+        &[
+            ("task-source-slack", "slack"),
+            ("task-source-github", "github"),
+        ],
+    );
+
+    let (ok, _, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            "--from-source",
+            "notion",
+            "--print-plan",
+            "--repo",
+            repo.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(!ok);
+    assert!(err.contains("github"), "{err}");
+    assert!(err.contains("slack"), "{err}");
+}
+
+#[test]
+fn from_source_outside_a_checkout_says_how_to_point_at_one() {
+    let env = Env::new("from-source-outside");
+    let elsewhere = outside_any_checkout(&env);
+
+    let (ok, _, err) = env.run_bin_in(
+        Path::new(env!("CARGO_BIN_EXE_totsuka")),
+        Some(&elsewhere),
+        &[
+            "plugin",
+            "install",
+            "--from-source",
+            "slack",
+            "--print-plan",
+        ],
+        &[],
+        None,
+    );
+    assert!(!ok);
+    assert!(err.contains("--repo"), "{err}");
+}
+
+#[test]
+fn from_source_rejects_a_repo_that_is_not_a_checkout() {
+    let env = Env::new("from-source-bad-repo");
+    let elsewhere = outside_any_checkout(&env);
+
+    let (ok, _, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            "--from-source",
+            "slack",
+            "--print-plan",
+            "--repo",
+            elsewhere.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(!ok);
+    assert!(err.contains("not a totsuka checkout"), "{err}");
+}
+
+#[test]
+fn from_source_and_bundled_are_mutually_exclusive() {
+    let env = Env::new("from-source-vs-bundled");
+
+    let (ok, _, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            "--from-source",
+            "--bundled",
+            "--all",
+            "--print-plan",
+        ],
+        None,
+    );
+    assert!(!ok);
+    assert!(err.contains("pick one"), "{err}");
+}
+
+#[test]
+fn print_plan_only_applies_to_from_source() {
+    let env = Env::new("print-plan-misuse");
+    let src = env.root.join("src");
+    fake_source(&src, "github", ">=0.1.6, <0.4");
+
+    let (ok, _, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            src.to_str().unwrap(),
+            "--print-plan",
+            "--yes",
+        ],
+        None,
+    );
+    assert!(!ok);
+    assert!(err.contains("--from-source"), "{err}");
+    assert!(!env.installed());
 }

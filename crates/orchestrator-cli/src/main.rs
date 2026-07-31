@@ -9,6 +9,7 @@ mod common;
 mod config_cmd;
 mod doctor_cmd;
 mod focus_cmd;
+mod from_source;
 mod init_cmd;
 mod logs_cmd;
 mod plugin_cmd;
