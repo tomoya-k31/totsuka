@@ -4,7 +4,8 @@ title: ADR-0024 エージェントへの指示は task_source プラグインが
 description: ペイン内エージェントに渡す散文（手順・テンプレート・書式）を task_source プラグインの prompts が Task.instructions 経由で所有し、tools 設定と core は argv のツール制限・モデル・タイムアウトだけを持つ決定。Slack の books 起票フローで確定した。allowedTools は制限ではなく付与であること、ペインがオペレーターの settings.json を継承することを前提として明記し、スキル注入・agents インライン JSON・initialPrompt は不採用とする。
 resource: https://github.com/tomoya-k31/totsuka/issues/324
 tags: [decision, prompt, tool, permission, slack, agent, adr]
-generated: { by: claude-code/opus-5, at: 2026-07-31T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-07-31T14:00:00+09:00 }
+verified: { by: claude-code/opus-5, at: 2026-07-31T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -195,12 +196,26 @@ mode_args = [
 ]
 ```
 
-`mode_args` の各要素は argv の 1 トークンとして herdr の `agent.start` に渡り、**シェルを経由しない**。`--tools` はカンマ区切りの 1 要素だが、`--disallowedTools` が argv 配列で複数値をどう取るか（可変長 / フラグ反復 / カンマ区切り）は実機で確認する必要がある。**ここが外れると deny が黙って全部無効になる**ので、実装前に潰す最優先項目である。
+`mode_args` の各要素は argv の 1 トークンとして herdr の `agent.start` に渡り、**シェルを経由しない**。この形が成立することは実機で確認した（下記）。
 
-同じく実機で確認する項目:
+## 実機で確認した挙動
 
-- deny がオペレーターの `permissions.allow` に本当に勝つか（`Bash(gh:*)` が allow されている状態で `Bash(gh api:*)` を deny する）
-- `--tools "Bash,Read,Grep,Glob"` で調査が回るか。止まるようなら追加する
+`claude -p` で 2026-07-31 に確認した。**留保: 検証は headless（`-p`）で行っており、実際のペインは対話モードである。** 引数パースと permission エンジンは同じコードパスなので結論は変わらないはずだが、ペイン実装での再確認は #324 の実機検収に残す。
+
+**1. `--disallowedTools` は可変長を取る。** `claude --help` が `--disallowedTools, --disallowed-tools <tools...>` と表示し、説明も "Comma or space-separated list of tool names to deny" と書いている。空白区切りの複数 argv 要素で正しくパースされた。`--tools` も同じく `<tools...>`。したがって上の `mode_args` の書き方（フラグの後にパターンを別要素で並べる）で問題ない。
+
+**2. 可変長は後続のフラグを飲み込まない。** totsuka は `mode_args` の**後ろ**に `--settings` / `--resume` を付ける（`crates/orchestrator-core/src/tool/mod.rs`）。`--disallowedTools A B C --settings <json>` の形で実行し、deny と settings の両方が効くことを確認した。
+
+**3. deny はオペレーターの `permissions.allow` に勝つ。** 検証環境のグローバル設定には `permissions.allow` に `Bash(gh:*)` があり、`defaultMode = "auto"` が設定されている。同一プロンプト（`gh api /user` の実行を依頼）で A/B を取った:
+
+| 条件 | 結果 |
+|---|---|
+| `--disallowedTools` なし | 実行された（allow が効く） |
+| `--disallowedTools "Bash(gh api:*)" …` | 拒否された |
+
+deny リストに含まれない `echo` は同じフラグ構成でも実行できたので、Bash ツール自体が落ちていたわけではない。**ただし `Bash(echo:*)` も検証環境の allow リストにあるため、`echo` の成功だけでは「deny が勝った」と「allow されたものだけ通る」を区別できない** — 上の A/B が結論の根拠である。
+
+**4. `--tools "Bash,Read,Grep,Glob"` で Bash が使える。** 3 の検証がこの構成で回っている。ただし「調査が止まらないか」（`Read` / `Grep` でリポジトリを読み切れるか）は実タスクでの確認事項として #324 に残す。
 
 詳細な段階分割と残りの検証項目は #324 に記載する。
 
