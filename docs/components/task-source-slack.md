@@ -4,7 +4,7 @@ title: task-source-slack プラグイン
 description: 自分宛の Slack メンションをタスク化し本人名義で代理返信する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard（auth.test + apps.connections.open + 任意の bot probe）・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決・下書き提示・承認フロー・bot ナッジ DM 通知（#305）に加え、manifest 雛形・CLI レベル E2E・運用ドキュメントまで完備（エピック#102 完了）。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard, conversation-identity, conversation-continuity]
-generated: { by: human:tomoya-k31, at: 2026-07-31T01:00:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-31T17:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
