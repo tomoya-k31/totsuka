@@ -14,7 +14,8 @@ use crate::common::{CliError, Cx, JsonFlag, print_json};
 /// Plugin management subcommands.
 #[derive(Debug, Subcommand)]
 pub enum PluginCommand {
-    /// Install a plugin from a local directory (containing plugin.toml + binary).
+    /// Install a plugin: from a local directory (plugin.toml + binary), or with
+    /// `--bundled` from the plugins shipped alongside this binary.
     Install {
         /// Source: a local directory path, or — with `--bundled` — the name of
         /// a plugin shipped alongside this binary. (`github:owner/repo` is not

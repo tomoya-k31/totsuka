@@ -4,7 +4,7 @@ title: orchestrator-core クレート
 description: totsuka のコア。ヘキサゴナルアーキテクチャの domain（ドメイン・ステートマシン）/ ports（TaskSource・AgentIde・LlmRouter・SecretStore 等の trait）/ adapters（JSON-RPC ブリッジ・SQLite・Keychain）を担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin, worktree, git, workflow, scheduler, llm, repo-select, recovery, session, run, output, signal, hook]
-generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-01T05:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
