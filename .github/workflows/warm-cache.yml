@@ -31,6 +31,13 @@ on:
       - "Cargo.lock"
       - "**/Cargo.toml"
       - "rust-toolchain.toml"
+      # この 2 本自身も鍵空間を決める。ci.yml は消費側の shared-key と
+      # env (RUSTFLAGS / CARGO_TERM_COLOR — rust-cache が鍵に含める) を、
+      # warm-cache.yml は生成側の同じものを持つ。ここを入れ忘れると、
+      # 鍵を変える変更が merge されても warm が走らず、次の PR は cron か
+      # 手動 dispatch まで cold のままになる (PR #366 の Copilot 指摘)。
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/warm-cache.yml"
   schedule:
     - cron: "41 19 * * 0" # 04:41 JST 日曜。rustc 新リリースの保険
   workflow_dispatch:

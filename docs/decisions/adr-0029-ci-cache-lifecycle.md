@@ -175,6 +175,14 @@ false`）ため、full match でも 11 クレートを毎回建て直すから�
 フィルタを入れ、rustc リリースの穴は週次 cron（3 分/週）で塞ぐ。なお Cargo 系を
 触る merge が週約 11 回あるので、実際には穴は半日程度で自然に閉じる。
 
+**フィルタには `ci.yml` と `warm-cache.yml` 自身も含める。** 鍵空間を決めるのは
+Cargo 系ファイルだけではない。消費側の `shared-key` と `env`（`RUSTFLAGS` /
+`CARGO_TERM_COLOR` — rust-cache が鍵に含める）は `ci.yml` にあり、生成側の同じものは
+`warm-cache.yml` にある。これを入れ忘れると、**鍵を変える変更が merge されても warm が
+走らず、次の PR は cron か手動 dispatch まで cold のまま**になる。この ADR を導入する
+PR 自身がまさにその形（ワークフローと docs しか触らない）だったため、初版はこの穴を
+持っていた。
+
 ## 4. coverage にも TEST_SUPPORT_PREBUILT_BINS を立てる
 
 `cargo llvm-cov` は内部で `cargo test --workspace` 相当を走らせるため、テスト実行前に
