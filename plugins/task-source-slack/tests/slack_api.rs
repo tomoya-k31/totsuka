@@ -141,6 +141,143 @@ async fn conversations_replies_without_messages_is_invalid_response() {
 }
 
 #[tokio::test]
+async fn conversations_history_one_narrows_the_window_to_a_single_ts() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({
+        "ok": true,
+        "messages": [{ "user": "U1", "text": "target", "ts": "1.0" }]
+    })));
+
+    let message = api(&shared)
+        .conversations_history_one("C1", "1.0")
+        .await
+        .unwrap()
+        .expect("the message is found");
+    assert_eq!(message.text, "target");
+    assert_eq!(message.user.as_deref(), Some("U1"));
+
+    let requests = shared.requests();
+    assert_eq!(requests[0].method, "conversations.history");
+    assert!(requests[0].idempotent);
+    let body = requests[0].body.as_ref().unwrap();
+    assert_eq!(body["channel"], "C1");
+    // Both edges pinned to the same ts, inclusive: exactly one message.
+    assert_eq!(body["latest"], "1.0");
+    assert_eq!(body["oldest"], "1.0");
+    assert_eq!(body["inclusive"], true);
+    assert_eq!(body["limit"], 1);
+}
+
+#[tokio::test]
+async fn conversations_history_one_is_none_when_the_window_is_empty() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({ "ok": true, "messages": [] })));
+    let message = api(&shared)
+        .conversations_history_one("C1", "1.0")
+        .await
+        .unwrap();
+    assert!(message.is_none(), "an empty window is not an error");
+}
+
+/// A neighbouring message coming back instead of the requested one would be
+/// turned into a task built from the wrong text, so the `ts` match is
+/// explicit rather than trusting the window.
+#[tokio::test]
+async fn conversations_history_one_rejects_a_message_with_another_ts() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({
+        "ok": true,
+        "messages": [{ "user": "U1", "text": "neighbour", "ts": "0.9" }]
+    })));
+    let message = api(&shared)
+        .conversations_history_one("C1", "1.0")
+        .await
+        .unwrap();
+    assert!(message.is_none());
+}
+
+#[tokio::test]
+async fn conversations_history_one_without_messages_is_invalid_response() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({ "ok": true })));
+    let err = api(&shared)
+        .conversations_history_one("C1", "1.0")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SlackError::InvalidResponse(_)), "{err}");
+}
+
+#[tokio::test]
+async fn fetch_message_takes_the_history_hit_without_a_second_call() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({
+        "ok": true,
+        "messages": [{ "user": "U1", "text": "channel level", "ts": "1.0" }]
+    })));
+
+    let message = api(&shared)
+        .fetch_message("C1", "1.0")
+        .await
+        .unwrap()
+        .expect("found via history");
+    assert_eq!(message.text, "channel level");
+    let requests = shared.requests();
+    assert_eq!(requests.len(), 1, "the common case is one round trip");
+    assert_eq!(requests[0].method, "conversations.history");
+}
+
+/// **The fallback is the whole point of `fetch_message`.**
+/// `conversations.history` does not return replies inside a thread unless
+/// they were broadcast, so without this a reaction on a threaded message
+/// looks like a dropped event.
+#[tokio::test]
+async fn fetch_message_falls_back_to_replies_for_a_thread_reply() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({ "ok": true, "messages": [] })));
+    shared.push(Canned::Data(json!({
+        "ok": true,
+        "messages": [
+            { "user": "U1", "text": "parent", "ts": "1.0", "thread_ts": "1.0" },
+            { "user": "U2", "text": "the reply", "ts": "2.0", "thread_ts": "1.0" },
+        ]
+    })));
+
+    let message = api(&shared)
+        .fetch_message("C1", "2.0")
+        .await
+        .unwrap()
+        .expect("found via replies");
+    // The target is picked by ts, not by position: it is not messages[0].
+    assert_eq!(message.text, "the reply");
+    assert_eq!(message.thread_ts.as_deref(), Some("1.0"));
+
+    let requests = shared.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "conversations.history");
+    assert_eq!(requests[1].method, "conversations.replies");
+    let body = requests[1].body.as_ref().unwrap();
+    assert_eq!(body["ts"], "2.0");
+    // `latest` is passed as `None` — the lookup key *is* the message's own ts,
+    // so the page has to come from the head of the thread. What the fake
+    // transport records is the wrapper's JSON, where `None` is still a
+    // literal null; the real transport (`transport::form_fields`) is what
+    // drops null arguments, so Slack receives `latest` omitted.
+    assert!(body["latest"].is_null());
+}
+
+#[tokio::test]
+async fn fetch_message_is_none_when_neither_route_finds_it() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({ "ok": true, "messages": [] })));
+    shared.push(Canned::Data(json!({ "ok": true, "messages": [] })));
+    let message = api(&shared).fetch_message("C1", "1.0").await.unwrap();
+    assert!(
+        message.is_none(),
+        "an unreachable message is dropped, not an error"
+    );
+}
+
+#[tokio::test]
 async fn conversations_open_self_returns_the_dm_channel() {
     let shared = Shared::default();
     shared.push(Canned::Data(
