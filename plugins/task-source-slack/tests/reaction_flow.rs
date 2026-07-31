@@ -196,6 +196,34 @@ async fn an_emoji_outside_the_trigger_set_submits_nothing() {
     harness.assert_no_task(Duration::from_millis(300)).await;
 }
 
+/// A transient lookup failure must not consume the dedup key.
+///
+/// The envelope is acked before processing (`socket_mode`: ack first), so
+/// Slack never redelivers it. If the key were spent on the failed attempt,
+/// the operator's natural retry — remove the reaction and add it again —
+/// would key on the same *message* ts and be deduped away, leaving the
+/// trigger unrecoverable until a restart cleared the LRU.
+#[tokio::test]
+async fn a_failed_lookup_leaves_the_trigger_retryable() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    // The first history call fails; the canned success stays behind it.
+    shared.push_front_for("conversations.history", Canned::Network);
+    let (mut srv, mut harness) = server(&shared);
+
+    call(&mut srv, 1, "initialize", init_params()).await;
+    let mut ws = accept_with_hello(&listener).await;
+
+    send_and_await_ack(&mut ws, reaction_envelope("e1", "U_ME", "eyes", "100.0")).await;
+    harness.assert_no_task(Duration::from_millis(300)).await;
+
+    // Re-reacting to the same message now succeeds instead of being swallowed.
+    send_and_await_ack(&mut ws, reaction_envelope("e2", "U_ME", "eyes", "100.0")).await;
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.0");
+}
+
 /// The dedup set is shared: one message reached by both triggers is one task.
 #[tokio::test]
 async fn a_mention_and_a_reaction_on_one_message_make_one_task() {

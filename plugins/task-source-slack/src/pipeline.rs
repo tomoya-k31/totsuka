@@ -428,12 +428,17 @@ where
                     if filter.is_self_dm_channel(&target.channel) {
                         continue;
                     }
-                    // Dedup before the API call, not after: a redelivery of an
-                    // event already handled must not cost a round trip. It
-                    // also means a message rejected below stays rejected,
-                    // which is what we want — Slack will redeliver, and the
-                    // answer would not change.
-                    if !filter.remember(target.dedup_key()) {
+                    // Skip a known duplicate without paying for the round trip,
+                    // but do **not** record anything yet: recording here would
+                    // burn the key on a transient fetch failure, and the
+                    // envelope was already acked (`socket_mode`: ack first),
+                    // so Slack never redelivers it. Worse, the operator's
+                    // natural retry — remove the reaction and add it again —
+                    // keys on the *message* ts, so it would be deduped away
+                    // too. The trigger would be unrecoverable until a restart
+                    // cleared the LRU.
+                    let dedup_key = target.dedup_key();
+                    if filter.already_processed(&dedup_key) {
                         continue;
                     }
                     let fetched = match api.fetch_message(&target.channel, &target.ts).await {
@@ -462,6 +467,15 @@ where
                     let Some(mention) = to_mention(&target, fetched) else {
                         continue;
                     };
+                    // Only now is the trigger definitely going to produce a
+                    // task, so this is where the key is spent. The re-check is
+                    // not redundant with the one above: `remember` is what
+                    // actually records it, and returning early on `false`
+                    // keeps the mention path's contract (one message, one
+                    // task) even if the two ever race.
+                    if !filter.remember(dedup_key) {
+                        continue;
+                    }
                     // From here the two triggers are the same code path.
                     let enriched = enrich(api.as_ref(), &config, &mut names, mention).await;
                     tokio::spawn(handle_mention(

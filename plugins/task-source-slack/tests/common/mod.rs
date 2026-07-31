@@ -69,6 +69,17 @@ impl Shared {
             .or_default()
             .push_back(canned);
     }
+    /// Queue a response *ahead* of the ones already registered for `method`.
+    /// The last entry stays sticky, so this is how a test makes the first
+    /// call fail while later calls still get the normal answer.
+    pub fn push_front_for(&self, method: &str, canned: Canned) {
+        self.keyed
+            .lock()
+            .unwrap()
+            .entry(method.to_string())
+            .or_default()
+            .push_front(canned);
+    }
     fn next_response(&self, method: &str) -> Option<Canned> {
         if let Some(queue) = self.keyed.lock().unwrap().get_mut(method) {
             return match queue.len() {
