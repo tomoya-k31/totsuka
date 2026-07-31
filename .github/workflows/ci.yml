@@ -60,16 +60,19 @@ jobs:
       # キャッシュが無言で孤児化する。warm-cache ジョブがこの鍵空間へ書き込む前提も
       # あるため明示する (#341)。
       #
-      # key: rust-cache が鍵に含めるマニフェストは cargo metadata のパッケージ由来で、
-      # workspace root の Cargo.toml は virtual manifest ゆえに含まれない。そこに
-      # [profile.*] が置かれているため、#281 の `debug = false` は鍵を 1 ビットも
-      # 変えないまま全成果物のフィンガープリントを無効化した。root を明示的に
-      # 鍵へ入れて同じ事故を構造的に防ぐ (#341 / ADR-0029)。
+      # hashFiles('Cargo.toml'): rust-cache が鍵に含めるマニフェストは cargo metadata
+      # のパッケージ由来で、workspace root の Cargo.toml は virtual manifest ゆえに
+      # 含まれない。そこに [profile.*] が置かれているため、#281 の `debug = false` は
+      # 鍵を 1 ビットも変えないまま全成果物のフィンガープリントを無効化した。root を
+      # 明示的に鍵へ入れて同じ事故を構造的に防ぐ (#341 / ADR-0029)。
+      #
+      # ハッシュを shared-key に畳み込んでいるのは、`key` 入力が使えないため。
+      # rust-cache v2.9.1 の src/config.ts:74-88 は shared-key と key を排他に
+      # 扱っており、shared-key があると key は読まれずに黙って捨てられる。
       - name: Cache cargo build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: clippy
-          key: ${{ hashFiles('Cargo.toml') }}
+          shared-key: clippy-${{ hashFiles('Cargo.toml') }}
       - name: Check formatting
         run: cargo fmt --all --check
       # ワークスペース依存境界の fitness function (#172)。cargo metadata --no-deps
@@ -104,12 +107,11 @@ jobs:
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: stable
-      # shared-key / key の意図は clippy ジョブのコメントを参照 (#341)。
+      # shared-key にハッシュを畳み込む理由は clippy ジョブのコメントを参照 (#341)。
       - name: Cache cargo build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: test
-          key: ${{ hashFiles('Cargo.toml') }}
+          shared-key: test-${{ hashFiles('Cargo.toml') }}
       # --all-targets はこのワークスペースでは --lib --bins --tests と等価。
       # examples/ も benches/ も無く、[[example]] / [[bench]] 宣言も無いため
       # (#341 で列挙して確認)。つまり直後の `cargo test` がどのみち作る集合と同じで、
@@ -148,13 +150,12 @@ jobs:
         with:
           toolchain: stable
           components: llvm-tools-preview
-      # shared-key / key の意図は clippy ジョブのコメントを参照 (#341)。
+      # shared-key にハッシュを畳み込む理由は clippy ジョブのコメントを参照 (#341)。
       # 計装済み成果物は通常ビルドと混ぜられないので、鍵は独立のままにする。
       - name: Cache cargo build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: coverage
-          key: ${{ hashFiles('Cargo.toml') }}
+          shared-key: coverage-${{ hashFiles('Cargo.toml') }}
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
         with:
@@ -224,8 +225,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: ${{ matrix.key }}
-          key: ${{ hashFiles('Cargo.toml') }}
+          shared-key: ${{ matrix.key }}-${{ hashFiles('Cargo.toml') }}
       # 消費側ジョブと完全に同じコマンドであること。違うとフィンガープリントが
       # 揃わず、温めたつもりのキャッシュが効かない。
       - name: Warm

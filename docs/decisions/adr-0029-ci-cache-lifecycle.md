@@ -118,12 +118,34 @@ cold run が消えれば重複エントリの生成も止まるので、欠陥 A
 ## 2. キャッシュ鍵に root の Cargo.toml を加える
 
 `clippy` / `test` / `coverage` / `warm-cache` すべての rust-cache に
-`key: ${{ hashFiles('Cargo.toml') }}` を与える。`[profile]` 変更が鍵を壊すようになり、
-欠陥 B は構造的に再発しない。
+`shared-key: <名前>-${{ hashFiles('Cargo.toml') }}` を与える。`[profile]` 変更が鍵を
+壊すようになり、欠陥 B は構造的に再発しない。
 
-あわせて `shared-key` を明示する。既定の鍵はジョブ id 由来の暗黙依存なので、
-ジョブを改名するとキャッシュが無言で孤児化する。warm ジョブがこの鍵空間へ
-書き込む前提もあるため明示が要る。
+`shared-key` を明示すること自体にも意味がある。既定の鍵はジョブ id 由来の暗黙依存なので、
+ジョブを改名するとキャッシュが無言で孤児化する。warm ジョブがこの鍵空間へ書き込む
+前提もあるため明示が要る。
+
+**ハッシュを `shared-key` に畳み込むのは、`key` 入力が使えないため。** 実装時に
+`shared-key: test` と `key: ${{ hashFiles('Cargo.toml') }}` を併記したところ、CI が
+出力した Cache Key は `v0-rust-test-Linux-x64-<envhash>-<lockhash>` のままで、
+ハッシュがどこにも現れなかった。rust-cache v2.9.1 の `src/config.ts:74-88` は
+両者を**排他**に扱う:
+
+```js
+const sharedKey = core.getInput("shared-key");
+if (sharedKey) {
+  key += `-${sharedKey}`;
+} else {
+  const inputKey = core.getInput("key");   // shared-key があると到達しない
+  if (inputKey) { key += `-${inputKey}`; }
+  ...
+}
+```
+
+README の「`key` は自動ジョブキーと併存する」は `shared-key` 未設定時のみ真で、
+**`shared-key` を設定すると `key` は読まれずに黙って捨てられる**。エラーも警告も
+出ないため、CI ログの Cache Key を実際に読むまで気付けない。ドキュメントではなく
+出力で確認すること。
 
 ## 3. warm ジョブにパスフィルタを付けない
 
