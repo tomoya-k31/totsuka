@@ -26,7 +26,7 @@ Orchestrator は pane を直接知らない。pane を触る操作はすべて `
 
 3 つとも専用フラグを新設せず `pane_control` に相乗りしている（focus も release も list も「pane 表面の制御」で分離する意味がない）。宣言しないプラグイン（orca 等）では単に呼ばれず、Orchestrator は pane 操作をスキップして静かに縮退する。
 
-herdr の pane id（`w34:p2`）は**位置ベース**で、閉じた pane の id が別の pane に再利用されうる。そのため release / 解放系の RPC は `expect_cwd`（worktree パス）や `expect_label` を同一性ガードとして渡し、列挙から実行までの間に id が付け替わるレースを弾く。
+herdr の pane id（`w34:p2`）は**位置ベース**で、閉じた pane の id が別の pane に再利用されうる。そのため release / 解放系の RPC は同一性ガードを添えて、列挙から実行までの間に id が付け替わるレースを弾く。プロトコルは `expect_cwd`（worktree パス）と `expect_label` の 2 つを定義しているが、**Orchestrator が送るのは `expect_cwd` だけ**である（`expect_label: None` 固定）。worktree パスはタスクごとに一意で状態 DB が正本であるのに対し、label はプラグイン内部の表現なので、Orchestrator 側で組み立てることはしない。
 
 # 寿命と孤児
 
