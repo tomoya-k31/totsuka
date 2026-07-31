@@ -946,6 +946,16 @@ impl StateDb {
     /// must be able to say so rather than inventing a name. `base_commit` is
     /// not — creation always resolves one, and cleanup needs it to tell this
     /// task's branch apart from the operator's.
+    ///
+    /// **`base_commit` is written once** (`COALESCE`). A task can be dispatched
+    /// again after its worktree was cleaned up (#254), and `create` recomputes
+    /// the base from a *fresh* `origin/{default}` every time. Overwriting would
+    /// walk the recorded value forward past the commit the task's branch was
+    /// actually cut from, and the ownership test
+    /// (`merge-base --is-ancestor <base> <branch>`) would then answer "not
+    /// ours" for a branch that is. It fails safe — the branch is kept — but
+    /// that is exactly the unbounded accumulation #266 was about. The value
+    /// means "where this task's work started", which happens once.
     pub fn set_worktree(
         &self,
         id: i64,
@@ -954,8 +964,8 @@ impl StateDb {
         base_commit: &str,
     ) -> Result<(), StateError> {
         let n = self.conn.execute(
-            "UPDATE tasks SET worktree_path = ?1, branch = ?2, base_commit = ?3, \
-             updated_at = ?4 WHERE id = ?5",
+            "UPDATE tasks SET worktree_path = ?1, branch = ?2, \
+             base_commit = COALESCE(base_commit, ?3), updated_at = ?4 WHERE id = ?5",
             params![path, branch, base_commit, self.clock.now_rfc3339(), id],
         )?;
         if n == 0 {
@@ -1841,6 +1851,26 @@ mod tests {
         assert_eq!(queued[0].branch.as_deref(), Some("agent/github-42"));
         assert_eq!(queued[0].base_commit.as_deref(), Some("c0ffee"));
         assert!(db.tasks_in_state(TaskState::Running).unwrap().is_empty());
+    }
+
+    /// Re-creation after a cleanup (#254) recomputes the base from a fresh
+    /// `origin/{default}`, which is a *later* commit. Letting that overwrite
+    /// the recorded value would move the task's starting point past the commit
+    /// its branch was cut from, and cleanup's ownership test would stop
+    /// recognising its own branch.
+    #[test]
+    fn the_base_commit_is_recorded_once_and_not_moved_by_a_re_creation() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.set_worktree(id, "/tmp/wt", None, "original").unwrap();
+        // The same task, dispatched again after its worktree was cleaned up.
+        db.set_worktree(id, "/tmp/wt", Some("feat/x"), "moved-on")
+            .unwrap();
+
+        let task = db.get_task(id).unwrap().unwrap();
+        assert_eq!(task.base_commit.as_deref(), Some("original"));
+        // Everything else still updates — only the base is pinned.
+        assert_eq!(task.branch.as_deref(), Some("feat/x"));
     }
 
     /// A worktree can exist without being on a branch, and the record has to

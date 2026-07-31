@@ -705,7 +705,14 @@ fn check_prompt_placeholders(
 /// part of `${...}` expansion (handled at resolve time), not a worktree
 /// placeholder.
 fn check_worktree_placeholders(referrer: &str, template: &str, errors: &mut Vec<ValidationError>) {
+    // Deduplicated: `scan` reports every occurrence, so a template naming the
+    // same placeholder twice would otherwise produce two identical findings —
+    // pure noise, since one remedy fixes both.
+    let mut seen = HashSet::new();
     for name in template::scan(template, template::ScanMode::Replaced) {
+        if !seen.insert(name) {
+            continue;
+        }
         if name == "branch" {
             errors.push(ValidationError::RetiredWorktreeBranchPlaceholder {
                 referrer: referrer.to_string(),
@@ -888,6 +895,37 @@ location = "/state/worktrees/{repo_name}/{branch}"
         assert!(
             message.contains("{worktree_name}"),
             "the message must name the replacement: {message}"
+        );
+    }
+
+    /// One finding per distinct placeholder, however many times a template
+    /// names it — the remedy is the same edit either way.
+    #[test]
+    fn a_repeated_bad_placeholder_is_reported_once() {
+        let toml = r#"
+[worktree]
+location = "/state/{branch}/{branch}/{bogus}/{bogus}"
+"#;
+        let cfg = RootConfig::from_toml_str(toml).unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|e| matches!(e, ValidationError::RetiredWorktreeBranchPlaceholder { .. }))
+                .count(),
+            1,
+            "{errors:?}"
+        );
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|e| matches!(
+                    e,
+                    ValidationError::UnknownWorktreePlaceholder { placeholder, .. } if placeholder == "bogus"
+                ))
+                .count(),
+            1,
+            "{errors:?}"
         );
     }
 
