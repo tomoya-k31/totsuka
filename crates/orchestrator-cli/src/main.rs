@@ -14,6 +14,7 @@ mod init_cmd;
 mod logs_cmd;
 mod plugin_cmd;
 mod run_cmd;
+mod setup;
 mod status_cmd;
 mod task_cmd;
 
@@ -42,6 +43,22 @@ struct Cli {
 enum Command {
     /// Generate a config skeleton and check the environment.
     Init,
+    /// Fill the config in interactively: pick a starting recipe, answer a few
+    /// questions, review the plan. Never handles secret values.
+    Setup {
+        /// Read answers from a file instead of asking (testing affordance).
+        #[arg(long, hide = true)]
+        answers: Option<PathBuf>,
+        /// Write the collected answers to a file.
+        #[arg(long)]
+        save_answers: Option<PathBuf>,
+        /// Show the plan and stop without writing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Run the main loop: fetch → dispatch → monitor (§5.1).
     Run {
         /// Keep polling task sources at their configured intervals (F-06)
@@ -203,6 +220,20 @@ fn execute(
     match command {
         Command::Completion { .. } => unreachable!("handled above"),
         Command::Init => init_cmd::run(&cx),
+        Command::Setup {
+            answers,
+            save_answers,
+            dry_run,
+            yes,
+        } => setup::run(
+            &cx,
+            &setup::SetupArgs {
+                answers,
+                save_answers,
+                dry_run,
+                yes,
+            },
+        ),
         Command::Run {
             watch,
             dry_run,
