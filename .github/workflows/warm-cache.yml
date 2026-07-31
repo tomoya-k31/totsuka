@@ -26,9 +26,11 @@ name: warm-cache
 
 on:
   push:
-    # TEMPORARY(#341): perf/ci-cache-lifecycle と paths の一時無効化は、ci.yml の
-    # 消費側と同じキャッシュ鍵が出ることを実測で確かめるため。マージ前に外す。
-    branches: [main, perf/ci-cache-lifecycle]
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "rust-toolchain.toml"
   schedule:
     - cron: "41 19 * * 0" # 04:41 JST 日曜。rustc 新リリースの保険
   workflow_dispatch:

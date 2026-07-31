@@ -3,8 +3,7 @@ name: ci
 on:
   pull_request:
   push:
-    # TEMPORARY(#341): perf/ci-cache-lifecycle は段階 1 の実測用。マージ前に外す。
-    branches: [main, perf/ci-cache-lifecycle]
+    branches: [main]
 
 # Actions billing rounds every job UP to the next full minute, so the job
 # count — not just wall-clock — drives cost. Jobs are therefore consolidated
@@ -31,8 +30,7 @@ env:
 jobs:
   clippy:
     name: clippy / rustfmt
-    # TEMPORARY(#341): ref_name の OR は段階 1 の実測用。マージ前に外す。
-    if: github.event_name == 'pull_request' || github.ref_name == 'perf/ci-cache-lifecycle'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -97,8 +95,7 @@ jobs:
 
   test:
     name: test
-    # TEMPORARY(#341): ref_name の OR は段階 1 の実測用。マージ前に外す。
-    if: github.event_name == 'pull_request' || github.ref_name == 'perf/ci-cache-lifecycle'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
