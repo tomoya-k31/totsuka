@@ -1756,7 +1756,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 if let Some(chunk) = &note.log_chunk {
                     tracing::debug!(task_id, "agent log: {chunk}");
                     // Accumulate the streamed output; it is the `output = source`
-                    // publish artifact (F-07) and the PR body `{summary}`.
+                    // publish artifact (F-07).
                     let buf = self.agent_output.entry(task_id).or_default();
                     buf.push_str(chunk);
                     if !chunk.ends_with('\n') {
@@ -2071,7 +2071,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Fail a task at the publishing stage, KEEPING its worktree, commits and
     /// session so `task retry` can resume (issue #65). The accumulated agent
     /// output is dropped so a retry re-captures fresh output (no duplication in
-    /// the PR body). The source status is intentionally left unchanged: a
+    /// the publish artifact). The source status is intentionally left unchanged: a
     /// recoverable publish failure must not flap the source task to
     /// `on_failure` and back on the next successful retry.
     async fn fail_publish(

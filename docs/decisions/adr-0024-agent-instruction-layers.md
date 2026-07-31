@@ -4,7 +4,7 @@ title: ADR-0024 エージェントへの指示は task_source プラグインが
 description: ペイン内エージェントに渡す散文（手順・テンプレート・書式）を task_source プラグインの prompts が Task.instructions 経由で所有し、tools 設定と core は argv のツール制限・モデル・タイムアウトだけを持つ決定。Slack の books 起票フローで確定した。allowedTools は制限ではなく付与であること、ペインがオペレーターの settings.json を継承することを前提として明記し、スキル注入・agents インライン JSON・initialPrompt は不採用とする。
 resource: https://github.com/tomoya-k31/totsuka/issues/324
 tags: [decision, prompt, tool, permission, slack, agent, adr]
-generated: { by: claude-code/opus-5, at: 2026-07-31T14:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-07-31T00:00:00Z }
 verified: { by: claude-code/opus-5, at: 2026-07-31T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
@@ -95,7 +95,9 @@ totsuka が `--settings` で渡すファイル（`crates/orchestrator-core/src/h
 
 ## 5. F-86 の適用範囲は「成果物の公開」に限る
 
-F-86（agent_ide プラグインの成果はコミットまで。push / PR 作成は Orchestrator の責務）は改訂しない。F-86 が守っているのは**ワークフローの成果物（コード変更）を外部に公開する経路の一元管理**であり、対象は push と PR である。`gh issue create` は成果物の公開ではなく**タスクの登録**で、worktree のコミットとは無関係（`output = "source"` により push は構造的に抑止されている）。
+F-86（agent_ide プラグインの成果はコミットまで。push / PR 作成は Orchestrator の責務）はこの ADR では改訂しない。F-86 が守っているのは**ワークフローの成果物（コード変更）を外部に公開する経路の一元管理**であり、対象は push と PR である。`gh issue create` は成果物の公開ではなく**タスクの登録**で、worktree のコミットとは無関係。
+
+> **改訂（[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）**: F-86 自体はその後**全面撤回**され、push と PR 作成はエージェントの責務になった。したがって「`output = "source"` により push は構造的に抑止されている」という当初の但し書きはもう成り立たない。この節の結論 —「`gh issue create` は成果物の公開ではないので F-86 の対象外」— は変わらないが、その根拠は「push が構造的に不可能だから」ではなく「issue 起票は worktree のコミットとは無関係だから」の方だけになる。
 
 # 検討した選択肢
 

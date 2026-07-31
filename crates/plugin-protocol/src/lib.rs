@@ -35,9 +35,16 @@
 //!
 //! ## Responsibility boundary (F-86)
 //!
-//! An `agent_ide` plugin's responsibility ends **at the commit**. Pushing the
-//! branch and opening the pull request is the **Orchestrator's** job — plugins
-//! must never push or open PRs.
+//! The worktree arrives on a **detached `HEAD`**. Creating the branch,
+//! committing, pushing and opening the pull request are all the **agent's**,
+//! following the repository's own conventions — which is where those
+//! procedures are written down, and therefore somewhere the orchestrator
+//! cannot read them from.
+//!
+//! An `agent_ide` plugin drives the agent; it does not do any of this itself.
+//! The orchestrator owns the worktree's lifecycle and the task's, and never
+//! pushes. This reverses the earlier boundary, under which the agent stopped
+//! at the commit and the orchestrator pushed — see ADR-0026.
 //!
 //! ## Versioning (§10.2)
 //!

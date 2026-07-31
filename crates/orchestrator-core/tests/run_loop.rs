@@ -800,6 +800,17 @@ async fn retry_after_a_publish_failure_can_publish_again() {
         TaskState::Failed,
         "a publish failure fails the task"
     );
+    // Publish was attempted exactly once. The deleted `pull_request` version of
+    // this test asserted the same thing about PR creation, and dropping the
+    // count would let both a double-publish and a retry that never re-publishes
+    // pass silently — the two failures this test exists to catch.
+    let attempts = |log: &Path| {
+        read_log(log)
+            .iter()
+            .filter(|c| c["method"] == "result/publish")
+            .count()
+    };
+    assert_eq!(attempts(&source_log), 1, "publish attempted once");
     let worktree = PathBuf::from(task.worktree_path.clone().expect("worktree kept"));
     assert!(
         worktree.is_dir(),
@@ -853,6 +864,11 @@ async fn retry_after_a_publish_failure_can_publish_again() {
         task.state,
         TaskState::Done,
         "the retry publishes and completes"
+    );
+    assert_eq!(
+        attempts(&source_log),
+        2,
+        "the retry re-attempted the publish rather than completing without one"
     );
     engine.shutdown(Duration::from_secs(5)).await;
 

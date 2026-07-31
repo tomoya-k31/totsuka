@@ -17,8 +17,8 @@
 //! - `task/dispatch` → replies with the config's `"session_id"` (default
 //!   `sess-mock`); `"commit_on_dispatch": true` makes the mock agent branch
 //!   (`"branch_on_dispatch"`, default `feat/mock-agent-work`) and leave a real
-//!   commit on it, so the pull_request output policy has something to push —
-//!   the worktree arrives detached, so the branch has to come first;
+//!   commit on it — the worktree arrives detached, so the branch has to come
+//!   first or the commits land where nothing can reach them;
 //!   `"dirty_on_dispatch": true` leaves an uncommitted file so cleanup's
 //!   data-loss guard (F-23 DirtySkipped) is exercisable;
 //!   `"crash_on_dispatch": true` exits mid-dispatch (crash isolation, §5.3);
@@ -207,8 +207,7 @@ fn main() {
                 // real one is asked to: name a branch, switch to it, and
                 // commit. The worktree arrives detached, so the branch has to
                 // come first — without it the commits land on a detached HEAD
-                // and the orchestrator has nothing to push (the agent's work
-                // ends at the commit, F-86).
+                // and are reachable from nothing once the worktree is removed.
                 if config
                     .get("commit_on_dispatch")
                     .and_then(Value::as_bool)

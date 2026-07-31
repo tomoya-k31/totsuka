@@ -288,7 +288,7 @@ mod tests {
         Workflow::from_configs(&cfg.workflows)
     }
 
-    /// The §4.9 example: design (plan/source) + implement (implement/pull_request).
+    /// The §4.9 example: design (plan/source) + implement (implement/source).
     const SPEC_EXAMPLE: &str = r#"
 [[workflows]]
 name = "design"

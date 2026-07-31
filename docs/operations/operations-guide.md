@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, worktree, faq, troubleshooting]
-generated: { by: human:tomoya-k31, at: 2026-07-26T21:00:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---

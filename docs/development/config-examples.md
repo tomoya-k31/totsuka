@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: human:tomoya-k31, at: 2026-07-31T17:00:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -210,11 +210,6 @@ plan_cleanup = "immediate"  # plan モードの掃除（既定 immediate）
 level = "info"        # error | warn | info | debug | trace（`--debug` で debug に引き上げ）
 log_prompts = true    # プロンプト/ペイロードを記録（実出力は debug 以上のときのみ）
 max_files = 7         # 日次ログの保持世代数
-
-Source: {url}
-
-{summary}
-"""
 
 # ── Claude Code フック受信 ───────────────────────────────────
 [hooks]
