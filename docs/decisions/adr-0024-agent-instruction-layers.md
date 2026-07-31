@@ -5,6 +5,8 @@ description: ペイン内エージェントに渡す散文（手順・テンプ�
 resource: https://github.com/tomoya-k31/totsuka/issues/324
 tags: [decision, prompt, tool, permission, slack, agent, adr]
 generated: { by: claude-code/opus-5, at: 2026-07-31T12:00:00+09:00 }
+status: stable
+owner: tomoya-k31
 sources:
   - id: cc-cli-reference
     resource: https://code.claude.com/docs/en/cli-reference
