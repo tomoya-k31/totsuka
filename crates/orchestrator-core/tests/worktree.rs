@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::paths::Paths;
 use orchestrator_core::worktree::{
-    CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE, WorktreeManager,
-    default_location_template,
+    CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE,
+    DEFAULT_WORKTREE_NAME_TEMPLATE, WorktreeManager, default_location_template,
 };
 
 use test_support::{bare_origin_and_clone as setup, git, scratch};
@@ -17,7 +17,8 @@ use test_support::{bare_origin_and_clone as setup, git, scratch};
 /// built-in default no longer has this shape (it is pre-resolved from
 /// [`Paths`]), but user config still supports it, so the lifecycle tests keep
 /// exercising the expansion path.
-const ENV_LOCATION_TEMPLATE: &str = "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}";
+const ENV_LOCATION_TEMPLATE: &str =
+    "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{worktree_name}";
 
 fn env(state_dir: &Path) -> HashMap<String, String> {
     HashMap::from([(
@@ -37,6 +38,7 @@ fn request<'a>(
         source: "github",
         task_id,
         branch_template: DEFAULT_BRANCH_TEMPLATE,
+        name_template: DEFAULT_WORKTREE_NAME_TEMPLATE,
         location_template: ENV_LOCATION_TEMPLATE,
         base_branch: None,
         env,
@@ -68,6 +70,7 @@ fn default_location_creates_a_worktree_without_xdg_state_home() {
             source: "slack",
             task_id: "C0ABCDEF12:1720000000.123456",
             branch_template: DEFAULT_BRANCH_TEMPLATE,
+            name_template: DEFAULT_WORKTREE_NAME_TEMPLATE,
             location_template: &template,
             base_branch: None,
             env: &HashMap::new(),
@@ -76,11 +79,17 @@ fn default_location_creates_a_worktree_without_xdg_state_home() {
 
     assert_eq!(wt.branch, "agent/slack-C0ABCDEF12-1720000000.123456");
     assert!(wt.path.is_dir(), "worktree dir must exist");
+    // The directory is named from `(source, task_id)`, not from the branch —
+    // and the `:` a Slack task id carries never reaches the filesystem.
     assert_eq!(
         wt.path,
         home.join(".local/state/totsuka/worktrees/myrepo")
-            .join("agent-slack-C0ABCDEF12-1720000000.123456")
+            .join("slack-C0ABCDEF12-1720000000.123456")
     );
+    // The base commit is reported so cleanup can later prove the branch it is
+    // about to delete descends from this worktree's starting point.
+    let head = git(&clone, &["rev-parse", "origin/main"]);
+    assert_eq!(wt.base_commit, head.trim());
 }
 
 #[test]
@@ -95,10 +104,7 @@ fn create_cleanup_and_orphan_detection() {
     let wt = mgr.create(&request(&clone, "123", &env)).unwrap();
     assert_eq!(wt.branch, "agent/github-123");
     assert!(wt.path.is_dir(), "worktree dir must exist");
-    assert_eq!(
-        wt.path,
-        state.join("totsuka/worktrees/myrepo/agent-github-123")
-    );
+    assert_eq!(wt.path, state.join("totsuka/worktrees/myrepo/github-123"));
     // It is based on origin/main.
     let head = git(&wt.path, &["rev-parse", "HEAD"]);
     let origin_main = git(&clone, &["rev-parse", "origin/main"]);
@@ -126,7 +132,7 @@ fn create_cleanup_and_orphan_detection() {
         .cleanup(
             &clone,
             &wt.path,
-            &wt.branch,
+            Some(&wt.branch),
             CleanupPolicy::Immediate,
             None,
             "2026-07-12T00:00:00Z",
@@ -153,7 +159,8 @@ fn recreates_a_cleaned_up_worktree_at_the_same_path() {
     let mgr = WorktreeManager::new(SystemGitRunner);
 
     let first = mgr.create(&request(&clone, "42", &env)).unwrap();
-    mgr.remove(&clone, &first.path, &first.branch).unwrap();
+    mgr.remove(&clone, &first.path, Some(&first.branch))
+        .unwrap();
     assert!(!first.path.exists());
 
     let second = mgr.create(&request(&clone, "42", &env)).unwrap();
@@ -227,7 +234,8 @@ fn recreates_from_the_remote_branch_after_a_published_branch_was_cleaned_up() {
     let published = git(&first.path, &["rev-parse", "HEAD"]);
     mgr.push_branch(&first.path, &first.branch).unwrap();
 
-    mgr.remove(&clone, &first.path, &first.branch).unwrap();
+    mgr.remove(&clone, &first.path, Some(&first.branch))
+        .unwrap();
     assert!(
         git(&clone, &["branch", "--list", &first.branch]).is_empty(),
         "the local branch really is deleted once published — that is the hazard"
@@ -315,7 +323,7 @@ fn dirty_worktree_is_not_removed() {
         .cleanup(
             &clone,
             &wt.path,
-            &wt.branch,
+            Some(&wt.branch),
             CleanupPolicy::Immediate,
             None,
             "2026-07-12T00:00:00Z",
@@ -341,7 +349,7 @@ fn retain_policies_do_not_remove() {
         .cleanup(
             &clone,
             &wt.path,
-            &wt.branch,
+            Some(&wt.branch),
             CleanupPolicy::Manual,
             Some("2026-07-01T00:00:00Z"),
             "2026-07-12T00:00:00Z",
@@ -356,7 +364,7 @@ fn retain_policies_do_not_remove() {
         .cleanup(
             &clone,
             &wt2.path,
-            &wt2.branch,
+            Some(&wt2.branch),
             CleanupPolicy::RetentionDays(30),
             Some("2026-07-11T00:00:00Z"),
             "2026-07-12T00:00:00Z",
@@ -445,7 +453,7 @@ fn cleanup_deletes_the_branch_even_when_the_local_default_lags_origin() {
         mgr.cleanup(
             &clone,
             &wt.path,
-            &branch,
+            Some(&branch),
             CleanupPolicy::Immediate,
             None,
             "2026-07-12T00:00:00Z",
@@ -482,7 +490,7 @@ fn cleanup_keeps_a_branch_whose_commits_are_not_on_origin() {
         mgr.cleanup(
             &clone,
             &wt.path,
-            &branch,
+            Some(&branch),
             CleanupPolicy::Immediate,
             None,
             "2026-07-12T00:00:00Z",
@@ -521,7 +529,7 @@ fn cleanup_deletes_a_pushed_branch_that_is_not_merged_into_the_default() {
         mgr.cleanup(
             &clone,
             &wt.path,
-            &branch,
+            Some(&branch),
             CleanupPolicy::Immediate,
             None,
             "2026-07-12T00:00:00Z",

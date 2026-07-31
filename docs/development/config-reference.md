@@ -216,7 +216,7 @@ OpenAI 互換 `/chat/completions` を前提。repo_hint を持たないタスク
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `location` | string? | `<state dir>/worktrees/{repo_name}/{branch}` | 配置テンプレート。`{repo}`/`{repo_name}`/`{branch}`/`{task_id}`/`{source}`/`${ENV}`/`~` を展開 |
+| `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | 配置テンプレート。`{repo}`/`{repo_name}`/`{worktree_name}`/`{task_id}`/`{source}`/`${ENV}`/`~` を展開。`{worktree_name}` は `{source}-{task_id}` を git ref 規則で正規化して `/` を潰したもの。**`{branch}` は廃止** — ブランチは worktree ができた後にエージェントが決めるので、作成時点のディレクトリ名には使えない。残っていると設定エラーで起動しない |
 | `cleanup` | policy? | `manual` | implement モードの掃除ポリシー（F-23） |
 | `plan_cleanup` | policy? | `immediate` | plan モードの掃除ポリシー（F-85） |
 

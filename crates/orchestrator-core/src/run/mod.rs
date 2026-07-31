@@ -75,7 +75,7 @@ use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_
 use crate::tool::{LaunchInputs, ToolProfile};
 use crate::worktree::{
     CleanupDecision, CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_BRANCH_TEMPLATE,
-    WorktreeError, WorktreeManager, default_location_template,
+    DEFAULT_WORKTREE_NAME_TEMPLATE, WorktreeError, WorktreeManager, default_location_template,
 };
 
 /// Lines of a repository README shown to the LLM as selection context (F-11).
@@ -139,6 +139,9 @@ pub struct EngineSettings {
     pub limits: Limits,
     /// Branch-name template (F-21).
     pub branch_template: String,
+    /// Worktree directory-name template, filling `{worktree_name}` in
+    /// `location_template` (F-22 addendum).
+    pub worktree_name_template: String,
     /// Global worktree location template (F-22).
     pub location_template: String,
     /// Cleanup policy for implement-mode worktrees (F-23).
@@ -259,6 +262,7 @@ pub fn settings_from_config(
         repos,
         limits,
         branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
+        worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
         location_template: cfg
             .worktree
             .location
@@ -1338,8 +1342,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // branch and path (both are pure functions of source + task id), and
         // the agent session survives it: Claude Code keys sessions by working
         // directory, storing them outside the worktree.
-        let worktree_path = match (&record.worktree_path, &record.branch) {
-            (Some(path), Some(_)) if Path::new(path).is_dir() => PathBuf::from(path),
+        //
+        // Keyed on the path alone: a recorded worktree is reusable whether or
+        // not a branch was ever recorded for it, and requiring both would send
+        // a branchless task back through `create` to collide with its own
+        // directory.
+        let worktree_path = match &record.worktree_path {
+            Some(path) if Path::new(path).is_dir() => PathBuf::from(path),
             _ => {
                 let location_template = repo
                     .worktree_location
@@ -1351,6 +1360,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     source: &record.source,
                     task_id: &record.source_task_id,
                     branch_template: &self.settings.branch_template,
+                    name_template: &self.settings.worktree_name_template,
                     location_template: &location_template,
                     base_branch: None,
                     env: &self.settings.env,
@@ -1358,7 +1368,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 match self.worktrees.create(&request) {
                     Ok(worktree) => {
                         let path = worktree.path.display().to_string();
-                        self.db.set_worktree(record.id, &path, &worktree.branch)?;
+                        self.db.set_worktree(
+                            record.id,
+                            &path,
+                            Some(&worktree.branch),
+                            &worktree.base_commit,
+                        )?;
                         worktree.path
                     }
                     // `AlreadyExists` means the rendered path is claimed by a
@@ -2217,11 +2232,15 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let Some(record) = self.db.get_task(task_id)? else {
             return Ok(());
         };
-        let (Some(path), Some(branch), Some(repo_name)) =
-            (&record.worktree_path, &record.branch, &record.repo)
-        else {
+        // A missing branch is not a reason to skip the cleanup — a worktree
+        // can legitimately never have been put on one, and treating that as
+        // "nothing to do" would leak the directory *and* its pane, silently,
+        // on every sweep for the lifetime of the process. Only the branch
+        // deletion is conditional on it; `remove` takes the `Option`.
+        let (Some(path), Some(repo_name)) = (&record.worktree_path, &record.repo) else {
             return Ok(());
         };
+        let branch = record.branch.as_deref();
         // Already removed (earlier run / manual cleanup): nothing to do. The
         // task will never be swept again, so drop its release memo too.
         if !Path::new(path).exists() {
@@ -2795,7 +2814,11 @@ plan_cleanup = { retention_days = 2 }
         assert_eq!(settings.cleanup_plan, CleanupPolicy::Immediate);
         assert_eq!(
             settings.location_template,
-            "/xdg/state/totsuka/worktrees/{repo_name}/{branch}"
+            "/xdg/state/totsuka/worktrees/{repo_name}/{worktree_name}"
+        );
+        assert_eq!(
+            settings.worktree_name_template,
+            DEFAULT_WORKTREE_NAME_TEMPLATE
         );
         assert_eq!(settings.worktree_sweep_interval, WORKTREE_SWEEP_INTERVAL);
         // Promoting this from a const to a settings field must not change what
@@ -2819,7 +2842,7 @@ plan_cleanup = { retention_days = 2 }
 
         assert_eq!(
             settings.location_template,
-            "/home/t/.local/state/totsuka/worktrees/{repo_name}/{branch}"
+            "/home/t/.local/state/totsuka/worktrees/{repo_name}/{worktree_name}"
         );
         // The template no longer carries a `${ENV}` reference, so rendering
         // cannot fail on an unset variable.
@@ -2833,14 +2856,14 @@ plan_cleanup = { retention_days = 2 }
         let cfg = RootConfig::from_toml_str(
             r#"
 [worktree]
-location = "${MY_ROOT}/wt/{branch}"
+location = "${MY_ROOT}/wt/{worktree_name}"
 "#,
         )
         .unwrap();
         let settings =
             settings_from_config(&cfg, &HashMap::new(), &test_paths(&[("HOME", "/home/t")]))
                 .unwrap();
-        assert_eq!(settings.location_template, "${MY_ROOT}/wt/{branch}");
+        assert_eq!(settings.location_template, "${MY_ROOT}/wt/{worktree_name}");
     }
 
     #[test]
@@ -2872,7 +2895,8 @@ plan_cleanup = "keep_28d"
             repos: Vec::new(),
             limits: Limits::global(1),
             branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
-            location_template: "/tmp/totsuka-sweep/{repo_name}/{branch}".to_string(),
+            worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
+            location_template: "/tmp/totsuka-sweep/{repo_name}/{worktree_name}".to_string(),
             cleanup_implement: CleanupPolicy::Manual,
             cleanup_plan: CleanupPolicy::Immediate,
             env: HashMap::new(),

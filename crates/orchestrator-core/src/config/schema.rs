@@ -610,10 +610,10 @@ kind = "task_source"
 [[repositories]]
 name = "totsuka"
 path = "~/Workspace/github/tomoya-k31/totsuka"
-worktree_location = "{repo}/../.worktrees/{branch}"
+worktree_location = "{repo}/../.worktrees/{worktree_name}"
 
 [worktree]
-location = "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}"
+location = "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{worktree_name}"
 
 [llm]
 base_url = "https://openrouter.ai/api/v1"

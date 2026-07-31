@@ -240,8 +240,8 @@ pub enum RetryPlan {
     ReuseSession {
         /// Existing worktree path.
         worktree_path: String,
-        /// Existing branch.
-        branch: String,
+        /// Existing branch, if the worktree is on one.
+        branch: Option<String>,
         /// Owning plugin.
         plugin: String,
         /// Session id to re-attach to.
@@ -254,17 +254,19 @@ pub enum RetryPlan {
 
 /// Decide how to retry `task` given its most recent session (F-44).
 ///
-/// Reuse requires both a recorded worktree (path + branch, #53) and a session;
-/// anything missing means a clean re-dispatch.
+/// Reuse requires a recorded worktree (#53) and a session; either missing
+/// means a clean re-dispatch.
+///
+/// The branch is carried but not required. It was part of the gate when it
+/// was generated alongside the worktree and so always present together with
+/// the path; a worktree that is not on a branch is still perfectly reusable,
+/// and refusing to reuse it would re-dispatch onto a directory that already
+/// exists.
 pub fn retry_plan(task: &TaskRecord, latest_session: Option<&SessionRecord>) -> RetryPlan {
-    match (
-        task.worktree_path.as_ref(),
-        task.branch.as_ref(),
-        latest_session,
-    ) {
-        (Some(worktree_path), Some(branch), Some(session)) => RetryPlan::ReuseSession {
+    match (task.worktree_path.as_ref(), latest_session) {
+        (Some(worktree_path), Some(session)) => RetryPlan::ReuseSession {
             worktree_path: worktree_path.clone(),
-            branch: branch.clone(),
+            branch: task.branch.clone(),
             plugin: session.plugin.clone(),
             session_id: session.session_id.clone(),
         },
@@ -629,7 +631,7 @@ mod tests {
     fn retry_plan_reuses_when_worktree_and_session_present() {
         let db = StateDb::open_in_memory().unwrap();
         let id = db.upsert_task(&new_task("1")).unwrap();
-        db.set_worktree(id, "/wt/agent-github-1", "agent/github-1")
+        db.set_worktree(id, "/wt/agent-github-1", Some("agent/github-1"), "c0ffee")
             .unwrap();
         db.record_session(id, "herdr", "sess-1").unwrap();
         let task = db.get_task(id).unwrap().unwrap();
@@ -639,7 +641,30 @@ mod tests {
             retry_plan(&task, session.as_ref()),
             RetryPlan::ReuseSession {
                 worktree_path: "/wt/agent-github-1".into(),
-                branch: "agent/github-1".into(),
+                branch: Some("agent/github-1".into()),
+                plugin: "herdr".into(),
+                session_id: "sess-1".into(),
+            }
+        );
+    }
+
+    /// A worktree that is not on a branch is still reusable — the branch is
+    /// carried, not required. Refusing to reuse it would re-dispatch onto a
+    /// directory that already exists and fail on `AlreadyExists`.
+    #[test]
+    fn retry_plan_reuses_a_worktree_with_no_branch() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&new_task("1")).unwrap();
+        db.set_worktree(id, "/wt/github-1", None, "c0ffee").unwrap();
+        db.record_session(id, "herdr", "sess-1").unwrap();
+        let task = db.get_task(id).unwrap().unwrap();
+        let session = db.latest_session(id).unwrap();
+
+        assert_eq!(
+            retry_plan(&task, session.as_ref()),
+            RetryPlan::ReuseSession {
+                worktree_path: "/wt/github-1".into(),
+                branch: None,
                 plugin: "herdr".into(),
                 session_id: "sess-1".into(),
             }

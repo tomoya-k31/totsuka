@@ -27,7 +27,9 @@ use orchestrator_core::ports::{Clock, SecretString};
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, HookRuntime, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_BRANCH_TEMPLATE};
+use orchestrator_core::worktree::{
+    CleanupPolicy, DEFAULT_BRANCH_TEMPLATE, DEFAULT_WORKTREE_NAME_TEMPLATE,
+};
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use test_support::{bare_origin_and_clone as setup_repo, scratch};
@@ -140,7 +142,8 @@ fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSetti
         }],
         limits: Limits::global(4),
         branch_template: DEFAULT_BRANCH_TEMPLATE.to_string(),
-        location_template: "{repo}/../wt/{branch}".to_string(),
+        worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
+        location_template: "{repo}/../wt/{worktree_name}".to_string(),
         cleanup_implement: CleanupPolicy::Manual,
         cleanup_plan: CleanupPolicy::Immediate,
         env: HashMap::new(),
@@ -985,7 +988,7 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         worktree_location: None,
         tool: None,
     }];
-    settings.location_template = "{repo}/../wt/{branch}".to_string();
+    settings.location_template = "{repo}/../wt/{worktree_name}".to_string();
 
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
@@ -1131,7 +1134,7 @@ async fn dispatch_with_codex_tool_builds_codex_argv() {
         worktree_location: None,
         tool: Some("codex".to_string()),
     }];
-    settings.location_template = "{repo}/../wt/{branch}".to_string();
+    settings.location_template = "{repo}/../wt/{worktree_name}".to_string();
 
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
@@ -1217,7 +1220,7 @@ async fn dispatch_with_opencode_tool_routes_context_visibly() {
         worktree_location: None,
         tool: Some("opencode".to_string()),
     }];
-    settings.location_template = "{repo}/../wt/{branch}".to_string();
+    settings.location_template = "{repo}/../wt/{worktree_name}".to_string();
 
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
@@ -1309,7 +1312,7 @@ async fn dispatch_without_hook_falls_back_to_visible_extra_context() {
         worktree_location: None,
         tool: None,
     }];
-    settings.location_template = "{repo}/../wt/{branch}".to_string();
+    settings.location_template = "{repo}/../wt/{worktree_name}".to_string();
 
     let mut engine = Engine::new(
         StateDb::open(&base.join("state.db")).unwrap(),
@@ -1635,7 +1638,7 @@ fn resume_settings(repo: &Path, base: &Path) -> EngineSettings {
         worktree_location: None,
         tool: None,
     }];
-    settings.location_template = "{repo}/../wt/{branch}".to_string();
+    settings.location_template = "{repo}/../wt/{worktree_name}".to_string();
     settings
 }
 
@@ -1664,16 +1667,16 @@ fn seed_finished_conversation(db: &StateDb, source_task_id: &str, tool_sid: Opti
         db.set_tool_session_id(row, sid).unwrap();
     }
     // The earlier run left a worktree and branch recorded, as every real one
-    // does. That matters: `recovery::retry_plan` reads exactly
-    // (worktree_path, branch, session) and never the task's state, so a
-    // reopened conversation always *looks* reusable — the case a follow-up
-    // message must not be swallowed by (#242). The path is deliberately gone
-    // from disk, the state a cleaned-up worktree leaves behind; #254
-    // re-creates it.
+    // does. That matters: `recovery::retry_plan` reads (worktree_path,
+    // session) and never the task's state, so a reopened conversation always
+    // *looks* reusable — the case a follow-up message must not be swallowed by
+    // (#242). The path is deliberately gone from disk, the state a cleaned-up
+    // worktree leaves behind; #254 re-creates it.
     db.set_worktree(
         id,
-        &format!("/nonexistent/wt/agent-mock_src-{source_task_id}"),
-        &format!("agent/mock_src-{source_task_id}"),
+        &format!("/nonexistent/wt/mock_src-{source_task_id}"),
+        Some(&format!("agent/mock_src-{source_task_id}")),
+        "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeec0ff",
     )
     .unwrap();
     for event in [

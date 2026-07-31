@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: human:tomoya-k31, at: 2026-07-28T16:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
 status: draft
 owner: tomoya-k31
 ---
@@ -106,7 +106,7 @@ Notion タスクや GitHub Projects に紐づく Issue などのタスク管理�
 |---|---|---|
 | F-20 | タスク開始時に対象リポジトリへ worktree を作成する(1 task = 1 worktree = 1 branch) | M |
 | F-21 | ブランチ命名規則を設定可能(デフォルト: `agent/{source}-{task_id}`) | M |
-| F-22 | worktree の配置先を設定可能(デフォルト: `{repo}/../.worktrees/{branch}` または XDG_STATE_HOME 配下) | M |
+| F-22 | worktree の配置先を設定可能(デフォルト: `<state dir>/worktrees/{repo_name}/{worktree_name}`。`{worktree_name}` は `{source}-{task_id}` を描画したもの)。ディレクトリ名はタスクから導き、ブランチからは導かない — worktree を作る時点でブランチはまだ存在しない | M |
 | F-23 | タスク完了・キャンセル時の worktree 掃除(即時 / 保持期間指定 / 手動)をポリシーとして設定可能 | M |
 | F-24 | 起動時に孤児 worktree(状態DBに対応タスクが無いもの)を検出し、`doctor` コマンドで掃除を提案 | S |
 | F-25 | worktree 作成直前に `git fetch` を行い、`origin/{default_branch}` からブランチを切る(stale なローカルブランチ起点を防ぐ)。ベースブランチはリポジトリ設定で上書き可能 | M |

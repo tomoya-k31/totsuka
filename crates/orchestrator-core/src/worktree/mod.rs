@@ -18,6 +18,15 @@ use crate::ports::git::GitRunner;
 /// Default branch-name template (F-21).
 pub const DEFAULT_BRANCH_TEMPLATE: &str = "agent/{source}-{task_id}";
 
+/// Default worktree-directory-name template (F-22 addendum).
+///
+/// The directory name is derived from `(source, task_id)` directly rather than
+/// from the branch: the branch is about to stop being something the
+/// orchestrator picks, and a path that depends on it could not be rendered
+/// before the agent has chosen a name. `(source, task_id)` is known at
+/// creation time and is already unique per task, which is all the path needs.
+pub const DEFAULT_WORKTREE_NAME_TEMPLATE: &str = "{source}-{task_id}";
+
 /// Default worktree location template — centralized under XDG state (F-22).
 ///
 /// Built from the already-resolved [`Paths`] rather than from a
@@ -28,13 +37,17 @@ pub const DEFAULT_BRANCH_TEMPLATE: &str = "agent/{source}-{task_id}";
 /// fallback, and this mirrors how the other state-directory defaults
 /// (`[hooks].socket_path` / `spool_dir`) are already built in the CLI.
 ///
-/// `{repo_name}` / `{branch}` stay as placeholders for [`render_location`];
-/// only the base is pre-resolved. `Paths::state_dir()` already ends in
-/// `totsuka`, so the rendered path is byte-identical to the previous default
-/// whenever `XDG_STATE_HOME` *is* set — no migration for existing worktrees.
+/// `{repo_name}` / `{worktree_name}` stay as placeholders for
+/// [`render_location`]; only the base is pre-resolved.
+///
+/// The leaf was `{branch}` until the branch became agent-owned. Existing
+/// worktrees need no migration regardless: every consumer (cleanup, orphan
+/// detection, `doctor`, the dispatch-time reuse guard) reads the path recorded
+/// in `state.db`, never a freshly rendered one, so only newly created
+/// worktrees pick up the new shape.
 pub fn default_location_template(paths: &Paths) -> String {
     format!(
-        "{}/worktrees/{{repo_name}}/{{branch}}",
+        "{}/worktrees/{{repo_name}}/{{worktree_name}}",
         paths.state_dir().display()
     )
 }
@@ -138,21 +151,50 @@ pub struct Worktree {
     pub path: PathBuf,
     /// The branch checked out in it.
     pub branch: String,
+    /// The `origin/{default}` commit the worktree was branched from.
+    ///
+    /// Recorded so cleanup can later ask whether a branch actually descends
+    /// from this task's starting point before deleting it — the question that
+    /// matters once branch names stop being orchestrator-generated and start
+    /// sharing a namespace with the operator's own branches.
+    pub base_commit: String,
 }
 
-/// Sanitize a branch name for use as a single path component: `/` becomes `-`
-/// so `agent/github-123` maps to the directory `agent-github-123` (avoids
-/// unintended nesting, F-22 addendum).
+/// Flatten a name into a single path component: `/` becomes `-`, so
+/// `agent/github-123` maps to `agent-github-123` rather than nesting one
+/// directory deeper than the template says (F-22 addendum).
 pub fn sanitize_branch_for_path(branch: &str) -> String {
     branch.replace('/', "-")
 }
 
 /// Render a branch name from a template (F-21). Placeholders: `{source}`,
-/// `{task_id}`. The result is legalized for git: task ids are
-/// source-defined and may carry characters `git check-ref-format` forbids
-/// (Slack ids are `{channel}:{ts}`), so the git-level constraint is
-/// enforced once here at the git boundary rather than in every plugin.
+/// `{task_id}`. See `render_legalized` for what the result is normalized to.
 pub fn render_branch(template: &str, source: &str, task_id: &str) -> String {
+    render_legalized(template, source, task_id)
+}
+
+/// Render a worktree directory name from a template (F-22 addendum).
+/// Placeholders: `{source}`, `{task_id}`.
+///
+/// Shares `render_legalized` with [`render_branch`] rather than applying a
+/// path-specific allowlist. The git-ref rules are a strict superset of what a
+/// single path component needs — they already remove control characters,
+/// whitespace, `:` (which a Slack task id always carries) and a leading `-`
+/// (which would be read as an option by any command taking the name) — and
+/// reusing them keeps one normalization to reason about instead of two that
+/// can drift. The `/` that git-ref rules deliberately preserve is then folded
+/// by [`sanitize_branch_for_path`], because a path component must not nest.
+pub fn render_worktree_name(template: &str, source: &str, task_id: &str) -> String {
+    sanitize_branch_for_path(&render_legalized(template, source, task_id))
+}
+
+/// Substitute `{source}` / `{task_id}` and legalize the result for git.
+///
+/// Task ids are source-defined and may carry characters `git
+/// check-ref-format` forbids (Slack ids are `{channel}:{ts}`), so the
+/// git-level constraint is enforced once here at the git boundary rather than
+/// in every plugin.
+fn render_legalized(template: &str, source: &str, task_id: &str) -> String {
     let rendered = template
         .replace("{source}", source)
         .replace("{task_id}", task_id);
@@ -218,23 +260,28 @@ pub struct LocationContext<'a> {
 }
 
 /// Render a worktree location from a template (F-22). `${ENV}` is expanded from
-/// `env`; `{repo}` / `{repo_name}` / `{branch}` (sanitized) / `{task_id}` /
+/// `env`; `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` /
 /// `{source}` are substituted.
+///
+/// `worktree_name` is expected to come from [`render_worktree_name`], which is
+/// what makes it safe as a path component. `{task_id}` and `{source}` are
+/// substituted raw — they are an escape hatch for operators who want a
+/// different shape, and normalizing them here would silently change the
+/// meaning of an existing custom template.
 pub fn render_location(
     template: &str,
     ctx: &LocationContext<'_>,
-    branch: &str,
+    worktree_name: &str,
     env: &HashMap<String, String>,
 ) -> Result<PathBuf, WorktreeError> {
     let expanded = expand_env(template, &|k: &str| env.get(k).cloned())?;
-    let sanitized = sanitize_branch_for_path(branch);
     let rendered = expanded
         .replace("{repo}", &ctx.repo_path.display().to_string())
         .replace("{repo_name}", ctx.repo_name)
-        .replace("{branch}", &sanitized)
+        .replace("{worktree_name}", worktree_name)
         .replace("{task_id}", ctx.task_id)
         .replace("{source}", ctx.source);
-    // A leading `~` expands to `$HOME` (e.g. `worktree_location = "~/.worktrees/{branch}"`).
+    // A leading `~` expands to `$HOME` (e.g. `worktree_location = "~/.worktrees/{worktree_name}"`).
     if let Some(rest) = rendered.strip_prefix("~/") {
         let home = env
             .get("HOME")
@@ -288,6 +335,10 @@ pub struct CreateRequest<'a> {
     pub task_id: &'a str,
     /// Branch template (use [`DEFAULT_BRANCH_TEMPLATE`]).
     pub branch_template: &'a str,
+    /// Worktree directory-name template (use
+    /// [`DEFAULT_WORKTREE_NAME_TEMPLATE`]); fills `{worktree_name}` in
+    /// `location_template`.
+    pub name_template: &'a str,
     /// Location template (use [`default_location_template`] for the default).
     pub location_template: &'a str,
     /// Base branch override; `None` detects `origin`'s default (F-25).
@@ -343,13 +394,14 @@ impl<G: GitRunner> WorktreeManager<G> {
         let base_commit = rev.stdout.trim().to_string();
 
         let branch = render_branch(req.branch_template, req.source, req.task_id);
+        let worktree_name = render_worktree_name(req.name_template, req.source, req.task_id);
         let ctx = LocationContext {
             repo_path: req.repo_path,
             repo_name: req.repo_name,
             source: req.source,
             task_id: req.task_id,
         };
-        let path = render_location(req.location_template, &ctx, &branch, req.env)?;
+        let path = render_location(req.location_template, &ctx, &worktree_name, req.env)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -404,7 +456,11 @@ impl<G: GitRunner> WorktreeManager<G> {
             });
         }
 
-        Ok(Worktree { path, branch })
+        Ok(Worktree {
+            path,
+            branch,
+            base_commit,
+        })
     }
 
     /// Where the branch for a (re-)created worktree comes from (#254).
@@ -540,7 +596,7 @@ impl<G: GitRunner> WorktreeManager<G> {
         &self,
         repo_path: &Path,
         worktree_path: &Path,
-        branch: &str,
+        branch: Option<&str>,
         policy: CleanupPolicy,
         finished_at: Option<&str>,
         now: &str,
@@ -575,11 +631,15 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// [`decide_cleanup`](Self::decide_cleanup), and a worktree that turned
     /// dirty in that window must still be kept — data loss (irreversible)
     /// outranks a lost pane (minor). The next sweep retries.
+    ///
+    /// `branch` is optional because a worktree need not be on one: nothing
+    /// guarantees a branch was ever created, and a `None` here means only
+    /// "there is no branch to consider deleting", never "skip the cleanup".
     pub fn remove(
         &self,
         repo_path: &Path,
         worktree_path: &Path,
-        branch: &str,
+        branch: Option<&str>,
     ) -> Result<CleanupOutcome, WorktreeError> {
         if self.has_uncommitted_changes(worktree_path)? {
             tracing::warn!(
@@ -598,7 +658,9 @@ impl<G: GitRunner> WorktreeManager<G> {
                 stderr: remove.stderr,
             });
         }
-        self.delete_branch_if_published(repo_path, branch)?;
+        if let Some(branch) = branch {
+            self.delete_branch_if_published(repo_path, branch)?;
+        }
         Ok(CleanupOutcome::Removed)
     }
 
@@ -864,6 +926,8 @@ mod tests {
     fn renders_default_branch_and_location() {
         let branch = render_branch(DEFAULT_BRANCH_TEMPLATE, "github", "123");
         assert_eq!(branch, "agent/github-123");
+        let name = render_worktree_name(DEFAULT_WORKTREE_NAME_TEMPLATE, "github", "123");
+        assert_eq!(name, "github-123");
 
         let ctx = LocationContext {
             repo_path: Path::new("/repos/totsuka"),
@@ -875,17 +939,40 @@ mod tests {
         // the built-in default used to have, kept here because user config
         // still supports it.
         let loc = render_location(
-            "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}",
+            "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{worktree_name}",
             &ctx,
-            &branch,
+            &name,
             &env(&[("XDG_STATE_HOME", "/state")]),
         )
         .unwrap();
-        // `/` in the branch is sanitized to `-` in the directory name.
         assert_eq!(
             loc,
-            PathBuf::from("/state/totsuka/worktrees/totsuka/agent-github-123")
+            PathBuf::from("/state/totsuka/worktrees/totsuka/github-123")
         );
+    }
+
+    #[test]
+    fn worktree_name_is_legalized_and_flattened() {
+        // The `:` of a Slack task id would otherwise reach the filesystem,
+        // where it is a separator in `PATH`-shaped variables and a host/path
+        // delimiter to `scp`/`rsync`.
+        assert_eq!(
+            render_worktree_name(
+                DEFAULT_WORKTREE_NAME_TEMPLATE,
+                "slack",
+                "C0ABCDEF12:1720000000.123456"
+            ),
+            "slack-C0ABCDEF12-1720000000.123456"
+        );
+        // Any `/` a task id carries is folded rather than nesting the worktree
+        // one directory deeper than the template says.
+        assert_eq!(
+            render_worktree_name(DEFAULT_WORKTREE_NAME_TEMPLATE, "notion", "a/b"),
+            "notion-a-b"
+        );
+        // The option-injection and empty-render guards apply here too.
+        assert_eq!(render_worktree_name("{task_id}", "s", "-rf"), "b-rf");
+        assert_eq!(render_worktree_name("{task_id}", "s", "///"), "task");
     }
 
     #[test]
@@ -901,7 +988,7 @@ mod tests {
         // every dispatch on a machine that does not set it.
         assert_eq!(
             template,
-            "/home/t/.local/state/totsuka/worktrees/{repo_name}/{branch}"
+            "/home/t/.local/state/totsuka/worktrees/{repo_name}/{worktree_name}"
         );
 
         let ctx = LocationContext {
@@ -910,20 +997,22 @@ mod tests {
             source: "slack",
             task_id: "C1:100.1",
         };
-        let branch = render_branch(DEFAULT_BRANCH_TEMPLATE, ctx.source, ctx.task_id);
+        let name = render_worktree_name(DEFAULT_WORKTREE_NAME_TEMPLATE, ctx.source, ctx.task_id);
         // Rendering succeeds against an *empty* environment.
-        let loc = render_location(&template, &ctx, &branch, &HashMap::new()).unwrap();
+        let loc = render_location(&template, &ctx, &name, &HashMap::new()).unwrap();
         assert_eq!(
             loc,
-            PathBuf::from("/home/t/.local/state/totsuka/worktrees/totsuka/agent-slack-C1-100.1")
+            PathBuf::from("/home/t/.local/state/totsuka/worktrees/totsuka/slack-C1-100.1")
         );
     }
 
     #[test]
-    fn default_location_template_is_unchanged_when_xdg_state_home_is_set() {
-        // Regression guard for existing installs: with `XDG_STATE_HOME` set,
-        // the resolved path must be byte-identical to the old literal default,
-        // so no worktree needs migrating.
+    fn default_location_base_still_honours_xdg_state_home() {
+        // The pre-resolved base must keep matching what `${XDG_STATE_HOME}`
+        // would have expanded to. Only the *leaf* moved from `{branch}` to
+        // `{worktree_name}`; if the base drifted too, every existing install
+        // would find its worktree tree relocated wholesale rather than just
+        // naming new directories differently.
         let paths = Paths::from_env(|k| match k {
             "HOME" => Some("/home/t".to_string()),
             "XDG_STATE_HOME" => Some("/state".to_string()),
@@ -936,22 +1025,22 @@ mod tests {
             source: "github",
             task_id: "123",
         };
-        let branch = render_branch(DEFAULT_BRANCH_TEMPLATE, ctx.source, ctx.task_id);
+        let name = render_worktree_name(DEFAULT_WORKTREE_NAME_TEMPLATE, ctx.source, ctx.task_id);
         let new = render_location(
             &default_location_template(&paths),
             &ctx,
-            &branch,
+            &name,
             &HashMap::new(),
         )
         .unwrap();
-        let old = render_location(
-            "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{branch}",
+        let expected = render_location(
+            "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{worktree_name}",
             &ctx,
-            &branch,
+            &name,
             &env(&[("XDG_STATE_HOME", "/state")]),
         )
         .unwrap();
-        assert_eq!(new, old);
+        assert_eq!(new, expected);
     }
 
     #[test]
@@ -963,16 +1052,13 @@ mod tests {
             task_id: "1",
         };
         let loc = render_location(
-            "{repo}/../.worktrees/{branch}",
+            "{repo}/../.worktrees/{worktree_name}",
             &ctx,
-            "agent/github-1",
+            "github-1",
             &env(&[]),
         )
         .unwrap();
-        assert_eq!(
-            loc,
-            PathBuf::from("/repos/totsuka/../.worktrees/agent-github-1")
-        );
+        assert_eq!(loc, PathBuf::from("/repos/totsuka/../.worktrees/github-1"));
     }
 
     #[test]
@@ -1125,7 +1211,7 @@ mod tests {
             CleanupDecision::Remove
         );
         let outcome = mgr
-            .remove(Path::new("/repo"), Path::new("/wt"), "b")
+            .remove(Path::new("/repo"), Path::new("/wt"), Some("b"))
             .unwrap();
         assert_eq!(outcome, CleanupOutcome::DirtySkipped);
         assert!(
@@ -1137,7 +1223,7 @@ mod tests {
         let git = ScriptedGit::new(&[""]);
         let mgr = WorktreeManager::new(&git);
         let outcome = mgr
-            .remove(Path::new("/repo"), Path::new("/wt"), "b")
+            .remove(Path::new("/repo"), Path::new("/wt"), Some("b"))
             .unwrap();
         assert_eq!(outcome, CleanupOutcome::Removed);
         assert!(git.ran("worktree remove"));
@@ -1152,7 +1238,7 @@ mod tests {
         let git = ScriptedGit::new(&[""]).with_unpublished("2");
         let mgr = WorktreeManager::new(&git);
         assert_eq!(
-            mgr.remove(Path::new("/repo"), Path::new("/wt"), "b")
+            mgr.remove(Path::new("/repo"), Path::new("/wt"), Some("b"))
                 .unwrap(),
             CleanupOutcome::Removed,
             "the worktree still goes — only the branch is spared"
@@ -1173,7 +1259,7 @@ mod tests {
         let git = ScriptedGit::new(&[""]).with_unpublished("not a number");
         let mgr = WorktreeManager::new(&git);
         assert_eq!(
-            mgr.remove(Path::new("/repo"), Path::new("/wt"), "b")
+            mgr.remove(Path::new("/repo"), Path::new("/wt"), Some("b"))
                 .unwrap(),
             CleanupOutcome::Removed
         );
@@ -1189,15 +1275,15 @@ mod tests {
             task_id: "1",
         };
         let loc = render_location(
-            "~/.worktrees/{branch}",
+            "~/.worktrees/{worktree_name}",
             &ctx,
-            "agent/github-1",
+            "github-1",
             &env(&[("HOME", "/home/alice")]),
         )
         .unwrap();
-        assert_eq!(loc, PathBuf::from("/home/alice/.worktrees/agent-github-1"));
+        assert_eq!(loc, PathBuf::from("/home/alice/.worktrees/github-1"));
         // `~/` with no HOME is an error, not a literal directory.
-        assert!(render_location("~/{branch}", &ctx, "b", &env(&[])).is_err());
+        assert!(render_location("~/{worktree_name}", &ctx, "b", &env(&[])).is_err());
     }
 
     #[test]
@@ -1208,6 +1294,6 @@ mod tests {
             source: "s",
             task_id: "1",
         };
-        assert!(render_location("${MISSING}/{branch}", &ctx, "b", &env(&[])).is_err());
+        assert!(render_location("${MISSING}/{worktree_name}", &ctx, "b", &env(&[])).is_err());
     }
 }

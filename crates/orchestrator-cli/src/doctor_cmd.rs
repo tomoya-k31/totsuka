@@ -887,7 +887,7 @@ fn check_spool(cx: &Cx, cfg: &RootConfig, env: &HashMap<String, String>, checks:
 ///
 /// Only explicit values are checked: the built-in default is pre-resolved from
 /// [`Paths`](orchestrator_core::paths::Paths) and always expands. The rendered
-/// value is discarded — `{repo_name}` / `{branch}` are still unresolved at this
+/// value is discarded — `{repo_name}` / `{worktree_name}` are still unresolved at this
 /// point, so there is no directory to probe for writability.
 ///
 /// Several templates can be broken at once (the global one plus any per-repo
@@ -1734,7 +1734,7 @@ mod tests {
         let checks = worktree_location_checks(
             r#"
 [worktree]
-location = "${TOTSUKA_DOCTOR_UNSET_VAR}/wt/{branch}"
+location = "${TOTSUKA_DOCTOR_UNSET_VAR}/wt/{worktree_name}"
 "#,
             &[],
         );
@@ -1756,7 +1756,7 @@ location = "${TOTSUKA_DOCTOR_UNSET_VAR}/wt/{branch}"
 [[repositories]]
 name = "web"
 path = "/repos/web"
-worktree_location = "${TOTSUKA_DOCTOR_UNSET_VAR}/wt/{branch}"
+worktree_location = "${TOTSUKA_DOCTOR_UNSET_VAR}/wt/{worktree_name}"
 "#,
             &[],
         );
@@ -1777,12 +1777,12 @@ worktree_location = "${TOTSUKA_DOCTOR_UNSET_VAR}/wt/{branch}"
         let checks = worktree_location_checks(
             r#"
 [worktree]
-location = "${TOTSUKA_DOCTOR_UNSET_A}/wt/{branch}"
+location = "${TOTSUKA_DOCTOR_UNSET_A}/wt/{worktree_name}"
 
 [[repositories]]
 name = "web"
 path = "/repos/web"
-worktree_location = "${TOTSUKA_DOCTOR_UNSET_B}/wt/{branch}"
+worktree_location = "${TOTSUKA_DOCTOR_UNSET_B}/wt/{worktree_name}"
 "#,
             &[],
         );
@@ -1800,7 +1800,7 @@ worktree_location = "${TOTSUKA_DOCTOR_UNSET_B}/wt/{branch}"
         let checks = worktree_location_checks(
             r#"
 [worktree]
-location = "${MY_ROOT}/wt/{branch}"
+location = "${MY_ROOT}/wt/{worktree_name}"
 "#,
             &[("MY_ROOT", "/tmp/root")],
         );
@@ -1820,6 +1820,7 @@ location = "${MY_ROOT}/wt/{branch}"
             repo: Some("web".into()),
             worktree_path: worktree_path.map(str::to_string),
             branch: None,
+            base_commit: None,
             state,
             priority: 0,
             title: format!("task {source_task_id}"),
