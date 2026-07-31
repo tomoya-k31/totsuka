@@ -4,7 +4,9 @@ title: ADR-0026 ブランチ命名と push・PR 作成をエージェントの�
 description: リポジトリごとのブランチ命名規約に従うため、worktree を detached で引き渡してエージェントに命名させ、あわせて push・PR 作成の責務（F-86）を撤回した記録。取得手段・同期契機・新設したデータ損失経路への蓋・失うものを含む。
 tags: [worktree, branch, git, output-policy, adr]
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-07-31T10:10:00Z }
+verified:
+  - { by: human:tomoya-k31, at: 2026-07-31T10:05:00Z }
 owner: tomoya-k31
 ---
 
@@ -15,6 +17,36 @@ stable。[#338](https://github.com/tomoya-k31/totsuka/pull/338) /
 [#340](https://github.com/tomoya-k31/totsuka/pull/340) の 3 PR で実装。
 [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md) の掃除判定に分岐を 1 つ足し、
 [ADR-0024](/decisions/adr-0024-agent-instruction-layers.md) の安全表を 1 行降格させる。
+
+**実機検収済み**（2026-07-31、Slack → herdr → claude）。plan / implement 両モードを
+それぞれ本物の Slack メンションで通した。確認できたことは下表のとおり。
+
+| 確認項目 | plan（`dotfiles`） | implement（`totsuka`） |
+|---|---|---|
+| worktree 名が `{source}-{task_id}` | `slack-C0AGK11DMM4-1785487852.720219` | `slack-C0AGK11DMM4-1785491581.396559` |
+| detached で引き渡す | ✓（`branch` は最後まで NULL） | ✓（ディスパッチ直後に `rev-parse --abbrev-ref HEAD` = `HEAD` を実測） |
+| `base_commit` 記録 | ✓ `dotfiles` の `origin/master` と一致 | ✓ `origin/main` と一致 |
+| **エージェントが規約に従って命名** | — （plan は git を実行できない） | ✓ **`docs/glossary-pane`** |
+| ブランチ作成 → コミットの順序 | — | ✓ コミット 1 件がブランチ上（detached には無い） |
+| **push と PR 作成もエージェントが行う（F-86 撤回）** | — | ✓ エージェントが自分で push し [#352](https://github.com/tomoya-k31/totsuka/pull/352) を作成した |
+| HEAD 同期が記録 | ✓ NULL のまま（正しい） | ✓ `recorded the agent's branch` |
+| 再作成経路（#254） | ✓ 掃除済み worktree を同一パスで再作成、`existing_branch: None` で再び detached | — |
+| 掃除 | ✓ `outcome=Removed` | ✓ `Retained`（`cleanup = "manual"`） |
+| state.db v7 → v8 | ✓ 既存 18 行を保全、`state.db.v7.bak` 生成 | — |
+
+**最も重要なのは implement の「規約に従って命名」の行**で、これがこの ADR で唯一
+プロンプト遵守に依存する箇所だった。エージェントは
+`.claude/rules/git-conventions.md` の `<type>/<slug>`（type ∈
+`feat|fix|docs|style|refactor|perf|test|chore|revert`、小文字・`-` 区切り）を読み、
+「`docs/glossary/` に用語を 1 つ追加」という依頼に対して `docs/glossary-pane` を
+選んだ。コミットメッセージも Conventional Commits になっており、規約を読んで
+従っていることが二重に確認できた。**旧実装が生成していた
+`agent/slack-C0AGK11DMM4-1785491581.396559` では到達しえない名前**である。
+
+**エージェントはさらに push と PR 作成まで自分で完走した**（09:56:36 に
+[#352](https://github.com/tomoya-k31/totsuka/pull/352) を作成）。F-86 を撤回して
+「push と PR 作成はエージェントの責務」に変えた判断そのものが、Orchestrator 側の
+コードを一行も通さずに成立したことになる。
 
 # Context
 
