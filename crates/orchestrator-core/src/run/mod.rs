@@ -980,7 +980,20 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// cost as the `git status` the sweep already throttles for.
     fn sync_branches_of_active_tasks(&mut self) -> Result<(), EngineError> {
         let mut candidates = Vec::new();
-        for state in [TaskState::Dispatched, TaskState::Running] {
+        // Every non-terminal state a dispatched task can sit in. `Escalated` is
+        // the one this exists for — `sweep_signal_timeouts` escalates earlier
+        // in the same `cycle()` and produces no Stop — but a task parked in
+        // `WaitingInput` / `Verifying` / `Publishing` has a live worktree the
+        // agent may still be branching in, and none of them is reached by a
+        // Stop either once the pane is gone.
+        for state in [
+            TaskState::Dispatched,
+            TaskState::Running,
+            TaskState::WaitingInput,
+            TaskState::Verifying,
+            TaskState::Escalated,
+            TaskState::Publishing,
+        ] {
             for record in self.db.tasks_in_state(state)? {
                 candidates.push(record.id);
             }
@@ -1464,6 +1477,18 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
         };
 
+        // Whether the worktree we are about to hand over is on a branch,
+        // read from the worktree itself rather than from `record`.
+        //
+        // `record` was fetched once at the top of this function and is stale by
+        // now in exactly the case that matters: a re-creation whose recorded
+        // branch survived neither locally nor on `origin` gets a *detached*
+        // worktree and a `branch = NULL` write, while the in-memory copy still
+        // says `Some(...)`. Deciding from that copy would suppress the branch
+        // instruction for a worktree that is detached — the one failure this is
+        // here to prevent. `HEAD` cannot be stale.
+        let on_a_branch = self.worktrees.head_branch(&worktree_path).is_some();
+
         // Hook-capable agents (herdr 0.1.3: `resume_session` / `diagnostics_snapshot`)
         // receive a correlation `job_id` + a [`HookLaunchSpec`] so their Claude
         // Code hooks POST completion signals back (#131/#138). The job id's
@@ -1519,7 +1544,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 // a timeout escalation. A task already on a branch is resuming
                 // onto one this task made earlier, and re-asking would invite
                 // a second branch mid-conversation.
-                if record.mode != "plan" && record.branch.is_none() {
+                if record.mode != "plan" && !on_a_branch {
                     prompt_context.push_str(prompts.branch_convention());
                     prompt_context.push_str("\n\n");
                 }

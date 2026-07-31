@@ -728,6 +728,13 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// Without a recorded `base_commit` the question cannot be asked, so the
     /// answer is "no" — reporting an unprovable loss on every legacy row would
     /// pin every pre-v8 worktree on disk forever.
+    ///
+    /// Every *other* way of not knowing fails **closed**, matching
+    /// [`has_uncommitted_changes`](Self::has_uncommitted_changes) directly
+    /// above it in [`decide_cleanup`](Self::decide_cleanup). Once a base commit
+    /// exists, "git would not tell us" is not evidence that there is nothing to
+    /// lose, and the two outcomes are not symmetric: a retained worktree is
+    /// visible and removable by hand, a destroyed commit is neither.
     fn is_detached_with_commits(
         &self,
         worktree_path: &Path,
@@ -739,21 +746,34 @@ impl<G: GitRunner> WorktreeManager<G> {
         let head = self
             .git
             .run(worktree_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-        if !head.success() || head.stdout.trim() != DETACHED_HEAD {
+        if !head.success() {
+            return Err(WorktreeError::Git {
+                command: "rev-parse".to_string(),
+                stderr: head.stderr,
+            });
+        }
+        if head.stdout.trim() != DETACHED_HEAD {
             return Ok(false);
         }
         let out = self.git.run(
             worktree_path,
             &["rev-list", "--count", &format!("{base}..HEAD")],
         )?;
-        // Unparseable means the question was not answered. Treat that as "no
-        // commits": the alternative pins the worktree forever on a broken ref,
-        // and the uncommitted-changes guard above still covers the common case.
-        Ok(out
+        let count = out
             .success()
             .then(|| out.stdout.trim().parse::<u64>().ok())
-            .flatten()
-            .is_some_and(|n| n > 0))
+            .flatten();
+        let Some(count) = count else {
+            return Err(WorktreeError::Git {
+                command: "rev-list".to_string(),
+                stderr: format!(
+                    "could not count commits on a detached HEAD: {:?} {}",
+                    out.stdout,
+                    out.stderr.trim()
+                ),
+            });
+        };
+        Ok(count > 0)
     }
 
     /// Remove a worktree (and best-effort its branch). Re-checks dirtiness
@@ -776,6 +796,18 @@ impl<G: GitRunner> WorktreeManager<G> {
             tracing::warn!(
                 worktree = %worktree_path.display(),
                 "worktree turned dirty between the cleanup decision and removal; kept (F-23)"
+            );
+            return Ok(CleanupOutcome::DirtySkipped);
+        }
+        // The same window, for the same reason: the pane was closed between the
+        // decision and here, and an agent still alive in it (a cancel races
+        // exactly this way) can have committed onto the detached HEAD since.
+        // Those commits are reachable from nothing once the worktree goes.
+        if self.is_detached_with_commits(worktree_path, base_commit)? {
+            tracing::warn!(
+                worktree = %worktree_path.display(),
+                "worktree gained commits on a detached HEAD between the cleanup \
+                 decision and removal; kept"
             );
             return Ok(CleanupOutcome::DirtySkipped);
         }
@@ -1285,6 +1317,8 @@ mod tests {
         ahead_of_base: std::cell::RefCell<&'static str>,
         /// Whether `merge-base --is-ancestor <base> <branch>` exits 0.
         descends_from_base: std::cell::RefCell<bool>,
+        /// Whether `rev-parse --abbrev-ref HEAD` fails outright.
+        head_fails: std::cell::RefCell<bool>,
     }
 
     impl ScriptedGit {
@@ -1298,6 +1332,7 @@ mod tests {
                 head: std::cell::RefCell::new("a-branch"),
                 ahead_of_base: std::cell::RefCell::new("0"),
                 descends_from_base: std::cell::RefCell::new(true),
+                head_fails: std::cell::RefCell::new(false),
             }
         }
 
@@ -1325,6 +1360,12 @@ mod tests {
             self
         }
 
+        /// `rev-parse --abbrev-ref HEAD` exits non-zero.
+        fn with_failing_head(self) -> Self {
+            *self.head_fails.borrow_mut() = true;
+            self
+        }
+
         fn ran(&self, subcommand: &str) -> bool {
             self.commands
                 .borrow()
@@ -1344,6 +1385,9 @@ mod tests {
                     .expect("more `git status` calls than scripted outputs")
                     .to_string()
             } else if args == ["rev-parse", "--abbrev-ref", "HEAD"] {
+                if *self.head_fails.borrow() {
+                    status = Some(128);
+                }
                 self.head.borrow().to_string()
             } else if args.first() == Some(&"merge-base") {
                 if !*self.descends_from_base.borrow() {
@@ -1493,6 +1537,44 @@ mod tests {
             .unwrap(),
             CleanupDecision::Remove
         );
+    }
+
+    #[test]
+    fn an_unreadable_head_stops_the_cleanup_instead_of_allowing_it() {
+        // Fails closed, like the uncommitted-changes guard beside it. "git
+        // would not tell us" is not evidence that there is nothing to lose,
+        // and a retained worktree is visible and fixable where a destroyed
+        // commit is neither.
+        let git = ScriptedGit::new(&[""]).with_failing_head();
+        let mgr = WorktreeManager::new(&git);
+        assert!(
+            mgr.decide_cleanup(
+                Path::new("/wt"),
+                Some("base"),
+                CleanupPolicy::Immediate,
+                None,
+                "2026-07-12T00:00:00Z"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn removal_rechecks_for_commits_made_on_a_detached_head() {
+        // The TOCTOU window `remove` already re-checks dirtiness for: the pane
+        // was closed between the decision and here, and an agent still alive in
+        // it can have committed since. `decide_cleanup` said Remove (no
+        // commits); by removal time there are three.
+        let git = ScriptedGit::new(&["", ""])
+            .with_head(DETACHED_HEAD)
+            .with_commits_beyond_base("3");
+        let mgr = WorktreeManager::new(&git);
+        assert_eq!(
+            mgr.remove(Path::new("/repo"), Path::new("/wt"), None, Some("base"))
+                .unwrap(),
+            CleanupOutcome::DirtySkipped
+        );
+        assert!(!git.ran("worktree remove"), "{:?}", git.commands.borrow());
     }
 
     #[test]

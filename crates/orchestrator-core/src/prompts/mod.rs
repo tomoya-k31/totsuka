@@ -417,6 +417,12 @@ mod tests {
             "must forbid a start-point argument — passing one re-points HEAD \
              and discards work already in the worktree: {text}"
         );
+        assert!(
+            text.contains("Before your first commit") || text.contains("before your first commit"),
+            "must put the branch BEFORE the first commit — commits made while \
+             still detached are reachable from nothing once the worktree goes: \
+             {text}"
+        );
     }
 
     #[test]

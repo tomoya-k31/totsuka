@@ -1055,6 +1055,17 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         ctx.contains("<<STATUS:COMPLETED>>") && ctx.contains("NEEDS_INPUT"),
         "prompt context states the marker convention: {ctx}"
     );
+    // ...and, for an implement-mode dispatch into a freshly created (therefore
+    // detached) worktree, the instruction to create the branch. The condition
+    // guarding this is read from the worktree's own HEAD rather than from the
+    // task record, because the record is fetched once per dispatch and is
+    // stale in exactly the case that matters: a re-creation whose recorded
+    // branch no longer exists gets a detached worktree while the in-memory
+    // copy still names one.
+    assert!(
+        ctx.contains("DETACHED HEAD") && ctx.contains("git switch -c"),
+        "prompt context tells the agent to create the branch: {ctx}"
+    );
     // Delivery contract (slack-reply real-machine finding): only the
     // marker-bearing final message is published, so it must be self-contained,
     // and no marker may be emitted while background tasks are still running

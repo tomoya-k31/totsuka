@@ -560,10 +560,6 @@ fn record_to(path: Option<&Value>, method: &str, params: &Value) {
     }
 }
 
-/// Leave an empty commit in `worktree` (mock agent "work"). Signing is
-/// disabled and identity is injected so it never blocks in CI. Spawn/exit
-/// failures are logged to stderr (forwarded to the orchestrator log) so a
-/// misconfigured test worktree fails loudly rather than silently proceeding.
 /// The branch the mock agent picks when the config does not name one. Chosen
 /// to look like something a repository convention would produce, because that
 /// is what the real instruction asks for.
@@ -590,6 +586,10 @@ fn branch_in(worktree: &str, branch: &str) {
     }
 }
 
+/// Leave an empty commit in `worktree` (mock agent "work"). Signing is
+/// disabled and identity is injected so it never blocks in CI. Spawn/exit
+/// failures are logged to stderr (forwarded to the orchestrator log) so a
+/// misconfigured test worktree fails loudly rather than silently proceeding.
 fn commit_in(worktree: &str) {
     match std::process::Command::new("git")
         .current_dir(worktree)
