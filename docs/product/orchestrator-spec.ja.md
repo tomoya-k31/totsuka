@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: human:tomoya-k31, at: 2026-07-28T16:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
 status: draft
 owner: tomoya-k31
 ---
