@@ -66,8 +66,12 @@ pub enum StoreError {
 pub struct InstallPlan {
     /// Plugin name (from the manifest).
     pub name: String,
-    /// Where the plugin is being installed from (for display).
-    pub source: PathBuf,
+    /// Path of the `plugin.toml` this plan was built from. [`PluginStore::commit_install`]
+    /// copies exactly this file rather than re-deriving it from a source
+    /// directory, so the manifest and the binary may live in different trees —
+    /// which is what installing straight out of a Cargo checkout needs
+    /// (manifest under `plugins/<pkg>/`, binary under `target/<profile>/`).
+    pub manifest_path: PathBuf,
     /// Canonical (absolute) path of the source binary.
     pub binary: PathBuf,
     /// Hex-encoded SHA-256 of the binary (§5.4).
@@ -116,11 +120,33 @@ impl PluginStore {
     /// anything. The source must contain `plugin.toml` and a binary named after
     /// the manifest's `name`. Rejects protocol-incompatible plugins (F-54).
     pub fn prepare_install(&self, source_dir: &Path) -> Result<InstallPlan, StoreError> {
-        let manifest_path = source_dir.join(MANIFEST_FILE);
+        self.prepare_install_from(&source_dir.join(MANIFEST_FILE), source_dir)
+    }
+
+    /// Same validation as [`PluginStore::prepare_install`], but the manifest and
+    /// the binary are located separately.
+    ///
+    /// The binary is always `binary_dir/<manifest name>` — the naming
+    /// invariant is the same one `plugin install` and the store itself rely on
+    /// (see `docs/decisions/adr-0027-plugin-artifact-naming.md`), so splitting
+    /// the two paths does not weaken it. This exists so a plugin can be
+    /// installed out of a Cargo checkout without first assembling a staging
+    /// directory: the manifest stays in `plugins/<pkg>/` and the binary is read
+    /// straight from `target/<profile>/`.
+    pub fn prepare_install_from(
+        &self,
+        manifest_path: &Path,
+        binary_dir: &Path,
+    ) -> Result<InstallPlan, StoreError> {
         if !manifest_path.is_file() {
-            return Err(StoreError::NoManifest(source_dir.to_path_buf()));
+            return Err(StoreError::NoManifest(
+                manifest_path
+                    .parent()
+                    .unwrap_or(manifest_path)
+                    .to_path_buf(),
+            ));
         }
-        let manifest = Manifest::from_toml_str(&fs::read_to_string(&manifest_path)?)?;
+        let manifest = Manifest::from_toml_str(&fs::read_to_string(manifest_path)?)?;
 
         // A crafted manifest name must not escape the plugins root on commit.
         validate_plugin_name(&manifest.name)?;
@@ -135,11 +161,11 @@ impl PluginStore {
             });
         }
 
-        let binary = source_dir.join(&manifest.name);
+        let binary = binary_dir.join(&manifest.name);
         if !binary.is_file() {
             return Err(StoreError::NoBinary {
                 binary: manifest.name.clone(),
-                dir: source_dir.to_path_buf(),
+                dir: binary_dir.to_path_buf(),
             });
         }
         // Canonicalize so `binary` is genuinely absolute (the source may be a
@@ -149,7 +175,7 @@ impl PluginStore {
 
         Ok(InstallPlan {
             name: manifest.name.clone(),
-            source: source_dir.to_path_buf(),
+            manifest_path: manifest_path.to_path_buf(),
             binary,
             checksum,
             manifest,
@@ -188,7 +214,7 @@ impl PluginStore {
             let _ = fs::remove_file(&staged);
             return Err(e);
         }
-        fs::copy(plan.source.join(MANIFEST_FILE), dir.join(MANIFEST_FILE))?;
+        fs::copy(&plan.manifest_path, dir.join(MANIFEST_FILE))?;
         Ok(())
     }
 

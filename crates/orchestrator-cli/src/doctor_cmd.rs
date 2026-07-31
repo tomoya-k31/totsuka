@@ -25,6 +25,7 @@ use serde::Serialize;
 
 use orchestrator_core::plugins::plugin_spec;
 
+use crate::bundled;
 use crate::common::{self, CliError, Cx, safe};
 use crate::init_cmd::git_version;
 
@@ -158,6 +159,42 @@ pub fn run(cx: &Cx, json: bool, online: bool) -> Result<(), CliError> {
             "install git (worktree management requires it)",
         )),
     }
+
+    // Which plugins ship next to this binary. A `cargo install` build has none,
+    // which is normal — so this can never be worse than a warning, and the
+    // 0/1/3 exit-code contract is unaffected.
+    checks.push(match bundled::locate(None) {
+        Some(root) => {
+            let found = bundled::list(&root);
+            if found.is_empty() {
+                Check::warn(
+                    "bundled-plugins",
+                    format!("no plugins under {}", root.display()),
+                    "reinstall from the release tarball, or install from a directory",
+                )
+            } else {
+                Check::ok(
+                    "bundled-plugins",
+                    format!(
+                        "{} in {} ({})",
+                        found.len(),
+                        root.display(),
+                        found
+                            .iter()
+                            .map(|p| p.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+            }
+        }
+        None => Check::warn(
+            "bundled-plugins",
+            "no plugins bundled next to this binary",
+            "expected for a `cargo install` build — install plugins from a directory \
+             (`totsuka plugin install <dir>`)",
+        ),
+    });
 
     // Config presence + full offline validation. `config_ok` gates the checks
     // with side effects outside totsuka's own dirs (codex hooks.json sync) —

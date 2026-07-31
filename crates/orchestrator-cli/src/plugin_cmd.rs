@@ -2,25 +2,44 @@
 
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use orchestrator_core::config::{RootConfig, set_plugin_enabled};
 use serde::Serialize;
 
+use crate::bundled;
 use crate::common::{CliError, Cx, JsonFlag, print_json};
 
 /// Plugin management subcommands.
 #[derive(Debug, Subcommand)]
 pub enum PluginCommand {
-    /// Install a plugin from a local directory (containing plugin.toml + binary).
+    /// Install a plugin: from a local directory (plugin.toml + binary), or with
+    /// `--bundled` from the plugins shipped alongside this binary.
     Install {
-        /// Source: a local directory path (`github:owner/repo` is not yet
-        /// supported in v1).
-        source: String,
+        /// Source: a local directory path, or — with `--bundled` — the name of
+        /// a plugin shipped alongside this binary. (`github:owner/repo` is not
+        /// yet supported in v1.)
+        source: Option<String>,
+        /// Install from the plugins bundled with this `totsuka` (the release
+        /// tarball ships them next to the binary), instead of a path.
+        #[arg(long)]
+        bundled: bool,
+        /// With `--bundled`: install every bundled plugin.
+        #[arg(long)]
+        all: bool,
+        /// Also enable the plugin in config.toml (install and enable stay
+        /// separate concepts — this is the opt-in that does both, F-56).
+        #[arg(long)]
+        enable: bool,
         /// Skip the confirmation prompt (for CI).
         #[arg(long)]
         yes: bool,
+        /// Override where bundled plugins are looked up. Testing affordance;
+        /// an env var is deliberately avoided (unknown `TOTSUKA_*` warns to
+        /// stderr per ADR-0009 and breaks E2Es that parse it).
+        #[arg(long, hide = true)]
+        bundled_dir: Option<PathBuf>,
     },
     /// Uninstall a plugin (removes its binary; the config declaration remains).
     Uninstall {
@@ -61,7 +80,25 @@ impl PluginCommand {
 pub fn run(cx: &Cx, command: PluginCommand) -> Result<(), CliError> {
     let env: HashMap<String, String> = std::env::vars().collect();
     match command {
-        PluginCommand::Install { source, yes } => install(cx, &env, &source, yes),
+        PluginCommand::Install {
+            source,
+            bundled,
+            all,
+            enable,
+            yes,
+            bundled_dir,
+        } => install(
+            cx,
+            &env,
+            InstallArgs {
+                source,
+                bundled,
+                all,
+                enable,
+                yes,
+                bundled_dir,
+            },
+        ),
         PluginCommand::Uninstall { name } => uninstall(cx, &env, &name),
         PluginCommand::Enable { name } => set_enabled(cx, &name, true),
         PluginCommand::Disable { name } => set_enabled(cx, &name, false),
@@ -69,13 +106,62 @@ pub fn run(cx: &Cx, command: PluginCommand) -> Result<(), CliError> {
     }
 }
 
-fn install(
-    cx: &Cx,
-    env: &HashMap<String, String>,
-    source: &str,
+/// Parsed `plugin install` arguments (the subcommand has enough knobs that
+/// threading them positionally stops being readable).
+struct InstallArgs {
+    source: Option<String>,
+    bundled: bool,
+    all: bool,
+    enable: bool,
     yes: bool,
-) -> Result<(), CliError> {
-    if let Some(rest) = source.strip_prefix("github:") {
+    bundled_dir: Option<PathBuf>,
+}
+
+fn install(cx: &Cx, env: &HashMap<String, String>, args: InstallArgs) -> Result<(), CliError> {
+    // Config first: a broken `TOTSUKA_*` override must fail here, before the
+    // store is touched — not after "Installed" has already been printed.
+    let config = cx.load_config_or_default(env)?;
+
+    // `--enable` edits config.toml *after* the binary is in the store, so a
+    // missing or unparseable file would leave "installed but the command
+    // failed". Reject it up front, while nothing has been written yet. The
+    // read is the same one `set_enabled` does, so the error text matches.
+    if args.enable {
+        read_config_for_edit(cx)?;
+    }
+
+    let sources = resolve_sources(&args)?;
+    for dir in &sources {
+        install_one(cx, &config, dir, &args)?;
+    }
+    Ok(())
+}
+
+/// Read `config.toml` as raw text for a `set_plugin_enabled` edit, mapping a
+/// missing file to the "run `totsuka init`" guidance.
+fn read_config_for_edit(cx: &Cx) -> Result<String, CliError> {
+    let text = std::fs::read_to_string(&cx.config_path).map_err(|e| {
+        if e.kind() == io::ErrorKind::NotFound {
+            CliError::from(format!(
+                "config.toml not found at {} → run `totsuka init` to create it",
+                cx.config_path.display()
+            ))
+        } else {
+            CliError::from(e)
+        }
+    })?;
+    // Parse too: an unparseable config fails the edit just as hard as a
+    // missing one, and it is just as cheap to find out now.
+    RootConfig::from_toml_str(&text)?;
+    Ok(text)
+}
+
+/// Turn the flag combination into the list of source directories to install
+/// from. Every rejection names the flag that is wrong and what to do instead.
+fn resolve_sources(args: &InstallArgs) -> Result<Vec<PathBuf>, CliError> {
+    if let Some(source) = &args.source
+        && let Some(rest) = source.strip_prefix("github:")
+    {
         return Err(format!(
             "GitHub Release install (`github:{rest}`) is not yet available in v1 → download the \
              plugin's `plugin.toml` and binary into a directory and run \
@@ -84,10 +170,75 @@ fn install(
         .into());
     }
 
-    // Config first: a broken `TOTSUKA_*` override must fail here, before the
-    // store is touched — not after "Installed" has already been printed.
-    let config = cx.load_config_or_default(env)?;
-    let source_dir = Path::new(source);
+    if !args.bundled {
+        if args.all {
+            return Err("`--all` only applies to `--bundled` → run `totsuka plugin install --bundled --all`".into());
+        }
+        if args.bundled_dir.is_some() {
+            return Err("`--bundled-dir` only applies to `--bundled`".into());
+        }
+        let source = args.source.as_deref().ok_or(
+            "`totsuka plugin install` needs a directory → pass one, or use `--bundled <name>` \
+             to install a plugin shipped with this binary",
+        )?;
+        return Ok(vec![PathBuf::from(source)]);
+    }
+
+    let Some(root) = bundled::locate(args.bundled_dir.as_deref()) else {
+        return Err(
+            "no bundled plugins found next to this `totsuka` → this looks like a \
+                    `cargo install` build; install from a directory instead \
+                    (`totsuka plugin install <dir>`)"
+                .into(),
+        );
+    };
+    let available = bundled::list(&root);
+    if available.is_empty() {
+        return Err(format!(
+            "no plugins under {} → expected `<name>/plugin.toml` subdirectories",
+            root.display()
+        )
+        .into());
+    }
+    // Say which tree was chosen: with several install shapes in play, "it
+    // installed something" is not enough to know *what*.
+    println!("Bundled plugins: {}", root.display());
+
+    match (&args.source, args.all) {
+        (Some(name), false) => {
+            // Format the "available" list from the same snapshot that was
+            // searched: re-reading the directory could report a set that does
+            // not match what the lookup actually saw.
+            let names = available
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            available
+                .into_iter()
+                .find(|p| &p.name == name)
+                .map(|p| vec![p.dir])
+                .ok_or_else(|| {
+                    format!("`{name}` is not bundled with this `totsuka` → available: {names}")
+                        .into()
+                })
+        }
+        (None, true) => Ok(available.into_iter().map(|p| p.dir).collect()),
+        (Some(_), true) => {
+            Err("pass either a plugin name or `--all` to `--bundled`, not both".into())
+        }
+        (None, false) => Err(
+            "`--bundled` needs a plugin name, or `--all` to install every bundled plugin".into(),
+        ),
+    }
+}
+
+fn install_one(
+    cx: &Cx,
+    config: &RootConfig,
+    source_dir: &Path,
+    args: &InstallArgs,
+) -> Result<(), CliError> {
     let store = cx.store();
     let plan = store.prepare_install(source_dir)?;
 
@@ -96,9 +247,9 @@ fn install(
         "Plugin:   {} v{} ({:?})",
         plan.name, plan.manifest.version, plan.manifest.kind
     );
-    println!("Source:   {}", plan.source.display());
+    println!("Source:   {}", source_dir.display());
     println!("SHA-256:  {}", plan.checksum);
-    if !yes && !confirm("Install this plugin?")? {
+    if !args.yes && !confirm("Install this plugin?")? {
         println!("Aborted; nothing was installed.");
         return Ok(());
     }
@@ -109,7 +260,10 @@ fn install(
         plan.name,
         store.plugin_dir(&plan.name).display()
     );
-    if !config.plugins.contains_key(&plan.name) {
+
+    if args.enable {
+        set_enabled(cx, &plan.name, true)?;
+    } else if !config.plugins.contains_key(&plan.name) {
         println!(
             "Note: `{}` is installed but not enabled. Run `totsuka plugin enable {}`.",
             plan.name, plan.name
@@ -140,17 +294,7 @@ fn set_enabled(cx: &Cx, name: &str, enabled: bool) -> Result<(), CliError> {
     // The edit works on the raw file text (comments and formatting must
     // survive `set_plugin_enabled`), so the env layer is deliberately not
     // folded into what gets written back.
-    let current = std::fs::read_to_string(&cx.config_path).map_err(|e| {
-        if e.kind() == io::ErrorKind::NotFound {
-            format!(
-                "config.toml not found at {} → run `totsuka init` to create it",
-                cx.config_path.display()
-            )
-            .into()
-        } else {
-            CliError::from(e)
-        }
-    })?;
+    let current = read_config_for_edit(cx)?;
 
     // If a new `[plugins.{name}]` section will be created, it needs `kind` to be
     // schema-valid. Take it from the installed manifest; if the plugin is

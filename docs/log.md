@@ -2,6 +2,8 @@
 
 ## 2026-08-01
 
+* **Update**: [orchestrator-cli](/components/orchestrator-cli.md) / [orchestrator-core](/components/orchestrator-core.md) / [リリース Runbook](/operations/release-runbook.md) — `totsuka plugin install --bundled <name>|--all` を追加し、同梱プラグインをパス指定なしで入れられるようにした（[#345](https://github.com/tomoya-k31/totsuka/issues/345)）。あわせて `--enable` を全モード共通のオプトインにし（install と enable の概念分離 F-56 は維持）、core に `prepare_install_from(manifest_path, binary_dir)` の parts API を足して `InstallPlan` から `commit_install` への暗黙結合を解いた。**実装中に前提の誤りを 1 つ潰した**: `std::env::current_exe` は macOS で symlink を解決しない（`_NSGetExecutablePath` は起動に使われたパスを返す。Linux の `/proc/self/exe` とは異なる）ため、標準のインストール形（`/usr/local/bin/totsuka` → `/usr/local/lib/totsuka/totsuka` の symlink、プラグインはリンク先の隣）では 1 つも見つからなかった。`fs::canonicalize` の結果も明示的に探索することで解決している — symlink 経由で実バイナリを起動する E2E が検出した。`doctor` には `bundled-plugins` チェック（warning 止まりなので終了コード契約 0/1/3 は不変）を追加。
+
 * **Update**: [リリース Runbook](/operations/release-runbook.md) — リリース tarball に同梱プラグインを載せた（[#344](https://github.com/tomoya-k31/totsuka/issues/344)）。`universal-binary` ジョブを `--workspace --bins` に広げ、**本体だけでなく全プラグインバイナリに ad-hoc 署名**し（本体だけ署名するとプラグインが Gatekeeper に殺されて doctor は「crashed or exited」としか言えない）、`totsuka` の隣に `plugins/<name>/{<name>,plugin.toml}` を並べたプレフィックス付きディレクトリ構成で固める。同梱名は `plugins/*/plugin.toml` から抜くのでプラグイン追加時のワークフロー編集は不要（[ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md) の bin 名不変条件が前提）。添付直前に「展開した tarball から全プラグインを install できる」スモークテストを挟んだ — README が約束するコマンドが実際に動くことを守る唯一の自動ガードで、これまでは必ず失敗する状態が放置されていた。成果物のファイル名と `.sha256` の形式は据え置き。
 
 ## 2026-07-31

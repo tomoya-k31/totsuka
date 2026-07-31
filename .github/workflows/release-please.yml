@@ -217,9 +217,20 @@ jobs:
 
           "${totsuka}" --version
 
-          for dir in "${work}/${PREFIX}"/plugins/*/; do
-            "${totsuka}" plugin install "${dir}" --yes
-          done
+          # `--bundled` with no path: the same command the README gives, which
+          # also exercises the discovery that has to find the tree next to the
+          # binary.
+          "${totsuka}" plugin install --bundled --all --yes
+
+          # Then the same plugin again, by path. Two things this covers that
+          # `--bundled` alone does not: the directory form the README still
+          # documents for non-bundled plugins, and the re-install path — which
+          # stages and renames rather than overwriting, because macOS caches a
+          # code-signature verdict per vnode and an in-place rewrite makes the
+          # next exec die on SIGKILL (#292). That failure needs a *signed*
+          # binary to reproduce, so this job is the only place it can be caught.
+          first="$(ls -d "${work}/${PREFIX}"/plugins/*/ | head -1)"
+          "${totsuka}" plugin install "${first}" --yes
 
           installed="$("${totsuka}" plugin list --json)"
           echo "${installed}"
