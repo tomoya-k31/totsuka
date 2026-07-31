@@ -23,6 +23,14 @@ impl Env {
         self.root.join("config/totsuka/config.toml")
     }
 
+    /// Whether anything is in the plugin store, read straight off disk — for
+    /// assertions that must hold even when `plugin list` itself cannot run.
+    fn installed(&self) -> bool {
+        fs::read_dir(self.root.join("data/totsuka/plugins"))
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false)
+    }
+
     /// Run `totsuka <args>` with this env and optional stdin. Returns
     /// (success, stdout, stderr).
     fn run(&self, args: &[&str], stdin: Option<&str>) -> (bool, String, String) {
@@ -420,8 +428,10 @@ fn unknown_bundled_name_lists_what_is_available() {
 fn bundled_discovery_follows_the_symlink_to_the_real_tree() {
     // The documented install shape is `/usr/local/bin/totsuka` symlinked to
     // `/usr/local/lib/totsuka/totsuka`, with the plugins next to the *target*.
-    // `current_exe` resolves the symlink on macOS, which is the whole reason
-    // the tarball keeps binary and plugins together.
+    // `current_exe` does NOT resolve symlinks on macOS — it reports the path
+    // the process was launched with — so discovery has to search the
+    // `fs::canonicalize`d path as well. This test is what caught that: the
+    // first implementation trusted `current_exe` and found nothing here.
     let env = Env::new("bundled-symlink");
     let tree = env.root.join("lib/totsuka");
     fs::create_dir_all(&tree).unwrap();
@@ -496,4 +506,60 @@ fn enable_flag_works_for_a_plain_directory_install_too() {
     let (_, listed, _) = env.run(&["plugin", "list", "--json"], None);
     let rows: serde_json::Value = serde_json::from_str(&listed).unwrap();
     assert_eq!(rows[0]["enabled"], true, "{listed}");
+}
+
+#[test]
+fn enable_flag_fails_before_touching_the_store() {
+    // `--enable` edits config.toml only after the binary is in the store, so
+    // without a preflight a missing config leaves "installed, but the command
+    // failed". Nothing must be written when the edit cannot succeed.
+    let env = Env::new("enable-preflight");
+    let src = env.root.join("src");
+    fake_source(&src, "github", ">=0.1.6, <0.4");
+    fs::remove_file(env.config_toml()).ok();
+    assert!(!env.config_toml().exists());
+
+    let (ok, _, err) = env.run(
+        &[
+            "plugin",
+            "install",
+            src.to_str().unwrap(),
+            "--yes",
+            "--enable",
+        ],
+        None,
+    );
+    assert!(!ok);
+    assert!(err.contains("totsuka init"), "{err}");
+    // Assert against the store on disk rather than `plugin list`: the whole
+    // point is that nothing was *written*, and with a broken config `list`
+    // cannot run either.
+    assert!(
+        !env.installed(),
+        "the store was written to despite the failure"
+    );
+}
+
+#[test]
+fn enable_flag_rejects_an_unparseable_config_before_installing() {
+    let env = Env::new("enable-preflight-parse");
+    let src = env.root.join("src");
+    fake_source(&src, "github", ">=0.1.6, <0.4");
+    fs::write(env.config_toml(), "this is not = = valid toml\n").unwrap();
+
+    let (ok, _, _) = env.run(
+        &[
+            "plugin",
+            "install",
+            src.to_str().unwrap(),
+            "--yes",
+            "--enable",
+        ],
+        None,
+    );
+    assert!(!ok);
+    assert!(
+        !env.installed(),
+        "the store was written to despite the failure"
+    );
 }

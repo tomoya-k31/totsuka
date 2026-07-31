@@ -122,11 +122,38 @@ fn install(cx: &Cx, env: &HashMap<String, String>, args: InstallArgs) -> Result<
     // store is touched — not after "Installed" has already been printed.
     let config = cx.load_config_or_default(env)?;
 
+    // `--enable` edits config.toml *after* the binary is in the store, so a
+    // missing or unparseable file would leave "installed but the command
+    // failed". Reject it up front, while nothing has been written yet. The
+    // read is the same one `set_enabled` does, so the error text matches.
+    if args.enable {
+        read_config_for_edit(cx)?;
+    }
+
     let sources = resolve_sources(&args)?;
     for dir in &sources {
         install_one(cx, &config, dir, &args)?;
     }
     Ok(())
+}
+
+/// Read `config.toml` as raw text for a `set_plugin_enabled` edit, mapping a
+/// missing file to the "run `totsuka init`" guidance.
+fn read_config_for_edit(cx: &Cx) -> Result<String, CliError> {
+    let text = std::fs::read_to_string(&cx.config_path).map_err(|e| {
+        if e.kind() == io::ErrorKind::NotFound {
+            CliError::from(format!(
+                "config.toml not found at {} → run `totsuka init` to create it",
+                cx.config_path.display()
+            ))
+        } else {
+            CliError::from(e)
+        }
+    })?;
+    // Parse too: an unparseable config fails the edit just as hard as a
+    // missing one, and it is just as cheap to find out now.
+    RootConfig::from_toml_str(&text)?;
+    Ok(text)
 }
 
 /// Turn the flag combination into the list of source directories to install
@@ -178,21 +205,24 @@ fn resolve_sources(args: &InstallArgs) -> Result<Vec<PathBuf>, CliError> {
     println!("Bundled plugins: {}", root.display());
 
     match (&args.source, args.all) {
-        (Some(name), false) => available
-            .into_iter()
-            .find(|p| &p.name == name)
-            .map(|p| vec![p.dir])
-            .ok_or_else(|| {
-                format!(
-                    "`{name}` is not bundled with this `totsuka` → available: {}",
-                    bundled::list(&root)
-                        .iter()
-                        .map(|p| p.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-                .into()
-            }),
+        (Some(name), false) => {
+            // Format the "available" list from the same snapshot that was
+            // searched: re-reading the directory could report a set that does
+            // not match what the lookup actually saw.
+            let names = available
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            available
+                .into_iter()
+                .find(|p| &p.name == name)
+                .map(|p| vec![p.dir])
+                .ok_or_else(|| {
+                    format!("`{name}` is not bundled with this `totsuka` → available: {names}")
+                        .into()
+                })
+        }
         (None, true) => Ok(available.into_iter().map(|p| p.dir).collect()),
         (Some(_), true) => {
             Err("pass either a plugin name or `--all` to `--bundled`, not both".into())
@@ -264,17 +294,7 @@ fn set_enabled(cx: &Cx, name: &str, enabled: bool) -> Result<(), CliError> {
     // The edit works on the raw file text (comments and formatting must
     // survive `set_plugin_enabled`), so the env layer is deliberately not
     // folded into what gets written back.
-    let current = std::fs::read_to_string(&cx.config_path).map_err(|e| {
-        if e.kind() == io::ErrorKind::NotFound {
-            format!(
-                "config.toml not found at {} → run `totsuka init` to create it",
-                cx.config_path.display()
-            )
-            .into()
-        } else {
-            CliError::from(e)
-        }
-    })?;
+    let current = read_config_for_edit(cx)?;
 
     // If a new `[plugins.{name}]` section will be created, it needs `kind` to be
     // schema-valid. Take it from the installed manifest; if the plugin is

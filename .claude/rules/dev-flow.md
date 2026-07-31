@@ -172,21 +172,70 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
    All required checks must be green.
 
 2. **Monitor the GitHub Copilot auto-review.** It runs in parallel with CI and
-   can take a few minutes to appear; poll on the same 30 s / 10 min cap. The
-   review author is `copilot-pull-request-reviewer` (inline comment user
-   `Copilot`). **This repo triggers the Copilot review only on PR creation** —
-   later pushes do NOT re-trigger it, so only poll for it once, right after
-   opening the PR (see Handling findings for what to do after fix commits).
-   Fetch both levels:
+   can take a few minutes to appear; poll on the same 30 s / 10 min cap.
+   **This repo triggers the Copilot review only on PR creation** — later pushes
+   do NOT re-trigger it, so only poll for it once, right after opening the PR
+   (see Handling findings for what to do after fix commits).
+
+   **Copilot has three different logins depending on where you look. Matching
+   the wrong one silently reports "no review" forever.** Verified on PRs
+   #354/#355/#357:
+
+   | Where | Field | Value |
+   |---|---|---|
+   | `gh api .../pulls/<n>/reviews` (REST) | `.user.login` | `copilot-pull-request-reviewer[bot]` |
+   | `gh pr view <n> --json reviews` (GraphQL) | `.author.login` | `copilot-pull-request-reviewer` |
+   | `gh api .../pulls/<n>/comments` (inline) | `.user.login` | `Copilot` |
+
+   An exact-match `select(.user.login == "copilot-pull-request-reviewer")`
+   against the REST endpoint therefore **never matches** — the `[bot]` suffix is
+   only present there. That exact bug made three PRs in a row report "no
+   Copilot review" while the review had been sitting there the whole time, and
+   the reviews were only found later by hand via the GraphQL path. **Match on a
+   case-insensitive `copilot` prefix**, which is stable across all three.
+
+   Copy-pasteable watcher (30 s interval, 10 min cap, prints both levels):
 
    ```bash
-   # inline review comments
-   gh api repos/{owner}/{repo}/pulls/<n>/comments \
-     --jq '.[] | {user: .user.login, path, line, body}'
+   pr=<n>
+   deadline=$(( $(date +%s) + 600 ))
+   while [ "$(date +%s)" -lt "${deadline}" ]; do
+     found=$(gh api "repos/{owner}/{repo}/pulls/${pr}/reviews" \
+       --jq '[.[] | select(.user.login | ascii_downcase | startswith("copilot"))] | length')
+     if [ "${found}" != "0" ]; then
+       echo "### review-level"
+       gh api "repos/{owner}/{repo}/pulls/${pr}/reviews" \
+         --jq '.[] | select(.user.login | ascii_downcase | startswith("copilot"))
+               | "state=\(.state)\n\(.body)"'
+       echo "### inline comments"
+       gh api "repos/{owner}/{repo}/pulls/${pr}/comments" \
+         --jq '.[] | select(.user.login | ascii_downcase | startswith("copilot"))
+               | "--- \(.path):\(.line)  id=\(.id)\n\(.body)"'
+       exit 0
+     fi
+     sleep 30
+   done
+   echo "no Copilot review after 10 min — report to the user and wait"
+   ```
 
-   # review-level summary / state
-   gh pr view <n> --json reviews \
-     --jq '.reviews[] | {author: .author.login, state, body}'
+   **Fetch both levels.** The review-level record carries the verdict and the
+   summary; the findings themselves are the inline comments and are absent from
+   it. A PR can have a review with zero inline comments (no findings) — that is
+   a real result, not a fetch failure.
+
+   The `id` printed per inline comment is what you reply to when recording a
+   rationale (→ Handling findings):
+
+   ```bash
+   gh api repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies -f body='…'
+   ```
+
+   **Sanity-check a "no review" verdict before believing it.** If the watcher
+   reports nothing, run the review-level query once with no `select` at all —
+   if rows come back, the filter is wrong, not the review missing:
+
+   ```bash
+   gh api repos/{owner}/{repo}/pulls/<n>/reviews --jq '.[] | "\(.user.login)\t\(.state)"'
    ```
 
 3. **Grasp both results** — summarize the CI outcome and every Copilot finding.
