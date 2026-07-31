@@ -131,13 +131,16 @@ async fn non_message_envelopes_are_acked_but_not_delivered() {
     );
     let mut ws = accept_with_hello(&listener).await;
 
-    // A reaction event is acked (Slack must not redeliver) yet filtered out.
+    // An unconsumed event is acked (Slack must not redeliver) yet filtered
+    // out. `reaction_removed` is deliberately not subscribed to (#319:
+    // removing a reaction is not a cancel signal), so it stays the example
+    // here now that `reaction_added` is delivered.
     send_and_await_ack(
         &mut ws,
         json!({
             "type": "events_api",
-            "envelope_id": "e-reaction",
-            "payload": { "event": { "type": "reaction_added" } }
+            "envelope_id": "e-reaction-removed",
+            "payload": { "event": { "type": "reaction_removed" } }
         }),
     )
     .await;
@@ -147,6 +150,46 @@ async fn non_message_envelopes_are_acked_but_not_delivered() {
         panic!("expected Message");
     };
     assert_eq!(event["text"], "after");
+}
+
+#[tokio::test]
+async fn reaction_added_envelopes_are_delivered() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({ "ok": true, "url": url })));
+
+    let (mut rx, _handle) = spawn(
+        std::sync::Arc::new(SlackApi::new(transport(&shared))),
+        options(),
+    );
+    let mut ws = accept_with_hello(&listener).await;
+
+    // #319: the payload carries no message body — only the coordinates the
+    // consumer needs to re-fetch it — so the whole `event` object rides
+    // through untouched.
+    send_and_await_ack(
+        &mut ws,
+        json!({
+            "type": "events_api",
+            "envelope_id": "e-reaction-added",
+            "payload": { "event": {
+                "type": "reaction_added",
+                "user": "U_ME",
+                "reaction": "eyes",
+                "item": { "type": "message", "channel": "C1", "ts": "1700000000.000100" },
+                "item_user": "U_OTHER",
+                "event_ts": "1700000001.000200"
+            }}
+        }),
+    )
+    .await;
+    let SocketEvent::Reaction(event) = next_event(&mut rx).await else {
+        panic!("expected Reaction");
+    };
+    assert_eq!(event["reaction"], "eyes");
+    assert_eq!(event["user"], "U_ME");
+    assert_eq!(event["item"]["channel"], "C1");
+    assert_eq!(event["item"]["ts"], "1700000000.000100");
 }
 
 #[tokio::test]
