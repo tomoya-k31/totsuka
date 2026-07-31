@@ -291,6 +291,14 @@ fn save_answers_round_trips_into_a_second_run() {
     ]);
     assert_eq!(code, Some(0), "{out}{err}");
     assert!(saved.exists(), "nothing saved");
+    // `--save-answers` writes before the plan, so answers survive a rejected
+    // plan. That makes a blanket "nothing was written" false — the summary has
+    // to name the one file it did write, or the claim is a lie.
+    assert!(
+        out.contains("nothing was configured") && out.contains("saved.toml"),
+        "--dry-run claimed nothing was written while saving a file: {out}"
+    );
+    assert!(!env.config_toml().exists(), "dry-run wrote a config");
 
     let text = fs::read_to_string(&saved).unwrap();
     assert!(

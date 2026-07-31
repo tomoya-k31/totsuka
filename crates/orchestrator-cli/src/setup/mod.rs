@@ -18,10 +18,16 @@
 //! # Two phases
 //!
 //! The interview is pure: it builds [`Answers`] in memory and touches nothing.
-//! Only after the plan is printed and confirmed does anything get written. So
-//! Ctrl-C during the questions leaves no trace, and a failure during apply
-//! reports how far it got — every step is idempotent, so re-running converges
-//! rather than double-applying.
+//! Nothing is *configured* until the plan is printed and confirmed. So Ctrl-C
+//! during the questions leaves no trace, and a failure during apply reports how
+//! far it got — every step is idempotent, so re-running converges rather than
+//! double-applying.
+//!
+//! The one file written outside apply is `--save-answers`, and deliberately so:
+//! "let me see the plan and keep my answers, without applying them" is the
+//! point of pairing it with `--dry-run`. It is called out here, and in what
+//! `--dry-run` prints, because a blanket "nothing was written" would be a lie
+//! the moment both flags are used together.
 //!
 //! # Secrets
 //!
@@ -84,6 +90,10 @@ pub fn run(cx: &Cx, args: &SetupArgs) -> Result<(), CliError> {
         }
     };
 
+    // Before the plan, so the answers survive even if the plan is rejected —
+    // re-answering a dozen questions to recover them would be the worse
+    // failure. `--dry-run`'s summary names this file so the claim it makes
+    // stays true.
     if let Some(path) = &args.save_answers {
         std::fs::write(path, answers.to_toml())?;
         println!("Saved answers to {}", path.display());
@@ -92,7 +102,13 @@ pub fn run(cx: &Cx, args: &SetupArgs) -> Result<(), CliError> {
     let plan = Plan::new(cx, &answers)?;
     print!("{}", plan.render());
     if args.dry_run {
-        println!("\n--dry-run: nothing was written.");
+        match &args.save_answers {
+            Some(path) => println!(
+                "\n--dry-run: nothing was configured (only {} was written).",
+                path.display()
+            ),
+            None => println!("\n--dry-run: nothing was written."),
+        }
         return Ok(());
     }
     if !args.yes {
@@ -126,7 +142,7 @@ fn load_answers(path: &Path) -> Result<Answers, CliError> {
 /// The pure phase: ask everything, write nothing.
 fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
     prompt.say("totsuka setup — this asks a few questions, shows what it will do,")?;
-    prompt.say("and writes nothing until you confirm. Secrets are never entered here.")?;
+    prompt.say("and changes nothing until you confirm. Secrets are never entered here.")?;
     prompt.say("")?;
 
     let choices: Vec<(&str, &str)> = RECIPES.iter().map(|r| (r.label, r.blurb)).collect();
