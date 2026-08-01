@@ -457,7 +457,9 @@ fn apply(cx: &Cx, answers: &Answers, plan: &Plan) -> Result<(), CliError> {
     println!();
     println!("Running `totsuka doctor` …");
     println!();
-    doctor_cmd::run(cx, false, false)
+    // Defaults on purpose: `setup` is the one caller that *wants* the repairs
+    // — materialising the hook assets is part of finishing the install.
+    doctor_cmd::run(cx, doctor_cmd::DoctorArgs::default())
 }
 
 /// Write each `plugins/<name>.toml` the recipe needs, skipping ones that exist.
