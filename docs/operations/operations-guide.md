@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, worktree, faq, troubleshooting]
-generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-01T22:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -52,6 +52,30 @@ WARN the LLM provider rejected the API key; repository selection falls back to
 ```
 
 （[task/lookup](/components/orchestrator-core.md) により 2 通目以降は LLM を呼ばないため、影響は新規会話に限られる。）
+
+## `--no-repair`（検査だけする、#351）
+
+```bash
+totsuka doctor --no-repair
+```
+
+**`doctor` は既定では read-only ではない。** 検査のついでに、`run` と同じ書き出しを行う:
+
+| 書き込み先 | 何を |
+|---|---|
+| `$XDG_DATA_HOME/totsuka/hooks` | フックスクリプトと workflow ごとの settings |
+| `$CODEX_HOME/hooks.json` | totsuka の管理エントリ |
+| opencode の config ディレクトリ | プラグイン + plan agent アセット |
+| `$XDG_STATE_HOME/totsuka/hooks/spool` | ディレクトリ作成と書き込みプローブ |
+
+これは「フル run なしでセットアップを完了させる」ための意図的な設計で、既定のまま変えない。ただし**そのままでは「純粋な監査」を表現できない** — 他人のマシンを点検する、CI で読み取り専用に走らせる、といった用途で `$CODEX_HOME` に書き込んでしまう。`--no-repair` はその 4 つを抑止する。
+
+- **verify 側は全て走る。** 修復してから見た状態ではなく「見つけたままの状態」が報告される。`codex-hooks` が不一致を報告したときのアクションだけが変わる（「改竄を疑え」ではなく「`--no-repair` 無しで同期しろ」）
+- **孤児 worktree / pane の掃除提案も出ない。** 読み取り専用の監査が削除を持ちかけるのは筋が通らない
+- **代償**: `hook-spool` が書き込み可否を検証できない。ディレクトリが未作成なら warning（`ok: true`）に留め、失敗にはしない
+- **チェックの集合と終了コードは変わらない。** `--no-repair` は書き込みを止めるだけで、検査を減らさない（テストで固定）
+
+`doctor --fix`（残った fail を機械的に直す）は入れない。理由は [ADR-0028](/decisions/adr-0028-setup-wizard.md) の却下案に記録がある。
 
 # worktree 掃除
 

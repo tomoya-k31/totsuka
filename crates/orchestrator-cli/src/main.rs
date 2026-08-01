@@ -126,6 +126,12 @@ enum Command {
         /// reference, so an `op://` reference may raise a biometric prompt.
         #[arg(long)]
         online: bool,
+        /// Inspect only: skip the writes `doctor` normally performs (hook
+        /// assets, $CODEX_HOME/hooks.json, opencode assets, the spool
+        /// directory) and do not offer to clean up orphans. For read-only
+        /// audits and CI.
+        #[arg(long)]
+        no_repair: bool,
         #[command(flatten)]
         json: common::JsonFlag,
     },
@@ -252,6 +258,17 @@ fn execute(
         Command::Plugin { cmd } => plugin_cmd::run(&cx, cmd),
         Command::Config { cmd } => config_cmd::run(&cx, cmd),
         Command::Logs { follow, task } => logs_cmd::run(&cx, follow, task),
-        Command::Doctor { json, online } => doctor_cmd::run(&cx, json.json, online),
+        Command::Doctor {
+            json,
+            online,
+            no_repair,
+        } => doctor_cmd::run(
+            &cx,
+            doctor_cmd::DoctorArgs {
+                json: json.json,
+                online,
+                no_repair,
+            },
+        ),
     }
 }

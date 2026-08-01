@@ -4,7 +4,8 @@
 //! The six hook scripts are baked into the binary with [`include_str!`] and
 //! written to `$XDG_DATA_HOME/totsuka/hooks/` at `totsuka run` / `totsuka
 //! doctor` startup (0700, idempotent by content hash so a version bump refreshes
-//! them but an unchanged run touches nothing). Per-workflow settings are
+//! them but an unchanged run touches nothing). `doctor --no-repair` is the one
+//! exception: it verifies without writing (#351). Per-workflow settings are
 //! rendered next to them (0600), with the `prompt`-type Stop hook added only for
 //! `verification = "llm"` workflows.
 //!
@@ -84,9 +85,11 @@ pub struct AssetIssue {
 /// Verify every hook asset exists with the embedded content and the expected
 /// mode (0700 scripts, 0600 settings) **without** writing anything. Returns the
 /// issues found (empty ⇒ all assets are correct). This is the read-only
-/// counterpart to [`install`]: `doctor` calls `install` first to materialize
-/// and self-heal, then `verify_assets` to surface anything that is still wrong
-/// (e.g. active tampering, or a dir the repair could not write to).
+/// counterpart to [`install`]: `doctor` normally calls `install` first to
+/// materialize and self-heal, then `verify_assets` to surface anything that is
+/// still wrong (e.g. active tampering, or a dir the repair could not write to).
+/// Under `doctor --no-repair` (#351) only this half runs, so what it reports is
+/// the state of the machine as found rather than what survived a repair.
 pub fn verify_assets(paths: &Paths, cfg: &RootConfig) -> Vec<AssetIssue> {
     let dir = hooks_dir(paths);
     let mut issues = Vec::new();

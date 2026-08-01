@@ -143,9 +143,32 @@ impl OpReadiness {
     }
 }
 
-/// Execute `totsuka doctor`. `online` opts into the live probes (#267) —
-/// the only checks here that reach the network.
-pub fn run(cx: &Cx, json: bool, online: bool) -> Result<(), CliError> {
+/// How this `doctor` invocation was asked to behave.
+///
+/// A struct rather than three positional `bool`s: they are all the same type,
+/// so a swapped pair at a call site would compile and quietly change what runs.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DoctorArgs {
+    /// Emit the machine-readable report instead of the human one.
+    pub json: bool,
+    /// Opt into the live probes (#267) — the only checks that reach the network.
+    pub online: bool,
+    /// Inspect only: skip every write `doctor` would otherwise perform.
+    ///
+    /// `doctor` is deliberately not read-only by default. It re-materialises
+    /// the hook assets, syncs `$CODEX_HOME/hooks.json` and the opencode
+    /// assets, and creates the spool directory — the same writes `run` does,
+    /// which is what lets `doctor` double as "finish the setup" (#137/#196).
+    /// That leaves no way to express a pure audit: a read-only CI check, or a
+    /// look at a machine you would rather not modify, still writes into the
+    /// user's `$CODEX_HOME`. This flag is that way. See [`DoctorArgs::no_repair`]
+    /// usages for exactly which writes it suppresses.
+    pub no_repair: bool,
+}
+
+/// Execute `totsuka doctor`.
+pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
+    let DoctorArgs { json, .. } = args;
     let mut checks = Vec::new();
     // One environment snapshot, threaded through every check that needs it.
     let env: HashMap<String, String> = std::env::vars().collect();
@@ -283,11 +306,11 @@ pub fn run(cx: &Cx, json: bool, online: bool) -> Result<(), CliError> {
         // and `hook-token` checks claimed the probes would cover.
         let op = check_onepassword(cx, &env, &mut checks);
         check_worktree_location(cfg, &env, &mut checks);
-        check_hooks(cx, cfg, config_ok, &env, op, &mut checks);
+        check_hooks(cx, cfg, config_ok, &env, op, args, &mut checks);
         check_plugins(cx, cfg, &env, op, &mut checks);
-        check_llm_key(cfg, &env, online, op, &mut checks);
-        check_orphans(cfg, &env, db.as_ref(), json, &mut checks)?;
-        check_orphan_panes(cx, cfg, &env, db.as_ref(), json, op, &mut checks)?;
+        check_llm_key(cfg, &env, args, op, &mut checks);
+        check_orphans(cfg, &env, db.as_ref(), args, &mut checks)?;
+        check_orphan_panes(cx, cfg, &env, db.as_ref(), args, op, &mut checks)?;
     }
 
     if json {
@@ -507,11 +530,12 @@ fn check_hooks(
     config_ok: bool,
     env: &HashMap<String, String>,
     op: OpReadiness,
+    args: DoctorArgs,
     checks: &mut Vec<Check>,
 ) {
-    check_hook_assets(cx, cfg, checks);
-    check_codex_hooks(cx, cfg, config_ok, env, checks);
-    check_opencode_assets(cfg, config_ok, env, checks);
+    check_hook_assets(cx, cfg, args, checks);
+    check_codex_hooks(cx, cfg, config_ok, env, args, checks);
+    check_opencode_assets(cfg, config_ok, env, args, checks);
     check_hook_deps(env, checks);
     // Which workflows actually need the Bearer token, decided from the static
     // manifests alone (plugin enablement / reference integrity belong to
@@ -533,7 +557,7 @@ fn check_hooks(
         }
     }
     check_hook_token(cfg, env, &hook_workflows, &unknown_workflows, checks);
-    check_spool(cx, cfg, env, checks);
+    check_spool(cx, cfg, env, args, checks);
     check_hook_socket(cx, cfg, env, op, checks);
 }
 
@@ -541,8 +565,13 @@ fn check_hooks(
 /// writeout as `totsuka run`, so `doctor` doubles as "materialize the hooks"),
 /// then verify every asset exists with the embedded content and the expected
 /// mode (0700 scripts / 0600 settings, N-02 tamper resistance).
-fn check_hook_assets(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
-    if let Err(e) = orchestrator_core::hooks::install(&cx.paths, cfg) {
+fn check_hook_assets(cx: &Cx, cfg: &RootConfig, args: DoctorArgs, checks: &mut Vec<Check>) {
+    // `verify_assets` below runs either way; only the refresh is suppressed, so
+    // `--no-repair` still reports drift — it just does not silently repair it
+    // first, which is what makes the report describe the machine as found.
+    if !args.no_repair
+        && let Err(e) = orchestrator_core::hooks::install(&cx.paths, cfg)
+    {
         checks.push(Check::fail(
             "hooks",
             format!("could not write hook scripts/settings: {e}"),
@@ -595,11 +624,21 @@ fn check_hook_assets(cx: &Cx, cfg: &RootConfig, checks: &mut Vec<Check>) {
             .map(|i| format!("{}: {}", i.path.display(), i.problem))
             .collect::<Vec<_>>()
             .join("; ");
-        checks.push(Check::fail(
-            "hooks",
-            format!("hook assets are inconsistent after a repair attempt: {detail}"),
-            "a persistent mismatch on a writable dir means the asset is being tampered with (N-02) → investigate",
-        ));
+        // Tampering is only a fair reading when a repair *was* attempted and
+        // did not stick. Under `--no-repair` a mismatch usually means the
+        // assets were simply never installed.
+        let (detail, action) = if args.no_repair {
+            (
+                format!("hook assets do not match the expected content: {detail}"),
+                "run `totsuka doctor` without --no-repair (or `totsuka run`) to write them",
+            )
+        } else {
+            (
+                format!("hook assets are inconsistent after a repair attempt: {detail}"),
+                "a persistent mismatch on a writable dir means the asset is being tampered with (N-02) → investigate",
+            )
+        };
+        checks.push(Check::fail("hooks", detail, action));
     }
 }
 
@@ -614,6 +653,7 @@ fn check_codex_hooks(
     cfg: &RootConfig,
     config_ok: bool,
     env: &HashMap<String, String>,
+    args: DoctorArgs,
     checks: &mut Vec<Check>,
 ) {
     use orchestrator_core::hooks::codex;
@@ -633,8 +673,20 @@ fn check_codex_hooks(
         return;
     }
     let home = codex::codex_home(|k| env.get(k).cloned());
-    match codex::sync_registration(home.as_deref(), &cx.paths, cfg) {
-        Ok(codex::SyncOutcome::NoCodexHome) => {
+    // The sync is the one write `doctor` makes **outside totsuka's own dirs**,
+    // so it is the write `--no-repair` exists for. The verify + trust probes
+    // below are reads and still run; without the sync they report the real
+    // state of `hooks.json` instead of the state doctor just imposed on it.
+    if args.no_repair {
+        // `SyncOutcome::NoCodexHome` means "no *existing* codex home", but
+        // `codex_home()` happily returns `$HOME/.codex` whether or not it is
+        // there. Testing only `is_none()` would let an uninstalled codex fall
+        // through to `verify_registration`, which reports every entry missing
+        // and tells the operator to re-run without `--no-repair` — advice that
+        // cannot work, because the repairing path returns `NoCodexHome` and
+        // never creates the file. Audit mode is exactly where the tool is
+        // likeliest to be absent, so the two conditions have to agree.
+        if home.as_deref().is_none_or(|h| !h.is_dir()) {
             checks.push(Check::fail(
                 "codex-hooks",
                 "the config references a codex-kind tool but no codex home was found",
@@ -642,17 +694,28 @@ fn check_codex_hooks(
             ));
             return;
         }
-        Ok(_) => {}
-        Err(e) => {
-            checks.push(Check::fail(
-                "codex-hooks",
-                format!("could not sync the totsuka entries in hooks.json: {e}"),
-                "fix $CODEX_HOME/hooks.json (it is never overwritten when unparseable) and re-run doctor",
-            ));
-            return;
+    } else {
+        match codex::sync_registration(home.as_deref(), &cx.paths, cfg) {
+            Ok(codex::SyncOutcome::NoCodexHome) => {
+                checks.push(Check::fail(
+                    "codex-hooks",
+                    "the config references a codex-kind tool but no codex home was found",
+                    "install the codex CLI (its home is $CODEX_HOME, default ~/.codex) or drop the codex tool reference",
+                ));
+                return;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                checks.push(Check::fail(
+                    "codex-hooks",
+                    format!("could not sync the totsuka entries in hooks.json: {e}"),
+                    "fix $CODEX_HOME/hooks.json (it is never overwritten when unparseable) and re-run doctor",
+                ));
+                return;
+            }
         }
     }
-    let home = home.expect("NoCodexHome returned above");
+    let home = home.expect("the no-home case returned above");
     let issues = codex::verify_registration(&home, &cx.paths);
     if !issues.is_empty() {
         let detail = issues
@@ -660,11 +723,18 @@ fn check_codex_hooks(
             .map(|i| format!("{}: {}", i.path.display(), i.problem))
             .collect::<Vec<_>>()
             .join("; ");
-        checks.push(Check::fail(
-            "codex-hooks",
-            format!("hooks.json is inconsistent after a sync attempt: {detail}"),
-            "a persistent mismatch on a writable file means it is being tampered with (N-02) → investigate",
-        ));
+        let (detail, action) = if args.no_repair {
+            (
+                format!("hooks.json does not match the expected entries: {detail}"),
+                "run `totsuka doctor` without --no-repair (or `totsuka run`) to sync it",
+            )
+        } else {
+            (
+                format!("hooks.json is inconsistent after a sync attempt: {detail}"),
+                "a persistent mismatch on a writable file means it is being tampered with (N-02) → investigate",
+            )
+        };
+        checks.push(Check::fail("codex-hooks", detail, action));
         return;
     }
     match codex::untrusted_events(&home, &cx.paths) {
@@ -699,6 +769,7 @@ fn check_opencode_assets(
     cfg: &RootConfig,
     config_ok: bool,
     env: &HashMap<String, String>,
+    args: DoctorArgs,
     checks: &mut Vec<Check>,
 ) {
     use orchestrator_core::hooks::opencode;
@@ -714,8 +785,13 @@ fn check_opencode_assets(
         return;
     }
     let dir = opencode::opencode_config_dir(|k| env.get(k).cloned());
-    match opencode::sync_assets(dir.as_deref(), cfg) {
-        Ok(opencode::SyncOutcome::NoConfigDir) => {
+    // Same shape as the codex sync, and suppressed for the same reason: it
+    // writes into a directory totsuka does not own.
+    if args.no_repair {
+        // Same trap as the codex guard: `SyncOutcome::NoConfigDir` tests for an
+        // *existing* directory, so `is_none()` alone would accuse a machine
+        // without opencode of tampering with assets it never had.
+        if dir.as_deref().is_none_or(|d| !d.is_dir()) {
             checks.push(Check::fail(
                 "opencode-assets",
                 "the config references an opencode-kind tool but no opencode config dir was found",
@@ -723,17 +799,28 @@ fn check_opencode_assets(
             ));
             return;
         }
-        Ok(_) => {}
-        Err(e) => {
-            checks.push(Check::fail(
-                "opencode-assets",
-                format!("could not write the opencode assets: {e}"),
-                "check permissions on the opencode config dir ($XDG_CONFIG_HOME/opencode, default ~/.config/opencode)",
-            ));
-            return;
+    } else {
+        match opencode::sync_assets(dir.as_deref(), cfg) {
+            Ok(opencode::SyncOutcome::NoConfigDir) => {
+                checks.push(Check::fail(
+                    "opencode-assets",
+                    "the config references an opencode-kind tool but no opencode config dir was found",
+                    "install opencode and run it once (its config dir — $XDG_CONFIG_HOME/opencode, default ~/.config/opencode — must exist) or drop the opencode tool reference",
+                ));
+                return;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                checks.push(Check::fail(
+                    "opencode-assets",
+                    format!("could not write the opencode assets: {e}"),
+                    "check permissions on the opencode config dir ($XDG_CONFIG_HOME/opencode, default ~/.config/opencode)",
+                ));
+                return;
+            }
         }
     }
-    let dir = dir.expect("NoConfigDir returned above");
+    let dir = dir.expect("the no-dir case returned above");
     let issues = opencode::verify_assets(&dir, cfg);
     if issues.is_empty() {
         // Same reason as the `hooks` check: an operator debugging a plan-mode
@@ -757,11 +844,18 @@ fn check_opencode_assets(
             .map(|i| format!("{}: {}", i.path.display(), i.problem))
             .collect::<Vec<_>>()
             .join("; ");
-        checks.push(Check::fail(
-            "opencode-assets",
-            format!("assets are inconsistent after a sync attempt: {detail}"),
-            "a persistent mismatch on a writable dir means the asset is being tampered with (N-02) → investigate",
-        ));
+        let (detail, action) = if args.no_repair {
+            (
+                format!("assets do not match the expected content: {detail}"),
+                "run `totsuka doctor` without --no-repair (or `totsuka run`) to install them",
+            )
+        } else {
+            (
+                format!("assets are inconsistent after a sync attempt: {detail}"),
+                "a persistent mismatch on a writable dir means the asset is being tampered with (N-02) → investigate",
+            )
+        };
+        checks.push(Check::fail("opencode-assets", detail, action));
     }
 }
 
@@ -862,7 +956,13 @@ fn check_hook_token(
 /// non-empty backlog is surfaced as an advisory — spooled events replay
 /// automatically on the next `totsuka run`, but a growing backlog signals the
 /// receiver has been unreachable.
-fn check_spool(cx: &Cx, cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
+fn check_spool(
+    cx: &Cx,
+    cfg: &RootConfig,
+    env: &HashMap<String, String>,
+    args: DoctorArgs,
+    checks: &mut Vec<Check>,
+) {
     let env_fn = |k: &str| env.get(k).cloned();
     let dir = match &cfg.hooks.spool_dir {
         Some(p) => match config::expand_path(p, &env_fn) {
@@ -878,6 +978,40 @@ fn check_spool(cx: &Cx, cfg: &RootConfig, env: &HashMap<String, String>, checks:
         },
         None => cx.paths.state_dir().join("hooks").join("spool"),
     };
+    // Both the create and the probe below write. Under `--no-repair` the
+    // directory is reported as found and the backlog is still counted (reading
+    // it is free) — the price is that writability goes unverified, which is
+    // the honest trade for touching nothing.
+    if args.no_repair {
+        if !dir.is_dir() {
+            checks.push(Check::warn(
+                "hook-spool",
+                format!(
+                    "spool dir {} does not exist yet (--no-repair: not created)",
+                    dir.display()
+                ),
+                "run `totsuka doctor` without --no-repair, or `totsuka run`, to create it",
+            ));
+            return;
+        }
+        let backlog = count_spool_backlog(&dir);
+        checks.push(if backlog == 0 {
+            Check::ok(
+                "hook-spool",
+                format!("{} exists, no backlog (writability unchecked)", dir.display()),
+            )
+        } else {
+            Check::warn(
+                "hook-spool",
+                format!(
+                    "{backlog} spooled hook-event file(s) awaiting replay in {}",
+                    dir.display()
+                ),
+                "run `totsuka run` to drain the spool (idempotent); inspect any *.corrupt files by hand",
+            )
+        });
+        return;
+    }
     if let Err(e) = std::fs::create_dir_all(&dir) {
         checks.push(Check::fail(
             "hook-spool",
@@ -1256,10 +1390,11 @@ fn check_plugins(
 fn check_llm_key(
     cfg: &RootConfig,
     env: &HashMap<String, String>,
-    online: bool,
+    args: DoctorArgs,
     op: OpReadiness,
     checks: &mut Vec<Check>,
 ) {
+    let online = args.online;
     let Some(llm) = &cfg.llm else {
         checks.push(Check::ok(
             "llm",
@@ -1386,9 +1521,10 @@ fn check_orphans(
     cfg: &RootConfig,
     env: &HashMap<String, String>,
     db: Option<&orchestrator_core::adapters::StateDb>,
-    json: bool,
+    args: DoctorArgs,
     checks: &mut Vec<Check>,
 ) -> Result<(), CliError> {
+    let json = args.json;
     let Some(db) = db else {
         return Ok(());
     };
@@ -1425,7 +1561,7 @@ fn check_orphans(
         .collect::<Vec<_>>()
         .join(", ");
     // Interactive cleanup proposal (§5.1) — only on a TTY and never in --json.
-    if !json && io::stdin().is_terminal() {
+    if !json && !args.no_repair && io::stdin().is_terminal() {
         for (repo_name, repo_path, orphan) in &orphans {
             // The path carries the branch built from the task title, and
             // `render_branch` only folds `Cc` — bidi overrides survive it
@@ -1464,7 +1600,11 @@ fn check_orphans(
         checks.push(Check::fail(
             "worktrees",
             format!("orphan worktrees: {listing}"),
-            "run `totsuka doctor` in a terminal to clean them up interactively",
+            if args.no_repair {
+                "re-run `totsuka doctor` without --no-repair to clean them up interactively"
+            } else {
+                "run `totsuka doctor` in a terminal to clean them up interactively"
+            },
         ));
     }
     Ok(())
@@ -1553,11 +1693,12 @@ fn check_orphan_panes(
     cfg: &RootConfig,
     env: &HashMap<String, String>,
     db: Option<&orchestrator_core::adapters::StateDb>,
-    json: bool,
+    args: DoctorArgs,
     op: OpReadiness,
     checks: &mut Vec<Check>,
 ) -> Result<(), CliError> {
     use plugin_protocol::manifest::PluginKind;
+    let json = args.json;
     use plugin_protocol::methods::{
         SessionListParams, SessionListResult, SessionReleaseParams, SessionReleaseResult,
     };
@@ -1680,7 +1821,7 @@ fn check_orphan_panes(
         .join(", ");
     // Interactive release proposal — only on a TTY and never in --json,
     // mirroring the orphan-worktree flow (doctor proposes, never auto-frees).
-    if !json && io::stdin().is_terminal() {
+    if !json && !args.no_repair && io::stdin().is_terminal() {
         for orphan in &orphans {
             // The label is `totsuka {source_task_id}` (ADR-0013) — the id the
             // source chose, so external text on the prompt the operator is
@@ -1732,7 +1873,11 @@ fn check_orphan_panes(
         checks.push(Check::fail(
             "panes",
             format!("orphan panes: {listing}"),
-            "run `totsuka doctor` in a terminal to release them interactively",
+            if args.no_repair {
+                "re-run `totsuka doctor` without --no-repair to release them interactively"
+            } else {
+                "run `totsuka doctor` in a terminal to release them interactively"
+            },
         ));
     }
     Ok(())

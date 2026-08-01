@@ -1396,3 +1396,198 @@ fn a_newer_state_db_is_refused_with_an_upgrade_hint() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ---------------------------------------------------------------------------
+// `doctor --no-repair` (#351): `doctor` is deliberately not read-only — it
+// re-materialises the hook assets, syncs `$CODEX_HOME/hooks.json` and the
+// opencode assets, and creates the spool directory. That is what lets it double
+// as "finish the setup", but it left no way to express a pure audit. These
+// tests assert the flag actually suppresses those writes, by looking for the
+// files rather than trusting the report.
+// ---------------------------------------------------------------------------
+
+/// A config that makes every repairing check fire: hook assets always, plus
+/// the codex sync and the opencode sync.
+///
+/// Both syncs are gated on the config *referencing* a tool of that kind, and a
+/// bare `[tools.x]` entry nobody uses does not count — the reference has to
+/// come from `default_tool` or a repository. Declaring the tools alone leaves
+/// the opencode check silently absent, and the test then proves nothing.
+fn config_touching_every_writer(base: &Path) {
+    let cfg_dir = base.join("cfg/totsuka");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    let repo = base.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        cfg_dir.join("config.toml"),
+        format!(
+            "default_tool = \"cdx\"\n\n\
+             [tools.cdx]\nkind = \"codex\"\n\n\
+             [tools.oc]\nkind = \"opencode\"\n\n\
+             [[repositories]]\nname = \"r\"\npath = \"{}\"\ntool = \"oc\"\n",
+            repo.display()
+        ),
+    )
+    .unwrap();
+}
+
+/// Every path `doctor` writes to, so a test can assert none of them appeared.
+fn writable_targets(base: &Path) -> Vec<PathBuf> {
+    vec![
+        base.join("data/totsuka/hooks"),
+        base.join("state/totsuka/hooks/spool"),
+        base.join("codex/hooks.json"),
+        base.join("cfg/opencode"),
+    ]
+}
+
+#[test]
+fn no_repair_writes_nothing_that_the_default_run_writes() {
+    let base = scratch("doctor_no_repair");
+    config_touching_every_writer(&base);
+    let codex_home = base.join("codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    let opencode_dir = base.join("cfg/opencode");
+    std::fs::create_dir_all(&opencode_dir).unwrap();
+
+    let env: Vec<(&str, &str)> = vec![("CODEX_HOME", codex_home.to_str().unwrap())];
+
+    // --no-repair first, on a machine where nothing has been materialised yet.
+    let out = run_env(&base, &["doctor", "--json", "--no-repair"], &env);
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("doctor --json parses under --no-repair");
+    assert!(doc.is_array(), "the --json shape is unchanged: {doc}");
+
+    assert!(
+        !codex_home.join("hooks.json").exists(),
+        "--no-repair wrote into $CODEX_HOME, which is not totsuka's directory"
+    );
+    assert!(
+        !base.join("data/totsuka/hooks").exists(),
+        "--no-repair materialised the hook assets"
+    );
+    assert!(
+        !base.join("state/totsuka/hooks/spool").exists(),
+        "--no-repair created the spool directory"
+    );
+    // opencode's dir has to pre-exist for the check to run at all; what must
+    // not appear is anything *inside* it.
+    assert_eq!(
+        std::fs::read_dir(&opencode_dir).unwrap().count(),
+        0,
+        "--no-repair installed the opencode assets"
+    );
+
+    // The default run is unchanged: it still writes all of them. Without this
+    // half, the assertions above would also pass if the checks silently
+    // stopped running altogether.
+    let out = run_env(&base, &["doctor", "--json"], &env);
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
+    assert!(doc.is_array(), "{doc}");
+    for path in writable_targets(&base) {
+        assert!(
+            path.exists(),
+            "the default run must still repair: {} is missing",
+            path.display()
+        );
+    }
+    assert!(
+        std::fs::read_dir(&opencode_dir).unwrap().count() > 0,
+        "the default run must still install the opencode assets"
+    );
+}
+
+#[test]
+fn no_repair_keeps_the_exit_code_contract() {
+    // Exit 3 means "problems found" and is read by scripts (#177). Suppressing
+    // repairs must not turn a healthy machine unhealthy, nor the reverse: the
+    // verdict is the same, only the writes differ.
+    let base = scratch("doctor_no_repair_exit");
+    config_touching_every_writer(&base);
+    let codex_home = base.join("codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    let env: Vec<(&str, &str)> = vec![("CODEX_HOME", codex_home.to_str().unwrap())];
+
+    // Repair once so both runs look at the same, already-materialised machine.
+    let repaired = run_env(&base, &["doctor", "--json"], &env);
+    let audited = run_env(&base, &["doctor", "--json", "--no-repair"], &env);
+    assert_eq!(
+        repaired.status.code(),
+        audited.status.code(),
+        "--no-repair changed the verdict on an unchanged machine\nrepaired: {}\naudited: {}",
+        stdout(&repaired),
+        stdout(&audited)
+    );
+
+    // And the set of check names is the same — `--no-repair` suppresses writes,
+    // it does not drop checks.
+    let names = |out: &Output| -> Vec<String> {
+        serde_json::from_str::<serde_json::Value>(&stdout(out))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(names(&repaired), names(&audited));
+}
+
+#[test]
+fn no_repair_is_discoverable_in_help() {
+    // Unlike `--answers`, this is a real feature and not a testing affordance,
+    // so it must show up in `--help`.
+    let base = scratch("doctor_no_repair_help");
+    let out = run(&base, &["doctor", "--help"]);
+    assert!(stdout(&out).contains("--no-repair"), "{}", stdout(&out));
+}
+
+#[test]
+fn no_repair_diagnoses_a_missing_tool_home_the_same_way_a_repairing_run_does() {
+    // The audit case is exactly the case where the tool is *not* installed, and
+    // the two paths decide "no home" differently if you are not careful:
+    // `SyncOutcome::NoCodexHome` means "no **existing** directory", while
+    // `codex_home()` returns `$HOME/.codex` whether or not it is there. Testing
+    // only for `None` let an uninstalled codex reach `verify_registration`,
+    // which reported every entry missing and advised re-running without
+    // `--no-repair` — advice that cannot work, since the repairing path also
+    // finds no home and never writes the file.
+    let base = scratch("doctor_no_repair_missing_home");
+    config_touching_every_writer(&base);
+    // Both homes resolve to paths that do not exist.
+    let absent_codex = base.join("no-such-codex");
+    let env: Vec<(&str, &str)> = vec![("CODEX_HOME", absent_codex.to_str().unwrap())];
+
+    let detail_for = |out: &Output, name: &str| -> (String, String) {
+        let checks: Vec<serde_json::Value> = serde_json::from_str(&stdout(out)).unwrap();
+        let row = checks
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("no `{name}` check: {}", stdout(out)));
+        (
+            row["detail"].as_str().unwrap_or_default().to_string(),
+            row["action"].as_str().unwrap_or_default().to_string(),
+        )
+    };
+
+    let repaired = run_env(&base, &["doctor", "--json"], &env);
+    let audited = run_env(&base, &["doctor", "--json", "--no-repair"], &env);
+
+    for name in ["codex-hooks", "opencode-assets"] {
+        let (repaired_detail, _) = detail_for(&repaired, name);
+        let (audited_detail, audited_action) = detail_for(&audited, name);
+        assert_eq!(
+            audited_detail, repaired_detail,
+            "{name}: --no-repair misdiagnosed a missing tool home"
+        );
+        assert!(
+            !audited_action.contains("--no-repair"),
+            "{name}: told the operator to re-run without --no-repair, which cannot help \
+             when the tool is not installed: {audited_action}"
+        );
+        assert!(
+            !audited_action.contains("tampered"),
+            "{name}: accused a machine of tampering with assets it never had: {audited_action}"
+        );
+    }
+}
