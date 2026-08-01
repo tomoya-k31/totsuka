@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-01T20:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -448,9 +448,23 @@ repos = ["totsuka"]
 
 agent_command = "claude"                        # 起動するエージェント（空白区切りで引数も可）
 plan_args = ["--permission-mode", "plan"]       # plan モード時に追加する引数
-design_preview = "side_pane"                    # 設計プレビューの表示方法
+design_preview = "side_pane"                    # deprecated・無効（誰も読んでいない。削除は 0.3）
 request_timeout_secs = 30                       # herdr への RPC タイムアウト
+
+# dispatch した pane の配置（省略可。以下が既定値）
+[layout]
+shell     = true                                # 併設シェル pane を出すか（false ならエージェント全画面）
+direction = "down"                              # "down" = 上下 / "right" = 左右（herdr の SplitDirection）
+ratio     = 0.8                                 # エージェント側の取り分
 ```
+
+- `agent_command` / `plan_args` は **deprecated**。`tool_launch` を送らない旧 Orchestrator 向けのフォールバックで、
+  通常は `config.toml` の `[tools]` が argv を決める（[ADR-0014](/decisions/adr-0014-tool-abstraction.md)）。
+- `design_preview` は **deprecated かつ無効** — core もプラグインも読んでおらず、値を変えても描画は変わらない。
+  pane の配置は `[layout]` が決める（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。
+- `[layout]` の `ratio` は**エージェント側**の取り分。範囲検査はせず herdr へそのまま送る（不正値は herdr が拒否し、
+  その場合は警告のうえシェル pane なしで続行する）。`direction` は `down` / `right` のみで、
+  他の値は `initialize` の時点でエラーになる。`shell = false` のとき `direction` / `ratio` は無視される。
 
 # Part 3: シナリオ別レシピ
 
