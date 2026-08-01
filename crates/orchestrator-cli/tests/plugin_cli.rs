@@ -333,6 +333,36 @@ fn broken_env_override_fails_before_install_side_effects() {
 // the binary, so `--bundled` needs no path from the user.
 // ---------------------------------------------------------------------------
 
+/// Put a runnable copy of the test binary at `dest`.
+///
+/// A plain `fs::copy` makes this test flaky on Linux with `ExecutableFileBusy`
+/// (`ETXTBSY`). The race is not with this test's own write — `copy` closes its
+/// descriptor before returning — but with the *other* tests running
+/// concurrently in the same process: `Command::spawn` forks, and a fork that
+/// happens while `copy`'s write descriptor is open inherits it, so the new
+/// file still has a writer when this test tries to `execve` it.
+///
+/// A hard link never opens the destination for writing, so the window does not
+/// exist. It needs `dest` on the same filesystem as the Cargo target dir; when
+/// it is not, fall back to copying and retry the spawn-side failure by waiting
+/// for the inherited descriptor to be closed.
+fn place_binary(src: &str, dest: &Path) {
+    if fs::hard_link(src, dest).is_ok() {
+        return;
+    }
+    fs::copy(src, dest).unwrap();
+    // Give any fork that inherited the write descriptor a moment to exec and
+    // close it. Bounded, and only on the fallback path.
+    for _ in 0..50 {
+        match std::process::Command::new(dest).arg("--version").output() {
+            Err(e) if e.raw_os_error() == Some(26) => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            _ => return,
+        }
+    }
+}
+
 /// Lay out a bundled tree: `<root>/plugins/<name>/{plugin.toml, <name>}`.
 fn fake_bundle(root: &Path, names: &[&str]) {
     for name in names {
@@ -454,7 +484,7 @@ fn bundled_discovery_follows_the_symlink_to_the_real_tree() {
     fs::create_dir_all(&tree).unwrap();
     fake_bundle(&tree, &["github"]);
     let real_bin = tree.join("totsuka");
-    fs::copy(env!("CARGO_BIN_EXE_totsuka"), &real_bin).unwrap();
+    place_binary(env!("CARGO_BIN_EXE_totsuka"), &real_bin);
 
     let bin_dir = env.root.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
