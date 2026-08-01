@@ -1,0 +1,90 @@
+name: warm-cache
+
+# main スコープの rust-cache を再生するためだけのワークフロー (#341 / ADR-0029)。
+#
+# ADR-0007 で clippy / test を pull_request 限定にした結果、main では両ジョブが
+# 走らなくなり、main スコープのキャッシュを書く主体が消えた。GitHub のキャッシュは
+# ブランチスコープで、PR スコープ (refs/pull/N/merge) のエントリは他の PR から
+# 読めないため、新しい PR は必ず「最後に main で test が走った時点」の化石へ
+# フォールバックする。実際 2026-07-17 のエントリが 2 週間使われ続け、全 PR の
+# 初回 run が依存 215 中 186 クレートを再ビルドしていた。
+#
+# ci.yml ではなく独立したワークフローなのは、パスフィルタが on: 単位でしか
+# 書けないため。ci.yml の push トリガに paths を足すと coverage まで止まるが、
+# coverage は main の per-merge テストを兼ねるので全 merge で走らねばならない。
+#
+# パスフィルタの対象はキャッシュ鍵が依存するファイルだけ。実測で main への merge
+# 178 件のうち Cargo 系を触るのは 46 件 (25%) なので、warm は週 45 → 約 11 回になる。
+# cron はその隙間を埋める保険で、rustc の新リリースは repo に変更が無いまま鍵を
+# 壊す (dtolnay/rust-toolchain が toolchain: stable で最新安定版を入れるため) が、
+# パスフィルタではそれを検知できない。
+#
+# env は ci.yml と一字一句同じでなければならない。rust-cache は CARGO / CC /
+# CFLAGS / CXX / CMAKE / RUST 接頭辞の環境変数を鍵に含めるので、ここがずれると
+# 別の鍵ができて温めたキャッシュが永久に使われない。しかも CI は緑のままなので
+# 気付けない。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "rust-toolchain.toml"
+      # この 2 本自身も鍵空間を決める。ci.yml は消費側の shared-key と
+      # env (RUSTFLAGS / CARGO_TERM_COLOR — rust-cache が鍵に含める) を、
+      # warm-cache.yml は生成側の同じものを持つ。ここを入れ忘れると、
+      # 鍵を変える変更が merge されても warm が走らず、次の PR は cron か
+      # 手動 dispatch まで cold のままになる (PR #366 の Copilot 指摘)。
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/warm-cache.yml"
+  schedule:
+    # UTC 日曜 19:41 = JST 月曜 04:41（cache-cleanup.yml の "日曜 05:23 JST" も
+    # 同じ理由で実際は月曜。あちらは本 PR の対象外なので触っていない）
+    - cron: "41 19 * * 0" # 月曜 04:41 JST。rustc 新リリースの保険
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  warm:
+    name: warm cache (${{ matrix.key }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # 片方が落ちてももう片方のキャッシュは温めたい。
+      fail-fast: false
+      matrix:
+        include:
+          - key: test
+            cmd: cargo build --workspace --all-targets
+          - key: clippy
+            cmd: cargo clippy --workspace --all-targets --all-features -- -D warnings
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          # clippy leg でのみ必要。test leg では不要だが、空文字を渡す分岐を避けるため
+          # 両方に入れる（コンポーネントの有無はビルド成果物に影響しない）。
+          components: clippy
+      # shared-key は ci.yml の消費側と完全に一致させること。clippy と test で
+      # 鍵を分けるのは必須で、cargo clippy は check ベースゆえ依存を .rmeta として
+      # しか emit しない。1 つの鍵を共有すると先に保存した側が勝ち、clippy が勝つと
+      # test は rlib の無いキャッシュを復元して結局ビルドし直す。
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ${{ matrix.key }}-${{ hashFiles('Cargo.toml') }}
+      # 消費側ジョブと完全に同じコマンドであること。違うとフィンガープリントが
+      # 揃わず、温めたつもりのキャッシュが効かない。
+      - name: Warm
+        run: ${{ matrix.cmd }}
