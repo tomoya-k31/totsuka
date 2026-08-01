@@ -16,7 +16,8 @@ name: cache-cleanup
 
 on:
   schedule:
-    - cron: "23 20 * * 0" # 日曜 05:23 JST
+    # cron は UTC 指定。UTC 日曜 20:23 は JST では月曜 05:23 になる。
+    - cron: "23 20 * * 0" # 月曜 05:23 JST
   workflow_dispatch:
 
 concurrency:
