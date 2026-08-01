@@ -1541,3 +1541,53 @@ fn no_repair_is_discoverable_in_help() {
     let out = run(&base, &["doctor", "--help"]);
     assert!(stdout(&out).contains("--no-repair"), "{}", stdout(&out));
 }
+
+#[test]
+fn no_repair_diagnoses_a_missing_tool_home_the_same_way_a_repairing_run_does() {
+    // The audit case is exactly the case where the tool is *not* installed, and
+    // the two paths decide "no home" differently if you are not careful:
+    // `SyncOutcome::NoCodexHome` means "no **existing** directory", while
+    // `codex_home()` returns `$HOME/.codex` whether or not it is there. Testing
+    // only for `None` let an uninstalled codex reach `verify_registration`,
+    // which reported every entry missing and advised re-running without
+    // `--no-repair` — advice that cannot work, since the repairing path also
+    // finds no home and never writes the file.
+    let base = scratch("doctor_no_repair_missing_home");
+    config_touching_every_writer(&base);
+    // Both homes resolve to paths that do not exist.
+    let absent_codex = base.join("no-such-codex");
+    let env: Vec<(&str, &str)> = vec![("CODEX_HOME", absent_codex.to_str().unwrap())];
+
+    let detail_for = |out: &Output, name: &str| -> (String, String) {
+        let checks: Vec<serde_json::Value> = serde_json::from_str(&stdout(out)).unwrap();
+        let row = checks
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("no `{name}` check: {}", stdout(out)));
+        (
+            row["detail"].as_str().unwrap_or_default().to_string(),
+            row["action"].as_str().unwrap_or_default().to_string(),
+        )
+    };
+
+    let repaired = run_env(&base, &["doctor", "--json"], &env);
+    let audited = run_env(&base, &["doctor", "--json", "--no-repair"], &env);
+
+    for name in ["codex-hooks", "opencode-assets"] {
+        let (repaired_detail, _) = detail_for(&repaired, name);
+        let (audited_detail, audited_action) = detail_for(&audited, name);
+        assert_eq!(
+            audited_detail, repaired_detail,
+            "{name}: --no-repair misdiagnosed a missing tool home"
+        );
+        assert!(
+            !audited_action.contains("--no-repair"),
+            "{name}: told the operator to re-run without --no-repair, which cannot help \
+             when the tool is not installed: {audited_action}"
+        );
+        assert!(
+            !audited_action.contains("tampered"),
+            "{name}: accused a machine of tampering with assets it never had: {audited_action}"
+        );
+    }
+}

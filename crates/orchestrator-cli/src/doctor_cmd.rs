@@ -624,11 +624,21 @@ fn check_hook_assets(cx: &Cx, cfg: &RootConfig, args: DoctorArgs, checks: &mut V
             .map(|i| format!("{}: {}", i.path.display(), i.problem))
             .collect::<Vec<_>>()
             .join("; ");
-        checks.push(Check::fail(
-            "hooks",
-            format!("hook assets are inconsistent after a repair attempt: {detail}"),
-            "a persistent mismatch on a writable dir means the asset is being tampered with (N-02) → investigate",
-        ));
+        // Tampering is only a fair reading when a repair *was* attempted and
+        // did not stick. Under `--no-repair` a mismatch usually means the
+        // assets were simply never installed.
+        let (detail, action) = if args.no_repair {
+            (
+                format!("hook assets do not match the expected content: {detail}"),
+                "run `totsuka doctor` without --no-repair (or `totsuka run`) to write them",
+            )
+        } else {
+            (
+                format!("hook assets are inconsistent after a repair attempt: {detail}"),
+                "a persistent mismatch on a writable dir means the asset is being tampered with (N-02) → investigate",
+            )
+        };
+        checks.push(Check::fail("hooks", detail, action));
     }
 }
 
@@ -668,7 +678,15 @@ fn check_codex_hooks(
     // below are reads and still run; without the sync they report the real
     // state of `hooks.json` instead of the state doctor just imposed on it.
     if args.no_repair {
-        if home.is_none() {
+        // `SyncOutcome::NoCodexHome` means "no *existing* codex home", but
+        // `codex_home()` happily returns `$HOME/.codex` whether or not it is
+        // there. Testing only `is_none()` would let an uninstalled codex fall
+        // through to `verify_registration`, which reports every entry missing
+        // and tells the operator to re-run without `--no-repair` — advice that
+        // cannot work, because the repairing path returns `NoCodexHome` and
+        // never creates the file. Audit mode is exactly where the tool is
+        // likeliest to be absent, so the two conditions have to agree.
+        if home.as_deref().is_none_or(|h| !h.is_dir()) {
             checks.push(Check::fail(
                 "codex-hooks",
                 "the config references a codex-kind tool but no codex home was found",
@@ -770,7 +788,10 @@ fn check_opencode_assets(
     // Same shape as the codex sync, and suppressed for the same reason: it
     // writes into a directory totsuka does not own.
     if args.no_repair {
-        if dir.is_none() {
+        // Same trap as the codex guard: `SyncOutcome::NoConfigDir` tests for an
+        // *existing* directory, so `is_none()` alone would accuse a machine
+        // without opencode of tampering with assets it never had.
+        if dir.as_deref().is_none_or(|d| !d.is_dir()) {
             checks.push(Check::fail(
                 "opencode-assets",
                 "the config references an opencode-kind tool but no opencode config dir was found",
@@ -823,11 +844,18 @@ fn check_opencode_assets(
             .map(|i| format!("{}: {}", i.path.display(), i.problem))
             .collect::<Vec<_>>()
             .join("; ");
-        checks.push(Check::fail(
-            "opencode-assets",
-            format!("assets are inconsistent after a sync attempt: {detail}"),
-            "a persistent mismatch on a writable dir means the asset is being tampered with (N-02) → investigate",
-        ));
+        let (detail, action) = if args.no_repair {
+            (
+                format!("assets do not match the expected content: {detail}"),
+                "run `totsuka doctor` without --no-repair (or `totsuka run`) to install them",
+            )
+        } else {
+            (
+                format!("assets are inconsistent after a sync attempt: {detail}"),
+                "a persistent mismatch on a writable dir means the asset is being tampered with (N-02) → investigate",
+            )
+        };
+        checks.push(Check::fail("opencode-assets", detail, action));
     }
 }
 
@@ -1572,7 +1600,11 @@ fn check_orphans(
         checks.push(Check::fail(
             "worktrees",
             format!("orphan worktrees: {listing}"),
-            "run `totsuka doctor` in a terminal to clean them up interactively",
+            if args.no_repair {
+                "re-run `totsuka doctor` without --no-repair to clean them up interactively"
+            } else {
+                "run `totsuka doctor` in a terminal to clean them up interactively"
+            },
         ));
     }
     Ok(())
@@ -1841,7 +1873,11 @@ fn check_orphan_panes(
         checks.push(Check::fail(
             "panes",
             format!("orphan panes: {listing}"),
-            "run `totsuka doctor` in a terminal to release them interactively",
+            if args.no_repair {
+                "re-run `totsuka doctor` without --no-repair to release them interactively"
+            } else {
+                "run `totsuka doctor` in a terminal to release them interactively"
+            },
         ));
     }
     Ok(())
