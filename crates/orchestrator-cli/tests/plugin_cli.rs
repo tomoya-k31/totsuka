@@ -454,7 +454,7 @@ fn bundled_discovery_follows_the_symlink_to_the_real_tree() {
     fs::create_dir_all(&tree).unwrap();
     fake_bundle(&tree, &["github"]);
     let real_bin = tree.join("totsuka");
-    fs::copy(env!("CARGO_BIN_EXE_totsuka"), &real_bin).unwrap();
+    test_support::place_binary(Path::new(env!("CARGO_BIN_EXE_totsuka")), &real_bin);
 
     let bin_dir = env.root.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();

@@ -5,6 +5,7 @@
 //! bare-origin bootstrap live in one place.
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
@@ -146,6 +147,54 @@ pub fn read_ndjson_log(path: &Path) -> Vec<serde_json::Value> {
             Err(e) => panic!("malformed log line {} ({e}): {line}", i + 1),
         })
         .collect()
+}
+
+/// Place a runnable copy of an executable at `dest`, without the `ETXTBSY` race.
+///
+/// Tests that stage a binary somewhere and then run it must not use `fs::copy`.
+/// The hazard is not the test's own write — `copy` closes its descriptor before
+/// returning — but the **other tests running concurrently in the same
+/// process**: `Command::spawn` forks, and a fork that lands while `copy`'s
+/// write descriptor is open inherits it. `O_CLOEXEC` only closes that
+/// descriptor at the child's own `execve`, so until then the staged file still
+/// has a writer and Linux refuses to execute it (`ExecutableFileBusy`).
+///
+/// A hard link never opens the destination for writing, so the window does not
+/// exist. It requires `dest` on the same filesystem as `src`; when it is not,
+/// this falls back to copying and waits for the inherited descriptor to close.
+/// Exhausting that wait **panics** rather than returning — leaving an
+/// unrunnable binary in place would resurface as a spawn failure much later,
+/// which is the confusing symptom this exists to remove.
+pub fn place_binary(src: &Path, dest: &Path) {
+    let link_err = match fs::hard_link(src, dest) {
+        Ok(()) => return,
+        // Any failure is worth falling back on — cross-device is merely the
+        // expected one — but it is kept for the panic messages below so a
+        // surprising cause (permissions, a full disk) is not swallowed.
+        Err(e) => e,
+    };
+    fs::copy(src, dest).unwrap_or_else(|e| {
+        panic!(
+            "cannot place {}: hard link failed ({link_err}), copy failed ({e})",
+            dest.display()
+        )
+    });
+
+    // `ETXTBSY` is 26 on both Linux and macOS.
+    const ETXTBSY: i32 = 26;
+    for _ in 0..50 {
+        match Command::new(dest).arg("--version").output() {
+            Err(e) if e.raw_os_error() == Some(ETXTBSY) => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            _ => return,
+        }
+    }
+    panic!(
+        "{} stayed ETXTBSY for 1s — a concurrent test is holding a write descriptor to it \
+         (hard link was unavailable: {link_err})",
+        dest.display()
+    );
 }
 
 /// Locate a **sibling** workspace binary — one that is not a bin target of the

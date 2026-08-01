@@ -4,7 +4,7 @@ title: テスト戦略（自動結合テスト / E2E / モックプラグイン�
 description: totsuka のテスト層（ユニット・実プロセス結合・バイナリE2E）とモックプラグインによるシナリオ注入、フレーク対策、CI 品質ゲートの定義。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates
 tags: [testing, e2e, integration, mock, ci, quality, slack]
-generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-01T10:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -61,6 +61,7 @@ owner: tomoya-k31
 - 実プロセステストは実 git の bare origin をローカル tempdir に作り、外部ネットワークに依存しない。
 - LLM 呼び出しは、単一リポジトリ経路（LLM 不要）と `MockRouter`（ユニット）でスタブ化。HTTP レベルの VCR 再生は将来対応（[Known Issue](/quality/known-issues.md) 参照）。
 - git のコミット署名はテストヘルパで無効化（ローカル署名エージェントによるブロック回避）。
+- **テスト用にバイナリを配置するときは `fs::copy` ではなくハードリンク**（`test_support::place_binary`。CLI の E2E 4 ファイルすべてがこれを使う）。Linux で `ETXTBSY`（`ExecutableFileBusy`）を踏む。原因は自分の書き込みではなく**同一プロセス内で並行する他のテスト**で、`Command::spawn` の fork が `copy` の書き込み fd を継承したまま残ると、その間 `execve` が拒否される。ハードリンクは書き込み用に開かないのでこの窓が存在しない。同一ファイルシステムでないときだけ copy にフォールバックし、有限回リトライしたうえで**尽きたら panic する** — 実行できないバイナリを置いたまま返すと、数行あとの spawn 失敗という分かりにくい形で出るため。
 
 # CI 品質ゲート
 
