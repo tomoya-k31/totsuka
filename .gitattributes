@@ -6,11 +6,11 @@
 # description を frontmatter から転記し直す）へ寄せる。
 docs/**/index.md merge=union
 
-# log.md は docs/log.d/ の断片から生成されるので、3-way マージする意味がない。
-# 再生成するのが唯一の正しい解決。ドライバは checked-in できない（git の仕様）ので
-# clone ごとに 1 度だけ `bash scripts/okf-setup-merge-drivers.sh` を実行する。
+# docs/log.md には union もカスタム merge ドライバも指定しない。
+# 理由は /decisions/adr-0031-docs-ledger-conflicts.md の「マージドライバ」節:
+# git はマージ中、全パスの内容マージを終えてから worktree / index を更新するため、
+# ドライバからは相手側の docs/log.d/ 断片が**どちらにも見えず**、再生成しても
+# 相手のエントリが丸ごと欠けた log.md をコンフリクトなしで作ってしまう（実測）。
 #
-# **未設定でも安全**: 定義されていない merge ドライバ名を書いた場合、git は警告して
-# 通常の 3-way マージへフォールバックする＝従来どおりコンフリクトが出るだけで、
-# 黙って壊れた log.md にはならない。設定は「衝突を 0 にする」ための上乗せである。
-docs/log.md merge=okf-log
+# 衝突したときの解決は 1 手で決定的:
+#   bash scripts/okf-log-build.sh && git add docs/log.md

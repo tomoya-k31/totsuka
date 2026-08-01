@@ -75,7 +75,7 @@ list_fragments() {
     README.md) continue ;;
     esac
     if [ ! -f "${f}" ] ||
-      ! printf '%s' "${b}" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0-9.-]*\.md$'; then
+      ! printf '%s' "${b}" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0-9-]*\.md$'; then
       echo "okf-log-build: 断片名が規約外: ${FRAGDIR}/${b}" >&2
       echo "  → YYYY-MM-DD-<slug>.md（slug は必須・英小文字/数字/ハイフン）" >&2
       bad=1
