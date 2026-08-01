@@ -6,6 +6,14 @@
 # description を frontmatter から転記し直す）へ寄せる。
 docs/**/index.md merge=union
 
+# ただしルートの docs/index.md は除く。これは concept ではなく**ディレクトリ一覧**を
+# 手書きの説明文で持つファイルで、`okf-index-build.sh` は `-mindepth 2` で意図的に
+# 対象外にしている。union の後始末をする主体が居ないため、union だけ掛けると
+# 同じ項目の 2 バージョンが無警告で main に残り、index-sync も見ない。
+# （`docs/**/index.md` は `**/` がゼロ階層にも一致するのでルートにも掛かる。
+#  後勝ちなのでこの行で打ち消す。実測: git check-attr merge -- docs/index.md）
+docs/index.md !merge
+
 # docs/log.md には union もカスタム merge ドライバも指定しない。
 # 理由は /decisions/adr-0031-docs-ledger-conflicts.md の「マージドライバ」節:
 # git はマージ中、全パスの内容マージを終えてから worktree / index を更新するため、

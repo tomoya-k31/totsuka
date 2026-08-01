@@ -17,7 +17,7 @@ tags: [meta, okf]
 
 ## 最低限のルール（3つだけ）
 
-1. `index.md` / `log.md` 以外の `.md` には、必ず YAML frontmatter と `type` を書く
+1. `index.md` / `log.md` / `log.d/` 配下 以外の `.md` には、必ず YAML frontmatter と `type` を書く（`log.d/` は log.md の材料で、frontmatter を書くと生成物に混ざる）
 2. ファイルを足したり消したりしたら、同じコミットで **`log.d/YYYY-MM-DD-<slug>.md` を新規作成**し、生成物を作り直す:
 
    ```bash

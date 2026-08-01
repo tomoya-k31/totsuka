@@ -670,7 +670,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 for pair in "log-sync:okf-log-build.sh" "index-sync:okf-index-build.sh"; do
   check="${pair%%:*}"
   builder="${SCRIPT_DIR}/${pair#*:}"
-  [ -f "$builder" ] || continue
+  # ビルダーが無いのは「検査しなくてよい」ではなく「検査できない」。スキップすると
+  # 生成物への唯一の番人が消えたまま lint が緑を返す（＝ビルダーを消す/改名する
+  # PR が素通りする）ので、エラーにする。
+  if [ ! -f "$builder" ]; then
+    error "$check" "${BUNDLE}" "ビルダーが無いので検査できない: ${builder}"
+    continue
+  fi
   if ! bash "$builder" "$BUNDLE" --check; then
     error "$check" "${BUNDLE}" "生成物が材料と同期していない（上の差分を参照）"
   fi

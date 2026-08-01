@@ -16,9 +16,11 @@
 #     - 中身は `* **Creation**: …` のようなエントリ本体のみ（複数エントリ可）
 #
 # 並び順:
-#   日付は降順（`docs/CLAUDE.md` の「新しい日付が上」）。同日内はファイル名の昇順で、
-#   これは同じく `docs/CLAUDE.md` の「同日ならエントリを追記する」に一致する
-#   （断片には作成時刻が残らないので、決定的な鍵はファイル名しかない）。
+#   日付は降順（`docs/CLAUDE.md` の「新しい日付が上」）。
+#   **同日内はファイル名（= slug）の昇順であって、時刻順ではない。** 断片には
+#   作成時刻が残らないので決定的な鍵はファイル名しかなく、slug は任意の語なので
+#   後から足したエントリが先のエントリより上に出ることがある（`abc-…` は
+#   `zzz-…` より前）。同日内の並びに意味を持たせないこと。
 #
 # 使い方:
 #   scripts/okf-log-build.sh [bundleDir=docs]           # docs/log.md を書き出す
@@ -81,6 +83,21 @@ list_fragments() {
       bad=1
       continue
     fi
+    # 中身も検査する。断片は lint の frontmatter 走査から prune されており、
+    # log-sync は「生成物と材料が一致するか」しか見ないので、ここで弾かないと
+    # 規約違反がそのまま log.md へ流れて**全チェックが緑のまま**出荷される。
+    if head -n 1 "${f}" | grep -q '^---[[:space:]]*$'; then
+      echo "okf-log-build: 断片に frontmatter がある: ${FRAGDIR}/${b}" >&2
+      echo "  → 断片は concept ではない。エントリ本体（\`* **Update**: …\`）だけを書く" >&2
+      bad=1
+      continue
+    fi
+    if grep -q '^## ' "${f}"; then
+      echo "okf-log-build: 断片に \`## \` 見出しがある: ${FRAGDIR}/${b}" >&2
+      echo "  → 日付見出しはファイル名から生成側が出す。断片には書かない" >&2
+      bad=1
+      continue
+    fi
     names="${names}${b}
 "
   done
@@ -91,8 +108,18 @@ list_fragments() {
 build() {
   frags="$(list_fragments)" || return 1
 
+  # 断片ゼロで生成すると log.md が見出し 1 行に切り詰まる。log.md は移行後
+  # **唯一の履歴の置き場ではない**（材料は log.d/）ものの、切り詰めたものを
+  # コミットすれば履歴は消える。しかも log-sync は「断片と一致」で緑になるので
+  # 気づけない。断片が無いのは正常な状態ではないので、書かずに止める。
+  if [ -z "${frags}" ]; then
+    echo "okf-log-build: 断片が 1 つも無い: ${FRAGDIR}/" >&2
+    echo "  → log.md を空で上書きしないため中止する。worktree が壊れていないか確認する" >&2
+    echo "    (sparse checkout / stash / 別ディレクトリでの実行が典型)" >&2
+    return 1
+  fi
+
   printf '# Bundle Update Log\n'
-  [ -n "${frags}" ] || return 0
 
   dates="$(printf '%s\n' "${frags}" | cut -c1-10 | LC_ALL=C sort -ru)"
   printf '%s\n' "${dates}" | while IFS= read -r d; do
