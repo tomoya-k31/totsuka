@@ -11,6 +11,13 @@
 #   [E] index-listed: 各 concept / サブディレクトリが index.md からリンクされている
 #   [E] index-desc  : index.md の転記が concept の description と一致する
 #   [E] log-format  : log.md の日付見出しが `## YYYY-MM-DD` 形式
+#   [E] log-sync    : log.md が log.d/ の断片と一致する（断片名の規約違反もここ）
+#   [E] index-sync  : 各 index.md のマーカー区間が concept と一致する
+#
+# log-sync / index-sync の判定は scripts/okf-log-build.sh / okf-index-build.sh の
+# --check へ**委譲**する（#360）。ここに書き写すと同じ規約が 2 箇所に生まれ、
+# 「lint は通るのに生成すると差分が出る」が必ずいつか起きる。ビルダーが正本。
+# log.d/ 自体は走査対象外 — frontmatter も index 掲載も要らない材料置き場である。
 #
 # v0.2 のファミリ（§5 / §10）に対するチェック:
 #   [E] status      : `status` が draft | stable | deprecated のいずれか (§5.4)
