@@ -333,7 +333,8 @@ AWK
 
 is_reserved() { case "$1" in index.md | log.md) return 0 ;; *) return 1 ;; esac }
 
-find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -type f -name '*.md' -print |
+# log.d/ は log.md の材料置き場（#360）。frontmatter を持たないので検索対象外。
+find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -name log.d -prune -o -type f -name '*.md' -print |
   while IFS= read -r file; do
     base="$(basename "$file")"
     is_reserved "$base" && continue

@@ -43,6 +43,11 @@ disable = [
 # エージェントへ渡すプロンプト本体（frontmatter + 地の文）。上と同じ理由。
 "crates/orchestrator-core/src/hooks/*.md" = ["MD041"]
 
+# docs/log.d/ は docs/log.md の**材料**（#360）。1 ファイル = ログエントリ本体で、
+# 見出しを持たないのが仕様である（`## YYYY-MM-DD` は生成側 okf-log-build.sh が出す）。
+# 断片に H1 を足すと生成結果に紛れ込むので MD041 は除外する。
+"docs/log.d/*.md" = ["MD041"]
+
 # README は 1 行目が言語スイッチャ（`> 🌐 **English** · [日本語](README.ja.md)`）で
 # 始まる規約（.claude/rules/documentation-i18n.md）。H1 はその次の行に置く。
 "README.md" = ["MD041"]

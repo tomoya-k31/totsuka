@@ -26,11 +26,25 @@ description: docs/ 配下（OKF Knowledge Bundle）へのドキュメント作�
    - 出典があれば本文ではなく frontmatter の `sources` に書く（`# Citations` は v0.2 で廃止）
    - 実機で確認が取れた事実があれば `verified: { by: human:<id>, at: ... }` を足す
    - 他 concept への言及はバンドルルート相対リンク `[title](/dir/file.md)` にする
-5. **index.md を更新**: 新規作成・改名・削除をした場合、同ディレクトリの `index.md` に
-   `* [Title](file.md) - description転記` 形式で追記/修正する
-6. **log.md を更新**: `docs/log.md` の先頭（今日の `## YYYY-MM-DD` 見出し。無ければ作る）に
-   `* **Creation|Update|Deprecation**: 説明と [リンク](/dir/file.md)` を追記する
+5. **ログ断片を書く**: `docs/log.d/YYYY-MM-DD-<slug>.md` を**新規作成**し、
+   `* **Creation|Update|Deprecation**: 説明と [リンク](/dir/file.md)` を書く。
+   - `docs/log.md` は生成物なので**直接編集しない**（全 PR が同じ行に書き込む構造をやめ、
+     並行 PR の決定論的コンフリクトを消すため。[ADR-0031](/decisions/adr-0031-docs-ledger-conflicts.md)）
+   - `<slug>` は**必須**で、同日の別 PR とファイル名が衝突しないよう
+     issue 番号や題材などその変更に固有の語にする（`356-pane-layout` 等）
+   - 断片に `## YYYY-MM-DD` 見出しは書かない（日付はファイル名から取られる）
+6. **生成物を作り直す**: 新規作成・改名・削除をした場合は index も併せて正規化する。
+   `index.md` の一覧行と `log.md` は**手で書かない**:
+
+   ```bash
+   bash scripts/okf-log-build.sh    # docs/log.md を断片から生成
+   bash scripts/okf-index-build.sh  # 各 index.md のマーカー区間を正規化
+   ```
+
+   並び順と表示タイトルは `index.md` 側の既存の値が保存されるので、
+   新しい concept を望みの位置に置きたいときは生成後に行を移動してよい。
 7. **lint を実行**: `bash scripts/okf-lint.sh docs` を実行し、エラーがゼロになるまで修正する
+   （`log-sync` / `index-sync` が落ちたら手順 6 を実行し忘れている）
 
 ## コード変更時のドキュメント要否判定
 
@@ -49,6 +63,10 @@ description: docs/ 配下（OKF Knowledge Bundle）へのドキュメント作�
 ## 禁止事項
 
 - `index.md` / `log.md` という名前で concept を作らない（予約ファイル名）
+- **`docs/log.md` を直接編集しない**（生成物。書くのは `docs/log.d/` の断片）
+- **`index.md` のマーカー区間を手で書かない**（`* [Title](file.md) - …` の行は
+  `okf-index-build.sh` の管轄。前後の散文とサブディレクトリ行は手で書いてよい）
+- `docs/log.d/` を concept 置き場にしない（frontmatter も index 掲載も無い材料ディレクトリ）
 - ルート以外の `index.md` に frontmatter を書かない
 - 廃止された concept を削除しない（`status: deprecated` にして後継へリンク）
 - `docs/` 全体を無差別に読み込まない（index.md からの progressive disclosure で辿る）

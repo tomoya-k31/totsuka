@@ -2,6 +2,10 @@
 
 ドメイン用語・社内略語。1用語=1ファイル。
 
+<!-- concept を追加・改名・削除したら `bash scripts/okf-index-build.sh` を実行する。
+     description は frontmatter から転記される（手で書かない）。
+     並び順と表示タイトルは手で決めてよい — スクリプトはそれを保存する。 -->
+<!-- okf:index:begin -->
 * [Task（タスク）](task.md) - タスクソース由来の作業単位。共通スキーマ（plugin-protocol の Task 型）に正規化され、状態DBの1行として9状態のステートマシン（F-71）を遷移する。
 * [Task Source（タスクソース）](task-source.md) - タスクの供給元（GitHub / Notion 等）。task_source プラグインが task/submit（push）・task/update_status・result/publish を実装して接続する。
 * [Agent IDE（エージェントIDE）](agent-ide.md) - コーディングエージェントを動かす実行環境（herdr / orca 等）。agent_ide プラグインが task/dispatch・session/attach・state/subscribe を実装して接続する。
@@ -14,7 +18,4 @@
 * [AI Tool（AI ツール）と 2 軸モデル](ai-tool.md) - pane 内で起動する AI エージェント CLI（Claude Code / Codex / OpenCode）。pane を管理する agent プラグイン（herdr 等）とは直交する軸で、[tools] レジストリと tool フィールド（workflow > repo > default_tool > 組み込み claude）で選択される。
 * [pane（ペイン）](pane.md) - エージェント CLI が実際に動くターミナル区画（herdr の pane）。dispatch 時に worktree を cwd、label を totsuka + source task id として作られ、pane_control capability 越しの session/focus・session/release・session/list で制御され、寿命は worktree の掃除ポリシーに連動する。
 * [click-to-focus（クリックで pane を開く）](click-to-focus.md) - 通知をクリックすると、その通知を出したタスクの herdr pane が前面に来る機能（F-94）。terminal-notifier の -activate（GUI 前面化）+ -execute（totsuka focus → 制御 UDS /focus → agent_ide の session/focus 委譲）の 2 段で実現し、縮退はすべて静か。
-
-<!-- concept を追加したら、ここに 1 行追加する:
-* [Title](file.md) - frontmatter の description を転記
--->
+<!-- okf:index:end -->

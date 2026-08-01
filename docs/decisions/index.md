@@ -2,6 +2,10 @@
 
 アーキテクチャ上の意思決定記録。1決定=1ファイル、`adr-NNNN-<slug>.md` 形式。
 
+<!-- concept を追加・改名・削除したら `bash scripts/okf-index-build.sh` を実行する。
+     description は frontmatter から転記される（手で書かない）。
+     並び順と表示タイトルは手で決めてよい — スクリプトはそれを保存する。 -->
+<!-- okf:index:begin -->
 * [ADR-0001 OKFによるドキュメント管理の採用](adr-0001-adopt-okf.md) - リポジトリ内ドキュメントをOKF準拠のKnowledge Bundleとして管理する決定。採用時点の準拠バージョンはv0.1で、v0.2への追従はADR-0022で決めた。
 * [ADR-0002 Rust workspace 構成と CI 品質ゲート](adr-0002-rust-workspace-ci.md) - totsuka を Rust edition 2024 のヘキサゴナル workspace（core/cli/plugin-protocol）として構成し、clippy deny warnings・rustfmt・cargo-audit/deny・llvm-cov を CI 品質ゲートに据える決定。
 * [ADR-0003 Slack メンション代理返信アシスタントの設計](adr-0003-slack-reply-assistant.md) - task-source-slack をコア無変更のプラグイン内完結で実装する決定。リポジトリ解決はプラグイン内 3 段階、イベントはバッファ + 短周期 tasks/fetch、トークンはユーザートークン（xoxp）のみで本人名義返信 + 承認フロー必須。
@@ -32,3 +36,5 @@
 * [ADR-0028 totsuka setup は対話ウィザードにし、機密は一切扱わない](adr-0028-setup-wizard.md) - init が全行コメントの雛形しか書かず config を手書きするしかなかった問題に対し、対話ウィザード totsuka setup を追加する決定。init は非対話・CI 用として残す。既存の設定ファイルは上書きせずスキップし、全行コメントの雛形だけを未設定として扱う。setup は機密の値を一切扱わず参照だけを書いて登録コマンドを印字する。宣言ファイル駆動・SecretWriter ポート・setup --repair・doctor --fix は不採用。
 * [ADR-0029 main スコープの rust-cache を push 時に再生し、キャッシュ鍵に workspace root の Cargo.toml を含める](adr-0029-ci-cache-lifecycle.md) - ADR-0007 で clippy/test を pull_request 限定にした結果 main スコープの rust-cache を書く主体が消え、全 PR の初回 run が依存 215 中 186 クレートを再ビルドしていた問題に対し、main への push で専用の warm ジョブがキャッシュを再生する決定。あわせて virtual manifest ゆえ鍵に入らなかった workspace root の Cargo.toml を明示的に鍵へ加え、coverage にも TEST_SUPPORT_PREBUILT_BINS を立てる。リンカ差し替え・単一 shared-key の共有・テストバイナリ統合は不採用とする。
 * [ADR-0030 dispatch の pane レイアウトは herdr.toml の [layout] 3 ノブで決める](adr-0030-herdr-pane-layout.md) - dispatch が pane 配置を一切指定せず herdr の既定（右分割 0.5）が漏れていた問題に対し、plugins/herdr.toml へ [layout]（shell / direction / ratio）を追加し、agent.start の後に初期シェル pane を close してから agent pane を split する決定。既定を down / 0.8 へ変え、失敗は警告して続行する。プリセット名・workflow 別スコープ・ratio の範囲検査は不採用。副次効果として人間が叩くシェルから TOTSUKA_HOOK_TOKEN が消える。
+* [ADR-0031 docs の元帳（log.md / index.md）は生成物にして並行 PR の衝突源を構造的に消す](adr-0031-docs-ledger-conflicts.md) - log.md が「全 PR が同じ 1 行に書き込む」構造で並行 PR を決定論的にコンフリクトさせていた問題に対し、log.d/ の断片ファイルから生成する形へ変え、index.md の一覧も okf-index-build.sh で正規化し merge=union を宣言する決定。log.md 用のカスタム merge ドライバは、git がマージ中に相手側の断片を worktree にも index にも展開していないことを実測で確認したため不採用。
+<!-- okf:index:end -->

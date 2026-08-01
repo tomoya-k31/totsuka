@@ -113,6 +113,19 @@ post-PR you still monitor all checks that report on your PR.
 - Docs obligation: if a trigger applies (design decision / new component /
   API·schema·infra change / release), update the relevant `docs/` concept plus
   its `index.md` / `log.md` in the **same** PR (→ CLAUDE.md, docs/CLAUDE.md).
+- **`docs/log.md` and the `index.md` concept lists are generated** (#360,
+  [ADR-0031](../../docs/decisions/adr-0031-docs-ledger-conflicts.md)). Write a
+  **new** fragment `docs/log.d/YYYY-MM-DD-<slug>.md` instead of editing
+  `log.md`, then regenerate. `okf-lint`'s `log-sync` / `index-sync` fail if you
+  forget:
+
+  ```bash
+  bash scripts/okf-log-build.sh    # docs/log.md
+  bash scripts/okf-index-build.sh  # index.md のマーカー区間
+  ```
+
+  Pick a `<slug>` unique to your change (issue number, topic) — that filename is
+  the entire mechanism that keeps two same-day PRs from colliding.
 
 **Always** (any PR, regardless of what changed):
 
@@ -338,6 +351,17 @@ git add <resolved files>
 GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
 ```
 
+- **`docs/log.md` conflicts have a fixed, judgment-free resolution** — never
+  hand-merge the markers, regenerate from the fragments (both sides' fragments
+  are new files, so they always merge cleanly on their own):
+
+  ```bash
+  bash scripts/okf-log-build.sh && git add docs/log.md
+  ```
+
+  `docs/**/index.md` is `merge=union` (`.gitattributes`), so it does not
+  conflict at all; run `bash scripts/okf-index-build.sh` afterwards to collapse
+  any duplicate the union kept.
 - After the rebase completes, re-run the **scoped local checks** for the union
   of the branch's diff and the conflicted files (Rust set if Rust files are
   involved — the branch's code has never been built against the new `main`),

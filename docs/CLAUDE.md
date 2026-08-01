@@ -257,23 +257,46 @@ lint は書式だけ受け付ける状態にしてあるので、必要になっ
 
 # index.md のルール
 
+**concept 一覧は手で書かない。** `<!-- okf:index:begin -->` 〜 `<!-- okf:index:end -->`
+に挟まれた範囲は `bash scripts/okf-index-build.sh` が正規化する（[ADR-0031](/decisions/adr-0031-docs-ledger-conflicts.md)）。
+
+- concept ファイルを追加・改名・削除したら **`bash scripts/okf-index-build.sh` を実行する**。
+  未掲載の追記・消えた行の削除・`description` の転記し直し・重複行の畳み込みを全部やる
+- **並び順と表示タイトルは手で決めてよい** — スクリプトはそれを保存する。並びは curate
+  されていてファイル名順ではない（`components/` はレイヤ順、`glossary/` は概念の導入順、
+  `product/` は英語 canonical が先）。タイトルも frontmatter と意図的に違うものがある
+  （`orchestrator-core` ⇄ `orchestrator-core クレート`）
 - **すべてのディレクトリ**に `index.md` を置く（progressive disclosure の要）
-- concept ファイルまたはサブディレクトリを追加・改名・削除したら、**同じコミットで**そのディレクトリの `index.md` を更新する
 - エントリ形式: `* [Title](file.md) - frontmatter の description をそのまま転記`
-  - **全文をそのまま**転記する（要約・省略・追記をしない）。lint の `index-desc` が
-    frontmatter との一致を検査するので、description を書き換えたら index も同じコミットで直す
-  - description を引用符で囲んでいる場合、index には**引用符を外した中身**を転記する
-- ルート `/index.md` のみ frontmatter（`okf_version: "0.2"` 宣言）を持つ。他の index.md に frontmatter を書かない
+  （**全文をそのまま**。引用符で囲んでいる場合は引用符を外した中身。ビルダーがこれを守る）
+- サブディレクトリへのリンクと前後の散文はマーカーの**外**に置く。ビルダーは触らない
+- ルート `/index.md` のみ frontmatter（`okf_version: "0.2"` 宣言）を持ち、
+  ディレクトリ一覧を手書きの説明文で持つため**生成対象外**。他の index.md に frontmatter を書かない
 - `README.md` / `CLAUDE.md` は index への掲載対象外（linter も除外している）
 
 # log.md のルール
 
-- `log.md` はルート（`/log.md`）にのみ置く。ディレクトリ単位の log は作らない
-- 以下の場合に追記する（新しい日付が上）:
+**`log.md` は生成物である。直接編集しない。** 書くのは `log.d/` の断片ファイルで、
+`log.md` は `bash scripts/okf-log-build.sh` が組み立てる（[ADR-0031](/decisions/adr-0031-docs-ledger-conflicts.md)）。
+「全 PR が同じ 1 行に書き込む」構造をやめ、並行 PR の決定論的なコンフリクトを消すため。
+
+- 追記するときは **`/log.d/YYYY-MM-DD-<slug>.md` を新規作成**し、`bash scripts/okf-log-build.sh` を実行する
+  - `<slug>` は**必須**（英小文字・数字・ハイフン）。同日に複数の PR が書いてもファイル名が
+    衝突しないための唯一の仕掛けなので、issue 番号や題材など**その変更に固有の語**にする
+  - 断片には `## YYYY-MM-DD` 見出しを**書かない**（日付はファイル名から取り、見出しは生成側が出す）
+  - 中身はエントリ本体（`* **Creation**: …`）のみ。複数エントリを 1 ファイルに入れてよい
+- 以下の場合に書く:
   - concept の新規作成・廃止（`**Creation**` / `**Deprecation**`）
   - 既存 concept の意味的な更新（`**Update**`。typo 修正は不要）
-- 日付見出しは `## YYYY-MM-DD` 固定。同日ならエントリを追記する
 - エントリには対象 concept へのバンドルルート相対リンクを含める
+- 並び順: **日付は降順**（新しい日付が上）。**同日内は断片ファイル名の昇順**＝追記順
+  （断片には作成時刻が残らないので、決定的な鍵はファイル名しかない）
+- `log.md` / `log.d/` はルート（`/`）にのみ置く。ディレクトリ単位の log は作らない
+- **コンフリクトしたときの解決は 1 手**（判断は要らない）:
+
+  ```bash
+  bash scripts/okf-log-build.sh && git add docs/log.md
+  ```
 
 # 検証（CI / hooks）
 
@@ -297,6 +320,17 @@ bash scripts/okf-lint.sh docs --strict # 加えてリンク切れもエラー化
 | `index-listed` | 各 concept / サブディレクトリが `index.md` から張られている |
 | `index-desc` | `index.md` の転記が frontmatter の `description` と一致する |
 | `log-format` | `log.md` の日付見出しが `## YYYY-MM-DD` |
+| `log-sync` | `log.md` が `log.d/` の断片と一致する（断片名の規約違反もここで落ちる）。実体は `scripts/okf-log-build.sh --check` |
+| `index-sync` | 各 `index.md` のマーカー区間が concept と一致する。実体は `scripts/okf-index-build.sh --check` |
+
+`log-sync` / `index-sync` の検査は**ビルダーへ委譲している**。lint 側に判定を書き写すと、
+同じ規約を 2 箇所で実装することになり「lint は通るのに生成すると差分が出る」が必ずいつか生まれる。
+どちらも直し方は同じで、ビルダーを実行するだけ:
+
+```bash
+bash scripts/okf-log-build.sh    # docs/log.md を作り直す
+bash scripts/okf-index-build.sh  # 各 index.md の一覧を正規化する
+```
 
 v0.2 ファミリのチェック:
 
