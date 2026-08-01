@@ -74,7 +74,13 @@ totsuka run             # execute: fetch -> dispatch -> monitor -> publish
 
 `setup` exits with code 3 until every secret it listed exists — that is
 `doctor` reporting real work left to do, not a failure of the setup itself.
-Re-run `totsuka doctor` after step 2; it should be green.
+
+**`doctor` stays red until after your first `totsuka run`**, even with every
+secret registered: the `state-db` check fails while the state database does not
+exist, and only `run` creates it. So the order above is the order that goes
+green — register the secrets, run once, then `totsuka doctor` exits 0. It may
+still print `warn:` lines (an unset hook token, no bundled plugins); those are
+advisory and do not fail it.
 
 Inspect progress with `totsuka status`, drill into a task with
 `totsuka task show <id>`, and follow logs with `totsuka logs -f`.

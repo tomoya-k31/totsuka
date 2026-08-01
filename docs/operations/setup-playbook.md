@@ -4,7 +4,7 @@ title: セットアップ Playbook（新マシン / 開発機 / ローテーシ�
 description: "ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup → シークレット登録 → doctor → run）、開発機（クローン → --from-source）、トークンローテーション、中断・失敗時の復旧を扱う。"
 resource: https://github.com/tomoya-k31/totsuka/issues/350
 tags: [setup, onboarding, runbook, playbook, secrets, doctor, rotation]
-generated: { by: claude-code/opus-5, at: 2026-08-01T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-01T09:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

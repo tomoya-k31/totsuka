@@ -74,8 +74,13 @@ totsuka run             # 実行: fetch -> dispatch -> 監視 -> publish
 
 印字されたシークレットが 1 つでも未登録のうち、`setup` は終了コード 3 で終わり
 ます。これは `doctor` が「まだ人間がやることが残っている」と報告しているので
-あって、setup 自体の失敗ではありません。手順 2 のあとに `totsuka doctor` を
-打ち直せば緑になります。
+あって、setup 自体の失敗ではありません。
+
+**シークレットを全部登録しても、`totsuka run` を一度打つまで `doctor` は赤の
+ままです。** 状態 DB が無いあいだ `state-db` チェックが fail し、これを作るのは
+`run` だけだからです。上の順番どおり「登録 → 1 回実行 → `totsuka doctor`」で
+終了コード 0 になります。`warn:` の行（hook トークン未設定、同梱プラグイン無し
+など）は残ることがありますが、これらは助言であって失敗ではありません。
 
 進捗は `totsuka status`、個別タスクは `totsuka task show <id>`、ログ追尾は
 `totsuka logs -f` で確認します。
