@@ -28,6 +28,9 @@ use agent_ide_herdr::server::{Server, TransportFactory};
 use agent_ide_herdr::transport::SocketTransport;
 
 const PANE: &str = "w1:p1";
+/// The shell pane herdr opens every workspace with (`workspace.create`'s
+/// `root_pane`). `dispatch` closes it as part of applying `[layout]` (#356).
+const ROOT_PANE: &str = "w1:p0";
 
 /// The fake agent CLI's observable state — the pane's screen and status.
 #[derive(Default)]
@@ -69,6 +72,15 @@ struct FakeHerdr {
     detection: &'static str,
     /// When set, `workspace.create` fails with an `id: ""` decode-style error.
     empty_id_error_on_create: bool,
+    /// When set, `workspace.create` answers without a `root_pane` (an older or
+    /// future herdr) — the layout step then has no pane id to close.
+    no_root_pane: bool,
+    /// When set, `pane.close` fails with this herdr error code (#356: the
+    /// initial shell survives, so no companion may be split in).
+    close_error: Option<&'static str>,
+    /// When set, `pane.split` fails with this herdr error code (#356: the
+    /// companion shell is lost, the dispatch is not).
+    split_error: Option<&'static str>,
     /// When set, every call the prompt submission makes fails with this herdr
     /// error code — a herdr that is down rather than momentarily busy.
     submission_error: Option<&'static str>,
@@ -92,6 +104,9 @@ impl Default for FakeHerdr {
             list_panes: Vec::new(),
             detection: "",
             empty_id_error_on_create: false,
+            no_root_pane: false,
+            close_error: None,
+            split_error: None,
             submission_error: None,
         }
     }
@@ -159,13 +174,18 @@ impl FakeHerdr {
                 )
                 .await;
             }
+            // herdr answers with the workspace *and* the shell pane it opened
+            // it with (`root_pane`) — the only handle to that pane, and what
+            // the layout step closes (#356).
             "workspace.create" => {
-                reply(
-                    &mut write_half,
-                    &id,
-                    json!({ "type": "workspace_created", "workspace": { "workspace_id": "w1" } }),
-                )
-                .await
+                let mut result =
+                    json!({ "type": "workspace_created", "workspace": { "workspace_id": "w1" } });
+                if !self.no_root_pane {
+                    result["root_pane"] = json!({
+                        "pane_id": ROOT_PANE, "workspace_id": "w1", "tab_id": "w1:t1",
+                    });
+                }
+                reply(&mut write_half, &id, result).await
             }
             "agent.start" => {
                 reply(
@@ -210,8 +230,27 @@ impl FakeHerdr {
                 }
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
+            "pane.close" if self.close_error.is_some() => {
+                let code = self.close_error.unwrap();
+                reply_error(&mut write_half, &id, code, "herdr refused the close").await
+            }
             "pane.close" | "workspace.close" => {
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
+            }
+
+            // The companion shell pane (#356). A failure here must cost the
+            // shell and nothing else.
+            "pane.split" if self.split_error.is_some() => {
+                let code = self.split_error.unwrap();
+                reply_error(&mut write_half, &id, code, "herdr refused the split").await
+            }
+            "pane.split" => {
+                reply(
+                    &mut write_half,
+                    &id,
+                    json!({ "type": "pane_info", "pane": { "pane_id": "w1:p2" } }),
+                )
+                .await
             }
 
             // The focus chain (`session/focus`, F-94). `pane_gone` fails every
@@ -431,12 +470,19 @@ impl Driver {
     }
 
     async fn init(&mut self, socket: &Path) -> Value {
+        self.init_with(socket, json!({})).await
+    }
+
+    /// `initialize` with extra `plugins/herdr.toml` keys merged in (`[layout]`,
+    /// #356). `extra` must be a JSON object.
+    async fn init_with(&mut self, socket: &Path, extra: Value) -> Value {
+        let mut config = json!({ "socket_path": socket.to_str().unwrap() });
+        for (key, value) in extra.as_object().expect("a config object") {
+            config[key] = value.clone();
+        }
         self.call(
             "initialize",
-            json!({
-                "protocol_version": "0.1.0",
-                "config": { "socket_path": socket.to_str().unwrap() }
-            }),
+            json!({ "protocol_version": "0.1.0", "config": config }),
         )
         .await
     }
@@ -518,6 +564,222 @@ async fn dispatch_types_and_submits_the_prompt_through_the_startup_race() {
         .map(|v| v.as_str().unwrap())
         .collect();
     assert_eq!(argv, vec!["claude", "--permission-mode", "plan"]);
+}
+
+/// Every request of `method`, in the order the fake herdr received them.
+fn calls(log: &[Value], method: &str) -> Vec<Value> {
+    log.iter()
+        .filter(|r| r["method"] == method)
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn dispatch_lays_the_workspace_out_with_the_default_layout() {
+    // #356: with no `[layout]` written, dispatch replaces herdr's own 50/50
+    // side-by-side default with the agent stacked above a small shell.
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+    assert!(disp["error"].is_null(), "dispatch failed: {disp}");
+
+    let log = requests.lock().unwrap();
+
+    // `agent.start` must NOT ask for a split: its `split` takes no ratio, so
+    // asking there would just re-impose a half-and-half arrangement.
+    let start = &calls(&log, "agent.start")[0];
+    assert!(
+        start["params"].get("split").is_none(),
+        "agent.start must not carry a split: {start}"
+    );
+
+    // The initial shell is closed — and it is the *initial* pane that is
+    // closed, not the agent's. Asserting on the pane id is the point: a bare
+    // "a pane.close happened" would also pass if dispatch closed the agent.
+    let closes = calls(&log, "pane.close");
+    assert_eq!(closes.len(), 1, "exactly one close: {closes:?}");
+    assert_eq!(closes[0]["params"]["pane_id"], ROOT_PANE);
+
+    let splits = calls(&log, "pane.split");
+    assert_eq!(splits.len(), 1, "one companion shell: {splits:?}");
+    let split = &splits[0]["params"];
+    assert_eq!(split["target_pane_id"], PANE, "split off the agent's pane");
+    assert_eq!(split["direction"], "down");
+    assert_eq!(split["ratio"], 0.8, "the ratio is the AGENT's share");
+    assert_eq!(
+        split["cwd"], "/wt/agent-1",
+        "the shell opens on the worktree"
+    );
+    assert_eq!(split["focus"], false, "focus stays with the agent");
+
+    // Close before split: a split that fails must land on "agent full-screen",
+    // a layout `shell = false` also produces — never on three panes.
+    let order: Vec<&str> = log
+        .iter()
+        .filter_map(|r| r["method"].as_str())
+        .filter(|m| matches!(*m, "agent.start" | "pane.close" | "pane.split"))
+        .collect();
+    assert_eq!(order, vec!["agent.start", "pane.close", "pane.split"]);
+}
+
+#[tokio::test]
+async fn the_companion_shell_never_receives_the_hook_env() {
+    // The security half of #356. herdr's initial pane inherits the workspace's
+    // env — which for a hook dispatch carries TOTSUKA_HOOK_TOKEN — so that
+    // pane is closed, and the shell that replaces it is made by `pane.split`,
+    // which inherits nothing. Passing `env` here would put a bearer token back
+    // into a pane a human types into.
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .call(
+            "task/dispatch",
+            json!({
+                "task": { "id": "T1", "source": "slack", "title": "t",
+                          "body": "multi-line\n\nbody" },
+                "worktree_path": "/wt/agent-1",
+                "mode": "implement",
+                "hook": {
+                    "settings_path": "/hooks/orchestrator-implement.json",
+                    "env": { "TOTSUKA_HOOK_TOKEN": "secret-token", "TOTSUKA_JOB_ID": "job-1" },
+                },
+            }),
+        )
+        .await;
+    assert!(disp["error"].is_null(), "dispatch failed: {disp}");
+
+    let log = requests.lock().unwrap();
+    // The agent still gets it — that is the channel completion is reported on.
+    let start = &calls(&log, "agent.start")[0];
+    assert_eq!(start["params"]["env"]["TOTSUKA_HOOK_TOKEN"], "secret-token");
+
+    let split = &calls(&log, "pane.split")[0];
+    assert!(
+        split["params"].get("env").is_none(),
+        "the human's shell must carry no hook env: {split}"
+    );
+}
+
+#[tokio::test]
+async fn shell_false_gives_the_agent_the_whole_workspace() {
+    // The initial pane is still closed — that is what makes the agent
+    // full-screen — but nothing is split back in.
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init_with(&socket, json!({ "layout": { "shell": false } }))
+        .await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+    assert!(disp["error"].is_null(), "dispatch failed: {disp}");
+
+    let log = requests.lock().unwrap();
+    assert_eq!(calls(&log, "pane.close")[0]["params"]["pane_id"], ROOT_PANE);
+    assert!(
+        calls(&log, "pane.split").is_empty(),
+        "no companion shell was asked for: {log:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_configured_direction_and_ratio_reach_herdr_verbatim() {
+    // `right` is the other of herdr's two directions, and the ratio is passed
+    // through unvalidated — herdr owns what it means.
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init_with(
+        &socket,
+        json!({ "layout": { "direction": "right", "ratio": 0.65 } }),
+    )
+    .await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+    assert!(disp["error"].is_null(), "dispatch failed: {disp}");
+
+    let split = &calls(&requests.lock().unwrap(), "pane.split")[0]["params"];
+    assert_eq!(split["direction"], "right");
+    assert_eq!(split["ratio"], 0.65);
+}
+
+#[tokio::test]
+async fn a_failed_split_costs_the_shell_but_not_the_task() {
+    // The layout is decoration: a herdr that blips while drawing it must not
+    // lose a task that is otherwise ready to run. The intermediate state is a
+    // valid layout (agent full-screen), which is why close runs before split.
+    let (socket, requests) = FakeHerdr {
+        split_error: Some("internal_error"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(
+        disp["error"].is_null(),
+        "a failed split must not fail the dispatch: {disp}"
+    );
+    assert_eq!(disp["result"]["session_id"], "w1:p1|");
+    // And the prompt still went in — the layout runs before submission, so a
+    // failure there must not short-circuit it.
+    let log = requests.lock().unwrap();
+    assert!(
+        !calls(&log, "agent.send").is_empty(),
+        "the prompt was still typed"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_close_leaves_herdrs_default_layout_alone() {
+    // With the initial shell still open, splitting another one off would make
+    // three panes. Better to leave herdr's own arrangement (what every task got
+    // before #356) than to add clutter on top of it.
+    let (socket, requests) = FakeHerdr {
+        close_error: Some("internal_error"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+    assert!(
+        disp["error"].is_null(),
+        "a failed close must not fail the dispatch: {disp}"
+    );
+
+    assert!(
+        calls(&requests.lock().unwrap(), "pane.split").is_empty(),
+        "no shell may be added while the initial one is still there"
+    );
+}
+
+#[tokio::test]
+async fn a_response_without_a_root_pane_skips_the_layout_entirely() {
+    // An older or future herdr that names no `root_pane` leaves us no handle to
+    // close. Degrade to herdr's default arrangement rather than failing the
+    // dispatch — or adding a third pane.
+    let (socket, requests) = FakeHerdr {
+        no_root_pane: true,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+    assert!(disp["error"].is_null(), "dispatch failed: {disp}");
+
+    let log = requests.lock().unwrap();
+    assert!(calls(&log, "pane.close").is_empty(), "nothing to close");
+    assert!(
+        calls(&log, "pane.split").is_empty(),
+        "and therefore nothing to split"
+    );
 }
 
 #[tokio::test]
@@ -1131,7 +1393,14 @@ async fn cancel_takes_down_the_whole_workspace() {
     let log = requests.lock().unwrap();
     let sent = |method: &str| log.iter().any(|r| r["method"] == method);
     assert!(sent("pane.send_keys"), "the agent must be interrupted");
-    assert!(sent("pane.close"), "the pane must be closed");
+    // Assert the *pane id*, not just that some close happened: since #356
+    // `dispatch` closes a pane of its own, so a bare method check here would
+    // pass on the layout's close and stop testing cancel at all.
+    assert_eq!(
+        calls(&log, "pane.close")[0]["params"]["pane_id"],
+        PANE,
+        "the session's own pane must be closed"
+    );
     let closed = log
         .iter()
         .find(|r| r["method"] == "workspace.close")
@@ -1164,7 +1433,8 @@ async fn release_closes_pane_and_workspace_without_interrupting() {
         !sent("pane.send_keys"),
         "release must not interrupt (no ctrl+c): {log:?}"
     );
-    assert!(sent("pane.close"), "the pane must be closed");
+    // By pane id, for the same reason as in `cancel_takes_down_the_whole_workspace`.
+    assert_eq!(calls(&log, "pane.close")[0]["params"]["pane_id"], PANE);
     assert!(
         sent("workspace.close"),
         "the task's workspace must be closed too"
@@ -1298,8 +1568,8 @@ async fn release_degrades_open_when_identity_is_unverifiable() {
         .await;
     assert_eq!(resp["result"]["released"], true);
     let log = requests.lock().unwrap();
-    let sent = |method: &str| log.iter().any(|r| r["method"] == method);
-    assert!(sent("pane.close") && sent("workspace.close"));
+    assert_eq!(calls(&log, "pane.close")[0]["params"]["pane_id"], PANE);
+    assert!(log.iter().any(|r| r["method"] == "workspace.close"));
 }
 
 #[tokio::test]

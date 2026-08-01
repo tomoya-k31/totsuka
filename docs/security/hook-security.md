@@ -4,7 +4,7 @@ title: Claude Code フック機構のセキュリティポリシー
 description: "フック完了判定の UDS Bearer トークン管理（keychain 参照・socket 0600 第一層・定数時間比較・herdr env 配送）、スプールファイルの機密保持（N-05: last_assistant_message は機微・$XDG_STATE_HOME 配下・drain 後削除・隔離の注意）、フックアセットの改ざん耐性（N-02: 0700/0600・内容ハッシュ冪等修復・静的埋め込み）を定める。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [security, hook, claude-code, uds, token, keychain, spool, tamper, epic-131]
-generated: { by: human:tomoya-k31, at: 2026-07-30T23:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-01T20:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -27,6 +27,7 @@ Claude Code の完了判定は、pane 内の `claude` が発火するフック�
 - `auth_token_ref` は**シークレット参照**（`${ENV}` または `keychain:<service>/<account>`）で書く。設定ファイルに平文で書かない（F-62/65。解決は Orchestrator 側のみ、プラグインに Keychain 権限を渡さない）。
 - 解決済みトークンは herdr プラグイン経由で pane に **env（`TOTSUKA_HOOK_TOKEN`）として注入**される（H-02）。フックスクリプトはファイルではなく env からトークンを読むため、`--settings` ファイル（0600 でレンダリング）にトークンは書かれない。これにより 1 本の `--settings` を `claude --resume` を跨いで再利用できる（H-03）一方、トークンはプロセス env に閉じる。
 - **ログへ出さない**: トークン・Authorization ヘッダは logging layer で無条件 redact（§5.2）。フックスクリプトの POST も compact JSON のみを stdout の block 用途に限定し、トークンを標準出力へ出さない（H-13）。
+- **人間が叩くシェル pane には載せない**（#356）。herdr は workspace とともに初期シェル pane を開き、その pane は `workspace.create` の `env` を継承する — つまり**エージェントの隣に、トークンを持ったシェルが常駐していた**（実測で確認）。dispatch はこの初期 pane を close し、`env` を継承しない `pane.split` でシェルを作り直すため、そこでは `TOTSUKA_HOOK_TOKEN` は空になる（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。エージェント pane には従来どおり注入される（完了検知の幹線）。
 
 トークン失効・ローテーション時は `keychain:` の実体を差し替え、`totsuka doctor` の `hook-token` チェック（`auth_token_ref` 解決）と `hook-socket` チェック（自己 POST → 200）で疎通を確認する（[hook-troubleshooting](/operations/hook-troubleshooting.md)）。
 

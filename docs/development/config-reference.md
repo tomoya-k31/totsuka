@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: 設定リファレンス（config.toml）
-description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml を含む。
+description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-01T20:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -304,6 +304,37 @@ kind = "task_source"
 - `classifier_system` の既定値は JSON 出力形の `{"repo": string, ...}` をリテラルに含む。プレースホルダ名は識別子（`[A-Za-z_][A-Za-z0-9_]*`）に限られるので、これは中身として素通しされる。
 - 未知のプレースホルダはそのまま出力され、`initialize` 時に警告としてログに出る。**エラーにしないのは意図的である**（このプラグインは `config/validate` フックを持っているのでエラーにもできる）— 未知キーはそのまま描画されるので症状はドラフト中に見える `{token}` であり、core の `[prompts]` がエラーにするのは、あちらで消えるのが完了マーカー規約で症状がタイムアウトでのエスカレーションだけだからである。
 - ここは **LLM 向けのプロンプトのみ**である。悪い上書きは分類の劣化（スレッド内ピッカーへフォールバックする）や返信案の質低下に留まり、core の `[prompts]` と違って完了検知は壊せない。
+
+# `plugins/herdr.toml`（agent-ide-herdr）
+
+全キー（`deny_unknown_fields`。ネストした `[layout]` にも効く）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `socket_path` | string? | なし | herdr ソケットの明示パス。解決順の最上位 |
+| `session` | string? | なし | 名前付きセッション（`~/.config/herdr/sessions/{name}/herdr.sock` に解決）。`socket_path` 未設定時に使う |
+| `agent_command` | string | `claude` | **deprecated**。pane で起動する CLI。`tool_launch` を送らない旧 Orchestrator 向けフォールバック（[ADR-0014](/decisions/adr-0014-tool-abstraction.md)）。削除は 0.3 |
+| `plan_args` | string[] | `["--permission-mode", "plan"]` | **deprecated**。同上、plan モードの追加引数 |
+| `design_preview` | string | `side_pane` | **deprecated かつ無効**。core もプラグインも読んでいないため、値を変えても描画は一切変わらない。pane の配置は `[layout]` が決める（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。削除は 0.3 |
+| `[layout]` | テーブル | 下記の既定 | dispatch した pane の配置（#356、下記） |
+| `request_timeout_secs` | int | 30 | herdr socket 呼び出し 1 本あたりのタイムアウト |
+
+ソケットの解決順: `socket_path` > `session` 名 > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定 `~/.config/herdr/herdr.sock`。
+
+## `[layout]`（pane の配置、#356）
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `shell` | bool | `true` | 併設シェル pane を出すか。`false` ならエージェント全画面になり、`direction` / `ratio` は無視される |
+| `direction` | `"down"` \| `"right"` | `"down"` | 分割方向。herdr の `SplitDirection` そのままで、**他の値は `initialize` でエラー**（`up` / `left` は herdr に存在しない） |
+| `ratio` | float | `0.8` | **エージェント側**の取り分。**範囲検査はせず** herdr へそのまま送る |
+
+- 既定は「エージェントを上 80% / シェルを下 20%」。#356 以前は herdr の既定（右分割 0.5）が漏れており、
+  エージェント pane の幅は実測 123 桁だった。**この変更で既存ユーザの画面は変わる**（視覚のみ。データ・フロー・完了検知に影響なし）。
+- **併設シェルには hook 環境変数が渡らない**（`TOTSUKA_HOOK_TOKEN` を含む）。人間が直接叩くシェルに
+  ベアラトークンを常駐させないため（[hook のセキュリティ](/security/hook-security.md)）。エージェント pane には従来どおり載る。
+- **レイアウト適用の失敗は dispatch を落とさない**。警告を出して続行し、シェルなし（またはherdr の既定配置）に落ちる。
+  `ratio` が不正で herdr が拒否した場合もこの経路になる。
 
 # 例
 

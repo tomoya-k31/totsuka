@@ -1,11 +1,12 @@
 ---
 type: Reference
 title: herdr Socket API / 統合エージェント capability（外部一次情報ミラー）
-description: herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124）設計の根拠。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。
+description: "herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status・pane レイアウト）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124/#356）設計の根拠。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。"
 resource: https://herdr.dev/docs/socket-api/
 tags: [herdr, socket-api, integration, agent-ide, external]
-generated: { by: human:tomoya-k31, at: 2026-07-19T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-01T20:00:00+09:00 }
 status: stable
+stale_after: 2027-02-01
 owner: tomoya-k31
 sources:
   - id: ref-1
@@ -16,6 +17,9 @@ sources:
     title: "herdr — Integrations. （2026-07-13 参照）"
   - id: ref-3
     resource: "herdr 0.7.1 (protocol 14) / 0.7.4 (protocol 16) 実機プローブ記録（socket 直叩き + `herdr api schema --json`）: #123 / #124 のコメント（2026-07-17）"
+  - id: ref-4
+    resource: https://github.com/tomoya-k31/totsuka/issues/356
+    title: "#356 pane レイアウトの実機プローブ記録（SplitDirection / pane.split の ratio 意味論 / env 継承 / レイテンシ、2026-08-01）"
 ---
 
 # このドキュメントについて
@@ -28,6 +32,10 @@ herdr 公式ドキュメント（[Socket API](https://herdr.dev/docs/socket-api/
 乖離を多数検出したため、実機プローブ（socket 直叩き）+ `herdr api schema --json`（0.7.4 で追加）で確認した値へ全面改訂した。
 旧版が正としていた「単一接続の多重化」「`pane.exited` の `exit_code`」は **0.7.1 / 0.7.4 とも存在しない**。
 `session.snapshot` は 0.7.1 に無く **0.7.4 で復活**（バージョン依存につき利用は避ける）。
+
+**2026-08-01 追記（#356）**: pane レイアウト系（`SplitDirection` / `pane.split` の params と `ratio` の意味論 /
+`agent.start` が `split` 未指定でも分割すること / `workspace.create` の `root_pane` と `env` の効き方）が
+**一切記載されていなかった**ため、schema と実機プローブから節を追加した。
 
 > ⚠️ herdr は活発に更新される外部ソフトウェア。依存する前に `herdr status` / `ping` でプロトコル版を確認し、
 > 正確なスキーマは `herdr api schema --json` で取得すること（**0.7.1 以前の CLI に `api` サブコマンドは無い**。
@@ -67,8 +75,9 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 
 | メソッド | params（実測） | result（実測） |
 |---|---|---|
-| `workspace.create` | `{cwd, label?, env?, focus?}`（**`command`/`args` は無い** — 旧記載は誤り） | `{type:"workspace_created", workspace:{workspace_id, number, label, ...}, tab:{tab_id, ...}}`。初期 pane（シェル）1 枚付き |
-| `agent.start` | `{name, argv, cwd?, workspace_id?, tab_id?, split?, env?, focus?}`（`name`/`argv` 必須）。**エージェント CLI の起動はこれ** | `{type:"agent_started", agent:{pane_id, terminal_id, workspace_id, tab_id, agent_status, cwd, ...}, argv}` |
+| `workspace.create` | `{cwd, label?, env?, focus?}`（**`command`/`args` は無い** — 旧記載は誤り） | `{type:"workspace_created", workspace:{workspace_id, number, label, pane_count, ...}, tab:{tab_id, ...}, root_pane:{pane_id, ...}}`。初期 pane（シェル）1 枚付きで、**`root_pane` はその pane（`PaneInfo`）を返す required フィールド**（#356 で追記。これが初期 pane を掴む唯一の手段） |
+| `agent.start` | `{name, argv, cwd?, workspace_id?, tab_id?, split?, env?, focus?}`（`name`/`argv` 必須）。**エージェント CLI の起動はこれ**。`split` は `SplitDirection` のみで **`ratio` を取らない**。**`split` 未指定でも分割する**（既定 `right` / 0.5, #356 実測） | `{type:"agent_started", agent:{pane_id, terminal_id, workspace_id, tab_id, agent_status, cwd, ...}, argv}` |
+| `pane.split` | `{direction(必須), ratio?, target_pane_id?, workspace_id?, cwd?, env?, focus?}`。**作成時に比率を指定できる唯一の経路**（#356） | `{type:"pane_info", pane:{...}}` |
 | `agent.send` | `{target, text}`。target は terminal id / agent 名 / pane id。**literal text の書き込みのみで Enter は押されない** — 送信確定には `pane.send_keys` で `enter` を送る | ok（不在 target は `agent_not_found`） |
 | `pane.send_keys` | `{pane_id, keys}`。**`keys` は配列**（例 `["ctrl+c"]`、`["enter"]`） | ok |
 | `pane.get` | `{pane_id}` | `{type:"pane_info", pane:{pane_id, terminal_id, workspace_id, tab_id, focused, cwd, foreground_cwd, agent_status, revision, agent_session?, label?, ...}}`。**`scrollback` フィールドは無い**（旧記載は誤り）。不在は `pane_not_found` |
@@ -76,6 +85,30 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 | `pane.list` / `workspace.list` | `{}` | `{type:"pane_list", panes:[...]}` / `{type:"workspace_list", workspaces:[...]}` |
 | `pane.close` / `workspace.close` | `{pane_id}` / `{workspace_id}` | `{type:"ok"}` |
 | `pane.report_agent_session` | `{pane_id, source, agent, seq, agent_session_id, agent_session_path?}`（公式統合 hook が使用） | ok |
+
+## pane レイアウト（#356 で schema + 実機から追記）
+
+配置を制御できるのは **herdr の階層（workspace → tab → pane）内のタイル位置だけ**。
+OS ウィンドウの座標・サイズ・ディスプレイ指定に相当する API は**存在しない**。
+
+| 事実 | 根拠 |
+|---|---|
+| `SplitDirection` は **`right` / `down` の 2 値のみ**（`up` / `left` は無い） | `api schema` の enum |
+| `AgentStartParams.split` は `SplitDirection` のみで **`ratio` を取らない** | schema。`agent.start` 単独では比率を指定できない |
+| **`agent.start` は `split` 未指定でも分割する。既定は `right` / 0.5** | 実機 |
+| **`ratio` は分割元（上 / 左）の取り分** | 実機: area 67 行に `--direction down --ratio 0.8` → 上 54 行（80.6%）/ 下 13 行（19.4%）。分割線は行を消費しない（54 + 13 = 67） |
+| `pane.split` はフォーカスを**分割元に残す**（`focus: false` 時） | 実機: `focused_pane_id` が分割元のまま |
+| **`agent.start` の `name` が pane label になる**。`workspace.create` の `label` は pane に伝播しない | 実機: root pane も split pane も `label = null`、エージェント pane だけ `totsuka <task.id>` |
+| **`workspace.create` の `env` は root pane にしか効かない**。`pane.split` で作った pane は継承しない | 実機: root pane で `MARK<SENTINEL_9f3a>` / split pane で `MARK<>` |
+
+その他の位置制御メソッド（totsuka は未使用）: `layout.set_split_ratio {path: [bool], ratio}` / `layout.apply` /
+`layout.export` / `pane.resize` / `pane.swap` / `pane.move` / `pane.zoom` / `pane.neighbor` / `pane.edges` /
+`pane.focus_direction`。検証には `pane.layout` が実セル単位の `rect {x, y, width, height}` を返す。
+
+レイテンシ（生ソケット・1 リクエスト 1 接続、2 回計測）: `ping` 0.04–0.13 ms /
+`workspace.create` 4.3–5.2 ms / `agent.start` 5.8–6.5 ms / `pane.close` 23.0–25.3 ms / `pane.split` 6.4–6.7 ms。
+
+totsuka 側の利用は [ADR-0030](/decisions/adr-0030-herdr-pane-layout.md) / [agent-ide-herdr](/components/agent-ide-herdr.md)。
 
 ## プロンプト投入の実機作法（重要・#124 で実測）
 

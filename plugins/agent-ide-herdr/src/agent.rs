@@ -16,6 +16,11 @@
 //! - events arrive as `{event, data}` envelopes whose kind separator is
 //!   inconsistent (`pane.agent_status_changed` but `pane_exited`), so kinds are
 //!   compared normalized
+//! - **`agent.start` always splits** (default `right` at 0.5) and its `split`
+//!   parameter takes no ratio, so the pane arrangement cannot be asked for on
+//!   the way in. `pane.split {direction, ratio, target_pane_id, cwd, env}` is
+//!   the only call that accepts a ratio, and it is what
+//!   `HerdrAgent::apply_layout` uses to impose `[layout]` afterwards (#356)
 //!
 //! # Completion detection is now hook-based (0.1.3, #131 / R-07)
 //!
@@ -116,9 +121,9 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     }
 
     /// Dispatch a task (F-31/F-37): create a herdr workspace on the worktree,
-    /// start the agent CLI in it (plan mode when asked, F-36), submit the task
-    /// prompt, and return a `(pane_id, agent_session_id)` re-attach handle as
-    /// the session id.
+    /// start the agent CLI in it (plan mode when asked, F-36), lay the
+    /// workspace out as configured (#356), submit the task prompt, and return a
+    /// `(pane_id, agent_session_id)` re-attach handle as the session id.
     ///
     /// Returns only once the agent has actually started working, so a caller
     /// that subscribes afterwards can trust the pane's status (see
@@ -140,13 +145,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             create_params["env"] = env.clone();
         }
         let created = self.client.call("workspace.create", create_params).await?;
-        let workspace_id = created
-            .get("workspace")
-            .and_then(|w| w.get("workspace_id"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                HerdrError::InvalidResponse("workspace.create returned no workspace_id".into())
-            })?;
+        let workspace = NewWorkspace::from_response(&created)?;
 
         // From here on the workspace exists, so every failure path has to take
         // it back down: a failed dispatch reports no session id, which leaves
@@ -154,9 +153,9 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // process would run until the operator noticed them (and `task retry`
         // would strand another one).
         let started = self
-            .start_agent(&params, workspace_id, program, args, env.as_ref())
+            .start_agent(&params, &workspace, program, args, env.as_ref())
             .await
-            .inspect_err(|_| self.abandon(workspace_id))?;
+            .inspect_err(|_| self.abandon(&workspace.id))?;
         Ok(started)
     }
 
@@ -165,17 +164,20 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     async fn start_agent(
         &self,
         params: &TaskDispatchParams,
-        workspace_id: &str,
+        workspace: &NewWorkspace,
         program: String,
         args: Vec<String>,
         env: Option<&Value>,
     ) -> Result<TaskDispatchResult, HerdrError> {
         let argv: Vec<String> = std::iter::once(program).chain(args).collect();
+        // `split` is deliberately not sent: `agent.start` splits regardless
+        // (herdr's default is `right` at 0.5) and takes no ratio, so the layout
+        // is imposed afterwards by `apply_layout` where a ratio can be given.
         let mut start_params = json!({
             "name": format!("totsuka {}", params.task.id),
             "argv": argv,
             "cwd": params.worktree_path,
-            "workspace_id": workspace_id,
+            "workspace_id": workspace.id,
             "focus": false,
         });
         if let Some(env) = env {
@@ -188,6 +190,13 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .and_then(Value::as_str)
             .ok_or_else(|| HerdrError::InvalidResponse("agent.start returned no pane_id".into()))?
             .to_string();
+
+        // Before the prompt, not after: the split resizes the agent's pane, and
+        // `submit_prompt` confirms the prompt by reading that pane's screen —
+        // reflowing it mid-submission would invalidate exactly the check the
+        // startup race is guarded by.
+        self.apply_layout(workspace, &pane_id, &params.worktree_path)
+            .await;
 
         self.submit_prompt(&pane_id, &compose_prompt(params))
             .await
@@ -206,6 +215,84 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         Ok(TaskDispatchResult {
             session_id: handle.encode(),
         })
+    }
+
+    /// Arrange the task's workspace as `[layout]` asks (#356): drop the initial
+    /// shell herdr opens every workspace with, then — unless `shell = false` —
+    /// split a fresh one off the agent's own pane at the configured direction
+    /// and ratio.
+    ///
+    /// **Close before split**, so a half-applied layout is still a layout
+    /// someone could have asked for: a split that fails leaves the agent
+    /// full-screen, which is exactly `shell = false`. The reverse order would
+    /// strand three panes — the agent, the shell it just made, and the initial
+    /// one it never got to close.
+    ///
+    /// **The new shell gets no `env`.** herdr's initial pane inherits the
+    /// workspace's, which for a hook-capable dispatch is the Orchestrator's
+    /// hook environment — `TOTSUKA_HOOK_TOKEN` included. A pane a human types
+    /// into is not where a bearer token belongs
+    /// (`docs/security/hook-security.md`), and a pane made by `pane.split`
+    /// inherits nothing, so simply not passing `env` is what removes it.
+    ///
+    /// **Every failure is a warning, never an error.** The layout is
+    /// decoration: a herdr that blips while drawing it must not lose a task
+    /// that is otherwise ready to run.
+    ///
+    /// Focus is left alone deliberately: closing the initial pane hands focus
+    /// to the only pane left (the agent), and `pane.split` keeps focus on the
+    /// pane it split from — so the agent ends up focused without a `pane.focus`
+    /// of our own.
+    async fn apply_layout(&self, workspace: &NewWorkspace, agent_pane_id: &str, cwd: &str) {
+        let layout = &self.config.layout;
+        let Some(initial_pane_id) = &workspace.initial_pane_id else {
+            // No id to close means the initial shell stays, so adding a second
+            // one would make three panes. Nothing to do but leave herdr's own
+            // arrangement in place.
+            tracing::warn!(
+                workspace_id = %workspace.id,
+                "workspace.create reported no root pane; leaving herdr's default layout alone"
+            );
+            return;
+        };
+        if let Err(e) = self
+            .client
+            .call("pane.close", json!({ "pane_id": initial_pane_id }))
+            .await
+        {
+            // Same reasoning as above: the shell we meant to replace is still
+            // there, so splitting another one off would only add clutter.
+            tracing::warn!(
+                pane_id = %initial_pane_id, error = %e,
+                "could not close the workspace's initial shell pane; keeping herdr's default layout"
+            );
+            return;
+        }
+        if !layout.shell {
+            return;
+        }
+        if let Err(e) = self
+            .client
+            .call(
+                "pane.split",
+                json!({
+                    "target_pane_id": agent_pane_id,
+                    "direction": layout.direction.as_str(),
+                    // herdr's `ratio` is the *split source's* share, and the
+                    // source here is the agent's pane — so the configured
+                    // agent share goes across unchanged.
+                    "ratio": layout.ratio,
+                    "cwd": cwd,
+                    "focus": false,
+                }),
+            )
+            .await
+        {
+            tracing::warn!(
+                pane_id = agent_pane_id, error = %e,
+                "could not add the companion shell pane; the agent runs full-screen"
+            );
+        }
     }
 
     /// Tear down a workspace a failed dispatch allocated, best-effort: the
@@ -668,6 +755,44 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             }
             tokio::time::sleep(self.retry.poll_interval).await;
         }
+    }
+}
+
+/// What `dispatch` needs out of a `workspace.create` response: the workspace
+/// itself, and the shell pane herdr opens it with.
+///
+/// The initial pane is the one `apply_layout` closes, and it is the only handle
+/// to it — the response names it (`root_pane`, herdr 0.7.4) and nothing else
+/// does: `pane.list` cannot distinguish it from the agent's pane by label,
+/// because a split pane's label is `null` on both.
+struct NewWorkspace {
+    id: String,
+    /// `None` when the response carried no `root_pane` — an older or future
+    /// herdr. Optional on purpose: the id is only needed for the layout, and a
+    /// missing one must degrade to herdr's default arrangement, not fail the
+    /// dispatch (unlike the workspace id, which every teardown path needs).
+    initial_pane_id: Option<String>,
+}
+
+impl NewWorkspace {
+    fn from_response(created: &Value) -> Result<Self, HerdrError> {
+        let id = created
+            .get("workspace")
+            .and_then(|w| w.get("workspace_id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                HerdrError::InvalidResponse("workspace.create returned no workspace_id".into())
+            })?
+            .to_string();
+        let initial_pane_id = created
+            .get("root_pane")
+            .and_then(|p| p.get("pane_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        Ok(Self {
+            id,
+            initial_pane_id,
+        })
     }
 }
 
