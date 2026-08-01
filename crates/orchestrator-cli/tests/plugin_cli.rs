@@ -333,58 +333,6 @@ fn broken_env_override_fails_before_install_side_effects() {
 // the binary, so `--bundled` needs no path from the user.
 // ---------------------------------------------------------------------------
 
-/// Put a runnable copy of the test binary at `dest`.
-///
-/// A plain `fs::copy` makes this test flaky on Linux with `ExecutableFileBusy`
-/// (`ETXTBSY`). The race is not with this test's own write — `copy` closes its
-/// descriptor before returning — but with the *other* tests running
-/// concurrently in the same process: `Command::spawn` forks, and a fork that
-/// happens while `copy`'s write descriptor is open inherits it, so the new
-/// file still has a writer when this test tries to `execve` it.
-///
-/// A hard link never opens the destination for writing, so the window does not
-/// exist. It needs `dest` on the same filesystem as the Cargo target dir; when
-/// it is not, fall back to copying and wait for the inherited descriptor to be
-/// closed. Exhausting that wait **panics** rather than returning: leaving an
-/// unrunnable binary in place would resurface as a spawn failure several lines
-/// later, which is exactly the confusing symptom this helper exists to remove.
-fn place_binary(src: &str, dest: &Path) {
-    let link_err = match fs::hard_link(src, dest) {
-        Ok(()) => return,
-        // Any failure is worth falling back on — cross-device is merely the
-        // expected one — but it is kept for the panic message below, so a
-        // surprising cause (permissions, a full disk) is not swallowed.
-        Err(e) => e,
-    };
-    fs::copy(src, dest).unwrap_or_else(|e| {
-        panic!(
-            "cannot place {}: hard link failed ({link_err}), copy failed ({e})",
-            dest.display()
-        )
-    });
-
-    for _ in 0..50 {
-        match std::process::Command::new(dest).arg("--version").output() {
-            Err(e) if e.raw_os_error() == Some(libc_etxtbsy()) => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            Ok(_) => return,
-            Err(e) => panic!("copied binary at {} is not runnable: {e}", dest.display()),
-        }
-    }
-    panic!(
-        "copied binary at {} stayed ETXTBSY for 1s — a concurrent test is holding a write \
-         descriptor to it (hard link was unavailable: {link_err})",
-        dest.display()
-    );
-}
-
-/// `ETXTBSY`. Spelled out rather than pulled from a crate: this is the only
-/// errno the test suite cares about, and `libc` is not a dev-dependency here.
-fn libc_etxtbsy() -> i32 {
-    26
-}
-
 /// Lay out a bundled tree: `<root>/plugins/<name>/{plugin.toml, <name>}`.
 fn fake_bundle(root: &Path, names: &[&str]) {
     for name in names {
@@ -506,7 +454,7 @@ fn bundled_discovery_follows_the_symlink_to_the_real_tree() {
     fs::create_dir_all(&tree).unwrap();
     fake_bundle(&tree, &["github"]);
     let real_bin = tree.join("totsuka");
-    place_binary(env!("CARGO_BIN_EXE_totsuka"), &real_bin);
+    test_support::place_binary(Path::new(env!("CARGO_BIN_EXE_totsuka")), &real_bin);
 
     let bin_dir = env.root.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();

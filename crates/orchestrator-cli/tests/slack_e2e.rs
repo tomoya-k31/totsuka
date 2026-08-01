@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -391,10 +391,10 @@ impl Env {
 }
 
 /// Install a plugin binary as `name` (kind `kind`) into the store.
-fn install_plugin(env: &Env, name: &str, kind: &str, binary: &PathBuf) {
+fn install_plugin(env: &Env, name: &str, kind: &str, binary: &Path) {
     let dir = env.plugins_store().join(name);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::copy(binary, dir.join(name)).unwrap();
+    test_support::place_binary(binary, &dir.join(name));
     std::fs::write(
         dir.join("plugin.toml"),
         format!(

@@ -115,7 +115,7 @@ impl Env {
 fn install_plugin(env: &Env, name: &str, kind: &str) {
     let dir = env.plugins_store().join(name);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::copy(mock_plugin(), dir.join(name)).unwrap();
+    test_support::place_binary(&mock_plugin(), &dir.join(name));
     std::fs::write(
         dir.join("plugin.toml"),
         format!(
@@ -389,7 +389,7 @@ fn doctor_detects_orphan_panes_via_session_list() {
     // install_plugin は pane_control を宣言しないため手書き）。
     let dir = env.plugins_store().join("mock_agent");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::copy(mock_plugin(), dir.join("mock_agent")).unwrap();
+    test_support::place_binary(&mock_plugin(), &dir.join("mock_agent"));
     std::fs::write(
         dir.join("plugin.toml"),
         "name = \"mock_agent\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
@@ -496,7 +496,7 @@ fn doctor_human_output_cannot_repaint_the_terminal_yet_json_stays_verbatim() {
 
     let dir = env.plugins_store().join("mock_agent");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::copy(mock_plugin(), dir.join("mock_agent")).unwrap();
+    test_support::place_binary(&mock_plugin(), &dir.join("mock_agent"));
     std::fs::write(
         dir.join("plugin.toml"),
         "name = \"mock_agent\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
