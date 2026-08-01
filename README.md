@@ -35,9 +35,9 @@ sudo ln -sf /usr/local/lib/totsuka/totsuka /usr/local/bin/totsuka
 ```
 
 The whole directory moves, not just the binary: `totsuka` looks for the bundled
-plugins next to itself, which is how `plugin install --bundled` works without a
-path (Quickstart step 2). Keeping the tree in place also means adding or
-reinstalling a plugin later needs no second download.
+plugins next to itself, which is how `totsuka setup` installs them with no path
+from you. Keeping the tree in place also means adding or reinstalling a plugin
+later needs no second download.
 
 Everything is ad-hoc–signed. If Gatekeeper blocks it, clear the quarantine
 attribute on the whole tree once:
@@ -58,28 +58,39 @@ This installs the CLI only. Plugins are built from a checkout — see
 ## Quickstart (5 minutes, 1 task)
 
 ```sh
-# 1. Scaffold the config and check the environment.
-totsuka init
+# 1. Answer a few questions. Pick a starting recipe, name your repositories,
+#    say where your secrets live — the wizard writes the config, installs and
+#    enables the plugins the recipe needs, and finishes by running `doctor`.
+totsuka setup
 
-# 2. Install the plugins you need (task source, agent, notifier), then enable
-#    them. They ship in the tarball, so --bundled finds them with no path.
-totsuka plugin install --bundled github --enable
-#    …or take the lot: totsuka plugin install --bundled --all --enable
+# 2. Register the secrets it listed. It never handles the values itself, so it
+#    prints one ready-to-paste command per secret, e.g.
+security add-generic-password -U -s totsuka -a github-token -w '<the token>'
 
-# 3. Store your secrets in the Keychain and reference them from config
-#    (e.g. api_key_ref = "keychain:totsuka/github"); edit
-#    ~/.config/totsuka/config.toml — repositories, workflows, and the [llm] block.
-
-# 4. Verify everything is wired up.
-totsuka doctor
-
-# 5. Run one cycle (add --watch to keep polling).
+# 3. Run one cycle (add --watch to keep polling).
 totsuka run --dry-run   # preview: which task -> which repo -> which agent
 totsuka run             # execute: fetch -> dispatch -> monitor -> publish
 ```
 
+`setup` exits with code 3 until every secret it listed exists — that is
+`doctor` reporting real work left to do, not a failure of the setup itself.
+
+**`doctor` stays red until after your first `totsuka run`**, even with every
+secret registered: the `state-db` check fails while the state database does not
+exist, and only `run` creates it. So the order above is the order that goes
+green — register the secrets, run once, then `totsuka doctor` exits 0. It may
+still print `warn:` lines (an unset hook token, no bundled plugins); those are
+advisory and do not fail it.
+
 Inspect progress with `totsuka status`, drill into a task with
 `totsuka task show <id>`, and follow logs with `totsuka logs -f`.
+
+`totsuka init` is still there for CI and scripted bootstraps: it never prompts,
+and writes only directories plus a fully commented config skeleton. `setup`
+fills that skeleton in, so running `init` first is harmless but unnecessary.
+
+New machine, dev checkout, token rotation, and recovery are covered end to end
+in the [setup playbook](docs/operations/setup-playbook.md) (Japanese).
 
 ## Documentation
 

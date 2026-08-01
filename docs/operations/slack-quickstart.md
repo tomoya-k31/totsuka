@@ -1,10 +1,10 @@
 ---
 type: Runbook
 title: Slack セットアップ Quickstart（task-source-slack）
-description: manifest からの Slack アプリ作成 → トークン発行 → Keychain 登録 → plugin install/enable → doctor → run --watch までの導入手順と、トークン失効・スコープ変更時の対処。
+description: manifest からの Slack アプリ作成 → トークン発行 → Keychain 登録 → totsuka setup → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, keychain, doctor]
-generated: { by: human:tomoya-k31, at: 2026-07-31T17:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-01T09:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -30,12 +30,29 @@ security add-generic-password -U -s totsuka -a slack-bot  -w 'xoxb-…'   # 通�
 
 自分の Slack ユーザー ID（`U…`）も控える: Slack のプロフィール → **…** → **メンバー ID をコピー**。
 
-# 3. plugin install / enable と設定
+# 3. `totsuka setup` で設定を作る
 
-```sh
-totsuka plugin install ./plugins/task-source-slack
-totsuka plugin enable slack
+```bash
+totsuka setup
 ```
+
+レシピの選択で **「Slack — reply as yourself」** を選ぶ。聞かれるのはリポジトリと、手順 2 で控えたメンバー ID、リポジトリ分類用の LLM だけで、`plugins/slack.toml` の生成・プラグインの install + enable・`doctor` の実行までこの 1 コマンドで済む。トークンの**値**は聞かれない（[ADR-0028](/decisions/adr-0028-setup-wizard.md)）。
+
+手順 2 の Keychain 登録がまだなら、`setup` が登録コマンドのチェックリストを印字するので、それから登録する。
+
+**登録が済んでも `state-db` チェックだけは fail のままで、`doctor` は exit 3 で終わる。** これは状態 DB がまだ無いというだけで、作るのは次の手順の `totsuka run` だけ。緑になるのは 1 回走らせたあと。
+
+通しの導入手順（新マシン・開発機・復旧）は [セットアップ Playbook](/operations/setup-playbook.md)。
+
+## 手で書く場合（フォールバック）
+
+`setup` は**既存ファイルを上書きしない**ので、すでに config がある環境で Slack だけ足すときや、レシピが表現していない構成にしたいときは手で書く。
+
+```bash
+totsuka plugin install --bundled slack --enable
+```
+
+> リリース tarball ではなくチェックアウトから入れるなら `totsuka plugin install --from-source slack --enable`。`./plugins/task-source-slack` のような**ディレクトリ指定は、そこにビルド済みバイナリを自分で置いた場合にだけ**動く（[ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md)）。
 
 `~/.config/totsuka/config.toml`（キーの意味は [設定リファレンス](/development/config-reference.md)）:
 
