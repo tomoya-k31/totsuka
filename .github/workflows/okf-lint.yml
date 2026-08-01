@@ -9,6 +9,10 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      # 元帳のビルダー / lint 本体だけを触った変更でも main を検証する
+      # (log.md と index.md は生成物になったので、生成側の回帰は docs/ を
+      #  1 バイトも変えずに入りうる)
+      - "scripts/okf-*.sh"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

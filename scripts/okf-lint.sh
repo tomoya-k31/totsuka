@@ -11,6 +11,13 @@
 #   [E] index-listed: 各 concept / サブディレクトリが index.md からリンクされている
 #   [E] index-desc  : index.md の転記が concept の description と一致する
 #   [E] log-format  : log.md の日付見出しが `## YYYY-MM-DD` 形式
+#   [E] log-sync    : log.md が log.d/ の断片と一致する（断片名の規約違反もここ）
+#   [E] index-sync  : 各 index.md のマーカー区間が concept と一致する
+#
+# log-sync / index-sync の判定は scripts/okf-log-build.sh / okf-index-build.sh の
+# --check へ**委譲**する（#360）。ここに書き写すと同じ規約が 2 箇所に生まれ、
+# 「lint は通るのに生成すると差分が出る」が必ずいつか起きる。ビルダーが正本。
+# log.d/ 自体は走査対象外 — frontmatter も index 掲載も要らない材料置き場である。
 #
 # v0.2 のファミリ（§5 / §10）に対するチェック:
 #   [E] status      : `status` が draft | stable | deprecated のいずれか (§5.4)
@@ -514,8 +521,13 @@ report() {
   done
 }
 
+# log.d/ は log.md の材料置き場であって concept ディレクトリではない（#360）。
+# frontmatter も index.md も要らず、ルート index.md への掲載対象でもないので、
+# 両方の走査から丸ごと外す。中身の検査は okf-log-build.sh --check が担う。
+FRAGMENT_DIR="log.d"
+
 # ---------- 1) frontmatter / type / index-fm / log-format ----------
-find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -type f -name '*.md' -print |
+find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -name "$FRAGMENT_DIR" -prune -o -type f -name '*.md' -print |
   while IFS= read -r file; do
     rel="${file#"$BUNDLE"/}"
     base="$(basename "$file")"
@@ -554,7 +566,7 @@ find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -type f -name '
 cat /tmp/okf-lint-pass1.$$
 
 # ---------- 2) index-exists / index-listed ----------
-find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -type d -print |
+find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -name "$FRAGMENT_DIR" -prune -o -type d -print |
   while IFS= read -r dir; do
     reldir="${dir#"$BUNDLE"}"
     reldir="${reldir#/}"
@@ -572,6 +584,8 @@ find "$BUNDLE" -name node_modules -prune -o -name '.*' -prune -o -type d -print 
         is_exempt "$name" && continue
         concepts="$concepts $name"
       elif [ -d "$entry" ]; then
+        # 断片置き場は concept のサブディレクトリではないので index への掲載も要らない
+        [ "$name" = "$FRAGMENT_DIR" ] && continue
         if find "$entry" -type f -name '*.md' -print -quit | grep -q .; then
           subdirs="$subdirs $name"
         fi
@@ -648,7 +662,27 @@ ERRORS=$(cat /tmp/okf-lint-pass1.$$ /tmp/okf-lint-pass2.$$ | grep -c '^ERROR' ||
 WARNINGS=$(cat /tmp/okf-lint-pass1.$$ /tmp/okf-lint-pass2.$$ | grep -c '^WARN' || true)
 rm -f /tmp/okf-lint-pass1.$$ /tmp/okf-lint-pass2.$$
 
-# ---------- 3) リンク切れ（lychee に委譲）----------
+# ---------- 3) 元帳の同期（log.md / index.md の一覧は生成物）----------
+# 検査そのものはビルダーへ委譲する。ここで frontmatter を読み直す実装を持つと、
+# 「lint は通るのに生成すると差分が出る」という食い違いが必ずいつか生まれる
+# （同じ規約を 2 箇所で実装することになるため）。ビルダーが正本。
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+for pair in "log-sync:okf-log-build.sh" "index-sync:okf-index-build.sh"; do
+  check="${pair%%:*}"
+  builder="${SCRIPT_DIR}/${pair#*:}"
+  # ビルダーが無いのは「検査しなくてよい」ではなく「検査できない」。スキップすると
+  # 生成物への唯一の番人が消えたまま lint が緑を返す（＝ビルダーを消す/改名する
+  # PR が素通りする）ので、エラーにする。
+  if [ ! -f "$builder" ]; then
+    error "$check" "${BUNDLE}" "ビルダーが無いので検査できない: ${builder}"
+    continue
+  fi
+  if ! bash "$builder" "$BUNDLE" --check; then
+    error "$check" "${BUNDLE}" "生成物が材料と同期していない（上の差分を参照）"
+  fi
+done
+
+# ---------- 4) リンク切れ（lychee に委譲）----------
 if [ "$NO_LINKS" -eq 0 ]; then
   if command -v lychee >/dev/null 2>&1; then
     # --offline: ネットワークに出ない（外部URLは対象外、ファイルリンクのみ検査）

@@ -2,6 +2,10 @@
 
 パッケージ/サービス単位の責務・公開インターフェース・依存先。
 
+<!-- concept を追加・改名・削除したら `bash scripts/okf-index-build.sh` を実行する。
+     description は frontmatter から転記される（手で書かない）。
+     並び順と表示タイトルは手で決めてよい — スクリプトはそれを保存する。 -->
+<!-- okf:index:begin -->
 * [okf-search](okf-search.md) - docs/ の frontmatter（type/status/owner/resource/tags と OKF v0.2 の generated/verified/sources/stale_after）でconceptを絞り込むCLIスクリプトと、絞り込み結果をAIが読んで抽出するokf-searchスキル。
 * [orchestrator-core](orchestrator-core.md) - totsuka のコア。ヘキサゴナルアーキテクチャの domain（ドメイン・ステートマシン）/ ports（TaskSource・AgentIde・LlmRouter・SecretStore 等の trait）/ adapters（JSON-RPC ブリッジ・SQLite・Keychain）を担う。
 * [orchestrator-cli](orchestrator-cli.md) - totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（init / setup / run / status / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。
@@ -13,7 +17,4 @@
 * [agent-ide-herdr](agent-ide-herdr.md) - herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 * [agent-ide-orca](agent-ide-orca.md) - orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。design_preview は非宣言（capability を正直に宣言）。
 * [notifier-macos](notifier-macos.md) - Orchestrator のイベント（waiting_input / done / failed / pending / escalated / verification_pending）を macOS 通知センターへ配送する公式 notifier プラグイン。バックエンド選択（osascript / terminal-notifier click-to-focus）、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
-
-<!-- concept を追加したら、ここに 1 行追加する:
-* [Title](file.md) - frontmatter の description を転記
--->
+<!-- okf:index:end -->

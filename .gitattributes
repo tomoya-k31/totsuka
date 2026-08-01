@@ -1,0 +1,24 @@
+# docs/ の「元帳」ファイルは並行 PR がほぼ必ず同じ行に触るため、マージ方法を明示する（#360）。
+
+# index.md の concept 一覧は追記オンリーのリスト。union は両側の追加行をどちらも
+# 残すのでコンフリクトが出ず、順序が混ざっても
+# `bash scripts/okf-index-build.sh` が決定的な形（既存順を保存し、重複を畳み、
+# description を frontmatter から転記し直す）へ寄せる。
+docs/**/index.md merge=union
+
+# ただしルートの docs/index.md は除く。これは concept ではなく**ディレクトリ一覧**を
+# 手書きの説明文で持つファイルで、`okf-index-build.sh` は `-mindepth 2` で意図的に
+# 対象外にしている。union の後始末をする主体が居ないため、union だけ掛けると
+# 同じ項目の 2 バージョンが無警告で main に残り、index-sync も見ない。
+# （`docs/**/index.md` は `**/` がゼロ階層にも一致するのでルートにも掛かる。
+#  後勝ちなのでこの行で打ち消す。実測: git check-attr merge -- docs/index.md）
+docs/index.md !merge
+
+# docs/log.md には union もカスタム merge ドライバも指定しない。
+# 理由は /decisions/adr-0031-docs-ledger-conflicts.md の「マージドライバ」節:
+# git はマージ中、全パスの内容マージを終えてから worktree / index を更新するため、
+# ドライバからは相手側の docs/log.d/ 断片が**どちらにも見えず**、再生成しても
+# 相手のエントリが丸ごと欠けた log.md をコンフリクトなしで作ってしまう（実測）。
+#
+# 衝突したときの解決は 1 手で決定的:
+#   bash scripts/okf-log-build.sh && git add docs/log.md

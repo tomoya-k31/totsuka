@@ -113,6 +113,22 @@ post-PR you still monitor all checks that report on your PR.
 - Docs obligation: if a trigger applies (design decision / new component /
   API·schema·infra change / release), update the relevant `docs/` concept plus
   its `index.md` / `log.md` in the **same** PR (→ CLAUDE.md, docs/CLAUDE.md).
+- **`docs/log.md` and the `index.md` concept lists are generated** (#360,
+  [ADR-0031](../../docs/decisions/adr-0031-docs-ledger-conflicts.md)). Write a
+  **new** fragment `docs/log.d/YYYY-MM-DD-<slug>.md` instead of editing
+  `log.md`, then regenerate. `okf-lint`'s `log-sync` / `index-sync` fail if you
+  forget:
+
+  ```bash
+  bash scripts/okf-log-build.sh    # docs/log.md
+  bash scripts/okf-index-build.sh  # index.md のマーカー区間
+  ```
+
+  Pick a `<slug>` unique to your change (issue number, topic) — that filename is
+  the entire mechanism that keeps two same-day PRs from colliding.
+- **Keep every ledger edit in ONE commit.** `git rebase` replays commit by
+  commit, so a branch that touches `docs/log.md` in three commits stops for the
+  same conflict three times. One commit → at most one stop.
 
 **Always** (any PR, regardless of what changed):
 
@@ -272,7 +288,44 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
 
 6. **Vet each `/code-review` finding the same way** (valid vs mistaken).
 
-7. **Merge only on explicit instruction; otherwise wait.**
+7. **Park the PR — do NOT chase `main`.** Once steps 1-6 are done the PR has a
+   *banked green*, and that green already proves what a rebase would re-prove
+   (see Parking below). Leave it alone until there is an instruction to merge.
+
+8. **Merge only on explicit instruction; otherwise wait.** Rebase once, at that
+   point, if `main` has moved (→ Conflict check & resolution, then Merging).
+
+### Parking a ready PR (step 7)
+
+**Chasing `main` buys nothing, and it is not free.** Three measured facts:
+
+1. **CI runs on the merge ref.** `ci.yml` triggers on `pull_request` with no
+   `types`, so GitHub checks out `refs/pull/<n>/merge` — a green run has
+   *already* tested "branch ⊕ `main` as of that moment". Rebasing to catch up
+   re-proves the same statement about a slightly newer `main`.
+2. **The ruleset does not require the branch to be up to date.** Verified on
+   `main-required-checks`: `strict_required_status_checks_policy: false`, and
+   the required contexts are **`lint` only**. A behind-but-clean branch merges.
+3. **A conflicted PR runs no CI at all** — GitHub cannot build
+   `refs/pull/<n>/merge`, so every `pull_request` workflow is skipped with no
+   report (PR #169: `gh pr checks` says "no checks reported"). So a rebase you
+   did not need can *cost* you a full round trip if it lands you in a conflict.
+
+PR #288 paid rebase + a full CI cycle **three times** while open, for a result
+that was already proven each time.
+
+**Park by default. Rebase once, when told to merge.** Break the park only for:
+
+| 例外 | なぜ |
+|---|---|
+| **banked green が無い** | CI が緑になったことが一度も無いなら park する対象がない。まず緑にする |
+| **自分か `main` の進みが `Cargo.*` を触る** | lockfile はマージ時に機械的に解決できない。早く突き合わせるほど安い |
+| **`main` の進みが自分の変更ファイルと重なる**（元帳は除く） | 論理的な衝突は merge ref の green では捕まらない。同じ関数を両側が触ったら早く見る |
+| **bot PR**（release-please） | Release PR は release-please が force-push し、`sync-lockfile` ジョブが `Cargo.lock` を書き戻す。人間の park の前提（ブランチが動かない）が成り立たない |
+| **park が 3 回 / 1 日を超えた** | 「証明済みの green」が古くなりすぎると、2 の "up to date でなくてよい" が形式的にしか正しくなくなる |
+
+**Parking makes "no checks reported" the normal state**, because the PR's last
+CI run belongs to an older head. Do not read that as pass — see below.
 
 ### Handling findings (steps 4 & 6)
 
@@ -292,9 +345,11 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
   cover the small fix commits, and a full `/code-review` pass is expensive.
   Explicitly **not** re-run triggers: a fix commit answering a finding, a
   force-push that only replays existing work, and **a merge conflict plus a
-  mechanical rebase resolving it** (conflicts resolved by keeping both sides or
-  taking one side verbatim) — a conflict says `main` moved, not that the diff
-  became riskier. The **carve-out is load-bearing**: if the conflict resolution
+  mechanical rebase resolving it** (conflicts resolved by keeping both sides,
+  taking one side verbatim, or regenerating a ledger from its source) — a
+  conflict says `main` moved, not that the diff became riskier. Parking (step 7)
+  makes this the common case: a parked PR is rebased once, right before merge.
+  The **carve-out is load-bearing**: if the conflict resolution
   itself changed behavior, or the force-push carries substantive new logic, it
   is a substantive commit and the rule above applies. (This restates Conflict
   check & resolution below, because that is not where anyone looks when
@@ -302,17 +357,39 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
   unconditional version of this rule was already shipped once and corrected
   after review, in `29161af`.)
 
-### If CI is red
+### If CI is red — or absent, or stale
 
-Investigate → fix → push → re-monitor. Never merge on red. If `main` itself
-broke, follow pr-conventions "If `main` breaks" (revert first, root-cause after).
+Investigate → fix → push → re-monitor. If `main` itself broke, follow
+pr-conventions "If `main` breaks" (revert first, root-cause after).
+
+**Never merge on red — and "not red" is not the same as green.** Parking (step
+7) makes the other two states normal, so name them explicitly:
+
+```bash
+gh pr view <n> --json headRefOid,mergeStateStatus,statusCheckRollup \
+  --jq '{head: .headRefOid, merge: .mergeStateStatus,
+         checks: [.statusCheckRollup[] | "\(.name)=\(.conclusion)"]}'
+```
+
+| 状態 | 見え方 | 意味 |
+|---|---|---|
+| **red** | `checks` に `FAILURE` がある | 直す |
+| **absent（衝突）** | `checks` が空 かつ `merge: "DIRTY"` | **緑ではない。** merge ref を作れないので全ワークフローが無報告でスキップされる（PR #169）。まず衝突を解消する |
+| **absent（未着手）** | `checks` が空 かつ `merge` はそれ以外 | まだ走り出していないだけ。待つ |
+| **stale** | force-push 直後で `checks` が空／前の run のまま | 新しい head の run を待つ。push した瞬間に前の green は自分のものではなくなる |
+
+`statusCheckRollup` は PR の**最新コミット**に紐づくので、返ってきた結果は
+`headRefOid` のものである。**危ないのは「空」の解釈**で、上の 2 行が示すとおり
+「衝突している」と「まだ走っていない」は見分けがつかない — `mergeStateStatus` で
+割ること。どちらも pass ではない。
 
 ### Conflict check & resolution
 
-**When to check**: right after opening the PR, whenever `main` advances while
-the PR is open (another PR merged first), and always immediately before merge
-(step 7). GitHub computes mergeability asynchronously, so an `UNKNOWN` result
-just means "not computed yet" — re-run after a few seconds.
+**When to check**: right after opening the PR, and **once immediately before
+merge** (step 8). *Not* every time `main` advances — that is the loop parking
+(step 7) exists to break; a `DIRTY` PR you are not about to merge costs nothing
+until you merge it. GitHub computes mergeability asynchronously, so an `UNKNOWN`
+result just means "not computed yet" — re-run after a few seconds.
 
 ```bash
 gh pr view <n> --json mergeStateStatus,mergeable
@@ -338,33 +415,98 @@ git add <resolved files>
 GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
 ```
 
-- After the rebase completes, re-run the **scoped local checks** for the union
-  of the branch's diff and the conflicted files (Rust set if Rust files are
-  involved — the branch's code has never been built against the new `main`),
-  plus `bash scripts/okf-lint.sh docs` if `docs/**` was conflicted and
-  `rumdl check .` if **any** `*.md` was conflicted (the marker check — see
-  Markdown lint above).
-- Only when those checks pass, push:
+**During a rebase `--ours` and `--theirs` are inverted** relative to intuition:
+the rebase replays *your* commits onto `main`, so `--ours` is **`main`** and
+`--theirs` is **your branch**. Getting this backwards silently discards one
+side. `git checkout --ours <file>` during a rebase keeps `main`'s version.
+
+**The ledger files have a fixed, judgment-free resolution** (#360) — never
+hand-merge their markers:
+
+```bash
+bash scripts/okf-log-build.sh && git add docs/log.md
+```
+
+Both sides' `docs/log.d/` fragments are **new files**, so they merge cleanly on
+their own and regenerating picks up both. `docs/**/index.md` is `merge=union`
+(`.gitattributes`) and does not conflict at all; run
+`bash scripts/okf-index-build.sh` afterwards to collapse any duplicate the union
+kept.
+
+**"Keep both sides" is a resolution for list-structured files only** — the
+ledgers above, and files that are genuinely a flat list of independent lines.
+It is **not** a general strategy: in source, concatenating both sides cuts a
+function in half. `cli_commands.rs` was resolved that way once and failed to
+compile with `unclosed delimiter`. For anything else, read the hunk.
+
+**Check for leftover conflict markers with `--check`, not `grep`:**
+
+```bash
+git diff main...HEAD --check      # 第一手。空なら残骸なし
+```
+
+`git grep '======='` also matches a setext `H2` underline, which is a real
+construct in Markdown — it false-positives on prose. `--check` knows what a
+conflict marker is. (`rumdl` catches markers too, but only for `*.md`, and
+which rule fires depends on what surrounds the marker — see Markdown lint.)
+
+#### After the rebase — staged re-checks
+
+**A force-push re-runs the entire CI suite, so local checks here buy fail-fast,
+not correctness — with two exceptions.** `rumdl` and `cargo doc --workspace
+--no-deps` have **no CI counterpart at all**; if you skip those, nothing else
+catches the regression. Everything else is a duplicate of what CI is about to
+run anyway.
+
+Pick the tier from **what conflicted × what `main`'s advance contains**:
+
+| Tier | 条件 | ローカルで回すもの |
+|---|---|---|
+| **T0** | 衝突ゼロで rebase が通り、`main` の進みが自分の変更ファイルと 1 つも重ならない | 何も回さない。push して CI に任せる |
+| **T1** | 衝突が**元帳だけ**（`docs/log.md` / `docs/**/index.md`）で、`main` の進みが Rust/Cargo を触っていない | `git diff main...HEAD --check`／`bash scripts/okf-lint.sh docs`／`rumdl check .` |
+| **T2** | 衝突が `*.md`・`.claude/**`・`docs/**`（元帳以外）に及ぶ | T1 と同じ（対象が広がるだけ） |
+| **T3** | 衝突が Rust/Cargo に及ぶ、**または** `main` の進みが `**/*.rs` / `Cargo.*` を触る | T2 ＋ **Rust セット一式**（`cargo doc` を含む） |
+
+**なぜ T1/T2 で Rust を回さないのか。** `main` の進みが Rust/Cargo を 1 バイトも
+触っていないなら、rebase 後のブランチの Rust ソースと依存グラフは、**CI が既に
+green にした merge ref のそれとバイト同一**である。clippy と test はその同じ入力に
+対する同じ計算なので、証明可能に冗長になる。docs だけの衝突で 11 crate 分の
+clippy + test を回していたのはこれである（PR #288）。
+
+**逆に T3 は必ず回す。** `main` が Rust を触ったなら、ブランチのコードが**新しい
+`main` に対してビルドされたことは一度も無い**。ここは fail-fast ではなく、
+CI を 1 周無駄にしないための実質的な検査になる。
+
+- Only when the tier's checks pass, push:
   `git push --force-with-lease` (own feature branch only → git-conventions).
 - A force-push re-triggers CI — re-monitor it (steps 1 & 3). Copilot does not
-  re-review (step 2). A mechanical rebase (conflicts resolved by keeping both
-  sides / taking one side verbatim) needs no `/code-review` re-run; if the
-  conflict resolution itself changed behavior, treat it like any substantive
-  commit (step 5's re-run policy applies).
+  re-review (step 2). A mechanical rebase needs no `/code-review` re-run —
+  conflicts resolved by keeping both sides, taking one side verbatim, or
+  **regenerating a ledger from its source** are all mechanical. **The carve-out
+  is load-bearing**: if the conflict resolution itself changed behavior, treat
+  it like any substantive commit (step 5's re-run policy applies). Keep this
+  wording in step with the copy under Handling findings — an unconditional
+  version of this rule shipped once and was corrected after review (`29161af`).
 
-## Merging (step 7 — only when instructed)
+## Merging (step 8 — only when instructed)
 
 - Default strategy: **Squash and Merge**; delete the branch
-  (→ pr-conventions for when a non-default strategy is allowed):
+  (→ pr-conventions for when a non-default strategy is allowed). Close the
+  window between "green" and "merged" so another merge cannot invalidate it:
 
   ```bash
-  gh pr merge <n> --squash --delete-branch
+  gh pr checks <n> --watch --fail-fast && gh pr merge <n> --squash --delete-branch
   ```
 
-- Pre-merge: `mergeStateStatus` clean, required checks green, no unresolved
-  review threads. If it reports `mergeStateStatus: DIRTY` /
-  `mergeable: CONFLICTING`, go through "Conflict check & resolution" above
-  first:
+- **Merge ready PRs one at a time, serially.** Each squash moves `main`, which
+  makes every other open PR behind (and possibly `DIRTY`). Merging in parallel
+  means resolving the same conflict repeatedly against a `main` that keeps
+  moving; merging serially means each PR is rebased at most once, right before
+  its own merge.
+- Pre-merge: `mergeStateStatus` clean, required checks green **for the current
+  head** (→ "red, absent, or stale"), no unresolved review threads. If it
+  reports `mergeStateStatus: DIRTY` / `mergeable: CONFLICTING`, go through
+  "Conflict check & resolution" above first:
 
   ```bash
   gh pr view <n> --json mergeStateStatus,mergeable,reviewDecision
@@ -375,3 +517,17 @@ GIT_EDITOR=true git -c commit.gpgsign=false rebase --continue
 - Merging `main` is outward-facing and hard to reverse → only with an explicit
   user go-ahead. High-risk git operations (force push, etc.) follow
   git-conventions' confirm-first rules.
+
+### Two merge shortcuts that are wrong here
+
+- **`gh pr merge --auto` is unusable in this repo.** `--auto` fires as soon as
+  the *required* checks pass, and the ruleset requires **`lint` only** —
+  `okf-lint.yml` has no path filter, so it is green on nearly every PR. Auto
+  merge would therefore land a PR with `clippy / rustfmt` and `test` still red.
+  Using it safely would first need those two contexts added to the ruleset's
+  required checks (a repo settings change, not a flag).
+- **Never use `gh pr update-branch` or GitHub's "Update branch" button.** Its
+  default merges `main` **into** the branch, creating a merge commit — which
+  git-conventions forbids ("never `git merge main`", keep history linear).
+  `allow_update_branch: true` is set on the repo, so the button is always
+  visible in the UI; that is not permission to press it. Rebase instead.
