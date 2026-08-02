@@ -4,10 +4,21 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-01T20:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-03T06:50:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
+
+# ⚠️ 既知の非互換: herdr 0.7.5 (protocol 17) では dispatch が動かない
+
+本ドキュメントが記述する実装は **herdr 0.7.4 (protocol 16) までを前提**にしている。
+0.7.5 (protocol 17) では `agent.start` が manifest 駆動へ、プロンプト投入が `agent.prompt` へ
+破壊的に変わっており、`task/dispatch` は
+`invalid_request: missing field 'kind'` で失敗する（2026-08-03 の実機検証で検出）。
+
+差分と 17 での正しい呼び出し列は [herdr Socket API](/references/herdr-socket-api.md) の
+2026-08-03 改訂節を参照。以下の「プロンプト投入」「dispatch のフック起動」「pane レイアウト」の
+各節は **0.7.4 までの記述**であり、17 対応の実装が入るまでこの注記が正である。
 
 # 責務
 
