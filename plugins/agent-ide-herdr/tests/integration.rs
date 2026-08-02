@@ -849,12 +849,15 @@ async fn a_response_without_a_root_pane_fails_the_dispatch() {
         "a dispatch with no pane to run in must fail: {disp}"
     );
 
-    let log = requests.lock().unwrap();
-    assert!(
-        calls(&log, "agent.start").is_empty(),
-        "and must not start an agent anywhere: {log:?}"
-    );
-    drop(log);
+    // Scoped, not `drop`ped: the guard must be out of scope before the await
+    // below, and a block is what proves that to `clippy::await_holding_lock`.
+    {
+        let log = requests.lock().unwrap();
+        assert!(
+            calls(&log, "agent.start").is_empty(),
+            "and must not start an agent anywhere: {log:?}"
+        );
+    }
     // The workspace it allocated is still taken back down (asynchronously, so
     // this waits rather than sampling).
     assert!(
@@ -880,13 +883,14 @@ async fn a_taken_agent_name_fails_the_dispatch() {
     let disp = d.dispatch("T1", "Draft the reply", "implement").await;
 
     assert!(!disp["error"].is_null(), "must not be papered over: {disp}");
-    let log = requests.lock().unwrap();
-    assert_eq!(
-        calls(&log, "agent.start").len(),
-        1,
-        "no retry under a different name: {log:?}"
-    );
-    drop(log);
+    {
+        let log = requests.lock().unwrap();
+        assert_eq!(
+            calls(&log, "agent.start").len(),
+            1,
+            "no retry under a different name: {log:?}"
+        );
+    }
     assert!(
         awaits_workspace_close(&requests).await,
         "a failed dispatch must not leak its workspace"
