@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-08-03
+
+* **Update**: [herdr Socket API](/references/herdr-socket-api.md) を herdr 0.7.5 (protocol 17) の実機プローブで改訂。`agent.start` が manifest 駆動（`{name, kind, pane_id}` 必須・`argv`/`cwd`/`env`/`split` 廃止・pane は呼び出し側が用意）へ、プロンプト投入が `agent.send` 廃止 + `agent.prompt {target, text, wait}` 新設へ、`name` が表示ラベルから識別子（`[a-z][a-z0-9_-]{0,31}`）へと破壊的に変わったことを記録し、0.7.4 までの記述を無効化した。#124 で必須とされた「送信 → 画面照合 → enter 再押下」の自己修正手順は 17 では不要になる。
+* **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) に既知の非互換の注記を追加。実機検証で `task/dispatch` が `invalid_request: missing field 'kind'` で失敗することを確認したため、本文が 0.7.4 までの前提である旨を先頭に明示した。
+
 ## 2026-08-01
 
 * **Creation**: [ADR-0031 docs の元帳（log.md / index.md）は生成物にして並行 PR の衝突源を構造的に消す](/decisions/adr-0031-docs-ledger-conflicts.md) / **Update**: [CLAUDE.md](/CLAUDE.md) — `docs/log.md` を `docs/log.d/` の断片から生成する形に変えた（[#360](https://github.com/tomoya-k31/totsuka/issues/360)）。**衝突は運ではなく構造の帰結だった**: log.md は直近 60 commit のうち 55 件が変更し、そのうちログを触った直近 40 commit は **40 件すべてがファイル先頭への挿入**で、これは「新しい日付が上」＋「同日はエントリを追記」という規約の直接の帰結である。コンフリクト中の PR は `refs/pull/N/merge` を作れず **CI が一切走らない**ため、代償は「解決 → 再検査 → force-push → CI 全周回」1 式（PR #288 は開いている間に 3 回払った）。各 PR が**新規ファイル**を 1 枚置く形にすればその衝突源が消える。あわせて `index.md` の concept 一覧を `scripts/okf-index-build.sh` の管轄にし、`.gitattributes` で `merge=union` を宣言した。

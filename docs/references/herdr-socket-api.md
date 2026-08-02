@@ -1,10 +1,10 @@
 ---
 type: Reference
 title: herdr Socket API / 統合エージェント capability（外部一次情報ミラー）
-description: "herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status・pane レイアウト）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124/#356）設計の根拠。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。"
+description: "herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status・pane レイアウト）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124/#356）設計の根拠。protocol 17 で agent.start が manifest 駆動（kind + 既存 pane）へ、プロンプト投入が agent.prompt へ変わった破壊的変更を含む。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。"
 resource: https://herdr.dev/docs/socket-api/
 tags: [herdr, socket-api, integration, agent-ide, external]
-generated: { by: claude-code/opus-5, at: 2026-08-01T20:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-03T06:20:00+09:00 }
 status: stable
 stale_after: 2027-02-01
 owner: tomoya-k31
@@ -20,6 +20,9 @@ sources:
   - id: ref-4
     resource: https://github.com/tomoya-k31/totsuka/issues/356
     title: "#356 pane レイアウトの実機プローブ記録（SplitDirection / pane.split の ratio 意味論 / env 継承 / レイテンシ、2026-08-01）"
+  - id: ref-5
+    resource: "herdr 0.7.5 (protocol 17) 実機プローブ記録（`herdr api schema --json` + CLI 経由の workspace.create → pane.split → agent.start → agent.prompt 一気通貫、2026-08-03）"
+    title: "protocol 17 の破壊的変更（agent.start の manifest 駆動化 / agent.send 廃止 / agent.prompt 新設）"
 ---
 
 # このドキュメントについて
@@ -37,9 +40,24 @@ herdr 公式ドキュメント（[Socket API](https://herdr.dev/docs/socket-api/
 `agent.start` が `split` 未指定でも分割すること / `workspace.create` の `root_pane` と `env` の効き方）が
 **一切記載されていなかった**ため、schema と実機プローブから節を追加した。
 
+**2026-08-03 改訂（protocol 17・実機検証で検出）**[^ref-5]: 実機検証で `task/dispatch` が
+`invalid_request: missing field 'kind'` で失敗したことを起点に 0.7.5 を再プローブし、
+**エージェント起動とプロンプト投入の 2 系統が破壊的に変わっている**ことを確認して改訂した。
+要点は 3 つで、いずれも 0.7.4 までの記載を**無効化**する:
+
+1. **`agent.start` が manifest 駆動になった** — `{name, kind, pane_id}` が必須で、`argv` / `cwd` /
+   `env` / `workspace_id` / `split` / `focus` は受け付けない。**pane は呼び出し側が用意する**
+2. **`agent.send` が廃止され `agent.prompt` が新設された** — `{target, text, wait?}` で、
+   **複数行プロンプトをそのまま投入できる**。#124 で必須とされた「送信 → 画面照合 → enter 再押下」の
+   自己修正手順は protocol 17 では不要
+3. **`name` が表示ラベルではなく識別子になった** — `[a-z][a-z0-9_-]{0,31}`
+
+[^ref-5]: protocol 17 の破壊的変更（agent.start の manifest 駆動化 / agent.send 廃止 / agent.prompt 新設）
+
 > ⚠️ herdr は活発に更新される外部ソフトウェア。依存する前に `herdr status` / `ping` でプロトコル版を確認し、
 > 正確なスキーマは `herdr api schema --json` で取得すること（**0.7.1 以前の CLI に `api` サブコマンドは無い**。
-> 未知フィールドは寛容に扱う）。本書は 0.7.4 (protocol 16) 実機で検証済み。
+> 未知フィールドは寛容に扱う）。本書は **0.7.5 (protocol 17) 実機で検証済み**で、
+> 0.7.4 (protocol 16) までとの差分は上記 3 点として明示してある。
 
 # トランスポート・接続モデル（重要）
 
@@ -61,12 +79,17 @@ not-found 系のエラーコードは対象別: **`pane_not_found` / `agent_not_
 herdr が管理プロセスへ注入する環境変数: `HERDR_SOCKET_PATH` / `HERDR_ENV=1` / `HERDR_WORKSPACE_ID` / `HERDR_TAB_ID` /
 `HERDR_PANE_ID` / `HERDR_AGENT`（統合別）/ プラグイン向け `HERDR_PLUGIN_ID` 他。herdr 管理変数は呼び出し側指定より優先。
 
-# 主要メソッド（0.7.4 実機で確認済みの形）
+# 主要メソッド（0.7.5 / protocol 17 実機で確認済みの形）
 
-有効メソッド一覧（実機の `unknown variant` エラー列挙より）: `ping`, `server.*`, `notification.show`, `client.window_title.*`,
+有効メソッド一覧（`herdr api schema --json` の `request.oneOf` より）: `ping`, `server.*`（`agent_manifests` /
+`reload_agent_manifests` を含む）, `notification.show`, `client.window_title.*`,
 `workspace.create|list|get|focus|rename|close`, `worktree.list|create|open|remove`, `tab.*`,
-`agent.list|get|read|explain|send|rename|focus|start`, `pane.split|swap|move|zoom|layout|process_info|neighbor|edges|focus|focus_direction|resize|list|current|get|rename|send_text|send_keys|send_input|read|report_agent|report_agent_session|report_metadata|clear_agent_authority|release_agent|close|wait_for_output`,
+`agent.list|get|read|explain|send_keys|rename|view.set|view.clear|focus|start|prompt|wait`,
+`pane.split|swap|move|zoom|layout|process_info|neighbor|edges|focus|focus_direction|resize|list|current|get|rename|send_text|send_keys|send_input|read|graphics.*|report_agent|report_agent_session|report_metadata|clear_agent_authority|release_agent|close|wait_for_output`,
 `events.subscribe|wait`, `layout.export|apply`, `integration.*`, `plugin.*`。
+
+**0.7.4 との差分**: `agent.send` が**消え**、`agent.prompt` / `agent.wait` / `agent.view.*` が**加わった**。
+`server.agent_manifests` の存在が示すとおり、エージェントは manifest レジストリ管理になっている。
 
 **focus 系（#155 で `herdr api schema --json`（0.7.4）から確認・追記）**: `workspace.focus {workspace_id}` /
 `tab.focus {tab_id}` / `pane.focus {pane_id}` が存在する（params は各 id のみ、request スキーマの
@@ -76,9 +99,10 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 | メソッド | params（実測） | result（実測） |
 |---|---|---|
 | `workspace.create` | `{cwd, label?, env?, focus?}`（**`command`/`args` は無い** — 旧記載は誤り） | `{type:"workspace_created", workspace:{workspace_id, number, label, pane_count, ...}, tab:{tab_id, ...}, root_pane:{pane_id, ...}}`。初期 pane（シェル）1 枚付きで、**`root_pane` はその pane（`PaneInfo`）を返す required フィールド**（#356 で追記。これが初期 pane を掴む唯一の手段） |
-| `agent.start` | `{name, argv, cwd?, workspace_id?, tab_id?, split?, env?, focus?}`（`name`/`argv` 必須）。**エージェント CLI の起動はこれ**。`split` は `SplitDirection` のみで **`ratio` を取らない**。**`split` 未指定でも分割する**（既定 `right` / 0.5, #356 実測） | `{type:"agent_started", agent:{pane_id, terminal_id, workspace_id, tab_id, agent_status, cwd, ...}, argv}` |
+| `agent.start` | **protocol 17 で一新**: `{name, kind, pane_id}` が必須、`args?` / `timeout_ms?`。`cwd` / `env` / `argv` / `workspace_id` / `tab_id` / `split` / `focus` は**受け付けない**。`kind` は実行ファイルを決める enum（`claude` / `codex` / `opencode` / `gemini` / `cursor` ほか計 21）で、`args` はその後ろに付く。`name` は**識別子**で `[a-z][a-z0-9_-]{0,31}`（空白・`:`・大文字は `invalid_agent_name`）。`pane_id` は**対話シェルプロンプト状態の既存 pane**を指す — pane の用意は呼び出し側の仕事になった | `{type:"agent_started", agent:{pane_id, name, agent, agent_status, interactive_ready, cwd, ...}, argv}`。`argv` に herdr が組み立てた実コマンドが返る（実測 `["claude","--permission-mode","plan"]`） |
 | `pane.split` | `{direction(必須), ratio?, target_pane_id?, workspace_id?, cwd?, env?, focus?}`。**作成時に比率を指定できる唯一の経路**（#356） | `{type:"pane_info", pane:{...}}` |
-| `agent.send` | `{target, text}`。target は terminal id / agent 名 / pane id。**literal text の書き込みのみで Enter は押されない** — 送信確定には `pane.send_keys` で `enter` を送る | ok（不在 target は `agent_not_found`） |
+| `agent.prompt` | **protocol 17 で新設**（`agent.send` の後継）: `{target, text, wait?}`。`wait` は `{until:[AgentStatus], timeout_ms}`。**複数行テキストをそのまま投入し、送信まで行う**（enter を別途送る必要はない） | `{type:"agent_prompted", agent:{...}}` |
+| `agent.wait` | `{target, until?:[AgentStatus], timeout_ms?}`。投入と独立に状態到達を待つ | agent 情報 |
 | `pane.send_keys` | `{pane_id, keys}`。**`keys` は配列**（例 `["ctrl+c"]`、`["enter"]`） | ok |
 | `pane.get` | `{pane_id}` | `{type:"pane_info", pane:{pane_id, terminal_id, workspace_id, tab_id, focused, cwd, foreground_cwd, agent_status, revision, agent_session?, label?, ...}}`。**`scrollback` フィールドは無い**（旧記載は誤り）。不在は `pane_not_found` |
 | `pane.read` | `{pane_id, source, lines?, format?, strip_ansi?}`。`source` ∈ `visible` / `recent` / `recent-unwrapped` / `detection` | `{type:"pane_read", read:{pane_id, workspace_id, tab_id, source, format, text, revision, truncated}}`。`strip_ansi: true` で装飾除去（`agent.read {target, ...}` も同形）。**返るのは画面のコピーのみ**（下記） |
@@ -94,12 +118,12 @@ OS ウィンドウの座標・サイズ・ディスプレイ指定に相当す�
 | 事実 | 根拠 |
 |---|---|
 | `SplitDirection` は **`right` / `down` の 2 値のみ**（`up` / `left` は無い） | `api schema` の enum |
-| `AgentStartParams.split` は `SplitDirection` のみで **`ratio` を取らない** | schema。`agent.start` 単独では比率を指定できない |
-| **`agent.start` は `split` 未指定でも分割する。既定は `right` / 0.5** | 実機 |
+| ~~`AgentStartParams.split`~~ は **protocol 17 で消滅** | schema。0.7.4 までは `SplitDirection` のみ受け `ratio` を取らなかった |
+| ~~`agent.start` は `split` 未指定でも分割する~~ → **protocol 17 では分割しない**。既存 pane に起動するだけ | 実機 0.7.5: `pane_id` に渡した pane がそのままエージェント pane になり、pane 数は増えない |
 | **`ratio` は分割元（上 / 左）の取り分** | 実機: area 67 行に `--direction down --ratio 0.8` → 上 54 行（80.6%）/ 下 13 行（19.4%）。分割線は行を消費しない（54 + 13 = 67） |
 | `pane.split` はフォーカスを**分割元に残す**（`focus: false` 時） | 実機: `focused_pane_id` が分割元のまま |
-| **`agent.start` の `name` が pane label になる**。`workspace.create` の `label` は pane に伝播しない | 実機: root pane も split pane も `label = null`、エージェント pane だけ `totsuka <task.id>` |
-| **`workspace.create` の `env` は root pane にしか効かない**。`pane.split` で作った pane は継承しない | 実機: root pane で `MARK<SENTINEL_9f3a>` / split pane で `MARK<>` |
+| ~~`agent.start` の `name` が pane label になる~~ → **protocol 17 では ならない**。`name` は識別子で、pane の表示は `terminal_title` が担う | 実機 0.7.5: `name = "totsuka-probe"` で起動した pane の `pane.get` は `label` を返さず（null）、`terminal_title: "✳ Claude Code"` |
+| **`workspace.create` の `env` は root pane にしか効かない**。`pane.split` で作った pane は継承しない | 実機: root pane で `MARK<SENTINEL_9f3a>` / split pane で `MARK<>`（0.7.5 でも再現: `MARK<SENTINEL_p17>`） |
 
 その他の位置制御メソッド（totsuka は未使用）: `layout.set_split_ratio {path: [bool], ratio}` / `layout.apply` /
 `layout.export` / `pane.resize` / `pane.swap` / `pane.move` / `pane.zoom` / `pane.neighbor` / `pane.edges` /
@@ -110,16 +134,42 @@ OS ウィンドウの座標・サイズ・ディスプレイ指定に相当す�
 
 totsuka 側の利用は [ADR-0030](/decisions/adr-0030-herdr-pane-layout.md) / [agent-ide-herdr](/components/agent-ide-herdr.md)。
 
-## プロンプト投入の実機作法（重要・#124 で実測）
+## エージェント起動の実機作法（protocol 17）
 
-**`argv` 末尾にプロンプトを渡す方式は使えない**。`claude … "<単一行>"` は動くが、**改行を含むプロンプトは投入されない**（入力欄は空のまま `idle` 固定 → 状態変化ゼロ → 状態ストリームが永久に無通知）。totsuka のタスク本文は常に複数行なので、実運用では必ずこれを踏む。
+呼び出し列は 4 手で、**pane の用意が呼び出し側の仕事になった**のが 0.7.4 までとの最大の差:
 
-正しい手順は `agent.start`（プロンプトなし）→ `agent.send` → `pane.send_keys {keys:["enter"]}`。ただし **CLI は「入力を受け取れる状態」と「入力に反応できる状態」がずれている**ため、どちらの書き込みも撃ちっぱなしにはできない:
+```text
+workspace.create {cwd, env, focus:false}          → root_pane（env はここでしか効かない）
+pane.split {target_pane_id: root_pane, ...}       → 併設シェル pane（レイアウトが要るときだけ）
+agent.start {name, kind, pane_id: root_pane, args}
+agent.prompt {target: root_pane, text, wait}
+```
+
+- **フック環境変数の注入先は `workspace.create` の `env`**。`agent.start` は `env` を受け付けなくなったが、
+  エージェントは root pane のシェルから起動されるので、root pane に効く env がそのまま届く
+  （0.7.5 実機で `MARK<SENTINEL_p17>` を確認）
+- **`pane.close` で初期 pane を捨てる手順は不要になった**。0.7.4 までは `agent.start` が新しい pane を
+  作るせいで初期シェル pane が余っていたが、17 では初期 pane がそのままエージェント pane になる
+- `kind` が実行ファイルを決めるため、**任意パスの実行ファイルは指定できない**（`args` は渡せる）
+
+## プロンプト投入の実機作法（protocol 17 で大幅に単純化）
+
+**`argv` 末尾にプロンプトを渡す方式は使えない**。`claude … "<単一行>"` は動くが、**改行を含むプロンプトは投入されない**（入力欄は空のまま `idle` 固定 → 状態変化ゼロ → 状態ストリームが永久に無通知）。totsuka のタスク本文は常に複数行なので、実運用では必ずこれを踏む。**この制約は 17 でも変わらない。**
+
+変わったのは投入手段のほうで、**`agent.prompt {target, text, wait}` 1 回で複数行プロンプトの入力と送信が完了する**（0.7.5 実機: 3 行のプロンプトが全行そのまま入り、エージェントが応答した）。`wait` は
+`{until:[AgentStatus], timeout_ms}` で、submission 後に観測された最初の一致状態まで待つ。
+
+**0.7.4 までの自己修正手順は 17 では不要**（`agent.send` 自体が無い）。ただし何が問題だったかは、
+`agent.prompt` が内部で解決している内容そのものなので記録として残す:
 
 - 早すぎる `agent.send` は**テキストが失われる**。早すぎる `enter` は**飲み込まれる**（実測で 3 回押して初めて送信された試行あり）
 - `❯` の描画（〜1.2s）も `agent_session` の報告（hook の SessionStart、〜1.2s）も **「入力受付可能」を意味しない**
-- したがって **①テキスト着弾を画面で確認して未着弾なら再送 ②`agent_status ∈ {working, blocked, done}` になるまで `enter` を再押下**（空入力への enter は no-op なので冪等）、という自己修正が必須
+- したがって **①テキスト着弾を画面で確認して未着弾なら再送 ②`agent_status ∈ {working, blocked, done}` になるまで `enter` を再押下**（空入力への enter は no-op なので冪等）、という自己修正が必須だった
 - 画面確認は **空白除去による正規化マッチ**で行う。入力欄は画面幅で折り返され CJK は語中で割れるため、素朴な substring は必ず偽陰性になる。またプロンプトが長いと入力欄はカーソル（＝末尾）側を表示するので、**照合はプロンプトの末尾**で行う
+
+なお **`agent_session`（`--resume` に使う識別子）は `herdr integration install claude` が前提**で、
+統合が入っていない環境では `pane.get` に現れない（0.7.5 実機で確認）。これは 17 の変更ではなく、
+0.7.4 までと同じ「hook が `pane.report_agent_session` で報告する」設計のままである。
 
 # agent_status と totsuka 正規化状態の対応
 
