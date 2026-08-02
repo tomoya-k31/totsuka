@@ -1,6 +1,7 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
 //! `plugins/herdr.toml` as JSON (F-64/F-65).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -38,6 +39,26 @@ pub struct HerdrConfig {
     /// How the dispatched task's panes are arranged (#356).
     #[serde(default)]
     pub layout: LayoutConfig,
+    /// Overrides for the program-basename → herdr `kind` mapping
+    /// ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-1).
+    ///
+    /// herdr protocol 17 picks the executable itself from `agent.start`'s
+    /// `kind`, so the plugin translates
+    /// [`ToolLaunchSpec::program`](plugin_protocol::methods::ToolLaunchSpec) into that
+    /// vocabulary by its file name. A wrapper script (`my-claude`) has a name
+    /// herdr does not know, and this table is how it is told:
+    ///
+    /// ```toml
+    /// [kind_map]
+    /// my-claude = "claude"
+    /// ```
+    ///
+    /// Keys are compared against the program's **file name**, not its path.
+    /// Nothing is validated here — herdr rejects an unknown `kind` at
+    /// `agent.start`, and duplicating its 21-value enum in this crate would
+    /// only give the two a chance to disagree.
+    #[serde(default)]
+    pub kind_map: HashMap<String, String>,
     /// Per-request timeout (seconds) for herdr socket calls.
     #[serde(default = "default_request_timeout")]
     pub request_timeout_secs: u64,

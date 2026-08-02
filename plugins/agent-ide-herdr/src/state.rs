@@ -65,16 +65,6 @@ impl SessionHandle {
     }
 }
 
-/// `s` with every whitespace run removed.
-///
-/// Screen text is wrapped to the pane width — mid-word for CJK — so a phrase
-/// the plugin wrote is never on one line as written. Comparing both sides
-/// squashed makes "is my text on screen?" independent of where it wrapped
-/// (used by `submit_prompt` to confirm the prompt landed on screen).
-pub fn squash_ws(s: &str) -> String {
-    s.chars().filter(|c| !c.is_whitespace()).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,12 +97,5 @@ mod tests {
         // An empty agent session still round-trips.
         let bare = SessionHandle::new("w1:p1", "");
         assert_eq!(SessionHandle::decode(&bare.encode()), bare);
-    }
-
-    #[test]
-    fn squash_ws_makes_wrapped_screen_text_comparable() {
-        // How the input box renders a prompt the plugin sent as one line.
-        let on_screen = "❯ zsh の設定はどこ\n  にありますか？";
-        assert!(squash_ws(on_screen).contains(&squash_ws("zsh の設定はどこにありますか？")));
     }
 }

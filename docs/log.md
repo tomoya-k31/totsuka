@@ -2,6 +2,10 @@
 
 ## 2026-08-03
 
+* **Creation**: [ADR-0032 herdr protocol 17 への追随](/decisions/adr-0032-herdr-protocol-17.md) — herdr 0.7.5 で `agent.start` が manifest 駆動（`{name, kind, pane_id}` 必須・pane は呼び出し側が用意）へ、プロンプト投入が `agent.prompt` へ破壊的に変わったことへの追随方針を定めた。`program`→`kind` 写像（判定は herdr に委ね、逃げ道は `plugins/herdr.toml` の `[kind_map]`）、`name` の生成規則（`t-<可読プレフィクス>-<sha256 8 桁>`）と `agent_name_taken` を別名で回避しない判断、pane 確保順序の反転と `pane.close` の廃止、`submit_prompt` / `RetryPolicy` の廃止、protocol 16 以下を切る判断の 6 点。
+* **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) — ADR-0032 を実装。dispatch の呼び出し列（`workspace.create` → `pane.split` → `agent.start` → `agent.prompt`）、フック env の注入先が `workspace.create` へ移ったこと、`initialize` の protocol 下限検査、#124 / #281 で積み上げた起動レースの自己修正手順が上流の `agent.prompt` により不要になったことを反映した。
+* **Update**: [設定リファレンス](/development/config-reference.md) — `plugins/herdr.toml` に `[kind_map]` を追加し、herdr 0.7.5 以降が必要である旨を明記した。
+* **Update**: `scripts/okf-log-build.sh`（[ADR-0031](/decisions/adr-0031-docs-ledger-conflicts.md)）— 同日に断片が 2 つ以上あるとき、その日のリストが tight か loose かを判定して区切りの空行を出し分けるようにした。従来は常に空行を挟んでおり、単一行エントリだけの日が rumdl の `MD076` に掛かっていた。断片が PR ごとになった時点で初めて到達しうる経路。
 * **Update**: [herdr Socket API](/references/herdr-socket-api.md) を herdr 0.7.5 (protocol 17) の実機プローブで改訂。`agent.start` が manifest 駆動（`{name, kind, pane_id}` 必須・`argv`/`cwd`/`env`/`split` 廃止・pane は呼び出し側が用意）へ、プロンプト投入が `agent.send` 廃止 + `agent.prompt {target, text, wait}` 新設へ、`name` が表示ラベルから識別子（`[a-z][a-z0-9_-]{0,31}`）へと破壊的に変わったことを記録し、0.7.4 までの記述を無効化した。#124 で必須とされた「送信 → 画面照合 → enter 再押下」の自己修正手順は 17 では不要になる。
 * **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) に既知の非互換の注記を追加。実機検証で `task/dispatch` が `invalid_request: missing field 'kind'` で失敗することを確認したため、本文が 0.7.4 までの前提である旨を先頭に明示した。
 

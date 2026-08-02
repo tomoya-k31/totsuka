@@ -33,3 +33,7 @@ tokio = { workspace = true, features = ["net", "io-std"] }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Only to derive a collision-free `agent.start` name from a task id (ADR-0032
+# D-2). Already in the workspace for `plugin install`'s SHA-256 verification, so
+# this adds no new crate to the graph.
+sha2.workspace = true
