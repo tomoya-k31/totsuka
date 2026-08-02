@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-03T08:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-03T09:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -54,6 +54,14 @@ env を継承しないので、人間が叩くシェルにトークンは載ら�
 
 **分割はエージェント起動の前。** 0.7.4 までとは逆順である。エージェント pane が分割元になるので、
 先に割っておけば CLI は最終サイズで 1 度だけ描画される。
+
+**`agent.start` は `agent_pane_busy` の間リトライする**（予算 60 秒・間隔 500ms、[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7）。
+`workspace.create` が返した root pane はシェルがまだ起動中で、herdr は
+`agent target pane … is not an available shell` を返す。プロンプトへ達するまでの時間は運用者の
+rc ファイル次第で予測できず、読める readiness シグナルも無い（`pane.process_info` の `shell_pid` は
+実測 10 秒間ずっと `null`）。`agent.start` 自体が herdr の readiness 検査なので、
+その判断を再実装せず同じ問いを繰り返す。**リトライするのは `agent_pane_busy` だけ**で、
+未知の `kind`・`agent_name_taken`・CLI が現れない `timeout` は放っておいても直らないため即座に失敗させる。
 
 ## `program` → `kind` の写像
 
