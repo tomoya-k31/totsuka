@@ -57,4 +57,19 @@ impl HerdrError {
             _ => false,
         }
     }
+
+    /// Whether this is `agent.start` refusing a pane that has not reached its
+    /// interactive shell prompt yet — a **transient** state that clears on its
+    /// own within seconds.
+    ///
+    /// A freshly created workspace's root pane is still starting its shell, and
+    /// protocol 17 hands `agent.start` that pane directly. Measured live: a
+    /// dispatch calling `agent.start` about a second after `workspace.create`
+    /// got `agent_pane_busy: agent target pane w5:p1 is not an available
+    /// shell`, while the same call a few seconds later succeeded. How long the
+    /// window lasts is the operator's shell startup, so it is waited out rather
+    /// than predicted.
+    pub fn is_pane_not_ready(&self) -> bool {
+        matches!(self, HerdrError::Protocol { code, .. } if code == "agent_pane_busy")
+    }
 }

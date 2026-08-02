@@ -1,26 +1,32 @@
 //! The herdr adapter logic (F-30〜F-38): translate the Orchestrator's
 //! agent_ide calls into herdr Socket API method calls and event streams.
 //!
-//! Protocol facts this adapter is written against (herdr 0.7.4, verified live
-//! against real Claude Code in #124, mirrored in
-//! `docs/references/herdr-socket-api.md`):
-//! - the agent CLI is launched with `agent.start {name, argv, cwd, workspace_id}`
-//!   (`workspace.create` has no command params). Both methods accept an optional
-//!   `env` map (herdr 0.7.1+), used to inject the Orchestrator's hook
-//!   environment (`TOTSUKA_JOB_ID`, …) when a [`HookLaunchSpec`](plugin_protocol::methods::HookLaunchSpec) is supplied
-//! - the prompt **cannot** ride in `argv`: a multi-line prompt passed that way
-//!   is never submitted, and every task body here is multi-line. It is typed in
-//!   with `agent.send` and submitted with Enter — both confirmed, never
-//!   fire-and-forget, because the CLI accepts keystrokes before it acts on them
-//!   (see `HerdrAgent::submit_prompt`)
+//! Protocol facts this adapter is written against (herdr 0.7.5 / protocol 17,
+//! verified live in [ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md),
+//! mirrored in `docs/references/herdr-socket-api.md`):
+//! - the agent CLI is launched with `agent.start {name, kind, pane_id, args}`
+//!   into a pane the **caller** supplies. `kind` picks the executable, `name` is
+//!   an identifier (`[a-z][a-z0-9_-]{0,31}`, unique among live agents), and
+//!   `cwd`/`env`/`argv` are not accepted at all
+//! - the hook environment (`TOTSUKA_JOB_ID`, … from a
+//!   [`HookLaunchSpec`](plugin_protocol::methods::HookLaunchSpec)) therefore
+//!   rides on `workspace.create`, whose `env` herdr applies to the root pane —
+//!   which is the pane the agent is started in
+//! - a freshly created pane is **not immediately usable**: its shell is still
+//!   starting, and `agent.start` answers `agent_pane_busy` until it reaches a
+//!   prompt. There is no readiness signal to poll (`pane.process_info` reports
+//!   `shell_pid: null` throughout), so the call is retried
+//! - the prompt **cannot** ride in `args`: a multi-line prompt passed that way
+//!   is never submitted, and every task body here is multi-line. It goes in
+//!   through `agent.prompt {target, text, wait}`, which types and submits in one
+//!   call and reports `agent_prompt_stalled` when the agent does not react
 //! - events arrive as `{event, data}` envelopes whose kind separator is
 //!   inconsistent (`pane.agent_status_changed` but `pane_exited`), so kinds are
 //!   compared normalized
-//! - **`agent.start` always splits** (default `right` at 0.5) and its `split`
-//!   parameter takes no ratio, so the pane arrangement cannot be asked for on
-//!   the way in. `pane.split {direction, ratio, target_pane_id, cwd, env}` is
-//!   the only call that accepts a ratio, and it is what
-//!   `HerdrAgent::apply_layout` uses to impose `[layout]` afterwards (#356)
+//! - `agent.start` does **not** split (it did before protocol 17). The pane
+//!   arrangement is imposed by `pane.split {direction, ratio, target_pane_id,
+//!   cwd, env}` before the agent is started, which is what
+//!   `HerdrAgent::apply_layout` does (#356)
 //!
 //! # Completion detection is now hook-based (0.1.3, #131 / R-07)
 //!
@@ -42,6 +48,7 @@ use plugin_protocol::methods::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::config::HerdrConfig;
@@ -67,6 +74,19 @@ const PROMPT_WAIT_MS: u64 = 120_000;
 /// an interactive shell prompt first, and how long that takes is the operator's
 /// shell startup, not ours.
 const AGENT_START_TIMEOUT_MS: u64 = 120_000;
+
+/// How long `agent.start` keeps being re-asked while the pane reports
+/// `agent_pane_busy`.
+///
+/// The window measured live was seconds, not minutes; 60s is slack for a shell
+/// whose rc files do real work (version managers, completions). Past it the
+/// refusal is reported as-is — at that point "the shell is still starting" has
+/// stopped being a plausible reading.
+const PANE_READY_BUDGET: Duration = Duration::from_secs(60);
+
+/// How long to wait between those attempts. Short enough that the usual
+/// few-second window costs a few probes, long enough not to spin.
+const PANE_READY_POLL: Duration = Duration::from_millis(500);
 
 /// The herdr agent_ide adapter, generic over its [`HerdrTransport`].
 pub struct HerdrAgent<T> {
@@ -153,18 +173,15 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // screen-matching left that a reflow could invalidate (D-5).
         self.apply_layout(&pane_id, &params.worktree_path).await;
 
+        let start_params = json!({
+            "name": agent_name(&params.task.id),
+            "kind": resolve_kind(&self.config, &program),
+            "pane_id": pane_id,
+            "args": args,
+            "timeout_ms": AGENT_START_TIMEOUT_MS,
+        });
         let started = self
-            .client
-            .call(
-                "agent.start",
-                json!({
-                    "name": agent_name(&params.task.id),
-                    "kind": resolve_kind(&self.config, &program),
-                    "pane_id": pane_id,
-                    "args": args,
-                    "timeout_ms": AGENT_START_TIMEOUT_MS,
-                }),
-            )
+            .start_when_pane_is_ready(&pane_id, start_params)
             .await?;
         // herdr echoes the pane it was given; trusting our own value keeps the
         // handle well-defined even if a future response drops the field.
@@ -193,6 +210,48 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         Ok(TaskDispatchResult {
             session_id: handle.encode(),
         })
+    }
+
+    /// `agent.start`, waiting out a pane that has not reached its shell prompt.
+    ///
+    /// Protocol 17 hands `agent.start` the workspace's root pane moments after
+    /// `workspace.create` made it, and herdr refuses a pane whose shell is
+    /// still starting: `agent_pane_busy`. Measured live, a dispatch calling it
+    /// ~1s after creation was refused while the same call seconds later
+    /// succeeded.
+    ///
+    /// **Retried rather than predicted.** How long a shell takes to reach its
+    /// prompt is the operator's rc files, not something this plugin can know,
+    /// and herdr exposes no readiness signal to poll instead —
+    /// `pane.process_info` reports `shell_pid: null` for the whole window
+    /// (measured over 10s). `agent.start` *is* the readiness check, so it is
+    /// asked again rather than second-guessed.
+    ///
+    /// Only `agent_pane_busy` is retried. Every other failure — an unknown
+    /// `kind`, `agent_name_taken`, a CLI that never appears — means something
+    /// that will not fix itself, and retrying would only delay the report.
+    async fn start_when_pane_is_ready(
+        &self,
+        pane_id: &str,
+        params: Value,
+    ) -> Result<Value, HerdrError> {
+        let deadline = tokio::time::Instant::now() + PANE_READY_BUDGET;
+        loop {
+            match self.client.call("agent.start", params.clone()).await {
+                Ok(started) => return Ok(started),
+                Err(e) if e.is_pane_not_ready() => {
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(e);
+                    }
+                    tracing::debug!(
+                        pane_id,
+                        "the pane has not reached its shell prompt yet; retrying agent.start"
+                    );
+                    tokio::time::sleep(PANE_READY_POLL).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Arrange the task's workspace as `[layout]` asks (#356): unless

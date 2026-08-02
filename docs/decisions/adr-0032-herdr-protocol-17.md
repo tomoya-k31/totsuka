@@ -4,7 +4,7 @@ title: ADR-0032 herdr protocol 17 への追随（agent.start の manifest 駆動
 description: herdr 0.7.5 (protocol 17) で agent.start が manifest 駆動（kind + 呼び出し側が用意した既存 pane）へ、プロンプト投入が agent.prompt へ破壊的に変わったことへの追随方針。program→kind 写像、agent name の生成規則と agent_name_taken の扱い、pane 確保順序の反転、submit_prompt と RetryPolicy の廃止、protocol 16 以下を切る判断を定める。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [adr, herdr, agent-ide, protocol, breaking-change]
-generated: { by: claude-code/opus-5, at: 2026-08-03T07:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-03T09:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -159,11 +159,7 @@ name = "t-" + sanitize(task.id)[..N] + "-" + hex(sha256(task.id))[..8]
   23–25 ms と本 API 群で最も遅く、1 dispatch ぶんそれが消える
 - **`[layout].ratio` の意味は変わらない。** `ratio` は分割元の取り分で、分割元は 16 でも 17 でも
   エージェント pane である。**既存の `plugins/herdr.toml` を書き換える必要はない**
-- **`agent.start` には `timeout_ms` を明示する**（120 秒）。実測で `workspace.create` 直後の
-  `agent.start` が herdr の既定 30 秒で `timeout` した事例があり、pane が対話シェルプロンプトへ
-  達するまでの時間は**運用者のシェル起動時間**でこちらの領分ではない。
-  `pane.wait_for_output` でプロンプトを待つ案は、待つべき文字列がプロンプトのカスタマイズ次第で
-  何にでもなるため採らない（`❯` を決め打ちすると別のプロンプトで必ず外れる）
+- **`agent.start` は `agent_pane_busy` の間リトライする**（下記 D-7）
 
 ## D-5: `submit_prompt` の自己修正手順と `RetryPolicy` を廃止する
 
@@ -204,6 +200,29 @@ dispatch 失敗に写像すれば同じ意味になる。
    16 に留まる利用者を支える期間は短い
 
 **これは利用者にとっては破壊的変更**なので、リリースノートに移行手順（`herdr update`）を書く。
+
+## D-7: 生成直後の pane は `agent.start` をリトライして待つ
+
+**`workspace.create` が返した root pane は、すぐには使えない。** シェルがまだ起動中で、
+herdr は `agent_pane_busy: agent target pane w5:p1 is not an available shell` を返す。
+実機の初回検証はこれで dispatch が落ちた（`workspace.create` の約 1 秒後に `agent.start`）。
+
+対処は**リトライで待つ**ことにした。予測もポーリングも成立しないためである。
+
+- **予測できない**: シェルがプロンプトへ達するまでの時間は運用者の rc ファイル次第で、
+  バージョンマネージャや補完の読み込みが入れば延びる。`timeout_ms` を伸ばしても解決しない
+  （`agent_pane_busy` は待たずに即時返るため）
+- **ポーリングする先が無い**: `pane.process_info` は `shell_pid` を返しうる形をしているが、
+  実測では 10 秒間ずっと `null` のままだった。`foreground_processes` も空で、
+  「プロンプトに達したか」を読み取れる場所が無い
+- **`pane.wait_for_output` は使えない**: 待つべき文字列はプロンプトのカスタマイズ次第で
+  何にでもなる（`❯` を決め打ちすると別のプロンプトで必ず外れる）
+
+`agent.start` **そのものが herdr の readiness 検査**なので、その判断を再実装せず
+同じ問いを繰り返す。予算 60 秒・間隔 500ms。
+
+**リトライするのは `agent_pane_busy` だけ。** 未知の `kind`・`agent_name_taken`・
+CLI が現れない `timeout` は、いずれも放っておいても直らない。リトライは報告を遅らせるだけになる。
 
 # Consequences
 

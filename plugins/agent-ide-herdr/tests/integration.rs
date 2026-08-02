@@ -66,6 +66,9 @@ struct FakeHerdr {
     /// name collision (`agent_name_taken`) or a pane that never reached its
     /// shell prompt (`timeout`) arrives in.
     start_error: Option<&'static str>,
+    /// How many `agent.start` calls answer `agent_pane_busy` before one
+    /// succeeds — the real shape of a root pane whose shell is still starting.
+    busy_starts: Arc<Mutex<usize>>,
     /// `pane.get` reports a vanished pane.
     pane_gone: bool,
     /// Only the final `pane.focus` reports a vanished pane — the pane
@@ -107,6 +110,7 @@ impl Default for FakeHerdr {
             events_on_subscribe: Arc::default(),
             protocol: PROTOCOL,
             start_error: None,
+            busy_starts: Arc::default(),
             pane_gone: false,
             pane_focus_gone: false,
             agent_session: None,
@@ -198,6 +202,26 @@ impl FakeHerdr {
                     });
                 }
                 reply(&mut write_half, &id, result).await
+            }
+            // A pane whose shell has not reached its prompt. herdr answers this
+            // and clears on its own, so the plugin re-asks rather than failing.
+            "agent.start"
+                if {
+                    let mut left = self.busy_starts.lock().unwrap();
+                    let busy = *left > 0;
+                    if busy {
+                        *left -= 1;
+                    }
+                    busy
+                } =>
+            {
+                reply_error(
+                    &mut write_half,
+                    &id,
+                    "agent_pane_busy",
+                    &format!("agent target pane {PANE} is not an available shell"),
+                )
+                .await
             }
             "agent.start" if self.start_error.is_some() => {
                 let code = self.start_error.unwrap();
@@ -860,6 +884,70 @@ async fn a_response_without_a_root_pane_fails_the_dispatch() {
     }
     // The workspace it allocated is still taken back down (asynchronously, so
     // this waits rather than sampling).
+    assert!(
+        awaits_workspace_close(&requests).await,
+        "a failed dispatch must not leak its workspace"
+    );
+}
+
+/// A freshly created workspace's root pane is still starting its shell, and
+/// protocol 17 hands `agent.start` that pane directly — measured live, a
+/// dispatch ~1s after `workspace.create` was refused with `agent_pane_busy`
+/// while the same call seconds later succeeded. herdr exposes no readiness
+/// signal to poll (`pane.process_info` reports `shell_pid: null` throughout),
+/// so `agent.start` is re-asked until it takes.
+#[tokio::test]
+async fn agent_start_waits_out_a_pane_that_is_still_starting_its_shell() {
+    let fake = FakeHerdr::default();
+    *fake.busy_starts.lock().unwrap() = 3;
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(
+        disp["error"].is_null(),
+        "a shell that is merely slow must not fail the dispatch: {disp}"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        4,
+        "three refusals then the one that took: {log:?}"
+    );
+    // The workspace is NOT abandoned on the way — retrying must not look like a
+    // failed dispatch to anything downstream.
+    assert!(
+        calls(&log, "workspace.close").is_empty(),
+        "nothing was torn down: {log:?}"
+    );
+}
+
+/// Only `agent_pane_busy` is waited out. Everything else — an unknown `kind`, a
+/// taken name, a CLI that never appears — will not fix itself, and retrying
+/// would only delay the report.
+#[tokio::test]
+async fn a_start_failure_that_is_not_busy_is_not_retried() {
+    let (socket, requests) = FakeHerdr {
+        start_error: Some("timeout"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(!disp["error"].is_null(), "must surface: {disp}");
+    {
+        let log = requests.lock().unwrap();
+        assert_eq!(
+            calls(&log, "agent.start").len(),
+            1,
+            "no retry for a failure that will not clear: {log:?}"
+        );
+    }
     assert!(
         awaits_workspace_close(&requests).await,
         "a failed dispatch must not leak its workspace"
