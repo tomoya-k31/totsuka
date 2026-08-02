@@ -8,3 +8,8 @@ lcov.info
 
 # macOS
 .DS_Store
+
+# Local environment variables (never commit)
+.env
+.env.*
+!.env.example
