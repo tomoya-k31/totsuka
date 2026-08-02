@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use crate::agent::{HerdrAgent, RetryPolicy};
+use crate::agent::HerdrAgent;
 use crate::config::HerdrConfig;
 use crate::error::HerdrError;
 use crate::transport::HerdrTransport;
@@ -45,29 +45,15 @@ pub struct Server<F: TransportFactory> {
     factory: F,
     agent: Option<HerdrAgent<F::Transport>>,
     out: mpsc::UnboundedSender<String>,
-    retry: RetryPolicy,
 }
 
 impl<F: TransportFactory> Server<F> {
-    /// A fresh, uninitialized server writing NDJSON lines to `out`, whose agent
-    /// uses the production [`RetryPolicy`].
+    /// A fresh, uninitialized server writing NDJSON lines to `out`.
     pub fn new(factory: F, out: mpsc::UnboundedSender<String>) -> Self {
-        Self::with_retry_policy(factory, out, RetryPolicy::default())
-    }
-
-    /// As [`new`](Self::new), with an explicit [`RetryPolicy`] for the agent it
-    /// builds at `initialize`. Only the fake-herdr integration tests pass
-    /// anything but the default.
-    pub fn with_retry_policy(
-        factory: F,
-        out: mpsc::UnboundedSender<String>,
-        retry: RetryPolicy,
-    ) -> Self {
         Self {
             factory,
             agent: None,
             out,
-            retry,
         }
     }
 
@@ -150,16 +136,28 @@ impl<F: TransportFactory> Server<F> {
                 ));
             }
         };
-        match self.connect(&config).await {
-            Ok(transport) => {
-                self.agent = Some(HerdrAgent::with_retry_policy(transport, config, self.retry));
-                self.send(Response::result(id, capabilities_result()));
+        let transport = match self.connect(&config).await {
+            Ok(t) => t,
+            Err(e) => {
+                return self.send(Response::error(
+                    id,
+                    Error::new(error_code::CONFIG_INVALID, e.to_string()),
+                ));
             }
-            Err(e) => self.send(Response::error(
+        };
+        // Refuse a herdr this plugin cannot drive, here rather than at the
+        // first dispatch (ADR-0032 D-6). Before this check the symptom was
+        // `invalid_request: missing field 'kind'` on a task that had already
+        // been ingested, had a worktree cut for it, and failed — an error at
+        // `initialize` is one `totsuka doctor` away instead.
+        if let Err(e) = check_herdr_protocol(&transport).await {
+            return self.send(Response::error(
                 id,
                 Error::new(error_code::CONFIG_INVALID, e.to_string()),
-            )),
+            ));
         }
+        self.agent = Some(HerdrAgent::new(transport, config));
+        self.send(Response::result(id, capabilities_result()));
     }
 
     async fn config_validate(&mut self, id: RequestId, params: Value) {
@@ -176,13 +174,18 @@ impl<F: TransportFactory> Server<F> {
         };
         let mut errors = Vec::new();
         // Connectivity is the meaningful check (F-59): can we reach herdr and
-        // does it answer `ping`?
+        // does it answer `ping`? Since ADR-0032 the same answer also carries
+        // the protocol version, so the version check costs no extra round trip
+        // and `totsuka config validate` reports a too-old herdr by name.
         match self.connect(&config).await {
-            Ok(transport) => {
-                if let Err(e) = transport.call("ping", json!({})).await {
-                    errors.push(format!("herdr did not answer ping → {e}"));
+            Ok(transport) => match transport.call("ping", json!({})).await {
+                Ok(pong) => {
+                    if let Err(e) = check_protocol_version(&pong) {
+                        errors.push(e.to_string());
+                    }
                 }
-            }
+                Err(e) => errors.push(format!("herdr did not answer ping → {e}")),
+            },
             Err(e) => errors.push(e.to_string()),
         }
         self.ok_validate(id, errors);
@@ -353,6 +356,49 @@ fn capabilities_result() -> Value {
             ..Capabilities::default()
         },
     })
+}
+
+/// The oldest herdr Socket API protocol this plugin can drive
+/// ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-6).
+///
+/// 17 is where `agent.start` became manifest-driven and `agent.send` was
+/// replaced by `agent.prompt`. Everything older needs the pre-ADR-0032 dispatch
+/// path, which is not kept: a second path would be one that CI never runs
+/// (herdr is not in CI, §9), and the two differ in pane ownership, env
+/// injection and prompt submission at once — there is almost nothing to share.
+const MIN_HERDR_PROTOCOL: u64 = 17;
+
+/// Ask herdr its protocol version and refuse anything older than
+/// [`MIN_HERDR_PROTOCOL`].
+///
+/// A `ping` that fails is **not** treated as a version problem: `connect`
+/// already proved the socket, so a failure here is herdr misbehaving, and
+/// reporting it as "upgrade herdr" would send the operator after the wrong
+/// thing.
+async fn check_herdr_protocol<T: HerdrTransport>(transport: &T) -> Result<(), HerdrError> {
+    let pong = transport.call("ping", json!({})).await?;
+    check_protocol_version(&pong)
+}
+
+/// The version half of [`check_herdr_protocol`], over a `ping` response.
+///
+/// **A `ping` with no `protocol` field passes.** The field has been there since
+/// at least 0.7.1, so its absence means a herdr shaped differently from any this
+/// plugin has seen — and refusing to start on an unknown shape would turn a
+/// guess into an outage, while the dispatch path fails loudly on its own if the
+/// guess was wrong.
+fn check_protocol_version(pong: &Value) -> Result<(), HerdrError> {
+    let Some(protocol) = pong.get("protocol").and_then(Value::as_u64) else {
+        return Ok(());
+    };
+    if protocol < MIN_HERDR_PROTOCOL {
+        return Err(HerdrError::InvalidResponse(format!(
+            "herdr speaks protocol {protocol}, but this plugin needs {MIN_HERDR_PROTOCOL} or \
+             newer (herdr 0.7.5+): protocol 17 changed `agent.start` and replaced `agent.send` \
+             with `agent.prompt` → run `herdr update`, then `herdr status` to confirm"
+        )));
+    }
+    Ok(())
 }
 
 /// This plugin's version, from Cargo. Falls back to `0.0.0` if unparseable.

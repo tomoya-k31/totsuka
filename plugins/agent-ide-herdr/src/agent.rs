@@ -41,83 +41,43 @@ use plugin_protocol::methods::{
     TaskDispatchParams, TaskDispatchResult,
 };
 use serde_json::{Value, json};
-use std::time::Duration;
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
 use crate::config::HerdrConfig;
 use crate::error::HerdrError;
-use crate::state::{SessionHandle, map_agent_status, squash_ws};
+use crate::state::{SessionHandle, map_agent_status};
 use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT};
 
 /// How many screen lines are read when extracting text from a pane.
 const SCREEN_LINES: u64 = 200;
 
-/// How prompt submission retries: attempt counts and the waits between them
-/// (#281).
+/// How long `agent.prompt` is given to observe the agent reacting, in
+/// milliseconds ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-5).
 ///
-/// [`Default`] **is** the production policy, tuned against a real agent CLI:
-/// the CLI renders its input box before it accepts input, and accepts input
-/// before it acts on Enter, so both writes are confirmed rather than
-/// fire-and-forget. It is a value rather than a set of `const`s only so a
-/// caller driving a *simulated* CLI (the fake-herdr integration tests, whose
-/// pane reacts within one poll) can collapse the waits without changing
-/// **what** is retried. No production path constructs anything but
-/// [`RetryPolicy::default`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RetryPolicy {
-    /// How many times the prompt is typed in before giving up.
-    pub send_attempts: usize,
-    /// How long each `agent.send` is given to appear on screen.
-    pub send_render_timeout: Duration,
-    /// How many *re*-presses of Enter before giving up (the first press is not
-    /// a retry, so the loop body runs `enter_attempts + 1` times).
-    pub enter_attempts: usize,
-    /// How long each Enter is given to start the agent. An upper bound, not a
-    /// fixed cost: the wait ends the moment the pane reports `working`.
-    pub enter_settle: Duration,
-    /// How long a screen/status check waits between polls.
-    pub poll_interval: Duration,
-}
+/// herdr's own floor is 5s for the *first* state change; this is the outer
+/// bound on reaching a settled state. Generous on purpose — the cost of being
+/// wrong is a dispatch that fails on an agent that was merely slow.
+const PROMPT_WAIT_MS: u64 = 120_000;
 
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self {
-            send_attempts: 5,
-            send_render_timeout: Duration::from_secs(3),
-            enter_attempts: 10,
-            enter_settle: Duration::from_millis(1200),
-            poll_interval: Duration::from_millis(200),
-        }
-    }
-}
-
-/// How much of the prompt's tail identifies it on screen. The input box scrolls
-/// with the cursor, so a long prompt shows its **end** — matching the head
-/// would fail exactly when the prompt is long.
-const PROMPT_MARKER_CHARS: usize = 24;
+/// How long `agent.start` is given to detect the CLI, in milliseconds.
+///
+/// herdr's default is 30s, which a probe hit as `timed out waiting for agent
+/// startup` when the pane had been created ~1s earlier. The pane has to reach
+/// an interactive shell prompt first, and how long that takes is the operator's
+/// shell startup, not ours.
+const AGENT_START_TIMEOUT_MS: u64 = 120_000;
 
 /// The herdr agent_ide adapter, generic over its [`HerdrTransport`].
 pub struct HerdrAgent<T> {
     client: T,
     config: HerdrConfig,
-    retry: RetryPolicy,
 }
 
 impl<T: HerdrTransport> HerdrAgent<T> {
-    /// A new adapter over `client` using `config` and the production
-    /// [`RetryPolicy`].
+    /// A new adapter over `client` using `config`.
     pub fn new(client: T, config: HerdrConfig) -> Self {
-        Self::with_retry_policy(client, config, RetryPolicy::default())
-    }
-
-    /// As [`new`](Self::new), with an explicit retry policy. Only the
-    /// fake-herdr integration tests pass anything but the default.
-    pub fn with_retry_policy(client: T, config: HerdrConfig, retry: RetryPolicy) -> Self {
-        Self {
-            client,
-            config,
-            retry,
-        }
+        Self { client, config }
     }
 
     /// Dispatch a task (F-31/F-37): create a herdr workspace on the worktree,
@@ -137,6 +97,12 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // A workspace per task keeps agent panes out of the operator's own
         // workspaces (there is no "start session" method; the workspace is the
         // container).
+        //
+        // `env` goes here and **only** here (protocol 17): `agent.start` no
+        // longer takes one. It still reaches the agent because herdr applies a
+        // workspace's env to its root pane, which is the pane the agent is
+        // started in (D-4). A pane made by `pane.split` inherits nothing, which
+        // is why the companion shell never sees `TOTSUKA_HOOK_TOKEN`.
         let mut create_params = json!({
             "cwd": params.worktree_path,
             "label": format!("totsuka {}", params.task.id),
@@ -153,7 +119,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // process would run until the operator noticed them (and `task retry`
         // would strand another one).
         let started = self
-            .start_agent(&params, &workspace, program, args, env.as_ref())
+            .start_agent(&params, &workspace, program, args)
             .await
             .inspect_err(|_| self.abandon(&workspace.id))?;
         Ok(started)
@@ -161,42 +127,54 @@ impl<T: HerdrTransport> HerdrAgent<T> {
 
     /// The part of [`dispatch`](Self::dispatch) that runs with a workspace
     /// allocated: start the CLI, submit the prompt, and build the handle.
+    ///
+    /// **The agent runs in the workspace's own root pane** (protocol 17,
+    /// [ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-4).
+    /// `agent.start` no longer creates a pane — it takes one that is already at
+    /// an interactive shell prompt — and that suits the hook environment: only
+    /// the root pane inherits `workspace.create`'s `env`, and the root pane is
+    /// now exactly where the agent lands.
     async fn start_agent(
         &self,
         params: &TaskDispatchParams,
         workspace: &NewWorkspace,
         program: String,
         args: Vec<String>,
-        env: Option<&Value>,
     ) -> Result<TaskDispatchResult, HerdrError> {
-        let argv: Vec<String> = std::iter::once(program).chain(args).collect();
-        // `split` is deliberately not sent: `agent.start` splits regardless
-        // (herdr's default is `right` at 0.5) and takes no ratio, so the layout
-        // is imposed afterwards by `apply_layout` where a ratio can be given.
-        let mut start_params = json!({
-            "name": format!("totsuka {}", params.task.id),
-            "argv": argv,
-            "cwd": params.worktree_path,
-            "workspace_id": workspace.id,
-            "focus": false,
-        });
-        if let Some(env) = env {
-            start_params["env"] = env.clone();
-        }
-        let started = self.client.call("agent.start", start_params).await?;
-        let agent = started.get("agent").unwrap_or(&started);
-        let pane_id = agent
-            .get("pane_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| HerdrError::InvalidResponse("agent.start returned no pane_id".into()))?
-            .to_string();
+        let pane_id = workspace.root_pane_id.clone().ok_or_else(|| {
+            // Fatal now, where a missing root pane used to only cost the
+            // layout: without it there is no pane to start the agent in.
+            HerdrError::InvalidResponse("workspace.create returned no root pane".into())
+        })?;
 
-        // Before the prompt, not after: the split resizes the agent's pane, and
-        // `submit_prompt` confirms the prompt by reading that pane's screen —
-        // reflowing it mid-submission would invalidate exactly the check the
-        // startup race is guarded by.
-        self.apply_layout(workspace, &pane_id, &params.worktree_path)
-            .await;
+        // Split BEFORE starting the agent, the reverse of protocol 16's order.
+        // The agent's pane is the one being split off, so doing it first means
+        // the CLI draws itself once, at its final size — and there is no
+        // screen-matching left that a reflow could invalidate (D-5).
+        self.apply_layout(&pane_id, &params.worktree_path).await;
+
+        let started = self
+            .client
+            .call(
+                "agent.start",
+                json!({
+                    "name": agent_name(&params.task.id),
+                    "kind": resolve_kind(&self.config, &program),
+                    "pane_id": pane_id,
+                    "args": args,
+                    "timeout_ms": AGENT_START_TIMEOUT_MS,
+                }),
+            )
+            .await?;
+        // herdr echoes the pane it was given; trusting our own value keeps the
+        // handle well-defined even if a future response drops the field.
+        debug_assert_eq!(
+            started
+                .get("agent")
+                .and_then(|a| a.get("pane_id"))
+                .and_then(Value::as_str),
+            Some(pane_id.as_str()),
+        );
 
         self.submit_prompt(&pane_id, &compose_prompt(params))
             .await
@@ -217,18 +195,19 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         })
     }
 
-    /// Arrange the task's workspace as `[layout]` asks (#356): drop the initial
-    /// shell herdr opens every workspace with, then — unless `shell = false` —
-    /// split a fresh one off the agent's own pane at the configured direction
-    /// and ratio.
+    /// Arrange the task's workspace as `[layout]` asks (#356): unless
+    /// `shell = false`, split a companion shell off the pane the agent is about
+    /// to run in, at the configured direction and ratio.
     ///
-    /// **Close before split**, so a half-applied layout is still a layout
-    /// someone could have asked for: a split that fails leaves the agent
-    /// full-screen, which is exactly `shell = false`. The reverse order would
-    /// strand three panes — the agent, the shell it just made, and the initial
-    /// one it never got to close.
+    /// **There is no `pane.close` here any more** (protocol 17,
+    /// [ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-4).
+    /// Under protocol 16 `agent.start` made a *second* pane, leaving the
+    /// workspace's initial shell stranded, and closing it was this method's
+    /// first act. In 17 the agent runs in that initial pane, so there is
+    /// nothing left over — one call, not two, and the slowest of the two
+    /// (`pane.close`, measured at 23–25 ms) is the one that went away.
     ///
-    /// **The new shell gets no `env`.** herdr's initial pane inherits the
+    /// **The new shell gets no `env`.** herdr's root pane inherits the
     /// workspace's, which for a hook-capable dispatch is the Orchestrator's
     /// hook environment — `TOTSUKA_HOOK_TOKEN` included. A pane a human types
     /// into is not where a bearer token belongs
@@ -239,35 +218,11 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// decoration: a herdr that blips while drawing it must not lose a task
     /// that is otherwise ready to run.
     ///
-    /// Focus is left alone deliberately: closing the initial pane hands focus
-    /// to the only pane left (the agent), and `pane.split` keeps focus on the
-    /// pane it split from — so the agent ends up focused without a `pane.focus`
-    /// of our own.
-    async fn apply_layout(&self, workspace: &NewWorkspace, agent_pane_id: &str, cwd: &str) {
+    /// Focus is left alone deliberately: `pane.split` keeps focus on the pane
+    /// it split from — the agent's — so it ends up focused without a
+    /// `pane.focus` of our own.
+    async fn apply_layout(&self, agent_pane_id: &str, cwd: &str) {
         let layout = &self.config.layout;
-        let Some(initial_pane_id) = &workspace.initial_pane_id else {
-            // No id to close means the initial shell stays, so adding a second
-            // one would make three panes. Nothing to do but leave herdr's own
-            // arrangement in place.
-            tracing::warn!(
-                workspace_id = %workspace.id,
-                "workspace.create reported no root pane; leaving herdr's default layout alone"
-            );
-            return;
-        };
-        if let Err(e) = self
-            .client
-            .call("pane.close", json!({ "pane_id": initial_pane_id }))
-            .await
-        {
-            // Same reasoning as above: the shell we meant to replace is still
-            // there, so splitting another one off would only add clutter.
-            tracing::warn!(
-                pane_id = %initial_pane_id, error = %e,
-                "could not close the workspace's initial shell pane; keeping herdr's default layout"
-            );
-            return;
-        }
         if !layout.shell {
             return;
         }
@@ -314,137 +269,43 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         });
     }
 
-    /// Type `prompt` into the agent's TUI and submit it, confirming both steps.
+    /// Hand `prompt` to the agent and wait until it reacts.
     ///
-    /// Neither write can be fire-and-forget (#124): the CLI renders its input
-    /// box before it accepts input, and accepts input before it acts on Enter,
-    /// so text sent too early is dropped and an early Enter is swallowed —
-    /// leaving a pane that sits idle forever with the prompt unsent. Instead the
-    /// text is re-sent until it shows up on screen, and Enter is re-pressed
-    /// until the agent actually starts. Both retries are safe: `agent.send`
-    /// replaces nothing (the guard re-checks the screen first) and Enter on an
-    /// empty input box is a no-op.
+    /// One call (protocol 17,
+    /// [ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-5).
+    /// `agent.prompt` types the text *and* submits it, and its `wait` is
+    /// herdr's own version of the guarantee this method used to build by hand:
+    /// it requires an observed state change within 5s of a submission from a
+    /// non-working state, and answers `agent_prompt_stalled` when there is
+    /// none.
+    ///
+    /// What that replaces, from #124 and #281: re-sending the text until it
+    /// appeared on screen, re-pressing Enter until `agent_status` moved,
+    /// matching the prompt's whitespace-squashed tail against a wrapped input
+    /// box, and the `RetryPolicy` tuning all of it. herdr's `agent.send` — the
+    /// write-without-submitting the dance was built around — no longer exists.
+    ///
+    /// **The contract is unchanged**: a prompt that cannot be confirmed as
+    /// submitted fails the dispatch rather than leaving a pane that sits idle
+    /// forever with the task unsent.
     async fn submit_prompt(&self, pane_id: &str, prompt: &str) -> Result<(), HerdrError> {
-        let marker = prompt_marker(prompt);
-        // Retrying past herdr errors is what absorbs a blip — but it also hides
-        // a socket that is simply down, so the last one is kept and reported
-        // with the failure. Without it the caller only learns "it never
-        // started", never that herdr was unreachable all along.
-        let mut last_error: Option<HerdrError> = None;
-
-        let mut typed = false;
-        for _ in 0..self.retry.send_attempts {
-            if self.screen_contains(pane_id, &marker).await {
-                typed = true;
-                break;
-            }
-            // A blip on the way in is what the retries are for; only a pane
-            // that is truly gone ends this early.
-            if let Err(e) = self
-                .client
-                .call("agent.send", json!({ "target": pane_id, "text": prompt }))
-                .await
-            {
-                if e.is_missing() {
-                    return Err(e);
-                }
-                tracing::warn!(pane_id, error = %e, "agent.send failed; retrying");
-                last_error = Some(e);
-            }
-            if self
-                .wait_for(self.retry.send_render_timeout, || {
-                    self.screen_contains(pane_id, &marker)
-                })
-                .await
-            {
-                typed = true;
-                break;
-            }
-            tracing::warn!(
-                pane_id,
-                "the prompt did not reach the agent's input box; retrying"
-            );
-        }
-        if !typed {
-            return Err(gave_up(
-                format!("the agent CLI never showed the prompt in pane {pane_id}"),
-                last_error,
-            ));
-        }
-
-        // The prompt may already have been acted on (a resumed pane, a CLI that
-        // auto-submits), so check once before pressing anything.
-        if self.started(pane_id, &mut last_error).await? {
-            return Ok(());
-        }
-        for _ in 0..=self.retry.enter_attempts {
-            if let Err(e) = self
-                .client
-                .call(
-                    "pane.send_keys",
-                    json!({ "pane_id": pane_id, "keys": ["enter"] }),
-                )
-                .await
-            {
-                if e.is_missing() {
-                    return Err(e);
-                }
-                tracing::warn!(pane_id, error = %e, "Enter failed; retrying");
-                last_error = Some(e);
-            }
-            // `enter_settle` is a *deadline*, not a fixed cost. Sleeping it out
-            // unconditionally meant the press that actually worked was still
-            // followed by a full 1.2s, because success was only observed at the
-            // top of the next iteration — every successful dispatch paid it.
-            // The give-up path is unchanged: all `enter_attempts` + 1 presses
-            // still happen, each still gets the full window.
-            let deadline = tokio::time::Instant::now() + self.retry.enter_settle;
-            loop {
-                if self.started(pane_id, &mut last_error).await? {
-                    return Ok(());
-                }
-                let now = tokio::time::Instant::now();
-                if now >= deadline {
-                    break;
-                }
-                // Cap the poll at what is left of the window, or a settle that
-                // is not a whole number of poll intervals would overshoot by up
-                // to one interval per attempt — which is what makes the
-                // worst-case-unchanged guarantee above exact rather than
-                // approximate.
-                tokio::time::sleep(self.retry.poll_interval.min(deadline - now)).await;
-            }
-        }
-        Err(gave_up(
-            format!("the agent in pane {pane_id} never started after the prompt was submitted"),
-            last_error,
-        ))
-    }
-
-    /// Whether the agent has started, folding a transient read failure into
-    /// `last_error` and re-raising only a pane that is truly gone — the same
-    /// three-way handling the Enter loop used to do inline.
-    async fn started(
-        &self,
-        pane_id: &str,
-        last_error: &mut Option<HerdrError>,
-    ) -> Result<bool, HerdrError> {
-        match self.agent_is_running(pane_id).await {
-            Ok(v) => Ok(v),
-            Err(e) if e.is_missing() => Err(e),
-            Err(e) => {
-                tracing::warn!(pane_id, error = %e, "could not read the pane's status; retrying");
-                *last_error = Some(e);
-                Ok(false)
-            }
-        }
-    }
-
-    /// Whether the agent has acted on the prompt.
-    async fn agent_is_running(&self, pane_id: &str) -> Result<bool, HerdrError> {
-        pane_status(&self.client, pane_id)
+        self.client
+            .call(
+                "agent.prompt",
+                json!({
+                    "target": pane_id,
+                    "text": prompt,
+                    // `working` alone would be a race on a turn short enough to
+                    // settle before herdr samples again; the other two are the
+                    // settled states that also mean "it read the prompt".
+                    "wait": {
+                        "until": ["working", "blocked", "done"],
+                        "timeout_ms": PROMPT_WAIT_MS,
+                    },
+                }),
+            )
             .await
-            .map(|status| agent_started(&status))
+            .map(|_| ())
     }
 
     /// Re-attach to a dispatched session (F-37): confirm the pane is alive with
@@ -730,48 +591,26 @@ impl<T: HerdrTransport> HerdrAgent<T> {
 
         Ok(rx)
     }
-
-    /// Whether the pane's screen currently shows `marker` (whitespace-insensitive).
-    async fn screen_contains(&self, pane_id: &str, marker: &str) -> bool {
-        match read_pane_text(&self.client, pane_id, "visible", SCREEN_LINES).await {
-            Some(text) => squash_ws(&text).contains(marker),
-            None => false,
-        }
-    }
-
-    /// Poll `check` until it holds or `timeout` elapses.
-    async fn wait_for<F, Fut>(&self, timeout: Duration, check: F) -> bool
-    where
-        F: Fn() -> Fut,
-        Fut: std::future::Future<Output = bool>,
-    {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if check().await {
-                return true;
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return false;
-            }
-            tokio::time::sleep(self.retry.poll_interval).await;
-        }
-    }
 }
 
 /// What `dispatch` needs out of a `workspace.create` response: the workspace
-/// itself, and the shell pane herdr opens it with.
+/// itself, and the root pane herdr opens it with.
 ///
-/// The initial pane is the one `apply_layout` closes, and it is the only handle
-/// to it — the response names it (`root_pane`, herdr 0.7.4) and nothing else
+/// The root pane is where the agent is started (protocol 17), and the response
+/// is the only handle to it — the response names it (`root_pane`) and nothing else
 /// does: `pane.list` cannot distinguish it from the agent's pane by label,
 /// because a split pane's label is `null` on both.
 struct NewWorkspace {
     id: String,
-    /// `None` when the response carried no `root_pane` — an older or future
-    /// herdr. Optional on purpose: the id is only needed for the layout, and a
-    /// missing one must degrade to herdr's default arrangement, not fail the
-    /// dispatch (unlike the workspace id, which every teardown path needs).
-    initial_pane_id: Option<String>,
+    /// `None` when the response carried no `root_pane` — a herdr this plugin
+    /// does not know how to drive.
+    ///
+    /// Still an `Option` rather than a hard parse error because the two callers
+    /// want different things from its absence: `dispatch` cannot proceed
+    /// (protocol 17 starts the agent *in* this pane), but the workspace id has
+    /// already been read by then and every teardown path needs it, so the
+    /// failure has to happen after `NewWorkspace` exists — not instead of it.
+    root_pane_id: Option<String>,
 }
 
 impl NewWorkspace {
@@ -784,15 +623,12 @@ impl NewWorkspace {
                 HerdrError::InvalidResponse("workspace.create returned no workspace_id".into())
             })?
             .to_string();
-        let initial_pane_id = created
+        let root_pane_id = created
             .get("root_pane")
             .and_then(|p| p.get("pane_id"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        Ok(Self {
-            id,
-            initial_pane_id,
-        })
+        Ok(Self { id, root_pane_id })
     }
 }
 
@@ -820,29 +656,11 @@ async fn pane_status<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<Str
         .to_string())
 }
 
-/// Whether a herdr `agent_status` means the agent acted on the prompt.
-fn agent_started(status: &str) -> bool {
-    matches!(status, "working" | "blocked" | "done")
-}
-
 /// The workspace a pane belongs to. herdr ids nest the workspace in the pane
 /// (`w1:p2` lives in `w1`), which is the only handle back to it — the protocol
 /// `session_id` carries the pane, not the workspace.
 fn workspace_of(pane_id: &str) -> Option<&str> {
     pane_id.split_once(':').map(|(workspace, _)| workspace)
-}
-
-/// The error for a step that exhausted its retries, carrying whatever herdr
-/// last complained about. The retries exist to ride out a blip, so the symptom
-/// alone ("it never started") is what a caller would otherwise see even when
-/// the real story is that the socket was down the whole time.
-fn gave_up(symptom: String, cause: Option<HerdrError>) -> HerdrError {
-    match cause {
-        Some(cause) => {
-            HerdrError::InvalidResponse(format!("{symptom} → last herdr error: {cause}"))
-        }
-        None => HerdrError::InvalidResponse(symptom),
-    }
 }
 
 /// The agent's native session id from a pane record
@@ -931,20 +749,6 @@ async fn read_pane_text<T: HerdrTransport>(
         .map(str::to_string)
 }
 
-/// The whitespace-squashed tail of `prompt`, used to recognize it on screen.
-/// Squashed because the input box wraps long lines (and CJK wraps mid-word), so
-/// the raw text is never on one line.
-fn prompt_marker(prompt: &str) -> String {
-    let squashed = squash_ws(prompt);
-    let start = squashed
-        .char_indices()
-        .rev()
-        .nth(PROMPT_MARKER_CHARS - 1)
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    squashed[start..].to_string()
-}
-
 /// Compose the agent prompt: any extra context as a preamble, then the task
 /// (body, or the title when there is no body).
 ///
@@ -960,13 +764,15 @@ fn prompt_marker(prompt: &str) -> String {
 /// fallback for non-hook dispatches (e.g. the task's instructions when no
 /// hook channel exists).
 ///
-/// The extra context comes FIRST: [`submit_prompt`](HerdrAgent::submit_prompt)
-/// confirms arrival by matching the prompt's **tail** on screen
-/// ([`prompt_marker`]), and the extra context can repeat across dispatches —
-/// as a suffix it would make every dispatch's tail identical, so on a `claude
-/// --resume` pane the check could match the PREVIOUS turn's prompt still
-/// rendered on screen and submit before the new prompt was typed. With the
-/// task text last, the tail stays unique per task.
+/// The extra context comes FIRST, and stays first. It originally had to:
+/// `submit_prompt` confirmed arrival by matching the prompt's **tail** on
+/// screen, and extra context repeats across dispatches, so as a suffix it made
+/// every dispatch's tail identical — on a `claude --resume` pane the check
+/// could match the PREVIOUS turn's prompt and submit before the new one was
+/// typed. Protocol 17's `agent.prompt` removed that check, so the ordering is
+/// no longer load-bearing; it is kept because a preamble-then-task prompt is
+/// what the agent has been reading all along, and reordering it would change
+/// every dispatch's input for no reason.
 fn compose_prompt(params: &TaskDispatchParams) -> String {
     let task_text = params.task.body.as_ref().unwrap_or(&params.task.title);
     match &params.extra_context {
@@ -974,6 +780,87 @@ fn compose_prompt(params: &TaskDispatchParams) -> String {
         Some(other) => format!("{other}\n\n---\n{task_text}"),
         None => task_text.clone(),
     }
+}
+
+/// How many characters of the readable prefix survive in an [`agent_name`].
+///
+/// The budget is herdr's 32: `t-` (2) + prefix + `-` (1) + 8 hex = 32.
+const NAME_PREFIX_CHARS: usize = 21;
+
+/// The `name` for `agent.start`: `t-<readable prefix>-<8 hex of the task id>`
+/// ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-2).
+///
+/// Protocol 17 made `name` an **identifier**, not a label:
+/// `[a-z][a-z0-9_-]{0,31}`, unique among live agents. Every task id this plugin
+/// sees breaks that as-is — GitHub's is mixed case (`I_kwDOTrfAp88AAA…`) and
+/// Slack's carries a colon (`C0BNAU8KKG8:1754…`) — and 32 characters is
+/// shorter than either.
+///
+/// **The hash is what makes truncation safe.** A name that collides does not
+/// merely read ambiguously any more; it names another task's agent. Eight hex
+/// characters over the *full* id keep that out of reach while the sanitized
+/// prefix keeps `herdr agent list` legible to whoever is debugging a run — the
+/// only reason to carry a prefix at all.
+fn agent_name(task_id: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(task_id.as_bytes());
+    let digest = hash.finalize();
+
+    let mut prefix = String::with_capacity(NAME_PREFIX_CHARS);
+    let mut pending_dash = false;
+    for c in task_id.chars() {
+        if prefix.len() >= NAME_PREFIX_CHARS {
+            break;
+        }
+        if c.is_ascii_alphanumeric() {
+            // Only after something was kept, so a leading run of separators
+            // cannot produce the `-` start herdr rejects.
+            if pending_dash && !prefix.is_empty() {
+                prefix.push('-');
+            }
+            pending_dash = false;
+            prefix.push(c.to_ascii_lowercase());
+        } else {
+            // Collapsed rather than emitted: `a::b` is one separator, and a
+            // trailing run leaves nothing behind because it is never flushed.
+            pending_dash = true;
+        }
+    }
+
+    let hex: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+    if prefix.is_empty() {
+        // No alphanumerics at all (an id that is punctuation, or empty): the
+        // hash alone is still a valid, unique name — and hex cannot start with
+        // a letter-less character, but it *can* start with a digit, which herdr
+        // rejects. `t-` in front is what keeps every branch legal.
+        format!("t-{hex}")
+    } else {
+        format!("t-{prefix}-{hex}")
+    }
+}
+
+/// The herdr `kind` for `program`
+/// ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-1).
+///
+/// Protocol 17 chooses the executable itself from this enum, so the plugin can
+/// no longer pass `program` through: it translates the program's **file name**
+/// into herdr's vocabulary, consulting `[kind_map]` first so a wrapper script
+/// can say what it wraps.
+///
+/// Nothing is validated against herdr's 21 values here — an unknown `kind` is
+/// rejected at `agent.start` with herdr's own message, and a copy of that enum
+/// in this crate would only be one more thing that can fall behind (this whole
+/// ADR exists because a copy of herdr's shape fell behind).
+fn resolve_kind(config: &HerdrConfig, program: &str) -> String {
+    let file_name = std::path::Path::new(program)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(program);
+    config
+        .kind_map
+        .get(file_name)
+        .cloned()
+        .unwrap_or_else(|| file_name.to_string())
 }
 
 /// The `(program, args, env)` to launch in the pane. Since protocol 0.2.3
@@ -1056,37 +943,6 @@ mod tests {
         // A hand-written session id without the herdr shape names no workspace
         // (the pane still closes; only the workspace sweep is skipped).
         assert_eq!(workspace_of("bare-pane"), None);
-    }
-
-    #[test]
-    fn agent_started_covers_every_active_status() {
-        assert!(agent_started("working"));
-        assert!(agent_started("blocked"));
-        // Fast answers can be `done` before the first status poll.
-        assert!(agent_started("done"));
-        // Not yet acting on the prompt: Enter must be pressed (again).
-        assert!(!agent_started("idle"));
-        assert!(!agent_started("unknown"));
-    }
-
-    #[test]
-    fn prompt_marker_is_the_squashed_tail() {
-        // The tail identifies the prompt: the input box scrolls to the cursor,
-        // so a long prompt's head is off-screen.
-        let marker = prompt_marker("Reply to this\n\nthread context …\nlast line of the prompt");
-        assert!(marker.len() <= "lastlineoftheprompt".len() + 8);
-        assert!(marker.ends_with("lastlineoftheprompt"));
-        assert!(!marker.contains(' '));
-
-        // A prompt shorter than the marker window is used whole.
-        assert_eq!(prompt_marker("hi there"), "hithere");
-    }
-
-    #[test]
-    fn prompt_marker_handles_multibyte_tails() {
-        // Slicing must land on a char boundary, not mid-codepoint.
-        let marker = prompt_marker("質問です\n\nzsh の設定はどこにありますか？教えてください。");
-        assert!(marker.ends_with("教えてください。"));
     }
 
     fn dispatch_params(title: &str, body: Option<&str>) -> TaskDispatchParams {
@@ -1223,18 +1079,89 @@ mod tests {
         assert_eq!(env, Some(serde_json::json!({})));
     }
 
-    /// The retry policy became injectable so the integration tests could
-    /// collapse their waits (#281); this pins the production side of that trade
-    /// so a future edit to the test values cannot quietly retune the real CLI's
-    /// submission behaviour. These are the values verified live against Claude
-    /// Code in #124 — changing one is a deliberate act, not a refactor.
+    /// The pieces of an [`agent_name`] that herdr's identifier rules constrain.
+    /// Every assertion here is a rule `agent.start` enforces, verified live:
+    /// `"totsuka probe"` was rejected as `invalid_agent_name`.
     #[test]
-    fn default_retry_policy_is_the_production_policy() {
-        let p = RetryPolicy::default();
-        assert_eq!(p.send_attempts, 5);
-        assert_eq!(p.send_render_timeout, Duration::from_secs(3));
-        assert_eq!(p.enter_attempts, 10);
-        assert_eq!(p.enter_settle, Duration::from_millis(1200));
-        assert_eq!(p.poll_interval, Duration::from_millis(200));
+    fn agent_name_satisfies_herdrs_identifier_rules() {
+        let legal = |name: &str| {
+            let mut chars = name.chars();
+            chars.next().is_some_and(|c| c.is_ascii_lowercase())
+                && name.len() <= 32
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        };
+
+        // The two shapes that actually reach this plugin. Slack's colon and
+        // GitHub's upper case are exactly what the old `totsuka <id>` name
+        // failed on.
+        for id in [
+            "C0BNAU8KKG8:1754236800.123456",
+            "I_kwDOTrfAp88AAAABLKoO_Q",
+            "42",
+        ] {
+            let name = agent_name(id);
+            assert!(legal(&name), "{id} produced an illegal name: {name}");
+        }
+
+        // Degenerate ids still have to produce something legal: an id that is
+        // all punctuation leaves no prefix, and a hash-only name would start
+        // with a digit half the time.
+        for id in ["", ":::", "::9"] {
+            let name = agent_name(id);
+            assert!(legal(&name), "{id:?} produced an illegal name: {name}");
+        }
+    }
+
+    /// Truncation is what makes a bare prefix unsafe, so the suffix has to
+    /// separate ids that share their first 21 characters — the case that would
+    /// otherwise point two tasks at one agent.
+    #[test]
+    fn agent_name_separates_ids_sharing_a_prefix() {
+        let a = agent_name("C0BNAU8KKG8:1754236800.111111");
+        let b = agent_name("C0BNAU8KKG8:1754236800.222222");
+        assert_ne!(a, b);
+        // …and is stable, because a re-dispatch of the same task has to
+        // compute the same name.
+        assert_eq!(a, agent_name("C0BNAU8KKG8:1754236800.111111"));
+    }
+
+    /// The prefix is only worth carrying if it is still readable, which is the
+    /// whole reason the name is not just a hash.
+    #[test]
+    fn agent_name_keeps_a_readable_prefix() {
+        let name = agent_name("C0BNAU8KKG8:1754236800.123456");
+        assert!(
+            name.starts_with("t-c0bnau8kkg8-"),
+            "prefix was not preserved: {name}"
+        );
+    }
+
+    /// `kind` comes from the program's file name, so an absolute path resolves
+    /// the same as a bare command — the Orchestrator sends whichever the
+    /// `[tools]` registry produced.
+    #[test]
+    fn resolve_kind_uses_the_programs_file_name() {
+        let config: HerdrConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(resolve_kind(&config, "claude"), "claude");
+        assert_eq!(
+            resolve_kind(&config, "/Users/x/.local/bin/claude"),
+            "claude"
+        );
+    }
+
+    /// `[kind_map]` is the escape hatch for a wrapper whose name herdr does not
+    /// know; without it such a program reaches `agent.start` as an unknown
+    /// `kind` and is rejected there.
+    #[test]
+    fn resolve_kind_honours_the_kind_map() {
+        let config: HerdrConfig =
+            serde_json::from_value(serde_json::json!({ "kind_map": { "my-claude": "claude" } }))
+                .unwrap();
+        assert_eq!(resolve_kind(&config, "/opt/bin/my-claude"), "claude");
+        // Unmapped names still pass through unchanged — this table overrides,
+        // it does not gate.
+        assert_eq!(resolve_kind(&config, "codex"), "codex");
     }
 }

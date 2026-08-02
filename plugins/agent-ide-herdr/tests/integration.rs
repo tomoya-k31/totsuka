@@ -1,16 +1,24 @@
 //! End-to-end plugin flow over a **real Unix-socket fake herdr** modelled on
-//! herdr 0.7.4 as verified live in #124: NDJSON with **one request per
-//! connection** (the server closes after every response), `events.subscribe` as
-//! the only persistent connection (pushing `{event, data}` envelopes), the
-//! `agent.start` dispatch, and — crucially — a CLI that **accepts keystrokes
-//! before it acts on them**, so early `agent.send`/Enter are dropped.
+//! herdr 0.7.5 (protocol 17) as verified live in ADR-0032: NDJSON with **one
+//! request per connection** (the server closes after every response),
+//! `events.subscribe` as the only persistent connection (pushing
+//! `{event, data}` envelopes), and the protocol-17 dispatch shape —
+//! `agent.start {name, kind, pane_id}` into a pane the **caller** supplies,
+//! then `agent.prompt {target, text, wait}` which types and submits in one
+//! call.
 //!
-//! Covers initialize → task/dispatch (typing + submitting the prompt through
-//! that startup race, plus 0.1.3 hook `env` injection + `--settings`/`--resume`
-//! launch) → the reduced state stream (a `pane.exited` **deadman**: status
-//! changes produce no notification, nonzero/absent exit → `failed`, clean exit
-//! is silent), `diagnostics/snapshot`, session/attach success and
-//! pane-not-found, and `id: ""` error correlation (F-32/F-37/F-38, #131).
+//! The startup race #124 modelled here (`agent.send` landing before the CLI
+//! was listening, Enter being swallowed) is gone with `agent.send` itself:
+//! protocol 17 makes it herdr's problem, and `agent.prompt`'s own answer —
+//! `agent_prompt_stalled` — is what the plugin now reacts to.
+//!
+//! Covers initialize (including the protocol floor) → task/dispatch (pane
+//! ownership, layout, `kind` resolution, the hook `env` reaching the agent via
+//! `workspace.create`, `--settings`/`--resume` launch) → the reduced state
+//! stream (a `pane.exited` **deadman**: status changes produce no notification,
+//! nonzero/absent exit → `failed`, clean exit is silent),
+//! `diagnostics/snapshot`, session/attach success and pane-not-found, and
+//! `id: ""` error correlation (F-32/F-37/F-38, #131).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,25 +30,28 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 
-use agent_ide_herdr::agent::RetryPolicy;
 use agent_ide_herdr::error::HerdrError;
 use agent_ide_herdr::server::{Server, TransportFactory};
 use agent_ide_herdr::transport::SocketTransport;
 
+/// The pane the agent runs in. Under protocol 17 that is the workspace's own
+/// root pane — `agent.start` no longer makes one — so this is what
+/// `workspace.create` answers with **and** what the session handle carries.
 const PANE: &str = "w1:p1";
-/// The shell pane herdr opens every workspace with (`workspace.create`'s
-/// `root_pane`). `dispatch` closes it as part of applying `[layout]` (#356).
-const ROOT_PANE: &str = "w1:p0";
+/// The companion shell `[layout]` splits off (#356).
+const SHELL_PANE: &str = "w1:p2";
+/// The protocol the fake speaks. The plugin refuses anything below 17
+/// (ADR-0032 D-6).
+const PROTOCOL: u64 = 17;
 
 /// The fake agent CLI's observable state — the pane's screen and status.
 #[derive(Default)]
 struct Cli {
-    /// What the input box shows (what `agent.send` typed in).
+    /// What `agent.prompt` submitted.
     input: String,
     /// herdr's `agent_status` for the pane.
     status: String,
-    sends: usize,
-    enters: usize,
+    prompts: usize,
 }
 
 /// Scripted fake-herdr behaviour for one test.
@@ -49,10 +60,12 @@ struct FakeHerdr {
     cli: Arc<Mutex<Cli>>,
     /// Envelope events pushed on the subscription connection after its ACK.
     events_on_subscribe: Arc<Mutex<Vec<Value>>>,
-    /// Startup race: this many `agent.send`/Enter presses are dropped before
-    /// the CLI starts acting on them (0 = a CLI that is ready immediately).
-    deaf_sends: usize,
-    deaf_enters: usize,
+    /// The protocol `ping` reports. Below 17 the plugin refuses to initialize.
+    protocol: u64,
+    /// When set, `agent.start` fails with this herdr error code — the shape a
+    /// name collision (`agent_name_taken`) or a pane that never reached its
+    /// shell prompt (`timeout`) arrives in.
+    start_error: Option<&'static str>,
     /// `pane.get` reports a vanished pane.
     pane_gone: bool,
     /// Only the final `pane.focus` reports a vanished pane — the pane
@@ -72,18 +85,16 @@ struct FakeHerdr {
     detection: &'static str,
     /// When set, `workspace.create` fails with an `id: ""` decode-style error.
     empty_id_error_on_create: bool,
-    /// When set, `workspace.create` answers without a `root_pane` (an older or
-    /// future herdr) — the layout step then has no pane id to close.
+    /// When set, `workspace.create` answers without a `root_pane` — under
+    /// protocol 17 that leaves no pane to start the agent in, so the dispatch
+    /// cannot proceed (it used to only cost the layout).
     no_root_pane: bool,
-    /// When set, `pane.close` fails with this herdr error code (#356: the
-    /// initial shell survives, so no companion may be split in).
-    close_error: Option<&'static str>,
     /// When set, `pane.split` fails with this herdr error code (#356: the
     /// companion shell is lost, the dispatch is not).
     split_error: Option<&'static str>,
-    /// When set, every call the prompt submission makes fails with this herdr
-    /// error code — a herdr that is down rather than momentarily busy.
-    submission_error: Option<&'static str>,
+    /// When set, `agent.prompt` fails with this herdr error code — `stalled`
+    /// (herdr saw no reaction) or a socket that is simply down.
+    prompt_error: Option<&'static str>,
 }
 
 impl Default for FakeHerdr {
@@ -94,8 +105,8 @@ impl Default for FakeHerdr {
                 ..Cli::default()
             })),
             events_on_subscribe: Arc::default(),
-            deaf_sends: 0,
-            deaf_enters: 0,
+            protocol: PROTOCOL,
+            start_error: None,
             pane_gone: false,
             pane_focus_gone: false,
             agent_session: None,
@@ -105,9 +116,8 @@ impl Default for FakeHerdr {
             detection: "",
             empty_id_error_on_create: false,
             no_root_pane: false,
-            close_error: None,
             split_error: None,
-            submission_error: None,
+            prompt_error: None,
         }
     }
 }
@@ -150,19 +160,21 @@ impl FakeHerdr {
         let id = req["id"].clone();
         let params = &req["params"];
         let method = req["method"].as_str().unwrap_or("");
-        // A herdr that is down fails every call the submission makes — the
-        // retries must not turn that into a symptom with no cause.
-        if let Some(code) = self.submission_error
-            && matches!(
-                method,
-                "agent.send" | "pane.send_keys" | "pane.get" | "pane.read"
-            )
-        {
-            reply_error(&mut write_half, &id, code, "herdr is not reachable").await;
-            return;
-        }
         match method {
-            "ping" => reply(&mut write_half, &id, json!({ "type": "pong" })).await,
+            "ping" => {
+                reply(
+                    &mut write_half,
+                    &id,
+                    // `protocol: 0` stands for a `ping` that carries no
+                    // protocol field at all.
+                    if self.protocol == 0 {
+                        json!({ "type": "pong", "version": "0.7.5" })
+                    } else {
+                        json!({ "type": "pong", "version": "0.7.5", "protocol": self.protocol })
+                    },
+                )
+                .await
+            }
 
             "workspace.create" if self.empty_id_error_on_create => {
                 // herdr does not echo the id when it cannot decode a request.
@@ -174,66 +186,79 @@ impl FakeHerdr {
                 )
                 .await;
             }
-            // herdr answers with the workspace *and* the shell pane it opened
-            // it with (`root_pane`) — the only handle to that pane, and what
-            // the layout step closes (#356).
+            // herdr answers with the workspace *and* the root pane it opened it
+            // with. Under protocol 17 that pane is where the agent goes, so it
+            // is the one thing dispatch cannot do without.
             "workspace.create" => {
                 let mut result =
                     json!({ "type": "workspace_created", "workspace": { "workspace_id": "w1" } });
                 if !self.no_root_pane {
                     result["root_pane"] = json!({
-                        "pane_id": ROOT_PANE, "workspace_id": "w1", "tab_id": "w1:t1",
+                        "pane_id": PANE, "workspace_id": "w1", "tab_id": "w1:t1",
                     });
                 }
                 reply(&mut write_half, &id, result).await
             }
+            "agent.start" if self.start_error.is_some() => {
+                let code = self.start_error.unwrap();
+                reply_error(&mut write_half, &id, code, "herdr refused the start").await
+            }
+            // Protocol 17 starts the agent in the pane it is *given*, echoing
+            // it back, and reports the argv it assembled from `kind` + `args`.
             "agent.start" => {
+                let pane_id = params["pane_id"].as_str().unwrap_or_default().to_string();
+                let kind = params["kind"].as_str().unwrap_or_default().to_string();
+                let args: Vec<String> = params["args"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let argv: Vec<String> = std::iter::once(kind.clone()).chain(args).collect();
                 reply(
                     &mut write_half,
                     &id,
                     json!({
                         "type": "agent_started",
-                        "agent": { "pane_id": PANE, "terminal_id": "t1", "agent_status": "idle" },
+                        "agent": {
+                            "pane_id": pane_id, "terminal_id": "t1",
+                            "agent_status": "idle", "agent": kind,
+                            "name": params["name"].clone(), "interactive_ready": true,
+                        },
+                        "argv": argv,
                     }),
                 )
                 .await
             }
 
-            // The CLI ignores input until it is ready; once ready, typed text
-            // lands in the input box without being submitted. Text **appends**
-            // like real keystrokes do — a send that overwrote would hide a
-            // double-typed prompt.
-            "agent.send" => {
+            "agent.prompt" if self.prompt_error.is_some() => {
+                let code = self.prompt_error.unwrap();
+                reply_error(&mut write_half, &id, code, "herdr could not submit").await
+            }
+            // One call types **and** submits, then honours `wait` itself. There
+            // is no half-submitted state to model any more: either herdr
+            // reports the agent reacting, or it answers with an error.
+            "agent.prompt" => {
                 {
                     let mut cli = self.cli.lock().unwrap();
-                    cli.sends += 1;
-                    if cli.sends > self.deaf_sends {
-                        cli.input
-                            .push_str(params["text"].as_str().unwrap_or_default());
-                    }
+                    cli.prompts += 1;
+                    cli.input = params["text"].as_str().unwrap_or_default().to_string();
+                    cli.status = "working".to_string();
                 }
-                reply(&mut write_half, &id, json!({ "type": "ok" })).await
+                reply(
+                    &mut write_half,
+                    &id,
+                    json!({
+                        "type": "agent_prompted",
+                        "agent": { "pane_id": PANE, "agent_status": "working" },
+                    }),
+                )
+                .await
             }
-            // Enter submits whatever is in the box — once the CLI is listening.
-            // On an empty box it is a no-op, exactly like the real TUI.
-            "pane.send_keys" => {
-                let enter = params["keys"]
-                    .as_array()
-                    .is_some_and(|keys| keys.iter().any(|k| k == "enter"));
-                if enter {
-                    let mut cli = self.cli.lock().unwrap();
-                    cli.enters += 1;
-                    if cli.enters > self.deaf_enters && !cli.input.is_empty() {
-                        cli.status = "working".to_string();
-                    }
-                    drop(cli);
-                }
-                reply(&mut write_half, &id, json!({ "type": "ok" })).await
-            }
-            "pane.close" if self.close_error.is_some() => {
-                let code = self.close_error.unwrap();
-                reply_error(&mut write_half, &id, code, "herdr refused the close").await
-            }
+            // Still used by `cancel` (ctrl+c); no longer part of submission.
+            "pane.send_keys" => reply(&mut write_half, &id, json!({ "type": "ok" })).await,
             "pane.close" | "workspace.close" => {
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
@@ -248,7 +273,7 @@ impl FakeHerdr {
                 reply(
                     &mut write_half,
                     &id,
-                    json!({ "type": "pane_info", "pane": { "pane_id": "w1:p2" } }),
+                    json!({ "type": "pane_info", "pane": { "pane_id": SHELL_PANE } }),
                 )
                 .await
             }
@@ -413,27 +438,11 @@ struct Driver {
     next_id: i64,
 }
 
-/// The fake herdr's CLI has no startup latency of its own — `deaf_sends` /
-/// `deaf_enters` model the race explicitly — so production's settle windows
-/// would be spent entirely in `sleep` here (#281).
-///
-/// The **counts** stay at production values on purpose: the give-up tests
-/// assert that all 5 sends and all 11 Enter presses really happen, so shrinking
-/// them would hollow out the assertions. Only the waits collapse.
-fn fast_retries() -> RetryPolicy {
-    RetryPolicy {
-        send_render_timeout: Duration::from_millis(200),
-        enter_settle: Duration::from_millis(100),
-        poll_interval: Duration::from_millis(2),
-        ..RetryPolicy::default()
-    }
-}
-
 impl Driver {
     fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         Self {
-            server: Server::with_retry_policy(SocketFactory, tx, fast_retries()),
+            server: Server::new(SocketFactory, tx),
             out: rx,
             next_id: 0,
         }
@@ -488,16 +497,22 @@ impl Driver {
     }
 
     async fn dispatch(&mut self, id: &str, title: &str, mode: &str) -> Value {
-        self.call(
-            "task/dispatch",
-            json!({
-                "task": { "id": id, "source": "slack", "title": title,
-                          "body": "Answer in the thread.\n\nContext:\n- multi-line, like every Slack task body" },
-                "worktree_path": "/wt/agent-1",
-                "mode": mode
-            }),
-        )
-        .await
+        self.dispatch_with(id, title, mode, json!({})).await
+    }
+
+    /// As [`dispatch`](Self::dispatch), merging `extra` into the params (a
+    /// `tool_launch`, a `hook`, …).
+    async fn dispatch_with(&mut self, id: &str, title: &str, mode: &str, extra: Value) -> Value {
+        let mut params = json!({
+            "task": { "id": id, "source": "slack", "title": title,
+                      "body": "Answer in the thread.\n\nContext:\n- multi-line, like every Slack task body" },
+            "worktree_path": "/wt/agent-1",
+            "mode": mode
+        });
+        for (k, v) in extra.as_object().into_iter().flatten() {
+            params[k] = v.clone();
+        }
+        self.call("task/dispatch", params).await
     }
 }
 
@@ -509,14 +524,8 @@ const DETECTION: &str = "\n ▐▛███▜▌   Claude Code\n\n\
      ✻ Cooked for 4s\n";
 
 #[tokio::test]
-async fn dispatch_types_and_submits_the_prompt_through_the_startup_race() {
-    // The CLI ignores the first send and the first two Enters — the real
-    // startup race that left panes idle forever with the prompt unsent (#124).
-    let fake = FakeHerdr {
-        deaf_sends: 1,
-        deaf_enters: 2,
-        ..FakeHerdr::default()
-    };
+async fn dispatch_submits_the_whole_prompt_in_one_call() {
+    let fake = FakeHerdr::default();
     let cli = fake.cli.clone();
     let (socket, requests) = fake.spawn();
 
@@ -524,14 +533,16 @@ async fn dispatch_types_and_submits_the_prompt_through_the_startup_race() {
     d.init(&socket).await;
     let disp = d.dispatch("T1", "Draft the reply", "plan").await;
 
-    assert!(disp["error"].is_null(), "dispatch must recover: {disp}");
+    assert!(disp["error"].is_null(), "dispatch failed: {disp}");
+    // The handle carries the workspace's root pane: protocol 17 runs the agent
+    // there rather than in a pane `agent.start` invented.
     assert_eq!(disp["result"]["session_id"], "w1:p1|");
     {
         let cli = cli.lock().unwrap();
         assert_eq!(cli.status, "working", "the agent must actually be started");
         assert!(
             cli.input.contains("Answer in the thread.") && cli.input.contains("multi-line"),
-            "the whole multi-line body is typed in, not passed as argv"
+            "the whole multi-line body is submitted, not passed as argv"
         );
         // The truncated title is NOT typed when a body exists — the body carries
         // the full task text, so the title would just be a cut-off duplicate.
@@ -541,29 +552,104 @@ async fn dispatch_types_and_submits_the_prompt_through_the_startup_race() {
             cli.input
         );
         assert_eq!(
-            cli.input.matches("Answer in the thread.").count(),
-            1,
-            "the retries must not type the prompt in twice: {:?}",
-            cli.input
-        );
-        assert!(
-            cli.sends >= 2 && cli.enters >= 3,
-            "retries must have happened"
+            cli.prompts, 1,
+            "one agent.prompt does what five sends and eleven Enters used to"
         );
     }
-    // The prompt is never in argv: a multi-line argv prompt is never submitted.
+
     let log = requests.lock().unwrap();
-    let start = log
-        .iter()
-        .find(|r| r["method"] == "agent.start")
-        .expect("an agent.start request");
-    let argv: Vec<&str> = start["params"]["argv"]
+    // The prompt is never in argv: a multi-line argv prompt is never submitted.
+    let start = &calls(&log, "agent.start")[0]["params"];
+    assert_eq!(
+        start["args"].as_array().unwrap().len(),
+        2,
+        "args carry the tool flags only: {start}"
+    );
+    assert!(
+        start.get("argv").is_none() && start.get("cwd").is_none() && start.get("env").is_none(),
+        "protocol 17 rejects these outright: {start}"
+    );
+
+    // `wait` is what replaced the hand-rolled confirmation: without it
+    // `agent.prompt` returns before herdr has seen the agent react at all.
+    let prompt = &calls(&log, "agent.prompt")[0]["params"];
+    assert_eq!(prompt["target"], PANE);
+    let until: Vec<&str> = prompt["wait"]["until"]
         .as_array()
-        .unwrap()
+        .expect("a wait.until list")
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
-    assert_eq!(argv, vec!["claude", "--permission-mode", "plan"]);
+    assert!(
+        until.contains(&"working") && until.contains(&"done") && until.contains(&"blocked"),
+        "a short turn can settle before `working` is ever sampled: {until:?}"
+    );
+}
+
+/// `kind` is what protocol 17 launches from, so a `program` the Orchestrator
+/// resolved to an absolute path has to arrive as the bare tool name.
+#[tokio::test]
+async fn dispatch_resolves_the_program_to_a_herdr_kind() {
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .dispatch_with(
+            "T1",
+            "Draft the reply",
+            "plan",
+            json!({
+                "tool_launch": {
+                    "program": "/Users/x/.local/bin/claude",
+                    "args": ["--permission-mode", "plan"],
+                    "env": {},
+                }
+            }),
+        )
+        .await;
+    assert!(disp["error"].is_null(), "dispatch failed: {disp}");
+
+    let log = requests.lock().unwrap();
+    let start = &calls(&log, "agent.start")[0]["params"];
+    assert_eq!(start["kind"], "claude", "the file name is the kind");
+    assert_eq!(
+        start["args"],
+        json!(["--permission-mode", "plan"]),
+        "args pass through untouched: {start}"
+    );
+}
+
+/// herdr made `name` an identifier: lowercase, `[a-z0-9_-]`, at most 32. The
+/// task ids this plugin sees break all three rules, and a name it rejects is a
+/// dispatch that never starts.
+#[tokio::test]
+async fn dispatch_sends_a_legal_agent_name() {
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    // A Slack task id: uppercase, and a colon in the middle.
+    let disp = d
+        .dispatch("C0BNAU8KKG8:1754236800.123456", "Draft the reply", "plan")
+        .await;
+    assert!(disp["error"].is_null(), "dispatch failed: {disp}");
+
+    let log = requests.lock().unwrap();
+    let name = calls(&log, "agent.start")[0]["params"]["name"]
+        .as_str()
+        .expect("a name")
+        .to_string();
+    assert!(name.len() <= 32, "too long for herdr: {name}");
+    assert!(
+        name.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'),
+        "illegal characters: {name}"
+    );
+    assert!(
+        name.starts_with(|c: char| c.is_ascii_lowercase()),
+        "must start with a lowercase letter: {name}"
+    );
 }
 
 /// Every request of `method`, in the order the fake herdr received them.
@@ -587,20 +673,14 @@ async fn dispatch_lays_the_workspace_out_with_the_default_layout() {
 
     let log = requests.lock().unwrap();
 
-    // `agent.start` must NOT ask for a split: its `split` takes no ratio, so
-    // asking there would just re-impose a half-and-half arrangement.
-    let start = &calls(&log, "agent.start")[0];
+    // The agent goes in the root pane, so nothing is left over to close.
+    // Asserting on the *absence* is the point: a stray close here would be
+    // closing the agent's own pane.
     assert!(
-        start["params"].get("split").is_none(),
-        "agent.start must not carry a split: {start}"
+        calls(&log, "pane.close").is_empty(),
+        "protocol 17 leaves no initial shell to close: {log:?}"
     );
-
-    // The initial shell is closed — and it is the *initial* pane that is
-    // closed, not the agent's. Asserting on the pane id is the point: a bare
-    // "a pane.close happened" would also pass if dispatch closed the agent.
-    let closes = calls(&log, "pane.close");
-    assert_eq!(closes.len(), 1, "exactly one close: {closes:?}");
-    assert_eq!(closes[0]["params"]["pane_id"], ROOT_PANE);
+    assert_eq!(calls(&log, "agent.start")[0]["params"]["pane_id"], PANE);
 
     let splits = calls(&log, "pane.split");
     assert_eq!(splits.len(), 1, "one companion shell: {splits:?}");
@@ -614,23 +694,26 @@ async fn dispatch_lays_the_workspace_out_with_the_default_layout() {
     );
     assert_eq!(split["focus"], false, "focus stays with the agent");
 
-    // Close before split: a split that fails must land on "agent full-screen",
-    // a layout `shell = false` also produces — never on three panes.
+    // Split BEFORE the agent starts, the reverse of protocol 16. The CLI then
+    // draws itself once, at its final size, instead of being reflowed under a
+    // split that arrives after it.
     let order: Vec<&str> = log
         .iter()
         .filter_map(|r| r["method"].as_str())
-        .filter(|m| matches!(*m, "agent.start" | "pane.close" | "pane.split"))
+        .filter(|m| matches!(*m, "agent.start" | "pane.split" | "agent.prompt"))
         .collect();
-    assert_eq!(order, vec!["agent.start", "pane.close", "pane.split"]);
+    assert_eq!(order, vec!["pane.split", "agent.start", "agent.prompt"]);
 }
 
 #[tokio::test]
 async fn the_companion_shell_never_receives_the_hook_env() {
-    // The security half of #356. herdr's initial pane inherits the workspace's
-    // env — which for a hook dispatch carries TOTSUKA_HOOK_TOKEN — so that
-    // pane is closed, and the shell that replaces it is made by `pane.split`,
-    // which inherits nothing. Passing `env` here would put a bearer token back
-    // into a pane a human types into.
+    // The security half of #356, on protocol 17's plumbing. `agent.start` no
+    // longer takes an `env`, so the hook environment rides on
+    // `workspace.create` and reaches the agent because herdr applies a
+    // workspace's env to its root pane — the pane the agent is started in. The
+    // companion shell comes from `pane.split`, which inherits nothing, so
+    // simply not passing `env` there is what keeps TOTSUKA_HOOK_TOKEN out of a
+    // pane a human types into.
     let (socket, requests) = FakeHerdr::default().spawn();
 
     let mut d = Driver::new();
@@ -653,9 +736,18 @@ async fn the_companion_shell_never_receives_the_hook_env() {
     assert!(disp["error"].is_null(), "dispatch failed: {disp}");
 
     let log = requests.lock().unwrap();
-    // The agent still gets it — that is the channel completion is reported on.
+    // The agent still gets it — that is the channel completion is reported on
+    // — but now by inheriting the workspace's env rather than being handed it.
+    let created = &calls(&log, "workspace.create")[0];
+    assert_eq!(
+        created["params"]["env"]["TOTSUKA_HOOK_TOKEN"],
+        "secret-token"
+    );
     let start = &calls(&log, "agent.start")[0];
-    assert_eq!(start["params"]["env"]["TOTSUKA_HOOK_TOKEN"], "secret-token");
+    assert!(
+        start["params"].get("env").is_none(),
+        "protocol 17 rejects an env on agent.start: {start}"
+    );
 
     let split = &calls(&log, "pane.split")[0];
     assert!(
@@ -666,8 +758,8 @@ async fn the_companion_shell_never_receives_the_hook_env() {
 
 #[tokio::test]
 async fn shell_false_gives_the_agent_the_whole_workspace() {
-    // The initial pane is still closed — that is what makes the agent
-    // full-screen — but nothing is split back in.
+    // The root pane is the agent's, so "full-screen" is simply what not
+    // splitting leaves behind.
     let (socket, requests) = FakeHerdr::default().spawn();
 
     let mut d = Driver::new();
@@ -677,10 +769,13 @@ async fn shell_false_gives_the_agent_the_whole_workspace() {
     assert!(disp["error"].is_null(), "dispatch failed: {disp}");
 
     let log = requests.lock().unwrap();
-    assert_eq!(calls(&log, "pane.close")[0]["params"]["pane_id"], ROOT_PANE);
     assert!(
         calls(&log, "pane.split").is_empty(),
         "no companion shell was asked for: {log:?}"
+    );
+    assert!(
+        calls(&log, "pane.close").is_empty(),
+        "and nothing to clean up either: {log:?}"
     );
 }
 
@@ -707,8 +802,9 @@ async fn a_configured_direction_and_ratio_reach_herdr_verbatim() {
 #[tokio::test]
 async fn a_failed_split_costs_the_shell_but_not_the_task() {
     // The layout is decoration: a herdr that blips while drawing it must not
-    // lose a task that is otherwise ready to run. The intermediate state is a
-    // valid layout (agent full-screen), which is why close runs before split.
+    // lose a task that is otherwise ready to run. The state a failed split
+    // leaves behind is a layout someone could have asked for — `shell = false`
+    // produces the same thing.
     let (socket, requests) = FakeHerdr {
         split_error: Some("internal_error"),
         ..FakeHerdr::default()
@@ -728,41 +824,17 @@ async fn a_failed_split_costs_the_shell_but_not_the_task() {
     // failure there must not short-circuit it.
     let log = requests.lock().unwrap();
     assert!(
-        !calls(&log, "agent.send").is_empty(),
-        "the prompt was still typed"
+        !calls(&log, "agent.prompt").is_empty(),
+        "the prompt was still submitted"
     );
 }
 
 #[tokio::test]
-async fn a_failed_close_leaves_herdrs_default_layout_alone() {
-    // With the initial shell still open, splitting another one off would make
-    // three panes. Better to leave herdr's own arrangement (what every task got
-    // before #356) than to add clutter on top of it.
-    let (socket, requests) = FakeHerdr {
-        close_error: Some("internal_error"),
-        ..FakeHerdr::default()
-    }
-    .spawn();
-
-    let mut d = Driver::new();
-    d.init(&socket).await;
-    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
-    assert!(
-        disp["error"].is_null(),
-        "a failed close must not fail the dispatch: {disp}"
-    );
-
-    assert!(
-        calls(&requests.lock().unwrap(), "pane.split").is_empty(),
-        "no shell may be added while the initial one is still there"
-    );
-}
-
-#[tokio::test]
-async fn a_response_without_a_root_pane_skips_the_layout_entirely() {
-    // An older or future herdr that names no `root_pane` leaves us no handle to
-    // close. Degrade to herdr's default arrangement rather than failing the
-    // dispatch — or adding a third pane.
+async fn a_response_without_a_root_pane_fails_the_dispatch() {
+    // Under protocol 16 a missing `root_pane` only cost the layout. Now it is
+    // the pane the agent runs in, so there is nothing to degrade to: starting
+    // anyway would mean guessing a pane id, and guessing wrong means typing a
+    // task into whatever the operator had open.
     let (socket, requests) = FakeHerdr {
         no_root_pane: true,
         ..FakeHerdr::default()
@@ -772,22 +844,89 @@ async fn a_response_without_a_root_pane_skips_the_layout_entirely() {
     let mut d = Driver::new();
     d.init(&socket).await;
     let disp = d.dispatch("T1", "Draft the reply", "implement").await;
-    assert!(disp["error"].is_null(), "dispatch failed: {disp}");
-
-    let log = requests.lock().unwrap();
-    assert!(calls(&log, "pane.close").is_empty(), "nothing to close");
     assert!(
-        calls(&log, "pane.split").is_empty(),
-        "and therefore nothing to split"
+        !disp["error"].is_null(),
+        "a dispatch with no pane to run in must fail: {disp}"
     );
+
+    // Scoped, not `drop`ped: the guard must be out of scope before the await
+    // below, and a block is what proves that to `clippy::await_holding_lock`.
+    {
+        let log = requests.lock().unwrap();
+        assert!(
+            calls(&log, "agent.start").is_empty(),
+            "and must not start an agent anywhere: {log:?}"
+        );
+    }
+    // The workspace it allocated is still taken back down (asynchronously, so
+    // this waits rather than sampling).
+    assert!(
+        awaits_workspace_close(&requests).await,
+        "a failed dispatch must not leak its workspace"
+    );
+}
+
+/// `agent_name_taken` means a live agent already owns this task's name, which
+/// only happens when an earlier pane was never released (ADR-0032 D-3). It is
+/// deliberately **not** worked around with a second name: that would let orphan
+/// panes pile up while every dispatch kept succeeding.
+#[tokio::test]
+async fn a_taken_agent_name_fails_the_dispatch() {
+    let (socket, requests) = FakeHerdr {
+        start_error: Some("agent_name_taken"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(!disp["error"].is_null(), "must not be papered over: {disp}");
+    {
+        let log = requests.lock().unwrap();
+        assert_eq!(
+            calls(&log, "agent.start").len(),
+            1,
+            "no retry under a different name: {log:?}"
+        );
+    }
+    assert!(
+        awaits_workspace_close(&requests).await,
+        "a failed dispatch must not leak its workspace"
+    );
+}
+
+/// Wait for the `workspace.close` a failed dispatch fires off. `abandon` spawns
+/// it, so it lands after the error response — sampling the log instead of
+/// waiting on it would be a flake, not an assertion.
+async fn awaits_workspace_close(requests: &Arc<Mutex<Vec<Value>>>) -> bool {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r["method"] == "workspace.close")
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .is_ok()
 }
 
 #[tokio::test]
 async fn dispatch_fails_loudly_when_the_agent_never_starts() {
-    // A CLI that never listens must surface an error, not a session id whose
-    // state stream would hang forever.
+    // A CLI that never reacts must surface an error, not a session id whose
+    // state stream would hang forever. Protocol 17 detects this inside
+    // `agent.prompt` — `agent_prompt_stalled` is herdr saying the submission
+    // produced no state change — and the plugin's contract is unchanged: it
+    // fails the dispatch rather than leaving a pane sitting on an unsent task.
     let (socket, requests) = FakeHerdr {
-        deaf_enters: usize::MAX,
+        prompt_error: Some("agent_prompt_stalled"),
         ..FakeHerdr::default()
     }
     .spawn();
@@ -795,13 +934,7 @@ async fn dispatch_fails_loudly_when_the_agent_never_starts() {
     let mut d = Driver::new();
     d.init(&socket).await;
     let disp = d.dispatch("T2", "Never starts", "plan").await;
-    assert!(
-        disp["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("never started"),
-        "expected a loud failure: {disp}"
-    );
+    assert!(!disp["error"].is_null(), "expected a loud failure: {disp}");
 
     // …and it must take its workspace down with it: a failed dispatch reports
     // no session id, so nothing else could ever close the pane or its CLI.
@@ -1193,31 +1326,35 @@ async fn dispatch_injects_hook_env_and_settings_and_resume() {
         "the hook env must ride on workspace.create"
     );
 
-    // env rides on agent.start, and `--settings`/`--resume` are in the argv.
+    // `agent.start` carries none: protocol 17 rejects the field, and it does
+    // not need it — the agent runs in the root pane, which inherits the
+    // workspace's env.
     let start = log
         .iter()
         .find(|r| r["method"] == "agent.start")
         .expect("an agent.start request");
-    assert_eq!(
-        start["params"]["env"], expected_env,
-        "the hook env must ride on agent.start"
+    assert!(
+        start["params"].get("env").is_none(),
+        "protocol 17 rejects an env on agent.start: {start}"
     );
-    let argv: Vec<&str> = start["params"]["argv"]
+    // `--settings`/`--resume` ride in `args`, after the executable `kind`
+    // selects.
+    assert_eq!(start["params"]["kind"], "claude");
+    let args: Vec<&str> = start["params"]["args"]
         .as_array()
         .unwrap()
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
     assert_eq!(
-        argv,
+        args,
         vec![
-            "claude",
             "--settings",
             "/data/totsuka/hooks/orchestrator-implement.json",
             "--resume",
             "claude-sess-abc",
         ],
-        "the argv must carry --settings and --resume: {argv:?}"
+        "args must carry --settings and --resume: {args:?}"
     );
 }
 
@@ -1250,17 +1387,59 @@ async fn dispatch_without_a_hook_injects_no_env() {
         create["params"].get("env").is_none(),
         "no hook spec → no env on workspace.create"
     );
-    let argv: Vec<&str> = start["params"]["argv"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
+    assert_eq!(start["params"]["kind"], "claude");
     assert_eq!(
-        argv,
-        vec!["claude"],
+        start["params"]["args"],
+        json!([]),
         "no --settings/--resume without a hook"
     );
+}
+
+/// A herdr older than 17 cannot run this plugin's dispatch at all, so
+/// `initialize` refuses it (ADR-0032 D-6). Failing here rather than at the
+/// first dispatch is the whole point: before this check the symptom was
+/// `missing field 'kind'` on a task that had already been ingested and had a
+/// worktree cut for it.
+#[tokio::test]
+async fn initialize_refuses_a_herdr_below_protocol_17() {
+    let (socket, _) = FakeHerdr {
+        protocol: 16,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    let resp = d.init(&socket).await;
+    let message = resp["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("protocol 16") && message.contains("herdr update"),
+        "the refusal must name the version and the fix: {resp}"
+    );
+
+    // And the plugin stays uninitialized, rather than accepting work it would
+    // fail on later.
+    let disp = d.dispatch("T1", "Draft the reply", "plan").await;
+    assert!(
+        !disp["error"].is_null(),
+        "must not accept a dispatch: {disp}"
+    );
+}
+
+/// A `ping` with no `protocol` at all passes. The field has been there since
+/// 0.7.1, so its absence means a herdr shaped unlike any we have seen —
+/// refusing on that guess would turn an unknown into an outage, and the
+/// dispatch path fails loudly on its own if the guess was wrong.
+#[tokio::test]
+async fn initialize_accepts_a_ping_without_a_protocol_field() {
+    let (socket, _) = FakeHerdr {
+        protocol: 0,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    let resp = d.init(&socket).await;
+    assert!(resp["error"].is_null(), "must not refuse: {resp}");
 }
 
 #[tokio::test]
@@ -1605,12 +1784,12 @@ async fn release_reports_false_when_pane_already_gone() {
 
 #[tokio::test]
 async fn a_failing_herdr_is_reported_with_its_cause() {
-    // The retries absorb a blip, but a herdr that is simply down would
-    // otherwise be reported as the symptom alone ("it never started"), with the
-    // real error only in the plugin's stderr — a diagnosability regression the
-    // pre-retry code did not have.
+    // Whatever herdr said has to reach the caller. Under protocol 16 the
+    // retries could bury it — the symptom ("it never started") surfaced while
+    // the cause stayed in stderr. With a single `agent.prompt` there is nothing
+    // to bury, and this pins that the error still travels intact.
     let (socket, _) = FakeHerdr {
-        submission_error: Some("internal_error"),
+        prompt_error: Some("internal_error"),
         ..FakeHerdr::default()
     }
     .spawn();
@@ -1620,16 +1799,17 @@ async fn a_failing_herdr_is_reported_with_its_cause() {
     let disp = d.dispatch("T9", "Herdr is down", "plan").await;
     let message = disp["error"]["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains("internal_error") && message.contains("not reachable"),
+        message.contains("internal_error") && message.contains("could not submit"),
         "the failure must carry what herdr actually said: {message}"
     );
 }
 
 /// A dispatch that asks to resume `claude-sess-abc`, against a herdr whose
-/// calls fail with `code` once the pane is up. Returns the error response.
+/// prompt submission fails with `code` once the pane is up. Returns the error
+/// response.
 async fn dispatch_resuming_against(code: &'static str) -> Value {
     let (socket, _) = FakeHerdr {
-        submission_error: Some(code),
+        prompt_error: Some(code),
         ..FakeHerdr::default()
     }
     .spawn();
@@ -1673,7 +1853,7 @@ async fn a_vanished_pane_without_resume_keeps_its_own_error() {
     // session can be blamed on resuming one. Answering SESSION_UNRESUMABLE
     // here would send the Orchestrator into a retry that changes nothing.
     let (socket, _) = FakeHerdr {
-        submission_error: Some("agent_not_found"),
+        prompt_error: Some("agent_not_found"),
         ..FakeHerdr::default()
     }
     .spawn();

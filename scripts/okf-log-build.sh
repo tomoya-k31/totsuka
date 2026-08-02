@@ -125,10 +125,30 @@ build() {
   printf '%s\n' "${dates}" | while IFS= read -r d; do
     [ -n "${d}" ] || continue
     printf '\n## %s\n\n' "${d}"
+    # A day's fragments concatenate into ONE Markdown list, so their spacing has
+    # to be consistent or rumdl's MD076 fires — in both directions. A day whose
+    # entries are all single-line is a *tight* list and must have no blank lines
+    # between items; a day where any entry carries continuation paragraphs is a
+    # *loose* list and must have them between all items. Deciding per day is
+    # what keeps a day mixing the two kinds correct.
+    #
+    # This only became reachable when ADR-0031 made fragments per-PR: before
+    # that a date had one fragment and there was nothing to separate.
+    loose="$(
+      printf '%s\n' "${frags}" | while IFS= read -r b; do
+        case "${b}" in "${d}"-*) ;; *) continue ;; esac
+        if emit_fragment "${FRAGDIR}/${b}" | grep -qE '^[[:space:]]*$'; then
+          printf 'y'
+          break
+        fi
+      done
+    )"
     first=1
     printf '%s\n' "${frags}" | while IFS= read -r b; do
       case "${b}" in "${d}"-*) ;; *) continue ;; esac
-      [ "${first}" -eq 1 ] || printf '\n'
+      if [ "${first}" -eq 0 ] && [ -n "${loose}" ]; then
+        printf '\n'
+      fi
       emit_fragment "${FRAGDIR}/${b}"
       first=0
     done

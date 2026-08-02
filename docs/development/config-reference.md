@@ -317,9 +317,33 @@ kind = "task_source"
 | `plan_args` | string[] | `["--permission-mode", "plan"]` | **deprecated**。同上、plan モードの追加引数 |
 | `design_preview` | string | `side_pane` | **deprecated かつ無効**。core もプラグインも読んでいないため、値を変えても描画は一切変わらない。pane の配置は `[layout]` が決める（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。削除は 0.3 |
 | `[layout]` | テーブル | 下記の既定 | dispatch した pane の配置（#356、下記） |
+| `[kind_map]` | テーブル | `{}` | 実行ファイル名 → herdr の `kind` の写像（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-1、下記） |
 | `request_timeout_secs` | int | 30 | herdr socket 呼び出し 1 本あたりのタイムアウト |
 
 ソケットの解決順: `socket_path` > `session` 名 > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定 `~/.config/herdr/herdr.sock`。
+
+**herdr は 0.7.5（protocol 17）以降が必要。** それより古い herdr に対しては `initialize` が
+`CONFIG_INVALID` で初期化を拒否し、`totsuka config validate` / `doctor` がバージョンを名指しで報告する
+（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-6）。
+
+## `[kind_map]`（実行ファイル名 → herdr の `kind`）
+
+protocol 17 の `agent.start` は**実行ファイルを `kind`（21 値の enum）から決める**ため、プラグインは
+`[tools]` が解決した `program` をそのまま起動できず、**ファイル名**を herdr の語彙へ翻訳する。
+`claude` / `codex` / `opencode` はそのまま通るので、通常このテーブルは要らない。
+
+必要になるのは**ラッパースクリプト**のように herdr が知らない名前のときだけ:
+
+```toml
+[kind_map]
+my-claude = "claude"
+```
+
+- キーは**ファイル名**と比較する（パスではない）。`/opt/bin/my-claude` は `my-claude` で引く
+- 値の検証はしない。未知の `kind` は herdr が `agent.start` で拒否する。21 値の enum をこちら側に
+  複製すると、上流が増やしたときに黙って食い違うため
+- `[tools]` レジストリ側には置かない。`[tools]` は agent_ide 非依存の共有設定で、herdr 固有の語彙を
+  そこへ持ち込むと orca しか使わない構成にも漏れる
 
 ## `[layout]`（pane の配置、#356）
 
