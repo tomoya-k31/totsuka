@@ -46,7 +46,7 @@ herdr 公式ドキュメント（[Socket API](https://herdr.dev/docs/socket-api/
 要点は 3 つで、いずれも 0.7.4 までの記載を**無効化**する:
 
 1. **`agent.start` が manifest 駆動になった** — `{name, kind, pane_id}` が必須で、`argv` / `cwd` /
-   `env` / `workspace_id` / `split` / `focus` は受け付けない。**pane は呼び出し側が用意する**
+   `env` / `workspace_id` / `tab_id` / `split` / `focus` は受け付けない。**pane は呼び出し側が用意する**
 2. **`agent.send` が廃止され `agent.prompt` が新設された** — `{target, text, wait?}` で、
    **複数行プロンプトをそのまま投入できる**。#124 で必須とされた「送信 → 画面照合 → enter 再押下」の
    自己修正手順は protocol 17 では不要
