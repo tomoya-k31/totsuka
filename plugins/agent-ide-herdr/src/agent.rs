@@ -417,7 +417,8 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     async fn confirm_submission(&self, pane_id: &str, stall: HerdrError) -> Result<(), HerdrError> {
         tracing::warn!(
             pane_id,
-            "agent.prompt saw no state change inside herdr's 5s floor; confirming with agent.wait              rather than re-sending the prompt"
+            "agent.prompt saw no state change inside herdr's 5s floor; confirming with \
+             agent.wait rather than re-sending the prompt"
         );
         match self
             .client

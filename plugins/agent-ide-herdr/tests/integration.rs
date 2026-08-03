@@ -95,8 +95,14 @@ struct FakeHerdr {
     /// When set, `pane.split` fails with this herdr error code (#356: the
     /// companion shell is lost, the dispatch is not).
     split_error: Option<&'static str>,
-    /// When set, `agent.prompt` fails with this herdr error code — `stalled`
-    /// (herdr saw no reaction) or a socket that is simply down.
+    /// When set, `agent.prompt` fails outright with this herdr error code — a
+    /// socket that is down, a pane that is gone. **Not** `agent_prompt_stalled`
+    /// (that lands the prompt and is modelled by
+    /// [`stalled_prompts`](Self::stalled_prompts)) and **not**
+    /// `agent_not_ready` (modelled by
+    /// [`not_ready_prompts`](Self::not_ready_prompts)) — both of those are
+    /// answered rather than propagated, so routing them through here would
+    /// test a path the plugin does not take.
     prompt_error: Option<&'static str>,
     /// How many `agent.prompt` calls answer `agent_prompt_stalled` — herdr
     /// typed and submitted the prompt but saw no reaction inside its own 5s
