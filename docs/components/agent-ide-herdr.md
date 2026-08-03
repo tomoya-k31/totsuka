@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-03T13:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-03T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -71,6 +71,12 @@ prompt が通ったのは t=5.0s）。herdr の応答は非決定的で、同じ
 **リトライするのはこの 2 コードだけ**で、未知の `kind`・`agent_name_taken`・CLI が現れない `timeout` は
 放っておいても直らないため即座に失敗させる。**`agent_not_found` も含めない** — pane が死んだ形であり、
 resume 付き dispatch では `SESSION_UNRESUMABLE` として上げる必要がある（#261）。
+
+**3 段目の `agent_prompt_stalled` はリトライしない**（#380、[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7）。
+herdr の 5 秒下限（設定不可）に Claude Code が間に合わないと、**成功した投入が失敗として返る**。
+このときプロンプトは既に投入済みなので、再送すると**タスクを二重投入する**。代わりに
+`agent.wait` でこちらの窓を使って確認し、到達すれば成功、しなければ**元の stall を**報告する
+（`agent.wait` が `agent_not_found` を返したときだけそちらを通す — `SESSION_UNRESUMABLE` を埋もれさせないため）。
 
 ## `program` → `kind` の写像
 

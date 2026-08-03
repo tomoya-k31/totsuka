@@ -89,4 +89,21 @@ impl HerdrError {
     pub fn is_agent_not_ready(&self) -> bool {
         matches!(self, HerdrError::Protocol { code, .. } if code == "agent_not_ready")
     }
+
+    /// Whether this is `agent.prompt` reporting that it saw no state change
+    /// within herdr's own 5s floor.
+    ///
+    /// **Unlike the other two startup transients, the prompt has already been
+    /// typed and submitted when this comes back.** herdr requires an observed
+    /// state change within 5000ms of a submission from a non-working state, and
+    /// that floor is not something the caller can raise — `wait.timeout_ms` is
+    /// the outer bound on reaching a settled state, not this. A Claude Code that
+    /// takes longer than 5s to visibly react therefore fails a dispatch that
+    /// actually worked (observed on 3 of 7 live tasks, #380).
+    ///
+    /// So this must **never** be answered by re-sending: that would put the
+    /// task into the agent twice. It is confirmed instead.
+    pub fn is_prompt_stalled(&self) -> bool {
+        matches!(self, HerdrError::Protocol { code, .. } if code == "agent_prompt_stalled")
+    }
 }

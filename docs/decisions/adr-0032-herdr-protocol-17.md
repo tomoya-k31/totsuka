@@ -4,7 +4,7 @@ title: ADR-0032 herdr protocol 17 への追随（agent.start の manifest 駆動
 description: herdr 0.7.5 (protocol 17) で agent.start が manifest 駆動（kind + 呼び出し側が用意した既存 pane）へ、プロンプト投入が agent.prompt へ破壊的に変わったことへの追随方針。program→kind 写像、agent name の生成規則と agent_name_taken の扱い、pane 確保順序の反転、submit_prompt と RetryPolicy の廃止、protocol 16 以下を切る判断を定める。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [adr, herdr, agent-ide, protocol, breaking-change]
-generated: { by: claude-code/opus-5, at: 2026-08-03T13:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-03T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -238,6 +238,31 @@ CLI が現れない `timeout` は、いずれも放っておいても直らな�
 **`agent_not_found` も含めない** — これは pane が死んだ形で、resume 付き dispatch では
 `SESSION_UNRESUMABLE` として上げる必要がある（#261）。リトライすると、その報告を
 タイムアウトまで遅らせたうえで別のエラーに化けさせてしまう。
+
+### 3 段目は「リトライしてはいけない」過渡状態（#380）
+
+`agent.prompt` の `agent_prompt_stalled` も過渡状態だが、**扱いが逆**である。
+
+herdr は「非 working 状態からの投入では 5000ms 以内の状態変化を要求する」という下限を持ち、
+**これは設定で変えられない** — `wait.timeout_ms` は settle 到達までの外側の上限であって別物、
+`herdr --default-config` の全文にも該当キーは無い。Claude Code が 5 秒以内に目に見えて反応しないと、
+**成功した投入が失敗として返る**（実機 7 タスク中 3 回）。
+
+このとき**プロンプトは既に typed + submitted されている**。したがって再送は
+**同じタスクをエージェントへ二重投入する**ことになり、`agent_pane_busy` /
+`agent_not_ready` と同じ扱いにはできない。
+
+対処は**確認**である。`agent.wait {until: [working, blocked, done], timeout_ms}` で
+こちらの窓を使ってもう一度 herdr に問う。到達すれば dispatch 成功、到達しなければ
+**元の stall を**報告する（症状として意味があるのはそちらで、確認側のタイムアウトではない）。
+ただし `agent.wait` が `agent_not_found` を返したときだけは**そちらを通す** —
+pane が死んだ形なので、resume 付き dispatch では `SESSION_UNRESUMABLE` に写らねばならない。
+
+**`wait` を付けずに投入して常に `agent.wait` で確認する案**は、5 秒下限を迂回できて
+一見きれいだが採らなかった。`agent.prompt` の `wait` は「投入が非 working 状態から
+始まったか」という文脈を herdr 側でしか持てない判定を含んでおり、外すとその情報が失われる。
+stall を確認で拾う形なら、正常系では herdr の判定をそのまま使い、
+外れたときだけこちらの窓で問い直すことになる。
 
 # Consequences
 
