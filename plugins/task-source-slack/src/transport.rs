@@ -63,6 +63,26 @@ pub trait SlackTransport: Send + Sync {
         idempotent: bool,
     ) -> impl Future<Output = Result<Value, SlackError>> + Send;
 
+    /// The OAuth scopes `token` actually carries, as Slack reports them in the
+    /// `x-oauth-scopes` response header.
+    ///
+    /// **`None` means "cannot tell", never "none granted".** The default
+    /// answers `None`, so an implementation with no way to see the header — or
+    /// no wish to — inherits the honest answer without doing anything. Callers
+    /// must read it that way: treating an unknown scope set as a missing one
+    /// would turn "this transport did not say" into "your token is broken".
+    ///
+    /// This exists because a missing scope is **silent**: Slack does not
+    /// deliver the events it gates and reports no error, so a plugin
+    /// configured to use them looks healthy while doing nothing (#379).
+    fn granted_scopes(
+        &self,
+        token: TokenKind,
+    ) -> impl Future<Output = Result<Option<Vec<String>>, SlackError>> + Send {
+        let _ = token;
+        async { Ok(None) }
+    }
+
     /// POST a JSON `body` to an absolute `url` outside the Web API base — the
     /// `response_url` rewrite channel for ephemeral messages. Unauthenticated
     /// (the URL itself is the capability) and never retried: the URL is valid
@@ -271,6 +291,46 @@ impl ReqwestTransport {
 }
 
 impl SlackTransport for ReqwestTransport {
+    /// Read `x-oauth-scopes` off a bare `auth.test`.
+    ///
+    /// `auth.test` because it takes no arguments and is the one call whose only
+    /// failure mode is the token itself — the TokenGuard already proves it
+    /// works before this runs. A missing or unparseable header is `None`
+    /// ("cannot tell"), not an empty scope list: Slack has always sent it, so
+    /// its absence means a shape we do not recognise, and guessing there would
+    /// turn an unknown into a startup failure.
+    async fn granted_scopes(&self, token: TokenKind) -> Result<Option<Vec<String>>, SlackError> {
+        let response = self
+            .client
+            .post(format!("{}/auth.test", self.base_url))
+            .bearer_auth(self.token(token)?)
+            .timeout(self.timeout)
+            .send()
+            .await
+            .map_err(|e| self.send_error(e))?;
+        // A non-2xx answer is not a scope answer. 429 and 5xx carry no
+        // meaningful `x-oauth-scopes`, and reading one off them would report a
+        // scope set the token may not have — the one thing this must never do,
+        // since the caller turns "missing" into a warning.
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+        let Some(raw) = response
+            .headers()
+            .get("x-oauth-scopes")
+            .and_then(|v| v.to_str().ok())
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            raw.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
+        ))
+    }
+
     async fn call(
         &self,
         token: TokenKind,

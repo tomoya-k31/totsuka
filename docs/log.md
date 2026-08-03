@@ -3,6 +3,7 @@
 ## 2026-08-04
 
 * **Update**: [フックシグナルフロー](/architecture/hook-signal-flow.md) — `task/dispatch` が D-03 の沈黙アンカー（`last_signal_at`）をクリアするようにした（[#382](https://github.com/tomoya-k31/totsuka/issues/382)）。実機で `task retry` した直後のタスクが **dispatch の 3 ミリ秒後にエスカレーション**した（エージェント自身は正常に `working`）。掃引は前の実行の信号時刻を起点に「`timeout_secs` 以上黙っている」と判定していた。クリアであって dispatch 時刻での上書きではない — 上書きすると D-03 が「一度も生きなかったタスク」まで拾うことになり、それは `pane.exited` デッドマン（F-106）の担当で、従来カバーしていない範囲だから。
+* **Update**: [task-source-slack](/components/task-source-slack.md) の TokenGuard が、**設定の要求するスコープをトークンが持っているか**を検査して警告するようにした（[#379](https://github.com/tomoya-k31/totsuka/issues/379)）。`trigger_reactions` に対する `reactions:read`、`[[channel_groups]]` に対する `channels:read` / `groups:read` が対象。スコープ欠落は無症状で、Slack はイベントを配送せずエラーも返さないため、設定は有効に見えて `doctor` も緑のまま何も起きない（実機検証でこれを踏んだ）。スコープは `auth.test` の応答ヘッダ `x-oauth-scopes` から読み（`SlackTransport::granted_scopes`、既定実装は `None` = 判定不能）、**読めないときは何も言わない**。主機能は動き続けるのでエラーではなく警告に留める。
 
 ## 2026-08-03
 

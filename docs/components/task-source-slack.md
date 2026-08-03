@@ -4,7 +4,7 @@ title: task-source-slack プラグイン
 description: 自分宛の Slack メンションをタスク化し本人名義で代理返信する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard（auth.test + apps.connections.open + 任意の bot probe）・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決・下書き提示・承認フロー・bot ナッジ DM 通知（#305）に加え、manifest 雛形・CLI レベル E2E・運用ドキュメントまで完備（エピック#102 完了）。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard, conversation-identity, conversation-continuity]
-generated: { by: human:tomoya-k31, at: 2026-07-31T17:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-04T01:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -46,6 +46,21 @@ owner: tomoya-k31
 - `apps.connections.open` で App-Level Token（`xapp-`）も同期検証（#108）。これがないと xapp 失効は背景の Socket Mode ループでしか露見せず、`initialize` の呼び手（= `doctor` プローブ）に見えない
 - `bot_token`（`xoxb-`）は**設定時のみ**同じ扱いで probe（#305）。明示的に有効化した通知ナッジの死んだトークンを黙って握り潰さず、`doctor` で可視化する。未設定は probe なし（ナッジ off は正当な構成）
 - ネットワーク障害などクレデンシャル以外の失敗は `INTERNAL_ERROR` として区別
+
+加えて、**設定が要求するスコープをトークンが持っているかを検査し、欠けていれば警告する**（#379）:
+
+| 条件 | 警告 |
+|---|---|
+| `trigger_reactions` が非空 かつ `reactions:read` 無し | `reaction_added` が配送されず、リアクション起動が黙って死ぬ |
+| `[[channel_groups]]` が非空 かつ `channels:read` / `groups:read` のどちらも無し | チャンネル名が解決できず prefix ルールが全て外れる |
+
+**スコープ欠落は無症状**である — Slack はそのスコープが門番をしているイベントを配送せず、エラーも返さない。
+設定は有効に見え、`doctor` は緑で、何も起きない。実機検証でこれを踏み、原因特定に数往復を要した。
+
+**エラーではなく警告**にしている。スコープが無くてもプラグインの主機能（メンション・下書き・承認）は動き、
+死ぬのは opt-in の機能だけなので、まだ使っていないかもしれない機能のために動いている構成を落とさない。
+スコープは `auth.test` の応答ヘッダ `x-oauth-scopes` から読む（`SlackTransport::granted_scopes`）。
+**読めない場合（`None`）は何も言わない** — 見えない検査は「問題を見つけた検査」ではない。
 
 `config/validate` は意図的にオフライン（静的検証のみ）。ホストのプローブ（`totsuka config validate` / `doctor`）は launch ハンドシェイクで `initialize` も呼ぶため、TokenGuard（両トークンの疎通）はそこで実行される。
 

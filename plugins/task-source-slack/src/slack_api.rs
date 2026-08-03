@@ -167,6 +167,14 @@ impl<T: SlackTransport> SlackApi<T> {
         Ok(AuthIdentity { user_id })
     }
 
+    /// The user token's OAuth scopes, or `None` when the transport cannot see
+    /// them ([`SlackTransport::granted_scopes`]). Used by the TokenGuard to
+    /// warn about a config whose feature is gated behind a scope the token
+    /// does not carry (#379).
+    pub async fn granted_scopes(&self) -> Result<Option<Vec<String>>, SlackError> {
+        self.transport.granted_scopes(TokenKind::User).await
+    }
+
     /// `apps.connections.open` — a fresh Socket Mode WebSocket URL. The one
     /// method authenticated by the App-Level Token.
     ///
