@@ -1,0 +1,11 @@
+# mock_agent を agent_ide として install するための plugin.toml。
+# 実エージェントの前に経路だけ通したいときに使う（バイナリは
+# target/debug/mock_plugin を `mock_agent` の名前で同じディレクトリに置く）。
+name = "mock_agent"
+kind = "agent_ide"
+version = "0.1.0"
+protocol_version = ">=0.1.6, <0.4"
+
+[capabilities]
+state_stream = true
+outputs = ["source"]
