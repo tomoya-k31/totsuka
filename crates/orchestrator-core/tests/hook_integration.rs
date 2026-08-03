@@ -706,11 +706,15 @@ async fn timeout_sweep_escalates_silent_task() {
     let notify_log = base.join("notify.ndjson");
     let clock = manual_clock();
     let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
-    // Seed a task whose last signal is "now" on the manual clock; the test
-    // then drives the clock across the 30-minute default timeout (#174).
-    let id = db.upsert_task(&new_task("1", Some(T0))).unwrap();
+    // Seed a task that proves itself alive *after* being dispatched, then let
+    // the test drive the clock across the 30-minute default timeout (#174).
+    // The signal has to come after the dispatch: a dispatch starts a new
+    // execution and clears the anchor (#382), and seeding one beforehand would
+    // build a state that never occurs.
+    let id = db.upsert_task(&new_task("1", None)).unwrap();
     db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
     db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.touch_last_signal(id).unwrap();
     db.record_session(id, "mock_agent", "sess-1").unwrap();
 
     let mut engine = Engine::with_clock(
@@ -747,6 +751,64 @@ async fn timeout_sweep_escalates_silent_task() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A retried task must not be judged by the previous execution's silence
+/// (#382). Live, a task that signalled, failed, and was `task retry`d ~27
+/// minutes later escalated **3ms after being dispatched** — the sweep compared
+/// `now` against an anchor belonging to the attempt before.
+#[tokio::test]
+async fn a_redispatched_task_is_not_escalated_for_the_previous_attempts_silence() {
+    let base = scratch("hook_retry_anchor");
+    let notify_log = base.join("notify.ndjson");
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+    let id = db.upsert_task(&new_task("1", None)).unwrap();
+
+    // First execution: dispatched, proved itself alive, then failed. The
+    // anchor is stamped AFTER the dispatch — seeding it beforehand would let
+    // the first dispatch clear it, leaving nothing for the second one to clear
+    // and turning this into a test that passes without the fix.
+    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.touch_last_signal(id).unwrap();
+    db.apply_event(id, TaskEvent::Fail, None).unwrap();
+
+    // A human retries it well past the workflow timeout.
+    clock.advance(time::Duration::seconds(1801));
+    db.retry_task(id, None).unwrap();
+    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+
+    let mut engine = Engine::with_clock(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+        clock.clone(),
+    )
+    .await;
+
+    engine.sweep_signal_timeouts().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Dispatched,
+        "the fresh execution has not been silent — the old anchor must not count against it"
+    );
+
+    // And D-03 still applies once THIS execution proves itself alive and then
+    // goes quiet: the fix clears the anchor, it does not disable the sweep.
+    engine.db().touch_last_signal(id).unwrap();
+    clock.advance(time::Duration::seconds(1801));
+    engine.sweep_signal_timeouts().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Escalated,
+        "a silent task past its timeout still escalates (D-03)"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Same workflow as [`workflows`] but with a short, explicit `timeout_secs`
 /// so a test can observe a task crossing its timeout *during* the run,
 /// rather than seeding it already-expired (which the initial startup
@@ -779,21 +841,20 @@ async fn watch_mode_periodic_tick_escalates_silent_task_without_events() {
     // `--watch` process would never re-check signal timeouts (D-03) or
     // worktree retention (F-23) unless a push event happened to arrive.
     //
-    // The task is seeded with a *fresh* `last_signal_at` and a 1-second
-    // workflow timeout — not yet timed out when the startup `cycle()` runs,
-    // only becoming so a moment later. No event is ever sent, so only a
-    // periodic re-check (not the startup sweep) can catch it.
+    // The task gets a *fresh* `last_signal_at` and a 1-second workflow timeout
+    // — not yet timed out when the startup `cycle()` runs, only becoming so a
+    // moment later. No event is ever sent, so only a periodic re-check (not the
+    // startup sweep) can catch it. The anchor is stamped after the dispatch
+    // because a dispatch clears it (#382).
     let base = scratch("hook_watch_tick");
     let db_path = base.join("state.db");
     let notify_log = base.join("notify.ndjson");
-    let now = time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap();
     let id = {
         let db = StateDb::open(&db_path).unwrap();
-        let id = db.upsert_task(&new_task("1", Some(&now))).unwrap();
+        let id = db.upsert_task(&new_task("1", None)).unwrap();
         db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
         db.apply_event(id, TaskEvent::Start, None).unwrap();
+        db.touch_last_signal(id).unwrap();
         db.record_session(id, "mock_agent", "sess-1").unwrap();
         id
     };
