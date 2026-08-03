@@ -108,7 +108,7 @@ owner: tomoya-k31
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source インスタンス名 |
 | `trigger` | テーブル | `{}`（全マッチ） | トリガー条件。`status`/`project_status`/`label`/`labels` は Orchestrator が防御的に再判定、他キーはプラグインが `initialize` の `triggers` として受け取り解釈する |
-| `mode` | enum | 必須 | `plan`（ペインが git を実行できないので、ブランチ作成もコミットも push も起きない。F-82）/ `implement` |
+| `mode` | enum | 必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
 | `output` | enum | 必須 | `source` / `none`。**`pull_request` は廃止** — push と PR 作成はエージェントの責務になった（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、PR 作成手順はリポジトリの規約と `[prompts]` で指示する |
 | `on_success` | `{ set_status = "..." }`? | なし | 成功時にソース側ステータスを更新（F-84） |
@@ -120,6 +120,18 @@ owner: tomoya-k31
 | `tool` | string? | なし | AI ツールの明示ピン（#196）。優先順位は workflow > repo > `default_tool`。`verification = "llm"` は Claude の prompt 型 Stop フックが必要なので、非 claude 系へ解決されうる構成では `tool = "claude"` のピンを警告で提案 |
 
 定義順に first-match（F-81）。同一ソース内でトリガーが重なると警告。
+
+## `mode = "plan"` は git を構造的には止めない（#378）
+
+F-82 は plan を「worktree は作るが push・PR は行わない」モードとして定義しており、
+実装も `--permission-mode plan` / `--sandbox read-only` / `bash: deny` がそれを担保する前提で
+書かれてきた。**実機ではその前提が破れた** — plan モードのタスクがブランチを切り、コミットし、
+push し、PR まで作成した。対象リポジトリの `CLAUDE.md` が「終わったら push して PR を作れ」と
+指示していたためである。
+
+現状は**検出**まで。plan モードのタスクの worktree にブランチが現れると `run` が警告を出す
+（ブランチ名つき）。副作用の無いモードとして plan を選ぶ場合は、**対象リポジトリの規約に
+push / PR を指示する記述が無いか**を確認すること。
 
 # `[tools.{name}]`（AI ツールレジストリ、#196）
 

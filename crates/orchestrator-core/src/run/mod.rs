@@ -967,6 +967,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             return Ok(());
         }
         tracing::info!(task_id, branch = %head, "recorded the agent's branch");
+        if let Some(warning) = plan_mode_side_effect(&record.mode, &head) {
+            tracing::warn!(task_id, branch = %head, "{warning}");
+        }
         self.db.set_branch(task_id, &head)?;
         Ok(())
     }
@@ -1470,14 +1473,19 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     prompt_context.push_str("\n\n");
                 }
                 // Ask the agent to branch, but only where the ask is both
-                // actionable and needed. Plan mode cannot run git at all
+                // actionable and needed. Plan mode is *meant* to be read-only
                 // (claude `--permission-mode plan`, codex `--sandbox
-                // read-only`, opencode's `bash: deny`), and on claude the
+                // read-only`, opencode's `bash: deny`) and on claude the
                 // instruction would provoke a permission prompt an unattended
                 // pane has nobody to answer — turning an unfollowable ask into
-                // a timeout escalation. A task already on a branch is resuming
-                // onto one this task made earlier, and re-asking would invite
-                // a second branch mid-conversation.
+                // a timeout escalation. **That read-only-ness is not
+                // enforced**: a live plan task branched, committed, pushed and
+                // opened a PR because its repository's conventions asked for
+                // it (#378), which `plan_mode_side_effect` now reports. Not
+                // injecting the ask here is therefore about not *provoking*
+                // git, not about git being impossible. A task already on a
+                // branch is resuming onto one this task made earlier, and
+                // re-asking would invite a second branch mid-conversation.
                 if record.mode != "plan" && !on_a_branch {
                     prompt_context.push_str(prompts.branch_convention());
                     prompt_context.push_str("\n\n");
@@ -2730,6 +2738,47 @@ fn policy_str(policy: OutputPolicy) -> &'static str {
     }
 }
 
+/// The warning a plan-mode task earns by having branched, if it has (#378).
+///
+/// **`mode = "plan"` does not prevent git.** Spec F-82 asks for a mode that
+/// creates a worktree to read from but performs no push or PR, and the
+/// implementation has been written as though the agent CLI enforced that
+/// (`--permission-mode plan`, `--sandbox read-only`, `bash: deny`). It does
+/// not: a live plan-mode task branched, committed, pushed and opened a pull
+/// request, because the repository's own conventions told it to.
+///
+/// Detection, not prevention. Making the guarantee true needs something
+/// totsuka does not have today — the agent's own permission model is not it —
+/// and until that exists, the failure that costs the most is the silent one:
+/// an operator picks `plan` **because** they want no side effects (Slack reply
+/// drafting is the case `totsuka setup` generates) and gets a pull request
+/// without being told.
+///
+/// A branch is the signal because it is the one this side can see: the
+/// orchestrator hands the worktree over detached and reads `HEAD` back, so a
+/// named branch means the agent ran git. A commit made *on* the detached head
+/// is not caught, but that shape cannot be pushed without first naming a ref,
+/// which is what the operator actually cares about.
+///
+/// The message says the worktree **is on** a branch, not that the agent
+/// created one. `HEAD` cannot tell the two apart — `git switch -c feat/x` and
+/// `git switch main` both land here — and during incident response a wrong
+/// claim about what happened costs more than a vague one.
+fn plan_mode_side_effect(mode: &str, branch: &str) -> Option<String> {
+    (mode == "plan").then(|| {
+        format!(
+            concat!(
+                "a plan-mode task's worktree is on the branch `{}` — it was handed over ",
+                "detached, so the agent ran git. Plan is documented as making no branch, ",
+                "commit or push (F-82), but nothing enforces that, so the agent followed ",
+                "the repository's own conventions instead. Check whether it also pushed or ",
+                "opened a pull request."
+            ),
+            branch
+        )
+    })
+}
+
 /// Parse a persisted mode string into the dispatch execution mode (F-31).
 fn execution_mode(mode: &str) -> ExecutionMode {
     if mode == "plan" {
@@ -3633,5 +3682,31 @@ plan_cleanup = "keep_28d"
         // Unknown persisted values fall back to implement (never plan: plan is
         // the restrictive read-oriented mode only when explicitly chosen).
         assert_eq!(execution_mode("bogus"), ExecutionMode::Implement);
+    }
+
+    /// `mode = "plan"` is documented as making no branch, commit or push
+    /// (F-82) but nothing enforces it — a live plan-mode task branched,
+    /// committed, pushed and opened a PR because the repository's conventions
+    /// told it to (#378). Detection is what keeps that from being silent.
+    #[test]
+    fn a_plan_task_that_branched_is_reported() {
+        let warning =
+            plan_mode_side_effect("plan", "feat/count-by-hour").expect("a plan-mode branch warns");
+        // Not "created": `HEAD` cannot tell a new branch from an existing one
+        // being checked out, and overclaiming misleads incident response.
+        assert!(!warning.contains("created"), "{warning}");
+        // The branch name has to be in it: "a plan task branched" without
+        // saying which one leaves the operator nothing to look at.
+        assert!(warning.contains("feat/count-by-hour"), "{warning}");
+        // And it must point past the branch itself — the push and the PR are
+        // what the operator actually cares about.
+        assert!(warning.contains("pull request"), "{warning}");
+    }
+
+    /// Branching is the *expected* outcome in implement mode (F-86,
+    /// ADR-0026), so warning there would train operators to ignore this.
+    #[test]
+    fn an_implement_task_that_branched_is_not_reported() {
+        assert!(plan_mode_side_effect("implement", "feat/add-slugify").is_none());
     }
 }
