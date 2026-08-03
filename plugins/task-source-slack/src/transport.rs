@@ -66,10 +66,11 @@ pub trait SlackTransport: Send + Sync {
     /// The OAuth scopes `token` actually carries, as Slack reports them in the
     /// `x-oauth-scopes` response header.
     ///
-    /// **`None` means "cannot tell", never "none granted".** Only the real HTTP
-    /// transport can read headers; every other implementation inherits this
-    /// default, and a caller that treats an unknown scope set as a missing one
-    /// would fail startup on a transport that simply does not expose them.
+    /// **`None` means "cannot tell", never "none granted".** The default
+    /// answers `None`, so an implementation with no way to see the header — or
+    /// no wish to — inherits the honest answer without doing anything. Callers
+    /// must read it that way: treating an unknown scope set as a missing one
+    /// would turn "this transport did not say" into "your token is broken".
     ///
     /// This exists because a missing scope is **silent**: Slack does not
     /// deliver the events it gates and reports no error, so a plugin
