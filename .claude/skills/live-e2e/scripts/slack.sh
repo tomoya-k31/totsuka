@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # Slack 側の駆動と観測。API でできることだけを担う。
 #
-#   bash scripts/slack.sh channels          # チャンネル一覧（ID を調べる）
-#   bash scripts/slack.sh messages [n]      # 直近の投稿（bot_id 付きかも見える）
-#   bash scripts/slack.sh react <ts>        # トリガー絵文字を付ける（A 名義）
-#   bash scripts/slack.sh unreact <ts>      # 外す（付け直しで再トリガーしたいとき）
-#   bash scripts/slack.sh draft             # self-DM とナッジ DM の下書き記録
-#   bash scripts/slack.sh reply <ts>        # スレッドの返信（承認後の確認）
-#   bash scripts/slack.sh watch [sec]       # slack タスクが終端に達するまで追う
+#   bash .claude/skills/live-e2e/scripts/slack.sh channels          # チャンネル一覧（ID を調べる）
+#   bash .claude/skills/live-e2e/scripts/slack.sh messages [n]      # 直近の投稿（bot_id 付きかも見える）
+#   bash .claude/skills/live-e2e/scripts/slack.sh react <ts>        # トリガー絵文字を付ける（A 名義）
+#   bash .claude/skills/live-e2e/scripts/slack.sh unreact <ts>      # 外す（付け直しで再トリガーしたいとき）
+#   bash .claude/skills/live-e2e/scripts/slack.sh draft             # self-DM とナッジ DM の下書き記録
+#   bash .claude/skills/live-e2e/scripts/slack.sh reply <ts>        # スレッドの返信（承認後の確認）
+#   bash .claude/skills/live-e2e/scripts/slack.sh watch [sec]       # slack タスクが終端に達するまで追う
 #
 # 「投稿」だけは意図的に無い。API 投稿には bot_id が付き、判定表①が必ず弾くため
 # （user token でも同じ）。メンションもリアクション対象も、人間が手で打つ必要がある。
 set -euo pipefail
+# `tt` はシェル関数なので子プロセスには継承されない。共通定義を読む。
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 : "${E2E_SLACK_A:?source .env してください}"
 : "${E2E_SLACK_CHANNEL:?}"
 

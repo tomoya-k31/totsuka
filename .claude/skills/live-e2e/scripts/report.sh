@@ -2,9 +2,11 @@
 # 検証結果を集める。自動で判定できるものは pass/fail を出し、目視項目は「未確認」として
 # 列挙する。自動分だけを見て「全部通った」と書かないための仕切り。
 #
-#   bash scripts/report.sh                  # 結果
-#   bash scripts/report.sh --cleanup-hints  # 後始末の対象を列挙
+#   bash .claude/skills/live-e2e/scripts/report.sh                  # 結果
+#   bash .claude/skills/live-e2e/scripts/report.sh --cleanup-hints  # 後始末の対象を列挙
 set -euo pipefail
+# `tt` はシェル関数なので子プロセスには継承されない。共通定義を読む。
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 : "${E2E_HOME:?source .env してください}"
 OWNER="${E2E_GH_OWNER:-}"
 WEB="${E2E_GH_REPO_WEB:-totsuka-sandbox-web}"

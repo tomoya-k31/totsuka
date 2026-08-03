@@ -213,6 +213,6 @@ done
 cat <<MSG
 
 ==> Project #$NUM を .env の E2E_GH_PROJECT に設定してください
-==> 初期状態は 'bash scripts/github.sh status' で確認できます
+==> 初期状態は 'bash .claude/skills/live-e2e/scripts/github.sh status' で確認できます
     検証を始める前に、cli の 1 件を In Progress にしておくと F-08 の対照になります
 MSG

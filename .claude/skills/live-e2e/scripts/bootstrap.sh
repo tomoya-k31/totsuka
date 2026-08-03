@@ -4,6 +4,8 @@
 #
 #   source .env && bash .claude/skills/live-e2e/scripts/bootstrap.sh
 set -euo pipefail
+# `tt` はシェル関数なので子プロセスには継承されない。共通定義を読む。
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
 : "${E2E_HOME:?source .env してください}"
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

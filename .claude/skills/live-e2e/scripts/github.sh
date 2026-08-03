@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # GitHub 側の駆動と観測。人間の関与ゼロで完結する。
 #
-#   bash scripts/github.sh bootstrap        # サンドボックス repo 2 つ + Project + seed Issue
-#   bash scripts/github.sh status           # Project の item と Status 一覧
-#   bash scripts/github.sh seed <web|cli> <issue#>   # その item を Todo にする
-#   bash scripts/github.sh clear <web|cli> <issue#>  # Status を外す
-#   bash scripts/github.sh wait [sec]       # github タスクが終端に達するまで追う
-#   bash scripts/github.sh verify <web|cli> <issue#> # F-07/F-84/F-86 を判定
+#   bash .claude/skills/live-e2e/scripts/github.sh bootstrap        # サンドボックス repo 2 つ + Project + seed Issue
+#   bash .claude/skills/live-e2e/scripts/github.sh status           # Project の item と Status 一覧
+#   bash .claude/skills/live-e2e/scripts/github.sh seed <web|cli> <issue#>   # その item を Todo にする
+#   bash .claude/skills/live-e2e/scripts/github.sh clear <web|cli> <issue#>  # Status を外す
+#   bash .claude/skills/live-e2e/scripts/github.sh wait [sec]       # github タスクが終端に達するまで追う
+#   bash .claude/skills/live-e2e/scripts/github.sh verify <web|cli> <issue#> # F-07/F-84/F-86 を判定
 set -euo pipefail
+# `tt` はシェル関数なので子プロセスには継承されない。共通定義を読む。
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 : "${E2E_GH_OWNER:?source .env してください}"
 OWNER="$E2E_GH_OWNER"
 WEB="${E2E_GH_REPO_WEB:-totsuka-sandbox-web}"

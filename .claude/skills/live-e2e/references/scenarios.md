@@ -12,9 +12,9 @@
 **人間の関与ゼロ。** 最初にこれを通す。ここが通らなければ他は全部止まる。
 
 ```bash
-bash scripts/github.sh seed web 1          # Issue を Todo にする
-bash scripts/github.sh wait 1              # タスクが終端に達するまで待つ
-bash scripts/github.sh verify web 1
+bash .claude/skills/live-e2e/scripts/github.sh seed web 1          # Issue を Todo にする
+bash .claude/skills/live-e2e/scripts/github.sh wait 1              # タスクが終端に達するまで待つ
+bash .claude/skills/live-e2e/scripts/github.sh verify web 1
 ```
 
 | 検証点 | 見るもの |
@@ -47,7 +47,7 @@ S1 と同時に確認できる。`bootstrap` は cli#2 を `In Progress` にし�
 ## S3. Slack / メンション経路 🙋👀
 
 ```bash
-bash scripts/slack.sh channels              # チャンネル ID の確認
+bash .claude/skills/live-e2e/scripts/slack.sh channels              # チャンネル ID の確認
 ```
 
 **🙋 人間に依頼**（貼れる文面を渡すこと）:
@@ -56,14 +56,14 @@ bash scripts/slack.sh channels              # チャンネル ID の確認
 > `@<A の表示名> ログ集計ツールの出力を JSON にも対応させたいです。どう実装するのが良いでしょうか？`
 
 ```bash
-bash scripts/slack.sh watch                 # タスク化 → done までを追う
-bash scripts/slack.sh draft                 # self-DM とナッジ DM に返信案が届いたか
+bash .claude/skills/live-e2e/scripts/slack.sh watch                 # タスク化 → done までを追う
+bash .claude/skills/live-e2e/scripts/slack.sh draft                 # self-DM とナッジ DM に返信案が届いたか
 ```
 
 **🙋 人間に依頼**: 承認ボタンを押してもらう（スレッド内エフェメラル or self-DM）
 
 ```bash
-bash scripts/slack.sh reply <thread_ts>     # A 名義のスレッド返信が生えたか
+bash .claude/skills/live-e2e/scripts/slack.sh reply <thread_ts>     # A 名義のスレッド返信が生えたか
 ```
 
 | 検証点 | 区分 |
@@ -86,8 +86,8 @@ bash scripts/slack.sh reply <thread_ts>     # A 名義のスレッド返信が�
 > `#totsuka-e2e` に**メンションなしの普通のメッセージ**を手で打ってください。
 
 ```bash
-bash scripts/slack.sh react <ts>            # 絵文字付けは自動（reactions.add）
-bash scripts/slack.sh watch
+bash .claude/skills/live-e2e/scripts/slack.sh react <ts>            # 絵文字付けは自動（reactions.add）
+bash .claude/skills/live-e2e/scripts/slack.sh watch
 ```
 
 | 検証点 | 区分 |
