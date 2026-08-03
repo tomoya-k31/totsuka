@@ -307,6 +307,13 @@ impl SlackTransport for ReqwestTransport {
             .send()
             .await
             .map_err(|e| self.send_error(e))?;
+        // A non-2xx answer is not a scope answer. 429 and 5xx carry no
+        // meaningful `x-oauth-scopes`, and reading one off them would report a
+        // scope set the token may not have — the one thing this must never do,
+        // since the caller turns "missing" into a warning.
+        if !response.status().is_success() {
+            return Ok(None);
+        }
         let Some(raw) = response
             .headers()
             .get("x-oauth-scopes")

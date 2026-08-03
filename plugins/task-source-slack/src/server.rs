@@ -478,16 +478,28 @@ fn scope_warnings(scopes: &[String], config: &SlackConfig) -> Vec<String> {
 
     if !config.trigger_reactions.is_empty() && !has("reactions:read") {
         warnings.push(
-            "`trigger_reactions` is set but the user token has no `reactions:read` scope →              Slack will not deliver `reaction_added` at all, so reaction triggers are silently              dead. Update the app with the current manifest, Reinstall to Workspace, then store              the NEW `xoxp-` and `xoxb-` tokens (a reinstall reissues both)."
-                .to_string(),
+            concat!(
+                "`trigger_reactions` is set but the user token has no `reactions:read` ",
+                "scope → Slack will not deliver `reaction_added` at all, so reaction ",
+                "triggers are silently dead. Update the app with the current manifest, ",
+                "Reinstall to Workspace, then store the NEW `xoxp-` and `xoxb-` tokens ",
+                "(a reinstall reissues both).",
+            )
+            .to_string(),
         );
     }
     // Either scope resolves a channel name; private-only or public-only setups
     // are both legitimate, so this fires only when neither is present.
     if !config.channel_groups.is_empty() && !(has("channels:read") || has("groups:read")) {
         warnings.push(
-            "`[[channel_groups]]` is set but the user token has neither `channels:read` nor              `groups:read` → channel names cannot be resolved, so every prefix rule misses and              repository selection always falls through to the LLM or the picker. Reinstall the              app with the current manifest and update both tokens."
-                .to_string(),
+            concat!(
+                "`[[channel_groups]]` is set but the user token has neither ",
+                "`channels:read` nor `groups:read` → channel names cannot be resolved, ",
+                "so every prefix rule misses and repository selection always falls ",
+                "through to the LLM or the picker. Reinstall the app with the current ",
+                "manifest and update both tokens.",
+            )
+            .to_string(),
         );
     }
     warnings

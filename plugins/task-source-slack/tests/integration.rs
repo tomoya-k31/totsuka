@@ -118,12 +118,15 @@ async fn initialize_runs_token_guard_and_declares_capabilities() {
     assert_eq!(requests[1].token, TokenKind::App);
 }
 
-/// A missing scope is **silent** — Slack stops delivering the events it gates
-/// and says nothing — so a `trigger_reactions` set against a token without
-/// `reactions:read` looks configured, probes green, and does nothing (#379).
-/// The guard warns instead of leaving that invisible.
+/// A missing scope is a **warning, not a refusal**: mentions, drafts and
+/// approvals all still work, so taking the plugin down over an opt-in feature
+/// would cost more than it saves (#379).
+///
+/// That the warning is *produced* is pinned by `server::tests::scope_warnings`
+/// — asserting it here would need the log captured, and a test that only
+/// checks `initialize` succeeded would pass with the check deleted.
 #[tokio::test]
-async fn initialize_warns_when_a_configured_feature_lacks_its_scope() {
+async fn a_missing_scope_warns_without_failing_initialize() {
     let shared = Shared::default();
     push_guard_ok(&shared);
     // The scopes the app was actually installed with: no `reactions:read`,
@@ -150,9 +153,9 @@ async fn initialize_warns_when_a_configured_feature_lacks_its_scope() {
 }
 
 /// A transport that cannot read headers reports `None`, and "cannot tell" must
-/// never be read as "missing" — otherwise every fake-driven setup would warn.
+/// cost nothing: no extra round trip that could not have told us anything.
 #[tokio::test]
-async fn initialize_says_nothing_when_the_scopes_are_unknown() {
+async fn unknown_scopes_add_no_round_trip() {
     let shared = Shared::default();
     push_guard_ok(&shared);
     // No `set_scopes`: the default is the real "headers not visible" case.
