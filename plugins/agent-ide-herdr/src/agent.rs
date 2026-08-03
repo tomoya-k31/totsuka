@@ -75,18 +75,18 @@ const PROMPT_WAIT_MS: u64 = 120_000;
 /// shell startup, not ours.
 const AGENT_START_TIMEOUT_MS: u64 = 120_000;
 
-/// How long `agent.start` keeps being re-asked while the pane reports
-/// `agent_pane_busy`.
+/// How long a herdr startup transient (`agent_pane_busy` on `agent.start`,
+/// `agent_not_ready` on `agent.prompt`) keeps being re-asked.
 ///
-/// The window measured live was seconds, not minutes; 60s is slack for a shell
-/// whose rc files do real work (version managers, completions). Past it the
-/// refusal is reported as-is — at that point "the shell is still starting" has
-/// stopped being a plausible reading.
-const PANE_READY_BUDGET: Duration = Duration::from_secs(60);
+/// Both windows measured live were seconds, not minutes; 60s is slack for a
+/// shell whose rc files do real work (version managers, completions) and a CLI
+/// that is slow to come up. Past it the refusal is reported as-is — at that
+/// point "it is still starting" has stopped being a plausible reading.
+const STARTUP_RETRY_BUDGET: Duration = Duration::from_secs(60);
 
 /// How long to wait between those attempts. Short enough that the usual
 /// few-second window costs a few probes, long enough not to spin.
-const PANE_READY_POLL: Duration = Duration::from_millis(500);
+const STARTUP_RETRY_POLL: Duration = Duration::from_millis(500);
 
 /// The herdr agent_ide adapter, generic over its [`HerdrTransport`].
 pub struct HerdrAgent<T> {
@@ -235,7 +235,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         pane_id: &str,
         params: Value,
     ) -> Result<Value, HerdrError> {
-        let deadline = tokio::time::Instant::now() + PANE_READY_BUDGET;
+        let deadline = tokio::time::Instant::now() + STARTUP_RETRY_BUDGET;
         loop {
             match self.client.call("agent.start", params.clone()).await {
                 Ok(started) => return Ok(started),
@@ -247,7 +247,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                         pane_id,
                         "the pane has not reached its shell prompt yet; retrying agent.start"
                     );
-                    tokio::time::sleep(PANE_READY_POLL).await;
+                    tokio::time::sleep(STARTUP_RETRY_POLL).await;
                 }
                 Err(e) => return Err(e),
             }
@@ -344,27 +344,46 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// box, and the `RetryPolicy` tuning all of it. herdr's `agent.send` — the
     /// write-without-submitting the dance was built around — no longer exists.
     ///
+    /// **A successful `agent.start` does not mean the agent can take a prompt.**
+    /// herdr can accept the launch and answer `launch_pending: true` with
+    /// `agent_status: unknown`, and `agent.prompt` then refuses with
+    /// `agent_not_ready` until the CLI is actually up — measured live at ~4s.
+    /// That refusal is waited out here, on the same budget as the pane's own
+    /// startup. `agent_not_found` is **not** retried: it is a pane that died,
+    /// and on a resumed dispatch it has to surface as `SESSION_UNRESUMABLE`.
+    ///
     /// **The contract is unchanged**: a prompt that cannot be confirmed as
     /// submitted fails the dispatch rather than leaving a pane that sits idle
     /// forever with the task unsent.
     async fn submit_prompt(&self, pane_id: &str, prompt: &str) -> Result<(), HerdrError> {
-        self.client
-            .call(
-                "agent.prompt",
-                json!({
-                    "target": pane_id,
-                    "text": prompt,
-                    // `working` alone would be a race on a turn short enough to
-                    // settle before herdr samples again; the other two are the
-                    // settled states that also mean "it read the prompt".
-                    "wait": {
-                        "until": ["working", "blocked", "done"],
-                        "timeout_ms": PROMPT_WAIT_MS,
-                    },
-                }),
-            )
-            .await
-            .map(|_| ())
+        let params = json!({
+            "target": pane_id,
+            "text": prompt,
+            // `working` alone would be a race on a turn short enough to settle
+            // before herdr samples again; the other two are the settled states
+            // that also mean "it read the prompt".
+            "wait": {
+                "until": ["working", "blocked", "done"],
+                "timeout_ms": PROMPT_WAIT_MS,
+            },
+        });
+        let deadline = tokio::time::Instant::now() + STARTUP_RETRY_BUDGET;
+        loop {
+            match self.client.call("agent.prompt", params.clone()).await {
+                Ok(_) => return Ok(()),
+                Err(e) if e.is_agent_not_ready() => {
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(e);
+                    }
+                    tracing::debug!(
+                        pane_id,
+                        "the agent has not finished launching yet; retrying agent.prompt"
+                    );
+                    tokio::time::sleep(STARTUP_RETRY_POLL).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Re-attach to a dispatched session (F-37): confirm the pane is alive with

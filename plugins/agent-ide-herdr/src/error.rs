@@ -72,4 +72,21 @@ impl HerdrError {
     pub fn is_pane_not_ready(&self) -> bool {
         matches!(self, HerdrError::Protocol { code, .. } if code == "agent_pane_busy")
     }
+
+    /// Whether this is herdr refusing to address an agent that `agent.start`
+    /// accepted but has not finished launching — also **transient**.
+    ///
+    /// A successful `agent.start` can answer `launch_pending: true` with
+    /// `agent_status: unknown`, which means "the launch was accepted", not
+    /// "the agent can take a prompt". Measured live: the start succeeded at
+    /// t=1.0s and `agent.prompt` answered `agent_not_ready` until t=5.0s.
+    ///
+    /// Deliberately **not** `agent_not_found`. That one is
+    /// [`is_missing`](Self::is_missing) — the shape a pane that died takes —
+    /// and on a resumed dispatch it means the session is unresumable (#261).
+    /// Retrying it would delay a real failure and, worse, keep a
+    /// `SESSION_UNRESUMABLE` from being reported as one.
+    pub fn is_agent_not_ready(&self) -> bool {
+        matches!(self, HerdrError::Protocol { code, .. } if code == "agent_not_ready")
+    }
 }
