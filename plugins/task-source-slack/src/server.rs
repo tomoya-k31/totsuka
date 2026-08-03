@@ -431,7 +431,66 @@ async fn token_guard<T: SlackTransport>(
     if config.bot_token.is_some() {
         api.auth_test_bot().await?;
     }
+    check_scopes(api, config).await;
     Ok(())
+}
+
+/// Warn when the user token lacks a scope the config depends on (#379).
+///
+/// **A missing scope is silent.** Slack simply does not deliver the events it
+/// gates, and reports nothing: a `trigger_reactions` set against a token
+/// without `reactions:read` produces no `reaction_added`, no error, and no log
+/// line — the feature is configured, `doctor` is green, and nothing happens.
+/// That cost hours to diagnose live, which is why the check exists at all.
+///
+/// **Warn rather than fail.** The plugin still does its main job (mentions,
+/// drafts, approvals) with the scope missing; only the opt-in feature is dead.
+/// Refusing to start would take a working setup down over a feature the
+/// operator may not even be relying on yet.
+///
+/// **An unknown scope set says nothing.** `granted_scopes` answers `None` on
+/// any transport that cannot read headers, and that must stay silent — a check
+/// that cannot see is not a check that found a problem.
+async fn check_scopes<T: SlackTransport>(api: &SlackApi<T>, config: &SlackConfig) {
+    let scopes = match api.granted_scopes().await {
+        Ok(Some(scopes)) => scopes,
+        // Unreadable or unsupported: say nothing rather than guess.
+        Ok(None) => return,
+        Err(e) => {
+            tracing::debug!(error = %e, "could not read the token's scopes; skipping the scope check");
+            return;
+        }
+    };
+    for warning in scope_warnings(&scopes, config) {
+        tracing::warn!("{warning}");
+    }
+}
+
+/// The scope problems `config` has against `scopes` — one message each, empty
+/// when there is nothing to say.
+///
+/// Split out from [`check_scopes`] so the *decision* can be tested directly.
+/// Asserting "initialize still succeeded" would pass just as well with the
+/// check deleted, which is no test at all.
+fn scope_warnings(scopes: &[String], config: &SlackConfig) -> Vec<String> {
+    let has = |scope: &str| scopes.iter().any(|s| s == scope);
+    let mut warnings = Vec::new();
+
+    if !config.trigger_reactions.is_empty() && !has("reactions:read") {
+        warnings.push(
+            "`trigger_reactions` is set but the user token has no `reactions:read` scope →              Slack will not deliver `reaction_added` at all, so reaction triggers are silently              dead. Update the app with the current manifest, Reinstall to Workspace, then store              the NEW `xoxp-` and `xoxb-` tokens (a reinstall reissues both)."
+                .to_string(),
+        );
+    }
+    // Either scope resolves a channel name; private-only or public-only setups
+    // are both legitimate, so this fires only when neither is present.
+    if !config.channel_groups.is_empty() && !(has("channels:read") || has("groups:read")) {
+        warnings.push(
+            "`[[channel_groups]]` is set but the user token has neither `channels:read` nor              `groups:read` → channel names cannot be resolved, so every prefix rule misses and              repository selection always falls through to the LLM or the picker. Reinstall the              app with the current manifest and update both tokens."
+                .to_string(),
+        );
+    }
+    warnings
 }
 
 /// The capabilities this plugin declares (F-33/F-83): a **push** task source
@@ -507,5 +566,72 @@ fn request_id(id: &Value) -> RequestId {
         RequestId::Str(s.to_string())
     } else {
         RequestId::Str(id.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with(trigger_reactions: &[&str], channel_group: bool) -> SlackConfig {
+        let mut value = serde_json::json!({
+            "app_token": "xapp-1-A1-t",
+            "user_token": "xoxp-t",
+            "target_user_id": "U_ME",
+            "trigger_reactions": trigger_reactions,
+        });
+        if channel_group {
+            value["repos"] = serde_json::json!([{ "name": "web-app" }]);
+            value["channel_groups"] =
+                serde_json::json!([{ "prefix": "dev-", "repos": ["web-app"] }]);
+        }
+        serde_json::from_value(value).expect("a valid config")
+    }
+
+    fn owned(scopes: &[&str]) -> Vec<String> {
+        scopes.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The case that cost hours live (#379): the feature is configured, the
+    /// token cannot receive its events, and Slack reports nothing.
+    #[test]
+    fn reaction_triggers_without_their_scope_are_reported() {
+        let warnings = scope_warnings(
+            &owned(&["chat:write", "im:write", "users:read"]),
+            &config_with(&["totsuka-test"], false),
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("reactions:read"), "{}", warnings[0]);
+        // The message has to say what to *do*: the scope alone does not tell
+        // an operator that a reinstall reissues both tokens.
+        assert!(warnings[0].contains("Reinstall"), "{}", warnings[0]);
+    }
+
+    /// Silence is the whole point of the split: a config that asks for nothing
+    /// extra must not be nagged about scopes it does not use.
+    #[test]
+    fn a_token_carrying_what_the_config_uses_is_silent() {
+        assert!(
+            scope_warnings(
+                &owned(&["reactions:read", "channels:read"]),
+                &config_with(&["totsuka-test"], true),
+            )
+            .is_empty()
+        );
+        // …and neither feature configured means neither scope is wanted.
+        assert!(scope_warnings(&owned(&["chat:write"]), &config_with(&[], false)).is_empty());
+    }
+
+    /// Either scope resolves a channel name, so a private-only or public-only
+    /// install is legitimate; only having neither breaks the prefix rules.
+    #[test]
+    fn channel_groups_accept_either_channel_scope() {
+        assert!(
+            scope_warnings(&owned(&["groups:read"]), &config_with(&[], true)).is_empty(),
+            "private-channel-only is a real setup"
+        );
+        let warnings = scope_warnings(&owned(&["chat:write"]), &config_with(&[], true));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("channel_groups"), "{}", warnings[0]);
     }
 }

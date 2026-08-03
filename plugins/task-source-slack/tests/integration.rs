@@ -118,6 +118,64 @@ async fn initialize_runs_token_guard_and_declares_capabilities() {
     assert_eq!(requests[1].token, TokenKind::App);
 }
 
+/// A missing scope is **silent** — Slack stops delivering the events it gates
+/// and says nothing — so a `trigger_reactions` set against a token without
+/// `reactions:read` looks configured, probes green, and does nothing (#379).
+/// The guard warns instead of leaving that invisible.
+#[tokio::test]
+async fn initialize_warns_when_a_configured_feature_lacks_its_scope() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    // The scopes the app was actually installed with: no `reactions:read`,
+    // and neither channel-name scope for the configured `[[channel_groups]]`.
+    shared.set_scopes(&["chat:write", "im:write", "users:read"]);
+    let (mut srv, _harness) = server(&shared);
+
+    let mut config = init_config();
+    config["trigger_reactions"] = json!(["totsuka-test"]);
+
+    // It is a warning, not a refusal: mentions, drafts and approvals all still
+    // work without these scopes — only the opt-in features are dead, and
+    // taking a working setup down over them would cost more than it saves.
+    let result = result_of(
+        call(
+            &mut srv,
+            1,
+            "initialize",
+            json!({ "protocol_version": "0.1.0", "config": config }),
+        )
+        .await,
+    );
+    assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
+}
+
+/// A transport that cannot read headers reports `None`, and "cannot tell" must
+/// never be read as "missing" — otherwise every fake-driven setup would warn.
+#[tokio::test]
+async fn initialize_says_nothing_when_the_scopes_are_unknown() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    // No `set_scopes`: the default is the real "headers not visible" case.
+    let (mut srv, _harness) = server(&shared);
+
+    let mut config = init_config();
+    config["trigger_reactions"] = json!(["totsuka-test"]);
+
+    let result = result_of(
+        call(
+            &mut srv,
+            1,
+            "initialize",
+            json!({ "protocol_version": "0.1.0", "config": config }),
+        )
+        .await,
+    );
+    assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
+    // The guard spent exactly its two probes — no extra scope round trip that
+    // could not have told it anything.
+    assert_eq!(shared.requests().len(), 2);
+}
+
 #[tokio::test]
 async fn initialize_probes_the_bot_token_when_configured() {
     let shared = Shared::default();

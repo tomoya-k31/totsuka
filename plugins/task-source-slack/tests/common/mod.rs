@@ -53,9 +53,16 @@ pub struct Shared {
     posted_urls: Arc<Mutex<Vec<PostedUrl>>>,
     chat_responses: Arc<Mutex<VecDeque<Result<Value, ChatError>>>>,
     chat_requests: Arc<Mutex<Vec<Value>>>,
+    /// What `granted_scopes` reports. `None` (the default) is the real
+    /// transport-cannot-see-headers case, which the scope check must ignore.
+    scopes: Arc<Mutex<Option<Vec<String>>>>,
 }
 
 impl Shared {
+    /// Make `granted_scopes` report `scopes` instead of "cannot tell" (#379).
+    pub fn set_scopes(&self, scopes: &[&str]) {
+        *self.scopes.lock().unwrap() = Some(scopes.iter().map(|s| s.to_string()).collect());
+    }
     pub fn push(&self, canned: Canned) {
         self.responses.lock().unwrap().push_back(canned);
     }
@@ -111,6 +118,14 @@ pub struct FakeTransport {
 }
 
 impl SlackTransport for FakeTransport {
+    fn granted_scopes(
+        &self,
+        _token: TokenKind,
+    ) -> impl Future<Output = Result<Option<Vec<String>>, SlackError>> + Send {
+        let scopes = self.shared.scopes.lock().unwrap().clone();
+        async move { Ok(scopes) }
+    }
+
     fn call(
         &self,
         token: TokenKind,
