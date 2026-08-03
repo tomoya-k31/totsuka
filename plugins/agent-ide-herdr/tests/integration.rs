@@ -95,9 +95,22 @@ struct FakeHerdr {
     /// When set, `pane.split` fails with this herdr error code (#356: the
     /// companion shell is lost, the dispatch is not).
     split_error: Option<&'static str>,
-    /// When set, `agent.prompt` fails with this herdr error code — `stalled`
-    /// (herdr saw no reaction) or a socket that is simply down.
+    /// When set, `agent.prompt` fails outright with this herdr error code — a
+    /// socket that is down, a pane that is gone. **Not** `agent_prompt_stalled`
+    /// (that lands the prompt and is modelled by
+    /// [`stalled_prompts`](Self::stalled_prompts)) and **not**
+    /// `agent_not_ready` (modelled by
+    /// [`not_ready_prompts`](Self::not_ready_prompts)) — both of those are
+    /// answered rather than propagated, so routing them through here would
+    /// test a path the plugin does not take.
     prompt_error: Option<&'static str>,
+    /// How many `agent.prompt` calls answer `agent_prompt_stalled` — herdr
+    /// typed and submitted the prompt but saw no reaction inside its own 5s
+    /// floor. The prompt IS in the agent, so this must be confirmed, never
+    /// re-sent (#380).
+    stalled_prompts: Arc<Mutex<usize>>,
+    /// When set, `agent.wait` fails with this herdr error code.
+    wait_error: Option<&'static str>,
     /// How many `agent.prompt` calls answer `agent_not_ready` before one takes
     /// — an agent whose `agent.start` was accepted (`launch_pending: true`)
     /// but whose CLI is still coming up.
@@ -127,6 +140,8 @@ impl Default for FakeHerdr {
             split_error: None,
             prompt_error: None,
             not_ready_prompts: Arc::default(),
+            stalled_prompts: Arc::default(),
+            wait_error: None,
         }
     }
 }
@@ -277,6 +292,48 @@ impl FakeHerdr {
                     &id,
                     "agent_not_ready",
                     &format!("agent {PANE} is not an active named agent"),
+                )
+                .await
+            }
+            "agent.prompt"
+                if {
+                    let mut left = self.stalled_prompts.lock().unwrap();
+                    let stalled = *left > 0;
+                    if stalled {
+                        *left -= 1;
+                    }
+                    stalled
+                } =>
+            {
+                // The text landed; only the reaction went unobserved. The CLI
+                // state is updated to match, so a plugin that re-sent would be
+                // caught by the `prompts` counter.
+                {
+                    let mut cli = self.cli.lock().unwrap();
+                    cli.prompts += 1;
+                    cli.input = params["text"].as_str().unwrap_or_default().to_string();
+                }
+                reply_error(
+                    &mut write_half,
+                    &id,
+                    "agent_prompt_stalled",
+                    "agent prompt produced no observed state change within 5000 ms",
+                )
+                .await
+            }
+            "agent.wait" if self.wait_error.is_some() => {
+                let code = self.wait_error.unwrap();
+                reply_error(&mut write_half, &id, code, "herdr could not confirm").await
+            }
+            "agent.wait" => {
+                self.cli.lock().unwrap().status = "working".to_string();
+                reply(
+                    &mut write_half,
+                    &id,
+                    json!({
+                        "type": "agent_info",
+                        "agent": { "pane_id": PANE, "agent_status": "working" },
+                    }),
                 )
                 .await
             }
@@ -979,6 +1036,97 @@ async fn the_prompt_waits_out_an_agent_that_is_still_launching() {
     );
 }
 
+/// herdr's `agent.prompt` requires a state change inside a 5s floor it does not
+/// let the caller raise, and Claude Code does not always react that fast — it
+/// failed 3 of 7 live dispatches (#380). The prompt is already submitted when
+/// that happens, so the plugin confirms with `agent.wait` instead of sending it
+/// a second time.
+#[tokio::test]
+async fn a_stalled_prompt_is_confirmed_rather_than_resent() {
+    let fake = FakeHerdr::default();
+    *fake.stalled_prompts.lock().unwrap() = 1;
+    let cli = fake.cli.clone();
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(
+        disp["error"].is_null(),
+        "a prompt that landed must not fail the dispatch: {disp}"
+    );
+    assert_eq!(
+        cli.lock().unwrap().prompts,
+        1,
+        "the task must reach the agent exactly once — re-sending would deliver it twice"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.prompt").len(),
+        1,
+        "no second submission: {log:?}"
+    );
+    assert_eq!(
+        calls(&log, "agent.wait").len(),
+        1,
+        "the stall is answered by asking herdr again, with our own window: {log:?}"
+    );
+}
+
+/// If the agent never reacts either, the dispatch still fails — and reports the
+/// stall, which is the symptom worth showing, not the confirmation timeout.
+#[tokio::test]
+async fn a_prompt_that_never_lands_still_fails_the_dispatch() {
+    let fake = FakeHerdr {
+        wait_error: Some("timeout"),
+        ..FakeHerdr::default()
+    };
+    *fake.stalled_prompts.lock().unwrap() = 1;
+    let (socket, _) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    let message = disp["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("agent_prompt_stalled"),
+        "the stall is the symptom, not the confirmation's own timeout: {message}"
+    );
+}
+
+/// A pane that died during confirmation keeps its own error, so a resumed
+/// dispatch still reaches the Orchestrator as `SESSION_UNRESUMABLE` (#261)
+/// instead of being buried under the stall.
+#[tokio::test]
+async fn a_pane_that_dies_during_confirmation_stays_unresumable() {
+    let fake = FakeHerdr {
+        wait_error: Some("agent_not_found"),
+        ..FakeHerdr::default()
+    };
+    *fake.stalled_prompts.lock().unwrap() = 1;
+    let (socket, _) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .call(
+            "task/dispatch",
+            json!({
+                "task": { "id": "TR", "source": "slack", "title": "Continue the thread" },
+                "worktree_path": "/wt/agent-1",
+                "mode": "implement",
+                "resume_session_id": "claude-sess-abc",
+            }),
+        )
+        .await;
+    assert_eq!(
+        disp["error"]["code"], -32006,
+        "a vanished pane must not be masked by the stall: {disp}"
+    );
+}
+
 /// `agent_not_found` is **not** waited out. It is a pane that died, and on a
 /// resumed dispatch it has to surface as `SESSION_UNRESUMABLE` (#261) rather
 /// than be retried into a timeout.
@@ -1087,13 +1235,13 @@ async fn awaits_workspace_close(requests: &Arc<Mutex<Vec<Value>>>) -> bool {
 
 #[tokio::test]
 async fn dispatch_fails_loudly_when_the_agent_never_starts() {
-    // A CLI that never reacts must surface an error, not a session id whose
-    // state stream would hang forever. Protocol 17 detects this inside
-    // `agent.prompt` — `agent_prompt_stalled` is herdr saying the submission
-    // produced no state change — and the plugin's contract is unchanged: it
-    // fails the dispatch rather than leaving a pane sitting on an unsent task.
+    // A submission that cannot be completed must surface an error, not a
+    // session id whose state stream would hang forever. `agent_prompt_stalled`
+    // is deliberately NOT the code used here — that one means the prompt landed
+    // and is confirmed rather than failed (#380). This is herdr failing the
+    // call outright, which nothing can rescue.
     let (socket, requests) = FakeHerdr {
-        prompt_error: Some("agent_prompt_stalled"),
+        prompt_error: Some("internal_error"),
         ..FakeHerdr::default()
     }
     .spawn();

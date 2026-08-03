@@ -75,6 +75,15 @@ const PROMPT_WAIT_MS: u64 = 120_000;
 /// shell startup, not ours.
 const AGENT_START_TIMEOUT_MS: u64 = 120_000;
 
+/// How long [`confirm_submission`](HerdrAgent::confirm_submission) watches a
+/// stalled prompt before giving up, in milliseconds.
+///
+/// Shorter than [`PROMPT_WAIT_MS`] on purpose: herdr has already spent its own
+/// 5s floor seeing nothing, so this is the "it was merely slow" allowance, not
+/// a fresh full-length wait. A prompt that never landed costs this much before
+/// the dispatch fails, so it is bounded rather than generous.
+const PROMPT_CONFIRM_MS: u64 = 60_000;
+
 /// How long a herdr startup transient (`agent_pane_busy` on `agent.start`,
 /// `agent_not_ready` on `agent.prompt`) keeps being re-asked.
 ///
@@ -381,7 +390,59 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                     );
                     tokio::time::sleep(STARTUP_RETRY_POLL).await;
                 }
+                // Submitted, but herdr saw no reaction inside its 5s floor.
+                // Confirm — never re-send (#380).
+                Err(e) if e.is_prompt_stalled() => {
+                    return self.confirm_submission(pane_id, e).await;
+                }
                 Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Decide whether a stalled `agent.prompt` actually landed, by watching the
+    /// agent instead of prompting it again (#380).
+    ///
+    /// The prompt is already in the agent by the time `agent_prompt_stalled`
+    /// comes back — herdr typed and submitted it, then failed to observe a
+    /// state change within its own 5s floor. Re-sending would deliver the task
+    /// twice, so the question "did it land?" is answered by `agent.wait`, which
+    /// asks herdr the same thing with a window we choose.
+    ///
+    /// **A pane that vanished keeps its own error.** `agent.wait` answering
+    /// `agent_not_found` means the CLI died, and on a resumed dispatch that has
+    /// to reach the Orchestrator as `SESSION_UNRESUMABLE` (#261) — reporting
+    /// the stall instead would bury it. Any other failure reports the stall,
+    /// because "the agent never reacted" is the symptom worth showing.
+    async fn confirm_submission(&self, pane_id: &str, stall: HerdrError) -> Result<(), HerdrError> {
+        tracing::warn!(
+            pane_id,
+            "agent.prompt saw no state change inside herdr's 5s floor; confirming with \
+             agent.wait rather than re-sending the prompt"
+        );
+        match self
+            .client
+            .call(
+                "agent.wait",
+                json!({
+                    "target": pane_id,
+                    "until": ["working", "blocked", "done"],
+                    "timeout_ms": PROMPT_CONFIRM_MS,
+                }),
+            )
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    pane_id,
+                    "the agent did react; the prompt had landed after all"
+                );
+                Ok(())
+            }
+            Err(e) if e.is_missing() => Err(e),
+            Err(e) => {
+                tracing::warn!(pane_id, error = %e, "agent.wait could not confirm the prompt either");
+                Err(stall)
             }
         }
     }
