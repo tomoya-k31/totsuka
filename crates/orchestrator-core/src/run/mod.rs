@@ -2759,14 +2759,20 @@ fn policy_str(policy: OutputPolicy) -> &'static str {
 /// named branch means the agent ran git. A commit made *on* the detached head
 /// is not caught, but that shape cannot be pushed without first naming a ref,
 /// which is what the operator actually cares about.
+///
+/// The message says the worktree **is on** a branch, not that the agent
+/// created one. `HEAD` cannot tell the two apart — `git switch -c feat/x` and
+/// `git switch main` both land here — and during incident response a wrong
+/// claim about what happened costs more than a vague one.
 fn plan_mode_side_effect(mode: &str, branch: &str) -> Option<String> {
     (mode == "plan").then(|| {
         format!(
             concat!(
-                "a plan-mode task created the branch `{}` — plan is documented as making no ",
-                "branch, commit or push (F-82), but nothing enforces that, so the agent ",
-                "followed the repository's own conventions instead. Check whether it also ",
-                "pushed or opened a pull request."
+                "a plan-mode task's worktree is on the branch `{}` — it was handed over ",
+                "detached, so the agent ran git. Plan is documented as making no branch, ",
+                "commit or push (F-82), but nothing enforces that, so the agent followed ",
+                "the repository's own conventions instead. Check whether it also pushed or ",
+                "opened a pull request."
             ),
             branch
         )
@@ -3686,6 +3692,9 @@ plan_cleanup = "keep_28d"
     fn a_plan_task_that_branched_is_reported() {
         let warning =
             plan_mode_side_effect("plan", "feat/count-by-hour").expect("a plan-mode branch warns");
+        // Not "created": `HEAD` cannot tell a new branch from an existing one
+        // being checked out, and overclaiming misleads incident response.
+        assert!(!warning.contains("created"), "{warning}");
         // The branch name has to be in it: "a plan task branched" without
         // saying which one leaves the operator nothing to look at.
         assert!(warning.contains("feat/count-by-hour"), "{warning}");
