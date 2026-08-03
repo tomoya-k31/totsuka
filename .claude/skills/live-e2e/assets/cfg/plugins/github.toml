@@ -1,0 +1,20 @@
+# $E2E_HOME/cfg/totsuka/plugins/github.toml
+#
+# ProjectsV2 の書き戻し（F-84）には project write が要る。gh の OAuth を流用する場合は
+# `gh auth refresh -s project` を先に実行し、.env で E2E_GH_TOKEN に入れておく。
+# fine-grained PAT は user 所有の Project には使えない（アカウント権限に Projects が無い）。
+token = "${E2E_GH_TOKEN}"
+
+owner = "________"
+owner_type = "user"
+project_number = 0
+status_field = "Status"
+
+# F-08 の自己判定。他人 assignee のタスクを除外するかの基準。
+github_login = "________"
+
+# このステータスの item は取り込まない（実行中とみなす）。
+in_progress_statuses = ["In Progress"]
+
+# Project には他リポジトリの item も入りうるので、対象を明示する。
+repos = ["totsuka-sandbox-web", "totsuka-sandbox-cli"]

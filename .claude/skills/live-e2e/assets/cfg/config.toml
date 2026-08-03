@@ -1,0 +1,85 @@
+# 実機 E2E 用の totsuka 設定。$E2E_HOME/cfg/totsuka/config.toml へ置く。
+version = 1
+max_concurrency = 2
+
+# name は GitHub 上のリポジトリ名と一致させること。task-source-github が返す
+# repo_hint はリポジトリ名そのものなので、ズレると F-10 の即決に入れず LLM 選択へ
+# フォールバックし、[llm] が無いと pending で止まる。
+#
+# 2 つ登録するのはリポジトリ選択（LLM 分類 → picker）を検証するため。候補が 1 件だと
+# repo_resolver の ① 段で即確定して LLM にも picker にも到達しない。summary は
+# ドメインをはっきり離す（似ていると confidence が閾値を割り、分類が効いているのか
+# 縮退なのか区別できない）。
+[[repositories]]
+name = "totsuka-sandbox-web"
+path = "${E2E_HOME}/repo/totsuka-sandbox-web"
+summary = "顧客向けの Web アプリ。画面・HTTP API・認証・フォームのバリデーション"
+
+[[repositories]]
+name = "totsuka-sandbox-cli"
+path = "${E2E_HOME}/repo/totsuka-sandbox-cli"
+summary = "ログ集計のコマンドラインツール。サブコマンド・集計ロジック・出力フォーマット"
+
+[plugins.slack]
+enabled = true
+kind = "task_source"
+poll_interval_secs = 1
+
+[plugins.github]
+enabled = true
+kind = "task_source"
+# 既定 60s だと 1 回の検証で 1 分待つことになるので詰める
+poll_interval_secs = 15
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+# 実エージェントの前に mock で経路を通したいときは、こちらを true にして
+# ワークフローの agent を mock_agent へ差し替える。
+[plugins.mock_agent]
+enabled = false
+kind = "agent_ide"
+
+# 完了検知（フック）の受信設定。auth_token_ref を省略すると、フック対応 agent を使う
+# 構成では doctor が fail する。
+[hooks]
+auth_token_ref = "${E2E_HOOK_TOKEN}"
+
+# repo_hint を持たないタスクのリポジトリ選択（F-11）に使う。task_source プラグインへも
+# initialize で分類用 default として供給される（#119）ので、これがあると slack.toml 側で
+# [llm] を書かなくても候補 2 件以上を扱える。
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+model = "anthropic/claude-haiku-4.5"
+api_key_ref = "op://Dev/Openrouter/api_key"
+
+[worktree]
+location = "${E2E_HOME}/wt/{repo_name}/{worktree_name}"
+cleanup = "immediate"
+plan_cleanup = "immediate"
+
+# Slack: 返信起案なので plan で十分（ペインは git を実行しない想定）。
+# ただし plan は git を構造的には止めない（#378）。対象リポジトリの CLAUDE.md に
+# push / PR の指示があると、返信起案のつもりでも PR が生える。
+[[workflows]]
+name = "slack-reply"
+source = "slack"
+trigger = {}
+mode = "plan"
+agent = "herdr"
+output = "source"
+
+# GitHub: Todo の item を拾い、実際にコードを書かせる。
+# 検証点は F-84（ステータス書き戻し）、F-07（Issue コメント）、
+# F-86 / ADR-0026（エージェント自身がブランチを切って push する）。
+[[workflows]]
+name = "github-task"
+source = "github"
+trigger = { project_status = "Todo" }
+mode = "implement"
+agent = "herdr"
+output = "source"
+on_success = { set_status = "Done" }
+# 既定 1800s は検証には長すぎる。詰まったら 15 分でエスカレーションさせる。
+timeout_secs = 900
