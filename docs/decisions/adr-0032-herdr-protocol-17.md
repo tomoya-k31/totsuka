@@ -4,7 +4,7 @@ title: ADR-0032 herdr protocol 17 への追随（agent.start の manifest 駆動
 description: herdr 0.7.5 (protocol 17) で agent.start が manifest 駆動（kind + 呼び出し側が用意した既存 pane）へ、プロンプト投入が agent.prompt へ破壊的に変わったことへの追随方針。program→kind 写像、agent name の生成規則と agent_name_taken の扱い、pane 確保順序の反転、submit_prompt と RetryPolicy の廃止、protocol 16 以下を切る判断を定める。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [adr, herdr, agent-ide, protocol, breaking-change]
-generated: { by: claude-code/opus-5, at: 2026-08-03T09:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-03T13:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -201,7 +201,7 @@ dispatch 失敗に写像すれば同じ意味になる。
 
 **これは利用者にとっては破壊的変更**なので、リリースノートに移行手順（`herdr update`）を書く。
 
-## D-7: 生成直後の pane は `agent.start` をリトライして待つ
+## D-7: herdr の起動過渡状態は 2 段とも `agent.start` / `agent.prompt` のリトライで待つ
 
 **`workspace.create` が返した root pane は、すぐには使えない。** シェルがまだ起動中で、
 herdr は `agent_pane_busy: agent target pane w5:p1 is not an available shell` を返す。
@@ -221,8 +221,23 @@ herdr は `agent_pane_busy: agent target pane w5:p1 is not an available shell` �
 `agent.start` **そのものが herdr の readiness 検査**なので、その判断を再実装せず
 同じ問いを繰り返す。予算 60 秒・間隔 500ms。
 
-**リトライするのは `agent_pane_busy` だけ。** 未知の `kind`・`agent_name_taken`・
+### 過渡状態は 2 段ある
+
+**`agent.start` の成功は「プロンプトを受けられる」を意味しない。** 成功応答が
+`launch_pending: true` / `agent_status: unknown` を返すことがあり、その間 `agent.prompt` は
+`agent_not_ready: agent … is not an active named agent` で拒否する。実測では
+pane 待ちを終えた `agent.start` が t=1.0s で成功し、`agent.prompt` が通ったのは t=5.0s だった。
+
+しかも **herdr の応答は非決定的**で、同じ状況が `agent_pane_busy`（起動前）にも
+`launch_pending: true`（起動受理済み・未完了）にもなる。したがって片方だけ待っても足りず、
+**`agent.start` の `agent_pane_busy` と `agent.prompt` の `agent_not_ready` の両方**を
+同じ予算で待つ。
+
+**リトライするのはこの 2 コードだけ。** 未知の `kind`・`agent_name_taken`・
 CLI が現れない `timeout` は、いずれも放っておいても直らない。リトライは報告を遅らせるだけになる。
+**`agent_not_found` も含めない** — これは pane が死んだ形で、resume 付き dispatch では
+`SESSION_UNRESUMABLE` として上げる必要がある（#261）。リトライすると、その報告を
+タイムアウトまで遅らせたうえで別のエラーに化けさせてしまう。
 
 # Consequences
 
@@ -257,10 +272,10 @@ CLI が現れない `timeout` は、いずれも放っておいても直らな�
 
 1. **`session/attach`（回復経路）が 17 で従来どおり動くか。** `pane.get` による pane 生存確認は
    変わっていないはずだが、実機で未確認
-2. **`herdr integration install claude` を導入したときの `agent_session` の出方**（`--resume` の前提）。
-   検証環境では統合が未インストールで、`pane.get` に `agent_session` が現れなかった。
-   スキーマの `PaneInfo` には残っているので 17 の変更ではないが、
-   **Slack の会話継続（`--resume`）を検証するには統合の導入が要る**
+2. ~~`herdr integration install claude` を導入したときの `agent_session` の出方~~ →
+   **解決した。** 統合を明示インストールしなくても `agent_session` は報告される
+   （実機の dispatch が `session_id = "wS:p1|aa37194a-…"` を返した）。
+   最初に出なかったのは、`agent.start` 直後で報告が届く前に読んだためである
 
 # 関連
 

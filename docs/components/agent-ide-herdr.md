@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-03T09:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-03T13:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -60,8 +60,17 @@ env を継承しないので、人間が叩くシェルにトークンは載ら�
 `agent target pane … is not an available shell` を返す。プロンプトへ達するまでの時間は運用者の
 rc ファイル次第で予測できず、読める readiness シグナルも無い（`pane.process_info` の `shell_pid` は
 実測 10 秒間ずっと `null`）。`agent.start` 自体が herdr の readiness 検査なので、
-その判断を再実装せず同じ問いを繰り返す。**リトライするのは `agent_pane_busy` だけ**で、
-未知の `kind`・`agent_name_taken`・CLI が現れない `timeout` は放っておいても直らないため即座に失敗させる。
+その判断を再実装せず同じ問いを繰り返す。
+
+**過渡状態は 2 段ある。** `agent.start` の成功は「起動を受理した」であって「プロンプトを受けられる」ではなく、
+成功応答が `launch_pending: true` / `agent_status: unknown` を返すことがある。その間 `agent.prompt` は
+`agent_not_ready` で拒否するので、**そちらも同じ予算でリトライする**（実測: start が t=1.0s で成功、
+prompt が通ったのは t=5.0s）。herdr の応答は非決定的で、同じ状況が `agent_pane_busy` にも
+`launch_pending` にもなるため、片方だけでは足りない。
+
+**リトライするのはこの 2 コードだけ**で、未知の `kind`・`agent_name_taken`・CLI が現れない `timeout` は
+放っておいても直らないため即座に失敗させる。**`agent_not_found` も含めない** — pane が死んだ形であり、
+resume 付き dispatch では `SESSION_UNRESUMABLE` として上げる必要がある（#261）。
 
 ## `program` → `kind` の写像
 

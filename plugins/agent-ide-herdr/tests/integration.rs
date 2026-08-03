@@ -98,6 +98,10 @@ struct FakeHerdr {
     /// When set, `agent.prompt` fails with this herdr error code — `stalled`
     /// (herdr saw no reaction) or a socket that is simply down.
     prompt_error: Option<&'static str>,
+    /// How many `agent.prompt` calls answer `agent_not_ready` before one takes
+    /// — an agent whose `agent.start` was accepted (`launch_pending: true`)
+    /// but whose CLI is still coming up.
+    not_ready_prompts: Arc<Mutex<usize>>,
 }
 
 impl Default for FakeHerdr {
@@ -122,6 +126,7 @@ impl Default for FakeHerdr {
             no_root_pane: false,
             split_error: None,
             prompt_error: None,
+            not_ready_prompts: Arc::default(),
         }
     }
 }
@@ -257,6 +262,24 @@ impl FakeHerdr {
                 .await
             }
 
+            "agent.prompt"
+                if {
+                    let mut left = self.not_ready_prompts.lock().unwrap();
+                    let pending = *left > 0;
+                    if pending {
+                        *left -= 1;
+                    }
+                    pending
+                } =>
+            {
+                reply_error(
+                    &mut write_half,
+                    &id,
+                    "agent_not_ready",
+                    &format!("agent {PANE} is not an active named agent"),
+                )
+                .await
+            }
             "agent.prompt" if self.prompt_error.is_some() => {
                 let code = self.prompt_error.unwrap();
                 reply_error(&mut write_half, &id, code, "herdr could not submit").await
@@ -921,6 +944,62 @@ async fn agent_start_waits_out_a_pane_that_is_still_starting_its_shell() {
     assert!(
         calls(&log, "workspace.close").is_empty(),
         "nothing was torn down: {log:?}"
+    );
+}
+
+/// `agent.start` succeeding means herdr accepted the launch, not that the CLI
+/// is up: it can answer `launch_pending: true` with `agent_status: unknown`,
+/// and `agent.prompt` then refuses with `agent_not_ready`. Measured live, that
+/// lasted ~4s after a start that had itself already waited for the pane.
+#[tokio::test]
+async fn the_prompt_waits_out_an_agent_that_is_still_launching() {
+    let fake = FakeHerdr::default();
+    *fake.not_ready_prompts.lock().unwrap() = 3;
+    let cli = fake.cli.clone();
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(
+        disp["error"].is_null(),
+        "a CLI that is merely slow to come up must not fail the dispatch: {disp}"
+    );
+    assert_eq!(
+        cli.lock().unwrap().prompts,
+        1,
+        "the refusals never reached the CLI, so the prompt lands exactly once"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.prompt").len(),
+        4,
+        "three refusals then the one that took: {log:?}"
+    );
+}
+
+/// `agent_not_found` is **not** waited out. It is a pane that died, and on a
+/// resumed dispatch it has to surface as `SESSION_UNRESUMABLE` (#261) rather
+/// than be retried into a timeout.
+#[tokio::test]
+async fn a_vanished_agent_is_not_mistaken_for_one_still_launching() {
+    let (socket, requests) = FakeHerdr {
+        prompt_error: Some("agent_not_found"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(!disp["error"].is_null(), "must surface: {disp}");
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.prompt").len(),
+        1,
+        "no retry for a pane that is gone: {log:?}"
     );
 }
 
