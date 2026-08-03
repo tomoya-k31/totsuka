@@ -761,11 +761,15 @@ async fn a_redispatched_task_is_not_escalated_for_the_previous_attempts_silence(
     let notify_log = base.join("notify.ndjson");
     let clock = manual_clock();
     let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
-    let id = db.upsert_task(&new_task("1", Some(T0))).unwrap();
+    let id = db.upsert_task(&new_task("1", None)).unwrap();
 
-    // First execution: dispatched, proved itself alive, then failed.
+    // First execution: dispatched, proved itself alive, then failed. The
+    // anchor is stamped AFTER the dispatch — seeding it beforehand would let
+    // the first dispatch clear it, leaving nothing for the second one to clear
+    // and turning this into a test that passes without the fix.
     db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
     db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.touch_last_signal(id).unwrap();
     db.apply_event(id, TaskEvent::Fail, None).unwrap();
 
     // A human retries it well past the workflow timeout.
