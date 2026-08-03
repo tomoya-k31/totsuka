@@ -1550,6 +1550,25 @@ fn apply_event_tx(
         "UPDATE tasks SET state = ?1, updated_at = ?2, finished_at = ?3 WHERE id = ?4",
         params![to.as_str(), now, finished_at, id],
     )?;
+    if event == TaskEvent::Dispatch {
+        // A dispatch starts a NEW execution, so the D-03 silence anchor from
+        // the previous one must not carry over (#382). It did: a task that got
+        // a hook signal, failed, and was `task retry`d minutes later was swept
+        // as "silent for longer than `timeout_secs`" and escalated **3ms after
+        // being dispatched** — before its fresh agent could emit anything.
+        //
+        // Cleared rather than set to `now`, which keeps `last_signal_at`
+        // meaning exactly what its name says (the last hook signal) and leaves
+        // a re-dispatched task in the same position as a first-dispatched one:
+        // `sweep_signal_timeouts` skips a task with no anchor, so D-03 starts
+        // protecting it once it has proven itself alive. Anchoring at dispatch
+        // instead would extend D-03 to "never came alive", which it has never
+        // covered and which the `pane.exited` deadman owns.
+        conn.execute(
+            "UPDATE tasks SET last_signal_at = NULL WHERE id = ?1",
+            params![id],
+        )?;
+    }
     conn.execute(
         "INSERT INTO events (task_id, from_state, to_state, occurred_at, detail)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -3052,6 +3071,46 @@ mod tests {
         );
         // Deleting a missing row is a no-op (best-effort rollback), not an error.
         db.delete_session(row).unwrap();
+    }
+
+    /// A dispatch starts a new execution, so the D-03 silence anchor from the
+    /// previous one must not survive it (#382). It did: a task that signalled,
+    /// failed, and was retried minutes later was swept as "silent past
+    /// `timeout_secs`" and escalated before its fresh agent could emit
+    /// anything.
+    #[test]
+    fn dispatch_clears_the_previous_executions_signal_anchor() {
+        let clock = manual_clock();
+        let db = StateDb::open_in_memory_with_clock(clock.clone()).unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+
+        // First execution: dispatched, and it proved itself alive.
+        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        db.touch_last_signal(id).unwrap();
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().last_signal_at.as_deref(),
+            Some(T0)
+        );
+
+        // …then it failed, and a human retried it much later.
+        db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        clock.advance(time::Duration::seconds(1600));
+        db.retry_task(id, None).unwrap();
+        // The retry itself does not clear it — the anchor belongs to the
+        // execution, and re-queueing has not started one yet.
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().last_signal_at.as_deref(),
+            Some(T0)
+        );
+
+        // Dispatching does. Without this the sweep would compare `now` against
+        // a 1600s-old anchor and escalate immediately.
+        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().last_signal_at,
+            None,
+            "the new execution starts with no anchor, exactly like a first dispatch"
+        );
     }
 
     #[test]

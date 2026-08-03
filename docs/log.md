@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-08-04
+
+* **Update**: [フックシグナルフロー](/architecture/hook-signal-flow.md) — `task/dispatch` が D-03 の沈黙アンカー（`last_signal_at`）をクリアするようにした（[#382](https://github.com/tomoya-k31/totsuka/issues/382)）。実機で `task retry` した直後のタスクが **dispatch の 3 ミリ秒後にエスカレーション**した（エージェント自身は正常に `working`）。掃引は前の実行の信号時刻を起点に「`timeout_secs` 以上黙っている」と判定していた。クリアであって dispatch 時刻での上書きではない — 上書きすると D-03 が「一度も生きなかったタスク」まで拾うことになり、それは `pane.exited` デッドマン（F-106）の担当で、従来カバーしていない範囲だから。
+
 ## 2026-08-03
 
 * **Creation**: [ADR-0032 herdr protocol 17 への追随](/decisions/adr-0032-herdr-protocol-17.md) — herdr 0.7.5 で `agent.start` が manifest 駆動（`{name, kind, pane_id}` 必須・pane は呼び出し側が用意）へ、プロンプト投入が `agent.prompt` へ破壊的に変わったことへの追随方針を定めた。`program`→`kind` 写像（判定は herdr に委ね、逃げ道は `plugins/herdr.toml` の `[kind_map]`）、`name` の生成規則（`t-<可読プレフィクス>-<sha256 8 桁>`）と `agent_name_taken` を別名で回避しない判断、pane 確保順序の反転と `pane.close` の廃止、`submit_prompt` / `RetryPolicy` の廃止、protocol 16 以下を切る判断の 6 点。

@@ -4,7 +4,7 @@ title: フックシグナルフロー（Slack メンション → 完了検知 �
 description: Claude Code フック完了判定のエンドツーエンド経路。Slack メンションの dispatch から herdr pane 起動・env 注入・claude --settings、Stop フックのマーカー抽出・UDS POST、hook_uds の Bearer/冪等検証、SignalPort→Engine::on_signal の検収分岐（llm/human/none）と Publishing/Verifying/Escalated、スプールフォールバックと pane.exited デッドマン、通知クリック → pane フォーカス（click-to-focus、F-94）までを図示する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [architecture, diagram, hook, claude-code, uds, signal, verification, deadman, spool, click-to-focus, epic-131]
-generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-04T00:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -85,10 +85,26 @@ flowchart TD
     UNK -->|"いいえ"| WAIT["遷移なし・次シグナル待ち"]
 
     SWEEP["sweep_signal_timeouts()（各サイクル）"] -->|"now - last_signal_at > timeout_secs（既定1800, D-03）"| ESC
+    DISP["task/dispatch（新しい実行の開始）"] -->|"last_signal_at をクリア（#382）"| SWEEP
 
     DEAD["events.subscribe → pane.exited デッドマン専用（F-106）"] -->|"exit_code 非0 / コード無し"| FAIL
     DEAD -->|"exit_code 0（clean）"| NOP["通知なし（SessionEnd が既報）"]
 ```
+
+## D-03 の沈黙アンカーは実行ごと（#382）
+
+`sweep_signal_timeouts` は `last_signal_at`（最後にフックから信号が来た時刻）を起点に沈黙を測り、
+**アンカーが無いタスクは掃かない** — 「生きていたのに黙った」ものだけを拾う設計である。
+
+そのため **`task/dispatch` はアンカーをクリアする**。dispatch は新しい実行の開始であり、
+前の実行の信号時刻を残すと、再 dispatch された瞬間に「前回から `timeout_secs` 以上黙っている」と
+判定されてしまう。実機ではこれで、`task retry` した直後のタスクが **dispatch の 3 ミリ秒後に
+エスカレーション**した（エージェント自身は正常に `working` だった）。
+
+クリアであって「dispatch 時刻で上書き」ではない。上書きすると D-03 が
+「**一度も生きなかった**タスク」まで拾うことになり、これは従来カバーしていない範囲で、
+`pane.exited` デッドマン（F-106）の担当である。再 dispatch されたタスクは初回 dispatch と
+同じ位置に戻り、自分が信号を出した時点から D-03 の保護対象になる。
 
 # 通知クリック → pane フォーカス（click-to-focus、F-94）
 
