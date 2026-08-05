@@ -10,7 +10,8 @@
 | `run` が `authorization timeout` で落ちる | `op read` がデスクトップ承認を要求している。非対話シェルからは不可 | 人間のターミナルから起動してもらう |
 | dispatch が `missing field 'kind'` | herdr が 0.7.5 未満、またはプラグインが古い | `herdr update` / プラグインを再 install |
 | dispatch が `agent_pane_busy` | 生成直後の pane はシェルがまだ起動中 | プラグインが 60 秒までリトライする。超えるならシェルの rc が重い |
-| dispatch が `agent_not_ready` | `agent.start` は受理したが CLI がまだ起動中（`launch_pending: true`） | 同上。リトライで吸収される |
+| dispatch が `agent_not_ready` | `agent.start` は受理されたが CLI が実際には起動していない。打鍵が入力可能前のシェルに送られて消えた（#387） | プラグインが `agent.start` を再送する。**待っても回復しない**（120 秒待っても pane は空のまま）ので、古いバイナリでは retry が要る |
+| dispatch が `timeout: timed out waiting for agent startup` | 同上。同じレースが `agent.start` 側に出た形 | 同上。リトライで吸収される |
 | dispatch が `agent_prompt_stalled` | herdr の 5 秒下限に Claude Code が間に合わなかった。**設定では変えられない** | プラグインが `agent.wait` で確認に回る。それでも駄目なら `tt task retry` |
 | dispatch が `is already occupied but is not recorded` | 前回の worktree が残っているのに state DB が消えている | `git worktree remove --force` してから retry |
 | dispatch 直後に `escalated` | D-03 の沈黙アンカーが前回実行のもの（#382） | 修正済み。古いバイナリなら入れ直す |

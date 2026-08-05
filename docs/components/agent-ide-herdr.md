@@ -4,8 +4,9 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-03T23:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-06T02:40:00+09:00 }
 status: stable
+verified: [{ by: human:tomoya-k31, at: 2026-08-06T03:15:00+09:00 }]
 owner: tomoya-k31
 ---
 
@@ -55,21 +56,29 @@ env を継承しないので、人間が叩くシェルにトークンは載ら�
 **分割はエージェント起動の前。** 0.7.4 までとは逆順である。エージェント pane が分割元になるので、
 先に割っておけば CLI は最終サイズで 1 度だけ描画される。
 
-**`agent.start` は `agent_pane_busy` の間リトライする**（予算 60 秒・間隔 500ms、[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7）。
-`workspace.create` が返した root pane はシェルがまだ起動中で、herdr は
-`agent target pane … is not an available shell` を返す。プロンプトへ達するまでの時間は運用者の
-rc ファイル次第で予測できず、読める readiness シグナルも無い（`pane.process_info` の `shell_pid` は
-実測 10 秒間ずっと `null`）。`agent.start` 自体が herdr の readiness 検査なので、
-その判断を再実装せず同じ問いを繰り返す。
+**`agent.start` はシェル未準備の間リトライする**（予算 180 秒・間隔 500ms・1 回あたり `timeout_ms` 15 秒、[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7）。
+`workspace.create` が返した root pane はシェルがまだ起動中で、herdr はそこへ起動コマンドを
+打ち込んでしまう。プロンプトへ達するまでの時間は運用者の rc ファイル次第で予測できず、読める
+readiness シグナルも無い（`pane.process_info` は「シェルが起動したか」しか答えず、実測で
+`workspace.create` の +0.01 秒から埋まっている。知りたい「入力を受け付けられるか」との隙間が
+このレース本体）。`agent.start` 自体が herdr の readiness 検査なので、その判断を再実装せず
+同じ問いを繰り返す。
 
-**過渡状態は 2 段ある。** `agent.start` の成功は「起動を受理した」であって「プロンプトを受けられる」ではなく、
-成功応答が `launch_pending: true` / `agent_status: unknown` を返すことがある。その間 `agent.prompt` は
-`agent_not_ready` で拒否するので、**そちらも同じ予算でリトライする**（実測: start が t=1.0s で成功、
-prompt が通ったのは t=5.0s）。herdr の応答は非決定的で、同じ状況が `agent_pane_busy` にも
-`launch_pending` にもなるため、片方だけでは足りない。
+**打鍵は消える。待っても回復しない。** 入力を読んでいないシェルへ送られた起動コマンドは
+キューされない。実測（#387）では `timeout_ms: 120000` で 120 秒フル待っても失敗し、その間
+pane はずっと空だった。**同じ pane への `agent.start` 再送は 3 秒で成功する**ので、長く待つのでは
+なく短い試行を重ねる。
 
-**リトライするのはこの 2 コードだけ**で、未知の `kind`・`agent_name_taken`・CLI が現れない `timeout` は
-放っておいても直らないため即座に失敗させる。**`agent_not_found` も含めない** — pane が死んだ形であり、
+**同じレースが 3 つの姿を取る**（実機 E2E で 15 回中 6 回＝40% が失敗、#387）:
+`agent.start` の `agent_pane_busy` と `timeout`、そして **`agent.start` が成功を返しつつ
+エージェントが検出されず `agent.prompt` が `agent_not_ready` を返し続ける**形。3 つ目が実機で
+支配的で、これは「起動が遅い」のではなく **CLI がそもそも起動していない**。したがって
+`agent_not_ready` に付き合う窓は 15 秒に区切り、超えたら `agent.prompt` を撃ち続けず
+**`agent.start` の再送に戻る**。検出に失敗した start は herdr にエージェントを登録しないので、
+**同名での再送は安全**である。
+
+**リトライするのはこの 3 つだけ**で、未知の `kind`・`agent_name_taken` は放っておいても直らない
+ため即座に失敗させる。**`agent_not_found` も含めない** — pane が死んだ形であり、
 resume 付き dispatch では `SESSION_UNRESUMABLE` として上げる必要がある（#261）。
 
 **3 段目の `agent_prompt_stalled` はリトライしない**（#380、[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7）。

@@ -1,0 +1,2 @@
+* **Update**: [ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7 を実機実測（#387）に合わせて改訂。シェル未準備の pane への `agent.start` が同じ 1 つのレースを 3 通りの応答（`agent_pane_busy` / `timeout` / 成功したのに `agent.prompt` が `agent_not_ready`）に化けさせることを追記し、`timeout` を「直らない」から「リトライする」へ変更。打鍵は消えるので待っても回復しない（120 秒待っても pane は空）ことと、`pane.process_info` を readiness シグナルに使えない理由が初版の記述（`shell_pid` が `null`）と違うことを訂正。
+* **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) をリトライ方針の変更に追随（予算 60→180 秒、`agent.start` の `timeout_ms` 120→15 秒、`agent_not_ready` は 15 秒で打ち切って `agent.start` を再送）。
