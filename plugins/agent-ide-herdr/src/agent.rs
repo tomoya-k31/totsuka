@@ -319,7 +319,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         loop {
             match self.client.call("agent.start", params.clone()).await {
                 Ok(started) => return Ok(started),
-                Err(e) if e.is_pane_not_ready() || e.is_agent_start_timeout() => {
+                Err(e) if e.is_pane_not_ready() || e.is_timeout_of("agent.start") => {
                     if tokio::time::Instant::now() >= deadline {
                         return Err(e);
                     }
