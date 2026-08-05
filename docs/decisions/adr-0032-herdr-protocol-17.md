@@ -6,6 +6,7 @@ resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herd
 tags: [adr, herdr, agent-ide, protocol, breaking-change]
 generated: { by: claude-code/opus-5, at: 2026-08-06T02:40:00+09:00 }
 status: stable
+verified: [{ by: human:tomoya-k31, at: 2026-08-06T03:15:00+09:00 }]
 owner: tomoya-k31
 sources:
   - id: probe-17
