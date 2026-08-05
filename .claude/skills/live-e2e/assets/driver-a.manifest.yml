@@ -1,0 +1,35 @@
+# 実機 E2E のテスト駆動アプリ A（運用者本人 = A がインストールする）。
+#
+# https://api.slack.com/apps > Create New App > From a manifest (YAML) に貼る。
+# インストール後、OAuth & Permissions の User OAuth Token (`xoxp-…`) を
+# `.env` の E2E_SLACK_A に入れる。
+#
+# 被テストアプリ（plugins/task-source-slack/manifest.yml）と分ける理由:
+# 被テスト側に駆動用スコープ（reactions:write）を足すと、本番と違う権限のアプリを
+# 検証することになる。S4 のリアクション付与は「A 名義で reactions.add を叩く」ため
+# だけに reactions:write が要るので、駆動側に閉じ込める。
+#
+# Socket Mode もイベント購読も不要。このアプリは Web API を叩くだけで、
+# Slack からイベントを受け取らない。
+display_information:
+  name: totsuka e2e driver A
+  description: E2E test driver acting as the operator (A). Adds trigger reactions and reads channel/DM history for verification.
+  background_color: "#2b5a3c"
+oauth_config:
+  scopes:
+    user:
+      - chat:write # 検証用メッセージの投稿（A 名義）
+      - reactions:write # S4: trigger_reactions の絵文字を付ける（reactions.add）
+      - reactions:read # 付与済みリアクションの確認
+      - channels:history # 検証チャンネルのメッセージ・スレッド返信の読み取り
+      - channels:read # チャンネル一覧・ID 解決（scripts/slack.sh channels）
+      - groups:history # 非公開チャンネルを使う場合
+      - groups:read # 同上
+      - im:history # self-DM の下書き記録とナッジ DM の読み取り（S3 の判定に使う）
+      - im:write # self-DM を開く（conversations.open）
+      - users:read # 表示名 → メンバー ID の解決
+settings:
+  # イベントは受け取らない。Socket Mode / interactivity は被テストアプリ側の責務。
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

@@ -1,0 +1,27 @@
+# 実機 E2E のテスト駆動アプリ B（送信者役 = B がインストールする）。
+#
+# **B のアカウントでログインした状態で** https://api.slack.com/apps >
+# Create New App > From a manifest (YAML) に貼る。インストール後、
+# User OAuth Token (`xoxp-…`) を `.env` の E2E_SLACK_B に入れる。
+#
+# B がアプリを作れない場合は、ワークスペース設定でメンバーのアプリインストールを
+# 許可するか、A が作って Settings > Collaborators に B を追加し、
+# B が Install to Workspace を押す。
+#
+# スコープが chat:write だけなのは、B の役割が「投稿する」だけだから。
+#
+# 注意: このトークンで投稿したメッセージには `bot_id` が付く。totsuka の判定表①が
+# bot 投稿を除外するので、**メンション経路の起動には使えない**（S3 は B が手で打つ）。
+# 用途は「他人のリアクションでは起動しないこと」等の否定側の確認と、文脈作りに限る。
+display_information:
+  name: totsuka e2e driver B
+  description: E2E test driver acting as the sender (B). Posts messages for negative-path checks.
+  background_color: "#5a2b3c"
+oauth_config:
+  scopes:
+    user:
+      - chat:write # 検証用メッセージの投稿（B 名義）
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
