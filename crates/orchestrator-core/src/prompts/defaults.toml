@@ -128,6 +128,27 @@ verification_background_exemption = """
 ただし、バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止は完了申告ではありません。その場合は検証もブロックも行わず停止を許可してください。完了判定はバックグラウンドタスクが残っていない停止に対してのみ行います。\
 """
 
+# Non-claim exemption: a Stop whose final message already reports NEEDS_INPUT or
+# FAILED is not claiming completion, so there is nothing for the judge to verify.
+#
+# Without this the judge blocks such a Stop, and keeps blocking: a `prompt`-type
+# hook cannot see `stop_hook_active` (it receives prose, not the Stop stdin), so
+# nothing tells it the turn is a re-entry. Measured live (#389): a `slack-reply`
+# task that legitimately answered NEEDS_INPUT was blocked **9 consecutive times**
+# until Claude Code's own cap force-ended the turn — while the judge's own
+# reasoning said "there are no changes in the repository to verify". The
+# orchestrator had already recorded `waiting_input` from the FIRST report, so
+# every one of those blocks was pure waste.
+#
+# This mirrors `on-stop.sh`, which accepts any present marker and only ever
+# blocks on a MISSING one. Leaving it out puts the two hooks in direct
+# contradiction on the same Stop.
+#
+# Placeholders: {marker_needs_input} {marker_failed}
+verification_nonclaim_exemption = """
+また、最終メッセージが {marker_needs_input} または {marker_failed} を報告している停止も完了申告ではありません。作業が終わっていないことをエージェント自身が申告しているので、その場合も検証もブロックも行わず停止を許可してください。ブロックしてよいのは完了を申告している停止だけです。\
+"""
+
 # Appended to the rubric so the verifying model re-emits the status marker that
 # the `on-stop.sh` command hook parses (D-12). Drop the markers from here and
 # every Stop parses as UNKNOWN.
@@ -137,15 +158,19 @@ verification_marker_convention = """
 検証結果を踏まえ、応答の最終行に必ず次のいずれかのマーカーを付けてください: {marker_completed} / {marker_needs_input} / {marker_failed}\
 """
 
-# How the three keys above are assembled into the hook's `prompt` field.
+# How the four keys above are assembled into the hook's `prompt` field.
 #
 # The assembly is itself a template so the sections can be reordered or dropped
 # without losing the pieces. Rendering is two staged single passes — the leaves
 # first (markers substituted), then this over the results — so a literal
 # `{marker_convention}` written inside the rubric is inserted, not expanded.
 #
-# Placeholders: {rubric} {background_exemption} {marker_convention}
-verification_prompt = "{rubric}\n\n{background_exemption}\n\n{marker_convention}"
+# Both exemptions sit before the marker convention on purpose: they narrow what
+# counts as a completion claim, and the convention then says how to report it.
+#
+# Placeholders: {rubric} {background_exemption} {nonclaim_exemption}
+#               {marker_convention}
+verification_prompt = "{rubric}\n\n{background_exemption}\n\n{nonclaim_exemption}\n\n{marker_convention}"
 
 # The prose body of the opencode plan-mode agent (`agents/totsuka-plan.md`),
 # selected at launch with `--agent totsuka-plan`.

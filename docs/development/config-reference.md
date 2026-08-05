@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-01T20:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-06T03:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -163,11 +163,12 @@ claude / codex / opencode に差し込むプロンプト文の上書き。組み
 | `branch_convention` | string? | 組み込み | ブランチ作成指示。worktree は detached で引き渡されるので、エージェントがリポジトリの命名規約を読んで `git switch -c` する。**plan モードでは注入しない**（plan ペインは git を実行できず、claude では無人ペインが答えられない承認プロンプトを誘発してタイムアウトになる）。既にブランチ上のタスク（再開）にも注入しない | なし |
 | `verification_rubric` | string? | 組み込み | llm 検収の判定基準文 | — |
 | `verification_background_exemption` | string? | 組み込み | バックグラウンドタスク実行中の中間停止を検収対象から外す文 | — |
+| `verification_nonclaim_exemption` | string? | 組み込み | 最終メッセージが `NEEDS_INPUT` / `FAILED` を報告している停止を検収対象から外す文。これが無いとジャッジが完了申告とみなしてブロックし続ける（`prompt` 型フックは `stop_hook_active` を見られないため止まらない。#389 で実機 9 連続ブロック） | `{marker_needs_input}` `{marker_failed}` |
 | `verification_marker_convention` | string? | 組み込み | 検収後にマーカーを再掲させる文 | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |
-| `verification_prompt` | string? | `"{rubric}\n\n{background_exemption}\n\n{marker_convention}"` | 上記 3 つの組み立て方。節の並べ替え・省略ができる | `{rubric}` `{background_exemption}` `{marker_convention}` |
+| `verification_prompt` | string? | `"{rubric}\n\n{background_exemption}\n\n{nonclaim_exemption}\n\n{marker_convention}"` | 上記 4 つの組み立て方。節の並べ替え・省略ができる | `{rubric}` `{background_exemption}` `{nonclaim_exemption}` `{marker_convention}` |
 | `opencode_plan_agent` | string? | 組み込み | opencode plan モードのエージェントファイル（`agents/totsuka-plan.md`）の**散文本体**。**グローバル専用**（ディスク上の 1 枚を全セッションが共有するため。`[[workflows]].prompts` に書くとパースエラー） | — |
 
-`verification_*` の 4 キーは `verification = "llm"` のワークフローでのみ使われる（prompt 型 Stop フックを持つのは claude だけで、他ツールでは `human` へ縮退する）。
+`verification_*` の 5 キーは `verification = "llm"` のワークフローでのみ使われる（prompt 型 Stop フックを持つのは claude だけで、他ツールでは `human` へ縮退する）。
 
 `opencode_plan_agent` は**散文本体のみ**である。YAML frontmatter（`mode: primary` と `permission: {edit: deny, bash: deny, task: deny}`）は Rust 側で固定されており設定できない — この deny マップが plan モードの読み取り専用保証そのもので、散文に見えるキーから `bash: allow` を注入できると権限昇格になるためである（[ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md)）。値が `---` の行を**どこかに**含む場合は検証エラーになる。frontmatter は慣例上ファイル先頭でしか解釈されないので後続の `---` は本来ただの水平線だが、opencode のパーサはこちらで検証できず、ここは権限境界なのでその推論に依存しない設計にしている（本文の水平線は `***` で書ける）。opencode は claude の `--permission-mode plan` や codex の `--sandbox read-only` に相当する構造的な plan フラグを持たないため、**このエージェントファイルが plan 意図の唯一の強制手段**である。
 
