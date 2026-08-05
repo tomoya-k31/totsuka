@@ -73,6 +73,30 @@ impl HerdrError {
         matches!(self, HerdrError::Protocol { code, .. } if code == "agent_pane_busy")
     }
 
+    /// Whether this is `agent.start` giving up on a pane whose shell never
+    /// reached its prompt — the **same race** as
+    /// [`is_pane_not_ready`](Self::is_pane_not_ready), in the shape it takes
+    /// when herdr waits for the CLI instead of refusing the pane outright.
+    ///
+    /// Measured live (#387): calling `agent.start` immediately after
+    /// `workspace.create` answered `timeout: timed out waiting for agent
+    /// startup` while the pane stayed **completely empty** — the launch
+    /// command had been typed into a shell that was not accepting input yet,
+    /// so the keystrokes were swallowed. Waiting does not undo that: the same
+    /// call with a 120s window still failed, and the pane was still empty
+    /// after all 120s. Re-issuing `agent.start` on that pane succeeded in ~3s.
+    ///
+    /// Also covers the client-side [`Timeout`](Self::Timeout) for that method:
+    /// `request_timeout_secs` can expire before herdr answers, and that is the
+    /// same "the shell was not ready" story seen from this side of the socket.
+    pub fn is_agent_start_timeout(&self) -> bool {
+        match self {
+            HerdrError::Protocol { code, .. } => code == "timeout",
+            HerdrError::Timeout(method) => method == "agent.start",
+            _ => false,
+        }
+    }
+
     /// Whether this is herdr refusing to address an agent that `agent.start`
     /// accepted but has not finished launching — also **transient**.
     ///

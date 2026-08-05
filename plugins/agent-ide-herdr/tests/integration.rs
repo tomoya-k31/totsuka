@@ -63,12 +63,25 @@ struct FakeHerdr {
     /// The protocol `ping` reports. Below 17 the plugin refuses to initialize.
     protocol: u64,
     /// When set, `agent.start` fails with this herdr error code — the shape a
-    /// name collision (`agent_name_taken`) or a pane that never reached its
-    /// shell prompt (`timeout`) arrives in.
+    /// name collision (`agent_name_taken`) or an unsupported `kind` arrives in.
+    ///
+    /// **Not `timeout`**: that one is the shell-readiness race and clears on a
+    /// re-issue, so it is modelled by [`timeout_starts`](Self::timeout_starts).
     start_error: Option<&'static str>,
     /// How many `agent.start` calls answer `agent_pane_busy` before one
     /// succeeds — the real shape of a root pane whose shell is still starting.
     busy_starts: Arc<Mutex<usize>>,
+    /// How many `agent.start` calls answer `timeout` before one succeeds — the
+    /// *other* shape of that same pane (#387): herdr took the pane, typed into
+    /// it, and never saw the CLI, because the shell was not reading yet.
+    timeout_starts: Arc<Mutex<usize>>,
+    /// When set, `agent.prompt` answers `agent_not_ready` until `agent.start`
+    /// has been called again — a CLI whose launch keystrokes were swallowed, so
+    /// the agent is not addressable and never becomes so on its own (#387).
+    not_ready_until_restart: bool,
+    /// How many `agent.start` calls have been *accepted* so far. Drives
+    /// [`not_ready_until_restart`](Self::not_ready_until_restart).
+    starts_seen: Arc<Mutex<usize>>,
     /// `pane.get` reports a vanished pane.
     pane_gone: bool,
     /// Only the final `pane.focus` reports a vanished pane — the pane
@@ -128,6 +141,9 @@ impl Default for FakeHerdr {
             protocol: PROTOCOL,
             start_error: None,
             busy_starts: Arc::default(),
+            timeout_starts: Arc::default(),
+            not_ready_until_restart: false,
+            starts_seen: Arc::default(),
             pane_gone: false,
             pane_focus_gone: false,
             agent_session: None,
@@ -243,6 +259,27 @@ impl FakeHerdr {
                 )
                 .await
             }
+            // The same pane in its other shape (#387): herdr accepted it, typed
+            // the launch command into a shell that was not reading, and waited
+            // out its own window without ever seeing the CLI.
+            "agent.start"
+                if {
+                    let mut left = self.timeout_starts.lock().unwrap();
+                    let pending = *left > 0;
+                    if pending {
+                        *left -= 1;
+                    }
+                    pending
+                } =>
+            {
+                reply_error(
+                    &mut write_half,
+                    &id,
+                    "timeout",
+                    "timed out waiting for agent startup",
+                )
+                .await
+            }
             "agent.start" if self.start_error.is_some() => {
                 let code = self.start_error.unwrap();
                 reply_error(&mut write_half, &id, code, "herdr refused the start").await
@@ -250,6 +287,7 @@ impl FakeHerdr {
             // Protocol 17 starts the agent in the pane it is *given*, echoing
             // it back, and reports the argv it assembled from `kind` + `args`.
             "agent.start" => {
+                *self.starts_seen.lock().unwrap() += 1;
                 let pane_id = params["pane_id"].as_str().unwrap_or_default().to_string();
                 let kind = params["kind"].as_str().unwrap_or_default().to_string();
                 let args: Vec<String> = params["args"]
@@ -277,6 +315,20 @@ impl FakeHerdr {
                 .await
             }
 
+            // An agent that will never answer until it is started again: the
+            // first `agent.start` was accepted but its keystrokes went nowhere,
+            // so no CLI exists to take the prompt (#387).
+            "agent.prompt"
+                if self.not_ready_until_restart && *self.starts_seen.lock().unwrap() < 2 =>
+            {
+                reply_error(
+                    &mut write_half,
+                    &id,
+                    "agent_not_ready",
+                    &format!("agent {PANE} is not an active named agent"),
+                )
+                .await
+            }
             "agent.prompt"
                 if {
                     let mut left = self.not_ready_prompts.lock().unwrap();
@@ -1004,6 +1056,77 @@ async fn agent_start_waits_out_a_pane_that_is_still_starting_its_shell() {
     );
 }
 
+/// The same slow pane in its other shape (#387): rather than refusing with
+/// `agent_pane_busy`, herdr takes the pane, types the launch command into a
+/// shell that is not reading yet, and gives up with `timeout`. The keystrokes
+/// are lost rather than queued — measured live, a 120s window failed just the
+/// same and left the pane empty, while a re-issued `agent.start` took in ~3s —
+/// so this is retried, not waited on.
+#[tokio::test]
+async fn agent_start_retries_a_timeout_because_waiting_longer_does_not_help() {
+    let fake = FakeHerdr::default();
+    *fake.timeout_starts.lock().unwrap() = 2;
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(
+        disp["error"].is_null(),
+        "a swallowed launch must be re-issued, not reported: {disp}"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        3,
+        "two timeouts then the one that took: {log:?}"
+    );
+    assert!(
+        calls(&log, "workspace.close").is_empty(),
+        "nothing was torn down: {log:?}"
+    );
+}
+
+/// An `agent.start` that is *accepted* while the CLI never actually launches
+/// (#387). Only `agent.prompt` can see it, as an `agent_not_ready` that never
+/// clears — the old code asked for the whole budget and then failed the
+/// dispatch, which is the 40% failure rate the issue reports. The fix is to
+/// stop prompting a CLI that does not exist and start it again instead.
+#[tokio::test]
+async fn a_prompt_that_never_becomes_ready_re_issues_agent_start() {
+    let fake = FakeHerdr {
+        not_ready_until_restart: true,
+        ..FakeHerdr::default()
+    };
+    let cli = fake.cli.clone();
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(
+        disp["error"].is_null(),
+        "re-starting the agent must rescue the dispatch: {disp}"
+    );
+    assert_eq!(
+        cli.lock().unwrap().prompts,
+        1,
+        "the refusals never reached a CLI, so the task lands exactly once"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        2,
+        "the accepted-but-dead start, then the one that produced a real agent: {log:?}"
+    );
+    assert!(
+        calls(&log, "workspace.close").is_empty(),
+        "the workspace is reused, not torn down: {log:?}"
+    );
+}
+
 /// `agent.start` succeeding means herdr accepted the launch, not that the CLI
 /// is up: it can answer `launch_pending: true` with `agent_status: unknown`,
 /// and `agent.prompt` then refuses with `agent_not_ready`. Measured live, that
@@ -1151,13 +1274,13 @@ async fn a_vanished_agent_is_not_mistaken_for_one_still_launching() {
     );
 }
 
-/// Only `agent_pane_busy` is waited out. Everything else — an unknown `kind`, a
-/// taken name, a CLI that never appears — will not fix itself, and retrying
-/// would only delay the report.
+/// Only the shell-readiness refusals (`agent_pane_busy`, `timeout`) are waited
+/// out. Everything else — an unknown `kind`, a taken name — will not fix
+/// itself, and retrying would only delay the report.
 #[tokio::test]
-async fn a_start_failure_that_is_not_busy_is_not_retried() {
+async fn a_start_failure_that_is_not_a_readiness_refusal_is_not_retried() {
     let (socket, requests) = FakeHerdr {
-        start_error: Some("timeout"),
+        start_error: Some("unsupported_kind"),
         ..FakeHerdr::default()
     }
     .spawn();

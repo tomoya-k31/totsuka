@@ -13,9 +13,16 @@
 //!   rides on `workspace.create`, whose `env` herdr applies to the root pane —
 //!   which is the pane the agent is started in
 //! - a freshly created pane is **not immediately usable**: its shell is still
-//!   starting, and `agent.start` answers `agent_pane_busy` until it reaches a
-//!   prompt. There is no readiness signal to poll (`pane.process_info` reports
-//!   `shell_pid: null` throughout), so the call is retried
+//!   starting, and `agent.start` types the launch command into it regardless.
+//!   There is no readiness signal to poll — `pane.process_info` shows the shell
+//!   from the moment it is *spawned*, which is not the moment it starts
+//!   *accepting input* — so the call is retried. The race surfaces in three
+//!   shapes and all three are one bug (#387): `agent_pane_busy` and `timeout`
+//!   on `agent.start`, and a start that is accepted while the agent never
+//!   becomes addressable, which only `agent.prompt` can see
+//!   (`agent_not_ready`). Keystrokes typed into a shell that was not reading
+//!   are **lost, not queued**, so waiting longer never helps; only re-issuing
+//!   `agent.start` does
 //! - the prompt **cannot** ride in `args`: a multi-line prompt passed that way
 //!   is never submitted, and every task body here is multi-line. It goes in
 //!   through `agent.prompt {target, text, wait}`, which types and submits in one
@@ -67,13 +74,25 @@ const SCREEN_LINES: u64 = 200;
 /// wrong is a dispatch that fails on an agent that was merely slow.
 const PROMPT_WAIT_MS: u64 = 120_000;
 
-/// How long `agent.start` is given to detect the CLI, in milliseconds.
+/// How long a single `agent.start` attempt is given to detect the CLI, in
+/// milliseconds.
 ///
-/// herdr's default is 30s, which a probe hit as `timed out waiting for agent
-/// startup` when the pane had been created ~1s earlier. The pane has to reach
-/// an interactive shell prompt first, and how long that takes is the operator's
-/// shell startup, not ours.
-const AGENT_START_TIMEOUT_MS: u64 = 120_000;
+/// **Deliberately short, and shorter than `request_timeout_secs` (30s).** This
+/// used to be 120s, on the theory that a pane which has not reached its shell
+/// prompt just needs longer. Measured live (#387), that theory is wrong twice
+/// over:
+///
+/// - Waiting does not help. A start issued immediately after
+///   `workspace.create` failed after the full 120s, and the pane was
+///   **empty the whole time** — the launch command had been typed into a shell
+///   that was not accepting input, so it was swallowed rather than queued.
+///   Re-issuing `agent.start` on that same pane then succeeded in ~3s.
+/// - 120s was unreachable anyway: the transport gives up at
+///   `request_timeout_secs`, so the client aborted at 30s and the extra 90s
+///   only ever existed on paper.
+///
+/// So an attempt is now cheap and repeated, rather than long and singular.
+const AGENT_START_TIMEOUT_MS: u64 = 15_000;
 
 /// How long [`confirm_submission`](HerdrAgent::confirm_submission) watches a
 /// stalled prompt before giving up, in milliseconds.
@@ -84,14 +103,28 @@ const AGENT_START_TIMEOUT_MS: u64 = 120_000;
 /// the dispatch fails, so it is bounded rather than generous.
 const PROMPT_CONFIRM_MS: u64 = 60_000;
 
-/// How long a herdr startup transient (`agent_pane_busy` on `agent.start`,
-/// `agent_not_ready` on `agent.prompt`) keeps being re-asked.
+/// How long the whole start-and-prompt handshake keeps being re-attempted.
 ///
-/// Both windows measured live were seconds, not minutes; 60s is slack for a
-/// shell whose rc files do real work (version managers, completions) and a CLI
-/// that is slow to come up. Past it the refusal is reported as-is — at that
-/// point "it is still starting" has stopped being a plausible reading.
-const STARTUP_RETRY_BUDGET: Duration = Duration::from_secs(60);
+/// Covers every shape the shell-readiness race takes (#387): `agent_pane_busy`
+/// and `timeout` on `agent.start`, and `agent_not_ready` on `agent.prompt`.
+///
+/// Raised from 60s because a single `agent.start` attempt can now cost
+/// [`AGENT_START_TIMEOUT_MS`], so 60s bought only a handful of tries. The
+/// workflow's own `timeout_secs` (default 1800s, 900s in the E2E config) is the
+/// outer bound that matters, so there is room. Past this the refusal is
+/// reported as-is — at that point "it is still starting" has stopped being a
+/// plausible reading.
+const STARTUP_RETRY_BUDGET: Duration = Duration::from_secs(180);
+
+/// How long `agent.prompt` tolerates `agent_not_ready` before the dispatch
+/// goes back and re-issues `agent.start`.
+///
+/// Measured live, a genuinely-still-launching CLI clears in ~4s. An agent whose
+/// keystrokes were swallowed never clears at all — the old code asked for the
+/// full 60s budget and then failed the dispatch, which is exactly the 40%
+/// failure rate #387 reports. Short enough that the doomed case is cheap,
+/// generous enough that the slow-but-real case is not cut off.
+const PROMPT_READY_WINDOW: Duration = Duration::from_secs(15);
 
 /// How long to wait between those attempts. Short enough that the usual
 /// few-second window costs a few probes, long enough not to spin.
@@ -189,22 +222,49 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             "args": args,
             "timeout_ms": AGENT_START_TIMEOUT_MS,
         });
-        let started = self
-            .start_when_pane_is_ready(&pane_id, start_params)
-            .await?;
-        // herdr echoes the pane it was given; trusting our own value keeps the
-        // handle well-defined even if a future response drops the field.
-        debug_assert_eq!(
-            started
-                .get("agent")
-                .and_then(|a| a.get("pane_id"))
-                .and_then(Value::as_str),
-            Some(pane_id.as_str()),
-        );
+        // Start and prompt share one budget, because they are two views of one
+        // race (#387). `agent.start` types the launch command into the pane; if
+        // the shell was not accepting input yet the keystrokes are swallowed,
+        // and herdr reports that in whichever of three shapes it happens to
+        // take — `agent_pane_busy`, `timeout`, or a start that is *accepted*
+        // while the agent never becomes addressable. Only the last one is
+        // visible from `agent.prompt`, so the prompt has to be able to send the
+        // dispatch back to `agent.start` rather than keep asking an agent that
+        // does not exist.
+        let prompt = compose_prompt(params);
+        let deadline = tokio::time::Instant::now() + STARTUP_RETRY_BUDGET;
+        loop {
+            let started = self
+                .start_when_pane_is_ready(&pane_id, start_params.clone(), deadline)
+                .await?;
+            // herdr echoes the pane it was given; trusting our own value keeps
+            // the handle well-defined even if a future response drops the field.
+            debug_assert_eq!(
+                started
+                    .get("agent")
+                    .and_then(|a| a.get("pane_id"))
+                    .and_then(Value::as_str),
+                Some(pane_id.as_str()),
+            );
 
-        self.submit_prompt(&pane_id, &compose_prompt(params))
-            .await
-            .map_err(|e| resume_failure(params, e))?;
+            match self.submit_prompt(&pane_id, &prompt, deadline).await {
+                Ok(()) => break,
+                // The CLI never actually launched, so there is nothing to
+                // prompt and no amount of asking will change that. Re-issuing
+                // `agent.start` is what clears it, and it is safe: herdr
+                // registers no agent for a start that detected none, so the
+                // task's name is still free (verified live — the same name
+                // succeeded on re-issue).
+                Err(e) if e.is_agent_not_ready() && tokio::time::Instant::now() < deadline => {
+                    tracing::warn!(
+                        pane_id,
+                        "the agent never became addressable; re-issuing agent.start rather \
+                         than prompting a CLI that did not start"
+                    );
+                }
+                Err(e) => return Err(resume_failure(params, e)),
+            }
+        }
 
         // The agent's own session id (for `claude --resume`) is reported by its
         // herdr integration hook during startup; by now it is normally there,
@@ -231,30 +291,42 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     ///
     /// **Retried rather than predicted.** How long a shell takes to reach its
     /// prompt is the operator's rc files, not something this plugin can know,
-    /// and herdr exposes no readiness signal to poll instead —
-    /// `pane.process_info` reports `shell_pid: null` for the whole window
-    /// (measured over 10s). `agent.start` *is* the readiness check, so it is
-    /// asked again rather than second-guessed.
+    /// and herdr exposes no readiness signal to poll instead. `agent.start`
+    /// *is* the readiness check, so it is asked again rather than
+    /// second-guessed.
     ///
-    /// Only `agent_pane_busy` is retried. Every other failure — an unknown
-    /// `kind`, `agent_name_taken`, a CLI that never appears — means something
-    /// that will not fix itself, and retrying would only delay the report.
+    /// `pane.process_info` is **not** that signal, though not for the reason
+    /// this comment used to give. Under protocol 17 it is populated from
+    /// ~10ms — `foreground_processes: [{argv0: "zsh", …}]` — so the old claim
+    /// that it "reports `shell_pid: null` for the whole window" is stale
+    /// (that field no longer exists). It is useless here for a different
+    /// reason: it shows the shell from the moment it is *spawned*, which is
+    /// not the moment it starts *accepting input*, and the gap between those
+    /// two is precisely the race (#387).
+    ///
+    /// Two refusals are retried, because they are one race in two shapes:
+    /// `agent_pane_busy` (herdr refused the pane) and `timeout` (herdr took
+    /// the pane, typed into it, and never saw the CLI appear — the keystrokes
+    /// went into a shell that was not reading yet). Every other failure — an
+    /// unknown `kind`, `agent_name_taken` — means something that will not fix
+    /// itself, and retrying would only delay the report.
     async fn start_when_pane_is_ready(
         &self,
         pane_id: &str,
         params: Value,
+        deadline: tokio::time::Instant,
     ) -> Result<Value, HerdrError> {
-        let deadline = tokio::time::Instant::now() + STARTUP_RETRY_BUDGET;
         loop {
             match self.client.call("agent.start", params.clone()).await {
                 Ok(started) => return Ok(started),
-                Err(e) if e.is_pane_not_ready() => {
+                Err(e) if e.is_pane_not_ready() || e.is_agent_start_timeout() => {
                     if tokio::time::Instant::now() >= deadline {
                         return Err(e);
                     }
                     tracing::debug!(
                         pane_id,
-                        "the pane has not reached its shell prompt yet; retrying agent.start"
+                        error = %e,
+                        "the pane was not ready to launch the CLI; retrying agent.start"
                     );
                     tokio::time::sleep(STARTUP_RETRY_POLL).await;
                 }
@@ -357,14 +429,30 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// herdr can accept the launch and answer `launch_pending: true` with
     /// `agent_status: unknown`, and `agent.prompt` then refuses with
     /// `agent_not_ready` until the CLI is actually up — measured live at ~4s.
-    /// That refusal is waited out here, on the same budget as the pane's own
-    /// startup. `agent_not_found` is **not** retried: it is a pane that died,
-    /// and on a resumed dispatch it has to surface as `SESSION_UNRESUMABLE`.
+    /// That refusal is waited out here, but only for
+    /// [`PROMPT_READY_WINDOW`], **not** for the whole dispatch budget.
+    ///
+    /// The short window is the fix for #387. `agent_not_ready` has two causes
+    /// that look identical from here: a CLI that is merely slow (clears in
+    /// seconds) and a CLI that was never launched at all, because
+    /// `agent.start`'s keystrokes went into a shell that was not reading yet
+    /// (never clears — measured live, it answered `agent_not_ready` for as
+    /// long as it was asked). Spending the entire budget here served the first
+    /// case and failed the second; returning the refusal lets
+    /// [`start_agent`](Self::start_agent) re-issue `agent.start`, which is what
+    /// actually clears it. `agent_not_found` is **not** retried: it is a pane
+    /// that died, and on a resumed dispatch it has to surface as
+    /// `SESSION_UNRESUMABLE`.
     ///
     /// **The contract is unchanged**: a prompt that cannot be confirmed as
     /// submitted fails the dispatch rather than leaving a pane that sits idle
     /// forever with the task unsent.
-    async fn submit_prompt(&self, pane_id: &str, prompt: &str) -> Result<(), HerdrError> {
+    async fn submit_prompt(
+        &self,
+        pane_id: &str,
+        prompt: &str,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), HerdrError> {
         let params = json!({
             "target": pane_id,
             "text": prompt,
@@ -376,12 +464,16 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 "timeout_ms": PROMPT_WAIT_MS,
             },
         });
-        let deadline = tokio::time::Instant::now() + STARTUP_RETRY_BUDGET;
+        // Whichever comes first: this attempt's own patience, or the dispatch's
+        // overall budget. Past the former the answer is "re-start the agent",
+        // past the latter it is "give up" — and `start_agent` tells them apart
+        // by re-checking the same deadline.
+        let ready_deadline = (tokio::time::Instant::now() + PROMPT_READY_WINDOW).min(deadline);
         loop {
             match self.client.call("agent.prompt", params.clone()).await {
                 Ok(_) => return Ok(()),
                 Err(e) if e.is_agent_not_ready() => {
-                    if tokio::time::Instant::now() >= deadline {
+                    if tokio::time::Instant::now() >= ready_deadline {
                         return Err(e);
                     }
                     tracing::debug!(

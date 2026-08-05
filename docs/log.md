@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-08-06
+
+* **Update**: [ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7 を実機実測（#387）に合わせて改訂。シェル未準備の pane への `agent.start` が同じ 1 つのレースを 3 通りの応答（`agent_pane_busy` / `timeout` / 成功したのに `agent.prompt` が `agent_not_ready`）に化けさせることを追記し、`timeout` を「直らない」から「リトライする」へ変更。打鍵は消えるので待っても回復しない（120 秒待っても pane は空）ことと、`pane.process_info` を readiness シグナルに使えない理由が初版の記述（`shell_pid` が `null`）と違うことを訂正。
+* **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) をリトライ方針の変更に追随（予算 60→180 秒、`agent.start` の `timeout_ms` 120→15 秒、`agent_not_ready` は 15 秒で打ち切って `agent.start` を再送）。
+
 ## 2026-08-04
 
 * **Creation**: [live-e2e スキル](/components/live-e2e.md) — 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証を、別環境でも再現できる形にした（`.claude/skills/live-e2e/`）。手順・設定雛形（`.env` の全環境変数と `tt()` ラッパー、`config.toml`、各プラグインの toml）・駆動スクリプト（Slack / GitHub / 結果集約）を同梱し、**自動／手動（人間に依頼）／目視**を全シナリオで区分した。API から代行できない操作（`op://` があるため常駐プロセスの起動、`bot_id` が付くためメンション投稿、API の無い承認ボタン押下）と、API から読めない項目（エフェメラル本体、pane レイアウト、通知センター）を明示している。2026-08-03 の初回検証でプロダクトの不具合 4 種を検出した経路。

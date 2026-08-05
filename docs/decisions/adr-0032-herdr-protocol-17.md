@@ -4,7 +4,7 @@ title: ADR-0032 herdr protocol 17 への追随（agent.start の manifest 駆動
 description: herdr 0.7.5 (protocol 17) で agent.start が manifest 駆動（kind + 呼び出し側が用意した既存 pane）へ、プロンプト投入が agent.prompt へ破壊的に変わったことへの追随方針。program→kind 写像、agent name の生成規則と agent_name_taken の扱い、pane 確保順序の反転、submit_prompt と RetryPolicy の廃止、protocol 16 以下を切る判断を定める。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [adr, herdr, agent-ide, protocol, breaking-change]
-generated: { by: claude-code/opus-5, at: 2026-08-03T23:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-06T02:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -159,7 +159,7 @@ name = "t-" + sanitize(task.id)[..N] + "-" + hex(sha256(task.id))[..8]
   23–25 ms と本 API 群で最も遅く、1 dispatch ぶんそれが消える
 - **`[layout].ratio` の意味は変わらない。** `ratio` は分割元の取り分で、分割元は 16 でも 17 でも
   エージェント pane である。**既存の `plugins/herdr.toml` を書き換える必要はない**
-- **`agent.start` は `agent_pane_busy` の間リトライする**（下記 D-7）
+- **`agent.start` はシェル未準備を示す応答の間リトライする**（`agent_pane_busy` / `timeout`、下記 D-7）
 
 ## D-5: `submit_prompt` の自己修正手順と `RetryPolicy` を廃止する
 
@@ -201,7 +201,7 @@ dispatch 失敗に写像すれば同じ意味になる。
 
 **これは利用者にとっては破壊的変更**なので、リリースノートに移行手順（`herdr update`）を書く。
 
-## D-7: herdr の起動過渡状態は 2 段とも `agent.start` / `agent.prompt` のリトライで待つ
+## D-7: herdr の起動過渡状態は `agent.start` / `agent.prompt` のリトライで待つ
 
 **`workspace.create` が返した root pane は、すぐには使えない。** シェルがまだ起動中で、
 herdr は `agent_pane_busy: agent target pane w5:p1 is not an available shell` を返す。
@@ -212,14 +212,28 @@ herdr は `agent_pane_busy: agent target pane w5:p1 is not an available shell` �
 - **予測できない**: シェルがプロンプトへ達するまでの時間は運用者の rc ファイル次第で、
   バージョンマネージャや補完の読み込みが入れば延びる。`timeout_ms` を伸ばしても解決しない
   （`agent_pane_busy` は待たずに即時返るため）
-- **ポーリングする先が無い**: `pane.process_info` は `shell_pid` を返しうる形をしているが、
-  実測では 10 秒間ずっと `null` のままだった。`foreground_processes` も空で、
-  「プロンプトに達したか」を読み取れる場所が無い
+- **ポーリングする先が無い**: `pane.process_info` は「シェルが起動したか」しか答えない。
+  実測（2026-08-05, #387）では `workspace.create` の **+0.01 秒**から
+  `foreground_processes: [{argv0: "zsh", …}]` が埋まっている。知りたいのは
+  「**入力を受け付けられるか**」で、その 2 つの間の隙間こそがこのレースなので使えない
+  （初版はここを「`shell_pid` が 10 秒間 `null`」と書いていたが、そのフィールドは
+  protocol 17 に無い。結論は変わらないが根拠が誤っていた）
 - **`pane.wait_for_output` は使えない**: 待つべき文字列はプロンプトのカスタマイズ次第で
   何にでもなる（`❯` を決め打ちすると別のプロンプトで必ず外れる）
 
 `agent.start` **そのものが herdr の readiness 検査**なので、その判断を再実装せず
-同じ問いを繰り返す。予算 60 秒・間隔 500ms。
+同じ問いを繰り返す。予算 180 秒・間隔 500ms、1 回あたりの `timeout_ms` は 15 秒
+（#387 で改訂。改訂前は予算 60 秒・`timeout_ms` 120 秒だった）。
+
+**1 回を長く待つのではなく、短い試行を重ねる。** #387 の実測で、初版の「`timeout_ms` を
+伸ばせばよい」という想定が二重に誤りだと分かったため:
+
+- **待っても回復しない。** `workspace.create` 直後に `timeout_ms: 120000` で `agent.start`
+  すると、**120 秒フル待った末に失敗し、その間 pane はずっと空**だった。打ち込まれた起動
+  コマンドは、入力を読んでいないシェルへ送られて**キューされず消えている**。同じ pane に
+  `agent.start` を再送すると 3 秒で成功する
+- **120 秒はそもそも到達不能だった。** トランスポートが `request_timeout_secs`（既定 30 秒）
+  で先に諦めるので、残りの 90 秒は紙の上にしか存在しなかった
 
 ### 過渡状態は 2 段ある
 
@@ -233,8 +247,28 @@ pane 待ちを終えた `agent.start` が t=1.0s で成功し、`agent.prompt` �
 **`agent.start` の `agent_pane_busy` と `agent.prompt` の `agent_not_ready` の両方**を
 同じ予算で待つ。
 
-**リトライするのはこの 2 コードだけ。** 未知の `kind`・`agent_name_taken`・
-CLI が現れない `timeout` は、いずれも放っておいても直らない。リトライは報告を遅らせるだけになる。
+### 同じレースは 3 つの姿を取る（#387 で改訂）
+
+実機 E2E（2026-08-05）で **15 回の dispatch 中 6 回（40%）が失敗**し、非決定性が上の 2 つでは
+足りないことが分かった。1 つの原因が herdr の応答としては 3 通りに化ける:
+
+| 姿 | herdr の応答 | 対処 |
+|---|---|---|
+| A | `agent.start` → `agent_pane_busy` | `agent.start` を再送 |
+| B | `agent.start` → `timeout` | **`agent.start` を再送**（初版は「直らない」として即失敗させていた） |
+| C | `agent.start` は成功を返すが、エージェントが検出されず `agent.prompt` が `agent_not_ready` を返し続ける | **`agent.prompt` を撃ち続けず `agent.start` を再送する** |
+
+実機で支配的だったのは **C** で、初版の実装は予算の 60 秒を丸ごと `agent.prompt` に費やして
+から dispatch を失敗させていた。C を「起動が遅いだけ」と読むのは誤りで、**CLI はそもそも
+起動していない**（打鍵が消えている）。したがって `agent.prompt` の `agent_not_ready` に
+付き合う窓は短く（15 秒）取り、それを超えたら `agent.start` の再送に戻る。
+
+**同名での再送は安全**である。`agent.start` が検出に失敗した場合 herdr はエージェントを
+登録しない（保留中は `agent list` に現れない）ので、タスクの agent name は空いたままになる。
+実測でも同名の再送が成功している。
+
+**リトライするのはこの 3 つだけ。** 未知の `kind`・`agent_name_taken` は放っておいても直らず、
+リトライは報告を遅らせるだけになる。
 **`agent_not_found` も含めない** — これは pane が死んだ形で、resume 付き dispatch では
 `SESSION_UNRESUMABLE` として上げる必要がある（#261）。リトライすると、その報告を
 タイムアウトまで遅らせたうえで別のエラーに化けさせてしまう。
