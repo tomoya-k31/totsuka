@@ -4,7 +4,7 @@
 
 * **Update**: [ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7 を実機実測（#387）に合わせて改訂。シェル未準備の pane への `agent.start` が同じ 1 つのレースを 3 通りの応答（`agent_pane_busy` / `timeout` / 成功したのに `agent.prompt` が `agent_not_ready`）に化けさせることを追記し、`timeout` を「直らない」から「リトライする」へ変更。打鍵は消えるので待っても回復しない（120 秒待っても pane は空）ことと、`pane.process_info` を readiness シグナルに使えない理由が初版の記述（`shell_pid` が `null`）と違うことを訂正。
 * **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) をリトライ方針の変更に追随（予算 60→180 秒、`agent.start` の `timeout_ms` 120→15 秒、`agent_not_ready` は 15 秒で打ち切って `agent.start` を再送）。
-* **Update**: [orchestrator-core](/components/orchestrator-core.md) と [設定リファレンス](/development/config-reference.md) に プロンプトキー `verification_nonclaim_exemption` を追加（#389）。最終メッセージが `NEEDS_INPUT` / `FAILED` を報告している停止は完了申告ではないと llm 検収ジャッジに伝える節。これが無いとジャッジは検証の前提が満たせないままブロックし続け、`prompt` 型フックは `stop_hook_active` を参照できないため再入を知る術も無い（実機で 9 連続ブロック → Claude Code 側の上限で強制解除。その間 Orchestrator は最初の報告で既に `waiting_input` を記録済みだった）。
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) と [設定リファレンス](/development/config-reference.md) の `verification_*` プロンプト群を、**命令の羅列から 1 つの条件文へ組み替えた**（#389）。Claude Code は `prompt` 型フックの本文を「ユーザ提供の条件が満たされているか」としてモデルに判定させ `{ok, reason}` を返させる（本体 2.1.224 で確認）。`ok: false` がブロックで `reason` がエージェントへ差し戻る。**モデルはブロックを制御していないので「許可してください」と書いても効かない** — 最初その形で実装したところ、実機でジャッジが当該文言を逐語引用しながら 8 回連続 `ok: false` を返し、運用者が ESC で止めるまでループした。許可してよい全ケース（`NEEDS_INPUT`/`FAILED` の申告・バックグラウンド中間停止・検証を通った完了申告）で真になる条件へ組み替え、`verification_nonclaim_exemption` を新設。実機で `NEEDS_INPUT` 停止のブロックが 8 回→0 回になることを確認した。
 
 ## 2026-08-04
 

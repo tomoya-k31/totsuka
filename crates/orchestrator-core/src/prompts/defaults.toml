@@ -105,72 +105,92 @@ self-contained answer; never refer to a previous message (no "as stated \
 above" / "already answered earlier").\
 """
 
-# The judging criteria of the `prompt`-type Stop hook, rendered into
-# `orchestrator-<workflow>.json` for `verification = "llm"` workflows only
-# (D-01). Claude is the only tool with `prompt_verification`; elsewhere the
-# workflow degrades to `human` and none of the `verification_*` keys are used.
+# The `prompt`-type Stop hook body for `verification = "llm"` workflows (D-01).
+# Claude is the only tool with `prompt_verification`; elsewhere the workflow
+# degrades to `human` and none of the `verification_*` keys are used.
+#
+# # This is a CONDITION, not an instruction — read this before rewording
+#
+# Claude Code hands a `prompt` hook to a judging model under its own fixed
+# system prompt, verified against the shipped binary (2.1.224):
+#
+#     You are evaluating a hook condition in Claude Code. Judge whether the
+#     user-provided condition is met.
+#     Your response must be a JSON object with one of these shapes:
+#     - {"ok": true, "reason": "<reason the condition is met>"}
+#     - {"ok": false, "reason": "<reason the condition is not met>"}
+#
+# `ok: true` lets the turn end. `ok: false` BLOCKS it and shows `reason` to the
+# agent (`Prompt hook condition was not met:` is the blocking branch).
+#
+# **The judge cannot be told to allow or block.** It only answers whether a
+# condition holds. #389 shipped an "その場合は…停止を許可してください" clause and
+# it did nothing: measured live, the judge applied that clause correctly and
+# quoted it verbatim in all 8 rounds — then still answered `ok: false`, because
+# "verification does not apply here" is not "the condition is met". Every round
+# blocked, until the operator hit ESC.
+#
+# So everything below has to read as one condition that is TRUE in every case a
+# stop should be allowed. Reword the branches freely; do not turn them back into
+# imperatives.
 #
 # Placeholders: none.
 verification_rubric = """
-作業が指示された要件を実際に満たしているかを、対象リポジトリの現在のコードと状態に基づいて検証してください。表面的な自己申告ではなく、変更が意図どおり機能し破綻や取りこぼしがないことを確認してください。\
+- 完了を申告しており、かつ作業が指示された要件を実際に満たしている。対象リポジトリの現在のコードと状態に基づいて確かめること。表面的な自己申告では足りず、変更が意図どおり機能し破綻や取りこぼしが無いこと\
 """
 
-# Intermediate-Stop exemption, mirroring `on-stop.sh`'s R-02/D-12 rule: a Stop
-# with background tasks still running is a heartbeat, not a completion claim.
+# Intermediate-Stop branch, mirroring `on-stop.sh`'s R-02/D-12 rule: a Stop with
+# background tasks still running is a heartbeat, not a completion claim.
 #
-# Without this the judge blocks every such Stop — the pane shows a spurious
-# "Stop hook error" and the session is forced to busy-wait in-turn instead of
+# Without it the judge answers `ok: false` on every such Stop — a spurious
+# "Stop hook error" in the pane, and the session busy-waits in-turn instead of
 # yielding to the task-notification re-invoke (real-machine finding on the
 # `slack-reply` workflow).
 #
 # Placeholders: none.
 verification_background_exemption = """
-ただし、バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止は完了申告ではありません。その場合は検証もブロックも行わず停止を許可してください。完了判定はバックグラウンドタスクが残っていない停止に対してのみ行います。\
+- バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止である。これはハートビートであって完了申告ではない\
 """
 
-# Non-claim exemption: a Stop whose final message already reports NEEDS_INPUT or
-# FAILED is not claiming completion, so there is nothing for the judge to verify.
-#
-# Without this the judge blocks such a Stop, and keeps blocking: a `prompt`-type
-# hook cannot see `stop_hook_active` (it receives prose, not the Stop stdin), so
-# nothing tells it the turn is a re-entry. Measured live (#389): a `slack-reply`
-# task that legitimately answered NEEDS_INPUT was blocked **9 consecutive times**
-# until Claude Code's own cap force-ended the turn — while the judge's own
-# reasoning said "there are no changes in the repository to verify". The
-# orchestrator had already recorded `waiting_input` from the FIRST report, so
-# every one of those blocks was pure waste.
+# Non-claim branch: a Stop whose final message already reports NEEDS_INPUT or
+# FAILED is not claiming completion, so there is nothing to verify (#389).
 #
 # This mirrors `on-stop.sh`, which accepts any present marker and only ever
-# blocks on a MISSING one. Leaving it out puts the two hooks in direct
-# contradiction on the same Stop.
+# blocks on a MISSING one. Without this branch the two hooks contradict each
+# other on the same Stop: the command hook records `waiting_input` and exits 0
+# while the judge keeps the turn alive.
 #
 # Placeholders: {marker_needs_input} {marker_failed}
 verification_nonclaim_exemption = """
-また、最終メッセージが {marker_needs_input} または {marker_failed} を報告している停止も完了申告ではありません。作業が終わっていないことをエージェント自身が申告しているので、その場合も検証もブロックも行わず停止を許可してください。ブロックしてよいのは完了を申告している停止だけです。\
+- 最終メッセージが {marker_needs_input} または {marker_failed} を報告している。エージェント自身が未完了を申告しているので、完了検証の対象ではない\
 """
 
-# Appended to the rubric so the verifying model re-emits the status marker that
-# the `on-stop.sh` command hook parses (D-12). Drop the markers from here and
-# every Stop parses as UNKNOWN.
+# What the judge should put in `reason` when it answers `ok: false`. That text
+# is fed back to the agent as the block reason, and the agent's next turn has to
+# carry a marker for `on-stop.sh` to parse (D-12) — so the convention is taught
+# here, where the agent will actually read it. Drop the markers and every
+# re-asked Stop parses as UNKNOWN.
 #
 # Placeholders: {marker_completed} {marker_needs_input} {marker_failed}
 verification_marker_convention = """
-検証結果を踏まえ、応答の最終行に必ず次のいずれかのマーカーを付けてください: {marker_completed} / {marker_needs_input} / {marker_failed}\
+条件が満たされていない場合は、何が不足しているかに加えて「応答の最終行に {marker_completed} / {marker_needs_input} / {marker_failed} のいずれかを付けること」を reason に含めること。\
 """
 
-# How the four keys above are assembled into the hook's `prompt` field.
+# How the branches above are assembled into the hook's `prompt` field.
 #
-# The assembly is itself a template so the sections can be reordered or dropped
-# without losing the pieces. Rendering is two staged single passes — the leaves
-# first (markers substituted), then this over the results — so a literal
-# `{marker_convention}` written inside the rubric is inserted, not expanded.
+# The leading sentence is what makes the whole thing a condition rather than a
+# list of orders — see the block comment on `verification_rubric`. The branches
+# are OR-ed, so the order among them does not change the verdict; the completion
+# branch is last because it is the only one that needs investigation, and the
+# two cheap structural checks should settle the common cases first.
 #
-# Both exemptions sit before the marker convention on purpose: they narrow what
-# counts as a completion claim, and the convention then says how to report it.
+# Rendering is two staged single passes — the leaves first (markers
+# substituted), then this over the results — so a literal `{marker_convention}`
+# written inside a branch is inserted, not expanded.
 #
 # Placeholders: {rubric} {background_exemption} {nonclaim_exemption}
 #               {marker_convention}
-verification_prompt = "{rubric}\n\n{background_exemption}\n\n{nonclaim_exemption}\n\n{marker_convention}"
+verification_prompt = "この停止を許可してよい。すなわち次のいずれかが成り立つ:\n\n{nonclaim_exemption}\n{background_exemption}\n{rubric}\n\n{marker_convention}"
 
 # The prose body of the opencode plan-mode agent (`agents/totsuka-plan.md`),
 # selected at launch with `--agent totsuka-plan`.
