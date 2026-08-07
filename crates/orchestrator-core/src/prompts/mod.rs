@@ -71,9 +71,12 @@ pub struct Prompts {
     verification_rubric: String,
     /// Intermediate-Stop exemption appended to the rubric.
     verification_background_exemption: String,
+    /// Non-claim exemption: a Stop already reporting NEEDS_INPUT/FAILED is not
+    /// claiming completion, so the judge must let it through (#389).
+    verification_nonclaim_exemption: String,
     /// Marker convention appended to the rubric.
     verification_marker_convention: String,
-    /// How the three keys above are assembled.
+    /// How the four keys above are assembled.
     verification_prompt: String,
     /// Prose body of the opencode plan-mode agent file. Global-only: one file
     /// on disk backs every session.
@@ -106,10 +109,19 @@ pub const ALLOWED_PLACEHOLDERS: &[(&str, &[&str])] = &[
     ("branch_convention", &[]),
     ("verification_rubric", &[]),
     ("verification_background_exemption", &[]),
+    (
+        "verification_nonclaim_exemption",
+        &["marker_needs_input", "marker_failed"],
+    ),
     ("verification_marker_convention", MARKER_PLACEHOLDERS),
     (
         "verification_prompt",
-        &["rubric", "background_exemption", "marker_convention"],
+        &[
+            "rubric",
+            "background_exemption",
+            "nonclaim_exemption",
+            "marker_convention",
+        ],
     ),
     ("opencode_plan_agent", &[]),
 ];
@@ -192,6 +204,8 @@ impl Prompts {
     pub fn verification_prompt(&self) -> String {
         let convention =
             template::render(&self.verification_marker_convention, &Self::marker_vars());
+        let nonclaim =
+            template::render(&self.verification_nonclaim_exemption, &Self::marker_vars());
         template::render(
             &self.verification_prompt,
             &[
@@ -200,6 +214,7 @@ impl Prompts {
                     "background_exemption",
                     self.verification_background_exemption.as_str(),
                 ),
+                ("nonclaim_exemption", nonclaim.as_str()),
                 ("marker_convention", convention.as_str()),
             ],
         )
@@ -258,6 +273,10 @@ impl Prompts {
             &o.verification_background_exemption,
         );
         set(
+            &mut self.verification_nonclaim_exemption,
+            &o.verification_nonclaim_exemption,
+        );
+        set(
             &mut self.verification_marker_convention,
             &o.verification_marker_convention,
         );
@@ -277,6 +296,10 @@ impl Prompts {
         set(
             &mut self.verification_background_exemption,
             &o.verification_background_exemption,
+        );
+        set(
+            &mut self.verification_nonclaim_exemption,
+            &o.verification_nonclaim_exemption,
         );
         set(
             &mut self.verification_marker_convention,
@@ -484,27 +507,148 @@ prompts = { branch_convention = "workflow text" }
             expected_self_report
         );
 
-        // Was `hooks::DEFAULT_RUBRIC`.
-        let expected_rubric = "作業が指示された要件を実際に満たしているかを、対象リポジトリの現在のコードと状態に基づいて検証してください。表面的な自己申告ではなく、変更が意図どおり機能し破綻や取りこぼしがないことを確認してください。";
-        // Was `hooks::BACKGROUND_EXEMPTION`.
-        let expected_exemption = "ただし、バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止は完了申告ではありません。その場合は検証もブロックも行わず停止を許可してください。完了判定はバックグラウンドタスクが残っていない停止に対してのみ行います。";
-        // Was `hooks::marker_convention()`.
-        let expected_convention = format!(
-            "検証結果を踏まえ、応答の最終行に必ず次のいずれかのマーカーを付けてください: {MARKER_COMPLETED} / {MARKER_NEEDS_INPUT} / {MARKER_FAILED}"
+        // The verification prompt is deliberately NOT part of this proof any
+        // more. #389 rewrote it from a list of imperatives into a single
+        // condition, because Claude Code judges a `prompt` hook by asking
+        // "is the user-provided condition met?" and blocks on `ok: false` —
+        // an instruction to allow is not something it can act on. Its shape is
+        // pinned by the tests below, which assert the contract rather than the
+        // pre-#313 bytes.
+    }
+
+    /// The composed condition, byte-exact.
+    ///
+    /// Pinned in full rather than by `contains` because every part of it is
+    /// load-bearing: the leading sentence is what makes the text a condition,
+    /// the branches are what make an exempt stop answer `ok: true`, and the
+    /// trailing clause is what keeps the status marker in the block reason.
+    #[test]
+    fn the_verification_prompt_is_one_condition_with_three_branches() {
+        let nonclaim = format!(
+            "- 最終メッセージが {MARKER_NEEDS_INPUT} または {MARKER_FAILED} を報告している。エージェント自身が未完了を申告しているので、完了検証の対象ではない"
         );
-        // Was the `format!` at `hooks::render_settings`.
+        let background = "- バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止である。これはハートビートであって完了申告ではない";
+        let completion = "- 完了を申告しており、かつ作業が指示された要件を実際に満たしている。対象リポジトリの現在のコードと状態に基づいて確かめること。表面的な自己申告では足りず、変更が意図どおり機能し破綻や取りこぼしが無いこと";
+        let convention = format!(
+            "条件が満たされていない場合は、何が不足しているかに加えて「応答の最終行に {MARKER_COMPLETED} / {MARKER_NEEDS_INPUT} / {MARKER_FAILED} のいずれかを付けること」を reason に含めること。"
+        );
         assert_eq!(
             Prompts::builtin().verification_prompt(),
-            format!("{expected_rubric}\n\n{expected_exemption}\n\n{expected_convention}")
+            format!(
+                "この停止を許可してよい。すなわち次のいずれかが成り立つ:\n\n{nonclaim}\n{background}\n{completion}\n\n{convention}"
+            )
         );
-        assert_eq!(Prompts::builtin().verification_rubric(), expected_rubric);
+        assert_eq!(Prompts::builtin().verification_rubric(), completion);
+    }
+
+    /// #389: a Stop already reporting NEEDS_INPUT/FAILED must make the
+    /// condition TRUE, so the judge answers `ok: true` and the turn ends.
+    ///
+    /// **The wording has to stay declarative.** Claude Code's judge is asked
+    /// "is the user-provided condition met?" and blocks on `ok: false`; it has
+    /// no way to act on an instruction. #389 first shipped an imperative
+    /// ("その場合は…停止を許可してください") and measured it live: the judge
+    /// applied the clause correctly and quoted it verbatim in all 8 rounds,
+    /// then answered `ok: false` every time, because "verification does not
+    /// apply" is not "the condition is met".
+    ///
+    /// Asserted on the **composed** output: an assembly that dropped
+    /// `{nonclaim_exemption}` would leave the leaf intact and still ship the
+    /// bug.
+    #[test]
+    fn a_stop_that_claims_no_completion_satisfies_the_condition() {
+        let rendered = Prompts::builtin().verification_prompt();
+        assert!(
+            rendered.starts_with("この停止を許可してよい。すなわち次のいずれかが成り立つ:"),
+            "the prompt has to read as a condition, not as orders: {rendered}"
+        );
+        assert!(
+            rendered.contains(&format!(
+                "- 最終メッセージが {MARKER_NEEDS_INPUT} または {MARKER_FAILED} を報告している"
+            )),
+            "the non-claim branch is missing from the composed condition: {rendered}"
+        );
+        // The imperative that did not work must not creep back in.
+        assert!(
+            !rendered.contains("停止を許可してください"),
+            "an instruction to allow is not something the judge can act on: {rendered}"
+        );
+    }
+
+    /// The branches must not swallow the thing they sit next to: a Stop that
+    /// *does* claim completion is only allowed when the work holds up. A
+    /// condition that were true unconditionally would pass the test above while
+    /// disabling verification entirely (D-01).
+    #[test]
+    fn a_completion_claim_still_has_to_earn_the_condition() {
+        let rendered = Prompts::builtin().verification_prompt();
+        assert!(
+            rendered.contains("完了を申告しており、かつ作業が指示された要件を実際に満たしている"),
+            "the completion branch is conjunctive — claiming is not enough: {rendered}"
+        );
+        assert!(
+            rendered.contains("表面的な自己申告では足りず"),
+            "the self-report escape hatch must stay closed: {rendered}"
+        );
+        // `ok: false` carries `reason` back to the agent, and its next turn has
+        // to be parseable by `on-stop.sh`.
+        assert!(
+            Prompts::missing_markers(&rendered).is_empty(),
+            "the block reason must still teach every marker: {rendered}"
+        );
+    }
+
+    /// Both exemptions are independently overridable, from either layer.
+    /// Sharing one key would make an operator who reworded the background rule
+    /// silently lose the non-claim rule.
+    #[test]
+    fn the_two_exemptions_are_separate_override_keys() {
+        let cfg: RootConfig = toml::from_str(
+            r#"
+[prompts]
+verification_nonclaim_exemption = "全体の差し替え"
+
+[[workflows]]
+name = "wf"
+source = "s"
+agent = "a"
+mode = "implement"
+output = "none"
+trigger = {}
+prompts = { verification_background_exemption = "ワークフローの差し替え" }
+"#,
+        )
+        .unwrap();
+        let global = Prompts::resolve(&cfg).verification_prompt();
+        assert!(global.contains("全体の差し替え"));
+        assert!(
+            global.contains("バックグラウンドタスク"),
+            "overriding one exemption must leave the other at its default: {global}"
+        );
+
+        let wf = Prompts::resolve_for(&cfg, &cfg.workflows[0]).verification_prompt();
+        assert!(wf.contains("ワークフローの差し替え"));
+        assert!(
+            wf.contains("全体の差し替え"),
+            "the workflow layer must not drop the global override of the other key: {wf}"
+        );
     }
 
     #[test]
     fn with_rubric_replaces_only_the_rubric() {
         let custom = Prompts::builtin().with_rubric("独自の観点");
         let rendered = custom.verification_prompt();
-        assert!(rendered.starts_with("独自の観点"));
+        assert!(
+            rendered.contains("独自の観点"),
+            "the custom rubric reaches the composed condition: {rendered}"
+        );
+        // No longer `starts_with`: since #389 the prompt opens with the fixed
+        // sentence that makes it a condition, and the rubric is one branch
+        // underneath it rather than the whole text.
+        assert!(
+            rendered.starts_with("この停止を許可してよい。"),
+            "a custom rubric must not cost the condition framing: {rendered}"
+        );
         assert!(
             !rendered.contains(Prompts::builtin().verification_rubric()),
             "the default rubric is replaced, not appended"
@@ -512,6 +656,12 @@ prompts = { branch_convention = "workflow text" }
         assert!(
             rendered.contains(MARKER_COMPLETED),
             "the marker convention survives a custom rubric"
+        );
+        // The exempting branches are not the rubric's to take with it — an
+        // operator narrowing the completion criteria must not re-break #389.
+        assert!(
+            rendered.contains(MARKER_NEEDS_INPUT),
+            "the non-claim branch survives a custom rubric: {rendered}"
         );
     }
 

@@ -120,12 +120,17 @@ pub struct PromptsConfig {
     /// Intermediate-Stop exemption appended to the rubric.
     #[serde(default)]
     pub verification_background_exemption: Option<String>,
+    /// Non-claim exemption appended to the rubric: a Stop already reporting
+    /// NEEDS_INPUT/FAILED is not a completion claim, so the judge must not
+    /// block it (#389). Placeholders: `{marker_needs_input}` `{marker_failed}`.
+    #[serde(default)]
+    pub verification_nonclaim_exemption: Option<String>,
     /// Marker convention appended to the rubric. Placeholders:
     /// `{marker_completed}` `{marker_needs_input}` `{marker_failed}`.
     #[serde(default)]
     pub verification_marker_convention: Option<String>,
-    /// How the three keys above are assembled. Placeholders: `{rubric}`
-    /// `{background_exemption}` `{marker_convention}`.
+    /// How the four keys above are assembled. Placeholders: `{rubric}`
+    /// `{background_exemption}` `{nonclaim_exemption}` `{marker_convention}`.
     #[serde(default)]
     pub verification_prompt: Option<String>,
     /// Prose body of the opencode plan-mode agent file (#316). No
@@ -153,6 +158,10 @@ impl PromptsConfig {
             (
                 "verification_background_exemption",
                 &self.verification_background_exemption,
+            ),
+            (
+                "verification_nonclaim_exemption",
+                &self.verification_nonclaim_exemption,
             ),
             (
                 "verification_marker_convention",
@@ -192,6 +201,9 @@ pub struct WorkflowPromptsConfig {
     /// See [`PromptsConfig::verification_background_exemption`].
     #[serde(default)]
     pub verification_background_exemption: Option<String>,
+    /// See [`PromptsConfig::verification_nonclaim_exemption`].
+    #[serde(default)]
+    pub verification_nonclaim_exemption: Option<String>,
     /// See [`PromptsConfig::verification_marker_convention`].
     #[serde(default)]
     pub verification_marker_convention: Option<String>,
@@ -210,6 +222,10 @@ impl WorkflowPromptsConfig {
             (
                 "verification_background_exemption",
                 &self.verification_background_exemption,
+            ),
+            (
+                "verification_nonclaim_exemption",
+                &self.verification_nonclaim_exemption,
             ),
             (
                 "verification_marker_convention",
