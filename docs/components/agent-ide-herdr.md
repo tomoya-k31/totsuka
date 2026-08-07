@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-06T02:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-07T23:30:00+09:00 }
 status: stable
 verified: [{ by: human:tomoya-k31, at: 2026-08-06T03:15:00+09:00 }]
 owner: tomoya-k31
@@ -69,22 +69,36 @@ readiness シグナルも無い（`pane.process_info` は「シェルが起動�
 pane はずっと空だった。**同じ pane への `agent.start` 再送は 3 秒で成功する**ので、長く待つのでは
 なく短い試行を重ねる。
 
-**同じレースが 3 つの姿を取る**（実機 E2E で 15 回中 6 回＝40% が失敗、#387）:
+**同じレースが 4 つの姿を取る**（実機 E2E で 15 回中 6 回＝40% が失敗、#387）:
 `agent.start` の `agent_pane_busy` と `timeout`、そして **`agent.start` が成功を返しつつ
-エージェントが検出されず `agent.prompt` が `agent_not_ready` を返し続ける**形。3 つ目が実機で
-支配的で、これは「起動が遅い」のではなく **CLI がそもそも起動していない**。したがって
-`agent_not_ready` に付き合う窓は 15 秒に区切り、超えたら `agent.prompt` を撃ち続けず
-**`agent.start` の再送に戻る**。検出に失敗した start は herdr にエージェントを登録しないので、
-**同名での再送は安全**である。
+エージェントが検出されず `agent.prompt` が拒否する**形が 2 つ（`agent_not_ready` と
+`agent_not_found`）。3 つ目が実機で支配的で、これは「起動が遅い」のではなく
+**CLI がそもそも起動していない**。したがって `agent_not_ready` に付き合う窓は 15 秒に区切り、
+超えたら `agent.prompt` を撃ち続けず **`agent.start` の再送に戻る**。検出に失敗した start は
+herdr にエージェントを登録しないので、**同名での再送は安全**である。
 
-**リトライするのはこの 3 つだけ**で、未知の `kind`・`agent_name_taken` は放っておいても直らない
-ため即座に失敗させる。**`agent_not_found` も含めない** — pane が死んだ形であり、
-resume 付き dispatch では `SESSION_UNRESUMABLE` として上げる必要がある（#261）。
+**`agent_not_found` は初回 dispatch のときだけ再送する**（#391）。resume 付き dispatch では
+pane がセッションごと死んだ形なので `SESSION_UNRESUMABLE` として上げねばならない（#261）が、
+**初回 dispatch には死ぬべきセッションが存在しない** — そこで届く `agent_not_found` は
+「`agent.start` が何も登録しなかった」以外に読みようがなく、同じレースである。
+実機 2026-08-07 に連続 2 回踏み、いずれも単純な retry で解消した。
 
-**3 段目の `agent_prompt_stalled` はリトライしない**（#380、[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7）。
+**再送は回数で上限を切る**（`MAX_AGENT_RESTARTS = 3`）。`agent_not_ready` は
+15 秒窓を挟むので時間で頭打ちになるが、`agent_not_found` は即座に返るため、時間だけで
+縛ると 180 秒の予算いっぱい CLI を起動し直し続けてしまう。
+
+**リトライするのはこれらだけ**で、未知の `kind`・`agent_name_taken` は放っておいても直らない
+ため即座に失敗させる。`pane_not_found` も含めない — pane が無ければ起動先が無く、再送しても
+同じ失敗を繰り返したうえで最初の情報量のあるエラーを潰すだけである。
+
+**`agent_prompt_stalled` は本文を再送しない。代わりに Enter を送る**（#380 / #391、[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7）。
 herdr の 5 秒下限（設定不可）に Claude Code が間に合わないと、**成功した投入が失敗として返る**。
-このときプロンプトは既に投入済みなので、再送すると**タスクを二重投入する**。代わりに
-`agent.wait` でこちらの窓を使って確認し、到達すれば成功、しなければ**元の stall を**報告する
+実測（2026-08-08）では、stall したペインはプロンプトを**入力欄に抱えたまま `agent_status: idle`**
+で、25 秒後も idle のままだった — **typed されているが submit されていない**ので `agent.wait` は
+タイムアウトするしかない。同じペインに Enter を送ると約 10 秒で `done` に達した。
+そこで `idle` のときだけ `agent.send_keys {keys: ["enter"]}` で既に入っているものを送信してから
+`agent.wait` で確認する。**本文の再送は禁止**（入力欄の既存文字列に追記されてタスクが壊れる）。
+`working` / `done` / `blocked` のペインには Enter を送らない。到達しなければ**元の stall を**報告する
 （`agent.wait` が `agent_not_found` を返したときだけそちらを通す — `SESSION_UNRESUMABLE` を埋もれさせないため）。
 
 ## `program` → `kind` の写像

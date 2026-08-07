@@ -16,12 +16,13 @@
 //!   starting, and `agent.start` types the launch command into it regardless.
 //!   There is no readiness signal to poll — `pane.process_info` shows the shell
 //!   from the moment it is *spawned*, which is not the moment it starts
-//!   *accepting input* — so the call is retried. The race surfaces in three
-//!   shapes and all three are one bug (#387): `agent_pane_busy` and `timeout`
-//!   on `agent.start`, and a start that is accepted while the agent never
-//!   becomes addressable, which only `agent.prompt` can see
-//!   (`agent_not_ready`). Keystrokes typed into a shell that was not reading
-//!   are **lost, not queued**, so waiting longer never helps; only re-issuing
+//!   *accepting input* — so the call is retried. The race surfaces in four
+//!   shapes and all four are one bug (#387, #391): `agent_pane_busy` and
+//!   `timeout` on `agent.start`, and a start that is accepted while the agent
+//!   never becomes addressable, which only `agent.prompt` can see — as
+//!   `agent_not_ready`, or as `agent_not_found` when herdr registered nothing
+//!   at all. Keystrokes typed into a shell that was not reading are **lost,
+//!   not queued**, so waiting longer never helps; only re-issuing
 //!   `agent.start` does
 //! - the prompt **cannot** ride in `args`: a multi-line prompt passed that way
 //!   is never submitted, and every task body here is multi-line. It goes in
@@ -130,6 +131,19 @@ const PROMPT_READY_WINDOW: Duration = Duration::from_secs(15);
 /// few-second window costs a few probes, long enough not to spin.
 const STARTUP_RETRY_POLL: Duration = Duration::from_millis(500);
 
+/// How many times a dispatch goes back and re-issues `agent.start` because the
+/// prompt found no agent to talk to.
+///
+/// A count, not just [`STARTUP_RETRY_BUDGET`], because the two failures that
+/// send us back there cost very different amounts of time. `agent_not_ready`
+/// is waited out inside [`PROMPT_READY_WINDOW`] first, so a cycle takes
+/// seconds; `agent_not_found` comes back immediately, so a purely time-bounded
+/// loop would re-launch the CLI as fast as herdr could answer for the whole
+/// budget. Three is past the measured need — every live occurrence cleared on
+/// the first re-issue (#387, #391) — while keeping a herdr that answers this
+/// way forever from turning one dispatch into minutes of thrash.
+const MAX_AGENT_RESTARTS: u32 = 3;
+
 /// The herdr agent_ide adapter, generic over its [`HerdrTransport`].
 pub struct HerdrAgent<T> {
     client: T,
@@ -233,6 +247,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // does not exist.
         let prompt = compose_prompt(params);
         let deadline = tokio::time::Instant::now() + STARTUP_RETRY_BUDGET;
+        let mut restarts = 0;
         loop {
             let started = self
                 .start_when_pane_is_ready(&pane_id, start_params.clone(), deadline)
@@ -255,9 +270,14 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 // registers no agent for a start that detected none, so the
                 // task's name is still free (verified live — the same name
                 // succeeded on re-issue).
-                Err(e) if e.is_agent_not_ready() && tokio::time::Instant::now() < deadline => {
+                Err(e)
+                    if restarts < MAX_AGENT_RESTARTS
+                        && tokio::time::Instant::now() < deadline
+                        && prompt_means_the_cli_never_started(params, &e) =>
+                {
+                    restarts += 1;
                     tracing::warn!(
-                        pane_id,
+                        pane_id, error = %e, restarts,
                         "the agent never became addressable; re-issuing agent.start rather \
                          than prompting a CLI that did not start"
                     );
@@ -512,6 +532,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             "agent.prompt saw no state change inside herdr's 5s floor; confirming with \
              agent.wait rather than re-sending the prompt"
         );
+        self.submit_if_left_unsent(pane_id).await;
         match self
             .client
             .call(
@@ -536,6 +557,54 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 tracing::warn!(pane_id, error = %e, "agent.wait could not confirm the prompt either");
                 Err(stall)
             }
+        }
+    }
+
+    /// Press Enter when a stalled prompt is sitting in the agent's input box,
+    /// unsent.
+    ///
+    /// **This is what a stall usually is.** `agent_prompt_stalled` was read as
+    /// "typed and submitted, but the agent was slow to react" (#380), and the
+    /// answer was to confirm with `agent.wait`. Measured live (#391): the text
+    /// is typed, but the **Enter is not always delivered** — the pane shows it
+    /// on the `❯` input line with `agent_status: idle`, and it stays that way
+    /// (still `idle` 25s later, and for as long as it is watched). Nothing is
+    /// coming, so `agent.wait` can only ever time out. Sending Enter to such a
+    /// pane took it to `done` in ~10s.
+    ///
+    /// **Enter, never the text again.** #380's caution holds and is the reason
+    /// this is not a re-send: the prompt IS in the box, so typing it a second
+    /// time appends to it and garbles the task. Submitting what is already
+    /// there delivers it exactly once.
+    ///
+    /// Only when the agent is `idle`. A pane that is `working`/`done`/`blocked`
+    /// did receive its prompt, so there is nothing to submit and a stray Enter
+    /// is noise. Best-effort throughout: this is a rescue attempt on a dispatch
+    /// that is already failing, so every error just leaves `agent.wait` to give
+    /// the verdict.
+    async fn submit_if_left_unsent(&self, pane_id: &str) {
+        match pane_status(&self.client, pane_id).await {
+            Ok(status) if status == "idle" => {}
+            Ok(_) => return,
+            Err(e) => {
+                tracing::warn!(pane_id, error = %e, "could not read the pane before confirming");
+                return;
+            }
+        }
+        tracing::warn!(
+            pane_id,
+            "the prompt is sitting unsent in an idle agent; pressing Enter to submit what is \
+             already there (never re-typing it)"
+        );
+        if let Err(e) = self
+            .client
+            .call(
+                "agent.send_keys",
+                json!({ "target": pane_id, "keys": ["enter"] }),
+            )
+            .await
+        {
+            tracing::warn!(pane_id, error = %e, "could not press Enter on the stalled prompt");
         }
     }
 
@@ -1147,6 +1216,28 @@ fn resolve_launch(
 ///
 /// A false positive still costs only one extra launch, so the narrowness is
 /// about **not** losing context, not about avoiding wasted work.
+/// Whether a failed `agent.prompt` means the CLI never started — so the answer
+/// is to re-issue `agent.start`, not to keep asking.
+///
+/// Two herdr codes carry that meaning, and one of them only conditionally:
+///
+/// - `agent_not_ready`: the start was accepted but the agent never became
+///   addressable (#387). Always this.
+/// - `agent_not_found`: no such agent. On a **resumed** dispatch that is a pane
+///   that died with its session and has to surface as `SESSION_UNRESUMABLE`
+///   (#261) — see [`resume_failure`]. On a **fresh** dispatch there is no
+///   session that could have died: the only way to reach it is `agent.start`
+///   having registered nothing, which is the same shell-readiness race (#391).
+///   Measured live on 2026-08-07: two consecutive fresh dispatches failed this
+///   way and a plain `tt task retry` cleared both.
+///
+/// Deliberately not `is_missing()`, which also covers `pane_not_found`. A pane
+/// that is gone cannot be started into, so re-issuing would only fail again —
+/// slower, and with the second error replacing the informative first one.
+fn prompt_means_the_cli_never_started(params: &TaskDispatchParams, error: &HerdrError) -> bool {
+    error.is_agent_not_ready() || (error.is_agent_missing() && params.resume_session_id.is_none())
+}
+
 fn resume_failure(params: &TaskDispatchParams, error: HerdrError) -> HerdrError {
     if params.resume_session_id.is_some() && error.is_missing() {
         return HerdrError::SessionUnresumable(error.to_string());
