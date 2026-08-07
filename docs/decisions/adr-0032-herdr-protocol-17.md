@@ -4,7 +4,7 @@ title: ADR-0032 herdr protocol 17 への追随（agent.start の manifest 駆動
 description: herdr 0.7.5 (protocol 17) で agent.start が manifest 駆動（kind + 呼び出し側が用意した既存 pane）へ、プロンプト投入が agent.prompt へ破壊的に変わったことへの追随方針。program→kind 写像、agent name の生成規則と agent_name_taken の扱い、pane 確保順序の反転、submit_prompt と RetryPolicy の廃止、protocol 16 以下を切る判断を定める。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [adr, herdr, agent-ide, protocol, breaking-change]
-generated: { by: claude-code/opus-5, at: 2026-08-06T02:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-07T23:30:00+09:00 }
 status: stable
 verified: [{ by: human:tomoya-k31, at: 2026-08-06T03:15:00+09:00 }]
 owner: tomoya-k31
@@ -251,13 +251,14 @@ pane 待ちを終えた `agent.start` が t=1.0s で成功し、`agent.prompt` �
 ### 同じレースは 3 つの姿を取る（#387 で改訂）
 
 実機 E2E（2026-08-05）で **15 回の dispatch 中 6 回（40%）が失敗**し、非決定性が上の 2 つでは
-足りないことが分かった。1 つの原因が herdr の応答としては 3 通りに化ける:
+足りないことが分かった。1 つの原因が herdr の応答としては 4 通りに化ける:
 
 | 姿 | herdr の応答 | 対処 |
 |---|---|---|
 | A | `agent.start` → `agent_pane_busy` | `agent.start` を再送 |
 | B | `agent.start` → `timeout` | **`agent.start` を再送**（初版は「直らない」として即失敗させていた） |
 | C | `agent.start` は成功を返すが、エージェントが検出されず `agent.prompt` が `agent_not_ready` を返し続ける | **`agent.prompt` を撃ち続けず `agent.start` を再送する** |
+| D | 同上だが `agent.prompt` が `agent_not_found` を返す（#391） | **初回 dispatch のときだけ** `agent.start` を再送する。resume 付きは `SESSION_UNRESUMABLE` のまま |
 
 実機で支配的だったのは **C** で、初版の実装は予算の 60 秒を丸ごと `agent.prompt` に費やして
 から dispatch を失敗させていた。C を「起動が遅いだけ」と読むのは誤りで、**CLI はそもそも
@@ -268,8 +269,18 @@ pane 待ちを終えた `agent.start` が t=1.0s で成功し、`agent.prompt` �
 登録しない（保留中は `agent list` に現れない）ので、タスクの agent name は空いたままになる。
 実測でも同名の再送が成功している。
 
-**リトライするのはこの 3 つだけ。** 未知の `kind`・`agent_name_taken` は放っておいても直らず、
-リトライは報告を遅らせるだけになる。
+**姿 D の扱いは dispatch の種類で割れる**（#391）。resume 付き dispatch では pane が
+セッションごと死んだ形なので `SESSION_UNRESUMABLE` として上げねばならない（#261）。一方
+**初回 dispatch には死ぬべきセッションが存在しない** — そこで届く `agent_not_found` は
+「`agent.start` が何も登録しなかった」以外に読みようがなく、A〜C と同じレースである。
+実機 2026-08-07 に連続 2 回踏み、いずれも単純な retry で解消した。
+
+**再送は回数で上限を切る**（`MAX_AGENT_RESTARTS = 3`）。姿 C は 15 秒窓を挟むので時間で
+頭打ちになるが、姿 D は即座に返るため、時間だけで縛ると予算いっぱい CLI を起動し直し続ける。
+
+**リトライするのはこれらだけ。** 未知の `kind`・`agent_name_taken` は放っておいても直らず、
+リトライは報告を遅らせるだけになる。`pane_not_found` も含めない — pane が無ければ起動先が
+無く、再送しても同じ失敗を繰り返したうえで最初の情報量のあるエラーを潰すだけである。
 **`agent_not_found` も含めない** — これは pane が死んだ形で、resume 付き dispatch では
 `SESSION_UNRESUMABLE` として上げる必要がある（#261）。リトライすると、その報告を
 タイムアウトまで遅らせたうえで別のエラーに化けさせてしまう。
@@ -290,6 +301,18 @@ herdr は「非 working 状態からの投入では 5000ms 以内の状態変化
 対処は**確認**である。`agent.wait {until: [working, blocked, done], timeout_ms}` で
 こちらの窓を使ってもう一度 herdr に問う。到達すれば dispatch 成功、到達しなければ
 **元の stall を**報告する（症状として意味があるのはそちらで、確認側のタイムアウトではない）。
+
+**ただし待つ前に Enter を送る（#391 で改訂）。** 「投入済み」という上の読みは半分しか
+正しくなかった。実測（2026-08-08）では、stall したペインは
+`❯ SENTINEL-11 復唱してください` を**入力欄に抱えたまま `agent_status: idle`** で、
+25 秒後も idle のままだった。**typed されてはいるが submit されていない**ので、
+`agent.wait` は原理的にタイムアウトするしかない。同じペインに Enter を送ると
+約 10 秒で `done` に達した。
+
+したがって `agent_status` が `idle` のときだけ `agent.send_keys {keys: ["enter"]}` で
+**既に入っているものを送信**してから待つ。**本文の再送は依然として禁止**で、それは
+#380 の指摘どおり入力欄の既存文字列に追記されてタスクを壊すからである。
+`working` / `done` / `blocked` のペインはプロンプトを受け取っているので Enter は送らない。
 ただし `agent.wait` が `agent_not_found` を返したときだけは**そちらを通す** —
 pane が死んだ形なので、resume 付き dispatch では `SESSION_UNRESUMABLE` に写らねばならない。
 

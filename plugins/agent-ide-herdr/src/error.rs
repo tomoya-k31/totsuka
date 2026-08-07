@@ -121,6 +121,17 @@ impl HerdrError {
         matches!(self, HerdrError::Protocol { code, .. } if code == "agent_not_ready")
     }
 
+    /// Whether this is herdr saying the *named agent* does not exist.
+    ///
+    /// A deliberate narrowing of [`is_missing`](Self::is_missing), which also
+    /// matches the pane-level codes. What to do about the two differs: a pane
+    /// that is gone cannot be started into, so re-issuing `agent.start` would
+    /// only fail again, while an agent that is gone from a pane that is still
+    /// there is the shell-readiness race (#391) and a re-issue clears it.
+    pub fn is_agent_missing(&self) -> bool {
+        matches!(self, HerdrError::Protocol { code, .. } if code == "agent_not_found")
+    }
+
     /// Whether this is `agent.prompt` reporting that it saw no state change
     /// within herdr's own 5s floor.
     ///

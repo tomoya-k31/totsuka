@@ -79,6 +79,10 @@ struct FakeHerdr {
     /// has been called again — a CLI whose launch keystrokes were swallowed, so
     /// the agent is not addressable and never becomes so on its own (#387).
     not_ready_until_restart: bool,
+    /// The same, in the shape where herdr registered no agent at all and
+    /// answers `agent_not_found` instead (#391). Separate from
+    /// [`prompt_error`](Self::prompt_error), which never clears.
+    not_found_until_restart: bool,
     /// How many `agent.start` calls have been *accepted* so far. Drives
     /// [`not_ready_until_restart`](Self::not_ready_until_restart).
     starts_seen: Arc<Mutex<usize>>,
@@ -143,6 +147,7 @@ impl Default for FakeHerdr {
             busy_starts: Arc::default(),
             timeout_starts: Arc::default(),
             not_ready_until_restart: false,
+            not_found_until_restart: false,
             starts_seen: Arc::default(),
             pane_gone: false,
             pane_focus_gone: false,
@@ -329,6 +334,19 @@ impl FakeHerdr {
                 )
                 .await
             }
+            // The same race in the shape where herdr has no record of the agent
+            // at all (#391).
+            "agent.prompt"
+                if self.not_found_until_restart && *self.starts_seen.lock().unwrap() < 2 =>
+            {
+                reply_error(
+                    &mut write_half,
+                    &id,
+                    "agent_not_found",
+                    &format!("agent target {PANE} not found"),
+                )
+                .await
+            }
             "agent.prompt"
                 if {
                     let mut left = self.not_ready_prompts.lock().unwrap();
@@ -445,6 +463,11 @@ impl FakeHerdr {
                 reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
             }
             "pane.focus" => reply(&mut write_half, &id, json!({ "type": "ok" })).await,
+
+            // The Enter that submits a prompt left sitting in the input box
+            // (#391). Recorded like any other call so a test can assert both
+            // that it happened and that it did not.
+            "agent.send_keys" => reply(&mut write_half, &id, json!({ "type": "ok" })).await,
 
             "pane.get" if self.pane_gone => {
                 reply_error(&mut write_half, &id, "pane_not_found", "pane not found").await
@@ -1197,6 +1220,76 @@ async fn a_stalled_prompt_is_confirmed_rather_than_resent() {
     );
 }
 
+/// A stall on an **idle** agent means the text is in the input box but the
+/// Enter never arrived (#391), so the fix is to submit what is already there.
+///
+/// Measured live: the pane showed the prompt on its `❯` line with
+/// `agent_status: idle` and stayed idle indefinitely — `agent.wait` could only
+/// ever time out. Sending Enter took the same pane to `done` in ~10s.
+///
+/// The key is that this presses Enter and does **not** re-send the text:
+/// re-typing appends to what is already in the box and garbles the task (#380).
+#[tokio::test]
+async fn a_stall_on_an_idle_agent_is_submitted_with_enter() {
+    let fake = FakeHerdr::default();
+    *fake.stalled_prompts.lock().unwrap() = 1;
+    let cli = fake.cli.clone();
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(disp["error"].is_null(), "the rescue must hold: {disp}");
+    assert_eq!(
+        cli.lock().unwrap().prompts,
+        1,
+        "Enter submits what is there — the text must not be typed twice"
+    );
+    let log = requests.lock().unwrap();
+    let keys = calls(&log, "agent.send_keys");
+    assert_eq!(keys.len(), 1, "exactly one Enter: {log:?}");
+    assert_eq!(
+        keys[0]["params"]["keys"],
+        json!(["enter"]),
+        "Enter, not the prompt text again: {keys:?}"
+    );
+    let sent_at = log
+        .iter()
+        .position(|r| r["method"] == "agent.send_keys")
+        .unwrap();
+    let waited_at = log
+        .iter()
+        .position(|r| r["method"] == "agent.wait")
+        .unwrap();
+    assert!(
+        sent_at < waited_at,
+        "submit first, then wait — waiting on an unsent prompt only burns the window: {log:?}"
+    );
+}
+
+/// The other half: an agent that is already `working` did get its prompt, so
+/// there is nothing to submit and a stray Enter is noise in a session a human
+/// may be reading.
+#[tokio::test]
+async fn a_stall_on_a_working_agent_gets_no_enter() {
+    let fake = FakeHerdr::default();
+    *fake.stalled_prompts.lock().unwrap() = 1;
+    fake.cli.lock().unwrap().status = "working".to_string();
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(disp["error"].is_null(), "a working agent confirms: {disp}");
+    let log = requests.lock().unwrap();
+    assert!(
+        calls(&log, "agent.send_keys").is_empty(),
+        "no Enter for an agent that is already working: {log:?}"
+    );
+}
+
 /// If the agent never reacts either, the dispatch still fails — and reports the
 /// stall, which is the symptom worth showing, not the confirmation timeout.
 #[tokio::test]
@@ -1250,11 +1343,20 @@ async fn a_pane_that_dies_during_confirmation_stays_unresumable() {
     );
 }
 
-/// `agent_not_found` is **not** waited out. It is a pane that died, and on a
-/// resumed dispatch it has to surface as `SESSION_UNRESUMABLE` (#261) rather
-/// than be retried into a timeout.
+/// An `agent_not_found` that never clears is bounded, not waited out.
+///
+/// This used to assert exactly one prompt, on the reading that
+/// `agent_not_found` always means a pane that died. #391 showed the reading was
+/// too broad: on a **fresh** dispatch there is no session that could have died,
+/// and live runs cleared it by re-issuing `agent.start`. So the fresh case is
+/// now retried — but by a *count*, because unlike `agent_not_ready` this
+/// refusal comes back instantly and a purely time-bounded loop would re-launch
+/// the CLI for the whole 180s budget.
+///
+/// The un-retried case is the resumed one, pinned by
+/// `a_resumed_dispatch_is_never_restarted_on_agent_not_found`.
 #[tokio::test]
-async fn a_vanished_agent_is_not_mistaken_for_one_still_launching() {
+async fn an_agent_not_found_that_never_clears_is_bounded() {
     let (socket, requests) = FakeHerdr {
         prompt_error: Some("agent_not_found"),
         ..FakeHerdr::default()
@@ -1266,11 +1368,25 @@ async fn a_vanished_agent_is_not_mistaken_for_one_still_launching() {
     let disp = d.dispatch("T1", "Draft the reply", "implement").await;
 
     assert!(!disp["error"].is_null(), "must surface: {disp}");
-    let log = requests.lock().unwrap();
-    assert_eq!(
-        calls(&log, "agent.prompt").len(),
-        1,
-        "no retry for a pane that is gone: {log:?}"
+    {
+        // Scoped: `awaits_workspace_close` locks the same mutex, so holding the
+        // guard across that await deadlocks the test.
+        let log = requests.lock().unwrap();
+        // 1 first attempt + MAX_AGENT_RESTARTS re-issues.
+        assert_eq!(
+            calls(&log, "agent.prompt").len(),
+            4,
+            "the re-issues are capped, so a permanent refusal cannot thrash: {log:?}"
+        );
+        assert_eq!(
+            calls(&log, "agent.start").len(),
+            4,
+            "each re-issue is a real start attempt: {log:?}"
+        );
+    }
+    assert!(
+        awaits_workspace_close(&requests).await,
+        "a dispatch that gave up must not leak its workspace"
     );
 }
 
@@ -2282,6 +2398,86 @@ async fn a_resumed_dispatch_whose_pane_vanished_is_session_unresumable() {
     assert!(
         message.contains("agent_not_found"),
         "the herdr error stays in the message for whoever debugs it: {message}"
+    );
+}
+
+/// #391: on a **fresh** dispatch, `agent_not_found` is the shell-readiness race
+/// wearing a fourth mask — `agent.start` registered nothing, so there is no
+/// agent to prompt. Re-issuing the start is what clears it.
+///
+/// Measured live on 2026-08-07: two consecutive fresh dispatches failed this
+/// way and a plain retry cleared both. The reasoning that keeps
+/// `agent_not_found` un-retried belongs to resumed dispatches (#261) — a fresh
+/// one has no session that could have died.
+#[tokio::test]
+async fn a_fresh_dispatch_re_issues_agent_start_when_the_agent_is_not_found() {
+    let fake = FakeHerdr {
+        not_found_until_restart: true,
+        ..FakeHerdr::default()
+    };
+    let cli = fake.cli.clone();
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+
+    assert!(
+        disp["error"].is_null(),
+        "a start that registered nothing must be re-issued, not reported: {disp}"
+    );
+    assert_eq!(
+        cli.lock().unwrap().prompts,
+        1,
+        "the refusals never reached a CLI, so the task lands exactly once"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        2,
+        "the start that registered nothing, then the one that took: {log:?}"
+    );
+    assert!(
+        calls(&log, "workspace.close").is_empty(),
+        "the workspace is reused, not torn down: {log:?}"
+    );
+}
+
+/// The #261 half of the same code path, pinned so #391's retry cannot swallow
+/// it: a **resumed** dispatch answering `agent_not_found` means the pane died
+/// with its session, and the Orchestrator needs `SESSION_UNRESUMABLE` to retry
+/// once *without* the session. Re-issuing `agent.start` here would bury that.
+#[tokio::test]
+async fn a_resumed_dispatch_is_never_restarted_on_agent_not_found() {
+    let fake = FakeHerdr {
+        not_found_until_restart: true,
+        ..FakeHerdr::default()
+    };
+    let (socket, requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .call(
+            "task/dispatch",
+            json!({
+                "task": { "id": "TR", "source": "slack", "title": "Continue the thread" },
+                "worktree_path": "/wt/agent-1",
+                "mode": "implement",
+                "resume_session_id": "claude-sess-abc",
+            }),
+        )
+        .await;
+
+    assert_eq!(
+        disp["error"]["code"], -32006,
+        "a resumed dispatch keeps SESSION_UNRESUMABLE: {disp}"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        1,
+        "no re-issue — the session is what died, and restarting hides it: {log:?}"
     );
 }
 
