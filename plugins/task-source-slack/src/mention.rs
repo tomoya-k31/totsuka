@@ -40,6 +40,12 @@ pub struct Mention {
     /// a mention-derived task must carry no `reaction:` label, or it stops
     /// matching the catch-all workflow that is meant to handle it.
     pub reaction: Option<String>,
+    /// The task-id prefix the matched workflow's profile asks for (#397).
+    ///
+    /// Set from `task_id_prefix` in the trigger the Orchestrator sent. `None`
+    /// keeps the plain conversation id, which is what `answer` — and every
+    /// mention — uses.
+    pub task_id_prefix: Option<String>,
 }
 
 impl Mention {
@@ -52,7 +58,37 @@ impl Mention {
     /// `ts` — its task id is unchanged from before #242, which is why no
     /// existing data had to migrate.
     pub fn task_id(&self) -> String {
+        match &self.task_id_prefix {
+            // A prefixed task is a *sibling* of the conversation, not the
+            // conversation (#397): it keys on the **reacted** message, so
+            // reacting to two different messages in one thread starts two
+            // tasks. Without the prefix these would collide with the thread's
+            // `answer` task on `UNIQUE(source, source_task_id)`.
+            Some(prefix) => format!("{prefix}:{}:{}", self.channel, self.ts),
+            None => self.conversation_id(),
+        }
+    }
+
+    /// The **conversation's** id, prefix or no prefix.
+    ///
+    /// What `task/lookup` must be asked with: a prefixed task's own id is by
+    /// construction new, so looking *that* up always answers "unknown" and the
+    /// repository the answering task already settled would be resolved from
+    /// scratch — an LLM call, or a picker in front of someone who already
+    /// chose (#397).
+    pub fn conversation_id(&self) -> String {
         format!("{}:{}", self.channel, self.reply_ts())
+    }
+
+    /// Whether this message is the thread's root, or stands outside a thread.
+    ///
+    /// Decides how much context a prefixed task gets (#393 D6): reacting to the
+    /// root means "implement what this thread concluded" and takes the whole
+    /// conversation; reacting to one reply means "implement this" and takes
+    /// only that message. A standalone message is its own whole conversation,
+    /// so the two cases collapse and need no separate branch.
+    pub fn is_thread_root(&self) -> bool {
+        self.thread_ts.as_deref().is_none_or(|root| root == self.ts)
     }
 
     /// This one delivery's identity (`{channel}:{ts}`), which the
@@ -163,6 +199,9 @@ impl MentionFilter {
             // a `reaction`-triggered workflow, and a mention belongs to the
             // catch-all.
             reaction: None,
+            // …and the catch-all is `answer`, whose task *is* the conversation
+            // (ADR-0015). A prefix here would open a second task per message.
+            task_id_prefix: None,
         })
     }
 
@@ -189,6 +228,58 @@ impl MentionFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reacted(ts: &str, thread_ts: Option<&str>, prefix: Option<&str>) -> Mention {
+        Mention {
+            channel: "C1".into(),
+            user: "U_OTHER".into(),
+            text: "方針はこれでいこう".into(),
+            ts: ts.into(),
+            thread_ts: thread_ts.map(str::to_string),
+            reaction: Some("hammer".into()),
+            task_id_prefix: prefix.map(str::to_string),
+        }
+    }
+
+    /// A prefixed task keys on the **reacted** message, so two reactions in one
+    /// thread start two tasks (#397).
+    ///
+    /// The unprefixed id is the conversation's, which is why an `answer` task
+    /// and an `impl:` task on the same thread do not collide on
+    /// `UNIQUE(source, source_task_id)` — the collision this prefix exists to
+    /// avoid.
+    #[test]
+    fn a_prefixed_task_keys_on_the_reacted_message_not_the_conversation() {
+        let root = reacted("100.0", Some("100.0"), Some("impl"));
+        assert_eq!(root.task_id(), "impl:C1:100.0");
+        assert_eq!(root.conversation_id(), "C1:100.0");
+
+        // A reply inside the same thread: a different task, same conversation.
+        let reply = reacted("100.5", Some("100.0"), Some("impl"));
+        assert_eq!(reply.task_id(), "impl:C1:100.5");
+        assert_eq!(reply.conversation_id(), "C1:100.0");
+        assert_ne!(root.task_id(), reply.task_id());
+    }
+
+    /// Without a prefix the id is the conversation's, unchanged from before
+    /// #397 — that is what makes a follow-up mention continue one task
+    /// (ADR-0015) rather than open a second.
+    #[test]
+    fn an_unprefixed_task_still_takes_the_conversation_id() {
+        let reply = reacted("100.5", Some("100.0"), None);
+        assert_eq!(reply.task_id(), "C1:100.0");
+        assert_eq!(reply.task_id(), reply.conversation_id());
+    }
+
+    /// Root vs reply decides how much context a prefixed task gets (#393 D6).
+    /// A message outside any thread is its own whole conversation, so the two
+    /// cases collapse and need no separate branch.
+    #[test]
+    fn thread_root_and_standalone_messages_are_both_roots() {
+        assert!(reacted("100.0", Some("100.0"), Some("impl")).is_thread_root());
+        assert!(reacted("100.0", None, Some("impl")).is_thread_root());
+        assert!(!reacted("100.5", Some("100.0"), Some("impl")).is_thread_root());
+    }
     use serde_json::json;
 
     fn filter() -> MentionFilter {

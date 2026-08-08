@@ -527,17 +527,45 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
     // took before this RPC existed. The orchestrator answers from its event
     // loop, which can be busy creating a worktree, so this must never be
     // load-bearing.
+    //
+    // Asked with the **conversation** id, not the task id. For a mention they
+    // are the same string; for a prefixed task (#397) they are not, and asking
+    // with the prefixed one would always answer "new" — the repository the
+    // answering task already settled would be resolved from scratch.
     let answer = orchestrator
         .lookup
-        .lookup(&config.source_name, &enriched.mention.task_id())
+        .lookup(&config.source_name, &enriched.mention.conversation_id())
         .await;
-    if answer.skips_resolution() {
+    let inherited = match &answer {
+        plugin_sdk::Lookup::Known { repo } => repo.as_deref(),
+        _ => None,
+    };
+    if enriched.mention.task_id_prefix.is_some() {
+        // A prefixed task is **new** to the orchestrator even when its
+        // conversation is not, so "skip resolution" does not apply: nothing
+        // downstream will settle a repository for it. Inherit the answering
+        // task's if there is one, else fall through and resolve normally.
+        if let Some(repo) = inherited {
+            tracing::info!(
+                task_id = enriched.mention.task_id(),
+                conversation = enriched.mention.conversation_id(),
+                repo,
+                "inheriting the repository the conversation already settled"
+            );
+            submit(
+                &state,
+                &config,
+                &enriched,
+                Some(repo.to_string()),
+                &orchestrator.submit,
+            )
+            .await;
+            return;
+        }
+    } else if answer.skips_resolution() {
         tracing::info!(
             task_id = enriched.mention.task_id(),
-            repo = tracing::field::debug(match &answer {
-                plugin_sdk::Lookup::Known { repo } => repo.as_deref(),
-                _ => None,
-            }),
+            repo = tracing::field::debug(inherited),
             "a message in a conversation the orchestrator already knows; \
              submitting without resolving a repository"
         );
@@ -931,7 +959,16 @@ fn build_task(
     // (invisible prompt-context injection) while the pane shows only the
     // mention and its thread context.
     let p = &config.prompts;
-    let mut instructions = p.reply_instructions.clone();
+    // A prefixed task is an implement run (#397), whose deliverable is a PR —
+    // the thread gets a report carrying its URL, not a reply draft. The
+    // approval gate is unchanged: the report is still a draft the operator
+    // presses before it is posted, because a wrong implementation report is
+    // exactly the kind of message that should not go out unreviewed.
+    let mut instructions = if mention.task_id_prefix.is_some() {
+        p.implement_instructions.clone()
+    } else {
+        p.reply_instructions.clone()
+    };
     if let Some(style) = &config.reply_style {
         instructions.push_str(&template::render(
             &p.reply_style_suffix,
@@ -1017,10 +1054,30 @@ async fn thread_context<T: SlackTransport>(
     let Some(thread_ts) = &mention.thread_ts else {
         return Some(Vec::new());
     };
+    // Scope for a prefixed task (#393 D6, #397). Reacting to **one reply**
+    // means "implement this message", so its thread is not context — pulling
+    // it in would hand the agent a conversation it was not pointed at, and the
+    // whole point of reacting to a specific message is to narrow the ask.
+    // Reacting to the root means "implement what this thread concluded", which
+    // takes the thread and falls through below.
+    if mention.task_id_prefix.is_some() && !mention.is_thread_root() {
+        return Some(Vec::new());
+    }
     // Window the thread from above at the mention itself (`latest`), so a
     // long thread yields the messages leading up to the mention, not its
     // head; +1 covers dropping the mention from the result.
-    let fetch_limit = config.thread_context_limit.saturating_add(1).min(200);
+    //
+    // A prefixed task reacting to the root wants the **whole** conversation,
+    // not the `thread_context_limit` window: the thread is where the approach
+    // was agreed, and a truncated one is a brief with the middle missing. The
+    // clamp to 200 stays — `conversations.replies` pages beyond that, and
+    // paging is not implemented (documented in config-reference).
+    let limit = if mention.task_id_prefix.is_some() {
+        u32::MAX
+    } else {
+        config.thread_context_limit
+    };
+    let fetch_limit = limit.saturating_add(1).min(200);
     let messages = match api
         .conversations_replies(&mention.channel, thread_ts, fetch_limit, Some(&mention.ts))
         .await
@@ -1138,6 +1195,7 @@ mod tests {
                 ts: task_id_ts.into(),
                 thread_ts: None,
                 reaction: None,
+                task_id_prefix: None,
             },
             sender_name: "alice".into(),
             channel_name: "general".into(),
