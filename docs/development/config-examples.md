@@ -220,6 +220,7 @@ block_retry_limit = 3                                             # Stop フッ�
 
 # ── ワークフロー ───────────────────────────────────────────
 # 定義順に first-match。最初にマッチした 1 件だけが実行される。
+# mode / output / verification は明示するか、profile（#394）でまとめて決めるかの二択。
 [[workflows]]
 name = "design"
 source = "github"                            # 必須。enabled な task_source 名
@@ -234,15 +235,16 @@ rubric = "設計方針・影響範囲・代替案の比較が明示されてい�
 timeout_secs = 1800                          # 無応答上限秒。超過でエスカレーション
 tool = "claude"                              # AI ツールの明示ピン（#196。llm 検収は claude 必須のため静的に保証。省略時 repo → default_tool）
 
+# 同じことを profile で書いた版。mode / verification は profile が決めるので書かない
+# （書くとエラー）。output だけは上書きしてよい。
 [[workflows]]
 name = "implement"
 source = "github"
 trigger = { project_status = "実装待ち" }
-mode = "implement"
+profile = "implement"                        # answer | triage | design | implement
 agent = "herdr"
-output = "source"
+output = "source"                            # profile の既定（none）を上書き
 on_success = { set_status = "レビュー待ち" }
-verification = "llm"
 rubric = "テストが追加されており、cargo clippy / cargo fmt が通っていること"
 ```
 
@@ -274,7 +276,44 @@ rubric = "テストが追加されており、cargo clippy / cargo fmt が通っ
 **注意**: `enabled` は省略すると `false`。`[plugins.x]` を書いて `kind` だけ設定した状態は「文法的には妥当だが動作しない」。
 その状態のプラグインを workflow の `source` / `agent` から参照すると、警告ではなく**バリデーションエラー**になる。
 
+## `[[workflows]].profile` — 4 原型でまとめて決める（#394）
+
+`mode` / `output` / `verification` を個別に選ぶ代わりに、噛み合う組み合わせに付けた名前を 1 つ選ぶ。
+組み合わせを人間が合わせる構造が事故の発生源だったため導入した（[ADR-0033](/decisions/adr-0033-workflow-profile.md)）。
+
+| profile | mode | output | verification | 選ぶ場面 |
+|---|---|---|---|---|
+| `answer` | plan | source | llm | 質問に答えてソースへ返す（Slack メンション・リアクション） |
+| `triage` | plan | source | llm | 依頼を GitHub / Notion へ起票する |
+| `design` | plan | none | llm | 詳細設計を issue コメント / ページへ書き、status で伝える |
+| `implement` | implement | none | llm | 実装して PR を出す |
+
+```toml
+[[workflows]]
+name = "gh-design"
+source = "github"
+trigger = { project_status = "設計待ち" }
+profile = "design"                           # mode / verification は書かない（書くとエラー）
+agent = "herdr"
+on_success = { set_status = "設計済み" }
+
+[[workflows]]
+name = "slack-implement"
+source = "slack"
+profile = "implement"
+output = "source"                            # output だけは profile を上書きできる
+agent = "herdr"
+```
+
+- `mode` / `verification` との併用は**エラー**。どちらを勝たせても、負けた側が「生きて見える死んだ設定」として残るため
+- `output` との併用だけは**可**で、`output` が勝つ。権限ではなく配線先の選択なので、上書きしても安全性は変わらない。Slack 起点の implement が PR URL をスレッドへ返すのに要る
+- `profile` を書かないなら `mode` と `output` は従来どおり**必須**
+- 4 原型で表せない組み合わせ（`verification = "human"` など）は明示記法で書く。明示記法は非推奨ではない
+- **旧バージョンへ戻すときは config も戻すこと** — `profile` は旧バイナリでは未知キーとしてパースエラーになる
+
 ## `[[workflows]].mode` — plan / implement
+
+`profile` を使わない場合に書く（使う場合は profile が決めるので書けない）。
 
 | 値 | 挙動 | 選ぶ場面 |
 |---|---|---|
