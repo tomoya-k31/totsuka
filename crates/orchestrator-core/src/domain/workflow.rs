@@ -15,7 +15,7 @@
 use plugin_protocol::Task;
 use plugin_protocol::manifest::OutputCapability;
 
-use crate::config::{OutputPolicy, VerificationMode, WorkflowConfig, WorkflowMode};
+use crate::config::{OutputPolicy, Profile, VerificationMode, WorkflowConfig, WorkflowMode};
 
 /// How a reaction-derived task announces which emoji started it (#396).
 ///
@@ -166,6 +166,16 @@ pub struct Workflow {
     /// Explicit AI-tool pin (#196); `None` falls through to the repository /
     /// global defaults at dispatch.
     pub tool: Option<String>,
+    /// The archetype this workflow was written as (#394), carried through
+    /// rather than resolved away.
+    ///
+    /// Everything else here is a *resolved* value, deliberately — see
+    /// [`from_config`](Self::from_config). This one is the exception because
+    /// [#399](https://github.com/tomoya-k31/totsuka/issues/399) asks a question
+    /// the resolved values cannot answer: which external tool the agent will
+    /// need. `mode = "implement"` says the worktree is writable; it does not
+    /// say a pull request is the deliverable.
+    pub profile: Option<Profile>,
 }
 
 impl Workflow {
@@ -189,6 +199,7 @@ impl Workflow {
             timeout_secs: config.timeout_secs,
             rubric: config.rubric.clone(),
             tool: config.tool.clone(),
+            profile: config.profile,
         }
     }
 

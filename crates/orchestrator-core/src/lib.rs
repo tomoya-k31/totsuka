@@ -12,6 +12,7 @@
 //! the module skeleton.
 
 pub mod adapters;
+pub mod agent_tools;
 pub mod config;
 pub mod domain;
 pub mod hooks;
