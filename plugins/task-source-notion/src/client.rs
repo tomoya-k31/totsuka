@@ -29,6 +29,13 @@ const APPEND_BATCH: usize = 100;
 struct TriggerFilter {
     status: Option<String>,
     raw: Option<Value>,
+    /// Which instruction set this workflow's profile asks for (#398).
+    ///
+    /// Baked into the trigger table by the Orchestrator rather than derived
+    /// here: `[[workflows]].profile` is core's schema, and this plugin stays
+    /// unaware of it. Absent from an older Orchestrator, in which case the task
+    /// carries no instructions — exactly the pre-#398 behaviour.
+    instructions_kind: Option<String>,
 }
 
 impl TriggerFilter {
@@ -41,6 +48,10 @@ impl TriggerFilter {
         Self {
             status,
             raw: trigger.get("filter").cloned(),
+            instructions_kind: trigger
+                .get("instructions_kind")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         }
     }
 
@@ -186,6 +197,20 @@ impl<T: NotionTransport> NotionClient<T> {
             .unwrap_or(0);
         let assignee = self.pick_assignee(map.assignee.as_deref().map(|n| &props[n]));
 
+        // Rendered before the struct takes `title` by value.
+        let instructions = filter
+            .instructions_kind
+            .as_deref()
+            .and_then(|kind| self.config.prompts.for_kind(kind))
+            .map(|template| {
+                crate::template::render(
+                    template,
+                    &[
+                        ("page_url", page["url"].as_str().unwrap_or_default()),
+                        ("title", title.as_str()),
+                    ],
+                )
+            });
         Some(Task {
             id,
             source: self.config.source_name.clone(),
@@ -198,7 +223,10 @@ impl<T: NotionTransport> NotionClient<T> {
             url: page["url"].as_str().map(str::to_string),
             assignee,
             message_key: None,
-            instructions: None,
+            // Layer 1 of ADR-0024: where this task's deliverable goes. Absent
+            // unless the Orchestrator asked for a kind (#398), which keeps
+            // every pre-profile config behaving exactly as before.
+            instructions,
         })
     }
 
