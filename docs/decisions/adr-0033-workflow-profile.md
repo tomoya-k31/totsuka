@@ -29,7 +29,7 @@ stable。[#394](https://github.com/tomoya-k31/totsuka/issues/394) の実装と�
 | 要素 | issue | 状態 |
 |---|---|---|
 | profile ごとの `permissions.deny` セット | [#395](https://github.com/tomoya-k31/totsuka/issues/395) | **済**（D4 節を参照） |
-| 成果物の書き手の分割と URL 実在検収 | [#398](https://github.com/tomoya-k31/totsuka/issues/398) | 未着手 |
+| 成果物の書き手の分割と URL 実在検収 | [#398](https://github.com/tomoya-k31/totsuka/issues/398) | **済**（D2/D3 節を参照） |
 | profile が要求する外部ツールの認証検査 | [#399](https://github.com/tomoya-k31/totsuka/issues/399) | 未着手 |
 
 #395 が入るまでの profile は「mode / output / verification の別名」でしかなかった。いまは claude タスクに限り**権限としての実効性がある**（下の D4 節）。実機検収は未了なので `verified` は付けていない。
@@ -163,6 +163,37 @@ Claude Code は settings ファイルの変更を実行中セッションに取�
 ### 積み残し: Notion MCP の write 系
 
 MCP ツールの deny（`mcp__<server>__<tool>`）は書けるが、**サーバ名がユーザ環境依存**なので Rust 固定にできない。`answer` profile から Notion への書き込みを止める手段は現状ここには無く、instructions 層（#398）に委ねている。
+
+## 7. D2/D3 — 成果物はエージェントが直接書き、URL の実在で検収する（#398）
+
+`design` / `implement` は `output = "none"` なので、コアは `result/publish` を呼ばない。成果物（issue コメント / Notion ページ / PR）は**エージェントが `gh` / Notion MCP で自分で書く**。[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) が push / PR について出した結論を、issue コメントと Notion ページへ広げたもの。
+
+status の書き戻しだけは**コアに残す**（`task/update_status`）。更新忘れと `in_progress_statuses` との不整合（再タスク化ループ）は、完了を知っている側が機械的にやるのが確実だから。
+
+### 書き込み先はどうやってエージェントに伝わるか
+
+指示は 2 層に分かれる（[ADR-0024](/decisions/adr-0024-agent-instruction-layers.md)）:
+
+- **層 1（ソースプラグインの `Task.instructions`）** — どこに何を書くか。`plugins/task-source-{github,notion}/src/defaults.toml` に置き、`[prompts]` で上書き可能
+- **層 2（コアの不可視プロンプト）** — 完了マーカーなど、既存のものだけ。URL 必須は層 1 が言う。**同じことを 2 箇所で言わない** — ズレたときどちらが正か決められなくなる
+
+プラグインは profile を知らない。コアが `TriggerInfo.trigger` に `instructions_kind`（`triage` / `design` / `implement`）を焼き込み、プラグインはそのキーで自分の指示文を選ぶ。トリガはもともと plugin-defined な `Value` なので**プロトコル変更もバージョン bump も不要**で、旧プラグインは未知キーを無視して従来どおり動く。
+
+**代償は縮退が無言なこと。** 新コア + 旧プラグインでは指示が付かず、書き込み先を知らないエージェントが dispatch される。capability 宣言が無いので probe できず、doctor にも検査を置けない — **コアとソースプラグインは同時にリリースする**。
+
+### URL 実在検収
+
+書き込みは Stop フックより前に済むので、**検収は事前ゲートではない**。「URL 検収の失敗 = 公開の取り消し」ではなく「タスクを完了扱いにしない」だけである。誤った書き込みの受け皿は、status を動かした人間の事後レビュー。
+
+これは GitHub Agentic Workflows の "stage and vet all writes" との**意図的な相違**で、成立するのは書き込み先が PR / issue コメント — **それ自体がレビュー面である場所**だからである。
+
+検収は rubric の差し替えで行う。`verification_rubric_artifact_url` が `triage` / `design` / `implement` の rubric leaf の既定になり、「最終メッセージに成果物 URL が実際に含まれているか」「その URL の内容が申告と整合するか」を条件として見る。`answer` は対象外 — 返信はプラグインの承認ゲートを通るので URL が無く、要求すると正常な回答が全部落ちる。
+
+**穴が 1 つある。** この既定は global `[prompts].verification_rubric` より**弱い**ので、それを設定済みの構成は URL 検収にならない。意図的な選択で、理由は「全 workflow に対して既に選ばれた文言を、後から入った profile が黙って覆す」方が悪いから。`config-reference.md` に明記し、テストで固定した。
+
+### 削除は 0.3
+
+`result_publish` の実体は残し、**呼ばれたときだけ**非推奨警告を出す（`initialize` 時ではない — その経路を通らない構成に、対処しようのない警告を出しても雑音になる）。実体と Notion の `blocks.rs` の削除は 0.3。
 
 # Consequences
 
