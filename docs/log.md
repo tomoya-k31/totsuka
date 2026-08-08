@@ -18,6 +18,8 @@
 * **Update**: 成果物（issue コメント / Notion ページ / PR）をエージェントが直接書く方式へ移行し、検収を「URL 実在」に置き換える決定を D2/D3 節として追記（#398）。書き込み先は `instructions_kind` の焼き込みでソースプラグインへ伝える（プロトコル変更なし、ただし旧プラグインでは無言で縮退するのでコアと同時リリースが必要）。URL 検収がグローバル `[prompts].verification_rubric` より弱いという穴も明記 [ADR-0033](/decisions/adr-0033-workflow-profile.md)
 * **Update**: profile が追加で決めるものの一覧、成果物 URL 検収の優先順位と落とし穴、ソースプラグインの `[prompts]` キーを追記 [config.toml リファレンス](/development/config-reference.md)
 * **Update**: `result/publish` の非推奨（呼び出し時のみ警告、削除は 0.3）と、`instructions_kind` から指示文を選ぶ経路を追記 [task-source-github](/components/task-source-github.md) / [task-source-notion](/components/task-source-notion.md)
+* **Update**: profile が要求する外部ツール（`implement` の `gh`）の不在を dispatch 前に検知し、タスクを `Queued` のまま待機させる決定を D9 節として追記（#399）。検査が偽陰性を出しうる（判定は totsuka のプロセス、実行は pane）ため doctor は `fail` ではなく `warn`、dispatch は失敗ではなく待機に倒す。`triage` / `design` は書き込み先が source 依存で判別できないため**検査しない**ことを skip 行で明示する [ADR-0033](/decisions/adr-0033-workflow-profile.md)
+* **Update**: 外部ツール未整備での待機の挙動、検査の偽陰性、検査しない範囲を追記 [config.toml リファレンス](/development/config-reference.md)
 
 ## 2026-08-07
 

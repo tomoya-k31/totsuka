@@ -1,0 +1,2 @@
+* **Update**: profile が要求する外部ツール（`implement` の `gh`）の不在を dispatch 前に検知し、タスクを `Queued` のまま待機させる決定を D9 節として追記（#399）。検査が偽陰性を出しうる（判定は totsuka のプロセス、実行は pane）ため doctor は `fail` ではなく `warn`、dispatch は失敗ではなく待機に倒す。`triage` / `design` は書き込み先が source 依存で判別できないため**検査しない**ことを skip 行で明示する [ADR-0033](/decisions/adr-0033-workflow-profile.md)
+* **Update**: 外部ツール未整備での待機の挙動、検査の偽陰性、検査しない範囲を追記 [config.toml リファレンス](/development/config-reference.md)

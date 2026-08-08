@@ -201,6 +201,7 @@ on_success = { set_status = "設計済み" }
 | ソースプラグインへ `instructions_kind` を伝え、書き込み先の指示を出させる | triage / design / implement | #398 |
 | 検収 rubric を「成果物 URL の実在」に差し替え | triage / design / implement | #398 |
 | ソースプラグインへ `task_id_prefix` を伝え、会話とは別 ID のタスクを立てさせる | implement (`impl:`) / triage (`books:`) | #397 |
+| 必要な外部ツール（`gh`）の不在を dispatch 前に検知して待機させる | implement | #399 |
 
 ### 成果物 URL 検収の落とし穴（#398）
 
@@ -215,6 +216,23 @@ rubric leaf の優先順位（強い順）:
 5. 汎用既定
 
 **3 が 4 より強い**ため、`[prompts].verification_rubric` を設定済みの構成は `design` workflow でも **URL 検収にならない**。全 workflow に対して既に選ばれた文言を、後から入った profile が黙って覆すよりはましだと判断した結果だが、症状は「投稿していない設計を『書いた』と申告したタスクが通る」なので、profile を使うならグローバルの rubric を外すか、`[[workflows]].rubric` で明示すること。
+
+### 外部ツールの未整備で待機する（#399）
+
+`profile = "implement"` のタスクは PR を作るので `gh` が要る。**未整備なら dispatch されず `Queued` のまま待機**し、通知が一度出る。整備すれば数分以内（検査結果のキャッシュ TTL）に自分で流れ出すので、操作は不要。
+
+`totsuka doctor` に `agent-tool:gh` の行が出る（必要とする workflow がある構成でのみ）。
+
+**この検査は間違うことがある。** 判定は totsuka のプロセスで走り、エージェントは pane（`.zshenv` / mise が効いた環境）で走るので、**pane からしか `gh` が見えない構成では「無い」と判定されます**。そのため:
+
+- doctor は `fail` ではなく **`warn`**（exit code を動かさない）
+- dispatch は失敗させず**待機**（偽陰性でもタスクは消えない）
+
+心当たりがあればこの警告は無視して構いません。
+
+**検査しない範囲**: `triage` / `design` も外部へ書きますが、**どこへ**書くか（GitHub の `gh` か Notion MCP か）は source 依存で、totsuka はプラグインのインスタンス名からそれを判別できません。推測して誤ると動いたはずのタスクを止めるので、検査しません。doctor はその旨を `agent-tool:external-write` の skip 行で明示します。
+
+**検査は「設定してあるか」だけ**で、`gh auth status` は実行しません（dispatch 経路にネットワーク呼び出しを持ち込まないため）。期限切れトークンは通ってしまい、従来どおり pane で失敗します。
 
 ### リアクションで実装タスクを起こす（#397）
 

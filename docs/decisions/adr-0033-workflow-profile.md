@@ -30,7 +30,7 @@ stable。[#394](https://github.com/tomoya-k31/totsuka/issues/394) の実装と�
 |---|---|---|
 | profile ごとの `permissions.deny` セット | [#395](https://github.com/tomoya-k31/totsuka/issues/395) | **済**（D4 節を参照） |
 | 成果物の書き手の分割と URL 実在検収 | [#398](https://github.com/tomoya-k31/totsuka/issues/398) | **済**（D2/D3 節を参照） |
-| profile が要求する外部ツールの認証検査 | [#399](https://github.com/tomoya-k31/totsuka/issues/399) | 未着手 |
+| profile が要求する外部ツールの認証検査 | [#399](https://github.com/tomoya-k31/totsuka/issues/399) | **済**（D9 節を参照。ただし検査範囲は当初設計より狭い） |
 
 #395 が入るまでの profile は「mode / output / verification の別名」でしかなかった。いまは claude タスクに限り**権限としての実効性がある**（下の D4 節）。実機検収は未了なので `verified` は付けていない。
 
@@ -216,6 +216,39 @@ Slack の「質問 → 方針決定 → 実装」（#393 の WF 8）を、**実�
 
 - `conversations.replies` は 200 件でクランプしている。親リアクションは全会話を文脈にしたいが、それを超えるとページングの実装が要る（未実装、config-reference に明記）
 - answer タスクが Running のうちに `:hammer:` が付くと並走する。別タスク・別 worktree なので衝突はしないが「方針決定前に実装が始まる」。初版は許容 — ブロックすると `task/lookup` の往復が load-bearing になり、FR-31 の禁止事項に触れる
+
+## 9. D9 — 必要な外部ツールの不在は dispatch 前に検知して待機させる（#399）
+
+#398 でエージェントが自分で成果物を書くようになったので、タスクとは無関係な理由（必要なツールが未認証）で失敗しうるようになった。壊れ方が悪い — エージェントが起動し、`gh` が GitHub に届かないと分かり、誰かが見るまで pane で座礁する。
+
+`dispatch_ready` で弾く（`dispatch_one` ではなく — スロットも worktree も取らないため）。
+
+### fail ではなく skip / warn
+
+**タスクは `Queued` のまま**で、状態遷移は増やさない（D9 の当初案は `Pending` だったが、`Pending` は F-14「リポジトリ選択待ち」の意味で state machine に組み込み済みで、意味が濁る）。検査が通れば次の cycle で自然に流れ出す。
+
+検査は orchestrator のプロセスで走り、エージェントはユーザのシェルプロファイルが効いた pane で走る。**pane からしか見えない `gh` は「無い」と読まれる** — 文書化済みの偽陰性である。だから:
+
+- dispatch では **skip**。偽陰性は仕事の消失ではなく遅延で済む
+- doctor では **warn**（当初設計の `fail` から変更）。`fail` は exit code を動かすので、全部動いているマシンで「壊れている」と報告することになる。**間違いうる検査に「止まれ」と言わせない**
+
+これは机上の懸念ではない。severity を `fail` にした版で `setup` の E2E が落ちた — scratch な `XDG_CONFIG_HOME` には `gh/hosts.yml` が無いので、`gh` を設定済みの環境でも fail する。
+
+### 検査しない範囲の方が大きい
+
+**`implement` の `gh` だけ**を見る。PR を開くのは source によらず `gh` なので、ここで判断できる。
+
+`triage` / `design` も外部へ書くが、**どこへ**書くかは source 依存（GitHub なら `gh issue comment`、Notion なら MCP）で、Orchestrator は区別できない — `[[workflows]].source` はユーザが決めるインスタンス名（`github` のこともあれば `gh-work` のこともある）で、そこから推測すると**動いたはずのタスクをブロックする**。**推測するゲートはゲートが無いより悪い。** doctor はその旨を `skip` 行で明示する（黙って通すと「検査済み」と読まれるため）。
+
+Notion MCP はもう 1 つ別の理由でも届かない: エージェント側の設定であり、しかも場所は workflow が解決するツールに依存し、`notion` プラグイン自身のトークンとは別系統である。
+
+### ネットワーク probe は dispatch パスに持ち込まない
+
+判定はローカルのみ（バイナリの存在 + `gh` の認証ファイルの存在）で、`gh auth status` は実行しない。dispatch は毎 cycle 走るので、そこにネットワークのレイテンシと flakiness を足すことになる。代償は**「見た目は正しいが期限切れ」の資格情報が通る**ことで、これは受け入れる — この検査が捕まえるのは「そもそも設定していない」という一番多いケースで、期限切れは従来どおり pane で見える形で失敗する。
+
+### 通知は既存 variant の再利用
+
+`NotifierEvent::Pending` を使う。新 variant は現行プロトコルでビルドされた notifier プラグインで deserialize に失敗し、配送は fire-and-forget（F-93）なので**通知が黙って止まる**のが症状になる。専用 variant は protocol 0.3 の `#[serde(other)]` フォールバックとセットで入れる。
 
 # Consequences
 
