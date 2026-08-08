@@ -17,8 +17,16 @@ use plugin_protocol::manifest::OutputCapability;
 
 use crate::config::{OutputPolicy, VerificationMode, WorkflowConfig, WorkflowMode};
 
+/// How a reaction-derived task announces which emoji started it (#396).
+///
+/// A plugin that honours `trigger = { reaction = "..." }` stamps
+/// `"reaction:<emoji>"` into [`Task::labels`], and [`Trigger::matches`] looks
+/// for it there. `Task.labels` has existed since the first protocol version,
+/// so carrying the emoji this way needs no wire change and no version bump.
+pub const REACTION_LABEL_PREFIX: &str = "reaction:";
+
 /// A trigger condition: an opaque key-value set the plugin filters on, plus the
-/// status/label keys the Orchestrator re-checks defensively.
+/// status/label/reaction keys the Orchestrator re-checks defensively.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trigger(toml::Table);
 
@@ -49,17 +57,35 @@ impl Trigger {
     /// with the common schema, F-01):
     /// - `status` / `project_status` → compared to `task.status`
     /// - `label` (string) / `labels` (array) → looked up in `task.labels`
+    /// - `reaction` → looked up in `task.labels` as [`REACTION_LABEL_PREFIX`]
+    ///   + the emoji name (#396)
     ///
     /// All other keys are opaque: the plugin already filtered on them before
     /// pushing the task, so they are trusted. Non-string values on reserved keys
     /// are also treated as opaque (skipped). An empty trigger matches every
     /// task (a catch-all).
+    ///
+    /// `reaction` had to become reserved rather than stay opaque. Left opaque
+    /// it is "satisfied" by every task, so a `reaction`-triggered workflow
+    /// defined before the catch-all would swallow **mention-derived tasks
+    /// too** — silently, since first-match produces a plausible run either
+    /// way (#396).
     pub fn matches(&self, task: &Task) -> bool {
         for (key, value) in &self.0 {
             match key.as_str() {
                 "status" | "project_status" => {
                     if let Some(want) = value.as_str()
                         && task.status.as_deref() != Some(want)
+                    {
+                        return false;
+                    }
+                }
+                "reaction" => {
+                    if let Some(want) = value.as_str()
+                        && !task
+                            .labels
+                            .iter()
+                            .any(|l| l == &format!("{REACTION_LABEL_PREFIX}{want}"))
                     {
                         return false;
                     }
@@ -238,25 +264,86 @@ where
         }
     }
 
+    issues.extend(unreachable_after_catch_all(workflows));
+
+    issues
+}
+
+/// Workflows that can never run because an earlier one in the same source
+/// matches everything (#396).
+///
+/// A catch-all (`trigger = {}`) matches every task from its source, and
+/// matching is first-match in definition order (F-81), so **everything after it
+/// in that source is dead config**. This is the ordering mistake the reaction
+/// notation invites: `trigger = { reaction = "hammer" }` reads as a filter that
+/// stands on its own, and putting it below the mention catch-all silently turns
+/// the emoji into a no-op.
+///
+/// Reported separately from the overlap warning above so the message can name
+/// the fix (reorder) rather than just the ambiguity.
+fn unreachable_after_catch_all(workflows: &[Workflow]) -> Vec<WorkflowIssue> {
+    let mut issues = Vec::new();
+    let mut catch_all: Vec<(&str, &str)> = Vec::new(); // (source, workflow name)
+
+    for wf in workflows {
+        if let Some((_, blocker)) = catch_all.iter().find(|(source, _)| *source == wf.source) {
+            issues.push(WorkflowIssue {
+                severity: Severity::Warning,
+                message: format!(
+                    "workflow `{}` (source `{}`) is unreachable: `{}` is defined earlier with an empty trigger, which matches every task from that source → move `{}` above `{}`",
+                    wf.name, wf.source, blocker, wf.name, blocker
+                ),
+            });
+        } else if wf.trigger.as_table().is_empty() {
+            catch_all.push((&wf.source, &wf.name));
+        }
+    }
+
     issues
 }
 
 /// Whether some task could satisfy **both** triggers (F-81 ambiguity).
 ///
-/// Only the `status` dimension can make two triggers mutually exclusive: a task
-/// has a single `status`, so if the two triggers require *different* statuses
-/// no task matches both (e.g. `設計待ち` vs `実装待ち` — not ambiguous).
-/// `status` and `project_status` are the **same** dimension (both compared to
-/// `task.status` in [`Trigger::matches`]), so they are normalized together.
+/// Two dimensions can make triggers mutually exclusive, and both work the same
+/// way — a task has at most one value, so two triggers demanding *different*
+/// values share no task:
+///
+/// - `status` / `project_status`. The **same** dimension under two spellings
+///   (both compared to `task.status` in [`Trigger::matches`]), so they are
+///   normalized together. `設計待ち` vs `実装待ち` → not ambiguous.
+/// - `reaction` (#396). One task carries one reaction label, so `eyes` vs
+///   `hammer` → not ambiguous.
+///
 /// Labels form a set (multiple required labels are jointly satisfiable) and
 /// opaque keys cannot be proven contradictory, so neither forces non-overlap.
+///
+/// **A trigger requiring a reaction is treated as exclusive with one that does
+/// not, which is not literally true** — a reaction-derived task carries the
+/// label *and* satisfies a catch-all, so both match. It is deliberate: that
+/// pair is the intended shape (`reaction = "hammer"` first, mention catch-all
+/// last), and warning on the correct configuration is how a warning becomes
+/// wallpaper. The genuinely broken order — catch-all first — is reported by
+/// [`unreachable_after_catch_all`] instead, which can name the fix.
+///
+/// The imprecision has a cost worth stating: a reaction workflow placed after a
+/// *narrower* non-catch-all trigger it overlaps with (say `label = "x"`) is
+/// reported by neither check.
 fn triggers_overlap(a: &Trigger, b: &Trigger) -> bool {
+    // status: two *different* required values are exclusive; requiring one
+    // against requiring none still overlaps (the unconstrained side matches
+    // whatever the other demands). This is the pre-#396 rule, unchanged.
     let mut statuses: Vec<&str> = required_statuses(a.as_table());
     statuses.extend(required_statuses(b.as_table()));
     statuses.sort_unstable();
     statuses.dedup();
-    // 0 or 1 distinct required status -> jointly satisfiable; 2+ -> exclusive.
-    statuses.len() <= 1
+    if statuses.len() >= 2 {
+        return false;
+    }
+
+    // reaction: any difference is exclusive, *including* "one requires an
+    // emoji, the other requires none" — see the note above on why that
+    // deliberate imprecision beats warning on the correct configuration.
+    required_reaction(a.as_table()) == required_reaction(b.as_table())
 }
 
 /// The string status values a trigger requires (from `status`/`project_status`).
@@ -265,6 +352,11 @@ fn required_statuses(table: &toml::Table) -> Vec<&str> {
         .iter()
         .filter_map(|key| table.get(*key).and_then(|v| v.as_str()))
         .collect()
+}
+
+/// The emoji a trigger requires (from `reaction`), if any.
+fn required_reaction(table: &toml::Table) -> Option<&str> {
+    table.get("reaction").and_then(|v| v.as_str())
 }
 
 #[cfg(test)]
@@ -529,6 +621,175 @@ output = "none"
         assert_eq!(workflows[1].verification, VerificationMode::Llm);
         assert!(workflows[1].timeout_secs.is_none());
         assert!(workflows[1].rubric.is_none());
+    }
+
+    /// The reaction notation in its intended shape: the emoji workflow first,
+    /// the mention catch-all last.
+    const REACTION_EXAMPLE: &str = r#"
+[[workflows]]
+name = "slack-implement"
+source = "slack"
+trigger = { reaction = "hammer" }
+profile = "implement"
+agent = "herdr"
+
+[[workflows]]
+name = "slack-reply"
+source = "slack"
+trigger = {}
+profile = "answer"
+agent = "herdr"
+"#;
+
+    /// **The reason `reaction` had to stop being an opaque key.** Left opaque
+    /// it is satisfied by every task, so `slack-implement` — defined first —
+    /// would swallow mention-derived tasks and run them in implement mode.
+    /// Nothing downstream would look wrong; the task simply took the other
+    /// branch.
+    #[test]
+    fn a_reaction_workflow_defined_first_does_not_swallow_mentions() {
+        let workflows = workflows_from_toml(REACTION_EXAMPLE);
+
+        let reacted = task("slack", None, &["reaction:hammer"]);
+        assert_eq!(
+            match_workflow(&workflows, &reacted).unwrap().name,
+            "slack-implement"
+        );
+
+        // A mention carries no reaction label, so it falls through to the
+        // catch-all even though the emoji workflow is defined above it.
+        let mention = task("slack", None, &[]);
+        assert_eq!(
+            match_workflow(&workflows, &mention).unwrap().name,
+            "slack-reply"
+        );
+
+        // And a different emoji is not this workflow's.
+        let other = task("slack", None, &["reaction:eyes"]);
+        assert_eq!(
+            match_workflow(&workflows, &other).unwrap().name,
+            "slack-reply"
+        );
+    }
+
+    #[test]
+    fn the_intended_reaction_ordering_produces_no_warning() {
+        // If the correct configuration warned, the warning would be wallpaper
+        // and the real ordering mistake below would go unread.
+        let issues = validate_workflows(&workflows_from_toml(REACTION_EXAMPLE), |_| {
+            Some(vec![OutputCapability::Source])
+        });
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn two_different_reactions_do_not_warn_but_the_same_one_twice_does() {
+        let two = |a: &str, b: &str| {
+            workflows_from_toml(&format!(
+                r#"
+[[workflows]]
+name = "a"
+source = "slack"
+trigger = {{ reaction = "{a}" }}
+profile = "answer"
+agent = "herdr"
+
+[[workflows]]
+name = "b"
+source = "slack"
+trigger = {{ reaction = "{b}" }}
+profile = "answer"
+agent = "herdr"
+"#
+            ))
+        };
+        let distinct = validate_workflows(&two("eyes", "hammer"), |_| {
+            Some(vec![OutputCapability::Source])
+        });
+        assert!(
+            !distinct.iter().any(|i| i.message.contains("overlapping")),
+            "one task carries one reaction, so these are exclusive: {distinct:?}"
+        );
+
+        let same = validate_workflows(&two("eyes", "eyes"), |_| {
+            Some(vec![OutputCapability::Source])
+        });
+        assert!(
+            same.iter().any(|i| i.message.contains("overlapping")),
+            "two workflows on one emoji genuinely collide: {same:?}"
+        );
+    }
+
+    /// The ordering mistake the reaction notation invites: `trigger = {…}`
+    /// reads as a self-standing filter, so putting it below the catch-all
+    /// looks fine and makes the emoji a no-op.
+    #[test]
+    fn a_workflow_after_a_catch_all_is_reported_unreachable() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "slack-reply"
+source = "slack"
+trigger = {}
+profile = "answer"
+agent = "herdr"
+
+[[workflows]]
+name = "slack-implement"
+source = "slack"
+trigger = { reaction = "hammer" }
+profile = "implement"
+agent = "herdr"
+"#,
+        );
+        // The behaviour the warning is about: the emoji never runs.
+        assert_eq!(
+            match_workflow(&workflows, &task("slack", None, &["reaction:hammer"]))
+                .unwrap()
+                .name,
+            "slack-reply"
+        );
+
+        let issues = validate_workflows(&workflows, |_| Some(vec![OutputCapability::Source]));
+        let issue = issues
+            .iter()
+            .find(|i| i.message.contains("unreachable"))
+            .unwrap_or_else(|| panic!("expected an unreachable warning: {issues:?}"));
+        assert_eq!(issue.severity, Severity::Warning);
+        // Naming both sides is the whole value — "unreachable" alone leaves
+        // the operator hunting for which line to move.
+        assert!(issue.message.contains("slack-implement"), "{issue:?}");
+        assert!(issue.message.contains("slack-reply"), "{issue:?}");
+    }
+
+    #[test]
+    fn a_catch_all_does_not_shadow_another_source() {
+        // Matching is per-source, so a Slack catch-all says nothing about a
+        // GitHub workflow defined after it.
+        let issues = validate_workflows(
+            &workflows_from_toml(
+                r#"
+[[workflows]]
+name = "slack-reply"
+source = "slack"
+trigger = {}
+profile = "answer"
+agent = "herdr"
+
+[[workflows]]
+name = "gh-design"
+source = "github"
+trigger = { project_status = "設計待ち" }
+profile = "design"
+agent = "herdr"
+"#,
+            ),
+            |_| Some(vec![OutputCapability::Source]),
+        );
+        assert!(
+            !issues.iter().any(|i| i.message.contains("unreachable")),
+            "{issues:?}"
+        );
     }
 
     #[test]
