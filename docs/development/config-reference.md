@@ -108,7 +108,7 @@ owner: tomoya-k31
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source インスタンス名 |
 | `trigger` | テーブル | `{}`（全マッチ） | トリガー条件。`status`/`project_status`/`label`/`labels` は Orchestrator が防御的に再判定、他キーはプラグインが `initialize` の `triggers` として受け取り解釈する |
-| `profile` | enum? | なし | 4 原型のいずれか（`answer` / `triage` / `design` / `implement`）。`mode` と `verification` をまとめて決める（下記） |
+| `profile` | enum? | なし | 4 原型のいずれか（`answer` / `triage` / `design` / `implement`）。`mode` / `output` / `verification` の 3 つをまとめて決める。うち `mode` / `verification` は併記不可、`output` は併記すればそちらが勝つ（下記） |
 | `mode` | enum | `profile` が無ければ必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
 | `output` | enum | `profile` が無ければ必須 | `source` / `none`。**`pull_request` は廃止** — push と PR 作成はエージェントの責務になった（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、PR 作成手順はリポジトリの規約と `[prompts]` で指示する |

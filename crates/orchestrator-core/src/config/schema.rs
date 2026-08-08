@@ -506,9 +506,9 @@ pub struct WorkflowConfig {
     /// Trigger condition; kept raw (interpreted in #54).
     #[serde(default)]
     pub trigger: toml::Table,
-    /// One of the four archetypes (#393 D5). Supplies `mode` and
-    /// `verification`, which must then not also be written out; `output` may
-    /// still be overridden.
+    /// One of the four archetypes (#393 D5). Supplies all three of `mode`,
+    /// `output` and `verification`. `mode` and `verification` must then not
+    /// also be written out; `output` may, and an explicit one wins.
     #[serde(default)]
     pub profile: Option<Profile>,
     /// Execution mode. Required unless [`profile`](Self::profile) supplies it.
