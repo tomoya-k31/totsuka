@@ -11,6 +11,132 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.2.0](https://github.com/tomoya-k31/totsuka/compare/v0.1.4...v0.2.0) (2026-08-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **agent-ide-herdr:** herdr 0.7.5 (protocol 17) 以降が必要。`initialize` が `ping` の `protocol` を検査し、17 未満はバージョンを名指しして拒否する。 `[tools].command` に任意パスの実行ファイルを書いている構成は、 `plugins/herdr.toml` の `[kind_map]` が要る。
+* **core:** `output = "pull_request"` は起動時に `unknown variant` で 落ちる。`output = "source"` に変更し、PR 作成手順はリポジトリの規約と `[prompts]` で指示すること。`[output]` セクションも削除した。
+* **protocol:** protocol_version を 0.2.0 へ。tasks/fetch RPC （TasksFetchParams/TasksFetchResult 含む）と Orchestrator 側のポーリング 機構一式（fetch_and_ingest / poll_sources / poll_interval_for / IngestPath enum / EngineSettings.poll_intervals）を削除した （ADR-0008 Phase C、エピック #182 最終、Issue #190）。
+
+### Features
+
+* **agent-ide-herdr:** herdr protocol 17 に追随する ([#375](https://github.com/tomoya-k31/totsuka/issues/375)) ([b193023](https://github.com/tomoya-k31/totsuka/commit/b193023487f513f83065607da2b6c381f9ef78c4))
+* **agent-ide-herdr:** pane レイアウトを [layout] で設定可能にする ([#371](https://github.com/tomoya-k31/totsuka/issues/371)) ([704cdd1](https://github.com/tomoya-k31/totsuka/commit/704cdd1c1f879ac98058a40f0f8d66ab341b13f0)), closes [#356](https://github.com/tomoya-k31/totsuka/issues/356)
+* **agent-ide-herdr:** resume 失敗を SESSION_UNRESUMABLE へ写像 ([#261](https://github.com/tomoya-k31/totsuka/issues/261)) ([#277](https://github.com/tomoya-k31/totsuka/issues/277)) ([054c499](https://github.com/tomoya-k31/totsuka/commit/054c49972c13d7f6418e5dd8c75a441a814c1a3c))
+* **cli:** doctor --no-repair で検査のみ実行できるようにする ([#367](https://github.com/tomoya-k31/totsuka/issues/367)) ([f33fc10](https://github.com/tomoya-k31/totsuka/commit/f33fc1026f0f3f99dc5ce3693bd280366a95cd0c))
+* **cli:** doctor に孤児 pane の検出と対話的解放を追加 ([#221](https://github.com/tomoya-k31/totsuka/issues/221)) ([082a6d1](https://github.com/tomoya-k31/totsuka/commit/082a6d156c95f889d984f4ebfb5d95c29972d944))
+* **cli:** plugin install --bundled で同梱プラグインをパス指定なしで入れる ([#357](https://github.com/tomoya-k31/totsuka/issues/357)) ([b949471](https://github.com/tomoya-k31/totsuka/commit/b949471f589240bfd30546b122bb5d9fe353df5e)), closes [#345](https://github.com/tomoya-k31/totsuka/issues/345)
+* **cli:** plugin install --from-source で開発ループを 1 コマンドにする ([#358](https://github.com/tomoya-k31/totsuka/issues/358)) ([31071e5](https://github.com/tomoya-k31/totsuka/commit/31071e5347cc8e0f141ac1def709f2c4aea9ebf2)), closes [#346](https://github.com/tomoya-k31/totsuka/issues/346)
+* **cli:** setup にプラグイン導入・plugins/*.toml 生成・doctor を追加する ([#364](https://github.com/tomoya-k31/totsuka/issues/364)) ([b02f936](https://github.com/tomoya-k31/totsuka/commit/b02f9368a1b4bec59cc1307d2c8008f2f5fee493))
+* **cli:** task show に会話履歴を表示 ([#263](https://github.com/tomoya-k31/totsuka/issues/263)) ([#279](https://github.com/tomoya-k31/totsuka/issues/279)) ([5e74e44](https://github.com/tomoya-k31/totsuka/commit/5e74e44d9e3ee20219afcab984d094bbe4638ac9))
+* **cli:** totsuka setup — レシピ選択式の対話ウィザード ([#362](https://github.com/tomoya-k31/totsuka/issues/362)) ([5126907](https://github.com/tomoya-k31/totsuka/commit/5126907f9b02da35b22c6a473008a9bfc44905b7))
+* **cli:** エラー出力の機械可読化と exit code 体系の整理 ([#220](https://github.com/tomoya-k31/totsuka/issues/220)) ([0ff046b](https://github.com/tomoya-k31/totsuka/commit/0ff046bb2e67b1f6bbadfff2ae8a79a2d21b47aa))
+* **core:** [prompts] / [[workflows]].prompts でプロンプトを上書き可能にする ([#325](https://github.com/tomoya-k31/totsuka/issues/325)) ([283e1cf](https://github.com/tomoya-k31/totsuka/commit/283e1cf41f952a9fd269067515c2be8e0fec361d))
+* **core:** AI ツールレジストリと解決済み ToolLaunchSpec（[#196](https://github.com/tomoya-k31/totsuka/issues/196) Phase 1） ([#223](https://github.com/tomoya-k31/totsuka/issues/223)) ([c3740fb](https://github.com/tomoya-k31/totsuka/commit/c3740fba0f106c8c050af88c73c3cad5cf03d893))
+* **core:** codex hooks 基盤 — スクリプトのツール非依存化と hooks.json 登録管理（[#196](https://github.com/tomoya-k31/totsuka/issues/196) Phase 2 PR1） ([#224](https://github.com/tomoya-k31/totsuka/issues/224)) ([93606f5](https://github.com/tomoya-k31/totsuka/commit/93606f579f2fa9468e8dc079d10f1adc1f6e72f0))
+* **core:** config.toml の型付き編集ヘルパを追加する ([#359](https://github.com/tomoya-k31/totsuka/issues/359)) ([f3dc52e](https://github.com/tomoya-k31/totsuka/commit/f3dc52eaefd6215152419cd7319bfca4552b8b32))
+* **core:** dispatch をメッセージ駆動化し resume を付け替え ([#273](https://github.com/tomoya-k31/totsuka/issues/273)) ([83326a5](https://github.com/tomoya-k31/totsuka/commit/83326a5b41c79bf1e900d5ae1b2993bc68b36b99)), closes [#259](https://github.com/tomoya-k31/totsuka/issues/259)
+* **core:** F-86 を撤回し push と PR 作成をエージェントの責務にする ([#340](https://github.com/tomoya-k31/totsuka/issues/340)) ([ef451a9](https://github.com/tomoya-k31/totsuka/commit/ef451a92f770a38863ea76ef4e0d1b4e0465c093))
+* **core:** ingest を会話への追記に対応（Reopen・ack 意味論） ([#272](https://github.com/tomoya-k31/totsuka/issues/272)) ([1fb056b](https://github.com/tomoya-k31/totsuka/commit/1fb056b08941a4333340d4b97db353417bca8640)), closes [#258](https://github.com/tomoya-k31/totsuka/issues/258)
+* **core:** opencode hooks 基盤 — 完了検知 JS プラグインと plan agent アセット（[#196](https://github.com/tomoya-k31/totsuka/issues/196) Phase 3 PR1） ([#226](https://github.com/tomoya-k31/totsuka/issues/226)) ([fe906d5](https://github.com/tomoya-k31/totsuka/commit/fe906d52ded92b1ba4150935013876519ea5d129))
+* **core:** opencode plan エージェントの散文を config 由来にする ([#327](https://github.com/tomoya-k31/totsuka/issues/327)) ([149c5cb](https://github.com/tomoya-k31/totsuka/commit/149c5cbabe8483c8f902cc1d6f553f1f6dd46b50)), closes [#316](https://github.com/tomoya-k31/totsuka/issues/316)
+* **core:** schema_migrations に applied_by 列とバージョン付きバックアップ ([#285](https://github.com/tomoya-k31/totsuka/issues/285)) ([64b76d8](https://github.com/tomoya-k31/totsuka/commit/64b76d8aa771ca2f7f59a71316605c8b6ecb8fb9))
+* **core:** state.db v5 — task_messages（会話メッセージ台帳） ([#271](https://github.com/tomoya-k31/totsuka/issues/271)) ([a2acce6](https://github.com/tomoya-k31/totsuka/commit/a2acce6e8c09b7dae36416d10c19e6db5c93c679)), closes [#257](https://github.com/tomoya-k31/totsuka/issues/257)
+* **core:** state.db バージョン不整合のガード ([#288](https://github.com/tomoya-k31/totsuka/issues/288)) ([c38d006](https://github.com/tomoya-k31/totsuka/commit/c38d006dd07ee737231276e40d067183fddd0d75)), closes [#275](https://github.com/tomoya-k31/totsuka/issues/275)
+* **core:** task/lookup の実装（core + plugin-sdk） ([#274](https://github.com/tomoya-k31/totsuka/issues/274)) ([036b562](https://github.com/tomoya-k31/totsuka/commit/036b562c9c698140884f33b910d446e1aeb92507)), closes [#260](https://github.com/tomoya-k31/totsuka/issues/260)
+* **core:** TaskEvent::Reopen と Done からの再キュー遷移 ([#270](https://github.com/tomoya-k31/totsuka/issues/270)) ([c277c3b](https://github.com/tomoya-k31/totsuka/commit/c277c3bf49c3d0d0f23cccfe5fdeafafc66379fe)), closes [#256](https://github.com/tomoya-k31/totsuka/issues/256)
+* **core:** ToolKind::Codex を有効化 — launch_spec の codex argv と組み込み codex（[#196](https://github.com/tomoya-k31/totsuka/issues/196) Phase 2 PR2） ([#225](https://github.com/tomoya-k31/totsuka/issues/225)) ([e40283a](https://github.com/tomoya-k31/totsuka/commit/e40283a7232a6a402b3dc8245487e9797341beb5))
+* **core:** ToolKind::Opencode を有効化 — launch_spec と可視コンテキスト経路（[#196](https://github.com/tomoya-k31/totsuka/issues/196) Phase 3 PR2） ([#227](https://github.com/tomoya-k31/totsuka/issues/227)) ([9510e94](https://github.com/tomoya-k31/totsuka/commit/9510e941dc7dde50df4234f6690ded1078aa2c56))
+* **core:** worktree ディレクトリ名をタスク由来にし base_commit を記録する ([#338](https://github.com/tomoya-k31/totsuka/issues/338)) ([08b9b02](https://github.com/tomoya-k31/totsuka/commit/08b9b02dffa6b0ffd331bab3de17b7f654cf8a0c))
+* **core:** worktree 掃除を「判定 → pane → worktree」の3段化 + 保持プリセット + session/release 追加 ([#215](https://github.com/tomoya-k31/totsuka/issues/215)) ([3889b1b](https://github.com/tomoya-k31/totsuka/commit/3889b1b2950f23df79a6d00e292cf8fef00765ba))
+* **core:** ブランチの命名権をエージェントへ移す ([#339](https://github.com/tomoya-k31/totsuka/issues/339)) ([29de6e5](https://github.com/tomoya-k31/totsuka/commit/29de6e59a780b974508af26f1a2872c8f331915d))
+* **core:** プロンプト上書きの検証と ADR-0023 を追加する ([#326](https://github.com/tomoya-k31/totsuka/issues/326)) ([51e3121](https://github.com/tomoya-k31/totsuka/commit/51e31212649ed3f4ab5d0be7eb408ab442b3f773)), closes [#315](https://github.com/tomoya-k31/totsuka/issues/315)
+* **orchestrator-core:** plan モードのタスクがブランチを切ったら警告する ([#385](https://github.com/tomoya-k31/totsuka/issues/385)) ([4b87830](https://github.com/tomoya-k31/totsuka/commit/4b87830c096888ce599ff187db047e8faf1534fd))
+* **plugin-protocol:** message_key / task/lookup / SESSION_UNRESUMABLE の追加 ([#269](https://github.com/tomoya-k31/totsuka/issues/269)) ([03ce40c](https://github.com/tomoya-k31/totsuka/commit/03ce40c40bc2f3bd08f8017017ca7798dbe5d1d6)), closes [#255](https://github.com/tomoya-k31/totsuka/issues/255)
+* **protocol:** 0.2.0 — tasks/fetch を削除し task_source を push 専用へ ([#204](https://github.com/tomoya-k31/totsuka/issues/204)) ([b42c2ca](https://github.com/tomoya-k31/totsuka/commit/b42c2cabeb538e413251881f63f1f1cb4f717c97))
+* **release:** リリース tarball に全プラグインを同梱する ([#355](https://github.com/tomoya-k31/totsuka/issues/355)) ([e5af156](https://github.com/tomoya-k31/totsuka/commit/e5af15657a931c2156fd91fb209b32ed6163fbf5)), closes [#344](https://github.com/tomoya-k31/totsuka/issues/344)
+* **slack:** trigger_reactions 設定と reaction_added の正規化を受け入れる ([#334](https://github.com/tomoya-k31/totsuka/issues/334)) ([fc16d94](https://github.com/tomoya-k31/totsuka/commit/fc16d94b53b8c9329c4520bcf482d5ea064084df)), closes [#319](https://github.com/tomoya-k31/totsuka/issues/319)
+* **slack:** プロンプト 9 キーを defaults.toml へ外出しし上書き可能にする ([#329](https://github.com/tomoya-k31/totsuka/issues/329)) ([0cdd0b5](https://github.com/tomoya-k31/totsuka/commit/0cdd0b58aa1f80de4421b2e3fc73037ca7c6ec96)), closes [#318](https://github.com/tomoya-k31/totsuka/issues/318)
+* **slack:** リアクション対象メッセージを引き直す API を追加する ([#335](https://github.com/tomoya-k31/totsuka/issues/335)) ([878d0d4](https://github.com/tomoya-k31/totsuka/commit/878d0d4387ccf9554f4cadcf9b7c6a9369259e8c))
+* **slack:** 本人が付けた :eyes: を mention と同じタスク起動トリガにする ([#336](https://github.com/tomoya-k31/totsuka/issues/336)) ([c136439](https://github.com/tomoya-k31/totsuka/commit/c136439de337a37e509628dd4a8f8c49c79b6bdd))
+* **slack:** 返信案・ピッカー到着を bot DM ナッジで push 通知する ([#306](https://github.com/tomoya-k31/totsuka/issues/306)) ([ed1d4e0](https://github.com/tomoya-k31/totsuka/commit/ed1d4e094532217d9ca8e2dc9ab09e6a04eff4c6))
+* **task-source-slack:** タスク同一性をスレッド単位へ ([#262](https://github.com/tomoya-k31/totsuka/issues/262)) ([#278](https://github.com/tomoya-k31/totsuka/issues/278)) ([155c0dd](https://github.com/tomoya-k31/totsuka/commit/155c0dd052496efed766d38a62a91c4dbc9f07ea))
+* **task-source-slack:** 下書きストアの永続化（再起動でボタンが期限切れにならないように） ([#238](https://github.com/tomoya-k31/totsuka/issues/238)) ([016004a](https://github.com/tomoya-k31/totsuka/commit/016004a2e320ce359a5ad1bd75bbaa5b7f03d750))
+* **task-source-slack:** 期限切れ下書き通知を元スレッド内へ投稿（ボタン value に座標を埋め込む） ([#239](https://github.com/tomoya-k31/totsuka/issues/239)) ([2229f23](https://github.com/tomoya-k31/totsuka/commit/2229f235f07116f8926105321ba90516b9f59e9a))
+* **task-source-slack:** 設定が要求するスコープの欠落を TokenGuard で警告する ([#384](https://github.com/tomoya-k31/totsuka/issues/384)) ([bbbbf42](https://github.com/tomoya-k31/totsuka/commit/bbbbf4279ffcd8f04d9e643ed25953772bf17410))
+
+
+### Bug Fixes
+
+* **agent-ide-herdr:** agent_not_found と未送信プロンプトを吸収する ([#392](https://github.com/tomoya-k31/totsuka/issues/392)) ([ff78b97](https://github.com/tomoya-k31/totsuka/commit/ff78b97eb28d4fcd72a5d86cd4b9891273d266ec)), closes [#391](https://github.com/tomoya-k31/totsuka/issues/391)
+* **agent-ide-herdr:** stall したプロンプトは再送せず agent.wait で確認する ([#381](https://github.com/tomoya-k31/totsuka/issues/381)) ([262c35f](https://github.com/tomoya-k31/totsuka/commit/262c35f70d177e9375390b246ed3ac5fe04cbdf8))
+* **agent-ide-herdr:** シェル未準備の pane への agent.start をリトライする ([#388](https://github.com/tomoya-k31/totsuka/issues/388)) ([28d3428](https://github.com/tomoya-k31/totsuka/commit/28d3428d79bcc5bf8bb34d9fb208ef25423eca81))
+* **agent-ide-herdr:** 生成直後の pane に対する agent.start をリトライする ([#376](https://github.com/tomoya-k31/totsuka/issues/376)) ([8edcee5](https://github.com/tomoya-k31/totsuka/commit/8edcee555ec9086b46cd40e1b3f87619a3456ff0))
+* **agent-ide-herdr:** 起動途中のエージェントへの agent.prompt をリトライする ([#377](https://github.com/tomoya-k31/totsuka/issues/377)) ([0c65c55](https://github.com/tomoya-k31/totsuka/commit/0c65c558ce32ad5d1eb20be7d022faebe1bef1b8))
+* **cli:** [hooks].auth_token_ref 未設定の検査を到達可能にする ([#213](https://github.com/tomoya-k31/totsuka/issues/213)) ([f6c6409](https://github.com/tomoya-k31/totsuka/commit/f6c6409fcdbe4cdda5ae0d68450e6fd20db88ca3))
+* **cli:** config validate --offline がパース不能な plugin.toml を無診断で通す問題を修正 ([#228](https://github.com/tomoya-k31/totsuka/issues/228)) ([7260d5b](https://github.com/tomoya-k31/totsuka/commit/7260d5b6ef608e6356977f29af9a134f26451c16))
+* **cli:** doctor が LLM キーの有効性を検証できず 401 が実行時まで露見しない問題を塞ぐ ([#286](https://github.com/tomoya-k31/totsuka/issues/286)) ([36aea50](https://github.com/tomoya-k31/totsuka/commit/36aea5047b67708983220189e53f2df9dcf1af60)), closes [#267](https://github.com/tomoya-k31/totsuka/issues/267)
+* **cli:** doctor の human 出力と stderr ログ層にも外部由来テキストの無害化を広げる ([#300](https://github.com/tomoya-k31/totsuka/issues/300)) ([5e09f39](https://github.com/tomoya-k31/totsuka/commit/5e09f39cc95490d33491f85acd46e7e43637fee1))
+* **cli:** doctor の op:// 解決を 1Password セッションの有無で出し分ける ([#298](https://github.com/tomoya-k31/totsuka/issues/298)) ([40ff31e](https://github.com/tomoya-k31/totsuka/commit/40ff31ea078797cb61a265c5a836c6df9da0cc58)), closes [#289](https://github.com/tomoya-k31/totsuka/issues/289)
+* **cli:** グローバル --debug が run 以外のコマンドで無視される問題を修正 ([#230](https://github.com/tomoya-k31/totsuka/issues/230)) ([3d25a41](https://github.com/tomoya-k31/totsuka/commit/3d25a41c7a8a40a4d1973b24edd04cfd28f5b4db))
+* **cli:** 外部由来テキストの制御シーケンスを端末出力前に無害化する ([#296](https://github.com/tomoya-k31/totsuka/issues/296)) ([d61c182](https://github.com/tomoya-k31/totsuka/commit/d61c1827702b9dfdf3c15b036ccc52646f6dc3ef)), closes [#280](https://github.com/tomoya-k31/totsuka/issues/280)
+* **cli:** 設定ロードの2系統不一致を解消（Cx と plugin_cmd::Locations の統一） ([#231](https://github.com/tomoya-k31/totsuka/issues/231)) ([f680735](https://github.com/tomoya-k31/totsuka/commit/f6807357118b511d65e2eb5d8f168c5f7aadb110))
+* **core:** plugin install がインストール先バイナリを in-place 上書きしないようにする ([#294](https://github.com/tomoya-k31/totsuka/issues/294)) ([bb30715](https://github.com/tomoya-k31/totsuka/commit/bb30715988f205a56b21c2da30d9d946825e8f97))
+* **core:** template::scan をプレースホルダ識別子に限定する ([#330](https://github.com/tomoya-k31/totsuka/issues/330)) ([9489e8b](https://github.com/tomoya-k31/totsuka/commit/9489e8b837d2aad032ee77fdd2d560b075e67a67)), closes [#328](https://github.com/tomoya-k31/totsuka/issues/328)
+* **core:** TOTSUKA_* 環境変数オーバーライドを設定ロード経路に配線 ([#212](https://github.com/tomoya-k31/totsuka/issues/212)) ([b7bcb4c](https://github.com/tomoya-k31/totsuka/commit/b7bcb4c550e7b119a48d857b45dd74f57964f37a))
+* **core:** verification = llm を prompt 型フック非対応ツールで human へ縮退させる ([#309](https://github.com/tomoya-k31/totsuka/issues/309)) ([6ef81f7](https://github.com/tomoya-k31/totsuka/commit/6ef81f7d54191c52e856c070346384fdbc55db02)), closes [#301](https://github.com/tomoya-k31/totsuka/issues/301)
+* **core:** worktree 再作成の堅牢化（パス実在チェック・既存ブランチ対応） ([#268](https://github.com/tomoya-k31/totsuka/issues/268)) ([56c626e](https://github.com/tomoya-k31/totsuka/commit/56c626ed342fd7c41b1672e382717bab606f4f91)), closes [#254](https://github.com/tomoya-k31/totsuka/issues/254)
+* **core:** worktree 掃除のブランチ削除を origin 基準に変える ([#266](https://github.com/tomoya-k31/totsuka/issues/266)) ([#287](https://github.com/tomoya-k31/totsuka/issues/287)) ([12fbf3f](https://github.com/tomoya-k31/totsuka/commit/12fbf3f3a5f48b7478899920039bb8e88bcd3983))
+* **core:** worktree 配置の既定値を Paths 経由にし XDG_STATE_HOME 未設定でも解決させる ([#240](https://github.com/tomoya-k31/totsuka/issues/240)) ([11b778e](https://github.com/tomoya-k31/totsuka/commit/11b778e7899ecf90fe489cb69884a3c59728e169))
+* **core:** 存在しない `config migrate` への案内と未実装の起動時マイグレーション約束を実態に合わせる ([#295](https://github.com/tomoya-k31/totsuka/issues/295)) ([2c93dbc](https://github.com/tomoya-k31/totsuka/commit/2c93dbcb6a3e8830f096ac9df45a9fff42fef038)), closes [#276](https://github.com/tomoya-k31/totsuka/issues/276)
+* **orchestrator-core:** dispatch で D-03 の沈黙アンカーをクリアする ([#383](https://github.com/tomoya-k31/totsuka/issues/383)) ([7007589](https://github.com/tomoya-k31/totsuka/commit/7007589db1c8992ea893d284aa34d7c7115c347a))
+* **orchestrator-core:** NEEDS_INPUT を報告した停止を検収ジャッジがブロックしないようにする ([#390](https://github.com/tomoya-k31/totsuka/issues/390)) ([2fe5bfb](https://github.com/tomoya-k31/totsuka/commit/2fe5bfb1620b07508b40a968eb0efe19a1b9116c)), closes [#389](https://github.com/tomoya-k31/totsuka/issues/389)
+* **scripts:** okf-lint が frontmatter の YAML 妥当性と description を検証していない ([#308](https://github.com/tomoya-k31/totsuka/issues/308)) ([44cfc9e](https://github.com/tomoya-k31/totsuka/commit/44cfc9ec394e15e078f450d8c5c928a3670f1f5c)), closes [#304](https://github.com/tomoya-k31/totsuka/issues/304)
+* **task-source-slack:** NameCache::channel() が失敗時も raw id をキャッシュする問題を修正 ([#129](https://github.com/tomoya-k31/totsuka/issues/129)) ([#232](https://github.com/tomoya-k31/totsuka/issues/232)) ([27d19b2](https://github.com/tomoya-k31/totsuka/commit/27d19b26d40fdef5296e6103f535b32f7babfd00))
+
+
+### Performance
+
+* **build:** テストの待ち時間とリンクコストを削る ([#281](https://github.com/tomoya-k31/totsuka/issues/281) の E/B/C-1) ([#284](https://github.com/tomoya-k31/totsuka/issues/284)) ([a0b1cc7](https://github.com/tomoya-k31/totsuka/commit/a0b1cc7ed4e7eeb5a99477d1487094107e5276a6))
+* **ci:** main スコープの rust-cache を再生し、全 PR の初回 run を warm にする ([#366](https://github.com/tomoya-k31/totsuka/issues/366)) ([c000081](https://github.com/tomoya-k31/totsuka/commit/c000081b00560f266860ef0093f2986206e39a83)), closes [#341](https://github.com/tomoya-k31/totsuka/issues/341)
+* **ci:** テストの待ち時間を潰し、machete 統合とキャッシュ掃除を入れる ([#281](https://github.com/tomoya-k31/totsuka/issues/281) の A/C-2/D/G) ([#291](https://github.com/tomoya-k31/totsuka/issues/291)) ([a6cb511](https://github.com/tomoya-k31/totsuka/commit/a6cb51108d9e7699ae531752c1b9c3d2ea717122))
+
+
+### Refactors
+
+* claude 固定命名の一般化 rename（/agent-events・tool_session_id・AgentHook） ([#222](https://github.com/tomoya-k31/totsuka/issues/222)) ([62c9f57](https://github.com/tomoya-k31/totsuka/commit/62c9f578bb4d834f06526b33a469882afcb56223))
+* **cli:** common.rs の config→core 型マッピング + secret 解決ヘルパを orchestrator-core へ移動 ([#219](https://github.com/tomoya-k31/totsuka/issues/219)) ([33821f4](https://github.com/tomoya-k31/totsuka/commit/33821f41c498c7c779b03b32b297380ac090b281))
+* **cli:** hooks レンダリングサブシステムを orchestrator-core へ移動 ([#218](https://github.com/tomoya-k31/totsuka/issues/218)) ([20116f3](https://github.com/tomoya-k31/totsuka/commit/20116f33798342ef70996f8c930ad8102920becf))
+* **core:** Clock port の導入 — 時刻取得の seam 化 ([#174](https://github.com/tomoya-k31/totsuka/issues/174)) ([#236](https://github.com/tomoya-k31/totsuka/issues/236)) ([51695d6](https://github.com/tomoya-k31/totsuka/commit/51695d656454eea4662ec0f54a55b36f2852f88b))
+* **core:** コア注入プロンプトを prompts/defaults.toml へ外出しする ([#323](https://github.com/tomoya-k31/totsuka/issues/323)) ([3a32db7](https://github.com/tomoya-k31/totsuka/commit/3a32db7b3947c391fc99a3d7ac492984b8c2e806)), closes [#313](https://github.com/tomoya-k31/totsuka/issues/313)
+* **core:** プレースホルダレンダラを src/template.rs に抽出する ([#320](https://github.com/tomoya-k31/totsuka/issues/320)) ([06ea078](https://github.com/tomoya-k31/totsuka/commit/06ea078f1d82089f123e4945dcda46a6bb5e5ee5)), closes [#312](https://github.com/tomoya-k31/totsuka/issues/312)
+* **docs:** docs 元帳の並行 PR 衝突を構造的に潰し、dev-flow を park + 段階検査に改める ([#372](https://github.com/tomoya-k31/totsuka/issues/372)) ([c910a40](https://github.com/tomoya-k31/totsuka/commit/c910a408cd6b29fb18d1275a4c9c753a3d84d0b1)), closes [#360](https://github.com/tomoya-k31/totsuka/issues/360)
+* **orca:** plan prefix のデフォルトを defaults.toml へ外出しする ([#321](https://github.com/tomoya-k31/totsuka/issues/321)) ([1f6295e](https://github.com/tomoya-k31/totsuka/commit/1f6295ea425044fef009d3c2dc2ecebba9bbf1e4)), closes [#317](https://github.com/tomoya-k31/totsuka/issues/317)
+* **plugins:** プラグインの bin 名を plugin.toml の name に揃える ([#354](https://github.com/tomoya-k31/totsuka/issues/354)) ([dc54106](https://github.com/tomoya-k31/totsuka/commit/dc54106dcbf40f47d3e71f046b3833fb54e28672)), closes [#343](https://github.com/tomoya-k31/totsuka/issues/343)
+* thread_key の撤去（protocol 0.3.0 + state.db v7） ([#264](https://github.com/tomoya-k31/totsuka/issues/264)) ([#282](https://github.com/tomoya-k31/totsuka/issues/282)) ([482b08c](https://github.com/tomoya-k31/totsuka/commit/482b08c08b6186867981587180572be487ab4765))
+
+
+### Documentation
+
+* ADR-0026 に実機検収の結果を記録する ([#353](https://github.com/tomoya-k31/totsuka/issues/353)) ([c031d71](https://github.com/tomoya-k31/totsuka/commit/c031d7182f35bc41bf3798c60d8f272da0e533a9))
+* **ci:** cron の JST 表記が 1 日ずれていたのを直す ([#369](https://github.com/tomoya-k31/totsuka/issues/369)) ([91f18b7](https://github.com/tomoya-k31/totsuka/commit/91f18b705892552161f8898c7f393bc9cbf1453b))
+* **data:** state.db スキーマに ER 図（Mermaid）を追加 ([#241](https://github.com/tomoya-k31/totsuka/issues/241)) ([1cbb9b2](https://github.com/tomoya-k31/totsuka/commit/1cbb9b2e0faf780026efad8701b8bcdc36c8841f))
+* **decisions:** ADR-0020 ステータスマーカーの存置を記録する ([#303](https://github.com/tomoya-k31/totsuka/issues/303)) ([c07af5e](https://github.com/tomoya-k31/totsuka/commit/c07af5e33b55f00fda4f2e74774d640d90aa16cc))
+* **decisions:** ADR-0024 エージェントへの指示と実行エンベロープの層分けを記録する ([#332](https://github.com/tomoya-k31/totsuka/issues/332)) ([6bdbeed](https://github.com/tomoya-k31/totsuka/commit/6bdbeed6bffb851d158b2afdffa383f5e0e4d5e6))
+* **decisions:** ADR-0024 のツール制限フラグを実機で確定させ verified を付ける ([#333](https://github.com/tomoya-k31/totsuka/issues/333)) ([e138ab8](https://github.com/tomoya-k31/totsuka/commit/e138ab8808e0aa1fdb6dcb65081b771e575ed0af)), closes [#324](https://github.com/tomoya-k31/totsuka/issues/324)
+* **development:** config.toml の設定例集を追加 ([#207](https://github.com/tomoya-k31/totsuka/issues/207)) ([100ec2c](https://github.com/tomoya-k31/totsuka/commit/100ec2cc93197a657c6eb4093677b7740983b76a))
+* **development:** プラグイン開発ガイドにビルド手順を追記 ([#206](https://github.com/tomoya-k31/totsuka/issues/206)) ([c300d56](https://github.com/tomoya-k31/totsuka/commit/c300d567988e966e3185156cefc9fa1543fcb45d))
+* **glossary:** pane（ペイン）を用語として追加する ([#352](https://github.com/tomoya-k31/totsuka/issues/352)) ([91c854e](https://github.com/tomoya-k31/totsuka/commit/91c854e0a255f7fb213b465cf95a7ad04c2c84e3))
+* **okf:** docs バンドルを OKF v0.2 へ移行する ([#310](https://github.com/tomoya-k31/totsuka/issues/310)) ([add5e51](https://github.com/tomoya-k31/totsuka/commit/add5e51411bcbaba7970bfab6e030cb96c6f4af1))
+* **references:** herdr Socket API ミラーを protocol 17 の実機プローブで改訂 ([#374](https://github.com/tomoya-k31/totsuka/issues/374)) ([a47d372](https://github.com/tomoya-k31/totsuka/commit/a47d3727d057cc9e7e8eb844bf3538c07b2e7129))
+* **rules:** dev-flow に code-review の必要性と再実行の非トリガーを明記する ([#322](https://github.com/tomoya-k31/totsuka/issues/322)) ([0176dd2](https://github.com/tomoya-k31/totsuka/commit/0176dd288eb6bb9bbe3437093576513069805a4d))
+* **slack:** :eyes: リアクショントリガの仕様・設定・ADR を追加する ([#337](https://github.com/tomoya-k31/totsuka/issues/337)) ([adb246e](https://github.com/tomoya-k31/totsuka/commit/adb246ea3ee111f127308ca66d1be46688703701))
+* **spec:** F-104 の hook_events 冪等キーを実装（5 列）に合わせる ([#307](https://github.com/tomoya-k31/totsuka/issues/307)) ([2cbac78](https://github.com/tomoya-k31/totsuka/commit/2cbac7827f3e115e19d5331c0d519798c98fc8db)), closes [#302](https://github.com/tomoya-k31/totsuka/issues/302)
+* 統合セットアップ Playbook と Quickstart 改訂 ([#365](https://github.com/tomoya-k31/totsuka/issues/365)) ([eed30b5](https://github.com/tomoya-k31/totsuka/commit/eed30b584c264004fee2c689bae8b9752da6fe0d))
+* 設定キーの追加はスキーマ変更なので config-reference.md を同一 PR で ([283e1cf](https://github.com/tomoya-k31/totsuka/commit/283e1cf41f952a9fd269067515c2be8e0fec361d)), closes [#314](https://github.com/tomoya-k31/totsuka/issues/314)
+
 ## [0.1.4](https://github.com/tomoya-k31/totsuka/compare/v0.1.3...v0.1.4) (2026-07-20)
 
 
