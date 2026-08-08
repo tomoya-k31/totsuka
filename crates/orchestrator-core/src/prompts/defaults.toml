@@ -139,6 +139,30 @@ verification_rubric = """
 - 完了を申告しており、かつ作業が指示された要件を実際に満たしている。対象リポジトリの現在のコードと状態に基づいて確かめること。表面的な自己申告では足りず、変更が意図どおり機能し破綻や取りこぼしが無いこと\
 """
 
+# The rubric for profiles whose deliverable is written **outside** the worktree
+# by the agent itself — triage / design / implement (#398, #393 D3).
+#
+# Those profiles publish nothing through `result/publish`, so the artifact's URL
+# in the final message is the *only* channel by which the Orchestrator learns
+# the work landed anywhere. Without this the judge would grade the reasoning and
+# pass a task that described a design it never posted — the "said it wrote it
+# and did not" trap #311 hit twice.
+#
+# It is a **rubric default**, not an extra section: it replaces
+# `verification_rubric` for those profiles rather than being appended, so the
+# existing precedence (workflow prompts > workflow rubric > global [prompts] >
+# this > the generic default) needs no new rule.
+#
+# Same grammatical constraint as `verification_rubric` above: this is read as a
+# *condition that must be TRUE*, never as an instruction. "Include the URL"
+# would be graded as unmet on a stop where the rule does not apply.
+#
+# Placeholders: none.
+verification_rubric_artifact_url = """
+- 完了を申告しており、成果物（issue コメント / Notion ページ / Pull Request）の URL が応答の最終メッセージに実際に含まれている。この URL は成果物が存在することを Orchestrator が知る唯一の経路であり、「これから書く」「作成予定」のような未着手を示す書き方は含まれているとは見なさない\
+- かつ、その URL が指す成果物の内容が、申告している作業（設計・起票・実装）と整合している\
+"""
+
 # Intermediate-Stop branch, mirroring `on-stop.sh`'s R-02/D-12 rule: a Stop with
 # background tasks still running is a heartbeat, not a completion claim.
 #

@@ -27,7 +27,7 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-use crate::config::{PromptsConfig, RootConfig, WorkflowConfig, WorkflowPromptsConfig};
+use crate::config::{Profile, PromptsConfig, RootConfig, WorkflowConfig, WorkflowPromptsConfig};
 use crate::domain::signal::{MARKER_COMPLETED, MARKER_FAILED, MARKER_NEEDS_INPUT};
 use crate::template;
 
@@ -69,6 +69,16 @@ pub struct Prompts {
     branch_convention: String,
     /// Judging criteria of the `prompt`-type Stop hook.
     verification_rubric: String,
+    /// The rubric [`resolve_for`](Self::resolve_for) substitutes for
+    /// [`verification_rubric`](Self::verification_rubric) on a profile whose
+    /// deliverable the agent writes outside the worktree (#398).
+    ///
+    /// Deliberately **not** a `[prompts]` key. It is a *default* for the rubric
+    /// leaf, and that leaf already has two override spellings
+    /// (`[[workflows]].rubric` and `[[workflows]].prompts.verification_rubric`)
+    /// sitting above it. A third would be one more way to say the same thing,
+    /// with its own precedence question.
+    verification_rubric_artifact_url: String,
     /// Intermediate-Stop exemption appended to the rubric.
     verification_background_exemption: String,
     /// Non-claim exemption: a Stop already reporting NEEDS_INPUT/FAILED is not
@@ -108,6 +118,7 @@ pub const ALLOWED_PLACEHOLDERS: &[(&str, &[&str])] = &[
     ("marker_self_report", MARKER_PLACEHOLDERS),
     ("branch_convention", &[]),
     ("verification_rubric", &[]),
+    ("verification_rubric_artifact_url", &[]),
     ("verification_background_exemption", &[]),
     (
         "verification_nonclaim_exemption",
@@ -322,17 +333,45 @@ impl Prompts {
     /// 1. `[[workflows]].prompts.*`
     /// 2. `[[workflows]].rubric` (legacy, rubric leaf only)
     /// 3. `[prompts].*`
-    /// 4. the built-in default
+    /// 4. **the profile's rubric default** (rubric leaf only, #398)
+    /// 5. the built-in default
     ///
     /// 2 beating 3 is deliberate — both are about this workflow, so ordering it
     /// the other way would mean adding a global `verification_rubric` silently
     /// overrides every existing per-workflow `rubric`.
+    ///
+    /// 4 sits *below* the global table for the same reason in reverse: an
+    /// operator who already set `[prompts].verification_rubric` chose that text
+    /// for every workflow, and a profile introduced later must not overrule a
+    /// choice already made. The cost is real and worth naming — **such a config
+    /// does not get URL verification** even on a `design` workflow, and the
+    /// only symptom is a task passing on a design it never posted. It is
+    /// written down in `config-reference.md`; the alternative (profile beating
+    /// global) trades a documented gap for a silent override.
     pub fn resolve_for(cfg: &RootConfig, wf: &WorkflowConfig) -> Prompts {
-        let mut p = Self::builtin().clone().overlay_global(&cfg.prompts);
+        let mut p = Self::builtin().clone();
+        if wf.profile.is_some_and(Self::profile_verifies_an_artifact) {
+            p.verification_rubric
+                .clone_from(&p.verification_rubric_artifact_url);
+        }
+        let mut p = p.overlay_global(&cfg.prompts);
         if let Some(rubric) = wf.rubric.as_deref() {
             p.verification_rubric = rubric.to_string();
         }
         p.overlay_workflow(&wf.prompts).finish()
+    }
+
+    /// Whether this profile's deliverable is written outside the worktree, so
+    /// the only evidence it exists is a URL in the final message (#393 D3).
+    ///
+    /// `answer` is excluded: its reply goes back through the source plugin's
+    /// approval gate, so there is no URL to demand and demanding one would fail
+    /// every well-behaved answer.
+    fn profile_verifies_an_artifact(profile: Profile) -> bool {
+        match profile {
+            Profile::Triage | Profile::Design | Profile::Implement => true,
+            Profile::Answer => false,
+        }
     }
 }
 
@@ -680,6 +719,91 @@ verification = "llm"
 "#
         ))
         .unwrap()
+    }
+
+    /// One profile workflow, with whatever extra keys the caller adds.
+    fn profile_cfg(profile: &str, extra: &str) -> RootConfig {
+        RootConfig::from_toml_str(&format!(
+            r#"
+[[workflows]]
+name = "w"
+source = "github"
+profile = "{profile}"
+agent = "herdr"
+{extra}
+"#
+        ))
+        .unwrap()
+    }
+
+    /// The profiles whose deliverable the agent writes outside the worktree get
+    /// the URL rubric; `answer` does not.
+    ///
+    /// `answer` matters as much as the other three: its reply goes back through
+    /// the plugin's approval gate, so there is no URL to produce and demanding
+    /// one would fail every well-behaved answer.
+    #[test]
+    fn the_artifact_rubric_is_the_default_for_externally_written_deliverables() {
+        for profile in ["triage", "design", "implement"] {
+            let c = profile_cfg(profile, "");
+            let rubric = Prompts::resolve_for(&c, &c.workflows[0])
+                .verification_rubric()
+                .to_string();
+            assert!(
+                rubric.contains("URL"),
+                "{profile} must be judged on the artifact URL: {rubric}"
+            );
+            assert_ne!(rubric, Prompts::builtin().verification_rubric());
+        }
+
+        let c = profile_cfg("answer", "");
+        assert_eq!(
+            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
+            Prompts::builtin().verification_rubric(),
+            "answer publishes through the plugin, so there is no URL to require"
+        );
+    }
+
+    /// The full precedence ladder for the rubric leaf, including where the
+    /// profile default sits (#398).
+    ///
+    /// The bottom row is the one worth pinning: an operator who set a global
+    /// `[prompts].verification_rubric` **does not get URL verification**, and
+    /// the only symptom is a design task passing on a design it never posted.
+    /// That is a documented gap, chosen over the alternative of a profile
+    /// silently overruling a choice already made for every workflow.
+    #[test]
+    fn the_profile_rubric_sits_below_global_prompts_and_above_the_generic_default() {
+        let artifact = |c: &RootConfig| {
+            Prompts::resolve_for(c, &c.workflows[0])
+                .verification_rubric()
+                .to_string()
+        };
+
+        // profile default beats the generic built-in.
+        let c = profile_cfg("design", "");
+        assert!(artifact(&c).contains("URL"));
+
+        // …and loses to a global `[prompts]`.
+        let c = profile_cfg(
+            "design",
+            "\n[prompts]\nverification_rubric = \"グローバル\"\n",
+        );
+        assert_eq!(artifact(&c), "グローバル");
+
+        // …which in turn loses to the workflow's own legacy `rubric`.
+        let c = profile_cfg(
+            "design",
+            "rubric = \"ワークフロー\"\n\n[prompts]\nverification_rubric = \"グローバル\"\n",
+        );
+        assert_eq!(artifact(&c), "ワークフロー");
+
+        // …which loses to the workflow's `prompts` table.
+        let c = profile_cfg(
+            "design",
+            "rubric = \"ワークフロー\"\n\n[workflows.prompts]\nverification_rubric = \"最強\"\n",
+        );
+        assert_eq!(artifact(&c), "最強");
     }
 
     #[test]

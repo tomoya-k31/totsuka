@@ -87,7 +87,7 @@ pub fn plugin_spec(
                 .filter(|w| w.source == name)
                 .map(|w| TriggerInfo {
                     workflow: w.name.clone(),
-                    trigger: serde_json::to_value(&w.trigger).unwrap_or(serde_json::Value::Null),
+                    trigger: trigger_value(w),
                 })
                 .collect();
             let poll = cfg.plugin(name).and_then(|p| p.poll_interval_secs);
@@ -175,6 +175,58 @@ pub fn plugin_init_config(
     Ok(value)
 }
 
+/// A workflow's trigger as the plugin receives it, with the profile-derived
+/// keys the Orchestrator adds (#398).
+///
+/// # Why the trigger table carries this
+///
+/// A source plugin has to write different instructions for a `design` task than
+/// for an `implement` one — where to put the design comment, what URL to report
+/// back. It cannot read the profile: `[[workflows]]` is the Orchestrator's
+/// schema, and teaching every plugin about profiles would make each one depend
+/// on a core concept that keeps changing.
+///
+/// So the Orchestrator translates. The trigger is already a plugin-defined
+/// `Value` that plugins parse loosely, so an extra key rides along with **no
+/// protocol change and no version bump**: an older plugin ignores what it does
+/// not recognise and behaves exactly as before.
+///
+/// The **cost is that the degradation is silent**. A new Orchestrator against
+/// an old plugin sends `instructions_kind`, gets no instructions back in the
+/// task, and dispatches an agent that was never told where to write. Nothing
+/// errors. There is no capability flag to probe for, so this cannot be checked
+/// at runtime — release core and the source plugins together.
+fn trigger_value(wf: &crate::config::WorkflowConfig) -> serde_json::Value {
+    let mut value = serde_json::to_value(&wf.trigger).unwrap_or(serde_json::Value::Null);
+    let Some(table) = value.as_object_mut() else {
+        return value;
+    };
+    if let Some(kind) = wf.profile.and_then(instructions_kind) {
+        table.insert(
+            "instructions_kind".to_string(),
+            serde_json::Value::String(kind.to_string()),
+        );
+    }
+    value
+}
+
+/// Which instruction set a profile asks its source plugin for, or `None` when
+/// the plugin should keep its existing behaviour.
+///
+/// `answer` is absent on purpose: its reply goes back through the plugin's own
+/// publish path, so the plugin already knows what to say and has always said
+/// it. Sending a kind it has no text for would be a key that reads as
+/// configured and does nothing.
+fn instructions_kind(profile: crate::config::Profile) -> Option<&'static str> {
+    use crate::config::Profile;
+    match profile {
+        Profile::Triage => Some("triage"),
+        Profile::Design => Some("design"),
+        Profile::Implement => Some("implement"),
+        Profile::Answer => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,7 +279,7 @@ agent = "herdr"
             .filter(|w| w.source == "slack")
             .map(|w| TriggerInfo {
                 workflow: w.name.clone(),
-                trigger: serde_json::to_value(&w.trigger).unwrap_or(serde_json::Value::Null),
+                trigger: trigger_value(w),
             })
             .collect();
 
@@ -243,6 +295,73 @@ agent = "herdr"
         // The catch-all is an empty object, never `null`: a plugin reading
         // `.get("reaction")` on `null` would panic or mis-branch.
         assert!(triggers[1].trigger.is_object());
+    }
+
+    /// The profile → `instructions_kind` translation the source plugins read
+    /// (#398), and the two silences that are deliberate.
+    #[test]
+    fn a_profile_bakes_its_instructions_kind_into_the_trigger() {
+        let cfg = root(
+            r#"
+[[workflows]]
+name = "gh-design"
+source = "github"
+trigger = { project_status = "設計待ち" }
+profile = "design"
+agent = "herdr"
+
+[[workflows]]
+name = "gh-implement"
+source = "github"
+trigger = { project_status = "実装待ち" }
+profile = "implement"
+agent = "herdr"
+
+[[workflows]]
+name = "slack-reply"
+source = "slack"
+trigger = {}
+profile = "answer"
+agent = "herdr"
+
+[[workflows]]
+name = "spelled-out"
+source = "github"
+trigger = { project_status = "その他" }
+mode = "plan"
+output = "source"
+agent = "herdr"
+"#,
+        );
+        let kind_of = |name: &str| {
+            let wf = cfg.workflows.iter().find(|w| w.name == name).unwrap();
+            trigger_value(wf)
+                .get("instructions_kind")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+
+        assert_eq!(kind_of("gh-design").as_deref(), Some("design"));
+        assert_eq!(kind_of("gh-implement").as_deref(), Some("implement"));
+        // `answer` publishes through the plugin's own path, which already knows
+        // what to say. A kind it has no text for would read as configured and
+        // do nothing.
+        assert_eq!(kind_of("slack-reply"), None);
+        // The spelled-out notation has no profile to translate.
+        assert_eq!(kind_of("spelled-out"), None);
+
+        // The existing trigger keys survive — the plugin still filters on them.
+        let design = cfg
+            .workflows
+            .iter()
+            .find(|w| w.name == "gh-design")
+            .unwrap();
+        assert_eq!(
+            trigger_value(design)
+                .get("project_status")
+                .and_then(|v| v.as_str()),
+            Some("設計待ち")
+        );
     }
 
     #[test]
