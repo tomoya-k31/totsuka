@@ -1,5 +1,13 @@
 # Bundle Update Log
 
+## 2026-08-09
+
+* **Creation**: `[[workflows]].profile` の 4 原型（answer / triage / design / implement）を導入する決定を記録 [ADR-0033 ワークフローの原型は [[workflows]].profile の 4 値で束ねる](/decisions/adr-0033-workflow-profile.md)
+* **Update**: `[[workflows]]` に `profile` を追加し、`mode` / `output` が profile 指定時は省略可になったことを反映 [config.toml リファレンス](/development/config-reference.md)
+* **Update**: profile 記法の設定例を追加 [config.toml の設定例集](/development/config-examples.md)
+* **Update**: ワークフローの定義に profile による原型指定を追記 [Workflow（ワークフロー）](/glossary/workflow.md)
+* **Update**: `setup` の「Slack — reply as yourself」レシピが `mode = "implement"` から `profile = "answer"`（= plan）へ変わった。記法だけでなく挙動の変更で、これから同レシピを選ぶ構成は書き込み可能な worktree を得なくなる [ADR-0033 §5](/decisions/adr-0033-workflow-profile.md)
+
 ## 2026-08-07
 
 * **Update**: [ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-7 と [agent-ide-herdr](/components/agent-ide-herdr.md) に、シェル未準備レースの**4 つ目の姿**を追記（#391）。`agent.start` が成功を返しつつ `agent.prompt` が `agent_not_found` を返す形で、**初回 dispatch のときだけ** `agent.start` を再送する。resume 付き dispatch では pane がセッションごと死んだ形なので `SESSION_UNRESUMABLE` のまま（#261）だが、初回 dispatch には死ぬべきセッションが存在しないため同じ読み方はできない。再送は時間ではなく回数で上限を切る（`MAX_AGENT_RESTARTS = 3`）— この姿は即座に返るので、時間だけで縛ると予算いっぱい CLI を起動し直し続けてしまう。

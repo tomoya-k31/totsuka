@@ -3684,6 +3684,51 @@ plan_cleanup = "keep_28d"
         assert_eq!(execution_mode("bogus"), ExecutionMode::Implement);
     }
 
+    /// `tasks.mode` is what routes worktree cleanup (`cleanup_plan` vs
+    /// `cleanup_implement`) and what `plan_mode_side_effect` reads, and it is
+    /// written from the resolved workflow mode. A profile that resolved to the
+    /// wrong string would leave `answer` worktrees behind under the implement
+    /// retention — invisible until the disk fills.
+    #[test]
+    fn profiles_persist_the_mode_string_that_routes_cleanup() {
+        let cfg = crate::config::RootConfig::from_toml_str(
+            r#"
+[[workflows]]
+name = "answer"
+source = "slack"
+trigger = { label = "a" }
+profile = "answer"
+agent = "herdr"
+
+[[workflows]]
+name = "triage"
+source = "slack"
+trigger = { label = "t" }
+profile = "triage"
+agent = "herdr"
+
+[[workflows]]
+name = "design"
+source = "slack"
+trigger = { label = "d" }
+profile = "design"
+agent = "herdr"
+
+[[workflows]]
+name = "implement"
+source = "slack"
+trigger = { label = "i" }
+profile = "implement"
+agent = "herdr"
+"#,
+        )
+        .unwrap();
+        let workflows = crate::domain::Workflow::from_configs(&cfg.workflows);
+        for (wf, expected) in workflows.iter().zip(["plan", "plan", "plan", "implement"]) {
+            assert_eq!(mode_str(wf.mode), expected, "{}", wf.name);
+        }
+    }
+
     /// `mode = "plan"` is documented as making no branch, commit or push
     /// (F-82) but nothing enforces it — a live plan-mode task branched,
     /// committed, pushed and opened a PR because the repository's conventions

@@ -30,7 +30,7 @@
 
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-use super::schema::{OutputPolicy, VerificationMode, WorkflowMode};
+use super::schema::{OutputPolicy, Profile, VerificationMode, WorkflowMode};
 
 /// Errors from editing `config.toml`.
 #[derive(Debug, thiserror::Error)]
@@ -125,12 +125,17 @@ pub struct WorkflowDraft<'a> {
     pub source: &'a str,
     /// Inline-table fragment, or `None` to match every task from the source.
     pub trigger: Option<&'a str>,
-    /// Plan or implement.
-    pub mode: WorkflowMode,
+    /// One of the four archetypes (#394). When set, `mode` and `verification`
+    /// must be `None` — the profile supplies them, and writing both is a
+    /// `ProfileConflict`.
+    pub profile: Option<Profile>,
+    /// Plan or implement. Required unless `profile` supplies it.
+    pub mode: Option<WorkflowMode>,
     /// Agent IDE plugin name.
     pub agent: &'a str,
-    /// What to do with the result.
-    pub output: OutputPolicy,
+    /// What to do with the result. Required unless `profile` supplies it, and
+    /// the one key a profile may be overridden on.
+    pub output: Option<OutputPolicy>,
     /// Omitted when `None`, so the schema default applies.
     pub verification: Option<VerificationMode>,
     /// Inline-table fragment, or `None` for no success hook.
@@ -164,9 +169,14 @@ pub fn upsert_workflow(config_toml: &str, draft: &WorkflowDraft) -> Result<Strin
     let entry = array_entry(&mut doc, "workflows", draft.name)?;
     set_value(entry, "name", draft.name);
     set_value(entry, "source", draft.source);
-    set_value(entry, "mode", draft.mode.as_str());
     set_value(entry, "agent", draft.agent);
-    set_value(entry, "output", draft.output.as_str());
+    // `put_value` rather than `set_value` for the three profile-owned keys: an
+    // entry being rewritten from the spelled-out notation to a profile has to
+    // lose the keys it no longer sets, or the result is a `ProfileConflict` the
+    // wizard itself wrote.
+    put_value(entry, "profile", draft.profile.map(Profile::as_str));
+    put_value(entry, "mode", draft.mode.map(WorkflowMode::as_str));
+    put_value(entry, "output", draft.output.map(OutputPolicy::as_str));
     put_value(
         entry,
         "verification",
@@ -465,9 +475,10 @@ max_concurrency = 3
                 name: "slack-reply",
                 source: "slack",
                 trigger: Some(r#"{ mention = true }"#),
-                mode: WorkflowMode::Plan,
+                profile: None,
+                mode: Some(WorkflowMode::Plan),
                 agent: "herdr",
-                output: OutputPolicy::Source,
+                output: Some(OutputPolicy::Source),
                 verification: Some(VerificationMode::Human),
                 on_success: None,
                 on_failure: None,
@@ -549,9 +560,10 @@ max_concurrency = 3
                     name: "slack-reply",
                     source: "slack",
                     trigger: Some(r#"{ mention = true }"#),
-                    mode: WorkflowMode::Plan,
+                    profile: None,
+                    mode: Some(WorkflowMode::Plan),
                     agent: "herdr",
-                    output: OutputPolicy::Source,
+                    output: Some(OutputPolicy::Source),
                     verification: Some(VerificationMode::Human),
                     on_success: None,
                     on_failure: None,
@@ -612,9 +624,10 @@ path = "/dotfiles"
                             name: "w",
                             source: "s",
                             trigger: None,
-                            mode,
+                            profile: None,
+                            mode: Some(mode),
                             agent: "a",
-                            output,
+                            output: Some(output),
                             verification: Some(verification),
                             on_success: None,
                             on_failure: None,
@@ -623,12 +636,97 @@ path = "/dotfiles"
                     .unwrap();
                     let cfg = crate::config::RootConfig::from_toml_str(&out)
                         .unwrap_or_else(|e| panic!("{mode:?}/{output:?}/{verification:?}: {e}"));
-                    assert_eq!(cfg.workflows[0].mode, mode);
-                    assert_eq!(cfg.workflows[0].output, output);
-                    assert_eq!(cfg.workflows[0].verification, verification);
+                    assert_eq!(cfg.workflows[0].mode, Some(mode));
+                    assert_eq!(cfg.workflows[0].output, Some(output));
+                    assert_eq!(cfg.workflows[0].verification, Some(verification));
                 }
             }
         }
+    }
+
+    #[test]
+    fn profile_round_trips_and_omits_the_keys_it_supplies() {
+        // Same drift guard for `Profile::as_str` vs serde's rename, plus the
+        // half that matters more: a profile draft must not also emit `mode` or
+        // `verification`, or the file the wizard just wrote fails validation
+        // with `ProfileConflict`.
+        for profile in [
+            Profile::Answer,
+            Profile::Triage,
+            Profile::Design,
+            Profile::Implement,
+        ] {
+            let out = upsert_workflow(
+                "",
+                &WorkflowDraft {
+                    name: "w",
+                    source: "s",
+                    trigger: None,
+                    profile: Some(profile),
+                    mode: None,
+                    agent: "a",
+                    output: None,
+                    verification: None,
+                    on_success: None,
+                    on_failure: None,
+                },
+            )
+            .unwrap();
+            let cfg = crate::config::RootConfig::from_toml_str(&out)
+                .unwrap_or_else(|e| panic!("{profile:?}: {e}\n---\n{out}"));
+            assert_eq!(cfg.workflows[0].profile, Some(profile));
+            assert_eq!(cfg.workflows[0].mode, None, "{out}");
+            assert_eq!(cfg.workflows[0].verification, None, "{out}");
+            assert_eq!(cfg.workflows[0].resolved_mode(), profile.mode());
+            assert_eq!(cfg.workflows[0].resolved_output(), profile.output());
+        }
+    }
+
+    #[test]
+    fn rewriting_a_workflow_as_a_profile_drops_the_keys_it_replaces() {
+        // The upsert path a `setup` re-run takes. `set_value` would have left
+        // `mode` behind next to the new `profile`, which validation rejects —
+        // the entry has to lose the keys the profile now owns.
+        let spelled_out = upsert_workflow(
+            "",
+            &WorkflowDraft {
+                name: "w",
+                source: "s",
+                trigger: None,
+                profile: None,
+                mode: Some(WorkflowMode::Implement),
+                agent: "a",
+                output: Some(OutputPolicy::Source),
+                verification: Some(VerificationMode::Human),
+                on_success: None,
+                on_failure: None,
+            },
+        )
+        .unwrap();
+        assert!(spelled_out.contains("mode"), "{spelled_out}");
+
+        let as_profile = upsert_workflow(
+            &spelled_out,
+            &WorkflowDraft {
+                name: "w",
+                source: "s",
+                trigger: None,
+                profile: Some(Profile::Design),
+                mode: None,
+                agent: "a",
+                output: None,
+                verification: None,
+                on_success: None,
+                on_failure: None,
+            },
+        )
+        .unwrap();
+        let cfg = crate::config::RootConfig::from_toml_str(&as_profile)
+            .unwrap_or_else(|e| panic!("{e}\n---\n{as_profile}"));
+        assert_eq!(cfg.workflows[0].profile, Some(Profile::Design));
+        assert_eq!(cfg.workflows[0].mode, None, "{as_profile}");
+        assert_eq!(cfg.workflows[0].verification, None, "{as_profile}");
+        assert_eq!(cfg.workflows[0].output, None, "{as_profile}");
     }
 
     #[test]
@@ -639,9 +737,10 @@ path = "/dotfiles"
                 name: "w",
                 source: "s",
                 trigger: Some("not a table"),
-                mode: WorkflowMode::Plan,
+                profile: None,
+                mode: Some(WorkflowMode::Plan),
                 agent: "a",
-                output: OutputPolicy::Source,
+                output: Some(OutputPolicy::Source),
                 verification: None,
                 on_success: None,
                 on_failure: None,
@@ -689,9 +788,10 @@ path = "/dotfiles"
                 name: "w",
                 source: "s",
                 trigger: None,
-                mode: WorkflowMode::Implement,
+                profile: None,
+                mode: Some(WorkflowMode::Implement),
                 agent: "a",
-                output: OutputPolicy::None,
+                output: Some(OutputPolicy::None),
                 verification: None,
                 on_success: None,
                 on_failure: None,
@@ -702,7 +802,11 @@ path = "/dotfiles"
         assert!(!out.contains("trigger"), "{out}");
         // The schema default applies when the key is absent.
         let cfg = crate::config::RootConfig::from_toml_str(&out).unwrap();
-        assert_eq!(cfg.workflows[0].verification, VerificationMode::Llm);
+        assert_eq!(cfg.workflows[0].verification, None);
+        assert_eq!(
+            cfg.workflows[0].resolved_verification(),
+            VerificationMode::Llm
+        );
     }
 
     #[test]
@@ -718,9 +822,10 @@ path = "/dotfiles"
                 name: "w",
                 source: "s",
                 trigger: Some(r#"{ project_status = "実装待ち" }"#),
-                mode: WorkflowMode::Implement,
+                profile: None,
+                mode: Some(WorkflowMode::Implement),
                 agent: "a",
-                output: OutputPolicy::Source,
+                output: Some(OutputPolicy::Source),
                 verification: Some(VerificationMode::Human),
                 on_success: Some(r#"{ set_status = "done" }"#),
                 on_failure: None,
@@ -735,9 +840,10 @@ path = "/dotfiles"
                 name: "w",
                 source: "s",
                 trigger: None,
-                mode: WorkflowMode::Implement,
+                profile: None,
+                mode: Some(WorkflowMode::Implement),
                 agent: "a",
-                output: OutputPolicy::Source,
+                output: Some(OutputPolicy::Source),
                 verification: None,
                 on_success: None,
                 on_failure: None,
@@ -749,7 +855,11 @@ path = "/dotfiles"
         }
         let cfg = crate::config::RootConfig::from_toml_str(&cleared).unwrap();
         assert_eq!(cfg.workflows.len(), 1, "{cleared}");
-        assert_eq!(cfg.workflows[0].verification, VerificationMode::Llm);
+        assert_eq!(cfg.workflows[0].verification, None);
+        assert_eq!(
+            cfg.workflows[0].resolved_verification(),
+            VerificationMode::Llm
+        );
 
         // Same rule for the other drafts' optionals.
         let repo = upsert_repository(
@@ -802,9 +912,10 @@ path = "/dotfiles"
             name: "migration",
             source: "github",
             trigger: Some(r#"{ labels = ["migration", "high-risk"] }"#),
-            mode: WorkflowMode::Implement,
+            profile: None,
+            mode: Some(WorkflowMode::Implement),
             agent: "herdr",
-            output: OutputPolicy::Source,
+            output: Some(OutputPolicy::Source),
             verification: None,
             on_success: None,
             on_failure: None,

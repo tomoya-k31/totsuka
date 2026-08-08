@@ -409,8 +409,93 @@ impl VerificationMode {
     }
 }
 
+/// A workflow archetype ([#393](https://github.com/tomoya-k31/totsuka/issues/393)
+/// D5): one name that resolves `mode` / `output` / `verification` as a bundle.
+///
+/// The two-valued [`WorkflowMode`] cannot express "the worktree is read-only but
+/// the agent still writes outside it" — the shape both `triage` and `design`
+/// need. A profile decides that bundle in Rust rather than leaving the operator
+/// to assemble a combination by hand, which is where the mis-combinations were.
+///
+/// **As of this commit the four are not yet distinguishable by what they
+/// permit.** `triage` and `design` both resolve to [`WorkflowMode::Plan`], and
+/// plan does not structurally stop anything (#378), so nothing here yet does
+/// what `mode` alone could not. The distinction becomes real when
+/// [#395](https://github.com/tomoya-k31/totsuka/issues/395) gives each profile
+/// its own `permissions.deny` set and
+/// [#398](https://github.com/tomoya-k31/totsuka/issues/398) its own
+/// verification rubric. The bundle exists first so those have somewhere to
+/// attach; do not read the variant names as enforcement.
+///
+/// The resolution table is deliberately closed: adding a knob means adding a
+/// profile, not a config key. Same reasoning as the deny sets in
+/// [ADR-0023](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0023-configurable-prompt-surface.md)
+/// — a permission-bearing decision reachable through a config string is a
+/// privilege-escalation surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Profile {
+    /// Answer a question. Worktree meant to stay read-only; the source plugin
+    /// publishes the reply behind its approval gate (WF 1, 2).
+    Answer,
+    /// File the request somewhere trackable. Worktree meant to stay read-only;
+    /// the agent creates the issue/page itself (WF 3).
+    Triage,
+    /// Produce a detailed design. Worktree meant to stay read-only; the agent
+    /// writes the design to the issue/page itself (WF 4, 6).
+    Design,
+    /// Implement and open a PR. The worktree is writable (WF 5, 7).
+    Implement,
+}
+
+impl Profile {
+    /// The stable snake_case config string for this profile.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Profile::Answer => "answer",
+            Profile::Triage => "triage",
+            Profile::Design => "design",
+            Profile::Implement => "implement",
+        }
+    }
+
+    /// The execution mode this profile resolves to. Only `implement` gets a
+    /// writable worktree.
+    pub fn mode(self) -> WorkflowMode {
+        match self {
+            Profile::Implement => WorkflowMode::Implement,
+            Profile::Answer | Profile::Triage | Profile::Design => WorkflowMode::Plan,
+        }
+    }
+
+    /// The output policy this profile resolves to. `design` / `implement` write
+    /// their artifact directly and report status through `on_success`, so they
+    /// have nothing left to publish.
+    pub fn output(self) -> OutputPolicy {
+        match self {
+            Profile::Answer | Profile::Triage => OutputPolicy::Source,
+            Profile::Design | Profile::Implement => OutputPolicy::None,
+        }
+    }
+
+    /// The verification mode this profile resolves to. All four verify with the
+    /// llm judge; what differs is the rubric, which
+    /// [#398](https://github.com/tomoya-k31/totsuka/issues/398) specialises.
+    pub fn verification(self) -> VerificationMode {
+        VerificationMode::Llm
+    }
+}
+
 /// A named workflow (F-80). Parsed structurally; trigger/handoff semantics are
 /// validated and matched in #54.
+///
+/// `mode` / `output` / `verification` are `Option` because
+/// [`profile`](Self::profile) supplies them as a bundle. Read them through
+/// [`resolved_mode`](Self::resolved_mode) /
+/// [`resolved_output`](Self::resolved_output) /
+/// [`resolved_verification`](Self::resolved_verification) — the raw fields are
+/// for validation only, which is the one place that has to tell "omitted" from
+/// "written out".
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowConfig {
@@ -421,21 +506,32 @@ pub struct WorkflowConfig {
     /// Trigger condition; kept raw (interpreted in #54).
     #[serde(default)]
     pub trigger: toml::Table,
-    /// Execution mode.
-    pub mode: WorkflowMode,
+    /// One of the four archetypes (#393 D5). Supplies all three of `mode`,
+    /// `output` and `verification`. `mode` and `verification` must then not
+    /// also be written out; `output` may, and an explicit one wins.
+    #[serde(default)]
+    pub profile: Option<Profile>,
+    /// Execution mode. Required unless [`profile`](Self::profile) supplies it.
+    #[serde(default)]
+    pub mode: Option<WorkflowMode>,
     /// Agent plugin instance name (must be an enabled `agent_ide`).
     pub agent: String,
-    /// Output policy.
-    pub output: OutputPolicy,
+    /// Output policy. Required unless [`profile`](Self::profile) supplies it,
+    /// and the one field a profile may be overridden on.
+    #[serde(default)]
+    pub output: Option<OutputPolicy>,
     /// Source status transition on success; kept raw (interpreted in #54).
     #[serde(default)]
     pub on_success: Option<toml::Table>,
     /// Source status transition on failure; kept raw (interpreted in #54).
     #[serde(default)]
     pub on_failure: Option<toml::Table>,
-    /// How completion self-reports are verified (D-01). Defaults to `llm`.
+    /// How completion self-reports are verified (D-01). Omitted means `llm`,
+    /// same as before profiles existed — the `Option` distinguishes "omitted"
+    /// from "written out" so validation can reject writing it out *alongside* a
+    /// profile. Both resolve to the same value.
     #[serde(default)]
-    pub verification: VerificationMode,
+    pub verification: Option<VerificationMode>,
     /// Silence limit in seconds since the last hook signal before the task
     /// escalates (D-03). Defaults to [`DEFAULT_WORKFLOW_TIMEOUT_SECS`].
     #[serde(default)]
@@ -462,6 +558,51 @@ pub struct WorkflowConfig {
     /// repository/global defaults.
     #[serde(default)]
     pub tool: Option<String>,
+}
+
+impl WorkflowConfig {
+    /// The execution mode this workflow actually runs in: the profile's, else
+    /// the explicit one.
+    ///
+    /// The last arm is unreachable through a validated config —
+    /// `validate_static` rejects a workflow with neither — and resolves to the
+    /// *least* powerful value on purpose. If a path ever reached here
+    /// unvalidated, the failure to prefer is a read-only worktree, not an
+    /// implement run nobody asked for.
+    pub fn resolved_mode(&self) -> WorkflowMode {
+        match (self.profile, self.mode) {
+            (Some(profile), _) => profile.mode(),
+            (None, Some(mode)) => mode,
+            (None, None) => WorkflowMode::Plan,
+        }
+    }
+
+    /// The output policy this workflow actually uses.
+    ///
+    /// An explicit `output` **wins over the profile's** — the one documented
+    /// override (#393/#394). It picks a wiring destination rather than a
+    /// permission, so allowing it costs no safety, and a Slack-sourced
+    /// `implement` needs `output = "source"` to get its PR URL back into the
+    /// thread. The `(None, None)` fallback mirrors
+    /// [`resolved_mode`](Self::resolved_mode): publish nothing.
+    pub fn resolved_output(&self) -> OutputPolicy {
+        match (self.output, self.profile) {
+            (Some(output), _) => output,
+            (None, Some(profile)) => profile.output(),
+            (None, None) => OutputPolicy::None,
+        }
+    }
+
+    /// How this workflow's completion self-report is verified. Omitting it has
+    /// always meant `llm`, and every profile resolves to `llm` too, so the
+    /// fallback here is the real default rather than a safety net.
+    pub fn resolved_verification(&self) -> VerificationMode {
+        match (self.profile, self.verification) {
+            (Some(profile), _) => profile.verification(),
+            (None, Some(verification)) => verification,
+            (None, None) => VerificationMode::default(),
+        }
+    }
 }
 
 /// A `[tools.<name>]` registry entry (#196): how to launch one AI tool CLI.
@@ -686,13 +827,13 @@ on_success = { set_status = "レビュー待ち" }
 
         assert_eq!(cfg.workflows.len(), 2);
         let design = &cfg.workflows[0];
-        assert_eq!(design.mode, WorkflowMode::Plan);
-        assert_eq!(design.output, OutputPolicy::Source);
+        assert_eq!(design.mode, Some(WorkflowMode::Plan));
+        assert_eq!(design.output, Some(OutputPolicy::Source));
         assert_eq!(
             design.trigger.get("project_status").unwrap().as_str(),
             Some("設計待ち")
         );
-        assert_eq!(cfg.workflows[1].output, OutputPolicy::Source);
+        assert_eq!(cfg.workflows[1].output, Some(OutputPolicy::Source));
 
         let llm = cfg.llm.as_ref().unwrap();
         assert_eq!(
@@ -744,7 +885,7 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
         assert_eq!(cfg.hooks.block_retry_limit, Some(3));
 
         let wf = &cfg.workflows[0];
-        assert_eq!(wf.verification, VerificationMode::Human);
+        assert_eq!(wf.verification, Some(VerificationMode::Human));
         assert_eq!(wf.timeout_secs, Some(1800));
         assert_eq!(
             wf.rubric.as_deref(),
@@ -761,7 +902,8 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
         assert!(cfg.hooks.spool_dir.is_none());
         assert!(cfg.hooks.block_retry_limit.is_none());
         for wf in &cfg.workflows {
-            assert_eq!(wf.verification, VerificationMode::Llm);
+            assert_eq!(wf.verification, None);
+            assert_eq!(wf.resolved_verification(), VerificationMode::Llm);
             assert!(wf.timeout_secs.is_none());
             assert!(wf.rubric.is_none());
         }

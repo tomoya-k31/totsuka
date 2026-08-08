@@ -10,7 +10,7 @@
 //! Each recipe declares which plugins it needs and which blanks the interview
 //! must fill; everything else is fixed by the recipe.
 
-use orchestrator_core::config::{OutputPolicy, VerificationMode, WorkflowMode};
+use orchestrator_core::config::{OutputPolicy, Profile, VerificationMode, WorkflowMode};
 
 /// A plugin a recipe requires, with the kind its `[plugins.<name>]` section
 /// needs when the section is created.
@@ -23,6 +23,11 @@ pub struct RequiredPlugin {
 }
 
 /// A `[[workflows]]` entry a recipe contributes.
+///
+/// A recipe writes **either** a `profile` or the spelled-out
+/// `mode`/`output`/`verification` — writing both is a `ProfileConflict` (#394).
+/// `output` is the exception and may accompany a profile, which is what lets
+/// the profile-based recipes below keep publishing back to their source.
 #[derive(Debug, Clone, Copy)]
 pub struct RecipeWorkflow {
     /// Workflow name.
@@ -31,13 +36,15 @@ pub struct RecipeWorkflow {
     pub source: &'static str,
     /// Inline-table fragment, or `None` to match everything from the source.
     pub trigger: Option<&'static str>,
-    /// Plan or implement.
-    pub mode: WorkflowMode,
+    /// One of the four archetypes; `None` spells the keys out instead.
+    pub profile: Option<Profile>,
+    /// Plan or implement. `None` when `profile` supplies it.
+    pub mode: Option<WorkflowMode>,
     /// Agent IDE plugin.
     pub agent: &'static str,
-    /// Result handling.
-    pub output: OutputPolicy,
-    /// `None` leaves the schema default.
+    /// Result handling. `None` leaves it to the profile.
+    pub output: Option<OutputPolicy>,
+    /// `None` leaves the schema default (or the profile's).
     pub verification: Option<VerificationMode>,
     /// Inline-table fragment.
     pub on_success: Option<&'static str>,
@@ -113,9 +120,12 @@ pub const RECIPES: &[Recipe] = &[
             name: "implement",
             source: "github",
             trigger: Some(r#"{ project_status = "実装待ち" }"#),
-            mode: WorkflowMode::Implement,
+            profile: Some(Profile::Implement),
+            mode: None,
             agent: "herdr",
-            output: OutputPolicy::Source,
+            // The profile alone would publish nothing; the card has to be
+            // written back for the status transition to mean anything.
+            output: Some(OutputPolicy::Source),
             verification: None,
             on_success: Some(r#"{ set_status = "レビュー待ち" }"#),
         }],
@@ -130,9 +140,10 @@ pub const RECIPES: &[Recipe] = &[
                 name: "design",
                 source: "github",
                 trigger: Some(r#"{ project_status = "設計待ち" }"#),
-                mode: WorkflowMode::Plan,
+                profile: Some(Profile::Design),
+                mode: None,
                 agent: "herdr",
-                output: OutputPolicy::Source,
+                output: Some(OutputPolicy::Source),
                 verification: None,
                 on_success: Some(r#"{ set_status = "設計レビュー待ち" }"#),
             },
@@ -140,9 +151,10 @@ pub const RECIPES: &[Recipe] = &[
                 name: "implement",
                 source: "github",
                 trigger: Some(r#"{ project_status = "実装待ち" }"#),
-                mode: WorkflowMode::Implement,
+                profile: Some(Profile::Implement),
+                mode: None,
                 agent: "herdr",
-                output: OutputPolicy::Source,
+                output: Some(OutputPolicy::Source),
                 verification: None,
                 on_success: Some(r#"{ set_status = "レビュー待ち" }"#),
             },
@@ -157,10 +169,17 @@ pub const RECIPES: &[Recipe] = &[
             name: "slack-reply",
             source: "slack",
             trigger: None,
-            mode: WorkflowMode::Implement,
+            // Behaviour change, not just notation: this recipe used to write
+            // `mode = "implement"`, and `answer` resolves to `plan`. It is WF 1
+            // in #393 and answering a mention is not implementing — a Slack
+            // question that turns out to need code is meant to become a
+            // separate `impl:` task through a reaction (#393 D6 / #397) rather
+            // than quietly getting a writable worktree.
+            profile: Some(Profile::Answer),
+            mode: None,
             agent: "herdr",
-            output: OutputPolicy::Source,
-            verification: Some(VerificationMode::Llm),
+            output: Some(OutputPolicy::Source),
+            verification: None,
             on_success: None,
         }],
         blanks: &[Blank::SlackUserId, Blank::Llm],
@@ -169,13 +188,17 @@ pub const RECIPES: &[Recipe] = &[
         label: "Human sign-off required",
         blurb: "High-impact work waits for `totsuka task verify`; pairs with the notifier.",
         plugins: &[GITHUB, HERDR, MACOS],
+        // No profile: all four resolve `verification` to `llm`, and waiting for
+        // a person is the entire point of this recipe. The spelled-out notation
+        // stays supported for exactly this — a combination no archetype covers.
         workflows: &[RecipeWorkflow {
             name: "migration",
             source: "github",
             trigger: Some(r#"{ labels = ["migration", "high-risk"] }"#),
-            mode: WorkflowMode::Implement,
+            profile: None,
+            mode: Some(WorkflowMode::Implement),
             agent: "herdr",
-            output: OutputPolicy::Source,
+            output: Some(OutputPolicy::Source),
             verification: Some(VerificationMode::Human),
             on_success: None,
         }],

@@ -108,18 +108,55 @@ owner: tomoya-k31
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source インスタンス名 |
 | `trigger` | テーブル | `{}`（全マッチ） | トリガー条件。`status`/`project_status`/`label`/`labels` は Orchestrator が防御的に再判定、他キーはプラグインが `initialize` の `triggers` として受け取り解釈する |
-| `mode` | enum | 必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
+| `profile` | enum? | なし | 4 原型のいずれか（`answer` / `triage` / `design` / `implement`）。`mode` / `output` / `verification` の 3 つをまとめて決める。うち `mode` / `verification` は併記不可、`output` は併記すればそちらが勝つ（下記） |
+| `mode` | enum | `profile` が無ければ必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
-| `output` | enum | 必須 | `source` / `none`。**`pull_request` は廃止** — push と PR 作成はエージェントの責務になった（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、PR 作成手順はリポジトリの規約と `[prompts]` で指示する |
+| `output` | enum | `profile` が無ければ必須 | `source` / `none`。**`pull_request` は廃止** — push と PR 作成はエージェントの責務になった（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、PR 作成手順はリポジトリの規約と `[prompts]` で指示する |
 | `on_success` | `{ set_status = "..." }`? | なし | 成功時にソース側ステータスを更新（F-84） |
 | `on_failure` | `{ set_status = "..." }`? | なし | 失敗時にソース側ステータスを更新（publish 失敗など retry 可能な失敗では書き戻さない） |
-| `verification` | enum | `llm` | 完了自己申告の検収方式（D-01）: `llm`（prompt 型 Stop フックで in-session 検収）/ `human`（`totsuka task verify` 待ち。有効な notifier が無いと警告）/ `none`（検収なし） |
+| `verification` | enum | `llm` | 完了自己申告の検収方式（D-01）: `llm`（prompt 型 Stop フックで in-session 検収）/ `human`（`totsuka task verify` 待ち。有効な notifier が無いと警告）/ `none`（検収なし）。`profile` 指定時は書けない |
 | `timeout_secs` | int? | 1800 | 最終フックシグナルからの無応答上限秒。超過でエスカレーション（D-03） |
 | `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告。`[prompts]`（#314）より前からあるキーで、動作は維持される — 同じワークフローの `[workflows.prompts].verification_rubric` にのみ負け、グローバルの `[prompts].verification_rubric` には勝つ |
 | `[workflows.prompts]` | テーブル | — | このワークフロー専用のプロンプト上書き（下記 `[prompts]` の 5 キー。最優先層） |
 | `tool` | string? | なし | AI ツールの明示ピン（#196）。優先順位は workflow > repo > `default_tool`。`verification = "llm"` は Claude の prompt 型 Stop フックが必要なので、非 claude 系へ解決されうる構成では `tool = "claude"` のピンを警告で提案 |
 
 定義順に first-match（F-81）。同一ソース内でトリガーが重なると警告。
+
+## `profile` — 4 原型（#394、[ADR-0033](/decisions/adr-0033-workflow-profile.md)）
+
+`mode` / `output` / `verification` の噛み合う組み合わせに名前を付けたもの。解決テーブルは Rust 固定で、設定側からは原型名を選ぶだけになる（deny セットのような権限に関わる決定を設定文字列から到達可能にしないため — [ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md) と同じ理由）。
+
+| profile | mode | output | verification | 想定用途 |
+|---|---|---|---|---|
+| `answer` | `plan` | `source` | `llm` | 質問に答え、ソースへ返信する |
+| `triage` | `plan` | `source` | `llm` | 依頼を GitHub / Notion へ起票する |
+| `design` | `plan` | `none` | `llm` | 詳細設計を issue コメント / ページへ書く |
+| `implement` | `implement` | `none` | `llm` | 実装して PR を出す |
+
+```toml
+[[workflows]]
+name = "gh-design"
+source = "github"
+trigger = { project_status = "設計待ち" }
+profile = "design"
+agent = "herdr"
+on_success = { set_status = "設計済み" }
+```
+
+併用の規則:
+
+| 構成 | 結果 |
+|---|---|
+| `profile` + `mode` / `verification` | **エラー**。profile が決める値なので、書くと「生きて見える死んだ設定」が残る |
+| `profile` + `output` | **可**。`output` が profile の値に勝つ。権限ではなく配線先の選択なので上書きを許している（Slack 起点の implement が PR URL をスレッドへ返すのに要る） |
+| `profile` 無し + `mode` / `output` の欠落 | **エラー**。`profile` を書くか、両方を明示するか |
+| `profile` + `rubric` / `[workflows.prompts]` / `tool` / `timeout_secs` / `on_success` / `on_failure` | 可 |
+
+`profile` は必須ではない。4 原型で表せない組み合わせ（例: `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
+
+**ロールバック時の注意**: `profile` を書いた config は旧バイナリでは未知キーとして**パースエラー**になる。totsuka を前のバージョンへ戻すときは config も戻すこと。
+
+**この時点では `profile` に権限としての実効性は無い**（`mode` / `output` / `verification` の別名でしかない）。profile ごとの `permissions.deny` 注入は [#395](https://github.com/tomoya-k31/totsuka/issues/395) で入る。
 
 ## `mode = "plan"` は git を構造的には止めない（#378）
 

@@ -191,7 +191,7 @@ pub fn render_settings(dir: &Path, cfg: &RootConfig, wf: &WorkflowConfig) -> Str
     let mut stop = vec![json!({
         "hooks": [{ "type": "command", "command": script("on-stop.sh"), "timeout": 30 }]
     })];
-    if wf.verification == VerificationMode::Llm {
+    if wf.resolved_verification() == VerificationMode::Llm {
         // The workflow's own `rubric` replaces just that leaf; the exemption,
         // the marker convention, and how the three are assembled come from the
         // prompt registry (#313).
@@ -866,6 +866,29 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
             text.contains("<<STATUS:COMPLETED>>"),
             "the marker convention survives a custom rubric"
         );
+    }
+
+    #[test]
+    fn a_profile_workflow_gets_the_prompt_hook_too() {
+        // `render_settings` reads `verification` off the raw config rather than
+        // the domain `Workflow`, so it is the one place a profile could go
+        // unnoticed. Missing the prompt hook here is silent: the run would look
+        // fine and simply never verify. All four profiles resolve to llm.
+        for profile in ["answer", "triage", "design", "implement"] {
+            let cfg = workflows_config(&format!(
+                r#"
+[[workflows]]
+name = "w"
+source = "slack"
+profile = "{profile}"
+agent = "herdr"
+"#
+            ));
+            let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+            let stop = stop_hooks(&rendered);
+            assert_eq!(stop.len(), 2, "command + prompt hook for {profile}");
+            assert_eq!(stop[1]["hooks"][0]["type"], "prompt", "{profile}");
+        }
     }
 
     #[test]

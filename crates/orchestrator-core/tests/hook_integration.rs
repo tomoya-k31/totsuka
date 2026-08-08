@@ -357,6 +357,73 @@ async fn completed_llm_on_tool_without_prompt_hooks_parks_in_verifying() {
     }
 }
 
+/// The same #301 degradation, reached through `profile` instead of an explicit
+/// `verification = "llm"` (#394).
+///
+/// A profile supplies `verification`, so the raw config field is `None`. If any
+/// step of the chain read that field instead of the resolved value, this task
+/// would take the `None` arm and publish **unverified** — the exact failure
+/// #301 fixed, re-introduced through the new notation and invisible because the
+/// run still looks successful.
+#[tokio::test]
+async fn a_profile_workflow_also_degrades_to_human_on_a_tool_without_prompt_hooks() {
+    let base = scratch("hook_llm_degrade_profile");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let cfg = RootConfig::from_toml_str(
+        r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {}
+profile = "answer"
+agent = "mock_agent"
+output = "none"
+on_success = { set_status = "done" }
+on_failure = { set_status = "failed" }
+"#,
+    )
+    .unwrap();
+    let mut settings = engine_settings(Workflow::from_configs(&cfg.workflows), None);
+    settings.default_tool = "codex".to_string();
+
+    let mut engine = Engine::new(
+        db,
+        settings,
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine
+        .on_signal(stop(
+            id,
+            row,
+            "p1",
+            StopStatus::Completed,
+            Some("all done <<STATUS:COMPLETED>>"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Verifying,
+        "profile = answer resolves verification to llm, so codex must degrade to human"
+    );
+
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    assert!(
+        !notes.iter().any(|n| n["params"]["event"] == "done"),
+        "nothing may be published before verification: {notes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn completed_human_waits_for_verify_then_pass_reaches_done() {
     let base = scratch("hook_human_verify");
