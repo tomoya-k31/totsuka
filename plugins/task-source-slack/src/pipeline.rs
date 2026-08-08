@@ -1078,6 +1078,14 @@ async fn thread_context<T: SlackTransport>(
         config.thread_context_limit
     };
     let fetch_limit = limit.saturating_add(1).min(200);
+    // …and the same limit again below. The fetch and the trim are two separate
+    // caps, and widening only the first leaves the thread trimmed to
+    // `thread_context_limit` anyway — a whole-thread context that quietly is
+    // not one.
+    //
+    // `limit`, not `fetch_limit`: the `+1` above pays for dropping the mention
+    // itself from the fetched window and must not widen what is kept.
+    let keep = limit as usize;
     let messages = match api
         .conversations_replies(&mention.channel, thread_ts, fetch_limit, Some(&mention.ts))
         .await
@@ -1095,7 +1103,7 @@ async fn thread_context<T: SlackTransport>(
         .iter()
         .filter(|m| m.ts != mention.ts)
         .rev()
-        .take(config.thread_context_limit as usize)
+        .take(keep)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -1150,6 +1158,101 @@ mod tests {
         SlackApi::new(ScriptedTransport {
             responses: Mutex::new(responses.into()),
         })
+    }
+
+    /// A thread of `count` replies, plus one user-name lookup per speaker.
+    ///
+    /// Replies start at `1.0`; the thread root is `0.0`, so a reaction on the
+    /// root does not filter one of them out of the context.
+    fn thread_of(count: usize) -> Vec<Result<Value, SlackError>> {
+        let messages: Vec<Value> = (1..=count)
+            .map(
+                |i| json!({ "user": "U_OTHER", "text": format!("msg{i}"), "ts": format!("{i}.0") }),
+            )
+            .collect();
+        let mut script = vec![Ok(json!({ "ok": true, "messages": messages }))];
+        // One `users.info` per line; the cache collapses them to one call, but
+        // an extra scripted response is harmless.
+        script.push(Ok(
+            json!({"ok": true, "user": {"name": "alice", "profile": {"display_name": "アリス"}}}),
+        ));
+        script
+    }
+
+    /// A reaction on the thread **root** (`ts == thread_ts`), which is the
+    /// "implement what this thread concluded" case.
+    fn threaded_mention(prefix: Option<&str>) -> Mention {
+        Mention {
+            channel: "C1".into(),
+            user: "U_ME".into(),
+            text: "やろう".into(),
+            ts: "0.0".into(),
+            thread_ts: Some("0.0".into()),
+            reaction: prefix.map(|_| "hammer".to_string()),
+            task_id_prefix: prefix.map(str::to_string),
+        }
+    }
+
+    fn small_limit_config() -> SlackConfig {
+        serde_json::from_value(json!({
+            "app_token": "xapp-1-A1-t",
+            "user_token": "xoxp-t",
+            "target_user_id": "U_ME",
+            "thread_context_limit": 3,
+        }))
+        .unwrap()
+    }
+
+    /// **A prefixed task takes the whole thread, not `thread_context_limit`.**
+    ///
+    /// There are two caps here — how many messages are fetched and how many are
+    /// kept — and widening only the first leaves the context trimmed anyway.
+    /// That is what shipped in the first draft of #397: `limit = u32::MAX` for
+    /// the fetch, `take(thread_context_limit)` below it. The symptom would have
+    /// been an implement task briefed on the last 3 messages of the discussion
+    /// that decided its approach, with nothing anywhere saying so.
+    #[tokio::test]
+    async fn a_prefixed_task_keeps_the_whole_thread_not_the_context_window() {
+        let api = scripted(thread_of(10));
+        let config = small_limit_config();
+        let mut names = NameCache::default();
+        let lines = thread_context(&api, &config, &mut names, &threaded_mention(Some("impl")))
+            .await
+            .expect("context fetched");
+        assert_eq!(
+            lines.len(),
+            10,
+            "the prefixed task must see the whole thread, not `thread_context_limit`: {lines:?}"
+        );
+    }
+
+    /// …and an ordinary mention still gets the window it always got.
+    #[tokio::test]
+    async fn a_mention_still_gets_the_configured_window() {
+        let api = scripted(thread_of(10));
+        let config = small_limit_config();
+        let mut names = NameCache::default();
+        let lines = thread_context(&api, &config, &mut names, &threaded_mention(None))
+            .await
+            .expect("context fetched");
+        assert_eq!(lines.len(), 3, "{lines:?}");
+    }
+
+    /// Reacting to one reply means "implement this message" — its thread is
+    /// not context, and pulling it in would hand the agent a conversation it
+    /// was not pointed at.
+    #[tokio::test]
+    async fn a_prefixed_task_on_a_reply_takes_no_thread_context() {
+        let api = scripted(vec![]); // any API call would error
+        let config = small_limit_config();
+        let mut names = NameCache::default();
+        let mut mention = threaded_mention(Some("impl"));
+        mention.ts = "5.0".into(); // a reply, not the root
+        assert!(!mention.is_thread_root());
+        let lines = thread_context(&api, &config, &mut names, &mention)
+            .await
+            .expect("no fetch, no failure");
+        assert!(lines.is_empty(), "{lines:?}");
     }
 
     /// #129: a failed `conversations.info` must not pin the raw id in the
