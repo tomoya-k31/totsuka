@@ -158,6 +158,30 @@ pub enum ValidationError {
         tool: String,
         kind: String,
     },
+
+    /// A workflow writes out a key its `profile` already supplies (#394).
+    ///
+    /// Rejected rather than silently overridden either way: whichever side lost
+    /// would be text that reads as live config and is not. The same reasoning
+    /// removed `output = "pull_request"` instead of accepting-and-ignoring it.
+    /// `output` is exempt — it selects a wiring destination, not a permission,
+    /// so an override there is a documented feature.
+    #[error(
+        "workflow `{workflow}` sets both profile = \"{profile}\" and {key} → the profile already decides {key} (and mode/verification are what make it a permission boundary, so an override is not accepted); remove `{key}` to use the profile, or drop `profile` and spell out mode/output/verification"
+    )]
+    ProfileConflict {
+        workflow: String,
+        profile: String,
+        key: &'static str,
+    },
+
+    /// A workflow has neither a `profile` nor the keys one would have supplied
+    /// (#394). `mode`/`output` were required before profiles existed; this
+    /// keeps them required whenever no profile stands in for them.
+    #[error(
+        "workflow `{workflow}` has no profile and no `{key}` → set `profile` to one of answer/triage/design/implement, or write `{key}` out"
+    )]
+    WorkflowMissingKey { workflow: String, key: &'static str },
 }
 
 /// Placeholders permitted in worktree location templates (F-22 addendum).
@@ -306,6 +330,7 @@ where
                 &mut errors,
             );
         }
+        check_profile_keys(wf, &mut errors);
     }
 
     // Global default tool (#196). Checked even when unset: the implicit
@@ -319,6 +344,41 @@ where
     );
 
     errors
+}
+
+/// Whether a workflow spells out exactly one of "profile" or "the keys a
+/// profile supplies" (#394).
+///
+/// `output` appears in neither list: it is required when no profile supplies
+/// it, and permitted as an override when one does — the single exception, since
+/// it chooses where a result is wired rather than what the agent may do.
+fn check_profile_keys(wf: &crate::config::WorkflowConfig, errors: &mut Vec<ValidationError>) {
+    match wf.profile {
+        Some(profile) => {
+            for (key, present) in [
+                ("mode", wf.mode.is_some()),
+                ("verification", wf.verification.is_some()),
+            ] {
+                if present {
+                    errors.push(ValidationError::ProfileConflict {
+                        workflow: wf.name.clone(),
+                        profile: profile.as_str().to_string(),
+                        key,
+                    });
+                }
+            }
+        }
+        None => {
+            for (key, present) in [("mode", wf.mode.is_some()), ("output", wf.output.is_some())] {
+                if !present {
+                    errors.push(ValidationError::WorkflowMissingKey {
+                        workflow: wf.name.clone(),
+                        key,
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Severity of a validation finding.
@@ -411,7 +471,7 @@ where
 
     for wf in &cfg.workflows {
         // verification = human needs a notifier, or nobody notices the wait.
-        if wf.verification == VerificationMode::Human && !has_notifier {
+        if wf.resolved_verification() == VerificationMode::Human && !has_notifier {
             findings.push(Finding {
                 severity: FindingSeverity::Warning,
                 message: format!(
@@ -438,7 +498,7 @@ where
         // #301); an unpinned workflow whose repo/global default could resolve
         // to a non-claude tool is fragile — suggest the explicit pin so the
         // constraint is statically guaranteed.
-        if wf.verification == VerificationMode::Llm {
+        if wf.resolved_verification() == VerificationMode::Llm {
             match &wf.tool {
                 Some(tool) => {
                     if matches!(
@@ -480,13 +540,13 @@ where
         }
 
         // rubric only feeds the llm-verification prompt hook.
-        if wf.rubric.is_some() && wf.verification != VerificationMode::Llm {
+        if wf.rubric.is_some() && wf.resolved_verification() != VerificationMode::Llm {
             findings.push(Finding {
                 severity: FindingSeverity::Warning,
                 message: format!(
                     "workflow `{}` sets rubric but verification = {} → rubric only applies to llm verification; set verification = \"llm\" or remove rubric",
                     wf.name,
-                    wf.verification.as_str()
+                    wf.resolved_verification().as_str()
                 ),
             });
         }
@@ -516,7 +576,7 @@ fn prompt_findings(
     // Composed, so it catches both a `verification_marker_convention` that
     // lost its `{marker_*}` and a `verification_prompt` assembly that dropped
     // `{marker_convention}`. Only for llm workflows: nothing else renders it.
-    if wf.verification == VerificationMode::Llm {
+    if wf.resolved_verification() == VerificationMode::Llm {
         let rendered = crate::prompts::Prompts::resolve_for(cfg, wf).verification_prompt();
         let missing = crate::prompts::Prompts::missing_markers(&rendered);
         if !missing.is_empty() {
@@ -534,7 +594,7 @@ fn prompt_findings(
     // The `verification_*` family only feeds the llm prompt hook, same as the
     // legacy `rubric` above. Its message is left untouched so the wording the
     // existing test pins does not move.
-    if wf.verification != VerificationMode::Llm {
+    if wf.resolved_verification() != VerificationMode::Llm {
         let unused: Vec<&str> = entries
             .iter()
             .map(|(k, _)| *k)
@@ -547,7 +607,7 @@ fn prompt_findings(
                     "workflow `{}` sets prompts.{} but verification = {} → these only apply to llm verification; set verification = \"llm\" or remove them",
                     wf.name,
                     unused.join(", prompts."),
-                    wf.verification.as_str()
+                    wf.resolved_verification().as_str()
                 ),
             });
         }
@@ -954,6 +1014,147 @@ location = "/state/{branch}/{branch}/{bogus}/{bogus}"
         let text = err.to_string();
         assert!(text.contains("update config.toml"), "{text}");
         assert!(!text.contains("config migrate"), "{text}");
+    }
+
+    /// A workflow body with the plugin refs a validation pass needs, so these
+    /// tests see only the profile findings they are about.
+    fn profile_cfg(workflow_body: &str) -> RootConfig {
+        RootConfig::from_toml_str(&format!(
+            r#"
+[plugins.slack]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[workflows]]
+name = "w"
+source = "slack"
+agent = "herdr"
+{workflow_body}
+"#
+        ))
+        .unwrap_or_else(|e| panic!("fixture does not parse: {e}"))
+    }
+
+    #[test]
+    fn a_profile_alongside_the_keys_it_supplies_is_an_error() {
+        // Silent-override in either direction leaves text that reads as live
+        // config and is not — the reason `output = "pull_request"` was deleted
+        // rather than ignored.
+        for key in ["mode = \"implement\"", "verification = \"human\""] {
+            let cfg = profile_cfg(&format!("profile = \"answer\"\n{key}"));
+            let errors = validate_static(&cfg, &env_from(&[]));
+            let err = errors
+                .iter()
+                .find(|e| matches!(e, ValidationError::ProfileConflict { .. }))
+                .unwrap_or_else(|| panic!("no ProfileConflict for {key}: {errors:?}"));
+            let text = err.to_string();
+            assert!(text.contains("answer"), "{text}");
+            // "cause + next action": both ways out have to be spelled out.
+            assert!(text.contains("remove"), "{text}");
+        }
+    }
+
+    #[test]
+    fn output_is_the_one_key_a_profile_may_be_overridden_on() {
+        let cfg = profile_cfg("profile = \"implement\"\noutput = \"source\"");
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::ProfileConflict { .. })),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn no_profile_and_no_mode_or_output_is_an_error() {
+        // `mode`/`output` stopped being structurally required when they became
+        // `Option`; this is what keeps them required in practice.
+        let cfg = profile_cfg("output = \"none\"");
+        let errors = validate_static(&cfg, &env_from(&[]));
+        let err = errors
+            .iter()
+            .find(|e| matches!(e, ValidationError::WorkflowMissingKey { key: "mode", .. }))
+            .unwrap_or_else(|| panic!("no WorkflowMissingKey(mode): {errors:?}"));
+        assert!(err.to_string().contains("profile"), "{err}");
+
+        let cfg = profile_cfg("mode = \"plan\"");
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::WorkflowMissingKey { key: "output", .. })),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_profile_workflow_needs_neither_mode_nor_output() {
+        let cfg = profile_cfg("profile = \"design\"");
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn an_unknown_profile_name_is_rejected_at_parse_time() {
+        // serde's enum rejection is the whole mechanism — no hand-written list
+        // of valid names to drift out of step with `Profile`.
+        let err = RootConfig::from_toml_str(
+            r#"
+[[workflows]]
+name = "w"
+source = "s"
+profile = "reviewer"
+agent = "a"
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, crate::config::ConfigError::Parse(_)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_profile_reaches_the_llm_verification_advisories() {
+        // #301's degradation and the tool-pin advisory both key off
+        // `verification`, which a profile now supplies. If they read the raw
+        // field they would see `None` and never fire — an `answer` task would
+        // run unverified against a non-claude tool while the config claimed
+        // otherwise.
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[plugins.slack]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[tools.codex-cli]
+kind = "codex"
+
+[[workflows]]
+name = "w"
+source = "slack"
+profile = "answer"
+agent = "herdr"
+tool = "codex-cli"
+"#,
+        )
+        .unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| Some(vec![]), |_| None);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("verification = llm")),
+            "{findings:?}"
+        );
     }
 
     #[test]

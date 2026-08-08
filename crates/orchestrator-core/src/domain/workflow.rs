@@ -139,17 +139,22 @@ pub struct Workflow {
 
 impl Workflow {
     /// Interpret a parsed config workflow.
+    ///
+    /// This is the **single** place a `profile` is resolved into concrete
+    /// mode/output/verification values (#394): everything downstream reads this
+    /// struct, whose fields are already concrete, so no other code has to know
+    /// profiles exist.
     pub fn from_config(config: &WorkflowConfig) -> Self {
         Self {
             name: config.name.clone(),
             source: config.source.clone(),
             trigger: Trigger::new(config.trigger.clone()),
-            mode: config.mode,
+            mode: config.resolved_mode(),
             agent: config.agent.clone(),
-            output: config.output,
+            output: config.resolved_output(),
             on_success: config.on_success.as_ref().map(OutcomeAction::from_table),
             on_failure: config.on_failure.as_ref().map(OutcomeAction::from_table),
-            verification: config.verification,
+            verification: config.resolved_verification(),
             timeout_secs: config.timeout_secs,
             rubric: config.rubric.clone(),
             tool: config.tool.clone(),
@@ -524,6 +529,88 @@ output = "none"
         assert_eq!(workflows[1].verification, VerificationMode::Llm);
         assert!(workflows[1].timeout_secs.is_none());
         assert!(workflows[1].rubric.is_none());
+    }
+
+    #[test]
+    fn each_profile_resolves_the_documented_bundle() {
+        // The #393 D5 table, pinned. These four rows decide what a workflow may
+        // do, so a silent edit to `Profile::mode` is the kind of change that
+        // hands `implement` powers to an `answer` task.
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "answer"
+source = "slack"
+trigger = { label = "a" }
+profile = "answer"
+agent = "herdr"
+
+[[workflows]]
+name = "triage"
+source = "slack"
+trigger = { label = "t" }
+profile = "triage"
+agent = "herdr"
+
+[[workflows]]
+name = "design"
+source = "slack"
+trigger = { label = "d" }
+profile = "design"
+agent = "herdr"
+
+[[workflows]]
+name = "implement"
+source = "slack"
+trigger = { label = "i" }
+profile = "implement"
+agent = "herdr"
+"#,
+        );
+        let expected = [
+            ("answer", WorkflowMode::Plan, OutputPolicy::Source),
+            ("triage", WorkflowMode::Plan, OutputPolicy::Source),
+            ("design", WorkflowMode::Plan, OutputPolicy::None),
+            ("implement", WorkflowMode::Implement, OutputPolicy::None),
+        ];
+        for (wf, (name, mode, output)) in workflows.iter().zip(expected) {
+            assert_eq!(wf.name, name);
+            assert_eq!(wf.mode, mode, "{name} mode");
+            assert_eq!(wf.output, output, "{name} output");
+            // All four judge with the llm verifier; #398 varies the rubric, not
+            // the mode.
+            assert_eq!(wf.verification, VerificationMode::Llm, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_explicit_output_overrides_the_profile_but_mode_still_comes_from_it() {
+        // The one documented override: a Slack-sourced `implement` needs
+        // `output = "source"` to get its PR URL back into the thread, and that
+        // choice of destination is not a permission.
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "slack-implement"
+source = "slack"
+profile = "implement"
+output = "source"
+agent = "herdr"
+"#,
+        );
+        assert_eq!(workflows[0].output, OutputPolicy::Source);
+        assert_eq!(workflows[0].mode, WorkflowMode::Implement);
+    }
+
+    #[test]
+    fn a_config_without_profiles_resolves_exactly_as_before() {
+        // The compatibility half of making `mode`/`output` optional: every
+        // pre-#394 config has to mean what it meant.
+        let workflows = workflows_from_toml(SPEC_EXAMPLE);
+        assert_eq!(workflows[0].mode, WorkflowMode::Plan);
+        assert_eq!(workflows[0].output, OutputPolicy::Source);
+        assert_eq!(workflows[0].verification, VerificationMode::Llm);
+        assert_eq!(workflows[1].mode, WorkflowMode::Implement);
     }
 
     #[test]
