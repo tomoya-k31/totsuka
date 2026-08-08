@@ -104,6 +104,30 @@ parse 不能行を含むスプールファイルは**削除されず** `<name>.c
 
 `verifying` 以外の状態に対する `verify` はエラー（原因 + 次のアクションで表示）。どの workflow が human 検収かは設定次第（例: 詳細設計 = human、Slack メンション/実装 = llm）。llm 検収はセッション内 prompt 型 Stop フックが自動判定するため `task verify` 操作は不要。
 
+# 4. plan 系 profile のタスクで編集やコマンドが拒否される
+
+`profile = "answer"` / `"triage"` / `"design"` の claude タスクで、エージェントが `Edit` / `Write` を使おうとして拒否される、あるいは `git switch -c` / `gh pr create` が通らない。
+
+**これは正常動作である。** これらの profile には Rust 固定の `permissions.deny` が入っており（#395、[ADR-0033](/decisions/adr-0033-workflow-profile.md) D4）、対象リポジトリの `.claude/settings.json` の allow より**必ず強い**（deny はスコープ横断でマージされる）。対象リポジトリの `CLAUDE.md` が「終わったら push して PR を作れ」と指示していても効かないのが狙いで、[#378](https://github.com/tomoya-k31/totsuka/issues/378) がまさにその形で plan タスクを実装まで走らせた事故だった。
+
+| 症状 | 判断 |
+|---|---|
+| `answer` タスクが `Edit` を拒否される | 正常。回答は返信文であって編集ではない |
+| `answer` タスクが `gh issue comment` を拒否される | 正常。返信はプラグインの承認ゲートを通って本人名義で出る |
+| `design` タスクが `gh issue comment` を拒否される | **異常**。design は issue コメントで成果物を書く profile なので、deny セットの不具合か profile の指定違い |
+| `design` タスクが `gh pr create` を拒否される | 正常。PR を出すのは `implement` |
+| **実装させたいのに拒否される** | profile の選択ミス。`profile = "implement"` にする。Slack 起点なら、本人のリアクションで別タスクとして起こす（#393 D6） |
+
+確認するには rendered settings を見る:
+
+```bash
+jq '.permissions.deny' "${XDG_DATA_HOME:-$HOME/.local/share}/totsuka/hooks/orchestrator-<workflow>.json"
+```
+
+キー自体が無ければ `implement` profile か、profile を使わない明示記法（`mode` / `output` を直接書く形）である。**明示記法には deny が付かない** — `mode` は元々何も強制しておらず、そこから権限境界を推測すると既存の構成がアップグレードで黙って厳しくなるため。強制が欲しければ profile 記法へ移行する。
+
+デプロイ中に deny セットが変わった場合、`run` / `doctor` の起動時に内容ハッシュ差分で自動的に書き換わる。**走行中のセッションにも反映される**（Claude Code は settings ファイルの変更を実行中セッションに取り込む）が、変化は常に「制限が強まる」方向なので安全側に倒れる。
+
 # 関連
 
 - [フックシグナルフロー](/architecture/hook-signal-flow.md)

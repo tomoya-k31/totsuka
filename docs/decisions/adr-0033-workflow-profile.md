@@ -28,11 +28,11 @@ stable。[#394](https://github.com/tomoya-k31/totsuka/issues/394) の実装と�
 
 | 要素 | issue | 状態 |
 |---|---|---|
-| profile ごとの `permissions.deny` セット | [#395](https://github.com/tomoya-k31/totsuka/issues/395) | 未着手 |
+| profile ごとの `permissions.deny` セット | [#395](https://github.com/tomoya-k31/totsuka/issues/395) | **済**（D4 節を参照） |
 | 成果物の書き手の分割と URL 実在検収 | [#398](https://github.com/tomoya-k31/totsuka/issues/398) | 未着手 |
 | profile が要求する外部ツールの認証検査 | [#399](https://github.com/tomoya-k31/totsuka/issues/399) | 未着手 |
 
-つまり**この時点の profile は「mode / output / verification の別名」でしかない**。権限としての実効性は #395 が入って初めて生まれる。実機検収も未了なので `verified` は付けていない。
+#395 が入るまでの profile は「mode / output / verification の別名」でしかなかった。いまは claude タスクに限り**権限としての実効性がある**（下の D4 節）。実機検収は未了なので `verified` は付けていない。
 
 # Context
 
@@ -121,6 +121,49 @@ profile が最終的に決めるものには `permissions.deny` セットが含�
 
 `upsert_workflow` は `profile` / `mode` / `output` を「値が無ければキーごと消す」書き方にした。明示記法から profile へ書き換えた既存エントリに `mode` が残ると、ウィザード自身が `ProfileConflict` を書き込むことになる。
 
+## 6. D4 — plan 系 profile は Rust 固定の `permissions.deny` を持つ（#395）
+
+`hooks::render_settings` が、`answer` / `triage` / `design` の workflow に対して `--settings` JSON へ `permissions.deny` を書く。リストは `hooks::permissions` の Rust 定数で、**設定キーからは合成できない**（理由は上の「束ねる場所は Rust であってキーではない」と同じ）。
+
+効く根拠は Claude Code の permission モデルそのものにある:
+
+- **deny はスコープ横断でマージされ、どこかで deny されたツールは他のどのスコープの allow でも許可できない。** よって `--settings` の deny は対象リポジトリの `.claude/settings.json` の allow に必ず勝つ
+- 公式ドキュメントの「Permission rules are enforced by Claude Code, not by the model. Instructions in your prompt or CLAUDE.md … don't change what Claude Code allows.」が、[#378](https://github.com/tomoya-k31/totsuka/issues/378)（リポジトリの `CLAUDE.md` に誘導されて plan タスクが push・PR まで到達した）への直接の答えになる。散文には散文で対抗できない
+- deny は全 permission mode で有効なので、`--permission-mode plan` と併用できる
+
+| profile | 拒否するもの |
+|---|---|
+| `answer` | ファイル編集 + git 書き込み + PR + **GitHub への書き込み一式**（`gh issue …` / `gh repo` / `gh api`） |
+| `triage` / `design` | ファイル編集 + git 書き込み + PR + `gh repo delete` / `rename` + `gh api`。**`gh issue …` は開けたまま** — そこに成果物を書くのがこの profile の仕事だから |
+| `implement` | 何も拒否しない（`permissions` キー自体を書かない） |
+
+**`gh api` は read-only profile すべてで塞ぐ。** REST も GraphQL も叩けるので、開けたまま `gh repo delete` や `gh pr create` を denyしても意味がない — `gh api -X DELETE repos/{owner}/{repo}` と `gh api -X POST .../pulls` で同じ場所に届く。**実際より強く読めるリストは、短いリストより悪い。** 代償は本物で、パターンは `GET` と `POST` を区別できないので読み取り用の API 呼び出しも一緒に塞がる（`gh issue view` / `gh pr view` / `gh search` で足りる範囲に収まる想定）。**GraphQL が要る workflow が出てきたら** — Projects v2 のフィールドや draft issue には `gh` サブコマンドが無い — それはこのルールを意識的に見直す合図であって、黙って穴を開けたままにする理由ではない。
+
+### 保証の強さは層で違う
+
+| 層 | 機構 | 強さ |
+|---|---|---|
+| 1 | `--permission-mode plan` | フラグ。モデルは説得されうる |
+| 2 | 裸のツール名（`Edit` / `Write` / `NotebookEdit`） | **ファイル編集の実質保証**。フィルタではなくツールごと除去される |
+| 3 | `Bash(...)` パターン | ベストエフォート |
+| 4 | ブランチ検出警告（#385） | 事後検出 |
+
+**層 3 は境界ではない。** `Bash(...)` はコマンド文字列への前方一致でしかなく、`/usr/bin/git push`・`sh -c "git push"`・チェーン内の実行は素通りする。事故を減らすだけで、ハード保証には sandbox が要る（本 ADR のスコープ外）。
+
+書式の罠を 2 つ踏まないようにしている: **`Write(path)` / `NotebookEdit(path)` のパス付きルールは受理されて参照されない**（パス限定が効くのは `Edit(path)` / `Read(path)` だけ）ので裸名のみを使う。`Bash(git *)` と `Bash(git*)` は別物（後者は `gitk` にもマッチ）なので、ワイルドカード前のスペースをテストで固定した。
+
+### 明示記法には deny を付けない
+
+`mode = "plan"` と書いただけの workflow は deny を得ない。`mode` は元々何も強制しておらず（#378 がその証拠）、そこから権限境界を推測すると**既存の構成がアップグレードで黙って厳しくなる** — 意図してブランチを切っていた plan タスクが、設定を一切変えていないのに落ちるようになる。強制が欲しければ profile 記法へ移行する、という線にした。
+
+### 走行中セッションへの反映
+
+Claude Code は settings ファイルの変更を実行中セッションに取り込む。つまり totsuka を更新して `install` が走ると、**走行中の plan タスクにも新しい deny が即時適用される**。変化は常に「制限が強まる」方向なので安全側だが、走行中タスクが突然 `Edit` を拒否されうる点はリリースノートに書く。
+
+### 積み残し: Notion MCP の write 系
+
+MCP ツールの deny（`mcp__<server>__<tool>`）は書けるが、**サーバ名がユーザ環境依存**なので Rust 固定にできない。`answer` profile から Notion への書き込みを止める手段は現状ここには無く、instructions 層（#398）に委ねている。
+
 # Consequences
 
 ## 良くなること
@@ -133,7 +176,8 @@ profile が最終的に決めるものには `permissions.deny` セットが含�
 
 - **設定の書き方が 2 通りになった。** profile 記法と明示記法が併存する。統一しなかったのは「Human sign-off required」のように 4 原型で表せない組み合わせが実在するためで、明示記法は非推奨ではない
 - **ロールバックが非対称。** profile を使った config は旧バイナリでは `deny_unknown_fields` によりパースエラーになる。新 → 旧に戻すときは config も戻す必要がある（リリースノートに明記する）
-- **この時点では profile に実効性が無い。** 上の Status 表のとおり、権限としての意味は #395 待ちである。`profile = "design"` と書いても worktree の編集は止まらない。それを止めるのが #395 の仕事で、本 ADR はその受け皿を用意しただけである
+- **実効性は claude タスクに限られる。** deny は `--settings` 経由なので、codex（`--sandbox read-only` で別途 OS レベルに制限）と opencode（agent ファイルの deny マップ）はこの経路を読まない。3 つの機構が同じ意図を別々に実装している状態で、[ADR-0014](/decisions/adr-0014-tool-abstraction.md) の縮退表どおりではあるが、集約されてはいない
+- **層 3（`Bash(...)` パターン）は保証ではない。** 上の D4 節のとおり、`/usr/bin/git push` やチェーン内実行は素通りする。「deny に書いてあるから安全」と読まれるのが一番危ないので、ドキュメント側にも層ごとの強さを明記した
 
 ## 非破壊であること
 
