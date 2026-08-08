@@ -18,6 +18,7 @@
 
 pub mod codex;
 pub mod opencode;
+pub mod permissions;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -184,7 +185,15 @@ pub fn install(paths: &Paths, cfg: &RootConfig) -> io::Result<()> {
 
 /// Render a workflow's `orchestrator-<workflow>.json`. The `Stop` array always
 /// carries the `on-stop.sh` command hook; `verification = "llm"` workflows also
-/// get a `prompt`-type hook running the rubric in-session (D-01).
+/// get a `prompt`-type hook running the rubric in-session (D-01). A read-only
+/// [`Profile`](crate::config::Profile) additionally gets its `permissions.deny`
+/// set (#395).
+///
+/// The deny block is written whatever tool the workflow resolves to. Only
+/// Claude reads `--settings`; codex is confined by `--sandbox read-only` and
+/// opencode by its own agent-file deny map, and neither so much as opens this
+/// file. Branching on the resolved tool would only add a case where a
+/// repository-level `tool` override silently changes what this file contains.
 pub fn render_settings(dir: &Path, cfg: &RootConfig, wf: &WorkflowConfig) -> String {
     let script = |name: &str| dir.join(name).to_string_lossy().into_owned();
 
@@ -201,7 +210,7 @@ pub fn render_settings(dir: &Path, cfg: &RootConfig, wf: &WorkflowConfig) -> Str
         }));
     }
 
-    let settings = json!({
+    let mut settings = json!({
         "hooks": {
             "Stop": stop,
             "Notification": [{
@@ -221,6 +230,16 @@ pub fn render_settings(dir: &Path, cfg: &RootConfig, wf: &WorkflowConfig) -> Str
             }]
         }
     });
+    // Only profiles carry a deny set. A workflow written in the spelled-out
+    // notation gets none even at `mode = "plan"` — `mode` never claimed to
+    // enforce anything (#378 proved it does not), and inferring a permission
+    // boundary from it would make an existing config quietly stricter on
+    // upgrade. Migrating to a profile is what buys the enforcement.
+    if let Some(profile) = wf.profile
+        && let Some(deny) = permissions::deny_rules(profile)
+    {
+        settings["permissions"] = json!({ "deny": deny });
+    }
     serde_json::to_string_pretty(&settings).expect("settings JSON is always serializable")
 }
 
@@ -636,6 +655,50 @@ mod tests {
         );
     }
 
+    /// A changed deny set has to reach an already-installed workflow.
+    ///
+    /// The settings file is written once at startup and then read by every
+    /// session, so a rule added in a new totsuka version only takes effect if
+    /// the content hash notices. If it did not, the operator would upgrade,
+    /// see the release note about a tightened profile, and keep running the old
+    /// permissions with nothing to indicate it.
+    #[test]
+    fn a_changed_deny_set_is_rewritten_over_the_installed_one() {
+        let dir = unique_dir("deny-refresh");
+        let path = dir.join("orchestrator-w.json");
+
+        let profile_cfg = |profile: &str| {
+            workflows_config(&format!(
+                r#"
+[[workflows]]
+name = "w"
+source = "slack"
+profile = "{profile}"
+agent = "herdr"
+"#
+            ))
+        };
+
+        let answer = profile_cfg("answer");
+        let rendered = render_settings(Path::new("/hooks"), &answer, &answer.workflows[0]);
+        assert!(write_if_changed(&path, rendered.as_bytes(), 0o600).unwrap());
+        assert!(
+            !write_if_changed(&path, rendered.as_bytes(), 0o600).unwrap(),
+            "an unchanged profile must not churn the file every startup"
+        );
+
+        // Same workflow name, a profile with a different deny set: the file has
+        // to be replaced, not left alone.
+        let design = profile_cfg("design");
+        let rendered = render_settings(Path::new("/hooks"), &design, &design.workflows[0]);
+        assert!(
+            write_if_changed(&path, rendered.as_bytes(), 0o600).unwrap(),
+            "a changed deny set must be written through"
+        );
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("gh issue comment"), "{on_disk}");
+    }
+
     #[test]
     fn install_is_idempotent_across_startups() {
         let base = unique_dir("install");
@@ -889,6 +952,110 @@ agent = "herdr"
             assert_eq!(stop.len(), 2, "command + prompt hook for {profile}");
             assert_eq!(stop[1]["hooks"][0]["type"], "prompt", "{profile}");
         }
+    }
+
+    /// The rendered `permissions.deny` for a read-only profile, and the proof
+    /// that adding it did not disturb the hooks block (#395).
+    #[test]
+    fn a_read_only_profile_renders_its_deny_set_alongside_the_hooks() {
+        let cfg = workflows_config(
+            r#"
+[[workflows]]
+name = "w"
+source = "slack"
+profile = "answer"
+agent = "herdr"
+"#,
+        );
+        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+        let deny: Vec<&str> = v["permissions"]["deny"]
+            .as_array()
+            .expect("a deny array")
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            deny,
+            permissions::deny_rules(crate::config::Profile::Answer).unwrap(),
+            "the rendered set must be the module's, not a copy that can drift"
+        );
+        // The three that actually hold, by bare name.
+        for tool in ["Edit", "Write", "NotebookEdit"] {
+            assert!(deny.contains(&tool), "{rendered}");
+        }
+
+        // …and the hooks the file existed for in the first place are intact.
+        assert_eq!(stop_hooks(&rendered).len(), 2, "command + prompt hook");
+        assert!(v["hooks"]["UserPromptSubmit"].is_array(), "{rendered}");
+        assert!(v["hooks"]["SessionStart"].is_array(), "{rendered}");
+    }
+
+    #[test]
+    fn an_implement_profile_renders_no_permissions_key() {
+        // Not an empty deny list — the key must be absent, or a future reader
+        // would take "permissions: {deny: []}" as a considered decision to
+        // allow everything rather than as "this profile has no restrictions".
+        let cfg = workflows_config(
+            r#"
+[[workflows]]
+name = "w"
+source = "slack"
+profile = "implement"
+agent = "herdr"
+"#,
+        );
+        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert!(v.get("permissions").is_none(), "{rendered}");
+    }
+
+    /// The spelled-out notation gets no deny set, including at `mode = "plan"`.
+    ///
+    /// `mode` never claimed to enforce anything — #378 is the proof — so
+    /// inferring a permission boundary from it would make an existing config
+    /// quietly stricter on upgrade, and a plan task that had been branching on
+    /// purpose would start failing with no config change to point at.
+    #[test]
+    fn the_spelled_out_notation_gets_no_deny_set() {
+        let cfg = workflows_config(
+            r#"
+[[workflows]]
+name = "w"
+source = "slack"
+mode = "plan"
+agent = "herdr"
+output = "source"
+"#,
+        );
+        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert!(v.get("permissions").is_none(), "{rendered}");
+    }
+
+    /// `design` must keep the commands it writes its artifact with (#393 D2).
+    /// Denying them would deny the profile's whole purpose, and the symptom
+    /// would be a task that reports success having written nothing.
+    #[test]
+    fn design_may_still_write_to_github() {
+        let cfg = workflows_config(
+            r#"
+[[workflows]]
+name = "w"
+source = "github"
+profile = "design"
+agent = "herdr"
+"#,
+        );
+        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let deny = v["permissions"]["deny"].to_string();
+        assert!(!deny.contains("gh issue comment"), "{deny}");
+        assert!(!deny.contains("gh issue create"), "{deny}");
+        // But it still may not open a PR or edit the worktree.
+        assert!(deny.contains("gh pr create"), "{deny}");
+        assert!(deny.contains("\"Edit\""), "{deny}");
     }
 
     #[test]
