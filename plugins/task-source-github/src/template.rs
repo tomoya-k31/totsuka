@@ -1,12 +1,15 @@
 //! `{placeholder}` substitution for the configurable instructions (#398).
 //!
-//! A deliberate copy of `task_source_slack::template` / `orchestrator_core::
-//! template::render`: plugins may depend only on `plugin-protocol` /
-//! `plugin-sdk` (`scripts/arch-lint.sh`), so neither of the other two is
-//! reachable from here. **This is the second plugin to need it, which is the
-//! trigger the Slack copy names for promoting it into `plugin-sdk`** — left as
-//! a follow-up rather than folded into #398, because moving it means touching
-//! the Slack plugin's prompt path in a PR that is already about GitHub.
+//! **The fourth copy of this renderer.** The others are
+//! `orchestrator_core::template::render`, `task_source_slack::template`, and
+//! the twin of this file in the `task-source-notion` plugin. Plugins may depend only on
+//! `plugin-protocol` / `plugin-sdk` (`scripts/arch-lint.sh`), so core's copy is
+//! out of reach and one plugin cannot borrow another's.
+//!
+//! Four is past the point where duplicating is cheaper than moving.
+//! **Promote it to `plugin-sdk`** — deliberately not done in #398, because that
+//! means touching the Slack plugin's prompt path in a PR that is about GitHub
+//! and Notion. Whoever needs a fifth: do the move first.
 
 /// Substitute `{key}` tokens in a **single pass**: a substituted value that
 /// itself contains `{token}` text is never re-expanded.
