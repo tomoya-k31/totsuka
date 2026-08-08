@@ -200,6 +200,7 @@ on_success = { set_status = "設計済み" }
 | claude の `--settings` へ `permissions.deny` を注入 | answer / triage / design | #395 |
 | ソースプラグインへ `instructions_kind` を伝え、書き込み先の指示を出させる | triage / design / implement | #398 |
 | 検収 rubric を「成果物 URL の実在」に差し替え | triage / design / implement | #398 |
+| ソースプラグインへ `task_id_prefix` を伝え、会話とは別 ID のタスクを立てさせる | implement (`impl:`) / triage (`books:`) | #397 |
 
 ### 成果物 URL 検収の落とし穴（#398）
 
@@ -214,6 +215,36 @@ rubric leaf の優先順位（強い順）:
 5. 汎用既定
 
 **3 が 4 より強い**ため、`[prompts].verification_rubric` を設定済みの構成は `design` workflow でも **URL 検収にならない**。全 workflow に対して既に選ばれた文言を、後から入った profile が黙って覆すよりはましだと判断した結果だが、症状は「投稿していない設計を『書いた』と申告したタスクが通る」なので、profile を使うならグローバルの rubric を外すか、`[[workflows]].rubric` で明示すること。
+
+### リアクションで実装タスクを起こす（#397）
+
+Slack の「質問 → 方針決定 → 実装」は、**実行中タスクの権限を広げるのではなく、本人のリアクションで別タスクを起こす**。
+
+```toml
+[[workflows]]
+name = "slack-implement"
+source = "slack"
+trigger = { reaction = "hammer" }
+profile = "implement"
+output = "source"                 # PR の URL をスレッドへ返すため（profile 既定は none）
+agent = "herdr"
+
+[[workflows]]
+name = "slack-reply"              # catch-all。必ず最後
+source = "slack"
+trigger = {}
+profile = "answer"
+agent = "herdr"
+```
+
+- タスク ID は `impl:{channel}:{反応したメッセージの ts}`。スレッドの `answer` タスク（`{channel}:{thread_ts}`）と衝突しない
+- **文脈のスコープは反応した位置で決まる**: スレッドの先頭（またはスレッド外の単独メッセージ）→ **スレッド全会話**、スレッド内の返信 1 つ → **そのメッセージのみ**
+- リポジトリは会話から継承する（`answer` タスクが解決済みならそれを使い、LLM 呼び出しもピッカーも走らない）
+- 報告は**承認ゲートを通る**。実装報告こそ誤送信の影響が大きい
+
+**制限**: 親リアクションはスレッド全体を文脈にするが、`conversations.replies` の取得は **200 件でクランプ**している。それを超えるスレッドは古い方から欠ける（ページング未実装）。
+
+**注意**: `answer` タスクが実行中のうちに `:hammer:` を付けると 2 つのタスクが並走する。別 worktree なので壊れないが、「方針が決まる前に実装が始まる」ことになる。
 
 ### ソースプラグインの `[prompts]`（#398）
 

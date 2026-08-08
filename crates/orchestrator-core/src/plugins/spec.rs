@@ -216,7 +216,7 @@ fn trigger_value(wf: &crate::config::WorkflowConfig) -> serde_json::Value {
 /// plain conversation id (#397, #393 D7).
 ///
 /// A Slack thread can already have an `answer` task at `{channel}:{thread_ts}`
-/// ([ADR-0015](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0015-conversation-identity.md)),
+/// ([ADR-0015](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0015-conversation-task-identity.md)),
 /// and `UNIQUE(source, source_task_id)` means a second task on the same thread
 /// needs a different id. Prefixing is what lets "answer this" and "now
 /// implement it" coexist as separate tasks with separate worktrees, instead of
