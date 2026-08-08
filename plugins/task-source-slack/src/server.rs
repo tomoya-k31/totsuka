@@ -306,7 +306,7 @@ where
             ));
         }
         let api = Arc::new(SlackApi::new(self.factory.build(settings(&config))));
-        if let Err(e) = token_guard(&api, &config).await {
+        if let Err(e) = token_guard(&api, &config, &reaction_triggers).await {
             // Credential/identity problems are config-class (fix the token or
             // the config); anything else (network down) is an internal error.
             let code = if e.is_credential() {
@@ -455,6 +455,7 @@ where
 async fn token_guard<T: SlackTransport>(
     api: &SlackApi<T>,
     config: &SlackConfig,
+    reactions: &ReactionTriggers,
 ) -> Result<(), SlackError> {
     let identity = api.auth_test().await?;
     if identity.user_id != config.target_user_id {
@@ -471,7 +472,7 @@ async fn token_guard<T: SlackTransport>(
     if config.bot_token.is_some() {
         api.auth_test_bot().await?;
     }
-    check_scopes(api, config).await;
+    check_scopes(api, config, reactions).await;
     Ok(())
 }
 
@@ -491,7 +492,11 @@ async fn token_guard<T: SlackTransport>(
 /// **An unknown scope set says nothing.** `granted_scopes` answers `None` on
 /// any transport that cannot read headers, and that must stay silent — a check
 /// that cannot see is not a check that found a problem.
-async fn check_scopes<T: SlackTransport>(api: &SlackApi<T>, config: &SlackConfig) {
+async fn check_scopes<T: SlackTransport>(
+    api: &SlackApi<T>,
+    config: &SlackConfig,
+    reactions: &ReactionTriggers,
+) {
     let scopes = match api.granted_scopes().await {
         Ok(Some(scopes)) => scopes,
         // Unreadable or unsupported: say nothing rather than guess.
@@ -501,7 +506,7 @@ async fn check_scopes<T: SlackTransport>(api: &SlackApi<T>, config: &SlackConfig
             return;
         }
     };
-    for warning in scope_warnings(&scopes, config) {
+    for warning in scope_warnings(&scopes, config, reactions) {
         tracing::warn!("{warning}");
     }
 }
@@ -512,18 +517,27 @@ async fn check_scopes<T: SlackTransport>(api: &SlackApi<T>, config: &SlackConfig
 /// Split out from [`check_scopes`] so the *decision* can be tested directly.
 /// Asserting "initialize still succeeded" would pass just as well with the
 /// check deleted, which is no test at all.
-fn scope_warnings(scopes: &[String], config: &SlackConfig) -> Vec<String> {
+fn scope_warnings(
+    scopes: &[String],
+    config: &SlackConfig,
+    reactions: &ReactionTriggers,
+) -> Vec<String> {
     let has = |scope: &str| scopes.iter().any(|s| s == scope);
     let mut warnings = Vec::new();
 
-    if !config.trigger_reactions.is_empty() && !has("reactions:read") {
+    // Keyed off the **resolved** trigger set, not `config.trigger_reactions`
+    // (#396). Reading the config field alone would make this warning vanish
+    // the moment someone migrated to `[[workflows]].trigger.reaction` — and a
+    // missing scope is invisible without it: Slack delivers no event and
+    // reports no error, so the config looks right and nothing happens.
+    if !reactions.is_empty() && !has("reactions:read") {
         warnings.push(
             concat!(
-                "`trigger_reactions` is set but the user token has no `reactions:read` ",
-                "scope → Slack will not deliver `reaction_added` at all, so reaction ",
-                "triggers are silently dead. Update the app with the current manifest, ",
-                "Reinstall to Workspace, then store the NEW `xoxp-` and `xoxb-` tokens ",
-                "(a reinstall reissues both).",
+                "a reaction trigger is configured but the user token has no ",
+                "`reactions:read` scope → Slack will not deliver `reaction_added` at all, ",
+                "so reaction triggers are silently dead. Update the app with the current ",
+                "manifest, Reinstall to Workspace, then store the NEW `xoxp-` and `xoxb-` ",
+                "tokens (a reinstall reissues both).",
             )
             .to_string(),
         );
@@ -644,6 +658,13 @@ mod tests {
         scopes.iter().map(|s| s.to_string()).collect()
     }
 
+    /// The trigger set the legacy `trigger_reactions` in `config_with`
+    /// resolves to.
+    fn legacy(names: &[&str]) -> ReactionTriggers {
+        let owned: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+        ReactionTriggers::resolve(&[], &owned).expect("valid")
+    }
+
     /// The case that cost hours live (#379): the feature is configured, the
     /// token cannot receive its events, and Slack reports nothing.
     #[test]
@@ -651,12 +672,34 @@ mod tests {
         let warnings = scope_warnings(
             &owned(&["chat:write", "im:write", "users:read"]),
             &config_with(&["totsuka-test"], false),
+            &legacy(&["totsuka-test"]),
         );
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("reactions:read"), "{}", warnings[0]);
         // The message has to say what to *do*: the scope alone does not tell
         // an operator that a reinstall reissues both tokens.
         assert!(warnings[0].contains("Reinstall"), "{}", warnings[0]);
+    }
+
+    /// **Migrating to the #396 notation must not silence the check.**
+    ///
+    /// `trigger_reactions` is empty here — the emoji lives in a workflow
+    /// trigger instead. A `scope_warnings` that read the config field would go
+    /// quiet exactly when someone followed the deprecation notice, and the
+    /// failure it guards is invisible: Slack delivers no `reaction_added` and
+    /// reports no error, so the config looks right and nothing happens (#379).
+    #[test]
+    fn the_scope_check_follows_the_workflow_notation_too() {
+        let workflow_triggers =
+            ReactionTriggers::resolve(&[("watch".into(), Some("eyes".into()))], &[])
+                .expect("valid");
+        let warnings = scope_warnings(
+            &owned(&["chat:write", "im:write", "users:read"]),
+            &config_with(&[], false),
+            &workflow_triggers,
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("reactions:read"), "{}", warnings[0]);
     }
 
     /// Silence is the whole point of the split: a config that asks for nothing
@@ -667,11 +710,19 @@ mod tests {
             scope_warnings(
                 &owned(&["reactions:read", "channels:read"]),
                 &config_with(&["totsuka-test"], true),
+                &legacy(&["totsuka-test"]),
             )
             .is_empty()
         );
         // …and neither feature configured means neither scope is wanted.
-        assert!(scope_warnings(&owned(&["chat:write"]), &config_with(&[], false)).is_empty());
+        assert!(
+            scope_warnings(
+                &owned(&["chat:write"]),
+                &config_with(&[], false),
+                &ReactionTriggers::default(),
+            )
+            .is_empty()
+        );
     }
 
     /// Either scope resolves a channel name, so a private-only or public-only
@@ -679,10 +730,19 @@ mod tests {
     #[test]
     fn channel_groups_accept_either_channel_scope() {
         assert!(
-            scope_warnings(&owned(&["groups:read"]), &config_with(&[], true)).is_empty(),
+            scope_warnings(
+                &owned(&["groups:read"]),
+                &config_with(&[], true),
+                &ReactionTriggers::default(),
+            )
+            .is_empty(),
             "private-channel-only is a real setup"
         );
-        let warnings = scope_warnings(&owned(&["chat:write"]), &config_with(&[], true));
+        let warnings = scope_warnings(
+            &owned(&["chat:write"]),
+            &config_with(&[], true),
+            &ReactionTriggers::default(),
+        );
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("channel_groups"), "{}", warnings[0]);
     }

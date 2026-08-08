@@ -107,7 +107,7 @@ owner: tomoya-k31
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source インスタンス名 |
-| `trigger` | テーブル | `{}`（全マッチ） | トリガー条件。`status`/`project_status`/`label`/`labels` は Orchestrator が防御的に再判定、他キーはプラグインが `initialize` の `triggers` として受け取り解釈する |
+| `trigger` | テーブル | `{}`（全マッチ） | トリガー条件。`status`/`project_status`/`label`/`labels`/`reaction` は Orchestrator が防御的に再判定、他キーはプラグインが `initialize` の `triggers` として受け取り解釈する |
 | `profile` | enum? | なし | 4 原型のいずれか（`answer` / `triage` / `design` / `implement`）。`mode` / `output` / `verification` の 3 つをまとめて決める。うち `mode` / `verification` は併記不可、`output` は併記すればそちらが勝つ（下記） |
 | `mode` | enum | `profile` が無ければ必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
@@ -120,7 +120,43 @@ owner: tomoya-k31
 | `[workflows.prompts]` | テーブル | — | このワークフロー専用のプロンプト上書き（下記 `[prompts]` の 5 キー。最優先層） |
 | `tool` | string? | なし | AI ツールの明示ピン（#196）。優先順位は workflow > repo > `default_tool`。`verification = "llm"` は Claude の prompt 型 Stop フックが必要なので、非 claude 系へ解決されうる構成では `tool = "claude"` のピンを警告で提案 |
 
-定義順に first-match（F-81）。同一ソース内でトリガーが重なると警告。
+定義順に first-match（F-81）。同一ソース内でトリガーが重なると警告。**catch-all（`trigger = {}`）より後に定義した同一ソースの workflow は到達不能**で、警告が出る（#396）。
+
+## `trigger` の予約キー
+
+Orchestrator が正規化済み `Task` に対して再判定するキー。これ以外はプラグインが解釈する不透明値として素通しする。
+
+| キー | 照合先 |
+|---|---|
+| `status` / `project_status` | `task.status` |
+| `label`（文字列）/ `labels`（配列） | `task.labels`（配列は全部必要） |
+| `reaction` | `task.labels` の `reaction:<絵文字名>`（#396） |
+
+### `reaction` — 絵文字でワークフローを選ぶ（#396）
+
+```toml
+[[workflows]]
+name = "slack-implement"
+source = "slack"
+trigger = { reaction = "hammer" }     # :hammer: を本人が付けたら実装タスク
+profile = "implement"
+agent = "herdr"
+
+[[workflows]]
+name = "slack-reply"                  # メンション: catch-all。必ず最後
+source = "slack"
+trigger = {}
+profile = "answer"
+agent = "herdr"
+```
+
+- **リアクション workflow は catch-all より前に定義する。** 後ろに置くと到達不能で、絵文字が無反応になる（警告が出る）
+- 絵文字名は Slack が報告する形（コロン無し）。`":eyes:"` と書いても剥がされる。👀 は `eyes`、👁 は `eye` で別物
+- **同一絵文字を 2 つの workflow に書くと `CONFIG_INVALID`**。first-match で片方が黙って勝つのを許さない
+- **`plugins/slack.toml` の `trigger_reactions` との併用も `CONFIG_INVALID`。** 旧記法だけの構成は非推奨警告つきで従来どおり動く（削除は 0.3）
+- 本人限定の不変条件は不変（他人のリアクションでは起動しない、→ [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）
+
+**混在バージョンの注意**: 新プラグイン + 旧コアの組み合わせでは、旧コアに `reaction` 予約キーが無いため**リアクション workflow が全タスクを吸う**。コア → プラグインの順にリリースすること（同一リポジトリの一括リリースなら自然に満たされる）。ロールバック時は `trigger = { reaction = ... }` の workflow を config から外す。
 
 ## `profile` — 4 原型（#394、[ADR-0033](/decisions/adr-0033-workflow-profile.md)）
 
@@ -322,7 +358,7 @@ kind = "task_source"
 | `user_token` | string | 必須 | User OAuth Token（`xoxp-`、本人名義の読み書き）。Keychain 参照推奨 |
 | `bot_token` | string? | なし | Bot User OAuth Token（`xoxb-`、[ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)・#305）。設定すると返信案・ピッカー到着時に bot が本人へ通知 DM（ナッジ）を送る。**未設定なら機能 off**（起動時 warn 1 回）。設定時は TokenGuard が `auth.test` で probe。Keychain 参照推奨 |
 | `target_user_id` | string | 必須 | 自分の Slack ユーザー ID（`U…`）。このユーザー宛メンションをタスク化し、TokenGuard が `auth.test` の identity と一致検証 |
-| `trigger_reactions` | string[] | `[]` | **本人が付けると**タスクを起こす絵文字名（#319）。空 = 無効。コロンは剥がされるので `":eyes:"` と `"eyes"` は同じ。他人が付けても起動せず、緩和する設定は無い（→ [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）。`reactions:read` スコープが要る |
+| `trigger_reactions` | string[] | `[]` | **非推奨**（#396、削除は 0.3）。→ `[[workflows]].trigger.reaction`（下記）。**本人が付けると**タスクを起こす絵文字名（#319）。空 = 無効。コロンは剥がされるので `":eyes:"` と `"eyes"` は同じ。他人が付けても起動せず、緩和する設定は無い（→ [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）。`reactions:read` スコープが要る |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
 | `reply_style` | string? | なし | 返信トーンの指示（タスク本文へ注入、例 `"丁寧語で簡潔に"`） |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#318） |

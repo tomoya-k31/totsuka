@@ -352,6 +352,37 @@ PR の URL を Slack 返信に載せたい場合は、エージェントの最�
 ## `[[workflows]].trigger` — マッチ条件
 
 省略または `{}` は**全タスクにマッチ**する。定義順の first-match なので、広いトリガーは後ろに置く。
+catch-all より後ろに書いた同一ソースの workflow は**到達不能**で、警告が出る（#396）。
+
+### 絵文字でワークフローを選ぶ（#396）
+
+Slack のリアクションでどのワークフローを起動するかを、config.toml 側だけで決める。
+
+```toml
+[[workflows]]
+name = "slack-implement"
+source = "slack"
+trigger = { reaction = "hammer" }   # 🔨 を自分で付けたら実装させる
+profile = "implement"
+agent = "herdr"
+
+[[workflows]]
+name = "slack-reply"                # メンション。catch-all なので必ず最後
+source = "slack"
+trigger = {}
+profile = "answer"
+agent = "herdr"
+```
+
+| やりがちな間違い | どうなるか |
+|---|---|
+| リアクション workflow を catch-all の**後ろ**に書く | 絵文字が無反応になる（到達不能警告が出る） |
+| 同じ絵文字を 2 つの workflow に書く | `CONFIG_INVALID` |
+| `plugins/slack.toml` の `trigger_reactions` と併用 | `CONFIG_INVALID`（旧記法を消す） |
+
+旧記法（`trigger_reactions` だけ）の構成は非推奨警告つきで従来どおり動く。移行するときは
+**両方書かず、片方に寄せる**こと。本人限定の不変条件（他人のリアクションでは起動しない）は
+どちらの記法でも変わらない。
 
 | キー | 型 | 意味 |
 |---|---|---|
@@ -446,10 +477,11 @@ app_token = "op://Dev/Slack/app_token"     # 必須。App-Level Token（xapp- �
 user_token = "op://Dev/Slack/user_token"   # 必須。User OAuth Token（xoxp- で始まる）
 target_user_id = "U01ABCDEF"               # 必須。自分の Slack ユーザー ID
 
-# 自分が付けるとタスクを起こす絵文字（#319）。既定は [] = 無効。
-# 自分宛でないメッセージを、会話にノイズを足さずタスク化できる。
-# 他人が同じ絵文字を付けても起動しない（緩和する設定は無い）。
-# reactions:read スコープが必要 → 追加後はアプリ再インストール + Keychain 2 本更新。
+# 【非推奨・0.3 で削除】自分が付けるとタスクを起こす絵文字（#319）。
+# config.toml 側の `[[workflows]].trigger = { reaction = "eyes" }` へ移行する
+# （#396。下の「絵文字でワークフローを選ぶ」参照）。併用すると CONFIG_INVALID。
+# どちらの記法でも reactions:read スコープが必要
+# → 追加後はアプリ再インストール + Keychain 2 本更新。
 trigger_reactions = ["eyes"]
 
 thread_context_limit = 6                   # タスク本文に含めるスレッド直近メッセージ数（既定 6）
