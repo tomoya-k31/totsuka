@@ -18,7 +18,11 @@
 | メンションしてもタスク化されない | **API で投稿した**（`bot_id` が付く）／ `run --watch` が止まっている／編集済み投稿（subtype 付き） | 人間に手で打ってもらう |
 | リアクションを付けても無反応 | **`reactions:read` が無い**（無症状）／絵文字名の不一致／既に処理済み（dedup） | スコープを確認 → 現行マニフェストで再インストール |
 | prefix ルール（`channel_groups`）が効かない | `channels:read` / `groups:read` が無く `conversations.info` が失敗 | 同上 |
-| plan モードなのに PR が生えた | **plan は git を構造的に止めていない**（#378） | リポジトリの `CLAUDE.md` から push/PR 指示を外す。警告は出る |
+| plan モードなのに PR が生えた | **plan は git を構造的に止めていない**（#378） | `profile` 記法に移行する。#395 の deny が `--settings` 経由で入り、リポジトリの `CLAUDE.md` の指示より**必ず強い**。明示記法（`mode = "plan"`）には deny が付かない |
+| `implement` profile のタスクが `Queued` から動かない | #399 の `gh` 検査に落ちている。`tt` が `XDG_CONFIG_HOME` を差し替えるので、`GH_CONFIG_DIR` が無いと**本物の gh 設定を見つけられない** | `_common.sh` の `tt()` に `GH_CONFIG_DIR` があるか確認。無ければ古い雛形。ログに「waiting: gh unavailable」が出る |
+| `answer` profile のタスクで `Edit` が拒否される | **正常動作**（#395）。answer は worktree を書かない profile | 実装させたいなら profile を変える。Slack 起点なら本人が ➕ を付けて別タスクを起こす（#397） |
+| `design` タスクが pane で座礁する | `gh` 未認証。**design には #399 の検査が効かない**（書き込み先が source 依存で判別できないため意図的に対象外） | 事前に `gh auth status` を確認する。implement と違い自動では待たない |
+| 完了申告したのに検収で差し戻される（design/implement） | **URL 実在検収**（#398）。最終メッセージに成果物 URL が無いか、未来形（「これから書く」） | 正常動作。エージェントが実際に書いていない可能性を先に疑う |
 
 ## スコープを確認する
 
