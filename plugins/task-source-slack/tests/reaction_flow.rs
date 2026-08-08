@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use common::{
     Canned, FakeFactory, LookupHarness, Shared, SubmitHarness, accept_with_hello, call,
-    mention_envelope_in, scratch_state_dir, send_and_await_ack, ws_listener,
+    call_expecting_error, mention_envelope_in, scratch_state_dir, send_and_await_ack, ws_listener,
 };
 use task_source_slack::server::Server;
 
@@ -26,8 +26,9 @@ fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
     (srv, harness)
 }
 
-/// Like the mention-flow config, plus the opt-in trigger set. `":eyes:"` is
-/// written with colons on purpose: config may spell it either way.
+/// Like the mention-flow config, plus the deprecated opt-in trigger set.
+/// `":eyes:"` is written with colons on purpose: config may spell it either
+/// way.
 fn init_params() -> Value {
     json!({
         "protocol_version": "0.1.0",
@@ -41,6 +42,21 @@ fn init_params() -> Value {
             "repos": [{ "name": "web-app", "summary": "customer web app" }]
         }
     })
+}
+
+/// The same config with the emoji declared the #396 way instead: as a workflow
+/// trigger the Orchestrator supplies at `initialize`.
+fn init_params_with_workflow_trigger() -> Value {
+    let mut params = init_params();
+    params["config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("trigger_reactions");
+    params["triggers"] = json!([
+        { "workflow": "slack-watch", "trigger": { "reaction": "eyes" } },
+        { "workflow": "slack-reply", "trigger": {} },
+    ]);
+    params
 }
 
 /// A `reaction_added` envelope from `user` on the message at `ts`.
@@ -151,6 +167,87 @@ async fn the_operators_reaction_becomes_a_task() {
     )
     .await;
     harness.assert_no_task(Duration::from_millis(300)).await;
+}
+
+/// The #396 notation end to end: the emoji comes from a workflow trigger, and
+/// the task carries the `reaction:` label that routes it back to that workflow.
+///
+/// **Without the label the task is submitted and then matches nothing** — core
+/// re-checks `reaction` against `Task.labels`, so the run would look like a
+/// successful submit followed by silence.
+#[tokio::test]
+async fn a_workflow_declared_reaction_labels_the_task() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    let (mut srv, mut harness) = server(&shared);
+
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_with_workflow_trigger(),
+    )
+    .await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, reaction_envelope("e1", "U_ME", "eyes", "100.0")).await;
+
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.0");
+    assert_eq!(
+        task["labels"],
+        json!(["reaction:eyes"]),
+        "the label is what selects the reaction workflow: {task}"
+    );
+}
+
+/// The mirror of the above, and the reason the legacy path must stay
+/// label-free: a mention has no reaction, so it must fall through to the
+/// catch-all workflow.
+#[tokio::test]
+async fn a_mention_carries_no_reaction_label() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    let (mut srv, mut harness) = server(&shared);
+
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_with_workflow_trigger(),
+    )
+    .await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, mention_envelope_in("m1", "100.5", None)).await;
+
+    let task = harness.next_task().await;
+    // `labels` is `skip_serializing_if = "Vec::is_empty"`, so "no labels" is
+    // an absent key on the wire, not `[]`.
+    assert!(
+        task.get("labels").is_none_or(|l| l == &json!([])),
+        "a labelled mention would stop matching the catch-all: {task}"
+    );
+}
+
+/// Declaring the emoji in both places is rejected at `initialize` rather than
+/// letting one notation silently win.
+#[tokio::test]
+async fn declaring_both_notations_fails_initialize() {
+    let (_listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    let (mut srv, _harness) = server(&shared);
+
+    let mut params = init_params(); // keeps `trigger_reactions`
+    params["triggers"] = json!([
+        { "workflow": "slack-watch", "trigger": { "reaction": "hammer" } },
+    ]);
+    let message = call_expecting_error(&mut srv, 1, "initialize", params).await;
+    assert!(
+        message.contains("trigger_reactions"),
+        "the error must name the key to delete: {message}"
+    );
 }
 
 /// **The regression guard for the feature's safety story. Do not delete.**

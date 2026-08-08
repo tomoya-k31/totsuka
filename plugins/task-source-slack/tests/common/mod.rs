@@ -249,6 +249,24 @@ pub async fn call(srv: &mut Server<FakeFactory>, id: i64, method: &str, params: 
     response.result.unwrap_or(Value::Null)
 }
 
+/// Like [`call`], but for the cases where the *rejection* is the behaviour
+/// under test. Returns the error message.
+pub async fn call_expecting_error(
+    srv: &mut Server<FakeFactory>,
+    id: i64,
+    method: &str,
+    params: Value,
+) -> String {
+    let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+    let reply = srv.handle_line(&line.to_string()).await;
+    let response: Response =
+        serde_json::from_str(&reply.line.expect("a response line")).expect("valid response");
+    match response.error {
+        Some(error) => error.message,
+        None => panic!("{method} was expected to fail but succeeded"),
+    }
+}
+
 /// A bound TCP listener for the Socket Mode mock and its `ws://` URL.
 pub async fn ws_listener() -> (TcpListener, String) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

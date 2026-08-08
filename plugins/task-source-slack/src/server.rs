@@ -29,6 +29,7 @@ use crate::error::SlackError;
 use crate::llm::ChatTransport;
 use crate::persist;
 use crate::pipeline::{self, SharedState};
+use crate::reaction::ReactionTriggers;
 use crate::slack_api::SlackApi;
 use crate::socket_mode::{self, SocketModeOptions};
 use crate::transport::{SlackTransport, TransportSettings};
@@ -45,6 +46,30 @@ pub trait TransportFactory {
     fn build(&self, settings: TransportSettings<'_>) -> Self::Transport;
     /// Build the chat transport for repository classification.
     fn build_chat(&self) -> Self::Chat;
+}
+
+/// `(workflow name, its `trigger.reaction`)` for every trigger the
+/// Orchestrator sent, in definition order (#396).
+///
+/// The trigger is an opaque `serde_json::Value` (a TOML inline table converted
+/// to JSON), so a non-string `reaction` reads as absent rather than as an
+/// error: the plugin's job is to pick out the key it understands, and core
+/// already rejects a malformed workflow.
+fn workflow_reactions(
+    triggers: &[plugin_protocol::methods::TriggerInfo],
+) -> Vec<(String, Option<String>)> {
+    triggers
+        .iter()
+        .map(|t| {
+            (
+                t.workflow.clone(),
+                t.trigger
+                    .get("reaction")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            )
+        })
+        .collect()
 }
 
 /// Connection settings derived from a [`SlackConfig`].
@@ -260,6 +285,20 @@ where
                     .into(),
             );
         }
+        // Which reaction notation is live (#396). Resolved here because this
+        // is the only place both inputs exist: the workflow triggers arrive on
+        // this call, the deprecated `trigger_reactions` comes from the
+        // plugin's own file.
+        let reaction_triggers = match ReactionTriggers::resolve(
+            &workflow_reactions(&init.triggers),
+            &config.trigger_reactions,
+        ) {
+            Ok(t) => t,
+            Err(mut e) => {
+                errors.append(&mut e);
+                ReactionTriggers::default()
+            }
+        };
         if !errors.is_empty() {
             return Reply::respond(Response::error(
                 id,
@@ -306,6 +345,7 @@ where
                 Arc::clone(&api),
                 Arc::new(self.factory.build_chat()),
                 Arc::new(config.clone()),
+                reaction_triggers,
                 events,
                 state.clone(),
                 self.submit.clone(),
