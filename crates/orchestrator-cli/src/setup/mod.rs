@@ -351,12 +351,20 @@ impl<'a> Plan<'a> {
             out.push_str(&format!("Plugin:   {} ({})\n", plugin.name, plugin.kind));
         }
         for workflow in self.recipe.workflows {
+            // Whichever notation the recipe uses, name what the workflow will
+            // do: the profile if it has one, else the mode it spells out.
+            let shape = workflow
+                .profile
+                .map(orchestrator_core::config::Profile::as_str)
+                .or_else(|| {
+                    workflow
+                        .mode
+                        .map(orchestrator_core::config::WorkflowMode::as_str)
+                })
+                .unwrap_or("?");
             out.push_str(&format!(
                 "Workflow: {} — {} → {} ({})\n",
-                workflow.name,
-                workflow.source,
-                workflow.agent,
-                workflow.mode.as_str()
+                workflow.name, workflow.source, workflow.agent, shape
             ));
         }
         if self.write_config {
@@ -572,6 +580,7 @@ pub(crate) fn build_config(
                 name: workflow.name,
                 source: workflow.source,
                 trigger: workflow.trigger,
+                profile: workflow.profile,
                 mode: workflow.mode,
                 agent: workflow.agent,
                 output: workflow.output,
