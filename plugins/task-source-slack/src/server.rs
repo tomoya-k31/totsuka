@@ -52,21 +52,38 @@ pub trait TransportFactory {
 /// Orchestrator sent, in definition order (#396).
 ///
 /// The trigger is an opaque `serde_json::Value` (a TOML inline table converted
-/// to JSON), so a non-string `reaction` reads as absent rather than as an
-/// error: the plugin's job is to pick out the key it understands, and core
-/// already rejects a malformed workflow.
+/// to JSON), so a non-string `reaction` cannot be turned into an emoji here and
+/// reads as absent.
+///
+/// **A present-but-unreadable value is warned about rather than ignored.** A
+/// current Orchestrator rejects it (`validate_workflows`), so this only fires
+/// against an older core — and there the same value is *also* skipped by
+/// `Trigger::matches`, which makes that workflow match every task from this
+/// source. The two halves then fail in opposite directions from one typo: no
+/// emoji is registered here, and everything is swallowed there. Neither end
+/// reports an error on its own, so the warning is the only signal.
 fn workflow_reactions(
     triggers: &[plugin_protocol::methods::TriggerInfo],
 ) -> Vec<(String, Option<String>)> {
     triggers
         .iter()
         .map(|t| {
+            let raw = t.trigger.get("reaction");
+            if let Some(value) = raw
+                && value.as_str().is_none()
+            {
+                tracing::warn!(
+                    workflow = %t.workflow,
+                    value = %value,
+                    "`trigger.reaction` is not a string → this workflow registers no emoji, and \
+                     an orchestrator that does not reject the value will match every task from \
+                     this source against it; write the emoji name as a string \
+                     (`reaction = \"eyes\"`)"
+                );
+            }
             (
                 t.workflow.clone(),
-                t.trigger
-                    .get("reaction")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                raw.and_then(Value::as_str).map(str::to_string),
             )
         })
         .collect()

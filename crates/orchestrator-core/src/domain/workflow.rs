@@ -65,6 +65,11 @@ impl Trigger {
     /// are also treated as opaque (skipped). An empty trigger matches every
     /// task (a catch-all).
     ///
+    /// **Skipping an unreadable reserved key means the trigger is weaker than
+    /// it looks**, and for `reaction` that is the whole hazard back again — so
+    /// [`validate_workflows`] rejects a non-string `reaction` outright rather
+    /// than leaving it to be silently skipped here.
+    ///
     /// `reaction` had to become reserved rather than stay opaque. Left opaque
     /// it is "satisfied" by every task, so a `reaction`-triggered workflow
     /// defined before the catch-all would swallow **mention-derived tasks
@@ -244,6 +249,27 @@ where
                 message: format!(
                     "workflow `{}` output = source but plugin `{}` does not declare the `source` output capability → use a capable plugin or change output",
                     wf.name, wf.source
+                ),
+            });
+        }
+
+        // A `reaction` that is not a string reverts to the pre-#396 hazard:
+        // `matches` skips a reserved key it cannot read, so the workflow
+        // matches **every** task from its source — and being defined above the
+        // catch-all (which is where a reaction workflow belongs) it then
+        // swallows the mentions. Meanwhile the plugin sees no emoji and never
+        // fires the trigger. Both halves fail, in opposite directions, from
+        // one mistyped value.
+        if let Some(value) = wf.trigger.as_table().get("reaction")
+            && value.as_str().is_none()
+        {
+            issues.push(WorkflowIssue {
+                severity: Severity::Error,
+                message: format!(
+                    "workflow `{}` has a non-string `trigger.reaction` ({}) → write the emoji name as a string (`reaction = \"eyes\"`); a value that cannot be read is skipped during matching, so this workflow would match every task from `{}` while the plugin registers no emoji at all",
+                    wf.name,
+                    value.type_str(),
+                    wf.source
                 ),
             });
         }
@@ -760,6 +786,43 @@ agent = "herdr"
         // the operator hunting for which line to move.
         assert!(issue.message.contains("slack-implement"), "{issue:?}");
         assert!(issue.message.contains("slack-reply"), "{issue:?}");
+    }
+
+    /// One typo puts the pre-#396 hazard straight back: `matches` skips a
+    /// reserved key it cannot read, so a non-string `reaction` matches
+    /// **everything** — and this workflow belongs above the catch-all, so it
+    /// swallows the mentions. The plugin meanwhile registers no emoji. Both
+    /// halves fail, in opposite directions, and neither reports anything.
+    #[test]
+    fn a_non_string_reaction_is_rejected_rather_than_silently_skipped() {
+        for value in ["123", "true", r#"["eyes"]"#] {
+            let workflows = workflows_from_toml(&format!(
+                r#"
+[[workflows]]
+name = "typo"
+source = "slack"
+trigger = {{ reaction = {value} }}
+profile = "implement"
+agent = "herdr"
+"#
+            ));
+            // The behaviour being guarded against: it currently matches a task
+            // that carries no reaction at all.
+            assert!(
+                match_workflow(&workflows, &task("slack", None, &[])).is_some(),
+                "{value}: an unreadable reserved key is skipped, which is why this must not ship"
+            );
+
+            let issues = validate_workflows(&workflows, |_| Some(vec![OutputCapability::Source]));
+            let issue = issues
+                .iter()
+                .find(|i| i.message.contains("non-string"))
+                .unwrap_or_else(|| panic!("{value}: expected a rejection: {issues:?}"));
+            assert_eq!(issue.severity, Severity::Error, "{issue:?}");
+            // The message has to explain *both* failures, or the operator fixes
+            // the emoji and never learns what the run was doing meanwhile.
+            assert!(issue.message.contains("every task"), "{issue:?}");
+        }
     }
 
     #[test]
