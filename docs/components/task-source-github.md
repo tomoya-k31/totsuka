@@ -41,6 +41,10 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1
 
 - `plugin-protocol`（プラグイン境界）、[plugin-sdk](/components/plugin-sdk.md)（stdio ランタイム / `poll_loop` / `SubmitClient`）、`reqwest`（GraphQL）、`tokio`、`serde` / `serde_json` / `semver` / `thiserror` / `tracing`。
 
+# 成果物の書き込み（#398 で非推奨）
+
+`design` / `implement` profile の workflow は `output = "none"` になり、成果物はエージェントが `gh issue comment` などで自分で書く。`result/publish` の実装は残っているが**呼ばれたときに非推奨警告を出す**（`initialize` 時ではない — その経路を通らない構成に、対処しようのない警告を出しても雑音になる）。実体の削除は 0.3。代わりに `instructions_kind`（コアが `TriggerInfo.trigger` に焼き込む）から `[prompts]` の指示文を選び、`Task.instructions` に載せる — これが書き込み先をエージェントへ伝える唯一の経路で、**旧プラグインでは無言で欠落する**（capability 宣言が無いので probe できない。コアと同時にリリースすること）。
+
 # 関連
 
 - [plugin-protocol](/components/plugin-protocol.md)

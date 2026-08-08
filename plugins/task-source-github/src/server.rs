@@ -228,6 +228,15 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
+        // #398: the deliverable is the agent's to write now. Warned **on use**,
+        // not at `initialize`: a config that never reaches this path is not
+        // affected, and a startup warning it cannot act on is noise.
+        tracing::warn!(
+            task_id = %parsed.task_id,
+            "`result/publish` on this plugin is deprecated → the agent writes the \
+             deliverable itself with `gh` (#398). Set the workflow's `profile` to \
+             design/implement and drop `output = \"source\"`; this handler is removed in 0.3"
+        );
         match session
             .client
             .publish(&parsed.task_id, &parsed.content, parsed.format.as_deref())

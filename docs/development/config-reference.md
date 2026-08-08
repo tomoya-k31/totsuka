@@ -193,7 +193,41 @@ on_success = { set_status = "設計済み" }
 
 **ロールバック時の注意**: `profile` を書いた config は旧バイナリでは未知キーとして**パースエラー**になる。totsuka を前のバージョンへ戻すときは config も戻すこと。
 
-**この時点では `profile` に権限としての実効性は無い**（`mode` / `output` / `verification` の別名でしかない）。profile ごとの `permissions.deny` 注入は [#395](https://github.com/tomoya-k31/totsuka/issues/395) で入る。
+**profile が追加で決めるもの**（#394 の時点では mode/output/verification だけだった）:
+
+| 追加された挙動 | 対象 profile | issue |
+|---|---|---|
+| claude の `--settings` へ `permissions.deny` を注入 | answer / triage / design | #395 |
+| ソースプラグインへ `instructions_kind` を伝え、書き込み先の指示を出させる | triage / design / implement | #398 |
+| 検収 rubric を「成果物 URL の実在」に差し替え | triage / design / implement | #398 |
+
+### 成果物 URL 検収の落とし穴（#398）
+
+`triage` / `design` / `implement` の検収 rubric は「最終メッセージに成果物（issue コメント / Notion ページ / PR）の URL が実際に含まれているか」を条件にする。これらの profile は `result/publish` を通らないので、**この URL が「成果物がどこかに存在する」ことを Orchestrator が知る唯一の経路**である。
+
+rubric leaf の優先順位（強い順）:
+
+1. `[[workflows]].prompts.verification_rubric`
+2. `[[workflows]].rubric`
+3. `[prompts].verification_rubric`（グローバル）
+4. **profile の既定（= URL 検収）**
+5. 汎用既定
+
+**3 が 4 より強い**ため、`[prompts].verification_rubric` を設定済みの構成は `design` workflow でも **URL 検収にならない**。全 workflow に対して既に選ばれた文言を、後から入った profile が黙って覆すよりはましだと判断した結果だが、症状は「投稿していない設計を『書いた』と申告したタスクが通る」なので、profile を使うならグローバルの rubric を外すか、`[[workflows]].rubric` で明示すること。
+
+### ソースプラグインの `[prompts]`（#398）
+
+`plugins/github.toml` / `plugins/notion.toml` に `[prompts]` が増えた。profile が `instructions_kind` を伝えたときに、そのプラグインがタスクへ載せる書き込み先の指示文。
+
+| キー | 使われるとき | プレースホルダ |
+|---|---|---|
+| `triage_instructions` | `profile = "triage"` | github: `{issue_number}` `{repo}` / notion: `{page_url}` `{title}` |
+| `design_instructions` | `profile = "design"` | 同上 |
+| `implement_instructions` | `profile = "implement"` | 同上 |
+
+いずれも省略可（埋め込みの既定を使う）。**profile を使わない構成ではこのキー群は一切使われず、タスクの `instructions` は従来どおり空**になる。
+
+展開はシングルパス — issue タイトルや Notion ページ名は他人が書ける内容なので、そこに書かれた `{placeholder}` は文字列として挿入されるだけで指示にはならない。
 
 ## `mode = "plan"` は git を構造的には止めない（#378）
 

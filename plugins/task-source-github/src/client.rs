@@ -24,6 +24,13 @@ const MAX_FETCH_PAGES: usize = 40;
 struct TriggerFilter {
     project_status: Option<String>,
     label: Option<String>,
+    /// Which instruction set this workflow's profile asks for (#398).
+    ///
+    /// Baked into the trigger table by the Orchestrator rather than derived
+    /// here: `[[workflows]].profile` is core's schema, and this plugin stays
+    /// unaware of it. Absent from an older Orchestrator, in which case the task
+    /// carries no instructions — exactly the pre-#398 behaviour.
+    instructions_kind: Option<String>,
 }
 
 impl TriggerFilter {
@@ -35,6 +42,10 @@ impl TriggerFilter {
                 .map(str::to_string),
             label: trigger
                 .get("label")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            instructions_kind: trigger
+                .get("instructions_kind")
                 .and_then(Value::as_str)
                 .map(str::to_string),
         }
@@ -130,6 +141,7 @@ impl<T: GithubTransport> GithubClient<T> {
         }
         let status = node["status"]["name"].as_str();
         let repo = content["repository"]["name"].as_str().unwrap_or_default();
+        let issue_number = content["number"].as_i64().unwrap_or_default().to_string();
         let labels: Vec<String> = content["labels"]["nodes"]
             .as_array()
             .into_iter()
@@ -176,7 +188,19 @@ impl<T: GithubTransport> GithubClient<T> {
             url: content["url"].as_str().map(str::to_string),
             assignee,
             message_key: None,
-            instructions: None,
+            // Layer 1 of ADR-0024: where this task's deliverable goes. Absent
+            // unless the Orchestrator asked for a kind (#398), which keeps
+            // every pre-profile config behaving exactly as before.
+            instructions: filter
+                .instructions_kind
+                .as_deref()
+                .and_then(|kind| self.config.prompts.for_kind(kind))
+                .map(|template| {
+                    crate::template::render(
+                        template,
+                        &[("issue_number", issue_number.as_str()), ("repo", repo)],
+                    )
+                }),
         })
     }
 
@@ -458,6 +482,127 @@ mod tests {
         let f = TriggerFilter::parse(&json!({}));
         assert!(f.matches(Some("anything"), &[]));
         assert!(f.matches(None, &["x".into()]));
+    }
+
+    /// A project item as the fetch query returns it.
+    fn item(status: &str) -> Value {
+        json!({
+            "status": { "name": status },
+            "content": {
+                "__typename": "Issue",
+                "id": "I_1",
+                "number": 42,
+                "title": "カウント集計を時間帯別にする",
+                "body": "現状は日次のみ",
+                "url": "https://github.com/me/web-app/issues/42",
+                "repository": { "name": "web-app" },
+                "labels": { "nodes": [] },
+                "assignees": { "nodes": [] }
+            }
+        })
+    }
+
+    /// `normalize_item` never touches the transport, so a stub that refuses
+    /// every call is both sufficient and a guard: a future change that started
+    /// making network calls from the mapper would fail loudly here.
+    struct NeverCalled;
+
+    impl crate::transport::GithubTransport for NeverCalled {
+        async fn post_graphql(
+            &self,
+            _body: Value,
+            _idempotent: bool,
+        ) -> Result<Value, GithubError> {
+            panic!("normalize_item must not perform a request")
+        }
+    }
+
+    fn client_for_tests() -> GithubClient<NeverCalled> {
+        let cfg: GithubConfig = serde_json::from_value(json!({
+            "token": "t", "owner": "me", "project_number": 1, "github_login": "me"
+        }))
+        .unwrap();
+        GithubClient::new(cfg, NeverCalled)
+    }
+
+    /// The `instructions_kind` the Orchestrator baked into the trigger picks
+    /// the instruction text, and the placeholders are filled from the issue
+    /// (#398).
+    #[test]
+    fn a_design_trigger_tells_the_agent_where_to_put_the_design() {
+        let filter = TriggerFilter::parse(&json!({
+            "project_status": "設計待ち",
+            "instructions_kind": "design",
+        }));
+        let task = client_for_tests()
+            .normalize_item(&item("設計待ち"), &filter)
+            .expect("ingestable");
+        let instructions = task.instructions.expect("design tasks carry instructions");
+
+        assert!(
+            instructions.contains("gh issue comment 42"),
+            "{instructions}"
+        );
+        assert!(instructions.contains("web-app"), "{instructions}");
+        // The URL demand is the whole reason these exist: nothing else tells
+        // the Orchestrator the comment was ever posted.
+        assert!(instructions.contains("URL"), "{instructions}");
+        // No leftover placeholder — a `{issue_number}` shipped verbatim would
+        // be read by the agent as literal text.
+        assert!(!instructions.contains('{'), "{instructions}");
+    }
+
+    #[test]
+    fn each_kind_selects_its_own_text() {
+        let for_kind = |kind: &str| {
+            let filter = TriggerFilter::parse(&json!({ "instructions_kind": kind }));
+            client_for_tests()
+                .normalize_item(&item("any"), &filter)
+                .unwrap()
+                .instructions
+                .unwrap()
+        };
+        assert!(for_kind("implement").contains("Pull Request"));
+        assert!(for_kind("triage").contains("起票"));
+        assert!(for_kind("design").contains("詳細設計"));
+    }
+
+    /// **The compatibility half.** An Orchestrator that sends no
+    /// `instructions_kind` — anything before #398, and any workflow written in
+    /// the spelled-out notation — must produce exactly the task it did before.
+    #[test]
+    fn no_instructions_kind_means_no_instructions() {
+        let filter = TriggerFilter::parse(&json!({ "project_status": "実装待ち" }));
+        let task = client_for_tests()
+            .normalize_item(&item("実装待ち"), &filter)
+            .expect("ingestable");
+        assert_eq!(task.instructions, None);
+    }
+
+    /// A kind this plugin has no text for yields nothing rather than guessing.
+    /// Dispatching an agent with instructions for the wrong deliverable is
+    /// worse than dispatching it with the instructions it had before.
+    #[test]
+    fn an_unknown_kind_falls_back_to_no_instructions() {
+        let filter = TriggerFilter::parse(&json!({ "instructions_kind": "audit" }));
+        let task = client_for_tests()
+            .normalize_item(&item("any"), &filter)
+            .expect("ingestable");
+        assert_eq!(task.instructions, None);
+    }
+
+    #[test]
+    fn embedded_defaults_parse() {
+        // Force the LazyLock so a malformed or key-missing `defaults.toml`
+        // fails here rather than at `initialize` — and prove no key is empty.
+        let p = crate::config::GithubPrompts::default();
+        for (name, value) in [
+            ("triage_instructions", &p.triage_instructions),
+            ("design_instructions", &p.design_instructions),
+            ("implement_instructions", &p.implement_instructions),
+        ] {
+            assert!(!value.trim().is_empty(), "`{name}` is empty");
+        }
     }
 
     #[test]

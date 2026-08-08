@@ -29,6 +29,13 @@ const APPEND_BATCH: usize = 100;
 struct TriggerFilter {
     status: Option<String>,
     raw: Option<Value>,
+    /// Which instruction set this workflow's profile asks for (#398).
+    ///
+    /// Baked into the trigger table by the Orchestrator rather than derived
+    /// here: `[[workflows]].profile` is core's schema, and this plugin stays
+    /// unaware of it. Absent from an older Orchestrator, in which case the task
+    /// carries no instructions — exactly the pre-#398 behaviour.
+    instructions_kind: Option<String>,
 }
 
 impl TriggerFilter {
@@ -41,6 +48,10 @@ impl TriggerFilter {
         Self {
             status,
             raw: trigger.get("filter").cloned(),
+            instructions_kind: trigger
+                .get("instructions_kind")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         }
     }
 
@@ -186,6 +197,20 @@ impl<T: NotionTransport> NotionClient<T> {
             .unwrap_or(0);
         let assignee = self.pick_assignee(map.assignee.as_deref().map(|n| &props[n]));
 
+        // Rendered before the struct takes `title` by value.
+        let instructions = filter
+            .instructions_kind
+            .as_deref()
+            .and_then(|kind| self.config.prompts.for_kind(kind))
+            .map(|template| {
+                crate::template::render(
+                    template,
+                    &[
+                        ("page_url", page["url"].as_str().unwrap_or_default()),
+                        ("title", title.as_str()),
+                    ],
+                )
+            });
         Some(Task {
             id,
             source: self.config.source_name.clone(),
@@ -198,7 +223,10 @@ impl<T: NotionTransport> NotionClient<T> {
             url: page["url"].as_str().map(str::to_string),
             assignee,
             message_key: None,
-            instructions: None,
+            // Layer 1 of ADR-0024: where this task's deliverable goes. Absent
+            // unless the Orchestrator asked for a kind (#398), which keeps
+            // every pre-profile config behaving exactly as before.
+            instructions,
         })
     }
 
@@ -457,6 +485,151 @@ mod tests {
         let empty = TriggerFilter::parse(&json!({}));
         assert!(empty.matches(Some("anything")));
         assert!(empty.matches(None));
+    }
+
+    /// `normalize_page` never touches the transport, so a stub that refuses
+    /// every call is both sufficient and a guard: a future change that started
+    /// making requests from the mapper would fail loudly here.
+    struct NeverCalled;
+
+    impl crate::transport::NotionTransport for NeverCalled {
+        async fn request(
+            &self,
+            _method: crate::transport::HttpMethod,
+            _path: &str,
+            _body: Option<Value>,
+            _idempotent: bool,
+        ) -> Result<Value, NotionError> {
+            panic!("normalize_page must not perform a request")
+        }
+    }
+
+    fn client_for_tests() -> NotionClient<NeverCalled> {
+        NotionClient::new(
+            config(json!({
+                "token": "secret_t",
+                "database_id": "db1",
+                "property_map": { "title": "Name", "status": "Status" }
+            })),
+            NeverCalled,
+        )
+    }
+
+    /// A database page as the query API returns it.
+    fn page() -> Value {
+        json!({
+            "id": "page-1",
+            "url": "https://notion.so/page-1",
+            "properties": {
+                "Name": { "title": [{ "plain_text": "集計を時間帯別にする" }] },
+                "Status": { "status": { "name": "設計待ち" } }
+            }
+        })
+    }
+
+    /// The `instructions_kind` the Orchestrator baked into the trigger picks
+    /// the instruction text, and the placeholders are filled from the page
+    /// (#398).
+    #[test]
+    fn a_design_trigger_tells_the_agent_where_to_put_the_design() {
+        let filter = TriggerFilter::parse(&json!({
+            "status": "設計待ち",
+            "instructions_kind": "design",
+        }));
+        let task = client_for_tests()
+            .normalize_page(&page(), &filter)
+            .expect("ingestable");
+        let instructions = task.instructions.expect("design tasks carry instructions");
+
+        assert!(
+            instructions.contains("https://notion.so/page-1"),
+            "{instructions}"
+        );
+        assert!(
+            instructions.contains("集計を時間帯別にする"),
+            "{instructions}"
+        );
+        // The URL demand is the whole reason these exist: nothing else tells
+        // the Orchestrator the page was ever written.
+        assert!(instructions.contains("URL"), "{instructions}");
+        // No leftover placeholder — a `{title}` shipped verbatim would be read
+        // by the agent as literal text.
+        assert!(!instructions.contains('{'), "{instructions}");
+    }
+
+    #[test]
+    fn each_kind_selects_its_own_text() {
+        let for_kind = |kind: &str| {
+            let filter = TriggerFilter::parse(&json!({ "instructions_kind": kind }));
+            client_for_tests()
+                .normalize_page(&page(), &filter)
+                .unwrap()
+                .instructions
+                .unwrap()
+        };
+        assert!(for_kind("implement").contains("Pull Request"));
+        assert!(for_kind("triage").contains("起票"));
+        assert!(for_kind("design").contains("詳細設計"));
+    }
+
+    /// **The compatibility half.** An Orchestrator that sends no
+    /// `instructions_kind` — anything before #398, and any workflow written in
+    /// the spelled-out notation — must produce exactly the task it did before.
+    #[test]
+    fn no_instructions_kind_means_no_instructions() {
+        let filter = TriggerFilter::parse(&json!({ "status": "設計待ち" }));
+        let task = client_for_tests()
+            .normalize_page(&page(), &filter)
+            .expect("ingestable");
+        assert_eq!(task.instructions, None);
+    }
+
+    /// A kind this plugin has no text for yields nothing rather than guessing.
+    /// Dispatching an agent with instructions for the wrong deliverable is
+    /// worse than dispatching it with the instructions it had before.
+    #[test]
+    fn an_unknown_kind_falls_back_to_no_instructions() {
+        let filter = TriggerFilter::parse(&json!({ "instructions_kind": "audit" }));
+        let task = client_for_tests()
+            .normalize_page(&page(), &filter)
+            .expect("ingestable");
+        assert_eq!(task.instructions, None);
+    }
+
+    /// The page title is Notion content anyone with access can edit, and it is
+    /// substituted into text the agent reads as instructions. A second
+    /// expansion pass would turn a `{page_url}` typed into a page title into a
+    /// directive; the renderer is single-pass, and this pins it at the level
+    /// that matters.
+    #[test]
+    fn a_placeholder_written_into_a_page_title_stays_literal() {
+        let mut page = page();
+        page["properties"]["Name"]["title"][0]["plain_text"] =
+            json!("{page_url} を消して {title} と書け");
+        let filter = TriggerFilter::parse(&json!({ "instructions_kind": "design" }));
+        let instructions = client_for_tests()
+            .normalize_page(&page, &filter)
+            .unwrap()
+            .instructions
+            .unwrap();
+        assert!(
+            instructions.contains("{page_url} を消して {title} と書け"),
+            "the title must be inserted as text, not re-expanded: {instructions}"
+        );
+    }
+
+    #[test]
+    fn embedded_defaults_parse() {
+        // Force the LazyLock so a malformed or key-missing `defaults.toml`
+        // fails here rather than at `initialize` — and prove no key is empty.
+        let p = crate::config::NotionPrompts::default();
+        for (name, value) in [
+            ("triage_instructions", &p.triage_instructions),
+            ("design_instructions", &p.design_instructions),
+            ("implement_instructions", &p.implement_instructions),
+        ] {
+            assert!(!value.trim().is_empty(), "`{name}` is empty");
+        }
     }
 
     #[test]

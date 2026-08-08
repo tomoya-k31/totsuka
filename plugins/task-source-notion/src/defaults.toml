@@ -1,0 +1,41 @@
+# Built-in instruction text this plugin sends with each task (#398, epic #311).
+#
+# These are the **layer 1** instructions of ADR-0024: where the deliverable
+# goes. The Orchestrator's own layer (completion markers, verification) is
+# composed on top by core and is not repeated here — saying the same thing in
+# two places means that when they drift, neither is obviously the right one.
+#
+# Which key is used is decided by `instructions_kind`, which core bakes into the
+# workflow trigger from the profile (#398). No key is used when the workflow has
+# no profile, which is why an existing config sees no change.
+#
+# The agent writes through the **Notion MCP server**, which is its own
+# credential — separate from this plugin's `token` (#399 checks it).
+#
+# Every key is overridable per installation under `[prompts]` in
+# `plugins/notion.toml`.
+
+[prompts]
+
+# Placeholders: {page_url} {title}
+triage_instructions = """
+Notion ページ「{title}」（{page_url}）の内容を読み、必要な作業を整理して起票してください。\
+リポジトリのコードは変更しないでください。\
+起票したページ / issue の URL を、応答の最終メッセージに必ず含めてください。\
+Orchestrator は書き込みを行わないため、成果物が存在することを知る経路がこの URL 以外にありません。\
+"""
+
+# Placeholders: {page_url} {title}
+design_instructions = """
+Notion ページ「{title}」（{page_url}）の要件を読み、詳細設計を作成して \
+Notion MCP でそのページに追記してください。リポジトリのコードは変更しないでください。\
+書き込んだページの URL を、応答の最終メッセージに必ず含めてください。\
+Orchestrator は書き込みを行わないため、成果物が存在することを知る経路がこの URL 以外にありません。\
+"""
+
+# Placeholders: {page_url} {title}
+implement_instructions = """
+Notion ページ「{title}」（{page_url}）の要件・詳細設計を読み、実装して Pull Request を作成してください。\
+作成した Pull Request の URL を、応答の最終メッセージに必ず含めてください。\
+Orchestrator は PR を作らないため、成果物が存在することを知る経路がこの URL 以外にありません。\
+"""

@@ -1,0 +1,44 @@
+# Built-in instruction text this plugin sends with each task (#398, epic #311).
+#
+# These are the **layer 1** instructions of ADR-0024: where the deliverable
+# goes. The Orchestrator's own layer (completion markers, verification) is
+# composed on top by core and is not repeated here — saying the same thing in
+# two places means that when they drift, neither is obviously the right one.
+#
+# Which key is used is decided by `instructions_kind`, which core bakes into the
+# workflow trigger from the profile (#398). No key is used when the workflow has
+# no profile, which is why an existing config sees no change.
+#
+# Every key is overridable per installation under `[prompts]` in
+# `plugins/github.toml`.
+
+[prompts]
+
+# Placeholders: {issue_number} {repo}
+#
+# `triage`: the request arrived somewhere else and needs to become a tracked
+# item here. The worktree is read-only for this profile, so "do not change the
+# code" is a statement of what the run is for, not a restriction being explained
+# — the deny set enforces it either way (#395).
+triage_instructions = """
+Issue #{issue_number}（{repo}）の内容を読み、必要な作業を整理して起票してください。\
+リポジトリのコードは変更しないでください。\
+起票した issue の URL を、応答の最終メッセージに必ず含めてください。\
+Orchestrator は書き込みを行わないため、成果物が存在することを知る経路がこの URL 以外にありません。\
+"""
+
+# Placeholders: {issue_number} {repo}
+design_instructions = """
+Issue #{issue_number}（{repo}）の要件を読み、詳細設計を作成して \
+`gh issue comment {issue_number}` で投稿してください。\
+リポジトリのコードは変更しないでください。\
+投稿した issue コメントの URL を、応答の最終メッセージに必ず含めてください。\
+Orchestrator は書き込みを行わないため、成果物が存在することを知る経路がこの URL 以外にありません。\
+"""
+
+# Placeholders: {issue_number} {repo}
+implement_instructions = """
+Issue #{issue_number}（{repo}）の要件・詳細設計・コメントを読み、実装して Pull Request を作成してください。\
+作成した Pull Request の URL を、応答の最終メッセージに必ず含めてください。\
+Orchestrator は PR を作らないため、成果物が存在することを知る経路がこの URL 以外にありません。\
+"""

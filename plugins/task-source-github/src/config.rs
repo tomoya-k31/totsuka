@@ -2,8 +2,103 @@
 //! `plugins/github.toml` as JSON with secrets already expanded (F-64/F-65).
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use serde::Deserialize;
+
+/// The embedded instruction defaults, parsed once on first use.
+///
+/// A malformed `defaults.toml` is an authoring error in a file that ships
+/// inside the binary — no input can change it — so this panics rather than
+/// degrading. `embedded_defaults_parse` forces it in CI instead of at
+/// `initialize`.
+static DEFAULTS: LazyLock<EmbeddedPrompts> = LazyLock::new(|| {
+    toml::from_str::<Defaults>(include_str!("defaults.toml"))
+        .expect("embedded defaults.toml must parse")
+        .prompts
+});
+
+/// Top level of `defaults.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Defaults {
+    prompts: EmbeddedPrompts,
+}
+
+/// The embedded defaults, with **every field required**.
+///
+/// A separate type from [`GithubPrompts`], and the duplication is the point —
+/// the same trap the Slack plugin documents. `GithubPrompts` fills omitted keys
+/// from `DEFAULTS`; if `DEFAULTS` were also a `GithubPrompts`, deleting a key
+/// from `defaults.toml` would make its `#[serde(default)]` read `DEFAULTS`
+/// **while `DEFAULTS` is still initialising** — a re-entrant `LazyLock`, which
+/// **deadlocks rather than panicking**. The symptom would be a CI job hanging
+/// to its timeout instead of a test failing with a readable message.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmbeddedPrompts {
+    triage_instructions: String,
+    design_instructions: String,
+    implement_instructions: String,
+}
+
+/// Instruction text this plugin sends with each task (#398, epic #311).
+///
+/// Built-in values live in the embedded `defaults.toml`, not in Rust string
+/// literals, so rewording is a data edit. Field names are the config keys under
+/// `[prompts]` in `plugins/github.toml`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GithubPrompts {
+    /// Sent when the workflow's profile is `triage`.
+    #[serde(default = "default_triage_instructions")]
+    pub triage_instructions: String,
+    /// Sent when the workflow's profile is `design`.
+    #[serde(default = "default_design_instructions")]
+    pub design_instructions: String,
+    /// Sent when the workflow's profile is `implement`.
+    #[serde(default = "default_implement_instructions")]
+    pub implement_instructions: String,
+}
+
+fn default_triage_instructions() -> String {
+    DEFAULTS.triage_instructions.clone()
+}
+fn default_design_instructions() -> String {
+    DEFAULTS.design_instructions.clone()
+}
+fn default_implement_instructions() -> String {
+    DEFAULTS.implement_instructions.clone()
+}
+
+impl Default for GithubPrompts {
+    fn default() -> Self {
+        Self {
+            triage_instructions: default_triage_instructions(),
+            design_instructions: default_design_instructions(),
+            implement_instructions: default_implement_instructions(),
+        }
+    }
+}
+
+impl GithubPrompts {
+    /// The template for `kind`, or `None` when the Orchestrator sent no
+    /// `instructions_kind` — or sent one this plugin has no text for.
+    ///
+    /// An unknown kind returns `None` rather than falling back to a default:
+    /// guessing which instruction a future profile wants would put the agent to
+    /// work on the wrong deliverable, which is worse than dispatching it with
+    /// the instructions it had before (#398 predates any such profile, so this
+    /// arm is reachable only from a newer core).
+    pub fn for_kind(&self, kind: &str) -> Option<&str> {
+        match kind {
+            "triage" => Some(&self.triage_instructions),
+            "design" => Some(&self.design_instructions),
+            "implement" => Some(&self.implement_instructions),
+            _ => None,
+        }
+    }
+}
 
 /// Whether the project owner is a user or an organization (GraphQL requires
 /// choosing the right root field).
@@ -67,6 +162,10 @@ pub struct GithubConfig {
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Instruction text overrides (#398). Every key falls back to the embedded
+    /// default when omitted.
+    #[serde(default)]
+    pub prompts: GithubPrompts,
 }
 
 impl GithubConfig {
