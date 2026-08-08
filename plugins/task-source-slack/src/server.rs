@@ -29,7 +29,7 @@ use crate::error::SlackError;
 use crate::llm::ChatTransport;
 use crate::persist;
 use crate::pipeline::{self, SharedState};
-use crate::reaction::ReactionTriggers;
+use crate::reaction::{ReactionTriggers, WorkflowTrigger};
 use crate::slack_api::SlackApi;
 use crate::socket_mode::{self, SocketModeOptions};
 use crate::transport::{SlackTransport, TransportSettings};
@@ -62,9 +62,7 @@ pub trait TransportFactory {
 /// source. The two halves then fail in opposite directions from one typo: no
 /// emoji is registered here, and everything is swallowed there. Neither end
 /// reports an error on its own, so the warning is the only signal.
-fn workflow_reactions(
-    triggers: &[plugin_protocol::methods::TriggerInfo],
-) -> Vec<(String, Option<String>)> {
+fn workflow_reactions(triggers: &[plugin_protocol::methods::TriggerInfo]) -> Vec<WorkflowTrigger> {
     triggers
         .iter()
         .map(|t| {
@@ -81,10 +79,17 @@ fn workflow_reactions(
                      (`reaction = \"eyes\"`)"
                 );
             }
-            (
-                t.workflow.clone(),
-                raw.and_then(Value::as_str).map(str::to_string),
-            )
+            WorkflowTrigger {
+                workflow: t.workflow.clone(),
+                reaction: raw.and_then(Value::as_str).map(str::to_string),
+                // Absent from an older Orchestrator → no prefix → the
+                // conversation id, which is the pre-#397 behaviour.
+                task_id_prefix: t
+                    .trigger
+                    .get("task_id_prefix")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            }
         })
         .collect()
 }
@@ -707,9 +712,15 @@ mod tests {
     /// reports no error, so the config looks right and nothing happens (#379).
     #[test]
     fn the_scope_check_follows_the_workflow_notation_too() {
-        let workflow_triggers =
-            ReactionTriggers::resolve(&[("watch".into(), Some("eyes".into()))], &[])
-                .expect("valid");
+        let workflow_triggers = ReactionTriggers::resolve(
+            &[WorkflowTrigger {
+                workflow: "watch".into(),
+                reaction: Some("eyes".into()),
+                task_id_prefix: None,
+            }],
+            &[],
+        )
+        .expect("valid");
         let warnings = scope_warnings(
             &owned(&["chat:write", "im:write", "users:read"]),
             &config_with(&[], false),

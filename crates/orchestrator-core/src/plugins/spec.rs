@@ -201,13 +201,41 @@ fn trigger_value(wf: &crate::config::WorkflowConfig) -> serde_json::Value {
     let Some(table) = value.as_object_mut() else {
         return value;
     };
-    if let Some(kind) = wf.profile.and_then(instructions_kind) {
-        table.insert(
-            "instructions_kind".to_string(),
-            serde_json::Value::String(kind.to_string()),
-        );
+    for (key, derived) in [
+        ("instructions_kind", wf.profile.and_then(instructions_kind)),
+        ("task_id_prefix", wf.profile.and_then(task_id_prefix)),
+    ] {
+        if let Some(v) = derived {
+            table.insert(key.to_string(), serde_json::Value::String(v.to_string()));
+        }
     }
     value
+}
+
+/// The task-id prefix a profile's tasks carry, or `None` when they keep the
+/// plain conversation id (#397, #393 D7).
+///
+/// A Slack thread can already have an `answer` task at `{channel}:{thread_ts}`
+/// ([ADR-0015](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0015-conversation-task-identity.md)),
+/// and `UNIQUE(source, source_task_id)` means a second task on the same thread
+/// needs a different id. Prefixing is what lets "answer this" and "now
+/// implement it" coexist as separate tasks with separate worktrees, instead of
+/// one task whose permissions widen mid-run.
+///
+/// `answer` has no prefix on purpose: it *is* the conversation, and taking the
+/// plain id is what makes a follow-up mention continue it rather than open a
+/// second one.
+fn task_id_prefix(profile: crate::config::Profile) -> Option<&'static str> {
+    use crate::config::Profile;
+    match profile {
+        Profile::Implement => Some("impl"),
+        // `books:` is #324's existing design for the Slack triage flow; this
+        // keeps that spelling rather than inventing a second one.
+        Profile::Triage => Some("books"),
+        // `design` is GitHub/Notion-sourced, where the task id is the issue's
+        // own — there is no sibling task to collide with.
+        Profile::Design | Profile::Answer => None,
+    }
 }
 
 /// Which instruction set a profile asks its source plugin for, or `None` when
@@ -341,6 +369,14 @@ agent = "herdr"
                 .map(str::to_string)
         };
 
+        let prefix_of = |name: &str| {
+            let wf = cfg.workflows.iter().find(|w| w.name == name).unwrap();
+            trigger_value(wf)
+                .get("task_id_prefix")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+
         assert_eq!(kind_of("gh-design").as_deref(), Some("design"));
         assert_eq!(kind_of("gh-implement").as_deref(), Some("implement"));
         // `answer` publishes through the plugin's own path, which already knows
@@ -349,6 +385,17 @@ agent = "herdr"
         assert_eq!(kind_of("slack-reply"), None);
         // The spelled-out notation has no profile to translate.
         assert_eq!(kind_of("spelled-out"), None);
+
+        // #397: the id prefix that keeps an `impl:` task from colliding with
+        // the `answer` task on the same Slack thread.
+        assert_eq!(prefix_of("gh-implement").as_deref(), Some("impl"));
+        // `answer` is the conversation itself, so it takes the plain id — that
+        // is what makes a follow-up mention continue it (ADR-0015).
+        assert_eq!(prefix_of("slack-reply"), None);
+        // `design` is issue-sourced: its task id is the issue's own, with no
+        // sibling to collide with.
+        assert_eq!(prefix_of("gh-design"), None);
+        assert_eq!(prefix_of("spelled-out"), None);
 
         // The existing trigger keys survive — the plugin still filters on them.
         let design = cfg

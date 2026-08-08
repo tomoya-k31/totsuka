@@ -30,6 +30,21 @@ reply_instructions = """
 Pull Request を作成した場合は、その URL を返信文に必ず含めてください（Orchestrator は PR を作らないため、URL を知る手段がこの返信文以外にありません）。\
 """
 
+# Sent instead of `reply_instructions` when the matched workflow's profile asks
+# for a task-id prefix (#397) — i.e. the reaction started an *implement* task
+# rather than an answer.
+#
+# The reply still goes through the approval gate, so this asks for a report
+# rather than a reply draft: the PR is the deliverable and its URL is the only
+# way the thread learns it exists.
+#
+# Placeholders: none.
+implement_instructions = """
+このスレッドで合意された方針に従って実装し、Pull Request を作成してください。\
+完了後、Slack スレッドへの報告文を出力してください。報告文には**作成した Pull Request の URL を必ず含めてください**（Orchestrator は PR を作らないため、URL を知る手段がこの報告文以外にありません）。\
+出力は報告文のみとし、前置き・後書き・説明を含めないでください。\
+"""
+
 # Appended to `reply_instructions` only when `reply_style` is set in
 # `plugins/slack.toml`. `reply_style` itself stays a plain user string — it is
 # content, not a template.

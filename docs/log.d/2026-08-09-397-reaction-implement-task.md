@@ -1,0 +1,2 @@
+* **Update**: 実装への移行を「実行中タスクの権限昇格」ではなく「本人のリアクションで起こす別タスク（`impl:` 接頭辞）」として実現する決定を D6/D7 節として追記（#397）。親/子スコープ、会話 ID での repo 継承、dedup キーを「結果のタスク ID」にした理由（issue 指定の絵文字キーだと #319 の「メンションとリアクションで 1 タスク」不変条件が壊れる）を記録 [ADR-0033](/decisions/adr-0033-workflow-profile.md)
+* **Update**: `profile` が追加で決めるものに `task_id_prefix` を追加し、リアクション起動 implement の設定例と `conversations.replies` の 200 件クランプを明記 [config.toml リファレンス](/development/config-reference.md)

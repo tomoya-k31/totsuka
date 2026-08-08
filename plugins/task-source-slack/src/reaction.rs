@@ -50,11 +50,22 @@ use crate::slack_api::SlackMessage;
 /// then silently dropped for want of a matching workflow.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReactionTriggers {
-    /// Accepted emoji names, normalized (colon-free). Empty disables the
-    /// trigger, which is the default.
-    emojis: Vec<String>,
+    /// Accepted emoji, normalized (colon-free), each with the task-id prefix
+    /// its workflow's profile asks for (#397). Empty disables the trigger,
+    /// which is the default.
+    emojis: Vec<TriggerEmoji>,
     /// Whether a match stamps `reaction:<emoji>` onto the task.
     labelled: bool,
+}
+
+/// One accepted emoji and what the workflow behind it wants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TriggerEmoji {
+    /// Normalized emoji name, as `reaction_added` reports it.
+    name: String,
+    /// `task_id_prefix` from the trigger (#397), or `None` for the plain
+    /// conversation id.
+    task_id_prefix: Option<String>,
 }
 
 impl ReactionTriggers {
@@ -66,14 +77,19 @@ impl ReactionTriggers {
     /// both notations written at once) leave the operator with a reaction whose
     /// behaviour depends on which one silently won.
     pub fn resolve(
-        triggers: &[(String, Option<String>)],
+        triggers: &[WorkflowTrigger],
         legacy_names: &[String],
     ) -> Result<Self, Vec<String>> {
         let mut errors = Vec::new();
-        let mut emojis: Vec<String> = Vec::new();
+        let mut emojis: Vec<TriggerEmoji> = Vec::new();
         let mut claimed_by: Vec<(String, String)> = Vec::new(); // (emoji, workflow)
 
-        for (workflow, reaction) in triggers {
+        for WorkflowTrigger {
+            workflow,
+            reaction,
+            task_id_prefix,
+        } in triggers
+        {
             let Some(raw) = reaction else { continue };
             // `":eyes:"` and `"eyes"` are the same trigger — Slack reports the
             // bare name, and writing the colons in TOML is the natural thing
@@ -95,7 +111,10 @@ impl ReactionTriggers {
                 continue;
             }
             claimed_by.push((emoji.clone(), workflow.clone()));
-            emojis.push(emoji);
+            emojis.push(TriggerEmoji {
+                name: emoji,
+                task_id_prefix: task_id_prefix.clone(),
+            });
         }
 
         let legacy = normalize_reactions(legacy_names);
@@ -125,7 +144,16 @@ impl ReactionTriggers {
                  the mention catch-all); support is removed in 0.3"
             );
             return Ok(Self {
-                emojis: legacy,
+                emojis: legacy
+                    .into_iter()
+                    .map(|name| TriggerEmoji {
+                        name,
+                        // The legacy notation predates profiles, so its
+                        // workflow is whatever catch-all exists — which takes
+                        // the conversation id.
+                        task_id_prefix: None,
+                    })
+                    .collect(),
                 labelled: false,
             });
         }
@@ -141,6 +169,23 @@ impl ReactionTriggers {
     fn label_for(&self, emoji: &str) -> Option<String> {
         self.labelled.then(|| emoji.to_string())
     }
+
+    /// The configured entry for `emoji`, if it is a trigger at all.
+    fn entry(&self, emoji: &str) -> Option<&TriggerEmoji> {
+        self.emojis.iter().find(|e| e.name == emoji)
+    }
+}
+
+/// One workflow's reaction trigger as the Orchestrator sent it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowTrigger {
+    /// `[[workflows]].name`, used only in error messages.
+    pub workflow: String,
+    /// `trigger.reaction`, if the workflow has one.
+    pub reaction: Option<String>,
+    /// `task_id_prefix`, which the Orchestrator derives from the profile
+    /// (#397). Absent from an older Orchestrator → the conversation id.
+    pub task_id_prefix: Option<String>,
 }
 
 /// Where a reaction points: the coordinates needed to re-fetch the message.
@@ -153,13 +198,36 @@ pub struct ReactionTarget {
     /// The emoji to announce as a `reaction:` label, when the configured
     /// notation labels (see [`ReactionTriggers`]). `None` on the legacy path.
     pub reaction: Option<String>,
+    /// The task-id prefix the matched workflow's profile asks for (#397), from
+    /// `task_id_prefix` in the trigger. `None` keeps the conversation id.
+    pub task_id_prefix: Option<String>,
 }
 
 impl ReactionTarget {
-    /// The dedup key, in the same `{channel}:{ts}` shape a mention uses, so
-    /// one message reached both ways is still one task.
+    /// The dedup key: **the task this reaction would produce**.
+    ///
+    /// `{channel}:{ts}` unprefixed — the same shape a mention uses, which is
+    /// what makes one message reached both ways a single task (#319) — and
+    /// `{prefix}:{channel}:{ts}` when the workflow's profile asks for a prefix
+    /// (#397).
+    ///
+    /// #397 specified `{channel}:{ts}:{emoji}` for this. Keying on the emoji
+    /// solves the case it was written for — a `:hammer:` on a message already
+    /// answered via `:eyes:` must not be dropped as a redelivery, permanently,
+    /// since the LRU only clears on restart — but it *also* separates two
+    /// reactions that produce the **same** task, which breaks the shared-dedup
+    /// invariant #319 established and costs an extra submit plus an enrich
+    /// round trip per message reached both ways.
+    ///
+    /// Keying on the resulting task id gets both: different tasks are distinct,
+    /// same task is one. The emoji only matters here inasmuch as it selects a
+    /// workflow with a different prefix — which is exactly when the tasks
+    /// differ.
     pub fn dedup_key(&self) -> String {
-        format!("{}:{}", self.channel, self.ts)
+        match &self.task_id_prefix {
+            Some(prefix) => format!("{prefix}:{}:{}", self.channel, self.ts),
+            None => format!("{}:{}", self.channel, self.ts),
+        }
     }
 }
 
@@ -178,9 +246,7 @@ pub fn reaction_target(
     }
     // 2. a configured trigger emoji. Slack reports `reaction` without colons.
     let reaction = text_of("reaction")?;
-    if !triggers.emojis.iter().any(|name| name == reaction) {
-        return None;
-    }
+    let entry = triggers.entry(reaction)?;
     // 3. messages only — `file` and `file_comment` reactions arrive on the
     //    same event and have no message to build a task from.
     let item = event.get("item")?;
@@ -192,6 +258,7 @@ pub fn reaction_target(
         channel: item_str("channel")?.to_string(),
         ts: item_str("ts")?.to_string(),
         reaction: triggers.label_for(reaction),
+        task_id_prefix: entry.task_id_prefix.clone(),
     })
 }
 
@@ -219,6 +286,7 @@ pub fn to_mention(target: &ReactionTarget, message: SlackMessage) -> Option<Ment
         ts: message.ts,
         thread_ts: message.thread_ts,
         reaction: target.reaction.clone(),
+        task_id_prefix: target.task_id_prefix.clone(),
     })
 }
 
@@ -229,7 +297,15 @@ mod tests {
 
     /// The workflow-trigger notation, which is the labelling one.
     fn triggers() -> ReactionTriggers {
-        ReactionTriggers::resolve(&[("wf".into(), Some("eyes".into()))], &[]).expect("valid")
+        ReactionTriggers::resolve(
+            &[WorkflowTrigger {
+                workflow: "wf".into(),
+                reaction: Some("eyes".into()),
+                task_id_prefix: None,
+            }],
+            &[],
+        )
+        .expect("valid")
     }
 
     /// The deprecated `trigger_reactions` notation: same emoji, no label.
@@ -259,6 +335,83 @@ mod tests {
         }
     }
 
+    /// The prefix rides from the workflow trigger to the task id (#397).
+    #[test]
+    fn a_prefixed_workflow_produces_a_prefixed_task() {
+        let triggers = ReactionTriggers::resolve(
+            &[WorkflowTrigger {
+                workflow: "slack-implement".into(),
+                reaction: Some("hammer".into()),
+                task_id_prefix: Some("impl".into()),
+            }],
+            &[],
+        )
+        .expect("valid");
+        let target = reaction_target(&event("U_ME", "hammer", "message"), "U_ME", &triggers)
+            .expect("accepted");
+        assert_eq!(target.task_id_prefix.as_deref(), Some("impl"));
+        // The dedup key follows the task, so this does not collide with the
+        // `:eyes:` answer on the same message.
+        assert_eq!(target.dedup_key(), "impl:C1:1.0");
+
+        let mention = to_mention(&target, message()).expect("converted");
+        assert_eq!(mention.task_id(), "impl:C1:1.0");
+    }
+
+    /// **The case #397 exists for**: a `:hammer:` on a message already answered
+    /// via `:eyes:` must start the implement task.
+    ///
+    /// Keyed on the message alone it would be dropped as a redelivery — and
+    /// permanently, since the LRU only clears on restart, so removing and
+    /// re-adding the emoji would not recover it either.
+    #[test]
+    fn a_second_emoji_on_an_answered_message_is_not_deduped_away() {
+        let triggers = ReactionTriggers::resolve(
+            &[
+                WorkflowTrigger {
+                    workflow: "slack-reply".into(),
+                    reaction: Some("eyes".into()),
+                    task_id_prefix: None,
+                },
+                WorkflowTrigger {
+                    workflow: "slack-implement".into(),
+                    reaction: Some("hammer".into()),
+                    task_id_prefix: Some("impl".into()),
+                },
+            ],
+            &[],
+        )
+        .expect("valid");
+        let eyes = reaction_target(&event("U_ME", "eyes", "message"), "U_ME", &triggers).unwrap();
+        let hammer =
+            reaction_target(&event("U_ME", "hammer", "message"), "U_ME", &triggers).unwrap();
+        assert_ne!(eyes.dedup_key(), hammer.dedup_key());
+    }
+
+    /// …and the invariant that must survive it (#319): a message reached by
+    /// both a mention and an unprefixed reaction is **one** task, because both
+    /// paths land on the same key.
+    #[test]
+    fn an_unprefixed_reaction_shares_the_mention_paths_key() {
+        let target =
+            reaction_target(&event("U_ME", "eyes", "message"), "U_ME", &triggers()).unwrap();
+        assert_eq!(
+            target.dedup_key(),
+            "C1:1.0",
+            "same shape as a mention's key"
+        );
+    }
+
+    /// An Orchestrator that sends no `task_id_prefix` — anything before #397 —
+    /// keeps producing conversation-id tasks.
+    #[test]
+    fn no_prefix_from_the_orchestrator_means_the_conversation_id() {
+        let target =
+            reaction_target(&event("U_ME", "eyes", "message"), "U_ME", &triggers()).unwrap();
+        assert_eq!(target.task_id_prefix, None);
+        assert_eq!(to_mention(&target, message()).unwrap().task_id(), "C1:1.0");
+    }
+
     #[test]
     fn the_workflow_notation_labels_and_the_legacy_one_does_not() {
         // **The asymmetry is the whole point of the two notations existing at
@@ -284,8 +437,15 @@ mod tests {
         // Slack reports `reaction` bare; `":eyes:"` is the natural TOML
         // spelling. Both must land on the same key or the trigger silently
         // never fires.
-        let triggers =
-            ReactionTriggers::resolve(&[("wf".into(), Some(":eyes:".into()))], &[]).expect("valid");
+        let triggers = ReactionTriggers::resolve(
+            &[WorkflowTrigger {
+                workflow: "wf".into(),
+                reaction: Some(":eyes:".into()),
+                task_id_prefix: None,
+            }],
+            &[],
+        )
+        .expect("valid");
         assert!(reaction_target(&event("U_ME", "eyes", "message"), "U_ME", &triggers).is_some());
     }
 
@@ -295,8 +455,16 @@ mod tests {
         // definition order in a file the operator was not thinking about.
         let errors = ReactionTriggers::resolve(
             &[
-                ("a".into(), Some("eyes".into())),
-                ("b".into(), Some(":eyes:".into())),
+                WorkflowTrigger {
+                    workflow: "a".into(),
+                    reaction: Some("eyes".into()),
+                    task_id_prefix: None,
+                },
+                WorkflowTrigger {
+                    workflow: "b".into(),
+                    reaction: Some(":eyes:".into()),
+                    task_id_prefix: None,
+                },
             ],
             &[],
         )
@@ -311,7 +479,11 @@ mod tests {
     #[test]
     fn declaring_both_notations_is_rejected() {
         let errors = ReactionTriggers::resolve(
-            &[("wf".into(), Some("hammer".into()))],
+            &[WorkflowTrigger {
+                workflow: "wf".into(),
+                reaction: Some("hammer".into()),
+                task_id_prefix: None,
+            }],
             &["eyes".to_string()],
         )
         .expect_err("both notations at once must be rejected");
@@ -323,8 +495,15 @@ mod tests {
 
     #[test]
     fn a_workflow_reaction_that_normalizes_away_is_rejected() {
-        let errors = ReactionTriggers::resolve(&[("wf".into(), Some("::".into()))], &[])
-            .expect_err("a non-name must be rejected");
+        let errors = ReactionTriggers::resolve(
+            &[WorkflowTrigger {
+                workflow: "wf".into(),
+                reaction: Some("::".into()),
+                task_id_prefix: None,
+            }],
+            &[],
+        )
+        .expect_err("a non-name must be rejected");
         assert!(errors[0].contains("wf"), "{errors:?}");
     }
 
@@ -332,7 +511,15 @@ mod tests {
     fn workflows_without_a_reaction_trigger_leave_the_feature_off() {
         // The mention catch-all (`trigger = {}`) and status-triggered
         // workflows must not switch the reaction path on.
-        let triggers = ReactionTriggers::resolve(&[("catch-all".into(), None)], &[]).unwrap();
+        let triggers = ReactionTriggers::resolve(
+            &[WorkflowTrigger {
+                workflow: "catch-all".into(),
+                reaction: None,
+                task_id_prefix: None,
+            }],
+            &[],
+        )
+        .unwrap();
         assert!(triggers.is_empty());
         assert!(reaction_target(&event("U_ME", "eyes", "message"), "U_ME", &triggers).is_none());
     }
@@ -343,6 +530,8 @@ mod tests {
             .expect("accepted");
         assert_eq!(target.channel, "C1");
         assert_eq!(target.ts, "1.0");
+        // Unprefixed: the same key a mention on this message would use, so
+        // one message reached both ways is still one task (#319).
         assert_eq!(target.dedup_key(), "C1:1.0");
     }
 
@@ -411,6 +600,7 @@ mod tests {
             channel: "C1".to_string(),
             ts: "1.0".to_string(),
             reaction: None,
+            task_id_prefix: None,
         };
         let mention = to_mention(&target, message()).expect("converted");
         // The reacting user is the operator; the mention's `user` is the
@@ -431,6 +621,7 @@ mod tests {
             channel: "C1".to_string(),
             ts: "1.0".to_string(),
             reaction: None,
+            task_id_prefix: None,
         };
         let own = SlackMessage {
             user: Some("U_ME".to_string()),
@@ -446,6 +637,7 @@ mod tests {
             channel: "C1".to_string(),
             ts: "2.0".to_string(),
             reaction: None,
+            task_id_prefix: None,
         };
         let reply = SlackMessage {
             ts: "2.0".to_string(),
@@ -466,6 +658,7 @@ mod tests {
             channel: "C1".to_string(),
             ts: "1.0".to_string(),
             reaction: None,
+            task_id_prefix: None,
         };
         let edited = SlackMessage {
             subtype: Some("message_changed".to_string()),
@@ -485,6 +678,7 @@ mod tests {
             channel: "C1".to_string(),
             ts: "1.0".to_string(),
             reaction: None,
+            task_id_prefix: None,
         };
         let authorless = SlackMessage {
             user: None,

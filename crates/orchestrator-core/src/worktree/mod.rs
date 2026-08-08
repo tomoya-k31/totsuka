@@ -1065,6 +1065,34 @@ mod tests {
         );
     }
 
+    /// A prefixed task id (#397) has **two** colons, not one, and lands here
+    /// with no special case.
+    ///
+    /// Worth pinning rather than assuming: [#108] shipped a `render_branch`
+    /// that mishandled the single `:` in a Slack id, and `impl:C1:100.0`
+    /// reaches the same code by a path nobody exercised before. The point is
+    /// that normalisation stays centralised at the git boundary — the prefix
+    /// needed no change anywhere else.
+    ///
+    /// [#108]: https://github.com/tomoya-k31/totsuka/issues/108
+    #[test]
+    fn a_prefixed_task_id_normalizes_without_a_special_case() {
+        assert_eq!(
+            render_worktree_name("{source}-{task_id}", "slack", "impl:C1:100.0"),
+            "slack-impl-C1-100.0"
+        );
+        assert_eq!(
+            render_worktree_name("{source}-{task_id}", "slack", "books:C1:100.0"),
+            "slack-books-C1-100.0"
+        );
+        // …and the unprefixed form is unchanged, so adding the prefix did not
+        // move the directory of an existing task.
+        assert_eq!(
+            render_worktree_name("{source}-{task_id}", "slack", "C1:100.0"),
+            "slack-C1-100.0"
+        );
+    }
+
     #[test]
     fn render_legalizes_forbidden_ref_sequences() {
         // check-ref-format rejects more than single characters: `..`, `@{`,
