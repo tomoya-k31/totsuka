@@ -133,9 +133,11 @@ profile が最終的に決めるものには `permissions.deny` セットが含�
 
 | profile | 拒否するもの |
 |---|---|
-| `answer` | ファイル編集 + git 書き込み + PR + **GitHub への書き込み一式**（`gh issue …` / `gh api` / `gh repo`） |
-| `triage` / `design` | ファイル編集 + git 書き込み + PR + `gh repo delete` / `rename`。**`gh issue …` は開けたまま** — そこに成果物を書くのがこの profile の仕事だから |
+| `answer` | ファイル編集 + git 書き込み + PR + **GitHub への書き込み一式**（`gh issue …` / `gh repo` / `gh api`） |
+| `triage` / `design` | ファイル編集 + git 書き込み + PR + `gh repo delete` / `rename` + `gh api`。**`gh issue …` は開けたまま** — そこに成果物を書くのがこの profile の仕事だから |
 | `implement` | 何も拒否しない（`permissions` キー自体を書かない） |
+
+**`gh api` は read-only profile すべてで塞ぐ。** REST も GraphQL も叩けるので、開けたまま `gh repo delete` や `gh pr create` を denyしても意味がない — `gh api -X DELETE repos/{owner}/{repo}` と `gh api -X POST .../pulls` で同じ場所に届く。**実際より強く読めるリストは、短いリストより悪い。** 代償は本物で、パターンは `GET` と `POST` を区別できないので読み取り用の API 呼び出しも一緒に塞がる（`gh issue view` / `gh pr view` / `gh search` で足りる範囲に収まる想定）。**GraphQL が要る workflow が出てきたら** — Projects v2 のフィールドや draft issue には `gh` サブコマンドが無い — それはこのルールを意識的に見直す合図であって、黙って穴を開けたままにする理由ではない。
 
 ### 保証の強さは層で違う
 

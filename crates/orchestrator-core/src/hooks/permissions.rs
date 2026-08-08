@@ -89,8 +89,23 @@ const DENY_PR: &[&str] = &[
 /// requires deleting or renaming a repository.
 const DENY_REPO_ADMIN: &[&str] = &["Bash(gh repo delete *)", "Bash(gh repo rename *)"];
 
-/// Writing to GitHub itself — issues, comments, and the escape hatch that
-/// reaches every endpoint.
+/// `gh api`, denied in **every** read-only profile.
+///
+/// It reaches every REST and GraphQL endpoint, so leaving it open while denying
+/// `gh repo delete` and `gh pr create` would make those rules decorative — the
+/// same operations are a `gh api -X DELETE repos/{owner}/{repo}` or
+/// `gh api -X POST repos/{owner}/{repo}/pulls` away. A deny list that reads
+/// stronger than it is, is worse than a short one.
+///
+/// The cost is real: the pattern cannot tell a `GET` from a `POST`, so
+/// read-only API calls go with it. `gh issue view` / `gh pr view` / `gh search`
+/// cover the reads these profiles need. **If a workflow turns out to need
+/// GraphQL** — Projects v2 fields and draft issues have no `gh` subcommand —
+/// that is the signal to revisit this rule deliberately, not to quietly leave
+/// the hatch open.
+const DENY_GH_API: &[&str] = &["Bash(gh api *)"];
+
+/// Writing to GitHub's issue surface.
 ///
 /// Denied for `answer` only. `triage` and `design` write their artifact this
 /// way, so denying it there would deny the profile's whole purpose.
@@ -100,7 +115,6 @@ const DENY_GH_ARTIFACTS: &[&str] = &[
     "Bash(gh issue edit *)",
     "Bash(gh issue close *)",
     "Bash(gh repo *)",
-    "Bash(gh api *)",
 ];
 
 /// The deny rules for `profile`, or `None` when the profile is meant to write
@@ -119,14 +133,18 @@ pub fn deny_rules(profile: Profile) -> Option<Vec<&'static str>> {
             rules.extend(DENY_FILE_EDITS);
             rules.extend(DENY_GIT_WRITES);
             rules.extend(DENY_PR);
+            rules.extend(DENY_GH_API);
             rules.extend(DENY_GH_ARTIFACTS);
         }
         // The worktree stays read-only, but the agent files the issue / writes
-        // the design comment itself (#393 D2), so `gh issue …` stays open.
+        // the design comment itself (#393 D2), so `gh issue …` stays open —
+        // and only that. `gh api` goes with the rest: it would reach the same
+        // endpoints the rules above deny.
         Profile::Triage | Profile::Design => {
             rules.extend(DENY_FILE_EDITS);
             rules.extend(DENY_GIT_WRITES);
             rules.extend(DENY_PR);
+            rules.extend(DENY_GH_API);
             rules.extend(DENY_REPO_ADMIN);
         }
         Profile::Implement => return None,
@@ -216,6 +234,31 @@ mod tests {
                     inner.ends_with(" *"),
                     "`{rule}`: a wildcard must be preceded by a space, or the rule also \
                      matches commands that merely start with the same letters"
+                );
+            }
+        }
+    }
+
+    /// **A denied command must not be reachable through `gh api`.**
+    ///
+    /// `gh api` speaks to every REST and GraphQL endpoint, so
+    /// `Bash(gh repo delete *)` means nothing next to an allowed
+    /// `gh api -X DELETE repos/{owner}/{repo}`, and `Bash(gh pr create *)`
+    /// means nothing next to `gh api -X POST .../pulls`. Any profile that
+    /// denies a `gh` command has to deny the hatch as well, or the list reads
+    /// stronger than it enforces.
+    #[test]
+    fn no_profile_denies_a_gh_command_while_leaving_gh_api_open() {
+        for profile in [Profile::Answer, Profile::Triage, Profile::Design] {
+            let rules = deny_rules(profile).unwrap();
+            let denies_a_gh_command = rules
+                .iter()
+                .any(|r| r.starts_with("Bash(gh ") && !r.starts_with("Bash(gh api"));
+            if denies_a_gh_command {
+                assert!(
+                    rules.contains(&"Bash(gh api *)"),
+                    "{profile:?} denies specific `gh` commands but leaves `gh api` open, \
+                     which reaches the same endpoints"
                 );
             }
         }
