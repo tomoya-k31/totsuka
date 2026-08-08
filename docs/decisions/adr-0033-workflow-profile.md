@@ -112,6 +112,13 @@ profile が最終的に決めるものには `permissions.deny` セットが含�
 
 生成される `config.toml` が新記法の実例になる。ただし「Human sign-off required」レシピだけは明示記法のまま残した — `verification = "human"` を要求し、4 原型はいずれも `llm` に解決するので profile では書けない。これは劣化ではなく、**明示記法が残る理由そのもの**である。
 
+**「Slack — reply as yourself」は記法だけでなく挙動も変わる。** このレシピは `mode = "implement"` を書いていたが、`profile = "answer"` は `plan` に解決する。表記の言い換えではなく意図した変更で、根拠は 2 つ:
+
+- このレシピは #393 の WF 1 そのものであり、**メンションに答えることは実装ではない**
+- Slack の質問が実装を要することが分かった場合の経路は、同じタスクの権限が広がることではなく、本人のリアクションで別の `impl:` タスクを起こすこと（#393 D6 / [#397](https://github.com/tomoya-k31/totsuka/issues/397)）
+
+既存 config への影響は無い（`setup` は既存 `config.toml` を上書きしない）。影響を受けるのは、これから同レシピを選ぶ利用者が書き込み可能な worktree を得なくなる点である。
+
 `upsert_workflow` は `profile` / `mode` / `output` を「値が無ければキーごと消す」書き方にした。明示記法から profile へ書き換えた既存エントリに `mode` が残ると、ウィザード自身が `ProfileConflict` を書き込むことになる。
 
 # Consequences

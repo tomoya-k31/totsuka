@@ -417,22 +417,32 @@ impl VerificationMode {
 /// need. A profile decides that bundle in Rust rather than leaving the operator
 /// to assemble a combination by hand, which is where the mis-combinations were.
 ///
+/// **As of this commit the four are not yet distinguishable by what they
+/// permit.** `triage` and `design` both resolve to [`WorkflowMode::Plan`], and
+/// plan does not structurally stop anything (#378), so nothing here yet does
+/// what `mode` alone could not. The distinction becomes real when
+/// [#395](https://github.com/tomoya-k31/totsuka/issues/395) gives each profile
+/// its own `permissions.deny` set and
+/// [#398](https://github.com/tomoya-k31/totsuka/issues/398) its own
+/// verification rubric. The bundle exists first so those have somewhere to
+/// attach; do not read the variant names as enforcement.
+///
 /// The resolution table is deliberately closed: adding a knob means adding a
 /// profile, not a config key. Same reasoning as the deny sets in
-/// [ADR-0023](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0023-prompt-config-boundary.md)
+/// [ADR-0023](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0023-configurable-prompt-surface.md)
 /// — a permission-bearing decision reachable through a config string is a
 /// privilege-escalation surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Profile {
-    /// Answer a question. Read-only worktree; the source plugin publishes the
-    /// reply behind its approval gate (WF 1, 2).
+    /// Answer a question. Worktree meant to stay read-only; the source plugin
+    /// publishes the reply behind its approval gate (WF 1, 2).
     Answer,
-    /// File the request somewhere trackable. Read-only worktree; the agent
-    /// creates the issue/page itself (WF 3).
+    /// File the request somewhere trackable. Worktree meant to stay read-only;
+    /// the agent creates the issue/page itself (WF 3).
     Triage,
-    /// Produce a detailed design. Read-only worktree; the agent writes the
-    /// design to the issue/page itself (WF 4, 6).
+    /// Produce a detailed design. Worktree meant to stay read-only; the agent
+    /// writes the design to the issue/page itself (WF 4, 6).
     Design,
     /// Implement and open a PR. The worktree is writable (WF 5, 7).
     Implement,

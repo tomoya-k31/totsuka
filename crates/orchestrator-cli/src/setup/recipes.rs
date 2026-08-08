@@ -169,6 +169,12 @@ pub const RECIPES: &[Recipe] = &[
             name: "slack-reply",
             source: "slack",
             trigger: None,
+            // Behaviour change, not just notation: this recipe used to write
+            // `mode = "implement"`, and `answer` resolves to `plan`. It is WF 1
+            // in #393 and answering a mention is not implementing — a Slack
+            // question that turns out to need code is meant to become a
+            // separate `impl:` task through a reaction (#393 D6 / #397) rather
+            // than quietly getting a writable worktree.
             profile: Some(Profile::Answer),
             mode: None,
             agent: "herdr",
