@@ -108,7 +108,7 @@ pub struct ToolCache {
 
 impl ToolCache {
     /// Whether `tool` looks usable, answering from cache within
-    /// [`CACHE_TTL`].
+    /// `CACHE_TTL` (5 minutes).
     ///
     /// `now` is passed in rather than read here so the expiry is testable
     /// without sleeping (the same reason the engine takes a `Clock`).

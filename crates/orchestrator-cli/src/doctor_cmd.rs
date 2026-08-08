@@ -426,6 +426,89 @@ fn check_onepassword(
 /// Whether `[llm].api_key_ref` is an `op://` reference — the one secret
 /// `plugin_spec` resolves for a task-source plugin that does *not* live in
 /// that plugin's own config file.
+/// Whether the external tools the configured profiles need are usable here
+/// (#399).
+///
+/// Emitted **only when something needs them** — a config of `answer`-only
+/// workflows gets no line, because a check that always passes teaches the
+/// reader to skip it.
+///
+/// # This check can be wrong, and says so
+///
+/// It runs in the CLI's environment. The agent runs in a pane with the user's
+/// shell profile applied (`.zshenv`, `mise activate`, herdr's workspace env), so
+/// a `gh` reachable only there reads as missing. The failure text says that
+/// outright rather than leaving the operator to discover it: a check whose
+/// false-negative mode is undocumented gets ignored entirely the first time it
+/// is wrong.
+///
+/// # What it does not cover
+///
+/// `triage` and `design` write externally too, but where depends on the source
+/// — and that is not something the Orchestrator can identify from a
+/// user-chosen plugin instance name. The line says so when such a workflow
+/// exists, rather than passing silently and reading as "checked".
+fn check_agent_tools(cfg: &RootConfig, checks: &mut Vec<Check>) {
+    use orchestrator_core::agent_tools::{self, AgentTool};
+    use orchestrator_core::config::Profile;
+
+    let mut needed: Vec<AgentTool> = Vec::new();
+    let mut unchecked: Vec<&str> = Vec::new();
+    for wf in &cfg.workflows {
+        for tool in agent_tools::required(wf.profile) {
+            if !needed.contains(tool) {
+                needed.push(*tool);
+            }
+        }
+        if matches!(wf.profile, Some(Profile::Triage | Profile::Design)) {
+            unchecked.push(wf.name.as_str());
+        }
+    }
+    if needed.is_empty() && unchecked.is_empty() {
+        return; // nothing here writes outside its worktree
+    }
+
+    let caveat = "if the tool is only reachable from the agent's pane                   (shell profile / mise), this check is a false negative and can be ignored";
+    for tool in needed {
+        let name = format!("agent-tool:{}", tool.as_str());
+        if agent_tools::available(tool) {
+            checks.push(Check::ok(
+                &name,
+                format!("{} is available and configured", tool.as_str()),
+            ));
+        } else {
+            // **`warn`, not `fail`.** This check has a documented false
+            // negative — the caveat below — and `fail` moves the exit code,
+            // which would make `doctor` report a broken setup on a machine
+            // where everything works. A check that can be wrong must not be
+            // the one that says "stop"; the dispatch gate is what actually
+            // protects the run, and it degrades to waiting rather than
+            // failing for the same reason.
+            checks.push(Check::warn(
+                &name,
+                format!(
+                    "{} is not usable from here → implement-profile tasks will wait in the queue \
+                     instead of stranding in the pane ({caveat})",
+                    tool.as_str()
+                ),
+                tool.remedy(),
+            ));
+        }
+    }
+    if !unchecked.is_empty() {
+        checks.push(Check::skip(
+            "agent-tool:external-write",
+            format!(
+                "not checked for {}: a triage/design task writes to its source (GitHub via `gh`, \
+                 Notion via MCP) and totsuka cannot tell which from a plugin instance name",
+                unchecked.join(", ")
+            ),
+            "verify by hand that the agent can write to that source (`gh auth status`, or the \
+             Notion MCP server in the agent's own config)",
+        ));
+    }
+}
+
 fn llm_key_is_onepassword(cfg: &RootConfig) -> bool {
     cfg.llm
         .as_ref()
@@ -537,6 +620,7 @@ fn check_hooks(
     check_codex_hooks(cx, cfg, config_ok, env, args, checks);
     check_opencode_assets(cfg, config_ok, env, args, checks);
     check_hook_deps(env, checks);
+    check_agent_tools(cfg, checks);
     // Which workflows actually need the Bearer token, decided from the static
     // manifests alone (plugin enablement / reference integrity belong to
     // `config validate` and the `plugin:*` checks, not here). An unparsable
