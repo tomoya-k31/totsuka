@@ -494,6 +494,17 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     slot_holders: HashMap<i64, (String, String)>,
     /// `(agent plugin, session_id)` → task id, for routing notifications.
     sessions: HashMap<(String, String), i64>,
+    /// Availability answers for the external tools a profile needs (#399),
+    /// cached so the 200 ms dispatch loop does not re-stat every tick.
+    agent_tools: crate::agent_tools::ToolCache,
+    /// Tasks already reported as blocked on a missing tool, so the operator is
+    /// told once rather than every cycle.
+    ///
+    /// In-process, not persisted: a restart re-notifies once, which is the
+    /// right amount — the situation is still true and the previous message is
+    /// gone from the operator's notification centre anyway. Persisting it would
+    /// mean a schema change for a message.
+    blocked_on_tools: std::collections::HashSet<i64>,
     events: mpsc::UnboundedReceiver<PluginEvent>,
     /// Kept so `events.recv()` never observes a closed channel.
     _events_tx: mpsc::UnboundedSender<PluginEvent>,
@@ -597,6 +608,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let slots = SlotManager::new(settings.limits.clone());
         let readme_cache = settings.readme_cache_dir.clone().map(ReadmeCache::new);
         Self {
+            agent_tools: crate::agent_tools::ToolCache::default(),
+            blocked_on_tools: std::collections::HashSet::new(),
             db,
             settings,
             plugins,
@@ -1146,15 +1159,66 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
 
     /// Dispatch queued tasks with a selected repository, gated by slots
     /// (F-40–F-43).
+    /// Log, and tell the operator once, that a task cannot start because a
+    /// tool its profile needs is unusable here (#399).
+    ///
+    /// Reuses [`NotifierEvent::Pending`] rather than adding a variant. A new
+    /// one would fail to deserialize in a notifier plugin built against the
+    /// current protocol, and since delivery is fire-and-forget (F-93) the
+    /// symptom would be **notifications quietly stopping** — worse than a
+    /// slightly generic event name. A dedicated variant belongs with the
+    /// `#[serde(other)]` fallback in protocol 0.3.
+    async fn report_blocked_on_agent_tools(
+        &mut self,
+        record: &TaskRecord,
+        missing: &[crate::agent_tools::AgentTool],
+    ) {
+        let names: Vec<&str> = missing.iter().map(|t| t.as_str()).collect();
+        if !self.blocked_on_tools.insert(record.id) {
+            // Already reported; the dispatch loop reaches this every cycle.
+            tracing::debug!(
+                task_id = record.id,
+                missing = ?names,
+                "still waiting on an unavailable agent tool"
+            );
+            return;
+        }
+        let remedies: Vec<&str> = missing.iter().map(|t| t.remedy()).collect();
+        let reason = format!(
+            "waiting: {} unavailable in the orchestrator's environment → {}. \
+             The task stays queued and starts on its own once this resolves \
+             (checked every few minutes). If the tool is only reachable from \
+             the agent's pane, this check is a false negative — see the \
+             agent-tools note in `totsuka doctor`.",
+            names.join(", "),
+            remedies.join("; ")
+        );
+        tracing::warn!(task_id = record.id, missing = ?names, "{reason}");
+        notify_all(
+            &self.plugins.notifiers,
+            NotifierEvent::Pending,
+            record,
+            Some(reason),
+        );
+    }
+
     async fn dispatch_ready(&mut self) -> Result<(), EngineError> {
-        let workflows = workflows_by_name(&self.settings.workflows);
+        // Cloned rather than borrowed: reporting a blocked task needs
+        // `&mut self`, and holding a borrow of `self.settings` across the loop
+        // would forbid it. Two small strings per workflow, once per cycle.
+        let wf_info: HashMap<String, (String, Option<crate::config::Profile>)> = self
+            .settings
+            .workflows
+            .iter()
+            .map(|w| (w.name.clone(), (w.agent.clone(), w.profile)))
+            .collect();
         let queued = self.db.tasks_in_state(TaskState::Queued)?;
         let mut ready = Vec::new();
         for record in &queued {
             let Some(repo) = record.repo.clone() else {
                 continue; // repo selection pending/failed this cycle
             };
-            let Some(wf) = workflows.get(record.workflow.as_str()) else {
+            let Some((agent, profile)) = wf_info.get(record.workflow.as_str()).cloned() else {
                 tracing::warn!(
                     task_id = record.id,
                     workflow = %record.workflow,
@@ -1162,10 +1226,25 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 );
                 continue;
             };
+            // #399: the agent writes its own deliverable now, so a task can
+            // fail for a reason that is not about the task. Skipping here
+            // rather than in `dispatch_one` means no slot is taken and no
+            // worktree is created for work that cannot finish.
+            //
+            // **Skip, not fail.** The check runs in this process, while the
+            // agent runs in a pane with the user's shell profile applied, so a
+            // `gh` reachable only there reads as missing. Leaving the task
+            // `Queued` makes a false negative a delay instead of a loss: it
+            // dispatches on its own once the check passes.
+            let missing = self.agent_tools.missing(profile, std::time::Instant::now());
+            if !missing.is_empty() {
+                self.report_blocked_on_agent_tools(record, &missing).await;
+                continue;
+            }
             ready.push(ReadyTask {
                 task_id: record.id,
                 repo,
-                agent: wf.agent.clone(),
+                agent,
                 priority: record.priority,
             });
         }
@@ -3040,6 +3119,7 @@ plan_cleanup = "keep_28d"
             timeout_secs: None,
             rubric: None,
             tool: None,
+            profile: None,
         }];
         engine
     }
