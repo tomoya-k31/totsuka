@@ -26,7 +26,7 @@ use crate::config::SlackConfig;
 use crate::draft::{DRAFT_TTL, Draft, DraftStatus, DraftStore};
 use crate::llm::ChatTransport;
 use crate::mention::{Mention, MentionFilter};
-use crate::reaction::{reaction_target, to_mention};
+use crate::reaction::{ReactionTriggers, reaction_target, to_mention};
 use crate::repo_resolver::{Resolution, resolve};
 use crate::slack_api::{PostEphemeral, SlackApi};
 use crate::socket_mode::SocketEvent;
@@ -309,10 +309,15 @@ impl<S: Clone> Clone for Orchestrator<S> {
 /// message event, enrich + resolve + normalize fresh mentions, push results
 /// via `submitter` (`task/submit`, 0.1.6), and answer `block_actions`
 /// (repository selections and the approval flow's approve/reject presses).
+#[allow(clippy::too_many_arguments)]
 pub fn spawn<T, C, S>(
     api: Arc<SlackApi<T>>,
     chat: Arc<C>,
     config: Arc<SlackConfig>,
+    // Resolved at `initialize`, where the workflow triggers are in hand
+    // (#396); the pipeline is handed the answer rather than re-deriving it
+    // from config, because only one of the two notations may be live.
+    trigger_reactions: ReactionTriggers,
     mut events: mpsc::UnboundedReceiver<SocketEvent>,
     state: SharedState,
     submitter: S,
@@ -325,10 +330,6 @@ where
 {
     tokio::spawn(async move {
         let mut filter = MentionFilter::new(&config.target_user_id);
-        // Normalized once: the colon-stripping is config-shaped work, not
-        // per-event work, and an empty set means the reaction trigger is off
-        // (the default — an install that has not opted in is unaffected).
-        let trigger_reactions = config.normalized_trigger_reactions();
         // Resolve the self-DM record channel up front (filter row 3). Failure
         // is not fatal: row 2 (own posts) already breaks reply loops.
         match api.conversations_open_self(&config.target_user_id).await {
@@ -973,7 +974,15 @@ fn build_task(
         title,
         body: Some(body),
         repo_hint,
-        labels: Vec::new(),
+        // How a reaction-derived task reaches its `trigger = { reaction = ... }`
+        // workflow (#396). The Orchestrator re-checks the emoji against this
+        // label, so its absence is not cosmetic — the task would fall through
+        // to the catch-all and be answered instead of implemented.
+        labels: mention
+            .reaction
+            .iter()
+            .map(|emoji| format!("reaction:{emoji}"))
+            .collect(),
         priority: 0,
         status: None,
         url: enriched.permalink.clone(),
@@ -1128,6 +1137,7 @@ mod tests {
                 text: "<@U_ME> hi".into(),
                 ts: task_id_ts.into(),
                 thread_ts: None,
+                reaction: None,
             },
             sender_name: "alice".into(),
             channel_name: "general".into(),

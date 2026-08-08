@@ -245,6 +245,17 @@ fn respond(path: &str, ws_url: &str) -> Value {
             "user": { "name": "alice", "profile": { "display_name": "アリス" } }
         }),
         "/conversations.info" => json!({ "ok": true, "channel": { "name": "dev-general" } }),
+        // The reacted-to message, re-fetched from the event's coordinates
+        // (#319). Note it carries no `<@U_ME>` tag — that is what makes the
+        // reaction, not a mention, the thing that started the task.
+        "/conversations.history" => json!({
+            "ok": true,
+            "messages": [{
+                "user": "U_OTHER",
+                "text": "あとで調べておいてほしい",
+                "ts": "300.0"
+            }]
+        }),
         "/conversations.replies" => json!({
             "ok": true,
             "messages": [{
@@ -292,6 +303,25 @@ fn mention_envelope() -> Value {
             "text": "<@U_ME> デプロイが失敗しています。原因わかりますか？",
             "ts": "100.1",
             "thread_ts": "100.0"
+        }}
+    })
+}
+
+/// The operator adding `:eyes:` to a *different* message in `C1` (#396).
+///
+/// A separate `ts` on purpose: reusing the mention's would land on the same
+/// conversation task (ADR-0015) and prove nothing about workflow selection.
+fn reaction_envelope() -> Value {
+    json!({
+        "type": "events_api",
+        "envelope_id": "env-reaction-1",
+        "payload": { "event": {
+            "type": "reaction_added",
+            "user": "U_ME",
+            "reaction": "eyes",
+            "item": { "type": "message", "channel": "C1", "ts": "300.0" },
+            "item_user": "U_OTHER",
+            "event_ts": "900.0"
         }}
     })
 }
@@ -455,6 +485,17 @@ location = "{state}/wt/{{repo_name}}/{{worktree_name}}"
 cleanup = "immediate"
 plan_cleanup = "immediate"
 
+# The emoji workflow is defined **first**: reaction triggers are more
+# specific than the mention catch-all, and putting it last would make it
+# unreachable (#396, `validate_workflows` warns about exactly that).
+[[workflows]]
+name = "watch"
+source = "slack"
+trigger = {{ reaction = "eyes" }}
+mode = "plan"
+agent = "mock_agent"
+output = "none"
+
 [[workflows]]
 name = "reply"
 source = "slack"
@@ -577,6 +618,42 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
             c.form.get("channel").map(String::as_str) == Some("D_SELF")
         })
     });
+
+    // #396, riding the same run: an `:eyes:` reaction on a *different*
+    // message must reach the `watch` workflow, not the mention catch-all.
+    //
+    // This is the one place the whole chain is exercised against real
+    // processes — core sends `trigger.reaction` at `initialize`, the plugin
+    // reads it and stamps `reaction:eyes` into `Task.labels`, and core
+    // re-checks that label to select the workflow. Each link has its own unit
+    // test; none of them can catch a break *between* two links, which is the
+    // failure mode this notation invites (the `triggers` contract existed for
+    // versions before anything read it).
+    rt.block_on(send_and_await_ack(&mut ws, reaction_envelope()));
+    let watched = wait_for("the reaction task", Duration::from_secs(60), || {
+        let out = env.run(&["task", "list", "--json"]);
+        let tasks: Value = serde_json::from_slice(&out.stdout).ok()?;
+        tasks
+            .as_array()?
+            .iter()
+            .find(|t| t["source_task_id"] == "C1:300.0")
+            .cloned()
+    });
+    assert_eq!(
+        watched["workflow"], "watch",
+        "the reaction must select its own workflow, not the catch-all: {watched}"
+    );
+    // And the control: the mention task took the catch-all even though the
+    // reaction workflow is defined above it.
+    let out = env.run(&["task", "list", "--json"]);
+    let tasks: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let mention_task = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["source_task_id"] == "C1:100.0")
+        .unwrap_or_else(|| panic!("the mention task: {tasks}"));
+    assert_eq!(mention_task["workflow"], "reply", "{mention_task}");
 
     stop(child);
 

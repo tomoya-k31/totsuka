@@ -190,6 +190,61 @@ mod tests {
             .collect()
     }
 
+    /// The `initialize.triggers` contract has existed since protocol 0.1.6,
+    /// and #396 made a plugin depend on it for the first time: the Slack
+    /// plugin reads `trigger.reaction` from here to know which emoji start a
+    /// task. Silently dropping the key — or reordering the list — turns the
+    /// emoji into a no-op with no error anywhere.
+    #[test]
+    fn a_task_sources_triggers_arrive_whole_and_in_definition_order() {
+        let cfg = root(
+            r#"
+[[workflows]]
+name = "slack-implement"
+source = "slack"
+trigger = { reaction = "hammer" }
+profile = "implement"
+agent = "herdr"
+
+[[workflows]]
+name = "slack-reply"
+source = "slack"
+trigger = {}
+profile = "answer"
+agent = "herdr"
+
+[[workflows]]
+name = "gh-design"
+source = "github"
+trigger = { project_status = "設計待ち" }
+profile = "design"
+agent = "herdr"
+"#,
+        );
+        let triggers: Vec<TriggerInfo> = cfg
+            .workflows
+            .iter()
+            .filter(|w| w.source == "slack")
+            .map(|w| TriggerInfo {
+                workflow: w.name.clone(),
+                trigger: serde_json::to_value(&w.trigger).unwrap_or(serde_json::Value::Null),
+            })
+            .collect();
+
+        // Only this source's workflows, in definition order — the plugin
+        // reproduces first-match from this list.
+        assert_eq!(triggers.len(), 2);
+        assert_eq!(triggers[0].workflow, "slack-implement");
+        assert_eq!(triggers[1].workflow, "slack-reply");
+        assert_eq!(
+            triggers[0].trigger.get("reaction").and_then(|v| v.as_str()),
+            Some("hammer")
+        );
+        // The catch-all is an empty object, never `null`: a plugin reading
+        // `.get("reaction")` on `null` would panic or mis-branch.
+        assert!(triggers[1].trigger.is_object());
+    }
+
     #[test]
     fn llm_info_is_none_without_an_llm_table() {
         assert!(llm_info(&root(""), &env(&[])).is_none());
