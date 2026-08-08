@@ -423,9 +423,22 @@ fn check_onepassword(
     }
 }
 
-/// Whether `[llm].api_key_ref` is an `op://` reference — the one secret
-/// `plugin_spec` resolves for a task-source plugin that does *not* live in
-/// that plugin's own config file.
+/// The false-negative note appended to every `agent-tool:*` failure.
+///
+/// A `const`, not a local, so `no_check_text_carries_collapsed_indentation` can
+/// assert on it **unconditionally**. As a local it was only reachable through
+/// the failure branch, which does not run on a machine where `gh` is set up —
+/// the first version of that test passed while the bug it was written for was
+/// still present.
+///
+/// `concat!`, not a `\`-continued literal: rustfmt collapses the continuation
+/// onto one line and the indentation survives as a run of spaces in text the
+/// operator reads.
+const AGENT_TOOL_CAVEAT: &str = concat!(
+    "if the tool is only reachable from the agent's pane (shell profile / mise), ",
+    "this check is a false negative and can be ignored"
+);
+
 /// Whether the external tools the configured profiles need are usable here
 /// (#399).
 ///
@@ -468,7 +481,7 @@ fn check_agent_tools(cfg: &RootConfig, checks: &mut Vec<Check>) {
         return; // nothing here writes outside its worktree
     }
 
-    let caveat = "if the tool is only reachable from the agent's pane                   (shell profile / mise), this check is a false negative and can be ignored";
+    let caveat = AGENT_TOOL_CAVEAT;
     for tool in needed {
         let name = format!("agent-tool:{}", tool.as_str());
         if agent_tools::available(tool) {
@@ -509,6 +522,77 @@ fn check_agent_tools(cfg: &RootConfig, checks: &mut Vec<Check>) {
     }
 }
 
+#[cfg(test)]
+mod agent_tools_tests {
+    use super::*;
+
+    fn cfg_with(profile: &str) -> RootConfig {
+        RootConfig::from_toml_str(&format!(
+            r#"
+[[workflows]]
+name = "w"
+source = "github"
+profile = "{profile}"
+agent = "herdr"
+"#
+        ))
+        .unwrap()
+    }
+
+    /// **No operator-visible string may contain a run of spaces.**
+    ///
+    /// `rustfmt` collapses a `\`-continued literal onto one line and the
+    /// indentation survives inside the string, which reads as a typo in
+    /// `totsuka doctor` output. It happened in this very function and only a
+    /// reviewer caught it — a rendered-text assertion catches the next one.
+    #[test]
+    fn no_check_text_carries_collapsed_indentation() {
+        let mut checks = Vec::new();
+        check_agent_tools(&cfg_with("implement"), &mut checks);
+        check_agent_tools(&cfg_with("design"), &mut checks);
+        assert!(!checks.is_empty(), "the fixtures must produce checks");
+        // Unconditionally, because the failure branch that carries it only
+        // runs on a machine without `gh` — scanning the rendered checks alone
+        // passed on a developer machine while the bug was present.
+        assert!(!AGENT_TOOL_CAVEAT.contains("  "), "{AGENT_TOOL_CAVEAT:?}");
+        for check in &checks {
+            let texts = [Some(&check.detail), check.action.as_ref()];
+            for text in texts.into_iter().flatten() {
+                assert!(
+                    !text.contains("  "),
+                    "`{}` has a run of spaces: {text:?}",
+                    check.name
+                );
+            }
+        }
+    }
+
+    /// A config that writes nothing outside its worktree gets no line at all —
+    /// a check that always passes teaches the reader to skip it.
+    #[test]
+    fn an_answer_only_config_produces_no_agent_tool_line() {
+        let mut checks = Vec::new();
+        check_agent_tools(&cfg_with("answer"), &mut checks);
+        assert!(checks.is_empty(), "{checks:?}");
+    }
+
+    /// `design` is not checked, and says so rather than passing silently —
+    /// silence would read as "checked and fine".
+    #[test]
+    fn design_reports_that_it_was_not_checked() {
+        let mut checks = Vec::new();
+        check_agent_tools(&cfg_with("design"), &mut checks);
+        let skipped = checks
+            .iter()
+            .find(|c| c.name == "agent-tool:external-write")
+            .unwrap_or_else(|| panic!("expected a skip line: {checks:?}"));
+        assert!(skipped.detail.contains('w'), "{skipped:?}");
+    }
+}
+
+/// Whether `[llm].api_key_ref` is an `op://` reference — the one secret
+/// `plugin_spec` resolves for a task-source plugin that does *not* live in
+/// that plugin's own config file.
 fn llm_key_is_onepassword(cfg: &RootConfig) -> bool {
     cfg.llm
         .as_ref()
