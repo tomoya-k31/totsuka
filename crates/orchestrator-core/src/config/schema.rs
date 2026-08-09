@@ -459,6 +459,21 @@ impl Profile {
         }
     }
 
+    /// Whether this profile is one of the read-only archetypes.
+    ///
+    /// **Written as a closed match on purpose.** Two call sites depend on this
+    /// (dropping claude's plan flag, and refusing to publish a task that ended
+    /// up on a branch), and when they each carried their own rule one was an
+    /// open `!= Implement` while the other enumerated. A profile added later
+    /// would have fallen to opposite defaults in the two places; here it fails
+    /// to compile until someone decides.
+    pub fn is_read_only(self) -> bool {
+        match self {
+            Profile::Answer | Profile::Triage | Profile::Design => true,
+            Profile::Implement => false,
+        }
+    }
+
     /// The execution mode this profile resolves to. Only `implement` gets a
     /// writable worktree.
     pub fn mode(self) -> WorkflowMode {
