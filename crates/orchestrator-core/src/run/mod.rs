@@ -2125,17 +2125,25 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // agent may already have pushed it — but "loudly failed with the
         // evidence retained" is a different operational state from "reported
         // done", and the live #410 run produced the second one.
-        if let Some(reason) = self.read_only_side_effect(record) {
+        //
+        // One lookup serves both this check and the output policy below. The
+        // map borrows `self.settings`, and everything after it needs
+        // `&mut self`, so the two values are copied out first.
+        let resolved = workflows_by_name(&self.settings.workflows)
+            .get(record.workflow.as_str())
+            .map(|w| (w.profile, w.output));
+        if let Some(reason) = read_only_side_effect(
+            &record.workflow,
+            resolved.and_then(|(profile, _)| profile),
+            record.branch.as_deref(),
+        ) {
             return self.fail_publish(record, reason).await;
         }
         // A finished task whose workflow vanished from config still holds the
         // agent's commits; treat it as a recoverable publish failure rather
         // than silently completing and deleting the worktree (never confuse a
         // missing workflow with an explicit `output = none`).
-        let Some(policy) = workflows_by_name(&self.settings.workflows)
-            .get(record.workflow.as_str())
-            .map(|w| w.output)
-        else {
+        let Some((_, policy)) = resolved else {
             return self
                 .fail_publish(
                     record,
@@ -2179,29 +2187,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// the publish artifact). The source status is intentionally left unchanged: a
     /// recoverable publish failure must not flap the source task to
     /// `on_failure` and back on the next successful retry.
-    /// Why this task must not be published as a success, if a read-only
-    /// profile modified the repository (#409/#410).
-    ///
-    /// Gated on the **profile**, never on `record.mode`. A workflow written as
-    /// plain `mode = "plan"` gets no deny rules and never promised anything
-    /// about branches, so failing it here would make an existing config start
-    /// losing tasks on upgrade — the same reasoning that keeps deny injection
-    /// profile-only (ADR-0033 D4).
-    ///
-    /// The branch is the signal because it is the one the orchestrator can
-    /// see: the worktree is handed over detached, so a named `HEAD` means the
-    /// agent ran git. A commit left on the detached head is missed, but that
-    /// shape cannot be pushed without first naming a ref.
-    fn read_only_side_effect(&self, record: &TaskRecord) -> Option<String> {
-        read_only_side_effect(
-            &record.workflow,
-            workflows_by_name(&self.settings.workflows)
-                .get(record.workflow.as_str())
-                .and_then(|w| w.profile),
-            record.branch.as_deref(),
-        )
-    }
-
     async fn fail_publish(
         &mut self,
         record: &TaskRecord,
@@ -2899,8 +2884,9 @@ fn plan_mode_side_effect(mode: &str, branch: &str) -> Option<String> {
     })
 }
 
-/// The reason a read-only profile's task must not be published as a success,
-/// if it modified the repository. Free-standing so the rule is unit-testable
+/// The reason a read-only profile's task must not be published as a success:
+/// its worktree ended up on a named branch, which the orchestrator never
+/// handed it. Free-standing so the rule is unit-testable
 /// without an engine (`Engine::read_only_side_effect` is the lookup around it).
 fn read_only_side_effect(
     workflow: &str,
@@ -2914,10 +2900,11 @@ fn read_only_side_effect(
     }
     Some(format!(
         concat!(
-            "workflow `{}` is `profile = \"{}\"`, which does not write to the repository, but ",
-            "its worktree is on the branch `{}` — it was handed over detached, so the agent ran ",
-            "git. The worktree and its commits are kept for inspection. Check whether it also ",
-            "pushed or opened a pull request: neither can be undone from here."
+            "workflow `{}` is `profile = \"{}\"`, a read-only profile, but its worktree ended ",
+            "up on the branch `{}` — it was handed over detached, so the agent ran git. Nothing ",
+            "here prevented that; this check only refuses to publish it as a success. The ",
+            "worktree and its commits are kept for inspection. Check whether it also pushed or ",
+            "opened a pull request: neither can be undone from here."
         ),
         workflow,
         profile.as_str(),
