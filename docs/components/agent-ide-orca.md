@@ -4,7 +4,7 @@ title: agent-ide-orca プラグイン
 description: orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。pane_control は非宣言（capability を正直に宣言）。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [rust, crate, plugin, agent-ide, orca, cli, worktree]
-generated: { by: human:tomoya-k31, at: 2026-07-30T12:00:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-08-09T20:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

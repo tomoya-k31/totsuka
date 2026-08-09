@@ -1308,10 +1308,32 @@ async fn dispatch_with_codex_tool_builds_codex_argv() {
         ]),
         "codex implement argv: sandbox flags, no --settings"
     );
+    // The hook env still rides the codex launch verbatim (codex hooks are
+    // registered globally and reached through `TOTSUKA_*`). Asserted as the
+    // whole map, not one key: before #411 this compared `tool_launch.env`
+    // against `hook.env` on the same dispatch, and dropping to a single key
+    // when `hook` went away would have quietly stopped checking that nothing
+    // extra leaks in. This runtime sets no token and no spool dir, so the
+    // endpoint and the job id are the entire expected env.
+    let env = tool["env"].as_object().expect("tool_launch env");
+    let mut keys: Vec<&str> = env.keys().map(String::as_str).collect();
+    keys.sort_unstable();
     assert_eq!(
-        tool["env"]["TOTSUKA_JOB_ID"], params["job_id"],
-        "TOTSUKA_* env still rides the codex launch (global hooks are env-gated)"
+        keys,
+        // This runtime sets no token and no spool dir; codex supports
+        // invisible injection, so the prompt context rides the env too.
+        [
+            "TOTSUKA_HOOK_ENDPOINT",
+            "TOTSUKA_JOB_ID",
+            "TOTSUKA_PROMPT_CONTEXT"
+        ],
+        "the codex launch env is exactly the hook env — no more, no less"
     );
+    assert_eq!(
+        env["TOTSUKA_HOOK_ENDPOINT"],
+        json!(base.join("agent-events.sock").display().to_string())
+    );
+    assert_eq!(env["TOTSUKA_JOB_ID"], params["job_id"]);
     let _ = std::fs::remove_dir_all(&base);
 }
 
