@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use plugin_protocol::methods::ToolLaunchSpec;
 use serde::Deserialize;
 
-use crate::config::ToolConfig;
+use crate::config::{Profile, ToolConfig};
 
 /// The adapter family a `[tools.<name>]` entry belongs to. Determines argv
 /// assembly, capabilities, and (Phase 2/3) the completion-detection assets.
@@ -116,6 +116,13 @@ pub struct ToolProfile {
 pub struct LaunchInputs<'a> {
     /// Plan (design) mode instead of implement.
     pub plan: bool,
+    /// The workflow's resolved [`Profile`], when it has one.
+    ///
+    /// Read only to answer "are this dispatch's write paths already closed by
+    /// the rendered deny rules?" — see the Claude arm of
+    /// [`launch_spec`](ToolProfile::launch_spec), which drops
+    /// `--permission-mode plan` in that case (#410).
+    pub profile: Option<Profile>,
     /// The workflow's rendered hook-settings path (Claude only; `--settings`).
     pub settings_path: Option<&'a str>,
     /// A prior session's native id to resume (#140), if any.
@@ -221,11 +228,15 @@ impl ToolProfile {
     /// when the kind has no adapter yet (callers refuse such dispatches
     /// upfront via [`ToolKind::has_adapter`]).
     ///
-    /// Claude argv (mirrors the herdr `launch_command` this replaces —
-    /// #196 Phase 1 is behavior-invariant): base command, plan args in plan
-    /// mode (default `--permission-mode plan`), `--settings <path>` whenever a
-    /// hook settings path is supplied (H-03: `--resume` never inherits hooks,
-    /// so the settings ride every launch), and `--resume <id>` when resuming.
+    /// Claude argv: base command, plan args in plan mode (default
+    /// `--permission-mode plan`), `--settings <path>` whenever a hook settings
+    /// path is supplied (H-03: `--resume` never inherits hooks, so the settings
+    /// ride every launch), and `--resume <id>` when resuming.
+    ///
+    /// **The plan args are conditional since #410.** They are skipped when the
+    /// dispatch both carries a settings file and names a [`Profile`] whose deny
+    /// rules remove every write tool — `answer` today. See the Claude arm for
+    /// why both halves are required. An explicit `plan_args` is never skipped.
     ///
     /// Codex argv (#196 Phase 2): base command, then the `resume <id>`
     /// subcommand when resuming (codex resumes via a subcommand, not a flag),
@@ -248,12 +259,41 @@ impl ToolProfile {
         let mut args: Vec<String> = parts.collect();
         match self.kind {
             ToolKind::Claude => {
-                if inp.plan {
+                // `--permission-mode plan` is skipped when the profile's deny
+                // rules already remove every write tool (#410). Claude's plan
+                // mode did not stop a `Bash` file write in a live session, so
+                // against a shell-less agent what it still contributes is
+                // `ExitPlanMode`, a human approval gate that an unattended pane
+                // resolves unpredictably: it hangs when Claude Code wrote its
+                // plan file and auto-passes when it could not, and `Write`
+                // (which authors that file) is one of the tools we removed. An
+                // explicit `plan_args` override is still honoured — an operator
+                // who wrote one meant it.
+                //
+                // **`settings_path` is part of the condition, not decoration.**
+                // The deny rules reach Claude only through `--settings`, and
+                // `run::dispatch_one` resolves that path only for hook-capable
+                // agents (`resume_session` / `diagnostics_snapshot`). An
+                // agent_ide that declares neither — orca, mock, any plugin
+                // shaped like them — gets no settings file, so asking the
+                // profile alone would drop the plan flag from a dispatch that
+                // never received a deny list: strictly looser than before this
+                // change. Both halves must be true for the trade to hold.
+                //
+                // Only claude is treated this way. Codex's plan flag is
+                // `--sandbox read-only`, a real sandbox, and opencode's is an
+                // all-deny agent (ADR-0023); dropping those would be a loss.
+                let plan_mode_is_redundant = self.plan_args.is_none()
+                    && inp.settings_path.is_some()
+                    && crate::hooks::permissions::denies_every_write_tool(inp.profile);
+                if inp.plan && !plan_mode_is_redundant {
                     match &self.plan_args {
                         Some(extra) => args.extend(extra.iter().cloned()),
                         None => args.extend(["--permission-mode".to_string(), "plan".to_string()]),
                     }
-                } else if let Some(extra) = &self.mode_args {
+                } else if !inp.plan
+                    && let Some(extra) = &self.mode_args
+                {
                     args.extend(extra.iter().cloned());
                 }
                 if let Some(settings) = inp.settings_path {
@@ -363,6 +403,9 @@ mod tests {
     ) -> LaunchInputs<'a> {
         LaunchInputs {
             plan,
+            // No profile: the legacy `mode = "plan"` shape, which gets no deny
+            // injection and therefore keeps `--permission-mode plan`.
+            profile: None,
             settings_path,
             resume_session_id,
             env: BTreeMap::new(),
@@ -467,6 +510,132 @@ mod tests {
         );
     }
 
+    /// #410: a profile whose deny rules remove every write tool drops
+    /// `--permission-mode plan`. Plan mode did not stop a `Bash` file write in
+    /// a live session, so against a shell-less agent what it still contributes
+    /// is an approval gate that an unattended pane resolves unpredictably.
+    #[test]
+    fn claude_drops_plan_mode_when_the_profile_already_removes_every_write_tool() {
+        let with = |profile| LaunchInputs {
+            plan: true,
+            profile,
+            // A settings file is passed: this is the hook-capable shape, the
+            // only one where the deny rules actually reach Claude.
+            settings_path: Some("/hooks/orchestrator-wf.json"),
+            resume_session_id: None,
+            env: BTreeMap::new(),
+        };
+        let args = |profile| argv(&claude(), &with(profile)).1;
+
+        let settings = [
+            "--settings".to_string(),
+            "/hooks/orchestrator-wf.json".to_string(),
+        ];
+
+        assert_eq!(
+            args(Some(Profile::Answer)),
+            settings.to_vec(),
+            "answer denies `Bash` and the edit tools, so plan mode adds only the gate"
+        );
+        // Still leave `Bash`, so plan mode is the only restriction they have.
+        for profile in [Profile::Triage, Profile::Design] {
+            assert_eq!(
+                args(Some(profile)),
+                [
+                    vec!["--permission-mode".to_string(), "plan".to_string()],
+                    settings.to_vec()
+                ]
+                .concat(),
+                "{profile:?} keeps plan mode until its shell is fenced (#409)"
+            );
+        }
+        // A workflow with no profile gets no deny injection at all; dropping
+        // plan mode there would leave it unrestricted.
+        assert_eq!(
+            args(None),
+            [
+                vec!["--permission-mode".to_string(), "plan".to_string()],
+                settings.to_vec()
+            ]
+            .concat()
+        );
+    }
+
+    /// The deny rules only reach Claude through `--settings`, and
+    /// `run::dispatch_one` resolves that path only for hook-capable agents. An
+    /// `answer` dispatch to an agent_ide that declares neither `resume_session`
+    /// nor `diagnostics_snapshot` (orca, mock) therefore carries **no deny
+    /// list**, and dropping the plan flag as well would leave it with nothing
+    /// at all — looser than before #410 touched this.
+    #[test]
+    fn the_plan_flag_survives_when_no_settings_file_carries_the_deny_rules() {
+        let args = argv(
+            &claude(),
+            &LaunchInputs {
+                plan: true,
+                profile: Some(Profile::Answer),
+                settings_path: None,
+                resume_session_id: None,
+                env: BTreeMap::new(),
+            },
+        )
+        .1;
+        assert_eq!(
+            args,
+            vec!["--permission-mode".to_string(), "plan".to_string()],
+            "without a settings file there is no deny list, so plan mode is all there is"
+        );
+    }
+
+    /// The drop is **claude-only**. Codex's plan flag is a real OS sandbox and
+    /// opencode's is an all-deny agent (ADR-0023) — those enforce something,
+    /// so removing them would be a straight loss.
+    #[test]
+    fn the_other_tools_keep_their_plan_flags_under_the_same_profile() {
+        let inp = LaunchInputs {
+            plan: true,
+            profile: Some(Profile::Answer),
+            settings_path: Some("/hooks/orchestrator-wf.json"),
+            resume_session_id: None,
+            env: BTreeMap::new(),
+        };
+        assert_eq!(
+            argv(&ToolProfile::builtin("codex").unwrap(), &inp).1,
+            vec!["--sandbox".to_string(), "read-only".to_string()]
+        );
+        assert_eq!(
+            argv(&ToolProfile::builtin("opencode").unwrap(), &inp).1,
+            vec!["--agent".to_string(), "totsuka-plan".to_string()]
+        );
+    }
+
+    /// An operator who wrote `plan_args` meant it, so the drop does not apply.
+    #[test]
+    fn an_explicit_plan_args_override_survives_the_drop() {
+        let mut tool = claude();
+        tool.plan_args = Some(vec!["--permission-mode".into(), "plan".into()]);
+        let args = argv(
+            &tool,
+            &LaunchInputs {
+                plan: true,
+                profile: Some(Profile::Answer),
+                settings_path: Some("/hooks/orchestrator-wf.json"),
+                resume_session_id: None,
+                env: BTreeMap::new(),
+            },
+        )
+        .1;
+        assert_eq!(
+            args,
+            vec![
+                "--permission-mode".to_string(),
+                "plan".to_string(),
+                "--settings".to_string(),
+                "/hooks/orchestrator-wf.json".to_string()
+            ]
+        );
+    }
+
     #[test]
     fn launch_spec_carries_env_verbatim() {
         let mut env = BTreeMap::new();
@@ -474,6 +643,7 @@ mod tests {
         let spec = claude()
             .launch_spec(&LaunchInputs {
                 plan: false,
+                profile: None,
                 settings_path: None,
                 resume_session_id: None,
                 env: env.clone(),
