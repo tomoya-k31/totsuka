@@ -2132,10 +2132,27 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let resolved = workflows_by_name(&self.settings.workflows)
             .get(record.workflow.as_str())
             .map(|w| (w.profile, w.output));
+        //
+        // The branch is read from the worktree's **live `HEAD`**, not from
+        // `record.branch`. The recorded column is write-once — `sync_branch`
+        // deliberately leaves a detached head unrecorded rather than clearing
+        // it, and `retry_task` does not touch it — so gating on it would make
+        // this failure unrecoverable: every `totsuka task retry` would reach
+        // here, read the same stale value, and fail again forever. Reading
+        // `HEAD` makes the check describe the worktree as it is now, so
+        // detaching it is a remedy the operator can actually apply (and one
+        // the failure message names).
+        let live_branch = record
+            .worktree_path
+            .as_deref()
+            .filter(|p| Path::new(p).is_dir())
+            .and_then(|p| self.worktrees.head_branch(Path::new(p)));
         if let Some(reason) = read_only_side_effect(
             &record.workflow,
             resolved.and_then(|(profile, _)| profile),
-            record.branch.as_deref(),
+            live_branch.as_deref(),
+            record.id,
+            record.worktree_path.as_deref().unwrap_or("<worktree>"),
         ) {
             return self.fail_publish(record, reason).await;
         }
@@ -2892,23 +2909,27 @@ fn read_only_side_effect(
     workflow: &str,
     profile: Option<Profile>,
     branch: Option<&str>,
+    task_id: i64,
+    worktree_path: &str,
 ) -> Option<String> {
     let branch = branch?;
-    let profile = profile?;
-    if profile == Profile::Implement {
-        return None;
-    }
+    let profile = profile.filter(|p| p.is_read_only())?;
     Some(format!(
         concat!(
             "workflow `{}` is `profile = \"{}\"`, a read-only profile, but its worktree ended ",
             "up on the branch `{}` — it was handed over detached, so the agent ran git. Nothing ",
             "here prevented that; this check only refuses to publish it as a success. The ",
             "worktree and its commits are kept for inspection. Check whether it also pushed or ",
-            "opened a pull request: neither can be undone from here."
+            "opened a pull request: neither can be undone from here. `totsuka task retry {}` ",
+            "hits this same check again while the worktree is still on the branch — detach it ",
+            "first (`git -C {} switch --detach`) or `totsuka task cancel {}`."
         ),
         workflow,
         profile.as_str(),
-        branch
+        branch,
+        task_id,
+        worktree_path,
+        task_id
     ))
 }
 
@@ -2931,20 +2952,27 @@ mod tests {
     /// failing it would make an existing config start losing tasks on upgrade.
     #[test]
     fn a_read_only_profile_on_a_branch_is_a_publish_failure() {
+        let check = |profile, branch| read_only_side_effect("wf", profile, branch, 42, "/wt/t42");
+
         for profile in [Profile::Answer, Profile::Triage, Profile::Design] {
-            let reason = read_only_side_effect("wf", Some(profile), Some("feat/x"))
+            let reason = check(Some(profile), Some("feat/x"))
                 .unwrap_or_else(|| panic!("{profile:?} on a branch must not publish"));
             assert!(reason.contains("feat/x"), "{reason}");
             assert!(reason.contains(profile.as_str()), "{reason}");
-            // The operator has to be told the part that cannot be undone.
+            // The operator has to be told the part that cannot be undone…
             assert!(reason.contains("pushed"), "{reason}");
+            // …and how to get out, because a plain retry hits this again.
+            assert!(reason.contains("switch --detach"), "{reason}");
+            assert!(reason.contains("/wt/t42"), "{reason}");
+            assert!(reason.contains("cancel 42"), "{reason}");
         }
-        // Detached: nothing to report.
-        assert!(read_only_side_effect("wf", Some(Profile::Design), None).is_none());
+        // Detached: nothing to report. This is the state an operator reaches
+        // by following the remedy, so it must clear the gate.
+        assert!(check(Some(Profile::Design), None).is_none());
         // `implement` is what branches are for.
-        assert!(read_only_side_effect("wf", Some(Profile::Implement), Some("feat/x")).is_none());
+        assert!(check(Some(Profile::Implement), Some("feat/x")).is_none());
         // No profile: the legacy `mode = "plan"` shape keeps its warning only.
-        assert!(read_only_side_effect("wf", None, Some("feat/x")).is_none());
+        assert!(check(None, Some("feat/x")).is_none());
     }
 
     /// XDG bases resolved from a fake environment, mirroring what the CLI

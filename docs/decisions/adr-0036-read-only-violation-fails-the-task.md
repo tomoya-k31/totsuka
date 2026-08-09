@@ -4,7 +4,7 @@ title: ADR-0036 triage / design はシェルを検査せず、リポジトリを
 description: "gh issue comment に複数行 Markdown を渡すにはシェル構文が要るため triage / design から Bash を取り上げられない。コマンド文字列を検査するフックは、引用符の内外を見分けるパーサが要るうえ取りこぼしに強い名前が付くので不採用。代わりに全 read-only profile から plan ゲートを外して無人ハングを消し、read-only profile のタスクがブランチ上にあったら成功として公開せず fail_publish で失敗させる。防止ではなく検出で、本当の境界はサンドボックス調査（#418）に送る。"
 resource: https://github.com/tomoya-k31/totsuka/issues/409
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-10T00:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-10T08:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -79,6 +79,8 @@ gh issue comment 31 --body x && git push                    # 危険
 
 ブランチを信号に使うのは、それがオーケストレータ側から見える唯一のものだから。worktree は detached で渡すので、名前付き `HEAD` は「エージェントが git を実行した」を意味する。detached head 上のコミットは取りこぼすが、その形は ref に名前を付けずに push できない。
 
+**読むのは worktree の生きた `HEAD` で、`record.branch` ではない。** 記録列は書き込み専用に近い — `sync_branch` は detached を「クリアせず未記録のまま残す」設計で、`retry_task` も触らない。そこを門にすると**この失敗から復帰できなくなる**: `totsuka task retry` のたびにここへ来て同じ古い値を読み、永久に落ち続ける。`HEAD` を読めば検査は worktree の現状を述べるものになり、**detach という操作が実際に効く救済手段になる**（失敗メッセージにその手順を書いてある）。
+
 # 不採用案
 
 ## `PreToolUse` フックでコマンドを検査する（D1 の詳細）
@@ -106,6 +108,7 @@ gh issue comment 31 --body x && git push                    # 危険
 - **`triage` / `design` に境界は無い。** `Bash(...)` パターンは #410 が不十分だと示したままで、シェル経由の書き込みも `&&` による回避も可能である。**防げるとは書かない**
 - **push / PR は取り返せない。** 検出は事後で、外部に出たものは戻らない
 - **検出はブランチだけを見る。** detached head 上のコミットは通る（push には ref 名が要るので、実害の主経路は押さえている）
+- **救済は `task retry` 単体ではない。** worktree がブランチ上にある限り検査は再び落とすので、operator は先に detach するか cancel する必要がある。メッセージにその 2 択を書いた
 - plan フラグを外したことによる未実測の縁は [ADR-0035](/decisions/adr-0035-answer-profile-shell-removal.md) と同じ — pane は既定モードで起動し、`WebFetch` / `mcp__*` に対する plan の網は代替されていない
 
 ## 送った先
@@ -114,5 +117,5 @@ gh issue comment 31 --body x && git push                    # 危険
 
 # 検証
 
-- `cargo test --workspace --all-features` — 全 read-only profile が plan フラグを落とすこと（`implement` と profile 無しは落とさないこと）、`read_only_side_effect` が profile で門を作りブランチ・profile 名・「push は取り返せない」旨をメッセージに含むこと、detached / `implement` / profile 無しでは発火しないこと
+- `cargo test --workspace --all-features` — 全 read-only profile が plan フラグを落とすこと（`implement` と profile 無しは落とさないこと）、`read_only_side_effect` が profile で門を作りブランチ・profile 名・「push は取り返せない」旨・**救済手順（detach / cancel）**をメッセージに含むこと、**detached では発火しないこと**（救済が実際に効くことの固定）、`implement` / profile 無しでも発火しないこと
 - **実機検収は未了。** `design` タスクが人間の承認を待たずに完走すること、および read-only profile がブランチを切った場合にタスクが失敗して worktree が残ることを実機で確認するまで `verified` は付けない

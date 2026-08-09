@@ -231,10 +231,7 @@ const DENY_GH_API: &[&str] = &["Bash(gh api *)"];
 /// all, so dropping the flag would leave it with nothing. `implement` is
 /// excluded because it is not read-only in the first place.
 pub fn plan_mode_only_adds_the_gate(profile: Option<Profile>) -> bool {
-    matches!(
-        profile,
-        Some(Profile::Answer | Profile::Triage | Profile::Design)
-    )
+    profile.is_some_and(Profile::is_read_only)
 }
 
 /// The deny rules for `profile`, or `None` when the profile is meant to write
