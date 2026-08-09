@@ -4,7 +4,7 @@ title: ADR-0033 ワークフローの原型は [[workflows]].profile の 4 値�
 description: "2 値の WorkflowMode では「worktree は read-only だが外部へは書く」を表現できないため、answer / triage / design / implement の 4 原型を Rust 固定で定義し、mode・output・verification をまとめて解決する決定。profile と mode / verification の併用は CONFIG_INVALID、output だけは上書き可。resolved アクセサで解決を Workflow::from_config に一元化し、state.db と plugin-protocol は変更しない。"
 resource: https://github.com/tomoya-k31/totsuka/issues/394
 tags: [decision, config, workflow, profile, permissions, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-09T18:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-09T22:15:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -133,9 +133,11 @@ profile が最終的に決めるものには `permissions.deny` セットが含�
 
 | profile | 拒否するもの |
 |---|---|
-| `answer` | ファイル編集 + git 書き込み + PR + **GitHub への書き込み一式**（`gh issue …` / `gh repo` / `gh api`） |
+| `answer` | ファイル編集 + **`Bash` そのもの**（[ADR-0035](/decisions/adr-0035-answer-profile-shell-removal.md) で `Bash(...)` パターン列挙から置き換えた。あわせて claude の `--permission-mode plan` も渡さなくなった） |
 | `triage` / `design` | ファイル編集 + git 書き込み + PR + `gh repo delete` / `rename` + `gh api`。**`gh issue …` は開けたまま** — そこに成果物を書くのがこの profile の仕事だから |
 | `implement` | 何も拒否しない（`permissions` キー自体を書かない） |
+
+**下の表と節は初版（#395 時点）の記述である。** `answer` については [ADR-0035](/decisions/adr-0035-answer-profile-shell-removal.md) が置き換えた。`triage` / `design` については今も現状のままで、[#409](https://github.com/tomoya-k31/totsuka/issues/409) 待ちである。
 
 **`gh api` は read-only profile すべてで塞ぐ。** REST も GraphQL も叩けるので、開けたまま `gh repo delete` や `gh pr create` を denyしても意味がない — `gh api -X DELETE repos/{owner}/{repo}` と `gh api -X POST .../pulls` で同じ場所に届く。**実際より強く読めるリストは、短いリストより悪い。** 代償は本物で、パターンは `GET` と `POST` を区別できないので読み取り用の API 呼び出しも一緒に塞がる（`gh issue view` / `gh pr view` / `gh search` で足りる範囲に収まる想定）。**GraphQL が要る workflow が出てきたら** — Projects v2 のフィールドや draft issue には `gh` サブコマンドが無い — それはこのルールを意識的に見直す合図であって、黙って穴を開けたままにする理由ではない。
 
@@ -143,7 +145,7 @@ profile が最終的に決めるものには `permissions.deny` セットが含�
 
 | 層 | 機構 | 実際に止まるもの |
 |---|---|---|
-| 1 | `--permission-mode plan` | フラグ。モデルは説得されうる |
+| 1 | `--permission-mode plan` | **何も止めない**。`permissionMode` が `plan` のまま `cat >` が成功した実測がある（#410）。残るのは `ExitPlanMode` の承認ゲートだけで、無人 pane では非決定的に振る舞う |
 | 2 | 裸のツール名（`Edit` / `Write` / `NotebookEdit`） | **その名前のツール**。ファイル書き込みではない（下記） |
 | 3 | `Bash(...)` パターン | その文字列で**始まる**コマンドだけ |
 | 4 | ブランチ検出警告（#385） | 何も止めない。事後に警告するだけ |

@@ -1277,6 +1277,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             return Ok(()); // warned in dispatch_ready
         };
         let agent_name = wf.agent.clone();
+        // Copied out because `wf` borrows `self.settings` and the launch spec
+        // is built inside a closure further down. `Option<Profile>` is `Copy`.
+        let wf_profile = wf.profile;
 
         let Some(repo) = self
             .settings
@@ -1626,6 +1629,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             job_id: job_id.clone(),
             tool_launch: tool_profile.launch_spec(&LaunchInputs {
                 plan: mode == plugin_protocol::methods::ExecutionMode::Plan,
+                profile: wf_profile,
                 settings_path: hook_spec.as_ref().map(|(path, _)| path.as_str()),
                 resume_session_id: resume.as_deref(),
                 env: hook_spec

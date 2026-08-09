@@ -38,28 +38,29 @@
 //! **[#410](https://github.com/tomoya-k31/totsuka/issues/410): a live `answer`
 //! task branched, committed, pushed and opened a pull request with every rule
 //! below correctly generated and applied.** The rules fired — `Write` was gone,
-//! `git switch -c` was denied — and the agent went around all of them. Read the
-//! table as "what each layer stops", never as a boundary.
+//! `git switch -c` was denied — and the agent went around all of them, through
+//! `Bash`.
 //!
-//! | layer | mechanism | what it actually stops |
+//! Only one mechanism here survived that: **taking the tool away**. Patterns
+//! did not. So the profiles now differ in *kind*, not in list length:
+//!
+//! | | `answer` | `triage` / `design` |
 //! |---|---|---|
-//! | 1 | `--permission-mode plan` | a flag; the model can be talked around it |
-//! | 2 | bare tool names (`Edit` / `Write` / `NotebookEdit`) | those **tools**. Not file writes — see below |
-//! | 3 | `Bash(...)` patterns | commands whose string *starts* with the pattern |
-//! | 4 | the branch-detection warning (#385) | nothing; it warns after the fact |
+//! | edit tools | removed | removed |
+//! | `Bash` | **removed** | present, filtered by `Bash(...)` patterns |
+//! | `--permission-mode plan` | not passed (see [`denies_every_write_tool`]) | passed |
+//! | what bypassed #410 | unavailable — there is no shell | **still open** |
 //!
-//! Two holes, both observed in #410, neither closed:
+//! `answer` can no longer run a command at all, which is what closes both of
+//! the routes #410 used:
 //!
-//! 1. **Removing the edit tools does not make the worktree read-only, because
-//!    `Bash` is still there.** The same file the vanished `Write` would have
-//!    touched goes down with `cat > file`, `python3 - <<EOF`, or `tee`. There is
-//!    no `Bash` rule here corresponding to `DENY_FILE_EDITS`, and enumerating
-//!    one is not obviously possible — the set of ways to write a file from a
-//!    shell is not closed.
-//! 2. **Compound and piped commands got through.** In #410, with their rules
-//!    present, `git add -A && git commit`, `git push … | tail -5` and
-//!    `gh pr create --fill | tail -5` all ran. `/usr/bin/git push` and
-//!    `sh -c "git push"` are presumed to be the same class.
+//! 1. **Writing a file through the shell.** `cat > file`, `python3 - <<EOF`,
+//!    `tee` — the set of ways to do this is not closed, so it was never going
+//!    to be enumerable as `Bash(...)` rules. Removing `Bash` is the only move
+//!    that covers it.
+//! 2. **Compound and piped commands.** In #410, with their rules present,
+//!    `git add -A && git commit`, `git push … | tail -5` and
+//!    `gh pr create --fill | tail -5` all ran.
 //!
 //!    *That* much is observed. **The mechanism is not.** The obvious
 //!    explanation is that the rule is matched against the command string as a
@@ -70,10 +71,17 @@
 //!    someone does: asserting a mechanism from an outcome is the same mistake
 //!    this module is retracting.
 //!
-//! A hard guarantee needs a sandbox. Until there is one, **do not write
-//! anywhere that these rules make a profile read-only** — that sentence was in
-//! the security policy and the ADR before #410 disproved it, and a documented
-//! promise nobody can keep is worse than no promise at all.
+//! **`triage` and `design` still have both routes open.** They write their
+//! artifact with `gh issue comment`, so the shell cannot simply go; fencing it
+//! needs a `PreToolUse` hook that inspects the whole command (#409). Until that
+//! lands, their `Bash(...)` rules are what #410 proved insufficient.
+//!
+//! **This is still not a read-only guarantee, for any profile.** Removing
+//! `Bash` closes the routes that were *measured*; it says nothing about MCP
+//! tools, subagents, or a tool added later. A hard guarantee needs a sandbox.
+//! **Do not write anywhere that these rules make a profile read-only** — that
+//! sentence was in the security policy and the ADR before #410 disproved it,
+//! and a documented promise nobody can keep is worse than no promise at all.
 //!
 //! Two format traps, both load-bearing:
 //!
@@ -91,13 +99,34 @@ use crate::config::Profile;
 /// Bare names rather than path-scoped rules — a path-scoped `Write(path)` is
 /// accepted and then never consulted.
 ///
-/// **This does not stop the agent writing files.** `Bash` remains, and #410
-/// observed `cat >`, `cat >>` and `python3 - <<EOF` writing the worktree in a
-/// session where `Write` was correctly removed. What this buys is that the
-/// direct route is closed; the indirect one is wide open.
+/// **On its own this does not stop the agent writing files.** #410 observed
+/// `cat >`, `cat >>` and `python3 - <<EOF` writing the worktree in a session
+/// where `Write` was correctly removed. It closes the direct route only; the
+/// profile has to close `Bash` too ([`DENY_SHELL`]) for that to mean anything.
 const DENY_FILE_EDITS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 
-/// History-rewriting and publishing git commands. Best-effort (layer 3).
+/// The shell, removed as a tool rather than filtered by command pattern.
+///
+/// This is the one rule here that is a boundary rather than a speed bump, and
+/// it is a boundary for the same reason [`DENY_FILE_EDITS`] is: **the tool is
+/// gone**, so there is no string to get around. #410 got past every
+/// `Bash(...)` pattern with `&&`, a pipe, and a heredoc, in one session; none
+/// of that is available when `Bash` itself is not offered.
+///
+/// The cost is that the agent cannot run *anything* — no `git log`, no `gh
+/// issue view`, no test suite. That is affordable for `answer`, whose job is
+/// to read and reply, because reading is [`Read`]/`Grep`/`Glob` and the reply
+/// goes back through the source plugin's approval gate. It is **not**
+/// affordable for `triage`/`design`, which write their artifact with
+/// `gh issue comment`; those need a `PreToolUse` hook that can inspect the
+/// whole command instead (#409).
+///
+/// [`Read`]: https://code.claude.com/docs/en/settings
+const DENY_SHELL: &[&str] = &["Bash"];
+
+/// History-rewriting and publishing git commands. Pattern-based, and
+/// therefore best-effort — see the module header. Reached only by the profiles
+/// that still have a shell (`triage` / `design`).
 ///
 /// `git switch -c` / `git checkout -b` rather than bare `git switch` /
 /// `git checkout`: reading another ref is legitimate work for a design task,
@@ -144,36 +173,56 @@ const DENY_REPO_ADMIN: &[&str] = &["Bash(gh repo delete *)", "Bash(gh repo renam
 /// the hatch open.
 const DENY_GH_API: &[&str] = &["Bash(gh api *)"];
 
-/// Writing to GitHub's issue surface.
+// There is no `DENY_GH_ARTIFACTS` fragment any more (#410). It listed
+// `gh issue create|comment|edit|close` and `gh repo *`, and existed to stop
+// `answer` writing to GitHub while letting `triage`/`design` do exactly that.
+// `answer` now denies `Bash` outright, which covers all of it and cannot be
+// worked around with `&&`; the profiles that *need* those commands were never
+// covered by it.
+
+/// Whether `profile`'s rules remove **every** tool the agent could write
+/// through — the edit tools *and* the shell.
 ///
-/// Denied for `answer` only. `triage` and `design` write their artifact this
-/// way, so denying it there would deny the profile's whole purpose.
-const DENY_GH_ARTIFACTS: &[&str] = &[
-    "Bash(gh issue create *)",
-    "Bash(gh issue comment *)",
-    "Bash(gh issue edit *)",
-    "Bash(gh issue close *)",
-    "Bash(gh repo *)",
-];
+/// This is what lets a Claude dispatch drop `--permission-mode plan` (#410).
+/// Plan mode contributes no enforcement of its own — a live session wrote a
+/// file with `cat >` while `permissionMode` was still `plan` — so all it adds
+/// is `ExitPlanMode`, an approval gate with nobody to answer it. Unattended
+/// that gate resolves two ways, and **which one is not totsuka's to decide**:
+/// it hangs when Claude Code managed to write its plan file, and auto-passes
+/// when it did not. Since `DENY_FILE_EDITS` removes the `Write` that authors
+/// that very file, the deciding factor was whether the agent happened to route
+/// around our own deny list with `Bash`.
+///
+/// Dropping the gate is only safe where the write paths are actually closed,
+/// which is why this asks about the rules rather than about the mode.
+pub fn denies_every_write_tool(profile: Option<Profile>) -> bool {
+    let Some(rules) = profile.and_then(deny_rules) else {
+        return false;
+    };
+    DENY_FILE_EDITS
+        .iter()
+        .chain(DENY_SHELL)
+        .all(|needed| rules.contains(needed))
+}
 
 /// The deny rules for `profile`, or `None` when the profile is meant to write
 /// (only `implement`).
 ///
 /// Assembled from the shared fragments above rather than written out per
-/// profile, so the two read-only sets cannot drift apart when one is edited —
-/// their difference is exactly the GitHub-artifact commands, which
-/// `answer_denies_a_superset_of_the_external_write_profiles` pins.
+/// profile, so the read-only sets cannot drift apart when one is edited.
 pub fn deny_rules(profile: Profile) -> Option<Vec<&'static str>> {
     let mut rules: Vec<&'static str> = Vec::new();
     match profile {
         // Answers go back through the source plugin's approval gate, so the
-        // agent needs no write of any kind.
+        // agent needs no write of any kind — not even a shell.
+        //
+        // The `Bash(...)` patterns the other profiles carry are deliberately
+        // **absent** here rather than kept "for documentation": `Bash` itself
+        // is denied, so every one of them is unreachable, and a rule list that
+        // reads stronger than it is was the whole failure of #410.
         Profile::Answer => {
             rules.extend(DENY_FILE_EDITS);
-            rules.extend(DENY_GIT_WRITES);
-            rules.extend(DENY_PR);
-            rules.extend(DENY_GH_API);
-            rules.extend(DENY_GH_ARTIFACTS);
+            rules.extend(DENY_SHELL);
         }
         // The edit tools are denied (which is not the same as a read-only
         // worktree — see the module header), but the agent files the issue /
@@ -196,40 +245,69 @@ pub fn deny_rules(profile: Profile) -> Option<Vec<&'static str>> {
 mod tests {
     use super::*;
 
-    /// The two read-only sets must differ by the GitHub-artifact commands and
-    /// nothing else. Written out per profile they drifted the moment one was
-    /// edited; this pins the relationship rather than the lists.
+    /// `answer` must be strictly the stricter of the two read-only shapes, and
+    /// the way it is stricter must be **tool removal**, not a longer pattern
+    /// list. #410 is what happens when a rule list reads stronger than it is.
     #[test]
-    fn answer_denies_a_superset_of_the_external_write_profiles() {
+    fn answer_is_stricter_than_the_external_write_profiles_by_removing_the_shell() {
         let answer = deny_rules(Profile::Answer).unwrap();
         let design = deny_rules(Profile::Design).unwrap();
 
+        assert!(
+            answer.contains(&"Bash"),
+            "answer must deny the shell itself"
+        );
+        assert!(
+            !design.contains(&"Bash"),
+            "design writes its artifact with `gh issue comment`, so it cannot \
+             deny the shell — it needs a PreToolUse hook instead (#409)"
+        );
+
+        // Everything `design` blocks by pattern, `answer` blocks by not having
+        // the tool at all. Asserted as an implication rather than a list, so a
+        // new `Bash(...)` fragment cannot silently escape it.
         for rule in &design {
-            // `gh repo delete`/`rename` are covered by `answer`'s broader
-            // `Bash(gh repo *)`, so they are the one legitimate absence.
-            if rule.starts_with("Bash(gh repo ") {
+            if rule.starts_with("Bash(") {
                 assert!(
-                    answer.contains(&"Bash(gh repo *)"),
-                    "answer must still cover `{rule}` through the broader rule"
+                    answer.contains(&"Bash"),
+                    "`{rule}` is unreachable for answer only because `Bash` is denied"
                 );
-                continue;
+            } else {
+                assert!(
+                    answer.contains(rule),
+                    "`{rule}` is denied for design but not for answer, which is strictly stricter"
+                );
             }
-            assert!(
-                answer.contains(rule),
-                "`{rule}` is denied for design but not for answer, which is strictly stricter"
-            );
         }
 
-        // And the difference is only about writing to GitHub.
+        // And answer carries no `Bash(...)` pattern of its own: with the tool
+        // gone they would all be dead text that reads like protection.
         for rule in &answer {
-            if !design.contains(rule) {
-                assert!(
-                    rule.starts_with("Bash(gh "),
-                    "answer denies `{rule}` for a reason unrelated to GitHub writes; \
-                     if that is intended, the fragment split above needs updating"
-                );
-            }
+            assert!(
+                !rule.starts_with("Bash("),
+                "answer denies `Bash` outright, so the pattern `{rule}` is unreachable — \
+                 delete it rather than leaving a rule that cannot fire"
+            );
         }
+    }
+
+    /// The predicate that lets a Claude dispatch drop `--permission-mode plan`
+    /// (#410). It must answer for the *rules*, not for the profile name: the
+    /// moment `triage`/`design` also deny the shell they become eligible, and
+    /// the moment `answer` stops denying it they must not be.
+    #[test]
+    fn only_a_profile_that_removes_every_write_tool_supersedes_plan_mode() {
+        assert!(denies_every_write_tool(Some(Profile::Answer)));
+
+        // These still leave `Bash`, so plan mode is all they have.
+        assert!(!denies_every_write_tool(Some(Profile::Triage)));
+        assert!(!denies_every_write_tool(Some(Profile::Design)));
+
+        // `implement` denies nothing, and a workflow with no profile gets no
+        // deny injection at all — dropping plan mode there would leave the
+        // dispatch with no restriction whatsoever.
+        assert!(!denies_every_write_tool(Some(Profile::Implement)));
+        assert!(!denies_every_write_tool(None));
     }
 
     #[test]
@@ -307,14 +385,17 @@ mod tests {
     /// The `implement` profile is the only one that may open a PR — that is
     /// what distinguishes it. If a read-only profile ever stopped denying this,
     /// the symptom would be a PR nobody asked for.
+    ///
+    /// Stated as "cannot reach `gh pr create`" rather than "contains the
+    /// pattern", because there are two ways to be unable to run it and #410
+    /// showed the pattern is the weaker one.
     #[test]
     fn only_implement_may_open_a_pull_request() {
         for profile in [Profile::Answer, Profile::Triage, Profile::Design] {
+            let rules = deny_rules(profile).unwrap();
             assert!(
-                deny_rules(profile)
-                    .unwrap()
-                    .contains(&"Bash(gh pr create *)"),
-                "{profile:?} must not be able to open a PR"
+                rules.contains(&"Bash") || rules.contains(&"Bash(gh pr create *)"),
+                "{profile:?} must not be able to open a PR — deny `Bash`, or the command"
             );
         }
     }
