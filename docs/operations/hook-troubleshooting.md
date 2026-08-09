@@ -4,7 +4,7 @@ title: フック完了判定のトラブルシューティング
 description: Claude Code フック方式の運用手引き。スプールバックログ（doctor hook-spool チェックでの検出・drain/確認・corrupt 隔離ファイル）、Escalated タスクの対応手順（pane スナップショット確認・herdr pane での解消・次 Stop での自然復帰・fail アウト）、human 検収での totsuka task verify --pass/--fail 操作を、doctor のフックプローブ参照つきで整理する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [operations, playbook, hook, claude-code, spool, escalation, verify, doctor, epic-131]
-generated: { by: human:tomoya-k31, at: 2026-07-23T13:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-08-09T08:59:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -108,7 +108,9 @@ parse 不能行を含むスプールファイルは**削除されず** `<name>.c
 
 `profile = "answer"` / `"triage"` / `"design"` の claude タスクで、エージェントが `Edit` / `Write` を使おうとして拒否される、あるいは `git switch -c` / `gh pr create` が通らない。
 
-**これは正常動作である。** これらの profile には Rust 固定の `permissions.deny` が入っており（#395、[ADR-0033](/decisions/adr-0033-workflow-profile.md) D4）、対象リポジトリの `.claude/settings.json` の allow より**必ず強い**（deny はスコープ横断でマージされる）。対象リポジトリの `CLAUDE.md` が「終わったら push して PR を作れ」と指示していても効かないのが狙いで、[#378](https://github.com/tomoya-k31/totsuka/issues/378) がまさにその形で plan タスクを実装まで走らせた事故だった。
+**これは正常動作である。** これらの profile には Rust 固定の `permissions.deny` が入っており（#395、[ADR-0033](/decisions/adr-0033-workflow-profile.md) D4）、対象リポジトリの `.claude/settings.json` の allow より強い（deny はスコープ横断でマージされる）。
+
+**ただし deny は read-only の保証ではない。** [#410](https://github.com/tomoya-k31/totsuka/issues/410) の実機検証で、ルールが全部発火した状態のまま `answer` タスクがブランチ・commit・push・PR まで到達した — `Bash` 経由のファイル書き込み（`cat >` 等）と、`&&` / パイプによる前方一致の回避が塞げていない。**「deny があるから read-only」と考えないこと。**
 
 | 症状 | 判断 |
 |---|---|
@@ -117,6 +119,7 @@ parse 不能行を含むスプールファイルは**削除されず** `<name>.c
 | `design` タスクが `gh issue comment` を拒否される | **異常**。design は issue コメントで成果物を書く profile なので、deny セットの不具合か profile の指定違い |
 | `design` タスクが `gh pr create` を拒否される | 正常。PR を出すのは `implement` |
 | **実装させたいのに拒否される** | profile の選択ミス。`profile = "implement"` にする。Slack 起点なら、本人のリアクションで別タスクとして起こす（#393 D6） |
+| **`answer` / `triage` / `design` タスクが commit / push / PR 作成まで到達した** | **既知の未修正の不具合**（[#410](https://github.com/tomoya-k31/totsuka/issues/410)）。deny の生成不良ではないので rendered settings を見ても異常は出ない。対象リポジトリの `CLAUDE.md` が push / PR を指示していると起きやすい。**deny では塞げていない**ので、無人で回す前に対象リポジトリ側を確認すること |
 
 確認するには rendered settings を見る:
 

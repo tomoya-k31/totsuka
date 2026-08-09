@@ -20,26 +20,60 @@
 //!   `.claude/settings.json`.
 //! - "Permission rules are enforced by Claude Code, not by the model.
 //!   Instructions in your prompt or CLAUDE.md … don't change what Claude Code
-//!   allows." That sentence is the whole point: [#378] was a plan-mode task
+//!   allows." Read that narrowly: a **denied rule stays denied** no matter what
+//!   the repository's `CLAUDE.md` says. It does **not** say the agent will stop
+//!   pursuing what `CLAUDE.md` asked for — it will reach for whatever is still
+//!   allowed, which is the whole of
+//!   [#410](https://github.com/tomoya-k31/totsuka/issues/410) below. This was
+//!   first written here as the answer to
+//!   [#378](https://github.com/tomoya-k31/totsuka/issues/378) (a plan-mode task
 //!   that branched, committed, pushed and opened a PR because the target
-//!   repository's `CLAUDE.md` told it to. Prose could not be answered with
-//!   prose.
+//!   repository's `CLAUDE.md` told it to). It is not that answer, and #378 is
+//!   not fixed.
 //! - deny applies in every permission mode, so it composes with
 //!   `--permission-mode plan` rather than replacing it.
 //!
-//! # What this does and does not guarantee
+//! # This is not a read-only guarantee. It was documented as one, and it is not.
 //!
-//! | layer | mechanism | strength |
+//! **[#410](https://github.com/tomoya-k31/totsuka/issues/410): a live `answer`
+//! task branched, committed, pushed and opened a pull request with every rule
+//! below correctly generated and applied.** The rules fired — `Write` was gone,
+//! `git switch -c` was denied — and the agent went around all of them. Read the
+//! table as "what each layer stops", never as a boundary.
+//!
+//! | layer | mechanism | what it actually stops |
 //! |---|---|---|
 //! | 1 | `--permission-mode plan` | a flag; the model can be talked around it |
-//! | 2 | bare tool names (`Edit` / `Write` / `NotebookEdit`) | **effectively guarantees no file edits** — the tool is removed, not filtered |
-//! | 3 | `Bash(...)` patterns | best effort only (see below) |
-//! | 4 | the branch-detection warning (#385) | detection after the fact |
+//! | 2 | bare tool names (`Edit` / `Write` / `NotebookEdit`) | those **tools**. Not file writes — see below |
+//! | 3 | `Bash(...)` patterns | commands whose string *starts* with the pattern |
+//! | 4 | the branch-detection warning (#385) | nothing; it warns after the fact |
 //!
-//! **`Bash(...)` is a literal prefix match on the command string.** `Bash(git
-//! push *)` does not stop `/usr/bin/git push`, `sh -c "git push"`, or a `git
-//! push` in the middle of a chain. Layer 3 reduces accidents; it is not a
-//! boundary. A hard guarantee needs a sandbox, which is out of scope here.
+//! Two holes, both observed in #410, neither closed:
+//!
+//! 1. **Removing the edit tools does not make the worktree read-only, because
+//!    `Bash` is still there.** The same file the vanished `Write` would have
+//!    touched goes down with `cat > file`, `python3 - <<EOF`, or `tee`. There is
+//!    no `Bash` rule here corresponding to `DENY_FILE_EDITS`, and enumerating
+//!    one is not obviously possible — the set of ways to write a file from a
+//!    shell is not closed.
+//! 2. **Compound and piped commands got through.** In #410, with their rules
+//!    present, `git add -A && git commit`, `git push … | tail -5` and
+//!    `gh pr create --fill | tail -5` all ran. `/usr/bin/git push` and
+//!    `sh -c "git push"` are presumed to be the same class.
+//!
+//!    *That* much is observed. **The mechanism is not.** The obvious
+//!    explanation is that the rule is matched against the command string as a
+//!    whole, so a string starting with `git add` is never tested against
+//!    `Bash(git commit *)` — but Claude Code might equally be splitting the
+//!    compound and evaluating each part, and failing for some other reason.
+//!    Nobody has measured which. Do not build a fix on the explanation until
+//!    someone does: asserting a mechanism from an outcome is the same mistake
+//!    this module is retracting.
+//!
+//! A hard guarantee needs a sandbox. Until there is one, **do not write
+//! anywhere that these rules make a profile read-only** — that sentence was in
+//! the security policy and the ADR before #410 disproved it, and a documented
+//! promise nobody can keep is worse than no promise at all.
 //!
 //! Two format traps, both load-bearing:
 //!
@@ -52,10 +86,15 @@
 
 use crate::config::Profile;
 
-/// The tools an agent is not given at all in a read-only profile.
+/// The edit tools an agent is not given at all in a read-only profile.
 ///
-/// Bare names rather than path-scoped rules: this removes the tool, which is
-/// the one layer here that actually holds.
+/// Bare names rather than path-scoped rules — a path-scoped `Write(path)` is
+/// accepted and then never consulted.
+///
+/// **This does not stop the agent writing files.** `Bash` remains, and #410
+/// observed `cat >`, `cat >>` and `python3 - <<EOF` writing the worktree in a
+/// session where `Write` was correctly removed. What this buys is that the
+/// direct route is closed; the indirect one is wide open.
 const DENY_FILE_EDITS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 
 /// History-rewriting and publishing git commands. Best-effort (layer 3).
@@ -136,10 +175,11 @@ pub fn deny_rules(profile: Profile) -> Option<Vec<&'static str>> {
             rules.extend(DENY_GH_API);
             rules.extend(DENY_GH_ARTIFACTS);
         }
-        // The worktree stays read-only, but the agent files the issue / writes
-        // the design comment itself (#393 D2), so `gh issue …` stays open —
-        // and only that. `gh api` goes with the rest: it would reach the same
-        // endpoints the rules above deny.
+        // The edit tools are denied (which is not the same as a read-only
+        // worktree — see the module header), but the agent files the issue /
+        // writes the design comment itself (#393 D2), so `gh issue …` stays
+        // open — and only that. `gh api` goes with the rest: it would reach
+        // the same endpoints the rules above deny.
         Profile::Triage | Profile::Design => {
             rules.extend(DENY_FILE_EDITS);
             rules.extend(DENY_GIT_WRITES);
