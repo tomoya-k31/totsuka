@@ -4,7 +4,7 @@ title: ADR-0033 ワークフローの原型は [[workflows]].profile の 4 値�
 description: "2 値の WorkflowMode では「worktree は read-only だが外部へは書く」を表現できないため、answer / triage / design / implement の 4 原型を Rust 固定で定義し、mode・output・verification をまとめて解決する決定。profile と mode / verification の併用は CONFIG_INVALID、output だけは上書き可。resolved アクセサで解決を Workflow::from_config に一元化し、state.db と plugin-protocol は変更しない。"
 resource: https://github.com/tomoya-k31/totsuka/issues/394
 tags: [decision, config, workflow, profile, permissions, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-09T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-09T18:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -32,7 +32,7 @@ stable。[#394](https://github.com/tomoya-k31/totsuka/issues/394) の実装と�
 | 成果物の書き手の分割と URL 実在検収 | [#398](https://github.com/tomoya-k31/totsuka/issues/398) | **済**（D2/D3 節を参照） |
 | profile が要求する外部ツールの認証検査 | [#399](https://github.com/tomoya-k31/totsuka/issues/399) | **済**（D9 節を参照。ただし検査範囲は当初設計より狭い） |
 
-#395 が入るまでの profile は「mode / output / verification の別名」でしかなかった。いまは claude タスクに限り**権限としての実効性がある**（下の D4 節）。実機検収は未了なので `verified` は付けていない。
+#395 が入るまでの profile は「mode / output / verification の別名」でしかなかった。いまは claude タスクに限り**一定の権限効果がある**（下の D4 節）。ただし**それは read-only の保証ではない** — 実機検収は [#410](https://github.com/tomoya-k31/totsuka/issues/410) で実施され、**否定的な結果になった**（D4 節の「実機で否定された部分」）。この ADR に `verified` は付けない。
 
 # Context
 
@@ -263,7 +263,7 @@ Notion MCP はもう 1 つ別の理由でも届かない: エージェント側�
 
 ## 良くなること
 
-- 権限に関わる組み合わせを人間が合わせなくてよくなる。#395 が入れば「answer なのに worktree を編集できた」が構造的に起きなくなる
+- 権限に関わる組み合わせを人間が合わせなくてよくなる。profile を選べば mode / output / verification と deny セットが一括で決まる（**deny が read-only を保証するという当初の記述は #410 で撤回した** — D4 節「実機で否定された部分」）
 - 「worktree は read-only だが外部へは書く」が初めて表現可能になり、#393 の WF 3 / 4 / 6 が書けるようになる
 - 新しい原型が要るときに足す場所が 1 つ（`Profile` の enum と解決テーブル）に決まる
 

@@ -7,7 +7,7 @@
 * **Update**: profile 記法の設定例を追加 [config.toml の設定例集](/development/config-examples.md)
 * **Update**: ワークフローの定義に profile による原型指定を追記 [Workflow（ワークフロー）](/glossary/workflow.md)
 * **Update**: `setup` の「Slack — reply as yourself」レシピが `mode = "implement"` から `profile = "answer"`（= plan）へ変わった。記法だけでなく挙動の変更で、これから同レシピを選ぶ構成は書き込み可能な worktree を得なくなる [ADR-0033 §5](/decisions/adr-0033-workflow-profile.md)
-* **Update**: plan 系 profile（answer / triage / design）の claude タスクに Rust 固定の `permissions.deny` を注入する決定を D4 節として追記（#395）。deny はスコープ横断でマージされるので対象リポジトリの `.claude/settings.json` の allow に勝ち、`CLAUDE.md` による誘導（#378）を構造的に止める。層ごとの保証の強さ（裸ツール名は実質保証 / `Bash(...)` はベストエフォート）も明記 [ADR-0033](/decisions/adr-0033-workflow-profile.md)
+* **Update**: plan 系 profile（answer / triage / design）の claude タスクに Rust 固定の `permissions.deny` を注入する決定を D4 節として追記（#395）。deny はスコープ横断でマージされるので対象リポジトリの `.claude/settings.json` の allow に勝つ。**当初ここには「`CLAUDE.md` による誘導（#378）を構造的に止める」「裸ツール名は実質保証」と書いていたが、どちらも同日の #410 で撤回した**（実機で deny 発火下のまま commit / push / PR まで到達した）[ADR-0033](/decisions/adr-0033-workflow-profile.md)
 * **Update**: `--settings` の deny をフックアセットの改ざん耐性の一項として追加。設定キー化しない理由と、`Write(path)` が受理されて参照されない罠を記録 [Claude Code フック機構のセキュリティポリシー](/security/hook-security.md)
 * **Update**: 「plan 系 profile で編集やコマンドが拒否される」は正常動作である旨と、症状ごとの正常/異常の判断表を追加 [フックのトラブルシューティング](/operations/hook-troubleshooting.md)
 * **Update**: `[[workflows]].trigger` に予約キー `reaction` を追加し、絵文字 → workflow の対応を config.toml 側へ統一（#396）。catch-all より後の workflow は到達不能として警告する。`plugins/slack.toml` の `trigger_reactions` は非推奨（削除は 0.3）、併用は `CONFIG_INVALID` [config.toml リファレンス](/development/config-reference.md)

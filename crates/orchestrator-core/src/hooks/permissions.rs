@@ -56,11 +56,19 @@
 //!    no `Bash` rule here corresponding to `DENY_FILE_EDITS`, and enumerating
 //!    one is not obviously possible — the set of ways to write a file from a
 //!    shell is not closed.
-//! 2. **A prefix match loses to `&&` and to pipes.** `git add -A && git commit`
-//!    starts with `git add`, so `Bash(git commit *)` never sees it.
-//!    `git push … | tail -5` and `gh pr create --fill | tail -5` both went
-//!    through in #410 with their rules present. `/usr/bin/git push` and
-//!    `sh -c "git push"` are the same class.
+//! 2. **Compound and piped commands got through.** In #410, with their rules
+//!    present, `git add -A && git commit`, `git push … | tail -5` and
+//!    `gh pr create --fill | tail -5` all ran. `/usr/bin/git push` and
+//!    `sh -c "git push"` are presumed to be the same class.
+//!
+//!    *That* much is observed. **The mechanism is not.** The obvious
+//!    explanation is that the rule is matched against the command string as a
+//!    whole, so a string starting with `git add` is never tested against
+//!    `Bash(git commit *)` — but Claude Code might equally be splitting the
+//!    compound and evaluating each part, and failing for some other reason.
+//!    Nobody has measured which. Do not build a fix on the explanation until
+//!    someone does: asserting a mechanism from an outcome is the same mistake
+//!    this module is retracting.
 //!
 //! A hard guarantee needs a sandbox. Until there is one, **do not write
 //! anywhere that these rules make a profile read-only** — that sentence was in
@@ -167,10 +175,11 @@ pub fn deny_rules(profile: Profile) -> Option<Vec<&'static str>> {
             rules.extend(DENY_GH_API);
             rules.extend(DENY_GH_ARTIFACTS);
         }
-        // The worktree stays read-only, but the agent files the issue / writes
-        // the design comment itself (#393 D2), so `gh issue …` stays open —
-        // and only that. `gh api` goes with the rest: it would reach the same
-        // endpoints the rules above deny.
+        // The edit tools are denied (which is not the same as a read-only
+        // worktree — see the module header), but the agent files the issue /
+        // writes the design comment itself (#393 D2), so `gh issue …` stays
+        // open — and only that. `gh api` goes with the rest: it would reach
+        // the same endpoints the rules above deny.
         Profile::Triage | Profile::Design => {
             rules.extend(DENY_FILE_EDITS);
             rules.extend(DENY_GIT_WRITES);

@@ -4,7 +4,7 @@ title: フック完了判定のトラブルシューティング
 description: Claude Code フック方式の運用手引き。スプールバックログ（doctor hook-spool チェックでの検出・drain/確認・corrupt 隔離ファイル）、Escalated タスクの対応手順（pane スナップショット確認・herdr pane での解消・次 Stop での自然復帰・fail アウト）、human 検収での totsuka task verify --pass/--fail 操作を、doctor のフックプローブ参照つきで整理する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [operations, playbook, hook, claude-code, spool, escalation, verify, doctor, epic-131]
-generated: { by: claude-code/opus-5, at: 2026-08-09T08:59:00Z }
+generated: { by: human:tomoya-k31, at: 2026-08-09T08:59:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -119,6 +119,7 @@ parse 不能行を含むスプールファイルは**削除されず** `<name>.c
 | `design` タスクが `gh issue comment` を拒否される | **異常**。design は issue コメントで成果物を書く profile なので、deny セットの不具合か profile の指定違い |
 | `design` タスクが `gh pr create` を拒否される | 正常。PR を出すのは `implement` |
 | **実装させたいのに拒否される** | profile の選択ミス。`profile = "implement"` にする。Slack 起点なら、本人のリアクションで別タスクとして起こす（#393 D6） |
+| **`answer` / `triage` / `design` タスクが commit / push / PR 作成まで到達した** | **既知の未修正の不具合**（[#410](https://github.com/tomoya-k31/totsuka/issues/410)）。deny の生成不良ではないので rendered settings を見ても異常は出ない。対象リポジトリの `CLAUDE.md` が push / PR を指示していると起きやすい。**deny では塞げていない**ので、無人で回す前に対象リポジトリ側を確認すること |
 
 確認するには rendered settings を見る:
 
