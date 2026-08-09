@@ -21,13 +21,6 @@
     "extra_context": { "base": "main" },
     "job_id": "job-7",
     "resume_session_id": "claude-sess-abc",
-    "hook": {
-      "settings_path": "/data/totsuka/hooks/orchestrator-implement.json",
-      "env": {
-        "TOTSUKA_HOOK_ENDPOINT": "/run/totsuka/hook.sock",
-        "TOTSUKA_JOB_ID": "job-7"
-      }
-    },
     "tool_launch": {
       "program": "claude",
       "args": [
@@ -36,7 +29,10 @@
         "--resume",
         "claude-sess-abc"
       ],
-      "env": { "TOTSUKA_JOB_ID": "job-7" }
+      "env": {
+        "TOTSUKA_HOOK_ENDPOINT": "/run/totsuka/hook.sock",
+        "TOTSUKA_JOB_ID": "job-7"
+      }
     }
   }
 }

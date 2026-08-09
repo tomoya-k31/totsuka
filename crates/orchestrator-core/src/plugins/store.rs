@@ -367,7 +367,7 @@ protocol_version = "{protocol_req}"
         let base = scratch("store_install");
         let src = base.join("src");
         fs::create_dir_all(&src).unwrap();
-        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\necho hi\n");
+        fake_source(&src, "github", ">=0.1.6, <0.5", b"#!/bin/sh\necho hi\n");
 
         let store = PluginStore::new(base.join("plugins"));
         assert!(!store.is_installed("github"));
@@ -406,7 +406,7 @@ protocol_version = "{protocol_req}"
         let base = scratch("store_reinstall");
         let src = base.join("src");
         fs::create_dir_all(&src).unwrap();
-        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 0\n");
+        fake_source(&src, "github", ">=0.1.6, <0.5", b"#!/bin/sh\nexit 0\n");
 
         let store = PluginStore::new(base.join("plugins"));
         let plan = store.prepare_install(&src).unwrap();
@@ -421,7 +421,7 @@ protocol_version = "{protocol_req}"
         );
 
         // A new build of the same plugin, installed over the old one.
-        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 1\n");
+        fake_source(&src, "github", ">=0.1.6, <0.5", b"#!/bin/sh\nexit 1\n");
         let plan = store.prepare_install(&src).unwrap();
         store.commit_install(&plan).unwrap();
 
@@ -468,7 +468,7 @@ protocol_version = "{protocol_req}"
         let base = scratch("store_failed_commit");
         let src = base.join("src");
         fs::create_dir_all(&src).unwrap();
-        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 7\n");
+        fake_source(&src, "github", ">=0.1.6, <0.5", b"#!/bin/sh\nexit 7\n");
 
         let store = PluginStore::new(base.join("plugins"));
         let plan = store.prepare_install(&src).unwrap();
@@ -478,7 +478,7 @@ protocol_version = "{protocol_req}"
 
         // A second install that cannot complete: the source binary disappears
         // between `prepare` and `commit`, so the copy is the step that fails.
-        fake_source(&src, "github", ">=0.1.6, <0.4", b"#!/bin/sh\nexit 8\n");
+        fake_source(&src, "github", ">=0.1.6, <0.5", b"#!/bin/sh\nexit 8\n");
         let mut plan = store.prepare_install(&src).unwrap();
         plan.binary = src.join("gone");
         assert!(store.commit_install(&plan).is_err());
@@ -520,10 +520,10 @@ protocol_version = "{protocol_req}"
         let src = base.join("src");
         fs::create_dir_all(&src).unwrap();
         // A manifest name that would escape the plugins root on commit.
-        fake_source(&src, "x", ">=0.1.6, <0.4", b"bin");
+        fake_source(&src, "x", ">=0.1.6, <0.5", b"bin");
         fs::write(
             src.join(MANIFEST_FILE),
-            "name = \"../evil\"\nkind = \"notifier\"\nversion = \"0.1.0\"\nprotocol_version = \">=0.1.0, <0.4\"\n",
+            "name = \"../evil\"\nkind = \"notifier\"\nversion = \"0.1.0\"\nprotocol_version = \">=0.1.0, <0.5\"\n",
         )
         .unwrap();
         let store = PluginStore::new(base.join("plugins"));
@@ -549,7 +549,7 @@ protocol_version = "{protocol_req}"
         let base = scratch("store_kind");
         let src = base.join("src");
         fs::create_dir_all(&src).unwrap();
-        fake_source(&src, "github", ">=0.1.6, <0.4", b"bin");
+        fake_source(&src, "github", ">=0.1.6, <0.5", b"bin");
         let store = PluginStore::new(base.join("plugins"));
         let plan = store.prepare_install(&src).unwrap();
         store.commit_install(&plan).unwrap();
@@ -576,7 +576,7 @@ protocol_version = "{protocol_req}"
         fs::create_dir_all(&no_bin).unwrap();
         fs::write(
             no_bin.join(MANIFEST_FILE),
-            "name = \"x\"\nkind = \"notifier\"\nversion = \"0.1.0\"\nprotocol_version = \">=0.1.0, <0.4\"\n",
+            "name = \"x\"\nkind = \"notifier\"\nversion = \"0.1.0\"\nprotocol_version = \">=0.1.0, <0.5\"\n",
         )
         .unwrap();
         assert!(matches!(

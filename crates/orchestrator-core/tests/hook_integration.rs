@@ -42,7 +42,7 @@ async fn launch(kind: &str, name: &str, init_config: serde_json::Value) -> Plugi
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = ">=0.1.6, <0.4"
+protocol_version = ">=0.1.6, <0.5"
 "#
     ))
     .unwrap();
@@ -1144,19 +1144,31 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         params["job_id"], expected_job,
         "job_id minted from task + session row"
     );
-    let hook = &params["hook"];
+    // #411: the separate `hook` spec is gone; the settings path is baked into
+    // the argv and the hook env rides `tool_launch.env`.
+    let tool = &params["tool_launch"];
+    let args: Vec<&str> = tool["args"]
+        .as_array()
+        .expect("tool_launch args")
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    let settings_at = args
+        .iter()
+        .position(|a| *a == "--settings")
+        .expect("--settings is in the argv");
     assert_eq!(
-        hook["settings_path"],
+        args[settings_at + 1],
         base.join("orchestrator-wf.json").display().to_string()
     );
-    assert_eq!(hook["env"]["TOTSUKA_JOB_ID"], expected_job);
+    assert_eq!(tool["env"]["TOTSUKA_JOB_ID"], expected_job);
     assert_eq!(
-        hook["env"]["TOTSUKA_HOOK_ENDPOINT"],
+        tool["env"]["TOTSUKA_HOOK_ENDPOINT"],
         base.join("claude.sock").display().to_string()
     );
-    assert_eq!(hook["env"]["TOTSUKA_HOOK_TOKEN"], "tok3n");
+    assert_eq!(tool["env"]["TOTSUKA_HOOK_TOKEN"], "tok3n");
     assert_eq!(
-        hook["env"]["TOTSUKA_HOOK_SPOOL_DIR"],
+        tool["env"]["TOTSUKA_HOOK_SPOOL_DIR"],
         base.join("spool").display().to_string()
     );
     // A hook dispatch delivers the task's instructions AND the marker
@@ -1170,9 +1182,9 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         "hook dispatch carries no visible extra_context: {}",
         params["extra_context"]
     );
-    let ctx = hook["env"]["TOTSUKA_PROMPT_CONTEXT"]
+    let ctx = tool["env"]["TOTSUKA_PROMPT_CONTEXT"]
         .as_str()
-        .expect("hook env carries the prompt context");
+        .expect("the launch env carries the prompt context");
     assert!(
         ctx.contains("回答は日本語で作成してください。"),
         "prompt context carries the task's instructions: {ctx}"
@@ -1201,23 +1213,19 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
             && ctx.contains("do NOT emit a marker"),
         "prompt context states the delivery contract: {ctx}"
     );
-    // #196: the fully-resolved tool launch rides alongside the deprecated
-    // hook spec. Its argv must equal what herdr's `launch_command` built for
-    // the same inputs before the tool registry existed (Phase 1 behavior
+    // #196: the fully-resolved tool launch is the only launch channel since
+    // 0.4.0 (#411). Its argv must equal what herdr's `launch_command` built
+    // for the same inputs before the tool registry existed (Phase 1 behavior
     // invariance: base `claude` + `--settings <workflow settings>`), and its
-    // env must carry the exact hook env.
-    let tool = &params["tool_launch"];
+    // env must carry the hook environment the agent reports completion with.
     assert_eq!(tool["program"], "claude");
     assert_eq!(
         tool["args"],
         json!([
             "--settings",
             base.join("orchestrator-wf.json").display().to_string()
-        ])
-    );
-    assert_eq!(
-        tool["env"], hook["env"],
-        "tool_launch env matches the hook env verbatim"
+        ]),
+        "the settings path is the whole argv for a claude implement dispatch"
     );
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -1300,10 +1308,32 @@ async fn dispatch_with_codex_tool_builds_codex_argv() {
         ]),
         "codex implement argv: sandbox flags, no --settings"
     );
+    // The hook env still rides the codex launch verbatim (codex hooks are
+    // registered globally and reached through `TOTSUKA_*`). Asserted as the
+    // whole map, not one key: before #411 this compared `tool_launch.env`
+    // against `hook.env` on the same dispatch, and dropping to a single key
+    // when `hook` went away would have quietly stopped checking that nothing
+    // extra leaks in. This runtime sets no token and no spool dir, so the
+    // endpoint and the job id are the entire expected env.
+    let env = tool["env"].as_object().expect("tool_launch env");
+    let mut keys: Vec<&str> = env.keys().map(String::as_str).collect();
+    keys.sort_unstable();
     assert_eq!(
-        tool["env"], params["hook"]["env"],
-        "TOTSUKA_* env still rides the codex launch (global hooks are env-gated)"
+        keys,
+        // This runtime sets no token and no spool dir; codex supports
+        // invisible injection, so the prompt context rides the env too.
+        [
+            "TOTSUKA_HOOK_ENDPOINT",
+            "TOTSUKA_JOB_ID",
+            "TOTSUKA_PROMPT_CONTEXT"
+        ],
+        "the codex launch env is exactly the hook env — no more, no less"
     );
+    assert_eq!(
+        env["TOTSUKA_HOOK_ENDPOINT"],
+        json!(base.join("agent-events.sock").display().to_string())
+    );
+    assert_eq!(env["TOTSUKA_JOB_ID"], params["job_id"]);
     let _ = std::fs::remove_dir_all(&base);
 }
 

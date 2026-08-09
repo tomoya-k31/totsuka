@@ -165,12 +165,14 @@ async fn dispatch_then_state_stream_to_done() {
     let mut d = Driver::new(cli.clone());
     let init = d.init().await;
     // Capability negotiation (F-33): declares plan_mode + state_stream, and
-    // NOT design_preview / pane_control (orca can't fulfil them).
+    // NOT pane_control (orca can't fulfil it).
     let caps = &init["result"]["capabilities"];
     assert_eq!(caps["plan_mode"], true);
     assert_eq!(caps["state_stream"], true);
-    assert_eq!(caps["design_preview"], false);
     assert_eq!(caps["pane_control"], false);
+    // #411: the capability was removed from the protocol, so it is absent
+    // from the wire rather than present-and-false.
+    assert!(caps.get("design_preview").is_none());
 
     let disp = d
         .call(
@@ -356,10 +358,8 @@ fn shipped_manifest_declares_only_supported_capabilities() {
     assert_eq!(manifest.kind, plugin_protocol::PluginKind::AgentIde);
     assert!(manifest.capabilities.plan_mode);
     assert!(manifest.capabilities.state_stream);
-    // orca cannot fulfil these, so they must not be advertised (F-33): the
-    // Orchestrator only requests declared capabilities, so a workflow needing
-    // e.g. a design preview simply won't route it here.
-    assert!(!manifest.capabilities.design_preview);
+    // orca cannot fulfil this, so it must not be advertised (F-33): the
+    // Orchestrator only requests declared capabilities.
     assert!(!manifest.capabilities.pane_control);
     assert!(manifest.is_compatible_with(&plugin_protocol::protocol_version()));
 }

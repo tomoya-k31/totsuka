@@ -26,7 +26,7 @@ fn spec() -> PluginSpec {
 name = "mock"
 kind = "agent_ide"
 version = "0.1.0"
-protocol_version = ">=0.1.6, <0.4"
+protocol_version = ">=0.1.6, <0.5"
 "#,
         )
         .unwrap(),
@@ -93,7 +93,6 @@ async fn kill9_restart_attach_resumes_running() {
                 extra_context: None,
                 job_id: None,
                 resume_session_id: None,
-                hook: None,
                 tool_launch: None,
             },
         )

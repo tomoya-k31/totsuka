@@ -4,9 +4,8 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-07T23:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-09T20:30:00+09:00 }
 status: stable
-verified: [{ by: human:tomoya-k31, at: 2026-08-06T03:15:00+09:00 }]
 owner: tomoya-k31
 ---
 
@@ -27,10 +26,10 @@ herdr socket は **JSON-RPC ではなく NDJSON**（1 行 1 メッセージ・`i
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `plugins/herdr.toml`（= `InitializeParams.config`）を型付け。`socket_path` / `session`（解決順: `socket_path` > `session` 名 > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定 `~/.config/herdr/herdr.sock`、named session は `sessions/<name>/herdr.sock`）/ `agent_command`（pane で起動する CLI, F-31）/ `plan_args`（plan モードの追加引数, 既定 `--permission-mode plan`）— **`agent_command`/`plan_args`/`launch_command` は 0.2.3（#196）から deprecated フォールバック**（Orchestrator が `tool_launch` を送らない旧世代専用。次の breaking protocol バンプで削除予定）/ **`[kind_map]`**（実行ファイル名 → herdr の `kind`、[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-1）/ `design_preview`（**deprecated・inert**: core もプラグインも読んでおらず、設定しても描画は一切変わらない。pane 配置は `[layout]` が決める。削除は 0.3、[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）/ **`[layout]`**（`LayoutConfig { shell, direction, ratio }`。`direction` は herdr の `SplitDirection` を写した enum で `down` / `right` の 2 値のみ、下記）/ `request_timeout_secs`。**`deny_unknown_fields` はネストした `[layout]` にも効く** |
+| `config` | `plugins/herdr.toml`（= `InitializeParams.config`）を型付け。`socket_path` / `session`（解決順: `socket_path` > `session` 名 > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定 `~/.config/herdr/herdr.sock`、named session は `sessions/<name>/herdr.sock`）— **`agent_command` / `plan_args` / `launch_command` はプロトコル 0.4.0 で削除**（#411、[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)。0.2.3 以降は Orchestrator が `tool_launch` で argv を完全解決しており、manifest 下限を `>=0.2.3` に上げたことでフォールバックは到達不能になった。`deny_unknown_fields` なので**残っていると `initialize` が `CONFIG_INVALID`** になる — キー名と代替を挙げる `removed_keys_in` のメッセージが出る）/ **`[kind_map]`（実行ファイル名 → herdr の `kind`、[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-1）/ `design_preview`（**0.4.0 で削除**。core もプラグインも読んでおらず設定しても描画は変わらなかった。pane 配置は `[layout]` が決める。[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md) は「削除は 0.3」と書いたが実際に消えたのは 0.4.0）/ **`[layout]`**（`LayoutConfig { shell, direction, ratio }`。`direction` は herdr の `SplitDirection` を写した enum で `down` / `right` の 2 値のみ、下記）/ `request_timeout_secs`。**`deny_unknown_fields` はネストした `[layout]` にも効く** |
 | `state` | herdr `agent_status`→totsuka 正規化状態の写像（`working→running`・`blocked→waiting_input`・`done→done`・`unknown→前値維持`, F-32。**`session/attach` 専用**の写像で、タスク完了はもはやここを通らない — 完了検知はフックが担う）、`(pane_id, agent_session_id)` 復帰ハンドルの `session_id` 文字列へのエンコード（F-37）。**`squash_ws`（折り返し非依存の画面照合ヘルパ）は `agent.prompt` への移行で消滅**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-5）。**質問/回答の画面抽出（旧 `extract_question` / `extract_answer`）は完了判定のフック移行に伴い削除**（#131） |
 | `transport` | `HerdrTransport` trait（`call` / `subscribe_events` / `events`）＋ `SocketTransport`。herdr の接続モデルに合わせ **リクエストごとに新規接続**（`call`）+ `events.subscribe` 専用の持続接続（reader タスクが `{event, data}` 封筒を broadcast へ転送）。broadcast はプロセス内の全購読で共有されるため、EOF 時の合成 close イベントは**購読対象 pane ごとに `data.pane_id` 付きで**発行し、他タスクを巻き込まない。`invalid_request` の `id:""` エラーも接続単位で相関。ロジックを fake herdr でテストするための seam |
-| `agent` | `HerdrAgent<T: HerdrTransport>`。`dispatch`（`workspace.create`（`env` 付き）→**`apply_layout` = `pane.split`（#356）**→`agent.start {name, kind, pane_id: root_pane, args}`→`agent.prompt`→ハンドル返却, F-31/F-37。呼び出し列と各段の理由は下記）。**プロンプトは `compose_prompt` = `extra_context`（前文）＋ body（無ければ title）**: source が切り詰めた snippet title は body があるとき打たない（ペイン先頭の切れた重複行をなくす）。string の `extra_context`（フック非対応 dispatch 用の可視フォールバック。フック付き dispatch では通常 `None` — 指示文は env `TOTSUKA_PROMPT_CONTEXT` 経由の不可視注入で届く）は JSON 引用符なしの生テキストとして `---` 区切りの**前文**に置く。**protocol 17 で `RetryPolicy` と `submit_prompt` の自己修正手順（#124 / #281）は削除**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-5。`Server::with_retry_policy` / `HerdrAgent::with_retry_policy` も無くなった）。**0.1.3: `hook` 指定時に env を `workspace.create` へ注入し、`args` に `--settings <settings_path>` を付与。`resume_session_id` 指定時は `--resume <id>` も付与**。**0.2.3（#196, [ADR-0014](/decisions/adr-0014-tool-abstraction.md)）: `tool_launch: Option<ToolLaunchSpec>` が Some ならその `args`/`env` をそのまま使い、`program` は**ファイル名を `kind` へ写像**して渡す（`resolve_kind`。protocol 17 が実行ファイルを `kind` から決めるため。CLI フラグ知識は引き続き Orchestrator 側）。None（旧 Orchestrator）のときだけ従来の `launch_command` フォールバック**）/ `attach`（`pane.get` で pane 生存確認・消失（`pane_not_found`）は `attached:false`, F-37）/ `cancel`（`pane.send_keys ["ctrl+c"]`→`pane.close`→**タスクの workspace も close**（pane id `w1:p2` の接頭辞が workspace id。dispatch が workspace を作る以上、pane だけ閉じると空の workspace が残る）, 冪等）/ `release`（**0.2.1: `session/release`**。完了済みセッションの pane + workspace を ctrl+c なしで閉じる。同一性検証つき — 下記 #210 節, [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）/ `snapshot`（**0.1.3: `diagnostics/snapshot`**。`pane.read`（`recent`）で画面テキストを返す。pane 消失は `text: None` でエラーにしない, R-10）/ `focus`（**0.1.4: `session/focus`**。`pane.get` 生存確認 → `workspace.focus`→`tab.focus`→`pane.focus` の外→内チェーン。pane/コンテナ消失は `focused: false` でエラーにしない, F-94）/ `start_state_stream`（`events.subscribe`→**`pane.exited` デッドマン専用**に縮退。異常終了→`Failed`, F-38） |
+| `agent` | `HerdrAgent<T: HerdrTransport>`。`dispatch`（`workspace.create`（`env` 付き）→**`apply_layout` = `pane.split`（#356）**→`agent.start {name, kind, pane_id: root_pane, args}`→`agent.prompt`→ハンドル返却, F-31/F-37。呼び出し列と各段の理由は下記）。**プロンプトは `compose_prompt` = `extra_context`（前文）＋ body（無ければ title）**: source が切り詰めた snippet title は body があるとき打たない（ペイン先頭の切れた重複行をなくす）。string の `extra_context`（フック非対応 dispatch 用の可視フォールバック。フック付き dispatch では通常 `None` — 指示文は env `TOTSUKA_PROMPT_CONTEXT` 経由の不可視注入で届く）は JSON 引用符なしの生テキストとして `---` 区切りの**前文**に置く。**protocol 17 で `RetryPolicy` と `submit_prompt` の自己修正手順（#124 / #281）は削除**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-5。`Server::with_retry_policy` / `HerdrAgent::with_retry_policy` も無くなった）。**0.2.3（#196, [ADR-0014](/decisions/adr-0014-tool-abstraction.md)）以降は `tool_launch: ToolLaunchSpec` が唯一の起動元**: `args`/`env` をそのまま使い、`program` は**ファイル名を `kind` へ写像**して渡す（`resolve_kind`。protocol 17 が実行ファイルを `kind` から決めるため。CLI フラグ知識は Orchestrator 側）。env は `workspace.create` へ注入され、`--settings` / `--resume` は既に `args` に焼かれている。**0.4.0（#411）で `tool_launch` 不在は `INVALID_PARAMS` エラー**（旧 `launch_command` フォールバックは削除。argv を自作すると `--settings` 無しで起動して完了報告が来ないペインになるため、黙って代替しない））/ `attach`（`pane.get` で pane 生存確認・消失（`pane_not_found`）は `attached:false`, F-37）/ `cancel`（`pane.send_keys ["ctrl+c"]`→`pane.close`→**タスクの workspace も close**（pane id `w1:p2` の接頭辞が workspace id。dispatch が workspace を作る以上、pane だけ閉じると空の workspace が残る）, 冪等）/ `release`（**0.2.1: `session/release`**。完了済みセッションの pane + workspace を ctrl+c なしで閉じる。同一性検証つき — 下記 #210 節, [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）/ `snapshot`（**0.1.3: `diagnostics/snapshot`**。`pane.read`（`recent`）で画面テキストを返す。pane 消失は `text: None` でエラーにしない, R-10）/ `focus`（**0.1.4: `session/focus`**。`pane.get` 生存確認 → `workspace.focus`→`tab.focus`→`pane.focus` の外→内チェーン。pane/コンテナ消失は `focused: false` でエラーにしない, F-94）/ `start_state_stream`（`events.subscribe`→**`pane.exited` デッドマン専用**に縮退。異常終了→`Failed`, F-38） |
 | `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。**`initialize` / `config·validate` が `ping` の `protocol` を検査し、17 未満はバージョンを名指しして拒否**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-6。`protocol` フィールドが無い応答は通す）。応答と push 通知（`state/notification`）を mpsc ラインチャネルへ送出（main が stdout へ、テストはバッファへ排出）。未初期化メソッドは拒否 |
 | `main` | `#[tokio::main]`。専用 writer タスクが stdout を単独所有し、応答と通知が行途中で交錯しないよう直列化。stdin ループが `SocketFactory`（実ソケット接続）を配線 |
 
@@ -140,15 +139,15 @@ protocol 17 の `name` は表示ラベルではなく**識別子**（`[a-z][a-z0
 **契約は変わらない**: 送信を確認できなければ dispatch をエラーにする（無言で永久ハングするセッションを作らない）。
 `agent_prompt_stalled` がその失敗に写像される。
 
-# dispatch のフック起動（0.1.3, #131）
+# dispatch のフック起動（0.1.3, #131 → 0.4.0, #411）
 
-`TaskDispatchParams.hook`（`HookLaunchSpec = { settings_path, env }`）が Some のとき、dispatch は完了判定フックを載せた Claude Code を起動する:
+フック環境と `--settings` は **`TaskDispatchParams.tool_launch`（`ToolLaunchSpec = { program, args, env }`）だけ**で届く。0.1.3〜0.3 系にあった専用の `hook` フィールドはプロトコル 0.4.0 で削除された（#411、[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）— `ToolLaunchSpec` は同じ情報を、プラグインが解釈しなくてよい形で運んでいるため。
 
-- **`workspace.create` の params にだけ** `env` を付与（protocol 17 の `agent.start` は `env` を取らない。root pane が継承するので、フック環境変数 `TOTSUKA_JOB_ID` / `TOTSUKA_HOOK_ENDPOINT` / `TOTSUKA_HOOK_TOKEN` 等はエージェントに届く）
-- `agent.start` の `args` に `--settings <settings_path>` を付与（workflow ごとの orchestrator-*.json を読ませ、Stop/SessionEnd フックを有効化）
-- `resume_session_id` が Some なら `args` に `--resume <id>` も付与（Slack スレッド会話継続。`--resume` はフックを引き継がないため `--settings` は resume でも必須, H-03）
+- **`workspace.create` の params にだけ** `tool_launch.env` を付与（protocol 17 の `agent.start` は `env` を取らない。root pane が継承するので、フック環境変数 `TOTSUKA_JOB_ID` / `TOTSUKA_HOOK_ENDPOINT` / `TOTSUKA_HOOK_TOKEN` 等はエージェントに届く）。空の env はキーごと送らない
+- `agent.start` の `args` は `tool_launch.args` そのまま。`--settings <path>`（workflow ごとの orchestrator-*.json、Stop/SessionEnd フックを有効化）も `--resume <id>`（Slack スレッド会話継続。`--resume` はフックを引き継がないため `--settings` は resume でも必須, H-03）も **Orchestrator 側で既に焼かれている**
+- `resume_session_id` は依然として送られてくるが、**プラグインはこれを読んで argv を組み立てない**（フラグは既に `args` にある）
 
-env 注入・フックの内容は**プラグインにとって不透明**（Orchestrator 側が生成・解釈する。プラグインは値を配線するだけ）。`hook` が None（旧 Orchestrator）でも dispatch は動くが、その場合 env・`--settings` は付かず**完了検知が働かない**（後述）。
+内容は**プラグインにとって不透明**（Orchestrator 側が生成・解釈する。プラグインは値を配線するだけ）。`tool_launch` が無い dispatch は `INVALID_PARAMS` で**失敗させる**: 代替の argv を組めば `--settings` 無しで起動し、走るが完了を報告しないペインになり、タイムアウトのエスカレーションまで気づけないため。
 
 # pane レイアウト（`apply_layout`, #356, 0.2.x）
 
@@ -199,7 +198,7 @@ pane.split {target_pane_id: <root pane = これからエージェントが入る
 - `exit_code == 0`（clean exit）→ **通知なし**でストリームを終える（正常終了はフック SessionEnd が既報）
 - 購読接続の EOF（当該 pane 向け合成 close イベント）→ `Failed`（pane 自体は生きている可能性があるため復旧は `session/attach` 側に委ねる）
 
-`data.pane_id` の自衛フィルタ・イベント区切り文字の正規化（`pane.agent_status_changed` はドット、`pane_exited` はアンダースコア）は継続。この縮退は**無条件**（`hook` None でも同じ）: 旧 Orchestrator + 新プラグインの組合せは `^0.1` 互換上は成立するが完了を検知しなくなるため、`initialize` の `protocol_version` が 0.1.3 未満なら**警告ログ**を出す（orchestrator 側 0.1.3 以上必須）。
+`data.pane_id` の自衛フィルタ・イベント区切り文字の正規化（`pane.agent_status_changed` はドット、`pane_exited` はアンダースコア）は継続。この縮退は**無条件**（`tool_launch.env` が空でも同じ）。かつては旧 Orchestrator との組合せを `initialize` の警告ログで知らせていたが、0.4.0 で manifest 下限が `>=0.2.3` になったため、そもそも起動時点で拒否される（F-54）— 到達しないコードだったので削除した。
 
 # diagnostics/snapshot（R-10, 0.1.3）
 

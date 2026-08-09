@@ -34,7 +34,7 @@ sequenceDiagram
     TS->>EN: task/submit（Task, id=channel:thread_ts=会話, message_key=この配送）— push, persist-before-ack
     Note over EN: 冪等取り込み → repo 選択 → スロット確保 → worktree 作成
     EN->>EN: dispatch_one — job_id=job-{task_id}-{session_row}<br/>自タスクの最新セッションから resume_session_id を解決（F-105）
-    EN->>HE: task/dispatch（HookLaunchSpec{settings_path, env}, resume_session_id?）
+    EN->>HE: task/dispatch（ToolLaunchSpec{program, args, env}, resume_session_id?）
     HE->>CC: workspace.create / agent.start（env 注入: TOTSUKA_JOB_ID / HOOK_ENDPOINT / HOOK_TOKEN / HOOK_SPOOL_DIR / PROMPT_CONTEXT）<br/>argv: claude --settings orchestrator-<workflow>.json [--resume <sid>]
     CC->>UDS: SessionStart フック → POST /agent-events
     UDS->>EN: SignalPort::submit（SessionStart）

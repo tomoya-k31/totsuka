@@ -81,7 +81,7 @@ on_success = {{ set_status = "レビュー待ち" }}
 
     let plugin_toml = r#"
 socket_path = "${XDG_RUNTIME_DIR}/herdr.sock"
-design_preview = "side_pane"
+request_timeout_secs = 30
 api_key_ref = "${HERDR_TOKEN}"
 user_token = "op://Dev/Slack/user_token"
 "#;

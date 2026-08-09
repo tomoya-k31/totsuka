@@ -485,9 +485,6 @@ kind = "task_source"
 |---|---|---|---|
 | `socket_path` | string? | なし | herdr ソケットの明示パス。解決順の最上位 |
 | `session` | string? | なし | 名前付きセッション（`~/.config/herdr/sessions/{name}/herdr.sock` に解決）。`socket_path` 未設定時に使う |
-| `agent_command` | string | `claude` | **deprecated**。pane で起動する CLI。`tool_launch` を送らない旧 Orchestrator 向けフォールバック（[ADR-0014](/decisions/adr-0014-tool-abstraction.md)）。削除は 0.3 |
-| `plan_args` | string[] | `["--permission-mode", "plan"]` | **deprecated**。同上、plan モードの追加引数 |
-| `design_preview` | string | `side_pane` | **deprecated かつ無効**。core もプラグインも読んでいないため、値を変えても描画は一切変わらない。pane の配置は `[layout]` が決める（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。削除は 0.3 |
 | `[layout]` | テーブル | 下記の既定 | dispatch した pane の配置（#356、下記） |
 | `[kind_map]` | テーブル | `{}` | 実行ファイル名 → herdr の `kind` の写像（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-1、下記） |
 | `request_timeout_secs` | int | 30 | herdr socket 呼び出し 1 本あたりのタイムアウト |

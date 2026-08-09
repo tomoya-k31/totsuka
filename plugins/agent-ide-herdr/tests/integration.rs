@@ -670,7 +670,7 @@ impl Driver {
         }
         self.call(
             "initialize",
-            json!({ "protocol_version": "0.1.0", "config": config }),
+            json!({ "protocol_version": "0.4.0", "config": config }),
         )
         .await
     }
@@ -679,14 +679,20 @@ impl Driver {
         self.dispatch_with(id, title, mode, json!({})).await
     }
 
-    /// As [`dispatch`](Self::dispatch), merging `extra` into the params (a
-    /// `tool_launch`, a `hook`, …).
+    /// As [`dispatch`](Self::dispatch), merging `extra` into the params
+    /// (overriding `tool_launch`, adding `resume_session_id`, …).
+    ///
+    /// A `tool_launch` is included by default because since protocol 0.4.0
+    /// (#411) a dispatch without one is rejected outright — there is no
+    /// plugin-local argv fallback any more, so "the minimal dispatch" now
+    /// includes it.
     async fn dispatch_with(&mut self, id: &str, title: &str, mode: &str, extra: Value) -> Value {
         let mut params = json!({
             "task": { "id": id, "source": "slack", "title": title,
                       "body": "Answer in the thread.\n\nContext:\n- multi-line, like every Slack task body" },
             "worktree_path": "/wt/agent-1",
-            "mode": mode
+            "mode": mode,
+            "tool_launch": { "program": "claude", "args": [], "env": {} }
         });
         for (k, v) in extra.as_object().into_iter().flatten() {
             params[k] = v.clone();
@@ -710,7 +716,20 @@ async fn dispatch_submits_the_whole_prompt_in_one_call() {
 
     let mut d = Driver::new();
     d.init(&socket).await;
-    let disp = d.dispatch("T1", "Draft the reply", "plan").await;
+    let disp = d
+        .dispatch_with(
+            "T1",
+            "Draft the reply",
+            "plan",
+            json!({
+                "tool_launch": {
+                    "program": "claude",
+                    "args": ["--permission-mode", "plan"],
+                    "env": {},
+                }
+            }),
+        )
+        .await;
 
     assert!(disp["error"].is_null(), "dispatch failed: {disp}");
     // The handle carries the workspace's root pane: protocol 17 runs the agent
@@ -905,8 +924,9 @@ async fn the_companion_shell_never_receives_the_hook_env() {
                           "body": "multi-line\n\nbody" },
                 "worktree_path": "/wt/agent-1",
                 "mode": "implement",
-                "hook": {
-                    "settings_path": "/hooks/orchestrator-implement.json",
+                "tool_launch": {
+                    "program": "claude",
+                    "args": ["--settings", "/hooks/orchestrator-implement.json"],
                     "env": { "TOTSUKA_HOOK_TOKEN": "secret-token", "TOTSUKA_JOB_ID": "job-1" },
                 },
             }),
@@ -1334,6 +1354,7 @@ async fn a_pane_that_dies_during_confirmation_stays_unresumable() {
                 "worktree_path": "/wt/agent-1",
                 "mode": "implement",
                 "resume_session_id": "claude-sess-abc",
+                "tool_launch": { "program": "claude", "args": ["--resume", "claude-sess-abc"], "env": {} },
             }),
         )
         .await;
@@ -1833,9 +1854,11 @@ async fn dispatch_carries_the_agent_session_for_resume_and_transcripts() {
 
 #[tokio::test]
 async fn dispatch_injects_hook_env_and_settings_and_resume() {
-    // 0.1.3: a hook launch spec rides `env` onto both workspace.create and
-    // agent.start, appends `--settings <path>` to the argv, and `--resume <id>`
-    // when resuming (Slack thread continuation).
+    // The hook env rides `workspace.create`, and `--settings`/`--resume` ride
+    // the argv (Slack thread continuation). Since 0.2.3 (#196) all of it
+    // arrives pre-assembled in `tool_launch`; since 0.4.0 (#411) that is the
+    // only way it can arrive. `resume_session_id` is still sent alongside —
+    // the plugin must not act on it, because the flag is already in `args`.
     let (socket, requests) = FakeHerdr::default().spawn();
 
     let mut d = Driver::new();
@@ -1850,8 +1873,14 @@ async fn dispatch_injects_hook_env_and_settings_and_resume() {
                 "mode": "implement",
                 "job_id": "job-7",
                 "resume_session_id": "claude-sess-abc",
-                "hook": {
-                    "settings_path": "/data/totsuka/hooks/orchestrator-implement.json",
+                "tool_launch": {
+                    "program": "claude",
+                    "args": [
+                        "--settings",
+                        "/data/totsuka/hooks/orchestrator-implement.json",
+                        "--resume",
+                        "claude-sess-abc"
+                    ],
                     "env": {
                         "TOTSUKA_JOB_ID": "job-7",
                         "TOTSUKA_HOOK_ENDPOINT": "/run/totsuka/hook.sock",
@@ -1913,10 +1942,10 @@ async fn dispatch_injects_hook_env_and_settings_and_resume() {
 }
 
 #[tokio::test]
-async fn dispatch_without_a_hook_injects_no_env() {
-    // The reduction is unconditional, but env injection is not: an old
-    // orchestrator that sends no hook spec must not get an `env` key (nor
-    // `--settings`/`--resume`).
+async fn a_tool_launch_with_an_empty_env_injects_none() {
+    // The reduction is unconditional, but env injection is not: an empty
+    // `tool_launch.env` must produce no `env` key at all, rather than an empty
+    // object. Configs with no `[hooks]` (and non-hook tools) dispatch this way.
     let (socket, requests) = FakeHerdr::default().spawn();
 
     let mut d = Driver::new();
@@ -1931,7 +1960,7 @@ async fn dispatch_without_a_hook_injects_no_env() {
         .expect("an agent.start request");
     assert!(
         start["params"].get("env").is_none(),
-        "no hook spec → no env on agent.start"
+        "an empty tool_launch env → no env on agent.start"
     );
     let create = log
         .iter()
@@ -1939,13 +1968,13 @@ async fn dispatch_without_a_hook_injects_no_env() {
         .expect("a workspace.create request");
     assert!(
         create["params"].get("env").is_none(),
-        "no hook spec → no env on workspace.create"
+        "an empty tool_launch env → no env on workspace.create"
     );
     assert_eq!(start["params"]["kind"], "claude");
     assert_eq!(
         start["params"]["args"],
         json!([]),
-        "no --settings/--resume without a hook"
+        "the argv is whatever tool_launch said, here nothing"
     );
 }
 
@@ -2053,7 +2082,6 @@ fn shipped_manifest_is_valid_agent_ide() {
     assert_eq!(manifest.kind, plugin_protocol::PluginKind::AgentIde);
     assert!(manifest.capabilities.plan_mode);
     assert!(manifest.capabilities.state_stream);
-    assert!(manifest.capabilities.design_preview);
     assert!(manifest.capabilities.pane_control);
     // 0.1.3: session resume + pane diagnostics snapshots (#131).
     assert!(manifest.capabilities.resume_session);
@@ -2377,6 +2405,7 @@ async fn dispatch_resuming_against(code: &'static str) -> Value {
             "worktree_path": "/wt/agent-1",
             "mode": "implement",
             "resume_session_id": "claude-sess-abc",
+            "tool_launch": { "program": "claude", "args": ["--resume", "claude-sess-abc"], "env": {} },
         }),
     )
     .await
@@ -2465,6 +2494,7 @@ async fn a_resumed_dispatch_is_never_restarted_on_agent_not_found() {
                 "worktree_path": "/wt/agent-1",
                 "mode": "implement",
                 "resume_session_id": "claude-sess-abc",
+                "tool_launch": { "program": "claude", "args": ["--resume", "claude-sess-abc"], "env": {} },
             }),
         )
         .await;

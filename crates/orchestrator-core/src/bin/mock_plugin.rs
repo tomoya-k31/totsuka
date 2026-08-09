@@ -106,7 +106,7 @@ fn main() {
                     .unwrap_or(false);
                 // Hook-capability flags (0.1.3): `resume_session` /
                 // `diagnostics_snapshot` make the orchestrator take the
-                // hook-dispatch path (job_id + HookLaunchSpec). 0.1.4:
+                // hook-dispatch path (job_id + the hook env on tool_launch). 0.1.4:
                 // `pane_control` gates the `session/focus` control path (F-94).
                 let flag = |k: &str| config.get(k).and_then(Value::as_bool).unwrap_or(false);
                 Response::result(
@@ -122,7 +122,10 @@ fn main() {
                             // 0.1.6: a push task source (never polled).
                             task_submit: flag("task_submit"),
                             outputs: vec![OutputCapability::Source],
-                            ..Default::default()
+                            // No `..Default::default()`: removing
+                            // `design_preview` in 0.4.0 (#411) made this
+                            // literal exhaustive, and clippy's
+                            // `needless_update` rejects the rest pattern.
                         },
                     })
                     .unwrap(),
@@ -400,7 +403,9 @@ fn main() {
 /// real UDS hook socket (#141 E2E). No-op unless `hook_post_on_dispatch` is set
 /// in the init config. The synthetic Stop is shaped exactly like the JSON
 /// `on-stop.sh` emits, and is addressed with the `job_id` / endpoint / token the
-/// orchestrator injected into `params.hook.env` (#132 `HookLaunchSpec`).
+/// orchestrator injected into `params.tool_launch.env` (#132; the separate
+/// `params.hook` spec that used to carry it was removed in protocol 0.4.0,
+/// #411, and `ToolLaunchSpec.env` is a superset of what it held).
 ///
 /// Config shape (all fields optional):
 /// ```json
@@ -415,11 +420,11 @@ fn hook_post_on_dispatch(config: &Value, params: &Value, session_id: &str) {
     let Some(spec) = config.get("hook_post_on_dispatch") else {
         return;
     };
-    let env = params.get("hook").and_then(|h| h.get("env"));
+    let env = params.get("tool_launch").and_then(|t| t.get("env"));
     let field = |key: &str| env.and_then(|e| e.get(key)).and_then(Value::as_str);
     let Some(endpoint) = field("TOTSUKA_HOOK_ENDPOINT") else {
         eprintln!(
-            "mock_plugin: hook_post_on_dispatch set but no TOTSUKA_HOOK_ENDPOINT in hook env"
+            "mock_plugin: hook_post_on_dispatch set but no TOTSUKA_HOOK_ENDPOINT in tool_launch env"
         );
         return;
     };

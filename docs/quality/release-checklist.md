@@ -37,7 +37,6 @@ CI（[テスト戦略](/quality/test-strategy.md)）は実 mock プラグイン�
 
 - [ ] dispatch で orca セッションが起動し、状態が `worktree ps` 由来で反映される
 - [ ] `waiting`（承認待ち idle）と `done` が正しく切り分けられる
-- [ ] `design_preview` capability は非宣言（orca に構造化プレビュー無し、F-33）
 
 # notifier（macOS）
 

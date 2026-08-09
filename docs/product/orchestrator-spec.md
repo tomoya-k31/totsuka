@@ -117,7 +117,7 @@ Priorities use MoSCoW (M: Must / S: Should / C: Could / W: Won't in v1).
 | F-30 | Abstract Agent IDEs as plugins; the agent to use is switchable per task type and per repository via configuration | M |
 | F-31 | Dispatch interface: pass worktree path, task body, execution mode (`plan` / `implement`), and extra context | M |
 | F-32 | Agent state (idle / running / waiting_input / done / failed) is retrievable. herdr uses its Socket API; orca hides its own mechanism inside the plugin. **Note:** herdr + Claude Code completion detection is replaced by the hook mechanism (§4.11, F-100–F-107); the herdr state stream is retained only for `pane.exited` deadman detection | M |
-| F-33 | **Capability negotiation**: plugins declare their supported features (`plan_mode`, `design_preview`, `pane_control`, `state_stream`, etc.) and the orchestrator only requests supported features | M |
+| F-33 | **Capability negotiation**: plugins declare their supported features (`plan_mode`, `pane_control`, `state_stream`, etc.) and the orchestrator only requests supported features | M |
 | F-36 | In `plan` mode, the plugin maps to each agent's plan / read-mostly mode and runs it. Artifacts (design documents) are returned to the orchestrator as structured results (used for write-back per the workflow's output policy) | M |
 | F-37 | **Session management**: on dispatch, obtain the agent's session identifier (conversation history ID), associate it with the task, and persist it in the state DB. `session/attach` is a required method of agent_ide plugins; on orchestrator restart / task resume, re-attach to the existing session | M |
 | F-38 | The plugin carries agent execution logs as fragments in `state/subscribe` notifications; the orchestrator persists them tagged with task_id (source for `logs --task <id>`). **Note:** herdr + Claude Code completion detection is replaced by the hook mechanism (§4.11, F-100–F-107); the herdr state stream is retained only for `pane.exited` deadman detection | M |
@@ -172,7 +172,7 @@ timeout_secs = 120
 ```toml
 # plugins/herdr.toml (plugin-specific)
 socket_path = "${XDG_RUNTIME_DIR}/herdr.sock"
-design_preview = "side_pane"
+request_timeout_secs = 30
 ```
 
 **Plugin mechanism comparison (decision rationale)**

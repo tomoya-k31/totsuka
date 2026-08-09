@@ -8,10 +8,10 @@
 //!   into a pane the **caller** supplies. `kind` picks the executable, `name` is
 //!   an identifier (`[a-z][a-z0-9_-]{0,31}`, unique among live agents), and
 //!   `cwd`/`env`/`argv` are not accepted at all
-//! - the hook environment (`TOTSUKA_JOB_ID`, … from a
-//!   [`HookLaunchSpec`](plugin_protocol::methods::HookLaunchSpec)) therefore
-//!   rides on `workspace.create`, whose `env` herdr applies to the root pane —
-//!   which is the pane the agent is started in
+//! - the hook environment (`TOTSUKA_JOB_ID`, … from
+//!   [`ToolLaunchSpec::env`](plugin_protocol::methods::ToolLaunchSpec::env))
+//!   therefore rides on `workspace.create`, whose `env` herdr applies to the
+//!   root pane — which is the pane the agent is started in
 //! - a freshly created pane is **not immediately usable**: its shell is still
 //!   starting, and `agent.start` types the launch command into it regardless.
 //!   There is no readiness signal to poll — `pane.process_info` shows the shell
@@ -45,13 +45,15 @@
 //! extracting a `waiting_input` question) is **removed**. The state stream is
 //! reduced to a **deadman**: it subscribes only to `pane.exited` and reports
 //! `Failed` on an abnormal exit — the hook already reported a normal end. This
-//! reduction is unconditional (it holds even when no hook spec is supplied); an
-//! orchestrator older than 0.1.3 will therefore not learn of completion, which
-//! `initialize` warns about.
+//! reduction is unconditional (it holds even when the launch carries no hook
+//! env). An orchestrator older than 0.1.3 would therefore never learn of
+//! completion; `initialize` used to warn about that, and since 0.4.0 (#411) the
+//! manifest's `>=0.2.3` floor makes such an orchestrator unable to launch this
+//! plugin at all — the launcher refuses it before `initialize` (F-54).
 
 use plugin_protocol::methods::{
-    AgentState, DiagnosticsSnapshotResult, ExecutionMode, SessionAttachResult, SessionFocusResult,
-    SessionInfo, SessionListResult, SessionReleaseParams, SessionReleaseResult, StateNotification,
+    AgentState, DiagnosticsSnapshotResult, SessionAttachResult, SessionFocusResult, SessionInfo,
+    SessionListResult, SessionReleaseParams, SessionReleaseResult, StateNotification,
     TaskDispatchParams, TaskDispatchResult,
 };
 use serde_json::{Value, json};
@@ -168,7 +170,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         &self,
         params: TaskDispatchParams,
     ) -> Result<TaskDispatchResult, HerdrError> {
-        let (program, args, env) = resolve_launch(&self.config, &params);
+        let (program, args, env) = resolve_launch(&params)?;
 
         // A workspace per task keeps agent panes out of the operator's own
         // workspaces (there is no "start session" method; the workspace is the
@@ -1166,29 +1168,33 @@ fn resolve_kind(config: &HerdrConfig, program: &str) -> String {
 /// The `(program, args, env)` to launch in the pane. Since protocol 0.2.3
 /// (#196) the Orchestrator sends a fully-resolved `tool_launch` (argv + env,
 /// opaque to the plugin) which is used verbatim — no CLI-flag knowledge here.
-/// The deprecated `hook`-driven [`HerdrConfig::launch_command`] path remains
-/// as a fallback for older orchestrators only.
+///
+/// Since 0.4.0 (#411) that is the *only* source. The plugin used to assemble an
+/// argv of its own from `agent_command`/`plan_args` when `tool_launch` was
+/// absent, for orchestrators predating 0.2.3; the manifest now declares
+/// `>=0.2.3`, so such an orchestrator cannot launch this plugin at all (F-54)
+/// and the fallback was unreachable before it was deleted.
+///
+/// An absent `tool_launch` therefore means the Orchestrator failed to resolve
+/// one, not that it is old. Failing here is the honest answer: assembling a
+/// substitute would launch the agent with **no `--settings`**, and a Claude
+/// Code pane without the workflow's hooks never reports completion — the task
+/// would look dispatched and then hang until it escalated on timeout.
 fn resolve_launch(
-    config: &HerdrConfig,
     params: &TaskDispatchParams,
-) -> (String, Vec<String>, Option<Value>) {
-    match &params.tool_launch {
-        Some(tool) => (
-            tool.program.clone(),
-            tool.args.clone(),
-            (!tool.env.is_empty()).then(|| json!(tool.env)),
-        ),
-        None => {
-            let plan = params.mode == ExecutionMode::Plan;
-            let hook_settings = params.hook.as_ref().map(|h| h.settings_path.as_str());
-            let resume = params.resume_session_id.as_deref();
-            let (program, args) = config.launch_command(plan, hook_settings, resume);
-            // herdr injects this env into the launched process
-            // (workspace.create + agent.start both take `env`). Only set when
-            // a hook spec is present.
-            (program, args, params.hook.as_ref().map(|h| json!(h.env)))
-        }
-    }
+) -> Result<(String, Vec<String>, Option<Value>), HerdrError> {
+    let tool = params
+        .tool_launch
+        .as_ref()
+        .ok_or(HerdrError::MissingToolLaunch)?;
+    Ok((
+        tool.program.clone(),
+        tool.args.clone(),
+        // herdr injects this env into the launched process (`workspace.create`
+        // applies it to the root pane, D-4). An empty map stays absent so no
+        // `env` key is sent at all.
+        (!tool.env.is_empty()).then(|| json!(tool.env)),
+    ))
 }
 
 /// Classify a post-start dispatch failure: a pane that **vanished** while we
@@ -1288,7 +1294,6 @@ mod tests {
             extra_context: None,
             job_id: None,
             resume_session_id: None,
-            hook: None,
             tool_launch: None,
         }
     }
@@ -1340,20 +1345,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_launch_prefers_tool_launch_verbatim() {
-        // #196: a 0.2.3 orchestrator's fully-resolved argv/env is launched
-        // as-is — the plugin-local launch_command must NOT re-append
-        // `--settings`/`--resume` even though hook/resume fields are set.
-        let config: HerdrConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+    fn resolve_launch_uses_tool_launch_verbatim() {
+        // #196: the Orchestrator's fully-resolved argv/env is launched as-is.
+        // `resume_session_id` is set here precisely because the plugin must
+        // NOT act on it — the resume flag is already inside `args` if it
+        // belongs there.
         let mut params = dispatch_params("t", None);
         params.resume_session_id = Some("sess-9".into());
-        params.hook = Some(plugin_protocol::methods::HookLaunchSpec {
-            settings_path: "/hooks/orchestrator-wf.json".into(),
-            env: std::collections::BTreeMap::from([(
-                "TOTSUKA_JOB_ID".to_string(),
-                "job-1-2".to_string(),
-            )]),
-        });
         params.tool_launch = Some(plugin_protocol::methods::ToolLaunchSpec {
             program: "claude".into(),
             args: vec!["--resolved".into()],
@@ -1362,43 +1360,25 @@ mod tests {
                 "job-1-2".to_string(),
             )]),
         });
-        let (program, args, env) = resolve_launch(&config, &params);
+        let (program, args, env) = resolve_launch(&params).unwrap();
         assert_eq!(program, "claude");
         assert_eq!(args, vec!["--resolved".to_string()]);
         assert_eq!(env, Some(serde_json::json!({"TOTSUKA_JOB_ID": "job-1-2"})));
 
-        // An empty tool_launch env stays absent (parity with the old
-        // hookless launch: no env key sent to herdr at all).
+        // An empty tool_launch env stays absent: no `env` key sent to herdr.
         params.tool_launch.as_mut().unwrap().env.clear();
-        let (_, _, env) = resolve_launch(&config, &params);
+        let (_, _, env) = resolve_launch(&params).unwrap();
         assert_eq!(env, None);
     }
 
     #[test]
-    fn resolve_launch_falls_back_to_launch_command() {
-        // Pre-0.2.3 orchestrator: no tool_launch — the deprecated hook path
-        // assembles the argv exactly as before.
-        let config: HerdrConfig = serde_json::from_value(serde_json::json!({})).unwrap();
-        let mut params = dispatch_params("t", None); // mode: Plan
-        params.resume_session_id = Some("sess-9".into());
-        params.hook = Some(plugin_protocol::methods::HookLaunchSpec {
-            settings_path: "/hooks/orchestrator-wf.json".into(),
-            env: std::collections::BTreeMap::new(),
-        });
-        let (program, args, env) = resolve_launch(&config, &params);
-        assert_eq!(program, "claude");
-        assert_eq!(
-            args,
-            vec![
-                "--permission-mode".to_string(),
-                "plan".to_string(),
-                "--settings".to_string(),
-                "/hooks/orchestrator-wf.json".to_string(),
-                "--resume".to_string(),
-                "sess-9".to_string(),
-            ]
-        );
-        assert_eq!(env, Some(serde_json::json!({})));
+    fn a_dispatch_without_tool_launch_fails_instead_of_improvising() {
+        // #411: the local argv fallback is gone. Launching `claude` without
+        // the workflow's `--settings` would produce a pane that runs and never
+        // reports completion, so this must fail loudly at dispatch instead.
+        let params = dispatch_params("t", None);
+        let err = resolve_launch(&params).unwrap_err();
+        assert!(matches!(err, HerdrError::MissingToolLaunch), "{err}");
     }
 
     /// The pieces of an [`agent_name`] that herdr's identifier rules constrain.

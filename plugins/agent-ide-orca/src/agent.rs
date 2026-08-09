@@ -411,7 +411,6 @@ mod tests {
             extra_context: Some(Value::String("line one\nline two".into())),
             job_id: None,
             resume_session_id: None,
-            hook: None,
             tool_launch: None,
         };
         let prompt = compose_prompt(&params);

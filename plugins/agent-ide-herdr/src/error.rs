@@ -34,6 +34,15 @@ pub enum HerdrError {
     /// The response was not the shape we expected.
     #[error("herdr returned an unexpected response: {0}")]
     InvalidResponse(String),
+    /// `task/dispatch` arrived without a `tool_launch` (#411). Not a herdr
+    /// failure at all — the Orchestrator failed to resolve the agent argv —
+    /// so it maps to `INVALID_PARAMS`, not the internal-error catch-all.
+    #[error(
+        "task/dispatch carried no `tool_launch`: since protocol 0.4.0 (#411) this plugin has no \
+         local argv fallback, so there is nothing to launch. This is an Orchestrator-side tool \
+         resolution failure — check `[tools]` / `default_tool`."
+    )]
+    MissingToolLaunch,
     /// A dispatch that asked to resume a session died with its pane, so the
     /// session could not be resumed (protocol `SESSION_UNRESUMABLE`, #242).
     /// Carries the herdr error underneath, which is what a human debugging it

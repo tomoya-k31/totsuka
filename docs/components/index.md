@@ -15,7 +15,7 @@
 * [task-source-notion](task-source-notion.md) - Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 * [task-source-slack](task-source-slack.md) - 自分宛の Slack メンションをタスク化し本人名義で代理返信する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard（auth.test + apps.connections.open + 任意の bot probe）・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決・下書き提示・承認フロー・bot ナッジ DM 通知（#305）に加え、manifest 雛形・CLI レベル E2E・運用ドキュメントまで完備（エピック#102 完了）。
 * [agent-ide-herdr](agent-ide-herdr.md) - herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
-* [agent-ide-orca](agent-ide-orca.md) - orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。design_preview は非宣言（capability を正直に宣言）。
+* [agent-ide-orca](agent-ide-orca.md) - orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。pane_control は非宣言（capability を正直に宣言）。
 * [notifier-macos](notifier-macos.md) - Orchestrator のイベント（waiting_input / done / failed / pending / escalated / verification_pending）を macOS 通知センターへ配送する公式 notifier プラグイン。バックエンド選択（osascript / terminal-notifier click-to-focus）、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
 * [live-e2e スキル](live-e2e.md) - 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順・設定雛形・駆動スクリプト一式。自動／手動／目視の区分と、別環境での一からの構築手順を含む。
 <!-- okf:index:end -->

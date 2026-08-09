@@ -1,11 +1,14 @@
 name = "herdr"
 kind = "agent_ide"
 version = "0.1.0"
-protocol_version = ">=0.1.0, <0.4"
+# The lower bound is load-bearing, not cosmetic (#411): 0.2.3 is where
+# `TaskDispatchParams.tool_launch` arrived, and this plugin no longer has a
+# local argv fallback for orchestrators that send none. Refusing them here
+# (F-54) is what makes deleting `agent_command`/`plan_args` safe.
+protocol_version = ">=0.2.3, <0.5"
 
 [capabilities]
 plan_mode = true
-design_preview = true
 pane_control = true
 state_stream = true
 resume_session = true

@@ -24,7 +24,8 @@
 //! State is a coarse 3-value derived from OSC "state dots" (a status-line hook),
 //! not a structured stream; `failed` has no native signal (derived from an
 //! abnormal terminal exit / timeout); and orca has no structured plan/preview
-//! API, so `design_preview` is **not** declared.
+//! API. (There used to be a `design_preview` capability to *not* declare; it
+//! was removed in protocol 0.4.0, #411, because nothing ever read it.)
 
 pub mod agent;
 pub mod cli;

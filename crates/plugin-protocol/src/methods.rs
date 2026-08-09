@@ -356,24 +356,21 @@ pub struct TaskDispatchParams {
     /// continuation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_session_id: Option<String>,
-    /// 0.1.3: hook launch spec. When `Some`, the plugin appends
-    /// `--settings <settings_path>` to the agent CLI argv and injects `env`
-    /// into the process. Knowledge of the hook mechanism stays on the
-    /// Orchestrator side; the plugin does not interpret the contents.
+    /// 0.2.3 (#196): the fully-resolved tool launch spec — plan flags, hook
+    /// settings (`--settings <path>`) and resume syntax are already baked in
+    /// by the Orchestrator's tool registry, and the plugin launches exactly
+    /// this argv/env in the pane without interpreting it.
     ///
-    /// **Deprecated since 0.2.3** (#196): superseded by
-    /// [`tool_launch`](Self::tool_launch), which carries the *fully assembled*
-    /// argv instead of leaving CLI-flag knowledge (`--settings`, `--resume`)
-    /// in the plugin. Both are sent during the deprecation window — an old
-    /// plugin reads `hook`, a new plugin prefers `tool_launch` — and `hook`
-    /// is removed at the next breaking bump (0.3).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hook: Option<HookLaunchSpec>,
-    /// 0.2.3 (#196): the fully-resolved tool launch spec. When `Some`, the
-    /// plugin launches exactly this argv/env in the pane — plan flags, hook
-    /// settings, and resume syntax are already baked in by the Orchestrator's
-    /// tool registry. Takes precedence over [`hook`](Self::hook) +
-    /// plugin-local command assembly when present.
+    /// Optional only for the historical reason that it arrived additively in
+    /// 0.2.3 alongside the `hook` spec it replaced, which 0.4.0 removed.
+    ///
+    /// A plugin that *depends* on this spec should declare `>=0.2.3` in its
+    /// manifest and **fail the dispatch** when it arrives `None`, rather than
+    /// assembling an argv of its own: there is no second channel left to fall
+    /// back to, and an improvised argv would omit `--settings`. That is not a
+    /// blanket rule for `agent_ide` — a plugin that never reads `tool_launch`
+    /// (orca drives the `orca` CLI itself) keeps a wide lower bound, because
+    /// raising it would only refuse orchestrators it works with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_launch: Option<ToolLaunchSpec>,
 }
@@ -381,28 +378,13 @@ pub struct TaskDispatchParams {
 /// A fully-resolved agent-CLI launch command (additive since protocol 0.2.3,
 /// #196), carried in [`TaskDispatchParams::tool_launch`]. Opaque to the
 /// plugin — it starts `program` with `args` and `env` in the pane, exactly as
-/// given (same contract style as [`HookLaunchSpec`]: tool knowledge stays on
-/// the Orchestrator side).
+/// given: tool knowledge stays on the Orchestrator side.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolLaunchSpec {
     /// The program to launch (e.g. `claude`).
     pub program: String,
     /// Arguments, fully resolved: mode flags, hook settings, resume id.
     pub args: Vec<String>,
-    /// Environment variables to inject into the launched process
-    /// (`TOTSUKA_*`; a superset of the deprecated [`HookLaunchSpec::env`]).
-    pub env: std::collections::BTreeMap<String, String>,
-}
-
-/// How to launch the agent with the Orchestrator's hook configuration
-/// (additive since protocol 0.1.3), carried in
-/// [`TaskDispatchParams::hook`]. Opaque to the plugin: it only wires the
-/// values through to the agent process.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HookLaunchSpec {
-    /// Absolute path of the settings file passed to `--settings` (managed
-    /// per-workflow by the Orchestrator).
-    pub settings_path: String,
     /// Environment variables to inject into the launched process
     /// (`TOTSUKA_JOB_ID` / `TOTSUKA_HOOK_ENDPOINT` / `TOTSUKA_HOOK_TOKEN`, …).
     pub env: std::collections::BTreeMap<String, String>,
@@ -741,16 +723,6 @@ mod tests {
             extra_context: Some(serde_json::json!({"base": "main"})),
             job_id: Some("job-7".into()),
             resume_session_id: Some("claude-sess-abc".into()),
-            hook: Some(HookLaunchSpec {
-                settings_path: "/data/totsuka/hooks/orchestrator-implement.json".into(),
-                env: std::collections::BTreeMap::from([
-                    ("TOTSUKA_JOB_ID".to_string(), "job-7".to_string()),
-                    (
-                        "TOTSUKA_HOOK_ENDPOINT".to_string(),
-                        "/run/totsuka/hook.sock".to_string(),
-                    ),
-                ]),
-            }),
             tool_launch: Some(ToolLaunchSpec {
                 program: "claude".into(),
                 args: vec![
@@ -759,10 +731,13 @@ mod tests {
                     "--resume".into(),
                     "claude-sess-abc".into(),
                 ],
-                env: std::collections::BTreeMap::from([(
-                    "TOTSUKA_JOB_ID".to_string(),
-                    "job-7".to_string(),
-                )]),
+                env: std::collections::BTreeMap::from([
+                    ("TOTSUKA_JOB_ID".to_string(), "job-7".to_string()),
+                    (
+                        "TOTSUKA_HOOK_ENDPOINT".to_string(),
+                        "/run/totsuka/hook.sock".to_string(),
+                    ),
+                ]),
             }),
         });
         round_trip(&TaskDispatchResult {
@@ -871,7 +846,7 @@ mod tests {
         .unwrap();
         assert!(old.job_id.is_none());
         assert!(old.resume_session_id.is_none());
-        assert!(old.hook.is_none());
+        assert!(old.tool_launch.is_none());
         assert!(old.task.instructions.is_none());
         let unset = TaskDispatchParams {
             task: sample_task(),
@@ -880,13 +855,12 @@ mod tests {
             extra_context: None,
             job_id: None,
             resume_session_id: None,
-            hook: None,
             tool_launch: None,
         };
         let wire = serde_json::to_string(&unset).unwrap();
         assert!(!wire.contains("job_id"));
         assert!(!wire.contains("resume_session_id"));
-        assert!(!wire.contains("hook"));
+        assert!(!wire.contains("tool_launch"));
         assert!(!wire.contains("instructions"));
         // A `diagnostics/snapshot` result may omit `text` (capture failure is
         // not an error): absent deserializes to None, None stays off the wire.
