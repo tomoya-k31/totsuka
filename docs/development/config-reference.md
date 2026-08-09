@@ -198,6 +198,9 @@ on_success = { set_status = "設計済み" }
 | 追加された挙動 | 対象 profile | issue |
 |---|---|---|
 | claude の `--settings` へ `permissions.deny` を注入 | answer / triage / design | #395 |
+| `Bash` を**ツールごと** deny（コマンドを 1 つも実行できない） | answer | #410 |
+| claude の `--permission-mode plan` を**渡さない** | answer / triage / design | #410 / #409 |
+| worktree がブランチ上にあったら成果物を**公開せず失敗**させる | answer / triage / design | #409 |
 | ソースプラグインへ `instructions_kind` を伝え、書き込み先の指示を出させる | triage / design / implement | #398 |
 | 検収 rubric を「成果物 URL の実在」に差し替え | triage / design / implement | #398 |
 | ソースプラグインへ `task_id_prefix` を伝え、会話とは別 ID のタスクを立てさせる | implement (`impl:`) / triage (`books:`) | #397 |
@@ -284,10 +287,21 @@ F-82 は plan を「worktree は作るが push・PR は行わない」モード�
 実装も `--permission-mode plan` / `--sandbox read-only` / `bash: deny` がそれを担保する前提で
 書かれてきた。**実機ではその前提が破れた** — plan モードのタスクがブランチを切り、コミットし、
 push し、PR まで作成した。対象リポジトリの `CLAUDE.md` が「終わったら push して PR を作れ」と
-指示していたためである。
+指示していたためである。**claude の `--permission-mode plan` に至っては、`permissionMode` が
+`plan` のままファイルが書かれた実測がある**（#410）ので、書き込みを止める機構として数えないこと。
 
-現状は**検出**まで。plan モードのタスクの worktree にブランチが現れると `run` が警告を出す
-（ブランチ名つき）。副作用の無いモードとして plan を選ぶ場合は、**対象リポジトリの規約に
+**素の `mode = "plan"`（profile 無し）は今も検出だけ**である。worktree にブランチが現れると
+`run` が警告を出す（ブランチ名つき）。既存の構成がアップグレードで黙って厳しくならないよう、
+ここは意図的に警告のままにしてある。
+
+**profile を書いた workflow は失敗する**（#409、[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md)）。
+read-only profile（answer / triage / design）のタスクの worktree がブランチ上にあると、成果物を
+公開せず `fail_publish` で失敗し、worktree とコミットは調査用に保持される。**これは防止ではない** —
+ブランチがある時点で push は済んでいるかもしれず取り返せない。失敗させることで「黙って成功」を
+避けているだけである。復帰するには worktree を detach してから `totsuka task retry`（そのままの
+retry は同じ検査で再び落ちる）か、`totsuka task cancel`。
+
+副作用の無いモードとして plan を選ぶ場合は、いずれにせよ**対象リポジトリの規約に
 push / PR を指示する記述が無いか**を確認すること。
 
 # `[tools.{name}]`（AI ツールレジストリ、#196）
