@@ -20,10 +20,16 @@
 //!   `.claude/settings.json`.
 //! - "Permission rules are enforced by Claude Code, not by the model.
 //!   Instructions in your prompt or CLAUDE.md … don't change what Claude Code
-//!   allows." That sentence is the whole point: [#378] was a plan-mode task
+//!   allows." Read that narrowly: a **denied rule stays denied** no matter what
+//!   the repository's `CLAUDE.md` says. It does **not** say the agent will stop
+//!   pursuing what `CLAUDE.md` asked for — it will reach for whatever is still
+//!   allowed, which is the whole of
+//!   [#410](https://github.com/tomoya-k31/totsuka/issues/410) below. This was
+//!   first written here as the answer to
+//!   [#378](https://github.com/tomoya-k31/totsuka/issues/378) (a plan-mode task
 //!   that branched, committed, pushed and opened a PR because the target
-//!   repository's `CLAUDE.md` told it to. Prose could not be answered with
-//!   prose.
+//!   repository's `CLAUDE.md` told it to). It is not that answer, and #378 is
+//!   not fixed.
 //! - deny applies in every permission mode, so it composes with
 //!   `--permission-mode plan` rather than replacing it.
 //!
