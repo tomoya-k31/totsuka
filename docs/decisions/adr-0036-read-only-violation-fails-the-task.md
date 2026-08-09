@@ -4,7 +4,7 @@ title: ADR-0036 triage / design はシェルを検査せず、リポジトリを
 description: "gh issue comment に複数行 Markdown を渡すにはシェル構文が要るため triage / design から Bash を取り上げられない。コマンド文字列を検査するフックは、引用符の内外を見分けるパーサが要るうえ取りこぼしに強い名前が付くので不採用。代わりに全 read-only profile から plan ゲートを外して無人ハングを消し、read-only profile のタスクがブランチ上にあったら成功として公開せず fail_publish で失敗させる。防止ではなく検出で、本当の境界はサンドボックス調査（#418）に送る。"
 resource: https://github.com/tomoya-k31/totsuka/issues/409
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-10T08:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-10T09:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:

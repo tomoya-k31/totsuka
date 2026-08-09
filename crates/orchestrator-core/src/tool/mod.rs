@@ -118,10 +118,10 @@ pub struct LaunchInputs<'a> {
     pub plan: bool,
     /// The workflow's resolved [`Profile`], when it has one.
     ///
-    /// Read only to answer "are this dispatch's write paths already closed by
-    /// the rendered deny rules?" — see the Claude arm of
-    /// [`launch_spec`](ToolProfile::launch_spec), which drops
-    /// `--permission-mode plan` in that case (#410).
+    /// Read only to answer "is this a read-only profile?" — see the Claude arm
+    /// of [`launch_spec`](ToolProfile::launch_spec), which drops
+    /// `--permission-mode plan` for those (#410, widened to all three in
+    /// #409).
     pub profile: Option<Profile>,
     /// The workflow's rendered hook-settings path (Claude only; `--settings`).
     pub settings_path: Option<&'a str>,
@@ -234,9 +234,11 @@ impl ToolProfile {
     /// ride every launch), and `--resume <id>` when resuming.
     ///
     /// **The plan args are conditional since #410.** They are skipped when the
-    /// dispatch both carries a settings file and names a [`Profile`] whose deny
-    /// rules remove every write tool — `answer` today. See the Claude arm for
-    /// why both halves are required. An explicit `plan_args` is never skipped.
+    /// dispatch both carries a settings file and names a **read-only**
+    /// [`Profile`] (`answer` / `triage` / `design` — #409 widened this from
+    /// "a profile that also denies `Bash`", which was `answer` alone). See the
+    /// Claude arm for why both halves are required. An explicit `plan_args` is
+    /// never skipped.
     ///
     /// Codex argv (#196 Phase 2): base command, then the `resume <id>`
     /// subcommand when resuming (codex resumes via a subcommand, not a flag),
