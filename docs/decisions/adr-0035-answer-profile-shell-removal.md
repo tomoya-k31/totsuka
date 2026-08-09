@@ -1,10 +1,10 @@
 ---
 type: Decision
 title: ADR-0035 answer profile は Bash ごと取り上げ、claude の plan モードを渡さない
-description: "実機で deny を全部回り込まれた（#410）ことを受け、answer profile の Bash(...) パターン列挙を裸の Bash 拒否へ置き換える決定。あわせて、書き込みツールが全部消えている profile では claude の --permission-mode plan を渡さない。plan モードは強制力を持たず ExitPlanMode の承認ゲートだけを足すが、そのゲートは計画ファイルを書く Write を我々が消しているせいで無人環境で非決定的に振る舞うため。codex の --sandbox read-only は本物なので対象外。"
+description: "実機で deny を全部回り込まれた（#410）ことを受け、answer profile の Bash(...) パターン列挙を裸の Bash 拒否へ置き換える決定。あわせて、deny が実際に届いている claude 起動に限り --permission-mode plan を渡さない。plan モードは Bash のファイル書き込みを止めず、残る ExitPlanMode の承認ゲートは計画ファイルを書く Write を我々が消しているせいで無人環境で非決定的に振る舞うため。codex の --sandbox read-only は本物なので対象外。"
 resource: https://github.com/tomoya-k31/totsuka/issues/410
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-09T22:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-09T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -34,11 +34,13 @@ stable（[#410](https://github.com/tomoya-k31/totsuka/issues/410)）。[ADR-0033
 
 **残った機構は 1 つだけだった: ツールごと取り上げること。** `Write` は実際に消えており、`No such tool available` で拒否されている。パターンは機能しなかった。
 
-## plan モードは何も強制していなかった
+## plan モードは書き込みを止めていなかった
 
-もう 1 つ実測で分かったことがある。**`--permission-mode plan` はファイル書き込みを止めない。** 別のセッションで、`permissionMode` が `plan` のまま `cat > …` が成功している。
+もう 1 つ実測で分かったことがある。**`--permission-mode plan` は `Bash` 経由のファイル書き込みを止めない。** 別のセッションで、`permissionMode` が `plan` のまま `cat > …` が成功している。
 
-plan モードが足しているのは実質 `ExitPlanMode` の承認ゲートだけで、そのゲートは無人 pane で**非決定的に振る舞う**。372 セッションの走査結果:
+（これは「plan モードは何もしていない」ではない。測ったのはこの 1 点だけである — 下の「引き受けたコスト」を参照。）
+
+シェルを持たないエージェントに対して plan モードが残す実質は `ExitPlanMode` の承認ゲートで、そのゲートは無人 pane で**非決定的に振る舞う**。372 セッションの走査結果:
 
 | `ExitPlanMode` の入力 | 結果 | 件数 |
 |---|---|---|
@@ -74,6 +76,8 @@ DENY_FILE_EDITS → （Bash で迂回して書けた） → ゲートが出る �
 - `implement` → 対象外（deny しない）
 - **profile 無しの `mode = "plan"` → 対象外。** deny 注入自体が無いので、ここで plan モードを外すと代替機構が無く、ただ緩くなる
 
+**もう 1 つ、profile だけでは足りない条件がある。** deny は `--settings` 経由でしか claude に届かず、そのパスを `run::dispatch_one` が解決するのは**フック対応 agent**（`resume_session` / `diagnostics_snapshot` を宣言するもの）に対してだけである。どちらも宣言しない agent_ide（orca / mock、および同じ形の第三者プラグイン）には settings ファイルが渡らないので、profile だけを見て plan フラグを落とすと **deny も plan も無い**起動になり、この変更前より緩くなる。したがって条件は `settings_path.is_some()` との**論理積**である。
+
 `plan_args` を明示した operator の設定は尊重する（書いた以上そのつもりである）。
 
 ## D3. これは **claude 限定**
@@ -82,7 +86,7 @@ DENY_FILE_EDITS → （Bash で迂回して書けた） → ゲートが出る �
 
 | kind | plan 時の引数 | 実体 |
 |---|---|---|
-| claude | `--permission-mode plan` | ゲートのみ。強制力なし |
+| claude | `--permission-mode plan` | `Bash` 書き込みを止めないと実測。シェルが無ければ残るのは承認ゲートだけ |
 | codex | `--sandbox read-only` | **本物の OS サンドボックス** |
 | opencode | `--agent totsuka-plan` | 全 deny エージェント（[ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md)） |
 
@@ -114,6 +118,7 @@ deny は allow に勝つので、無人承認も無人ハングも消えて「pl
 
 - **`answer` タスクはコマンドを 1 つも実行できない。** `git log` も `gh issue view` もテスト実行も不可。「読んで答える」には `Read` / `Grep` / `Glob` で足りるという判断だが、**リポジトリの履歴を根拠に答えるような質問には答えられなくなる**
 - **`triage` / `design` は手つかず。** 両方の経路が開いたままで、#409 の `PreToolUse` フックを待つ
+- **plan モードを外したことには未実測の縁がある。** 実測したのは「plan モードは `Bash` のファイル書き込みを止めなかった」という狭い事実で、そこから「plan モードは何もしていない」は出てこない。pane は既定モードで起動するようになり、このリストが名前を挙げていないツール（`WebFetch` / `WebSearch` / `mcp__*`）に対する plan の網は**代替されていない**。次の実機で見るべき形は 2 つ: 対象リポジトリ自身の設定が書き込み可能な MCP ツールを allow している場合と、plan 下では自由だった読み取りツールが**無人 pane に答えられない許可プロンプトを出す**場合。後者は少なくとも黙って通らずエスカレーションする
 - **依然として read-only の「保証」ではない。** 塞いだのは**実測された**経路だけで、MCP ツール・サブエージェント・将来追加されるツールについては何も言っていない。ハード保証には sandbox が要る
 
 ## 分かったこと
@@ -124,5 +129,5 @@ deny は allow に勝つので、無人承認も無人ハングも消えて「pl
 
 # 検証
 
-- `cargo test --workspace --all-features` — `answer` が `Bash` を deny し `Bash(...)` パターンを 1 つも持たないこと、`denies_every_write_tool` が profile 名ではなくルールに対して答えること、claude だけが plan フラグを落とし codex / opencode は保つこと、`plan_args` 明示が優先されること
+- `cargo test --workspace --all-features` — `answer` が `Bash` を deny し `Bash(...)` パターンを 1 つも持たないこと、`denies_every_write_tool` が profile 名ではなくルールに対して答えること、claude だけが plan フラグを落とし codex / opencode は保つこと、`plan_args` 明示が優先されること、**settings ファイルが無い起動では plan フラグが残ること**
 - **実機検収は未了。** #410 の受け入れ条件は「`profile = "answer"` に『実装して PR を出せ』と明示しても、ブランチ・commit・push・PR のいずれも発生しない」ことを、対象リポジトリの `CLAUDE.md` が push / PR を指示している状態で確認することを求めている。それが済むまでこの ADR に `verified` は付けない

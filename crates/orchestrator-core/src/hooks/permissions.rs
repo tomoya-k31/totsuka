@@ -76,6 +76,16 @@
 //! needs a `PreToolUse` hook that inspects the whole command (#409). Until that
 //! lands, their `Bash(...)` rules are what #410 proved insufficient.
 //!
+//! **Dropping plan mode for `answer` has an unmeasured edge.** What was
+//! measured is narrow: plan mode did not stop a `Bash` file write. It does not
+//! follow that plan mode did *nothing* — the pane now starts in the ambient
+//! default mode instead, and nothing here replaces plan's blanket over tools
+//! this list never names (`WebFetch`, `WebSearch`, `mcp__*`). Two shapes to
+//! watch for in the next live run: a target repo whose own settings allow a
+//! write-capable MCP tool, and a read-only tool that used to be free under
+//! plan now raising a permission prompt an unattended pane cannot answer. The
+//! second is at least loud (it escalates), not silent.
+//!
 //! **This is still not a read-only guarantee, for any profile.** Removing
 //! `Bash` closes the routes that were *measured*; it says nothing about MCP
 //! tools, subagents, or a tool added later. A hard guarantee needs a sandbox.
@@ -144,8 +154,12 @@ const DENY_GIT_WRITES: &[&str] = &[
     "Bash(git tag *)",
 ];
 
-/// Pull-request commands, denied in every non-`implement` profile: opening a
-/// PR is what `implement` is for.
+/// Pull-request commands. Opening a PR is what `implement` is for.
+///
+/// Carried by `triage` / `design` only — **not** by `answer`, which has no
+/// shell for them to apply to. Do not restore the words "every non-implement
+/// profile" here: a comment that claims wider coverage than the code has is
+/// the failure this module keeps re-learning (#410).
 const DENY_PR: &[&str] = &[
     "Bash(gh pr create *)",
     "Bash(gh pr merge *)",
@@ -154,10 +168,13 @@ const DENY_PR: &[&str] = &[
 
 /// Repository administration. Denied even where the agent is expected to write
 /// through `gh`, because nothing a `triage` or `design` task legitimately does
-/// requires deleting or renaming a repository.
+/// requires deleting or renaming a repository. (`answer` has no shell, so it
+/// does not carry this either.)
 const DENY_REPO_ADMIN: &[&str] = &["Bash(gh repo delete *)", "Bash(gh repo rename *)"];
 
-/// `gh api`, denied in **every** read-only profile.
+/// `gh api`, denied in the read-only profiles that still have a shell
+/// (`triage` / `design`). `answer` denies `Bash` instead, so it never reaches
+/// a `gh` of any kind.
 ///
 /// It reaches every REST and GraphQL endpoint, so leaving it open while denying
 /// `gh repo delete` and `gh pr create` would make those rules decorative — the
