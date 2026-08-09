@@ -4,7 +4,7 @@ title: ADR-0035 answer profile は Bash ごと取り上げ、claude の plan モ
 description: "実機で deny を全部回り込まれた（#410）ことを受け、answer profile の Bash(...) パターン列挙を裸の Bash 拒否へ置き換える決定。あわせて、deny が実際に届いている claude 起動に限り --permission-mode plan を渡さない。plan モードは Bash のファイル書き込みを止めず、残る ExitPlanMode の承認ゲートは計画ファイルを書く Write を我々が消しているせいで無人環境で非決定的に振る舞うため。codex の --sandbox read-only は本物なので対象外。"
 resource: https://github.com/tomoya-k31/totsuka/issues/410
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-09T23:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-10T08:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -19,6 +19,8 @@ sources:
 # Status
 
 stable（[#410](https://github.com/tomoya-k31/totsuka/issues/410)）。[ADR-0033](/decisions/adr-0033-workflow-profile.md) D4 の改訂。
+
+> **改訂（[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md)）**: 下の D2 は plan フラグを落とす対象を「書き込みツールが全部消えている profile」に限っていたが、**ADR-0036 D2 が全 read-only profile へ広げた**。判定関数 `denies_every_write_tool` も `permissions::plan_mode_only_adds_the_gate` に置き換わっており、**もう存在しない**。D2 を読むときは ADR-0036 D2 を併せて読むこと。
 
 `triage` / `design` はこの ADR の対象外で、[#409](https://github.com/tomoya-k31/totsuka/issues/409) で別途扱う。
 
@@ -69,7 +71,7 @@ DENY_FILE_EDITS → （Bash で迂回して書けた） → ゲートが出る �
 
 ## D2. 書き込みツールが全部消えている profile では claude の plan モードを渡さない
 
-判定は profile 名ではなく**ルールの中身**に対して行う（`permissions::denies_every_write_tool`）。編集ツールと `Bash` の両方を deny している profile だけが対象になる。
+判定は profile 名ではなく**ルールの中身**に対して行う（`permissions::denies_every_write_tool`）。編集ツールと `Bash` の両方を deny している profile だけが対象になる。**（この関数は ADR-0036 で `plan_mode_only_adds_the_gate` に置き換えられ、対象は全 read-only profile に広がった。）**
 
 - `answer` → 対象（渡さない）
 - `triage` / `design` → **対象外**。`Bash` が残っているので、plan モードは持っている唯一の制限である

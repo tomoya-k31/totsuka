@@ -138,8 +138,13 @@ const DENY_FILE_EDITS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 /// to read and reply, because reading is [`Read`]/`Grep`/`Glob` and the reply
 /// goes back through the source plugin's approval gate. It is **not**
 /// affordable for `triage`/`design`, which write their artifact with
-/// `gh issue comment`; those need a `PreToolUse` hook that can inspect the
-/// whole command instead (#409).
+/// `gh issue comment`. Inspecting the whole command with a `PreToolUse` hook
+/// was the obvious answer and was **rejected** in
+/// [ADR-0036](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0036-read-only-violation-fails-the-task.md):
+/// separating `--body 'use A && B'` from `… && git push` needs a
+/// quoting-aware parser, and an imperfect one would carry the name "command
+/// safety check". They rely on the patterns below plus a read-only violation
+/// failing the task instead of publishing it.
 ///
 /// [`Read`]: https://code.claude.com/docs/en/settings
 const DENY_SHELL: &[&str] = &["Bash"];
@@ -289,7 +294,8 @@ mod tests {
         assert!(
             !design.contains(&"Bash"),
             "design writes its artifact with `gh issue comment`, so it cannot \
-             deny the shell — it needs a PreToolUse hook instead (#409)"
+             deny the shell (#409: inspecting commands was rejected; the \
+             backstop is that a violation fails the task)"
         );
 
         // Everything `design` blocks by pattern, `answer` blocks by not having

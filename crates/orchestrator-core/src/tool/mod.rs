@@ -118,10 +118,10 @@ pub struct LaunchInputs<'a> {
     pub plan: bool,
     /// The workflow's resolved [`Profile`], when it has one.
     ///
-    /// Read only to answer "are this dispatch's write paths already closed by
-    /// the rendered deny rules?" — see the Claude arm of
-    /// [`launch_spec`](ToolProfile::launch_spec), which drops
-    /// `--permission-mode plan` in that case (#410).
+    /// Read only to answer "is this a read-only profile?" — see the Claude arm
+    /// of [`launch_spec`](ToolProfile::launch_spec), which drops
+    /// `--permission-mode plan` for those (#410, widened to all three in
+    /// #409).
     pub profile: Option<Profile>,
     /// The workflow's rendered hook-settings path (Claude only; `--settings`).
     pub settings_path: Option<&'a str>,
@@ -234,9 +234,11 @@ impl ToolProfile {
     /// ride every launch), and `--resume <id>` when resuming.
     ///
     /// **The plan args are conditional since #410.** They are skipped when the
-    /// dispatch both carries a settings file and names a [`Profile`] whose deny
-    /// rules remove every write tool — `answer` today. See the Claude arm for
-    /// why both halves are required. An explicit `plan_args` is never skipped.
+    /// dispatch both carries a settings file and names a **read-only**
+    /// [`Profile`] (`answer` / `triage` / `design` — #409 widened this from
+    /// "a profile that also denies `Bash`", which was `answer` alone). See the
+    /// Claude arm for why both halves are required. An explicit `plan_args` is
+    /// never skipped.
     ///
     /// Codex argv (#196 Phase 2): base command, then the `resume <id>`
     /// subcommand when resuming (codex resumes via a subcommand, not a flag),
@@ -259,16 +261,17 @@ impl ToolProfile {
         let mut args: Vec<String> = parts.collect();
         match self.kind {
             ToolKind::Claude => {
-                // `--permission-mode plan` is skipped when the profile's deny
-                // rules already remove every write tool (#410). Claude's plan
-                // mode did not stop a `Bash` file write in a live session, so
-                // against a shell-less agent what it still contributes is
-                // `ExitPlanMode`, a human approval gate that an unattended pane
-                // resolves unpredictably: it hangs when Claude Code wrote its
-                // plan file and auto-passes when it could not, and `Write`
-                // (which authors that file) is one of the tools we removed. An
-                // explicit `plan_args` override is still honoured — an operator
-                // who wrote one meant it.
+                // `--permission-mode plan` is skipped for every read-only
+                // profile (#410, widened in #409). Plan mode did not stop a
+                // `Bash` file write in a live session, so what it reliably
+                // contributes is `ExitPlanMode` — a human approval gate that an
+                // unattended pane resolves unpredictably: it auto-passes when
+                // Claude Code could not write its plan file (which `Write`, one
+                // of the tools we removed, authors) and **hangs** when it
+                // could. A live `design` task sat at that gate for 14 minutes.
+                // Trading a certain hang for an unmeasured nudge is not a
+                // trade. An explicit `plan_args` override is still honoured —
+                // an operator who wrote one meant it.
                 //
                 // **`settings_path` is part of the condition, not decoration.**
                 // The deny rules reach Claude only through `--settings`, and

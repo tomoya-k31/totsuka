@@ -2903,8 +2903,8 @@ fn plan_mode_side_effect(mode: &str, branch: &str) -> Option<String> {
 
 /// The reason a read-only profile's task must not be published as a success:
 /// its worktree ended up on a named branch, which the orchestrator never
-/// handed it. Free-standing so the rule is unit-testable
-/// without an engine (`Engine::read_only_side_effect` is the lookup around it).
+/// handed it. Free-standing so the rule is unit-testable without an engine;
+/// `finalize_success` does the workflow lookup and reads the live `HEAD`.
 fn read_only_side_effect(
     workflow: &str,
     profile: Option<Profile>,

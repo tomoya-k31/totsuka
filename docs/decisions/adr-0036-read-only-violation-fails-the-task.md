@@ -4,7 +4,7 @@ title: ADR-0036 triage / design はシェルを検査せず、リポジトリを
 description: "gh issue comment に複数行 Markdown を渡すにはシェル構文が要るため triage / design から Bash を取り上げられない。コマンド文字列を検査するフックは、引用符の内外を見分けるパーサが要るうえ取りこぼしに強い名前が付くので不採用。代わりに全 read-only profile から plan ゲートを外して無人ハングを消し、read-only profile のタスクがブランチ上にあったら成功として公開せず fail_publish で失敗させる。防止ではなく検出で、本当の境界はサンドボックス調査（#418）に送る。"
 resource: https://github.com/tomoya-k31/totsuka/issues/409
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-10T08:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-10T09:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -119,3 +119,4 @@ gh issue comment 31 --body x && git push                    # 危険
 
 - `cargo test --workspace --all-features` — 全 read-only profile が plan フラグを落とすこと（`implement` と profile 無しは落とさないこと）、`read_only_side_effect` が profile で門を作りブランチ・profile 名・「push は取り返せない」旨・**救済手順（detach / cancel）**をメッセージに含むこと、**detached では発火しないこと**（救済が実際に効くことの固定）、`implement` / profile 無しでも発火しないこと
 - **実機検収は未了。** `design` タスクが人間の承認を待たずに完走すること、および read-only profile がブランチを切った場合にタスクが失敗して worktree が残ることを実機で確認するまで `verified` は付けない
+- **検収では「承認プロンプトを 1 つも出さずに完走したか」を明示的に見る。** plan フラグを外した pane は環境の既定モードで起動し、totsuka が配る settings には `deny` しか無い（`allow` も `defaultMode` も書かない）。`triage` / `design` は仕事が丸ごと `Bash`（`gh issue comment`）なので、**既定モードが Bash の承認を求める環境では、#409 と同種の停止が場所を変えて戻る**。開発機のグローバル設定には `Bash(gh:*)` 等の allow があるため**そこでは再現しない**点に注意 — クリーンな環境で確かめる必要がある。追跡は [#420](https://github.com/tomoya-k31/totsuka/issues/420)
