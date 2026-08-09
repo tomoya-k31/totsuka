@@ -20,6 +20,7 @@
 * **Update**: `result/publish` の非推奨（呼び出し時のみ警告、削除は 0.3）と、`instructions_kind` から指示文を選ぶ経路を追記 [task-source-github](/components/task-source-github.md) / [task-source-notion](/components/task-source-notion.md)
 * **Update**: profile が要求する外部ツール（`implement` の `gh`）の不在を dispatch 前に検知し、タスクを `Queued` のまま待機させる決定を D9 節として追記（#399）。検査が偽陰性を出しうる（判定は totsuka のプロセス、実行は pane）ため doctor は `fail` ではなく `warn`、dispatch は失敗ではなく待機に倒す。`triage` / `design` は書き込み先が source 依存で判別できないため**検査しない**ことを skip 行で明示する [ADR-0033](/decisions/adr-0033-workflow-profile.md)
 * **Update**: 外部ツール未整備での待機の挙動、検査の偽陰性、検査しない範囲を追記 [config.toml リファレンス](/development/config-reference.md)
+* **Update**: `permissions.deny` を read-only の保証として書いていた記述を**撤回**した（#410）。実機検証で、ルールが全部正しく生成・適用・発火した状態のまま `answer` profile のタスクがブランチ・commit・push・PR まで到達している。塞げていないのは (a) `Bash` 経由のファイル書き込み（編集ツールを消しても `cat >` / `python3 - <<EOF` で書ける）と (b) `&&` / パイプによる前方一致の回避。**#378 はまだ直っていない**。守れない約束が書いてある状態は何も書いていないより危険なので、修正の方針が決まる前に記述だけ先に撤回した [ADR-0033](/decisions/adr-0033-workflow-profile.md) / [Claude Code フック機構のセキュリティポリシー](/security/hook-security.md) / [フックのトラブルシューティング](/operations/hook-troubleshooting.md)
 
 ## 2026-08-07
 

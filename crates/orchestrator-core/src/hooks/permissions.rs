@@ -27,19 +27,39 @@
 //! - deny applies in every permission mode, so it composes with
 //!   `--permission-mode plan` rather than replacing it.
 //!
-//! # What this does and does not guarantee
+//! # This is not a read-only guarantee. It was documented as one, and it is not.
 //!
-//! | layer | mechanism | strength |
+//! **[#410](https://github.com/tomoya-k31/totsuka/issues/410): a live `answer`
+//! task branched, committed, pushed and opened a pull request with every rule
+//! below correctly generated and applied.** The rules fired — `Write` was gone,
+//! `git switch -c` was denied — and the agent went around all of them. Read the
+//! table as "what each layer stops", never as a boundary.
+//!
+//! | layer | mechanism | what it actually stops |
 //! |---|---|---|
 //! | 1 | `--permission-mode plan` | a flag; the model can be talked around it |
-//! | 2 | bare tool names (`Edit` / `Write` / `NotebookEdit`) | **effectively guarantees no file edits** — the tool is removed, not filtered |
-//! | 3 | `Bash(...)` patterns | best effort only (see below) |
-//! | 4 | the branch-detection warning (#385) | detection after the fact |
+//! | 2 | bare tool names (`Edit` / `Write` / `NotebookEdit`) | those **tools**. Not file writes — see below |
+//! | 3 | `Bash(...)` patterns | commands whose string *starts* with the pattern |
+//! | 4 | the branch-detection warning (#385) | nothing; it warns after the fact |
 //!
-//! **`Bash(...)` is a literal prefix match on the command string.** `Bash(git
-//! push *)` does not stop `/usr/bin/git push`, `sh -c "git push"`, or a `git
-//! push` in the middle of a chain. Layer 3 reduces accidents; it is not a
-//! boundary. A hard guarantee needs a sandbox, which is out of scope here.
+//! Two holes, both observed in #410, neither closed:
+//!
+//! 1. **Removing the edit tools does not make the worktree read-only, because
+//!    `Bash` is still there.** The same file the vanished `Write` would have
+//!    touched goes down with `cat > file`, `python3 - <<EOF`, or `tee`. There is
+//!    no `Bash` rule here corresponding to `DENY_FILE_EDITS`, and enumerating
+//!    one is not obviously possible — the set of ways to write a file from a
+//!    shell is not closed.
+//! 2. **A prefix match loses to `&&` and to pipes.** `git add -A && git commit`
+//!    starts with `git add`, so `Bash(git commit *)` never sees it.
+//!    `git push … | tail -5` and `gh pr create --fill | tail -5` both went
+//!    through in #410 with their rules present. `/usr/bin/git push` and
+//!    `sh -c "git push"` are the same class.
+//!
+//! A hard guarantee needs a sandbox. Until there is one, **do not write
+//! anywhere that these rules make a profile read-only** — that sentence was in
+//! the security policy and the ADR before #410 disproved it, and a documented
+//! promise nobody can keep is worse than no promise at all.
 //!
 //! Two format traps, both load-bearing:
 //!
@@ -52,10 +72,15 @@
 
 use crate::config::Profile;
 
-/// The tools an agent is not given at all in a read-only profile.
+/// The edit tools an agent is not given at all in a read-only profile.
 ///
-/// Bare names rather than path-scoped rules: this removes the tool, which is
-/// the one layer here that actually holds.
+/// Bare names rather than path-scoped rules — a path-scoped `Write(path)` is
+/// accepted and then never consulted.
+///
+/// **This does not stop the agent writing files.** `Bash` remains, and #410
+/// observed `cat >`, `cat >>` and `python3 - <<EOF` writing the worktree in a
+/// session where `Write` was correctly removed. What this buys is that the
+/// direct route is closed; the indirect one is wide open.
 const DENY_FILE_EDITS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 
 /// History-rewriting and publishing git commands. Best-effort (layer 3).

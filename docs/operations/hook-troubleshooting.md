@@ -108,7 +108,9 @@ parse 不能行を含むスプールファイルは**削除されず** `<name>.c
 
 `profile = "answer"` / `"triage"` / `"design"` の claude タスクで、エージェントが `Edit` / `Write` を使おうとして拒否される、あるいは `git switch -c` / `gh pr create` が通らない。
 
-**これは正常動作である。** これらの profile には Rust 固定の `permissions.deny` が入っており（#395、[ADR-0033](/decisions/adr-0033-workflow-profile.md) D4）、対象リポジトリの `.claude/settings.json` の allow より**必ず強い**（deny はスコープ横断でマージされる）。対象リポジトリの `CLAUDE.md` が「終わったら push して PR を作れ」と指示していても効かないのが狙いで、[#378](https://github.com/tomoya-k31/totsuka/issues/378) がまさにその形で plan タスクを実装まで走らせた事故だった。
+**これは正常動作である。** これらの profile には Rust 固定の `permissions.deny` が入っており（#395、[ADR-0033](/decisions/adr-0033-workflow-profile.md) D4）、対象リポジトリの `.claude/settings.json` の allow より強い（deny はスコープ横断でマージされる）。
+
+**ただし deny は read-only の保証ではない。** [#410](https://github.com/tomoya-k31/totsuka/issues/410) の実機検証で、ルールが全部発火した状態のまま `answer` タスクがブランチ・commit・push・PR まで到達した — `Bash` 経由のファイル書き込み（`cat >` 等）と、`&&` / パイプによる前方一致の回避が塞げていない。**「deny があるから read-only」と考えないこと。**
 
 | 症状 | 判断 |
 |---|---|

@@ -128,7 +128,7 @@ profile が最終的に決めるものには `permissions.deny` セットが含�
 効く根拠は Claude Code の permission モデルそのものにある:
 
 - **deny はスコープ横断でマージされ、どこかで deny されたツールは他のどのスコープの allow でも許可できない。** よって `--settings` の deny は対象リポジトリの `.claude/settings.json` の allow に必ず勝つ
-- 公式ドキュメントの「Permission rules are enforced by Claude Code, not by the model. Instructions in your prompt or CLAUDE.md … don't change what Claude Code allows.」が、[#378](https://github.com/tomoya-k31/totsuka/issues/378)（リポジトリの `CLAUDE.md` に誘導されて plan タスクが push・PR まで到達した）への直接の答えになる。散文には散文で対抗できない
+- 公式ドキュメントは「Permission rules are enforced by Claude Code, not by the model. Instructions in your prompt or CLAUDE.md … don't change what Claude Code allows.」と明言している。**ただしこれは「deny したツール／コマンド文字列は CLAUDE.md では覆せない」という意味であって、「CLAUDE.md の指示どおりの結果にならない」という意味ではない。** 本 ADR の初版はこれを [#378](https://github.com/tomoya-k31/totsuka/issues/378) への答えだと書いたが、[#410](https://github.com/tomoya-k31/totsuka/issues/410) の実機検証で否定された（下の「実機で否定された部分」を参照）
 - deny は全 permission mode で有効なので、`--permission-mode plan` と併用できる
 
 | profile | 拒否するもの |
@@ -141,14 +141,23 @@ profile が最終的に決めるものには `permissions.deny` セットが含�
 
 ### 保証の強さは層で違う
 
-| 層 | 機構 | 強さ |
+| 層 | 機構 | 実際に止まるもの |
 |---|---|---|
 | 1 | `--permission-mode plan` | フラグ。モデルは説得されうる |
-| 2 | 裸のツール名（`Edit` / `Write` / `NotebookEdit`） | **ファイル編集の実質保証**。フィルタではなくツールごと除去される |
-| 3 | `Bash(...)` パターン | ベストエフォート |
-| 4 | ブランチ検出警告（#385） | 事後検出 |
+| 2 | 裸のツール名（`Edit` / `Write` / `NotebookEdit`） | **その名前のツール**。ファイル書き込みではない（下記） |
+| 3 | `Bash(...)` パターン | その文字列で**始まる**コマンドだけ |
+| 4 | ブランチ検出警告（#385） | 何も止めない。事後に警告するだけ |
 
-**層 3 は境界ではない。** `Bash(...)` はコマンド文字列への前方一致でしかなく、`/usr/bin/git push`・`sh -c "git push"`・チェーン内の実行は素通りする。事故を減らすだけで、ハード保証には sandbox が要る（本 ADR のスコープ外）。
+### 実機で否定された部分（#410）
+
+**この節の初版は「層 2 はファイル編集の実質保証」「`CLAUDE.md` が push / PR を指示していても効かない」と書いていた。[#410](https://github.com/tomoya-k31/totsuka/issues/410) の実機検証がどちらも否定した。**
+
+ルールは正しく生成され、正しく適用され、実際に発火した（`Write` は消え、`git switch -c` は拒否された）。そのうえで `answer` profile のタスクがブランチを切り、commit し、push し、PR を作った。穴は 2 つ:
+
+1. **編集ツールを消しても worktree は read-only にならない。`Bash` が残っているため。** 消えた `Write` が触るはずだったファイルに `cat > file` / `python3 - <<EOF` / `tee` で書ける。`DENY_FILE_EDITS` に対応する `Bash` 規則は存在せず、**列挙で塞ぎ切れる集合でもない**
+2. **前方一致は `&&` とパイプに負ける。** `git add -A && git commit` は `git add` で始まるので `Bash(git commit *)` に掛からない。`git push … | tail -5` と `gh pr create --fill | tail -5` はルールがある状態で通った
+
+ハード保証には sandbox が要る。**それまでは、これらの規則が profile を read-only にすると書かないこと** — #410 が否定するまで security ポリシーと本 ADR にその一文があった。守れない約束は、約束が無いより悪い。
 
 書式の罠を 2 つ踏まないようにしている: **`Write(path)` / `NotebookEdit(path)` のパス付きルールは受理されて参照されない**（パス限定が効くのは `Edit(path)` / `Read(path)` だけ）ので裸名のみを使う。`Bash(git *)` と `Bash(git*)` は別物（後者は `gitk` にもマッチ）なので、ワイルドカード前のスペースをテストで固定した。
 
@@ -263,7 +272,8 @@ Notion MCP はもう 1 つ別の理由でも届かない: エージェント側�
 - **設定の書き方が 2 通りになった。** profile 記法と明示記法が併存する。統一しなかったのは「Human sign-off required」のように 4 原型で表せない組み合わせが実在するためで、明示記法は非推奨ではない
 - **ロールバックが非対称。** profile を使った config は旧バイナリでは `deny_unknown_fields` によりパースエラーになる。新 → 旧に戻すときは config も戻す必要がある（リリースノートに明記する）
 - **実効性は claude タスクに限られる。** deny は `--settings` 経由なので、codex（`--sandbox read-only` で別途 OS レベルに制限）と opencode（agent ファイルの deny マップ）はこの経路を読まない。3 つの機構が同じ意図を別々に実装している状態で、[ADR-0014](/decisions/adr-0014-tool-abstraction.md) の縮退表どおりではあるが、集約されてはいない
-- **層 3（`Bash(...)` パターン）は保証ではない。** 上の D4 節のとおり、`/usr/bin/git push` やチェーン内実行は素通りする。「deny に書いてあるから安全」と読まれるのが一番危ないので、ドキュメント側にも層ごとの強さを明記した
+- **deny は read-only の保証ではない — 層 2 も含めて。** 上の D4 節「実機で否定された部分」のとおり、[#410](https://github.com/tomoya-k31/totsuka/issues/410) の実機検証で `answer` タスクがブランチ・commit・push・PR まで到達した。層 3 が弱いことは初版から書いていたが、**層 2 を「ファイル編集の実質保証」と書いたのが誤り**だった — 編集ツールを消しても `Bash` が残っていれば同じファイルに書ける
+- **「deny に書いてあるから安全」と読まれるのが一番危ない、と初版に書きながら、その一番危ない文章を自分で書いていた。** 保証を書く前に実機で測る、が守れていなかった
 
 ## 非破壊であること
 
