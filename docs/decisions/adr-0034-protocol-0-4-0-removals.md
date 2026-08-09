@@ -1,10 +1,10 @@
 ---
 type: Decision
 title: ADR-0034 期限切れの非推奨 3 面をプロトコル 0.4.0 で削除する
-description: "0.3.0 で削除すると宣言しながら残っていた TaskDispatchParams.hook / HookLaunchSpec、herdr の agent_command・plan_args・launch_command、design_preview（設定キーとケイパビリティ宣言）を、プロトコル 0.4.0 として実際に削除する決定。agent_ide の manifest 下限を >=0.2.3 へ上げてフォールバックを到達不能化してから消す。宣言だけ直す案・アプリ 0.3 とまとめる案は採らない。"
+description: "0.3.0 で削除すると宣言しながら残っていた TaskDispatchParams.hook / HookLaunchSpec、herdr の agent_command・plan_args・launch_command、design_preview（設定キーとケイパビリティ宣言）を、プロトコル 0.4.0 として実際に削除する決定。herdr の manifest 下限を >=0.2.3 へ上げてフォールバックを到達不能化してから消す（下限は kind ではなく依存に従うので、tool_launch を読まない orca は >=0.1.0 のまま）。宣言だけ直す案・アプリ 0.3 とまとめる案は採らない。"
 resource: https://github.com/tomoya-k31/totsuka/issues/411
 tags: [decision, protocol, deprecation, breaking-change, herdr, capability, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-09T19:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-09T20:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -54,7 +54,7 @@ stable（[#411](https://github.com/tomoya-k31/totsuka/issues/411)）。
 
 `agent_command` / `plan_args` / `launch_command()`、およびそれを呼ぶ `resolve_launch` のフォールバック分岐を削除する。
 
-**削除の前に、到達不能にする。** herdr の manifest 下限を `>=0.1.0` → **`>=0.2.3`** へ上げる。0.2.3 は `tool_launch` が入ったバージョンなので、それを送らない Orchestrator は F-54 により**起動時点で拒否される**。フォールバックが存在意義を失ってから消すので、これは挙動変更ではない。この不変条件はコメントではなく `version.rs` のテストで固定した（`the_agent_ide_lower_bound_is_what_makes_the_fallback_unreachable`）。
+**削除の前に、到達不能にする。** herdr の manifest 下限を `>=0.1.0` → **`>=0.2.3`** へ上げる。0.2.3 は `tool_launch` が入ったバージョンなので、それを送らない Orchestrator は F-54 により**起動時点で拒否される**。フォールバックが存在意義を失ってから消すので、これは挙動変更ではない。この不変条件はコメントではなく `version.rs` のテストで固定した（`herdrs_lower_bound_is_what_makes_the_fallback_unreachable`。同じテストが「orca の範囲は 0.4.0 でも通る」ことも押さえており、下限が kind ではなく依存に従うことを一緒に固定している）。
 
 **`tool_launch` 不在は `INVALID_PARAMS` で失敗させる。** 黙って `claude` を素で起動する誘惑があるが、それは `--settings` 無しの起動＝**フックが載らないペイン**を意味する。走るが完了を報告しないので、タイムアウトでエスカレーションするまで誰も気づかない。「起動できたように見えて完了しない」より「dispatch が落ちる」ほうが良い。
 
@@ -123,5 +123,5 @@ in the orchestrator config instead. Delete the key.
 
 # 検証
 
-- `cargo test --workspace --all-features` — `version.rs` の境界テスト（`<0.4` 系 manifest が拒否される / agent_ide 下限が pre-0.2.3 を排除する）、`removed_keys_in` の墓標メッセージ、`tool_launch` 不在で dispatch が失敗すること、mock plugin が `tool_launch.env` からフック env を読むこと
+- `cargo test --workspace --all-features` — `version.rs` の境界テスト（`<0.4` 系 manifest が拒否される / herdr の下限が pre-0.2.3 を排除し、同時に orca の広い下限は通る）、`removed_keys_in` の墓標メッセージ、`tool_launch` 不在で dispatch が失敗すること、mock plugin が `tool_launch.env` からフック env を読むこと
 - `cargo doc --workspace --no-deps` — 削除した型への intra-doc link が残っていないこと

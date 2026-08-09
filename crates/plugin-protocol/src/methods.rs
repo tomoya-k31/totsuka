@@ -362,10 +362,15 @@ pub struct TaskDispatchParams {
     /// this argv/env in the pane without interpreting it.
     ///
     /// Optional only for the historical reason that it arrived additively in
-    /// 0.2.3 alongside the `hook` spec it replaced. Since 0.4.0 `hook` is gone
-    /// and every agent_ide manifest declares `>=0.2.3`, so an agent_ide plugin
-    /// that receives `None` here has no second channel to fall back to and
-    /// should fail the dispatch rather than assemble an argv of its own.
+    /// 0.2.3 alongside the `hook` spec it replaced, which 0.4.0 removed.
+    ///
+    /// A plugin that *depends* on this spec should declare `>=0.2.3` in its
+    /// manifest and **fail the dispatch** when it arrives `None`, rather than
+    /// assembling an argv of its own: there is no second channel left to fall
+    /// back to, and an improvised argv would omit `--settings`. That is not a
+    /// blanket rule for `agent_ide` — a plugin that never reads `tool_launch`
+    /// (orca drives the `orca` CLI itself) keeps a wide lower bound, because
+    /// raising it would only refuse orchestrators it works with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_launch: Option<ToolLaunchSpec>,
 }

@@ -30,7 +30,7 @@ plugin-protocol = { git = "https://github.com/tomoya-k31/totsuka" }
 name = "github"                 # インスタンスバイナリ名と一致
 kind = "task_source"            # task_source | agent_ide | notifier
 version = "0.1.0"               # プラグイン自身の版
-protocol_version = ">=0.2.3, <0.5"  # 対応する Orchestrator プロトコル範囲(F-54)
+protocol_version = ">=0.1.6, <0.5"  # 対応する Orchestrator プロトコル範囲(F-54)
 
 [capabilities]                  # 実際に対応する機能だけ宣言(F-33)
 plan_mode = true                # agent: plan モード対応
@@ -41,7 +41,11 @@ task_submit = true              # task_source: push 型ソース宣言（必須�
 
 Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push（`task_submit = true`）専用**（`tasks/fetch` は削除済み）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に、`<0.3` を上限とする manifest は **0.3.0**（#264 の `Task.thread_key` 削除）に、`<0.4` を上限とする manifest は **0.4.0**（#411 の `TaskDispatchParams.hook` / `Capabilities.design_preview` 削除）に、それぞれ起動拒否される — 上限は超えたい破壊的バンプの**次**のメジャー/マイナーに置く（現行なら `<0.5`）。
 
-**下限も同じくらい意味を持つ。** agent_ide プラグインは `>=0.2.3` を宣言する。0.2.3 が `TaskDispatchParams.tool_launch` の入ったバージョンで、0.4.0 以降のプラグインには argv を自前で組み立てるフォールバックが無いためである。下限で弾いておくことが、そのフォールバックを「非推奨」ではなく**到達不能**にしている（[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。逆に task_source / notifier は `tool_launch` に触れないので下限を上げる理由がなく、`>=0.1.6, <0.5` のままでよい（0.1.6 より前は `task_submit` capability 自体が無いので、その場合は `push` 対応版を新たにリリースしてから範囲を広げること）。
+上の例は task_source なので下限は `>=0.1.6`（`task_submit` capability が入ったバージョン。それより前を含める範囲は宣言できない）。
+
+**下限も上限と同じくらい意味を持つ。** 例えば herdr は `>=0.2.3` を宣言する。0.2.3 が `TaskDispatchParams.tool_launch` の入ったバージョンで、herdr には argv を自前で組み立てるフォールバックがもう無いためである。下限で弾いておくことが、そのフォールバックを「非推奨」ではなく**到達不能**にしている（[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。
+
+**これは kind で決まる規則ではない。** 同じ agent_ide でも orca は `>=0.1.0` のままである — `orca` CLI 自体を駆動していて `tool_launch` を一度も読まないので、下限を上げると**問題なく動く Orchestrator を弾く**ことになる。task_source / notifier も同じ理由で据え置き。**下限は「何に依存しているか」に従う**のであって、プラグインの kind やその時点の最新プロトコルに合わせるものではない。
 
 # メソッド（§11 付録 A）
 

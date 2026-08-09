@@ -106,12 +106,18 @@ use semver::{Version, VersionReq};
 ///   `deny_unknown_fields`) and ignored; a plugin that *reads* the field no
 ///   longer compiles.
 ///
-/// The bundled plugins move to `<0.5`, and the agent_ide plugins raise their
-/// **lower** bound to `>=0.2.3` — the version that introduced `tool_launch`.
-/// That is what makes the removal safe rather than merely declared: an
-/// Orchestrator old enough to send no `tool_launch` can no longer launch them
-/// at all (F-54), so the plugin-local argv assembly it used to fall back to is
-/// unreachable, not just deprecated.
+/// The bundled plugins move to `<0.5`. **herdr additionally raises its lower
+/// bound** to `>=0.2.3` — the version that introduced `tool_launch`. That is
+/// what makes deleting its local argv assembly safe rather than merely
+/// declared: an Orchestrator old enough to send no `tool_launch` can no longer
+/// launch it at all (F-54), so the fallback is unreachable, not just
+/// deprecated.
+///
+/// The floor follows the *dependency*, not the plugin kind. orca is an
+/// `agent_ide` too and stays at `>=0.1.0`: it drives the `orca` CLI itself and
+/// never reads `tool_launch`, so raising its bound would refuse orchestrators
+/// it works with perfectly well. task_source and notifier stay put for the
+/// same reason.
 pub const PROTOCOL_VERSION: &str = "0.4.0";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
@@ -178,22 +184,27 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_ide_lower_bound_is_what_makes_the_fallback_unreachable() {
+    fn herdrs_lower_bound_is_what_makes_the_fallback_unreachable() {
         // #411: deleting herdr's `agent_command`/`plan_args` argv assembly is
         // only safe because no Orchestrator that would have used it can launch
         // the plugin any more. That is a claim about the *manifest range*, not
         // about the code, so it is asserted here: `>=0.2.3` excludes every
         // release that predates `tool_launch`.
-        let agent_ide = VersionReq::parse(">=0.2.3, <0.5").unwrap();
+        let herdr = VersionReq::parse(">=0.2.3, <0.5").unwrap();
         for pre_tool_launch in ["0.1.0", "0.1.6", "0.2.0", "0.2.2"] {
             let v = Version::parse(pre_tool_launch).unwrap();
             assert!(
-                !is_compatible(&agent_ide, &v),
-                "an agent_ide plugin must refuse orchestrator {pre_tool_launch}, \
-                 which sends no tool_launch"
+                !is_compatible(&herdr, &v),
+                "herdr must refuse orchestrator {pre_tool_launch}, which sends no tool_launch"
             );
         }
-        assert!(is_compatible(&agent_ide, &Version::new(0, 2, 3)));
+        assert!(is_compatible(&herdr, &Version::new(0, 2, 3)));
+
+        // The floor tracks the dependency, not the kind: orca is an agent_ide
+        // too, reads no `tool_launch`, and keeps working with all of them.
+        let orca = VersionReq::parse(">=0.1.0, <0.5").unwrap();
+        assert!(is_compatible(&orca, &Version::new(0, 1, 0)));
+        assert!(is_compatible_with_current(&orca));
     }
 
     #[test]

@@ -122,7 +122,10 @@ fn main() {
                             // 0.1.6: a push task source (never polled).
                             task_submit: flag("task_submit"),
                             outputs: vec![OutputCapability::Source],
-                            ..Default::default()
+                            // No `..Default::default()`: removing
+                            // `design_preview` in 0.4.0 (#411) made this
+                            // literal exhaustive, and clippy's
+                            // `needless_update` rejects the rest pattern.
                         },
                     })
                     .unwrap(),
