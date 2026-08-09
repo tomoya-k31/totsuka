@@ -285,7 +285,7 @@ impl ToolProfile {
                 // all-deny agent (ADR-0023); dropping those would be a loss.
                 let plan_mode_is_redundant = self.plan_args.is_none()
                     && inp.settings_path.is_some()
-                    && crate::hooks::permissions::denies_every_write_tool(inp.profile);
+                    && crate::hooks::permissions::plan_mode_only_adds_the_gate(inp.profile);
                 if inp.plan && !plan_mode_is_redundant {
                     match &self.plan_args {
                         Some(extra) => args.extend(extra.iter().cloned()),
@@ -510,12 +510,12 @@ mod tests {
         );
     }
 
-    /// #410: a profile whose deny rules remove every write tool drops
-    /// `--permission-mode plan`. Plan mode did not stop a `Bash` file write in
-    /// a live session, so against a shell-less agent what it still contributes
-    /// is an approval gate that an unattended pane resolves unpredictably.
+    /// #410/#409: every read-only profile drops `--permission-mode plan`.
+    /// Plan mode did not stop a `Bash` file write in a live session, so what it
+    /// still contributes is an approval gate that an unattended pane resolves
+    /// unpredictably — hanging for 14 minutes in one measured `design` run.
     #[test]
-    fn claude_drops_plan_mode_when_the_profile_already_removes_every_write_tool() {
+    fn claude_drops_plan_mode_for_every_read_only_profile() {
         let with = |profile| LaunchInputs {
             plan: true,
             profile,
@@ -537,18 +537,25 @@ mod tests {
             settings.to_vec(),
             "answer denies `Bash` and the edit tools, so plan mode adds only the gate"
         );
-        // Still leave `Bash`, so plan mode is the only restriction they have.
+        // These keep `Bash` — the patterns and the read-only violation check
+        // are their protection — but the gate would hang them, so it goes too.
         for profile in [Profile::Triage, Profile::Design] {
             assert_eq!(
                 args(Some(profile)),
-                [
-                    vec!["--permission-mode".to_string(), "plan".to_string()],
-                    settings.to_vec()
-                ]
-                .concat(),
-                "{profile:?} keeps plan mode until its shell is fenced (#409)"
+                settings.to_vec(),
+                "{profile:?} drops the gate as well (#409): it hangs an unattended pane"
             );
         }
+        // `implement` is not read-only, so it never had the flag to drop.
+        assert_eq!(
+            args(Some(Profile::Implement)),
+            [
+                vec!["--permission-mode".to_string(), "plan".to_string()],
+                settings.to_vec()
+            ]
+            .concat(),
+            "an implement workflow forced into plan mode keeps the flag"
+        );
         // A workflow with no profile gets no deny injection at all; dropping
         // plan mode there would leave it unrestricted.
         assert_eq!(

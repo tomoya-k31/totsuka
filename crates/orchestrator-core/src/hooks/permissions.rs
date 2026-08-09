@@ -47,8 +47,8 @@
 //! | | `answer` | `triage` / `design` |
 //! |---|---|---|
 //! | edit tools | removed | removed |
-//! | `Bash` | **removed** | present, filtered by `Bash(...)` patterns |
-//! | `--permission-mode plan` | not passed (see [`denies_every_write_tool`]) | passed |
+//! | `Bash` | **removed** | present, filtered by `Bash(...)` patterns (weak — see below) |
+//! | `--permission-mode plan` | not passed | not passed (#409) |
 //! | what bypassed #410 | unavailable — there is no shell | **still open** |
 //!
 //! `answer` can no longer run a command at all, which is what closes both of
@@ -71,10 +71,20 @@
 //!    someone does: asserting a mechanism from an outcome is the same mistake
 //!    this module is retracting.
 //!
-//! **`triage` and `design` still have both routes open.** They write their
-//! artifact with `gh issue comment`, so the shell cannot simply go; fencing it
-//! needs a `PreToolUse` hook that inspects the whole command (#409). Until that
-//! lands, their `Bash(...)` rules are what #410 proved insufficient.
+//! **`triage` and `design` still have both routes open, and that is now a
+//! decision rather than a gap (#409).** They write their artifact with
+//! `gh issue comment`, so the shell cannot simply go. Fencing it by inspecting
+//! commands was considered and **rejected**: telling
+//! `gh issue comment 31 --body 'use A && B'` (harmless — the `&&` is inside
+//! the text being posted) from `gh issue comment 31 && git push` needs a
+//! quoting-aware shell parser, and shipping an imperfect one under a name like
+//! "command safety check" would be the third thing here that reads stronger
+//! than it is. Their `Bash(...)` rules remain what #410 proved insufficient;
+//! what changed is that a read-only profile which ends up on a branch now
+//! **fails instead of publishing** (`run::read_only_side_effect`). That does
+//! not prevent a push — by then it has happened — but it stops the silent
+//! success #410 produced. The real boundary is a sandbox
+//! ([#418](https://github.com/tomoya-k31/totsuka/issues/418)).
 //!
 //! **Dropping plan mode for `answer` has an unmeasured edge.** What was
 //! measured is narrow: plan mode did not stop a `Bash` file write. It does not
@@ -197,29 +207,34 @@ const DENY_GH_API: &[&str] = &["Bash(gh api *)"];
 // worked around with `&&`; the profiles that *need* those commands were never
 // covered by it.
 
-/// Whether `profile`'s rules remove **every** tool the agent could write
-/// through — the edit tools *and* the shell.
+/// Whether Claude's `--permission-mode plan` would add nothing but its
+/// approval gate for `profile`, so the dispatch is better off without it
+/// (#410/#409).
 ///
-/// This is what lets a Claude dispatch drop `--permission-mode plan` (#410).
-/// Plan mode contributes no enforcement of its own — a live session wrote a
-/// file with `cat >` while `permissionMode` was still `plan` — so all it adds
-/// is `ExitPlanMode`, an approval gate with nobody to answer it. Unattended
-/// that gate resolves two ways, and **which one is not totsuka's to decide**:
-/// it hangs when Claude Code managed to write its plan file, and auto-passes
-/// when it did not. Since `DENY_FILE_EDITS` removes the `Write` that authors
-/// that very file, the deciding factor was whether the agent happened to route
-/// around our own deny list with `Bash`.
+/// True for every read-only profile. That is a **reversal** of the narrower
+/// rule this shipped with, which asked whether the rules removed every write
+/// tool and therefore covered `answer` only. What changed is not the evidence
+/// about `answer` but the accounting for `triage`/`design`:
 ///
-/// Dropping the gate is only safe where the write paths are actually closed,
-/// which is why this asks about the rules rather than about the mode.
-pub fn denies_every_write_tool(profile: Option<Profile>) -> bool {
-    let Some(rules) = profile.and_then(deny_rules) else {
-        return false;
-    };
-    DENY_FILE_EDITS
-        .iter()
-        .chain(DENY_SHELL)
-        .all(|needed| rules.contains(needed))
+/// - plan mode's contribution to *enforcement* is unmeasured at best — a live
+///   session wrote a file with `cat >` while `permissionMode` was still `plan`
+/// - plan mode's contribution to *breakage* is certain: `ExitPlanMode` is a
+///   human approval gate, and a live `design` task sat at it for 14 minutes
+///   until a human answered ([#409](https://github.com/tomoya-k31/totsuka/issues/409))
+///
+/// Trading a certain hang for a speculative nudge is not a trade. The profiles
+/// that still have a shell get their (weak) protection from the `Bash(...)`
+/// patterns and, since #409, from a read-only violation failing the task
+/// instead of publishing it.
+///
+/// A workflow with **no** profile is excluded: it receives no deny rules at
+/// all, so dropping the flag would leave it with nothing. `implement` is
+/// excluded because it is not read-only in the first place.
+pub fn plan_mode_only_adds_the_gate(profile: Option<Profile>) -> bool {
+    matches!(
+        profile,
+        Some(Profile::Answer | Profile::Triage | Profile::Design)
+    )
 }
 
 /// The deny rules for `profile`, or `None` when the profile is meant to write
@@ -308,23 +323,16 @@ mod tests {
         }
     }
 
-    /// The predicate that lets a Claude dispatch drop `--permission-mode plan`
-    /// (#410). It must answer for the *rules*, not for the profile name: the
-    /// moment `triage`/`design` also deny the shell they become eligible, and
-    /// the moment `answer` stops denying it they must not be.
+    /// Every read-only profile drops the plan flag (#409). `implement` is not
+    /// read-only, and a workflow with **no** profile receives no deny rules at
+    /// all — dropping the flag there would leave the dispatch with nothing.
     #[test]
-    fn only_a_profile_that_removes_every_write_tool_supersedes_plan_mode() {
-        assert!(denies_every_write_tool(Some(Profile::Answer)));
-
-        // These still leave `Bash`, so plan mode is all they have.
-        assert!(!denies_every_write_tool(Some(Profile::Triage)));
-        assert!(!denies_every_write_tool(Some(Profile::Design)));
-
-        // `implement` denies nothing, and a workflow with no profile gets no
-        // deny injection at all — dropping plan mode there would leave the
-        // dispatch with no restriction whatsoever.
-        assert!(!denies_every_write_tool(Some(Profile::Implement)));
-        assert!(!denies_every_write_tool(None));
+    fn only_the_read_only_profiles_drop_the_plan_flag() {
+        for profile in [Profile::Answer, Profile::Triage, Profile::Design] {
+            assert!(plan_mode_only_adds_the_gate(Some(profile)), "{profile:?}");
+        }
+        assert!(!plan_mode_only_adds_the_gate(Some(Profile::Implement)));
+        assert!(!plan_mode_only_adds_the_gate(None));
     }
 
     #[test]

@@ -1,5 +1,11 @@
 # Bundle Update Log
 
+## 2026-08-10
+
+* **Creation**: [ADR-0036 triage / design はシェルを検査せず、リポジトリを触ったら公開せず失敗させる](/decisions/adr-0036-read-only-violation-fails-the-task.md)（#409）。`gh issue comment` に複数行 Markdown を渡すにはシェル構文が要るので、`triage` / `design` から `Bash` を取り上げられない。コマンド検査フックは**不採用** — `--body 'A なら && B'`（無害）と `... && git push`（危険）を見分けるには引用を理解するパーサが要り、取りこぼしのある判定器に「安全検査」という名前が付くのが #410 の失敗そのものだから
+* **Update**: **すべての read-only profile から claude の plan フラグを外した**（[ADR-0035](/decisions/adr-0035-answer-profile-shell-removal.md) D2 の判断を覆す）。あちらは `triage` / `design` について「plan モードが持っている唯一の制限だから残す」としたが、会計が合わない — plan モードの**強制力は未実測**（`permissionMode` が `plan` のまま `cat >` が成功）なのに対し、**破壊力は実測済み**（無人 pane を 858 秒 = 14 分 18 秒 止めた）。確実な停止を推測上の抑止と引き換えにはできない [ADR-0033 D4](/decisions/adr-0033-workflow-profile.md)
+* **Update**: read-only profile のタスクがブランチ上にあったら、成果物を公開せず `fail_publish` で失敗させるようにした。worktree とコミットは保持される。**防止ではない**（ブランチがある時点で push は済んでいるかもしれず取り返せない）が、「証拠を残して失敗した」は「完了と報告された」とは別の運用状態である。門は `record.mode` ではなく **profile** で作る — 素の `mode = "plan"` を対象にすると既存構成がアップグレードで黙ってタスクを失う [orchestrator-core クレート](/components/orchestrator-core.md)
+
 ## 2026-08-09
 
 * **Creation**: `[[workflows]].profile` の 4 原型（answer / triage / design / implement）を導入する決定を記録 [ADR-0033 ワークフローの原型は [[workflows]].profile の 4 値で束ねる](/decisions/adr-0033-workflow-profile.md)

@@ -52,7 +52,7 @@ use crate::adapters::state_db::{
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{
     CleanupPolicyConfig, CleanupPolicyName, DEFAULT_GLOBAL_CONCURRENCY, OutputPolicy, PluginKind,
-    RootConfig, WorkflowMode, resolve::ResolveError,
+    Profile, RootConfig, WorkflowMode, resolve::ResolveError,
 };
 use crate::domain::signal::{AgentSignal, JobId};
 use crate::domain::state::{TaskEvent, TaskState};
@@ -2116,6 +2116,18 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .db
             .get_task(record.id)?
             .unwrap_or_else(|| record.clone());
+        // A read-only profile that ended up on a branch touched the repository
+        // it was told not to touch (#409/#410). Refuse to publish it as a
+        // success: `fail_publish` keeps the worktree and the commits, so a
+        // human can see what happened, and the notifier says so out loud.
+        //
+        // This does not *prevent* anything — by the time a branch exists the
+        // agent may already have pushed it — but "loudly failed with the
+        // evidence retained" is a different operational state from "reported
+        // done", and the live #410 run produced the second one.
+        if let Some(reason) = self.read_only_side_effect(record) {
+            return self.fail_publish(record, reason).await;
+        }
         // A finished task whose workflow vanished from config still holds the
         // agent's commits; treat it as a recoverable publish failure rather
         // than silently completing and deleting the worktree (never confuse a
@@ -2167,6 +2179,29 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// the publish artifact). The source status is intentionally left unchanged: a
     /// recoverable publish failure must not flap the source task to
     /// `on_failure` and back on the next successful retry.
+    /// Why this task must not be published as a success, if a read-only
+    /// profile modified the repository (#409/#410).
+    ///
+    /// Gated on the **profile**, never on `record.mode`. A workflow written as
+    /// plain `mode = "plan"` gets no deny rules and never promised anything
+    /// about branches, so failing it here would make an existing config start
+    /// losing tasks on upgrade — the same reasoning that keeps deny injection
+    /// profile-only (ADR-0033 D4).
+    ///
+    /// The branch is the signal because it is the one the orchestrator can
+    /// see: the worktree is handed over detached, so a named `HEAD` means the
+    /// agent ran git. A commit left on the detached head is missed, but that
+    /// shape cannot be pushed without first naming a ref.
+    fn read_only_side_effect(&self, record: &TaskRecord) -> Option<String> {
+        read_only_side_effect(
+            &record.workflow,
+            workflows_by_name(&self.settings.workflows)
+                .get(record.workflow.as_str())
+                .and_then(|w| w.profile),
+            record.branch.as_deref(),
+        )
+    }
+
     async fn fail_publish(
         &mut self,
         record: &TaskRecord,
@@ -2864,6 +2899,32 @@ fn plan_mode_side_effect(mode: &str, branch: &str) -> Option<String> {
     })
 }
 
+/// The reason a read-only profile's task must not be published as a success,
+/// if it modified the repository. Free-standing so the rule is unit-testable
+/// without an engine (`Engine::read_only_side_effect` is the lookup around it).
+fn read_only_side_effect(
+    workflow: &str,
+    profile: Option<Profile>,
+    branch: Option<&str>,
+) -> Option<String> {
+    let branch = branch?;
+    let profile = profile?;
+    if profile == Profile::Implement {
+        return None;
+    }
+    Some(format!(
+        concat!(
+            "workflow `{}` is `profile = \"{}\"`, which does not write to the repository, but ",
+            "its worktree is on the branch `{}` — it was handed over detached, so the agent ran ",
+            "git. The worktree and its commits are kept for inspection. Check whether it also ",
+            "pushed or opened a pull request: neither can be undone from here."
+        ),
+        workflow,
+        profile.as_str(),
+        branch
+    ))
+}
+
 /// Parse a persisted mode string into the dispatch execution mode (F-31).
 fn execution_mode(mode: &str) -> ExecutionMode {
     if mode == "plan" {
@@ -2876,6 +2937,28 @@ fn execution_mode(mode: &str) -> ExecutionMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #409/#410: a read-only profile that ended up on a branch is failed
+    /// rather than published. Gated on the **profile** — a plain
+    /// `mode = "plan"` workflow never promised anything about branches, so
+    /// failing it would make an existing config start losing tasks on upgrade.
+    #[test]
+    fn a_read_only_profile_on_a_branch_is_a_publish_failure() {
+        for profile in [Profile::Answer, Profile::Triage, Profile::Design] {
+            let reason = read_only_side_effect("wf", Some(profile), Some("feat/x"))
+                .unwrap_or_else(|| panic!("{profile:?} on a branch must not publish"));
+            assert!(reason.contains("feat/x"), "{reason}");
+            assert!(reason.contains(profile.as_str()), "{reason}");
+            // The operator has to be told the part that cannot be undone.
+            assert!(reason.contains("pushed"), "{reason}");
+        }
+        // Detached: nothing to report.
+        assert!(read_only_side_effect("wf", Some(Profile::Design), None).is_none());
+        // `implement` is what branches are for.
+        assert!(read_only_side_effect("wf", Some(Profile::Implement), Some("feat/x")).is_none());
+        // No profile: the legacy `mode = "plan"` shape keeps its warning only.
+        assert!(read_only_side_effect("wf", None, Some("feat/x")).is_none());
+    }
 
     /// XDG bases resolved from a fake environment, mirroring what the CLI
     /// hands to [`settings_from_config`].
