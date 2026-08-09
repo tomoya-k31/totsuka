@@ -96,10 +96,10 @@ pub use manifest::{Capabilities, Manifest, ManifestError, OutputCapability, Plug
 pub use methods::method;
 pub use methods::{
     AgentState, ConfigValidateParams, ConfigValidateResult, DiagnosticsSnapshotParams,
-    DiagnosticsSnapshotResult, ExecutionMode, HookLaunchSpec, InitializeParams, InitializeResult,
-    NotifierEvent, NotifyParams, RepoInfo, ResultPublishParams, SessionAttachParams,
-    SessionAttachResult, StateNotification, StateSubscribeParams, TaskCancelParams,
-    TaskDispatchParams, TaskDispatchResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus,
+    DiagnosticsSnapshotResult, ExecutionMode, InitializeParams, InitializeResult, NotifierEvent,
+    NotifyParams, RepoInfo, ResultPublishParams, SessionAttachParams, SessionAttachResult,
+    StateNotification, StateSubscribeParams, TaskCancelParams, TaskDispatchParams,
+    TaskDispatchResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus,
     TaskUpdateStatusParams, TriggerInfo,
 };
 pub use task::Task;

@@ -59,7 +59,7 @@ impl Env {
             // source without `outputs = ["source"]` makes every recipe here
             // invalid, so the fixture cannot skip it.
             let (kind, capabilities) = match *name {
-                "herdr" => ("agent_ide", "plan_mode = true\ndesign_preview = true\n"),
+                "herdr" => ("agent_ide", "plan_mode = true\npane_control = true\n"),
                 "macos" => ("notifier", ""),
                 _ => (
                     "task_source",
@@ -70,7 +70,7 @@ impl Env {
                 dir.join("plugin.toml"),
                 format!(
                     "name = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.2.0\"\n\
-                     protocol_version = \">=0.1.6, <0.4\"\n\n[capabilities]\n{capabilities}"
+                     protocol_version = \">=0.1.6, <0.5\"\n\n[capabilities]\n{capabilities}"
                 ),
             )
             .unwrap();

@@ -18,24 +18,6 @@ pub struct HerdrConfig {
     /// is unset.
     #[serde(default)]
     pub session: Option<String>,
-    /// The agent CLI launched in each pane (F-31). Split on whitespace; the
-    /// first token is the program, the rest are base arguments.
-    #[serde(default = "default_agent_command")]
-    pub agent_command: String,
-    /// Extra argument appended for plan/design mode (F-36). For Claude Code the
-    /// default puts the CLI in its read-oriented plan permission mode.
-    #[serde(default = "default_plan_args")]
-    pub plan_args: Vec<String>,
-    /// How a design preview is surfaced (F-34), e.g. `side_pane`.
-    ///
-    /// **Deprecated and inert** (#356): nothing reads it — neither this plugin
-    /// nor the Orchestrator — so setting it has never changed what is drawn.
-    /// The pane a dispatched task gets is decided by [`layout`](Self::layout);
-    /// `side_pane` here does **not** mean "put the agent beside something".
-    /// Scheduled for removal at the next breaking bump, together with
-    /// `agent_command`/`plan_args`.
-    #[serde(default = "default_design_preview")]
-    pub design_preview: String,
     /// How the dispatched task's panes are arranged (#356).
     #[serde(default)]
     pub layout: LayoutConfig,
@@ -148,45 +130,48 @@ impl HerdrConfig {
         }
         herdr_config_dir().join("herdr.sock")
     }
+}
 
-    /// The agent launch command line for `mode` (F-31): the base
-    /// [`agent_command`](Self::agent_command) plus [`plan_args`](Self::plan_args)
-    /// in plan mode. Returns `(program, args)`.
-    ///
-    /// **Deprecated fallback** (#196): since protocol 0.2.3 the Orchestrator
-    /// resolves the full argv itself (`TaskDispatchParams.tool_launch`) and
-    /// this is only used when dispatching from an older orchestrator that
-    /// sends no `tool_launch`. Scheduled for removal at the next breaking
-    /// protocol bump, together with `agent_command`/`plan_args`.
-    ///
-    /// When the Orchestrator supplies a hook launch spec (0.1.3), `hook_settings`
-    /// is its settings path and `--settings <path>` is appended so Claude Code
-    /// loads the workflow's hooks (H-03: `--resume` never inherits hooks, so the
-    /// settings must be re-passed on every launch, resume included). When
-    /// resuming a past session, `resume` is its agent-native id and
-    /// `--resume <id>` is appended (both flags coexist).
-    pub fn launch_command(
-        &self,
-        plan: bool,
-        hook_settings: Option<&str>,
-        resume: Option<&str>,
-    ) -> (String, Vec<String>) {
-        let mut parts = self.agent_command.split_whitespace().map(str::to_string);
-        let program = parts.next().unwrap_or_else(|| "claude".to_string());
-        let mut args: Vec<String> = parts.collect();
-        if plan {
-            args.extend(self.plan_args.iter().cloned());
-        }
-        if let Some(settings) = hook_settings {
-            args.push("--settings".to_string());
-            args.push(settings.to_string());
-        }
-        if let Some(id) = resume {
-            args.push("--resume".to_string());
-            args.push(id.to_string());
-        }
-        (program, args)
-    }
+/// Config keys this plugin removed in protocol 0.4.0 (#411), paired with what
+/// to do instead.
+///
+/// [`HerdrConfig`] is `deny_unknown_fields`, so simply deleting the fields
+/// would turn a `herdr.toml` that worked yesterday into
+/// `unknown field 'agent_command', expected one of ...` — loud, but it does not
+/// say the key was *removed*, when it was removed, or what replaced it. These
+/// pairs exist to answer that, and [`removed_keys_in`] is what reports them.
+const REMOVED_KEYS: &[(&str, &str)] = &[
+    (
+        "agent_command",
+        "the Orchestrator resolves the full argv itself since protocol 0.2.3 \
+         (#196); set `[tools]`/`default_tool` in the orchestrator config instead",
+    ),
+    (
+        "plan_args",
+        "same as `agent_command` — plan flags come from the orchestrator's tool \
+         registry (`[tools.<name>].plan_args`), not from this file",
+    ),
+    (
+        "design_preview",
+        "it never did anything (#356): nothing read it, so no drawing ever \
+         changed. Pane arrangement is `[layout]`",
+    ),
+];
+
+/// The removed keys (#411) present in a raw plugin-config object, rendered as
+/// operator-facing lines. Empty when the config is clean — including when it is
+/// not an object at all, which is a different error and reported by serde.
+pub fn removed_keys_in(config: &serde_json::Value) -> Vec<String> {
+    let Some(map) = config.as_object() else {
+        return Vec::new();
+    };
+    REMOVED_KEYS
+        .iter()
+        .filter(|(key, _)| map.contains_key(*key))
+        .map(|(key, advice)| {
+            format!("`{key}` was removed in protocol 0.4.0 (#411): {advice}. Delete the key.")
+        })
+        .collect()
 }
 
 /// The herdr config directory: `$XDG_CONFIG_HOME/herdr` or `~/.config/herdr`.
@@ -208,15 +193,6 @@ fn session_socket(name: &str) -> PathBuf {
         .join("herdr.sock")
 }
 
-fn default_agent_command() -> String {
-    "claude".to_string()
-}
-fn default_plan_args() -> Vec<String> {
-    vec!["--permission-mode".to_string(), "plan".to_string()]
-}
-fn default_design_preview() -> String {
-    "side_pane".to_string()
-}
 fn default_layout_shell() -> bool {
     true
 }
@@ -244,9 +220,6 @@ mod tests {
     #[test]
     fn minimal_config_applies_defaults() {
         let cfg = parse(serde_json::json!({}));
-        assert_eq!(cfg.agent_command, "claude");
-        assert_eq!(cfg.plan_args, vec!["--permission-mode", "plan"]);
-        assert_eq!(cfg.design_preview, "side_pane");
         assert_eq!(cfg.request_timeout_secs, 30);
         // #356: an operator who writes no `[layout]` gets the agent stacked
         // above a small shell — NOT herdr's own 50/50 side-by-side default,
@@ -342,65 +315,38 @@ mod tests {
     }
 
     #[test]
-    fn launch_command_adds_plan_args_only_in_plan_mode() {
-        let cfg = parse(serde_json::json!({ "agent_command": "claude --verbose" }));
-        assert_eq!(
-            cfg.launch_command(false, None, None),
-            ("claude".to_string(), vec!["--verbose".to_string()])
-        );
-        assert_eq!(
-            cfg.launch_command(true, None, None),
-            (
-                "claude".to_string(),
-                vec![
-                    "--verbose".to_string(),
-                    "--permission-mode".to_string(),
-                    "plan".to_string()
-                ]
-            )
-        );
+    fn the_removed_keys_are_reported_by_name_not_as_unknown_fields() {
+        // #411: `HerdrConfig` is `deny_unknown_fields`, so a herdr.toml that
+        // still sets these would otherwise fail with serde's
+        // `unknown field ...`, which does not say the key was removed, when,
+        // or what replaced it.
+        for key in ["agent_command", "plan_args", "design_preview"] {
+            let found = removed_keys_in(&serde_json::json!({ key: "whatever" }));
+            assert_eq!(found.len(), 1, "{key}");
+            assert!(found[0].contains(key), "{}", found[0]);
+            assert!(found[0].contains("0.4.0"), "{}", found[0]);
+        }
+        // All three at once are reported together, so one round trip tells the
+        // operator everything to delete.
+        let all = removed_keys_in(&serde_json::json!({
+            "agent_command": "claude",
+            "plan_args": ["--permission-mode", "plan"],
+            "design_preview": "side_pane",
+        }));
+        assert_eq!(all.len(), 3);
+        // A clean config, and a non-object, both report nothing.
+        assert!(removed_keys_in(&serde_json::json!({ "session": "work" })).is_empty());
+        assert!(removed_keys_in(&serde_json::Value::Null).is_empty());
     }
 
     #[test]
-    fn launch_command_appends_settings_and_resume() {
-        let cfg = parse(serde_json::json!({}));
-        // The hook settings path rides after any plan args; `--resume` coexists
-        // with `--settings` (H-03: resume must re-pass the hook settings).
-        assert_eq!(
-            cfg.launch_command(false, Some("/data/hooks/orchestrator-implement.json"), None),
-            (
-                "claude".to_string(),
-                vec![
-                    "--settings".to_string(),
-                    "/data/hooks/orchestrator-implement.json".to_string(),
-                ]
-            )
-        );
-        assert_eq!(
-            cfg.launch_command(
-                true,
-                Some("/data/hooks/orchestrator-plan.json"),
-                Some("claude-sess-abc"),
-            ),
-            (
-                "claude".to_string(),
-                vec![
-                    "--permission-mode".to_string(),
-                    "plan".to_string(),
-                    "--settings".to_string(),
-                    "/data/hooks/orchestrator-plan.json".to_string(),
-                    "--resume".to_string(),
-                    "claude-sess-abc".to_string(),
-                ]
-            )
-        );
-        // Resume without a hook spec still passes `--resume` alone.
-        assert_eq!(
-            cfg.launch_command(false, None, Some("sess-1")),
-            (
-                "claude".to_string(),
-                vec!["--resume".to_string(), "sess-1".to_string()]
-            )
-        );
+    fn a_config_that_still_sets_a_removed_key_does_not_parse() {
+        // The tombstone above is the *message*; this is the behaviour. Both
+        // matter: a key silently accepted and ignored is how `design_preview`
+        // survived four minor versions doing nothing (#356).
+        let err =
+            serde_json::from_value::<HerdrConfig>(serde_json::json!({ "agent_command": "claude" }))
+                .unwrap_err();
+        assert!(err.to_string().contains("agent_command"), "got {err}");
     }
 }

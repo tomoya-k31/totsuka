@@ -167,6 +167,8 @@ ratio     = 0.8       # エージェント側の取り分
 
 `[layout]` が入ると `side_pane` という語が二重化し、「`design_preview = "side_pane"` にすれば横に出る」と誤読されるため、設定キー・ドキュメントに deprecated と明記する。削除は `agent_command` / `plan_args` と同じく次の breaking bump（0.3）。ケイパビリティ宣言自体は 0.3 まで残す（プロトコルの `Capabilities` は additive に扱うため、宣言を今落とすと旧 Orchestrator との組合せで意味が変わりうる）。
 
+> **後日談（#411）**: ここで「削除は 0.3」と書いたが、0.3.0 の破壊的バンプは `Task.thread_key` しか落とさず、`design_preview` は設定キー・ケイパビリティ宣言ともに 0.3 系を丸ごと生き延びた。実際に消えたのは **プロトコル 0.4.0**（[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。「次の breaking bump で消す」という書き方が、その bump が来たときに誰も参照しないので実行されない、という教訓つき。
+
 # 検証
 
 - `cargo test -p agent-ide-herdr` — 既定 / `shell = false` / `direction = "right"` / split 失敗時の続行 / close 失敗時の split 省略 / `root_pane` 無し / **`env` が split に渡らないこと**を固定した

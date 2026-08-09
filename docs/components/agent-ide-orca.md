@@ -1,7 +1,7 @@
 ---
 type: Component
 title: agent-ide-orca プラグイン
-description: orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。design_preview は非宣言（capability を正直に宣言）。
+description: orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。pane_control は非宣言（capability を正直に宣言）。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [rust, crate, plugin, agent-ide, orca, cli, worktree]
 generated: { by: human:tomoya-k31, at: 2026-07-30T12:00:00+09:00 }
@@ -35,7 +35,7 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 
 # capability negotiation（F-33）
 
-orca CLI で確実に対応できる `plan_mode` / `state_stream` のみを宣言し、**`design_preview` / `pane_control` は宣言しない**（orca は構造化 plan/preview API を持たない）。Orchestrator は宣言された機能のみ要求するため、未対応機能があってもワークフローは成立する。`pane_control` 非宣言のため、0.1.4 の `session/focus` に加え **0.2.1 の `session/release`（worktree 掃除時の pane 解放, #210, [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）も 0.2.2 の `session/list`（doctor 孤児 pane 検出, #211, [ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）も呼ばれない** — Orchestrator は pane 解放をスキップして worktree だけ削除し、doctor の pane チェックも本プラグインには行わない（本プラグイン変更なし）。
+orca CLI で確実に対応できる `plan_mode` / `state_stream` のみを宣言し、**`pane_control` は宣言しない**（orca は pane 制御サーフェスを持たない）。かつては `design_preview` も非宣言だったが、その capability 自体がプロトコル 0.4.0 で削除された（#411、[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。Orchestrator は宣言された機能のみ要求するため、未対応機能があってもワークフローは成立する。`pane_control` 非宣言のため、0.1.4 の `session/focus` に加え **0.2.1 の `session/release`（worktree 掃除時の pane 解放, #210, [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）も 0.2.2 の `session/list`（doctor 孤児 pane 検出, #211, [ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）も呼ばれない** — Orchestrator は pane 解放をスキップして worktree だけ削除し、doctor の pane チェックも本プラグインには行わない（本プラグイン変更なし）。
 
 # Claude Code / orca 固有の制約
 
@@ -44,7 +44,7 @@ orca CLI で確実に対応できる `plan_mode` / `state_stream` のみを宣�
 # テスト
 
 - 状態写像（3値＋異常→failed・大小無視・不明は前値維持）・worktree 名正規化・repo セレクタ・plan プロンプト前置・質問抽出は単体テスト。
-- **fake orca CLI**（サブコマンド別レスポンス）に対して initialize→dispatch→state/subscribe→状態ストリーム（`running`→`waiting_input`（質問付き）→`done`、異常 state→`failed`）を結合テスト（`tests/integration.rs`）。session/attach 成功・worktree 消失（`attached:false`）、cancel の冪等、capability 宣言（design_preview 非宣言）、`config/validate`（`orca status` 疎通）を検証。
+- **fake orca CLI**（サブコマンド別レスポンス）に対して initialize→dispatch→state/subscribe→状態ストリーム（`running`→`waiting_input`（質問付き）→`done`、異常 state→`failed`）を結合テスト（`tests/integration.rs`）。session/attach 成功・worktree 消失（`attached:false`）、cancel の冪等、capability 宣言（`pane_control` 非宣言）、`config/validate`（`orca status` 疎通）を検証。
 - 実バイナリを stdio で fake `orca` スクリプトに接続して疎通確認済み。
 - **実機との手動疎通チェックリストは issue #61 のコメントに整理**（状態が OSC state dots 由来である前提での遅延・取りこぼし・「承認待ち idle」誤検知の観点を含む）。
 

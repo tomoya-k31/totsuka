@@ -39,7 +39,7 @@ mod tests {
         let raw = PluginRawConfig::from_toml_str(
             r#"
 socket_path = "${XDG_RUNTIME_DIR}/herdr.sock"
-design_preview = "side_pane"
+request_timeout_secs = 30
 "#,
         )
         .unwrap();
@@ -51,6 +51,6 @@ design_preview = "side_pane"
         );
 
         let json = raw.to_json().unwrap();
-        assert_eq!(json["design_preview"], serde_json::json!("side_pane"));
+        assert_eq!(json["request_timeout_secs"], serde_json::json!(30));
     }
 }

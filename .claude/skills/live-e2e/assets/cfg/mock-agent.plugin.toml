@@ -4,7 +4,7 @@
 name = "mock_agent"
 kind = "agent_ide"
 version = "0.1.0"
-protocol_version = ">=0.1.6, <0.4"
+protocol_version = ">=0.1.6, <0.5"
 
 [capabilities]
 state_stream = true

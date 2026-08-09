@@ -87,7 +87,32 @@ use semver::{Version, VersionReq};
 /// leaving third parties to discover it: a `<0.3` manifest is rejected at
 /// launch by design (F-54), exactly as `^0.1` was at 0.2.0. The bundled
 /// plugins move to `<0.4`.
-pub const PROTOCOL_VERSION: &str = "0.3.0";
+///
+/// 0.4.0: **breaking** — the three surfaces 0.3.0 was *supposed* to remove
+/// (#411). 0.3.0 was a breaking bump, but it only deleted `Task.thread_key`;
+/// everything else that said "removed at the next breaking bump" was left
+/// behind, so the declarations and the code disagreed for a whole generation.
+/// This bump makes them agree:
+///
+/// - `TaskDispatchParams.hook` and `HookLaunchSpec` (deprecated 0.2.3, #196)
+///   are removed. [`ToolLaunchSpec`](crate::methods::ToolLaunchSpec) carries
+///   the fully assembled argv, so `hook` only duplicated `--settings` and the
+///   env in a form the plugin had to interpret.
+/// - [`Capabilities`](crate::manifest::Capabilities)`::design_preview` is
+///   removed (#356/#411). Nothing ever read it — neither the Orchestrator nor
+///   any bundled plugin — so it was a declaration with no behaviour behind it
+///   ([ADR-0030](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0030-herdr-pane-layout.md)).
+///   The manifest key is tolerated on the wire (`Capabilities` has no
+///   `deny_unknown_fields`) and ignored; a plugin that *reads* the field no
+///   longer compiles.
+///
+/// The bundled plugins move to `<0.5`, and the agent_ide plugins raise their
+/// **lower** bound to `>=0.2.3` — the version that introduced `tool_launch`.
+/// That is what makes the removal safe rather than merely declared: an
+/// Orchestrator old enough to send no `tool_launch` can no longer launch them
+/// at all (F-54), so the plugin-local argv assembly it used to fall back to is
+/// unreachable, not just deprecated.
+pub const PROTOCOL_VERSION: &str = "0.4.0";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -111,15 +136,22 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 3, 0));
+        assert_eq!(protocol_version(), Version::new(0, 4, 0));
     }
 
     #[test]
     fn compatible_requirement_matches() {
-        // A range reaching past the 0.3.0 boundary — where `Task.thread_key`
-        // was removed (#264) — is what the bundled plugins now declare.
-        let req = VersionReq::parse(">=0.1.6, <0.4").unwrap();
-        assert!(is_compatible_with_current(&req));
+        // What the bundled plugins declare after the 0.4.0 boundary (#411):
+        // task_source/notifier keep a wide lower bound, agent_ide plugins
+        // require `tool_launch` (0.2.3) because their local argv fallback is
+        // gone.
+        for req in [">=0.1.6, <0.5", ">=0.2.3, <0.5"] {
+            let parsed = VersionReq::parse(req).unwrap();
+            assert!(
+                is_compatible_with_current(&parsed),
+                "{req} must be accepted by protocol 0.4.0"
+            );
+        }
     }
 
     #[test]
@@ -130,18 +162,38 @@ mod tests {
     }
 
     #[test]
-    fn zero_two_manifests_are_stranded_by_the_zero_three_boundary() {
-        // F-54 again (#264): removing `Task.thread_key` is a break in the
-        // type, so every `<0.3`-bounded manifest — the whole 0.2 family, and
-        // the 0.1.6 push-only range that survived the 0.2.0 boundary — is
-        // rejected at launch rather than left to fail at a field access.
-        for req in ["^0.2", ">=0.1.6, <0.3", ">=0.2.4, <0.3"] {
+    fn zero_three_manifests_are_stranded_by_the_zero_four_boundary() {
+        // F-54 again (#411): 0.4.0 removes `TaskDispatchParams.hook` and
+        // `Capabilities.design_preview`, so every `<0.4`-bounded manifest —
+        // what the bundled plugins declared across the whole 0.3 generation —
+        // is rejected at launch rather than left to read a field that is no
+        // longer sent.
+        for req in ["^0.2", ">=0.1.6, <0.4", ">=0.1.0, <0.4", ">=0.3.0, <0.4"] {
             let parsed = VersionReq::parse(req).unwrap();
             assert!(
                 !is_compatible_with_current(&parsed),
-                "{req} must be rejected by protocol 0.3.0"
+                "{req} must be rejected by protocol 0.4.0"
             );
         }
+    }
+
+    #[test]
+    fn the_agent_ide_lower_bound_is_what_makes_the_fallback_unreachable() {
+        // #411: deleting herdr's `agent_command`/`plan_args` argv assembly is
+        // only safe because no Orchestrator that would have used it can launch
+        // the plugin any more. That is a claim about the *manifest range*, not
+        // about the code, so it is asserted here: `>=0.2.3` excludes every
+        // release that predates `tool_launch`.
+        let agent_ide = VersionReq::parse(">=0.2.3, <0.5").unwrap();
+        for pre_tool_launch in ["0.1.0", "0.1.6", "0.2.0", "0.2.2"] {
+            let v = Version::parse(pre_tool_launch).unwrap();
+            assert!(
+                !is_compatible(&agent_ide, &v),
+                "an agent_ide plugin must refuse orchestrator {pre_tool_launch}, \
+                 which sends no tool_launch"
+            );
+        }
+        assert!(is_compatible(&agent_ide, &Version::new(0, 2, 3)));
     }
 
     #[test]

@@ -517,9 +517,6 @@ repos = ["totsuka"]
 # socket_path = "${XDG_CONFIG_HOME}/herdr/herdr.sock"
 # session = "main"
 
-agent_command = "claude"                        # 起動するエージェント（空白区切りで引数も可）
-plan_args = ["--permission-mode", "plan"]       # plan モード時に追加する引数
-design_preview = "side_pane"                    # deprecated・無効（誰も読んでいない。削除は 0.3）
 request_timeout_secs = 30                       # herdr への RPC タイムアウト
 
 # dispatch した pane の配置（省略可。以下が既定値）
@@ -529,9 +526,10 @@ direction = "down"                              # "down" = 上下 / "right" = �
 ratio     = 0.8                                 # エージェント側の取り分
 ```
 
-- `agent_command` / `plan_args` は **deprecated**。`tool_launch` を送らない旧 Orchestrator 向けのフォールバックで、
-  通常は `config.toml` の `[tools]` が argv を決める（[ADR-0014](/decisions/adr-0014-tool-abstraction.md)）。
-- `design_preview` は **deprecated かつ無効** — core もプラグインも読んでおらず、値を変えても描画は変わらない。
+- **`agent_command` / `plan_args` / `design_preview` はプロトコル 0.4.0 で削除された**（#411、
+  [ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。まだ書いてあると `initialize` が
+  `CONFIG_INVALID` で落ちる（キー名と代替を挙げたメッセージが出る）ので消すこと。argv は
+  `config.toml` の `[tools]` が決め（[ADR-0014](/decisions/adr-0014-tool-abstraction.md)）、
   pane の配置は `[layout]` が決める（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。
 - `[layout]` の `ratio` は**エージェント側**の取り分。範囲検査はせず herdr へそのまま送る（不正値は herdr が拒否し、
   その場合は警告のうえシェル pane なしで続行する）。`direction` は `down` / `right` のみで、

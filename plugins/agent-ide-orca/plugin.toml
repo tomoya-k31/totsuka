@@ -1,11 +1,15 @@
 name = "orca"
 kind = "agent_ide"
 version = "0.1.0"
-protocol_version = ">=0.1.0, <0.4"
+# Unlike herdr this stays at `>=0.1.0`: orca drives the `orca` CLI itself and
+# never reads `TaskDispatchParams.tool_launch`, so the 0.2.3 floor that #411
+# put on herdr (whose local argv fallback was deleted) would exclude
+# orchestrators this plugin works with perfectly well.
+protocol_version = ">=0.1.0, <0.5"
 
-# orca has no structured plan/preview API and no pane-control surface, so only
-# the capabilities it can honestly fulfil are declared (F-33). design_preview
-# and pane_control are intentionally omitted.
+# orca has no structured plan API and no pane-control surface, so only the
+# capabilities it can honestly fulfil are declared (F-33). pane_control is
+# intentionally omitted.
 [capabilities]
 plan_mode = true
 state_stream = true

@@ -94,8 +94,8 @@ orca は Claude を **TUI プロセス**として扱い、状態は **Orca が�
 [Supported agents マトリクス](https://www.onorca.dev/docs/agents/supported)上、**Claude Code はむしろ最上位の "Deep integration: usage, hot-swap, hooks"**（Codex より hooks の分だけ厚い）。
 つまり「Claude だと一部限られる」の実体は Claude 固有の格下げではなく、**orca が全エージェントを TUI プロセスとして扱う構造そのもの**に由来する。#61 の capability 宣言・状態設計はこれを前提にする。
 
-- **構造化 plan / preview API が無い**: orca は plan モード成果物を構造化して返す手段を持たない。よって **`design_preview` capability は宣言しない**
-  （#61 の設計例が正しいことを裏付ける）。plan は Claude CLI 側の plan/permission-mode を起動引数で付与して実現する（orca はプロセスホストのみ）。
+- **構造化 plan / preview API が無い**: orca は plan モード成果物を構造化して返す手段を持たない。#61 当時はこれを理由に **`design_preview` capability を宣言しない**設計にした
+  （その capability 自体はプロトコル 0.4.0 で削除された。誰も読んでいなかったため — #411 / [ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。plan は Claude CLI 側の plan/permission-mode を起動引数で付与して実現する（orca はプロセスホストのみ）。
 - **状態は OSC state dots 由来の粗い3値**: Claude の状態は Orca 注入の status-line hook が発行する OSC title に依存。フック非発火時（古い CLI・statusline を上書きする独自設定）は状態が劣化する。native な権威報告ではない。
 - **結果は構造化ペイロードで返らない**: dispatch 完了時に構造化された成果物は返らない。**worktree は実 FS 上の実体**なので、`<worktree-path>/…` の出力ファイルを直接読むのが端末 scrollback パースより堅牢。
 - **入力は端末送信のみ**: 追加ターンは `terminal send --text … --enter`。構造化 multi-turn API は無い。
@@ -124,5 +124,5 @@ Yolo は各 CLI の permission-bypass フラグを**事前入力**する — **C
 | クリーンアップ | `orca worktree rm --worktree id:<id> --force --json`（研究レポート時点の未確認項目が解決） |
 | 完了検知 | `terminal wait --for tui-idle` 単独では「承認待ち idle」を誤検知しうる → `worktree ps` state 併用 |
 | 結果取得 | worktree 実体ファイルを直接読む（scrollback パースより堅牢） |
-| capability | `design_preview` は非宣言。宣言するのは orca CLI で確実に対応できるものだけ（F-33） |
+| capability | 宣言するのは orca CLI で確実に対応できるものだけ（F-33）。`pane_control` は非宣言 |
 | バージョン変動 | 日次リリース。`--json` パースは薄いアダプタに分離 |

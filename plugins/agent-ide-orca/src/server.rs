@@ -221,8 +221,8 @@ impl<F: CliFactory> Server<F> {
 }
 
 /// The capabilities this plugin declares (F-33): plan mode and a state stream.
-/// `design_preview`/`pane_control` are intentionally **not** declared — orca has
-/// no structured plan/preview API — so the Orchestrator never requests them.
+/// `pane_control` is intentionally **not** declared — orca exposes no pane
+/// surface — so the Orchestrator never requests it.
 fn capabilities_result() -> Value {
     to_value(&InitializeResult {
         plugin_version: plugin_version(),

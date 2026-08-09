@@ -17,7 +17,7 @@ use plugin_protocol::methods::{
     TaskCancelParams, TaskDispatchParams,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
-use semver::Version;
+
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -112,17 +112,21 @@ impl<F: TransportFactory> Server<F> {
             Ok(v) => v,
             Err(e) => return self.send(Response::error(id, e)),
         };
-        // Completion detection is now hook-based (0.1.3, #131): an orchestrator
-        // older than 0.1.3 does not issue the hook launch spec, so tasks would
-        // never be reported complete (the state stream is a deadman only). This
-        // is compatible on the wire (`^0.1`) but operationally broken, so warn.
-        if init.protocol_version < Version::new(0, 1, 3) {
-            tracing::warn!(
-                orchestrator = %init.protocol_version,
-                "orchestrator protocol < 0.1.3: hook-based completion is unavailable, so this \
-                 plugin will not report task completion (only pane.exited failures). Upgrade the \
-                 orchestrator to 0.1.3+."
-            );
+        // No runtime version floor is checked here any more (#411). The
+        // manifest declares `>=0.2.3`, so an orchestrator too old to send
+        // `tool_launch` — or too old for hook-based completion (0.1.3, #131) —
+        // is refused before `initialize` is even reached (F-54). A warning
+        // here could only fire in a state the launcher already made
+        // unreachable.
+        let removed = crate::config::removed_keys_in(&init.config);
+        if !removed.is_empty() {
+            return self.send(Response::error(
+                id,
+                Error::new(
+                    error_code::CONFIG_INVALID,
+                    format!("invalid herdr plugin config: {}", removed.join(" ")),
+                ),
+            ));
         }
         let config: HerdrConfig = match serde_json::from_value(init.config) {
             Ok(c) => c,
@@ -161,14 +165,16 @@ impl<F: TransportFactory> Server<F> {
     }
 
     async fn config_validate(&mut self, id: RequestId, params: Value) {
-        let config: HerdrConfig = match params
-            .get("config")
-            .cloned()
-            .ok_or(())
-            .and_then(|c| serde_json::from_value(c).map_err(|_| ()))
-        {
+        let raw = params.get("config").cloned().unwrap_or(Value::Null);
+        // Report the removed keys (#411) by name — `config does not parse`
+        // below is true but useless for the one config change 0.4.0 forces.
+        let removed = crate::config::removed_keys_in(&raw);
+        if !removed.is_empty() {
+            return self.ok_validate(id, removed);
+        }
+        let config: HerdrConfig = match serde_json::from_value(raw) {
             Ok(c) => c,
-            Err(()) => {
+            Err(_) => {
                 return self.ok_validate(id, vec!["config does not parse".into()]);
             }
         };
@@ -337,15 +343,18 @@ impl<F: TransportFactory> Server<F> {
     }
 }
 
-/// The capabilities this plugin declares (F-33): plan mode, design preview,
-/// pane control, a state stream, plus session resume and pane diagnostics
-/// snapshots (0.1.3, #131). Must mirror `plugin.toml`.
+/// The capabilities this plugin declares (F-33): plan mode, pane control, a
+/// state stream, plus session resume and pane diagnostics snapshots (0.1.3,
+/// #131). Must mirror `plugin.toml`.
+///
+/// `design_preview` used to be declared here and was removed with the field
+/// itself in protocol 0.4.0 (#411/#356) — nothing ever read it, so declaring it
+/// promised a feature that did not exist.
 fn capabilities_result() -> Value {
     to_value(&InitializeResult {
         plugin_version: plugin_version(),
         capabilities: Capabilities {
             plan_mode: true,
-            design_preview: true,
             pane_control: true,
             state_stream: true,
             // 0.1.3: `--resume` re-opens an agent session (Slack thread
@@ -434,10 +443,12 @@ fn not_initialized(id: RequestId) -> Response {
 /// Everything herdr can go wrong with is an internal error to the caller —
 /// except a session it could not resume, which the protocol gives its own code
 /// so the Orchestrator can retry without it (0.2.4 `SESSION_UNRESUMABLE`,
-/// #242).
+/// #242), and a dispatch that arrived without a `tool_launch`, which is the
+/// caller's own malformed request (#411).
 fn rpc_error(id: RequestId, error: &HerdrError) -> Response {
     let code = match error {
         HerdrError::SessionUnresumable(_) => error_code::SESSION_UNRESUMABLE,
+        HerdrError::MissingToolLaunch => error_code::INVALID_PARAMS,
         _ => error_code::INTERNAL_ERROR,
     };
     Response::error(id, Error::new(code, error.to_string()))

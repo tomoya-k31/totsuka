@@ -37,8 +37,6 @@ pub enum OutputCapability {
 pub struct Capabilities {
     /// Supports plan (design) mode (F-36).
     pub plan_mode: bool,
-    /// Can render a design preview in a side pane / screen (F-34).
-    pub design_preview: bool,
     /// Supports pane control.
     pub pane_control: bool,
     /// Streams state/log fragments via `state/subscribe` (F-38).
@@ -121,7 +119,6 @@ protocol_version = "^0.1"
 
 [capabilities]
 plan_mode = true
-design_preview = true
 state_stream = true
 "#;
 
@@ -210,7 +207,7 @@ outputs = ["source"]
 name = "slack"
 kind = "task_source"
 version = "0.2.0"
-protocol_version = ">=0.1.6, <0.4"
+protocol_version = ">=0.1.6, <0.5"
 
 [capabilities]
 task_submit = true
@@ -220,12 +217,15 @@ outputs = ["source"]
         .unwrap();
         assert!(m.capabilities.task_submit);
         assert!(m.is_compatible_with(&Version::new(0, 1, 6)));
-        // A push-only plugin survives the 0.2.0 fetch removal and, with the
-        // bound raised to `<0.4`, the 0.3.0 removal of `Task.thread_key`…
+        // A push-only plugin survives the 0.2.0 fetch removal, the 0.3.0
+        // removal of `Task.thread_key`, and — with the bound raised to `<0.5`
+        // (#411) — the 0.4.0 removal of `TaskDispatchParams.hook`, which no
+        // task_source ever read…
         assert!(m.is_compatible_with(&Version::new(0, 2, 0)));
         assert!(m.is_compatible_with(&Version::new(0, 3, 0)));
-        // …while staying honest about a hypothetical 0.4.
-        assert!(!m.is_compatible_with(&Version::new(0, 4, 0)));
+        assert!(m.is_compatible_with(&Version::new(0, 4, 0)));
+        // …while staying honest about a hypothetical 0.5.
+        assert!(!m.is_compatible_with(&Version::new(0, 5, 0)));
     }
 
     #[test]

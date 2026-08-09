@@ -35,7 +35,7 @@ use std::time::Duration;
 
 use plugin_protocol::method;
 use plugin_protocol::methods::{
-    AgentState, ExecutionMode, HookLaunchSpec, NotifierEvent, NotifyParams, ResultPublishParams,
+    AgentState, ExecutionMode, NotifierEvent, NotifyParams, ResultPublishParams,
     SessionReleaseParams, SessionReleaseResult, StateNotification, TaskDispatchParams,
     TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams, TaskSubmitResult,
     TaskSubmitStatus, TaskUpdateStatusParams,
@@ -176,8 +176,8 @@ pub struct EngineSettings {
     /// even when `[hooks]` is unset — a default socket path is used, so a config
     /// with no hook-capable agent simply never receives a POST). `None` only for
     /// `--dry-run` (read-only: no receiver, no dispatch) and hook-disabled
-    /// tests; when `None` the receiver never starts and dispatch never sets a
-    /// [`HookLaunchSpec`].
+    /// tests; when `None` the receiver never starts and dispatch never resolves
+    /// a hook launch (no `--settings`, no `TOTSUKA_*` env).
     pub hook: Option<HookRuntime>,
 }
 
@@ -199,8 +199,9 @@ pub struct HookRuntime {
     /// injected as `TOTSUKA_HOOK_SPOOL_DIR`. The engine drains it after
     /// `recover()` and on every cycle. `None` disables at-least-once recovery.
     pub spool_dir: Option<PathBuf>,
-    /// Per-workflow rendered `orchestrator-<workflow>.json` path
-    /// (`HookLaunchSpec.settings_path`), keyed by workflow name (H-01/H-03).
+    /// Per-workflow rendered `orchestrator-<workflow>.json` path (baked into
+    /// `ToolLaunchSpec.args` as `--settings <path>`), keyed by workflow name
+    /// (H-01/H-03).
     pub settings_paths: HashMap<String, PathBuf>,
     /// Consecutive UNKNOWN stops before a task escalates (D-02).
     pub block_retry_limit: u32,
@@ -1583,7 +1584,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 };
                 (
                     Some(job_id.to_string()),
-                    Some(HookLaunchSpec { settings_path, env }),
+                    Some((settings_path, env)),
                     Some(session_row),
                     visible_hook_context,
                 )
@@ -1610,9 +1611,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let mode = execution_mode(&record.mode);
         // Fully-resolved tool launch (#196): the argv (base command, mode
         // flags, hook settings, resume id) is assembled in core from the
-        // resolved profile; the plugin launches it verbatim. The deprecated
-        // `hook` spec rides along for plugins predating protocol 0.2.3.
-        // `tool_launch` bakes the resume flag into the argv, so a retry
+        // resolved profile; the plugin launches it verbatim. This is the only
+        // launch channel since protocol 0.4.0 (#411) — the `hook` spec that
+        // used to ride along for pre-0.2.3 plugins is gone, and `hook_spec`
+        // below is a core-internal `(settings_path, env)` pair, not a wire
+        // type. `tool_launch` bakes the resume flag into the argv, so a retry
         // without resume has to rebuild the whole spec — hence a closure
         // rather than a mutated struct.
         let build_params = |resume: Option<String>| TaskDispatchParams {
@@ -1621,14 +1624,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             mode,
             extra_context: extra_context.clone(),
             job_id: job_id.clone(),
-            hook: hook_spec.clone(),
             tool_launch: tool_profile.launch_spec(&LaunchInputs {
                 plan: mode == plugin_protocol::methods::ExecutionMode::Plan,
-                settings_path: hook_spec.as_ref().map(|h| h.settings_path.as_str()),
+                settings_path: hook_spec.as_ref().map(|(path, _)| path.as_str()),
                 resume_session_id: resume.as_deref(),
                 env: hook_spec
                     .as_ref()
-                    .map(|h| h.env.clone())
+                    .map(|(_, env)| env.clone())
                     .unwrap_or_default(),
             }),
             resume_session_id: resume,

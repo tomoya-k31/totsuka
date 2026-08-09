@@ -6,8 +6,9 @@
 # initialize が落ちる。herdr は totsuka とは別プログラムで、ソケットは本物の ~/.config にある。
 socket_path = "${HOME}/.config/herdr/herdr.sock"
 
-# agent_command / plan_args は 0.2.3 以降 deprecated なので書かない。
-# 起動する CLI は config.toml の [tools] レジストリ側（既定 claude）が決める。
+# agent_command / plan_args / design_preview はプロトコル 0.4.0 で削除された（#411）。
+# 書くと initialize が CONFIG_INVALID で落ちる。起動する CLI は config.toml の
+# [tools] レジストリ側（既定 claude）が決める。
 
 [layout]
 # エージェントの隣にシェル pane を割り、様子を見ながら手で git を叩けるようにする。
