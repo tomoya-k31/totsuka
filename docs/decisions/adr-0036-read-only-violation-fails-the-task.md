@@ -1,11 +1,12 @@
 ---
 type: Decision
-title: ADR-0036 triage / design はシェルを検査せず、リポジトリを触ったら公開せず失敗させる
-description: "gh issue comment に複数行 Markdown を渡すにはシェル構文が要るため triage / design から Bash を取り上げられない。コマンド文字列を検査するフックは、引用符の内外を見分けるパーサが要るうえ取りこぼしに強い名前が付くので不採用。代わりに全 read-only profile から plan ゲートを外して無人ハングを消し、read-only profile のタスクがブランチ上にあったら成功として公開せず fail_publish で失敗させる。防止ではなく検出で、本当の境界はサンドボックス調査（#418）に送る。"
+title: ADR-0036 triage / design はシェルを検査せず、リポジトリを触ったら成功として扱わない
+description: "gh issue comment に複数行 Markdown を渡すにはシェル構文が要るため triage / design から Bash を取り上げられない。コマンド文字列を検査するフックは、引用符の内外を見分けるパーサが要るうえ取りこぼしに強い名前が付くので不採用。代わりに全 read-only profile から plan ゲートを外して無人ハングを消し、read-only profile のタスクがブランチ上にあったら fail_publish で失敗させる。止まるのは成功報告と on_success で、triage / design の成果物はエージェントが直接書く（#398）ため既に公開済みで取り消せない。防止ではなく検出で、本当の境界はサンドボックス調査（#418）に送る。"
 resource: https://github.com/tomoya-k31/totsuka/issues/409
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-10T09:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T13:30:00+09:00 }
 status: stable
+verified: [{ by: human:tomoya-k31, at: 2026-08-11T04:05:00+09:00 }]
 owner: tomoya-k31
 sources:
   - id: issue-409
@@ -69,9 +70,19 @@ gh issue comment 31 --body x && git push                    # 危険
 
 判定は `permissions::plan_mode_only_adds_the_gate` に移した。profile 無しの workflow は引き続き対象外（deny 注入自体が無いので、外すと何も残らない）。
 
-## D3. read-only profile がブランチ上にあったら、公開せず失敗させる
+## D3. read-only profile がブランチ上にあったら、成功として扱わない
 
-`finalize_success` が成果物を公開する直前に検査する。ブランチがあれば `fail_publish` で失敗させる — **worktree とコミットは保持される**ので、人間が何が起きたか見られる。
+`finalize_success` が出力ポリシーを実行する直前に検査する。ブランチがあれば `fail_publish` で失敗させる — **worktree とコミットは保持される**ので、人間が何が起きたか見られる。
+
+何が止まるかは **profile で違う**（実機 2026-08-11 で確認）。
+
+| | `answer` | `triage` / `design` |
+|---|---|---|
+| 成果物そのもの | **止まる**（返信はオーケストレータが出力ポリシーで publish するため） | **止まらない**。エージェントが `gh issue comment` で直接書く（#398）ので、検査が走る時点で公開済み |
+| 成功として報告すること | 止まる | 止まる |
+| `on_success` の状態遷移 | 止まる | 止まる |
+
+実測では、エージェントが 19:02:57 に設計コメントを投稿し、タスクは 19:03:27 に失敗した。**30 秒の差で、成果物は既に外に出ていた。** #398 で「成果物はエージェントが書く」と決めた以上、`finalize_success` の検査は原理的にそれを取り消せない。この節の初版は「成果物を公開せず失敗させる」と書いていたが、`triage` / `design` については誤りだった。
 
 **これは防止ではない。** ブランチが存在する時点で push は済んでいるかもしれず、そこから取り返す手段は無い。しかし「証拠を残して大きな音で失敗した」は「完了と報告された」とは別の運用状態であり、#410 が生んだのは後者だった。
 
@@ -106,7 +117,7 @@ gh issue comment 31 --body x && git push                    # 危険
 ## 引き受けたコスト
 
 - **`triage` / `design` に境界は無い。** `Bash(...)` パターンは #410 が不十分だと示したままで、シェル経由の書き込みも `&&` による回避も可能である。**防げるとは書かない**
-- **push / PR は取り返せない。** 検出は事後で、外部に出たものは戻らない
+- **push / PR は取り返せない。** 検出は事後で、外部に出たものは戻らない。**`triage` / `design` では成果物そのものも同じ**（上の表）— 止められるのは成功報告と `on_success` だけである
 - **検出はブランチだけを見る。** detached head 上のコミットは通る（push には ref 名が要るので、実害の主経路は押さえている）
 - **救済は `task retry` 単体ではない。** worktree がブランチ上にある限り検査は再び落とすので、operator は先に detach するか cancel する必要がある。メッセージにその 2 択を書いた
 - plan フラグを外したことによる未実測の縁は [ADR-0035](/decisions/adr-0035-answer-profile-shell-removal.md) と同じ — pane は既定モードで起動し、`WebFetch` / `mcp__*` に対する plan の網は代替されていない
@@ -118,5 +129,7 @@ gh issue comment 31 --body x && git push                    # 危険
 # 検証
 
 - `cargo test --workspace --all-features` — 全 read-only profile が plan フラグを落とすこと（`implement` と profile 無しは落とさないこと）、`read_only_side_effect` が profile で門を作りブランチ・profile 名・「push は取り返せない」旨・**救済手順（detach / cancel）**をメッセージに含むこと、**detached では発火しないこと**（救済が実際に効くことの固定）、`implement` / profile 無しでも発火しないこと
-- **実機検収は未了。** `design` タスクが人間の承認を待たずに完走すること、および read-only profile がブランチを切った場合にタスクが失敗して worktree が残ることを実機で確認するまで `verified` は付けない
+- **実機検収済み（2026-08-11）。** `design` タスク（`github-design`）が**人間の承認を待たず約 2 分で完走**した（従来は 858 秒待ち）。セッション記録の `permissionMode` は `auto` のみで **`ExitPlanMode` の呼び出しは 0 回**、拒否も 0 件。成果物を本人名義で issue へ投稿し、`on_success` で `Design Review` へ遷移した
+- **違反時の失敗も実機で発火させた。** 走行中の `design` タスクの worktree にブランチを注入したところ、状態遷移は `dispatched → running → publishing → failed` となり、`finalize_success` に入ってから `fail_publish` で落ちた。worktree とコミットは保持され、失敗理由にブランチ名・profile 名・「push は取り返せない」・救済手順（detach / cancel）がすべて入っていた。**負の対照**も取れている: 同時期の `implement` タスクはブランチ `feat/logtool-stddev` を持ったまま `done` で完走し、PR まで作った（免除が効いている）
+- **ただしこの検収は「承認プロンプトを 1 つも出さずに完走」を証明していない。** pane は `permissionMode: auto` で動いており、検証機のグローバル設定にある広い `allow` が効いていた。[#420](https://github.com/tomoya-k31/totsuka/issues/420) は open のまま
 - **検収では「承認プロンプトを 1 つも出さずに完走したか」を明示的に見る。** plan フラグを外した pane は環境の既定モードで起動し、totsuka が配る settings には `deny` しか無い（`allow` も `defaultMode` も書かない）。`triage` / `design` は仕事が丸ごと `Bash`（`gh issue comment`）なので、**既定モードが Bash の承認を求める環境では、#409 と同種の停止が場所を変えて戻る**。開発機のグローバル設定には `Bash(gh:*)` 等の allow があるため**そこでは再現しない**点に注意 — クリーンな環境で確かめる必要がある。追跡は [#420](https://github.com/tomoya-k31/totsuka/issues/420)

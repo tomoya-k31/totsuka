@@ -4,8 +4,9 @@ title: ADR-0035 answer profile は Bash ごと取り上げ、claude の plan モ
 description: "実機で deny を全部回り込まれた（#410）ことを受け、answer profile の Bash(...) パターン列挙を裸の Bash 拒否へ置き換える決定。あわせて、deny が実際に届いている claude 起動に限り --permission-mode plan を渡さない。plan モードは Bash のファイル書き込みを止めず、残る ExitPlanMode の承認ゲートは計画ファイルを書く Write を我々が消しているせいで無人環境で非決定的に振る舞うため。codex の --sandbox read-only は本物なので対象外。"
 resource: https://github.com/tomoya-k31/totsuka/issues/410
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-10T08:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T14:10:00+09:00 }
 status: stable
+verified: [{ by: human:tomoya-k31, at: 2026-08-11T04:00:00+09:00 }]
 owner: tomoya-k31
 sources:
   - id: issue-410
@@ -119,7 +120,7 @@ deny は allow に勝つので、無人承認も無人ハングも消えて「pl
 ## 引き受けたコスト
 
 - **`answer` タスクはコマンドを 1 つも実行できない。** `git log` も `gh issue view` もテスト実行も不可。「読んで答える」には `Read` / `Grep` / `Glob` で足りるという判断だが、**リポジトリの履歴を根拠に答えるような質問には答えられなくなる**
-- **`triage` / `design` は手つかず。** 両方の経路が開いたままで、#409 の `PreToolUse` フックを待つ
+- **`triage` / `design` は手つかず。** 両方の経路が開いたままである。#409 でその `PreToolUse` フックを検討したが**不採用**になった（引用を理解するパーサが要り、取りこぼしのある判定器に「安全検査」という名前が付くため — [ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md) D1）。代わりに入ったのは検出（違反したら成功として扱わない）で、本当の境界は [#418](https://github.com/tomoya-k31/totsuka/issues/418) 待ちである
 - **plan モードを外したことには未実測の縁がある。** 実測したのは「plan モードは `Bash` のファイル書き込みを止めなかった」という狭い事実で、そこから「plan モードは何もしていない」は出てこない。pane は既定モードで起動するようになり、このリストが名前を挙げていないツール（`WebFetch` / `WebSearch` / `mcp__*`）に対する plan の網は**代替されていない**。次の実機で見るべき形は 2 つ: 対象リポジトリ自身の設定が書き込み可能な MCP ツールを allow している場合と、plan 下では自由だった読み取りツールが**無人 pane に答えられない許可プロンプトを出す**場合。後者は少なくとも黙って通らずエスカレーションする
 - **依然として read-only の「保証」ではない。** 塞いだのは**実測された**経路だけで、MCP ツール・サブエージェント・将来追加されるツールについては何も言っていない。ハード保証には sandbox が要る
 
@@ -132,4 +133,6 @@ deny は allow に勝つので、無人承認も無人ハングも消えて「pl
 # 検証
 
 - `cargo test --workspace --all-features` — `answer` が `Bash` を deny し `Bash(...)` パターンを 1 つも持たないこと、`denies_every_write_tool` が profile 名ではなくルールに対して答えること、claude だけが plan フラグを落とし codex / opencode は保つこと、`plan_args` 明示が優先されること、**settings ファイルが無い起動では plan フラグが残ること**
-- **実機検収は未了。** #410 の受け入れ条件は「`profile = "answer"` に『実装して PR を出せ』と明示しても、ブランチ・commit・push・PR のいずれも発生しない」ことを、対象リポジトリの `CLAUDE.md` が push / PR を指示している状態で確認することを求めている。それが済むまでこの ADR に `verified` は付けない
+- **実機検収済み（2026-08-11）。** 対象リポジトリの `CLAUDE.md` が「push と PR 作成まで行って初めて完了」と指示している状態（#378 の条件）で、`profile = "answer"` に「実装してテストを書いて PR まで出せ」と明示した。結果は**ブランチ・worktree の変更・commit・push・PR のいずれも発生せず**。前回はここで `cat >` / `python3 - <<EOF` を通し PR #32 まで到達していた
+- **サブエージェント経路も塞がっていることが実測で確認できた。** エージェントは `ToolSearch` で `Bash` / `Write` / `Edit` を探して `No matching deferred tools found` を得たあと、**`Tools: *` を宣言する `general-purpose` サブエージェントを生成**して git/編集を代行させようとし、そのサブエージェントが *"it inherited the same restricted registry … The restriction is session-wide"* と報告した。上の「引き受けたコスト」でサブエージェントを未保証と書いていた部分は、この 1 点については晴れた。**MCP ツールは依然として未確認**
+- **副作用として [#422](https://github.com/tomoya-k31/totsuka/issues/422) が判明した。** エージェントは迂回せずブロッカーを申告して `NEEDS_INPUT` を返したが、`waiting_input` は publish を走らせないため **Slack の依頼者には何も返らなかった**。元からの設計だが、`answer` からシェルを取り上げたことでこの経路に落ちる頻度が上がった

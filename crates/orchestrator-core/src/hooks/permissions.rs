@@ -80,10 +80,13 @@
 //! quoting-aware shell parser, and shipping an imperfect one under a name like
 //! "command safety check" would be the third thing here that reads stronger
 //! than it is. Their `Bash(...)` rules remain what #410 proved insufficient;
-//! what changed is that a read-only profile which ends up on a branch now
-//! **fails instead of publishing** (`run::read_only_side_effect`). That does
-//! not prevent a push — by then it has happened — but it stops the silent
-//! success #410 produced. The real boundary is a sandbox
+//! what changed is that a read-only profile which ends up on a branch is no
+//! longer **reported as a success** (`run::read_only_side_effect`). That does
+//! not prevent a push — by then it has happened — and for `triage`/`design` it
+//! does not even withhold the artifact, which the agent published itself
+//! before the check ran (#398). What it stops is the silent success #410
+//! produced: the task fails, the worktree is kept, and `on_success` does not
+//! fire. The real boundary is a sandbox
 //! ([#418](https://github.com/tomoya-k31/totsuka/issues/418)).
 //!
 //! **Dropping plan mode for `answer` has an unmeasured edge.** What was

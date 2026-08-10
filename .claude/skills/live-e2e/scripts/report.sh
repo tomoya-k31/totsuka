@@ -43,7 +43,9 @@ tt task list 2>/dev/null || echo "（state DB なし。まだ run していな�
 echo
 echo "== GitHub 側（自動判定）=="
 if [ -n "$OWNER" ] && [ -n "${E2E_GH_PROJECT:-}" ]; then
-  gh project item-list "$E2E_GH_PROJECT" --owner "$OWNER" --format json | python3 -c '
+  # --limit は必須。既定 30 だと Project が 30 件を超えた時点で新しい item を
+  # 黙って見落とす（github.sh と同じバグを踏んでいた）。
+  gh project item-list "$E2E_GH_PROJECT" --owner "$OWNER" --limit 100 --format json | python3 -c '
 import json,sys
 for i in json.load(sys.stdin)["items"]:
     c=i.get("content",{})
