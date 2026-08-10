@@ -4,7 +4,7 @@ title: ADR-0035 answer profile は Bash ごと取り上げ、claude の plan モ
 description: "実機で deny を全部回り込まれた（#410）ことを受け、answer profile の Bash(...) パターン列挙を裸の Bash 拒否へ置き換える決定。あわせて、deny が実際に届いている claude 起動に限り --permission-mode plan を渡さない。plan モードは Bash のファイル書き込みを止めず、残る ExitPlanMode の承認ゲートは計画ファイルを書く Write を我々が消しているせいで無人環境で非決定的に振る舞うため。codex の --sandbox read-only は本物なので対象外。"
 resource: https://github.com/tomoya-k31/totsuka/issues/410
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-10T08:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T14:10:00+09:00 }
 status: stable
 verified: [{ by: human:tomoya-k31, at: 2026-08-11T04:00:00+09:00 }]
 owner: tomoya-k31
@@ -120,7 +120,7 @@ deny は allow に勝つので、無人承認も無人ハングも消えて「pl
 ## 引き受けたコスト
 
 - **`answer` タスクはコマンドを 1 つも実行できない。** `git log` も `gh issue view` もテスト実行も不可。「読んで答える」には `Read` / `Grep` / `Glob` で足りるという判断だが、**リポジトリの履歴を根拠に答えるような質問には答えられなくなる**
-- **`triage` / `design` は手つかず。** 両方の経路が開いたままで、#409 の `PreToolUse` フックを待つ
+- **`triage` / `design` は手つかず。** 両方の経路が開いたままである。#409 でその `PreToolUse` フックを検討したが**不採用**になった（引用を理解するパーサが要り、取りこぼしのある判定器に「安全検査」という名前が付くため — [ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md) D1）。代わりに入ったのは検出（違反したら成功として扱わない）で、本当の境界は [#418](https://github.com/tomoya-k31/totsuka/issues/418) 待ちである
 - **plan モードを外したことには未実測の縁がある。** 実測したのは「plan モードは `Bash` のファイル書き込みを止めなかった」という狭い事実で、そこから「plan モードは何もしていない」は出てこない。pane は既定モードで起動するようになり、このリストが名前を挙げていないツール（`WebFetch` / `WebSearch` / `mcp__*`）に対する plan の網は**代替されていない**。次の実機で見るべき形は 2 つ: 対象リポジトリ自身の設定が書き込み可能な MCP ツールを allow している場合と、plan 下では自由だった読み取りツールが**無人 pane に答えられない許可プロンプトを出す**場合。後者は少なくとも黙って通らずエスカレーションする
 - **依然として read-only の「保証」ではない。** 塞いだのは**実測された**経路だけで、MCP ツール・サブエージェント・将来追加されるツールについては何も言っていない。ハード保証には sandbox が要る
 

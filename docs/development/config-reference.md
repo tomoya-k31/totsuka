@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-10T09:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T14:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -200,7 +200,7 @@ on_success = { set_status = "設計済み" }
 | claude の `--settings` へ `permissions.deny` を注入 | answer / triage / design | #395 |
 | `Bash` を**ツールごと** deny（コマンドを 1 つも実行できない） | answer | #410 |
 | claude の `--permission-mode plan` を**渡さない** | answer / triage / design | #410 / #409 |
-| worktree がブランチ上にあったら成果物を**公開せず失敗**させる | answer / triage / design | #409 |
+| worktree がブランチ上にあったら**成功として扱わず失敗**させる | answer / triage / design | #409 |
 | ソースプラグインへ `instructions_kind` を伝え、書き込み先の指示を出させる | triage / design / implement | #398 |
 | 検収 rubric を「成果物 URL の実在」に差し替え | triage / design / implement | #398 |
 | ソースプラグインへ `task_id_prefix` を伝え、会話とは別 ID のタスクを立てさせる | implement (`impl:`) / triage (`books:`) | #397 |
