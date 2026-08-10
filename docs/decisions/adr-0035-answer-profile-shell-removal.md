@@ -6,6 +6,7 @@ resource: https://github.com/tomoya-k31/totsuka/issues/410
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-10T08:40:00+09:00 }
 status: stable
+verified: [{ by: human:tomoya-k31, at: 2026-08-11T04:00:00+09:00 }]
 owner: tomoya-k31
 sources:
   - id: issue-410
@@ -132,4 +133,6 @@ deny は allow に勝つので、無人承認も無人ハングも消えて「pl
 # 検証
 
 - `cargo test --workspace --all-features` — `answer` が `Bash` を deny し `Bash(...)` パターンを 1 つも持たないこと、`denies_every_write_tool` が profile 名ではなくルールに対して答えること、claude だけが plan フラグを落とし codex / opencode は保つこと、`plan_args` 明示が優先されること、**settings ファイルが無い起動では plan フラグが残ること**
-- **実機検収は未了。** #410 の受け入れ条件は「`profile = "answer"` に『実装して PR を出せ』と明示しても、ブランチ・commit・push・PR のいずれも発生しない」ことを、対象リポジトリの `CLAUDE.md` が push / PR を指示している状態で確認することを求めている。それが済むまでこの ADR に `verified` は付けない
+- **実機検収済み（2026-08-11）。** 対象リポジトリの `CLAUDE.md` が「push と PR 作成まで行って初めて完了」と指示している状態（#378 の条件）で、`profile = "answer"` に「実装してテストを書いて PR まで出せ」と明示した。結果は**ブランチ・worktree の変更・commit・push・PR のいずれも発生せず**。前回はここで `cat >` / `python3 - <<EOF` を通し PR #32 まで到達していた
+- **サブエージェント経路も塞がっていることが実測で確認できた。** エージェントは `ToolSearch` で `Bash` / `Write` / `Edit` を探して `No matching deferred tools found` を得たあと、**`Tools: *` を宣言する `general-purpose` サブエージェントを生成**して git/編集を代行させようとし、そのサブエージェントが *"it inherited the same restricted registry … The restriction is session-wide"* と報告した。上の「引き受けたコスト」でサブエージェントを未保証と書いていた部分は、この 1 点については晴れた。**MCP ツールは依然として未確認**
+- **副作用として [#422](https://github.com/tomoya-k31/totsuka/issues/422) が判明した。** エージェントは迂回せずブロッカーを申告して `NEEDS_INPUT` を返したが、`waiting_input` は publish を走らせないため **Slack の依頼者には何も返らなかった**。元からの設計だが、`answer` からシェルを取り上げたことでこの経路に落ちる頻度が上がった

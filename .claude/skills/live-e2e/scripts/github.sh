@@ -3,10 +3,30 @@
 #
 #   bash .claude/skills/live-e2e/scripts/github.sh bootstrap        # サンドボックス repo 2 つ + Project + seed Issue
 #   bash .claude/skills/live-e2e/scripts/github.sh status           # Project の item と Status 一覧
-#   bash .claude/skills/live-e2e/scripts/github.sh seed <web|cli> <issue#>   # その item を Todo にする
+#   bash .claude/skills/live-e2e/scripts/github.sh seed <web|cli> <issue#> [Status]  # 既定 Todo。design を試すなら Design
+#
+# 注意: Project #7 は新規 item を自動で Todo にする。design を回したいときは
+# item-add 後すぐ（poll_interval_secs=15 より早く）Design へ倒すこと。遅れると
+# github-task が先に拾って implement が走る。
 #   bash .claude/skills/live-e2e/scripts/github.sh clear <web|cli> <issue#>  # Status を外す
 #   bash .claude/skills/live-e2e/scripts/github.sh wait [sec]       # github タスクが終端に達するまで追う
 #   bash .claude/skills/live-e2e/scripts/github.sh verify <web|cli> <issue#> # F-07/F-84/F-86 を判定
+#
+# GraphQL のレートに注意（実測 2026-08-11）。`gh project` 系は 1 リクエスト 1 ポイント
+# ではない:
+#
+#   item-list --limit 30   →  31 points
+#   item-list --limit 100+ → 102 points   （gh が 100 ノードのページを要求するため、
+#                                           100 を超えて指定しても同じ）
+#   field-list             → 102 points
+#   → set_status 1 回 = item_id + project view + field_ids ≒ 200 points
+#
+# 上限は 5000 points/時。**この中の関数をリトライループで回さないこと** — 40 回回すと
+# 8000 points で使い切る（実際にやって 40 分止まった）。伝播待ちが要るなら
+# `item-add --format json` が返す item id を使い、item-list を引き直さない。
+#
+# `--limit 100` は打ち切り回避のため。既定の 30 だと Project が 30 件を超えた時点で
+# 新しい item を**黙って**見落とす。正しさに 31 → 102 points 払っている。
 set -euo pipefail
 # `tt` はシェル関数なので子プロセスには継承されない。共通定義を読む。
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
@@ -21,17 +41,21 @@ field_ids() {  # Status フィールドと option の id を出す
 import json,sys
 f=[x for x in json.load(sys.stdin)["fields"] if x["name"]=="Status"][0]
 print(f["id"])
-for o in f["options"]: print(o["name"], o["id"])'
+for o in f["options"]: print("%s\t%s" % (o["name"], o["id"]))'
 }
 
 item_id() {  # item_id <repo> <issue#>
-  gh project item-list "${E2E_GH_PROJECT}" --owner "$OWNER" --format json | python3 -c '
+  gh project item-list "${E2E_GH_PROJECT}" --owner "$OWNER" --limit 100 --format json | python3 -c '
 import json,sys
 repo,num=sys.argv[1],int(sys.argv[2])
-for i in json.load(sys.stdin)["items"]:
+items=json.load(sys.stdin)["items"]
+for i in items:
     c=i.get("content",{})
     if c.get("repository","").split("/")[-1]==repo and c.get("number")==num:
-        print(i["id"]); break' "$1" "$2"
+        print(i["id"]); break
+else:
+    if len(items) >= 100:
+        sys.stderr.write("warn: item-list が上限 100 件に達している。--limit を上げないと新しい item を取りこぼす\n")' "$1" "$2"
 }
 
 set_status() {  # set_status <repo> <issue#> <option-name|-->
@@ -43,7 +67,9 @@ set_status() {  # set_status <repo> <issue#> <option-name|-->
   if [ "$3" = "--" ]; then
     gh project item-edit --id "$iid" --project-id "$pid" --field-id "$fid" --clear >/dev/null
   else
-    oid="$(echo "$ids" | awk -v n="$3" '$0 ~ "^"n" " {print $NF}')"
+    # 完全一致。前方一致だと `Design` が `Design Review` にも当たり、
+    # option id が 2 つ出て GraphQL が "option Id does not belong to the field" で落ちる。
+    oid="$(echo "$ids" | awk -F'\t' -v n="$3" '$1 == n {print $2}')"
     gh project item-edit --id "$iid" --project-id "$pid" --field-id "$fid" \
         --single-select-option-id "$oid" >/dev/null
   fi
@@ -55,14 +81,14 @@ bootstrap)
   bash "$(dirname "${BASH_SOURCE[0]}")/bootstrap-github.sh"
   ;;
 status)
-  gh project item-list "${E2E_GH_PROJECT}" --owner "$OWNER" --format json | python3 -c '
+  gh project item-list "${E2E_GH_PROJECT}" --owner "$OWNER" --limit 100 --format json | python3 -c '
 import json,sys
 for i in json.load(sys.stdin)["items"]:
     c=i.get("content",{})
     print("%-24s #%-3s %-10s %s" % (c.get("repository","?").split("/")[-1], c.get("number"),
           i.get("status","(none)"), (c.get("title") or "")[:44]))'
   ;;
-seed)  set_status "$(repo_of "$1")" "$2" Todo; echo "$(repo_of "$1")#$2 → Todo";;
+seed)  st="${3:-Todo}"; set_status "$(repo_of "$1")" "$2" "$st"; echo "$(repo_of "$1")#$2 → $st";;
 clear) set_status "$(repo_of "$1")" "$2" --;  echo "$(repo_of "$1")#$2 → (none)";;
 wait)
   limit="${1:-1800}"; deadline=$(( $(date +%s) + limit ))
@@ -82,7 +108,7 @@ verify)
   }
   echo "== $r#$n =="
 
-  status="$(gh project item-list "${E2E_GH_PROJECT}" --owner "$OWNER" --format json \
+  status="$(gh project item-list "${E2E_GH_PROJECT}" --owner "$OWNER" --limit 100 --format json \
     | python3 -c 'import json,sys
 repo, num = sys.argv[1], int(sys.argv[2])
 for i in json.load(sys.stdin)["items"]:

@@ -1,5 +1,11 @@
 # Bundle Update Log
 
+## 2026-08-11
+
+* **Update**: 実機 E2E で #410 / #409 を検収し、両 ADR に `verified` を付けた。**#410**: 対象リポジトリの `CLAUDE.md` が push / PR を要求する状態で `answer` に「実装して PR まで出せ」と明示しても、ブランチ・commit・push・PR のいずれも発生しなかった。**サブエージェント経路も塞がっていることを実測**（エージェントが `Tools: *` の `general-purpose` を生成して迂回を試み、"The restriction is session-wide" と報告）。**#409**: `design` が人間の承認なしに約 2 分で完走（`ExitPlanMode` の呼び出し 0 回）。違反時の失敗も worktree にブランチを注入して発火させ、`dispatched → running → publishing → failed` と worktree 保持を確認した [ADR-0035](/decisions/adr-0035-answer-profile-shell-removal.md) / [ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md)
+* **Update**: **「成果物を公開せず失敗させる」という記述を訂正した。** 実機では、エージェントが 19:02:57 に設計コメントを投稿し、タスクは 19:03:27 に失敗している — **30 秒の差で成果物は既に外に出ていた**。#398 で「成果物はエージェントが直接書く」と決めた以上、`finalize_success` の検査は原理的にそれを取り消せない。止まるものは profile で違い、`answer` は返信ごと止まる（オーケストレータが publish するため）が、`triage` / `design` は**成功報告と `on_success` だけ**が止まる [orchestrator-core クレート](/components/orchestrator-core.md)
+* **Update**: 実機検証ハーネスの実バグ 3 件を修正し、`gh project` の GraphQL コストを実測して記録した。(1) `gh project item-list` に `--limit` が無く **Project が 30 件を超えると新しい item を黙って見落とす**、(2) option 名が前方一致で `Design` が `Design Review` にも当たり GraphQL が落ちる、(3) `seed` が第 3 引数を無視して `Todo` 固定。あわせて `item-list` 31〜102 points / `field-list` 102 points / `set_status` 1 回で約 200 points（上限 5000 per hour）を計測し、**この中の関数をリトライループで回すな**（40 回で使い切る）とスクリプト冒頭に明記した
+
 ## 2026-08-10
 
 * **Update**: PR #419 のレビュー追随。判定を `plan_mode_only_adds_the_gate` へ変えたのに**直上のコメントが旧ルールのまま**（「deny が書き込みツールを全部消している profile」「シェルを持たないエージェント」）だったのを、実際の理由（無人 pane を 14 分止めた）に書き換えた。ADR-0036 D1 で**不採用にした** `PreToolUse` フックが doc とテストの assert メッセージに「次の一手」として残っていたのも削除。削除済みメソッドを指す rustdoc も直した [orchestrator-core クレート](/components/orchestrator-core.md)
@@ -8,7 +14,7 @@
 * **Update**: ADR-0036 の検収条件に「**承認プロンプトを 1 つも出さずに完走したか**」を追加。plan フラグを外した pane は環境の既定モードで起動し、`triage` / `design` は仕事が丸ごと `Bash` なので、**#409 と同種の停止が `ExitPlanMode` から `Bash` へ場所を変えて戻りうる**。開発機はグローバル設定に広い `allow` があるため再現しない点も明記した（追跡: #420）
 * **Creation**: [ADR-0036 triage / design はシェルを検査せず、リポジトリを触ったら公開せず失敗させる](/decisions/adr-0036-read-only-violation-fails-the-task.md)（#409）。`gh issue comment` に複数行 Markdown を渡すにはシェル構文が要るので、`triage` / `design` から `Bash` を取り上げられない。コマンド検査フックは**不採用** — `--body 'A なら && B'`（無害）と `... && git push`（危険）を見分けるには引用を理解するパーサが要り、取りこぼしのある判定器に「安全検査」という名前が付くのが #410 の失敗そのものだから
 * **Update**: **すべての read-only profile から claude の plan フラグを外した**（[ADR-0035](/decisions/adr-0035-answer-profile-shell-removal.md) D2 の判断を覆す）。あちらは `triage` / `design` について「plan モードが持っている唯一の制限だから残す」としたが、会計が合わない — plan モードの**強制力は未実測**（`permissionMode` が `plan` のまま `cat >` が成功）なのに対し、**破壊力は実測済み**（無人 pane を 858 秒 = 14 分 18 秒 止めた）。確実な停止を推測上の抑止と引き換えにはできない [ADR-0033 D4](/decisions/adr-0033-workflow-profile.md)
-* **Update**: read-only profile のタスクがブランチ上にあったら、成果物を公開せず `fail_publish` で失敗させるようにした。worktree とコミットは保持される。**防止ではない**（ブランチがある時点で push は済んでいるかもしれず取り返せない）が、「証拠を残して失敗した」は「完了と報告された」とは別の運用状態である。検査は worktree の**生きた `HEAD`** を読む（`record.branch` は `sync_branch` が detached でクリアしない書き込み専用に近い列で、そこを門にすると `task retry` が永久に落ち続ける）。門は `record.mode` ではなく **profile** で作る — 素の `mode = "plan"` を対象にすると既存構成がアップグレードで黙ってタスクを失う [orchestrator-core クレート](/components/orchestrator-core.md)
+* **Update**: read-only profile のタスクがブランチ上にあったら `fail_publish` で失敗させるようにした。**止まるものは profile で違う**（実機 2026-08-11 で確認）: `answer` は返信をオーケストレータが publish するので返信ごと止まるが、`triage` / `design` はエージェントが直接書く（#398）ため成果物は既に出ており取り消せず、止まるのは成功報告と `on_success` だけ。worktree とコミットは保持される。**防止ではない**（ブランチがある時点で push は済んでいるかもしれず取り返せない）が、「証拠を残して失敗した」は「完了と報告された」とは別の運用状態である。検査は worktree の**生きた `HEAD`** を読む（`record.branch` は `sync_branch` が detached でクリアしない書き込み専用に近い列で、そこを門にすると `task retry` が永久に落ち続ける）。門は `record.mode` ではなく **profile** で作る — 素の `mode = "plan"` を対象にすると既存構成がアップグレードで黙ってタスクを失う [orchestrator-core クレート](/components/orchestrator-core.md)
 
 ## 2026-08-09
 
