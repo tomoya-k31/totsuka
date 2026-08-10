@@ -55,7 +55,9 @@ for i in items:
         print(i["id"]); break
 else:
     if len(items) >= 100:
-        sys.stderr.write("warn: item-list が上限 100 件に達している。--limit を上げないと新しい item を取りこぼす\n")' "$1" "$2"
+        sys.stderr.write("warn: item-list が 100 件返した。gh は 100 ノードのページしか要求しないので\n"
+                         "      --limit を上げても増えない。目的の item を id で直接掴むこと\n"
+                         "      （item-add --format json が返す id を使う）\n")' "$1" "$2"
 }
 
 set_status() {  # set_status <repo> <issue#> <option-name|-->
@@ -70,6 +72,14 @@ set_status() {  # set_status <repo> <issue#> <option-name|-->
     # 完全一致。前方一致だと `Design` が `Design Review` にも当たり、
     # option id が 2 つ出て GraphQL が "option Id does not belong to the field" で落ちる。
     oid="$(echo "$ids" | awk -F'\t' -v n="$3" '$1 == n {print $2}')"
+    # 空のまま item-edit へ渡すと GraphQL が
+    # "single select option Id does not belong to the field" で落ち、
+    # 「名前を間違えた」のか「別の不整合」なのか読み取れない。ここで落とす。
+    if [ -z "$oid" ]; then
+      { echo "Status option \`$3\` は存在しません。候補:";
+        echo "$ids" | tail -n +2 | awk -F'\t' '{print "  - " $1}'; } >&2
+      exit 1
+    fi
     gh project item-edit --id "$iid" --project-id "$pid" --field-id "$fid" \
         --single-select-option-id "$oid" >/dev/null
   fi
