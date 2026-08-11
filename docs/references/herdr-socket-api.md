@@ -109,6 +109,23 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 | `pane.list` / `workspace.list` | `{}` | `{type:"pane_list", panes:[...]}` / `{type:"workspace_list", workspaces:[...]}` |
 | `pane.close` / `workspace.close` | `{pane_id}` / `{workspace_id}` | `{type:"ok"}` |
 | `pane.report_agent_session` | `{pane_id, source, agent, seq, agent_session_id, agent_session_path?}`（公式統合 hook が使用） | ok |
+| `workspace.report_metadata` / `pane.report_metadata` | `{workspace_id \| pane_id, source, tokens: {name: value\|null}, seq?, ttl_ms?}`。pane 版は加えて `title` / `display_agent` / `state_labels`。トークン名は `^[A-Za-z0-9_-]{1,32}$`、1 コール 16 トークンまで、`ttl_ms` ≤ 86400000 | ok。報告済みトークンは `WorkspaceInfo.tokens` / `PaneInfo.tokens` として **`list` と `get` の両方**に載る（`pane.list` で確認済み）ので、表示だけでなく呼び出し側の識別にも使える |
+| `workspace.rename` | `{workspace_id, label}` | ok。**tokens は保たれる**（確認済み） |
+
+## metadata token（#417 で実機から追記）
+
+サイドバーの行に `$name` として差し込める任意の名前付き値。実測した制約:
+
+| 事実 | 内容 |
+|---|---|
+| 値の上限 | **80 文字**（バイトではない）。`"あ"×100` を送ると 80 文字 / 240 バイトに切られる。**超過はエラーではなく黙って切られる** |
+| `source` スロット | 1 つの pane / workspace が受け付ける**異なる `source` は生涯 32 個まで**。clear や expiry でスロットは戻らない — タスク毎の `source` は禁物 |
+| 読み出し | `list` と `get` の**両方**に `tokens` が載る |
+| `workspace.rename` との関係 | rename しても tokens は保たれる |
+| 組み込みトークン | spaces: `state_icon` `state_text` `workspace` `branch` `git_status`。agents: ＋ `tab` `pane` `agent` `terminal_title` `terminal_title_stripped`。**リポジトリ名のトークンは無い**（だから totsuka が `$repo` を報告する） |
+| `$name` の解決先 | agents 行 = **pane** メタデータ、spaces 行 = **workspace** メタデータ。両パネルに出すなら**両方に報告が必要** |
+| `WorkspaceInfo.worktree` | `{repo_key, repo_name, repo_root, checkout_path, is_linked_worktree}`。ただし **herdr 自身が `worktree.create` / `worktree.open` で開いた workspace にしか載らない**（`workspace.create` 由来はフィールドごと欠落を確認） |
+| `WorktreeOpenParams` | `{workspace_id?, cwd?, path?, branch?, label?, focus}` — **`env` が無い**。totsuka が `worktree.open` へ移れない理由（[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D5） |
 
 ## label は workspace のものと pane のもので別物（#416 で実機から追記）
 

@@ -52,8 +52,8 @@
 //! plugin at all — the launcher refuses it before `initialize` (F-54).
 
 use plugin_protocol::methods::{
-    AgentState, DiagnosticsSnapshotResult, SessionAttachResult, SessionFocusResult, SessionInfo,
-    SessionListResult, SessionReleaseParams, SessionReleaseResult, StateNotification,
+    AgentState, DiagnosticsSnapshotResult, ExecutionMode, SessionAttachResult, SessionFocusResult,
+    SessionInfo, SessionListResult, SessionReleaseParams, SessionReleaseResult, StateNotification,
     TaskDispatchParams, TaskDispatchResult,
 };
 use serde_json::{Value, json};
@@ -213,6 +213,12 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // the Orchestrator no handle to cancel with — the pane and its CLI
         // process would run until the operator noticed them (and `task retry`
         // would strand another one).
+        //
+        // `report_identity` is not one of those paths — it cannot fail the
+        // dispatch, by design (#417) — but it belongs inside the boundary
+        // rather than before it, because it is the first thing that talks to a
+        // workspace that now needs tearing down.
+        self.report_identity(&params, &workspace).await;
         let started = self
             .start_agent(&params, &workspace, program, args)
             .await
@@ -426,6 +432,94 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 pane_id = agent_pane_id, error = %e,
                 "could not add the companion shell pane; the agent runs full-screen"
             );
+        }
+    }
+
+    /// Tell herdr which repository, task and mode this workspace is for, so
+    /// the sidebar can say so (#417,
+    /// [ADR-0039](../../../docs/decisions/adr-0039-herdr-sidebar-identity.md)).
+    ///
+    /// Reported to the **workspace and its root pane both**: `$name` in a
+    /// sidebar row resolves against workspace metadata in the spaces panel and
+    /// against pane metadata in the agents panel, so one report only fixes one
+    /// panel.
+    ///
+    /// # Placement
+    ///
+    /// Before `agent.start`, which is a retry loop of up to 180 seconds. After
+    /// it, the rows would stay anonymous through exactly the window an
+    /// operator is most likely to be looking at them. Two socket round trips
+    /// at ~25 ms each ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md))
+    /// is noise beside that.
+    ///
+    /// # Failure
+    ///
+    /// Warned about, never raised. Identity is decoration; a herdr that blips
+    /// while recording it must not lose a task that is otherwise ready to run
+    /// — the same rule [`apply_layout`](Self::apply_layout) follows.
+    async fn report_identity(&self, params: &TaskDispatchParams, workspace: &NewWorkspace) {
+        if !self.config.identity.enabled {
+            return;
+        }
+        let mut tokens = json!({
+            "task": token_value(&params.task.title),
+            "mode": match params.mode {
+                ExecutionMode::Plan => "plan",
+                ExecutionMode::Implement => "implement",
+            },
+        });
+        // The machine identifier, and the one token that is **compared rather
+        // than displayed** — so it goes across verbatim, never through
+        // `token_value`. Collapsing whitespace or appending `…` would make a
+        // pane that *is* ours fail its own check in `release`, and would have
+        // `session/list` synthesise a label `doctor` cannot match against
+        // `source_task_id`.
+        //
+        // An id longer than herdr keeps is **omitted**, not truncated: herdr
+        // would cut it silently, and a cut machine identifier is worse than no
+        // identifier at all — the label path is a correct fallback, a wrong id
+        // is not.
+        if params.task.id.chars().count() <= TOKEN_VALUE_CHARS {
+            tokens["totsuka_task"] = json!(params.task.id);
+        } else {
+            tracing::debug!(
+                task_id = %params.task.id,
+                "task id exceeds herdr's token limit; reporting no identity token \
+                 (ownership falls back to the workspace label)"
+            );
+        }
+        // Absent from an Orchestrator older than protocol 0.4.1. Omitted
+        // rather than guessed: `$repo` renders empty, which is what the
+        // sidebar snippet is written to tolerate.
+        if let Some(repo) = &params.repo_name {
+            tokens["repo"] = json!(token_value(repo));
+        }
+        // A constant, not something per-task: a workspace or pane accepts at
+        // most 32 distinct `source` values **for its lifetime**, and neither
+        // clearing nor expiry gives a slot back.
+        let report = |method: &'static str, target: serde_json::Value| {
+            let client = self.client.clone();
+            let tokens = tokens.clone();
+            async move {
+                let mut payload = target;
+                payload["source"] = json!("totsuka");
+                payload["tokens"] = tokens;
+                client.call(method, payload).await
+            }
+        };
+        if let Err(e) = report(
+            "workspace.report_metadata",
+            json!({ "workspace_id": workspace.id }),
+        )
+        .await
+        {
+            tracing::warn!(workspace_id = %workspace.id, error = %e, "could not report workspace identity");
+        }
+        let Some(pane_id) = &workspace.root_pane_id else {
+            return;
+        };
+        if let Err(e) = report("pane.report_metadata", json!({ "pane_id": pane_id })).await {
+            tracing::warn!(pane_id, error = %e, "could not report pane identity");
         }
     }
 
@@ -699,23 +793,51 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // pane-label comparison below has never once been comparable against a
         // real herdr — every release fell through to the degrade-open branch.
         // Fetched only when there is something to compare it against.
-        let workspace_label = match params.expect_label {
-            Some(_) => self.workspace_label(workspace_of(&handle.pane_id)).await,
-            None => None,
+        let (workspace_label, workspace_token) = match params.expect_label {
+            Some(_) => self.workspace_identity(workspace_of(&handle.pane_id)).await,
+            None => (None, None),
         };
-        let checks = [
-            ("cwd", params.expect_cwd.as_deref(), pane_str(&pane, "cwd")),
-            (
-                "label",
-                params.expect_label.as_deref(),
-                pane_str(&pane, "label"),
-            ),
-            (
-                "workspace label",
-                params.expect_label.as_deref(),
-                workspace_label.as_deref(),
-            ),
-        ];
+        // What the caller's label says the task is (#417). The token is
+        // reported as the bare task id; `expect_label` wraps it in the marker.
+        let expect_task = params
+            .expect_label
+            .as_deref()
+            .and_then(|l| l.strip_prefix(OWNED_LABEL_PREFIX));
+        let token = identity_token(&pane).or(workspace_token.as_deref());
+        let mut checks = vec![("cwd", params.expect_cwd.as_deref(), pane_str(&pane, "cwd"))];
+        // The token replaces the labels **only when both sides have one**.
+        //
+        // Preferring it is a correctness requirement, not a taste: #417 D4
+        // renames the workspace to `{repo}: {title}`, so its label stops
+        // matching `expect_label` while naming the very same task. Compared,
+        // that would refuse every release of a renamed workspace.
+        //
+        // But `expect_task` is `None` for a caller whose `expect_label` is not
+        // in our `totsuka {id}` form, and dropping the label checks *then*
+        // would leave zero comparable pairs — degrade-open, closing a pane on
+        // no evidence at all. Every caller sends the marker form today; this
+        // is about not making that a silent precondition.
+        //
+        // The label path is not weakened by the swap, because D4 only renames
+        // when **both** reports succeeded: a container with no token was never
+        // renamed and still carries `totsuka {task}`.
+        match (token, expect_task) {
+            (Some(actual), Some(expected)) => {
+                checks.push(("identity token", Some(expected), Some(actual)));
+            }
+            _ => checks.extend([
+                (
+                    "label",
+                    params.expect_label.as_deref(),
+                    pane_str(&pane, "label"),
+                ),
+                (
+                    "workspace label",
+                    params.expect_label.as_deref(),
+                    workspace_label.as_deref(),
+                ),
+            ]),
+        }
         let mut comparable = false;
         for (field, expected, actual) in checks {
             let (Some(expected), Some(actual)) = (expected, actual) else {
@@ -780,7 +902,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     pub async fn list_sessions(&self) -> Result<SessionListResult, HerdrError> {
         let panes = self.client.call("pane.list", json!({})).await?;
         let workspaces = self.client.call("workspace.list", json!({})).await?;
-        let owned = owned_workspace_labels(&workspaces);
+        let owned = owned_workspaces(&workspaces);
 
         // `Vec`, not a map: `pane.list` order is the only stable ordering
         // there is, and a hash map would shuffle `session list` output between
@@ -796,15 +918,27 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 continue;
             };
             let workspace = pane_str(pane, "workspace_id");
-            let own_label = pane_str(pane, "label").filter(|l| l.starts_with(OWNED_LABEL_PREFIX));
-            let label = own_label.or_else(|| workspace.and_then(|ws| owned.get(ws).copied()));
-            let Some(label) = label else {
+            // Four ways a pane can be ours, in descending order of directness
+            // (#417 D2). The token paths are the new evidence; the label paths
+            // stay because a dispatch whose report failed, and every pane a
+            // release before this one left behind, has only those.
+            let by_token = identity_token(pane)
+                .or_else(|| workspace.and_then(|ws| owned.tokens.get(ws).copied()))
+                .map(|task| format!("{OWNED_LABEL_PREFIX}{task}"));
+            let by_label = pane_str(pane, "label")
+                .filter(|l| l.starts_with(OWNED_LABEL_PREFIX))
+                .or_else(|| workspace.and_then(|ws| owned.labels.get(ws).copied()))
+                .map(str::to_string);
+            // Synthesised from the token when there is one, so `doctor`'s
+            // `strip_prefix` → `source_task_id` match keeps working even after
+            // the label becomes human-readable in PR-3.
+            let Some(label) = by_token.or(by_label) else {
                 continue;
             };
             let has_agent = looks_like_an_agent_pane(pane);
             let info = SessionInfo {
                 session_id: SessionHandle::new(pane_id, "").encode(),
-                label: Some(label.to_string()),
+                label: Some(label),
                 cwd: pane_str(pane, "cwd").map(str::to_string),
             };
             match workspace.and_then(|ws| chosen.iter().position(|(w, ..)| *w == Some(ws))) {
@@ -818,37 +952,45 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         })
     }
 
-    /// The label of one workspace, whatever it says, or `None` when the id is
-    /// unknown, the workspace is gone, or the lookup failed (#416).
+    /// One workspace's `(label, identity token)`, for `release`'s identity
+    /// check (#416, #417).
     ///
-    /// **Deliberately unfiltered**, unlike [`owned_workspace_labels`]. This
-    /// feeds `release`'s identity check, where the interesting answer is a
-    /// label that is *not* ours: filtering to `totsuka `-prefixed labels would
-    /// turn "this workspace belongs to someone else" into "cannot say", and
-    /// the caller degrades open on "cannot say" — closing the operator's pane
-    /// on a reused pane id, which is the exact accident that check exists to
-    /// prevent.
+    /// The label is **deliberately unfiltered**, unlike [`owned_workspaces`].
+    /// Here the interesting answer is a label that is *not* ours: filtering to
+    /// `totsuka `-prefixed labels would turn "this workspace belongs to
+    /// someone else" into "cannot say", and the caller degrades open on
+    /// "cannot say" — closing the operator's pane on a reused pane id, the
+    /// exact accident this check exists to prevent.
     ///
-    /// `None` therefore means "cannot say", never "does not match": a
-    /// transient herdr error must not read as a mismatch and leak the pane
-    /// either.
-    async fn workspace_label(&self, workspace_id: Option<&str>) -> Option<String> {
-        let workspace_id = workspace_id?;
+    /// `None` means "cannot say", never "does not match": a transient herdr
+    /// error must not read as a mismatch and leak the pane either.
+    async fn workspace_identity(
+        &self,
+        workspace_id: Option<&str>,
+    ) -> (Option<String>, Option<String>) {
+        let Some(workspace_id) = workspace_id else {
+            return (None, None);
+        };
         let response = match self.client.call("workspace.list", json!({})).await {
             Ok(response) => response,
             Err(e) => {
                 tracing::debug!(workspace_id, error = %e, "workspace.list failed; identity unverifiable");
-                return None;
+                return (None, None);
             }
         };
-        response
+        let Some(ws) = response
             .get("workspaces")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .find(|ws| pane_str(ws, "workspace_id") == Some(workspace_id))
-            .and_then(|ws| pane_str(ws, "label"))
-            .map(str::to_string)
+        else {
+            return (None, None);
+        };
+        (
+            pane_str(ws, "label").map(str::to_string),
+            identity_token(ws).map(str::to_string),
+        )
     }
 
     /// Close a session's pane and the task-private workspace `dispatch`
@@ -1090,23 +1232,61 @@ fn looks_like_an_agent_pane(pane: &Value) -> bool {
         || pane_str(pane, "agent_status").is_some_and(|status| status != "unknown")
 }
 
-/// `workspace_id` → label, for the workspaces this plugin owns (#416).
+/// The metadata token that names the task a container belongs to (#417).
 ///
-/// Takes a `workspace.list` response. Workspaces without an
-/// [`OWNED_LABEL_PREFIX`] label are absent: not being in the map *is* the
-/// answer "not ours".
-fn owned_workspace_labels(response: &Value) -> HashMap<&str, &str> {
-    response
+/// Reported by [`HerdrAgent::report_identity`] onto both the workspace and its
+/// root pane. It is a *machine* identifier — never shown — so that renaming a
+/// workspace for humans (#417 D4) cannot cost the plugin its ownership
+/// evidence.
+const IDENTITY_TOKEN: &str = "totsuka_task";
+
+/// The [`IDENTITY_TOKEN`] on a `PaneInfo` / `WorkspaceInfo` record, if any.
+///
+/// `tokens` rides on both `list` and `get` responses (verified on 0.7.5), so
+/// this works off `pane.list` without a second round trip.
+fn identity_token(record: &Value) -> Option<&str> {
+    record
+        .get("tokens")
+        .and_then(|t| t.get(IDENTITY_TOKEN))
+        .and_then(Value::as_str)
+        .filter(|task| !task.is_empty())
+}
+
+/// What a `workspace.list` response says about the workspaces this plugin owns
+/// (#416, extended for tokens in #417).
+///
+/// Two maps rather than one because they answer different questions and a
+/// workspace can be in either alone: `tokens` is the evidence a *current*
+/// dispatch left, `labels` is what a dispatch whose report failed — or one
+/// from before #417 — left instead. Absence from both is the answer "not
+/// ours".
+#[derive(Debug, Default)]
+struct OwnedWorkspaces<'a> {
+    /// `workspace_id` → the `totsuka ` label.
+    labels: HashMap<&'a str, &'a str>,
+    /// `workspace_id` → the reported task id.
+    tokens: HashMap<&'a str, &'a str>,
+}
+
+fn owned_workspaces(response: &Value) -> OwnedWorkspaces<'_> {
+    let mut owned = OwnedWorkspaces::default();
+    for ws in response
         .get("workspaces")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|ws| {
-            let id = pane_str(ws, "workspace_id")?;
-            let label = pane_str(ws, "label")?;
-            label.starts_with(OWNED_LABEL_PREFIX).then_some((id, label))
-        })
-        .collect()
+    {
+        let Some(id) = pane_str(ws, "workspace_id") else {
+            continue;
+        };
+        if let Some(label) = pane_str(ws, "label").filter(|l| l.starts_with(OWNED_LABEL_PREFIX)) {
+            owned.labels.insert(id, label);
+        }
+        if let Some(task) = identity_token(ws) {
+            owned.tokens.insert(id, task);
+        }
+    }
+    owned
 }
 
 /// The agent's native session id from a pane record
@@ -1285,6 +1465,33 @@ fn agent_name(task_id: &str) -> String {
     }
 }
 
+/// The longest metadata token value herdr keeps, in **characters**.
+///
+/// Measured on 0.7.5: `"あ"×100` comes back as 80 characters / 240 bytes.
+/// Over-long values are **truncated silently**, not rejected.
+const TOKEN_VALUE_CHARS: usize = 80;
+
+/// Fit `value` into a herdr metadata token (#417).
+///
+/// Whitespace runs collapse to one space and the result is trimmed, because a
+/// task title with an embedded newline would otherwise eat a sidebar row.
+/// Over-length values are cut to 79 characters plus `…` — herdr would cut them
+/// anyway, and doing it here is what makes the cut *visible*.
+///
+/// The cut walks `char_indices`: `&s[..80]` panics on a Japanese title, which
+/// is the common case for this repository's tasks rather than an edge one.
+fn token_value(value: &str) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= TOKEN_VALUE_CHARS {
+        return collapsed;
+    }
+    let cut = collapsed
+        .char_indices()
+        .nth(TOKEN_VALUE_CHARS - 1)
+        .map_or(collapsed.len(), |(i, _)| i);
+    format!("{}…", &collapsed[..cut])
+}
+
 /// The herdr `kind` for `program`
 /// ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-1).
 ///
@@ -1419,13 +1626,72 @@ mod tests {
             // A near miss: the prefix includes the space, so this is not ours.
             { "workspace_id": "w5", "label": "totsukaboard" },
         ]});
-        let owned = owned_workspace_labels(&response);
-        assert_eq!(owned.get("w1").copied(), Some("totsuka 7"));
-        assert_eq!(owned.len(), 1, "{owned:?}");
+        let owned = owned_workspaces(&response);
+        assert_eq!(owned.labels.get("w1").copied(), Some("totsuka 7"));
+        assert_eq!(owned.labels.len(), 1, "{owned:?}");
 
         // A response with no `workspaces` array is "nothing owned", not a
         // panic: `session/list` runs against whatever herdr answers.
-        assert!(owned_workspace_labels(&json!({ "type": "ok" })).is_empty());
+        let shapeless = json!({ "type": "ok" });
+        let empty = owned_workspaces(&shapeless);
+        assert!(empty.labels.is_empty() && empty.tokens.is_empty());
+    }
+
+    #[test]
+    fn a_token_owns_a_workspace_whose_label_says_nothing() {
+        // #417 D4 renames the workspace to `{repo}: {title}`, which no longer
+        // starts with `totsuka `. The token is what keeps it ours.
+        let response = json!({ "type": "workspace_list", "workspaces": [
+            { "workspace_id": "w1", "label": "web: Fix the bug",
+              "tokens": { "totsuka_task": "42", "repo": "web" } },
+            // An empty token value is not a task id.
+            { "workspace_id": "w2", "label": "scratch", "tokens": { "totsuka_task": "" } },
+            { "workspace_id": "w3", "label": "scratch", "tokens": { "repo": "web" } },
+        ]});
+        let owned = owned_workspaces(&response);
+        assert_eq!(owned.tokens.get("w1").copied(), Some("42"));
+        assert_eq!(owned.tokens.len(), 1, "{owned:?}");
+        assert!(
+            owned.labels.is_empty(),
+            "the rename left no `totsuka ` label"
+        );
+    }
+
+    #[test]
+    fn token_value_cuts_on_char_boundaries() {
+        // `&s[..80]` panics here; most task titles in this repository are
+        // Japanese, so this is the ordinary case rather than an edge one.
+        let long: String = "あ".repeat(200);
+        let cut = token_value(&long);
+        assert_eq!(cut.chars().count(), TOKEN_VALUE_CHARS);
+        assert!(cut.ends_with('…'), "the cut is visible: {cut}");
+
+        // Exactly at the limit is not cut.
+        let exact: String = "あ".repeat(TOKEN_VALUE_CHARS);
+        assert_eq!(token_value(&exact), exact);
+
+        // Whitespace runs collapse, so an embedded newline cannot eat a
+        // sidebar row.
+        assert_eq!(token_value("  a\n\tb  "), "a b");
+        assert_eq!(token_value(""), "");
+    }
+
+    #[test]
+    fn identity_token_names_satisfy_herdrs_identifier_rules() {
+        // herdr: `^[A-Za-z0-9_-]{1,32}$`, at most 16 tokens per call. Pinned
+        // the same way `agent_name_satisfies_herdrs_identifier_rules` is —
+        // a name herdr rejects fails the whole report, silently, at dispatch.
+        let names = [IDENTITY_TOKEN, "repo", "task", "mode"];
+        assert!(names.len() <= 16);
+        for name in names {
+            assert!(
+                (1..=32).contains(&name.len())
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+                "{name}"
+            );
+        }
     }
 
     #[test]
