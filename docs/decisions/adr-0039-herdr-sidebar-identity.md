@@ -4,9 +4,9 @@ title: ADR-0039 herdr サイドバーの identity は metadata token で運び�
 description: "herdr の左サイドバーに「どのリポジトリの・どのタスクを・どのモードで」を出すため、identity を label ではなく workspace / pane の metadata token として報告し、リポジトリ名は TaskDispatchParams.repo_name（プロトコル 0.4.1、純追加）で渡す決定。worktree.open によるグルーピング・pane.rename・display_agent の各案を採らない理由と、サイドバー設定を totsuka が書き換えない理由。"
 tags: [herdr, protocol, ui, identity, 417]
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-08-11T15:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T16:10:00+09:00 }
 verified:
-  - { by: human:tomoya-k31, at: 2026-08-11T15:10:00+09:00 }
+  - { by: human:tomoya-k31, at: 2026-08-11T16:10:00+09:00 }
 sources:
   - id: herdr-probe-2026-08-09
     resource: herdr 0.7.5 / protocol 17 の実機プローブ（`herdr api schema --json` と workspace 作成による実測）
@@ -122,7 +122,7 @@ dispatch の `workspace.create` 直後（`start_agent` の**前**）に、**work
 
 herdr 側の一時障害で 2 が落ちても「機械 label のまま・サイドバーが綺麗にならないだけ」で、**label と token の両方から identity が消える瞬間が無い**。
 
-token だけでは足りない理由: `rows` はグローバルで、オペレータが自分で開いた space にも同じ行構成が当たる。`$repo` / `$task` は人間の space では空なので、1 行目から `workspace` トークンを外せない。つまり `workspace` が不透明なままだと**両パネルとも 1 行目が壊れたまま**になる。
+token だけでは足りない理由: `rows` はグローバルで、オペレータが自分で開いた space にも同じ行構成が当たる。`$repo` / `$task` は人間の space では空なので、**spaces 行**から `workspace` トークンを外せない。つまり `workspace` が不透明なままだと spaces パネルが壊れたままになる（agents 側で `workspace` を主語にしない話は D6 の制約 2 で、こことは別のパネルの議論である）。
 
 ## D5 — `worktree.open` によるグルーピングは見送り
 
@@ -140,12 +140,16 @@ token だけでは足りない理由: `rows` はグローバルで、オペレ�
 
 **その推奨スニペットが満たすべき制約は 3 つある**（いずれも最初のスニペットが破っていて、実機で出た）:
 
-1. **どの行も、常に非空のトークンを 1 つ以上含む。** `rows` はグローバルなので、オペレータが自分で
-   開いた space と**手で起動した agent** にも同じ行構成が当たる。報告されたトークンだけで組んだ行は、
-   そこで `state_icon` だけになる
+1. **entry のどこかに、常に非空のトークンを 1 つ以上置く。** `rows` はグローバルなので、
+   オペレータが自分で開いた space と**手で起動した agent** にも同じ行構成が当たる。報告された
+   トークンだけで組むと、そこで entry 全体が `state_icon` だけになる。常に非空と言えるのは
+   spaces の `workspace`、agents の `workspace` / `agent` だけである
 2. **agents 行の主語に `workspace` を使わない。** 1 つの space に別リポジトリの tab を足せるので、
-   space 名を主語にすると別リポジトリで動いている agent が space の名前で名乗る
-3. **可変長のトークンは行の最後。** 幅の足りないサイドバーでは、先に置くと後続が押し出される
+   space 名を主語にすると別リポジトリで動いている agent が space の名前で名乗る。1 と併せると、
+   `workspace` は agents では 2 行目に置いて「常に非空」役を兼ねさせる形になる。
+   **spaces 側では逆に `workspace` が正しい主語**（D4 の議論はそちらの話）
+3. **長さに上限のないトークンは行の最後。** 幅の足りないサイドバーでは、先に置くと後続が
+   押し出される。`$repo` / `$mode` のような短く上限のあるものは先でよい
 
 `branch` / `git_status` は **space 単位**のトークンで agents には存在せず、また 1 space が複数
 リポジトリの tab を持つと意味を成さないので、推奨スニペットからは外してある。

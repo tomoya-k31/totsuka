@@ -6,7 +6,7 @@ resource: https://herdr.dev/docs/
 tags: [herdr, ui, sidebar, reference, 417]
 owner: tomoya-k31
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-08-11T15:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T16:10:00+09:00 }
 stale_after: 2027-02-09
 sources:
   - id: herdr-probe-2026-08-09
@@ -47,15 +47,16 @@ rows = [
 
 # 組み込みトークン
 
-**2 つのパネルの語彙は「片方がもう片方を含む」関係ではない。** herdr 同梱の設定テンプレート
-（`strings herdr` で読める既定のコメント）が挙げているのは:
+**2 つのパネルの語彙は「片方がもう片方を含む」関係ではない。** 出典は herdr 同梱の設定
+テンプレート（バイナリに埋め込まれた既定コメント）で、**挙動を実測したものではない** —
+つまり「列挙に無い＝描画されない」は herdr の宣言を信じた推論である。挙げられているのは:
 
 | パネル | トークン |
 |---|---|
 | spaces | `state_icon` `state_text` `workspace` `branch` `git_status` |
 | agents | `state_icon` `state_text` `workspace` `tab` `pane` `agent` `terminal_title` `terminal_title_stripped` |
 
-- **agents に `branch` / `git_status` は無い** — ブランチを agent 行に出すことはできない
+- **agents に `branch` / `git_status` は無い**
 - **spaces に `tab` / `pane` / `agent` / `terminal_title*` は無い**
 
 **リポジトリ名のトークンはどちらにも無い。** これが [ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) の
@@ -91,13 +92,18 @@ totsuka が報告するトークン（`[identity] enabled = true` のとき）:
 **未報告のトークンは空になる。** オペレータが自分で開いた space、および**手で起動した agent** には
 `$repo` も `$task` も載らない。したがって:
 
-- **どの行も、常に非空のトークンを 1 つ以上含めること。** 報告されたトークンだけで組んだ行は、
-  報告が無い相手では `state_icon` だけになる。spaces なら `workspace`、agents なら
-  `terminal_title_stripped` あたりが確実
-- **可変長のトークン（`workspace` / `terminal_title_stripped`）は行の最後に置く。** 先に置くと、
-  幅の足りないサイドバーで後続のトークンが押し出される
+- **entry（1 エントリ＝複数行）のどこかに、常に非空のトークンを 1 つ以上置くこと。**
+  報告されたトークンだけで組むと、報告が無い相手では entry 全体が `state_icon` だけになる。
+  **常に非空と言えるのは spaces では `workspace`、agents では `workspace` と `agent` だけ**で、
+  `terminal_title_stripped` は当てにできない（agent が OSC タイトルを出すまで空）。
+  行ごとではなく entry 単位の条件なので、主語に使えない `workspace` を 2 行目へ置いて
+  この役を兼ねさせるのが素直
+- **長さに上限のないトークン（`workspace` / `terminal_title_stripped` / `$task`）は行の最後に。**
+  先に置くと、幅の足りないサイドバーで後続が押し出される。`$repo` / `$mode` のように短くて
+  上限のあるものは先でよい
 - **agents 行の主語に `workspace` を使わない。** 1 つの space に別リポジトリの tab を足せるので、
-  その space で動いている別リポジトリの agent が space 名で名乗ることになる
+  その space で動いている別リポジトリの agent が space 名で名乗ることになる。
+  **spaces 行では逆に `workspace` が正しい主語**（space の identity そのものなので）
 
 # `rows_by_agent` — エージェント種別ごとの差し替え
 
@@ -116,6 +122,9 @@ claude = [ ... ]
 ```toml
 rows = [["state_icon", { token = "$repo", fg = "#89b4fa", bold = true }]]
 ```
+
+指定できるのは `fg`（`#RGB` / `#RRGGBB`）・`bold`・`dim` で、省いたフィールドはその文脈の
+既定を保つ。
 
 # 関連
 

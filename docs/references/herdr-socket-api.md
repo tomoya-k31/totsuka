@@ -124,7 +124,7 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 | 読み出し | `tokens` は **`workspace.list` / `workspace.get` / `pane.list` のすべて**に載る（#417 実機）。totsuka の所有判定が読むのは `workspace.list` |
 | `workspace.rename` との関係 | rename しても tokens は保たれる |
 | `agent.start` との関係 | `agent.start` を挟んでも pane の tokens は保たれる（#417 実機）。totsuka が `agent.start` の**前**に報告する設計はこれに依存している |
-| 組み込みトークン | spaces: `state_icon` `state_text` `workspace` `branch` `git_status`。agents: ＋ `tab` `pane` `agent` `terminal_title` `terminal_title_stripped`。**リポジトリ名のトークンは無い**（だから totsuka が `$repo` を報告する） |
+| 組み込みトークン | **2 パネルの語彙は包含関係ではない** → [サイドバー設定](/references/herdr-sidebar-config.md)。どちらにも**リポジトリ名のトークンは無い**（だから totsuka が `$repo` を報告する） |
 | `$name` の解決先 | agents 行 = **pane** メタデータ、spaces 行 = **workspace** メタデータ。両パネルに出すなら**両方に報告が必要** |
 | `WorkspaceInfo.worktree` | `{repo_key, repo_name, repo_root, checkout_path, is_linked_worktree}`。ただし **herdr 自身が `worktree.create` / `worktree.open` で開いた workspace にしか載らない**（`workspace.create` 由来はフィールドごと欠落を確認） |
 | `WorktreeOpenParams` | `{workspace_id?, cwd?, path?, branch?, label?, focus}` — **`env` が無い**。totsuka が `worktree.open` へ移れない理由（[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D5） |
