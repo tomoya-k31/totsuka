@@ -1675,3 +1675,121 @@ async fn release_is_sent_once_even_when_removal_keeps_failing() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ---------------------------------------------------------------------------
+// Read-only violation, caught while the task is still running (#410)
+// ---------------------------------------------------------------------------
+
+/// A workflow driven by a `profile`, with the output policy pinned so the test
+/// does not depend on which one the archetype resolves to (an explicit
+/// `output` wins over the profile's, #393/#394).
+fn workflows_with_profile(profile: &str) -> Vec<Workflow> {
+    let cfg = RootConfig::from_toml_str(&format!(
+        r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {{}}
+profile = "{profile}"
+agent = "mock_agent"
+output = "none"
+"#
+    ))
+    .unwrap();
+    Workflow::from_configs(&cfg.workflows)
+}
+
+/// #410's last open item: a read-only profile whose worktree lands on a branch
+/// is failed **while it runs**, not only when it tries to publish.
+///
+/// `finalize_success` already refuses to publish one, but a task that never
+/// gets there — this one stays `running` forever, exactly like the `answer`
+/// task in #422 that stopped at `NEEDS_INPUT` — used to keep the violation with
+/// nothing but a log line. Closing the pane is the other half: it is the only
+/// lever this side has on an agent that is still going.
+#[tokio::test]
+async fn a_read_only_task_that_branches_mid_run_is_failed_and_its_pane_closed() {
+    let base = scratch("read_only_branch_mid_run");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        // No terminal state: the agent is still working when the branch
+        // appears, which is the situation this check exists for.
+        json!({
+            "stream_states": ["running"],
+            "pane_control": true,
+            "dispatch_log": dispatch_log,
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.workflows = workflows_with_profile("design");
+    // Keep the evidence: `fail_publish` retains the worktree, and the
+    // assertions below check that it really is still there.
+    settings.cleanup_plan = CleanupPolicy::Manual;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    // The probe is `Fn`, so the "already branched" latch is a cell.
+    let branched = std::cell::Cell::new(false);
+    run_watch_until(&mut engine, move || {
+        let db = StateDb::open(&db_probe).unwrap();
+        let Some(task) = db.find_by_source("mock_src", "1").unwrap() else {
+            return false;
+        };
+        // Stand in for the agent running `git switch -c`, once the worktree it
+        // was handed actually exists.
+        if !branched.get()
+            && let Some(path) = task.worktree_path.as_deref()
+            && Path::new(path).is_dir()
+        {
+            git(Path::new(path), &["switch", "-c", "feat/sneaky"]);
+            branched.set(true);
+        }
+        task.state == TaskState::Failed
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    assert_eq!(task.state, TaskState::Failed);
+    let worktree = task.worktree_path.clone().unwrap();
+    assert!(
+        PathBuf::from(&worktree).exists(),
+        "the worktree is the evidence and must survive the failure"
+    );
+
+    // The pane is closed, with the same identity guard every release carries.
+    let releases = recorded_releases(&dispatch_log);
+    assert_eq!(releases.len(), 1, "the agent is stopped once: {releases:?}");
+    assert_eq!(releases[0]["params"]["expect_cwd"], worktree);
+
+    // The operator is told which branch, and that a push may already be gone.
+    let notifications = read_log(&notify_log);
+    let failed: Vec<&serde_json::Value> = notifications
+        .iter()
+        .filter(|n| n["params"]["event"] == "failed")
+        .collect();
+    assert!(!failed.is_empty(), "expected a failure notification");
+    let reason = failed[0]["params"]["body"].as_str().unwrap_or_default();
+    assert!(reason.contains("feat/sneaky"), "{reason}");
+    assert!(reason.contains("design"), "{reason}");
+    assert!(reason.contains("pushed"), "{reason}");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
