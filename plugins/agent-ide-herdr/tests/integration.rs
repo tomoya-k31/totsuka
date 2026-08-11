@@ -114,6 +114,9 @@ struct FakeHerdr {
     /// When set, both `*.report_metadata` calls fail with this herdr error
     /// code — identity is decoration, so the dispatch must survive (#417).
     metadata_error: Option<&'static str>,
+    /// When set, `workspace.rename` fails with this herdr error code. The
+    /// machine label survives, which is still an ownership marker (#417 D4).
+    rename_error: Option<&'static str>,
     /// `pane.read` text for the `detection` source.
     detection: &'static str,
     /// When set, `workspace.create` fails with an `id: ""` decode-style error.
@@ -171,6 +174,7 @@ impl Default for FakeHerdr {
             list_workspaces: Vec::new(),
             pane_tokens: None,
             metadata_error: None,
+            rename_error: None,
             detection: "",
             empty_id_error_on_create: false,
             no_root_pane: false,
@@ -535,6 +539,12 @@ impl FakeHerdr {
             "workspace.report_metadata" | "pane.report_metadata" => {
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
+            // The human-readable label (#417 D4).
+            "workspace.rename" if self.rename_error.is_some() => {
+                let code = self.rename_error.unwrap();
+                reply_error(&mut write_half, &id, code, "herdr refused the rename").await
+            }
+            "workspace.rename" => reply(&mut write_half, &id, json!({ "type": "ok" })).await,
             // The workspace inventory — where the `totsuka ` label lives
             // (#416).
             "workspace.list" => {
@@ -1076,6 +1086,178 @@ async fn the_identity_token_is_the_task_id_verbatim_or_absent() {
         calls(&log, "workspace.create")[0]["params"]["label"],
         format!("totsuka {long_id}"),
         "and the label path, which is the fallback, is untouched"
+    );
+}
+
+/// #417 D4: the workspace ends up with a label an operator can read, and the
+/// machine marker still exists from the workspace's first instant.
+#[tokio::test]
+async fn dispatch_renames_the_workspace_for_humans() {
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    assert!(
+        d.dispatch_with(
+            "T1",
+            "サイドバーを直す",
+            "plan",
+            json!({ "repo_name": "totsuka" })
+        )
+        .await["error"]
+            .is_null()
+    );
+
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "workspace.create")[0]["params"]["label"],
+        "totsuka T1",
+        "create is byte-identical to before #417 — the marker exists immediately"
+    );
+    let renames = calls(&log, "workspace.rename");
+    assert_eq!(renames.len(), 1, "{renames:?}");
+    assert_eq!(renames[0]["params"]["label"], "totsuka: サイドバーを直す");
+    assert_eq!(renames[0]["params"]["workspace_id"], "w1");
+
+    // create → report×2 → rename. Renaming first would leave a window with no
+    // ownership marker at all.
+    let order: Vec<&str> = log
+        .iter()
+        .filter_map(|r| r["method"].as_str())
+        .filter(|m| m.starts_with("workspace.") || *m == "pane.report_metadata")
+        .collect();
+    assert_eq!(
+        order,
+        vec![
+            "workspace.create",
+            "workspace.report_metadata",
+            "pane.report_metadata",
+            "workspace.rename"
+        ]
+    );
+}
+
+/// #417 D4: no rename unless **both** reports landed. Otherwise a herdr blip
+/// could leave a workspace with a pretty label and no token — identity gone
+/// from both places at once.
+#[tokio::test]
+async fn a_failed_identity_report_leaves_the_machine_label() {
+    let (socket, requests) = FakeHerdr {
+        metadata_error: Some("internal_error"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    assert!(
+        d.dispatch_with("T1", "t", "plan", json!({ "repo_name": "totsuka" }))
+            .await["error"]
+            .is_null()
+    );
+
+    let log = requests.lock().unwrap();
+    assert!(calls(&log, "workspace.rename").is_empty(), "{log:?}");
+    assert_eq!(
+        calls(&log, "workspace.create")[0]["params"]["label"],
+        "totsuka T1"
+    );
+    assert!(
+        calls(&log, "workspace.close").is_empty(),
+        "and the dispatch is not torn down"
+    );
+}
+
+/// #417 D4: renaming is gated on the marker being **readable back**, not on
+/// the calls returning `ok`.
+///
+/// A task id too long for a token is skipped while both reports still succeed.
+/// Renaming there would leave the one container the design forbids — no
+/// `totsuka ` label *and* no token — which `session/list` drops entirely (so
+/// `doctor` never sees it) and `release` refuses (so its pane leaks).
+#[tokio::test]
+async fn no_rename_when_the_task_id_left_no_token() {
+    for id in [&"x".repeat(81), ""] {
+        let (socket, requests) = FakeHerdr::default().spawn();
+        let mut d = Driver::new();
+        d.init(&socket).await;
+        assert!(
+            d.dispatch_with(id, "t", "plan", json!({ "repo_name": "totsuka" }))
+                .await["error"]
+                .is_null()
+        );
+
+        let log = requests.lock().unwrap();
+        assert!(
+            calls(&log, "workspace.rename").is_empty(),
+            "id {id:?}: renaming here loses identity from both places"
+        );
+        assert_eq!(
+            calls(&log, "workspace.create")[0]["params"]["label"],
+            format!("totsuka {id}"),
+            "id {id:?}: the label stays the marker the fallback path compares"
+        );
+        let tokens = &calls(&log, "workspace.report_metadata")[0]["params"]["tokens"];
+        assert!(tokens.get("totsuka_task").is_none(), "id {id:?}: {tokens}");
+    }
+}
+
+/// #417 D4: `: Fix the bug` is not an improvement on `totsuka 42`, so an
+/// Orchestrator too old to send `repo_name` gets no rename.
+#[tokio::test]
+async fn no_rename_without_a_repo_name() {
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    assert!(d.dispatch("T1", "t", "plan").await["error"].is_null());
+    assert!(
+        calls(&requests.lock().unwrap(), "workspace.rename").is_empty(),
+        "no repo name, no rename"
+    );
+}
+
+/// #417: herdr refusing the rename costs the sidebar, not the task — and the
+/// label it leaves behind is still an ownership marker.
+#[tokio::test]
+async fn a_failed_rename_does_not_fail_the_dispatch() {
+    let (socket, requests) = FakeHerdr {
+        rename_error: Some("internal_error"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .dispatch_with("T1", "t", "plan", json!({ "repo_name": "totsuka" }))
+        .await;
+    assert!(disp["error"].is_null(), "dispatch survives: {disp}");
+    let log = requests.lock().unwrap();
+    assert_eq!(calls(&log, "agent.start").len(), 1);
+    assert!(calls(&log, "workspace.close").is_empty());
+}
+
+/// #417 D7: one flag stops the report **and** the rename. A pretty label with
+/// no token is the state the single flag exists to prevent.
+#[tokio::test]
+async fn disabling_identity_also_stops_the_rename() {
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init_with(&socket, json!({ "identity": { "enabled": false } }))
+        .await;
+    assert!(
+        d.dispatch_with("T1", "t", "plan", json!({ "repo_name": "totsuka" }))
+            .await["error"]
+            .is_null()
+    );
+
+    let log = requests.lock().unwrap();
+    assert!(calls(&log, "workspace.rename").is_empty(), "{log:?}");
+    assert_eq!(
+        calls(&log, "workspace.create")[0]["params"]["label"],
+        "totsuka T1"
     );
 }
 
