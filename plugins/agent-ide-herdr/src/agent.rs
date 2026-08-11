@@ -538,8 +538,74 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .get(IDENTITY_TOKEN)
             .and_then(Value::as_str)
             .is_some_and(|task| !task.is_empty());
-        if reported && marked {
+        // The marker that outlives a herdr restart (#432). Tokens do not: a
+        // `herdr server live-handoff` keeps the workspace, its panes, the
+        // running agent **and both labels**, and drops every metadata token.
+        // Before this, a renamed workspace came out of a handoff with no token
+        // and a human-readable label — no ownership marker at all — and
+        // vanished from `session/list`.
+        let pane_labeled = self.label_pane(params, workspace).await;
+        if reported && marked && pane_labeled {
             self.rename_for_humans(params, workspace).await;
+        }
+    }
+
+    /// Write the machine marker onto the **pane** as well, and report whether
+    /// it is there (#432).
+    ///
+    /// # Why the pane and not just the workspace
+    ///
+    /// [`rename_for_humans`](Self::rename_for_humans) trades the workspace's
+    /// machine label for a readable one, which is safe only while the tokens
+    /// carry the identity instead. **A herdr restart breaks that trade**:
+    /// `live-handoff` preserves labels and drops tokens (measured on herdr
+    /// 0.7.5), so a renamed workspace loses its last marker and `doctor`'s
+    /// orphan-pane detection goes blind to a pane that is still running.
+    ///
+    /// The pane label survives the same handoff (measured), and it is a
+    /// *separate* field from the workspace label — `pane.rename` is the only
+    /// thing that writes it, and totsuka never called it, which is exactly the
+    /// gap #416 found. So the readable name and the machine marker stop
+    /// competing for one field: the workspace label is for humans, the pane
+    /// label is for us.
+    ///
+    /// [`list_sessions`](Self::list_sessions) already reads `PaneInfo.label`
+    /// as one of its four ownership paths, so nothing there changes — the path
+    /// simply stops being dead.
+    ///
+    /// # Why the rename waits on this
+    ///
+    /// Returning `false` keeps the workspace on its machine label. That is the
+    /// same invariant #417 D4 already enforced, extended by one term: **never
+    /// rename away the last marker.** A pane rename that herdr refuses costs
+    /// the pretty name, not the ownership.
+    ///
+    /// Verbatim `task.id`, never through `token_value`: this label is compared
+    /// (`strip_prefix` → `source_task_id`), not displayed. It does not reach
+    /// the sidebar unless the operator puts the `pane` token in their `rows`,
+    /// which the recommended snippet does not.
+    async fn label_pane(&self, params: &TaskDispatchParams, workspace: &NewWorkspace) -> bool {
+        let Some(pane_id) = &workspace.root_pane_id else {
+            return false;
+        };
+        if params.task.id.is_empty() {
+            return false;
+        }
+        let label = format!("{OWNED_LABEL_PREFIX}{}", params.task.id);
+        match self
+            .client
+            .call("pane.rename", json!({ "pane_id": pane_id, "label": label }))
+            .await
+        {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(
+                    pane_id, error = %e,
+                    "could not label the pane; keeping the workspace's machine label so the \
+                     marker survives a herdr restart"
+                );
+                false
+            }
         }
     }
 
