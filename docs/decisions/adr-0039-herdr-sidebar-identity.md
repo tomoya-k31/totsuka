@@ -4,7 +4,9 @@ title: ADR-0039 herdr サイドバーの identity は metadata token で運び�
 description: "herdr の左サイドバーに「どのリポジトリの・どのタスクを・どのモードで」を出すため、identity を label ではなく workspace / pane の metadata token として報告し、リポジトリ名は TaskDispatchParams.repo_name（プロトコル 0.4.1、純追加）で渡す決定。worktree.open によるグルーピング・pane.rename・display_agent の各案を採らない理由と、サイドバー設定を totsuka が書き換えない理由。"
 tags: [herdr, protocol, ui, identity, 417]
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-08-11T23:55:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-12T01:20:00+09:00 }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-12T01:20:00+09:00 }
 sources:
   - id: herdr-probe-2026-08-09
     resource: herdr 0.7.5 / protocol 17 の実機プローブ（`herdr api schema --json` と workspace 作成による実測）
@@ -15,7 +17,24 @@ sources:
 
 Accepted — 2026-08-11（[#417](https://github.com/tomoya-k31/totsuka/issues/417)）。
 
-実装は 3 本に分けて入る: **PR-1** = プロトコル 0.4.1 の `repo_name` ＋ core（挙動変化なし。この ADR はここで入る）、**PR-2** = プラグインの identity 報告（見た目は変わらない）、**PR-3** = `workspace.rename` と docs 一式。**実機検収は PR-3 の後**で、それまで `verified` は付けない。
+実装は 3 本に分けて入った: **PR-1**（[#427](https://github.com/tomoya-k31/totsuka/pull/427)）= プロトコル 0.4.1 の `repo_name` ＋ core、**PR-2**（[#428](https://github.com/tomoya-k31/totsuka/pull/428)）= プラグインの identity 報告、**PR-3**（[#429](https://github.com/tomoya-k31/totsuka/pull/429)）= `workspace.rename` と docs 一式。
+
+## 実機で確認した範囲（2026-08-12、herdr 0.7.5 / protocol 17）
+
+`verified` はこの範囲に対して付けている:
+
+- `workspace.report_metadata` / `pane.report_metadata` が受理される
+- **`tokens` が `workspace get` と `pane list` の両方から読み戻せる**（D1 が前提にしていた点）
+- **`workspace.rename` がトークンを保つ**（D4 が前提にしていた点）
+- 日本語のタイトルがそのまま往復する
+- 一連の操作の後も `PaneInfo.label` は null のまま（#416 の前提の再確認）
+
+**確認できていないもの**（`verified` はこれらを含まない）:
+
+- **サイドバーの見た目**。行が想定どおり描画されるか、オペレータが自分で開いた space で `$repo` が空行を残さないかは目視が要る
+- **プラグイン経由の dispatch 一周**。上は `herdr` CLI から同じ呼び出しを再現したもので、`agent.start` の readiness レース（#387 / #391）に往復 3 回の追加が影響しないかはまだ測っていない
+- **herdr 再起動をまたいで `tokens` が残るか**（下の Consequences 参照）
+- **`[identity] enabled = false` の否定側**
 
 # Context
 

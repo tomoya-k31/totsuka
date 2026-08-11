@@ -2713,25 +2713,27 @@ async fn session_list_finds_panes_through_their_workspace_label() {
     // label-less, which is what a real herdr reports: nothing writes a
     // `PaneInfo.label`. The old fake staged them, so this test passed while
     // the feature returned an empty array against every real herdr.
-    // Every pane record here is shaped like the live probe in
-    // `docs/references/herdr-socket-api.md`: `agent_status` is always present
-    // and reads `unknown` when nothing is running, and there is no `agent`
-    // object. Staging a field herdr does not send is what hid this bug for a
-    // whole release.
+    // Every pane record here is shaped like a **dispatched** workspace on
+    // herdr 0.7.5, transcribed from `herdr pane list`: no `label` anywhere,
+    // and the agent's pane carrying `agent: "claude"` + a real `agent_status`
+    // while the companion shell carries `agent: null` + `unknown`. Staging a
+    // field herdr does not send is what hid this bug for a whole release, so
+    // these fixtures copy the record rather than describe it.
     let fake = FakeHerdr {
         list_panes: vec![
             // (c) A totsuka workspace holds two panes — the agent's and the
             // companion shell. Exactly one session must come out of it.
             json!({ "pane_id": "w1:p1", "cwd": "/wt/7", "workspace_id": "w1",
-                    "agent_status": "unknown" }),
+                    "agent": null, "agent_status": "unknown" }),
             json!({ "pane_id": "w1:p2", "cwd": "/wt/7", "workspace_id": "w1",
-                    "agent_status": "working" }),
+                    "agent": "claude", "agent_status": "idle" }),
             // (b) The operator's own workspace.
             json!({ "pane_id": "w2:p1", "cwd": "/home", "workspace_id": "w2",
-                    "agent_status": "unknown" }),
+                    "agent": null, "agent_status": "unknown" }),
             // (a) The orphan case: the agent has exited, so nothing in the
-            // workspace reports a status. It must still be listed.
-            json!({ "pane_id": "w4:p1", "workspace_id": "w4", "agent_status": "unknown" }),
+            // workspace reports one. It must still be listed.
+            json!({ "pane_id": "w4:p1", "workspace_id": "w4",
+                    "agent": null, "agent_status": "unknown" }),
         ],
         list_workspaces: vec![
             json!({ "workspace_id": "w1", "label": "totsuka 7" }),

@@ -1283,23 +1283,32 @@ fn workspace_of(pane_id: &str) -> Option<&str> {
 /// Whether a `pane.list` record looks like the pane an agent is running in,
 /// rather than the companion shell beside it (#416).
 ///
-/// Judged off `agent_status` and `agent_session`, which the live probe in
-/// [the API reference](../../../docs/references/herdr-socket-api.md) shows
-/// `pane.list` actually carrying. An earlier version of this checked an
-/// `agent` object — that field is on `agent.start`'s **response**, not on a
-/// pane record, so it would have been absent on every real pane and this
-/// would have silently degraded to "whichever pane herdr listed first", which
-/// is the companion shell as often as not. That is the same
-/// fake-stages-a-field-the-real-thing-lacks trap this whole issue is about, so
-/// the test fixtures below mirror the probe rather than the wish.
+/// All three signals are read because all three are on a live record. From a
+/// dispatched totsuka workspace on herdr 0.7.5:
 ///
-/// A workspace whose agent has exited reports `unknown` on both panes; the
+/// ```text
+/// {pane_id: "w6E:p1", agent: "claude", agent_status: "idle",    label: null}   ← agent
+/// {pane_id: "w6E:p2", agent: null,     agent_status: "unknown", label: null}   ← shell
+/// ```
+///
+/// **`agent` is a string on the record, not an object, and not absent.** An
+/// earlier revision of this comment claimed the field lives only on
+/// `agent.start`'s response — that was wrong, and it was wrong because it was
+/// reasoned from a probe of a workspace with *no agent started in it* rather
+/// than measured against a dispatched one. Either signal alone would work;
+/// reading all three is what makes a future herdr dropping one of them a
+/// degradation instead of a silent regression to "whichever pane came first",
+/// which is the companion shell as often as not.
+///
+/// A workspace whose agent has exited reports nothing on either pane; the
 /// caller falls back to the first pane there, which is the orphan case and
 /// wants exactly that.
 fn looks_like_an_agent_pane(pane: &Value) -> bool {
-    // Reported by the agent's own herdr integration hook once it starts.
-    agent_session_id(pane).is_some()
-        // A pane with nothing running in it reports `unknown` (probe, 0.7.5).
+    // Set while herdr has an agent registered in the pane.
+    pane_str(pane, "agent").is_some_and(|agent| !agent.is_empty())
+        // Reported by the agent's own herdr integration hook once it starts.
+        || agent_session_id(pane).is_some()
+        // A pane with nothing running in it reports `unknown`.
         || pane_str(pane, "agent_status").is_some_and(|status| status != "unknown")
 }
 

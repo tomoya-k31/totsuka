@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-12T00:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-12T01:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -255,7 +255,7 @@ pane.split {target_pane_id: <root pane = これからエージェントが入る
 
 **pane の label は見ない（#416）。** 0.2.2 から 2026-08-11 まで、この列挙は `PaneInfo.label` を見ており、**実機 herdr に対して常に空配列を返していた** — herdr は workspace の label と pane の label を別フィールドとして持ち、前者は `workspace.create { label }` / `workspace.rename`、後者は **`pane.rename` だけ**が書く。totsuka は `pane.rename` を呼ばないので、pane の label は一度も設定されていなかった。結果として ADR-0013 の孤児 pane 検出は実機で一度も発火していない。`pane.rename` を呼ぶ案は、`show_agent_labels_on_pane_borders = true` の環境で不透明な ID が pane 枠に出るため採らなかった。pane 自身の label 判定は無害なので残してある（将来 herdr が label を伝播しても正しい）。
 
-**1 workspace = 1 セッション。** totsuka の workspace には agent pane と伴走シェルの 2 枚があり、workspace 単位の判定では両方が当たる。**`agent_status` が `unknown` 以外か `agent_session` を報告している** pane を優先し、1 枚も無いとき（= エージェントが終了済み。まさに孤児のケース）だけ先頭の pane を代表にする。判定材料をこの 2 つに限るのは、実機プローブが `pane.list` のレコードに載ると示しているのがこれらだけだからである（`agent.start` の**レスポンス**には `agent` オブジェクトが載るが、pane レコードには載らない — 混同すると実機で常に false になり、この dedup が「herdr が最初に返した pane」＝伴走シェルへ黙って退化する）。これをしないと doctor が 1 タスクにつき 2 回聞き、2 回目の release が `released: false` を返す。
+**1 workspace = 1 セッション。** totsuka の workspace には agent pane と伴走シェルの 2 枚があり、workspace 単位の判定では両方が当たる。**`agent_status` が `unknown` 以外か `agent_session` を報告している** pane を優先し、1 枚も無いとき（= エージェントが終了済み。まさに孤児のケース）だけ先頭の pane を代表にする。判定材料が 3 つあるのは、**dispatch 済みの workspace を実測すると 3 つとも載っている**ためである（0.7.5: agent pane が `agent: "claude"` / `agent_status: "idle"`、伴走シェルが `agent: null` / `agent_status: "unknown"`、label は両方 null）。**「`agent` は `pane.list` に載らない」と一度書いたが、これは誤り** — エージェントを起動していない probe workspace から推論したもので、dispatch 済みのものを測っていなかった。どれか 1 つでも判定はできるが、3 つ読むことで将来 herdr がどれかを落としても「劣化」で済み、「herdr が最初に返した pane」＝伴走シェルへの黙った退化にはならない。これをしないと doctor が 1 タスクにつき 2 回聞き、2 回目の release が `released: false` を返す。
 
 # エラー写像 — `SESSION_UNRESUMABLE`（#261, 0.2.4）
 

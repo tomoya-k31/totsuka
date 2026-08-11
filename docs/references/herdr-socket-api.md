@@ -4,7 +4,7 @@ title: herdr Socket API / 統合エージェント capability（外部一次情�
 description: "herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status・pane レイアウト）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124/#356）設計の根拠。protocol 17 で agent.start が manifest 駆動（kind + 既存 pane）へ、プロンプト投入が agent.prompt へ変わった破壊的変更を含む。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。"
 resource: https://herdr.dev/docs/socket-api/
 tags: [herdr, socket-api, integration, agent-ide, external]
-generated: { by: claude-code/opus-5, at: 2026-08-11T21:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-12T01:20:00+09:00 }
 status: stable
 stale_after: 2027-02-01
 owner: tomoya-k31
@@ -152,6 +152,17 @@ $ herdr pane list --workspace w68
     "workspace_id": "w68"
 }]}}                      ← "label" キーが存在しない
 ```
+
+**上のプローブは「エージェントを起動していない workspace」である点に注意。** dispatch 済みの
+workspace を測ると、pane のレコードは `agent` と実際の `agent_status` を持つ（#417 実機、0.7.5）:
+
+```text
+{pane_id: "w6E:p1", agent: "claude", agent_status: "idle",    label: null}   ← エージェントの pane
+{pane_id: "w6E:p2", agent: null,     agent_status: "unknown", label: null}   ← 伴走シェル
+```
+
+**`agent` は `pane.list` のレコードに載る**（文字列であってオブジェクトではない）。
+`label` はどちらの状況でも null のままである。
 
 `workspace list` 側には `"label": "totsuka probe"` が載っている。totsuka はこれを取り違えており、
 `session/list` が実機で常に空配列を返していた（#416、[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md) の改訂節）。
