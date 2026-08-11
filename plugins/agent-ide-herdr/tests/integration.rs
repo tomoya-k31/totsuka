@@ -98,9 +98,17 @@ struct FakeHerdr {
     /// is absent — drives `session/release`'s degrade-open path).
     pane_cwd: Option<&'static str>,
     /// The pane's `label` as `pane.get` reports it, if any.
+    ///
+    /// **A real herdr never sets one** (#416) — only `pane.rename` does, which
+    /// totsuka does not call. Kept because the adapter still honours a pane
+    /// label if one ever appears; ownership itself is decided by
+    /// [`FakeHerdr::list_workspaces`].
     pane_label: Option<&'static str>,
     /// The full pane inventory `pane.list` reports (#211).
     list_panes: Vec<Value>,
+    /// The workspace inventory `workspace.list` reports (#416). This is where
+    /// the `totsuka ` marker actually lives.
+    list_workspaces: Vec<Value>,
     /// `pane.read` text for the `detection` source.
     detection: &'static str,
     /// When set, `workspace.create` fails with an `id: ""` decode-style error.
@@ -155,6 +163,7 @@ impl Default for FakeHerdr {
             pane_cwd: Some("/wt/agent-1"),
             pane_label: None,
             list_panes: Vec::new(),
+            list_workspaces: Vec::new(),
             detection: "",
             empty_id_error_on_create: false,
             no_root_pane: false,
@@ -502,6 +511,16 @@ impl FakeHerdr {
                     &mut write_half,
                     &id,
                     json!({ "type": "pane_list", "panes": self.list_panes.clone() }),
+                )
+                .await
+            }
+            // The workspace inventory — where the `totsuka ` label lives
+            // (#416).
+            "workspace.list" => {
+                reply(
+                    &mut write_half,
+                    &id,
+                    json!({ "type": "workspace_list", "workspaces": self.list_workspaces.clone() }),
                 )
                 .await
             }
@@ -2203,16 +2222,29 @@ async fn release_closes_pane_and_workspace_without_interrupting() {
 }
 
 #[tokio::test]
-async fn session_list_returns_only_totsuka_labeled_panes() {
-    // `session/list` (#211) is the orphan-pane inventory. The `totsuka `
-    // label filter is the ownership boundary: herdr serves human-opened
-    // panes too, and those must never become release candidates.
+async fn session_list_finds_panes_through_their_workspace_label() {
+    // `session/list` (#211) is the orphan-pane inventory, and ownership is
+    // decided by the **workspace's** label (#416). Every pane here is
+    // label-less, which is what a real herdr reports: nothing writes a
+    // `PaneInfo.label`. The old fake staged them, so this test passed while
+    // the feature returned an empty array against every real herdr.
     let fake = FakeHerdr {
         list_panes: vec![
-            json!({ "pane_id": "w1:p1", "label": "totsuka 7", "cwd": "/wt/7" }),
-            json!({ "pane_id": "w2:p1", "label": "my scratch pane", "cwd": "/home" }),
-            json!({ "pane_id": "w3:p1", "cwd": "/home" }),
-            json!({ "pane_id": "w4:p1", "label": "totsuka 9" }),
+            // (c) A totsuka workspace holds two panes — the agent's and the
+            // companion shell. Exactly one session must come out of it.
+            json!({ "pane_id": "w1:p1", "cwd": "/wt/7", "workspace_id": "w1" }),
+            json!({ "pane_id": "w1:p2", "cwd": "/wt/7", "workspace_id": "w1",
+                    "agent": { "name": "totsuka-7" } }),
+            // (b) The operator's own workspace.
+            json!({ "pane_id": "w2:p1", "cwd": "/home", "workspace_id": "w2" }),
+            // (a) The orphan case: the agent has exited, so no pane in the
+            // workspace reports one. It must still be listed.
+            json!({ "pane_id": "w4:p1", "workspace_id": "w4" }),
+        ],
+        list_workspaces: vec![
+            json!({ "workspace_id": "w1", "label": "totsuka 7" }),
+            json!({ "workspace_id": "w2", "label": "scratch" }),
+            json!({ "workspace_id": "w4", "label": "totsuka 9" }),
         ],
         ..FakeHerdr::default()
     };
@@ -2226,15 +2258,44 @@ async fn session_list_returns_only_totsuka_labeled_panes() {
     assert_eq!(
         sessions.len(),
         2,
-        "only totsuka-labeled panes: {sessions:?}"
+        "one per totsuka workspace, and nothing from the operator's: {sessions:?}"
     );
-    // The session id encodes the pane with an empty agent session — the bare
-    // form `session/release` decodes.
-    assert_eq!(sessions[0]["session_id"], "w1:p1|");
-    assert_eq!(sessions[0]["label"], "totsuka 7");
+    // The agent's pane wins over the companion shell — asking `doctor` about
+    // the same task twice makes its second release answer `released: false`.
+    assert_eq!(sessions[0]["session_id"], "w1:p2|");
+    assert_eq!(
+        sessions[0]["label"], "totsuka 7",
+        "the workspace label is reported as the session's, so doctor's \
+         strip_prefix → source_task_id still works unchanged"
+    );
     assert_eq!(sessions[0]["cwd"], "/wt/7");
     assert_eq!(sessions[1]["session_id"], "w4:p1|");
+    assert_eq!(sessions[1]["label"], "totsuka 9");
     assert!(sessions[1]["cwd"].is_null(), "absent cwd stays absent");
+}
+
+#[tokio::test]
+async fn session_list_still_honours_a_pane_that_carries_the_label_itself() {
+    // Forward compatibility only: no herdr sets this today. A pane labelled
+    // directly is ours even when its workspace is not — and its own label
+    // wins, since it is the more specific statement.
+    let fake = FakeHerdr {
+        list_panes: vec![
+            json!({ "pane_id": "w5:p1", "label": "totsuka 11", "workspace_id": "w5" }),
+        ],
+        list_workspaces: vec![json!({ "workspace_id": "w5", "label": "someone else" })],
+        ..FakeHerdr::default()
+    };
+    let (socket, _requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let sessions = d.call("session/list", json!({})).await["result"]["sessions"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(sessions[0]["label"], "totsuka 11");
 }
 
 #[tokio::test]
@@ -2306,6 +2367,71 @@ async fn release_refuses_on_label_mismatch_even_when_cwd_matches() {
             .iter()
             .any(|r| r["method"] == "pane.close" || r["method"] == "workspace.close"),
     );
+}
+
+#[tokio::test]
+async fn release_verifies_the_label_against_the_workspace() {
+    // The pane carries no label (the real shape), so this comparison is the
+    // only one that can ever be made — before #416 the label check silently
+    // fell through to degrade-open on every single release.
+    let (socket, requests) = FakeHerdr {
+        pane_cwd: Some("/wt/agent-1"),
+        pane_label: None,
+        list_workspaces: vec![json!({ "workspace_id": "w1", "label": "totsuka OTHER" })],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({
+                "session_id": "w1:p1|sess",
+                "expect_cwd": "/wt/agent-1",
+                "expect_label": "totsuka T1",
+            }),
+        )
+        .await;
+    assert_eq!(
+        resp["result"]["released"], false,
+        "the workspace names a different task"
+    );
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r["method"] == "pane.close" || r["method"] == "workspace.close"),
+    );
+}
+
+#[tokio::test]
+async fn release_proceeds_when_the_workspace_label_matches() {
+    let (socket, requests) = FakeHerdr {
+        pane_cwd: Some("/wt/agent-1"),
+        pane_label: None,
+        list_workspaces: vec![json!({ "workspace_id": "w1", "label": "totsuka T1" })],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({
+                "session_id": "w1:p1|sess",
+                "expect_cwd": "/wt/agent-1",
+                "expect_label": "totsuka T1",
+            }),
+        )
+        .await;
+    assert_eq!(resp["result"]["released"], true);
+    let log = requests.lock().unwrap();
+    assert_eq!(calls(&log, "pane.close")[0]["params"]["pane_id"], PANE);
 }
 
 #[tokio::test]

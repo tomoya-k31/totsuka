@@ -35,4 +35,17 @@ worktree 側には `doctor` の `check_orphans`（F-24）という受け皿が�
 - herdr プラグインに `pane.list` の呼び出しが初めて入る（herdr 本体の変更は不要）。mock plugin は `list_sessions` 設定でテスト用の pane 一覧を staging できる。
 - `session/list` は additive のため既存 `<0.3` manifest はそのまま互換。orca は `pane_control` を宣言しないため呼ばれない（プラグイン変更なし）。
 - label 前置 `totsuka ` がプラグインの所有権境界として意味論を持つようになった。label 形式を変える場合は dispatch（設定側）と `session/list`（フィルタ側）を同時に変える必要がある（どちらも herdr プラグイン内で閉じる）。
+
+# 改訂: 所有判定は pane の label ではなく workspace の label（2026-08-11、#416）
+
+**上の §2 が前提にしていた「`pane.list` の `label` を見る」は、実機 herdr に対して成立していなかった。** herdr は `WorkspaceInfo.label`（`workspace.create { label }` / `workspace.rename` が書く）と `PaneInfo.label`（**`pane.rename` だけ**が書く）を別フィールドとして持つ。totsuka が書いているのは前者だけで、`pane.rename` は一度も呼んでいない。
+
+つまり `session/list` は 0.2.2 から 2026-08-11 まで**常に空配列を返しており、本 ADR の孤児 pane 検出は実機で一度も発火していない**。結合テストが緑だったのは、`FakeHerdr` が pane の label を手で仕込んでいたためである。herdr 0.7.5 / protocol 17 の実機プローブで確定した。
+
+修正は所有判定を **`pane.list` × `workspace.list` の `workspace_id` 結合**に変え、workspace の label で絞る（#416）。`SessionInfo.label` にはその workspace label を入れるので、§4 / §5 の「label の source task id を `source_task_id` と突き合わせる」「列挙した label を `expect_label` に詰める」は**無改修で成立する**。
+
+- `pane.rename` を呼んで pane 側にも label を付ける案は不採用。`show_agent_labels_on_pane_borders = true` の環境で不透明な ID が pane 枠に出る
+- workspace 単位の判定は agent pane と伴走シェルの**両方**に当たるので、`agent` を報告している pane を優先し、1 枚も無いときだけ先頭を代表にする。さもないと doctor が 1 タスクにつき 2 回聞き、2 回目の release が `released: false` を返す
+- `session/release` の `expect_label` 比較も workspace label に対して行う。それまでは**比較可能なペアが常に 0 個**で、全 release が degrade-open の枝に落ちていた
+- 教訓: fake が実機に無いフィールドを staging していると、機能が丸ごと死んでいてもテストは緑になる。`FakeHerdr` からは pane label の staging をやめ、実機と同じ「pane に label は無い」形に合わせた
 - doctor は agent プラグインを `check_plugins` の validate probe とは別にもう一度起動する（launch → `session/list` → shutdown）。診断コマンドのため許容。

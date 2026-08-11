@@ -186,7 +186,7 @@ pane.split {target_pane_id: <root pane = これからエージェントが入る
 人間が直接叩くシェルに `TOTSUKA_HOOK_TOKEN` は載らない（[hook-security](/security/hook-security.md)）。
 エージェント pane には root pane 経由で載る。
 
-**`session/list` への影響**: split で作るシェル pane は `label = null` なので `totsuka ` 前置フィルタに掛からない。`workspace.close` で巻き添えに閉じるため実害はなく、孤児検出の対象が 1 タスク 1 件に保たれる。
+**`session/list` への影響**: 所有判定が workspace 単位になった（#416）ので、split で作るシェル pane も**当たる**。`agent` を持つ pane を優先することで 1 タスク 1 件に保っている（下記）。`workspace.close` で巻き添えに閉じる点は変わらない。
 
 # 状態ストリーム — デッドマン縮退（F-38, #131）
 
@@ -217,7 +217,11 @@ pane.split {target_pane_id: <root pane = これからエージェントが入る
 
 # session/list（#211, 0.2.2）
 
-`session/list`（O→P、`pane_control` capability。[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）は `doctor` の孤児 pane 検出のための**自分の所有物の列挙**: herdr の `pane.list`（本プラグイン初使用）を呼び、`label` が **`totsuka ` で始まる pane だけ**を返す。この label フィルタが所有権境界 — herdr はユーザーが手で開いた pane も持ち、それを列挙・解放候補にしてはならない。label は `dispatch` が `workspace.create` に設定する `totsuka {task.id}`（`task.id` はプロトコル `Task.id` = **source task id**。Slack のスレッドキー等の文字列で、orchestrator DB の行 id ではない）で、doctor はこの source task id を `source_task_id` と文字列照合して DB と突き合わせる。返す `session_id` は pane_id + **空 agent_session** の縮退形（`pane.list` は中の Claude セッションを知らないが、`SessionHandle::decode` は bare 形式を受け付け `session/release` は pane さえ分かれば良い）。label / cwd は pane record から取れる範囲でそのまま添える。
+`session/list`（O→P、`pane_control` capability。[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）は `doctor` の孤児 pane 検出のための**自分の所有物の列挙**: `pane.list` と `workspace.list` を呼び、`PaneInfo.workspace_id` で結合して、**その workspace の `label` が `totsuka ` で始まる pane**を返す。この label フィルタが所有権境界 — herdr はユーザーが手で開いた pane も持ち、それを列挙・解放候補にしてはならない。label は `dispatch` が `workspace.create` に設定する `totsuka {task.id}`（`task.id` はプロトコル `Task.id` = **source task id**。Slack のスレッドキー等の文字列で、orchestrator DB の行 id ではない）で、doctor はこの source task id を `source_task_id` と文字列照合して DB と突き合わせる。返す `session_id` は pane_id + **空 agent_session** の縮退形（`pane.list` は中の Claude セッションを知らないが、`SessionHandle::decode` は bare 形式を受け付け `session/release` は pane さえ分かれば良い）。`SessionInfo.label` にはその **workspace の label** を入れるので、doctor 側の `strip_prefix` → `source_task_id` 照合は無改修で通る。
+
+**pane の label は見ない（#416）。** 0.2.2 から 2026-08-11 まで、この列挙は `PaneInfo.label` を見ており、**実機 herdr に対して常に空配列を返していた** — herdr は workspace の label と pane の label を別フィールドとして持ち、前者は `workspace.create { label }` / `workspace.rename`、後者は **`pane.rename` だけ**が書く。totsuka は `pane.rename` を呼ばないので、pane の label は一度も設定されていなかった。結果として ADR-0013 の孤児 pane 検出は実機で一度も発火していない。`pane.rename` を呼ぶ案は、`show_agent_labels_on_pane_borders = true` の環境で不透明な ID が pane 枠に出るため採らなかった。pane 自身の label 判定は無害なので残してある（将来 herdr が label を伝播しても正しい）。
+
+**1 workspace = 1 セッション。** totsuka の workspace には agent pane と伴走シェルの 2 枚があり、workspace 単位の判定では両方が当たる。`agent` を報告している pane を優先し、1 枚も無いとき（= エージェントが終了済み。まさに孤児のケース）だけ先頭の pane を代表にする。これをしないと doctor が 1 タスクにつき 2 回聞き、2 回目の release が `released: false` を返す。
 
 # エラー写像 — `SESSION_UNRESUMABLE`（#261, 0.2.4）
 
