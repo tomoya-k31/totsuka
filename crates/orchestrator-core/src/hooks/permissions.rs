@@ -114,8 +114,45 @@
 //!   tool names**, which have no such caveat and no version requirement.
 //! - The space matters: `Bash(git *)` and `Bash(git*)` are different rules, and
 //!   the latter also matches `gitk`.
+//!
+//! # The permission mode, and why it is `auto`
+//!
+//! A profile's block also pins [`DEFAULT_MODE`]. Without it the pane inherits
+//! whatever the machine's own settings say, and a machine that says nothing
+//! runs in `default` (labelled `manual`), which **prompts before every Bash
+//! command outside a small read-only set** — measured on Claude Code v2.1.227:
+//! an unattended pane sat on `Do you want to proceed?` and never moved. That is
+//! [#409](https://github.com/tomoya-k31/totsuka/issues/409)'s hang returning at
+//! `Bash` after
+//! [ADR-0036](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0036-read-only-violation-fails-the-task.md)
+//! removed it at `ExitPlanMode`, and it is the whole of
+//! [#420](https://github.com/tomoya-k31/totsuka/issues/420). It never showed up
+//! on the development machine because that machine's user settings carry a wide
+//! `allow` list and `defaultMode = "auto"`.
+//!
+//! **`deny` still wins.** Claude Code applies deny rules in every permission
+//! mode, so the sets below are exactly as strong under `auto` as under any
+//! other mode; what the mode decides is only what happens to calls the deny
+//! rules do **not** name.
+//!
+//! `dontAsk` — auto-deny anything not pre-approved, also never prompting — was
+//! the other candidate and is the stricter one. It is not chosen here: it needs
+//! a per-profile `allow` list to let `triage`/`design` run `gh issue comment`
+//! at all, and an allow list that is even slightly incomplete turns "no prompt"
+//! into "the task cannot do its job", silently, per command. `auto` fails the
+//! other way, which is the trade being made here: **the boundary is `deny`, not
+//! the mode.**
+//!
+//! This says nothing about codex or opencode. Only Claude reads `--settings`.
 
 use crate::config::Profile;
+
+/// The permission mode a profile's pane starts in (#420).
+///
+/// See the module docs for why this is `auto` and not `default` or `dontAsk`.
+/// Claude Code's own description: auto-approves tool calls with background
+/// safety checks that verify actions align with the request.
+pub const DEFAULT_MODE: &str = "auto";
 
 /// The edit tools an agent is not given at all in a read-only profile.
 ///

@@ -228,7 +228,8 @@ on_success = { set_status = "設計済み" }
 | claude の `--settings` へ `permissions.deny` を注入 | answer / triage / design | #395 |
 | `Bash` を**ツールごと** deny（コマンドを 1 つも実行できない） | answer | #410 |
 | claude の `--permission-mode plan` を**渡さない** | answer / triage / design | #410 / #409 |
-| worktree がブランチ上にあったら**成功として扱わず失敗**させる | answer / triage / design | #409 |
+| worktree がブランチ上にあったら**成功として扱わず失敗**させる（走行中の検知では pane も閉じる） | answer / triage / design | #409 / #410 |
+| claude の `--settings` へ `permissions.defaultMode = "auto"` を注入 | 全 profile | #420 |
 | ソースプラグインへ `instructions_kind` を伝え、書き込み先の指示を出させる | triage / design / implement | #398 |
 | 検収 rubric を「成果物 URL の実在」に差し替え | triage / design / implement | #398 |
 | ソースプラグインへ `task_id_prefix` を伝え、会話とは別 ID のタスクを立てさせる | implement (`impl:`) / triage (`books:`) | #397 |
@@ -351,10 +352,32 @@ pane 内で起動する AI ツール CLI の定義。`{name}` は `default_tool`
 |---|---|---|---|
 | `kind` | enum | 必須 | アダプタ種別: `claude` / `codex` / `opencode`。argv 組立と完了検知方式を決める |
 | `command` | string? | kind 名 | 空白区切りのコマンドライン。先頭 = プログラム、残り = 基本引数（例 `"claude --model haiku"`） |
-| `mode_args` | string[]? | kind 既定 | implement モードで追加する引数（codex 既定: `["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]`、claude / opencode 既定: なし） |
-| `plan_args` | string[]? | kind 既定 | plan モードで追加する引数（claude 既定: `["--permission-mode", "plan"]`、codex 既定: `["--sandbox", "read-only"]` — plan permission mode 不在の縮退、opencode 既定: `["--agent", "totsuka-plan"]` — 全 deny の plan エージェント） |
+| `mode_args` | string[]? | kind 既定 | implement モードで追加する引数（codex 既定: `["--sandbox", "workspace-write", "--ask-for-approval", "never"]`、opencode 既定: `["--auto"]`、claude 既定: なし） |
+| `plan_args` | string[]? | kind 既定 | plan モードで追加する引数（claude 既定: `["--permission-mode", "plan"]`、codex 既定: `["--sandbox", "read-only", "--ask-for-approval", "never"]` — plan permission mode 不在の縮退、opencode 既定: `["--agent", "totsuka-plan", "--auto"]` — 全 deny の plan エージェント） |
 
 kind ごとの argv 組立の差分: claude はフック設定を `--settings <path>` で受け、resume は `--resume <id>` フラグ。codex はフックがグローバル登録（`~/.codex/hooks.json`、`TOTSUKA_*` env でゲート）のため `--settings` 相当は付かず、resume は `resume <id>` **サブコマンド**（基本引数の直後・モード引数の前に挿入）。 opencode もグローバル配置の JS プラグイン（env ゲート）で完了検知するため `--settings` 相当は無く、resume は `-s <id>` フラグ。opencode は不可視注入が無いため、タスク指示 + マーカー規約は**可視の extra_context** として pane に渡る。
+
+## 承認プロンプトで止まらないこと（#420）
+
+**pane には答える人が居ない**ので、3 ツールとも「人間に確認を求めない」設定で起動する。綴りはツールごとに違うが、意図は同じである。
+
+| ツール | 綴り | どこで |
+|---|---|---|
+| claude | `permissions.defaultMode = "auto"` | `--settings` のファイル（profile がある workflow のみ） |
+| codex | `--ask-for-approval never` | plan / implement 両方の既定 argv |
+| opencode | `--auto` | plan / implement 両方の既定 argv |
+
+**これは「エージェントにできることを広げる」設定ではない。** 境界はそれぞれ別の機構が持っており、この設定はそれを緩めない:
+
+- claude の `deny` は**どの permission mode でも適用される**ので、profile の deny セットは `auto` でも同じ強さで効く
+- codex の `--sandbox` は承認ポリシーとは**別のフラグ**である（両方まとめて捨てる `--dangerously-bypass-approvals-and-sandbox` が第 3 のフラグとして存在するのが、独立している証拠）
+- opencode の `--auto` は CLI 自身が「**explicitly denied を除いて**自動承認する」と説明しており、plan エージェント `totsuka-plan` の `edit/bash/task: deny` はそのまま残る
+
+変わるのは、**境界が拒否しないもの**に対して人間に聞くかどうかだけである。
+
+放っておくとどうなるかは実測してある: 何も設定していないマシンの claude は `default`（CLI 表示は `manual`）で起動し、allowlist に無い Bash コマンドの手前で `Do you want to proceed?` を出したまま動かなくなる。codex は `on-request`（モデルが必要と判断したら聞く）、opencode は `doom_loop` / `external_directory` が `ask` である。
+
+`mode_args` / `plan_args` を明示すると**既定を丸ごと置き換える**ので、これらのフラグも消える。無人で回すなら自分で書き足すこと。
 
 ツール解決はディスパッチ時に workflow ピン > repo 既定 > `default_tool` > 組み込み `claude` の順。解決結果は core が完全な argv/env（`ToolLaunchSpec`）へ組み立てて agent プラグインに渡すため、herdr.toml の `agent_command` / `plan_args` は後方互換フォールバック（deprecated）になった。
 

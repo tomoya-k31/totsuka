@@ -230,15 +230,18 @@ pub fn render_settings(dir: &Path, cfg: &RootConfig, wf: &WorkflowConfig) -> Str
             }]
         }
     });
-    // Only profiles carry a deny set. A workflow written in the spelled-out
-    // notation gets none even at `mode = "plan"` — `mode` never claimed to
-    // enforce anything (#378 proved it does not), and inferring a permission
-    // boundary from it would make an existing config quietly stricter on
-    // upgrade. Migrating to a profile is what buys the enforcement.
-    if let Some(profile) = wf.profile
-        && let Some(deny) = permissions::deny_rules(profile)
-    {
-        settings["permissions"] = json!({ "deny": deny });
+    // Only profiles carry a permissions block. A workflow written in the
+    // spelled-out notation gets none even at `mode = "plan"` — `mode` never
+    // claimed to enforce anything (#378 proved it does not), and inferring a
+    // permission *boundary* from it would make an existing config quietly
+    // stricter on upgrade, while inferring a permission *mode* from it would
+    // make one quietly looser. Migrating to a profile is what buys either.
+    if let Some(profile) = wf.profile {
+        let mut permissions = json!({ "defaultMode": permissions::DEFAULT_MODE });
+        if let Some(deny) = permissions::deny_rules(profile) {
+            permissions["deny"] = json!(deny);
+        }
+        settings["permissions"] = permissions;
     }
     serde_json::to_string_pretty(&settings).expect("settings JSON is always serializable")
 }
@@ -993,16 +996,66 @@ agent = "herdr"
     }
 
     #[test]
-    fn an_implement_profile_renders_no_permissions_key() {
+    fn an_implement_profile_renders_the_mode_but_no_deny_key() {
         // Not an empty deny list — the key must be absent, or a future reader
-        // would take "permissions: {deny: []}" as a considered decision to
-        // allow everything rather than as "this profile has no restrictions".
+        // would take "deny: []" as a considered decision to allow everything
+        // rather than as "this profile has no restrictions". The mode is a
+        // separate question and every profile answers it (#420).
         let cfg = workflows_config(
             r#"
 [[workflows]]
 name = "w"
 source = "slack"
 profile = "implement"
+agent = "herdr"
+"#,
+        );
+        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(v["permissions"]["defaultMode"], "auto", "{rendered}");
+        assert!(v["permissions"].get("deny").is_none(), "{rendered}");
+    }
+
+    /// #420: every profile pins the permission mode, read-only or not.
+    ///
+    /// Without it the pane inherits the machine's default, and a machine that
+    /// configures nothing runs in `default`, which prompts before Bash — the
+    /// unattended hang #409 removed at `ExitPlanMode`, returning at `Bash`.
+    #[test]
+    fn every_profile_pins_the_permission_mode() {
+        for profile in ["answer", "triage", "design", "implement"] {
+            let cfg = workflows_config(&format!(
+                r#"
+[[workflows]]
+name = "w"
+source = "slack"
+profile = "{profile}"
+agent = "herdr"
+"#
+            ));
+            let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+            let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+            assert_eq!(
+                v["permissions"]["defaultMode"], "auto",
+                "{profile}: {rendered}"
+            );
+        }
+    }
+
+    /// The mode rides with the profile, not with `mode = "plan"`.
+    ///
+    /// The spelled-out notation gets no permissions block at all. Writing one
+    /// would change an existing config's behaviour on upgrade — and in the
+    /// *looser* direction, since `auto` auto-approves calls a human used to be
+    /// asked about. Migrating to a profile is what opts into it.
+    #[test]
+    fn the_spelled_out_notation_gets_no_permission_mode() {
+        let cfg = workflows_config(
+            r#"
+[[workflows]]
+name = "w"
+source = "slack"
+mode = "plan"
 agent = "herdr"
 "#,
         );

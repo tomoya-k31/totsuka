@@ -243,17 +243,41 @@ impl ToolProfile {
     /// Codex argv (#196 Phase 2): base command, then the `resume <id>`
     /// subcommand when resuming (codex resumes via a subcommand, not a flag),
     /// then the mode flags — implement default `--sandbox workspace-write
-    /// --ask-for-approval on-request`, plan default `--sandbox read-only`
-    /// (codex has no plan permission mode — spike \[V3\]); `codex resume`
-    /// accepts the same flags. `settings_path` is ignored: codex hooks are
-    /// registered globally ([`crate::hooks::codex`]) and gated per pane via
-    /// the `TOTSUKA_*` env this spec carries.
+    /// --ask-for-approval never`, plan default `--sandbox read-only
+    /// --ask-for-approval never` (codex has no plan permission mode — spike
+    /// \[V3\]); `codex resume` accepts the same flags. `settings_path` is
+    /// ignored: codex hooks are registered globally
+    /// ([`crate::hooks::codex`]) and gated per pane via the `TOTSUKA_*` env
+    /// this spec carries.
     ///
     /// OpenCode argv (#196 Phase 3): base command, plan default
-    /// `--agent totsuka-plan` (the full-deny plan agent installed by
-    /// [`crate::hooks::opencode`]), implement default = no extra flags, and
+    /// `--agent totsuka-plan --auto` (the full-deny plan agent installed by
+    /// [`crate::hooks::opencode`]), implement default `--auto`, and
     /// `-s <id>` when resuming. `settings_path` is ignored — completion
     /// detection is the globally installed JS plugin, env-gated like codex.
+    ///
+    /// # Nobody is there to approve (#420)
+    ///
+    /// `--ask-for-approval never` and `--auto` are each tool's spelling of
+    /// what claude gets from `permissions.defaultMode = "auto"` in its
+    /// settings file (see [`crate::hooks::permissions`]): **do not stop to ask
+    /// a human, because the pane has none.** Before this, codex defaulted to
+    /// `on-request` — "the model decides when to ask" — and opencode was left
+    /// on its own defaults, which are permissive for `bash`/`edit` but `ask`
+    /// for `doom_loop` and `external_directory`. Either can park an unattended
+    /// pane on a prompt, which is [#409](https://github.com/tomoya-k31/totsuka/issues/409)'s
+    /// hang wearing a different hat.
+    ///
+    /// **None of this widens what the agent may do.** codex's `--sandbox` is
+    /// an OS sandbox and is a separate flag from the approval policy (which is
+    /// why `--dangerously-bypass-approvals-and-sandbox` exists as a third
+    /// thing that drops both); opencode's `--auto` "auto-approves permission
+    /// requests while still enforcing explicit deny rules", so the plan
+    /// agent's `edit/bash/task: deny` survives it. What changes is only what
+    /// happens to calls the boundary does not already refuse.
+    ///
+    /// An explicit `plan_args` / `mode_args` replaces the whole default,
+    /// including these flags — an operator who wrote an argv meant it.
     pub fn launch_spec(&self, inp: &LaunchInputs<'_>) -> Option<ToolLaunchSpec> {
         let fallback_program = self.kind.as_str().to_string();
         let mut parts = self.command.split_whitespace().map(str::to_string);
@@ -316,7 +340,12 @@ impl ToolProfile {
                 if inp.plan {
                     match &self.plan_args {
                         Some(extra) => args.extend(extra.iter().cloned()),
-                        None => args.extend(["--sandbox".to_string(), "read-only".to_string()]),
+                        None => args.extend([
+                            "--sandbox".to_string(),
+                            "read-only".to_string(),
+                            "--ask-for-approval".to_string(),
+                            "never".to_string(),
+                        ]),
                     }
                 } else {
                     match &self.mode_args {
@@ -325,7 +354,7 @@ impl ToolProfile {
                             "--sandbox".to_string(),
                             "workspace-write".to_string(),
                             "--ask-for-approval".to_string(),
-                            "on-request".to_string(),
+                            "never".to_string(),
                         ]),
                     }
                 }
@@ -335,11 +364,18 @@ impl ToolProfile {
                     match &self.plan_args {
                         Some(extra) => args.extend(extra.iter().cloned()),
                         None => {
-                            args.extend(["--agent".to_string(), "totsuka-plan".to_string()]);
+                            args.extend([
+                                "--agent".to_string(),
+                                "totsuka-plan".to_string(),
+                                "--auto".to_string(),
+                            ]);
                         }
                     }
-                } else if let Some(extra) = &self.mode_args {
-                    args.extend(extra.iter().cloned());
+                } else {
+                    match &self.mode_args {
+                        Some(extra) => args.extend(extra.iter().cloned()),
+                        None => args.push("--auto".to_string()),
+                    }
                 }
                 if let Some(id) = inp.resume_session_id {
                     args.push("-s".to_string());
@@ -611,11 +647,71 @@ mod tests {
         };
         assert_eq!(
             argv(&ToolProfile::builtin("codex").unwrap(), &inp).1,
-            vec!["--sandbox".to_string(), "read-only".to_string()]
+            vec![
+                "--sandbox".to_string(),
+                "read-only".to_string(),
+                "--ask-for-approval".to_string(),
+                "never".to_string(),
+            ]
         );
         assert_eq!(
             argv(&ToolProfile::builtin("opencode").unwrap(), &inp).1,
-            vec!["--agent".to_string(), "totsuka-plan".to_string()]
+            vec![
+                "--agent".to_string(),
+                "totsuka-plan".to_string(),
+                "--auto".to_string(),
+            ]
+        );
+    }
+
+    /// #420: every tool launches unattended, and none of them loses its
+    /// boundary to do so.
+    ///
+    /// The three spellings of "do not stop to ask a human" are
+    /// `permissions.defaultMode = "auto"` (claude, in the settings file),
+    /// `--ask-for-approval never` (codex) and `--auto` (opencode). The
+    /// boundary each keeps is a *separate* mechanism: claude's `deny` applies
+    /// in every permission mode, codex's `--sandbox` is a separate flag, and
+    /// opencode's `--auto` still enforces explicit deny rules — which is what
+    /// leaves `totsuka-plan`'s `edit/bash/task: deny` standing.
+    #[test]
+    fn no_tool_waits_for_an_approval_nobody_will_give() {
+        for plan in [true, false] {
+            let inp = LaunchInputs {
+                plan,
+                profile: Some(Profile::Design),
+                settings_path: Some("/hooks/orchestrator-wf.json"),
+                resume_session_id: None,
+                env: BTreeMap::new(),
+            };
+            let codex = argv(&ToolProfile::builtin("codex").unwrap(), &inp).1;
+            let at = codex
+                .iter()
+                .position(|a| a == "--ask-for-approval")
+                .unwrap_or_else(|| panic!("codex plan={plan}: {codex:?}"));
+            assert_eq!(codex[at + 1], "never", "{codex:?}");
+            // …and the sandbox it rides beside is untouched.
+            assert!(codex.contains(&"--sandbox".to_string()), "{codex:?}");
+
+            let opencode = argv(&ToolProfile::builtin("opencode").unwrap(), &inp).1;
+            assert!(
+                opencode.contains(&"--auto".to_string()),
+                "opencode plan={plan}: {opencode:?}"
+            );
+        }
+        // The plan agent's deny map is what `--auto` is documented not to
+        // override; losing the agent would lose the boundary with it.
+        let plan_inp = LaunchInputs {
+            plan: true,
+            profile: Some(Profile::Design),
+            settings_path: Some("/hooks/orchestrator-wf.json"),
+            resume_session_id: None,
+            env: BTreeMap::new(),
+        };
+        assert!(
+            argv(&ToolProfile::builtin("opencode").unwrap(), &plan_inp)
+                .1
+                .contains(&"totsuka-plan".to_string())
         );
     }
 
@@ -682,14 +778,18 @@ mod tests {
     fn opencode_plan_uses_totsuka_plan_agent_and_resume_is_a_flag() {
         assert_eq!(
             argv(&opencode(), &inputs(false, None, None)),
-            ("opencode".to_string(), vec![]),
-            "implement mode launches the plain TUI"
+            ("opencode".to_string(), vec!["--auto".to_string()]),
+            "implement mode launches the plain TUI, unattended (#420)"
         );
         assert_eq!(
             argv(&opencode(), &inputs(true, None, None)),
             (
                 "opencode".to_string(),
-                vec!["--agent".to_string(), "totsuka-plan".to_string()]
+                vec![
+                    "--agent".to_string(),
+                    "totsuka-plan".to_string(),
+                    "--auto".to_string(),
+                ]
             )
         );
         assert_eq!(
@@ -699,6 +799,7 @@ mod tests {
                 vec![
                     "--agent".to_string(),
                     "totsuka-plan".to_string(),
+                    "--auto".to_string(),
                     "-s".to_string(),
                     "ses_abc".to_string()
                 ]
@@ -752,17 +853,24 @@ mod tests {
                     "--sandbox".to_string(),
                     "workspace-write".to_string(),
                     "--ask-for-approval".to_string(),
-                    "on-request".to_string(),
+                    "never".to_string(),
                 ]
             )
         );
         // No plan permission mode exists ([V3]); plan degrades to the
-        // read-only sandbox.
+        // read-only sandbox. `never` rides along in both modes: nobody is in
+        // the pane to answer an approval prompt (#420). The sandbox is a
+        // separate flag and keeps its boundary.
         assert_eq!(
             argv(&codex(), &inputs(true, None, None)),
             (
                 "codex".to_string(),
-                vec!["--sandbox".to_string(), "read-only".to_string()]
+                vec![
+                    "--sandbox".to_string(),
+                    "read-only".to_string(),
+                    "--ask-for-approval".to_string(),
+                    "never".to_string(),
+                ]
             )
         );
     }
@@ -779,7 +887,7 @@ mod tests {
                     "--sandbox".to_string(),
                     "workspace-write".to_string(),
                     "--ask-for-approval".to_string(),
-                    "on-request".to_string(),
+                    "never".to_string(),
                 ]
             )
         );
