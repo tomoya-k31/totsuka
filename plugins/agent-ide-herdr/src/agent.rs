@@ -1459,6 +1459,7 @@ mod tests {
             job_id: None,
             resume_session_id: None,
             tool_launch: None,
+            repo_name: None,
         }
     }
 

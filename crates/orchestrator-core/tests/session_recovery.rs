@@ -93,6 +93,7 @@ async fn kill9_restart_attach_resumes_running() {
                 extra_context: None,
                 job_id: None,
                 resume_session_id: None,
+                repo_name: Some("clone".into()),
                 tool_launch: None,
             },
         )

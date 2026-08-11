@@ -118,7 +118,18 @@ use semver::{Version, VersionReq};
 /// never reads `tool_launch`, so raising its bound would refuse orchestrators
 /// it works with perfectly well. task_source and notifier stay put for the
 /// same reason.
-pub const PROTOCOL_VERSION: &str = "0.4.0";
+///
+/// 0.4.1: [`TaskDispatchParams::repo_name`](crate::methods::TaskDispatchParams::repo_name)
+/// (#417) — the repository the task was routed to, named as the operator named
+/// it (`[[repositories]].name`), so an IDE plugin can show it. Additive and
+/// optional: absent means the Orchestrator predates this version, and a plugin
+/// must omit the name rather than refuse the dispatch.
+///
+/// **Patch, not minor.** In this 0.x scheme a minor bump strands every
+/// manifest with a `<0.x` upper bound — the whole point of the 0.4.0
+/// paragraph above — and nothing here requires a plugin to change. The
+/// bundled manifests keep `<0.5` untouched.
+pub const PROTOCOL_VERSION: &str = "0.4.1";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -142,7 +153,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 4, 0));
+        assert_eq!(protocol_version(), Version::new(0, 4, 1));
     }
 
     #[test]
@@ -155,7 +166,7 @@ mod tests {
             let parsed = VersionReq::parse(req).unwrap();
             assert!(
                 is_compatible_with_current(&parsed),
-                "{req} must be accepted by protocol 0.4.0"
+                "{req} must be accepted by protocol 0.4.1"
             );
         }
     }
@@ -178,7 +189,7 @@ mod tests {
             let parsed = VersionReq::parse(req).unwrap();
             assert!(
                 !is_compatible_with_current(&parsed),
-                "{req} must be rejected by protocol 0.4.0"
+                "{req} must be rejected by protocol 0.4.1"
             );
         }
     }
@@ -205,6 +216,20 @@ mod tests {
         let orca = VersionReq::parse(">=0.1.0, <0.5").unwrap();
         assert!(is_compatible(&orca, &Version::new(0, 1, 0)));
         assert!(is_compatible_with_current(&orca));
+    }
+
+    #[test]
+    fn an_additive_patch_strands_nobody_a_minor_would_have() {
+        // #417 chose 0.4.1 over 0.5.0 for `repo_name`. The difference is not
+        // stylistic: in this 0.x scheme the bundled manifests are bounded
+        // `<0.5`, so a minor bump would refuse every one of them for a field
+        // no plugin is required to read.
+        let bundled = VersionReq::parse(">=0.2.3, <0.5").unwrap();
+        assert!(is_compatible_with_current(&bundled), "0.4.1 is inside <0.5");
+        assert!(
+            !is_compatible(&bundled, &Version::new(0, 5, 0)),
+            "which is exactly what a minor bump would have broken"
+        );
     }
 
     #[test]

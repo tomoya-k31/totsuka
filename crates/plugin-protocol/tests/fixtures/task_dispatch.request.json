@@ -21,6 +21,7 @@
     "extra_context": { "base": "main" },
     "job_id": "job-7",
     "resume_session_id": "claude-sess-abc",
+    "repo_name": "web-app",
     "tool_launch": {
       "program": "claude",
       "args": [
