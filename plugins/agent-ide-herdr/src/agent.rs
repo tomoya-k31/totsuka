@@ -801,9 +801,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             let Some(label) = label else {
                 continue;
             };
-            // `agent` is present on a pane herdr has started an agent in
-            // (`agent.start` returns it), and absent on the companion shell.
-            let has_agent = pane.get("agent").is_some_and(|a| !a.is_null());
+            let has_agent = looks_like_an_agent_pane(pane);
             let info = SessionInfo {
                 session_id: SessionHandle::new(pane_id, "").encode(),
                 label: Some(label.to_string()),
@@ -1067,6 +1065,29 @@ async fn pane_status<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<Str
 /// `session_id` carries the pane, not the workspace.
 fn workspace_of(pane_id: &str) -> Option<&str> {
     pane_id.split_once(':').map(|(workspace, _)| workspace)
+}
+
+/// Whether a `pane.list` record looks like the pane an agent is running in,
+/// rather than the companion shell beside it (#416).
+///
+/// Judged off `agent_status` and `agent_session`, which the live probe in
+/// [the API reference](../../../docs/references/herdr-socket-api.md) shows
+/// `pane.list` actually carrying. An earlier version of this checked an
+/// `agent` object — that field is on `agent.start`'s **response**, not on a
+/// pane record, so it would have been absent on every real pane and this
+/// would have silently degraded to "whichever pane herdr listed first", which
+/// is the companion shell as often as not. That is the same
+/// fake-stages-a-field-the-real-thing-lacks trap this whole issue is about, so
+/// the test fixtures below mirror the probe rather than the wish.
+///
+/// A workspace whose agent has exited reports `unknown` on both panes; the
+/// caller falls back to the first pane there, which is the orphan case and
+/// wants exactly that.
+fn looks_like_an_agent_pane(pane: &Value) -> bool {
+    // Reported by the agent's own herdr integration hook once it starts.
+    agent_session_id(pane).is_some()
+        // A pane with nothing running in it reports `unknown` (probe, 0.7.5).
+        || pane_str(pane, "agent_status").is_some_and(|status| status != "unknown")
 }
 
 /// `workspace_id` → label, for the workspaces this plugin owns (#416).

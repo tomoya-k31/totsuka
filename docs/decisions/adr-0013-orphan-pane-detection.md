@@ -1,9 +1,9 @@
 ---
 type: Decision
 title: ADR-0013 孤児 pane の検出は session/list（label 所有権フィルタ）+ doctor の対話的解放で行う
-description: doctor の孤児 pane 検出（#211）のため protocol 0.2.2 で列挙 RPC session/list を追加し、所有権はプラグイン側の label 前置（totsuka {task_id}）フィルタで絞る決定。孤児判定は「DB 未知」+「終端タスクかつ worktree 消滅」の 2 基準、解放は session/release を列挙した label を expect_label に詰めて呼ぶ。生存確認方式（DB 既知 id の照会）は DB 未知 pane を原理的に見つけられないため不採用。
+description: "doctor の孤児 pane 検出（#211）のため protocol 0.2.2 で列挙 RPC session/list を追加し、所有権はプラグイン側の label 前置（totsuka {task_id}）フィルタで絞る決定。孤児判定は「DB 未知」+「終端タスクかつ worktree 消滅」の 2 基準、解放は session/release を列挙した label を expect_label に詰めて呼ぶ。生存確認方式（DB 既知 id の照会）は DB 未知 pane を原理的に見つけられないため不採用。2026-08-11 改訂: 見るべき label は pane のものではなく workspace のもので、それまで実機では一度も発火していなかった（#416）。"
 tags: [protocol, pane, doctor, orphan, herdr, pane-control]
-generated: { by: human:tomoya-k31, at: 2026-07-23T14:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-11T21:30:00+09:00 }
 status: stable
 ---
 

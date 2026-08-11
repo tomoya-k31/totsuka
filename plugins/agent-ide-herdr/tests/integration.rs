@@ -2228,18 +2228,25 @@ async fn session_list_finds_panes_through_their_workspace_label() {
     // label-less, which is what a real herdr reports: nothing writes a
     // `PaneInfo.label`. The old fake staged them, so this test passed while
     // the feature returned an empty array against every real herdr.
+    // Every pane record here is shaped like the live probe in
+    // `docs/references/herdr-socket-api.md`: `agent_status` is always present
+    // and reads `unknown` when nothing is running, and there is no `agent`
+    // object. Staging a field herdr does not send is what hid this bug for a
+    // whole release.
     let fake = FakeHerdr {
         list_panes: vec![
             // (c) A totsuka workspace holds two panes — the agent's and the
             // companion shell. Exactly one session must come out of it.
-            json!({ "pane_id": "w1:p1", "cwd": "/wt/7", "workspace_id": "w1" }),
+            json!({ "pane_id": "w1:p1", "cwd": "/wt/7", "workspace_id": "w1",
+                    "agent_status": "unknown" }),
             json!({ "pane_id": "w1:p2", "cwd": "/wt/7", "workspace_id": "w1",
-                    "agent": { "name": "totsuka-7" } }),
+                    "agent_status": "working" }),
             // (b) The operator's own workspace.
-            json!({ "pane_id": "w2:p1", "cwd": "/home", "workspace_id": "w2" }),
-            // (a) The orphan case: the agent has exited, so no pane in the
-            // workspace reports one. It must still be listed.
-            json!({ "pane_id": "w4:p1", "workspace_id": "w4" }),
+            json!({ "pane_id": "w2:p1", "cwd": "/home", "workspace_id": "w2",
+                    "agent_status": "unknown" }),
+            // (a) The orphan case: the agent has exited, so nothing in the
+            // workspace reports a status. It must still be listed.
+            json!({ "pane_id": "w4:p1", "workspace_id": "w4", "agent_status": "unknown" }),
         ],
         list_workspaces: vec![
             json!({ "workspace_id": "w1", "label": "totsuka 7" }),
@@ -2272,6 +2279,34 @@ async fn session_list_finds_panes_through_their_workspace_label() {
     assert_eq!(sessions[1]["session_id"], "w4:p1|");
     assert_eq!(sessions[1]["label"], "totsuka 9");
     assert!(sessions[1]["cwd"].is_null(), "absent cwd stays absent");
+}
+
+#[tokio::test]
+async fn the_agent_pane_is_found_by_its_reported_session_too() {
+    // The other signal `pane.list` actually carries. Relevant while the agent
+    // sits idle: `agent_status` reads `idle`, but a pane with nothing in it
+    // reads `unknown`, so the two are still distinguishable — and if a future
+    // herdr stops reporting a status here, `agent_session` still names the
+    // right pane.
+    let fake = FakeHerdr {
+        list_panes: vec![
+            json!({ "pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "unknown" }),
+            json!({ "pane_id": "w1:p2", "workspace_id": "w1",
+                    "agent_session": { "value": "cc-7" } }),
+        ],
+        list_workspaces: vec![json!({ "workspace_id": "w1", "label": "totsuka 7" })],
+        ..FakeHerdr::default()
+    };
+    let (socket, _requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let sessions = d.call("session/list", json!({})).await["result"]["sessions"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(sessions[0]["session_id"], "w1:p2|");
 }
 
 #[tokio::test]
