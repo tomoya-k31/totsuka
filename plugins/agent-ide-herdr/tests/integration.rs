@@ -109,6 +109,11 @@ struct FakeHerdr {
     /// The workspace inventory `workspace.list` reports (#416). This is where
     /// the `totsuka ` marker actually lives.
     list_workspaces: Vec<Value>,
+    /// The `tokens.totsuka_task` value `pane.get` reports, if any (#417).
+    pane_tokens: Option<&'static str>,
+    /// When set, both `*.report_metadata` calls fail with this herdr error
+    /// code — identity is decoration, so the dispatch must survive (#417).
+    metadata_error: Option<&'static str>,
     /// `pane.read` text for the `detection` source.
     detection: &'static str,
     /// When set, `workspace.create` fails with an `id: ""` decode-style error.
@@ -164,6 +169,8 @@ impl Default for FakeHerdr {
             pane_label: None,
             list_panes: Vec::new(),
             list_workspaces: Vec::new(),
+            pane_tokens: None,
+            metadata_error: None,
             detection: "",
             empty_id_error_on_create: false,
             no_root_pane: false,
@@ -495,6 +502,9 @@ impl FakeHerdr {
                 if let Some(label) = self.pane_label {
                     pane["label"] = json!(label);
                 }
+                if let Some(task) = self.pane_tokens {
+                    pane["tokens"] = json!({ "totsuka_task": task });
+                }
                 if let Some(session) = &self.agent_session {
                     pane["agent_session"] = session.clone();
                 }
@@ -513,6 +523,17 @@ impl FakeHerdr {
                     json!({ "type": "pane_list", "panes": self.list_panes.clone() }),
                 )
                 .await
+            }
+            // Identity reporting (#417). The plugin ignores the result, so
+            // the assertions are made on the request log.
+            "workspace.report_metadata" | "pane.report_metadata"
+                if self.metadata_error.is_some() =>
+            {
+                let code = self.metadata_error.unwrap();
+                reply_error(&mut write_half, &id, code, "herdr refused the report").await
+            }
+            "workspace.report_metadata" | "pane.report_metadata" => {
+                reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
             // The workspace inventory — where the `totsuka ` label lives
             // (#416).
@@ -920,6 +941,214 @@ async fn dispatch_lays_the_workspace_out_with_the_default_layout() {
         .filter(|m| matches!(*m, "agent.start" | "pane.split" | "agent.prompt"))
         .collect();
     assert_eq!(order, vec!["pane.split", "agent.start", "agent.prompt"]);
+}
+
+/// #417: dispatch tells herdr what the workspace is for, on both the
+/// workspace and its root pane, before the agent starts.
+#[tokio::test]
+async fn dispatch_reports_repo_and_task_identity() {
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .dispatch_with(
+            "T1",
+            "サイドバーにリポジトリ名を出す",
+            "plan",
+            json!({ "repo_name": "totsuka" }),
+        )
+        .await;
+    assert!(disp["error"].is_null(), "dispatch failed: {disp}");
+
+    let log = requests.lock().unwrap();
+    let ws = calls(&log, "workspace.report_metadata");
+    let pane = calls(&log, "pane.report_metadata");
+    assert_eq!(ws.len(), 1, "{ws:?}");
+    assert_eq!(pane.len(), 1, "{pane:?}");
+
+    let expected = json!({
+        "totsuka_task": "T1",
+        "task": "サイドバーにリポジトリ名を出す",
+        "mode": "plan",
+        "repo": "totsuka",
+    });
+    for call in [&ws[0], &pane[0]] {
+        assert_eq!(
+            call["params"]["source"], "totsuka",
+            "a constant source: the 32-slot budget is per-lifetime"
+        );
+        assert_eq!(call["params"]["tokens"], expected, "{call}");
+        assert!(
+            call["params"].get("seq").is_none() && call["params"].get("ttl_ms").is_none(),
+            "identity outlives the task; it is not a status: {call}"
+        );
+    }
+    assert_eq!(ws[0]["params"]["workspace_id"], "w1");
+    assert_eq!(
+        pane[0]["params"]["pane_id"], PANE,
+        "the root pane — the one the agent runs in, not the companion shell"
+    );
+
+    // Before `agent.start`, which retries for up to 180s: after it, the rows
+    // would stay anonymous through the window an operator is most likely to be
+    // watching them.
+    let order: Vec<&str> = log
+        .iter()
+        .filter_map(|r| r["method"].as_str())
+        .filter(|m| {
+            matches!(
+                *m,
+                "workspace.create"
+                    | "workspace.report_metadata"
+                    | "pane.report_metadata"
+                    | "agent.start"
+            )
+        })
+        .collect();
+    assert_eq!(
+        order,
+        vec![
+            "workspace.create",
+            "workspace.report_metadata",
+            "pane.report_metadata",
+            "agent.start"
+        ]
+    );
+}
+
+/// #417: an Orchestrator older than protocol 0.4.1 sends no `repo_name`. The
+/// token is omitted rather than invented, and the dispatch is unaffected.
+#[tokio::test]
+async fn identity_omits_a_repo_name_it_was_not_given() {
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    assert!(
+        d.dispatch("T1", "t", "implement").await["error"].is_null(),
+        "dispatch must not depend on repo_name"
+    );
+
+    let log = requests.lock().unwrap();
+    let tokens = &calls(&log, "workspace.report_metadata")[0]["params"]["tokens"];
+    assert!(tokens.get("repo").is_none(), "{tokens}");
+    assert_eq!(tokens["totsuka_task"], "T1");
+    assert_eq!(tokens["mode"], "implement");
+}
+
+/// #417: herdr refusing the report costs the sidebar, not the task.
+#[tokio::test]
+async fn a_failed_identity_report_does_not_fail_the_dispatch() {
+    let (socket, requests) = FakeHerdr {
+        metadata_error: Some("internal_error"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d.dispatch("T1", "t", "implement").await;
+    assert!(disp["error"].is_null(), "dispatch survives: {disp}");
+    assert!(!disp["result"]["session_id"].as_str().unwrap().is_empty());
+
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        1,
+        "the agent still started"
+    );
+    assert!(
+        calls(&log, "workspace.close").is_empty(),
+        "and the workspace is not torn down: {log:?}"
+    );
+}
+
+/// #417: `[identity] enabled = false` restores the pre-#417 wire exactly.
+#[tokio::test]
+async fn identity_can_be_turned_off_completely() {
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init_with(&socket, json!({ "identity": { "enabled": false } }))
+        .await;
+    assert!(d.dispatch("T1", "t", "implement").await["error"].is_null());
+
+    let log = requests.lock().unwrap();
+    assert!(
+        calls(&log, "workspace.report_metadata").is_empty()
+            && calls(&log, "pane.report_metadata").is_empty(),
+        "no reports at all: {log:?}"
+    );
+    assert_eq!(
+        calls(&log, "workspace.create")[0]["params"]["label"],
+        "totsuka T1",
+        "the machine label is unchanged"
+    );
+}
+
+/// #417 D2: a pane whose workspace was renamed past the `totsuka ` prefix is
+/// still ours, and `session/list` synthesises the label `doctor` parses.
+#[tokio::test]
+async fn session_list_finds_panes_by_their_identity_token() {
+    let fake = FakeHerdr {
+        list_panes: vec![
+            json!({ "pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "working" }),
+            json!({ "pane_id": "w2:p1", "workspace_id": "w2", "agent_status": "unknown" }),
+        ],
+        list_workspaces: vec![
+            // Renamed for humans (#417 D4): no `totsuka ` prefix left.
+            json!({ "workspace_id": "w1", "label": "web: Fix the bug",
+                    "tokens": { "totsuka_task": "C1:1.0", "repo": "web" } }),
+            json!({ "workspace_id": "w2", "label": "my scratch space" }),
+        ],
+        ..FakeHerdr::default()
+    };
+    let (socket, _requests) = fake.spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let sessions = d.call("session/list", json!({})).await["result"]["sessions"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(sessions[0]["session_id"], "w1:p1|");
+    assert_eq!(
+        sessions[0]["label"], "totsuka C1:1.0",
+        "synthesised, so doctor's strip_prefix → source_task_id is unchanged"
+    );
+}
+
+/// #417 D2: release verifies identity by token too — the one comparison left
+/// once the workspace label is human-readable.
+#[tokio::test]
+async fn release_verifies_identity_by_token() {
+    for (token, released) in [("T1", true), ("SOMEONE-ELSE", false)] {
+        let (socket, requests) = FakeHerdr {
+            pane_cwd: None,
+            pane_tokens: Some(token),
+            list_workspaces: vec![json!({ "workspace_id": "w1", "label": "web: Fix the bug" })],
+            ..FakeHerdr::default()
+        }
+        .spawn();
+
+        let mut d = Driver::new();
+        d.init(&socket).await;
+        let resp = d
+            .call(
+                "session/release",
+                json!({ "session_id": "w1:p1|sess", "expect_label": "totsuka T1" }),
+            )
+            .await;
+        assert_eq!(resp["result"]["released"], released, "token {token}");
+        let log = requests.lock().unwrap();
+        assert_eq!(
+            !calls(&log, "pane.close").is_empty(),
+            released,
+            "token {token}: closing must follow the verdict"
+        );
+    }
 }
 
 #[tokio::test]

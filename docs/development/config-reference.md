@@ -538,6 +538,7 @@ kind = "task_source"
 | `session` | string? | なし | 名前付きセッション（`~/.config/herdr/sessions/{name}/herdr.sock` に解決）。`socket_path` 未設定時に使う |
 | `[layout]` | テーブル | 下記の既定 | dispatch した pane の配置（#356、下記） |
 | `[kind_map]` | テーブル | `{}` | 実行ファイル名 → herdr の `kind` の写像（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-1、下記） |
+| `[identity]` | テーブル | `{ enabled = true }` | dispatch が「どのリポジトリの・どのタスクか」を herdr へ報告するか（#417、[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md)、下記） |
 | `request_timeout_secs` | int | 30 | herdr socket 呼び出し 1 本あたりのタイムアウト |
 
 ソケットの解決順: `socket_path` > `session` 名 > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定 `~/.config/herdr/herdr.sock`。
@@ -545,6 +546,33 @@ kind = "task_source"
 **herdr は 0.7.5（protocol 17）以降が必要。** それより古い herdr に対しては `initialize` が
 `CONFIG_INVALID` で初期化を拒否し、`totsuka config validate` / `doctor` がバージョンを名指しで報告する
 （[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-6）。
+
+## `[identity]` — サイドバーに出す identity の報告（#417）
+
+```toml
+[identity]
+enabled = true   # 既定
+```
+
+dispatch が `workspace.create` の直後（`agent.start` の**前**）に、workspace と root pane の**両方**へ
+metadata token を報告する。`$name` の解決先が spaces 行では workspace、agents 行では pane なので、
+片方だけでは片方のパネルしか直らない。
+
+| token | 値 |
+|---|---|
+| `totsuka_task` | `Task.id`（**表示しない**機械識別子。所有判定の根拠になる） |
+| `repo` | `[[repositories]].name`（プロトコル 0.4.1 未満のオーケストレータからは届かないので省かれる） |
+| `task` | タスクのタイトル（空白を畳んで 79 文字 + `…`） |
+| `mode` | `plan` / `implement` |
+
+**サイドバーの行構成は totsuka が書き換えない。** `~/.config/herdr/config.toml` は herdr と運用者のもので、
+推奨スニペットは運用ドキュメント側にある（[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D6）。
+スニペットを入れていない環境では、報告しても表示は変わらない。
+
+**報告の失敗は dispatch を落とさない**（`tracing::warn!` のみ）。identity は装飾で、
+herdr が一瞬詰まっただけで走れるタスクを失うほうが高くつく。
+
+`enabled = false` で報告が止まり、**#417 以前と完全に同じ挙動に戻る**。
 
 ## `[kind_map]`（実行ファイル名 → herdr の `kind`）
 

@@ -21,6 +21,10 @@ pub struct HerdrConfig {
     /// How the dispatched task's panes are arranged (#356).
     #[serde(default)]
     pub layout: LayoutConfig,
+    /// Whether dispatch tells herdr which repository and task a workspace is
+    /// for (#417).
+    #[serde(default)]
+    pub identity: IdentityConfig,
     /// Overrides for the program-basename → herdr `kind` mapping
     /// ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-1).
     ///
@@ -82,6 +86,36 @@ impl Default for LayoutConfig {
             ratio: default_layout_ratio(),
         }
     }
+}
+
+/// Whether dispatch reports what a workspace is for (#417,
+/// [ADR-0039](../../../docs/decisions/adr-0039-herdr-sidebar-identity.md)).
+///
+/// **One flag, both halves.** It gates the metadata report *and* the
+/// human-readable `workspace.rename` together, on purpose: they are two
+/// statements of the same fact, and a state where the label reads
+/// `web: Fix the bug` while nothing carries `totsuka_task` is one where the
+/// sidebar looks right and `doctor`'s ownership check has lost its newest
+/// evidence.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// `false` restores the pre-#417 behaviour exactly: the machine label
+    /// `totsuka {task.id}` and no tokens.
+    #[serde(default = "default_identity_enabled")]
+    pub enabled: bool,
+}
+
+impl Default for IdentityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_identity_enabled(),
+        }
+    }
+}
+
+fn default_identity_enabled() -> bool {
+    true
 }
 
 /// herdr's `SplitDirection`, mirrored verbatim — it has exactly these two

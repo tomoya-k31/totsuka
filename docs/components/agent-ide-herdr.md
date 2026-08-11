@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-11T21:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -37,10 +37,20 @@ herdr socket は **JSON-RPC ではなく NDJSON**（1 行 1 メッセージ・`i
 
 ```text
 workspace.create {cwd: worktree, env: hook_env}   → root_pane
+workspace.report_metadata {workspace_id, source: "totsuka", tokens}   ┐ #417
+pane.report_metadata {pane_id: root_pane, source: "totsuka", tokens}  ┘ 失敗しても続行
 pane.split {target_pane_id: root_pane, ...}       → 併設シェル（[layout].shell = true のとき）
 agent.start {name, kind, pane_id: root_pane, args, timeout_ms}
 agent.prompt {target: root_pane, text, wait}
 ```
+
+**identity の報告は `agent.start` の前**（#417、[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D1）。
+`agent.start` は最大 180 秒のリトライループなので、後に回すと**運用者が一番サイドバーを見ている時間帯だけ
+行が無名になる**。ソケット 1 往復 ≒ 25ms なので `agent.start` に比べれば誤差。workspace と root pane の
+**両方**に送るのは、`$name` の解決先が spaces 行では workspace、agents 行では pane だから。
+`source` は定数 `"totsuka"` — 異なる `source` は 1 コンテナにつき生涯 32 個しか受け付けず、
+clear でも expiry でもスロットが戻らないため、タスク毎の `source` は使えない。
+`[identity] enabled = false` で報告ごと止まる。
 
 **エージェントは workspace の root pane で動く。** protocol 17 の `agent.start` は pane を作らず、
 呼び出し側が用意した pane に起動する。0.7.4 までは `agent.start` が新しい pane を作っていたため、
@@ -213,11 +223,19 @@ pane.split {target_pane_id: <root pane = これからエージェントが入る
 `session/release`（O→P、`pane_control` capability。[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）は worktree 掃除が「削除する」と判定した**完了済み**セッションの pane + workspace を閉じる。`cancel` との差は 2 点:
 
 1. **ctrl+c を送らない** — 完了済みで中断すべきものが無い。close の対（`pane.close` → workspace 接頭辞の `workspace.close`）は `cancel` と共通の `close_pane_and_workspace` に抽出。
-2. **同一性を検証してから閉じる** — `cancel` の盲目クローズは dispatch 直後に走るが、release は保持ポリシー次第で完了から日単位で後に走り、位置ベースの pane id（`w34:p2`）が別の pane に再発番されている窓がある。`pane.get` で live pane を取得し、`expect_cwd`（= worktree パス）を `PaneInfo.cwd` と、`expect_label` を **`WorkspaceInfo.label`**（`workspace.list` から `PaneInfo.workspace_id` で引く）および `PaneInfo.label` と突き合わせる。**この workspace label の比較が #416 で入るまで、label 側は比較可能になったことが一度も無かった**（totsuka は pane に label を書かないため常に degrade-open へ落ちていた）。workspace label の取得は所有フィルタを**かけない** — `totsuka ` 前置で絞ると「他人の workspace である」が「判定不能」に化け、degrade-open で他人の pane を閉じてしまう。**比較可能なペアが1つでも不一致 → 閉じずに `released: false` + warn。全ペア比較不能（nullable フィールドが全部欠落）→ 閉じる（degrade-open）**。pane が既に無い（cancel 済みタスク等）は `released: false` で、**workspace も閉じない**（同一性未検証のまま閉じない）。
+2. **同一性を検証してから閉じる** — `cancel` の盲目クローズは dispatch 直後に走るが、release は保持ポリシー次第で完了から日単位で後に走り、位置ベースの pane id（`w34:p2`）が別の pane に再発番されている窓がある。`pane.get` で live pane を取得し、`expect_cwd`（= worktree パス）を `PaneInfo.cwd` と突き合わせる。identity については **token があれば token だけを見る**（#417）: `expect_label` から `totsuka ` を剥がした task id と `tokens.totsuka_task` を比較し、**label は一切参照しない**。これは好みではなく必要で、[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D4 の rename 後は workspace label が `{repo}: {title}` になり、同じタスクを指しているのに `expect_label` と一致しなくなるためである（比較すると rename 済み workspace の release が全部拒否される）。token が無い場合だけ、`expect_label` を **`WorkspaceInfo.label`**（`workspace.list` から `PaneInfo.workspace_id` で引く）および `PaneInfo.label` と突き合わせる — rename は**両方の報告が成功したときだけ**行うので、token が無い container は rename もされておらず `totsuka {task}` の label を持っている。**この workspace label の比較が #416 で入るまで、label 側は比較可能になったことが一度も無かった**（totsuka は pane に label を書かないため常に degrade-open へ落ちていた）。workspace label の取得は所有フィルタを**かけない** — `totsuka ` 前置で絞ると「他人の workspace である」が「判定不能」に化け、degrade-open で他人の pane を閉じてしまう。**比較可能なペアが1つでも不一致 → 閉じずに `released: false` + warn。全ペア比較不能（nullable フィールドが全部欠落）→ 閉じる（degrade-open）**。pane が既に無い（cancel 済みタスク等）は `released: false` で、**workspace も閉じない**（同一性未検証のまま閉じない）。
 
 # session/list（#211, 0.2.2）
 
 `session/list`（O→P、`pane_control` capability。[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）は `doctor` の孤児 pane 検出のための**自分の所有物の列挙**: `pane.list` と `workspace.list` を呼び、`PaneInfo.workspace_id` で結合して、**その workspace の `label` が `totsuka ` で始まる pane**を返す。この label フィルタが所有権境界 — herdr はユーザーが手で開いた pane も持ち、それを列挙・解放候補にしてはならない。label は `dispatch` が `workspace.create` に設定する `totsuka {task.id}`（`task.id` はプロトコル `Task.id` = **source task id**。Slack のスレッドキー等の文字列で、orchestrator DB の行 id ではない）で、doctor はこの source task id を `source_task_id` と文字列照合して DB と突き合わせる。返す `session_id` は pane_id + **空 agent_session** の縮退形（`pane.list` は中の Claude セッションを知らないが、`SessionHandle::decode` は bare 形式を受け付け `session/release` は pane さえ分かれば良い）。`SessionInfo.label` にはその **workspace の label** を入れるので、doctor 側の `strip_prefix` → `source_task_id` 照合は無改修で通る。
+
+**token を先に見る（#417）。** pane が自分のものである条件は 4 つのいずれかで、直接的な順に:
+`PaneInfo.tokens.totsuka_task` がある → その workspace の同トークンがある → その workspace の `label` が
+`totsuka ` で始まる → pane 自身の `label` が始まる。token は `report_identity` が dispatch 時に付けた
+機械識別子で、label が人間可読になっても所有の根拠が消えないようにするためのもの。
+`SessionInfo.label` は token があれば `totsuka {task}` を**合成**して返すので、`doctor` の
+`strip_prefix` → `source_task_id` 照合は無改修で通る。label 経路は「報告が失敗した dispatch」と
+「#417 以前が残した pane」の回収として残す。
 
 **pane の label は見ない（#416）。** 0.2.2 から 2026-08-11 まで、この列挙は `PaneInfo.label` を見ており、**実機 herdr に対して常に空配列を返していた** — herdr は workspace の label と pane の label を別フィールドとして持ち、前者は `workspace.create { label }` / `workspace.rename`、後者は **`pane.rename` だけ**が書く。totsuka は `pane.rename` を呼ばないので、pane の label は一度も設定されていなかった。結果として ADR-0013 の孤児 pane 検出は実機で一度も発火していない。`pane.rename` を呼ぶ案は、`show_agent_labels_on_pane_borders = true` の環境で不透明な ID が pane 枠に出るため採らなかった。pane 自身の label 判定は無害なので残してある（将来 herdr が label を伝播しても正しい）。
 
