@@ -3,13 +3,19 @@ type: Decision
 title: ADR-0039 herdr サイドバーの identity は metadata token で運び、リポジトリ名はプロトコルの追加フィールドで渡す
 description: "herdr の左サイドバーに「どのリポジトリの・どのタスクを・どのモードで」を出すため、identity を label ではなく workspace / pane の metadata token として報告し、リポジトリ名は TaskDispatchParams.repo_name（プロトコル 0.4.1、純追加）で渡す決定。worktree.open によるグルーピング・pane.rename・display_agent の各案を採らない理由と、サイドバー設定を totsuka が書き換えない理由。"
 tags: [herdr, protocol, ui, identity, 417]
-status: draft
+status: stable
 generated: { by: claude-code/opus-5, at: 2026-08-11T00:00:00Z }
 sources:
   - id: herdr-probe-2026-08-09
     resource: herdr 0.7.5 / protocol 17 の実機プローブ（`herdr api schema --json` と workspace 作成による実測）
     title: herdr 実機プローブ（2026-08-09）
 ---
+
+# Status
+
+Accepted — 2026-08-11（[#417](https://github.com/tomoya-k31/totsuka/issues/417)）。
+
+実装は 3 本に分けて入る: **PR-1** = プロトコル 0.4.1 の `repo_name` ＋ core（挙動変化なし。この ADR はここで入る）、**PR-2** = プラグインの identity 報告（見た目は変わらない）、**PR-3** = `workspace.rename` と docs 一式。**実機検収は PR-3 の後**で、それまで `verified` は付けない。
 
 # Context
 
