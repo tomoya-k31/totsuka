@@ -1023,7 +1023,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             );
         }
         self.drop_task_sessions(record.id);
-        self.fail_publish(&record, reason).await
+        self.fail_publish(&record, "read_only_violation", reason)
+            .await
     }
 
     /// Record which branch a task's worktree is on, if it is on one.
@@ -2264,7 +2265,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             record.id,
             record.worktree_path.as_deref().unwrap_or("<worktree>"),
         ) {
-            return self.fail_publish(record, reason).await;
+            return self
+                .fail_publish(record, "read_only_violation", reason)
+                .await;
         }
         // A finished task whose workflow vanished from config still holds the
         // agent's commits; treat it as a recoverable publish failure rather
@@ -2274,6 +2277,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             return self
                 .fail_publish(
                     record,
+                    "publish",
                     format!(
                         "workflow `{}` is no longer configured → restore it (worktree and commits are kept) or `totsuka task cancel {}`",
                         record.workflow, record.id
@@ -2304,26 +2308,34 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 tracing::info!(task_id = record.id, "task done");
                 Ok(())
             }
-            Err(reason) => self.fail_publish(record, reason).await,
+            Err(reason) => self.fail_publish(record, "publish", reason).await,
         }
     }
 
-    /// Fail a task at the publishing stage, KEEPING its worktree, commits and
-    /// session so `task retry` can resume (issue #65). The accumulated agent
-    /// output is dropped so a retry re-captures fresh output (no duplication in
-    /// the publish artifact). The source status is intentionally left unchanged: a
-    /// recoverable publish failure must not flap the source task to
-    /// `on_failure` and back on the next successful retry.
+    /// Fail a task recoverably, KEEPING its worktree, commits and session so
+    /// `task retry` can resume (issue #65). The accumulated agent output is
+    /// dropped so a retry re-captures fresh output (no duplication in the
+    /// publish artifact). The source status is intentionally left unchanged: a
+    /// recoverable failure must not flap the source task to `on_failure` and
+    /// back on the next successful retry.
+    ///
+    /// `kind` names *which* check refused, and it is not decoration: it is the
+    /// audit `detail.kind` **and** the log line. Named `fail_publish` because
+    /// publishing was the only caller at first; since
+    /// [`enforce_read_only`](Self::enforce_read_only) it is not, and a log line
+    /// hardcoded to "output policy failed" was reporting a mid-run violation as
+    /// a publish failure — the output policy had not run at all (#410).
     async fn fail_publish(
         &mut self,
         record: &TaskRecord,
+        kind: &str,
         reason: String,
     ) -> Result<(), EngineError> {
-        tracing::error!(task_id = record.id, "output policy failed: {reason}");
+        tracing::error!(task_id = record.id, kind, "task failed: {reason}");
         self.db.apply_event(
             record.id,
             TaskEvent::Fail,
-            Some(serde_json::json!({ "kind": "publish", "reason": reason.clone() })),
+            Some(serde_json::json!({ "kind": kind, "reason": reason.clone() })),
         )?;
         self.release_slot(record.id);
         self.agent_output.remove(&record.id);
@@ -2612,7 +2624,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             Ok(result) => {
                 self.released_panes.insert(record.id);
                 if result.released {
-                    tracing::info!(task_id = record.id, "pane released before worktree removal");
+                    tracing::info!(task_id = record.id, "pane released");
                 } else {
                     tracing::debug!(
                         task_id = record.id,

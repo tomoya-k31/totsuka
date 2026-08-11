@@ -1779,6 +1779,30 @@ async fn a_read_only_task_that_branches_mid_run_is_failed_and_its_pane_closed() 
     assert_eq!(releases.len(), 1, "the agent is stopped once: {releases:?}");
     assert_eq!(releases[0]["params"]["expect_cwd"], worktree);
 
+    // The audit row says which check refused. Not `publish`: the output policy
+    // never ran, and calling it a publish failure sent operators looking at the
+    // wrong stage during the live #410 acceptance run.
+    let kinds: Vec<String> = db
+        .list_events(task.id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| {
+            e.detail
+                .as_ref()
+                .and_then(|d| d.get("kind"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+    assert!(
+        kinds.iter().any(|k| k == "read_only_violation"),
+        "expected a read_only_violation event: {kinds:?}"
+    );
+    assert!(
+        !kinds.iter().any(|k| k == "publish"),
+        "the output policy never ran: {kinds:?}"
+    );
+
     // The operator is told which branch, and that a push may already be gone.
     let notifications = read_log(&notify_log);
     let failed: Vec<&serde_json::Value> = notifications
