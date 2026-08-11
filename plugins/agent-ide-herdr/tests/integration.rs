@@ -2408,6 +2408,39 @@ async fn release_verifies_the_label_against_the_workspace() {
 }
 
 #[tokio::test]
+async fn release_refuses_a_workspace_that_is_not_ours_at_all() {
+    // The dangerous shape: a reused pane id now points into the operator's own
+    // workspace, whose label carries no `totsuka ` prefix. If the lookup
+    // filtered to our own labels, this would read as "cannot say", degrade
+    // open, and close their pane.
+    let (socket, requests) = FakeHerdr {
+        pane_cwd: None,
+        pane_label: None,
+        list_workspaces: vec![json!({ "workspace_id": "w1", "label": "my scratch space" })],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess", "expect_label": "totsuka T1" }),
+        )
+        .await;
+    assert_eq!(resp["result"]["released"], false);
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r["method"] == "pane.close" || r["method"] == "workspace.close"),
+        "someone else's pane must not be touched"
+    );
+}
+
+#[tokio::test]
 async fn release_proceeds_when_the_workspace_label_matches() {
     let (socket, requests) = FakeHerdr {
         pane_cwd: Some("/wt/agent-1"),

@@ -820,12 +820,20 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         })
     }
 
-    /// This plugin's label for one workspace, or `None` when the id is
+    /// The label of one workspace, whatever it says, or `None` when the id is
     /// unknown, the workspace is gone, or the lookup failed (#416).
     ///
-    /// `None` means "cannot say", never "does not match": the caller treats an
-    /// unavailable identity as one fewer comparable pair and degrades open, so
-    /// a transient herdr error must not read as a mismatch and leak the pane.
+    /// **Deliberately unfiltered**, unlike [`owned_workspace_labels`]. This
+    /// feeds `release`'s identity check, where the interesting answer is a
+    /// label that is *not* ours: filtering to `totsuka `-prefixed labels would
+    /// turn "this workspace belongs to someone else" into "cannot say", and
+    /// the caller degrades open on "cannot say" — closing the operator's pane
+    /// on a reused pane id, which is the exact accident that check exists to
+    /// prevent.
+    ///
+    /// `None` therefore means "cannot say", never "does not match": a
+    /// transient herdr error must not read as a mismatch and leak the pane
+    /// either.
     async fn workspace_label(&self, workspace_id: Option<&str>) -> Option<String> {
         let workspace_id = workspace_id?;
         let response = match self.client.call("workspace.list", json!({})).await {
@@ -835,9 +843,14 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 return None;
             }
         };
-        owned_workspace_labels(&response)
-            .get(workspace_id)
-            .map(|label| (*label).to_string())
+        response
+            .get("workspaces")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|ws| pane_str(ws, "workspace_id") == Some(workspace_id))
+            .and_then(|ws| pane_str(ws, "label"))
+            .map(str::to_string)
     }
 
     /// Close a session's pane and the task-private workspace `dispatch`
