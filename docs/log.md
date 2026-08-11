@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-08-12
+
+* **Update**: #420 と [ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md) D4 を実機で検収し、両 ADR に `verified` を足した。**#420**: `github-design` タスクが人間の介入ゼロで約 2.5 分で完走し、`permissionMode` は `auto` のみ・承認プロンプトも拒否も 0 件だった。さらに **totsuka の settings の `defaultMode` だけを `dontAsk` に差し替える対照実験**を回し、ユーザー設定が `auto` のままでもセッションが `dontAsk` になり allowlist 外の `awk` がプロンプトなしで拒否されることを確認した — **「グローバル設定ではなく `--settings` が効いている」の直接証拠**で、[ADR-0041](/decisions/adr-0041-unattended-permission-mode.md) の土台がこれで実測に乗った。**D4**: 走行中の worktree にブランチを注入すると **23 秒で `dispatched → failed`**（`publishing` を経ない）、pane が閉じ、worktree は残った。D3 の `publishing → failed` と**別の段階で発火することが分離して確認できた**
+* **Update**: **codex / opencode の実機タスクは回さないと決めた**（運用判断）。`--ask-for-approval never` の受理と `--auto` の意味は CLI の一次情報で確認済みだが、**それでタスクが完走することは測っていない**。codex の `never` がループしないか、opencode の `doom_loop` / `external_directory` が `--auto` でどう扱われるかも未検証のまま [ADR-0041](/decisions/adr-0041-unattended-permission-mode.md)
+
 ## 2026-08-11
 
 * **Creation**: [ADR-0037](/decisions/adr-0037-task-notes-in-the-event-log.md) — タスクが動かない理由を `tasks` の列ではなく `events` の**非遷移行**（`from_state == to_state`、`detail.note` が印）として記録する決定（#407）。採用理由は「自分で解消する」ことに尽き、全遷移が event を書く（F-72）以上、タスクが動いた瞬間に「最新の event」でなくなって表示から消える。列にすると `Queued` から出る全経路で消して回る必要があり、**消し忘れた 1 経路が永久に嘘をつく `totsuka status` になる**

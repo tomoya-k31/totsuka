@@ -4,9 +4,11 @@ title: ADR-0036 triage / design はシェルを検査せず、リポジトリを
 description: "gh issue comment に複数行 Markdown を渡すにはシェル構文が要るため triage / design から Bash を取り上げられない。コマンド文字列を検査するフックは、引用符の内外を見分けるパーサが要るうえ取りこぼしに強い名前が付くので不採用。代わりに全 read-only profile から plan ゲートを外して無人ハングを消し、read-only profile のタスクがブランチ上にあったら fail_publish で失敗させる。同じ検査を worktree sweep からも回し、走行中に見つけたら pane を閉じる。止まるのは成功報告と on_success で、triage / design の成果物はエージェントが直接書く（#398）ため既に公開済みで取り消せない。防止ではなく検出で、本当の境界はサンドボックス調査（#418）に送る。"
 resource: https://github.com/tomoya-k31/totsuka/issues/409
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-11T20:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-12T00:10:00+09:00 }
 status: stable
-verified: [{ by: human:tomoya-k31, at: 2026-08-11T04:05:00+09:00 }]
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-11T04:05:00+09:00 }
+  - { by: claude-code/opus-5, at: 2026-08-11T23:10:00+09:00 }
 owner: tomoya-k31
 sources:
   - id: issue-409
@@ -143,7 +145,25 @@ D3 は `finalize_success`、つまり**タスクが publish に到達したと�
 # 検証
 
 - `cargo test --workspace --all-features` — 全 read-only profile が plan フラグを落とすこと（`implement` と profile 無しは落とさないこと）、`read_only_side_effect` が profile で門を作りブランチ・profile 名・「push は取り返せない」旨・**救済手順（detach / cancel）**をメッセージに含むこと、**detached では発火しないこと**（救済が実際に効くことの固定）、`implement` / profile 無しでも発火しないこと
-- **D4 は結合テストのみで、実機未検収。** `a_read_only_task_that_branches_mid_run_is_failed_and_its_pane_closed`（`run_loop.rs`）が、終端状態を流さないモックエージェント（＝走行中）の worktree にブランチを注入し、タスクが `failed` になること・`session/release` が worktree パスの身元ガード付きで 1 回だけ飛ぶこと・worktree が残ること・失敗理由にブランチ名と profile 名が入ることを固定する。`enforce_read_only` の呼び出しを外すとこのテストは 60 秒待って落ちる（確認済み）。**下の実機検収の記述は D3 のものであり、D4 は含まない。**
+- **D4 も実機検収済み（2026-08-11、task 52）。** 走行中の `github-design` タスクの worktree が現れた瞬間にブランチを注入したところ:
+
+  | 観測 | 結果 |
+  |---|---|
+  | 状態遷移 | `dispatched → failed` — **`publishing` を経ていない**（D3 は `publishing → failed` だった） |
+  | 注入から失敗まで | **23 秒** |
+  | pane | 閉じた（`w6V:p1` が消滅、ログに `pane released`） |
+  | worktree | 残った（`HEAD = feat/d4-injected`） |
+  | 失敗理由 | ブランチ名・profile 名・「push は取り返せない」・救済手順すべて含む |
+
+  **D3 と D4 は同じ違反に対して別の段階で発火する**ことが、この 2 回の実機検収で分離して確認できた。
+  結合テスト `a_read_only_task_that_branches_mid_run_is_failed_and_its_pane_closed`（`run_loop.rs`）も
+  同じ性質を固定しており、`enforce_read_only` の呼び出しを外すと 60 秒待って落ちる（確認済み）。
+- **この検収で表示バグを 1 つ見つけて直した。** `fail_publish` が publish 専用だった頃のログ文言
+  （`output policy failed:`）と `detail.kind = "publish"` をハードコードしていたため、**出力ポリシーが
+  1 度も走っていない失敗を publish の失敗として報告していた**。`kind` を引数にし、走行中の検知は
+  `read_only_violation` と名乗る。`release_pane` の `pane released before worktree removal` も、
+  worktree を保持したまま閉じる経路が増えたので `pane released` にした。**どちらも新しい呼び出し元を
+  足したことで既存の文言が嘘になった形**である。
 - **実機検収済み（2026-08-11）。** `design` タスク（`github-design`）が**人間の承認を待たず約 2 分で完走**した（従来は 858 秒待ち）。セッション記録の `permissionMode` は `auto` のみで **`ExitPlanMode` の呼び出しは 0 回**、拒否も 0 件。成果物を本人名義で issue へ投稿し、`on_success` で `Design Review` へ遷移した
 - **違反時の失敗も実機で発火させた。** 走行中の `design` タスクの worktree にブランチを注入したところ、状態遷移は `dispatched → running → publishing → failed` となり、`finalize_success` に入ってから `fail_publish` で落ちた。worktree とコミットは保持され、失敗理由にブランチ名・profile 名・「push は取り返せない」・救済手順（detach / cancel）がすべて入っていた。**負の対照**も取れている: 同時期の `implement` タスクはブランチ `feat/logtool-stddev` を持ったまま `done` で完走し、PR まで作った（免除が効いている）
 - **ただしこの検収は「承認プロンプトを 1 つも出さずに完走」を証明していない。** pane は `permissionMode: auto` で動いており、検証機のグローバル設定にある広い `allow` が効いていた。[#420](https://github.com/tomoya-k31/totsuka/issues/420) は open のまま
