@@ -83,14 +83,20 @@ dispatch した pane にしか報告しないため、**手で起動した agent
 
 シェル側から報告すれば埋まる。zsh なら:
 
-```bash
+```zsh
 # totsuka が dispatch した pane では走らせないこと（下記）
 if [[ -n $HERDR_ENV && -n $HERDR_PANE_ID && -z $TOTSUKA_JOB_ID ]]; then
   autoload -U add-zsh-hook
   _herdr_report_repo() {
     local root
     root=$(command git rev-parse --show-toplevel 2>/dev/null) || root=''
-    [[ $root == $_herdr_reported_repo_root ]] && return   # 同じ repo なら herdr を叩かない
+    # 同じ repo なら herdr を叩かない。ただし「まだ一度も報告していない」と
+    # 「repo の外に居る」はどちらも空文字なので ${+set} で区別する — 同一視すると、
+    # pane に前のシェルが残したトークンがある状態で非 repo から起動したときに
+    # 下の clear が走らず、古い repo 名が残る。
+    if [[ ${_herdr_reported_repo_root+set} == set && $root == $_herdr_reported_repo_root ]]; then
+      return
+    fi
     _herdr_reported_repo_root=$root
     if [[ -n $root ]]; then
       command herdr pane report-metadata "$HERDR_PANE_ID" \
