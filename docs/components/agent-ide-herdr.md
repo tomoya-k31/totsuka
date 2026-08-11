@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-11T15:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-12T00:45:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -253,7 +253,9 @@ pane.split {target_pane_id: <root pane = これからエージェントが入る
 `strip_prefix` → `source_task_id` 照合は無改修で通る。label 経路は「報告が失敗した dispatch」と
 「#417 以前が残した pane」の回収として残す。
 
-**pane の label は見ない（#416）。** 0.2.2 から 2026-08-11 まで、この列挙は `PaneInfo.label` を見ており、**実機 herdr に対して常に空配列を返していた** — herdr は workspace の label と pane の label を別フィールドとして持ち、前者は `workspace.create { label }` / `workspace.rename`、後者は **`pane.rename` だけ**が書く。totsuka は `pane.rename` を呼ばないので、pane の label は一度も設定されていなかった。結果として ADR-0013 の孤児 pane 検出は実機で一度も発火していない。`pane.rename` を呼ぶ案は、`show_agent_labels_on_pane_borders = true` の環境で不透明な ID が pane 枠に出るため採らなかった。pane 自身の label 判定は無害なので残してある（将来 herdr が label を伝播しても正しい）。
+**pane の label は 2026-08-12 から totsuka 自身が書く（#416 → #432）。** 0.2.2 から 2026-08-11 まで、この列挙は `PaneInfo.label` を見ており、**実機 herdr に対して常に空配列を返していた** — herdr は workspace の label と pane の label を別フィールドとして持ち、前者は `workspace.create { label }` / `workspace.rename`、後者は **`pane.rename` だけ**が書く。totsuka は `pane.rename` を呼んでいなかったので、pane の label は一度も設定されていなかった。結果として ADR-0013 の孤児 pane 検出は実機で一度も発火していない。#416 ではこれを workspace label 側で直し、**pane label の判定は「無害なので残す」死んだ経路のままにした**。
+
+**#432 でその経路が load-bearing になった。** `herdr server live-handoff` が metadata token を全部落とす一方 label は保つと実測で分かり、#417 の rename と組み合わさると **再起動をまたいだ rename 済み workspace の所有マーカーがゼロになる**（`session/list` が空 → `doctor` が盲目）。そこで dispatch が `pane.rename { label: "totsuka {task.id}" }` を呼ぶようにした（[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D7）。`show_agent_labels_on_pane_borders = true` の環境で不透明な ID が pane 枠に出る問題は残るが、退けたのは「pane label を**表示**に使う」案であって「pane label を使う」ことではない。**読む側のコードは 1 行も変わっていない** — 死んでいた経路が生きただけである。
 
 **1 workspace = 1 セッション。** totsuka の workspace には agent pane と伴走シェルの 2 枚があり、workspace 単位の判定では両方が当たる。**`agent` を持つか、`agent_session` を報告しているか、`agent_status` が `unknown` 以外の** pane を優先し、1 枚も無いとき（= エージェントが終了済み。まさに孤児のケース）だけ先頭の pane を代表にする。判定材料が 3 つあるのは、**dispatch 済みの workspace を実測すると 3 つとも載っている**ためである（0.7.5: agent pane が `agent: "claude"` / `agent_status: "idle"`、伴走シェルが `agent: null` / `agent_status: "unknown"`、label は両方 null）。**「`agent` は `pane.list` に載らない」と一度書いたが、これは誤り** — エージェントを起動していない probe workspace から推論したもので、dispatch 済みのものを測っていなかった。どれか 1 つでも判定はできるが、3 つ読むことで将来 herdr がどれかを落としても「劣化」で済み、「herdr が最初に返した pane」＝伴走シェルへの黙った退化にはならない。これをしないと doctor が 1 タスクにつき 2 回聞き、2 回目の release が `released: false` を返す。
 

@@ -117,6 +117,11 @@ struct FakeHerdr {
     /// When set, `workspace.rename` fails with this herdr error code. The
     /// machine label survives, which is still an ownership marker (#417 D4).
     rename_error: Option<&'static str>,
+    /// When set, `pane.rename` fails with this herdr error code. The workspace
+    /// must then keep its machine label — the pane label is the marker that
+    /// outlives a herdr restart, so renaming without it would leave nothing
+    /// after a handoff (#432).
+    pane_rename_error: Option<&'static str>,
     /// `pane.read` text for the `detection` source.
     detection: &'static str,
     /// When set, `workspace.create` fails with an `id: ""` decode-style error.
@@ -175,6 +180,7 @@ impl Default for FakeHerdr {
             pane_tokens: None,
             metadata_error: None,
             rename_error: None,
+            pane_rename_error: None,
             detection: "",
             empty_id_error_on_create: false,
             no_root_pane: false,
@@ -539,6 +545,12 @@ impl FakeHerdr {
             "workspace.report_metadata" | "pane.report_metadata" => {
                 reply(&mut write_half, &id, json!({ "type": "ok" })).await
             }
+            // The machine marker that survives a herdr restart (#432).
+            "pane.rename" if self.pane_rename_error.is_some() => {
+                let code = self.pane_rename_error.unwrap();
+                reply_error(&mut write_half, &id, code, "herdr refused the pane rename").await
+            }
+            "pane.rename" => reply(&mut write_half, &id, json!({ "type": "ok" })).await,
             // The human-readable label (#417 D4).
             "workspace.rename" if self.rename_error.is_some() => {
                 let code = self.rename_error.unwrap();
@@ -1124,7 +1136,9 @@ async fn dispatch_renames_the_workspace_for_humans() {
     let order: Vec<&str> = log
         .iter()
         .filter_map(|r| r["method"].as_str())
-        .filter(|m| m.starts_with("workspace.") || *m == "pane.report_metadata")
+        .filter(|m| {
+            m.starts_with("workspace.") || *m == "pane.report_metadata" || *m == "pane.rename"
+        })
         .collect();
     assert_eq!(
         order,
@@ -1132,8 +1146,117 @@ async fn dispatch_renames_the_workspace_for_humans() {
             "workspace.create",
             "workspace.report_metadata",
             "pane.report_metadata",
+            "pane.rename",
             "workspace.rename"
         ]
+    );
+}
+
+/// #432: the pane carries the machine marker, because it is the one that
+/// survives a herdr restart.
+///
+/// `live-handoff` keeps the workspace, its panes, the running agent and both
+/// labels, and drops every metadata token (measured on herdr 0.7.5). Renaming
+/// the workspace to something readable is therefore only safe while *something
+/// else* holds the marker across that event, and the tokens do not.
+#[tokio::test]
+async fn dispatch_labels_the_pane_with_the_machine_marker() {
+    let (socket, requests) = FakeHerdr::default().spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    assert!(
+        d.dispatch_with(
+            "T1",
+            "サイドバーを直す",
+            "plan",
+            json!({ "repo_name": "totsuka" })
+        )
+        .await["error"]
+            .is_null()
+    );
+
+    let log = requests.lock().unwrap();
+    let renames = calls(&log, "pane.rename");
+    assert_eq!(renames.len(), 1, "{renames:?}");
+    assert_eq!(renames[0]["params"]["pane_id"], PANE);
+    // Verbatim, never through `token_value`: `doctor` strips the prefix and
+    // matches the rest against `source_task_id`.
+    assert_eq!(renames[0]["params"]["label"], "totsuka T1");
+}
+
+/// #432: if the pane cannot be labelled, the workspace keeps its machine
+/// label. Renaming anyway would leave a container whose only marker is a token
+/// — and a herdr restart deletes exactly that.
+#[tokio::test]
+async fn a_failed_pane_label_keeps_the_workspace_machine_label() {
+    let (socket, requests) = FakeHerdr {
+        pane_rename_error: Some("internal_error"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .dispatch_with(
+            "T1",
+            "サイドバーを直す",
+            "plan",
+            json!({ "repo_name": "totsuka" }),
+        )
+        .await;
+    assert!(disp["error"].is_null(), "identity never fails a dispatch");
+    assert!(
+        calls(&requests.lock().unwrap(), "workspace.rename").is_empty(),
+        "no pane marker, no rename"
+    );
+}
+
+/// #432, the shape a herdr restart leaves behind: tokens gone, both labels
+/// intact, workspace label already human-readable. Ownership has to come from
+/// the pane label alone.
+#[tokio::test]
+async fn a_pane_label_is_enough_after_a_restart_drops_every_token() {
+    let (socket, _requests) = FakeHerdr {
+        // No `tokens` anywhere, and the workspace label is the post-rename
+        // human-readable form — nothing a `totsuka `-prefix match would catch.
+        list_workspaces: vec![json!({
+            "workspace_id": "w1",
+            "label": "totsuka: サイドバーを直す",
+        })],
+        list_panes: vec![
+            json!({
+                "pane_id": PANE,
+                "workspace_id": "w1",
+                "label": "totsuka T1",
+                "cwd": "/wt/agent-1",
+                "agent": "claude",
+                "agent_status": "idle",
+            }),
+            // The companion shell: same workspace, no marker of its own.
+            json!({
+                "pane_id": SHELL_PANE,
+                "workspace_id": "w1",
+                "cwd": "/wt/agent-1",
+                "agent_status": "unknown",
+            }),
+        ],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let listed = d.call("session/list", json!({})).await;
+    let sessions = listed["result"]["sessions"]
+        .as_array()
+        .expect("sessions array");
+    assert_eq!(sessions.len(), 1, "one session per workspace: {listed}");
+    assert_eq!(sessions[0]["session_id"], "w1:p1|");
+    assert_eq!(
+        sessions[0]["label"], "totsuka T1",
+        "`doctor` strips the prefix and matches `source_task_id`: {listed}"
     );
 }
 

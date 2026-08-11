@@ -1,10 +1,10 @@
 ---
 type: Decision
 title: ADR-0039 herdr サイドバーの identity は metadata token で運び、リポジトリ名はプロトコルの追加フィールドで渡す
-description: "herdr の左サイドバーに「どのリポジトリの・どのタスクを・どのモードで」を出すため、identity を label ではなく workspace / pane の metadata token として報告し、リポジトリ名は TaskDispatchParams.repo_name（プロトコル 0.4.1、純追加）で渡す決定。worktree.open によるグルーピング・pane.rename・display_agent の各案を採らない理由と、サイドバー設定を totsuka が書き換えない理由。"
+description: "herdr の左サイドバーに「どのリポジトリの・どのタスクを・どのモードで」を出すため、identity を workspace / pane の metadata token として報告し、リポジトリ名は TaskDispatchParams.repo_name（プロトコル 0.4.1、純追加）で渡す決定。worktree.open によるグルーピング・display_agent・title の各案を採らない理由と、サイドバー設定を totsuka が書き換えない理由。表示用に pane.rename を使う案は採らないが、D7 で機械マーカーの置き場として採用している（herdr の再起動が token だけを落とすため）。"
 tags: [herdr, protocol, ui, identity, 417]
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-08-11T16:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-12T00:40:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-08-11T16:10:00+09:00 }
 sources:
@@ -113,7 +113,8 @@ dispatch の `workspace.create` 直後（`start_agent` の**前**）に、**work
 
 1. `workspace.create { label: "totsuka {task.id}" }` — **現状とバイト同一**。所有マーカーが最初の瞬間から存在する
 2. identity 報告（D1）
-3. **2 が両方成功し、かつ `totsuka_task` が実際に載ったときだけ** `workspace.rename { label: "{repo}: {title}" }`（`repo_name` が無ければ rename しない）
+3. `pane.rename { label: "totsuka {task.id}" }` — **herdr の再起動を越える唯一のマーカー**（D7、#432）
+4. **2 が両方成功し、かつ `totsuka_task` が実際に載り、かつ 3 が成功したときだけ** `workspace.rename { label: "{repo}: {title}" }`（`repo_name` が無ければ rename しない）
 
 **ゲートは「呼び出しが成功したか」ではなく「マーカーが読み戻せるか」。** この 2 つは離れる: D1 のとおり
 上限を超える（あるいは空の）`task.id` は token を**載せずに**報告するので、`report_metadata` は成功する。
@@ -123,6 +124,20 @@ dispatch の `workspace.create` 直後（`start_agent` の**前**）に、**work
 herdr 側の一時障害で 2 が落ちても「機械 label のまま・サイドバーが綺麗にならないだけ」で、**label と token の両方から identity が消える瞬間が無い**。
 
 token だけでは足りない理由: `rows` はグローバルで、オペレータが自分で開いた space にも同じ行構成が当たる。`$repo` / `$task` は人間の space では空なので、**spaces 行**から `workspace` トークンを外せない。つまり `workspace` が不透明なままだと spaces パネルが壊れたままになる（agents 側で `workspace` を主語にしない話は D6 の制約 2 で、こことは別のパネルの議論である）。
+
+## D7 — 機械マーカーは pane label にも書く（#432）
+
+**D4 の取引は herdr の再起動で壊れる。** `herdr server live-handoff` は workspace・pane・走行中のエージェント・**両方の label** を保つ一方、**metadata token を全部落とす**（herdr 0.7.5 で実測）。rename 済みの workspace は token を失った瞬間に所有マーカーがゼロになり、`session/list` が空を返して `doctor` の孤児 pane 検出（[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）が盲目になる。
+
+**pane label は同じ handoff を生き残る**（実測）。しかも `PaneInfo.label` は `WorkspaceInfo.label` とは**別のフィールド**で、書くのは `pane.rename` だけ — totsuka が一度も呼んでいなかった、まさに [#416](https://github.com/tomoya-k31/totsuka/issues/416) が見つけた空白である。ここに機械マーカーを置けば、**表示用の名前と機械マーカーが 1 つのフィールドを奪い合うのをやめられる**: workspace label は人間のもの、pane label は我々のもの。
+
+`list_sessions` は元から `PaneInfo.label` を 4 経路のうち 1 つとして読んでいるので、**読む側は 1 行も変わらない** — その経路が dead でなくなるだけである。
+
+D4 の rename はこれを前提条件に加える（**最後のマーカーを消して rename しない**）。pane rename を herdr が拒んだら、失うのは綺麗な名前であって所有ではない。
+
+label は `token_value` を通さず `task.id` を**そのまま**書く。これは比較される値（`strip_prefix` → `source_task_id`）であって表示ではない。サイドバーには出ない — オペレータが `rows` に `pane` トークンを入れない限りで、推奨スニペットは入れていない。
+
+**「冗長な 2 経路」は独立に壊れるときだけ冗長である。** #417 は label と token の 2 経路を用意したつもりだったが、rename が片方を潰し handoff がもう片方を潰す順序が実在した。pane label はどちらにも潰されないので、ここで初めて独立になる。
 
 ## D5 — `worktree.open` によるグルーピングは見送り
 
@@ -160,9 +175,10 @@ token だけでは足りない理由: `rows` はグローバルで、オペレ�
 
 **2 つに分けない。** 「label は人間可読だが token が無い」中間状態は、サイドバーが正しく見えているのに `doctor` の所有判定が最新の根拠を失っている状態で、**どちらの症状も単体では気づけない**。ロールバックの単位は「identity を報告するかどうか」1 つでよい。
 
-## 不採用: `pane.rename` / `display_agent` / `title`
+## 不採用: `pane.rename` を**表示**に使う / `display_agent` / `title`
 
-- `pane.rename` — `show_agent_labels_on_pane_borders = true` の環境で**不透明な ID が pane 枠に出る**。D2 で代替できる
+- `pane.rename` を**表示手段として**使う案 — `show_agent_labels_on_pane_borders = true` の環境で**不透明な ID が pane 枠に出る**。表示は D2 の token で代替できる。
+  **ただし `pane.rename` そのものは D7 で採用した** — 表示のためではなく、**herdr の再起動を越える機械マーカーの置き場**としてである（#432。token は handoff で消え、pane label は残る）。この節が退けているのは「pane label を人間に見せる」ことであって、「pane label を使う」ことではない。pane 枠に出る問題は残るので、そこが気になる環境は `show_agent_labels_on_pane_borders` を落とすことになる
 - `display_agent` — `claude` / `codex` / `opencode` の区別が消える診断上の後退。D4 で 1 行目に repo とタスクが出るので買うものが無い
 - `title` — 将来の pane 単位ステータス行の置き場として、ここに記録するに留める
 
@@ -180,6 +196,21 @@ token だけでは足りない理由: `rows` はグローバルで、オペレ�
 - **サイドバーの見た目はオペレータの設定次第。** D6 のとおり totsuka は `rows` を書かないので、スニペットを入れていない環境では `$repo` / `$mode` が単に空になる
 - **rename 後は所有判定が token 単独に依存する**（label が `totsuka ` で始まらなくなるため）。**herdr の再起動やセッション復元をまたいで `tokens` が残るかは未実測**で、消えるならその pane は `session/list` からも `doctor` の孤児検出からも消える。実機検収の項目に入れてある（[サイドバー設定手順](/operations/herdr-sidebar-setup.md)）。消えると分かったら「rename しない」か「identity を再報告する経路を足す」かをここで決め直す
 - **`workspace.rename` の label 長上限は未実測。** 実装は metadata token の 80 文字を安全側の代理として流用している
+
+# 検証
+
+- **D7 の前提は実測**（herdr 0.7.5、2026-08-12）。`pane.rename` は受理され、`live-handoff` を挟んでも
+  **pane label は残り、workspace label も残り、token は workspace / pane とも全部消える**。
+  handoff 後に所有を主張できるのは label だけで、rename 済み workspace ではそれが pane label だけになる。
+  対照として `[identity] enabled = false` の workspace は機械 label のまま残るので handoff 後も拾える
+- **D7 の実装自体は結合テストのみで、実機 dispatch は未通過。**
+  `dispatch_labels_the_pane_with_the_machine_marker` /
+  `a_failed_pane_label_keeps_the_workspace_machine_label` /
+  `a_pane_label_is_enough_after_a_restart_drops_every_token`（`integration.rs`）が、
+  マーカーが verbatim で書かれること・pane rename が失敗したら workspace を rename しないこと・
+  **token ゼロ + 人間可読な workspace label + pane label だけ**という handoff 後の形で
+  `session/list` が 1 件返すことを固定する。`label_pane` の結果を握り潰すと 3 本とも落ちる（確認済み）
+- D1〜D6 の wire は 2026-08-11 に実機検収済み（`verified` の 1 本目）
 
 # 関連
 
