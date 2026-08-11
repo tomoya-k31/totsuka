@@ -5,7 +5,7 @@ description: "totsuka が dispatch 時に報告する repo / task / mode のメ�
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [herdr, ui, sidebar, setup, 417]
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-08-12T00:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T15:10:00+09:00 }
 owner: tomoya-k31
 ---
 

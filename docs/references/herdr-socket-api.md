@@ -4,7 +4,7 @@ title: herdr Socket API / 統合エージェント capability（外部一次情�
 description: "herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status・pane レイアウト）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124/#356）設計の根拠。protocol 17 で agent.start が manifest 駆動（kind + 既存 pane）へ、プロンプト投入が agent.prompt へ変わった破壊的変更を含む。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。"
 resource: https://herdr.dev/docs/socket-api/
 tags: [herdr, socket-api, integration, agent-ide, external]
-generated: { by: claude-code/opus-5, at: 2026-08-12T01:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T15:10:00+09:00 }
 status: stable
 stale_after: 2027-02-01
 owner: tomoya-k31
@@ -120,7 +120,7 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 |---|---|
 | 値の上限 | **80 文字**（バイトではない）。`"あ"×100` を送ると 80 文字 / 240 バイトに切られる。**超過はエラーではなく黙って切られる** |
 | `source` スロット | 1 つの pane / workspace が受け付ける**異なる `source` は生涯 32 個まで**。clear や expiry でスロットは戻らない — タスク毎の `source` は禁物 |
-| 読み出し | `list` と `get` の**両方**に `tokens` が載る |
+| 読み出し | `tokens` は **`workspace.list` / `workspace.get` / `pane.list` のすべて**に載る（#417 実機）。totsuka の所有判定が読むのは `workspace.list` |
 | `workspace.rename` との関係 | rename しても tokens は保たれる |
 | 組み込みトークン | spaces: `state_icon` `state_text` `workspace` `branch` `git_status`。agents: ＋ `tab` `pane` `agent` `terminal_title` `terminal_title_stripped`。**リポジトリ名のトークンは無い**（だから totsuka が `$repo` を報告する） |
 | `$name` の解決先 | agents 行 = **pane** メタデータ、spaces 行 = **workspace** メタデータ。両パネルに出すなら**両方に報告が必要** |
@@ -157,12 +157,13 @@ $ herdr pane list --workspace w68
 workspace を測ると、pane のレコードは `agent` と実際の `agent_status` を持つ（#417 実機、0.7.5）:
 
 ```text
-{pane_id: "w6E:p1", agent: "claude", agent_status: "idle",    label: null}   ← エージェントの pane
-{pane_id: "w6E:p2", agent: null,     agent_status: "unknown", label: null}   ← 伴走シェル
+{pane_id: "w6E:p1", agent: "claude", agent_status: "idle"   }   ← エージェントの pane
+{pane_id: "w6E:p2",                  agent_status: "unknown"}   ← 伴走シェル
 ```
 
 **`agent` は `pane.list` のレコードに載る**（文字列であってオブジェクトではない）。
-`label` はどちらの状況でも null のままである。
+**herdr は「無い」を `null` ではなく*キーの省略*で表す** — 伴走シェルには `agent` キー自体が無く、
+`label` はどちらにも無い。上のプローブ出力の「`label` キーが存在しない」と同じ表し方である。
 
 `workspace list` 側には `"label": "totsuka probe"` が載っている。totsuka はこれを取り違えており、
 `session/list` が実機で常に空配列を返していた（#416、[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md) の改訂節）。

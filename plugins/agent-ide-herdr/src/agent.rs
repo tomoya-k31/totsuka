@@ -1287,22 +1287,24 @@ fn workspace_of(pane_id: &str) -> Option<&str> {
 /// dispatched totsuka workspace on herdr 0.7.5:
 ///
 /// ```text
-/// {pane_id: "w6E:p1", agent: "claude", agent_status: "idle",    label: null}   ← agent
-/// {pane_id: "w6E:p2", agent: null,     agent_status: "unknown", label: null}   ← shell
+/// {pane_id: "w6E:p1", agent: "claude", agent_status: "idle"   }   ← agent
+/// {pane_id: "w6E:p2",                  agent_status: "unknown"}   ← shell
 /// ```
 ///
-/// **`agent` is a string on the record, not an object, and not absent.** An
+/// **`agent` is a plain string, and on the shell the key is simply absent**
+/// (as `label` is on both — herdr omits these rather than sending `null`). An
 /// earlier revision of this comment claimed the field lives only on
-/// `agent.start`'s response — that was wrong, and it was wrong because it was
-/// reasoned from a probe of a workspace with *no agent started in it* rather
-/// than measured against a dispatched one. Either signal alone would work;
-/// reading all three is what makes a future herdr dropping one of them a
-/// degradation instead of a silent regression to "whichever pane came first",
-/// which is the companion shell as often as not.
+/// `agent.start`'s response; that was wrong, and it was wrong because it was
+/// reasoned from a probe of a workspace with *no agent started in it* instead
+/// of measured against a dispatched one. Any one signal would do today;
+/// reading all three makes a future herdr dropping one a degradation rather
+/// than a silent regression to "whichever pane came first", which is the
+/// companion shell as often as not.
 ///
-/// A workspace whose agent has exited reports nothing on either pane; the
-/// caller falls back to the first pane there, which is the orphan case and
-/// wants exactly that.
+/// **What an *exited* agent's pane reports is not measured.** If `agent`
+/// lingers, that pane keeps winning the tie-break — which changes nothing
+/// that matters: the workspace still yields exactly one session, and the
+/// orphan it represents is exactly the one `doctor` is looking for.
 fn looks_like_an_agent_pane(pane: &Value) -> bool {
     // Set while herdr has an agent registered in the pane.
     pane_str(pane, "agent").is_some_and(|agent| !agent.is_empty())
