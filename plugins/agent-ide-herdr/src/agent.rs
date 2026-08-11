@@ -457,15 +457,32 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             return;
         }
         let mut tokens = json!({
-            // The machine identifier. Never displayed; this is what makes a
-            // pane provably ours once `session/list` learns to read it.
-            "totsuka_task": token_value(&params.task.id),
             "task": token_value(&params.task.title),
             "mode": match params.mode {
                 ExecutionMode::Plan => "plan",
                 ExecutionMode::Implement => "implement",
             },
         });
+        // The machine identifier, and the one token that is **compared rather
+        // than displayed** — so it goes across verbatim, never through
+        // `token_value`. Collapsing whitespace or appending `…` would make a
+        // pane that *is* ours fail its own check in `release`, and would have
+        // `session/list` synthesise a label `doctor` cannot match against
+        // `source_task_id`.
+        //
+        // An id longer than herdr keeps is **omitted**, not truncated: herdr
+        // would cut it silently, and a cut machine identifier is worse than no
+        // identifier at all — the label path is a correct fallback, a wrong id
+        // is not.
+        if params.task.id.chars().count() <= TOKEN_VALUE_CHARS {
+            tokens["totsuka_task"] = json!(params.task.id);
+        } else {
+            tracing::debug!(
+                task_id = %params.task.id,
+                "task id exceeds herdr's token limit; reporting no identity token \
+                 (ownership falls back to the workspace label)"
+            );
+        }
         // Absent from an Orchestrator older than protocol 0.4.1. Omitted
         // rather than guessed: `$repo` renders empty, which is what the
         // sidebar snippet is written to tolerate.

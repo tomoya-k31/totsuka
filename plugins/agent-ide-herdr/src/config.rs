@@ -91,8 +91,9 @@ impl Default for LayoutConfig {
 /// Whether dispatch reports what a workspace is for (#417,
 /// [ADR-0039](../../../docs/decisions/adr-0039-herdr-sidebar-identity.md)).
 ///
-/// **One flag, both halves.** It gates the metadata report *and* the
-/// human-readable `workspace.rename` together, on purpose: they are two
+/// Today that means the `workspace.report_metadata` / `pane.report_metadata`
+/// calls and nothing else. #417 PR-3 adds a human-readable
+/// `workspace.rename` **under this same flag**, deliberately: the two are
 /// statements of the same fact, and a state where the label reads
 /// `web: Fix the bug` while nothing carries `totsuka_task` is one where the
 /// sidebar looks right and `doctor`'s ownership check has lost its newest

@@ -560,9 +560,9 @@ metadata token を報告する。`$name` の解決先が spaces 行では worksp
 
 | token | 値 |
 |---|---|
-| `totsuka_task` | `Task.id`（**表示しない**機械識別子。所有判定の根拠になる） |
+| `totsuka_task` | `Task.id` を**そのまま**（**表示しない**機械識別子で、比較に使うので整形も切り詰めもしない。herdr の上限 80 文字に収まらない id は**送らない** — 切れた識別子は無い識別子より悪く、label 経路が正しいフォールバックになる） |
 | `repo` | `[[repositories]].name`（プロトコル 0.4.1 未満のオーケストレータからは届かないので省かれる） |
-| `task` | タスクのタイトル（空白を畳んで 79 文字 + `…`） |
+| `task` | タスクのタイトル（**表示用**なので空白を畳んで 79 文字 + `…`） |
 | `mode` | `plan` / `implement` |
 
 **サイドバーの行構成は totsuka が書き換えない。** `~/.config/herdr/config.toml` は herdr と運用者のもので、

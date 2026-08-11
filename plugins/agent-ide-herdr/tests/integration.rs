@@ -1037,6 +1037,48 @@ async fn identity_omits_a_repo_name_it_was_not_given() {
     assert_eq!(tokens["mode"], "implement");
 }
 
+/// #417: the identity token is compared, never displayed, so it must reach
+/// herdr byte-for-byte — and be omitted entirely when it cannot.
+#[tokio::test]
+async fn the_identity_token_is_the_task_id_verbatim_or_absent() {
+    // A Slack conversation id: mixed case, a colon, a dot. `token_value`
+    // would leave it alone, but the point is that nothing normalises it.
+    let (socket, requests) = FakeHerdr::default().spawn();
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    assert!(
+        d.dispatch("C0BNAU8KKG8:1754236800.123456", "t", "implement")
+            .await["error"]
+            .is_null()
+    );
+    {
+        let log = requests.lock().unwrap();
+        let tokens = &calls(&log, "workspace.report_metadata")[0]["params"]["tokens"];
+        assert_eq!(tokens["totsuka_task"], "C0BNAU8KKG8:1754236800.123456");
+    }
+
+    // Longer than herdr keeps: omitted rather than cut. A cut machine
+    // identifier would make a pane that IS ours fail its own release check,
+    // and would have `session/list` synthesise a label `doctor` cannot match.
+    let long_id = "x".repeat(200);
+    let (socket, requests) = FakeHerdr::default().spawn();
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    assert!(d.dispatch(&long_id, "t", "implement").await["error"].is_null());
+    let log = requests.lock().unwrap();
+    let tokens = &calls(&log, "workspace.report_metadata")[0]["params"]["tokens"];
+    assert!(
+        tokens.get("totsuka_task").is_none(),
+        "no token beats a wrong one: {tokens}"
+    );
+    assert_eq!(tokens["mode"], "implement", "the display tokens still go");
+    assert_eq!(
+        calls(&log, "workspace.create")[0]["params"]["label"],
+        format!("totsuka {long_id}"),
+        "and the label path, which is the fallback, is untouched"
+    );
+}
+
 /// #417: herdr refusing the report costs the sidebar, not the task.
 #[tokio::test]
 async fn a_failed_identity_report_does_not_fail_the_dispatch() {
