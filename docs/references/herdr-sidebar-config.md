@@ -6,7 +6,7 @@ resource: https://herdr.dev/docs/
 tags: [herdr, ui, sidebar, reference, 417]
 owner: tomoya-k31
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-08-12T00:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T15:10:00+09:00 }
 stale_after: 2027-02-09
 sources:
   - id: herdr-probe-2026-08-09
