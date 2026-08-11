@@ -22,7 +22,7 @@ owner: tomoya-k31
 ```mermaid
 erDiagram
     tasks ||--o{ sessions : "task_id（リトライで追記、最新行が re-attach 対象）"
-    tasks ||--o{ events : "task_id（全状態遷移の監査ログ）"
+    tasks ||--o{ events : "task_id（全状態遷移の監査ログ + ノート行）"
     tasks ||--o{ hook_events : "task_id（job_id から解決、推測しない）"
     tasks ||--o{ task_messages : "task_id（v5 — 1 会話に届いた各メッセージ）"
 
@@ -189,7 +189,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 ## events（F-72）
 
-全状態遷移を記録する監査ログ。`from_state`（取り込み時 NULL）→ `to_state`、`occurred_at`、`detail`（JSON）。実行ログ断片（F-38）は含めず JSONL ログ側（#49）に置く。
+**全状態遷移**を記録する監査ログ（F-72。状態が動くときは必ず 1 行増える）と、**動いていないタスクについてのノート行**（#407、下記）が同居する。`from_state`（取り込み時 NULL）→ `to_state`、`occurred_at`、`detail`（JSON）。実行ログ断片（F-38）は含めず JSONL ログ側（#49）に置く。
 
 ### ノート行（#407、[ADR-0037](/decisions/adr-0037-task-notes-in-the-event-log.md)）
 

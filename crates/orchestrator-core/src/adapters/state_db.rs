@@ -312,6 +312,15 @@ pub enum StateError {
     /// No task with the given id.
     #[error("task not found: {0}")]
     NotFound(i64),
+    /// [`StateDb::note_task`] was handed a `detail` with no [`NOTE_KEY`]
+    /// string (#407).
+    ///
+    /// Refused rather than written: an unmarked row would still become the
+    /// task's latest event and would therefore **hide** a real note from
+    /// [`StateDb::open_notes`], leaving `totsuka status` silent about a task
+    /// that is not moving — the exact failure the note exists to prevent.
+    #[error("a task note must carry a `{NOTE_KEY}` string naming its kind, got: {0}")]
+    NotANote(String),
     /// The DB's schema is newer than this binary understands — a downgrade
     /// (#275). Refusing beats running against a schema we cannot reason
     /// about: a purely additive version difference would otherwise not even
@@ -436,15 +445,21 @@ pub struct SessionRecord {
 }
 
 /// A persisted audit event (F-72), for `task show` history.
+///
+/// Usually a state transition. A row whose `detail` carries [`NOTE_KEY`] is a
+/// **note** instead — something recorded *about* a task that did not move
+/// (#407) — and has `from_state == Some(to_state)`. See
+/// [`StateDb::note_task`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventRecord {
     /// Row id.
     pub id: i64,
     /// Owning task id.
     pub task_id: i64,
-    /// State before the transition (`None` for the ingest event).
+    /// State before the transition (`None` for the ingest event; equal to
+    /// [`to_state`](Self::to_state) for a note).
     pub from_state: Option<TaskState>,
-    /// State after the transition.
+    /// State after the transition — or the unchanged state, for a note.
     pub to_state: TaskState,
     /// Timestamp (ISO 8601 UTC).
     pub occurred_at: String,
@@ -1186,10 +1201,12 @@ impl StateDb {
     /// notify again" — after a restart the operator may never have seen the
     /// first notification, so the two dedups are kept separate.
     pub fn note_task(&self, id: i64, detail: &serde_json::Value) -> Result<bool, StateError> {
-        debug_assert!(
-            detail.get(NOTE_KEY).and_then(|v| v.as_str()).is_some(),
-            "a note's detail must carry a `{NOTE_KEY}` string naming its kind"
-        );
+        // Enforced, not asserted: a `debug_assert!` is gone in release, and
+        // the row it would let through is worse than useless — it becomes the
+        // latest event and hides the note that was already there.
+        if detail.get(NOTE_KEY).and_then(|v| v.as_str()).is_none() {
+            return Err(StateError::NotANote(detail.to_string()));
+        }
         let tx = self.conn.unchecked_transaction()?;
         let state: Option<String> = tx
             .query_row("SELECT state FROM tasks WHERE id = ?1", params![id], |r| {
@@ -2242,6 +2259,28 @@ mod tests {
             db.note_task(999, &blocked_note()),
             Err(StateError::NotFound(999))
         ));
+    }
+
+    #[test]
+    fn a_detail_without_the_note_key_is_refused_not_written() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.note_task(id, &blocked_note()).unwrap();
+
+        for bad in [
+            serde_json::json!({"kind": "dispatch"}),
+            serde_json::json!({NOTE_KEY: 7}),
+            serde_json::json!("blocked"),
+        ] {
+            assert!(matches!(
+                db.note_task(id, &bad),
+                Err(StateError::NotANote(_))
+            ));
+        }
+        // The point of refusing: an unmarked row would be the latest event
+        // and would hide the real note without anyone noticing.
+        assert!(db.open_notes().unwrap().contains_key(&id));
+        assert_eq!(db.event_count(id).unwrap(), 2, "ingest + the one real note");
     }
 
     #[test]

@@ -133,7 +133,17 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
         println!("\nnot starting yet:");
         for t in blocked {
             let reason = t.wait_reason.as_ref().expect("filtered on Some");
-            println!("  task {} ({}): {}", t.id, reason.since, reason.message);
+            // The message is assembled from a `detail` read back out of
+            // SQLite. Today every part of it is ours, but "ours" is a
+            // property of the writer, not of this print site — and #280's
+            // rule is that the human rendering defuses, while `--json` stays
+            // byte-exact. Hence here and not inside `wait_reason`.
+            println!(
+                "  task {} ({}): {}",
+                t.id,
+                safe(&reason.since),
+                safe(&reason.message)
+            );
         }
     }
 
@@ -168,6 +178,9 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
 /// wording. A kind this build does not know still gets a row — saying "task 4
 /// is blocked, kind `x`" beats silently dropping it, which would read as "not
 /// blocked".
+///
+/// Nothing is sanitised here: this feeds `--json` too, which must stay
+/// byte-exact (#280). Defusing happens at the print site.
 fn wait_reason(note: TaskNote) -> WaitReason {
     let message = match note.kind.as_str() {
         agent_tools::BLOCKED_NOTE => {
@@ -179,7 +192,7 @@ fn wait_reason(note: TaskNote) -> WaitReason {
                 .unwrap_or_default();
             agent_tools::blocked_reason(&missing)
         }
-        other => format!("blocked: {} — see `totsuka task show`", safe(other)),
+        other => format!("blocked: {other} — see `totsuka task show`"),
     };
     WaitReason {
         kind: note.kind,

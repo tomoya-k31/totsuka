@@ -1175,27 +1175,36 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         missing: &[crate::agent_tools::AgentTool],
     ) {
         let names: Vec<&str> = missing.iter().map(|t| t.as_str()).collect();
-        if !self.blocked_on_tools.insert(record.id) {
-            // Already reported; the dispatch loop reaches this every cycle.
-            tracing::debug!(
-                task_id = record.id,
-                missing = ?names,
-                "still waiting on an unavailable agent tool"
-            );
-            return;
-        }
         // Persisted so `totsuka status` can still answer "why is this task not
         // moving" long after the notification scrolled away (#407). Recorded
         // rather than recomputed at read time on purpose: `status` runs in the
         // operator's shell, where `gh` may well be on `PATH` even though it is
         // not here — a live check there would report "not blocked" about a
         // task this process is refusing to dispatch.
+        //
+        // **Ahead of the notification gate below, on every cycle.**
+        // `note_task` deduplicates against the task's own history, which makes
+        // repeating the call a single indexed lookup — and buys two things the
+        // in-process set cannot give: a failed write is retried next cycle
+        // rather than losing the explanation for the whole wait, and a
+        // *changed* `missing` set supersedes the recorded one instead of
+        // leaving a note that no longer describes the situation.
         let note = serde_json::json!({
             crate::adapters::state_db::NOTE_KEY: crate::agent_tools::BLOCKED_NOTE,
             "missing": names,
         });
         if let Err(e) = self.db.note_task(record.id, &note) {
             tracing::warn!(task_id = record.id, error = %e, "could not record the wait reason");
+        }
+        // The set gates the *notification* only (#399): interrupting someone
+        // every 200 ms is spam, whereas re-recording the same note is a no-op.
+        if !self.blocked_on_tools.insert(record.id) {
+            tracing::debug!(
+                task_id = record.id,
+                missing = ?names,
+                "still waiting on an unavailable agent tool"
+            );
+            return;
         }
         let reason = format!("waiting: {}", crate::agent_tools::blocked_reason(&names));
         tracing::warn!(task_id = record.id, missing = ?names, "{reason}");
