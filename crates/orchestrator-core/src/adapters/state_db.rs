@@ -22,6 +22,7 @@
 //!   binary is refused at both entry points; forward compatibility is not
 //!   offered, and the guard can only help between releases that have it.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -273,6 +274,15 @@ const INGEST_DETAIL: &str = r#"{"kind":"ingested"}"#;
 /// `events.detail` for a push ingest (`task/submit`, 0.1.6).
 const SUBMIT_DETAIL: &str = r#"{"kind":"submitted"}"#;
 
+/// The `events.detail` key that marks a row as a **note** rather than a state
+/// transition (#407), and whose value names the kind of note.
+///
+/// A separate key from the existing `kind` (`ingested` / `dispatch` /
+/// `publish` / …), which every transition already uses and which therefore
+/// cannot tell the two apart. `from_state == to_state` cannot either:
+/// `Escalated → Escalated` is a legal transition.
+pub const NOTE_KEY: &str = "note";
+
 /// Columns of `tasks`, read by name in [`row_to_task`].
 const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
      worktree_path, branch, base_commit, state, priority, title, url, source_payload, \
@@ -440,6 +450,20 @@ pub struct EventRecord {
     pub occurred_at: String,
     /// Structured detail, if recorded.
     pub detail: Option<serde_json::Value>,
+}
+
+/// An unresolved note recorded against a task (#407).
+///
+/// See [`StateDb::note_task`] for what a note is and why it resolves itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskNote {
+    /// The [`NOTE_KEY`] value, naming what kind of note this is.
+    pub kind: String,
+    /// The whole `detail` object, including [`NOTE_KEY`].
+    pub detail: serde_json::Value,
+    /// When the note was recorded (ISO 8601 UTC) — how long the task has been
+    /// in this condition.
+    pub since: String,
 }
 
 /// A hook event to persist idempotently (#131 D-05 / N-01).
@@ -1135,6 +1159,116 @@ impl StateDb {
         })?;
         rows.collect::<rusqlite::Result<_>>()
             .map_err(StateError::from)
+    }
+
+    /// Record a **note** against a task — something an operator needs to know
+    /// about a task that is not moving — without moving it (#407).
+    ///
+    /// `detail` must be a JSON object whose [`NOTE_KEY`] field names the kind.
+    /// The row is written to `events` with `from_state == to_state == ` the
+    /// task's current state.
+    ///
+    /// # Why `events` and not a column on `tasks`
+    ///
+    /// **It resolves itself.** Every state transition writes an event (F-72),
+    /// so the instant the task moves — dispatched, cancelled, failed — the
+    /// note stops being the latest event and [`StateDb::open_notes`] stops
+    /// reporting it. A `blocked_reason` column would have to be cleared by
+    /// hand on every path out of the state, and the one path someone forgets
+    /// is a `totsuka status` that lies about it forever.
+    ///
+    /// # Dedup
+    ///
+    /// Deduped against the task's **own history**, not the caller's memory:
+    /// writes nothing and returns `false` when the task's latest event is
+    /// already an identical note. That survives a restart, which an in-process
+    /// set does not. It is deliberately a different question from "should we
+    /// notify again" — after a restart the operator may never have seen the
+    /// first notification, so the two dedups are kept separate.
+    pub fn note_task(&self, id: i64, detail: &serde_json::Value) -> Result<bool, StateError> {
+        debug_assert!(
+            detail.get(NOTE_KEY).and_then(|v| v.as_str()).is_some(),
+            "a note's detail must carry a `{NOTE_KEY}` string naming its kind"
+        );
+        let tx = self.conn.unchecked_transaction()?;
+        let state: Option<String> = tx
+            .query_row("SELECT state FROM tasks WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        let state: TaskState = state.ok_or(StateError::NotFound(id))?.parse()?;
+        let latest: Option<String> = tx
+            .query_row(
+                "SELECT detail FROM events WHERE task_id = ?1 ORDER BY id DESC LIMIT 1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(latest) = latest
+            && serde_json::from_str::<serde_json::Value>(&latest)
+                .ok()
+                .as_ref()
+                == Some(detail)
+        {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO events (task_id, from_state, to_state, occurred_at, detail)
+             VALUES (?1, ?2, ?2, ?3, ?4)",
+            params![
+                id,
+                state.as_str(),
+                self.clock.now_rfc3339(),
+                serde_json::to_string(detail)?
+            ],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Every task whose latest event is a note, keyed by task id (#407).
+    ///
+    /// One query for the whole table rather than one per task: `totsuka
+    /// status` renders every row and has a 500 ms budget (§5.5).
+    pub fn open_notes(&self) -> Result<HashMap<i64, TaskNote>, StateError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.task_id, e.detail, e.occurred_at FROM events e \
+             JOIN (SELECT task_id, MAX(id) AS max_id FROM events GROUP BY task_id) m \
+               ON e.id = m.max_id \
+             WHERE e.detail IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let detail: String = row.get("detail")?;
+            Ok((
+                row.get::<_, i64>("task_id")?,
+                detail,
+                row.get::<_, String>("occurred_at")?,
+            ))
+        })?;
+        let mut notes = HashMap::new();
+        for row in rows {
+            let (task_id, detail, since) = row?;
+            // A `detail` that will not parse is a row written by some other
+            // version; it is not a note, and status is not the place to fail
+            // over it.
+            let Ok(detail) = serde_json::from_str::<serde_json::Value>(&detail) else {
+                continue;
+            };
+            let Some(kind) = detail.get(NOTE_KEY).and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let kind = kind.to_string();
+            notes.insert(
+                task_id,
+                TaskNote {
+                    kind,
+                    detail,
+                    since,
+                },
+            );
+        }
+        Ok(notes)
     }
 
     /// Count of audit events recorded for a task (F-72).
@@ -2016,6 +2150,98 @@ mod tests {
         assert_eq!(events[2].detail, Some(serde_json::json!({"k": 1})));
         // Unknown task -> empty history, not an error.
         assert!(db.list_events(999).unwrap().is_empty());
+    }
+
+    /// A note for `id`, shaped the way `run` writes one (#407).
+    fn blocked_note() -> serde_json::Value {
+        serde_json::json!({ NOTE_KEY: "blocked_agent_tools", "missing": ["gh"] })
+    }
+
+    #[test]
+    fn a_note_records_once_and_resolves_when_the_task_moves() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+
+        assert!(db.note_task(id, &blocked_note()).unwrap(), "first write");
+        let note = db.open_notes().unwrap().remove(&id).expect("unresolved");
+        assert_eq!(note.kind, "blocked_agent_tools");
+        assert_eq!(note.detail, blocked_note());
+
+        // The dispatch loop reaches this every cycle. Nothing accumulates,
+        // and the note stays readable.
+        for _ in 0..5 {
+            assert!(!db.note_task(id, &blocked_note()).unwrap(), "deduped");
+        }
+        assert_eq!(db.event_count(id).unwrap(), 2, "ingest + one note");
+        assert!(db.open_notes().unwrap().contains_key(&id));
+
+        // The note is not a transition: the task is still queued and still
+        // dispatchable.
+        assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Queued);
+        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        assert!(
+            !db.open_notes().unwrap().contains_key(&id),
+            "moving the task resolves the note with no resolution record"
+        );
+    }
+
+    #[test]
+    fn a_note_is_recorded_again_after_the_condition_returns() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.note_task(id, &blocked_note()).unwrap();
+        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        db.apply_event(id, TaskEvent::Retry, None).unwrap();
+
+        assert!(
+            db.note_task(id, &blocked_note()).unwrap(),
+            "the dedup is against the *latest* event, so a second wait is \
+             recorded rather than swallowed"
+        );
+        assert!(db.open_notes().unwrap().contains_key(&id));
+    }
+
+    #[test]
+    fn a_changed_note_supersedes_the_old_one() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.note_task(id, &blocked_note()).unwrap();
+        let widened =
+            serde_json::json!({ NOTE_KEY: "blocked_agent_tools", "missing": ["gh", "x"] });
+        assert!(db.note_task(id, &widened).unwrap(), "detail differs");
+        assert_eq!(db.open_notes().unwrap()[&id].detail, widened);
+    }
+
+    #[test]
+    fn a_transition_detail_is_not_mistaken_for_a_note() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        // Every transition detail carries `kind`; only a note carries `note`.
+        db.apply_event(
+            id,
+            TaskEvent::Dispatch,
+            Some(serde_json::json!({"kind": "dispatch"})),
+        )
+        .unwrap();
+        assert!(db.open_notes().unwrap().is_empty());
+        // Nor is the ingest event, which is the latest one for a fresh task.
+        let other = db
+            .upsert_task(&NewTask {
+                source_task_id: "43".to_string(),
+                ..sample_task()
+            })
+            .unwrap();
+        assert!(!db.open_notes().unwrap().contains_key(&other));
+    }
+
+    #[test]
+    fn noting_an_unknown_task_is_an_error_not_an_orphan_row() {
+        let db = StateDb::open_in_memory().unwrap();
+        assert!(matches!(
+            db.note_task(999, &blocked_note()),
+            Err(StateError::NotFound(999))
+        ));
     }
 
     #[test]

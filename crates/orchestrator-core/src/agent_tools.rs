@@ -79,12 +79,61 @@ impl AgentTool {
         }
     }
 
+    /// The tool a name written by [`AgentTool::as_str`] refers to.
+    ///
+    /// Needed because the wait reason is *recorded* as names (#407) and
+    /// rendered later, possibly by a build that knows more tools than the one
+    /// that wrote the note — hence `Option` rather than a panic.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "gh" => Some(AgentTool::Gh),
+            _ => None,
+        }
+    }
+
     /// What to do about it being missing.
     pub fn remedy(self) -> &'static str {
         match self {
             AgentTool::Gh => "install the GitHub CLI and run `gh auth login`",
         }
     }
+}
+
+/// The [`NOTE_KEY`](crate::adapters::state_db::NOTE_KEY) value for "this task
+/// cannot start because a tool it needs is unusable in this environment"
+/// (#407). The note also carries `missing`, a list of [`AgentTool::as_str`]
+/// names.
+pub const BLOCKED_NOTE: &str = "blocked_agent_tools";
+
+/// The operator-facing explanation for a task waiting on `missing`.
+///
+/// Shared by the notification that fires once (#399) and by `totsuka status`,
+/// which answers the same question minutes later (#407), so the two cannot
+/// drift apart on the remedy or on the false-negative caveat — the caveat is
+/// the whole reason this check skips instead of failing.
+///
+/// Names that this build does not recognise still appear; only their remedy is
+/// omitted. A note is data written by some version of totsuka, not necessarily
+/// this one.
+pub fn blocked_reason(missing: &[&str]) -> String {
+    let remedies: Vec<&str> = missing
+        .iter()
+        .filter_map(|n| AgentTool::parse(n))
+        .map(AgentTool::remedy)
+        .collect();
+    let remedy = if remedies.is_empty() {
+        String::new()
+    } else {
+        format!(" → {}", remedies.join("; "))
+    };
+    format!(
+        "{} unavailable in the orchestrator's environment{remedy}. \
+         The task stays queued and starts on its own once this resolves \
+         (checked every few minutes). If the tool is only reachable from \
+         the agent's pane, this check is a false negative — see the \
+         agent-tools note in `totsuka doctor`.",
+        missing.join(", ")
+    )
 }
 
 /// The tools `profile` needs before its tasks can usefully start.
@@ -202,6 +251,36 @@ mod tests {
             "past the TTL the check runs again — this is how a task resumes \
              after the operator authenticates"
         );
+    }
+
+    /// Every variant. `as_str` / `remedy` are exhaustive matches so the
+    /// compiler catches a new variant there; `parse` matches on `&str` and
+    /// cannot, so this list is what keeps it honest — extend it with the
+    /// variant.
+    const ALL: &[AgentTool] = &[AgentTool::Gh];
+
+    #[test]
+    fn every_tool_name_round_trips() {
+        // `blocked_reason` reads names back out of a recorded note (#407), so
+        // a tool whose name does not parse would lose its remedy.
+        for tool in ALL {
+            assert_eq!(AgentTool::parse(tool.as_str()), Some(*tool));
+        }
+    }
+
+    #[test]
+    fn a_reason_carries_the_remedy_and_the_false_negative_caveat() {
+        let reason = blocked_reason(&["gh"]);
+        assert!(reason.starts_with("gh unavailable"), "{reason}");
+        assert!(reason.contains("gh auth login"), "{reason}");
+        assert!(reason.contains("false negative"), "{reason}");
+
+        // A note written by a build that knows a tool this one does not: the
+        // name still has to reach the operator, because dropping it would
+        // render as "blocked for no reason".
+        let reason = blocked_reason(&["nonesuch"]);
+        assert!(reason.starts_with("nonesuch unavailable"), "{reason}");
+        assert!(!reason.contains(" → "), "no remedy invented: {reason}");
     }
 
     #[test]

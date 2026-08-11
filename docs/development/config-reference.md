@@ -224,6 +224,15 @@ rubric leaf の優先順位（強い順）:
 
 `profile = "implement"` のタスクは PR を作るので `gh` が要る。**未整備なら dispatch されず `Queued` のまま待機**し、通知が一度出る。整備すれば数分以内（検査結果のキャッシュ TTL）に自分で流れ出すので、操作は不要。
 
+通知は流れて消えるので、`totsuka status` にも待機理由が出る（#407、[ADR-0037](/decisions/adr-0037-task-notes-in-the-event-log.md)）:
+
+```text
+not starting yet:
+  task 12 (2026-08-11T09:00:00Z): gh unavailable in the orchestrator's environment → …
+```
+
+`--json` では該当タスクの `wait_reason`（`kind` / `since` / `message`）に入る。待機していないタスクにはキーごと出ない。**表示は Orchestrator が記録した内容で、`totsuka status` はツールを再検査しない** — status はオペレータのシェルで走るので、そこで `gh` が見えても Orchestrator から見えているとは限らないため。表示は dispatch できた時点で自動的に消えるが、**`totsuka run` が止まっている間に環境を直しても消えない**（次に `run` が回ったときに消える）。
+
 `totsuka doctor` に `agent-tool:gh` の行が出る（必要とする workflow がある構成でのみ）。
 
 **この検査は間違うことがある。** 判定は totsuka のプロセスで走り、エージェントは pane（`.zshenv` / mise が効いた環境）で走るので、**pane からしか `gh` が見えない構成では「無い」と判定されます**。そのため:
