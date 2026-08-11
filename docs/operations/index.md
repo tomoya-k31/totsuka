@@ -14,5 +14,5 @@
 * [Codex ツールのセットアップと hooks trust 運用](codex-tool-setup.md) - リポジトリ/ワークフローを Codex CLI で動かすための一回きりのセットアップ手順（インストール確認・config 設定・hooks trust・対象リポジトリの trust）と、trust が壊れた場合の復旧手順。
 * [OpenCode ツールのセットアップと運用](opencode-tool-setup.md) - リポジトリ/ワークフローを OpenCode で動かすためのセットアップ（インストール確認・config 設定・アセット自動配置）と、Codex/Claude と異なる縮退（block 不可・指示が可視・llm 検収不可）の運用上の注意。
 * [click-to-focus セットアップ（terminal-notifier / bundle id / 切り分け）](click-to-focus-setup.md) - 通知クリックで対象タスクの herdr pane を開く F-94 の導入手順。terminal-notifier の導入、plugins/notifier-macos.toml の backend / activate_bundle_id / click_command 設定、bundle id の調べ方、動作確認、クリックが効かない・通知が出ないときの切り分け表。
-* [herdr サイドバーに repo / タスクを出す（一回きりの設定）](herdr-sidebar-setup.md) - totsuka が dispatch 時に報告する repo / task / mode のメタデータトークンをサイドバーに出すための ~/.config/herdr/config.toml スニペットと、反映手順・確認方法・出ないときの切り分け。totsuka はこのファイルを書き換えないので手作業になる。
+* [herdr サイドバーに repo / タスクを出す（一回きりの設定）](herdr-sidebar-setup.md) - totsuka が dispatch 時に報告する repo / task / mode のメタデータトークンをサイドバーに出すための ~/.config/herdr/config.toml スニペットと、反映手順・確認方法・出ないときの切り分け。手で起動した agent にもリポジトリ名を出す zsh フックを含む。totsuka はこのファイルを書き換えないので手作業になる。
 <!-- okf:index:end -->

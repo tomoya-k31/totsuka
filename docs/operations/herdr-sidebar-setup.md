@@ -1,11 +1,11 @@
 ---
 type: Runbook
 title: herdr サイドバーに repo / タスクを出す（一回きりの設定）
-description: "totsuka が dispatch 時に報告する repo / task / mode のメタデータトークンをサイドバーに出すための ~/.config/herdr/config.toml スニペットと、反映手順・確認方法・出ないときの切り分け。totsuka はこのファイルを書き換えないので手作業になる。"
+description: "totsuka が dispatch 時に報告する repo / task / mode のメタデータトークンをサイドバーに出すための ~/.config/herdr/config.toml スニペットと、反映手順・確認方法・出ないときの切り分け。手で起動した agent にもリポジトリ名を出す zsh フックを含む。totsuka はこのファイルを書き換えないので手作業になる。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [herdr, ui, sidebar, setup, 417]
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-08-11T15:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T16:10:00+09:00 }
 owner: tomoya-k31
 ---
 
@@ -21,38 +21,122 @@ totsuka は dispatch のたびに、herdr の workspace と pane へ「どのリ
 やらない場合の見え方: spaces / agents の両パネルに `totsuka: サイドバーを直す` という
 workspace label は出る（#417 D4 の rename）。行が増えないだけである。
 
+**サイドバーの幅も足りないことが多い。** 既定では `totsuka: {タイトル}` が切れる。
+`[ui]` に `sidebar_width`（`sidebar_min_width` / `sidebar_max_width` も同じ層）があり、
+`herdr config check` は認識する。
+
+ただし**実行中セッションに効くかは確かめていない**: `session.json` にも `sidebar_width` が
+別途永続化されており、設定を変えて `reload-config` した直後もそちらの値は変わらなかった。
+両者の優先関係は未確認なので、**すぐ広げたいなら境界をマウスでドラッグする**のが確実で、
+ドラッグした値はそのまま永続化される。
+
 # 手順
 
 `~/.config/herdr/config.toml` に追記する。
 
+**`[ui]` テーブルは既にあるはず**なので、`sidebar_width` は**その中へ**足すこと。`[ui]` を
+もう一度書くと TOML の重複テーブルになり、**設定ファイルごと読めなくなる**（未知キーのように
+無視されない）。
+
 ```toml
+# 既存の [ui] の中へ。既定 36 では "totsuka: {タイトル}" が切れる。
+# sidebar_width = 44
+
+# branch / git_status は **space 単位**のトークン。1 つの space に別リポジトリの
+# tab をぶら下げられる以上、「どれの branch か」が言えないので出さない。
+# $repo も出さない — rename 後の label が repo で始まるので重複する。
 [ui.sidebar.spaces]
 row_gap = 0
-rows = [
-  ["state_icon", { token = "$repo", fg = "#89b4fa", bold = true }, "workspace"],
-  ["branch", "git_status"],
-]
+rows = [["state_icon", "workspace"]]
 
+# claude 以外（codex / opencode …）と、rows_by_agent に無い agent 用のフォールバック。
+# ここも下の 3 制約に従う: agent は常に非空、主語は $repo、長い workspace は次の行。
 [ui.sidebar.agents]
 row_gap = 0
-rows = [["state_icon", "workspace", "tab"], ["agent"]]
+rows = [
+  ["state_icon", { token = "$repo", fg = "#89b4fa", bold = true }, "agent"],
+  [{ token = "workspace", dim = true }],
+]
 
+# 行の主語は **pane が居るリポジトリ**であって space ではない。workspace label を
+# 主語にすると、totsuka の space に足した別リポジトリの tab で動いている agent が
+# 「totsuka」と名乗ってしまう。workspace は 2 行目へ dim で落とす。
+#
+# その 2 行目が「常に非空の行」も兼ねている。$repo / $mode はメタデータを報告した
+# pane にしか載らず、terminal_title_stripped も agent が OSC タイトルを出すまでは
+# 空なので、1 行目だけでは entry が state icon だけになりうる。
 [ui.sidebar.agents.rows_by_agent]
 claude = [
-  ["state_icon", { token = "$repo", fg = "#89b4fa", bold = true }, { token = "$mode", fg = "#f9e2af" }],
-  [{ token = "terminal_title_stripped", fg = "#a6adc8" }],
+  [
+    "state_icon",
+    { token = "$repo", fg = "#89b4fa", bold = true },
+    { token = "$mode", fg = "#f9e2af" },
+    { token = "terminal_title_stripped", fg = "#a6adc8" },
+  ],
+  [{ token = "workspace", dim = true }],
 ]
 ```
 
 反映（再起動は不要）:
 
 ```bash
+herdr config check          # 未知キーはここで名指しで報告される
 herdr server reload-config
 ```
 
-**`rows_by_agent.claude` ＋ `terminal_title_stripped` の 2 行は totsuka 側の実装を待たずに今日入れられる**
-（`$repo` / `$mode` が空になるだけ）。`terminal_title_stripped` は Claude Code が OSC で出す作業要約で、
-これ自体は totsuka と無関係に動く。
+**`terminal_title_stripped` は totsuka 側の実装を待たずに今日入れられる**（`$repo` / `$mode` が
+空になるだけ）。Claude Code が OSC で出す作業要約で、これ自体は totsuka と無関係に動く。
+
+## 手で起動した agent にもリポジトリ名を出す（任意）
+
+**herdr に「リポジトリ名」の組み込みトークンは無い。** pane のレコードは `cwd` を持っているが、
+それを描画するトークンが無いので、値を出す唯一の手段はメタデータの報告である。totsuka は自分が
+dispatch した pane にしか報告しないため、**手で起動した agent の `$repo` は空のまま**になる。
+
+シェル側から報告すれば埋まる。zsh なら:
+
+```zsh
+# totsuka が dispatch した pane では走らせないこと（下記）
+if [[ -n $HERDR_ENV && -n $HERDR_PANE_ID && -z $TOTSUKA_JOB_ID ]]; then
+  autoload -U add-zsh-hook
+  _herdr_report_repo() {
+    local root
+    root=$(command git rev-parse --show-toplevel 2>/dev/null) || root=''
+    # 同じ repo なら herdr を叩かない。ただし「まだ一度も報告していない」と
+    # 「repo の外に居る」はどちらも空文字なので ${+set} で区別する — 同一視すると、
+    # pane に前のシェルが残したトークンがある状態で非 repo から起動したときに
+    # 下の clear が走らず、古い repo 名が残る。
+    # RHS を引用符で囲むのは GLOB_SUBST 対策（既定の zsh では変数展開した
+    # パターン文字は効かないが、有効にしている環境ではパスの [ ] * が効いてしまう）。
+    if [[ ${_herdr_reported_repo_root+set} == set && $root == "$_herdr_reported_repo_root" ]]; then
+      return
+    fi
+    typeset -g _herdr_reported_repo_root=$root
+    if [[ -n $root ]]; then
+      command herdr pane report-metadata "$HERDR_PANE_ID" \
+        --source shell --token repo="${root:t}" &>/dev/null
+    else
+      command herdr pane report-metadata "$HERDR_PANE_ID" \
+        --source shell --clear-token repo &>/dev/null   # repo の外では消す
+    fi
+  }
+  add-zsh-hook chpwd _herdr_report_repo
+  _herdr_report_repo
+fi
+```
+
+`HERDR_ENV` / `HERDR_PANE_ID` は herdr が pane の環境に入れる（実測）ので、pane を引くための
+API 呼び出しは要らない。
+
+**`TOTSUKA_JOB_ID` のガードは必須。** トークン名はコンテナごとにグローバルで、`--source` は
+名前空間ではない（[herdr Socket API](/references/herdr-socket-api.md) 参照）ので、totsuka が
+dispatch した pane で走らせると totsuka の `repo` を上書き・削除してしまう。しかも totsuka の
+worktree では `${root:t}` は **worktree 名**（`github-42` 等）であって `[[repositories]].name` では
+ない。**伴走シェルでは走る。** `TOTSUKA_JOB_ID` は agent pane にしか届かず（`workspace.create` の
+`env` は root pane にだけ適用される）、伴走シェルの cwd は worktree なので、フックはそこへ
+`repo = <worktree ディレクトリ名>` を書く。無害ではあるが正確でもない — 別 pane なので
+エージェントのトークンには触れず、その pane は agent を持たないので agents パネルにも出ない。
+気になるなら `[[ -z $TOTSUKA_JOB_ID ]]` の代わりに、worktree 配下かどうかで弾いてもよい。
 
 # 確認
 
@@ -79,11 +163,13 @@ identity を再報告する経路を足すかで、[ADR-0039](/decisions/adr-003
 
 | 症状 | 見るところ |
 |---|---|
-| 行が増えない | `herdr server reload-config` を実行したか。`[ui.sidebar.*]` の綴り |
+| 行が増えない | `herdr server reload-config` を実行したか。`herdr config check` は**未知キーを名指しで報告する**（`unknown config key ui.…; ignoring key`）ので、綴りはそれで確かめる |
 | `$repo` だけ空 | Orchestrator が protocol 0.4.1 以上か（`repo_name` は 0.4.1 の追加。それ以前は報告されない） |
 | workspace label が `totsuka {id}` のまま | **rename しない条件が 4 つある。いずれも正常な縮退**（[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D4）。`totsuka logs` の文言で切り分ける: ①identity 報告の失敗 → `could not report … identity` ②rename 自体の失敗 → `could not rename the workspace` ③`repo_name` が届いていない（Orchestrator が 0.4.1 未満）→ ログ無し ④タスク ID が長すぎて（80 文字超）マーカー token を載せられない → `task id exceeds herdr's token limit`（`--debug` が要る） |
 | すべて出ない | `plugins/herdr.toml` の `[identity] enabled` が `false` になっていないか |
-| 自分で開いた space の行が空行だらけ | `rows` はグローバルなので、`$repo` / `$task` だけの行は人間の space で空になる。1 行目に組み込みトークン（`workspace` 等）を混ぜること |
+| 自分で開いた space / 手起動の agent の行が空になる | `rows` はグローバルなので、報告されたトークンだけで組んだ行は空になる。**1 行目に常に非空のトークンを 1 つ以上**混ぜること（spaces なら `workspace`、agents なら `terminal_title_stripped` 等）。上のスニペットはそうしてある |
+| agent が居るリポジトリではなく space 名が出る | 1 つの space に別リポジトリの tab を足すとこうなる。`workspace` を 1 行目の主語にしないこと。手起動の agent に repo を出すには上の shell フックが要る |
+| `$mode` が長い label に押し出される | 可変長の `workspace` は行の**最後**に置く。固定長のトークンを先に |
 
 **totsuka を元に戻したいだけなら** `plugins/herdr.toml` に `[identity] enabled = false` を書く。
 報告も rename も止まり、#417 以前と同じ挙動になる。herdr 側の設定はそのままでよい

@@ -4,9 +4,9 @@ title: ADR-0039 herdr サイドバーの identity は metadata token で運び�
 description: "herdr の左サイドバーに「どのリポジトリの・どのタスクを・どのモードで」を出すため、identity を label ではなく workspace / pane の metadata token として報告し、リポジトリ名は TaskDispatchParams.repo_name（プロトコル 0.4.1、純追加）で渡す決定。worktree.open によるグルーピング・pane.rename・display_agent の各案を採らない理由と、サイドバー設定を totsuka が書き換えない理由。"
 tags: [herdr, protocol, ui, identity, 417]
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-08-11T15:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T16:10:00+09:00 }
 verified:
-  - { by: human:tomoya-k31, at: 2026-08-11T15:10:00+09:00 }
+  - { by: human:tomoya-k31, at: 2026-08-11T16:10:00+09:00 }
 sources:
   - id: herdr-probe-2026-08-09
     resource: herdr 0.7.5 / protocol 17 の実機プローブ（`herdr api schema --json` と workspace 作成による実測）
@@ -27,14 +27,19 @@ Accepted — 2026-08-11（[#417](https://github.com/tomoya-k31/totsuka/issues/41
 - **`tokens` が `workspace.list` / `workspace.get` / `pane.list` の 3 つすべてから読み戻せる。**
   所有判定（D2）が読むのは **`workspace.list`** なので、そこに載ることが要点である
 - **`workspace.rename` がトークンを保つ**（D4 が前提にしていた点）
+- **`agent.start` を挟んでもトークンが保たれる**（D1 の「報告してから起動する」順序が依存している点）
 - 日本語のタイトルがそのまま往復する
 - 一連の操作の後も pane のレコードに `label` **キーが現れない**（#416 の前提の再確認）。
   herdr は `null` を送るのではなく**キーごと省く** — `agent` も伴走シェルでは同じく省かれる
+- **サイドバーの描画。** 報告した pane の行に `$repo` / `$mode` が出ること、オペレータが自分で
+  開いた space と手で起動した agent ではそれらが空になることを目視で確認した。**D6 の 3 制約は
+  この目視で見つかった** — 最初のスニペットは 3 つとも破っており、手で起動した claude の行が
+  `state_icon` だけになり、別リポジトリの tab で動く agent が space 名で名乗っていた
 
 **確認できていないもの**（`verified` はこれらを含まない）:
 
-- **サイドバーの見た目**。行が想定どおり描画されるか、オペレータが自分で開いた space で `$repo` が空行を残さないかは目視が要る
-- **プラグイン経由の dispatch 一周**。上は `herdr` CLI から同じ呼び出しを再現したもので、`agent.start` の readiness レース（#387 / #391）に往復 3 回の追加が影響しないかはまだ測っていない
+- **プラグイン経由の dispatch 一周**。上は `herdr` CLI から同じ呼び出しを再現したもので、
+  `agent.start` の readiness レース（#387 / #391）に往復 3 回の追加が影響しないかは測っていない
 - **herdr 再起動をまたいで `tokens` が残るか**（下の Consequences 参照）
 - **`[identity] enabled = false` の否定側**
 - **エージェントが終了した後の pane レコードの形。** `agent` が残るなら、その pane が
@@ -65,6 +70,11 @@ dispatch の `workspace.create` 直後（`start_agent` の**前**）に、**work
 | `mode` | `plan` / `implement` | `$mode` |
 
 - `source` は**定数 `"totsuka"`**。1 つの pane / workspace が受け付ける異なる `source` は**生涯 32 個まで**で、clear や expiry でスロットが戻らない。タスク毎の source はこれを食い潰す
+- **`source` は名前空間ではない**（実機で確認）。トークン名はコンテナごとにグローバルで、別の
+  `source` から同じ名前を書けば上書きでき、`--clear-token` は他人が入れた値ごと消す。定数にした
+  理由はスロット制限のままだが、**同じ pane に 2 つの書き手が居てはいけない**という帰結が別につく —
+  手で起動した agent に repo を出すシェルフックは、totsuka が dispatch した pane では
+  走らせてはならない（[サイドバー設定手順](/operations/herdr-sidebar-setup.md)）
 - `seq` / `ttl_ms` は付けない。identity は status ではなく、タスクより長生きすべきものである
 - **失敗しても dispatch は落とさない**。`apply_layout` と同じく `tracing::warn!` のみ
 - `start_agent` の**前**に置くのは、`start_agent` が最大 180 秒のリトライループだからである。後に回すと、オペレータが一番見ている時間帯だけ行が無名になる。ソケット 1 往復 ≒ 25ms（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md)）で `agent.start` に比べれば誤差
@@ -112,7 +122,7 @@ dispatch の `workspace.create` 直後（`start_agent` の**前**）に、**work
 
 herdr 側の一時障害で 2 が落ちても「機械 label のまま・サイドバーが綺麗にならないだけ」で、**label と token の両方から identity が消える瞬間が無い**。
 
-token だけでは足りない理由: `rows` はグローバルで、オペレータが自分で開いた space にも同じ行構成が当たる。`$repo` / `$task` は人間の space では空なので、1 行目から `workspace` トークンを外せない。つまり `workspace` が不透明なままだと**両パネルとも 1 行目が壊れたまま**になる。
+token だけでは足りない理由: `rows` はグローバルで、オペレータが自分で開いた space にも同じ行構成が当たる。`$repo` / `$task` は人間の space では空なので、**spaces 行**から `workspace` トークンを外せない。つまり `workspace` が不透明なままだと spaces パネルが壊れたままになる（agents 側で `workspace` を主語にしない話は D6 の制約 2 で、こことは別のパネルの議論である）。
 
 ## D5 — `worktree.open` によるグルーピングは見送り
 
@@ -127,6 +137,22 @@ token だけでは足りない理由: `rows` はグローバルで、オペレ�
 ## D6 — サイドバーの `rows` はオペレータの設定。totsuka は書き換えない
 
 `~/.config/herdr/config.toml` は herdr とオペレータのものであり、totsuka が触ってよいファイルではない（[click-to-focus セットアップ](/operations/click-to-focus-setup.md) と同じ扱い）。推奨スニペットを docs に置き、手で入れてもらう。
+
+**その推奨スニペットが満たすべき制約は 3 つある**（いずれも最初のスニペットが破っていて、実機で出た）:
+
+1. **entry のどこかに、常に非空のトークンを 1 つ以上置く。** `rows` はグローバルなので、
+   オペレータが自分で開いた space と**手で起動した agent** にも同じ行構成が当たる。報告された
+   トークンだけで組むと、そこで entry 全体が `state_icon` だけになる。常に非空と言えるのは
+   spaces の `workspace`、agents の `workspace` / `agent` だけである
+2. **agents 行の主語に `workspace` を使わない。** 1 つの space に別リポジトリの tab を足せるので、
+   space 名を主語にすると別リポジトリで動いている agent が space の名前で名乗る。1 と併せると、
+   `workspace` は agents では 2 行目に置いて「常に非空」役を兼ねさせる形になる。
+   **spaces 側では逆に `workspace` が正しい主語**（D4 の議論はそちらの話）
+3. **長さに上限のないトークンは行の最後。** 幅の足りないサイドバーでは、先に置くと後続が
+   押し出される。`$repo` / `$mode` のような短く上限のあるものは先でよい
+
+`branch` / `git_status` は **space 単位**のトークンで agents には存在せず、また 1 space が複数
+リポジトリの tab を持つと意味を成さないので、推奨スニペットからは外してある。
 
 ## D7 — 設定フラグ `[identity] enabled` は 1 つだけ
 
