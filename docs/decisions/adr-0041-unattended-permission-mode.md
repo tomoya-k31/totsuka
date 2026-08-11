@@ -4,9 +4,11 @@ title: ADR-0041 pane には答える人が居ないので、3 ツールとも承
 description: "無人 pane が承認プロンプトで止まる問題（#420）に対し、claude は permissions.defaultMode = auto、codex は --ask-for-approval never、opencode は --auto で起動する決定。境界は deny / サンドボックス / deny マップが別に持っており、この設定はそれを緩めない。より厳しい dontAsk を採らなかったのは、allow リストの取りこぼしが「タスクが仕事をできない」に静かに化けるため。claude 側は profile がある workflow に限る。"
 resource: https://github.com/tomoya-k31/totsuka/issues/420
 tags: [decision, security, permissions, claude-code, codex, opencode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-11T23:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-12T00:10:00+09:00 }
 status: stable
-verified: [{ by: claude-code/opus-5, at: 2026-08-11T22:50:00+09:00 }]
+verified:
+  - { by: claude-code/opus-5, at: 2026-08-11T22:50:00+09:00 }
+  - { by: claude-code/opus-5, at: 2026-08-11T23:07:00+09:00 }
 owner: tomoya-k31
 sources:
   - id: issue-420
@@ -122,4 +124,21 @@ claude には `dontAsk` — 「`permissions.allow` で事前に許可されて�
 - `cargo test --workspace --all-features` — 全 profile が `permissions.defaultMode = "auto"` を書くこと、`implement` は `deny` キーを**持たない**まま mode だけ書くこと、素の `mode = "plan"` には `permissions` キーが**付かない**こと、codex が plan / implement 両方で `--ask-for-approval never` を持ちかつ `--sandbox` を失わないこと、opencode が両モードで `--auto` を持ち plan では `totsuka-plan` も保つこと
 - **claude の挙動は実機で測った**（v2.1.227、PTY）: 個人設定から `allow` / `ask` / `defaultMode` を除くと `manual` 起動になること、`default` では allowlist 外の Bash が承認プロンプトで停止すること、`dontAsk` ではプロンプト無しで拒否され allowlist 内は実行されること、そして **`--settings` から `defaultMode` を設定できること**（ユーザー設定の `auto` を `default` / `dontAsk` に上書きできた）
 - **codex / opencode はフラグの受理を実機で確認した**（codex-cli 0.145.0 / opencode 1.18.4）。`--sandbox read-only --ask-for-approval never` は解析を通り、`--auto` は `opencode --help` に "auto-approve permissions that are not explicitly denied (dangerous!)" として存在する
-- **未検証**: `auto` で実際に無人 design タスクが完走すること（実機 E2E）、codex `never` のループ挙動、opencode の `doom_loop` / `external_directory` が `--auto` でどう扱われるか
+- **`auto` での無人完走を実機で確認した**（2026-08-11、task 50 / cli#41、herdr + 実 Claude Code）。`github-design` タスクが**人間の介入ゼロで約 2.5 分で完走**し、セッション記録の `permissionMode` は `auto` のみ、**承認プロンプトも拒否も 0 件**、`Bash` は 2 回とも承認なしで通り、成果物を本人名義で issue へ投稿して `on_success` で `Design Review` へ遷移した。worktree は cleanup され、read-only 違反も無い
+- **「グローバル設定ではなく totsuka の settings が効いている」ことを対照実験で確認した**（task 51 / cli#43）。totsuka が書いた settings の `defaultMode` **だけ**を `dontAsk` に差し替えて同じ形のタスクを流したところ:
+
+  | 観測 | 結果 |
+  |---|---|
+  | セッション記録の `permissionMode` | **`dontAsk`** — この機のユーザー設定は `auto` なのに |
+  | `awk 'BEGIN{print 42}'`（ユーザー設定の `allow` に無い） | **プロンプトなしで拒否**（`Permission to use Bash has been denied because Claude Code is running in don't ask mode.`） |
+  | `gh issue view` / `find` / `ls`（`allow` にある） | 実行された |
+  | `Write` | `No such tool available` — **deny は mode に関わらず効く**（D2 の前提） |
+  | タスク | `done`。拒否で止まらず、経緯をコメントに書いて完走 |
+
+  **これがこの ADR の土台の直接証拠である。** `--settings` の `defaultMode` が実効モードを決める以上、
+  task 50 の `auto` は settings 由来であって、ユーザー設定が同じ値だったことに依存していない。
+  あわせて **D3 で `dontAsk` を採らなかった理由（allow の取りこぼしが静かな拒否になる）も実物で見えた**。
+- **codex / opencode の実機タスクは回さない**（運用判断、2026-08-11）。フラグの受理と意味は上のとおり
+  一次情報で確認済みだが、**`never` / `--auto` で実際にタスクが完走することは測っていない**。
+  codex の `never` が失敗をモデルへ返し続けてループしないか、opencode の `doom_loop` /
+  `external_directory` が `--auto` でどう扱われるかも未検証のまま残す
