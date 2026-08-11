@@ -974,7 +974,7 @@ source = "github"
 trigger = { project_status = "Design" }
 profile = "design"
 agent = "herdr"
-initial_prompt = "  /grill-me スキルを使用して、詳細設計を行ってください  "
+initial_prompt = "  /grill-me で {設計観点} を詰めてください  "
 
 [[workflows]]
 name = "blank"
@@ -994,9 +994,9 @@ agent = "herdr"
         );
         assert_eq!(
             workflows[0].initial_prompt.as_deref(),
-            Some("/grill-me スキルを使用して、詳細設計を行ってください"),
-            "trimmed, but otherwise literal — no template rendering, so `{{` \
-             stays `{{`"
+            Some("/grill-me で {設計観点} を詰めてください"),
+            "trimmed, but otherwise literal — nothing runs `template::render` \
+             over it, so a brace survives interpretation"
         );
         // Written-but-blank reads as unset rather than as an empty preamble
         // followed by two newlines.

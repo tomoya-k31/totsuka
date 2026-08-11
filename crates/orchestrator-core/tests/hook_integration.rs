@@ -1514,6 +1514,62 @@ async fn an_initial_prompt_is_not_repeated_on_a_resume() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// #415 × `SESSION_UNRESUMABLE`: the retry names no session, so it really is a
+/// fresh conversation — and the preamble has to come back with it.
+///
+/// This is the whole reason the `resume.is_none()` test sits **inside**
+/// `build_params` rather than being computed once before it. Computed outside,
+/// the retry would inherit the resume dispatch's answer and start an agent
+/// that never sees the instructions.
+#[tokio::test]
+async fn an_initial_prompt_returns_when_a_resume_turns_out_to_be_impossible() {
+    let base = scratch("initial_prompt_unresumable");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+    seed_finished_conversation(&db, "1", Some("cc-gone"));
+
+    let plugins = resume_plugins_with(
+        follow_up("1", "1:reply"),
+        &dispatch_log,
+        &notify_log,
+        json!({ "dispatch_error": {
+            "code": plugin_protocol::error_code::SESSION_UNRESUMABLE,
+            "message": "the agent session could not be resumed",
+            "only_when_resuming": true,
+        }}),
+    )
+    .await;
+    let mut settings = resume_settings(&repo, &base);
+    for wf in &mut settings.workflows {
+        wf.initial_prompt = Some(INITIAL_PROMPT.to_string());
+    }
+    let mut engine =
+        Engine::with_clock(db, settings, plugins, SystemGitRunner, no_llm(), clock).await;
+
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || dispatches(&dispatch_probe).len() >= 2).await;
+    engine.shutdown(GRACE).await;
+
+    let attempts = dispatches(&dispatch_log);
+    assert_eq!(attempts.len(), 2, "{attempts:#?}");
+    assert_eq!(attempts[0]["params"]["resume_session_id"], "cc-gone");
+    assert!(
+        attempts[0]["params"]["extra_context"].is_null(),
+        "the resume attempt still carries nothing: {}",
+        attempts[0]["params"]
+    );
+    assert!(attempts[1]["params"]["resume_session_id"].is_null());
+    assert_eq!(
+        attempts[1]["params"]["extra_context"], INITIAL_PROMPT,
+        "the agent this actually starts remembers nothing, so it is told again"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// #415 on a tool with no invisible channel: the preamble leads and everything
 /// that used to be the whole visible context — the task's instructions and the
 /// marker convention — follows it, in that order.

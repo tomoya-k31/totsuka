@@ -112,4 +112,5 @@ core が但し書きを自動で足すと、`initial_prompt` に書いた内容�
 
 - [config.toml リファレンス](/development/config-reference.md) — キーの仕様と運用上の注意
 - [ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md) — プロンプト外出しの原則（権限に関わる決定を設定文字列から到達可能にしない）
+- [ADR-0024](/decisions/adr-0024-agent-instruction-layers.md) — 指示の所有層。**紛らわしいので注意**: あちらの不採用案に Claude Code ネイティブの `initialPrompt`（`agents` インライン JSON のキー）があるが、本 ADR の `[[workflows]].initial_prompt` は**別物**である。名前が似ているだけで、こちらは totsuka の設定キーで、届け方は pane への可視入力であり、Claude Code の機構には一切依存しない
 - [ADR-0033](/decisions/adr-0033-workflow-profile.md) — workflow profile
