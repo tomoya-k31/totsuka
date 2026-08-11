@@ -564,10 +564,10 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     ///
     /// The pane label survives the same handoff (measured), and it is a
     /// *separate* field from the workspace label — `pane.rename` is the only
-    /// thing that writes it, and totsuka never called it, which is exactly the
-    /// gap #416 found. So the readable name and the machine marker stop
-    /// competing for one field: the workspace label is for humans, the pane
-    /// label is for us.
+    /// thing that writes it, and until this function totsuka never called it,
+    /// which is exactly the gap #416 found. Filling it lets the readable name
+    /// and the machine marker stop competing for one field: the workspace
+    /// label is for humans, the pane label is for us.
     ///
     /// [`list_sessions`](Self::list_sessions) already reads `PaneInfo.label`
     /// as one of its four ownership paths, so nothing there changes — the path
