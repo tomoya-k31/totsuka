@@ -507,6 +507,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 client.call(method, payload).await
             }
         };
+        let mut reported = true;
         if let Err(e) = report(
             "workspace.report_metadata",
             json!({ "workspace_id": workspace.id }),
@@ -514,12 +515,65 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         .await
         {
             tracing::warn!(workspace_id = %workspace.id, error = %e, "could not report workspace identity");
+            reported = false;
         }
-        let Some(pane_id) = &workspace.root_pane_id else {
+        match &workspace.root_pane_id {
+            Some(pane_id) => {
+                if let Err(e) = report("pane.report_metadata", json!({ "pane_id": pane_id })).await
+                {
+                    tracing::warn!(pane_id, error = %e, "could not report pane identity");
+                    reported = false;
+                }
+            }
+            None => reported = false,
+        }
+        if reported {
+            self.rename_for_humans(params, workspace).await;
+        }
+    }
+
+    /// Replace the machine label with one an operator can read: `{repo}: {task}`
+    /// (#417 D4).
+    ///
+    /// # Why this is a third call and not just a better `workspace.create`
+    ///
+    /// `workspace.create` writes `totsuka {task.id}` — **byte-identical to
+    /// before #417** — so the ownership marker exists from the workspace's
+    /// first instant. Renaming afterwards, and **only when both reports
+    /// succeeded**, means there is no moment where identity is missing from
+    /// *both* the label and the tokens: a herdr that blips during the reports
+    /// leaves the machine label in place and merely does not get prettier.
+    ///
+    /// That ordering is also what lets `release` trust the token over the
+    /// label — a container with no token was never renamed, so its label is
+    /// still the marker form the label path compares.
+    ///
+    /// # Why the sidebar still needs a label at all
+    ///
+    /// `rows` is global: the operator's own spaces get the same row layout,
+    /// and `$repo` / `$task` are empty there. So the first row cannot drop the
+    /// built-in `workspace` token — which means an opaque `workspace` leaves
+    /// **both panels'** first row broken, tokens or no tokens.
+    ///
+    /// Skipped without a `repo_name` (an Orchestrator older than protocol
+    /// 0.4.1): `: Fix the bug` is not an improvement on `totsuka 42`.
+    async fn rename_for_humans(&self, params: &TaskDispatchParams, workspace: &NewWorkspace) {
+        let Some(repo) = &params.repo_name else {
             return;
         };
-        if let Err(e) = report("pane.report_metadata", json!({ "pane_id": pane_id })).await {
-            tracing::warn!(pane_id, error = %e, "could not report pane identity");
+        let label = token_value(&format!("{repo}: {}", params.task.title));
+        if let Err(e) = self
+            .client
+            .call(
+                "workspace.rename",
+                json!({ "workspace_id": workspace.id, "label": label }),
+            )
+            .await
+        {
+            tracing::warn!(
+                workspace_id = %workspace.id, error = %e,
+                "could not rename the workspace; the machine label stays, which is still ours"
+            );
         }
     }
 

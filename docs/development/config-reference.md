@@ -566,8 +566,15 @@ metadata token を報告する。`$name` の解決先が spaces 行では worksp
 | `mode` | `plan` / `implement` |
 
 **サイドバーの行構成は totsuka が書き換えない。** `~/.config/herdr/config.toml` は herdr と運用者のもので、
-推奨スニペットは運用ドキュメント側にある（[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D6）。
-スニペットを入れていない環境では、報告しても表示は変わらない。
+貼るスニペットは [herdr サイドバーに repo / タスクを出す](/operations/herdr-sidebar-setup.md)、
+書ける値は [herdr サイドバー設定](/references/herdr-sidebar-config.md) にある
+（[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D6）。
+**スニペットを入れていない環境では、報告しても行は増えない**（label だけは変わる）。
+
+報告が**両方成功したときだけ**、workspace の label を `{repo}: {タイトル}` に rename する（D4）。
+`workspace.create` が書く `totsuka {task.id}` は #417 以前とバイト同一なので、
+所有マーカーは workspace の最初の瞬間から存在し、rename に失敗しても機械 label が残る。
+`repo_name` が無ければ rename しない。
 
 **報告の失敗は dispatch を落とさない**（`tracing::warn!` のみ）。identity は装飾で、
 herdr が一瞬詰まっただけで走れるタスクを失うほうが高くつく。

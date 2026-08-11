@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-11T23:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-12T00:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -38,7 +38,8 @@ herdr socket は **JSON-RPC ではなく NDJSON**（1 行 1 メッセージ・`i
 ```text
 workspace.create {cwd: worktree, env: hook_env}   → root_pane
 workspace.report_metadata {workspace_id, source: "totsuka", tokens}   ┐ #417
-pane.report_metadata {pane_id: root_pane, source: "totsuka", tokens}  ┘ 失敗しても続行
+pane.report_metadata {pane_id: root_pane, source: "totsuka", tokens}  │ 失敗しても続行
+workspace.rename {workspace_id, label: "{repo}: {task}"}              ┘ 両方成功したときだけ
 pane.split {target_pane_id: root_pane, ...}       → 併設シェル（[layout].shell = true のとき）
 agent.start {name, kind, pane_id: root_pane, args, timeout_ms}
 agent.prompt {target: root_pane, text, wait}
@@ -51,6 +52,18 @@ agent.prompt {target: root_pane, text, wait}
 `source` は定数 `"totsuka"` — 異なる `source` は 1 コンテナにつき生涯 32 個しか受け付けず、
 clear でも expiry でもスロットが戻らないため、タスク毎の `source` は使えない。
 `[identity] enabled = false` で報告ごと止まる。
+
+**label を人間可読にするのは 3 番目の呼び出し**（#417 D4）。`workspace.create` が書くのは
+`totsuka {task.id}` で**#417 以前とバイト同一**、所有マーカーが workspace の最初の瞬間から存在する。
+rename は**報告が両方成功したときだけ**行うので、herdr が途中で詰まっても「機械 label のまま・
+サイドバーが綺麗にならないだけ」で、**label と token の両方から identity が消える瞬間が無い**。
+この順序が、`session/release` が token を label より信用してよい根拠でもある — token が無い
+container は rename もされておらず、label 経路が比較するマーカー形式のままだからである。
+`repo_name` が無ければ rename しない（`: Fix the bug` は `totsuka 42` の改善ではない）。
+
+**サイドバーの行構成は totsuka が書かない**（D6）。`~/.config/herdr/config.toml` に手で入れる
+スニペットは [herdr サイドバーに repo / タスクを出す](/operations/herdr-sidebar-setup.md)、
+書ける値は [herdr サイドバー設定](/references/herdr-sidebar-config.md) にある。
 
 **エージェントは workspace の root pane で動く。** protocol 17 の `agent.start` は pane を作らず、
 呼び出し側が用意した pane に起動する。0.7.4 までは `agent.start` が新しい pane を作っていたため、
