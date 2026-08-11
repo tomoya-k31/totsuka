@@ -1175,8 +1175,30 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         missing: &[crate::agent_tools::AgentTool],
     ) {
         let names: Vec<&str> = missing.iter().map(|t| t.as_str()).collect();
+        // Persisted so `totsuka status` can still answer "why is this task not
+        // moving" long after the notification scrolled away (#407). Recorded
+        // rather than recomputed at read time on purpose: `status` runs in the
+        // operator's shell, where `gh` may well be on `PATH` even though it is
+        // not here — a live check there would report "not blocked" about a
+        // task this process is refusing to dispatch.
+        //
+        // **Ahead of the notification gate below, on every cycle.**
+        // `note_task` deduplicates against the task's own history, which makes
+        // repeating the call a single indexed lookup — and buys two things the
+        // in-process set cannot give: a failed write is retried next cycle
+        // rather than losing the explanation for the whole wait, and a
+        // *changed* `missing` set supersedes the recorded one instead of
+        // leaving a note that no longer describes the situation.
+        let note = serde_json::json!({
+            crate::adapters::state_db::NOTE_KEY: crate::agent_tools::BLOCKED_NOTE,
+            "missing": names,
+        });
+        if let Err(e) = self.db.note_task(record.id, &note) {
+            tracing::warn!(task_id = record.id, error = %e, "could not record the wait reason");
+        }
+        // The set gates the *notification* only (#399): interrupting someone
+        // every 200 ms is spam, whereas re-recording the same note is a no-op.
         if !self.blocked_on_tools.insert(record.id) {
-            // Already reported; the dispatch loop reaches this every cycle.
             tracing::debug!(
                 task_id = record.id,
                 missing = ?names,
@@ -1184,16 +1206,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             );
             return;
         }
-        let remedies: Vec<&str> = missing.iter().map(|t| t.remedy()).collect();
-        let reason = format!(
-            "waiting: {} unavailable in the orchestrator's environment → {}. \
-             The task stays queued and starts on its own once this resolves \
-             (checked every few minutes). If the tool is only reachable from \
-             the agent's pane, this check is a false negative — see the \
-             agent-tools note in `totsuka doctor`.",
-            names.join(", "),
-            remedies.join("; ")
-        );
+        let reason = format!("waiting: {}", crate::agent_tools::blocked_reason(&names));
         tracing::warn!(task_id = record.id, missing = ?names, "{reason}");
         notify_all(
             &self.plugins.notifiers,
@@ -1242,6 +1255,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 self.report_blocked_on_agent_tools(record, &missing).await;
                 continue;
             }
+            // The wait ended, so the "already told you" memory has to end with
+            // it: a task that is blocked, dispatched, retried and blocked
+            // again is in a *new* condition the operator has not been told
+            // about. Without this the set only ever grows and the second wait
+            // is silent in both the notification and `status` (#407).
+            self.blocked_on_tools.remove(&record.id);
             ready.push(ReadyTask {
                 task_id: record.id,
                 repo,

@@ -203,6 +203,68 @@ fn status_reports_stale_lock_and_parseable_json() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// #407: a queued task that the orchestrator refuses to dispatch has to be
+/// able to say why, minutes after the one notification scrolled away.
+#[test]
+fn status_explains_why_a_queued_task_is_not_starting() {
+    let base = scratch("wait_reason");
+    let state_dir = base.join("state").join("totsuka");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let db = StateDb::open(&state_dir.join("state.db")).unwrap();
+    let id = db
+        .upsert_task(&NewTask {
+            source: "github".into(),
+            source_task_id: "7".into(),
+            workflow: "github-implement".into(),
+            mode: "implement".into(),
+            repo: Some("web".into()),
+            priority: 0,
+            title: "Add a flag".into(),
+            url: None,
+            source_payload: None,
+            last_signal_at: None,
+        })
+        .unwrap();
+    db.note_task(
+        id,
+        &serde_json::json!({ "note": "blocked_agent_tools", "missing": ["gh"] }),
+    )
+    .unwrap();
+    drop(db);
+
+    let text = stdout(&run(&base, &["status"]));
+    assert!(
+        text.contains("gh unavailable") && text.contains("gh auth login"),
+        "the reason and its remedy: {text}"
+    );
+    assert!(
+        text.contains("false negative") && text.contains("totsuka doctor"),
+        "the check runs in the orchestrator's environment, not the agent's — \
+         the operator needs the way out of a wrong answer: {text}"
+    );
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&run(&base, &["status", "--json"]))).unwrap();
+    let task = &doc["tasks"][0];
+    assert_eq!(task["state"], "queued");
+    assert_eq!(task["wait_reason"]["kind"], "blocked_agent_tools");
+
+    // Dispatching resolves it — nothing has to remember to clear it.
+    let db = StateDb::open(&state_dir.join("state.db")).unwrap();
+    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    drop(db);
+    let text = stdout(&run(&base, &["status"]));
+    assert!(!text.contains("not starting yet"), "resolved: {text}");
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&run(&base, &["status", "--json"]))).unwrap();
+    assert!(
+        doc["tasks"][0].get("wait_reason").is_none(),
+        "absent, not null: {doc}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// #280: a task source lets a third party choose `title` / `body` / `author`
 /// / `url` / `source_task_id`. Printed verbatim those can repaint the
 /// operator's screen, so every human rendering has to defuse them — while

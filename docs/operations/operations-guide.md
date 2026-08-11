@@ -129,7 +129,7 @@ worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane
 
 # タスク操作
 
-- `totsuka status [--json]`: 実行中 / 待機（waiting_input・pending）タスクと worktree 一覧
+- `totsuka status [--json]`: 実行中 / 待機（waiting_input・pending）タスクと worktree 一覧。**`Queued` のまま動かないタスクに理由が付いていればそれも出す**（`not starting yet:` ブロック / `--json` の `wait_reason`）。現状の唯一の理由は `blocked_agent_tools`（#399 の外部ツール未整備）で、対処は [config.toml リファレンス](/development/config-reference.md) 参照
 - `totsuka task show <id>`: 状態・セッション履歴・worktree・イベント全履歴
 - `totsuka task cancel <id>` / `retry <id>`: retry は failed/cancelled のみ。worktree/セッションを再利用して再開（F-44）
 - `totsuka logs [-f] [--task <id>]`: JSON Lines ログの整形表示。機密は logging layer で無条件マスク（§5.2）
