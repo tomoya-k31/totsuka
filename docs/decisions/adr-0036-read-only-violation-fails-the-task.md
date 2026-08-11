@@ -1,10 +1,10 @@
 ---
 type: Decision
 title: ADR-0036 triage / design はシェルを検査せず、リポジトリを触ったら成功として扱わない
-description: "gh issue comment に複数行 Markdown を渡すにはシェル構文が要るため triage / design から Bash を取り上げられない。コマンド文字列を検査するフックは、引用符の内外を見分けるパーサが要るうえ取りこぼしに強い名前が付くので不採用。代わりに全 read-only profile から plan ゲートを外して無人ハングを消し、read-only profile のタスクがブランチ上にあったら fail_publish で失敗させる。止まるのは成功報告と on_success で、triage / design の成果物はエージェントが直接書く（#398）ため既に公開済みで取り消せない。防止ではなく検出で、本当の境界はサンドボックス調査（#418）に送る。"
+description: "gh issue comment に複数行 Markdown を渡すにはシェル構文が要るため triage / design から Bash を取り上げられない。コマンド文字列を検査するフックは、引用符の内外を見分けるパーサが要るうえ取りこぼしに強い名前が付くので不採用。代わりに全 read-only profile から plan ゲートを外して無人ハングを消し、read-only profile のタスクがブランチ上にあったら fail_publish で失敗させる。同じ検査を worktree sweep からも回し、走行中に見つけたら pane を閉じる。止まるのは成功報告と on_success で、triage / design の成果物はエージェントが直接書く（#398）ため既に公開済みで取り消せない。防止ではなく検出で、本当の境界はサンドボックス調査（#418）に送る。"
 resource: https://github.com/tomoya-k31/totsuka/issues/409
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-11T13:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T20:00:00+09:00 }
 status: stable
 verified: [{ by: human:tomoya-k31, at: 2026-08-11T04:05:00+09:00 }]
 owner: tomoya-k31
@@ -92,6 +92,18 @@ gh issue comment 31 --body x && git push                    # 危険
 
 **読むのは worktree の生きた `HEAD` で、`record.branch` ではない。** 記録列は書き込み専用に近い — `sync_branch` は detached を「クリアせず未記録のまま残す」設計で、`retry_task` も触らない。そこを門にすると**この失敗から復帰できなくなる**: `totsuka task retry` のたびにここへ来て同じ古い値を読み、永久に落ち続ける。`HEAD` を読めば検査は worktree の現状を述べるものになり、**detach という操作が実際に効く救済手段になる**（失敗メッセージにその手順を書いてある）。
 
+## D4. 同じ検査を走行中にも回し、発火したら pane を閉じる
+
+D3 は `finalize_success`、つまり**タスクが publish に到達したときだけ**走る。[#410](https://github.com/tomoya-k31/totsuka/issues/410) の最後の未了項目として、worktree sweep からも同じ検査を回す（`Engine::enforce_read_only`）。
+
+**publish に到達しないタスクが取りこぼされていた。** `WaitingInput` / `Escalated` で終わった、あるいは pane を殺されたタスクは、ブランチを切って（場合によっては push して）**非失敗の状態のままログ 1 行だけを残して**止まる。[#422](https://github.com/tomoya-k31/totsuka/issues/422) の実機事例がまさにその形で、`answer` タスクが `NEEDS_INPUT` で park している。
+
+**もう半分は pane を閉じることである。** `finalize_success` がブランチを見るのはエージェントが仕事を終えたあとなので、そこで分かっても止めるものが残っていない。走行中に見つけたなら pane を閉じられる — **走っているエージェントに対してこちら側が持つ唯一のレバー**がそれである。失敗を記録する前に閉じる（生きている 1 秒ごとに、この検査では取り消せない push の機会が増えるため）。
+
+**これは防止ではない。間隔がそう言っている。** sweep は 60 秒間隔（`WORKTREE_SWEEP_INTERVAL`）で、`git switch -c` から `git push` までの数秒という窓を安定して取れる速さではない。**保証できるのは「違反したタスクは失敗で終わり、そのエージェントは止まっている」までで、「違反が起きない」ではない。** 防止は [#418](https://github.com/tomoya-k31/totsuka/issues/418) のサンドボックス待ちのままである。
+
+門は D3 と同じ `read_only_side_effect` を共有する（profile で門を作り、生きた `HEAD` を読む）。素の `mode = "plan"` は D3 と同じく警告のみで、失敗しない。
+
 # 不採用案
 
 ## `PreToolUse` フックでコマンドを検査する（D1 の詳細）
@@ -129,6 +141,7 @@ gh issue comment 31 --body x && git push                    # 危険
 # 検証
 
 - `cargo test --workspace --all-features` — 全 read-only profile が plan フラグを落とすこと（`implement` と profile 無しは落とさないこと）、`read_only_side_effect` が profile で門を作りブランチ・profile 名・「push は取り返せない」旨・**救済手順（detach / cancel）**をメッセージに含むこと、**detached では発火しないこと**（救済が実際に効くことの固定）、`implement` / profile 無しでも発火しないこと
+- **D4 は結合テストのみで、実機未検収。** `a_read_only_task_that_branches_mid_run_is_failed_and_its_pane_closed`（`run_loop.rs`）が、終端状態を流さないモックエージェント（＝走行中）の worktree にブランチを注入し、タスクが `failed` になること・`session/release` が worktree パスの身元ガード付きで 1 回だけ飛ぶこと・worktree が残ること・失敗理由にブランチ名と profile 名が入ることを固定する。`enforce_read_only` の呼び出しを外すとこのテストは 60 秒待って落ちる（確認済み）。**下の実機検収の記述は D3 のものであり、D4 は含まない。**
 - **実機検収済み（2026-08-11）。** `design` タスク（`github-design`）が**人間の承認を待たず約 2 分で完走**した（従来は 858 秒待ち）。セッション記録の `permissionMode` は `auto` のみで **`ExitPlanMode` の呼び出しは 0 回**、拒否も 0 件。成果物を本人名義で issue へ投稿し、`on_success` で `Design Review` へ遷移した
 - **違反時の失敗も実機で発火させた。** 走行中の `design` タスクの worktree にブランチを注入したところ、状態遷移は `dispatched → running → publishing → failed` となり、`finalize_success` に入ってから `fail_publish` で落ちた。worktree とコミットは保持され、失敗理由にブランチ名・profile 名・「push は取り返せない」・救済手順（detach / cancel）がすべて入っていた。**負の対照**も取れている: 同時期の `implement` タスクはブランチ `feat/logtool-stddev` を持ったまま `done` で完走し、PR まで作った（免除が効いている）
 - **ただしこの検収は「承認プロンプトを 1 つも出さずに完走」を証明していない。** pane は `permissionMode: auto` で動いており、検証機のグローバル設定にある広い `allow` が効いていた。[#420](https://github.com/tomoya-k31/totsuka/issues/420) は open のまま

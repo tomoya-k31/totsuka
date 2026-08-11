@@ -904,7 +904,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .last_worktree_sweep
             .is_none_or(|last| last.elapsed() >= self.settings.worktree_sweep_interval);
         if sweep_due {
-            self.sync_branches_of_active_tasks()?;
+            self.sync_branches_of_active_tasks().await?;
             self.sweep_finished_worktrees().await?;
             self.last_worktree_sweep = Some(tokio::time::Instant::now());
         }
@@ -926,7 +926,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Rides the existing worktree-sweep throttle rather than the 200ms tick:
     /// this is one `git rev-parse` per running task, which is the same order of
     /// cost as the `git status` the sweep already throttles for.
-    fn sync_branches_of_active_tasks(&mut self) -> Result<(), EngineError> {
+    async fn sync_branches_of_active_tasks(&mut self) -> Result<(), EngineError> {
         let mut candidates = Vec::new();
         // Every non-terminal state a dispatched task can sit in. `Escalated` is
         // the one this exists for — `sweep_signal_timeouts` escalates earlier
@@ -948,8 +948,68 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
         for task_id in candidates {
             self.sync_branch(task_id)?;
+            self.enforce_read_only(task_id).await?;
         }
         Ok(())
+    }
+
+    /// Fail an in-flight read-only task whose worktree is on a branch, and
+    /// close its pane (#410, the last open item on it).
+    ///
+    /// [`finalize_success`](Self::finalize_success) already refuses to publish
+    /// such a task, and that is the check that makes the violation impossible
+    /// to *miss*. It is not enough on its own for two reasons, and this covers
+    /// both:
+    ///
+    /// - **A task that never reaches publishing keeps the violation.** Ending
+    ///   in `WaitingInput`, `Escalated`, or with the pane killed leaves a task
+    ///   that branched, and possibly pushed, sitting in a non-failed state with
+    ///   nothing but a log line. #422's live run is exactly that shape: an
+    ///   `answer` task that stopped at `NEEDS_INPUT`.
+    /// - **The agent is still running.** `finalize_success` sees the branch
+    ///   after the agent has finished with it. Here the pane is closed, which
+    ///   is the only lever this side has on an agent mid-run.
+    ///
+    /// **This is not prevention, and the interval says so.** The sweep runs at
+    /// [`WORKTREE_SWEEP_INTERVAL`] (60s), so the window between `git switch -c`
+    /// and `git push` — seconds — is not one this can be relied on to win.
+    /// What it does guarantee is that a violating task ends up `failed` with
+    /// its agent stopped, rather than continuing to work in a repository it was
+    /// told not to touch. Prevention needs
+    /// [#418](https://github.com/tomoya-k31/totsuka/issues/418)'s sandbox.
+    ///
+    /// The worktree and its commits are deliberately kept (`fail_publish`'s
+    /// contract), so the evidence outlives the failure.
+    async fn enforce_read_only(&mut self, task_id: i64) -> Result<(), EngineError> {
+        let Some(record) = self.db.get_task(task_id)? else {
+            return Ok(());
+        };
+        let profile = workflows_by_name(&self.settings.workflows)
+            .get(record.workflow.as_str())
+            .and_then(|w| w.profile);
+        // The live `HEAD`, never `record.branch`: the column is write-once, so
+        // gating on it would make `task retry` fail forever on a worktree the
+        // operator had already detached (the trap #409 hit and documented in
+        // `finalize_success`).
+        let live_branch = record
+            .worktree_path
+            .as_deref()
+            .filter(|p| Path::new(p).is_dir())
+            .and_then(|p| self.worktrees.head_branch(Path::new(p)));
+        let Some(reason) = read_only_side_effect(
+            &record.workflow,
+            profile,
+            live_branch.as_deref(),
+            record.id,
+            record.worktree_path.as_deref().unwrap_or("<worktree>"),
+        ) else {
+            return Ok(());
+        };
+        // Stop the agent before recording the failure: while the pane lives,
+        // every second is another chance for the push this check cannot undo.
+        self.release_pane(&record).await;
+        self.drop_task_sessions(record.id);
+        self.fail_publish(&record, reason).await
     }
 
     /// Record which branch a task's worktree is on, if it is on one.
@@ -2940,6 +3000,16 @@ fn policy_str(policy: OutputPolicy) -> &'static str {
 /// drafting is the case `totsuka setup` generates) and gets a pull request
 /// without being told.
 ///
+/// **This stayed a warning while the profiles grew a verdict.** A workflow with
+/// a read-only `profile` is failed for the same observation — by
+/// [`read_only_side_effect`] at publishing time and by
+/// [`enforce_read_only`](Engine::enforce_read_only) while it runs — so for
+/// those this line is the log entry beside a failure, not the whole response.
+/// A bare `mode = "plan"` workflow with no profile is the case that is still
+/// only warned about, deliberately: it never promised anything about branches,
+/// and failing it would make an existing config start losing tasks on upgrade
+/// (#409).
+///
 /// A branch is the signal because it is the one this side can see: the
 /// orchestrator hands the worktree over detached and reads `HEAD` back, so a
 /// named branch means the agent ran git. A commit made *on* the detached head
@@ -2956,9 +3026,10 @@ fn plan_mode_side_effect(mode: &str, branch: &str) -> Option<String> {
             concat!(
                 "a plan-mode task's worktree is on the branch `{}` — it was handed over ",
                 "detached, so the agent ran git. Plan is documented as making no branch, ",
-                "commit or push (F-82), but nothing enforces that, so the agent followed ",
+                "commit or push (F-82), and nothing stopped it, so the agent followed ",
                 "the repository's own conventions instead. Check whether it also pushed or ",
-                "opened a pull request."
+                "opened a pull request. A workflow with a read-only `profile` is failed for ",
+                "this; a bare `mode = \"plan\"` one is only warned about."
             ),
             branch
         )
