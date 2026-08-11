@@ -4,7 +4,7 @@ title: herdr Socket API / 統合エージェント capability（外部一次情�
 description: "herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status・pane レイアウト）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124/#356）設計の根拠。protocol 17 で agent.start が manifest 駆動（kind + 既存 pane）へ、プロンプト投入が agent.prompt へ変わった破壊的変更を含む。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。"
 resource: https://herdr.dev/docs/socket-api/
 tags: [herdr, socket-api, integration, agent-ide, external]
-generated: { by: claude-code/opus-5, at: 2026-08-11T15:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T15:40:00+09:00 }
 status: stable
 stale_after: 2027-02-01
 owner: tomoya-k31
@@ -120,8 +120,10 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 |---|---|
 | 値の上限 | **80 文字**（バイトではない）。`"あ"×100` を送ると 80 文字 / 240 バイトに切られる。**超過はエラーではなく黙って切られる** |
 | `source` スロット | 1 つの pane / workspace が受け付ける**異なる `source` は生涯 32 個まで**。clear や expiry でスロットは戻らない — タスク毎の `source` は禁物 |
+| **`source` は名前空間ではない** | **トークン名はコンテナごとにグローバル。** source A が入れた `repo` を source B が上書きでき、B の `--clear-token repo` は A の値ごと消す（#417 実機）。`source` はスロット会計のための識別子であって隔離の単位ではないので、**同じ pane に 2 つの書き手が同じトークン名で書いてはいけない** |
 | 読み出し | `tokens` は **`workspace.list` / `workspace.get` / `pane.list` のすべて**に載る（#417 実機）。totsuka の所有判定が読むのは `workspace.list` |
 | `workspace.rename` との関係 | rename しても tokens は保たれる |
+| `agent.start` との関係 | `agent.start` を挟んでも pane の tokens は保たれる（#417 実機）。totsuka が `agent.start` の**前**に報告する設計はこれに依存している |
 | 組み込みトークン | spaces: `state_icon` `state_text` `workspace` `branch` `git_status`。agents: ＋ `tab` `pane` `agent` `terminal_title` `terminal_title_stripped`。**リポジトリ名のトークンは無い**（だから totsuka が `$repo` を報告する） |
 | `$name` の解決先 | agents 行 = **pane** メタデータ、spaces 行 = **workspace** メタデータ。両パネルに出すなら**両方に報告が必要** |
 | `WorkspaceInfo.worktree` | `{repo_key, repo_name, repo_root, checkout_path, is_linked_worktree}`。ただし **herdr 自身が `worktree.create` / `worktree.open` で開いた workspace にしか載らない**（`workspace.create` 由来はフィールドごと欠落を確認） |

@@ -1,12 +1,12 @@
 ---
 type: Reference
 title: herdr サイドバー設定（[ui.sidebar.*] のトークン語彙）
-description: "herdr の左サイドバー（spaces / agents）の行構成を決める [ui.sidebar.*].rows の書き方。組み込みトークンの一覧、$name によるメタデータ参照、rows_by_agent によるエージェント種別ごとの差し替え、インラインスタイル、1 パネル 16 行・1 行 16 トークンの上限（report_metadata 側の 16 とは別物）を、herdr 0.7.5 / protocol 17 の実機確認から記録する。"
+description: "herdr の左サイドバー（spaces / agents）の行構成を決める [ui.sidebar.*].rows の書き方。組み込みトークンの一覧、$name によるメタデータ参照、rows_by_agent によるエージェント種別ごとの差し替え、インラインスタイル、1 パネル 16 行・1 行 16 トークンの上限（report_metadata 側の 16 とは別物）を、herdr 0.7.5 / protocol 17 の実機確認から記録する。spaces と agents の語彙は包含関係ではなく、どちらにもリポジトリ名のトークンは無い。"
 resource: https://herdr.dev/docs/
 tags: [herdr, ui, sidebar, reference, 417]
 owner: tomoya-k31
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-08-11T15:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T15:40:00+09:00 }
 stale_after: 2027-02-09
 sources:
   - id: herdr-probe-2026-08-09
@@ -42,18 +42,25 @@ rows = [
 | 1 行のトークン数 | 16 まで |
 | 反映 | `herdr server reload-config`（再起動は不要） |
 
-（`report_metadata` の「1 コール 16 トークンまで」とは**別の 16** である。あちらは
-[Socket API](/references/herdr-socket-api.md) 側の制約で、こちらは表示側。）
+（行数・トークン数の上限は #417 の実機プローブによる。`report_metadata` の「1 コール 16 トークンまで」とは
+**別の 16** である — あちらは [Socket API](/references/herdr-socket-api.md) 側の制約で、こちらは表示側。）
 
 # 組み込みトークン
+
+**2 つのパネルの語彙は「片方がもう片方を含む」関係ではない。** herdr 同梱の設定テンプレート
+（`strings herdr` で読める既定のコメント）が挙げているのは:
 
 | パネル | トークン |
 |---|---|
 | spaces | `state_icon` `state_text` `workspace` `branch` `git_status` |
-| agents | 上記 ＋ `tab` `pane` `agent` `terminal_title` `terminal_title_stripped` |
+| agents | `state_icon` `state_text` `workspace` `tab` `pane` `agent` `terminal_title` `terminal_title_stripped` |
 
-**リポジトリ名のトークンは無い。** これが [ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) の出発点で、
-totsuka が `$repo` を metadata token として報告している理由である。
+- **agents に `branch` / `git_status` は無い** — ブランチを agent 行に出すことはできない
+- **spaces に `tab` / `pane` / `agent` / `terminal_title*` は無い**
+
+**リポジトリ名のトークンはどちらにも無い。** これが [ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) の
+出発点で、totsuka が `$repo` を metadata token として報告している理由である。pane のレコードは `cwd` を
+持っているが、それを描画する手段が無い。
 
 `terminal_title_stripped` は Claude Code が OSC で出す作業要約がそのまま入る
 （実測値: `"Herdrのメニューでリポジトリとブランチ情報を表示"`）。**totsuka 側の実装ゼロで使える。**
@@ -81,8 +88,16 @@ totsuka が報告するトークン（`[identity] enabled = true` のとき）:
 | `$mode` | `plan` / `implement` |
 | `$totsuka_task` | 機械識別子。**表示しないこと**（不透明な ID がそのまま出る） |
 
-**未報告のトークンは空になる。** オペレータが自分で開いた space には `$repo` も `$task` も無いので、
-それらだけの行は空行になる。1 行目には組み込みトークン（`workspace` 等）を必ず混ぜること。
+**未報告のトークンは空になる。** オペレータが自分で開いた space、および**手で起動した agent** には
+`$repo` も `$task` も載らない。したがって:
+
+- **どの行も、常に非空のトークンを 1 つ以上含めること。** 報告されたトークンだけで組んだ行は、
+  報告が無い相手では `state_icon` だけになる。spaces なら `workspace`、agents なら
+  `terminal_title_stripped` あたりが確実
+- **可変長のトークン（`workspace` / `terminal_title_stripped`）は行の最後に置く。** 先に置くと、
+  幅の足りないサイドバーで後続のトークンが押し出される
+- **agents 行の主語に `workspace` を使わない。** 1 つの space に別リポジトリの tab を足せるので、
+  その space で動いている別リポジトリの agent が space 名で名乗ることになる
 
 # `rows_by_agent` — エージェント種別ごとの差し替え
 
