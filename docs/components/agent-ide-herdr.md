@@ -55,8 +55,10 @@ clear でも expiry でもスロットが戻らないため、タスク毎の `s
 
 **label を人間可読にするのは 3 番目の呼び出し**（#417 D4）。`workspace.create` が書くのは
 `totsuka {task.id}` で**#417 以前とバイト同一**、所有マーカーが workspace の最初の瞬間から存在する。
-rename は**報告が両方成功したときだけ**行うので、herdr が途中で詰まっても「機械 label のまま・
-サイドバーが綺麗にならないだけ」で、**label と token の両方から identity が消える瞬間が無い**。
+rename は**報告が両方成功し、かつ `totsuka_task` が実際に載ったときだけ**行うので、herdr が途中で詰まっても
+「機械 label のまま・サイドバーが綺麗にならないだけ」で、**label と token の両方から identity が消える瞬間が無い**。
+ゲートが「呼び出しの成否」ではないのは、上限超過の `task.id` が token を載せずに報告成功するためで、
+そこで rename すると禁じている状態がまさに作れてしまう。
 この順序が、`session/release` が token を label より信用してよい根拠でもある — token が無い
 container は rename もされておらず、label 経路が比較するマーカー形式のままだからである。
 `repo_name` が無ければ rename しない（`: Fix the bug` は `totsuka 42` の改善ではない）。

@@ -79,7 +79,12 @@ dispatch の `workspace.create` 直後（`start_agent` の**前**）に、**work
 
 1. `workspace.create { label: "totsuka {task.id}" }` — **現状とバイト同一**。所有マーカーが最初の瞬間から存在する
 2. identity 報告（D1）
-3. **2 が両方成功したときだけ** `workspace.rename { label: "{repo}: {title}" }`（`repo_name` が無ければ rename しない）
+3. **2 が両方成功し、かつ `totsuka_task` が実際に載ったときだけ** `workspace.rename { label: "{repo}: {title}" }`（`repo_name` が無ければ rename しない）
+
+**ゲートは「呼び出しが成功したか」ではなく「マーカーが読み戻せるか」。** この 2 つは離れる: D1 のとおり
+上限を超える（あるいは空の）`task.id` は token を**載せずに**報告するので、`report_metadata` は成功する。
+そこで rename すると、`totsuka ` label も token も無い container ができる — **本節が禁じている状態そのもの**で、
+`list_sessions` はその pane を落とし（`doctor` から永久に消える）、`release` は拒否する（pane がリークする）。
 
 herdr 側の一時障害で 2 が落ちても「機械 label のまま・サイドバーが綺麗にならないだけ」で、**label と token の両方から identity が消える瞬間が無い**。
 
@@ -123,6 +128,8 @@ token だけでは足りない理由: `rows` はグローバルで、オペレ�
 - **dispatch にソケット往復が 2〜3 回増える。** `agent.start` の readiness レース（#387 / #391）に影響しないことは実機で確かめる必要がある
 - **プロトコルに表示専用のフィールドが 1 つ増えた。** `repo_name` は totsuka の内部語彙（`[[repositories]].name`）をプロトコルに露出させている。ここを将来変えるとサイドバーの表示が変わる
 - **サイドバーの見た目はオペレータの設定次第。** D6 のとおり totsuka は `rows` を書かないので、スニペットを入れていない環境では `$repo` / `$mode` が単に空になる
+- **rename 後は所有判定が token 単独に依存する**（label が `totsuka ` で始まらなくなるため）。**herdr の再起動やセッション復元をまたいで `tokens` が残るかは未実測**で、消えるならその pane は `session/list` からも `doctor` の孤児検出からも消える。実機検収の項目に入れてある（[サイドバー設定手順](/operations/herdr-sidebar-setup.md)）。消えると分かったら「rename しない」か「identity を再報告する経路を足す」かをここで決め直す
+- **`workspace.rename` の label 長上限は未実測。** 実装は metadata token の 80 文字を安全側の代理として流用している
 
 # 関連
 

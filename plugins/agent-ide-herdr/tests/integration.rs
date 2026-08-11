@@ -1168,6 +1168,40 @@ async fn a_failed_identity_report_leaves_the_machine_label() {
     );
 }
 
+/// #417 D4: renaming is gated on the marker being **readable back**, not on
+/// the calls returning `ok`.
+///
+/// A task id too long for a token is skipped while both reports still succeed.
+/// Renaming there would leave the one container the design forbids — no
+/// `totsuka ` label *and* no token — which `session/list` drops entirely (so
+/// `doctor` never sees it) and `release` refuses (so its pane leaks).
+#[tokio::test]
+async fn no_rename_when_the_task_id_left_no_token() {
+    for id in [&"x".repeat(81), ""] {
+        let (socket, requests) = FakeHerdr::default().spawn();
+        let mut d = Driver::new();
+        d.init(&socket).await;
+        assert!(
+            d.dispatch_with(id, "t", "plan", json!({ "repo_name": "totsuka" }))
+                .await["error"]
+                .is_null()
+        );
+
+        let log = requests.lock().unwrap();
+        assert!(
+            calls(&log, "workspace.rename").is_empty(),
+            "id {id:?}: renaming here loses identity from both places"
+        );
+        assert_eq!(
+            calls(&log, "workspace.create")[0]["params"]["label"],
+            format!("totsuka {id}"),
+            "id {id:?}: the label stays the marker the fallback path compares"
+        );
+        let tokens = &calls(&log, "workspace.report_metadata")[0]["params"]["tokens"];
+        assert!(tokens.get("totsuka_task").is_none(), "id {id:?}: {tokens}");
+    }
+}
+
 /// #417 D4: `: Fix the bug` is not an improvement on `totsuka 42`, so an
 /// Orchestrator too old to send `repo_name` gets no rename.
 #[tokio::test]

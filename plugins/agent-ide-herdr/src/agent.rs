@@ -479,8 +479,8 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // would cut it silently, and a cut machine identifier is worse than no
         // identifier at all — the label path is a correct fallback, a wrong id
         // is not.
-        if params.task.id.chars().count() <= TOKEN_VALUE_CHARS {
-            tokens["totsuka_task"] = json!(params.task.id);
+        if !params.task.id.is_empty() && params.task.id.chars().count() <= TOKEN_VALUE_CHARS {
+            tokens[IDENTITY_TOKEN] = json!(params.task.id);
         } else {
             tracing::debug!(
                 task_id = %params.task.id,
@@ -527,7 +527,18 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             }
             None => reported = false,
         }
-        if reported {
+        // **The gate is "is the marker readable back", not "did the calls
+        // succeed".** Those come apart: a `task.id` too long (or empty) for a
+        // token is skipped above while both reports still return `ok`. Renaming
+        // then would produce the one container this whole design forbids — no
+        // `totsuka ` label *and* no token — which `list_sessions` drops
+        // entirely (so `doctor` can never see it) and `release` refuses (so its
+        // pane leaks).
+        let marked = tokens
+            .get(IDENTITY_TOKEN)
+            .and_then(Value::as_str)
+            .is_some_and(|task| !task.is_empty());
+        if reported && marked {
             self.rename_for_humans(params, workspace).await;
         }
     }
@@ -561,6 +572,12 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let Some(repo) = &params.repo_name else {
             return;
         };
+        // `token_value` is reused for its whitespace collapsing, which a label
+        // wants too. Its 80 is the measured limit on a metadata **token**
+        // value, though — herdr's label limit is **not measured** and is not
+        // in the API reference. Borrowed as a safe-side stand-in: if the real
+        // ceiling is lower, herdr cuts further and the `…` stops meaning what
+        // it says; if higher, this cuts sooner than it needs to.
         let label = token_value(&format!("{repo}: {}", params.task.title));
         if let Err(e) = self
             .client

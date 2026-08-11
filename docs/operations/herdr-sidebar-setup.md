@@ -63,13 +63,25 @@ herdr workspace list   # label が "{repo}: {タイトル}"、tokens に totsuka
 herdr pane list        # agent pane に同じ token。伴走シェルには無い
 ```
 
+**rename 後は所有判定が token 単独になる**（label が `totsuka ` で始まらなくなるため）。したがって
+**herdr の再起動やセッション復元をまたいで `tokens` が残るかは、実機で確かめる必要がある**。
+消えるなら、その worktree の pane は `tt session list` からも `tt doctor` の孤児検出からも消える:
+
+```bash
+herdr workspace list | grep totsuka_task   # 再起動の前後で比較する
+```
+
+消えることが分かった場合の対処は「rename しない」（`[identity] enabled = false`）か、
+identity を再報告する経路を足すかで、[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) に
+追記して決め直すこと。
+
 # 出ないときの切り分け
 
 | 症状 | 見るところ |
 |---|---|
 | 行が増えない | `herdr server reload-config` を実行したか。`[ui.sidebar.*]` の綴り |
 | `$repo` だけ空 | Orchestrator が protocol 0.4.1 以上か（`repo_name` は 0.4.1 の追加。それ以前は報告されない） |
-| workspace label が `totsuka {id}` のまま | identity 報告が失敗している。**これは正常な縮退**で、失敗時は rename しない設計（[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D4）。`totsuka logs` に `could not report … identity` が出ているはず |
+| workspace label が `totsuka {id}` のまま | **rename しない条件が 4 つある。いずれも正常な縮退**（[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D4）。`totsuka logs` の文言で切り分ける: ①identity 報告の失敗 → `could not report … identity` ②rename 自体の失敗 → `could not rename the workspace` ③`repo_name` が届いていない（Orchestrator が 0.4.1 未満）→ ログ無し ④タスク ID が長すぎて（80 文字超）マーカー token を載せられない → `task id exceeds herdr's token limit`（`--debug` が要る） |
 | すべて出ない | `plugins/herdr.toml` の `[identity] enabled` が `false` になっていないか |
 | 自分で開いた space の行が空行だらけ | `rows` はグローバルなので、`$repo` / `$task` だけの行は人間の space で空になる。1 行目に組み込みトークン（`workspace` 等）を混ぜること |
 

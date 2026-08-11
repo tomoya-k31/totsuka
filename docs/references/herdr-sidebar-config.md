@@ -1,9 +1,10 @@
 ---
 type: Reference
 title: herdr サイドバー設定（[ui.sidebar.*] のトークン語彙）
-description: "herdr の左サイドバー（spaces / agents）の行構成を決める [ui.sidebar.*].rows の書き方。組み込みトークンの一覧、$name によるメタデータ参照、rows_by_agent によるエージェント種別ごとの差し替え、インラインスタイル、16 行 × 16 トークンの上限を、herdr 0.7.5 / protocol 17 の実機確認から記録する。"
+description: "herdr の左サイドバー（spaces / agents）の行構成を決める [ui.sidebar.*].rows の書き方。組み込みトークンの一覧、$name によるメタデータ参照、rows_by_agent によるエージェント種別ごとの差し替え、インラインスタイル、1 パネル 16 行・1 行 16 トークンの上限（report_metadata 側の 16 とは別物）を、herdr 0.7.5 / protocol 17 の実機確認から記録する。"
 resource: https://herdr.dev/docs/
 tags: [herdr, ui, sidebar, reference, 417]
+owner: tomoya-k31
 status: stable
 generated: { by: claude-code/opus-5, at: 2026-08-12T00:30:00+09:00 }
 stale_after: 2027-02-09
@@ -37,9 +38,12 @@ rows = [
 
 | 制約 | 値 |
 |---|---|
-| 行数 | 16 まで |
+| 行数 | 1 パネルにつき 16 まで |
 | 1 行のトークン数 | 16 まで |
 | 反映 | `herdr server reload-config`（再起動は不要） |
+
+（`report_metadata` の「1 コール 16 トークンまで」とは**別の 16** である。あちらは
+[Socket API](/references/herdr-socket-api.md) 側の制約で、こちらは表示側。）
 
 # 組み込みトークン
 
