@@ -1005,9 +1005,23 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         ) else {
             return Ok(());
         };
-        // Stop the agent before recording the failure: while the pane lives,
-        // every second is another chance for the push this check cannot undo.
+        // Try to stop the agent before recording the failure: while the pane
+        // lives, every second is another chance for the push this check cannot
+        // undo. **Best-effort, and the failure is recorded either way.** The
+        // alternative — hold the task in-flight until the pane is confirmed
+        // closed — trades the reliable half for the unreliable one: a herdr
+        // that cannot be reached would leave the violation unrecorded, which is
+        // the hole this whole check exists to close. An unreleasable pane is
+        // `doctor`'s job by construction (#211), and the pane still carries the
+        // ownership marker that `session/list` finds it by.
         self.release_pane(&record).await;
+        if !self.released_panes.contains(&record.id) {
+            tracing::error!(
+                task_id = record.id,
+                "could not confirm the pane closed: the agent may still be running. \
+                 `totsuka doctor` lists it as an orphan pane"
+            );
+        }
         self.drop_task_sessions(record.id);
         self.fail_publish(&record, reason).await
     }
