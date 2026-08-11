@@ -230,8 +230,9 @@ pane.split {target_pane_id: <root pane = これからエージェントが入る
 `session/list`（O→P、`pane_control` capability。[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）は `doctor` の孤児 pane 検出のための**自分の所有物の列挙**: `pane.list` と `workspace.list` を呼び、`PaneInfo.workspace_id` で結合して、**その workspace の `label` が `totsuka ` で始まる pane**を返す。この label フィルタが所有権境界 — herdr はユーザーが手で開いた pane も持ち、それを列挙・解放候補にしてはならない。label は `dispatch` が `workspace.create` に設定する `totsuka {task.id}`（`task.id` はプロトコル `Task.id` = **source task id**。Slack のスレッドキー等の文字列で、orchestrator DB の行 id ではない）で、doctor はこの source task id を `source_task_id` と文字列照合して DB と突き合わせる。返す `session_id` は pane_id + **空 agent_session** の縮退形（`pane.list` は中の Claude セッションを知らないが、`SessionHandle::decode` は bare 形式を受け付け `session/release` は pane さえ分かれば良い）。`SessionInfo.label` にはその **workspace の label** を入れるので、doctor 側の `strip_prefix` → `source_task_id` 照合は無改修で通る。
 
 **token を先に見る（#417）。** pane が自分のものである条件は 4 つのいずれかで、直接的な順に:
-`PaneInfo.tokens.totsuka_task` がある → その workspace の同トークンがある → その workspace の `label` が
-`totsuka ` で始まる → pane 自身の `label` が始まる。token は `report_identity` が dispatch 時に付けた
+`PaneInfo.tokens.totsuka_task` がある → その workspace の同トークンがある → pane 自身の `label` が
+`totsuka ` で始まる → その workspace の `label` が始まる（label どうしでは pane 自身の申告のほうが
+具体的なので勝つ）。token は `report_identity` が dispatch 時に付けた
 機械識別子で、label が人間可読になっても所有の根拠が消えないようにするためのもの。
 `SessionInfo.label` は token があれば `totsuka {task}` を**合成**して返すので、`doctor` の
 `strip_prefix` → `source_task_id` 照合は無改修で通る。label 経路は「報告が失敗した dispatch」と

@@ -1079,6 +1079,38 @@ async fn the_identity_token_is_the_task_id_verbatim_or_absent() {
     );
 }
 
+/// #417: an `expect_label` that is not in the `totsuka {id}` form gives the
+/// token nothing to compare against, so the label checks must stay — dropping
+/// them would leave zero comparable pairs and degrade-open onto a pane the
+/// caller never identified.
+#[tokio::test]
+async fn a_label_outside_our_marker_form_is_still_verified() {
+    let (socket, requests) = FakeHerdr {
+        pane_cwd: None,
+        pane_tokens: Some("T1"),
+        list_workspaces: vec![json!({ "workspace_id": "w1", "label": "someone else" })],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess", "expect_label": "not-our-form" }),
+        )
+        .await;
+    assert_eq!(
+        resp["result"]["released"], false,
+        "the workspace label disagrees, and that is the only comparable pair"
+    );
+    assert!(
+        calls(&requests.lock().unwrap(), "pane.close").is_empty(),
+        "nothing may be closed on an unmatched identity"
+    );
+}
+
 /// #417: herdr refusing the report costs the sidebar, not the task.
 #[tokio::test]
 async fn a_failed_identity_report_does_not_fail_the_dispatch() {

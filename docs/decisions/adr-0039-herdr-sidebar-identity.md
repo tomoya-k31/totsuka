@@ -4,7 +4,7 @@ title: ADR-0039 herdr サイドバーの identity は metadata token で運び�
 description: "herdr の左サイドバーに「どのリポジトリの・どのタスクを・どのモードで」を出すため、identity を label ではなく workspace / pane の metadata token として報告し、リポジトリ名は TaskDispatchParams.repo_name（プロトコル 0.4.1、純追加）で渡す決定。worktree.open によるグルーピング・pane.rename・display_agent の各案を採らない理由と、サイドバー設定を totsuka が書き換えない理由。"
 tags: [herdr, protocol, ui, identity, 417]
 status: stable
-generated: { by: claude-code/opus-5, at: 2026-08-11T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-11T23:55:00+09:00 }
 sources:
   - id: herdr-probe-2026-08-09
     resource: herdr 0.7.5 / protocol 17 の実機プローブ（`herdr api schema --json` と workspace 作成による実測）
@@ -35,7 +35,7 @@ dispatch の `workspace.create` 直後（`start_agent` の**前**）に、**work
 
 | token | 値 | 用途 |
 |---|---|---|
-| `totsuka_task` | `task.id` | 機械識別子（表示しない）。所有境界の新しい根拠 |
+| `totsuka_task` | `task.id` を**そのまま** | 機械識別子（表示しない）。所有境界の新しい根拠 |
 | `repo` | `repo_name`（D3） | 行の `$repo` |
 | `task` | `task.title` を整形・切り詰め | 行の人間可読部 |
 | `mode` | `plan` / `implement` | `$mode` |
@@ -45,7 +45,9 @@ dispatch の `workspace.create` 直後（`start_agent` の**前**）に、**work
 - **失敗しても dispatch は落とさない**。`apply_layout` と同じく `tracing::warn!` のみ
 - `start_agent` の**前**に置くのは、`start_agent` が最大 180 秒のリトライループだからである。後に回すと、オペレータが一番見ている時間帯だけ行が無名になる。ソケット 1 往復 ≒ 25ms（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md)）で `agent.start` に比べれば誤差
 
-値は **80 文字**（バイトではない）で herdr 側が黙って切る。自前で 79 文字 ＋ `…` に整形するのは、切れたことを見せるため。`char_indices` で char 境界を切ること — `&s[..80]` は日本語タイトルで panic する。
+値は **80 文字**（バイトではない）で herdr 側が黙って切る。**表示用のトークン**（`task` / `repo`）は自前で 79 文字 ＋ `…` に整形する — 切れたことを見せるためで、`char_indices` で char 境界を切ること（`&s[..80]` は日本語タイトルで panic する）。
+
+**`totsuka_task` だけは整形も切り詰めもしない。** これは表示ではなく**比較**に使う唯一のトークンで、空白の畳み込みや `…` の付与は「自分の pane が自分の同一性検査に落ちる」「`session/list` が合成した label を `doctor` が `source_task_id` と照合できない」を引き起こす。上限に収まらない id は**切らずに送らない** — herdr が黙って切るので、切れた機械識別子が残るくらいなら無いほうがよく、3 / 4 の label 経路が正しいフォールバックになる。
 
 ## D2 — 所有境界を workspace label から token へ（#416 の上に乗る）
 
@@ -53,8 +55,8 @@ dispatch の `workspace.create` 直後（`start_agent` の**前**）に、**work
 
 1. `pane.tokens.totsuka_task` がある（新規 dispatch）
 2. その workspace の `tokens.totsuka_task` がある
-3. その workspace の `label` が `"totsuka "` で始まる（**#416 の経路**。報告が失敗した dispatch と、過去リリースが取りこぼした既存 pane の回収）
-4. pane 自身の `label` が `"totsuka "` で始まる（将来 herdr が label を伝播しても正しい）
+3. pane 自身の `label` が `"totsuka "` で始まる（将来 herdr が label を伝播したとき。**pane 自身の申告のほうが workspace より具体的**なので、label どうしではこちらが勝つ）
+4. その workspace の `label` が `"totsuka "` で始まる（**#416 の経路**。報告が失敗した dispatch と、過去リリースが取りこぼした既存 pane の回収）
 
 `SessionInfo.label` は token があれば `format!("totsuka {}", totsuka_task)` を**合成**して返す。これで `doctor_cmd.rs` の `strip_prefix` → `source_task_id` 照合は**無改修**で通り、[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md) の「label が source task id を運ぶ」意味論も保たれる（D4 で label を人間可読にしても壊れない）。
 
@@ -96,6 +98,12 @@ token だけでは足りない理由: `rows` はグローバルで、オペレ�
 ## D6 — サイドバーの `rows` はオペレータの設定。totsuka は書き換えない
 
 `~/.config/herdr/config.toml` は herdr とオペレータのものであり、totsuka が触ってよいファイルではない（[click-to-focus セットアップ](/operations/click-to-focus-setup.md) と同じ扱い）。推奨スニペットを docs に置き、手で入れてもらう。
+
+## D7 — 設定フラグ `[identity] enabled` は 1 つだけ
+
+`plugins/herdr.toml`（`deny_unknown_fields` なので宣言が要る）に `[identity] enabled = true`（既定）を置く。`false` で D1 の報告も D4 の rename も止まり、現行挙動と完全に一致する。
+
+**2 つに分けない。** 「label は人間可読だが token が無い」中間状態は、サイドバーが正しく見えているのに `doctor` の所有判定が最新の根拠を失っている状態で、**どちらの症状も単体では気づけない**。ロールバックの単位は「identity を報告するかどうか」1 つでよい。
 
 ## 不採用: `pane.rename` / `display_agent` / `title`
 

@@ -207,13 +207,18 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         }
         let created = self.client.call("workspace.create", create_params).await?;
         let workspace = NewWorkspace::from_response(&created)?;
-        self.report_identity(&params, &workspace).await;
 
         // From here on the workspace exists, so every failure path has to take
         // it back down: a failed dispatch reports no session id, which leaves
         // the Orchestrator no handle to cancel with — the pane and its CLI
         // process would run until the operator noticed them (and `task retry`
         // would strand another one).
+        //
+        // `report_identity` is not one of those paths — it cannot fail the
+        // dispatch, by design (#417) — but it belongs inside the boundary
+        // rather than before it, because it is the first thing that talks to a
+        // workspace that now needs tearing down.
+        self.report_identity(&params, &workspace).await;
         let started = self
             .start_agent(&params, &workspace, program, args)
             .await
@@ -800,19 +805,27 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .and_then(|l| l.strip_prefix(OWNED_LABEL_PREFIX));
         let token = identity_token(&pane).or(workspace_token.as_deref());
         let mut checks = vec![("cwd", params.expect_cwd.as_deref(), pane_str(&pane, "cwd"))];
-        match token {
-            // **The token wins outright, and the labels are not consulted.**
-            // Not a preference — a correctness requirement: #417 D4 renames
-            // the workspace to `{repo}: {title}`, so its label stops matching
-            // `expect_label` while naming the very same task. Compared, it
-            // would refuse every release of a renamed workspace.
-            //
-            // The label fallback is not weakened by this, because D4 only
-            // renames when **both** reports succeeded: a container with no
-            // token is one that was never renamed, and still carries the
-            // `totsuka {task}` label the branch below compares.
-            Some(actual) => checks.push(("identity token", expect_task, Some(actual))),
-            None => checks.extend([
+        // The token replaces the labels **only when both sides have one**.
+        //
+        // Preferring it is a correctness requirement, not a taste: #417 D4
+        // renames the workspace to `{repo}: {title}`, so its label stops
+        // matching `expect_label` while naming the very same task. Compared,
+        // that would refuse every release of a renamed workspace.
+        //
+        // But `expect_task` is `None` for a caller whose `expect_label` is not
+        // in our `totsuka {id}` form, and dropping the label checks *then*
+        // would leave zero comparable pairs — degrade-open, closing a pane on
+        // no evidence at all. Every caller sends the marker form today; this
+        // is about not making that a silent precondition.
+        //
+        // The label path is not weakened by the swap, because D4 only renames
+        // when **both** reports succeeded: a container with no token was never
+        // renamed and still carries `totsuka {task}`.
+        match (token, expect_task) {
+            (Some(actual), Some(expected)) => {
+                checks.push(("identity token", Some(expected), Some(actual)));
+            }
+            _ => checks.extend([
                 (
                     "label",
                     params.expect_label.as_deref(),
