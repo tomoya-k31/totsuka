@@ -4,7 +4,7 @@ title: herdr Socket API / 統合エージェント capability（外部一次情�
 description: "herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status・pane レイアウト）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124/#356）設計の根拠。protocol 17 で agent.start が manifest 駆動（kind + 既存 pane）へ、プロンプト投入が agent.prompt へ変わった破壊的変更を含む。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。"
 resource: https://herdr.dev/docs/socket-api/
 tags: [herdr, socket-api, integration, agent-ide, external]
-generated: { by: claude-code/opus-5, at: 2026-08-03T06:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-11T21:30:00+09:00 }
 status: stable
 stale_after: 2027-02-01
 owner: tomoya-k31
@@ -109,6 +109,36 @@ agent_ide プラグインの `session/focus`（F-94 click-to-focus）はこの 3
 | `pane.list` / `workspace.list` | `{}` | `{type:"pane_list", panes:[...]}` / `{type:"workspace_list", workspaces:[...]}` |
 | `pane.close` / `workspace.close` | `{pane_id}` / `{workspace_id}` | `{type:"ok"}` |
 | `pane.report_agent_session` | `{pane_id, source, agent, seq, agent_session_id, agent_session_path?}`（公式統合 hook が使用） | ok |
+
+## label は workspace のものと pane のもので別物（#416 で実機から追記）
+
+**`WorkspaceInfo.label` と `PaneInfo.label` は別フィールドで、片方を書いてももう片方には伝播しない。**
+
+| | 型 | これを書く API |
+|---|---|---|
+| `WorkspaceInfo.label` | 必須・非 null | `workspace.create { label }` / `workspace.rename` |
+| `PaneInfo.label` | **null 可** | **`pane.rename` だけ** |
+
+実機プローブ（herdr 0.7.5 / protocol 17、2026-08-09）:
+
+```console
+$ herdr workspace create --cwd /tmp --label "totsuka probe" --no-focus
+{"result":{"workspace":{"workspace_id":"w68", ...}}}
+
+$ herdr pane list --workspace w68
+{"result":{"panes":[{
+    "agent_status": "unknown",
+    "cwd": "/private/tmp",
+    "pane_id": "w68:p1",
+    "tab_id": "w68:t1",
+    "terminal_id": "term_658a3f89f488b89",
+    "workspace_id": "w68"
+}]}}                      ← "label" キーが存在しない
+```
+
+`workspace list` 側には `"label": "totsuka probe"` が載っている。totsuka はこれを取り違えており、
+`session/list` が実機で常に空配列を返していた（#416、[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md) の改訂節）。
+pane から workspace へ戻るには `PaneInfo.workspace_id` を使う。
 
 ## pane レイアウト（#356 で schema + 実機から追記）
 

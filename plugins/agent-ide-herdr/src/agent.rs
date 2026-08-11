@@ -58,6 +58,7 @@ use plugin_protocol::methods::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -65,6 +66,22 @@ use crate::config::HerdrConfig;
 use crate::error::HerdrError;
 use crate::state::{SessionHandle, map_agent_status};
 use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT};
+
+/// The marker that says a herdr container belongs to totsuka, followed by the
+/// task's `source_task_id`.
+///
+/// **It is set on the `WorkspaceInfo.label`, never on a `PaneInfo.label`**
+/// (#416). herdr keeps the two apart: `workspace.create { label }` and
+/// `workspace.rename` write the former, and only `pane.rename` writes the
+/// latter — which totsuka never calls. Reading it back off panes is what made
+/// `session/list` return an empty array against every real herdr, and with it
+/// [ADR-0013](../../../docs/decisions/adr-0013-orphan-pane-detection.md)'s
+/// orphan-pane detection, since 0.2.2.
+///
+/// [`crate::agent::HerdrAgent::list_sessions`] still reports it as the
+/// session's `label`, because `doctor` strips this prefix to recover the
+/// source task id.
+const OWNED_LABEL_PREFIX: &str = "totsuka ";
 
 /// How many screen lines are read when extracting text from a pane.
 const SCREEN_LINES: u64 = 200;
@@ -183,7 +200,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // is why the companion shell never sees `TOTSUKA_HOOK_TOKEN`.
         let mut create_params = json!({
             "cwd": params.worktree_path,
-            "label": format!("totsuka {}", params.task.id),
+            "label": format!("{OWNED_LABEL_PREFIX}{}", params.task.id),
         });
         if let Some(env) = &env {
             create_params["env"] = env.clone();
@@ -678,12 +695,25 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             Err(e) if e.is_missing() => return Ok(SessionReleaseResult { released: false }),
             Err(e) => return Err(e),
         };
+        // The label lives on the *workspace*, not the pane (#416), so the
+        // pane-label comparison below has never once been comparable against a
+        // real herdr — every release fell through to the degrade-open branch.
+        // Fetched only when there is something to compare it against.
+        let workspace_label = match params.expect_label {
+            Some(_) => self.workspace_label(workspace_of(&handle.pane_id)).await,
+            None => None,
+        };
         let checks = [
             ("cwd", params.expect_cwd.as_deref(), pane_str(&pane, "cwd")),
             (
                 "label",
                 params.expect_label.as_deref(),
                 pane_str(&pane, "label"),
+            ),
+            (
+                "workspace label",
+                params.expect_label.as_deref(),
+                workspace_label.as_deref(),
             ),
         ];
         let mut comparable = false;
@@ -714,39 +744,111 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     }
 
     /// Enumerate the live panes this plugin owns (`session/list`, #211):
-    /// `pane.list` filtered to panes whose `label` carries the `totsuka `
-    /// marker `dispatch` sets on `workspace.create`. The label filter is the
-    /// ownership boundary — herdr serves human-opened panes too, and those
-    /// must never be listed as release candidates. A pane without a label
-    /// (or with someone else's) is simply not ours.
+    /// `pane.list` joined to `workspace.list` on `PaneInfo.workspace_id`: a
+    /// pane is ours when **its workspace's** label starts with `totsuka `.
+    /// That is the ownership boundary — herdr serves
+    /// human-opened panes too, and those must never be listed as release
+    /// candidates.
+    ///
+    /// # Why not the pane's own label (#416)
+    ///
+    /// That is what this did until now, and it returned an empty array against
+    /// every real herdr: totsuka writes the marker with
+    /// `workspace.create { label }` and **nothing ever writes a
+    /// `PaneInfo.label`** — only `pane.rename` does, which totsuka does not
+    /// call. The integration tests passed because the fake staged pane labels
+    /// by hand. Renaming panes instead was rejected: with
+    /// `show_agent_labels_on_pane_borders = true` it puts an opaque id on the
+    /// pane border, which is a visible regression for the operator.
+    ///
+    /// The pane's own label is still honoured, for the day herdr propagates
+    /// one.
+    ///
+    /// # One session per workspace
+    ///
+    /// A totsuka workspace holds **two** panes: the agent's and the companion
+    /// shell. Both match a workspace-level test, so the pane that reports an
+    /// `agent` wins and the others are dropped — otherwise `doctor` would ask
+    /// about the same task twice and the second `session/release` would answer
+    /// `released: false`. When no pane in the workspace reports one (the agent
+    /// has exited, which is exactly the orphan case), the first pane stands in.
     ///
     /// The returned `session_id` encodes the pane with an **empty** agent
     /// session id: `pane.list` does not say which Claude session runs inside,
     /// and `session/release` only needs the pane (`SessionHandle::decode`
     /// accepts the bare form).
     pub async fn list_sessions(&self) -> Result<SessionListResult, HerdrError> {
-        let result = self.client.call("pane.list", json!({})).await?;
-        let sessions = result
+        let panes = self.client.call("pane.list", json!({})).await?;
+        let workspaces = self.client.call("workspace.list", json!({})).await?;
+        let owned = owned_workspace_labels(&workspaces);
+
+        // `Vec`, not a map: `pane.list` order is the only stable ordering
+        // there is, and a hash map would shuffle `session list` output between
+        // runs.
+        let mut chosen: Vec<(Option<&str>, bool, SessionInfo)> = Vec::new();
+        for pane in panes
             .get("panes")
             .and_then(Value::as_array)
-            .map(|panes| {
-                panes
-                    .iter()
-                    .filter(|pane| {
-                        pane_str(pane, "label").is_some_and(|label| label.starts_with("totsuka "))
-                    })
-                    .filter_map(|pane| {
-                        let pane_id = pane_str(pane, "pane_id")?;
-                        Some(SessionInfo {
-                            session_id: SessionHandle::new(pane_id, "").encode(),
-                            label: pane_str(pane, "label").map(str::to_string),
-                            cwd: pane_str(pane, "cwd").map(str::to_string),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(SessionListResult { sessions })
+            .into_iter()
+            .flatten()
+        {
+            let Some(pane_id) = pane_str(pane, "pane_id") else {
+                continue;
+            };
+            let workspace = pane_str(pane, "workspace_id");
+            let own_label = pane_str(pane, "label").filter(|l| l.starts_with(OWNED_LABEL_PREFIX));
+            let label = own_label.or_else(|| workspace.and_then(|ws| owned.get(ws).copied()));
+            let Some(label) = label else {
+                continue;
+            };
+            let has_agent = looks_like_an_agent_pane(pane);
+            let info = SessionInfo {
+                session_id: SessionHandle::new(pane_id, "").encode(),
+                label: Some(label.to_string()),
+                cwd: pane_str(pane, "cwd").map(str::to_string),
+            };
+            match workspace.and_then(|ws| chosen.iter().position(|(w, ..)| *w == Some(ws))) {
+                Some(i) if has_agent && !chosen[i].1 => chosen[i] = (workspace, has_agent, info),
+                Some(_) => {}
+                None => chosen.push((workspace, has_agent, info)),
+            }
+        }
+        Ok(SessionListResult {
+            sessions: chosen.into_iter().map(|(.., info)| info).collect(),
+        })
+    }
+
+    /// The label of one workspace, whatever it says, or `None` when the id is
+    /// unknown, the workspace is gone, or the lookup failed (#416).
+    ///
+    /// **Deliberately unfiltered**, unlike [`owned_workspace_labels`]. This
+    /// feeds `release`'s identity check, where the interesting answer is a
+    /// label that is *not* ours: filtering to `totsuka `-prefixed labels would
+    /// turn "this workspace belongs to someone else" into "cannot say", and
+    /// the caller degrades open on "cannot say" — closing the operator's pane
+    /// on a reused pane id, which is the exact accident that check exists to
+    /// prevent.
+    ///
+    /// `None` therefore means "cannot say", never "does not match": a
+    /// transient herdr error must not read as a mismatch and leak the pane
+    /// either.
+    async fn workspace_label(&self, workspace_id: Option<&str>) -> Option<String> {
+        let workspace_id = workspace_id?;
+        let response = match self.client.call("workspace.list", json!({})).await {
+            Ok(response) => response,
+            Err(e) => {
+                tracing::debug!(workspace_id, error = %e, "workspace.list failed; identity unverifiable");
+                return None;
+            }
+        };
+        response
+            .get("workspaces")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|ws| pane_str(ws, "workspace_id") == Some(workspace_id))
+            .and_then(|ws| pane_str(ws, "label"))
+            .map(str::to_string)
     }
 
     /// Close a session's pane and the task-private workspace `dispatch`
@@ -963,6 +1065,48 @@ async fn pane_status<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<Str
 /// `session_id` carries the pane, not the workspace.
 fn workspace_of(pane_id: &str) -> Option<&str> {
     pane_id.split_once(':').map(|(workspace, _)| workspace)
+}
+
+/// Whether a `pane.list` record looks like the pane an agent is running in,
+/// rather than the companion shell beside it (#416).
+///
+/// Judged off `agent_status` and `agent_session`, which the live probe in
+/// [the API reference](../../../docs/references/herdr-socket-api.md) shows
+/// `pane.list` actually carrying. An earlier version of this checked an
+/// `agent` object — that field is on `agent.start`'s **response**, not on a
+/// pane record, so it would have been absent on every real pane and this
+/// would have silently degraded to "whichever pane herdr listed first", which
+/// is the companion shell as often as not. That is the same
+/// fake-stages-a-field-the-real-thing-lacks trap this whole issue is about, so
+/// the test fixtures below mirror the probe rather than the wish.
+///
+/// A workspace whose agent has exited reports `unknown` on both panes; the
+/// caller falls back to the first pane there, which is the orphan case and
+/// wants exactly that.
+fn looks_like_an_agent_pane(pane: &Value) -> bool {
+    // Reported by the agent's own herdr integration hook once it starts.
+    agent_session_id(pane).is_some()
+        // A pane with nothing running in it reports `unknown` (probe, 0.7.5).
+        || pane_str(pane, "agent_status").is_some_and(|status| status != "unknown")
+}
+
+/// `workspace_id` → label, for the workspaces this plugin owns (#416).
+///
+/// Takes a `workspace.list` response. Workspaces without an
+/// [`OWNED_LABEL_PREFIX`] label are absent: not being in the map *is* the
+/// answer "not ours".
+fn owned_workspace_labels(response: &Value) -> HashMap<&str, &str> {
+    response
+        .get("workspaces")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|ws| {
+            let id = pane_str(ws, "workspace_id")?;
+            let label = pane_str(ws, "label")?;
+            label.starts_with(OWNED_LABEL_PREFIX).then_some((id, label))
+        })
+        .collect()
 }
 
 /// The agent's native session id from a pane record
@@ -1263,6 +1407,26 @@ fn ignore_missing(result: Result<Value, HerdrError>) -> Result<(), HerdrError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_totsuka_labelled_workspaces_are_owned() {
+        let response = json!({ "type": "workspace_list", "workspaces": [
+            { "workspace_id": "w1", "label": "totsuka 7" },
+            { "workspace_id": "w2", "label": "scratch" },
+            // Label is nullable, and herdr reports workspaces we never made.
+            { "workspace_id": "w3" },
+            { "workspace_id": "w4", "label": null },
+            // A near miss: the prefix includes the space, so this is not ours.
+            { "workspace_id": "w5", "label": "totsukaboard" },
+        ]});
+        let owned = owned_workspace_labels(&response);
+        assert_eq!(owned.get("w1").copied(), Some("totsuka 7"));
+        assert_eq!(owned.len(), 1, "{owned:?}");
+
+        // A response with no `workspaces` array is "nothing owned", not a
+        // panic: `session/list` runs against whatever herdr answers.
+        assert!(owned_workspace_labels(&json!({ "type": "ok" })).is_empty());
+    }
 
     #[test]
     fn workspace_is_read_off_the_pane_id() {
