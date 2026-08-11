@@ -573,6 +573,19 @@ pub struct WorkflowConfig {
     /// repository/global defaults.
     #[serde(default)]
     pub tool: Option<String>,
+    /// Extra instructions prepended to the task body the **first** time a
+    /// conversation is started (#415).
+    ///
+    /// A separate layer from [`prompts`](Self::prompts): those seven keys are
+    /// wire-convention prose that breaks the completion contract when dropped,
+    /// are substituted into a fixed template, and are validated against
+    /// `ALLOWED_PLACEHOLDERS`. This is operator-written task shaping — no
+    /// substitution happens, `{` is literal, and it goes to a different place
+    /// (the visible pane, not the invisible channel or the Stop hook).
+    ///
+    /// Empty or whitespace-only is treated as unset rather than rejected.
+    #[serde(default)]
+    pub initial_prompt: Option<String>,
 }
 
 impl WorkflowConfig {

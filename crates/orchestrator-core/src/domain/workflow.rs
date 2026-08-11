@@ -176,6 +176,12 @@ pub struct Workflow {
     /// need. `mode = "implement"` says the worktree is writable; it does not
     /// say a pull request is the deliverable.
     pub profile: Option<Profile>,
+    /// Operator-written instructions prepended to the task body when a
+    /// **new** conversation is started (#415).
+    ///
+    /// Normalised at interpretation: empty or whitespace-only in the config
+    /// becomes `None`, so downstream only has to ask "is there one".
+    pub initial_prompt: Option<String>,
 }
 
 impl Workflow {
@@ -200,6 +206,16 @@ impl Workflow {
             rubric: config.rubric.clone(),
             tool: config.tool.clone(),
             profile: config.profile,
+            // `""` and `"   "` mean the operator wrote the key and left it
+            // blank. Rejecting that would be a validation error for something
+            // with an obvious reading; normalising it here means no downstream
+            // caller has to remember to trim.
+            initial_prompt: config
+                .initial_prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
         }
     }
 
@@ -946,6 +962,46 @@ agent = "herdr"
         assert_eq!(workflows[0].output, OutputPolicy::Source);
         assert_eq!(workflows[0].verification, VerificationMode::Llm);
         assert_eq!(workflows[1].mode, WorkflowMode::Implement);
+    }
+
+    #[test]
+    fn initial_prompt_is_carried_through_and_blank_means_unset() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "design"
+source = "github"
+trigger = { project_status = "Design" }
+profile = "design"
+agent = "herdr"
+initial_prompt = "  /grill-me スキルを使用して、詳細設計を行ってください  "
+
+[[workflows]]
+name = "blank"
+source = "github"
+trigger = {}
+profile = "design"
+agent = "herdr"
+initial_prompt = "   "
+
+[[workflows]]
+name = "absent"
+source = "github"
+trigger = {}
+profile = "design"
+agent = "herdr"
+"#,
+        );
+        assert_eq!(
+            workflows[0].initial_prompt.as_deref(),
+            Some("/grill-me スキルを使用して、詳細設計を行ってください"),
+            "trimmed, but otherwise literal — no template rendering, so `{{` \
+             stays `{{`"
+        );
+        // Written-but-blank reads as unset rather than as an empty preamble
+        // followed by two newlines.
+        assert_eq!(workflows[1].initial_prompt, None);
+        assert_eq!(workflows[2].initial_prompt, None);
     }
 
     #[test]

@@ -119,6 +119,7 @@ owner: tomoya-k31
 | `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告。`[prompts]`（#314）より前からあるキーで、動作は維持される — 同じワークフローの `[workflows.prompts].verification_rubric` にのみ負け、グローバルの `[prompts].verification_rubric` には勝つ |
 | `[workflows.prompts]` | テーブル | — | このワークフロー専用のプロンプト上書き（下記 `[prompts]` の 5 キー。最優先層） |
 | `tool` | string? | なし | AI ツールの明示ピン（#196）。優先順位は workflow > repo > `default_tool`。`verification = "llm"` は Claude の prompt 型 Stop フックが必要なので、非 claude 系へ解決されうる構成では `tool = "claude"` のピンを警告で提案 |
+| `initial_prompt` | string? | なし | このワークフローのエージェントに渡す**追加の前置き指示**（#415、[ADR-0038](/decisions/adr-0038-workflow-initial-prompt.md)）。**可視**（pane に見える）・**タスク本文の前**・**新規会話のときだけ**。下記 |
 
 定義順に first-match（F-81）。同一ソース内でトリガーが重なると警告。**catch-all（`trigger = {}`）より後に定義した同一ソースの workflow は到達不能**で、警告が出る（#396）。
 
@@ -158,6 +159,33 @@ agent = "herdr"
 - 本人限定の不変条件は不変（他人のリアクションでは起動しない、→ [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）
 
 **混在バージョンの注意**: 新プラグイン + 旧コアの組み合わせでは、旧コアに `reaction` 予約キーが無いため**リアクション workflow が全タスクを吸う**。コア → プラグインの順にリリースすること（同一リポジトリの一括リリースなら自然に満たされる）。ロールバック時は `trigger = { reaction = ... }` の workflow を config から外す。
+
+## `initial_prompt` — ワークフローごとの前置き指示（#415）
+
+```toml
+[[workflows]]
+name = "github-design"
+source = "github"
+trigger = { project_status = "Design" }
+profile = "design"
+agent = "herdr"
+on_success = { set_status = "Design Review" }
+initial_prompt = "/grill-me スキルを使用して、詳細設計を行ってください"
+```
+
+これ以前、エージェントへの追加指示は **Slack ソースの `reply_instructions` / `implement_instructions` しか手段が無く**、GitHub / Notion ソースには存在しなかった。しかもソース単位でワークフロー単位ではなかった。`initial_prompt` はその穴を、プラグインに手を入れずに塞ぐ。
+
+| 性質 | 内容 |
+|---|---|
+| **可視** | pane に見える形で入る。タスクの進め方を丸ごと変えうる指示なので、後から「なぜこの動きをしたのか」を追えるようにする。不可視の `TOTSUKA_PROMPT_CONTEXT` は「requester に届く成果物に混ぜたくないもの」専用で、中身は変えていない |
+| **先頭** | タスク本文の**前**に置かれる（`{initial_prompt}\n\n{従来の extra_context}`）。位置に選択肢は無く、herdr が `{extra_context}\n\n---\n{task_body}` を組み立てる |
+| **新規会話のみ** | resume ディスパッチ（スレッド返信・retry の会話継続）では入らない。`/grill-me` のような**開始宣言**は 3 ターン目に再入力されるとスキルが再起動して文脈を壊す。resume 非対応ツールは毎回が新規会話なので毎回入る（正しい） |
+| **リテラル** | `template::render` を通さない。`{` はそのまま書ける（JSON 例・コード断片） |
+| **未設定なら現状と同一** | 空文字列・空白のみは「未設定」と同じ扱いで無言で無視。設定していないワークフローの `extra_context` はバイト同一 |
+
+**無人ハングは設定した運用者の責任。** `AskUserQuestion` のように人間へ問いかけるツールを使わせる指示を書くと、無人 pane では Stop すら発火せず（ツール応答待ちで停止）、`timeout_secs` で Escalated になる。core は但し書きを自動で足さない — 足すと `initial_prompt` に書いた内容と矛盾する指示が混ざりうるため。
+
+`[prompts]` / `[[workflows]].prompts`（#314）とは**別レイヤ**。あちらは「落とすと壊れる wire 規約の散文」の置換で、`missing_markers` / `ALLOWED_PLACEHOLDERS` に照らして厳格に検証される。`initial_prompt` は指示の上乗せで、置換対象が存在せず、送り先も違う。
 
 ## `profile` — 4 原型（#394、[ADR-0033](/decisions/adr-0033-workflow-profile.md)）
 

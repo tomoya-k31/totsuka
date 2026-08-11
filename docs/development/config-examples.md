@@ -246,6 +246,19 @@ agent = "herdr"
 output = "source"                            # profile の既定（none）を上書き
 on_success = { set_status = "レビュー待ち" }
 rubric = "テストが追加されており、cargo clippy / cargo fmt が通っていること"
+
+# ワークフローごとの前置き指示（#415）。可視・タスク本文の前・新規会話のときだけ。
+# リテラル（テンプレート展開なし）なので `{` もそのまま書ける。
+# 人間へ問いかけるツールを使わせる指示は無人 pane でハングする → 運用者の責任。
+[[workflows]]
+name = "github-design"
+source = "github"
+trigger = { project_status = "Design" }
+profile = "design"
+agent = "herdr"
+on_success = { set_status = "Design Review" }
+timeout_secs = 900
+initial_prompt = "/grill-me スキルを使用して、詳細設計を行ってください"
 ```
 
 # 選択肢の選び方
