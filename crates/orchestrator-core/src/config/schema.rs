@@ -273,7 +273,8 @@ fn default_version() -> u32 {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryConfig {
-    /// Stable identifier used in branch names and logs.
+    /// Stable identifier used in the worktree path, the logs and `totsuka
+    /// status`. Not in branch names — the agent picks those (ADR-0026).
     pub name: String,
     /// Local clone path (may use `~` and `${ENV}`; expanded on validation).
     pub path: PathBuf,

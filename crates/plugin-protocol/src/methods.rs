@@ -373,6 +373,24 @@ pub struct TaskDispatchParams {
     /// raising it would only refuse orchestrators it works with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_launch: Option<ToolLaunchSpec>,
+    /// 0.4.1 (#417): the repository this task was routed to, named as the
+    /// operator named it — `[[repositories]].name` from `config.toml`, the
+    /// same string that appears in the worktree path, the logs and
+    /// `totsuka status`. **Not** in the branch name: since ADR-0026 the agent
+    /// picks that from the repository's own conventions.
+    ///
+    /// For **display**: an IDE plugin has no other way to say which repository
+    /// an agent is working in. The worktree path cannot be reduced to it
+    /// (`worktree_location` is per-repository overridable, so
+    /// `{state_dir}/worktrees/{repo}/{name}` is a coincidence rather than a
+    /// contract), shelling out to git would put git knowledge into an adapter
+    /// that starts no processes, and `Task::repo_hint` is the source's guess —
+    /// overridden by repository selection, and often absent.
+    ///
+    /// `None` when the Orchestrator predates 0.4.1. A plugin must degrade
+    /// (omit the name) rather than refuse the dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_name: Option<String>,
 }
 
 /// A fully-resolved agent-CLI launch command (additive since protocol 0.2.3,
@@ -723,6 +741,7 @@ mod tests {
             extra_context: Some(serde_json::json!({"base": "main"})),
             job_id: Some("job-7".into()),
             resume_session_id: Some("claude-sess-abc".into()),
+            repo_name: Some("totsuka".into()),
             tool_launch: Some(ToolLaunchSpec {
                 program: "claude".into(),
                 args: vec![
@@ -848,6 +867,9 @@ mod tests {
         assert!(old.resume_session_id.is_none());
         assert!(old.tool_launch.is_none());
         assert!(old.task.instructions.is_none());
+        // 0.4.1 (#417): same contract. A plugin reading this must show no
+        // repository name, not refuse the dispatch.
+        assert!(old.repo_name.is_none());
         let unset = TaskDispatchParams {
             task: sample_task(),
             worktree_path: "/wt".into(),
@@ -856,11 +878,13 @@ mod tests {
             job_id: None,
             resume_session_id: None,
             tool_launch: None,
+            repo_name: None,
         };
         let wire = serde_json::to_string(&unset).unwrap();
         assert!(!wire.contains("job_id"));
         assert!(!wire.contains("resume_session_id"));
         assert!(!wire.contains("tool_launch"));
+        assert!(!wire.contains("repo_name"));
         assert!(!wire.contains("instructions"));
         // A `diagnostics/snapshot` result may omit `text` (capture failure is
         // not an error): absent deserializes to None, None stays off the wire.
