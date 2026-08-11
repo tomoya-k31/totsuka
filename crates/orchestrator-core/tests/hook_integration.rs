@@ -1304,9 +1304,9 @@ async fn dispatch_with_codex_tool_builds_codex_argv() {
             "--sandbox",
             "workspace-write",
             "--ask-for-approval",
-            "on-request"
+            "never"
         ]),
-        "codex implement argv: sandbox flags, no --settings"
+        "codex implement argv: sandbox flags, no --settings, no approval prompt (#420)"
     );
     // The hook env still rides the codex launch verbatim (codex hooks are
     // registered globally and reached through `TOTSUKA_*`). Asserted as the
@@ -1408,8 +1408,8 @@ async fn dispatch_with_opencode_tool_routes_context_visibly() {
     assert_eq!(tool["program"], "opencode");
     assert_eq!(
         tool["args"],
-        json!([]),
-        "implement mode launches the plain TUI"
+        json!(["--auto"]),
+        "implement mode launches the plain TUI, unattended (#420)"
     );
     // Visible routing: instructions + marker convention in extra_context …
     let ctx = params["extra_context"]
