@@ -1427,6 +1427,233 @@ async fn dispatch_with_opencode_tool_routes_context_visibly() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// The `[[workflows]].initial_prompt` used by the #415 tests below.
+const INITIAL_PROMPT: &str = "/grill-me スキルを使用して、詳細設計を行ってください";
+
+/// #415: `[[workflows]].initial_prompt` reaches the pane as the **first**
+/// thing the agent reads, ahead of the task body — and only when the agent is
+/// starting a fresh conversation.
+///
+/// Claude injects invisibly, so with no `initial_prompt` this dispatch's
+/// visible `extra_context` is `null` (asserted elsewhere); here it is the
+/// preamble and nothing else.
+#[tokio::test]
+async fn an_initial_prompt_leads_a_new_conversation() {
+    let base = scratch("initial_prompt_new");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let plugins = resume_plugins(
+        json!([{ "id": "1", "source": "github", "title": "t" }]),
+        &dispatch_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = resume_settings(&repo, &base);
+    for wf in &mut settings.workflows {
+        wf.initial_prompt = Some(INITIAL_PROMPT.to_string());
+    }
+    let mut engine = Engine::new(
+        StateDb::open(&base.join("state.db")).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
+    engine.shutdown(GRACE).await;
+
+    let params = last_dispatch_params(&dispatch_log);
+    assert!(
+        params["resume_session_id"].is_null(),
+        "a first dispatch resumes nothing: {params}"
+    );
+    assert_eq!(
+        params["extra_context"], INITIAL_PROMPT,
+        "the preamble is the whole visible context for an invisibly-injecting tool"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #415: a resume dispatch does **not** re-send it. `/grill-me` and its kind
+/// are start-of-work declarations; re-typing one three turns into a
+/// conversation restarts the skill and destroys the context it was given.
+#[tokio::test]
+async fn an_initial_prompt_is_not_repeated_on_a_resume() {
+    let base = scratch("initial_prompt_resume");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+    seed_finished_conversation(&db, "1", Some("cc-prior"));
+
+    let plugins = resume_plugins(follow_up("1", "1:reply"), &dispatch_log, &notify_log).await;
+    let mut settings = resume_settings(&repo, &base);
+    for wf in &mut settings.workflows {
+        wf.initial_prompt = Some(INITIAL_PROMPT.to_string());
+    }
+    let mut engine =
+        Engine::with_clock(db, settings, plugins, SystemGitRunner, no_llm(), clock).await;
+
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
+    engine.shutdown(GRACE).await;
+
+    let params = last_dispatch_params(&dispatch_log);
+    assert_eq!(params["resume_session_id"], "cc-prior");
+    assert!(
+        params["extra_context"].is_null(),
+        "the agent already read it in this same conversation: {params}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #415 × `SESSION_UNRESUMABLE`: the retry names no session, so it really is a
+/// fresh conversation — and the preamble has to come back with it.
+///
+/// This is the whole reason the `resume.is_none()` test sits **inside**
+/// `build_params` rather than being computed once before it. Computed outside,
+/// the retry would inherit the resume dispatch's answer and start an agent
+/// that never sees the instructions.
+#[tokio::test]
+async fn an_initial_prompt_returns_when_a_resume_turns_out_to_be_impossible() {
+    let base = scratch("initial_prompt_unresumable");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+    seed_finished_conversation(&db, "1", Some("cc-gone"));
+
+    let plugins = resume_plugins_with(
+        follow_up("1", "1:reply"),
+        &dispatch_log,
+        &notify_log,
+        json!({ "dispatch_error": {
+            "code": plugin_protocol::error_code::SESSION_UNRESUMABLE,
+            "message": "the agent session could not be resumed",
+            "only_when_resuming": true,
+        }}),
+    )
+    .await;
+    let mut settings = resume_settings(&repo, &base);
+    for wf in &mut settings.workflows {
+        wf.initial_prompt = Some(INITIAL_PROMPT.to_string());
+    }
+    let mut engine =
+        Engine::with_clock(db, settings, plugins, SystemGitRunner, no_llm(), clock).await;
+
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || dispatches(&dispatch_probe).len() >= 2).await;
+    engine.shutdown(GRACE).await;
+
+    let attempts = dispatches(&dispatch_log);
+    assert_eq!(attempts.len(), 2, "{attempts:#?}");
+    assert_eq!(attempts[0]["params"]["resume_session_id"], "cc-gone");
+    assert!(
+        attempts[0]["params"]["extra_context"].is_null(),
+        "the resume attempt still carries nothing: {}",
+        attempts[0]["params"]
+    );
+    assert!(attempts[1]["params"]["resume_session_id"].is_null());
+    assert_eq!(
+        attempts[1]["params"]["extra_context"], INITIAL_PROMPT,
+        "the agent this actually starts remembers nothing, so it is told again"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #415 on a tool with no invisible channel: the preamble leads and everything
+/// that used to be the whole visible context — the task's instructions and the
+/// marker convention — follows it, in that order.
+#[tokio::test]
+async fn an_initial_prompt_precedes_the_visible_marker_convention() {
+    let base = scratch("initial_prompt_opencode");
+    let repo = setup_repo(&base);
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
+                                "instructions": "回答は日本語で作成してください。" }] }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "resume_session": true, "stream_states": ["running"], "dispatch_log": dispatch_log }),
+        )
+        .await,
+    );
+
+    let hook = HookRuntime {
+        socket_path: base.join("agent-events.sock"),
+        auth_token: None,
+        spool_dir: None,
+        settings_paths: HashMap::from([("wf".to_string(), base.join("orchestrator-wf.json"))]),
+        block_retry_limit: 3,
+    };
+    let mut settings = engine_settings(workflows("none", "none"), Some(hook));
+    for wf in &mut settings.workflows {
+        wf.initial_prompt = Some(INITIAL_PROMPT.to_string());
+    }
+    settings.repos = vec![RepoSettings {
+        name: "clone".to_string(),
+        path: repo.clone(),
+        summary: None,
+        worktree_location: None,
+        tool: Some("opencode".to_string()),
+    }];
+    settings.location_template = "{repo}/../wt/{worktree_name}".to_string();
+
+    let mut engine = Engine::new(
+        StateDb::open(&base.join("state.db")).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
+    engine.shutdown(GRACE).await;
+
+    let ctx = last_dispatch_params(&dispatch_log)["extra_context"]
+        .as_str()
+        .expect("visible extra_context for a non-injecting tool")
+        .to_string();
+    assert!(
+        ctx.starts_with(INITIAL_PROMPT),
+        "the preamble leads: {ctx:?}"
+    );
+    let instructions = ctx
+        .find("回答は日本語で作成してください。")
+        .expect("instructions still delivered");
+    let marker = ctx
+        .find("<<STATUS:COMPLETED>>")
+        .expect("marker convention still delivered");
+    assert!(
+        INITIAL_PROMPT.len() < instructions && INITIAL_PROMPT.len() < marker,
+        "nothing the completion contract depends on was displaced: {ctx:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn dispatch_without_hook_falls_back_to_visible_extra_context() {
     // A non-hook agent (no resume_session / diagnostics_snapshot) has no

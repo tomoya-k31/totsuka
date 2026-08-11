@@ -218,6 +218,7 @@ On top of the same plugin binaries, any number of **named configurations — wor
 | F-84 | `on_success` / `on_failure`: transition the source-side status on completion (e.g. "awaiting design → awaiting design review"). This **source-side status transition is the handoff mechanism for plan → human review → implement**, naturally inserting human review between design and implementation | M |
 | F-85 | Worktree cleanup policy for plan mode configurable separately from implement (immediate cleanup is the default for design-only) | S |
 | F-86 | **Push and PR creation are the agent's responsibility**, following the repository's own conventions (which is where those procedures are written down). The orchestrator owns the worktree and the task lifecycle, and never pushes. `output = "pull_request"` was retired with this boundary — see [ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) for what this gives up | M |
+| F-87 | `[[workflows]].initial_prompt`: extra instructions the operator writes in the config, prepended to the task body in the pane the **first** time a conversation starts (never on a resume, which would restart a skill mid-conversation). Literal text — no placeholder substitution. It is the first instruction channel scoped to a workflow rather than to a task source, so a flow no longer has to depend on its source plugin having a key for it (the Slack plugin's `reply_instructions` and friends still exist and are unchanged) | M |
 
 **Configuration example**
 

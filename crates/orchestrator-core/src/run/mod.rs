@@ -1299,6 +1299,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // Copied out because `wf` borrows `self.settings` and the launch spec
         // is built inside a closure further down. `Option<Profile>` is `Copy`.
         let wf_profile = wf.profile;
+        // Same reason; already trimmed to `None` when blank (#415).
+        let initial_prompt = wf.initial_prompt.clone();
 
         let Some(repo) = self
             .settings
@@ -1644,7 +1646,17 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             task: task.clone(),
             worktree_path: worktree_path.display().to_string(),
             mode,
-            extra_context: extra_context.clone(),
+            // `initial_prompt` (#415) rides the *visible* channel, ahead of
+            // everything else, and only when the agent is about to start a
+            // fresh conversation. The test is `resume.is_none()` and it is
+            // deliberately inside this closure: the `SESSION_UNRESUMABLE`
+            // retry below rebuilds the params without a resume id, and that
+            // dispatch really is a new conversation — the agent remembers
+            // nothing, so the instructions have to come back with it.
+            extra_context: prepend_initial_prompt(
+                extra_context.clone(),
+                initial_prompt.as_deref().filter(|_| resume.is_none()),
+            ),
             job_id: job_id.clone(),
             tool_launch: tool_profile.launch_spec(&LaunchInputs {
                 plan: mode == plugin_protocol::methods::ExecutionMode::Plan,
@@ -2820,6 +2832,34 @@ fn workflows_by_name(workflows: &[Workflow]) -> HashMap<&str, &Workflow> {
     workflows.iter().map(|w| (w.name.as_str(), w)).collect()
 }
 
+/// Put `[[workflows]].initial_prompt` in front of whatever else the pane was
+/// going to be shown (#415).
+///
+/// `initial` is already `None` on a resume dispatch and when the key is unset,
+/// so with no `initial_prompt` configured `base` comes back **byte-identical**
+/// — which is what keeps every existing dispatch, and the "hook dispatches
+/// send a null `extra_context`" test, unchanged.
+///
+/// The placement is not a choice core gets to make: herdr's `compose_prompt`
+/// types `{extra_context}\n\n---\n{task_body}` into the pane, so anything put
+/// here lands ahead of the task. That is the right order for a preamble, and
+/// it is why the key is named for a *prompt* prepended to the body rather than
+/// something that replaces it.
+///
+/// A non-string `base` is left alone rather than coerced: the only producers
+/// today are string contexts, and silently JSON-stringifying a structured
+/// value into a pane would be worse than not prepending.
+fn prepend_initial_prompt(base: Option<Value>, initial: Option<&str>) -> Option<Value> {
+    let Some(initial) = initial else {
+        return base;
+    };
+    match base {
+        Some(Value::String(rest)) => Some(Value::String(format!("{initial}\n\n{rest}"))),
+        None => Some(Value::String(initial.to_string())),
+        other => other,
+    }
+}
+
 /// Reconstruct the normalized [`Task`] from a stored record: the full ingest
 /// payload when present, else a minimal task from the columns.
 /// The prompt for one dispatch: the messages nobody has sent the agent yet,
@@ -2992,6 +3032,48 @@ mod tests {
         assert!(check(Some(Profile::Implement), Some("feat/x")).is_none());
         // No profile: the legacy `mode = "plan"` shape keeps its warning only.
         assert!(check(None, Some("feat/x")).is_none());
+    }
+
+    /// #415: the preamble goes in front, and the no-preamble case has to come
+    /// back untouched — that is what keeps every existing dispatch identical.
+    #[test]
+    fn an_initial_prompt_goes_in_front_of_whatever_was_there() {
+        let s = |v: &str| Some(Value::String(v.to_string()));
+
+        // Claude: invisible injection, so the visible channel was empty.
+        assert_eq!(
+            prepend_initial_prompt(None, Some("/grill-me")),
+            s("/grill-me")
+        );
+        // OpenCode / non-hook agents: the preamble leads, the existing
+        // instructions and marker convention follow.
+        assert_eq!(
+            prepend_initial_prompt(s("marker rules"), Some("/grill-me")),
+            s("/grill-me\n\nmarker rules")
+        );
+
+        // Unset, or a resume dispatch (the caller passes `None` for both):
+        // byte-identical to what the dispatch would have sent before.
+        assert_eq!(prepend_initial_prompt(None, None), None);
+        assert_eq!(
+            prepend_initial_prompt(s("marker rules"), None),
+            s("marker rules")
+        );
+
+        // Literal: no template rendering, so braces survive. A prompt
+        // containing a JSON example must not be mangled.
+        assert_eq!(
+            prepend_initial_prompt(None, Some(r#"reply with {"ok": true}"#)),
+            s(r#"reply with {"ok": true}"#)
+        );
+
+        // A structured context (none exists today) is left alone rather than
+        // JSON-stringified into the pane.
+        let structured = Some(Value::Array(vec![Value::from(1)]));
+        assert_eq!(
+            prepend_initial_prompt(structured.clone(), Some("x")),
+            structured
+        );
     }
 
     /// XDG bases resolved from a fake environment, mirroring what the CLI
@@ -3243,6 +3325,7 @@ plan_cleanup = "keep_28d"
             rubric: None,
             tool: None,
             profile: None,
+            initial_prompt: None,
         }];
         engine
     }
