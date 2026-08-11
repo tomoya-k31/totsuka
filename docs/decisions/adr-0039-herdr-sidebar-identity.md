@@ -60,7 +60,7 @@ dispatch の `workspace.create` 直後（`start_agent` の**前**）に、**work
 
 ## D3 — リポジトリ名はプロトコルの追加フィールドで渡す（0.4.0 → 0.4.1）
 
-`TaskDispatchParams.repo_name: Option<String>`（`skip_serializing_if`）を足す。値は totsuka の設定上の名前 `[[repositories]].name` ＝ **ブランチ名やログに出るのと同じ文字列**にして、サイドバーと `tt task show` の表示を一致させる。
+`TaskDispatchParams.repo_name: Option<String>`（`skip_serializing_if`）を足す。値は totsuka の設定上の名前 `[[repositories]].name` ＝ **worktree のパス・ログ・`totsuka status` に出るのと同じ文字列**にして、サイドバーと `tt task show` の表示を一致させる（**ブランチ名ではない** — [ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) 以降、ブランチ名はエージェントがリポジトリの規約から選ぶ）。
 
 **バージョンは 0.4.1（patch）。** 0.x では patch が後方互換な追加で、minor を上げると `<0.5` で束ねた manifest を**無用に全部弾く** — [ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md) が 0.4.0 でやったのはまさにそれで、あれは弾くことに意味があった。ここには無い。欠落時（旧 core）は `repo` トークンを省略し、label も現状形のまま。エラーにしない。
 

@@ -1671,7 +1671,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             resume_session_id: resume,
             // 0.4.1 (#417): for the IDE plugin to show which repository the
             // agent is in. The *configured* name, not the worktree's directory
-            // name, so the sidebar says what branches and logs already say.
+            // name, so the sidebar says what the logs and `totsuka status`
+            // already say.
             repo_name: Some(repo.name.clone()),
         };
         let params = build_params(resume_session_id.clone());

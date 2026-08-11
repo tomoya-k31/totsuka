@@ -375,7 +375,9 @@ pub struct TaskDispatchParams {
     pub tool_launch: Option<ToolLaunchSpec>,
     /// 0.4.1 (#417): the repository this task was routed to, named as the
     /// operator named it — `[[repositories]].name` from `config.toml`, the
-    /// same string that appears in branch names and logs.
+    /// same string that appears in the worktree path, the logs and
+    /// `totsuka status`. **Not** in the branch name: since ADR-0026 the agent
+    /// picks that from the repository's own conventions.
     ///
     /// For **display**: an IDE plugin has no other way to say which repository
     /// an agent is working in. The worktree path cannot be reduced to it
