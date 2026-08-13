@@ -969,13 +969,30 @@ fn build_task(
     // is exactly the kind of message that should not go out unreviewed.
     //
     // An absent or unrecognised kind falls back to the reply draft rather than
-    // guessing a deliverable: an older Orchestrator sends no kind at all, and
-    // a *newer* one may send a profile this plugin has no text for. Working on
-    // the wrong deliverable is worse than answering the thread.
+    // guessing a deliverable — working on the wrong one is worse than
+    // answering the thread. The two cases are not equally hypothetical:
+    //
+    // - **absent**: a core older than #404. It sends no `task_id_prefix`
+    //   either (#405 came after), so this is the plain mention path and the
+    //   reply draft is exactly what that core always produced.
+    // - **unrecognised**: `design` reaches here from a **current** core.
+    //   `source = "slack"` + `profile = "design"` is a config nothing rejects,
+    //   and this plugin has no text for it — so it draws the reply draft, and
+    //   `design`'s `output = "none"` then publishes nothing at all. The warn
+    //   is the only signal that a configured workflow silently does nothing.
     let mut instructions = match mention.instructions_kind.as_deref() {
         Some("implement") => p.implement_instructions.clone(),
         Some("triage") => p.triage_instructions.clone(),
-        _ => p.reply_instructions.clone(),
+        Some(unhandled) => {
+            tracing::warn!(
+                kind = %unhandled,
+                "no instruction set for this profile → falling back to the reply draft; \
+                 a `design` profile on a Slack workflow also publishes nothing \
+                 (output = \"none\"), so the task produces no visible result"
+            );
+            p.reply_instructions.clone()
+        }
+        None => p.reply_instructions.clone(),
     };
     if let Some(style) = &config.reply_style {
         instructions.push_str(&template::render(
@@ -1441,9 +1458,17 @@ mod tests {
         // "Pull Request を作成": the reply directive legitimately contains a
         // conditional "PR を作成した場合は URL を含めて" clause, so matching on
         // that would assert something weaker than intended.
+        // `design` leads this list because a **current** core sends it: it is
+        // the one unhandled kind actually reachable today
+        // (`instructions_kind(Profile::Design) == Some("design")`, and nothing
+        // rejects `source = "slack"` + `profile = "design"`). The pairing
+        // `(Some("impl"), None)` is deliberately absent — `instructions_kind`
+        // shipped in #404, *before* `task_id_prefix` in #405, so no released
+        // core sends a prefix without a kind.
         for (prefix, kind) in [
+            (None, Some("design")),
             (Some("books"), Some("future-profile")),
-            (Some("impl"), None),
+            (None, None),
         ] {
             let degraded = instructions_for(prefix, kind);
             assert!(

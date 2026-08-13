@@ -336,6 +336,8 @@ agent = "herdr"
 
 Slack ソースは同じ `instructions_kind` を読んで自前の 3 キー（`reply_instructions` / `implement_instructions` / `triage_instructions`）から選ぶ（#450）。**選択は kind であって task-id 接頭辞ではない** — `triage` と `implement` は**どちらも接頭辞を持つ**（`books` / `impl`）ので、接頭辞で分岐すると triage のタスクに実装指示が渡る。kind が不明・不在のときは成果物を推測せず `reply_instructions` に縮退する。
 
+**`profile = "design"` を Slack ソースに書くと何も起きない。** `design` は現行コアが送る kind だが Slack プラグインは対応する指示文を持たず、しかも `design` の `output` は `none` なので下書きも publish されない — 返信案の指示を受けたエージェントが動いて、結果がどこにも出ない。設定は検証を通ってしまうので、プラグインは `initialize` 後の dispatch 時に警告ログを出す（#450）。Slack 起点で起票させたいなら `triage` を使う。
+
 展開はシングルパス — issue タイトルや Notion ページ名は他人が書ける内容なので、そこに書かれた `{placeholder}` は文字列として挿入されるだけで指示にはならない。
 
 ## `mode = "plan"` は git を構造的には止めない（#378）

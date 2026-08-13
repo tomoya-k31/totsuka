@@ -184,6 +184,10 @@ impl SlackPrompts {
     /// tokens an overridden template names but nothing supplies.
     const ALLOWED: &'static [(&'static str, &'static [&'static str])] = &[
         ("reply_instructions", &[]),
+        // The two profile-selected variants take no placeholders either — the
+        // deliverable and its URL requirement are stated in prose.
+        ("implement_instructions", &[]),
+        ("triage_instructions", &[]),
         ("reply_style_suffix", &["style"]),
         ("body_template", &["sender", "channel", "text"]),
         ("body_thread_header", &["count"]),
@@ -210,6 +214,8 @@ impl SlackPrompts {
     pub fn unknown_placeholders(&self) -> Vec<(&'static str, String)> {
         let values: &[(&str, &String)] = &[
             ("reply_instructions", &self.reply_instructions),
+            ("implement_instructions", &self.implement_instructions),
+            ("triage_instructions", &self.triage_instructions),
             ("reply_style_suffix", &self.reply_style_suffix),
             ("body_template", &self.body_template),
             ("body_thread_header", &self.body_thread_header),
@@ -678,6 +684,38 @@ mod tests {
         );
         // The keys that were not overridden stay clean.
         assert_eq!(found.len(), 2, "{found:?}");
+    }
+
+    /// **Every overridable key is scanned, not just the ones that take a
+    /// placeholder.** `implement_instructions` was absent from the scan from
+    /// the day it was added (#397) and `triage_instructions` inherited the
+    /// same gap on arrival (#450): a typo in either override skipped the
+    /// initialize-time warning that every other key gets, and the symptom is
+    /// a literal `{token}` reaching the model.
+    #[test]
+    fn the_profile_selected_instructions_are_scanned_too() {
+        let p: SlackPrompts = serde_json::from_value(serde_json::json!({
+            "implement_instructions": "実装して {bogus} してください",
+            "triage_instructions": "起票して {nonsense} してください",
+        }))
+        .unwrap();
+        let found = p.unknown_placeholders();
+        assert!(
+            found.contains(&("implement_instructions", "bogus".to_string())),
+            "{found:?}"
+        );
+        assert!(
+            found.contains(&("triage_instructions", "nonsense".to_string())),
+            "{found:?}"
+        );
+    }
+
+    /// The shipped defaults must not name a placeholder nothing supplies —
+    /// otherwise the warning above fires on a stock install.
+    #[test]
+    fn the_builtin_prompts_name_no_unknown_placeholder() {
+        let p: SlackPrompts = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(p.unknown_placeholders(), vec![]);
     }
 
     #[test]

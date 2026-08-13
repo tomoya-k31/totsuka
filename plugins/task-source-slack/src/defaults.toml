@@ -30,9 +30,12 @@ reply_instructions = """
 Pull Request を作成した場合は、その URL を返信文に必ず含めてください（Orchestrator は PR を作らないため、URL を知る手段がこの返信文以外にありません）。\
 """
 
-# Sent instead of `reply_instructions` when the matched workflow's profile asks
-# for a task-id prefix (#397) — i.e. the reaction started an *implement* task
-# rather than an answer.
+# Sent when the matched workflow's profile is `implement` (#398) — the reaction
+# started an implement run rather than an answer.
+#
+# Selected by `instructions_kind`, **not** by the presence of a task-id prefix:
+# `triage` carries one too (`books`), and picking on the prefix is the bug #450
+# fixed.
 #
 # The reply still goes through the approval gate, so this asks for a report
 # rather than a reply draft: the PR is the deliverable and its URL is the only
@@ -53,9 +56,11 @@ implement_instructions = """
 # the bug this key was added to fix (a triage run was told to implement).
 #
 # The deliverable is the issue, and — as with `implement` — its URL is the only
-# way the thread learns it exists, so the report must carry it. "Do not change
-# the code" is a statement of what the run is for; the deny set enforces it
-# either way (#395).
+# way the thread learns it exists, so the report must carry it.
+#
+# "Do not change the code" is prose, and for `triage` **prose is the only thing
+# saying it**: `triage` needs `Bash` for `gh issue comment`, so it cannot have
+# the shell taken away, and read-only is not enforced anywhere (ADR-0045).
 #
 # Placeholders: none.
 triage_instructions = """
