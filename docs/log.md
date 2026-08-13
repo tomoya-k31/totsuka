@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-08-14
+
+* **Update**: `answer` profile を実機で検収し（#447、task 56）、[ADR-0041](/decisions/adr-0041-unattended-permission-mode.md) と [ADR-0043](/decisions/adr-0043-human-approved-completion.md) に結果を追記した。B が A をメンション → 判定表 5 段を通過 → hint 一致でリポジトリ即決 → **24 秒で下書き生成（承認プロンプト 0 件）** → 承認ボタン押下 → **A 名義でスレッドへ投稿**（`user=U08T7QXPTTK`、bot ではない）まで一周。**`Bash` を全 deny した profile でも `auto` が停止要因にならない**ことと、**answer は `NEEDS_INPUT` を経ず直接 `COMPLETED` を出す**こと（design が park し answer が park しないという #440 の profile 分岐が、同一ビルド・同一 `tt run` の下で分離して観測できた）が要点
+* **Update**: `triage` profile の実機検収は**着手前にブロッカーが判明**して見送った（#450）。コアは triage にも `task_id_prefix`（`books`）を焼き込むが、`task-source-slack` は指示文を prefix の有無だけで選んでおり（コメントも「prefix が付いていれば implement」と明言）、**triage タスクに implement の指示（「実装して PR を作れ」）が渡る**。プラグインは `instructions_kind` を読んでおらず triage 用の指示文自体が無い。この経路が今まで表に出なかったのは、`profile = "triage"` を使う workflow がどの config にも一度も定義されていなかったため
+
 ## 2026-08-13
 
 * **Update**: #439 / #440 を実機で検収し、[ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md) と [ADR-0043](/decisions/adr-0043-human-approved-completion.md) に `verified` と検収内容を追記した。**#439**: 同一 workflow 形の対照実験で、`timeout_secs = 45` の control は dispatch から **46 秒でエスカレート**（D-03 が生きている実測）、`timeout_secs = 0` は同じ沈黙窓を超えてもエスカレーション 0 件。**#440**: design タスクが設計を issue コメントへ投稿 → `NEEDS_INPUT reason="完了確認待ち"` で park → pane 上の人間承認 → `COMPLETED` がジャッジ（承認 rubric）を通過して `done`、`Design Review` 書き戻し・pane 解放・worktree 削除まで一気通貫。**確認を飛ばした COMPLETED をブロックする負のパスは未検証** — 人間役のプロンプト自体が「人間の発言」になるため、汚染なしに誘発する刺激が存在しない

@@ -80,4 +80,6 @@ agent: <<STATUS:COMPLETED>>
 3. `on_success` の書き戻し（`Design Review`、F-84）・pane 解放・worktree 削除まで確認
 4. レンダリングされた `orchestrator-github-design.json` に承認 rubric・`defaultMode: auto`・deny 18 件が入っていることを直接確認
 
+**profile の線引きも実機で分離して確認した（2026-08-14、#447）。** 同じビルド・同じ `tt run` で Slack の `slack-reply`（profile = `answer`）を回したところ、エージェントは **`NEEDS_INPUT` を経ず直接 `COMPLETED`** を出し（フック列は `session_start → COMPLETED → session_end`）、24 秒で承認フローの下書き作成まで到達した。design が park し answer が park しないことが、**同一条件下で分離して観測できた** — この決定が profile 限定であることは、ユニットテストだけでなく実機でも成り立っている。
+
 **未検証**: 確認を飛ばした COMPLETED をジャッジがブロックする負のパスは実機では測っていない。人間役が送るプロンプト自体が「人間の発言」になるため、承認なしの完了申告を汚染なしに誘発する刺激が存在しない。この経路の根拠は、条件文としてのジャッジ挙動の実測（#389）と rubric の文面に依る。
