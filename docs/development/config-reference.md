@@ -231,23 +231,39 @@ on_success = { set_status = "設計済み" }
 | worktree がブランチ上にあったら**成功として扱わず失敗**させる（走行中の検知では pane も閉じる） | answer / triage / design | #409 / #410 |
 | claude の `--settings` へ `permissions.defaultMode = "auto"` を注入 | 全 profile | #420 |
 | ソースプラグインへ `instructions_kind` を伝え、書き込み先の指示を出させる | triage / design / implement | #398 |
-| 検収 rubric を「成果物 URL の実在」に差し替え | triage / design / implement | #398 |
+| 検収 rubric を「成果物 URL の実在」に差し替え | triage | #398（design / implement は #440 で下記の承認検収へ移行） |
+| 完了自己申告の指示を「先に NEEDS_INPUT で人間に確認を求め、pane 上の明示承認後にのみ COMPLETED」版に差し替え | design / implement | #440 |
+| 検収 rubric を「人間が会話上で完了を明示承認済みか」に差し替え | design / implement | #440 |
 | ソースプラグインへ `task_id_prefix` を伝え、会話とは別 ID のタスクを立てさせる | implement (`impl:`) / triage (`books:`) | #397 |
 | 必要な外部ツール（`gh`）の不在を dispatch 前に検知して待機させる | implement | #399 |
 
+### design / implement の完了は人間が pane 上で承認する（#440）
+
+`design` / `implement` は attended pane（人間が pane を見ている）前提の profile で、**完了の最終判断は人間が行う**（[ADR-0043](/decisions/adr-0043-human-approved-completion.md)）。エージェントへの完了自己申告の指示が差し替わり、次の流れになる:
+
+1. エージェントは作業を終えたと思ったら `COMPLETED` を**出さず**、内容を要約して確認を求め、`NEEDS_INPUT reason="完了確認待ち"` で停止する
+2. totsuka はタスクを `waiting_input` に park する（D-03 掃引対象外・並列 slot 解放・notifier 通知 — すべて従来動作）
+3. 人間が pane 上で明示的に承認すると、エージェントが `COMPLETED` を出して終端する
+
+llm 検収の rubric も「この完了申告より前の会話で人間が明示的に承認しているか」の条件に差し替わる。ジャッジはセッション内で会話を見られるので、**確認を飛ばして COMPLETED を出したエージェントは、マーカー欠落を止めるのと同じ層でブロックされる**。確認依頼の停止自体は NEEDS_INPUT なので non-claim 枝（#389）を満たし、ブロックされない。
+
+長い自走中の誤エスカレートを避けたい attended workflow は `timeout_secs = 0`（D-03 掃引のオプトアウト、#439 / [ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md)）を併用する。
+
+既知の制限: `WaitingInput` 中の 2 回目の NEEDS_INPUT（修正指示 → 再確認）は冪等 no-op で**再通知が飛ばない**。attended pane では人間が会話の当事者なので実害は小さい。
+
 ### 成果物 URL 検収の落とし穴（#398）
 
-`triage` / `design` / `implement` の検収 rubric は「最終メッセージに成果物（issue コメント / Notion ページ / PR）の URL が実際に含まれているか」を条件にする。これらの profile は `result/publish` を通らないので、**この URL が「成果物がどこかに存在する」ことを Orchestrator が知る唯一の経路**である。
+`triage` の検収 rubric は「最終メッセージに成果物（issue コメント / Notion ページ / PR）の URL が実際に含まれているか」を条件にする。この profile は `result/publish` を通らないので、**この URL が「成果物がどこかに存在する」ことを Orchestrator が知る唯一の経路**である（`design` / `implement` も #440 までは同じ URL 検収だったが、人間承認検収へ移行した — 人間が成果物を見て承認しているのに URL を要求し直すのは二重検収になるため）。
 
 rubric leaf の優先順位（強い順）:
 
 1. `[[workflows]].prompts.verification_rubric`
 2. `[[workflows]].rubric`
 3. `[prompts].verification_rubric`（グローバル）
-4. **profile の既定（= URL 検収）**
+4. **profile の既定**（triage = URL 検収 #398、design / implement = 承認検収 #440）
 5. 汎用既定
 
-**3 が 4 より強い**ため、`[prompts].verification_rubric` を設定済みの構成は `design` workflow でも **URL 検収にならない**。全 workflow に対して既に選ばれた文言を、後から入った profile が黙って覆すよりはましだと判断した結果だが、症状は「投稿していない設計を『書いた』と申告したタスクが通る」なので、profile を使うならグローバルの rubric を外すか、`[[workflows]].rubric` で明示すること。
+**3 が 4 より強い**ため、`[prompts].verification_rubric` を設定済みの構成は `triage` workflow でも **URL 検収にならない**。全 workflow に対して既に選ばれた文言を、後から入った profile が黙って覆すよりはましだと判断した結果だが、症状は「投稿していない設計を『書いた』と申告したタスクが通る」なので、profile を使うならグローバルの rubric を外すか、`[[workflows]].rubric` で明示すること。**同じ梯子が #440 の 2 leaf にも効く**: グローバルの `[prompts].marker_self_report` を設定済みだと、`design` / `implement` workflow でも確認プロトコル版の自己申告指示にならない。
 
 ### 外部ツールの未整備で待機する（#399）
 
@@ -390,9 +406,9 @@ claude / codex / opencode に差し込むプロンプト文の上書き。組み
 
 | キー | 型 | 既定 | 説明 | プレースホルダ |
 |---|---|---|---|---|
-| `marker_self_report` | string? | 組み込み | 全ディスパッチに注入される完了自己申告指示。invisible injection 対応ツールは env `TOTSUKA_PROMPT_CONTEXT` 経由、非対応（opencode）は可視 `extra_context` | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |
+| `marker_self_report` | string? | 組み込み（profile で分岐） | 全ディスパッチに注入される完了自己申告指示。invisible injection 対応ツールは env `TOTSUKA_PROMPT_CONTEXT` 経由、非対応（opencode）は可視 `extra_context`。**design / implement profile の既定は確認プロトコル版**（`marker_self_report_confirm` — 人間の pane 上承認後にのみ COMPLETED、#440）。このキーを上書きすると profile 分岐より優先される | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |
 | `branch_convention` | string? | 組み込み | ブランチ作成指示。worktree は detached で引き渡されるので、エージェントがリポジトリの命名規約を読んで `git switch -c` する。**plan モードでは注入しない**（plan ペインは git を実行できず、claude では無人ペインが答えられない承認プロンプトを誘発してタイムアウトになる）。既にブランチ上のタスク（再開）にも注入しない | なし |
-| `verification_rubric` | string? | 組み込み | 完了申告を許可してよい条件の枝（「完了を申告しており、かつ作業が要件を実際に満たしている」）。**命令文ではなく条件節として書く** — 下記の契約を参照 | — |
+| `verification_rubric` | string? | 組み込み（profile で分岐） | 完了申告を許可してよい条件の枝（「完了を申告しており、かつ作業が要件を実際に満たしている」）。profile 既定: triage = 成果物 URL 検収（#398）、design / implement = 人間承認検収（#440）。**命令文ではなく条件節として書く** — 下記の契約を参照 | — |
 | `verification_background_exemption` | string? | 組み込み | 許可条件の枝: バックグラウンドタスク実行中の中間停止（ハートビート） | — |
 | `verification_nonclaim_exemption` | string? | 組み込み | 許可条件の枝: 最終メッセージが `NEEDS_INPUT` / `FAILED` を報告している停止（#389） | `{marker_needs_input}` `{marker_failed}` |
 | `verification_marker_convention` | string? | 組み込み | `ok: false` のとき `reason` に何を書かせるか。`reason` はエージェントへ差し戻されるので、ここでマーカー規約を教える | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |

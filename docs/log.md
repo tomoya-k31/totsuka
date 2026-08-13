@@ -4,6 +4,7 @@
 
 * **Creation**: `timeout_secs = 0` を **D-03 無音掃引のオプトアウト**として定義した（#439、[ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md)）。attended pane（人間が pane を見ている）前提の workflow では無音は異常の証拠にならず、従来の 0 は「最初の掃引でほぼ必ず即エスカレート」という罠値で意図して使える意味を持っていなかった。トレードオフ（真にハングしたエージェントもその workflow では検知されない）は [設定リファレンス](/development/config-reference.md) に明記。attended pane 運用の本体設計は #440
 * **Update**: [orchestrator-core クレート](/components/orchestrator-core.md) の `run` 行に D-03 掃引の `timeout_secs = 0` オプトアウトを追記した（/code-review の指摘。掃引条件を明記している行が実装と食い違ったままだった）
+* **Creation**: design / implement profile の**完了判断を人間の pane 上承認に移した**（#440、[ADR-0043](/decisions/adr-0043-human-approved-completion.md)）。エージェントは完了と思ったら `NEEDS_INPUT reason="完了確認待ち"` で停止して確認を求め、人間が会話上で明示承認した後にのみ `COMPLETED` を出す。実装はプロンプト既定の profile 分岐 2 つ（`marker_self_report_confirm` / `verification_rubric_human_approval`、#398 の `verification_rubric_artifact_url` と同型の「既定の差し替え」）のみで、**状態機械の改修はゼロ** — `WaitingInput` の掃引免除・slot 解放・通知・`WaitingInput` からの COMPLETED 受理はすべて既存動作。ジャッジは「人間の明示承認が会話に実在するか」を検査するので、**確認を飛ばした COMPLETED はマーカー欠落と同じ層でブロックされる**。マーカー自体を消す案（COMPLETED が唯一の終端入口で、来ないタスクは不死身になる）と `verification = "human"` + CLI 案（判断が pane の外に出る・`Verifying` が slot を握り続ける）は不採用 [設定リファレンス](/development/config-reference.md) [設定例](/development/config-examples.md) [orchestrator-core クレート](/components/orchestrator-core.md)
 
 ## 2026-08-12
 

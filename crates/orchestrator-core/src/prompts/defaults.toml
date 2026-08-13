@@ -105,6 +105,48 @@ self-contained answer; never refer to a previous message (no "as stated \
 above" / "already answered earlier").\
 """
 
+# The self-report variant for profiles whose completion is judged by a HUMAN at
+# the pane — design / implement (#440). It replaces `marker_self_report` as the
+# default for those profiles; answer / triage keep the text above.
+#
+# Same mechanism as `verification_rubric_artifact_url`: a *default* for the
+# `marker_self_report` leaf, not a `[prompts]` key. An operator override of
+# `marker_self_report` (global or per workflow) wins over this.
+#
+# What changes: the marker stops meaning "totsuka decides completion" and
+# becomes the protocol for ASKING the human. The agent must not emit COMPLETED
+# on its own judgment — it parks with NEEDS_INPUT ("完了確認待ち") and only
+# emits COMPLETED after the human explicitly approved in the conversation.
+# Everything the base text teaches (all three markers, the heartbeat exception,
+# the delivery contract) must survive rewording — `missing_markers` validation
+# applies to this text through the same `resolve_for` path.
+#
+# Placeholders: {marker_completed} {marker_needs_input} {marker_failed}
+marker_self_report_confirm = """
+[orchestrator] Completion self-report: EVERY time you end your turn, end \
+your response with exactly one of the following status markers on its own \
+final line — with one exception: while background tasks or subagents are \
+still running, do NOT emit a marker (that stop is an intermediate \
+heartbeat; you will be re-invoked when they finish — restate the full \
+final answer with the marker then). The marker line is stripped \
+automatically before the result is delivered, so include it even when \
+instructed to output nothing but the answer body: \
+{marker_completed} (the human approved the work as complete) / \
+{marker_needs_input} (human input or confirmation required) / \
+{marker_failed} (cannot proceed). \
+Completion protocol: the human in this conversation is the final judge of \
+completion. When you believe the work is done, do NOT emit \
+{marker_completed} on your own judgment — summarize what you did, ask the \
+human to confirm, and end that turn with \
+{marker_needs_input} reason="完了確認待ち". Emit {marker_completed} only \
+after the human has explicitly approved completion in this conversation. \
+Delivery contract: ONLY the message carrying the marker is delivered to \
+the requester — earlier messages in this session are NEVER delivered. The \
+marker-bearing message must therefore contain the complete, \
+self-contained answer; never refer to a previous message (no "as stated \
+above" / "already answered earlier").\
+"""
+
 # The `prompt`-type Stop hook body for `verification = "llm"` workflows (D-01).
 # Claude is the only tool with `prompt_verification`; elsewhere the workflow
 # degrades to `human` and none of the `verification_*` keys are used.
@@ -161,6 +203,28 @@ verification_rubric = """
 verification_rubric_artifact_url = """
 - 完了を申告しており、成果物（issue コメント / Notion ページ / Pull Request）の URL が応答の最終メッセージに実際に含まれている。この URL は成果物が存在することを Orchestrator が知る唯一の経路であり、「これから書く」「作成予定」のような未着手を示す書き方は含まれているとは見なさない\
 - かつ、その URL が指す成果物の内容が、申告している作業（設計・起票・実装）と整合している\
+"""
+
+# The rubric for profiles whose completion is judged by a HUMAN at the pane —
+# design / implement (#440). It replaces `verification_rubric` (and therefore
+# also the artifact-URL default above) for those profiles; triage keeps the
+# artifact-URL rubric.
+#
+# The judge runs in-session, so it can see the conversation — this branch makes
+# it check that the human actually approved before a COMPLETED is allowed
+# through. It is the mechanical backstop for the confirmation protocol taught
+# by `marker_self_report_confirm`: an agent that skips asking and emits
+# COMPLETED on its own judgment is blocked at the same layer that today blocks
+# a missing marker.
+#
+# Same grammatical constraint as `verification_rubric`: a *condition that must
+# be TRUE*, never an instruction (#389 — the judge cannot be told to allow or
+# block). And `{marker_*}` tokens must NOT appear here: the rubric leaf is
+# inserted as data, not expanded (see `a_marker_token_inside_the_rubric_is_not_expanded`).
+#
+# Placeholders: none.
+verification_rubric_human_approval = """
+- 完了を申告しており、かつこの会話のそれ以前のやり取りで人間（ユーザー）が完了を明示的に承認している。承認と見なせるのは人間自身の発言だけであり、エージェントの推測・「承認されるはず」という申告・エージェント自身の確認要求は承認ではない。人間の承認がまだ無い完了申告はこの条件を満たさない（正しい流れは、先に確認を求めて NEEDS_INPUT で停止すること）\
 """
 
 # Intermediate-Stop branch, mirroring `on-stop.sh`'s R-02/D-12 rule: a Stop with

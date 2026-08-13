@@ -254,10 +254,10 @@ rubric = "テストが追加されており、cargo clippy / cargo fmt が通っ
 name = "github-design"
 source = "github"
 trigger = { project_status = "Design" }
-profile = "design"
+profile = "design"                           # 完了は人間の pane 上承認（#440）
 agent = "herdr"
 on_success = { set_status = "Design Review" }
-timeout_secs = 900
+timeout_secs = 0                             # attended pane: D-03 掃引を無効化（#439）
 initial_prompt = "/grill-me スキルを使用して、詳細設計を行ってください"
 ```
 
@@ -298,8 +298,8 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 |---|---|---|---|---|
 | `answer` | plan | source | llm | 質問に答えてソースへ返す（Slack メンション・リアクション） |
 | `triage` | plan | source | llm | 依頼を GitHub / Notion へ起票する |
-| `design` | plan | none | llm | 詳細設計を issue コメント / ページへ書き、status で伝える |
-| `implement` | implement | none | llm | 実装して PR を出す |
+| `design` | plan | none | llm | 詳細設計を issue コメント / ページへ書き、status で伝える。**完了は人間が pane 上で承認**（#440） |
+| `implement` | implement | none | llm | 実装して PR を出す。**完了は人間が pane 上で承認**（#440） |
 
 ```toml
 [[workflows]]
