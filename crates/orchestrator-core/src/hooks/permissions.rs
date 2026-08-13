@@ -86,8 +86,13 @@
 //! does not even withhold the artifact, which the agent published itself
 //! before the check ran (#398). What it stops is the silent success #410
 //! produced: the task fails, the worktree is kept, and `on_success` does not
-//! fire. The real boundary is a sandbox
-//! ([#418](https://github.com/tomoya-k31/totsuka/issues/418)).
+//! fire.
+//!
+//! **That detection is the end of the line, by decision.** A sandbox would be
+//! the real boundary and #418 measured that one works, but wiring it was
+//! declined (#446, ADR-0045) — so read-only is defence in depth plus
+//! after-the-fact detection, never a guarantee. An agent that means to write
+//! through `Bash` still can.
 //!
 //! **Dropping plan mode for `answer` has an unmeasured edge.** What was
 //! measured is narrow: plan mode did not stop a `Bash` file write. It does not

@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: claude-code/fable-5, at: 2026-08-13T18:30:00+09:00 }
+generated: { by: claude-code/fable-5, at: 2026-08-13T22:05:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -349,7 +349,7 @@ push し、PR まで作成した。対象リポジトリの `CLAUDE.md` が「�
 `run` が警告を出す（ブランチ名つき）。既存の構成がアップグレードで黙って厳しくならないよう、
 ここは意図的に警告のままにしてある。
 
-**profile を書いた workflow は失敗する**（#409、[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md)）。
+**profile を書いた workflow は失敗する**（#409、[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md)）。なお **read-only profile の read-only 性は保証ではない**（[ADR-0045](/decisions/adr-0045-read-only-is-not-guaranteed.md)）— OS レベルで封じるサンドボックスは実現可能と実測済みだが、実装しないと決めた。`cat >` でのファイル書き込みや `&&`・パイプを挟んだ git/gh は deny を素通りする。
 read-only profile（answer / triage / design）のタスクの worktree がブランチ上にあると、成果物を
 公開せず `fail_publish` で失敗し、worktree とコミットは調査用に保持される。**これは防止ではない** —
 ブランチがある時点で push は済んでいるかもしれず取り返せない。失敗させることで「黙って成功」を
@@ -420,7 +420,7 @@ claude / codex / opencode に差し込むプロンプト文の上書き。組み
 
 `verification_*` の 5 キーは `verification = "llm"` のワークフローでのみ使われる（prompt 型 Stop フックを持つのは claude だけで、他ツールでは `human` へ縮退する）。
 
-`opencode_plan_agent` は**散文本体のみ**である。YAML frontmatter（`mode: primary` と `permission: {edit: deny, bash: deny, task: deny}`）は Rust 側で固定されており設定できない — この deny マップが plan モードの読み取り専用保証そのもので、散文に見えるキーから `bash: allow` を注入できると権限昇格になるためである（[ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md)）。値が `---` の行を**どこかに**含む場合は検証エラーになる。frontmatter は慣例上ファイル先頭でしか解釈されないので後続の `---` は本来ただの水平線だが、opencode のパーサはこちらで検証できず、ここは権限境界なのでその推論に依存しない設計にしている（本文の水平線は `***` で書ける）。opencode は claude の `--permission-mode plan` や codex の `--sandbox read-only` に相当する構造的な plan フラグを持たないため、**このエージェントファイルが plan 意図の唯一の強制手段**である。
+`opencode_plan_agent` は**散文本体のみ**である。YAML frontmatter（`mode: primary` と `permission: {edit: deny, bash: deny, task: deny}`）は Rust 側で固定されており設定できない — この deny マップが plan 意図を運ぶ**唯一の機構**（保証ではない — 上記のとおり read-only はどこでも保証せず（[ADR-0045](/decisions/adr-0045-read-only-is-not-guaranteed.md)）、opencode 実機での挙動も未計測）で、散文に見えるキーから `bash: allow` を注入できると権限昇格になるためである（[ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md)）。値が `---` の行を**どこかに**含む場合は検証エラーになる。frontmatter は慣例上ファイル先頭でしか解釈されないので後続の `---` は本来ただの水平線だが、opencode のパーサはこちらで検証できず、ここは権限境界なのでその推論に依存しない設計にしている（本文の水平線は `***` で書ける）。opencode は claude の `--permission-mode plan` や codex の `--sandbox read-only` に相当する構造的な plan フラグを持たないため、**このエージェントファイルが plan 意図の唯一の強制手段**である。
 
 **マーカー自体（`<<STATUS:COMPLETED>>` など）は設定できない。** `on-stop.sh`（bash）と `totsuka-opencode.js` がリテラルをパースし、[ADR-0020](/decisions/adr-0020-status-marker-stays.md) が 3 ツール共通の唯一の完了信号と定めているため。ここで編集できるのは規約を**教える散文**であって規約そのものではない。`{marker_*}` はそのワイヤ定数へ解決される。
 

@@ -4,7 +4,7 @@ title: ADR-0040 read-only profile の worktree は sandbox-exec で OS レベル
 description: "read-only profile の worktree を macOS の sandbox-exec（Seatbelt）で書き込み禁止にできるかの調査結果。worktree と元リポジトリの .git を deny すればファイル書き込み・commit・ブランチ作成は実測で止まり、読みと gh は無傷で /tmp も書ける。配線は herdr が pane の PATH からエージェントを解決するのでシムで可能。ただし git push はリモートに届いてしまい、Claude Code 自身のサンドボックスは運用判断で使わない。Linux と sandbox-exec の将来は未解決。"
 resource: https://github.com/tomoya-k31/totsuka/issues/418
 tags: [decision, security, sandbox, macos, seatbelt, profile, herdr, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-11T22:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-13T22:05:00+09:00 }
 status: stable
 verified: [{ by: claude-code/opus-5, at: 2026-08-11T21:40:00+09:00 }]
 owner: tomoya-k31
@@ -148,8 +148,9 @@ worktree を別 uid に持たせる案は、totsuka 自身が worktree を作成
 
 ## 送った先
 
-実装は別 issue に切る。この ADR は「可能である」「どう配線するか」「どこまでしか守れないか」を確定させただけで、
-[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md) の事後検出は当面そのまま残る。
+**実装しないと決めた**（[ADR-0045](/decisions/adr-0045-read-only-is-not-guaranteed.md)。#446 として起票したものを、着手せずクローズした）。この ADR は「可能である」「どう配線するか」「どこまでしか守れないか」を確定させた**調査結果としてそのまま有効**で、方針が変われば調査からやり直す必要はない。
+
+[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md) の事後検出は「当面」ではなく**最終形**になった。read-only profile の read-only 性は保証されない。
 
 # 検証
 
