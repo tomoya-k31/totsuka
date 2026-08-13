@@ -11,6 +11,61 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.3.0](https://github.com/tomoya-k31/totsuka/compare/v0.2.0...v0.3.0) (2026-08-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **core:** `profile = "answer"` のタスクはコマンドを実行できなく なる（`git log` も `gh issue view` もテスト実行も不可）。履歴を根拠に 答える質問には答えられなくなる。
+* **protocol:** プロトコルが 0.4.0 になり、`<0.4` を上限とする manifest は起動拒否される。`plugins/herdr.toml` に `agent_command` / `plan_args` / `design_preview` が残っていると initialize が CONFIG_INVALID で落ちる。
+
+### Features
+
+* **agent-ide-herdr:** dispatch で repo/タスク identity を metadata token として報告する ([#417](https://github.com/tomoya-k31/totsuka/issues/417)) ([#428](https://github.com/tomoya-k31/totsuka/issues/428)) ([6d9789f](https://github.com/tomoya-k31/totsuka/commit/6d9789f25857ffa22c58725d965d84433d201998))
+* **agent-ide-herdr:** workspace label を人間可読にし、サイドバー設定手順を用意する ([#417](https://github.com/tomoya-k31/totsuka/issues/417)) ([#429](https://github.com/tomoya-k31/totsuka/issues/429)) ([a5ebd3c](https://github.com/tomoya-k31/totsuka/commit/a5ebd3cfef7bdec023f571e2fa669c0915cc2fff))
+* **cli:** totsuka status に「外部ツール待ち」の待機理由を表示する ([#407](https://github.com/tomoya-k31/totsuka/issues/407)) ([#424](https://github.com/tomoya-k31/totsuka/issues/424)) ([928459d](https://github.com/tomoya-k31/totsuka/commit/928459d0492669376bf3782c341dfda67d689317))
+* **core,cli:** implement profile の gh 未整備を dispatch 前に検知して待機させる ([#406](https://github.com/tomoya-k31/totsuka/issues/406)) ([396bad0](https://github.com/tomoya-k31/totsuka/commit/396bad02d6e7f17951f18b0ec35fe73ea16de961)), closes [#399](https://github.com/tomoya-k31/totsuka/issues/399)
+* **core,github,notion:** 成果物をエージェント直接書き込みへ移行し URL 実在検収を導入する ([#404](https://github.com/tomoya-k31/totsuka/issues/404)) ([47855de](https://github.com/tomoya-k31/totsuka/commit/47855def56902f193241d92941b30971eb25cda8)), closes [#398](https://github.com/tomoya-k31/totsuka/issues/398)
+* **core:** [[workflows]].profile を新設し answer/triage/design/implement の 4 原型を導入する ([#400](https://github.com/tomoya-k31/totsuka/issues/400)) ([ca77233](https://github.com/tomoya-k31/totsuka/commit/ca77233dd5d0aed02f5f96f2c332a22bd84bd9ea)), closes [#394](https://github.com/tomoya-k31/totsuka/issues/394)
+* **core:** 3 ツールとも承認プロンプトで止まらない設定で起動する ([#420](https://github.com/tomoya-k31/totsuka/issues/420)) ([#435](https://github.com/tomoya-k31/totsuka/issues/435)) ([b0513d1](https://github.com/tomoya-k31/totsuka/commit/b0513d1f2901960573f79d3b652554c2a3d93f52))
+* **core:** plan 系 profile に Rust 固定の permissions.deny を注入する ([#403](https://github.com/tomoya-k31/totsuka/issues/403)) ([0782e63](https://github.com/tomoya-k31/totsuka/commit/0782e63ad0b7df0a7b5e35d1a402a4525b825b95)), closes [#395](https://github.com/tomoya-k31/totsuka/issues/395)
+* **core:** timeout_secs = 0 を D-03 無音掃引のオプトアウトにする ([#439](https://github.com/tomoya-k31/totsuka/issues/439)) ([#441](https://github.com/tomoya-k31/totsuka/issues/441)) ([3784f27](https://github.com/tomoya-k31/totsuka/commit/3784f27310e2a9622b6eaf806b9f6963e36d8e6f))
+* **core:** workflow ごとに追加プロンプト（initial_prompt）を設定ファイルで渡せるようにする ([#415](https://github.com/tomoya-k31/totsuka/issues/415)) ([#425](https://github.com/tomoya-k31/totsuka/issues/425)) ([b8ed0c6](https://github.com/tomoya-k31/totsuka/commit/b8ed0c6e7107d95eb2d5b99552188368191d3ef0))
+* **core:** 秘密参照に cmd:&lt;command&gt; スキームを追加する ([#444](https://github.com/tomoya-k31/totsuka/issues/444)) ([#445](https://github.com/tomoya-k31/totsuka/issues/445)) ([df51e36](https://github.com/tomoya-k31/totsuka/commit/df51e368bc6660aa35cbc358105ad7399f74d3b6))
+* **profile:** design/implement の完了判断を人間の pane 上承認に移す ([#440](https://github.com/tomoya-k31/totsuka/issues/440)) ([#442](https://github.com/tomoya-k31/totsuka/issues/442)) ([b40e4fe](https://github.com/tomoya-k31/totsuka/commit/b40e4fef76c728ba249d0862b7002c1f85f0dc2c))
+* **protocol:** TaskDispatchParams.repo_name を追加する (0.4.1, [#417](https://github.com/tomoya-k31/totsuka/issues/417)) ([#427](https://github.com/tomoya-k31/totsuka/issues/427)) ([b6fee19](https://github.com/tomoya-k31/totsuka/commit/b6fee19db64bc5788da1e94df8aa2d7d5673dff8))
+* **slack,core:** リアクション起動の implement タスクを impl: 接頭辞の別タスクとして立てる ([#405](https://github.com/tomoya-k31/totsuka/issues/405)) ([00c57b7](https://github.com/tomoya-k31/totsuka/commit/00c57b77ab7560c827a275f3ca27737d2e54169c)), closes [#397](https://github.com/tomoya-k31/totsuka/issues/397)
+* **slack,core:** 絵文字→workflow の対応を [[workflows]].trigger に統一する ([#402](https://github.com/tomoya-k31/totsuka/issues/402)) ([8bdd1ae](https://github.com/tomoya-k31/totsuka/commit/8bdd1aef1e11cc2b60dd702cc289ad37958f3e97)), closes [#396](https://github.com/tomoya-k31/totsuka/issues/396)
+
+
+### Bug Fixes
+
+* **agent-ide-herdr:** 「agent は pane.list に載らない」という記述を訂正する ([#416](https://github.com/tomoya-k31/totsuka/issues/416), [#417](https://github.com/tomoya-k31/totsuka/issues/417)) ([#430](https://github.com/tomoya-k31/totsuka/issues/430)) ([27573d2](https://github.com/tomoya-k31/totsuka/commit/27573d219391354113a57a0860ae1f307e61654d))
+* **agent-ide-herdr:** session/list が実機で常に空になる所有判定を修正する ([#416](https://github.com/tomoya-k31/totsuka/issues/416)) ([#426](https://github.com/tomoya-k31/totsuka/issues/426)) ([efe448b](https://github.com/tomoya-k31/totsuka/commit/efe448b0c68e456e6b1eddce387b2366fc372ce9))
+* **agent-ide-herdr:** 機械マーカーを pane label にも書く ([#432](https://github.com/tomoya-k31/totsuka/issues/432)) ([#438](https://github.com/tomoya-k31/totsuka/issues/438)) ([90665bc](https://github.com/tomoya-k31/totsuka/commit/90665bcf6508417f3ba40a9d25588079c0748799))
+* **core:** answer profile から Bash を取り上げ、plan モードを渡さない ([#410](https://github.com/tomoya-k31/totsuka/issues/410)) ([#414](https://github.com/tomoya-k31/totsuka/issues/414)) ([092fa69](https://github.com/tomoya-k31/totsuka/commit/092fa69fa43b5836e535c301cfb853d1ae555805))
+* **core:** read-only profile の plan ゲートを外し、リポジトリを触ったら公開せず失敗させる ([#409](https://github.com/tomoya-k31/totsuka/issues/409)) ([#419](https://github.com/tomoya-k31/totsuka/issues/419)) ([f24dd3c](https://github.com/tomoya-k31/totsuka/commit/f24dd3cb8582d63684a27fd6fdef83c92a54a615))
+* **core:** read-only 違反を走行中にも失敗させ、pane を閉じる ([#410](https://github.com/tomoya-k31/totsuka/issues/410)) ([#433](https://github.com/tomoya-k31/totsuka/issues/433)) ([78c0a74](https://github.com/tomoya-k31/totsuka/commit/78c0a74a6ca93e7e381516e8aa0a81fd03669e8f))
+* **core:** 走行中の read-only 違反が publish の失敗を名乗るのをやめる ([#410](https://github.com/tomoya-k31/totsuka/issues/410)) ([#436](https://github.com/tomoya-k31/totsuka/issues/436)) ([c72e50c](https://github.com/tomoya-k31/totsuka/commit/c72e50cfd2de3b6abc67296cafe2af16aa40b26e))
+* **live-e2e:** tt に GH_CONFIG_DIR を渡し、profile 時代の症状表を足す ([#408](https://github.com/tomoya-k31/totsuka/issues/408)) ([12e6b5f](https://github.com/tomoya-k31/totsuka/commit/12e6b5fc1bcdba6d58d7cf0149406bd85261f400))
+
+
+### Documentation
+
+* [#419](https://github.com/tomoya-k31/totsuka/issues/419) で古くなった記述を実態に合わせる ([#409](https://github.com/tomoya-k31/totsuka/issues/409)) ([#421](https://github.com/tomoya-k31/totsuka/issues/421)) ([0c30612](https://github.com/tomoya-k31/totsuka/commit/0c3061215544e73ac3c51eb9d9f7e28542668d76))
+* [#420](https://github.com/tomoya-k31/totsuka/issues/420) と ADR-0036 D4 の実機検収を反映する ([#437](https://github.com/tomoya-k31/totsuka/issues/437)) ([f821589](https://github.com/tomoya-k31/totsuka/commit/f821589499090b0ef6d05f05ac4881c1f171c35d))
+* [#439](https://github.com/tomoya-k31/totsuka/issues/439)/[#440](https://github.com/tomoya-k31/totsuka/issues/440) の実機検収を記録する（ADR-0042/0043 に verified） ([#443](https://github.com/tomoya-k31/totsuka/issues/443)) ([0ecd84c](https://github.com/tomoya-k31/totsuka/commit/0ecd84c82ca8a1445d834fd6d078330b34bf499c))
+* deny を read-only 保証として書いた記述を撤回する ([#410](https://github.com/tomoya-k31/totsuka/issues/410)) ([#412](https://github.com/tomoya-k31/totsuka/issues/412)) ([5e5f3ac](https://github.com/tomoya-k31/totsuka/commit/5e5f3ac12f05b007f2d20345b4ff5146addeb7c2))
+* worktree の OS レベル read-only 化を調査し ADR-0040 にまとめる ([#418](https://github.com/tomoya-k31/totsuka/issues/418)) ([#434](https://github.com/tomoya-k31/totsuka/issues/434)) ([dcb7d5a](https://github.com/tomoya-k31/totsuka/commit/dcb7d5a43f22c67737697e4ccc9c523d7eddf00f))
+* サイドバー設定のトークン語彙（references）と貼って動くスニペット ([a5ebd3c](https://github.com/tomoya-k31/totsuka/commit/a5ebd3cfef7bdec023f571e2fa669c0915cc2fff))
+* 実機で使って壊れたサイドバースニペットを直す ([#417](https://github.com/tomoya-k31/totsuka/issues/417)) ([#431](https://github.com/tomoya-k31/totsuka/issues/431)) ([589c810](https://github.com/tomoya-k31/totsuka/commit/589c8108210800d076f14ee925edc0a16da7a890))
+* 実機検収の結果を反映し、検査の効き方の記述を訂正する ([#410](https://github.com/tomoya-k31/totsuka/issues/410), [#409](https://github.com/tomoya-k31/totsuka/issues/409)) ([#423](https://github.com/tomoya-k31/totsuka/issues/423)) ([c50c987](https://github.com/tomoya-k31/totsuka/commit/c50c98754dcc4f5bd0d810f5a354d7689b02ef8d))
+
+
+### Chores
+
+* **protocol:** 期限切れの非推奨 3 面を 0.4.0 で削除する ([#411](https://github.com/tomoya-k31/totsuka/issues/411)) ([#413](https://github.com/tomoya-k31/totsuka/issues/413)) ([c8fe01c](https://github.com/tomoya-k31/totsuka/commit/c8fe01ca857f9fd4fa434101c2feb0b782370c98))
+
 ## [0.2.0](https://github.com/tomoya-k31/totsuka/compare/v0.1.4...v0.2.0) (2026-08-07)
 
 
