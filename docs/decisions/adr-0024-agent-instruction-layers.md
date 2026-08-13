@@ -4,7 +4,7 @@ title: ADR-0024 エージェントへの指示は task_source プラグインが
 description: ペイン内エージェントに渡す散文（手順・テンプレート・書式）を task_source プラグインの prompts が Task.instructions 経由で所有し、tools 設定と core は argv のツール制限・モデル・タイムアウトだけを持つ決定。Slack の books 起票フローで確定した。allowedTools は制限ではなく付与であること、ペインがオペレーターの settings.json を継承することを前提として明記し、スキル注入・agents インライン JSON・initialPrompt は不採用とする。
 resource: https://github.com/tomoya-k31/totsuka/issues/324
 tags: [decision, prompt, tool, permission, slack, agent, adr]
-generated: { by: claude-code/opus-5, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-14T03:05:00+09:00 }
 verified: { by: claude-code/opus-5, at: 2026-07-31T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
@@ -182,7 +182,7 @@ core 側で正規表現判定する mode を作れば 3 ツール共通・決定
 
 # 実装
 
-`plugins/task-source-slack/src/defaults.toml` の `[prompts]` に `books_instructions` を追加し、`src/config.rs` の placeholder テーブルと `prompt_entries` に `reply_instructions` と同じ流儀で登録する（placeholder は持たない）。`build_issue_task` が組む構造化セクション（対象リポジトリ / permalink / ProjectsV2 / 対象メッセージ / スレッド全文）の**前**に置く。
+`plugins/task-source-slack/src/defaults.toml` の `[prompts]` に triage 用の指示文を追加し、`src/config.rs` の placeholder テーブルと `prompt_entries` に `reply_instructions` と同じ流儀で登録する（placeholder は持たない）。**実装時のキー名は `triage_instructions`**（#450。profile 名に揃えた — 選択は `instructions_kind` が行うため）。`build_issue_task` が組む構造化セクション（対象リポジトリ / permalink / ProjectsV2 / 対象メッセージ / スレッド全文）の**前**に置く。
 
 `[tools.claude-gh-issue]` の `mode_args` は実行エンベロープだけを持つ:
 

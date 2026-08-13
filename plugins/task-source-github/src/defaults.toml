@@ -19,7 +19,8 @@
 # `triage`: the request arrived somewhere else and needs to become a tracked
 # item here. The worktree is read-only for this profile, so "do not change the
 # code" is a statement of what the run is for, not a restriction being explained
-# — the deny set enforces it either way (#395).
+# — and for `triage` that prose is the only thing saying it, since read-only is
+# not enforced anywhere (ADR-0045) and `triage` keeps `Bash` for `gh`.
 triage_instructions = """
 Issue #{issue_number}（{repo}）の内容を読み、必要な作業を整理して起票してください。\
 リポジトリのコードは変更しないでください。\

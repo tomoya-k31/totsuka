@@ -89,6 +89,17 @@ fn workflow_reactions(triggers: &[plugin_protocol::methods::TriggerInfo]) -> Vec
                     .get("task_id_prefix")
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                // Which instruction set the workflow's profile wants (#398).
+                // Absent only from a core older than #404 — which predates
+                // `task_id_prefix` (#405), so "a prefix but no kind" is not a
+                // combination any shipped core produces. Such a core sends
+                // neither, and the pipeline's fallback is the reply draft,
+                // exactly what it always produced.
+                instructions_kind: t
+                    .trigger
+                    .get("instructions_kind")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             }
         })
         .collect()
@@ -717,6 +728,7 @@ mod tests {
                 workflow: "watch".into(),
                 reaction: Some("eyes".into()),
                 task_id_prefix: None,
+                instructions_kind: None,
             }],
             &[],
         )

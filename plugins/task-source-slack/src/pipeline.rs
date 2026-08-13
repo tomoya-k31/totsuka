@@ -959,15 +959,40 @@ fn build_task(
     // (invisible prompt-context injection) while the pane shows only the
     // mention and its thread context.
     let p = &config.prompts;
-    // A prefixed task is an implement run (#397), whose deliverable is a PR —
-    // the thread gets a report carrying its URL, not a reply draft. The
-    // approval gate is unchanged: the report is still a draft the operator
-    // presses before it is posted, because a wrong implementation report is
-    // exactly the kind of message that should not go out unreviewed.
-    let mut instructions = if mention.task_id_prefix.is_some() {
-        p.implement_instructions.clone()
-    } else {
-        p.reply_instructions.clone()
+    // Which deliverable this run is for comes from `instructions_kind` (#398),
+    // never from the task-id prefix. **`triage` and `implement` both carry a
+    // prefix** (`books` / `impl`), so the prefix cannot tell them apart — and
+    // branching on it told a triage agent to implement and open a PR (#450).
+    //
+    // The approval gate is unchanged for every kind: the output is still a
+    // draft the operator presses before it is posted, because a wrong report
+    // is exactly the kind of message that should not go out unreviewed.
+    //
+    // An absent or unrecognised kind falls back to the reply draft rather than
+    // guessing a deliverable — working on the wrong one is worse than
+    // answering the thread. The two cases are not equally hypothetical:
+    //
+    // - **absent**: a core older than #404. It sends no `task_id_prefix`
+    //   either (#405 came after), so this is the plain mention path and the
+    //   reply draft is exactly what that core always produced.
+    // - **unrecognised**: `design` reaches here from a **current** core.
+    //   `source = "slack"` + `profile = "design"` is a config nothing rejects,
+    //   and this plugin has no text for it — so it draws the reply draft, and
+    //   `design`'s `output = "none"` then publishes nothing at all. The warn
+    //   is the only signal that a configured workflow silently does nothing.
+    let mut instructions = match mention.instructions_kind.as_deref() {
+        Some("implement") => p.implement_instructions.clone(),
+        Some("triage") => p.triage_instructions.clone(),
+        Some(unhandled) => {
+            tracing::warn!(
+                kind = %unhandled,
+                "no instruction set for this profile → falling back to the reply draft; \
+                 a `design` profile on a Slack workflow also publishes nothing \
+                 (output = \"none\"), so the task produces no visible result"
+            );
+            p.reply_instructions.clone()
+        }
+        None => p.reply_instructions.clone(),
     };
     if let Some(style) = &config.reply_style {
         instructions.push_str(&template::render(
@@ -1190,6 +1215,7 @@ mod tests {
             thread_ts: Some("0.0".into()),
             reaction: prefix.map(|_| "hammer".to_string()),
             task_id_prefix: prefix.map(str::to_string),
+            instructions_kind: None,
         }
     }
 
@@ -1299,6 +1325,7 @@ mod tests {
                 thread_ts: None,
                 reaction: None,
                 task_id_prefix: None,
+                instructions_kind: None,
             },
             sender_name: "alice".into(),
             channel_name: "general".into(),
@@ -1363,6 +1390,94 @@ mod tests {
             "no directive in body"
         );
         assert!(!body.contains("返信スタイル"), "no style in body");
+    }
+
+    /// One `EnrichedMention` per profile shape, differing only in what the
+    /// Orchestrator baked into the trigger.
+    fn enriched_with(prefix: Option<&str>, kind: Option<&str>) -> EnrichedMention {
+        let mut e = enriched("300.0");
+        e.mention.task_id_prefix = prefix.map(str::to_string);
+        e.mention.instructions_kind = kind.map(str::to_string);
+        e
+    }
+
+    /// **The instruction set follows `instructions_kind`, never the task-id
+    /// prefix (#450).**
+    ///
+    /// `triage` and `implement` both carry a prefix (`books` / `impl`), so the
+    /// prefix cannot separate them — and the pre-#450 code branched on exactly
+    /// that, handing a triage run the implement directive ("実装して Pull
+    /// Request を作成"). Reverting `build_task` to `task_id_prefix.is_some()`
+    /// fails the triage row here.
+    #[test]
+    fn the_instruction_set_follows_the_kind_not_the_prefix() {
+        let config: SlackConfig = serde_json::from_value(json!({
+            "app_token": "xapp-1-A1-test",
+            "user_token": "xoxp-user-test",
+            "target_user_id": "U_ME",
+        }))
+        .unwrap();
+        let instructions_for = |prefix, kind| {
+            build_task(&config, &enriched_with(prefix, kind), None)
+                .0
+                .instructions
+                .expect("instructions are always set")
+        };
+
+        // triage: prefixed, but the deliverable is an issue — not a PR.
+        let triage = instructions_for(Some("books"), Some("triage"));
+        assert!(
+            triage.contains("GitHub Issue として起票"),
+            "triage must be told to file an issue: {triage}"
+        );
+        assert!(
+            !triage.contains("方針に従って実装し"),
+            "triage must NOT be told to implement — this is #450: {triage}"
+        );
+
+        // implement: prefixed too, and this one really is a PR run.
+        let implement = instructions_for(Some("impl"), Some("implement"));
+        assert!(
+            implement.contains("方針に従って実装し"),
+            "implement keeps its directive: {implement}"
+        );
+
+        // answer / plain mention: no prefix, no kind → the reply draft.
+        let answer = instructions_for(None, None);
+        assert!(
+            answer.contains("返信案を日本語で作成"),
+            "the catch-all still drafts a reply: {answer}"
+        );
+
+        // An unrecognised kind from a *newer* core degrades to the reply
+        // draft rather than guessing a deliverable, and a prefix present
+        // without a kind (an older core) does the same — neither may silently
+        // resolve to "implement".
+        //
+        // The negative markers are the *distinctive openings*, not the phrase
+        // "Pull Request を作成": the reply directive legitimately contains a
+        // conditional "PR を作成した場合は URL を含めて" clause, so matching on
+        // that would assert something weaker than intended.
+        // `design` leads this list because a **current** core sends it: it is
+        // the one unhandled kind actually reachable today
+        // (`instructions_kind(Profile::Design) == Some("design")`, and nothing
+        // rejects `source = "slack"` + `profile = "design"`). The pairing
+        // `(Some("impl"), None)` is deliberately absent — `instructions_kind`
+        // shipped in #404, *before* `task_id_prefix` in #405, so no released
+        // core sends a prefix without a kind.
+        for (prefix, kind) in [
+            (None, Some("design")),
+            (Some("books"), Some("future-profile")),
+            (None, None),
+        ] {
+            let degraded = instructions_for(prefix, kind);
+            assert!(
+                degraded.contains("返信案を日本語で作成")
+                    && !degraded.contains("方針に従って実装し")
+                    && !degraded.contains("GitHub Issue として起票"),
+                "unknown/absent kind must fall back to the reply draft ({prefix:?}, {kind:?}): {degraded}"
+            );
+        }
     }
 
     #[test]
