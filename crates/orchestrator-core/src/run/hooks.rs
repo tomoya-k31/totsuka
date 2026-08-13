@@ -478,7 +478,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// timeout (D-03). Runs each `cycle()`. Only actively-executing states are
     /// swept — `WaitingInput`/`Verifying`/`Escalated` are intentionally paused
     /// on a human, not silent agents — and only tasks that have received at
-    /// least one signal (a set `last_signal_at` is the anchor).
+    /// least one signal (a set `last_signal_at` is the anchor). A workflow with
+    /// `timeout_secs = 0` opts out of the sweep entirely (#439): its tasks are
+    /// watched by a human at the pane, so silence is not evidence of anything.
     pub async fn sweep_signal_timeouts(&mut self) -> Result<(), EngineError> {
         let now = self.clock.now_utc();
         let mut timed_out: Vec<TaskRecord> = Vec::new();
@@ -498,6 +500,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     continue;
                 };
                 let timeout = self.workflow_timeout_secs(&record.workflow);
+                if timeout == 0 {
+                    continue;
+                }
                 if (now - last_at).whole_seconds() > timeout as i64 {
                     timed_out.push(record);
                 }

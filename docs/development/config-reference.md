@@ -115,7 +115,7 @@ owner: tomoya-k31
 | `on_success` | `{ set_status = "..." }`? | なし | 成功時にソース側ステータスを更新（F-84） |
 | `on_failure` | `{ set_status = "..." }`? | なし | 失敗時にソース側ステータスを更新（publish 失敗など retry 可能な失敗では書き戻さない） |
 | `verification` | enum | `llm` | 完了自己申告の検収方式（D-01）: `llm`（prompt 型 Stop フックで in-session 検収）/ `human`（`totsuka task verify` 待ち。有効な notifier が無いと警告）/ `none`（検収なし）。`profile` 指定時は書けない |
-| `timeout_secs` | int? | 1800 | 最終フックシグナルからの無応答上限秒。超過でエスカレーション（D-03） |
+| `timeout_secs` | int? | 1800 | 最終フックシグナルからの無応答上限秒。超過でエスカレーション（D-03）。**`0` はこのワークフローを掃引の対象外にする**（#439、[ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md)）— 人間が pane を見ている attended 運用向け。真にハングしたエージェントも検知されなくなるので、無人ワークフローには設定しないこと |
 | `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告。`[prompts]`（#314）より前からあるキーで、動作は維持される — 同じワークフローの `[workflows.prompts].verification_rubric` にのみ負け、グローバルの `[prompts].verification_rubric` には勝つ |
 | `[workflows.prompts]` | テーブル | — | このワークフロー専用のプロンプト上書き（下記 `[prompts]` の 5 キー。最優先層） |
 | `tool` | string? | なし | AI ツールの明示ピン（#196）。優先順位は workflow > repo > `default_tool`。`verification = "llm"` は Claude の prompt 型 Stop フックが必要なので、非 claude 系へ解決されうる構成では `tool = "claude"` のピンを警告で提案 |
