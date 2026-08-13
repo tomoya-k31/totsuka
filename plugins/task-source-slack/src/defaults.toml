@@ -45,6 +45,26 @@ implement_instructions = """
 出力は報告文のみとし、前置き・後書き・説明を含めないでください。\
 """
 
+# Sent when the matched workflow's profile is `triage` (#450) — the `:books:`
+# flow of #324: turn the thread into a backlog item rather than answering it.
+#
+# Selected by `instructions_kind`, not by the presence of a task-id prefix:
+# `triage` and `implement` both carry one, and picking on the prefix is exactly
+# the bug this key was added to fix (a triage run was told to implement).
+#
+# The deliverable is the issue, and — as with `implement` — its URL is the only
+# way the thread learns it exists, so the report must carry it. "Do not change
+# the code" is a statement of what the run is for; the deny set enforces it
+# either way (#395).
+#
+# Placeholders: none.
+triage_instructions = """
+このスレッドの内容を読み、必要な作業を整理して GitHub Issue として起票してください。\
+リポジトリのコードは変更しないでください。\
+完了後、Slack スレッドへの報告文を出力してください。報告文には**起票した Issue の URL を必ず含めてください**（Orchestrator は起票を行わないため、URL を知る手段がこの報告文以外にありません）。\
+出力は報告文のみとし、前置き・後書き・説明を含めないでください。\
+"""
+
 # Appended to `reply_instructions` only when `reply_style` is set in
 # `plugins/slack.toml`. `reply_style` itself stays a plain user string — it is
 # content, not a template.

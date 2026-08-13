@@ -97,6 +97,7 @@ struct Defaults {
 struct EmbeddedPrompts {
     reply_instructions: String,
     implement_instructions: String,
+    triage_instructions: String,
     reply_style_suffix: String,
     body_template: String,
     body_thread_header: String,
@@ -124,10 +125,14 @@ pub struct SlackPrompts {
     #[serde(default = "default_reply_instructions")]
     pub reply_instructions: String,
     /// Sent instead of [`reply_instructions`](Self::reply_instructions) when
-    /// the matched workflow asks for a task-id prefix (#397) — the reaction
-    /// started an implement task, not an answer.
+    /// the matched workflow's profile is `implement` (#397/#398).
     #[serde(default = "default_implement_instructions")]
     pub implement_instructions: String,
+    /// Sent instead of [`reply_instructions`](Self::reply_instructions) when
+    /// the matched workflow's profile is `triage` (#450) — the `:books:` flow
+    /// files an issue instead of answering or implementing.
+    #[serde(default = "default_triage_instructions")]
+    pub triage_instructions: String,
     /// Appended to [`reply_instructions`](Self::reply_instructions) only when
     /// [`SlackConfig::reply_style`] is set. Placeholder: `{style}`.
     #[serde(default = "default_reply_style_suffix")]
@@ -161,6 +166,7 @@ impl Default for SlackPrompts {
         Self {
             reply_instructions: DEFAULTS.reply_instructions.clone(),
             implement_instructions: DEFAULTS.implement_instructions.clone(),
+            triage_instructions: DEFAULTS.triage_instructions.clone(),
             reply_style_suffix: DEFAULTS.reply_style_suffix.clone(),
             body_template: DEFAULTS.body_template.clone(),
             body_thread_header: DEFAULTS.body_thread_header.clone(),
@@ -231,6 +237,10 @@ impl SlackPrompts {
         }
         out
     }
+}
+
+fn default_triage_instructions() -> String {
+    DEFAULTS.triage_instructions.clone()
 }
 
 fn default_implement_instructions() -> String {

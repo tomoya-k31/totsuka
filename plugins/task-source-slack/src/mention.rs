@@ -46,6 +46,12 @@ pub struct Mention {
     /// keeps the plain conversation id, which is what `answer` — and every
     /// mention — uses.
     pub task_id_prefix: Option<String>,
+    /// Which instruction set the matched workflow's profile asks for (#398),
+    /// from `instructions_kind` in the trigger. This is what the pipeline
+    /// branches on (#450) — **not** the prefix, which `triage` and
+    /// `implement` both carry. `None` on the plain mention path, where the
+    /// workflow is matched Orchestrator-side after submit.
+    pub instructions_kind: Option<String>,
 }
 
 impl Mention {
@@ -202,6 +208,11 @@ impl MentionFilter {
             // …and the catch-all is `answer`, whose task *is* the conversation
             // (ADR-0015). A prefix here would open a second task per message.
             task_id_prefix: None,
+            // Which workflow a plain mention matches is decided
+            // Orchestrator-side *after* submit, so the plugin cannot know the
+            // kind here. `None` selects the reply instructions, which is what
+            // the catch-all `answer` wants.
+            instructions_kind: None,
         })
     }
 
@@ -238,6 +249,7 @@ mod tests {
             thread_ts: thread_ts.map(str::to_string),
             reaction: Some("hammer".into()),
             task_id_prefix: prefix.map(str::to_string),
+            instructions_kind: None,
         }
     }
 

@@ -66,6 +66,9 @@ struct TriggerEmoji {
     /// `task_id_prefix` from the trigger (#397), or `None` for the plain
     /// conversation id.
     task_id_prefix: Option<String>,
+    /// `instructions_kind` from the trigger (#398) — which instruction set
+    /// the matched workflow's profile wants (#450).
+    instructions_kind: Option<String>,
 }
 
 impl ReactionTriggers {
@@ -88,6 +91,7 @@ impl ReactionTriggers {
             workflow,
             reaction,
             task_id_prefix,
+            instructions_kind,
         } in triggers
         {
             let Some(raw) = reaction else { continue };
@@ -114,6 +118,7 @@ impl ReactionTriggers {
             emojis.push(TriggerEmoji {
                 name: emoji,
                 task_id_prefix: task_id_prefix.clone(),
+                instructions_kind: instructions_kind.clone(),
             });
         }
 
@@ -150,8 +155,9 @@ impl ReactionTriggers {
                         name,
                         // The legacy notation predates profiles, so its
                         // workflow is whatever catch-all exists — which takes
-                        // the conversation id.
+                        // the conversation id and the plain reply instructions.
                         task_id_prefix: None,
+                        instructions_kind: None,
                     })
                     .collect(),
                 labelled: false,
@@ -186,6 +192,11 @@ pub struct WorkflowTrigger {
     /// `task_id_prefix`, which the Orchestrator derives from the profile
     /// (#397). Absent from an older Orchestrator → the conversation id.
     pub task_id_prefix: Option<String>,
+    /// `instructions_kind`, also derived from the profile (#398). This — not
+    /// the prefix — is what picks the instruction set (#450): `triage` and
+    /// `implement` both carry a prefix, so branching on the prefix told a
+    /// triage agent to implement and open a PR.
+    pub instructions_kind: Option<String>,
 }
 
 /// Where a reaction points: the coordinates needed to re-fetch the message.
@@ -201,6 +212,9 @@ pub struct ReactionTarget {
     /// The task-id prefix the matched workflow's profile asks for (#397), from
     /// `task_id_prefix` in the trigger. `None` keeps the conversation id.
     pub task_id_prefix: Option<String>,
+    /// The instruction set the matched workflow's profile asks for (#398),
+    /// carried to the [`Mention`] so the pipeline can pick by kind (#450).
+    pub instructions_kind: Option<String>,
 }
 
 impl ReactionTarget {
@@ -259,6 +273,7 @@ pub fn reaction_target(
         ts: item_str("ts")?.to_string(),
         reaction: triggers.label_for(reaction),
         task_id_prefix: entry.task_id_prefix.clone(),
+        instructions_kind: entry.instructions_kind.clone(),
     })
 }
 
@@ -287,6 +302,7 @@ pub fn to_mention(target: &ReactionTarget, message: SlackMessage) -> Option<Ment
         thread_ts: message.thread_ts,
         reaction: target.reaction.clone(),
         task_id_prefix: target.task_id_prefix.clone(),
+        instructions_kind: target.instructions_kind.clone(),
     })
 }
 
@@ -302,6 +318,7 @@ mod tests {
                 workflow: "wf".into(),
                 reaction: Some("eyes".into()),
                 task_id_prefix: None,
+                instructions_kind: None,
             }],
             &[],
         )
@@ -343,6 +360,7 @@ mod tests {
                 workflow: "slack-implement".into(),
                 reaction: Some("hammer".into()),
                 task_id_prefix: Some("impl".into()),
+                instructions_kind: None,
             }],
             &[],
         )
@@ -372,11 +390,13 @@ mod tests {
                     workflow: "slack-reply".into(),
                     reaction: Some("eyes".into()),
                     task_id_prefix: None,
+                    instructions_kind: None,
                 },
                 WorkflowTrigger {
                     workflow: "slack-implement".into(),
                     reaction: Some("hammer".into()),
                     task_id_prefix: Some("impl".into()),
+                    instructions_kind: None,
                 },
             ],
             &[],
@@ -442,6 +462,7 @@ mod tests {
                 workflow: "wf".into(),
                 reaction: Some(":eyes:".into()),
                 task_id_prefix: None,
+                instructions_kind: None,
             }],
             &[],
         )
@@ -459,11 +480,13 @@ mod tests {
                     workflow: "a".into(),
                     reaction: Some("eyes".into()),
                     task_id_prefix: None,
+                    instructions_kind: None,
                 },
                 WorkflowTrigger {
                     workflow: "b".into(),
                     reaction: Some(":eyes:".into()),
                     task_id_prefix: None,
+                    instructions_kind: None,
                 },
             ],
             &[],
@@ -483,6 +506,7 @@ mod tests {
                 workflow: "wf".into(),
                 reaction: Some("hammer".into()),
                 task_id_prefix: None,
+                instructions_kind: None,
             }],
             &["eyes".to_string()],
         )
@@ -500,6 +524,7 @@ mod tests {
                 workflow: "wf".into(),
                 reaction: Some("::".into()),
                 task_id_prefix: None,
+                instructions_kind: None,
             }],
             &[],
         )
@@ -516,6 +541,7 @@ mod tests {
                 workflow: "catch-all".into(),
                 reaction: None,
                 task_id_prefix: None,
+                instructions_kind: None,
             }],
             &[],
         )
@@ -601,6 +627,7 @@ mod tests {
             ts: "1.0".to_string(),
             reaction: None,
             task_id_prefix: None,
+            instructions_kind: None,
         };
         let mention = to_mention(&target, message()).expect("converted");
         // The reacting user is the operator; the mention's `user` is the
@@ -622,6 +649,7 @@ mod tests {
             ts: "1.0".to_string(),
             reaction: None,
             task_id_prefix: None,
+            instructions_kind: None,
         };
         let own = SlackMessage {
             user: Some("U_ME".to_string()),
@@ -638,6 +666,7 @@ mod tests {
             ts: "2.0".to_string(),
             reaction: None,
             task_id_prefix: None,
+            instructions_kind: None,
         };
         let reply = SlackMessage {
             ts: "2.0".to_string(),
@@ -659,6 +688,7 @@ mod tests {
             ts: "1.0".to_string(),
             reaction: None,
             task_id_prefix: None,
+            instructions_kind: None,
         };
         let edited = SlackMessage {
             subtype: Some("message_changed".to_string()),
@@ -679,6 +709,7 @@ mod tests {
             ts: "1.0".to_string(),
             reaction: None,
             task_id_prefix: None,
+            instructions_kind: None,
         };
         let authorless = SlackMessage {
             user: None,

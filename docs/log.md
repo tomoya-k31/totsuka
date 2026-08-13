@@ -4,6 +4,7 @@
 
 * **Update**: `answer` profile を実機で検収し（#447、task 56）、[ADR-0041](/decisions/adr-0041-unattended-permission-mode.md) と [ADR-0043](/decisions/adr-0043-human-approved-completion.md) に結果を追記した。B が A をメンション → 判定表 5 段を通過 → hint 一致でリポジトリ即決 → **24 秒で下書き生成（承認プロンプト 0 件）** → 承認ボタン押下 → **A 名義でスレッドへ投稿**（`user=U08T7QXPTTK`、bot ではない）まで一周。**`Bash` を全 deny した profile でも `auto` が停止要因にならない**ことと、**answer は `NEEDS_INPUT` を経ず直接 `COMPLETED` を出す**こと（design が park し answer が park しないという #440 の profile 分岐が、同一ビルド・同一 `tt run` の下で分離して観測できた）が要点
 * **Update**: `triage` profile の実機検収は**着手前にブロッカーが判明**して見送った（#450）。コアは triage にも `task_id_prefix`（`books`）を焼き込むが、`task-source-slack` は指示文を prefix の有無だけで選んでおり（コメントも「prefix が付いていれば implement」と明言）、**triage タスクに implement の指示（「実装して PR を作れ」）が渡る**。プラグインは `instructions_kind` を読んでおらず triage 用の指示文自体が無い。この経路が今まで表に出なかったのは、`profile = "triage"` を使う workflow がどの config にも一度も定義されていなかったため
+* **Update**: Slack 起点の `profile = "triage"` に **implement の指示が渡っていた**のを直した（#450）。コアは triage にも `task_id_prefix`（`books`）を焼き込むのに、[task-source-slack](/components/task-source-slack.md) は指示文を**接頭辞の有無だけ**で選んでおり（コメントも「prefix が付いていれば implement」と前提を明言していた）、起票させたいタスクに「実装して Pull Request を作れ」と指示していた。選択を **`instructions_kind`（#398）** に切り替え、github / notion が既に採っている形へ揃えた。あわせて `triage_instructions` をプラグインに新設（Issue を起票し URL を報告文に含めさせる。#324 の `:books:` フロー）。kind が不明・不在のときは**成果物を推測せず** `reply_instructions` へ縮退する（旧コアとの互換、および将来 profile への安全側の縮退）。この経路が今まで表に出なかったのは、`profile = "triage"` を使う workflow がどの config にも一度も定義されていなかったため [設定リファレンス](/development/config-reference.md)
 
 ## 2026-08-13
 

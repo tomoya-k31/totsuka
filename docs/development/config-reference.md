@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: claude-code/fable-5, at: 2026-08-13T22:05:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-14T02:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -334,6 +334,8 @@ agent = "herdr"
 
 いずれも省略可（埋め込みの既定を使う）。**profile を使わない構成ではこのキー群は一切使われず、タスクの `instructions` は従来どおり空**になる。
 
+Slack ソースは同じ `instructions_kind` を読んで自前の 3 キー（`reply_instructions` / `implement_instructions` / `triage_instructions`）から選ぶ（#450）。**選択は kind であって task-id 接頭辞ではない** — `triage` と `implement` は**どちらも接頭辞を持つ**（`books` / `impl`）ので、接頭辞で分岐すると triage のタスクに実装指示が渡る。kind が不明・不在のときは成果物を推測せず `reply_instructions` に縮退する。
+
 展開はシングルパス — issue タイトルや Notion ページ名は他人が書ける内容なので、そこに書かれた `{placeholder}` は文字列として挿入されるだけで指示にはならない。
 
 ## `mode = "plan"` は git を構造的には止めない（#378）
@@ -550,7 +552,9 @@ kind = "task_source"
 
 | キー | 用途 | プレースホルダ |
 |---|---|---|
-| `reply_instructions` | 返信案作成の指示（`Task.instructions` として帯域外配送される） | — |
+| `reply_instructions` | 返信案作成の指示（`Task.instructions` として帯域外配送される）。**profile 既定**: `answer`、および kind 不明・不在のときのフォールバック | — |
+| `implement_instructions` | **profile 既定**: `implement`。実装して PR を作り、その URL を報告文に含めさせる | — |
+| `triage_instructions` | **profile 既定**: `triage`（`:books:` の起票フロー、#450）。Issue を起票し、その URL を報告文に含めさせる | — |
 | `reply_style_suffix` | `reply_style` が設定されているときだけ `reply_instructions` に追記される | `{style}` |
 | `body_template` | ペインに表示されるタスク本文 | `{sender}` `{channel}` `{text}` |
 | `body_thread_header` | スレッド文脈セクションの見出し | `{count}` |

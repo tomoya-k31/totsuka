@@ -89,6 +89,13 @@ fn workflow_reactions(triggers: &[plugin_protocol::methods::TriggerInfo]) -> Vec
                     .get("task_id_prefix")
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                // Absent from an older Orchestrator → the prefix heuristic
+                // below decides, which is the pre-#450 behaviour.
+                instructions_kind: t
+                    .trigger
+                    .get("instructions_kind")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             }
         })
         .collect()
@@ -717,6 +724,7 @@ mod tests {
                 workflow: "watch".into(),
                 reaction: Some("eyes".into()),
                 task_id_prefix: None,
+                instructions_kind: None,
             }],
             &[],
         )
