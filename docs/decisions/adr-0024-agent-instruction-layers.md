@@ -5,7 +5,9 @@ description: ペイン内エージェントに渡す散文（手順・テンプ�
 resource: https://github.com/tomoya-k31/totsuka/issues/324
 tags: [decision, prompt, tool, permission, slack, agent, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-14T03:05:00+09:00 }
-verified: { by: claude-code/opus-5, at: 2026-07-31T14:00:00+09:00 }
+verified:
+  - { by: claude-code/opus-5, at: 2026-07-31T14:00:00+09:00 }
+  - { by: claude-code/opus-5, at: 2026-08-14T04:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -222,6 +224,21 @@ deny リストに含まれない `echo` は同じフラグ構成でも実行で�
 **4. `--tools "Bash,Read,Grep,Glob"` で Bash が使える。** 3 の検証がこの構成で回っている。ただし「調査が止まらないか」（`Read` / `Grep` でリポジトリを読み切れるか）は実タスクでの確認事項として #324 に残す。
 
 詳細な段階分割と残りの検証項目は #324 に記載する。
+
+# 実機検収（2026-08-14、task 57 / #447）
+
+**Slack 起点の triage が、この ADR の想定どおり動くことを実機で確認した。** A が `:books:` を付けた
+1 件のメッセージから:
+
+- タスク ID は **`books:C0BNAU8KKG8:…`** — 接頭辞が付き、スレッドの answer タスクと衝突しない
+- エージェントは **Issue を起票した**（`totsuka-sandbox-cli#48`）。実装もブランチ作成も PR も無い。
+  ログの read-only 違反検出（D3 / D4）は発火していない
+- 報告文が Issue URL を含み、承認ゲートを経て **A 名義でスレッドへ投稿**された
+- 30 秒で `session_start → COMPLETED → session_end`
+
+**この経路は #450 を直すまで壊れていた** — 指示文の選択が task-id 接頭辞ベースで、`triage` も接頭辞
+（`books`）を持つため implement の指示（「実装して PR を作れ」）が渡っていた。この検収は
+`instructions_kind` 選択への切り替え後の確認である。
 
 [^cc-cli-reference]: Claude Code — CLI reference
 [^cc-settings]: Claude Code — Settings（precedence / merge）
