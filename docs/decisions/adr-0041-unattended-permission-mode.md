@@ -9,6 +9,7 @@ status: stable
 verified:
   - { by: claude-code/opus-5, at: 2026-08-11T22:50:00+09:00 }
   - { by: claude-code/opus-5, at: 2026-08-11T23:07:00+09:00 }
+  - { by: claude-code/opus-5, at: 2026-08-14T02:10:00+09:00 }
 owner: tomoya-k31
 sources:
   - id: issue-420
@@ -124,6 +125,7 @@ claude には `dontAsk` — 「`permissions.allow` で事前に許可されて�
 - `cargo test --workspace --all-features` — 全 profile が `permissions.defaultMode = "auto"` を書くこと、`implement` は `deny` キーを**持たない**まま mode だけ書くこと、素の `mode = "plan"` には `permissions` キーが**付かない**こと、codex が plan / implement 両方で `--ask-for-approval never` を持ちかつ `--sandbox` を失わないこと、opencode が両モードで `--auto` を持ち plan では `totsuka-plan` も保つこと
 - **claude の挙動は実機で測った**（v2.1.227、PTY）: 個人設定から `allow` / `ask` / `defaultMode` を除くと `manual` 起動になること、`default` では allowlist 外の Bash が承認プロンプトで停止すること、`dontAsk` ではプロンプト無しで拒否され allowlist 内は実行されること、そして **`--settings` から `defaultMode` を設定できること**（ユーザー設定の `auto` を `default` / `dontAsk` に上書きできた）
 - **codex / opencode はフラグの受理を実機で確認した**（codex-cli 0.145.0 / opencode 1.18.4）。`--sandbox read-only --ask-for-approval never` は解析を通り、`--auto` は `opencode --help` に "auto-approve permissions that are not explicitly denied (dangerous!)" として存在する
+- **`answer` profile でも実機で確認した**（2026-08-14、task 56、#447）。Slack の `slack-reply`（`profile = "answer"` = `Bash` ごと deny、[ADR-0035](/decisions/adr-0035-answer-profile-shell-removal.md)）で、メンションから**下書き生成まで 24 秒・承認プロンプト 0 件**。`Bash` を全 deny した profile でも `auto` が停止要因にならないことの確認で、これで実機確認は `design` / `implement` / `answer` の 3 profile に渡った（`triage` は #450 のため未実施）
 - **`auto` での無人完走を実機で確認した**（2026-08-11、task 50 / cli#41、herdr + 実 Claude Code）。`github-design` タスクが**人間の介入ゼロで約 2.5 分で完走**し、セッション記録の `permissionMode` は `auto` のみ、**承認プロンプトも拒否も 0 件**、`Bash` は 2 回とも承認なしで通り、成果物を本人名義で issue へ投稿して `on_success` で `Design Review` へ遷移した。worktree は cleanup され、read-only 違反も無い
 - **「グローバル設定ではなく totsuka の settings が効いている」ことを対照実験で確認した**（task 51 / cli#43）。totsuka が書いた settings の `defaultMode` **だけ**を `dontAsk` に差し替えて同じ形のタスクを流したところ:
 
