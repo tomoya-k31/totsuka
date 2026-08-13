@@ -4,8 +4,10 @@ title: ADR-0042 timeout_secs = 0 は「即エスカレート」ではなく「D-
 description: "attended pane（人間が pane を見ている）前提の workflow では無音は異常の証拠にならないため、timeout_secs = 0 を D-03 無音掃引のオプトアウトとして定義した決定。従来の 0 は最初の掃引でほぼ必ずエスカレートする罠値で、意図して使える意味を持っていなかった。トレードオフとして、真にハングしたエージェントもその workflow では検知されない。"
 resource: https://github.com/tomoya-k31/totsuka/issues/439
 tags: [decision, timeout, escalation, attended-pane, adr]
-generated: { by: claude-code/fable-5, at: 2026-08-13T00:00:00+09:00 }
+generated: { by: claude-code/fable-5, at: 2026-08-13T18:50:00+09:00 }
 status: stable
+verified:
+  - { by: claude-code/fable-5, at: 2026-08-13T17:50:00+09:00 }
 owner: tomoya-k31
 sources:
   - id: issue-439
@@ -43,6 +45,13 @@ design / implement 系 workflow を attended pane（人間が pane を見てい�
 - **真に止まったエージェント（クラッシュ・ハング）も、その workflow では永遠に検知されない。** D-03 の本来の役割をその workflow では放棄する。attended pane 前提の workflow でのみ使い、無人 pane で走る workflow（Slack 系など）には設定しないこと。[設定リファレンス](/development/config-reference.md)に同じ注意を明記した
 - 既存 config で `timeout_secs = 0` を書いていた場合、挙動は「即エスカレート」から「掃引なし」へ変わる。前者を意図して使う構成は考えにくいため、破壊的変更としては扱わない
 - D-02（UNKNOWN 連続エスカレート）と R-03（マーカー欠落ブロック）は影響を受けない。オプトアウトされるのは無音掃引だけで、エージェントが「何かを言った」ことに起因するエスカレーションは残る
+
+# 実機検収（2026-08-13）
+
+同一の workflow 形（`github-design`、profile = design、herdr → claude）で対照実験を行った:
+
+- **control（`timeout_secs = 45`）**: dispatch（08:44:15）から **46 秒後**（08:45:01）にエスカレート。D-03 掃引がこのビルド・この構成で生きていることの実測
+- **`timeout_secs = 0`**: 同じ形のタスクが dispatch から初回 Stop まで約 60 秒沈黙しても（control が発火した窓を超えても）**エスカレーション 0 件**のまま park → 承認 → done まで完走
 
 # 不採用案
 
