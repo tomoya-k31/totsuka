@@ -94,8 +94,9 @@ pub struct Prompts {
     /// whose completion is judged by a human at the pane (#440): the judge —
     /// which runs in-session and can see the conversation — checks that the
     /// human explicitly approved before a COMPLETED passes. The mechanical
-    /// backstop for the protocol [`marker_self_report_confirm`]
-    /// (Self::marker_self_report_confirm) teaches.
+    /// backstop for the protocol
+    /// [`marker_self_report_confirm`](Self::marker_self_report_confirm)
+    /// teaches.
     ///
     /// Not a `[prompts]` key, same reasoning as
     /// [`verification_rubric_artifact_url`](Self::verification_rubric_artifact_url).
