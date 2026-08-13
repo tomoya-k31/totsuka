@@ -64,6 +64,17 @@ struct Embedded {
 pub struct Prompts {
     /// Dispatch-time completion self-report instruction.
     marker_self_report: String,
+    /// The self-report [`resolve_for`](Self::resolve_for) substitutes for
+    /// [`marker_self_report`](Self::marker_self_report) on a profile whose
+    /// completion is judged by a human at the pane (#440): the agent asks for
+    /// confirmation with NEEDS_INPUT and emits COMPLETED only after an
+    /// explicit approval in the conversation.
+    ///
+    /// Not a `[prompts]` key, for the same reason as
+    /// [`verification_rubric_artifact_url`](Self::verification_rubric_artifact_url):
+    /// it is a *default* for a leaf that already has its own override
+    /// spellings, and an operator override of `marker_self_report` wins.
+    marker_self_report_confirm: String,
     /// Dispatch-time instruction to create the task's branch. Emitted only
     /// when the worktree is handed over detached.
     branch_convention: String,
@@ -79,6 +90,17 @@ pub struct Prompts {
     /// sitting above it. A third would be one more way to say the same thing,
     /// with its own precedence question.
     verification_rubric_artifact_url: String,
+    /// The rubric [`resolve_for`](Self::resolve_for) substitutes on a profile
+    /// whose completion is judged by a human at the pane (#440): the judge —
+    /// which runs in-session and can see the conversation — checks that the
+    /// human explicitly approved before a COMPLETED passes. The mechanical
+    /// backstop for the protocol
+    /// [`marker_self_report_confirm`](Self::marker_self_report_confirm)
+    /// teaches.
+    ///
+    /// Not a `[prompts]` key, same reasoning as
+    /// [`verification_rubric_artifact_url`](Self::verification_rubric_artifact_url).
+    verification_rubric_human_approval: String,
     /// Intermediate-Stop exemption appended to the rubric.
     verification_background_exemption: String,
     /// Non-claim exemption: a Stop already reporting NEEDS_INPUT/FAILED is not
@@ -116,9 +138,11 @@ const MARKER_PLACEHOLDERS: &[&str] = &["marker_completed", "marker_needs_input",
 /// gives no hint about its cause.
 pub const ALLOWED_PLACEHOLDERS: &[(&str, &[&str])] = &[
     ("marker_self_report", MARKER_PLACEHOLDERS),
+    ("marker_self_report_confirm", MARKER_PLACEHOLDERS),
     ("branch_convention", &[]),
     ("verification_rubric", &[]),
     ("verification_rubric_artifact_url", &[]),
+    ("verification_rubric_human_approval", &[]),
     ("verification_background_exemption", &[]),
     (
         "verification_nonclaim_exemption",
@@ -333,7 +357,8 @@ impl Prompts {
     /// 1. `[[workflows]].prompts.*`
     /// 2. `[[workflows]].rubric` (legacy, rubric leaf only)
     /// 3. `[prompts].*`
-    /// 4. **the profile's rubric default** (rubric leaf only, #398)
+    /// 4. **the profile's defaults** (rubric leaf #398/#440, self-report leaf
+    ///    #440)
     /// 5. the built-in default
     ///
     /// 2 beating 3 is deliberate — both are about this workflow, so ordering it
@@ -347,12 +372,28 @@ impl Prompts {
     /// does not get URL verification** even on a `design` workflow, and the
     /// only symptom is a task passing on a design it never posted. It is
     /// written down in `config-reference.md`; the alternative (profile beating
-    /// global) trades a documented gap for a silent override.
+    /// global) trades a documented gap for a silent override. The same ladder
+    /// applies to #440's leaves: a global `marker_self_report` override costs a
+    /// `design` workflow the confirmation protocol.
     pub fn resolve_for(cfg: &RootConfig, wf: &WorkflowConfig) -> Prompts {
         let mut p = Self::builtin().clone();
-        if wf.profile.is_some_and(Self::profile_verifies_an_artifact) {
-            p.verification_rubric
-                .clone_from(&p.verification_rubric_artifact_url);
+        match wf.profile {
+            // Completion is judged by the human at the pane (#440): the
+            // self-report teaches ask-then-COMPLETED, and the rubric makes the
+            // judge check the approval actually happened. This shadows the
+            // artifact-URL rubric on purpose — the human saw the artifact, so
+            // a URL demand would second-guess an approval already given.
+            Some(profile) if Self::profile_confirms_with_a_human(profile) => {
+                p.marker_self_report
+                    .clone_from(&p.marker_self_report_confirm);
+                p.verification_rubric
+                    .clone_from(&p.verification_rubric_human_approval);
+            }
+            Some(profile) if Self::profile_verifies_an_artifact(profile) => {
+                p.verification_rubric
+                    .clone_from(&p.verification_rubric_artifact_url);
+            }
+            _ => {}
         }
         let mut p = p.overlay_global(&cfg.prompts);
         if let Some(rubric) = wf.rubric.as_deref() {
@@ -361,12 +402,30 @@ impl Prompts {
         p.overlay_workflow(&wf.prompts).finish()
     }
 
+    /// Whether this profile's completion is judged by a human at the pane
+    /// (#440): the pane is attended, the agent asks for confirmation with
+    /// NEEDS_INPUT, and COMPLETED means "the human approved".
+    ///
+    /// Profiles only — a spelled-out `mode = "implement"` workflow keeps the
+    /// plain self-report, the same line #420 drew for permissions: a profile
+    /// is what buys a behavior bundle, and an existing config must not change
+    /// meaning on upgrade.
+    fn profile_confirms_with_a_human(profile: Profile) -> bool {
+        match profile {
+            Profile::Design | Profile::Implement => true,
+            Profile::Answer | Profile::Triage => false,
+        }
+    }
+
     /// Whether this profile's deliverable is written outside the worktree, so
     /// the only evidence it exists is a URL in the final message (#393 D3).
     ///
     /// `answer` is excluded: its reply goes back through the source plugin's
     /// approval gate, so there is no URL to demand and demanding one would fail
-    /// every well-behaved answer.
+    /// every well-behaved answer. `design` / `implement` still satisfy this
+    /// predicate, but [`resolve_for`](Self::resolve_for) checks
+    /// [`profile_confirms_with_a_human`](Self::profile_confirms_with_a_human)
+    /// first, so since #440 only `triage` actually resolves to the URL rubric.
     fn profile_verifies_an_artifact(profile: Profile) -> bool {
         match profile {
             Profile::Triage | Profile::Design | Profile::Implement => true,
@@ -441,8 +500,13 @@ mod tests {
         let p = Prompts::builtin();
         for (name, value) in [
             ("marker_self_report", &p.marker_self_report),
+            ("marker_self_report_confirm", &p.marker_self_report_confirm),
             ("branch_convention", &p.branch_convention),
             ("verification_rubric", &p.verification_rubric),
+            (
+                "verification_rubric_human_approval",
+                &p.verification_rubric_human_approval,
+            ),
             (
                 "verification_background_exemption",
                 &p.verification_background_exemption,
@@ -736,24 +800,40 @@ agent = "herdr"
         .unwrap()
     }
 
-    /// The profiles whose deliverable the agent writes outside the worktree get
-    /// the URL rubric; `answer` does not.
+    /// Each profile's default rubric, post-#440: `triage` is judged on the
+    /// artifact URL (#398), `design` / `implement` on the human's explicit
+    /// approval in the conversation (#440), and `answer` on the generic
+    /// rubric.
     ///
-    /// `answer` matters as much as the other three: its reply goes back through
+    /// `answer` matters as much as the others: its reply goes back through
     /// the plugin's approval gate, so there is no URL to produce and demanding
     /// one would fail every well-behaved answer.
     #[test]
-    fn the_artifact_rubric_is_the_default_for_externally_written_deliverables() {
-        for profile in ["triage", "design", "implement"] {
+    fn each_profile_resolves_to_its_own_rubric_default() {
+        let c = profile_cfg("triage", "");
+        let rubric = Prompts::resolve_for(&c, &c.workflows[0])
+            .verification_rubric()
+            .to_string();
+        assert!(
+            rubric.contains("URL"),
+            "triage must be judged on the artifact URL: {rubric}"
+        );
+        assert_ne!(rubric, Prompts::builtin().verification_rubric());
+
+        for profile in ["design", "implement"] {
             let c = profile_cfg(profile, "");
             let rubric = Prompts::resolve_for(&c, &c.workflows[0])
                 .verification_rubric()
                 .to_string();
             assert!(
-                rubric.contains("URL"),
-                "{profile} must be judged on the artifact URL: {rubric}"
+                rubric.contains("人間（ユーザー）が完了を明示的に承認している"),
+                "{profile} must be judged on the human's approval: {rubric}"
             );
-            assert_ne!(rubric, Prompts::builtin().verification_rubric());
+            assert!(
+                !rubric.contains("URL"),
+                "the human saw the artifact — a URL demand would second-guess \
+                 an approval already given: {rubric}"
+            );
         }
 
         let c = profile_cfg("answer", "");
@@ -761,6 +841,99 @@ agent = "herdr"
             Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
             Prompts::builtin().verification_rubric(),
             "answer publishes through the plugin, so there is no URL to require"
+        );
+    }
+
+    /// #440: design / implement teach the ask-then-COMPLETED protocol; answer /
+    /// triage keep the plain self-report. The confirm variant must still teach
+    /// every marker — it goes through the same `missing_markers` validation.
+    #[test]
+    fn design_and_implement_teach_the_confirmation_protocol() {
+        for profile in ["design", "implement"] {
+            let c = profile_cfg(profile, "");
+            let text = Prompts::resolve_for(&c, &c.workflows[0])
+                .marker_self_report()
+                .to_string();
+            assert!(
+                text.contains("the human in this conversation is the final judge of completion"),
+                "{profile} must name the human as the judge: {text}"
+            );
+            assert!(
+                text.contains("only after the human has explicitly approved"),
+                "{profile} must gate COMPLETED on an explicit approval: {text}"
+            );
+            assert!(
+                text.contains("完了確認待ち"),
+                "{profile} must teach the confirmation-park reason: {text}"
+            );
+            assert!(
+                Prompts::missing_markers(&text).is_empty(),
+                "the confirm variant must still teach every marker: {text}"
+            );
+        }
+
+        for profile in ["answer", "triage"] {
+            let c = profile_cfg(profile, "");
+            assert_eq!(
+                Prompts::resolve_for(&c, &c.workflows[0]).marker_self_report(),
+                Prompts::builtin().marker_self_report(),
+                "{profile} keeps the plain self-report"
+            );
+        }
+    }
+
+    /// The #440 self-report default sits in the same ladder slot as the #398
+    /// rubric default: below both override scopes.
+    #[test]
+    fn the_confirm_self_report_loses_to_both_override_scopes() {
+        let c = profile_cfg(
+            "design",
+            "\n[prompts]\nmarker_self_report = \"G {marker_completed} {marker_needs_input} {marker_failed}\"\n",
+        );
+        assert!(
+            Prompts::resolve_for(&c, &c.workflows[0])
+                .marker_self_report()
+                .starts_with("G "),
+            "a global override wins over the profile default"
+        );
+
+        let c = profile_cfg(
+            "design",
+            "\n[prompts]\nmarker_self_report = \"G {marker_completed} {marker_needs_input} {marker_failed}\"\n\n[workflows.prompts]\nmarker_self_report = \"W {marker_completed} {marker_needs_input} {marker_failed}\"\n",
+        );
+        assert!(
+            Prompts::resolve_for(&c, &c.workflows[0])
+                .marker_self_report()
+                .starts_with("W "),
+            "the workflow table is the strongest layer"
+        );
+    }
+
+    /// The approval rubric composes into the same condition frame, and the
+    /// branches it sits next to survive — a confirmation-request stop
+    /// (NEEDS_INPUT) must still satisfy the non-claim branch.
+    #[test]
+    fn the_approval_rubric_keeps_the_condition_frame_and_the_exemptions() {
+        let c = profile_cfg("design", "");
+        let rendered = Prompts::resolve_for(&c, &c.workflows[0]).verification_prompt();
+        assert!(
+            rendered.starts_with("この停止を許可してよい。すなわち次のいずれかが成り立つ:"),
+            "the approval rubric must not cost the condition framing: {rendered}"
+        );
+        assert!(
+            rendered.contains("人間（ユーザー）が完了を明示的に承認している"),
+            "the approval branch reaches the composed condition: {rendered}"
+        );
+        assert!(
+            rendered.contains(&format!(
+                "最終メッセージが {MARKER_NEEDS_INPUT} または {MARKER_FAILED} を報告している"
+            )),
+            "the non-claim branch survives — the confirmation request itself \
+             stops with NEEDS_INPUT and must pass the judge: {rendered}"
+        );
+        assert!(
+            !rendered.contains("停止を許可してください"),
+            "still a condition, not an order (#389): {rendered}"
         );
     }
 
@@ -780,9 +953,10 @@ agent = "herdr"
                 .to_string()
         };
 
-        // profile default beats the generic built-in.
+        // profile default beats the generic built-in (post-#440 design
+        // resolves to the approval rubric; the ladder slot is what matters).
         let c = profile_cfg("design", "");
-        assert!(artifact(&c).contains("URL"));
+        assert!(artifact(&c).contains("承認"));
 
         // …and loses to a global `[prompts]`.
         let c = profile_cfg(

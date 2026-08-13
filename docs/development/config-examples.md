@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-08-01T20:00:00+09:00 }
+generated: { by: claude-code/fable-5, at: 2026-08-13T18:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -254,10 +254,10 @@ rubric = "テストが追加されており、cargo clippy / cargo fmt が通っ
 name = "github-design"
 source = "github"
 trigger = { project_status = "Design" }
-profile = "design"
+profile = "design"                           # 完了は人間の pane 上承認（#440）
 agent = "herdr"
 on_success = { set_status = "Design Review" }
-timeout_secs = 900
+timeout_secs = 0                             # attended pane: D-03 掃引を無効化（#439）
 initial_prompt = "/grill-me スキルを使用して、詳細設計を行ってください"
 ```
 
@@ -298,8 +298,8 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 |---|---|---|---|---|
 | `answer` | plan | source | llm | 質問に答えてソースへ返す（Slack メンション・リアクション） |
 | `triage` | plan | source | llm | 依頼を GitHub / Notion へ起票する |
-| `design` | plan | none | llm | 詳細設計を issue コメント / ページへ書き、status で伝える |
-| `implement` | implement | none | llm | 実装して PR を出す |
+| `design` | plan | none | llm | 詳細設計を issue コメント / ページへ書き、status で伝える。**完了は人間が pane 上で承認**（#440） |
+| `implement` | implement | none | llm | 実装して PR を出す。**完了は人間が pane 上で承認**（#440） |
 
 ```toml
 [[workflows]]
