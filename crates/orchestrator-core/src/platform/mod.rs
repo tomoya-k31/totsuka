@@ -20,6 +20,7 @@ pub mod macos;
 #[cfg(not(target_os = "macos"))]
 pub mod fallback;
 
+pub mod command;
 pub mod onepassword;
 
 /// The `keychain:` backend for the current platform (Keychain on macOS,
@@ -32,11 +33,13 @@ type KeychainBackend = fallback::UnsupportedSecretStore;
 /// The [`SecretStore`] for the current platform:
 /// a composite that routes each [`SecretRef`] to its scheme's backend —
 /// `keychain:` to the OS Keychain (or the non-macOS fallback), `op://` to the
-/// 1Password CLI ([`onepassword::OnePasswordCli`], every platform).
+/// 1Password CLI ([`onepassword::OnePasswordCli`], every platform), and
+/// `cmd:` to `/bin/sh -c` ([`command::CommandSecretStore`], #444).
 #[derive(Clone, Default)]
 pub struct PlatformSecretStore {
     keychain: KeychainBackend,
     onepassword: onepassword::OnePasswordCli,
+    command: command::CommandSecretStore,
 }
 
 impl SecretStore for PlatformSecretStore {
@@ -44,6 +47,7 @@ impl SecretStore for PlatformSecretStore {
         match reference {
             SecretRef::Keychain { .. } => self.keychain.get(reference),
             SecretRef::OnePassword { .. } => self.onepassword.get(reference),
+            SecretRef::Command { .. } => self.command.get(reference),
         }
     }
 }

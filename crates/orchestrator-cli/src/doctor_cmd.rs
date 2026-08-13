@@ -688,6 +688,49 @@ fn toml_has_op_reference(value: &toml::Value) -> bool {
     }
 }
 
+/// Whether any string leaf of a TOML value starts with `cmd:` (#444).
+fn toml_has_cmd_reference(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::String(s) => s.starts_with("cmd:"),
+        toml::Value::Array(items) => items.iter().any(toml_has_cmd_reference),
+        toml::Value::Table(table) => table.values().any(toml_has_cmd_reference),
+        _ => false,
+    }
+}
+
+/// Whether launching `name` would make `plugin_spec` run a `cmd:` reference's
+/// command (#444). Same two doors as [`plugin_needs_onepassword`]: the
+/// plugin's own config file, and `[llm].api_key_ref` for a task source.
+///
+/// Unlike `op://` there is no session to measure — doctor cannot know whether
+/// the command is prompt-free (`cmd:op read …` is a real spelling), so a
+/// plugin that mentions one is always skipped rather than probed (#289's
+/// non-interactive principle).
+fn plugin_needs_command_exec(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
+    let declared_task_source = cfg
+        .plugin(name)
+        .is_some_and(|p| p.kind == ConfigPluginKind::TaskSource);
+    let manifest_task_source = cx
+        .store()
+        .manifest_of(name)
+        .ok()
+        .flatten()
+        .is_some_and(|m| m.kind == plugin_protocol::manifest::PluginKind::TaskSource);
+    let is_task_source = declared_task_source || manifest_task_source;
+    let llm_key_is_command = cfg
+        .llm
+        .as_ref()
+        .and_then(|llm| llm.api_key_ref.as_deref())
+        .is_some_and(|reference| reference.starts_with("cmd:"));
+    let path = cx.plugin_config_dir().join(format!("{name}.toml"));
+    let plugin_mentions_cmd = std::fs::read_to_string(&path).is_ok_and(|content| {
+        content
+            .parse::<toml::Table>()
+            .is_ok_and(|table| table.values().any(toml_has_cmd_reference))
+    });
+    plugin_mentions_cmd || (is_task_source && llm_key_is_command)
+}
+
 /// All Claude Code hook-mechanism probes (#141): assets, script dependencies,
 /// the Bearer token, the spool backlog, and (when a receiver is live) UDS
 /// connectivity. Extends the single asset check that shipped with #137.
@@ -1109,6 +1152,13 @@ fn check_hook_token(
             "[hooks].auth_token_ref is an op:// reference, left unresolved here \
              (doctor stays non-interactive; see the 1password checks above)",
         )),
+        // Same for `cmd:` — resolving would execute the command (#444).
+        Some(reference) if reference.starts_with("cmd:") => checks.push(Check::ok(
+            "hook-token",
+            "[hooks].auth_token_ref is a cmd: reference, left unresolved here \
+             (doctor stays non-interactive; the command runs when `totsuka run` \
+             resolves the config)",
+        )),
         Some(reference) => match secret_resolver(env).resolve(reference) {
             Ok(_) => checks.push(Check::ok("hook-token", "[hooks].auth_token_ref resolves")),
             Err(e) => checks.push(Check::fail(
@@ -1500,6 +1550,19 @@ fn check_plugins(
             ));
             continue;
         }
+        // A `cmd:` reference has no session to measure: doctor cannot know
+        // the command is prompt-free (`cmd:op read …` is a real spelling), so
+        // the probe is always skipped rather than executed (#444, #289).
+        if plugin_needs_command_exec(cx, cfg, name) {
+            checks.push(Check::skip(
+                &format!("plugin:{name}"),
+                "resolving its cmd: reference would execute a command \
+                 (doctor stays non-interactive)",
+                "the command runs when `totsuka run` resolves the config; \
+                 test it by hand if unsure",
+            ));
+            continue;
+        }
         match plugin_spec(&cx.store(), &cx.plugin_config_dir(), cfg, name, env) {
             // `plugin_spec` already resolved plugins/{name}.toml (with secrets)
             // into `init_config`; reuse it rather than re-reading and hitting
@@ -1594,6 +1657,12 @@ fn check_llm_key(
                      (doctor stays non-interactive; see the 1password checks above)"
                 }
             },
+        )),
+        // Same for `cmd:` — resolving would execute the command (#444).
+        Some(reference) if reference.starts_with("cmd:") => checks.push(Check::ok(
+            "llm",
+            "api_key_ref is a cmd: reference, left unresolved here (doctor stays \
+             non-interactive; the command runs when `totsuka run` resolves the config)",
         )),
         Some(reference) => match secret_resolver(env).resolve(reference) {
             Ok(_) => checks.push(Check::ok("llm", "api_key_ref resolves")),
