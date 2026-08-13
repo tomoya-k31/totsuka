@@ -4,7 +4,7 @@ title: ADR-0040 read-only profile の worktree は sandbox-exec で OS レベル
 description: "read-only profile の worktree を macOS の sandbox-exec（Seatbelt）で書き込み禁止にできるかの調査結果。worktree と元リポジトリの .git を deny すればファイル書き込み・commit・ブランチ作成は実測で止まり、読みと gh は無傷で /tmp も書ける。配線は herdr が pane の PATH からエージェントを解決するのでシムで可能。ただし git push はリモートに届いてしまい、Claude Code 自身のサンドボックスは運用判断で使わない。Linux と sandbox-exec の将来は未解決。"
 resource: https://github.com/tomoya-k31/totsuka/issues/418
 tags: [decision, security, sandbox, macos, seatbelt, profile, herdr, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-11T22:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-13T22:05:00+09:00 }
 status: stable
 verified: [{ by: claude-code/opus-5, at: 2026-08-11T21:40:00+09:00 }]
 owner: tomoya-k31
