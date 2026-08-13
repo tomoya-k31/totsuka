@@ -137,8 +137,8 @@ instructed to output nothing but the answer body: \
 Completion protocol: the human in this conversation is the final judge of \
 completion. When you believe the work is done, do NOT emit \
 {marker_completed} on your own judgment — summarize what you did, ask the \
-human to confirm, and end that turn with \
-{marker_needs_input} reason="完了確認待ち". Emit {marker_completed} only \
+human to confirm, and end that turn with {marker_needs_input}, setting \
+its reason to "完了確認待ち". Emit {marker_completed} only \
 after the human has explicitly approved completion in this conversation. \
 Delivery contract: ONLY the message carrying the marker is delivered to \
 the requester — earlier messages in this session are NEVER delivered. The \
