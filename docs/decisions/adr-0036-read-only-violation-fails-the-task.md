@@ -140,7 +140,9 @@ D3 は `finalize_success`、つまり**タスクが publish に到達したと�
 
 ## 送った先
 
-本当の境界は「構文を見て拒む」ではなく「効果を封じる」方向にしかない。worktree を OS レベルで read-only にできるかの調査を [#418](https://github.com/tomoya-k31/totsuka/issues/418) に切った。**実現できれば `Bash(...)` パターンという弱い層ごと捨てられる。**
+本当の境界は「構文を見て拒む」ではなく「効果を封じる」方向にしかない。worktree を OS レベルで read-only にできるかの調査を [#418](https://github.com/tomoya-k31/totsuka/issues/418) に切り、[ADR-0040](/decisions/adr-0040-worktree-sandbox-feasibility.md) が **`sandbox-exec` で実現できる**と実測で確定させた。
+
+**ただしその実装は行わないと決めた**（[ADR-0045](/decisions/adr-0045-read-only-is-not-guaranteed.md)、#446 をクローズ）。したがって **`Bash(...)` パターンという弱い層は捨てられず、ここに書いた検出が最終形である**。read-only profile の read-only 性は保証ではない。
 
 # 検証
 

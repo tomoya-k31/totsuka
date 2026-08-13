@@ -975,8 +975,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// and `git push` — seconds — is not one this can be relied on to win.
     /// What it does guarantee is that a violating task ends up `failed` with
     /// its agent stopped, rather than continuing to work in a repository it was
-    /// told not to touch. Prevention needs
-    /// [#418](https://github.com/tomoya-k31/totsuka/issues/418)'s sandbox.
+    /// told not to touch.
+    ///
+    /// **Prevention is not coming.** #418 measured that a sandbox would work;
+    /// building it was declined (#446, ADR-0045), so this detection is the
+    /// strongest thing there is and read-only stays a best effort.
     ///
     /// The worktree and its commits are deliberately kept (`fail_publish`'s
     /// contract), so the evidence outlives the failure.

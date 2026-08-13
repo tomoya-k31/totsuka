@@ -148,8 +148,9 @@ worktree を別 uid に持たせる案は、totsuka 自身が worktree を作成
 
 ## 送った先
 
-実装は別 issue に切る。この ADR は「可能である」「どう配線するか」「どこまでしか守れないか」を確定させただけで、
-[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md) の事後検出は当面そのまま残る。
+**実装しないと決めた**（[ADR-0045](/decisions/adr-0045-read-only-is-not-guaranteed.md)。#446 として起票したものを、着手せずクローズした）。この ADR は「可能である」「どう配線するか」「どこまでしか守れないか」を確定させた**調査結果としてそのまま有効**で、方針が変われば調査からやり直す必要はない。
+
+[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md) の事後検出は「当面」ではなく**最終形**になった。read-only profile の read-only 性は保証されない。
 
 # 検証
 

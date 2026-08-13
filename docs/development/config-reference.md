@@ -349,7 +349,7 @@ push し、PR まで作成した。対象リポジトリの `CLAUDE.md` が「�
 `run` が警告を出す（ブランチ名つき）。既存の構成がアップグレードで黙って厳しくならないよう、
 ここは意図的に警告のままにしてある。
 
-**profile を書いた workflow は失敗する**（#409、[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md)）。
+**profile を書いた workflow は失敗する**（#409、[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md)）。なお **read-only profile の read-only 性は保証ではない**（[ADR-0045](/decisions/adr-0045-read-only-is-not-guaranteed.md)）— OS レベルで封じるサンドボックスは実現可能と実測済みだが、実装しないと決めた。`cat >` でのファイル書き込みや `&&`・パイプを挟んだ git/gh は deny を素通りする。
 read-only profile（answer / triage / design）のタスクの worktree がブランチ上にあると、成果物を
 公開せず `fail_publish` で失敗し、worktree とコミットは調査用に保持される。**これは防止ではない** —
 ブランチがある時点で push は済んでいるかもしれず取り返せない。失敗させることで「黙って成功」を
