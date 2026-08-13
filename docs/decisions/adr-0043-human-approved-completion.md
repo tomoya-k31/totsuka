@@ -4,8 +4,10 @@ title: ADR-0043 design / implement の完了は人間が pane 上で承認し、
 description: "attended pane 前提の design / implement profile で、エージェントは完了と思ったら NEEDS_INPUT で人間に確認を求め、pane 上の明示承認後にのみ COMPLETED を出す決定。実装はプロンプト既定の profile 分岐（marker_self_report_confirm）と llm 検収 rubric の承認検査への差し替え（verification_rubric_human_approval）のみで、状態機械の改修はゼロ。マーカー自体を消す案と verification = human + CLI 案を退けた理由も記録する。"
 resource: https://github.com/tomoya-k31/totsuka/issues/440
 tags: [decision, profile, marker, verification, attended-pane, prompts, adr]
-generated: { by: claude-code/fable-5, at: 2026-08-13T18:00:00+09:00 }
+generated: { by: claude-code/fable-5, at: 2026-08-13T17:50:00+09:00 }
 status: stable
+verified:
+  - { by: claude-code/fable-5, at: 2026-08-13T17:50:00+09:00 }
 owner: tomoya-k31
 sources:
   - id: issue-440
@@ -66,3 +68,16 @@ agent: <<STATUS:COMPLETED>>
 - **`verification = "human"` + `tt task verify` CLI**: 既存機構だが、完了判断が pane の外（別ターミナルの CLI）に出る。要件は「pane の会話内で確認」。加えて `Verifying` は slot を保持し続け（`scheduler` の F-45 規則に明記）、一晩放置すると (repo, agent) の並列枠を握る。profile と `verification` の併記は validation が拒否するため、profile を崩す改修も要る
 - **完全マーカーレス + 人間クローズ**: マーカー注入・R-03・D-02 / D-03 を workflow 単位で全部無効化し、終端は `tt task done` 新コマンドか SessionEnd で入れる案。改修 6 点 + 新しい状態遷移の設計が必要で、「COMPLETED が来ないタスクの不死身問題」を全部手当てし直すことになる。本決定が同じ到達点（人間が終端を握る）を既存の状態機械で実現するため割に合わない
 - **design / implement にも成果物 URL 検収を併存**: 人間が成果物を見て承認しているのに URL を要求し直すのは二重検収で、承認済みの停止をジャッジが別基準で覆す矛盾（グリルで排除した「現行ルーブリックのまま」案の症状）を再導入する
+
+# 検証
+
+実機検収（2026-08-13）:
+
+`github-design`（profile = design、`timeout_secs = 0`、herdr 隔離セッション → claude、Claude Code の実セッション）で一周を実測した:
+
+1. dispatch されたエージェントは設計を issue コメントへ投稿し（URL 実在を `gh issue view` で確認）、**確認を求めて `<<STATUS:NEEDS_INPUT reason="完了確認待ち">>` で停止**した — `marker_self_report_confirm` の教示どおり。タスクは `waiting_input` に park
+2. pane へ人間の承認（`herdr agent prompt`）を送ると、エージェントが `COMPLETED` を出し、**ジャッジ（承認 rubric）を通過**して `done` に到達。イベント列は `session_start → NEEDS_INPUT → 通知 → COMPLETED → session_end`
+3. `on_success` の書き戻し（`Design Review`、F-84）・pane 解放・worktree 削除まで確認
+4. レンダリングされた `orchestrator-github-design.json` に承認 rubric・`defaultMode: auto`・deny 18 件が入っていることを直接確認
+
+**未検証**: 確認を飛ばした COMPLETED をジャッジがブロックする負のパスは実機では測っていない。人間役が送るプロンプト自体が「人間の発言」になるため、承認なしの完了申告を汚染なしに誘発する刺激が存在しない。この経路の根拠は、条件文としてのジャッジ挙動の実測（#389）と rubric の文面に依る。

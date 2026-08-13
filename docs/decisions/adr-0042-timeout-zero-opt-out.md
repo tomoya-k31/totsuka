@@ -4,8 +4,10 @@ title: ADR-0042 timeout_secs = 0 は「即エスカレート」ではなく「D-
 description: "attended pane（人間が pane を見ている）前提の workflow では無音は異常の証拠にならないため、timeout_secs = 0 を D-03 無音掃引のオプトアウトとして定義した決定。従来の 0 は最初の掃引でほぼ必ずエスカレートする罠値で、意図して使える意味を持っていなかった。トレードオフとして、真にハングしたエージェントもその workflow では検知されない。"
 resource: https://github.com/tomoya-k31/totsuka/issues/439
 tags: [decision, timeout, escalation, attended-pane, adr]
-generated: { by: claude-code/fable-5, at: 2026-08-13T00:00:00+09:00 }
+generated: { by: claude-code/fable-5, at: 2026-08-13T17:50:00+09:00 }
 status: stable
+verified:
+  - { by: claude-code/fable-5, at: 2026-08-13T17:50:00+09:00 }
 owner: tomoya-k31
 sources:
   - id: issue-439
@@ -48,3 +50,12 @@ design / implement 系 workflow を attended pane（人間が pane を見てい�
 
 - **profile でデフォルトを分岐（design/implement だけ長い既定値にする)**: 「止まったエージェントの検知」が全利用者で一律に遅くなり、値の根拠付けも難しい。オプトアウトは workflow を書く人が明示的に選ぶべき
 - **巨大な値を書くワークアラウンドの容認**: 動くが意図が読めず、「なぜ 31536000 なのか」を config を読む人全員が推測することになる。0 に意味を与える方が 1 行の変更で意図が残る
+
+# 検証
+
+実機検収（2026-08-13）:
+
+同一の workflow 形（`github-design`、profile = design、herdr → claude）で対照実験を行った:
+
+- **control（`timeout_secs = 45`）**: dispatch（08:44:15）から **46 秒後**（08:45:01）にエスカレート。D-03 掃引がこのビルド・この構成で生きていることの実測
+- **`timeout_secs = 0`**: 同じ形のタスクが dispatch から初回 Stop まで約 60 秒沈黙しても（control が発火した窓を超えても）**エスカレーション 0 件**のまま park → 承認 → done まで完走
