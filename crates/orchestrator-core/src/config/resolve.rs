@@ -22,6 +22,9 @@ const KEYCHAIN_PREFIX: &str = "keychain:";
 /// Prefix marking a 1Password secret reference (`op read` native URI).
 const ONEPASSWORD_PREFIX: &str = "op://";
 
+/// Prefix marking a command-backed secret reference (#444).
+const COMMAND_PREFIX: &str = "cmd:";
+
 /// Errors from resolving/expanding a configuration value.
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
@@ -102,11 +105,15 @@ where
 
     /// Resolve one configuration value into a [`SecretString`].
     ///
-    /// A `keychain:` or `op://` value is fetched from the store (which routes
-    /// by scheme); anything else has its `${VAR}` placeholders expanded. The
-    /// result is wrapped so it cannot leak via `Debug`/`Display` (§5.2).
+    /// A `keychain:` / `op://` / `cmd:` value is fetched from the store (which
+    /// routes by scheme); anything else has its `${VAR}` placeholders
+    /// expanded. The result is wrapped so it cannot leak via `Debug`/`Display`
+    /// (§5.2).
     pub fn resolve(&self, value: &str) -> Result<SecretString, ResolveError> {
-        if value.starts_with(KEYCHAIN_PREFIX) || value.starts_with(ONEPASSWORD_PREFIX) {
+        if value.starts_with(KEYCHAIN_PREFIX)
+            || value.starts_with(ONEPASSWORD_PREFIX)
+            || value.starts_with(COMMAND_PREFIX)
+        {
             let reference: SecretRef = value.parse()?;
             Ok(self.store.get(&reference)?)
         } else {
@@ -180,6 +187,9 @@ mod tests {
                 }
                 SecretRef::OnePassword { uri } if uri == "op://Dev/Openrouter/api_key" => {
                     Ok(SecretString::new("sk-or-from-op"))
+                }
+                SecretRef::Command { command } if command == "gh auth token" => {
+                    Ok(SecretString::new("gho_from_cmd"))
                 }
                 _ => Err(SecretError::NotFound {
                     reference: reference.to_string(),
@@ -278,6 +288,26 @@ mod tests {
         // string (it would otherwise reach a plugin as a bogus "secret").
         let resolver = SecretResolver::new(FakeStore, env_from(&[]));
         let err = resolver.resolve("op://only-vault").unwrap_err();
+        assert!(matches!(
+            err,
+            ResolveError::Secret(SecretError::InvalidReference(_))
+        ));
+    }
+
+    #[test]
+    fn resolves_command_reference_via_store() {
+        // `cmd:` is the fourth reference scheme (#444): routed to the store,
+        // never env-expanded — a `${VAR}` inside the command string is the
+        // shell's business at execution time, not the resolver's.
+        let resolver = SecretResolver::new(FakeStore, env_from(&[]));
+        let secret = resolver.resolve("cmd:gh auth token").unwrap();
+        assert_eq!(secret.expose(), "gho_from_cmd");
+    }
+
+    #[test]
+    fn blank_command_reference_is_rejected() {
+        let resolver = SecretResolver::new(FakeStore, env_from(&[]));
+        let err = resolver.resolve("cmd:   ").unwrap_err();
         assert!(matches!(
             err,
             ResolveError::Secret(SecretError::InvalidReference(_))

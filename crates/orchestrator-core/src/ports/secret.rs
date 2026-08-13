@@ -15,6 +15,9 @@ const KEYCHAIN_PREFIX: &str = "keychain:";
 /// Prefix identifying a 1Password secret reference (`op read` native URI).
 const ONEPASSWORD_PREFIX: &str = "op://";
 
+/// Prefix identifying a command-backed secret reference (#444).
+const COMMAND_PREFIX: &str = "cmd:";
+
 /// A secret value that never exposes itself through `Debug`/`Display`.
 ///
 /// Wrapping secrets in this newtype prevents accidental leakage into logs or
@@ -58,7 +61,7 @@ impl fmt::Display for SecretString {
 
 /// A parsed reference to an externally-held secret.
 ///
-/// Two schemes exist:
+/// Three schemes exist:
 ///
 /// - `keychain:<service>/<account>` — the OS Keychain (macOS). The
 ///   `<service>` segment runs up to the first `/`; everything after it is the
@@ -67,6 +70,11 @@ impl fmt::Display for SecretString {
 ///   `op read`. The URI is kept verbatim (`op read` accepts it natively);
 ///   parsing only requires the `vault/item/field` shape, existence is the
 ///   CLI's job.
+/// - `cmd:<command>` — a shell command whose stdout is the secret (#444).
+///   For credentials another tool already manages and rotates
+///   (`cmd:gh auth token`): resolving re-runs the command, so no copy exists
+///   to go stale. The `keychain:`-style prefix is deliberate — `op://`'s `//`
+///   comes from `op`'s native URI, which has no counterpart here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretRef {
     /// An OS-Keychain item (`keychain:<service>/<account>`).
@@ -80,6 +88,11 @@ pub enum SecretRef {
     OnePassword {
         /// The full `op://…` URI as written in config.
         uri: String,
+    },
+    /// A shell command whose stdout is the secret (`cmd:<command>`).
+    Command {
+        /// The command string, run via `/bin/sh -c`.
+        command: String,
     },
 }
 
@@ -96,11 +109,24 @@ impl SecretRef {
     pub fn onepassword(uri: impl Into<String>) -> Self {
         Self::OnePassword { uri: uri.into() }
     }
+
+    /// Build a command reference from its shell command string.
+    pub fn command(command: impl Into<String>) -> Self {
+        Self::Command {
+            command: command.into(),
+        }
+    }
 }
 
-/// The textual form the reference was written in (`keychain:…` / `op://…`).
-/// The reference names *where* a secret lives, never the secret itself, so
-/// displaying it is safe (error messages, doctor output).
+/// The textual form the reference was written in (`keychain:…` / `op://…` /
+/// `cmd:…`). The reference names *where* a secret lives, never the secret
+/// itself, so displaying it is safe (error messages, doctor output).
+///
+/// For `cmd:` that safety is a rule, not a construction: the command string
+/// is config text, and the standing rule that no plaintext secret goes into
+/// config applies to it — `cmd:curl -H "Bearer xoxp-…"` violates it exactly
+/// the way `token = "xoxp-…"` does. Fetch inline credentials via the command
+/// itself (that is the scheme's whole point), never paste them into it.
 impl fmt::Display for SecretRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -108,6 +134,7 @@ impl fmt::Display for SecretRef {
                 write!(f, "{KEYCHAIN_PREFIX}{service}/{account}")
             }
             Self::OnePassword { uri } => f.write_str(uri),
+            Self::Command { command } => write!(f, "{COMMAND_PREFIX}{command}"),
         }
     }
 }
@@ -134,6 +161,15 @@ impl FromStr for SecretRef {
             }
             return Ok(Self::onepassword(s));
         }
+        if let Some(rest) = s.strip_prefix(COMMAND_PREFIX) {
+            // Anything after the prefix is the command, verbatim. Only an
+            // empty/blank command is rejected — the command's own validity is
+            // the shell's job at resolve time.
+            if rest.trim().is_empty() {
+                return Err(SecretError::InvalidReference(s.to_string()));
+            }
+            return Ok(Self::command(rest));
+        }
         Err(SecretError::InvalidReference(s.to_string()))
     }
 }
@@ -141,8 +177,8 @@ impl FromStr for SecretRef {
 /// Errors from resolving a secret reference.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
-    /// The reference string was not a well-formed `keychain:<service>/<account>`
-    /// or `op://<vault>/<item>/<field>`.
+    /// The reference string was not a well-formed `keychain:<service>/<account>`,
+    /// `op://<vault>/<item>/<field>`, or `cmd:<command>`.
     #[error("invalid secret reference: {0}")]
     InvalidReference(String),
     /// No secret exists for the reference.
@@ -209,6 +245,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_command_reference_verbatim() {
+        let r: SecretRef = "cmd:gh auth token".parse().unwrap();
+        assert_eq!(r, SecretRef::command("gh auth token"));
+        assert_eq!(r.to_string(), "cmd:gh auth token");
+        // Shell syntax rides through untouched — validity is the shell's job.
+        assert!(
+            "cmd:op read 'op://Dev/X/y' | tr -d '\\n'"
+                .parse::<SecretRef>()
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn rejects_malformed_references() {
         for bad in [
             "totsuka/token",
@@ -220,6 +269,9 @@ mod tests {
             "op://only-vault",
             "op://Dev/item-only",
             "op://Dev//field",
+            // cmd: needs a non-blank command.
+            "cmd:",
+            "cmd:   ",
         ] {
             assert!(
                 bad.parse::<SecretRef>().is_err(),

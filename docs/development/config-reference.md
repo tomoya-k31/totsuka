@@ -26,6 +26,7 @@ owner: tomoya-k31
 
 - `keychain:<service>/<account>` — macOS Keychain から解決
 - `op://<vault>/<item>/<field>` — 1Password から解決（#156、[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md)）。1Password CLI（`op read --no-newline`）へのシェルアウトで、事前に `op signin` 済みの対話セッションが前提。`config.toml` / `plugins/{name}.toml` の**任意の文字列 leaf** で使える（例 `api_key_ref = "op://Dev/Openrouter/api_key"`、Slack の `user_token = "op://Dev/Slack/user_token"`）。`op` は cross-platform のため **非 macOS でも動く唯一の実働バックエンド**。未導入はインストール導線（macOS は `brew install 1password-cli`、他プラットフォームは公式ドキュメント）、item 不在は not found、未サインインは「`op signin` を実行」の actionable エラーになり、`totsuka doctor` は設定に `op://` があるときのみ `op --version` / `op whoami`（非プロンプト）を検査する
+- `cmd:<command>` — コマンドを `/bin/sh -c` で実行し、その **stdout を秘密値**として使う（#444、[ADR-0044](/decisions/adr-0044-cmd-secret-scheme.md)）。`gh auth token` のように**別ツールが管理・ローテートする credential** 向け — 解決のたびに現在値を取るので、コピーの陳腐化が起きない（例 `token = "cmd:gh auth token"`）。末尾の改行は除去される。非ゼロ exit と空出力は起動時エラー（stderr の先頭行を引用、stdout は §5.2 により決して引用しない）。実行は `totsuka run` の解決時のみで、parse や `config show` はコマンドを実行しない。`totsuka doctor` は `op://` と同じ理由（非対話原則、#289）で `cmd:` を含むプラグインの probe を skip する。**コマンド文字列に秘密を直書きしないこと** — 参照文字列は設定の一部としてエラーメッセージに引用されうる。「設定に平文の秘密を書かない」規則はコマンド文字列にも適用され、秘密はコマンドに**取得させる**（それがこの形式の目的）
 - `${ENV_VAR}` を含む文字列 — 環境変数から展開
 - `~` / `${ENV}` はパスでも展開される
 
