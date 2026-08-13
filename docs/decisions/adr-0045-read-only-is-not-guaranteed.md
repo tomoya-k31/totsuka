@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0045 read-only profile は保証しない — 検出で止め、サンドボックスは実装しない
-description: "read-only profile（answer / triage / design）の worktree を sandbox-exec で封じる案（ADR-0040 で実現可能と実測済み）を実装しないと決めた記録。read-only は deny による多層防御と D4 の事後検出までで、保証ではない。エージェントが Bash 経由でファイルを書き、commit し、push し、PR を作ることは今も可能である。サンドボックスを入れても git push は止まらず、shim の配布・macOS 限定・sandbox-exec の deprecated という費用が残る点が判断材料。"
+description: "read-only profile（answer / triage / design）の worktree を sandbox-exec で封じる案（ADR-0040 で実現可能と実測済み）を実装しないと決めた記録。read-only は deny による多層防御と事後検出（D3: publish 直前に即時 / D4: 走行中の 60 秒 sweep）までで、保証ではない。エージェントが Bash 経由でファイルを書き、commit し、push し、PR を作ることは今も可能である。サンドボックスを入れても git push は止まらず、shim の配布・macOS 限定・sandbox-exec の deprecated という費用が残る点が判断材料。"
 tags: [decision, security, profile, read-only, sandbox, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-13T22:20:00+09:00 }
 status: stable
@@ -27,19 +27,20 @@ stable。[#446](https://github.com/tomoya-k31/totsuka/issues/446) を実装せ�
 
 - 裸ツール名 deny（`Edit` / `Write` / `NotebookEdit`）— ツールごと消えるので、エージェントがツールとして書こうとすると失敗する
 - `Bash(git push *)` 等のパターン deny — リテラルなコマンド文字列への前方一致
-- D4 の事後検出（[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md)）— worktree がブランチ上に出たらタスクを失敗させ、pane を閉じ、`on_success` を撃たない
+- 事後検出（[ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md)）— worktree がブランチ上に出たらタスクを失敗させ `on_success` を撃たない。**2 段ある**: D3 は `finalize_success`（publish 到達時に即時）、D4 は走行中の worktree sweep（`WORKTREE_SWEEP_INTERVAL` = 60 秒）で、こちらは pane も閉じる
 
 **効いていないもの**（2026-08-09 の実機 E2E で `answer` profile のタスクが branch → commit → push → PR まで到達した）:
 
-- `cat >` / `cat >>` / `python3 - <<EOF` でのファイル書き込みは、どの deny 規則にも掛からない
-- `git add -A && git commit -m …` は先頭が `git add` なので `Bash(git commit *)` に不一致
-- `git push … | tail -5` / `gh pr create --fill | tail -5` はパイプを足すだけで素通り
+- `cat >` / `cat >>` / `python3 - <<EOF` でのファイル書き込みは、どの deny 規則にも掛からない。書く手段は閉じた集合ではないので、`Bash(...)` の列挙では原理的に覆えない
+- `git add -A && git commit -m …` / `git push … | tail -5` / `gh pr create --fill | tail -5` は、**規則が存在する状態で実際に走った**
+
+**観測されたのはそこまでで、迂回の機構は計測されていない。** 前方一致がコマンド文字列全体に当たるため `git add` で始まる文字列が `Bash(git commit *)` に照合されない、というのが自然な説明だが、Claude Code が連結を分解して各部を評価したうえで別の理由で通した可能性も同じだけ残る。どちらかは誰も測っていない（`hooks::permissions` のモジュールドキュメントに同じ但し書きがある）。**結果から機構を断定するのは、この ADR が撤回している過ちと同じ形**なので、対策をこの説明の上に建てないこと。
 
 [ADR-0040](/decisions/adr-0040-worktree-sandbox-feasibility.md)（#418）は、この穴を「効果を封じる」方向で塞げるかを実測し、**塞げる**と結論した — `sandbox-exec` で worktree と元リポジトリの `.git` を deny すると、ファイル書き込み・commit・ブランチ作成は実際に止まる。配線も herdr が pane の PATH からエージェントを解決するのでシムで可能だと確認済みである。
 
 # Decision
 
-**サンドボックスは実装しない。read-only profile の read-only 性は保証しない。** 強制力は現状のまま — deny による多層防御（迂回可能）と、D4 の事後検出（60 秒粒度・ブランチ単位）である。
+**サンドボックスは実装しない。read-only profile の read-only 性は保証しない。** 強制力は現状のまま — deny による多層防御（迂回可能）と、D3 / D4 の事後検出（ブランチ単位。publish 経路は即時、走行中の検知は最大 60 秒）である。
 
 判断材料として ADR-0040 が確定させた費用と限界:
 
@@ -50,7 +51,7 @@ stable。[#446](https://github.com/tomoya-k31/totsuka/issues/446) を実装せ�
 # Consequences
 
 - **read-only profile のタスクは、その気になれば worktree を書き、commit し、push し、PR を作れる。** これは既知の受容済みリスクであり、バグとして報告する対象ではない
-- 起きたことは検出される — ブランチが現れれば D4 が最大 60 秒でタスクを失敗させ、worktree とコミットを証拠として残す。**ただし push は検出時点で済んでいる可能性があり、取り返せない**
+- 起きたことは検出される — ブランチが現れれば失敗として終わり、worktree とコミットが証拠として残る。publish に到達した経路は D3 が即時に捕まえ、走行中のものは D4 が最大 60 秒で捕まえる。**ただし push は検出時点で済んでいる可能性があり、取り返せない**
 - deny は「エージェントが本気で書こうとしない限り」でしか保たない層として残る。捨てはしない（穏当な文面のタスクでは実際に read-only が保たれている）が、保証と呼ばない
 - **この決定は覆せる。** ADR-0040 の実測（何が止まり、何が止まらず、どう配線するか）はそのまま有効なので、方針が変われば調査からやり直す必要はない
 

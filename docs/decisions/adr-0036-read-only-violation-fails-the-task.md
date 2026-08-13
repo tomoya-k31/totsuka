@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0036 triage / design はシェルを検査せず、リポジトリを触ったら成功として扱わない
-description: "gh issue comment に複数行 Markdown を渡すにはシェル構文が要るため triage / design から Bash を取り上げられない。コマンド文字列を検査するフックは、引用符の内外を見分けるパーサが要るうえ取りこぼしに強い名前が付くので不採用。代わりに全 read-only profile から plan ゲートを外して無人ハングを消し、read-only profile のタスクがブランチ上にあったら fail_publish で失敗させる。同じ検査を worktree sweep からも回し、走行中に見つけたら pane を閉じる。止まるのは成功報告と on_success で、triage / design の成果物はエージェントが直接書く（#398）ため既に公開済みで取り消せない。防止ではなく検出で、本当の境界はサンドボックス調査（#418）に送る。"
+description: "gh issue comment に複数行 Markdown を渡すにはシェル構文が要るため triage / design から Bash を取り上げられない。コマンド文字列を検査するフックは、引用符の内外を見分けるパーサが要るうえ取りこぼしに強い名前が付くので不採用。代わりに全 read-only profile から plan ゲートを外して無人ハングを消し、read-only profile のタスクがブランチ上にあったら fail_publish で失敗させる。同じ検査を worktree sweep からも回し、走行中に見つけたら pane を閉じる。止まるのは成功報告と on_success で、triage / design の成果物はエージェントが直接書く（#398）ため既に公開済みで取り消せない。防止ではなく検出である。本当の境界はサンドボックスだが、実装しないと決めた（ADR-0045）のでこの検出が最終形になった。"
 resource: https://github.com/tomoya-k31/totsuka/issues/409
 tags: [decision, security, permissions, claude-code, plan-mode, profile, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-13T22:05:00+09:00 }
@@ -104,7 +104,7 @@ D3 は `finalize_success`、つまり**タスクが publish に到達したと�
 
 **ただし pane を閉じるのは best-effort で、失敗の記録はどちらにせよ行う。** 「閉じたと確認できるまでタスクを in-flight に留める」案は採らない — 信頼できる側（記録）を信頼できない側（RPC）に人質に取る形になり、herdr に届かないときに**違反が記録されないまま残る**。それはこの検査が塞ごうとしている穴そのものである。閉じられなかった pane は設計上 `doctor` の担当で（#211）、pane には `session/list` が拾う所有マーカーが残っている。確認できなかった場合は `tracing::error!` でそう言う。
 
-**これは防止ではない。間隔がそう言っている。** sweep は 60 秒間隔（`WORKTREE_SWEEP_INTERVAL`）で、`git switch -c` から `git push` までの数秒という窓を安定して取れる速さではない。**保証できるのは「違反したタスクは失敗で終わり、そのエージェントは止まっている」までで、「違反が起きない」ではない。** 防止は [#418](https://github.com/tomoya-k31/totsuka/issues/418) のサンドボックス待ちのままである。
+**これは防止ではない。間隔がそう言っている。** sweep は 60 秒間隔（`WORKTREE_SWEEP_INTERVAL`）で、`git switch -c` から `git push` までの数秒という窓を安定して取れる速さではない。**保証できるのは「違反したタスクは失敗で終わり、そのエージェントは止まっている」までで、「違反が起きない」ではない。** そして**防止は来ない** — サンドボックスは実装しないと決めた（[ADR-0045](/decisions/adr-0045-read-only-is-not-guaranteed.md)）。
 
 門は D3 と同じ `read_only_side_effect` を共有する（profile で門を作り、生きた `HEAD` を読む）。素の `mode = "plan"` は D3 と同じく警告のみで、失敗しない。
 

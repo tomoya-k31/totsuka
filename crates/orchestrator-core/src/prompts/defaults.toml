@@ -288,7 +288,9 @@ verification_prompt = "この停止を許可してよい。すなわち次のい
 # This is the BODY ONLY. The YAML frontmatter — `mode: primary` plus
 # `permission: {edit: deny, bash: deny, task: deny}` — is fixed in Rust
 # (`hooks::opencode::PLAN_AGENT_FRONTMATTER`) and deliberately NOT configurable:
-# that deny map *is* plan mode's read-only guarantee, and a key that reads like
+# that deny map is the *whole* of what carries plan intent here (not a
+# guarantee — nothing is, ADR-0045 — and never measured on real opencode, but
+# the only mechanism there is), and a key that reads like
 # prose must never be able to grant `bash: allow`. Validation rejects a body
 # starting with `---` for the same reason (it would also produce two
 # frontmatter blocks, which opencode parses in an undefined way).

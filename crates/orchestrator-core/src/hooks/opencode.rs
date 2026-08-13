@@ -41,10 +41,12 @@ const STATIC_ASSETS: &[(&str, &str, u32)] = &[(
 /// The plan-mode agent's YAML frontmatter, **fixed in Rust and deliberately
 /// not configurable** (#316, [ADR-0023]).
 ///
-/// `permission: {edit: deny, bash: deny, task: deny}` *is* plan mode's
-/// read-only guarantee. opencode has no structural plan flag — unlike claude's
-/// `--permission-mode plan` or codex's `--sandbox read-only`, this file is the
-/// whole mechanism — so a config key able to author this block would let text
+/// `permission: {edit: deny, bash: deny, task: deny}` is the *whole* of what
+/// carries plan intent here — not a guarantee (nothing is; ADR-0045), and
+/// never measured on real opencode, but the only mechanism there is. opencode
+/// has no structural plan flag — unlike claude's `--permission-mode plan` or
+/// codex's `--sandbox read-only`, this file is
+/// it — so a config key able to author this block would let text
 /// that reads like prose grant `bash: allow` to every plan-mode task. That is
 /// privilege escalation through a string field.
 ///
