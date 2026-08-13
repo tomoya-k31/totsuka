@@ -900,6 +900,51 @@ on_failure = {{ set_status = "failed" }}
     Workflow::from_configs(&cfg.workflows)
 }
 
+/// `timeout_secs = 0` opts a workflow out of the D-03 sweep (#439). Before
+/// this, a written-out `0` meant "escalate on the first sweep" — `> 0` is true
+/// for any positive silence — which no config could have wanted.
+#[tokio::test]
+async fn a_zero_timeout_disables_the_silence_sweep() {
+    let base = scratch("hook_timeout_zero");
+    let notify_log = base.join("notify.ndjson");
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+    // Same shape as `timeout_sweep_escalates_silent_task`: alive after the
+    // dispatch, then silent for far longer than any plausible timeout.
+    let id = db.upsert_task(&new_task("1", None)).unwrap();
+    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.touch_last_signal(id).unwrap();
+    db.record_session(id, "mock_agent", "sess-1").unwrap();
+
+    let mut engine = Engine::with_clock(
+        db,
+        engine_settings(workflows_with_timeout(0), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+        clock.clone(),
+    )
+    .await;
+
+    // A week of silence: far past the default 30 minutes, and past the old
+    // behaviour's instant trip point.
+    clock.advance(time::Duration::days(7));
+    engine.sweep_signal_timeouts().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Running,
+        "timeout_secs = 0 must exempt the task from the D-03 sweep"
+    );
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    assert!(
+        !notes.iter().any(|n| n["params"]["event"] == "escalated"),
+        "no escalation notification may fire for an opted-out workflow"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn watch_mode_periodic_tick_escalates_silent_task_without_events() {
     // Regression test (0.2.0, #190): the old poll-driven `cycle()` call used

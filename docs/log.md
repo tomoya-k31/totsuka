@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-08-13
+
+* **Creation**: `timeout_secs = 0` を **D-03 無音掃引のオプトアウト**として定義した（#439、[ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md)）。attended pane（人間が pane を見ている）前提の workflow では無音は異常の証拠にならず、従来の 0 は「最初の掃引でほぼ必ず即エスカレート」という罠値で意図して使える意味を持っていなかった。トレードオフ（真にハングしたエージェントもその workflow では検知されない）は [設定リファレンス](/development/config-reference.md) に明記。attended pane 運用の本体設計は #440
+* **Update**: [orchestrator-core クレート](/components/orchestrator-core.md) の `run` 行に D-03 掃引の `timeout_secs = 0` オプトアウトを追記した（/code-review の指摘。掃引条件を明記している行が実装と食い違ったままだった）
+
 ## 2026-08-12
 
 * **Update**: #420 と [ADR-0036](/decisions/adr-0036-read-only-violation-fails-the-task.md) D4 を実機で検収し、両 ADR に `verified` を足した。**#420**: `github-design` タスクが人間の介入ゼロで約 2.5 分で完走し、`permissionMode` は `auto` のみ・承認プロンプトも拒否も 0 件だった。さらに **totsuka の settings の `defaultMode` だけを `dontAsk` に差し替える対照実験**を回し、ユーザー設定が `auto` のままでもセッションが `dontAsk` になり allowlist 外の `awk` がプロンプトなしで拒否されることを確認した — **「グローバル設定ではなく `--settings` が効いている」の直接証拠**で、[ADR-0041](/decisions/adr-0041-unattended-permission-mode.md) の土台がこれで実測に乗った。**D4**: 走行中の worktree にブランチを注入すると **23 秒で `dispatched → failed`**（`publishing` を経ない）、pane が閉じ、worktree は残った。D3 の `publishing → failed` と**別の段階で発火することが分離して確認できた**

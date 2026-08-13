@@ -550,6 +550,13 @@ pub struct WorkflowConfig {
     pub verification: Option<VerificationMode>,
     /// Silence limit in seconds since the last hook signal before the task
     /// escalates (D-03). Defaults to [`DEFAULT_WORKFLOW_TIMEOUT_SECS`].
+    ///
+    /// `0` disables the sweep for this workflow (#439) — for attended panes
+    /// where a human watches the agent and silence is not evidence of a stall.
+    /// The trade-off is real: a genuinely hung agent is never detected either,
+    /// so never set it on an unattended workflow. (Before #439 a written-out
+    /// `0` effectively escalated on the first sweep, which no config could
+    /// have wanted.)
     #[serde(default)]
     pub timeout_secs: Option<u64>,
     /// Criteria text embedded into the llm-verification prompt hook. Only
