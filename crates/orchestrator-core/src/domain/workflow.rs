@@ -159,7 +159,8 @@ pub struct Workflow {
     /// How completion self-reports are verified (D-01).
     pub verification: VerificationMode,
     /// Silence limit in seconds since the last hook signal before escalation
-    /// (D-03). `None` means the built-in default (30 minutes).
+    /// (D-03). `None` means the built-in default (30 minutes); `Some(0)` opts
+    /// the workflow out of the sweep entirely (#439, attended panes).
     pub timeout_secs: Option<u64>,
     /// Criteria text for the llm-verification prompt hook.
     pub rubric: Option<String>,
