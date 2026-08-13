@@ -1394,6 +1394,22 @@ fn check_hook_socket(
         ));
         return;
     }
+    // A `cmd:` token has no session to measure — resolving would execute the
+    // command, which doctor never does (#444, #289). Unconditional, unlike
+    // the op gate above.
+    if token_ref.is_some_and(|r| r.starts_with("cmd:")) {
+        checks.push(Check::skip(
+            "hook-socket",
+            format!(
+                "a receiver is live at {} but resolving the cmd: token would \
+                 execute a command (doctor stays non-interactive)",
+                socket_path.display()
+            ),
+            "the command runs when `totsuka run` resolves the config; \
+             test the receiver by hand if unsure",
+        ));
+        return;
+    }
     let token = token_ref.and_then(|reference| secret_resolver(env).resolve(reference).ok());
     match self_post(&socket_path, token.as_ref().map(|t| t.expose())) {
         Ok(200) => checks.push(Check::ok(
@@ -1977,11 +1993,13 @@ fn check_orphan_panes(
     let mut probed = 0usize;
     let mut skipped: Vec<&str> = Vec::new();
     for name in &agents {
-        // Same gate as `check_plugins` (#289): launching the agent resolves
-        // its secrets. Tracked separately so the check can say it saw only
-        // part of the picture — silently probing fewer agents would under-
-        // report orphans and read as "none found".
-        if !op.may_resolve() && plugin_needs_onepassword(cx, cfg, name) {
+        // Same gate as `check_plugins` (#289, #444): launching the agent
+        // resolves its secrets. Tracked separately so the check can say it
+        // saw only part of the picture — silently probing fewer agents would
+        // under-report orphans and read as "none found".
+        if (!op.may_resolve() && plugin_needs_onepassword(cx, cfg, name))
+            || plugin_needs_command_exec(cx, cfg, name)
+        {
             skipped.push(name.as_str());
             continue;
         }
