@@ -121,6 +121,12 @@ impl SecretRef {
 /// The textual form the reference was written in (`keychain:…` / `op://…` /
 /// `cmd:…`). The reference names *where* a secret lives, never the secret
 /// itself, so displaying it is safe (error messages, doctor output).
+///
+/// For `cmd:` that safety is a rule, not a construction: the command string
+/// is config text, and the standing rule that no plaintext secret goes into
+/// config applies to it — `cmd:curl -H "Bearer xoxp-…"` violates it exactly
+/// the way `token = "xoxp-…"` does. Fetch inline credentials via the command
+/// itself (that is the scheme's whole point), never paste them into it.
 impl fmt::Display for SecretRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

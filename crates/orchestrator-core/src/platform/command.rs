@@ -16,7 +16,12 @@
 //! Security invariants (F-65, §5.2), identical to
 //! [`onepassword`](super::onepassword): **stdout is the plaintext secret** and
 //! is only ever wrapped into a [`SecretString`] — never logged, never put in
-//! an error. Error messages quote stderr only.
+//! an error. Error messages quote stderr and the reference (the command
+//! string) only. The reference is quotable for the same reason an `op://` URI
+//! is — it is config text, covered by the standing rule that no plaintext
+//! secret goes into config. A command with an inline credential
+//! (`cmd:curl -H "Bearer …"`) breaks that rule, not this module's invariant;
+//! the scheme's whole point is that the command *fetches* the credential.
 
 use std::io;
 use std::process::{Command, Output};
