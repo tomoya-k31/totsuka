@@ -26,15 +26,15 @@ use crate::transport::SlackTransport;
 /// notification, the draft/picker surfaces are untouched. No-op when the bot
 /// DM channel is unresolved (no `bot_token`, or startup resolution failed).
 ///
-/// `log_blocks` (a JSON array of Block Kit blocks) is appended below the
-/// nudge line in the same message — one message, one notification (#456).
-/// `None` keeps the plain one-line nudge (the picker path).
+/// `log_blocks` (Block Kit blocks) are appended below the nudge line in the
+/// same message — one message, one notification (#456). `None` keeps the
+/// plain one-line nudge (the picker path).
 pub async fn send_nudge<T: SlackTransport>(
     api: &SlackApi<T>,
     state: &SharedState,
     text: &str,
     permalink: Option<&str>,
-    log_blocks: Option<Value>,
+    log_blocks: Option<Vec<Value>>,
 ) {
     let Some(channel) = state.bot_dm_channel() else {
         tracing::debug!("no bot DM channel; skipping the notification nudge");
@@ -51,9 +51,7 @@ pub async fn send_nudge<T: SlackTransport>(
             "type": "section",
             "text": { "type": "mrkdwn", "text": body.clone() },
         })];
-        if let Value::Array(items) = extra {
-            all.extend(items);
-        }
+        all.extend(extra);
         Value::Array(all)
     });
     if let Err(e) = api

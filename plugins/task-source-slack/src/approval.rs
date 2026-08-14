@@ -156,7 +156,7 @@ pub async fn publish_draft<T: SlackTransport>(
             state,
             &format!("{} さんへの返信案が届きました", draft.sender_name),
             draft.permalink.as_deref(),
-            Some(json!([reply_preview_block(&draft.text)])),
+            Some(vec![reply_preview_block(&draft.text)]),
         )
         .await;
     }
