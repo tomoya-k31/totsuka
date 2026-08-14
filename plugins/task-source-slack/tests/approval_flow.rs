@@ -321,6 +321,25 @@ async fn publish_sends_a_bot_nudge_when_configured() {
         text.contains("https://ws.slack.test/archives/C1/p1002"),
         "{text}"
     );
+    // #456: the reply text rides along as a buttonless log — nudge line as
+    // the leading block, then the same `markdown` block the approval sends.
+    let blocks = body["blocks"].as_array().unwrap();
+    assert!(
+        blocks[0]["text"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("返信案が届きました"),
+        "{blocks:?}"
+    );
+    assert_eq!(
+        blocks[1],
+        json!({ "type": "markdown", "text": expected_posted_reply() }),
+        "{blocks:?}"
+    );
+    assert!(
+        !blocks.iter().any(|b| b["type"] == "actions"),
+        "the bot-DM log must carry no approve/reject buttons: {blocks:?}"
+    );
     // The record itself still went out as the operator (user token).
     assert_eq!(
         messages[0].token,

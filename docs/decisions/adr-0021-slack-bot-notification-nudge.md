@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0021 Slack 返信案・ピッカーの通知は「ナッジ専用 bot」の DM で行う
 description: エフェメラルと自分名義 self-DM は Slack 通知を一切発生させず、オペレーターが返信案の到着に気づけない問題（#305）に対し、通知ナッジ専用の bot user を追加して bot→本人 DM で push 通知を出す決定。投稿主体は user token のまま不変で、ADR-0003 の「Bot なし」前提を部分改訂する。reminders.add ハックと macOS 通知強化のみの案は不採用。
 tags: [slack, plugin, task-source, notification, bot, token, approval]
-generated: { by: human:tomoya-k31, at: 2026-07-28T00:00:00Z }
+generated: { by: claude-code/fable-5, at: 2026-08-15T09:00:00+09:00 }
 status: stable
 sources:
   - id: ref-1
@@ -39,6 +39,7 @@ task-source-slack は返信案とリポジトリピッカーを「スレッド�
 Slack アプリに bot user を追加し（manifest: bot scopes は `chat:write` + `im:write` のみ）、次の 2 タイミングで bot がオペレーターへ短い DM ナッジ（🔔 + スレッド permalink リンク）を送る:
 
 1. 返信案ドラフト到着時（`approval::publish_draft` の 2 面投稿後。両面とも失敗した場合はボタンがどこにも無いため送らない）
+   - **追記（2026-08-15、#456）**: ドラフトのナッジには返信案本文をブロックで同梱する（エフェメラル消失後も App DM 側から内容を追えるようにするログ）。**ボタンは付けず、approve/reject 後の更新もしない** — 下の「通知フィードであり記録面は self-DM」の役割分担は不変
 2. リポジトリピッカー投稿成功時（`pipeline::post_selection_ephemeral` の成功後。投稿失敗時は hint なし提出に縮退しており、答えるべき UI が無いため送らない）
 
 bot DM は Slack ネイティブの push・バッジがデスクトップ+モバイル両方に届き、スレッドの相手には見えない。permalink は enrich 時に解決済みの値を再利用し、`chat.getPermalink` の追加呼び出しはしない。

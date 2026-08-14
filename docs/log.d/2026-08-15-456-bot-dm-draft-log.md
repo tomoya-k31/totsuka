@@ -1,0 +1,1 @@
+* **Update**: [task-source-slack プラグイン](/components/task-source-slack.md) / [ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md) — draft の bot ナッジ DM に返信案本文をボタンなしログとして同梱（#456）。エフェメラル消失後も App DM から「何を送ろうとしていたか」を追える。approve/reject 後に更新しない役割分担（記録面 = self-DM）は不変

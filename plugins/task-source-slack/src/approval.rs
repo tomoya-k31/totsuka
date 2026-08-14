@@ -146,13 +146,17 @@ pub async fn publish_draft<T: SlackTransport>(
     } else {
         // Neither surface generates a Slack notification (ephemerals never
         // do; the self-DM record is the operator's own message) — nudge via
-        // the bot DM so the draft is noticed (#305). Never finalized on
-        // approve/reject: the bot DM is a notification feed, not a record.
+        // the bot DM so the draft is noticed (#305). The reply text rides
+        // along as a buttonless log (#456): the ephemeral is transient, and
+        // without a copy here the feed cannot answer "what was it about to
+        // send?" once that is gone. Never finalized on approve/reject: the
+        // bot DM stays a notification feed, not a record.
         crate::notify::send_nudge(
             api,
             state,
             &format!("{} さんへの返信案が届きました", draft.sender_name),
             draft.permalink.as_deref(),
+            Some(json!([reply_preview_block(&draft.text)])),
         )
         .await;
     }
@@ -378,6 +382,19 @@ fn reply_markdown_block(text: &str) -> Option<Value> {
     (text.len() <= MARKDOWN_BLOCK_LIMIT).then(|| json!({ "type": "markdown", "text": text }))
 }
 
+/// The reply text as a display block: the `markdown` block when it fits, the
+/// clipped mrkdwn section when the post path will fall back to plain `text`.
+/// Shared by the draft preview surfaces and the bot-DM log (#456) so every
+/// rendering of the reply makes the same markdown-vs-fallback decision.
+fn reply_preview_block(text: &str) -> Value {
+    reply_markdown_block(text).unwrap_or_else(|| {
+        json!({
+            "type": "section",
+            "text": { "type": "mrkdwn", "text": clipped(text) },
+        })
+    })
+}
+
 /// The notification-fallback text of a finalized draft view.
 fn final_fallback(status: DraftStatus) -> &'static str {
     match status {
@@ -401,18 +418,12 @@ fn draft_blocks(draft: &Draft, draft_id: &str, source_name: &str) -> Value {
     // The preview must show what approval will send: the same `markdown`
     // block when the text fits, the same clipped mrkdwn section when the
     // approve path will fall back to a plain-`text` post.
-    let reply_preview = reply_markdown_block(&draft.text).unwrap_or_else(|| {
-        json!({
-            "type": "section",
-            "text": { "type": "mrkdwn", "text": clipped(&draft.text) },
-        })
-    });
     let mut blocks = vec![
         json!({
             "type": "section",
             "text": { "type": "mrkdwn", "text": header },
         }),
-        reply_preview,
+        reply_preview_block(&draft.text),
     ];
     match draft.status {
         DraftStatus::Pending => blocks.push(json!({
