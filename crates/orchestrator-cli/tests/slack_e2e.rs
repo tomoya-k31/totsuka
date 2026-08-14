@@ -595,7 +595,8 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
     ));
 
     // The reply lands in the mention's thread, under the *user* token, with
-    // the agent's published text and no leftover Block Kit.
+    // the agent's published text — as the notification-fallback `text` and as
+    // a `markdown` block so its Markdown renders properly (#454).
     let reply = wait_for("the approved reply", Duration::from_secs(30), || {
         mock.find("/chat.postMessage", |c| {
             c.form.get("thread_ts").map(String::as_str) == Some("100.0")
@@ -606,7 +607,12 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
     // The mock agent streamed exactly one log chunk; publish trims nothing
     // beyond the mechanical `<@asker>` mention prefix.
     assert_eq!(reply.form["text"], "<@U_OTHER> compiling...");
-    assert!(!reply.form.contains_key("blocks"));
+    let reply_blocks: Value =
+        serde_json::from_str(&reply.form["blocks"]).expect("reply blocks are JSON");
+    assert_eq!(
+        reply_blocks,
+        json!([{ "type": "markdown", "text": "<@U_OTHER> compiling..." }])
+    );
 
     // Both draft surfaces were finalized: the pressed ephemeral through its
     // response_url, the self-DM record through chat.update.

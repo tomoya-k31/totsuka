@@ -409,13 +409,19 @@ async fn approve_posts_the_reply_and_finalizes_both_views_once() {
     })
     .await;
 
-    // The reply went to the mention's thread, as plain text, verbatim.
+    // The reply went to the mention's thread: the full text verbatim as the
+    // notification fallback, plus a single `markdown` block carrying the same
+    // text so the agent's Markdown renders properly (#454).
     let reply = &requests_for(&shared, "chat.postMessage")[1];
     let body = reply.body.as_ref().unwrap();
     assert_eq!(body["channel"], "C1");
     assert_eq!(body["thread_ts"], "100.0");
     assert_eq!(body["text"], expected_posted_reply());
-    assert!(body["blocks"].is_null(), "{body}");
+    assert_eq!(
+        body["blocks"],
+        json!([{ "type": "markdown", "text": expected_posted_reply() }]),
+        "{body}"
+    );
 
     // The pressed in-thread ephemeral was deleted outright…
     wait_until("the ephemeral deletion + record update", || {
@@ -474,6 +480,69 @@ async fn approve_posts_the_reply_and_finalizes_both_views_once() {
         2,
         "no double send"
     );
+}
+
+/// A reply over the `markdown` block's 12,000-character cumulative cap keeps
+/// the pre-#454 shape end to end: a clipped mrkdwn-section preview and a
+/// plain-`text` post with no blocks.
+#[tokio::test]
+async fn oversized_reply_falls_back_to_plain_text() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
+    );
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "777.7" })),
+    );
+    let (mut srv, mut harness) = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
+    harness.next_task().await;
+
+    let long_reply = "x".repeat(13_000);
+    call(
+        &mut srv,
+        3,
+        "result/publish",
+        json!({ "task_id": "C1:100.0", "content": long_reply, "format": "markdown" }),
+    )
+    .await;
+
+    // The preview degrades to the clipped section — no `markdown` block.
+    let ephemerals = requests_for(&shared, "chat.postEphemeral");
+    let blocks = ephemerals[0].body.as_ref().unwrap()["blocks"].clone();
+    assert!(
+        !blocks
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["type"] == "markdown"),
+        "{blocks}"
+    );
+    assert!(blocks.to_string().contains("省略"), "{blocks}");
+
+    // Approval posts the full text with no blocks, exactly as before #454.
+    let (draft_id, ..) = draft_buttons(&shared);
+    send_and_await_ack(
+        &mut ws,
+        block_actions_envelope("e2", "approve_reply", &draft_id, "C1"),
+    )
+    .await;
+    wait_until("the approved reply post", || {
+        requests_for(&shared, "chat.postMessage").len() == 2
+    })
+    .await;
+    let body = requests_for(&shared, "chat.postMessage")[1]
+        .body
+        .clone()
+        .unwrap();
+    assert_eq!(body["text"], format!("<@U_OTHER> {long_reply}"));
+    assert!(body["blocks"].is_null(), "{body}");
 }
 
 #[tokio::test]
