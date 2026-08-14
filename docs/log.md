@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-08-15
+
+* **Update**: [task-source-slack プラグイン](/components/task-source-slack.md) / [ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md) — draft の bot ナッジ DM に返信案本文をボタンなしログとして同梱（#456）。エフェメラル消失後も App DM から「何を送ろうとしていたか」を追える。approve/reject 後に更新しない役割分担（記録面 = self-DM）は不変
+
 ## 2026-08-14
 
 * **Update**: `answer` profile を実機で検収し（#447、task 56）、[ADR-0041](/decisions/adr-0041-unattended-permission-mode.md) と [ADR-0043](/decisions/adr-0043-human-approved-completion.md) に結果を追記した。B が A をメンション → 判定表 5 段を通過 → hint 一致でリポジトリ即決 → **24 秒で下書き生成（承認プロンプト 0 件）** → 承認ボタン押下 → **A 名義でスレッドへ投稿**（`user=U08T7QXPTTK`、bot ではない）まで一周。**`Bash` を全 deny した profile でも `auto` が停止要因にならない**ことと、**answer は `NEEDS_INPUT` を経ず直接 `COMPLETED` を出す**こと（design が park し answer が park しないという #440 の profile 分岐が、同一ビルド・同一 `tt run` の下で分離して観測できた）が要点

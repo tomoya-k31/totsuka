@@ -618,6 +618,9 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
                         &state,
                         "リポジトリ選択の確認が届きました",
                         enriched.permalink.as_deref(),
+                        // No log payload: the picker has no content worth
+                        // preserving beyond the mention it links to (#456).
+                        None,
                     )
                     .await;
                 }
