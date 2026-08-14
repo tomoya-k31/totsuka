@@ -29,6 +29,13 @@ use crate::transport::SlackTransport;
 /// leave room for the truncation note.
 const BLOCK_TEXT_LIMIT: usize = 2900;
 
+/// Slack caps the cumulative text of all `markdown` blocks in one payload at
+/// 12,000 characters. Compared against the byte length, which over-counts
+/// multibyte text relative to any unit Slack could be counting in (bytes ≥
+/// UTF-16 units ≥ characters) — so a text that passes here can never be the
+/// one Slack rejects for size, only fall back earlier than strictly needed.
+const MARKDOWN_BLOCK_LIMIT: usize = 12_000;
+
 /// `result/publish`: build a draft from the agent's `content`, store it, and
 /// present it (thread ephemeral + self-DM record). `Err` is reserved for
 /// requests that cannot become a draft at all (unknown task, empty reply);
@@ -223,13 +230,16 @@ pub async fn handle_approval_action<T: SlackTransport>(
 
     let status = match action_id {
         "approve_reply" => {
+            // The `markdown` block renders the agent's Markdown properly
+            // (#454); `text` stays the full reply as the notification/search
+            // fallback. Oversized replies post as bare `text`, as before.
             let posted = api
                 .chat_post_message(&PostMessage {
                     channel: &draft.channel,
                     text: &draft.text,
                     thread_ts: Some(&draft.reply_ts),
                     unfurl_links: None,
-                    blocks: None,
+                    blocks: reply_markdown_block(&draft.text).map(|b| Value::Array(vec![b])),
                 })
                 .await;
             if let Err(e) = posted {
@@ -354,6 +364,20 @@ async fn notice<T: SlackTransport>(api: &SlackApi<T>, response_url: Option<&str>
     }
 }
 
+/// The reply as a Block Kit `markdown` block (#454). The agent writes
+/// GitHub-flavored Markdown; posted as bare `text` Slack reads it as mrkdwn —
+/// a different dialect — so `**bold**`, fence language tags, `[t](url)` links,
+/// headings and tables all render broken. The `markdown` block accepts
+/// standard Markdown and Slack translates it into `rich_text`/`table` blocks
+/// server-side; `<@user>` mentions survive as real mentions (both verified
+/// live against a user token, 2026-08-14).
+///
+/// `None` when the text could exceed the cumulative cap — the caller keeps
+/// today's plain-`text` behavior, which has no practical size limit.
+fn reply_markdown_block(text: &str) -> Option<Value> {
+    (text.len() <= MARKDOWN_BLOCK_LIMIT).then(|| json!({ "type": "markdown", "text": text }))
+}
+
 /// The notification-fallback text of a finalized draft view.
 fn final_fallback(status: DraftStatus) -> &'static str {
     match status {
@@ -374,15 +398,21 @@ fn draft_blocks(draft: &Draft, draft_id: &str, source_name: &str) -> Value {
         header.push_str(&format!(" <{link}|元メッセージを開く>"));
     }
 
+    // The preview must show what approval will send: the same `markdown`
+    // block when the text fits, the same clipped mrkdwn section when the
+    // approve path will fall back to a plain-`text` post.
+    let reply_preview = reply_markdown_block(&draft.text).unwrap_or_else(|| {
+        json!({
+            "type": "section",
+            "text": { "type": "mrkdwn", "text": clipped(&draft.text) },
+        })
+    });
     let mut blocks = vec![
         json!({
             "type": "section",
             "text": { "type": "mrkdwn", "text": header },
         }),
-        json!({
-            "type": "section",
-            "text": { "type": "mrkdwn", "text": clipped(&draft.text) },
-        }),
+        reply_preview,
     ];
     match draft.status {
         DraftStatus::Pending => blocks.push(json!({
