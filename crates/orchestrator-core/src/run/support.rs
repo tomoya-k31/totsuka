@@ -144,8 +144,6 @@ pub(super) fn prepend_initial_prompt(base: Option<Value>, initial: Option<&str>)
     }
 }
 
-/// Reconstruct the normalized [`Task`] from a stored record: the full ingest
-/// payload when present, else a minimal task from the columns.
 /// The prompt for one dispatch: the messages nobody has sent the agent yet,
 /// oldest first (#242).
 ///
@@ -166,6 +164,8 @@ pub(super) fn conversation_prompt(pending: &[TaskMessage]) -> Option<String> {
     (!bodies.is_empty()).then(|| bodies.join("\n\n"))
 }
 
+/// Reconstruct the normalized [`Task`] from a stored record: the full ingest
+/// payload when present, else a minimal task from the columns.
 pub(super) fn task_from_record(record: &TaskRecord) -> Task {
     record
         .source_payload
