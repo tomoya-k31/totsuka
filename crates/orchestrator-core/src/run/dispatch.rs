@@ -203,97 +203,327 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Dispatch a single task: worktree (create or reuse), `task/dispatch` (or
     /// `session/attach` on retry reuse, F-44), `state/subscribe`. The slot has
     /// already been acquired; failure paths release it and fail the task.
+    /// Get the worktree this dispatch will hand over: reuse the recorded one
+    /// when it is still on disk, else create it (#471, split out of
+    /// `dispatch_one`).
+    ///
+    /// `Ok(None)` means the task was already failed through
+    /// `fail_dispatch` — the reasons here are the ones an operator can act
+    /// on, so they keep going through the same path as before.
+    async fn acquire_worktree(
+        &mut self,
+        record: &TaskRecord,
+        repo: &RepoSettings,
+    ) -> Result<Option<PathBuf>, EngineError> {
+        // Worktree: reuse a recorded one (retry without a live session), else
+        // create fresh (F-20–F-22).
+        //
+        // The recorded path must still be **on disk** (#254). Cleanup removes
+        // it at completion under `plan_cleanup = "immediate"`, and an operator
+        // may remove it by hand, so a recorded path is not evidence of a usable
+        // worktree; handing a missing directory to the agent fails the dispatch
+        // for a reason the operator cannot act on. Re-creating renders the same
+        // path (a pure function of source + task id) and puts the worktree back
+        // on the branch this task was last seen on, and the agent session
+        // survives it: Claude Code keys sessions by working directory, storing
+        // them outside the worktree.
+        //
+        // Keyed on the path alone: a recorded worktree is reusable whether or
+        // not a branch was ever recorded for it, and requiring both would send
+        // a branchless task back through `create` to collide with its own
+        // directory.
+        let path = match &record.worktree_path {
+            Some(path) if Path::new(path).is_dir() => PathBuf::from(path),
+            _ => {
+                let location_template = repo
+                    .worktree_location
+                    .clone()
+                    .unwrap_or_else(|| self.settings.location_template.clone());
+                let request = CreateRequest {
+                    repo_path: &repo.path,
+                    repo_name: &repo.name,
+                    source: &record.source,
+                    task_id: &record.source_task_id,
+                    existing_branch: record.branch.as_deref(),
+                    name_template: &self.settings.worktree_name_template,
+                    location_template: &location_template,
+                    base_branch: None,
+                    env: &self.settings.env,
+                };
+                match self.worktrees.create(&request) {
+                    Ok(worktree) => {
+                        let path = worktree.path.display().to_string();
+                        self.db.set_worktree(
+                            record.id,
+                            &path,
+                            worktree.branch.as_deref(),
+                            &worktree.base_commit,
+                        )?;
+                        worktree.path
+                    }
+                    // `AlreadyExists` means the rendered path is claimed by a
+                    // worktree this task does not own — a leftover from an
+                    // interrupted run, or an operator's own checkout. Say so
+                    // and name the remedy instead of surfacing raw git stderr:
+                    // re-creation (#254) already absorbs every case totsuka
+                    // caused itself, so reaching here needs a human.
+                    Err(WorktreeError::AlreadyExists { path }) => {
+                        return self
+                            .fail_dispatch(
+                                record,
+                                format!(
+                                    "`{}` is already occupied but is not recorded for this task; \
+                                     remove it — `git worktree remove {}`, or the cleanup \
+                                     `totsuka doctor` offers, or plain `rm -rf` if it is not a \
+                                     worktree at all — and retry",
+                                    path.display(),
+                                    path.display(),
+                                ),
+                            )
+                            .await
+                            .map(|()| None);
+                    }
+                    Err(e) => {
+                        return self
+                            .fail_dispatch(record, e.to_string())
+                            .await
+                            .map(|()| None);
+                    }
+                }
+            }
+        };
+        Ok(Some(path))
+    }
+
+    /// Wire a hook-capable agent for this dispatch: reserve the session row
+    /// the `job_id` names, assemble the launch env, and decide whether the
+    /// completion contract travels invisibly or as visible context (#471,
+    /// split out of `dispatch_one`).
+    ///
+    /// Returns all-`None` for an agent without hooks (orca / mock), which is
+    /// the unchanged path.
+    #[allow(clippy::type_complexity)]
+    async fn wire_hooks(
+        &mut self,
+        record: &TaskRecord,
+        agent_name: &str,
+        tool_profile: &crate::tool::ToolProfile,
+        task: &Task,
+        on_a_branch: bool,
+        resume_session_id: Option<&str>,
+    ) -> Result<
+        (
+            Option<String>,
+            Option<(String, std::collections::BTreeMap<String, String>)>,
+            Option<i64>,
+            Option<String>,
+        ),
+        EngineError,
+    > {
+        // Hook-capable agents (herdr 0.1.3: `resume_session` / `diagnostics_snapshot`)
+        // receive a correlation `job_id` + a [`HookLaunchSpec`] so their Claude
+        // Code hooks POST completion signals back (#131/#138). The job id's
+        // `session_row` must exist *before* launch — it is injected into the
+        // process and echoed by every hook — so the session row is reserved up
+        // front and its native id filled in after `task/dispatch` returns.
+        // Non-hook agents (orca / mock) take the unchanged path below.
+        let hook_capable = self
+            .plugins
+            .agents
+            .get(agent_name)
+            .map(|a| a.capabilities().hook_capable())
+            .unwrap_or(false);
+        let wiring = match hook_capable
+            .then(|| self.hook_launch(&record.workflow))
+            .flatten()
+        {
+            Some((settings_path, mut env)) => {
+                let session_row = self.db.reserve_session(record.id, agent_name)?;
+                // Thread continuity (#140): tentatively stamp the resumed
+                // Claude session id onto the fresh row so a later follow-up can
+                // resume it even before this dispatch's SessionStart hook lands
+                // (best-effort resilience). The hook's SessionStart reconciles
+                // it against the real id (#138: a `--resume` may legitimately
+                // change the id → warn + keep the newest).
+                if let Some(sid) = resume_session_id {
+                    self.db.set_tool_session_id(session_row, sid)?;
+                }
+                let job_id = JobId::new(record.id, session_row);
+                env.insert("TOTSUKA_JOB_ID".to_string(), job_id.to_string());
+                // Invisible prompt context: the task-source's `instructions`
+                // (0.1.5) plus the marker self-report convention ride the
+                // `UserPromptSubmit` hook's `additionalContext` via this env
+                // var — the model sees them, the pane shows only the task
+                // body. Hook knowledge stays in core (H-01): source plugins
+                // never compose marker instructions.
+                let prompts = self.settings.prompts.for_workflow(&record.workflow);
+                let mut prompt_context = String::new();
+                if let Some(instructions) = &task.instructions {
+                    prompt_context.push_str(instructions);
+                    prompt_context.push_str("\n\n");
+                }
+                // Ask the agent to branch, but only where the ask is both
+                // actionable and needed. Plan mode is *meant* to be read-only
+                // (claude `--permission-mode plan`, codex `--sandbox
+                // read-only`, opencode's `bash: deny`) and on claude the
+                // instruction would provoke a permission prompt an unattended
+                // pane has nobody to answer — turning an unfollowable ask into
+                // a timeout escalation. **That read-only-ness is not
+                // enforced**: a live plan task branched, committed, pushed and
+                // opened a PR because its repository's conventions asked for
+                // it (#378), which `plan_mode_side_effect` now reports. Not
+                // injecting the ask here is therefore about not *provoking*
+                // git, not about git being impossible. A task already on a
+                // branch is resuming onto one this task made earlier, and
+                // re-asking would invite a second branch mid-conversation.
+                if record.mode != "plan" && !on_a_branch {
+                    prompt_context.push_str(prompts.branch_convention());
+                    prompt_context.push_str("\n\n");
+                }
+                prompt_context.push_str(prompts.marker_self_report());
+                // Context routing per tool capability (#196 Phase 3): a tool
+                // without invisible injection (opencode — no UserPromptSubmit
+                // additionalContext channel) gets the same instructions +
+                // marker convention as *visible* extra_context instead, so
+                // the completion contract still reaches the model up front.
+                let visible_hook_context = if tool_profile.capabilities().invisible_injection {
+                    env.insert("TOTSUKA_PROMPT_CONTEXT".to_string(), prompt_context);
+                    None
+                } else {
+                    Some(prompt_context)
+                };
+                (
+                    Some(job_id.to_string()),
+                    Some((settings_path, env)),
+                    Some(session_row),
+                    visible_hook_context,
+                )
+            }
+            None => (None, None, None, None),
+        };
+        Ok(wiring)
+    }
+
+    /// Record a dispatch that succeeded and start listening (#471, split out
+    /// of `dispatch_one`).
+    ///
+    /// Everything here happens **after** the agent accepted the task, in the
+    /// order that keeps a crash recoverable: the native session id lands
+    /// first (F-37, so a restart can re-attach), the audit event next, the
+    /// message ledger only once the batch is genuinely in the agent's hands
+    /// (#242 — stamping earlier would lose the batch on a failed dispatch),
+    /// and `state/subscribe` last (F-38).
+    async fn record_dispatch_and_subscribe(
+        &mut self,
+        record: &TaskRecord,
+        agent_name: &str,
+        dispatched: &plugin_protocol::methods::TaskDispatchResult,
+        reserved_row: Option<i64>,
+        pending: &[TaskMessage],
+        worktree_path: &Path,
+    ) -> Result<(), EngineError> {
+        let agent = self
+            .plugins
+            .agents
+            .get(agent_name)
+            .expect("the agent was resolved before dispatch");
+        // Persist the native session id (F-37): fill the reserved hook row, or
+        // append a fresh row on the non-hook path.
+        match reserved_row {
+            Some(row) => self.db.set_session_native_id(row, &dispatched.session_id)?,
+            None => {
+                self.db
+                    .record_session(record.id, agent_name, &dispatched.session_id)?;
+            }
+        }
+        self.db.apply_event(
+            record.id,
+            TaskEvent::Dispatch,
+            Some(serde_json::json!({
+                "kind": "dispatch", "plugin": agent_name, "session_id": dispatched.session_id,
+            })),
+        )?;
+        // The messages are in the agent's hands now. Stamped only after the
+        // dispatch succeeded, so a failed one leaves them queued for the
+        // retry; every message in this batch gets the same timestamp, which is
+        // what lets `task retry` later put exactly this batch back (#257).
+        if !pending.is_empty() {
+            self.db.mark_messages_processed(record.id)?;
+        }
+        self.sessions.insert(
+            (agent_name.to_string(), dispatched.session_id.clone()),
+            record.id,
+        );
+        self.stats.dispatched += 1;
+        tracing::info!(
+            task_id = record.id,
+            agent = %agent_name,
+            session_id = %dispatched.session_id,
+            worktree = %worktree_path.display(),
+            "dispatched"
+        );
+
+        let subscribe = plugin_protocol::methods::StateSubscribeParams {
+            session_id: dispatched.session_id.clone(),
+        };
+        let subscribe_error = match agent
+            .call::<_, Value>(method::STATE_SUBSCRIBE, &subscribe)
+            .await
+        {
+            Ok(_) => None,
+            Err(e) => {
+                // No stream means the task could never progress (the loop
+                // would hold its slot forever). Best-effort cancel, then fail.
+                let cancel = plugin_protocol::methods::TaskCancelParams {
+                    session_id: dispatched.session_id.clone(),
+                };
+                let _ = agent.call::<_, Value>(method::TASK_CANCEL, &cancel).await;
+                Some(e.to_string())
+            }
+        };
+        if let Some(e) = subscribe_error {
+            self.drop_task_sessions(record.id);
+            return self
+                .fail_dispatch(
+                    record,
+                    format!("state/subscribe failed: {e} → dispatch cancelled; fix the agent plugin and `task retry`"),
+                )
+                .await;
+        }
+        Ok(())
+    }
+
     async fn dispatch_one(&mut self, task_id: i64) -> Result<(), EngineError> {
         let record = self
             .db
             .get_task(task_id)?
             .ok_or(StateError::NotFound(task_id))?;
-        let repo_name = record.repo.clone().unwrap_or_default();
-        let workflows = workflows_by_name(&self.settings.workflows);
-        let Some(wf) = workflows.get(record.workflow.as_str()).copied() else {
-            self.release_slot(task_id);
-            return Ok(()); // warned in dispatch_ready
-        };
-        let agent_name = wf.agent.clone();
-        // Copied out because `wf` borrows `self.settings` and the launch spec
-        // is built inside a closure further down. `Option<Profile>` is `Copy`.
-        let wf_profile = wf.profile;
-        // Same reason; already trimmed to `None` when blank (#415).
-        let initial_prompt = wf.initial_prompt.clone();
 
-        let Some(repo) = self
-            .settings
-            .repos
-            .iter()
-            .find(|r| r.name == repo_name)
-            .cloned()
-        else {
-            return self
-                .fail_dispatch(
-                    &record,
-                    format!(
-                        "selected repository `{repo_name}` is not configured → re-add it to [[repositories]]"
-                    ),
-                )
-                .await;
+        // Everything decidable before the first side effect, decided in one
+        // pure function (#471). Failure handling stays here because it writes.
+        let target = {
+            let agents = &self.plugins.agents;
+            resolve_dispatch_target(&record, &self.settings, |name| {
+                agents.get(name).map(|a| a.capabilities().clone())
+            })
         };
-        match self.plugins.agents.get(&agent_name) {
-            None => {
-                return self
-                    .fail_dispatch(
-                        &record,
-                        format!(
-                            "agent plugin `{agent_name}` is not launched → install and enable it"
-                        ),
-                    )
-                    .await;
+        let DispatchTarget {
+            agent_name,
+            profile: wf_profile,
+            initial_prompt,
+            repo,
+            tool_name: _tool_name,
+            tool_profile,
+        } = match target {
+            Ok(target) => target,
+            Err(DispatchRefusal::UnknownWorkflow) => {
+                self.release_slot(task_id);
+                return Ok(()); // warned in dispatch_ready
             }
-            // Without a state stream the task could never progress and its
-            // slot would be held for the life of the process — refuse upfront.
-            Some(agent) if !agent.capabilities().state_stream => {
-                return self
-                    .fail_dispatch(
-                        &record,
-                        format!(
-                            "agent plugin `{agent_name}` does not declare the `state_stream` capability → totsuka cannot track its progress; use a state-streaming agent plugin"
-                        ),
-                    )
-                    .await;
+            Err(DispatchRefusal::Failed(reason)) => {
+                return self.fail_dispatch(&record, reason).await;
             }
-            Some(_) => {}
-        }
-
-        // AI-tool resolution (#196): workflow pin > repo default > global
-        // default. The registry always contains the built-ins, so an unknown
-        // name here is a config-drift error (validation catches it upfront);
-        // a kind without an adapter could never signal completion, so both
-        // are refused before any side effect (no worktree, no session row).
-        let tool_name = crate::tool::resolve_tool_name(
-            wf.tool.as_deref(),
-            repo.tool.as_deref(),
-            &self.settings.default_tool,
-        );
-        let Some(tool_profile) = self.settings.tools.get(&tool_name).cloned() else {
-            return self
-                .fail_dispatch(
-                    &record,
-                    format!(
-                        "resolved tool `{tool_name}` is not configured → add `[tools.{tool_name}]` or fix the `tool`/`default_tool` reference"
-                    ),
-                )
-                .await;
         };
-        if !tool_profile.kind.has_adapter() {
-            return self
-                .fail_dispatch(
-                    &record,
-                    format!(
-                        "tool `{tool_name}` (kind `{}`) has no completion-detection adapter yet → use a kind with an adapter",
-                        tool_profile.kind.as_str()
-                    ),
-                )
-                .await;
-        }
 
         // Conversation continuity (#242, superseding #140's D-10): a follow-up
         // message reopens *this* task, so the session to resume is simply this
@@ -363,78 +593,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             return Ok(());
         }
 
-        // Worktree: reuse a recorded one (retry without a live session), else
-        // create fresh (F-20–F-22).
-        //
-        // The recorded path must still be **on disk** (#254). Cleanup removes
-        // it at completion under `plan_cleanup = "immediate"`, and an operator
-        // may remove it by hand, so a recorded path is not evidence of a usable
-        // worktree; handing a missing directory to the agent fails the dispatch
-        // for a reason the operator cannot act on. Re-creating renders the same
-        // path (a pure function of source + task id) and puts the worktree back
-        // on the branch this task was last seen on, and the agent session
-        // survives it: Claude Code keys sessions by working directory, storing
-        // them outside the worktree.
-        //
-        // Keyed on the path alone: a recorded worktree is reusable whether or
-        // not a branch was ever recorded for it, and requiring both would send
-        // a branchless task back through `create` to collide with its own
-        // directory.
-        let worktree_path = match &record.worktree_path {
-            Some(path) if Path::new(path).is_dir() => PathBuf::from(path),
-            _ => {
-                let location_template = repo
-                    .worktree_location
-                    .clone()
-                    .unwrap_or_else(|| self.settings.location_template.clone());
-                let request = CreateRequest {
-                    repo_path: &repo.path,
-                    repo_name: &repo.name,
-                    source: &record.source,
-                    task_id: &record.source_task_id,
-                    existing_branch: record.branch.as_deref(),
-                    name_template: &self.settings.worktree_name_template,
-                    location_template: &location_template,
-                    base_branch: None,
-                    env: &self.settings.env,
-                };
-                match self.worktrees.create(&request) {
-                    Ok(worktree) => {
-                        let path = worktree.path.display().to_string();
-                        self.db.set_worktree(
-                            record.id,
-                            &path,
-                            worktree.branch.as_deref(),
-                            &worktree.base_commit,
-                        )?;
-                        worktree.path
-                    }
-                    // `AlreadyExists` means the rendered path is claimed by a
-                    // worktree this task does not own — a leftover from an
-                    // interrupted run, or an operator's own checkout. Say so
-                    // and name the remedy instead of surfacing raw git stderr:
-                    // re-creation (#254) already absorbs every case totsuka
-                    // caused itself, so reaching here needs a human.
-                    Err(WorktreeError::AlreadyExists { path }) => {
-                        return self
-                            .fail_dispatch(
-                                &record,
-                                format!(
-                                    "`{}` is already occupied but is not recorded for this task; \
-                                     remove it — `git worktree remove {}`, or the cleanup \
-                                     `totsuka doctor` offers, or plain `rm -rf` if it is not a \
-                                     worktree at all — and retry",
-                                    path.display(),
-                                    path.display(),
-                                ),
-                            )
-                            .await;
-                    }
-                    Err(e) => {
-                        return self.fail_dispatch(&record, e.to_string()).await;
-                    }
-                }
-            }
+        let Some(worktree_path) = self.acquire_worktree(&record, &repo).await? else {
+            return Ok(());
         };
 
         // Whether the worktree we are about to hand over is on a branch,
@@ -449,91 +609,20 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // here to prevent. `HEAD` cannot be stale.
         let on_a_branch = self.worktrees.head_branch(&worktree_path).is_some();
 
-        // Hook-capable agents (herdr 0.1.3: `resume_session` / `diagnostics_snapshot`)
-        // receive a correlation `job_id` + a [`HookLaunchSpec`] so their Claude
-        // Code hooks POST completion signals back (#131/#138). The job id's
-        // `session_row` must exist *before* launch — it is injected into the
-        // process and echoed by every hook — so the session row is reserved up
-        // front and its native id filled in after `task/dispatch` returns.
-        // Non-hook agents (orca / mock) take the unchanged path below.
-        let hook_capable = self
-            .plugins
-            .agents
-            .get(&agent_name)
-            .map(|a| a.capabilities().hook_capable())
-            .unwrap_or(false);
         let mut task = task_from_record(&record);
         if let Some(body) = conversation_prompt(&pending) {
             task.body = Some(body);
         }
-        let (job_id, hook_spec, reserved_row, visible_hook_context) = match hook_capable
-            .then(|| self.hook_launch(&record.workflow))
-            .flatten()
-        {
-            Some((settings_path, mut env)) => {
-                let session_row = self.db.reserve_session(record.id, &agent_name)?;
-                // Thread continuity (#140): tentatively stamp the resumed
-                // Claude session id onto the fresh row so a later follow-up can
-                // resume it even before this dispatch's SessionStart hook lands
-                // (best-effort resilience). The hook's SessionStart reconciles
-                // it against the real id (#138: a `--resume` may legitimately
-                // change the id → warn + keep the newest).
-                if let Some(sid) = &resume_session_id {
-                    self.db.set_tool_session_id(session_row, sid)?;
-                }
-                let job_id = JobId::new(record.id, session_row);
-                env.insert("TOTSUKA_JOB_ID".to_string(), job_id.to_string());
-                // Invisible prompt context: the task-source's `instructions`
-                // (0.1.5) plus the marker self-report convention ride the
-                // `UserPromptSubmit` hook's `additionalContext` via this env
-                // var — the model sees them, the pane shows only the task
-                // body. Hook knowledge stays in core (H-01): source plugins
-                // never compose marker instructions.
-                let prompts = self.settings.prompts.for_workflow(&record.workflow);
-                let mut prompt_context = String::new();
-                if let Some(instructions) = &task.instructions {
-                    prompt_context.push_str(instructions);
-                    prompt_context.push_str("\n\n");
-                }
-                // Ask the agent to branch, but only where the ask is both
-                // actionable and needed. Plan mode is *meant* to be read-only
-                // (claude `--permission-mode plan`, codex `--sandbox
-                // read-only`, opencode's `bash: deny`) and on claude the
-                // instruction would provoke a permission prompt an unattended
-                // pane has nobody to answer — turning an unfollowable ask into
-                // a timeout escalation. **That read-only-ness is not
-                // enforced**: a live plan task branched, committed, pushed and
-                // opened a PR because its repository's conventions asked for
-                // it (#378), which `plan_mode_side_effect` now reports. Not
-                // injecting the ask here is therefore about not *provoking*
-                // git, not about git being impossible. A task already on a
-                // branch is resuming onto one this task made earlier, and
-                // re-asking would invite a second branch mid-conversation.
-                if record.mode != "plan" && !on_a_branch {
-                    prompt_context.push_str(prompts.branch_convention());
-                    prompt_context.push_str("\n\n");
-                }
-                prompt_context.push_str(prompts.marker_self_report());
-                // Context routing per tool capability (#196 Phase 3): a tool
-                // without invisible injection (opencode — no UserPromptSubmit
-                // additionalContext channel) gets the same instructions +
-                // marker convention as *visible* extra_context instead, so
-                // the completion contract still reaches the model up front.
-                let visible_hook_context = if tool_profile.capabilities().invisible_injection {
-                    env.insert("TOTSUKA_PROMPT_CONTEXT".to_string(), prompt_context);
-                    None
-                } else {
-                    Some(prompt_context)
-                };
-                (
-                    Some(job_id.to_string()),
-                    Some((settings_path, env)),
-                    Some(session_row),
-                    visible_hook_context,
-                )
-            }
-            None => (None, None, None, None),
-        };
+        let (job_id, hook_spec, reserved_row, visible_hook_context) = self
+            .wire_hooks(
+                &record,
+                &agent_name,
+                &tool_profile,
+                &task,
+                on_a_branch,
+                resume_session_id.as_deref(),
+            )
+            .await?;
 
         // task/dispatch (F-31) → session id → persist (F-37) → subscribe (F-38).
         let agent = self.plugins.agents.get(&agent_name).expect("checked above");
@@ -629,69 +718,15 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 return self.fail_dispatch(&record, e.to_string()).await;
             }
         };
-        // Persist the native session id (F-37): fill the reserved hook row, or
-        // append a fresh row on the non-hook path.
-        match reserved_row {
-            Some(row) => self.db.set_session_native_id(row, &dispatched.session_id)?,
-            None => {
-                self.db
-                    .record_session(record.id, &agent_name, &dispatched.session_id)?;
-            }
-        }
-        self.db.apply_event(
-            record.id,
-            TaskEvent::Dispatch,
-            Some(serde_json::json!({
-                "kind": "dispatch", "plugin": agent_name, "session_id": dispatched.session_id,
-            })),
-        )?;
-        // The messages are in the agent's hands now. Stamped only after the
-        // dispatch succeeded, so a failed one leaves them queued for the
-        // retry; every message in this batch gets the same timestamp, which is
-        // what lets `task retry` later put exactly this batch back (#257).
-        if !pending.is_empty() {
-            self.db.mark_messages_processed(record.id)?;
-        }
-        self.sessions.insert(
-            (agent_name.clone(), dispatched.session_id.clone()),
-            record.id,
-        );
-        self.stats.dispatched += 1;
-        tracing::info!(
-            task_id = record.id,
-            agent = %agent_name,
-            session_id = %dispatched.session_id,
-            worktree = %worktree_path.display(),
-            "dispatched"
-        );
-
-        let subscribe = plugin_protocol::methods::StateSubscribeParams {
-            session_id: dispatched.session_id.clone(),
-        };
-        let subscribe_error = match agent
-            .call::<_, Value>(method::STATE_SUBSCRIBE, &subscribe)
-            .await
-        {
-            Ok(_) => None,
-            Err(e) => {
-                // No stream means the task could never progress (the loop
-                // would hold its slot forever). Best-effort cancel, then fail.
-                let cancel = plugin_protocol::methods::TaskCancelParams {
-                    session_id: dispatched.session_id.clone(),
-                };
-                let _ = agent.call::<_, Value>(method::TASK_CANCEL, &cancel).await;
-                Some(e.to_string())
-            }
-        };
-        if let Some(e) = subscribe_error {
-            self.drop_task_sessions(record.id);
-            return self
-                .fail_dispatch(
-                    &record,
-                    format!("state/subscribe failed: {e} → dispatch cancelled; fix the agent plugin and `task retry`"),
-                )
-                .await;
-        }
+        self.record_dispatch_and_subscribe(
+            &record,
+            &agent_name,
+            &dispatched,
+            reserved_row,
+            &pending,
+            &worktree_path,
+        )
+        .await?;
         Ok(())
     }
 
@@ -790,5 +825,311 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             Some(reason),
         );
         Ok(())
+    }
+}
+
+/// Why a dispatch is refused before anything is created (#471).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum DispatchRefusal {
+    /// The workflow vanished from config between `dispatch_ready` and here.
+    /// `dispatch_ready` already warned, so the slot is released in silence.
+    UnknownWorkflow,
+    /// Refused with a reason the operator can act on — the caller turns this
+    /// into `fail_dispatch`, which is the only thing that writes.
+    Failed(String),
+}
+
+/// Everything settled before the first side effect: which agent, which
+/// repository, which tool (#471).
+///
+/// Split out of `dispatch_one` so the decisions can be exercised without
+/// launching a plugin or creating a worktree. #196's tool precedence and the
+/// capability refusals used to be reachable only through a full dispatch.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct DispatchTarget {
+    /// Agent plugin instance the workflow names.
+    pub agent_name: String,
+    /// Copied out of the workflow: `wf` borrows `self.settings`, and the launch
+    /// spec is assembled inside a closure that outlives that borrow.
+    pub profile: Option<crate::config::Profile>,
+    /// Already trimmed to `None` when blank (#415).
+    pub initial_prompt: Option<String>,
+    /// The repository the task was routed to.
+    pub repo: RepoSettings,
+    /// Resolved tool name (#196: workflow pin > repo default > global default).
+    pub tool_name: String,
+    /// That tool's profile.
+    pub tool_profile: crate::tool::ToolProfile,
+}
+
+/// Decide where a task should be dispatched, or why it cannot be (#471).
+///
+/// **Pure**: no I/O, no `self`. `agent_caps` answers "is this agent plugin
+/// launched, and what does it declare" — a closure rather than the plugin map
+/// so a test can answer it with a literal.
+///
+/// The refusals are in the order the side-effecting version checked them, and
+/// each carries the same message, because those strings are what an operator
+/// reads when a task fails.
+pub(super) fn resolve_dispatch_target(
+    record: &TaskRecord,
+    settings: &EngineSettings,
+    agent_caps: impl Fn(&str) -> Option<plugin_protocol::manifest::Capabilities>,
+) -> Result<DispatchTarget, DispatchRefusal> {
+    let repo_name = record.repo.clone().unwrap_or_default();
+    let workflows = workflows_by_name(&settings.workflows);
+    let Some(wf) = workflows.get(record.workflow.as_str()).copied() else {
+        return Err(DispatchRefusal::UnknownWorkflow);
+    };
+    let agent_name = wf.agent.clone();
+
+    let Some(repo) = settings.repos.iter().find(|r| r.name == repo_name).cloned() else {
+        return Err(DispatchRefusal::Failed(format!(
+            "selected repository `{repo_name}` is not configured → re-add it to [[repositories]]"
+        )));
+    };
+    match agent_caps(&agent_name) {
+        None => {
+            return Err(DispatchRefusal::Failed(format!(
+                "agent plugin `{agent_name}` is not launched → install and enable it"
+            )));
+        }
+        // Without a state stream the task could never progress and its slot
+        // would be held for the life of the process — refuse upfront.
+        Some(caps) if !caps.state_stream => {
+            return Err(DispatchRefusal::Failed(format!(
+                "agent plugin `{agent_name}` does not declare the `state_stream` capability → totsuka cannot track its progress; use a state-streaming agent plugin"
+            )));
+        }
+        Some(_) => {}
+    }
+
+    // AI-tool resolution (#196): workflow pin > repo default > global default.
+    // The registry always contains the built-ins, so an unknown name here is a
+    // config-drift error (validation catches it upfront); a kind without an
+    // adapter could never signal completion, so both are refused before any
+    // side effect (no worktree, no session row).
+    let tool_name = crate::tool::resolve_tool_name(
+        wf.tool.as_deref(),
+        repo.tool.as_deref(),
+        &settings.default_tool,
+    );
+    let Some(tool_profile) = settings.tools.get(&tool_name).cloned() else {
+        return Err(DispatchRefusal::Failed(format!(
+            "resolved tool `{tool_name}` is not configured → add `[tools.{tool_name}]` or fix the `tool`/`default_tool` reference"
+        )));
+    };
+    if !tool_profile.kind.has_adapter() {
+        return Err(DispatchRefusal::Failed(format!(
+            "tool `{tool_name}` (kind `{}`) has no completion-detection adapter yet → use a kind with an adapter",
+            tool_profile.kind.as_str()
+        )));
+    }
+
+    Ok(DispatchTarget {
+        agent_name,
+        profile: wf.profile,
+        initial_prompt: wf.initial_prompt.clone(),
+        repo,
+        tool_name,
+        tool_profile,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::workflow::Trigger;
+
+    fn settings(workflows: Vec<Workflow>, repos: Vec<RepoSettings>) -> EngineSettings {
+        EngineSettings {
+            workflows,
+            repos,
+            limits: Limits::global(1),
+            worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
+            location_template: "/tmp/totsuka-dispatch/{repo_name}/{worktree_name}".to_string(),
+            cleanup_implement: CleanupPolicy::Manual,
+            cleanup_plan: CleanupPolicy::Immediate,
+            env: HashMap::new(),
+            select: SelectConfig::default(),
+            readme_cache_dir: None,
+            worktree_sweep_interval: Duration::ZERO,
+            one_shot_grace: Duration::ZERO,
+            tools: crate::tool::builtin_registry(),
+            default_tool: "claude".to_string(),
+            prompts: Default::default(),
+            hook: None,
+        }
+    }
+
+    fn workflow(name: &str, agent: &str, tool: Option<&str>) -> Workflow {
+        Workflow {
+            name: name.to_string(),
+            source: "github".to_string(),
+            trigger: Trigger::new(toml::Table::new()),
+            mode: WorkflowMode::Implement,
+            agent: agent.to_string(),
+            output: crate::config::OutputPolicy::None,
+            on_success: None,
+            on_failure: None,
+            verification: crate::config::VerificationMode::None,
+            rubric: None,
+            timeout_secs: Some(1800),
+            tool: tool.map(str::to_string),
+            profile: None,
+            initial_prompt: None,
+        }
+    }
+
+    fn repo(name: &str, tool: Option<&str>) -> RepoSettings {
+        RepoSettings {
+            name: name.to_string(),
+            path: PathBuf::from("/tmp/repo"),
+            summary: None,
+            tool: tool.map(str::to_string),
+            worktree_location: None,
+        }
+    }
+
+    fn record(workflow: &str, repo: Option<&str>) -> TaskRecord {
+        TaskRecord {
+            id: 1,
+            source: "github".to_string(),
+            source_task_id: "1".to_string(),
+            workflow: workflow.to_string(),
+            mode: "implement".to_string(),
+            repo: repo.map(str::to_string),
+            worktree_path: None,
+            branch: None,
+            base_commit: None,
+            state: TaskState::Queued,
+            priority: 0,
+            title: "t".to_string(),
+            url: None,
+            source_payload: None,
+            finished_at: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            last_signal_at: None,
+        }
+    }
+
+    /// Every agent this workspace ships streams state; a stub that does too.
+    fn streaming(_: &str) -> Option<plugin_protocol::manifest::Capabilities> {
+        Some(plugin_protocol::manifest::Capabilities {
+            state_stream: true,
+            ..Default::default()
+        })
+    }
+
+    /// #196's precedence, without launching a plugin or creating a worktree —
+    /// which is the point of splitting the decision out (#471). Before this it
+    /// was reachable only through a full dispatch.
+    #[test]
+    fn tool_resolution_prefers_the_workflow_pin_then_the_repo_then_the_default() {
+        let cases = [
+            (Some("codex"), Some("opencode"), "codex"),
+            (None, Some("opencode"), "opencode"),
+            (None, None, "claude"),
+        ];
+        for (wf_tool, repo_tool, expected) in cases {
+            let s = settings(
+                vec![workflow("implement", "herdr", wf_tool)],
+                vec![repo("web", repo_tool)],
+            );
+            let target = resolve_dispatch_target(&record("implement", Some("web")), &s, streaming)
+                .expect("resolvable");
+            assert_eq!(
+                target.tool_name, expected,
+                "workflow={wf_tool:?} repo={repo_tool:?}"
+            );
+        }
+    }
+
+    /// A workflow that vanished from config is not a task failure: the slot is
+    /// released and `dispatch_ready`'s warning stands. Refusing it as `Failed`
+    /// would mark a task dead over an edit the operator is mid-way through.
+    #[test]
+    fn an_unknown_workflow_is_released_not_failed() {
+        let s = settings(Vec::new(), vec![repo("web", None)]);
+        assert_eq!(
+            resolve_dispatch_target(&record("gone", Some("web")), &s, streaming),
+            Err(DispatchRefusal::UnknownWorkflow)
+        );
+    }
+
+    /// Each refusal names what to do about it — these strings are what an
+    /// operator reads on a failed task, so they are asserted, not just the
+    /// variant.
+    #[test]
+    fn each_refusal_says_what_to_fix() {
+        let with_repo = |name: &str| {
+            settings(
+                vec![workflow("implement", "herdr", None)],
+                vec![repo(name, None)],
+            )
+        };
+
+        // Repository dropped from `[[repositories]]` after selection.
+        let err = resolve_dispatch_target(
+            &record("implement", Some("web")),
+            &with_repo("other"),
+            streaming,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, DispatchRefusal::Failed(m) if m.contains("[[repositories]]")),
+            "{err:?}"
+        );
+
+        // Plugin not launched.
+        let err =
+            resolve_dispatch_target(&record("implement", Some("web")), &with_repo("web"), |_| {
+                None
+            })
+            .unwrap_err();
+        assert!(
+            matches!(&err, DispatchRefusal::Failed(m) if m.contains("install and enable")),
+            "{err:?}"
+        );
+
+        // Launched but cannot stream state: the task could never progress and
+        // would hold its slot for the life of the process.
+        let mute = |_: &str| Some(plugin_protocol::manifest::Capabilities::default());
+        let err =
+            resolve_dispatch_target(&record("implement", Some("web")), &with_repo("web"), mute)
+                .unwrap_err();
+        assert!(
+            matches!(&err, DispatchRefusal::Failed(m) if m.contains("state_stream")),
+            "{err:?}"
+        );
+
+        // A tool the registry does not have.
+        let s = settings(
+            vec![workflow("implement", "herdr", Some("nosuchtool"))],
+            vec![repo("web", None)],
+        );
+        let err =
+            resolve_dispatch_target(&record("implement", Some("web")), &s, streaming).unwrap_err();
+        assert!(
+            matches!(&err, DispatchRefusal::Failed(m) if m.contains("[tools.nosuchtool]")),
+            "{err:?}"
+        );
+    }
+
+    /// The decision reads nothing and writes nothing: calling it twice on the
+    /// same inputs gives the same answer, which is what lets the caller keep
+    /// every side effect (worktree, session row, `fail_dispatch`) to itself.
+    #[test]
+    fn resolving_twice_gives_the_same_target() {
+        let s = settings(
+            vec![workflow("implement", "herdr", None)],
+            vec![repo("web", Some("codex"))],
+        );
+        let r = record("implement", Some("web"));
+        assert_eq!(
+            resolve_dispatch_target(&r, &s, streaming),
+            resolve_dispatch_target(&r, &s, streaming)
+        );
     }
 }
