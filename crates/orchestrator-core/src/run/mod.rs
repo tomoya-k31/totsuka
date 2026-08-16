@@ -416,7 +416,7 @@ impl IngestOutcome {
 }
 
 /// Counters accumulated over one `run` invocation.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RunStats {
     /// Newly ingested tasks that arrived via `task/submit` (0.1.6;
     /// duplicates do not count, F-73).
@@ -430,7 +430,12 @@ pub struct RunStats {
 }
 
 /// The summary printed when `run` exits (§5.1 one-shot contract).
-#[derive(Debug, Default)]
+///
+/// [`Serialize`](serde::Serialize) is the `totsuka run --json` document
+/// (#462): the field names *are* the machine-readable contract, so renaming
+/// one is a breaking change for callers even though it is a private field
+/// nowhere else.
+#[derive(Debug, Default, serde::Serialize)]
 pub struct RunSummary {
     /// Counters for this run.
     pub stats: RunStats,

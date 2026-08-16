@@ -266,6 +266,36 @@ fn e2e_full_path_source_output_binary() {
     let _ = std::fs::remove_dir_all(&env.base);
 }
 
+/// `totsuka run --json` puts the whole `RunSummary` on stdout and nothing else
+/// (#462), so a caller can act on the run instead of grepping prose.
+#[test]
+fn e2e_run_json_emits_only_the_summary_document() {
+    let env = setup(
+        "runjson",
+        "stream_states = [\"running\", \"done\"]\n",
+        "source",
+        "plan",
+    );
+
+    let out = env.run(&[&["run", "--json"], GRACE].concat());
+    assert!(out.status.success(), "run failed: {}", stdout(&out));
+
+    // Parsing *the whole of stdout* is the assertion that matters: the
+    // `--json` contract is "nothing but the document", so a stray prose line
+    // has to fail here rather than merely add noise a `contains` would miss.
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out))
+        .unwrap_or_else(|e| panic!("stdout is not one JSON document ({e}): {}", stdout(&out)));
+    assert_eq!(doc["stats"]["done"], 1, "document: {doc}");
+    assert_eq!(doc["stats"]["failed"], 0, "document: {doc}");
+    assert_eq!(doc["interrupted"], false, "document: {doc}");
+    assert!(
+        doc["waiting"].as_array().is_some_and(|a| a.is_empty()),
+        "waiting is an empty array, not absent: {doc}"
+    );
+
+    let _ = std::fs::remove_dir_all(&env.base);
+}
+
 #[test]
 fn e2e_waiting_input_leaves_task_and_status_shows_it() {
     let env = setup(
