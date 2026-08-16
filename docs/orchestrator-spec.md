@@ -1,7 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:7d136caad88346ceec1c32e58bd9e5dd2b1e29c3f7516985c2aaefbf77dbe494 -->
-
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:4c69e4ed342d09a3896c52979ff4ecf5d2e6f63a533a253618f2d091c7cd67d6 -->
 
 # What totsuka is
 
@@ -82,7 +81,9 @@ A single binary, run in the foreground.
 | `logs [-f] [--task <id>]` | Read or follow logs |
 | `completion <shell>` | Shell completions |
 
-Common flags are `--debug`, `--json`, `--dry-run`, and `--config <path>`. Every read-only command supports `--json` so other tools can consume it.
+Common flags are `--debug`, `--json`, `--dry-run`, and `--config <path>`. `--json` is available on the commands that print a document — `status`, `task list`, `task show`, `plugin list`, `doctor` — so other tools can consume them. `task export` needs no such flag, since NDJSON is the only thing it prints.
+
+Whenever you ask for machine-readable output, stdout carries the document and nothing else; anything advisory goes to stderr.
 
 `run --json` prints the run summary as a single JSON document on stdout and nothing else, so you can act on a run instead of reading it:
 

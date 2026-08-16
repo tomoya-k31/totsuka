@@ -1,8 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:63bf71671ed5f0d79d363c69e636aae703c80dd89e6f9797cba53a6a81218305 -->
-
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:4c37e0b60713e23a319cf19653d46b433e58386efc97d75215ca15cb2103edce -->
 
 # totsuka とは
 
@@ -83,7 +82,9 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 | `logs [-f] [--task <id>]` | ログの表示・追尾 |
 | `completion <shell>` | シェル補完の生成 |
 
-共通フラグは `--debug` / `--json` / `--dry-run` / `--config <path>`。読み取り専用のコマンドはすべて `--json` に対応しており、他のツールから使える。
+共通フラグは `--debug` / `--json` / `--dry-run` / `--config <path>`。`--json` はドキュメントを印字するコマンド — `status` / `task list` / `task show` / `plugin list` / `doctor` — に用意されており、他のツールから使える。`task export` にこのフラグは無い。印字するのが NDJSON だけだからである。
+
+機械可読な出力を求めたときは、標準出力にはそのドキュメントだけが載る。助言的なメッセージは標準エラーへ出る。
 
 `run --json` は実行サマリを JSON ドキュメント 1 件として標準出力に出し、それ以外は何も出さない。実行結果を読むのではなく、実行結果に基づいて動けるようになる。
 
