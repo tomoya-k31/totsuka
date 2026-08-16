@@ -110,8 +110,9 @@ above" / "already answered earlier").\
 # default for those profiles; answer / triage keep the text above.
 #
 # Same mechanism as `verification_rubric_artifact_url`: a *default* for the
-# `marker_self_report` leaf, not a `[prompts]` key. An operator override of
-# `marker_self_report` (global or per workflow) wins over this.
+# `marker_self_report` leaf, selected by the profile. Nothing overrides it —
+# an operator override of `marker_self_report` used to, until #465 removed the
+# override surface for exactly that reason.
 #
 # What changes: the marker stops meaning "totsuka decides completion" and
 # becomes the protocol for ASKING the human. The agent must not emit COMPLETED
@@ -192,8 +193,8 @@ verification_rubric = """
 #
 # It is a **rubric default**, not an extra section: it replaces
 # `verification_rubric` for those profiles rather than being appended, so the
-# existing precedence (workflow prompts > workflow rubric > global [prompts] >
-# this > the generic default) needs no new rule.
+# existing precedence (the workflow's own `rubric` > this > the generic
+# default) needs no new rule.
 #
 # Same grammatical constraint as `verification_rubric` above: this is read as a
 # *condition that must be TRUE*, never as an instruction. "Include the URL"

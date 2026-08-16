@@ -39,7 +39,7 @@ Slack 系（answer / triage）は無人前提で、totsuka が llm 検収で完�
 1. **`marker_self_report_confirm`**（`prompts/defaults.toml` の新キー）: design / implement profile の完了自己申告指示の既定。作業を終えたと思ったら COMPLETED を自分の判断で出さず、内容を要約して確認を求め `NEEDS_INPUT reason="完了確認待ち"` で停止する。COMPLETED は人間が会話上で明示承認した後にのみ出す。基底テキストが教えるもの（3 マーカー・ハートビート例外・配信契約）はすべて保持し、`missing_markers` 検証も同じ経路で効く
 2. **`verification_rubric_human_approval`**（同・新キー）: design / implement の llm 検収 rubric の既定。「この完了申告より前の会話で人間が明示的に承認しているか」を条件にする。ジャッジはセッション内で会話を見られるので、**確認を飛ばした COMPLETED はマーカー欠落を止めるのと同じ層で機械的にブロックされる**。triage は従来どおり成果物 URL 検収（#398）のまま
 
-配置は #398 の `verification_rubric_artifact_url` と同型: `[prompts]` キーではなく**既定の差し替え**であり、優先順位の梯子（workflow prompts > workflow rubric > グローバル `[prompts]` > profile 既定 > 汎用既定）に新しい規則を足さない。グローバル上書きが profile 既定に勝つギャップも #398 と同じ形で存在する（[設定リファレンス](/development/config-reference.md)に明記）。
+配置は #398 の `verification_rubric_artifact_url` と同型: `[prompts]` キーではなく**既定の差し替え**であり、優先順位の梯子に新しい規則を足さない。当時の梯子は workflow prompts > workflow rubric > グローバル `[prompts]` > profile 既定 > 汎用既定で、グローバル上書きが profile 既定に勝つギャップが #398 と同じ形で存在した。**[#465](https://github.com/tomoya-k31/totsuka/issues/465) が上書き面を削除してそのギャップを塞ぎ**、梯子は workflow の `rubric` > profile 既定 > 汎用既定の 3 段になった（[ADR-0023 の Amendment](/decisions/adr-0023-configurable-prompt-surface.md)）。
 
 適用は **profile のみ**。spelled-out 記法（`mode = "implement"` 手書き）は無変更 — #420 の permissions と同じ線引きで、既存 config の挙動をアップグレードで黙って変えない。
 
@@ -61,7 +61,7 @@ agent: <<STATUS:COMPLETED>>
 - design / implement の COMPLETED の意味が「人間が承認した」に変わる。llm ジャッジは完了の判定者ではなく、**確認プロトコルが守られたことの検査者**になる
 - 既知の制限（スコープ外）: `WaitingInput` 中の 2 回目の NEEDS_INPUT（修正指示 → 再確認）は冪等 no-op で**再通知が飛ばない**。attended pane では人間が会話の当事者なので実害は小さいと判断
 - エージェントの自走度（確認を求める前にどこまで進めるか）は各リポジトリの AGENTS.md / CLAUDE.md の責務で、totsuka のスコープ外
-- グローバル `[prompts].marker_self_report` を設定済みの構成は確認プロトコル版にならない（#398 と同じ documented gap）
+- ~~グローバル `[prompts].marker_self_report` を設定済みの構成は確認プロトコル版にならない（#398 と同じ documented gap）~~ → [#465](https://github.com/tomoya-k31/totsuka/issues/465) がそのキーごと削除して解消した
 
 # 不採用案
 

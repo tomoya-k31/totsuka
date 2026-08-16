@@ -79,164 +79,17 @@ pub struct RootConfig {
     /// Claude Code hook-event ingestion settings (#131: E-03, D-02, E-07).
     #[serde(default)]
     pub hooks: HooksConfig,
-    /// Prompt-text overrides (#314). Every key is optional and falls back to
-    /// the built-in default embedded in
-    /// [`prompts`](crate::prompts); a workflow can narrow them further via
-    /// [`WorkflowConfig::prompts`].
-    #[serde(default)]
-    pub prompts: PromptsConfig,
-}
-
-/// `[prompts]` — global overrides for the text injected into the AI tool
-/// (#314, epic #311).
-///
-/// Interpreted by [`prompts`](crate::prompts), not here: this struct only
-/// records what the operator wrote. Every field is `None` by default, meaning
-/// "use the built-in".
-///
-/// The markers themselves (`<<STATUS:COMPLETED>>` and friends) are **not**
-/// configurable — see the module docs of [`prompts`](crate::prompts).
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PromptsConfig {
-    /// Completion self-report instruction injected into every hook-capable
-    /// dispatch. Placeholders: `{marker_completed}` `{marker_needs_input}`
-    /// `{marker_failed}`.
-    #[serde(default)]
-    pub marker_self_report: Option<String>,
-    /// Instruction to create the task's branch, injected when the worktree is
-    /// handed over detached (implement mode, not resuming onto an existing
-    /// branch). No placeholders.
+    /// `[prompts]` — **removed in #465** (an amend of ADR-0023). Prompt text is
+    /// built-in only; the one surviving knob is [`WorkflowConfig::rubric`].
     ///
-    /// Not emitted in plan mode at all — a plan-mode pane cannot run git, so
-    /// the text would be unfollowable there regardless of what it says.
+    /// Parsed as an opaque table rather than dropped from the struct so a
+    /// config that still carries it fails with an error naming each key and
+    /// what became of it. Dropping the field would leave serde saying only
+    /// that `prompts` is an unknown field — true, but silent about the fact
+    /// that it used to be a supported table, which is the worst outcome for an
+    /// operator who wrote it on purpose (#465).
     #[serde(default)]
-    pub branch_convention: Option<String>,
-    /// Judging criteria of the llm-verification prompt hook. The per-workflow
-    /// [`rubric`](WorkflowConfig::rubric) key predates this and still wins for
-    /// the workflow that sets it.
-    #[serde(default)]
-    pub verification_rubric: Option<String>,
-    /// Intermediate-Stop exemption appended to the rubric.
-    #[serde(default)]
-    pub verification_background_exemption: Option<String>,
-    /// Non-claim exemption appended to the rubric: a Stop already reporting
-    /// NEEDS_INPUT/FAILED is not a completion claim, so the judge must not
-    /// block it (#389). Placeholders: `{marker_needs_input}` `{marker_failed}`.
-    #[serde(default)]
-    pub verification_nonclaim_exemption: Option<String>,
-    /// Marker convention appended to the rubric. Placeholders:
-    /// `{marker_completed}` `{marker_needs_input}` `{marker_failed}`.
-    #[serde(default)]
-    pub verification_marker_convention: Option<String>,
-    /// How the four keys above are assembled. Placeholders: `{rubric}`
-    /// `{background_exemption}` `{nonclaim_exemption}` `{marker_convention}`.
-    #[serde(default)]
-    pub verification_prompt: Option<String>,
-    /// Prose body of the opencode plan-mode agent file (#316). No
-    /// placeholders.
-    ///
-    /// **Global only** — one `agents/totsuka-plan.md` on disk backs every
-    /// opencode session, and `--agent totsuka-plan` has no per-workflow
-    /// dimension, which is why [`WorkflowPromptsConfig`] omits it.
-    ///
-    /// Body only: the YAML frontmatter carrying `permission: {edit: deny,
-    /// bash: deny, task: deny}` is fixed in Rust. Validation rejects a value
-    /// starting with `---`.
-    #[serde(default)]
-    pub opencode_plan_agent: Option<String>,
-}
-
-impl PromptsConfig {
-    /// The keys the operator actually set, as `(key name, value)` pairs.
-    /// Validation walks this instead of hard-coding the field list twice.
-    pub fn entries(&self) -> Vec<(&'static str, &str)> {
-        [
-            ("marker_self_report", &self.marker_self_report),
-            ("branch_convention", &self.branch_convention),
-            ("verification_rubric", &self.verification_rubric),
-            (
-                "verification_background_exemption",
-                &self.verification_background_exemption,
-            ),
-            (
-                "verification_nonclaim_exemption",
-                &self.verification_nonclaim_exemption,
-            ),
-            (
-                "verification_marker_convention",
-                &self.verification_marker_convention,
-            ),
-            ("verification_prompt", &self.verification_prompt),
-            ("opencode_plan_agent", &self.opencode_plan_agent),
-        ]
-        .into_iter()
-        .filter_map(|(k, v)| v.as_deref().map(|v| (k, v)))
-        .collect()
-    }
-}
-
-/// `[[workflows]].prompts` — the workflow-scoped subset of
-/// [`PromptsConfig`] (#314).
-///
-/// A separate type rather than a reuse of [`PromptsConfig`] because the two
-/// diverge: prompts that describe a shared on-disk asset (the opencode plan
-/// agent, #316) are global-only, since one file backs every session. Keeping
-/// them distinct means `deny_unknown_fields` rejects a global-only key written
-/// under a workflow, naming it — no extra validation needed. `serde(flatten)`
-/// would have deduplicated the fields but silently disables
-/// `deny_unknown_fields`, turning a typo into a silent no-op.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowPromptsConfig {
-    /// See [`PromptsConfig::marker_self_report`].
-    #[serde(default)]
-    pub marker_self_report: Option<String>,
-    /// See [`PromptsConfig::branch_convention`].
-    #[serde(default)]
-    pub branch_convention: Option<String>,
-    /// See [`PromptsConfig::verification_rubric`].
-    #[serde(default)]
-    pub verification_rubric: Option<String>,
-    /// See [`PromptsConfig::verification_background_exemption`].
-    #[serde(default)]
-    pub verification_background_exemption: Option<String>,
-    /// See [`PromptsConfig::verification_nonclaim_exemption`].
-    #[serde(default)]
-    pub verification_nonclaim_exemption: Option<String>,
-    /// See [`PromptsConfig::verification_marker_convention`].
-    #[serde(default)]
-    pub verification_marker_convention: Option<String>,
-    /// See [`PromptsConfig::verification_prompt`].
-    #[serde(default)]
-    pub verification_prompt: Option<String>,
-}
-
-impl WorkflowPromptsConfig {
-    /// The keys this workflow actually set — see [`PromptsConfig::entries`].
-    pub fn entries(&self) -> Vec<(&'static str, &str)> {
-        [
-            ("marker_self_report", &self.marker_self_report),
-            ("branch_convention", &self.branch_convention),
-            ("verification_rubric", &self.verification_rubric),
-            (
-                "verification_background_exemption",
-                &self.verification_background_exemption,
-            ),
-            (
-                "verification_nonclaim_exemption",
-                &self.verification_nonclaim_exemption,
-            ),
-            (
-                "verification_marker_convention",
-                &self.verification_marker_convention,
-            ),
-            ("verification_prompt", &self.verification_prompt),
-        ]
-        .into_iter()
-        .filter_map(|(k, v)| v.as_deref().map(|v| (k, v)))
-        .collect()
-    }
+    pub prompts: toml::Table,
 }
 
 /// Hook-event ingestion settings from `[hooks]` (#131).
@@ -562,18 +415,18 @@ pub struct WorkflowConfig {
     /// Criteria text embedded into the llm-verification prompt hook. Only
     /// meaningful with `verification = "llm"` (validation warns otherwise).
     ///
-    /// Predates `[prompts]` (#314) and is kept working: it outranks
-    /// [`PromptsConfig::verification_rubric`] because both are about this
-    /// workflow, and letting a newly-added global key silently override every
-    /// existing per-workflow `rubric` would be a real regression. It loses only
-    /// to [`prompts.verification_rubric`](WorkflowPromptsConfig::verification_rubric)
-    /// on the same workflow.
+    /// **The only prompt knob there is** since #465 removed the `[prompts]`
+    /// surface. It predates that surface (it is older than #314) and outlived
+    /// it: of the fifteen keys #314 added, this is the one an operator ever
+    /// set. It beats the profile's rubric, which is what makes it useful —
+    /// see [`Prompts::resolve_for`](crate::prompts::Prompts::resolve_for).
     #[serde(default)]
     pub rubric: Option<String>,
-    /// Prompt overrides scoped to this workflow (#314) — the strongest layer,
-    /// above `[prompts]` and above [`rubric`](Self::rubric).
+    /// `[[workflows]].prompts` — **removed in #465**, same treatment as
+    /// [`RootConfig::prompts`]: parsed opaquely so validation can name each key
+    /// instead of leaving a bare unknown-field error.
     #[serde(default)]
-    pub prompts: WorkflowPromptsConfig,
+    pub prompts: toml::Table,
     /// Explicit AI-tool pin for this workflow (#196) — the strongest level of
     /// the tool precedence (workflow > repo > `default_tool`). Use it when the
     /// flow's shape demands a specific tool (e.g. `verification = "llm"`

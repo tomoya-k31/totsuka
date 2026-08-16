@@ -55,7 +55,7 @@ herdr の `compose_prompt` が `{extra_context}\n\n---\n{task_body}` を組み�
 
 ## D3 — 既存の `prompts` テーブルに統合しない
 
-`[prompts]` / `[[workflows]].prompts`（#314）の 7 キーとは別のトップレベルフィールドにする。
+`[prompts]` / `[[workflows]].prompts`（#314）のキー群とは別のトップレベルフィールドにする（その 2 面は [#465](https://github.com/tomoya-k31/totsuka/issues/465) で削除されたが、`initial_prompt` は別レイヤなので影響を受けない）。
 
 | | `prompts.*` | `initial_prompt` |
 |---|---|---|
@@ -66,7 +66,7 @@ herdr の `compose_prompt` が `{extra_context}\n\n---\n{task_body}` を組み�
 
 `defaults.toml` に 8 キー目として置くと「空文字列の既定値」という異質な行が入り、`embedded_defaults_toml_parses` の「空でないこと」テストも例外扱いになる。
 
-グローバル既定（`[prompts]` 相当の層）も作らない。作ると「置換か連結か」という優先順位の問いが新たに生まれる。ワークフローは数個なのでコピペで足りる。
+グローバル既定（`[prompts]` 相当の層）も作らない。作ると「置換か連結か」という優先順位の問いが新たに生まれる。ワークフローは数個なのでコピペで足りる。（#465 がその `[prompts]` 自体を削除したので、この判断は結果的に先回りになった。）
 
 ## D4 — テンプレート変数を持たない
 
@@ -104,7 +104,7 @@ core が但し書きを自動で足すと、`initial_prompt` に書いた内容�
 
 ## 引き受けたコスト
 
-- **指示の置き場が増えた。** `[prompts]` / `[[workflows]].prompts` / `rubric` / `initial_prompt` / ソースプラグインの `*_instructions` が並存する。層が違う説明は [config.toml リファレンス](/development/config-reference.md) に置いたが、「どこに書くか」を最初に迷う面は増えた
+- **指示の置き場が増えた。** `[prompts]` / `[[workflows]].prompts` / `rubric` / `initial_prompt` / ソースプラグインの `*_instructions` が並存する。層が違う説明は [config.toml リファレンス](/development/config-reference.md) に置いたが、「どこに書くか」を最初に迷う面は増えた（この並存は [#465](https://github.com/tomoya-k31/totsuka/issues/465) が前 2 者を削除して `rubric` / `initial_prompt` / プラグインの `*_instructions` の 3 つに減った）
 - **無人ハングを踏める口を増やした。** D6 のとおり実装でもドキュメントでも面倒を見ない
 - **実機検収は未了。** mock プラグインでは `extra_context` が組み立てられたことまでしか確かめられず、pane に実際に打ち込まれてエージェントが指示どおり動くかは実機でしか見えない
 

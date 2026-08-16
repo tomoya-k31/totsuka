@@ -54,7 +54,7 @@ totsuka が `--settings` で渡すファイル（`crates/orchestrator-core/src/h
 
 ## 3. 散文の所有者が割れていた
 
-返信の作法（`reply_instructions`）は `plugins/task-source-slack/src/defaults.toml` の `[prompts]` にあり、ADR-0023 の枠組みで `[[workflows]].prompts` から上書きできる。一方で起票の作法だけを `[tools]` の system prompt に置くと、**ワークフロー固有の散文がワークフロー横断のツールプロファイルに入る**。これは #324 自身が「ProjectsV2 の情報を `[tools]` に置かない理由」として挙げた罠と同じ構造である。
+返信の作法（`reply_instructions`）は `plugins/task-source-slack/src/defaults.toml` の `[prompts]` にあり、ADR-0023 の枠組みで `plugins/slack.toml` の `[prompts]` から上書きできる。一方で起票の作法だけを `[tools]` の system prompt に置くと、**ワークフロー固有の散文がワークフロー横断のツールプロファイルに入る**。これは #324 自身が「ProjectsV2 の情報を `[tools]` に置かない理由」として挙げた罠と同じ構造である。
 
 # Decision
 
@@ -168,7 +168,7 @@ core 側で正規表現判定する mode を作れば 3 ツール共通・決定
 
 ## 良くなること
 
-- 散文の置き場が 1 つに決まる。Slack の返信の作法と起票の作法が同じ `[prompts]` に並び、同じ上書き機構（ADR-0023）で調整できる
+- 散文の置き場が 1 つに決まる。Slack の返信の作法と起票の作法が同じ `[prompts]` に並び、同じ上書き機構（ADR-0023）で調整できる（プラグイン側の `[prompts]` は #465 のスコープ外なので、この面は今も上書きできる）
 - 散文が **ツール可搬** になる。opencode でも手順が届く（可視 `extra_context` に降りる）
 - `orchestrator-core` にドメイン固有の散文が入らない。#324 が掲げた「変更は `plugins/task-source-slack` と設定ファイルに閉じる」が core 改修なしで維持される
 - 禁止事項の一部（`gh api` / `git push` / Edit / Write）が散文から **deny という実効的な制限** に格上げされる

@@ -98,7 +98,7 @@ pub fn verify_assets(paths: &Paths, cfg: &RootConfig) -> Vec<AssetIssue> {
         verify_one(&dir.join(name), content.as_bytes(), 0o700, &mut issues);
     }
     for wf in &cfg.workflows {
-        let rendered = render_settings(&dir, cfg, wf);
+        let rendered = render_settings(&dir, wf);
         verify_one(
             &settings_path(paths, &wf.name),
             rendered.as_bytes(),
@@ -177,7 +177,7 @@ pub fn install(paths: &Paths, cfg: &RootConfig) -> io::Result<()> {
         write_if_changed(&dir.join(name), content.as_bytes(), 0o700)?;
     }
     for wf in &cfg.workflows {
-        let rendered = render_settings(&dir, cfg, wf);
+        let rendered = render_settings(&dir, wf);
         write_if_changed(&settings_path(paths, &wf.name), rendered.as_bytes(), 0o600)?;
     }
     Ok(())
@@ -194,7 +194,7 @@ pub fn install(paths: &Paths, cfg: &RootConfig) -> io::Result<()> {
 /// opencode by its own agent-file deny map, and neither so much as opens this
 /// file. Branching on the resolved tool would only add a case where a
 /// repository-level `tool` override silently changes what this file contains.
-pub fn render_settings(dir: &Path, cfg: &RootConfig, wf: &WorkflowConfig) -> String {
+pub fn render_settings(dir: &Path, wf: &WorkflowConfig) -> String {
     let script = |name: &str| dir.join(name).to_string_lossy().into_owned();
 
     let mut stop = vec![json!({
@@ -204,7 +204,7 @@ pub fn render_settings(dir: &Path, cfg: &RootConfig, wf: &WorkflowConfig) -> Str
         // The workflow's own `rubric` replaces just that leaf; the exemption,
         // the marker convention, and how the three are assembled come from the
         // prompt registry (#313).
-        let prompt = Prompts::resolve_for(cfg, wf).verification_prompt();
+        let prompt = Prompts::resolve_for(wf).verification_prompt();
         stop.push(json!({
             "hooks": [{ "type": "prompt", "prompt": prompt, "timeout": 60 }]
         }));
@@ -683,7 +683,7 @@ agent = "herdr"
         };
 
         let answer = profile_cfg("answer");
-        let rendered = render_settings(Path::new("/hooks"), &answer, &answer.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &answer.workflows[0]);
         assert!(write_if_changed(&path, rendered.as_bytes(), 0o600).unwrap());
         assert!(
             !write_if_changed(&path, rendered.as_bytes(), 0o600).unwrap(),
@@ -693,7 +693,7 @@ agent = "herdr"
         // Same workflow name, a profile with a different deny set: the file has
         // to be replaced, not left alone.
         let design = profile_cfg("design");
-        let rendered = render_settings(Path::new("/hooks"), &design, &design.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &design.workflows[0]);
         assert!(
             write_if_changed(&path, rendered.as_bytes(), 0o600).unwrap(),
             "a changed deny set must be written through"
@@ -876,7 +876,7 @@ output = "source"
 verification = "llm"
 "#,
         );
-        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
         let stop = stop_hooks(&rendered);
         assert_eq!(stop.len(), 2, "command + prompt hook");
         let prompt = &stop[1]["hooks"][0];
@@ -915,7 +915,7 @@ verification = "llm"
 rubric = "回答は対象リポジトリの実調査に基づくこと"
 "#,
         );
-        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
         let stop = stop_hooks(&rendered);
         assert_eq!(stop.len(), 2);
         let text = stop[1]["hooks"][0]["prompt"].as_str().unwrap();
@@ -950,7 +950,7 @@ profile = "{profile}"
 agent = "herdr"
 "#
             ));
-            let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+            let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
             let stop = stop_hooks(&rendered);
             assert_eq!(stop.len(), 2, "command + prompt hook for {profile}");
             assert_eq!(stop[1]["hooks"][0]["type"], "prompt", "{profile}");
@@ -970,7 +970,7 @@ profile = "answer"
 agent = "herdr"
 "#,
         );
-        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
         let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
 
         let deny: Vec<&str> = v["permissions"]["deny"]
@@ -1010,7 +1010,7 @@ profile = "implement"
 agent = "herdr"
 "#,
         );
-        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
         let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(v["permissions"]["defaultMode"], "auto", "{rendered}");
         assert!(v["permissions"].get("deny").is_none(), "{rendered}");
@@ -1033,7 +1033,7 @@ profile = "{profile}"
 agent = "herdr"
 "#
             ));
-            let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+            let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
             let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
             assert_eq!(
                 v["permissions"]["defaultMode"], "auto",
@@ -1059,7 +1059,7 @@ mode = "plan"
 agent = "herdr"
 "#,
         );
-        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
         let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert!(v.get("permissions").is_none(), "{rendered}");
     }
@@ -1082,7 +1082,7 @@ agent = "herdr"
 output = "source"
 "#,
         );
-        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
         let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert!(v.get("permissions").is_none(), "{rendered}");
     }
@@ -1101,7 +1101,7 @@ profile = "design"
 agent = "herdr"
 "#,
         );
-        let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+        let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
         let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         let deny = v["permissions"]["deny"].to_string();
         assert!(!deny.contains("gh issue comment"), "{deny}");
@@ -1125,7 +1125,7 @@ output = "none"
 verification = "{mode}"
 "#
             ));
-            let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+            let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
             let stop = stop_hooks(&rendered);
             assert_eq!(
                 stop.len(),
@@ -1153,7 +1153,7 @@ output = "source"
 verification = "{verification}"
 "#
             ));
-            let rendered = render_settings(Path::new("/hooks"), &cfg, &cfg.workflows[0]);
+            let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
             let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
             let entry = &v["hooks"]["UserPromptSubmit"][0];
             assert!(
@@ -1179,11 +1179,7 @@ agent = "herdr"
 output = "source"
 "#,
         );
-        let rendered = render_settings(
-            Path::new("/xdg/data/totsuka/hooks"),
-            &cfg,
-            &cfg.workflows[0],
-        );
+        let rendered = render_settings(Path::new("/xdg/data/totsuka/hooks"), &cfg.workflows[0]);
         let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(
             v["hooks"]["Stop"][0]["hooks"][0]["command"],

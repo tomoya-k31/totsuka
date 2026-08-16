@@ -1,17 +1,21 @@
 ---
 type: Decision
 title: ADR-0023 AI ツールへ差し込むプロンプトは設定可能にし、実行を決める面は設定不可のまま残す
-description: claude/codex/opencode へ注入するプロンプト文をコードから外出しし config.toml から上書き可能にする一方、スクリプト・argv・permission ブロック・ステータスマーカーは設定不可のまま残す決定。上書きはインライン文字列のみで、ファイルパス指定と TOTSUKA_PROMPTS_* env は不採用。マーカー規約を失う上書きは検証エラーで止める。
+description: claude/codex/opencode へ注入するプロンプト文をコードから外出しし config.toml から上書き可能にする一方、スクリプト・argv・permission ブロック・ステータスマーカーは設定不可のまま残す決定。上書きはインライン文字列のみで、ファイルパス指定と TOTSUKA_PROMPTS_* env は不採用。2026-08-17 に amend し、上書き面（[prompts] と [[workflows]].prompts の 15 キー）は撤回して組み込み専用へ戻した。残る上書きは [[workflows]].rubric 1 キーのみ。
 resource: https://github.com/tomoya-k31/totsuka/issues/311
 tags: [decision, prompt, config, security, marker, adr]
-generated: { by: human:tomoya-k31, at: 2026-07-31T03:00:00+09:00 }
+generated: { by: human:tomoya-k31, at: 2026-08-17T07:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
 
 # Status
 
-Accepted（2026-07-30、エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311)）。
+Accepted（2026-07-30、エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311)）、**一部 amended（2026-08-17、[#465](https://github.com/tomoya-k31/totsuka/issues/465)）**。
+
+**決定 1 の後半「設定で上書き可能にする」を撤回した。** core の `[prompts]` / `[[workflows]].prompts` は削除され、プロンプト文は組み込み専用に戻った。残る上書き面は `[[workflows]].rubric` 1 キーのみである。**決定 1 の前半（`defaults.toml` への外出し）と、決定 2〜5 は生きている** — 撤回したのは設定面だけで、「何を伝えるか / 何が動くか」の一線も、インライン文字列のみという方針も、マーカーを失う出力を検査するという方針も変わらない。詳細と根拠は下の Amendment を参照。
+
+以下の Decision / Consequences は **2026-07-30 時点の決定として読むこと**。設定面に言及している箇所は Amendment が上書きする。
 
 [ADR-0020](/decisions/adr-0020-status-marker-stays.md)（マーカー存置）を **supersede しない** — 本 ADR はその決定を前提に、マーカーを「教える散文」だけを設定可能にする。
 [ADR-0004](/decisions/adr-0004-hook-completion-signal.md)（llm 検収はセッション内 prompt 型 Stop フック）、
@@ -133,10 +137,81 @@ claude / codex / opencode に差し込むプロンプト文が Rust の文字列
 |---|---|---|
 | [#312](https://github.com/tomoya-k31/totsuka/issues/312) | `template` モジュール抽出（シングルパスレンダラの共通化） | 完了 |
 | [#313](https://github.com/tomoya-k31/totsuka/issues/313) | `prompts` レジストリ + 埋め込み `defaults.toml`（挙動保存） | 完了 |
-| [#314](https://github.com/tomoya-k31/totsuka/issues/314) | `[prompts]` / `[[workflows]].prompts` の設定面 | 完了 |
+| [#314](https://github.com/tomoya-k31/totsuka/issues/314) | `[prompts]` / `[[workflows]].prompts` の設定面 | 完了 → **#465 で撤回** |
 | [#317](https://github.com/tomoya-k31/totsuka/issues/317) | agent-ide-orca | 完了 |
 | [#315](https://github.com/tomoya-k31/totsuka/issues/315) | 検証（決定 4）+ doctor の上書き数表示 + 本 ADR | 本 ADR と同時 |
 | [#316](https://github.com/tomoya-k31/totsuka/issues/316) | opencode plan エージェント（frontmatter は固定） | 完了 |
 | [#318](https://github.com/tomoya-k31/totsuka/issues/318) | task-source-slack | 完了 |
 
 決定 2 の表のうち plan エージェントの frontmatter の行、および決定 4 の `opencode_plan_agent` に対する frontmatter 検査は #316 で実装済みである。#318（task-source-slack）はプラグイン側の `plugins/slack.toml` を使うため core の `[prompts]` とは独立しており、これでエピックの全段が入った。
+
+# Amendment（2026-08-17、#465）: 設定面の撤回
+
+## 何を撤回したか
+
+| 面 | 2026-07-30 | 2026-08-17 以降 |
+|---|---|---|
+| `[prompts]`（グローバル 8 キー） | 上書き可 | **削除** |
+| `[[workflows]].prompts`（7 キー） | 上書き可 | **削除** |
+| `[[workflows]].rubric` | 上位 2 面に負けるレガシー | **唯一の上書き面**。profile 既定に勝ち、組み込みに勝つ |
+| `defaults.toml` への外出し（決定 1 前半） | 採用 | 変更なし |
+| 決定 2（何が動くかは変えない一線） | 採用 | 変更なし。むしろ面が減って守りやすくなった |
+| 決定 3（インライン文字列のみ） | 採用 | 変更なし（対象が `rubric` 1 キーになった） |
+| 決定 4（マーカー規約の検査） | 設定値に対する検査 | **検査対象が変わった**。組み込み `defaults.toml` に対する単体テストになり、設定に対しては `rubric` のプレースホルダ検査だけが残る |
+| 決定 5（`TOTSUKA_PROMPTS_*` は作らない） | 採用 | 変更なし |
+
+優先順位の梯子は 5 段から 3 段になった: `[[workflows]].rubric` > profile 既定（[#398](https://github.com/tomoya-k31/totsuka/issues/398) の成果物 URL 検収 / [#440](https://github.com/tomoya-k31/totsuka/issues/440) の人間承認検収） > 組み込み既定。
+
+## なぜ
+
+### 1. 設計が 2 週間で追い越した
+
+`defaults.toml` の 11 キーのうち config に露出していたのは 8 キーで、**露出していない 3 キーはすべて `[prompts]` より後に入り、profile が自動選択するもの**だった。
+
+| 日付 | 出来事 |
+|---|---|
+| 2026-07-30 | `[prompts]` 15 ノブ（本 ADR） |
+| 2026-08-07 | `verification_nonclaim_exemption` 追加（[#390](https://github.com/tomoya-k31/totsuka/issues/390)） |
+| 2026-08-09 | `verification_rubric_artifact_url` 追加 — **設定不可**（#398） |
+| 2026-08-13 | `marker_self_report_confirm` / `verification_rubric_human_approval` 追加 — **どちらも設定不可**（#440） |
+
+「新しい葉は profile が選び、設定はしない」が出荷から 2 週間で既定路線になった。残っていた 15 ノブは、その路線が確立する前の地層である。
+
+### 2. ノブが実際にバグを生んでいた
+
+梯子でグローバル `[prompts]` が profile 既定より**強かった**ため、キーを 1 つ書くだけで後から入った検収が黙って無効化された。設定リファレンスにも [ADR-0033](/decisions/adr-0033-workflow-profile.md) にも [ADR-0043](/decisions/adr-0043-human-approved-completion.md) にも「documented gap」として書いてあったが、書いてあること自体が問題だった:
+
+- `[prompts].verification_rubric` を設定済み → `triage` workflow が **URL 検収にならない**
+- `[prompts].marker_self_report` を設定済み → `design` / `implement` workflow が **確認プロトコルにならない**
+
+**どちらも症状は「検収が緩くなる」方向**、つまり気づきにくい方向へ倒れる。梯子を逆順にする案（profile が勝つ）は「全 workflow に対して既に選ばれた文言を後から入った profile が黙って覆す」という対称の悪さがあり、これは**梯子の順序の問題ではなく、グローバルな面が存在することの問題**だった。残した `rubric` はワークフロー単位なので、運用者が見ていないワークフローに届かない。
+
+### 3. 使用実績（根拠としては弱い）
+
+実運用 config に `[prompts]` / `[workflows.prompts]` は 1 つも無く、唯一のプロンプト調整は `[[workflows]].rubric` — 本 ADR より前からあるキーだった。**この根拠は弱い**（期間 2.5 週間・運用者 1 人）ので、1 と 2 の補強材料として扱う。実際、残すキーを選ぶ判断にはこれが効いた。
+
+## 正面から受け入れ直すコスト
+
+**`defaults.toml` は `include_str!` でバイナリに埋め込まれるので、編集にはリビルドが要る。** `[prompts]` を消すと、**リビルドなしでプロンプトを変える経路が無くなる**。
+
+これは本 ADR の Context がまさに問題視していたこと（「文言を調整するたびにコード変更とリビルドが必要」）であり、本 amendment は**その問題を意図的に受け入れ直す**決定である。前提が変わったからで、当時「運用上のチューニング対象」と見ていたプロンプト文は、2 週間後には profile と検収機構に結びついた**動作の一部**だと判明した。動作の一部を再ビルドなしに差し替えられることは利点ではない。
+
+`rubric` だけを残したのは、そこだけが今も本当にチューニング対象だからである。ただし `rubric` も `config.toml` の編集を要するので、「リビルド不要」の利益は完全には失われていない。
+
+## 撤回しなかったもの
+
+- **決定 2 の一線。** プロンプトはスクリプト・argv・permission ブロックを変えられない。面が減ったぶん守りやすくなっただけで、緩めていない
+- **`ALLOWED_PLACEHOLDERS` とマーカー検査。** 組み込みプロンプト同士の組み立て（`verification_prompt` が 4 つの葉を埋める）はノブを消しても続く。**消したのは「設定値の検証」であって「組み立ての検証」ではない** — 後者はむしろ強くなり、`defaults.toml` 自身が `ALLOWED_PLACEHOLDERS` に照らして検査されるようになった（従来は運用者が書いた値だけが検査され、全ビルドに載るアセットのタイポは無検査だった）
+- **プラグイン側の `[prompts]`。** `plugins/slack.toml`（11 キー、[#318](https://github.com/tomoya-k31/totsuka/issues/318)）と `plugins/{github,notion}.toml`（#398）は対象外である。あちらは LLM 向けのプロンプトのみで、悪い上書きの被害が返信案の質低下に留まり完了検知を壊せない。危険度が違うので同じ判断を機械的には適用しない
+
+## 移行
+
+`[prompts]` / `[[workflows]].prompts` は**パースはされ、検証で落ちる**。素の `unknown field` で落とすと、運用者が意図して書いた文言に対して「そのキーは無い」としか言わないことになるため、キーごとに何になったかを名指しするエラーを別途用意した。
+
+```text
+[prompts] sets `verification_rubric`, which was removed in favour of built-in
+prompt text → write the criteria as `rubric` on the workflow itself — the one
+prompt key that survived
+```
+
+移行期間は置かない。既存ファイルの母数が 0 だからである（実運用 config・dotfiles・リポジトリ内 fixture のいずれにも `[prompts]` は無い）。
