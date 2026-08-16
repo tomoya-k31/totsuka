@@ -16,7 +16,7 @@ pub enum EngineError {
 }
 
 /// A repository the engine can target (paths already expanded).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RepoSettings {
     /// Repository name (config `[[repositories]].name`).
     pub name: String,
