@@ -72,7 +72,7 @@ enum Command {
         watch: bool,
         /// Report what would happen without executing anything.
         ///
-        /// **A no-op since protocol 0.2.0**: every task source pushes
+        /// A no-op since protocol 0.2.0: every task source pushes
         /// (`task/submit`) rather than being fetched on demand, so there is
         /// nothing to preview ahead of time and the only output is the
         /// sentence saying so. Kept because the flag is a documented part of
@@ -81,6 +81,10 @@ enum Command {
         /// Refused together with `--json` for the same reason: a JSON envelope
         /// around an empty preview would promise machine-readable output that
         /// does not exist.
+        //
+        // No markdown emphasis in help text: clap prints doc comments
+        // verbatim, so `**...**` would paint literal asterisks in a terminal.
+        // No other command's `--help` in this binary does that.
         #[arg(long, conflicts_with = "json")]
         dry_run: bool,
         /// One-shot's quiet-period floor in milliseconds (default 2000) before
