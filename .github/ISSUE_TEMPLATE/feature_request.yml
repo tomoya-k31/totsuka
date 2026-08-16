@@ -13,6 +13,6 @@ body:
     id: proposal
     attributes:
       label: Proposed solution
-      description: What would you like totsuka to do? Reference the spec (ai-docs/product) if relevant.
+      description: What would you like totsuka to do? Reference the spec (docs/orchestrator-spec.md) if relevant.
     validations:
       required: false

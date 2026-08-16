@@ -19,6 +19,8 @@ docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 | a dependency change in `Cargo.toml` / `Cargo.lock` | Rust set **plus** `cargo audit` and `cargo deny check`. If the tools are missing, install them once (`cargo install cargo-audit cargo-deny`); if that is not possible, do NOT silently skip — state it in the PR body and treat the `cargo-audit / cargo-deny` check (`audit.yml`, which fires on these paths) as the gate in post-PR monitoring |
 | any `*.md` anywhere | `rumdl check .` — Markdown lint (below) |
 | `ai-docs/**` | **Docs checks** (below) + the docs obligation |
+| one of the 5 generation sources under `ai-docs/` (see the `human-docs` skill) | regenerate the matching `docs/` pages with the **`human-docs` skill** in the same PR, then `bash scripts/docs-freshness.sh` |
+| `docs/**` | `bash scripts/docs-freshness.sh` to zero errors + `rumdl check .`. Do **not** run `okf-lint` on it — it is not an OKF bundle |
 | a prose `*.md` outside the OKF/vendored exclusions and outside `.claude/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
 | `.github/workflows/**` | read the SHA-pin + `ubuntu-slim` rules, validate YAML (`yq . <file>`); if you changed `ci.yml`'s commands, also run the affected Rust set |
 | `.claude/**` (settings / hooks / rules) | validate JSON (`python3 -m json.tool .claude/settings.json`); no Rust, no `.ja.md` |
@@ -110,6 +112,11 @@ post-PR you still monitor all checks that report on your PR.
 **Docs checks** — when `ai-docs/**` changed:
 
 - `bash scripts/okf-lint.sh ai-docs` to zero errors.
+- If you touched one of the 5 sources that `docs/` is generated from, use the
+  **`human-docs` skill** to regenerate the matching pages in the same PR and get
+  `bash scripts/docs-freshness.sh` to zero errors. CI runs that check inside the
+  `lint` job, so skipping it fails the PR — and **the check only proves the
+  pages are not stale, never that their content is right** (→ ADR-0047).
 - Docs obligation: if a trigger applies (design decision / new component /
   API·schema·infra change / release), update the relevant `ai-docs/` concept plus
   its `index.md` / `log.md` in the **same** PR (→ CLAUDE.md, ai-docs/CLAUDE.md).

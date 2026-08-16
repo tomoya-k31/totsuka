@@ -53,7 +53,7 @@ cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
 ```
 
 This installs the CLI only. Plugins are built from a checkout — see
-[the plugin development guide](ai-docs/development/plugin-dev-guide.md).
+[the plugin development guide](docs/plugin-dev-guide.md).
 
 ## Quickstart (5 minutes, 1 task)
 
@@ -90,19 +90,21 @@ and writes only directories plus a fully commented config skeleton. `setup`
 fills that skeleton in, so running `init` first is harmless but unnecessary.
 
 New machine, dev checkout, token rotation, and recovery are covered end to end
-in the [setup playbook](ai-docs/operations/setup-playbook.md) (Japanese).
+in the [setup playbook](docs/setup-playbook.md).
 
 ## Documentation
 
-All project knowledge lives in [`ai-docs/`](./ai-docs/), an
-[Open Knowledge Format (OKF) v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)
-Knowledge Bundle.
+- **What totsuka is**: [docs/orchestrator-spec.md](./docs/orchestrator-spec.md)
+- **Setup playbook**: [docs/setup-playbook.md](./docs/setup-playbook.md)
+- **Configuration reference**: [docs/config-reference.md](./docs/config-reference.md)
+- **Operations guide** (doctor / worktree cleanup / FAQ): [docs/operations-guide.md](./docs/operations-guide.md)
+- **Plugin development guide**: [docs/plugin-dev-guide.md](./docs/plugin-dev-guide.md)
+- **Table of contents**: [docs/index.md](./docs/index.md) · **Changelog**: [CHANGELOG.md](./CHANGELOG.md)
 
-- **Product spec**: [ai-docs/product/orchestrator-spec.ja.md](./ai-docs/product/orchestrator-spec.ja.md)
-- **Configuration reference**: [ai-docs/development/config-reference.md](./ai-docs/development/config-reference.md)
-- **Plugin development guide**: [ai-docs/development/plugin-dev-guide.md](./ai-docs/development/plugin-dev-guide.md)
-- **Operations guide** (doctor / worktree cleanup / FAQ): [ai-docs/operations/operations-guide.md](./ai-docs/operations/operations-guide.md)
-- **Table of contents**: [ai-docs/index.md](./ai-docs/index.md) · **Changelog**: [CHANGELOG.md](./CHANGELOG.md)
+Those pages are generated from [`ai-docs/`](./ai-docs/), an
+[Open Knowledge Format (OKF) v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)
+Knowledge Bundle holding the repository's full knowledge — design decisions,
+measurements, and history. Read that if you are working on totsuka itself.
 
 ## Contributing
 

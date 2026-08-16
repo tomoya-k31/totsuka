@@ -4,6 +4,8 @@
 
 * **Creation**: AI 用 OKF バンドルを `ai-docs/` へ分離し、人間用 `docs/` を `ai-docs/` からの生成物にする決定を記録した（[ADR-0047](/decisions/adr-0047-ai-docs-human-docs-split.md)、[#458](https://github.com/tomoya-k31/totsuka/issues/458)）。隠しディレクトリ `.ai-docs/` は `rg` と `okf-search.sh` の走査の双方から不可視になることを実測して不採用。
 * **Update**: バンドルを `docs/` から `ai-docs/` へ移設し、参照側を追随させた（CI の `okf-lint.yml`、PostToolUse フック、`.gitattributes`、`.rumdl.toml`、OKF スクリプト 5 本の既定 `bundleDir`、`CLAUDE.md` / rules / skills、README、Rust ソースの doc コメントと GitHub blob URL 11 箇所）。
+* **Creation**: 人間向け `docs/` を `ai-docs/` から生成する仕組みを入れた（[ADR-0048](/decisions/adr-0048-human-docs-freshness-check.md)、[#458](https://github.com/tomoya-k31/totsuka/issues/458)）。生成は `human-docs` スキルによる編集的変換（frontmatter 除去に留まらず内部 issue 番号・判断過程・実測ログを落とす）で、同期は生成ページに埋めたソースの content hash を `scripts/docs-freshness.sh` が照合する形。**保証するのは「古くない」ことだけで、内容の正しさは PR レビューが引き受ける。** 検査スクリプトは `--marker` でマーカー行を印字するだけで `docs/` を書き換えない — hash だけ更新して内容を古いまま残す近道を作らないため。
+* **Update**: README / README.ja のドキュメント一覧、ユーザ向け実行時メッセージ 2 箇所（`config/validate.rs` のスキーマ版数エラー、`task-source-slack` のプレースホルダ警告）、issue テンプレートの spec 参照を、生成された `docs/` へ切り替えた（[ADR-0047](/decisions/adr-0047-ai-docs-human-docs-split.md) の Consequences に暫定として挙げていた 4 件）。CI は `okf-lint.yml` の `lint` ジョブ内のステップとして鮮度検査を走らせる（このジョブ名が必須チェックのコンテキストなので、ruleset を変えずに必須化される）。
 
 ## 2026-08-15
 

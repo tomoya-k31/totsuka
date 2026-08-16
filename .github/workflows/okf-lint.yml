@@ -9,10 +9,13 @@ on:
     branches: [main]
     paths:
       - "ai-docs/**"
+      # 人間向け docs/ は ai-docs/ からの生成物なので、鮮度検査の対象になる
+      - "docs/**"
       # 元帳のビルダー / lint 本体だけを触った変更でも main を検証する
       # (log.md と index.md は生成物になったので、生成側の回帰は ai-docs/ を
       #  1 バイトも変えずに入りうる)
       - "scripts/okf-*.sh"
+      - "scripts/docs-freshness.sh"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,3 +39,10 @@ jobs:
       # リンク切れも落としたい場合は --strict を付ける。
       - name: Run okf-lint
         run: bash scripts/okf-lint.sh ai-docs
+
+      # 人間向け docs/ が ai-docs/ の現在の内容から作られているかを検査する。
+      # 検査するのは「古くないこと」だけで、内容の正しさは PR レビューが引き受ける
+      # (ADR-0047)。このジョブ名 `lint` は必須チェックのコンテキストなので、
+      # ここにステップとして足すことで ruleset を変えずに必須化される。
+      - name: Check docs freshness
+        run: bash scripts/docs-freshness.sh docs

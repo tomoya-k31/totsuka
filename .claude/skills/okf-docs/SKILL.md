@@ -45,6 +45,12 @@ description: ai-docs/ 配下（OKF Knowledge Bundle）へのドキュメント�
    新しい concept を望みの位置に置きたいときは生成後に行を移動してよい。
 7. **lint を実行**: `bash scripts/okf-lint.sh ai-docs` を実行し、エラーがゼロになるまで修正する
    （`log-sync` / `index-sync` が落ちたら手順 6 を実行し忘れている）
+8. **人間向け docs/ の生成元を触ったなら作り直す**: 触ったファイルが
+   `development/config-reference.md` / `development/plugin-dev-guide.md` /
+   `operations/setup-playbook.md` / `operations/operations-guide.md` /
+   `product/orchestrator-spec(.ja).md` のいずれかなら、**`human-docs` スキル**で
+   対応する `docs/` のページを作り直し、`bash scripts/docs-freshness.sh` を
+   0 error にする。CI の `lint` ジョブが同じ検査をするので、飛ばすと PR が落ちる
 
 ## コード変更時のドキュメント要否判定
 
