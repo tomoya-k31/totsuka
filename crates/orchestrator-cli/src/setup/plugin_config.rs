@@ -138,28 +138,31 @@ mod tests {
     };
     use crate::setup::recipes::{Blank, RECIPES};
 
-    fn answers_for(recipe: usize) -> Answers {
+    fn answers_for(recipe: &str) -> Answers {
         Answers {
             version: super::super::answers::ANSWERS_VERSION,
-            recipe,
+            recipe: recipe.to_string(),
             repositories: vec![RepositoryAnswer {
                 name: "totsuka".to_string(),
                 path: "/tmp".to_string(),
                 summary: None,
             }],
             secret_backend: SecretBackend::Keychain,
-            llm: RECIPES[recipe]
+            llm: crate::setup::recipes::by_key(recipe)
+                .unwrap()
                 .blanks
                 .contains(&Blank::Llm)
                 .then(|| LlmAnswer {
                     base_url: "https://openrouter.ai/api/v1".to_string(),
                     model: "anthropic/claude-haiku-4-5".to_string(),
                 }),
-            slack_user_id: RECIPES[recipe]
+            slack_user_id: crate::setup::recipes::by_key(recipe)
+                .unwrap()
                 .blanks
                 .contains(&Blank::SlackUserId)
                 .then(|| "U123456".to_string()),
-            github: RECIPES[recipe]
+            github: crate::setup::recipes::by_key(recipe)
+                .unwrap()
                 .blanks
                 .contains(&Blank::GitHub)
                 .then(|| GitHubAnswer {
@@ -177,8 +180,8 @@ mod tests {
         // rather than "it parses as TOML". A missing required key or a renamed
         // one produces a file the orchestrator hands over at `initialize` and
         // the plugin rejects — long after `setup` reported success.
-        for (index, recipe) in RECIPES.iter().enumerate() {
-            let answers = answers_for(index);
+        for recipe in RECIPES {
+            let answers = answers_for(recipe.key);
             for draft in drafts_for(&answers, recipe) {
                 // Held uninterpreted by the orchestrator first (F-64) …
                 let raw = orchestrator_core::config::PluginRawConfig::from_toml_str(&draft.body)
@@ -213,8 +216,8 @@ mod tests {
         // no draft is the failure this module exists to prevent, and it would
         // otherwise be invisible until run time.
         const NEEDS_A_FILE: &[&str] = &["github", "slack"];
-        for (index, recipe) in RECIPES.iter().enumerate() {
-            let drafts = drafts_for(&answers_for(index), recipe);
+        for recipe in RECIPES {
+            let drafts = drafts_for(&answers_for(recipe.key), recipe);
             let written: Vec<&str> = drafts.iter().map(|d| d.name).collect();
             for plugin in recipe.plugins {
                 if NEEDS_A_FILE.contains(&plugin.name) {
@@ -238,8 +241,8 @@ mod tests {
 
     #[test]
     fn tokens_appear_only_as_references() {
-        for (index, recipe) in RECIPES.iter().enumerate() {
-            for draft in drafts_for(&answers_for(index), recipe) {
+        for recipe in RECIPES {
+            for draft in drafts_for(&answers_for(recipe.key), recipe) {
                 for line in draft.body.lines().filter(|l| l.contains("token")) {
                     assert!(
                         line.contains("keychain:totsuka/"),
@@ -256,7 +259,7 @@ mod tests {
         // Defaulting this wrong is not a formatting nit: `user(login:)` and
         // `organization(login:)` are different GraphQL roots, so an org board
         // polled as a user returns nothing, with no error to explain it.
-        let mut answers = answers_for(0);
+        let mut answers = answers_for(RECIPES[0].key);
         let github = answers.github.as_mut().unwrap();
         github.owner_type = GitHubOwnerType::Organization;
         let drafts = drafts_for(&answers, &RECIPES[0]);

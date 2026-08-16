@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:7678fa46bb165dc60a8826b1d70406fc49c62c419918ebc3717c3ea41f8c1cb9 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:0e5008a0b115a4460df3ee83452435dfecf70ad92eba8dac3bfc219e5f3d238d -->
 
 # セットアップ Playbook
 
@@ -148,16 +148,16 @@ totsuka setup
 
 ### 同じ設定を別マシンで再現したい
 
-回答ファイルを保存して持っていく。**機密は構造的に入りえない**（回答の形式にトークンを表す項目が存在しない）ので、dotfiles に置いても安全である。
+回答ファイルを保存して持っていく。**`setup` は機密の値をファイルに書かない**（どのバックエンドを使うかを記録し、値の登録コマンドを印字するだけである）ので、`setup` が生成したファイルは dotfiles に置いても安全である。
 
 ```bash
 totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
 totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes
 ```
 
-`--answers` は hidden フラグなので `--help` には出ない。
-
 シークレットの登録だけは各マシンで人間が行う。
+
+このファイルは書いたビルドとは別のビルドが読むので、形式は契約として扱われる。古いファイルの意味が変わるような変更では `version` が上がり、版の違うファイルは**推測されずに拒否される**（作り直すよう案内が出る）。レシピは番号ではなく名前（`recipe = "minimal-github-herdr"`）で指定するので、メニューにレシピが増えても、持ち歩いているファイルの指す先が黙って変わることはない。
 
 ### `doctor` が赤いまま
 

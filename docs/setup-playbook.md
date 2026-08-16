@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:7678fa46bb165dc60a8826b1d70406fc49c62c419918ebc3717c3ea41f8c1cb9 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:0e5008a0b115a4460df3ee83452435dfecf70ad92eba8dac3bfc219e5f3d238d -->
 
 # Setup playbook
 
@@ -147,16 +147,16 @@ One exception: the all-comments template that `totsuka init` writes is treated a
 
 ### You want the same configuration on another machine
 
-Save the answers file and take it with you. **Secrets cannot structurally end up in it** — the answer format has no field that could hold a token — so it is safe to keep in your dotfiles.
+Save the answers file and take it with you. **`setup` never writes a secret value into it** — it records which backend to use and prints the commands to register the values — so a file it generated is safe to keep in your dotfiles.
 
 ```bash
 totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
 totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes
 ```
 
-`--answers` is a hidden flag, so it does not appear in `--help`.
-
 Registering the secrets themselves is still done by a human on each machine.
+
+The file is read by a different build than wrote it, so the format is treated as a contract: a change that would alter what an older file means bumps its `version`, and a file from another version is **refused rather than guessed at** — it tells you to regenerate it. The recipe is named (`recipe = "minimal-github-herdr"`), not numbered, so adding a recipe to the menu never silently repoints a file you have been carrying around.
 
 ### doctor is still red
 

@@ -159,19 +159,25 @@ totsuka setup
 
 ## 同じ設定を別マシンで再現したい
 
-回答ファイルを保存して持っていく。**機密は構造的に入りえない**（回答の型が `deny_unknown_fields` で、トークンを表すフィールドが存在しない）ので、dotfiles に置いても安全:
+回答ファイルを保存して持っていく。**`setup` は機密の値をファイルに書かない**（どのバックエンドを使うかを記録し、値の登録コマンドを印字するだけ）ので、`setup` が生成したファイルは dotfiles に置いても安全:
 
 ```bash
 totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
 ```
 
-読み込む側は hidden フラグなので `--help` には出ない:
+読み込む側:
 
 ```bash
 totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes
 ```
 
 シークレットの登録だけは各マシンで人間がやる。
+
+**別マシン・別バージョンで読まれる前提のファイルなので、形式は契約として扱う**（#466）:
+
+- 意味が変わる変更では `version` を上げ、**版が違うファイルは推測せず拒否する**（`→ regenerate it by running totsuka setup interactively` を案内）。版はファイルの他の部分より先に読むので、フィールドの型が変わった版でも「version が違う」と言える
+- `recipe` は**安定キー**（`recipe = "minimal-github-herdr"`）であってメニュー位置ではない。位置だと、レシピを 1 つ挿入するだけで既存ファイルが黙って隣のレシピを選ぶ — 範囲チェックは通り、`version` も動かないので誰も気づけない
+- 存在しないキーを書いたときのエラーは、実在するキーを列挙する
 
 ## `doctor` が赤いまま
 

@@ -46,11 +46,17 @@ enum Command {
     /// Fill the config in interactively: pick a starting recipe, answer a few
     /// questions, review the plan. Never handles secret values.
     Setup {
-        /// Read answers from a file instead of asking (testing affordance).
-        #[arg(long, hide = true)]
+        /// Replay a saved answers file instead of asking.
+        ///
+        /// The non-interactive form of this command, and the pair to
+        /// `--save-answers`: answer once, keep the file, and set up the next
+        /// machine from it. `setup` never writes a secret value into the file —
+        /// it records which backend to use and prints the register commands —
+        /// so a generated one is safe in a dotfiles repository.
+        #[arg(long, value_name = "FILE")]
         answers: Option<PathBuf>,
-        /// Write the collected answers to a file.
-        #[arg(long)]
+        /// Write the collected answers to a file, to replay with `--answers`.
+        #[arg(long, value_name = "FILE")]
         save_answers: Option<PathBuf>,
         /// Show the plan and stop without writing.
         #[arg(long)]

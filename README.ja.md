@@ -89,6 +89,16 @@ totsuka run             # 実行: fetch -> dispatch -> 監視 -> publish
 ディレクトリと全行コメントの雛形しか書きません。`setup` はその雛形を埋めるので、
 先に `init` を打っても害はありませんが不要です。
 
+`setup` には非対話の形もあります。1 度答えてファイルを残しておけば、次のマシンは
+そこから立ち上げられます。`setup` は機密の値をファイルに書きません（どのバックエンド
+を使うかを記録し、値の登録コマンドを印字するだけです）。したがって `setup` が生成
+したファイルは dotfiles にコミットしても安全です。
+
+```sh
+totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
+totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes   # 次のマシンで
+```
+
 新マシン・開発機・トークンローテーション・復旧は
 [セットアップ Playbook](docs/setup-playbook.ja.md) が通しで扱います。
 
