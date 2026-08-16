@@ -148,3 +148,5 @@ worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane
 - **通知が来ない**: `[plugins.{notifier}] enabled` と `notifier` プラグイン疎通を `doctor` で確認。配送失敗はタスク実行を止めない（F-93）
 
 リリース前の実機確認は [リリース前手動チェックリスト](/quality/release-checklist.md) を参照。
+
+<!-- 鮮度検査の赤を実測するための一時的な変更（#458 受け入れ条件）。この PR はマージしない。 -->
