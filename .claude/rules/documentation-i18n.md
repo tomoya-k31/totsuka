@@ -6,6 +6,8 @@ paths:
   - "*.md"
   - "ai-docs/**/*.md"
   - "ai-docs/**/*.ja.md"
+  - "docs/**/*.md"
+  - "docs/**/*.ja.md"
 ---
 
 # Documentation rules — bilingual en / ja
@@ -40,9 +42,18 @@ paths:
 - Use relative links. Keep code blocks, commands, paths, and identifiers in
   English in both versions; translate prose only.
 
+## The human-facing `docs/` tree is generated
+
+`docs/` is generated from `ai-docs/` (→ ADR-0047). Both languages are produced
+by the `human-docs` skill, so the rule above still holds — but **do not
+hand-edit one language to fix a wording problem**. Fix it at the source or
+regenerate both, then keep the `generated-from` marker in step. `docs/index.md`
+and `docs/index.ja.md` are the exception: they are hand-written.
+
 ## Out of scope (do NOT create `.ja.md` for these)
 
-- Open Knowledge Format (OKF): `**/index.md`, `**/log.md`.
+- Open Knowledge Format (OKF): `**/index.md`, `**/log.md` (this covers the OKF
+  bundle's `index.md`, not the hand-written `docs/index.md` pair above).
 - Vendored / build output: `node_modules/`, `dist/`, `.next/`, `build/` — and
   anything else listed in `.gitignore`.
 - Claude system prompts: `.claude/**/*.md`.

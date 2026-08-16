@@ -12,6 +12,9 @@ owner: tomoya-k31
 
 # totsuka — Local AI-Agent Orchestrator Requirements Specification
 
+> **This file is the source for the human-facing `docs/orchestrator-spec.md`.** After changing it, regenerate that page with the `human-docs` skill; `scripts/docs-freshness.sh` checks this in CI.
+<!-- generates: docs/orchestrator-spec.md -->
+
 - Status: Draft v0.2 (imported from `orchestrator-requirements.md`)
 - Product name: totsuka (十束剣)
 - Created: 2026-07-12
@@ -279,6 +282,7 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 | Command | Purpose |
 |---|---|
 | `init` | Generate configuration scaffolding, environment check |
+| `setup` | Interactive first-time setup from a recipe (added after this table was first written; see the setup playbook) |
 | `run [--watch]` | Main loop from task intake (push, `task/submit`) to dispatch (one-shot by default; `--watch` stays up receiving pushes until shutdown — see Open Question #2, resolved) |
 | `status [--json]` | List running / queued / waiting tasks and worktrees |
 | `task list / show <id> / cancel <id> / retry <id>` | Individual task operations |

@@ -53,7 +53,7 @@ cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
 ```
 
 こちらは CLI のみです。プラグインはチェックアウトからビルドします —
-[プラグイン開発ガイド](ai-docs/development/plugin-dev-guide.md) を参照してください。
+[プラグイン開発ガイド](docs/plugin-dev-guide.ja.md) を参照してください。
 
 ## クイックスタート（5 分・1 タスク）
 
@@ -90,18 +90,20 @@ totsuka run             # 実行: fetch -> dispatch -> 監視 -> publish
 先に `init` を打っても害はありませんが不要です。
 
 新マシン・開発機・トークンローテーション・復旧は
-[セットアップ Playbook](ai-docs/operations/setup-playbook.md) が通しで扱います。
+[セットアップ Playbook](docs/setup-playbook.ja.md) が通しで扱います。
 
 ## ドキュメント
 
-このリポジトリの知識はすべて [`ai-docs/`](./ai-docs/)（OKF v0.2 準拠の Knowledge
-Bundle）で管理しています。
+- **totsuka とは**: [docs/orchestrator-spec.ja.md](./docs/orchestrator-spec.ja.md)
+- **セットアップ Playbook**: [docs/setup-playbook.ja.md](./docs/setup-playbook.ja.md)
+- **設定リファレンス**: [docs/config-reference.ja.md](./docs/config-reference.ja.md)
+- **運用ガイド**（doctor / worktree 掃除 / FAQ）: [docs/operations-guide.ja.md](./docs/operations-guide.ja.md)
+- **プラグイン開発ガイド**: [docs/plugin-dev-guide.ja.md](./docs/plugin-dev-guide.ja.md)
+- **目次**: [docs/index.ja.md](./docs/index.ja.md) · **変更履歴**: [CHANGELOG.md](./CHANGELOG.md)
 
-- **仕様書**: [ai-docs/product/orchestrator-spec.ja.md](./ai-docs/product/orchestrator-spec.ja.md)
-- **設定リファレンス**: [ai-docs/development/config-reference.md](./ai-docs/development/config-reference.md)
-- **プラグイン開発ガイド**: [ai-docs/development/plugin-dev-guide.md](./ai-docs/development/plugin-dev-guide.md)
-- **運用ガイド**（doctor / worktree 掃除 / FAQ）: [ai-docs/operations/operations-guide.md](./ai-docs/operations/operations-guide.md)
-- **目次**: [ai-docs/index.md](./ai-docs/index.md) · **変更履歴**: [CHANGELOG.md](./CHANGELOG.md)
+これらのページは [`ai-docs/`](./ai-docs/)（OKF v0.2 準拠の Knowledge Bundle）から
+生成しています。設計判断・実測・経緯まで含むリポジトリの全知識はそちらにあるので、
+totsuka 自体を開発する場合はそちらを読んでください。
 
 ## コントリビュート
 

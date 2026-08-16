@@ -9,6 +9,9 @@ status: stable
 owner: tomoya-k31
 ---
 
+> **このファイルは人間向け `docs/plugin-dev-guide.md` / `.ja.md` の生成元である。** 変更したら `human-docs` スキルで生成物も作り直すこと（`scripts/docs-freshness.sh` が CI で検査する）。
+<!-- generates: docs/plugin-dev-guide.md docs/plugin-dev-guide.ja.md -->
+
 # 概要
 
 プラグインは **stdio 上で JSON-RPC 2.0（1 行 1 メッセージ = NDJSON）を話す単一実行バイナリ**。3 種の kind がある: `task_source`（タスク供給）、`agent_ide`（エージェント駆動）、`notifier`（通知）。プロトコルの単一の正は [plugin-protocol クレート](/components/plugin-protocol.md)（型定義を公開）。

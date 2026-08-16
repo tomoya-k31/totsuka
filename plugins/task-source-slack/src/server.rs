@@ -261,7 +261,7 @@ where
             tracing::warn!(
                 key,
                 placeholder,
-                "slack prompt override references an unknown placeholder → it will be rendered literally; check the key's allowed placeholders in ai-docs/development/config-reference.md"
+                "slack prompt override references an unknown placeholder → it will be rendered literally; check the key's allowed placeholders in docs/config-reference.md"
             );
         }
         // Without an explicit `[[repos]]`, the orchestrator's own
