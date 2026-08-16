@@ -59,10 +59,14 @@ pub enum TaskCommand {
         task: Option<i64>,
         /// Omit the `detail` field.
         ///
-        /// **Not a redaction feature** — the same content is already reachable
-        /// through `task show --json`. It is here because `detail` carries the
-        /// agent's accumulated terminal output on the publish transitions,
-        /// which makes rows arbitrarily large.
+        /// This is NOT a redaction feature — the same content is already
+        /// reachable through `task show --json`. It is here because `detail`
+        /// carries the agent's accumulated terminal output on the publish
+        /// transitions, which makes rows arbitrarily large.
+        //
+        // No markdown emphasis in help text: clap prints doc comments
+        // verbatim, so `**...**` would paint literal asterisks in a terminal.
+        // No other command's `--help` in this binary does that.
         #[arg(long)]
         no_detail: bool,
     },

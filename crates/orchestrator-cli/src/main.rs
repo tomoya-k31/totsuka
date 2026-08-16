@@ -103,7 +103,8 @@ enum Command {
         #[command(flatten)]
         json: common::JsonFlag,
     },
-    /// Operate on individual tasks (list / show / cancel / retry).
+    /// Operate on individual tasks (list / show / cancel / retry / verify /
+    /// export).
     Task {
         #[command(subcommand)]
         cmd: task_cmd::TaskCommand,
