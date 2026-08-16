@@ -16,7 +16,7 @@
 //! The prose that *teaches* the marker convention is data. The convention
 //! itself is not: [`MARKER_COMPLETED`] and friends are the wire format that
 //! `on-stop.sh` (bash) and `totsuka-opencode.js` parse, and per
-//! [ADR-0020](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0020-status-marker-stays.md)
+//! [ADR-0020](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0020-status-marker-stays.md)
 //! the marker is the one completion signal shared by all three tools. Prompt
 //! text changes what the model is *told*; it never changes what *runs*.
 //!

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Totsuka is an AI-driven dev-flow automation tool (detects task instructions and orchestrates them to AI agents via a Socket API, working with `herdr`). The repo is a Rust workspace (see the root `Cargo.toml` for the member crates); all project knowledge lives in the `docs/` OKF bundle.
+Totsuka is an AI-driven dev-flow automation tool (detects task instructions and orchestrates them to AI agents via a Socket API, working with `herdr`). The repo is a Rust workspace (see the root `Cargo.toml` for the member crates); all project knowledge lives in the `ai-docs/` OKF bundle.
 
 ## Code Intelligence (Rust / rust-analyzer)
 
@@ -25,30 +25,30 @@ After writing or editing code, check LSP diagnostics before moving on. Fix type 
 
 If rust-analyzer becomes slow or unstable on this workspace (large monorepo), it's fine to disable it temporarily with `/plugin disable rust-analyzer-lsp@claude-plugins-official` and fall back to Grep.
 
-## Documentation (`docs/` = OKF Knowledge Bundle)
+## Documentation (`ai-docs/` = OKF Knowledge Bundle)
 
-All knowledge about this repository lives in `docs/`, an [OKF v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)-compliant Knowledge Bundle.
+All knowledge about this repository lives in `ai-docs/`, an [OKF v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)-compliant Knowledge Bundle.
 
 ### Reading (progressive disclosure)
 
-Do not scan all of `docs/` at once. Always follow this order:
+Do not scan all of `ai-docs/` at once. Always follow this order:
 
-1. `docs/index.md` — top-level table of contents: which directory holds what
+1. `ai-docs/index.md` — top-level table of contents: which directory holds what
 2. The `index.md` of the relevant directory — its concept list with one-line summaries
 3. Only then open the specific concept file(s) you actually need
 
-Start from `docs/decisions/index.md` for past design decisions, `docs/operations/index.md` for runbooks, `docs/glossary/index.md` for terminology, and `docs/log.md` for a summary of recent changes.
+Start from `ai-docs/decisions/index.md` for past design decisions, `ai-docs/operations/index.md` for runbooks, `ai-docs/glossary/index.md` for terminology, and `ai-docs/log.md` for a summary of recent changes.
 
 For cross-cutting queries by frontmatter (e.g. "all `type: Decision` docs", "everything `status: deprecated`"), use the `okf-search` skill (`scripts/okf-search.sh`) instead of walking every `index.md` by hand.
 
 ### Writing
 
-Before creating or updating anything under `docs/`, **always** read `docs/CLAUDE.md` first and follow its rules (frontmatter, `type` vocabulary, index/log update obligations, when to write). Use the `okf-docs` skill when it's available.
+Before creating or updating anything under `ai-docs/`, **always** read `ai-docs/CLAUDE.md` first and follow its rules (frontmatter, `type` vocabulary, index/log update obligations, when to write). Use the `okf-docs` skill when it's available.
 
 ### Obligation when changing code
 
-Work involving design decisions, new components, API/schema/infra changes, incident response, or releases must update the corresponding docs and `index.md`/`log.md` **in the same PR** — follow the trigger table in `docs/CLAUDE.md`.
+Work involving design decisions, new components, API/schema/infra changes, incident response, or releases must update the corresponding docs and `index.md`/`log.md` **in the same PR** — follow the trigger table in `ai-docs/CLAUDE.md`.
 
 ### Verification
 
-After changing docs, run `bash scripts/okf-lint.sh docs` and get it to zero errors before finishing. A PostToolUse hook (`.claude/settings.json`) also runs this automatically after edits under `docs/`, and CI (`.github/workflows/okf-lint.yml`) runs it on PRs touching `docs/**`.
+After changing docs, run `bash scripts/okf-lint.sh ai-docs` and get it to zero errors before finishing. A PostToolUse hook (`.claude/settings.json`) also runs this automatically after edits under `ai-docs/`, and CI (`.github/workflows/okf-lint.yml`) runs it on PRs touching `ai-docs/**`.

@@ -622,7 +622,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// `human` when the task's AI tool cannot run llm verification.
     ///
     /// `llm` verification is an in-session prompt-type `Stop` hook running the
-    /// rubric ([ADR-0004](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0004-hook-completion-signal.md)
+    /// rubric ([ADR-0004](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0004-hook-completion-signal.md)
     /// decision 2), and only Claude-kind tools have prompt-type hooks —
     /// `hooks::render_settings` emits the rubric hook into Claude's
     /// `--settings` file, while Codex registers command-type hooks only and

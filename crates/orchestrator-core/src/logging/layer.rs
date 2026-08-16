@@ -110,7 +110,7 @@ where
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let meta = event.metadata();
         // Prompt/payload fields are only ever logged at debug+ (convention in
-        // docs/development/logging-conventions.md), so a stray `info!(prompt=…)`
+        // ai-docs/development/logging-conventions.md), so a stray `info!(prompt=…)`
         // cannot leak the body even with `log_prompts = true`.
         let allow_prompts = self.log_prompts
             && matches!(*meta.level(), tracing::Level::DEBUG | tracing::Level::TRACE);

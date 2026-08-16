@@ -26,7 +26,7 @@ stable。[#338](https://github.com/tomoya-k31/totsuka/pull/338) /
 | worktree 名が `{source}-{task_id}` | `slack-C0AGK11DMM4-1785487852.720219` | `slack-C0AGK11DMM4-1785491581.396559` |
 | detached で引き渡す | ✓（`branch` は最後まで NULL） | ✓（ディスパッチ直後に `rev-parse --abbrev-ref HEAD` = `HEAD` を実測） |
 | `base_commit` 記録 | ✓ `dotfiles` の `origin/master` と一致 | ✓ `origin/main` と一致 |
-| **エージェントが規約に従って命名** | — （plan は git を実行できない） | ✓ **`docs/glossary-pane`** |
+| **エージェントが規約に従って命名** | — （plan は git を実行できない） | ✓ **`ai-docs/glossary-pane`** |
 | ブランチ作成 → コミットの順序 | — | ✓ コミット 1 件がブランチ上（detached には無い） |
 | **push と PR 作成もエージェントが行う（F-86 撤回）** | — | ✓ エージェントが自分で push し [#352](https://github.com/tomoya-k31/totsuka/pull/352) を作成した |
 | HEAD 同期が記録 | ✓ NULL のまま（正しい） | ✓ `recorded the agent's branch` |
@@ -38,7 +38,7 @@ stable。[#338](https://github.com/tomoya-k31/totsuka/pull/338) /
 プロンプト遵守に依存する箇所だった。エージェントは
 `.claude/rules/git-conventions.md` の `<type>/<slug>`（type ∈
 `feat|fix|docs|style|refactor|perf|test|chore|revert`、小文字・`-` 区切り）を読み、
-「`docs/glossary/` に用語を 1 つ追加」という依頼に対して `docs/glossary-pane` を
+「`ai-docs/glossary/` に用語を 1 つ追加」という依頼に対して `ai-docs/glossary-pane` を
 選んだ。コミットメッセージも Conventional Commits になっており、規約を読んで
 従っていることが二重に確認できた。**旧実装が生成していた
 `agent/slack-C0AGK11DMM4-1785491581.396559` では到達しえない名前**である。

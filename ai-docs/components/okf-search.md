@@ -12,7 +12,7 @@ status: stable
 
 `docs/` バンドル内の concept ファイルを、本文ではなく frontmatter のフィールド（`type` / `status` / `owner` / `resource` / `tags` と OKF v0.2 の `generated` / `verified` / `sources` / `stale_after`）をクエリキーとして絞り込む。本文の全文検索は行わない — 絞り込んだファイル一覧を呼び出し元（`okf-search` スキル / Claude）に渡し、実際の内容抽出・要約は AI 側が行う。
 
-frontmatter は OKF バンドル運用における「クエリ・フィルタ・インデックス対象の小さなフィールド集合」であり、本ツールはその役割を活かす検索インターフェースにあたる。`docs/CLAUDE.md` の progressive disclosure（index.md を辿る読み方）を置き換えるものではなく、ディレクトリ横断的な条件検索を補うもの。
+frontmatter は OKF バンドル運用における「クエリ・フィルタ・インデックス対象の小さなフィールド集合」であり、本ツールはその役割を活かす検索インターフェースにあたる。`ai-docs/CLAUDE.md` の progressive disclosure（index.md を辿る読み方）を置き換えるものではなく、ディレクトリ横断的な条件検索を補うもの。
 
 # 公開インターフェース
 
@@ -30,7 +30,7 @@ scripts/okf-search.sh [bundleDir=docs] [フィルタ...] [出力オプション]
   字下げ行を直前のトップレベルキーの続きとして解釈する。
 - 依存: bash 3.2+, POSIX awk/grep/sed のみ（`scripts/okf-lint.sh` と同方針。追加の外部依存なし）。
 - 値の引用符は YAML の構文であって値の一部ではないので、**外してから比較・表示する**。`description` は
-  ` #` や `: ` を含む場合に引用が必須（`docs/CLAUDE.md`）で、外さないと表示に `"` が混ざり、
+  ` #` や `: ` を含む場合に引用が必須（`ai-docs/CLAUDE.md`）で、外さないと表示に `"` が混ざり、
   `--field KEY=VALUE` の完全一致も引用符の有無で外れる（#304）。
 
 # Examples
@@ -46,5 +46,5 @@ bash scripts/okf-search.sh --list-values trust
 
 # 依存先
 
-- `docs/CLAUDE.md` の frontmatter テンプレート・type 語彙表に準拠する
+- `ai-docs/CLAUDE.md` の frontmatter テンプレート・type 語彙表に準拠する
 - `.claude/skills/okf-search/SKILL.md` から呼び出される（クエリ→フィルタ翻訳、絞り込み、該当ファイルのみ読んでAI抽出、という手順を定義）

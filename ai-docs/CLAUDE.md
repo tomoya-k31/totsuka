@@ -64,7 +64,7 @@ sources:                                    # 出典があるときだけ
 ## 書ける構造（YAML 部分集合）
 
 v0.2 で `sources` などのネストが必要になったため、本バンドルは次の部分集合に限定する。
-逸脱は `bash scripts/okf-lint.sh docs` の `fm-yaml` が検出する。
+逸脱は `bash scripts/okf-lint.sh ai-docs` の `fm-yaml` が検出する。
 
 - インデントは **0 / 2 / 4 スペースのみ**。タブは使えない
 - ブロックシーケンス項目は `  - `（インデント 2）で始める
@@ -299,7 +299,7 @@ lint は書式だけ受け付ける状態にしてあるので、必要になっ
 - **コンフリクトしたときの解決は 1 手**（判断は要らない）:
 
   ```bash
-  bash scripts/okf-log-build.sh && git add docs/log.md
+  bash scripts/okf-log-build.sh && git add ai-docs/log.md
   ```
 
 # 検証（CI / hooks）
@@ -307,8 +307,8 @@ lint は書式だけ受け付ける状態にしてあるので、必要になっ
 ドキュメントを変更したら必ず lint を通すこと:
 
 ```bash
-bash scripts/okf-lint.sh docs          # 下記チェックをエラーとして報告
-bash scripts/okf-lint.sh docs --strict # 加えてリンク切れもエラー化
+bash scripts/okf-lint.sh ai-docs          # 下記チェックをエラーとして報告
+bash scripts/okf-lint.sh ai-docs --strict # 加えてリンク切れもエラー化
 ```
 
 構造チェック:
@@ -332,7 +332,7 @@ bash scripts/okf-lint.sh docs --strict # 加えてリンク切れもエラー化
 どちらも直し方は同じで、ビルダーを実行するだけ:
 
 ```bash
-bash scripts/okf-log-build.sh    # docs/log.md を作り直す
+bash scripts/okf-log-build.sh    # ai-docs/log.md を作り直す
 bash scripts/okf-index-build.sh  # 各 index.md の一覧を正規化する
 ```
 
@@ -356,5 +356,5 @@ PostToolUse hook（`.claude/settings.json`）により、docs 配下の編集後
 v0.1 形式で書かれたファイルを機械的に v0.2 へ寄せる変換スクリプトがある（冪等・`--dry-run` 付き）:
 
 ```bash
-bash scripts/okf-migrate-v02.sh docs --dry-run
+bash scripts/okf-migrate-v02.sh ai-docs --dry-run
 ```

@@ -6,7 +6,7 @@
 # 呼び出し元（Claude / okf-search スキル）が読み、実際の抽出・要約は AI 側で行う設計。
 #
 # 使い方:
-#   scripts/okf-search.sh [bundleDir=docs] [フィルタ...] [出力オプション]
+#   scripts/okf-search.sh [bundleDir=ai-docs] [フィルタ...] [出力オプション]
 #
 # フィルタ（すべて AND。未指定のキーはフィルタしない）:
 #   --type VALUE          type の完全一致
@@ -170,7 +170,7 @@ while [ $# -gt 0 ]; do
     ;;
   esac
 done
-BUNDLE="${BUNDLE:-docs}"
+BUNDLE="${BUNDLE:-ai-docs}"
 
 [ -d "$BUNDLE" ] || {
   echo "okf-search: bundle directory not found: $BUNDLE" >&2
@@ -188,7 +188,7 @@ cat >"$AWK_PROG" <<'AWK'
 function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
 
 # 引用符は YAML の構文であって値の一部ではない（`: ` や ` #` を含む
-# description は引用が必須 — docs/CLAUDE.md）。外してから比較・表示する。
+# description は引用が必須 — ai-docs/CLAUDE.md）。外してから比較・表示する。
 function unquote(s,   n) {
   n = length(s)
   if (n >= 2 && substr(s, 1, 1) == "\"" && substr(s, n, 1) == "\"") {

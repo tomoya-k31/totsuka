@@ -54,7 +54,7 @@ const STATIC_ASSETS: &[(&str, &str, u32)] = &[(
 /// [`prompts`](crate::prompts::Prompts::opencode_plan_agent);
 /// `config::validate` additionally rejects a body starting with `---`.
 ///
-/// [ADR-0023]: https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0023-configurable-prompt-surface.md
+/// [ADR-0023]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0023-configurable-prompt-surface.md
 const PLAN_AGENT_FRONTMATTER: &str = "\
 ---
 description: totsuka の plan/design モード用エージェント。読み取り専用で計画のみ作成し、編集・コマンド実行・サブエージェント委譲は行わない。

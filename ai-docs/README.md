@@ -34,7 +34,7 @@ tags: [meta, okf]
 ## 検証
 
 ```bash
-bash scripts/okf-lint.sh docs
+bash scripts/okf-lint.sh ai-docs
 ```
 
 CI（GitHub Actions）でも同じチェックが走ります。ローカルで通してから push してください。

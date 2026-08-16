@@ -27,7 +27,7 @@ disable = [
   # 相対リンクの存在検査。rumdl 0.2.43 の MD057 は相対リンクを「そのファイルのある
   # ディレクトリ」ではなく「プロセスの CWD」基準で解決するため、リポジトリルートから
   # `rumdl check .` すると実在するリンクを軒並み存在しないと誤検知する
-  # （`cd docs/operations && rumdl check index.md` では同じリンクが通ることを確認済み）。
+  # （`cd ai-docs/operations && rumdl check index.md` では同じリンクが通ることを確認済み）。
   # リンク検査は lychee に一本化する（scripts/okf-lint.sh と CI の lychee ステップ）。
   "MD057",
 ]
@@ -43,10 +43,10 @@ disable = [
 # エージェントへ渡すプロンプト本体（frontmatter + 地の文）。上と同じ理由。
 "crates/orchestrator-core/src/hooks/*.md" = ["MD041"]
 
-# docs/log.d/ は docs/log.md の**材料**（#360）。1 ファイル = ログエントリ本体で、
+# ai-docs/log.d/ は ai-docs/log.md の**材料**（#360）。1 ファイル = ログエントリ本体で、
 # 見出しを持たないのが仕様である（`## YYYY-MM-DD` は生成側 okf-log-build.sh が出す）。
 # 断片に H1 を足すと生成結果に紛れ込むので MD041 は除外する。
-"docs/log.d/*.md" = ["MD041"]
+"ai-docs/log.d/*.md" = ["MD041"]
 
 # README は 1 行目が言語スイッチャ（`> 🌐 **English** · [日本語](README.ja.md)`）で
 # 始まる規約（.claude/rules/documentation-i18n.md）。H1 はその次の行に置く。
@@ -56,5 +56,5 @@ disable = [
 # 要件定義書は F-NN の要件表を主構造とし、その合間の補足を `**ラベル**` で置いている。
 # 見出しに変換すると要件表の間に見出しが割り込み、F 番号で辿る構造が壊れるため
 # MD036 のみ除外する。
-"docs/product/orchestrator-spec.md" = ["MD036"]
-"docs/product/orchestrator-spec.ja.md" = ["MD036"]
+"ai-docs/product/orchestrator-spec.md" = ["MD036"]
+"ai-docs/product/orchestrator-spec.ja.md" = ["MD036"]

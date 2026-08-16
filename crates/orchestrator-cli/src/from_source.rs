@@ -10,7 +10,7 @@
 //!
 //! Everything here is a pure function or a plain filesystem read — the one
 //! place that actually spawns `cargo` is `plugin_cmd`'s `from_source_sources`.
-//! That split is deliberate: `docs/quality/test-strategy.md` (ADR-0018) forbids
+//! That split is deliberate: `ai-docs/quality/test-strategy.md` (ADR-0018) forbids
 //! calling `cargo build` from a test, so the resolution logic has to be
 //! testable without it, and the CLI exposes `--print-plan` to cover the wiring.
 

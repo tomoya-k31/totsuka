@@ -53,7 +53,7 @@ cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
 ```
 
 This installs the CLI only. Plugins are built from a checkout — see
-[the plugin development guide](docs/development/plugin-dev-guide.md).
+[the plugin development guide](ai-docs/development/plugin-dev-guide.md).
 
 ## Quickstart (5 minutes, 1 task)
 
@@ -90,25 +90,25 @@ and writes only directories plus a fully commented config skeleton. `setup`
 fills that skeleton in, so running `init` first is harmless but unnecessary.
 
 New machine, dev checkout, token rotation, and recovery are covered end to end
-in the [setup playbook](docs/operations/setup-playbook.md) (Japanese).
+in the [setup playbook](ai-docs/operations/setup-playbook.md) (Japanese).
 
 ## Documentation
 
-All project knowledge lives in [`docs/`](./docs/), an
+All project knowledge lives in [`ai-docs/`](./ai-docs/), an
 [Open Knowledge Format (OKF) v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)
 Knowledge Bundle.
 
-- **Product spec**: [docs/product/orchestrator-spec.ja.md](./docs/product/orchestrator-spec.ja.md)
-- **Configuration reference**: [docs/development/config-reference.md](./docs/development/config-reference.md)
-- **Plugin development guide**: [docs/development/plugin-dev-guide.md](./docs/development/plugin-dev-guide.md)
-- **Operations guide** (doctor / worktree cleanup / FAQ): [docs/operations/operations-guide.md](./docs/operations/operations-guide.md)
-- **Table of contents**: [docs/index.md](./docs/index.md) · **Changelog**: [CHANGELOG.md](./CHANGELOG.md)
+- **Product spec**: [ai-docs/product/orchestrator-spec.ja.md](./ai-docs/product/orchestrator-spec.ja.md)
+- **Configuration reference**: [ai-docs/development/config-reference.md](./ai-docs/development/config-reference.md)
+- **Plugin development guide**: [ai-docs/development/plugin-dev-guide.md](./ai-docs/development/plugin-dev-guide.md)
+- **Operations guide** (doctor / worktree cleanup / FAQ): [ai-docs/operations/operations-guide.md](./ai-docs/operations/operations-guide.md)
+- **Table of contents**: [ai-docs/index.md](./ai-docs/index.md) · **Changelog**: [CHANGELOG.md](./CHANGELOG.md)
 
 ## Contributing
 
 Conventional Commits are required (`type(scope): description`). Releases are cut
 by merging the [release-please](https://github.com/googleapis/release-please)
-Release PR. Docs changes are validated by `bash scripts/okf-lint.sh docs`.
+Release PR. Docs changes are validated by `bash scripts/okf-lint.sh ai-docs`.
 
 ## License
 

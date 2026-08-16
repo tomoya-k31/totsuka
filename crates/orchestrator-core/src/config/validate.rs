@@ -27,9 +27,9 @@ pub enum ValidationError {
 
     /// The config predates this binary. There is no automatic migration and
     /// deliberately no `config migrate` command — see the versioning policy in
-    /// `docs/development/config-reference.md` (#276).
+    /// `ai-docs/development/config-reference.md` (#276).
     #[error(
-        "config schema version {found} is older than this totsuka requires (v{expected}) → update config.toml to schema v{expected} (see docs/development/config-reference.md) and set `version = {expected}`"
+        "config schema version {found} is older than this totsuka requires (v{expected}) → update config.toml to schema v{expected} (see ai-docs/development/config-reference.md) and set `version = {expected}`"
     )]
     SchemaOutdated { found: u32, expected: u32 },
 

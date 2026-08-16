@@ -2,15 +2,15 @@ name: okf-lint
 
 on:
   # path フィルタなし: main の required_status_checks が `lint` を必須にしているため、
-  # docs/ 以外だけを触る PR でも必ず1回は lint チェックが報告される必要がある
+  # ai-docs/ 以外だけを触る PR でも必ず1回は lint チェックが報告される必要がある
   # (フィルタで対象外になると、必須チェックが永久に "Expected" のまま PR が BLOCKED し続ける)。
   pull_request:
   push:
     branches: [main]
     paths:
-      - "docs/**"
+      - "ai-docs/**"
       # 元帳のビルダー / lint 本体だけを触った変更でも main を検証する
-      # (log.md と index.md は生成物になったので、生成側の回帰は docs/ を
+      # (log.md と index.md は生成物になったので、生成側の回帰は ai-docs/ を
       #  1 バイトも変えずに入りうる)
       - "scripts/okf-*.sh"
 
@@ -35,4 +35,4 @@ jobs:
       # frontmatter / type / index掲載漏れ / log形式 をエラー、リンク切れは警告。
       # リンク切れも落としたい場合は --strict を付ける。
       - name: Run okf-lint
-        run: bash scripts/okf-lint.sh docs
+        run: bash scripts/okf-lint.sh ai-docs

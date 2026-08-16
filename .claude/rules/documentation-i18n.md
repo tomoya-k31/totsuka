@@ -4,8 +4,8 @@
 # Generated/vendored Markdown is excluded (see "Out of scope" below).
 paths:
   - "*.md"
-  - "docs/**/*.md"
-  - "docs/**/*.ja.md"
+  - "ai-docs/**/*.md"
+  - "ai-docs/**/*.ja.md"
 ---
 
 # Documentation rules — bilingual en / ja

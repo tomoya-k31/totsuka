@@ -3,7 +3,7 @@
 // Installed to ~/.config/opencode/plugins/ by `totsuka run` / `totsuka doctor`
 // (opencode auto-loads every plugin there). It normalizes OpenCode session
 // events onto the same UDS wire contract the Claude/Codex hook scripts use
-// (docs/apis/agent-events.md): POST /agent-events with hook_event_name +
+// (ai-docs/apis/agent-events.md): POST /agent-events with hook_event_name +
 // uppercase status parsed from the LAST <<STATUS:...>> marker in the final
 // assistant message.
 //
