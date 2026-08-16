@@ -347,7 +347,7 @@ plan の結果を人に見せたいなら `output = "source"`（ソース側に�
 **`pull_request` は廃止された。** push と PR 作成はエージェントの責務になり
 （F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）、Orchestrator は
 push しない。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、
-PR 作成手順はリポジトリの規約（CLAUDE.md / CONTRIBUTING.md など）と `[prompts]` で指示する。
+PR 作成手順はリポジトリの規約（CLAUDE.md / CONTRIBUTING.md など）に書く。
 PR の URL を Slack 返信に載せたい場合は、エージェントの最終メッセージに含めさせる
 （`plugins/slack.toml` の `[prompts].reply_instructions`）。
 

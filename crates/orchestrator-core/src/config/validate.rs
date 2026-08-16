@@ -119,32 +119,20 @@ pub enum ValidationError {
         allowed: String,
     },
 
-    /// The opencode plan-agent prose contains a `---` fence line (#316).
+    /// A key written under a `prompts` table that #465 removed.
     ///
-    /// The file totsuka writes is a fixed frontmatter block followed by this
-    /// value, and a `---` here is how someone would try to smuggle in a
-    /// `permission:` map. The deny map is not configurable (ADR-0023).
-    ///
-    /// Rejected **anywhere** in the body, not just at the start. By convention
-    /// YAML frontmatter is recognised only at the very beginning of a file, so
-    /// a later `---` should be an inert Markdown thematic break — but opencode's
-    /// parser is not ours to verify, and this is a privilege boundary. A prose
-    /// horizontal rule can be written `***`; being able to reason about the
-    /// permission map without knowing a third party's parser is worth more.
+    /// The table is still parsed (opaquely) purely so this can be raised.
+    /// Deleting the field instead would leave serde reporting `prompts` as an
+    /// unknown field, which is true but answers the wrong question: the
+    /// operator is going to ask what happened to text they wrote deliberately,
+    /// and a schema error does not tell them.
     #[error(
-        "[prompts].opencode_plan_agent contains a `---` line → this key is the agent file's prose BODY only; totsuka writes the YAML frontmatter (including the `permission` deny map, which is not configurable) ahead of it, and a `---` in the body could be read as a second block — remove it (use `***` for a horizontal rule)"
+        "{referrer} sets `{key}`, which was removed in favour of built-in prompt text → {replacement}"
     )]
-    PromptPlanAgentFrontmatter,
-
-    /// A prompt override that must teach the status-marker convention does not
-    /// mention any marker (#315, ADR-0020).
-    #[error(
-        "{referrer} prompt `{key}` never teaches these status markers: {missing} → an outcome the agent cannot report parses as UNKNOWN and the task escalates on timeout; keep {{marker_completed}} / {{marker_needs_input}} / {{marker_failed}} in the text (a name that is not a bare identifier, such as `{{marker-needs-input}}`, is treated as content and silently dropped)"
-    )]
-    PromptDropsMarkerConvention {
+    RemovedPromptKey {
         referrer: String,
         key: String,
-        missing: String,
+        replacement: &'static str,
     },
 
     /// A referenced tool's kind has no completion-detection adapter yet
@@ -216,55 +204,25 @@ where
         check_worktree_placeholders("[worktree].location", location, &mut errors);
     }
 
-    // Prompt overrides (#315). Placeholder typos are errors here rather than
-    // render-time passthroughs — see `UnknownPromptPlaceholder`.
-    check_prompt_placeholders("[prompts]", &cfg.prompts.entries(), &mut errors);
+    // `[prompts]` and `[[workflows]].prompts` were removed in #465. Both are
+    // still *parsed* (as opaque tables) so this can name every key the operator
+    // wrote and say what became of it — serde's bare unknown-field error would
+    // report a table that is "not allowed" without ever mentioning that it used
+    // to be supported.
+    check_removed_prompt_table("[prompts]", &cfg.prompts, &mut errors);
     for wf in &cfg.workflows {
-        check_prompt_placeholders(
+        check_removed_prompt_table(
             &format!("workflow `{}` prompts", wf.name),
-            &wf.prompts.entries(),
+            &wf.prompts,
             &mut errors,
         );
     }
 
-    // The plan agent's prose must not carry a frontmatter fence anywhere
-    // (#316). Line-wise rather than prefix-wise, and BOM-tolerant: a
-    // `\u{feff}---` would slip past `trim_start`, which does not treat the BOM
-    // as whitespace.
-    if let Some(body) = &cfg.prompts.opencode_plan_agent
-        && body
-            .lines()
-            .any(|l| l.trim_start_matches('\u{feff}').trim() == "---")
-    {
-        errors.push(ValidationError::PromptPlanAgentFrontmatter);
-    }
-
-    // ADR-0020 guard: the *composed* self-report instruction must still teach
-    // the marker convention. Composed, not per-key, so it catches both a leaf
-    // that lost its `{marker_*}` and an assembly that dropped the section.
-    // Reported per distinct resolved text so one bad global key does not
-    // produce one finding per workflow.
-    let mut reported: HashSet<String> = HashSet::new();
-    let global = crate::prompts::Prompts::resolve(cfg);
-    for (referrer, prompts) in std::iter::once(("[prompts]".to_string(), global)).chain(
-        cfg.workflows
-            .iter()
-            .map(|wf| {
-                (
-                    format!("workflow `{}` prompts", wf.name),
-                    crate::prompts::Prompts::resolve_for(cfg, wf),
-                )
-            })
-            .collect::<Vec<_>>(),
-    ) {
-        let rendered = prompts.marker_self_report().to_string();
-        let missing = crate::prompts::Prompts::missing_markers(&rendered);
-        if !missing.is_empty() && reported.insert(rendered) {
-            errors.push(ValidationError::PromptDropsMarkerConvention {
-                referrer: referrer.clone(),
-                key: "marker_self_report".to_string(),
-                missing: missing.join(" / "),
-            });
+    // The one prompt knob left (#465). Placeholder typos are errors here rather
+    // than render-time passthroughs — see `UnknownPromptPlaceholder`.
+    for wf in &cfg.workflows {
+        if let Some(rubric) = wf.rubric.as_deref() {
+            check_rubric_placeholders(&wf.name, rubric, &mut errors);
         }
     }
 
@@ -438,23 +396,6 @@ where
         });
     }
     hook_findings(cfg, &agent_hook_capable, &mut findings);
-    for message in swallowed_brace_warnings("[prompts]", &cfg.prompts.entries()) {
-        findings.push(Finding {
-            severity: FindingSeverity::Warning,
-            message,
-        });
-    }
-    // Same empty-override advisory as the per-workflow one, for `[prompts]`.
-    for (key, value) in cfg.prompts.entries() {
-        if value.trim().is_empty() {
-            findings.push(Finding {
-                severity: FindingSeverity::Warning,
-                message: format!(
-                    "[prompts].{key} is an empty string → this replaces the built-in text with nothing rather than falling back to it; remove the key to use the default"
-                ),
-            });
-        }
-    }
     findings
 }
 
@@ -551,99 +492,23 @@ where
             });
         }
 
-        prompt_findings(cfg, wf, findings);
-    }
-}
-
-/// Advisories for a workflow's prompt overrides (#315). Errors live in
-/// [`validate_static`]; these are the "it parses but probably isn't what you
-/// meant" cases.
-fn prompt_findings(
-    cfg: &RootConfig,
-    wf: &crate::config::WorkflowConfig,
-    findings: &mut Vec<Finding>,
-) {
-    let entries = wf.prompts.entries();
-
-    // ADR-0020 guard, warning half. The composed verification prompt is the
-    // `prompt`-type Stop hook's body, and the judging model has to re-emit a
-    // marker for `on-stop.sh` to parse; without one every Stop reads as
-    // UNKNOWN. A warning rather than an error (unlike `marker_self_report`)
-    // because restructuring the verification text — dropping the convention
-    // section on purpose, say, when the up-front instruction already carries
-    // it — is a legitimate thing to want.
-    //
-    // Composed, so it catches both a `verification_marker_convention` that
-    // lost its `{marker_*}` and a `verification_prompt` assembly that dropped
-    // `{marker_convention}`. Only for llm workflows: nothing else renders it.
-    if wf.resolved_verification() == VerificationMode::Llm {
-        let rendered = crate::prompts::Prompts::resolve_for(cfg, wf).verification_prompt();
-        let missing = crate::prompts::Prompts::missing_markers(&rendered);
-        if !missing.is_empty() {
+        // An empty rubric reads as "leave it out", but it lands in the
+        // verification prompt as nothing at all — the judge is then left with
+        // only the exemptions and no criterion to check.
+        if wf.rubric.as_deref().is_some_and(|r| r.trim().is_empty()) {
             findings.push(Finding {
                 severity: FindingSeverity::Warning,
                 message: format!(
-                    "workflow `{}` renders an llm-verification prompt that never teaches these status markers: {} → the verifying model cannot re-emit one it was not shown, so that Stop parses as UNKNOWN; keep {{marker_convention}} in prompts.verification_prompt and all three markers in prompts.verification_marker_convention",
-                    wf.name,
-                    missing.join(" / ")
-                ),
-            });
-        }
-    }
-
-    // The `verification_*` family only feeds the llm prompt hook, same as the
-    // legacy `rubric` above. Its message is left untouched so the wording the
-    // existing test pins does not move.
-    if wf.resolved_verification() != VerificationMode::Llm {
-        let unused: Vec<&str> = entries
-            .iter()
-            .map(|(k, _)| *k)
-            .filter(|k| k.starts_with("verification_"))
-            .collect();
-        if !unused.is_empty() {
-            findings.push(Finding {
-                severity: FindingSeverity::Warning,
-                message: format!(
-                    "workflow `{}` sets prompts.{} but verification = {} → these only apply to llm verification; set verification = \"llm\" or remove them",
-                    wf.name,
-                    unused.join(", prompts."),
-                    wf.resolved_verification().as_str()
-                ),
-            });
-        }
-    }
-
-    // Both spellings of the rubric on one workflow: the newer key wins, so the
-    // older one is dead text that still reads as live. A warning, not an error
-    // — a config caught mid-migration must keep working.
-    if wf.rubric.is_some() && wf.prompts.verification_rubric.is_some() {
-        findings.push(Finding {
-            severity: FindingSeverity::Warning,
-            message: format!(
-                "workflow `{}` sets both rubric and prompts.verification_rubric → prompts.verification_rubric wins; remove the now-ignored rubric",
-                wf.name
-            ),
-        });
-    }
-
-    for message in swallowed_brace_warnings(&format!("workflow `{}`", wf.name), &entries) {
-        findings.push(Finding {
-            severity: FindingSeverity::Warning,
-            message,
-        });
-    }
-
-    // An empty override reads as "leave it out", but it replaces the built-in
-    // with nothing. Called out separately from the marker guard because the
-    // cause is much clearer here.
-    for (key, value) in &entries {
-        if value.trim().is_empty() {
-            findings.push(Finding {
-                severity: FindingSeverity::Warning,
-                message: format!(
-                    "workflow `{}` sets prompts.{key} to an empty string → this replaces the built-in text with nothing rather than falling back to it; remove the key to use the default",
+                    "workflow `{}` sets rubric to an empty string → this replaces the built-in criteria with nothing rather than falling back to them; remove the key to use the default",
                     wf.name
                 ),
+            });
+        }
+
+        for message in swallowed_brace_warnings(&wf.name, wf.rubric.as_deref()) {
+            findings.push(Finding {
+                severity: FindingSeverity::Warning,
+                message,
             });
         }
     }
@@ -708,54 +573,98 @@ fn check_plugin_ref(
     }
 }
 
-/// Advisory messages for prompt templates whose braces are malformed in a way
-/// that silently swallows a real placeholder (#328).
+/// Advisory message for a `rubric` whose braces are malformed in a way that
+/// silently swallows a real placeholder (#328).
 ///
-/// Separate from [`check_prompt_placeholders`] because it is a Warning: the
+/// Separate from [`check_rubric_placeholders`] because it is a Warning: the
 /// pattern also occurs in legitimate nested JSON shown to a model.
-fn swallowed_brace_warnings(referrer: &str, entries: &[(&'static str, &str)]) -> Vec<String> {
-    entries
-        .iter()
-        .filter(|(_, value)| template::has_swallowed_brace(value))
-        .map(|(key, _)| {
+fn swallowed_brace_warnings(workflow: &str, rubric: Option<&str>) -> Vec<String> {
+    rubric
+        .filter(|value| template::has_swallowed_brace(value))
+        .map(|_| {
             format!(
-                "{referrer} prompt `{key}` has a `{{` inside another `{{…}}` span → the whole span is treated as one unknown name and emitted verbatim, so any real placeholder inside it never expands (e.g. `{{ {{rubric}}` drops the rubric); if the braces are literal content this is harmless, otherwise balance them"
+                "workflow `{workflow}` rubric has a `{{` inside another `{{…}}` span → the whole span is treated as one unknown name and emitted verbatim, so any real placeholder inside it never expands; if the braces are literal content this is harmless, otherwise balance them"
             )
         })
+        .into_iter()
         .collect()
 }
 
-/// Report any `{placeholder}` a prompt override uses outside its key's set
-/// (#315). `${ENV}` is **not** skipped: prompts get no env expansion, so a
-/// `${…}` in one is a literal, and `{…}` inside it is still a placeholder.
-fn check_prompt_placeholders(
+/// Report any `{placeholder}` a workflow's `rubric` uses (#315, #465).
+///
+/// The allowed set is empty, and comes from the built-in table rather than a
+/// literal here so the two cannot drift: `rubric` fills the
+/// `verification_rubric` leaf, and leaves render in a pass of their own before
+/// the assembly substitutes `{rubric}`. A name in a leaf therefore has nothing
+/// to resolve against and ships as literal text — which is why this is an
+/// error rather than a passthrough.
+///
+/// `${ENV}` is **not** skipped: prompts get no env expansion, so a `${…}` in
+/// one is a literal, and `{…}` inside it is still a placeholder.
+fn check_rubric_placeholders(workflow: &str, rubric: &str, errors: &mut Vec<ValidationError>) {
+    let allowed = crate::prompts::allowed_placeholders("verification_rubric")
+        .expect("verification_rubric is a built-in prompt key");
+    for name in template::scan(rubric, template::ScanMode::Rendered) {
+        if !allowed.contains(&name) {
+            errors.push(ValidationError::UnknownPromptPlaceholder {
+                referrer: format!("workflow `{workflow}`"),
+                key: "rubric".to_string(),
+                placeholder: name.to_string(),
+                allowed: if allowed.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    allowed
+                        .iter()
+                        .map(|a| format!("{{{a}}}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                },
+            });
+        }
+    }
+}
+
+/// Report every key still written under a `prompts` table removed by #465.
+///
+/// One finding per key, each naming what replaced it, because the operator
+/// wrote that text on purpose and "unknown field" answers a different question
+/// than the one they will be asking.
+fn check_removed_prompt_table(
     referrer: &str,
-    entries: &[(&'static str, &str)],
+    table: &toml::Table,
     errors: &mut Vec<ValidationError>,
 ) {
-    for (key, value) in entries {
-        let Some(allowed) = crate::prompts::allowed_placeholders(key) else {
-            // `deny_unknown_fields` already rejected unknown keys at parse.
-            continue;
-        };
-        for name in template::scan(value, template::ScanMode::Rendered) {
-            if !allowed.contains(&name) {
-                errors.push(ValidationError::UnknownPromptPlaceholder {
-                    referrer: referrer.to_string(),
-                    key: (*key).to_string(),
-                    placeholder: name.to_string(),
-                    allowed: if allowed.is_empty() {
-                        "(none)".to_string()
-                    } else {
-                        allowed
-                            .iter()
-                            .map(|a| format!("{{{a}}}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    },
-                });
-            }
+    for key in table.keys() {
+        errors.push(ValidationError::RemovedPromptKey {
+            referrer: referrer.to_string(),
+            key: key.clone(),
+            replacement: removed_prompt_replacement(key),
+        });
+    }
+}
+
+/// What to do instead, per removed key (#465).
+fn removed_prompt_replacement(key: &str) -> &'static str {
+    match key {
+        "verification_rubric" => {
+            "write the criteria as `rubric` on the workflow itself — the one prompt key that survived"
         }
+        "marker_self_report" => {
+            "nothing replaces it: the completion protocol is chosen by the workflow's `profile` (design / implement get the human-confirmation variant), which is exactly what an override here used to defeat"
+        }
+        "branch_convention" => {
+            "nothing replaces it: the agent reads the branch convention out of the target repository (ADR-0026)"
+        }
+        "verification_prompt"
+        | "verification_marker_convention"
+        | "verification_background_exemption"
+        | "verification_nonclaim_exemption" => {
+            "nothing replaces it: how the judging prompt is assembled is built in, and `rubric` is the part of it that was ever meant to be yours"
+        }
+        "opencode_plan_agent" => {
+            "nothing replaces it: the opencode plan agent's prose is built in (its permission deny map never was configurable)"
+        }
+        _ => "no key by this name was ever supported here",
     }
 }
 
@@ -1529,64 +1438,81 @@ verification = "llm"
     }
 
     #[test]
-    fn unknown_prompt_placeholder_is_a_validation_error() {
-        // A typo must not be a render-time passthrough: `{marker_completd}`
-        // would ship as literal text and delete the convention it meant to
-        // insert.
+    fn a_removed_prompt_key_says_what_became_of_it() {
+        // #465 kept both tables parseable purely so this error can exist. A
+        // bare `unknown field` would be true and useless: the operator wrote
+        // that text on purpose and needs to know where it went.
         let cfg = prompts_cfg(
-            "\n[prompts]\nmarker_self_report = \"完了時は {marker_completd} を付けてください\"\n",
+            "\n[prompts]\nmarker_self_report = \"完了時は印を付けてください\"\nopencode_plan_agent = \"設計だけ\"\n",
         );
         let errors = validate_static(&cfg, &env_from(&[]));
-        assert!(
-            errors.iter().any(|e| matches!(
-                e,
-                ValidationError::UnknownPromptPlaceholder { key, placeholder, .. }
-                    if key == "marker_self_report" && placeholder == "marker_completd"
-            )),
-            "got {errors:?}"
-        );
-        // The message names the key and what it may use.
-        let msg = errors
+        let removed: Vec<&ValidationError> = errors
             .iter()
-            .find(|e| matches!(e, ValidationError::UnknownPromptPlaceholder { .. }))
-            .unwrap()
-            .to_string();
-        assert!(msg.contains("marker_self_report"), "got {msg}");
-        assert!(msg.contains("{marker_completed}"), "got {msg}");
-
-        // A key that takes no placeholders rejects every one.
-        let cfg = prompts_cfg("\n[prompts]\nverification_rubric = \"{rubric} を見てください\"\n");
-        let errors = validate_static(&cfg, &env_from(&[]));
+            .filter(|e| matches!(e, ValidationError::RemovedPromptKey { .. }))
+            .collect();
+        assert_eq!(removed.len(), 2, "one per key, got {errors:?}");
+        let msgs: Vec<String> = removed.iter().map(|e| e.to_string()).collect();
         assert!(
-            errors.iter().any(|e| matches!(
-                e,
-                ValidationError::UnknownPromptPlaceholder { key, .. } if key == "verification_rubric"
-            )),
-            "got {errors:?}"
+            msgs.iter()
+                .any(|m| m.contains("marker_self_report") && m.contains("profile")),
+            "the self-report message points at the profile that now decides it: {msgs:?}"
         );
-
-        // The workflow scope is checked too, and names the workflow.
-        let cfg = prompts_cfg("  [workflows.prompts]\n  verification_prompt = \"{rubrik}\"\n");
-        let errors = validate_static(&cfg, &env_from(&[]));
         assert!(
-            errors.iter().any(|e| matches!(
-                e,
-                ValidationError::UnknownPromptPlaceholder { referrer, placeholder, .. }
-                    if referrer.contains("`reply`") && placeholder == "rubrik"
-            )),
-            "got {errors:?}"
+            msgs.iter()
+                .any(|m| m.contains("opencode_plan_agent") && m.contains("built in")),
+            "got {msgs:?}"
         );
     }
 
     #[test]
-    fn a_json_shape_in_a_prompt_is_content_not_a_placeholder() {
-        // #328: `render` emits `{"ok": true}` verbatim (nothing in `vars` is
-        // named that), so validation must not reject it. Showing a model the
-        // shape it must answer with is an ordinary thing to write, and before
-        // the fix it made `run` refuse to start.
-        let cfg = prompts_cfg(
-            "\n[prompts]\nverification_rubric = \"出力は {\\\"ok\\\": true} の形にしてください\"\n",
+    fn a_removed_workflow_prompt_key_names_its_workflow() {
+        // The workflow table used to be a distinct type whose
+        // `deny_unknown_fields` rejected global-only keys. Both tables are now
+        // opaque, so the workflow name has to come from the referrer.
+        let cfg =
+            prompts_cfg("  [workflows.prompts]\n  verification_rubric = \"実調査に基づくこと\"\n");
+        let errors = validate_static(&cfg, &env_from(&[]));
+        let msg = errors
+            .iter()
+            .find(|e| matches!(e, ValidationError::RemovedPromptKey { .. }))
+            .unwrap_or_else(|| panic!("got {errors:?}"))
+            .to_string();
+        assert!(msg.contains("`reply`"), "got {msg}");
+        // It points at the key that survived, by its surviving spelling.
+        assert!(msg.contains("`rubric`"), "got {msg}");
+    }
+
+    #[test]
+    fn an_unknown_placeholder_in_a_rubric_is_a_validation_error() {
+        // The rubric is a leaf: leaves render in a pass of their own, before
+        // the assembly substitutes `{rubric}`. A name written here has nothing
+        // to resolve against and ships as literal text.
+        let cfg = prompts_cfg("rubric = \"{rubric} を見てください\"\n");
+        let errors = validate_static(&cfg, &env_from(&[]));
+        let found = errors.iter().find(|e| {
+            matches!(
+                e,
+                ValidationError::UnknownPromptPlaceholder { key, placeholder, .. }
+                    if key == "rubric" && placeholder == "rubric"
+            )
+        });
+        assert!(found.is_some(), "got {errors:?}");
+        // The message names the config spelling, not the leaf it fills.
+        let msg = found.unwrap().to_string();
+        assert!(
+            msg.contains("`reply`") && msg.contains("`rubric`"),
+            "got {msg}"
         );
+        assert!(msg.contains("(none)"), "no placeholder is allowed: {msg}");
+    }
+
+    #[test]
+    fn a_json_shape_in_a_rubric_is_content_not_a_placeholder() {
+        // #328: `render` emits `{"ok": true}` verbatim, so validation must not
+        // reject it. Showing a model the shape it must answer with is an
+        // ordinary thing to write, and before the fix it made `run` refuse to
+        // start.
+        let cfg = prompts_cfg("rubric = \"出力は {\\\"ok\\\": true} の形にしてください\"\n");
         let errors = validate_static(&cfg, &env_from(&[]));
         assert!(
             !errors
@@ -1594,62 +1520,21 @@ verification = "llm"
                 .any(|e| matches!(e, ValidationError::UnknownPromptPlaceholder { .. })),
             "got {errors:?}"
         );
-        // A real typo alongside it is still caught.
-        let cfg =
-            prompts_cfg("\n[prompts]\nverification_prompt = \"{\\\"ok\\\": true} {rubrik}\"\n");
-        assert!(
-            validate_static(&cfg, &env_from(&[]))
-                .iter()
-                .any(|e| matches!(
-                    e,
-                    ValidationError::UnknownPromptPlaceholder { placeholder, .. }
-                        if placeholder == "rubrik"
-                ))
-        );
     }
 
     #[test]
-    fn a_hyphen_typo_in_a_marker_placeholder_is_still_caught() {
-        // #328 regression guard. `{marker-needs-input}` is not an identifier,
-        // so `scan` treats it as content and reports nothing — the marker just
-        // vanishes from the instruction. Before the all-markers check this
-        // slipped through both guards, because the other two markers satisfied
-        // the old `any` test.
-        let cfg = prompts_cfg(
-            "\n[prompts]\nmarker_self_report = \"{marker_completed} / {marker-needs-input} / {marker_failed}\"\n",
-        );
-        let errors = validate_static(&cfg, &env_from(&[]));
-        let found = errors
-            .iter()
-            .find(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. }));
-        assert!(found.is_some(), "got {errors:?}");
-        // The message names which marker is missing, not just "a marker".
-        let msg = found.unwrap().to_string();
-        assert!(msg.contains("NEEDS_INPUT"), "got {msg}");
-        assert!(
-            !msg.contains("<<STATUS:COMPLETED>>"),
-            "only the missing one: {msg}"
-        );
-    }
-
-    #[test]
-    fn a_stray_brace_that_swallows_a_placeholder_warns() {
-        // `"{ {rubric}"` renders as one unknown key emitted verbatim, so the
-        // rubric never lands and nothing else notices (#328).
-        let cfg = prompts_cfg(
-            "\n[prompts]\nverification_prompt = \"{ {rubric}\\n{marker_convention}\"\n",
-        );
+    fn a_stray_brace_in_a_rubric_warns() {
+        // `"{ {rubric}"` renders as one unknown key emitted verbatim (#328).
+        let cfg = prompts_cfg("rubric = \"{ {rubric}\"\n");
         let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
         assert!(
             warnings_of(&findings)
                 .iter()
-                .any(|f| f.message.contains("verification_prompt")
-                    && f.message.contains("inside another")),
+                .any(|f| f.message.contains("`reply`") && f.message.contains("inside another")),
             "got {findings:?}"
         );
         // The stock config is clean.
-        let cfg = prompts_cfg("");
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&prompts_cfg(""), &env_from(&[]), |_| None, |_| None);
         assert!(
             !warnings_of(&findings)
                 .iter()
@@ -1699,238 +1584,40 @@ location = "/tmp/{{repo-name}}"
     }
 
     #[test]
-    fn a_valid_placeholder_is_accepted() {
-        let cfg = prompts_cfg(
-            "\n[prompts]\nmarker_self_report = \"{marker_completed} / {marker_needs_input} / {marker_failed}\"\nverification_prompt = \"{rubric}|{background_exemption}|{marker_convention}\"\n",
-        );
-        let errors = validate_static(&cfg, &env_from(&[]));
-        assert!(
-            !errors
-                .iter()
-                .any(|e| matches!(e, ValidationError::UnknownPromptPlaceholder { .. })),
-            "got {errors:?}"
-        );
-    }
-
-    #[test]
-    fn a_self_report_without_any_marker_is_rejected() {
-        // ADR-0020: the marker is the only completion signal shared by all
-        // three tools. Losing it strands every task on the escalation timeout.
-        let cfg = prompts_cfg("\n[prompts]\nmarker_self_report = \"終わったら教えてください\"\n");
-        let errors = validate_static(&cfg, &env_from(&[]));
-        assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { key, .. } if key == "marker_self_report")),
-            "got {errors:?}"
-        );
-
-        // Only reported once even though a workflow resolves to the same text.
-        assert_eq!(
-            errors
-                .iter()
-                .filter(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. }))
-                .count(),
-            1,
-            "one finding per distinct resolved text, got {errors:?}"
-        );
-
-        // The stock config is clean.
-        let cfg = prompts_cfg("");
-        assert!(
-            !validate_static(&cfg, &env_from(&[]))
-                .iter()
-                .any(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. }))
-        );
-    }
-
-    #[test]
-    fn plan_agent_body_starting_with_frontmatter_is_rejected() {
-        // This is how someone would try to smuggle a `permission:` map in.
-        let cfg = prompts_cfg(
-            "\n[prompts]\nopencode_plan_agent = \"---\\npermission:\\n  bash: allow\\n---\\n\"\n",
-        );
-        let errors = validate_static(&cfg, &env_from(&[]));
-        assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, ValidationError::PromptPlanAgentFrontmatter)),
-            "got {errors:?}"
-        );
-
-        // A `---` LATER in the body is rejected too. Frontmatter is
-        // conventionally start-only, so this should be an inert thematic
-        // break — but opencode's parser is not ours to verify and this is a
-        // privilege boundary, so the guard does not depend on that reasoning.
-        let cfg = prompts_cfg(
-            "\n[prompts]\nopencode_plan_agent = \"設計してください。\\n\\n---\\npermission:\\n  bash: allow\\n\"\n",
-        );
-        assert!(
-            validate_static(&cfg, &env_from(&[]))
-                .iter()
-                .any(|e| matches!(e, ValidationError::PromptPlanAgentFrontmatter)),
-            "a later `---` must be rejected as well"
-        );
-
-        // A BOM does not smuggle one past the check (`trim_start` does not
-        // treat U+FEFF as whitespace).
-        let cfg = prompts_cfg(
-            "\n[prompts]\nopencode_plan_agent = \"\\uFEFF---\\npermission:\\n  bash: allow\\n---\\n\"\n",
-        );
-        assert!(
-            validate_static(&cfg, &env_from(&[]))
-                .iter()
-                .any(|e| matches!(e, ValidationError::PromptPlanAgentFrontmatter)),
-            "a BOM-prefixed fence must be rejected"
-        );
-
-        // Plain prose is fine, including a `***` horizontal rule.
-        let cfg = prompts_cfg(
-            "\n[prompts]\nopencode_plan_agent = \"設計だけしてください。\\n\\n***\\n続き。\\n\"\n",
-        );
-        assert!(
-            !validate_static(&cfg, &env_from(&[]))
-                .iter()
-                .any(|e| matches!(e, ValidationError::PromptPlanAgentFrontmatter))
-        );
-    }
-
-    #[test]
-    fn plan_agent_is_global_only() {
-        // `deny_unknown_fields` on WorkflowPromptsConfig is what rejects the
-        // global-only key under a workflow — no extra validation needed.
-        let err = RootConfig::from_toml_str(&format!(
-            r#"{PLUGIN_PAIR}
-[[workflows]]
-name = "reply"
-source = "github"
-mode = "implement"
-agent = "herdr"
-output = "none"
-verification = "llm"
-
-  [workflows.prompts]
-  opencode_plan_agent = "だめ"
-"#
-        ))
-        .unwrap_err();
-        assert!(err.to_string().contains("opencode_plan_agent"), "got {err}");
-    }
-
-    #[test]
-    fn a_verification_prompt_without_any_marker_warns() {
-        // The warning half of the ADR-0020 guard: the judging model has to
-        // re-emit a marker for `on-stop.sh` to parse. A warning rather than an
-        // error, because dropping the convention section on purpose is a
-        // legitimate restructuring.
-        let cfg = prompts_cfg("  [workflows.prompts]\n  verification_prompt = \"{rubric}\"\n");
+    fn an_empty_rubric_warns() {
+        // An empty rubric reads as "leave it out" but lands as nothing at all,
+        // leaving the judge with only the exemptions and no criterion.
+        let cfg = prompts_cfg("rubric = \"\"\n");
         let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
         assert!(
             warnings_of(&findings)
                 .iter()
                 .any(|f| f.message.contains("`reply`")
-                    && f.message.contains("never teaches these status markers")),
+                    && f.message.contains("rubric")
+                    && f.message.contains("empty string")),
             "got {findings:?}"
         );
-        // Not an error — the config still starts.
+    }
+
+    #[test]
+    fn the_stock_config_raises_nothing_about_prompts() {
+        // With no override surface left, a config that says nothing about
+        // prompts must produce nothing about prompts — errors or warnings.
+        let cfg = prompts_cfg("");
         assert!(
             !validate_static(&cfg, &env_from(&[]))
                 .iter()
-                .any(|e| matches!(e, ValidationError::PromptDropsMarkerConvention { .. })),
-            "the verification prompt half must not block startup"
-        );
-
-        // A marker-free convention leaf is caught too (composed check).
-        let cfg = prompts_cfg(
-            "  [workflows.prompts]\n  verification_marker_convention = \"最後に一言そえてください\"\n",
+                .any(|e| matches!(
+                    e,
+                    ValidationError::RemovedPromptKey { .. }
+                        | ValidationError::UnknownPromptPlaceholder { .. }
+                ))
         );
         let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
         assert!(
-            warnings_of(&findings)
+            !warnings_of(&findings)
                 .iter()
-                .any(|f| f.message.contains("never teaches these status markers")),
-            "got {findings:?}"
-        );
-
-        // Stock config, and non-llm workflows, produce nothing.
-        for extra in ["", "verification = \"none\"\n"] {
-            let cfg = RootConfig::from_toml_str(&format!(
-                r#"{PLUGIN_PAIR}
-[[workflows]]
-name = "reply"
-source = "github"
-mode = "implement"
-agent = "herdr"
-output = "none"
-{}
-"#,
-                if extra.is_empty() {
-                    "verification = \"llm\"\n"
-                } else {
-                    extra
-                }
-            ))
-            .unwrap();
-            let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
-            assert!(
-                !warnings_of(&findings)
-                    .iter()
-                    .any(|f| f.message.contains("never teaches these status markers")),
-                "unexpected warning for {extra:?}: {findings:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn both_rubric_spellings_on_one_workflow_warn() {
-        let cfg = prompts_cfg(
-            "rubric = \"レガシー\"\n  [workflows.prompts]\n  verification_rubric = \"新しい\"\n",
-        );
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
-        assert!(
-            warnings_of(&findings).iter().any(|f| f
-                .message
-                .contains("both rubric and prompts.verification_rubric")),
-            "got {findings:?}"
-        );
-    }
-
-    #[test]
-    fn verification_prompts_without_llm_verification_warn() {
-        let toml = format!(
-            r#"{PLUGIN_PAIR}
-[[workflows]]
-name = "no_verify"
-source = "github"
-mode = "implement"
-agent = "herdr"
-output = "none"
-verification = "none"
-
-  [workflows.prompts]
-  verification_rubric = "実調査に基づくこと"
-"#
-        );
-        let cfg = RootConfig::from_toml_str(&toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
-        assert!(
-            warnings_of(&findings)
-                .iter()
-                .any(|f| f.message.contains("prompts.verification_rubric")
-                    && f.message.contains("`no_verify`")),
-            "got {findings:?}"
-        );
-    }
-
-    #[test]
-    fn an_empty_prompt_override_warns() {
-        let cfg = prompts_cfg("\n[prompts]\nverification_rubric = \"\"\n");
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
-        assert!(
-            warnings_of(&findings)
-                .iter()
-                .any(|f| f.message.contains("[prompts].verification_rubric")
-                    && f.message.contains("empty string")),
+                .any(|f| f.message.contains("rubric") || f.message.contains("prompt")),
             "got {findings:?}"
         );
     }

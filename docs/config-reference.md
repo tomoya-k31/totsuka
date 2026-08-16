@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:1806fb2af74e65526105172ae86a3a920489b55b1d6acdc1e99aa551e94f29bc -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:5c0855072ec5cfd56b626e4432deb1d82ec3d42602182710d75c39e05997a72f -->
 
 # Configuration reference
 
@@ -48,7 +48,6 @@ Never write a plain secret into your configuration. Any string value can instead
 | `[hooks]` | table | — | Receiving agent CLI hook events |
 | `default_tool` | string? | `"claude"` | Default AI tool when neither the workflow nor the repository pins one |
 | `[tools.{name}]` | table | — | AI tool registry; overrides and extends the built-ins |
-| `[prompts]` | table | — | Overrides for the prompt text injected into AI tools |
 
 ## Schema versioning
 
@@ -102,8 +101,7 @@ The guidance depends on which side is behind:
 | `on_failure` | `{ set_status = "..." }`? | none | Update the status in the source on failure. Retryable failures do not write back |
 | `verification` | enum | `llm` | How a completion claim is checked: `llm` (checked in session), `human` (waits for `totsuka task verify`), or `none`. Cannot be combined with `profile` |
 | `timeout_secs` | int? | 1800 | Seconds of silence after the last signal before escalating. **`0` opts this workflow out of the timeout sweep entirely** |
-| `rubric` | string? | none | The criteria used for `llm` verification |
-| `[workflows.prompts]` | table | — | Prompt overrides for this workflow only; the strongest layer |
+| `rubric` | string? | none | The criteria used for `llm` verification. **The only prompt override there is** (see below); it beats the profile's default |
 | `tool` | string? | none | Pins the AI tool. Workflow beats repository beats `default_tool` |
 | `initial_prompt` | string? | none | Extra instructions prepended for this workflow's agent. See below |
 
@@ -199,7 +197,7 @@ on_success = { set_status = "Designed" }
 | `profile` plus `mode` or `verification` | **Error.** The profile decides these, so writing them would leave dead settings that look alive |
 | `profile` plus `output` | **Allowed**, and `output` wins. This is a wiring choice rather than a permission, and a Slack-triggered implement workflow needs it to return the pull request URL to the thread |
 | No `profile` and no `mode` / `output` | **Error.** Either name a profile or write both |
-| `profile` plus `rubric`, `[workflows.prompts]`, `tool`, `timeout_secs`, `on_success`, `on_failure` | Allowed |
+| `profile` plus `rubric`, `tool`, `timeout_secs`, `on_success`, `on_failure` | Allowed |
 
 Profiles are optional. Combinations they cannot express — `verification = "human"`, for instance, since all four resolve to `llm` — are written out explicitly.
 
@@ -237,15 +235,9 @@ A known limitation: a second "needs input" while already waiting — you send co
 
 ### The verification-criteria ladder
 
-From strongest to weakest:
+From strongest to weakest: `[[workflows]].rubric` > **the profile's default** (`triage` verifies the result URL, `design` and `implement` verify the human's approval) > the generic default.
 
-1. `[[workflows]].prompts.verification_rubric`
-2. `[[workflows]].rubric`
-3. `[prompts].verification_rubric` (global)
-4. The profile's default
-5. The generic default
-
-**Layer 3 beats layer 4**, so if you have set a global `verification_rubric`, a `triage` workflow does **not** get the result-URL check. The symptom is that a task claiming it "wrote the design" passes without having posted anything. If you use profiles, either drop the global rubric or set `[[workflows]].rubric` explicitly. The same ladder applies to the completion instructions: a global `marker_self_report` means `design` and `implement` do not get the confirmation protocol.
+**There used to be a global layer above the profile's default.** A global `verification_rubric` meant a `triage` workflow did not get the result-URL check, and a global `marker_self_report` meant `design` and `implement` did not get the confirmation protocol. The symptom in both cases was a task claiming it "wrote the design" passing without having posted anything — verification quietly getting looser. Rather than reorder the ladder, the global layer was removed. Only the workflow's own `rubric` outranks the profile's default now.
 
 ### Waiting for a missing external tool
 
@@ -409,56 +401,75 @@ Left alone, an unconfigured claude launches in its manual mode and stops dead on
 
 Tool resolution at dispatch is workflow pin, then repository default, then `default_tool`, then the built-in `claude`. Because totsuka now builds the complete command line here, the `agent_command` and `plan_args` keys in `plugins/herdr.toml` are a **deprecated** backward-compatibility fallback — configure tools through `[tools.{name}]` instead.
 
-## `[prompts]`
+## Prompt text
 
-Overrides for the prompt text injected into the AI tools. The built-in defaults are embedded in the binary, and this table overrides **per key** — anything you do not set stays built-in. Values are inline strings only; there is no form that points at a file.
+The prompt text injected into the AI tools is embedded in the binary and **cannot be overridden from configuration**. The one thing you can set is the criteria used to judge a completion claim, spelled `rubric` on the workflow.
 
-| Key | Default | What it is | Placeholders |
-|---|---|---|---|
-| `marker_self_report` | built-in, varies by profile | The completion self-report instruction injected into every dispatch. For `design` and `implement` the default is the confirmation-protocol version. Overriding this key beats the profile default | `{marker_completed}`, `{marker_needs_input}`, `{marker_failed}` |
-| `branch_convention` | built-in | Branch creation instructions. Worktrees arrive detached, so the agent reads the repository's conventions and creates the branch. **Not injected in plan mode**, nor for a task already on a branch | none |
-| `verification_rubric` | built-in, varies by profile | The clause describing when a completion claim is acceptable. **Write it as a condition, not an instruction** — see below | — |
-| `verification_background_exemption` | built-in | The clause covering an intermediate stop while a background task runs | — |
-| `verification_nonclaim_exemption` | built-in | The clause covering a stop that reports "needs input" or "failed" | `{marker_needs_input}`, `{marker_failed}` |
-| `verification_marker_convention` | built-in | What to write in the reason when blocking. The reason goes back to the agent, so this is where the marker convention is taught | `{marker_completed}`, `{marker_needs_input}`, `{marker_failed}` |
-| `verification_prompt` | see below | How the clauses are assembled | `{rubric}`, `{background_exemption}`, `{nonclaim_exemption}`, `{marker_convention}` |
-| `opencode_plan_agent` | built-in | The prose body of opencode's plan agent file. **Global only** — writing it under a workflow is a parse error, since one file on disk is shared by every session | — |
+A `[prompts]` table (8 keys) and a per-workflow `prompts` table (7 keys) used to exist. Both were removed, for two reasons:
 
-> **The `verification_*` keys are conditions, not instructions.** Claude Code passes the hook body to the model under a fixed system prompt and takes back a verdict; a false verdict blocks the stop and the reason is handed to the agent. **The model does not control blocking, so writing "please allow this and do not block" has no effect.** That exact wording shipped once, and the judge quoted it verbatim while refusing eight times in a row. Write text that is **true in every case you want allowed**.
+- **One global key could silently disable a check a profile had chosen.** Setting `verification_rubric` globally meant `triage` stopped verifying the artifact URL; setting `marker_self_report` globally meant `design` and `implement` stopped using the human-confirmation protocol. Both failures lean the same way — verification gets *looser* — which is the direction you do not notice
+- **The design moved past it.** Every prompt added after those tables was built-in and chosen by the workflow's `profile`, never configurable
 
-The five `verification_*` keys are used only by workflows with `verification = "llm"`. Only Claude has the stop hook they need; other tools degrade to `human`.
+**A configuration that still has one does not start.** Each key fails with an error saying what became of it:
 
-`opencode_plan_agent` is the **prose body only**. Its frontmatter is fixed in code and cannot be configured, because that deny map is the only mechanism carrying plan intent — and letting a prose-looking key inject an allow would be a privilege escalation. A value containing a line of `---` anywhere is rejected: frontmatter is conventionally only read at the top of a file, but this is a permission boundary and the design does not rely on that inference. Write horizontal rules as `***`.
+```text
+[prompts] sets `verification_rubric`, which was removed in favour of built-in
+prompt text → write the criteria as `rubric` on the workflow itself — the one
+prompt key that survived
+```
 
-**The markers themselves cannot be configured.** The hook scripts parse them literally, and they are the single completion signal shared by all three tools. What you can edit here is the prose that *teaches* the convention, not the convention.
+| Removed key | Instead |
+|---|---|
+| `verification_rubric` | Write the criteria as `rubric` on the workflow |
+| `marker_self_report` | Nothing replaces it. The completion protocol is chosen by the workflow's `profile` — `design` and `implement` get the human-confirmation variant — which is what an override here used to defeat |
+| `branch_convention` | Nothing replaces it. The agent reads the branch convention out of the target repository |
+| `verification_prompt`, `verification_marker_convention`, `verification_background_exemption`, `verification_nonclaim_exemption` | Nothing replaces them. How the judging prompt is assembled is built in; `rubric` is the part of it that was ever meant to be yours |
+| `opencode_plan_agent` | Nothing replaces it. The prose of opencode's plan agent is built in — its permission deny map never was configurable |
+
+**Changing prompt text now needs a rebuild.** That is a deliberate reversal: prompt text turned out to be part of how completion and verification behave, not a knob to tune.
+
+### Writing a `rubric`
+
+`[[workflows]].rubric` fills **one branch** of the judging prompt. Assembled, the whole thing reads:
+
+```text
+This stop may be allowed. That is, one of the following holds:
+
+{nonclaim_exemption}      ← the final message reports "needs input" or "failed"
+{background_exemption}    ← an intermediate stop while a background task runs
+{rubric}                  ← your text goes here
+
+{marker_convention}       ← what to write in the reason when blocking
+```
+
+> **A rubric is a condition, not an instruction.** Claude Code passes the hook body to the model under a fixed system prompt and takes back a verdict; a false verdict blocks the stop and the reason is handed to the agent. **The model does not control blocking, so writing "please allow this and do not block" has no effect.** That exact wording shipped once, and the judge quoted it verbatim while refusing eight times in a row. Write text that is **true in every case you want allowed**.
+
+`rubric` is used only by workflows with `verification = "llm"`. Only Claude has the stop hook they need; other tools degrade to `human`. Setting it on any other verification mode is a warning.
+
+**The markers themselves cannot be configured.** The hook scripts parse them literally, and they are the single completion signal shared by all three tools.
 
 ### Precedence
 
 Strongest first:
 
-1. `[[workflows]].prompts.<key>` — this workflow only (except `opencode_plan_agent`, which is global)
-2. `[[workflows]].rubric` — legacy, affects the rubric only
-3. `[prompts].<key>` — global
-4. The built-in default
+1. `[[workflows]].rubric`
+2. **The profile's default** — `triage` verifies the artifact URL, `design` and `implement` verify the human's approval
+3. The built-in default
 
-**Layer 2 beating layer 3 is deliberate.** Both are per-workflow settings, and the other order would mean that adding a global `verification_rubric` silently overwrites every existing per-workflow `rubric`.
+The removed tables sat above and *between* these, which is how one global key could reach past layer 2.
 
 ### Expansion rules
 
-- Placeholder substitution is **single-pass**. A `{token}` inside a substituted value is not expanded again
-- Assembly happens in two stages, each single-pass, so a literal `{marker_convention}` written inside a rubric is inserted rather than expanded
-- Placeholder names must be identifiers, so other braces pass through as content and you can write JSON such as `{"ok": true}` in a prompt. The flip side is that a typo which is not a valid identifier — `{marker-needs-input}` — is not caught by placeholder checking. Markers are checked separately by confirming all three appear in the assembled output
-- A `{` nested inside braces makes the whole span one unknown name, dropping the real placeholder inside it. This is reported as a warning
+- **A rubric cannot contain placeholders.** A `{name}` is a validation error: branches are rendered on their own before the assembly fills `{rubric}`, so a name inside a branch has nothing to resolve against and ships as literal text
+- Placeholder names must be identifiers, so other braces pass through as content and you can write JSON such as `{"ok": true}` in a rubric
+- A `{` nested inside braces makes the whole span one unknown name. This is reported as a warning
 - The `[worktree]` templates use a different substitution, so **everything inside their braces is checked** and a typo like `{repo-name}` stays an error
-- Unknown placeholders are passed through unchanged
-- **Prompt changes take effect from the next dispatch.** An already-running agent does not see them
+- Assembly happens in two stages, each single-pass, so a literal `{marker_convention}` written inside a rubric is inserted rather than expanded
+- **A rubric change takes effect from the next dispatch.** An already-running agent does not see it
 
 ### Example
 
 ```toml
-[prompts]
-verification_rubric = "Confirm the change works by actually running the tests."
-
 [[workflows]]
 name = "slack-reply"
 source = "slack"
@@ -466,9 +477,7 @@ mode = "implement"
 agent = "herdr"
 output = "source"
 verification = "llm"
-
-  [workflows.prompts]
-  verification_rubric = "Check that the draft answers the question directly and shows its reasoning."
+rubric = "Check that the draft answers the question directly and shows its reasoning."
 ```
 
 ## `[llm]`
@@ -574,8 +583,8 @@ Things to know:
 
 - **`{text}` arrives already quoted.** The rewrite happens before expansion, so a template that drops the leading `> ` does not break continuation lines, and one that keeps it does not double-quote
 - **`{text}`, `{thread_context}`, and `{catalog}` contain content chosen by whoever posted in Slack.** Expansion is single-pass, so a mention containing the literal text `{catalog}` is inserted as that string and does not splice in the candidate list
-- Unknown placeholders pass through and are logged as a warning at startup. **This is deliberately not an error**: the symptom is a visible `{token}` in the draft, whereas the core's prompts fail hard because what goes missing there is the completion convention and the only symptom would be a timeout
-- These are **LLM prompts only**. A bad override degrades classification or draft quality; unlike the core prompts, it cannot break completion detection
+- Unknown placeholders pass through and are logged as a warning at startup. **This is deliberately not an error**: the symptom is a visible `{token}` in the draft. The core's `rubric` fails hard instead, because it is the judging condition and a broken one only makes verification looser
+- These are **LLM prompts only**. A bad override degrades classification or draft quality; it cannot break completion detection. That difference in blast radius is why this table stayed while the core's prompt overrides were removed
 
 ## `plugins/herdr.toml`
 

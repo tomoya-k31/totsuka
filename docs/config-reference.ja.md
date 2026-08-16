@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:1806fb2af74e65526105172ae86a3a920489b55b1d6acdc1e99aa551e94f29bc -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:5c0855072ec5cfd56b626e4432deb1d82ec3d42602182710d75c39e05997a72f -->
 
 # 設定リファレンス
 
@@ -49,7 +49,6 @@
 | `[hooks]` | テーブル | — | エージェント CLI のフックイベント受信 |
 | `default_tool` | string? | `"claude"` | ワークフローもリポジトリも指定しないときの既定 AI ツール |
 | `[tools.{name}]` | テーブル | — | AI ツールのレジストリ。組み込みを上書き・拡張する |
-| `[prompts]` | テーブル | — | AI ツールへ差し込むプロンプト文の上書き |
 
 ## スキーマのバージョニング
 
@@ -103,8 +102,7 @@
 | `on_failure` | `{ set_status = "..." }`? | なし | 失敗時にソース側のステータスを更新する。再試行可能な失敗では書き戻さない |
 | `verification` | enum | `llm` | 完了申告の検収方式。`llm`（セッション内で検収）/ `human`（`totsuka task verify` を待つ）/ `none`。`profile` とは併記できない |
 | `timeout_secs` | int? | 1800 | 最後のシグナルから無応答が続いてエスカレートするまでの秒数。**`0` はこのワークフローを掃引の対象外にする** |
-| `rubric` | string? | なし | `llm` 検収で使う判定基準 |
-| `[workflows.prompts]` | テーブル | — | このワークフロー専用のプロンプト上書き。最も強い層 |
+| `rubric` | string? | なし | `llm` 検収で使う判定基準。**唯一のプロンプト上書き面**（下記）で、profile の既定より強い |
 | `tool` | string? | なし | AI ツールのピン。ワークフロー > リポジトリ > `default_tool` |
 | `initial_prompt` | string? | なし | このワークフローのエージェントへ前置きする追加指示。下記参照 |
 
@@ -200,7 +198,7 @@ on_success = { set_status = "設計済み" }
 | `profile` + `mode` / `verification` | **エラー。** profile が決める値なので、書くと「生きて見える死んだ設定」が残る |
 | `profile` + `output` | **可。** `output` が勝つ。権限ではなく配線先の選択であり、Slack 起点の implement がプルリクエストの URL をスレッドへ返すのに要る |
 | `profile` 無しで `mode` / `output` が欠けている | **エラー。** profile を書くか、両方を明示する |
-| `profile` + `rubric` / `[workflows.prompts]` / `tool` / `timeout_secs` / `on_success` / `on_failure` | 可 |
+| `profile` + `rubric` / `tool` / `timeout_secs` / `on_success` / `on_failure` | 可 |
 
 profile は必須ではない。4 原型で表せない組み合わせ（たとえば `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
 
@@ -238,15 +236,9 @@ profile はこの 3 キー以外にも次を決める。
 
 ### 検収基準の優先順位
 
-強い順に次の 5 層。
+強い順に `[[workflows]].rubric` > **profile の既定**（`triage` は成果物 URL、`design` / `implement` は人間の承認を検証する）> 汎用の既定。
 
-1. `[[workflows]].prompts.verification_rubric`
-2. `[[workflows]].rubric`
-3. `[prompts].verification_rubric`（グローバル）
-4. profile の既定
-5. 汎用の既定
-
-**3 が 4 より強い**ため、グローバルの `verification_rubric` を設定済みだと `triage` のワークフローでも URL 検収にならない。症状は「投稿していない設計を『書いた』と申告したタスクが通る」である。profile を使うなら、グローバルの rubric を外すか `[[workflows]].rubric` で明示すること。**同じ梯子が完了申告の指示にも効く** — グローバルの `marker_self_report` を設定済みだと、`design` / `implement` でも確認プロトコル版にならない。
+**かつては profile の既定の上にグローバルな層があった。** グローバルの `verification_rubric` を設定済みだと `triage` のワークフローでも URL 検収にならず、グローバルの `marker_self_report` を設定済みだと `design` / `implement` が確認プロトコル版にならなかった。どちらも症状は「投稿していない設計を『書いた』と申告したタスクが通る」— 検収が黙って緩くなる方向である。梯子の順序を入れ替えるのではなく、グローバルな層そのものを削除した。今 profile の既定に勝てるのは、そのワークフロー自身の `rubric` だけである。
 
 ### 外部ツールが無いときの待機
 
@@ -410,56 +402,75 @@ tool = "claude-deep"
 
 ディスパッチ時のツール解決は、ワークフローのピン > リポジトリの既定 > `default_tool` > 組み込みの `claude` の順である。完全なコマンドラインをここで組み立てるようになったため、`plugins/herdr.toml` の `agent_command` / `plan_args` は**非推奨**の後方互換フォールバックである。ツールの設定は `[tools.{name}]` で行うこと。
 
-## `[prompts]`
+## プロンプト文
 
-AI ツールへ差し込むプロンプト文の上書き。組み込みの既定はバイナリに埋め込まれており、このテーブルは**キー単位の上書き**である（未指定のキーは組み込みのまま）。値はインライン文字列のみで、ファイルを指す形式は無い。
+AI ツールへ差し込むプロンプト文はバイナリに埋め込まれており、**設定から上書きできない**。設定できるのは完了申告を判定する基準文だけで、綴りはワークフローの `rubric` である。
 
-| キー | 既定 | 内容 | プレースホルダ |
-|---|---|---|---|
-| `marker_self_report` | 組み込み（profile で分岐） | 全ディスパッチに注入される完了自己申告の指示。`design` / `implement` の既定は確認プロトコル版。このキーを上書きすると profile の分岐より優先される | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |
-| `branch_convention` | 組み込み | ブランチ作成の指示。worktree は detached で渡されるので、エージェントがリポジトリの規約を読んで自分で切る。**plan モードでは注入しない**。既にブランチ上のタスクにも注入しない | なし |
-| `verification_rubric` | 組み込み（profile で分岐） | 完了申告を許可してよい条件。**命令文ではなく条件節として書く** — 下記参照 | — |
-| `verification_background_exemption` | 組み込み | バックグラウンド実行中の中間停止を許可する条件節 | — |
-| `verification_nonclaim_exemption` | 組み込み | 「入力待ち」「失敗」を報告した停止を許可する条件節 | `{marker_needs_input}` `{marker_failed}` |
-| `verification_marker_convention` | 組み込み | ブロックするときに理由へ何を書かせるか。理由はエージェントへ差し戻されるので、ここでマーカー規約を教える | `{marker_completed}` `{marker_needs_input}` `{marker_failed}` |
-| `verification_prompt` | 下記 | 各条件節の組み立て方 | `{rubric}` `{background_exemption}` `{nonclaim_exemption}` `{marker_convention}` |
-| `opencode_plan_agent` | 組み込み | opencode の plan エージェントファイルの**散文本体**。**グローバル専用** — ディスク上の 1 枚を全セッションが共有するので、ワークフロー配下に書くとパースエラーになる | — |
+かつては `[prompts]` テーブル（8 キー）とワークフローごとの `prompts` テーブル（7 キー）があった。どちらも削除した。理由は 2 つ:
 
-> **`verification_*` は「命令」ではなく「条件」である。** Claude Code はフック本文を固定のシステムプロンプト配下でモデルに渡し、判定を受け取る。否定の判定が停止をブロックし、その理由がエージェントへ差し戻される。**モデルはブロックを制御していないので、「ブロックせず許可してください」と書いても効かない。** その形を一度出荷したことがあり、実機ではジャッジが当該文言を逐語引用しながら 8 回連続で拒否した。ここに書くテキストは、**許可してよい全ケースで真になる条件**として書くこと。
+- **グローバルなキーを 1 つ書くだけで、profile が選んだ検査が黙って無効になった。** `verification_rubric` をグローバルに設定すると `triage` が成果物 URL を検証しなくなり、`marker_self_report` を設定すると `design` / `implement` が人間確認プロトコルを使わなくなる。どちらも「検収が緩くなる」方向、つまり**気づきにくい方向**へ倒れる
+- **設計が追い越した。** それらのテーブルより後に入ったプロンプトはすべて組み込みで、ワークフローの `profile` が選ぶものだった
 
-`verification_*` の 5 キーが使われるのは `verification = "llm"` のワークフローだけである。必要なフックを持つのは Claude だけで、他のツールでは `human` へ縮退する。
+**まだ書いてある設定は起動しない。** キーごとに何になったかを名指しするエラーで落ちる:
 
-`opencode_plan_agent` は**散文本体のみ**である。frontmatter は Rust 側で固定されていて設定できない — その deny マップが plan の意図を運ぶ唯一の機構であり、散文に見えるキーから allow を注入できると権限昇格になるためである。値が `---` の行をどこかに含むと検証エラーになる。frontmatter は慣例上ファイル先頭でしか解釈されないが、ここは権限境界なのでその推論に依存しない設計にしてある（本文の水平線は `***` で書ける）。
+```text
+[prompts] sets `verification_rubric`, which was removed in favour of built-in
+prompt text → write the criteria as `rubric` on the workflow itself — the one
+prompt key that survived
+```
 
-**マーカー自体は設定できない。** フックスクリプトがリテラルとしてパースしており、3 ツール共通の唯一の完了信号だからである。ここで編集できるのは規約を**教える散文**であって、規約そのものではない。
+| 消えたキー | 代わりに |
+|---|---|
+| `verification_rubric` | ワークフローの `rubric` に書く |
+| `marker_self_report` | 代替なし。完了プロトコルはワークフローの `profile` が選ぶ（`design` / `implement` は人間確認版）。上書きはまさにそれを打ち消していた |
+| `branch_convention` | 代替なし。ブランチ規約はエージェントが対象リポジトリから読む |
+| `verification_prompt` / `verification_marker_convention` / `verification_background_exemption` / `verification_nonclaim_exemption` | 代替なし。判定プロンプトの組み立て方は組み込みで、そのうち運用者のものだったのが `rubric` である |
+| `opencode_plan_agent` | 代替なし。opencode plan エージェントの散文は組み込み（permission の deny マップは元々設定不可） |
+
+**プロンプト文の変更にはリビルドが要る。** これは意図的な巻き戻しである。プロンプト文は調整用のノブではなく、完了と検収の**動作の一部**だと分かったためである。
+
+### `rubric` の書き方
+
+`[[workflows]].rubric` は判定プロンプトの**枝の 1 つ**に入る。組み立て後の全体はこうなる:
+
+```text
+この停止を許可してよい。すなわち次のいずれかが成り立つ:
+
+{nonclaim_exemption}      ← 最終メッセージが「入力待ち」または「失敗」を報告している
+{background_exemption}    ← バックグラウンドタスク実行中の中間停止
+{rubric}                  ← ここに書いた文が入る
+
+{marker_convention}       ← ブロックするとき reason に何を書くか
+```
+
+> **rubric は「命令」ではなく「条件」である。** Claude Code は固定のシステムプロンプト配下でフック本文をモデルに渡し、判定を受け取る。否定の判定が停止をブロックし、その理由がエージェントへ差し戻される。**モデルはブロックを制御していないので、「ブロックせず許可してください」と書いても効かない。** その文言を一度出荷したことがあり、ジャッジは当該文言を逐語引用しながら 8 回連続で拒否した。ここには**許可してよい全ケースで真になる条件**を書くこと。
+
+`rubric` は `verification = "llm"` のワークフローでのみ使われる。必要な停止フックを持つのは Claude だけで、他のツールでは `human` へ縮退する。他の verification に設定すると警告になる。
+
+**マーカー自体は設定できない。** フックスクリプトがリテラルとしてパースし、3 ツール共通の唯一の完了信号だからである。
 
 ### 優先順位
 
-強い順に 4 層。
+強い順:
 
-1. `[[workflows]].prompts.<key>` — このワークフロー専用（`opencode_plan_agent` を除く。グローバル専用のため）
-2. `[[workflows]].rubric` — レガシー。rubric にのみ効く
-3. `[prompts].<key>` — グローバル
-4. 組み込みの既定
+1. `[[workflows]].rubric`
+2. **profile の既定** — `triage` は成果物 URL を、`design` / `implement` は人間の承認を検証する
+3. 組み込みデフォルト
 
-**2 が 3 より強いのは意図的である。** どちらもワークフロー単位の設定なので、逆順にすると、グローバルの `verification_rubric` を新たに足した瞬間に既存のワークフロー個別の `rubric` が黙って上書きされる。
+削除したテーブルはこの上と、1 と 2 の**間**にあった。グローバルなキーが 2 を飛び越せたのはそのためである。
 
 ### 展開規則
 
-- プレースホルダの置換は**シングルパス**。置換された値の中の `{token}` は再展開されない
-- 組み立ては 2 段階で、各段がシングルパスなので、rubric 内に書いたリテラルの `{marker_convention}` は挿入されるだけで展開されない
-- プレースホルダ名は識別子に限られるので、それ以外の波括弧は中身として素通しされ、`{"ok": true}` のような JSON をプロンプトに書ける。**その裏返しとして、識別子でない綴りのタイポはプレースホルダ検査では捕まらない。** マーカーについては、3 つすべてが組み立て後の出力に現れることを別途検査している
-- 波括弧の中にさらに `{` があると、その範囲全体が 1 つの未知の名前として素通しされ、中の本物のプレースホルダが落ちる。この形は警告として報告される
-- `[worktree]` のテンプレートは置換方式が異なり、**波括弧の中身がすべて検査される**ので、`{repo-name}` のようなタイポはエラーのままである
-- 未知のプレースホルダはそのまま出力される
-- **プロンプトの変更は次のディスパッチから有効になる。** 既に起動しているエージェントには届かない
+- **rubric にプレースホルダは書けない。** `{name}` は検証エラーになる。枝はまず単独でレンダリングされ、そのあと組み立てが `{rubric}` を埋めるので、枝の中の名前には解決先が無くそのまま文字列として出荷される
+- プレースホルダ名は識別子に限られるため、それ以外の波括弧は中身として素通しされる。`{"ok": true}` のような JSON を rubric に書いてよい
+- 波括弧の中にさらに `{` があると、その範囲全体が 1 つの未知の名前になる。この形は警告として報告される
+- `[worktree]` のテンプレートは置換方式が異なるため、**波括弧の中身はすべて検査される**。`{repo-name}` のようなタイポはエラーのままである
+- 組み立ては 2 段階で各段シングルパスなので、rubric に書いたリテラル `{marker_convention}` は挿入されるだけで展開されない
+- **rubric の変更は次のディスパッチから有効。** 既に起動しているエージェントには届かない
 
 ### 例
 
 ```toml
-[prompts]
-verification_rubric = "変更が意図どおり動くことを、実際にテストを走らせて確認してください。"
-
 [[workflows]]
 name = "slack-reply"
 source = "slack"
@@ -467,9 +478,7 @@ mode = "implement"
 agent = "herdr"
 output = "source"
 verification = "llm"
-
-  [workflows.prompts]
-  verification_rubric = "返信案が質問に直接答えているか、根拠が示されているかを検証してください。"
+rubric = "返信案が質問に直接答えているか、根拠が示されているかを検証してください。"
 ```
 
 ## `[llm]`
@@ -575,8 +584,8 @@ kind = "task_source"
 
 - **`{text}` は引用済みで渡る。** 書き換えは展開の前に行われるので、先頭の `> ` を落としたテンプレートでも継続行は壊れず、`> ` を残しても二重引用にならない
 - **`{text}` `{thread_context}` `{catalog}` の中身は Slack の投稿者が決められる。** 展開はシングルパスなので、本文に `{catalog}` と書かれたメンションはその文字列として挿入されるだけで、候補リストの差し込みにはならない
-- 未知のプレースホルダはそのまま出力され、起動時に警告としてログに出る。**エラーにしないのは意図的である** — 症状は下書きに見える `{token}` であって目に見える。コアの `[prompts]` がエラーにするのは、あちらで消えるのが完了マーカーの規約で、症状がタイムアウトによるエスカレーションしか無いからである
-- ここは **LLM 向けのプロンプトのみ**である。悪い上書きは分類の劣化や返信案の質低下に留まり、コアの `[prompts]` と違って完了検知は壊せない
+- 未知のプレースホルダはそのまま出力され、起動時に警告としてログに出る。**エラーにしないのは意図的である** — 症状は下書きに見える `{token}` であって目に見える。コアの `rubric` がエラーにするのは、あちらが検収の判定条件で、壊れても症状が「検収が緩くなる」だけだからである
+- ここは **LLM 向けのプロンプトのみ**である。悪い上書きは分類の劣化や返信案の質低下に留まり、完了検知は壊せない。この被害範囲の違いが、コア側の上書き面を削除しつつ**このテーブルを残した**理由である
 
 ## `plugins/herdr.toml`
 

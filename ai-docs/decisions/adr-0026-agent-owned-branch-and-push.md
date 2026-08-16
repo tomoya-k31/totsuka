@@ -126,11 +126,12 @@ push も PR 作成もエージェントの責務にする。規約に沿った p
 採らなかった。**PR が作られなくなったことに気付かないまま運用される**方が、起動時に
 落ちるより悪い。
 
-## 6. 指示は core の `[prompts].branch_convention`
+## 6. 指示は core の組み込みプロンプト `branch_convention`
 
 ブランチは source に依存しない **worktree のメカニクス**なので、ADR-0024 の
-所有権表では core 側（マーカー規約と同じカテゴリ）。ADR-0023 に従い `[prompts]` /
-`[[workflows]].prompts` で上書き可能。
+所有権表では core 側（マーカー規約と同じカテゴリ）。当初は ADR-0023 に従い
+`[prompts]` / `[[workflows]].prompts` から上書きできたが、[#465](https://github.com/tomoya-k31/totsuka/issues/465)
+でその面ごと削除され、組み込み専用に戻った（[ADR-0023 の Amendment](/decisions/adr-0023-configurable-prompt-surface.md)）。
 
 **plan モードでは注入しない。** plan ペインは git を実行できない
 （claude `--permission-mode plan` / codex `--sandbox read-only` / opencode の
@@ -175,7 +176,7 @@ F-23 のデータ損失ガード（`has_uncommitted_changes`）をすり抜け�
   `{worktree_name}`（`{source}-{task_id}` を git ref 規則で正規化し `/` を潰したもの）
   に置換する。専用のエラーで起動を止める。
 - `output = "pull_request"` は serde の `unknown variant` で起動を止める。
-  `output = "source"` に変更し、PR 作成手順はリポジトリの規約と `[prompts]` で指示する。
+  `output = "source"` に変更し、PR 作成手順はリポジトリの規約に書く。
 - `[output]` の `pr_title_template` / `pr_body_template` を削除。
 - worktree ディレクトリ名が `agent-slack-{task_id}` から `slack-{task_id}` に変わる。
   既存 worktree の移行は不要 — 掃除・孤児検出・`doctor`・再利用ガードはすべて

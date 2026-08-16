@@ -1,9 +1,18 @@
 //! The prompt text totsuka injects into claude / codex / opencode (#313).
 //!
-//! Built-in defaults live in the embedded [`defaults.toml`], not in Rust string
+//! The text lives in the embedded [`defaults.toml`], not in Rust string
 //! literals, so rewording what an agent is told is an edit to a data file
 //! rather than a code change (epic #311). This module parses that file once and
 //! resolves each template when a set is built.
+//!
+//! **The file is embedded with `include_str!`, so editing it needs a rebuild.**
+//! #314 added a `[prompts]` config surface to avoid exactly that; #465 removed
+//! it again, re-accepting the rebuild. The reason is in the ladder on
+//! [`Prompts::resolve_for`]: an override could silently defeat the completion
+//! protocol and the verification criteria a workflow's `profile` had already
+//! chosen, and it always failed the loose way. What survives is one key,
+//! [`WorkflowConfig::rubric`](crate::config::WorkflowConfig::rubric) — the
+//! criteria, which is the part an operator ever actually wrote.
 //!
 //! It sits alongside [`tool`](crate::tool) and [`worktree`](crate::worktree)
 //! rather than under [`config`](crate::config) because it is an
@@ -27,7 +36,7 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-use crate::config::{Profile, PromptsConfig, RootConfig, WorkflowConfig, WorkflowPromptsConfig};
+use crate::config::{Profile, RootConfig, WorkflowConfig};
 use crate::domain::signal::{MARKER_COMPLETED, MARKER_FAILED, MARKER_NEEDS_INPUT};
 use crate::template;
 
@@ -70,10 +79,9 @@ pub struct Prompts {
     /// confirmation with NEEDS_INPUT and emits COMPLETED only after an
     /// explicit approval in the conversation.
     ///
-    /// Not a `[prompts]` key, for the same reason as
-    /// [`verification_rubric_artifact_url`](Self::verification_rubric_artifact_url):
-    /// it is a *default* for a leaf that already has its own override
-    /// spellings, and an operator override of `marker_self_report` wins.
+    /// Selected by the profile alone. Nothing overrides it — an operator
+    /// override of `marker_self_report` used to, which is one of the two silent
+    /// failures #465 removed the surface for.
     marker_self_report_confirm: String,
     /// Dispatch-time instruction to create the task's branch. Emitted only
     /// when the worktree is handed over detached.
@@ -84,11 +92,8 @@ pub struct Prompts {
     /// [`verification_rubric`](Self::verification_rubric) on a profile whose
     /// deliverable the agent writes outside the worktree (#398).
     ///
-    /// Deliberately **not** a `[prompts]` key. It is a *default* for the rubric
-    /// leaf, and that leaf already has two override spellings
-    /// (`[[workflows]].rubric` and `[[workflows]].prompts.verification_rubric`)
-    /// sitting above it. A third would be one more way to say the same thing,
-    /// with its own precedence question.
+    /// Selected by the profile, and beaten only by the workflow's own
+    /// `rubric` — the one spelling of this leaf that a config can write.
     verification_rubric_artifact_url: String,
     /// The rubric [`resolve_for`](Self::resolve_for) substitutes on a profile
     /// whose completion is judged by a human at the pane (#440): the judge —
@@ -98,7 +103,7 @@ pub struct Prompts {
     /// [`marker_self_report_confirm`](Self::marker_self_report_confirm)
     /// teaches.
     ///
-    /// Not a `[prompts]` key, same reasoning as
+    /// Selected by the profile, same as
     /// [`verification_rubric_artifact_url`](Self::verification_rubric_artifact_url).
     verification_rubric_human_approval: String,
     /// Intermediate-Stop exemption appended to the rubric.
@@ -110,8 +115,9 @@ pub struct Prompts {
     verification_marker_convention: String,
     /// How the four keys above are assembled.
     verification_prompt: String,
-    /// Prose body of the opencode plan-mode agent file. Global-only: one file
-    /// on disk backs every session.
+    /// Prose body of the opencode plan-mode agent file. One file on disk backs
+    /// every session, which is why it was global-only while it was
+    /// configurable at all.
     opencode_plan_agent: String,
     /// [`marker_self_report`](Self::marker_self_report) with its placeholders
     /// already substituted.
@@ -119,9 +125,9 @@ pub struct Prompts {
     /// Rendered once by [`finish`](Self::finish) when the set is built, not per
     /// call: this one is on the dispatch path, and the pre-#313 code had it as
     /// a `LazyLock<String>` that every dispatch merely copied from. Deriving it
-    /// here keeps that property while the *template* stays editable for the
-    /// config overrides landing in #314 — which resolve per workflow at
-    /// startup, so a global cache would be wrong.
+    /// here keeps that property while the *template* stays per-set: the profile
+    /// picks between two of them ([`marker_self_report_confirm`](Self::marker_self_report_confirm)),
+    /// so a single global cache would be wrong.
     #[serde(skip)]
     rendered_marker_self_report: String,
 }
@@ -131,11 +137,14 @@ const MARKER_PLACEHOLDERS: &[&str] = &["marker_completed", "marker_needs_input",
 
 /// Which `{placeholder}` each prompt key may reference (#315).
 ///
-/// [`config::validate`](mod@crate::config::validate) rejects anything else as
-/// an **error**, unlike the PR templates which pass an unknown key through
-/// silently. A typo like `{marker_completd}` deletes the completion convention,
-/// and the symptom — every Stop parsing as UNKNOWN until the task escalates —
-/// gives no hint about its cause.
+/// Two consumers, and they check different things. A unit test checks
+/// `defaults.toml` itself against this table, which is where a typo would now
+/// come from; [`config::validate`](mod@crate::config::validate) checks the one
+/// operator-written value that still fills a leaf, `[[workflows]].rubric`.
+/// Either way an unknown name is an **error**, unlike the PR templates which
+/// pass one through silently: `{marker_completd}` deletes the completion
+/// convention, and the symptom — every Stop parsing as UNKNOWN until the task
+/// escalates — gives no hint about its cause.
 pub const ALLOWED_PLACEHOLDERS: &[(&str, &[&str])] = &[
     ("marker_self_report", MARKER_PLACEHOLDERS),
     ("marker_self_report_confirm", MARKER_PLACEHOLDERS),
@@ -297,85 +306,24 @@ impl Prompts {
         .finish()
     }
 
-    /// Apply the global `[prompts]` table. Every `None` leaves the current
-    /// value, so this composes with the workflow layer below.
-    fn overlay_global(mut self, o: &PromptsConfig) -> Self {
-        set(&mut self.marker_self_report, &o.marker_self_report);
-        set(&mut self.branch_convention, &o.branch_convention);
-        set(&mut self.verification_rubric, &o.verification_rubric);
-        set(
-            &mut self.verification_background_exemption,
-            &o.verification_background_exemption,
-        );
-        set(
-            &mut self.verification_nonclaim_exemption,
-            &o.verification_nonclaim_exemption,
-        );
-        set(
-            &mut self.verification_marker_convention,
-            &o.verification_marker_convention,
-        );
-        set(&mut self.verification_prompt, &o.verification_prompt);
-        set(&mut self.opencode_plan_agent, &o.opencode_plan_agent);
-        self
-    }
-
-    /// Apply a `[[workflows]].prompts` table — the strongest layer.
-    ///
-    /// `opencode_plan_agent` is absent here on purpose: it describes a single
-    /// shared on-disk file, so it has no per-workflow meaning.
-    fn overlay_workflow(mut self, o: &WorkflowPromptsConfig) -> Self {
-        set(&mut self.marker_self_report, &o.marker_self_report);
-        set(&mut self.branch_convention, &o.branch_convention);
-        set(&mut self.verification_rubric, &o.verification_rubric);
-        set(
-            &mut self.verification_background_exemption,
-            &o.verification_background_exemption,
-        );
-        set(
-            &mut self.verification_nonclaim_exemption,
-            &o.verification_nonclaim_exemption,
-        );
-        set(
-            &mut self.verification_marker_convention,
-            &o.verification_marker_convention,
-        );
-        set(&mut self.verification_prompt, &o.verification_prompt);
-        self
-    }
-
-    /// Global scope: built-ins overlaid with `[prompts]`.
-    pub fn resolve(cfg: &RootConfig) -> Prompts {
-        Self::builtin()
-            .clone()
-            .overlay_global(&cfg.prompts)
-            .finish()
-    }
-
     /// Workflow scope. Precedence, strongest first:
     ///
-    /// 1. `[[workflows]].prompts.*`
-    /// 2. `[[workflows]].rubric` (legacy, rubric leaf only)
-    /// 3. `[prompts].*`
-    /// 4. **the profile's defaults** (rubric leaf #398/#440, self-report leaf
+    /// 1. `[[workflows]].rubric` (rubric leaf only)
+    /// 2. **the profile's defaults** (rubric leaf #398/#440, self-report leaf
     ///    #440)
-    /// 5. the built-in default
+    /// 3. the built-in default
     ///
-    /// 2 beating 3 is deliberate — both are about this workflow, so ordering it
-    /// the other way would mean adding a global `verification_rubric` silently
-    /// overrides every existing per-workflow `rubric`.
-    ///
-    /// 4 sits *below* the global table for the same reason in reverse: an
-    /// operator who already set `[prompts].verification_rubric` chose that text
-    /// for every workflow, and a profile introduced later must not overrule a
-    /// choice already made. The cost is real and worth naming — **such a config
-    /// does not get URL verification** even on a `design` workflow, and the
-    /// only symptom is a task passing on a design it never posted. It is
-    /// written down in `config-reference.md`; the alternative (profile beating
-    /// global) trades a documented gap for a silent override. The same ladder
-    /// applies to #440's leaves: a global `marker_self_report` override costs a
-    /// `design` workflow the confirmation protocol.
-    pub fn resolve_for(cfg: &RootConfig, wf: &WorkflowConfig) -> Prompts {
+    /// **This ladder used to have five rungs**, with a global `[prompts]` table
+    /// and a per-workflow `prompts` table around the two that are left. #465
+    /// removed both. The two rungs that went were the ones that could defeat
+    /// rung 2 without saying so: setting `[prompts].verification_rubric` cost
+    /// every `triage` workflow its artifact-URL check, and setting
+    /// `[prompts].marker_self_report` cost every `design` workflow the #440
+    /// confirmation protocol. Both failures were silent and both leaned the
+    /// unsafe way — verification got *looser*. The surviving rung is
+    /// per-workflow, so it cannot reach a workflow the operator was not
+    /// looking at.
+    pub fn resolve_for(wf: &WorkflowConfig) -> Prompts {
         let mut p = Self::builtin().clone();
         match wf.profile {
             // Completion is judged by the human at the pane (#440): the
@@ -395,11 +343,10 @@ impl Prompts {
             }
             _ => {}
         }
-        let mut p = p.overlay_global(&cfg.prompts);
         if let Some(rubric) = wf.rubric.as_deref() {
             p.verification_rubric = rubric.to_string();
         }
-        p.overlay_workflow(&wf.prompts).finish()
+        p.finish()
     }
 
     /// Whether this profile's completion is judged by a human at the pane
@@ -434,13 +381,6 @@ impl Prompts {
     }
 }
 
-/// Overwrite `dst` when the override is present, leave it otherwise.
-fn set(dst: &mut String, src: &Option<String>) {
-    if let Some(v) = src {
-        dst.clone_from(v);
-    }
-}
-
 /// Every workflow's resolved prompt set, plus the global one (#314).
 ///
 /// Built once at startup and carried on
@@ -464,13 +404,18 @@ impl Default for PromptSet {
 
 impl PromptSet {
     /// Resolve the global set and one set per configured workflow.
+    ///
+    /// The global set is the built-in one verbatim since #465 — there is no
+    /// global override table any more. It remains a distinct field because
+    /// [`for_workflow`](Self::for_workflow) needs a fallback for a task whose
+    /// workflow has since been deleted from the config.
     pub fn from_config(cfg: &RootConfig) -> Self {
         Self {
-            global: Prompts::resolve(cfg),
+            global: Prompts::builtin().clone(),
             by_workflow: cfg
                 .workflows
                 .iter()
-                .map(|wf| (wf.name.clone(), Prompts::resolve_for(cfg, wf)))
+                .map(|wf| (wf.name.clone(), Prompts::resolve_for(wf)))
                 .collect(),
         }
     }
@@ -483,7 +428,7 @@ impl PromptSet {
         self.by_workflow.get(name).unwrap_or(&self.global)
     }
 
-    /// The global set (`[prompts]` applied, no workflow layer).
+    /// The global set — since #465 the built-in one, with no workflow layer.
     pub fn global(&self) -> &Prompts {
         &self.global
     }
@@ -548,33 +493,6 @@ mod tests {
             "must put the branch BEFORE the first commit — commits made while \
              still detached are reachable from nothing once the worktree goes: \
              {text}"
-        );
-    }
-
-    #[test]
-    fn branch_convention_is_overridable_at_both_scopes() {
-        let cfg = RootConfig::from_toml_str(
-            r#"
-version = 1
-
-[prompts]
-branch_convention = "global text"
-
-[[workflows]]
-name = "wf"
-source = "s"
-agent = "a"
-mode = "implement"
-output = "none"
-trigger = {}
-prompts = { branch_convention = "workflow text" }
-"#,
-        )
-        .unwrap();
-        assert_eq!(Prompts::resolve(&cfg).branch_convention(), "global text");
-        assert_eq!(
-            Prompts::resolve_for(&cfg, &cfg.workflows[0]).branch_convention(),
-            "workflow text"
         );
     }
 
@@ -701,39 +619,74 @@ prompts = { branch_convention = "workflow text" }
         );
     }
 
-    /// Both exemptions are independently overridable, from either layer.
-    /// Sharing one key would make an operator who reworded the background rule
-    /// silently lose the non-claim rule.
+    /// The two exemptions are separate keys in `defaults.toml`, and both reach
+    /// the composed condition. They were separate so that rewording one could
+    /// not silently drop the other; nothing can reword them any more (#465),
+    /// but the composed prompt still has to carry both — #389 is the reason the
+    /// non-claim branch exists at all.
     #[test]
-    fn the_two_exemptions_are_separate_override_keys() {
-        let cfg: RootConfig = toml::from_str(
-            r#"
-[prompts]
-verification_nonclaim_exemption = "全体の差し替え"
-
-[[workflows]]
-name = "wf"
-source = "s"
-agent = "a"
-mode = "implement"
-output = "none"
-trigger = {}
-prompts = { verification_background_exemption = "ワークフローの差し替え" }
-"#,
-        )
-        .unwrap();
-        let global = Prompts::resolve(&cfg).verification_prompt();
-        assert!(global.contains("全体の差し替え"));
+    fn both_exemptions_reach_the_composed_condition() {
+        let rendered = Prompts::builtin().verification_prompt();
         assert!(
-            global.contains("バックグラウンドタスク"),
-            "overriding one exemption must leave the other at its default: {global}"
+            rendered.contains("バックグラウンドタスク"),
+            "the background exemption is a branch of the condition: {rendered}"
         );
-
-        let wf = Prompts::resolve_for(&cfg, &cfg.workflows[0]).verification_prompt();
-        assert!(wf.contains("ワークフローの差し替え"));
         assert!(
-            wf.contains("全体の差し替え"),
-            "the workflow layer must not drop the global override of the other key: {wf}"
+            rendered.contains(MARKER_NEEDS_INPUT) && rendered.contains(MARKER_FAILED),
+            "the non-claim exemption names the markers it exempts: {rendered}"
+        );
+    }
+
+    /// ADR-0020, moved here by #465. The composed self-report and the composed
+    /// judging prompt must teach every marker, and with no override surface
+    /// left this is a property of `defaults.toml` alone — so it belongs in a
+    /// unit test rather than in config validation, which used to carry it and
+    /// could only ever have found a breakage at startup.
+    #[test]
+    fn every_builtin_composition_teaches_every_marker() {
+        for (what, text) in [
+            (
+                "the plain self-report",
+                Prompts::builtin().marker_self_report().to_string(),
+            ),
+            (
+                "the judging prompt",
+                Prompts::builtin().verification_prompt(),
+            ),
+        ] {
+            assert!(
+                Prompts::missing_markers(&text).is_empty(),
+                "{what} drops {:?}: {text}",
+                Prompts::missing_markers(&text)
+            );
+        }
+    }
+
+    /// [`ALLOWED_PLACEHOLDERS`] is the table `defaults.toml` is written
+    /// against. It used to be enforced only on operator overrides, which meant
+    /// a typo introduced in the asset itself — the one file that ships in every
+    /// build — went unchecked. #465 removed the overrides; the table now checks
+    /// the asset.
+    #[test]
+    fn every_builtin_prompt_uses_only_its_allowed_placeholders() {
+        let raw: toml::Table = toml::from_str(include_str!("defaults.toml")).unwrap();
+        let table = raw["prompts"].as_table().unwrap();
+        for (key, allowed) in ALLOWED_PLACEHOLDERS {
+            let value = table[*key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{key} is a string"));
+            for name in crate::template::scan(value, crate::template::ScanMode::Rendered) {
+                assert!(
+                    allowed.contains(&name),
+                    "defaults.toml `{key}` uses `{{{name}}}`, which is not in its allowed set \
+                     {allowed:?} — an unknown name is emitted verbatim at render time"
+                );
+            }
+        }
+        assert_eq!(
+            table.len(),
+            ALLOWED_PLACEHOLDERS.len(),
+            "every key in defaults.toml needs a row in ALLOWED_PLACEHOLDERS"
         );
     }
 
@@ -768,7 +721,7 @@ prompts = { verification_background_exemption = "ワークフローの差し替�
         );
     }
 
-    /// One workflow, with whatever `[prompts]` / workflow keys the caller adds.
+    /// One workflow, with whatever extra keys the caller adds.
     fn cfg(extra: &str) -> RootConfig {
         RootConfig::from_toml_str(&format!(
             r#"
@@ -811,7 +764,7 @@ agent = "herdr"
     #[test]
     fn each_profile_resolves_to_its_own_rubric_default() {
         let c = profile_cfg("triage", "");
-        let rubric = Prompts::resolve_for(&c, &c.workflows[0])
+        let rubric = Prompts::resolve_for(&c.workflows[0])
             .verification_rubric()
             .to_string();
         assert!(
@@ -822,7 +775,7 @@ agent = "herdr"
 
         for profile in ["design", "implement"] {
             let c = profile_cfg(profile, "");
-            let rubric = Prompts::resolve_for(&c, &c.workflows[0])
+            let rubric = Prompts::resolve_for(&c.workflows[0])
                 .verification_rubric()
                 .to_string();
             assert!(
@@ -838,7 +791,7 @@ agent = "herdr"
 
         let c = profile_cfg("answer", "");
         assert_eq!(
-            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
+            Prompts::resolve_for(&c.workflows[0]).verification_rubric(),
             Prompts::builtin().verification_rubric(),
             "answer publishes through the plugin, so there is no URL to require"
         );
@@ -851,7 +804,7 @@ agent = "herdr"
     fn design_and_implement_teach_the_confirmation_protocol() {
         for profile in ["design", "implement"] {
             let c = profile_cfg(profile, "");
-            let text = Prompts::resolve_for(&c, &c.workflows[0])
+            let text = Prompts::resolve_for(&c.workflows[0])
                 .marker_self_report()
                 .to_string();
             assert!(
@@ -875,38 +828,11 @@ agent = "herdr"
         for profile in ["answer", "triage"] {
             let c = profile_cfg(profile, "");
             assert_eq!(
-                Prompts::resolve_for(&c, &c.workflows[0]).marker_self_report(),
+                Prompts::resolve_for(&c.workflows[0]).marker_self_report(),
                 Prompts::builtin().marker_self_report(),
                 "{profile} keeps the plain self-report"
             );
         }
-    }
-
-    /// The #440 self-report default sits in the same ladder slot as the #398
-    /// rubric default: below both override scopes.
-    #[test]
-    fn the_confirm_self_report_loses_to_both_override_scopes() {
-        let c = profile_cfg(
-            "design",
-            "\n[prompts]\nmarker_self_report = \"G {marker_completed} {marker_needs_input} {marker_failed}\"\n",
-        );
-        assert!(
-            Prompts::resolve_for(&c, &c.workflows[0])
-                .marker_self_report()
-                .starts_with("G "),
-            "a global override wins over the profile default"
-        );
-
-        let c = profile_cfg(
-            "design",
-            "\n[prompts]\nmarker_self_report = \"G {marker_completed} {marker_needs_input} {marker_failed}\"\n\n[workflows.prompts]\nmarker_self_report = \"W {marker_completed} {marker_needs_input} {marker_failed}\"\n",
-        );
-        assert!(
-            Prompts::resolve_for(&c, &c.workflows[0])
-                .marker_self_report()
-                .starts_with("W "),
-            "the workflow table is the strongest layer"
-        );
     }
 
     /// The approval rubric composes into the same condition frame, and the
@@ -915,7 +841,7 @@ agent = "herdr"
     #[test]
     fn the_approval_rubric_keeps_the_condition_frame_and_the_exemptions() {
         let c = profile_cfg("design", "");
-        let rendered = Prompts::resolve_for(&c, &c.workflows[0]).verification_prompt();
+        let rendered = Prompts::resolve_for(&c.workflows[0]).verification_prompt();
         assert!(
             rendered.starts_with("この停止を許可してよい。すなわち次のいずれかが成り立つ:"),
             "the approval rubric must not cost the condition framing: {rendered}"
@@ -937,84 +863,45 @@ agent = "herdr"
         );
     }
 
-    /// The full precedence ladder for the rubric leaf, including where the
-    /// profile default sits (#398).
+    /// The whole precedence ladder for the rubric leaf, after #465 cut it from
+    /// five rungs to three.
     ///
-    /// The bottom row is the one worth pinning: an operator who set a global
-    /// `[prompts].verification_rubric` **does not get URL verification**, and
-    /// the only symptom is a design task passing on a design it never posted.
-    /// That is a documented gap, chosen over the alternative of a profile
-    /// silently overruling a choice already made for every workflow.
+    /// **The rung that went is the point of the change.** A global
+    /// `[prompts].verification_rubric` used to sit *between* these two, above
+    /// the profile default, so setting it once cost every `triage` workflow its
+    /// artifact-URL check and every `design` workflow the approval check — with
+    /// no symptom beyond a task passing on work it never posted. The rung that
+    /// stayed is per-workflow, so it cannot reach a workflow the operator was
+    /// not looking at.
     #[test]
-    fn the_profile_rubric_sits_below_global_prompts_and_above_the_generic_default() {
-        let artifact = |c: &RootConfig| {
-            Prompts::resolve_for(c, &c.workflows[0])
+    fn the_workflow_rubric_beats_the_profile_default_which_beats_the_builtin() {
+        let rubric = |c: &RootConfig| {
+            Prompts::resolve_for(&c.workflows[0])
                 .verification_rubric()
                 .to_string()
         };
 
-        // profile default beats the generic built-in (post-#440 design
-        // resolves to the approval rubric; the ladder slot is what matters).
+        // The generic built-in, when no profile supplies one.
+        let c = profile_cfg("answer", "");
+        assert_eq!(rubric(&c), Prompts::builtin().verification_rubric());
+
+        // The profile default beats it (post-#440 `design` resolves to the
+        // approval rubric; the ladder slot is what matters here).
         let c = profile_cfg("design", "");
-        assert!(artifact(&c).contains("承認"));
+        assert!(rubric(&c).contains("承認"));
 
-        // …and loses to a global `[prompts]`.
-        let c = profile_cfg(
-            "design",
-            "\n[prompts]\nverification_rubric = \"グローバル\"\n",
-        );
-        assert_eq!(artifact(&c), "グローバル");
-
-        // …which in turn loses to the workflow's own legacy `rubric`.
-        let c = profile_cfg(
-            "design",
-            "rubric = \"ワークフロー\"\n\n[prompts]\nverification_rubric = \"グローバル\"\n",
-        );
-        assert_eq!(artifact(&c), "ワークフロー");
-
-        // …which loses to the workflow's `prompts` table.
-        let c = profile_cfg(
-            "design",
-            "rubric = \"ワークフロー\"\n\n[workflows.prompts]\nverification_rubric = \"最強\"\n",
-        );
-        assert_eq!(artifact(&c), "最強");
+        // The workflow's own `rubric` beats the profile default.
+        let c = profile_cfg("design", "rubric = \"ワークフロー\"\n");
+        assert_eq!(rubric(&c), "ワークフロー");
     }
 
     #[test]
-    fn workflow_prompts_override_global_override_defaults() {
-        // Layer 4 only.
-        let c = cfg("");
-        assert_eq!(
-            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
-            Prompts::builtin().verification_rubric()
-        );
-
-        // Layer 3: `[prompts]` beats the built-in.
-        let c = cfg("\n[prompts]\nverification_rubric = \"グローバル\"\n");
-        assert_eq!(
-            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
-            "グローバル"
-        );
-        assert_eq!(Prompts::resolve(&c).verification_rubric(), "グローバル");
-
-        // Layer 1: the workflow table beats `[prompts]`.
-        let c = cfg(
-            "  [workflows.prompts]\n  verification_rubric = \"ワークフロー\"\n\n[prompts]\nverification_rubric = \"グローバル\"\n",
-        );
-        assert_eq!(
-            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
-            "ワークフロー"
-        );
-        // …and the global set is untouched by the workflow layer.
-        assert_eq!(Prompts::resolve(&c).verification_rubric(), "グローバル");
-    }
-
-    #[test]
-    fn legacy_rubric_still_feeds_the_verification_prompt() {
+    fn the_workflow_rubric_feeds_the_verification_prompt() {
         let c = cfg("rubric = \"レガシー\"\n");
-        let p = Prompts::resolve_for(&c, &c.workflows[0]);
+        let p = Prompts::resolve_for(&c.workflows[0]);
         assert_eq!(p.verification_rubric(), "レガシー");
-        // Identical to what `with_rubric` produced before #314.
+        // Identical to what `with_rubric` produced before #314 — the key is
+        // older than the surface #465 removed, and outlived it.
         assert_eq!(
             p.verification_prompt(),
             Prompts::builtin()
@@ -1023,70 +910,37 @@ agent = "herdr"
         );
     }
 
+    /// A `[prompts]` table changes nothing at all now: resolution ignores it
+    /// and validation is what rejects it (see `config::validate`). Pinned here
+    /// because "removed" has two possible meanings — refused, or accepted and
+    /// ignored — and only the first is safe.
     #[test]
-    fn legacy_rubric_beats_the_global_key_but_loses_to_the_workflow_key() {
-        // Both are workflow-scoped, so a newly-added global key must not
-        // silently override an existing per-workflow `rubric`.
-        let c = cfg("rubric = \"レガシー\"\n\n[prompts]\nverification_rubric = \"グローバル\"\n");
+    fn a_removed_prompts_table_does_not_reach_the_resolved_set() {
+        let c = cfg("\n[prompts]\nverification_rubric = \"グローバル\"\n");
         assert_eq!(
-            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
-            "レガシー"
-        );
-
-        // The new workflow key is the strongest layer.
-        let c = cfg(
-            "rubric = \"レガシー\"\n  [workflows.prompts]\n  verification_rubric = \"ワークフロー\"\n",
+            Prompts::resolve_for(&c.workflows[0]).verification_rubric(),
+            Prompts::builtin().verification_rubric()
         );
         assert_eq!(
-            Prompts::resolve_for(&c, &c.workflows[0]).verification_rubric(),
-            "ワークフロー"
+            PromptSet::from_config(&c).global().verification_rubric(),
+            Prompts::builtin().verification_rubric()
         );
-    }
-
-    #[test]
-    fn every_key_is_overridable_at_both_scopes() {
-        let keys = "\
-marker_self_report = \"A {marker_completed}\"
-verification_rubric = \"B\"
-verification_background_exemption = \"C\"
-verification_marker_convention = \"D {marker_failed}\"
-verification_prompt = \"{rubric}|{background_exemption}|{marker_convention}\"
-";
-        for (scope, extra) in [
-            ("global", format!("\n[prompts]\n{keys}")),
-            (
-                "workflow",
-                format!("  [workflows.prompts]\n{}", keys.replace('\n', "\n  ")),
-            ),
-        ] {
-            let c = cfg(&extra);
-            let p = Prompts::resolve_for(&c, &c.workflows[0]);
-            assert_eq!(
-                p.marker_self_report(),
-                format!("A {MARKER_COMPLETED}"),
-                "marker_self_report at {scope} scope"
-            );
-            assert_eq!(
-                p.verification_prompt(),
-                format!("B|C|D {MARKER_FAILED}"),
-                "verification_prompt at {scope} scope"
-            );
-        }
     }
 
     #[test]
     fn prompt_set_falls_back_to_global_for_an_unknown_workflow() {
-        let c = cfg("\n[prompts]\nverification_rubric = \"グローバル\"\n");
+        let c = cfg("rubric = \"ワークフロー\"\n");
         let set = PromptSet::from_config(&c);
         assert_eq!(
             set.for_workflow("reply").verification_rubric(),
-            "グローバル"
+            "ワークフロー"
         );
         // A task can outlive its workflow; that must not panic or lose the
-        // marker convention.
+        // marker convention. The fallback is the built-in set, so the workflow
+        // rubric does *not* leak to a workflow that no longer exists.
         assert_eq!(
             set.for_workflow("消えた").verification_rubric(),
-            "グローバル"
+            Prompts::builtin().verification_rubric()
         );
         assert!(
             set.for_workflow("消えた")

@@ -200,7 +200,7 @@ status の書き戻しだけは**コアに残す**（`task/update_status`）。�
 
 検収は rubric の差し替えで行う。`verification_rubric_artifact_url` が `triage` / `design` / `implement` の rubric leaf の既定になり、「最終メッセージに成果物 URL が実際に含まれているか」「その URL の内容が申告と整合するか」を条件として見る。`answer` は対象外 — 返信はプラグインの承認ゲートを通るので URL が無く、要求すると正常な回答が全部落ちる。
 
-**穴が 1 つある。** この既定は global `[prompts].verification_rubric` より**弱い**ので、それを設定済みの構成は URL 検収にならない。意図的な選択で、理由は「全 workflow に対して既に選ばれた文言を、後から入った profile が黙って覆す」方が悪いから。`config-reference.md` に明記し、テストで固定した。
+**穴が 1 つあった。** この既定は global `[prompts].verification_rubric` より**弱い**ので、それを設定済みの構成は URL 検収にならなかった。梯子をこの順にしたのは「全 workflow に対して既に選ばれた文言を、後から入った profile が黙って覆す」方が悪いからだが、どちらの順でも黙って壊れることに変わりはなく、**[#465](https://github.com/tomoya-k31/totsuka/issues/465) がグローバルな面そのものを削除して穴を塞いだ**（[ADR-0023 の Amendment](/decisions/adr-0023-configurable-prompt-surface.md)）。現在この既定に勝てるのは同じワークフローの `rubric` だけである。
 
 ### 削除は 0.3
 
