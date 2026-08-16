@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e16b96f4e84fb1493adc1dccb6827541c2bf0ec56cd12748c003b94ad417ffc9 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:eb4fb2a90c6f43935abf29749b372e2863658ee0f42680d38e38b0e76df94a73 -->
 
 # 設定リファレンス
 
@@ -335,6 +335,60 @@ pane 内で起動する AI ツール CLI の定義。組み込みとして `clau
 `kind = "codex"` はツール側での一回きりの信頼設定が要る。`kind = "opencode"` は信頼設定こそ不要だが、縮退する箇所が多い。
 
 アダプタは、再開の仕方とフック設定の受け取り方が異なる。claude は設定ファイルを受け取りフラグで再開し、codex はフックをグローバルに登録してサブコマンドで再開し、opencode もグローバル配置でフラグで再開する。opencode は不可視の注入ができないため、タスクの指示とマーカー規約は pane から見える形で渡る。
+
+### モデルと推論強度の指定
+
+**`[tools.{name}]` に `model` / `effort` の専用キーは無い。** 受け付けるのは上表の 4 キーだけで、他のキーを書くと設定のパース時点で落ちる:
+
+```text
+unknown field `model`, expected one of `kind`, `command`, `mode_args`, `plan_args`
+```
+
+モデルと推論強度は、**ツール CLI 自身のフラグとして `command` に書く**。
+
+```toml
+[tools.claude-fast]
+kind = "claude"
+command = "claude --model haiku --effort low"
+
+[tools.claude-deep]
+kind = "claude"
+command = "claude --model opus --effort high"
+```
+
+綴りは totsuka の抽象ではなく**ツール CLI のもの**なので kind ごとに違う。以下は claude 2.1.233 / codex 0.145.0 / opencode 1.18.4 で確認したもの。**起動されるのは対話 CLI**（`command` の既定は kind 名そのもの）なので、非対話のサブコマンド（`codex exec` / `opencode run`）にしか無いフラグは使えない。
+
+| kind | モデル | 推論強度 |
+|---|---|---|
+| claude | `--model <alias\|full-name>` | `--effort <low\|medium\|high\|xhigh\|max>` |
+| codex | `-m, --model <MODEL>` | `-c model_reasoning_effort=<value>`（専用フラグは無い） |
+| opencode | `-m, --model <provider/model>` | **対話 CLI では指定できない**（下記） |
+
+codex の `model_reasoning_effort` は `-c` による設定上書きなので、**CLI 側は値を検証しない**。不正な値でも起動は通り、最初のリクエストで API がエラーを返す（`bogusvalue` を渡すと `Supported values are: 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', and 'max'.`）。
+
+opencode の推論強度は `--variant` だが、**これは `opencode run`（非対話）のフラグで、起動される対話 TUI には無い**。代わりに opencode 側の `opencode.json` でエージェントに `variant` を設定することになるが、公式スキーマはこれを「そのエージェントに**設定されたモデルを使うときにのみ**適用される」と定義しているため、`command` に `-m` を書くと効かない可能性がある（未確認）。モデルと variant のどちらで指定するかは揃えること。
+
+#### ワークフローごとに切り替える
+
+ツール解決はワークフローのピン > リポジトリの既定 > `default_tool` > 組み込みの `claude` の順なので、レジストリに複数のプロファイルを置いて `[[workflows]].tool` で選ぶ:
+
+```toml
+[[workflows]]
+name = "triage"
+tool = "claude-fast"
+
+[[workflows]]
+name = "implement"
+tool = "claude-deep"
+```
+
+#### `mode_args` / `plan_args` には書かない
+
+この 2 つは kind の既定を**丸ごと置き換える**。`plan_args = ["--effort", "low"]` と書くと claude の既定である `["--permission-mode", "plan"]` が消え、plan モードの構造的な境界が外れる。モードに依らない起動オプションは `command` 側に置くこと。
+
+#### `command` はシェルではない
+
+`command` は空白で分割されるだけで、シェル的なクォートは解釈されない。したがって**空白を含む単一の引数は `command` に書けない**。必要な場合は配列である `mode_args` / `plan_args` を使うことになるが、その場合は上記のとおり kind の既定を自分で書き足す必要がある。
 
 ### 承認プロンプトで止まらないこと
 

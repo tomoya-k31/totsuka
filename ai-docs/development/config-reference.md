@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-14T02:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-17T06:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -380,6 +380,60 @@ pane 内で起動する AI ツール CLI の定義。`{name}` は `default_tool`
 | `plan_args` | string[]? | kind 既定 | plan モードで追加する引数（claude 既定: `["--permission-mode", "plan"]`、codex 既定: `["--sandbox", "read-only", "--ask-for-approval", "never"]` — plan permission mode 不在の縮退、opencode 既定: `["--agent", "totsuka-plan", "--auto"]` — 全 deny の plan エージェント） |
 
 kind ごとの argv 組立の差分: claude はフック設定を `--settings <path>` で受け、resume は `--resume <id>` フラグ。codex はフックがグローバル登録（`~/.codex/hooks.json`、`TOTSUKA_*` env でゲート）のため `--settings` 相当は付かず、resume は `resume <id>` **サブコマンド**（基本引数の直後・モード引数の前に挿入）。 opencode もグローバル配置の JS プラグイン（env ゲート）で完了検知するため `--settings` 相当は無く、resume は `-s <id>` フラグ。opencode は不可視注入が無いため、タスク指示 + マーカー規約は**可視の extra_context** として pane に渡る。
+
+## モデルと推論強度の指定
+
+**`[tools.{name}]` に `model` / `effort` の専用キーは無い。** 受け付けるのは上表の 4 キーだけで、`ToolConfig` は `deny_unknown_fields` なので書くと設定のパース時点で落ちる:
+
+```text
+unknown field `model`, expected one of `kind`, `command`, `mode_args`, `plan_args`
+```
+
+モデルと推論強度は、**ツール CLI 自身のフラグとして `command` に書く**。
+
+```toml
+[tools.claude-fast]
+kind = "claude"
+command = "claude --model haiku --effort low"
+
+[tools.claude-deep]
+kind = "claude"
+command = "claude --model opus --effort high"
+```
+
+綴りは totsuka の抽象ではなく**ツール CLI のもの**なので kind ごとに違う。以下は実測（claude 2.1.233 / codex 0.145.0 / opencode 1.18.4）。**totsuka が起動するのは対話 CLI**（`command` 既定は kind 名そのもの）なので、非対話サブコマンド（`codex exec` / `opencode run`）にしか無いフラグは使えない。
+
+| kind | モデル | 推論強度 |
+|---|---|---|
+| claude | `--model <alias\|full-name>` | `--effort <low\|medium\|high\|xhigh\|max>` |
+| codex | `-m, --model <MODEL>` | `-c model_reasoning_effort=<value>`（専用フラグは無い） |
+| opencode | `-m, --model <provider/model>` | **対話 CLI では指定できない**（下記） |
+
+codex の `model_reasoning_effort` は `-c` による設定上書きなので、**CLI 側は値を検証しない**。不正な値でも起動は通り、最初のリクエストで API がエラーを返す（実測: `bogusvalue` を渡すと `Supported values are: 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', and 'max'.`）。
+
+opencode の推論強度は `--variant` だが、**これは `opencode run`（非対話）のフラグで、totsuka が起動する対話 TUI には無い**。代わりに opencode 側の `opencode.json` でエージェントに `variant` を設定することになるが、公式スキーマはこれを「そのエージェントに**設定されたモデルを使うときにのみ**適用される」と定義しているため、`command` に `-m` を書くと効かない可能性がある（未実測）。モデルと variant は片方だけ totsuka 側に置かず、どちらで指定するかを揃えること。
+
+### workflow ごとに切り替える
+
+ツール解決は workflow ピン > repo 既定 > `default_tool` > 組み込み `claude` の順（後述）なので、レジストリに複数のプロファイルを置いて `[[workflows]].tool` で選ぶ:
+
+```toml
+[[workflows]]
+name = "triage"
+tool = "claude-fast"
+
+[[workflows]]
+name = "implement"
+tool = "claude-deep"
+```
+
+### `mode_args` / `plan_args` には書かない
+
+この 2 つは kind 既定を**丸ごと置き換える**（後述）。`plan_args = ["--effort", "low"]` と書くと claude 既定の `["--permission-mode", "plan"]` が消え、plan モードの構造的な境界が外れる。モードに依らない起動オプションは `command` 側に置くこと。
+
+### `command` はシェルではない
+
+`command` は `split_whitespace()` で分割されるだけで、シェル的なクォートは解釈されない。したがって**空白を含む単一引数は `command` に書けない**。必要な場合は配列である `mode_args` / `plan_args` を使うことになるが、その場合は上記のとおり kind 既定を自分で書き足す必要がある。
 
 ## 承認プロンプトで止まらないこと（#420）
 
