@@ -20,7 +20,7 @@ sources:
 
 stable。[#360](https://github.com/tomoya-k31/totsuka/issues/360) の実装とともに確定した。
 
-[ADR-0022](/decisions/adr-0022-okf-v02-migration.md)（OKF v0.2 移行）で整えた `docs/` の運用規約のうち、
+[ADR-0022](/decisions/adr-0022-okf-v02-migration.md)（OKF v0.2 移行）で整えた `ai-docs/` の運用規約のうち、
 **元帳 2 種の書き方**を変える。frontmatter・`type` 語彙・`description` の全文転記といった OKF 側の規約は一切変えない。
 
 # Context
@@ -78,7 +78,7 @@ done
 ## 3. `.gitattributes` で `index.md` を `merge=union` にする
 
 ```text
-docs/**/index.md merge=union
+ai-docs/**/index.md merge=union
 ```
 
 追記オンリーのリストなので union と相性がよい。両側の追加行がどちらも残りコンフリクトが出ない。順序が混ざっても ④ の重複畳み込みと①の転記し直しで決定的な形へ戻る。**実測で、同日に別々の concept を足した 2 ブランチの rebase が `index.md` については無衝突になることを確認した。**

@@ -16,7 +16,7 @@ description: ai-docs/ 配下（OKF Knowledge Bundle）を type/status/owner/reso
    - `--trust-tier` は `verified` から導出される信頼段階（`unverified` / `machine-confirmed` / `human-reviewed`、SPEC §5.3）。frontmatter に保存された値ではないので `--field` では引けない。
    - 有効な値が分からない場合は先に `bash scripts/okf-search.sh --list-values <field>`（例: `type` / `status` / `owner` / `tags` / `trust` / `generated.by` / `sources.resource`）で実在する値を確認する。当てずっぽうで値を打たない。
    - `type` の語彙表は `ai-docs/CLAUDE.md` のディレクトリ表を正とする。
-2. **絞り込む**: `bash scripts/okf-search.sh [フィルタ...]` を実行する（既定 bundle は `docs`）。出力は `path / type / status / generated.at / trust / title — description` の表。ファイル一覧だけで十分なら `--paths-only` を付ける。
+2. **絞り込む**: `bash scripts/okf-search.sh [フィルタ...]` を実行する（既定 bundle は `ai-docs`）。出力は `path / type / status / generated.at / trust / title — description` の表。ファイル一覧だけで十分なら `--paths-only` を付ける。
 3. **0件だった場合**: 全件スキャンにフォールバックしない。フィルタを意図的に緩めるか、ユーザーに「該当なし」と伝える。
 4. **候補ファイルだけを読む**: 手順2で絞り込まれたファイルのみを Read し、その内容からユーザーの質問に対する実際の答え・要約・抽出を行う。`ai-docs/` 全体を無差別に読み込まない（`ai-docs/CLAUDE.md` の禁止事項と同じ）。
 5. 本文の全文検索（frontmatter に現れない語句での検索）が必要な場合は、手順2の絞り込み結果に対してのみ `grep` 等を使う。フィルタなしで `ai-docs/` 全体を grep しない。
@@ -24,7 +24,7 @@ description: ai-docs/ 配下（OKF Knowledge Bundle）を type/status/owner/reso
 ## リファレンス
 
 ```text
-scripts/okf-search.sh [bundleDir=docs] [フィルタ...] [出力オプション]
+scripts/okf-search.sh [bundleDir=ai-docs] [フィルタ...] [出力オプション]
 
 --type VALUE / --status VALUE / --owner VALUE / --resource VALUE   完全一致
 --resource-like TEXT                                                部分一致

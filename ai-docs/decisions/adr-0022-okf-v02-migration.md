@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0022 docs バンドルを OKF v0.2 へ移行する
-description: "docs/ の準拠バージョンを OKF v0.1 から v0.2 へ上げる決定。破壊的変更2件（timestamp→generated.at、本文 # Citations→frontmatter sources）をスクリプトで一括変換し、status 語彙を draft/stable/deprecated へ寄せ、okf-lint の YAML 部分集合をネスト対応へ広げる。verified と stale_after は運用ルールだけ定義して既存ファイルへの一括付与はしない。"
+description: "ai-docs/ の準拠バージョンを OKF v0.1 から v0.2 へ上げる決定。破壊的変更2件（timestamp→generated.at、本文 # Citations→frontmatter sources）をスクリプトで一括変換し、status 語彙を draft/stable/deprecated へ寄せ、okf-lint の YAML 部分集合をネスト対応へ広げる。verified と stale_after は運用ルールだけ定義して既存ファイルへの一括付与はしない。"
 tags: [documentation, okf, migration, tooling, lint]
 resource: https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md
 status: stable
@@ -46,13 +46,13 @@ lifecycle / attestation を frontmatter の第一級市民にしている（SPEC
 
 移行しないという選択肢もあった。v0.2 の消費者は legacy な `timestamp` と `# Citations` を
 読んでもよいとされている（§13.1）ので、放置しても「壊れる」わけではない。しかし
-`docs/` は本リポジトリの唯一の知識ソースであり、その価値は機械可読な一貫性にある。
+`ai-docs/` は本リポジトリの唯一の知識ソースであり、その価値は機械可読な一貫性にある。
 2 系統の書式が混在すれば lint も検索も両方を相手にし続けることになり、
 「フォーマットに合わせる」コストは時間とともに増えるだけなので、一括で寄せる。
 
 # Decision
 
-`docs/` を OKF v0.2 準拠とする。ルートの `/index.md` は `okf_version: "0.2"` を宣言する。
+`ai-docs/` を OKF v0.2 準拠とする。ルートの `/index.md` は `okf_version: "0.2"` を宣言する。
 
 ## 1. frontmatter の一括変換はスクリプトで行う
 
