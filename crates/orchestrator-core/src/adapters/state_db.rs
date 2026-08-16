@@ -467,6 +467,66 @@ pub struct EventRecord {
     pub detail: Option<serde_json::Value>,
 }
 
+/// Which events one `totsuka task export` walk should visit (#463).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EventExportFilter {
+    /// Only events with `id` **strictly greater** than this — the cursor for
+    /// an incremental export. `events` is append-only and `id` is a SQLite
+    /// `INTEGER PRIMARY KEY`, so "the last id I saw" is a complete cursor.
+    pub after_id: Option<i64>,
+    /// Only events belonging to this task.
+    pub task_id: Option<i64>,
+    /// Skip the `detail` column entirely.
+    ///
+    /// Not a redaction feature — the same content is already reachable through
+    /// `totsuka task show --json`. It exists because `detail` carries the
+    /// agent's accumulated terminal output on the publish transitions
+    /// (`publish_artifact`), which makes individual rows arbitrarily large;
+    /// this drops them at the SQL level rather than after loading.
+    pub without_detail: bool,
+}
+
+/// One exported audit event: the [`events`](EventRecord) row plus the owning
+/// task's immutable identity, since an event alone cannot be interpreted
+/// (#463).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ExportedEvent {
+    /// `events.id` — the cursor for [`EventExportFilter::after_id`].
+    pub event_id: i64,
+    /// Owning task id.
+    pub task_id: i64,
+    /// State before the transition; `null` for the ingest event.
+    pub from: Option<&'static str>,
+    /// State after the transition.
+    pub to: &'static str,
+    /// Timestamp (ISO 8601 UTC).
+    pub occurred_at: String,
+    /// Structured detail as recorded. Absent when the row had none, and when
+    /// [`EventExportFilter::without_detail`] was set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
+    /// The owning task, denormalized.
+    pub task: ExportedTask,
+}
+
+/// The owning task's immutable fields, carried on every [`ExportedEvent`].
+///
+/// Deliberately only the fields that never change after ingest: a mutable one
+/// (`state`, `branch`, `repo`) would describe the task as it is *now* while
+/// the event describes a moment in the past, which is exactly the confusion an
+/// append-only export exists to avoid.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ExportedTask {
+    /// Source plugin instance name.
+    pub source: String,
+    /// Id within that source.
+    pub source_task_id: String,
+    /// Matched workflow name.
+    pub workflow: String,
+    /// Task title.
+    pub title: String,
+}
+
 /// An unresolved note recorded against a task (#407).
 ///
 /// See [`StateDb::note_task`] for what a note is and why it resolves itself.
@@ -1176,6 +1236,68 @@ impl StateDb {
             .map_err(StateError::from)
     }
 
+    /// Walk the audit log across **all** tasks, oldest first, handing each row
+    /// to `sink` as it is read (#463).
+    ///
+    /// This is the flat-text escape hatch for a state of record that lives in
+    /// SQLite: `events` is append-only and therefore already shaped like a log,
+    /// but nothing could read it without `sqlite3` and knowledge of the schema.
+    /// [`list_events`](Self::list_events) answers a different question (one
+    /// task, as a `Vec`) and cannot serve this one.
+    ///
+    /// # Why a callback and not `-> Vec<_>` or `-> impl Iterator`
+    ///
+    /// **Streaming is a correctness requirement here, not a nicety.** A single
+    /// `detail` can hold `publish_artifact` — the agent's whole accumulated
+    /// terminal output — so a `Vec` of every event is unbounded in a way
+    /// `list_events` (one task) never is. An `impl Iterator` would have to
+    /// borrow the prepared statement, which cannot outlive this method; a
+    /// callback keeps the statement alive for exactly the walk and never holds
+    /// more than one row.
+    ///
+    /// `sink` returning `Err` aborts the walk and propagates — a closed pipe
+    /// downstream should stop the query, not read the rest of the table into a
+    /// buffer nobody will drain. Its error type is the caller's, so a consumer
+    /// writing to stdout can keep its own I/O errors intact (`BrokenPipe` in
+    /// particular) instead of flattening them into [`StateError::Io`].
+    pub fn for_each_exported_event<F, E>(
+        &self,
+        filter: EventExportFilter,
+        mut sink: F,
+    ) -> Result<(), E>
+    where
+        F: FnMut(ExportedEvent) -> Result<(), E>,
+        E: From<StateError>,
+    {
+        // `detail` is selected as a literal NULL rather than omitted from the
+        // column list, so the row mapper below stays one shape.
+        let detail_column = if filter.without_detail {
+            "NULL"
+        } else {
+            "e.detail"
+        };
+        // Every DB error is mapped explicitly rather than via `?`: the return
+        // type is the caller's `E`, so `From<rusqlite::Error>` is not in scope.
+        let db = |e: rusqlite::Error| E::from(StateError::from(e));
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT e.id, e.task_id, e.from_state, e.to_state, e.occurred_at, \
+                 {detail_column}, t.source, t.source_task_id, t.workflow, t.title \
+                 FROM events e JOIN tasks t ON t.id = e.task_id \
+                 WHERE (?1 IS NULL OR e.id > ?1) AND (?2 IS NULL OR e.task_id = ?2) \
+                 ORDER BY e.id"
+            ))
+            .map_err(db)?;
+        let mut rows = stmt
+            .query(params![filter.after_id, filter.task_id])
+            .map_err(db)?;
+        while let Some(row) = rows.next().map_err(db)? {
+            sink(row_to_exported_event(row).map_err(E::from)?)?;
+        }
+        Ok(())
+    }
+
     /// Record a **note** against a task — something an operator needs to know
     /// about a task that is not moving — without moving it (#407).
     ///
@@ -1639,6 +1761,39 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
     })
 }
 
+/// Map one joined `events`/`tasks` row for
+/// [`StateDb::for_each_exported_event`] (#463).
+///
+/// Positional rather than by-name because the `detail` column is selected as a
+/// literal `NULL` when `without_detail` is set, which leaves it unnamed.
+fn row_to_exported_event(row: &Row<'_>) -> Result<ExportedEvent, StateError> {
+    let from: Option<String> = row.get(2)?;
+    let from = from.map(|s| s.parse::<TaskState>()).transpose()?;
+    let to: String = row.get(3)?;
+    let to = to.parse::<TaskState>()?;
+    let detail: Option<String> = row.get(5)?;
+    // Parsed rather than passed through as a string, matching
+    // `task show --json`'s `detail`. Deliberately **not** reshaped: the `kind`
+    // vocabulary has grown over time, and re-interpreting old rows under
+    // today's reading is the exact failure an append-only export exists to
+    // prevent.
+    let detail = detail.map(|s| serde_json::from_str(&s)).transpose()?;
+    Ok(ExportedEvent {
+        event_id: row.get(0)?,
+        task_id: row.get(1)?,
+        from: from.map(TaskState::as_str),
+        to: to.as_str(),
+        occurred_at: row.get(4)?,
+        detail,
+        task: ExportedTask {
+            source: row.get(6)?,
+            source_task_id: row.get(7)?,
+            workflow: row.get(8)?,
+            title: row.get(9)?,
+        },
+    })
+}
+
 /// Put the newest dispatched batch of a conversation back on the queue.
 /// See [`StateDb::unprocess_last_batch`] for why the batch is found by id.
 fn unprocess_last_batch_tx(conn: &Connection, task_id: i64) -> Result<usize, StateError> {
@@ -1837,6 +1992,146 @@ mod tests {
         let all = db.list_task_messages(id).unwrap();
         assert_eq!(keys(&all), ["m1"], "the duplicate must not add a row");
         assert_eq!(all[0].body, "first", "and must not overwrite the original");
+    }
+
+    /// Seed two tasks with a few events each; returns their ids.
+    fn seed_export_fixture(db: &StateDb) -> (i64, i64) {
+        let first = db.upsert_task(&sample_task()).unwrap();
+        db.apply_event(first, TaskEvent::Dispatch, None).unwrap();
+        db.apply_event(
+            first,
+            TaskEvent::Start,
+            Some(serde_json::json!({"kind": "dispatch", "plugin": "herdr"})),
+        )
+        .unwrap();
+
+        let mut other = sample_task();
+        other.source_task_id = "43".to_string();
+        other.title = "Another".to_string();
+        let second = db.upsert_task(&other).unwrap();
+        db.apply_event(
+            second,
+            TaskEvent::Fail,
+            Some(serde_json::json!({"kind": "hook"})),
+        )
+        .unwrap();
+        (first, second)
+    }
+
+    fn collect_export(db: &StateDb, filter: EventExportFilter) -> Vec<ExportedEvent> {
+        let mut out = Vec::new();
+        db.for_each_exported_event::<_, StateError>(filter, |e| {
+            out.push(e);
+            Ok(())
+        })
+        .unwrap();
+        out
+    }
+
+    /// The export walks **every** task in `events.id` order and carries the
+    /// owning task's identity — the two things `list_events` cannot do (#463).
+    #[test]
+    fn export_walks_all_tasks_in_id_order_with_task_identity() {
+        let db = StateDb::open_in_memory().unwrap();
+        let (first, second) = seed_export_fixture(&db);
+
+        let all = collect_export(&db, EventExportFilter::default());
+        let ids: Vec<i64> = all.iter().map(|e| e.event_id).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(ids, sorted, "oldest first, by event id");
+        assert!(
+            all.iter().any(|e| e.task_id == first) && all.iter().any(|e| e.task_id == second),
+            "both tasks appear: {all:?}"
+        );
+
+        let ingest = &all[0];
+        assert_eq!(ingest.from, None, "the ingest event has no prior state");
+        assert_eq!(ingest.task.source, "github");
+        assert_eq!(ingest.task.source_task_id, "42");
+        assert_eq!(ingest.task.workflow, "implement");
+        assert_eq!(ingest.task.title, "Fix the bug");
+    }
+
+    /// `after_id` is a complete cursor: `events` is append-only, so "the last
+    /// id I saw" resumes exactly where the previous export stopped.
+    #[test]
+    fn export_since_resumes_after_the_cursor() {
+        let db = StateDb::open_in_memory().unwrap();
+        seed_export_fixture(&db);
+
+        let all = collect_export(&db, EventExportFilter::default());
+        let cursor = all[1].event_id;
+        let rest = collect_export(
+            &db,
+            EventExportFilter {
+                after_id: Some(cursor),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            rest.iter().map(|e| e.event_id).collect::<Vec<_>>(),
+            all[2..].iter().map(|e| e.event_id).collect::<Vec<_>>(),
+            "strictly greater than the cursor, no overlap and no gap"
+        );
+    }
+
+    /// `task_id` narrows to one task; `without_detail` drops the column.
+    #[test]
+    fn export_filters_by_task_and_can_drop_detail() {
+        let db = StateDb::open_in_memory().unwrap();
+        let (first, _) = seed_export_fixture(&db);
+
+        let mine = collect_export(
+            &db,
+            EventExportFilter {
+                task_id: Some(first),
+                ..Default::default()
+            },
+        );
+        assert!(
+            mine.iter().all(|e| e.task_id == first) && !mine.is_empty(),
+            "only the requested task: {mine:?}"
+        );
+        assert!(
+            mine.iter().any(|e| e.detail.is_some()),
+            "detail is present by default, matching `task show --json`: {mine:?}"
+        );
+
+        let lean = collect_export(
+            &db,
+            EventExportFilter {
+                task_id: Some(first),
+                without_detail: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            lean.len(),
+            mine.len(),
+            "dropping detail drops no rows: {lean:?}"
+        );
+        assert!(
+            lean.iter().all(|e| e.detail.is_none()),
+            "no detail survives: {lean:?}"
+        );
+    }
+
+    /// A sink error aborts the walk instead of draining the table into a
+    /// buffer nobody will read — this is what makes a closed pipe cheap.
+    #[test]
+    fn export_stops_when_the_sink_fails() {
+        let db = StateDb::open_in_memory().unwrap();
+        seed_export_fixture(&db);
+
+        let mut seen = 0;
+        let result =
+            db.for_each_exported_event::<_, StateError>(EventExportFilter::default(), |_| {
+                seen += 1;
+                Err(StateError::NotFound(-1))
+            });
+        assert!(result.is_err(), "the sink's error propagates");
+        assert_eq!(seen, 1, "and the walk stopped at the first row");
     }
 
     /// The pending set is the queue: undispatched only, in arrival order.

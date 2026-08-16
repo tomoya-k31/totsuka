@@ -207,6 +207,76 @@ fn run_json_is_advertised_and_conflicts_with_dry_run() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// `task export` streams the audit log as NDJSON — the flat-text escape hatch
+/// for a state of record that otherwise needs `sqlite3` and the schema (#463).
+#[test]
+fn task_export_streams_ndjson_with_a_resumable_cursor() {
+    let base = scratch("task-export");
+    let (running, _failed, done) = seed_db(&base);
+
+    let out = run(&base, &["task", "export"]);
+    assert!(out.status.success(), "export failed: {}", stderr(&out));
+    let text = stdout(&out);
+
+    // Every line parses on its own — that is what NDJSON buys over a single
+    // document, and what lets `head` / `tail` / a streaming reader work.
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("line is not JSON ({e}): {line}"))
+        })
+        .collect();
+    assert!(rows.len() >= 6, "all tasks' events, not one task's: {text}");
+
+    let ids: Vec<i64> = rows
+        .iter()
+        .map(|r| r["event_id"].as_i64().unwrap())
+        .collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted, "oldest first");
+    assert!(
+        rows.iter().any(|r| r["task_id"] == running) && rows.iter().any(|r| r["task_id"] == done),
+        "events from more than one task: {text}"
+    );
+    // The owning task rides along: an event alone cannot be interpreted.
+    assert_eq!(rows[0]["task"]["source"], "github");
+    assert!(rows[0]["task"]["source_task_id"].is_string());
+
+    // `--since` resumes strictly after the cursor.
+    let cursor = ids[1];
+    let rest = run(&base, &["task", "export", "--since", &cursor.to_string()]);
+    assert!(rest.status.success());
+    let rest_ids: Vec<i64> = stdout(&rest)
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["event_id"]
+                .as_i64()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(rest_ids, ids[2..], "no overlap and no gap at the cursor");
+
+    // `--task` narrows to one task.
+    let one = run(&base, &["task", "export", "--task", &running.to_string()]);
+    assert!(one.status.success());
+    assert!(
+        stdout(&one)
+            .lines()
+            .all(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["task_id"] == running),
+        "only the requested task: {}",
+        stdout(&one)
+    );
+
+    // An unknown task is not an error — an empty export is a real answer, the
+    // same way `--since <latest>` legitimately yields nothing.
+    let none = run(&base, &["task", "export", "--task", "999999"]);
+    assert!(none.status.success(), "{}", stderr(&none));
+    assert!(none.stdout.is_empty(), "{}", stdout(&none));
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn status_reports_stale_lock_and_parseable_json() {
     let base = scratch("status");
