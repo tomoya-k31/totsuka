@@ -77,8 +77,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
-    /// Dispatch queued tasks with a selected repository, gated by slots
-    /// (F-40–F-43).
     /// Log, and tell the operator once, that a task cannot start because a
     /// tool its profile needs is unusable here (#399).
     ///
@@ -135,6 +133,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         );
     }
 
+    /// Dispatch queued tasks with a selected repository, gated by slots
+    /// (F-40–F-43).
     pub(super) async fn dispatch_ready(&mut self) -> Result<(), EngineError> {
         // Cloned rather than borrowed: reporting a blocked task needs
         // `&mut self`, and holding a borrow of `self.settings` across the loop
@@ -200,9 +200,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 
-    /// Dispatch a single task: worktree (create or reuse), `task/dispatch` (or
-    /// `session/attach` on retry reuse, F-44), `state/subscribe`. The slot has
-    /// already been acquired; failure paths release it and fail the task.
     /// Get the worktree this dispatch will hand over: reuse the recorded one
     /// when it is still on disk, else create it (#471, split out of
     /// `dispatch_one`).
@@ -339,7 +336,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         {
             Some((settings_path, mut env)) => {
                 let session_row = self.db.reserve_session(record.id, agent_name)?;
-                // Thread continuity (#140): tentatively stamp the resumed
+                // Thread continuity (#140's D-10, superseded by #242 — the
+                // session to resume is now this task's own): tentatively stamp the resumed
                 // Claude session id onto the fresh row so a later follow-up can
                 // resume it even before this dispatch's SessionStart hook lands
                 // (best-effort resilience). The hook's SessionStart reconciles
@@ -493,6 +491,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 
+    /// Dispatch a single task: worktree (create or reuse), `task/dispatch` (or
+    /// `session/attach` on retry reuse, F-44), `state/subscribe`. The slot has
+    /// already been acquired; failure paths release it and fail the task.
+    ///
+    /// The decision is [`resolve_dispatch_target`]; what remains here is the
+    /// order the side effects have to happen in (#471).
     async fn dispatch_one(&mut self, task_id: i64) -> Result<(), EngineError> {
         let record = self
             .db
