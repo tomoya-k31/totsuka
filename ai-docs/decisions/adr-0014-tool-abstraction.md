@@ -42,4 +42,4 @@ herdr プラグインが `claude … --settings <path> [--resume <id>]` の CLI 
 - 将来の pane runner（orca 等）にもツール対応が自動で波及する（runner は `tool_launch` を起動するだけ）。
 - thread 継続の resume は `caps.resume && caps.session_id_capture` でゲートされ、非対応ツールは常に新規 dispatch に縮退する。
 - herdr.toml の `agent_command` / `plan_args` は後方互換フォールバックとなり、次の breaking protocol バンプで `hook` フィールドとともに削除予定。
-- 検証済みツールバージョンの記録（#196 決定 9）は Phase 2/3 の実機スパイク時に `docs/operations/` へ残す。
+- 検証済みツールバージョンの記録（#196 決定 9）は Phase 2/3 の実機スパイク時に `ai-docs/operations/` へ残す。

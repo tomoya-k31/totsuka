@@ -23,7 +23,7 @@
 //! entries were added/removed) does. Untrusted entries are **silently
 //! skipped** by codex; [`untrusted_events`] lets `doctor` surface that, and
 //! the one-time approval is the TUI startup review (`codex` → "Trust all and
-//! continue"), documented in docs/operations.
+//! continue"), documented in ai-docs/operations.
 
 use std::io;
 use std::path::{Path, PathBuf};

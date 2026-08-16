@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0022 docs バンドルを OKF v0.2 へ移行する
-description: "docs/ の準拠バージョンを OKF v0.1 から v0.2 へ上げる決定。破壊的変更2件（timestamp→generated.at、本文 # Citations→frontmatter sources）をスクリプトで一括変換し、status 語彙を draft/stable/deprecated へ寄せ、okf-lint の YAML 部分集合をネスト対応へ広げる。verified と stale_after は運用ルールだけ定義して既存ファイルへの一括付与はしない。"
+description: "ai-docs/ の準拠バージョンを OKF v0.1 から v0.2 へ上げる決定。破壊的変更2件（timestamp→generated.at、本文 # Citations→frontmatter sources）をスクリプトで一括変換し、status 語彙を draft/stable/deprecated へ寄せ、okf-lint の YAML 部分集合をネスト対応へ広げる。verified と stale_after は運用ルールだけ定義して既存ファイルへの一括付与はしない。"
 tags: [documentation, okf, migration, tooling, lint]
 resource: https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md
 status: stable
@@ -46,13 +46,13 @@ lifecycle / attestation を frontmatter の第一級市民にしている（SPEC
 
 移行しないという選択肢もあった。v0.2 の消費者は legacy な `timestamp` と `# Citations` を
 読んでもよいとされている（§13.1）ので、放置しても「壊れる」わけではない。しかし
-`docs/` は本リポジトリの唯一の知識ソースであり、その価値は機械可読な一貫性にある。
+`ai-docs/` は本リポジトリの唯一の知識ソースであり、その価値は機械可読な一貫性にある。
 2 系統の書式が混在すれば lint も検索も両方を相手にし続けることになり、
 「フォーマットに合わせる」コストは時間とともに増えるだけなので、一括で寄せる。
 
 # Decision
 
-`docs/` を OKF v0.2 準拠とする。ルートの `/index.md` は `okf_version: "0.2"` を宣言する。
+`ai-docs/` を OKF v0.2 準拠とする。ルートの `/index.md` は `okf_version: "0.2"` を宣言する。
 
 ## 1. frontmatter の一括変換はスクリプトで行う
 
@@ -101,7 +101,7 @@ ADR の `accepted` / `superseded` は ADR 界隈では標準的な語彙で、�
 
 本文からの per-claim 脚注化（`[^id]`）は**今回は行っていない**。本リポジトリの本文には
 `[1]` 形式の番号参照が 1 件も無く、脚注を張る先が存在しなかったため。`sources` への移設だけで
-情報は落ちていない。今後の per-claim 帰属は脚注で書く（ルールは `docs/CLAUDE.md`）。
+情報は落ちていない。今後の per-claim 帰属は脚注で書く（ルールは `ai-docs/CLAUDE.md`）。
 
 1 行に複数リンクを持つ引用行が 5 箇所あり、これは 2 本目以降の URL が失われるため
 スクリプトが WARN で列挙し、手でエントリを分割した。黙って捨てないことを優先した。
@@ -136,7 +136,7 @@ ISO 8601、`sources[].resource` 必須、`Attested Computation` の `runtime` �
 `verified` を一括で付ければ、それは**検証していない事実に検証済みの印を付ける**ことになり、
 このファミリの存在意義を最初から壊す。よって既存 74 ファイルは全て `unverified` のまま出す。
 
-代わりに `docs/CLAUDE.md` に記入トリガーを定義した:
+代わりに `ai-docs/CLAUDE.md` に記入トリガーを定義した:
 
 - `verified` は実機で動作確認が取れたときに書く。実装して PR を通しただけでは書かない
 - CI や定期ジョブが担保している事実は `process:<id>` で書く
@@ -152,7 +152,7 @@ lint は `runtime` 必須などの書式検査を通すようにしてあるの�
 - 全 74 concept の信頼段階は `unverified` から始まる。`bash scripts/okf-search.sh --trust-tier unverified`
   が全件を返す状態であり、これは**正直な初期状態**であって不具合ではない
 - frontmatter に書ける YAML が明示的に制限された（インデント 0/2/4、複数行スカラー・アンカー禁止）。
-  制限は `docs/CLAUDE.md` に文書化し、逸脱は lint が落とす
+  制限は `ai-docs/CLAUDE.md` に文書化し、逸脱は lint が落とす
 - `generated.by` は全件同一値のため、当面 `--generated-by` での絞り込みに識別力は無い。
   今後の更新で実際の actor を書き分けていけば意味を持ち始める
 - ADR の `accepted` が frontmatter から消えた。ADR のライフサイクルを機械的に引きたい場合は

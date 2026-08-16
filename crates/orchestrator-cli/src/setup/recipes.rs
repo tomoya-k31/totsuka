@@ -1,7 +1,7 @@
 //! The starting points `totsuka setup` offers (#348).
 //!
 //! Data only. These mirror the scenario recipes in
-//! `docs/development/config-examples.md` — the point of the wizard is that a
+//! `ai-docs/development/config-examples.md` — the point of the wizard is that a
 //! working `[[workflows]]` block is *chosen*, not composed from questions: the
 //! trigger/mode/output/verification combination is what nobody can answer
 //! without reading the docs first, which is exactly the reading the wizard is

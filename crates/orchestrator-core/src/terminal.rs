@@ -6,7 +6,7 @@
 //! only become dangerous on the way to a terminal — which is where [`safe`]
 //! sits. The threat model, the escape-not-strip rule and the reason `--json`
 //! never goes through here live in
-//! `docs/security/terminal-output-sanitization.md`.
+//! `ai-docs/security/terminal-output-sanitization.md`.
 //!
 //! This lives in core rather than in the CLI because two crates print such
 //! text: the CLI's human renderings (`task show`, `status`, `logs`, `doctor`)

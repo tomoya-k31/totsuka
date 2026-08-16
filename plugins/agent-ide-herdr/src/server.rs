@@ -368,7 +368,7 @@ fn capabilities_result() -> Value {
 }
 
 /// The oldest herdr Socket API protocol this plugin can drive
-/// ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-6).
+/// ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-6).
 ///
 /// 17 is where `agent.start` became manifest-driven and `agent.send` was
 /// replaced by `agent.prompt`. Everything older needs the pre-ADR-0032 dispatch

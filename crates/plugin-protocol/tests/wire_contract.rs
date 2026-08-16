@@ -16,7 +16,7 @@
 //!
 //! When a fixture diff appears in a PR, decide additive vs breaking and bump
 //! `PROTOCOL_VERSION` accordingly — the procedure lives in
-//! `docs/components/plugin-protocol.md`.
+//! `ai-docs/components/plugin-protocol.md`.
 //!
 //! Each fixture is checked four ways:
 //! 1. the envelope (`Request`/`Response`/`Notification`) deserializes and

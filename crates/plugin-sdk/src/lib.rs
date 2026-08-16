@@ -20,7 +20,7 @@
 //! Out of scope by design: HTTP clients, LLM helpers, and config schemas —
 //! those stay source-specific.
 //!
-//! [ADR-0008]: https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0008-task-submit-push-ingestion.md
+//! [ADR-0008]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0008-task-submit-push-ingestion.md
 
 pub mod dispatch;
 pub mod lookup;

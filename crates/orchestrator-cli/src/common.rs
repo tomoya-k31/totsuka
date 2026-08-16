@@ -15,7 +15,7 @@ use orchestrator_core::plugins::PluginStore;
 pub type CliError = Box<dyn std::error::Error>;
 
 // Process exit codes (#177; the table lives in
-// docs/components/orchestrator-cli.md). 0 = success is expressed as
+// ai-docs/components/orchestrator-cli.md). 0 = success is expressed as
 // `ExitCode::SUCCESS` at the call site; 2 also covers clap's own parse
 // failures, which exit before `main`'s mapping is reached.
 
@@ -120,7 +120,7 @@ impl Cx {
     /// consult the config to cross-check declarations, so an absent file
     /// simply means "nothing declared". Every other command errors via
     /// [`Cx::load_config`]; which command gets which behavior is documented
-    /// in docs/components/orchestrator-cli.md.
+    /// in ai-docs/components/orchestrator-cli.md.
     pub fn load_config_or_default(
         &self,
         env: &HashMap<String, String>,

@@ -112,7 +112,7 @@ impl Check {
 
 /// Whether resolving an `op://` reference can happen without a prompt (#289).
 ///
-/// [ADR-0006](../../docs/decisions/adr-0006-onepassword-secret-backend.md)
+/// [ADR-0006](../../ai-docs/decisions/adr-0006-onepassword-secret-backend.md)
 /// requires `doctor` to stay non-interactive, but `op read` only prompts when
 /// no session is established. So rather than approximating with "is there a
 /// TTY", doctor asks the question directly — `op whoami` answers it and never

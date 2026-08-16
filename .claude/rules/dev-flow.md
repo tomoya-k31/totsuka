@@ -18,7 +18,7 @@ docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 | `**/*.rs`, `**/Cargo.toml`, `Cargo.lock`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | **Rust set** (below) |
 | a dependency change in `Cargo.toml` / `Cargo.lock` | Rust set **plus** `cargo audit` and `cargo deny check`. If the tools are missing, install them once (`cargo install cargo-audit cargo-deny`); if that is not possible, do NOT silently skip — state it in the PR body and treat the `cargo-audit / cargo-deny` check (`audit.yml`, which fires on these paths) as the gate in post-PR monitoring |
 | any `*.md` anywhere | `rumdl check .` — Markdown lint (below) |
-| `docs/**` | **Docs checks** (below) + the docs obligation |
+| `ai-docs/**` | **Docs checks** (below) + the docs obligation |
 | a prose `*.md` outside the OKF/vendored exclusions and outside `.claude/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
 | `.github/workflows/**` | read the SHA-pin + `ubuntu-slim` rules, validate YAML (`yq . <file>`); if you changed `ci.yml`'s commands, also run the affected Rust set |
 | `.claude/**` (settings / hooks / rules) | validate JSON (`python3 -m json.tool .claude/settings.json`); no Rust, no `.ja.md` |
@@ -28,7 +28,7 @@ Note: on every PR, CI runs `clippy / rustfmt` + `test` + `machete (unused
 deps)` (`ci.yml`, no path filter) and the `lint` check (`okf-lint.yml`)
 regardless of what changed. If `machete` fails, remove the unused dependency
 or suppress a false positive per
-[dependency-hygiene](../../docs/development/dependency-hygiene.md).
+[dependency-hygiene](../../ai-docs/development/dependency-hygiene.md).
 `audit` (`audit.yml`) additionally runs on PRs touching `**/Cargo.toml` /
 `Cargo.lock` / `deny.toml` (plus a daily cron); `coverage` runs only on push
 to `main`. Scoping only changes what you run **locally** before pushing —
@@ -59,7 +59,7 @@ post-PR you still monitor all checks that report on your PR.
   workspace — the E2Es would then test stale binaries. Never rename it into the
   `TOTSUKA_` namespace: unrecognised `TOTSUKA_*` variables print a warning to
   the child's stderr (ADR-0009) and break the tests that parse stderr as JSON
-  (→ [ADR-0018](../../docs/decisions/adr-0018-ci-test-time.md)).
+  (→ [ADR-0018](../../ai-docs/decisions/adr-0018-ci-test-time.md)).
 - `cargo doc --workspace --no-deps` — rustdoc link integrity. `[workspace.lints.rust]
   warnings = "deny"` already makes a broken intra-doc link a hard error
   (exit 101), but **CI never runs `cargo doc`**, so nothing fires it: 18
@@ -73,13 +73,13 @@ post-PR you still monitor all checks that report on your PR.
   - **redundant** explicit target (the shorthand already resolves) → drop
     the target: ``[`Engine`](orchestrator_core::run::Engine)`` → ``[`Engine`]``
   - a **file path** or a citation marker that is not an item at all
-    (``[`docs/references/foo.md`]``, `[V3]`) → code span, or escape the
+    (``[`ai-docs/references/foo.md`]``, `[V3]`) → code span, or escape the
     brackets (`\[V3\]`)
 - rust-analyzer LSP diagnostics clean — fix type errors / missing imports
   (rustc + clippy backed, per [CLAUDE.md](../../CLAUDE.md)).
 
 **Markdown lint** — when any `*.md` changed, anywhere in the repo (not just
-`docs/**` — this covers `README*.md`, `.claude/**`, and prompt files under
+`ai-docs/**` — this covers `README*.md`, `.claude/**`, and prompt files under
 `crates/`):
 
 - `rumdl check .` to zero issues. Configuration is `.rumdl.toml` at the repo
@@ -107,27 +107,27 @@ post-PR you still monitor all checks that report on your PR.
   `git grep` for all three forms (`<<<<<<<`, `=======`, `>>>>>>>`) across the
   worktree is the cheap belt-and-braces check.
 
-**Docs checks** — when `docs/**` changed:
+**Docs checks** — when `ai-docs/**` changed:
 
-- `bash scripts/okf-lint.sh docs` to zero errors.
+- `bash scripts/okf-lint.sh ai-docs` to zero errors.
 - Docs obligation: if a trigger applies (design decision / new component /
-  API·schema·infra change / release), update the relevant `docs/` concept plus
-  its `index.md` / `log.md` in the **same** PR (→ CLAUDE.md, docs/CLAUDE.md).
-- **`docs/log.md` and the `index.md` concept lists are generated** (#360,
-  [ADR-0031](../../docs/decisions/adr-0031-docs-ledger-conflicts.md)). Write a
-  **new** fragment `docs/log.d/YYYY-MM-DD-<slug>.md` instead of editing
+  API·schema·infra change / release), update the relevant `ai-docs/` concept plus
+  its `index.md` / `log.md` in the **same** PR (→ CLAUDE.md, ai-docs/CLAUDE.md).
+- **`ai-docs/log.md` and the `index.md` concept lists are generated** (#360,
+  [ADR-0031](../../ai-docs/decisions/adr-0031-docs-ledger-conflicts.md)). Write a
+  **new** fragment `ai-docs/log.d/YYYY-MM-DD-<slug>.md` instead of editing
   `log.md`, then regenerate. `okf-lint`'s `log-sync` / `index-sync` fail if you
   forget:
 
   ```bash
-  bash scripts/okf-log-build.sh    # docs/log.md
+  bash scripts/okf-log-build.sh    # ai-docs/log.md
   bash scripts/okf-index-build.sh  # index.md のマーカー区間
   ```
 
   Pick a `<slug>` unique to your change (issue number, topic) — that filename is
   the entire mechanism that keeps two same-day PRs from colliding.
 - **Keep every ledger edit in ONE commit.** `git rebase` replays commit by
-  commit, so a branch that touches `docs/log.md` in three commits stops for the
+  commit, so a branch that touches `ai-docs/log.md` in three commits stops for the
   same conflict three times. One commit → at most one stop.
 
 **Always** (any PR, regardless of what changed):
@@ -276,7 +276,7 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
    repo's own written obligations — nothing in CI encodes them. The concrete
    case: PR #320 commit `5a8c465` added a new `pub mod` to
    `crates/orchestrator-core/src/lib.rs` with no row added to
-   `docs/components/orchestrator-core.md`. CI was green on it and Copilot
+   `ai-docs/components/orchestrator-core.md`. CI was green on it and Copilot
    reviewed it and reported no comments; `/code-review` is what found the docs
    obligation, and `6c4f8d7` added the row. **Check the commits, not
    `gh pr diff 320`** — the merged diff contains the fix, so the violation is
@@ -424,11 +424,11 @@ side. `git checkout --ours <file>` during a rebase keeps `main`'s version.
 hand-merge their markers:
 
 ```bash
-bash scripts/okf-log-build.sh && git add docs/log.md
+bash scripts/okf-log-build.sh && git add ai-docs/log.md
 ```
 
-Both sides' `docs/log.d/` fragments are **new files**, so they merge cleanly on
-their own and regenerating picks up both. `docs/**/index.md` is `merge=union`
+Both sides' `ai-docs/log.d/` fragments are **new files**, so they merge cleanly on
+their own and regenerating picks up both. `ai-docs/**/index.md` is `merge=union`
 (`.gitattributes`) and does not conflict at all; run
 `bash scripts/okf-index-build.sh` afterwards to collapse any duplicate the union
 kept.
@@ -463,8 +463,8 @@ Pick the tier from **what conflicted × what `main`'s advance contains**:
 | Tier | 条件 | ローカルで回すもの |
 |---|---|---|
 | **T0** | 衝突ゼロで rebase が通り、`main` の進みが自分の変更ファイルと 1 つも重ならない | 何も回さない。push して CI に任せる |
-| **T1** | 衝突が**元帳だけ**（`docs/log.md` / `docs/**/index.md`）で、`main` の進みが Rust/Cargo を触っていない | `git diff main...HEAD --check`／`bash scripts/okf-lint.sh docs`／`rumdl check .` |
-| **T2** | 衝突が `*.md`・`.claude/**`・`docs/**`（元帳以外）に及ぶ | T1 と同じ（対象が広がるだけ） |
+| **T1** | 衝突が**元帳だけ**（`ai-docs/log.md` / `ai-docs/**/index.md`）で、`main` の進みが Rust/Cargo を触っていない | `git diff main...HEAD --check`／`bash scripts/okf-lint.sh ai-docs`／`rumdl check .` |
+| **T2** | 衝突が `*.md`・`.claude/**`・`ai-docs/**`（元帳以外）に及ぶ | T1 と同じ（対象が広がるだけ） |
 | **T3** | 衝突が Rust/Cargo に及ぶ、**または** `main` の進みが `**/*.rs` / `Cargo.*` を触る | T2 ＋ **Rust セット一式**（`cargo doc` を含む） |
 
 **なぜ T1/T2 で Rust を回さないのか。** `main` の進みが Rust/Cargo を 1 バイトも

@@ -13,25 +13,25 @@
 #     新規追加のときだけ frontmatter の `title` を使う。
 #
 # 機械が持つのは次の 4 つだけ:
-#   1. description を frontmatter から転記し直す（`docs/CLAUDE.md` の全文一致規約）
+#   1. description を frontmatter から転記し直す（`ai-docs/CLAUDE.md` の全文一致規約）
 #   2. 未掲載の concept を末尾へ追記する（ファイル名昇順）
 #   3. 消えた concept の行を落とす
 #   4. 同じリンク先の重複行を畳む（`merge=union` が両側の行を残した後の後始末）
 #
-# 4 が要るのは `.gitattributes` の `docs/**/index.md merge=union` と対になって
+# 4 が要るのは `.gitattributes` の `ai-docs/**/index.md merge=union` と対になって
 # いるから: union はコンフリクトを出さない代わりに両側の行をそのまま残すので、
 # 最後に決定的な形へ寄せる主体がどこかに要る。
 #
 # 対象は `<!-- okf:index:begin ... -->` と `<!-- okf:index:end -->` に挟まれた
 # 範囲だけ。前後の散文・見出し・サブディレクトリへのリンクは触らない
-# （ルート `docs/index.md` はディレクトリ一覧を手書きの説明文で持つので対象外）。
+# （ルート `ai-docs/index.md` はディレクトリ一覧を手書きの説明文で持つので対象外）。
 #
 # 使い方:
-#   scripts/okf-index-build.sh [bundleDir=docs]           # 書き換える
-#   scripts/okf-index-build.sh [bundleDir=docs] --check   # 差分があれば表示して exit 1
+#   scripts/okf-index-build.sh [bundleDir=ai-docs]           # 書き換える
+#   scripts/okf-index-build.sh [bundleDir=ai-docs] --check   # 差分があれば表示して exit 1
 set -u
 
-BUNDLE="docs"
+BUNDLE="ai-docs"
 CHECK=0
 for a in "$@"; do
   case "$a" in

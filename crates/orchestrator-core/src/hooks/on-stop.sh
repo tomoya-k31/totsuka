@@ -39,7 +39,7 @@ bg_count="$(printf '%s' "$bg_json" | jq -r 'length')"
 ts="$(iso_now)"
 
 # Build a Stop-family payload matching the canonical wire contract
-# (docs/apis/agent-events.md): the event kind is carried by `hook_event_name`
+# (ai-docs/apis/agent-events.md): the event kind is carried by `hook_event_name`
 # ("Stop"), and a non-empty `background_tasks` array is what the receiver reads
 # to treat an intermediate Stop as a heartbeat (D-12). $1 = status, $2 = reason.
 stop_payload() {

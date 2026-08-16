@@ -43,7 +43,7 @@ pub struct RootConfig {
     /// config.toml written for v1 would be read as v2 the moment this binary
     /// bumps — silently, since the guard above never fires. Deciding that
     /// default is a prerequisite for cutting v2; see the versioning policy in
-    /// `docs/development/config-reference.md`.
+    /// `ai-docs/development/config-reference.md`.
     #[serde(default = "default_version")]
     pub version: u32,
     /// Global maximum concurrent tasks (F-40). Defaults to
@@ -430,7 +430,7 @@ impl VerificationMode {
 ///
 /// The resolution table is deliberately closed: adding a knob means adding a
 /// profile, not a config key. Same reasoning as the deny sets in
-/// [ADR-0023](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0023-configurable-prompt-surface.md)
+/// [ADR-0023](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0023-configurable-prompt-surface.md)
 /// — a permission-bearing decision reachable through a config string is a
 /// privilege-escalation surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

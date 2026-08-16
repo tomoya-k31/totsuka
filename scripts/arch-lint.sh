@@ -27,7 +27,7 @@ set -euo pipefail
 # 許可リスト（宣言的ルール）
 #
 # 正当なアーキテクチャ変更で依存を追加する場合は、ここを更新した上で、同一 PR で
-# docs/architecture/workspace-dependency-rules.md（必要なら ADR も）を更新すること。
+# ai-docs/architecture/workspace-dependency-rules.md（必要なら ADR も）を更新すること。
 # plugins/* の判定はクレート名の列挙ではなく manifest パス（plugins/ 配下）で行う
 # ため、新プラグイン追加時にこのファイルの更新は不要。
 # ---------------------------------------------------------------------------

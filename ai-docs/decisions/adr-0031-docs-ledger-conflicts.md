@@ -20,26 +20,26 @@ sources:
 
 stable。[#360](https://github.com/tomoya-k31/totsuka/issues/360) の実装とともに確定した。
 
-[ADR-0022](/decisions/adr-0022-okf-v02-migration.md)（OKF v0.2 移行）で整えた `docs/` の運用規約のうち、
+[ADR-0022](/decisions/adr-0022-okf-v02-migration.md)（OKF v0.2 移行）で整えた `ai-docs/` の運用規約のうち、
 **元帳 2 種の書き方**を変える。frontmatter・`type` 語彙・`description` の全文転記といった OKF 側の規約は一切変えない。
 
 # Context
 
 並行 worktree で複数 PR を進めると、`main` が進むたびにほぼ確実にコンフリクトしていた。**運ではなく構造の問題**であることが実測で分かっている[^issue-360]。
 
-- `docs/log.md` は直近 60 commit のうち **55 件**が変更している。
+- `ai-docs/log.md` は直近 60 commit のうち **55 件**が変更している。
 - そのうちログを触った直近 40 commit は、**40 件すべてがファイル先頭への挿入**だった。
 
 ```bash
 git log --format='%H' -40 main | while read c; do
-  git show --format='' -U0 -- docs/log.md "$c" | grep -E '^@@' | head -1
+  git show --format='' -U0 -- ai-docs/log.md "$c" | grep -E '^@@' | head -1
 done
 # → 40/40 が新ファイル側 +3 前後（先頭）で始まる
 ```
 
-これは旧 `docs/CLAUDE.md` の「**新しい日付が上**」と「日付見出しは `## YYYY-MM-DD` 固定。同日ならエントリを追記する」の直接の帰結である。**ログ追記を含む並行 PR 同士は決定論的にコンフリクトする。**
+これは旧 `ai-docs/CLAUDE.md` の「**新しい日付が上**」と「日付見出しは `## YYYY-MM-DD` 固定。同日ならエントリを追記する」の直接の帰結である。**ログ追記を含む並行 PR 同士は決定論的にコンフリクトする。**
 
-第 2 の衝突源が各ディレクトリの `index.md`（リスト末尾への追記）。`docs/decisions/index.md` は直近 60 commit 中 13 件。
+第 2 の衝突源が各ディレクトリの `index.md`（リスト末尾への追記）。`ai-docs/decisions/index.md` は直近 60 commit 中 13 件。
 
 ## なぜコストが大きいか
 
@@ -52,15 +52,15 @@ done
 
 # Decision
 
-## 1. `docs/log.md` を `docs/log.d/` の断片から生成する
+## 1. `ai-docs/log.md` を `ai-docs/log.d/` の断片から生成する
 
-各 PR は **`docs/log.d/YYYY-MM-DD-<slug>.md` を新規作成**する。新規ファイルは衝突しない。`docs/log.md` は `scripts/okf-log-build.sh` が組み立てる。
+各 PR は **`ai-docs/log.d/YYYY-MM-DD-<slug>.md` を新規作成**する。新規ファイルは衝突しない。`ai-docs/log.md` は `scripts/okf-log-build.sh` が組み立てる。
 
 - 断片には `## YYYY-MM-DD` 見出しを**書かない**（日付はファイル名の先頭 10 文字。見出しは生成側が出す）
 - `<slug>` は**必須**。同日に複数の PR が書いてもファイル名が衝突しないための**唯一の仕掛け**なので、issue 番号や題材などその変更に固有の語にする
 - 中身はエントリ本体のみ。複数エントリを 1 ファイルに入れてよい
 
-**並び順**: 日付は降順（従来どおり「新しい日付が上」）。**同日内は断片ファイル名（= slug）の昇順で、時刻順ではない。** 断片には作成時刻が残らないので決定的な鍵はファイル名しかなく、slug は任意の語なので、**後から足したエントリが先のものより上に出ることがある**（`abc-…` は `zzz-…` より前）。同日内の並びに意味は持たせない — 本 ADR を入れた PR の出力自体が既にそうなっている（`2026-08-01-360-ledger-conflicts.md` が `2026-08-01-archive.md` より上に描画される）。当初は「`docs/CLAUDE.md` が元々書いていた『同日ならエントリを追記する』に一致する」と書いていたが、これは**成り立たない保証**だったのでレビューで撤回した。
+**並び順**: 日付は降順（従来どおり「新しい日付が上」）。**同日内は断片ファイル名（= slug）の昇順で、時刻順ではない。** 断片には作成時刻が残らないので決定的な鍵はファイル名しかなく、slug は任意の語なので、**後から足したエントリが先のものより上に出ることがある**（`abc-…` は `zzz-…` より前）。同日内の並びに意味は持たせない — 本 ADR を入れた PR の出力自体が既にそうなっている（`2026-08-01-360-ledger-conflicts.md` が `2026-08-01-archive.md` より上に描画される）。当初は「`ai-docs/CLAUDE.md` が元々書いていた『同日ならエントリを追記する』に一致する」と書いていたが、これは**成り立たない保証**だったのでレビューで撤回した。
 
 **移行**: 既存の 21 日分を 1 日 1 断片（`YYYY-MM-DD-archive.md`）へ機械分割した。**生成結果は移行前とバイト単位で一致する**（唯一の差分が上記 `# Log` の除去）。1 エントリ 1 ファイル（226 個）にしなかったのは、過去の日付には新しいエントリが来ないので衝突の余地が無く、日単位なら本文を verbatim に保てて差分がレビュー可能になるため。
 
@@ -78,7 +78,7 @@ done
 ## 3. `.gitattributes` で `index.md` を `merge=union` にする
 
 ```text
-docs/**/index.md merge=union
+ai-docs/**/index.md merge=union
 ```
 
 追記オンリーのリストなので union と相性がよい。両側の追加行がどちらも残りコンフリクトが出ない。順序が混ざっても ④ の重複畳み込みと①の転記し直しで決定的な形へ戻る。**実測で、同日に別々の concept を足した 2 ブランチの rebase が `index.md` については無衝突になることを確認した。**
@@ -86,12 +86,12 @@ docs/**/index.md merge=union
 ## 4. lint に `log-sync` / `index-sync` を足し、判定はビルダーへ委譲する
 
 ```bash
-bash scripts/okf-lint.sh docs   # log-sync / index-sync を含む
+bash scripts/okf-lint.sh ai-docs   # log-sync / index-sync を含む
 ```
 
 検査の実体は `okf-log-build.sh --check` / `okf-index-build.sh --check` で、lint 側に判定を書き写さない。同じ規約を 2 箇所で実装すると「lint は通るのに生成すると差分が出る」が必ずいつか生まれるため、**ビルダーが正本**とする。
 
-あわせて `docs/log.d/` を lint の走査対象から外した（frontmatter も `index.md` への掲載も要らない材料ディレクトリであり、ルート `index.md` のサブディレクトリ掲載義務からも外す）。`.rumdl.toml` には `docs/log.d/*.md` の MD041 除外を足した — 断片が見出しを持たないのは仕様である。
+あわせて `ai-docs/log.d/` を lint の走査対象から外した（frontmatter も `index.md` への掲載も要らない材料ディレクトリであり、ルート `index.md` のサブディレクトリ掲載義務からも外す）。`.rumdl.toml` には `ai-docs/log.d/*.md` の MD041 除外を足した — 断片が見出しを持たないのは仕様である。
 
 ## 5. 生成器は疑わしい入力を「直す」のではなく「止める」
 
@@ -112,10 +112,10 @@ bash scripts/okf-lint.sh docs   # log-sync / index-sync を含む
 
 ## 6. 衝突時の解決は 1 手
 
-`docs/log.md` が衝突したら、マーカーを手で解決せず**作り直す**。両側の断片は新規ファイルなので勝手にマージされている。
+`ai-docs/log.md` が衝突したら、マーカーを手で解決せず**作り直す**。両側の断片は新規ファイルなので勝手にマージされている。
 
 ```bash
-bash scripts/okf-log-build.sh && git add docs/log.md
+bash scripts/okf-log-build.sh && git add ai-docs/log.md
 ```
 
 # Consequences
@@ -129,10 +129,10 @@ bash scripts/okf-log-build.sh && git add docs/log.md
 
 ## 代償・制約
 
-1. **`docs/log.md` を直接編集できなくなる。** 編集しても次の `okf-log-build.sh` で消える。`docs/CLAUDE.md` / `okf-docs` スキル / `dev-flow.md` の 3 箇所に明記した。
+1. **`ai-docs/log.md` を直接編集できなくなる。** 編集しても次の `okf-log-build.sh` で消える。`ai-docs/CLAUDE.md` / `okf-docs` スキル / `dev-flow.md` の 3 箇所に明記した。
 2. **手順が 1 つ増える**（断片を書く → ビルダーを実行）。忘れると `log-sync` / `index-sync` が落ちるので沈黙はしないが、ローカルで lint を回すまで気づかない。
 3. **同日内の並び順の意味が変わる。** 従来は「その日の中でも新しいものが上」だったのが、断片ファイル名の昇順になる。日付見出しの降順は変わらないので、読み手の主要な導線は保たれる。
-4. **`docs/log.d/` にファイルが増え続ける。** 現状 21 個で、1 PR 1 個のペースで増える。ディレクトリが重くなったら年単位のサブディレクトリへ分ける余地はあるが、いまは不要。
+4. **`ai-docs/log.d/` にファイルが増え続ける。** 現状 21 個で、1 PR 1 個のペースで増える。ディレクトリが重くなったら年単位のサブディレクトリへ分ける余地はあるが、いまは不要。
 5. `index.md` の並びとタイトルは依然として手作業の領域。新しい concept は末尾に追記されるので、望みの位置に置きたいときは生成後に行を移動する（ビルダーはその移動を保存する）。
 
 # Alternatives considered
@@ -151,15 +151,15 @@ bash scripts/okf-log-build.sh && git add docs/log.md
 
 ## マージドライバ（不採用、実測つき）
 
-issue は `.gitattributes` に `docs/log.md merge=okf-log` と**再生成するドライバ**を配線すれば衝突が 0 件になる、としていた。実装して測ったところ**成立しない**。
+issue は `.gitattributes` に `ai-docs/log.md merge=okf-log` と**再生成するドライバ**を配線すれば衝突が 0 件になる、としていた。実装して測ったところ**成立しない**。
 
-ドライバは `docs/log.d/` を読んで `log.md` を作り直す。ところが git は、マージ中に**全パスの内容マージを終えてから** worktree と index を更新する。ドライバが走る時点で相手側の断片は**どちらにも存在しない**[^git-merge-probe]:
+ドライバは `ai-docs/log.d/` を読んで `log.md` を作り直す。ところが git は、マージ中に**全パスの内容マージを終えてから** worktree と index を更新する。ドライバが走る時点で相手側の断片は**どちらにも存在しない**[^git-merge-probe]:
 
 ```text
 --- worktree ---
 2026-08-02-branch-b.md          ← 自分側の断片だけ
 --- index (git ls-files) ---
-docs/log.d/2026-08-02-branch-b.md
+ai-docs/log.d/2026-08-02-branch-b.md
 ```
 
 結果、ドライバは**相手のエントリが丸ごと欠けた `log.md`** を生成し、しかもコンフリクトを出さないのでそのままコミットできてしまう。`git rebase` でも `git merge` でも同じだった。
@@ -170,11 +170,11 @@ docs/log.d/2026-08-02-branch-b.md
 
 # 検証
 
-- `bash scripts/okf-lint.sh docs` が 0 error / 0 warning
+- `bash scripts/okf-lint.sh ai-docs` が 0 error / 0 warning
 - `rumdl check .` が 0 件（**MD024 を含む**。断片の MD041 は `.rumdl.toml` で除外）
-- 移行前後で `docs/log.md` が**バイト一致**（差分は迷子の `# Log` の除去のみ）
+- 移行前後で `ai-docs/log.md` が**バイト一致**（差分は迷子の `# Log` の除去のみ）
 - **生成器のガードは、レビューが実演した失敗を実際に塞ぐことを 1 件ずつ確認した**（断片ゼロ → 中止して log.md を書かない／インデントしたマーカー → 中止して付録が残る／断片の frontmatter・`## ` 見出し → 中止／区間内の見出し → 中止して消えない／区間外の concept 行 → 中止／タイトル衝突 → 両表記を出して中止／ビルダー欠落 → `log-sync` がエラー）
-- **並行 2 ブランチの実測**: 同日にログエントリを足し、それぞれ別の concept を `docs/quality/` に足した 2 ブランチを rebase したところ、`index.md` は**無衝突**、`log.md` のみ衝突し `bash scripts/okf-log-build.sh && git add docs/log.md` の 1 手で解決して両方のエントリが残ることを確認した
+- **並行 2 ブランチの実測**: 同日にログエントリを足し、それぞれ別の concept を `ai-docs/quality/` に足した 2 ブランチを rebase したところ、`index.md` は**無衝突**、`log.md` のみ衝突し `bash scripts/okf-log-build.sh && git add ai-docs/log.md` の 1 手で解決して両方のエントリが残ることを確認した
 - ビルダーの修復動作（重複の畳み込み・description の転記し直し・未掲載の追記・消えた concept の削除）を実際に壊して確認し、元へ戻すとバイト一致することも確認した
 
 [^issue-360]: #360 の衝突頻度の実測

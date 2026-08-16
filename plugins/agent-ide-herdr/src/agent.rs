@@ -2,8 +2,8 @@
 //! agent_ide calls into herdr Socket API method calls and event streams.
 //!
 //! Protocol facts this adapter is written against (herdr 0.7.5 / protocol 17,
-//! verified live in [ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md),
-//! mirrored in `docs/references/herdr-socket-api.md`):
+//! verified live in [ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md),
+//! mirrored in `ai-docs/references/herdr-socket-api.md`):
 //! - the agent CLI is launched with `agent.start {name, kind, pane_id, args}`
 //!   into a pane the **caller** supplies. `kind` picks the executable, `name` is
 //!   an identifier (`[a-z][a-z0-9_-]{0,31}`, unique among live agents), and
@@ -75,7 +75,7 @@ use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT};
 /// `workspace.rename` write the former, and only `pane.rename` writes the
 /// latter — which totsuka never calls. Reading it back off panes is what made
 /// `session/list` return an empty array against every real herdr, and with it
-/// [ADR-0013](../../../docs/decisions/adr-0013-orphan-pane-detection.md)'s
+/// [ADR-0013](../../../ai-docs/decisions/adr-0013-orphan-pane-detection.md)'s
 /// orphan-pane detection, since 0.2.2.
 ///
 /// [`crate::agent::HerdrAgent::list_sessions`] still reports it as the
@@ -87,7 +87,7 @@ const OWNED_LABEL_PREFIX: &str = "totsuka ";
 const SCREEN_LINES: u64 = 200;
 
 /// How long `agent.prompt` is given to observe the agent reacting, in
-/// milliseconds ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-5).
+/// milliseconds ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-5).
 ///
 /// herdr's own floor is 5s for the *first* state change; this is the outer
 /// bound on reaching a settled state. Generous on purpose — the cost of being
@@ -230,7 +230,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// allocated: start the CLI, submit the prompt, and build the handle.
     ///
     /// **The agent runs in the workspace's own root pane** (protocol 17,
-    /// [ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-4).
+    /// [ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-4).
     /// `agent.start` no longer creates a pane — it takes one that is already at
     /// an interactive shell prompt — and that suits the hook environment: only
     /// the root pane inherits `workspace.create`'s `env`, and the root pane is
@@ -385,7 +385,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// to run in, at the configured direction and ratio.
     ///
     /// **There is no `pane.close` here any more** (protocol 17,
-    /// [ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-4).
+    /// [ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-4).
     /// Under protocol 16 `agent.start` made a *second* pane, leaving the
     /// workspace's initial shell stranded, and closing it was this method's
     /// first act. In 17 the agent runs in that initial pane, so there is
@@ -396,7 +396,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// workspace's, which for a hook-capable dispatch is the Orchestrator's
     /// hook environment — `TOTSUKA_HOOK_TOKEN` included. A pane a human types
     /// into is not where a bearer token belongs
-    /// (`docs/security/hook-security.md`), and a pane made by `pane.split`
+    /// (`ai-docs/security/hook-security.md`), and a pane made by `pane.split`
     /// inherits nothing, so simply not passing `env` is what removes it.
     ///
     /// **Every failure is a warning, never an error.** The layout is
@@ -437,7 +437,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
 
     /// Tell herdr which repository, task and mode this workspace is for, so
     /// the sidebar can say so (#417,
-    /// [ADR-0039](../../../docs/decisions/adr-0039-herdr-sidebar-identity.md)).
+    /// [ADR-0039](../../../ai-docs/decisions/adr-0039-herdr-sidebar-identity.md)).
     ///
     /// Reported to the **workspace and its root pane both**: `$name` in a
     /// sidebar row resolves against workspace metadata in the spaces panel and
@@ -449,7 +449,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// Before `agent.start`, which is a retry loop of up to 180 seconds. After
     /// it, the rows would stay anonymous through exactly the window an
     /// operator is most likely to be looking at them. Two socket round trips
-    /// at ~25 ms each ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md))
+    /// at ~25 ms each ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md))
     /// is noise beside that.
     ///
     /// # Failure
@@ -682,7 +682,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// Hand `prompt` to the agent and wait until it reacts.
     ///
     /// One call (protocol 17,
-    /// [ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-5).
+    /// [ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-5).
     /// `agent.prompt` types the text *and* submits it, and its `wait` is
     /// herdr's own version of the guarantee this method used to build by hand:
     /// it requires an observed state change within 5s of a submission from a
@@ -1562,7 +1562,7 @@ fn compose_prompt(params: &TaskDispatchParams) -> String {
 const NAME_PREFIX_CHARS: usize = 21;
 
 /// The `name` for `agent.start`: `t-<readable prefix>-<8 hex of the task id>`
-/// ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-2).
+/// ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-2).
 ///
 /// Protocol 17 made `name` an **identifier**, not a label:
 /// `[a-z][a-z0-9_-]{0,31}`, unique among live agents. Every task id this plugin
@@ -1641,7 +1641,7 @@ fn token_value(value: &str) -> String {
 }
 
 /// The herdr `kind` for `program`
-/// ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-1).
+/// ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-1).
 ///
 /// Protocol 17 chooses the executable itself from this enum, so the plugin can
 /// no longer pass `program` through: it translates the program's **file name**

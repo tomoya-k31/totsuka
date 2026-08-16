@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# okf-log-build.sh — docs/log.md を docs/log.d/ の断片ファイルから生成する。
+# okf-log-build.sh — ai-docs/log.md を ai-docs/log.d/ の断片ファイルから生成する。
 #
 # なぜ生成物なのか（#360）:
-#   docs/log.md は「新しい日付が上」という規約上、**全 PR が同じ 1 行に書き込む**
+#   ai-docs/log.md は「新しい日付が上」という規約上、**全 PR が同じ 1 行に書き込む**
 #   ファイルだった。実測で、ログを触った直近 40 commit は 40 件すべてがファイル
 #   先頭への挿入で、ログ追記を含む並行 PR 同士は運ではなく**決定論的に**
 #   コンフリクトしていた。コンフリクト中の PR は `refs/pull/N/merge` を作れず
@@ -10,24 +10,24 @@
 #   各 PR が**新規ファイル**を 1 枚置く形にすれば、その衝突源が構造的に消える。
 #
 # 断片ファイルの規約:
-#   docs/log.d/YYYY-MM-DD-<slug>.md
+#   ai-docs/log.d/YYYY-MM-DD-<slug>.md
 #     - 日付は先頭 10 文字。`## YYYY-MM-DD` 見出しは**断片には書かない**（生成側が出す）
 #     - slug は必須。同日に複数 PR が書いてもファイル名が衝突しないための唯一の仕掛け
 #     - 中身は `* **Creation**: …` のようなエントリ本体のみ（複数エントリ可）
 #
 # 並び順:
-#   日付は降順（`docs/CLAUDE.md` の「新しい日付が上」）。
+#   日付は降順（`ai-docs/CLAUDE.md` の「新しい日付が上」）。
 #   **同日内はファイル名（= slug）の昇順であって、時刻順ではない。** 断片には
 #   作成時刻が残らないので決定的な鍵はファイル名しかなく、slug は任意の語なので
 #   後から足したエントリが先のエントリより上に出ることがある（`abc-…` は
 #   `zzz-…` より前）。同日内の並びに意味を持たせないこと。
 #
 # 使い方:
-#   scripts/okf-log-build.sh [bundleDir=docs]           # docs/log.md を書き出す
-#   scripts/okf-log-build.sh [bundleDir=docs] --check   # 差分があれば表示して exit 1
+#   scripts/okf-log-build.sh [bundleDir=ai-docs]           # ai-docs/log.md を書き出す
+#   scripts/okf-log-build.sh [bundleDir=ai-docs] --check   # 差分があれば表示して exit 1
 set -u
 
-BUNDLE="docs"
+BUNDLE="ai-docs"
 CHECK=0
 for a in "$@"; do
   case "$a" in

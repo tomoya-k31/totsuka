@@ -25,13 +25,13 @@
 # しか残らない。取りこぼしを黙って通さないよう WARN で列挙するので、対象行は
 # 変換後に手で sources エントリを足すこと。
 #
-# 使い方: scripts/okf-migrate-v02.sh [bundleDir=docs] [--dry-run] [--actor ACTOR]
+# 使い方: scripts/okf-migrate-v02.sh [bundleDir=ai-docs] [--dry-run] [--actor ACTOR]
 #   --dry-run     : 書き換えずに diff を表示する
 #   --actor ACTOR : generated.by に入れる actor（既定: human:tomoya-k31）
 # 終了コード: 変換に失敗したファイルがあれば 1
 set -u
 
-BUNDLE="docs"
+BUNDLE="ai-docs"
 DRY_RUN=0
 ACTOR="human:tomoya-k31"
 while [ $# -gt 0 ]; do

@@ -1,7 +1,7 @@
 ---
 type: Guide
-title: docs バンドル運用ルール（エージェント向け）
-description: このOKFバンドルの書き方・更新タイミング・index/logの維持ルール。docs配下を触る前に必ず読むこと。
+title: ai-docs バンドル運用ルール（エージェント向け）
+description: このOKFバンドルの書き方・更新タイミング・index/logの維持ルール。ai-docs/ 配下を触る前に必ず読むこと。
 tags: [meta, okf, rules]
 status: stable
 generated: { by: human:tomoya-k31, at: 2026-07-29T00:00:00Z }
@@ -9,8 +9,8 @@ generated: { by: human:tomoya-k31, at: 2026-07-29T00:00:00Z }
 
 # このファイルについて
 
-`docs/` は [OKF (Open Knowledge Format) v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md) に準拠した Knowledge Bundle である。
-エージェントが `docs/` 配下のファイルを作成・更新する場合、本ファイルのルールに **必ず** 従うこと。
+`ai-docs/` は [OKF (Open Knowledge Format) v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md) に準拠した Knowledge Bundle である。
+エージェントが `ai-docs/` 配下のファイルを作成・更新する場合、本ファイルのルールに **必ず** 従うこと。
 
 読み方（progressive disclosure）:
 
@@ -18,7 +18,7 @@ generated: { by: human:tomoya-k31, at: 2026-07-29T00:00:00Z }
 2. 関係するディレクトリの `index.md` を読む
 3. 必要な concept ファイルだけを開く
 
-いきなり `docs/` を全走査しないこと。
+いきなり `ai-docs/` を全走査しないこと。
 
 ディレクトリ横断で条件検索したい場合（「type が Decision の全部」「status が deprecated な全部」等）は、
 index.md を1つずつ辿る代わりに `okf-search` スキル（`scripts/okf-search.sh`、frontmatter をクエリキーに絞り込む）
@@ -64,7 +64,7 @@ sources:                                    # 出典があるときだけ
 ## 書ける構造（YAML 部分集合）
 
 v0.2 で `sources` などのネストが必要になったため、本バンドルは次の部分集合に限定する。
-逸脱は `bash scripts/okf-lint.sh docs` の `fm-yaml` が検出する。
+逸脱は `bash scripts/okf-lint.sh ai-docs` の `fm-yaml` が検出する。
 
 - インデントは **0 / 2 / 4 スペースのみ**。タブは使えない
 - ブロックシーケンス項目は `  - `（インデント 2）で始める
@@ -195,7 +195,7 @@ v0.1 の本文 `# Citations` リストは **`sources` に置き換わった**（
 
 # クロスリンク
 
-- バンドルルート相対で書く: `[顧客テーブル](/data/customers.md)`（`/` は `docs/` を指す）
+- バンドルルート相対で書く: `[顧客テーブル](/data/customers.md)`（`/` は `ai-docs/` を指す）
 - 相対リンク（`./other.md`）は同一ディレクトリ内のみ許容
 - リンク先が未執筆でもよい（SPEC §6.1）が、CI が警告を出すので意図的な場合のみ残す
 
@@ -299,7 +299,7 @@ lint は書式だけ受け付ける状態にしてあるので、必要になっ
 - **コンフリクトしたときの解決は 1 手**（判断は要らない）:
 
   ```bash
-  bash scripts/okf-log-build.sh && git add docs/log.md
+  bash scripts/okf-log-build.sh && git add ai-docs/log.md
   ```
 
 # 検証（CI / hooks）
@@ -307,8 +307,8 @@ lint は書式だけ受け付ける状態にしてあるので、必要になっ
 ドキュメントを変更したら必ず lint を通すこと:
 
 ```bash
-bash scripts/okf-lint.sh docs          # 下記チェックをエラーとして報告
-bash scripts/okf-lint.sh docs --strict # 加えてリンク切れもエラー化
+bash scripts/okf-lint.sh ai-docs          # 下記チェックをエラーとして報告
+bash scripts/okf-lint.sh ai-docs --strict # 加えてリンク切れもエラー化
 ```
 
 構造チェック:
@@ -332,7 +332,7 @@ bash scripts/okf-lint.sh docs --strict # 加えてリンク切れもエラー化
 どちらも直し方は同じで、ビルダーを実行するだけ:
 
 ```bash
-bash scripts/okf-log-build.sh    # docs/log.md を作り直す
+bash scripts/okf-log-build.sh    # ai-docs/log.md を作り直す
 bash scripts/okf-index-build.sh  # 各 index.md の一覧を正規化する
 ```
 
@@ -351,10 +351,10 @@ v0.2 ファミリのチェック:
 | `[W] footnote` | 本文の脚注ラベルに対応する `sources[].id` がある |
 | `[W] okf-version` | ルート `index.md` の `okf_version` が `"0.2"` |
 
-PostToolUse hook（`.claude/settings.json`）により、docs 配下の編集後に自動で lint が走る。エラーが返った場合は必ず修正してから作業を完了すること。
+PostToolUse hook（`.claude/settings.json`）により、`ai-docs/` 配下の編集後に自動で lint が走る。エラーが返った場合は必ず修正してから作業を完了すること。
 
 v0.1 形式で書かれたファイルを機械的に v0.2 へ寄せる変換スクリプトがある（冪等・`--dry-run` 付き）:
 
 ```bash
-bash scripts/okf-migrate-v02.sh docs --dry-run
+bash scripts/okf-migrate-v02.sh ai-docs --dry-run
 ```

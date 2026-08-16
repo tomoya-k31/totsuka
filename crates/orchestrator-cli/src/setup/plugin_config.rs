@@ -30,7 +30,7 @@
 //! resolved at dispatch by the orchestrator (F-65). The same rule as
 //! `config.toml`, for the same reason — see [ADR-0028].
 //!
-//! [ADR-0028]: https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0028-setup-wizard.md
+//! [ADR-0028]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0028-setup-wizard.md
 
 use serde::Serialize;
 

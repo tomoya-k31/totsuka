@@ -101,7 +101,7 @@ use semver::{Version, VersionReq};
 /// - [`Capabilities`](crate::manifest::Capabilities)`::design_preview` is
 ///   removed (#356/#411). Nothing ever read it — neither the Orchestrator nor
 ///   any bundled plugin — so it was a declaration with no behaviour behind it
-///   ([ADR-0030](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0030-herdr-pane-layout.md)).
+///   ([ADR-0030](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0030-herdr-pane-layout.md)).
 ///   The manifest key is tolerated on the wire (`Capabilities` has no
 ///   `deny_unknown_fields`) and ignored; a plugin that *reads* the field no
 ///   longer compiles.

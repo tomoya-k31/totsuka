@@ -128,7 +128,7 @@ impl PluginStore {
     ///
     /// The binary is always `binary_dir/<manifest name>` — the naming
     /// invariant is the same one `plugin install` and the store itself rely on
-    /// (see `docs/decisions/adr-0027-plugin-artifact-naming.md`), so splitting
+    /// (see `ai-docs/decisions/adr-0027-plugin-artifact-naming.md`), so splitting
     /// the two paths does not weaken it. This exists so a plugin can be
     /// installed out of a Cargo checkout without first assembling a staging
     /// directory: the manifest stays in `plugins/<pkg>/` and the binary is read

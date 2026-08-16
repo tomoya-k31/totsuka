@@ -21,7 +21,7 @@ stable。[#348](https://github.com/tomoya-k31/totsuka/issues/348) の実装と�
 
 手で書くのが難しいのは記法ではなく**意味論**のほうだ。`trigger` / `mode` / `output` / `verification` の組み合わせは、[設定リファレンス](/development/config-reference.md)と[設定例](/development/config-examples.md)を読まないと決められない。つまり「設定ファイルの書き方が分からない」のではなく「どの組み合わせが自分のやりたいことなのかが分からない」。
 
-さらに全体の導線が存在しない。手順は README の 5 ステップと `docs/operations/` の 4 ランブックに散っており、「ゼロから動くまで」を通しで示すものがなかった。
+さらに全体の導線が存在しない。手順は README の 5 ステップと `ai-docs/operations/` の 4 ランブックに散っており、「ゼロから動くまで」を通しで示すものがなかった。
 
 # Decision
 

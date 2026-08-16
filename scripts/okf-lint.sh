@@ -5,7 +5,7 @@
 #   [E] frontmatter : index.md / log.md 以外の全 .md が YAML frontmatter を持つ
 #   [E] fm-yaml     : frontmatter が YAML として壊れていない（後述の部分集合で検証）
 #   [E] type        : frontmatter に空でない `type` がある (SPEC §4.1 REQUIRED)
-#   [E] description : frontmatter に空でない `description` がある (docs/CLAUDE.md)
+#   [E] description : frontmatter に空でない `description` がある (ai-docs/CLAUDE.md)
 #   [E] index-fm    : ルート以外の index.md が frontmatter を持たない (SPEC §8/§11)
 #   [E] index-exists: concept/サブディレクトリを含むディレクトリに index.md がある
 #   [E] index-listed: 各 concept / サブディレクトリが index.md からリンクされている
@@ -47,12 +47,12 @@
 # リンク切れ検査は lychee に委譲（インストール済みの場合のみ / --no-links でスキップ）:
 #   lychee --offline --root-dir <bundle> <bundle>
 #
-# 使い方: scripts/okf-lint.sh [bundleDir=docs] [--strict] [--no-links]
+# 使い方: scripts/okf-lint.sh [bundleDir=ai-docs] [--strict] [--no-links]
 #   --strict   : リンク切れ(lychee)もエラー扱いにする（既定は警告）
 # 終了コード: エラー1件以上で 1
 set -u
 
-BUNDLE="docs"
+BUNDLE="ai-docs"
 STRICT=0
 NO_LINKS=0
 for a in "$@"; do
@@ -334,7 +334,7 @@ fm_lint() {
 
       # ---- v0.2 ファミリの意味的検査 ----
       if (need_desc == 1 && !("description" in topkeys))
-        err("description", "frontmatter に空でない `description` がない（index 生成に使うため必須 / docs/CLAUDE.md）")
+        err("description", "frontmatter に空でない `description` がない（index 生成に使うため必須 / ai-docs/CLAUDE.md）")
 
       if ("timestamp" in topkeys)
         err("legacy", topln["timestamp"] " 行目: v0.1 の `timestamp` は `generated: { by, at }` に置き換わった (§13.1)。scripts/okf-migrate-v02.sh で変換する")
@@ -470,7 +470,7 @@ fm_value() {
 }
 
 # index.md の 1 エントリから「リンク先」と「転記された description」を取り出す。
-# 形式は docs/CLAUDE.md の `* [Title](file.md) - description`。
+# 形式は ai-docs/CLAUDE.md の `* [Title](file.md) - description`。
 # 出力: "<リンク先>\t<description>" を 1 行ずつ。
 index_entries() {
   awk '

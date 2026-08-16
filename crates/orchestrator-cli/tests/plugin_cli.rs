@@ -584,7 +584,7 @@ fn enable_flag_rejects_an_unparseable_config_before_installing() {
 // ---------------------------------------------------------------------------
 // --from-source (#346): build out of a checkout and install in one command.
 //
-// These never invoke Cargo. `docs/quality/test-strategy.md` (ADR-0018) forbids
+// These never invoke Cargo. `ai-docs/quality/test-strategy.md` (ADR-0018) forbids
 // calling `cargo build` from a test, so the wiring is exercised through
 // `--print-plan`, which resolves everything and stops before building.
 // ---------------------------------------------------------------------------

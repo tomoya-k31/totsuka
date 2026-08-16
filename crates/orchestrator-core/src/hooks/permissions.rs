@@ -7,7 +7,7 @@
 //! else. A config key that composed deny rules from strings would let prose —
 //! a value that reads like documentation — hand out permissions. That is the
 //! same conclusion, for the same reason, that
-//! [ADR-0023](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0023-configurable-prompt-surface.md)
+//! [ADR-0023](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0023-configurable-prompt-surface.md)
 //! reached about opencode's deny map.
 //!
 //! # Why a deny list is worth anything
@@ -129,7 +129,7 @@
 //! an unattended pane sat on `Do you want to proceed?` and never moved. That is
 //! [#409](https://github.com/tomoya-k31/totsuka/issues/409)'s hang returning at
 //! `Bash` after
-//! [ADR-0036](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0036-read-only-violation-fails-the-task.md)
+//! [ADR-0036](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0036-read-only-violation-fails-the-task.md)
 //! removed it at `ExitPlanMode`, and it is the whole of
 //! [#420](https://github.com/tomoya-k31/totsuka/issues/420). It never showed up
 //! on the development machine because that machine's user settings carry a wide
@@ -185,7 +185,7 @@ const DENY_FILE_EDITS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 /// affordable for `triage`/`design`, which write their artifact with
 /// `gh issue comment`. Inspecting the whole command with a `PreToolUse` hook
 /// was the obvious answer and was **rejected** in
-/// [ADR-0036](https://github.com/tomoya-k31/totsuka/blob/main/docs/decisions/adr-0036-read-only-violation-fails-the-task.md):
+/// [ADR-0036](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0036-read-only-violation-fails-the-task.md):
 /// separating `--body 'use A && B'` from `… && git push` needs a
 /// quoting-aware parser, and an imperfect one would carry the name "command
 /// safety check". They rely on the patterns below plus a read-only violation

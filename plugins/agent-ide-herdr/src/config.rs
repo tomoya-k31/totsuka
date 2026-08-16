@@ -26,7 +26,7 @@ pub struct HerdrConfig {
     #[serde(default)]
     pub identity: IdentityConfig,
     /// Overrides for the program-basename → herdr `kind` mapping
-    /// ([ADR-0032](../../../docs/decisions/adr-0032-herdr-protocol-17.md) D-1).
+    /// ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-1).
     ///
     /// herdr protocol 17 picks the executable itself from `agent.start`'s
     /// `kind`, so the plugin translates
@@ -89,7 +89,7 @@ impl Default for LayoutConfig {
 }
 
 /// Whether dispatch reports what a workspace is for (#417,
-/// [ADR-0039](../../../docs/decisions/adr-0039-herdr-sidebar-identity.md)).
+/// [ADR-0039](../../../ai-docs/decisions/adr-0039-herdr-sidebar-identity.md)).
 ///
 /// Today that means the `workspace.report_metadata` / `pane.report_metadata`
 /// calls and nothing else. #417 PR-3 adds a human-readable
