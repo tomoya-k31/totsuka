@@ -432,9 +432,9 @@ pub struct RunStats {
 /// The summary printed when `run` exits (§5.1 one-shot contract).
 ///
 /// [`Serialize`](serde::Serialize) is the `totsuka run --json` document
-/// (#462): the field names *are* the machine-readable contract, so renaming
-/// one is a breaking change for callers even though it is a private field
-/// nowhere else.
+/// (#462): the **serialized field names are the public contract**, independent
+/// of who reads the struct from Rust. Renaming one breaks every caller parsing
+/// the output even if nothing in this workspace refers to it by name.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct RunSummary {
     /// Counters for this run.

@@ -70,13 +70,17 @@ enum Command {
         /// instead of exiting after one cycle.
         #[arg(long)]
         watch: bool,
-        /// Show which tasks would match, which repository would be selected,
-        /// and which agent would run — without executing anything.
+        /// Report what would happen without executing anything.
         ///
-        /// Refused together with `--json`: every task source is push-only
-        /// since protocol 0.2.0, so `dry_run` has nothing to preview and its
-        /// only output is the sentence saying so. A JSON envelope around that
-        /// would promise a machine-readable preview that does not exist.
+        /// **A no-op since protocol 0.2.0**: every task source pushes
+        /// (`task/submit`) rather than being fetched on demand, so there is
+        /// nothing to preview ahead of time and the only output is the
+        /// sentence saying so. Kept because the flag is a documented part of
+        /// the command surface and its zero-side-effect guarantee still holds.
+        ///
+        /// Refused together with `--json` for the same reason: a JSON envelope
+        /// around an empty preview would promise machine-readable output that
+        /// does not exist.
         #[arg(long, conflicts_with = "json")]
         dry_run: bool,
         /// One-shot's quiet-period floor in milliseconds (default 2000) before
