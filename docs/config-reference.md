@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e16b96f4e84fb1493adc1dccb6827541c2bf0ec56cd12748c003b94ad417ffc9 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:1806fb2af74e65526105172ae86a3a920489b55b1d6acdc1e99aa551e94f29bc -->
 
 # Configuration reference
 
@@ -334,6 +334,60 @@ Defines the AI tool CLI launched inside the pane. `claude`, `codex`, and `openco
 Using `kind = "codex"` needs a one-time trust setup in the tool itself. `kind = "opencode"` needs no trust step but degrades in more places.
 
 The adapters differ in how they resume and how they receive hook configuration. Claude takes a settings file and resumes with a flag; codex registers hooks globally and resumes with a subcommand; opencode also registers globally and resumes with a flag. opencode has no invisible injection, so task instructions and the marker convention reach it as visible context in the pane.
+
+### Choosing a model and a reasoning effort
+
+**There is no dedicated `model` or `effort` key in `[tools.{name}]`.** The four keys above are the only ones accepted; anything else fails when the configuration is parsed:
+
+```text
+unknown field `model`, expected one of `kind`, `command`, `mode_args`, `plan_args`
+```
+
+Model and reasoning effort go into `command`, **as flags of the tool CLI itself**.
+
+```toml
+[tools.claude-fast]
+kind = "claude"
+command = "claude --model haiku --effort low"
+
+[tools.claude-deep]
+kind = "claude"
+command = "claude --model opus --effort high"
+```
+
+The spelling belongs to the tool CLI, not to totsuka, so it differs per kind. The table below was checked against claude 2.1.233, codex 0.145.0, and opencode 1.18.4. **What gets launched is the interactive CLI** (`command` defaults to the kind's own name), so a flag that only exists on a non-interactive subcommand (`codex exec`, `opencode run`) is not available.
+
+| kind | Model | Reasoning effort |
+|---|---|---|
+| claude | `--model <alias\|full-name>` | `--effort <low\|medium\|high\|xhigh\|max>` |
+| codex | `-m, --model <MODEL>` | `-c model_reasoning_effort=<value>` (no dedicated flag) |
+| opencode | `-m, --model <provider/model>` | **not settable on the interactive CLI** (see below) |
+
+codex's `model_reasoning_effort` is a configuration override passed with `-c`, so **the CLI does not validate the value**. An invalid one still launches and fails on the first request instead (passing `bogusvalue` returns `Supported values are: 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', and 'max'.`).
+
+opencode's reasoning effort is `--variant`, but **that flag belongs to `opencode run` (non-interactive) and does not exist on the interactive TUI that gets launched**. The alternative is to set `variant` on an agent in opencode's own `opencode.json` — though the official schema defines it as applying **only when the agent's configured model is used**, so writing `-m` in `command` may defeat it (unverified). Pick one place for the model and the variant rather than splitting them.
+
+#### Switching per workflow
+
+Tool resolution goes workflow pin > repository default > `default_tool` > built-in `claude`, so put several profiles in the registry and select one with `[[workflows]].tool`:
+
+```toml
+[[workflows]]
+name = "triage"
+tool = "claude-fast"
+
+[[workflows]]
+name = "implement"
+tool = "claude-deep"
+```
+
+#### Do not put them in `mode_args` / `plan_args`
+
+Those two **replace the kind's default wholesale**. Writing `plan_args = ["--effort", "low"]` drops claude's default `["--permission-mode", "plan"]`, removing the structural boundary of plan mode. Launch options that do not depend on the mode belong in `command`.
+
+#### `command` is not a shell
+
+`command` is only split on whitespace; shell quoting is not interpreted. **A single argument containing a space therefore cannot be written in `command`.** If you need one, use `mode_args` / `plan_args`, which are arrays — but then you have to restate the kind's defaults yourself, as above.
 
 ### Not stopping at approval prompts
 

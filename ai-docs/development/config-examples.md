@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/fable-5, at: 2026-08-13T18:30:00+09:00 }
+generated: { by: claude-code/fable-5, at: 2026-08-17T06:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -141,8 +141,9 @@ default_tool = "claude"  # グローバル既定の AI ツール（#196。省略
 # codex は一回きりのセットアップが必要 → /operations/codex-tool-setup.md
 # opencode はアセット自動配置のみ（縮退に注意）→ /operations/opencode-tool-setup.md
 [tools.claude-fast]
-kind = "claude"                        # アダプタ種別: claude | codex | opencode
-command = "claude --model haiku"       # 空白区切り: 先頭 = プログラム、残り = 基本引数
+kind = "claude"                             # アダプタ種別: claude | codex | opencode
+command = "claude --model haiku --effort low"  # 空白区切り: 先頭 = プログラム、残り = 基本引数
+                                            # モデル / 推論強度に専用キーは無く、ここに書く
 # plan_args = ["--permission-mode", "plan"]   # plan モード引数の上書き（claude 既定と同じ）
 
 # ── リポジトリ ────────────────────────────────────────────
