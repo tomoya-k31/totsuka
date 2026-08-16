@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:a36d830b6b778963e710b709b73e8d4a2f5799be8f2688530808b95194fb52ef -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:4c69e4ed342d09a3896c52979ff4ecf5d2e6f63a533a253618f2d091c7cd67d6 -->
 
 # What totsuka is
 
@@ -74,13 +74,16 @@ A single binary, run in the foreground.
 | `run [--watch] [--json]` | The main loop, from intake to dispatch. `--watch` stays up until you stop it |
 | `status [--json]` | Running, queued, and waiting tasks, plus worktrees |
 | `task list / show <id> / cancel <id> / retry <id>` | Working with individual tasks |
+| `task export` | Stream the audit log to stdout as NDJSON |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
 | `config validate / show [--redacted]` | Validate or print configuration, with secrets masked |
 | `doctor` | Diagnose the environment |
 | `logs [-f] [--task <id>]` | Read or follow logs |
 | `completion <shell>` | Shell completions |
 
-Common flags are `--debug`, `--json`, `--dry-run`, and `--config <path>`. Every read-only command supports `--json` so other tools can consume it.
+Common flags are `--debug`, `--json`, `--dry-run`, and `--config <path>`. `--json` is available on the commands that print a document — `status`, `task list`, `task show`, `plugin list`, `doctor` — so other tools can consume them. `task export` needs no such flag, since NDJSON is the only thing it prints.
+
+Whenever you ask for machine-readable output, stdout carries the document and nothing else; anything advisory goes to stderr.
 
 `run --json` prints the run summary as a single JSON document on stdout and nothing else, so you can act on a run instead of reading it:
 
@@ -89,6 +92,15 @@ totsuka run --json | jq -e '.stats.failed == 0'
 ```
 
 The document has `stats` (`submitted` / `dispatched` / `done` / `failed`), the task ids left in `waiting`, `pending`, and `queued`, and `interrupted`. **The exit code does not follow it** — a run that correctly recorded a failing task still exits 0, so decide from the document. `--json` cannot be combined with `--dry-run`, which has nothing to preview.
+
+`task export` writes the audit log — every state change every task has been through — to stdout as NDJSON, one event per line, oldest first:
+
+```bash
+totsuka task export | jq -r 'select(.to == "failed") | .task.source_task_id'
+totsuka task export --since 4213 > today.ndjson   # only what is new
+```
+
+The log is append-only, so `--since <event_id>` is all you need to resume from a previous export; a cursor past the end succeeds with no output. Add `--task <id>` for one task — an id that does not exist is an error, not an empty archive. `--no-detail` leaves out the `detail` field, which carries the agent's full output on publish transitions and can be large; rows then omit the key entirely, so an archive taken that way stays distinguishable from one where a transition simply recorded nothing (`"detail": null`). Piping into `head` is fine: the command stops quietly when the reader goes away.
 
 Read-only commands like `status` start in under a second.
 

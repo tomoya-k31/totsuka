@@ -287,6 +287,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | `run [--watch] [--json]` | タスク取り込み（push、`task/submit`）〜ディスパッチのメインループ実行(デフォルトはワンショット、`--watch` は push を受け続けたまま shutdown まで常駐 — 未決事項 #2 は解決済み) |
 | `status [--json]` | 実行中 / キュー / 待機中タスクと worktree の一覧 |
 | `task list / show <id> / cancel <id> / retry <id>` | タスク個別操作 |
+| `task export [--since <event_id>] [--task <id>] [--no-detail]` | 監査ログ（`events`）を NDJSON で標準出力へ。状態の正本は SQLite なので、他のツールが読める形で持ち出す口（追記専用テーブルなので `--since` が完全な差分カーソルになる） |
 | `plugin list / install / uninstall / enable / disable` | プラグイン管理 |
 | `config validate / show [--redacted]` | 設定検証・表示(シークレットはマスク) |
 | `doctor` | 環境診断(git バージョン、孤児 worktree、プラグイン疎通、API キー疎通) |
@@ -294,7 +295,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | `completion <shell>` | シェル補完生成 |
 | 共通フラグ | `--debug`, `--json`, `--dry-run`, `--config <path>` |
 
-`--json` は全読み取り系コマンドに用意し、他ツール(jq、CI、将来のTUI)からの利用を可能にする。**#462 で `run` にも用意した** — 読み取り系ではないが、実行結果（`RunSummary`）を呼び出し側が判定できないと `totsuka run` をパイプラインに組み込めないため。`run --json` は終了コードを変えない（失敗タスクを正しく記録した run は仕事を果たしているので `failed > 0` でも 0）。判定は `jq -e '.stats.failed == 0'` のように呼び出し側が行う。
+`--json` は、ドキュメントを印字する読み取り系コマンド — `status` / `task list` / `task show` / `plugin list` / `doctor` — に用意し、他ツール(jq、CI、将来のTUI)からの利用を可能にする。**これはフラグであって普遍規則ではない**: `task export`（#463）は読み取り系かつ機械可読だが `--json` を**持たない** — NDJSON が唯一の出力形式であり、代替があるかのようなフラグは嘘になるため。`run`（#462）は逆のケースで、読み取り系ではないが `--json` を持つ — 実行結果をパースできない呼び出し側は `totsuka run` をパイプラインに組み込めないため。終了コードは変えない（失敗タスクを正しく記録した run は仕事を果たしているので `failed > 0` でも 0）ので、判定は `jq -e '.stats.failed == 0'` のように呼び出し側が行う。実際に成り立っている不変条件は stdout の契約のほうである: **機械可読な出力を選んだとき、stdout にはそのドキュメントだけが載る。**
 
 `--dry-run` は protocol 0.2.0 以降、副作用ゼロの no-op になった: task_source は必要時に取得されるのではなく自ら push するため、事前にプレビューできる対象が無い — 実行結果を見るには `--dry-run` なしで起動する。**`run --dry-run --json` はパースエラーで拒否する**（exit 2）: プレビュー対象が存在しないので、JSON エンベロープは「機械可読なプレビューがある」という嘘の約束になる。
 

@@ -286,6 +286,7 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 | `run [--watch] [--json]` | Main loop from task intake (push, `task/submit`) to dispatch (one-shot by default; `--watch` stays up receiving pushes until shutdown — see Open Question #2, resolved) |
 | `status [--json]` | List running / queued / waiting tasks and worktrees |
 | `task list / show <id> / cancel <id> / retry <id>` | Individual task operations |
+| `task export [--since <event_id>] [--task <id>] [--no-detail]` | Stream the audit log (`events`) to stdout as NDJSON. The state of record lives in SQLite, so this is the way out in a form other tools can read; the table is append-only, which makes `--since` a complete incremental cursor |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
 | `config validate / show [--redacted]` | Config validation/display (secrets masked) |
 | `doctor` | Environment diagnosis (git version, orphan worktrees, plugin connectivity, API key connectivity) |
@@ -293,7 +294,7 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 | `completion <shell>` | Shell completion generation |
 | Common flags | `--debug`, `--json`, `--dry-run`, `--config <path>` |
 
-`--json` is available on all read-only commands to enable use from other tools (jq, CI, a future TUI). **#462 added it to `run` as well** — not a read-only command, but without a machine-readable result a caller cannot put `totsuka run` in a pipeline. `run --json` does not change the exit code (a run that correctly recorded a failing task did its job, so `failed > 0` still exits 0); the caller decides, e.g. `jq -e '.stats.failed == 0'`.
+`--json` is available on the read-only commands that print a document — `status`, `task list`, `task show`, `plugin list`, `doctor` — to enable use from other tools (jq, CI, a future TUI). **It is a flag, not a universal rule**: `task export` (#463) is read-only and machine-readable but has **no** `--json`, because NDJSON is its only output format and a flag implying an alternative would be a lie. `run` (#462) is the mirror case — not read-only, but it carries `--json` because a caller that cannot parse the result cannot put `totsuka run` in a pipeline; it does not change the exit code either (a run that correctly recorded a failing task did its job, so `failed > 0` still exits 0), so the caller decides with e.g. `jq -e '.stats.failed == 0'`. The invariant that actually holds is the stdout contract: **with machine-readable output selected, stdout carries the document and nothing else.**
 
 `--dry-run` is a zero-side-effect no-op as of protocol 0.2.0: since every task_source pushes rather than being fetched on demand, there is nothing to preview ahead of time — run without `--dry-run` to see live ingestion. **`run --dry-run --json` is refused at parse time** (exit 2): with nothing to preview, a JSON envelope would promise a machine-readable preview that does not exist.
 

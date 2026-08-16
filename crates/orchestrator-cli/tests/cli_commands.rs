@@ -207,6 +207,171 @@ fn run_json_is_advertised_and_conflicts_with_dry_run() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// `task export` streams the audit log as NDJSON — the flat-text escape hatch
+/// for a state of record that otherwise needs `sqlite3` and the schema (#463).
+#[test]
+fn task_export_streams_ndjson_with_a_resumable_cursor() {
+    let base = scratch("task-export");
+    let (running, _failed, done) = seed_db(&base);
+
+    let out = run(&base, &["task", "export"]);
+    assert!(out.status.success(), "export failed: {}", stderr(&out));
+    let text = stdout(&out);
+
+    // Every line parses on its own — that is what NDJSON buys over a single
+    // document, and what lets `head` / `tail` / a streaming reader work.
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("line is not JSON ({e}): {line}"))
+        })
+        .collect();
+    assert!(rows.len() >= 6, "all tasks' events, not one task's: {text}");
+
+    let ids: Vec<i64> = rows
+        .iter()
+        .map(|r| r["event_id"].as_i64().unwrap())
+        .collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted, "oldest first");
+    assert!(
+        rows.iter().any(|r| r["task_id"] == running) && rows.iter().any(|r| r["task_id"] == done),
+        "events from more than one task: {text}"
+    );
+    // The owning task rides along: an event alone cannot be interpreted.
+    assert_eq!(rows[0]["task"]["source"], "github");
+    assert!(rows[0]["task"]["source_task_id"].is_string());
+
+    // `--since` resumes strictly after the cursor.
+    let cursor = ids[1];
+    let rest = run(&base, &["task", "export", "--since", &cursor.to_string()]);
+    assert!(rest.status.success());
+    let rest_ids: Vec<i64> = stdout(&rest)
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["event_id"]
+                .as_i64()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(rest_ids, ids[2..], "no overlap and no gap at the cursor");
+
+    // `--task` narrows to one task.
+    let one = run(&base, &["task", "export", "--task", &running.to_string()]);
+    assert!(one.status.success());
+    assert!(
+        stdout(&one)
+            .lines()
+            .all(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["task_id"] == running),
+        "only the requested task: {}",
+        stdout(&one)
+    );
+
+    // An unknown `--task` is a user error, rejected the way `show` / `cancel`
+    // / `retry` reject it — not an empty archive that reads as "this task did
+    // nothing". `--json` is implied for `export`, so the error is an envelope.
+    let unknown = run(&base, &["task", "export", "--task", "999999"]);
+    assert!(!unknown.status.success(), "{}", stdout(&unknown));
+    assert!(unknown.stdout.is_empty(), "{}", stdout(&unknown));
+    let err: serde_json::Value = serde_json::from_str(stderr(&unknown).trim())
+        .unwrap_or_else(|e| panic!("stderr is not a JSON envelope ({e}): {}", stderr(&unknown)));
+    assert!(
+        err["error"]["message"].as_str().unwrap().contains("999999"),
+        "the error names the id: {err}"
+    );
+
+    // An exhausted cursor is the opposite case: a real answer that yields
+    // nothing, so it stays a success with empty output.
+    let past_end = run(
+        &base,
+        &[
+            "task",
+            "export",
+            "--since",
+            &(ids.last().unwrap() + 1).to_string(),
+        ],
+    );
+    assert!(past_end.status.success(), "{}", stderr(&past_end));
+    assert!(past_end.stdout.is_empty(), "{}", stdout(&past_end));
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `task export | head` stops quietly: the reader going away is success, not
+/// failure (#463).
+///
+/// Rust ignores SIGPIPE, so a closed pipe surfaces as an `EPIPE` write error
+/// that the command has to swallow deliberately. That is the behaviour the
+/// docs promise, and it survives only as long as nothing wraps the write
+/// error on its way out — an entirely ordinary edit. Hence a test.
+///
+/// The fixture writes more than a pipe buffer's worth (macOS: 64 KiB) so the
+/// child is guaranteed to still be writing when the reader disappears;
+/// otherwise the whole export would fit in the buffer and never see `EPIPE`.
+#[test]
+fn task_export_exits_quietly_when_the_reader_goes_away() {
+    use std::io::{BufRead, BufReader};
+
+    let base = scratch("task-export-pipe");
+    let state_dir = base.join("state").join("totsuka");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    {
+        let db = StateDb::open(&state_dir.join("state.db")).unwrap();
+        let bulky = "x".repeat(128 * 1024);
+        for i in 0..4 {
+            let id = db
+                .upsert_task(&NewTask {
+                    source: "github".into(),
+                    source_task_id: i.to_string(),
+                    workflow: "implement".into(),
+                    mode: "implement".into(),
+                    repo: None,
+                    priority: 0,
+                    title: format!("t{i}"),
+                    url: None,
+                    source_payload: None,
+                    last_signal_at: None,
+                })
+                .unwrap();
+            db.apply_event(
+                id,
+                TaskEvent::Dispatch,
+                Some(serde_json::json!({"publish_artifact": bulky})),
+            )
+            .unwrap();
+        }
+    }
+
+    let mut child = base_cmd(&base)
+        .args(["task", "export"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Read one line, then drop the read end while the child is still writing.
+    let mut stdout_pipe = BufReader::new(child.stdout.take().unwrap());
+    let mut first = String::new();
+    stdout_pipe.read_line(&mut first).unwrap();
+    assert!(
+        serde_json::from_str::<serde_json::Value>(first.trim()).is_ok(),
+        "the first line is a whole JSON document: {first}"
+    );
+    drop(stdout_pipe);
+
+    let out = child.wait_with_output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a closed pipe is not a failure (exit {:?}): {err}",
+        out.status.code()
+    );
+    assert!(err.is_empty(), "and says nothing about it: {err}");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn status_reports_stale_lock_and_parseable_json() {
     let base = scratch("status");

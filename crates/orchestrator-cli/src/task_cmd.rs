@@ -1,11 +1,14 @@
 //! `totsuka task ...` — per-task operations (§5.1): list / show / cancel /
-//! retry.
+//! retry / export.
 //!
 //! `cancel` / `retry` are state-machine transitions on the DB (#48); the agent
 //! session and slots are reconciled by the next `totsuka run` (recovery/retry
 //! reuse, F-44).
 
+use std::io::Write;
+
 use clap::Subcommand;
+use orchestrator_core::adapters::state_db::EventExportFilter;
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use serde::Serialize;
 use serde_json::Value;
@@ -39,6 +42,34 @@ pub enum TaskCommand {
         /// Task id.
         id: i64,
     },
+    /// Stream the audit log as NDJSON — one JSON event per line, oldest first
+    /// (#463).
+    ///
+    /// The state of record lives in SQLite, which no other tool can read
+    /// without `sqlite3` and the schema. This is its flat-text escape hatch:
+    /// `events` is append-only, so the export composes with `jq`, `grep`, and
+    /// an incremental cursor.
+    Export {
+        /// Only events after this `event_id` — the cursor for an incremental
+        /// export (take the last `event_id` of the previous run).
+        #[arg(long, value_name = "EVENT_ID")]
+        since: Option<i64>,
+        /// Only this task's events.
+        #[arg(long, value_name = "ID")]
+        task: Option<i64>,
+        /// Omit the `detail` field.
+        ///
+        /// This is NOT a redaction feature — the same content is already
+        /// reachable through `task show --json`. It is here because `detail`
+        /// carries the agent's accumulated terminal output on the publish
+        /// transitions, which makes rows arbitrarily large.
+        //
+        // No markdown emphasis in help text: clap prints doc comments
+        // verbatim, so `**...**` would paint literal asterisks in a terminal.
+        // No other command's `--help` in this binary does that.
+        #[arg(long)]
+        no_detail: bool,
+    },
     /// Approve or reject a task awaiting human verification
     /// (`verification = "human"`, #131 D-01).
     Verify {
@@ -60,6 +91,11 @@ impl TaskCommand {
     /// Whether this subcommand was invoked with `--json` (drives the JSON
     /// error envelope in `main`).
     pub fn wants_json(&self) -> bool {
+        // `export` has no `--json` to set: NDJSON is its only output, so its
+        // errors belong in the JSON envelope unconditionally.
+        if matches!(self, Self::Export { .. }) {
+            return true;
+        }
         matches!(
             self,
             Self::List { json } | Self::Show { json, .. } if json.json
@@ -128,6 +164,11 @@ pub fn run(cx: &Cx, command: TaskCommand) -> Result<(), CliError> {
         TaskCommand::Show { id, json } => show(cx, id, json.json),
         TaskCommand::Cancel { id } => cancel(cx, id),
         TaskCommand::Retry { id } => retry(cx, id),
+        TaskCommand::Export {
+            since,
+            task,
+            no_detail,
+        } => export(cx, since, task, no_detail),
         TaskCommand::Verify {
             id,
             pass,
@@ -311,6 +352,86 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
         println!("    {} {} → {}", e.occurred_at, from, e.to);
     }
     Ok(())
+}
+
+/// `totsuka task export` — stream the audit log as NDJSON (#463).
+///
+/// One compact JSON document per line, oldest first, written straight through
+/// a buffered stdout. Nothing accumulates in memory: a single `detail` can
+/// carry the agent's whole terminal output (`publish_artifact`), so collecting
+/// the walk first would make the memory cost of an export proportional to
+/// every byte every agent has ever printed.
+///
+/// Output is **not** passed through [`safe`]: like every other `--json` path,
+/// `serde_json` already escapes control characters, and re-escaping would
+/// corrupt the machine-readable values (see the note on external text in
+/// `orchestrator-cli`'s component doc).
+fn export(cx: &Cx, since: Option<i64>, task: Option<i64>, no_detail: bool) -> Result<(), CliError> {
+    let db = cx.open_state_db()?;
+    // An unknown `--task` is a user error, not an empty answer, and is
+    // rejected the way `show` / `cancel` / `retry` reject it. An exhausted
+    // `--since` cursor is the opposite case — a real answer that legitimately
+    // yields nothing — so it stays silent. Without this, a script passing a
+    // stale id writes an empty archive that reads as "this task did nothing"
+    // rather than "this task does not exist".
+    if let Some(id) = task
+        && db.get_task(id)?.is_none()
+    {
+        return Err(not_found(id));
+    }
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+    let filter = EventExportFilter {
+        after_id: since,
+        task_id: task,
+        without_detail: no_detail,
+    };
+
+    let result: Result<(), CliError> =
+        db.for_each_exported_event(filter, |event| write_ndjson_line(&mut out, &event));
+
+    // `totsuka task export | head -5` closes the pipe on us. Rust ignores
+    // SIGPIPE, so that surfaces as an `EPIPE` write error instead of killing
+    // the process — and reporting it as a failure would make the command
+    // unusable in exactly the pipelines it exists for. The reader left; that
+    // is success, not an error.
+    match result {
+        Err(e) if is_broken_pipe(&e) => return Ok(()),
+        other => other?,
+    }
+    match out.flush() {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => Ok(other?),
+    }
+}
+
+/// Serialize one event straight into `out`, followed by the NDJSON newline.
+///
+/// `to_writer` rather than `to_string` + `writeln!`: it serializes into the
+/// buffer instead of building an intermediate `String` per row, which for a
+/// row carrying a multi-megabyte `publish_artifact` is the difference between
+/// one copy and two.
+///
+/// A `serde_json` failure caused by the writer is unwrapped back into the
+/// underlying [`std::io::Error`] so the caller can still see a `BrokenPipe`;
+/// `serde_json::Error` hides the kind behind
+/// [`io_error_kind`](serde_json::Error::io_error_kind).
+fn write_ndjson_line<W: Write>(
+    out: &mut W,
+    event: &orchestrator_core::adapters::state_db::ExportedEvent,
+) -> Result<(), CliError> {
+    serde_json::to_writer(&mut *out, event).map_err(|e| match e.io_error_kind() {
+        Some(kind) => std::io::Error::new(kind, e),
+        None => std::io::Error::other(e),
+    })?;
+    out.write_all(b"\n")?;
+    Ok(())
+}
+
+/// Whether this error is a downstream reader closing the pipe.
+fn is_broken_pipe(e: &CliError) -> bool {
+    e.downcast_ref::<std::io::Error>()
+        .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
 }
 
 fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
