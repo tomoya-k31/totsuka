@@ -81,6 +81,20 @@ impl Blank {
 /// One selectable starting point.
 #[derive(Debug, Clone, Copy)]
 pub struct Recipe {
+    /// Stable identifier written into an answers file (#466).
+    ///
+    /// **Not the menu position and not the label.** An answers file is meant
+    /// to be kept in a dotfiles repository and replayed on another machine at
+    /// another version, so what it names a recipe by has to survive the menu
+    /// being reordered and the label being reworded. A positional index
+    /// survives neither: inserting one recipe silently makes every older file
+    /// select its neighbour, with the range check still passing and the format
+    /// version unmoved.
+    ///
+    /// Renaming a key is therefore a breaking change to the answers format
+    /// (bump [`ANSWERS_VERSION`](super::answers::ANSWERS_VERSION)); reordering
+    /// or inserting recipes is not.
+    pub key: &'static str,
     /// Menu label.
     pub label: &'static str,
     /// One-line explanation shown under the label.
@@ -110,9 +124,19 @@ const MACOS: RequiredPlugin = RequiredPlugin {
     kind: "notifier",
 };
 
+/// The recipe carrying `key`, or `None` when nothing does.
+///
+/// The single place `RECIPES` is searched, so the answers file's key and the
+/// menu never disagree about what a key means — the lookup is not open-coded
+/// anywhere, which is what kept the positional version consistent by accident.
+pub fn by_key(key: &str) -> Option<&'static Recipe> {
+    RECIPES.iter().find(|r| r.key == key)
+}
+
 /// The recipes, in menu order.
 pub const RECIPES: &[Recipe] = &[
     Recipe {
+        key: "minimal-github-herdr",
         label: "Minimal — GitHub Projects + herdr",
         blurb: "One workflow: cards in 実装待ち get implemented and written back.",
         plugins: &[GITHUB, HERDR],
@@ -132,6 +156,7 @@ pub const RECIPES: &[Recipe] = &[
         blanks: &[Blank::GitHub],
     },
     Recipe {
+        key: "design-implement-handoff",
         label: "Design → implement handoff",
         blurb: "Two stages with a human review in between (設計待ち, then 実装待ち).",
         plugins: &[GITHUB, HERDR],
@@ -162,6 +187,7 @@ pub const RECIPES: &[Recipe] = &[
         blanks: &[Blank::GitHub],
     },
     Recipe {
+        key: "slack-reply-as-yourself",
         label: "Slack — reply as yourself",
         blurb: "Mentions become tasks; the reply goes back to the thread under your name.",
         plugins: &[SLACK, HERDR, MACOS],
@@ -185,6 +211,7 @@ pub const RECIPES: &[Recipe] = &[
         blanks: &[Blank::SlackUserId, Blank::Llm],
     },
     Recipe {
+        key: "human-sign-off",
         label: "Human sign-off required",
         blurb: "High-impact work waits for `totsuka task verify`; pairs with the notifier.",
         plugins: &[GITHUB, HERDR, MACOS],

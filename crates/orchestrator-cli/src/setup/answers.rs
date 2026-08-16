@@ -1,16 +1,35 @@
 //! What the interview collected, and the non-interactive form of it (#348).
 //!
 //! The wizard is interactive by design, but the collected answers are a plain
-//! serialisable value with a hidden `--answers <file>` entry point. That is not
-//! a product feature — it is the only way to test the wizard end-to-end: a CLI
-//! E2E spawns `totsuka` as a child process, which has no terminal, so without
-//! this the strongest assertion available would be "it refuses to run", and
-//! "the config it writes actually loads" would go unchecked.
+//! serialisable value, and `--answers <file>` replays one. **That is a product
+//! feature** (#466): it is the pair to `--save-answers`, and the setup playbook
+//! documents it as the way to bring a machine up from a file kept in a dotfiles
+//! repository. It also happens to be the only way to test the wizard
+//! end-to-end — a CLI E2E spawns `totsuka` as a child process, which has no
+//! terminal — but that is a consequence of the feature, not its purpose.
 //!
-//! **No secret values live here.** `setup` writes secret *references*
+//! It was hidden from `--help` until #466 while the playbook recommended it in
+//! the same breath as apologising for the flag not appearing there. The
+//! apology was the tell.
+//!
+//! **No secret values live here** — the reason a file is safe to commit, and a
+//! structural property rather than a habit: no field of [`Answers`] or its
+//! members can hold one. `setup` writes secret *references*
 //! (`keychain:totsuka/slack-user`) and prints the commands to register them;
-//! the values never pass through this process. So an answers file is safe to
-//! keep in a dotfiles repository.
+//! the values never pass through this process.
+//!
+//! # Format stability
+//!
+//! A replayed file is read by a *different build* than wrote it, so the format
+//! is a contract:
+//!
+//! - [`ANSWERS_VERSION`] is bumped by any change that would make an older file
+//!   mean something different, and a mismatch is **refused, never guessed**.
+//! - The version is read before anything else, so the refusal survives a field
+//!   changing shape (see [`Answers::from_toml_str`]).
+//! - Fields name what they select rather than counting to it — see
+//!   [`Answers::recipe`], which is why reordering the recipe menu does not
+//!   silently repoint existing files.
 
 use serde::{Deserialize, Serialize};
 
@@ -130,9 +149,14 @@ pub struct LlmAnswer {
 pub struct Answers {
     /// Format version, so a future change can reject an old file rather than
     /// misread it.
+    ///
+    /// It only guards changes that *move* the version. A field whose meaning
+    /// drifts underneath a stable version is invisible to it — which is why
+    /// [`recipe`](Self::recipe) names its recipe rather than counting to it.
     pub version: u32,
-    /// Index into [`super::recipes::RECIPES`].
-    pub recipe: usize,
+    /// Which recipe to start from, by its stable
+    /// [`key`](super::recipes::Recipe::key) — **not** its menu position (#466).
+    pub recipe: String,
     /// Repositories to register (at least one).
     pub repositories: Vec<RepositoryAnswer>,
     /// Where secret references point.
@@ -149,7 +173,13 @@ pub struct Answers {
 }
 
 /// The version this build writes and accepts.
-pub const ANSWERS_VERSION: u32 = 1;
+///
+/// `2` since #466 made `recipe` a stable key instead of a menu index. Version
+/// `1` files are rejected rather than translated: the flag was hidden until
+/// #466 and no `1` file was ever written by a documented path, so a
+/// compatibility shim would carry the index semantics — the very thing being
+/// removed — forward forever for no reader.
+pub const ANSWERS_VERSION: u32 = 2;
 
 /// Failure to read an answers file.
 #[derive(Debug, thiserror::Error)]
@@ -183,15 +213,16 @@ pub enum AnswersError {
         /// Version this build understands.
         expected: u32,
     },
-    /// The recipe index does not exist.
-    #[error("{path} selects recipe {found}, but only {count} are available")]
+    /// No recipe carries the key the file names.
+    #[error("{path} selects recipe `{found}`, which does not exist → known keys: {known}")]
     UnknownRecipe {
         /// Path that was tried.
         path: String,
-        /// Index in the file.
-        found: usize,
-        /// How many recipes exist.
-        count: usize,
+        /// Key in the file.
+        found: String,
+        /// The keys that do exist, comma-separated — a typo'd key is otherwise
+        /// unanswerable without reading the source.
+        known: String,
     },
     /// No repository was given.
     #[error("{path} lists no repositories → at least one is required")]
@@ -224,22 +255,36 @@ impl Answers {
     /// setup with nobody to act for: a wizard that reported success and left
     /// the failure for run time.
     pub fn from_toml_str(path: &str, text: &str, recipes: &[Recipe]) -> Result<Self, AnswersError> {
+        // The version is read **before** the rest, against a struct that
+        // ignores every other key. Deserializing the whole file first would
+        // report a wrong-version file as a type error on whichever field
+        // changed shape — a v1 file says `recipe = 0`, and "invalid type:
+        // integer" is not an answer anyone can act on. Reading the version
+        // first is what makes the field do the job it exists for.
+        #[derive(Deserialize)]
+        struct VersionOnly {
+            version: u32,
+        }
+        let probe: VersionOnly = toml::from_str(text).map_err(|source| AnswersError::Parse {
+            path: path.to_string(),
+            source,
+        })?;
+        if probe.version != ANSWERS_VERSION {
+            return Err(AnswersError::Version {
+                path: path.to_string(),
+                found: probe.version,
+                expected: ANSWERS_VERSION,
+            });
+        }
         let answers: Answers = toml::from_str(text).map_err(|source| AnswersError::Parse {
             path: path.to_string(),
             source,
         })?;
-        if answers.version != ANSWERS_VERSION {
-            return Err(AnswersError::Version {
-                path: path.to_string(),
-                found: answers.version,
-                expected: ANSWERS_VERSION,
-            });
-        }
-        let Some(recipe) = recipes.get(answers.recipe) else {
+        let Some(recipe) = recipes.iter().find(|r| r.key == answers.recipe) else {
             return Err(AnswersError::UnknownRecipe {
                 path: path.to_string(),
-                found: answers.recipe,
-                count: recipes.len(),
+                found: answers.recipe.clone(),
+                known: recipes.iter().map(|r| r.key).collect::<Vec<_>>().join(", "),
             });
         };
         if answers.repositories.is_empty() {
@@ -278,7 +323,7 @@ mod tests {
     fn sample() -> Answers {
         Answers {
             version: ANSWERS_VERSION,
-            recipe: 0,
+            recipe: RECIPES[0].key.to_string(),
             repositories: vec![RepositoryAnswer {
                 name: "totsuka".to_string(),
                 path: "~/Workspace/totsuka".to_string(),
@@ -305,8 +350,8 @@ mod tests {
 
     #[test]
     fn a_typo_is_rejected_rather_than_ignored() {
-        let text = "version = 1\nrecipe = 0\nsecret_backend = \"keychain\"\n\
-                    repositorys = []\n";
+        let text = "version = 2\nrecipe = \"minimal-github-herdr\"\n\
+                    secret_backend = \"keychain\"\nrepositorys = []\n";
         let err = Answers::from_toml_str("x", text, RECIPES).unwrap_err();
         assert!(matches!(err, AnswersError::Parse { .. }), "{err}");
     }
@@ -324,14 +369,33 @@ mod tests {
     }
 
     #[test]
-    fn an_out_of_range_recipe_is_refused() {
+    fn an_unknown_recipe_key_is_refused_and_lists_the_real_ones() {
         let mut answers = sample();
-        answers.recipe = 42;
+        answers.recipe = "no-such-recipe".to_string();
         let err = Answers::from_toml_str("x", &answers.to_toml(), RECIPES).unwrap_err();
         assert!(
-            matches!(err, AnswersError::UnknownRecipe { found: 42, .. }),
+            matches!(&err, AnswersError::UnknownRecipe { found, .. } if found == "no-such-recipe"),
             "{err}"
         );
+        // A typo'd key is otherwise unanswerable without reading the source.
+        for recipe in RECIPES {
+            assert!(
+                err.to_string().contains(recipe.key),
+                "the message lists `{}`: {err}",
+                recipe.key
+            );
+        }
+    }
+
+    /// A menu index would have made this file mean a different recipe the
+    /// moment one was inserted above it; the key is what survives (#466).
+    #[test]
+    fn a_recipe_key_survives_the_menu_being_reordered() {
+        let answers = sample();
+        let reordered: Vec<Recipe> = RECIPES.iter().rev().copied().collect();
+        let parsed = Answers::from_toml_str("x", &answers.to_toml(), &reordered)
+            .expect("the key still resolves after a reorder");
+        assert_eq!(parsed.recipe, answers.recipe);
     }
 
     #[test]
@@ -350,11 +414,11 @@ mod tests {
         // mode the wizard exists to prevent.
         let slack = RECIPES
             .iter()
-            .position(|r| r.blanks.contains(&Blank::SlackUserId))
+            .find(|r| r.blanks.contains(&Blank::SlackUserId))
             .expect("a recipe with blanks");
 
         let mut answers = sample();
-        answers.recipe = slack;
+        answers.recipe = slack.key.to_string();
         let err = Answers::from_toml_str("x", &answers.to_toml(), RECIPES).unwrap_err();
         assert!(
             matches!(err, AnswersError::MissingBlank { .. }),
@@ -404,8 +468,8 @@ mod tests {
         // `deny_unknown_fields` is what enforces this: an answers file that
         // tried to carry a token would fail to parse rather than silently
         // persisting it.
-        let text = "version = 1\nrecipe = 0\nsecret_backend = \"keychain\"\n\
-                    slack_token = \"xoxp-secret\"\n\
+        let text = "version = 2\nrecipe = \"minimal-github-herdr\"\n\
+                    secret_backend = \"keychain\"\nslack_token = \"xoxp-secret\"\n\
                     [[repositories]]\nname = \"r\"\npath = \"/r\"\n";
         let err = Answers::from_toml_str("x", text, RECIPES).unwrap_err();
         assert!(matches!(err, AnswersError::Parse { .. }), "{err}");

@@ -134,7 +134,7 @@ impl Drop for Env {
 /// wizard writes passes that check for real, not with the one finding excused.
 fn minimal(repo: &Path) -> String {
     format!(
-        "version = 1\nrecipe = 0\nsecret_backend = \"keychain\"\n\n\
+        "version = 2\nrecipe = \"minimal-github-herdr\"\nsecret_backend = \"keychain\"\n\n\
          [[repositories]]\nname = \"totsuka\"\npath = \"{}\"\n\n\
          [github]\nowner = \"tomoya-k31\"\nowner_type = \"user\"\n\
          project_number = 1\ngithub_login = \"tomoya-k31\"\n",
@@ -145,13 +145,32 @@ fn minimal(repo: &Path) -> String {
 /// Answers selecting the Slack recipe, which needs the extra blanks.
 fn slack(repo: &Path) -> String {
     format!(
-        "version = 1\nrecipe = 2\nsecret_backend = \"keychain\"\n\
+        "version = 2\nrecipe = \"slack-reply-as-yourself\"\nsecret_backend = \"keychain\"\n\
          slack_user_id = \"U123456\"\n\n\
          [[repositories]]\nname = \"totsuka\"\npath = \"{}\"\n\n\
          [llm]\nbase_url = \"https://openrouter.ai/api/v1\"\n\
          model = \"anthropic/claude-haiku-4-5\"\n",
         repo.display()
     )
+}
+
+/// `--answers` is advertised in `--help`, and `--bundled-dir` is not (#466).
+///
+/// The pair is the point: one is the documented non-interactive modality that
+/// the setup playbook tells people to keep in their dotfiles, the other is a
+/// genuine test affordance (ADR-0018). Before #466 both were hidden, and the
+/// playbook had to apologise for the first one being missing from `--help`.
+#[test]
+fn setup_help_advertises_answers_but_not_the_test_affordance() {
+    let env = Env::new("setup-help");
+    let (code, out, err) = env.run(&["setup", "--help"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(out.contains("--answers"), "{out}");
+    assert!(out.contains("--save-answers"), "{out}");
+    assert!(
+        !out.contains("--bundled-dir"),
+        "the test affordance stays hidden: {out}"
+    );
 }
 
 #[test]
@@ -162,6 +181,13 @@ fn without_a_terminal_it_refuses_rather_than_guessing() {
     let (code, _, err) = env.run(&["setup"]);
     assert_eq!(code, Some(2), "{err}");
     assert!(err.contains("needs a terminal"), "{err}");
+    // `--answers` comes first: it is the path that actually produces a working
+    // config without a terminal, which is what this caller wanted (#466).
+    // `init` writes a fully commented skeleton, so it is the fallback.
+    assert!(
+        err.contains("--answers"),
+        "must name the non-interactive path: {err}"
+    );
     assert!(
         err.contains("totsuka init"),
         "must offer a way forward: {err}"
@@ -403,24 +429,36 @@ fn a_bad_answers_file_is_rejected_with_the_reason() {
 
     // Unknown field — a typo must fail loudly, not be ignored.
     let answers =
-        env.answers("version = 1\nrecipe = 0\nsecret_backend = \"keychain\"\nrepositorys = []\n");
+        env.answers("version = 2\nrecipe = \"minimal-github-herdr\"\nsecret_backend = \"keychain\"\nrepositorys = []\n");
     let (code, _, err) = env.run(&["setup", "--answers", answers.to_str().unwrap(), "--yes"]);
     assert_ne!(code, Some(0));
     assert!(err.contains("not a valid answers file"), "{err}");
 
-    // Out-of-range recipe.
+    // Unknown recipe key — and the message lists the ones that do exist, since
+    // a typo'd key is otherwise unanswerable without reading the source.
     let answers = env.answers(
-        "version = 1\nrecipe = 99\nsecret_backend = \"keychain\"\n\n[[repositories]]\nname = \"r\"\npath = \"/r\"\n",
+        "version = 2\nrecipe = \"no-such-recipe\"\nsecret_backend = \"keychain\"\n\n[[repositories]]\nname = \"r\"\npath = \"/r\"\n",
     );
     let (code, _, err) = env.run(&["setup", "--answers", answers.to_str().unwrap(), "--yes"]);
     assert_ne!(code, Some(0));
-    assert!(err.contains("recipe"), "{err}");
+    assert!(err.contains("no-such-recipe"), "{err}");
+    assert!(err.contains("minimal-github-herdr"), "{err}");
+
+    // A file from the old format is refused rather than misread: `recipe` was
+    // a menu index there, so accepting it would silently pick whichever recipe
+    // now sits at that position (#466).
+    let answers = env.answers(
+        "version = 1\nrecipe = 0\nsecret_backend = \"keychain\"\n\n[[repositories]]\nname = \"r\"\npath = \"/r\"\n",
+    );
+    let (code, _, err) = env.run(&["setup", "--answers", answers.to_str().unwrap(), "--yes"]);
+    assert_ne!(code, Some(0));
+    assert!(err.contains("version 1"), "{err}");
 
     // A recipe whose blanks are unfilled. Writing the config anyway would
     // produce one that loads (so `setup` reports success) and then fails at run
     // time — `verification = "llm"` with no `[llm]` block.
     let answers = env.answers(&format!(
-        "version = 1\nrecipe = 2\nsecret_backend = \"keychain\"\n\n\
+        "version = 2\nrecipe = \"slack-reply-as-yourself\"\nsecret_backend = \"keychain\"\n\n\
          [[repositories]]\nname = \"totsuka\"\npath = \"{}\"\n",
         env.repo().display()
     ));

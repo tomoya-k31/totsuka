@@ -10,7 +10,7 @@
 //!
 //! | | `init` | `setup` |
 //! |---|---|---|
-//! | interactive | never | yes (hidden `--answers` for tests) |
+//! | interactive | never | yes, or `--answers <file>` to replay a saved one |
 //! | writes | dirs + commented skeleton | dirs + real values |
 //! | existing files | skipped | skipped |
 //! | secrets | untouched | **untouched** — references only |
@@ -60,7 +60,8 @@ use recipes::{Blank, RECIPES, Recipe};
 /// Options parsed from the command line.
 #[derive(Debug, Default)]
 pub struct SetupArgs {
-    /// Read answers from a file instead of asking. Hidden; see [`answers`].
+    /// Replay a saved answers file instead of asking; see [`answers`] for the
+    /// format's stability contract.
     pub answers: Option<PathBuf>,
     /// Write the collected answers here.
     pub save_answers: Option<PathBuf>,
@@ -88,10 +89,17 @@ pub fn run(cx: &Cx, args: &SetupArgs) -> Result<(), CliError> {
             // Never fall back to defaults when there is nobody to ask: a
             // silently-guessed config is worse than no config.
             if !std::io::stdin().is_terminal() {
+                // Names `--answers` first: it is the path that produces a
+                // working config without a terminal, which is what the caller
+                // was after. `init` writes a fully commented skeleton and
+                // nothing more, so sending them there is the fallback, not the
+                // answer (#466).
                 return Err(ExitWith::new(
                     EXIT_USAGE,
-                    "`totsuka setup` needs a terminal → run it interactively, or run \
-                     `totsuka init` and edit config.toml by hand",
+                    "`totsuka setup` needs a terminal → replay a saved file with \
+                     `totsuka setup --answers <file> --yes`, run it interactively to \
+                     create one (`--save-answers <file>`), or run `totsuka init` and \
+                     edit config.toml by hand",
                 )
                 .into());
             }
@@ -159,6 +167,8 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
 
     let choices: Vec<(&str, &str)> = RECIPES.iter().map(|r| (r.label, r.blurb)).collect();
     let recipe_index = prompt.choose("Which setup do you want to start from?", &choices, 0)?;
+    // Indexed, correctly: `recipe_index` is the menu position the prompt just
+    // returned, not a value that travelled through a file.
     let recipe = &RECIPES[recipe_index];
     prompt.say("")?;
 
@@ -254,7 +264,7 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
 
     Ok(Answers {
         version: answers::ANSWERS_VERSION,
-        recipe: recipe_index,
+        recipe: recipe.key.to_string(),
         repositories,
         secret_backend,
         llm,
@@ -321,7 +331,11 @@ struct Plan<'a> {
 
 impl<'a> Plan<'a> {
     fn new(cx: &Cx, answers: &'a Answers, args: &SetupArgs) -> Result<Plan<'a>, CliError> {
-        let recipe = &RECIPES[answers.recipe];
+        // Resolved by key, not position (#466). `from_toml_str` has already
+        // rejected an unknown one, and the interview only ever writes a key
+        // it just read out of `RECIPES`.
+        let recipe =
+            recipes::by_key(&answers.recipe).expect("the recipe key was validated on the way in");
         let plugin_dir = cx.plugin_config_dir();
         let mut plugin_configs = Vec::new();
         for draft in plugin_config::drafts_for(answers, recipe) {
@@ -680,28 +694,31 @@ mod tests {
     use super::*;
     use orchestrator_core::config::RootConfig;
 
-    fn answers_for(recipe: usize) -> Answers {
+    fn answers_for(recipe: &str) -> Answers {
         Answers {
             version: answers::ANSWERS_VERSION,
-            recipe,
+            recipe: recipe.to_string(),
             repositories: vec![RepositoryAnswer {
                 name: "totsuka".to_string(),
                 path: "~/Workspace/totsuka".to_string(),
                 summary: Some("the orchestrator".to_string()),
             }],
             secret_backend: SecretBackend::Keychain,
-            llm: RECIPES[recipe]
+            llm: recipes::by_key(recipe)
+                .unwrap()
                 .blanks
                 .contains(&Blank::Llm)
                 .then(|| LlmAnswer {
                     base_url: "https://openrouter.ai/api/v1".to_string(),
                     model: "anthropic/claude-haiku-4-5".to_string(),
                 }),
-            slack_user_id: RECIPES[recipe]
+            slack_user_id: recipes::by_key(recipe)
+                .unwrap()
                 .blanks
                 .contains(&Blank::SlackUserId)
                 .then(|| "U123456".to_string()),
-            github: RECIPES[recipe]
+            github: recipes::by_key(recipe)
+                .unwrap()
                 .blanks
                 .contains(&Blank::GitHub)
                 .then(|| GitHubAnswer {
@@ -717,8 +734,8 @@ mod tests {
     fn every_recipe_produces_a_config_that_loads_and_validates() {
         // The wizard's whole job. A recipe that writes an unloadable config
         // would fail at `run`, long after the questions that caused it.
-        for (index, recipe) in RECIPES.iter().enumerate() {
-            let answers = answers_for(index);
+        for recipe in RECIPES {
+            let answers = answers_for(recipe.key);
             let text = build_config("", &answers, recipe)
                 .unwrap_or_else(|e| panic!("{}: {e}", recipe.label));
 
@@ -754,8 +771,8 @@ mod tests {
     fn applying_twice_is_a_no_op() {
         // `setup` is expected to be re-run; a second pass must converge, not
         // append duplicate `[[workflows]]` (which `validate` rejects outright).
-        for (index, recipe) in RECIPES.iter().enumerate() {
-            let answers = answers_for(index);
+        for recipe in RECIPES {
+            let answers = answers_for(recipe.key);
             let once = build_config("", &answers, recipe).unwrap();
             let twice = build_config(&once, &answers, recipe).unwrap();
             assert_eq!(once, twice, "{}", recipe.label);
@@ -826,11 +843,11 @@ mod tests {
         // a setup that looks finished and then fails with "secret not found".
         let slack = RECIPES
             .iter()
-            .position(|r| r.plugins.iter().any(|p| p.name == "slack"))
+            .find(|r| r.plugins.iter().any(|p| p.name == "slack"))
             .unwrap();
-        let answers = answers_for(slack);
-        let text = build_config("", &answers, &RECIPES[slack]).unwrap();
-        let accounts = required_secrets(&answers, &RECIPES[slack]);
+        let answers = answers_for(slack.key);
+        let text = build_config("", &answers, slack).unwrap();
+        let accounts = required_secrets(&answers, slack);
 
         assert!(accounts.iter().any(|a| a == "slack-user"), "{accounts:?}");
         assert!(accounts.iter().any(|a| a == "llm-api-key"), "{accounts:?}");
