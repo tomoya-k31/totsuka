@@ -368,6 +368,17 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
 /// `orchestrator-cli`'s component doc).
 fn export(cx: &Cx, since: Option<i64>, task: Option<i64>, no_detail: bool) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
+    // An unknown `--task` is a user error, not an empty answer, and is
+    // rejected the way `show` / `cancel` / `retry` reject it. An exhausted
+    // `--since` cursor is the opposite case — a real answer that legitimately
+    // yields nothing — so it stays silent. Without this, a script passing a
+    // stale id writes an empty archive that reads as "this task did nothing"
+    // rather than "this task does not exist".
+    if let Some(id) = task
+        && db.get_task(id)?.is_none()
+    {
+        return Err(not_found(id));
+    }
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     let filter = EventExportFilter {

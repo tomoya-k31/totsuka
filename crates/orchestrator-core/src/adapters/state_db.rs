@@ -501,10 +501,21 @@ pub struct ExportedEvent {
     pub to: &'static str,
     /// Timestamp (ISO 8601 UTC).
     pub occurred_at: String,
-    /// Structured detail as recorded. Absent when the row had none, and when
-    /// [`EventExportFilter::without_detail`] was set.
+    /// Structured detail as recorded — with "suppressed" and "never recorded"
+    /// kept apart, which is why this is doubly optional:
+    ///
+    /// | value | JSON | meaning |
+    /// |---|---|---|
+    /// | `None` | key absent | [`EventExportFilter::without_detail`] dropped it |
+    /// | `Some(None)` | `"detail": null` | the row recorded no detail |
+    /// | `Some(Some(v))` | `"detail": v` | as recorded |
+    ///
+    /// Collapsing the two into one absent key would leave an archive taken
+    /// with `--no-detail` unable to say which transitions *had* a detail —
+    /// answerable only by going back to the DB, which is the situation this
+    /// export exists to avoid.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<serde_json::Value>,
+    pub detail: Option<Option<serde_json::Value>>,
     /// The owning task, denormalized.
     pub task: ExportedTask,
 }
@@ -1293,7 +1304,7 @@ impl StateDb {
             .query(params![filter.after_id, filter.task_id])
             .map_err(db)?;
         while let Some(row) = rows.next().map_err(db)? {
-            sink(row_to_exported_event(row).map_err(E::from)?)?;
+            sink(row_to_exported_event(row, filter.without_detail).map_err(E::from)?)?;
         }
         Ok(())
     }
@@ -1766,18 +1777,29 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
 ///
 /// Positional rather than by-name because the `detail` column is selected as a
 /// literal `NULL` when `without_detail` is set, which leaves it unnamed.
-fn row_to_exported_event(row: &Row<'_>) -> Result<ExportedEvent, StateError> {
+fn row_to_exported_event(row: &Row<'_>, without_detail: bool) -> Result<ExportedEvent, StateError> {
     let from: Option<String> = row.get(2)?;
     let from = from.map(|s| s.parse::<TaskState>()).transpose()?;
     let to: String = row.get(3)?;
     let to = to.parse::<TaskState>()?;
-    let detail: Option<String> = row.get(5)?;
+    let stored: Option<String> = row.get(5)?;
     // Parsed rather than passed through as a string, matching
-    // `task show --json`'s `detail`. Deliberately **not** reshaped: the `kind`
-    // vocabulary has grown over time, and re-interpreting old rows under
-    // today's reading is the exact failure an append-only export exists to
+    // `task show --json`'s `detail`. Deliberately **not** re-interpreted: the
+    // `kind` vocabulary has grown over time, and reading old rows under
+    // today's meanings is the exact failure an append-only export exists to
     // prevent.
-    let detail = detail.map(|s| serde_json::from_str(&s)).transpose()?;
+    //
+    // The parse is also byte-stable for rows totsuka wrote, which is what an
+    // audit chain hashing exported lines needs: writes go through
+    // `serde_json::Value` too, so the column already holds this crate's
+    // canonical form (sorted keys, deduplicated) and the round-trip is
+    // identity. `export_detail_round_trips_byte_for_byte` pins that, since it
+    // holds by construction rather than by promise.
+    let detail = stored.map(|s| serde_json::from_str(&s)).transpose()?;
+    // `None` = suppressed, `Some(None)` = the row had none. The SQL already
+    // selected a literal NULL under `without_detail`, so `detail` is `None`
+    // either way here and only the flag can tell the two apart.
+    let detail = if without_detail { None } else { Some(detail) };
     Ok(ExportedEvent {
         event_id: row.get(0)?,
         task_id: row.get(1)?,
@@ -2094,8 +2116,14 @@ mod tests {
             "only the requested task: {mine:?}"
         );
         assert!(
-            mine.iter().any(|e| e.detail.is_some()),
+            mine.iter().any(|e| matches!(&e.detail, Some(Some(_)))),
             "detail is present by default, matching `task show --json`: {mine:?}"
+        );
+        // A row that recorded nothing is `Some(None)` — reported as recorded,
+        // and empty — never `None`, which means "suppressed".
+        assert!(
+            mine.iter().all(|e| e.detail.is_some()),
+            "without --no-detail, every row reports its detail slot: {mine:?}"
         );
 
         let lean = collect_export(
@@ -2115,6 +2143,80 @@ mod tests {
             lean.iter().all(|e| e.detail.is_none()),
             "no detail survives: {lean:?}"
         );
+
+        // The two states must be distinguishable in the JSON, or an archive
+        // taken with `--no-detail` cannot say which transitions had one.
+        let suppressed = serde_json::to_value(&lean[0]).unwrap();
+        assert!(
+            suppressed.get("detail").is_none(),
+            "--no-detail omits the key: {suppressed}"
+        );
+        let recorded_none = mine
+            .iter()
+            .find(|e| matches!(&e.detail, Some(None)))
+            .expect("the ingest event records no detail");
+        assert_eq!(
+            serde_json::to_value(recorded_none).unwrap()["detail"],
+            serde_json::Value::Null,
+            "a row that recorded nothing emits an explicit null"
+        );
+    }
+
+    /// The exported `detail` is byte-identical to the stored column.
+    ///
+    /// It holds by construction — writes go through `serde_json::Value` too,
+    /// so the column already carries this crate's canonical form and the
+    /// export's round-trip is identity — but "by construction" is exactly the
+    /// kind of property that stops being true without anyone noticing. An
+    /// audit chain hashing exported lines depends on it, so it is pinned here
+    /// rather than promised in a comment.
+    #[test]
+    fn export_detail_round_trips_byte_for_byte() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        // Keys deliberately out of alphabetical order, plus a nested object
+        // and a number, since those are where a reshape would show up.
+        db.apply_event(
+            id,
+            TaskEvent::Dispatch,
+            Some(serde_json::json!({
+                "kind": "hook_complete",
+                "publish_artifact": "line one\nline two",
+                "attempt": 3,
+                "agent": {"plugin": "herdr", "session": "s-1"},
+            })),
+        )
+        .unwrap();
+
+        // Compare **every** row against its own stored column, keyed by
+        // event id: picking one row by hand is how this test first passed
+        // against the wrong event.
+        let mut stmt = db
+            .conn
+            .prepare("SELECT id, detail FROM events WHERE detail IS NOT NULL ORDER BY id")
+            .unwrap();
+        let stored: HashMap<i64, String> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(stored.len() >= 2, "fixture has several details: {stored:?}");
+
+        let mut compared = 0;
+        for event in collect_export(&db, EventExportFilter::default()) {
+            let Some(Some(value)) = &event.detail else {
+                continue;
+            };
+            assert_eq!(
+                serde_json::to_string(value).unwrap(),
+                stored[&event.event_id],
+                "event {}: the export must reproduce the stored bytes, not \
+                 merely an equivalent document",
+                event.event_id
+            );
+            compared += 1;
+        }
+        assert_eq!(compared, stored.len(), "every stored detail was checked");
     }
 
     /// A sink error aborts the walk instead of draining the table into a
