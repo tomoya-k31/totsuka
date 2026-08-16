@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:fe1e86ac144d743870e7dc93f83a29998b02adafd51cfb8b773264d2de444c7c -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:a36d830b6b778963e710b709b73e8d4a2f5799be8f2688530808b95194fb52ef -->
 
 # What totsuka is
 
@@ -71,7 +71,7 @@ A single binary, run in the foreground.
 |---|---|
 | `init` | Generate configuration scaffolding and check the environment |
 | `setup` | Interactive first-time setup, from a recipe |
-| `run [--watch]` | The main loop, from intake to dispatch. `--watch` stays up until you stop it |
+| `run [--watch] [--json]` | The main loop, from intake to dispatch. `--watch` stays up until you stop it |
 | `status [--json]` | Running, queued, and waiting tasks, plus worktrees |
 | `task list / show <id> / cancel <id> / retry <id>` | Working with individual tasks |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
@@ -81,6 +81,14 @@ A single binary, run in the foreground.
 | `completion <shell>` | Shell completions |
 
 Common flags are `--debug`, `--json`, `--dry-run`, and `--config <path>`. Every read-only command supports `--json` so other tools can consume it.
+
+`run --json` prints the run summary as a single JSON document on stdout and nothing else, so you can act on a run instead of reading it:
+
+```bash
+totsuka run --json | jq -e '.stats.failed == 0'
+```
+
+The document has `stats` (`submitted` / `dispatched` / `done` / `failed`), the task ids left in `waiting`, `pending`, and `queued`, and `interrupted`. **The exit code does not follow it** — a run that correctly recorded a failing task still exits 0, so decide from the document. `--json` cannot be combined with `--dry-run`, which has nothing to preview.
 
 Read-only commands like `status` start in under a second.
 

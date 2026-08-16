@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:fea273de28cb0da7d52cc4f9d86ad89138b8634ca92b3562f9c0912447bcc7dd -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:1e9db8f8039e14b7ba96b4c01ea24110354aba0088b67125b396c1bda4d2381c -->
 
 # totsuka とは
 
@@ -72,7 +72,7 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 |---|---|
 | `init` | 設定の雛形生成と環境チェック |
 | `setup` | レシピからの対話的な初期セットアップ |
-| `run [--watch]` | 取り込みからディスパッチまでのメインループ。`--watch` は止めるまで常駐する |
+| `run [--watch] [--json]` | 取り込みからディスパッチまでのメインループ。`--watch` は止めるまで常駐する |
 | `status [--json]` | 実行中・待機中・入力待ちのタスクと worktree の一覧 |
 | `task list / show <id> / cancel <id> / retry <id>` | 個別のタスク操作 |
 | `plugin list / install / uninstall / enable / disable` | プラグイン管理 |
@@ -82,6 +82,14 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 | `completion <shell>` | シェル補完の生成 |
 
 共通フラグは `--debug` / `--json` / `--dry-run` / `--config <path>`。読み取り専用のコマンドはすべて `--json` に対応しており、他のツールから使える。
+
+`run --json` は実行サマリを JSON ドキュメント 1 件として標準出力に出し、それ以外は何も出さない。実行結果を読むのではなく、実行結果に基づいて動けるようになる。
+
+```bash
+totsuka run --json | jq -e '.stats.failed == 0'
+```
+
+ドキュメントの内容は `stats`（`submitted` / `dispatched` / `done` / `failed`）、残ったタスク id の `waiting` / `pending` / `queued`、そして `interrupted`。**終了コードはこれに追随しない** — 失敗したタスクを正しく記録した実行も 0 で終わるので、判定はドキュメントから行うこと。`--json` は `--dry-run` とは併用できない（プレビューする対象が無いため）。
 
 `status` のような読み取り専用コマンドは 1 秒以内に起動する。
 
