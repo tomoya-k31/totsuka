@@ -79,6 +79,6 @@ stable（[#458](https://github.com/tomoya-k31/totsuka/issues/458)）。本 ADR �
 
 - エージェント向けの参照は全て `ai-docs/` を指すようになる。CI・PostToolUse フック・`.gitattributes`・`.rumdl.toml`・OKF スクリプト 5 本の既定 `bundleDir`・`CLAUDE.md`・rules・skills が対象。
 - Rust ソース中の `docs/…` 参照も追随する。**GitHub blob URL 形式**（`github.com/…/blob/main/docs/…`）で書かれた rustdoc リンクが 11 箇所あり、これらは移設で 404 になるため同時に更新した。
-- ユーザ向けの実行時メッセージが 2 箇所（`config/validate.rs` のスキーマ版数エラー、`task-source-slack` のプレースホルダ警告）ドキュメントパスを含む。本 PR では `ai-docs/` を指すが、人間向けページが入った段階で `docs/` に切り替える。
+- 人間向けの導線は、移設した段階では**まだ `ai-docs/` を指したままになる**。README / README.ja のドキュメント一覧、ユーザ向けの実行時メッセージ 2 箇所（`config/validate.rs` のスキーマ版数エラー、`task-source-slack` のプレースホルダ警告）、issue テンプレートの spec 参照がこれにあたる。つまり移設だけを入れた時点では「人間が OKF 構造の文書を読む」という本 ADR が解こうとしている状態が残っており、生成物が入って初めて解消する。これらは人間向けページが入った段階で `docs/` に切り替える。
 - 過去の issue / PR 本文にある `docs/…` の深いリンクは main 上で 404 になる。リダイレクト用のスタブは置かない（当時のコミットから辿れる）。
 - `docs/` は OKF バンドルではないので、`okf-lint` を掛けてはならない。PostToolUse フックのパス判定も `ai-docs/` のみに絞ってある。
