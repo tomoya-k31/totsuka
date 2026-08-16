@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:7678fa46bb165dc60a8826b1d70406fc49c62c419918ebc3717c3ea41f8c1cb9 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:a88fd766b7a045f5502181968a3b963c9ce9a7b7942b03de916acede4cde815a -->
 
 # セットアップ Playbook
 
@@ -155,9 +155,9 @@ totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
 totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes
 ```
 
-`--answers` は hidden フラグなので `--help` には出ない。
-
 シークレットの登録だけは各マシンで人間が行う。
+
+このファイルは書いたビルドとは別のビルドが読むので、形式は契約として扱われる。古いファイルの意味が変わるような変更では `version` が上がり、版の違うファイルは**推測されずに拒否される**（作り直すよう案内が出る）。レシピは番号ではなく名前（`recipe = "minimal-github-herdr"`）で指定するので、メニューにレシピが増えても、持ち歩いているファイルの指す先が黙って変わることはない。
 
 ### `doctor` が赤いまま
 

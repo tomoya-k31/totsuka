@@ -89,6 +89,15 @@ Inspect progress with `totsuka status`, drill into a task with
 and writes only directories plus a fully commented config skeleton. `setup`
 fills that skeleton in, so running `init` first is harmless but unnecessary.
 
+`setup` also has a non-interactive form: answer once, keep the file, and bring
+the next machine up from it. Secrets cannot end up in the file — the format has
+no field that could hold one — so it is safe to commit to your dotfiles.
+
+```sh
+totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
+totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes   # on the next machine
+```
+
 New machine, dev checkout, token rotation, and recovery are covered end to end
 in the [setup playbook](docs/setup-playbook.md).
 

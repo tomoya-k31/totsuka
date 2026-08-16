@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:7678fa46bb165dc60a8826b1d70406fc49c62c419918ebc3717c3ea41f8c1cb9 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:a88fd766b7a045f5502181968a3b963c9ce9a7b7942b03de916acede4cde815a -->
 
 # Setup playbook
 
@@ -154,9 +154,9 @@ totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
 totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes
 ```
 
-`--answers` is a hidden flag, so it does not appear in `--help`.
-
 Registering the secrets themselves is still done by a human on each machine.
+
+The file is read by a different build than wrote it, so the format is treated as a contract: a change that would alter what an older file means bumps its `version`, and a file from another version is **refused rather than guessed at** — it tells you to regenerate it. The recipe is named (`recipe = "minimal-github-herdr"`), not numbered, so adding a recipe to the menu never silently repoints a file you have been carrying around.
 
 ### doctor is still red
 
