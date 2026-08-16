@@ -12,11 +12,17 @@
 //! the same breath as apologising for the flag not appearing there. The
 //! apology was the tell.
 //!
-//! **No secret values live here** — the reason a file is safe to commit, and a
-//! structural property rather than a habit: no field of [`Answers`] or its
-//! members can hold one. `setup` writes secret *references*
-//! (`keychain:totsuka/slack-user`) and prints the commands to register them;
-//! the values never pass through this process.
+//! **`setup` never writes a secret value into one.** It asks which backend to
+//! use, writes the *references* into the config
+//! (`keychain:totsuka/slack-user`), and prints the commands to register the
+//! values — which never pass through this process at all. That is what makes a
+//! generated file safe to commit.
+//!
+//! It is a property of what the wizard writes, **not** of what the format can
+//! hold: `path`, `summary`, `base_url` and friends are free-form strings, and a
+//! hand-edited file can contain anything a human puts there. Saying the format
+//! "cannot hold a secret" would be a stronger claim than the types support, and
+//! the wrong one to reassure someone with before they `git add` the file.
 //!
 //! # Format stability
 //!
@@ -280,7 +286,7 @@ impl Answers {
             path: path.to_string(),
             source,
         })?;
-        let Some(recipe) = recipes.iter().find(|r| r.key == answers.recipe) else {
+        let Some(recipe) = super::recipes::by_key_in(recipes, &answers.recipe) else {
             return Err(AnswersError::UnknownRecipe {
                 path: path.to_string(),
                 found: answers.recipe.clone(),

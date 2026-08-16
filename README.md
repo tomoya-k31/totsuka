@@ -90,8 +90,9 @@ and writes only directories plus a fully commented config skeleton. `setup`
 fills that skeleton in, so running `init` first is harmless but unnecessary.
 
 `setup` also has a non-interactive form: answer once, keep the file, and bring
-the next machine up from it. Secrets cannot end up in the file — the format has
-no field that could hold one — so it is safe to commit to your dotfiles.
+the next machine up from it. `setup` never writes a secret value into the file —
+it records which backend to use and prints the commands to register the values —
+so a file it generated is safe to commit to your dotfiles.
 
 ```sh
 totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml

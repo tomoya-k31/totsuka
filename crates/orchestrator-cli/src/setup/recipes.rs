@@ -124,13 +124,20 @@ const MACOS: RequiredPlugin = RequiredPlugin {
     kind: "notifier",
 };
 
-/// The recipe carrying `key`, or `None` when nothing does.
+/// The recipe carrying `key` in `recipes`, or `None` when nothing does.
 ///
-/// The single place `RECIPES` is searched, so the answers file's key and the
-/// menu never disagree about what a key means — the lookup is not open-coded
-/// anywhere, which is what kept the positional version consistent by accident.
+/// Takes the slice rather than reaching for [`RECIPES`] because the answers
+/// parser is handed one (tests inject a reordered or trimmed list to prove the
+/// key survives it). [`by_key`] is the same lookup against the real set, so
+/// there is exactly one implementation of "what does this key mean" — the
+/// question a file replayed on another machine is asking.
+pub fn by_key_in<'a>(recipes: &'a [Recipe], key: &str) -> Option<&'a Recipe> {
+    recipes.iter().find(|r| r.key == key)
+}
+
+/// [`by_key_in`] against [`RECIPES`].
 pub fn by_key(key: &str) -> Option<&'static Recipe> {
-    RECIPES.iter().find(|r| r.key == key)
+    by_key_in(RECIPES, key)
 }
 
 /// The recipes, in menu order.

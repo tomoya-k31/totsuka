@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:a88fd766b7a045f5502181968a3b963c9ce9a7b7942b03de916acede4cde815a -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:0e5008a0b115a4460df3ee83452435dfecf70ad92eba8dac3bfc219e5f3d238d -->
 
 # Setup playbook
 
@@ -147,7 +147,7 @@ One exception: the all-comments template that `totsuka init` writes is treated a
 
 ### You want the same configuration on another machine
 
-Save the answers file and take it with you. **Secrets cannot structurally end up in it** — the answer format has no field that could hold a token — so it is safe to keep in your dotfiles.
+Save the answers file and take it with you. **`setup` never writes a secret value into it** — it records which backend to use and prints the commands to register the values — so a file it generated is safe to keep in your dotfiles.
 
 ```bash
 totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml

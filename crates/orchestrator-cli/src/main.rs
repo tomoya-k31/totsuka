@@ -50,8 +50,9 @@ enum Command {
         ///
         /// The non-interactive form of this command, and the pair to
         /// `--save-answers`: answer once, keep the file, and set up the next
-        /// machine from it. Secrets cannot end up in it — the format has no
-        /// field that could hold one — so it is safe in a dotfiles repository.
+        /// machine from it. `setup` never writes a secret value into the file —
+        /// it records which backend to use and prints the register commands —
+        /// so a generated one is safe in a dotfiles repository.
         #[arg(long, value_name = "FILE")]
         answers: Option<PathBuf>,
         /// Write the collected answers to a file, to replay with `--answers`.

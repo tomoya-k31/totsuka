@@ -159,7 +159,7 @@ totsuka setup
 
 ## 同じ設定を別マシンで再現したい
 
-回答ファイルを保存して持っていく。**機密は構造的に入りえない**（回答の型が `deny_unknown_fields` で、トークンを表すフィールドが存在しない）ので、dotfiles に置いても安全:
+回答ファイルを保存して持っていく。**`setup` は機密の値をファイルに書かない**（どのバックエンドを使うかを記録し、値の登録コマンドを印字するだけ）ので、`setup` が生成したファイルは dotfiles に置いても安全:
 
 ```bash
 totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
