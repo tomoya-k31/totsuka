@@ -1,7 +1,8 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:1e9db8f8039e14b7ba96b4c01ea24110354aba0088b67125b396c1bda4d2381c -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:63bf71671ed5f0d79d363c69e636aae703c80dd89e6f9797cba53a6a81218305 -->
+
 
 # totsuka とは
 
@@ -75,6 +76,7 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 | `run [--watch] [--json]` | 取り込みからディスパッチまでのメインループ。`--watch` は止めるまで常駐する |
 | `status [--json]` | 実行中・待機中・入力待ちのタスクと worktree の一覧 |
 | `task list / show <id> / cancel <id> / retry <id>` | 個別のタスク操作 |
+| `task export` | 監査ログを NDJSON で標準出力へ流す |
 | `plugin list / install / uninstall / enable / disable` | プラグイン管理 |
 | `config validate / show [--redacted]` | 設定の検証・表示（秘密はマスクされる） |
 | `doctor` | 環境の診断 |
@@ -90,6 +92,15 @@ totsuka run --json | jq -e '.stats.failed == 0'
 ```
 
 ドキュメントの内容は `stats`（`submitted` / `dispatched` / `done` / `failed`）、残ったタスク id の `waiting` / `pending` / `queued`、そして `interrupted`。**終了コードはこれに追随しない** — 失敗したタスクを正しく記録した実行も 0 で終わるので、判定はドキュメントから行うこと。`--json` は `--dry-run` とは併用できない（プレビューする対象が無いため）。
+
+`task export` は監査ログ — 各タスクがたどった全状態遷移 — を NDJSON で標準出力へ流す。1 行 1 イベント、古い順:
+
+```bash
+totsuka task export | jq -r 'select(.to == "failed") | .task.source_task_id'
+totsuka task export --since 4213 > today.ndjson   # 前回の続きだけ
+```
+
+ログは追記専用なので、前回の続きから取るには `--since <event_id>` だけで足りる。1 タスクに絞るなら `--task <id>`、`detail` フィールドを落とすなら `--no-detail`（publish 時の遷移ではエージェントの出力全体が入るため大きくなりうる）。`head` に繋いでも問題ない — 読み手がいなくなればコマンドは静かに終わる。
 
 `status` のような読み取り専用コマンドは 1 秒以内に起動する。
 

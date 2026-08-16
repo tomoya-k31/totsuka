@@ -1,6 +1,7 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:a36d830b6b778963e710b709b73e8d4a2f5799be8f2688530808b95194fb52ef -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:7d136caad88346ceec1c32e58bd9e5dd2b1e29c3f7516985c2aaefbf77dbe494 -->
+
 
 # What totsuka is
 
@@ -74,6 +75,7 @@ A single binary, run in the foreground.
 | `run [--watch] [--json]` | The main loop, from intake to dispatch. `--watch` stays up until you stop it |
 | `status [--json]` | Running, queued, and waiting tasks, plus worktrees |
 | `task list / show <id> / cancel <id> / retry <id>` | Working with individual tasks |
+| `task export` | Stream the audit log to stdout as NDJSON |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
 | `config validate / show [--redacted]` | Validate or print configuration, with secrets masked |
 | `doctor` | Diagnose the environment |
@@ -89,6 +91,15 @@ totsuka run --json | jq -e '.stats.failed == 0'
 ```
 
 The document has `stats` (`submitted` / `dispatched` / `done` / `failed`), the task ids left in `waiting`, `pending`, and `queued`, and `interrupted`. **The exit code does not follow it** — a run that correctly recorded a failing task still exits 0, so decide from the document. `--json` cannot be combined with `--dry-run`, which has nothing to preview.
+
+`task export` writes the audit log — every state change every task has been through — to stdout as NDJSON, one event per line, oldest first:
+
+```bash
+totsuka task export | jq -r 'select(.to == "failed") | .task.source_task_id'
+totsuka task export --since 4213 > today.ndjson   # only what is new
+```
+
+The log is append-only, so `--since <event_id>` is all you need to resume from a previous export. Add `--task <id>` for one task, and `--no-detail` to leave out the `detail` field — which carries the agent's full output on publish transitions and can be large. Piping into `head` is fine: the command stops quietly when the reader goes away.
 
 Read-only commands like `status` start in under a second.
 

@@ -287,6 +287,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | `run [--watch] [--json]` | タスク取り込み（push、`task/submit`）〜ディスパッチのメインループ実行(デフォルトはワンショット、`--watch` は push を受け続けたまま shutdown まで常駐 — 未決事項 #2 は解決済み) |
 | `status [--json]` | 実行中 / キュー / 待機中タスクと worktree の一覧 |
 | `task list / show <id> / cancel <id> / retry <id>` | タスク個別操作 |
+| `task export [--since <event_id>] [--task <id>] [--no-detail]` | 監査ログ（`events`）を NDJSON で標準出力へ。状態の正本は SQLite なので、他のツールが読める形で持ち出す口（追記専用テーブルなので `--since` が完全な差分カーソルになる） |
 | `plugin list / install / uninstall / enable / disable` | プラグイン管理 |
 | `config validate / show [--redacted]` | 設定検証・表示(シークレットはマスク) |
 | `doctor` | 環境診断(git バージョン、孤児 worktree、プラグイン疎通、API キー疎通) |

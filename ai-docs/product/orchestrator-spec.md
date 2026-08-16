@@ -286,6 +286,7 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 | `run [--watch] [--json]` | Main loop from task intake (push, `task/submit`) to dispatch (one-shot by default; `--watch` stays up receiving pushes until shutdown — see Open Question #2, resolved) |
 | `status [--json]` | List running / queued / waiting tasks and worktrees |
 | `task list / show <id> / cancel <id> / retry <id>` | Individual task operations |
+| `task export [--since <event_id>] [--task <id>] [--no-detail]` | Stream the audit log (`events`) to stdout as NDJSON. The state of record lives in SQLite, so this is the way out in a form other tools can read; the table is append-only, which makes `--since` a complete incremental cursor |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
 | `config validate / show [--redacted]` | Config validation/display (secrets masked) |
 | `doctor` | Environment diagnosis (git version, orphan worktrees, plugin connectivity, API key connectivity) |
