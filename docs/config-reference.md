@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:70214eb4c7cc4648bc84830cf3d52292f1547f74364392ed99d84813748c4bd2 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:8f9df837ab33eb937dfa0aba4b6950cb8d0d62da4cc1ffe86b7735f79dc5273b -->
 
 # Configuration reference
 

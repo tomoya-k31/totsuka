@@ -9,6 +9,8 @@ status: stable
 owner: tomoya-k31
 ---
 
+> **このファイルは人間向け `docs/config-reference.md` / `.ja.md` の生成元である。** 変更したら `human-docs` スキルで生成物も作り直すこと（`scripts/docs-freshness.sh` が CI で検査する）。
+
 本ドキュメントはキーの一覧・型・既定値を扱う。実際に貼って動く設定例、選択肢を持つキーの選び分け基準、
 シナリオ別レシピは [設定例集](/development/config-examples.md) を参照。
 

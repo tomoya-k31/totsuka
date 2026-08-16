@@ -12,6 +12,8 @@ owner: tomoya-k31
 
 # totsuka — Local AI-Agent Orchestrator Requirements Specification
 
+> **This file is the source for the human-facing `docs/orchestrator-spec.md`.** After changing it, regenerate that page with the `human-docs` skill; `scripts/docs-freshness.sh` checks this in CI.
+
 - Status: Draft v0.2 (imported from `orchestrator-requirements.md`)
 - Product name: totsuka (十束剣)
 - Created: 2026-07-12

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:ff191fb4a433cda727054ab9b5868110d2dff4f6312c5432674cca748eb0cb5a -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:613683d3e2abe9f6f526ded25796b8330a1b2b14be20da5632d7594e45e1066c -->
 
 # Setup playbook
 

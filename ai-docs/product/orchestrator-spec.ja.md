@@ -13,6 +13,8 @@ owner: tomoya-k31
 
 # totsuka — ローカルAIエージェント Orchestrator 要件定義書
 
+> **このファイルは人間向け `docs/orchestrator-spec.ja.md` の生成元である。** 変更したら `human-docs` スキルで生成物も作り直すこと（`scripts/docs-freshness.sh` が CI で検査する）。
+
 - ステータス: Draft v0.2（`orchestrator-requirements.md` より取り込み）
 - プロダクト名: totsuka(十束剣)
 - 作成日: 2026-07-12
