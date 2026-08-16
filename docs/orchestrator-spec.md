@@ -100,7 +100,7 @@ totsuka task export | jq -r 'select(.to == "failed") | .task.source_task_id'
 totsuka task export --since 4213 > today.ndjson   # only what is new
 ```
 
-The log is append-only, so `--since <event_id>` is all you need to resume from a previous export. Add `--task <id>` for one task, and `--no-detail` to leave out the `detail` field — which carries the agent's full output on publish transitions and can be large. Piping into `head` is fine: the command stops quietly when the reader goes away.
+The log is append-only, so `--since <event_id>` is all you need to resume from a previous export; a cursor past the end succeeds with no output. Add `--task <id>` for one task — an id that does not exist is an error, not an empty archive. `--no-detail` leaves out the `detail` field, which carries the agent's full output on publish transitions and can be large; rows then omit the key entirely, so an archive taken that way stays distinguishable from one where a transition simply recorded nothing (`"detail": null`). Piping into `head` is fine: the command stops quietly when the reader goes away.
 
 Read-only commands like `status` start in under a second.
 

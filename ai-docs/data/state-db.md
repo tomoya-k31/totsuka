@@ -208,6 +208,8 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 - **`detail` は解釈し直さない**。`kind` の語彙は時期によって増えており（`repo_select` / `dispatch` / `reopen` / `agent_state` / `hook_start` / `hook_complete` / `self_report` / `hook` / `escalate`）、現在の読み方で過去の行を書き換えるのは、この取り出し口が防ごうとしている失敗そのものである
 - **同梱するタスク側の列は不変フィールドだけ**（`source` / `source_task_id` / `workflow` / `title`）。`state` や `branch` を載せると「過去の一瞬」を語る event に「今」の値が並ぶことになる
 - **秘密の扱い**: `detail` は `logging/redact.rs`（tracing レイヤの実装）の対象外なので、原理的に秘密を含みうる。ただし `task show --json` が既に同じ `detail` を露出しているため、export が新しい露出クラスを作るわけではない。`--no-detail` は**サイズ削減のオプションであってリダクション機能ではない**
+- **「落とした」と「元から無い」を区別する**。`ExportedEvent.detail` は `Option<Option<Value>>` で、キー無し = `--no-detail` が落とした / `"detail": null` = その行に detail が無かった / 値あり = 記録どおり。潰すと、`--no-detail` で取ったアーカイブが「どの遷移が detail を持っていたか」に答えられなくなり、DB に戻るしかなくなる — この取り出し口が避けようとしている状況そのもの
+- **出力は保存されているバイト列と一致する**。書き込み側も `serde_json::Value` を通るので列にはこのクレートの正準形（キーはソート済み・重複解消済み）が入っており、export の round-trip は恒等になる。**構造上そうなるだけで保証ではないので、`export_detail_round_trips_byte_for_byte` が全行を突き合わせて固定している**（監査チェーンが出力行をハッシュする用途がこれに依存する）
 
 ## schema_migrations（§10.3）
 
