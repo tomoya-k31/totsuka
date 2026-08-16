@@ -283,7 +283,7 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 |---|---|
 | `init` | Generate configuration scaffolding, environment check |
 | `setup` | Interactive first-time setup from a recipe (added after this table was first written; see the setup playbook) |
-| `run [--watch]` | Main loop from task intake (push, `task/submit`) to dispatch (one-shot by default; `--watch` stays up receiving pushes until shutdown — see Open Question #2, resolved) |
+| `run [--watch] [--json]` | Main loop from task intake (push, `task/submit`) to dispatch (one-shot by default; `--watch` stays up receiving pushes until shutdown — see Open Question #2, resolved) |
 | `status [--json]` | List running / queued / waiting tasks and worktrees |
 | `task list / show <id> / cancel <id> / retry <id>` | Individual task operations |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
@@ -293,7 +293,9 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 | `completion <shell>` | Shell completion generation |
 | Common flags | `--debug`, `--json`, `--dry-run`, `--config <path>` |
 
-`--json` is available on all read-only commands to enable use from other tools (jq, CI, a future TUI). `--dry-run` is a zero-side-effect no-op as of protocol 0.2.0: since every task_source pushes rather than being fetched on demand, there is nothing to preview ahead of time — run without `--dry-run` to see live ingestion.
+`--json` is available on all read-only commands to enable use from other tools (jq, CI, a future TUI). **#462 added it to `run` as well** — not a read-only command, but without a machine-readable result a caller cannot put `totsuka run` in a pipeline. `run --json` does not change the exit code (a run that correctly recorded a failing task did its job, so `failed > 0` still exits 0); the caller decides, e.g. `jq -e '.stats.failed == 0'`.
+
+`--dry-run` is a zero-side-effect no-op as of protocol 0.2.0: since every task_source pushes rather than being fetched on demand, there is nothing to preview ahead of time — run without `--dry-run` to see live ingestion. **`run --dry-run --json` is refused at parse time** (exit 2): with nothing to preview, a JSON envelope would promise a machine-readable preview that does not exist.
 
 ### 5.2 Logging
 

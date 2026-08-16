@@ -19,30 +19,41 @@ use orchestrator_core::plugins::plugin_spec;
 use orchestrator_core::ports::SecretString;
 use orchestrator_core::run::{Engine, HookRuntime, PluginSet, RunSummary, settings_from_config};
 
-use crate::common::{CliError, Cx};
+use crate::common::{CliError, Cx, print_json};
 
 /// Grace period for plugin shutdown at the end of a run.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
-/// Execute `totsuka run`.
-pub fn run(
-    cx: &Cx,
-    watch: bool,
-    dry_run: bool,
-    debug: bool,
-    one_shot_grace_ms: Option<u64>,
-) -> Result<(), CliError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(run_async(cx, watch, dry_run, debug, one_shot_grace_ms))
+/// What `totsuka run` was asked to do.
+#[derive(Debug, Clone, Copy)]
+pub struct RunArgs {
+    /// Keep polling instead of exiting after one cycle (F-06).
+    pub watch: bool,
+    /// Report what would happen without executing (mutually exclusive with
+    /// [`json`](Self::json), see the flag's docs in `main`).
+    pub dry_run: bool,
+    /// Global `--debug`: raises this run's file log level.
+    pub debug: bool,
+    /// One-shot's quiet-period floor override (test affordance).
+    pub one_shot_grace_ms: Option<u64>,
+    /// Emit the summary as JSON on stdout instead of prose (#462).
+    pub json: bool,
 }
 
-async fn run_async(
-    cx: &Cx,
-    watch: bool,
-    dry_run: bool,
-    debug: bool,
-    one_shot_grace_ms: Option<u64>,
-) -> Result<(), CliError> {
+/// Execute `totsuka run`.
+pub fn run(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(run_async(cx, args))
+}
+
+async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
+    let RunArgs {
+        watch,
+        dry_run,
+        debug,
+        one_shot_grace_ms,
+        json,
+    } = args;
     let paths = &cx.paths;
     let env: HashMap<String, String> = std::env::vars().collect();
     let env_fn = |k: &str| env.get(k).cloned();
@@ -214,7 +225,7 @@ async fn run_async(
         })
         .await?;
     engine.shutdown(SHUTDOWN_GRACE).await;
-    print_summary(&summary);
+    print_summary(&summary, json)?;
     Ok(())
 }
 
@@ -239,7 +250,19 @@ async fn launch_plugins(
 }
 
 /// Print the one-shot / watch exit summary (§5.1).
-fn print_summary(summary: &RunSummary) {
+///
+/// `json` emits the [`RunSummary`] as one document on stdout and nothing else
+/// (#462), so a caller can act on the run instead of grepping prose:
+/// `totsuka run --json | jq -e '.stats.failed == 0'`. The prose path is
+/// unchanged.
+///
+/// **`run`'s exit code is deliberately not derived from the summary.** A run
+/// that correctly recorded a failing task did its job, so `failed > 0` still
+/// exits 0; `--json` is what lets the caller decide otherwise.
+fn print_summary(summary: &RunSummary, json: bool) -> Result<(), CliError> {
+    if json {
+        return print_json(summary);
+    }
     if summary.interrupted {
         println!("interrupted — in-flight tasks stay in the state DB and resume on next run");
     }
@@ -272,4 +295,5 @@ fn print_summary(summary: &RunSummary) {
             list(&summary.queued)
         );
     }
+    Ok(())
 }

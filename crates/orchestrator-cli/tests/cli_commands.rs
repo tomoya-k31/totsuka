@@ -172,6 +172,41 @@ fn help_lists_every_command_and_completion_generates() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// `run --json` is advertised, and `--json --dry-run` is refused at parse time
+/// (#462).
+///
+/// The refusal is deliberate rather than a missing feature: every task source
+/// has been push-only since protocol 0.2.0, so `dry_run` fetches nothing and
+/// its sole output is the sentence saying so. Accepting the pair would ship a
+/// JSON envelope promising a preview that cannot exist.
+#[test]
+fn run_json_is_advertised_and_conflicts_with_dry_run() {
+    let base = scratch("run-json-flags");
+
+    let help = run(&base, &["run", "--help"]);
+    assert!(help.status.success());
+    assert!(
+        stdout(&help).contains("--json"),
+        "run --help advertises --json: {}",
+        stdout(&help)
+    );
+
+    let clash = run(&base, &["run", "--json", "--dry-run"]);
+    assert_eq!(
+        clash.status.code(),
+        Some(2),
+        "conflicting flags are a usage error: {}",
+        stderr(&clash)
+    );
+    assert!(
+        clash.stdout.is_empty(),
+        "a rejected invocation writes nothing to stdout: {}",
+        stdout(&clash)
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn status_reports_stale_lock_and_parseable_json() {
     let base = scratch("status");

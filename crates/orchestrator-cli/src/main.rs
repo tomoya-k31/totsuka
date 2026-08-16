@@ -70,9 +70,22 @@ enum Command {
         /// instead of exiting after one cycle.
         #[arg(long)]
         watch: bool,
-        /// Show which tasks would match, which repository would be selected,
-        /// and which agent would run — without executing anything.
-        #[arg(long)]
+        /// Report what would happen without executing anything.
+        ///
+        /// A no-op since protocol 0.2.0: every task source pushes
+        /// (`task/submit`) rather than being fetched on demand, so there is
+        /// nothing to preview ahead of time and the only output is the
+        /// sentence saying so. Kept because the flag is a documented part of
+        /// the command surface and its zero-side-effect guarantee still holds.
+        ///
+        /// Refused together with `--json` for the same reason: a JSON envelope
+        /// around an empty preview would promise machine-readable output that
+        /// does not exist.
+        //
+        // No markdown emphasis in help text: clap prints doc comments
+        // verbatim, so `**...**` would paint literal asterisks in a terminal.
+        // No other command's `--help` in this binary does that.
+        #[arg(long, conflicts_with = "json")]
         dry_run: bool,
         /// One-shot's quiet-period floor in milliseconds (default 2000) before
         /// an empty run is allowed to exit.
@@ -82,6 +95,8 @@ enum Command {
         /// up on a source that is still mid-handshake.
         #[arg(long, hide = true, value_name = "MS")]
         one_shot_grace_ms: Option<u64>,
+        #[command(flatten)]
+        json: common::JsonFlag,
     },
     /// Show tasks, worktrees, and whether the orchestrator is running.
     Status {
@@ -169,7 +184,9 @@ fn main() -> std::process::ExitCode {
 /// any) is then emitted as a JSON envelope on stderr instead of plain text.
 fn wants_json(command: &Command) -> bool {
     match command {
-        Command::Status { json } | Command::Doctor { json, .. } => json.json,
+        Command::Status { json } | Command::Doctor { json, .. } | Command::Run { json, .. } => {
+            json.json
+        }
         Command::Task { cmd } => cmd.wants_json(),
         Command::Plugin { cmd } => cmd.wants_json(),
         _ => false,
@@ -251,7 +268,17 @@ fn execute(
             watch,
             dry_run,
             one_shot_grace_ms,
-        } => run_cmd::run(&cx, watch, dry_run, debug, one_shot_grace_ms),
+            json,
+        } => run_cmd::run(
+            &cx,
+            run_cmd::RunArgs {
+                watch,
+                dry_run,
+                debug,
+                one_shot_grace_ms,
+                json: json.json,
+            },
+        ),
         Command::Status { json } => status_cmd::run(&cx, json.json),
         Command::Task { cmd } => task_cmd::run(&cx, cmd),
         Command::Focus { id } => focus_cmd::run(&cx, id),

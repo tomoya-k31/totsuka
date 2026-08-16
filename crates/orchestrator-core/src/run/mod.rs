@@ -416,7 +416,7 @@ impl IngestOutcome {
 }
 
 /// Counters accumulated over one `run` invocation.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RunStats {
     /// Newly ingested tasks that arrived via `task/submit` (0.1.6;
     /// duplicates do not count, F-73).
@@ -430,7 +430,12 @@ pub struct RunStats {
 }
 
 /// The summary printed when `run` exits (§5.1 one-shot contract).
-#[derive(Debug, Default)]
+///
+/// [`Serialize`](serde::Serialize) is the `totsuka run --json` document
+/// (#462): the **serialized field names are the public contract**, independent
+/// of who reads the struct from Rust. Renaming one breaks every caller parsing
+/// the output even if nothing in this workspace refers to it by name.
+#[derive(Debug, Default, serde::Serialize)]
 pub struct RunSummary {
     /// Counters for this run.
     pub stats: RunStats,
