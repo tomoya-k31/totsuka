@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:ea3b5ba3423e18f9e57ed93f04e5b86a36315b9cf6c302093fa890261b3b1c59 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:66971dc28817507b8866d2bd24a68deb3d6b29a9fd139204d0d13f338e74921d -->
 
 # 運用ガイド
 

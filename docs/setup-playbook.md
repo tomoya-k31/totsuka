@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:613683d3e2abe9f6f526ded25796b8330a1b2b14be20da5632d7594e45e1066c -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:7678fa46bb165dc60a8826b1d70406fc49c62c419918ebc3717c3ea41f8c1cb9 -->
 
 # Setup playbook
 
@@ -153,6 +153,8 @@ Save the answers file and take it with you. **Secrets cannot structurally end up
 totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
 totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes
 ```
+
+`--answers` is a hidden flag, so it does not appear in `--help`.
 
 Registering the secrets themselves is still done by a human on each machine.
 

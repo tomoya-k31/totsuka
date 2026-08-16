@@ -10,6 +10,7 @@ owner: tomoya-k31
 ---
 
 > **このファイルは人間向け `docs/operations-guide.md` / `.ja.md` の生成元である。** 変更したら `human-docs` スキルで生成物も作り直すこと（`scripts/docs-freshness.sh` が CI で検査する）。
+<!-- generates: docs/operations-guide.md docs/operations-guide.ja.md -->
 
 # doctor の読み方
 

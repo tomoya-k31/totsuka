@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:d06ba047997e7f6c1dc97603e336075010b9290a8dfe15d71aed28de5577c5e8 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:fea273de28cb0da7d52cc4f9d86ad89138b8634ca92b3562f9c0912447bcc7dd -->
 
 # totsuka とは
 

@@ -1,6 +1,6 @@
 ---
 name: human-docs
-description: 人間向け docs/ を ai-docs/ の対応ソースから生成・更新するときに使う。トリガー: ai-docs/development/config-reference.md・plugin-dev-guide.md、ai-docs/operations/setup-playbook.md・operations-guide.md、ai-docs/product/orchestrator-spec(.ja).md のいずれかを編集したとき（この 5 本は docs/ の生成元なので、触ったら必ず生成物も更新する）。「docs を更新」「利用者向けドキュメントを直して」「鮮度検査が落ちた」「generated-from が stale」等の依頼にも使う。README からリンクされるページを書き換えるときは常に該当する。
+description: 人間向け docs/ を ai-docs/ の対応ソースから生成・更新するときに使う。トリガー: ai-docs/development/config-reference.md・plugin-dev-guide.md、ai-docs/operations/setup-playbook.md・operations-guide.md、ai-docs/product/orchestrator-spec(.ja).md のいずれかを編集したとき（この 5 本は docs/ の生成元なので、触ったら必ず生成物も更新する）。docs/ 配下の生成ページを直すとき、生成ページを増減するとき、「鮮度検査が落ちた」「generated-from が stale」「宣言した生成物が無い」等の依頼にも使う。手書きの docs/index.md・index.ja.md だけは生成対象外で、このスキルの手順は適用しない。
 allowed-tools: Read, Write, Edit, Bash, Grep
 ---
 
@@ -28,14 +28,22 @@ OKF ではない（frontmatter も元帳も index 掲載義務も無い）。**`
 そこから `.md`（英語）と `.ja.md`（日本語）の両方を作る。したがって両者には
 **同じソースの同じ hash** が入る。
 
-`docs/index.md` / `docs/index.ja.md` は手書き。生成対象ではない
-（`scripts/docs-freshness.sh` の `EXEMPT` に入っている）。
+**上の表は写しであって正ではない。** 対応の正はソースファイル自身が持つ
+`<!-- generates: … -->` 宣言で、`scripts/docs-freshness.sh` はそれを読む。
+2 箇所に書けば必ず片方が腐るので、**対応を変えるときは宣言のほうを直す**
+（この表はその後で合わせる）。
+
+`docs/index.md` / `docs/index.ja.md` は手書きで、**このスキルの手順は適用しない**。
+生成対象外なので `scripts/docs-freshness.sh` の `EXEMPT` に入っている。
+これらを直すときは普通に編集すればよく、マーカーを付けてはならない
+（付けると生成ページとして検査される）。
 
 ## 手順
 
 1. **ソースを読む**（生成マップの該当行）。
 2. **落とすものを落として書き直す**（次節）。frontmatter を剥がすだけでは足りない。
-3. **マーカーを入れる**。言語スイッチャの直後に 1 行:
+3. **マーカーを入れる**。言語スイッチャの直後、**ファイルの先頭 20 行以内**に 1 行
+   （検査がそこまでしか見ないため）:
 
    ```bash
    bash scripts/docs-freshness.sh --marker ai-docs/development/config-reference.md
@@ -88,7 +96,19 @@ OKF ではない（frontmatter も元帳も index 掲載義務も無い）。**`
 - `docs/` の各ページの末尾に、対応する `ai-docs/` のソースを 1 行で示す
   （「詳細な設計判断は …」の形。**リンクにはしない** — 読者を OKF 側へ
   送り込まないため）
-- `ai-docs/` 側のソース冒頭に、人間向け生成物があることを 1 行で示す
+- `ai-docs/` 側のソース冒頭に、**人間向けの散文 1 行**と、その直下に
+  **機械可読な宣言**を置く:
+
+  ```text
+  <!-- generates: docs/config-reference.md docs/config-reference.ja.md -->
+  ```
+
+  散文は「生成元を編集する人に気づかせる」ためのもので、これが無いと
+  生成物の作り直しは CI が落ちるまで誰も思い出さない。宣言のほうは
+  検査が読み、**宣言した生成物が実在してこちらを名指しているか**を確かめる。
+
+**生成ページを増やす・減らす・改名するときは、まず宣言を直す。** 宣言が
+対応表の正なので、これを直さないと検査が古い対応で落ち続ける。
 
 ## 鮮度検査との関係
 

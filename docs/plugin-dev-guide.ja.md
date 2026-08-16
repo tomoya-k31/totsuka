@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:7765d07f5d553424f14929bc88f9568b41aa5aed40a146661dd00ef850ddf312 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:3dec7503a12cc91de3ae82ae5bf7cf19f0cd58d8819d6f8b2fd74073163a81fe -->
 
 # プラグイン開発ガイド
 
@@ -165,7 +165,7 @@ totsuka plugin install ./dist/github
 
 ## 動作確認
 
-`totsuka config validate` は各プラグインの `config/validate` に委譲し、`totsuka doctor` はライブで疎通を確認する。どちらでも、自作プラグインが起動して応答するかを確かめられる。
+`totsuka config validate` は各プラグインの `config/validate` に委譲する（`--offline` を付けると静的検査だけになり、プラグインを起動しない）。`totsuka doctor` はライブで疎通を確認する。どちらでも、自作プラグインが起動して応答するかを確かめられる。
 
 ---
 

@@ -14,6 +14,7 @@ owner: tomoya-k31
 # totsuka — ローカルAIエージェント Orchestrator 要件定義書
 
 > **このファイルは人間向け `docs/orchestrator-spec.ja.md` の生成元である。** 変更したら `human-docs` スキルで生成物も作り直すこと（`scripts/docs-freshness.sh` が CI で検査する）。
+<!-- generates: docs/orchestrator-spec.ja.md -->
 
 - ステータス: Draft v0.2（`orchestrator-requirements.md` より取り込み）
 - プロダクト名: totsuka(十束剣)
@@ -282,6 +283,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | コマンド | 用途 |
 |---|---|
 | `init` | 設定ファイルの雛形生成、環境チェック |
+| `setup` | レシピからの対話的な初期セットアップ（この表を最初に書いた後に追加された。セットアップ Playbook 参照） |
 | `run [--watch]` | タスク取り込み（push、`task/submit`）〜ディスパッチのメインループ実行(デフォルトはワンショット、`--watch` は push を受け続けたまま shutdown まで常駐 — 未決事項 #2 は解決済み) |
 | `status [--json]` | 実行中 / キュー / 待機中タスクと worktree の一覧 |
 | `task list / show <id> / cancel <id> / retry <id>` | タスク個別操作 |

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:7765d07f5d553424f14929bc88f9568b41aa5aed40a146661dd00ef850ddf312 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:3dec7503a12cc91de3ae82ae5bf7cf19f0cd58d8819d6f8b2fd74073163a81fe -->
 
 # Plugin development guide
 
@@ -164,7 +164,7 @@ For a minimal skeleton, `crates/orchestrator-core/src/bin/mock_plugin.rs` plays 
 
 ## Checking it works
 
-`totsuka config validate` delegates to your `config/validate`, and `totsuka doctor` probes your plugin live. Both will tell you whether your plugin starts and answers.
+`totsuka config validate` delegates to your `config/validate` — unless you pass `--offline`, which keeps it to static checks and never launches a plugin. `totsuka doctor` probes your plugin live. Either will tell you whether your plugin starts and answers.
 
 ---
 

@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:613683d3e2abe9f6f526ded25796b8330a1b2b14be20da5632d7594e45e1066c -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:7678fa46bb165dc60a8826b1d70406fc49c62c419918ebc3717c3ea41f8c1cb9 -->
 
 # セットアップ Playbook
 
@@ -154,6 +154,8 @@ totsuka setup
 totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
 totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes
 ```
+
+`--answers` は hidden フラグなので `--help` には出ない。
 
 シークレットの登録だけは各マシンで人間が行う。
 

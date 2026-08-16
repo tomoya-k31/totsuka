@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:8f9df837ab33eb937dfa0aba4b6950cb8d0d62da4cc1ffe86b7735f79dc5273b -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e16b96f4e84fb1493adc1dccb6827541c2bf0ec56cd12748c003b94ad417ffc9 -->
 
 # 設定リファレンス
 
@@ -86,7 +86,7 @@
 | `max_concurrency` | int? | 無制限 | agent プラグイン単位の同時実行上限 |
 | `timeout_secs` | int? | 120 | プラグイン呼び出し 1 本のタイムアウト |
 | `log_level` | string? | なし | プラグインのログレベル |
-| `poll_interval_secs` | int? | 60 | task_source のみ。push 型ソースは totsuka からポーリングされず、この値はプラグインへ転送されてプラグイン内部の取得周期になる |
+| `poll_interval_secs` | int? | 60 | task_source のみ。task_source はすべて push 型なので **totsuka 自身がポーリングすることはない** — この値は起動時にプラグインへ転送され、プラグイン内部の取得周期になる。イベント駆動のソースは無視してよい |
 
 ## `[[workflows]]`
 
@@ -354,7 +354,7 @@ pane 内で起動する AI ツール CLI の定義。組み込みとして `clau
 
 **`mode_args` / `plan_args` を明示すると既定を丸ごと置き換える**ので、これらのフラグも消える。無人で回すなら自分で書き足すこと。
 
-ディスパッチ時のツール解決は、ワークフローのピン > リポジトリの既定 > `default_tool` > 組み込みの `claude` の順である。
+ディスパッチ時のツール解決は、ワークフローのピン > リポジトリの既定 > `default_tool` > 組み込みの `claude` の順である。完全なコマンドラインをここで組み立てるようになったため、`plugins/herdr.toml` の `agent_command` / `plan_args` は**非推奨**の後方互換フォールバックである。ツールの設定は `[tools.{name}]` で行うこと。
 
 ## `[prompts]`
 

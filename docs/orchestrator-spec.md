@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:aeb11a66cc2fbb618b80b5af27e73cb1541aa82eb1a355326abdcfe554d9e41e -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:fe1e86ac144d743870e7dc93f83a29998b02adafd51cfb8b773264d2de444c7c -->
 
 # What totsuka is
 
@@ -90,7 +90,7 @@ Read-only commands like `status` start in under a second.
 
 **Secrets are masked unconditionally** in the logging layer: API keys, tokens, and authorization headers. Prompt bodies are written only at debug level or above, and can be turned off entirely. Logs are structured JSON Lines, rotated daily with a configurable retention count, and the `logs` command formats them for reading.
 
-**Configuration, state, and logs follow the XDG Base Directory specification.**
+**Configuration, state, and logs follow the XDG Base Directory specification**, so you can relocate them with the usual environment variables.
 
 **Output respects `NO_COLOR` and non-interactive terminals.**
 

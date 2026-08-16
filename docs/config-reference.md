@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:8f9df837ab33eb937dfa0aba4b6950cb8d0d62da4cc1ffe86b7735f79dc5273b -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e16b96f4e84fb1493adc1dccb6827541c2bf0ec56cd12748c003b94ad417ffc9 -->
 
 # Configuration reference
 
@@ -85,7 +85,7 @@ The guidance depends on which side is behind:
 | `max_concurrency` | int? | unlimited | Per-agent-plugin limit on tasks running at once |
 | `timeout_secs` | int? | 120 | Timeout for a single call to the plugin |
 | `log_level` | string? | none | The plugin's log level |
-| `poll_interval_secs` | int? | 60 | Task sources only. Push-style sources are never polled by totsuka; this value is forwarded to the plugin and becomes its own internal fetch interval |
+| `poll_interval_secs` | int? | 60 | Task sources only. Every task source is push-style, so totsuka never polls one itself — this value is forwarded to the plugin at startup and becomes its own internal fetch interval. Event-driven sources ignore it |
 
 ## `[[workflows]]`
 
@@ -353,7 +353,7 @@ Left alone, an unconfigured claude launches in its manual mode and stops dead on
 
 **Setting `mode_args` or `plan_args` replaces the defaults wholesale**, including these flags. Add them back yourself if you run unattended.
 
-Tool resolution at dispatch is workflow pin, then repository default, then `default_tool`, then the built-in `claude`.
+Tool resolution at dispatch is workflow pin, then repository default, then `default_tool`, then the built-in `claude`. Because totsuka now builds the complete command line here, the `agent_command` and `plan_args` keys in `plugins/herdr.toml` are a **deprecated** backward-compatibility fallback — configure tools through `[tools.{name}]` instead.
 
 ## `[prompts]`
 
