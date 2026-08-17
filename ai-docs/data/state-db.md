@@ -21,7 +21,7 @@ owner: tomoya-k31
 
 ```mermaid
 erDiagram
-    tasks ||--o{ sessions : "task_id（リトライで追記、最新行が re-attach 対象）"
+    tasks ||--o{ sessions : "task_id（リトライで追記、id 最大が re-attach 対象）"
     tasks ||--o{ events : "task_id（全状態遷移の監査ログ + ノート行）"
     tasks ||--o{ hook_events : "task_id（job_id から解決、推測しない）"
     tasks ||--o{ task_messages : "task_id（v5 — 1 会話に届いた各メッセージ）"
@@ -48,11 +48,11 @@ erDiagram
     }
 
     sessions {
-        INTEGER id PK
+        INTEGER id PK "最大 = re-attach 対象（#478）"
         INTEGER task_id FK "NN → tasks(id)"
         TEXT plugin "NN — 所有プラグイン名"
         TEXT session_id "NN — task/dispatch が返す ID"
-        TEXT created_at "NN — idx(task_id, created_at DESC)"
+        TEXT created_at "NN — 表示用。idx(task_id, created_at DESC)"
         TEXT tool_session_id "v2/v4 — ツールネイティブ ID（idx）"
     }
 
@@ -121,7 +121,9 @@ erDiagram
 
 ## sessions（F-37、#57）
 
-`task/dispatch` が返す `session_id` をタスク・所有プラグインに紐付けて永続化する（再起動後の `session/attach` 再接続に使う）。1 タスクに複数行を許し（リトライは新セッションを追記）、`(task_id, created_at DESC)` インデックスの最新行が re-attach 対象。ストア API は `StateDb::record_session`（追記）/ `latest_session`（最新1件）/ `list_sessions`（履歴・新しい順）。
+`task/dispatch` が返す `session_id` をタスク・所有プラグインに紐付けて永続化する（再起動後の `session/attach` 再接続に使う）。1 タスクに複数行を許し（リトライは新セッションを追記）、**`id`（rowid）が最大の行**が re-attach 対象。ストア API は `StateDb::record_session`（追記）/ `latest_session`（最新1件）/ `list_sessions`（履歴・新しい順）。
+
+**並び順は `created_at` ではなく `id` で決める（#478）。** `created_at` は RFC3339 の**文字列**で、`time` の整形は小数部を必要な桁数だけ出すため幅が一定しない。先の時刻が後の時刻の接頭辞になると、次に比較されるのが数字と `Z`（0x5A）になり、**古い行が新しい行より大きい**と判定される（`…10.28357Z` > `…10.283572Z`）。実測で連続 2,000 サンプルの 1,999 ペア中 278 ペア（約 14%）が反転した。`id DESC` を第 2 キーに置いても、`created_at` が（誤って）不一致になった時点でタイブレークは走らない。rowid は挿入順に振られ、`delete_session` によるロールバック後に再利用される値も**生き残っている全行より大きい**ので、`created_at` が表そうとしていた順序をそのまま表す。`idx_sessions_task` は `(task_id, created_at DESC)` のままで、`task_id` の絞り込みには効く（1 タスクあたりの行数はリトライ回数程度なので、並べ替えのためだけにスキーマを変えるほどの利得は無い）。
 
 | 列 | 型 | 備考 |
 |---|---|---|
@@ -129,7 +131,7 @@ erDiagram
 | task_id | INTEGER FK→tasks(id) | 所有タスク |
 | plugin | TEXT | 所有プラグイン名（"herdr" 等） |
 | session_id | TEXT | エージェントの会話/セッションID |
-| created_at | TEXT | ISO 8601 (UTC)。最新行が attach 対象 |
+| created_at | TEXT | ISO 8601 (UTC)。表示用で、**並び順の基準ではない**（上記 #478） |
 | tool_session_id | TEXT NULL | ツール（Claude Code 等）ネイティブの `session_id`（v2/#134、E-09。`--resume` 相関）。フックの SessionStart 観測時に `set_tool_session_id` が記録。`idx_sessions_tool_session`。v4/#196 で `claude_session_id` から改名 |
 
 追加ストア API（v2/#134）: `set_tool_session_id(session_row_id, sid)`（当該セッション行へツールネイティブのセッション ID を記録）/ `find_session_by_tool_session_id(sid)`（ツールセッション ID から最新セッション行を逆引き）。フック dispatch 配線（#138）: `reserve_session(task_id, plugin)` が `session_id` 空でセッション行を先行確保し、その行 id を `job_id = job-{task_id}-{session_row}` の `session_row` に用いる（フックが echo する job_id は起動時に env 注入するため、`task/dispatch` 応答前に行 id が必要）。`task/dispatch` 応答後 `set_session_native_id(session_row_id, session_id)` で実 session_id を埋める。dispatch 失敗時は `delete_session(session_row_id)` で予約行をロールバック（空 id 行を残さず retry/recovery が誤 reattach しない）。
