@@ -1197,7 +1197,8 @@ impl StateDb {
     /// is not chronological order: when the earlier timestamp is a prefix of
     /// the later one, the next character compared is a digit against `Z`, and
     /// the older row sorts as the newer (`…10.28357Z` > `…10.283572Z`).
-    /// Measured, that inverted 278 of 1,999 consecutive pairs. `id` is the
+    /// Measured over 2,000 samples, that inverted 278 of the 1,999 consecutive
+    /// pairs — roughly one in seven. `id` is the
     /// rowid, assigned in insertion order, and a reused rowid is only ever
     /// handed out above every surviving row — so it orders these rows exactly
     /// as `created_at` was meant to.
