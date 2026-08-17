@@ -36,7 +36,7 @@ Slack 系（answer / triage）は無人前提で、totsuka が llm 検収で完�
 
 **マーカーは消さず、design / implement では意味を「totsuka が完了判定する信号」から「人間への確認依頼のプロトコル」に変える。** 実装は 2 つのプロンプト既定の差し替えのみで、状態機械の改修はゼロ:
 
-1. **`marker_self_report_confirm`**（`prompts/defaults.toml` の新キー）: design / implement profile の完了自己申告指示の既定。作業を終えたと思ったら COMPLETED を自分の判断で出さず、内容を要約して確認を求め `NEEDS_INPUT reason="完了確認待ち"` で停止する。COMPLETED は人間が会話上で明示承認した後にのみ出す。基底テキストが教えるもの（3 マーカー・ハートビート例外・配信契約）はすべて保持し、`missing_markers` 検証も同じ経路で効く
+1. **`marker_self_report_confirm`**（`prompts/defaults.toml` の新キー）: design / implement profile の完了自己申告指示の既定。作業を終えたと思ったら COMPLETED を自分の判断で出さず、内容を要約して確認を求め `NEEDS_INPUT reason="awaiting completion confirmation"` で停止する（**この reason は #465 の英語化まで `"完了確認待ち"` だった**。ワイヤ上でパースはされないが、`WaitingInput` 通知として運用者の目に届く文字列なので変更の影響は Slack 通知に出る）。COMPLETED は人間が会話上で明示承認した後にのみ出す。基底テキストが教えるもの（3 マーカー・ハートビート例外・配信契約）はすべて保持し、`missing_markers` 検証も同じ経路で効く
 2. **`verification_rubric_human_approval`**（同・新キー）: design / implement の llm 検収 rubric の既定。「この完了申告より前の会話で人間が明示的に承認しているか」を条件にする。ジャッジはセッション内で会話を見られるので、**確認を飛ばした COMPLETED はマーカー欠落を止めるのと同じ層で機械的にブロックされる**。triage は従来どおり成果物 URL 検収（#398）のまま
 
 配置は #398 の `verification_rubric_artifact_url` と同型: `[prompts]` キーではなく**既定の差し替え**であり、優先順位の梯子に新しい規則を足さない。当時の梯子は workflow prompts > workflow rubric > グローバル `[prompts]` > profile 既定 > 汎用既定で、グローバル上書きが profile 既定に勝つギャップが #398 と同じ形で存在した。**[#465](https://github.com/tomoya-k31/totsuka/issues/465) が上書き面を削除してそのギャップを塞ぎ**、梯子は workflow の `rubric` > profile 既定 > 汎用既定の 3 段になった（[ADR-0023 の Amendment](/decisions/adr-0023-configurable-prompt-surface.md)）。
@@ -47,7 +47,7 @@ Slack 系（answer / triage）は無人前提で、totsuka が llm 検収で完�
 
 ```text
 agent: 設計書を書き終えました。確認をお願いします
-       <<STATUS:NEEDS_INPUT reason="完了確認待ち">>
+       <<STATUS:NEEDS_INPUT reason="awaiting completion confirmation">>
   → totsuka: WaitingInput に park（D-03 対象外・slot 解放・通知 — すべて既存動作）
 human: (pane 上で) OK、完了で
 agent: <<STATUS:COMPLETED>>
@@ -75,7 +75,7 @@ agent: <<STATUS:COMPLETED>>
 
 `github-design`（profile = design、`timeout_secs = 0`、herdr 隔離セッション → claude、Claude Code の実セッション）で一周を実測した:
 
-1. dispatch されたエージェントは設計を issue コメントへ投稿し（URL 実在を `gh issue view` で確認）、**確認を求めて `<<STATUS:NEEDS_INPUT reason="完了確認待ち">>` で停止**した — `marker_self_report_confirm` の教示どおり。タスクは `waiting_input` に park
+1. dispatch されたエージェントは設計を issue コメントへ投稿し（URL 実在を `gh issue view` で確認）、**確認を求めて `<<STATUS:NEEDS_INPUT reason="完了確認待ち">>` で停止**した — `marker_self_report_confirm` の教示どおり。タスクは `waiting_input` に park（この reason は当時の文言そのままで、**検収記録なので書き換えない**。現行は `"awaiting completion confirmation"`）
 2. pane へ人間の承認（`herdr agent prompt`）を送ると、エージェントが `COMPLETED` を出し、**ジャッジ（承認 rubric）を通過**して `done` に到達。イベント列は `session_start → NEEDS_INPUT → 通知 → COMPLETED → session_end`
 3. `on_success` の書き戻し（`Design Review`、F-84）・pane 解放・worktree 削除まで確認
 4. レンダリングされた `orchestrator-github-design.json` に承認 rubric・`defaultMode: auto`・deny 18 件が入っていることを直接確認

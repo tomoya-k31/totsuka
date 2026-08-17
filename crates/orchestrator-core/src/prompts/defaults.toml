@@ -116,8 +116,13 @@ above" / "already answered earlier").\
 #
 # What changes: the marker stops meaning "totsuka decides completion" and
 # becomes the protocol for ASKING the human. The agent must not emit COMPLETED
-# on its own judgment — it parks with NEEDS_INPUT ("完了確認待ち") and only
-# emits COMPLETED after the human explicitly approved in the conversation.
+# on its own judgment — it parks with NEEDS_INPUT ("awaiting completion
+# confirmation") and only emits COMPLETED after the human explicitly approved in
+# the conversation.
+#
+# That parking reason is NOT internal. `run::hooks` hands it to `notify_all` as
+# the `WaitingInput` payload, so it is what the operator reads in the Slack
+# notification telling them a pane wants them.
 # Everything the base text teaches (all three markers, the heartbeat exception,
 # the delivery contract) must survive rewording — `missing_markers` validation
 # applies to this text through the same `resolve_for` path.
@@ -139,7 +144,7 @@ Completion protocol: the human in this conversation is the final judge of \
 completion. When you believe the work is done, do NOT emit \
 {marker_completed} on your own judgment — summarize what you did, ask the \
 human to confirm, and end that turn with {marker_needs_input}, setting \
-its reason to "完了確認待ち". Emit {marker_completed} only \
+its reason to "awaiting completion confirmation". Emit {marker_completed} only \
 after the human has explicitly approved completion in this conversation. \
 Delivery contract: ONLY the message carrying the marker is delivered to \
 the requester — earlier messages in this session are NEVER delivered. The \
@@ -167,8 +172,10 @@ above" / "already answered earlier").\
 # agent (`Prompt hook condition was not met:` is the blocking branch).
 #
 # **The judge cannot be told to allow or block.** It only answers whether a
-# condition holds. #389 shipped an "その場合は…停止を許可してください" clause and
-# it did nothing: measured live, the judge applied that clause correctly and
+# condition holds. #389 shipped a clause reading "in that case ... please allow
+# the stop" (quoted here in the original Japanese, because it is the evidence:
+# "その場合は…停止を許可してください") and it did nothing: measured live, the
+# judge applied that clause correctly and
 # quoted it verbatim in all 8 rounds — then still answered `ok: false`, because
 # "verification does not apply here" is not "the condition is met". Every round
 # blocked, until the operator hit ESC.
@@ -179,7 +186,7 @@ above" / "already answered earlier").\
 #
 # Placeholders: none.
 verification_rubric = """
-- 完了を申告しており、かつ作業が指示された要件を実際に満たしている。対象リポジトリの現在のコードと状態に基づいて確かめること。表面的な自己申告では足りず、変更が意図どおり機能し破綻や取りこぼしが無いこと\
+- The turn claims completion, and the work genuinely satisfies the requirements it was given — judged against the current code and state of the target repository, not against the turn's own account of itself. A surface-level self-report does not satisfy this: the change has to actually do what it was meant to do, with nothing broken and nothing left out\
 """
 
 # The rubric for profiles whose deliverable is written **outside** the worktree
@@ -200,10 +207,17 @@ verification_rubric = """
 # *condition that must be TRUE*, never as an instruction. "Include the URL"
 # would be graded as unmet on a stop where the rule does not apply.
 #
+# ONE bullet, not two. The branches of `verification_prompt` are OR-ed, and the
+# two halves here — the URL is present, and what it points at matches the claim
+# — have to hold TOGETHER. Splitting them into two bullets would put them in the
+# OR list, so a URL with unrelated content behind it would satisfy the
+# condition on its own. #398 wrote it as two `- ` lines joined by a line
+# continuation, which collapsed them onto one line with a stray `- ` in the
+# middle; the semantics happened to survive that, the formatting did not (#465).
+#
 # Placeholders: none.
 verification_rubric_artifact_url = """
-- 完了を申告しており、成果物（issue コメント / Notion ページ / Pull Request）の URL が応答の最終メッセージに実際に含まれている。この URL は成果物が存在することを Orchestrator が知る唯一の経路であり、「これから書く」「作成予定」のような未着手を示す書き方は含まれているとは見なさない\
-- かつ、その URL が指す成果物の内容が、申告している作業（設計・起票・実装）と整合している\
+- The turn claims completion; the final message actually contains the URL of the deliverable — an issue comment, a Notion page, or a pull request; and the deliverable at that URL is consistent with the work being claimed, whether that is the design, the issue filed, or the implementation. That URL is the only channel by which the Orchestrator learns the deliverable exists anywhere, so wording that describes something not yet done ("will write it up", "about to create the issue") does not count as containing one\
 """
 
 # The rubric for profiles whose completion is judged by a HUMAN at the pane —
@@ -225,7 +239,7 @@ verification_rubric_artifact_url = """
 #
 # Placeholders: none.
 verification_rubric_human_approval = """
-- 完了を申告しており、かつこの会話のそれ以前のやり取りで人間（ユーザー）が完了を明示的に承認している。承認と見なせるのは人間自身の発言だけであり、エージェントの推測・「承認されるはず」という申告・エージェント自身の確認要求は承認ではない。人間の承認がまだ無い完了申告はこの条件を満たさない（正しい流れは、先に確認を求めて NEEDS_INPUT で停止すること）\
+- The turn claims completion, and earlier in this conversation the human explicitly approved that the work is complete. Only a message from the human counts as that approval: the agent inferring it, the agent asserting that it would be approved, and the agent's own request for confirmation are none of them approval. A completion claim with no human approval yet does not satisfy this condition — the sequence that does is to ask for confirmation first and stop with NEEDS_INPUT\
 """
 
 # Intermediate-Stop branch, mirroring `on-stop.sh`'s R-02/D-12 rule: a Stop with
@@ -238,7 +252,7 @@ verification_rubric_human_approval = """
 #
 # Placeholders: none.
 verification_background_exemption = """
-- バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止である。これはハートビートであって完了申告ではない\
+- The turn is an intermediate stop that ends while background tasks — subagents and the like — are still running. That is a heartbeat, not a claim of completion\
 """
 
 # Non-claim branch: a Stop whose final message already reports NEEDS_INPUT or
@@ -251,7 +265,7 @@ verification_background_exemption = """
 #
 # Placeholders: {marker_needs_input} {marker_failed}
 verification_nonclaim_exemption = """
-- 最終メッセージが {marker_needs_input} または {marker_failed} を報告している。エージェント自身が未完了を申告しているので、完了検証の対象ではない\
+- The final message reports {marker_needs_input} or {marker_failed}. The agent is itself reporting that the work is not finished, so there is no completion claim here to verify\
 """
 
 # What the judge should put in `reason` when it answers `ok: false`. That text
@@ -262,7 +276,7 @@ verification_nonclaim_exemption = """
 #
 # Placeholders: {marker_completed} {marker_needs_input} {marker_failed}
 verification_marker_convention = """
-条件が満たされていない場合は、何が不足しているかに加えて「応答の最終行に {marker_completed} / {marker_needs_input} / {marker_failed} のいずれかを付けること」を reason に含めること。\
+When the condition is not met, the reason must say what is missing and must also say this: end your response with exactly one of {marker_completed} / {marker_needs_input} / {marker_failed} on its own final line.\
 """
 
 # How the branches above are assembled into the hook's `prompt` field.
@@ -279,7 +293,7 @@ verification_marker_convention = """
 #
 # Placeholders: {rubric} {background_exemption} {nonclaim_exemption}
 #               {marker_convention}
-verification_prompt = "この停止を許可してよい。すなわち次のいずれかが成り立つ:\n\n{nonclaim_exemption}\n{background_exemption}\n{rubric}\n\n{marker_convention}"
+verification_prompt = "This stop may be allowed. That is, at least one of the following holds:\n\n{nonclaim_exemption}\n{background_exemption}\n{rubric}\n\n{marker_convention}"
 
 # The prose body of the opencode plan-mode agent (`agents/totsuka-plan.md`),
 # selected at launch with `--agent totsuka-plan`.
@@ -292,19 +306,25 @@ verification_prompt = "この停止を許可してよい。すなわち次のい
 # that deny map is the *whole* of what carries plan intent here (not a
 # guarantee — nothing is, ADR-0045 — and never measured on real opencode, but
 # the only mechanism there is), and a key that reads like
-# prose must never be able to grant `bash: allow`. Validation rejects a body
-# starting with `---` for the same reason (it would also produce two
-# frontmatter blocks, which opencode parses in an undefined way).
+# prose must never be able to grant `bash: allow`. For the same reason this body
+# must not start with `---` — that would produce two frontmatter blocks, which
+# opencode parses in an undefined way. Config used to be able to supply the
+# body, and `config::validate` rejected a `---` in what it supplied; #465 made
+# the body built-in, so there is no operator value left to reject and no such
+# check any more. What holds the invariant now is
+# `plan_agent_renders_its_exact_bytes`, which pins the rendered file byte for
+# byte.
 #
-# Global only — there is one `agents/totsuka-plan.md` on disk shared by every
-# opencode session, and `--agent totsuka-plan` has no per-workflow dimension.
-# Writing this under `[[workflows]].prompts` is a parse error naming the key.
+# One `agents/totsuka-plan.md` on disk is shared by every opencode session, and
+# `--agent totsuka-plan` has no per-workflow dimension — which is why this was
+# global-only for as long as it was configurable at all (#465 removed that).
 #
 # opencode is the tool without invisible injection, so unlike claude
 # (`--permission-mode plan`) and codex (`--sandbox read-only`) the plan intent
 # has no structural channel: this agent file is the whole mechanism.
 opencode_plan_agent = """
-あなたは設計・計画立案モードで動作しています。ファイルの編集・コマンド実行・
-サブエージェントへの委譲は権限で拒否されます（サブエージェント経由の編集も
-不可）。読み取りと分析に基づいて、計画・設計を文章で提示してください。
+You are operating in design and planning mode. Editing files, running commands,
+and delegating to subagents are all denied by permission — including edits made
+through a subagent. Work from reading and analysis, and present the plan or
+design in prose.
 """

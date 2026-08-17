@@ -892,7 +892,7 @@ verification = "llm"
             "default rubric embedded"
         );
         assert!(
-            text.contains("バックグラウンドタスク"),
+            text.contains("background tasks"),
             "R-02 intermediate-stop exemption embedded"
         );
         assert!(
@@ -919,13 +919,17 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
         let stop = stop_hooks(&rendered);
         assert_eq!(stop.len(), 2);
         let text = stop[1]["hooks"][0]["prompt"].as_str().unwrap();
+        // The fixture rubric stays Japanese on purpose. The built-in text is
+        // English since #465, but an operator's `rubric` is an arbitrary string
+        // — so a composed prompt mixing the two is the normal case in
+        // production, not a defect to "fix".
         assert!(text.contains("回答は対象リポジトリの実調査に基づくこと"));
         assert!(
             !text.contains(Prompts::builtin().verification_rubric()),
             "custom rubric replaces default"
         );
         assert!(
-            text.contains("バックグラウンドタスク"),
+            text.contains("background tasks"),
             "exemption is appended even with a custom rubric"
         );
         assert!(

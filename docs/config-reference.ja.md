@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:5c0855072ec5cfd56b626e4432deb1d82ec3d42602182710d75c39e05997a72f -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:166f7ed549a766dcd993b6c62018a3abda9daf46586dff7d94d3bb1804d9fd2c -->
 
 # 設定リファレンス
 
@@ -434,7 +434,7 @@ prompt key that survived
 `[[workflows]].rubric` は判定プロンプトの**枝の 1 つ**に入る。組み立て後の全体はこうなる:
 
 ```text
-この停止を許可してよい。すなわち次のいずれかが成り立つ:
+This stop may be allowed. That is, at least one of the following holds:
 
 {nonclaim_exemption}      ← 最終メッセージが「入力待ち」または「失敗」を報告している
 {background_exemption}    ← バックグラウンドタスク実行中の中間停止

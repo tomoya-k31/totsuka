@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:5c0855072ec5cfd56b626e4432deb1d82ec3d42602182710d75c39e05997a72f -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:166f7ed549a766dcd993b6c62018a3abda9daf46586dff7d94d3bb1804d9fd2c -->
 
 # Configuration reference
 
@@ -433,7 +433,7 @@ prompt key that survived
 `[[workflows]].rubric` fills **one branch** of the judging prompt. Assembled, the whole thing reads:
 
 ```text
-This stop may be allowed. That is, one of the following holds:
+This stop may be allowed. That is, at least one of the following holds:
 
 {nonclaim_exemption}      ← the final message reports "needs input" or "failed"
 {background_exemption}    ← an intermediate stop while a background task runs
