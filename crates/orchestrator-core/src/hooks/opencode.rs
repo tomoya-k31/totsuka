@@ -51,13 +51,13 @@ const STATIC_ASSETS: &[(&str, &str, u32)] = &[(
 /// privilege escalation through a string field.
 ///
 /// Only the prose body below it comes from
-/// [`prompts`](crate::prompts::Prompts::opencode_plan_agent);
-/// `config::validate` additionally rejects a body starting with `---`.
+/// [`prompts`](crate::prompts::Prompts::opencode_plan_agent) — built-in since
+/// #465, so there is no longer any value here that a config could reach.
 ///
 /// [ADR-0023]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0023-configurable-prompt-surface.md
 const PLAN_AGENT_FRONTMATTER: &str = "\
 ---
-description: totsuka の plan/design モード用エージェント。読み取り専用で計画のみ作成し、編集・コマンド実行・サブエージェント委譲は行わない。
+description: totsuka's plan/design mode agent. Produces a plan from reading and analysis; does not edit files, run commands, or delegate to subagents.
 mode: primary
 permission:
   edit: deny
@@ -271,17 +271,23 @@ kind = "opencode"
         assert!(verify_assets(&dir).is_empty());
     }
 
-    /// The behavior-preservation proof for #316: the file totsuka writes must
-    /// be byte-identical to the `totsuka-plan.md` that used to be embedded.
+    /// The exact bytes totsuka writes to `agents/totsuka-plan.md`.
     ///
-    /// The expectation is the pre-#316 file content, transcribed here rather
-    /// than re-derived from `defaults.toml` — deriving it would make this
-    /// vacuous and let a mangled move through.
+    /// **This started as the behaviour-preservation proof for #316** — the
+    /// expectation was the pre-#316 embedded file, transcribed rather than
+    /// re-derived from `defaults.toml`. #465 translated the prose to English,
+    /// so it no longer proves anything about the pre-#316 bytes; that proof
+    /// ended deliberately, at a commit that says so.
+    ///
+    /// What it still does is worth keeping: the expectation is written out here
+    /// rather than derived from the source, so a mangled edit to `defaults.toml`
+    /// or to the frontmatter fails here instead of shipping. Update it by
+    /// reading the new intended file, not by pasting what the code produced.
     #[test]
-    fn plan_agent_renders_the_pre_316_bytes() {
+    fn plan_agent_renders_its_exact_bytes() {
         let expected = "\
 ---
-description: totsuka の plan/design モード用エージェント。読み取り専用で計画のみ作成し、編集・コマンド実行・サブエージェント委譲は行わない。
+description: totsuka's plan/design mode agent. Produces a plan from reading and analysis; does not edit files, run commands, or delegate to subagents.
 mode: primary
 permission:
   edit: deny
@@ -289,9 +295,10 @@ permission:
   task: deny
 ---
 
-あなたは設計・計画立案モードで動作しています。ファイルの編集・コマンド実行・
-サブエージェントへの委譲は権限で拒否されます（サブエージェント経由の編集も
-不可）。読み取りと分析に基づいて、計画・設計を文章で提示してください。
+You are operating in design and planning mode. Editing files, running commands,
+and delegating to subagents are all denied by permission — including edits made
+through a subagent. Work from reading and analysis, and present the plan or
+design in prose.
 ";
         let rendered = rendered_assets();
         assert_eq!(rendered.len(), 1);

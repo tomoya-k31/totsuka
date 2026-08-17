@@ -546,17 +546,30 @@ mod tests {
     #[test]
     fn the_verification_prompt_is_one_condition_with_three_branches() {
         let nonclaim = format!(
-            "- 最終メッセージが {MARKER_NEEDS_INPUT} または {MARKER_FAILED} を報告している。エージェント自身が未完了を申告しているので、完了検証の対象ではない"
+            "- The final message reports {MARKER_NEEDS_INPUT} or {MARKER_FAILED}. \
+             The agent is itself reporting that the work is not finished, so \
+             there is no completion claim here to verify"
         );
-        let background = "- バックグラウンドタスク（サブエージェント等）が実行中のままターンを終える中間停止である。これはハートビートであって完了申告ではない";
-        let completion = "- 完了を申告しており、かつ作業が指示された要件を実際に満たしている。対象リポジトリの現在のコードと状態に基づいて確かめること。表面的な自己申告では足りず、変更が意図どおり機能し破綻や取りこぼしが無いこと";
+        let background = "- The turn is an intermediate stop that ends while \
+                          background tasks — subagents and the like — are still \
+                          running. That is a heartbeat, not a claim of completion";
+        let completion = "- The turn claims completion, and the work genuinely \
+                          satisfies the requirements it was given — judged \
+                          against the current code and state of the target \
+                          repository, not against the turn's own account of \
+                          itself. A surface-level self-report does not satisfy \
+                          this: the change has to actually do what it was meant \
+                          to do, with nothing broken and nothing left out";
         let convention = format!(
-            "条件が満たされていない場合は、何が不足しているかに加えて「応答の最終行に {MARKER_COMPLETED} / {MARKER_NEEDS_INPUT} / {MARKER_FAILED} のいずれかを付けること」を reason に含めること。"
+            "When the condition is not met, the reason must say what is missing \
+             and must also say this: end your response with exactly one of \
+             {MARKER_COMPLETED} / {MARKER_NEEDS_INPUT} / {MARKER_FAILED} on its \
+             own final line."
         );
         assert_eq!(
             Prompts::builtin().verification_prompt(),
             format!(
-                "この停止を許可してよい。すなわち次のいずれかが成り立つ:\n\n{nonclaim}\n{background}\n{completion}\n\n{convention}"
+                "This stop may be allowed. That is, at least one of the following holds:\n\n{nonclaim}\n{background}\n{completion}\n\n{convention}"
             )
         );
         assert_eq!(Prompts::builtin().verification_rubric(), completion);
@@ -567,11 +580,13 @@ mod tests {
     ///
     /// **The wording has to stay declarative.** Claude Code's judge is asked
     /// "is the user-provided condition met?" and blocks on `ok: false`; it has
-    /// no way to act on an instruction. #389 first shipped an imperative
-    /// ("その場合は…停止を許可してください") and measured it live: the judge
-    /// applied the clause correctly and quoted it verbatim in all 8 rounds,
-    /// then answered `ok: false` every time, because "verification does not
-    /// apply" is not "the condition is met".
+    /// no way to act on an instruction. #389 first shipped an imperative —
+    /// "in that case ... please allow the stop", quoted here in the original
+    /// Japanese because it is the evidence: "その場合は…停止を許可してください"
+    /// — and measured it live: the judge applied the clause correctly and
+    /// quoted it verbatim in all 8 rounds, then answered `ok: false` every
+    /// time, because "verification does not apply" is not "the condition is
+    /// met".
     ///
     /// Asserted on the **composed** output: an assembly that dropped
     /// `{nonclaim_exemption}` would leave the leaf intact and still ship the
@@ -580,20 +595,27 @@ mod tests {
     fn a_stop_that_claims_no_completion_satisfies_the_condition() {
         let rendered = Prompts::builtin().verification_prompt();
         assert!(
-            rendered.starts_with("この停止を許可してよい。すなわち次のいずれかが成り立つ:"),
+            rendered.starts_with(
+                "This stop may be allowed. That is, at least one of the following holds:"
+            ),
             "the prompt has to read as a condition, not as orders: {rendered}"
         );
         assert!(
             rendered.contains(&format!(
-                "- 最終メッセージが {MARKER_NEEDS_INPUT} または {MARKER_FAILED} を報告している"
+                "- The final message reports {MARKER_NEEDS_INPUT} or {MARKER_FAILED}"
             )),
             "the non-claim branch is missing from the composed condition: {rendered}"
         );
-        // The imperative that did not work must not creep back in.
-        assert!(
-            !rendered.contains("停止を許可してください"),
-            "an instruction to allow is not something the judge can act on: {rendered}"
-        );
+        // The imperative that did not work must not creep back in. English
+        // drifts toward the imperative more readily than the Japanese this was
+        // translated from (#465), so the guard matters more now, not less.
+        for imperative in ["please allow", "allow the stop", "do not block"] {
+            assert!(
+                !rendered.to_lowercase().contains(imperative),
+                "an instruction to allow is not something the judge can act on \
+                 ({imperative}): {rendered}"
+            );
+        }
     }
 
     /// The branches must not swallow the thing they sit next to: a Stop that
@@ -604,11 +626,13 @@ mod tests {
     fn a_completion_claim_still_has_to_earn_the_condition() {
         let rendered = Prompts::builtin().verification_prompt();
         assert!(
-            rendered.contains("完了を申告しており、かつ作業が指示された要件を実際に満たしている"),
+            rendered.contains(
+                "The turn claims completion, and the work genuinely satisfies the requirements"
+            ),
             "the completion branch is conjunctive — claiming is not enough: {rendered}"
         );
         assert!(
-            rendered.contains("表面的な自己申告では足りず"),
+            rendered.contains("A surface-level self-report does not satisfy this"),
             "the self-report escape hatch must stay closed: {rendered}"
         );
         // `ok: false` carries `reason` back to the agent, and its next turn has
@@ -628,13 +652,55 @@ mod tests {
     fn both_exemptions_reach_the_composed_condition() {
         let rendered = Prompts::builtin().verification_prompt();
         assert!(
-            rendered.contains("バックグラウンドタスク"),
+            rendered.contains("background tasks"),
             "the background exemption is a branch of the condition: {rendered}"
         );
         assert!(
             rendered.contains(MARKER_NEEDS_INPUT) && rendered.contains(MARKER_FAILED),
             "the non-claim exemption names the markers it exempts: {rendered}"
         );
+    }
+
+    /// Every branch of the judging condition is exactly one bullet.
+    ///
+    /// The branches are OR-ed by `verification_prompt`, so a leaf that emits two
+    /// `- ` lines silently turns an AND into an OR — for the artifact-URL rubric
+    /// that would mean a URL with unrelated content behind it passing on its
+    /// own. #398 wrote that leaf as two bullets joined by a TOML line
+    /// continuation, which collapsed them onto one line with a stray `- ` in the
+    /// middle: the meaning survived by accident, and the only visible symptom
+    /// was the run-on in the rendered prompt. Checked on the leaves rather than
+    /// the assembly, because the assembly is where the accident hid it.
+    #[test]
+    fn each_condition_branch_is_exactly_one_bullet() {
+        let p = Prompts::builtin();
+        for (key, leaf) in [
+            ("verification_rubric", p.verification_rubric.as_str()),
+            (
+                "verification_rubric_artifact_url",
+                p.verification_rubric_artifact_url.as_str(),
+            ),
+            (
+                "verification_rubric_human_approval",
+                p.verification_rubric_human_approval.as_str(),
+            ),
+            (
+                "verification_background_exemption",
+                p.verification_background_exemption.as_str(),
+            ),
+            (
+                "verification_nonclaim_exemption",
+                p.verification_nonclaim_exemption.as_str(),
+            ),
+        ] {
+            assert!(leaf.starts_with("- "), "{key} is a bullet: {leaf}");
+            assert!(
+                !leaf.trim_start_matches("- ").contains("- "),
+                "{key} has a second bullet in it, which the OR-ed assembly would \
+                 read as a separate branch: {leaf}"
+            );
+            assert!(!leaf.contains('\n'), "{key} is one line: {leaf}");
+        }
     }
 
     /// ADR-0020, moved here by #465. The composed self-report and the composed
@@ -702,7 +768,7 @@ mod tests {
         // sentence that makes it a condition, and the rubric is one branch
         // underneath it rather than the whole text.
         assert!(
-            rendered.starts_with("この停止を許可してよい。"),
+            rendered.starts_with("This stop may be allowed."),
             "a custom rubric must not cost the condition framing: {rendered}"
         );
         assert!(
@@ -779,7 +845,7 @@ agent = "herdr"
                 .verification_rubric()
                 .to_string();
             assert!(
-                rubric.contains("人間（ユーザー）が完了を明示的に承認している"),
+                rubric.contains("the human explicitly approved that the work is complete"),
                 "{profile} must be judged on the human's approval: {rubric}"
             );
             assert!(
@@ -816,8 +882,10 @@ agent = "herdr"
                 "{profile} must gate COMPLETED on an explicit approval: {text}"
             );
             assert!(
-                text.contains("完了確認待ち"),
-                "{profile} must teach the confirmation-park reason: {text}"
+                text.contains("awaiting completion confirmation"),
+                "{profile} must teach the confirmation-park reason — this string \
+                 reaches the operator as the WaitingInput notification, so it is \
+                 not internal: {text}"
             );
             assert!(
                 Prompts::missing_markers(&text).is_empty(),
@@ -843,22 +911,24 @@ agent = "herdr"
         let c = profile_cfg("design", "");
         let rendered = Prompts::resolve_for(&c.workflows[0]).verification_prompt();
         assert!(
-            rendered.starts_with("この停止を許可してよい。すなわち次のいずれかが成り立つ:"),
+            rendered.starts_with(
+                "This stop may be allowed. That is, at least one of the following holds:"
+            ),
             "the approval rubric must not cost the condition framing: {rendered}"
         );
         assert!(
-            rendered.contains("人間（ユーザー）が完了を明示的に承認している"),
+            rendered.contains("the human explicitly approved that the work is complete"),
             "the approval branch reaches the composed condition: {rendered}"
         );
         assert!(
             rendered.contains(&format!(
-                "最終メッセージが {MARKER_NEEDS_INPUT} または {MARKER_FAILED} を報告している"
+                "The final message reports {MARKER_NEEDS_INPUT} or {MARKER_FAILED}"
             )),
             "the non-claim branch survives — the confirmation request itself \
              stops with NEEDS_INPUT and must pass the judge: {rendered}"
         );
         assert!(
-            !rendered.contains("停止を許可してください"),
+            !rendered.to_lowercase().contains("please allow"),
             "still a condition, not an order (#389): {rendered}"
         );
     }
@@ -888,7 +958,7 @@ agent = "herdr"
         // The profile default beats it (post-#440 `design` resolves to the
         // approval rubric; the ladder slot is what matters here).
         let c = profile_cfg("design", "");
-        assert!(rubric(&c).contains("承認"));
+        assert!(rubric(&c).contains("the human explicitly approved"));
 
         // The workflow's own `rubric` beats the profile default.
         let c = profile_cfg("design", "rubric = \"ワークフロー\"\n");

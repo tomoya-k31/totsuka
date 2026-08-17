@@ -243,7 +243,7 @@ on_success = { set_status = "設計済み" }
 
 `design` / `implement` は attended pane（人間が pane を見ている）前提の profile で、**完了の最終判断は人間が行う**（[ADR-0043](/decisions/adr-0043-human-approved-completion.md)）。エージェントへの完了自己申告の指示が差し替わり、次の流れになる:
 
-1. エージェントは作業を終えたと思ったら `COMPLETED` を**出さず**、内容を要約して確認を求め、`NEEDS_INPUT reason="完了確認待ち"` で停止する
+1. エージェントは作業を終えたと思ったら `COMPLETED` を**出さず**、内容を要約して確認を求め、`NEEDS_INPUT reason="awaiting completion confirmation"` で停止する。**この reason は運用者の目に届く** — `WaitingInput` の通知本文としてそのまま Slack へ出る
 2. totsuka はタスクを `waiting_input` に park する（D-03 掃引対象外・並列 slot 解放・notifier 通知 — すべて従来動作）
 3. 人間が pane 上で明示的に承認すると、エージェントが `COMPLETED` を出して終端する
 
@@ -497,7 +497,7 @@ prompt key that survived
 （`{...}` の位置に組み込みの各枝が入る）:
 
 ```text
-この停止を許可してよい。すなわち次のいずれかが成り立つ:
+This stop may be allowed. That is, at least one of the following holds:
 
 {nonclaim_exemption}      ← 最終メッセージが NEEDS_INPUT / FAILED を報告している停止（#389）
 {background_exemption}    ← バックグラウンドタスク実行中の中間停止（ハートビート）
@@ -505,6 +505,10 @@ prompt key that survived
 
 {marker_convention}       ← ok: false のとき reason に何を書かせるか
 ```
+
+**組み込みのプロンプト文は英語である**（#465）。`rubric` に何語で書くかは自由で、
+実運用では日本語の `rubric` が英語の枠に入る形になる — これは運用者の文字列であって
+不整合ではない。
 
 > **`rubric` は「命令」ではなく「条件」である。** Claude Code は `prompt` 型フックの本文を
 > 固定のシステムプロンプト配下でモデルに渡し、`{"ok": true|false, "reason": "..."}` を返させる
