@@ -306,9 +306,14 @@ verification_prompt = "This stop may be allowed. That is, at least one of the fo
 # that deny map is the *whole* of what carries plan intent here (not a
 # guarantee — nothing is, ADR-0045 — and never measured on real opencode, but
 # the only mechanism there is), and a key that reads like
-# prose must never be able to grant `bash: allow`. Validation rejects a body
-# starting with `---` for the same reason (it would also produce two
-# frontmatter blocks, which opencode parses in an undefined way).
+# prose must never be able to grant `bash: allow`. For the same reason this body
+# must not start with `---` — that would produce two frontmatter blocks, which
+# opencode parses in an undefined way. Config used to be able to supply the
+# body, and `config::validate` rejected a `---` in what it supplied; #465 made
+# the body built-in, so there is no operator value left to reject and no such
+# check any more. What holds the invariant now is
+# `plan_agent_renders_its_exact_bytes`, which pins the rendered file byte for
+# byte.
 #
 # One `agents/totsuka-plan.md` on disk is shared by every opencode session, and
 # `--agent totsuka-plan` has no per-workflow dimension — which is why this was
