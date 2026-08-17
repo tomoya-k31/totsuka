@@ -36,8 +36,11 @@ or suppress a false positive per
 to `main`. Scoping only changes what you run **locally** before pushing —
 post-PR you still monitor all checks that report on your PR.
 
-**Rust set** — when Rust/Cargo files changed (mirror CI's flags; this is an
-11-member workspace, so a missing `--workspace` can pass locally yet fail CI):
+**Rust set** — when Rust/Cargo files changed. Keep `--workspace` on every
+command: this is an 11-member workspace, so a missing `--workspace` can pass
+locally yet fail CI. Two of CI's flags are deliberately **not** mirrored
+locally (`RUSTFLAGS="-D warnings"` and `--all-features`) — see the test bullet
+for why. CI's own flags stay exactly as they are:
 
 - **Toolchain parity first**: CI installs the **latest stable** (the
   SHA-pinned `dtolnay/rust-toolchain` action with `toolchain: stable`), so
@@ -51,17 +54,46 @@ post-PR you still monitor all checks that report on your PR.
   (`cargo metadata --no-deps`, seconds); especially relevant when a
   `Cargo.toml` changed. CI runs it as a step inside the `clippy / rustfmt` job.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- `RUSTFLAGS="-D warnings" cargo test --workspace --all-features` — CI
-  (`ci.yml`) exports `RUSTFLAGS: -D warnings` job-wide, so a plain
-  `cargo test` can pass locally on a warning that fails CI's build/test.
-  CI additionally sets `TEST_SUPPORT_PREBUILT_BINS=1` (it has just run
-  `cargo build --workspace --all-targets`), which makes the CLI E2Es use the
-  already-built sibling binaries instead of shelling out to `cargo build` per
-  test. **Do not set that variable locally** unless you have just built the
-  workspace — the E2Es would then test stale binaries. Never rename it into the
-  `TOTSUKA_` namespace: unrecognised `TOTSUKA_*` variables print a warning to
-  the child's stderr (ADR-0009) and break the tests that parse stderr as JSON
-  (→ [ADR-0018](../../ai-docs/decisions/adr-0018-ci-test-time.md)).
+- **Tests — `bash scripts/dev-test.sh`**, not `cargo test` by hand
+  (→ [ADR-0049](../../ai-docs/decisions/adr-0049-local-test-loop.md)). It runs
+  `cargo build --workspace --all-targets`, then `cargo nextest run --workspace`,
+  then `cargo test --doc --workspace`. Measured warm on this workspace: **10s
+  against 20s** for the `cargo test` one-liner it replaces, running the same
+  1,201 tests. Extra arguments are forwarded to `cargo nextest run` verbatim, so
+  narrowing is nextest's filterset and nothing of ours:
+  `bash scripts/dev-test.sh -E 'package(=agent-ide-herdr)'`.
+  - it covers **tests only**. `fmt` / `arch-lint` / `clippy` / `cargo doc` are
+    the other bullets in this list and stay manual
+  - **Do not add `RUSTFLAGS="-D warnings"` or `--all-features` to local
+    commands.** `--all-features` is a no-op in this workspace (zero `[features]`
+    declarations, → ADR-0029), and the deny is already permanent: root
+    `Cargo.toml` has `[workspace.lints.rust] warnings = "deny"` and all 11
+    members opt in with `[lints] workspace = true`. That covers `tests/` targets
+    — measured: an unused variable in an integration test fails a plain
+    `cargo build -p <crate> --tests` with `error`, exit 101. Setting `RUSTFLAGS`
+    changes the fingerprint without changing the outcome, so it builds
+    everything a second time into an artifact space that clippy, `cargo doc` and
+    rust-analyzer (none of which set it) do not share.
+  - **CI's `env: RUSTFLAGS` is a different question — never touch it.** It is
+    part of the rust-cache key (`warm-cache.yml` requires it byte-for-byte), so
+    changing it invalidates every cache entry.
+  - the script exports `TEST_SUPPORT_PREBUILT_BINS=1` itself, immediately after
+    the workspace build, so the "everything has just been built" precondition
+    holds by construction — and under a process-per-test runner that matters
+    more than it did before, since without it the nested `cargo build` would run
+    once *per test*. **If you run `cargo test` / `cargo nextest run` by hand, do
+    not set it** unless you have just built the workspace, or the E2Es test
+    stale binaries. Never rename it into the `TOTSUKA_` namespace: unrecognised
+    `TOTSUKA_*` variables print a warning to the child's stderr (ADR-0009) and
+    break the tests that parse stderr as JSON
+    (→ [ADR-0018](../../ai-docs/decisions/adr-0018-ci-test-time.md)).
+  - **`target/` needs an occasional `cargo clean`.** Nothing garbage-collects
+    it: it had reached 1,131,673 files / 80.2 GiB, accumulated one artifact
+    space per flag set. #459 reconstructed a ~20-minute local test run from
+    artifact mtimes at that size; measured immediately after the clean, the same
+    command took 32s. The bloated run was never timed directly, so treat the
+    size as the leading suspect rather than a proven cause — but the clean took
+    222s, which is cheap against either number.
 - `cargo doc --workspace --no-deps` — rustdoc link integrity. `[workspace.lints.rust]
   warnings = "deny"` already makes a broken intra-doc link a hard error
   (exit 101), but **CI never runs `cargo doc`**, so nothing fires it: 18
