@@ -53,7 +53,9 @@ for why. CI's own flags stay exactly as they are:
   (plugins → protocol/sdk only, protocol is a leaf, no cycles). Cheap
   (`cargo metadata --no-deps`, seconds); especially relevant when a
   `Cargo.toml` changed. CI runs it as a step inside the `clippy / rustfmt` job.
-- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo clippy --workspace --all-targets -- -D warnings` — CI passes
+  `--all-features` here; locally it is dropped for the same reason as in the
+  test bullet below (zero `[features]` in the workspace, so it selects nothing).
 - **Tests — `bash scripts/dev-test.sh`**, not `cargo test` by hand
   (→ [ADR-0049](../../ai-docs/decisions/adr-0049-local-test-loop.md)). It runs
   `cargo build --workspace --all-targets`, then `cargo nextest run --workspace`,

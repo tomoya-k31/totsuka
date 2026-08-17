@@ -42,4 +42,7 @@ sha2.workspace = true
 # `test-util` is what makes `#[tokio::test(start_paused = true)]` available:
 # the integration test for the never-clears `agent_not_ready` path has to wait
 # out PROMPT_READY_WINDOW, and on a paused clock that costs no wall time.
-tokio = { workspace = true, features = ["net", "io-std", "test-util"] }
+#
+# Only the *extra* feature is listed: cargo unions features across dependency
+# kinds, so the `net` / `io-std` above are already on for the test build.
+tokio = { workspace = true, features = ["test-util"] }
