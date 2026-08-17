@@ -37,3 +37,12 @@ tracing-subscriber.workspace = true
 # D-2). Already in the workspace for `plugin install`'s SHA-256 verification, so
 # this adds no new crate to the graph.
 sha2.workspace = true
+
+[dev-dependencies]
+# `test-util` is what makes `#[tokio::test(start_paused = true)]` available:
+# the integration test for the never-clears `agent_not_ready` path has to wait
+# out PROMPT_READY_WINDOW, and on a paused clock that costs no wall time.
+#
+# Only the *extra* feature is listed: cargo unions features across dependency
+# kinds, so the `net` / `io-std` above are already on for the test build.
+tokio = { workspace = true, features = ["test-util"] }
