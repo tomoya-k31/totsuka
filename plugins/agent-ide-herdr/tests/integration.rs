@@ -1763,7 +1763,13 @@ async fn agent_start_retries_a_timeout_because_waiting_longer_does_not_help() {
 /// clears — the old code asked for the whole budget and then failed the
 /// dispatch, which is the 40% failure rate the issue reports. The fix is to
 /// stop prompting a CLI that does not exist and start it again instead.
-#[tokio::test]
+///
+/// `start_paused` because "never clears" means waiting out the whole
+/// `PROMPT_READY_WINDOW` (15s) before the re-issue happens, and that was
+/// **15.099s of the workspace suite's 15.138s wall time** (#459). The fake
+/// herdr runs on this same runtime, so the paused clock covers both sides and
+/// the assertions below are unchanged — what is gone is only the real waiting.
+#[tokio::test(start_paused = true)]
 async fn a_prompt_that_never_becomes_ready_re_issues_agent_start() {
     let fake = FakeHerdr {
         not_ready_until_restart: true,
