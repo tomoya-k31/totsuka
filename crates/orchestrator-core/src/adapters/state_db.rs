@@ -1191,10 +1191,20 @@ impl StateDb {
 
     /// The most recent session for a task — the re-attach target (F-37) — or
     /// `None` if the task was never dispatched.
+    ///
+    /// Ordered by `id`, **not** `created_at` (#478). `created_at` is an RFC3339
+    /// *string* whose subsecond part is variable-width, so lexicographic order
+    /// is not chronological order: when the earlier timestamp is a prefix of
+    /// the later one, the next character compared is a digit against `Z`, and
+    /// the older row sorts as the newer (`…10.28357Z` > `…10.283572Z`).
+    /// Measured, that inverted 278 of 1,999 consecutive pairs. `id` is the
+    /// rowid, assigned in insertion order, and a reused rowid is only ever
+    /// handed out above every surviving row — so it orders these rows exactly
+    /// as `created_at` was meant to.
     pub fn latest_session(&self, task_id: i64) -> Result<Option<SessionRecord>, StateError> {
         let sql = format!(
             "SELECT {SESSION_COLUMNS} FROM sessions WHERE task_id = ?1 \
-             ORDER BY created_at DESC, id DESC LIMIT 1"
+             ORDER BY id DESC LIMIT 1"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(params![task_id], row_to_session)?;
@@ -1202,10 +1212,13 @@ impl StateDb {
     }
 
     /// All sessions for a task, newest first (session history for `status`).
+    ///
+    /// Ordered by `id` for the reason spelled out on
+    /// [`latest_session`](Self::latest_session) (#478).
     pub fn list_sessions(&self, task_id: i64) -> Result<Vec<SessionRecord>, StateError> {
         let sql = format!(
             "SELECT {SESSION_COLUMNS} FROM sessions WHERE task_id = ?1 \
-             ORDER BY created_at DESC, id DESC"
+             ORDER BY id DESC"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![task_id], row_to_session)?;
@@ -2498,7 +2511,7 @@ mod tests {
         let s2 = db.record_session(id, "herdr", "sess-2").unwrap();
         assert_ne!(s1, s2, "each dispatch appends a distinct session row");
 
-        // Latest (highest id on a created_at tie) is the re-attach target.
+        // Latest (highest id) is the re-attach target.
         let latest = db.latest_session(id).unwrap().unwrap();
         assert_eq!(latest.session_id, "sess-2");
         assert_eq!(latest.plugin, "herdr");
@@ -2509,6 +2522,50 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].session_id, "sess-2");
         assert_eq!(all[1].session_id, "sess-1");
+    }
+
+    /// The re-attach target must not depend on how `created_at` happens to
+    /// *format* (#478).
+    ///
+    /// `time`'s RFC3339 writes only as many subsecond digits as it needs, so
+    /// consecutive timestamps differ in width — and when the earlier one is a
+    /// prefix of the later one, string comparison puts the **older** row first
+    /// (`.5Z` vs `.53Z`: `Z` is 0x5A, `3` is 0x33). This test pins exactly that
+    /// pair through the injected clock, so it is deterministic rather than a
+    /// 14%-of-the-time flake, and it fails against `ORDER BY created_at DESC`
+    /// even with an `id DESC` tiebreak — the tiebreak never runs, because the
+    /// two timestamps do compare unequal.
+    #[test]
+    fn latest_session_ignores_how_the_timestamp_string_sorts() {
+        let clock = manual_clock();
+        // …T00:00:00.5Z — one subsecond digit.
+        clock.advance(time::Duration::milliseconds(500));
+        let db = StateDb::open_in_memory_with_clock(clock.clone()).unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        let first = db.record_session(id, "herdr", "sess-1").unwrap();
+
+        // …T00:00:00.53Z — later in time, *smaller* as a string.
+        clock.advance(time::Duration::milliseconds(30));
+        let second = db.record_session(id, "herdr", "sess-2").unwrap();
+        assert!(second > first, "the rowid still increases");
+
+        let rows = db.list_sessions(id).unwrap();
+        let stamps: Vec<&str> = rows.iter().map(|r| r.created_at.as_str()).collect();
+        assert!(
+            stamps.contains(&"2026-01-01T00:00:00.5Z")
+                && stamps.contains(&"2026-01-01T00:00:00.53Z"),
+            "the fixture must actually produce the prefix pair, got {stamps:?}"
+        );
+
+        assert_eq!(
+            db.latest_session(id).unwrap().unwrap().session_id,
+            "sess-2",
+            "the newest dispatch is the re-attach target, whatever the string sort says"
+        );
+        assert_eq!(
+            rows[0].session_id, "sess-2",
+            "history is newest-first by the same order"
+        );
     }
 
     #[test]
