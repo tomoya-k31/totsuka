@@ -635,16 +635,44 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // unreachable.
         if latest.is_some() {
             // Logged here rather than left to `release_pane`'s own lines: this
-            // is the one caller whose failure has a *user-visible* consequence
-            // (the dispatch below may be refused), and at `warn` it is the only
-            // hint the operator gets. `Untouched` stays quiet — it is the
-            // ordinary case where the sweep already closed the pane, and the
-            // plugin warns on its own when it was an identity refusal instead.
+            // is the one caller whose outcome has a *user-visible* consequence
+            // (the dispatch below may be refused). `Untouched` stays quiet — it
+            // is the ordinary case where the sweep already closed the pane.
             match self.release_pane(&record, ReleaseMode::Always).await {
                 PaneRelease::Closed => tracing::info!(
                     task_id = record.id,
                     "closed the previous dispatch's pane before re-dispatching"
                 ),
+                // The plugin looked and found a pane of its own still sitting
+                // on this task's worktree (protocol 0.4.2, #485) — not at the
+                // id we recorded, which is why it would not close it, but
+                // there. Dispatching anyway is how #481 looked from the
+                // outside: an agent plugin that derives its agent name from
+                // the task id refuses the launch with an error of its own
+                // making, seconds later, in its own vocabulary. Stopping here
+                // costs the same dispatch and buys a reason the operator can
+                // act on.
+                //
+                // Only reachable against a plugin new enough to say why:
+                // before 0.4.2, and for any reason this build does not know,
+                // the answer is `Untouched` and this arm never runs.
+                PaneRelease::Refused => {
+                    return self
+                        .fail_dispatch(
+                            &record,
+                            concat!(
+                                "a pane is still open on this task's worktree — the ",
+                                "agent plugin found one of its own there, at a ",
+                                "different pane id than the one recorded, so it ",
+                                "declined to close it → close that pane yourself, ",
+                                "then `totsuka task retry` this task. `totsuka ",
+                                "doctor` will not list it: its worktree still ",
+                                "exists, so it is not an orphan"
+                            )
+                            .to_string(),
+                        )
+                        .await;
+                }
                 PaneRelease::Failed => tracing::warn!(
                     task_id = record.id,
                     "could not confirm the previous dispatch's pane is closed; if the agent \

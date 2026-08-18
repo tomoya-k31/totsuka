@@ -2981,12 +2981,132 @@ async fn release_refuses_on_identity_mismatch() {
         )
         .await;
     assert_eq!(resp["result"]["released"], false);
+    // No pane of ours is listed on `/wt/agent-1`, so the task's pane is gone
+    // and the mismatch was someone else's pane taking the id (0.4.2, #485).
+    assert_eq!(resp["result"]["not_released"], "gone");
 
     let log = requests.lock().unwrap();
     assert!(
         !log.iter()
             .any(|r| r["method"] == "pane.close" || r["method"] == "workspace.close"),
         "a mismatched pane must not be touched: {log:?}"
+    );
+}
+
+#[tokio::test]
+async fn release_reports_refused_when_the_task_still_has_a_pane_elsewhere() {
+    // 0.4.2 (#485): `released: false` alone cannot tell the caller whether the
+    // task's own pane is gone or merely somewhere else, and those are opposites
+    // for a caller about to open a new pane for it. The pane id did not resolve
+    // to our pane, but one of ours *is* sitting on the expected worktree, so
+    // the answer is `refused`, not `gone`.
+    let (socket, _requests) = FakeHerdr {
+        pane_cwd: Some("/wt/someone-else"),
+        list_panes: vec![
+            json!({ "pane_id": "w9:p1", "workspace_id": "w9", "agent_status": "working",
+                    "cwd": "/wt/agent-1" }),
+        ],
+        list_workspaces: vec![json!({ "workspace_id": "w9", "label": "totsuka C1:1.0" })],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess", "expect_cwd": "/wt/agent-1" }),
+        )
+        .await;
+
+    assert_eq!(resp["result"]["released"], false);
+    assert_eq!(
+        resp["result"]["not_released"], "refused",
+        "a pane of ours on that worktree means the task's pane is still open: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn release_reports_refused_when_the_agent_wandered_out_of_its_worktree() {
+    // The most realistic refusal (#485): the agent `cd`'d out of its worktree,
+    // so the pane's cwd matches nothing — not the identity guard, and not the
+    // worktree-based ownership check either. Its name registration collides
+    // all the same. The pane reporting the *same agent conversation* as the
+    // recorded session id is what identifies it, wherever its shell went.
+    let (socket, _requests) = FakeHerdr {
+        pane_cwd: Some("/home/elsewhere"),
+        list_panes: vec![json!({
+            "pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "working",
+            "cwd": "/home/elsewhere",
+            "agent_session": { "value": "sess-uuid" }
+        })],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess-uuid", "expect_cwd": "/wt/agent-1" }),
+        )
+        .await;
+
+    assert_eq!(resp["result"]["released"], false);
+    assert_eq!(
+        resp["result"]["not_released"], "refused",
+        "a live pane on this conversation is the task's pane, wherever it cd'd to: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn release_reports_gone_when_the_pane_id_resolves_to_nothing() {
+    // The ordinary case: cancel or the agent exiting already closed it, and no
+    // pane of ours is left on the worktree.
+    let (socket, _requests) = FakeHerdr {
+        pane_gone: true,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess", "expect_cwd": "/wt/agent-1" }),
+        )
+        .await;
+
+    assert_eq!(resp["result"]["released"], false);
+    assert_eq!(resp["result"]["not_released"], "gone");
+}
+
+#[tokio::test]
+async fn a_successful_release_reports_no_reason() {
+    // `not_released` is meaningless when something was closed, and it is
+    // `skip_serializing_if = "Option::is_none"`, so it must not appear at all.
+    let (socket, _requests) = FakeHerdr {
+        pane_cwd: Some("/wt/agent-1"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess", "expect_cwd": "/wt/agent-1" }),
+        )
+        .await;
+
+    assert_eq!(resp["result"]["released"], true);
+    assert!(
+        resp["result"].get("not_released").is_none(),
+        "a closed pane carries no reason: {resp}"
     );
 }
 

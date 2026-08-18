@@ -50,6 +50,8 @@ protocol 0.2.0 の Slack 実機検証で、完了したタスクの herdr pane �
 
 capability を新設せず **`pane_control` に相乗り**する（[ADR-0005](/decisions/adr-0005-click-to-focus.md) の `session/focus` と同じ判断）。トレードオフ: 専用 flag（例 `pane_release`）なら「focus はできるが release はできない」プラグインを表現できるが、focus も release も「この pane を制御する」ことに変わりなく、release に対応するプラグインはどのみち実装更新が要る。宣言しないプラグイン（orca / mock 既定）は単に呼ばれず、orchestrator は pane 解放をスキップして worktree だけ削除する。
 
+**2026-08-19 追記（#485、protocol 0.4.2）**: この `false` の 2 つの意味は、**新しい pane をこれから開く呼び出し側にとっては正反対**だった — 「既に消えている」は何もしなくてよく、「pane が生きている」なら次の dispatch が衝突する。`not_released: Option<NotReleased>`（`gone` / `refused` / catch-all の `unknown`）を追加し、`refused` のときだけ dispatch を fail-fast させる。**ただし「同一性不一致」はそのまま `refused` ではない。** pane id は位置ベースなので、不一致は「その id が別の pane を指している」としか言っておらず、**タスク自身の pane が消えたのか別の位置へ移ったのかを何も語らない** — 前者なら agent 名は空いていて dispatch は成功する。そこでプラグインは**タスクの pane が生きているか**を実データで確かめてから `refused` / `gone` を決める。証拠は強い順に 2 つ: ①session_id が運ぶ**エージェント会話 id** と同じ会話を報告する live pane（`cd` で worktree の外へ出た pane — 最も現実的な refusal — も、名前の占有は続くのでこれが捕まえる）、②決定 3 のガードで使う `expect_cwd`（タスク毎に一意な worktree パス）上の自分の pane（会話報告が届かなかった pane の受け皿）。判定材料が無い場合（会話 id 未記録かつ `expect_cwd` 無し・列挙失敗）は `gone` へ縮退する — 推測を返すくらいなら 0.4.2 以前と同じ答えを返すほうがよい。欠落（0.4.2 以前のプラグイン）と `unknown` も同様に素通しする。additive change のため 0.2.0 → **0.2.1**。全同梱プラグインの manifest は上限 `<0.3` のため manifest 変更なしで受理される。
+
 ## 3. 同一性検証は `expect_cwd` を主キーとし、判定規則は「不一致は拒否・比較不能は degrade-open」
 
 herdr の pane id（`w34:p2`）は**位置ベース**で、遅延削除（7日/28日）では元の pane が閉じられ別 pane が同じ id を取る窓が開く。そこで orchestrator は DB が正本でタスク毎に一意な **worktree パスを `expect_cwd`** として送り、herdr プラグインが live pane の `cwd` と突き合わせる。

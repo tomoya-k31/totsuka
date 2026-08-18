@@ -1939,7 +1939,8 @@ fn check_orphan_panes(
     use plugin_protocol::manifest::PluginKind;
     let json = args.json;
     use plugin_protocol::methods::{
-        SessionListParams, SessionListResult, SessionReleaseParams, SessionReleaseResult,
+        NotReleased, SessionListParams, SessionListResult, SessionReleaseParams,
+        SessionReleaseResult,
     };
 
     let Some(db) = db else {
@@ -2102,10 +2103,26 @@ fn check_orphan_panes(
                 result
             });
             match released {
-                Ok(SessionReleaseResult { released: true }) => println!("released {name}"),
-                Ok(SessionReleaseResult { released: false }) => {
-                    println!("not released (already gone, or the pane changed identity)")
-                }
+                Ok(r) if r.released => println!("released {name}"),
+                // Since protocol 0.4.2 the plugin says which it was (#485); an
+                // older one says nothing, and "already gone or the pane
+                // changed identity" is then the honest answer rather than a
+                // guess.
+                Ok(r) => match r.not_released {
+                    // `Gone` also covers "could not tell" (this path sends no
+                    // `expect_cwd`, so the plugin often has nothing to go on) —
+                    // phrase it as the plugin's report, not as a fact.
+                    Some(NotReleased::Gone) => {
+                        println!("not released (the plugin found no pane left for this task)")
+                    }
+                    Some(NotReleased::Refused) => println!(
+                        "not released: the plugin reports a live pane still belonging to \
+                         this task — check it by hand before closing anything"
+                    ),
+                    Some(NotReleased::Unknown) | None => {
+                        println!("not released (already gone, or the pane changed identity)")
+                    }
+                },
                 Err(e) => println!("release failed: {}", safe(&e.to_string())),
             }
         }

@@ -117,7 +117,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // Read the outcome rather than the memo (#486): the memo is keyed by
         // session row now, and asking it here would mean resolving the row a
         // second time to learn what `release_pane` already returned.
-        if self.release_pane(&record, ReleaseMode::Once).await == PaneRelease::Failed {
+        // `Refused` counts too (0.4.2, #485): it is the one answer that says a
+        // pane is definitely still there, which is exactly what this warning
+        // is about.
+        if matches!(
+            self.release_pane(&record, ReleaseMode::Once).await,
+            PaneRelease::Failed | PaneRelease::Refused
+        ) {
             tracing::error!(
                 task_id = record.id,
                 "could not confirm the pane closed: the agent may still be running. \

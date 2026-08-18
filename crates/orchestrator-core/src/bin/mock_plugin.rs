@@ -303,12 +303,22 @@ fn main() {
                 // that is already closed (`released: false`, not an error —
                 // same convention as `session/focus`).
                 record_to(config.get("dispatch_log"), "session/release", &params);
-                let released = !params
+                let session_id = params
                     .get("session_id")
                     .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .contains("gone");
-                Response::result(request_id(&id), serde_json::json!({ "released": released }))
+                    .unwrap_or("");
+                // `refused` simulates protocol 0.4.2's "the pane is alive and
+                // the identity guard refused" (#485); `gone` stays the
+                // already-closed case. Both answer `released: false`, which is
+                // the point — only `not_released` tells them apart.
+                let body = if session_id.contains("refused") {
+                    serde_json::json!({ "released": false, "not_released": "refused" })
+                } else if session_id.contains("gone") {
+                    serde_json::json!({ "released": false, "not_released": "gone" })
+                } else {
+                    serde_json::json!({ "released": true })
+                };
+                Response::result(request_id(&id), body)
             }
             "session/list" => {
                 // Orphan-pane detection (#211): the staged pane inventory
