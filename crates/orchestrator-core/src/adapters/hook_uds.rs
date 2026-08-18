@@ -39,12 +39,12 @@
 //!   "job_id": "job-42-7",              // required; TOTSUKA_JOB_ID echoed back
 //!   "session_id": "abc123",            // tool-native session id (optional)
 //!   "prompt_id": "p-1",                // idempotency-key component (optional)
-//!   "hook_event_name": "Stop",         // Stop|Notification|SessionStart|SessionEnd
+//!   "hook_event_name": "Stop",         // Stop|Notification|QuestionPending|SessionStart|SessionEnd
 //!   "status": "completed",             // Stop: completed|needs_input|failed|unknown
 //!   "reason": "...",                   // optional
 //!   "last_assistant_message": "...",   // Stop (optional)
 //!   "transcript_path": "...",          // Stop (optional)
-//!   "message": "...",                  // Notification (optional)
+//!   "message": "...",                  // Notification / QuestionPending (optional)
 //!   "background_tasks": ["..."]        // Stop: non-empty ⇒ heartbeat (still working)
 //! }
 //! ```
