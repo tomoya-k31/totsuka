@@ -661,6 +661,25 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
         .unwrap_or_else(|| panic!("the mention task: {tasks}"));
     assert_eq!(mention_task["workflow"], "reply", "{mention_task}");
 
+    // Every worktree must be gone before `doctor` runs. `cleanup = immediate`
+    // removes them, but waiting on the task state would not be enough:
+    // `apply_event(Complete)` lands *before* `cleanup_worktree`
+    // (`run/finalize.rs`), so a task can read `done` while its worktree is
+    // still on disk. Wait on the directory — the condition `doctor` actually
+    // checks — or the run gets killed mid-cleanup and `doctor` reports an
+    // orphan worktree (observed once in CI, passed on re-run).
+    let worktree_root = env.state_dir().join("wt/clone");
+    wait_for(
+        "the worktrees to be cleaned up",
+        Duration::from_secs(60),
+        || {
+            std::fs::read_dir(&worktree_root)
+                .map(|mut entries| entries.next().is_none())
+                .unwrap_or(true)
+                .then_some(())
+        },
+    );
+
     stop(child);
 
     // doctor: the live probe launches the plugin and runs the TokenGuard
