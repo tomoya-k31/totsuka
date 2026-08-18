@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-17T06:20:00+09:00 }
+generated: { by: claude-code/fable-5, at: 2026-08-18T13:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -251,7 +251,17 @@ llm 検収の rubric も「この完了申告より前の会話で人間が明�
 
 長い自走中の誤エスカレートを避けたい attended workflow は `timeout_secs = 0`（D-03 掃引のオプトアウト、#439 / [ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md)）を併用する。
 
-既知の制限: `WaitingInput` 中の 2 回目の NEEDS_INPUT（修正指示 → 再確認）は冪等 no-op で**再通知が飛ばない**。attended pane では人間が会話の当事者なので実害は小さい。
+既知の制限: `WaitingInput` 中の 2 回目の NEEDS_INPUT（修正指示 → 再確認）は冪等 no-op で**再通知が飛ばない**。attended pane では人間が会話の当事者なので実害は小さい（質問ツール経路は下記のとおり #487 で解消）。
+
+#### 訊き方は質問ツールの選択 UI（#487）
+
+上の流れの「確認を求める」部分は、ツールに native の質問ツールがあればそれを使う（[ADR-0050](/decisions/adr-0050-question-tool-asking.md)）:
+
+- **claude**: `AskUserQuestion`（単一選択ピッカー。「Approve completion / Request changes」等）。ダイアログ待機中はターンが終わらず `NEEDS_INPUT` が届かないため、design / implement の `--settings` にだけ描画される PreToolUse フック（`on-ask-user-question.sh`）が `QuestionPending` イベントを送り、totsuka はそれで従来どおり `waiting_input` へ park する（通知本文は質問文の要約）
+- **opencode**: native の `question` ツール（同じ指示が visible extra_context で届く）。`totsuka-opencode.js` の `tool.execute.before` が同じ `QuestionPending` を送り、ダイアログ待機中の idle を UNKNOWN と誤判定しないようガードする
+- **codex**: 質問ツールが Default mode に無い（`request_user_input` は Plan Mode 限定）ため従来どおり `NEEDS_INPUT` で停止するが、選択肢を**番号付きリスト**で提示し、人間は番号 1 文字で回答できる
+
+質問ツールが使えない・失敗した場合のフォールバックは常に「番号付きリスト + `NEEDS_INPUT`」で、プロンプト自体に含まれている。park 中に**新しい**質問が来た場合、質問経路では再通知される（NEEDS_INPUT 経路の既知の制限を解消）。
 
 ### 成果物 URL 検収の落とし穴（#398）
 

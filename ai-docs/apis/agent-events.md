@@ -4,7 +4,7 @@ title: POST /agent-events（UDS フック受信）
 description: エージェント CLI（Claude Code / Codex / OpenCode）のフック/プラグインが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。制御エンドポイント POST /focus（click-to-focus、F-94）も同一ソケットに同居。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/hook_uds.rs
 tags: [api, uds, hook, claude-code, codex, opencode, signal, ingress]
-generated: { by: human:tomoya-k31, at: 2026-07-24T12:00:00Z }
+generated: { by: claude-code/fable-5, at: 2026-08-18T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -38,12 +38,14 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 | `job_id` | ✔ | `"job-{task_id}-{session_row}"`。`TOTSUKA_JOB_ID` のエコーバック。相関はこれのみで行い session_id からの推測はしない（E-09） |
 | `session_id` | | ツールネイティブのセッション id（相関補助・冪等キー要素。DB では `tool_session_id`） |
 | `prompt_id` | | 冪等キー要素（codex では stdin の `turn_id`、opencode では最終メッセージ id を送信側がこのフィールドへ載せ替える — ワイヤ形は不変、#196） |
-| `hook_event_name` | | `Stop` / `Notification` / `SessionStart` / `SessionEnd`。未知/欠落は `Heartbeat`（生存のみ、誤完了を避ける最も非断定な扱い）へ正規化。**これが正本のイベント種別キー**（旧 `event` フィールドではない。フックスクリプト `on-stop.sh` 等はこの名で送出する #138） |
+| `hook_event_name` | | `Stop` / `Notification` / `QuestionPending` / `SessionStart` / `SessionEnd`。未知/欠落は `Heartbeat`（生存のみ、誤完了を避ける最も非断定な扱い）へ正規化。**これが正本のイベント種別キー**（旧 `event` フィールドではない。フックスクリプト `on-stop.sh` 等はこの名で送出する #138） |
 | `status` | | `Stop` 時: `completed` / `needs_input` / `failed` / `unknown`。**大小無視で照合**（`on-stop.sh` はマーカー語 `COMPLETED` 等を大文字のまま送るため） |
 | `reason` | | 補足理由 |
 | `last_assistant_message` / `transcript_path` | | `Stop` 時の補助 |
-| `message` | | `Notification` 時のメッセージ（codex に Notification イベントは無く、`PermissionRequest` を `on-notification.sh` が `permission_prompt: <tool_name>` へ合成して同形で送出） |
+| `message` | | `Notification` / `QuestionPending` 時のメッセージ（codex に Notification イベントは無く、`PermissionRequest` を `on-notification.sh` が `permission_prompt: <tool_name>` へ合成して同形で送出。`QuestionPending` では質問文の要約で、waiting_input 通知の本文になる） |
 | `background_tasks` | | `Stop` 時に非空なら中間 Stop＝`Heartbeat` として扱う（#131 D-12） |
+
+`QuestionPending`（#487, [ADR-0050](/decisions/adr-0050-question-tool-asking.md)）はエージェントが対話的な質問ツール（claude `AskUserQuestion` / opencode `question`）のダイアログを開いたことを表す。送出元は claude では PreToolUse フック `on-ask-user-question.sh`、opencode では `totsuka-opencode.js` の `tool.execute.before`。ダイアログ待機中はターンが終わらず `Stop{needs_input}` が届かないため、Engine はこのイベントで task を `waiting_input` へ park する（スロット解放 + 通知）。**`prompt_id` は質問ごとに distinct**（claude: `tool_use_id`、opencode: `callID`）でなければならない — 冪等キー `(job_id, tool_session_id, prompt_id, event, status)` の下で、空だと同一セッション 2 問目が Duplicate として黙って落ちる。
 
 # レスポンス
 
