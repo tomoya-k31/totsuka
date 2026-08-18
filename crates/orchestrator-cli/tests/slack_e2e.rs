@@ -673,10 +673,15 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
         "the worktrees to be cleaned up",
         Duration::from_secs(60),
         || {
-            std::fs::read_dir(&worktree_root)
-                .map(|mut entries| entries.next().is_none())
-                .unwrap_or(true)
-                .then_some(())
+            match std::fs::read_dir(&worktree_root) {
+                Ok(mut entries) => entries.next().is_none().then_some(()),
+                // The root itself is gone: nothing is left, by definition.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(()),
+                // Anything else (permissions, transient IO) must not read as
+                // "clean" — that is the silent pass this wait exists to
+                // prevent, and it would put the flake straight back.
+                Err(e) => panic!("cannot read {}: {e}", worktree_root.display()),
+            }
         },
     );
 
