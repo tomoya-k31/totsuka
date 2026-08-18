@@ -466,10 +466,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             (agent_name.to_string(), dispatched.session_id.clone()),
             record.id,
         );
-        // This task has a *new* pane, so any "already released" memo from the
-        // previous dispatch is stale — kept, it would suppress the release of
-        // the pane that was just created (#481).
-        self.released_panes.remove(&record.id);
         self.stats.dispatched += 1;
         tracing::info!(
             task_id = record.id,
@@ -609,9 +605,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             )?;
             self.sessions
                 .insert((plugin.clone(), session_id), record.id);
-            // Re-attached, so the pane is live again: a release memo from the
-            // last time this task finished would suppress its next release.
-            self.released_panes.remove(&record.id);
             self.stats.dispatched += 1;
             self.apply_agent_state(record.id, &plugin, state, None)
                 .await?;
@@ -647,7 +640,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             // hint the operator gets. `Untouched` stays quiet — it is the
             // ordinary case where the sweep already closed the pane, and the
             // plugin warns on its own when it was an identity refusal instead.
-            match self.release_pane(&record).await {
+            match self.release_pane(&record, ReleaseMode::Always).await {
                 PaneRelease::Closed => tracing::info!(
                     task_id = record.id,
                     "closed the previous dispatch's pane before re-dispatching"

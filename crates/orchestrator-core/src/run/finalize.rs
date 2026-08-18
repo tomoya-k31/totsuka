@@ -280,9 +280,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let branch = record.branch.as_deref();
         let base_commit = record.base_commit.as_deref();
         // Already removed (earlier run / manual cleanup): nothing to do. The
-        // task will never be swept again, so drop its release memo too.
+        // task will never be swept again, so drop its release memos too.
         if !Path::new(path).exists() {
-            self.released_panes.remove(&task_id);
+            self.forget_release_memos(task_id);
             return Ok(());
         }
         // Owned copy: `release_pane` below needs `&mut self`, which a borrow
@@ -336,11 +336,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
         // The worktree is going away → its pane has nothing left to show.
         // Close it before the removal so the pane's lifetime tracks the
-        // worktree's; at most once per task (a removal that keeps failing
-        // must not re-release every sweep).
-        if !self.released_panes.contains(&task_id) {
-            self.release_pane(&record).await;
-        }
+        // worktree's. `Once`: a removal that keeps failing must not re-release
+        // on every sweep (#210).
+        self.release_pane(&record, ReleaseMode::Once).await;
         match self
             .worktrees
             .remove(&repo_path, Path::new(path), branch, base_commit)
@@ -357,10 +355,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
             Ok(outcome) => {
                 // Removed: this task is done being swept — drop its release
-                // memo so `released_panes` stays bounded by the worktrees
-                // still awaiting removal, not by every task a long `--watch`
-                // run ever completed (same hygiene as `drop_task_sessions`).
-                self.released_panes.remove(&task_id);
+                // memos so `released_panes` stays bounded by the worktrees
+                // still awaiting removal, not by every dispatch a long
+                // `--watch` run ever made (same hygiene as
+                // `drop_task_sessions`).
+                self.forget_release_memos(task_id);
                 tracing::info!(task_id, ?outcome, "worktree cleanup");
             }
             Err(e) => {
@@ -370,19 +369,44 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 
+    /// Drop every release memo belonging to `task_id` (#486).
+    ///
+    /// The memo is keyed by session row, so pruning by task means asking which
+    /// rows the task has. A task that has been retried owns several, and
+    /// leaving the older ones behind would grow the set for the life of the
+    /// process. A lookup failure only skips the pruning — the memo is an
+    /// optimisation, never correctness.
+    pub(super) fn forget_release_memos(&mut self, task_id: i64) {
+        match self.db.list_sessions(task_id) {
+            Ok(sessions) => {
+                for session in sessions {
+                    self.released_panes.remove(&session.id);
+                }
+            }
+            Err(e) => tracing::debug!(task_id, "could not prune release memos: {e}"),
+        }
+    }
+
     /// Release (close) a finished task's pane via `session/release` (#210).
     /// Best-effort: every failure only logs — a pane that could not be
     /// released must never block the worktree removal (an orphaned pane is
-    /// `doctor`'s job, #211). Marks the task released once the RPC answered
-    /// (whatever `released` says — `false` means "already gone or refused",
-    /// both final) or when release is impossible for this run; a transport
-    /// error leaves it unmarked so the next sweep retries.
-    pub(super) async fn release_pane(&mut self, record: &TaskRecord) -> PaneRelease {
+    /// `doctor`'s job, #211). Records **the session row** as released once the
+    /// RPC answered (whatever `released` says — `false` means "already gone or
+    /// refused", both final) or when release is impossible for this run; a
+    /// transport error leaves it unrecorded so the next sweep retries.
+    ///
+    /// `mode` decides whether that record may short-circuit the call — see
+    /// [`ReleaseMode`].
+    pub(super) async fn release_pane(
+        &mut self,
+        record: &TaskRecord,
+        mode: ReleaseMode,
+    ) -> PaneRelease {
         let session = match self.db.latest_session(record.id) {
             Ok(Some(session)) => session,
             Ok(None) => {
-                // Never dispatched → no pane to release.
-                self.released_panes.insert(record.id);
+                // Never dispatched → no pane to release, and nothing to
+                // remember: the memo is keyed by session row (#486).
                 return PaneRelease::NotApplicable;
             }
             Err(e) => {
@@ -393,6 +417,15 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 return PaneRelease::Failed;
             }
         };
+        // Once-ness is the caller's call, and only this function knows which
+        // session row the memo is keyed by (#486). The two callers differ:
+        // cleanup must not re-release on every sweep, while a re-dispatch needs
+        // the pane *gone* and cannot take the memo as proof of that — a
+        // recorded `released: false` also covers an identity refusal, which
+        // leaves the pane alive.
+        if mode == ReleaseMode::Once && self.released_panes.contains(&session.id) {
+            return PaneRelease::NotApplicable;
+        }
         let Some(agent) = self.plugins.agents.get(&session.plugin) else {
             // The owning plugin is not launched this run; that cannot change
             // until restart, so do not retry every sweep.
@@ -401,12 +434,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 plugin = %session.plugin,
                 "pane release skipped: agent plugin not launched"
             );
-            self.released_panes.insert(record.id);
+            self.released_panes.insert(session.id);
             return PaneRelease::NotApplicable;
         };
         if !agent.capabilities().pane_control {
             // No pane to control (e.g. orca): nothing to release, ever.
-            self.released_panes.insert(record.id);
+            self.released_panes.insert(session.id);
             return PaneRelease::NotApplicable;
         }
         let params = SessionReleaseParams {
@@ -422,7 +455,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .await
         {
             Ok(result) => {
-                self.released_panes.insert(record.id);
+                self.released_panes.insert(session.id);
                 if result.released {
                     tracing::info!(task_id = record.id, "pane released");
                     PaneRelease::Closed
@@ -440,6 +473,19 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
         }
     }
+}
+
+/// Whether a release may be skipped because this session was already settled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReleaseMode {
+    /// Cleanup (#210): a worktree removal that keeps failing must not re-send
+    /// `session/release` on every sweep.
+    Once,
+    /// A precondition rather than cleanup (#481): the caller is about to open a
+    /// new pane for this task and needs the old one gone. The memo is not
+    /// evidence that it is — `released: false` covers "already gone" *and*
+    /// "the identity guard refused", and only the second leaves a live pane.
+    Always,
 }
 
 /// What a `session/release` attempt did, for callers that react to the outcome

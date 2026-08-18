@@ -76,7 +76,7 @@ use crate::worktree::{
 mod dispatch;
 mod events;
 mod finalize;
-use finalize::PaneRelease;
+use finalize::{PaneRelease, ReleaseMode};
 mod ingest;
 mod report;
 mod settings;
@@ -262,10 +262,16 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     /// Accumulated agent output (streamed `log_chunk`s) per task, used as the
     /// `output = source` publish artifact (F-07).
     agent_output: HashMap<i64, String>,
-    /// Tasks whose pane release has already been settled this run (#210):
-    /// the `session/release` RPC answered, or release is impossible (no
-    /// pane-controlling plugin). Without it, a worktree whose removal keeps
-    /// failing would be re-released on every sweep.
+    /// Session rows whose pane has been released — or is known to be
+    /// unreleasable — so a repeated cleanup never re-sends `session/release`
+    /// for the same dispatch (#210).
+    ///
+    /// Keyed by `sessions.id`, **not** by task (#486). A task can hold several
+    /// panes over its life (retry, a follow-up message), and a task-keyed memo
+    /// had to be cleared by hand wherever a new pane appeared — a rule whose
+    /// failure was silent: forget it and the new pane simply never gets
+    /// released, which is the leak #210 was filed for. A dispatch creates a new
+    /// session row, so this key invalidates itself.
     released_panes: HashSet<i64>,
     /// When the last worktree-retention sweep ran (#210); `None` at startup so
     /// the first `cycle()` always sweeps (startup recovery stays immediate).

@@ -114,8 +114,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // the hole this whole check exists to close. An unreleasable pane is
         // `doctor`'s job by construction (#211), and the pane still carries the
         // ownership marker that `session/list` finds it by.
-        self.release_pane(&record).await;
-        if !self.released_panes.contains(&record.id) {
+        // Read the outcome rather than the memo (#486): the memo is keyed by
+        // session row now, and asking it here would mean resolving the row a
+        // second time to learn what `release_pane` already returned.
+        if self.release_pane(&record, ReleaseMode::Once).await == PaneRelease::Failed {
             tracing::error!(
                 task_id = record.id,
                 "could not confirm the pane closed: the agent may still be running. \
