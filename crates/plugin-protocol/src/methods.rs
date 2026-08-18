@@ -525,6 +525,39 @@ pub struct SessionReleaseResult {
     /// Whether the pane was closed. `false` when it no longer exists or an
     /// identity check refused the close — both are normal, not errors.
     pub released: bool,
+    /// Why nothing was closed, when `released` is `false` (0.4.2, #485).
+    ///
+    /// Absent from a plugin that predates 0.4.2, and meaningless when
+    /// `released` is `true`. A caller that needs the distinction must treat
+    /// absence as "cannot tell" and fall back to whatever it did before —
+    /// the two cases are opposites and guessing picks the wrong one half the
+    /// time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_released: Option<NotReleased>,
+}
+
+/// Why a `session/release` closed nothing (0.4.2, #485).
+///
+/// A bare `released: false` conflates two situations that are opposites for
+/// the caller: the pane is *gone* (nothing to do) or the pane is *alive* and
+/// the plugin declined to touch it. The Orchestrator releases a task's
+/// previous pane before dispatching a new one, and only the second case means
+/// that dispatch is about to collide with a live pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotReleased {
+    /// There was no pane to close: it had already been closed, by this
+    /// plugin's own earlier release, by the human, or by the agent exiting.
+    Gone,
+    /// The pane exists and was left running: the identity guard
+    /// (`expect_cwd` / `expect_label`) did not match, so closing it would
+    /// have taken down a pane the id no longer names.
+    Refused,
+    /// A reason this build does not know. Keeps a response from a newer
+    /// plugin deserializable instead of failing the whole call over a field
+    /// that is advisory by construction.
+    #[serde(other)]
+    Unknown,
 }
 
 /// `session/list` params (O→P, #211): enumerate the live panes the plugin
@@ -797,8 +830,31 @@ mod tests {
             expect_cwd: Some("/state/worktrees/agent-slack-1".into()),
             expect_label: Some("totsuka C1:1.0".into()),
         });
-        round_trip(&SessionReleaseResult { released: true });
-        round_trip(&SessionReleaseResult { released: false });
+        round_trip(&SessionReleaseResult {
+            released: true,
+            not_released: None,
+        });
+        // Every reason round-trips, including the catch-all: a build that does
+        // not know a reason must still deserialize the response (#485).
+        for reason in [
+            None,
+            Some(NotReleased::Gone),
+            Some(NotReleased::Refused),
+            Some(NotReleased::Unknown),
+        ] {
+            round_trip(&SessionReleaseResult {
+                released: false,
+                not_released: reason,
+            });
+        }
+        // A reason this build does not know arrives as `Unknown` rather than
+        // failing the whole response — the forward-compatibility contract.
+        let newer: SessionReleaseResult =
+            serde_json::from_str(r#"{"released":false,"not_released":"evaporated"}"#).unwrap();
+        assert_eq!(newer.not_released, Some(NotReleased::Unknown));
+        // A plugin older than 0.4.2 sends no reason at all.
+        let older: SessionReleaseResult = serde_json::from_str(r#"{"released":false}"#).unwrap();
+        assert_eq!(older.not_released, None);
         round_trip(&SessionListParams {});
         round_trip(&SessionListResult {
             sessions: vec![

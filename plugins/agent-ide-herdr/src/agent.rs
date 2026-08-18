@@ -52,9 +52,9 @@
 //! plugin at all — the launcher refuses it before `initialize` (F-54).
 
 use plugin_protocol::methods::{
-    AgentState, DiagnosticsSnapshotResult, ExecutionMode, SessionAttachResult, SessionFocusResult,
-    SessionInfo, SessionListResult, SessionReleaseParams, SessionReleaseResult, StateNotification,
-    TaskDispatchParams, TaskDispatchResult,
+    AgentState, DiagnosticsSnapshotResult, ExecutionMode, NotReleased, SessionAttachResult,
+    SessionFocusResult, SessionInfo, SessionListResult, SessionReleaseParams, SessionReleaseResult,
+    StateNotification, TaskDispatchParams, TaskDispatchResult,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -923,7 +923,12 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             // Already gone (e.g. cancel closed it): nothing to release. The
             // workspace is intentionally left alone too — with the pane
             // unverifiable, `workspace_of` might name someone else's.
-            Err(e) if e.is_missing() => return Ok(SessionReleaseResult { released: false }),
+            Err(e) if e.is_missing() => {
+                return Ok(SessionReleaseResult {
+                    released: false,
+                    not_released: Some(NotReleased::Gone),
+                });
+            }
             Err(e) => return Err(e),
         };
         // The label lives on the *workspace*, not the pane (#416), so the
@@ -989,7 +994,10 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                     actual,
                     "release refused: the pane id names a different pane now"
                 );
-                return Ok(SessionReleaseResult { released: false });
+                return Ok(SessionReleaseResult {
+                    released: false,
+                    not_released: Some(NotReleased::Refused),
+                });
             }
         }
         if !comparable && (params.expect_cwd.is_some() || params.expect_label.is_some()) {
@@ -999,7 +1007,10 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             );
         }
         self.close_pane_and_workspace(&handle).await?;
-        Ok(SessionReleaseResult { released: true })
+        Ok(SessionReleaseResult {
+            released: true,
+            not_released: None,
+        })
     }
 
     /// Enumerate the live panes this plugin owns (`session/list`, #211):

@@ -1974,6 +1974,143 @@ async fn a_re_dispatch_makes_the_task_releasable_again() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Drive one task to `done`, then reopen it with a follow-up message so the
+/// dispatcher has to release the previous pane before opening a new one, and
+/// report what the second dispatch attempt did.
+///
+/// `cleanup = manual` throughout: nothing else ever releases a pane, so every
+/// recorded `session/release` came from the dispatcher.
+async fn redispatch_after_release(
+    label: &str,
+    session_id: &str,
+) -> (TaskState, Vec<serde_json::Value>, Vec<String>) {
+    let base = scratch(label);
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({
+            "stream_states": ["running", "done"],
+            "pane_control": true,
+            "dispatch_log": dispatch_log,
+            "session_id": session_id,
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.cleanup_implement = CleanupPolicy::Manual;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+
+    let task = StateDb::open(&db_path)
+        .unwrap()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap();
+    StateDb::open(&db_path)
+        .unwrap()
+        .append_task_message_reopening(
+            &orchestrator_core::adapters::state_db::TaskMessageInsert {
+                task_id: task.id,
+                message_key: "msg-2".to_string(),
+                author: None,
+                body: "and one more thing".to_string(),
+                url: None,
+                payload: "{}".to_string(),
+            },
+            None,
+        )
+        .unwrap();
+
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .get_task(task.id)
+            .unwrap()
+            .is_some_and(|t| matches!(t.state, TaskState::Done | TaskState::Failed))
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let state = db.get_task(task.id).unwrap().unwrap().state;
+    let reasons: Vec<String> = db
+        .list_events(task.id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| e.detail)
+        .filter_map(|d| d["reason"].as_str().map(str::to_string))
+        .collect();
+    let calls = read_log(&dispatch_log);
+    let _ = std::fs::remove_dir_all(&base);
+    (state, calls, reasons)
+}
+
+#[tokio::test]
+async fn a_refused_release_stops_the_dispatch_instead_of_colliding() {
+    // #485: `released: false` used to mean "already gone" *or* "the pane is
+    // alive and the identity guard refused", and the dispatcher could not tell
+    // them apart, so it dispatched into the second case and the agent plugin
+    // refused the launch seconds later in its own vocabulary (#481's
+    // `agent_name_taken`). Protocol 0.4.2 carries the reason, so the refusal
+    // stops the dispatch with something the operator can act on.
+    let (state, calls, reasons) = redispatch_after_release("release_refused", "sess-refused").await;
+
+    assert_eq!(
+        state,
+        TaskState::Failed,
+        "a live pane the plugin refuses to close stops the re-dispatch"
+    );
+    assert!(
+        reasons.iter().any(|r| r.contains("still open")),
+        "the failure names the pane as the cause: {reasons:?}"
+    );
+    let dispatches = calls
+        .iter()
+        .filter(|c| c["method"] == "task/dispatch")
+        .count();
+    assert_eq!(
+        dispatches, 1,
+        "the second dispatch never went out: {calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_release_that_finds_nothing_lets_the_dispatch_through() {
+    // The control for the test above, and the ordinary case: the pane was
+    // already gone, which is not a reason to refuse anything.
+    let (state, calls, _) = redispatch_after_release("release_gone", "sess-gone").await;
+
+    assert_eq!(state, TaskState::Done, "an absent pane blocks nothing");
+    let dispatches = calls
+        .iter()
+        .filter(|c| c["method"] == "task/dispatch")
+        .count();
+    assert_eq!(dispatches, 2, "both dispatches went out: {calls:?}");
+}
+
 // ---------------------------------------------------------------------------
 // Read-only violation, caught while the task is still running (#410)
 // ---------------------------------------------------------------------------

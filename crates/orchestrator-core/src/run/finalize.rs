@@ -456,15 +456,31 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         {
             Ok(result) => {
                 self.released_panes.insert(session.id);
-                if result.released {
-                    tracing::info!(task_id = record.id, "pane released");
-                    PaneRelease::Closed
-                } else {
-                    tracing::debug!(
-                        task_id = record.id,
-                        "pane not released (already gone or identity mismatch)"
-                    );
-                    PaneRelease::Untouched
+                match (result.released, result.not_released) {
+                    (true, _) => {
+                        tracing::info!(task_id = record.id, "pane released");
+                        PaneRelease::Closed
+                    }
+                    // The pane is alive and the plugin declined to touch it
+                    // (0.4.2, #485). The only caller that can act on this is
+                    // the dispatcher, which is about to open a new pane for
+                    // this task.
+                    (false, Some(NotReleased::Refused)) => {
+                        tracing::warn!(
+                            task_id = record.id,
+                            "pane not released: the plugin's identity guard refused — \
+                             the pane id names a different pane now"
+                        );
+                        PaneRelease::Refused
+                    }
+                    // `Gone` is the ordinary case. `Unknown` is a reason this
+                    // build does not know, and `None` is a plugin older than
+                    // 0.4.2 — both mean "cannot tell", and the pre-0.4.2
+                    // behaviour was to carry on.
+                    (false, reason) => {
+                        tracing::debug!(task_id = record.id, ?reason, "pane not released");
+                        PaneRelease::Untouched
+                    }
                 }
             }
             Err(e) => {
@@ -491,18 +507,26 @@ pub(super) enum ReleaseMode {
 /// What a `session/release` attempt did, for callers that react to the outcome
 /// rather than fire and forget (#481).
 ///
-/// [`Untouched`](Self::Untouched) deliberately does **not** distinguish "the
-/// pane was already gone" from "the identity guard refused to close it": the
-/// RPC answers a bare `released: bool` for both. The plugin logs which one it
-/// was — herdr warns `release refused: the pane id names a different pane now`
-/// — and plugin logs are relayed, so the distinction is reachable without
-/// widening the protocol for a case never yet observed.
+/// [`Refused`](Self::Refused) is separated from [`Untouched`](Self::Untouched)
+/// by `SessionReleaseResult::not_released` (protocol 0.4.2, #485). Before that
+/// the RPC answered a bare `released: bool` for both, and the two are opposites
+/// for a caller that is about to open a new pane: "already gone" is the
+/// ordinary case, while "the identity guard refused" means a live pane is still
+/// there. A plugin older than 0.4.2 sends no reason at all, so its answer stays
+/// `Untouched` — the pre-0.4.2 behaviour — rather than being guessed either
+/// way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PaneRelease {
     /// The plugin closed the pane.
     Closed,
-    /// The plugin answered and closed nothing.
+    /// The plugin answered and closed nothing, and either said the pane was
+    /// already gone or could not say (a plugin older than protocol 0.4.2, or a
+    /// reason this build does not know). Not evidence that a pane is alive.
     Untouched,
+    /// The plugin answered that the pane is **alive** and its identity guard
+    /// refused to close it (0.4.2, #485). A caller about to open a new pane for
+    /// the same task is about to collide with this one.
+    Refused,
     /// There was no pane to close: never dispatched, the owning plugin is not
     /// launched this run, or it does not control panes.
     NotApplicable,

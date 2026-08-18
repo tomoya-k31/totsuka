@@ -35,7 +35,7 @@ use std::time::Duration;
 
 use plugin_protocol::method;
 use plugin_protocol::methods::{
-    AgentState, ExecutionMode, NotifierEvent, NotifyParams, ResultPublishParams,
+    AgentState, ExecutionMode, NotReleased, NotifierEvent, NotifyParams, ResultPublishParams,
     SessionReleaseParams, SessionReleaseResult, StateNotification, TaskDispatchParams,
     TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams, TaskSubmitResult,
     TaskSubmitStatus, TaskUpdateStatusParams,

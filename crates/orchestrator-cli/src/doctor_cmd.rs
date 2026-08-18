@@ -1939,7 +1939,8 @@ fn check_orphan_panes(
     use plugin_protocol::manifest::PluginKind;
     let json = args.json;
     use plugin_protocol::methods::{
-        SessionListParams, SessionListResult, SessionReleaseParams, SessionReleaseResult,
+        NotReleased, SessionListParams, SessionListResult, SessionReleaseParams,
+        SessionReleaseResult,
     };
 
     let Some(db) = db else {
@@ -2102,10 +2103,21 @@ fn check_orphan_panes(
                 result
             });
             match released {
-                Ok(SessionReleaseResult { released: true }) => println!("released {name}"),
-                Ok(SessionReleaseResult { released: false }) => {
-                    println!("not released (already gone, or the pane changed identity)")
-                }
+                Ok(r) if r.released => println!("released {name}"),
+                // Since protocol 0.4.2 the plugin says which it was (#485); an
+                // older one says nothing, and "already gone or the pane
+                // changed identity" is then the honest answer rather than a
+                // guess.
+                Ok(r) => match r.not_released {
+                    Some(NotReleased::Gone) => println!("not released (it was already gone)"),
+                    Some(NotReleased::Refused) => println!(
+                        "not released: that pane id now names a different pane, so the plugin \
+                         refused to close it — check it by hand before releasing"
+                    ),
+                    Some(NotReleased::Unknown) | None => {
+                        println!("not released (already gone, or the pane changed identity)")
+                    }
+                },
                 Err(e) => println!("release failed: {}", safe(&e.to_string())),
             }
         }

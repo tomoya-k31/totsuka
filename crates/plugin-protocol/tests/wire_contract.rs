@@ -335,6 +335,10 @@ fn session_focus_wire() {
 fn session_release_wire() {
     check_request::<SessionReleaseParams>("session_release.request.json", method::SESSION_RELEASE);
     check_response::<SessionReleaseResult>("session_release.response.json");
+    // 0.4.2 (#485): the reason a release closed nothing. Pinned on the wire
+    // because both sides read it — the plugin writes `refused` and the
+    // dispatcher stops on it.
+    check_response::<SessionReleaseResult>("session_release_refused.response.json");
 }
 
 #[test]

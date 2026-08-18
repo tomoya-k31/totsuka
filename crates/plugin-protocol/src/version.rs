@@ -129,7 +129,19 @@ use semver::{Version, VersionReq};
 /// manifest with a `<0.x` upper bound — the whole point of the 0.4.0
 /// paragraph above — and nothing here requires a plugin to change. The
 /// bundled manifests keep `<0.5` untouched.
-pub const PROTOCOL_VERSION: &str = "0.4.1";
+///
+/// 0.4.2: [`SessionReleaseResult::not_released`](crate::methods::SessionReleaseResult::not_released)
+/// (#485) — why a release closed nothing. A bare `released: false` conflates
+/// "the pane was already gone" with "the pane is alive and the identity guard
+/// refused", which are opposites for a caller that is about to open a new pane
+/// for the same task: only the second means the next dispatch collides with a
+/// live pane. Additive and optional under the same contract as `repo_name` in
+/// 0.4.1 — absent means the plugin predates this version, and the caller must
+/// fall back to its pre-0.4.2 behaviour rather than assume either reason.
+/// [`NotReleased`](crate::methods::NotReleased) carries a `#[serde(other)]`
+/// catch-all so a reason added later does not make the whole response
+/// undeserializable to this build. `<0.5` manifests keep matching.
+pub const PROTOCOL_VERSION: &str = "0.4.2";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -153,7 +165,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 4, 1));
+        assert_eq!(protocol_version(), Version::new(0, 4, 2));
     }
 
     #[test]
