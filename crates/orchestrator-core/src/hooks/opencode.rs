@@ -333,4 +333,26 @@ design in prose.
         assert!(js.contains("if (!ENDPOINT || !JOB_ID) return {}"));
         assert!(js.contains("TOTSUKA_HOOK_ENDPOINT"));
     }
+
+    /// #487: the plugin relays an open `question` dialog as QuestionPending
+    /// (parking the task) and suppresses idle judgement while it waits — a
+    /// pending question keeps the turn open, so an idle then would post a
+    /// spurious UNKNOWN into the D-02 escalation streak. String pins, same
+    /// style as `embedded_plugin_is_env_gated`: the JS has no test harness of
+    /// its own, so the pins are what keeps a refactor from silently dropping
+    /// the mechanism.
+    #[test]
+    fn embedded_plugin_relays_question_and_guards_idle() {
+        let js = include_str!("totsuka-opencode.js");
+        assert!(js.contains(r#""tool.execute.before""#));
+        assert!(js.contains(r#""tool.execute.after""#));
+        assert!(js.contains(r#"input?.tool !== "question""#));
+        assert!(js.contains(r#"hook_event_name: "QuestionPending""#));
+        // The per-question idempotency key.
+        assert!(js.contains("input.callID"));
+        // The idle guard, at the top of onIdle.
+        assert!(js.contains("if (pendingQuestions.has(sessionID)) return"));
+        // Fail-open: an errored session is unmarked so later idles judge again.
+        assert!(js.contains("pendingQuestions.delete(sessionID)"));
+    }
 }
