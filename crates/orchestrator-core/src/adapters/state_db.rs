@@ -607,6 +607,14 @@ pub struct TaskMessageInsert {
     pub payload: String,
 }
 
+/// The `events.detail.kind` an automatic dispatch retry is recorded under
+/// (#492).
+///
+/// Shared so the writer (the engine, when it requeues a failed dispatch) and
+/// the reader ([`StateDb::auto_retry_streak`]) cannot drift apart: the whole
+/// counter is "how many trailing events carry this string".
+pub const AUTO_RETRY_KIND: &str = "auto_retry";
+
 /// A stored conversation message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskMessage {
@@ -1668,6 +1676,60 @@ impl StateDb {
     /// dispatches, which only a frozen test clock does.
     pub fn unprocess_last_batch(&self, task_id: i64) -> Result<usize, StateError> {
         unprocess_last_batch_tx(&self.conn, task_id)
+    }
+
+    /// How many times the **current** run of dispatch failures has already
+    /// been retried automatically (#492).
+    ///
+    /// Recomputed from the event log rather than held in the engine, for the
+    /// same reason as [`unknown_stop_streak`](Self::unknown_stop_streak): a
+    /// counter in memory is lost when `totsuka run` restarts, and this one has
+    /// to survive that — a task that failed twice before a restart must not
+    /// get a fresh budget of three.
+    ///
+    /// Scans events id-descending and counts the leading run of automatic
+    /// requeues. Two things end the run, and both mean "whatever failed before
+    /// this is not what we are counting now":
+    ///
+    /// - a **successful dispatch** (`to_state = dispatched`), and
+    /// - any other way back to `queued` — a human's `totsuka task retry`
+    ///   (`detail.kind = "cli"`), the first submission, a reopen. A person
+    ///   stepping in resets the budget, which is what makes the automatic
+    ///   retries and the deliberate one compose instead of competing.
+    ///
+    /// Rows that are neither (the `Fail` that precedes each requeue) are
+    /// skipped, so the walk is ~O(streak).
+    pub fn auto_retry_streak(&self, task_id: i64) -> Result<u32, StateError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT to_state, detail FROM events WHERE task_id = ?1 ORDER BY id DESC")?;
+        let rows = stmt.query_map(params![task_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })?;
+        let mut streak = 0u32;
+        for row in rows {
+            let (to_state, detail) = row?;
+            if to_state == TaskState::Dispatched.to_string() {
+                break;
+            }
+            if to_state != TaskState::Queued.to_string() {
+                continue;
+            }
+            let kind = detail
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                .and_then(|v| {
+                    v.get("kind")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                });
+            if kind.as_deref() == Some(AUTO_RETRY_KIND) {
+                streak += 1;
+            } else {
+                break;
+            }
+        }
+        Ok(streak)
     }
 
     /// Number of consecutive `UNKNOWN` stops at the tail of a task's stop

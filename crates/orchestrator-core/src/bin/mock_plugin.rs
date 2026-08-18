@@ -57,6 +57,7 @@ use plugin_protocol::methods::{
 };
 use plugin_protocol::{Capabilities, manifest::OutputCapability};
 use serde_json::Value;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn main() {
     let stdin = std::io::stdin();
@@ -561,8 +562,22 @@ fn forces_dispatch_error(config: &Value, params: &Value) -> bool {
         .get("only_when_resuming")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    !only_when_resuming || params.get("resume_session_id").is_some()
+    if only_when_resuming && params.get("resume_session_id").is_none() {
+        return false;
+    }
+    // `fail_first: N` (#492): fail the first N dispatches this process sees and
+    // let everything after through — a transient launch failure, which is the
+    // case the orchestrator's automatic retry exists for. Counted in the
+    // plugin because the host keeps one plugin process for the whole run, so
+    // "attempt number" is the same thing on both sides.
+    match spec.get("fail_first").and_then(Value::as_u64) {
+        Some(n) => (DISPATCH_ATTEMPTS.fetch_add(1, Ordering::Relaxed) as u64) < n,
+        None => true,
+    }
 }
+
+/// Dispatch attempts seen by this process, for `dispatch_error.fail_first`.
+static DISPATCH_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 
 /// The error [`forces_dispatch_error`] asked for.
 fn forced_dispatch_error(config: &Value) -> Error {

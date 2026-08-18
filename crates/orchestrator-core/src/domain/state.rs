@@ -146,7 +146,8 @@ pub enum TaskEvent {
     ///
     /// Deliberately **not** [`Retry`](Self::Retry), even though both land in
     /// `Queued`. `Retry` means "run the same instruction again" — a human
-    /// reacting to a failure — while `Reopen` means "there is a new
+    /// reacting to a failure, or the engine retrying a failed dispatch on
+    /// their behalf (#492) — while `Reopen` means "there is a new
     /// instruction". That difference is what makes `Done` reachable by exactly
     /// one of them: a successful task has nothing to re-run, but it can very
     /// well be continued.
@@ -155,7 +156,10 @@ pub enum TaskEvent {
     /// alone: it records `from_state` / `to_state`, so both look like
     /// `failed → queued`. Callers that need the provenance must put it in
     /// `apply_event`'s `detail`, as `totsuka task retry` already does with
-    /// `{"kind": "cli", ...}`.
+    /// `{"kind": "cli", ...}`. The automatic dispatch retry (#492) leans on
+    /// exactly that: it writes `{"kind": "auto_retry", ...}`, and
+    /// `StateDb::auto_retry_streak` counts those to decide when to stop —
+    /// which also makes a human's `cli` retry reset the budget for free.
     Reopen,
 }
 
