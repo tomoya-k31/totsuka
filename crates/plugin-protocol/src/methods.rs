@@ -546,12 +546,21 @@ pub struct SessionReleaseResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotReleased {
-    /// There was no pane to close: it had already been closed, by this
-    /// plugin's own earlier release, by the human, or by the agent exiting.
+    /// No pane of the plugin's is left on the task's worktree: it had already
+    /// been closed, by this plugin's own earlier release, by the human, or by
+    /// the agent exiting. Also the honest answer when the plugin cannot tell
+    /// (no `expect_cwd` to match on, an enumeration that failed) — it is what
+    /// a pre-0.4.2 plugin effectively said, and callers carry on.
     Gone,
-    /// The pane exists and was left running: the identity guard
-    /// (`expect_cwd` / `expect_label`) did not match, so closing it would
-    /// have taken down a pane the id no longer names.
+    /// A pane of the plugin's own is still on the task's worktree, and it was
+    /// left running: the recorded pane id did not resolve to it (the guard
+    /// refused, or that id resolves to nothing), so closing anything would
+    /// have risked a pane the id no longer names.
+    ///
+    /// This is an answer about **the task's pane**, not about whatever sits at
+    /// the recorded id — that is the question a caller about to open a new
+    /// pane for the task actually has. A plugin that cannot look beyond the id
+    /// must answer [`Gone`](Self::Gone) rather than guess.
     Refused,
     /// A reason this build does not know. Keeps a response from a newer
     /// plugin deserializable instead of failing the whole call over a field

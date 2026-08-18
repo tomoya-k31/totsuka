@@ -643,8 +643,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     task_id = record.id,
                     "closed the previous dispatch's pane before re-dispatching"
                 ),
-                // The plugin says that pane is **alive** (protocol 0.4.2,
-                // #485). Dispatching anyway is how #481 looked from the
+                // The plugin looked and found a pane of its own still sitting
+                // on this task's worktree (protocol 0.4.2, #485) — not at the
+                // id we recorded, which is why it would not close it, but
+                // there. Dispatching anyway is how #481 looked from the
                 // outside: an agent plugin that derives its agent name from
                 // the task id refuses the launch with an error of its own
                 // making, seconds later, in its own vocabulary. Stopping here
@@ -659,11 +661,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         .fail_dispatch(
                             &record,
                             concat!(
-                                "the previous dispatch's pane is still open and the ",
-                                "agent plugin refused to close it (its identity guard ",
-                                "says that pane id now names a different pane) → close ",
-                                "it by hand (`totsuka doctor` lists orphan panes) and ",
-                                "`totsuka task retry` this task"
+                                "a pane is still open on this task's worktree — the ",
+                                "agent plugin found one of its own there, at a ",
+                                "different pane id than the one recorded, so it ",
+                                "declined to close it → close that pane yourself, ",
+                                "then `totsuka task retry` this task. `totsuka ",
+                                "doctor` will not list it: its worktree still ",
+                                "exists, so it is not an orphan"
                             )
                             .to_string(),
                         )

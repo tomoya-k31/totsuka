@@ -901,6 +901,45 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         self.close_pane_and_workspace(&handle).await
     }
 
+    /// Say whether the task still has a pane of ours, when the recorded pane id
+    /// did not resolve to it (0.4.2, #485).
+    ///
+    /// A pane id is position-based, so "the id names something else now" says
+    /// nothing about the task's own pane — it may be gone, or it may be sitting
+    /// two positions over. The caller's real question is the second one: it is
+    /// about to open a new pane for this task, and an existing one collides.
+    ///
+    /// The worktree path answers it. It is unique per task, this plugin can
+    /// enumerate the panes it owns, and both facts are already load-bearing
+    /// elsewhere (`expect_cwd` is the identity guard; `session/list` is how
+    /// `doctor` finds orphans). Without an `expect_cwd` there is nothing to
+    /// match on, and a failed enumeration must not be turned into a claim in
+    /// either direction — both degrade to [`NotReleased::Gone`], which is what
+    /// a pre-0.4.2 plugin effectively said and what the caller treats as
+    /// "carry on".
+    async fn classify_unreleased(&self, params: &SessionReleaseParams) -> NotReleased {
+        let Some(cwd) = params.expect_cwd.as_deref() else {
+            return NotReleased::Gone;
+        };
+        match self.list_sessions().await {
+            Ok(list) => {
+                if list.sessions.iter().any(|s| s.cwd.as_deref() == Some(cwd)) {
+                    NotReleased::Refused
+                } else {
+                    NotReleased::Gone
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "could not enumerate panes to classify an unreleased session; \
+                     reporting it as gone"
+                );
+                NotReleased::Gone
+            }
+        }
+    }
+
     /// Release a **finished** session's pane (`session/release`, #210): close
     /// the pane and its workspace, without the interrupt `cancel` sends —
     /// there is nothing left to interrupt.
@@ -920,13 +959,14 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let handle = SessionHandle::decode(&params.session_id);
         let pane = match pane_record(&self.client, &handle.pane_id).await {
             Ok(pane) => pane,
-            // Already gone (e.g. cancel closed it): nothing to release. The
-            // workspace is intentionally left alone too — with the pane
-            // unverifiable, `workspace_of` might name someone else's.
+            // Nothing at that id. Usually the pane is simply gone (cancel
+            // closed it), but pane ids are position-based, so it can also mean
+            // the task's pane moved. `not_released` is only worth anything if
+            // it answers which (0.4.2, #485).
             Err(e) if e.is_missing() => {
                 return Ok(SessionReleaseResult {
                     released: false,
-                    not_released: Some(NotReleased::Gone),
+                    not_released: Some(self.classify_unreleased(params).await),
                 });
             }
             Err(e) => return Err(e),
@@ -996,7 +1036,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 );
                 return Ok(SessionReleaseResult {
                     released: false,
-                    not_released: Some(NotReleased::Refused),
+                    not_released: Some(self.classify_unreleased(params).await),
                 });
             }
         }

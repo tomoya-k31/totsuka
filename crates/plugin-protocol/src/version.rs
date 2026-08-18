@@ -178,7 +178,7 @@ mod tests {
             let parsed = VersionReq::parse(req).unwrap();
             assert!(
                 is_compatible_with_current(&parsed),
-                "{req} must be accepted by protocol 0.4.1"
+                "{req} must be accepted by protocol 0.4.2"
             );
         }
     }
@@ -201,7 +201,7 @@ mod tests {
             let parsed = VersionReq::parse(req).unwrap();
             assert!(
                 !is_compatible_with_current(&parsed),
-                "{req} must be rejected by protocol 0.4.1"
+                "{req} must be rejected by protocol 0.4.2"
             );
         }
     }
@@ -237,7 +237,7 @@ mod tests {
         // `<0.5`, so a minor bump would refuse every one of them for a field
         // no plugin is required to read.
         let bundled = VersionReq::parse(">=0.2.3, <0.5").unwrap();
-        assert!(is_compatible_with_current(&bundled), "0.4.1 is inside <0.5");
+        assert!(is_compatible_with_current(&bundled), "0.4.2 is inside <0.5");
         assert!(
             !is_compatible(&bundled, &Version::new(0, 5, 0)),
             "which is exactly what a minor bump would have broken"
