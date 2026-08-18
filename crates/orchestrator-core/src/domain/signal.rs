@@ -111,12 +111,31 @@ pub struct JobId {
 }
 
 impl JobId {
+    /// The job id `totsuka doctor` posts to prove the hook receiver answers.
+    ///
+    /// `tasks.id` is a SQLite rowid and starts at 1, so `job-0-0` can never
+    /// name a real task — which is exactly why the probe uses it. Both sides
+    /// read it from here rather than spelling `job-0-0` out again: the
+    /// receiver has to recognise the same value the prober sends, and a
+    /// convention held in two string literals is one edit away from becoming
+    /// a warning nobody can explain.
+    pub const DOCTOR_PROBE: Self = Self {
+        task_id: 0,
+        session_row: 0,
+    };
+
     /// Build a job id for a task's dispatch.
     pub fn new(task_id: i64, session_row: i64) -> Self {
         Self {
             task_id,
             session_row,
         }
+    }
+
+    /// Whether this is [`doctor`'s liveness probe](Self::DOCTOR_PROBE) rather
+    /// than a signal from a dispatched agent.
+    pub fn is_doctor_probe(&self) -> bool {
+        *self == Self::DOCTOR_PROBE
     }
 }
 
