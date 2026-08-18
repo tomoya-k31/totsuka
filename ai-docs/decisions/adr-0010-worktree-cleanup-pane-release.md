@@ -42,7 +42,7 @@ protocol 0.2.0 の Slack 実機検証で、完了したタスクの herdr pane �
 `WorktreeManager::cleanup()` を `decide_cleanup()`（dirty チェック + policy 判定 → `Remove | Retain | Dirty`）と `remove()`（削除の実行）に分割し、既存 `cleanup()` は両者を呼ぶ薄いラッパとして残す。Engine の `cleanup_worktree` は判定が **`Remove` のときだけ** pane を閉じ（`session/release`）、その後 worktree を削除する。`Retain` / `Dirty` では pane を保持し、人間の導線（F-23）を守る。
 
 - **TOCTOU 対策**: `remove()` は冒頭で dirty を**再チェック**し、判定と実行の間に dirty 化していれば削除せず `DirtySkipped` を返す。pane は既に閉じた後だが、**データ損失（不可逆）> pane 喪失（軽微）**の優先順位で削除を中止し、次の sweep が再試行する。
-- **release の一回性**: Engine が `released_panes: HashSet<task_id>` を持ち、release RPC が**正常応答した時点で**（`released` の真偽によらず）記録する。削除が失敗し続ける worktree に対して sweep のたびに release を再送しない。transport エラー時は記録せず warn のみ（release 失敗は削除をブロックしない — pane 孤児化は #211 の doctor が受け持つ）。
+- **release の一回性**: Engine が `released_panes` を持ち、release RPC が**正常応答した時点で**（`released` の真偽によらず）記録する。**キーは `sessions.id`（#486 で `task_id` から変更）** — 1 つのタスクは retry や追いメッセージで複数の pane を持ちうるので、task 単位のメモは「新しい pane ができたら手で無効化する」規約を要求し、その違反が無言（新 pane が二度と解放されない = 本 ADR が塞いだはずの漏れ）だった。セッション行は dispatch のたびに増えるので、このキーは自動的に無効化される。**一回性を適用するかは呼び出し側が `ReleaseMode` で選ぶ**: 掃除は `Once`（下記）、再 dispatch は `Always`（[#481](https://github.com/tomoya-k31/totsuka/issues/481)） — 後者はこれから新しい pane を開くための前提条件であり、`released: false` は「既に消えていた」と「同一性拒否で閉じなかった」の両方を意味するので、メモは pane が閉じた証拠にならない。削除が失敗し続ける worktree に対して sweep のたびに release を再送しない。transport エラー時は記録せず warn のみ（release 失敗は削除をブロックしない — pane 孤児化は #211 の doctor が受け持つ）。
 
 ## 2. protocol 0.2.1 で `session/release` を追加し、capability は `pane_control` を再利用する
 
