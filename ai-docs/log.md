@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-08-18
+
+* **Fix**: 仕様 F-107「`Done` の pane は冪等な `task/cancel` で自動クローズ」を、実装の実態（pane の寿命は worktree の掃除ポリシーに連動）へ書き換えた（[#481](https://github.com/tomoya-k31/totsuka/issues/481) の派生、[orchestrator-spec](/product/orchestrator-spec.md)、[hook-signal-flow](/architecture/hook-signal-flow.md)、[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）。**完了時に `task/cancel` を呼んだことは一度も無い** — `method::TASK_CANCEL` の呼び出し元は repo 全体で 1 箇所、`dispatch_one` の `state/subscribe` 失敗ロールバックだけである。pane を閉じるのは `decide_cleanup` が `Remove` を返したときの `session/release` だけで、**既定の `manual` では `Retain` になり永久に閉じない**（これは ADR-0010 の意図的な判断で、コミット済み未 push の作業のレビュー面として残す）。`hook-signal-flow` のシーケンス図には **発行されない RPC の矢印**が描かれていたので Note へ置き換えた。#481 で ADR-0010 の Consequences を訂正した際、同じ誤った前提が spec 英日 2 本と図の計 3 箇所に生き残っていたのを `/code-review` が見つけた — **訂正を伝播し切らないと嘘が残る**の 4 回目である。`docs/` の生成ページは pane に触れていない（ユーザ向けには落としている情報）ため本文は不変で、鮮度マーカーの hash だけが動いた。
+
 ## 2026-08-17
 
 * **Creation**: ローカルのテスト実行を `scripts/dev-test.sh`（build → nextest → doctest）へ一本化した（[#459](https://github.com/tomoya-k31/totsuka/issues/459)、[ADR-0049](/decisions/adr-0049-local-test-loop.md)）。**issue の前提は実装前の基準計測で崩れた**: 「毎回 20 分弱」は `target/` の mtime から復元した推定で、`cargo clean`（1,131,673 ファイル / 80.2 GiB・222 秒）の直後に同じコマンドを測ると **32 秒**だった。肥大した `target/` での実行そのものは測っていないので、20 分の原因が肥大だったとは断定していない。#459 の主眼だった `rdeps()` による変更影響範囲の絞り込みは、**実測で節約が最大 8 秒・一番よく触る orchestrator-core では 2 秒**だったため採らない（実装して分岐検証まで済ませたうえで捨てた）。代わりに残したのは、ランナーの nextest 化、`RUSTFLAGS="-D warnings"` と `--all-features` のローカルからの削除、`target/` の定期 clean。**遅いテスト 1 本の修正も含めた最終形**は、同条件 warm で `cargo test` 一本の **20s に対し `scripts/dev-test.sh` が 10s**（どちらも 1,201 テスト）。
