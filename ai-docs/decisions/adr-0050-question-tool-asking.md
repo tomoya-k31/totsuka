@@ -68,7 +68,7 @@ stable（[#487](https://github.com/tomoya-k31/totsuka/issues/487)）。[ADR-0043
 
 1. claude: PreToolUse が AskUserQuestion で実際に発火するか・`tool_use_id` の有無・空 stdout がダイアログを乱さないか
 2. claude: design profile で確認ピッカー到達 → `waiting_input` park → 通知に質問文 → 承認選択後 COMPLETED → 拡張 rubric をジャッジが通すか（回答の transcript 上の形の観察）
-3. opencode: build モードで `question` が使えるか（不可ならプロンプトのフォールバックで番号付きリストに縮退することの確認）・ダイアログ中の `session.idle` 発火と `pendingQuestions` ガードの実効
+3. opencode: build モードで `question` が使えるか（不可ならプロンプトのフォールバックで番号付きリストに縮退することの確認）・ダイアログ中の `session.idle` 発火と `pendingQuestions` ガードの実効・`tool.execute.before` の入力に `callID` が実在するか（欠落時はプラグインが時刻ベースの fallback キーを使う）
 4. 起動中 opencode の旧プラグイン混在挙動
 
 [^codex-issue-11536]: Continue on Ask Question Tool (request_user_input in Default mode)

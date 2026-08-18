@@ -157,7 +157,11 @@ export const TotsukaOpencode = async ({ client }) => {
         await postEvent({
           job_id: JOB_ID,
           session_id: sessionID,
-          prompt_id: input.callID ?? `q-${sessionID}`,
+          // Idempotency key: must be DISTINCT per question (a session-constant
+          // fallback would silently drop the session's second question as a
+          // Duplicate). The fallback is baked into this payload before the
+          // POST, so a spool re-send retries the same key — retry-stable.
+          prompt_id: input.callID ?? `q-${sessionID}-${Date.now()}`,
           hook_event_name: "QuestionPending",
           ts: isoNow(),
           message: summarizeQuestion(output?.args),

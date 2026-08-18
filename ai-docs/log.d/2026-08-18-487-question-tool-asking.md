@@ -2,3 +2,4 @@
 * **Update**: [POST /agent-events（UDS フック受信）](/apis/agent-events.md) — `hook_event_name` に `QuestionPending` を追加（質問ごとに distinct な `prompt_id` が必須である制約を含む）
 * **Update**: [orchestrator-core クレート](/components/orchestrator-core.md) — フックスクリプトが 7 本になり（`on-ask-user-question.sh` 追加）、シグナル語彙に `QuestionPending` が入った
 * **Update**: [設定リファレンス](/development/config-reference.md) — design / implement の承認フローに質問ツール経由の訊き方とフォールバックを追記
+* **Update**: [totsuka — Local AI-Agent Orchestrator Requirements (v1)](/product/orchestrator-spec.md) / [日本語版](/product/orchestrator-spec.ja.md) — 要件 F-108（質問ダイアログの park）を追加し、§4.11 の導入に design / implement の `PreToolUse` フックを追記

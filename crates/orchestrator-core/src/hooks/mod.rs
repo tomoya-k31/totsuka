@@ -191,7 +191,8 @@ pub fn install(paths: &Paths, cfg: &RootConfig) -> io::Result<()> {
 /// carries the `on-stop.sh` command hook; `verification = "llm"` workflows also
 /// get a `prompt`-type hook running the rubric in-session (D-01). A read-only
 /// [`Profile`](crate::config::Profile) additionally gets its `permissions.deny`
-/// set (#395).
+/// set (#395), and a profile that confirms with a human gets the
+/// `AskUserQuestion` PreToolUse relay (#487).
 ///
 /// The deny block is written whatever tool the workflow resolves to. Only
 /// Claude reads `--settings`; codex is confined by `--sandbox read-only` and

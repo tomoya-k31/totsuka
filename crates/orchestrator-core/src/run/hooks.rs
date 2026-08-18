@@ -133,8 +133,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
             // A permission / idle prompt: surface it to the human but keep the
             // task running and holding its slot. Approval-waiting is distinct
-            // from question-waiting (R-08) — only `Stop{NeedsInput}` moves the
-            // task to `WaitingInput`.
+            // from question-waiting (R-08) — only `Stop{NeedsInput}` and
+            // `QuestionPending` (#487, the arm below) move the task to
+            // `WaitingInput`.
             SignalEvent::Notification { message } => {
                 notify_all(
                     &self.plugins.notifiers,
