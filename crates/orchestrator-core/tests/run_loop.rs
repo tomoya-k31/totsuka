@@ -1825,15 +1825,22 @@ async fn release_is_sent_once_even_when_removal_keeps_failing() {
 
 #[tokio::test]
 async fn a_re_dispatch_makes_the_task_releasable_again() {
-    // #481: `released_panes` is a per-task memo, so a dispatch that opens a
-    // *new* pane has to clear it — otherwise the memo left by the previous
-    // pane suppresses the release of the new one and it leaks for good, which
-    // is the exact symptom #210 was filed for.
+    // The two callers of `release_pane` want opposite things from the memo,
+    // and this pins both (#481, re-keyed to session rows in #486).
     //
-    // The memo only survives a cleanup when the removal **fails**: the success
-    // arm drops it for bounding. So the worktree is locked, which makes
-    // `git worktree remove` fail deterministically (same device as
-    // `release_is_sent_once_even_when_removal_keeps_failing`).
+    // - Cleanup asks for `ReleaseMode::Once`: a removal that keeps failing must
+    //   not re-release on every sweep.
+    // - A re-dispatch asks for `ReleaseMode::Always`: it is about to open a new
+    //   pane and needs the old one gone. The memo is not evidence that it is —
+    //   a recorded `released: false` covers "already gone" *and* "the identity
+    //   guard refused", and only the second leaves a live pane. So the release
+    //   goes out even though the memo names that very session.
+    //
+    // Getting either wrong loses a pane for good, which is the symptom #210 was
+    // filed for. The memo only survives a cleanup when the removal **fails**
+    // (the success arm prunes it), so the worktree is locked to make
+    // `git worktree remove` fail deterministically — same device as
+    // `release_is_sent_once_even_when_removal_keeps_failing`.
     let base = scratch("re_dispatch_releasable");
     let repo = setup_repo(&base);
     let source_log = base.join("source.ndjson");
@@ -1950,8 +1957,9 @@ async fn a_re_dispatch_makes_the_task_releasable_again() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     // Three releases: the sweep's, the dispatcher's pre-dispatch one, and the
-    // one for the pane the re-dispatch created. The third is the assertion —
-    // without the memo reset it never goes out.
+    // one for the pane the re-dispatch created. The second proves `Always`
+    // ignores the memo; the third proves the new session is not covered by the
+    // old session's memo.
     let releases = recorded_releases(&dispatch_log2);
     assert_eq!(
         releases.len(),

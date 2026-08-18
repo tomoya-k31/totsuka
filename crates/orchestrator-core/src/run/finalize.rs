@@ -336,9 +336,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
         // The worktree is going away → its pane has nothing left to show.
         // Close it before the removal so the pane's lifetime tracks the
-        // worktree's. `release_pane` is idempotent per session row (#486), so
-        // a removal that keeps failing does not re-release every sweep.
-        self.release_pane(&record).await;
+        // worktree's. `Once`: a removal that keeps failing must not re-release
+        // on every sweep (#210).
+        self.release_pane(&record, ReleaseMode::Once).await;
         match self
             .worktrees
             .remove(&repo_path, Path::new(path), branch, base_commit)
@@ -394,7 +394,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// (whatever `released` says — `false` means "already gone or refused",
     /// both final) or when release is impossible for this run; a transport
     /// error leaves it unmarked so the next sweep retries.
-    pub(super) async fn release_pane(&mut self, record: &TaskRecord) -> PaneRelease {
+    pub(super) async fn release_pane(
+        &mut self,
+        record: &TaskRecord,
+        mode: ReleaseMode,
+    ) -> PaneRelease {
         let session = match self.db.latest_session(record.id) {
             Ok(Some(session)) => session,
             Ok(None) => {
@@ -410,10 +414,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 return PaneRelease::Failed;
             }
         };
-        // Once-ness lives here, not in the callers (#486): every caller wants
-        // "release this task's pane unless that has already been settled", and
-        // only this function knows which session row that is.
-        if self.released_panes.contains(&session.id) {
+        // Once-ness is the caller's call, and only this function knows which
+        // session row the memo is keyed by (#486). The two callers differ:
+        // cleanup must not re-release on every sweep, while a re-dispatch needs
+        // the pane *gone* and cannot take the memo as proof of that — a
+        // recorded `released: false` also covers an identity refusal, which
+        // leaves the pane alive.
+        if mode == ReleaseMode::Once && self.released_panes.contains(&session.id) {
             return PaneRelease::NotApplicable;
         }
         let Some(agent) = self.plugins.agents.get(&session.plugin) else {
@@ -463,6 +470,19 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
         }
     }
+}
+
+/// Whether a release may be skipped because this session was already settled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReleaseMode {
+    /// Cleanup (#210): a worktree removal that keeps failing must not re-send
+    /// `session/release` on every sweep.
+    Once,
+    /// A precondition rather than cleanup (#481): the caller is about to open a
+    /// new pane for this task and needs the old one gone. The memo is not
+    /// evidence that it is — `released: false` covers "already gone" *and*
+    /// "the identity guard refused", and only the second leaves a live pane.
+    Always,
 }
 
 /// What a `session/release` attempt did, for callers that react to the outcome
