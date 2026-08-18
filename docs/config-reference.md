@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:166f7ed549a766dcd993b6c62018a3abda9daf46586dff7d94d3bb1804d9fd2c -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:ec39981cd439f35aeedaae4962adaa5626ed04efce1292e0765eb7b0898a8472 -->
 
 # Configuration reference
 
@@ -223,15 +223,25 @@ A profile also decides several behaviours beyond those three keys:
 
 `design` and `implement` assume an attended pane, and **a human makes the final call**:
 
-1. When the agent thinks it is done it does **not** claim completion. It summarises what it did, asks for confirmation, and stops with "needs input"
+1. When the agent thinks it is done it does **not** claim completion. It summarises what it did and asks you to confirm
 2. totsuka parks the task as waiting for input — exempt from the timeout sweep, its concurrency slot released, a notification sent
 3. Once you approve explicitly in the pane, the agent claims completion and the task finishes
 
-Verification criteria change to match: the judge, which can see the conversation, checks whether a human approved before the claim. **An agent that skips the confirmation and claims completion is blocked by the same layer that catches a missing marker.** Stopping to ask is not a completion claim, so it is never blocked.
+Verification criteria change to match: the judge, which can see the conversation, checks whether a human approved before the claim — an answer you selected in a question dialog counts. **An agent that skips the confirmation and claims completion is blocked by the same layer that catches a missing marker.** Stopping to ask is not a completion claim, so it is never blocked.
 
 Pair this with `timeout_secs = 0` if you want to avoid spurious escalation during a long unattended stretch.
 
-A known limitation: a second "needs input" while already waiting — you send corrections, the agent asks again — does not send another notification. In an attended pane you are part of the conversation anyway, so the impact is small.
+A known limitation: a second "needs input" stop while already waiting — you send corrections, the agent asks again in plain text — does not send another notification. In an attended pane you are part of the conversation anyway, so the impact is small. Questions asked through the picker below **do** re-notify.
+
+#### Questions arrive as a picker, not free text
+
+How the agent asks — for the completion confirmation above and for any other decision it needs mid-task — depends on the tool running in the pane:
+
+- **claude**: the agent asks through `AskUserQuestion`, a single-select picker in the pane with options such as "Approve completion" and "Request changes". While the picker is open the task is parked as waiting for input, its slot released, and the notification you receive carries the question text. Answer in the pane and the conversation continues.
+- **opencode**: the agent uses its native `question` dialog, with the same parking behavior.
+- **codex**: has no question dialog outside plan mode, so the agent stops with "needs input" as before — but presents the choices as a short numbered list, so you can answer by typing just a number.
+
+If the question tool is unavailable or fails, every tool falls back to the numbered list plus a "needs input" stop.
 
 ### The verification-criteria ladder
 

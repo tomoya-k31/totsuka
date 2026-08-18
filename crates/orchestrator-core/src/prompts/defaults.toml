@@ -143,9 +143,64 @@ instructed to output nothing but the answer body: \
 Completion protocol: the human in this conversation is the final judge of \
 completion. When you believe the work is done, do NOT emit \
 {marker_completed} on your own judgment — summarize what you did, ask the \
-human to confirm, and end that turn with {marker_needs_input}, setting \
+human to confirm — presenting the choices as a short numbered list (e.g. \
+"1. Approve completion / 2. Request changes") so the human can answer by \
+typing just a number — and end that turn with {marker_needs_input}, setting \
 its reason to "awaiting completion confirmation". Emit {marker_completed} only \
 after the human has explicitly approved completion in this conversation. \
+Delivery contract: ONLY the message carrying the marker is delivered to \
+the requester — earlier messages in this session are NEVER delivered. The \
+marker-bearing message must therefore contain the complete, \
+self-contained answer; never refer to a previous message (no "as stated \
+above" / "already answered earlier").\
+"""
+
+# The confirm variant for a tool with a native interactive question tool —
+# claude (`AskUserQuestion`) and opencode (`question`), selected at dispatch
+# time by `ToolCapabilities::interactive_question` (#487). It replaces the
+# text above when the workflow's profile confirms with a human AND the
+# resolved tool has such a tool; codex (no question tool outside plan mode)
+# keeps `marker_self_report_confirm`.
+#
+# What changes against `marker_self_report_confirm`: the *asking* moves from
+# "end the turn with NEEDS_INPUT and wait" into the question tool, so the
+# human answers a single-select picker instead of typing free text. The turn
+# does NOT end while the question is pending — no Stop fires, so no
+# NEEDS_INPUT reaches the orchestrator from this path (ADR-0038 D6). What
+# parks the task instead is the PreToolUse hook (claude) / the
+# `tool.execute.before` plugin hook (opencode) posting `QuestionPending`
+# (ADR-0050). The markers below are therefore NOT dead text: COMPLETED /
+# FAILED remain the only completion wire signal (ADR-0020), and NEEDS_INPUT
+# is the documented fallback for when the question tool is unavailable —
+# which is also why this text must survive `missing_markers` validation.
+#
+# Placeholders: {marker_completed} {marker_needs_input} {marker_failed}
+#               {question_tool}
+marker_self_report_confirm_question = """
+[orchestrator] Completion self-report: EVERY time you end your turn, end \
+your response with exactly one of the following status markers on its own \
+final line — with one exception: while background tasks or subagents are \
+still running, do NOT emit a marker (that stop is an intermediate \
+heartbeat; you will be re-invoked when they finish — restate the full \
+final answer with the marker then). The marker line is stripped \
+automatically before the result is delivered, so include it even when \
+instructed to output nothing but the answer body: \
+{marker_completed} (the human approved the work as complete) / \
+{marker_needs_input} (human input or confirmation required) / \
+{marker_failed} (cannot proceed). \
+Completion protocol: the human in this conversation is the final judge of \
+completion. When you believe the work is done, do NOT emit \
+{marker_completed} on your own judgment — summarize what you did, then \
+ask the human to confirm through the {question_tool} tool (a \
+single-select question with options such as "Approve completion" and \
+"Request changes"), not in plain prose. Use the {question_tool} tool the \
+same way for any other decision you need from the human mid-task. Emit \
+{marker_completed} only after the human has explicitly approved \
+completion — through that question or in this conversation. If the \
+{question_tool} tool is unavailable or fails, fall back to ending your \
+turn with {marker_needs_input}, setting its reason to "awaiting \
+completion confirmation" and presenting the choices as a short numbered \
+list so the human can answer by typing just a number. \
 Delivery contract: ONLY the message carrying the marker is delivered to \
 the requester — earlier messages in this session are NEVER delivered. The \
 marker-bearing message must therefore contain the complete, \
@@ -239,7 +294,7 @@ verification_rubric_artifact_url = """
 #
 # Placeholders: none.
 verification_rubric_human_approval = """
-- The turn claims completion, and earlier in this conversation the human explicitly approved that the work is complete. Only a message from the human counts as that approval: the agent inferring it, the agent asserting that it would be approved, and the agent's own request for confirmation are none of them approval. A completion claim with no human approval yet does not satisfy this condition — the sequence that does is to ask for confirmation first and stop with NEEDS_INPUT\
+- The turn claims completion, and earlier in this conversation the human explicitly approved that the work is complete. The human's own message counts as that approval, and so does the human's selected answer to a confirmation question the agent posed through an interactive question tool, whatever form that answer takes in the transcript. What never counts is the agent inferring approval, asserting it would be approved, or its own request for confirmation. A completion claim with no human approval yet does not satisfy this condition — the sequence that does is to ask for confirmation first and wait for the human's answer\
 """
 
 # Intermediate-Stop branch, mirroring `on-stop.sh`'s R-02/D-12 rule: a Stop with

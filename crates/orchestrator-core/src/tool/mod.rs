@@ -92,6 +92,11 @@ pub struct ToolCapabilities {
     /// The tool's native session id is captured (SessionStart or equivalent),
     /// enabling thread continuity (#140).
     pub session_id_capture: bool,
+    /// The tool's native interactive question tool (a single-select choice UI
+    /// the agent can call mid-turn), by the name the agent calls it (#487).
+    /// `None` ⇒ asking rides the NEEDS_INPUT marker with a numbered list
+    /// (codex — `request_user_input` exists but only in plan mode).
+    pub interactive_question: Option<&'static str>,
 }
 
 /// A resolved `[tools.<name>]` entry (or a built-in default): everything
@@ -187,6 +192,7 @@ impl ToolProfile {
                 plan_mode: true,
                 heartbeat: true,
                 session_id_capture: true,
+                interactive_question: Some("AskUserQuestion"),
             },
             // Confirmed by the Phase 2 real-machine spike (2026-07-24,
             // codex-cli 0.145.0): Stop block via exit 2 / decision JSON,
@@ -203,6 +209,7 @@ impl ToolProfile {
                 plan_mode: true,
                 heartbeat: false,
                 session_id_capture: true,
+                interactive_question: None,
             },
             // Confirmed by the Phase 3 real-machine spike (2026-07-24,
             // opencode 1.14.39): `-s <id>` resume with retained context,
@@ -220,6 +227,7 @@ impl ToolProfile {
                 plan_mode: true,
                 heartbeat: false,
                 session_id_capture: true,
+                interactive_question: Some("question"),
             },
         }
     }
@@ -454,6 +462,30 @@ mod tests {
     fn argv(profile: &ToolProfile, inp: &LaunchInputs<'_>) -> (String, Vec<String>) {
         let spec = profile.launch_spec(inp).unwrap();
         (spec.program, spec.args)
+    }
+
+    /// #487: which tools carry a native question tool, by the name the agent
+    /// calls it. Pinned because the name feeds straight into the prompt text
+    /// (`{question_tool}`) — a drift here misnames the tool the agent is told
+    /// to call, and nothing else would notice.
+    #[test]
+    fn each_kind_pins_its_interactive_question_tool() {
+        for (name, expected) in [
+            ("claude", Some("AskUserQuestion")),
+            // `request_user_input` exists but only in codex's plan mode, so
+            // default-mode dispatches must not be told to call it.
+            ("codex", None),
+            ("opencode", Some("question")),
+        ] {
+            assert_eq!(
+                ToolProfile::builtin(name)
+                    .unwrap()
+                    .capabilities()
+                    .interactive_question,
+                expected,
+                "{name}"
+            );
+        }
     }
 
     // Golden tests ported from the herdr `launch_command` this module

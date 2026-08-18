@@ -328,6 +328,22 @@ impl Profile {
         }
     }
 
+    /// Whether this profile's completion is judged by a human at the pane
+    /// (#440): the pane is attended, the agent asks the human for
+    /// confirmation, and COMPLETED means "the human approved".
+    ///
+    /// Two call sites depend on this — the confirm prompt selection
+    /// ([`prompts`](crate::prompts)) and the `AskUserQuestion` PreToolUse hook
+    /// wiring ([`hooks`](crate::hooks), #487) — so it lives here as a closed
+    /// match for the same reason as [`is_read_only`](Self::is_read_only): a
+    /// profile added later must fail to compile until someone decides.
+    pub fn confirms_with_a_human(self) -> bool {
+        match self {
+            Profile::Design | Profile::Implement => true,
+            Profile::Answer | Profile::Triage => false,
+        }
+    }
+
     /// The execution mode this profile resolves to. Only `implement` gets a
     /// writable worktree.
     pub fn mode(self) -> WorkflowMode {

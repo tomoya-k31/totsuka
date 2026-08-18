@@ -1,7 +1,7 @@
 //! Static hook scripts + per-workflow `orchestrator-<workflow>.json` rendering
 //! (#131 H-01/H-03, #137).
 //!
-//! The six hook scripts are baked into the binary with [`include_str!`] and
+//! The seven hook scripts are baked into the binary with [`include_str!`] and
 //! written to `$XDG_DATA_HOME/totsuka/hooks/` at `totsuka run` / `totsuka
 //! doctor` startup (0700, idempotent by content hash so a version bump refreshes
 //! them but an unchanged run touches nothing). `doctor --no-repair` is the one
@@ -54,6 +54,10 @@ const HOOK_SCRIPTS: &[(&str, &str)] = &[
     ("hook-common.sh", include_str!("hook-common.sh")),
     ("on-stop.sh", include_str!("on-stop.sh")),
     ("on-notification.sh", include_str!("on-notification.sh")),
+    (
+        "on-ask-user-question.sh",
+        include_str!("on-ask-user-question.sh"),
+    ),
     ("on-session-start.sh", include_str!("on-session-start.sh")),
     ("on-session-end.sh", include_str!("on-session-end.sh")),
     (
@@ -187,7 +191,8 @@ pub fn install(paths: &Paths, cfg: &RootConfig) -> io::Result<()> {
 /// carries the `on-stop.sh` command hook; `verification = "llm"` workflows also
 /// get a `prompt`-type hook running the rubric in-session (D-01). A read-only
 /// [`Profile`](crate::config::Profile) additionally gets its `permissions.deny`
-/// set (#395).
+/// set (#395), and a profile that confirms with a human gets the
+/// `AskUserQuestion` PreToolUse relay (#487).
 ///
 /// The deny block is written whatever tool the workflow resolves to. Only
 /// Claude reads `--settings`; codex is confined by `--sandbox read-only` and
@@ -230,6 +235,18 @@ pub fn render_settings(dir: &Path, wf: &WorkflowConfig) -> String {
             }]
         }
     });
+    // The AskUserQuestion PreToolUse relay (#487): only for profiles whose
+    // completion is confirmed by a human at the pane. The question dialog
+    // keeps the turn open, so no Stop can park the task (ADR-0038 D6) — this
+    // hook posts QuestionPending instead. Gated so that answer / triage /
+    // spelled-out workflows keep byte-identical settings (the install path is
+    // content-hash idempotent, and a live `--settings` file must stay stable).
+    if wf.profile.is_some_and(|p| p.confirms_with_a_human()) {
+        settings["hooks"]["PreToolUse"] = json!([{
+            "matcher": "AskUserQuestion",
+            "hooks": [{ "type": "command", "command": script("on-ask-user-question.sh"), "timeout": 10 }]
+        }]);
+    }
     // Only profiles carry a permissions block. A workflow written in the
     // spelled-out notation gets none even at `mode = "plan"` — `mode` never
     // claimed to enforce anything (#378 proved it does not), and inferring a
@@ -959,6 +976,199 @@ agent = "herdr"
             assert_eq!(stop.len(), 2, "command + prompt hook for {profile}");
             assert_eq!(stop[1]["hooks"][0]["type"], "prompt", "{profile}");
         }
+    }
+
+    /// #487: only the profiles whose completion a human confirms at the pane
+    /// get the AskUserQuestion PreToolUse relay. Everything else — answer /
+    /// triage and the spelled-out notation — must render **byte-identically**
+    /// to before, because the install path is content-hash idempotent and a
+    /// live session's `--settings` file has to stay stable.
+    #[test]
+    fn only_confirm_profiles_get_the_ask_user_question_hook() {
+        for (profile, expected) in [
+            ("design", true),
+            ("implement", true),
+            ("answer", false),
+            ("triage", false),
+        ] {
+            let cfg = workflows_config(&format!(
+                r#"
+[[workflows]]
+name = "w"
+source = "slack"
+profile = "{profile}"
+agent = "herdr"
+"#
+            ));
+            let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
+            let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+            if expected {
+                let pre = v["hooks"]["PreToolUse"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{profile} gets a PreToolUse block: {rendered}"));
+                assert_eq!(pre[0]["matcher"], "AskUserQuestion", "{profile}");
+                assert!(
+                    pre[0]["hooks"][0]["command"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("on-ask-user-question.sh"),
+                    "{profile}: {rendered}"
+                );
+            } else {
+                assert!(
+                    v["hooks"].get("PreToolUse").is_none(),
+                    "{profile} must not fire the question relay — its NEEDS_INPUT \
+                     round-trips through the task source: {rendered}"
+                );
+            }
+        }
+
+        // The spelled-out notation gets none either — same line #440 drew.
+        let cfg = workflows_config(
+            r#"
+[[workflows]]
+name = "w"
+source = "slack"
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "llm"
+"#,
+        );
+        let rendered = render_settings(Path::new("/hooks"), &cfg.workflows[0]);
+        let v: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert!(v["hooks"].get("PreToolUse").is_none(), "{rendered}");
+    }
+
+    /// Run `on-ask-user-question.sh` with `input` on stdin, spooling instead of
+    /// POSTing (no live UDS in a unit test) — same shape as [`run_stop`].
+    fn run_ask_user_question(input: &str, spool: &Path, with_job_id: bool) -> std::process::Output {
+        let mut cmd = Command::new(tool("bash"));
+        cmd.arg(script_dir().join("on-ask-user-question.sh"))
+            .env("TOTSUKA_HOOK_SPOOL_DIR", spool)
+            .env_remove("TOTSUKA_HOOK_ENDPOINT")
+            .env_remove("TOTSUKA_HOOK_TOKEN")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if with_job_id {
+            cmd.env("TOTSUKA_JOB_ID", "job-test");
+        } else {
+            cmd.env_remove("TOTSUKA_JOB_ID");
+        }
+        let mut child = cmd.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    /// The canonical PreToolUse input for one AskUserQuestion call.
+    const ASK_INPUT: &str = r#"{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_use_id":"toolu_01","tool_input":{"questions":[{"question":"作業内容を承認しますか？","header":"承認","multiSelect":false}]}}"#;
+
+    #[test]
+    fn ask_user_question_posts_question_pending_with_empty_stdout() {
+        let spool = unique_dir("ask");
+        let out = run_ask_user_question(ASK_INPUT, &spool, true);
+        assert!(out.status.success());
+        // A PreToolUse hook's stdout is a permission decision — printing
+        // anything would allow/deny the dialog instead of relaying it.
+        assert!(out.stdout.is_empty(), "stdout would decide the tool call");
+        let events = spooled_json(&spool);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["hook_event_name"], "QuestionPending");
+        assert_eq!(events[0]["job_id"], "job-test");
+        assert_eq!(events[0]["session_id"], "s1");
+        // The per-call tool_use_id is the idempotency key: distinct per
+        // question, so a second question is not dropped as a duplicate.
+        assert_eq!(events[0]["prompt_id"], "toolu_01");
+        assert_eq!(events[0]["message"], "作業内容を承認しますか？");
+    }
+
+    #[test]
+    fn ask_user_question_without_tool_use_id_derives_a_stable_prompt_id() {
+        // If the hook input carries no tool_use_id (its presence on PreToolUse
+        // stdin is a live-verify item), the fallback hashes tool_input: stable
+        // across a re-send of the same question, distinct across questions.
+        let no_id = r#"{"session_id":"s1","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"which branch?"}]}}"#;
+        let other = r#"{"session_id":"s1","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"approve?"}]}}"#;
+        let spool_a = unique_dir("ask-hash-a");
+        let spool_b = unique_dir("ask-hash-b");
+        let spool_c = unique_dir("ask-hash-c");
+        assert!(
+            run_ask_user_question(no_id, &spool_a, true)
+                .status
+                .success()
+        );
+        assert!(
+            run_ask_user_question(no_id, &spool_b, true)
+                .status
+                .success()
+        );
+        assert!(
+            run_ask_user_question(other, &spool_c, true)
+                .status
+                .success()
+        );
+        let a = &spooled_json(&spool_a)[0]["prompt_id"];
+        let b = &spooled_json(&spool_b)[0]["prompt_id"];
+        let c = &spooled_json(&spool_c)[0]["prompt_id"];
+        assert_eq!(a, b, "same question ⇒ same key (retry-safe)");
+        assert_ne!(a, c, "different question ⇒ different key");
+        assert!(
+            a.as_str().unwrap().starts_with("q-"),
+            "derived keys are marked: {a}"
+        );
+    }
+
+    #[test]
+    fn ask_user_question_without_job_id_is_inert() {
+        // Personal session: the settings file only reaches orchestrator panes,
+        // but the env gate is the convention every script keeps (#196).
+        let spool = unique_dir("ask-nojob");
+        let out = run_ask_user_question(ASK_INPUT, &spool, false);
+        assert!(out.status.success());
+        assert!(out.stdout.is_empty());
+        assert!(spooled_lines(&spool).is_empty(), "nothing posted/spooled");
+    }
+
+    #[test]
+    fn ask_user_question_without_jq_spools_raw_input_and_exits_zero() {
+        // Missing jq/curl: spool the raw hook input for later recovery, stdout
+        // still empty (H-14 fail-open).
+        let spool = unique_dir("ask-nojq");
+        let bin = unique_dir("ask-nojq-bin");
+        for t in [
+            "bash", "cat", "dirname", "date", "mkdir", "cut", "awk", "cksum",
+        ] {
+            let _ = std::os::unix::fs::symlink(tool(t), bin.join(t));
+        }
+        let mut cmd = Command::new(tool("bash"));
+        cmd.arg(script_dir().join("on-ask-user-question.sh"))
+            .env("TOTSUKA_JOB_ID", "job-test")
+            .env("TOTSUKA_HOOK_SPOOL_DIR", &spool)
+            .env_remove("TOTSUKA_HOOK_ENDPOINT")
+            .env_remove("TOTSUKA_HOOK_TOKEN")
+            .env("PATH", &bin)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(ASK_INPUT.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        assert!(out.stdout.is_empty());
+        let lines = spooled_lines(&spool);
+        assert_eq!(lines.len(), 1, "raw input spooled");
+        assert!(lines[0].contains("AskUserQuestion"));
     }
 
     /// The rendered `permissions.deny` for a read-only profile, and the proof

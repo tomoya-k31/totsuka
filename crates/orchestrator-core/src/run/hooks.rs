@@ -133,8 +133,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
             // A permission / idle prompt: surface it to the human but keep the
             // task running and holding its slot. Approval-waiting is distinct
-            // from question-waiting (R-08) — only `Stop{NeedsInput}` moves the
-            // task to `WaitingInput`.
+            // from question-waiting (R-08) — only `Stop{NeedsInput}` and
+            // `QuestionPending` (#487, the arm below) move the task to
+            // `WaitingInput`.
             SignalEvent::Notification { message } => {
                 notify_all(
                     &self.plugins.notifiers,
@@ -142,6 +143,14 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     &record,
                     message,
                 );
+            }
+            // An interactive question dialog is open (#487): the turn will not
+            // end while it waits, so — unlike the arm above — this DOES park
+            // the task, standing in for the `Stop{NeedsInput}` that cannot
+            // arrive (ADR-0038 D6).
+            SignalEvent::QuestionPending { message } => {
+                self.on_question_pending(&record, &agent_plugin, message)
+                    .await?
             }
             SignalEvent::SessionStart { tool_session_id } => {
                 self.on_session_start(&record, sig.job_id.session_row, &tool_session_id)?;
@@ -244,14 +253,67 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         reason: Option<String>,
     ) -> Result<(), EngineError> {
         match record.state {
-            // Already waiting: idempotent no-op.
-            TaskState::WaitingInput => {}
+            // Already waiting: idempotent no-op. (The known ADR-0043 gap: a
+            // second NEEDS_INPUT does not re-notify.)
+            TaskState::WaitingInput => Ok(()),
+            _ => {
+                self.park_waiting_input(record, agent_plugin, reason, "hook")
+                    .await
+            }
+        }
+    }
+
+    /// `QuestionPending` (#487): the agent opened an interactive question
+    /// dialog — claude `AskUserQuestion` via the PreToolUse hook, opencode
+    /// `question` via `tool.execute.before` — and is blocked on the human.
+    /// The turn has not ended, so no `Stop{NeedsInput}` will arrive from this
+    /// path (ADR-0038 D6); this signal is what parks the task instead.
+    async fn on_question_pending(
+        &mut self,
+        record: &TaskRecord,
+        agent_plugin: &str,
+        message: Option<String>,
+    ) -> Result<(), EngineError> {
+        match record.state {
+            // Already parked: no state change, but DO re-notify — a second
+            // `QuestionPending` that survived the idempotency key carries a
+            // distinct per-question `prompt_id`, so it is a *new* question,
+            // not a redelivery. This narrows the ADR-0043 no-re-notify gap
+            // for the question path.
+            TaskState::WaitingInput => {
+                notify_all(
+                    &self.plugins.notifiers,
+                    NotifierEvent::WaitingInput,
+                    record,
+                    message,
+                );
+                Ok(())
+            }
+            _ => {
+                self.park_waiting_input(record, agent_plugin, message, "question_pending")
+                    .await
+            }
+        }
+    }
+
+    /// Park a task in `WaitingInput`: slot released, operator notified. The
+    /// shared tail of [`on_stop_needs_input`](Self::on_stop_needs_input) and
+    /// [`on_question_pending`](Self::on_question_pending) — the two differ
+    /// only in what an arrival while already parked means.
+    async fn park_waiting_input(
+        &mut self,
+        record: &TaskRecord,
+        agent_plugin: &str,
+        reason: Option<String>,
+        kind: &str,
+    ) -> Result<(), EngineError> {
+        match record.state {
             // Resume from an escalation straight into WaitingInput.
             TaskState::Escalated => {
                 self.db.apply_event(
                     record.id,
                     TaskEvent::WaitInput,
-                    Some(serde_json::json!({ "kind": "hook", "reason": reason })),
+                    Some(serde_json::json!({ "kind": kind, "reason": reason })),
                 )?;
                 self.release_slot(record.id);
                 notify_all(
@@ -266,7 +328,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     .await?;
             }
             _ => {
-                tracing::debug!(task_id = record.id, state = %record.state, "ignoring NEEDS_INPUT in a non-pipeline state")
+                tracing::debug!(task_id = record.id, state = %record.state, kind, "ignoring a park request in a non-pipeline state")
             }
         }
         Ok(())
@@ -721,6 +783,9 @@ fn event_and_status_strings(event: &SignalEvent) -> (&'static str, Option<&'stat
             }),
         ),
         SignalEvent::Notification { .. } => ("notification", None),
+        // Not "stop": `unknown_stop_streak` filters on `event = 'stop'`, so a
+        // question row can never feed the D-02 escalation counter.
+        SignalEvent::QuestionPending { .. } => ("question_pending", None),
         SignalEvent::SessionStart { .. } => ("session_start", None),
         SignalEvent::SessionEnd { .. } => ("session_end", None),
         SignalEvent::Heartbeat => ("heartbeat", None),
@@ -826,6 +891,12 @@ mod tests {
         assert_eq!(
             event_and_status_strings(&SignalEvent::SessionEnd { reason: None }),
             ("session_end", None)
+        );
+        // #487: NOT "stop" — `unknown_stop_streak` filters on `event = 'stop'`,
+        // so a question row must never feed the D-02 escalation counter.
+        assert_eq!(
+            event_and_status_strings(&SignalEvent::QuestionPending { message: None }),
+            ("question_pending", None)
         );
     }
 }

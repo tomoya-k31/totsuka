@@ -56,6 +56,19 @@ pub enum SignalEvent {
         /// The notification message, if present.
         message: Option<String>,
     },
+    /// The agent opened an interactive question dialog (claude
+    /// `AskUserQuestion` via the PreToolUse hook, opencode `question` via the
+    /// plugin's `tool.execute.before`) and is blocked on the human (#487).
+    ///
+    /// Unlike [`Notification`](Self::Notification) — which keeps the task
+    /// running and holding its slot (R-08) — this parks the task in
+    /// `WaitingInput`: the turn does not end while the dialog is open, so no
+    /// `Stop{NeedsInput}` will ever arrive from this path (ADR-0038 D6).
+    QuestionPending {
+        /// A summary of the question(s) shown to the human, if present.
+        /// Becomes the `WaitingInput` notification payload the operator reads.
+        message: Option<String>,
+    },
     /// A session started (also carries the fresh session id for correlation).
     SessionStart {
         /// The new session's id.

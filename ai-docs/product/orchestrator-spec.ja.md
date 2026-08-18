@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/fable-5, at: 2026-08-18T04:10:00Z }
 status: draft
 owner: tomoya-k31
 ---
@@ -258,7 +258,7 @@ on_success = { set_status = "レビュー待ち" }
 
 ### 4.11 決定的な完了シグナル(Claude Code フック)
 
-Claude Code は Lifecycle Authority を持たないため、herdr の screen-manifest(画面パターン認識)由来の完了検知は構造的にロスが避けられない(遅延・取りこぼし・誤検知)。そこで完了は **Claude Code のフックを介して決定的に**通知する: herdr の pane が `claude --settings <hooks_dir>/orchestrator-<workflow>.json [--resume <sid>]` を起動し、command 型の `Stop` / `Notification` / `SessionStart` / `SessionEnd` フックが Unix ドメインソケット経由で Orchestrator へ POST する(`verification = "llm"` のワークフローは追加で、rubric をセッション内で適用する prompt 型 `Stop` フックも持つ)。本節がこの機構の要件のホームであり、エンドツーエンドの流れは `architecture/hook-signal-flow.md`、配置の意思決定は ADR-0004、設定面は `[hooks]`(`auth_token_ref` / `socket_path` / `spool_dir` / `block_retry_limit`)とワークフロー別の `verification` / `timeout_secs` / `rubric` キーが担う。
+Claude Code は Lifecycle Authority を持たないため、herdr の screen-manifest(画面パターン認識)由来の完了検知は構造的にロスが避けられない(遅延・取りこぼし・誤検知)。そこで完了は **Claude Code のフックを介して決定的に**通知する: herdr の pane が `claude --settings <hooks_dir>/orchestrator-<workflow>.json [--resume <sid>]` を起動し、command 型の `Stop` / `Notification` / `SessionStart` / `SessionEnd` フックが Unix ドメインソケット経由で Orchestrator へ POST する(`verification = "llm"` のワークフローは追加で、rubric をセッション内で適用する prompt 型 `Stop` フックも持ち、design / implement profile は `AskUserQuestion` 向けの `PreToolUse` フックも持つ。F-108)。本節がこの機構の要件のホームであり、エンドツーエンドの流れは `architecture/hook-signal-flow.md`、配置の意思決定は ADR-0004、設定面は `[hooks]`(`auth_token_ref` / `socket_path` / `spool_dir` / `block_retry_limit`)とワークフロー別の `verification` / `timeout_secs` / `rubric` キーが担う。
 
 | ID | 要件 | 優先度 |
 |---|---|---|
@@ -270,6 +270,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | F-105 | **会話継続**: 会話がタスクそのもの。`Task.id` が会話(Slack: `channel:thread_ts`)を、`Task.message_key` がその中の 1 配送を識別するので、追いメンションは 2 つのタスクを相関させるのではなく**同じタスクへ追記**され、worktree・ブランチ・エージェントセッションを共有する。未処理メッセージは連結して 1 回 dispatch し、終端タスクは再オープン(`Reopen`)する。使えないセッションは `SESSION_UNRESUMABLE` として報告され、resume なしで 1 回だけ再試行する。シグナルは自身の `job_id` のタスクへ配路され、セッション id から宛先を推測しない(E-09)。#140 の `thread_key` 相関を置き換え、同フィールドは protocol 0.3.0 (#242/#264) で削除 | M |
 | F-106 | **デッドマン**: herdr の `events.subscribe` ストリームは `pane.exited` デッドマン検知のみへ縮退する。herdr プロセスのクラッシュは `Failed` として表面化する | M |
 | F-107 | **pane の後処理**: pane の寿命はタスクの状態ではなく **worktree の掃除ポリシーに連動**する([ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md))。pane を閉じる(`session/release`)のは `decide_cleanup` が `Remove` を返したときだけで、**既定の `manual` では決して閉じない**。これは意図的で、コミット済み未 push の作業のレビュー面として pane を残す。`Retain` / `Dirty` も同じ理由で保持し、`Failed` / `Escalated` の pane は診断のため保持する。例外は同じタスクの**再 dispatch** で、このときは保持中の pane を先に閉じる(#481) — 1 タスクに 2 枚の pane はレビュー面ではない。閉じ残った pane は `totsuka doctor` の受け持ち(#211)。**元の記述**(`Done` の pane は冪等な `task/cancel` で自動クローズ)**を置き換える** — 完了時に `task/cancel` を呼んだことは一度も無く、唯一の呼び出し元は `dispatch_one` の `state/subscribe` 失敗ロールバックである | M |
+| F-108 | **質問ダイアログの park**(#487、ADR-0050): design / implement(attended)profile は人間への質問・完了確認をツール native の質問 UI で行う — claude は `AskUserQuestion`(この 2 profile の settings にだけ描画される `PreToolUse` フック)、opencode は `question`(プラグインの `tool.execute.before`。ダイアログ待機中の idle 判定も抑止する)。codex は Default mode に質問ツールが無いため `NEEDS_INPUT` + 番号付き選択肢リストのまま。ダイアログ待機中はターンが終わらず `Stop` が届かないので、フックが `QuestionPending`(質問ごとの `prompt_id` 必須 — 空だと 2 問目が dedup で消える)を POST し、Engine は `Stop{NEEDS_INPUT}` と同様に `waiting_input` へ park する: スロット解放・質問文つき通知。park 中の**新しい**質問は再通知される。マーカーは完了ワイヤシグナルのまま(ADR-0020)で、質問ツール不能時のフォールバック(`NEEDS_INPUT` + 番号付きリスト)はプロンプト内に残る | M |
 
 ## 5. 非機能要件
 

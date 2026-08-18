@@ -39,12 +39,12 @@
 //!   "job_id": "job-42-7",              // required; TOTSUKA_JOB_ID echoed back
 //!   "session_id": "abc123",            // tool-native session id (optional)
 //!   "prompt_id": "p-1",                // idempotency-key component (optional)
-//!   "hook_event_name": "Stop",         // Stop|Notification|SessionStart|SessionEnd
+//!   "hook_event_name": "Stop",         // Stop|Notification|QuestionPending|SessionStart|SessionEnd
 //!   "status": "completed",             // Stop: completed|needs_input|failed|unknown
 //!   "reason": "...",                   // optional
 //!   "last_assistant_message": "...",   // Stop (optional)
 //!   "transcript_path": "...",          // Stop (optional)
-//!   "message": "...",                  // Notification (optional)
+//!   "message": "...",                  // Notification / QuestionPending (optional)
 //!   "background_tasks": ["..."]        // Stop: non-empty ⇒ heartbeat (still working)
 //! }
 //! ```
@@ -502,6 +502,9 @@ fn normalize_event(
         Some("Notification") => SignalEvent::Notification {
             message: str_field(obj, "message"),
         },
+        Some("QuestionPending") => SignalEvent::QuestionPending {
+            message: str_field(obj, "message"),
+        },
         Some("SessionStart") => SignalEvent::SessionStart {
             tool_session_id: session_id.to_string(),
         },
@@ -676,6 +679,40 @@ mod tests {
             end.event,
             SignalEvent::SessionEnd { reason: Some(_) }
         ));
+    }
+
+    /// The shape `on-ask-user-question.sh` (claude PreToolUse) and
+    /// `totsuka-opencode.js` (`tool.execute.before`) emit for an open question
+    /// dialog (#487). The per-question `prompt_id` must survive — it is the
+    /// idempotency-key component that keeps a second question from being
+    /// dropped as a duplicate of the first.
+    #[test]
+    fn question_pending_payload_deserializes_with_its_prompt_id() {
+        let sig = parse_signal(
+            br#"{"job_id":"job-42-7","session_id":"cc-1","prompt_id":"toolu_01","hook_event_name":"QuestionPending","ts":"t","message":"Approve completion?"}"#,
+        )
+        .unwrap();
+        assert_eq!(sig.prompt_id, "toolu_01");
+        match sig.event {
+            SignalEvent::QuestionPending { message } => {
+                assert_eq!(message.as_deref(), Some("Approve completion?"))
+            }
+            other => panic!("expected QuestionPending, got {other:?}"),
+        }
+        // An empty message is carried as None, same as Notification.
+        let bare = parse_signal(
+            br#"{"job_id":"job-42-7","hook_event_name":"QuestionPending","message":""}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            bare.event,
+            SignalEvent::QuestionPending { message: None }
+        ));
+        // Forward compatibility still holds: an unknown event name from some
+        // future script degrades to a liveness bump, never a state change.
+        let future =
+            parse_signal(br#"{"job_id":"job-42-7","hook_event_name":"QuestionAnswered"}"#).unwrap();
+        assert!(matches!(future.event, SignalEvent::Heartbeat));
     }
 
     /// A [`SignalPort`] fake that records every submitted signal.

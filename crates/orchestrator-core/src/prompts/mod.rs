@@ -83,6 +83,17 @@ pub struct Prompts {
     /// override of `marker_self_report` used to, which is one of the two silent
     /// failures #465 removed the surface for.
     marker_self_report_confirm: String,
+    /// The confirm variant for a tool with a native interactive question tool
+    /// (#487): the agent asks for confirmation through `AskUserQuestion`
+    /// (claude) / `question` (opencode) instead of parking the turn with
+    /// NEEDS_INPUT.
+    ///
+    /// Selected at *dispatch* time via
+    /// [`marker_self_report_for_question_tool`](Self::marker_self_report_for_question_tool),
+    /// not here: tool resolution has a repository dimension
+    /// (`workflow.tool` > `repo.tool` > `default_tool`), so one workflow's set
+    /// can serve dispatches to different tools.
+    marker_self_report_confirm_question: String,
     /// Dispatch-time instruction to create the task's branch. Emitted only
     /// when the worktree is handed over detached.
     branch_convention: String,
@@ -130,6 +141,13 @@ pub struct Prompts {
     /// so a single global cache would be wrong.
     #[serde(skip)]
     rendered_marker_self_report: String,
+    /// Whether [`resolve_for`](Self::resolve_for) selected the confirmation
+    /// protocol (#440) for this set. Gates
+    /// [`marker_self_report_for_question_tool`](Self::marker_self_report_for_question_tool)
+    /// so the question variant can never reach an answer / triage / spelled-out
+    /// workflow, whatever tool it dispatches to.
+    #[serde(skip)]
+    confirm_selected: bool,
 }
 
 /// Placeholders that resolve to the wire marker constants.
@@ -148,6 +166,15 @@ const MARKER_PLACEHOLDERS: &[&str] = &["marker_completed", "marker_needs_input",
 pub const ALLOWED_PLACEHOLDERS: &[(&str, &[&str])] = &[
     ("marker_self_report", MARKER_PLACEHOLDERS),
     ("marker_self_report_confirm", MARKER_PLACEHOLDERS),
+    (
+        "marker_self_report_confirm_question",
+        &[
+            "marker_completed",
+            "marker_needs_input",
+            "marker_failed",
+            "question_tool",
+        ],
+    ),
     ("branch_convention", &[]),
     ("verification_rubric", &[]),
     ("verification_rubric_artifact_url", &[]),
@@ -237,6 +264,28 @@ impl Prompts {
     /// built, so the dispatch path does no work per task.
     pub fn marker_self_report(&self) -> &str {
         self.rendered_marker_self_report.as_str()
+    }
+
+    /// The confirm self-report for a tool whose native question tool is named
+    /// `question_tool` (#487) — `None` unless this set resolved to the
+    /// confirmation protocol (#440), so answer / triage and spelled-out
+    /// workflows can never receive it and the caller falls back to
+    /// [`marker_self_report`](Self::marker_self_report).
+    ///
+    /// Rendered per call, unlike the pre-rendered plain self-report: the tool
+    /// name is only known at dispatch time, and this path runs once per
+    /// dispatch, not per copy.
+    pub fn marker_self_report_for_question_tool(&self, question_tool: &str) -> Option<String> {
+        if !self.confirm_selected {
+            return None;
+        }
+        let vars = Self::marker_vars();
+        let mut vars: Vec<(&str, &str)> = vars.to_vec();
+        vars.push(("question_tool", question_tool));
+        Some(template::render(
+            &self.marker_self_report_confirm_question,
+            &vars,
+        ))
     }
 
     /// The `prompt`-type Stop hook body for a `verification = "llm"` workflow.
@@ -331,11 +380,12 @@ impl Prompts {
             // judge check the approval actually happened. This shadows the
             // artifact-URL rubric on purpose — the human saw the artifact, so
             // a URL demand would second-guess an approval already given.
-            Some(profile) if Self::profile_confirms_with_a_human(profile) => {
+            Some(profile) if profile.confirms_with_a_human() => {
                 p.marker_self_report
                     .clone_from(&p.marker_self_report_confirm);
                 p.verification_rubric
                     .clone_from(&p.verification_rubric_human_approval);
+                p.confirm_selected = true;
             }
             Some(profile) if Self::profile_verifies_an_artifact(profile) => {
                 p.verification_rubric
@@ -349,21 +399,6 @@ impl Prompts {
         p.finish()
     }
 
-    /// Whether this profile's completion is judged by a human at the pane
-    /// (#440): the pane is attended, the agent asks for confirmation with
-    /// NEEDS_INPUT, and COMPLETED means "the human approved".
-    ///
-    /// Profiles only — a spelled-out `mode = "implement"` workflow keeps the
-    /// plain self-report, the same line #420 drew for permissions: a profile
-    /// is what buys a behavior bundle, and an existing config must not change
-    /// meaning on upgrade.
-    fn profile_confirms_with_a_human(profile: Profile) -> bool {
-        match profile {
-            Profile::Design | Profile::Implement => true,
-            Profile::Answer | Profile::Triage => false,
-        }
-    }
-
     /// Whether this profile's deliverable is written outside the worktree, so
     /// the only evidence it exists is a URL in the final message (#393 D3).
     ///
@@ -371,7 +406,7 @@ impl Prompts {
     /// approval gate, so there is no URL to demand and demanding one would fail
     /// every well-behaved answer. `design` / `implement` still satisfy this
     /// predicate, but [`resolve_for`](Self::resolve_for) checks
-    /// [`profile_confirms_with_a_human`](Self::profile_confirms_with_a_human)
+    /// [`Profile::confirms_with_a_human`]
     /// first, so since #440 only `triage` actually resolves to the URL rubric.
     fn profile_verifies_an_artifact(profile: Profile) -> bool {
         match profile {
@@ -446,6 +481,10 @@ mod tests {
         for (name, value) in [
             ("marker_self_report", &p.marker_self_report),
             ("marker_self_report_confirm", &p.marker_self_report_confirm),
+            (
+                "marker_self_report_confirm_question",
+                &p.marker_self_report_confirm_question,
+            ),
             ("branch_convention", &p.branch_convention),
             ("verification_rubric", &p.verification_rubric),
             (
@@ -888,6 +927,11 @@ agent = "herdr"
                  not internal: {text}"
             );
             assert!(
+                text.contains("numbered list"),
+                "{profile} must ask for numbered choices, so the human at the \
+                 pane can answer by typing just a number (#487): {text}"
+            );
+            assert!(
                 Prompts::missing_markers(&text).is_empty(),
                 "the confirm variant must still teach every marker: {text}"
             );
@@ -901,6 +945,90 @@ agent = "herdr"
                 "{profile} keeps the plain self-report"
             );
         }
+    }
+
+    /// #487: the question-tool self-report variant. Reachable only through a
+    /// confirm profile (design / implement), and only when the dispatch-time
+    /// caller supplies a question-tool name — answer / triage and spelled-out
+    /// workflows get `None` and fall back to the plain self-report, whatever
+    /// tool they dispatch to.
+    #[test]
+    fn the_question_variant_is_gated_on_the_confirm_profiles() {
+        for profile in ["design", "implement"] {
+            let c = profile_cfg(profile, "");
+            let text = Prompts::resolve_for(&c.workflows[0])
+                .marker_self_report_for_question_tool("AskUserQuestion")
+                .unwrap_or_else(|| panic!("{profile} must resolve the question variant"));
+            assert!(
+                text.contains("the AskUserQuestion tool"),
+                "{profile} must name the tool the agent actually calls: {text}"
+            );
+            assert!(
+                !text.contains("{question_tool}"),
+                "the placeholder must be substituted, not shipped: {text}"
+            );
+            assert!(
+                text.contains("If the AskUserQuestion tool is unavailable"),
+                "{profile} must keep the NEEDS_INPUT fallback — the marker stays \
+                 the wire signal when the question tool cannot run: {text}"
+            );
+            assert!(
+                text.contains("awaiting completion confirmation"),
+                "the fallback must park with the reason the operator reads: {text}"
+            );
+            assert!(
+                text.contains("only after the human has explicitly approved"),
+                "{profile} must still gate COMPLETED on an explicit approval: {text}"
+            );
+            assert!(
+                Prompts::missing_markers(&text).is_empty(),
+                "the question variant must still teach every marker (ADR-0020): {text}"
+            );
+        }
+
+        for profile in ["answer", "triage"] {
+            let c = profile_cfg(profile, "");
+            assert_eq!(
+                Prompts::resolve_for(&c.workflows[0])
+                    .marker_self_report_for_question_tool("AskUserQuestion"),
+                None,
+                "{profile} answers through the task source, not a pane picker"
+            );
+        }
+
+        // A spelled-out `mode = "implement"` keeps the plain self-report, the
+        // same line #440 drew — and the un-resolved built-in set has no
+        // profile at all.
+        let c = cfg("");
+        assert_eq!(
+            Prompts::resolve_for(&c.workflows[0])
+                .marker_self_report_for_question_tool("AskUserQuestion"),
+            None
+        );
+        assert_eq!(
+            Prompts::builtin().marker_self_report_for_question_tool("AskUserQuestion"),
+            None
+        );
+    }
+
+    /// The rubric counts a question-tool answer as approval (#487) — the
+    /// transcript form of that answer is unverified on real machines, so the
+    /// wording has to bind to the fact of the answer, not its shape.
+    #[test]
+    fn the_approval_rubric_counts_a_question_tool_answer() {
+        let c = profile_cfg("design", "");
+        let rubric = Prompts::resolve_for(&c.workflows[0])
+            .verification_rubric()
+            .to_string();
+        assert!(
+            rubric.contains("interactive question tool"),
+            "the rubric must recognize an approval given through the question \
+             tool, or the judge blocks every approved completion: {rubric}"
+        );
+        assert!(
+            rubric.contains("whatever form that answer takes in the transcript"),
+            "the transcript shape is unverified — the rubric must not pin it: {rubric}"
+        );
     }
 
     /// The approval rubric composes into the same condition frame, and the

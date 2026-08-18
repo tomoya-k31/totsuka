@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:8c321ae61fad7efb08bd768a3bb76b81f193c0f47dbce9861f84dec47d0d7262 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:23095d3bb4f52140a10c23efd100ac150ddc3c468d1eaba86388fe0e51d2e561 -->
 
 # What totsuka is
 
@@ -52,6 +52,8 @@ Cleanup on completion or cancellation follows a policy you choose: immediately, 
 Agent IDEs are plugins too, and which one runs can be switched per task type and per repository. Dispatching hands over the worktree path, the task body, the mode (`plan` or `implement`), and any extra context, and gets back a session.
 
 Agents report their state as one of idle, running, waiting for input, done, or failed. Completion itself is detected through a hook the agent CLI fires, which makes it deterministic rather than inferred from output.
+
+In workflows where a human approves completion at the pane, questions and the completion confirmation arrive through the tool's native question picker — claude's `AskUserQuestion`, opencode's `question` dialog. While the dialog is open totsuka treats the task as waiting for input, releases its slot, and notifies you with the question text. Tools without a picker ask with a numbered list instead.
 
 **Plugins declare what they support and totsuka only asks for that.** A plugin that does not implement plan mode is never asked to run one.
 

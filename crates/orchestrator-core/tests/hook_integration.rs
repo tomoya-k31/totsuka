@@ -224,6 +224,22 @@ fn stop(
     }
 }
 
+/// A `QuestionPending` signal (#487): the agent opened an interactive question
+/// dialog. `prompt_id` is the per-question idempotency key (claude: the
+/// PreToolUse `tool_use_id`; opencode: the plugin's `callID`).
+fn question(task_id: i64, row: i64, prompt_id: &str, msg: &str) -> AgentSignal {
+    AgentSignal {
+        source: SignalSource::AgentHook,
+        job_id: JobId::new(task_id, row),
+        tool_session_id: "cc-1".into(),
+        prompt_id: prompt_id.into(),
+        event: SignalEvent::QuestionPending {
+            message: Some(msg.to_string()),
+        },
+        payload: json!({ "hook_event_name": "QuestionPending" }),
+    }
+}
+
 fn heartbeat(task_id: i64, row: i64, prompt_id: &str) -> AgentSignal {
     AgentSignal {
         source: SignalSource::AgentHook,
@@ -837,6 +853,122 @@ async fn needs_input_parks_in_waiting_input() {
             .iter()
             .any(|n| n["params"]["event"] == "waiting_input"),
         "waiting_input notification delivered: {notes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #487: a `QuestionPending` parks exactly like `Stop{NeedsInput}` — the turn
+/// has not ended (the dialog is open), so this signal is the only thing that
+/// can park the task (ADR-0038 D6). The question text reaches the operator as
+/// the `waiting_input` notification payload, and a later COMPLETED — the human
+/// answered "approve" in the dialog and the agent finished its turn — still
+/// publishes from `WaitingInput`.
+#[tokio::test]
+async fn question_pending_parks_and_a_later_completed_still_publishes() {
+    let base = scratch("hook_question_park");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine
+        .on_signal(question(id, row, "toolu_01", "Approve completion?"))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::WaitingInput,
+        "an open question dialog parks the task"
+    );
+
+    // The human answered and the agent ended its turn with COMPLETED: the
+    // park must not strand the task.
+    engine
+        .on_signal(stop(
+            id,
+            row,
+            "p2",
+            StopStatus::Completed,
+            Some("approved <<STATUS:COMPLETED>>"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Done,
+        "COMPLETED after the question park still publishes"
+    );
+
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    assert!(
+        notes.iter().any(|n| n["params"]["event"] == "waiting_input"
+            && n["params"]["body"]
+                .as_str()
+                .is_some_and(|m| m.contains("Approve completion?"))),
+        "the question text is what the operator reads: {notes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #487: while already parked, a *new* question (distinct `prompt_id`)
+/// re-notifies without a state change — unlike a second NEEDS_INPUT, which is
+/// a silent no-op (the known ADR-0043 gap). A literal redelivery of the same
+/// question (same `prompt_id`) is dropped by the idempotency key and must not
+/// re-notify.
+#[tokio::test]
+async fn a_second_question_renotifies_and_a_redelivery_does_not() {
+    let base = scratch("hook_question_renotify");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine
+        .on_signal(question(id, row, "toolu_01", "first?"))
+        .await
+        .unwrap();
+    // A curl retry / spool re-send of the SAME question: dropped (D-05).
+    engine
+        .on_signal(question(id, row, "toolu_01", "first?"))
+        .await
+        .unwrap();
+    // A NEW question while still parked: notify again, state unchanged.
+    engine
+        .on_signal(question(id, row, "toolu_02", "second?"))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::WaitingInput
+    );
+
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    let waiting: Vec<_> = notes
+        .iter()
+        .filter(|n| n["params"]["event"] == "waiting_input")
+        .collect();
+    assert_eq!(
+        waiting.len(),
+        2,
+        "one notification per distinct question, none for the redelivery: {notes:?}"
     );
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -1579,6 +1711,116 @@ async fn dispatch_with_opencode_tool_routes_context_visibly() {
     );
     assert!(tool["env"].get("TOTSUKA_JOB_ID").is_some());
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #487: the confirm self-report has a question-tool variant, selected at
+/// dispatch time by profile × tool. A `design` dispatch to claude is told to
+/// ask through `AskUserQuestion`; the same workflow dispatched to codex —
+/// which has no question tool outside plan mode — keeps the marker protocol
+/// with numbered choices. Driven through the real dispatch path because the
+/// selection lives in `wire_hooks`, not in `Prompts::resolve_for`.
+#[tokio::test]
+async fn a_design_dispatch_selects_the_question_variant_per_tool() {
+    for (tool_pin, expect, reject) in [
+        (
+            None, // default_tool = claude
+            "ask the human to confirm through the AskUserQuestion tool",
+            "1. Approve completion / 2. Request changes",
+        ),
+        (
+            Some("codex".to_string()),
+            "1. Approve completion / 2. Request changes",
+            "AskUserQuestion",
+        ),
+    ] {
+        let base = scratch("question_variant_dispatch");
+        let repo = setup_repo(&base);
+        let dispatch_log = base.join("dispatch.ndjson");
+        let db_path = base.join("state.db");
+
+        let mut plugins = PluginSet::default();
+        plugins.sources.insert(
+            "mock_src".to_string(),
+            launch(
+                "task_source",
+                "mock_src",
+                json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+            )
+            .await,
+        );
+        plugins.agents.insert(
+            "mock_agent".to_string(),
+            launch(
+                "agent_ide",
+                "mock_agent",
+                json!({ "resume_session": true, "stream_states": ["running"], "dispatch_log": dispatch_log }),
+            )
+            .await,
+        );
+
+        let hook = HookRuntime {
+            socket_path: base.join("agent-events.sock"),
+            auth_token: None,
+            spool_dir: None,
+            settings_paths: HashMap::from([("wf".to_string(), base.join("orchestrator-wf.json"))]),
+            block_retry_limit: 3,
+        };
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {}
+profile = "design"
+agent = "mock_agent"
+on_success = { set_status = "done" }
+on_failure = { set_status = "failed" }
+"#,
+        )
+        .unwrap();
+        let mut settings = engine_settings(Workflow::from_configs(&cfg.workflows), Some(hook));
+        settings.prompts = orchestrator_core::prompts::PromptSet::from_config(&cfg);
+        settings.repos = vec![RepoSettings {
+            name: "clone".to_string(),
+            path: repo.clone(),
+            summary: None,
+            worktree_location: None,
+            tool: tool_pin.clone(),
+        }];
+        settings.location_template = "{repo}/../wt/{worktree_name}".to_string();
+
+        let mut engine = Engine::new(
+            StateDb::open(&db_path).unwrap(),
+            settings,
+            plugins,
+            SystemGitRunner,
+            no_llm(),
+        )
+        .await;
+
+        let dispatch_probe = dispatch_log.clone();
+        run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
+        engine.shutdown(GRACE).await;
+
+        let dispatches = read_log(&dispatch_log);
+        let params = &dispatches
+            .iter()
+            .find(|d| d["method"] == "task/dispatch")
+            .expect("dispatch recorded")["params"];
+        // Both tools inject invisibly, so the self-report rides the env.
+        let ctx = params["tool_launch"]["env"]["TOTSUKA_PROMPT_CONTEXT"]
+            .as_str()
+            .expect("prompt context rides the launch env");
+        assert!(
+            ctx.contains(expect),
+            "tool {tool_pin:?} must be taught its own asking protocol: {ctx}"
+        );
+        assert!(
+            !ctx.contains(reject),
+            "tool {tool_pin:?} must not be taught the other tool's protocol: {ctx}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 /// The `[[workflows]].initial_prompt` used by the #415 tests below.
