@@ -57,7 +57,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             // health check, not an anomaly. Warning about it puts a line in a
             // *running* orchestrator's log every time someone runs `doctor`,
             // which reads as a fault and has already cost two people an
-            // investigation already (live acceptance run for #481).
+            // investigation (live acceptance run for #481).
             if sig.job_id.is_doctor_probe() {
                 tracing::debug!("hook receiver answered `totsuka doctor`'s liveness probe");
                 return Ok(());
