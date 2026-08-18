@@ -248,6 +248,115 @@ fn manual_clock() -> Arc<ManualClock> {
     Arc::new(ManualClock::new(t0))
 }
 
+/// A `tracing` writer that keeps everything in memory, so a test can assert on
+/// what was logged — which is the whole promise here: the probe must not be
+/// reported as an anomaly. Asserting only "nothing changed" would pass with the
+/// fix reverted, because the unknown-task path changes nothing either.
+#[derive(Clone, Default)]
+struct CapturedLogs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl CapturedLogs {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+}
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLogs {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+#[tokio::test]
+async fn the_doctor_liveness_probe_is_not_logged_as_an_anomaly() {
+    // `totsuka doctor` proves the hook receiver is alive by POSTing a real
+    // signal whose job id names no task on purpose (`JobId::DOCTOR_PROBE`). It
+    // takes the unknown-task path — no state change, nothing persisted — but a
+    // routine health check must not warn: running `doctor` against a live
+    // `totsuka run` would put a line in that run's log every time, which reads
+    // as a fault (it cost two people an investigation during the live
+    // acceptance run for #481).
+    //
+    // The control in the same test is a genuinely unknown job id, which must
+    // still warn.
+    let base = scratch("hook_doctor_probe");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let logs = CapturedLogs::default();
+    let guard = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish(),
+    );
+
+    let probe = AgentSignal {
+        job_id: JobId::DOCTOR_PROBE,
+        ..stop(id, row, "p1", StopStatus::Completed, Some("ignored"))
+    };
+    engine.on_signal(probe).await.unwrap();
+    assert_eq!(
+        logs.text(),
+        "",
+        "the probe is routine: nothing at WARN or above"
+    );
+
+    let stale = AgentSignal {
+        job_id: JobId::new(999_999, 1),
+        ..stop(id, row, "p2", StopStatus::Completed, Some("ignored"))
+    };
+    engine.on_signal(stale).await.unwrap();
+    assert!(
+        logs.text().contains("hook signal for unknown task"),
+        "a job id that is not the probe still warns: {:?}",
+        logs.text()
+    );
+    drop(guard);
+
+    let task = engine.db().get_task(id).unwrap().unwrap();
+    assert_eq!(
+        task.state,
+        TaskState::Running,
+        "neither signal touched any task's state"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The wire value both sides depend on. `doctor` sends it and the receiver
+/// recognises it; pinning the string keeps the two from drifting apart into a
+/// warning nobody can explain.
+#[test]
+fn the_doctor_probe_job_id_is_job_0_0() {
+    assert_eq!(JobId::DOCTOR_PROBE.to_string(), "job-0-0");
+    assert!("job-0-0".parse::<JobId>().unwrap().is_doctor_probe());
+    assert!(!JobId::new(1, 0).is_doctor_probe());
+    assert!(!JobId::new(0, 1).is_doctor_probe());
+}
+
 #[tokio::test]
 async fn completed_llm_publishes_to_done() {
     let base = scratch("hook_llm_done");

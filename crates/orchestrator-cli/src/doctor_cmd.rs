@@ -1478,7 +1478,10 @@ fn self_post(socket_path: &Path, token: Option<&str>) -> io::Result<u16> {
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     stream.set_write_timeout(Some(Duration::from_secs(3)))?;
 
-    let body = r#"{"job_id":"job-0-0","doctor_probe":true}"#;
+    let body = format!(
+        r#"{{"job_id":"{probe}","doctor_probe":true}}"#,
+        probe = orchestrator_core::domain::signal::JobId::DOCTOR_PROBE
+    );
     let auth = token
         .map(|t| format!("Authorization: Bearer {t}\r\n"))
         .unwrap_or_default();

@@ -52,6 +52,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // can never corrupt state.
         let task_id = sig.job_id.task_id;
         let Some(record) = self.db.get_task(task_id)? else {
+            // `doctor`'s liveness probe takes the same path — it is a real POST
+            // with a job id that names no task on purpose — but it is a routine
+            // health check, not an anomaly. Warning about it puts a line in a
+            // *running* orchestrator's log every time someone runs `doctor`,
+            // which reads as a fault and has already cost two people an
+            // investigation already (live acceptance run for #481).
+            if sig.job_id.is_doctor_probe() {
+                tracing::debug!("hook receiver answered `totsuka doctor`'s liveness probe");
+                return Ok(());
+            }
             tracing::warn!(job_id = %sig.job_id, "hook signal for unknown task → warn-logged only, not persisted (E-09)");
             return Ok(());
         };
