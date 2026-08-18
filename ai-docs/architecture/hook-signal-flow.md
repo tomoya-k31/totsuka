@@ -54,7 +54,7 @@ sequenceDiagram
         EN->>EN: finalize_success（マーカー除去済み last_assistant_message を成果物へ）
         EN->>HE: 出力ポリシー（source=result/publish / none）
         HE->>TS: result/publish（source の場合 → 本人名義スレッド返信の下書き・承認フロー）
-        EN->>HE: task/cancel（冪等 → Done pane 自動クローズ, F-107）
+        Note over EN,HE: pane は掃除ポリシー次第（`Remove` のときだけ session/release、既定 `manual` は保持）— ADR-0010 / F-107
         EN->>NO: notify(done)
     else verification = "human"
         EN->>DB: SelfReportComplete → Verifying（スロット保持, F-45）
