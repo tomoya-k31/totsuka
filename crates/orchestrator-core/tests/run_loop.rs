@@ -2083,9 +2083,17 @@ async fn a_refused_release_stops_the_dispatch_instead_of_colliding() {
         TaskState::Failed,
         "a live pane the plugin refuses to close stops the re-dispatch"
     );
+    let reason = reasons
+        .iter()
+        .find(|r| r.contains("still open"))
+        .unwrap_or_else(|| panic!("the failure names the pane as the cause: {reasons:?}"));
+    // The reason is read by a human, so it has to survive rustfmt wrapping the
+    // literal. A wrapped string that lost its line continuations keeps the
+    // source indentation *inside* the message, and `contains` alone never
+    // notices — this assertion is here because that shipped once.
     assert!(
-        reasons.iter().any(|r| r.contains("still open")),
-        "the failure names the pane as the cause: {reasons:?}"
+        !reason.contains("  "),
+        "the reason carries source indentation: {reason:?}"
     );
     let dispatches = calls
         .iter()

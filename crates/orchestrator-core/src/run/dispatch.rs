@@ -658,8 +658,14 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     return self
                         .fail_dispatch(
                             &record,
-                            "the previous dispatch's pane is still open and the agent plugin                              refused to close it (its identity guard says that pane id now                              names a different pane) → close it by hand (`totsuka doctor`                              lists orphan panes) and `totsuka task retry` this task"
-                                .to_string(),
+                            concat!(
+                                "the previous dispatch's pane is still open and the ",
+                                "agent plugin refused to close it (its identity guard ",
+                                "says that pane id now names a different pane) → close ",
+                                "it by hand (`totsuka doctor` lists orphan panes) and ",
+                                "`totsuka task retry` this task"
+                            )
+                            .to_string(),
                         )
                         .await;
                 }
