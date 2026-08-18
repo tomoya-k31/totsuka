@@ -1581,6 +1581,116 @@ async fn dispatch_with_opencode_tool_routes_context_visibly() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// #487: the confirm self-report has a question-tool variant, selected at
+/// dispatch time by profile × tool. A `design` dispatch to claude is told to
+/// ask through `AskUserQuestion`; the same workflow dispatched to codex —
+/// which has no question tool outside plan mode — keeps the marker protocol
+/// with numbered choices. Driven through the real dispatch path because the
+/// selection lives in `wire_hooks`, not in `Prompts::resolve_for`.
+#[tokio::test]
+async fn a_design_dispatch_selects_the_question_variant_per_tool() {
+    for (tool_pin, expect, reject) in [
+        (
+            None, // default_tool = claude
+            "ask the human to confirm through the AskUserQuestion tool",
+            "1. Approve completion / 2. Request changes",
+        ),
+        (
+            Some("codex".to_string()),
+            "1. Approve completion / 2. Request changes",
+            "AskUserQuestion",
+        ),
+    ] {
+        let base = scratch("question_variant_dispatch");
+        let repo = setup_repo(&base);
+        let dispatch_log = base.join("dispatch.ndjson");
+        let db_path = base.join("state.db");
+
+        let mut plugins = PluginSet::default();
+        plugins.sources.insert(
+            "mock_src".to_string(),
+            launch(
+                "task_source",
+                "mock_src",
+                json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+            )
+            .await,
+        );
+        plugins.agents.insert(
+            "mock_agent".to_string(),
+            launch(
+                "agent_ide",
+                "mock_agent",
+                json!({ "resume_session": true, "stream_states": ["running"], "dispatch_log": dispatch_log }),
+            )
+            .await,
+        );
+
+        let hook = HookRuntime {
+            socket_path: base.join("agent-events.sock"),
+            auth_token: None,
+            spool_dir: None,
+            settings_paths: HashMap::from([("wf".to_string(), base.join("orchestrator-wf.json"))]),
+            block_retry_limit: 3,
+        };
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {}
+profile = "design"
+agent = "mock_agent"
+on_success = { set_status = "done" }
+on_failure = { set_status = "failed" }
+"#,
+        )
+        .unwrap();
+        let mut settings = engine_settings(Workflow::from_configs(&cfg.workflows), Some(hook));
+        settings.prompts = orchestrator_core::prompts::PromptSet::from_config(&cfg);
+        settings.repos = vec![RepoSettings {
+            name: "clone".to_string(),
+            path: repo.clone(),
+            summary: None,
+            worktree_location: None,
+            tool: tool_pin.clone(),
+        }];
+        settings.location_template = "{repo}/../wt/{worktree_name}".to_string();
+
+        let mut engine = Engine::new(
+            StateDb::open(&db_path).unwrap(),
+            settings,
+            plugins,
+            SystemGitRunner,
+            no_llm(),
+        )
+        .await;
+
+        let dispatch_probe = dispatch_log.clone();
+        run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
+        engine.shutdown(GRACE).await;
+
+        let dispatches = read_log(&dispatch_log);
+        let params = &dispatches
+            .iter()
+            .find(|d| d["method"] == "task/dispatch")
+            .expect("dispatch recorded")["params"];
+        // Both tools inject invisibly, so the self-report rides the env.
+        let ctx = params["tool_launch"]["env"]["TOTSUKA_PROMPT_CONTEXT"]
+            .as_str()
+            .expect("prompt context rides the launch env");
+        assert!(
+            ctx.contains(expect),
+            "tool {tool_pin:?} must be taught its own asking protocol: {ctx}"
+        );
+        assert!(
+            !ctx.contains(reject),
+            "tool {tool_pin:?} must not be taught the other tool's protocol: {ctx}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
 /// The `[[workflows]].initial_prompt` used by the #415 tests below.
 const INITIAL_PROMPT: &str = "/grill-me スキルを使用して、詳細設計を行ってください";
 

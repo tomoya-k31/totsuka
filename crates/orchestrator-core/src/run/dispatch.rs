@@ -378,7 +378,21 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     prompt_context.push_str(prompts.branch_convention());
                     prompt_context.push_str("\n\n");
                 }
-                prompt_context.push_str(prompts.marker_self_report());
+                // The confirm-with-a-human self-report has a question-tool
+                // variant (#487): on a tool with a native single-select
+                // question tool (claude `AskUserQuestion`, opencode
+                // `question`) the agent asks through that UI instead of
+                // parking the turn with NEEDS_INPUT. Selected here, not in
+                // `resolve_for` — tool resolution has a repository dimension,
+                // so the same workflow can dispatch to different tools.
+                match tool_profile
+                    .capabilities()
+                    .interactive_question
+                    .and_then(|qt| prompts.marker_self_report_for_question_tool(qt))
+                {
+                    Some(text) => prompt_context.push_str(&text),
+                    None => prompt_context.push_str(prompts.marker_self_report()),
+                }
                 // Context routing per tool capability (#196 Phase 3): a tool
                 // without invisible injection (opencode — no UserPromptSubmit
                 // additionalContext channel) gets the same instructions +
