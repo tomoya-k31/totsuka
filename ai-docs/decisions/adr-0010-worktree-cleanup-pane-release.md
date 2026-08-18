@@ -46,7 +46,7 @@ protocol 0.2.0 の Slack 実機検証で、完了したタスクの herdr pane �
 
 ## 2. protocol 0.2.1 で `session/release` を追加し、capability は `pane_control` を再利用する
 
-`SessionReleaseParams { session_id, expect_cwd?, expect_label? }` → `SessionReleaseResult { released }`（`false` は「既に消えている / 同一性不一致で見送った」でいずれも正常）。additive change のため 0.2.0 → **0.2.1**。全同梱プラグインの manifest は上限 `<0.3` のため manifest 変更なしで受理される。
+`SessionReleaseParams { session_id, expect_cwd?, expect_label? }` → `SessionReleaseResult { released }`（`false` は「既に消えている / 同一性不一致で見送った」でいずれも正常）。**2026-08-19 追記（#485、protocol 0.4.2）**: この `false` の 2 つの意味は、**新しい pane をこれから開く呼び出し側にとっては正反対**だった — 「既に消えている」は何もしなくてよく、「同一性不一致」は pane が生きているので次の dispatch が衝突する。`not_released: Option<NotReleased>`（`gone` / `refused` / catch-all の `unknown`）を追加し、`refused` のときだけ dispatch を fail-fast させる。欠落（0.4.2 以前のプラグイン）と `unknown` は従来どおり素通しする。additive change のため 0.2.0 → **0.2.1**。全同梱プラグインの manifest は上限 `<0.3` のため manifest 変更なしで受理される。
 
 capability を新設せず **`pane_control` に相乗り**する（[ADR-0005](/decisions/adr-0005-click-to-focus.md) の `session/focus` と同じ判断）。トレードオフ: 専用 flag（例 `pane_release`）なら「focus はできるが release はできない」プラグインを表現できるが、focus も release も「この pane を制御する」ことに変わりなく、release に対応するプラグインはどのみち実装更新が要る。宣言しないプラグイン（orca / mock 既定）は単に呼ばれず、orchestrator は pane 解放をスキップして worktree だけ削除する。
 
