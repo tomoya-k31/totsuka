@@ -452,6 +452,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             (agent_name.to_string(), dispatched.session_id.clone()),
             record.id,
         );
+        // This task has a *new* pane, so any "already released" memo from the
+        // previous dispatch is stale — kept, it would suppress the release of
+        // the pane that was just created (#481).
+        self.released_panes.remove(&record.id);
         self.stats.dispatched += 1;
         tracing::info!(
             task_id = record.id,
@@ -591,10 +595,39 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             )?;
             self.sessions
                 .insert((plugin.clone(), session_id), record.id);
+            // Re-attached, so the pane is live again: a release memo from the
+            // last time this task finished would suppress its next release.
+            self.released_panes.remove(&record.id);
             self.stats.dispatched += 1;
             self.apply_agent_state(record.id, &plugin, state, None)
                 .await?;
             return Ok(());
+        }
+
+        // A previous dispatch's pane may still be alive here (#481). `totsuka
+        // task cancel` only writes the DB — the CLI has no plugin host, so it
+        // cannot close anything — and the sweep that would release the pane
+        // runs on `worktree_sweep_interval`. Retrying inside that window
+        // dispatches on top of a live pane, and an agent plugin that derives
+        // its agent name from the task id then collides with itself: herdr
+        // answers `agent_name_taken`, the dispatch fails in under a second,
+        // and no later sweep un-fails it. The same collision is reachable
+        // without a retry — a follow-up message (#242) on a `done` task whose
+        // pane outlived its worktree removal.
+        //
+        // So the release is owed by the dispatcher, not by a sweep that may or
+        // may not have run. `release` rather than `task/cancel`: it carries the
+        // `expect_cwd` identity guard, and herdr pane ids are position-based —
+        // an unguarded close can take down a pane the id no longer names. It is
+        // idempotent (an absent pane answers `released: false`), so the common
+        // case where the sweep got there first costs one RPC.
+        //
+        // Only for a task that has been dispatched before, and only *before*
+        // `wire_hooks` reserves a fresh session row: after that,
+        // `latest_session` is the new empty row and the live pane is
+        // unreachable.
+        if latest.is_some() {
+            self.release_pane(&record).await;
         }
 
         let Some(worktree_path) = self.acquire_worktree(&record, &repo).await? else {
