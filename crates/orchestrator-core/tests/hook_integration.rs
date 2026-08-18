@@ -224,6 +224,22 @@ fn stop(
     }
 }
 
+/// A `QuestionPending` signal (#487): the agent opened an interactive question
+/// dialog. `prompt_id` is the per-question idempotency key (claude: the
+/// PreToolUse `tool_use_id`; opencode: the plugin's `callID`).
+fn question(task_id: i64, row: i64, prompt_id: &str, msg: &str) -> AgentSignal {
+    AgentSignal {
+        source: SignalSource::AgentHook,
+        job_id: JobId::new(task_id, row),
+        tool_session_id: "cc-1".into(),
+        prompt_id: prompt_id.into(),
+        event: SignalEvent::QuestionPending {
+            message: Some(msg.to_string()),
+        },
+        payload: json!({ "hook_event_name": "QuestionPending" }),
+    }
+}
+
 fn heartbeat(task_id: i64, row: i64, prompt_id: &str) -> AgentSignal {
     AgentSignal {
         source: SignalSource::AgentHook,
@@ -837,6 +853,122 @@ async fn needs_input_parks_in_waiting_input() {
             .iter()
             .any(|n| n["params"]["event"] == "waiting_input"),
         "waiting_input notification delivered: {notes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #487: a `QuestionPending` parks exactly like `Stop{NeedsInput}` — the turn
+/// has not ended (the dialog is open), so this signal is the only thing that
+/// can park the task (ADR-0038 D6). The question text reaches the operator as
+/// the `waiting_input` notification payload, and a later COMPLETED — the human
+/// answered "approve" in the dialog and the agent finished its turn — still
+/// publishes from `WaitingInput`.
+#[tokio::test]
+async fn question_pending_parks_and_a_later_completed_still_publishes() {
+    let base = scratch("hook_question_park");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine
+        .on_signal(question(id, row, "toolu_01", "Approve completion?"))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::WaitingInput,
+        "an open question dialog parks the task"
+    );
+
+    // The human answered and the agent ended its turn with COMPLETED: the
+    // park must not strand the task.
+    engine
+        .on_signal(stop(
+            id,
+            row,
+            "p2",
+            StopStatus::Completed,
+            Some("approved <<STATUS:COMPLETED>>"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Done,
+        "COMPLETED after the question park still publishes"
+    );
+
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    assert!(
+        notes.iter().any(|n| n["params"]["event"] == "waiting_input"
+            && n["params"]["body"]
+                .as_str()
+                .is_some_and(|m| m.contains("Approve completion?"))),
+        "the question text is what the operator reads: {notes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #487: while already parked, a *new* question (distinct `prompt_id`)
+/// re-notifies without a state change — unlike a second NEEDS_INPUT, which is
+/// a silent no-op (the known ADR-0043 gap). A literal redelivery of the same
+/// question (same `prompt_id`) is dropped by the idempotency key and must not
+/// re-notify.
+#[tokio::test]
+async fn a_second_question_renotifies_and_a_redelivery_does_not() {
+    let base = scratch("hook_question_renotify");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    engine
+        .on_signal(question(id, row, "toolu_01", "first?"))
+        .await
+        .unwrap();
+    // A curl retry / spool re-send of the SAME question: dropped (D-05).
+    engine
+        .on_signal(question(id, row, "toolu_01", "first?"))
+        .await
+        .unwrap();
+    // A NEW question while still parked: notify again, state unchanged.
+    engine
+        .on_signal(question(id, row, "toolu_02", "second?"))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::WaitingInput
+    );
+
+    engine.shutdown(GRACE).await;
+    let notes = read_log(&notify_log);
+    let waiting: Vec<_> = notes
+        .iter()
+        .filter(|n| n["params"]["event"] == "waiting_input")
+        .collect();
+    assert_eq!(
+        waiting.len(),
+        2,
+        "one notification per distinct question, none for the redelivery: {notes:?}"
     );
     let _ = std::fs::remove_dir_all(&base);
 }
