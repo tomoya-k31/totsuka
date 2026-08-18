@@ -390,10 +390,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Release (close) a finished task's pane via `session/release` (#210).
     /// Best-effort: every failure only logs — a pane that could not be
     /// released must never block the worktree removal (an orphaned pane is
-    /// `doctor`'s job, #211). Marks the task released once the RPC answered
-    /// (whatever `released` says — `false` means "already gone or refused",
-    /// both final) or when release is impossible for this run; a transport
-    /// error leaves it unmarked so the next sweep retries.
+    /// `doctor`'s job, #211). Records **the session row** as released once the
+    /// RPC answered (whatever `released` says — `false` means "already gone or
+    /// refused", both final) or when release is impossible for this run; a
+    /// transport error leaves it unrecorded so the next sweep retries.
+    ///
+    /// `mode` decides whether that record may short-circuit the call — see
+    /// [`ReleaseMode`].
     pub(super) async fn release_pane(
         &mut self,
         record: &TaskRecord,
