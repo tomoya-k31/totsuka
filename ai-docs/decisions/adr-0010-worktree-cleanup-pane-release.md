@@ -72,7 +72,8 @@ sweep は `Retained` / `DirtySkipped` の worktree 1件につき `git status --p
 # Consequences
 
 - 正常完了時、削除すると決まった worktree の pane が閉じられ、pane の寿命が worktree の掃除ポリシーに連動する。`DirtySkipped` / `Retained` / `manual` では pane が保持され、人間の導線が残る。
-- Cancelled タスクの sweep では `cancel()` が既に pane を閉じているため release は `released: false` を返す（無害。pane 消失時に何も閉じず `released: false` を返す挙動は herdr プラグインの fake transport テストで固定）。
+- ~~Cancelled タスクの sweep では `cancel()` が既に pane を閉じているため release は `released: false` を返す~~ **この前提は誤りだった（[#481](https://github.com/tomoya-k31/totsuka/issues/481)、2026-08-18 訂正）**。`totsuka task cancel` は CLI プロセスでプラグインホストを持たないので、`cancel()`（`task/cancel` RPC）は**呼ばれない**。cancel されたタスクの pane を実際に閉じるのは本 ADR の `release_pane` であり、掃引がそこへ到達するまで pane は生きている。その窓の中で `task retry` すると生きた pane の上へ dispatch し、agent 名が衝突して retry が即 failed になっていた。修正は `dispatch_one` が前回セッションの pane を dispatch 前に `session/release` することで、同一性ガード（`expect_cwd`）も冪等性も本 ADR の設計をそのまま使う。なお pane 消失時に何も閉じず `released: false` を返す挙動自体は正しく、herdr プラグインの fake transport テストで固定されている。
+- **決定 1 の「`Retain` / `Dirty` では pane を保持する」には例外が 1 つある（#481、2026-08-18）**: そのタスクを**もう一度 dispatch すると決めた**とき、`dispatch_one` は保持中の pane も `session/release` で閉じる。「レビュー面として残す」という判断はタスクが終わったまま放置される局面のもので、同じ worktree に新しいエージェントを入れると決めた瞬間に前提が変わる — 残せば古い pane は同じ作業ディレクトリを指す幽霊になり、しかも task id から agent 名を導くプラグイン（herdr）では新しい dispatch 自体が名前衝突で拒否される。既定 `manual` の implement タスクはまさにこの状態（`Retain` のまま pane が生き続ける）なので、例外を置かないと既定構成で retry が直らない。
 - orca は `pane_control` 非宣言のため release は呼ばれず、従来どおり worktree だけ削除される（変更なし）。
 - pane を閉じても Claude セッションは消えないため、`claude --resume` による[会話継続](/glossary/conversation-continuity.md)は影響を受けない。
 - release の transport 失敗や degrade 判定で pane が残るケースは残存する — 孤児 pane の検出・解放は #211（doctor）が `session/release` を再利用して担う。

@@ -466,7 +466,7 @@ fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
             | TaskState::Publishing
     ) {
         println!(
-            "note: its agent session is reconciled on the next `totsuka run`; the worktree is kept per the cleanup policy"
+            "note: the worktree is kept per the cleanup policy; the pane is not closed here — `totsuka doctor` lists it"
         );
     }
     Ok(())
