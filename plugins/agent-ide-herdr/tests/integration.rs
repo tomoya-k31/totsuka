@@ -3028,6 +3028,40 @@ async fn release_reports_refused_when_the_task_still_has_a_pane_elsewhere() {
 }
 
 #[tokio::test]
+async fn release_reports_refused_when_the_agent_wandered_out_of_its_worktree() {
+    // The most realistic refusal (#485): the agent `cd`'d out of its worktree,
+    // so the pane's cwd matches nothing — not the identity guard, and not the
+    // worktree-based ownership check either. Its name registration collides
+    // all the same. The pane reporting the *same agent conversation* as the
+    // recorded session id is what identifies it, wherever its shell went.
+    let (socket, _requests) = FakeHerdr {
+        pane_cwd: Some("/home/elsewhere"),
+        list_panes: vec![json!({
+            "pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "working",
+            "cwd": "/home/elsewhere",
+            "agent_session": { "value": "sess-uuid" }
+        })],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d
+        .call(
+            "session/release",
+            json!({ "session_id": "w1:p1|sess-uuid", "expect_cwd": "/wt/agent-1" }),
+        )
+        .await;
+
+    assert_eq!(resp["result"]["released"], false);
+    assert_eq!(
+        resp["result"]["not_released"], "refused",
+        "a live pane on this conversation is the task's pane, wherever it cd'd to: {resp}"
+    );
+}
+
+#[tokio::test]
 async fn release_reports_gone_when_the_pane_id_resolves_to_nothing() {
     // The ordinary case: cancel or the agent exiting already closed it, and no
     // pane of ours is left on the worktree.

@@ -909,15 +909,54 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// two positions over. The caller's real question is the second one: it is
     /// about to open a new pane for this task, and an existing one collides.
     ///
-    /// The worktree path answers it. It is unique per task, this plugin can
-    /// enumerate the panes it owns, and both facts are already load-bearing
-    /// elsewhere (`expect_cwd` is the identity guard; `session/list` is how
-    /// `doctor` finds orphans). Without an `expect_cwd` there is nothing to
-    /// match on, and a failed enumeration must not be turned into a claim in
-    /// either direction — both degrade to [`NotReleased::Gone`], which is what
-    /// a pre-0.4.2 plugin effectively said and what the caller treats as
-    /// "carry on".
-    async fn classify_unreleased(&self, params: &SessionReleaseParams) -> NotReleased {
+    /// Two pieces of evidence answer it, tried strongest-first:
+    ///
+    /// 1. **The agent conversation id** ([`SessionHandle::agent_session_id`]).
+    ///    A live pane reporting the same conversation *is* this task's pane,
+    ///    wherever its shell has `cd`'d to — and an agent that wandered out of
+    ///    its worktree is exactly the case the cwd check below cannot see,
+    ///    while its name registration collides all the same.
+    /// 2. **The worktree path** (`expect_cwd`). Unique per task, and this
+    ///    plugin can enumerate the panes it owns — both facts already
+    ///    load-bearing elsewhere (`expect_cwd` is the identity guard;
+    ///    `session/list` is how `doctor` finds orphans). This catches a pane
+    ///    whose session report never landed, which the id check cannot.
+    ///
+    /// With no evidence either way — no conversation id recorded, no
+    /// `expect_cwd`, or an enumeration that failed — the answer degrades to
+    /// [`NotReleased::Gone`]: it is what a pre-0.4.2 plugin effectively said,
+    /// and the caller treats it as "carry on". A guess must not be turned into
+    /// a claim in either direction.
+    async fn classify_unreleased(
+        &self,
+        handle: &SessionHandle,
+        params: &SessionReleaseParams,
+    ) -> NotReleased {
+        if !handle.agent_session_id.is_empty() {
+            match self.client.call("pane.list", json!({})).await {
+                Ok(panes) => {
+                    let alive = panes
+                        .get("panes")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .any(|pane| {
+                            agent_session_id(pane).as_deref() == Some(&handle.agent_session_id)
+                        });
+                    if alive {
+                        return NotReleased::Refused;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "could not enumerate panes to classify an unreleased session; \
+                         reporting it as gone"
+                    );
+                    return NotReleased::Gone;
+                }
+            }
+        }
         let Some(cwd) = params.expect_cwd.as_deref() else {
             return NotReleased::Gone;
         };
@@ -966,7 +1005,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             Err(e) if e.is_missing() => {
                 return Ok(SessionReleaseResult {
                     released: false,
-                    not_released: Some(self.classify_unreleased(params).await),
+                    not_released: Some(self.classify_unreleased(&handle, params).await),
                 });
             }
             Err(e) => return Err(e),
@@ -1036,7 +1075,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 );
                 return Ok(SessionReleaseResult {
                     released: false,
-                    not_released: Some(self.classify_unreleased(params).await),
+                    not_released: Some(self.classify_unreleased(&handle, params).await),
                 });
             }
         }

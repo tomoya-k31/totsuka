@@ -2109,10 +2109,15 @@ fn check_orphan_panes(
                 // changed identity" is then the honest answer rather than a
                 // guess.
                 Ok(r) => match r.not_released {
-                    Some(NotReleased::Gone) => println!("not released (it was already gone)"),
+                    // `Gone` also covers "could not tell" (this path sends no
+                    // `expect_cwd`, so the plugin often has nothing to go on) —
+                    // phrase it as the plugin's report, not as a fact.
+                    Some(NotReleased::Gone) => {
+                        println!("not released (the plugin found no pane left for this task)")
+                    }
                     Some(NotReleased::Refused) => println!(
-                        "not released: that pane id now names a different pane, so the plugin \
-                         refused to close it — check it by hand before releasing"
+                        "not released: the plugin reports a live pane still belonging to \
+                         this task — check it by hand before closing anything"
                     ),
                     Some(NotReleased::Unknown) | None => {
                         println!("not released (already gone, or the pane changed identity)")
