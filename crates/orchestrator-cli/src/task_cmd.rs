@@ -466,7 +466,7 @@ fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
             | TaskState::Publishing
     ) {
         println!(
-            "note: its pane is closed by the running `totsuka run` when the cleanup sweep reaches it (or on the next start); the worktree is kept per the cleanup policy"
+            "note: the worktree is kept per the cleanup policy; the pane is not closed here — `totsuka doctor` lists it"
         );
     }
     Ok(())

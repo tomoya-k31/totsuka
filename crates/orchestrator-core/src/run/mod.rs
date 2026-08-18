@@ -76,6 +76,7 @@ use crate::worktree::{
 mod dispatch;
 mod events;
 mod finalize;
+use finalize::PaneRelease;
 mod ingest;
 mod report;
 mod settings;

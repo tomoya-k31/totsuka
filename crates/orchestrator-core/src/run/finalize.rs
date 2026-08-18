@@ -377,20 +377,20 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// (whatever `released` says — `false` means "already gone or refused",
     /// both final) or when release is impossible for this run; a transport
     /// error leaves it unmarked so the next sweep retries.
-    pub(super) async fn release_pane(&mut self, record: &TaskRecord) {
+    pub(super) async fn release_pane(&mut self, record: &TaskRecord) -> PaneRelease {
         let session = match self.db.latest_session(record.id) {
             Ok(Some(session)) => session,
             Ok(None) => {
                 // Never dispatched → no pane to release.
                 self.released_panes.insert(record.id);
-                return;
+                return PaneRelease::NotApplicable;
             }
             Err(e) => {
                 tracing::warn!(
                     task_id = record.id,
                     "cannot resolve session for pane release: {e}"
                 );
-                return;
+                return PaneRelease::Failed;
             }
         };
         let Some(agent) = self.plugins.agents.get(&session.plugin) else {
@@ -402,12 +402,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 "pane release skipped: agent plugin not launched"
             );
             self.released_panes.insert(record.id);
-            return;
+            return PaneRelease::NotApplicable;
         };
         if !agent.capabilities().pane_control {
             // No pane to control (e.g. orca): nothing to release, ever.
             self.released_panes.insert(record.id);
-            return;
+            return PaneRelease::NotApplicable;
         }
         let params = SessionReleaseParams {
             session_id: session.session_id.clone(),
@@ -425,16 +425,41 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 self.released_panes.insert(record.id);
                 if result.released {
                     tracing::info!(task_id = record.id, "pane released");
+                    PaneRelease::Closed
                 } else {
                     tracing::debug!(
                         task_id = record.id,
                         "pane not released (already gone or identity mismatch)"
                     );
+                    PaneRelease::Untouched
                 }
             }
             Err(e) => {
                 tracing::warn!(task_id = record.id, "session/release failed: {e}");
+                PaneRelease::Failed
             }
         }
     }
+}
+
+/// What a `session/release` attempt did, for callers that react to the outcome
+/// rather than fire and forget (#481).
+///
+/// [`Untouched`](Self::Untouched) deliberately does **not** distinguish "the
+/// pane was already gone" from "the identity guard refused to close it": the
+/// RPC answers a bare `released: bool` for both. The plugin logs which one it
+/// was — herdr warns `release refused: the pane id names a different pane now`
+/// — and plugin logs are relayed, so the distinction is reachable without
+/// widening the protocol for a case never yet observed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PaneRelease {
+    /// The plugin closed the pane.
+    Closed,
+    /// The plugin answered and closed nothing.
+    Untouched,
+    /// There was no pane to close: never dispatched, the owning plugin is not
+    /// launched this run, or it does not control panes.
+    NotApplicable,
+    /// The attempt itself failed (session lookup or RPC).
+    Failed,
 }

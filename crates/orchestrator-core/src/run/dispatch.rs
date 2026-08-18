@@ -627,7 +627,25 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // `latest_session` is the new empty row and the live pane is
         // unreachable.
         if latest.is_some() {
-            self.release_pane(&record).await;
+            // Logged here rather than left to `release_pane`'s own lines: this
+            // is the one caller whose failure has a *user-visible* consequence
+            // (the dispatch below may be refused), and at `warn` it is the only
+            // hint the operator gets. `Untouched` stays quiet — it is the
+            // ordinary case where the sweep already closed the pane, and the
+            // plugin warns on its own when it was an identity refusal instead.
+            match self.release_pane(&record).await {
+                PaneRelease::Closed => tracing::info!(
+                    task_id = record.id,
+                    "closed the previous dispatch's pane before re-dispatching"
+                ),
+                PaneRelease::Failed => tracing::warn!(
+                    task_id = record.id,
+                    "could not confirm the previous dispatch's pane is closed; if the agent \
+                     plugin now refuses this dispatch because the session already exists, \
+                     that pane is why"
+                ),
+                PaneRelease::Untouched | PaneRelease::NotApplicable => {}
+            }
         }
 
         let Some(worktree_path) = self.acquire_worktree(&record, &repo).await? else {

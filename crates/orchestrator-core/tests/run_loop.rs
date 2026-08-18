@@ -1823,6 +1823,149 @@ async fn release_is_sent_once_even_when_removal_keeps_failing() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+#[tokio::test]
+async fn a_re_dispatch_makes_the_task_releasable_again() {
+    // #481: `released_panes` is a per-task memo, so a dispatch that opens a
+    // *new* pane has to clear it — otherwise the memo left by the previous
+    // pane suppresses the release of the new one and it leaks for good, which
+    // is the exact symptom #210 was filed for.
+    //
+    // The memo only survives a cleanup when the removal **fails**: the success
+    // arm drops it for bounding. So the worktree is locked, which makes
+    // `git worktree remove` fail deterministically (same device as
+    // `release_is_sent_once_even_when_removal_keeps_failing`).
+    let base = scratch("re_dispatch_releasable");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log1 = base.join("dispatch1.ndjson");
+    let dispatch_log2 = base.join("dispatch2.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({
+            "stream_states": ["running", "done"],
+            "pane_control": true,
+            "dispatch_log": dispatch_log1,
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let clock = manual_clock();
+    let mut settings = engine_settings(&repo);
+    settings.cleanup_implement = CleanupPolicy::RetentionDays(7);
+    let mut engine = Engine::with_clock(
+        StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+        clock.clone(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let worktree = task.worktree_path.clone().unwrap();
+    // Retention elapses and the removal is made to fail, so the sweep releases
+    // the pane and then keeps the memo.
+    clock.advance(time::Duration::days(8));
+    git(&repo, &["worktree", "lock", &worktree]);
+
+    // Second run: the sweep releases (memo set, removal fails), then the task
+    // is retried and dispatched again — which must leave it releasable.
+    let plugins = plugin_set(
+        json!([]),
+        json!({
+            "stream_states": ["running", "done"],
+            "pane_control": true,
+            "dispatch_log": dispatch_log2,
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.cleanup_implement = CleanupPolicy::RetentionDays(7);
+    let mut engine = Engine::with_clock(
+        StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+        clock.clone(),
+    )
+    .await;
+    engine.cycle().await.unwrap();
+    assert_eq!(
+        recorded_releases(&dispatch_log2).len(),
+        1,
+        "the sweep released the first pane and kept the memo (removal is locked)"
+    );
+
+    git(&repo, &["worktree", "unlock", &worktree]);
+    // A follow-up message (#242), not `retry`: `Retry` is not a legal event
+    // from `Done`, and a finished conversation is re-opened by its next
+    // message. Either way the dispatcher takes the fresh-dispatch path,
+    // which is what has to leave the task releasable again.
+    StateDb::open(&db_path)
+        .unwrap()
+        .append_task_message_reopening(
+            &orchestrator_core::adapters::state_db::TaskMessageInsert {
+                task_id: task.id,
+                message_key: "msg-2".to_string(),
+                author: None,
+                body: "and one more thing".to_string(),
+                url: None,
+                payload: "{}".to_string(),
+            },
+            None,
+        )
+        .unwrap();
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .get_task(task.id)
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    // The re-dispatch reset the retention window too, so the second completion
+    // decides `Retain`; advance past it so the sweep reaches the new pane.
+    clock.advance(time::Duration::days(8));
+    engine.cycle().await.unwrap();
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    // Three releases: the sweep's, the dispatcher's pre-dispatch one, and the
+    // one for the pane the re-dispatch created. The third is the assertion —
+    // without the memo reset it never goes out.
+    let releases = recorded_releases(&dispatch_log2);
+    assert_eq!(
+        releases.len(),
+        3,
+        "the pane the re-dispatch created was released too: {releases:?}"
+    );
+    assert!(
+        !PathBuf::from(&worktree).exists(),
+        "the retry's worktree was removed once the lock was gone"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 // ---------------------------------------------------------------------------
 // Read-only violation, caught while the task is still running (#410)
 // ---------------------------------------------------------------------------
