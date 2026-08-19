@@ -304,6 +304,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     return Ok(());
                 };
                 self.install_restarted(&name, kind, launched).await;
+                // It came back, so a task waiting on it should wait rather
+                // than fail. Clearing here (not on the attempt) means the flag
+                // only ever says "down for good" while that is true.
+                self.abandoned_plugins.remove(&name);
                 self.stats.plugin_restarts += 1;
                 self.plugin_events.entry(name.clone()).or_default().1 += 1;
                 tracing::info!(plugin = %name, "plugin restarted");
@@ -423,7 +427,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// task's problem, and attaching it to whichever task happened to be
     /// running would misattribute it. `task_id` and `workflow` are `None` on
     /// purpose.
-    fn escalate_dead_plugin(&self, plugin: &str, reason: &str) {
+    fn escalate_dead_plugin(&mut self, plugin: &str, reason: &str) {
+        // Marked **here**, not at the three call sites, so "we gave up" and
+        // "dispatch knows we gave up" cannot drift apart. Every path that
+        // leaves a plugin down runs through this function (#499).
+        self.abandoned_plugins.insert(plugin.to_string());
         let params = NotifyParams {
             event: NotifierEvent::Escalated,
             task_id: None,

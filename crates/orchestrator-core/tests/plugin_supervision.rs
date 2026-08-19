@@ -93,6 +93,13 @@ output = "none"
 /// Settings with a **zero backoff** — the seam that keeps these tests instant.
 /// Restart *ordering* is what is under test; the sleep is production pacing.
 fn settings(max_attempts: u32) -> EngineSettings {
+    settings_with_backoff(max_attempts, Duration::ZERO)
+}
+
+/// [`settings`] with a real backoff, for the one test that needs the plugin to
+/// still be **down** when a dispatch is attempted. Zero backoff relaunches so
+/// fast that no crash window exists to observe.
+fn settings_with_backoff(max_attempts: u32, first_backoff: Duration) -> EngineSettings {
     EngineSettings {
         workflows: workflows(),
         repos: vec![RepoSettings {
@@ -118,7 +125,7 @@ fn settings(max_attempts: u32) -> EngineSettings {
         plugin_restart: RestartPolicy {
             max_attempts,
             window: Duration::from_secs(300),
-            first_backoff: Duration::ZERO,
+            first_backoff,
         },
         restart_disabled: Default::default(),
         hook: None,
@@ -486,6 +493,80 @@ async fn restart_can_be_disabled_without_losing_detection() {
             .contains("mock_src")
     );
     engine.shutdown(Duration::from_secs(2)).await;
+}
+
+/// #499: a task that arrives while its agent is between instances **waits**
+/// instead of burning its dispatch-retry budget.
+///
+/// The pure-function tests fix the rule; this one fixes that the rule is
+/// wired to a real crash. The agent stays down for the whole run (a long
+/// first backoff), so every dispatch attempt meets a dead plugin — which
+/// before #499 meant `DISPATCH_RETRY_LIMIT` attempts one `SETTLE_TICK` apart
+/// and a terminal `Failed` inside the first backoff second.
+///
+/// Nothing here needs a worktree: refusal happens at the gate, before any
+/// side effect.
+#[tokio::test]
+async fn a_task_queued_during_a_crash_window_is_not_failed() {
+    let dir = test_support::scratch("supervise_crash_window");
+    let counter = dir.join("launches");
+    let db = StateDb::open(&dir.join("state.db")).unwrap();
+
+    let mut plugins = PluginSet::default();
+    install(
+        &mut plugins,
+        "task_source",
+        "mock_src",
+        // Held back so the task arrives **after** the agent has crashed and
+        // the crash has been observed. Submitting immediately races the
+        // detection, and the test would then pass or fail on timing.
+        json!({
+            "submit_delay_ms": 800,
+            "submit_tasks": [{
+                "id": "crash-window-1",
+                "source": "mock_src",
+                "title": "queued while the agent is down",
+            }],
+        }),
+    )
+    .await;
+    // Dies on every launch, so the window never closes during this run.
+    install(
+        &mut plugins,
+        "agent_ide",
+        "mock_agent",
+        json!({ "suicide": { "counter": counter, "times": 99 } }),
+    )
+    .await;
+
+    // A backoff long enough that the agent is still down for every dispatch
+    // attempt in the window below.
+    let mut engine = Engine::new(
+        db,
+        settings_with_backoff(5, Duration::from_secs(30)),
+        plugins,
+        SystemGitRunner,
+        None::<OpenAiRouter>,
+    )
+    .await;
+
+    let summary = run_for(&mut engine, Duration::from_millis(2000)).await;
+
+    assert_eq!(
+        summary.stats.submitted, 1,
+        "the task must have arrived at all: {summary:?}"
+    );
+    // Before #499 this was 1: three dispatch attempts against the dead handle,
+    // one `SETTLE_TICK` apart, all inside the first backoff second.
+    assert_eq!(
+        summary.stats.failed, 0,
+        "a task must not be failed while its agent is between instances: {summary:?}"
+    );
+    assert_eq!(
+        summary.queued.len(),
+        1,
+        "it must still be queued, waiting for the agent: {summary:?}"
+    );
 }
 
 /// #497: the run summary accounts for RPCs **per plugin**, so a slow or

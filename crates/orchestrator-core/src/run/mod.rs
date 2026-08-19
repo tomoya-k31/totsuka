@@ -271,6 +271,14 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     /// gone from the operator's notification centre anyway. Persisting it would
     /// mean a schema change for a message.
     blocked_on_tools: std::collections::HashSet<i64>,
+    /// Tasks already reported as waiting for a downed agent plugin (#499), on
+    /// the same once-per-task contract as `blocked_on_tools`. Cleared when the
+    /// task finally gets past the gate, so a second outage is reported again.
+    blocked_on_agent: std::collections::HashSet<i64>,
+    /// Plugins the supervisor has stopped trying to relaunch (#495/#499).
+    /// A task waiting on one of these is waiting forever, so dispatch fails it
+    /// with a reason instead of parking it.
+    abandoned_plugins: std::collections::HashSet<String>,
     /// Relaunch attempts per plugin inside the policy window (#495).
     restarts: HashMap<String, supervise::RestartLedger>,
     /// Call stats harvested from plugin instances that have been replaced
@@ -381,6 +389,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Self {
             agent_tools: crate::agent_tools::ToolCache::default(),
             blocked_on_tools: std::collections::HashSet::new(),
+            blocked_on_agent: std::collections::HashSet::new(),
+            abandoned_plugins: std::collections::HashSet::new(),
             db,
             settings,
             plugins,

@@ -520,11 +520,27 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
 
         // Everything decidable before the first side effect, decided in one
         // pure function (#471). Failure handling stays here because it writes.
+        // How many automatic dispatch retries this task has already spent
+        // (#492). Read here rather than inside the pure resolver, which does
+        // not touch the DB. A read failure counts as "none spent", which
+        // biases toward waiting for a plugin that is coming back — the
+        // cheaper mistake, since the task stays queued rather than dying.
+        let spent_retries = self.db.auto_retry_streak(task_id).unwrap_or(0);
         let target = {
             let agents = &self.plugins.agents;
-            resolve_dispatch_target(&record, &self.settings, |name| {
-                agents.get(name).map(|a| a.capabilities().clone())
-            })
+            let abandoned = &self.abandoned_plugins;
+            resolve_dispatch_target(
+                &record,
+                &self.settings,
+                |name| {
+                    agents.get(name).map(|a| AgentStatus {
+                        capabilities: a.capabilities().clone(),
+                        live: !a.is_closed(),
+                        abandoned: abandoned.contains(name),
+                    })
+                },
+                spent_retries,
+            )
         };
         let DispatchTarget {
             agent_name,
@@ -542,7 +558,23 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             Err(DispatchRefusal::Failed(reason)) => {
                 return self.fail_dispatch(&record, reason).await;
             }
+            Err(DispatchRefusal::AgentDown) => {
+                self.release_slot(task_id);
+                // Told once per task, not once per 200 ms tick — the same
+                // reason `blocked_on_tools` exists. The operator's actionable
+                // signal is the plugin's own escalation, which `supervise`
+                // sends when the restart budget runs out.
+                if self.blocked_on_agent.insert(task_id) {
+                    tracing::warn!(
+                        task_id,
+                        "agent plugin is down; leaving the task queued until it is back"
+                    );
+                }
+                return Ok(());
+            }
         };
+        // Past the liveness gate: a later outage is news again.
+        self.blocked_on_agent.remove(&task_id);
 
         // Conversation continuity (#242, superseding #140's D-10): a follow-up
         // message reopens *this* task, so the session to resume is simply this
@@ -999,6 +1031,34 @@ pub(super) enum DispatchRefusal {
     /// Refused with a reason the operator can act on — the caller turns this
     /// into `fail_dispatch`, which is the only thing that writes.
     Failed(String),
+    /// The agent plugin is enabled but **between instances**: it crashed and a
+    /// relaunch is booked (#495). The slot is released and the task is left
+    /// **queued**, so a later cycle picks it up once the plugin is back
+    /// (#499).
+    ///
+    /// Distinct from [`Failed`](Self::Failed) because the two clocks do not
+    /// line up: the automatic dispatch retries are `DISPATCH_RETRY_LIMIT`
+    /// attempts one `SETTLE_TICK` apart — under a second — while the first
+    /// restart backoff alone is one second. Treating "between instances" as a
+    /// dispatch failure spends the whole retry budget and fails the task
+    /// before its agent has made a single attempt to come back.
+    AgentDown,
+}
+
+/// What [`resolve_dispatch_target`] needs to know about one agent plugin
+/// (#495/#499).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AgentStatus {
+    /// The plugin's declared capabilities (F-33).
+    pub capabilities: plugin_protocol::manifest::Capabilities,
+    /// Whether the process is running. A crashed plugin stays in the engine's
+    /// map until a relaunch replaces it, so **presence is not liveness**.
+    pub live: bool,
+    /// Whether the supervisor has stopped trying to bring it back (#495): the
+    /// restart budget ran out, `restart = false`, or no launch spec was
+    /// recorded. Down **and** abandoned means waiting for it is waiting
+    /// forever, so such a task must fail rather than park.
+    pub abandoned: bool,
 }
 
 /// Everything settled before the first side effect: which agent, which
@@ -1036,7 +1096,8 @@ pub(super) struct DispatchTarget {
 pub(super) fn resolve_dispatch_target(
     record: &TaskRecord,
     settings: &EngineSettings,
-    agent_caps: impl Fn(&str) -> Option<plugin_protocol::manifest::Capabilities>,
+    agent_status: impl Fn(&str) -> Option<AgentStatus>,
+    spent_retries: u32,
 ) -> Result<DispatchTarget, DispatchRefusal> {
     let repo_name = record.repo.clone().unwrap_or_default();
     let workflows = workflows_by_name(&settings.workflows);
@@ -1050,15 +1111,34 @@ pub(super) fn resolve_dispatch_target(
             "selected repository `{repo_name}` is not configured → re-add it to [[repositories]]"
         )));
     };
-    match agent_caps(&agent_name) {
+    match agent_status(&agent_name) {
         None => {
             return Err(DispatchRefusal::Failed(format!(
                 "agent plugin `{agent_name}` is not launched → install and enable it"
             )));
         }
-        // Without a state stream the task could never progress and its slot
-        // would be held for the life of the process — refuse upfront.
-        Some(caps) if !caps.state_stream => {
+        // Down for good: nothing will bring it back, so parking would park
+        // forever. Say why, rather than letting the task discover it through
+        // three identical RPC failures.
+        Some(s) if !s.live && s.abandoned => {
+            return Err(DispatchRefusal::Failed(format!(
+                "agent plugin `{agent_name}` is down and will not be restarted → fix it and re-run `totsuka run`"
+            )));
+        }
+        // Down, but a relaunch is booked, **and this task has not yet spent a
+        // dispatch retry on it** (#499). Wait.
+        //
+        // The second half is what keeps this from swallowing a task whose own
+        // dispatch is what kills the plugin (`crash_on_dispatch`): once a task
+        // is being counted by the retry budget, that budget must be allowed to
+        // run out, or the task would park through restart after restart and
+        // never reach a terminal state. A task that has attempted nothing is
+        // in a different situation and simply waits.
+        Some(s) if !s.live && spent_retries == 0 => return Err(DispatchRefusal::AgentDown),
+        // Checked after liveness: a dead process's declared capabilities are
+        // still whatever it declared, so testing them first would report the
+        // wrong problem — and report it as a terminal `Failed`.
+        Some(s) if !s.capabilities.state_stream => {
             return Err(DispatchRefusal::Failed(format!(
                 "agent plugin `{agent_name}` does not declare the `state_stream` capability → totsuka cannot track its progress; use a state-streaming agent plugin"
             )));
@@ -1178,12 +1258,109 @@ mod tests {
         }
     }
 
-    /// Every agent this workspace ships streams state; a stub that does too.
-    fn streaming(_: &str) -> Option<plugin_protocol::manifest::Capabilities> {
-        Some(plugin_protocol::manifest::Capabilities {
-            state_stream: true,
-            ..Default::default()
+    /// Every agent this workspace ships streams state; a stub that does too,
+    /// and is alive.
+    fn streaming(_: &str) -> Option<AgentStatus> {
+        Some(AgentStatus {
+            capabilities: plugin_protocol::manifest::Capabilities {
+                state_stream: true,
+                ..Default::default()
+            },
+            live: true,
+            abandoned: false,
         })
+    }
+
+    /// The same agent mid-crash: still in the engine's map (no relaunch has
+    /// replaced it yet) but its process is gone, and a restart is booked.
+    fn crashed(_: &str) -> Option<AgentStatus> {
+        Some(AgentStatus {
+            live: false,
+            ..streaming("").unwrap()
+        })
+    }
+
+    /// Down, and the supervisor has stopped trying.
+    fn abandoned(_: &str) -> Option<AgentStatus> {
+        Some(AgentStatus {
+            live: false,
+            abandoned: true,
+            ..streaming("").unwrap()
+        })
+    }
+
+    /// #499: the four states a dispatch can meet its agent in, and why the
+    /// answer differs in each.
+    ///
+    /// The two clocks are the reason this is not one rule: the automatic
+    /// dispatch retries are `DISPATCH_RETRY_LIMIT` attempts one `SETTLE_TICK`
+    /// apart — under a second — while the first restart backoff alone is one
+    /// second. Without a distinction, a task queued during a crash window
+    /// spends its whole budget and reaches terminal `Failed` before the plugin
+    /// has made a single attempt to come back.
+    #[test]
+    fn a_dispatch_meeting_a_downed_agent_waits_only_when_waiting_can_help() {
+        let s = settings(
+            vec![workflow("implement", "herdr", None)],
+            vec![repo("web", None)],
+        );
+        let task = record("implement", Some("web"));
+
+        // Down, a relaunch is booked, and this task has attempted nothing:
+        // wait. Failing here is what #499 was filed for.
+        assert_eq!(
+            resolve_dispatch_target(&task, &s, crashed, 0),
+            Err(DispatchRefusal::AgentDown),
+        );
+
+        // Down, but this task has already spent a retry — its own dispatch may
+        // be what keeps killing the plugin (`crash_on_dispatch`). The budget
+        // must be allowed to run out, or the task parks through restart after
+        // restart and never reaches a terminal state.
+        assert!(
+            resolve_dispatch_target(&task, &s, crashed, 1).is_ok(),
+            "a task already being counted by the retry budget must not park",
+        );
+
+        // Down for good: waiting is waiting forever, so say so instead.
+        let err = resolve_dispatch_target(&task, &s, abandoned, 0).unwrap_err();
+        assert!(
+            matches!(&err, DispatchRefusal::Failed(m) if m.contains("will not be restarted")),
+            "{err:?}",
+        );
+
+        // Alive: nothing special happens, whatever the retry count.
+        assert!(resolve_dispatch_target(&task, &s, streaming, 0).is_ok());
+        assert!(resolve_dispatch_target(&task, &s, streaming, 2).is_ok());
+    }
+
+    /// The liveness gate comes **before** the capability gate on purpose.
+    ///
+    /// A dead process's declared capabilities are still whatever it declared,
+    /// so checking them first reports the wrong problem — and reports it as a
+    /// terminal `Failed`, killing a task whose agent was about to return.
+    #[test]
+    fn liveness_is_judged_before_capabilities() {
+        let s = settings(
+            vec![workflow("implement", "herdr", None)],
+            vec![repo("web", None)],
+        );
+        let dead_and_streamless = |_: &str| {
+            Some(AgentStatus {
+                capabilities: plugin_protocol::manifest::Capabilities::default(),
+                live: false,
+                abandoned: false,
+            })
+        };
+        assert_eq!(
+            resolve_dispatch_target(
+                &record("implement", Some("web")),
+                &s,
+                dead_and_streamless,
+                0
+            ),
+            Err(DispatchRefusal::AgentDown),
+        );
     }
 
     /// #196's precedence, without launching a plugin or creating a worktree —
@@ -1201,8 +1378,9 @@ mod tests {
                 vec![workflow("implement", "herdr", wf_tool)],
                 vec![repo("web", repo_tool)],
             );
-            let target = resolve_dispatch_target(&record("implement", Some("web")), &s, streaming)
-                .expect("resolvable");
+            let target =
+                resolve_dispatch_target(&record("implement", Some("web")), &s, streaming, 0)
+                    .expect("resolvable");
             assert_eq!(
                 target.tool_name, expected,
                 "workflow={wf_tool:?} repo={repo_tool:?}"
@@ -1217,7 +1395,7 @@ mod tests {
     fn an_unknown_workflow_is_released_not_failed() {
         let s = settings(Vec::new(), vec![repo("web", None)]);
         assert_eq!(
-            resolve_dispatch_target(&record("gone", Some("web")), &s, streaming),
+            resolve_dispatch_target(&record("gone", Some("web")), &s, streaming, 0),
             Err(DispatchRefusal::UnknownWorkflow)
         );
     }
@@ -1239,6 +1417,7 @@ mod tests {
             &record("implement", Some("web")),
             &with_repo("other"),
             streaming,
+            0,
         )
         .unwrap_err();
         assert!(
@@ -1247,11 +1426,13 @@ mod tests {
         );
 
         // Plugin not launched.
-        let err =
-            resolve_dispatch_target(&record("implement", Some("web")), &with_repo("web"), |_| {
-                None
-            })
-            .unwrap_err();
+        let err = resolve_dispatch_target(
+            &record("implement", Some("web")),
+            &with_repo("web"),
+            |_| None,
+            0,
+        )
+        .unwrap_err();
         assert!(
             matches!(&err, DispatchRefusal::Failed(m) if m.contains("install and enable")),
             "{err:?}"
@@ -1259,10 +1440,20 @@ mod tests {
 
         // Launched but cannot stream state: the task could never progress and
         // would hold its slot for the life of the process.
-        let mute = |_: &str| Some(plugin_protocol::manifest::Capabilities::default());
-        let err =
-            resolve_dispatch_target(&record("implement", Some("web")), &with_repo("web"), mute)
-                .unwrap_err();
+        let mute = |_: &str| {
+            Some(AgentStatus {
+                capabilities: plugin_protocol::manifest::Capabilities::default(),
+                live: true,
+                abandoned: false,
+            })
+        };
+        let err = resolve_dispatch_target(
+            &record("implement", Some("web")),
+            &with_repo("web"),
+            mute,
+            0,
+        )
+        .unwrap_err();
         assert!(
             matches!(&err, DispatchRefusal::Failed(m) if m.contains("state_stream")),
             "{err:?}"
@@ -1273,8 +1464,8 @@ mod tests {
             vec![workflow("implement", "herdr", Some("nosuchtool"))],
             vec![repo("web", None)],
         );
-        let err =
-            resolve_dispatch_target(&record("implement", Some("web")), &s, streaming).unwrap_err();
+        let err = resolve_dispatch_target(&record("implement", Some("web")), &s, streaming, 0)
+            .unwrap_err();
         assert!(
             matches!(&err, DispatchRefusal::Failed(m) if m.contains("[tools.nosuchtool]")),
             "{err:?}"
@@ -1292,8 +1483,8 @@ mod tests {
         );
         let r = record("implement", Some("web"));
         assert_eq!(
-            resolve_dispatch_target(&r, &s, streaming),
-            resolve_dispatch_target(&r, &s, streaming)
+            resolve_dispatch_target(&r, &s, streaming, 0),
+            resolve_dispatch_target(&r, &s, streaming, 0)
         );
     }
 }

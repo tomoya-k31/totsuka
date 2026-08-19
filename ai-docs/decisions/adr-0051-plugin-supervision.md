@@ -23,7 +23,7 @@ sources:
 
 # Status
 
-stable。実装は #495（本 ADR と同一 PR）。**実機検収済み**（2026-08-20）— 実 herdr / 実 Slack を相手に、notifier と task_source の両方を本当に kill して検知・再起動を確認した。Slack ソースは Socket Mode の再接続（`socket mode: connected (hello)`）まで戻る。バックオフは実測 1→2→4→8→16 秒で、5 回で `gave up restarting after 5 attempts in 300s` に到達した。
+stable。実装は #495（本 ADR と同一 PR）。**実機検収済み**（2026-08-20、要点 1〜4）— 実 herdr / 実 Slack を相手に、notifier と task_source の両方を本当に kill して検知・再起動を確認した。Slack ソースは Socket Mode の再接続（`socket mode: connected (hello)`）まで戻る。バックオフは実測 1→2→4→8→16 秒で、5 回で `gave up restarting after 5 attempts in 300s` に到達した。**要点 5（#499 の park）は後から足したもので、実機検収は未了** — テストのみ。
 
 # Context
 
@@ -56,7 +56,7 @@ stable。実装は #495（本 ADR と同一 PR）。**実機検収済み**（202
 
 # Decision
 
-選択肢 3 を採る。設計上の要点は 4 つある。
+選択肢 3 を採る。設計上の要点は 5 つある。
 
 ## 1. 検知は「子プロセスの終了」に紐づける。ストリームではない
 
@@ -84,22 +84,37 @@ stable。実装は #495（本 ADR と同一 PR）。**実機検収済み**（202
 
 `[plugins.{name}].restart = false` で個別に無効化できる。**無効化しても検知は残る** — ログに出て `plugin_crashes` に計上され、`escalated` も飛び、agent なら在席タスクも畳まれる。止まるのは再起動だけで、これはプラグインを手で調べている人間が欲しい形である。
 
-## 既知のギャップ: クラッシュ窓中に queue されたタスク（#499）
+## 5. 死んだハンドルへ dispatch を解決させない（#499）
 
-クラッシュした `Plugin` は再起動が**成功**するまでエンジンのマップに残り、`resolve_dispatch_target` は capability しか見ないので、**死んだハンドルへ dispatch が解決する**。
+クラッシュした `Plugin` は再起動が**成功**するまでエンジンのマップに残るので、`resolve_dispatch_target` が capability しか見ないと**死んだハンドルへ dispatch が解決する**。
 
-2 つの時計が噛み合っていない: dispatch の自動再試行は `DISPATCH_RETRY_LIMIT` 回 × `SETTLE_TICK` 間隔で**1 秒未満**に尽きるのに対し、最初の再起動バックオフだけで**1 秒**ある。したがって**クラッシュ窓中に queue されたタスクは、プラグインが最初の復帰を試みる前に終端 `Failed` へ落ちうる** — この 1 クラスについては、下の「一過性のクラッシュが人手を介さず復旧する」が成立しない。
+2 つの時計が噛み合っていない: dispatch の自動再試行は `DISPATCH_RETRY_LIMIT` 回 × `SETTLE_TICK` 間隔で**1 秒未満**に尽きるのに対し、最初の再起動バックオフだけで**1 秒**ある。クラッシュ窓中に queue されたタスクは、**プラグインが最初の復帰を試みる前に終端 `Failed` へ落ちていた**。
 
-**本 ADR ではこれを直さない。** 直し方が自明ではないためである。dispatch 側で liveness を見て park する実装を試したところ、`crash_on_dispatch`（その dispatch 自体がプラグインを殺すケース）でタスクが `Failed` にならず queued のまま残り、既存の契約（`e2e_agent_crash_fails_task_and_orchestrator_survives`）が壊れた。**「まだ試していないタスクは待つ」と「自分の dispatch が失敗し続けているタスクは予算を使い切る」を分ける規則**が要り、それは #492 の再試行予算・one-shot の終了条件と噛み合わせて別途設計する必要がある。
+**素朴に park すると既存契約が壊れる。** `crash_on_dispatch`（その dispatch 自体がプラグインを殺すケース）では、park したタスクが再起動のたびに再挑戦して永久に終端へ行かない — one-shot は途中で抜け、`failed 1` を期待していた既存テストが崩れる。**park と fail を分ける規則が要る**というのがこの節の内容である。
 
-`first_backoff` を再試行予算より短くするのは確率を下げるだけで構造ではないので、緩和策としても採らない。→ [#499](https://github.com/tomoya-k31/totsuka/issues/499)
+規則は 4 通り。**エージェントの状態だけでなく、そのタスク自身の再試行回数も見る**のが要点:
+
+| プラグイン | そのタスクの自動再試行 | 動作 |
+|---|---|---|
+| 生存 | — | 通常 |
+| 停止・再起動待ち | 0 回 | **park**（スロット解放・`Queued` のまま。次のサイクルが拾う） |
+| 停止・再起動待ち | 1 回以上 | 通常（自分の予算を使い切らせる） |
+| 停止・**見放し済み** | — | `Failed`（「再起動されない」と名指しする） |
+
+2 行目と 3 行目の差が `crash_on_dispatch` を救う: **まだ何も試していないタスクは待てばよく、自分の dispatch が失敗し続けているタスクは予算を使い切るべき**である。前者は他人のクラッシュの巻き添えで、後者は自分が原因かもしれない。
+
+4 行目が無いと park は無限になる。再起動を諦めた（予算切れ / `restart = false` / spec 未記録）プラグインを待つのは永久に待つことなので、**`abandoned_plugins` は `escalate_dead_plugin` の中で立てる** — 呼び出し側 3 箇所に書くと「諦めた」と「dispatch がそれを知っている」がずれる。
+
+**liveness の判定は capability ゲートより先**に置く。死んだプロセスの宣言した capability は宣言のままなので、先に capability を見ると**間違った問題を、しかも終端の `Failed` として**報告することになる。
+
+`first_backoff` を再試行予算より短くする案は採らない — 確率を下げるだけで構造ではない。
 
 # Consequences
 
 ## 良くなること
 
 * `task_source` / `notifier` の死亡が、**そのプラグインの仕事が止まった瞬間に**可視化される
-* 一過性のクラッシュが人手を介さず復旧する（**ただしクラッシュ窓中に queue されたタスクは除く** — 上の既知のギャップ / [#499](https://github.com/tomoya-k31/totsuka/issues/499)）
+* 一過性のクラッシュが人手を介さず復旧する。**クラッシュ窓中に queue されたタスクも含む**（[#499](https://github.com/tomoya-k31/totsuka/issues/499)）
 * `plugin_host` の「v1 does not auto-restart」は本 PR で撤回した。宣言を残したまま挙動だけ変えるのは、このリポジトリが繰り返してきた失敗そのものである
 
 ## 悪くなること・注意点
@@ -111,8 +126,8 @@ stable。実装は #495（本 ADR と同一 PR）。**実機検収済み**（202
 
 # 検証
 
-`crates/orchestrator-core/tests/plugin_supervision.rs` の 4 本と、`tests/plugin_host.rs` の `Liveness` 3 本。`mock_plugin` に**ファイル backed のカウンタ**で「最初の N 回の起動だけ `initialize` 直後に exit(1) する」`suicide` モードを足して駆動する — 起動のたびに別プロセスになるので、プロセス内カウンタでは「いつか復帰する」を書けない。
+`crates/orchestrator-core/tests/plugin_supervision.rs` の 6 本、`tests/plugin_host.rs` の `Liveness` 3 本、`run::dispatch` の 4 分岐 2 本。`mock_plugin` に**ファイル backed のカウンタ**で「最初の N 回の起動だけ `initialize` 直後に exit(1) する」`suicide` モードを足して駆動する — 起動のたびに別プロセスになるので、プロセス内カウンタでは「いつか復帰する」を書けない。
 
-**プラグインが下がったままになるときにエスカレーションが飛ぶこと**を、予算切れと `restart = false` の 2 つの経路それぞれで testcase にしてある。検知配線（`wire_liveness`）を外すと **4 本とも落ちる**ことを実測で確認済み。
+**プラグインが下がったままになるときにエスカレーションが飛ぶこと**を、予算切れと `restart = false` の 2 つの経路それぞれで testcase にしてある。#499 の park は**クラッシュ窓を実際に作って**検証する — mock source に `submit_delay_ms` を足し、タスクの到着をエージェントのクラッシュ**より後**に置いた。即時 submit だと検知と競合し、テストが振る舞いではなくタイミングで通ったり落ちたりする。検知配線（`wire_liveness`）を外すと **4 本とも落ちる**ことを実測で確認済み。
 
 最初の版はここが 3 本だった。`restart = false` のテストが `plugin_restarts == 0`、つまり**抑止したものが起きていないこと**しか見ておらず、名前が言っている "without losing detection" を一度も検査していなかったためである — 検知が丸ごと壊れていても通るテストだった。**抑止したものの不在ではなく、残ると約束したものの存在を assert する。**
