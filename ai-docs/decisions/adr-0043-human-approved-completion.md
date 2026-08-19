@@ -8,6 +8,7 @@ generated: { by: claude-code/fable-5, at: 2026-08-13T17:50:00+09:00 }
 status: stable
 verified:
   - { by: claude-code/fable-5, at: 2026-08-13T17:50:00+09:00 }
+  - { by: human:tomoya-k31, at: 2026-08-18T21:56:00Z }
 owner: tomoya-k31
 sources:
   - id: issue-440
