@@ -5,11 +5,10 @@ version = "0.1.0"
 # never reads `TaskDispatchParams.tool_launch`, so the 0.2.3 floor that #411
 # put on herdr (whose local argv fallback was deleted) would exclude
 # orchestrators this plugin works with perfectly well.
-protocol_version = ">=0.1.0, <0.5"
+protocol_version = ">=0.1.0, <0.6"
 
 # orca has no structured plan API and no pane-control surface, so only the
 # capabilities it can honestly fulfil are declared (F-33). pane_control is
 # intentionally omitted.
 [capabilities]
-plan_mode = true
 state_stream = true

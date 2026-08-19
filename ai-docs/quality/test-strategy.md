@@ -28,7 +28,7 @@ owner: tomoya-k31
 
 | config キー | 効果 |
 |---|---|
-| `task_submit` / `submit_tasks` | `task_submit: true` で push 型 task_source を演じ、`initialize` 応答直後に `submit_tasks` の各エントリを `task/submit` として push（1 タスクの重複投入で orchestrator 側 dedup=`duplicate` ack の検証にも使える） |
+| `submit_tasks` | push 型 task_source を演じ、`initialize` 応答直後に `submit_tasks` の各エントリを `task/submit` として push（1 タスクの重複投入で orchestrator 側 dedup=`duplicate` ack の検証にも使える） |
 | `stream_states` | `state/subscribe` 後に再生する状態列（例 `["running","done"]` / `["running","waiting_input"]`）（agent_ide, F-38） |
 | `session_id` | `task/dispatch` が返すセッション ID。`gone`/`done`/`waiting`/`fail` を含めると `session/attach` の応答を制御（回復シナリオ #57） |
 | `commit_on_dispatch` | dispatch 時に worktree でブランチを切って実コミット（`branch_on_dispatch` で名前を指定、既定 `feat/mock-agent-work`）。worktree は detached で渡るので、ブランチが先 |

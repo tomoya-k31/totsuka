@@ -121,7 +121,7 @@ Notion タスクや GitHub Projects に紐づく Issue などのタスク管理�
 | F-30 | Agent IDE をプラグインとして抽象化し、設定でタスク種別ごと・リポジトリごとに使用エージェントを切り替えられる | M |
 | F-31 | 指示発行インターフェース: worktree パス・タスク本文・実行モード(`plan` / `implement`)・追加コンテキストを渡す | M |
 | F-32 | エージェントの状態(idle / running / waiting_input / done / failed)を取得できる。herdr は Socket API、orca は各自の手段をプラグイン内に隠蔽。**注:** herdr + Claude Code の完了検知はフック機構(§4.11、F-100–F-107)へ置換され、herdr の状態ストリームは `pane.exited` デッドマン検知のためだけに残す | M |
-| F-33 | **Capability negotiation**: プラグインは自身の対応機能(`plan_mode`, `pane_control`, `state_stream` 等)を宣言し、Orchestrator は対応機能のみ要求する | M |
+| F-33 | **Capability negotiation**: プラグインは自身の対応機能(`pane_control`, `state_stream`, `hook_completion` 等)を宣言し、Orchestrator は対応機能のみ要求する | M |
 | F-36 | `plan` モードでは、プラグインが各エージェントの plan / 読み取り主体モードへマッピングして実行する。成果物(設計ドキュメント)を構造化された結果として Orchestrator へ返却する(ワークフローの出力ポリシーに従い書き戻しに使用) | M |
 | F-37 | **セッション管理**: dispatch 時にエージェントのセッション識別子(会話履歴 ID)を取得し、タスクと紐付けて状態DBへ永続化する。`session/attach` を agent_ide プラグインの必須メソッドとし、Orchestrator 再起動時・タスク再開時に既存セッションへ re-attach できる | M |
 | F-38 | エージェントの実行ログはプラグインが `state/subscribe` の notification に断片として載せ、Orchestrator が task_id 付きで永続化する(`logs --task <id>` の情報源)。**注:** herdr + Claude Code の完了検知はフック機構(§4.11、F-100–F-107)へ置換され、herdr の状態ストリームは `pane.exited` デッドマン検知のためだけに残す | M |

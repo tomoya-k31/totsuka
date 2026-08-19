@@ -437,7 +437,7 @@ agent = "herdr"
 
 **すべき。**未設定でもフック POST は受理されるが、その場合の防御は 0600 の UDS パーミッションのみになる。
 
-未設定はツール側が検出する（#209）。判定材料は agent プラグインのマニフェストで、`resume_session` または
+未設定はツール側が検出する（#209）。判定材料は agent プラグインのマニフェストで、`hook_completion` または
 `diagnostics_snapshot` を宣言していれば「フック対応 agent」とみなす（herdr が該当。orca / mock は非該当）:
 
 - `config validate` / `totsuka run` — フック対応 agent を使う workflow ごとに**警告**（終了コードは変わらない。`run` は表示して続行）

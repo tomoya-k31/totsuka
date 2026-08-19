@@ -227,7 +227,6 @@ fn capabilities_result() -> Value {
     to_value(&InitializeResult {
         plugin_version: plugin_version(),
         capabilities: Capabilities {
-            plan_mode: true,
             state_stream: true,
             ..Capabilities::default()
         },

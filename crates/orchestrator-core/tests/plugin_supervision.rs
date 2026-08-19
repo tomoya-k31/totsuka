@@ -41,7 +41,7 @@ fn spec(kind: &str, name: &str, init_config: serde_json::Value) -> PluginSpec {
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = ">=0.1.6, <0.5"
+protocol_version = ">=0.1.6, <0.6"
 "#
     ))
     .unwrap();

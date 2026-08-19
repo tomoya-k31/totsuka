@@ -224,7 +224,7 @@ impl Cx {
                     .manifest_of(name)
                     .ok()
                     .flatten()
-                    .map(|m| m.capabilities.hook_capable())
+                    .map(|m| m.capabilities.hook_completion)
             },
         ));
         findings

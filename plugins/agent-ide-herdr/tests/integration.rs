@@ -2186,9 +2186,9 @@ async fn state_stream_ignores_status_changes_after_the_reduction() {
 
     let mut d = Driver::new();
     let init = d.init(&socket).await;
-    // The 0.1.3 capabilities are declared.
+    // The capabilities this agent actually fulfils are declared.
     assert_eq!(init["result"]["capabilities"]["state_stream"], true);
-    assert_eq!(init["result"]["capabilities"]["resume_session"], true);
+    assert_eq!(init["result"]["capabilities"]["hook_completion"], true);
     assert_eq!(init["result"]["capabilities"]["diagnostics_snapshot"], true);
 
     let disp = d.dispatch("T3", "Draft the reply", "plan").await;
@@ -2713,11 +2713,10 @@ fn shipped_manifest_is_valid_agent_ide() {
         .expect("plugin.toml parses");
     assert_eq!(manifest.name, "herdr");
     assert_eq!(manifest.kind, plugin_protocol::PluginKind::AgentIde);
-    assert!(manifest.capabilities.plan_mode);
     assert!(manifest.capabilities.state_stream);
     assert!(manifest.capabilities.pane_control);
-    // 0.1.3: session resume + pane diagnostics snapshots (#131).
-    assert!(manifest.capabilities.resume_session);
+    // 0.5.0: hook-driven completion (#131), and pane diagnostics snapshots.
+    assert!(manifest.capabilities.hook_completion);
     assert!(manifest.capabilities.diagnostics_snapshot);
     assert!(manifest.is_compatible_with(&plugin_protocol::protocol_version()));
 }

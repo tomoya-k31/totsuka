@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:3dec7503a12cc91de3ae82ae5bf7cf19f0cd58d8819d6f8b2fd74073163a81fe -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:05ed7a7e62f4bc2ddfe2075d9c3c5dd40cbcd7b64a3843c8411db9e5a8b285df -->
 
 # Plugin development guide
 
@@ -33,20 +33,23 @@ Every plugin ships a `plugin.toml` next to its binary.
 name = "github"                     # must match the binary name
 kind = "task_source"                # task_source | agent_ide | notifier
 version = "0.1.0"                   # your plugin's own version
-protocol_version = ">=0.1.6, <0.5"  # the orchestrator protocol range you support
+protocol_version = ">=0.1.6, <0.6"  # the orchestrator protocol range you support
 
 [capabilities]                      # declare only what you actually implement
-plan_mode = true                    # agent: supports plan mode
 state_stream = true                 # agent: supports the state stream
+pane_control = true                 # agent: can focus, release and list panes
+hook_completion = true              # agent: reports completion via tool hooks
+diagnostics_snapshot = true         # agent: answers diagnostics/snapshot
 outputs = ["source"]                # task_source: supports publishing results
-task_submit = true                  # task_source: required, push-style source
 ```
 
 Before starting your plugin, the orchestrator checks `protocol_version` for compatibility and only asks for the capabilities you declared.
 
+**Only keys the orchestrator actually reads exist.** Every capability field and error code is machine-checked to have a reader, so a key that does nothing cannot be added. Protocol 0.5.0 removed five that had none — `plan_mode`, `task_submit`, `resume_session`, and the error codes `-32001` / `-32002`. **An older manifest that still lists them starts fine**: unknown keys are ignored. But `resume_session` was *replaced* by `hook_completion`, so an agent that reports completion through hooks must declare it under the new name.
+
 ### Choosing the range
 
-The **upper bound** goes at the next major or minor after the breaking change you want to stay below — currently `<0.5`. A manifest capping at `<0.3` is refused by a 0.3.0 orchestrator, one capping at `<0.4` is refused by 0.4.0, and so on.
+The **upper bound** goes at the next major or minor after the breaking change you want to stay below — currently `<0.6`. A manifest capping at `<0.3` is refused by a 0.3.0 orchestrator, one capping at `<0.4` is refused by 0.4.0, one capping at `<0.5` is refused by 0.5.0, and so on.
 
 **The lower bound matters just as much, and it follows what you depend on — not your plugin's kind, and not whatever protocol version is newest.** The herdr plugin declares `>=0.2.3` because 0.2.3 is where the field it needs to launch tools was added, and it no longer has a fallback that builds the command line itself. Refusing older orchestrators is what makes that removed fallback **unreachable** rather than merely deprecated.
 

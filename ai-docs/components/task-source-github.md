@@ -31,7 +31,7 @@ fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tas
 
 # capabilities（F-83）
 
-manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1.6, <0.4"`）と `initialize` 応答で `kind = task_source`・`task_submit = true`・`outputs = ["source"]` を宣言。`result/publish` に対応する。
+manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1.6, <0.6"`）と `initialize` 応答で `kind = task_source`・`outputs = ["source"]` を宣言。`result/publish` に対応する。
 
 # テスト
 

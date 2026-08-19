@@ -709,7 +709,7 @@ mod tests {
         round_trip(&InitializeResult {
             plugin_version: Version::new(1, 0, 0),
             capabilities: Capabilities {
-                plan_mode: true,
+                hook_completion: true,
                 ..Default::default()
             },
         });

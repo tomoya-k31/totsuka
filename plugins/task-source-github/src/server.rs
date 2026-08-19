@@ -267,7 +267,6 @@ fn capabilities_result() -> Value {
     let result = InitializeResult {
         plugin_version: plugin_version(),
         capabilities: Capabilities {
-            task_submit: true,
             outputs: vec![OutputCapability::Source],
             ..Capabilities::default()
         },

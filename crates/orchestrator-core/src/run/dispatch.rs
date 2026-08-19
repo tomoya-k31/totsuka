@@ -329,7 +329,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .plugins
             .agents
             .get(agent_name)
-            .map(|a| a.capabilities().hook_capable())
+            .map(|a| a.capabilities().hook_completion)
             .unwrap_or(false);
         let wiring = match hook_capable
             .then(|| self.hook_launch(&record.workflow))

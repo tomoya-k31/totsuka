@@ -14,6 +14,8 @@
 #   [E] cycle         : ワークスペース内に依存循環がない
 #   [E] plugin-bin-name : plugins/* は bin ターゲットをちょうど 1 つ持ち、その名前が
 #                       同ディレクトリの plugin.toml の `name` と一致する
+#   [E] declaration-consumed : plugin-protocol が公開する宣言（Capabilities の各
+#                       フィールド・error_code の各定数）を、実際に誰かが読んでいる
 #
 # 使い方: scripts/arch-lint.sh
 # 終了コード: 違反 1 件以上で 1、前提ツール欠如・検査自体の失敗で 2
@@ -31,6 +33,15 @@ set -euo pipefail
 # plugins/* の判定はクレート名の列挙ではなく manifest パス（plugins/ 配下）で行う
 # ため、新プラグイン追加時にこのファイルの更新は不要。
 # ---------------------------------------------------------------------------
+# declaration-consumed の免除リスト。
+#
+# 「宣言はあるが、まだ誰も読んでいない」を**意図して**置く場合だけここに
+# `<name>=<理由>` を 1 行で書く。空なら免除なし。
+#
+# このリストの存在が検査の主眼である: 放置された宣言と、意図した猶予とを
+# 区別できるようにするためにある。理由なしで足さないこと。
+DECLARATION_EXEMPT=""
+
 PLUGIN_ALLOWED_NORMAL="plugin-protocol plugin-sdk"
 PLUGIN_ALLOWED_DEV="plugin-protocol plugin-sdk test-support"
 SDK_ALLOWED_NORMAL="plugin-protocol"
@@ -217,11 +228,106 @@ done <<<"$PLUGIN_BINS"
   exit 2
 }
 
+# ---------- [E] declaration-consumed ----------
+#
+# plugin-protocol は契約であって実装ではない。そこに宣言があるのに誰も読んで
+# いないなら、それは「プラグイン作者に効くと信じさせて何もしない鍵」である。
+# 実際 `Capabilities::design_preview` は誰にも読まれないまま 1 世代残った
+# （ADR-0030 / #411）。この検査はその再発を機械で止める。
+#
+# 探索範囲が 2 種類で違うのは、宣言の向きが違うため:
+#
+# - **Capabilities のフィールド**は「プラグインが宣言し、Orchestrator が読む」。
+#   プラグイン側は値を**立てる**だけで消費者ではないので、`orchestrator-core` /
+#   `orchestrator-cli` の src だけを見る。ここを広げると、herdr が
+#   `plan_mode: true` と書いているだけで「消費されている」ことになってしまう。
+# - **error_code の定数**は両側が発行し照合するので、plugin-protocol 自身を除く
+#   すべてを見る。
+#
+# どちらも mock_plugin と tests/ は消費者に数えない。テストダブルが立てている
+# だけの宣言は、本番では誰も読んでいないのと同じである。
+CAP_CONSUMERS="$ROOT/crates/orchestrator-core/src $ROOT/crates/orchestrator-cli/src"
+CODE_CONSUMERS="$CAP_CONSUMERS $ROOT/crates/plugin-sdk/src $ROOT/plugins"
+MOCK="$ROOT/crates/orchestrator-core/src/bin/mock_plugin.rs"
+
+# `pub struct Capabilities { ... }` のフィールド名。
+CAP_FIELDS="$(awk '
+  /^pub struct Capabilities/ { inside = 1; next }
+  inside && /^}/ { exit }
+  inside && /^[[:space:]]*pub [a-z_]+:/ {
+    sub(/^[[:space:]]*pub /, ""); sub(/:.*$/, ""); print
+  }' "$ROOT/crates/plugin-protocol/src/manifest.rs")" || {
+  echo "arch-lint: Capabilities の解析（awk）に失敗" >&2
+  exit 2
+}
+
+# `pub mod error_code { ... }` の定数名。
+ERROR_CODES="$(awk '
+  /^pub mod error_code/ { inside = 1; next }
+  inside && /^}/ { exit }
+  inside && /^[[:space:]]*pub const [A-Z_]+:/ {
+    sub(/^[[:space:]]*pub const /, ""); sub(/:.*$/, ""); print
+  }' "$ROOT/crates/plugin-protocol/src/jsonrpc.rs")" || {
+  echo "arch-lint: error_code の解析（awk）に失敗" >&2
+  exit 2
+}
+
+# フェイルクローズ: 抽出できなければ「違反なし」ではなく検査の失敗。
+[ -n "$CAP_FIELDS" ] || {
+  echo "arch-lint: Capabilities のフィールドを 1 つも抽出できなかった" >&2
+  exit 2
+}
+[ -n "$ERROR_CODES" ] || {
+  echo "arch-lint: error_code の定数を 1 つも抽出できなかった" >&2
+  exit 2
+}
+
+exempt_reason() {
+  printf '%s\n' "$DECLARATION_EXEMPT" | awk -F= -v n="$1" '$1 == n { sub(/^[^=]*=/, ""); print; exit }'
+}
+
+# コメント行は消費に数えない。「`.plan_mode` を読む」と書いた doc comment が
+# あるだけで、読まれていないフィールドが生きているように見えてしまう。
+consumers_of() {
+  grep -rn --include="*.rs" -e "$1" $2 2>/dev/null |
+    grep -v "^$MOCK:" |
+    grep -v "/tests/" |
+    grep -vE "^[^:]+:[0-9]+:[[:space:]]*//" |
+    grep -c . || true
+}
+
+N_DECLS=0
+for field in $CAP_FIELDS; do
+  N_DECLS=$((N_DECLS + 1))
+  # フィールド**アクセス**だけを数える。`plan_mode: true` のような初期化は
+  # 宣言であって消費ではない。
+  hits="$(consumers_of "\.${field}\b" "$CAP_CONSUMERS")"
+  [ "$hits" -eq 0 ] || continue
+  reason="$(exempt_reason "$field")"
+  if [ -n "$reason" ]; then
+    continue
+  fi
+  error declaration-consumed "plugin-protocol" \
+    "Capabilities::${field} を orchestrator が一度も読んでいない（宣言だけの鍵になっている）: 消費するか、削除するか、DECLARATION_EXEMPT に理由付きで登録すること"
+done
+
+for code in $ERROR_CODES; do
+  N_DECLS=$((N_DECLS + 1))
+  hits="$(consumers_of "error_code::${code}\b" "$CODE_CONSUMERS")"
+  [ "$hits" -eq 0 ] || continue
+  reason="$(exempt_reason "$code")"
+  if [ -n "$reason" ]; then
+    continue
+  fi
+  error declaration-consumed "plugin-protocol" \
+    "error_code::${code} を誰も発行も照合もしていない: 使うか、削除するか、DECLARATION_EXEMPT に理由付きで登録すること"
+done
+
 # ---------- サマリ ----------
 N_PKGS="$(jq -r '.packages | length' <<<"$META")"
 N_DEPS=0
 [ -z "$DEPS" ] || N_DEPS="$(printf '%s\n' "$DEPS" | grep -c .)"
 echo ""
-echo "arch-lint: ${ERRORS} error(s)（${N_PKGS} crates / ワークスペース内依存 ${N_DEPS} 本 / プラグイン ${N_PLUGINS} 個を検査）"
+echo "arch-lint: ${ERRORS} error(s)（${N_PKGS} crates / ワークスペース内依存 ${N_DEPS} 本 / プラグイン ${N_PLUGINS} 個 / protocol の宣言 ${N_DECLS} 個を検査）"
 [ "$ERRORS" -eq 0 ] || exit 1
 exit 0

@@ -354,13 +354,12 @@ fn capabilities_result() -> Value {
     to_value(&InitializeResult {
         plugin_version: plugin_version(),
         capabilities: Capabilities {
-            plan_mode: true,
             pane_control: true,
             state_stream: true,
             // 0.1.3: `--resume` re-opens an agent session (Slack thread
             // continuation), and `diagnostics/snapshot` captures the pane
             // screen for escalation diagnostics (R-10).
-            resume_session: true,
+            hook_completion: true,
             diagnostics_snapshot: true,
             ..Capabilities::default()
         },

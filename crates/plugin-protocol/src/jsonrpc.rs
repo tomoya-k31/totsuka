@@ -195,12 +195,14 @@ pub mod error_code {
     /// Internal plugin error.
     pub const INTERNAL_ERROR: i64 = -32603;
 
-    /// The Orchestrator's protocol version is outside the plugin's supported
-    /// range (F-54).
-    pub const PROTOCOL_VERSION_MISMATCH: i64 = -32001;
-    /// A requested capability is not supported by the plugin (F-33).
-    pub const CAPABILITY_UNSUPPORTED: i64 = -32002;
     /// The plugin-specific configuration is invalid (F-59).
+    ///
+    /// `-32001` and `-32002` are **retired** (0.5.0) and must not be reused:
+    /// `PROTOCOL_VERSION_MISMATCH` could never be sent, because the
+    /// compatibility check happens host-side *before* the process is spawned
+    /// (F-54), and `CAPABILITY_UNSUPPORTED` could never be sent either,
+    /// because the Orchestrator only calls what a plugin declared. Both were
+    /// unreachable by construction, not merely unused.
     pub const CONFIG_INVALID: i64 = -32003;
     /// The Orchestrator is draining/shutting down and not accepting
     /// `task/submit` (0.1.6). Retryable: back off and re-submit — the

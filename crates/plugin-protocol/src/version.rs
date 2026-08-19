@@ -141,7 +141,46 @@ use semver::{Version, VersionReq};
 /// [`NotReleased`](crate::methods::NotReleased) carries a `#[serde(other)]`
 /// catch-all so a reason added later does not make the whole response
 /// undeserializable to this build. `<0.5` manifests keep matching.
-pub const PROTOCOL_VERSION: &str = "0.4.2";
+/// 0.5.0: **breaking** — five declarations that nothing could ever act on are
+/// removed, and the machine check that stops the next one is added (#496).
+///
+/// - [`Capabilities`](crate::manifest::Capabilities)`::plan_mode` and
+///   `::task_submit` are removed. Neither was ever read by the Orchestrator.
+///   `task_submit` additionally stopped carrying information at 0.2.0: with
+///   `tasks/fetch` gone, every task_source that can launch at all is a push
+///   source, so the flag could only ever be `true`.
+/// - `Capabilities::resume_session` is replaced by
+///   [`hook_completion`](crate::manifest::Capabilities::hook_completion).
+///   Nothing read `resume_session` on its own — the resume decision is made
+///   from the *tool's* capabilities, not the plugin's. Its only role was as
+///   half of a `hook_capable()` heuristic that OR-ed it with
+///   `diagnostics_snapshot`, so a plugin had to know an undocumented
+///   convention to opt into hook completion. The new flag says what it means;
+///   `diagnostics_snapshot` stays as its own flag because it gates a real RPC.
+/// - `error_code::PROTOCOL_VERSION_MISMATCH` (-32001) and
+///   `CAPABILITY_UNSUPPORTED` (-32002) are removed and their numbers retired.
+///   Both were **unreachable by construction**: the compatibility check runs
+///   host-side before the process is spawned, and the Orchestrator only calls
+///   what a plugin declared.
+///
+/// **Nothing breaks on the wire.** `Capabilities` has no
+/// `deny_unknown_fields`, so an old manifest's `plan_mode = true` is accepted
+/// and ignored; an unknown error code was always just a number. What breaks is
+/// code that *reads* the removed items, which is a type break — the same shape
+/// as the 0.4.0 removal of `design_preview`. A `<0.5` manifest is rejected at
+/// launch by design (F-54); the bundled plugins move to `<0.6`.
+///
+/// **The removals are not the point.** `scripts/arch-lint.sh` grew a
+/// `declaration-consumed` check that fails when a `Capabilities` field is
+/// never read by the Orchestrator, or an `error_code` constant is never
+/// emitted or matched anywhere. Deleting these five without it would only
+/// have reset a counter: `design_preview` sat unread for a whole generation
+/// (0.4.0, #411), and `TaskDispatchParams.hook` took a full generation to go
+/// after being marked for removal (0.2.3 → 0.4.0). An intentional
+/// declaration-ahead-of-implementation is still possible — it goes in the
+/// script's `DECLARATION_EXEMPT` list with a reason, which is what makes
+/// "deliberate" distinguishable from "forgotten".
+pub const PROTOCOL_VERSION: &str = "0.5.0";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -165,7 +204,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 4, 2));
+        assert_eq!(protocol_version(), Version::new(0, 5, 0));
     }
 
     #[test]
@@ -174,11 +213,11 @@ mod tests {
         // task_source/notifier keep a wide lower bound, agent_ide plugins
         // require `tool_launch` (0.2.3) because their local argv fallback is
         // gone.
-        for req in [">=0.1.6, <0.5", ">=0.2.3, <0.5"] {
+        for req in [">=0.1.6, <0.6", ">=0.2.3, <0.6"] {
             let parsed = VersionReq::parse(req).unwrap();
             assert!(
                 is_compatible_with_current(&parsed),
-                "{req} must be accepted by protocol 0.4.2"
+                "{req} must be accepted by protocol 0.5.0"
             );
         }
     }
@@ -213,7 +252,7 @@ mod tests {
         // the plugin any more. That is a claim about the *manifest range*, not
         // about the code, so it is asserted here: `>=0.2.3` excludes every
         // release that predates `tool_launch`.
-        let herdr = VersionReq::parse(">=0.2.3, <0.5").unwrap();
+        let herdr = VersionReq::parse(">=0.2.3, <0.6").unwrap();
         for pre_tool_launch in ["0.1.0", "0.1.6", "0.2.0", "0.2.2"] {
             let v = Version::parse(pre_tool_launch).unwrap();
             assert!(
@@ -225,7 +264,7 @@ mod tests {
 
         // The floor tracks the dependency, not the kind: orca is an agent_ide
         // too, reads no `tool_launch`, and keeps working with all of them.
-        let orca = VersionReq::parse(">=0.1.0, <0.5").unwrap();
+        let orca = VersionReq::parse(">=0.1.0, <0.6").unwrap();
         assert!(is_compatible(&orca, &Version::new(0, 1, 0)));
         assert!(is_compatible_with_current(&orca));
     }
@@ -233,15 +272,35 @@ mod tests {
     #[test]
     fn an_additive_patch_strands_nobody_a_minor_would_have() {
         // #417 chose 0.4.1 over 0.5.0 for `repo_name`. The difference is not
-        // stylistic: in this 0.x scheme the bundled manifests are bounded
-        // `<0.5`, so a minor bump would refuse every one of them for a field
-        // no plugin is required to read.
-        let bundled = VersionReq::parse(">=0.2.3, <0.5").unwrap();
-        assert!(is_compatible_with_current(&bundled), "0.4.2 is inside <0.5");
+        // stylistic: in this 0.x scheme the bundled manifests carry an upper
+        // bound, so a minor bump refuses every one of them — which is
+        // acceptable for a removal (#496) and pure cost for an added field no
+        // plugin is required to read.
+        let old_bound = VersionReq::parse(">=0.2.3, <0.5").unwrap();
         assert!(
-            !is_compatible(&bundled, &Version::new(0, 5, 0)),
-            "which is exactly what a minor bump would have broken"
+            !is_compatible_with_current(&old_bound),
+            "0.5.0 strands the previous generation's bound, by design"
         );
+        let bundled = VersionReq::parse(">=0.2.3, <0.6").unwrap();
+        assert!(is_compatible_with_current(&bundled), "0.5.0 is inside <0.6");
+        assert!(
+            !is_compatible(&bundled, &Version::new(0, 6, 0)),
+            "and the same boundary is waiting for the next removal"
+        );
+    }
+
+    /// The 0.5.0 boundary (#496), stated the way F-54 means it: every manifest
+    /// from the 0.4 generation is refused at launch rather than left to read
+    /// `plan_mode` / `task_submit` / `resume_session`, which no longer exist.
+    #[test]
+    fn zero_four_manifests_are_stranded_by_the_zero_five_boundary() {
+        for req in ["^0.4", ">=0.1.6, <0.5", ">=0.2.3, <0.5", ">=0.4.0, <0.5"] {
+            let parsed = VersionReq::parse(req).unwrap();
+            assert!(
+                !is_compatible_with_current(&parsed),
+                "{req} must be rejected by protocol 0.5.0"
+            );
+        }
     }
 
     #[test]

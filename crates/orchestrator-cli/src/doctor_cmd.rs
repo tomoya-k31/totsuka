@@ -759,7 +759,7 @@ fn check_hooks(
     let mut unknown_workflows: Vec<(&str, &str)> = Vec::new();
     for wf in &cfg.workflows {
         match store.manifest_of(&wf.agent) {
-            Ok(Some(m)) if m.capabilities.hook_capable() => {
+            Ok(Some(m)) if m.capabilities.hook_completion => {
                 hook_workflows.push((wf.name.as_str(), wf.agent.as_str()));
             }
             // Not installed (`plugin:*` reports that) or not hook-capable.

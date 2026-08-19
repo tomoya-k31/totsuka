@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:3dec7503a12cc91de3ae82ae5bf7cf19f0cd58d8819d6f8b2fd74073163a81fe -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:05ed7a7e62f4bc2ddfe2075d9c3c5dd40cbcd7b64a3843c8411db9e5a8b285df -->
 
 # プラグイン開発ガイド
 
@@ -34,20 +34,23 @@ plugin-protocol = { git = "https://github.com/tomoya-k31/totsuka" }
 name = "github"                     # バイナリ名と一致させる
 kind = "task_source"                # task_source | agent_ide | notifier
 version = "0.1.0"                   # プラグイン自身の版
-protocol_version = ">=0.1.6, <0.5"  # 対応する Orchestrator プロトコルの範囲
+protocol_version = ">=0.1.6, <0.6"  # 対応する Orchestrator プロトコルの範囲
 
 [capabilities]                      # 実装しているものだけ宣言する
-plan_mode = true                    # agent: plan モード対応
 state_stream = true                 # agent: 状態ストリーム対応
+pane_control = true                 # agent: pane のフォーカス・解放・列挙
+hook_completion = true              # agent: 完了をツールのフック経由で報告する
+diagnostics_snapshot = true         # agent: diagnostics/snapshot に応答する
 outputs = ["source"]                # task_source: 成果物の書き戻し対応
-task_submit = true                  # task_source: 必須。push 型ソースの宣言
 ```
 
 Orchestrator は起動前に `protocol_version` の互換性を検査し、宣言された capability だけを要求する。
 
+**Orchestrator が実際に読む鍵しか存在しない。** capability のフィールドと error code は「読み手がいるか」を機械検証しているので、何もしない鍵は追加できない。プロトコル 0.5.0 は読み手の無かった 5 つ（`plan_mode` / `task_submit` / `resume_session` と error code の `-32001` / `-32002`）を削除した。**これらが残っている古いマニフェストでも起動は失敗しない**（未知の鍵は無視される）。ただし `resume_session` は `hook_completion` に**置き換わった**ので、フック経由で完了を報告する agent は新しい名前で宣言し直すこと。
+
 ### 範囲の決め方
 
-**上限**は、下回っていたい破壊的変更の**次**のメジャー／マイナーに置く（現行なら `<0.5`）。上限 `<0.3` のマニフェストは 0.3.0 の Orchestrator に、`<0.4` は 0.4.0 に、それぞれ起動を拒否される。
+**上限**は、下回っていたい破壊的変更の**次**のメジャー／マイナーに置く（現行なら `<0.6`）。上限 `<0.3` のマニフェストは 0.3.0 の Orchestrator に、`<0.4` は 0.4.0 に、`<0.5` は 0.5.0 に、それぞれ起動を拒否される。
 
 **下限も上限と同じくらい意味を持ち、決めるのは「何に依存しているか」である。** プラグインの kind でも、その時点の最新プロトコルでもない。herdr プラグインが `>=0.2.3` を宣言しているのは、ツール起動に必要なフィールドが入ったのが 0.2.3 で、コマンドラインを自前で組み立てるフォールバックをもう持っていないからである。下限で弾いておくことが、削除したフォールバックを「非推奨」ではなく**到達不能**にしている。
 
