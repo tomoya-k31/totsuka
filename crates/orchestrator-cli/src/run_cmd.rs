@@ -297,7 +297,7 @@ fn print_summary(summary: &RunSummary, json: bool) -> Result<(), CliError> {
         }
         let calls: usize = report.methods.values().map(|m| m.calls).sum();
         println!(
-            "plugin {name}: {failed}/{calls} call(s) failed, {} crash(es), {} restart(s)              → `totsuka run --json` for the per-method breakdown",
+            "plugin {name}: {failed}/{calls} call(s) failed, {} crash(es), {} restart(s) → `totsuka run --json` for the per-method breakdown",
             report.crashes, report.restarts
         );
     }
