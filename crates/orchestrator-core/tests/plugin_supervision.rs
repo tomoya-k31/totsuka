@@ -193,48 +193,103 @@ fn notifications(log: &Path) -> Vec<serde_json::Value> {
     test_support::read_ndjson_log(log)
 }
 
-/// Capture the process's `tracing` output for the rest of the test.
+#[derive(Clone)]
+struct CaptureBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureBuf {
+    type Writer = CaptureGuard;
+    fn make_writer(&'a self) -> CaptureGuard {
+        CaptureGuard(self.0.clone())
+    }
+}
+
+struct CaptureGuard(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for CaptureGuard {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The process's one capture buffer. A `tracing` global default can be set
+/// **once per process**, so this cannot be per-test.
+static CAPTURED: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Vec<u8>>>> =
+    std::sync::OnceLock::new();
+
+/// A test's view of the capture: everything written **after** it started.
+struct Capture {
+    buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    from: usize,
+}
+
+impl Clone for Capture {
+    fn clone(&self) -> Self {
+        Self {
+            buf: self.buf.clone(),
+            from: self.from,
+        }
+    }
+}
+
+/// Capture this process's `tracing` output from here on.
 ///
 /// **`set_global_default`, not `with_default`.** A thread-local default is
 /// invisible to the engine, whose work runs on tokio worker threads — a test
-/// that used one would capture nothing and pass, which is the failure this
-/// exists to prevent. Safe here because nextest runs one process per test.
-fn capture_logs() -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+/// using one would capture nothing and pass, which is the failure this exists
+/// to prevent.
+///
+/// **But a global can only be installed once per process**, and the two
+/// runners disagree about what a process is: `cargo nextest` (the local loop,
+/// ADR-0049) gives each test its own, while CI's `cargo test --workspace`
+/// shares one across a binary's tests. The first version installed a fresh
+/// buffer per call and ignored the resulting error, so under CI the second
+/// test to call it read an empty buffer and failed — green locally, red in CI.
+///
+/// So: install once, and hand each test an offset into the shared buffer.
+fn capture_logs() -> Capture {
     use tracing_subscriber::layer::SubscriberExt;
 
-    #[derive(Clone)]
-    struct BufWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufWriter {
-        type Writer = BufGuard;
-        fn make_writer(&'a self) -> BufGuard {
-            BufGuard(self.0.clone())
-        }
-    }
-    struct BufGuard(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-    impl std::io::Write for BufGuard {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(RedactingLayer::new(
-        BufWriter(buf.clone()),
-        LogFormat::Json,
-        false,
-        false,
-    ));
-    let _ = tracing::subscriber::set_global_default(subscriber);
-    buf
+    let buf = CAPTURED
+        .get_or_init(|| {
+            let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let subscriber = tracing_subscriber::registry().with(RedactingLayer::new(
+                CaptureBuf(buf.clone()),
+                LogFormat::Json,
+                false,
+                false,
+            ));
+            // Only this call site sets it, so a failure here means something
+            // else in the binary did — worth failing loudly rather than
+            // silently capturing nothing.
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("no other global tracing subscriber may be installed in this binary");
+            buf
+        })
+        .clone();
+    let from = buf.lock().unwrap().len();
+    Capture { buf, from }
 }
 
-/// The captured log as text.
-fn captured(buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
-    String::from_utf8(buf.lock().unwrap().clone()).unwrap_or_default()
+/// What was logged since [`capture_logs`] was called.
+fn captured(capture: &Capture) -> String {
+    let buf = capture.buf.lock().unwrap();
+    String::from_utf8_lossy(&buf[capture.from.min(buf.len())..]).into_owned()
+}
+
+/// Whether **one line** since [`capture_logs`] contains all of `needles`.
+///
+/// One line, not the whole slice: under `cargo test` sibling tests write into
+/// the same buffer concurrently, so `text.contains(a) && text.contains(b)` can
+/// be satisfied by two different tests' lines. Requiring co-occurrence on a
+/// line, with at least one needle naming this test's own plugin, is what makes
+/// the assertion about this test.
+fn logged_line_with(capture: &Capture, needles: &[&str]) -> bool {
+    captured(capture)
+        .lines()
+        .any(|line| needles.iter().all(|n| line.contains(n)))
 }
 
 /// **The regression this issue is about.** A `task_source` that dies used to
@@ -391,14 +446,11 @@ async fn giving_up_escalates_instead_of_retrying_forever() {
     // *about* it is handed *to* it — nobody hears it. The log is what
     // survives that, which is exactly why it must be checked here rather
     // than trusted because it was seen once by hand.
-    let text = captured(&logs);
     assert!(
-        text.contains("escalating"),
-        "the escalation must reach the log, not only the notifier: {text}"
-    );
-    assert!(
-        text.contains("mock_src"),
-        "and it must name the plugin: {text}"
+        logged_line_with(&logs, &["escalating", "mock_src"]),
+        "the escalation must reach the log naming the plugin, not only the \
+         notifier: {}",
+        captured(&logs)
     );
     let params = &escalations[0]["params"];
     assert!(
@@ -660,7 +712,10 @@ async fn a_task_queued_during_a_crash_window_is_not_failed() {
     // dispatch ever having been attempted — a green test proving nothing.
     let probe = logs.clone();
     let summary = run_until(&mut engine, move || {
-        captured(&probe).contains("leaving the task queued")
+        // Keyed on **this test's** agent: another test parking its own agent
+        // writes the same message into the shared buffer under `cargo test`,
+        // and stopping on that would end this run before its task arrived.
+        logged_line_with(&probe, &["leaving the task queued", "mock_agent"])
     })
     .await;
 

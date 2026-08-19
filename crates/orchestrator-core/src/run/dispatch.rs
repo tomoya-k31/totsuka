@@ -213,6 +213,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 if self.blocked_on_agent.insert(record.id) {
                     tracing::warn!(
                         task_id = record.id,
+                        agent = %agent,
                         "agent plugin is down; leaving the task queued until it is back"
                     );
                 }
@@ -617,8 +618,15 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 // signal is the plugin's own escalation, which `supervise`
                 // sends when the restart budget runs out.
                 if self.blocked_on_agent.insert(task_id) {
+                    // The workflow's agent, not the workflow: a field named
+                    // `agent` holding a workflow name is worse than no field.
+                    let agent = workflows_by_name(&self.settings.workflows)
+                        .get(record.workflow.as_str())
+                        .map(|w| w.agent.clone())
+                        .unwrap_or_default();
                     tracing::warn!(
                         task_id,
+                        agent = %agent,
                         "agent plugin is down; leaving the task queued until it is back"
                     );
                 }
