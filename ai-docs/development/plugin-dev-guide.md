@@ -101,6 +101,21 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 |---|---|---|
 | `notify` | O→P（通知・応答不要） | イベント（`waiting_input`/`done`/`failed`/`pending`）配送（F-90）。**配送失敗はタスク実行に影響させない（F-93）** |
 
+# ログと stderr（#497）
+
+プラグインの **stderr は Orchestrator のログへ素通しで入る**（`plugin=<name>` 付きの `info`）。
+デバッグには便利だが、**秘密を書かないのはプラグイン作者の責務である** — Orchestrator は
+プラグインが何を秘密と考えているか知らないので正しく伏せられず、プラグイン側からは
+Orchestrator の redaction 層に手が届かない。
+
+転送は **10 秒あたり 100 行**にレート制限され、超過分は「N 行抑制」の 1 行に畳まれる。
+失敗ループに入ったプラグインが読む側より速く stderr を吐き、運用者のログを埋めるのを
+防ぐためで、抑制した行数自体は報告されるので**うるささが数字として残る**。
+
+O→P 呼び出しは Orchestrator 側でメソッド別に会計されており、`totsuka run --json` の
+`plugins` に呼び出し数・outcome 別の内訳・直近サンプルの p50/p95 が出る。プラグインが
+何かする必要はない。
+
 # 状態の対応（F-32）
 
 エージェントの状態 `AgentState` は Orchestrator のステートマシンへ写像される（dispatched→running は `Start`、blocked は `waiting_input` でスロット解放、done は publishing へ）。プラグインは自分のツールの状態を 5 値へ正直に写像する。

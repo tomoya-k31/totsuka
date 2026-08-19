@@ -47,6 +47,47 @@ pub struct RunSummary {
     pub queued: Vec<i64>,
     /// Whether the loop exited due to a shutdown signal.
     pub interrupted: bool,
+    /// Per-plugin RPC accounting (#497), keyed by plugin instance name.
+    /// Empty when no plugin was called (a dry run, a config-only failure).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub plugins: std::collections::BTreeMap<String, PluginReport>,
+}
+
+/// What one plugin did over the run (#497).
+///
+/// Reported per plugin because "the run made 40 RPCs and 3 timed out" does not
+/// say **whose** — and the whole point of this is being able to name the
+/// plugin that is slow or failing without reading the log.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct PluginReport {
+    /// Times this plugin's process exited without being asked to (#495).
+    pub crashes: usize,
+    /// Times it was successfully relaunched (#495). Lower than `crashes`
+    /// means it is currently down.
+    pub restarts: usize,
+    /// Per-method call accounting, keyed by JSON-RPC method name.
+    pub methods: std::collections::BTreeMap<String, MethodReport>,
+}
+
+/// What one method did on one plugin (#497).
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct MethodReport {
+    /// Calls started, whatever the outcome.
+    pub calls: usize,
+    /// Count per outcome (`ok` / `timeout` / `crashed` / `closed` /
+    /// `rpc_error` / `json` / `io`). `ok` is included: a failure count alone
+    /// cannot be read as a rate.
+    pub outcomes: std::collections::BTreeMap<String, usize>,
+    /// Median latency over the retained samples, in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p50_ms: Option<u64>,
+    /// 95th-percentile latency over the retained samples, in milliseconds.
+    ///
+    /// **Over the most recent samples, not the whole run.** A `--watch`
+    /// process stays up for weeks, and keeping every latency would be
+    /// unbounded for a number whose useful window is "lately" anyway.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p95_ms: Option<u64>,
 }
 
 /// One line of a `--dry-run` report (§5.1: what would run where, and why).

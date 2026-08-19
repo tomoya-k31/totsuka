@@ -86,7 +86,7 @@ mod sweep;
 
 use support::*;
 
-pub use report::{DryRunEntry, RunStats, RunSummary};
+pub use report::{DryRunEntry, MethodReport, PluginReport, RunStats, RunSummary};
 pub use settings::{
     EngineError, EngineSettings, HookRuntime, PluginSet, RepoSettings, RestartPolicy,
     settings_from_config,
@@ -273,6 +273,15 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     blocked_on_tools: std::collections::HashSet<i64>,
     /// Relaunch attempts per plugin inside the policy window (#495).
     restarts: HashMap<String, supervise::RestartLedger>,
+    /// Call stats harvested from plugin instances that have been replaced
+    /// (#497). A restart (#495) creates a **new** `Plugin`, so its counters
+    /// start at zero; without carrying the old ones forward, the plugin that
+    /// crashed most would report the fewest calls — the opposite of the truth.
+    retired_stats: HashMap<String, crate::adapters::plugin_host::CallStats>,
+    /// Per-plugin crash and restart tallies (#497), so the summary can name
+    /// *which* plugin is flapping rather than only how many times something
+    /// did.
+    plugin_events: HashMap<String, (usize, usize)>,
     events: mpsc::UnboundedReceiver<PluginEvent>,
     /// Kept so `events.recv()` never observes a closed channel, and cloned
     /// whenever a consumer task has to be re-spawned — which a plugin restart
@@ -379,6 +388,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             llm,
             slots,
             restarts: HashMap::new(),
+            retired_stats: HashMap::new(),
+            plugin_events: HashMap::new(),
             slot_holders: HashMap::new(),
             sessions: HashMap::new(),
             events: rx,
@@ -605,6 +616,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         for task in self.db.tasks_in_state(TaskState::Queued)? {
             summary.queued.push(task.id);
         }
+        summary.plugins = self.plugin_reports();
         Ok(summary)
     }
 

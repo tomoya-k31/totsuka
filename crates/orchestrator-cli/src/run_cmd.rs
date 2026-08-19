@@ -283,6 +283,24 @@ fn print_summary(summary: &RunSummary, json: bool) -> Result<(), CliError> {
             s.plugin_restarts
         );
     }
+    // Only the plugins worth mentioning (#497): a healthy run would otherwise
+    // print a table of zeroes every time, which trains people to skip it.
+    // `--json` always carries the full accounting.
+    for (name, report) in &summary.plugins {
+        let failed: usize = report
+            .methods
+            .values()
+            .map(|m| m.calls - m.outcomes.get("ok").copied().unwrap_or(0))
+            .sum();
+        if failed == 0 && report.crashes == 0 {
+            continue;
+        }
+        let calls: usize = report.methods.values().map(|m| m.calls).sum();
+        println!(
+            "plugin {name}: {failed}/{calls} call(s) failed, {} crash(es), {} restart(s)              → `totsuka run --json` for the per-method breakdown",
+            report.crashes, report.restarts
+        );
+    }
     let list = |ids: &[i64]| {
         ids.iter()
             .map(|id| id.to_string())

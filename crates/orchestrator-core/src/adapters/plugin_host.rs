@@ -171,6 +171,124 @@ pub enum Liveness {
     ShutDown,
 }
 
+/// How one O→P call ended (#497).
+///
+/// The variants mirror [`HostError`] rather than collapsing to ok/error
+/// because the difference is what an operator acts on: a `Timeout` means the
+/// plugin is alive but slow, a `Crashed` means it is gone, and an `Rpc` means
+/// it answered and said no. A single "failure" count would hide all three
+/// behind the same number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CallOutcome {
+    /// The plugin answered with a result.
+    Ok,
+    /// The per-call timeout elapsed with no answer.
+    Timeout,
+    /// The process went away mid-call.
+    Crashed,
+    /// The plugin was already closed when the call started.
+    Closed,
+    /// The plugin answered with a JSON-RPC error.
+    RpcError,
+    /// The payload could not be (de)serialized.
+    Json,
+    /// Transport IO failed.
+    Io,
+}
+
+impl CallOutcome {
+    /// The stable string used in logs and in `run --json`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Timeout => "timeout",
+            Self::Crashed => "crashed",
+            Self::Closed => "closed",
+            Self::RpcError => "rpc_error",
+            Self::Json => "json",
+            Self::Io => "io",
+        }
+    }
+
+    fn of<T>(result: &Result<T, HostError>) -> Self {
+        match result {
+            Ok(_) => Self::Ok,
+            Err(HostError::Timeout { .. }) => Self::Timeout,
+            Err(HostError::Crashed(_)) => Self::Crashed,
+            Err(HostError::Closed(_)) => Self::Closed,
+            Err(HostError::Rpc { .. }) => Self::RpcError,
+            Err(HostError::Json(_)) => Self::Json,
+            Err(HostError::Io(_)) => Self::Io,
+            // Neither can reach a call: both are refused before the process
+            // exists. Counted as `Io` rather than given a variant nobody
+            // reads — `declaration-consumed` (#496) would flag that.
+            Err(HostError::ProtocolMismatch { .. }) | Err(HostError::Spawn { .. }) => Self::Io,
+        }
+    }
+}
+
+/// What one plugin's RPCs did, per method (#497).
+///
+/// Latencies are kept as a bounded ring of the most recent
+/// `LATENCY_SAMPLES` durations. Unbounded would be fine for a one-shot run
+/// but not for a `--watch` process that stays up for weeks, and "recently"
+/// is the useful window for the question this answers anyway.
+#[derive(Debug, Default, Clone)]
+pub struct MethodStats {
+    /// Calls started, whatever the outcome.
+    pub calls: usize,
+    /// Count per outcome, including [`CallOutcome::Ok`].
+    pub outcomes: std::collections::BTreeMap<CallOutcome, usize>,
+    /// Most recent latencies in milliseconds, oldest first.
+    recent_ms: std::collections::VecDeque<u64>,
+}
+
+/// How many latency samples one method retains.
+const LATENCY_SAMPLES: usize = 256;
+
+impl MethodStats {
+    fn record(&mut self, outcome: CallOutcome, elapsed_ms: u64) {
+        self.calls += 1;
+        *self.outcomes.entry(outcome).or_default() += 1;
+        if self.recent_ms.len() == LATENCY_SAMPLES {
+            self.recent_ms.pop_front();
+        }
+        self.recent_ms.push_back(elapsed_ms);
+    }
+
+    /// The `q`th percentile (0.0–1.0) of the retained samples, or `None` when
+    /// nothing has been recorded.
+    pub fn percentile_ms(&self, q: f64) -> Option<u64> {
+        if self.recent_ms.is_empty() {
+            return None;
+        }
+        let mut sorted: Vec<u64> = self.recent_ms.iter().copied().collect();
+        sorted.sort_unstable();
+        // Nearest-rank: index of the smallest value at or above the quantile.
+        let rank = (q * sorted.len() as f64).ceil() as usize;
+        Some(sorted[rank.saturating_sub(1).min(sorted.len() - 1)])
+    }
+
+    /// Fold `other` into `self` — used to carry a crashed plugin's counters
+    /// across a restart (#495 replaces the whole `Plugin`, so without this a
+    /// flapping plugin would look like it had made the fewest calls).
+    pub fn merge(&mut self, other: &MethodStats) {
+        self.calls += other.calls;
+        for (outcome, n) in &other.outcomes {
+            *self.outcomes.entry(*outcome).or_default() += n;
+        }
+        for ms in &other.recent_ms {
+            if self.recent_ms.len() == LATENCY_SAMPLES {
+                self.recent_ms.pop_front();
+            }
+            self.recent_ms.push_back(*ms);
+        }
+    }
+}
+
+/// Per-method stats for one plugin, keyed by method name.
+pub type CallStats = std::collections::BTreeMap<String, MethodStats>;
+
 /// Outcome delivered to a waiting call: RPC success value or RPC error.
 type PendingOutcome = Result<Value, jsonrpc::Error>;
 
@@ -242,6 +360,10 @@ struct Inner {
     /// protocol below pairs with `pending` under Acquire/Release and must not
     /// grow a second meaning.
     liveness: watch::Sender<Liveness>,
+    /// Per-method call accounting (#497). A `std::sync` mutex on purpose: the
+    /// critical section is a counter bump, and it is never held across an
+    /// await.
+    stats: std::sync::Mutex<CallStats>,
     timeout: Duration,
 }
 
@@ -261,7 +383,36 @@ impl Inner {
         });
     }
 
+    /// Issue one call, timing it and recording how it ended (#497).
+    ///
+    /// Every O→P call funnels through here, which is why this is the only
+    /// place instrumented — one choke point covers all 13 methods.
     async fn call_raw(&self, method: &str, params: Option<Value>) -> Result<Value, HostError> {
+        let span = tracing::debug_span!("plugin_rpc", plugin = %self.name, method = %method);
+        let _entered = span.enter();
+        let started = std::time::Instant::now();
+        let result = self.call_raw_inner(method, params).await;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let outcome = CallOutcome::of(&result);
+        if let Ok(mut stats) = self.stats.lock() {
+            stats
+                .entry(method.to_string())
+                .or_default()
+                .record(outcome, elapsed_ms);
+        }
+        tracing::debug!(
+            outcome = outcome.as_str(),
+            elapsed_ms,
+            "plugin rpc finished"
+        );
+        result
+    }
+
+    async fn call_raw_inner(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, HostError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(HostError::Closed(self.name.clone()));
         }
@@ -379,6 +530,7 @@ impl Plugin {
             next_id: AtomicI64::new(1),
             closed: AtomicBool::new(false),
             liveness,
+            stats: std::sync::Mutex::new(CallStats::new()),
             timeout: spec.timeout,
         });
 
@@ -439,6 +591,20 @@ impl Plugin {
     /// Whether the plugin process has exited.
     pub fn is_closed(&self) -> bool {
         self.inner.closed.load(Ordering::Acquire)
+    }
+
+    /// A snapshot of this plugin's per-method call stats (#497).
+    ///
+    /// Taken by value because the caller outlives nothing: a restart replaces
+    /// the whole `Plugin`, and the engine harvests this before dropping the
+    /// old one so a flapping plugin does not appear to have made the fewest
+    /// calls.
+    pub fn stats(&self) -> CallStats {
+        self.inner
+            .stats
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default()
     }
 
     /// Watch this plugin's [`Liveness`] (#495).
@@ -692,12 +858,52 @@ async fn deliver_response(inner: &Arc<Inner>, value: Value) {
     }
 }
 
-/// Forward plugin stderr lines into the Orchestrator log (F-38 adjacent).
+/// Lines of plugin stderr forwarded per [`STDERR_WINDOW`] before the rest of
+/// the window is summarised instead (#497).
+const STDERR_LINES_PER_WINDOW: usize = 100;
+
+/// The window [`STDERR_LINES_PER_WINDOW`] is measured over.
+const STDERR_WINDOW: Duration = Duration::from_secs(10);
+
+/// Forward plugin stderr lines into the Orchestrator log (F-38 adjacent),
+/// rate-limited (#497).
+///
+/// A plugin in a tight failure loop can emit stderr faster than anything reads
+/// it, and every line lands in the operator's log verbatim. The cap keeps a
+/// noisy plugin from burying everything else; the suppressed count is still
+/// reported, so the noise itself stays visible as a number.
+///
+/// **The content is not redacted, and cannot be.** The host does not know what
+/// a plugin considers secret, and plugins cannot reach the redaction layer.
+/// That is documented in the plugin guide as the author's responsibility.
 fn spawn_stderr_logger(name: String, stderr: tokio::process::ChildStderr) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
+        let mut window_started = tokio::time::Instant::now();
+        let mut in_window = 0usize;
+        let mut suppressed = 0usize;
         while let Ok(Some(line)) = lines.next_line().await {
-            tracing::info!(plugin = %name, "{line}");
+            if window_started.elapsed() >= STDERR_WINDOW {
+                if suppressed > 0 {
+                    tracing::warn!(
+                        plugin = %name,
+                        "suppressed {suppressed} further stderr line(s) in the last {}s",
+                        STDERR_WINDOW.as_secs()
+                    );
+                }
+                window_started = tokio::time::Instant::now();
+                in_window = 0;
+                suppressed = 0;
+            }
+            if in_window < STDERR_LINES_PER_WINDOW {
+                in_window += 1;
+                tracing::info!(plugin = %name, "{line}");
+            } else {
+                suppressed += 1;
+            }
+        }
+        if suppressed > 0 {
+            tracing::warn!(plugin = %name, "suppressed {suppressed} further stderr line(s)");
         }
     });
 }

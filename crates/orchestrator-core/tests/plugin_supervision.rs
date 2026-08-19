@@ -153,6 +153,25 @@ async fn run_until(
     }
 }
 
+/// Drive a watch-mode run for a fixed window, then stop it. For assertions
+/// whose subject is that a plugin merely *started*, with no event to wait for.
+async fn run_for(
+    engine: &mut Engine<SystemGitRunner, OpenAiRouter>,
+    window: Duration,
+) -> RunSummary {
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move {
+        tokio::time::sleep(window).await;
+        let _ = stop_tx.send(());
+    });
+    engine
+        .run(true, async move {
+            let _ = stop_rx.await;
+        })
+        .await
+        .expect("run loop error")
+}
+
 /// How many times the mock plugin has been launched, from its shared counter.
 fn launches(counter: &Path) -> u64 {
     std::fs::read_to_string(counter)
@@ -391,5 +410,92 @@ async fn restart_can_be_disabled_without_losing_detection() {
             .unwrap()
             .contains("mock_src")
     );
+    engine.shutdown(Duration::from_secs(2)).await;
+}
+
+/// #497: the run summary accounts for RPCs **per plugin**, so a slow or
+/// failing one can be named without reading the log.
+#[tokio::test]
+async fn the_summary_accounts_for_rpcs_per_plugin() {
+    let dir = test_support::scratch("observability_calls");
+    let db = StateDb::open(&dir.join("state.db")).unwrap();
+
+    let mut plugins = PluginSet::default();
+    install(
+        &mut plugins,
+        "notifier",
+        "mock_notify",
+        json!({ "notify_log": dir.join("notify.ndjson") }),
+    )
+    .await;
+
+    let mut engine = Engine::new(
+        db,
+        settings(5),
+        plugins,
+        SystemGitRunner,
+        None::<OpenAiRouter>,
+    )
+    .await;
+    let summary = run_for(&mut engine, Duration::from_millis(200)).await;
+
+    let report = summary
+        .plugins
+        .get("mock_notify")
+        .expect("the launched plugin must appear in the summary");
+    // `initialize` is the one call every plugin takes, so it is the one method
+    // whose presence is guaranteed without staging traffic.
+    let init = report
+        .methods
+        .get("initialize")
+        .expect("initialize must be accounted for");
+    assert_eq!(init.calls, 1);
+    assert_eq!(init.outcomes.get("ok").copied(), Some(1));
+    // A latency is recorded even when it rounds to zero milliseconds — the
+    // field being present is what says "this was measured".
+    assert!(init.p50_ms.is_some(), "p50 must be reported: {init:?}");
+    assert!(init.p95_ms.is_some());
+    engine.shutdown(Duration::from_secs(2)).await;
+}
+
+/// **The interaction that makes this worth having.** A restart (#495) builds a
+/// whole new `Plugin`, so its counters start at zero — the plugin that crashed
+/// most would otherwise report the fewest calls.
+#[tokio::test]
+async fn a_restart_does_not_reset_the_accounting() {
+    let dir = test_support::scratch("observability_restart");
+    let counter = dir.join("launches");
+    let db = StateDb::open(&dir.join("state.db")).unwrap();
+
+    let mut plugins = PluginSet::default();
+    install(
+        &mut plugins,
+        "task_source",
+        "mock_src",
+        json!({ "suicide": { "counter": counter, "times": 1 } }),
+    )
+    .await;
+
+    let mut engine = Engine::new(
+        db,
+        settings(5),
+        plugins,
+        SystemGitRunner,
+        None::<OpenAiRouter>,
+    )
+    .await;
+    let probe = counter.clone();
+    let summary = run_until(&mut engine, move || launches(&probe) >= 2).await;
+
+    let report = summary.plugins.get("mock_src").expect("plugin in summary");
+    let init = report.methods.get("initialize").expect("initialize");
+    // Two launches means two `initialize` calls. Counting 1 would mean the
+    // dead instance's history was dropped along with the instance.
+    assert_eq!(
+        init.calls, 2,
+        "the pre-crash instance's calls must survive the restart: {report:?}"
+    );
+    assert_eq!(report.crashes, 1, "and the crash is attributed by name");
+    assert_eq!(report.restarts, 1);
     engine.shutdown(Duration::from_secs(2)).await;
 }
