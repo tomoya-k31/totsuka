@@ -174,10 +174,10 @@ pub enum Liveness {
 /// How one O→P call ended (#497).
 ///
 /// The variants mirror [`HostError`] rather than collapsing to ok/error
-/// because the difference is what an operator acts on: a `Timeout` means the
-/// plugin is alive but slow, a `Crashed` means it is gone, and an `Rpc` means
-/// it answered and said no. A single "failure" count would hide all three
-/// behind the same number.
+/// because the difference is what an operator acts on: [`Timeout`](Self::Timeout)
+/// means the plugin is alive but slow, [`Crashed`](Self::Crashed) means it is
+/// gone, and [`RpcError`](Self::RpcError) means it answered and said no. A
+/// single "failure" count would hide all three behind the same number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CallOutcome {
     /// The plugin answered with a result.
@@ -385,27 +385,46 @@ impl Inner {
 
     /// Issue one call, timing it and recording how it ended (#497).
     ///
-    /// Every O→P call funnels through here, which is why this is the only
-    /// place instrumented — one choke point covers all 13 methods.
+    /// Every O→P call that **waits for a reply** funnels through here, which
+    /// is why this is the only place instrumented: one choke point covers 12
+    /// of the 13 request methods.
+    ///
+    /// [`Plugin::shutdown`] is the exception, and stays one deliberately — it
+    /// writes its request straight to the transport and then waits on the
+    /// *process*, not on a reply, so routing it through here would make an
+    /// orderly stop block for the full RPC timeout. It never appears in the
+    /// accounting, which costs nothing: the run summary is built before
+    /// shutdown runs.
     async fn call_raw(&self, method: &str, params: Option<Value>) -> Result<Value, HostError> {
+        use tracing::Instrument;
+
+        // `.instrument(span)`, **not** `span.enter()`. A guard only applies to
+        // the thread that took it, so holding one across an `.await` leaves it
+        // behind the moment the multi-threaded runtime resumes this task
+        // elsewhere: the span would cover part of the call and nest under
+        // whatever that thread was doing instead. Attaching the span to the
+        // future is what makes it follow the work.
         let span = tracing::debug_span!("plugin_rpc", plugin = %self.name, method = %method);
-        let _entered = span.enter();
-        let started = std::time::Instant::now();
-        let result = self.call_raw_inner(method, params).await;
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        let outcome = CallOutcome::of(&result);
-        if let Ok(mut stats) = self.stats.lock() {
-            stats
-                .entry(method.to_string())
-                .or_default()
-                .record(outcome, elapsed_ms);
+        async move {
+            let started = std::time::Instant::now();
+            let result = self.call_raw_inner(method, params).await;
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            let outcome = CallOutcome::of(&result);
+            if let Ok(mut stats) = self.stats.lock() {
+                stats
+                    .entry(method.to_string())
+                    .or_default()
+                    .record(outcome, elapsed_ms);
+            }
+            tracing::debug!(
+                outcome = outcome.as_str(),
+                elapsed_ms,
+                "plugin rpc finished"
+            );
+            result
         }
-        tracing::debug!(
-            outcome = outcome.as_str(),
-            elapsed_ms,
-            "plugin rpc finished"
-        );
-        result
+        .instrument(span)
+        .await
     }
 
     async fn call_raw_inner(
