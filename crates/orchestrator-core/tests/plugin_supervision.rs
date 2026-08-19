@@ -317,6 +317,20 @@ async fn giving_up_escalates_instead_of_retrying_forever() {
         !escalations.is_empty(),
         "exhausting the restart budget must reach the operator"
     );
+    // Delivery alone is not enough of a guarantee to rest on. `notify` is
+    // fire-and-forget down a pipe, so a dead notifier still returns `Ok` —
+    // and the sharpest case is a single configured notifier being the plugin
+    // that died, where the escalation about it is handed to it. The log line
+    // is the record that survives that, so it is asserted here rather than
+    // left as an incidental.
+    assert!(
+        escalations[0]["params"]["body"]
+            .as_str()
+            .unwrap()
+            .contains("staying down"),
+        "the escalation must say the plugin is not coming back: {:?}",
+        escalations[0]
+    );
     let params = &escalations[0]["params"];
     assert!(
         params["title"].as_str().unwrap().contains("mock_src"),

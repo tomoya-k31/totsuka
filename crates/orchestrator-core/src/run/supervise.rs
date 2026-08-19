@@ -435,6 +435,22 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                  run` is restarted."
             )),
         };
+        // Logged as well as delivered, because delivery is not reliable and
+        // is least reliable exactly here. `notify` is fire-and-forget down a
+        // pipe: writing to a dead plugin's stdin still returns `Ok` while the
+        // writer task drains, so a failed delivery leaves no error either.
+        //
+        // The case that motivated this is the sharpest one: with a single
+        // notifier configured, the escalation saying **that notifier is down**
+        // is handed to the notifier that is down. Nobody hears it, and before
+        // this line nothing recorded that we tried — an outage announcement
+        // that goes silent, inside the change whose whole purpose is removing
+        // silent failure.
+        tracing::error!(
+            plugin,
+            notifiers = self.plugins.notifiers.len(),
+            "escalating: {reason}"
+        );
         deliver_notification(&self.plugins.notifiers, &params);
     }
 }

@@ -21,7 +21,7 @@ sources:
 
 # Status
 
-stable。実装は #496（本 ADR と同一 PR）。
+stable。実装は #496（本 ADR と同一 PR）。**実機検収済み**（2026-08-20）— F-54 の境界が両方向で効いた。`<0.5` を宣言したままの installed プラグインは protocol 0.5.0 に拒否され（`it supports ">=0.2.3, <0.5" but the orchestrator is 0.5.0`）、`<0.6` へ再インストール後は`launches and accepts its config` になった。`hook_completion` 経由の dispatch も実タスクで通っている。
 
 # Context
 
