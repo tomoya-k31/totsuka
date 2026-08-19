@@ -34,7 +34,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
             PluginEvent::Closed(plugin) => self.on_plugin_closed(&plugin).await,
             // A booked relaunch came due (#495, `run::supervise`).
-            PluginEvent::RestartDue(plugin) => self.on_restart_due(&plugin).await,
+            PluginEvent::RestartDue(plugin) => {
+                self.on_restart_due(&plugin);
+                Ok(())
+            }
+            PluginEvent::Restarted { name, outcome } => self.on_restarted(name, *outcome).await,
             // A normalized Claude Code hook signal from the UDS receiver (#136):
             // idempotent record → task resolution → state transition →
             // verification → output (#138, `run::hooks`).

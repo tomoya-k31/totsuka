@@ -43,7 +43,7 @@ use super::{
     Engine, EngineError, LOOKUP_IN_FLIGHT_BUDGET, PluginEvent, SUBMIT_IN_FLIGHT_BUDGET,
     deliver_notification, state_event,
 };
-use crate::adapters::plugin_host::{Liveness, Plugin};
+use crate::adapters::plugin_host::{HostError, Liveness, Plugin};
 use crate::ports::git::GitRunner;
 use crate::ports::llm::LlmRouter;
 use plugin_protocol::manifest::PluginKind as ManifestKind;
@@ -161,6 +161,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// or a fresh id could be matched against a task belonging to the dead one.
     pub(super) async fn on_plugin_closed(&mut self, plugin: &str) -> Result<(), EngineError> {
         tracing::warn!(plugin, "plugin process exited");
+        // Counted before anything decides what to do about it: a crash that
+        // was repaired is still a crash, and an operator who only ever sees
+        // `plugin_restarts` cannot tell "never died" from "died and stayed
+        // down" (the `restart = false` case, where nothing is relaunched).
+        self.stats.plugin_crashes += 1;
         if self.plugins.agents.contains_key(plugin) {
             self.fail_sessions_of(plugin).await?;
         }
@@ -211,6 +216,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             // this path, and so would any future caller that assembles a
             // `PluginSet` without specs — detection still happened.
             tracing::warn!(plugin, "no launch spec recorded → not restarting");
+            self.escalate_dead_plugin(plugin, "no launch spec was recorded for it");
             return;
         }
         if self.settings.restart_disabled.contains(plugin) {
@@ -218,6 +224,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 plugin,
                 "restart is disabled for this plugin ([plugins.{plugin}].restart = false) \
                  → leaving it down"
+            );
+            // Escalating here is the whole point of the switch being about
+            // *relaunching* and not about *noticing*. Someone who sets
+            // `restart = false` wants the corpse kept, not the alarm silenced.
+            self.escalate_dead_plugin(
+                plugin,
+                "restart is disabled for it ([plugins.<name>].restart = false)",
             );
             return;
         }
@@ -231,7 +244,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 plugin,
                 "gave up restarting after {used} attempts in {window_secs}s"
             );
-            self.escalate_dead_plugin(plugin, used, window_secs);
+            self.escalate_dead_plugin(
+                plugin,
+                &format!("{used} restart attempts in {window_secs}s all failed"),
+            );
             return;
         }
         ledger.record(now);
@@ -252,23 +268,49 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         });
     }
 
-    /// A booked relaunch came due: launch, and re-wire the new process.
-    pub(super) async fn on_restart_due(&mut self, plugin: &str) -> Result<(), EngineError> {
+    /// A booked relaunch came due: launch **off the loop**.
+    ///
+    /// `Plugin::launch` sends `initialize` and waits for the reply, bounded
+    /// only by the plugin's own RPC timeout (120s by default). Awaiting that
+    /// here would stall the engine loop for the duration — no hook signals, no
+    /// `task/submit` acks — for a plugin that is already down. The backoff is
+    /// slept off the loop for the same reason; doing the launch on it would
+    /// have undone that.
+    pub(super) fn on_restart_due(&mut self, plugin: &str) {
         let Some(spec) = self.plugins.specs.get(plugin).cloned() else {
-            return Ok(());
+            return;
         };
-        let kind = spec.manifest.kind;
-        match Plugin::launch(spec).await {
+        let name = plugin.to_string();
+        let tx = self.events_tx.clone();
+        tokio::spawn(async move {
+            let outcome = Plugin::launch(spec).await;
+            let _ = tx.send(PluginEvent::Restarted {
+                name,
+                outcome: Box::new(outcome),
+            });
+        });
+    }
+
+    /// A relaunch attempt finished (#495).
+    pub(super) async fn on_restarted(
+        &mut self,
+        name: String,
+        outcome: Result<Plugin, HostError>,
+    ) -> Result<(), EngineError> {
+        match outcome {
             Ok(launched) => {
-                self.install_restarted(plugin, kind, launched).await;
+                let Some(kind) = self.plugins.specs.get(&name).map(|s| s.manifest.kind) else {
+                    return Ok(());
+                };
+                self.install_restarted(&name, kind, launched).await;
                 self.stats.plugin_restarts += 1;
-                tracing::info!(plugin, "plugin restarted");
+                tracing::info!(plugin = %name, "plugin restarted");
             }
             Err(e) => {
-                tracing::warn!(plugin, "restart failed: {e}");
+                tracing::warn!(plugin = %name, "restart failed: {e}");
                 // A failed launch is a spent attempt like any other, so the
                 // same budget applies and this terminates.
-                self.schedule_restart(plugin);
+                self.schedule_restart(&name);
             }
         }
         Ok(())
@@ -299,16 +341,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// task's problem, and attaching it to whichever task happened to be
     /// running would misattribute it. `task_id` and `workflow` are `None` on
     /// purpose.
-    fn escalate_dead_plugin(&self, plugin: &str, attempts: usize, window_secs: u64) {
+    fn escalate_dead_plugin(&self, plugin: &str, reason: &str) {
         let params = NotifyParams {
             event: NotifierEvent::Escalated,
             task_id: None,
             workflow: None,
             title: format!("plugin `{plugin}` is down"),
             body: Some(format!(
-                "{attempts} restart attempts in {window_secs}s all failed. \
-                 Tasks from this plugin will not be processed until it is fixed \
-                 and `totsuka run` is restarted."
+                "It exited and is staying down: {reason}. Tasks needing this \
+                 plugin will not be processed until it is fixed and `totsuka \
+                 run` is restarted."
             )),
         };
         deliver_notification(&self.plugins.notifiers, &params);

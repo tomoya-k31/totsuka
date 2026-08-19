@@ -153,26 +153,6 @@ async fn run_until(
     }
 }
 
-/// Drive a watch-mode run for a fixed window, then stop it. For assertions
-/// whose subject is that **nothing** happens, where there is no condition to
-/// wait for.
-async fn run_for(
-    engine: &mut Engine<SystemGitRunner, OpenAiRouter>,
-    window: Duration,
-) -> RunSummary {
-    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-    tokio::spawn(async move {
-        tokio::time::sleep(window).await;
-        let _ = stop_tx.send(());
-    });
-    engine
-        .run(true, async move {
-            let _ = stop_rx.await;
-        })
-        .await
-        .expect("run loop error")
-}
-
 /// How many times the mock plugin has been launched, from its shared counter.
 fn launches(counter: &Path) -> u64 {
     std::fs::read_to_string(counter)
@@ -225,6 +205,10 @@ async fn a_dead_task_source_is_noticed_and_comes_back() {
     assert_eq!(
         summary.stats.plugin_restarts, 1,
         "the restart must be visible in the run summary, not only in the log"
+    );
+    assert_eq!(
+        summary.stats.plugin_crashes, 1,
+        "and so must the death it repaired — equal counts mean nothing is still down"
     );
     engine.shutdown(Duration::from_secs(2)).await;
 }
@@ -337,10 +321,17 @@ async fn giving_up_escalates_instead_of_retrying_forever() {
 
 /// `[plugins.{name}].restart = false` suppresses the relaunch **and keeps the
 /// detection** — the shape someone debugging a plugin by hand needs.
+///
+/// The first version of this test only asserted that nothing was relaunched,
+/// which its own name says is half the claim. It passed while the escalation
+/// was missing entirely, because it installed no notifier to receive one.
+/// **Assert the detection you promise**, not just the absence of the thing you
+/// suppressed.
 #[tokio::test]
 async fn restart_can_be_disabled_without_losing_detection() {
     let dir = test_support::scratch("supervise_disabled");
     let counter = dir.join("launches");
+    let notify_log = dir.join("notify.ndjson");
     let db = StateDb::open(&dir.join("state.db")).unwrap();
 
     let mut plugins = PluginSet::default();
@@ -351,21 +342,54 @@ async fn restart_can_be_disabled_without_losing_detection() {
         json!({ "task_submit": true, "suicide": { "counter": counter, "times": 1 } }),
     )
     .await;
+    install(
+        &mut plugins,
+        "notifier",
+        "mock_notify",
+        json!({ "notify_log": notify_log }),
+    )
+    .await;
 
     let mut settings = settings(5);
     settings.restart_disabled = ["mock_src".to_string()].into_iter().collect();
     let mut engine =
         Engine::new(db, settings, plugins, SystemGitRunner, None::<OpenAiRouter>).await;
 
-    // Nothing to wait *for* — the assertion is that nothing happens — so run a
-    // short fixed window and check the count never moved. The window only has
-    // to outlast a zero backoff, which would fire on the very next tick.
-    let summary = run_for(&mut engine, Duration::from_millis(500)).await;
+    let probe = notify_log.clone();
+    let summary = run_until(&mut engine, move || {
+        notifications(&probe)
+            .iter()
+            .any(|n| n["params"]["event"] == "escalated")
+    })
+    .await;
+
+    // Suppressed: the relaunch.
     assert_eq!(
         launches(&counter),
         1,
         "a disabled plugin must stay down after its single launch"
     );
     assert_eq!(summary.stats.plugin_restarts, 0);
+    // Kept: everything else. The crash is counted whatever happens next, so
+    // `plugin_restarts == 0` alone can never be read as "nothing died".
+    assert_eq!(
+        summary.stats.plugin_crashes, 1,
+        "the death must be counted even though nothing was relaunched"
+    );
+    let escalations: Vec<_> = notifications(&notify_log)
+        .into_iter()
+        .filter(|n| n["params"]["event"] == "escalated")
+        .collect();
+    assert_eq!(
+        escalations.len(),
+        1,
+        "a plugin left down on purpose is still news, and exactly once"
+    );
+    assert!(
+        escalations[0]["params"]["title"]
+            .as_str()
+            .unwrap()
+            .contains("mock_src")
+    );
     engine.shutdown(Duration::from_secs(2)).await;
 }

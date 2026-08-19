@@ -133,6 +133,15 @@ pub(crate) enum PluginEvent {
     /// backoff is slept in a spawned task so the engine loop keeps serving
     /// events while a plugin is down.
     RestartDue(String),
+    /// A relaunch attempt finished (#495). Boxed because a live [`Plugin`] is
+    /// much larger than the other variants, and every event on the channel
+    /// would otherwise pay for it.
+    Restarted {
+        /// The plugin instance that was relaunched.
+        name: String,
+        /// The new process, or why it could not be started.
+        outcome: Box<Result<Plugin, HostError>>,
+    },
     /// A normalized Claude Code hook signal from the UDS receiver (#136).
     /// Engine interpretation (state transitions, verification) lands in #138.
     HookSignal(AgentSignal),

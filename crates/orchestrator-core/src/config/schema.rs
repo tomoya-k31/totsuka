@@ -194,11 +194,11 @@ pub struct PluginConfig {
     /// Whether a crash of this plugin is followed by a relaunch (#495).
     /// Defaults to `true`.
     ///
-    /// Turning it off keeps the **detection** — the death is still logged,
-    /// still fails an agent's in-flight tasks, and still escalates to the
-    /// notifiers. Only the relaunch is suppressed, which is what someone
-    /// debugging a plugin by hand wants: a process that stays dead so they can
-    /// see why.
+    /// Turning it off keeps the **detection**: the death is logged, counted in
+    /// [`RunStats::plugin_crashes`](crate::run::RunStats), fails an agent's
+    /// in-flight tasks, and sends an `escalated` notification. Only the
+    /// relaunch is suppressed, which is what someone debugging a plugin by
+    /// hand wants — a process that stays dead so they can see why.
     #[serde(default = "default_true")]
     pub restart: bool,
 }
