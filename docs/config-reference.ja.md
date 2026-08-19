@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:ec39981cd439f35aeedaae4962adaa5626ed04efce1292e0765eb7b0898a8472 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:fb44d419677414941387dc09aefab8b62be4fd197aa9e4c6543a67a9cc1fdce2 -->
 
 # 設定リファレンス
 
@@ -85,6 +85,7 @@
 | `max_concurrency` | int? | 無制限 | agent プラグイン単位の同時実行上限 |
 | `timeout_secs` | int? | 120 | プラグイン呼び出し 1 本のタイムアウト |
 | `log_level` | string? | なし | プラグインのログレベル |
+| `restart` | bool | true | クラッシュしたプラグインを起動し直すか。1 秒・2 秒・4 秒…と間隔を広げながら**最大 5 回・直近 5 分以内**まで試し、使い切ったら `escalated` を通知する。**`false` にしても死んだことの検知は残る** — ログにも実行サマリにも出るし、エージェントのプラグインなら実行中のタスクは失敗として畳まれ、通知も飛ぶ。止まるのは起動し直す動作だけなので、プラグインを手元で調べたいときに使う |
 | `poll_interval_secs` | int? | 60 | task_source のみ。task_source はすべて push 型なので **totsuka 自身がポーリングすることはない** — この値は起動時にプラグインへ転送され、プラグイン内部の取得周期になる。イベント駆動のソースは無視してよい |
 
 ## `[[workflows]]`

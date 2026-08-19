@@ -191,6 +191,21 @@ pub struct PluginConfig {
     /// F-06). Defaults to [`DEFAULT_POLL_INTERVAL_SECS`].
     #[serde(default)]
     pub poll_interval_secs: Option<u64>,
+    /// Whether a crash of this plugin is followed by a relaunch (#495).
+    /// Defaults to `true`.
+    ///
+    /// Turning it off keeps the **detection** — the death is still logged,
+    /// still fails an agent's in-flight tasks, and still escalates to the
+    /// notifiers. Only the relaunch is suppressed, which is what someone
+    /// debugging a plugin by hand wants: a process that stays dead so they can
+    /// see why.
+    #[serde(default = "default_true")]
+    pub restart: bool,
+}
+
+/// serde default for [`PluginConfig::restart`].
+fn default_true() -> bool {
+    true
 }
 
 /// Execution mode of a workflow (F-80, F-82).

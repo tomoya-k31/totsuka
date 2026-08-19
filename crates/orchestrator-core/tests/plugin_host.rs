@@ -424,3 +424,67 @@ kind = "task_source"
         "F-58: disabled never launched"
     );
 }
+
+/// #495: a crash and an orderly shutdown both end with the child gone and
+/// stdout closed. The host has to tell them apart, because a supervisor that
+/// cannot would relaunch every plugin during shutdown.
+#[tokio::test]
+async fn a_crash_is_reported_as_crashed() {
+    use orchestrator_core::adapters::plugin_host::Liveness;
+
+    let plugin = Plugin::launch(spec(">=0.1.6, <0.5")).await.expect("launch");
+    let mut liveness = plugin.liveness();
+    assert_eq!(*liveness.borrow_and_update(), Liveness::Live);
+
+    let _: Result<serde_json::Value, _> = plugin.call("crash", &()).await;
+    liveness.changed().await.expect("liveness must change");
+    assert_eq!(*liveness.borrow(), Liveness::Crashed);
+}
+
+/// The same watch, on the path that must **not** look like a crash.
+#[tokio::test]
+async fn an_orderly_shutdown_is_never_reported_as_a_crash() {
+    use orchestrator_core::adapters::plugin_host::Liveness;
+
+    let plugin = Plugin::launch(spec(">=0.1.6, <0.5")).await.expect("launch");
+    let mut liveness = plugin.liveness();
+
+    plugin.shutdown(Duration::from_secs(5)).await.unwrap();
+    liveness.changed().await.expect("liveness must change");
+    // The reader sees EOF *after* `shutdown` marked its intent, and marking is
+    // first-writer-wins precisely so that EOF cannot relabel this. Give the
+    // reader a moment to run and confirm it stayed put.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        *liveness.borrow(),
+        Liveness::ShutDown,
+        "an EOF that follows an intentional shutdown must not read as a crash"
+    );
+}
+
+/// A liveness receiver outlives the plugin it came from — the property a
+/// supervisor depends on when it replaces the very value it was watching.
+///
+/// **Dropping a live plugin reads as a crash**, and that is correct rather
+/// than a wart: `kill_on_drop` really does kill the child, so the process
+/// really is gone. It is harmless where it happens because a restart only
+/// drops the *old* instance, whose watcher has already fired and exited by
+/// then; and an orderly `shutdown` marks its intent first, which
+/// first-writer-wins preserves.
+#[tokio::test]
+async fn liveness_outlives_the_plugin_it_came_from() {
+    use orchestrator_core::adapters::plugin_host::Liveness;
+
+    let plugin = Plugin::launch(spec(">=0.1.6, <0.5")).await.expect("launch");
+    let mut liveness = plugin.liveness();
+    drop(plugin);
+
+    // The receiver must resolve rather than hang, or every supervisor task
+    // would leak one per restart.
+    let resolved = tokio::time::timeout(Duration::from_secs(5), liveness.changed()).await;
+    assert!(
+        resolved.is_ok(),
+        "a dropped plugin must still resolve its watchers"
+    );
+    assert_eq!(*liveness.borrow(), Liveness::Crashed);
+}

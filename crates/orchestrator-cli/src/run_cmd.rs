@@ -239,6 +239,10 @@ async fn launch_plugins(
     let mut set = PluginSet::default();
     for (name, plugin_cfg) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
         let spec = plugin_spec(&cx.store(), &cx.plugin_config_dir(), cfg, name, env)?;
+        // Keep the spec: it is everything a relaunch needs (#495), and
+        // re-deriving it later would re-resolve the plugin's secrets — a
+        // Keychain/1Password round trip per crash, on the engine loop.
+        set.specs.insert(name.clone(), spec.clone());
         let plugin = Plugin::launch(spec).await?;
         match plugin_cfg.kind {
             PluginKind::TaskSource => set.sources.insert(name.clone(), plugin),
@@ -271,6 +275,14 @@ fn print_summary(summary: &RunSummary, json: bool) -> Result<(), CliError> {
         "run summary: submitted {} / dispatched {} / done {} / failed {}",
         s.submitted, s.dispatched, s.done, s.failed
     );
+    if s.plugin_restarts > 0 {
+        // The restart itself is deliberately quiet, so this line is the only
+        // place a flapping plugin becomes visible without reading the log.
+        println!(
+            "plugin restarts: {} (a plugin crashed and was relaunched — check the log)",
+            s.plugin_restarts
+        );
+    }
     let list = |ids: &[i64]| {
         ids.iter()
             .map(|id| id.to_string())

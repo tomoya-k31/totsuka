@@ -153,6 +153,8 @@ fn settings_with(
         tools: orchestrator_core::tool::builtin_registry(),
         default_tool: "claude".to_string(),
         prompts: Default::default(),
+        plugin_restart: Default::default(),
+        restart_disabled: Default::default(),
         hook: Some(hook),
     }
 }

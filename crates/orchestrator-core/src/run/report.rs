@@ -18,6 +18,10 @@ pub struct RunStats {
     pub done: usize,
     /// Tasks that reached `failed` this run.
     pub failed: usize,
+    /// Plugin processes relaunched after crashing (#495). A non-zero count on
+    /// an otherwise clean run is the signal that something is flapping — the
+    /// restart itself is silent by design, so this is where it shows up.
+    pub plugin_restarts: usize,
 }
 
 /// The summary printed when `run` exits (§5.1 one-shot contract).

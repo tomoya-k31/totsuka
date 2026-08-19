@@ -102,6 +102,7 @@ owner: tomoya-k31
 | `max_concurrency` | int? | 無制限 | agent プラグイン単位の同時実行上限（F-42） |
 | `timeout_secs` | int? | 120 | RPC タイムアウト秒 |
 | `log_level` | string? | なし | プラグインのログレベル |
+| `restart` | bool | true | クラッシュしたら再起動するか（#495 / [ADR-0051](/decisions/adr-0051-plugin-supervision.md)）。指数バックオフ（1s / 2s / 4s …）で**最大 5 回・5 分のスライディング窓**、尽きたら `escalated` を通知する。**`false` にしても検知は残る** — ログにも `RunSummary` にも出るし、agent なら在席タスクは畳まれ、エスカレーションもする。止まるのは再起動だけで、プラグインを手で調べたいときの形。バックオフの形は設定に出していない（運用者が調整する材料を持たないため） |
 | `poll_interval_secs` | int? | 60 | task_source のみ。**fetch 型 source**（`task_submit` capability 未宣言）では `run --watch` の Orchestrator 側ポーリング間隔（F-06）。**push 型 source**（`task_submit` 宣言、0.1.6 / [ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）はポーリングされず、この値は `initialize` でプラグインへ転送されプラグイン内部の fetch 周期になる |
 
 # `[[workflows]]`
