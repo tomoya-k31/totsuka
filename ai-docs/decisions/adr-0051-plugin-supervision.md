@@ -5,6 +5,8 @@ description: "死活検知が agent_ide だけに配線され、しかも通知�
 resource: https://github.com/tomoya-k31/totsuka/issues/495
 tags: [decision, plugin, lifecycle, supervision, reliability, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-20T10:30:00Z }
 status: stable
 owner: tomoya-k31
 sources:
@@ -21,7 +23,7 @@ sources:
 
 # Status
 
-stable。実装は #495（本 ADR と同一 PR）。実機検収は未了。
+stable。実装は #495（本 ADR と同一 PR）。**実機検収済み**（2026-08-20）— 実 herdr / 実 Slack を相手に、notifier と task_source の両方を本当に kill して検知・再起動を確認した。Slack ソースは Socket Mode の再接続（`socket mode: connected (hello)`）まで戻る。バックオフは実測 1→2→4→8→16 秒で、5 回で `gave up restarting after 5 attempts in 300s` に到達した。
 
 # Context
 

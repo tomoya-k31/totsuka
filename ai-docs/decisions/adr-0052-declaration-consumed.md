@@ -5,6 +5,8 @@ description: "Capabilities のフィールドと error_code の定数が実際�
 resource: https://github.com/tomoya-k31/totsuka/issues/496
 tags: [decision, plugin, protocol, fitness-function, arch-lint, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-20T10:30:00Z }
 status: stable
 owner: tomoya-k31
 sources:
@@ -21,7 +23,7 @@ sources:
 
 # Status
 
-stable。実装は #496（本 ADR と同一 PR）。
+stable。実装は #496（本 ADR と同一 PR）。**実機検収済み**（2026-08-20）— F-54 の境界が両方向で効いた。`<0.5` を宣言したままの installed プラグインは protocol 0.5.0 に拒否され（`it supports ">=0.2.3, <0.5" but the orchestrator is 0.5.0`）、`<0.6` へ再インストール後は`launches and accepts its config` になった。`hook_completion` 経由の dispatch も実タスクで通っている。
 
 # Context
 

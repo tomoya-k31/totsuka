@@ -21,6 +21,7 @@ use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::registry::LookupSpan;
 
 use super::redact::{is_prompt_field, redact_field};
 use crate::terminal::safe;
@@ -55,6 +56,36 @@ impl<W> RedactingLayer<W> {
             ansi,
         }
     }
+}
+
+/// A span's own fields, already redacted, stored in the span's extensions so
+/// every event inside it can be labelled with them (#497 follow-up).
+///
+/// **Extensions are per-span and shared by every layer**, and this process
+/// installs two `RedactingLayer`s (JSON to file, human to stderr). So the
+/// store must be written at most once and must be **policy-free**: whichever
+/// layer sees the span first wins, and if what it stored depended on that
+/// layer's settings the other layer would silently render the wrong thing.
+///
+/// Hence prompt/payload fields are stored (redacted) and filtered at *render*
+/// time by each layer, rather than dropped here.
+///
+/// Without this the layer renders **only the event's own fields**, and a span
+/// carrying `plugin` / `method` contributes nothing to the line — which is how
+/// `plugin rpc finished elapsed_ms=12 outcome=ok` reached production without
+/// saying *which plugin's which method*, the one question the instrumentation
+/// existed to answer.
+#[derive(Debug)]
+struct SpanFields {
+    fields: Map<String, Value>,
+    /// The level the span was **declared** at.
+    ///
+    /// Carried because a prompt/payload field's gate is about where it was
+    /// *recorded*, not about the line that happens to print it. Filtering a
+    /// span's prompt field on the triggering event's level instead would let
+    /// a stray `info_span!(prompt = …)` leak through any inner `debug!` —
+    /// the exact hole the event path closes by checking its own level.
+    level: tracing::Level,
 }
 
 /// Collects an event's fields into a redacted JSON map + message.
@@ -104,10 +135,65 @@ impl Visit for FieldCollector {
 
 impl<S, W> Layer<S> for RedactingLayer<W>
 where
-    S: Subscriber,
+    S: Subscriber + for<'a> LookupSpan<'a>,
     W: for<'a> MakeWriter<'a> + 'static,
 {
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+    /// Record a span's fields once, at creation, so events inside it can carry
+    /// them. Redaction happens here, on the same path as event fields — a span
+    /// field is no less capable of holding a secret.
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, S>,
+    ) {
+        let Some(span) = ctx.span(id) else { return };
+        let mut ext = span.extensions_mut();
+        // Already stored by the sibling layer. Inserting twice panics
+        // (`Extensions::insert` asserts the slot is empty), which is how the
+        // first version of this took down a live `run` on startup.
+        if ext.get_mut::<SpanFields>().is_some() {
+            return;
+        }
+        // `true`: store everything, filter at render. See [`SpanFields`].
+        let mut collector = FieldCollector::new(true);
+        attrs.record(&mut collector);
+        // A span's `message` field is dropped rather than stored: the event's
+        // message is the line's prose, and letting a span supply one would
+        // either fight it or print twice. Spans are named, not messaged.
+        ext.insert(SpanFields {
+            fields: collector.fields,
+            level: *attrs.metadata().level(),
+        });
+    }
+
+    /// Fields added after creation (`span.record(…)`) land here. Without this
+    /// the capture would silently cover only what was passed to the macro —
+    /// the kind of partial coverage that reads as working.
+    fn on_record(
+        &self,
+        id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: Context<'_, S>,
+    ) {
+        let Some(span) = ctx.span(id) else { return };
+        let mut collector = FieldCollector::new(true);
+        values.record(&mut collector);
+        let level = *span.metadata().level();
+        let mut ext = span.extensions_mut();
+        if let Some(stored) = ext.get_mut::<SpanFields>() {
+            // Idempotent across the two layers: both record the same values,
+            // so the second pass overwrites with what is already there.
+            stored.fields.extend(collector.fields);
+        } else {
+            ext.insert(SpanFields {
+                fields: collector.fields,
+                level,
+            });
+        }
+    }
+
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         let meta = event.metadata();
         // Prompt/payload fields are only ever logged at debug+ (convention in
         // ai-docs/development/logging-conventions.md), so a stray `info!(prompt=…)`
@@ -116,6 +202,31 @@ where
             && matches!(*meta.level(), tracing::Level::DEBUG | tracing::Level::TRACE);
         let mut collector = FieldCollector::new(allow_prompts);
         event.record(&mut collector);
+        // Outermost span first, then inward, then the event's own fields last:
+        // the nearest name for a key wins, which is what a reader assumes.
+        let mut fields = Map::new();
+        if let Some(scope) = ctx.event_scope(event) {
+            for span in scope.from_root() {
+                if let Some(stored) = span.extensions().get::<SpanFields>() {
+                    // The prompt policy is applied here, per layer, not at
+                    // store time — see [`SpanFields`]. The level checked is
+                    // the **span's own**, mirroring what the event path does
+                    // with its own level; using the triggering event's would
+                    // let an `info_span!(prompt = …)` out through any inner
+                    // `debug!`.
+                    let span_prompts = self.log_prompts
+                        && matches!(stored.level, tracing::Level::DEBUG | tracing::Level::TRACE);
+                    for (k, v) in &stored.fields {
+                        if is_prompt_field(k) && !span_prompts {
+                            continue;
+                        }
+                        fields.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        fields.extend(collector.fields);
+        collector.fields = fields;
         let ts = now_rfc3339();
 
         let line = match self.format {
@@ -223,6 +334,167 @@ mod tests {
 
     fn capture(log_prompts: bool, emit: impl FnOnce()) -> String {
         capture_as(LogFormat::Json, log_prompts, emit)
+    }
+
+    /// **Two layers, one subscriber — the shape production actually runs.**
+    ///
+    /// `logging::init` installs a JSON file layer *and* a human stderr layer.
+    /// Span extensions are per-span and shared by every layer, so a layer that
+    /// stores into them unconditionally panics on the second insert
+    /// (`Extensions::insert` asserts the slot is empty). The first version of
+    /// span-field rendering did exactly that and took down a live `run` at
+    /// startup — while every test here passed, because they all registered a
+    /// single layer.
+    ///
+    /// Both layers are **level-filtered like production**, and the events
+    /// emitted through this are `debug_span!` + `debug!` — what `call_raw`
+    /// actually uses. An unfiltered `info_span!` test would pass while a
+    /// `debug_span!` silently failed to register under the default INFO
+    /// filter, leaving `on_new_span` unrun and the span fields absent.
+    fn capture_two_layers(emit: impl FnOnce()) -> (String, String) {
+        use tracing_subscriber::filter::LevelFilter;
+        use tracing_subscriber::layer::Layer as _;
+
+        let json_buf = Arc::new(Mutex::new(Vec::new()));
+        let human_buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = Registry::default()
+            .with(
+                RedactingLayer::new(BufWriter(json_buf.clone()), LogFormat::Json, false, false)
+                    .with_filter(LevelFilter::DEBUG),
+            )
+            .with(
+                RedactingLayer::new(BufWriter(human_buf.clone()), LogFormat::Human, false, false)
+                    .with_filter(LevelFilter::DEBUG),
+            );
+        with_default(subscriber, emit);
+        (
+            String::from_utf8(json_buf.lock().unwrap().clone()).unwrap(),
+            String::from_utf8(human_buf.lock().unwrap().clone()).unwrap(),
+        )
+    }
+
+    #[test]
+    fn two_layers_share_one_span_without_panicking() {
+        let (json, human) = capture_two_layers(|| {
+            // `debug_span!` + `debug!`, matching `Inner::call_raw`. Under an
+            // unfiltered registry an `info_span!` would prove less: the
+            // filtered path is where a span can fail to register at all.
+            let span = tracing::debug_span!("plugin_rpc", plugin = "slack", method = "task/submit");
+            let _g = span.enter();
+            tracing::debug!(outcome = "ok", "plugin rpc finished");
+        });
+        // Both streams must carry the span's fields — storing once must not
+        // mean only one layer can read them.
+        let doc: Value = serde_json::from_str(json.trim()).unwrap();
+        assert_eq!(doc["plugin"], "slack", "{json}");
+        assert_eq!(doc["method"], "task/submit");
+        assert!(human.contains("plugin=slack"), "{human}");
+        assert!(human.contains("method=task/submit"), "{human}");
+    }
+
+    /// #497 follow-up: an event inside a span carries the span's fields.
+    ///
+    /// This is the whole reason the instrumentation exists — `plugin rpc
+    /// finished elapsed_ms=12 outcome=ok` reached production without naming
+    /// the plugin or the method, because the layer only ever rendered an
+    /// event's *own* fields and silently dropped everything the span carried.
+    #[test]
+    fn an_event_carries_the_fields_of_its_spans() {
+        let out = capture(false, || {
+            let span =
+                tracing::info_span!("plugin_rpc", plugin = "slack", method = "task/dispatch");
+            let _g = span.enter();
+            tracing::info!(outcome = "ok", "plugin rpc finished");
+        });
+        let doc: Value = serde_json::from_str(out.trim()).unwrap();
+        assert_eq!(doc["plugin"], "slack", "{out}");
+        assert_eq!(doc["method"], "task/dispatch", "{out}");
+        assert_eq!(doc["outcome"], "ok");
+        assert_eq!(doc["message"], "plugin rpc finished");
+    }
+
+    /// Nested spans compose, and the **nearest** value for a key wins — an
+    /// inner span (or the event) refining an outer one must not be shadowed by
+    /// the outer value.
+    #[test]
+    fn the_nearest_value_for_a_key_wins() {
+        let out = capture(false, || {
+            let outer = tracing::info_span!("outer", plugin = "slack", scope = "outer");
+            let _o = outer.enter();
+            let inner = tracing::info_span!("inner", scope = "inner");
+            let _i = inner.enter();
+            tracing::info!(scope = "event", "done");
+        });
+        let doc: Value = serde_json::from_str(out.trim()).unwrap();
+        // The event is nearest, so it wins over both spans…
+        assert_eq!(doc["scope"], "event", "{out}");
+        // …while a key only the outer span sets still comes through.
+        assert_eq!(doc["plugin"], "slack");
+    }
+
+    /// A prompt/payload field on a span is gated by the **span's own** level,
+    /// the way an event's is gated by its own.
+    ///
+    /// Without this, the gate would be the triggering event's level, and a
+    /// stray `info_span!(prompt = …)` would leak through any inner `debug!` —
+    /// reopening on the span path exactly the hole the event path closes.
+    /// Asserted at both levels, because a one-sided check would pass on a
+    /// layer that simply dropped every span prompt field.
+    #[test]
+    fn a_spans_prompt_field_is_gated_by_the_spans_own_level() {
+        // Declared at INFO: not eligible, whatever level the event uses.
+        let leaked = capture(true, || {
+            let span = tracing::info_span!("ask", prompt = "the whole user body");
+            let _g = span.enter();
+            tracing::debug!("inside");
+        });
+        assert!(
+            !leaked.contains("the whole user body"),
+            "an info-level span must not leak a prompt field through a debug event: {leaked}"
+        );
+
+        // Declared at DEBUG with `log_prompts`: eligible, and still arrives.
+        // The negative case above would also pass on a layer that dropped
+        // every span prompt field, so the positive case is what makes it a
+        // gate rather than a wall.
+        let kept = capture(true, || {
+            let span = tracing::debug_span!("ask", prompt = "the whole user body");
+            let _g = span.enter();
+            tracing::debug!("inside");
+        });
+        assert!(
+            kept.contains("the whole user body"),
+            "a debug-level span's prompt field must survive when log_prompts is on: {kept}"
+        );
+    }
+
+    /// Span fields go through redaction too. A span is no less capable of
+    /// carrying a secret than an event, and this layer's contract is that the
+    /// stream is redacted **by construction**.
+    #[test]
+    fn span_fields_are_redacted_like_event_fields() {
+        let out = capture(false, || {
+            let span = tracing::info_span!("auth", token = "xoxb-super-secret-value");
+            let _g = span.enter();
+            tracing::info!("in the span");
+        });
+        assert!(
+            !out.contains("xoxb-super-secret-value"),
+            "a span field must not reach the stream unredacted: {out}"
+        );
+    }
+
+    /// The human format gets the span fields too — it is the stream a person
+    /// actually reads while a run is live, which is where the gap was found.
+    #[test]
+    fn the_human_format_shows_span_fields() {
+        let out = capture_as(LogFormat::Human, false, || {
+            let span = tracing::info_span!("plugin_rpc", plugin = "herdr");
+            let _g = span.enter();
+            tracing::info!(outcome = "timeout", "plugin rpc finished");
+        });
+        assert!(out.contains("plugin=herdr"), "{out}");
+        assert!(out.contains("outcome=timeout"), "{out}");
     }
 
     #[test]
