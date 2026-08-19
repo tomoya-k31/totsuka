@@ -592,9 +592,13 @@ fn scope_warnings(
     warnings
 }
 
-/// The capabilities this plugin declares (F-33/F-83): a **push** task source
-/// (`task_submit`, 0.1.6 — never polled) that can write results back to the
-/// source (`result/publish` → the Slack thread).
+/// The capabilities this plugin declares (F-33/F-83): a task source that can
+/// write results back to the source (`result/publish` → the Slack thread).
+///
+/// It is a **push** source — it calls `task/submit` and is never polled — but
+/// that is no longer declared. Since `tasks/fetch` was removed at protocol
+/// 0.2.0 every task source is push-only, so the `task_submit` flag could only
+/// ever be `true`; it was removed in 0.5.0 (#496).
 fn capabilities_result() -> Value {
     let result = InitializeResult {
         plugin_version: plugin_version(),

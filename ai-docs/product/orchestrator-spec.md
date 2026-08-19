@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/fable-5, at: 2026-08-18T04:10:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
 status: draft
 owner: tomoya-k31
 ---

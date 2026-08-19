@@ -343,22 +343,25 @@ impl<F: TransportFactory> Server<F> {
     }
 }
 
-/// The capabilities this plugin declares (F-33): plan mode, pane control, a
-/// state stream, plus session resume and pane diagnostics snapshots (0.1.3,
-/// #131). Must mirror `plugin.toml`.
+/// The capabilities this plugin declares (F-33): pane control, a state
+/// stream, hook-driven completion, and pane diagnostics snapshots. Must mirror
+/// `plugin.toml`.
 ///
-/// `design_preview` used to be declared here and was removed with the field
-/// itself in protocol 0.4.0 (#411/#356) — nothing ever read it, so declaring it
-/// promised a feature that did not exist.
+/// Two declarations were removed here after nothing turned out to read them:
+/// `design_preview` in protocol 0.4.0 (#411/#356), and `plan_mode` in 0.5.0
+/// (#496). Declaring either promised a feature that did not exist. Since
+/// 0.5.0 that class of mistake is caught by the `declaration-consumed` check
+/// in `scripts/arch-lint.sh`.
 fn capabilities_result() -> Value {
     to_value(&InitializeResult {
         plugin_version: plugin_version(),
         capabilities: Capabilities {
             pane_control: true,
             state_stream: true,
-            // 0.1.3: `--resume` re-opens an agent session (Slack thread
-            // continuation), and `diagnostics/snapshot` captures the pane
-            // screen for escalation diagnostics (R-10).
+            // 0.5.0: this agent reports completion through the tool's hooks
+            // rather than through the state stream alone. Replaces
+            // `resume_session`, which said nothing about hooks and was only
+            // ever read as half of a de-facto OR (#496).
             hook_completion: true,
             diagnostics_snapshot: true,
             ..Capabilities::default()

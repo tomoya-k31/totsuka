@@ -4,7 +4,7 @@ title: orchestrator-cli クレート
 description: "totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（init / setup / run / status / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [rust, crate, cli, plugin, run, status, doctor, hooks, security]
-generated: { by: claude-code/fable-5, at: 2026-08-13T19:11:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---

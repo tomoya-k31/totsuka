@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/fable-5, at: 2026-08-17T06:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -437,8 +437,11 @@ agent = "herdr"
 
 **すべき。**未設定でもフック POST は受理されるが、その場合の防御は 0600 の UDS パーミッションのみになる。
 
-未設定はツール側が検出する（#209）。判定材料は agent プラグインのマニフェストで、`hook_completion` または
-`diagnostics_snapshot` を宣言していれば「フック対応 agent」とみなす（herdr が該当。orca / mock は非該当）:
+未設定はツール側が検出する（#209）。判定材料は agent プラグインのマニフェストで、`hook_completion` を宣言していれば
+「フック対応 agent」とみなす（herdr が該当。orca / mock は非該当）。**0.5.0 より前は
+`resume_session || diagnostics_snapshot` という de-facto の OR だった**が、
+`diagnostics_snapshot` は `diagnostics/snapshot` に応答できることしか言っておらず、
+フック対応を含意しない（[ADR-0052](/decisions/adr-0052-declaration-consumed.md)）:
 
 - `config validate` / `totsuka run` — フック対応 agent を使う workflow ごとに**警告**（終了コードは変わらない。`run` は表示して続行）
 - `totsuka doctor` — 同じ条件で **fail**（終了コード非 0）。フック対応 agent を使わない構成では warn 表示のみで成功のまま。

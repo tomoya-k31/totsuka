@@ -209,7 +209,7 @@ outputs = ["source"]
 name = "slack"
 kind = "task_source"
 version = "0.2.0"
-protocol_version = ">=0.1.6, <0.5"
+protocol_version = ">=0.1.6, <0.6"
 
 [capabilities]
 outputs = ["source"]
@@ -218,14 +218,16 @@ outputs = ["source"]
         .unwrap();
         assert!(m.is_compatible_with(&Version::new(0, 1, 6)));
         // A push-only plugin survives the 0.2.0 fetch removal, the 0.3.0
-        // removal of `Task.thread_key`, and — with the bound raised to `<0.5`
-        // (#411) — the 0.4.0 removal of `TaskDispatchParams.hook`, which no
-        // task_source ever read…
+        // removal of `Task.thread_key`, the 0.4.0 removal of
+        // `TaskDispatchParams.hook` (#411), and — with the bound raised to
+        // `<0.6` (#496) — the 0.5.0 removal of `Capabilities::task_submit`.
+        // A task_source read none of them…
         assert!(m.is_compatible_with(&Version::new(0, 2, 0)));
         assert!(m.is_compatible_with(&Version::new(0, 3, 0)));
         assert!(m.is_compatible_with(&Version::new(0, 4, 0)));
-        // …while staying honest about a hypothetical 0.5.
-        assert!(!m.is_compatible_with(&Version::new(0, 5, 0)));
+        assert!(m.is_compatible_with(&crate::version::protocol_version()));
+        // …while staying honest about the next boundary, whatever it removes.
+        assert!(!m.is_compatible_with(&Version::new(0, 6, 0)));
     }
 
     #[test]

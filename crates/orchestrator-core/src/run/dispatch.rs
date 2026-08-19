@@ -318,7 +318,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         ),
         EngineError,
     > {
-        // Hook-capable agents (herdr 0.1.3: `resume_session` / `diagnostics_snapshot`)
+        // Agents declaring `hook_completion` (0.5.0, #496 — herdr does)
         // receive a correlation `job_id` + a [`HookLaunchSpec`] so their Claude
         // Code hooks POST completion signals back (#131/#138). The job id's
         // `session_row` must exist *before* launch — it is injected into the

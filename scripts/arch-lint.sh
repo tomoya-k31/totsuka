@@ -282,14 +282,57 @@ ERROR_CODES="$(awk '
   exit 2
 }
 
+# フィールド**読み**の境界。識別子を構成する文字が続かないこと（`.plan_mode` が
+# `.plan_modes` にマッチしないため）に加え、**`(` も続かないこと**を要求する。
+#
+# 後者が要る理由: レシーバは見ていないので、`self.diagnostics_snapshot(record)`
+# という**同名のメソッド呼び出し**が capability フィールドの読みとして数えられて
+# いた（実際に `hooks.rs` で起きていた）。本物の読みを消しても検査が通るという
+# ことで、「誰かが読んでいる」という中核の約束が担保されていなかった。
+#
+# レシーバ側で絞る案は採らない — `caps` / `capabilities()` / `m.capabilities` と
+# 呼び名が一定しないので、許可した綴りの外にある読みを取りこぼす。「呼び出しでは
+# ない」ほうが判定として安定している。
+NOT_FIELD_READ="([^A-Za-z0-9_(]|$)"
+
+# error_code は定数なので、続く文字が識別子でなければよい。
+NOT_IDENT="([^A-Za-z0-9_]|$)"
+
+# `NF >= 2` が要点: `-F=` なので `=` を含まない行は NF==1 になる。これが無いと
+# `DECLARATION_EXEMPT="pane_control"`（理由の書き忘れ）で `$1` が行全体になって
+# 名前と一致し、**理由なしの免除が黙って成立していた**。理由を空にした
+# `pane_control=` のほうは元々フェイルクローズしていたので、**起きやすいほうの
+# タイプミスだけが素通りする**という最悪の形だった。
 exempt_reason() {
-  printf '%s\n' "$DECLARATION_EXEMPT" | awk -F= -v n="$1" '$1 == n { sub(/^[^=]*=/, ""); print; exit }'
+  printf '%s\n' "$DECLARATION_EXEMPT" |
+    awk -F= -v n="$1" 'NF >= 2 && $1 == n { sub(/^[^=]*=/, ""); print; exit }'
 }
+
+# 免除リスト自体を検証する。理由を書き忘れた行は「免除されない」で済ませず、
+# **検査の失敗**として落とす — このリストの存在が主眼である以上、書き方の誤りを
+# 黙って無視するのは目的に反する。
+while IFS= read -r entry; do
+  [ -n "$entry" ] || continue
+  case "$entry" in
+  *=?*) ;;
+  *)
+    echo "arch-lint: DECLARATION_EXEMPT の行 '$entry' に理由がない（'<name>=<理由>' で書くこと）" >&2
+    exit 2
+    ;;
+  esac
+done <<<"$DECLARATION_EXEMPT"
 
 # コメント行は消費に数えない。「`.plan_mode` を読む」と書いた doc comment が
 # あるだけで、読まれていないフィールドが生きているように見えてしまう。
+# `-E` + 明示的な文字クラス（`\b` ではない）: 単語境界は GNU/BSD の拡張であって
+# POSIX ではなく、この検査は mac と CI の Linux の両方で走る。今日はどちらの grep
+# でも動くが、Fitness Function がそれに寄りかかるべきではない。
+#
+# 仮にマッチが壊れても**フェイルクローズ**する: 何もマッチしなくなるので全宣言が
+# 「読まれていない」として報告され、スクリプトは赤くなる。この種の検査が倒れる
+# べき方向はそちらである。
 consumers_of() {
-  grep -rn --include="*.rs" -e "$1" $2 2>/dev/null |
+  grep -rnE --include="*.rs" -e "$1" $2 2>/dev/null |
     grep -v "^$MOCK:" |
     grep -v "/tests/" |
     grep -vE "^[^:]+:[0-9]+:[[:space:]]*//" |
@@ -301,7 +344,7 @@ for field in $CAP_FIELDS; do
   N_DECLS=$((N_DECLS + 1))
   # フィールド**アクセス**だけを数える。`plan_mode: true` のような初期化は
   # 宣言であって消費ではない。
-  hits="$(consumers_of "\.${field}\b" "$CAP_CONSUMERS")"
+  hits="$(consumers_of "\.${field}${NOT_FIELD_READ}" "$CAP_CONSUMERS")"
   [ "$hits" -eq 0 ] || continue
   reason="$(exempt_reason "$field")"
   if [ -n "$reason" ]; then
@@ -313,7 +356,7 @@ done
 
 for code in $ERROR_CODES; do
   N_DECLS=$((N_DECLS + 1))
-  hits="$(consumers_of "error_code::${code}\b" "$CODE_CONSUMERS")"
+  hits="$(consumers_of "error_code::${code}${NOT_IDENT}" "$CODE_CONSUMERS")"
   [ "$hits" -eq 0 ] || continue
   reason="$(exempt_reason "$code")"
   if [ -n "$reason" ]; then
