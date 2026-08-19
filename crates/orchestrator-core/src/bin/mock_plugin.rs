@@ -41,6 +41,15 @@
 //! - `shutdown` → replies, then exits 0.
 //! - anything else → method-not-found error.
 //!
+//! `"submit_delay_ms": N` holds the `submit_tasks` pushes back by N ms, so a
+//! test can sequence a task's arrival after another event (#499).
+//!
+//! It sleeps the **whole plugin**: this is a single-threaded read loop, so for
+//! those N ms no further request is answered, and anything later in the
+//! `initialize` branch — `suicide` in particular — is postponed by the same
+//! amount. Combining it with `suicide` therefore delays the exit, which is
+//! probably not what such a test would mean.
+//!
 //! `"suicide": { "counter": <path>, "times": N }` makes the plugin exit(1)
 //! immediately after answering `initialize`, for the first N launches, using
 //! a file-backed counter so the count survives across processes (#495). Launch
@@ -403,6 +412,18 @@ fn main() {
             // `submit_tasks`: one `task/submit` request per entry (0.1.6),
             // ids `submit-0`, `submit-1`, …. Repeating the same task tests
             // orchestrator-side idempotency (the second ack is `duplicate`).
+            // `submit_delay_ms` (#499): hold the pushes back so a test can
+            // put a task's arrival **after** something else has happened —
+            // an agent crashing, say. Without it the submit races whatever
+            // the test is trying to sequence against, and the test passes or
+            // fails on timing rather than on behaviour.
+            //
+            // This blocks the read loop, so it also postpones the `suicide`
+            // block below. Documented rather than reordered: a test that wants
+            // both would have to say which it means, and none does yet.
+            if let Some(ms) = config.get("submit_delay_ms").and_then(Value::as_u64) {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
             if let Some(tasks) = config.get("submit_tasks").and_then(Value::as_array) {
                 for (i, task) in tasks.iter().enumerate() {
                     let request = serde_json::json!({

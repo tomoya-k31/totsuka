@@ -16,6 +16,7 @@ use std::time::Duration;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::adapters::state_db::StateDb;
 use orchestrator_core::config::RootConfig;
+use orchestrator_core::domain::state::TaskState;
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{
@@ -93,6 +94,13 @@ output = "none"
 /// Settings with a **zero backoff** — the seam that keeps these tests instant.
 /// Restart *ordering* is what is under test; the sleep is production pacing.
 fn settings(max_attempts: u32) -> EngineSettings {
+    settings_with_backoff(max_attempts, Duration::ZERO)
+}
+
+/// [`settings`] with a real backoff, for the one test that needs the plugin to
+/// still be **down** when a dispatch is attempted. Zero backoff relaunches so
+/// fast that no crash window exists to observe.
+fn settings_with_backoff(max_attempts: u32, first_backoff: Duration) -> EngineSettings {
     EngineSettings {
         workflows: workflows(),
         repos: vec![RepoSettings {
@@ -118,7 +126,7 @@ fn settings(max_attempts: u32) -> EngineSettings {
         plugin_restart: RestartPolicy {
             max_attempts,
             window: Duration::from_secs(300),
-            first_backoff: Duration::ZERO,
+            first_backoff,
         },
         restart_disabled: Default::default(),
         hook: None,
@@ -185,48 +193,103 @@ fn notifications(log: &Path) -> Vec<serde_json::Value> {
     test_support::read_ndjson_log(log)
 }
 
-/// Capture the process's `tracing` output for the rest of the test.
+#[derive(Clone)]
+struct CaptureBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureBuf {
+    type Writer = CaptureGuard;
+    fn make_writer(&'a self) -> CaptureGuard {
+        CaptureGuard(self.0.clone())
+    }
+}
+
+struct CaptureGuard(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for CaptureGuard {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The process's one capture buffer. A `tracing` global default can be set
+/// **once per process**, so this cannot be per-test.
+static CAPTURED: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Vec<u8>>>> =
+    std::sync::OnceLock::new();
+
+/// A test's view of the capture: everything written **after** it started.
+struct Capture {
+    buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    from: usize,
+}
+
+impl Clone for Capture {
+    fn clone(&self) -> Self {
+        Self {
+            buf: self.buf.clone(),
+            from: self.from,
+        }
+    }
+}
+
+/// Capture this process's `tracing` output from here on.
 ///
 /// **`set_global_default`, not `with_default`.** A thread-local default is
 /// invisible to the engine, whose work runs on tokio worker threads — a test
-/// that used one would capture nothing and pass, which is the failure this
-/// exists to prevent. Safe here because nextest runs one process per test.
-fn capture_logs() -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+/// using one would capture nothing and pass, which is the failure this exists
+/// to prevent.
+///
+/// **But a global can only be installed once per process**, and the two
+/// runners disagree about what a process is: `cargo nextest` (the local loop,
+/// ADR-0049) gives each test its own, while CI's `cargo test --workspace`
+/// shares one across a binary's tests. The first version installed a fresh
+/// buffer per call and ignored the resulting error, so under CI the second
+/// test to call it read an empty buffer and failed — green locally, red in CI.
+///
+/// So: install once, and hand each test an offset into the shared buffer.
+fn capture_logs() -> Capture {
     use tracing_subscriber::layer::SubscriberExt;
 
-    #[derive(Clone)]
-    struct BufWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufWriter {
-        type Writer = BufGuard;
-        fn make_writer(&'a self) -> BufGuard {
-            BufGuard(self.0.clone())
-        }
-    }
-    struct BufGuard(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-    impl std::io::Write for BufGuard {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(RedactingLayer::new(
-        BufWriter(buf.clone()),
-        LogFormat::Json,
-        false,
-        false,
-    ));
-    let _ = tracing::subscriber::set_global_default(subscriber);
-    buf
+    let buf = CAPTURED
+        .get_or_init(|| {
+            let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let subscriber = tracing_subscriber::registry().with(RedactingLayer::new(
+                CaptureBuf(buf.clone()),
+                LogFormat::Json,
+                false,
+                false,
+            ));
+            // Only this call site sets it, so a failure here means something
+            // else in the binary did — worth failing loudly rather than
+            // silently capturing nothing.
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("no other global tracing subscriber may be installed in this binary");
+            buf
+        })
+        .clone();
+    let from = buf.lock().unwrap().len();
+    Capture { buf, from }
 }
 
-/// The captured log as text.
-fn captured(buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
-    String::from_utf8(buf.lock().unwrap().clone()).unwrap_or_default()
+/// What was logged since [`capture_logs`] was called.
+fn captured(capture: &Capture) -> String {
+    let buf = capture.buf.lock().unwrap();
+    String::from_utf8_lossy(&buf[capture.from.min(buf.len())..]).into_owned()
+}
+
+/// Whether **one line** since [`capture_logs`] contains all of `needles`.
+///
+/// One line, not the whole slice: under `cargo test` sibling tests write into
+/// the same buffer concurrently, so `text.contains(a) && text.contains(b)` can
+/// be satisfied by two different tests' lines. Requiring co-occurrence on a
+/// line, with at least one needle naming this test's own plugin, is what makes
+/// the assertion about this test.
+fn logged_line_with(capture: &Capture, needles: &[&str]) -> bool {
+    captured(capture)
+        .lines()
+        .any(|line| needles.iter().all(|n| line.contains(n)))
 }
 
 /// **The regression this issue is about.** A `task_source` that dies used to
@@ -383,14 +446,11 @@ async fn giving_up_escalates_instead_of_retrying_forever() {
     // *about* it is handed *to* it — nobody hears it. The log is what
     // survives that, which is exactly why it must be checked here rather
     // than trusted because it was seen once by hand.
-    let text = captured(&logs);
     assert!(
-        text.contains("escalating"),
-        "the escalation must reach the log, not only the notifier: {text}"
-    );
-    assert!(
-        text.contains("mock_src"),
-        "and it must name the plugin: {text}"
+        logged_line_with(&logs, &["escalating", "mock_src"]),
+        "the escalation must reach the log naming the plugin, not only the \
+         notifier: {}",
+        captured(&logs)
     );
     let params = &escalations[0]["params"];
     assert!(
@@ -486,6 +546,194 @@ async fn restart_can_be_disabled_without_losing_detection() {
             .contains("mock_src")
     );
     engine.shutdown(Duration::from_secs(2)).await;
+}
+
+/// **The starvation this fix is really about.**
+///
+/// `plan_dispatch` fixes the plan for a whole cycle, so a slot released inside
+/// `dispatch_one`'s park arm comes back too late to help anyone. With
+/// `max_concurrency = 1`, a task parked on a crashed agent would take the only
+/// global slot every 200 ms tick and a task for a **healthy** agent would never
+/// dispatch for the entire outage — parking without moving the gate ahead of
+/// slot acquisition trades one bug for a worse one.
+///
+/// This pins the gate in `dispatch_ready`: `dispatch_one`'s park arm alone
+/// makes the next test pass, so without this one the move would be untested.
+#[tokio::test]
+async fn a_parked_task_does_not_starve_a_healthy_agent() {
+    let dir = test_support::scratch("supervise_starvation");
+    let repo = test_support::bare_origin_and_clone(&dir);
+    let counter = dir.join("launches");
+    let db = StateDb::open(&dir.join("state.db")).unwrap();
+
+    let mut plugins = PluginSet::default();
+    install(
+        &mut plugins,
+        "task_source",
+        "src_down",
+        json!({ "submit_tasks": [{ "id": "for-the-dead-agent", "source": "src_down", "title": "a" }] }),
+    )
+    .await;
+    install(
+        &mut plugins,
+        "task_source",
+        "src_up",
+        json!({ "submit_tasks": [{ "id": "for-the-live-agent", "source": "src_up", "title": "b" }] }),
+    )
+    .await;
+    // Down for the whole run.
+    install(
+        &mut plugins,
+        "agent_ide",
+        "agent_down",
+        json!({ "suicide": { "counter": counter, "times": 99 } }),
+    )
+    .await;
+    install(&mut plugins, "agent_ide", "agent_up", json!({})).await;
+
+    let cfg = RootConfig::from_toml_str(
+        r#"
+[[workflows]]
+name = "wf-down"
+source = "src_down"
+trigger = {}
+mode = "implement"
+agent = "agent_down"
+output = "none"
+
+[[workflows]]
+name = "wf-up"
+source = "src_up"
+trigger = {}
+mode = "implement"
+agent = "agent_up"
+output = "none"
+"#,
+    )
+    .unwrap();
+
+    let mut settings = settings_with_backoff(5, Duration::from_secs(30));
+    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    settings.repos = vec![RepoSettings {
+        name: "clone".to_string(),
+        path: repo.clone(),
+        summary: None,
+        worktree_location: None,
+        tool: None,
+    }];
+    // **One** global slot: the parked task and the healthy one compete for it.
+    settings.limits = Limits::global(1);
+    settings.location_template = format!("{}/../wt/{{worktree_name}}", repo.display());
+
+    let mut engine =
+        Engine::new(db, settings, plugins, SystemGitRunner, None::<OpenAiRouter>).await;
+
+    // Stop as soon as anything dispatches. Without the gate ahead of slot
+    // acquisition nothing ever does, and the harness times out.
+    let probe = dir.join("state.db");
+    let summary = run_until(&mut engine, move || {
+        StateDb::open(&probe).ok().is_some_and(|db| {
+            // "left the queue", not "is Dispatched": the mock streams
+            // `running` immediately, so `Dispatched` is a state the probe can
+            // miss entirely between polls.
+            db.tasks_in_state(TaskState::Queued)
+                .map(|t| t.len() < 2)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    assert!(
+        summary.stats.dispatched >= 1,
+        "a task for a healthy agent must dispatch while another is parked: {summary:?}"
+    );
+    engine.shutdown(Duration::from_secs(2)).await;
+}
+
+/// #499: a task that arrives while its agent is between instances **waits**
+/// instead of burning its dispatch-retry budget.
+///
+/// The pure-function tests fix the rule; this one fixes that the rule is
+/// wired to a real crash. The agent stays down for the whole run (a long
+/// first backoff), so every dispatch attempt meets a dead plugin — which
+/// before #499 meant `DISPATCH_RETRY_LIMIT` attempts one `SETTLE_TICK` apart
+/// and a terminal `Failed` inside the first backoff second.
+///
+/// Nothing here needs a worktree: refusal happens at the gate, before any
+/// side effect.
+#[tokio::test]
+async fn a_task_queued_during_a_crash_window_is_not_failed() {
+    let logs = capture_logs();
+    let dir = test_support::scratch("supervise_crash_window");
+    let counter = dir.join("launches");
+    let db = StateDb::open(&dir.join("state.db")).unwrap();
+
+    let mut plugins = PluginSet::default();
+    install(
+        &mut plugins,
+        "task_source",
+        "mock_src",
+        // Held back so the task arrives **after** the agent has crashed and
+        // the crash has been observed. Submitting immediately races the
+        // detection, and the test would then pass or fail on timing.
+        json!({
+            "submit_delay_ms": 800,
+            "submit_tasks": [{
+                "id": "crash-window-1",
+                "source": "mock_src",
+                "title": "queued while the agent is down",
+            }],
+        }),
+    )
+    .await;
+    // Dies on every launch, so the window never closes during this run.
+    install(
+        &mut plugins,
+        "agent_ide",
+        "mock_agent",
+        json!({ "suicide": { "counter": counter, "times": 99 } }),
+    )
+    .await;
+
+    // A backoff long enough that the agent is still down for every dispatch
+    // attempt in the window below.
+    let mut engine = Engine::new(
+        db,
+        settings_with_backoff(5, Duration::from_secs(30)),
+        plugins,
+        SystemGitRunner,
+        None::<OpenAiRouter>,
+    )
+    .await;
+
+    // Wait for the **park itself**, not for a wall-clock window. A fixed
+    // window makes the result depend on CI load; worse, stopping merely
+    // because the task was submitted would let `failed == 0` pass without the
+    // dispatch ever having been attempted — a green test proving nothing.
+    let probe = logs.clone();
+    let summary = run_until(&mut engine, move || {
+        // Keyed on **this test's** agent: another test parking its own agent
+        // writes the same message into the shared buffer under `cargo test`,
+        // and stopping on that would end this run before its task arrived.
+        logged_line_with(&probe, &["leaving the task queued", "mock_agent"])
+    })
+    .await;
+
+    assert_eq!(
+        summary.stats.submitted, 1,
+        "the task must have arrived at all: {summary:?}"
+    );
+    // Before #499 this was 1: three dispatch attempts against the dead handle,
+    // one `SETTLE_TICK` apart, all inside the first backoff second.
+    assert_eq!(
+        summary.stats.failed, 0,
+        "a task must not be failed while its agent is between instances: {summary:?}"
+    );
+    assert_eq!(
+        summary.queued.len(),
+        1,
+        "it must still be queued, waiting for the agent: {summary:?}"
+    );
 }
 
 /// #497: the run summary accounts for RPCs **per plugin**, so a slow or
