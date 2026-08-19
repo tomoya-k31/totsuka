@@ -11,13 +11,25 @@ AI コーディングエージェント（herdr、orca）へ — それぞれ専
 
 - **タスクソース**: GitHub Issues / Projects、Notion データベース、Slack
   メンション（返信案を承認すると本人名義で返信）
-- **エージェント**: herdr、orca（プラグインプロトコル越しに駆動する agent IDE）
+- **エージェント**: [herdr](https://herdr.dev/)、[orca](https://www.onorca.dev/)
+  — いずれもサードパーティの agent IDE。totsuka のプラグインプロトコル越しに駆動する
 - **隔離**: 1 タスク = 1 リポジトリ = 1 worktree = 1 ブランチ
 - **出力ポリシー**: プルリクエスト作成 / ソースへ書き戻し / なし
 - **ローカルファースト**: 単一の CLI バイナリ、デーモンなし、シークレットは Keychain
 
-> ステータス: v1。現状 macOS のみ。コードは XDG 準拠で、将来の Linux 移植に向け
-> プラットフォーム境界を抽象化済み。
+> ステータス: 0.4.0（v1 スコープを目標）。現状 macOS のみ。コードは XDG 準拠で、
+> 将来の Linux 移植に向けプラットフォーム境界を抽象化済み。
+
+## 前提
+
+totsuka はエージェントをオーケストレーションするツールで、エージェント自体は
+同梱しません。いずれかの agent IDE を別途インストールし、ワークフローから
+指定してください。
+
+- **[herdr](https://herdr.dev/)** — **0.7.5 以降が必要**（Socket API protocol
+  17）。プラグインが `initialize` で検査し、それ未満は `CONFIG_INVALID` で
+  拒否します。
+- **[orca](https://www.onorca.dev/)** — `orca` CLI 経由で駆動します。
 
 ## インストール
 

@@ -10,13 +10,25 @@ it back to the source.
 
 - **Task sources**: GitHub Issues / Projects, Notion databases, Slack mentions
   (drafts replied under your own name after your approval)
-- **Agents**: herdr, orca (agent IDEs driven over a plugin protocol)
+- **Agents**: [herdr](https://herdr.dev/) and [orca](https://www.onorca.dev/)
+  — third-party agent IDEs, each driven over totsuka's plugin protocol
 - **Isolation**: one task = one repo = one worktree = one branch
 - **Output policies**: open a pull request, write back to the source, or none
 - **Local-first**: a single CLI binary, no daemon, secrets stay in the Keychain
 
-> Status: v1. macOS only for now; the code is XDG-compliant and platform
-> boundaries are abstracted for a future Linux port.
+> Status: 0.4.0, targeting the v1 scope. macOS only for now; the code is
+> XDG-compliant and platform boundaries are abstracted for a future Linux
+> port.
+
+## Prerequisites
+
+totsuka orchestrates agents; it does not bundle one. Install at least one
+agent IDE and point a workflow at it:
+
+- **[herdr](https://herdr.dev/)** — **0.7.5 or newer is required** (Socket API
+  protocol 17). The plugin checks it during `initialize` and refuses anything
+  older with `CONFIG_INVALID`.
+- **[orca](https://www.onorca.dev/)** — driven through the `orca` CLI.
 
 ## Install
 

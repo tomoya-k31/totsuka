@@ -17,6 +17,11 @@ on:
       - "scripts/okf-*.sh"
       - "scripts/docs-freshness.sh"
 
+# 最小権限: チェックアウトと lint スクリプトの実行しかしないので read だけ。
+# リポジトリ既定が write でもトークンを read-only に固定する。
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

@@ -16,6 +16,10 @@ on:
       - "deny.toml"
   workflow_dispatch:
 
+# Least privilege: this workflow only checks out and runs the audit tools.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
