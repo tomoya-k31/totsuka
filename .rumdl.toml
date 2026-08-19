@@ -53,6 +53,10 @@ disable = [
 "README.md" = ["MD041"]
 "README.ja.md" = ["MD041"]
 
+# SECURITY.md も同じ言語スイッチャ規約に従うリポジトリ直下の散文。理由は上と同じ。
+"SECURITY.md" = ["MD041"]
+"SECURITY.ja.md" = ["MD041"]
+
 # 人間向け docs/ も同じ言語スイッチャ規約に従う。さらに 1 行目の直後に
 # `<!-- generated-from: … -->` マーカー（scripts/docs-freshness.sh が読む）が入るので、
 # H1 はどう書いても 1 行目には来ない。README と同じ理由で MD041 のみ除外する。

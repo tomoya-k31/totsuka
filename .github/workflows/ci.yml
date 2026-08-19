@@ -16,6 +16,12 @@ on:
 # None of these jobs is a required status check (the ruleset requires only
 # okf-lint's `lint`), so event gating cannot leave a PR blocked on "Expected".
 
+# Least privilege: every job here only checks out, builds, caches and
+# uploads an artifact — none of them calls the GitHub API. Declaring this
+# pins the token to read-only regardless of the repository default.
+permissions:
+  contents: read
+
 # Cancel superseded runs on PR branches only. On main, coverage doubles as
 # the per-merge test run, so a rapid follow-up merge must queue behind it,
 # not cancel it — otherwise the earlier merge is never verified on its own.

@@ -43,6 +43,11 @@ on:
     - cron: "41 19 * * 0" # 月曜 04:41 JST。rustc 新リリースの保険
   workflow_dispatch:
 
+# 最小権限: キャッシュを温めるだけで GitHub API を叩かない。
+# (キャッシュ書き込みは runtime token を使うので contents: read で足りる)
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
