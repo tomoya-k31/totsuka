@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: claude-code/fable-5, at: 2026-08-18T13:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -102,6 +102,7 @@ owner: tomoya-k31
 | `max_concurrency` | int? | 無制限 | agent プラグイン単位の同時実行上限（F-42） |
 | `timeout_secs` | int? | 120 | RPC タイムアウト秒 |
 | `log_level` | string? | なし | プラグインのログレベル |
+| `restart` | bool | true | クラッシュしたら再起動するか（#495 / [ADR-0051](/decisions/adr-0051-plugin-supervision.md)）。指数バックオフ（1s / 2s / 4s …）で**最大 5 回・5 分のスライディング窓**、尽きたら `escalated` を通知する。**`false` にしても検知は残る** — ログに出て `RunSummary.plugin_crashes` に計上され、`escalated` も飛ぶ（`plugin_restarts` のほうは 0 のまま。だから死亡を数える counter が別に要る）。agent なら在席タスクも畳まれる。止まるのは再起動だけで、プラグインを手で調べたいときの形。バックオフの形は設定に出していない（運用者が調整する材料を持たないため） |
 | `poll_interval_secs` | int? | 60 | task_source のみ。**fetch 型 source**（`task_submit` capability 未宣言）では `run --watch` の Orchestrator 側ポーリング間隔（F-06）。**push 型 source**（`task_submit` 宣言、0.1.6 / [ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）はポーリングされず、この値は `initialize` でプラグインへ転送されプラグイン内部の fetch 周期になる |
 
 # `[[workflows]]`

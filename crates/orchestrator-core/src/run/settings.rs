@@ -80,6 +80,12 @@ pub struct EngineSettings {
     /// `[prompts]` and each workflow's `prompts` / legacy `rubric`. Resolved
     /// once here so dispatch never re-reads config per task.
     pub prompts: crate::prompts::PromptSet,
+    /// How crashed plugins are brought back (#495). Not exposed in config
+    /// beyond the per-plugin `restart` switch; see [`RestartPolicy`].
+    pub plugin_restart: RestartPolicy,
+    /// Plugin instance names whose `[plugins.{name}].restart` is `false`
+    /// (#495) — detected and reported when they die, never relaunched.
+    pub restart_disabled: std::collections::HashSet<String>,
     /// Claude Code hook runtime (#131/#138): receiver endpoint, auth token,
     /// spool dir, per-workflow `--settings` paths, and the escalation
     /// threshold. A normal `totsuka run` always sets this (the CLI builds it
@@ -187,6 +193,13 @@ pub fn settings_from_config(
             .clone()
             .unwrap_or_else(|| "claude".to_string()),
         prompts: crate::prompts::PromptSet::from_config(cfg),
+        plugin_restart: RestartPolicy::default(),
+        restart_disabled: cfg
+            .plugins
+            .iter()
+            .filter(|(_, p)| !p.restart)
+            .map(|(name, _)| name.clone())
+            .collect(),
         // The hook runtime needs the resolved token, expanded paths, and the
         // per-workflow settings files — all CLI-level (secret store, `Paths`,
         // the `hooks` module). `run_cmd` fills this in before building the
@@ -224,6 +237,46 @@ pub struct PluginSet {
     pub agents: HashMap<String, Plugin>,
     /// notifier plugins by instance name.
     pub notifiers: HashMap<String, Plugin>,
+    /// The launch spec each plugin was started from, by instance name — all a
+    /// restart needs (#495).
+    ///
+    /// Deliberately a **separate map** rather than a field on a wrapper
+    /// around [`Plugin`]: the three maps above are built by hand in a few
+    /// dozen tests, and none of them care about restarting. A name missing
+    /// here is detected as dead and reported, but never relaunched, which is
+    /// exactly what those tests want.
+    pub specs: HashMap<String, crate::adapters::plugin_host::PluginSpec>,
+}
+
+/// How hard the engine tries to bring a crashed plugin back (#495).
+///
+/// Not exposed in `config.toml` beyond the per-plugin on/off switch
+/// (`[plugins.{name}].restart`): the shape of the backoff is not something an
+/// operator has the information to tune, and every knob here would be one
+/// more thing that can be set to a value nobody tested. Tests set
+/// [`first_backoff`](Self::first_backoff) to [`Duration::ZERO`], the same
+/// seam [`worktree_sweep_interval`](EngineSettings::worktree_sweep_interval)
+/// and [`one_shot_grace`](EngineSettings::one_shot_grace) already use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestartPolicy {
+    /// Attempts allowed inside [`window`](Self::window) before the plugin is
+    /// given up on and escalated.
+    pub max_attempts: u32,
+    /// The sliding window the attempt count is measured over. A plugin that
+    /// crashes once a day forever is not the failure this budget is for.
+    pub window: Duration,
+    /// Delay before the first attempt; doubled for each subsequent one.
+    pub first_backoff: Duration,
+}
+
+impl Default for RestartPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 5,
+            window: Duration::from_secs(300),
+            first_backoff: Duration::from_secs(1),
+        }
+    }
 }
 
 #[cfg(test)]

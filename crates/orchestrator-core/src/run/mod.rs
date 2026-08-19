@@ -80,15 +80,16 @@ use finalize::{PaneRelease, ReleaseMode};
 mod ingest;
 mod report;
 mod settings;
+mod supervise;
 mod support;
 mod sweep;
 
-use ingest::{PluginRequestBudgets, forward_plugin_request};
 use support::*;
 
 pub use report::{DryRunEntry, RunStats, RunSummary};
 pub use settings::{
-    EngineError, EngineSettings, HookRuntime, PluginSet, RepoSettings, settings_from_config,
+    EngineError, EngineSettings, HookRuntime, PluginSet, RepoSettings, RestartPolicy,
+    settings_from_config,
 };
 
 /// Lines of a repository README shown to the LLM as selection context (F-11).
@@ -124,8 +125,23 @@ const ONE_SHOT_GRACE: Duration = Duration::from_secs(2);
 pub(crate) enum PluginEvent {
     /// A `state/notification` from an agent plugin.
     State(String, StateNotification),
-    /// An agent plugin's notification stream closed (process exit, §5.3).
+    /// A plugin process exited without being asked to (§5.3, #495). Emitted
+    /// for **every** kind, from the child's own exit rather than from any one
+    /// stream.
     Closed(String),
+    /// A scheduled relaunch of a crashed plugin has come due (#495). The
+    /// backoff is slept in a spawned task so the engine loop keeps serving
+    /// events while a plugin is down.
+    RestartDue(String),
+    /// A relaunch attempt finished (#495). Boxed because a live [`Plugin`] is
+    /// much larger than the other variants, and every event on the channel
+    /// would otherwise pay for it.
+    Restarted {
+        /// The plugin instance that was relaunched.
+        name: String,
+        /// The new process, or why it could not be started.
+        outcome: Box<Result<Plugin, HostError>>,
+    },
     /// A normalized Claude Code hook signal from the UDS receiver (#136).
     /// Engine interpretation (state transitions, verification) lands in #138.
     HookSignal(AgentSignal),
@@ -255,9 +271,13 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     /// gone from the operator's notification centre anyway. Persisting it would
     /// mean a schema change for a message.
     blocked_on_tools: std::collections::HashSet<i64>,
+    /// Relaunch attempts per plugin inside the policy window (#495).
+    restarts: HashMap<String, supervise::RestartLedger>,
     events: mpsc::UnboundedReceiver<PluginEvent>,
-    /// Kept so `events.recv()` never observes a closed channel.
-    _events_tx: mpsc::UnboundedSender<PluginEvent>,
+    /// Kept so `events.recv()` never observes a closed channel, and cloned
+    /// whenever a consumer task has to be re-spawned — which a plugin restart
+    /// does for every stream the dead process owned (#495).
+    events_tx: mpsc::UnboundedSender<PluginEvent>,
     readme_cache: Option<ReadmeCache>,
     /// Accumulated agent output (streamed `log_chunk`s) per task, used as the
     /// `output = source` publish artifact (F-07).
@@ -326,20 +346,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         for (name, plugin) in &plugins.agents {
-            if let Some(mut notifications) = plugin.take_notifications().await {
-                let name = name.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    while let Some(note) = notifications.recv().await {
-                        if let Some(event) = state_event(&name, note)
-                            && tx.send(event).is_err()
-                        {
-                            return;
-                        }
-                    }
-                    let _ = tx.send(PluginEvent::Closed(name));
-                });
-            }
+            supervise::wire_agent(name, plugin, &tx).await;
         }
         // 0.1.6: consume plugin-initiated requests (`task/submit`) from every
         // task source. Parsing and backpressure happen here; persistence and
@@ -347,19 +354,18 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // Ordering per source is preserved: the event-channel send is inline,
         // only the ack await is spawned off.
         for (name, plugin) in &plugins.sources {
-            if let Some(mut incoming) = plugin.take_incoming_requests().await {
-                let name = name.clone();
-                let tx = tx.clone();
-                let budgets = PluginRequestBudgets {
-                    submit: Arc::new(Semaphore::new(SUBMIT_IN_FLIGHT_BUDGET)),
-                    lookup: Arc::new(Semaphore::new(LOOKUP_IN_FLIGHT_BUDGET)),
-                };
-                tokio::spawn(async move {
-                    while let Some(request) = incoming.recv().await {
-                        forward_plugin_request(&name, request, &tx, &budgets);
-                    }
-                });
-            }
+            supervise::wire_source(name, plugin, &tx).await;
+        }
+        // Liveness is watched for every kind, notifiers included (#495): before
+        // this, a dead `task_source` produced no event at all and the run kept
+        // going as a process that would never receive another task.
+        for (name, plugin) in plugins
+            .sources
+            .iter()
+            .chain(plugins.agents.iter())
+            .chain(plugins.notifiers.iter())
+        {
+            supervise::wire_liveness(name, plugin, &tx);
         }
         let slots = SlotManager::new(settings.limits.clone());
         let readme_cache = settings.readme_cache_dir.clone().map(ReadmeCache::new);
@@ -372,10 +378,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             worktrees: WorktreeManager::new(git),
             llm,
             slots,
+            restarts: HashMap::new(),
             slot_holders: HashMap::new(),
             sessions: HashMap::new(),
             events: rx,
-            _events_tx: tx,
+            events_tx: tx,
             readme_cache,
             agent_output: HashMap::new(),
             released_panes: HashSet::new(),
@@ -515,7 +522,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 Ok(listener) => {
                     let socket_path = hs.socket_path.clone();
                     tracing::info!(socket = %socket_path.display(), "hook receiver listening");
-                    let sink = EngineSignalSink::new(self._events_tx.clone());
+                    let sink = EngineSignalSink::new(self.events_tx.clone());
                     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
                     // The sink doubles as the focus port (F-94): both feed the
                     // same event channel, focus with a response oneshot.
@@ -682,8 +689,14 @@ fn notify_all(
         title: record.title.clone(),
         body,
     };
+    deliver_notification(notifiers, &params);
+}
+
+/// Deliver one already-built [`NotifyParams`] to every notifier (F-90).
+/// Fire-and-forget: delivery failures never affect task execution (F-93).
+fn deliver_notification(notifiers: &HashMap<String, Plugin>, params: &NotifyParams) {
     for plugin in notifiers.values() {
-        if let Err(e) = plugin.notify(method::NOTIFY, &params) {
+        if let Err(e) = plugin.notify(method::NOTIFY, params) {
             tracing::warn!(plugin = %plugin.name(), "notify delivery failed (ignored, F-93): {e}");
         }
     }
@@ -737,6 +750,8 @@ pub(crate) async fn test_engine(
         tools: crate::tool::builtin_registry(),
         default_tool: "claude".to_string(),
         prompts: Default::default(),
+        plugin_restart: Default::default(),
+        restart_disabled: Default::default(),
         hook: None,
     };
     Engine::new(

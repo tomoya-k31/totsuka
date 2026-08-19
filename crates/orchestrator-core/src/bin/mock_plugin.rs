@@ -41,6 +41,12 @@
 //! - `shutdown` → replies, then exits 0.
 //! - anything else → method-not-found error.
 //!
+//! `"suicide": { "counter": <path>, "times": N }` makes the plugin exit(1)
+//! immediately after answering `initialize`, for the first N launches, using
+//! a file-backed counter so the count survives across processes (#495). Launch
+//! N+1 behaves normally, which is what makes "crashed, then came back" a
+//! deterministic assertion rather than a race.
+//!
 //! Plugin-initiated requests (0.1.6): if the config has a `"request_on_init"`
 //! object, it is emitted **verbatim** as one NDJSON line right after the
 //! `initialize` reply (tests supply a full JSON-RPC request, e.g.
@@ -404,6 +410,26 @@ fn main() {
                     });
                     let _ = writeln!(stdout, "{}", serde_json::to_string(&request).unwrap());
                     let _ = stdout.flush();
+                }
+            }
+            // `suicide: { counter: <path>, times: N }` (#495): exit(1) right
+            // after answering `initialize`, for the first N launches. The
+            // count lives in a file because each launch is a **new process**
+            // — an in-process counter would reset every time and the plugin
+            // would never come back, which is the one thing the supervision
+            // tests need it to eventually do.
+            if let Some(suicide) = config.get("suicide") {
+                let counter = suicide.get("counter").and_then(Value::as_str);
+                let times = suicide.get("times").and_then(Value::as_u64).unwrap_or(0);
+                if let Some(path) = counter {
+                    let so_far: u64 = std::fs::read_to_string(path)
+                        .ok()
+                        .and_then(|raw| raw.trim().parse().ok())
+                        .unwrap_or(0);
+                    let _ = std::fs::write(path, (so_far + 1).to_string());
+                    if so_far < times {
+                        std::process::exit(1);
+                    }
                 }
             }
         }

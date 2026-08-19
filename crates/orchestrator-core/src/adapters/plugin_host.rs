@@ -16,8 +16,20 @@
 //!
 //! If the child exits, its stdout closes; the reader drains all pending calls
 //! with [`HostError::Crashed`] and marks the plugin closed. The host itself is
-//! unaffected — the caller decides how to fail the affected tasks (#63). v1
-//! does not auto-restart.
+//! unaffected — the caller decides how to fail the affected tasks (#63).
+//!
+//! # Liveness (#495)
+//!
+//! The host **reports** that a plugin is gone and why ([`Liveness`],
+//! [`Plugin::liveness`]); it does not decide what to do about it. Restart
+//! policy lives one layer up, in the run loop's `supervise` module, because
+//! the answer is kind-specific — an `agent_ide` has in-flight tasks to fail
+//! first, a `task_source` has a subscription to re-establish, a `notifier`
+//! has neither.
+//!
+//! This module previously stated that "v1 does not auto-restart", which was
+//! true until #495 and is retracted here rather than left to contradict the
+//! code.
 //!
 //! # Plugin-initiated requests (0.1.6)
 //!
@@ -45,7 +57,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
 /// How a plugin should be launched.
 #[derive(Debug, Clone)]
@@ -139,6 +151,26 @@ pub enum HostError {
     Io(#[from] std::io::Error),
 }
 
+/// Whether a plugin process is still usable, and — once it is not — whether
+/// anyone should do something about it (#495).
+///
+/// The distinction is the whole point. [`Crashed`](Self::Crashed) and
+/// [`ShutDown`](Self::ShutDown) look identical from the transport's side (the
+/// child is gone, stdout is closed), but only the first one means the plugin
+/// stopped doing its job without being asked. A supervisor that cannot tell
+/// them apart would relaunch every plugin during an orderly shutdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Liveness {
+    /// The process is running as far as the host can tell.
+    Live,
+    /// The process went away on its own — panic, exit, or a transport that
+    /// can no longer be written to.
+    Crashed,
+    /// The Orchestrator asked it to stop ([`Plugin::shutdown`]). Nothing
+    /// should restart it.
+    ShutDown,
+}
+
 /// Outcome delivered to a waiting call: RPC success value or RPC error.
 type PendingOutcome = Result<Value, jsonrpc::Error>;
 
@@ -205,10 +237,30 @@ struct Inner {
     pending: Mutex<HashMap<i64, oneshot::Sender<PendingOutcome>>>,
     next_id: AtomicI64,
     closed: AtomicBool,
+    /// Broadcasts the transition out of [`Liveness::Live`] to anyone watching
+    /// this plugin (#495). Separate from `closed`, which the crash-drain
+    /// protocol below pairs with `pending` under Acquire/Release and must not
+    /// grow a second meaning.
+    liveness: watch::Sender<Liveness>,
     timeout: Duration,
 }
 
 impl Inner {
+    /// Record why this plugin stopped being usable. **First writer wins**: an
+    /// EOF that arrives while [`Plugin::shutdown`] is waiting out its grace
+    /// period must not relabel an intentional stop as a crash, which is
+    /// exactly the race a supervisor would misread.
+    fn mark_liveness(&self, reason: Liveness) {
+        self.liveness.send_if_modified(|current| {
+            if *current == Liveness::Live {
+                *current = reason;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
     async fn call_raw(&self, method: &str, params: Option<Value>) -> Result<Value, HostError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(HostError::Closed(self.name.clone()));
@@ -234,6 +286,7 @@ impl Inner {
             // The writer task is gone (stdin dead) => the plugin is unusable.
             // Mark it closed so subsequent calls short-circuit.
             self.closed.store(true, Ordering::Release);
+            self.mark_liveness(Liveness::Crashed);
             self.pending.lock().await.remove(&id);
             return Err(HostError::Closed(self.name.clone()));
         }
@@ -318,12 +371,14 @@ impl Plugin {
         let (write_tx, write_rx) = mpsc::unbounded_channel::<String>();
         let (notif_tx, notif_rx) = mpsc::unbounded_channel::<Notification>();
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel::<IncomingRequest>();
+        let (liveness, _) = watch::channel(Liveness::Live);
         let inner = Arc::new(Inner {
             name: spec.name.clone(),
             write_tx,
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicI64::new(1),
             closed: AtomicBool::new(false),
+            liveness,
             timeout: spec.timeout,
         });
 
@@ -386,6 +441,18 @@ impl Plugin {
         self.inner.closed.load(Ordering::Acquire)
     }
 
+    /// Watch this plugin's [`Liveness`] (#495).
+    ///
+    /// The receiver outlives the `Plugin` it came from, which is what a
+    /// supervisor needs: it waits for the transition, then replaces the very
+    /// value it was watching. **Detection is bound to the child's exit, not to
+    /// any one stream** — the notification channel only closes for agents that
+    /// were subscribed to, so watching that instead would leave every
+    /// `task_source` and `notifier` undetectable.
+    pub fn liveness(&self) -> watch::Receiver<Liveness> {
+        self.inner.liveness.subscribe()
+    }
+
     /// Call a method with typed params, deserializing the typed result.
     pub async fn call<P, R>(&self, method: &str, params: &P) -> Result<R, HostError>
     where
@@ -442,6 +509,11 @@ impl Plugin {
 
     /// Gracefully shut down: send `shutdown`, wait `grace`, then kill.
     pub async fn shutdown(&self, grace: Duration) -> Result<(), HostError> {
+        // Record the intent *before* anything can make the child exit (#495).
+        // The reader marks `Crashed` on EOF, and that EOF is the expected
+        // outcome of this very call — labelling it first is what stops a
+        // supervisor from relaunching a plugin the operator just stopped.
+        self.inner.mark_liveness(Liveness::ShutDown);
         // Best-effort shutdown notification; ignore errors if already closed.
         let shutdown = Request::new(0, plugin_protocol::method::SHUTDOWN, None);
         if let Ok(line) = jsonrpc::to_line(&shutdown) {
@@ -591,6 +663,7 @@ fn spawn_reader(
         }
         // stdout closed -> the plugin exited. Mark closed and fail all waiters.
         inner.closed.store(true, Ordering::Release);
+        inner.mark_liveness(Liveness::Crashed);
         let mut pending = inner.pending.lock().await;
         pending.clear(); // dropping senders => callers observe Crashed
         tracing::warn!(plugin = %name, "plugin process closed its output; marked closed");

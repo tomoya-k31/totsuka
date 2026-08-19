@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:ec39981cd439f35aeedaae4962adaa5626ed04efce1292e0765eb7b0898a8472 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e884e2fdf990887acd348ee1092273a542d98e9d9450172507b39f62bf6a591c -->
 
 # Configuration reference
 
@@ -84,6 +84,7 @@ The guidance depends on which side is behind:
 | `max_concurrency` | int? | unlimited | Per-agent-plugin limit on tasks running at once |
 | `timeout_secs` | int? | 120 | Timeout for a single call to the plugin |
 | `log_level` | string? | none | The plugin's log level |
+| `restart` | bool | true | Whether a crashed plugin is launched again. Retries back off (1s, 2s, 4s, …) up to **5 attempts within a rolling 5 minutes**, then send an `escalated` notification. **Setting it to `false` keeps the detection** — the death is logged, counted in the run summary's `plugin_crashes`, and still sends an `escalated` notification; an agent plugin's in-flight tasks are still failed. Only the relaunch stops, which is what you want while investigating a plugin by hand |
 | `poll_interval_secs` | int? | 60 | Task sources only. Every task source is push-style, so totsuka never polls one itself — this value is forwarded to the plugin at startup and becomes its own internal fetch interval. Event-driven sources ignore it |
 
 ## `[[workflows]]`

@@ -18,6 +18,15 @@ pub struct RunStats {
     pub done: usize,
     /// Tasks that reached `failed` this run.
     pub failed: usize,
+    /// Plugin processes that exited without being asked to (#495). Counted
+    /// whatever happens next, so a crash is visible even when nothing is
+    /// relaunched — which is exactly the `[plugins.{name}].restart = false`
+    /// case, where [`plugin_restarts`](Self::plugin_restarts) stays 0.
+    pub plugin_crashes: usize,
+    /// Plugin processes successfully relaunched after crashing (#495). Read
+    /// against `plugin_crashes`: equal means every death was repaired, lower
+    /// means at least one plugin is still down.
+    pub plugin_restarts: usize,
 }
 
 /// The summary printed when `run` exits (§5.1 one-shot contract).

@@ -33,6 +33,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     .await
             }
             PluginEvent::Closed(plugin) => self.on_plugin_closed(&plugin).await,
+            // A booked relaunch came due (#495, `run::supervise`).
+            PluginEvent::RestartDue(plugin) => {
+                self.on_restart_due(&plugin);
+                Ok(())
+            }
+            PluginEvent::Restarted { name, outcome } => self.on_restarted(name, *outcome).await,
             // A normalized Claude Code hook signal from the UDS receiver (#136):
             // idempotent record → task resolution → state transition →
             // verification → output (#138, `run::hooks`).
@@ -218,44 +224,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 );
                 tracing::warn!(task_id, "task failed");
             }
-        }
-        Ok(())
-    }
-
-    /// An agent plugin's process exited (§5.3): fail its in-flight tasks; the
-    /// Orchestrator itself keeps running.
-    pub(super) async fn on_plugin_closed(&mut self, plugin: &str) -> Result<(), EngineError> {
-        tracing::warn!(plugin, "agent plugin process exited");
-        let affected: Vec<i64> = self
-            .sessions
-            .iter()
-            .filter(|((p, _), _)| p == plugin)
-            .map(|(_, &task_id)| task_id)
-            .collect();
-        // The plugin is gone: its session routes can never fire again.
-        self.sessions.retain(|(p, _), _| p != plugin);
-        for task_id in affected {
-            let Some(record) = self.db.get_task(task_id)? else {
-                continue;
-            };
-            if record.state.is_terminal() {
-                continue;
-            }
-            self.db.apply_event(
-                task_id,
-                TaskEvent::Fail,
-                Some(serde_json::json!({ "kind": "plugin_crash", "plugin": plugin })),
-            )?;
-            self.release_slot(task_id);
-            self.agent_output.remove(&task_id);
-            self.stats.failed += 1;
-            self.write_back_status(&record, false).await;
-            notify_all(
-                &self.plugins.notifiers,
-                NotifierEvent::Failed,
-                &record,
-                Some(format!("agent plugin `{plugin}` crashed")),
-            );
         }
         Ok(())
     }
