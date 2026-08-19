@@ -580,6 +580,10 @@ fn forces_dispatch_error(config: &Value, params: &Value) -> bool {
 static DISPATCH_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 
 /// The error [`forces_dispatch_error`] asked for.
+///
+/// `dispatch_error` accepts `code` / `message` (the error to answer with),
+/// `only_when_resuming` (fail only a dispatch that names a session), and
+/// `fail_first: N` (fail the first N dispatches, then stop failing).
 fn forced_dispatch_error(config: &Value) -> Error {
     let field = |key: &str| config.get("dispatch_error").and_then(|s| s.get(key));
     Error::new(

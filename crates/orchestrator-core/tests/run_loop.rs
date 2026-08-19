@@ -2203,8 +2203,8 @@ async fn a_permanent_dispatch_failure_stops_after_three_and_notifies_once() {
     // The bound is what makes retrying safe at all: without it, requeueing on
     // failure re-dispatches and fails the same way every tick forever (the
     // reason `requeue_conversations_with_unsent_messages` refuses to touch
-    // `Failed`). Three attempts, one notification, then it is a human's
-    // problem.
+    // `Failed`). One first attempt plus three retries, a single notification,
+    // and then it is a human's problem.
     let base = scratch("dispatch_retry_permanent");
     let repo = setup_repo(&base);
     let source_log = base.join("source.ndjson");
@@ -2254,7 +2254,7 @@ async fn a_permanent_dispatch_failure_stops_after_three_and_notifies_once() {
             .filter(|c| c["method"] == "task/dispatch")
             .count(),
         4,
-        "the first attempt plus three retries, and then it stops"
+        "one first attempt plus DISPATCH_RETRY_LIMIT retries, and then it stops"
     );
     let failures = read_log(&notify_log)
         .into_iter()

@@ -1698,7 +1698,14 @@ impl StateDb {
     ///   retries and the deliberate one compose instead of competing.
     ///
     /// Rows that are neither (the `Fail` that precedes each requeue) are
-    /// skipped, so the walk is ~O(streak).
+    /// skipped, so the walk is ~O(streak) — the early `break` is what bounds
+    /// it, and the `ORDER BY id DESC` costs no sort to get there. That last
+    /// part is worth pinning because `idx_events_task` is on `(task_id)` alone
+    /// and looks like it should need one: a SQLite index carries the rowid as
+    /// its implicit tail, so the entries for one `task_id` are already in `id`
+    /// order and the range is simply walked backwards. Measured — the plan is
+    /// `SEARCH events USING INDEX idx_events_task (task_id=?)` with **no**
+    /// `USE TEMP B-TREE FOR ORDER BY`.
     pub fn auto_retry_streak(&self, task_id: i64) -> Result<u32, StateError> {
         let mut stmt = self
             .conn
@@ -1709,21 +1716,19 @@ impl StateDb {
         let mut streak = 0u32;
         for row in rows {
             let (to_state, detail) = row?;
-            if to_state == TaskState::Dispatched.to_string() {
+            if to_state == TaskState::Dispatched.as_str() {
                 break;
             }
-            if to_state != TaskState::Queued.to_string() {
+            if to_state != TaskState::Queued.as_str() {
                 continue;
             }
-            let kind = detail
+            let is_auto = detail
                 .as_deref()
                 .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-                .and_then(|v| {
-                    v.get("kind")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string)
+                .is_some_and(|v| {
+                    v.get("kind").and_then(serde_json::Value::as_str) == Some(AUTO_RETRY_KIND)
                 });
-            if kind.as_deref() == Some(AUTO_RETRY_KIND) {
+            if is_auto {
                 streak += 1;
             } else {
                 break;
