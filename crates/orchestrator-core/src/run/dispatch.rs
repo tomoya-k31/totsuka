@@ -542,6 +542,32 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 spent_retries,
             )
         };
+        // Parking is the only outcome that leaves the task waiting on a downed
+        // agent. Every other one — dispatching, failing, a vanished workflow —
+        // ends that wait, so the "already reported" memo is dropped once, here,
+        // instead of in each arm below. Structuring it this way is what keeps
+        // the set from growing for the life of a `--watch` process, and keeps
+        // a *later* outage reportable again.
+        let target = match target {
+            Err(DispatchRefusal::AgentDown) => {
+                self.release_slot(task_id);
+                // Told once per task, not once per 200 ms tick — the same
+                // reason `blocked_on_tools` exists. The operator's actionable
+                // signal is the plugin's own escalation, which `supervise`
+                // sends when the restart budget runs out.
+                if self.blocked_on_agent.insert(task_id) {
+                    tracing::warn!(
+                        task_id,
+                        "agent plugin is down; leaving the task queued until it is back"
+                    );
+                }
+                return Ok(());
+            }
+            other => {
+                self.blocked_on_agent.remove(&task_id);
+                other
+            }
+        };
         let DispatchTarget {
             agent_name,
             profile: wf_profile,
@@ -558,23 +584,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             Err(DispatchRefusal::Failed(reason)) => {
                 return self.fail_dispatch(&record, reason).await;
             }
-            Err(DispatchRefusal::AgentDown) => {
-                self.release_slot(task_id);
-                // Told once per task, not once per 200 ms tick — the same
-                // reason `blocked_on_tools` exists. The operator's actionable
-                // signal is the plugin's own escalation, which `supervise`
-                // sends when the restart budget runs out.
-                if self.blocked_on_agent.insert(task_id) {
-                    tracing::warn!(
-                        task_id,
-                        "agent plugin is down; leaving the task queued until it is back"
-                    );
-                }
-                return Ok(());
-            }
+            // Consumed by the park arm above; unreachable here.
+            Err(DispatchRefusal::AgentDown) => unreachable!("parked above"),
         };
-        // Past the liveness gate: a later outage is news again.
-        self.blocked_on_agent.remove(&task_id);
 
         // Conversation continuity (#242, superseding #140's D-10): a follow-up
         // message reopens *this* task, so the session to resume is simply this

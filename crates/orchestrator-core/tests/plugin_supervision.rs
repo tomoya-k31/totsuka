@@ -508,6 +508,7 @@ async fn restart_can_be_disabled_without_losing_detection() {
 /// side effect.
 #[tokio::test]
 async fn a_task_queued_during_a_crash_window_is_not_failed() {
+    let logs = capture_logs();
     let dir = test_support::scratch("supervise_crash_window");
     let counter = dir.join("launches");
     let db = StateDb::open(&dir.join("state.db")).unwrap();
@@ -550,7 +551,15 @@ async fn a_task_queued_during_a_crash_window_is_not_failed() {
     )
     .await;
 
-    let summary = run_for(&mut engine, Duration::from_millis(2000)).await;
+    // Wait for the **park itself**, not for a wall-clock window. A fixed
+    // window makes the result depend on CI load; worse, stopping merely
+    // because the task was submitted would let `failed == 0` pass without the
+    // dispatch ever having been attempted — a green test proving nothing.
+    let probe = logs.clone();
+    let summary = run_until(&mut engine, move || {
+        captured(&probe).contains("leaving the task queued")
+    })
+    .await;
 
     assert_eq!(
         summary.stats.submitted, 1,
