@@ -28,6 +28,7 @@ use serde_json::json;
 
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::OpenAiRouter;
+use orchestrator_core::logging::{LogFormat, RedactingLayer};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -184,6 +185,50 @@ fn notifications(log: &Path) -> Vec<serde_json::Value> {
     test_support::read_ndjson_log(log)
 }
 
+/// Capture the process's `tracing` output for the rest of the test.
+///
+/// **`set_global_default`, not `with_default`.** A thread-local default is
+/// invisible to the engine, whose work runs on tokio worker threads — a test
+/// that used one would capture nothing and pass, which is the failure this
+/// exists to prevent. Safe here because nextest runs one process per test.
+fn capture_logs() -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    #[derive(Clone)]
+    struct BufWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufWriter {
+        type Writer = BufGuard;
+        fn make_writer(&'a self) -> BufGuard {
+            BufGuard(self.0.clone())
+        }
+    }
+    struct BufGuard(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for BufGuard {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(RedactingLayer::new(
+        BufWriter(buf.clone()),
+        LogFormat::Json,
+        false,
+        false,
+    ));
+    let _ = tracing::subscriber::set_global_default(subscriber);
+    buf
+}
+
+/// The captured log as text.
+fn captured(buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
+    String::from_utf8(buf.lock().unwrap().clone()).unwrap_or_default()
+}
+
 /// **The regression this issue is about.** A `task_source` that dies used to
 /// produce no engine event whatsoever — the run stayed up as a process that
 /// would never receive another task. It must now be noticed and relaunched.
@@ -270,6 +315,7 @@ async fn a_dead_notifier_is_noticed_and_comes_back() {
 /// replaced one silent failure with another.
 #[tokio::test]
 async fn giving_up_escalates_instead_of_retrying_forever() {
+    let logs = capture_logs();
     let dir = test_support::scratch("supervise_exhausted");
     let counter = dir.join("launches");
     let notify_log = dir.join("notify.ndjson");
@@ -317,12 +363,6 @@ async fn giving_up_escalates_instead_of_retrying_forever() {
         !escalations.is_empty(),
         "exhausting the restart budget must reach the operator"
     );
-    // Delivery alone is not enough of a guarantee to rest on. `notify` is
-    // fire-and-forget down a pipe, so a dead notifier still returns `Ok` —
-    // and the sharpest case is a single configured notifier being the plugin
-    // that died, where the escalation about it is handed to it. The log line
-    // is the record that survives that, so it is asserted here rather than
-    // left as an incidental.
     assert!(
         escalations[0]["params"]["body"]
             .as_str()
@@ -330,6 +370,27 @@ async fn giving_up_escalates_instead_of_retrying_forever() {
             .contains("staying down"),
         "the escalation must say the plugin is not coming back: {:?}",
         escalations[0]
+    );
+
+    // **Delivery alone is not enough of a guarantee to rest on**, so the log
+    // line is asserted separately — and against the captured log, not the
+    // notification, which are two different records.
+    //
+    // `notify` is fire-and-forget down a pipe: a dead plugin's stdin still
+    // accepts a write while the writer task drains, so a lost notification
+    // returns `Ok` and leaves no error. The sharpest case is a single
+    // configured notifier being the plugin that died, where the escalation
+    // *about* it is handed *to* it — nobody hears it. The log is what
+    // survives that, which is exactly why it must be checked here rather
+    // than trusted because it was seen once by hand.
+    let text = captured(&logs);
+    assert!(
+        text.contains("escalating"),
+        "the escalation must reach the log, not only the notifier: {text}"
+    );
+    assert!(
+        text.contains("mock_src"),
+        "and it must name the plugin: {text}"
     );
     let params = &escalations[0]["params"];
     assert!(

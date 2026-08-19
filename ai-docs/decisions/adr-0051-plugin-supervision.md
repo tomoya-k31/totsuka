@@ -5,6 +5,8 @@ description: "死活検知が agent_ide だけに配線され、しかも通知�
 resource: https://github.com/tomoya-k31/totsuka/issues/495
 tags: [decision, plugin, lifecycle, supervision, reliability, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-20T10:30:00Z }
 status: stable
 owner: tomoya-k31
 sources:

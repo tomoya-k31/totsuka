@@ -5,6 +5,8 @@ description: "Capabilities のフィールドと error_code の定数が実際�
 resource: https://github.com/tomoya-k31/totsuka/issues/496
 tags: [decision, plugin, protocol, fitness-function, arch-lint, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-20T10:30:00Z }
 status: stable
 owner: tomoya-k31
 sources:
