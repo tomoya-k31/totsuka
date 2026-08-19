@@ -4,7 +4,7 @@ title: テスト戦略（自動結合テスト / E2E / モックプラグイン�
 description: totsuka のテスト層（ユニット・実プロセス結合・バイナリE2E）とモックプラグインによるシナリオ注入、フレーク対策、CI 品質ゲートの定義。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates
 tags: [testing, e2e, integration, mock, ci, quality, slack]
-generated: { by: claude-code/opus-5, at: 2026-08-01T10:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -28,7 +28,7 @@ owner: tomoya-k31
 
 | config キー | 効果 |
 |---|---|
-| `task_submit` / `submit_tasks` | `task_submit: true` で push 型 task_source を演じ、`initialize` 応答直後に `submit_tasks` の各エントリを `task/submit` として push（1 タスクの重複投入で orchestrator 側 dedup=`duplicate` ack の検証にも使える） |
+| `submit_tasks` | push 型 task_source を演じ、`initialize` 応答直後に `submit_tasks` の各エントリを `task/submit` として push（1 タスクの重複投入で orchestrator 側 dedup=`duplicate` ack の検証にも使える） |
 | `stream_states` | `state/subscribe` 後に再生する状態列（例 `["running","done"]` / `["running","waiting_input"]`）（agent_ide, F-38） |
 | `session_id` | `task/dispatch` が返すセッション ID。`gone`/`done`/`waiting`/`fail` を含めると `session/attach` の応答を制御（回復シナリオ #57） |
 | `commit_on_dispatch` | dispatch 時に worktree でブランチを切って実コミット（`branch_on_dispatch` で名前を指定、既定 `feat/mock-agent-work`）。worktree は detached で渡るので、ブランチが先 |

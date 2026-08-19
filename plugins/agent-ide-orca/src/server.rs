@@ -220,14 +220,15 @@ impl<F: CliFactory> Server<F> {
     }
 }
 
-/// The capabilities this plugin declares (F-33): plan mode and a state stream.
-/// `pane_control` is intentionally **not** declared — orca exposes no pane
-/// surface — so the Orchestrator never requests it.
+/// The capabilities this plugin declares (F-33): a state stream, and nothing
+/// else. `pane_control` is intentionally **not** declared — orca exposes no
+/// pane surface — and neither is `hook_completion`: orca drives the `orca` CLI
+/// itself and reports completion through the state stream. The Orchestrator
+/// never requests either.
 fn capabilities_result() -> Value {
     to_value(&InitializeResult {
         plugin_version: plugin_version(),
         capabilities: Capabilities {
-            plan_mode: true,
             state_stream: true,
             ..Capabilities::default()
         },

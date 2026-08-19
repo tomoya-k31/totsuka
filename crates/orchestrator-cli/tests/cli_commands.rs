@@ -1287,7 +1287,7 @@ fn hook_config(agent: &str) -> String {
 fn unset_hook_token_fails_doctor_when_an_agent_is_hook_capable() {
     let base = scratch("hook-token-fail");
     seed_empty_config(&base, &hook_config("herdr"));
-    seed_manifest(&base, "herdr", "resume_session = true");
+    seed_manifest(&base, "herdr", "hook_completion = true");
 
     let out = run(&base, &["doctor", "--json"]);
     assert_eq!(out.status.code(), Some(3), "problems found exit 3 (#177)");
@@ -1339,7 +1339,7 @@ fn unset_hook_token_stays_advisory_without_a_hook_capable_agent() {
 fn unset_hook_token_warns_in_config_validate() {
     let base = scratch("hook-token-validate");
     seed_empty_config(&base, &hook_config("herdr"));
-    seed_manifest(&base, "herdr", "diagnostics_snapshot = true");
+    seed_manifest(&base, "herdr", "hook_completion = true");
 
     let out = run(&base, &["config", "validate", "--offline"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));

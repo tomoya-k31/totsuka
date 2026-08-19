@@ -5,11 +5,13 @@ version = "0.1.0"
 # `TaskDispatchParams.tool_launch` arrived, and this plugin no longer has a
 # local argv fallback for orchestrators that send none. Refusing them here
 # (F-54) is what makes deleting `agent_command`/`plan_args` safe.
-protocol_version = ">=0.2.3, <0.5"
+protocol_version = ">=0.2.3, <0.6"
 
 [capabilities]
-plan_mode = true
 pane_control = true
 state_stream = true
-resume_session = true
+# 0.5.0: replaces the `resume_session` / `diagnostics_snapshot` pair that used
+# to stand in for "this agent reports completion through hooks". The snapshot
+# flag stays because it gates a real RPC, not because it implies hooks.
+hook_completion = true
 diagnostics_snapshot = true

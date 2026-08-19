@@ -759,7 +759,7 @@ fn check_hooks(
     let mut unknown_workflows: Vec<(&str, &str)> = Vec::new();
     for wf in &cfg.workflows {
         match store.manifest_of(&wf.agent) {
-            Ok(Some(m)) if m.capabilities.hook_capable() => {
+            Ok(Some(m)) if m.capabilities.hook_completion => {
                 hook_workflows.push((wf.name.as_str(), wf.agent.as_str()));
             }
             // Not installed (`plugin:*` reports that) or not hook-capable.
@@ -1080,7 +1080,7 @@ fn check_hook_deps(env: &HashMap<String, String>, checks: &mut Vec<Check>) {
 /// the 0600 socket is still a barrier.
 ///
 /// `hook_workflows` is the `(workflow, agent)` list of workflows whose agent
-/// declares `Capabilities::hook_capable()`; `unknown_workflows` holds those
+/// declares `Capabilities::hook_completion`; `unknown_workflows` holds those
 /// whose agent's capability could not be determined (unparsable manifest), so
 /// the advisory can say *why* it might be under-reporting instead of silently
 /// treating them as not hook-capable (#214).

@@ -111,23 +111,26 @@ fn main() {
                     .get("no_state_stream")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                // Hook-capability flags (0.1.3): `resume_session` /
-                // `diagnostics_snapshot` make the orchestrator take the
-                // hook-dispatch path (job_id + the hook env on tool_launch). 0.1.4:
-                // `pane_control` gates the `session/focus` control path (F-94).
+                // 0.5.0: `hook_completion` makes the orchestrator take the
+                // hook-dispatch path (job_id + the hook env on tool_launch);
+                // it replaced the `resume_session` / `diagnostics_snapshot`
+                // pair that used to stand in for it. 0.1.4: `pane_control`
+                // gates the `session/focus` control path (F-94).
+                //
+                // Tests that predate 0.5.0 set `resume_session`, so it is
+                // still accepted here as an alias — this is a *test double's*
+                // input, not the wire, and rewriting every fixture would be
+                // churn with no signal.
                 let flag = |k: &str| config.get(k).and_then(Value::as_bool).unwrap_or(false);
                 Response::result(
                     request_id(&id),
                     serde_json::to_value(InitializeResult {
                         plugin_version: semver::Version::new(0, 1, 0),
                         capabilities: Capabilities {
-                            plan_mode: true,
                             state_stream,
                             pane_control: flag("pane_control"),
-                            resume_session: flag("resume_session"),
+                            hook_completion: flag("hook_completion") || flag("resume_session"),
                             diagnostics_snapshot: flag("diagnostics_snapshot"),
-                            // 0.1.6: a push task source (never polled).
-                            task_submit: flag("task_submit"),
                             outputs: vec![OutputCapability::Source],
                             // No `..Default::default()`: removing
                             // `design_preview` in 0.4.0 (#411) made this

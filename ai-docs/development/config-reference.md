@@ -103,7 +103,7 @@ owner: tomoya-k31
 | `timeout_secs` | int? | 120 | RPC タイムアウト秒 |
 | `log_level` | string? | なし | プラグインのログレベル |
 | `restart` | bool | true | クラッシュしたら再起動するか（#495 / [ADR-0051](/decisions/adr-0051-plugin-supervision.md)）。指数バックオフ（1s / 2s / 4s …）で**最大 5 回・5 分のスライディング窓**、尽きたら `escalated` を通知する。**`false` にしても検知は残る** — ログに出て `RunSummary.plugin_crashes` に計上され、`escalated` も飛ぶ（`plugin_restarts` のほうは 0 のまま。だから死亡を数える counter が別に要る）。agent なら在席タスクも畳まれる。止まるのは再起動だけで、プラグインを手で調べたいときの形。バックオフの形は設定に出していない（運用者が調整する材料を持たないため） |
-| `poll_interval_secs` | int? | 60 | task_source のみ。**fetch 型 source**（`task_submit` capability 未宣言）では `run --watch` の Orchestrator 側ポーリング間隔（F-06）。**push 型 source**（`task_submit` 宣言、0.1.6 / [ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）はポーリングされず、この値は `initialize` でプラグインへ転送されプラグイン内部の fetch 周期になる |
+| `poll_interval_secs` | int? | 60 | task_source のみ。**全 task_source は push 型**（0.2.0 で `tasks/fetch` を削除、[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）なので Orchestrator 側のポーリングは存在しない。この値は `initialize` でプラグインへ転送され、プラグイン内部の fetch 周期になる。イベント駆動ソースは無視してよい |
 
 # `[[workflows]]`
 
@@ -623,7 +623,7 @@ Claude Code フックイベント受信（UDS）の設定（#131。全キー省�
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `auth_token_ref` | string? | なし | フック POST を認証する Bearer トークンのシークレット参照（E-03、例 `keychain:totsuka/hook-token`）。**運用上は必須**（未設定時の防御は 0600 の UDS パーミッションのみ）。未設定は #209 でツール側が検出するようになった: フック対応 agent（マニフェストが `resume_session` または `diagnostics_snapshot` を宣言）を使う workflow がある場合、`config validate` / `run` が該当 workflow ごとに警告を出し、`doctor` は **fail**（終了コード非 0）。フック対応 agent を使わない構成では doctor は warn 表示のみ（終了コードは成功）。参照を設定したのに解決できない場合は構成によらず fail |
+| `auth_token_ref` | string? | なし | フック POST を認証する Bearer トークンのシークレット参照（E-03、例 `keychain:totsuka/hook-token`）。**運用上は必須**（未設定時の防御は 0600 の UDS パーミッションのみ）。未設定は #209 でツール側が検出するようになった: フック対応 agent（マニフェストが `hook_completion` を宣言）を使う workflow がある場合、`config validate` / `run` が該当 workflow ごとに警告を出し、`doctor` は **fail**（終了コード非 0）。フック対応 agent を使わない構成では doctor は warn 表示のみ（終了コードは成功）。参照を設定したのに解決できない場合は構成によらず fail |
 | `socket_path` | string? | 組み込み既定 | 受信 UDS のパス（例 `${XDG_RUNTIME_DIR}/totsuka/agent-events.sock`） |
 | `spool_dir` | string? | 組み込み既定 | POST 失敗時にイベントを退避するスプールディレクトリ（E-07、例 `${XDG_STATE_HOME}/totsuka/hooks/spool`） |
 | `block_retry_limit` | int? | 3 | Stop フック block 差し戻しの連続上限。超過でエスカレーション（D-02） |

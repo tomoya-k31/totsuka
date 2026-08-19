@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5, at: 2026-08-01T06:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -33,18 +33,31 @@ plugin-protocol = { git = "https://github.com/tomoya-k31/totsuka" }
 name = "github"                 # インスタンスバイナリ名と一致
 kind = "task_source"            # task_source | agent_ide | notifier
 version = "0.1.0"               # プラグイン自身の版
-protocol_version = ">=0.1.6, <0.5"  # 対応する Orchestrator プロトコル範囲(F-54)
+protocol_version = ">=0.1.6, <0.6"  # 対応する Orchestrator プロトコル範囲(F-54)
 
 [capabilities]                  # 実際に対応する機能だけ宣言(F-33)
-plan_mode = true                # agent: plan モード対応
 state_stream = true             # agent: state/subscribe ストリーム(F-38)
+pane_control = true             # agent: session/focus・release・list(F-94)
+hook_completion = true          # agent: 完了をツールのフック経由で報告する
+diagnostics_snapshot = true     # agent: diagnostics/snapshot に応答する
 outputs = ["source"]            # task_source: result/publish 対応(F-83)
-task_submit = true              # task_source: push 型ソース宣言（必須。[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）
 ```
 
-Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push（`task_submit = true`）専用**（`tasks/fetch` は削除済み）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に、`<0.3` を上限とする manifest は **0.3.0**（#264 の `Task.thread_key` 削除）に、`<0.4` を上限とする manifest は **0.4.0**（#411 の `TaskDispatchParams.hook` / `Capabilities.design_preview` 削除）に、それぞれ起動拒否される — 上限は超えたい破壊的バンプの**次**のメジャー/マイナーに置く（現行なら `<0.5`）。
+**宣言できるのは、Orchestrator が実際に読む鍵だけである。** `Capabilities` の
+各フィールドと `error_code` の各定数は、`scripts/arch-lint.sh` の
+`declaration-consumed` 検査が「誰かが読んでいるか」を機械検証しており、読み手の
+無い宣言は CI で落ちる。プロトコル 0.5.0 はこの検査を入れると同時に、それに引っ
+かかった 5 つ（`plan_mode` / `task_submit` / `resume_session` /
+`PROTOCOL_VERSION_MISMATCH` / `CAPABILITY_UNSUPPORTED`）を削除した
+（[ADR-0052](/decisions/adr-0052-declaration-consumed.md)）。**古い manifest に
+これらの鍵が残っていても起動は失敗しない** — `Capabilities` に
+`deny_unknown_fields` は無いので、読み飛ばして無視される。ただし
+`resume_session` は `hook_completion` に**置き換わった**ので、フック経由で完了を
+報告する agent は新しい名前で宣言し直すこと。
 
-上の例は task_source なので下限は `>=0.1.6`（`task_submit` capability が入ったバージョン。それより前を含める範囲は宣言できない）。
+Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push 専用**（`tasks/fetch` は削除済み。起動できる task_source は例外なく push 型なので、0.5.0 でこれを宣言する `task_submit` は情報量ゼロとして削除された）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に、`<0.3` を上限とする manifest は **0.3.0**（#264 の `Task.thread_key` 削除）に、`<0.4` を上限とする manifest は **0.4.0**（#411 の `TaskDispatchParams.hook` / `Capabilities.design_preview` 削除）に、`<0.5` を上限とする manifest は **0.5.0**（#496 の到達不能な宣言 5 件の削除）に、それぞれ起動拒否される — 上限は超えたい破壊的バンプの**次**のメジャー/マイナーに置く（現行なら `<0.6`）。
+
+上の例は下限を `>=0.1.6`（`task/submit` RPC が入ったバージョン）に置いている。それより前の Orchestrator には push する手段が無いので、範囲に含めても動かない。
 
 **下限も上限と同じくらい意味を持つ。** 例えば herdr は `>=0.2.3` を宣言する。0.2.3 が `TaskDispatchParams.tool_launch` の入ったバージョンで、herdr には argv を自前で組み立てるフォールバックがもう無いためである。下限で弾いておくことが、そのフォールバックを「非推奨」ではなく**到達不能**にしている（[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。
 

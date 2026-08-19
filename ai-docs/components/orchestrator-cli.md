@@ -4,7 +4,7 @@ title: orchestrator-cli クレート
 description: "totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（init / setup / run / status / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [rust, crate, cli, plugin, run, status, doctor, hooks, security]
-generated: { by: claude-code/fable-5, at: 2026-08-13T19:11:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -67,7 +67,7 @@ owner: tomoya-k31
 
 - `check_hook_socket`（`hook-socket`） — UDS への**自己 POST → 200**（受信サーバ・Bearer・0600 権限の疎通）。
 - `check_hook_assets`（`hooks`） — スクリプト + `orchestrator-*.json` の存在・**0700/0600 パーミッション**・**内容ハッシュ一致**（既存の `hooks` アセットチェックを拡張。実体は core の `hooks::install` / `hooks::verify_assets` 呼び出し、#178）。
-- `check_hook_token`（`hook-token`） — `[hooks].auth_token_ref` が解決できる（keychain/env 参照切れの検出）。**#209 で未設定の扱いを条件付きに変更**: `cfg.workflows` の `agent` を静的マニフェストで引き、`Capabilities::hook_capable()`（= `resume_session || diagnostics_snapshot`）な agent を使う workflow が 1 つでもあれば **`Check::fail`**（該当 workflow / agent 名を detail に列挙）、無ければ従来どおり `Check::warn`。**#214**: agent のマニフェストがパース不能で capability を判定できなかった workflow は「hook 非対応」扱いに沈黙させず、warn の detail に **capability 不明**として明示する（マニフェスト破損だけで fail → warn への静かな格下げが起きないようにするため。破損自体は `config` チェックと `plugin:*` チェックが fail として捕捉する）。doctor で唯一、構成によって severity が変わるチェック。plugin の enabled 状態や参照整合性は既存の validate / `plugin:*` チェックの責務としてここでは重ねない。
+- `check_hook_token`（`hook-token`） — `[hooks].auth_token_ref` が解決できる（keychain/env 参照切れの検出）。**#209 で未設定の扱いを条件付きに変更**: `cfg.workflows` の `agent` を静的マニフェストで引き、`Capabilities::hook_completion` を宣言する agent を使う workflow が 1 つでもあれば **`Check::fail`**（該当 workflow / agent 名を detail に列挙）、無ければ従来どおり `Check::warn`。**#214**: agent のマニフェストがパース不能で capability を判定できなかった workflow は「hook 非対応」扱いに沈黙させず、warn の detail に **capability 不明**として明示する（マニフェスト破損だけで fail → warn への静かな格下げが起きないようにするため。破損自体は `config` チェックと `plugin:*` チェックが fail として捕捉する）。doctor で唯一、構成によって severity が変わるチェック。plugin の enabled 状態や参照整合性は既存の validate / `plugin:*` チェックの責務としてここでは重ねない。
 - `check_hook_deps`（`hook-deps`） — `curl` + `jq` の存在（H-14。無いとフックが送信不能で全て spool 行き）。
 - `check_spool`（`hook-spool`） — `spool_dir` の書き込み可否と**バックログ件数**（backlog > 0 は warning、[hook-security](/security/hook-security.md) N-05 の滞留検出）。
 

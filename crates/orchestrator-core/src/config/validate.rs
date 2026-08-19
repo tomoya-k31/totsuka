@@ -363,8 +363,10 @@ pub struct Finding {
 ///
 /// `source_outputs` returns a task-source plugin's declared output
 /// capabilities (from its manifest offline, or `None` when unknown).
-/// `agent_hook_capable` returns whether an agent plugin signals completion via
-/// Claude Code hooks (#131), or `None` when unknown — then the
+/// `agent_hook_capable` returns whether an agent plugin declares
+/// `Capabilities::hook_completion` (#131, renamed from a `resume_session ||
+/// diagnostics_snapshot` heuristic in 0.5.0 / #496), or `None` when unknown —
+/// then the
 /// `[hooks].auth_token_ref` advisory is skipped.
 pub fn validate<E, F, H>(
     cfg: &RootConfig,

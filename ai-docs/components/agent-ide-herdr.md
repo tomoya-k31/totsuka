@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-12T00:45:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -274,7 +274,7 @@ herdr 固有のエラー語彙を**プロトコルの語彙へ翻訳するのは
 
 # capabilities（F-33）
 
-manifest（`plugins/agent-ide-herdr/plugin.toml`）と `initialize` 応答で `kind = agent_ide`・`plan_mode` / `design_preview` / `pane_control` / `state_stream` に加え、**0.1.3 で `resume_session`（`--resume` セッション再開）/ `diagnostics_snapshot`（`diagnostics/snapshot`）**を宣言する（両者は一致させる）。
+manifest（`plugins/agent-ide-herdr/plugin.toml`）と `initialize` 応答で `kind = agent_ide`・`pane_control` / `state_stream` / `diagnostics_snapshot`（`diagnostics/snapshot`）に加え、**0.5.0 で `hook_completion`**（フック経由で完了を報告する）を宣言する（manifest と `initialize` 応答は一致させる）。`hook_completion` は 0.1.3 の `resume_session` を置き換えたもので、それ以前は `resume_session || diagnostics_snapshot` という de-facto の OR がフック対応の判定に使われていた（#496 / [ADR-0052](/decisions/adr-0052-declaration-consumed.md)）。
 
 `[layout]`（#356）は**ケイパビリティを新設せず既存の `pane_control` に相乗り**する（[ADR-0005](/decisions/adr-0005-click-to-focus.md) / [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md) と同じパターン）。`design_preview` は**宣言だけが残っている**状態で、実体は無い（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。
 

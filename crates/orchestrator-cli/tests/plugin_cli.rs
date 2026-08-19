@@ -135,7 +135,7 @@ fn fake_source(dir: &Path, name: &str, protocol_req: &str) {
 fn full_lifecycle_install_list_enable_disable_uninstall() {
     let env = Env::new("lifecycle");
     let src = env.root.join("src");
-    fake_source(&src, "github", ">=0.1.6, <0.5");
+    fake_source(&src, "github", ">=0.1.6, <0.6");
 
     // install --yes shows source + checksum.
     let (ok, out, _) = env.run(&["plugin", "install", src.to_str().unwrap(), "--yes"], None);
@@ -192,7 +192,7 @@ fn install_then_enable_produces_loadable_config() {
     // the resulting config.toml is schema-valid and later commands still work.
     let env = Env::new("install_enable");
     let src = env.root.join("src");
-    fake_source(&src, "github", ">=0.1.6, <0.5");
+    fake_source(&src, "github", ">=0.1.6, <0.6");
     // A config exists (as after `init`) but has no [plugins.github] section yet.
     fs::write(env.config_toml(), "version = 1\n").unwrap();
 
@@ -227,7 +227,7 @@ fn install_then_enable_produces_loadable_config() {
 fn install_requires_confirmation() {
     let env = Env::new("confirm");
     let src = env.root.join("src");
-    fake_source(&src, "notion", ">=0.1.6, <0.5");
+    fake_source(&src, "notion", ">=0.1.6, <0.6");
 
     // Answer "n": nothing is installed.
     let (ok, out, _) = env.run(&["plugin", "install", src.to_str().unwrap()], Some("n\n"));
@@ -310,7 +310,7 @@ fn plugin_list_honors_config_override() {
 fn broken_env_override_fails_before_install_side_effects() {
     let env = Env::new("env-fail-loud");
     let src = env.root.join("src");
-    fake_source(&src, "github", ">=0.1.6, <0.5");
+    fake_source(&src, "github", ">=0.1.6, <0.6");
 
     let (ok, _, stderr) = env.run_with_env(
         &["plugin", "install", src.to_str().unwrap(), "--yes"],
@@ -336,7 +336,7 @@ fn broken_env_override_fails_before_install_side_effects() {
 /// Lay out a bundled tree: `<root>/plugins/<name>/{plugin.toml, <name>}`.
 fn fake_bundle(root: &Path, names: &[&str]) {
     for name in names {
-        fake_source(&root.join("plugins").join(name), name, ">=0.1.6, <0.5");
+        fake_source(&root.join("plugins").join(name), name, ">=0.1.6, <0.6");
     }
 }
 
@@ -505,7 +505,7 @@ fn bundled_only_flags_are_rejected_without_bundled() {
 fn enable_flag_works_for_a_plain_directory_install_too() {
     let env = Env::new("enable-flag-dir");
     let src = env.root.join("src");
-    fake_source(&src, "github", ">=0.1.6, <0.5");
+    fake_source(&src, "github", ">=0.1.6, <0.6");
     fs::write(env.config_toml(), "").unwrap();
 
     let (ok, out, err) = env.run(
@@ -532,7 +532,7 @@ fn enable_flag_fails_before_touching_the_store() {
     // failed". Nothing must be written when the edit cannot succeed.
     let env = Env::new("enable-preflight");
     let src = env.root.join("src");
-    fake_source(&src, "github", ">=0.1.6, <0.5");
+    fake_source(&src, "github", ">=0.1.6, <0.6");
     fs::remove_file(env.config_toml()).ok();
     assert!(!env.config_toml().exists());
 
@@ -561,7 +561,7 @@ fn enable_flag_fails_before_touching_the_store() {
 fn enable_flag_rejects_an_unparseable_config_before_installing() {
     let env = Env::new("enable-preflight-parse");
     let src = env.root.join("src");
-    fake_source(&src, "github", ">=0.1.6, <0.5");
+    fake_source(&src, "github", ">=0.1.6, <0.6");
     fs::write(env.config_toml(), "this is not = = valid toml\n").unwrap();
 
     let (ok, _, _) = env.run(
@@ -604,7 +604,7 @@ fn fake_checkout(root: &Path, plugins: &[(&str, &str)]) {
         fs::write(
             dir.join("plugin.toml"),
             format!(
-                "name = \"{name}\"\nkind = \"task_source\"\nversion = \"0.2.0\"\nprotocol_version = \">=0.1.6, <0.5\"\n"
+                "name = \"{name}\"\nkind = \"task_source\"\nversion = \"0.2.0\"\nprotocol_version = \">=0.1.6, <0.6\"\n"
             ),
         )
         .unwrap();
@@ -800,7 +800,7 @@ fn mode_specific_flags_are_rejected_outside_their_mode() {
     // reason.
     let env = Env::new("flag-misuse");
     let src = env.root.join("src");
-    fake_source(&src, "github", ">=0.1.6, <0.5");
+    fake_source(&src, "github", ">=0.1.6, <0.6");
     let dir = src.to_str().unwrap().to_string();
 
     let cases: Vec<(Vec<&str>, &str)> = vec![

@@ -239,10 +239,11 @@ async fn full_flow_initialize_update_publish() {
     let shared = Shared::default();
     let mut srv = server(&shared);
 
-    // initialize → declares task_submit (push, 0.1.6) + outputs = ["source"].
+    // initialize → declares outputs = ["source"]. `task_submit` is gone in
+    // 0.5.0: every task_source has been push-only since `tasks/fetch` was
+    // removed at 0.2.0, so the flag could only ever be `true`.
     let resp = call(&mut srv, 1, "initialize", init_params()).await;
     let result = resp.result.expect("initialize result");
-    assert_eq!(result["capabilities"]["task_submit"], json!(true));
     assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
 
     // task/update_status → maps レビュー待ち → "In Review", verifies the option
@@ -534,7 +535,6 @@ fn shipped_manifest_is_valid_and_declares_push_source() {
         .expect("plugin.toml parses");
     assert_eq!(manifest.name, "notion");
     assert_eq!(manifest.kind, plugin_protocol::PluginKind::TaskSource);
-    assert!(manifest.capabilities.task_submit);
     assert_eq!(
         manifest.capabilities.outputs,
         vec![plugin_protocol::OutputCapability::Source]

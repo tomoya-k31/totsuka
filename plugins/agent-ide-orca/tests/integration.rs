@@ -164,15 +164,23 @@ async fn dispatch_then_state_stream_to_done() {
 
     let mut d = Driver::new(cli.clone());
     let init = d.init().await;
-    // Capability negotiation (F-33): declares plan_mode + state_stream, and
-    // NOT pane_control (orca can't fulfil it).
+    // Capability negotiation (F-33): declares state_stream, and NOT
+    // pane_control (orca can't fulfil it) or hook_completion (it drives the
+    // `orca` CLI itself and reports through the state stream).
     let caps = &init["result"]["capabilities"];
-    assert_eq!(caps["plan_mode"], true);
     assert_eq!(caps["state_stream"], true);
     assert_eq!(caps["pane_control"], false);
-    // #411: the capability was removed from the protocol, so it is absent
-    // from the wire rather than present-and-false.
-    assert!(caps.get("design_preview").is_none());
+    assert_eq!(caps["hook_completion"], false);
+    // A removed capability is absent from the wire rather than
+    // present-and-false: #411 for `design_preview`, #496 for these three.
+    for retired in [
+        "design_preview",
+        "plan_mode",
+        "task_submit",
+        "resume_session",
+    ] {
+        assert!(caps.get(retired).is_none(), "{retired} must be gone");
+    }
 
     let disp = d
         .call(
@@ -356,7 +364,6 @@ fn shipped_manifest_declares_only_supported_capabilities() {
         .expect("plugin.toml parses");
     assert_eq!(manifest.name, "orca");
     assert_eq!(manifest.kind, plugin_protocol::PluginKind::AgentIde);
-    assert!(manifest.capabilities.plan_mode);
     assert!(manifest.capabilities.state_stream);
     // orca cannot fulfil this, so it must not be advertised (F-33): the
     // Orchestrator only requests declared capabilities.

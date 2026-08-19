@@ -4,12 +4,10 @@
   "result": {
     "plugin_version": "1.2.0",
     "capabilities": {
-      "plan_mode": true,
       "pane_control": true,
       "state_stream": true,
-      "resume_session": true,
+      "hook_completion": true,
       "diagnostics_snapshot": true,
-      "task_submit": false,
       "outputs": []
     }
   }

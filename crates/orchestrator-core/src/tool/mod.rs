@@ -307,10 +307,10 @@ impl ToolProfile {
                 //
                 // **`settings_path` is part of the condition, not decoration.**
                 // The deny rules reach Claude only through `--settings`, and
-                // `run::dispatch_one` resolves that path only for hook-capable
-                // agents (`resume_session` / `diagnostics_snapshot`). An
-                // agent_ide that declares neither — orca, mock, any plugin
-                // shaped like them — gets no settings file, so asking the
+                // `run::dispatch_one` resolves that path only for agents
+                // declaring `hook_completion` (0.5.0, #496). An agent_ide that
+                // does not — orca, mock, any plugin shaped like them — gets no
+                // settings file, so asking the
                 // profile alone would drop the plan flag from a dispatch that
                 // never received a deny list: strictly looser than before this
                 // change. Both halves must be true for the trade to hold.
@@ -640,9 +640,9 @@ mod tests {
     }
 
     /// The deny rules only reach Claude through `--settings`, and
-    /// `run::dispatch_one` resolves that path only for hook-capable agents. An
-    /// `answer` dispatch to an agent_ide that declares neither `resume_session`
-    /// nor `diagnostics_snapshot` (orca, mock) therefore carries **no deny
+    /// `run::dispatch_one` resolves that path only for agents declaring
+    /// `Capabilities::hook_completion` (0.5.0, #496). An `answer` dispatch to
+    /// an agent_ide that does not (orca, mock) therefore carries **no deny
     /// list**, and dropping the plan flag as well would leave it with nothing
     /// at all — looser than before #410 touched this.
     #[test]

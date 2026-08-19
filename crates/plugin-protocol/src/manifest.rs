@@ -35,39 +35,29 @@ pub enum OutputCapability {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Capabilities {
-    /// Supports plan (design) mode (F-36).
-    pub plan_mode: bool,
     /// Supports pane control.
     pub pane_control: bool,
     /// Streams state/log fragments via `state/subscribe` (F-38).
     pub state_stream: bool,
-    /// Can resume a past agent session via
-    /// `task/dispatch(resume_session_id)` (0.1.3). Defaults to `false`, so
-    /// plugins that predate it (orca, mock, …) simply never advertise it.
-    pub resume_session: bool,
+    /// Reports completion through the agent tool's hooks rather than through
+    /// the state stream alone (#131, 0.5.0).
+    ///
+    /// Replaces the `resume_session` / `diagnostics_snapshot` pair that used
+    /// to stand in for this (`hook_capable()`). That pair was a *de-facto*
+    /// signal — neither flag says "hooks" — so a plugin author had to know the
+    /// convention to opt in, and a plugin that could resume sessions without
+    /// speaking hooks had no way to say so. This flag says what it means.
+    pub hook_completion: bool,
     /// Answers `diagnostics/snapshot` with a pane screen capture (0.1.3,
-    /// R-10). Defaults to `false` like `resume_session`.
+    /// R-10).
+    ///
+    /// Deliberately **not** folded into
+    /// [`hook_completion`](Self::hook_completion): it gates a real RPC, and
+    /// merging the two would silently require every hook-completing agent to
+    /// also answer snapshots.
     pub diagnostics_snapshot: bool,
-    /// This task_source pushes tasks via `task/submit` (0.1.6). Since
-    /// protocol 0.2.0 `tasks/fetch` no longer exists, so every task_source
-    /// that can launch at all effectively declares this `true`; a manifest
-    /// requiring only `^0.1` is rejected before this field is even
-    /// consulted (F-54). Defaults to `false` for the historical case of a
-    /// pre-0.1.6 manifest parsed by an older orchestrator.
-    pub task_submit: bool,
     /// Output policies this (task source) plugin can fulfil.
     pub outputs: Vec<OutputCapability>,
-}
-
-impl Capabilities {
-    /// Whether this agent reports completion through Claude Code hooks (#131).
-    /// There is no dedicated flag: the 0.1.3 `resume_session` /
-    /// `diagnostics_snapshot` pair is the de-facto signal, and this is the
-    /// single source of that rule — the runtime launch decision and the
-    /// `[hooks].auth_token_ref` config advisory must agree on it.
-    pub fn hook_capable(&self) -> bool {
-        self.resume_session || self.diagnostics_snapshot
-    }
 }
 
 /// A parsed `plugin.toml`.
@@ -118,7 +108,7 @@ version = "1.2.0"
 protocol_version = "^0.1"
 
 [capabilities]
-plan_mode = true
+pane_control = true
 state_stream = true
 "#;
 
@@ -128,46 +118,61 @@ state_stream = true
         assert_eq!(m.name, "herdr");
         assert_eq!(m.kind, PluginKind::AgentIde);
         assert_eq!(m.version, Version::new(1, 2, 0));
-        assert!(m.capabilities.plan_mode);
+        assert!(m.capabilities.pane_control);
         assert!(m.capabilities.state_stream);
-        assert!(!m.capabilities.pane_control);
-        // The 0.1.3 flags default to false when absent (additive).
-        assert!(!m.capabilities.resume_session);
+        // Absent flags default to false, which is what lets a manifest
+        // written against an older protocol keep parsing.
+        assert!(!m.capabilities.hook_completion);
         assert!(!m.capabilities.diagnostics_snapshot);
     }
 
     #[test]
-    fn parses_0_1_3_capability_flags() {
+    fn parses_the_hook_and_snapshot_flags() {
         let m = Manifest::from_toml_str(
             r#"
 name = "herdr"
 kind = "agent_ide"
 version = "1.3.0"
-protocol_version = "^0.1"
+protocol_version = "^0.5"
 
 [capabilities]
-resume_session = true
+hook_completion = true
 diagnostics_snapshot = true
 "#,
         )
         .unwrap();
-        assert!(m.capabilities.resume_session);
+        assert!(m.capabilities.hook_completion);
         assert!(m.capabilities.diagnostics_snapshot);
     }
 
+    /// 0.5.0 retired `plan_mode` / `task_submit` / `resume_session`. The
+    /// manifest must keep **parsing** them — `Capabilities` has no
+    /// `deny_unknown_fields`, so an older plugin's manifest is accepted and
+    /// the keys ignored. What breaks is code that *reads* them, which is a
+    /// type break and is why the protocol version moved.
     #[test]
-    fn hook_capable_follows_the_0_1_3_flags() {
-        let cap = |resume_session, diagnostics_snapshot| Capabilities {
-            resume_session,
-            diagnostics_snapshot,
-            ..Default::default()
-        };
-        assert!(cap(true, false).hook_capable());
-        assert!(cap(false, true).hook_capable());
-        assert!(cap(true, true).hook_capable());
-        // orca / mock declare neither.
-        assert!(!cap(false, false).hook_capable());
-        assert!(!Capabilities::default().hook_capable());
+    fn retired_capability_keys_are_tolerated_and_ignored() {
+        let m = Manifest::from_toml_str(
+            r#"
+name = "legacy"
+kind = "agent_ide"
+version = "0.1.0"
+protocol_version = "^0.5"
+
+[capabilities]
+plan_mode = true
+task_submit = true
+resume_session = true
+state_stream = true
+"#,
+        )
+        .unwrap();
+        // The retired keys parsed without error…
+        assert!(m.capabilities.state_stream);
+        // …and none of them turned into the flag that replaced one of them.
+        // A plugin wanting hook completion must say so with the new name,
+        // which is the point of retiring a de-facto signal.
+        assert!(!m.capabilities.hook_completion);
     }
 
     #[test]
@@ -195,37 +200,34 @@ outputs = ["source"]
         .unwrap();
         assert_eq!(m.kind, PluginKind::TaskSource);
         assert_eq!(m.capabilities.outputs, vec![OutputCapability::Source]);
-        // 0.1.6: absent `task_submit` defaults to false (additive) — the
-        // plugin keeps being polled.
-        assert!(!m.capabilities.task_submit);
     }
 
     #[test]
-    fn push_source_declares_task_submit() {
+    fn a_task_source_manifest_survives_every_boundary_so_far() {
         let m = Manifest::from_toml_str(
             r#"
 name = "slack"
 kind = "task_source"
 version = "0.2.0"
-protocol_version = ">=0.1.6, <0.5"
+protocol_version = ">=0.1.6, <0.6"
 
 [capabilities]
-task_submit = true
 outputs = ["source"]
 "#,
         )
         .unwrap();
-        assert!(m.capabilities.task_submit);
         assert!(m.is_compatible_with(&Version::new(0, 1, 6)));
         // A push-only plugin survives the 0.2.0 fetch removal, the 0.3.0
-        // removal of `Task.thread_key`, and — with the bound raised to `<0.5`
-        // (#411) — the 0.4.0 removal of `TaskDispatchParams.hook`, which no
-        // task_source ever read…
+        // removal of `Task.thread_key`, the 0.4.0 removal of
+        // `TaskDispatchParams.hook` (#411), and — with the bound raised to
+        // `<0.6` (#496) — the 0.5.0 removal of `Capabilities::task_submit`.
+        // A task_source read none of them…
         assert!(m.is_compatible_with(&Version::new(0, 2, 0)));
         assert!(m.is_compatible_with(&Version::new(0, 3, 0)));
         assert!(m.is_compatible_with(&Version::new(0, 4, 0)));
-        // …while staying honest about a hypothetical 0.5.
-        assert!(!m.is_compatible_with(&Version::new(0, 5, 0)));
+        assert!(m.is_compatible_with(&crate::version::protocol_version()));
+        // …while staying honest about the next boundary, whatever it removes.
+        assert!(!m.is_compatible_with(&Version::new(0, 6, 0)));
     }
 
     #[test]

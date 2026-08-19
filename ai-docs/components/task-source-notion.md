@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: human:tomoya-k31, at: 2026-07-26T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -36,7 +36,7 @@ fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tas
 
 # capabilities（F-83）
 
-manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.1.6, <0.4"`）と `initialize` 応答で `kind = task_source`・`task_submit = true`・`outputs = ["source"]` を宣言。`result/publish` に対応する。
+manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.1.6, <0.6"`）と `initialize` 応答で `kind = task_source`・`outputs = ["source"]` を宣言。`result/publish` に対応する。
 
 # テスト
 
