@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:62f9a2eb9658d9fbfbc4a88d9b11157e4869c027b249ff888cd802bc84432f09 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:02a7d68856b453a244b0696eb4d507a639124b95e04c2f74662fec297b349332 -->
 
 # Plugin development guide
 
@@ -112,6 +112,24 @@ Transport-level errors (`NOT_ACCEPTING`, `SUBMIT_OVERLOADED`, `INTERNAL_ERROR`) 
 | `notify` | O→P (no response) | Delivers an event: `waiting_input`, `done`, `failed`, or `pending` |
 
 **A failed delivery must never affect task execution.**
+
+## Logging and stderr
+
+**Your plugin's stderr goes straight into the orchestrator's log**, tagged with your
+plugin name. That is handy while debugging, but **keeping secrets out of it is your
+job** — the orchestrator does not know what your plugin considers secret, so it
+cannot redact it for you, and your plugin has no access to its redaction layer.
+
+Forwarding is rate-limited to **100 lines per 10 seconds**; anything beyond that is
+collapsed into a single "suppressed N lines" warning. A plugin stuck in a failure
+loop can emit stderr faster than anything reads it, and the cap keeps it from burying
+everything else. The suppressed count is still reported, so the noise stays visible
+as a number.
+
+Calls the orchestrator makes to your plugin are timed and counted per method on its
+side. `totsuka run --json` reports them under `plugins`, with call counts, a
+breakdown by outcome, and recent p50/p95 latency. Your plugin does not have to do
+anything for this.
 
 ## Building and installing
 

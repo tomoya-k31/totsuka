@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:62f9a2eb9658d9fbfbc4a88d9b11157e4869c027b249ff888cd802bc84432f09 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:02a7d68856b453a244b0696eb4d507a639124b95e04c2f74662fec297b349332 -->
 
 # プラグイン開発ガイド
 
@@ -113,6 +113,21 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 | `notify` | O→P（応答不要） | `waiting_input` / `done` / `failed` / `pending` のイベントを配送する |
 
 通知は片道で応答を返さない。**配送に失敗してもタスクの実行に影響させてはならず**、失敗は自分のログに留めること。
+
+## ログと stderr
+
+**プラグインの stderr は Orchestrator のログにそのまま入る**（プラグイン名のタグ付き）。
+デバッグには便利だが、**秘密を書かないのは作者の責務である** — Orchestrator は
+プラグインが何を秘密と考えているか知らないので伏せられないし、プラグイン側から
+Orchestrator の伏字処理には手が届かない。
+
+転送は **10 秒あたり 100 行**に制限され、超えた分は「N 行抑制」の 1 行にまとめられる。
+失敗ループに入ったプラグインは読む側より速く stderr を吐けるので、それで他のログが
+埋まらないようにするためである。抑制した行数は報告されるので、うるささ自体は数字として残る。
+
+Orchestrator からプラグインへの呼び出しは、Orchestrator 側でメソッド別に時間と回数が
+記録される。`totsuka run --json` の `plugins` に、呼び出し数・結果の内訳・直近の
+p50/p95 レイテンシが出る。プラグイン側で何かする必要はない。
 
 ## ビルドと導入
 

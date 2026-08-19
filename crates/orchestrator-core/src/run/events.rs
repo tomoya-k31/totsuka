@@ -60,19 +60,42 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 source,
                 task,
                 respond,
-            } => match self.on_task_submit(source, task) {
-                Ok(result) => {
-                    let _ = respond.send(Ok(result));
-                    self.select_repos().await
+            } => {
+                let task_id = task.id.clone();
+                match self.on_task_submit(source.clone(), task) {
+                    Ok(result) => {
+                        // Host API audit (#497): a plugin asked the
+                        // Orchestrator to create work, and this is the only
+                        // record of *who asked for what and what we said*.
+                        // The task row that results is the after-the-fact
+                        // trace; a `duplicate` or `rejected` leaves no row at
+                        // all.
+                        tracing::info!(
+                            plugin = %source,
+                            method = "task/submit",
+                            task_id = %task_id,
+                            ack = ?result.status,
+                            "plugin request"
+                        );
+                        let _ = respond.send(Ok(result));
+                        self.select_repos().await
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            plugin = %source,
+                            method = "task/submit",
+                            task_id = %task_id,
+                            ack = "internal_error",
+                            "plugin request"
+                        );
+                        let _ = respond.send(Err(jsonrpc::Error::new(
+                            plugin_protocol::error_code::INTERNAL_ERROR,
+                            format!("failed to persist task: {e} → retry with backoff"),
+                        )));
+                        Err(e)
+                    }
                 }
-                Err(e) => {
-                    let _ = respond.send(Err(jsonrpc::Error::new(
-                        plugin_protocol::error_code::INTERNAL_ERROR,
-                        format!("failed to persist task: {e} → retry with backoff"),
-                    )));
-                    Err(e)
-                }
-            },
+            }
             // `task/lookup` (#242): read-only, so a failure is answered and
             // dropped rather than being run-fatal the way a lost write is.
             // The plugin's fallback — resolve the repository as it always did
@@ -92,6 +115,17 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         repo: found.and_then(|t| t.repo),
                     }
                 });
+                // Host API audit (#497). Read-only, so `debug` rather than
+                // `info`: a lookup changes nothing, and a polling source can
+                // issue many. What matters is being able to see them at all
+                // when explaining why a source resolved a repository twice.
+                tracing::debug!(
+                    plugin = %source,
+                    method = "task/lookup",
+                    task_id = %task_id,
+                    known = ?answer.as_ref().ok().map(|a| a.known),
+                    "plugin request"
+                );
                 let _ = respond.send(answer.map_err(|e| {
                     jsonrpc::Error::new(
                         plugin_protocol::error_code::INTERNAL_ERROR,

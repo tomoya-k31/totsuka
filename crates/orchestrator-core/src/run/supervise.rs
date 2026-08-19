@@ -40,10 +40,10 @@ use tokio::time::Instant;
 
 use super::ingest::{PluginRequestBudgets, forward_plugin_request};
 use super::{
-    Engine, EngineError, LOOKUP_IN_FLIGHT_BUDGET, PluginEvent, SUBMIT_IN_FLIGHT_BUDGET,
-    deliver_notification, state_event,
+    Engine, EngineError, LOOKUP_IN_FLIGHT_BUDGET, MethodReport, PluginEvent, PluginReport,
+    SUBMIT_IN_FLIGHT_BUDGET, deliver_notification, state_event,
 };
-use crate::adapters::plugin_host::{HostError, Liveness, Plugin};
+use crate::adapters::plugin_host::{CallStats, HostError, Liveness, Plugin};
 use crate::ports::git::GitRunner;
 use crate::ports::llm::LlmRouter;
 use plugin_protocol::manifest::PluginKind as ManifestKind;
@@ -166,6 +166,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // `plugin_restarts` cannot tell "never died" from "died and stayed
         // down" (the `restart = false` case, where nothing is relaunched).
         self.stats.plugin_crashes += 1;
+        self.plugin_events.entry(plugin.to_string()).or_default().0 += 1;
         if self.plugins.agents.contains_key(plugin) {
             self.fail_sessions_of(plugin).await?;
         }
@@ -304,6 +305,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 };
                 self.install_restarted(&name, kind, launched).await;
                 self.stats.plugin_restarts += 1;
+                self.plugin_events.entry(name.clone()).or_default().1 += 1;
                 tracing::info!(plugin = %name, "plugin restarted");
             }
             Err(e) => {
@@ -318,6 +320,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
 
     /// Put a relaunched plugin back in its map and re-establish its streams.
     async fn install_restarted(&mut self, name: &str, kind: ManifestKind, plugin: Plugin) {
+        // Harvest the outgoing instance's counters before it is dropped
+        // (#497). The `insert` below is what drops it, so this has to happen
+        // first — afterwards the stats are simply gone.
+        self.harvest_stats(name);
         let tx = self.events_tx.clone();
         wire_liveness(name, &plugin, &tx);
         match kind {
@@ -333,6 +339,82 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 self.plugins.notifiers.insert(name.to_string(), plugin);
             }
         }
+    }
+
+    /// Fold a live plugin's call stats into the retired accumulator (#497).
+    pub(super) fn harvest_stats(&mut self, name: &str) {
+        let live = self
+            .plugins
+            .sources
+            .get(name)
+            .or_else(|| self.plugins.agents.get(name))
+            .or_else(|| self.plugins.notifiers.get(name))
+            .map(|p| p.stats());
+        let Some(live) = live else { return };
+        let retired = self.retired_stats.entry(name.to_string()).or_default();
+        for (method, stats) in &live {
+            retired.entry(method.clone()).or_default().merge(stats);
+        }
+    }
+
+    /// Per-plugin RPC accounting for the run summary (#497).
+    ///
+    /// Live instances plus everything harvested from instances a restart
+    /// replaced, so the numbers describe **the plugin over the run**, not
+    /// whichever process happens to be current.
+    pub(super) fn plugin_reports(&self) -> std::collections::BTreeMap<String, PluginReport> {
+        let mut merged: std::collections::BTreeMap<String, CallStats> = self
+            .retired_stats
+            .iter()
+            .map(|(name, stats)| (name.clone(), stats.clone()))
+            .collect();
+        for (name, plugin) in self
+            .plugins
+            .sources
+            .iter()
+            .chain(self.plugins.agents.iter())
+            .chain(self.plugins.notifiers.iter())
+        {
+            let target = merged.entry(name.clone()).or_default();
+            for (method, stats) in &plugin.stats() {
+                target.entry(method.clone()).or_default().merge(stats);
+            }
+        }
+        // A plugin that only ever crashed made no calls, but its crash count
+        // is exactly what the operator needs — so the key set is the union.
+        for name in self.plugin_events.keys() {
+            merged.entry(name.clone()).or_default();
+        }
+        merged
+            .into_iter()
+            .map(|(name, stats)| {
+                let (crashes, restarts) = self.plugin_events.get(&name).copied().unwrap_or((0, 0));
+                let methods = stats
+                    .into_iter()
+                    .map(|(method, m)| {
+                        let report = MethodReport {
+                            calls: m.calls,
+                            outcomes: m
+                                .outcomes
+                                .iter()
+                                .map(|(o, n)| (o.as_str().to_string(), *n))
+                                .collect(),
+                            p50_ms: m.percentile_ms(0.50),
+                            p95_ms: m.percentile_ms(0.95),
+                        };
+                        (method, report)
+                    })
+                    .collect();
+                (
+                    name,
+                    PluginReport {
+                        crashes,
+                        restarts,
+                        methods,
+                    },
+                )
+            })
+            .collect()
     }
 
     /// Tell the operator a plugin is staying down.
