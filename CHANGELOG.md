@@ -11,6 +11,54 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.4.0](https://github.com/tomoya-k31/totsuka/compare/v0.3.0...v0.4.0) (2026-08-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **core:** config.toml の [prompts] と [[workflows]].prompts は起動時 エラーになる。verification_rubric を設定していた構成は、その文言を該当 ワークフローの rubric へ移すこと。
+* **cli:** 回答ファイルの形式が version 2 になり、`recipe` は数値では なく `"minimal-github-herdr"` のような安定キーになった。version 1 のファイル は拒否されるので `totsuka setup` を対話で回して作り直す。
+
+### Features
+
+* **cli:** setup --answers を文書化されたモダリティへ昇格させ、回答ファイルの recipe を安定キーにする ([#470](https://github.com/tomoya-k31/totsuka/issues/470)) ([43bd838](https://github.com/tomoya-k31/totsuka/commit/43bd83867785e86986c59d16c6238349a7f177bc))
+* **cli:** task export で監査ログを NDJSON に書き出す ([#469](https://github.com/tomoya-k31/totsuka/issues/469)) ([c8b4826](https://github.com/tomoya-k31/totsuka/commit/c8b4826bdb868f8af2c0247b194ad5f6c97fd0af))
+* **cli:** totsuka run に --json を追加し、実行結果を機械可読にする ([#468](https://github.com/tomoya-k31/totsuka/issues/468)) ([833440b](https://github.com/tomoya-k31/totsuka/commit/833440b577fee85b63d3fb0b8aa2e5f6709876b8))
+* **core:** design/implement の質問・完了確認を選択 UI 化する（AskUserQuestion / question / 番号リスト） ([#488](https://github.com/tomoya-k31/totsuka/issues/488)) ([56999ed](https://github.com/tomoya-k31/totsuka/commit/56999ed189c4e1cb562dd3c370be68501f9b9274)), closes [#487](https://github.com/tomoya-k31/totsuka/issues/487)
+* **core:** dispatch 失敗を最大 3 回まで自動で再試行し、尽きたときだけ通知する ([#493](https://github.com/tomoya-k31/totsuka/issues/493)) ([7a89b78](https://github.com/tomoya-k31/totsuka/commit/7a89b78eacadc6ed71a7bcfb110716ce65d3bfc2))
+* **docs:** 人間向け docs/ を ai-docs/ から生成し、鮮度を CI で検査する ([#461](https://github.com/tomoya-k31/totsuka/issues/461)) ([f58e8e3](https://github.com/tomoya-k31/totsuka/commit/f58e8e36b71fcbef04437f37679c427dfd8e98ca)), closes [#458](https://github.com/tomoya-k31/totsuka/issues/458)
+* **protocol:** session/release に「閉じなかった理由」を持たせ、拒否で dispatch を止める ([#491](https://github.com/tomoya-k31/totsuka/issues/491)) ([697ce9d](https://github.com/tomoya-k31/totsuka/commit/697ce9dbbe5893d139b82597d706a70c8f466085))
+* **slack:** bot ナッジ DM に返信案本文をログとして同梱する ([#457](https://github.com/tomoya-k31/totsuka/issues/457)) ([f5ac4a7](https://github.com/tomoya-k31/totsuka/commit/f5ac4a7516c724c331c9924b241d09695ea2f846))
+
+
+### Bug Fixes
+
+* **core:** dispatch 前に前回セッションの pane を解放する ([#482](https://github.com/tomoya-k31/totsuka/issues/482)) ([b59905c](https://github.com/tomoya-k31/totsuka/commit/b59905ce5035be8be0cd78f22f3a540f79d33477))
+* **core:** doctor の受信機プローブを異常として警告しない ([#489](https://github.com/tomoya-k31/totsuka/issues/489)) ([f2d6a94](https://github.com/tomoya-k31/totsuka/commit/f2d6a949f702dd94864814e313cf227a6ec81750))
+* **core:** セッションの並び順を時刻文字列から rowid へ変える ([#480](https://github.com/tomoya-k31/totsuka/issues/480)) ([78caddf](https://github.com/tomoya-k31/totsuka/commit/78caddfaf1097c7bdf5472bc5b9c89a419238f5f)), closes [#478](https://github.com/tomoya-k31/totsuka/issues/478)
+* **slack:** 指示文を instructions_kind で選ぶ（triage に implement の指示が渡っていた） ([#450](https://github.com/tomoya-k31/totsuka/issues/450)) ([#452](https://github.com/tomoya-k31/totsuka/issues/452)) ([522e7f1](https://github.com/tomoya-k31/totsuka/commit/522e7f147b4c7b26349dcc823eea4a9ee60d2483))
+* **slack:** 返信を Block Kit markdown ブロックで投稿する ([#455](https://github.com/tomoya-k31/totsuka/issues/455)) ([da052de](https://github.com/tomoya-k31/totsuka/commit/da052de35975e2c4ffb0c4aefe354d73b8c407b7))
+
+
+### Refactors
+
+* **core:** dispatch_one（513 行）から純粋な決定を切り出し、単体テスト可能にする ([#474](https://github.com/tomoya-k31/totsuka/issues/474)) ([bf97ca1](https://github.com/tomoya-k31/totsuka/commit/bf97ca1d668b12eb942be9dba7b56be5dfd82bb3))
+* **core:** released_panes をセッション行 id で持ち、一回性を呼び出し側が選ぶ ([#490](https://github.com/tomoya-k31/totsuka/issues/490)) ([b18e925](https://github.com/tomoya-k31/totsuka/commit/b18e9251bfd22f80122fa4a6fd04f67758fb5b69))
+* **core:** run/mod.rs（4,153 行）を責務ごとに 9 モジュールへ分割する ([#472](https://github.com/tomoya-k31/totsuka/issues/472)) ([78a5e55](https://github.com/tomoya-k31/totsuka/commit/78a5e55da031e501fd7ab26d1ee56d00f2b647b5))
+* **core:** プロンプト上書き面 15 キーを削除し rubric 1 キーに絞る ([#476](https://github.com/tomoya-k31/totsuka/issues/476)) ([4a6c758](https://github.com/tomoya-k31/totsuka/commit/4a6c758e4afd0764570392347a55f298b7d4a021)), closes [#465](https://github.com/tomoya-k31/totsuka/issues/465)
+* **core:** 組み込みプロンプトを英語へ揃える ([#477](https://github.com/tomoya-k31/totsuka/issues/477)) ([33a5f77](https://github.com/tomoya-k31/totsuka/commit/33a5f77d578b399346f5c382395524946e97e8b6))
+* **docs:** OKF バンドルを docs/ から ai-docs/ へ移設する ([#460](https://github.com/tomoya-k31/totsuka/issues/460)) ([04f3b41](https://github.com/tomoya-k31/totsuka/commit/04f3b414bd8d1952512ad65c25af700dc4c15801)), closes [#458](https://github.com/tomoya-k31/totsuka/issues/458)
+
+
+### Documentation
+
+* answer profile の実機検収を記録する ([#447](https://github.com/tomoya-k31/totsuka/issues/447)) ([#451](https://github.com/tomoya-k31/totsuka/issues/451)) ([404e85a](https://github.com/tomoya-k31/totsuka/commit/404e85a872aeee52de2b87264f0a0d960c9cc274))
+* **config:** [tools.{name}] にモデル / 推論強度の指定方法を追記する ([#475](https://github.com/tomoya-k31/totsuka/issues/475)) ([7ecb36f](https://github.com/tomoya-k31/totsuka/commit/7ecb36ff5e611d163f8b053e9649c12b973b9aa0))
+* read-only は保証しないと決め、サンドボックス前提の記述を撤回する ([#446](https://github.com/tomoya-k31/totsuka/issues/446)) ([#448](https://github.com/tomoya-k31/totsuka/issues/448)) ([8fbbafe](https://github.com/tomoya-k31/totsuka/commit/8fbbafe79f87772563868aef2fe2f3f31c2082cc))
+* **spec:** F-107 を実装の実態（掃除ポリシー連動）へ書き換える ([#484](https://github.com/tomoya-k31/totsuka/issues/484)) ([ba5da03](https://github.com/tomoya-k31/totsuka/commit/ba5da032e16a55acc2d055b6fcc2f7c9c46d87a0))
+* triage profile の実機検収を記録する ([#447](https://github.com/tomoya-k31/totsuka/issues/447)) ([#453](https://github.com/tomoya-k31/totsuka/issues/453)) ([ba75f51](https://github.com/tomoya-k31/totsuka/commit/ba75f51396177f99cfd8966e5590974aee6db21d))
+* 実機で確認が取れた concept に verified を追記する ([#494](https://github.com/tomoya-k31/totsuka/issues/494)) ([8eed1fe](https://github.com/tomoya-k31/totsuka/commit/8eed1fe0a2dc494b15593a4a34a3467418245d88))
+
 ## [0.3.0](https://github.com/tomoya-k31/totsuka/compare/v0.2.0...v0.3.0) (2026-08-13)
 
 
