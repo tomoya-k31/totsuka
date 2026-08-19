@@ -619,11 +619,15 @@ impl Plugin {
     /// old one so a flapping plugin does not appear to have made the fewest
     /// calls.
     pub fn stats(&self) -> CallStats {
+        // Same reasoning as the recording side: a poisoned lock must not turn
+        // into an empty report. `unwrap_or_default()` here would have made
+        // every later call return zeros, silently and permanently — the
+        // observability itself becoming the thing that fails quietly.
         self.inner
             .stats
             .lock()
-            .map(|s| s.clone())
-            .unwrap_or_default()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Watch this plugin's [`Liveness`] (#495).
