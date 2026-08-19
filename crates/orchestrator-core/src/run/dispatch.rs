@@ -5,6 +5,7 @@
 //! a detached `HEAD`; naming the branch is the agent's job (ADR-0026).
 
 use super::*;
+use crate::adapters::state_db::AUTO_RETRY_KIND;
 
 impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// Select a repository for every queued task that has none (F-10–F-14).
@@ -901,11 +902,72 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         tracing::error!(task_id = record.id, "dispatch failed: {reason}");
         self.release_slot(record.id);
         self.agent_output.remove(&record.id);
+        // Recorded before deciding whether to retry, so the reason for *every*
+        // attempt is in the log even when the task recovers and nobody ever
+        // looks. It is also what makes the requeue below legal: `Retry` is a
+        // transition out of `Failed`.
         self.db.apply_event(
             record.id,
             TaskEvent::Fail,
             Some(serde_json::json!({ "kind": "dispatch", "reason": reason })),
         )?;
+
+        // #492: most dispatch failures are transient — an agent CLI whose
+        // launch keystrokes were swallowed, a plugin that timed out — and the
+        // human's whole repair is `totsuka task retry`, unchanged, which then
+        // works. Do that automatically, a bounded number of times.
+        //
+        // **The bound is the whole design.** `requeue_conversations_with_unsent_messages`
+        // refuses to touch `Failed` because requeueing on failure with no limit
+        // re-dispatches, fails the same way and goes round every tick forever
+        // (see its rustdoc). Counting removes exactly that: the worst a
+        // permanently broken task costs is `DISPATCH_RETRY_LIMIT` attempts.
+        // Which is also why nothing here inspects *what* failed — with a bound
+        // in place, misclassifying a failure as permanent (and abandoning a
+        // task that one more attempt would have fixed) is the more expensive
+        // mistake.
+        match self.db.auto_retry_streak(record.id) {
+            Ok(spent) if spent < DISPATCH_RETRY_LIMIT => {
+                let attempt = spent + 1;
+                let detail = serde_json::json!({
+                    "kind": AUTO_RETRY_KIND,
+                    "attempt": attempt,
+                    "limit": DISPATCH_RETRY_LIMIT,
+                });
+                match self.db.retry_task(record.id, Some(detail)) {
+                    Ok(_) => {
+                        // No notification, no status write-back: the task is
+                        // not finished, and telling the operator about a
+                        // failure that repairs itself is the noise this
+                        // feature exists to remove.
+                        tracing::warn!(
+                            task_id = record.id,
+                            attempt,
+                            limit = DISPATCH_RETRY_LIMIT,
+                            "dispatch failed; requeued automatically"
+                        );
+                        return Ok(());
+                    }
+                    // Requeueing is the optimisation, not the contract. If the
+                    // DB refuses, fall through and fail the task as before
+                    // rather than leaving it in `Failed` with nobody told.
+                    Err(e) => tracing::warn!(
+                        task_id = record.id,
+                        "could not requeue a failed dispatch: {e}"
+                    ),
+                }
+            }
+            Ok(_) => tracing::warn!(
+                task_id = record.id,
+                limit = DISPATCH_RETRY_LIMIT,
+                "dispatch failed and the automatic retries are spent"
+            ),
+            Err(e) => tracing::warn!(
+                task_id = record.id,
+                "could not count previous automatic retries: {e}"
+            ),
+        }
+
         self.stats.failed += 1;
         self.write_back_status(record, false).await;
         notify_all(
@@ -917,6 +979,16 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok(())
     }
 }
+
+/// How many times a dispatch failure is retried before the task is failed for
+/// good (#492).
+///
+/// A constant, not a setting: the number only has to be large enough to ride
+/// out a transient launch failure and small enough that a permanently broken
+/// task stops quickly, and no observation yet says three is the wrong answer.
+/// [`hooks.block_retry_limit`](crate::run::EngineSettings) is the precedent for
+/// promoting it to config if one ever does.
+const DISPATCH_RETRY_LIMIT: u32 = 3;
 
 /// Why a dispatch is refused before anything is created (#471).
 #[derive(Debug, Clone, PartialEq, Eq)]

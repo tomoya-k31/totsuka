@@ -2120,6 +2120,155 @@ async fn a_release_that_finds_nothing_lets_the_dispatch_through() {
 }
 
 // ---------------------------------------------------------------------------
+// Automatic dispatch retry (#492)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_transient_dispatch_failure_recovers_without_a_human() {
+    // #492: the failure this is for looked like `agent_prompt_stalled` — the
+    // pane and the CLI came up, the prompt was never submitted, and the same
+    // task dispatched again a minute later worked untouched. The human's whole
+    // repair was `totsuka task retry`, so the orchestrator does it.
+    let base = scratch("dispatch_retry_transient");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({
+            "stream_states": ["running", "done"],
+            "dispatch_log": dispatch_log,
+            // Fails once, then behaves.
+            "dispatch_error": { "fail_first": 1 },
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    assert_eq!(task.state, TaskState::Done, "the retry carried it through");
+    assert_eq!(
+        read_log(&dispatch_log)
+            .iter()
+            .filter(|c| c["method"] == "task/dispatch")
+            .count(),
+        2,
+        "one failed attempt, one that worked"
+    );
+    // The point of the feature: nobody was told, because nothing needed doing.
+    let notes = read_log(&notify_log);
+    assert!(
+        !notes.iter().any(|n| n["params"]["event"] == "failed"),
+        "a failure that repaired itself must not notify: {notes:?}"
+    );
+    // The attempt is still in the audit log, with the reason, for anyone who
+    // does go looking.
+    let auto: Vec<_> = db
+        .list_events(task.id)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.detail.as_ref().is_some_and(|d| d["kind"] == "auto_retry"))
+        .collect();
+    assert_eq!(auto.len(), 1, "the automatic requeue is recorded: {auto:?}");
+    assert_eq!(auto[0].detail.as_ref().unwrap()["attempt"], 1);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn a_permanent_dispatch_failure_stops_after_three_and_notifies_once() {
+    // The bound is what makes retrying safe at all: without it, requeueing on
+    // failure re-dispatches and fails the same way every tick forever (the
+    // reason `requeue_conversations_with_unsent_messages` refuses to touch
+    // `Failed`). One first attempt plus three retries, a single notification,
+    // and then it is a human's problem.
+    let base = scratch("dispatch_retry_permanent");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({
+            "dispatch_log": dispatch_log,
+            // No `fail_first`: every dispatch fails.
+            "dispatch_error": { "message": "permanently broken" },
+        }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        let db = StateDb::open(&db_probe).unwrap();
+        db.find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Failed)
+            && db
+                .find_by_source("mock_src", "1")
+                .unwrap()
+                .is_some_and(|t| db.auto_retry_streak(t.id).unwrap() == 3)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    assert_eq!(task.state, TaskState::Failed, "it gives up");
+    assert_eq!(
+        read_log(&dispatch_log)
+            .iter()
+            .filter(|c| c["method"] == "task/dispatch")
+            .count(),
+        4,
+        "one first attempt plus DISPATCH_RETRY_LIMIT retries, and then it stops"
+    );
+    let failures = read_log(&notify_log)
+        .into_iter()
+        .filter(|n| n["params"]["event"] == "failed")
+        .count();
+    assert_eq!(
+        failures, 1,
+        "exactly one notification — the retries are silent, the giving up is not"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---------------------------------------------------------------------------
 // Read-only violation, caught while the task is still running (#410)
 // ---------------------------------------------------------------------------
 

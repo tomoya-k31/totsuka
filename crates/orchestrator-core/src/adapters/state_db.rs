@@ -607,6 +607,14 @@ pub struct TaskMessageInsert {
     pub payload: String,
 }
 
+/// The `events.detail.kind` an automatic dispatch retry is recorded under
+/// (#492).
+///
+/// Shared so the writer (the engine, when it requeues a failed dispatch) and
+/// the reader ([`StateDb::auto_retry_streak`]) cannot drift apart: the whole
+/// counter is "how many trailing events carry this string".
+pub const AUTO_RETRY_KIND: &str = "auto_retry";
+
 /// A stored conversation message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskMessage {
@@ -1668,6 +1676,65 @@ impl StateDb {
     /// dispatches, which only a frozen test clock does.
     pub fn unprocess_last_batch(&self, task_id: i64) -> Result<usize, StateError> {
         unprocess_last_batch_tx(&self.conn, task_id)
+    }
+
+    /// How many times the **current** run of dispatch failures has already
+    /// been retried automatically (#492).
+    ///
+    /// Recomputed from the event log rather than held in the engine, for the
+    /// same reason as [`unknown_stop_streak`](Self::unknown_stop_streak): a
+    /// counter in memory is lost when `totsuka run` restarts, and this one has
+    /// to survive that — a task that failed twice before a restart must not
+    /// get a fresh budget of three.
+    ///
+    /// Scans events id-descending and counts the leading run of automatic
+    /// requeues. Two things end the run, and both mean "whatever failed before
+    /// this is not what we are counting now":
+    ///
+    /// - a **successful dispatch** (`to_state = dispatched`), and
+    /// - any other way back to `queued` — a human's `totsuka task retry`
+    ///   (`detail.kind = "cli"`), the first submission, a reopen. A person
+    ///   stepping in resets the budget, which is what makes the automatic
+    ///   retries and the deliberate one compose instead of competing.
+    ///
+    /// Rows that are neither (the `Fail` that precedes each requeue) are
+    /// skipped, so the walk is ~O(streak) — the early `break` is what bounds
+    /// it, and the `ORDER BY id DESC` costs no sort to get there. That last
+    /// part is worth pinning because `idx_events_task` is on `(task_id)` alone
+    /// and looks like it should need one: a SQLite index carries the rowid as
+    /// its implicit tail, so the entries for one `task_id` are already in `id`
+    /// order and the range is simply walked backwards. Measured — the plan is
+    /// `SEARCH events USING INDEX idx_events_task (task_id=?)` with **no**
+    /// `USE TEMP B-TREE FOR ORDER BY`.
+    pub fn auto_retry_streak(&self, task_id: i64) -> Result<u32, StateError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT to_state, detail FROM events WHERE task_id = ?1 ORDER BY id DESC")?;
+        let rows = stmt.query_map(params![task_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })?;
+        let mut streak = 0u32;
+        for row in rows {
+            let (to_state, detail) = row?;
+            if to_state == TaskState::Dispatched.as_str() {
+                break;
+            }
+            if to_state != TaskState::Queued.as_str() {
+                continue;
+            }
+            let is_auto = detail
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                .is_some_and(|v| {
+                    v.get("kind").and_then(serde_json::Value::as_str) == Some(AUTO_RETRY_KIND)
+                });
+            if is_auto {
+                streak += 1;
+            } else {
+                break;
+            }
+        }
+        Ok(streak)
     }
 
     /// Number of consecutive `UNKNOWN` stops at the tail of a task's stop

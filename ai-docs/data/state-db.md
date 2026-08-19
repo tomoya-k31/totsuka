@@ -155,6 +155,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 `idx_hook_events_task (task_id, id)`。追加ストア API:
 
 - `record_hook_event(&HookEventInsert) -> HookEventOutcome` — `INSERT ... ON CONFLICT DO NOTHING`。新規は `New`、冪等キー衝突は `Duplicate`（呼び出し側は黙って捨てる）。
+- `auto_retry_streak(task_id) -> u32` — `events` を id 降順に走査し、**直近の成功 dispatch 以降に自動で再試行した回数**を返す（#492 の再試行予算）。`to_state = dispatched` で打ち切り、`to_state = queued` は `detail.kind` が `auto_retry` なら数え、それ以外（人間の `cli` retry・初回 submit・reopen）なら打ち切る。**プロセス内カウンタにしない理由**は `unknown_stop_streak` と同じで、`run` の再起動をまたいで「あと何回」を保つため。副産物として**人間が `task retry` を打つと予算が自動でリセット**される。
 - `unknown_stop_streak(task_id) -> u32` — stop イベントを id 降順に走査し、最初の非 UNKNOWN stop までの UNKNOWN 連続数（D-02 のエスカレーション計数。**フック自己申告の block_count は信用せず DB から再計算**）。`idx_hook_events_task` + 早期 break で実質 O(streak)。
 
 ## task_messages（v5、#242/#257）
