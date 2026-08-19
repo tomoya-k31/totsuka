@@ -5,6 +5,8 @@ description: プラグイン開発者向けに公開する型定義クレート�
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [rust, crate, plugin, protocol, json-rpc]
 generated: { by: claude-code/opus-5, at: 2026-08-11T22:10:00+09:00 }
+verified:
+  - { by: claude-code/opus-5, at: 2026-08-18T21:14:00Z }
 status: stable
 owner: tomoya-k31
 ---

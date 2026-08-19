@@ -4,6 +4,9 @@ title: ADR-0010 worktree 掃除の3段化（判定→pane→worktree）と sessi
 description: 正常完了時に herdr pane を閉じる経路が無く pane が単調増加する問題（#210）に対し、cleanup を「判定→pane 解放→worktree 削除」の3段に分割し、protocol 0.2.1 で session/release RPC（pane_control 相乗り・expect_cwd による同一性検証・degrade-open）を追加、保持プリセット keep_7d/keep_28d と worktree sweep 間隔の分離（60s・config 非露出）を併せて導入する決定。
 tags: [worktree, cleanup, pane, protocol, herdr, retention, architecture]
 generated: { by: human:tomoya-k31, at: 2026-07-22T00:00:00Z }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-18T04:07:00Z }
+  - { by: claude-code/opus-5, at: 2026-08-18T21:14:00Z }
 status: stable
 sources:
   - id: ref-1
