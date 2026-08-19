@@ -114,7 +114,7 @@ stable。実装は #495（本 ADR と同一 PR）。**実機検収済み**（202
 ## 良くなること
 
 * `task_source` / `notifier` の死亡が、**そのプラグインの仕事が止まった瞬間に**可視化される
-* 一過性のクラッシュが人手を介さず復旧する。**クラッシュ窓中に queue されたタスクも含む**（[#499](https://github.com/tomoya-k31/totsuka/issues/499)）
+* 一過性のクラッシュが人手を介さず復旧する。**クラッシュ窓中に queue されたタスクも含む** — ただし**まだ何も試していないタスクに限る**（[#499](https://github.com/tomoya-k31/totsuka/issues/499)）。上の表の 3 行目のとおり、既に再試行を消費しているタスクは予算を使い切って `Failed` に達する。**クラッシュの原因に最も近いタスク**（その dispatch でプラグインが死んだもの）はまさにこれに当たり、そのタスクについては #499 の症状が残る — これは意図した線引きで、`crash_on_dispatch` が終端へ行かなくなるのを避けるための代償である
 * `plugin_host` の「v1 does not auto-restart」は本 PR で撤回した。宣言を残したまま挙動だけ変えるのは、このリポジトリが繰り返してきた失敗そのものである
 
 ## 悪くなること・注意点
@@ -126,8 +126,8 @@ stable。実装は #495（本 ADR と同一 PR）。**実機検収済み**（202
 
 # 検証
 
-`crates/orchestrator-core/tests/plugin_supervision.rs` の 6 本、`tests/plugin_host.rs` の `Liveness` 3 本、`run::dispatch` の 4 分岐 2 本。`mock_plugin` に**ファイル backed のカウンタ**で「最初の N 回の起動だけ `initialize` 直後に exit(1) する」`suicide` モードを足して駆動する — 起動のたびに別プロセスになるので、プロセス内カウンタでは「いつか復帰する」を書けない。
+`crates/orchestrator-core/tests/plugin_supervision.rs` の 7 本（うち 2 本は #497 の RPC 会計）、`tests/plugin_host.rs` の `Liveness` 3 本、`run::dispatch` のゲート 3 本。`mock_plugin` に**ファイル backed のカウンタ**で「最初の N 回の起動だけ `initialize` 直後に exit(1) する」`suicide` モードを足して駆動する — 起動のたびに別プロセスになるので、プロセス内カウンタでは「いつか復帰する」を書けない。
 
-**プラグインが下がったままになるときにエスカレーションが飛ぶこと**を、予算切れと `restart = false` の 2 つの経路それぞれで testcase にしてある。#499 の park は**クラッシュ窓を実際に作って**検証する — mock source に `submit_delay_ms` を足し、タスクの到着をエージェントのクラッシュ**より後**に置いた。即時 submit だと検知と競合し、テストが振る舞いではなくタイミングで通ったり落ちたりする。検知配線（`wire_liveness`）を外すと **4 本とも落ちる**ことを実測で確認済み。
+**プラグインが下がったままになるときにエスカレーションが飛ぶこと**を、予算切れと `restart = false` の 2 つの経路それぞれで testcase にしてある。#499 の park は**クラッシュ窓を実際に作って**検証する — mock source に `submit_delay_ms` を足し、タスクの到着をエージェントのクラッシュ**より後**に置いた。即時 submit だと検知と競合し、テストが振る舞いではなくタイミングで通ったり落ちたりする。検知配線（`wire_liveness`）を外すと、**supervision のテスト 4 本が落ちる**ことを実測で確認済み。
 
 最初の版はここが 3 本だった。`restart = false` のテストが `plugin_restarts == 0`、つまり**抑止したものが起きていないこと**しか見ておらず、名前が言っている "without losing detection" を一度も検査していなかったためである — 検知が丸ごと壊れていても通るテストだった。**抑止したものの不在ではなく、残ると約束したものの存在を assert する。**

@@ -16,6 +16,7 @@ use std::time::Duration;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::adapters::state_db::StateDb;
 use orchestrator_core::config::RootConfig;
+use orchestrator_core::domain::state::TaskState;
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{
@@ -491,6 +492,108 @@ async fn restart_can_be_disabled_without_losing_detection() {
             .as_str()
             .unwrap()
             .contains("mock_src")
+    );
+    engine.shutdown(Duration::from_secs(2)).await;
+}
+
+/// **The starvation this fix is really about.**
+///
+/// `plan_dispatch` fixes the plan for a whole cycle, so a slot released inside
+/// `dispatch_one`'s park arm comes back too late to help anyone. With
+/// `max_concurrency = 1`, a task parked on a crashed agent would take the only
+/// global slot every 200 ms tick and a task for a **healthy** agent would never
+/// dispatch for the entire outage — parking without moving the gate ahead of
+/// slot acquisition trades one bug for a worse one.
+///
+/// This pins the gate in `dispatch_ready`: `dispatch_one`'s park arm alone
+/// makes the next test pass, so without this one the move would be untested.
+#[tokio::test]
+async fn a_parked_task_does_not_starve_a_healthy_agent() {
+    let dir = test_support::scratch("supervise_starvation");
+    let repo = test_support::bare_origin_and_clone(&dir);
+    let counter = dir.join("launches");
+    let db = StateDb::open(&dir.join("state.db")).unwrap();
+
+    let mut plugins = PluginSet::default();
+    install(
+        &mut plugins,
+        "task_source",
+        "src_down",
+        json!({ "submit_tasks": [{ "id": "for-the-dead-agent", "source": "src_down", "title": "a" }] }),
+    )
+    .await;
+    install(
+        &mut plugins,
+        "task_source",
+        "src_up",
+        json!({ "submit_tasks": [{ "id": "for-the-live-agent", "source": "src_up", "title": "b" }] }),
+    )
+    .await;
+    // Down for the whole run.
+    install(
+        &mut plugins,
+        "agent_ide",
+        "agent_down",
+        json!({ "suicide": { "counter": counter, "times": 99 } }),
+    )
+    .await;
+    install(&mut plugins, "agent_ide", "agent_up", json!({})).await;
+
+    let cfg = RootConfig::from_toml_str(
+        r#"
+[[workflows]]
+name = "wf-down"
+source = "src_down"
+trigger = {}
+mode = "implement"
+agent = "agent_down"
+output = "none"
+
+[[workflows]]
+name = "wf-up"
+source = "src_up"
+trigger = {}
+mode = "implement"
+agent = "agent_up"
+output = "none"
+"#,
+    )
+    .unwrap();
+
+    let mut settings = settings_with_backoff(5, Duration::from_secs(30));
+    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    settings.repos = vec![RepoSettings {
+        name: "clone".to_string(),
+        path: repo.clone(),
+        summary: None,
+        worktree_location: None,
+        tool: None,
+    }];
+    // **One** global slot: the parked task and the healthy one compete for it.
+    settings.limits = Limits::global(1);
+    settings.location_template = format!("{}/../wt/{{worktree_name}}", repo.display());
+
+    let mut engine =
+        Engine::new(db, settings, plugins, SystemGitRunner, None::<OpenAiRouter>).await;
+
+    // Stop as soon as anything dispatches. Without the gate ahead of slot
+    // acquisition nothing ever does, and the harness times out.
+    let probe = dir.join("state.db");
+    let summary = run_until(&mut engine, move || {
+        StateDb::open(&probe).ok().is_some_and(|db| {
+            // "left the queue", not "is Dispatched": the mock streams
+            // `running` immediately, so `Dispatched` is a state the probe can
+            // miss entirely between polls.
+            db.tasks_in_state(TaskState::Queued)
+                .map(|t| t.len() < 2)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    assert!(
+        summary.stats.dispatched >= 1,
+        "a task for a healthy agent must dispatch while another is parked: {summary:?}"
     );
     engine.shutdown(Duration::from_secs(2)).await;
 }

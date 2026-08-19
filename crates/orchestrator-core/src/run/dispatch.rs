@@ -147,6 +147,14 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .map(|w| (w.name.clone(), (w.agent.clone(), w.profile)))
             .collect();
         let queued = self.db.tasks_in_state(TaskState::Queued)?;
+        // Only a queued task can be parked, so the memo cannot outlive the
+        // queue (#499). Pruning against it here — rather than removing at each
+        // exit — is what makes the bound structural: a task cancelled at its
+        // source, or one whose workflow was removed from config, never reaches
+        // the loop below to clean up after itself, and a `--watch` process
+        // runs for weeks.
+        let still_queued: std::collections::HashSet<i64> = queued.iter().map(|r| r.id).collect();
+        self.blocked_on_agent.retain(|id| still_queued.contains(id));
         let mut ready = Vec::new();
         for record in &queued {
             let Some(repo) = record.repo.clone() else {
@@ -181,6 +189,40 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             // about. Without this the set only ever grows and the second wait
             // is silent in both the notification and `status` (#407).
             self.blocked_on_tools.remove(&record.id);
+            // #499: a plugin between instances must not take a slot either.
+            // Same reason as the tool gate above — deciding here rather than
+            // in `dispatch_one` means no slot is acquired, so tasks for
+            // *other* agents keep flowing during an outage. `plan_dispatch`
+            // below fixes the plan for the whole cycle, so a slot released
+            // inside `dispatch_one` comes back too late to help anyone.
+            //
+            // The streak is only read when the agent is actually down, so the
+            // healthy path costs no extra query.
+            let status = self.agent_status_of(&agent);
+            let down = status.as_ref().is_some_and(|s| !s.live && !s.abandoned);
+            let spent = if down {
+                self.spent_retries(record.id)
+            } else {
+                0
+            };
+            if agent_gate(&agent, status.as_ref(), spent) == AgentGate::Park {
+                // Told once per task, not once per 200 ms tick — the same
+                // reason `blocked_on_tools` exists. The operator's actionable
+                // signal is the plugin's own escalation, which `supervise`
+                // sends when the restart budget runs out.
+                if self.blocked_on_agent.insert(record.id) {
+                    tracing::warn!(
+                        task_id = record.id,
+                        "agent plugin is down; leaving the task queued until it is back"
+                    );
+                }
+                continue;
+            }
+            // The wait ended (or never started), so the memo ends with it —
+            // and the set stops growing. Doing it here rather than only in
+            // `dispatch_one` also covers a task that never reaches dispatch
+            // again: cancelled at its source, or its workflow removed.
+            self.blocked_on_agent.remove(&record.id);
             ready.push(ReadyTask {
                 task_id: record.id,
                 repo,
@@ -512,6 +554,37 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     ///
     /// The decision is [`resolve_dispatch_target`]; what remains here is the
     /// order the side effects have to happen in (#471).
+    /// How many automatic dispatch retries a task has spent (#492).
+    ///
+    /// A read failure counts as "none spent", biasing toward waiting for a
+    /// plugin that is coming back — the cheaper mistake, since the task stays
+    /// queued rather than dying. **But it is logged**: without that, a DB
+    /// fault would express itself as tasks quietly not moving, with nothing
+    /// anywhere saying why. That is the failure shape this whole area exists
+    /// to remove.
+    fn spent_retries(&self, task_id: i64) -> u32 {
+        match self.db.auto_retry_streak(task_id) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    task_id,
+                    "could not read the retry streak: {e} → treating it as 0, so this task \
+                     may wait for its agent instead of exhausting its budget"
+                );
+                0
+            }
+        }
+    }
+
+    /// The agent gate's view of one plugin (#495/#499).
+    fn agent_status_of(&self, agent: &str) -> Option<AgentStatus> {
+        self.plugins.agents.get(agent).map(|a| AgentStatus {
+            capabilities: a.capabilities().clone(),
+            live: !a.is_closed(),
+            abandoned: self.abandoned_plugins.contains(agent),
+        })
+    }
+
     async fn dispatch_one(&mut self, task_id: i64) -> Result<(), EngineError> {
         let record = self
             .db
@@ -522,26 +595,14 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // pure function (#471). Failure handling stays here because it writes.
         // How many automatic dispatch retries this task has already spent
         // (#492). Read here rather than inside the pure resolver, which does
-        // not touch the DB. A read failure counts as "none spent", which
-        // biases toward waiting for a plugin that is coming back — the
-        // cheaper mistake, since the task stays queued rather than dying.
-        let spent_retries = self.db.auto_retry_streak(task_id).unwrap_or(0);
-        let target = {
-            let agents = &self.plugins.agents;
-            let abandoned = &self.abandoned_plugins;
-            resolve_dispatch_target(
-                &record,
-                &self.settings,
-                |name| {
-                    agents.get(name).map(|a| AgentStatus {
-                        capabilities: a.capabilities().clone(),
-                        live: !a.is_closed(),
-                        abandoned: abandoned.contains(name),
-                    })
-                },
-                spent_retries,
-            )
-        };
+        // not touch the DB.
+        let spent_retries = self.spent_retries(task_id);
+        let target = resolve_dispatch_target(
+            &record,
+            &self.settings,
+            |name| self.agent_status_of(name),
+            spent_retries,
+        );
         // Parking is the only outcome that leaves the task waiting on a downed
         // agent. Every other one — dispatching, failing, a vanished workflow —
         // ends that wait, so the "already reported" memo is dropped once, here,
@@ -1057,8 +1118,70 @@ pub(super) enum DispatchRefusal {
     AgentDown,
 }
 
-/// What [`resolve_dispatch_target`] needs to know about one agent plugin
-/// (#495/#499).
+/// What the agent gate decides for one task (#499).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AgentGate {
+    /// The agent can take the task.
+    Proceed,
+    /// The agent is between instances and this task has attempted nothing:
+    /// leave it queued.
+    Park,
+    /// Refuse with a reason the operator can act on.
+    Refuse(String),
+}
+
+/// Whether a task may be dispatched to `status` right now, given how many
+/// automatic dispatch retries it has already spent (#499).
+///
+/// **One definition, two callers.** `dispatch_ready` consults it *before*
+/// acquiring a slot, so a parked task does not hold concurrency it cannot use;
+/// [`resolve_dispatch_target`] consults it again at the last moment, because
+/// the plugin can die in between. Splitting the rule across the two would let
+/// them drift, and the drift would be invisible — both sides would look
+/// reasonable on their own.
+pub(super) fn agent_gate(
+    agent_name: &str,
+    status: Option<&AgentStatus>,
+    spent_retries: u32,
+) -> AgentGate {
+    let Some(status) = status else {
+        return AgentGate::Refuse(format!(
+            "agent plugin `{agent_name}` is not launched → install and enable it"
+        ));
+    };
+    if !status.live {
+        // Down for good: nothing will bring it back, so parking would park
+        // forever. Say why, rather than letting the task discover it through
+        // three identical RPC failures.
+        if status.abandoned {
+            return AgentGate::Refuse(format!(
+                "agent plugin `{agent_name}` is down and will not be restarted → fix it and re-run `totsuka run`"
+            ));
+        }
+        // A relaunch is booked, **and this task has attempted nothing**.
+        //
+        // The second half is what keeps this from swallowing a task whose own
+        // dispatch is what kills the plugin (`crash_on_dispatch`): once a task
+        // is being counted by the retry budget, that budget must be allowed to
+        // run out, or the task would park through restart after restart and
+        // never reach a terminal state. A task that has attempted nothing is
+        // in a different situation and simply waits.
+        if spent_retries == 0 {
+            return AgentGate::Park;
+        }
+    }
+    // Checked after liveness: a dead process's declared capabilities are still
+    // whatever it declared, so testing them first would report the wrong
+    // problem — and report it as a terminal refusal.
+    if !status.capabilities.state_stream {
+        return AgentGate::Refuse(format!(
+            "agent plugin `{agent_name}` does not declare the `state_stream` capability → totsuka cannot track its progress; use a state-streaming agent plugin"
+        ));
+    }
+    AgentGate::Proceed
+}
+
+/// What the agent gate needs to know about one agent plugin (#495/#499).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AgentStatus {
     /// The plugin's declared capabilities (F-33).
@@ -1098,13 +1221,20 @@ pub(super) struct DispatchTarget {
 
 /// Decide where a task should be dispatched, or why it cannot be (#471).
 ///
-/// **Pure**: no I/O, no `self`. `agent_caps` answers "is this agent plugin
-/// launched, and what does it declare" — a closure rather than the plugin map
-/// so a test can answer it with a literal.
+/// **Pure**: no I/O, no `self`. `agent_status` answers "is this agent plugin
+/// launched, is its process alive, has the supervisor given up on it, and what
+/// does it declare" — a closure rather than the plugin map so a test can
+/// answer it with a literal. `spent_retries` is the task's automatic
+/// dispatch-retry count (#492), read by the caller because this function does
+/// not touch the DB.
 ///
-/// The refusals are in the order the side-effecting version checked them, and
-/// each carries the same message, because those strings are what an operator
-/// reads when a task fails.
+/// The refusal messages are the ones an operator reads when a task fails, so
+/// they are kept verbatim. **The order is not the side-effecting version's any
+/// more**: since #499 the liveness checks run *before* the capability check,
+/// because a dead process's declared capabilities are still whatever it
+/// declared, and reporting those first would name the wrong problem — as a
+/// terminal failure. The agent decision itself lives in [`agent_gate`], shared
+/// with `dispatch_ready` so the two cannot drift.
 pub(super) fn resolve_dispatch_target(
     record: &TaskRecord,
     settings: &EngineSettings,
@@ -1123,39 +1253,14 @@ pub(super) fn resolve_dispatch_target(
             "selected repository `{repo_name}` is not configured → re-add it to [[repositories]]"
         )));
     };
-    match agent_status(&agent_name) {
-        None => {
-            return Err(DispatchRefusal::Failed(format!(
-                "agent plugin `{agent_name}` is not launched → install and enable it"
-            )));
-        }
-        // Down for good: nothing will bring it back, so parking would park
-        // forever. Say why, rather than letting the task discover it through
-        // three identical RPC failures.
-        Some(s) if !s.live && s.abandoned => {
-            return Err(DispatchRefusal::Failed(format!(
-                "agent plugin `{agent_name}` is down and will not be restarted → fix it and re-run `totsuka run`"
-            )));
-        }
-        // Down, but a relaunch is booked, **and this task has not yet spent a
-        // dispatch retry on it** (#499). Wait.
-        //
-        // The second half is what keeps this from swallowing a task whose own
-        // dispatch is what kills the plugin (`crash_on_dispatch`): once a task
-        // is being counted by the retry budget, that budget must be allowed to
-        // run out, or the task would park through restart after restart and
-        // never reach a terminal state. A task that has attempted nothing is
-        // in a different situation and simply waits.
-        Some(s) if !s.live && spent_retries == 0 => return Err(DispatchRefusal::AgentDown),
-        // Checked after liveness: a dead process's declared capabilities are
-        // still whatever it declared, so testing them first would report the
-        // wrong problem — and report it as a terminal `Failed`.
-        Some(s) if !s.capabilities.state_stream => {
-            return Err(DispatchRefusal::Failed(format!(
-                "agent plugin `{agent_name}` does not declare the `state_stream` capability → totsuka cannot track its progress; use a state-streaming agent plugin"
-            )));
-        }
-        Some(_) => {}
+    match agent_gate(
+        &agent_name,
+        agent_status(&agent_name).as_ref(),
+        spent_retries,
+    ) {
+        AgentGate::Proceed => {}
+        AgentGate::Park => return Err(DispatchRefusal::AgentDown),
+        AgentGate::Refuse(reason) => return Err(DispatchRefusal::Failed(reason)),
     }
 
     // AI-tool resolution (#196): workflow pin > repo default > global default.
@@ -1344,6 +1449,55 @@ mod tests {
         // Alive: nothing special happens, whatever the retry count.
         assert!(resolve_dispatch_target(&task, &s, streaming, 0).is_ok());
         assert!(resolve_dispatch_target(&task, &s, streaming, 2).is_ok());
+    }
+
+    /// The gate is one function, and `dispatch_ready` consults it **before**
+    /// acquiring a slot (#499).
+    ///
+    /// `plan_dispatch` fixes the plan for a whole cycle, so a slot released
+    /// inside `dispatch_one`'s park arm comes back too late to help anyone:
+    /// with `max_concurrency = 4`, four tasks queued for a crashed agent would
+    /// take every global slot each tick and starve a task for a *healthy*
+    /// agent for the entire outage. Before #499 those tasks failed within
+    /// ~600 ms and stopped competing, so parking them without moving the gate
+    /// would have traded one bug for a worse one.
+    ///
+    /// This test pins the shared definition; the filter and the resolver both
+    /// call it, which is what keeps them from drifting.
+    #[test]
+    fn the_gate_is_shared_by_the_filter_and_the_resolver() {
+        let live = streaming("").unwrap();
+        let down = crashed("").unwrap();
+        let gone = abandoned("").unwrap();
+
+        assert_eq!(agent_gate("a", Some(&live), 0), AgentGate::Proceed);
+        assert_eq!(agent_gate("a", Some(&live), 3), AgentGate::Proceed);
+        // Down with nothing attempted: wait, and (in `dispatch_ready`) without
+        // taking a slot.
+        assert_eq!(agent_gate("a", Some(&down), 0), AgentGate::Park);
+        // Down but already being counted: let the budget finish.
+        assert_eq!(agent_gate("a", Some(&down), 1), AgentGate::Proceed);
+        // Down for good: waiting is waiting forever.
+        assert!(matches!(
+            agent_gate("a", Some(&gone), 0),
+            AgentGate::Refuse(m) if m.contains("will not be restarted")
+        ));
+        // Not launched at all is a config problem, not an outage.
+        assert!(matches!(
+            agent_gate("a", None, 0),
+            AgentGate::Refuse(m) if m.contains("install and enable")
+        ));
+        // And the resolver reaches the same answers through the same function.
+        let s = settings(
+            vec![workflow("implement", "herdr", None)],
+            vec![repo("web", None)],
+        );
+        let task = record("implement", Some("web"));
+        assert_eq!(
+            resolve_dispatch_target(&task, &s, crashed, 0),
+            Err(DispatchRefusal::AgentDown)
+        );
+        assert!(resolve_dispatch_target(&task, &s, crashed, 1).is_ok());
     }
 
     /// The liveness gate comes **before** the capability gate on purpose.
