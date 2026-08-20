@@ -11,6 +11,29 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.5.0](https://github.com/tomoya-k31/totsuka/compare/v0.4.0...v0.5.0) (2026-08-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **protocol:** 宣言が読まれていることを機械検証し、到達不能な 5 件を削除する ([#501](https://github.com/tomoya-k31/totsuka/issues/501))
+
+### Features
+
+* **core:** プラグインの死活監視を全 kind へ広げ、予算付きで自動再起動する ([#498](https://github.com/tomoya-k31/totsuka/issues/498)) ([37317c9](https://github.com/tomoya-k31/totsuka/commit/37317c9e3e234c3584249cd3218ddaae7bc4a327))
+* **core:** プラグイン単位の RPC 会計と監査ログを入れる ([#502](https://github.com/tomoya-k31/totsuka/issues/502)) ([f2df91a](https://github.com/tomoya-k31/totsuka/commit/f2df91af5997b671e9c78c8584180b9a761d6533)), closes [#497](https://github.com/tomoya-k31/totsuka/issues/497)
+
+
+### Bug Fixes
+
+* **core:** span のフィールドをログに出し、エスカレーションの痕跡を残す ([#503](https://github.com/tomoya-k31/totsuka/issues/503)) ([c1e11fa](https://github.com/tomoya-k31/totsuka/commit/c1e11fa1b2952ac47e3c104f768dcb304c088f12))
+* **core:** クラッシュ窓中に queue されたタスクを、復帰を待たずに Failed にしない ([#504](https://github.com/tomoya-k31/totsuka/issues/504)) ([c7c107f](https://github.com/tomoya-k31/totsuka/commit/c7c107fedd3e705009c5b37a89f0e53e9601003e)), closes [#499](https://github.com/tomoya-k31/totsuka/issues/499)
+
+
+### Refactors
+
+* **protocol:** 宣言が読まれていることを機械検証し、到達不能な 5 件を削除する ([#501](https://github.com/tomoya-k31/totsuka/issues/501)) ([6af148a](https://github.com/tomoya-k31/totsuka/commit/6af148a2cae2305a91a34209a72602d9a5746387)), closes [#496](https://github.com/tomoya-k31/totsuka/issues/496)
+
 ## [0.4.0](https://github.com/tomoya-k31/totsuka/compare/v0.3.0...v0.4.0) (2026-08-19)
 
 
