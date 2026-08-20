@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:d2433ef3f6bc1dd244755dd6f6434d8c2842dbf44c411b1736e5f4784fda25d7 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f7894aef7f1c2870419c1b789ded0aa1a0a132e6f8bba76327813caa4535ad86 -->
 
 # 設定リファレンス
 
@@ -19,12 +19,12 @@
 
 **平文のシークレットを設定に書かない。** 文字列値は次のいずれかにできる。
 
-| 形式 | 解決元 |
-|---|---|
-| `keychain:<service>/<account>` | macOS Keychain |
-| `op://<vault>/<item>/<field>` | 1Password |
-| `cmd:<command>` | コマンドの標準出力 |
-| `${ENV_VAR}` を含む文字列 | 環境変数 |
+| 形式 | 解決元 | 使いどころ |
+|---|---|---|
+| `op://<vault>/<item>/<field>` | 1Password | **通常はこれ。** macOS 以外で動く唯一のバックエンド |
+| `cmd:<command>` | コマンドの標準出力 | 別ツールが管理・ローテートする credential（例 `cmd:gh auth token`） |
+| `${ENV_VAR}` を含む文字列 | 環境変数 | すでに export してある値を使うとき |
+| `keychain:<service>/<account>` | macOS Keychain | macOS 専用 |
 
 `~` と `${ENV}` はパスでも展開される。
 
@@ -539,7 +539,7 @@ plan_cleanup = "immediate"            # plan: 即削除（既定）
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `auth_token_ref` | string? | なし | フックの POST を認証する Bearer トークンのシークレット参照（例 `keychain:totsuka/hook-token`）。**運用上は必須** — 未設定だとソケットのパーミッションだけが防御になる |
+| `auth_token_ref` | string? | なし | フックの POST を認証する Bearer トークンのシークレット参照（例 `op://Dev/totsuka/hook-token`）。**運用上は必須** — 未設定だとソケットのパーミッションだけが防御になる |
 | `socket_path` | string? | 組み込み既定 | 受信ソケットのパス |
 | `spool_dir` | string? | 組み込み既定 | POST に失敗したイベントを退避するディレクトリ |
 | `block_retry_limit` | int? | 3 | 停止のブロック差し戻しの連続上限。超えるとエスカレートする |

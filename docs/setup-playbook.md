@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:0e5008a0b115a4460df3ee83452435dfecf70ad92eba8dac3bfc219e5f3d238d -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:9c09ccaceda6e9c015e2cf0a51e40e21cbe5dfe7ad7b20cfcf8d6bf3a17d4816 -->
 
 # Setup playbook
 
@@ -40,7 +40,7 @@ It asks four kinds of question and gets the rest from the recipe you choose.
 
 1. **Which recipe to start from** (minimal GitHub, design-to-implement handoff, Slack replies under your own name, human sign-off required)
 2. **Repository paths and names** (more than one is fine)
-3. **Where to keep secrets** (Keychain, 1Password, or environment variables) — it never asks for the values themselves
+3. **Where to keep secrets** (1Password, Keychain, or environment variables) — it never asks for the values themselves
 4. Whatever the recipe still needs (GitHub Project owner and number, your Slack member ID, the LLM model name)
 
 It prints a plan; nothing has side effects until you confirm. **Pressing Ctrl-C during the questions leaves nothing behind.**

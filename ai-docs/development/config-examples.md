@@ -214,7 +214,7 @@ max_files = 7         # 日次ログの保持世代数
 
 # ── Claude Code フック受信 ───────────────────────────────────
 [hooks]
-auth_token_ref = "keychain:totsuka/hook-token"                    # 運用上ほぼ必須（後述）
+auth_token_ref = "op://Dev/totsuka/hook-token"                    # 運用上ほぼ必須（後述）
 socket_path = "${XDG_RUNTIME_DIR}/totsuka/agent-events.sock"     # 省略時は組み込み既定
 spool_dir = "${XDG_STATE_HOME}/totsuka/hooks/spool"               # POST 失敗時の退避先
 block_retry_limit = 3                                             # Stop フック差し戻しの連続上限
@@ -448,7 +448,7 @@ agent = "herdr"
   参照を設定したのに解決できない場合は構成によらず fail
 
 ```bash
-# 例: ランダムトークンを Keychain に入れて参照する
+# 例: ランダムトークンを生成して保管する（macOS Keychain の場合。1Password なら item を作る）
 security add-generic-password -s totsuka -a hook-token -w "$(openssl rand -hex 32)"
 ```
 
@@ -499,7 +499,7 @@ target_user_id = "U01ABCDEF"               # 必須。自分の Slack ユーザ�
 # config.toml 側の `[[workflows]].trigger = { reaction = "eyes" }` へ移行する
 # （#396。下の「絵文字でワークフローを選ぶ」参照）。併用すると CONFIG_INVALID。
 # どちらの記法でも reactions:read スコープが必要
-# → 追加後はアプリ再インストール + Keychain 2 本更新。
+# → 追加後はアプリ再インストール + 保管先の値を 2 本更新。
 trigger_reactions = ["eyes"]
 
 thread_context_limit = 6                   # タスク本文に含めるスレッド直近メッセージ数（既定 6）
@@ -632,7 +632,7 @@ model = "anthropic/claude-haiku-4-5"
 api_key_ref = "op://Dev/Openrouter/api_key"
 
 [hooks]
-auth_token_ref = "keychain:totsuka/hook-token"
+auth_token_ref = "op://Dev/totsuka/hook-token"
 
 [[workflows]]
 name = "slack-reply"

@@ -1,9 +1,9 @@
 ---
 type: Runbook
 title: Slack セットアップ Quickstart（task-source-slack）
-description: manifest からの Slack アプリ作成 → トークン発行 → Keychain 登録 → totsuka setup → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
+description: manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
-tags: [slack, setup, runbook, keychain, doctor]
+tags: [slack, setup, runbook, secrets, doctor]
 generated: { by: claude-code/opus-5, at: 2026-08-01T09:40:00+09:00 }
 status: stable
 owner: tomoya-k31
@@ -20,7 +20,19 @@ owner: tomoya-k31
 3. **Install App**(OAuth & Permissions → Install to Workspace)を実行し、**User OAuth Token**（`xoxp-…`）と **Bot User OAuth Token**（`xoxb-…`、同じページ）を控える。
 4. **Basic Information → App-Level Tokens → Generate Token and Scopes** で `connections:write` スコープのトークン（`xapp-…`）を生成して控える。
 
-# 2. トークンを Keychain へ登録
+# 2. トークンを保管する
+
+**通常は 1Password に置く。** item を作って 3 つのフィールドに値を入れ、参照文字列を控える
+（この Quickstart では vault `Dev` / item `Slack` を例にする）。手順 4 で
+`plugins/slack.toml` に書くのは**この参照であって、トークンの値ではない**。
+
+```text
+op://Dev/Slack/user_token   ← xoxp-…
+op://Dev/Slack/app_token    ← xapp-…
+op://Dev/Slack/bot_token    ← xoxb-…（通知ナッジを使う場合）
+```
+
+macOS でしか使わないなら Keychain でもよい（参照は `keychain:totsuka/slack-user` の形になる）:
 
 ```sh
 security add-generic-password -U -s totsuka -a slack-user -w 'xoxp-…'
@@ -38,7 +50,7 @@ totsuka setup
 
 レシピの選択で **「Slack — reply as yourself」** を選ぶ。聞かれるのはリポジトリと、手順 2 で控えたメンバー ID、リポジトリ分類用の LLM だけで、`plugins/slack.toml` の生成・プラグインの install + enable・`doctor` の実行までこの 1 コマンドで済む。トークンの**値**は聞かれない（[ADR-0028](/decisions/adr-0028-setup-wizard.md)）。
 
-手順 2 の Keychain 登録がまだなら、`setup` が登録コマンドのチェックリストを印字するので、それから登録する。
+手順 2 のトークン保管がまだなら、`setup` が登録コマンドのチェックリストを印字するので、それから登録する。
 
 **登録が済んでも `state-db` チェックだけは fail のままで、`doctor` は exit 3 で終わる。** これは状態 DB がまだ無いというだけで、作るのは次の手順の `totsuka run` だけ。緑になるのは 1 回走らせたあと。
 
@@ -74,9 +86,9 @@ output = "source"        # result/publish → 承認フローへ
 `~/.config/totsuka/plugins/slack.toml`:
 
 ```toml
-app_token = "keychain:totsuka/slack-app"
-user_token = "keychain:totsuka/slack-user"
-bot_token = "keychain:totsuka/slack-bot"    # 任意: 返信案/ピッカー到着の通知 DM（#305）。
+app_token = "op://Dev/Slack/app_token"
+user_token = "op://Dev/Slack/user_token"
+bot_token = "op://Dev/Slack/bot_token"    # 任意: 返信案/ピッカー到着の通知 DM（#305）。
                                             # 省略するとナッジなし（それ以外は同じ動作）
 target_user_id = "U012AB3CD"        # 自分のメンバー ID
 reply_style = "丁寧語で簡潔に"      # 任意
@@ -100,7 +112,7 @@ trigger_reactions = ["eyes"]
 # [llm]
 # base_url = "https://openrouter.ai/api/v1"
 # model = "…"
-# api_key = "keychain:totsuka/openrouter"
+# api_key = "op://Dev/Openrouter/api_key"
 ```
 
 # 4. 検証 → 常駐実行
@@ -118,15 +130,15 @@ totsuka run --watch       # Socket Mode 常駐 + 5 秒周期の吸い上げ
 
 | 症状 | 原因と対処 |
 |---|---|
-| `doctor` が `invalid_auth` / `token_revoked` | トークン失効。エラーメッセージ内の再発行手順に従い、Keychain を更新（→ [Revoke 手順](/security/slack-user-token.md)） |
+| `doctor` が `invalid_auth` / `token_revoked` | トークン失効。エラーメッセージ内の再発行手順に従い、保管先（1Password / Keychain）を更新（→ [Revoke 手順](/security/slack-user-token.md)） |
 | `doctor` が identity mismatch（`target_user_id`） | 他人のトークン、または `target_user_id` の誤記。なりすまし防止で意図的に拒否している |
 | メンションがタスク化されない | ①メンション形式が `@自分` か（`user_events` は本人参加チャンネルのみ）②`run --watch` が起動中か ③subtype 付き（編集・bot 投稿）は対象外 |
 | リアクションを付けてもタスク化されない | ①`trigger_reactions` が設定されているか（既定は空 = 無効）②絵文字名が一致しているか（👀 は `eyes`、👁 は `eye`。カスタム絵文字の alias は「実際に押された名前」で届くので alias を使うなら両方列挙）③**付けたのが自分か**（他人のリアクションでは起動しない。緩和する設定は無い — [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）④`reactions:read` を含む manifest で再インストール済みか（スコープが無いとイベント自体が届かず、**エラーにもならない**）⑤同じメッセージを既に mention 経由で処理していないか（dedup は共有） |
 | リアクションを付け直しても再実行されない | 意図した挙動。dedup キーが `{channel}:{メッセージの ts}` なので、**成功したものは付け直しても再実行しない**（誤って外して付け直しただけで二重にエージェントが走る方が事故が大きい）。ただし**取得に失敗した場合は付け直しで再試行できる**（失敗時はキーを消費しない）。強制的に再実行するならプロセス再起動で LRU が消える |
 | 返信案は届くがボタンが失効 | TTL 24h 超過、または FIFO 追い出し（上限 1024 件）。self-DM 記録のテキストから手動返信するか、再メンションで再実行（#122 以降、下書きは `~/.local/state/totsuka/plugins/{source_name}/drafts.json` に永続化されるため再起動ではボタンは失効しない） |
-| スコープを変更した | アプリ再インストールが必要 → **`xoxp-` と `xoxb-` の両方が再発行される**ので Keychain を両方更新 → `doctor` で確認（[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) のコメント参照）。既存アプリへ bot user を後から足す場合（#305）も同じ — `slack-bot` を追加するだけだと再発行済みの `xoxp-` が死んだままになる |
+| スコープを変更した | アプリ再インストールが必要 → **`xoxp-` と `xoxb-` の両方が再発行される**ので保管先の値を両方更新 → `doctor` で確認（[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) のコメント参照）。既存アプリへ bot user を後から足す場合（#305）も同じ — `slack-bot` を追加するだけだと再発行済みの `xoxp-` が死んだままになる |
 | 通知ナッジ（bot DM）が届かない | ① `bot_token` が未設定/失効（`doctor` の bot probe を確認）② 起動ログに bot DM 解決失敗の WARN がないか ③ Slack 側でこのアプリの DM をミュートしていると push は出ない（コードでは解決不能） |
-| prefix ルール（`[[channel_groups]]`）が効かず常に LLM/エフェメラル選択になる | `conversations.info` が `missing_scope` で失敗しチャンネル名が取れていない（ログ WARN 参照）。`channels:read` / `groups:read` を含む manifest でアプリを再インストール → Keychain 更新（上の「スコープを変更した」と同手順） |
+| prefix ルール（`[[channel_groups]]`）が効かず常に LLM/エフェメラル選択になる | `conversations.info` が `missing_scope` で失敗しチャンネル名が取れていない（ログ WARN 参照）。`channels:read` / `groups:read` を含む manifest でアプリを再インストール → 保管先の値を更新（上の「スコープを変更した」と同手順） |
 
 # 関連
 

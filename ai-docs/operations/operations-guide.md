@@ -23,7 +23,7 @@ owner: tomoya-k31
 | `state-db` | 状態 DB が開け、**スキーマ版数と適用したアプリ版数**を表示（`… opens — schema v7 (applied by 0.1.4)`。`applied by unknown` は `applied_by` 列を持たない旧版が適用したもので異常ではない） | まだ無いなら一度 `totsuka run`。**DB が新しすぎる**（ダウングレード）ならメッセージが名指す版以降へ totsuka を更新。**DB が古い**（アップグレード直後で未適用）なら一度 `totsuka run` — 適用するのは `run` だけで、`status` / `task` / `focus` / `doctor` は適用しない（→ [アップグレードとロールバック](/releases/upgrade-and-rollback.md)、[ADR-0017](/decisions/adr-0017-state-db-compatibility-policy.md)） |
 | `worktree-location` | 明示した `[worktree].location` / `[[repositories]].worktree_location` が展開できる | `${ENV}` の未設定変数を export、またはキーを削って既定値（`$XDG_STATE_HOME/totsuka` 配下、未設定なら `$HOME/.local/state/totsuka`）に戻す。**worktree 作成はディスパッチ時**なので、これを放置すると run は正常起動したまま全タスクが失敗する |
 | `plugin:{name}` | 起動 + `config/validate` 疎通 | install 済みか / `plugins/{name}.toml` を修正 |
-| `llm` | `api_key_ref` が**解決する**（鍵が有効かは見ない） | 環境変数 export / Keychain 登録 |
+| `llm` | `api_key_ref` が**解決する**（鍵が有効かは見ない） | 1Password に item を作る / 環境変数 export / Keychain 登録 |
 | `llm-online` | プロバイダが API キーを**受理した**（`--online` 時のみ） | 401/403 = 鍵をプロバイダで再発行し `[llm].api_key_ref` を更新。到達不能・5xx は warning 止まり（鍵が悪いとは限らない） |
 | `worktrees` | 孤児 worktree なし | 対話的に掃除を提案（TTY） |
 | `panes` | 孤児 agent pane なし（#211） | 対話的に解放を提案（TTY）。`pane_control` 宣言 agent が無い構成では出ない |

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:d2433ef3f6bc1dd244755dd6f6434d8c2842dbf44c411b1736e5f4784fda25d7 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f7894aef7f1c2870419c1b789ded0aa1a0a132e6f8bba76327813caa4535ad86 -->
 
 # Configuration reference
 
@@ -18,12 +18,12 @@ Every key in `config.toml` and in the per-plugin `plugins/{name}.toml`, with its
 
 Never write a plain secret into your configuration. Any string value can instead be one of:
 
-| Form | Resolves from |
-|---|---|
-| `keychain:<service>/<account>` | The macOS Keychain |
-| `op://<vault>/<item>/<field>` | 1Password |
-| `cmd:<command>` | The standard output of a command |
-| A string containing `${ENV_VAR}` | Environment variables |
+| Form | Resolves from | When to use |
+|---|---|---|
+| `op://<vault>/<item>/<field>` | 1Password | **The usual choice.** The only backend that works outside macOS |
+| `cmd:<command>` | The standard output of a command | Credentials another tool owns and rotates, e.g. `cmd:gh auth token` |
+| A string containing `${ENV_VAR}` | Environment variables | A value you already export |
+| `keychain:<service>/<account>` | The macOS Keychain | macOS only |
 
 `~` and `${ENV}` are also expanded in paths.
 
@@ -538,7 +538,7 @@ Settings for receiving agent CLI hook events. Every key is optional.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `auth_token_ref` | string? | none | Secret reference for the bearer token authenticating hook posts, e.g. `keychain:totsuka/hook-token`. **Required in practice** — without it the only protection is socket permissions |
+| `auth_token_ref` | string? | none | Secret reference for the bearer token authenticating hook posts, e.g. `op://Dev/totsuka/hook-token`. **Required in practice** — without it the only protection is socket permissions |
 | `socket_path` | string? | built-in | Path of the receiving socket |
 | `spool_dir` | string? | built-in | Where events are spooled when a post fails |
 | `block_retry_limit` | int? | 3 | Consecutive stop-hook blocks before escalating |
