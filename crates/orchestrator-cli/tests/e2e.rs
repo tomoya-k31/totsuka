@@ -325,21 +325,43 @@ fn e2e_waiting_input_leaves_task_and_status_shows_it() {
 }
 
 #[test]
-fn e2e_agent_crash_fails_task_and_orchestrator_survives() {
+fn e2e_agent_crash_is_isolated_and_the_orchestrator_survives() {
     let env = setup("crash", "crash_on_dispatch = true\n", "none", "implement");
-    // The agent self-destructs on dispatch; the run must still exit cleanly
-    // (crash isolation, §5.3), failing the affected task.
-    let out = env.run(&[&["run"], GRACE].concat());
+    // The agent self-destructs on dispatch. What this level can state
+    // deterministically is crash *isolation* (§5.3): the run exits cleanly,
+    // reports the crash, and does not lose the task.
+    //
+    // **The task's terminal state is deliberately not asserted.** Since #504 it
+    // depends on which of two correct paths wins: the dispatch reaching the
+    // dying plugin (transport error -> `failed`), or the supervisor marking the
+    // plugin down first (-> parked, left `queued`). This test's `GRACE` is
+    // 250 ms while the first restart backoff is one second, so no restart can
+    // land inside the window either way — asserting either outcome makes the
+    // test race the machine it runs on. It did: asserting `failed` passed
+    // locally and failed on CI.
+    //
+    // Those state-machine contracts have their own coverage in
+    // orchestrator-core's `plugin_supervision.rs`, which drives the backoff
+    // explicitly instead of racing wall-clock time — see
+    // `a_task_queued_during_a_crash_window_is_not_failed` and
+    // `giving_up_escalates_instead_of_retrying_forever`.
+    let out = env.run(&[&["run", "--json"], GRACE].concat());
     assert!(out.status.success(), "orchestrator survived the crash");
-    assert!(
-        stdout(&out).contains("failed 1"),
-        "summary: {}",
-        stdout(&out)
-    );
 
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out))
+        .unwrap_or_else(|e| panic!("stdout is not one JSON document ({e}): {}", stdout(&out)));
+    // Counted whatever happens next, so it holds on both paths above.
+    assert_eq!(doc["stats"]["plugin_crashes"], 1, "document: {doc}");
+    assert_eq!(doc["interrupted"], false, "document: {doc}");
+
+    // Whichever path won, the task is still there to retry.
     let status = env.run(&["status", "--json"]);
     let doc: serde_json::Value = serde_json::from_str(&stdout(&status)).unwrap();
-    assert_eq!(doc["tasks"][0]["state"], "failed");
+    assert_eq!(
+        doc["tasks"].as_array().map(Vec::len),
+        Some(1),
+        "the crash must not lose the task: {doc}"
+    );
     let _ = std::fs::remove_dir_all(&env.base);
 }
 
