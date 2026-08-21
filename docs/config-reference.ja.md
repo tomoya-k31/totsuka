@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:ec48c072cdf2de10983e95f9d4c7efa66eb7cfc681b3cbee1de0fa1c1db16082 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f8c44e8dca185153be1f2c0769b67687c9cd63dce788ee514a0e8c933f732976 -->
 
 # 設定リファレンス
 
@@ -548,10 +548,13 @@ plan_cleanup = "immediate"            # plan: 即削除（既定）
 
 ## `plugins/github.toml`
 
+ここで唯一のポーリング型 task source であり、`poll_interval_secs` がそのままプラグイン自身の fetch 周期になる（隣の Slack ソースはイベント駆動でこの値を使わない）。
+
 ```toml
 [plugins.github]
 enabled = true
 kind = "task_source"
+poll_interval_secs = 60   # 60 は既定値でもある
 ```
 
 | キー | 型 | 既定 | 意味 |
@@ -559,7 +562,7 @@ kind = "task_source"
 | `token` | string | 必須 | API トークン。bearer として送る以外には使わない。必要な権限は下記。`cmd:gh auth token` が使える |
 | `owner` | string | 必須 | Project の所有者ログイン（user または組織） |
 | `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か |
-| `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。正の数でなければ起動時に落ちる |
+| `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。正数チェックは起動時には**走らない** — 下記参照 |
 | `status_field` | string | `Status` | ステータス列を保持する single-select フィールド名 |
 | `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出に使う |
 | `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして取り込まないステータス名 |
@@ -569,6 +572,14 @@ kind = "task_source"
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の再試行回数 |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
+
+### `project_number` の誤りは起動時には出ない
+
+`project_number` が 0 や負の数でも**起動は通る**。正の数を要求する検査は設定検証の側にしかなく、起動は設定がデシリアライズできた時点で成功する。
+
+代わりに症状は「毎回の poll で Project が見つからず、**タスクが 1 件も取り込まれない**」になる。起動ログは正常に見える。ここで一番切り分けにくい壊れ方である。捕まえられるのは `totsuka doctor` と `totsuka config validate` だけなので、このファイルを編集したらどちらかを実行すること。
+
+未知のキーはその逆で、起動時の硬い失敗になる。そちらの検査はデシリアライズの最中に走るためである。
 
 ### トークンに必要な権限
 

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:ec48c072cdf2de10983e95f9d4c7efa66eb7cfc681b3cbee1de0fa1c1db16082 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f8c44e8dca185153be1f2c0769b67687c9cd63dce788ee514a0e8c933f732976 -->
 
 # Configuration reference
 
@@ -547,10 +547,13 @@ If a workflow uses a hook-capable agent, leaving `auth_token_ref` unset makes `c
 
 ## `plugins/github.toml`
 
+This is the only polling task source here — `poll_interval_secs` becomes the plugin's own fetch interval. (The Slack source next door is event-driven and ignores it.)
+
 ```toml
 [plugins.github]
 enabled = true
 kind = "task_source"
+poll_interval_secs = 60   # 60 is also the default
 ```
 
 | Key | Type | Default | Meaning |
@@ -558,7 +561,7 @@ kind = "task_source"
 | `token` | string | required | API token, sent as a bearer token and nothing else. See the permissions below. `cmd:gh auth token` works |
 | `owner` | string | required | Login of the project owner, a user or an organization |
 | `owner_type` | `user` \| `organization` | `user` | Whether `owner` is a user or an organization |
-| `project_number` | int | required | The ProjectsV2 number under `owner`. Must be positive, or startup fails |
+| `project_number` | int | required | The ProjectsV2 number under `owner`. The positive-number check does **not** run at startup — see below |
 | `status_field` | string | `Status` | Name of the single-select field holding the status column |
 | `github_login` | string | required | Your own login, used to detect self-assigned tasks |
 | `in_progress_statuses` | string[] | `[]` | Status names treated as in progress and therefore skipped |
@@ -568,6 +571,14 @@ kind = "task_source"
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise or testing |
 | `max_retries` | int | 3 | Retries for retryable API failures |
 | `[prompts]` | table | — | Overrides for the prompts this plugin sends |
+
+### A wrong `project_number` does not fail at startup
+
+A `project_number` of zero or a negative number **starts fine**. The check that requires a positive number lives only in config validation, not in startup: startup succeeds as soon as the config deserializes.
+
+The symptom is instead that every poll fails to find the project and **no task is ever ingested**, with a clean startup log. That is the hardest failure to diagnose here. Only `totsuka doctor` and `totsuka config validate` catch it, so run one of them after editing this file.
+
+An unknown key is the opposite: it is a hard startup failure, because that check happens during deserialization.
 
 ### Permissions the token needs
 

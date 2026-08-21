@@ -636,12 +636,13 @@ Claude Code フックイベント受信（UDS）の設定（#131。全キー省�
 
 # `plugins/github.toml`（task-source-github）
 
-config.toml 側の推奨設定:
+config.toml 側の推奨設定。**このリポジトリで唯一のポーリング型 task_source** で、`poll_interval_secs` がそのままプラグイン内部の fetch 周期になる（隣の task-source-slack はイベント駆動でこの値を使わない）:
 
 ```toml
 [plugins.github]
 enabled = true
 kind = "task_source"
+poll_interval_secs = 60   # 省略時も 60
 ```
 
 `plugins/github.toml` の全キー（`deny_unknown_fields`。**未知キーは `initialize` の硬い失敗になる**ので、タイポは起動時に分かる）:
@@ -651,7 +652,7 @@ kind = "task_source"
 | `token` | string | 必須 | API トークン（オーケストレータが解決して渡す、F-65）。プラグインは bearer として送る以外に触らない。必要な権限は [task-source-github](/components/task-source-github.md) を参照。`cmd:gh auth token` が使える（[ADR-0044](/decisions/adr-0044-cmd-secret-scheme.md)） |
 | `owner` | string | 必須 | Project の所有者ログイン（user または org） |
 | `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か。GraphQL のルートフィールドがこれで決まる |
-| `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。**正の数**でなければ `initialize` が落ちる |
+| `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。**正数チェックは `initialize` では走らない**（下記） |
 | `status_field` | string | `Status` | ステータス列を保持する SingleSelect フィールド名（F-02） |
 | `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出に使う（F-08） |
 | `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして ingest から除外するステータス名（F-08） |
@@ -661,6 +662,14 @@ kind = "task_source"
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用の上書き） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#398） |
+
+## `project_number` の誤りは起動時には出ない
+
+`project_number` が 0 や負でも **`initialize` は成功する**。正数を要求する検査は `config/validate` の側にしかなく、`initialize` は serde のデシリアライズが通れば起動する。
+
+結果として症状は「毎 poll で Project が見つからず、**タスクが 1 件も取り込まれない**」になる。起動ログは正常なので、これは一番切り分けにくい壊れ方である。捕まえられるのは `totsuka doctor` と `totsuka config validate` だけなので、設定を書いたらどちらかを通すこと。
+
+（未知キーのほうは対照的に `initialize` の硬い失敗になる。`deny_unknown_fields` は serde の層で効くため。）
 
 ## `token` に必要な権限
 
