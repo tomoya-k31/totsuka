@@ -1,7 +1,7 @@
 > 🌐 [English](slack-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:d53d06728a766396bdd56340dcfcc8bc00d3392b76ddaa6d7a20574120780ebd -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:58fc01583e754a7029a9a90678c1d47eda29374b1ec2a9824a31ab32165bc6d6 -->
 
 # Slack ソースのセットアップ
 
@@ -24,15 +24,23 @@
 
 totsuka がシークレットの値を保存することはない。設定に書くのは**参照**で、値は実行時に取得される。
 
-1Password なら、item を作って 3 つのフィールドに値を入れ、参照を控える:
+**`setup` が書く参照に合わせること。** 1Password バックエンドを選ぶと `setup` は vault `Dev` / item `totsuka` の固定形を書くので、別の場所に保管すると設定が実在しないものを指したままになり、**プラグインが起動できない**:
 
 ```text
-op://Dev/Slack/user_token   ← xoxp-…
-op://Dev/Slack/app_token    ← xapp-…
-op://Dev/Slack/bot_token    ← xoxb-…（通知 DM を使う場合のみ）
+op://Dev/totsuka/slack-user   ← xoxp-…
+op://Dev/totsuka/slack-app    ← xapp-…
+op://Dev/totsuka/slack-bot    ← xoxb-…（通知 DM を使う場合のみ）
 ```
 
-macOS なら Keychain でもよい。参照は `keychain:totsuka/slack-user` の形になる:
+```sh
+op item edit totsuka slack-user='xoxp-…'   # item が無ければ先に作る
+op item edit totsuka slack-app='xapp-…'
+op item edit totsuka slack-bot='xoxb-…'    # 任意
+```
+
+**vault 名 `Dev` も固定である。** 別の vault を使っているなら、`setup` の生成後に `plugins/slack.toml` の参照を手で書き換える（下記のとおり手で書く場合は任意の参照でよい）。
+
+macOS なら Keychain でもよい。参照は `keychain:totsuka/slack-user` の形になり、これは `setup` が書くものと一致する:
 
 ```sh
 security add-generic-password -U -s totsuka -a slack-user -w 'xoxp-…'
@@ -73,6 +81,8 @@ poll_interval_secs = 5   # Socket Mode バッファの吸い上げ周期
 # 任意: 自分が :eyes: を付けるとメッセージがタスクになる。
 # catch-all より前に置くこと —— `trigger = {}` は全マッチなので、
 # その後ろに置いたリアクション workflow には絶対に到達しない。
+# 順序を間違えると `totsuka config validate` が warning で名指しする
+# （"move X above Y"）ので、書いたら一度通すこと。
 # 他人が付けても起動せず、それを緩和する設定は無い。
 # 名前はコロン有無どちらでもよい。👀 は `eyes`、👁 は `eye` で別の絵文字。
 [[workflows]]
@@ -95,9 +105,9 @@ output = "source"        # 結果は承認フローへ渡る
 `~/.config/totsuka/plugins/slack.toml`:
 
 ```toml
-app_token = "op://Dev/Slack/app_token"
-user_token = "op://Dev/Slack/user_token"
-bot_token = "op://Dev/Slack/bot_token"    # 任意: 通知 DM。
+app_token = "op://Dev/totsuka/slack-app"
+user_token = "op://Dev/totsuka/slack-user"
+bot_token = "op://Dev/totsuka/slack-bot"  # 任意: 通知 DM。
                                           # 省略すると DM が来ないだけ
 target_user_id = "U012AB3CD"              # 自分のメンバー ID
 reply_style = "丁寧語で簡潔に"            # 任意
@@ -137,11 +147,11 @@ totsuka run --watch       # ソケット接続に常駐する
 | `doctor` が `invalid_auth` / `token_revoked` を報告する | トークンが失効している。再発行し、保管先の値を更新する |
 | `doctor` が identity mismatch を報告する | 他人のトークンか、`target_user_id` の誤記。他人名義での投稿を防ぐため意図的に拒否している |
 | メンションがタスクにならない | メンションが `@自分` か（見えるのは自分が参加しているチャンネルだけ）、`run --watch` が動いているか、そして通常の投稿か（編集や bot の投稿は対象外）を確認する |
-| リアクションを付けてもタスクにならない | `trigger = { reaction = "…" }` を持つ workflow があるか、それが catch-all の `trigger = {}` より**前**にあるか、絵文字名が一致しているか（👀 は `eyes`、👁 は `eye`。カスタム絵文字は実際に押された名前で届くので alias も列挙する）、**付けたのが自分か**、そして `reactions:read` を含む manifest でアプリを再インストールしたかを確認する。このスコープが無いとイベント自体が届かず、**しかも何もエラーを出さない** |
+| リアクションを付けてもタスクにならない | `trigger = { reaction = "…" }` を持つ workflow があるか、それが catch-all の `trigger = {}` より**前**にあるか（`totsuka config validate` が警告し、直し方まで名指しする）、絵文字名が一致しているか（👀 は `eyes`、👁 は `eye`。カスタム絵文字は実際に押された名前で届くので alias も列挙する）、**付けたのが自分か**、`reactions:read` を含む manifest でアプリを再インストールしたか（このスコープが無いとイベント自体が届かず、**しかも何もエラーを出さない**）、そして**そのメッセージを既にメンション経由で処理していないか**を確認する。両経路は処理済みメッセージの集合を共有しているので、すでにタスクになったメッセージにリアクションを付けても何も起きない |
 | リアクションを付け直しても再実行されない | 意図した挙動。成功したメッセージは二度と処理されないので、外して付け直してもエージェントが二重に走ることはない。**取得に失敗した**メッセージはこの方法で再試行できる |
 | 返信案は届くがボタンが効かない | 24 時間で失効する。または下書きが 1024 件を超えて追い出された。self-DM の控えから手で返信するか、もう一度メンションする。下書きは再起動しても残る |
 | アプリのスコープを変更した | スコープ変更にはアプリの再インストールが必要で、**`xoxp-` と `xoxb-` の両方が再発行される**。保管先の値を両方更新してから `doctor` を実行する。片方だけ直すとアプリは半分壊れたままになる |
-| チャンネル prefix のルールが効かず、常にピッカーが出る | アプリがチャンネル名を読めていない。`channels:read` と `groups:read` を含む manifest で再インストールし、上と同じ手順でトークンを更新する |
+| チャンネル prefix のルールが効かず、毎回 LLM 分類（LLM 未設定ならピッカー）に落ちる | アプリがチャンネル名を読めていない。`channels:read` と `groups:read` を含む manifest で再インストールし、上と同じ手順でトークンを更新する |
 | 通知 DM が届かない | `bot_token` が設定され有効か（`doctor` が probe する）、起動ログに bot DM の解決失敗の警告が無いか、Slack でこのアプリの DM をミュートしていないかを確認する |
 
 ---

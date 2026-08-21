@@ -25,17 +25,25 @@ owner: tomoya-k31
 
 # 2. トークンを保管する
 
-**通常は 1Password に置く。** item を作って 3 つのフィールドに値を入れ、参照文字列を控える
-（この Quickstart では vault `Dev` / item `Slack` を例にする）。手順 4 で
-`plugins/slack.toml` に書くのは**この参照であって、トークンの値ではない**。
+**通常は 1Password に置く。** 手順 3 で `plugins/slack.toml` に書かれるのは**参照であって、トークンの値ではない**。
+
+**`setup` が書く参照に合わせること。** 1Password バックエンドを選ぶと `setup` は vault `Dev` / item `totsuka` の固定形（`SecretBackend::reference`）を書くので、別の item に入れると**設定が指す先と実際の保管先が食い違い、プラグインが起動できない**:
 
 ```text
-op://Dev/Slack/user_token   ← xoxp-…
-op://Dev/Slack/app_token    ← xapp-…
-op://Dev/Slack/bot_token    ← xoxb-…（通知ナッジを使う場合）
+op://Dev/totsuka/slack-user   ← xoxp-…
+op://Dev/totsuka/slack-app    ← xapp-…
+op://Dev/totsuka/slack-bot    ← xoxb-…（通知ナッジを使う場合）
 ```
 
-macOS でしか使わないなら Keychain でもよい（参照は `keychain:totsuka/slack-user` の形になる）:
+```sh
+op item edit totsuka slack-user='xoxp-…'   # item が無ければ先に作る
+op item edit totsuka slack-app='xapp-…'
+op item edit totsuka slack-bot='xoxb-…'    # 通知ナッジを使う場合
+```
+
+**vault 名 `Dev` も固定である。** 別の vault を使っているなら、`setup` の生成後に `plugins/slack.toml` の参照を手で書き換える（手で書く場合は下記のとおり任意の参照でよい）。
+
+macOS でしか使わないなら Keychain でもよい（参照は `keychain:totsuka/slack-user` の形になり、こちらも `setup` の生成と一致する）:
 
 ```sh
 security add-generic-password -U -s totsuka -a slack-user -w 'xoxp-…'
@@ -79,6 +87,8 @@ poll_interval_secs = 5   # Socket Mode バッファの吸い上げ周期（推�
 
 # 任意: 自分が :eyes: を付けたらタスクにする（#396）。catch-all より前に置くこと
 # —— trigger = {} は全マッチなので、後ろに置くと絶対に届かない。
+# 順序を間違えると `totsuka config validate` が warning で名指しする
+# （"move X above Y"）ので、書いたら一度通すこと。
 # 他人が同じ絵文字を付けても起動しない（緩和する設定は無い）。
 # 名前はコロン有無どちらでも可。👀 は eyes、👁 は eye で別物。
 [[workflows]]
@@ -101,9 +111,9 @@ output = "source"        # result/publish → 承認フローへ
 `~/.config/totsuka/plugins/slack.toml`:
 
 ```toml
-app_token = "op://Dev/Slack/app_token"
-user_token = "op://Dev/Slack/user_token"
-bot_token = "op://Dev/Slack/bot_token"    # 任意: 返信案/ピッカー到着の通知 DM（#305）。
+app_token = "op://Dev/totsuka/slack-app"
+user_token = "op://Dev/totsuka/slack-user"
+bot_token = "op://Dev/totsuka/slack-bot"  # 任意: 返信案/ピッカー到着の通知 DM（#305）。
                                             # 省略するとナッジなし（それ以外は同じ動作）
 target_user_id = "U012AB3CD"        # 自分のメンバー ID
 reply_style = "丁寧語で簡潔に"      # 任意

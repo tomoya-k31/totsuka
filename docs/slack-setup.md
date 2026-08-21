@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:d53d06728a766396bdd56340dcfcc8bc00d3392b76ddaa6d7a20574120780ebd -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:58fc01583e754a7029a9a90678c1d47eda29374b1ec2a9824a31ab32165bc6d6 -->
 
 # Setting up the Slack source
 
@@ -23,15 +23,23 @@ Also copy your own member id (`U…`): your Slack profile → **⋯** → **Copy
 
 totsuka never stores a secret value — the config holds a *reference*, and the value is fetched at run time.
 
-With 1Password, create an item with three fields and note the references:
+**Match the references `setup` writes.** Choosing the 1Password backend makes `setup` write a fixed shape — vault `Dev`, item `totsuka` — so storing the tokens anywhere else leaves the configuration pointing at something that does not exist, and the plugin cannot start:
 
 ```text
-op://Dev/Slack/user_token   ← xoxp-…
-op://Dev/Slack/app_token    ← xapp-…
-op://Dev/Slack/bot_token    ← xoxb-…  (only if you want the notification DM)
+op://Dev/totsuka/slack-user   ← xoxp-…
+op://Dev/totsuka/slack-app    ← xapp-…
+op://Dev/totsuka/slack-bot    ← xoxb-…  (only if you want the notification DM)
 ```
 
-On macOS the Keychain works too; the references then look like `keychain:totsuka/slack-user`:
+```sh
+op item edit totsuka slack-user='xoxp-…'   # create the item first if it does not exist
+op item edit totsuka slack-app='xapp-…'
+op item edit totsuka slack-bot='xoxb-…'    # optional
+```
+
+**The vault name `Dev` is fixed too.** If your vault is called something else, edit the references in `plugins/slack.toml` after `setup` generates it. (Writing the file by hand, below, lets you use any reference you like.)
+
+On macOS the Keychain works too. Those references look like `keychain:totsuka/slack-user`, and they match what `setup` writes:
 
 ```sh
 security add-generic-password -U -s totsuka -a slack-user -w 'xoxp-…'
@@ -71,7 +79,9 @@ poll_interval_secs = 5   # how often the socket-mode buffer is drained
 
 # Optional: reacting with :eyes: yourself turns a message into a task.
 # Put it BEFORE the catch-all — `trigger = {}` matches everything, so a
-# reaction workflow placed after it can never be reached.
+# reaction workflow placed after it can never be reached. Get the order
+# wrong and `totsuka config validate` names it in a warning ("move X
+# above Y"), so run that once after editing.
 # Someone else reacting does not start anything, and there is no setting
 # that relaxes this. Names take or omit the colons; 👀 is `eyes` and
 # 👁 is `eye`, which are different emoji.
@@ -95,9 +105,9 @@ output = "source"        # the result goes through the approval flow
 In `~/.config/totsuka/plugins/slack.toml`:
 
 ```toml
-app_token = "op://Dev/Slack/app_token"
-user_token = "op://Dev/Slack/user_token"
-bot_token = "op://Dev/Slack/bot_token"    # optional: the notification DM.
+app_token = "op://Dev/totsuka/slack-app"
+user_token = "op://Dev/totsuka/slack-user"
+bot_token = "op://Dev/totsuka/slack-bot"  # optional: the notification DM.
                                           # Omit it and there is simply no DM.
 target_user_id = "U012AB3CD"              # your member id
 reply_style = "Keep it short and polite"  # optional
@@ -138,11 +148,11 @@ To try it end to end, have someone mention you. After the agent finishes, a draf
 | `doctor` reports `invalid_auth` or `token_revoked` | The token was revoked. Reissue it and update wherever you stored it |
 | `doctor` reports an identity mismatch | The token belongs to someone else, or `target_user_id` is wrong. This is refused on purpose, to prevent posting as another person |
 | Mentions do not become tasks | Check that the mention is `@you` (only channels you are in are visible), that `run --watch` is running, and that the message is a plain post — edits and bot posts are ignored |
-| Reacting does not create a task | Check that a workflow has `trigger = { reaction = "…" }`, that it sits **before** the catch-all `trigger = {}`, that the emoji name matches (👀 is `eyes`, 👁 is `eye`; a custom emoji arrives under the name actually clicked, so list aliases too), that **you** were the one who reacted, and that the app was reinstalled with a manifest containing `reactions:read` — without that scope the event never arrives **and nothing reports an error** |
+| Reacting does not create a task | Check that a workflow has `trigger = { reaction = "…" }`, that it sits **before** the catch-all `trigger = {}` (`totsuka config validate` warns about this and names the fix), that the emoji name matches (👀 is `eyes`, 👁 is `eye`; a custom emoji arrives under the name actually clicked, so list aliases too), that **you** were the one who reacted, that the app was reinstalled with a manifest containing `reactions:read` — without that scope the event never arrives **and nothing reports an error** — and that the message was not **already handled as a mention**: both paths share one set of processed messages, so reacting to a message that already became a task does nothing |
 | Re-adding a reaction does not re-run it | Intended. A message that was handled successfully is not handled again, so removing and re-adding a reaction cannot start a second agent. A message whose fetch **failed** can be retried this way |
 | The draft arrives but the buttons no longer work | They expire after 24 hours, or were evicted once more than 1024 drafts accumulated. Reply by hand from the self-DM copy, or mention again. Drafts survive a restart |
 | You changed the app's scopes | A scope change requires reinstalling the app, which **reissues both `xoxp-` and `xoxb-`**. Update both stored values, then run `doctor`. Updating only one leaves the app half-broken |
-| Channel-prefix rules never apply and you always get the picker | The app cannot read channel names. Reinstall with a manifest containing `channels:read` and `groups:read`, then update the stored tokens as above |
+| Channel-prefix rules never apply, so every mention falls back to the classifier LLM (or to the picker, if no LLM is configured) | The app cannot read channel names. Reinstall with a manifest containing `channels:read` and `groups:read`, then update the stored tokens as above |
 | No notification DM arrives | Check that `bot_token` is set and valid (`doctor` probes it), look for a warning about resolving the bot DM in the startup log, and check that you have not muted the app's DMs in Slack |
 
 ---

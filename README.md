@@ -120,6 +120,7 @@ in the [setup playbook](docs/setup-playbook.md).
 
 - **What totsuka is**: [docs/orchestrator-spec.md](./docs/orchestrator-spec.md)
 - **Setup playbook**: [docs/setup-playbook.md](./docs/setup-playbook.md)
+- **Slack setup**: [docs/slack-setup.md](./docs/slack-setup.md)
 - **Configuration reference**: [docs/config-reference.md](./docs/config-reference.md)
 - **Operations guide** (doctor / worktree cleanup / FAQ): [docs/operations-guide.md](./docs/operations-guide.md)
 - **Plugin development guide**: [docs/plugin-dev-guide.md](./docs/plugin-dev-guide.md)
