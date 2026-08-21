@@ -14,7 +14,8 @@ it back to the source.
   — third-party agent IDEs, each driven over totsuka's plugin protocol
 - **Isolation**: one task = one repo = one worktree = one branch
 - **Output policies**: open a pull request, write back to the source, or none
-- **Local-first**: a single CLI binary, no daemon, secrets stay in the Keychain
+- **Local-first**: a single CLI binary, no daemon, secrets stay in your own
+  secret store (1Password, Keychain, env, or a command)
 
 > Status: 0.4.0, targeting the v1 scope. macOS only for now; the code is
 > XDG-compliant and platform boundaries are abstracted for a future Linux

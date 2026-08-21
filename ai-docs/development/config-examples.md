@@ -214,7 +214,7 @@ max_files = 7         # 日次ログの保持世代数
 
 # ── Claude Code フック受信 ───────────────────────────────────
 [hooks]
-auth_token_ref = "keychain:totsuka/hook-token"                    # 運用上ほぼ必須（後述）
+auth_token_ref = "op://Dev/totsuka/hook-token"                    # 運用上ほぼ必須（後述）
 socket_path = "${XDG_RUNTIME_DIR}/totsuka/agent-events.sock"     # 省略時は組み込み既定
 spool_dir = "${XDG_STATE_HOME}/totsuka/hooks/spool"               # POST 失敗時の退避先
 block_retry_limit = 3                                             # Stop フック差し戻しの連続上限
@@ -270,7 +270,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 
 | 形式 | 例 | 選ぶ基準 |
 |---|---|---|
-| `op://<vault>/<item>/<field>` | `op://Dev/Openrouter/api_key` | **長命の秘密の推奨。**cross-platform で、非 macOS でも動く唯一の実働バックエンド。1Password CLI へのシェルアウトなので事前に `op signin` 済みであること |
+| `op://<vault>/<item>/<field>` | `op://Dev/Openrouter/api_key` | **長命の秘密の推奨。**cross-platform で、非 macOS でも動く唯一のシークレットストア（`keychain:` は macOS 専用）。1Password CLI へのシェルアウトなので事前に `op signin` 済みであること |
 | `cmd:<command>` | `cmd:gh auth token` | **別ツールが管理・ローテートする credential の推奨**（#444）。解決のたびにコマンドを実行して stdout を使うので、コピーの陳腐化が起きない。ローテートする token を op/keychain に写すとコピーが黙って死ぬ — その罠がこの形式の起点 |
 | `keychain:<service>/<account>` | `keychain:totsuka/hook-token` | macOS 専用。1Password を使っていない環境向け。`security add-generic-password` で登録済みであること |
 | `${ENV_VAR}` を含む文字列 | `${GITHUB_TOKEN}` | CI・使い捨て環境向け。**未設定だと起動時エラー**（既定値へのフォールバックはしない）。永続運用には非推奨 |
@@ -448,7 +448,7 @@ agent = "herdr"
   参照を設定したのに解決できない場合は構成によらず fail
 
 ```bash
-# 例: ランダムトークンを Keychain に入れて参照する
+# 例: ランダムトークンを生成して保管する（macOS Keychain の場合。1Password なら item を作る）
 security add-generic-password -s totsuka -a hook-token -w "$(openssl rand -hex 32)"
 ```
 
@@ -499,7 +499,7 @@ target_user_id = "U01ABCDEF"               # 必須。自分の Slack ユーザ�
 # config.toml 側の `[[workflows]].trigger = { reaction = "eyes" }` へ移行する
 # （#396。下の「絵文字でワークフローを選ぶ」参照）。併用すると CONFIG_INVALID。
 # どちらの記法でも reactions:read スコープが必要
-# → 追加後はアプリ再インストール + Keychain 2 本更新。
+# → 追加後はアプリ再インストール + 保管先の値を 2 本更新。
 trigger_reactions = ["eyes"]
 
 thread_context_limit = 6                   # タスク本文に含めるスレッド直近メッセージ数（既定 6）
@@ -632,7 +632,7 @@ model = "anthropic/claude-haiku-4-5"
 api_key_ref = "op://Dev/Openrouter/api_key"
 
 [hooks]
-auth_token_ref = "keychain:totsuka/hook-token"
+auth_token_ref = "op://Dev/totsuka/hook-token"
 
 [[workflows]]
 name = "slack-reply"

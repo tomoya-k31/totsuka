@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:0e5008a0b115a4460df3ee83452435dfecf70ad92eba8dac3bfc219e5f3d238d -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:9c09ccaceda6e9c015e2cf0a51e40e21cbe5dfe7ad7b20cfcf8d6bf3a17d4816 -->
 
 # セットアップ Playbook
 
@@ -41,7 +41,7 @@ totsuka setup
 
 1. **どのレシピから始めるか**（GitHub 最小構成 / 設計→実装ハンドオフ / Slack 本人名義返信 / 人間検収必須）
 2. **リポジトリのパスと名前**（複数可）
-3. **シークレットをどこに置くか**（Keychain / 1Password / 環境変数）— **値そのものは一切聞かれない**
+3. **シークレットをどこに置くか**（1Password / Keychain / 環境変数）— **値そのものは一切聞かれない**
 4. レシピが要求する項目だけ（GitHub Project の owner や番号、Slack のメンバー ID、LLM のモデル名など）
 
 計画が表示され、確認して初めて副作用が出る。**質問の途中で Ctrl-C しても何も残らない。**

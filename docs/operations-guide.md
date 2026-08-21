@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:66971dc28817507b8866d2bd24a68deb3d6b29a9fd139204d0d13f338e74921d -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:04d6fa4d4c6fec8dfca9867af8c9bdfc3d01751b29246e61c620d38a69f302f7 -->
 
 # Operations guide
 
@@ -17,7 +17,7 @@ Day-to-day operation: reading `doctor`, cleaning up worktrees and panes, stoppin
 | `state-db` | The state database opens. Shows the schema version and which totsuka version applied it | If it does not exist yet, run `totsuka run` once. If the database is too new (you downgraded), update totsuka to at least the version named in the message. If it is too old (you just upgraded), run `totsuka run` once — only `run` applies schema changes; `status`, `task`, `focus`, and `doctor` do not |
 | `worktree-location` | The configured worktree location expands | Export the missing `${ENV}` variable, or drop the key to fall back to the default |
 | `plugin:{name}` | The plugin starts and answers a config validation request | Check that it is installed, and fix `plugins/{name}.toml` |
-| `llm` | `api_key_ref` resolves (it does not check whether the key works) | Export the environment variable, or add it to your keychain |
+| `llm` | `api_key_ref` resolves (it does not check whether the key works) | Create a 1Password item, export the environment variable, or add it to your keychain |
 | `llm-online` | The provider accepted the API key (only with `--online`) | On 401 or 403, reissue the key with your provider and update `[llm].api_key_ref`. Unreachable hosts and 5xx responses stay warnings |
 | `worktrees` | No orphaned worktrees | Offers to clean them up interactively |
 | `panes` | No orphaned panes | Offers to release them interactively |

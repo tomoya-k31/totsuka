@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:66971dc28817507b8866d2bd24a68deb3d6b29a9fd139204d0d13f338e74921d -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:04d6fa4d4c6fec8dfca9867af8c9bdfc3d01751b29246e61c620d38a69f302f7 -->
 
 # 運用ガイド
 
@@ -18,7 +18,7 @@
 | `state-db` | 状態 DB が開ける。スキーマ版数と、それを適用した totsuka の版数を表示する | まだ無いなら一度 `totsuka run`。DB が新しすぎる（ダウングレードした）ならメッセージが名指す版以降へ totsuka を更新する。DB が古い（アップグレード直後）なら一度 `totsuka run` — スキーマを適用するのは `run` だけで、`status` / `task` / `focus` / `doctor` は適用しない |
 | `worktree-location` | 明示した worktree の配置先が展開できる | `${ENV}` の未設定変数を export するか、キーを削って既定値に戻す |
 | `plugin:{name}` | プラグインが起動し、設定の検証に応答する | インストール済みか確認し、`plugins/{name}.toml` を修正する |
-| `llm` | `api_key_ref` が解決する（鍵が有効かは見ない） | 環境変数を export するか Keychain に登録する |
+| `llm` | `api_key_ref` が解決する（鍵が有効かは見ない） | 1Password に item を作る、環境変数を export する、Keychain に登録する、のいずれか |
 | `llm-online` | プロバイダが API キーを受理した（`--online` 時のみ） | 401 / 403 ならプロバイダで鍵を再発行し `[llm].api_key_ref` を更新する。到達不能や 5xx は警告止まり |
 | `worktrees` | 孤児 worktree が無い | 対話的に掃除を提案する |
 | `panes` | 孤児 pane が無い | 対話的に解放を提案する |

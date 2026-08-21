@@ -52,7 +52,7 @@ totsuka setup
 
 1. **どのレシピから始めるか**（GitHub 最小構成 / 設計→実装ハンドオフ / Slack 本人名義返信 / 人間検収必須）
 2. **リポジトリのパスと名前**（複数可）
-3. **シークレットをどこに置くか**（Keychain / 1Password / 環境変数）— **値そのものは一切聞かれない**
+3. **シークレットをどこに置くか**（1Password / Keychain / 環境変数）— **値そのものは一切聞かれない**
 4. レシピが要求する穴だけ（GitHub Project の owner / owner_type / 番号 / 自分の login、Slack のメンバー ID、LLM の model）
 
 計画が印字され、確認するとそこから先が副作用を持つ。**質問中の Ctrl-C は何も残さない。**
@@ -118,7 +118,7 @@ totsuka plugin install --from-source slack --enable
 
 ## Slack — scope を変えたら 2 本とも再発行される
 
-**これが一番踏みやすい。** Slack アプリの scope を変更すると再インストールが必要になり、`xoxp-`（User）と `xoxb-`（Bot）が**両方**新しくなる。片方だけ Keychain を更新すると、更新しなかった側の機能だけが壊れる:
+**これが一番踏みやすい。** Slack アプリの scope を変更すると再インストールが必要になり、`xoxp-`（User）と `xoxb-`（Bot）が**両方**新しくなる。片方だけ保管先を更新すると、更新しなかった側の機能だけが壊れる:
 
 ```bash
 security add-generic-password -U -s totsuka -a slack-user -w 'xoxp-…'

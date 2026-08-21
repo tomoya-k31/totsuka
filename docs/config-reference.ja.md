@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:d2433ef3f6bc1dd244755dd6f6434d8c2842dbf44c411b1736e5f4784fda25d7 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:40fce3321081ddb6997d13f4781eb90078417f10d94ce04ecadb95847d66169d -->
 
 # 設定リファレンス
 
@@ -19,16 +19,16 @@
 
 **平文のシークレットを設定に書かない。** 文字列値は次のいずれかにできる。
 
-| 形式 | 解決元 |
-|---|---|
-| `keychain:<service>/<account>` | macOS Keychain |
-| `op://<vault>/<item>/<field>` | 1Password |
-| `cmd:<command>` | コマンドの標準出力 |
-| `${ENV_VAR}` を含む文字列 | 環境変数 |
+| 形式 | 解決元 | 使いどころ |
+|---|---|---|
+| `op://<vault>/<item>/<field>` | 1Password | **通常はこれ。** macOS 以外で動く唯一のシークレットストア |
+| `cmd:<command>` | コマンドの標準出力 | 別ツールが管理・ローテートする credential（例 `cmd:gh auth token`） |
+| `${ENV_VAR}` を含む文字列 | 環境変数 | すでに export してある値を使うとき |
+| `keychain:<service>/<account>` | macOS Keychain | macOS 専用 |
 
 `~` と `${ENV}` はパスでも展開される。
 
-**`op://`** は 1Password CLI を呼び出す形式で、事前に `op signin` 済みであることを前提とする。どちらの設定ファイルの**任意の文字列値**でも使え、CLI がクロスプラットフォームなので **macOS 以外で動く唯一のバックエンド**でもある。CLI 未導入・item 不在・未サインインは、それぞれ具体的で行動につながるエラーになる。`totsuka doctor` が 1Password を検査するのは、設定に `op://` 参照が実際にあるときだけである。
+**`op://`** は 1Password CLI を呼び出す形式で、事前に `op signin` 済みであることを前提とする。どちらの設定ファイルの**任意の文字列値**でも使え、CLI がクロスプラットフォームなので **macOS 以外で動く唯一のシークレットストア**でもある（`keychain:` が macOS 専用のほう。`${ENV_VAR}` と `cmd:` はどこでも動くが、値を持つのは環境や別ツールである）。CLI 未導入・item 不在・未サインインは、それぞれ具体的で行動につながるエラーになる。`totsuka doctor` が 1Password を検査するのは、設定に `op://` 参照が実際にあるときだけである。
 
 **`cmd:`** はコマンドを `/bin/sh -c` で実行し、その標準出力を秘密値として使う（末尾の改行は除去される）。`token = "cmd:gh auth token"` のように、**別のツールが管理・ローテートしている credential** 向けである — 毎回その時点の値を取るので、コピーが黙って古くなることがない。非ゼロ終了や空出力は起動時エラーで、stderr の先頭行を引用する（標準出力はどこにも引用しない）。コマンドが走るのは `totsuka run` がシークレットを解決するときだけで、パースや `config show` では実行されない。
 
@@ -539,7 +539,7 @@ plan_cleanup = "immediate"            # plan: 即削除（既定）
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `auth_token_ref` | string? | なし | フックの POST を認証する Bearer トークンのシークレット参照（例 `keychain:totsuka/hook-token`）。**運用上は必須** — 未設定だとソケットのパーミッションだけが防御になる |
+| `auth_token_ref` | string? | なし | フックの POST を認証する Bearer トークンのシークレット参照（例 `op://Dev/totsuka/hook-token`）。**運用上は必須** — 未設定だとソケットのパーミッションだけが防御になる |
 | `socket_path` | string? | 組み込み既定 | 受信ソケットのパス |
 | `spool_dir` | string? | 組み込み既定 | POST に失敗したイベントを退避するディレクトリ |
 | `block_retry_limit` | int? | 3 | 停止のブロック差し戻しの連続上限。超えるとエスカレートする |
