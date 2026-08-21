@@ -121,6 +121,7 @@ totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes   # 次のマシ�
 
 - **totsuka とは**: [docs/orchestrator-spec.ja.md](./docs/orchestrator-spec.ja.md)
 - **セットアップ Playbook**: [docs/setup-playbook.ja.md](./docs/setup-playbook.ja.md)
+- **Slack セットアップ**: [docs/slack-setup.ja.md](./docs/slack-setup.ja.md)
 - **設定リファレンス**: [docs/config-reference.ja.md](./docs/config-reference.ja.md)
 - **運用ガイド**（doctor / worktree 掃除 / FAQ）: [docs/operations-guide.ja.md](./docs/operations-guide.ja.md)
 - **プラグイン開発ガイド**: [docs/plugin-dev-guide.ja.md](./docs/plugin-dev-guide.ja.md)
