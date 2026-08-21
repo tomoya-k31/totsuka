@@ -250,3 +250,81 @@ jobs:
             "${PREFIX}.tar.gz" \
             "${PREFIX}.tar.gz.sha256" \
             --clobber
+
+      # Point the Homebrew tap at the release that was just published. A step
+      # in this job rather than a job of its own: Actions billing rounds every
+      # job up to a full minute (see ci.yml), the sha256 is already on disk
+      # here, and running after the upload means the formula can never point at
+      # a URL that 404s.
+      #
+      # A scripted step rather than a third-party action: the work is two `sed`
+      # expressions and a push, and an action would need a SHA pin, a review on
+      # every bump, and access to a token that can write to the tap.
+      - name: Update the Homebrew formula in the tap
+        # Gated on visibility, not on the secret. A Homebrew formula fetches
+        # its `url` with plain curl and no GitHub auth, so while this
+        # repository is private the tap cannot work at all and there is
+        # nothing worth bumping.
+        #
+        # Deliberately NOT `if: secrets.HOMEBREW_TAP_TOKEN != ''`. That reads
+        # the wrong hazard: an *expired* token is non-empty and would fail
+        # loudly anyway, while an *unset, deleted, or renamed* secret would
+        # green-skip every release forever and leave the tap silently behind —
+        # exactly the failure the `grep -q` asserts below exist to convert
+        # into red. Gating on visibility instead means this step turns itself
+        # on at public-ization with no human step to remember, and a missing
+        # secret is loud from that moment on.
+        if: ${{ !github.event.repository.private }}
+        env:
+          # A *different* fine-grained PAT from RELEASE_PLEASE_TOKEN, which is
+          # scoped to this repository only and cannot push to the tap.
+          # Contents: Read and write on tomoya-k31/homebrew-tap, nothing else.
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_REPO: tomoya-k31/homebrew-tap
+        run: |
+          set -euo pipefail
+
+          version="${TAG#v}"
+          sha="$(cat "${PREFIX}.tar.gz.sha256")"
+
+          work="$(mktemp -d)"
+          # The token ends up in ${work}/.git/config, so remove the clone on
+          # every exit path, not just the last line of the happy path.
+          trap 'rm -rf "${work}"' EXIT
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "${work}"
+          formula="${work}/Formula/totsuka.rb"
+
+          # Rewrite only the two lines carrying a release identity. The `url` is
+          # derived from `version` inside the formula, so it is never edited
+          # here and cannot drift from the tag. Anchored patterns, so a sha256
+          # mentioned in a comment or in `test do` is left alone. BSD sed on
+          # macos-latest requires the -i suffix argument.
+          sed -i.bak \
+            -e "s|^  version \".*\"\$|  version \"${version}\"|" \
+            -e "s|^  sha256 \".*\"\$|  sha256 \"${sha}\"|" \
+            "${formula}"
+          rm -f "${formula}.bak"
+
+          # Fail loudly if the rewrite did not take. A silently unedited formula
+          # keeps pointing at the previous release forever and `brew upgrade`
+          # reports "already up-to-date" — a failure nobody would notice until
+          # someone asked why they were a version behind.
+          grep -q "^  version \"${version}\"\$" "${formula}"
+          grep -q "^  sha256 \"${sha}\"\$"       "${formula}"
+
+          git -C "${work}" config user.name "github-actions[bot]"
+          git -C "${work}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "${work}" add Formula/totsuka.rb
+          if git -C "${work}" diff --cached --quiet; then
+            echo "Formula already at ${TAG}; nothing to push."
+            exit 0
+          fi
+          git -C "${work}" commit -m "totsuka ${version}"
+          # One rebase retry: a concurrent commit in the tap (a hand edit, a
+          # second formula) would otherwise reject the push as non-fast-forward
+          # and turn an already-published release red.
+          git -C "${work}" push || {
+            git -C "${work}" pull --rebase
+            git -C "${work}" push
+          }
