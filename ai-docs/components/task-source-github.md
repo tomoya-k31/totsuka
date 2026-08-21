@@ -1,10 +1,10 @@
 ---
 type: Component
 title: task-source-github プラグイン
-description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、Issue コメント publish を行う。
+description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、Issue コメント publish を行う。呼び出す 5 つの GraphQL 操作と、そこから導いたトークン権限（未実測）を含む。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -44,6 +44,42 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1
 # 成果物の書き込み（#398 で非推奨）
 
 `design` / `implement` profile の workflow は `output = "none"` になり、成果物はエージェントが `gh issue comment` などで自分で書く。`result/publish` の実装は残っているが**呼ばれたときに非推奨警告を出す**（`initialize` 時ではない — その経路を通らない構成に、対処しようのない警告を出しても雑音になる）。実体の削除は 0.3。代わりに `instructions_kind`（コアが `TriggerInfo.trigger` に焼き込む）から `[prompts]` の指示文を選び、`Task.instructions` に載せる — これが書き込み先をエージェントへ伝える唯一の経路で、**旧プラグインでは無言で欠落する**（capability 宣言が無いので probe できない。コアと同時にリリースすること）。
+
+# トークンに必要な権限
+
+**この節は導出であって実測ではない。** スコープ名は GitHub API の性質であってこのリポジトリの性質ではないので、コードからは検証できない。下の「実際に呼んでいるもの」は確定した事実で、そこから必要権限を GitHub のドキュメントに従って導いている。**最小値は測っていない**（`verified` を付けていないのはこのため）。
+
+## 実際に呼んでいるもの
+
+全て `https://api.github.com/graphql` への単一 POST に bearer トークンを載せる形で、操作は **5 つだけ**である。REST も Contents API も使わない。
+
+| 操作 | 触るもの |
+|---|---|
+| Project アイテム取得 | `user`\|`organization` → `projectV2(number:)` → `items`。アイテムごとに Issue の `id number title body url`、`repository { name }`、`assignees`、`labels` |
+| Project / フィールド / アイテムの id 解決 | `projectV2 { id, field(name:) { options }, items { id } }` |
+| カード移動 | `updateProjectV2ItemFieldValue` |
+| 結果の投稿 | Issue への `addComment(subjectId:)` |
+| 疎通確認 | `viewer { login }` |
+
+## 導いた権限
+
+**fine-grained PAT**:
+
+| 種別 | 権限 | なぜ |
+|---|---|---|
+| Repository | **Metadata: Read** | 必須（他の Repository 権限の前提） |
+| Repository | **Issues: Read and write** | `addComment`、および Project アイテム経由で読む Issue の本文・ラベル・アサイニー |
+| Organization **または** Account | **Projects: Read and write** | ProjectsV2 の読み取りと `updateProjectV2ItemFieldValue`。org 所有のボードなら Organization permissions、user 所有なら Account permissions |
+
+**Contents は不要**である。このトークンでリポジトリの中身を読み書きすることはない。
+
+**classic PAT**: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
+
+## PR 作成はこのトークンの仕事ではない
+
+`implement` profile のワークフローが PR を開くとき、`gh pr create` を実行するのは**エージェント自身**であって、このプラグインではない。エージェントはペインの環境にある**あなた自身の `gh` 認証**を使う。
+
+したがって `gh auth login` は**別個の前提条件**であり、ここで設定する PAT とは無関係である。`totsuka doctor` はこれをエージェントツールの検査として別に見る。
 
 # 関連
 

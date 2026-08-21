@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:40fce3321081ddb6997d13f4781eb90078417f10d94ce04ecadb95847d66169d -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:ec48c072cdf2de10983e95f9d4c7efa66eb7cfc681b3cbee1de0fa1c1db16082 -->
 
 # Configuration reference
 
@@ -544,6 +544,56 @@ Settings for receiving agent CLI hook events. Every key is optional.
 | `block_retry_limit` | int? | 3 | Consecutive stop-hook blocks before escalating |
 
 If a workflow uses a hook-capable agent, leaving `auth_token_ref` unset makes `config validate` and `run` warn per workflow, and makes `doctor` **fail**. Without any hook-capable agent, `doctor` only warns. A reference that is set but cannot be resolved always fails.
+
+## `plugins/github.toml`
+
+```toml
+[plugins.github]
+enabled = true
+kind = "task_source"
+```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `token` | string | required | API token, sent as a bearer token and nothing else. See the permissions below. `cmd:gh auth token` works |
+| `owner` | string | required | Login of the project owner, a user or an organization |
+| `owner_type` | `user` \| `organization` | `user` | Whether `owner` is a user or an organization |
+| `project_number` | int | required | The ProjectsV2 number under `owner`. Must be positive, or startup fails |
+| `status_field` | string | `Status` | Name of the single-select field holding the status column |
+| `github_login` | string | required | Your own login, used to detect self-assigned tasks |
+| `in_progress_statuses` | string[] | `[]` | Status names treated as in progress and therefore skipped |
+| `status_map` | table | `{}` | Maps a totsuka status name to the project's option name. **Unmapped names are used as-is** |
+| `repos` | string[] | `[]` | Restrict intake to these repository names. Empty means any repository in the project |
+| `source_name` | string | `github` | The source name stamped on each task |
+| `api_url` | string | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise or testing |
+| `max_retries` | int | 3 | Retries for retryable API failures |
+| `[prompts]` | table | — | Overrides for the prompts this plugin sends |
+
+### Permissions the token needs
+
+**Derived from what the code calls, not measured** — the minimum has not been narrowed empirically. Every call is a POST to `https://api.github.com/graphql`, and there are only five: fetching project items, resolving project/field/item ids, `updateProjectV2ItemFieldValue`, `addComment` on an issue, and `viewer`. No REST, no Contents API.
+
+For a fine-grained PAT:
+
+| Kind | Permission |
+|---|---|
+| Repository | **Metadata: Read** (required) |
+| Repository | **Issues: Read and write** |
+| Organization **or** Account | **Projects: Read and write** — Organization for an org-owned board, Account for a user-owned one |
+
+**Contents is not needed.** For a classic PAT: `project`, plus `repo` (if private repositories are involved) or `public_repo`. A private organization's board may also need `read:org`.
+
+**Opening the pull request is not this token's job.** In an `implement` workflow the agent runs `gh pr create` itself, using your own `gh` authentication from the pane's environment. `gh auth login` is a separate prerequisite.
+
+### `[prompts]` for the GitHub source
+
+Built-in defaults are embedded in the binary; this table overrides them one key at a time, and the key names are the config keys.
+
+| Key | Used when |
+|---|---|
+| `triage_instructions` | The workflow's profile is `triage` |
+| `design_instructions` | The workflow's profile is `design` |
+| `implement_instructions` | The workflow's profile is `implement` |
 
 ## `plugins/slack.toml`
 
