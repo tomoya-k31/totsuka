@@ -4,10 +4,13 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5, at: 2026-08-01T09:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
+
+> **このファイルは人間向け `docs/slack-setup.md` / `.ja.md` の生成元である。** 変更したら `human-docs` スキルで生成物も作り直すこと（`scripts/docs-freshness.sh` が CI で検査する）。
+<!-- generates: docs/slack-setup.md docs/slack-setup.ja.md -->
 
 # ゴール
 
@@ -74,6 +77,18 @@ enabled = true
 kind = "task_source"
 poll_interval_secs = 5   # Socket Mode バッファの吸い上げ周期（推奨）
 
+# 任意: 自分が :eyes: を付けたらタスクにする（#396）。catch-all より前に置くこと
+# —— trigger = {} は全マッチなので、後ろに置くと絶対に届かない。
+# 他人が同じ絵文字を付けても起動しない（緩和する設定は無い）。
+# 名前はコロン有無どちらでも可。👀 は eyes、👁 は eye で別物。
+[[workflows]]
+name = "slack-reaction"
+source = "slack"
+trigger = { reaction = "eyes" }
+mode = "plan"
+agent = "herdr"
+output = "source"
+
 [[workflows]]
 name = "slack-reply"
 source = "slack"
@@ -93,11 +108,7 @@ bot_token = "op://Dev/Slack/bot_token"    # 任意: 返信案/ピッカー到着
 target_user_id = "U012AB3CD"        # 自分のメンバー ID
 reply_style = "丁寧語で簡潔に"      # 任意
 
-# 任意: 自分が付けるとタスクを起こす絵文字（#319）。省略 = 無効（既定）。
-# 自分宛でないメッセージを、会話にノイズを足さずタスク化できる。
-# 他人が同じ絵文字を付けても起動しない（緩和する設定は無い）。
-# 名前はコロン有無どちらでも可。👀 は eyes、👁 は eye で別物。
-trigger_reactions = ["eyes"]
+# リアクション起動は config.toml の [[workflows]].trigger.reaction で設定する（上記）。
 
 # リポジトリ候補は config.toml の [[repositories]]（name/summary/path）が
 # そのまま使われる（#109）。候補を絞る・summary を上書きするときだけ
@@ -133,7 +144,7 @@ totsuka run --watch       # Socket Mode 常駐 + 5 秒周期の吸い上げ
 | `doctor` が `invalid_auth` / `token_revoked` | トークン失効。エラーメッセージ内の再発行手順に従い、保管先（1Password / Keychain）を更新（→ [Revoke 手順](/security/slack-user-token.md)） |
 | `doctor` が identity mismatch（`target_user_id`） | 他人のトークン、または `target_user_id` の誤記。なりすまし防止で意図的に拒否している |
 | メンションがタスク化されない | ①メンション形式が `@自分` か（`user_events` は本人参加チャンネルのみ）②`run --watch` が起動中か ③subtype 付き（編集・bot 投稿）は対象外 |
-| リアクションを付けてもタスク化されない | ①`trigger_reactions` が設定されているか（既定は空 = 無効）②絵文字名が一致しているか（👀 は `eyes`、👁 は `eye`。カスタム絵文字の alias は「実際に押された名前」で届くので alias を使うなら両方列挙）③**付けたのが自分か**（他人のリアクションでは起動しない。緩和する設定は無い — [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）④`reactions:read` を含む manifest で再インストール済みか（スコープが無いとイベント自体が届かず、**エラーにもならない**）⑤同じメッセージを既に mention 経由で処理していないか（dedup は共有） |
+| リアクションを付けてもタスク化されない | ①`[[workflows]]` に `trigger = { reaction = "…" }` があり、**catch-all（`trigger = {}`）より前**に置かれているか（後ろだと全マッチに吸われて絶対に届かない）②絵文字名が一致しているか（👀 は `eyes`、👁 は `eye`。カスタム絵文字の alias は「実際に押された名前」で届くので alias を使うなら両方列挙）③**付けたのが自分か**（他人のリアクションでは起動しない。緩和する設定は無い — [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）④`reactions:read` を含む manifest で再インストール済みか（スコープが無いとイベント自体が届かず、**エラーにもならない**）⑤同じメッセージを既に mention 経由で処理していないか（dedup は共有） |
 | リアクションを付け直しても再実行されない | 意図した挙動。dedup キーが `{channel}:{メッセージの ts}` なので、**成功したものは付け直しても再実行しない**（誤って外して付け直しただけで二重にエージェントが走る方が事故が大きい）。ただし**取得に失敗した場合は付け直しで再試行できる**（失敗時はキーを消費しない）。強制的に再実行するならプロセス再起動で LRU が消える |
 | 返信案は届くがボタンが失効 | TTL 24h 超過、または FIFO 追い出し（上限 1024 件）。self-DM 記録のテキストから手動返信するか、再メンションで再実行（#122 以降、下書きは `~/.local/state/totsuka/plugins/{source_name}/drafts.json` に永続化されるため再起動ではボタンは失効しない） |
 | スコープを変更した | アプリ再インストールが必要 → **`xoxp-` と `xoxb-` の両方が再発行される**ので保管先の値を両方更新 → `doctor` で確認（[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) のコメント参照）。既存アプリへ bot user を後から足す場合（#305）も同じ — `slack-bot` を追加するだけだと再発行済みの `xoxp-` が死んだままになる |

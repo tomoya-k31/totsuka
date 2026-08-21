@@ -6,6 +6,7 @@
 |---|---|
 | [What totsuka is](orchestrator-spec.md) | The model, what it does, what it deliberately does not do |
 | [Setup playbook](setup-playbook.md) | From nothing to a working install: a new machine, a development checkout, rotating tokens, recovery |
+| [Slack setup](slack-setup.md) | Creating the Slack app, storing the three tokens, and replying under your own name |
 | [Configuration reference](config-reference.md) | Every key in `config.toml` and the per-plugin files |
 | [Operations guide](operations-guide.md) | Reading `doctor`, cleaning up worktrees and panes, task operations, common problems |
 | [Plugin development guide](plugin-dev-guide.md) | Writing your own task source, agent, or notifier |
