@@ -250,3 +250,72 @@ jobs:
             "${PREFIX}.tar.gz" \
             "${PREFIX}.tar.gz.sha256" \
             --clobber
+
+      # Point the Homebrew tap at the release that was just published. A step
+      # in this job rather than a job of its own: Actions billing rounds every
+      # job up to a full minute (see ci.yml), the sha256 is already on disk
+      # here, and running after the upload means the formula can never point at
+      # a URL that 404s.
+      #
+      # A scripted step rather than a third-party action: the work is two `sed`
+      # expressions and a push, and an action would need a SHA pin, a review on
+      # every bump, and access to a token that can write to the tap.
+      - name: Update the Homebrew formula in the tap
+        env:
+          # A *different* fine-grained PAT from RELEASE_PLEASE_TOKEN, which is
+          # scoped to this repository only and cannot push to the tap.
+          # Contents: Read and write on tomoya-k31/homebrew-tap, nothing else.
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_REPO: tomoya-k31/homebrew-tap
+        run: |
+          set -euo pipefail
+
+          # Temporary guard, to be removed once the tap is live. A Homebrew
+          # formula fetches its `url` with plain curl and no GitHub auth, so
+          # the tap cannot work at all while this repository is private. Until
+          # then HOMEBREW_TAP_TOKEN is deliberately unset, and warning-and-
+          # skipping keeps every release green instead of ending each one on a
+          # red step that means nothing. Registering the secret activates this
+          # step on its own — there is no second switch to remember.
+          # See ai-docs/infrastructure/homebrew-tap.md.
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set; skipping the Homebrew formula bump. The tap now lags at whatever release it last recorded."
+            exit 0
+          fi
+
+          version="${TAG#v}"
+          sha="$(cat "${PREFIX}.tar.gz.sha256")"
+
+          work="$(mktemp -d)"
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "${work}"
+          formula="${work}/Formula/totsuka.rb"
+
+          # Rewrite only the two lines carrying a release identity. The `url` is
+          # derived from `version` inside the formula, so it is never edited
+          # here and cannot drift from the tag. Anchored patterns, so a sha256
+          # mentioned in a comment or in `test do` is left alone. BSD sed on
+          # macos-latest requires the -i suffix argument.
+          sed -i.bak \
+            -e "s|^  version \".*\"\$|  version \"${version}\"|" \
+            -e "s|^  sha256 \".*\"\$|  sha256 \"${sha}\"|" \
+            "${formula}"
+          rm -f "${formula}.bak"
+
+          # Fail loudly if the rewrite did not take. A silently unedited formula
+          # keeps pointing at the previous release forever and `brew upgrade`
+          # reports "already up-to-date" — a failure nobody would notice until
+          # someone asked why they were a version behind.
+          grep -q "^  version \"${version}\"\$" "${formula}"
+          grep -q "^  sha256 \"${sha}\"\$"       "${formula}"
+
+          git -C "${work}" config user.name "github-actions[bot]"
+          git -C "${work}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "${work}" add Formula/totsuka.rb
+          if git -C "${work}" diff --cached --quiet; then
+            echo "Formula already at ${TAG}; nothing to push."
+            exit 0
+          fi
+          git -C "${work}" commit -m "totsuka ${version}"
+          git -C "${work}" push
+          rm -rf "${work}"

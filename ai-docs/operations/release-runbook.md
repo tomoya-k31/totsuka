@@ -1,10 +1,10 @@
 ---
 type: Runbook
 title: リリース手順（release-please / ユニバーサルバイナリ / GitHub Releases）
-description: totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリと同梱プラグインの自動ビルド・署名・GitHub Releases 配布、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。
+description: "totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリと同梱プラグインの自動ビルド・署名・GitHub Releases 配布、リリースごとの Homebrew tap 自動 bump と 2 本のトークン運用、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.github/workflows
-tags: [release, ci, distribution, gatekeeper, semver, github-app, pat, branch-protection]
-generated: { by: claude-code/opus-5, at: 2026-08-01T03:00:00+09:00 }
+tags: [release, ci, distribution, homebrew, gatekeeper, semver, github-app, pat, branch-protection]
+generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -98,7 +98,8 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
 
 # 配布（GitHub Releases）
 
-- 配布経路は **GitHub Releases の tarball（ユニバーサルバイナリ + 同梱プラグイン）** と `cargo install --git ... orchestrator-cli`（README に併記）。後者は CLI のみでプラグインは付かない。パッケージマネージャ（Homebrew 等）は v1 では扱わない。
+- 配布経路は **GitHub Releases の tarball（ユニバーサルバイナリ + 同梱プラグイン）**、`cargo install --git ... orchestrator-cli`（README に併記。CLI のみでプラグインは付かない）、そして **Homebrew tap**（[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md)）。
+  かつてここには「パッケージマネージャ（Homebrew 等）は v1 では扱わない」と書いてあった。**その判断は ADR-0053 で覆っている**（配布層の摩擦がインストール全体の最初の関門で、5 コマンドの手配置と更新手段の不在が実際に古いバイナリを放置させたため）。ただし tap が実際に効くのは本リポジトリが public になってからで、それまでは下の暫定ガードが働く。
 - **「バイナリを配る」ではなく「ツリーを配る」。** 単一バイナリを置けばよいと読めると、利用者が `totsuka` だけを移して同梱プラグインを置き去りにする。本 runbook でも README でも配布物は tarball と呼ぶ。
 - 各 Release には `totsuka-vX.Y.Z-macos-universal.tar.gz` と生の SHA-256（`.sha256`）が添付される。**成果物のファイル名と `.sha256` サイドカーの形式は変えない**（ファイル名で取得している自動化を壊さないため）。
 - tarball はプレフィックス付きディレクトリ構成で、`totsuka` の隣に同梱プラグインが並ぶ:
@@ -115,6 +116,31 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
 
   > **`--bundled` の探索は symlink 先も見る。** `std::env::current_exe` は macOS で symlink を解決しない（`_NSGetExecutablePath` は起動に使われたパスを返す）ため、CLI は `fs::canonicalize` の結果も明示的に探索する。上記のインストール形はプラグインが**リンク先**の隣にあるので、これが無いと 1 つも見つからない。詳細は [orchestrator-cli](/components/orchestrator-cli.md)。
 - **スモークテスト**: 添付の直前に、展開した tarball からスクラッチな XDG 環境へ全プラグインを install し、`plugin list --json` の件数が `plugins/*/plugin.toml` の数と一致することを検証する。**利用者が実際にダウンロードする成果物に対して実行する**ので、ドキュメントの約束が嘘になっていないことをここで担保できる（かつては README が存在しないディレクトリを指していて必ず失敗する状態が放置されていた）。
+
+# Homebrew tap
+
+`Formula/totsuka.rb` は `tomoya-k31/homebrew-tap` にあり、**リリースごとに自動で bump される**。`universal-binary` ジョブの最終ステップが、アセットを Release へ添付した直後に `version` と `sha256` の 2 行だけを書き換えて push する。
+
+運用の詳細（レイアウトがなぜ `bundled.rs` の探索順と一致するのか、手で formula を編集するときの注意、public 化後にやること）は [Homebrew tap](/infrastructure/homebrew-tap.md)。
+
+## トークン
+
+| secret | スコープ | 用途 | 失効日 |
+|---|---|---|---|
+| `RELEASE_PLEASE_TOKEN` | `totsuka` のみ / Contents + Pull requests: RW | Release PR を実 identity で作り CI を走らせる | （記録なし） |
+| `HOMEBREW_TAP_TOKEN` | `homebrew-tap` のみ / Contents: RW | tap へ formula の bump を push する | **未発行** |
+
+**2 本を兼用しない。** `RELEASE_PLEASE_TOKEN` を tap まで届くよう広げると、リリーストークンの爆発半径とローテーション周期が tap に結合する。
+
+`HOMEBREW_TAP_TOKEN` が失効したときの見え方に注意: **リリース自体は緑のまま、bump ステップだけが赤くなり、tap が黙って 1 バージョン遅れる。** 発行したら失効日を上の表に書くこと。
+
+## 暫定ガード（public 化まで）
+
+Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で取る。本リポジトリが private である間、リリースアセットの URL は未認証では 404 になり、**tap 経路は動かない**。
+
+そのため bump ステップの先頭に、`HOMEBREW_TAP_TOKEN` が未登録なら `::warning::` を出して `exit 0` するガードがある。無条件に落ちるステップを置くと public 化までの毎リリースが赤で終わり、その赤が何も意味しなくなるためである。シークレットを登録した時点で自動的に有効化される。
+
+**tap を本番にしたらガードを外す**（手順は [Homebrew tap](/infrastructure/homebrew-tap.md)）。外して初めて、トークンの失効が赤いリリースとして見えるようになる。
 
 # Gatekeeper（macOS）
 

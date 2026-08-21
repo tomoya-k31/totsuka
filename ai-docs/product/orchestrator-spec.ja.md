@@ -379,7 +379,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 
 ### 10.1 配布
 
-- **GitHub Releases のユニバーサルバイナリ(arm64 / x86_64)(推奨)** + `cargo install`。パッケージマネージャ(Homebrew 等)は v1 では対象外。
+- **Homebrew tap(推奨)**、GitHub Releases のユニバーサルバイナリ tarball、`cargo install`。以前の版はパッケージマネージャを v1 の対象外としていたが、[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) がそれを覆した — tarball 経路は `sudo` 5 本を要し、更新手段が一切無く、そこが新規利用者の最初の関門になるため。
 - macOS Gatekeeper 対策: 社内配布なら ad-hoc 署名 + 手順書で可。社外公開するなら Developer ID 署名 + notarization を計画(v1 で判断が必要な項目)。
 
 ### 10.2 バージョニング・互換性
@@ -389,7 +389,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 
 ### 10.3 更新・運用
 
-- `--version` とリリースノートへの導線。self-update は v1 では対象外(バイナリ再取得 or `cargo install` 再実行)。
+- `--version` とリリースノートへの導線。self-update は v1 では対象外 — tap で入れたなら `brew upgrade totsuka`、それ以外は tarball 再取得 or `cargo install` 再実行。
 - 状態DB のスキーママイグレーション(埋め込みマイグレーション、起動時自動適用 + バックアップ)。
 - 依存 API(Notion / GitHub / herdr Socket API)の変更監視を保守タスクとして定義。プラグイン分離により本体リリースなしで追随可能。
 - Issue テンプレート + `doctor --json` の出力添付を報告フローとする。

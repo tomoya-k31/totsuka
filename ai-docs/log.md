@@ -1,5 +1,11 @@
 # Bundle Update Log
 
+## 2026-08-22
+
+* **Creation**: 配布を Homebrew tap へ寄せる決定と、その運用（[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md)、[Homebrew tap](/infrastructure/homebrew-tap.md)）。tarball の手配置は `sudo` 5 本を要し、`xattr` を忘れると**プラグインだけ**が無言で SIGKILL され `doctor` は "crashed or exited" としか言えない。加えて更新手段が無く、実際に開発機のバイナリが 2 リリース遅れたまま `plugin install --bundled` が動かない状態になっていた。formula は `tomoya-k31/homebrew-tap` に置き、リリースジョブの最終ステップが `version` と `sha256` の 2 行だけを書き換えて push する。本リポジトリ内に `Formula/` を置く案は却下 — bump はタグ生成後に `main` へ bot push する必要があり Ruleset が拒否する。迂回には Ruleset の緩和かリリースごとの手マージが要り、後者は目的の逆である。**インストールレイアウトのために Rust は 1 バイトも変えていない**: `bundled.rs` の `candidate_roots` は当初から `<exe dir>/../libexec/totsuka/plugins` を持ち、コメントが Homebrew を名指ししていた。formula 側を後から合わせただけで嵌まった。
+* **Update**: [リリース Runbook](/operations/release-runbook.md) に Homebrew tap 節とトークン表（`RELEASE_PLEASE_TOKEN` / `HOMEBREW_TAP_TOKEN` を兼用しない理由、失効時の見え方）を追加し、**「パッケージマネージャ(Homebrew 等)は v1 では扱わない」という記述を撤回**した。同じ約束は [orchestrator-spec](/product/orchestrator-spec.md) の §10.1 にも英日で書かれていたので、そちらも撤回した（`docs/` の生成ページは §10.1/§10.3 をそもそも収録していないため、本文は変わらずマーカーのみ更新）。
+* **Update**: **tap は本リポジトリが public になるまで動かない。** Homebrew の formula は `url` を素の `curl`（GitHub 認証なし）で取るので、private リポジトリのリリースアセットは 404 を返す（実測）。そのため bump ステップの先頭に「シークレット未登録なら `::warning::` を出して skip」する暫定ガードを置いた。無条件に落ちるステップを main に置くと public 化までの毎リリースが赤で終わり、その赤が何も意味しなくなる。`HOMEBREW_TAP_TOKEN` の登録で自動的に有効化され、外し方は [Homebrew tap](/infrastructure/homebrew-tap.md) にある。
+
 ## 2026-08-21
 
 * **Update**: [設定リファレンス](/development/config-reference.md) / [設定例](/development/config-examples.md) / [Slack セットアップ Quickstart](/operations/slack-quickstart.md) / [運用ガイド](/operations/operations-guide.md) / [セットアップ Playbook](/operations/setup-playbook.md) — シークレット参照の**推奨バックエンドを `keychain:` から `op://`（1Password）へ入れ替えた**。手順と例が Keychain 登録（`security add-generic-password`）を先頭に置いており、初見の導線が macOS 専用の経路から始まっていた。`op://` はクロスプラットフォームで動く唯一のシークレットストアなので、こちらを既定の説明にし、`${ENV_VAR}` と `cmd:` を用途別の選択肢、`keychain:` を「macOS 専用」として併記する形へ寄せた。**「平文のシークレットを設定に書かない」原則（F-62）は変更していない** — 変えたのは参照方式の推奨順だけで、ADR も要件も触っていない。[設定例](/development/config-examples.md) の比較表は元から `op://` が先頭だったため据え置き。生成物の `docs/` 6 ページも追随させた。
