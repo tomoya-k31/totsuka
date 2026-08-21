@@ -1,7 +1,7 @@
 ---
 type: Environment
 title: Homebrew tap（tomoya-k31/homebrew-tap）
-description: "totsuka を brew install で配れるようにするための tap リポジトリ。formula のインストールレイアウトがなぜ bundled plugins の探索順と一致するのか、リリースジョブが何を書き換えるのか、HOMEBREW_TAP_TOKEN のスコープ、そして public 化後に外す暫定ガードの手順。"
+description: "totsuka を brew install で配れるようにするための tap リポジトリ。formula のインストールレイアウトがなぜ bundled plugins の探索順と一致するのか、リリースジョブが何を書き換えるのか、HOMEBREW_TAP_TOKEN のスコープ、bump が失敗したときの復旧、そして public 化までステップを止めている可視性ゲート。"
 resource: https://github.com/tomoya-k31/homebrew-tap
 tags: [infrastructure, homebrew, distribution, release, token]
 generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
@@ -105,19 +105,32 @@ bin.install "totsuka"
 
 `RELEASE_PLEASE_TOKEN` を流用しない。あれは totsuka リポジトリのみにスコープされていて tap へ push できず、広げるとリリーストークンの爆発半径とローテーション周期が tap に結合する。
 
-失効すると **リリースは緑のまま、tap だけが黙って 1 バージョン遅れる**（bump ステップだけが赤くなる）。発行したら失効日を [リリース Runbook](/operations/release-runbook.md) のトークン表に書くこと。
+失効すると `git clone` が落ち、**リリース run が赤くなる**（タグ・Release・アセットは既に公開済みで無事）。発行したら失効日を [リリース Runbook](/operations/release-runbook.md) のトークン表に書くこと。
 
-# 暫定ガードと、その外し方
+## bump が失敗したときの復旧
 
-Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で取りに行く。totsuka リポジトリが private である間、リリースアセットの URL は未認証では 404 を返す。**tap 経路は public 化まで動かない。**
+bump が失敗したときの**復旧は、job の再実行ではなく tap の formula を手で直すこと**。再実行すると tarball が作り直され、`tar`/`gzip` が mtime を埋め込むためバイト同一にならず、`--clobber` が公開済みアセットを別の sha256 のものへ差し替えてしまう。
 
-そのため bump ステップの先頭に、シークレット未登録なら `::warning::` を出して `exit 0` するガードを置いてある。無条件に落ちるステップを main に置くと、public 化までの間ずっと毎リリースが赤で終わり、その赤が何も意味しなくなるためである。
+手順は 1 つ: tap の `Formula/totsuka.rb` の `version` と `sha256` を、公開済みアセットの値に手で合わせて push する。sha256 は Release に `.sha256` として添付されている。
 
-`HOMEBREW_TAP_TOKEN` を登録した時点で自動的に有効化される。**覚えておくべき第 2 のスイッチは無い。**
+# public 化までステップを止めている可視性ゲート
+
+Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で取る。totsuka リポジトリが private である間、リリースアセットの URL は未認証では 404 を返す。**tap 経路は public 化まで動かない。**
+
+そのため bump ステップは **`if: ${{ !github.event.repository.private }}`** でゲートしてある。private の間はステップごと skip され、**public 化した瞬間に自分で有効になる。外し忘れうる人間の手順は無い。**
+
+**シークレットの有無でゲートしていない**のは意図的である。それは危険を読み違える:
+
+| 状況 | シークレットでゲートした場合 | 可視性でゲートした場合 |
+|---|---|---|
+| トークンが**失効**した | 非空なので素通り → `git clone` が落ちて赤（見える） | 同じ |
+| シークレットが**未登録・削除・改名**された | 空なので**毎リリース緑で skip**。tap が永久に置き去り（見えない） | `git clone` か `push` が落ちて赤（見える） |
+
+下段が問題である。それは `grep -q` の assert を置いて赤に変換しようとしている失敗そのもので、ガードがそれを再導入してしまう。
 
 ## まだ済んでいないこと（tap を本番にするまでの手順）
 
-1. **totsuka リポジトリを public にする。** これが済むまで残りは意味を持たない
+1. **totsuka リポジトリを public にする。** これが済むまで残りは意味を持たない。bump ステップはこの時点で自動的に有効になる
 2. `Formula/totsuka.rb` の `version` / `sha256` が最新リリースを指しているか確認する（公開までに何度かリリースが出ていれば古い）。sha256 はアセットとして公開されている:
 
    ```sh
@@ -126,10 +139,9 @@ Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で�
      -p 'totsuka-*-macos-universal.tar.gz.sha256' -O -
    ```
 
-3. `HOMEBREW_TAP_TOKEN` を上の表のスコープで発行し、Actions secret に登録する
+3. `HOMEBREW_TAP_TOKEN` を上の表のスコープで発行し、Actions secret に登録する。**public 化の後は、これが無いとリリースが赤くなる**（そうなるように設計してある）
 4. **クリーンな Mac で実測する**（[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) の「検証」節のコマンド）。特に `totsuka doctor` — quarantine されたプラグインはメインのバイナリが動いたまま黙って落ちるので、`--version` が通ることは何の証拠にもならない
 5. 実測が通ったら README / setup playbook を brew 主導へ書き換える
-6. **ガードを外す。** `release-please.yml` の bump ステップ先頭にある `if [ -z "${TAP_TOKEN}" ]` ブロックを削除する。以後はトークンの失効が赤いリリースとして見える
 
 # 知っておくとよいこと
 

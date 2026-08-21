@@ -132,9 +132,11 @@ Actions の課金はジョブ単位で分単位切り上げ（`ci.yml` に記録
 
 **Homebrew の formula は `url` を素の `curl`（GitHub 認証なし）で取りに行く。** 本リポジトリは現在 private なので、リリースアセットの URL は未認証では 404 を返す（実測）。したがって **tap 経路は本リポジトリが public になるまで動かない。**
 
-この事実に合わせて、bump ステップには**シークレット未登録なら `::warning::` を出して skip する**ガードを置いた。public 化が先送りされている間、無条件に落ちるステップを main に置くと毎リリースが赤で終わり、その赤が何も意味しなくなるためである。`HOMEBREW_TAP_TOKEN` を登録した時点で自動的に有効化され、覚えておくべき第 2 のスイッチは無い。
+この事実に合わせて、bump ステップは **`if: ${{ !github.event.repository.private }}`** でゲートしてある。private の間はステップごと skip され、**public 化した瞬間に自分で有効になる**。
 
-**ガードは暫定である。** tap が本番になったら外す。手順は [Homebrew tap](/infrastructure/homebrew-tap.md) に置いた。
+**シークレットの有無でゲートしていないのは、それが危険を読み違えるからである。** `secrets.HOMEBREW_TAP_TOKEN != ''` 相当のガードは、*失効した*トークン（非空なのでどのみち大声で落ちる）を素通りさせる一方で、*未登録・削除・改名*されたシークレットを**毎リリース黙って緑で skip させ、tap を永久に置き去りにする**。それは `grep -q` の assert を置いて赤に変換しようとしている失敗そのものである。可視性でゲートすれば、**外し忘れうる人間の手順が存在せず**、public 化以降はシークレット欠落が赤くなる。
+
+public 化の後に残る手順は [Homebrew tap](/infrastructure/homebrew-tap.md) の「まだ済んでいないこと」にある。**ゲートを外す作業は含まれない** — 自分で外れる。
 
 # Consequences
 
@@ -147,7 +149,7 @@ Actions の課金はジョブ単位で分単位切り上げ（`ci.yml` に記録
 
 ## 悪くなること・注意点
 
-- **リポジトリが 2 つ、トークンが 2 本になる。** tap 側の失効は「リリースは緑、tap だけ黙って 1 バージョン遅れる」形で出る。失効日を Runbook に記録すること
+- **リポジトリが 2 つ、トークンが 2 本になる。** tap 側のトークンが失効すると **`git clone` が落ちてリリース run が赤くなる**（タグ・Release・アセットは既に公開済みで無事）。bump が失敗したときの**復旧は、job の再実行ではなく tap の formula を手で直すこと**。再実行すると tarball が作り直され、`tar`/`gzip` が mtime を埋め込むためバイト同一にならず、`--clobber` が公開済みアセットを別の sha256 のものへ差し替えてしまう。 失効日を Runbook に記録すること
 - **`brew install` は formula の `test do` を走らせない。** レイアウトが壊れても、誰かの `setup` がプラグインを見つけられなくなるまで気づけない。tap 側の定期 CI が本来の対策で、まだ無い
 - **Homebrew 6.0 は third-party tap に `brew trust` を要求する。** 「1 コマンド」の主張はここで少し弱まる。`brew install tomoya-k31/tap/totsuka` を非対話で実行したときは formula が `trust.json` に自動追加されたが、**対話実行時に確認プロンプトが出るかは未確認**
 - **quarantine が付かないことは未実測。** ad-hoc 署名がコピーで保存されること、quarantine xattr を書くのが LaunchServices 経由のダウンローダであって `curl` ではないことは構造的に言えるが、実際に測るまで README には書かない

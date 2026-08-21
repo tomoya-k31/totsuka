@@ -379,7 +379,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 
 ### 10.1 配布
 
-- **Homebrew tap(推奨)**、GitHub Releases のユニバーサルバイナリ tarball、`cargo install`。以前の版はパッケージマネージャを v1 の対象外としていたが、[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) がそれを覆した — tarball 経路は `sudo` 5 本を要し、更新手段が一切無く、そこが新規利用者の最初の関門になるため。
+- **Homebrew tap(有効化後は推奨)**、GitHub Releases のユニバーサルバイナリ tarball、`cargo install`。tap はまだ現用経路ではない — formula は URL を未認証の curl で取るので、本リポジトリが public になるまで機能しない。それまで README が案内するのは tarball 経路である。以前の版はパッケージマネージャを v1 の対象外としていたが、[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) がそれを覆した — tarball 経路は `sudo` 5 本を要し、更新手段が一切無く、そこが新規利用者の最初の関門になるため。
 - macOS Gatekeeper 対策: 社内配布なら ad-hoc 署名 + 手順書で可。社外公開するなら Developer ID 署名 + notarization を計画(v1 で判断が必要な項目)。
 
 ### 10.2 バージョニング・互換性

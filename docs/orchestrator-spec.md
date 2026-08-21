@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:cda86c4e42eabf670ba65a89fde190e08b52404af30829263e7568154fb6c785 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:1296a5b24432896abb695ba992fcd37ee91fdce4ca3a671daa2b696e0c07f9a0 -->
 
 # What totsuka is
 
@@ -11,7 +11,7 @@ It reads tasks from sources like GitHub Issues and Projects or Notion, decides w
 It is a local, single-machine tool. There is no server, no event bus, and no resident daemon — you run it from a terminal and it exits when you stop it.
 
 - Platform: macOS 14 or newer, git 2.40 or newer
-- Written in Rust, distributed as a single binary
+- Written in Rust, run as a single binary from the terminal
 
 ## The model
 

@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:7f852d8a64146219f7027fc04f84cb71c537dbd40cd738203f5aefdb0a208e04 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:58208ce5971ef3926e8be1d1c76a76c664448fb3ec50655999bb3ec63e1ce624 -->
 
 # totsuka とは
 
@@ -12,7 +12,7 @@ GitHub の Issue / Projects や Notion といったソースからタスクを�
 ローカルの 1 台で完結するツールである。サーバーもイベントバスも常駐デーモンも無く、端末から起動し、止めれば終わる。
 
 - 動作環境: macOS 14 以降、git 2.40 以降
-- Rust 製で、単一バイナリとして配布される
+- Rust 製で、ターミナルから単一バイナリとして起動する
 
 ## モデル
 

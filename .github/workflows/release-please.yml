@@ -261,6 +261,20 @@ jobs:
       # expressions and a push, and an action would need a SHA pin, a review on
       # every bump, and access to a token that can write to the tap.
       - name: Update the Homebrew formula in the tap
+        # Gated on visibility, not on the secret. A Homebrew formula fetches
+        # its `url` with plain curl and no GitHub auth, so while this
+        # repository is private the tap cannot work at all and there is
+        # nothing worth bumping.
+        #
+        # Deliberately NOT `if: secrets.HOMEBREW_TAP_TOKEN != ''`. That reads
+        # the wrong hazard: an *expired* token is non-empty and would fail
+        # loudly anyway, while an *unset, deleted, or renamed* secret would
+        # green-skip every release forever and leave the tap silently behind —
+        # exactly the failure the `grep -q` asserts below exist to convert
+        # into red. Gating on visibility instead means this step turns itself
+        # on at public-ization with no human step to remember, and a missing
+        # secret is loud from that moment on.
+        if: ${{ !github.event.repository.private }}
         env:
           # A *different* fine-grained PAT from RELEASE_PLEASE_TOKEN, which is
           # scoped to this repository only and cannot push to the tap.
@@ -270,23 +284,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Temporary guard, to be removed once the tap is live. A Homebrew
-          # formula fetches its `url` with plain curl and no GitHub auth, so
-          # the tap cannot work at all while this repository is private. Until
-          # then HOMEBREW_TAP_TOKEN is deliberately unset, and warning-and-
-          # skipping keeps every release green instead of ending each one on a
-          # red step that means nothing. Registering the secret activates this
-          # step on its own — there is no second switch to remember.
-          # See ai-docs/infrastructure/homebrew-tap.md.
-          if [ -z "${TAP_TOKEN}" ]; then
-            echo "::warning::HOMEBREW_TAP_TOKEN is not set; skipping the Homebrew formula bump. The tap now lags at whatever release it last recorded."
-            exit 0
-          fi
-
           version="${TAG#v}"
           sha="$(cat "${PREFIX}.tar.gz.sha256")"
 
           work="$(mktemp -d)"
+          # The token ends up in ${work}/.git/config, so remove the clone on
+          # every exit path, not just the last line of the happy path.
+          trap 'rm -rf "${work}"' EXIT
           git clone --depth 1 \
             "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "${work}"
           formula="${work}/Formula/totsuka.rb"
@@ -317,5 +321,10 @@ jobs:
             exit 0
           fi
           git -C "${work}" commit -m "totsuka ${version}"
-          git -C "${work}" push
-          rm -rf "${work}"
+          # One rebase retry: a concurrent commit in the tap (a hand edit, a
+          # second formula) would otherwise reject the push as non-fast-forward
+          # and turn an already-published release red.
+          git -C "${work}" push || {
+            git -C "${work}" pull --rebase
+            git -C "${work}" push
+          }

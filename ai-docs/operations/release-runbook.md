@@ -99,7 +99,7 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
 # 配布（GitHub Releases）
 
 - 配布経路は **GitHub Releases の tarball（ユニバーサルバイナリ + 同梱プラグイン）**、`cargo install --git ... orchestrator-cli`（README に併記。CLI のみでプラグインは付かない）、そして **Homebrew tap**（[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md)）。
-  かつてここには「パッケージマネージャ（Homebrew 等）は v1 では扱わない」と書いてあった。**その判断は ADR-0053 で覆っている**（配布層の摩擦がインストール全体の最初の関門で、5 コマンドの手配置と更新手段の不在が実際に古いバイナリを放置させたため）。ただし tap が実際に効くのは本リポジトリが public になってからで、それまでは下の暫定ガードが働く。
+  かつてここには「パッケージマネージャ（Homebrew 等）は v1 では扱わない」と書いてあった。**その判断は ADR-0053 で覆っている**（配布層の摩擦がインストール全体の最初の関門で、5 コマンドの手配置と更新手段の不在が実際に古いバイナリを放置させたため）。ただし tap が実際に効くのは本リポジトリが public になってからで、それまでは bump ステップが可視性ゲートで止まっている。
 - **「バイナリを配る」ではなく「ツリーを配る」。** 単一バイナリを置けばよいと読めると、利用者が `totsuka` だけを移して同梱プラグインを置き去りにする。本 runbook でも README でも配布物は tarball と呼ぶ。
 - 各 Release には `totsuka-vX.Y.Z-macos-universal.tar.gz` と生の SHA-256（`.sha256`）が添付される。**成果物のファイル名と `.sha256` サイドカーの形式は変えない**（ファイル名で取得している自動化を壊さないため）。
 - tarball はプレフィックス付きディレクトリ構成で、`totsuka` の隣に同梱プラグインが並ぶ:
@@ -132,15 +132,17 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
 
 **2 本を兼用しない。** `RELEASE_PLEASE_TOKEN` を tap まで届くよう広げると、リリーストークンの爆発半径とローテーション周期が tap に結合する。
 
-`HOMEBREW_TAP_TOKEN` が失効したときの見え方に注意: **リリース自体は緑のまま、bump ステップだけが赤くなり、tap が黙って 1 バージョン遅れる。** 発行したら失効日を上の表に書くこと。
+`HOMEBREW_TAP_TOKEN` が失効すると `git clone` が落ち、**リリース run が赤くなる**（タグ・Release・アセットは既に公開済みで無事）。発行したら失効日を上の表に書くこと。
 
-## 暫定ガード（public 化まで）
+**復旧は job の再実行ではない。** 再実行すると tarball が作り直され、`tar`/`gzip` が mtime を埋め込むためバイト同一にならず、`--clobber` が公開済みアセットを別の sha256 のものへ差し替えてしまう。 tap の `Formula/totsuka.rb` を公開済みアセットの値に手で合わせて push すること。
+
+## public 化までステップを止めている可視性ゲート
 
 Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で取る。本リポジトリが private である間、リリースアセットの URL は未認証では 404 になり、**tap 経路は動かない**。
 
-そのため bump ステップの先頭に、`HOMEBREW_TAP_TOKEN` が未登録なら `::warning::` を出して `exit 0` するガードがある。無条件に落ちるステップを置くと public 化までの毎リリースが赤で終わり、その赤が何も意味しなくなるためである。シークレットを登録した時点で自動的に有効化される。
+そのため bump ステップは `if: ${{ !github.event.repository.private }}` でゲートしてある。**public 化した瞬間に自分で有効になるので、外す作業は要らない。**
 
-**tap を本番にしたらガードを外す**（手順は [Homebrew tap](/infrastructure/homebrew-tap.md)）。外して初めて、トークンの失効が赤いリリースとして見えるようになる。
+シークレットの有無でゲートしていないのは意図的で、そちらは危険を読み違える（失効トークンは素通りする一方、未登録のシークレットが毎リリース緑で skip され tap が永久に遅れる）。詳細は [Homebrew tap](/infrastructure/homebrew-tap.md)。
 
 # Gatekeeper（macOS）
 

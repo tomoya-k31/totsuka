@@ -376,7 +376,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 
 ### 10.1 Distribution
 
-- **A Homebrew tap (recommended)**, the universal-binary tarball on GitHub Releases, and `cargo install`. An earlier revision put package managers out of scope for v1; [ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) reverses that — the tarball path costs five `sudo` commands and offers no upgrade path at all, which is the first gate a new user hits.
+- **A Homebrew tap (recommended once live)**, the universal-binary tarball on GitHub Releases, and `cargo install`. The tap is not the working path yet — a formula fetches its URL with unauthenticated curl, so it stays inert until this repository is public; the tarball flow is what the README documents until then. An earlier revision put package managers out of scope for v1; [ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) reverses that — the tarball path costs five `sudo` commands and offers no upgrade path at all, which is the first gate a new user hits.
 - macOS Gatekeeper: ad-hoc signing + a procedure document suffices for internal distribution. For public release, plan Developer ID signing + notarization (a decision needed for v1).
 
 ### 10.2 Versioning / compatibility
