@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: 設定リファレンス（config.toml）
-description: config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。
+description: "config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の plugins/github.toml、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
-tags: [config, reference, toml, secrets, workflow, worktree, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+tags: [config, reference, toml, secrets, workflow, worktree, github, slack, hooks, versioning]
+generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -633,6 +633,69 @@ Claude Code フックイベント受信（UDS）の設定（#131。全キー省�
 | `socket_path` | string? | 組み込み既定 | 受信 UDS のパス（例 `${XDG_RUNTIME_DIR}/totsuka/agent-events.sock`） |
 | `spool_dir` | string? | 組み込み既定 | POST 失敗時にイベントを退避するスプールディレクトリ（E-07、例 `${XDG_STATE_HOME}/totsuka/hooks/spool`） |
 | `block_retry_limit` | int? | 3 | Stop フック block 差し戻しの連続上限。超過でエスカレーション（D-02） |
+
+# `plugins/github.toml`（task-source-github）
+
+config.toml 側の推奨設定。**このリポジトリで唯一のポーリング型 task_source** で、`poll_interval_secs` がそのままプラグイン内部の fetch 周期になる（隣の task-source-slack はイベント駆動でこの値を使わない）:
+
+```toml
+[plugins.github]
+enabled = true
+kind = "task_source"
+poll_interval_secs = 60   # 省略時も 60
+```
+
+`plugins/github.toml` の全キー（`deny_unknown_fields`。**未知キーは `initialize` の硬い失敗になる**ので、タイポは起動時に分かる）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `token` | string | 必須 | API トークン（オーケストレータが解決して渡す、F-65）。プラグインは bearer として送る以外に触らない。必要な権限は [task-source-github](/components/task-source-github.md) を参照。`cmd:gh auth token` が使える（[ADR-0044](/decisions/adr-0044-cmd-secret-scheme.md)） |
+| `owner` | string | 必須 | Project の所有者ログイン（user または org） |
+| `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か。GraphQL のルートフィールドがこれで決まる |
+| `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。**正数チェックは `initialize` では走らない**（下記） |
+| `status_field` | string | `Status` | ステータス列を保持する SingleSelect フィールド名（F-02） |
+| `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出に使う（F-08） |
+| `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして ingest から除外するステータス名（F-08） |
+| `status_map` | テーブル | `{}` | オーケストレータ側のステータス名 → Project の SingleSelect オプション名の対応（`task/update_status` 用、F-84）。**未設定のキーは恒等**（名前がそのまま使われる） |
+| `repos` | string[] | `[]` | ingest を**リポジトリ名**で絞る。空 = Project 内のどのリポジトリでもよい |
+| `source_name` | string | `github` | `Task.source` に刻印するソース名 |
+| `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用の上書き） |
+| `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
+| `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#398） |
+
+## `project_number` の誤りは起動時には出ない
+
+`project_number` が 0 や負でも **`initialize` は成功する**。正数を要求する検査は `config/validate` の側にしかなく、`initialize` は serde のデシリアライズが通れば起動する。
+
+結果として症状は「毎 poll で Project が見つからず、**タスクが 1 件も取り込まれない**」になる。起動ログは正常なので、これは一番切り分けにくい壊れ方である。捕まえられるのは `totsuka doctor` と `totsuka config validate` だけなので、設定を書いたらどちらかを通すこと。
+
+（未知キーのほうは対照的に `initialize` の硬い失敗になる。`deny_unknown_fields` は serde の層で効くため。）
+
+## `token` に必要な権限
+
+**導出であって実測ではない**（最小値は測っていない）。呼んでいるのは `https://api.github.com/graphql` への 5 操作だけ — Project アイテム取得、Project/フィールド/アイテムの id 解決、`updateProjectV2ItemFieldValue`、Issue への `addComment`、`viewer`。REST も Contents API も使わない。導出の根拠は [task-source-github](/components/task-source-github.md)。
+
+**fine-grained PAT**:
+
+| 種別 | 権限 |
+|---|---|
+| Repository | **Metadata: Read**（必須） |
+| Repository | **Issues: Read and write** |
+| Organization **または** Account | **Projects: Read and write**（org 所有のボードなら Organization、user 所有なら Account） |
+
+**Contents は不要。** classic PAT なら `project` と、`repo`（private を含む場合）または `public_repo`。private org のボードでは `read:org` も要りうる。
+
+**PR 作成はこのトークンの仕事ではない。** `gh pr create` を実行するのはエージェント自身で、ペインの環境にあるあなた自身の `gh` 認証を使う。`gh auth login` は別個の前提条件である。
+
+## `[prompts]`（task-source-github、#398）
+
+組み込みデフォルトは `plugins/task-source-github/src/defaults.toml` にバイナリ埋め込みされており、このテーブルは**キー単位の上書き**である（未指定キーは組み込みのまま）。**キー名がそのまま設定キー**である。
+
+| キー | 用途 |
+|---|---|
+| `triage_instructions` | ワークフローの profile が `triage` のとき送られる |
+| `design_instructions` | 同 `design` |
+| `implement_instructions` | 同 `implement` |
 
 # `plugins/slack.toml`（task-source-slack）
 

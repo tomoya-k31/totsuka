@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:40fce3321081ddb6997d13f4781eb90078417f10d94ce04ecadb95847d66169d -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f8c44e8dca185153be1f2c0769b67687c9cd63dce788ee514a0e8c933f732976 -->
 
 # 設定リファレンス
 
@@ -545,6 +545,67 @@ plan_cleanup = "immediate"            # plan: 即削除（既定）
 | `block_retry_limit` | int? | 3 | 停止のブロック差し戻しの連続上限。超えるとエスカレートする |
 
 フック対応のエージェントを使うワークフローがある構成で `auth_token_ref` が未設定だと、`config validate` と `run` がワークフローごとに警告を出し、`doctor` は**失敗**する。フック対応エージェントを使わない構成では `doctor` は警告のみ。参照を設定したのに解決できない場合は、構成によらず失敗する。
+
+## `plugins/github.toml`
+
+ここで唯一のポーリング型 task source であり、`poll_interval_secs` がそのままプラグイン自身の fetch 周期になる（隣の Slack ソースはイベント駆動でこの値を使わない）。
+
+```toml
+[plugins.github]
+enabled = true
+kind = "task_source"
+poll_interval_secs = 60   # 60 は既定値でもある
+```
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `token` | string | 必須 | API トークン。bearer として送る以外には使わない。必要な権限は下記。`cmd:gh auth token` が使える |
+| `owner` | string | 必須 | Project の所有者ログイン（user または組織） |
+| `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か |
+| `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。正数チェックは起動時には**走らない** — 下記参照 |
+| `status_field` | string | `Status` | ステータス列を保持する single-select フィールド名 |
+| `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出に使う |
+| `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして取り込まないステータス名 |
+| `status_map` | テーブル | `{}` | totsuka 側のステータス名 → Project のオプション名。**対応の無い名前はそのまま使われる** |
+| `repos` | string[] | `[]` | 取り込みをこのリポジトリ名に限る。空なら Project 内のどれでもよい |
+| `source_name` | string | `github` | 各タスクに刻印されるソース名 |
+| `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用） |
+| `max_retries` | int | 3 | リトライ可能な API 失敗の再試行回数 |
+| `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
+
+### `project_number` の誤りは起動時には出ない
+
+`project_number` が 0 や負の数でも**起動は通る**。正の数を要求する検査は設定検証の側にしかなく、起動は設定がデシリアライズできた時点で成功する。
+
+代わりに症状は「毎回の poll で Project が見つからず、**タスクが 1 件も取り込まれない**」になる。起動ログは正常に見える。ここで一番切り分けにくい壊れ方である。捕まえられるのは `totsuka doctor` と `totsuka config validate` だけなので、このファイルを編集したらどちらかを実行すること。
+
+未知のキーはその逆で、起動時の硬い失敗になる。そちらの検査はデシリアライズの最中に走るためである。
+
+### トークンに必要な権限
+
+**コードが呼んでいるものからの導出であって、実測ではない** — 最小値は絞り込んでいない。呼び出しは全て `https://api.github.com/graphql` への POST で、操作は 5 つだけである: Project アイテムの取得、Project / フィールド / アイテムの id 解決、`updateProjectV2ItemFieldValue`、Issue への `addComment`、`viewer`。REST も Contents API も使わない。
+
+fine-grained PAT の場合:
+
+| 種別 | 権限 |
+|---|---|
+| Repository | **Metadata: Read**（必須） |
+| Repository | **Issues: Read and write** |
+| Organization **または** Account | **Projects: Read and write** — org 所有のボードなら Organization、user 所有なら Account |
+
+**Contents は不要。** classic PAT なら `project` と、`repo`（private リポジトリを含む場合）または `public_repo`。private な組織のボードでは `read:org` も要りうる。
+
+**PR を開くのはこのトークンの仕事ではない。** `implement` のワークフローでは、エージェント自身がペインの環境にあるあなた自身の `gh` 認証を使って `gh pr create` を実行する。`gh auth login` は別個の前提条件である。
+
+### GitHub ソースの `[prompts]`
+
+組み込みのデフォルトはバイナリに埋め込まれており、このテーブルはキー単位の上書きである。キー名がそのまま設定キーになる。
+
+| キー | 使われるとき |
+|---|---|
+| `triage_instructions` | ワークフローの profile が `triage` のとき |
+| `design_instructions` | 同 `design` |
+| `implement_instructions` | 同 `implement` |
 
 ## `plugins/slack.toml`
 
