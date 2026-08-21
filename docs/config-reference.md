@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:f7894aef7f1c2870419c1b789ded0aa1a0a132e6f8bba76327813caa4535ad86 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:40fce3321081ddb6997d13f4781eb90078417f10d94ce04ecadb95847d66169d -->
 
 # Configuration reference
 
@@ -20,14 +20,14 @@ Never write a plain secret into your configuration. Any string value can instead
 
 | Form | Resolves from | When to use |
 |---|---|---|
-| `op://<vault>/<item>/<field>` | 1Password | **The usual choice.** The only backend that works outside macOS |
+| `op://<vault>/<item>/<field>` | 1Password | **The usual choice.** The only secret store that works outside macOS |
 | `cmd:<command>` | The standard output of a command | Credentials another tool owns and rotates, e.g. `cmd:gh auth token` |
 | A string containing `${ENV_VAR}` | Environment variables | A value you already export |
 | `keychain:<service>/<account>` | The macOS Keychain | macOS only |
 
 `~` and `${ENV}` are also expanded in paths.
 
-**`op://`** shells out to the 1Password CLI and assumes you have already run `op signin`. It works on **any string value** in either config file, and because the CLI is cross-platform this is the only backend that works outside macOS. A missing CLI, a missing item, and a missing sign-in each produce a specific, actionable error. `totsuka doctor` only probes 1Password when your configuration actually contains an `op://` reference.
+**`op://`** shells out to the 1Password CLI and assumes you have already run `op signin`. It works on **any string value** in either config file, and because the CLI is cross-platform this is the only secret *store* that works outside macOS (`keychain:` is the macOS-only one; `${ENV_VAR}` and `cmd:` run anywhere but hold nothing themselves). A missing CLI, a missing item, and a missing sign-in each produce a specific, actionable error. `totsuka doctor` only probes 1Password when your configuration actually contains an `op://` reference.
 
 **`cmd:`** runs the command through `/bin/sh -c` and uses its standard output as the secret, with the trailing newline stripped. It is meant for credentials another tool already manages and rotates — `token = "cmd:gh auth token"` — because it fetches the current value every time rather than keeping a copy that can silently go stale. A non-zero exit or empty output is a startup error, quoting the first line of stderr; standard output is never quoted anywhere. The command runs only when `totsuka run` resolves secrets, never during parsing or `config show`.
 

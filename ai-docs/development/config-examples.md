@@ -270,7 +270,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 
 | 形式 | 例 | 選ぶ基準 |
 |---|---|---|
-| `op://<vault>/<item>/<field>` | `op://Dev/Openrouter/api_key` | **長命の秘密の推奨。**cross-platform で、非 macOS でも動く唯一の実働バックエンド。1Password CLI へのシェルアウトなので事前に `op signin` 済みであること |
+| `op://<vault>/<item>/<field>` | `op://Dev/Openrouter/api_key` | **長命の秘密の推奨。**cross-platform で、非 macOS でも動く唯一のシークレットストア（`keychain:` は macOS 専用）。1Password CLI へのシェルアウトなので事前に `op signin` 済みであること |
 | `cmd:<command>` | `cmd:gh auth token` | **別ツールが管理・ローテートする credential の推奨**（#444）。解決のたびにコマンドを実行して stdout を使うので、コピーの陳腐化が起きない。ローテートする token を op/keychain に写すとコピーが黙って死ぬ — その罠がこの形式の起点 |
 | `keychain:<service>/<account>` | `keychain:totsuka/hook-token` | macOS 専用。1Password を使っていない環境向け。`security add-generic-password` で登録済みであること |
 | `${ENV_VAR}` を含む文字列 | `${GITHUB_TOKEN}` | CI・使い捨て環境向け。**未設定だと起動時エラー**（既定値へのフォールバックはしない）。永続運用には非推奨 |
