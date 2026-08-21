@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:f8c44e8dca185153be1f2c0769b67687c9cd63dce788ee514a0e8c933f732976 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0aa9032a2ee66185959ae7cfbff1e066fbc3e6fdd4841fc8310de883bd2bc4e4 -->
 
 # 設定リファレンス
 
@@ -145,7 +145,6 @@ agent = "herdr"
 - 絵文字名は Slack が報告する形（コロン無し）の**文字列**。`":eyes:"` と書いてもコロンは剥がされる。👀 は `eyes`、👁 は `eye` で別物である
 - **`reaction = 123` のような文字列以外の値は起動時エラー。** 読めない予約キーは照合時にスキップされる仕様なので、放置すると逆方向に 2 つ壊れる — そのワークフローが全タスクに一致し（catch-all より前にあるのでメンションを吸う）、一方でプラグインは絵文字を 1 つも登録しない。どちらも単体ではエラーを出さない
 - **同じ絵文字を 2 つのワークフローに書くと設定エラー。** first-match で片方が黙って勝つのを許さない
-- `plugins/slack.toml` の旧 `trigger_reactions` との併用もエラーになる。旧記法だけの構成は非推奨警告つきで従来どおり動く
 - 起動するのは自分が付けたリアクションだけで、これを緩める設定は無い
 
 **混在バージョンの注意:** 新しいプラグインを古いコアと組み合わせると、コアに `reaction` 予約キーが無いためリアクションのワークフローが全タスクを吸う。コアを先に、プラグインを後に上げること。戻すときはリアクションのワークフローを設定から外す。
@@ -623,7 +622,6 @@ kind = "task_source"
 | `user_token` | string | 必須 | 本人名義の読み書きに使う User OAuth Token（`xoxp-`）。シークレット参照を推奨 |
 | `bot_token` | string? | なし | Bot Token（`xoxb-`）。設定すると、返信案やピッカーの到着時に bot が本人へ DM を送る。**未設定なら機能が off になるだけ**（起動時に警告 1 回） |
 | `target_user_id` | string | 必須 | 自分の Slack ユーザー ID。このユーザー宛のメンションがタスクになり、トークン自身の identity とも照合される |
-| `trigger_reactions` | string[] | `[]` | **非推奨**。ワークフローの `trigger.reaction` を使う。**自分が付けると**タスクを起こす絵文字名。コロンは剥がされる。`reactions:read` スコープが要る |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
 | `reply_style` | string? | なし | タスク本文へ注入する返信トーンの指示 |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |

@@ -35,10 +35,10 @@ pub struct Mention {
     pub ts: String,
     /// Enclosing thread, when the mention was posted inside one.
     pub thread_ts: Option<String>,
-    /// The emoji that started this task, when a reaction did and the
-    /// configured notation labels (#396). Always `None` on the mention path —
-    /// a mention-derived task must carry no `reaction:` label, or it stops
-    /// matching the catch-all workflow that is meant to handle it.
+    /// The emoji that started this task, when a reaction did (#396). Always
+    /// `None` on the mention path — a mention-derived task must carry no
+    /// `reaction:` label, or it stops matching the catch-all workflow that is
+    /// meant to handle it.
     pub reaction: Option<String>,
     /// The task-id prefix the matched workflow's profile asks for (#397).
     ///

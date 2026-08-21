@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use common::{
     Canned, FakeFactory, LookupHarness, Shared, SubmitHarness, accept_with_hello, call,
-    call_expecting_error, mention_envelope_in, scratch_state_dir, send_and_await_ack, ws_listener,
+    mention_envelope_in, scratch_state_dir, send_and_await_ack, ws_listener,
 };
 use task_source_slack::server::Server;
 
@@ -26,9 +26,8 @@ fn server(shared: &Shared) -> (Server<FakeFactory>, SubmitHarness) {
     (srv, harness)
 }
 
-/// Like the mention-flow config, plus the deprecated opt-in trigger set.
-/// `":eyes:"` is written with colons on purpose: config may spell it either
-/// way.
+/// The mention-flow config with no reaction trigger of its own — emoji are
+/// declared as workflow triggers, which the Orchestrator supplies separately.
 fn init_params() -> Value {
     json!({
         "protocol_version": "0.1.0",
@@ -38,20 +37,16 @@ fn init_params() -> Value {
             "user_token": "xoxp-user-test",
             "target_user_id": "U_ME",
             "thread_context_limit": 3,
-            "trigger_reactions": [":eyes:"],
             "repos": [{ "name": "web-app", "summary": "customer web app" }]
         }
     })
 }
 
-/// The same config with the emoji declared the #396 way instead: as a workflow
-/// trigger the Orchestrator supplies at `initialize`.
+/// The same config plus the emoji as a workflow trigger, alongside the mention
+/// catch-all. `"eyes"` is spelled without colons here; the resolver strips them
+/// either way.
 fn init_params_with_workflow_trigger() -> Value {
     let mut params = init_params();
-    params["config"]
-        .as_object_mut()
-        .unwrap()
-        .remove("trigger_reactions");
     params["triggers"] = json!([
         { "workflow": "slack-watch", "trigger": { "reaction": "eyes" } },
         { "workflow": "slack-reply", "trigger": {} },
@@ -140,7 +135,13 @@ async fn the_operators_reaction_becomes_a_task() {
     canned_web_api(&shared, &url);
     let (mut srv, mut harness) = server(&shared);
 
-    call(&mut srv, 1, "initialize", init_params()).await;
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_with_workflow_trigger(),
+    )
+    .await;
     let mut ws = accept_with_hello(&listener).await;
     send_and_await_ack(&mut ws, reaction_envelope("e1", "U_ME", "eyes", "100.0")).await;
 
@@ -169,8 +170,8 @@ async fn the_operators_reaction_becomes_a_task() {
     harness.assert_no_task(Duration::from_millis(300)).await;
 }
 
-/// The #396 notation end to end: the emoji comes from a workflow trigger, and
-/// the task carries the `reaction:` label that routes it back to that workflow.
+/// End to end: the emoji comes from a workflow trigger, and the task carries
+/// the `reaction:` label that routes it back to that workflow.
 ///
 /// **Without the label the task is submitted and then matches nothing** — core
 /// re-checks `reaction` against `Task.labels`, so the run would look like a
@@ -201,9 +202,9 @@ async fn a_workflow_declared_reaction_labels_the_task() {
     );
 }
 
-/// The mirror of the above, and the reason the legacy path must stay
-/// label-free: a mention has no reaction, so it must fall through to the
-/// catch-all workflow.
+/// The mirror of the above: a mention has no reaction, so it must fall through
+/// to the catch-all workflow rather than carrying a label that would stop it
+/// matching.
 #[tokio::test]
 async fn a_mention_carries_no_reaction_label() {
     let (listener, url) = ws_listener().await;
@@ -230,26 +231,6 @@ async fn a_mention_carries_no_reaction_label() {
     );
 }
 
-/// Declaring the emoji in both places is rejected at `initialize` rather than
-/// letting one notation silently win.
-#[tokio::test]
-async fn declaring_both_notations_fails_initialize() {
-    let (_listener, url) = ws_listener().await;
-    let shared = Shared::default();
-    canned_web_api(&shared, &url);
-    let (mut srv, _harness) = server(&shared);
-
-    let mut params = init_params(); // keeps `trigger_reactions`
-    params["triggers"] = json!([
-        { "workflow": "slack-watch", "trigger": { "reaction": "hammer" } },
-    ]);
-    let message = call_expecting_error(&mut srv, 1, "initialize", params).await;
-    assert!(
-        message.contains("trigger_reactions"),
-        "the error must name the key to delete: {message}"
-    );
-}
-
 /// **The regression guard for the feature's safety story. Do not delete.**
 /// Accepting a colleague's reaction would let them start work on the
 /// operator's machine with an emoji.
@@ -260,7 +241,13 @@ async fn another_users_reaction_submits_nothing() {
     canned_web_api(&shared, &url);
     let (mut srv, mut harness) = server(&shared);
 
-    call(&mut srv, 1, "initialize", init_params()).await;
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_with_workflow_trigger(),
+    )
+    .await;
     let mut ws = accept_with_hello(&listener).await;
     send_and_await_ack(
         &mut ws,
@@ -287,7 +274,13 @@ async fn an_emoji_outside_the_trigger_set_submits_nothing() {
     canned_web_api(&shared, &url);
     let (mut srv, mut harness) = server(&shared);
 
-    call(&mut srv, 1, "initialize", init_params()).await;
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_with_workflow_trigger(),
+    )
+    .await;
     let mut ws = accept_with_hello(&listener).await;
     send_and_await_ack(&mut ws, reaction_envelope("e1", "U_ME", "tada", "100.0")).await;
     harness.assert_no_task(Duration::from_millis(300)).await;
@@ -309,7 +302,13 @@ async fn a_failed_lookup_leaves_the_trigger_retryable() {
     shared.push_front_for("conversations.history", Canned::Network);
     let (mut srv, mut harness) = server(&shared);
 
-    call(&mut srv, 1, "initialize", init_params()).await;
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_with_workflow_trigger(),
+    )
+    .await;
     let mut ws = accept_with_hello(&listener).await;
 
     send_and_await_ack(&mut ws, reaction_envelope("e1", "U_ME", "eyes", "100.0")).await;
@@ -329,7 +328,13 @@ async fn a_mention_and_a_reaction_on_one_message_make_one_task() {
     canned_web_api(&shared, &url);
     let (mut srv, mut harness) = server(&shared);
 
-    call(&mut srv, 1, "initialize", init_params()).await;
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_with_workflow_trigger(),
+    )
+    .await;
     let mut ws = accept_with_hello(&listener).await;
 
     // The mention arrives first and submits.

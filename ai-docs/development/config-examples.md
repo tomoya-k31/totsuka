@@ -393,11 +393,8 @@ agent = "herdr"
 |---|---|
 | リアクション workflow を catch-all の**後ろ**に書く | 絵文字が無反応になる（到達不能警告が出る） |
 | 同じ絵文字を 2 つの workflow に書く | `CONFIG_INVALID` |
-| `plugins/slack.toml` の `trigger_reactions` と併用 | `CONFIG_INVALID`（旧記法を消す） |
 
-旧記法（`trigger_reactions` だけ）の構成は非推奨警告つきで従来どおり動く。移行するときは
-**両方書かず、片方に寄せる**こと。本人限定の不変条件（他人のリアクションでは起動しない）は
-どちらの記法でも変わらない。
+本人限定の不変条件（他人のリアクションでは起動しない）は緩和できない。
 
 | キー | 型 | 意味 |
 |---|---|---|
@@ -497,10 +494,9 @@ target_user_id = "U01ABCDEF"               # 必須。自分の Slack ユーザ�
 
 # 【非推奨・0.3 で削除】自分が付けるとタスクを起こす絵文字（#319）。
 # config.toml 側の `[[workflows]].trigger = { reaction = "eyes" }` へ移行する
-# （#396。下の「絵文字でワークフローを選ぶ」参照）。併用すると CONFIG_INVALID。
-# どちらの記法でも reactions:read スコープが必要
-# → 追加後はアプリ再インストール + 保管先の値を 2 本更新。
-trigger_reactions = ["eyes"]
+# リアクション起動は config.toml の [[workflows]].trigger.reaction で設定する
+# （#396。下の「絵文字でワークフローを選ぶ」参照）。reactions:read スコープが
+# 必要 → 追加後はアプリ再インストール + 保管先の値を 2 本更新。
 
 thread_context_limit = 6                   # タスク本文に含めるスレッド直近メッセージ数（既定 6）
 reply_style = "丁寧語で簡潔に。箇条書きを多用しない。"   # 返信トーンの指示

@@ -297,16 +297,6 @@ pub struct SlackConfig {
     /// The operator's own Slack user id (`U…`). Mentions of this user become
     /// tasks, and the TokenGuard refuses a token belonging to anyone else.
     pub target_user_id: String,
-    /// Emoji names whose reaction, **added by the operator**, starts a task the
-    /// same way a mention does (#319). Empty (the default) disables the
-    /// trigger entirely, so an existing install keeps behaving exactly as
-    /// before until it opts in.
-    ///
-    /// Stored without colons because `reaction_added` reports `reaction` that
-    /// way; [`normalize_reactions`] strips them so `":eyes:"` in config works
-    /// too. Note 👀 is `eyes` and 👁 is `eye` — different emoji.
-    #[serde(default)]
-    pub trigger_reactions: Vec<String>,
     /// How many recent thread messages to include as context.
     #[serde(default = "default_thread_context_limit")]
     pub thread_context_limit: u32,
@@ -350,12 +340,6 @@ impl SlackConfig {
     /// The declared repository names.
     pub fn repo_names(&self) -> Vec<&str> {
         self.repos.iter().map(|r| r.name.as_str()).collect()
-    }
-
-    /// [`trigger_reactions`](Self::trigger_reactions) with colons stripped and
-    /// blanks dropped — the form `reaction_added` events are matched against.
-    pub fn normalized_trigger_reactions(&self) -> Vec<String> {
-        normalize_reactions(&self.trigger_reactions)
     }
 }
 
@@ -431,28 +415,6 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
     if config.thread_context_limit == 0 {
         errors.push("`thread_context_limit` is 0 → set it to 1 or more".into());
     }
-    // An entry that normalizes away is a typo, not an opt-out: leaving it in
-    // silently shrinks the trigger set, and the symptom (a reaction that does
-    // nothing) gives no hint which entry was dropped.
-    for name in &config.trigger_reactions {
-        if name.trim().trim_matches(':').is_empty() {
-            errors.push(format!(
-                "`trigger_reactions` contains `{name}`, which is not an emoji name → write the \
-                 name as Slack reports it, without colons (e.g. `eyes` for 👀), or remove the \
-                 entry"
-            ));
-        }
-    }
-    let normalized = config.normalized_trigger_reactions();
-    for (i, name) in normalized.iter().enumerate() {
-        if normalized[..i].contains(name) {
-            errors.push(format!(
-                "`trigger_reactions` lists `{name}` more than once (colons are stripped, so \
-                 `:{name}:` and `{name}` are the same entry) → remove the duplicate"
-            ));
-        }
-    }
-
     // An empty `[[repos]]` is legal here: the orchestrator supplies its
     // `[[repositories]]` at `initialize` (#109), where the merged candidate
     // list is validated (see `server`). Offline validation can only check
@@ -747,60 +709,6 @@ mod tests {
         assert!(cfg.channel_groups.is_empty());
         // The nudge is opt-in: no `bot_token` is a valid config (#305).
         assert!(cfg.bot_token.is_none());
-        // The reaction trigger is opt-in too: absent means disabled, so an
-        // existing install keeps behaving exactly as before (#319).
-        assert!(cfg.trigger_reactions.is_empty());
-        assert!(static_config_errors(&cfg).is_empty());
-    }
-
-    #[test]
-    fn trigger_reactions_normalize_colons_and_whitespace() {
-        // Slack reports `reaction` without colons, but `":eyes:"` is the
-        // natural thing to write in TOML — both must land on the same key.
-        let mut value = minimal();
-        value["trigger_reactions"] = json!([":eyes:", "bookmark", " :bulb: "]);
-        let cfg = parse(value);
-        assert_eq!(
-            cfg.normalized_trigger_reactions(),
-            vec!["eyes", "bookmark", "bulb"]
-        );
-        assert!(static_config_errors(&cfg).is_empty());
-    }
-
-    #[test]
-    fn trigger_reactions_reject_entries_that_normalize_away() {
-        // A bare `":"` or blank leaves the trigger set silently smaller, and
-        // the symptom (a reaction that does nothing) names no entry.
-        for bad in [":", "  ", "::"] {
-            let mut value = minimal();
-            value["trigger_reactions"] = json!(["eyes", bad]);
-            let errors = static_config_errors(&parse(value));
-            assert!(
-                errors.iter().any(|e| e.contains("trigger_reactions")),
-                "{bad:?} should be rejected: {errors:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn trigger_reactions_reject_duplicates_after_normalization() {
-        let mut value = minimal();
-        value["trigger_reactions"] = json!(["eyes", ":eyes:"]);
-        let errors = static_config_errors(&parse(value));
-        assert!(
-            errors.iter().any(|e| e.contains("more than once")),
-            "{errors:?}"
-        );
-    }
-
-    /// 👀 is `eyes`; 👁 is `eye`. Different emoji, and the config is a plain
-    /// string list, so nothing catches the slip except knowing about it.
-    #[test]
-    fn eye_and_eyes_are_distinct_entries() {
-        let mut value = minimal();
-        value["trigger_reactions"] = json!(["eyes", "eye"]);
-        let cfg = parse(value);
-        assert_eq!(cfg.normalized_trigger_reactions(), vec!["eyes", "eye"]);
         assert!(static_config_errors(&cfg).is_empty());
     }
 
