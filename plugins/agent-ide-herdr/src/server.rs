@@ -186,8 +186,16 @@ impl<F: TransportFactory> Server<F> {
         // `totsuka config validate` reports a too-old herdr by name.
         match self.connect(&config).await {
             Ok(transport) => {
+                // Kept for the typed probe below: the point of that diagnostic
+                // is to say **which herdr** answered something unreadable, and
+                // `ping` is the only place this exchange learns the version.
+                let mut version = None;
                 match transport.call("ping", json!({})).await {
                     Ok(pong) => {
+                        version = pong
+                            .get("version")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
                         if let Err(e) = check_version(&pong) {
                             errors.push(e.to_string());
                         }
@@ -210,7 +218,13 @@ impl<F: TransportFactory> Server<F> {
                 )
                 .await
                 {
-                    errors.push(e.to_string());
+                    // Name the version when `ping` gave one. Without it the
+                    // operator is told a shape is unreadable but not *whose*
+                    // shape, which is the first thing they need to know.
+                    errors.push(match &version {
+                        Some(v) => format!("herdr {v}: {e}"),
+                        None => e.to_string(),
+                    });
                 }
             }
             Err(e) => errors.push(e.to_string()),

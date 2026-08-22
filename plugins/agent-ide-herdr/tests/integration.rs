@@ -192,7 +192,8 @@ struct FakeHerdr {
     no_root_pane: bool,
     /// When set, `workspace.create` answers **with** a `root_pane` that is
     /// missing required fields — the shape that used to fail the whole read
-    /// before `CreatedWorkspace` was narrowed to the two ids dispatch uses.
+    /// before `workspace.create` went back to reading its two ids off the raw
+    /// `Value` (see `NewWorkspace::from_response`).
     /// The workspace exists either way, so the cleanup must still run.
     malformed_root_pane: bool,
     /// When set, `pane.split` fails with this herdr error code (#356: the
@@ -333,7 +334,11 @@ impl FakeHerdr {
                     "tab": tab_info(json!({})),
                 });
                 if self.malformed_root_pane {
-                    result["root_pane"] = json!({ "pane_id": PANE });
+                    // **Not just "missing fields".** `pane_id` is the wrong
+                    // *type* here — the shape that still failed the whole read
+                    // after two narrower relaxations, because serde propagates
+                    // an inner error through `Option` rather than swallowing it.
+                    result["root_pane"] = json!({ "pane_id": 1 });
                 } else if !self.no_root_pane {
                     result["root_pane"] = pane_info(json!({}));
                 }
@@ -2714,12 +2719,28 @@ async fn a_tool_launch_with_an_empty_env_injects_none() {
 /// set out to end.
 #[test]
 fn the_fixtures_are_shapes_herdr_could_actually_send() {
-    use agent_ide_herdr::wire::result::{AgentSessionInfo, PaneInfo, TabInfo, WorkspaceInfo};
+    use agent_ide_herdr::wire::result::{
+        AgentInfo, AgentSessionInfo, PaneInfo, PaneReadResult, TabInfo, WorkspaceInfo,
+    };
 
     serde_json::from_value::<PaneInfo>(pane_info(json!({}))).expect("a PaneInfo");
     serde_json::from_value::<WorkspaceInfo>(workspace_info(json!({}))).expect("a WorkspaceInfo");
     serde_json::from_value::<TabInfo>(tab_info(json!({}))).expect("a TabInfo");
     serde_json::from_value::<AgentSessionInfo>(agent_session("v")).expect("an AgentSessionInfo");
+
+    // **`AgentInfo` is a distinct type from `PaneInfo`** even though the fake
+    // builds `agent.start`'s answer with `pane_info`. If herdr's two records
+    // ever diverge, the fake goes right on passing unless this line is here.
+    serde_json::from_value::<AgentInfo>(pane_info(json!({}))).expect("an AgentInfo");
+
+    // `pane.read` is the one response the fake constructs inline rather than
+    // through a builder, so its required fields are pinned here directly.
+    serde_json::from_value::<PaneReadResult>(json!({
+        "pane_id": PANE, "workspace_id": "w1", "tab_id": "w1:t1",
+        "source": "recent", "format": "text", "revision": 1,
+        "truncated": false, "text": "",
+    }))
+    .expect("a PaneReadResult");
 }
 
 /// A herdr older than 0.7.5 cannot run this plugin's dispatch at all, so
@@ -3721,12 +3742,20 @@ async fn config_validate_is_silent_on_a_herdr_it_can_read() {
 /// A `root_pane` that is **there but unreadable** must still leave a workspace
 /// this plugin can take back down (#519 review).
 ///
-/// The first cut of `CreatedWorkspace` only tolerated a *missing* `root_pane`
-/// key, so this shape failed the whole read before `NewWorkspace` existed —
-/// and the workspace it had just created leaked, which is precisely what the
-/// relaxation was for.
+/// This took three attempts, which is why the fixture uses a wrong-*typed*
+/// `pane_id` rather than a merely incomplete one:
+///
+/// 1. relaxing `root_pane`'s **presence** (`#[serde(default)] Option<PaneInfo>`)
+///    still failed on a `root_pane` that was there but incomplete
+/// 2. narrowing to `{ pane_id: String }` still failed on `{"pane_id": 1}` —
+///    **serde propagates an inner error through `Option`; it does not swallow it**
+/// 3. reading the two ids off the raw `Value` cannot fail at all
+///
+/// Every one of those failures returned before `NewWorkspace` existed, so
+/// `abandon` never ran and the freshly created workspace leaked with a live
+/// pane in it.
 #[tokio::test]
-async fn a_malformed_root_pane_still_lets_the_workspace_be_cleaned_up() {
+async fn a_malformed_root_pane_does_not_leak_the_workspace() {
     let (socket, requests) = FakeHerdr {
         malformed_root_pane: true,
         ..FakeHerdr::default()
@@ -3735,15 +3764,20 @@ async fn a_malformed_root_pane_still_lets_the_workspace_be_cleaned_up() {
 
     let mut d = Driver::new();
     d.init(&socket).await;
-    // A `root_pane` carrying a usable `pane_id` is enough to dispatch on: the
-    // fields it is missing are ones this plugin never reads.
+    // No usable `pane_id`, so the dispatch cannot proceed — but it must fail
+    // *after* the workspace is known.
     let disp = d.dispatch("T1", "Draft the reply", "implement").await;
-    assert!(disp["error"].is_null(), "dispatch must proceed: {disp}");
-    let log = requests.lock().unwrap();
-    assert_eq!(
-        calls(&log, "agent.start")[0]["params"]["pane_id"],
-        PANE,
-        "and it must be the pane the response named: {log:?}"
+    assert!(!disp["error"].is_null(), "dispatch cannot proceed: {disp}");
+    {
+        let log = requests.lock().unwrap();
+        assert!(
+            calls(&log, "agent.start").is_empty(),
+            "and must not start an agent with no pane to start it in: {log:?}"
+        );
+    }
+    assert!(
+        awaits_workspace_close(&requests).await,
+        "the workspace it created must still be taken back down"
     );
 }
 

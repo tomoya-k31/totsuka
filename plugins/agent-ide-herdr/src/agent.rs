@@ -68,8 +68,8 @@ use crate::state::{SessionHandle, map_agent_status};
 use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT, call_typed, to_params};
 use crate::wire::request;
 use crate::wire::result::{
-    AgentStatus, PaneInfo, PaneInfoEnvelope, PaneListEnvelope, PaneReadEnvelope, WorkspaceInfo,
-    WorkspaceListEnvelope,
+    AgentStartedEnvelope, AgentStatus, PaneInfo, PaneInfoEnvelope, PaneListEnvelope,
+    PaneReadEnvelope, WorkspaceInfo, WorkspaceListEnvelope,
 };
 
 /// The marker that says a herdr container belongs to totsuka, followed by the
@@ -224,9 +224,14 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 .unwrap_or_default(),
             focus: None,
         };
-        let created: CreatedWorkspace =
-            call_typed(&self.client, "workspace.create", &create_params).await?;
-        let workspace = NewWorkspace::from_created(created);
+        let created = self
+            .client
+            .call(
+                "workspace.create",
+                to_params("workspace.create", &create_params)?,
+            )
+            .await?;
+        let workspace = NewWorkspace::from_response(&created)?;
 
         // From here on the workspace exists, so every failure path has to take
         // it back down: a failed dispatch reports no session id, which leaves
@@ -302,13 +307,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 .await?;
             // herdr echoes the pane it was given; trusting our own value keeps
             // the handle well-defined even if a future response drops the field.
-            debug_assert_eq!(
-                started
-                    .get("agent")
-                    .and_then(|a| a.get("pane_id"))
-                    .and_then(Value::as_str),
-                Some(pane_id.as_str()),
-            );
+            debug_assert_eq!(started.agent.pane_id, pane_id);
 
             match self.submit_prompt(&pane_id, &prompt, deadline).await {
                 Ok(()) => break,
@@ -383,10 +382,19 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         pane_id: &str,
         params: Value,
         deadline: tokio::time::Instant,
-    ) -> Result<Value, HerdrError> {
+    ) -> Result<AgentStartedEnvelope, HerdrError> {
         loop {
+            // The **success** is read through the generated envelope; the error
+            // path stays raw because the retry decisions below are made on
+            // herdr's error codes, not on a result shape.
             match self.client.call("agent.start", params.clone()).await {
-                Ok(started) => return Ok(started),
+                Ok(started) => {
+                    return serde_json::from_value(started).map_err(|e| {
+                        HerdrError::InvalidResponse(format!(
+                            "`agent.start` answered a shape this build cannot read → {e}"
+                        ))
+                    });
+                }
                 Err(e) if e.is_pane_not_ready() || e.is_timeout_of("agent.start") => {
                     if tokio::time::Instant::now() >= deadline {
                         return Err(e);
@@ -1605,27 +1613,6 @@ impl<T: HerdrTransport> HerdrAgent<T> {
 /// record of what herdr promises, and the schema diff in CI is what reports a
 /// change to it — before merge, where nothing is running. Being strict *here*
 /// as well would buy no earlier warning and would cost a leaked workspace.
-#[derive(Debug, serde::Deserialize)]
-struct CreatedWorkspace {
-    workspace: CreatedWorkspaceRef,
-    /// Absent, or present but unreadable, both land as `None`: the caller
-    /// treats "no root pane" as a dispatch failure it can still clean up after.
-    #[serde(default)]
-    root_pane: Option<CreatedPaneRef>,
-}
-
-/// The one field of `workspace.create`'s `workspace` that dispatch uses.
-#[derive(Debug, serde::Deserialize)]
-struct CreatedWorkspaceRef {
-    workspace_id: String,
-}
-
-/// The one field of its `root_pane` that dispatch uses.
-#[derive(Debug, serde::Deserialize)]
-struct CreatedPaneRef {
-    pane_id: String,
-}
-
 /// What `dispatch` needs out of a `workspace.create` response: the workspace
 /// itself, and the root pane herdr opens it with.
 ///
@@ -1647,11 +1634,51 @@ struct NewWorkspace {
 }
 
 impl NewWorkspace {
-    fn from_created(created: CreatedWorkspace) -> Self {
-        Self {
-            id: created.workspace.workspace_id,
-            root_pane_id: created.root_pane.map(|pane| pane.pane_id),
-        }
+    /// Read the two ids out of a `workspace.create` response **by hand**.
+    ///
+    /// # Why this one call is not read through the generated envelope
+    ///
+    /// The reason is ordering, not shape: **by the time this is read the
+    /// workspace already exists on the operator's screen.** Any hard failure
+    /// returns before `NewWorkspace` exists, so nothing holds the id that
+    /// [`abandon`](HerdrAgent::abandon) needs — and the dispatch leaks a
+    /// workspace with a live pane in it.
+    ///
+    /// Two earlier attempts got this wrong by degrees, which is why it is
+    /// spelled out: relaxing only `root_pane`'s **presence** still failed on a
+    /// `root_pane` that was there but malformed, and narrowing to
+    /// `{ pane_id: String }` still failed on `{"pane_id": 1}` — serde
+    /// propagates an inner error through `Option`, it does not swallow it.
+    /// **The only shape that cannot fail is the one that never asks serde a
+    /// question it can answer with an error.**
+    ///
+    /// `workspace_id` is the single exception: without it there is nothing to
+    /// clean up either way, so its absence is the one hard error here.
+    ///
+    /// # This is not a hole in the design
+    ///
+    /// [ADR-0055](../../../ai-docs/decisions/adr-0055-herdr-schema-typed-wire.md)
+    /// is "**runtime forgiving, CI strict**". The generated
+    /// [`WorkspaceCreatedEnvelope`](crate::wire::result::WorkspaceCreatedEnvelope)
+    /// stays the record of what herdr promises, and the schema diff in CI is
+    /// what reports a change to it — before merge, where nothing is running.
+    /// Being strict *here* as well would buy no earlier warning and would cost
+    /// a leaked workspace.
+    fn from_response(created: &Value) -> Result<Self, HerdrError> {
+        let id = created
+            .get("workspace")
+            .and_then(|w| w.get("workspace_id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                HerdrError::InvalidResponse("workspace.create returned no workspace_id".into())
+            })?
+            .to_string();
+        let root_pane_id = created
+            .get("root_pane")
+            .and_then(|p| p.get("pane_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        Ok(Self { id, root_pane_id })
     }
 }
 
