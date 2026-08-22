@@ -343,6 +343,34 @@ impl SlackConfig {
     }
 }
 
+/// Config keys this plugin has removed, paired with what to do instead.
+///
+/// [`SlackConfig`] is `deny_unknown_fields`, so simply deleting a field turns a
+/// `slack.toml` that worked yesterday into `unknown field 'trigger_reactions',
+/// expected one of ...` — loud, but it does not say the key was *removed* or
+/// what replaced it. These pairs answer that, and [`removed_keys_in`] reports
+/// them. Same shape as the herdr plugin's table (#411).
+const REMOVED_KEYS: &[(&str, &str)] = &[(
+    "trigger_reactions",
+    "reaction triggers are declared as `[[workflows]].trigger = { reaction = \"<emoji>\" }` \
+     in the orchestrator config since #396; define each one **above** the mention catch-all \
+     (`trigger = {}` matches everything, so anything below it is unreachable)",
+)];
+
+/// The removed keys present in a raw plugin-config object, rendered as
+/// operator-facing lines. Empty when the config is clean — including when it is
+/// not an object at all, which is a different error and reported by serde.
+pub fn removed_keys_in(config: &serde_json::Value) -> Vec<String> {
+    let Some(map) = config.as_object() else {
+        return Vec::new();
+    };
+    REMOVED_KEYS
+        .iter()
+        .filter(|(key, _)| map.contains_key(*key))
+        .map(|(key, advice)| format!("`{key}` was removed: {advice}. Delete the key."))
+        .collect()
+}
+
 /// Strip surrounding colons from each emoji name and drop the ones that are
 /// left empty. Slack sends `reaction` without colons, but writing `":eyes:"`
 /// in TOML is the natural thing to do, so both spellings must land on the
@@ -710,6 +738,25 @@ mod tests {
         // The nudge is opt-in: no `bot_token` is a valid config (#305).
         assert!(cfg.bot_token.is_none());
         assert!(static_config_errors(&cfg).is_empty());
+    }
+
+    #[test]
+    fn the_removed_keys_are_reported_by_name_not_as_unknown_fields() {
+        // `SlackConfig` is `deny_unknown_fields`, so a slack.toml that still
+        // sets this would otherwise fail with serde's `unknown field ...`,
+        // which does not say the key was removed or what replaced it.
+        let found = removed_keys_in(&json!({ "trigger_reactions": ["eyes"] }));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("trigger_reactions"), "{}", found[0]);
+        // The message has to name the replacement, not just the removal.
+        assert!(found[0].contains("[[workflows]]"), "{}", found[0]);
+        assert!(found[0].contains("reaction ="), "{}", found[0]);
+        // …and the ordering rule, which is the part that silently does
+        // nothing when it is got wrong.
+        assert!(found[0].contains("catch-all"), "{}", found[0]);
+        // A clean config, and a non-object, both report nothing.
+        assert!(removed_keys_in(&json!({ "target_user_id": "U1" })).is_empty());
+        assert!(removed_keys_in(&serde_json::Value::Null).is_empty());
     }
 
     #[test]

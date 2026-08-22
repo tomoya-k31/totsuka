@@ -15,12 +15,12 @@ target_user_id = "U________"
 
 # 本人が付けるとタスクを起こす絵文字（#319）。省略 = 無効。
 #
+# リアクション起動は config.toml の [[workflows]].trigger.reaction で設定する。
 # 個人ワークスペースを流用するなら、日常で押さないカスタム絵文字にすること。
 # `eyes` にすると普段どおり 👀 を付けた瞬間にタスクが起動する。
 #
 # この機能には user token の `reactions:read` が要る。無いと Slack はイベントを
 # 配送せず、エラーも出ない（TokenGuard が警告する）。
-trigger_reactions = ["totsuka-test"]
 
 reply_style = "丁寧語で簡潔に"
 

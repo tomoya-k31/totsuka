@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use common::{
     Canned, FakeFactory, LookupHarness, Shared, SubmitHarness, accept_with_hello, call,
-    mention_envelope_in, scratch_state_dir, send_and_await_ack, ws_listener,
+    call_expecting_error, mention_envelope_in, scratch_state_dir, send_and_await_ack, ws_listener,
 };
 use task_source_slack::server::Server;
 
@@ -228,6 +228,29 @@ async fn a_mention_carries_no_reaction_label() {
     assert!(
         task.get("labels").is_none_or(|l| l == &json!([])),
         "a labelled mention would stop matching the catch-all: {task}"
+    );
+}
+
+/// A `slack.toml` still carrying the removed `trigger_reactions` is refused by
+/// name rather than by serde's `unknown field`, which says nothing about what
+/// replaced it (#396).
+#[tokio::test]
+async fn a_removed_key_is_refused_by_name() {
+    let (_listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    let (mut srv, _harness) = server(&shared);
+
+    let mut params = init_params();
+    params["config"]["trigger_reactions"] = json!(["eyes"]);
+    let message = call_expecting_error(&mut srv, 1, "initialize", params).await;
+    assert!(
+        message.contains("trigger_reactions"),
+        "the error must name the key: {message}"
+    );
+    assert!(
+        message.contains("[[workflows]]"),
+        "…and where it went: {message}"
     );
 }
 

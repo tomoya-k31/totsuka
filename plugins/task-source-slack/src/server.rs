@@ -239,6 +239,19 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
+        // Report a removed key by name before serde gets to it: `unknown field
+        // 'trigger_reactions'` is true but does not say the key was removed or
+        // what replaced it. Same shape as the herdr plugin (#411).
+        let removed = crate::config::removed_keys_in(&init.config);
+        if !removed.is_empty() {
+            return Reply::respond(Response::error(
+                id,
+                Error::new(
+                    error_code::CONFIG_INVALID,
+                    format!("invalid slack plugin config: {}", removed.join(" ")),
+                ),
+            ));
+        }
         let mut config: SlackConfig = match serde_json::from_value(init.config) {
             Ok(c) => c,
             Err(e) => {
@@ -401,6 +414,12 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
+        // Removed keys by name — `config does not parse` below is true but
+        // useless for the one config change #396 forces.
+        let removed = crate::config::removed_keys_in(&parsed.config);
+        if !removed.is_empty() {
+            return ok_validate(id, removed);
+        }
         let config: SlackConfig = match serde_json::from_value(parsed.config) {
             Ok(c) => c,
             Err(e) => return ok_validate(id, vec![format!("config does not parse: {e}")]),
