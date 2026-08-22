@@ -50,8 +50,6 @@ pub struct RecipeWorkflow {
     pub on_success: Option<&'static str>,
 }
 
-/// A blank the interview has to fill for a recipe.
-///
 /// One Project status column a recipe's workflows name, and what to call it.
 ///
 /// The recipes used to write these as literals, in Japanese, because that is
@@ -88,11 +86,37 @@ pub fn render_fragment(
 ) -> String {
     let mut out = fragment.to_string();
     for (key, value) in statuses {
-        out = out.replace(&format!("{{{{{key}}}}}"), value);
+        out = out.replace(&format!("{{{{{key}}}}}"), &escape_toml_basic(value));
     }
     out
 }
 
+/// Escape a value being spliced into a TOML basic string.
+///
+/// The placeholders sit **inside** `"…"` in the fragments, so an unescaped
+/// answer decides the TOML rather than filling it in. A name containing `"`
+/// aborts `setup` with an opaque parse error after every question has been
+/// asked; worse, `Ready", labels = ["x` produces a *syntactically valid*
+/// trigger carrying keys nobody asked for. This is the one hand-built TOML in
+/// setup — `plugin_config` uses typed structs precisely so serialisation
+/// cannot mis-quote.
+fn escape_toml_basic(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// A blank the interview has to fill for a recipe.
+///
 /// A blank exists when a plugin's own config has a **required** field that
 /// nothing else can supply — not for every knob it exposes. `herdr` and `macos`
 /// default every field, so they need no file and no questions; `github` and
@@ -323,6 +347,29 @@ pub const RECIPES: &[Recipe] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An answer is data, not TOML.
+    ///
+    /// The placeholders sit inside `"…"`, so without escaping a `"` in a
+    /// column name either aborts `setup` after every question or — worse —
+    /// closes the string and adds keys nobody asked for.
+    #[test]
+    fn an_answer_cannot_decide_the_toml_around_it() {
+        let statuses = std::collections::HashMap::from([(
+            "implement_status".to_string(),
+            r#"Ready", labels = ["x"#.to_string(),
+        )]);
+        let rendered = render_fragment(r#"{ project_status = "{{implement_status}}" }"#, &statuses);
+
+        // Still one key, and its value is the whole answer verbatim.
+        let table: toml::Table = toml::from_str(&format!("t = {rendered}")).expect("valid TOML");
+        let inner = table["t"].as_table().expect("an inline table");
+        assert_eq!(inner.len(), 1, "no key may be smuggled in: {inner:?}");
+        assert_eq!(
+            inner["project_status"].as_str(),
+            Some(r#"Ready", labels = ["x"#)
+        );
+    }
 
     /// Placeholders and slots must agree **in both directions**.
     ///

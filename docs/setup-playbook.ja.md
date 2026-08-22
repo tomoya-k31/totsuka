@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:4ed09376b42a4df9c1c82056bc1cfcfe712667519564cbfdba1806c78cffc115 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:6b55d1902d4b3e9e9f84255f468f2b742cd047fae83b360155d47703783eacb7 -->
 
 # セットアップ Playbook
 
@@ -37,7 +37,7 @@ sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 totsuka setup
 ```
 
-聞かれるのは 5 種類だけで、残りはレシピが持っている。
+聞かれるのは最大 5 種類で、残りはレシピが持っている。5 つ目は、Status 列の間でカードを動かすレシピを選んだときだけ出る。
 
 1. **どのレシピから始めるか**（GitHub 最小構成 / 設計→実装ハンドオフ / Slack 本人名義返信 / 人間検収必須）
 2. **リポジトリのパスと名前**（複数可）

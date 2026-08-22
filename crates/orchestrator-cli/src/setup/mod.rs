@@ -399,6 +399,14 @@ impl<'a> Plan<'a> {
             // here whose symptom is silence — `run` picks nothing up and
             // `doctor` stays green — so it has to be visible while there is
             // still a prompt to say no at.
+            //
+            // Only when the config will actually be written. An existing file
+            // is left untouched, so printing the names there would show an
+            // operator values that `apply` never writes — the same "asked,
+            // then discarded" shape this change removes elsewhere.
+            if !self.write_config {
+                continue;
+            }
             if let Some(trigger) = workflow.trigger {
                 out.push_str(&format!(
                     "          when {}\n",

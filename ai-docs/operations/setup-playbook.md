@@ -48,7 +48,7 @@ sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 totsuka setup
 ```
 
-聞かれるのは 5 種類だけで、それ以外はレシピが持つ:
+聞かれるのは**最大** 5 種類で、それ以外はレシピが持つ（5 は選んだレシピが Status 列を使う場合のみ）:
 
 1. **どのレシピから始めるか**（GitHub 最小構成 / 設計→実装ハンドオフ / Slack 本人名義返信 / 人間検収必須）
 2. **リポジトリのパスと名前**（複数可）

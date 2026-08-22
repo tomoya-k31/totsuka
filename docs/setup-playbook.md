@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:4ed09376b42a4df9c1c82056bc1cfcfe712667519564cbfdba1806c78cffc115 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:6b55d1902d4b3e9e9f84255f468f2b742cd047fae83b360155d47703783eacb7 -->
 
 # Setup playbook
 
@@ -36,7 +36,7 @@ Skip the `xattr` step and Gatekeeper silently kills **plugin startup only**. The
 totsuka setup
 ```
 
-It asks five kinds of question and gets the rest from the recipe you choose.
+It asks up to five kinds of question and gets the rest from the recipe you choose. The last one only comes up for recipes that move cards between status columns.
 
 1. **Which recipe to start from** (minimal GitHub, design-to-implement handoff, Slack replies under your own name, human sign-off required)
 2. **Repository paths and names** (more than one is fine)
