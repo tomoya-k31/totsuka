@@ -25,12 +25,18 @@ SCHEMA_DIR="$ROOT/plugins/agent-ide-herdr/schemas"
 SPEC="$SCHEMA_DIR/methods.json"
 WIRE="$ROOT/plugins/agent-ide-herdr/src/wire.rs"
 
+COMPAT_ONLY=0
+[[ "${1:-}" == "--compat-only" ]] && COMPAT_ONLY=1
+
 command -v jq >/dev/null 2>&1 || { echo "herdr-schema-check: jq が必要です" >&2; exit 2; }
 # 生成器は rustfmt に必須依存している（整形の有無が生成結果を変える）。ここで
 # 見ておかないと、rustfmt の無い環境では drift 検査が理由の分からない exit 2 に
 # なる — 「検査が落ちた」と「検査が動かなかった」を取り違えさせない。
-command -v rustfmt >/dev/null 2>&1 \
-  || { echo "herdr-schema-check: rustfmt が必要です (rustup component add rustfmt)" >&2; exit 2; }
+# **compat だけなら rustfmt は要らない**（生成を呼ばないため）。
+if [[ $COMPAT_ONLY -eq 0 ]]; then
+  command -v rustfmt >/dev/null 2>&1 \
+    || { echo "herdr-schema-check: rustfmt が必要です (rustup component add rustfmt)" >&2; exit 2; }
+fi
 
 # 型の対応表は生成器と共有する。検査は「各プロパティが写る Rust の型が
 # 変わっていないか」を見るので、写像そのものが同じでなければ意味が無い。
@@ -42,14 +48,16 @@ fail() { echo "herdr-schema-check: $*" >&2; errors=$((errors + 1)); }
 # ---------------------------------------------------------------- drift
 # 生成物をその場で作り直して突き合わせる。**元の内容はバイト単位で戻す**
 # （`$(cat …)` 経由だと末尾改行が落ちて、検査自身が差分を作ってしまう）。
-before="$(mktemp)"; trap 'rm -f "$before"' EXIT
-cp "$WIRE" "$before"
-# stdout だけを捨てる。**stderr は残す** — 生成が落ちた理由が 1 文字も
-# 出ないと、`set -e` のフェイルクローズが「無言の exit」に見える。
-bash "$ROOT/scripts/herdr-types-build.sh" >/dev/null
-if ! cmp -s "$before" "$WIRE"; then
-  fail "wire.rs が生成物と一致しません。\`bash scripts/herdr-types-build.sh\` を流してコミットしてください"
-  cp "$before" "$WIRE"
+if [[ $COMPAT_ONLY -eq 0 ]]; then
+  before="$(mktemp)"; trap 'rm -f "$before"' EXIT
+  cp "$WIRE" "$before"
+  # stdout だけを捨てる。**stderr は残す** — 生成が落ちた理由が 1 文字も
+  # 出ないと、`set -e` のフェイルクローズが「無言の exit」に見える。
+  bash "$ROOT/scripts/herdr-types-build.sh" >/dev/null
+  if ! cmp -s "$before" "$WIRE"; then
+    fail "wire.rs が生成物と一致しません。\`bash scripts/herdr-types-build.sh\` を流してコミットしてください"
+    cp "$before" "$WIRE"
+  fi
 fi
 
 # ---------------------------------------------------------------- compat
@@ -239,4 +247,6 @@ if [[ $errors -gt 0 ]]; then
   echo "herdr-schema-check: $errors error(s)" >&2
   exit 1
 fi
-echo "herdr-schema-check: 0 error(s)（下限 $floor / 上位 $checked 版 / $(jq -r '.methods | length' "$SPEC") メソッドを検査）"
+mode=""
+[[ $COMPAT_ONLY -eq 1 ]] && mode="、compat のみ"
+echo "herdr-schema-check: 0 error(s)（下限 $floor / 上位 $checked 版 / $(jq -r '.methods | length' "$SPEC") メソッドを検査${mode}）"

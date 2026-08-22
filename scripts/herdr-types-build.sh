@@ -34,8 +34,6 @@ SPEC="$SCHEMA_DIR/methods.json"
 UPSTREAM="https://raw.githubusercontent.com/herdrdev/herdr"
 
 command -v jq >/dev/null 2>&1 || { echo "herdr-types: jq が必要です (brew install jq)" >&2; exit 2; }
-command -v rustfmt >/dev/null 2>&1 || { echo "herdr-types: rustfmt が必要です (rustup component add rustfmt)" >&2; exit 2; }
-
 # 生成物を整形する edition は、ワークスペースが宣言しているものに従う。
 EDITION="$(jq -rn --rawfile t "$ROOT/Cargo.toml" '$t' | sed -n 's/^edition *= *"\([0-9]*\)".*/\1/p' | head -1)"
 [[ -n "$EDITION" ]] || { echo "herdr-types: ワークスペースの edition を読めません" >&2; exit 2; }
@@ -99,6 +97,7 @@ GEN_JQ="$(cat "$ROOT/scripts/herdr-types.jq")"
 # 送り返すことになる）。
 read -r -d '' EMIT_JQ <<'JQ' || true
 (.sliced_from.herdr_version) as $ver
+| $newest as $newest
 | (.request_defs | keys) as $rnames
 | check_unique($rnames; "request") as $_
 | (.result_defs | keys) as $enames
@@ -127,6 +126,18 @@ read -r -d '' EMIT_JQ <<'JQ' || true
     "//! タグの改名を報せるのはコミット済み schema の差分（マージ前）であって、",
     "//! 実行時の失敗ではない。",
     "",
+    "/// このビルドが生成元にした herdr のバージョン（= サポートする下限）。",
+    "pub const FLOOR: &str = \"\($ver)\";",
+    "",
+    "/// スライスをコミットしてある中で**最も新しい** herdr のバージョン。",
+    "///",
+    "/// **上限ではない。** これより新しい herdr も拒否しない（#517 の大前提）。",
+    "/// 意味するのは「この版までは CI の schema 差分が突き合わせている」だけで、",
+    "/// これより新しい herdr は*未検証*である — 動く公算が高いが、確かめられて",
+    "/// いない。区別できるようにしておくと、動かなかったときに最初に見る場所が",
+    "/// 決まる。",
+    "pub const NEWEST_CHECKED: &str = \"\($newest)\";",
+    "",
     "/// totsuka が herdr へ**送る**型。",
     "///",
     "/// `#[serde(other)]` はここには無い。知らない値を送り返すことになるうえ、",
@@ -154,8 +165,8 @@ read -r -d '' EMIT_JQ <<'JQ' || true
   ] | join("\n"))
 JQ
 
-generate() { # <sliced schema path>
-  jq -r "$GEN_JQ"$'\n'"$EMIT_JQ" "$1"
+generate() { # <sliced schema path> <newest committed version>
+  jq -r --arg newest "$2" "$GEN_JQ"$'\n'"$EMIT_JQ" "$1"
 }
 
 # ---------------------------------------------------------------- entry
@@ -174,13 +185,21 @@ if [[ "${1:-}" == "--fetch" ]]; then
   exit 0
 fi
 
+# rustfmt が要るのは**生成のときだけ**。`--fetch` は jq と curl しか使わないので、
+# Rust ツールチェインの無いランナー（日次 cron）でも回せる。
+command -v rustfmt >/dev/null 2>&1 \
+  || { echo "herdr-types: rustfmt が必要です (rustup component add rustfmt)" >&2; exit 2; }
+
 src="$SCHEMA_DIR/herdr-$(floor).json"
 [[ -f "$src" ]] || { echo "herdr-types: 下限版のスライスがありません: $src" >&2; exit 1; }
 # 一時ファイルへ書いてから差し替える。`> "$OUT"` で直接書くと、生成が
 # フェイルクローズした瞬間に `$OUT` は**切り詰められた後**で、失敗した実行が
 # 生成物を破壊する。
 tmp_out="$(mktemp)"; trap 'rm -f "$tmp_out"' EXIT
-generate "$src" > "$tmp_out"
+# コミット済みスライスのうち最も新しい版（バージョン順。`sort -V` は
+# `0.10.0 > 0.9.0` を正しく並べる）。
+newest="$(for f in "$SCHEMA_DIR"/herdr-*.json; do jq -r '.sliced_from.herdr_version' "$f"; done | sort -V | tail -1)"
+generate "$src" "$newest" > "$tmp_out"
 # **rustfmt は必須で、任意ではない。** 実測で、整形の有無は生成結果を変える
 # （1 フィールドの enum バリアントが 1 行に畳まれる）。無ければ生成物が環境で
 # 揺れ、drift 検査がその揺れを差分として報告してしまう。

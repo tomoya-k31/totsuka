@@ -1,0 +1,160 @@
+name: herdr-schema-watch
+
+# herdr の新しい stable が出たことを検知して issue を立てる。
+#
+# **PR の CI ではこれをやらない。** herdr がリリースされた瞬間に無関係な PR が
+# 全部赤くなり、ネットワーク障害でも落ちるため。PR の CI（ci.yml の
+# `herdr-schema-check`）はコミット済み schema とだけ突き合わせ、新版への追随は
+# この別レーンが持つ（#520 §2）。audit.yml の日次 cron が前例。
+#
+# herdr の stable は約 2 週間ごとなので、日次で十分に速い。
+
+on:
+  schedule:
+    - cron: "23 20 * * *" # 05:23 JST daily
+  workflow_dispatch:
+
+# issue を立てるためだけに write が要る。checkout は read で足りる。
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: check for a newer herdr
+    # gh / curl / jq しか使わない。Docker も特権操作も無く、1 vCPU で足り、
+    # 失敗してもリリースを止めない。
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # **prerelease は見ない。** preview ビルドは基底 stable の `version` を
+      # 名乗るので、混ぜると同じ版が何度も「新しい」と判定される。
+      #
+      # `/releases/latest` を使うのは、draft と prerelease を除いた最新を
+      # **1 件だけ**返すため。`/releases --paginate --jq` は結合後の配列では
+      # なく**ページごと**にフィルタを適用するので、リリースが 100 本を超えた
+      # 日に `.[0]` が複数行になり、`GITHUB_OUTPUT` が `Invalid format` で
+      # 落ちる（= 新版の検知そのものが止まる）。
+      - name: Find the newest stable herdr release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh api repos/herdrdev/herdr/releases/latest --jq '.tag_name')"
+          # 1 行の、それらしい形であることまで確かめる。上流の値をそのまま
+          # 下流のシェルへ流す前に、ここで形を閉じておく。
+          case "${tag}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "herdr-schema-watch: 最新の stable タグが読めません: '${tag}'" >&2
+              exit 1
+              ;;
+          esac
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${tag#v}" >> "${GITHUB_OUTPUT}"
+      # 値は `env:` 経由で渡す。`${{ }}` を `run:` へ直接展開すると、**上流の
+      # リポジトリが決めた文字列**がシェルのクォートを抜けうる（このリポジトリの
+      # 他のワークフローも例外なく `env:` を使っている）。
+      - name: Compare against the committed slices
+        id: diff
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+          VERSION: ${{ steps.upstream.outputs.version }}
+        run: |
+          if [ -f "plugins/agent-ide-herdr/schemas/herdr-${VERSION}.json" ]; then
+            echo "herdr ${VERSION} は既にコミット済みです"
+            echo "new=0" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          # **`--fetch` の前に**取っておく。後で取ると `sort -V | tail -2 | head -1`
+          # は「全体の 2 番目に高い版」を返すだけで、新リリースが最高版でない
+          # ときに嘘になる（`/releases/latest` は created_at 順なので起こりうる）。
+          previous="$(for f in plugins/agent-ide-herdr/schemas/herdr-*.json; do
+            jq -r '.sliced_from.herdr_version' "$f"; done | sort -V | tail -1)"
+          # 取得してスライスする。ここは jq と curl しか使わない
+          # （rustfmt が要るのは生成のときだけ）。
+          bash scripts/herdr-types-build.sh --fetch "${TAG}"
+          {
+            echo "new=1"
+            echo "previous=${previous}"
+          } >> "${GITHUB_OUTPUT}"
+          # **`--compat-only` で回す。** 素の検査は drift も見るが、新しい
+          # スライスを置いた直後は drift が**必ず**赤くなる（`NEWEST_CHECKED`
+          # がスライス集合から生成されるため）。混ぜると「必ず出る赤」と
+          # 「本当に知りたい赤」が区別できなくなり、受け取った人が毎回空振り
+          # する。compat は jq だけで動くので、Rust ツールチェインも要らない。
+          #
+          # 終了コードは 1（違反あり＝報せたい中身）と 2（環境不備＝検査が
+          # **動かなかった**）を区別する。1 は本文へ回し、2 はジョブを赤くする
+          # — `|| true` で両方飲み込むと、検査が一度も動いていないことに
+          # 誰も気づけない。
+          set +e
+          out="$(bash scripts/herdr-schema-check.sh --compat-only 2>&1)"
+          rc=$?
+          set -e
+          if [ "${rc}" -ge 2 ]; then
+            echo "herdr-schema-watch: 互換検査が動きませんでした (exit ${rc})" >&2
+            echo "${out}" >&2
+            exit 1
+          fi
+          {
+            echo "compat=${rc}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "### \`herdr-schema-check.sh --compat-only\`"
+            echo
+            echo '```text'
+            echo "${out}"
+            echo '```'
+          } > /tmp/check.md
+      - name: Open an issue for the new release
+        if: steps.diff.outputs.new == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+          VERSION: ${{ steps.upstream.outputs.version }}
+          PREVIOUS: ${{ steps.diff.outputs.previous }}
+          COMPAT: ${{ steps.diff.outputs.compat }}
+        run: |
+          title="chore(herdr): herdr ${VERSION} の API schema を取り込む"
+          # 同じ版で毎日立てないよう、開いている同題の issue を先に探す。
+          existing="$(gh issue list --state open --search "${title} in:title" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "${existing}" ]; then
+            echo "既に #${existing} が開いています"
+            exit 0
+          fi
+          {
+            echo "herdr **${VERSION}** が出ました（コミット済みの最新は ${PREVIOUS}）。"
+            echo
+            echo "取り込み手順:"
+            echo
+            echo "\`\`\`bash"
+            echo "bash scripts/herdr-types-build.sh --fetch ${TAG}"
+            echo "bash scripts/herdr-types-build.sh   # wire.rs を再生成（NEWEST_CHECKED が動く）"
+            echo "bash scripts/herdr-schema-check.sh"
+            echo "\`\`\`"
+            echo
+            echo "**再生成の 1 行を飛ばすと \`herdr-schema-check.sh\` は drift で落ちます。**"
+            echo "\`wire::NEWEST_CHECKED\` はコミット済みスライス集合から生成されるので、"
+            echo "スライスを足せば生成物も変わります（破壊的変更ではありません）。"
+            echo
+            echo "**このジョブが緑でも、取り込みは必要です。** 検査が見ているのは"
+            echo "コミット済みのスライスだけで、取り込むまでこの版は誰も突き合わせて"
+            echo "いません（\`wire::NEWEST_CHECKED\` はまだ ${PREVIOUS} のままです）。"
+            echo
+            if [ "${COMPAT}" != "0" ]; then
+              echo "> [!WARNING]"
+              echo "> **下の互換検査が赤い = 破壊的変更です。** 落とす条件と向きは"
+              echo "> [ADR-0055](../blob/main/ai-docs/decisions/adr-0055-herdr-schema-typed-wire.md) を参照。"
+              echo
+            fi
+            cat /tmp/check.md
+          } > /tmp/body.md
+          gh issue create --title "${title}" --body-file /tmp/body.md --label enhancement

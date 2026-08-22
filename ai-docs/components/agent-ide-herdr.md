@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-23T12:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-23T18:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -18,6 +18,20 @@ owner: tomoya-k31
 
 **上限は無い。** 新しい herdr で totsuka が起動できなくなることは設計上あってはならないので、
 このガードは下限だけを見る（#517）。
+
+ただし **`wire::NEWEST_CHECKED`（= スライスをコミットしてある中で最も新しい版）より
+新しい herdr には warn を 1 行出す**（#520 §2）。**下の表で「通す」に落ちるもの
+（`version` の欠落・パース不能）はここへ到達しない** — 比較する版が無いためである。
+拒否ではない — 意味するのは
+「この版までは CI の schema 差分が突き合わせている」だけで、それより新しい herdr は
+*未検証*である。動く公算は高いが、動かなかったときに最初に見る場所を決めておくための
+印である。**`config validate` の答えには載せない**: そこは `errors` しか運ばないので、
+「未検証」をエラーとして返すと動いている環境で `totsuka doctor` が赤くなる（warnings
+チャネルを足すのはプロトコル変更で、これには見合わない）。
+
+新版の検知は日次 cron（`.github/workflows/herdr-schema-watch.yml`）が持つ。
+**PR の CI では最新版を取りに行かない** — herdr がリリースされた瞬間に無関係な PR が
+全部赤くなり、ネットワーク障害でも落ちるため。
 
 **`protocol` 整数は見ない**（#520 で `version` へ移行）。あれは herdr の**バイナリ
 client↔server wire 形式**の版で、totsuka が使う NDJSON Socket API を追跡していない。実測では

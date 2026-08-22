@@ -472,6 +472,28 @@ fn check_version(pong: &Value) -> Result<(), HerdrError> {
     // Compare on the release triple only — see "a prerelease of the floor
     // passes" above.
     let released = semver::Version::new(version.major, version.minor, version.patch);
+    // **Newer than anything checked is a note, never a refusal** (#520 §2).
+    // The committed schema slices go up to `wire::NEWEST_CHECKED`; past that
+    // the CI diff has not compared anything, so this build is running against
+    // a herdr nobody verified. It will almost certainly work — additions are
+    // what herdr does between releases — but when it does not, this line is
+    // where to start.
+    //
+    // It goes to the log rather than into `config validate`'s answer, which
+    // carries `errors` and nothing else: reporting "not verified" as an error
+    // would make `totsuka doctor` red on a working setup, and adding a
+    // warnings channel is a protocol change this does not justify.
+    if let Ok(newest) = semver::Version::parse(crate::wire::NEWEST_CHECKED)
+        && released > newest
+    {
+        tracing::warn!(
+            herdr = raw,
+            newest_checked = crate::wire::NEWEST_CHECKED,
+            "this herdr is newer than any release whose API schema is committed here; it is not \
+             refused and is expected to work, but nothing has compared it against this build — \
+             run `bash scripts/herdr-types-build.sh --fetch v{raw}` to add it"
+        );
+    }
     if released < MIN_HERDR_VERSION {
         return Err(HerdrError::InvalidResponse(format!(
             "herdr {raw} is older than the {MIN_HERDR_VERSION} this plugin needs: 0.7.5 made \
@@ -534,5 +556,39 @@ fn request_id(id: &Value) -> RequestId {
         RequestId::Str(s.to_string())
     } else {
         RequestId::Str(id.to_string())
+    }
+}
+
+#[cfg(test)]
+mod version_floor_tests {
+    use super::*;
+
+    /// The floor is written twice — here as [`MIN_HERDR_VERSION`], and in
+    /// `schemas/methods.json` as the version the types are generated from
+    /// (surfaced as [`crate::wire::FLOOR`]).
+    ///
+    /// **Two places means one of them can go stale silently.** Raising the
+    /// generation floor without raising this constant would leave the guard
+    /// admitting a herdr whose responses the generated types were never built
+    /// from — the exact shape of failure ADR-0055 exists to remove.
+    #[test]
+    fn the_guard_and_the_generated_types_share_one_floor() {
+        assert_eq!(
+            MIN_HERDR_VERSION.to_string(),
+            crate::wire::FLOOR,
+            "raise both, or neither: `MIN_HERDR_VERSION` in server.rs and `floor` in \
+             plugins/agent-ide-herdr/schemas/methods.json"
+        );
+    }
+
+    /// `NEWEST_CHECKED` is not a ceiling, but it must not be *below* the floor
+    /// — that would mean the committed slices do not even cover the version
+    /// the types were generated from.
+    #[test]
+    fn the_newest_checked_version_is_not_below_the_floor() {
+        let floor = semver::Version::parse(crate::wire::FLOOR).expect("FLOOR is semver");
+        let newest =
+            semver::Version::parse(crate::wire::NEWEST_CHECKED).expect("NEWEST_CHECKED is semver");
+        assert!(newest >= floor, "{newest} < {floor}");
     }
 }
