@@ -582,14 +582,14 @@ poll_interval_secs = 60   # 60 は既定値でもある
 
 ### トークンに必要な権限
 
-**コードが呼んでいるものからの導出であって、実測ではない** — 最小値は絞り込んでいない。呼び出しは全て `https://api.github.com/graphql` への POST で、操作は 5 つだけである: Project アイテムの取得、Project / フィールド / アイテムの id 解決、`updateProjectV2ItemFieldValue`、Issue への `addComment`、`viewer`。REST も Contents API も使わない。
+**コードが呼んでいるものからの導出であって、実測ではない** — 最小値は絞り込んでいない。呼び出しは全て `https://api.github.com/graphql` への POST で、操作は 4 つだけである: Project アイテムの取得、Project / フィールド / アイテムの id 解決、`updateProjectV2ItemFieldValue`、`viewer`。REST も Contents API も使わず、**Issue へは何も書き込まない** —— 成果物はエージェントが自分で書く。
 
 fine-grained PAT の場合:
 
 | 種別 | 権限 |
 |---|---|
 | Repository | **Metadata: Read**（必須） |
-| Repository | **Issues: Read and write** |
+| Repository | **Issues: Read**（write は不要） |
 | Organization **または** Account | **Projects: Read and write** — org 所有のボードなら Organization、user 所有なら Account |
 
 **Contents は不要。** classic PAT なら `project` と、`repo`（private リポジトリを含む場合）または `public_repo`。private な組織のボードでは `read:org` も要りうる。

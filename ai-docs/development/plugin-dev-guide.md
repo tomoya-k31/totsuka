@@ -40,7 +40,8 @@ state_stream = true             # agent: state/subscribe ストリーム(F-38)
 pane_control = true             # agent: session/focus・release・list(F-94)
 hook_completion = true          # agent: 完了をツールのフック経由で報告する
 diagnostics_snapshot = true     # agent: diagnostics/snapshot に応答する
-outputs = ["source"]            # task_source: result/publish 対応(F-83)
+outputs = ["source"]            # result/publish に対応するなら宣言する(F-83)
+                               # 宣言しなければ output = "source" の workflow は弾かれる
 ```
 
 **宣言できるのは、Orchestrator が実際に読む鍵だけである。** `Capabilities` の

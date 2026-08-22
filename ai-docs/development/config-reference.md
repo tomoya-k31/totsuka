@@ -672,14 +672,14 @@ poll_interval_secs = 60   # 省略時も 60
 
 ## `token` に必要な権限
 
-**導出であって実測ではない**（最小値は測っていない）。呼んでいるのは `https://api.github.com/graphql` への 5 操作だけ — Project アイテム取得、Project/フィールド/アイテムの id 解決、`updateProjectV2ItemFieldValue`、Issue への `addComment`、`viewer`。REST も Contents API も使わない。導出の根拠は [task-source-github](/components/task-source-github.md)。
+**導出であって実測ではない**（最小値は測っていない）。呼んでいるのは `https://api.github.com/graphql` への 4 操作だけ — Project アイテム取得、Project/フィールド/アイテムの id 解決、`updateProjectV2ItemFieldValue`、`viewer`。REST も Contents API も使わない。**Issue への書き込みは無い**（#398 で `result/publish` とともに `addComment` が消えた）。導出の根拠は [task-source-github](/components/task-source-github.md)。
 
 **fine-grained PAT**:
 
 | 種別 | 権限 |
 |---|---|
 | Repository | **Metadata: Read**（必須） |
-| Repository | **Issues: Read and write** |
+| Repository | **Issues: Read**（write は不要） |
 | Organization **または** Account | **Projects: Read and write**（org 所有のボードなら Organization、user 所有なら Account） |
 
 **Contents は不要。** classic PAT なら `project` と、`repo`（private を含む場合）または `public_repo`。private org のボードでは `read:org` も要りうる。

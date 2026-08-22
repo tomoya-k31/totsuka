@@ -206,6 +206,12 @@ status の書き戻しだけは**コアに残す**（`task/update_status`）。�
 
 `result_publish` の実体は残し、**呼ばれたときだけ**非推奨警告を出す（`initialize` 時ではない — その経路を通らない構成に、対処しようのない警告を出しても雑音になる）。実体と Notion の `blocks.rs` の削除は 0.3。
 
+> **後日談**: ここで「削除は 0.3」と書いたが、**実際に消えたのは 0.5 系**である。0.3.0 も 0.4.0 も breaking bump だったのに、そのとき誰もこの行を参照しなかった。[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md) が `design_preview` でまったく同じ失敗を記録しており、**同じ書き方が同じ結果を生んだ**ことになる。「次の breaking bump で消す」は、bump のたびに未処理の削除予定を洗い出す仕掛けが無い限り実行されない。
+>
+> また `blocks.rs` の削除という書き方は広すぎた。消えたのは**書き込み方向だけ**（`markdown_to_blocks` とその補助）で、`blocks_to_markdown` / `rich_text_plain` はページ本文をタスク本体に載せる経路が使い続けている。
+>
+> 削除に伴い、`answer` / `triage` profile を github / notion で使うには `output = "none"` の明示が要るようになった（両 profile は `output` を `source` に解決するが、両プラグインは capability を宣言しなくなったため）。
+
 ## 8. D6/D7 — 実装への移行はリアクションで別タスクを起こす（#397）
 
 Slack の「質問 → 方針決定 → 実装」（#393 の WF 8）を、**実行中タスクの権限昇格ではなく**、本人のリアクションを起点とする別タスクとして実現する。`answer` タスクは deny を一度も緩めずに完結し、書き込み権限の付与は常に本人の明示的な操作を経由する。

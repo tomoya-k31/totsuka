@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:02a7d68856b453a244b0696eb4d507a639124b95e04c2f74662fec297b349332 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:1a6f0ee472dc41f8adbbaa107fbb8ea5ca13596e9bd92d3158c2c895b07fb593 -->
 
 # プラグイン開発ガイド
 
@@ -41,7 +41,9 @@ state_stream = true                 # agent: 状態ストリーム対応
 pane_control = true                 # agent: pane のフォーカス・解放・列挙
 hook_completion = true              # agent: 完了をツールのフック経由で報告する
 diagnostics_snapshot = true         # agent: diagnostics/snapshot に応答する
-outputs = ["source"]                # task_source: 成果物の書き戻し対応
+outputs = ["source"]                # result/publish を実装するときだけ宣言する。
+                                   # 宣言しないと output = "source" の
+                                   # workflow は弾かれる
 ```
 
 Orchestrator は起動前に `protocol_version` の互換性を検査し、宣言された capability だけを要求する。

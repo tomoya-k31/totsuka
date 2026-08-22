@@ -581,14 +581,14 @@ An unknown key is the opposite: it is a hard startup failure, because that check
 
 ### Permissions the token needs
 
-**Derived from what the code calls, not measured** — the minimum has not been narrowed empirically. Every call is a POST to `https://api.github.com/graphql`, and there are only five: fetching project items, resolving project/field/item ids, `updateProjectV2ItemFieldValue`, `addComment` on an issue, and `viewer`. No REST, no Contents API.
+**Derived from what the code calls, not measured** — the minimum has not been narrowed empirically. Every call is a POST to `https://api.github.com/graphql`, and there are only four: fetching project items, resolving project/field/item ids, `updateProjectV2ItemFieldValue`, and `viewer`. No REST, no Contents API, and **nothing is written to an issue** — the agent writes the deliverable itself.
 
 For a fine-grained PAT:
 
 | Kind | Permission |
 |---|---|
 | Repository | **Metadata: Read** (required) |
-| Repository | **Issues: Read and write** |
+| Repository | **Issues: Read** (write is not needed) |
 | Organization **or** Account | **Projects: Read and write** — Organization for an org-owned board, Account for a user-owned one |
 
 **Contents is not needed.** For a classic PAT: `project`, plus `repo` (if private repositories are involved) or `public_repo`. A private organization's board may also need `read:org`.

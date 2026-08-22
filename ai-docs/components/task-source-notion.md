@@ -36,11 +36,11 @@ fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tas
 
 # capabilities（F-83）
 
-manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.1.6, <0.6"`）と `initialize` 応答で `kind = task_source`・`outputs = ["source"]` を宣言。`result/publish` に対応する。
+manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.1.6, <0.6"`）と `initialize` 応答で `kind = task_source` を宣言する。**`outputs` は空**（#398）—— 成果物はエージェントが Notion MCP で自分で書くので、このプラグインは何も publish しない。
 
 # テスト
 
-`NotionTransport` を録画レスポンスの fake に差し替え、initialize→poll_loop→`task/submit` push（SubmitHarness で観測・ack 注入）、property_map 正規化→ページ本文取得→update_status→result/publish の全経路を JSON-RPC 境界越しに結合テスト（`tests/integration.rs`）。取り込み制御（他者 assignee / 実行中 / トリガー不一致）、triggers 空での no-poll、2000 文字超の publish 分割、未知 option の update_status 拒否、トークン無効／マップ先プロパティ欠落時の `config/validate`（原因＋次アクション）を検証。実バイナリを stdio で駆動して疎通確認済み。
+`NotionTransport` を録画レスポンスの fake に差し替え、initialize→poll_loop→`task/submit` push（SubmitHarness で観測・ack 注入）、property_map 正規化→ページ本文取得→update_status の全経路を JSON-RPC 境界越しに結合テスト（`tests/integration.rs`）。取り込み制御（他者 assignee / 実行中 / トリガー不一致）、triggers 空での no-poll、未知 option の update_status 拒否、トークン無効／マップ先プロパティ欠落時の `config/validate`（原因＋次アクション）を検証。実バイナリを stdio で駆動して疎通確認済み。
 
 # 依存
 
@@ -48,7 +48,7 @@ manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.1
 
 # 成果物の書き込み（#398 で非推奨）
 
-`design` / `implement` profile の workflow は `output = "none"` になり、成果物はエージェントが Notion MCP で自分で書く。`result/publish` の実装は残っているが**呼ばれたときに非推奨警告を出す**（`initialize` 時ではない — その経路を通らない構成に、対処しようのない警告を出しても雑音になる）。実体の削除は 0.3。代わりに `instructions_kind`（コアが `TriggerInfo.trigger` に焼き込む）から `[prompts]` の指示文を選び、`Task.instructions` に載せる — これが書き込み先をエージェントへ伝える唯一の経路で、**旧プラグインでは無言で欠落する**（capability 宣言が無いので probe できない。コアと同時にリリースすること）。
+`design` / `implement` profile の workflow は `output = "none"` になり、成果物はエージェントが Notion MCP で自分で書く。**`result/publish` の実体は削除済み**（#398）。`blocks.rs` は**読み取り方向だけ**が残った（`blocks_to_markdown` / `rich_text_plain`）—— ADR-0033 は「`blocks.rs` の削除」と書いたが、ページ本文をタスク本体に載せる経路が使い続けているので、消えたのは書き込み方向（`markdown_to_blocks` とその補助）だけである。`answer` / `triage` profile をこのソースで使うには **`output = "none"` を明示する**。代わりに `instructions_kind`（コアが `TriggerInfo.trigger` に焼き込む）から `[prompts]` の指示文を選び、`Task.instructions` に載せる — これが書き込み先をエージェントへ伝える唯一の経路で、**旧プラグインでは無言で欠落する**（capability 宣言が無いので probe できない。コアと同時にリリースすること）。
 
 # 関連
 

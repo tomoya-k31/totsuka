@@ -15,9 +15,9 @@ use std::time::Duration;
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskUpdateStatusParams, TriggerInfo,
+    TaskUpdateStatusParams, TriggerInfo,
 };
-use plugin_protocol::{Capabilities, OutputCapability, RequestId, method};
+use plugin_protocol::{Capabilities, RequestId, method};
 use plugin_sdk::{LineHandler, Reply, SubmitClient, poll_loop};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -122,7 +122,6 @@ where
             method::CONFIG_VALIDATE => self.config_validate(id, params).await,
             method::SHUTDOWN => Reply::shutdown_ack(id),
             method::TASK_UPDATE_STATUS => self.update_status(id, params).await,
-            method::RESULT_PUBLISH => self.result_publish(id, params).await,
             other => Reply::respond(Response::error(
                 id,
                 Error::new(
@@ -226,35 +225,6 @@ where
             Err(e) => Reply::respond(rpc_error(id, &e)),
         }
     }
-
-    async fn result_publish(&mut self, id: RequestId, params: Value) -> Reply {
-        let Some(session) = self.session.as_ref() else {
-            return not_initialized(id);
-        };
-        let parsed: ResultPublishParams = match parse_params(&params) {
-            Ok(v) => v,
-            Err(reply) => return reply.with_id(id),
-        };
-        // #398: the deliverable is the agent's to write now, through the Notion
-        // MCP server. Warned **on use**, not at `initialize`: a config that
-        // never reaches this path is not affected, and a startup warning it
-        // cannot act on is noise.
-        tracing::warn!(
-            task_id = %parsed.task_id,
-            "`result/publish` on this plugin is deprecated → the agent writes the \
-             deliverable itself through the Notion MCP server (#398). Set the workflow's \
-             `profile` to design/implement and drop `output = \"source\"`; this handler \
-             and the Markdown→blocks conversion are removed in 0.3"
-        );
-        match session
-            .client
-            .publish(&parsed.task_id, &parsed.content, parsed.format.as_deref())
-            .await
-        {
-            Ok(()) => Reply::respond(Response::result(id, Value::Null)),
-            Err(e) => Reply::respond(rpc_error(id, &e)),
-        }
-    }
 }
 
 /// Drive the server from the SDK stdio runtime (`plugin_sdk::serve`), which
@@ -280,7 +250,6 @@ fn capabilities_result() -> Value {
     let result = InitializeResult {
         plugin_version: plugin_version(),
         capabilities: Capabilities {
-            outputs: vec![OutputCapability::Source],
             ..Capabilities::default()
         },
     };

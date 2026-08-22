@@ -4,7 +4,7 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、Issue コメント publish を行う。呼び出す 5 つの GraphQL 操作と、そこから導いたトークン権限（未実測）を含む。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-22T12:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -31,11 +31,11 @@ fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tas
 
 # capabilities（F-83）
 
-manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1.6, <0.6"`）と `initialize` 応答で `kind = task_source`・`outputs = ["source"]` を宣言。`result/publish` に対応する。
+manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1.6, <0.6"`）と `initialize` 応答で `kind = task_source` を宣言する。**`outputs` は空**（#398）—— 成果物はエージェントが `gh` で自分で書くので、このプラグインは何も publish しない。`output = "source"` を書いた workflow は `config validate` が弾く（F-83）。
 
 # テスト
 
-`GithubTransport` を録画レスポンスの fake に差し替え、initialize→poll_loop→`task/submit` push（SubmitHarness で観測・ack 注入）、正規化→update_status→result/publish の全経路を JSON-RPC 境界越しに結合テスト（`tests/integration.rs`）。取り込み制御（他者 assignee / 実行中）、triggers 空での no-poll、トークン無効時の `config/validate`（原因＋次アクション）も検証。実バイナリを stdio で駆動して疎通確認済み。
+`GithubTransport` を録画レスポンスの fake に差し替え、initialize→poll_loop→`task/submit` push（SubmitHarness で観測・ack 注入）、正規化→update_status の全経路を JSON-RPC 境界越しに結合テスト（`tests/integration.rs`）。取り込み制御（他者 assignee / 実行中）、triggers 空での no-poll、トークン無効時の `config/validate`（原因＋次アクション）も検証。実バイナリを stdio で駆動して疎通確認済み。
 
 # 依存
 
@@ -43,7 +43,7 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1
 
 # 成果物の書き込み（#398 で非推奨）
 
-`design` / `implement` profile の workflow は `output = "none"` になり、成果物はエージェントが `gh issue comment` などで自分で書く。`result/publish` の実装は残っているが**呼ばれたときに非推奨警告を出す**（`initialize` 時ではない — その経路を通らない構成に、対処しようのない警告を出しても雑音になる）。実体の削除は 0.3。代わりに `instructions_kind`（コアが `TriggerInfo.trigger` に焼き込む）から `[prompts]` の指示文を選び、`Task.instructions` に載せる — これが書き込み先をエージェントへ伝える唯一の経路で、**旧プラグインでは無言で欠落する**（capability 宣言が無いので probe できない。コアと同時にリリースすること）。
+`design` / `implement` profile の workflow は `output = "none"` になり、成果物はエージェントが `gh issue comment` などで自分で書く。**`result/publish` の実体は削除済み**（#398。ADR-0033 は「削除は 0.3」と書いたが、実際に消えたのは 0.5 系である）。`answer` / `triage` profile は `output` を `source` に解決するので、このソースで使うには **`output = "none"` を明示して上書きする**（`output` は profile を上書きできる唯一のキー）。代わりに `instructions_kind`（コアが `TriggerInfo.trigger` に焼き込む）から `[prompts]` の指示文を選び、`Task.instructions` に載せる — これが書き込み先をエージェントへ伝える唯一の経路で、**旧プラグインでは無言で欠落する**（capability 宣言が無いので probe できない。コアと同時にリリースすること）。
 
 # トークンに必要な権限
 
@@ -51,14 +51,13 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1
 
 ## 実際に呼んでいるもの
 
-全て `https://api.github.com/graphql` への単一 POST に bearer トークンを載せる形で、操作は **5 つだけ**である。REST も Contents API も使わない。
+全て `https://api.github.com/graphql` への単一 POST に bearer トークンを載せる形で、操作は **4 つだけ**である。REST も Contents API も使わない。**書き込みは Project のカード移動だけ**で、Issue へは何も書かない（#398 で `addComment` ごと消えた）。
 
 | 操作 | 触るもの |
 |---|---|
 | Project アイテム取得 | `user`\|`organization` → `projectV2(number:)` → `items`。アイテムごとに Issue の `id number title body url`、`repository { name }`、`assignees`、`labels` |
 | Project / フィールド / アイテムの id 解決 | `projectV2 { id, field(name:) { options }, items { id } }` |
 | カード移動 | `updateProjectV2ItemFieldValue` |
-| 結果の投稿 | Issue への `addComment(subjectId:)` |
 | 疎通確認 | `viewer { login }` |
 
 ## 導いた権限
@@ -68,7 +67,7 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1
 | 種別 | 権限 | なぜ |
 |---|---|---|
 | Repository | **Metadata: Read** | 必須（他の Repository 権限の前提） |
-| Repository | **Issues: Read and write** | `addComment`、および Project アイテム経由で読む Issue の本文・ラベル・アサイニー |
+| Repository | **Issues: Read** | Project アイテム経由で読む Issue の本文・ラベル・アサイニー。**write は不要**（#398 で `addComment` が消えた） |
 | Organization **または** Account | **Projects: Read and write** | ProjectsV2 の読み取りと `updateProjectV2ItemFieldValue`。org 所有のボードなら Organization permissions、user 所有なら Account permissions |
 
 **Contents は不要**である。このトークンでリポジトリの中身を読み書きすることはない。

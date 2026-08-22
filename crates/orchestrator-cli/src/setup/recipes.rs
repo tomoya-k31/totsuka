@@ -251,9 +251,11 @@ pub const RECIPES: &[Recipe] = &[
             profile: Some(Profile::Implement),
             mode: None,
             agent: "herdr",
-            // The profile alone would publish nothing; the card has to be
-            // written back for the status transition to mean anything.
-            output: Some(OutputPolicy::Source),
+            // No `output` override: `implement` resolves to `none`, and that is
+            // right — the agent writes the deliverable itself (a pull request),
+            // and the card moves through `on_success`, which is a different RPC
+            // (`task/update_status`) that owes nothing to the output policy.
+            output: None,
             verification: None,
             on_success: Some(r#"{ set_status = "{{implement_done_status}}" }"#),
         }],
@@ -284,7 +286,7 @@ pub const RECIPES: &[Recipe] = &[
                 profile: Some(Profile::Design),
                 mode: None,
                 agent: "herdr",
-                output: Some(OutputPolicy::Source),
+                output: None,
                 verification: None,
                 on_success: Some(r#"{ set_status = "{{design_done_status}}" }"#),
             },
@@ -295,7 +297,7 @@ pub const RECIPES: &[Recipe] = &[
                 profile: Some(Profile::Implement),
                 mode: None,
                 agent: "herdr",
-                output: Some(OutputPolicy::Source),
+                output: None,
                 verification: None,
                 on_success: Some(r#"{ set_status = "{{implement_done_status}}" }"#),
             },
@@ -364,7 +366,10 @@ pub const RECIPES: &[Recipe] = &[
             profile: None,
             mode: Some(WorkflowMode::Implement),
             agent: "herdr",
-            output: Some(OutputPolicy::Source),
+            // `github` no longer publishes: the agent writes the deliverable
+            // itself (#398). Spelled out rather than omitted — this recipe has
+            // no profile, and without one `output` is required.
+            output: Some(OutputPolicy::None),
             verification: Some(VerificationMode::Human),
             on_success: None,
         }],

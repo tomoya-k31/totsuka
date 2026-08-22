@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use plugin_protocol::Task;
 
-use crate::blocks::{blocks_to_markdown, markdown_to_blocks, rich_text_plain};
+use crate::blocks::{blocks_to_markdown, rich_text_plain};
 use crate::config::{BodySource, NotionConfig};
 use crate::error::NotionError;
 use crate::transport::{HttpMethod, NotionTransport};
@@ -18,9 +18,6 @@ const QUERY_PAGE_SIZE: usize = 100;
 /// Max query pages walked per fetch. Bounds a poll on a very large database;
 /// reaching it is logged, not silently truncated.
 const MAX_FETCH_PAGES: usize = 40;
-
-/// Blocks appended per `result/publish` request (Notion's per-request cap).
-const APPEND_BATCH: usize = 100;
 
 /// A parsed trigger condition (workflow-defined shape, F-81). Supports a status
 /// value (`{"status": "実装待ち"}`, also accepted as `project_status`) and/or a
@@ -326,36 +323,6 @@ impl<T: NotionTransport> NotionClient<T> {
             .flatten()
             .filter_map(|o| o["name"].as_str().map(str::to_string))
             .collect())
-    }
-
-    /// Publish `content` by appending it as blocks to the task's page (F-07).
-    /// Markdown is converted to Notion blocks, split to the 2000-char limit, and
-    /// appended in batches of `APPEND_BATCH`.
-    ///
-    /// `_format` is accepted for protocol symmetry but ignored: `v1` always
-    /// parses `content` as Markdown (the only format the orchestrator emits).
-    pub async fn publish(
-        &self,
-        task_id: &str,
-        content: &str,
-        _format: Option<&str>,
-    ) -> Result<(), NotionError> {
-        let mut blocks = markdown_to_blocks(content);
-        if blocks.is_empty() {
-            return Ok(()); // nothing to publish (all-blank content)
-        }
-        let path = format!("/blocks/{task_id}/children");
-        // Chunk to Notion's per-request block cap.
-        while !blocks.is_empty() {
-            let rest = blocks.split_off(blocks.len().min(APPEND_BATCH));
-            let body = json!({ "children": blocks });
-            // Non-idempotent: a retried append would post duplicate blocks.
-            self.transport
-                .request(HttpMethod::Patch, &path, Some(body), false)
-                .await?;
-            blocks = rest;
-        }
-        Ok(())
     }
 
     /// Confirm the token works (`users/me`) and every mapped property exists on

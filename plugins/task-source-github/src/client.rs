@@ -11,9 +11,6 @@ use crate::config::GithubConfig;
 use crate::error::GithubError;
 use crate::transport::GithubTransport;
 
-/// Content longer than this is folded into a `<details>` block on publish (F-07).
-const FOLD_THRESHOLD: usize = 800;
-
 /// Max project-item pages walked per fetch / status lookup. Bounds a poll on a
 /// very large board (50–100 items per page); reaching it is logged, not silent.
 const MAX_FETCH_PAGES: usize = 40;
@@ -298,25 +295,6 @@ impl<T: GithubTransport> GithubClient<T> {
         Ok(())
     }
 
-    /// Publish `content` as an Issue comment (F-07), folding long bodies into a
-    /// `<details>` block. `task_id` is the Issue's node id (the comment subject).
-    pub async fn publish(
-        &self,
-        task_id: &str,
-        content: &str,
-        _format: Option<&str>,
-    ) -> Result<(), GithubError> {
-        let body = fold_long_content(content);
-        let mutation = json!({
-            "query": ADD_COMMENT_MUTATION,
-            "variables": { "subject": task_id, "body": body },
-        });
-        // Non-idempotent: a retried addComment would post a duplicate comment.
-        let resp = self.transport.post_graphql(mutation, false).await?;
-        check_errors(&resp)?;
-        Ok(())
-    }
-
     /// Confirm the token works by reading `viewer.login` (F-59). Static config
     /// problems are reported separately by [`static_config_errors`].
     pub async fn validate(&self) -> Result<(), GithubError> {
@@ -364,15 +342,6 @@ fn check_errors(resp: &Value) -> Result<&Value, GithubError> {
         return Err(GithubError::GraphQl(joined));
     }
     Ok(&resp["data"])
-}
-
-/// Fold `content` into a collapsed `<details>` block when it is long (F-07).
-fn fold_long_content(content: &str) -> String {
-    if content.len() <= FOLD_THRESHOLD {
-        content.to_string()
-    } else {
-        format!("<details>\n<summary>totsuka の生成結果を表示</summary>\n\n{content}\n\n</details>")
-    }
 }
 
 /// Static (offline) config problems for `config/validate` (F-63): things a
@@ -455,12 +424,6 @@ const UPDATE_STATUS_MUTATION: &str = r#"mutation($project: ID!, $item: ID!, $fie
     projectId: $project, itemId: $item, fieldId: $field,
     value: { singleSelectOptionId: $option }
   }) { projectV2Item { id } }
-}"#;
-
-const ADD_COMMENT_MUTATION: &str = r#"mutation($subject: ID!, $body: String!) {
-  addComment(input: { subjectId: $subject, body: $body }) {
-    commentEdge { node { url } }
-  }
 }"#;
 
 const VIEWER_QUERY: &str = "query { viewer { login } }";
@@ -603,20 +566,6 @@ mod tests {
         ] {
             assert!(!value.trim().is_empty(), "`{name}` is empty");
         }
-    }
-
-    #[test]
-    fn short_content_is_not_folded() {
-        assert_eq!(fold_long_content("hi"), "hi");
-    }
-
-    #[test]
-    fn long_content_is_folded_in_details() {
-        let long = "x".repeat(FOLD_THRESHOLD + 1);
-        let folded = fold_long_content(&long);
-        assert!(folded.starts_with("<details>"));
-        assert!(folded.contains("</details>"));
-        assert!(folded.contains(&long));
     }
 
     #[test]
