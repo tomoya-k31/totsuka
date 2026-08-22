@@ -517,30 +517,43 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The `answer` profile denies **file edits and the shell entirely**
-    /// (`hooks::permissions`), so instructions that invite the agent to change
-    /// code, commit, or open a pull request describe something it cannot do.
+    /// `reply_instructions` must not ask for a deliverable other than the
+    /// reply.
     ///
-    /// That is not a cosmetic mismatch. Live E2E (#527): the agent followed the
-    /// old text, tried to implement, hit the deny, and returned `STATUS:FAILED`
-    /// — so the mention got **no reply at all**, not even a draft. The boundary
-    /// was working; the prompt was wrong.
+    /// It is the `answer` default *and* the fallback for any `instructions_kind`
+    /// this plugin has no set for (`pipeline`), so it is read by workflows whose
+    /// tool boundaries differ: `answer` denies file edits and the shell,
+    /// `design` denies neither, and a workflow with no profile gets no deny
+    /// rules at all. **It therefore cannot claim what the agent can or cannot
+    /// run** — only what this task is for.
     ///
-    /// A string check because the deny list lives in orchestrator-core and this
-    /// crate cannot see it (`plugins → protocol/sdk only`, ADR-0011). Brittle
-    /// by construction; kept anyway, because the failure it guards is silent on
-    /// the operator's side.
+    /// #527 is what happens when it does the opposite: the text asked for a
+    /// pull-request URL, `answer` cannot open one, and the agent tried, was
+    /// refused, and failed the task — leaving the mention with no reply and no
+    /// draft. Silent on the operator's side, invisible to CI (a mock agent
+    /// never attempts an implementation).
+    ///
+    /// Checks are positive where they can be. The one negative check names the
+    /// exact sentence that caused #527 rather than guessing at substrings: a
+    /// forbidden-fragment list cannot tell "create a PR" from "do not create a
+    /// PR", and would fail on an innocent rewording.
     #[test]
-    fn the_reply_instructions_do_not_ask_for_what_answer_cannot_do() {
+    fn the_reply_instructions_ask_only_for_a_reply() {
         let text = &DEFAULTS.reply_instructions;
-        for forbidden in ["を作成してください", "コミットして", "push して"] {
+        for required in [
+            "成果物は返信文だけです",
+            "Pull Request の作成は行わないでください",
+            "実装は試みず",
+        ] {
             assert!(
-                !text.contains(forbidden),
-                "reply_instructions asks for `{forbidden}`, which `answer` cannot do:\n{text}"
+                !text.is_empty() && text.contains(required),
+                "`{required}` missing from reply_instructions:\n{text}"
             );
         }
-        // …and it has to say so, or the agent has no way to know before trying.
-        assert!(text.contains("読み取り専用"), "{text}");
+        assert!(
+            !text.contains("URL を返信文に必ず含めてください"),
+            "the #527 sentence is back — `answer` cannot open a pull request:\n{text}"
+        );
     }
 
     fn parse(json: serde_json::Value) -> SlackConfig {
@@ -592,17 +605,14 @@ mod tests {
         //
         // What still has to survive the #318 move is the instruction's own
         // shape: what to produce, and that the output is the reply alone.
-        for surviving in [
-            "以下の Slack メンションへの返信案を日本語で作成してください。",
-            "出力は返信文のみとし、前置き・後書き・説明を含めないでください。",
-            "根拠を持って回答してください",
-        ] {
-            assert!(
-                p.reply_instructions.contains(surviving),
-                "the pre-#318 text must survive: `{surviving}` missing from {}",
-                p.reply_instructions
-            );
-        }
+        let original = "以下の Slack メンションへの返信案を日本語で作成してください。\
+             対象リポジトリを調査し、根拠を持って回答してください。\
+             出力は返信文のみとし、前置き・後書き・説明を含めないでください。";
+        assert!(
+            p.reply_instructions.starts_with(original),
+            "the pre-#318 text must survive verbatim: {}",
+            p.reply_instructions
+        );
         // Was `format!("\n返信スタイル: {style}")`.
         assert_eq!(
             crate::template::render(&p.reply_style_suffix, &[("style", "簡潔に")]),
