@@ -117,14 +117,25 @@ herdr の版を上げた直後は**これを最初に回す**。schema に載ら
 
 | 検証点 | やり方 | 落ちたら |
 |---|---|---|
-| **C-5 `pane.split` の shell pane が env を継承しない** | dispatch 後、シェル pane で `echo "${TOTSUKA_HOOK_TOKEN:+set}${TOTSUKA_HOOK_TOKEN:-unset}"` | **必須項目。`set` ならセキュリティ問題**として扱い、以降を止める |
-| **C-4 `workspace.create` の env が root pane に届く** | 同じ dispatch のエージェント pane で同じコマンド | `unset` なら完了検知が来ない。以降のシナリオは全部タイムアウトするので、先に直す |
-| C-1 token 値の 80 文字上限が「拒否」に変わっていないか | 上記 concept の 1 コマンド（片付けまで） | `report_metadata` がエラーなら identity 報告が丸ごと落ちる |
+| **C-5 `pane.split` の shell pane が env を継承しない** | S1 の dispatch 後、**シェル pane**（`w…:p2`）で下記 1 行 | **必須項目。`TOKEN=set` ならセキュリティ問題**として扱い、以降を止める |
+| C-1 token 値の 80 文字上限が「拒否」に変わっていないか | 上記 concept の 1 コマンド（`--clear-token` まで） | `report_metadata` がエラーなら identity 報告が丸ごと落ちる |
 | C-2 pane id が `w1:p1` 形式 | 上記 concept の 1 コマンド | cancel / release が workspace を閉じられず、空の workspace が残る |
 
-**値そのものを画面に出さない。** `set` / `unset` しか出さないのは、
-`echo "$TOTSUKA_HOOK_TOKEN"` と書くと pane の履歴と `pane.read` の両方に
-トークンが残るためである。
+```bash
+herdr pane run <shell-pane> 'printenv TOTSUKA_HOOK_TOKEN >/dev/null 2>&1 && echo TOKEN=set || echo TOKEN=unset'
+```
+
+**値そのものを絶対に画面へ出さない。** 上の形が安全なのは出力を捨てて終了コード
+だけを見ているからで、**`echo "${TOTSUKA_HOOK_TOKEN:+set}${TOTSUKA_HOOK_TOKEN:-unset}"`
+は危険**（`:-` は設定されているとき**値そのもの**へ展開する）。一度出すと pane の
+履歴・`pane.read`・このシナリオを回したエージェントの transcript に残る。
+
+**C-4（env が root pane に届く）に独立した手順は無い。** root pane で動いて
+いるのは Claude Code の TUI でシェルではないので、コマンドを打っても
+プロンプトとして渡るだけである。観測点は**完了検知そのもの** — env が届かなければ
+Stop フックが Orchestrator を叩けず、タスクは完了報告を出さない。つまり
+**S1 がフック完了で通れば C-4 は成立している**。逆に S1 が「エージェントは
+答え終わっているのにタスクが `running` のままタイムアウト」で落ちたら、まず C-4 を疑う。
 
 C-3（herdr 内部の 5 秒下限）は独立に測れない。dispatch のログで
 `agent_prompt_stalled` までの時間を見る。
