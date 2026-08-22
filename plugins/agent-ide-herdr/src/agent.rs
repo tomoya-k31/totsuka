@@ -537,9 +537,6 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         if let Some(repo) = &params.repo_name {
             tokens.insert("repo".to_string(), Some(token_value(repo)));
         }
-        // A constant, not something per-task: a workspace or pane accepts at
-        // most 32 distinct `source` values **for its lifetime**, and neither
-        // clearing nor expiry gives a slot back.
         // The two reports take **different params types** (the pane one also
         // accepts `title` / `display_agent` / `state_labels`, which this plugin
         // never sets), so they are written out rather than shared through one
@@ -1253,14 +1250,37 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// and `session/release` only needs the pane (`SessionHandle::decode`
     /// accepts the bare form).
     pub async fn list_sessions(&self) -> Result<SessionListResult, HerdrError> {
-        let panes: PaneListEnvelope = call_typed(
-            &self.client,
+        // **A response this build cannot read is "nothing", not a failure.**
+        // `session/list` is a best-effort diagnostic surface — `doctor`'s
+        // orphan-pane detection stands on it — and #416 deliberately made a
+        // shapeless answer mean "nothing owned" rather than a panic. Typing
+        // the read must not quietly take that away, so the degrade moved here
+        // from the `Value` digging that used to carry it.
+        //
+        // A *failed call* still propagates, exactly as before: not reaching
+        // herdr is a different fact from herdr answering oddly.
+        let panes: PaneListEnvelope = unreadable_is_empty(
             "pane.list",
-            &request::PaneListParams { workspace_id: None },
+            self.client
+                .call(
+                    "pane.list",
+                    to_params("pane.list", &request::PaneListParams { workspace_id: None })?,
+                )
+                .await?,
         )
-        .await?;
-        let workspaces: WorkspaceListEnvelope =
-            call_typed(&self.client, "workspace.list", &request::EmptyParams {}).await?;
+        .unwrap_or(PaneListEnvelope { panes: Vec::new() });
+        let workspaces: WorkspaceListEnvelope = unreadable_is_empty(
+            "workspace.list",
+            self.client
+                .call(
+                    "workspace.list",
+                    to_params("workspace.list", &request::EmptyParams {})?,
+                )
+                .await?,
+        )
+        .unwrap_or(WorkspaceListEnvelope {
+            workspaces: Vec::new(),
+        });
         let owned = owned_workspaces(&workspaces.workspaces);
 
         // `Vec`, not a map: `pane.list` order is the only stable ordering
@@ -1560,37 +1580,59 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     }
 }
 
+/// `workspace.create`'s answer, read down to **exactly the two ids the rest of
+/// dispatch needs** rather than through the generated
+/// [`WorkspaceCreatedEnvelope`](crate::wire::result::WorkspaceCreatedEnvelope).
+///
+/// # Why this one call is read loosely
+///
+/// The reason is ordering, not shape: **by the time this is read the workspace
+/// already exists on the operator's screen.** Any hard failure here returns
+/// before [`NewWorkspace`] exists, so nothing holds the id that
+/// [`abandon`](HerdrAgent::abandon) needs — and the dispatch leaks a workspace
+/// with a live pane in it.
+///
+/// A first attempt at this relaxed only `root_pane`'s *presence*, which was not
+/// enough: a `root_pane` that is **there but malformed**, or a `workspace`
+/// missing any of `WorkspaceInfo`'s other seven required fields, still failed
+/// the whole read and leaked the same workspace. So nothing here is read that
+/// is not used.
+///
+/// # This is not a hole in the design
+///
+/// [ADR-0055](../../../ai-docs/decisions/adr-0055-herdr-schema-typed-wire.md)
+/// is "**runtime forgiving, CI strict**". The generated envelope stays the
+/// record of what herdr promises, and the schema diff in CI is what reports a
+/// change to it — before merge, where nothing is running. Being strict *here*
+/// as well would buy no earlier warning and would cost a leaked workspace.
+#[derive(Debug, serde::Deserialize)]
+struct CreatedWorkspace {
+    workspace: CreatedWorkspaceRef,
+    /// Absent, or present but unreadable, both land as `None`: the caller
+    /// treats "no root pane" as a dispatch failure it can still clean up after.
+    #[serde(default)]
+    root_pane: Option<CreatedPaneRef>,
+}
+
+/// The one field of `workspace.create`'s `workspace` that dispatch uses.
+#[derive(Debug, serde::Deserialize)]
+struct CreatedWorkspaceRef {
+    workspace_id: String,
+}
+
+/// The one field of its `root_pane` that dispatch uses.
+#[derive(Debug, serde::Deserialize)]
+struct CreatedPaneRef {
+    pane_id: String,
+}
+
 /// What `dispatch` needs out of a `workspace.create` response: the workspace
 /// itself, and the root pane herdr opens it with.
 ///
 /// The root pane is where the agent is started (protocol 17), and the response
-/// is the only handle to it — the response names it (`root_pane`) and nothing else
-/// does: `pane.list` cannot distinguish it from the agent's pane by label,
+/// is the only handle to it — the response names it (`root_pane`) and nothing
+/// else does: `pane.list` cannot distinguish it from the agent's pane by label,
 /// because a split pane's label is `null` on both.
-/// `workspace.create`'s answer, with **`root_pane` deliberately relaxed** from
-/// the `required` the generated
-/// [`WorkspaceCreatedEnvelope`](crate::wire::result::WorkspaceCreatedEnvelope)
-/// declares.
-///
-/// This is the one place where using the generated envelope directly would be
-/// wrong, and the reason is ordering, not shape: **by the time this is read the
-/// workspace already exists on the operator's screen.** A hard failure here
-/// returns before [`NewWorkspace`] exists, so nothing holds the id that
-/// [`abandon`](HerdrAgent::abandon) needs — and the dispatch leaks a workspace
-/// with a live pane in it. Relaxing the field keeps the failure where it has
-/// always been: [`start_agent`](HerdrAgent::start_agent) turns a missing root
-/// pane into a dispatch failure **after** the cleanup path can run.
-///
-/// The generated envelope stays the record of what herdr promises; this type is
-/// what survives herdr breaking that promise. `workspace` is **not** relaxed —
-/// without an id there is nothing to clean up either way.
-#[derive(Debug, serde::Deserialize)]
-struct CreatedWorkspace {
-    workspace: WorkspaceInfo,
-    #[serde(default)]
-    root_pane: Option<PaneInfo>,
-}
-
 struct NewWorkspace {
     id: String,
     /// `None` when the response carried no `root_pane` — a herdr this plugin
@@ -1609,6 +1651,26 @@ impl NewWorkspace {
         Self {
             id: created.workspace.workspace_id,
             root_pane_id: created.root_pane.map(|pane| pane.pane_id),
+        }
+    }
+}
+
+/// Deserialize a list response, treating "this build cannot read it" as an
+/// empty list rather than an error.
+///
+/// **Only for the best-effort surfaces.** Everywhere else an unreadable answer
+/// is an error at the call site — that is the point of #519. Here the caller is
+/// `session/list`, whose contract since #416 is that whatever herdr answers,
+/// the worst outcome is "nothing owned".
+fn unreadable_is_empty<T: serde::de::DeserializeOwned>(method: &str, result: Value) -> Option<T> {
+    match serde_json::from_value(result) {
+        Ok(value) => Some(value),
+        Err(e) => {
+            tracing::warn!(
+                method, error = %e,
+                "herdr answered a shape this build cannot read; treating it as an empty list"
+            );
+            None
         }
     }
 }
@@ -2104,18 +2166,35 @@ mod tests {
     /// a shape herdr cannot produce should not have a branch of its own.
     #[test]
     fn a_response_herdr_cannot_send_is_rejected_rather_than_defended_against() {
-        for missing in [
-            json!({ "type": "workspace_list", "workspaces": [{ "workspace_id": "w3" }] }),
-            json!({ "type": "workspace_list",
-                    "workspaces": [{ "workspace_id": "w4", "label": null }] }),
-            // `session/list` used to treat a response with no `workspaces` at
-            // all as "nothing owned". It is now an error at the call site —
-            // herdr answering `pane.list` to `workspace.list` is a fault, not
-            // an empty result.
-            json!({ "type": "ok" }),
-        ] {
-            let parsed: Result<WorkspaceListEnvelope, _> = serde_json::from_value(missing.clone());
-            assert!(parsed.is_err(), "must not deserialize: {missing}");
+        // Everything else stays valid, so what is being pinned is `label` and
+        // nothing else: with `label: Option<String>` these would both parse.
+        let full = serde_json::to_value(json!({
+            "type": "workspace_list",
+            "workspaces": [{
+                "workspace_id": "w3", "number": 1, "label": "x", "focused": false,
+                "pane_count": 1, "tab_count": 1, "active_tab_id": "t1",
+                "agent_status": "unknown",
+            }],
+        }))
+        .unwrap();
+        serde_json::from_value::<WorkspaceListEnvelope>(full.clone())
+            .expect("the control case must parse, or this test pins nothing");
+
+        let mut absent = full.clone();
+        absent["workspaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("label");
+        let mut null = full.clone();
+        null["workspaces"][0]["label"] = Value::Null;
+        // And a response that is not a `workspace_list` at all. `session/list`
+        // degrades this to "nothing owned" (see `unreadable_is_empty`); what
+        // is pinned here is only that it does not *parse*.
+        let wrong_shape = json!({ "type": "ok" });
+
+        for bad in [absent, null, wrong_shape] {
+            let parsed: Result<WorkspaceListEnvelope, _> = serde_json::from_value(bad.clone());
+            assert!(parsed.is_err(), "must not deserialize: {bad}");
         }
     }
 

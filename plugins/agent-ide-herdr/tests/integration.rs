@@ -190,6 +190,11 @@ struct FakeHerdr {
     /// protocol 17 that leaves no pane to start the agent in, so the dispatch
     /// cannot proceed (it used to only cost the layout).
     no_root_pane: bool,
+    /// When set, `workspace.create` answers **with** a `root_pane` that is
+    /// missing required fields — the shape that used to fail the whole read
+    /// before `CreatedWorkspace` was narrowed to the two ids dispatch uses.
+    /// The workspace exists either way, so the cleanup must still run.
+    malformed_root_pane: bool,
     /// When set, `pane.split` fails with this herdr error code (#356: the
     /// companion shell is lost, the dispatch is not).
     split_error: Option<&'static str>,
@@ -244,6 +249,7 @@ impl Default for FakeHerdr {
             detection: "",
             empty_id_error_on_create: false,
             no_root_pane: false,
+            malformed_root_pane: false,
             split_error: None,
             prompt_error: None,
             not_ready_prompts: Arc::default(),
@@ -326,7 +332,9 @@ impl FakeHerdr {
                     "workspace": workspace_info(json!({})),
                     "tab": tab_info(json!({})),
                 });
-                if !self.no_root_pane {
+                if self.malformed_root_pane {
+                    result["root_pane"] = json!({ "pane_id": PANE });
+                } else if !self.no_root_pane {
                     result["root_pane"] = pane_info(json!({}));
                 }
                 reply(&mut write_half, &id, result).await
@@ -2695,11 +2703,6 @@ async fn a_tool_launch_with_an_empty_env_injects_none() {
     );
 }
 
-/// A herdr older than 0.7.5 cannot run this plugin's dispatch at all, so
-/// `initialize` refuses it (ADR-0032 D-6, floored on `version` since #520).
-/// Failing here rather than at the first dispatch is the whole point: before
-/// this check the symptom was `missing field 'kind'` on a task that had
-/// already been ingested and had a worktree cut for it.
 /// The fixture builders above hard-code herdr's `required` fields. That list
 /// is only right until herdr changes it, so it is pinned against the generated
 /// types rather than against a comment.
@@ -2719,6 +2722,11 @@ fn the_fixtures_are_shapes_herdr_could_actually_send() {
     serde_json::from_value::<AgentSessionInfo>(agent_session("v")).expect("an AgentSessionInfo");
 }
 
+/// A herdr older than 0.7.5 cannot run this plugin's dispatch at all, so
+/// `initialize` refuses it (ADR-0032 D-6, floored on `version` since #520).
+/// Failing here rather than at the first dispatch is the whole point: before
+/// this check the symptom was `missing field 'kind'` on a task that had
+/// already been ingested and had a worktree cut for it.
 #[tokio::test]
 async fn initialize_refuses_a_herdr_below_0_7_5() {
     let (socket, _) = FakeHerdr {
@@ -3707,5 +3715,66 @@ async fn config_validate_is_silent_on_a_herdr_it_can_read() {
             .as_array()
             .is_none_or(|e| e.is_empty()),
         "…and carry no errors: {resp}"
+    );
+}
+
+/// A `root_pane` that is **there but unreadable** must still leave a workspace
+/// this plugin can take back down (#519 review).
+///
+/// The first cut of `CreatedWorkspace` only tolerated a *missing* `root_pane`
+/// key, so this shape failed the whole read before `NewWorkspace` existed —
+/// and the workspace it had just created leaked, which is precisely what the
+/// relaxation was for.
+#[tokio::test]
+async fn a_malformed_root_pane_still_lets_the_workspace_be_cleaned_up() {
+    let (socket, requests) = FakeHerdr {
+        malformed_root_pane: true,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    // A `root_pane` carrying a usable `pane_id` is enough to dispatch on: the
+    // fields it is missing are ones this plugin never reads.
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+    assert!(disp["error"].is_null(), "dispatch must proceed: {disp}");
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start")[0]["params"]["pane_id"],
+        PANE,
+        "and it must be the pane the response named: {log:?}"
+    );
+}
+
+/// `session/list` degrades an unreadable answer to "nothing owned" rather than
+/// failing (#416, kept through the typing in #519).
+///
+/// `doctor`'s orphan-pane detection stands on this call, so a herdr that
+/// answers oddly must cost a diagnostic, never the command.
+#[tokio::test]
+async fn session_list_degrades_an_unreadable_answer_to_nothing() {
+    let (socket, _) = FakeHerdr {
+        // Missing `agent_status` — one of `PaneInfo`'s seven required fields.
+        list_panes: vec![json!({
+            "pane_id": PANE, "terminal_id": "t1", "workspace_id": "w1",
+            "tab_id": "w1:t1", "focused": false, "revision": 1,
+        })],
+        list_workspaces: vec![workspace_info(json!({ "label": "totsuka 7" }))],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d.call("session/list", json!({})).await;
+    assert!(
+        resp["error"].is_null(),
+        "an unreadable pane.list must not fail session/list: {resp}"
+    );
+    assert_eq!(
+        resp["result"]["sessions"].as_array().map(Vec::len),
+        Some(0),
+        "…it reports nothing owned: {resp}"
     );
 }

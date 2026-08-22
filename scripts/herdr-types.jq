@@ -61,9 +61,11 @@ def rust_type:
         else die("非対応の type `" + ($t | tostring) + "`") end
     else die("type / $ref / anyOf / enum のいずれも無いプロパティ: " + ($s | tojson)) end;
 
-# `$ser` は「totsuka が送る側」。送る側では未設定のフィールドを **キーごと落とす**
-# 必要がある（`json!` で組んでいた既存の呼び出しと同じ形にするため。明示的な
-# `null` は herdr にとって「未指定」と同じとは限らない）。読む側にその問題は無い。
+# `$ser` は「totsuka が送る側」。送る側は **`Option` のときだけ**キーごと落とす
+# （明示的な `null` が herdr にとって「未指定」と同じとは限らないため）。
+# **空のコレクションは落とさない** — 下の `field` の注記のとおり、空を送るのと
+# 送らないのを同じにすると「空の env を渡した」と「env を一切渡していない」が
+# 区別できなくなる。読む側にこの問題は無い。
 def field($name; $schema; $required; $ser):
   ($schema | rust_type) as $ty
   | ($name | ident) as $id

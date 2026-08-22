@@ -68,8 +68,17 @@ pub trait HerdrTransport: Clone + Send + Sync + 'static {
 /// Serialize a `wire::request` type into the `params` object of a call.
 ///
 /// A params type that cannot serialize is a bug in this plugin, not a herdr
-/// problem — but it must not panic a running dispatch, so it takes the same
-/// error path as everything else.
+/// problem — but it must not panic a running dispatch, so it is an error
+/// instead.
+///
+/// **Two kinds of caller, deliberately.** One has an error path of its own and
+/// uses `?`. The other is fire-and-forget (identity reporting, the layout
+/// split, cancel's `ctrl+c`, the stalled-prompt Enter) and has nowhere to
+/// return an error to; it passes `.unwrap_or(Value::Null)`, herdr rejects a
+/// `null` params with `invalid_request`, and the caller's existing `warn` fires
+/// — the same visible outcome, one call later. Neither path can be reached
+/// today: every params type here is `String` / `Vec` / `BTreeMap`, none of
+/// which `serde_json::to_value` can fail on.
 ///
 /// Public because the calls whose **result** nobody reads still build their
 /// params from a generated type (`methods.json` records those as
