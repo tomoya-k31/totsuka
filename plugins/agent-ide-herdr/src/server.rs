@@ -472,6 +472,28 @@ fn check_version(pong: &Value) -> Result<(), HerdrError> {
     // Compare on the release triple only — see "a prerelease of the floor
     // passes" above.
     let released = semver::Version::new(version.major, version.minor, version.patch);
+    // **Newer than anything checked is a note, never a refusal** (#520 §2).
+    // The committed schema slices go up to `wire::NEWEST_CHECKED`; past that
+    // the CI diff has not compared anything, so this build is running against
+    // a herdr nobody verified. It will almost certainly work — additions are
+    // what herdr does between releases — but when it does not, this line is
+    // where to start.
+    //
+    // It goes to the log rather than into `config validate`'s answer, which
+    // carries `errors` and nothing else: reporting "not verified" as an error
+    // would make `totsuka doctor` red on a working setup, and adding a
+    // warnings channel is a protocol change this does not justify.
+    if let Ok(newest) = semver::Version::parse(crate::wire::NEWEST_CHECKED)
+        && released > newest
+    {
+        tracing::warn!(
+            herdr = raw,
+            newest_checked = crate::wire::NEWEST_CHECKED,
+            "this herdr is newer than any release whose API schema is committed here; it is not \
+             refused and is expected to work, but nothing has compared it against this build — \
+             run `bash scripts/herdr-types-build.sh --fetch v{raw}` to add it"
+        );
+    }
     if released < MIN_HERDR_VERSION {
         return Err(HerdrError::InvalidResponse(format!(
             "herdr {raw} is older than the {MIN_HERDR_VERSION} this plugin needs: 0.7.5 made \
