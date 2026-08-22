@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0aa9032a2ee66185959ae7cfbff1e066fbc3e6fdd4841fc8310de883bd2bc4e4 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:3f50844c3296dd480fa8e2f7336d7ffb961c8128252a238040a0c46c9e7131b5 -->
 
 # Configuration reference
 
@@ -409,7 +409,7 @@ Left alone, an unconfigured claude launches in its manual mode and stops dead on
 
 **Setting `mode_args` or `plan_args` replaces the defaults wholesale**, including these flags. Add them back yourself if you run unattended.
 
-Tool resolution at dispatch is workflow pin, then repository default, then `default_tool`, then the built-in `claude`. Because totsuka now builds the complete command line here, the `agent_command` and `plan_args` keys in `plugins/herdr.toml` are a **deprecated** backward-compatibility fallback — configure tools through `[tools.{name}]` instead.
+Tool resolution at dispatch is workflow pin, then repository default, then `default_tool`, then the built-in `claude`. totsuka builds the complete command line here, so the `agent_command` and `plan_args` keys in `plugins/herdr.toml` — once a backward-compatibility fallback — **have been removed**. Leaving one in place makes the plugin refuse to start, naming the key and its replacement. Configure tools through `[tools.{name}]`.
 
 ## Prompt text
 

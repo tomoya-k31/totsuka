@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0aa9032a2ee66185959ae7cfbff1e066fbc3e6fdd4841fc8310de883bd2bc4e4 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:3f50844c3296dd480fa8e2f7336d7ffb961c8128252a238040a0c46c9e7131b5 -->
 
 # 設定リファレンス
 
@@ -410,7 +410,7 @@ tool = "claude-deep"
 
 **`mode_args` / `plan_args` を明示すると既定を丸ごと置き換える**ので、これらのフラグも消える。無人で回すなら自分で書き足すこと。
 
-ディスパッチ時のツール解決は、ワークフローのピン > リポジトリの既定 > `default_tool` > 組み込みの `claude` の順である。完全なコマンドラインをここで組み立てるようになったため、`plugins/herdr.toml` の `agent_command` / `plan_args` は**非推奨**の後方互換フォールバックである。ツールの設定は `[tools.{name}]` で行うこと。
+ディスパッチ時のツール解決は、ワークフローのピン > リポジトリの既定 > `default_tool` > 組み込みの `claude` の順である。完全なコマンドラインをここで組み立てるため、`plugins/herdr.toml` の `agent_command` / `plan_args` —— かつての後方互換フォールバック —— は**削除済み**である。残っているとプラグインが起動を拒否し、キー名と代替を名指しする。ツールの設定は `[tools.{name}]` で行うこと。
 
 ## プロンプト文
 

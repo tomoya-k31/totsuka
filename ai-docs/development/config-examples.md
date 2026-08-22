@@ -492,8 +492,6 @@ app_token = "op://Dev/Slack/app_token"     # 必須。App-Level Token（xapp- �
 user_token = "op://Dev/Slack/user_token"   # 必須。User OAuth Token（xoxp- で始まる）
 target_user_id = "U01ABCDEF"               # 必須。自分の Slack ユーザー ID
 
-# 【非推奨・0.3 で削除】自分が付けるとタスクを起こす絵文字（#319）。
-# config.toml 側の `[[workflows]].trigger = { reaction = "eyes" }` へ移行する
 # リアクション起動は config.toml の [[workflows]].trigger.reaction で設定する
 # （#396。下の「絵文字でワークフローを選ぶ」参照）。reactions:read スコープが
 # 必要 → 追加後はアプリ再インストール + 保管先の値を 2 本更新。
