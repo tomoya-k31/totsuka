@@ -16,7 +16,7 @@
 #   bash .../github.sh seed web <新 issue#>
 #
 # 注意: Project #7 は新規 item を自動で Todo にする。design を回したいときは
-# item-add 後すぐ（poll_interval_secs=15 より早く）Design へ倒すこと。遅れると
+# item-add 後すぐ（poll_interval_secs より早く。既定 60s）Design へ倒すこと。遅れると
 # github-task が先に拾って implement が走る。
 #   bash .claude/skills/live-e2e/scripts/github.sh clear <web|cli> <issue#>  # Status を外す
 #   bash .claude/skills/live-e2e/scripts/github.sh wait <web|cli> <issue#> [sec]  # **その issue の**タスクが終端に達するまで追う
@@ -35,6 +35,15 @@
 # 8000 points で使い切る（実際にやって 40 分止まった）。伝播待ちが要るなら
 # `item-add --format json` が返す item id を使い、item-list を引き直さない。
 #
+# **不変な id はキャッシュしてある**（下記 `cached`）。実測で `set_status` 1 回は
+# **212 → 1 point**（初回だけ 212、以降は 1）。キャッシュしているのは
+# project id / Status の field・option id / item id の 3 つで、いずれも
+# 「そのプロジェクト・その item が在り続ける限り変わらない」もの。
+#
+# 対して **poll は 2 points/回**（Project #7 / 62 items / 2 ページで実測）。
+# つまり**削るべきは poll ではなくこちら側**で、poll を 60s から詰めても
+# 得られる待ち時間に対してレートの対価が合わない。
+#
 # `--limit 100` は打ち切り回避のため。既定の 30 だと Project が 30 件を超えた時点で
 # 新しい item を**黙って**見落とす。正しさに 31 → 102 points 払っている。
 set -euo pipefail
@@ -46,15 +55,54 @@ WEB="${E2E_GH_REPO_WEB:-totsuka-sandbox-web}"
 CLI="${E2E_GH_REPO_CLI:-totsuka-sandbox-cli}"
 repo_of() { case "$1" in web) echo "$WEB";; cli) echo "$CLI";; *) echo "$1";; esac; }
 
-field_ids() {  # Status フィールドと option の id を出す
+# Project の id と Status フィールド/option の id は、**そのプロジェクトが存在する
+# 限り変わらない**。それを毎回引き直しているのが e2e で一番高い操作だった:
+#
+#   field-list        → 102 points
+#   project view      →   1 point
+#   → set_status 1 回 ≒ 200 points（item-list 102 と合わせて）
+#
+# poll は実測 2 points/回なので、**`set_status` 1 回で poll 100 回分**を使っていた。
+# 不変のものはディスクに残して、2 回目以降は 0 points で済ませる。
+#
+# 消したいときは `rm -rf "$E2E_HOME/state/live-e2e/cache"`。Project の Status
+# option を編集したら消すこと（それ以外で古くなることは無い）。
+cache_dir() { echo "${E2E_HOME}/state/live-e2e/cache"; }
+cached() {  # cached <key> <コマンド...>  — 標準出力をキャッシュして返す
+  local key="$1"; shift
+  local f; f="$(cache_dir)/${key}"
+  if [ -s "$f" ]; then cat "$f"; return 0; fi
+  mkdir -p "$(cache_dir)"
+  # **空をキャッシュしない。** 一時的な失敗を永続化すると、以降ずっと壊れる。
+  local out; out="$("$@")" || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out" | tee "$f"
+}
+
+field_ids_uncached() {
   gh project field-list "${E2E_GH_PROJECT}" --owner "$OWNER" --format json | python3 -c '
 import json,sys
 f=[x for x in json.load(sys.stdin)["fields"] if x["name"]=="Status"][0]
 print(f["id"])
 for o in f["options"]: print("%s\t%s" % (o["name"], o["id"]))'
 }
+field_ids() { cached "fields-${E2E_GH_PROJECT}" field_ids_uncached; }
 
-item_id() {  # item_id <repo> <issue#>
+project_id_uncached() {
+  gh project view "${E2E_GH_PROJECT}" --owner "$OWNER" --format json \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'
+}
+project_id() { cached "project-${E2E_GH_PROJECT}" project_id_uncached; }
+
+# item の id も、その item が Project に**在り続ける限り**変わらない。
+# `item-list --limit 100` は 102 points なので、ここも 2 回目以降は 0 にする。
+#
+# **Project から item を外して入れ直すと id は変わる。** そのときは
+# `rm -rf "$E2E_HOME/state/live-e2e/cache"`。e2e の通常の流れ（検証ごとに
+# 新しい issue を作る）では別のキーになるので当たらない。
+item_id() { cached "item-${E2E_GH_PROJECT}-$1-$2" item_id_uncached "$1" "$2"; }
+
+item_id_uncached() {  # item_id_uncached <repo> <issue#>
   gh project item-list "${E2E_GH_PROJECT}" --owner "$OWNER" --limit 100 --format json | python3 -c '
 import json,sys
 repo,num=sys.argv[1],int(sys.argv[2])
@@ -73,8 +121,7 @@ else:
 set_status() {  # set_status <repo> <issue#> <option-name|-->
   local iid; iid="$(item_id "$1" "$2")"
   [ -n "$iid" ] || { echo "item が見つかりません: $1#$2" >&2; exit 1; }
-  local pid; pid="$(gh project view "${E2E_GH_PROJECT}" --owner "$OWNER" --format json \
-      | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+  local pid; pid="$(project_id)"
   local ids fid oid; ids="$(field_ids)"; fid="$(echo "$ids" | head -1)"
   if [ "$3" = "--" ]; then
     gh project item-edit --id "$iid" --project-id "$pid" --field-id "$fid" --clear >/dev/null

@@ -124,6 +124,30 @@ bash .claude/skills/live-e2e/scripts/report.sh
 | plan モードの設計プレビュー | 画面表示 |
 | macOS 通知センターの通知 | notifier の配送結果 |
 
+## GitHub のレート制限
+
+**GraphQL は 5000 points/時。** 使い切ると 1 時間止まる（実際にやった）。実測値:
+
+| 操作 | コスト | 備考 |
+|---|---|---|
+| task_source の poll | **2 points**（Project #7 / 62 items / 2 ページ） | 60s 間隔で 120 points/h ＝ 2.4% |
+| `github.sh` の `set_status` | **初回 212 → 以降 1 point** | project/field/item の id をキャッシュ |
+
+**poll を詰めても割に合わない。** 15s にすると 480 points/h（9.6%）を払って、縮まる
+待ち時間は 1 回あたり平均 22 秒しかない。`poll_interval_secs` は**既定の 60s のまま**にする。
+
+キャッシュを消したいとき（Project の Status option を編集した／item を入れ直した）:
+
+```bash
+rm -rf "$E2E_HOME/state/live-e2e/cache"
+```
+
+残量はいつでも見られる:
+
+```bash
+gh api graphql -f query='{ rateLimit { remaining limit } }' --jq .data.rateLimit
+```
+
 ## 後始末
 
 **既定は「残す」。** 次の検証で state DB とタスク履歴が手掛かりになる。片付けるときは:
