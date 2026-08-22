@@ -4,7 +4,7 @@ title: notifier-macos プラグイン
 description: Orchestrator のイベント（waiting_input / done / failed / pending / escalated / verification_pending）を macOS 通知センターへ配送する公式 notifier プラグイン。バックエンド選択（osascript / terminal-notifier click-to-focus）、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/notifier-macos
 tags: [rust, crate, plugin, notifier, macos, osascript, terminal-notifier, click-to-focus, hook, escalation, verification]
-generated: { by: human:tomoya-k31, at: 2026-07-23T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-22T13:30:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -17,7 +17,7 @@ Orchestrator からのイベント（`waiting_input` / `done` / `failed` / `pend
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `plugins/notifier-macos.toml`（= `InitializeParams.config`）を型付け。**`backend`**（`osascript`（既定・後方互換）/ `terminal_notifier`、#155 F-94）/ `osascript_bin` / **`terminal_notifier_bin`** / **`activate_bundle_id`**（クリック時に前面化する GUI アプリの bundle id、例 `org.alacritty`。環境依存・未設定なら `-activate` なし）/ **`click_command`**（`-execute` テンプレート、既定 `totsuka focus {task_id}`。空で無効化）/ `filter`（`[notifier.filter.events]` グローバル on/off ＋ `workflows` 別 override、F-92。トグルキーは `waiting_input` / `done` / `failed` / `pending` に加え **#131 で `escalated` / `verification_pending`**）。`Filter::allows(workflow, event)` は「ワークフロー別 > グローバル > 既定（全 on）」の優先で判定（新イベントも既定 on）。`deny_unknown_fields` |
+| `config` | `plugins/macos.toml`（= `InitializeParams.config`）を型付け。**`backend`**（`osascript`（既定・後方互換）/ `terminal_notifier`、#155 F-94）/ `osascript_bin` / **`terminal_notifier_bin`** / **`activate_bundle_id`**（クリック時に前面化する GUI アプリの bundle id、例 `org.alacritty`。環境依存・未設定なら `-activate` なし）/ **`click_command`**（`-execute` テンプレート、既定 `totsuka focus {task_id}`。空で無効化）/ `filter`（`[notifier.filter.events]` グローバル on/off ＋ `workflows` 別 override、F-92。トグルキーは `waiting_input` / `done` / `failed` / `pending` に加え **#131 で `escalated` / `verification_pending`**）。`Filter::allows(workflow, event)` は「ワークフロー別 > グローバル > 既定（全 on）」の優先で判定（新イベントも既定 on）。`deny_unknown_fields` |
 | `sender` | `NotificationSender` trait（`send(Notice)` / `probe()`）＋ 2 バックエンド（`BackendSender` enum が `backend` 設定で選択）。**`OsascriptSender`**: AppleScript `display notification`。ユーザ文字列は `on run argv` の **argv 経由**で渡し、スクリプト本文へ補間しない（インジェクション防止）。クリックは owner（Script Editor）が開くだけで pane へ届かない。**`TerminalNotifierSender`**（#155 F-94、[ADR-0005](/decisions/adr-0005-click-to-focus.md)）: `-title/-subtitle/-message` + `-group totsuka-<task_id>`（タスク別集約）+ `-activate <bundle-id>`（GUI 前面化）+ `-execute '<click_command>'`（`{task_id}` は **シングルクォートでシェル引用**して埋め込み = インジェクション安全）。**Sequoia 15.x+ で `-activate` と併用すると click-to-focus が壊れるため `-sender` は使わない**。バイナリ不在（spawn NotFound）は**送信単位で osascript へ自動フォールバック**（クリック不可だが通知は届く）。`probe()` は `terminal-notifier -help`（フォールバックしない = `config/validate` が「設定済みなのに未導入」を actionable に検出する）。`Notice` は title/subtitle/body に加え `task_id` を運ぶ |
 | `server` | JSON-RPC ディスパッチ `Server<F: SenderFactory>`。initialize / config·validate（`probe` で非表示疎通確認）/ shutdown は応答、`notify` は応答せず配送タスクを spawn（fire-and-forget、失敗はログのみ）。イベント→絵文字＋日本語ラベル＋タスク/ワークフロー/本文へ整形（`escalated` = 🚨 エスカレーション、`verification_pending` = 🔍 検収待ちの title/body テンプレートを含む #131）。整形した `Notice` に `NotifyParams.task_id` を載せる（クリック相関、F-94） |
 | `main` | `#[tokio::main]` の stdio ループ。`BackendFactory`（`BackendSender::from_config`）を配線 |

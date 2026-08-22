@@ -1,10 +1,10 @@
 ---
 type: Playbook
 title: click-to-focus セットアップ（terminal-notifier / bundle id / 切り分け）
-description: 通知クリックで対象タスクの herdr pane を開く F-94 の導入手順。terminal-notifier の導入、plugins/notifier-macos.toml の backend / activate_bundle_id / click_command 設定、bundle id の調べ方、動作確認、クリックが効かない・通知が出ないときの切り分け表。
+description: 通知クリックで対象タスクの herdr pane を開く F-94 の導入手順。terminal-notifier の導入、plugins/macos.toml の backend / activate_bundle_id / click_command 設定、bundle id の調べ方、動作確認、クリックが効かない・通知が出ないときの切り分け表。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/notifier-macos
 tags: [operations, playbook, notifier, terminal-notifier, click-to-focus, macos]
-generated: { by: human:tomoya-k31, at: 2026-07-23T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-22T13:30:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -28,7 +28,9 @@ owner: tomoya-k31
    # 例: iTerm2 → com.googlecode.iterm2 / Kitty → net.kovidgoyal.kitty / WezTerm → com.github.wez.wezterm
    ```
 
-3. **`plugins/notifier-macos.toml` を設定する**（notifier プラグインの設定。[notifier-macos](/components/notifier-macos.md)）:
+3. **`plugins/macos.toml` を設定する**（notifier プラグインの設定。[notifier-macos](/components/notifier-macos.md)）:
+
+   ファイル名は**プラグイン名**であってクレート名ではない。crate は `notifier-macos` だが `plugin.toml` の `name` は `macos` で、設定パスは `{plugin_config_dir}/{name}.toml` として導出される。`notifier-macos.toml` という名前で置くと**読まれず、エラーも出ない** —— 通知は届き続けるがクリックは効かないままになる。
 
    ```toml
    backend = "terminal_notifier"
@@ -54,7 +56,7 @@ owner: tomoya-k31
 
 | 症状 | 原因候補 | 対処 |
 |---|---|---|
-| 通知は出るがクリックしても何も起きない | `backend` が既定の `osascript` のまま | `plugins/notifier-macos.toml` に `backend = "terminal_notifier"` を設定 |
+| 通知は出るがクリックしても何も起きない | `backend` が既定の `osascript` のまま | `plugins/macos.toml` に `backend = "terminal_notifier"` を設定 |
 | クリックでアプリは前面化するが pane が変わらない | Orchestrator 停止中（`totsuka focus` は静かに no-op）/ pane が既に閉じている / agent が `pane_control` 非宣言（orca 等） | `totsuka focus <task-id>` を手で実行し理由を確認（`focus skipped: …` / `pane not focused — …` が原因を表示） |
 | クリックでコマンドは走るがアプリが前面化しない | `activate_bundle_id` 未設定 or bundle id が誤り | 手順 2 で正しい id を確認して設定 |
 | `config validate` が terminal-notifier のエラーを出す | 未導入 / PATH 外 / `terminal_notifier_bin` が誤り | `brew install terminal-notifier` するか絶対パスを設定。導入せず使う場合は `backend = "osascript"` に戻す（通知は出るがクリック不可） |
