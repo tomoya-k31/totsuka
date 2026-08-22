@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-08-23
+
+* **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) の herdr 下限ガードを `ping` の `protocol` 整数から **`version` の semver 判定**へ移した（#520 §1、エピック #517）。`protocol` は herdr の**バイナリ client↔server wire 形式**の版で、totsuka が使う NDJSON Socket API を追跡していない — 実測で protocol 17 → 20 の 3 回の bump では totsuka が呼ぶ 22 メソッドが何も変わらず、逆に `custom_status` は protocol 16 → 16 のまま `PaneInfo` から削除された。**下限を課したい対象を追跡していない数値では下限を表現できない**ので、「0.7.5 以降」と言える `version` に置き換えた。上限は設けない（新しい herdr で totsuka が起動できなくなることを設計上禁じる、#517）。通す側の判断は 3 つで、`version` の**欠落**・**semver としてパース不能**・**下限の prerelease**（`0.7.5-rc.1`）はいずれも通す — 未知の形で起動を拒否すると推測が障害になるため、`protocol` 検査が欠落フィールドについて下していた判断をそのまま引き継いだ。**このガードは粗い網**であることを doc comment に明記した: preview ビルドは基底 stable の `version` を名乗るので preview 同士は区別できず、逆に `protocol` は preview ごとに動くが stable 間で動かないことがある。互換の実判定はここではなくコミット済み schema の CI 差分が持つ（#518）。
+
 ## 2026-08-22
 
 * **Update**: [ADR-0054](/decisions/adr-0054-prompt-language-policy.md) を実機で検証し `verified` を付けた（実 Slack + 実 GitHub + herdr + Claude Code）。**指示文が英語でも、成果物と対話はすべて材料の言語（日本語）になった** —— Slack `slack-react`（profile = answer）は日本語の返信案を出し承認後に本人名義でスレッドへ投稿、GitHub `github-task`（profile = implement）は日本語の issue に対して**日本語のタイトルと本文の PR** を作り F-84 / F-86 も pass。**設計時に想定していなかった 3 つ目の経路も出た**: エージェントが人間に出した問い返し（#487 の質問 UI）も日本語だった。規則は成果物だけでなく**対話全体**に効いている。案 C（`output_language` キー新設）を入れる理由は、いまのところ実測でも生じていない。

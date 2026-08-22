@@ -12,7 +12,7 @@
 //! protocol 17 makes it herdr's problem, and `agent.prompt`'s own answer —
 //! `agent_prompt_stalled` — is what the plugin now reacts to.
 //!
-//! Covers initialize (including the protocol floor) → task/dispatch (pane
+//! Covers initialize (including the version floor) → task/dispatch (pane
 //! ownership, layout, `kind` resolution, the hook `env` reaching the agent via
 //! `workspace.create`, `--settings`/`--resume` launch) → the reduced state
 //! stream (a `pane.exited` **deadman**: status changes produce no notification,
@@ -40,8 +40,12 @@ use agent_ide_herdr::transport::SocketTransport;
 const PANE: &str = "w1:p1";
 /// The companion shell `[layout]` splits off (#356).
 const SHELL_PANE: &str = "w1:p2";
-/// The protocol the fake speaks. The plugin refuses anything below 17
-/// (ADR-0032 D-6).
+/// The herdr the fake speaks for. The plugin refuses anything below 0.7.5
+/// (ADR-0032 D-6, re-expressed as a semver floor in #520).
+const VERSION: &str = "0.7.5";
+/// The `protocol` integer `ping` carries alongside `version`. The plugin does
+/// **not** read it any more (#520) — it stays here only because a real `pong`
+/// has it, and a fake that drops it would stop being a faithful `ping`.
 const PROTOCOL: u64 = 17;
 
 /// The fake agent CLI's observable state — the pane's screen and status.
@@ -60,8 +64,10 @@ struct FakeHerdr {
     cli: Arc<Mutex<Cli>>,
     /// Envelope events pushed on the subscription connection after its ACK.
     events_on_subscribe: Arc<Mutex<Vec<Value>>>,
-    /// The protocol `ping` reports. Below 17 the plugin refuses to initialize.
-    protocol: u64,
+    /// The `version` `ping` reports. Below 0.7.5 the plugin refuses to
+    /// initialize (#520); `""` stands for a `ping` that carries no `version`
+    /// field at all, which passes.
+    version: &'static str,
     /// When set, `agent.start` fails with this herdr error code — the shape a
     /// name collision (`agent_name_taken`) or an unsupported `kind` arrives in.
     ///
@@ -163,7 +169,7 @@ impl Default for FakeHerdr {
                 ..Cli::default()
             })),
             events_on_subscribe: Arc::default(),
-            protocol: PROTOCOL,
+            version: VERSION,
             start_error: None,
             busy_starts: Arc::default(),
             timeout_starts: Arc::default(),
@@ -236,12 +242,12 @@ impl FakeHerdr {
                 reply(
                     &mut write_half,
                     &id,
-                    // `protocol: 0` stands for a `ping` that carries no
-                    // protocol field at all.
-                    if self.protocol == 0 {
-                        json!({ "type": "pong", "version": "0.7.5" })
+                    // `version: ""` stands for a `ping` that carries no
+                    // version field at all.
+                    if self.version.is_empty() {
+                        json!({ "type": "pong", "protocol": PROTOCOL })
                     } else {
-                        json!({ "type": "pong", "version": "0.7.5", "protocol": self.protocol })
+                        json!({ "type": "pong", "version": self.version, "protocol": PROTOCOL })
                     },
                 )
                 .await
@@ -2611,15 +2617,15 @@ async fn a_tool_launch_with_an_empty_env_injects_none() {
     );
 }
 
-/// A herdr older than 17 cannot run this plugin's dispatch at all, so
-/// `initialize` refuses it (ADR-0032 D-6). Failing here rather than at the
-/// first dispatch is the whole point: before this check the symptom was
-/// `missing field 'kind'` on a task that had already been ingested and had a
-/// worktree cut for it.
+/// A herdr older than 0.7.5 cannot run this plugin's dispatch at all, so
+/// `initialize` refuses it (ADR-0032 D-6, floored on `version` since #520).
+/// Failing here rather than at the first dispatch is the whole point: before
+/// this check the symptom was `missing field 'kind'` on a task that had
+/// already been ingested and had a worktree cut for it.
 #[tokio::test]
-async fn initialize_refuses_a_herdr_below_protocol_17() {
+async fn initialize_refuses_a_herdr_below_0_7_5() {
     let (socket, _) = FakeHerdr {
-        protocol: 16,
+        version: "0.7.4",
         ..FakeHerdr::default()
     }
     .spawn();
@@ -2628,7 +2634,7 @@ async fn initialize_refuses_a_herdr_below_protocol_17() {
     let resp = d.init(&socket).await;
     let message = resp["error"]["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains("protocol 16") && message.contains("herdr update"),
+        message.contains("0.7.4") && message.contains("herdr update"),
         "the refusal must name the version and the fix: {resp}"
     );
 
@@ -2641,14 +2647,62 @@ async fn initialize_refuses_a_herdr_below_protocol_17() {
     );
 }
 
-/// A `ping` with no `protocol` at all passes. The field has been there since
+/// A `ping` with no `version` at all passes. The field has been there since
 /// 0.7.1, so its absence means a herdr shaped unlike any we have seen —
 /// refusing on that guess would turn an unknown into an outage, and the
 /// dispatch path fails loudly on its own if the guess was wrong.
 #[tokio::test]
-async fn initialize_accepts_a_ping_without_a_protocol_field() {
+async fn initialize_accepts_a_ping_without_a_version_field() {
     let (socket, _) = FakeHerdr {
-        protocol: 0,
+        version: "",
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    let resp = d.init(&socket).await;
+    assert!(resp["error"].is_null(), "must not refuse: {resp}");
+}
+
+/// A `version` that is not semver passes, for the same reason a missing one
+/// does: the guard is a coarse net, and an unparseable string is an unknown
+/// shape rather than evidence of an old herdr.
+#[tokio::test]
+async fn initialize_accepts_a_version_that_is_not_semver() {
+    let (socket, _) = FakeHerdr {
+        version: "nightly",
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    let resp = d.init(&socket).await;
+    assert!(resp["error"].is_null(), "must not refuse: {resp}");
+}
+
+/// A prerelease of the floor passes. Semver orders `0.7.5-rc.1` below `0.7.5`,
+/// but it is the floor release, and this guard does not make calls that fine
+/// (#520) — the schema diff in CI is what decides real compatibility.
+#[tokio::test]
+async fn initialize_accepts_a_prerelease_of_the_floor() {
+    let (socket, _) = FakeHerdr {
+        version: "0.7.5-rc.1",
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    let resp = d.init(&socket).await;
+    assert!(resp["error"].is_null(), "must not refuse: {resp}");
+}
+
+/// A herdr newer than anything this plugin was built against passes. Totsuka
+/// must never be the reason an operator cannot run the current herdr (#517):
+/// the floor has no ceiling above it.
+#[tokio::test]
+async fn initialize_accepts_a_herdr_newer_than_the_floor() {
+    let (socket, _) = FakeHerdr {
+        version: "0.9.0",
         ..FakeHerdr::default()
     }
     .spawn();
