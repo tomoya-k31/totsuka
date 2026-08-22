@@ -517,6 +517,32 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// The `answer` profile denies **file edits and the shell entirely**
+    /// (`hooks::permissions`), so instructions that invite the agent to change
+    /// code, commit, or open a pull request describe something it cannot do.
+    ///
+    /// That is not a cosmetic mismatch. Live E2E (#527): the agent followed the
+    /// old text, tried to implement, hit the deny, and returned `STATUS:FAILED`
+    /// — so the mention got **no reply at all**, not even a draft. The boundary
+    /// was working; the prompt was wrong.
+    ///
+    /// A string check because the deny list lives in orchestrator-core and this
+    /// crate cannot see it (`plugins → protocol/sdk only`, ADR-0011). Brittle
+    /// by construction; kept anyway, because the failure it guards is silent on
+    /// the operator's side.
+    #[test]
+    fn the_reply_instructions_do_not_ask_for_what_answer_cannot_do() {
+        let text = &DEFAULTS.reply_instructions;
+        for forbidden in ["を作成してください", "コミットして", "push して"] {
+            assert!(
+                !text.contains(forbidden),
+                "reply_instructions asks for `{forbidden}`, which `answer` cannot do:\n{text}"
+            );
+        }
+        // …and it has to say so, or the agent has no way to know before trying.
+        assert!(text.contains("読み取り専用"), "{text}");
+    }
+
     fn parse(json: serde_json::Value) -> SlackConfig {
         serde_json::from_value(json).unwrap()
     }
@@ -553,25 +579,30 @@ mod tests {
     fn defaults_reproduce_todays_prompt_bytes() {
         let p = SlackPrompts::default();
 
-        // Was the `String::from(...)` in `pipeline::build_task`. The moved
-        // text has to survive intact, but it is no longer the *whole* value:
-        // ADR-0026 appended the PR-URL request, because the orchestrator stopped
-        // creating pull requests and this reply became the only channel the URL
-        // can travel on. Assert the original as a prefix so a mangled move
-        // still fails while a deliberate addition does not.
-        let original = "以下の Slack メンションへの返信案を日本語で作成してください。\
-             対象リポジトリを調査し、根拠を持って回答してください。\
-             出力は返信文のみとし、前置き・後書き・説明を含めないでください。";
-        assert!(
-            p.reply_instructions.starts_with(original),
-            "the pre-#318 text must survive verbatim: {}",
-            p.reply_instructions
-        );
-        assert!(
-            p.reply_instructions.contains("URL"),
-            "the PR URL request must be there — nothing else can carry it: {}",
-            p.reply_instructions
-        );
+        // Was the `String::from(...)` in `pipeline::build_task`.
+        //
+        // **The byte-for-byte claim no longer holds for this key, on purpose.**
+        // ADR-0026 had appended a PR-URL request here, reasoning that the reply
+        // is the only channel a URL can travel on once the orchestrator stopped
+        // creating pull requests. That reasoning is right for `implement` and
+        // wrong for this key: `answer` is denied file edits *and* the shell, so
+        // it cannot open a pull request at all. #527 caught it live — the agent
+        // tried, was refused, and failed the task, leaving the mention with no
+        // reply. The request is gone; do not restore it.
+        //
+        // What still has to survive the #318 move is the instruction's own
+        // shape: what to produce, and that the output is the reply alone.
+        for surviving in [
+            "以下の Slack メンションへの返信案を日本語で作成してください。",
+            "出力は返信文のみとし、前置き・後書き・説明を含めないでください。",
+            "根拠を持って回答してください",
+        ] {
+            assert!(
+                p.reply_instructions.contains(surviving),
+                "the pre-#318 text must survive: `{surviving}` missing from {}",
+                p.reply_instructions
+            );
+        }
         // Was `format!("\n返信スタイル: {style}")`.
         assert_eq!(
             crate::template::render(&p.reply_style_suffix, &[("style", "簡潔に")]),

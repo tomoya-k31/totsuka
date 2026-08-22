@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:28d258b2bbe0532c17d66c541bfce9498bd82aa4080409141ae3727b165fab20 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:8c68234fd33e7ff42112c5b7c4bcba0d85f8616923ba0a30b607504e527d489a -->
 
 # 設定リファレンス
 
@@ -638,7 +638,7 @@ kind = "task_source"
 
 | キー | 用途 | プレースホルダ |
 |---|---|---|
-| `reply_instructions` | 返信案の作成指示。`answer` の既定であり、種類が不明なときのフォールバックでもある | — |
+| `reply_instructions` | 返信案の作成指示。`answer` の既定であり、種類が不明なときのフォールバックでもある。**`answer` はファイル編集もシェルも使えない**ので、ここに変更・コミット・PR 作成を求める文を書くと、エージェントは試みて拒否され、返信を 1 つも出さないまま失敗する | — |
 | `implement_instructions` | `implement` の既定。実装してプルリクエストを作り、その URL を報告に含めさせる | — |
 | `triage_instructions` | `triage` の既定。issue を起票し、その URL を報告に含めさせる | — |
 | `reply_style_suffix` | `reply_style` が設定されているときだけ返信指示に追記される | `{style}` |

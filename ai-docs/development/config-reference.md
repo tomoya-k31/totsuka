@@ -730,7 +730,7 @@ kind = "task_source"
 
 | キー | 用途 | プレースホルダ |
 |---|---|---|
-| `reply_instructions` | 返信案作成の指示（`Task.instructions` として帯域外配送される）。**profile 既定**: `answer`、および kind 不明・不在のときのフォールバック | — |
+| `reply_instructions` | 返信案作成の指示（`Task.instructions` として帯域外配送される）。**profile 既定**: `answer`、および kind 不明・不在のときのフォールバック。**`answer` はファイル編集もシェルも拒否される**ので、ここに変更・コミット・PR 作成を求める文を書くとエージェントが試みて失敗する（#527。返信が 1 つも出ないまま `FAILED` になった） | — |
 | `implement_instructions` | **profile 既定**: `implement`。実装して PR を作り、その URL を報告文に含めさせる | — |
 | `triage_instructions` | **profile 既定**: `triage`（`:books:` の起票フロー、#450）。Issue を起票し、その URL を報告文に含めさせる | — |
 | `reply_style_suffix` | `reply_style` が設定されているときだけ `reply_instructions` に追記される | `{style}` |
