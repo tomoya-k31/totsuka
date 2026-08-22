@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:28d258b2bbe0532c17d66c541bfce9498bd82aa4080409141ae3727b165fab20 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:95edbb486f7383c97f27500a0959ca63c625e67be3f59f45238394fc5c89cec2 -->
 
 # Configuration reference
 
@@ -637,7 +637,7 @@ Per-key overrides for the prompts this plugin sends; the key name is the setting
 
 | Key | Used for | Placeholders |
 |---|---|---|
-| `reply_instructions` | Drafting a reply. The default for `answer`, and the fallback when the kind is unknown | — |
+| `reply_instructions` | Drafting a reply. The default for `answer`, and the fallback when the kind is unknown. This key is also the fallback for any kind this plugin has no instructions for, and those workflows have different tool boundaries — `answer` has no file edits and no shell, `design` has both, and a workflow with no profile has no restrictions at all. **So it must not claim what the agent can run**, only what the task is for. Ask here for a change, a commit or a pull request and an `answer` agent will try, be refused, and report a failure with no reply at all | — |
 | `implement_instructions` | The default for `implement`: implement, open a pull request, report the URL | — |
 | `triage_instructions` | The default for `triage`: file an issue, report the URL | — |
 | `reply_style_suffix` | Appended to the reply instructions only when `reply_style` is set | `{style}` |

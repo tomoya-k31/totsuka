@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:28d258b2bbe0532c17d66c541bfce9498bd82aa4080409141ae3727b165fab20 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:95edbb486f7383c97f27500a0959ca63c625e67be3f59f45238394fc5c89cec2 -->
 
 # 設定リファレンス
 
@@ -638,7 +638,7 @@ kind = "task_source"
 
 | キー | 用途 | プレースホルダ |
 |---|---|---|
-| `reply_instructions` | 返信案の作成指示。`answer` の既定であり、種類が不明なときのフォールバックでもある | — |
+| `reply_instructions` | 返信案の作成指示。`answer` の既定であり、種類が不明なときのフォールバックでもある。このキーは、このプラグインが指示文を持たない kind のフォールバックでもあり、そうした workflow はツールの境界が違う（`answer` はファイル編集もシェルも不可、`design` はどちらも可、profile 無しは制限なし）。**したがってツールの可否を主張してはならず**、書けるのはタスクの目的だけである。ここに変更・コミット・PR 作成を求める文を書くと、`answer` のエージェントは試みて拒否され、返信を 1 つも出さないまま失敗する | — |
 | `implement_instructions` | `implement` の既定。実装してプルリクエストを作り、その URL を報告に含めさせる | — |
 | `triage_instructions` | `triage` の既定。issue を起票し、その URL を報告に含めさせる | — |
 | `reply_style_suffix` | `reply_style` が設定されているときだけ返信指示に追記される | `{style}` |
