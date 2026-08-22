@@ -465,7 +465,7 @@ tool = "claude-deep"
 
 `mode_args` / `plan_args` を明示すると**既定を丸ごと置き換える**ので、これらのフラグも消える。無人で回すなら自分で書き足すこと。
 
-ツール解決はディスパッチ時に workflow ピン > repo 既定 > `default_tool` > 組み込み `claude` の順。解決結果は core が完全な argv/env（`ToolLaunchSpec`）へ組み立てて agent プラグインに渡す。かつて後方互換フォールバックだった herdr.toml の `agent_command` / `plan_args` / `launch_command` は、**プロトコル 0.4.0 で削除済み**（#411、[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。`deny_unknown_fields` なので**残っていると `initialize` が `CONFIG_INVALID`** になり、`removed_keys_in` がキー名と代替を名指しする。
+ツール解決はディスパッチ時に workflow ピン > repo 既定 > `default_tool` > 組み込み `claude` の順。解決結果は core が完全な argv/env（`ToolLaunchSpec`）へ組み立てて agent プラグインに渡す。かつて後方互換フォールバックだった herdr.toml の `agent_command` / `plan_args` は、**プロトコル 0.4.0 で削除済み**（#411、[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。`deny_unknown_fields` なので**残っていると `initialize` が `CONFIG_INVALID`** になり、`removed_keys_in` がキー名と代替を名指しする。
 
 # プロンプト文（組み込み、#314 → #465）
 
