@@ -558,3 +558,37 @@ fn request_id(id: &Value) -> RequestId {
         RequestId::Str(id.to_string())
     }
 }
+
+#[cfg(test)]
+mod version_floor_tests {
+    use super::*;
+
+    /// The floor is written twice — here as [`MIN_HERDR_VERSION`], and in
+    /// `schemas/methods.json` as the version the types are generated from
+    /// (surfaced as [`crate::wire::FLOOR`]).
+    ///
+    /// **Two places means one of them can go stale silently.** Raising the
+    /// generation floor without raising this constant would leave the guard
+    /// admitting a herdr whose responses the generated types were never built
+    /// from — the exact shape of failure ADR-0055 exists to remove.
+    #[test]
+    fn the_guard_and_the_generated_types_share_one_floor() {
+        assert_eq!(
+            MIN_HERDR_VERSION.to_string(),
+            crate::wire::FLOOR,
+            "raise both, or neither: `MIN_HERDR_VERSION` in server.rs and `floor` in \
+             plugins/agent-ide-herdr/schemas/methods.json"
+        );
+    }
+
+    /// `NEWEST_CHECKED` is not a ceiling, but it must not be *below* the floor
+    /// — that would mean the committed slices do not even cover the version
+    /// the types were generated from.
+    #[test]
+    fn the_newest_checked_version_is_not_below_the_floor() {
+        let floor = semver::Version::parse(crate::wire::FLOOR).expect("FLOOR is semver");
+        let newest =
+            semver::Version::parse(crate::wire::NEWEST_CHECKED).expect("NEWEST_CHECKED is semver");
+        assert!(newest >= floor, "{newest} < {floor}");
+    }
+}
