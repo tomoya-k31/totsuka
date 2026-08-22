@@ -134,8 +134,13 @@ async fn a_missing_scope_warns_without_failing_initialize() {
     shared.set_scopes(&["chat:write", "im:write", "users:read"]);
     let (mut srv, _harness) = server(&shared);
 
-    let mut config = init_config();
-    config["trigger_reactions"] = json!(["totsuka-test"]);
+    let config = init_config();
+    // The reaction trigger is declared as a workflow trigger, so it has to be
+    // supplied here — without it the `reactions:read` half of this test would
+    // pass for the wrong reason (no trigger configured means no scope wanted).
+    let triggers = json!([
+        { "workflow": "slack-reaction", "trigger": { "reaction": "totsuka-test" } },
+    ]);
 
     // It is a warning, not a refusal: mentions, drafts and approvals all still
     // work without these scopes — only the opt-in features are dead, and
@@ -145,7 +150,7 @@ async fn a_missing_scope_warns_without_failing_initialize() {
             &mut srv,
             1,
             "initialize",
-            json!({ "protocol_version": "0.1.0", "config": config }),
+            json!({ "protocol_version": "0.1.0", "config": config, "triggers": triggers }),
         )
         .await,
     );
@@ -161,15 +166,17 @@ async fn unknown_scopes_add_no_round_trip() {
     // No `set_scopes`: the default is the real "headers not visible" case.
     let (mut srv, _harness) = server(&shared);
 
-    let mut config = init_config();
-    config["trigger_reactions"] = json!(["totsuka-test"]);
+    let config = init_config();
+    let triggers = json!([
+        { "workflow": "slack-reaction", "trigger": { "reaction": "totsuka-test" } },
+    ]);
 
     let result = result_of(
         call(
             &mut srv,
             1,
             "initialize",
-            json!({ "protocol_version": "0.1.0", "config": config }),
+            json!({ "protocol_version": "0.1.0", "config": config, "triggers": triggers }),
         )
         .await,
     );

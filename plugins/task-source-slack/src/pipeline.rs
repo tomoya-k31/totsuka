@@ -315,8 +315,7 @@ pub fn spawn<T, C, S>(
     chat: Arc<C>,
     config: Arc<SlackConfig>,
     // Resolved at `initialize`, where the workflow triggers are in hand
-    // (#396); the pipeline is handed the answer rather than re-deriving it
-    // from config, because only one of the two notations may be live.
+    // (#396); the pipeline is handed the answer rather than re-deriving it.
     trigger_reactions: ReactionTriggers,
     mut events: mpsc::UnboundedReceiver<SocketEvent>,
     state: SharedState,

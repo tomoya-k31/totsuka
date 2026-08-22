@@ -59,6 +59,18 @@ location = "${E2E_HOME}/wt/{repo_name}/{worktree_name}"
 cleanup = "immediate"
 plan_cleanup = "immediate"
 
+# S4: 本人が :totsuka-test: を付けたらタスクを起こす。
+# **catch-all より前に置くこと** — 下の slack-reply は trigger = {} で全マッチ
+# なので、後ろに置くとこの workflow には絶対に到達しない
+# （順序を間違えると `totsuka config validate` が名指しで警告する）。
+[[workflows]]
+name = "slack-reaction"
+source = "slack"
+trigger = { reaction = "totsuka-test" }
+mode = "plan"
+agent = "herdr"
+output = "source"
+
 # Slack: 返信起案なので plan で十分（ペインは git を実行しない想定）。
 # ただし plan は git を構造的には止めない（#378）。対象リポジトリの CLAUDE.md に
 # push / PR の指示があると、返信起案のつもりでも PR が生える。

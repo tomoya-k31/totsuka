@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:f8c44e8dca185153be1f2c0769b67687c9cd63dce788ee514a0e8c933f732976 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0aa9032a2ee66185959ae7cfbff1e066fbc3e6fdd4841fc8310de883bd2bc4e4 -->
 
 # Configuration reference
 
@@ -144,7 +144,6 @@ agent = "herdr"
 - The emoji name is a **string** in the form Slack reports, without colons. Writing `":eyes:"` works — the colons are stripped. Note that 👀 is `eyes` and 👁 is `eye`, which are different
 - **A non-string value such as `reaction = 123` is a startup error.** An unreadable reserved key is skipped at match time, which would break things in two opposite directions at once: the workflow would match every task (and, sitting before the catch-all, swallow your mentions) while the plugin registered no emoji at all. Neither half reports an error on its own
 - **Using the same emoji in two workflows is a configuration error**, rather than letting first-match silently pick one
-- Combining this with the older `trigger_reactions` key in `plugins/slack.toml` is also an error. A configuration using only the old form still works, with a deprecation warning
 - Only your own reactions start a task. There is no setting that relaxes this
 
 **Mixed versions:** with a new plugin against an older core, the core has no `reaction` reserved key and the reaction workflow swallows every task. Upgrade the core before the plugin. When rolling back, remove reaction workflows from your configuration.
@@ -622,7 +621,6 @@ kind = "task_source"
 | `user_token` | string | required | User OAuth token (`xoxp-`) for reading and writing as you. Use a secret reference |
 | `bot_token` | string? | none | Bot token (`xoxb-`). With it set, a bot sends you a direct message when a draft or a picker arrives. **Without it the feature is simply off** (one warning at startup) |
 | `target_user_id` | string | required | Your Slack user id. Mentions of this user become tasks, and it is checked against the token's own identity |
-| `trigger_reactions` | string[] | `[]` | **Deprecated** in favour of `trigger.reaction` on a workflow. Emoji names that start a task when **you** react. Colons are stripped. Needs the `reactions:read` scope |
 | `thread_context_limit` | int | 6 | How many recent thread messages to include in the task body |
 | `reply_style` | string? | none | Tone instructions injected into the task body |
 | `[prompts]` | table | — | Overrides for the prompts this plugin sends |

@@ -19,7 +19,7 @@ oauth_config:
   scopes:
     user:
       - chat:write # 検証用メッセージの投稿（A 名義）
-      - reactions:write # S4: trigger_reactions の絵文字を付ける（reactions.add）
+      - reactions:write # S4: トリガ絵文字を付ける（reactions.add）
       - reactions:read # 付与済みリアクションの確認
       - channels:history # 検証チャンネルのメッセージ・スレッド返信の読み取り
       - channels:read # チャンネル一覧・ID 解決（scripts/slack.sh channels）

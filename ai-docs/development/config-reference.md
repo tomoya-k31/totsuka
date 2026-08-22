@@ -164,7 +164,6 @@ agent = "herdr"
 - 絵文字名は Slack が報告する形（コロン無し）の**文字列**。`":eyes:"` と書いても剥がされる。👀 は `eyes`、👁 は `eye` で別物
 - **文字列以外（`reaction = 123` 等）は起動時エラー。** 予約キーは読めない値だと照合時にスキップされる仕様なので、放置すると「その workflow が全タスクにマッチする（= catch-all より前にあるのでメンションを吸う）」一方で「プラグインは絵文字を1つも登録しない」という、逆方向に2つ壊れた状態になる。どちらも単体ではエラーを出さない
 - **同一絵文字を 2 つの workflow に書くと `CONFIG_INVALID`**。first-match で片方が黙って勝つのを許さない
-- **`plugins/slack.toml` の `trigger_reactions` との併用も `CONFIG_INVALID`。** 旧記法だけの構成は非推奨警告つきで従来どおり動く（削除は 0.3）
 - 本人限定の不変条件は不変（他人のリアクションでは起動しない、→ [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）
 
 **混在バージョンの注意**: 新プラグイン + 旧コアの組み合わせでは、旧コアに `reaction` 予約キーが無いため**リアクション workflow が全タスクを吸う**。コア → プラグインの順にリリースすること（同一リポジトリの一括リリースなら自然に満たされる）。ロールバック時は `trigger = { reaction = ... }` の workflow を config から外す。
@@ -715,7 +714,6 @@ kind = "task_source"
 | `user_token` | string | 必須 | User OAuth Token（`xoxp-`、本人名義の読み書き）。`op://` 参照推奨 |
 | `bot_token` | string? | なし | Bot User OAuth Token（`xoxb-`、[ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)・#305）。設定すると返信案・ピッカー到着時に bot が本人へ通知 DM（ナッジ）を送る。**未設定なら機能 off**（起動時 warn 1 回）。設定時は TokenGuard が `auth.test` で probe。`op://` 参照推奨 |
 | `target_user_id` | string | 必須 | 自分の Slack ユーザー ID（`U…`）。このユーザー宛メンションをタスク化し、TokenGuard が `auth.test` の identity と一致検証 |
-| `trigger_reactions` | string[] | `[]` | **非推奨**（#396、削除は 0.3）。→ `[[workflows]].trigger.reaction`（下記）。**本人が付けると**タスクを起こす絵文字名（#319）。空 = 無効。コロンは剥がされるので `":eyes:"` と `"eyes"` は同じ。他人が付けても起動せず、緩和する設定は無い（→ [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）。`reactions:read` スコープが要る |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
 | `reply_style` | string? | なし | 返信トーンの指示（タスク本文へ注入、例 `"丁寧語で簡潔に"`） |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#318） |
