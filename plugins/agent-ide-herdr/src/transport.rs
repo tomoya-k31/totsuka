@@ -65,6 +65,50 @@ pub trait HerdrTransport: Clone + Send + Sync + 'static {
     fn events(&self) -> broadcast::Receiver<Value>;
 }
 
+/// Serialize a `wire::request` type into the `params` object of a call.
+///
+/// A params type that cannot serialize is a bug in this plugin, not a herdr
+/// problem — but it must not panic a running dispatch, so it takes the same
+/// error path as everything else.
+///
+/// Public because the calls whose **result** nobody reads still build their
+/// params from a generated type (`methods.json` records those as
+/// `result: null`, so there is no envelope to deserialize into).
+pub fn to_params<P: serde::Serialize>(method: &str, params: &P) -> Result<Value, HerdrError> {
+    serde_json::to_value(params).map_err(|e| {
+        HerdrError::InvalidResponse(format!("could not build params for `{method}` → {e}"))
+    })
+}
+
+/// [`call`](HerdrTransport::call) with the generated wire types on both ends
+/// ([ADR-0055](../../../ai-docs/decisions/adr-0055-herdr-schema-typed-wire.md)):
+/// `params` is serialized from a `wire::request` type, and the `result` is
+/// deserialized into a `wire::result` envelope.
+///
+/// **This does not make the call stricter about what herdr adds.** The
+/// generated types carry no `deny_unknown_fields`, so unknown fields and
+/// unknown enum variants still pass — what changes is only *where* a
+/// **removal** surfaces: here, named, instead of several layers down as a
+/// default value nobody chose.
+///
+/// A deserialization failure becomes [`HerdrError::InvalidResponse`] naming
+/// the method, so it rides whatever the caller already does with an error from
+/// that call (warn and carry on, fail the task, treat as success — each call
+/// site already decided).
+pub async fn call_typed<T, P, R>(client: &T, method: &str, params: &P) -> Result<R, HerdrError>
+where
+    T: HerdrTransport,
+    P: serde::Serialize,
+    R: serde::de::DeserializeOwned,
+{
+    let result = client.call(method, to_params(method, params)?).await?;
+    serde_json::from_value(result).map_err(|e| {
+        HerdrError::InvalidResponse(format!(
+            "`{method}` answered a shape this build cannot read → {e}"
+        ))
+    })
+}
+
 /// The production transport: an NDJSON client over the herdr Unix socket,
 /// opening one connection per request (see the module docs for why).
 #[derive(Clone)]

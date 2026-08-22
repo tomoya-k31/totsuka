@@ -25,7 +25,8 @@ use tokio::sync::mpsc;
 use crate::agent::HerdrAgent;
 use crate::config::HerdrConfig;
 use crate::error::HerdrError;
-use crate::transport::HerdrTransport;
+use crate::transport::{HerdrTransport, call_typed};
+use crate::wire::result::WorkspaceListEnvelope;
 
 /// Builds (connects) a herdr transport. Abstracted so the server is tested
 /// against a fake herdr socket.
@@ -184,14 +185,34 @@ impl<F: TransportFactory> Server<F> {
         // so the floor check costs no extra round trip and
         // `totsuka config validate` reports a too-old herdr by name.
         match self.connect(&config).await {
-            Ok(transport) => match transport.call("ping", json!({})).await {
-                Ok(pong) => {
-                    if let Err(e) = check_version(&pong) {
-                        errors.push(e.to_string());
+            Ok(transport) => {
+                match transport.call("ping", json!({})).await {
+                    Ok(pong) => {
+                        if let Err(e) = check_version(&pong) {
+                            errors.push(e.to_string());
+                        }
                     }
+                    Err(e) => errors.push(format!("herdr did not answer ping → {e}")),
                 }
-                Err(e) => errors.push(format!("herdr did not answer ping → {e}")),
-            },
+                // One typed read, so `totsuka doctor` reports a herdr whose
+                // answers this build cannot parse — **before** a task is
+                // ingested and a worktree cut for it.
+                //
+                // `ping` alone cannot do this: its answer is three scalars, and
+                // ADR-0055's whole point is that the version number does not
+                // track the shape of the responses. `workspace.list` is the
+                // cheapest call that returns a real record (`WorkspaceInfo`,
+                // eight `required` fields) and it changes nothing.
+                if let Err(e) = call_typed::<_, _, WorkspaceListEnvelope>(
+                    &transport,
+                    "workspace.list",
+                    &crate::wire::request::EmptyParams {},
+                )
+                .await
+                {
+                    errors.push(e.to_string());
+                }
+            }
             Err(e) => errors.push(e.to_string()),
         }
         self.ok_validate(id, errors);

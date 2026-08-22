@@ -22,8 +22,13 @@ def int_type($fmt):
   ({"uint8":"u8","uint16":"u16","uint32":"u32","uint64":"u64","uint":"u64",
     "int8":"i8","int16":"i16","int32":"i32","int64":"i64","int":"i64"}[$fmt // "int64"])
   // die("知らない integer format `\($fmt)`");
+# **`float` も f64 に写す。** JSON に float32 は無く、`format: "float"` は herdr の
+# **内部の**型を述べているだけである。f32 を使うと、設定に書かれた `0.65` が
+# 送信時に `0.6499999761581421` になる — 同じ f32 だが同じ文字列ではなく、
+# 運用者が目にするのは文字列のほうである（実測: `pane.split` の `ratio`）。
+# f64 は f32 の全値を正確に保持するので、読む向きでも失うものは無い。
 def num_type($fmt):
-  ({"float":"f32","double":"f64"}[$fmt // "double"]) // die("知らない number format `\($fmt)`");
+  ({"float":"f64","double":"f64"}[$fmt // "double"]) // die("知らない number format `\($fmt)`");
 
 # 1 つのプロパティ schema を Rust の型へ。教えていない構文は推測せず落とす。
 def rust_type:
@@ -62,13 +67,15 @@ def rust_type:
 def field($name; $schema; $required; $ser):
   ($schema | rust_type) as $ty
   | ($name | ident) as $id
-  | (if ($ty | startswith("Vec<")) then "Vec::is_empty"
-     elif ($ty | startswith("BTreeMap<")) then "BTreeMap::is_empty"
-     else "Option::is_none" end) as $skip
   | (if ($ty | startswith("Vec<")) or ($ty | startswith("BTreeMap<")) or ($ty | startswith("Option<"))
      then $ty else "Option<\($ty)>" end) as $opt
+  # 送る側で **`Option` のときだけ**キーごと落とす。`None` は「指定していない」で
+  # あって値ではないが、**空のコレクションは値である** — 空を送るのと送らないのを
+  # 同じにしてしまうと、「空の env を渡した」と「env を一切渡していない」が
+  # 区別できなくなる。読む側にこの問題は無いので `default` だけでよい。
   | if $required then "    pub \($id): \($ty),"
-    elif $ser then "    #[serde(default, skip_serializing_if = \"\($skip)\")]\n    pub \($id): \($opt),"
+    elif $ser and ($opt | startswith("Option<"))
+      then "    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    pub \($id): \($opt),"
     else "    #[serde(default)]\n    pub \($id): \($opt)," end;
 
 def fields($schema; $skip; $ser):
