@@ -313,7 +313,13 @@ for t in tasks:
     break
 ')" || { echo "タスク一覧を読めませんでした（tt task list --json の形が変わった可能性）" >&2; exit 2; }
     case "$line" in
-      STALE*) echo "$(date +%H:%M:%S) （seed 前の古いタスクのみ: ${line#STALE	}）"; sleep 20; continue;;
+      # `cut -f2-` で 2 列目以降を取る。以前は `${line#STALE<TAB>}` と
+      # **パターンにタブの実文字**を書いていたが、画面では区別が付かず、
+      # エディタや整形で空白へ変わると**マッチせず `STALE` が表示に残る**
+      # だけで壊れたことに気づけない。区切りの扱いは `cut` に任せる。
+      STALE*)
+        echo "$(date +%H:%M:%S) （seed 前の古いタスクのみ: $(printf '%s' "$line" | cut -f2-)）"
+        sleep 20; continue;;
     esac
     if [ -z "$line" ]; then
       echo "$(date +%H:%M:%S) （まだ取り込まれていません）"
