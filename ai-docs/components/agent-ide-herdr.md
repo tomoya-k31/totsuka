@@ -4,10 +4,19 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-23T18:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-23T21:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
+
+# schema に載らない依存
+
+このプラグインは herdr の schema に**一度も現れない**振る舞いにもいくつか依存している。
+**生成型（`wire`）も CI の schema 差分もその層を 1 つもカバーしない** — 実機で測る以外に
+知る方法が無いので、一覧・確かめ方・壊れたときの現れ方は
+[herdr の暗黙契約](/references/herdr-implicit-contracts.md) にまとめてある。
+`pane.split` の shell pane が env を継承しないことだけは**セキュリティ前提**で、
+破れても**動き続けたまま秘密が漏れる**ため、実機検証の必須項目になっている。
 
 # 必要な herdr のバージョン
 
