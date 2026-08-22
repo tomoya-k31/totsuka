@@ -193,11 +193,15 @@ pub struct Answers {
     /// failure this whole change removes; leaving it on the replay path would
     /// have kept it exactly where the playbook sends a second machine.
     ///
+    /// A `BTreeMap`, not a `HashMap`: `--save-answers` writes this file into a
+    /// dotfiles repository, and a hash order would churn the diff on every
+    /// regeneration.
+    ///
     /// A map rather than named fields because the slots belong to the recipe,
     /// not to any one plugin: they end up in `config.toml`'s workflows, while
     /// [`github`](Self::github) describes `plugins/github.toml`.
     #[serde(default)]
-    pub statuses: std::collections::HashMap<String, String>,
+    pub statuses: std::collections::BTreeMap<String, String>,
 }
 
 /// The version this build writes and accepts.
@@ -279,6 +283,23 @@ pub enum AnswersError {
         found: String,
         /// The keys the recipe declares, comma-separated.
         known: String,
+    },
+    /// A `[statuses]` value that cannot name a column.
+    ///
+    /// `contains_key` is not enough: `""` passes every presence check and
+    /// renders `{ project_status = "" }`, which no task can match — a valid
+    /// config, a green `doctor`, and a `run` that picks nothing up. Surrounding
+    /// whitespace does the same thing while *looking* right. Neither is
+    /// silently trimmed: altering what the operator wrote is how a file stops
+    /// meaning what it says.
+    #[error("{path} sets status `{key}` to a value that {reason} → give the column's exact name")]
+    InvalidStatus {
+        /// Path that was tried.
+        path: String,
+        /// The offending key.
+        key: &'static str,
+        /// What is wrong with it.
+        reason: &'static str,
     },
     /// A `[statuses]` key the chosen recipe declares but the file omits.
     #[error(
@@ -395,6 +416,23 @@ impl Answers {
                 known: declared.join(", "),
             });
         }
+        for slot in recipe.statuses {
+            let value = &answers.statuses[slot.key];
+            let reason = if value.trim().is_empty() {
+                Some("is empty")
+            } else if value.trim() != value {
+                Some("has leading or trailing whitespace")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return Err(AnswersError::InvalidStatus {
+                    path: path.to_string(),
+                    key: slot.key,
+                    reason,
+                });
+            }
+        }
         for blank in recipe.blanks {
             let filled = match blank {
                 Blank::Llm => answers.llm.is_some(),
@@ -456,6 +494,54 @@ implement_statuss = "Ready"
         // The message has to say what the recipe *does* use, or the operator
         // cannot tell a typo from a key that moved.
         assert!(message.contains("implement_status"), "{message}");
+    }
+
+    /// Present is not the same as usable.
+    ///
+    /// `""` satisfies `contains_key`, renders `{ project_status = "" }`, and no
+    /// task can ever match it — valid config, green `doctor`, a `run` that
+    /// picks nothing up. Surrounding whitespace does the same while looking
+    /// right on screen.
+    #[test]
+    fn a_status_value_that_cannot_name_a_column_is_refused() {
+        let file = |value: &str| {
+            format!(
+                r#"
+version = 2
+recipe = "minimal-github-herdr"
+secret_backend = "keychain"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/totsuka"
+
+[github]
+owner = "tomoya-k31"
+owner_type = "user"
+project_number = 1
+github_login = "tomoya-k31"
+
+[statuses]
+implement_status = "{value}"
+implement_done_status = "In review"
+"#
+            )
+        };
+        for (value, reason) in [
+            ("", "is empty"),
+            ("   ", "is empty"),
+            (" Todo", "whitespace"),
+        ] {
+            let err = Answers::from_toml_str("a.toml", &file(value), RECIPES)
+                .expect_err(&format!("{value:?} must be refused"));
+            let message = err.to_string();
+            assert!(message.contains("implement_status"), "{message}");
+            assert!(message.contains(reason), "{value:?}: {message}");
+        }
+
+        // …and the same file with a usable value parses, so the check is not
+        // simply refusing everything.
+        Answers::from_toml_str("a.toml", &file("Todo"), RECIPES).expect("a real name is fine");
     }
 
     /// A recipe with no status columns must still refuse a `[statuses]` key

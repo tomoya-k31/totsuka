@@ -86,11 +86,33 @@ pub struct StatusSlot {
 /// below is what keeps one from ever being written.
 pub fn render_fragment(
     fragment: &str,
-    statuses: &std::collections::HashMap<String, String>,
+    statuses: &std::collections::BTreeMap<String, String>,
+) -> String {
+    substitute(fragment, statuses, escape_toml_basic)
+}
+
+/// [`render_fragment`] without the TOML escaping, for showing a fragment to a
+/// person.
+///
+/// The confirmation screen exists so the operator can compare each name against
+/// their board's Status options **character by character**; showing the escaped
+/// form would put backslashes in front of the very characters they are checking.
+/// Nothing here is written to a file.
+pub fn render_fragment_for_display(
+    fragment: &str,
+    statuses: &std::collections::BTreeMap<String, String>,
+) -> String {
+    substitute(fragment, statuses, str::to_string)
+}
+
+fn substitute(
+    fragment: &str,
+    statuses: &std::collections::BTreeMap<String, String>,
+    prepare: impl Fn(&str) -> String,
 ) -> String {
     let mut out = fragment.to_string();
     for (key, value) in statuses {
-        out = out.replace(&format!("{{{{{key}}}}}"), &escape_toml_basic(value));
+        out = out.replace(&format!("{{{{{key}}}}}"), &prepare(value));
     }
     out
 }
@@ -113,6 +135,10 @@ fn escape_toml_basic(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            // TOML forbids raw control characters in a basic string, so one
+            // left through writes a `config.toml` that fails to parse on the
+            // next read — the same breakage the `"` case is escaped for.
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
             _ => out.push(ch),
         }
     }
@@ -359,7 +385,7 @@ mod tests {
     /// closes the string and adds keys nobody asked for.
     #[test]
     fn an_answer_cannot_decide_the_toml_around_it() {
-        let statuses = std::collections::HashMap::from([(
+        let statuses = std::collections::BTreeMap::from([(
             "implement_status".to_string(),
             r#"Ready", labels = ["x"#.to_string(),
         )]);
@@ -373,6 +399,40 @@ mod tests {
             inner["project_status"].as_str(),
             Some(r#"Ready", labels = ["x"#)
         );
+    }
+
+    /// A control character must not reach the file raw: TOML forbids them in a
+    /// basic string, so the config would fail to parse on the next read.
+    #[test]
+    fn a_control_character_is_escaped_rather_than_written_raw() {
+        let statuses = std::collections::BTreeMap::from([(
+            "implement_status".to_string(),
+            "a\u{7}b".to_string(),
+        )]);
+        let rendered = render_fragment(r#"{ project_status = "{{implement_status}}" }"#, &statuses);
+        assert!(!rendered.contains('\u{7}'), "{rendered}");
+        let table: toml::Table = toml::from_str(&format!("t = {rendered}")).expect("valid TOML");
+        assert_eq!(
+            table["t"].as_table().unwrap()["project_status"].as_str(),
+            Some("a\u{7}b"),
+            "the value must survive the round trip"
+        );
+    }
+
+    /// The confirmation screen shows what the operator typed, not the escaped
+    /// form — that screen exists for a character-by-character comparison.
+    #[test]
+    fn the_display_form_is_not_escaped() {
+        let statuses = std::collections::BTreeMap::from([(
+            "implement_status".to_string(),
+            r#"Say "go""#.to_string(),
+        )]);
+        let shown = render_fragment_for_display(
+            r#"{ project_status = "{{implement_status}}" }"#,
+            &statuses,
+        );
+        assert!(shown.contains(r#"Say "go""#), "{shown}");
+        assert!(!shown.contains('\\'), "{shown}");
     }
 
     /// Placeholders and slots must agree **in both directions**.
@@ -436,7 +496,7 @@ mod tests {
     #[test]
     fn the_suggested_names_render_into_the_fragments() {
         let recipe = by_key("design-implement-handoff").expect("recipe");
-        let filled: std::collections::HashMap<String, String> = recipe
+        let filled: std::collections::BTreeMap<String, String> = recipe
             .statuses
             .iter()
             .map(|s| (s.key.to_string(), s.default.to_string()))

@@ -265,7 +265,7 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
     // Status columns last: they are the only questions whose right answer is
     // sitting on screen in another window, and the operator has just been
     // asked for the board's coordinates.
-    let mut statuses = std::collections::HashMap::new();
+    let mut statuses = std::collections::BTreeMap::new();
     if !recipe.statuses.is_empty() {
         prompt.say("Name the Project status columns this workflow moves cards between.")?;
         prompt.say("  Each must match an option in the board's Status field exactly.")?;
@@ -400,23 +400,21 @@ impl<'a> Plan<'a> {
             // `doctor` stays green — so it has to be visible while there is
             // still a prompt to say no at.
             //
-            // Only when the config will actually be written. An existing file
-            // is left untouched, so printing the names there would show an
-            // operator values that `apply` never writes — the same "asked,
-            // then discarded" shape this change removes elsewhere.
-            if !self.write_config {
-                continue;
-            }
+            // Printed whether or not the config is written, like the `Repo:`
+            // lines above: an existing file is left untouched, and the `Skip:`
+            // line below says so for every answer at once. Suppressing just
+            // these would make the recipe's answers the only ones asked for
+            // and then shown nowhere.
             if let Some(trigger) = workflow.trigger {
                 out.push_str(&format!(
                     "          when {}\n",
-                    resolve_statuses(trigger, self.recipe, self.answers)
+                    resolve_statuses_for_display(trigger, self.recipe, self.answers)
                 ));
             }
             if let Some(on_success) = workflow.on_success {
                 out.push_str(&format!(
                     "          then {}\n",
-                    resolve_statuses(on_success, self.recipe, self.answers)
+                    resolve_statuses_for_display(on_success, self.recipe, self.answers)
                 ));
             }
         }
@@ -424,7 +422,7 @@ impl<'a> Plan<'a> {
             out.push_str(&format!("Write:    {}\n", self.config_path.display()));
         } else {
             out.push_str(&format!(
-                "Skip:     {} already exists (left untouched)\n",
+                "Skip:     {} already exists (left untouched) — nothing above is applied to it\n",
                 self.config_path.display()
             ));
         }
@@ -668,7 +666,17 @@ pub(crate) fn build_config(
 /// it is there so a future third caller degrades to the suggestion rather than
 /// writing a literal `{{…}}`, not as a supported path.
 fn resolve_statuses(fragment: &str, recipe: &Recipe, answers: &Answers) -> String {
-    let filled: std::collections::HashMap<String, String> = recipe
+    recipes::render_fragment(fragment, &status_values(recipe, answers))
+}
+
+/// [`resolve_statuses`] for the confirmation screen: the operator's own text,
+/// unescaped (see [`recipes::render_fragment_for_display`]).
+fn resolve_statuses_for_display(fragment: &str, recipe: &Recipe, answers: &Answers) -> String {
+    recipes::render_fragment_for_display(fragment, &status_values(recipe, answers))
+}
+
+fn status_values(recipe: &Recipe, answers: &Answers) -> std::collections::BTreeMap<String, String> {
+    recipe
         .statuses
         .iter()
         .map(|slot| {
@@ -679,8 +687,7 @@ fn resolve_statuses(fragment: &str, recipe: &Recipe, answers: &Answers) -> Strin
                 .unwrap_or_else(|| slot.default.to_string());
             (slot.key.to_string(), value)
         })
-        .collect();
-    recipes::render_fragment(fragment, &filled)
+        .collect()
 }
 
 /// Write via a temporary file and rename, so an interrupted write cannot leave
