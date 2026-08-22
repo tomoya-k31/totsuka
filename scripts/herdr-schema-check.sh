@@ -15,8 +15,9 @@
 # そのものの差分だけで、しかも totsuka が使う 22 メソッドに絞ったものである。
 #
 # **なぜ PR の CI で最新版を取りに行かないのか。** herdr がリリースされた瞬間に
-# 無関係な PR が全部赤くなり、ネットワーク障害でも落ちる。追随は日次 cron の
-# 別レーンが持ち、PR の CI はコミット済み schema とだけ突き合わせる。
+# 無関係な PR が全部赤くなり、ネットワーク障害でも落ちる。PR の CI はコミット済み
+# schema とだけ突き合わせ、新版の追随は別レーンに分ける（日次 cron は #520 §2 で
+# 入れる。**まだ無い** — 現状の追随は `--fetch` を手で叩くこと）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,6 +26,15 @@ SPEC="$SCHEMA_DIR/methods.json"
 WIRE="$ROOT/plugins/agent-ide-herdr/src/wire.rs"
 
 command -v jq >/dev/null 2>&1 || { echo "herdr-schema-check: jq が必要です" >&2; exit 2; }
+# 生成器は rustfmt に必須依存している（整形の有無が生成結果を変える）。ここで
+# 見ておかないと、rustfmt の無い環境では drift 検査が理由の分からない exit 2 に
+# なる — 「検査が落ちた」と「検査が動かなかった」を取り違えさせない。
+command -v rustfmt >/dev/null 2>&1 \
+  || { echo "herdr-schema-check: rustfmt が必要です (rustup component add rustfmt)" >&2; exit 2; }
+
+# 型の対応表は生成器と共有する。検査は「各プロパティが写る Rust の型が
+# 変わっていないか」を見るので、写像そのものが同じでなければ意味が無い。
+TYPES_JQ="$(cat "$ROOT/scripts/herdr-types.jq")"
 
 errors=0
 fail() { echo "herdr-schema-check: $*" >&2; errors=$((errors + 1)); }
@@ -34,7 +44,9 @@ fail() { echo "herdr-schema-check: $*" >&2; errors=$((errors + 1)); }
 # （`$(cat …)` 経由だと末尾改行が落ちて、検査自身が差分を作ってしまう）。
 before="$(mktemp)"; trap 'rm -f "$before"' EXIT
 cp "$WIRE" "$before"
-bash "$ROOT/scripts/herdr-types-build.sh" >/dev/null 2>&1
+# stdout だけを捨てる。**stderr は残す** — 生成が落ちた理由が 1 文字も
+# 出ないと、`set -e` のフェイルクローズが「無言の exit」に見える。
+bash "$ROOT/scripts/herdr-types-build.sh" >/dev/null
 if ! cmp -s "$before" "$WIRE"; then
   fail "wire.rs が生成物と一致しません。\`bash scripts/herdr-types-build.sh\` を流してコミットしてください"
   cp "$before" "$WIRE"
@@ -62,36 +74,64 @@ fi
 # false` は 1 つも無い）が、**送っているつもりのものが届かなくなる**のは
 # 黙って縮退する側なので、知りたい。
 read -r -d '' COMPAT_JQ <<'JQ' || true
-def defs($doc; $ns): $doc[$ns + "_defs"];
+# 生成される型の一覧を、名前 → schema で作る。`$doc.results[]` の封筒も
+# **型である**（`*Envelope` として生成される）ので、ここに入れる。これを
+# 落としていると、`pong.version` が消えても検査が通ってしまう。
+def typed($doc; $ns):
+  ($doc[$ns + "_defs"] // {})
+  + (if $ns == "result"
+     then ($doc.results // [] | map({key: ((.properties.type.const | variant_name) + "Envelope"), value: .}) | from_entries)
+     else {} end);
 
-# 型 T の閉包に現れるプロパティ集合を「型名.プロパティ名」で平らにする。
 def props($doc; $ns):
-  (defs($doc; $ns) | to_entries
+  (typed($doc; $ns) | to_entries
    | map(.key as $t | ((.value.properties // {}) | keys | map($t + "." + .)))
    | flatten | unique);
 def required($doc; $ns):
-  (defs($doc; $ns) | to_entries
+  (typed($doc; $ns) | to_entries
    | map(.key as $t | ((.value.required // []) | map($t + "." + .)))
    | flatten | unique);
 def enums($doc; $ns):
-  (defs($doc; $ns) | to_entries
+  (typed($doc; $ns) | to_entries
    | map(.key as $t | ((.value.enum // []) | map($t + "." + .)))
    | flatten | unique);
+
+# **プロパティの「中身」も見る。** 名前の集合だけを比べていると、
+# `revision` が `uint64` から `string` に化けても検査を通る（生成型は `u64` の
+# ままなので、実行時にハードエラーになる）。比べる相手は生成される Rust の
+# 型名そのもの — 生成と検査が同じ写像（`herdr-types.jq`）を見ている理由。
+def shapes($doc; $ns):
+  (typed($doc; $ns) | to_entries
+   | map(.key as $t
+         | ((.value.properties // {}) | to_entries
+            | map(.key as $p
+                  | { key: ($t + "." + $p),
+                      value: (try (.value | rust_type) catch ("<" + . + ">")) })))
+   | flatten | from_entries);
+
 def methods($doc): [$doc.methods[].properties.method.const] | unique;
 def results($doc): [$doc.results[].properties.type.const] | unique;
 
 $floor as $f | . as $v
+| (shapes($f; "result")) as $fsr | (shapes($v; "result")) as $vsr
+| (shapes($f; "request")) as $fsq | (shapes($v; "request")) as $vsq
 | [
     (methods($f) - methods($v) | map("メソッドが消えた: " + .)),
     (results($f) - results($v) | map("result のタグが消えた: " + .)),
-    (props($f; "result") - props($v; "result") | map("生成した型に載っている result のプロパティが消えた: " + .)),
-    (props($f; "request") - props($v; "request") | map("生成した型に載っている params のプロパティが消えた: " + .)),
+    (props($f; "result") - props($v; "result")
+      | map("生成した型に載っている result のプロパティが消えた: " + .)),
+    (props($f; "request") - props($v; "request")
+      | map("生成した型に載っている params のプロパティが消えた: " + .)),
     (required($f; "result") - required($v; "result")
       | map("result の required から外れた（新しい版が省略しうる）: " + .)),
     (required($v; "request") - required($f; "request")
       | map("request に required が増えた（totsuka は送っていない）: " + .)),
     (enums($f; "result") - enums($v; "result") | map("読む enum のバリアントが消えた: " + .)),
-    (enums($f; "request") - enums($v; "request") | map("送る enum のバリアントが消えた: " + .))
+    (enums($f; "request") - enums($v; "request") | map("送る enum のバリアントが消えた: " + .)),
+    ($fsr | to_entries | map(select($vsr[.key] != null and $vsr[.key] != .value)
+      | "result のプロパティの型が変わった: \(.key) は \(.value) だったが \($vsr[.key])")),
+    ($fsq | to_entries | map(select($vsq[.key] != null and $vsq[.key] != .value)
+      | "params のプロパティの型が変わった: \(.key) は \(.value) だったが \($vsq[.key])"))
   ] | flatten
 JQ
 
@@ -125,6 +165,14 @@ def unwrap($defs):
          if . == null then null else (unwrap($defs) | ((.properties // {})[$p] // null)) end)) as $hit
     | select($hit == null)
     | "\($m.method): reads `\($path)` が下限版の schema に見当たりません" ]
+  # `params` も手書きなので、同じく下限版と突き合わせる。`reads` にだけ検査を
+  # 付けて `params` に付けないと、同じ手書きの表の片方だけがずれ得る。
+  + [ $spec.methods[]
+      | . as $m
+      | ($doc.methods[] | select(.properties.method.const == $m.method)
+         | .properties.params["$ref"] | sub("^#/schemas/[a-z_]+/\\$defs/"; "")) as $actual
+      | select($actual != $m.params)
+      | "\($m.method): params は `\($m.params)` と書かれていますが、下限版の schema は `\($actual)` です" ]
 JQ
 
 reads_out="$(jq -r --argjson spec "$(cat "$SPEC")" "$READS_JQ" "$floor_file")" \
@@ -142,13 +190,20 @@ for f in "$SCHEMA_DIR"/herdr-*.json; do
   # フェイルクローズ: 検査パイプライン自体の失敗は「違反なし」ではない
   # （`arch-lint.sh` と同じ方針）。パイプの中で jq が落ちると `while read` は
   # 何も読まずに抜け、そのまま 0 error と報告してしまう。
-  out="$(jq -r --argjson floor "$(cat "$floor_file")" "$COMPAT_JQ" "$f")" \
+  out="$(jq -r --argjson floor "$(cat "$floor_file")" "$TYPES_JQ"$'\n'"$COMPAT_JQ" "$f")" \
     || { echo "herdr-schema-check: $version の互換検査自体が失敗しました" >&2; exit 2; }
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     fail "herdr $version: $line"
   done < <(jq -r '.[]' <<<"$out")
 done
+
+# **対象ゼロは成功ではない。** 下限を上げて古いスライスを消し忘れた、逆に
+# 上位版を消した、という経路でここが 0 になる。件数は出力に出るが、CI は
+# 人が読まないので機械で押さえる。
+if [[ $checked -eq 0 ]]; then
+  fail "下限版より上のスライスが 1 本もありません。互換を突き合わせる相手がいません"
+fi
 
 if [[ $errors -gt 0 ]]; then
   echo "herdr-schema-check: $errors error(s)" >&2

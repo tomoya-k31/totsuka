@@ -16,10 +16,12 @@
 # 機械的に取り出せず、`methods.json` が一次情報になる。
 #
 # **なぜ下限版から生成するのか。** 型は 1 組しか作らない。古い版 = 生成元
-# そのものなので定義上読める。新しい版は追加しかしない（それを CI の
-# schema 差分が保証する）ので、未知フィールド無視 + `#[serde(other)]` で
-# 同じ型が読める。逆向き（最新版から生成）は、新しく `required` になった
-# フィールドを古い版が送らずデシリアライズが落ちるので採らない。
+# そのものなので定義上読める。新しい版については、未知フィールド無視 +
+# `#[serde(other)]` に加えて、**下限版の型で読めること自体を CI の schema 差分が
+# 検査する**（削除・プロパティの型の入れ替え・`required` の向き・enum バリアントの
+# 削除を落とす。検出しないのは `pattern` / `maxProperties` のような制約の厳格化と、
+# schema に出ない振る舞いの変化）。逆向き（最新版から生成）は、新しく `required`
+# になったフィールドを古い版が送らずデシリアライズが落ちるので採らない。
 #
 # **フェイルクローズ。** 教えていない JSON Schema 構文に当たったら、推測せず
 # 異常終了する（`arch-lint.sh` と同じ方針）。
@@ -89,129 +91,7 @@ slice() { # <full schema path> <version>
 }
 
 # ---------------------------------------------------------------- 生成器
-read -r -d '' GEN_JQ <<'JQ' || true
-def die($msg): error("herdr-types: " + $msg);
-
-def pascal: split("_") | map(select(length > 0) | (.[0:1] | ascii_upcase) + .[1:]) | join("");
-# `pane.exited` も `pane_exited` も PaneExited へ（herdr は区切り文字が混在する）
-def variant_name: gsub("[.\\-]"; "_") | pascal;
-
-def rust_keyword: ["as","break","const","continue","crate","dyn","else","enum","extern","false",
-  "fn","for","if","impl","in","let","loop","match","mod","move","mut","pub","ref","return",
-  "self","Self","static","struct","super","trait","true","type","unsafe","use","where","while",
-  "async","await","box","macro","try","yield"];
-def ident: . as $n | if (rust_keyword | index($n)) then "r#" + $n else $n end;
-
-# schemars が出す format。`uint` は usize、`int` は isize。
-def int_type($fmt):
-  ({"uint8":"u8","uint16":"u16","uint32":"u32","uint64":"u64","uint":"u64",
-    "int8":"i8","int16":"i16","int32":"i32","int64":"i64","int":"i64"}[$fmt // "int64"])
-  // die("知らない integer format `\($fmt)`");
-def num_type($fmt):
-  ({"float":"f32","double":"f64"}[$fmt // "double"]) // die("知らない number format `\($fmt)`");
-
-# 1 つのプロパティ schema を Rust の型へ。教えていない構文は推測せず落とす。
-def rust_type:
-  . as $s
-  | if ($s | has("$ref")) then ($s["$ref"] | sub("^#/schemas/[a-z_]+/\\$defs/"; ""))
-    elif ($s | has("anyOf")) then
-      ($s.anyOf) as $a
-      | if (($a | length) == 2) and (($a | map(select(.type == "null")) | length) == 1)
-        then "Option<" + (($a | map(select(.type != "null")))[0] | rust_type) + ">"
-        else die("`[T, null]` ではない anyOf: " + ($a | tojson)) end
-    elif ($s | has("oneOf")) then die("インラインの oneOf は非対応（$def にすること）")
-    elif ($s | has("allOf")) then die("allOf は非対応")
-    elif ($s | has("enum")) then die("インラインの enum は非対応（$def にすること）")
-    elif ($s | has("type")) then
-      ($s.type) as $t
-      | if ($t | type) == "array" then
-          (if ($t | index("null")) and (($t | length) == 2)
-           then "Option<" + (($s | del(.type)) + {type: (($t - ["null"])[0])} | rust_type) + ">"
-           else die("読めない type 配列: " + ($t | tojson)) end)
-        elif $t == "string" then "String"
-        elif $t == "boolean" then "bool"
-        elif $t == "integer" then int_type($s.format)
-        elif $t == "number" then num_type($s.format)
-        elif $t == "array" then "Vec<" + (($s.items // die("items の無い array")) | rust_type) + ">"
-        elif $t == "object" then
-          (if (($s.additionalProperties | type) == "object")
-           then "BTreeMap<String, " + ($s.additionalProperties | rust_type) + ">"
-           elif ($s | has("properties")) then die("インラインの object は非対応（$def にすること）")
-           else "BTreeMap<String, serde_json::Value>" end)
-        else die("非対応の type `" + ($t | tostring) + "`") end
-    else die("type / $ref / anyOf / enum のいずれも無いプロパティ: " + ($s | tojson)) end;
-
-# `$ser` は「totsuka が送る側」。送る側では未設定のフィールドを **キーごと落とす**
-# 必要がある（`json!` で組んでいた既存の呼び出しと同じ形にするため。明示的な
-# `null` は herdr にとって「未指定」と同じとは限らない）。読む側にその問題は無い。
-def field($name; $schema; $required; $ser):
-  ($schema | rust_type) as $ty
-  | ($name | ident) as $id
-  | (if ($ty | startswith("Vec<")) then "Vec::is_empty"
-     elif ($ty | startswith("BTreeMap<")) then "BTreeMap::is_empty"
-     else "Option::is_none" end) as $skip
-  | (if ($ty | startswith("Vec<")) or ($ty | startswith("BTreeMap<")) or ($ty | startswith("Option<"))
-     then $ty else "Option<\($ty)>" end) as $opt
-  | if $required then "    pub \($id): \($ty),"
-    elif $ser then "    #[serde(default, skip_serializing_if = \"\($skip)\")]\n    pub \($id): \($opt),"
-    else "    #[serde(default)]\n    pub \($id): \($opt)," end;
-
-def fields($schema; $skip; $ser):
-  ($schema.required // []) as $req
-  | (($schema.properties // {}) | to_entries
-     | map(.key as $k | select((($skip // []) | index($k)) | not))
-     | sort_by(.key)
-     | map(.key as $k | field($k; .value; (($req | index($k)) != null); $ser))
-     | join("\n"));
-
-def gen_struct($name; $schema; $skip; $ser; $derive):
-  (fields($schema; $skip; $ser)) as $f
-  | if ($f | length) == 0 then "#[derive(\($derive))]\npub struct \($name) {}"
-    else "#[derive(\($derive))]\npub struct \($name) {\n" + $f + "\n}" end;
-
-def gen_enum($name; $values; $other; $derive):
-  ([ "#[derive(\($derive), Copy, PartialEq, Eq)]", "pub enum \($name) {" ]
-   + ($values | map("    #[serde(rename = \"\(.)\")]\n    \(. | variant_name),"))
-   + (if $other then [
-        "    /// この生成が知らない値。herdr はリリースの合間にバリアントを足す",
-        "    /// （実測: 2 ヶ月で `EventKind` に 3 個）ので、読みは 1 個の追加で",
-        "    /// 落ちてはならない。追加を報せるのはコミット済み schema の差分で",
-        "    /// あって、デシリアライズの失敗ではない。",
-        "    #[serde(other)]",
-        "    Unrecognized,"
-      ] else [] end)
-   + [ "}" ]) | join("\n");
-
-def gen_tagged($name; $schema; $ser; $derive):
-  ([ "#[derive(\($derive))]", "#[serde(tag = \"type\")]", "pub enum \($name) {" ]
-   + ($schema.oneOf | map(
-       (.properties.type.const // die("`type` const の無い oneOf バリアント")) as $tag
-       | (fields(.; ["type"]; $ser)) as $f
-       | "    #[serde(rename = \"\($tag)\")]\n    \($tag | variant_name)"
-         + (if ($f | length) == 0 then ","
-            else " {\n" + ($f | gsub("(?m)^    "; "        ") | gsub("(?m)^(?<i> +)pub "; "\(.i)")) + "\n    }," end)))
-   + [ "}" ]) | join("\n");
-
-def gen_def($name; $schema; $ser; $derive):
-  if ($schema | has("enum")) then gen_enum($name; $schema.enum; ($ser | not); $derive)
-  elif ($schema | has("oneOf")) then gen_tagged($name; $schema; $ser; $derive)
-  elif ($schema.type == "object") then gen_struct($name; $schema; []; $ser; $derive)
-  else die("`\($name)` は enum でも tagged union でも object でもない") end;
-
-# 生成名の衝突は黙って壊れるので、ここで落とす。
-def check_unique($names; $where):
-  ($names | group_by(.) | map(select(length > 1) | .[0])) as $dup
-  | if ($dup | length) > 0 then die("\($where) で生成名が衝突: " + ($dup | join(", "))) else $names end;
-
-# `use` はモジュールの中に置く（`pub mod` の外の import はモジュール内から
-# 見えない）。BTreeMap / serde_json は使われないこともあるので、生成した本文に
-# 実際に現れたものだけを入れる — 使わない import は `warnings = "deny"` で落ちる。
-def wrap_mod($title; $derive; $body):
-  ([ "pub mod \($title) {" ]
-   + ["    use serde::\($derive);"]
-   + (if ($body | test("BTreeMap<")) then ["    use std::collections::BTreeMap;"] else [] end)
-   + [""] + [$body] + ["}"]) | join("\n");
-JQ
+GEN_JQ="$(cat "$ROOT/scripts/herdr-types.jq")"
 
 # 生成物の本文。request / result は herdr 自身が schema 上で分けている
 # 名前空間なので、Rust でもモジュールを分ける（同じ `AgentStatus` が両側に
@@ -234,8 +114,11 @@ read -r -d '' EMIT_JQ <<'JQ' || true
     "//! # なぜ下限版から生成するのか",
     "//!",
     "//! 型は 1 組だけで、版ごとの分岐は作らない。古い版は生成元そのものなので",
-    "//! 定義上読める。新しい版は追加しかしない（それを CI の schema 差分が",
-    "//! 保証する）ので、未知フィールド無視 + `#[serde(other)]` で同じ型が読める。",
+    "//! 定義上読める。新しい版は未知フィールド無視 + `#[serde(other)]` で読み、",
+    "//! **下限版の型で読めること自体を CI の schema 差分が検査する**（削除・",
+    "//! プロパティの型の入れ替え・`required` の向き・enum バリアントの削除を",
+    "//! 落とす。検出しないのは `pattern` / `maxProperties` のような制約の厳格化と、",
+    "//! schema に出ない振る舞いの変化）。",
     "//!",
     "//! # 実行時は寛容、CI は厳格",
     "//!",
