@@ -4,6 +4,7 @@ title: ADR-0054 組み込みプロンプトは英語で書き、成果物の言�
 description: "プラグインの defaults.toml が持つエージェント向け指示文を英語へ統一し、そこに焼き込まれていた「日本語で」という言語指定を「スレッド / 元 issue と同じ言語で書け」という規則へ置き換える決定。locale を読む案と output_language キー新設案は却下。人間が読む UI 文言とタスク本文のラベルは対象外。"
 tags: [decision, prompts, i18n, plugins, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
+verified: { by: human:tomoya-k31, at: 2026-08-22T13:00:00Z }
 status: stable
 owner: tomoya-k31
 sources:
@@ -141,5 +142,13 @@ macOS 通知のタイトル（`notifier-macos`）—— も触らない。**配�
 `do not open a pull request` / `do not attempt it`）と否定チェック（`URL` を含まない）の
 両方が独立に発火する。
 
-**実機での言語追従は未検証。** 日本語スレッドに対して日本語の返信が返ることを
-実機 E2E で確認するまで、この ADR に `verified` は付けない。
+**実機での言語追従を確認した**（2026-08-22、実 Slack + 実 GitHub + herdr + Claude Code）。
+指示文が英語でも、成果物と対話はすべて元の材料の言語（日本語）になった:
+
+| 経路 | 材料 | 成果物 | 結果 |
+|---|---|---|---|
+| Slack `slack-react`（profile = answer） | 日本語のメンション | 返信案 | **日本語**。承認後、本人名義でスレッドに投稿されるところまで確認 |
+| GitHub `github-task`（profile = implement） | 日本語の issue | PR のタイトルと本文 | **日本語**。F-84（カード → Done）と F-86（push + PR）も pass |
+| GitHub（同上）の**問い返し** | 同上 | エージェントが人間に出した質問 | **日本語**。指示文が英語でも対話の言語は材料に従った |
+
+3 番目は設計時に想定していなかった経路で、規則が成果物だけでなく**対話全体**に効くことを示している。
