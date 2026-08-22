@@ -1,5 +1,5 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
-//! `plugins/notifier-macos.toml` as JSON (F-64), and the workflow × event filter
+//! `plugins/macos.toml` as JSON (F-64), and the workflow × event filter
 //! (F-92).
 
 use std::collections::HashMap;
