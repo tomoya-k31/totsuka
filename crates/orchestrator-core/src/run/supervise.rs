@@ -165,13 +165,26 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // was repaired is still a crash, and an operator who only ever sees
         // `plugin_restarts` cannot tell "never died" from "died and stayed
         // down" (the `restart = false` case, where nothing is relaunched).
-        self.stats.plugin_crashes += 1;
-        self.plugin_events.entry(plugin.to_string()).or_default().0 += 1;
+        self.count_plugin_crash(plugin);
         if self.plugins.agents.contains_key(plugin) {
             self.fail_sessions_of(plugin).await?;
         }
         self.schedule_restart(plugin);
         Ok(())
+    }
+
+    /// Record that `plugin` died, without deciding anything about it.
+    ///
+    /// Split out of [`on_plugin_closed`](Self::on_plugin_closed) because the
+    /// two halves are wanted in different places: the shutdown drain in
+    /// [`run`](Self::run) needs the tally and must **not** run the teardown.
+    /// There, failing in-flight tasks would contradict the graceful-shutdown
+    /// contract, booking a restart would spawn a timer no loop is left to
+    /// consume, and the write-back inside `fail_sessions_of` awaits a plugin
+    /// RPC — a 120s hang after the run already decided to exit.
+    pub(super) fn count_plugin_crash(&mut self, plugin: &str) {
+        self.stats.plugin_crashes += 1;
+        self.plugin_events.entry(plugin.to_string()).or_default().0 += 1;
     }
 
     /// Fail every in-flight task an exited agent plugin was running.
