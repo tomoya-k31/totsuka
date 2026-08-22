@@ -8,6 +8,7 @@
 | [totsuka とは](orchestrator-spec.ja.md) | モデル、何をするか、意図的にやらないこと |
 | [セットアップ Playbook](setup-playbook.ja.md) | ゼロから動くまで。新マシン、開発機、トークンのローテーション、復旧 |
 | [Slack セットアップ](slack-setup.ja.md) | Slack アプリの作成、3 つのトークンの保管、本人名義での返信 |
+| [click-to-focus セットアップ](click-to-focus-setup.ja.md) | 通知クリックでターミナルを前面化し、タスクの pane を開く（macOS） |
 | [設定リファレンス](config-reference.ja.md) | `config.toml` とプラグイン個別設定の全キー |
 | [運用ガイド](operations-guide.ja.md) | `doctor` の読み方、worktree と pane の掃除、タスク操作、よくある問題 |
 | [プラグイン開発ガイド](plugin-dev-guide.ja.md) | 自作のタスクソース・エージェント・通知プラグインの作り方 |

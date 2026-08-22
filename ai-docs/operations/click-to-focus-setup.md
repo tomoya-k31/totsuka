@@ -9,6 +9,9 @@ status: stable
 owner: tomoya-k31
 ---
 
+> **このファイルは人間向け `docs/click-to-focus-setup.md` / `.ja.md` の生成元である。** 変更したら `human-docs` スキルで生成物も作り直すこと（`scripts/docs-freshness.sh` が CI で検査する）。
+<!-- generates: docs/click-to-focus-setup.md docs/click-to-focus-setup.ja.md -->
+
 # 目的
 
 通知（`waiting_input` / `escalated` / `verification_pending` / `failed`）をクリックしたとき、GUI ターミナルを前面化し対象タスクの herdr pane をフォーカスする（F-94、[ADR-0005](/decisions/adr-0005-click-to-focus.md)）。既定の osascript バックエンドは**クリック不可**（owner の Script Editor が開くだけ）なので、click-to-focus には terminal-notifier バックエンドへの切り替えが必要。
