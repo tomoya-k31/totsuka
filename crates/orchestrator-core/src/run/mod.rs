@@ -628,13 +628,20 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         // `orchestrator-core/tests/plugin_supervision.rs` (it waits for the
         // condition) rather than by a wall-clock e2e.
         //
-        // Only `Closed` is handled. Anything else left in the channel is
-        // dropped exactly as it is today — the loop has already decided to
-        // stop, and acting on a submission or a focus request here would be a
-        // new behaviour, not a fix.
+        // **Counting only** — deliberately not `on_plugin_closed`. That runs
+        // the teardown too: `fail_sessions_of` flips in-flight tasks to
+        // `Failed` (contradicting the graceful-shutdown contract on the SIGINT
+        // path) and awaits a `task/update_status` write-back, which would turn
+        // four lines of bookkeeping into a 120s hang after the run already
+        // decided to exit and stopped the hook receiver; `schedule_restart`
+        // would book a relaunch no loop is left to consume. Everything else in
+        // the channel is dropped exactly as it is today.
+        //
+        // Safe on the interrupted path for the same reason: a death that
+        // happened is counted, and nothing else moves.
         while let Ok(event) = self.events.try_recv() {
             if let PluginEvent::Closed(plugin) = event {
-                self.on_plugin_closed(&plugin).await?;
+                self.count_plugin_crash(&plugin);
             }
         }
 
@@ -815,6 +822,42 @@ pub(crate) async fn test_engine(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #512: a death reported while the loop was deciding to stop is still
+    /// counted.
+    ///
+    /// The exit check sits at the top of the loop, before `select!`, so with a
+    /// zero grace and nothing to settle the first iteration breaks without
+    /// ever polling the channel. That is exactly the window the summary used
+    /// to lose — it reported `plugin_crashes: 0` while the same document
+    /// showed the dispatch that killed the plugin with a `crashed` outcome.
+    ///
+    /// Deterministic because the event is enqueued *before* `run` is called:
+    /// no wall clock, no child process, no race.
+    #[tokio::test]
+    async fn a_death_queued_when_the_loop_exits_is_still_counted() {
+        let mut engine = test_engine(Duration::from_secs(3600)).await;
+        engine.settings.one_shot_grace = Duration::ZERO;
+        engine
+            .events_tx
+            .send(PluginEvent::Closed("mock_agent".to_string()))
+            .expect("the receiver is alive");
+
+        let summary = engine
+            .run(false, std::future::pending())
+            .await
+            .expect("run loop error");
+
+        assert_eq!(
+            summary.stats.plugin_crashes, 1,
+            "the queued death must reach the summary: {summary:?}"
+        );
+        let report = summary
+            .plugins
+            .get("mock_agent")
+            .expect("the plugin must appear in the per-plugin report");
+        assert_eq!(report.crashes, 1, "{report:?}");
+    }
 
     /// #409/#410: a read-only profile that ended up on a branch is failed
     /// rather than published. Gated on the **profile** — a plain
