@@ -328,8 +328,9 @@ fn e2e_waiting_input_leaves_task_and_status_shows_it() {
 fn e2e_agent_crash_is_isolated_and_the_orchestrator_survives() {
     let env = setup("crash", "crash_on_dispatch = true\n", "none", "implement");
     // The agent self-destructs on dispatch. What this level can state
-    // deterministically is crash *isolation* (§5.3): the run exits cleanly,
-    // reports the crash, and does not lose the task.
+    // deterministically is crash *isolation* (§5.3): the run exits cleanly and
+    // does not lose the task. What it cannot state is any count or terminal
+    // state — see below for both.
     //
     // **The task's terminal state is deliberately not asserted.** Since #504 it
     // depends on which of two correct paths wins: the dispatch reaching the
@@ -350,8 +351,20 @@ fn e2e_agent_crash_is_isolated_and_the_orchestrator_survives() {
 
     let doc: serde_json::Value = serde_json::from_str(&stdout(&out))
         .unwrap_or_else(|e| panic!("stdout is not one JSON document ({e}): {}", stdout(&out)));
-    // Counted whatever happens next, so it holds on both paths above.
-    assert_eq!(doc["stats"]["plugin_crashes"], 1, "document: {doc}");
+    // **The crash count is deliberately not asserted here.** Two observers
+    // write it: the dispatch call site records the transport error on the
+    // method, and `on_plugin_closed` — driven by the child's own exit —
+    // increments `plugin_crashes`. Only the second can still be behind when
+    // this one-shot run ends, so asserting it races the machine. #512 caught
+    // exactly that, on a branch with no Rust changes at all.
+    //
+    // The contract itself is pinned deterministically in orchestrator-core's
+    // `plugin_supervision.rs`, which waits for the condition instead of a
+    // wall clock — see `a_task_queued_during_a_crash_window_is_not_failed`
+    // and `giving_up_escalates_instead_of_retrying_forever`.
+    //
+    // What this level *can* state is that the crash was isolated: the run
+    // ended cleanly rather than being torn down.
     assert_eq!(doc["interrupted"], false, "document: {doc}");
 
     // Whichever path won, the task is still there to retry.

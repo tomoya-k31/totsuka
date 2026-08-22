@@ -612,6 +612,32 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             let _ = handle.await;
         }
 
+        // Count deaths that were reported but not yet read (#512).
+        //
+        // The exit check sits at the top of the loop, before `select!`, so a
+        // `Closed` already sitting in the channel is never seen: the run ends
+        // reporting `plugin_crashes: 0` while the same summary shows the
+        // dispatch that killed the plugin with a `crashed` outcome. Two
+        // observers write those numbers — the RPC call site records the
+        // transport error, `on_plugin_closed` records the death — and only the
+        // second one can be behind.
+        //
+        // **This closes the reported-but-unread window only.** A child whose
+        // exit the watcher has not observed yet is still uncounted; that race
+        // is not fixable here, which is why the crash count is pinned by
+        // `orchestrator-core/tests/plugin_supervision.rs` (it waits for the
+        // condition) rather than by a wall-clock e2e.
+        //
+        // Only `Closed` is handled. Anything else left in the channel is
+        // dropped exactly as it is today — the loop has already decided to
+        // stop, and acting on a submission or a focus request here would be a
+        // new behaviour, not a fix.
+        while let Ok(event) = self.events.try_recv() {
+            if let PluginEvent::Closed(plugin) = event {
+                self.on_plugin_closed(&plugin).await?;
+            }
+        }
+
         let mut summary = RunSummary {
             stats: self.stats.clone(),
             interrupted,
