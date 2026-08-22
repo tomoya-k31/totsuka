@@ -48,6 +48,60 @@ const VERSION: &str = "0.7.5";
 /// has it, and a fake that drops it would stop being a faithful `ping`.
 const PROTOCOL: u64 = 17;
 
+/// Fill in the fields herdr always sends on a `PaneInfo`, so a test case only
+/// has to state the ones it cares about.
+///
+/// **This exists because the double used to lie.** Before #519 the fake's
+/// records carried three or four fields; herdr's schema makes seven of them
+/// `required`, and nothing compared the two — a response shape no herdr could
+/// produce still passed every test. Now the plugin deserializes into the
+/// generated types, so an under-filled record fails here first.
+fn pane_info(overrides: Value) -> Value {
+    merge(
+        json!({
+            "pane_id": PANE, "terminal_id": "t1", "workspace_id": "w1", "tab_id": "w1:t1",
+            "focused": false, "agent_status": "unknown", "revision": 1,
+        }),
+        overrides,
+    )
+}
+
+/// The same for a `WorkspaceInfo` (eight `required` fields).
+fn workspace_info(overrides: Value) -> Value {
+    merge(
+        json!({
+            "workspace_id": "w1", "number": 1, "label": "", "focused": false,
+            "pane_count": 1, "tab_count": 1, "active_tab_id": "w1:t1",
+            "agent_status": "unknown",
+        }),
+        overrides,
+    )
+}
+
+/// …and for a `TabInfo` (seven).
+fn tab_info(overrides: Value) -> Value {
+    merge(
+        json!({
+            "tab_id": "w1:t1", "workspace_id": "w1", "number": 1, "label": "1",
+            "focused": false, "pane_count": 1, "agent_status": "unknown",
+        }),
+        overrides,
+    )
+}
+
+/// An `AgentSessionInfo` as the agent's herdr integration hook reports it.
+/// All four fields are `required`; tests only ever care about `value`.
+fn agent_session(value: &str) -> Value {
+    json!({ "source": "herdr:claude", "agent": "claude", "kind": "id", "value": value })
+}
+
+fn merge(mut base: Value, overrides: Value) -> Value {
+    for (k, v) in overrides.as_object().expect("an object of overrides") {
+        base[k] = v.clone();
+    }
+    base
+}
+
 /// The fake agent CLI's observable state — the pane's screen and status.
 #[derive(Default)]
 struct Cli {
@@ -136,6 +190,12 @@ struct FakeHerdr {
     /// protocol 17 that leaves no pane to start the agent in, so the dispatch
     /// cannot proceed (it used to only cost the layout).
     no_root_pane: bool,
+    /// When set, `workspace.create` answers **with** a `root_pane` that is
+    /// missing required fields — the shape that used to fail the whole read
+    /// before `workspace.create` went back to reading its two ids off the raw
+    /// `Value` (see `NewWorkspace::from_response`).
+    /// The workspace exists either way, so the cleanup must still run.
+    malformed_root_pane: bool,
     /// When set, `pane.split` fails with this herdr error code (#356: the
     /// companion shell is lost, the dispatch is not).
     split_error: Option<&'static str>,
@@ -190,6 +250,7 @@ impl Default for FakeHerdr {
             detection: "",
             empty_id_error_on_create: false,
             no_root_pane: false,
+            malformed_root_pane: false,
             split_error: None,
             prompt_error: None,
             not_ready_prompts: Arc::default(),
@@ -267,12 +328,19 @@ impl FakeHerdr {
             // with. Under protocol 17 that pane is where the agent goes, so it
             // is the one thing dispatch cannot do without.
             "workspace.create" => {
-                let mut result =
-                    json!({ "type": "workspace_created", "workspace": { "workspace_id": "w1" } });
-                if !self.no_root_pane {
-                    result["root_pane"] = json!({
-                        "pane_id": PANE, "workspace_id": "w1", "tab_id": "w1:t1",
-                    });
+                let mut result = json!({
+                    "type": "workspace_created",
+                    "workspace": workspace_info(json!({})),
+                    "tab": tab_info(json!({})),
+                });
+                if self.malformed_root_pane {
+                    // **Not just "missing fields".** `pane_id` is the wrong
+                    // *type* here — the shape that still failed the whole read
+                    // after two narrower relaxations, because serde propagates
+                    // an inner error through `Option` rather than swallowing it.
+                    result["root_pane"] = json!({ "pane_id": 1 });
+                } else if !self.no_root_pane {
+                    result["root_pane"] = pane_info(json!({}));
                 }
                 reply(&mut write_half, &id, result).await
             }
@@ -341,11 +409,10 @@ impl FakeHerdr {
                     &id,
                     json!({
                         "type": "agent_started",
-                        "agent": {
-                            "pane_id": pane_id, "terminal_id": "t1",
-                            "agent_status": "idle", "agent": kind,
+                        "agent": pane_info(json!({
+                            "pane_id": pane_id, "agent_status": "idle", "agent": kind,
                             "name": params["name"].clone(), "interactive_ready": true,
-                        },
+                        })),
                         "argv": argv,
                     }),
                 )
@@ -434,7 +501,7 @@ impl FakeHerdr {
                     &id,
                     json!({
                         "type": "agent_info",
-                        "agent": { "pane_id": PANE, "agent_status": "working" },
+                        "agent": pane_info(json!({ "agent_status": "working" })),
                     }),
                 )
                 .await
@@ -458,7 +525,7 @@ impl FakeHerdr {
                     &id,
                     json!({
                         "type": "agent_prompted",
-                        "agent": { "pane_id": PANE, "agent_status": "working" },
+                        "agent": pane_info(json!({ "agent_status": "working" })),
                     }),
                 )
                 .await
@@ -479,7 +546,8 @@ impl FakeHerdr {
                 reply(
                     &mut write_half,
                     &id,
-                    json!({ "type": "pane_info", "pane": { "pane_id": SHELL_PANE } }),
+                    json!({ "type": "pane_info",
+                            "pane": pane_info(json!({ "pane_id": SHELL_PANE })) }),
                 )
                 .await
             }
@@ -506,12 +574,7 @@ impl FakeHerdr {
             }
             "pane.get" => {
                 let status = self.cli.lock().unwrap().status.clone();
-                let mut pane = json!({
-                    "pane_id": PANE,
-                    "workspace_id": "w1",
-                    "tab_id": "w1:t1",
-                    "agent_status": status,
-                });
+                let mut pane = pane_info(json!({ "agent_status": status }));
                 if let Some(cwd) = self.pane_cwd {
                     pane["cwd"] = json!(cwd);
                 }
@@ -588,7 +651,11 @@ impl FakeHerdr {
                 reply(
                     &mut write_half,
                     &id,
-                    json!({ "type": "pane_read", "read": { "pane_id": PANE, "text": text } }),
+                    json!({ "type": "pane_read", "read": {
+                        "pane_id": PANE, "workspace_id": "w1", "tab_id": "w1:t1",
+                        "source": "recent", "format": "text", "revision": 1,
+                        "truncated": false, "text": text,
+                    }}),
                 )
                 .await
             }
@@ -1227,26 +1294,26 @@ async fn a_pane_label_is_enough_after_a_restart_drops_every_token() {
     let (socket, _requests) = FakeHerdr {
         // No `tokens` anywhere, and the workspace label is the post-rename
         // human-readable form — nothing a `totsuka `-prefix match would catch.
-        list_workspaces: vec![json!({
+        list_workspaces: vec![workspace_info(json!({
             "workspace_id": "w1",
             "label": "totsuka: サイドバーを直す",
-        })],
+        }))],
         list_panes: vec![
-            json!({
+            pane_info(json!({
                 "pane_id": PANE,
                 "workspace_id": "w1",
                 "label": "totsuka T1",
                 "cwd": "/wt/agent-1",
                 "agent": "claude",
                 "agent_status": "idle",
-            }),
+            })),
             // The companion shell: same workspace, no marker of its own.
-            json!({
+            pane_info(json!({
                 "pane_id": SHELL_PANE,
                 "workspace_id": "w1",
                 "cwd": "/wt/agent-1",
                 "agent_status": "unknown",
-            }),
+            })),
         ],
         ..FakeHerdr::default()
     }
@@ -1399,7 +1466,9 @@ async fn a_label_outside_our_marker_form_is_still_verified() {
     let (socket, requests) = FakeHerdr {
         pane_cwd: None,
         pane_tokens: Some("T1"),
-        list_workspaces: vec![json!({ "workspace_id": "w1", "label": "someone else" })],
+        list_workspaces: vec![workspace_info(
+            json!({ "workspace_id": "w1", "label": "someone else" }),
+        )],
         ..FakeHerdr::default()
     }
     .spawn();
@@ -1478,14 +1547,18 @@ async fn identity_can_be_turned_off_completely() {
 async fn session_list_finds_panes_by_their_identity_token() {
     let fake = FakeHerdr {
         list_panes: vec![
-            json!({ "pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "working" }),
-            json!({ "pane_id": "w2:p1", "workspace_id": "w2", "agent_status": "unknown" }),
+            pane_info(
+                json!({ "pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "working" }),
+            ),
+            pane_info(
+                json!({ "pane_id": "w2:p1", "workspace_id": "w2", "agent_status": "unknown" }),
+            ),
         ],
         list_workspaces: vec![
             // Renamed for humans (#417 D4): no `totsuka ` prefix left.
-            json!({ "workspace_id": "w1", "label": "web: Fix the bug",
-                    "tokens": { "totsuka_task": "C1:1.0", "repo": "web" } }),
-            json!({ "workspace_id": "w2", "label": "my scratch space" }),
+            workspace_info(json!({ "workspace_id": "w1", "label": "web: Fix the bug",
+                    "tokens": { "totsuka_task": "C1:1.0", "repo": "web" } })),
+            workspace_info(json!({ "workspace_id": "w2", "label": "my scratch space" })),
         ],
         ..FakeHerdr::default()
     };
@@ -1513,7 +1586,9 @@ async fn release_verifies_identity_by_token() {
         let (socket, requests) = FakeHerdr {
             pane_cwd: None,
             pane_tokens: Some(token),
-            list_workspaces: vec![json!({ "workspace_id": "w1", "label": "web: Fix the bug" })],
+            list_workspaces: vec![workspace_info(
+                json!({ "workspace_id": "w1", "label": "web: Fix the bug" }),
+            )],
             ..FakeHerdr::default()
         }
         .spawn();
@@ -1581,9 +1656,18 @@ async fn the_companion_shell_never_receives_the_hook_env() {
         "protocol 17 rejects an env on agent.start: {start}"
     );
 
+    // **The property is "no hook variables reach the shell", not "no `env`
+    // key".** Since #519 the params are built from the generated
+    // `PaneSplitParams`, whose `env` is a map rather than an `Option`, so an
+    // unset env now goes across as `{}` instead of being omitted — the same
+    // zero variables to apply, spelled differently. Asserting emptiness says
+    // what this test is actually guarding (`ai-docs/security/hook-security.md`).
     let split = &calls(&log, "pane.split")[0];
+    let env = split["params"]["env"]
+        .as_object()
+        .expect("pane.split carries an env object");
     assert!(
-        split["params"].get("env").is_none(),
+        env.is_empty(),
         "the human's shell must carry no hook env: {split}"
     );
 }
@@ -2605,9 +2689,16 @@ async fn a_tool_launch_with_an_empty_env_injects_none() {
         .iter()
         .find(|r| r["method"] == "workspace.create")
         .expect("a workspace.create request");
+    // Same shift as in `the_companion_shell_never_receives_the_hook_env`: the
+    // generated `WorkspaceCreateParams.env` is a map, not an `Option`, so an
+    // unset env is now `{}` rather than an omitted key. Zero variables either
+    // way; asserting emptiness says what is actually being guarded.
     assert!(
-        create["params"].get("env").is_none(),
-        "an empty tool_launch env → no env on workspace.create"
+        create["params"]["env"]
+            .as_object()
+            .expect("workspace.create carries an env object")
+            .is_empty(),
+        "an empty tool_launch env → no env entries on workspace.create"
     );
     assert_eq!(start["params"]["kind"], "claude");
     assert_eq!(
@@ -2615,6 +2706,41 @@ async fn a_tool_launch_with_an_empty_env_injects_none() {
         json!([]),
         "the argv is whatever tool_launch said, here nothing"
     );
+}
+
+/// The fixture builders above hard-code herdr's `required` fields. That list
+/// is only right until herdr changes it, so it is pinned against the generated
+/// types rather than against a comment.
+///
+/// **This is the check the double never had.** Before #519 `FakeHerdr` wrote
+/// its answers by hand and nothing compared them to herdr's schema — a shape
+/// no herdr could produce passed every test, which is exactly what
+/// [ADR-0055](../../../ai-docs/decisions/adr-0055-herdr-schema-typed-wire.md)
+/// set out to end.
+#[test]
+fn the_fixtures_are_shapes_herdr_could_actually_send() {
+    use agent_ide_herdr::wire::result::{
+        AgentInfo, AgentSessionInfo, PaneInfo, PaneReadResult, TabInfo, WorkspaceInfo,
+    };
+
+    serde_json::from_value::<PaneInfo>(pane_info(json!({}))).expect("a PaneInfo");
+    serde_json::from_value::<WorkspaceInfo>(workspace_info(json!({}))).expect("a WorkspaceInfo");
+    serde_json::from_value::<TabInfo>(tab_info(json!({}))).expect("a TabInfo");
+    serde_json::from_value::<AgentSessionInfo>(agent_session("v")).expect("an AgentSessionInfo");
+
+    // **`AgentInfo` is a distinct type from `PaneInfo`** even though the fake
+    // builds `agent.start`'s answer with `pane_info`. If herdr's two records
+    // ever diverge, the fake goes right on passing unless this line is here.
+    serde_json::from_value::<AgentInfo>(pane_info(json!({}))).expect("an AgentInfo");
+
+    // `pane.read` is the one response the fake constructs inline rather than
+    // through a builder, so its required fields are pinned here directly.
+    serde_json::from_value::<PaneReadResult>(json!({
+        "pane_id": PANE, "workspace_id": "w1", "tab_id": "w1:t1",
+        "source": "recent", "format": "text", "revision": 1,
+        "truncated": false, "text": "",
+    }))
+    .expect("a PaneReadResult");
 }
 
 /// A herdr older than 0.7.5 cannot run this plugin's dispatch at all, so
@@ -2908,21 +3034,27 @@ async fn session_list_finds_panes_through_their_workspace_label() {
         list_panes: vec![
             // (c) A totsuka workspace holds two panes — the agent's and the
             // companion shell. Exactly one session must come out of it.
-            json!({ "pane_id": "w1:p1", "cwd": "/wt/7", "workspace_id": "w1",
+            pane_info(
+                json!({ "pane_id": "w1:p1", "cwd": "/wt/7", "workspace_id": "w1",
                     "agent_status": "unknown" }),
-            json!({ "pane_id": "w1:p2", "cwd": "/wt/7", "workspace_id": "w1",
+            ),
+            pane_info(
+                json!({ "pane_id": "w1:p2", "cwd": "/wt/7", "workspace_id": "w1",
                     "agent": "claude", "agent_status": "idle" }),
+            ),
             // (b) The operator's own workspace.
-            json!({ "pane_id": "w2:p1", "cwd": "/home", "workspace_id": "w2",
+            pane_info(
+                json!({ "pane_id": "w2:p1", "cwd": "/home", "workspace_id": "w2",
                     "agent_status": "unknown" }),
+            ),
             // (a) The orphan case (constructed — see above).
-            json!({ "pane_id": "w4:p1", "workspace_id": "w4",
-                    "agent_status": "unknown" }),
+            pane_info(json!({ "pane_id": "w4:p1", "workspace_id": "w4",
+                    "agent_status": "unknown" })),
         ],
         list_workspaces: vec![
-            json!({ "workspace_id": "w1", "label": "totsuka 7" }),
-            json!({ "workspace_id": "w2", "label": "scratch" }),
-            json!({ "workspace_id": "w4", "label": "totsuka 9" }),
+            workspace_info(json!({ "workspace_id": "w1", "label": "totsuka 7" })),
+            workspace_info(json!({ "workspace_id": "w2", "label": "scratch" })),
+            workspace_info(json!({ "workspace_id": "w4", "label": "totsuka 9" })),
         ],
         ..FakeHerdr::default()
     };
@@ -2961,11 +3093,15 @@ async fn the_agent_pane_is_found_by_its_reported_session_too() {
     // right pane.
     let fake = FakeHerdr {
         list_panes: vec![
-            json!({ "pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "unknown" }),
-            json!({ "pane_id": "w1:p2", "workspace_id": "w1",
-                    "agent_session": { "value": "cc-7" } }),
+            pane_info(
+                json!({ "pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "unknown" }),
+            ),
+            pane_info(json!({ "pane_id": "w1:p2", "workspace_id": "w1",
+                    "agent_session": agent_session("cc-7") })),
         ],
-        list_workspaces: vec![json!({ "workspace_id": "w1", "label": "totsuka 7" })],
+        list_workspaces: vec![workspace_info(
+            json!({ "workspace_id": "w1", "label": "totsuka 7" }),
+        )],
         ..FakeHerdr::default()
     };
     let (socket, _requests) = fake.spawn();
@@ -2986,10 +3122,12 @@ async fn session_list_still_honours_a_pane_that_carries_the_label_itself() {
     // directly is ours even when its workspace is not — and its own label
     // wins, since it is the more specific statement.
     let fake = FakeHerdr {
-        list_panes: vec![
+        list_panes: vec![pane_info(
             json!({ "pane_id": "w5:p1", "label": "totsuka 11", "workspace_id": "w5" }),
-        ],
-        list_workspaces: vec![json!({ "workspace_id": "w5", "label": "someone else" })],
+        )],
+        list_workspaces: vec![workspace_info(
+            json!({ "workspace_id": "w5", "label": "someone else" }),
+        )],
         ..FakeHerdr::default()
     };
     let (socket, _requests) = fake.spawn();
@@ -3055,11 +3193,13 @@ async fn release_reports_refused_when_the_task_still_has_a_pane_elsewhere() {
     // the answer is `refused`, not `gone`.
     let (socket, _requests) = FakeHerdr {
         pane_cwd: Some("/wt/someone-else"),
-        list_panes: vec![
+        list_panes: vec![pane_info(
             json!({ "pane_id": "w9:p1", "workspace_id": "w9", "agent_status": "working",
                     "cwd": "/wt/agent-1" }),
-        ],
-        list_workspaces: vec![json!({ "workspace_id": "w9", "label": "totsuka C1:1.0" })],
+        )],
+        list_workspaces: vec![workspace_info(
+            json!({ "workspace_id": "w9", "label": "totsuka C1:1.0" }),
+        )],
         ..FakeHerdr::default()
     }
     .spawn();
@@ -3089,11 +3229,11 @@ async fn release_reports_refused_when_the_agent_wandered_out_of_its_worktree() {
     // recorded session id is what identifies it, wherever its shell went.
     let (socket, _requests) = FakeHerdr {
         pane_cwd: Some("/home/elsewhere"),
-        list_panes: vec![json!({
+        list_panes: vec![pane_info(json!({
             "pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "working",
             "cwd": "/home/elsewhere",
-            "agent_session": { "value": "sess-uuid" }
-        })],
+            "agent_session": agent_session("sess-uuid"),
+        }))],
         ..FakeHerdr::default()
     }
     .spawn();
@@ -3203,7 +3343,9 @@ async fn release_verifies_the_label_against_the_workspace() {
     let (socket, requests) = FakeHerdr {
         pane_cwd: Some("/wt/agent-1"),
         pane_label: None,
-        list_workspaces: vec![json!({ "workspace_id": "w1", "label": "totsuka OTHER" })],
+        list_workspaces: vec![workspace_info(
+            json!({ "workspace_id": "w1", "label": "totsuka OTHER" }),
+        )],
         ..FakeHerdr::default()
     }
     .spawn();
@@ -3242,7 +3384,9 @@ async fn release_refuses_a_workspace_that_is_not_ours_at_all() {
     let (socket, requests) = FakeHerdr {
         pane_cwd: None,
         pane_label: None,
-        list_workspaces: vec![json!({ "workspace_id": "w1", "label": "my scratch space" })],
+        list_workspaces: vec![workspace_info(
+            json!({ "workspace_id": "w1", "label": "my scratch space" }),
+        )],
         ..FakeHerdr::default()
     }
     .spawn();
@@ -3271,7 +3415,9 @@ async fn release_proceeds_when_the_workspace_label_matches() {
     let (socket, requests) = FakeHerdr {
         pane_cwd: Some("/wt/agent-1"),
         pane_label: None,
-        list_workspaces: vec![json!({ "workspace_id": "w1", "label": "totsuka T1" })],
+        list_workspaces: vec![workspace_info(
+            json!({ "workspace_id": "w1", "label": "totsuka T1" }),
+        )],
         ..FakeHerdr::default()
     }
     .spawn();
@@ -3526,5 +3672,143 @@ async fn a_resumed_dispatch_failing_for_another_reason_keeps_its_own_error() {
     assert_eq!(
         disp["error"]["code"], -32603,
         "only a *vanished* pane means the session could not be resumed: {disp}"
+    );
+}
+
+/// `config validate` reads one real record, not just `ping`, so a herdr whose
+/// answers this build cannot parse is named **before** a task is ingested
+/// (#519). `ping` cannot cover this: its answer is three scalars, and
+/// ADR-0055's premise is that the version number does not track response shape.
+#[tokio::test]
+async fn config_validate_reports_a_herdr_whose_answers_cannot_be_parsed() {
+    let (socket, _) = FakeHerdr {
+        // A `workspace.list` entry missing `agent_status` — one of eight
+        // `required` fields on a `WorkspaceInfo`. herdr has never sent this;
+        // a herdr that started to would break dispatch, and this is where
+        // that has to surface.
+        list_workspaces: vec![json!({
+            "workspace_id": "w1", "number": 1, "label": "x", "focused": false,
+            "pane_count": 1, "tab_count": 1, "active_tab_id": "w1:t1",
+        })],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    let resp = d
+        .call(
+            "config/validate",
+            json!({ "config": { "socket_path": socket.to_string_lossy() } }),
+        )
+        .await;
+    let errors = resp["result"]["errors"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.as_str().unwrap_or_default().contains("workspace.list")),
+        "the error must name the call that could not be read: {resp}"
+    );
+}
+
+/// The same path stays quiet on a healthy herdr — the probe must not turn a
+/// working setup into a reported error.
+#[tokio::test]
+async fn config_validate_is_silent_on_a_herdr_it_can_read() {
+    let (socket, _) = FakeHerdr::default().spawn();
+    let mut d = Driver::new();
+    let resp = d
+        .call(
+            "config/validate",
+            json!({ "config": { "socket_path": socket.to_string_lossy() } }),
+        )
+        .await;
+    assert_eq!(
+        resp["result"]["valid"], true,
+        "a healthy herdr must validate clean: {resp}"
+    );
+    // `errors` is omitted entirely when there are none, so "no errors" is
+    // asserted as `valid` rather than as an empty array.
+    assert!(
+        resp["result"]["errors"]
+            .as_array()
+            .is_none_or(|e| e.is_empty()),
+        "…and carry no errors: {resp}"
+    );
+}
+
+/// A `root_pane` that is **there but unreadable** must still leave a workspace
+/// this plugin can take back down (#519 review).
+///
+/// This took three attempts, which is why the fixture uses a wrong-*typed*
+/// `pane_id` rather than a merely incomplete one:
+///
+/// 1. relaxing `root_pane`'s **presence** (`#[serde(default)] Option<PaneInfo>`)
+///    still failed on a `root_pane` that was there but incomplete
+/// 2. narrowing to `{ pane_id: String }` still failed on `{"pane_id": 1}` —
+///    **serde propagates an inner error through `Option`; it does not swallow it**
+/// 3. reading the two ids off the raw `Value` cannot fail at all
+///
+/// Every one of those failures returned before `NewWorkspace` existed, so
+/// `abandon` never ran and the freshly created workspace leaked with a live
+/// pane in it.
+#[tokio::test]
+async fn a_malformed_root_pane_does_not_leak_the_workspace() {
+    let (socket, requests) = FakeHerdr {
+        malformed_root_pane: true,
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    // No usable `pane_id`, so the dispatch cannot proceed — but it must fail
+    // *after* the workspace is known.
+    let disp = d.dispatch("T1", "Draft the reply", "implement").await;
+    assert!(!disp["error"].is_null(), "dispatch cannot proceed: {disp}");
+    {
+        let log = requests.lock().unwrap();
+        assert!(
+            calls(&log, "agent.start").is_empty(),
+            "and must not start an agent with no pane to start it in: {log:?}"
+        );
+    }
+    assert!(
+        awaits_workspace_close(&requests).await,
+        "the workspace it created must still be taken back down"
+    );
+}
+
+/// `session/list` degrades an unreadable answer to "nothing owned" rather than
+/// failing (#416, kept through the typing in #519).
+///
+/// `doctor`'s orphan-pane detection stands on this call, so a herdr that
+/// answers oddly must cost a diagnostic, never the command.
+#[tokio::test]
+async fn session_list_degrades_an_unreadable_answer_to_nothing() {
+    let (socket, _) = FakeHerdr {
+        // Missing `agent_status` — one of `PaneInfo`'s seven required fields.
+        list_panes: vec![json!({
+            "pane_id": PANE, "terminal_id": "t1", "workspace_id": "w1",
+            "tab_id": "w1:t1", "focused": false, "revision": 1,
+        })],
+        list_workspaces: vec![workspace_info(json!({ "label": "totsuka 7" }))],
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let resp = d.call("session/list", json!({})).await;
+    assert!(
+        resp["error"].is_null(),
+        "an unreadable pane.list must not fail session/list: {resp}"
+    );
+    assert_eq!(
+        resp["result"]["sessions"].as_array().map(Vec::len),
+        Some(0),
+        "…it reports nothing owned: {resp}"
     );
 }

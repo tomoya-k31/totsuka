@@ -43,7 +43,7 @@ pub mod request {
     pub struct AgentPromptWaitOptions {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub timeout_ms: Option<u64>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         pub until: Vec<AgentStatus>,
     }
 
@@ -55,7 +55,7 @@ pub mod request {
 
     #[derive(Debug, Clone, Serialize)]
     pub struct AgentStartParams {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         pub args: Vec<String>,
         pub kind: String,
         pub name: String,
@@ -83,7 +83,7 @@ pub mod request {
         pub target: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub timeout_ms: Option<u64>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         pub until: Vec<AgentStatus>,
     }
 
@@ -147,11 +147,11 @@ pub mod request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub seq: Option<u64>,
         pub source: String,
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        #[serde(default)]
         pub state_labels: BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub title: Option<String>,
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        #[serde(default)]
         pub tokens: BTreeMap<String, Option<String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub ttl_ms: Option<u64>,
@@ -168,12 +168,12 @@ pub mod request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub cwd: Option<String>,
         pub direction: SplitDirection,
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        #[serde(default)]
         pub env: BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub focus: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub ratio: Option<f32>,
+        pub ratio: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub target_pane_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -294,7 +294,7 @@ pub mod request {
     pub struct WorkspaceCreateParams {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub cwd: Option<String>,
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        #[serde(default)]
         pub env: BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub focus: Option<bool>,

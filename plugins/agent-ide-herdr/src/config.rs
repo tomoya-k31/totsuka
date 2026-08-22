@@ -136,11 +136,19 @@ pub enum SplitDirection {
 }
 
 impl SplitDirection {
-    /// The wire value herdr's `SplitDirection` enum expects.
-    pub fn as_str(self) -> &'static str {
+    /// The generated wire enum this maps onto
+    /// ([`wire::request::SplitDirection`](crate::wire::request::SplitDirection)).
+    ///
+    /// The two enums stay separate on purpose: this one is the **config**
+    /// vocabulary (what an operator may write in `herdr.toml`, deliberately
+    /// two values), and the wire one is regenerated from herdr's schema. If
+    /// herdr ever grows a third direction, the regeneration adds it there and
+    /// this match still compiles — accepting it in config would be a separate,
+    /// deliberate change.
+    pub fn as_wire(self) -> crate::wire::request::SplitDirection {
         match self {
-            Self::Down => "down",
-            Self::Right => "right",
+            Self::Down => crate::wire::request::SplitDirection::Down,
+            Self::Right => crate::wire::request::SplitDirection::Right,
         }
     }
 }

@@ -58,14 +58,19 @@ use plugin_protocol::methods::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::config::HerdrConfig;
 use crate::error::HerdrError;
 use crate::state::{SessionHandle, map_agent_status};
-use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT};
+use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT, call_typed, to_params};
+use crate::wire::request;
+use crate::wire::result::{
+    AgentStartedEnvelope, AgentStatus, PaneInfo, PaneInfoEnvelope, PaneListEnvelope,
+    PaneReadEnvelope, WorkspaceInfo, WorkspaceListEnvelope,
+};
 
 /// The marker that says a herdr container belongs to totsuka, followed by the
 /// task's `source_task_id`.
@@ -84,7 +89,19 @@ use crate::transport::{HerdrTransport, SUBSCRIPTION_CLOSED_EVENT};
 const OWNED_LABEL_PREFIX: &str = "totsuka ";
 
 /// How many screen lines are read when extracting text from a pane.
-const SCREEN_LINES: u64 = 200;
+const SCREEN_LINES: u32 = 200;
+
+/// The statuses that mean "the agent read the prompt", for `agent.prompt`'s
+/// `wait` and the `agent.wait` confirmation behind it.
+///
+/// `working` alone would be a race on a turn short enough to settle before
+/// herdr samples again; `blocked` and `done` are the settled states that also
+/// mean it read the prompt.
+const SETTLED_OR_WORKING: [request::AgentStatus; 3] = [
+    request::AgentStatus::Working,
+    request::AgentStatus::Blocked,
+    request::AgentStatus::Done,
+];
 
 /// How long `agent.prompt` is given to observe the agent reacting, in
 /// milliseconds ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-5).
@@ -198,14 +215,22 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // workspace's env to its root pane, which is the pane the agent is
         // started in (D-4). A pane made by `pane.split` inherits nothing, which
         // is why the companion shell never sees `TOTSUKA_HOOK_TOKEN`.
-        let mut create_params = json!({
-            "cwd": params.worktree_path,
-            "label": format!("{OWNED_LABEL_PREFIX}{}", params.task.id),
-        });
-        if let Some(env) = &env {
-            create_params["env"] = env.clone();
-        }
-        let created = self.client.call("workspace.create", create_params).await?;
+        let create_params = request::WorkspaceCreateParams {
+            cwd: Some(params.worktree_path.clone()),
+            label: Some(format!("{OWNED_LABEL_PREFIX}{}", params.task.id)),
+            env: env
+                .as_ref()
+                .and_then(|env| serde_json::from_value(env.clone()).ok())
+                .unwrap_or_default(),
+            focus: None,
+        };
+        let created = self
+            .client
+            .call(
+                "workspace.create",
+                to_params("workspace.create", &create_params)?,
+            )
+            .await?;
         let workspace = NewWorkspace::from_response(&created)?;
 
         // From here on the workspace exists, so every failure path has to take
@@ -254,13 +279,16 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // screen-matching left that a reflow could invalidate (D-5).
         self.apply_layout(&pane_id, &params.worktree_path).await;
 
-        let start_params = json!({
-            "name": agent_name(&params.task.id),
-            "kind": resolve_kind(&self.config, &program),
-            "pane_id": pane_id,
-            "args": args,
-            "timeout_ms": AGENT_START_TIMEOUT_MS,
-        });
+        let start_params = to_params(
+            "agent.start",
+            &request::AgentStartParams {
+                name: agent_name(&params.task.id),
+                kind: resolve_kind(&self.config, &program),
+                pane_id: pane_id.clone(),
+                args,
+                timeout_ms: Some(AGENT_START_TIMEOUT_MS),
+            },
+        )?;
         // Start and prompt share one budget, because they are two views of one
         // race (#387). `agent.start` types the launch command into the pane; if
         // the shell was not accepting input yet the keystrokes are swallowed,
@@ -279,13 +307,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 .await?;
             // herdr echoes the pane it was given; trusting our own value keeps
             // the handle well-defined even if a future response drops the field.
-            debug_assert_eq!(
-                started
-                    .get("agent")
-                    .and_then(|a| a.get("pane_id"))
-                    .and_then(Value::as_str),
-                Some(pane_id.as_str()),
-            );
+            debug_assert_eq!(started.agent.pane_id, pane_id);
 
             match self.submit_prompt(&pane_id, &prompt, deadline).await {
                 Ok(()) => break,
@@ -317,7 +339,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let agent_session_id = pane_record(&self.client, &pane_id)
             .await
             .ok()
-            .and_then(|pane| agent_session_id(&pane))
+            .and_then(|pane| agent_session_id(&pane).map(str::to_string))
             .unwrap_or_default();
 
         let handle = SessionHandle::new(pane_id, agent_session_id);
@@ -360,10 +382,19 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         pane_id: &str,
         params: Value,
         deadline: tokio::time::Instant,
-    ) -> Result<Value, HerdrError> {
+    ) -> Result<AgentStartedEnvelope, HerdrError> {
         loop {
+            // The **success** is read through the generated envelope; the error
+            // path stays raw because the retry decisions below are made on
+            // herdr's error codes, not on a result shape.
             match self.client.call("agent.start", params.clone()).await {
-                Ok(started) => return Ok(started),
+                Ok(started) => {
+                    return serde_json::from_value(started).map_err(|e| {
+                        HerdrError::InvalidResponse(format!(
+                            "`agent.start` answered a shape this build cannot read → {e}"
+                        ))
+                    });
+                }
                 Err(e) if e.is_pane_not_ready() || e.is_timeout_of("agent.start") => {
                     if tokio::time::Instant::now() >= deadline {
                         return Err(e);
@@ -396,8 +427,16 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// workspace's, which for a hook-capable dispatch is the Orchestrator's
     /// hook environment — `TOTSUKA_HOOK_TOKEN` included. A pane a human types
     /// into is not where a bearer token belongs
-    /// (`ai-docs/security/hook-security.md`), and a pane made by `pane.split`
-    /// inherits nothing, so simply not passing `env` is what removes it.
+    /// (`ai-docs/security/hook-security.md`), and **a pane made by
+    /// `pane.split` inherits nothing**, which is what keeps it out.
+    ///
+    /// The request does carry `"env": {}` since #519 — the generated
+    /// `PaneSplitParams.env` is a map rather than an `Option`, so an unset env
+    /// is spelled as an empty one. **Zero variables to apply either way**, but
+    /// the distinction matters when reading the wire log: an earlier version of
+    /// this comment said "simply not passing `env` is what removes it", which
+    /// stopped being what the code does. The property is inheritance, not the
+    /// absence of a key.
     ///
     /// **Every failure is a warning, never an error.** The layout is
     /// decoration: a herdr that blips while drawing it must not lose a task
@@ -415,16 +454,27 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .client
             .call(
                 "pane.split",
-                json!({
-                    "target_pane_id": agent_pane_id,
-                    "direction": layout.direction.as_str(),
-                    // herdr's `ratio` is the *split source's* share, and the
-                    // source here is the agent's pane — so the configured
-                    // agent share goes across unchanged.
-                    "ratio": layout.ratio,
-                    "cwd": cwd,
-                    "focus": false,
-                }),
+                match to_params(
+                    "pane.split",
+                    &request::PaneSplitParams {
+                        target_pane_id: Some(agent_pane_id.to_string()),
+                        direction: layout.direction.as_wire(),
+                        // herdr's `ratio` is the *split source's* share, and the
+                        // source here is the agent's pane — so the configured
+                        // agent share goes across unchanged.
+                        ratio: Some(layout.ratio),
+                        cwd: Some(cwd.to_string()),
+                        focus: Some(false),
+                        env: BTreeMap::new(),
+                        workspace_id: None,
+                    },
+                ) {
+                    Ok(params) => params,
+                    Err(e) => {
+                        tracing::warn!(pane_id = agent_pane_id, error = %e, "could not build the split");
+                        return;
+                    }
+                },
             )
             .await
         {
@@ -461,13 +511,22 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         if !self.config.identity.enabled {
             return;
         }
-        let mut tokens = json!({
-            "task": token_value(&params.task.title),
-            "mode": match params.mode {
-                ExecutionMode::Plan => "plan",
-                ExecutionMode::Implement => "implement",
-            },
-        });
+        // `BTreeMap<String, Option<String>>` is herdr's own shape: a `null`
+        // value **clears** that token rather than setting it to nothing. Every
+        // value here is a `Some`; nothing in this plugin clears a token.
+        let mut tokens: BTreeMap<String, Option<String>> = BTreeMap::from([
+            ("task".to_string(), Some(token_value(&params.task.title))),
+            (
+                "mode".to_string(),
+                Some(
+                    match params.mode {
+                        ExecutionMode::Plan => "plan",
+                        ExecutionMode::Implement => "implement",
+                    }
+                    .to_string(),
+                ),
+            ),
+        ]);
         // The machine identifier, and the one token that is **compared rather
         // than displayed** — so it goes across verbatim, never through
         // `token_value`. Collapsing whitespace or appending `…` would make a
@@ -480,7 +539,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // identifier at all — the label path is a correct fallback, a wrong id
         // is not.
         if !params.task.id.is_empty() && params.task.id.chars().count() <= TOKEN_VALUE_CHARS {
-            tokens[IDENTITY_TOKEN] = json!(params.task.id);
+            tokens.insert(IDENTITY_TOKEN.to_string(), Some(params.task.id.clone()));
         } else {
             tracing::debug!(
                 task_id = %params.task.id,
@@ -492,34 +551,65 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // rather than guessed: `$repo` renders empty, which is what the
         // sidebar snippet is written to tolerate.
         if let Some(repo) = &params.repo_name {
-            tokens["repo"] = json!(token_value(repo));
+            tokens.insert("repo".to_string(), Some(token_value(repo)));
         }
-        // A constant, not something per-task: a workspace or pane accepts at
-        // most 32 distinct `source` values **for its lifetime**, and neither
-        // clearing nor expiry gives a slot back.
-        let report = |method: &'static str, target: serde_json::Value| {
-            let client = self.client.clone();
-            let tokens = tokens.clone();
-            async move {
-                let mut payload = target;
-                payload["source"] = json!("totsuka");
-                payload["tokens"] = tokens;
-                client.call(method, payload).await
-            }
-        };
+        // The two reports take **different params types** (the pane one also
+        // accepts `title` / `display_agent` / `state_labels`, which this plugin
+        // never sets), so they are written out rather than shared through one
+        // payload builder. What must not drift is the token map, and that is
+        // the value both clone.
         let mut reported = true;
-        if let Err(e) = report(
-            "workspace.report_metadata",
-            json!({ "workspace_id": workspace.id }),
-        )
-        .await
+        match self
+            .client
+            .call(
+                "workspace.report_metadata",
+                to_params(
+                    "workspace.report_metadata",
+                    &request::WorkspaceReportMetadataParams {
+                        workspace_id: workspace.id.clone(),
+                        source: METADATA_SOURCE.to_string(),
+                        tokens: tokens.clone(),
+                        seq: None,
+                        ttl_ms: None,
+                    },
+                )
+                .unwrap_or(Value::Null),
+            )
+            .await
         {
-            tracing::warn!(workspace_id = %workspace.id, error = %e, "could not report workspace identity");
-            reported = false;
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(workspace_id = %workspace.id, error = %e, "could not report workspace identity");
+                reported = false;
+            }
         }
         match &workspace.root_pane_id {
             Some(pane_id) => {
-                if let Err(e) = report("pane.report_metadata", json!({ "pane_id": pane_id })).await
+                if let Err(e) = self
+                    .client
+                    .call(
+                        "pane.report_metadata",
+                        to_params(
+                            "pane.report_metadata",
+                            &request::PaneReportMetadataParams {
+                                pane_id: pane_id.clone(),
+                                source: METADATA_SOURCE.to_string(),
+                                tokens: tokens.clone(),
+                                agent: None,
+                                applies_to_source: None,
+                                clear_display_agent: None,
+                                clear_state_labels: None,
+                                clear_title: None,
+                                display_agent: None,
+                                seq: None,
+                                state_labels: BTreeMap::new(),
+                                title: None,
+                                ttl_ms: None,
+                            },
+                        )
+                        .unwrap_or(Value::Null),
+                    )
+                    .await
                 {
                     tracing::warn!(pane_id, error = %e, "could not report pane identity");
                     reported = false;
@@ -536,7 +626,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // pane leaks).
         let marked = tokens
             .get(IDENTITY_TOKEN)
-            .and_then(Value::as_str)
+            .and_then(Option::as_deref)
             .is_some_and(|task| !task.is_empty());
         // The marker that outlives a herdr restart (#432). Tokens do not: a
         // `herdr server live-handoff` keeps the workspace, its panes, the
@@ -594,7 +684,17 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let label = format!("{OWNED_LABEL_PREFIX}{}", params.task.id);
         match self
             .client
-            .call("pane.rename", json!({ "pane_id": pane_id, "label": label }))
+            .call(
+                "pane.rename",
+                to_params(
+                    "pane.rename",
+                    &request::PaneRenameParams {
+                        pane_id: pane_id.to_string(),
+                        label: Some(label),
+                    },
+                )
+                .unwrap_or(Value::Null),
+            )
             .await
         {
             Ok(_) => true,
@@ -649,7 +749,14 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .client
             .call(
                 "workspace.rename",
-                json!({ "workspace_id": workspace.id, "label": label }),
+                to_params(
+                    "workspace.rename",
+                    &request::WorkspaceRenameParams {
+                        workspace_id: workspace.id.clone(),
+                        label,
+                    },
+                )
+                .unwrap_or(Value::Null),
             )
             .await
         {
@@ -668,7 +775,16 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let workspace_id = workspace_id.to_string();
         tokio::spawn(async move {
             if let Err(e) = client
-                .call("workspace.close", json!({ "workspace_id": workspace_id }))
+                .call(
+                    "workspace.close",
+                    to_params(
+                        "workspace.close",
+                        &request::WorkspaceTarget {
+                            workspace_id: workspace_id.to_string(),
+                        },
+                    )
+                    .unwrap_or(Value::Null),
+                )
                 .await
             {
                 tracing::warn!(
@@ -723,17 +839,17 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         prompt: &str,
         deadline: tokio::time::Instant,
     ) -> Result<(), HerdrError> {
-        let params = json!({
-            "target": pane_id,
-            "text": prompt,
-            // `working` alone would be a race on a turn short enough to settle
-            // before herdr samples again; the other two are the settled states
-            // that also mean "it read the prompt".
-            "wait": {
-                "until": ["working", "blocked", "done"],
-                "timeout_ms": PROMPT_WAIT_MS,
+        let params = to_params(
+            "agent.prompt",
+            &request::AgentPromptParams {
+                target: pane_id.to_string(),
+                text: prompt.to_string(),
+                wait: Some(request::AgentPromptWaitOptions {
+                    until: SETTLED_OR_WORKING.to_vec(),
+                    timeout_ms: Some(PROMPT_WAIT_MS),
+                }),
             },
-        });
+        )?;
         // Whichever comes first: this attempt's own patience, or the dispatch's
         // overall budget. Past the former the answer is "re-start the agent",
         // past the latter it is "give up" — and `start_agent` tells them apart
@@ -787,11 +903,14 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .client
             .call(
                 "agent.wait",
-                json!({
-                    "target": pane_id,
-                    "until": ["working", "blocked", "done"],
-                    "timeout_ms": PROMPT_CONFIRM_MS,
-                }),
+                to_params(
+                    "agent.wait",
+                    &request::AgentWaitParams {
+                        target: pane_id.to_string(),
+                        until: SETTLED_OR_WORKING.to_vec(),
+                        timeout_ms: Some(PROMPT_CONFIRM_MS),
+                    },
+                )?,
             )
             .await
         {
@@ -834,7 +953,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// the verdict.
     async fn submit_if_left_unsent(&self, pane_id: &str) {
         match pane_status(&self.client, pane_id).await {
-            Ok(status) if status == "idle" => {}
+            Ok(AgentStatus::Idle) => {}
             Ok(_) => return,
             Err(e) => {
                 tracing::warn!(pane_id, error = %e, "could not read the pane before confirming");
@@ -850,7 +969,19 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .client
             .call(
                 "agent.send_keys",
-                json!({ "target": pane_id, "keys": ["enter"] }),
+                match to_params(
+                    "agent.send_keys",
+                    &request::AgentSendKeysParams {
+                        target: pane_id.to_string(),
+                        keys: vec!["enter".to_string()],
+                    },
+                ) {
+                    Ok(params) => params,
+                    Err(e) => {
+                        tracing::warn!(pane_id, error = %e, "could not build the Enter keypress");
+                        return;
+                    }
+                },
             )
             .await
         {
@@ -867,7 +998,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         match pane_status(&self.client, &handle.pane_id).await {
             Ok(status) => Ok(SessionAttachResult {
                 attached: true,
-                state: map_agent_status(&status, AgentState::Idle),
+                state: map_agent_status(status, AgentState::Idle),
             }),
             // The pane is gone → not attached (F-37); the Orchestrator (#57)
             // routes this to human confirmation rather than auto-failing.
@@ -891,7 +1022,14 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .client
             .call(
                 "pane.send_keys",
-                json!({ "pane_id": handle.pane_id, "keys": ["ctrl+c"] }),
+                to_params(
+                    "pane.send_keys",
+                    &request::PaneSendKeysParams {
+                        pane_id: handle.pane_id.clone(),
+                        keys: vec!["ctrl+c".to_string()],
+                    },
+                )
+                .unwrap_or(Value::Null),
             )
             .await
             && !e.is_missing()
@@ -933,16 +1071,17 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         params: &SessionReleaseParams,
     ) -> NotReleased {
         if !handle.agent_session_id.is_empty() {
-            match self.client.call("pane.list", json!({})).await {
+            match call_typed::<_, _, PaneListEnvelope>(
+                &self.client,
+                "pane.list",
+                &request::PaneListParams { workspace_id: None },
+            )
+            .await
+            {
                 Ok(panes) => {
-                    let alive = panes
-                        .get("panes")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .any(|pane| {
-                            agent_session_id(pane).as_deref() == Some(&handle.agent_session_id)
-                        });
+                    let alive = panes.panes.iter().any(|pane| {
+                        agent_session_id(pane) == Some(handle.agent_session_id.as_str())
+                    });
                     if alive {
                         return NotReleased::Refused;
                     }
@@ -1024,8 +1163,8 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             .expect_label
             .as_deref()
             .and_then(|l| l.strip_prefix(OWNED_LABEL_PREFIX));
-        let token = identity_token(&pane).or(workspace_token.as_deref());
-        let mut checks = vec![("cwd", params.expect_cwd.as_deref(), pane_str(&pane, "cwd"))];
+        let token = identity_token(&pane.tokens).or(workspace_token.as_deref());
+        let mut checks = vec![("cwd", params.expect_cwd.as_deref(), pane.cwd.as_deref())];
         // The token replaces the labels **only when both sides have one**.
         //
         // Preferring it is a correctness requirement, not a taste: #417 D4
@@ -1050,7 +1189,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 (
                     "label",
                     params.expect_label.as_deref(),
-                    pane_str(&pane, "label"),
+                    pane.label.as_deref(),
                 ),
                 (
                     "workspace label",
@@ -1127,34 +1266,57 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// and `session/release` only needs the pane (`SessionHandle::decode`
     /// accepts the bare form).
     pub async fn list_sessions(&self) -> Result<SessionListResult, HerdrError> {
-        let panes = self.client.call("pane.list", json!({})).await?;
-        let workspaces = self.client.call("workspace.list", json!({})).await?;
-        let owned = owned_workspaces(&workspaces);
+        // **A response this build cannot read is "nothing", not a failure.**
+        // `session/list` is a best-effort diagnostic surface — `doctor`'s
+        // orphan-pane detection stands on it — and #416 deliberately made a
+        // shapeless answer mean "nothing owned" rather than a panic. Typing
+        // the read must not quietly take that away, so the degrade moved here
+        // from the `Value` digging that used to carry it.
+        //
+        // A *failed call* still propagates, exactly as before: not reaching
+        // herdr is a different fact from herdr answering oddly.
+        let panes: PaneListEnvelope = unreadable_is_empty(
+            "pane.list",
+            self.client
+                .call(
+                    "pane.list",
+                    to_params("pane.list", &request::PaneListParams { workspace_id: None })?,
+                )
+                .await?,
+        )
+        .unwrap_or(PaneListEnvelope { panes: Vec::new() });
+        let workspaces: WorkspaceListEnvelope = unreadable_is_empty(
+            "workspace.list",
+            self.client
+                .call(
+                    "workspace.list",
+                    to_params("workspace.list", &request::EmptyParams {})?,
+                )
+                .await?,
+        )
+        .unwrap_or(WorkspaceListEnvelope {
+            workspaces: Vec::new(),
+        });
+        let owned = owned_workspaces(&workspaces.workspaces);
 
         // `Vec`, not a map: `pane.list` order is the only stable ordering
         // there is, and a hash map would shuffle `session list` output between
         // runs.
-        let mut chosen: Vec<(Option<&str>, bool, SessionInfo)> = Vec::new();
-        for pane in panes
-            .get("panes")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let Some(pane_id) = pane_str(pane, "pane_id") else {
-                continue;
-            };
-            let workspace = pane_str(pane, "workspace_id");
+        let mut chosen: Vec<(&str, bool, SessionInfo)> = Vec::new();
+        for pane in &panes.panes {
+            let workspace = pane.workspace_id.as_str();
             // Four ways a pane can be ours, in descending order of directness
             // (#417 D2). The token paths are the new evidence; the label paths
             // stay because a dispatch whose report failed, and every pane a
             // release before this one left behind, has only those.
-            let by_token = identity_token(pane)
-                .or_else(|| workspace.and_then(|ws| owned.tokens.get(ws).copied()))
+            let by_token = identity_token(&pane.tokens)
+                .or_else(|| owned.tokens.get(workspace).copied())
                 .map(|task| format!("{OWNED_LABEL_PREFIX}{task}"));
-            let by_label = pane_str(pane, "label")
+            let by_label = pane
+                .label
+                .as_deref()
                 .filter(|l| l.starts_with(OWNED_LABEL_PREFIX))
-                .or_else(|| workspace.and_then(|ws| owned.labels.get(ws).copied()))
+                .or_else(|| owned.labels.get(workspace).copied())
                 .map(str::to_string);
             // Synthesised from the token when there is one, so `doctor`'s
             // `strip_prefix` → `source_task_id` match keeps working even after
@@ -1164,11 +1326,11 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             };
             let has_agent = looks_like_an_agent_pane(pane);
             let info = SessionInfo {
-                session_id: SessionHandle::new(pane_id, "").encode(),
+                session_id: SessionHandle::new(&pane.pane_id, "").encode(),
                 label: Some(label),
-                cwd: pane_str(pane, "cwd").map(str::to_string),
+                cwd: pane.cwd.clone(),
             };
-            match workspace.and_then(|ws| chosen.iter().position(|(w, ..)| *w == Some(ws))) {
+            match chosen.iter().position(|(w, ..)| *w == workspace) {
                 Some(i) if has_agent && !chosen[i].1 => chosen[i] = (workspace, has_agent, info),
                 Some(_) => {}
                 None => chosen.push((workspace, has_agent, info)),
@@ -1198,7 +1360,13 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let Some(workspace_id) = workspace_id else {
             return (None, None);
         };
-        let response = match self.client.call("workspace.list", json!({})).await {
+        let response: WorkspaceListEnvelope = match call_typed(
+            &self.client,
+            "workspace.list",
+            &request::EmptyParams {},
+        )
+        .await
+        {
             Ok(response) => response,
             Err(e) => {
                 tracing::debug!(workspace_id, error = %e, "workspace.list failed; identity unverifiable");
@@ -1206,17 +1374,15 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             }
         };
         let Some(ws) = response
-            .get("workspaces")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .find(|ws| pane_str(ws, "workspace_id") == Some(workspace_id))
+            .workspaces
+            .iter()
+            .find(|ws| ws.workspace_id == workspace_id)
         else {
             return (None, None);
         };
         (
-            pane_str(ws, "label").map(str::to_string),
-            identity_token(ws).map(str::to_string),
+            Some(ws.label.clone()),
+            identity_token(&ws.tokens).map(str::to_string),
         )
     }
 
@@ -1227,13 +1393,29 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     async fn close_pane_and_workspace(&self, handle: &SessionHandle) -> Result<(), HerdrError> {
         ignore_missing(
             self.client
-                .call("pane.close", json!({ "pane_id": handle.pane_id }))
+                .call(
+                    "pane.close",
+                    to_params(
+                        "pane.close",
+                        &request::PaneTarget {
+                            pane_id: handle.pane_id.clone(),
+                        },
+                    )?,
+                )
                 .await,
         )?;
         if let Some(workspace_id) = workspace_of(&handle.pane_id) {
             ignore_missing(
                 self.client
-                    .call("workspace.close", json!({ "workspace_id": workspace_id }))
+                    .call(
+                        "workspace.close",
+                        to_params(
+                            "workspace.close",
+                            &request::WorkspaceTarget {
+                                workspace_id: workspace_id.to_string(),
+                            },
+                        )?,
+                    )
                     .await,
             )?;
         }
@@ -1255,29 +1437,47 @@ impl<T: HerdrTransport> HerdrAgent<T> {
             Err(e) if e.is_missing() => return Ok(SessionFocusResult { focused: false }),
             Err(e) => return Err(e),
         };
-        // Container ids come from the pane record; the workspace also falls
-        // back to the pane-id prefix (`w1:p2` lives in `w1`). A record without
-        // a tab id just skips the tab step — `pane.focus` still lands.
-        let workspace_id = pane
-            .get("workspace_id")
-            .and_then(Value::as_str)
-            .or_else(|| workspace_of(&handle.pane_id));
+        // Container ids come from the pane record. `workspace_id` and `tab_id`
+        // are both `required` on a `PaneInfo`, so the old "a record without a
+        // tab id skips the tab step" case cannot arise any more — a record
+        // missing either does not deserialize, and `pane_record` reports that
+        // above rather than quietly focusing less.
+        //
+        // The pane-id prefix (`w1:p2` lives in `w1`) is kept as the fallback
+        // only for the shape where the two disagree; it costs nothing.
+        let workspace_id = if pane.workspace_id.is_empty() {
+            workspace_of(&handle.pane_id).map(str::to_string)
+        } else {
+            Some(pane.workspace_id.clone())
+        };
         if let Some(workspace_id) = workspace_id
             && !self
-                .focus_step("workspace.focus", json!({ "workspace_id": workspace_id }))
+                .focus_step(
+                    "workspace.focus",
+                    &request::WorkspaceTarget { workspace_id },
+                )
                 .await?
         {
             return Ok(SessionFocusResult { focused: false });
         }
-        if let Some(tab_id) = pane.get("tab_id").and_then(Value::as_str)
-            && !self
-                .focus_step("tab.focus", json!({ "tab_id": tab_id }))
-                .await?
+        if !self
+            .focus_step(
+                "tab.focus",
+                &request::TabTarget {
+                    tab_id: pane.tab_id,
+                },
+            )
+            .await?
         {
             return Ok(SessionFocusResult { focused: false });
         }
         let focused = self
-            .focus_step("pane.focus", json!({ "pane_id": handle.pane_id }))
+            .focus_step(
+                "pane.focus",
+                &request::PaneTarget {
+                    pane_id: handle.pane_id.clone(),
+                },
+            )
             .await?;
         Ok(SessionFocusResult { focused })
     }
@@ -1285,8 +1485,16 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// One focus call: `Ok(true)` on success, `Ok(false)` when the target is
     /// gone (the pane/tab/workspace closed between the liveness check and this
     /// call), and the error otherwise.
-    async fn focus_step(&self, method: &str, params: Value) -> Result<bool, HerdrError> {
-        match self.client.call(method, params).await {
+    async fn focus_step<P: serde::Serialize>(
+        &self,
+        method: &str,
+        params: &P,
+    ) -> Result<bool, HerdrError> {
+        // The result is deliberately untyped: `methods.json` records these
+        // three as `result: null` because nothing here reads the answer, and
+        // asserting a result type nobody reads would be a claim with no way to
+        // check it (ADR-0055 D-8).
+        match self.client.call(method, to_params(method, params)?).await {
             Ok(_) => Ok(true),
             Err(e) if e.is_missing() => Ok(false),
             Err(e) => Err(e),
@@ -1303,7 +1511,13 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         session_id: &str,
     ) -> Result<DiagnosticsSnapshotResult, HerdrError> {
         let handle = SessionHandle::decode(session_id);
-        let text = read_pane_text(&self.client, &handle.pane_id, "recent", SCREEN_LINES).await;
+        let text = read_pane_text(
+            &self.client,
+            &handle.pane_id,
+            request::ReadSource::Recent,
+            SCREEN_LINES,
+        )
+        .await;
         Ok(DiagnosticsSnapshotResult { text })
     }
 
@@ -1320,6 +1534,22 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let pane_id = handle.pane_id.clone();
         // Only the deadman subscription remains — no `pane.agent_status_changed`,
         // so screen-manifest status flicker can no longer drive task state.
+        //
+        // **This one is deliberately not built from
+        // [`wire::request::Subscription`](crate::wire::request::Subscription).**
+        // Typing it surfaced something worth writing down: herdr's schema makes
+        // `pane.exited` a **unit** variant — it takes no `pane_id`, so the
+        // subscription is global and the id below is a key herdr ignores
+        // (nothing in its request schema sets `additionalProperties: false`).
+        //
+        // The id is still sent because *totsuka* reads it back:
+        // `transport::subscribed_panes` derives the panes to notify on a dead
+        // connection from these very params. Nothing here depends on herdr
+        // filtering — `classify_exit` filters every envelope by `pane_id`
+        // itself, precisely because the stream carries other panes' events.
+        //
+        // Sending the typed unit variant instead would silently drop that key
+        // and take the subscription-closed deadman with it.
         let subscriptions = json!([
             { "type": "pane.exited", "pane_id": pane_id },
         ]);
@@ -1366,12 +1596,37 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     }
 }
 
+/// `workspace.create`'s answer, read down to **exactly the two ids the rest of
+/// dispatch needs** rather than through the generated
+/// [`WorkspaceCreatedEnvelope`](crate::wire::result::WorkspaceCreatedEnvelope).
+///
+/// # Why this one call is read loosely
+///
+/// The reason is ordering, not shape: **by the time this is read the workspace
+/// already exists on the operator's screen.** Any hard failure here returns
+/// before [`NewWorkspace`] exists, so nothing holds the id that
+/// [`abandon`](HerdrAgent::abandon) needs — and the dispatch leaks a workspace
+/// with a live pane in it.
+///
+/// A first attempt at this relaxed only `root_pane`'s *presence*, which was not
+/// enough: a `root_pane` that is **there but malformed**, or a `workspace`
+/// missing any of `WorkspaceInfo`'s other seven required fields, still failed
+/// the whole read and leaked the same workspace. So nothing here is read that
+/// is not used.
+///
+/// # This is not a hole in the design
+///
+/// [ADR-0055](../../../ai-docs/decisions/adr-0055-herdr-schema-typed-wire.md)
+/// is "**runtime forgiving, CI strict**". The generated envelope stays the
+/// record of what herdr promises, and the schema diff in CI is what reports a
+/// change to it — before merge, where nothing is running. Being strict *here*
+/// as well would buy no earlier warning and would cost a leaked workspace.
 /// What `dispatch` needs out of a `workspace.create` response: the workspace
 /// itself, and the root pane herdr opens it with.
 ///
 /// The root pane is where the agent is started (protocol 17), and the response
-/// is the only handle to it — the response names it (`root_pane`) and nothing else
-/// does: `pane.list` cannot distinguish it from the agent's pane by label,
+/// is the only handle to it — the response names it (`root_pane`) and nothing
+/// else does: `pane.list` cannot distinguish it from the agent's pane by label,
 /// because a split pane's label is `null` on both.
 struct NewWorkspace {
     id: String,
@@ -1387,6 +1642,36 @@ struct NewWorkspace {
 }
 
 impl NewWorkspace {
+    /// Read the two ids out of a `workspace.create` response **by hand**.
+    ///
+    /// # Why this one call is not read through the generated envelope
+    ///
+    /// The reason is ordering, not shape: **by the time this is read the
+    /// workspace already exists on the operator's screen.** Any hard failure
+    /// returns before `NewWorkspace` exists, so nothing holds the id that
+    /// [`abandon`](HerdrAgent::abandon) needs — and the dispatch leaks a
+    /// workspace with a live pane in it.
+    ///
+    /// Two earlier attempts got this wrong by degrees, which is why it is
+    /// spelled out: relaxing only `root_pane`'s **presence** still failed on a
+    /// `root_pane` that was there but malformed, and narrowing to
+    /// `{ pane_id: String }` still failed on `{"pane_id": 1}` — serde
+    /// propagates an inner error through `Option`, it does not swallow it.
+    /// **The only shape that cannot fail is the one that never asks serde a
+    /// question it can answer with an error.**
+    ///
+    /// `workspace_id` is the single exception: without it there is nothing to
+    /// clean up either way, so its absence is the one hard error here.
+    ///
+    /// # This is not a hole in the design
+    ///
+    /// [ADR-0055](../../../ai-docs/decisions/adr-0055-herdr-schema-typed-wire.md)
+    /// is "**runtime forgiving, CI strict**". The generated
+    /// [`WorkspaceCreatedEnvelope`](crate::wire::result::WorkspaceCreatedEnvelope)
+    /// stays the record of what herdr promises, and the schema diff in CI is
+    /// what reports a change to it — before merge, where nothing is running.
+    /// Being strict *here* as well would buy no earlier warning and would cost
+    /// a leaked workspace.
     fn from_response(created: &Value) -> Result<Self, HerdrError> {
         let id = created
             .get("workspace")
@@ -1405,28 +1690,52 @@ impl NewWorkspace {
     }
 }
 
+/// Deserialize a list response, treating "this build cannot read it" as an
+/// empty list rather than an error.
+///
+/// **Only for the best-effort surfaces.** Everywhere else an unreadable answer
+/// is an error at the call site — that is the point of #519. Here the caller is
+/// `session/list`, whose contract since #416 is that whatever herdr answers,
+/// the worst outcome is "nothing owned".
+fn unreadable_is_empty<T: serde::de::DeserializeOwned>(method: &str, result: Value) -> Option<T> {
+    match serde_json::from_value(result) {
+        Ok(value) => Some(value),
+        Err(e) => {
+            tracing::warn!(
+                method, error = %e,
+                "herdr answered a shape this build cannot read; treating it as an empty list"
+            );
+            None
+        }
+    }
+}
+
 /// The pane record (`pane.get` nests it under `result.pane`).
-async fn pane_record<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<Value, HerdrError> {
-    let result = client
-        .call("pane.get", json!({ "pane_id": pane_id }))
-        .await?;
-    Ok(result.get("pane").cloned().unwrap_or(result))
+async fn pane_record<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<PaneInfo, HerdrError> {
+    let envelope: PaneInfoEnvelope = call_typed(
+        client,
+        "pane.get",
+        &request::PaneTarget {
+            pane_id: pane_id.to_string(),
+        },
+    )
+    .await?;
+    Ok(envelope.pane)
 }
 
 /// A string field off a pane record, `None` when absent or null (herdr's
 /// `PaneInfo.cwd`/`label` are both optional-and-nullable).
-fn pane_str<'a>(pane: &'a Value, field: &str) -> Option<&'a str> {
-    pane.get(field).and_then(Value::as_str)
-}
-
 /// The pane's current `agent_status`.
-async fn pane_status<T: HerdrTransport>(client: &T, pane_id: &str) -> Result<String, HerdrError> {
-    let pane = pane_record(client, pane_id).await?;
-    Ok(pane
-        .get("agent_status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string())
+///
+/// `agent_status` is `required` in every herdr this plugin supports, so there
+/// is no "absent" case to default any more — a pane record without one does
+/// not deserialize, and that is reported by [`pane_record`] rather than
+/// silently becoming `unknown`.
+async fn pane_status<T: HerdrTransport>(
+    client: &T,
+    pane_id: &str,
+) -> Result<AgentStatus, HerdrError> {
+    Ok(pane_record(client, pane_id).await?.agent_status)
 }
 
 /// The workspace a pane belongs to. herdr ids nest the workspace in the pane
@@ -1461,13 +1770,13 @@ fn workspace_of(pane_id: &str) -> Option<&str> {
 /// lingers, that pane keeps winning the tie-break — which changes nothing
 /// that matters: the workspace still yields exactly one session, and the
 /// orphan it represents is exactly the one `doctor` is looking for.
-fn looks_like_an_agent_pane(pane: &Value) -> bool {
+fn looks_like_an_agent_pane(pane: &PaneInfo) -> bool {
     // Set while herdr has an agent registered in the pane.
-    pane_str(pane, "agent").is_some_and(|agent| !agent.is_empty())
+    pane.agent.as_deref().is_some_and(|agent| !agent.is_empty())
         // Reported by the agent's own herdr integration hook once it starts.
         || agent_session_id(pane).is_some()
         // A pane with nothing running in it reports `unknown`.
-        || pane_str(pane, "agent_status").is_some_and(|status| status != "unknown")
+        || pane.agent_status != AgentStatus::Unknown
 }
 
 /// The metadata token that names the task a container belongs to (#417).
@@ -1478,15 +1787,21 @@ fn looks_like_an_agent_pane(pane: &Value) -> bool {
 /// evidence.
 const IDENTITY_TOKEN: &str = "totsuka_task";
 
+/// The metadata `source` slot every report from this plugin uses.
+///
+/// **A constant, not something per-task**: a workspace or pane accepts at most
+/// 32 distinct `source` values *for its lifetime*, and neither clearing nor
+/// expiry gives a slot back.
+const METADATA_SOURCE: &str = "totsuka";
+
 /// The [`IDENTITY_TOKEN`] on a `PaneInfo` / `WorkspaceInfo` record, if any.
 ///
 /// `tokens` rides on both `list` and `get` responses (verified on 0.7.5), so
 /// this works off `pane.list` without a second round trip.
-fn identity_token(record: &Value) -> Option<&str> {
-    record
-        .get("tokens")
-        .and_then(|t| t.get(IDENTITY_TOKEN))
-        .and_then(Value::as_str)
+fn identity_token(tokens: &BTreeMap<String, String>) -> Option<&str> {
+    tokens
+        .get(IDENTITY_TOKEN)
+        .map(String::as_str)
         .filter(|task| !task.is_empty())
 }
 
@@ -1506,21 +1821,14 @@ struct OwnedWorkspaces<'a> {
     tokens: HashMap<&'a str, &'a str>,
 }
 
-fn owned_workspaces(response: &Value) -> OwnedWorkspaces<'_> {
+fn owned_workspaces(workspaces: &[WorkspaceInfo]) -> OwnedWorkspaces<'_> {
     let mut owned = OwnedWorkspaces::default();
-    for ws in response
-        .get("workspaces")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(id) = pane_str(ws, "workspace_id") else {
-            continue;
-        };
-        if let Some(label) = pane_str(ws, "label").filter(|l| l.starts_with(OWNED_LABEL_PREFIX)) {
-            owned.labels.insert(id, label);
+    for ws in workspaces {
+        let id = ws.workspace_id.as_str();
+        if ws.label.starts_with(OWNED_LABEL_PREFIX) {
+            owned.labels.insert(id, ws.label.as_str());
         }
-        if let Some(task) = identity_token(ws) {
+        if let Some(task) = identity_token(&ws.tokens) {
             owned.tokens.insert(id, task);
         }
     }
@@ -1531,12 +1839,11 @@ fn owned_workspaces(response: &Value) -> OwnedWorkspaces<'_> {
 /// (`pane.agent_session.value`), reported by the agent's herdr integration hook
 /// during startup and carried in the [`SessionHandle`] for `claude --resume`.
 /// Absent or empty → `None`.
-fn agent_session_id(pane: &Value) -> Option<String> {
-    let value = pane
-        .get("agent_session")
-        .and_then(|s| s.get("value"))
-        .and_then(Value::as_str)?;
-    (!value.is_empty()).then(|| value.to_string())
+fn agent_session_id(pane: &PaneInfo) -> Option<&str> {
+    pane.agent_session
+        .as_ref()
+        .map(|session| session.value.as_str())
+        .filter(|value| !value.is_empty())
 }
 
 /// What a single herdr event means to the deadman stream.
@@ -1591,26 +1898,23 @@ fn classify_exit(event: &Value, pane_id: &str) -> ExitSignal {
 async fn read_pane_text<T: HerdrTransport>(
     client: &T,
     pane_id: &str,
-    source: &str,
-    lines: u64,
+    source: request::ReadSource,
+    lines: u32,
 ) -> Option<String> {
-    let result = client
-        .call(
-            "pane.read",
-            json!({
-                "pane_id": pane_id,
-                "source": source,
-                "lines": lines,
-                "strip_ansi": true,
-            }),
-        )
-        .await
-        .ok()?;
-    result
-        .get("read")
-        .and_then(|r| r.get("text"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let envelope: PaneReadEnvelope = call_typed(
+        client,
+        "pane.read",
+        &request::PaneReadParams {
+            pane_id: pane_id.to_string(),
+            source,
+            lines: Some(lines),
+            format: None,
+            strip_ansi: Some(true),
+        },
+    )
+    .await
+    .ok()?;
+    Some(envelope.read.text)
 }
 
 /// Compose the agent prompt: any extra context as a preamble, then the task
@@ -1853,40 +2157,95 @@ fn ignore_missing(result: Result<Value, HerdrError>) -> Result<(), HerdrError> {
 mod tests {
     use super::*;
 
+    /// A `workspace.list` response as herdr sends it. `WorkspaceInfo` requires
+    /// `number` / `focused` / `pane_count` / `tab_count` / `active_tab_id` /
+    /// `agent_status` alongside the two fields these tests care about, so the
+    /// filler lives here rather than in every case.
+    fn workspace_list(entries: &[Value]) -> WorkspaceListEnvelope {
+        let workspaces: Vec<Value> = entries
+            .iter()
+            .map(|e| {
+                let mut ws = json!({
+                    "number": 1, "focused": false, "pane_count": 1, "tab_count": 1,
+                    "active_tab_id": "t1", "agent_status": "unknown",
+                });
+                for (k, v) in e.as_object().expect("object").iter() {
+                    ws[k] = v.clone();
+                }
+                ws
+            })
+            .collect();
+        serde_json::from_value(json!({ "type": "workspace_list", "workspaces": workspaces }))
+            .expect("the fixture must be a shape herdr could actually send")
+    }
+
     #[test]
     fn only_totsuka_labelled_workspaces_are_owned() {
-        let response = json!({ "type": "workspace_list", "workspaces": [
-            { "workspace_id": "w1", "label": "totsuka 7" },
-            { "workspace_id": "w2", "label": "scratch" },
-            // Label is nullable, and herdr reports workspaces we never made.
-            { "workspace_id": "w3" },
-            { "workspace_id": "w4", "label": null },
+        let response = workspace_list(&[
+            json!({ "workspace_id": "w1", "label": "totsuka 7" }),
+            json!({ "workspace_id": "w2", "label": "scratch" }),
             // A near miss: the prefix includes the space, so this is not ours.
-            { "workspace_id": "w5", "label": "totsukaboard" },
-        ]});
-        let owned = owned_workspaces(&response);
+            json!({ "workspace_id": "w5", "label": "totsukaboard" }),
+        ]);
+        let owned = owned_workspaces(&response.workspaces);
         assert_eq!(owned.labels.get("w1").copied(), Some("totsuka 7"));
         assert_eq!(owned.labels.len(), 1, "{owned:?}");
+    }
 
-        // A response with no `workspaces` array is "nothing owned", not a
-        // panic: `session/list` runs against whatever herdr answers.
-        let shapeless = json!({ "type": "ok" });
-        let empty = owned_workspaces(&shapeless);
-        assert!(empty.labels.is_empty() && empty.tokens.is_empty());
+    /// The two cases this test used to carry — a workspace with **no** `label`
+    /// and one with `label: null` — are shapes herdr does not send:
+    /// `WorkspaceInfo.label` is `required` and non-nullable in every schema
+    /// this plugin supports. They are pinned here as *rejections* instead of
+    /// being defended against in the mapping code, which is the whole point of
+    /// [ADR-0055](../../../ai-docs/decisions/adr-0055-herdr-schema-typed-wire.md):
+    /// a shape herdr cannot produce should not have a branch of its own.
+    #[test]
+    fn a_response_herdr_cannot_send_is_rejected_rather_than_defended_against() {
+        // Everything else stays valid, so what is being pinned is `label` and
+        // nothing else: with `label: Option<String>` these would both parse.
+        let full = serde_json::to_value(json!({
+            "type": "workspace_list",
+            "workspaces": [{
+                "workspace_id": "w3", "number": 1, "label": "x", "focused": false,
+                "pane_count": 1, "tab_count": 1, "active_tab_id": "t1",
+                "agent_status": "unknown",
+            }],
+        }))
+        .unwrap();
+        serde_json::from_value::<WorkspaceListEnvelope>(full.clone())
+            .expect("the control case must parse, or this test pins nothing");
+
+        let mut absent = full.clone();
+        absent["workspaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("label");
+        let mut null = full.clone();
+        null["workspaces"][0]["label"] = Value::Null;
+        // And a response that is not a `workspace_list` at all. `session/list`
+        // degrades this to "nothing owned" (see `unreadable_is_empty`); what
+        // is pinned here is only that it does not *parse*.
+        let wrong_shape = json!({ "type": "ok" });
+
+        for bad in [absent, null, wrong_shape] {
+            let parsed: Result<WorkspaceListEnvelope, _> = serde_json::from_value(bad.clone());
+            assert!(parsed.is_err(), "must not deserialize: {bad}");
+        }
     }
 
     #[test]
     fn a_token_owns_a_workspace_whose_label_says_nothing() {
         // #417 D4 renames the workspace to `{repo}: {title}`, which no longer
         // starts with `totsuka `. The token is what keeps it ours.
-        let response = json!({ "type": "workspace_list", "workspaces": [
-            { "workspace_id": "w1", "label": "web: Fix the bug",
-              "tokens": { "totsuka_task": "42", "repo": "web" } },
+        let response = workspace_list(&[
+            json!({ "workspace_id": "w1", "label": "web: Fix the bug",
+                    "tokens": { "totsuka_task": "42", "repo": "web" } }),
             // An empty token value is not a task id.
-            { "workspace_id": "w2", "label": "scratch", "tokens": { "totsuka_task": "" } },
-            { "workspace_id": "w3", "label": "scratch", "tokens": { "repo": "web" } },
-        ]});
-        let owned = owned_workspaces(&response);
+            json!({ "workspace_id": "w2", "label": "scratch",
+                    "tokens": { "totsuka_task": "" } }),
+            json!({ "workspace_id": "w3", "label": "scratch", "tokens": { "repo": "web" } }),
+        ]);
+        let owned = owned_workspaces(&response.workspaces);
         assert_eq!(owned.tokens.get("w1").copied(), Some("42"));
         assert_eq!(owned.tokens.len(), 1, "{owned:?}");
         assert!(

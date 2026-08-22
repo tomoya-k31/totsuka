@@ -7,6 +7,8 @@
 
 use plugin_protocol::methods::AgentState;
 
+use crate::wire::result::AgentStatus;
+
 /// Map a herdr `agent_status` to the totsuka normalized state (F-32).
 ///
 /// `unknown` has no totsuka equivalent, so the previous state is retained
@@ -15,14 +17,22 @@ use plugin_protocol::methods::AgentState;
 /// state; task **completion** no longer flows through here — it is reported by
 /// Claude Code's hooks (#131), and the state stream is a `pane.exited` deadman
 /// (see `agent::start_state_stream`).
-pub fn map_agent_status(status: &str, previous: AgentState) -> AgentState {
+pub fn map_agent_status(status: AgentStatus, previous: AgentState) -> AgentState {
     match status {
-        "idle" => AgentState::Idle,
-        "working" => AgentState::Running,
-        "blocked" => AgentState::WaitingInput,
-        "done" => AgentState::Done,
-        // `unknown` (and any status herdr adds later) holds the last known state.
-        _ => previous,
+        AgentStatus::Idle => AgentState::Idle,
+        AgentStatus::Working => AgentState::Running,
+        AgentStatus::Blocked => AgentState::WaitingInput,
+        AgentStatus::Done => AgentState::Done,
+        // `unknown` holds the last known state — herdr reports it for a pane it
+        // has nothing to say about, which is not the same as "the agent went
+        // idle".
+        AgentStatus::Unknown => previous,
+        // So does a status this build has never seen. Since ADR-0055 that case
+        // has a **name** rather than being the `_` arm of a string match: the
+        // generated enum's `#[serde(other)]` variant. herdr adding a status is
+        // an addition, and additions must not fail a read (nor silently move
+        // a task's state).
+        AgentStatus::Unrecognized => previous,
     }
 }
 
@@ -72,15 +82,31 @@ mod tests {
     #[test]
     fn maps_every_agent_status() {
         let prev = AgentState::Running;
-        assert_eq!(map_agent_status("idle", prev), AgentState::Idle);
-        assert_eq!(map_agent_status("working", prev), AgentState::Running);
-        assert_eq!(map_agent_status("blocked", prev), AgentState::WaitingInput);
-        assert_eq!(map_agent_status("done", prev), AgentState::Done);
-        // unknown holds the previous state, not a spurious transition.
-        assert_eq!(map_agent_status("unknown", prev), AgentState::Running);
+        assert_eq!(map_agent_status(AgentStatus::Idle, prev), AgentState::Idle);
         assert_eq!(
-            map_agent_status("unknown", AgentState::Idle),
+            map_agent_status(AgentStatus::Working, prev),
+            AgentState::Running
+        );
+        assert_eq!(
+            map_agent_status(AgentStatus::Blocked, prev),
+            AgentState::WaitingInput
+        );
+        assert_eq!(map_agent_status(AgentStatus::Done, prev), AgentState::Done);
+        // unknown holds the previous state, not a spurious transition.
+        assert_eq!(
+            map_agent_status(AgentStatus::Unknown, prev),
+            AgentState::Running
+        );
+        assert_eq!(
+            map_agent_status(AgentStatus::Unknown, AgentState::Idle),
             AgentState::Idle
+        );
+        // So does a status herdr added after this build was generated. The
+        // arm has a name now (`Unrecognized`) instead of being a `_` on a
+        // string match, so "we do not know" cannot be mistaken for "idle".
+        assert_eq!(
+            map_agent_status(AgentStatus::Unrecognized, prev),
+            AgentState::Running
         );
     }
 
