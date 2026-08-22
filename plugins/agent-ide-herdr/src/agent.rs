@@ -427,8 +427,16 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// workspace's, which for a hook-capable dispatch is the Orchestrator's
     /// hook environment — `TOTSUKA_HOOK_TOKEN` included. A pane a human types
     /// into is not where a bearer token belongs
-    /// (`ai-docs/security/hook-security.md`), and a pane made by `pane.split`
-    /// inherits nothing, so simply not passing `env` is what removes it.
+    /// (`ai-docs/security/hook-security.md`), and **a pane made by
+    /// `pane.split` inherits nothing**, which is what keeps it out.
+    ///
+    /// The request does carry `"env": {}` since #519 — the generated
+    /// `PaneSplitParams.env` is a map rather than an `Option`, so an unset env
+    /// is spelled as an empty one. **Zero variables to apply either way**, but
+    /// the distinction matters when reading the wire log: an earlier version of
+    /// this comment said "simply not passing `env` is what removes it", which
+    /// stopped being what the code does. The property is inheritance, not the
+    /// absence of a key.
     ///
     /// **Every failure is a warning, never an error.** The layout is
     /// decoration: a herdr that blips while drawing it must not lose a task
