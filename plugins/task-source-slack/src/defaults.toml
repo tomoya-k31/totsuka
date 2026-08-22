@@ -14,9 +14,15 @@
 # else in totsuka: `{text}`, `{thread_context}` and `{catalog}` carry Slack
 # content chosen by whoever wrote the message.
 #
-# Risk note: everything below is LLM-facing only. A bad override degrades
-# classification (which falls back to the in-thread picker) or produces a
-# weaker draft — it cannot break completion detection, unlike the core prompts.
+# Risk note: a bad override degrades classification (which falls back to the
+# in-thread picker) or produces a weaker draft — it cannot break completion
+# detection, unlike the core prompts.
+#
+# Most keys here are LLM-facing only, but `body_template` and the
+# `body_thread_*` keys render the task body, which a **human** also reads in
+# the pane. That is why they are the one group still written in Japanese while
+# the instructions above them are English (ADR-0054): the instructions are
+# plumbing, the body is what the operator looks at.
 
 [prompts]
 
