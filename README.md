@@ -27,9 +27,10 @@ it back to the source.
 totsuka orchestrates agents; it does not bundle one. Install at least one
 agent IDE and point a workflow at it:
 
-- **[herdr](https://herdr.dev/)** — **0.7.5 or newer is required** (Socket API
-  protocol 17). The plugin checks it during `initialize` and refuses anything
-  older with `CONFIG_INVALID`.
+- **[herdr](https://herdr.dev/)** — **0.7.5 or newer is required**. The plugin
+  reads herdr's own version from `ping` during `initialize` and refuses
+  anything older with `CONFIG_INVALID`. There is no upper bound: a newer herdr
+  is never refused.
 - **[orca](https://www.onorca.dev/)** — driven through the `orca` CLI.
 
 ## Install

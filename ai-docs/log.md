@@ -3,6 +3,7 @@
 ## 2026-08-23
 
 * **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) の herdr 下限ガードを `ping` の `protocol` 整数から **`version` の semver 判定**へ移した（#520 §1、エピック #517）。`protocol` は herdr の**バイナリ client↔server wire 形式**の版で、totsuka が使う NDJSON Socket API を追跡していない — 実測で protocol 17 → 20 の 3 回の bump では totsuka が呼ぶ 22 メソッドが何も変わらず、逆に `custom_status` は protocol 16 → 16 のまま `PaneInfo` から削除された。**下限を課したい対象を追跡していない数値では下限を表現できない**ので、「0.7.5 以降」と言える `version` に置き換えた。上限は設けない（新しい herdr で totsuka が起動できなくなることを設計上禁じる、#517）。通す側の判断は 3 つで、`version` の**欠落**・**semver としてパース不能**・**下限の prerelease**（`0.7.5-rc.1`）はいずれも通す — 未知の形で起動を拒否すると推測が障害になるため、`protocol` 検査が欠落フィールドについて下していた判断をそのまま引き継いだ。**このガードは粗い網**であることを doc comment に明記した: preview ビルドは基底 stable の `version` を名乗るので preview 同士は区別できず、逆に `protocol` は preview ごとに動くが stable 間で動かないことがある。互換の実判定はここではなくコミット済み schema の CI 差分が持つ（#518）。
+* **Update**: [設定リファレンス](/development/config-reference.md) の herdr 下限の記述から `（protocol 17）` を外し、判定が `ping` の `version` の semver 比較であること・**上限が無い**ことを明記した（#520 §1）。生成物の `docs/config-reference.md` / `.ja.md` と、ルートの `README.md` / `README.ja.md`（「Socket API protocol 17 を `initialize` で検査する」と、既に実装されていない機構を主張していた）も同一 PR で追随させた。**削除した機構の説明は、対象名で grep しなかった場所に生き残る** — このリポジトリで繰り返し出ている形なので、下限ガードのように複数箇所で説明される機構を変えたら、実装だけでなく「それが何をしていたか」で全ツリーを grep する。
 
 ## 2026-08-22
 
