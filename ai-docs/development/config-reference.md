@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の plugins/github.toml、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -773,9 +773,10 @@ kind = "task_source"
 
 ソケットの解決順: `socket_path` > `session` 名 > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定 `~/.config/herdr/herdr.sock`。
 
-**herdr は 0.7.5（protocol 17）以降が必要。** それより古い herdr に対しては `initialize` が
+**herdr は 0.7.5 以降が必要。** それより古い herdr に対しては `initialize` が
 `CONFIG_INVALID` で初期化を拒否し、`totsuka config validate` / `doctor` がバージョンを名指しで報告する
-（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-6）。
+（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-6）。判定は **`ping` の `version` の semver
+比較**で、`protocol` 整数は見ない（#520）。**上限は無い** — 新しい herdr を拒否することはない。
 
 ## `[identity]` — サイドバーに出す identity の報告（#417）
 

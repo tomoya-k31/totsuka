@@ -4,17 +4,39 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
 
 # 必要な herdr のバージョン
 
-**herdr 0.7.5 (protocol 17) 以降が必要**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md)）。
-`initialize` が `ping` の `protocol` を検査し、17 未満は `CONFIG_INVALID` で拒否する。
-0.7.4 までとの二重実装は持たない — herdr は CI に入っていないので、2 経路のうち片方は
-誰も走らせないコードになる。
+**herdr 0.7.5 以降が必要**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md)）。
+`initialize` が `ping` の **`version` を semver で検査**し、`0.7.5` 未満は `CONFIG_INVALID` で
+拒否する。0.7.4 までとの二重実装は持たない — herdr は CI に入っていないので、2 経路のうち
+片方は誰も走らせないコードになる。
+
+**上限は無い。** 新しい herdr で totsuka が起動できなくなることは設計上あってはならないので、
+このガードは下限だけを見る（#517）。
+
+**`protocol` 整数は見ない**（#520 で `version` へ移行）。あれは herdr の**バイナリ
+client↔server wire 形式**の版で、totsuka が使う NDJSON Socket API を追跡していない。実測では
+protocol 17 → 20 の 3 回の bump で totsuka が呼ぶ 22 メソッドは何も変わらず、逆に
+`custom_status` は protocol 16 → 16 のまま `PaneInfo` から削除された。**下限は、下限を課したい
+対象を追跡していない数値では表現できない。**
+
+**このガードは粗い網である。** preview ビルドは基底 stable の `version` を名乗る（herdr master の
+`Cargo.toml` は直近タグと同じ版）ので、preview 同士は区別できない。逆に `protocol` は preview
+ごとに動くが stable 間で動かないことがある。**どちらも単独では不完全**なので、互換の実判定は
+ここではなくコミット済み schema の CI 差分が持つ（#518）。
+
+通す側の判断は 3 つ:
+
+| `ping` の `version` | 判定 | 理由 |
+|---|---|---|
+| 欠落 | **通す** | 0.7.1 以降必ずあるフィールドなので、無いのは未知の形。推測で起動拒否すると障害になる |
+| semver としてパース不能 | **通す** | 同上。未知の形であって「古い」証拠ではない |
+| `0.7.5-rc.1`（下限の prerelease） | **通す** | semver 順では `0.7.5` 未満だが、下限のリリースそのもの。粗い網が細かい判定をしない |
 
 # 責務
 
@@ -30,7 +52,7 @@ herdr socket は **JSON-RPC ではなく NDJSON**（1 行 1 メッセージ・`i
 | `state` | herdr `agent_status`→totsuka 正規化状態の写像（`working→running`・`blocked→waiting_input`・`done→done`・`unknown→前値維持`, F-32。**`session/attach` 専用**の写像で、タスク完了はもはやここを通らない — 完了検知はフックが担う）、`(pane_id, agent_session_id)` 復帰ハンドルの `session_id` 文字列へのエンコード（F-37）。**`squash_ws`（折り返し非依存の画面照合ヘルパ）は `agent.prompt` への移行で消滅**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-5）。**質問/回答の画面抽出（旧 `extract_question` / `extract_answer`）は完了判定のフック移行に伴い削除**（#131） |
 | `transport` | `HerdrTransport` trait（`call` / `subscribe_events` / `events`）＋ `SocketTransport`。herdr の接続モデルに合わせ **リクエストごとに新規接続**（`call`）+ `events.subscribe` 専用の持続接続（reader タスクが `{event, data}` 封筒を broadcast へ転送）。broadcast はプロセス内の全購読で共有されるため、EOF 時の合成 close イベントは**購読対象 pane ごとに `data.pane_id` 付きで**発行し、他タスクを巻き込まない。`invalid_request` の `id:""` エラーも接続単位で相関。ロジックを fake herdr でテストするための seam |
 | `agent` | `HerdrAgent<T: HerdrTransport>`。`dispatch`（`workspace.create`（`env` 付き）→**`apply_layout` = `pane.split`（#356）**→`agent.start {name, kind, pane_id: root_pane, args}`→`agent.prompt`→ハンドル返却, F-31/F-37。呼び出し列と各段の理由は下記）。**プロンプトは `compose_prompt` = `extra_context`（前文）＋ body（無ければ title）**: source が切り詰めた snippet title は body があるとき打たない（ペイン先頭の切れた重複行をなくす）。string の `extra_context`（フック非対応 dispatch 用の可視フォールバック。フック付き dispatch では通常 `None` — 指示文は env `TOTSUKA_PROMPT_CONTEXT` 経由の不可視注入で届く）は JSON 引用符なしの生テキストとして `---` 区切りの**前文**に置く。**protocol 17 で `RetryPolicy` と `submit_prompt` の自己修正手順（#124 / #281）は削除**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-5。`Server::with_retry_policy` / `HerdrAgent::with_retry_policy` も無くなった）。**0.2.3（#196, [ADR-0014](/decisions/adr-0014-tool-abstraction.md)）以降は `tool_launch: ToolLaunchSpec` が唯一の起動元**: `args`/`env` をそのまま使い、`program` は**ファイル名を `kind` へ写像**して渡す（`resolve_kind`。protocol 17 が実行ファイルを `kind` から決めるため。CLI フラグ知識は Orchestrator 側）。env は `workspace.create` へ注入され、`--settings` / `--resume` は既に `args` に焼かれている。**0.4.0（#411）で `tool_launch` 不在は `INVALID_PARAMS` エラー**（旧 `launch_command` フォールバックは削除。argv を自作すると `--settings` 無しで起動して完了報告が来ないペインになるため、黙って代替しない））/ `attach`（`pane.get` で pane 生存確認・消失（`pane_not_found`）は `attached:false`, F-37）/ `cancel`（`pane.send_keys ["ctrl+c"]`→`pane.close`→**タスクの workspace も close**（pane id `w1:p2` の接頭辞が workspace id。dispatch が workspace を作る以上、pane だけ閉じると空の workspace が残る）, 冪等）/ `release`（**0.2.1: `session/release`**。完了済みセッションの pane + workspace を ctrl+c なしで閉じる。同一性検証つき — 下記 #210 節, [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）/ `snapshot`（**0.1.3: `diagnostics/snapshot`**。`pane.read`（`recent`）で画面テキストを返す。pane 消失は `text: None` でエラーにしない, R-10）/ `focus`（**0.1.4: `session/focus`**。`pane.get` 生存確認 → `workspace.focus`→`tab.focus`→`pane.focus` の外→内チェーン。pane/コンテナ消失は `focused: false` でエラーにしない, F-94）/ `start_state_stream`（`events.subscribe`→**`pane.exited` デッドマン専用**に縮退。異常終了→`Failed`, F-38） |
-| `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。**`initialize` / `config·validate` が `ping` の `protocol` を検査し、17 未満はバージョンを名指しして拒否**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-6。`protocol` フィールドが無い応答は通す）。応答と push 通知（`state/notification`）を mpsc ラインチャネルへ送出（main が stdout へ、テストはバッファへ排出）。未初期化メソッドは拒否 |
+| `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。**`initialize` / `config·validate` が `ping` の `version` を semver で検査し、`MIN_HERDR_VERSION`（0.7.5）未満はバージョンを名指しして拒否**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-6。#520 で `protocol` 整数から移行。`version` の欠落・パース不能・下限の prerelease は通す。上限は無い）。応答と push 通知（`state/notification`）を mpsc ラインチャネルへ送出（main が stdout へ、テストはバッファへ排出）。未初期化メソッドは拒否 |
 | `main` | `#[tokio::main]`。専用 writer タスクが stdout を単独所有し、応答と通知が行途中で交錯しないよう直列化。stdin ループが `SocketFactory`（実ソケット接続）を配線 |
 
 # dispatch の呼び出し列（protocol 17, [ADR-0032](/decisions/adr-0032-herdr-protocol-17.md)）

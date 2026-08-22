@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:78eaa47f947380a6876c3c72b5f8f818c57aa65c359138dbb3f1b23ec1b2c9d8 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:5e9ab1f73d1a033608e51ac938662a0f4e85ae6f217176cc83b85fed1bcbb905 -->
 
 # Configuration reference
 
@@ -673,7 +673,7 @@ Things to know:
 
 Socket resolution order: `socket_path`, then `session`, then `HERDR_SOCKET_PATH`, then `HERDR_SESSION`, then the default path.
 
-**herdr 0.7.5 or newer is required.** Against anything older, initialization is refused and `config validate` and `doctor` name the version.
+**herdr 0.7.5 or newer is required.** Against anything older, initialization is refused and `config validate` and `doctor` name the version. The check reads herdr's own version, and **there is no upper bound** — a newer herdr is never refused.
 
 ### `[identity]`
 

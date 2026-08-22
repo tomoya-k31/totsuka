@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:78eaa47f947380a6876c3c72b5f8f818c57aa65c359138dbb3f1b23ec1b2c9d8 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:5e9ab1f73d1a033608e51ac938662a0f4e85ae6f217176cc83b85fed1bcbb905 -->
 
 # 設定リファレンス
 
@@ -674,7 +674,7 @@ kind = "task_source"
 
 ソケットの解決順は `socket_path` > `session` > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定パス。
 
-**herdr は 0.7.5 以降が必要。** それより古い herdr に対しては初期化を拒否し、`config validate` と `doctor` がバージョンを名指しで報告する。
+**herdr は 0.7.5 以降が必要。** それより古い herdr に対しては初期化を拒否し、`config validate` と `doctor` がバージョンを名指しで報告する。検査は herdr 自身のバージョンを読むもので、**上限は無い** — 新しい herdr を拒否することはない。
 
 ### `[identity]`
 

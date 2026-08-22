@@ -29,9 +29,10 @@ totsuka はエージェントをオーケストレーションするツールで
 同梱しません。いずれかの agent IDE を別途インストールし、ワークフローから
 指定してください。
 
-- **[herdr](https://herdr.dev/)** — **0.7.5 以降が必要**（Socket API protocol
-  17）。プラグインが `initialize` で検査し、それ未満は `CONFIG_INVALID` で
-  拒否します。
+- **[herdr](https://herdr.dev/)** — **0.7.5 以降が必要**。プラグインが
+  `initialize` で herdr 自身のバージョン（`ping` の `version`）を検査し、
+  それ未満は `CONFIG_INVALID` で拒否します。上限はありません — 新しい herdr を
+  拒否することはありません。
 - **[orca](https://www.onorca.dev/)** — `orca` CLI 経由で駆動します。
 
 ## インストール

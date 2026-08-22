@@ -154,7 +154,7 @@ impl<F: TransportFactory> Server<F> {
         // `invalid_request: missing field 'kind'` on a task that had already
         // been ingested, had a worktree cut for it, and failed — an error at
         // `initialize` is one `totsuka doctor` away instead.
-        if let Err(e) = check_herdr_protocol(&transport).await {
+        if let Err(e) = check_herdr_version(&transport).await {
             return self.send(Response::error(
                 id,
                 Error::new(error_code::CONFIG_INVALID, e.to_string()),
@@ -180,13 +180,13 @@ impl<F: TransportFactory> Server<F> {
         };
         let mut errors = Vec::new();
         // Connectivity is the meaningful check (F-59): can we reach herdr and
-        // does it answer `ping`? Since ADR-0032 the same answer also carries
-        // the protocol version, so the version check costs no extra round trip
-        // and `totsuka config validate` reports a too-old herdr by name.
+        // does it answer `ping`? The same answer also carries herdr's version,
+        // so the floor check costs no extra round trip and
+        // `totsuka config validate` reports a too-old herdr by name.
         match self.connect(&config).await {
             Ok(transport) => match transport.call("ping", json!({})).await {
                 Ok(pong) => {
-                    if let Err(e) = check_protocol_version(&pong) {
+                    if let Err(e) = check_version(&pong) {
                         errors.push(e.to_string());
                     }
                 }
@@ -369,44 +369,79 @@ fn capabilities_result() -> Value {
     })
 }
 
-/// The oldest herdr Socket API protocol this plugin can drive
-/// ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-6).
+/// The oldest herdr this plugin can drive, as a semver over `ping`'s `version`
+/// ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-6,
+/// re-expressed for #520).
 ///
-/// 17 is where `agent.start` became manifest-driven and `agent.send` was
+/// 0.7.5 is where `agent.start` became manifest-driven and `agent.send` was
 /// replaced by `agent.prompt`. Everything older needs the pre-ADR-0032 dispatch
 /// path, which is not kept: a second path would be one that CI never runs
 /// (herdr is not in CI, §9), and the two differ in pane ownership, env
 /// injection and prompt submission at once — there is almost nothing to share.
-const MIN_HERDR_PROTOCOL: u64 = 17;
+const MIN_HERDR_VERSION: semver::Version = semver::Version::new(0, 7, 5);
 
-/// Ask herdr its protocol version and refuse anything older than
-/// [`MIN_HERDR_PROTOCOL`].
+/// Ask herdr its version and refuse anything older than [`MIN_HERDR_VERSION`].
 ///
 /// A `ping` that fails is **not** treated as a version problem: `connect`
 /// already proved the socket, so a failure here is herdr misbehaving, and
 /// reporting it as "upgrade herdr" would send the operator after the wrong
 /// thing.
-async fn check_herdr_protocol<T: HerdrTransport>(transport: &T) -> Result<(), HerdrError> {
+async fn check_herdr_version<T: HerdrTransport>(transport: &T) -> Result<(), HerdrError> {
     let pong = transport.call("ping", json!({})).await?;
-    check_protocol_version(&pong)
+    check_version(&pong)
 }
 
-/// The version half of [`check_herdr_protocol`], over a `ping` response.
+/// The version half of [`check_herdr_version`], over a `ping` response.
 ///
-/// **A `ping` with no `protocol` field passes.** The field has been there since
-/// at least 0.7.1, so its absence means a herdr shaped differently from any this
-/// plugin has seen — and refusing to start on an unknown shape would turn a
-/// guess into an outage, while the dispatch path fails loudly on its own if the
-/// guess was wrong.
-fn check_protocol_version(pong: &Value) -> Result<(), HerdrError> {
-    let Some(protocol) = pong.get("protocol").and_then(Value::as_u64) else {
+/// # Why `version` and not `protocol`
+///
+/// `ping` also carries a `protocol` integer, and this check used to read it.
+/// That integer versions herdr's **binary client↔server wire format**
+/// (`src/protocol/wire.rs` upstream), not the NDJSON Socket API this plugin
+/// speaks, and measurement across five releases showed it missing in both
+/// directions: protocol went 17 → 20 over three bumps that changed nothing in
+/// the 22 methods used here, while `custom_status` was **removed** from
+/// `PaneInfo` at a steady protocol 16. A floor cannot be stated in a number
+/// that does not track the thing being floored — `version` can say
+/// "0.7.5 or newer" about the release where `agent.prompt` appeared.
+///
+/// # Known limits of this net
+///
+/// Neither field is complete on its own. A **preview build reports the base
+/// stable `version`** (upstream's `Cargo.toml` carries the last tag), so
+/// previews are indistinguishable from the stable they sit on here; `protocol`
+/// does move per preview but, as above, stands still across stables. This guard
+/// is therefore deliberately a **coarse net** — it catches "far too old" and
+/// nothing finer. Real compatibility is decided by the committed API schemas
+/// and their CI diff (#518), not here.
+///
+/// # What passes
+///
+/// **A `ping` with no `version`, or one that is not semver, passes.** The field
+/// has been there since at least 0.7.1, so its absence means a herdr shaped
+/// differently from any this plugin has seen — and refusing to start on an
+/// unknown shape would turn a guess into an outage, while the dispatch path
+/// fails loudly on its own if the guess was wrong. This keeps the exact
+/// judgement the `protocol` check made about a missing field.
+///
+/// **A prerelease of the floor passes too** (`0.7.5-rc.1` is not refused).
+/// Semver orders it below `0.7.5`, but for this purpose it is the floor
+/// release, and refusing it would again be the coarse net making a fine call.
+fn check_version(pong: &Value) -> Result<(), HerdrError> {
+    let Some(raw) = pong.get("version").and_then(Value::as_str) else {
         return Ok(());
     };
-    if protocol < MIN_HERDR_PROTOCOL {
+    let Ok(version) = semver::Version::parse(raw) else {
+        return Ok(());
+    };
+    // Compare on the release triple only — see "a prerelease of the floor
+    // passes" above.
+    let released = semver::Version::new(version.major, version.minor, version.patch);
+    if released < MIN_HERDR_VERSION {
         return Err(HerdrError::InvalidResponse(format!(
-            "herdr speaks protocol {protocol}, but this plugin needs {MIN_HERDR_PROTOCOL} or \
-             newer (herdr 0.7.5+): protocol 17 changed `agent.start` and replaced `agent.send` \
-             with `agent.prompt` → run `herdr update`, then `herdr status` to confirm"
+            "herdr {raw} is older than the {MIN_HERDR_VERSION} this plugin needs: 0.7.5 made \
+             `agent.start` manifest-driven and replaced `agent.send` with `agent.prompt` \
+             → run `herdr update`, then `herdr status` to confirm"
         )));
     }
     Ok(())

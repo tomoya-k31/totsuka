@@ -8,7 +8,7 @@
 //!   `task/cancel`, `session/attach`, `state/subscribe` → streamed
 //!   `state/notification`.
 //! - **herdr side** ([`transport`]): NDJSON over a Unix socket (**not** JSON-RPC),
-//!   dotted methods (`workspace.create`, `agent.start`, `agent.send`,
+//!   dotted methods (`workspace.create`, `agent.start`, `agent.prompt`,
 //!   `pane.read`, `events.subscribe`, …), one request per connection.
 //!
 //! [`agent::HerdrAgent`] holds the mapping logic behind a
