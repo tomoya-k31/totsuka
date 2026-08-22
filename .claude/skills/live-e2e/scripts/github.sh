@@ -110,13 +110,20 @@ for i in json.load(sys.stdin)["items"]:
   ;;
 seed)
   st="${3:-Todo}"; r="$(repo_of "$1")"; n="$2"
-  set_status "$r" "$n" "$st"
-  # **`wait` のための基準時刻を残す。** これが無いと `wait` は「この issue の
-  # タスク」を正しく見つけたうえで、それが**前回の実行の done タスク**でも
-  # 即座に成功と報告する（使い回しの issue で必ず起きる）。seed の時刻より後に
-  # 動いたタスクだけを受け付けさせるためのファイル。
+  # **`wait` のための基準時刻を、Status を倒す「前」に残す。**
+  #
+  # これが無いと `wait` は「この issue のタスク」を正しく見つけたうえで、それが
+  # **前回の実行の done タスク**でも即座に成功と報告する（使い回しの issue で
+  # 必ず起きる）。
+  #
+  # 順序が重要で、`set_status` の**後**に書くと取りこぼす: `set_status` は
+  # GraphQL を数往復するので数秒かかり、その間に poll（既定 15 秒間隔）が
+  # 走ると、**本物のタスクの `updated_at` が基準より前**になって STALE 扱いに
+  # なる。先に書けば基準は必ず取り込みより前になる — 誤って**古いほうへ倒れる**
+  # ことはあっても、**新しいものを取りこぼすことはない**。
   mkdir -p "$E2E_HOME/state/live-e2e"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$E2E_HOME/state/live-e2e/seed-$r-$n"
+  set_status "$r" "$n" "$st"
   echo "$r#$n → $st"
   ;;
 clear) set_status "$(repo_of "$1")" "$2" --;  echo "$(repo_of "$1")#$2 → (none)";;
