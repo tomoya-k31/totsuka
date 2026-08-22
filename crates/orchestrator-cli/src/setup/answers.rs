@@ -176,6 +176,32 @@ pub struct Answers {
     /// GitHub Project coordinates, when the recipe asks for them.
     #[serde(default)]
     pub github: Option<GitHubAnswer>,
+    /// Project status column names, keyed by the recipe's
+    /// [`StatusSlot::key`](super::recipes::StatusSlot::key).
+    ///
+    /// **`ANSWERS_VERSION` deliberately does not move for this.** A file
+    /// written before the interview asked has no `statuses`, and rather than
+    /// being filled in from a default it is **refused by name**, listing the
+    /// keys to add. The version guards changes that make an old file mean
+    /// something *different*; refusing to read one is stricter, not different.
+    /// Do not "fix" the version here.
+    ///
+    /// The alternative — falling back to a declared default — was rejected on
+    /// purpose: it would write column names the operator never chose, and a
+    /// column name that does not exist on the board fails silently (valid
+    /// config, green `doctor`, a `run` that picks nothing up). That is the
+    /// failure this whole change removes; leaving it on the replay path would
+    /// have kept it exactly where the playbook sends a second machine.
+    ///
+    /// A `BTreeMap`, not a `HashMap`: `--save-answers` writes this file into a
+    /// dotfiles repository, and a hash order would churn the diff on every
+    /// regeneration.
+    ///
+    /// A map rather than named fields because the slots belong to the recipe,
+    /// not to any one plugin: they end up in `config.toml`'s workflows, while
+    /// [`github`](Self::github) describes `plugins/github.toml`.
+    #[serde(default)]
+    pub statuses: std::collections::BTreeMap<String, String>,
 }
 
 /// The version this build writes and accepts.
@@ -235,6 +261,60 @@ pub enum AnswersError {
     NoRepositories {
         /// Path that was tried.
         path: String,
+    },
+    /// A `[statuses]` key the chosen recipe does not declare.
+    ///
+    /// `deny_unknown_fields` only guards struct fields; `statuses` is a map,
+    /// and substitution reads from the **recipe** side, so an unrecognised key
+    /// would be dropped without a word and the declared default written in its
+    /// place — `setup --answers` succeeds, `validate` passes, `doctor` is
+    /// green, and `run` picks nothing up. That is the exact failure this whole
+    /// change exists to remove, so it cannot be left open on the path the
+    /// playbook recommends for a second machine.
+    #[error(
+        "{path} sets status `{found}`, which `{recipe}` does not use → this recipe names: {known}"
+    )]
+    UnknownStatus {
+        /// Path that was tried.
+        path: String,
+        /// Label of the selected recipe.
+        recipe: &'static str,
+        /// The key in the file.
+        found: String,
+        /// The keys the recipe declares, comma-separated.
+        known: String,
+    },
+    /// A `[statuses]` value that cannot name a column.
+    ///
+    /// `contains_key` is not enough: `""` passes every presence check and
+    /// renders `{ project_status = "" }`, which no task can match — a valid
+    /// config, a green `doctor`, and a `run` that picks nothing up. Surrounding
+    /// whitespace does the same thing while *looking* right. Neither is
+    /// silently trimmed: altering what the operator wrote is how a file stops
+    /// meaning what it says.
+    #[error("{path} sets status `{key}` to a value that {reason} → give the column's exact name")]
+    InvalidStatus {
+        /// Path that was tried.
+        path: String,
+        /// The offending key.
+        key: &'static str,
+        /// What is wrong with it.
+        reason: &'static str,
+    },
+    /// A `[statuses]` key the chosen recipe declares but the file omits.
+    #[error(
+        "{path} selects `{recipe}`, which needs status `{missing}` → add it under `[statuses]` \
+         (this recipe names: {known})"
+    )]
+    MissingStatus {
+        /// Path that was tried.
+        path: String,
+        /// Label of the selected recipe.
+        recipe: &'static str,
+        /// The first key that is absent.
+        missing: &'static str,
+        /// Every key the recipe declares, comma-separated.
+        known: String,
     },
     /// The chosen recipe needs a field the file does not set.
     #[error("{path} selects `{recipe}`, which needs `{field}` → add it to the answers file")]
@@ -298,6 +378,61 @@ impl Answers {
                 path: path.to_string(),
             });
         }
+        // Sorted so the message is stable: a `HashMap` would otherwise name
+        // the offending key differently on each run.
+        let mut declared: Vec<&str> = recipe.statuses.iter().map(|s| s.key).collect();
+        declared.sort_unstable();
+        let mut unknown: Vec<&str> = answers
+            .statuses
+            .keys()
+            .map(String::as_str)
+            .filter(|k| !declared.contains(k))
+            .collect();
+        unknown.sort_unstable();
+        if let Some(found) = unknown.first() {
+            return Err(AnswersError::UnknownStatus {
+                path: path.to_string(),
+                recipe: recipe.label,
+                found: (*found).to_string(),
+                known: if declared.is_empty() {
+                    "none — this recipe uses no status columns".to_string()
+                } else {
+                    declared.join(", ")
+                },
+            });
+        }
+        // Unknown before missing, deliberately: a typo trips both, and
+        // "`implement_statuss` is not a key" points at the line to fix, while
+        // "`implement_status` is missing" leaves the operator hunting.
+        if let Some(slot) = recipe
+            .statuses
+            .iter()
+            .find(|slot| !answers.statuses.contains_key(slot.key))
+        {
+            return Err(AnswersError::MissingStatus {
+                path: path.to_string(),
+                recipe: recipe.label,
+                missing: slot.key,
+                known: declared.join(", "),
+            });
+        }
+        for slot in recipe.statuses {
+            let value = &answers.statuses[slot.key];
+            let reason = if value.trim().is_empty() {
+                Some("is empty")
+            } else if value.trim() != value {
+                Some("has leading or trailing whitespace")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return Err(AnswersError::InvalidStatus {
+                    path: path.to_string(),
+                    key: slot.key,
+                    reason,
+                });
+            }
+        }
         for blank in recipe.blanks {
             let filled = match blank {
                 Blank::Llm => answers.llm.is_some(),
@@ -326,6 +461,115 @@ mod tests {
     use super::*;
     use crate::setup::recipes::RECIPES;
 
+    /// A typo'd status key must be refused, not dropped.
+    ///
+    /// `deny_unknown_fields` cannot see into a map, and substitution reads
+    /// from the recipe side, so silently ignoring it would write the default
+    /// and leave the operator with a green `doctor` and a `run` that picks
+    /// nothing up — on the path the playbook recommends for a second machine.
+    #[test]
+    fn an_unrecognised_status_key_is_refused() {
+        let text = r#"
+version = 2
+recipe = "minimal-github-herdr"
+secret_backend = "keychain"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/totsuka"
+
+[github]
+owner = "tomoya-k31"
+owner_type = "user"
+project_number = 1
+github_login = "tomoya-k31"
+
+[statuses]
+implement_statuss = "Ready"
+"#;
+        let err = Answers::from_toml_str("a.toml", text, RECIPES)
+            .expect_err("a key the recipe does not use must be refused");
+        let message = err.to_string();
+        assert!(message.contains("implement_statuss"), "{message}");
+        // The message has to say what the recipe *does* use, or the operator
+        // cannot tell a typo from a key that moved.
+        assert!(message.contains("implement_status"), "{message}");
+    }
+
+    /// Present is not the same as usable.
+    ///
+    /// `""` satisfies `contains_key`, renders `{ project_status = "" }`, and no
+    /// task can ever match it — valid config, green `doctor`, a `run` that
+    /// picks nothing up. Surrounding whitespace does the same while looking
+    /// right on screen.
+    #[test]
+    fn a_status_value_that_cannot_name_a_column_is_refused() {
+        let file = |value: &str| {
+            format!(
+                r#"
+version = 2
+recipe = "minimal-github-herdr"
+secret_backend = "keychain"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/totsuka"
+
+[github]
+owner = "tomoya-k31"
+owner_type = "user"
+project_number = 1
+github_login = "tomoya-k31"
+
+[statuses]
+implement_status = "{value}"
+implement_done_status = "In review"
+"#
+            )
+        };
+        for (value, reason) in [
+            ("", "is empty"),
+            ("   ", "is empty"),
+            (" Todo", "whitespace"),
+        ] {
+            let err = Answers::from_toml_str("a.toml", &file(value), RECIPES)
+                .expect_err(&format!("{value:?} must be refused"));
+            let message = err.to_string();
+            assert!(message.contains("implement_status"), "{message}");
+            assert!(message.contains(reason), "{value:?}: {message}");
+        }
+
+        // …and the same file with a usable value parses, so the check is not
+        // simply refusing everything.
+        Answers::from_toml_str("a.toml", &file("Todo"), RECIPES).expect("a real name is fine");
+    }
+
+    /// A recipe with no status columns must still refuse a `[statuses]` key
+    /// rather than accept a section that does nothing.
+    #[test]
+    fn a_status_key_on_a_recipe_without_columns_is_refused() {
+        let text = r#"
+version = 2
+recipe = "human-sign-off"
+secret_backend = "keychain"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/totsuka"
+
+[github]
+owner = "tomoya-k31"
+owner_type = "user"
+project_number = 1
+github_login = "tomoya-k31"
+
+[statuses]
+implement_status = "Ready"
+"#;
+        let err = Answers::from_toml_str("a.toml", text, RECIPES).expect_err("must be refused");
+        assert!(err.to_string().contains("uses no status columns"), "{err}");
+    }
+
     fn sample() -> Answers {
         Answers {
             version: ANSWERS_VERSION,
@@ -344,6 +588,11 @@ mod tests {
                 project_number: 1,
                 github_login: "tomoya-k31".to_string(),
             }),
+            statuses: RECIPES[0]
+                .statuses
+                .iter()
+                .map(|s| (s.key.to_string(), s.default.to_string()))
+                .collect(),
         }
     }
 
@@ -425,6 +674,10 @@ mod tests {
 
         let mut answers = sample();
         answers.recipe = slack.key.to_string();
+        // The sample carries the *other* recipe's status columns; this one
+        // declares none, so they would be refused as unknown before the blank
+        // check is reached.
+        answers.statuses.clear();
         let err = Answers::from_toml_str("x", &answers.to_toml(), RECIPES).unwrap_err();
         assert!(
             matches!(err, AnswersError::MissingBlank { .. }),

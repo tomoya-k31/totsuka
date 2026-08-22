@@ -262,6 +262,19 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
         }
     }
 
+    // Status columns last: they are the only questions whose right answer is
+    // sitting on screen in another window, and the operator has just been
+    // asked for the board's coordinates.
+    let mut statuses = std::collections::BTreeMap::new();
+    if !recipe.statuses.is_empty() {
+        prompt.say("Name the Project status columns this workflow moves cards between.")?;
+        prompt.say("  Each must match an option in the board's Status field exactly.")?;
+        for slot in recipe.statuses {
+            let answer = prompt.ask(&format!("  {}", slot.prompt), Some(slot.default))?;
+            statuses.insert(slot.key.to_string(), answer);
+        }
+    }
+
     Ok(Answers {
         version: answers::ANSWERS_VERSION,
         recipe: recipe.key.to_string(),
@@ -270,6 +283,7 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
         llm,
         slack_user_id,
         github,
+        statuses,
     })
 }
 
@@ -380,12 +394,35 @@ impl<'a> Plan<'a> {
                 "Workflow: {} — {} → {} ({})\n",
                 workflow.name, workflow.source, workflow.agent, shape
             ));
+            // Show the trigger with the status names already substituted. A
+            // column name that does not exist on the board is the one mistake
+            // here whose symptom is silence — `run` picks nothing up and
+            // `doctor` stays green — so it has to be visible while there is
+            // still a prompt to say no at.
+            //
+            // Printed whether or not the config is written, like the `Repo:`
+            // lines above: an existing file is left untouched, and the `Skip:`
+            // line below says so for every answer at once. Suppressing just
+            // these would make the recipe's answers the only ones asked for
+            // and then shown nowhere.
+            if let Some(trigger) = workflow.trigger {
+                out.push_str(&format!(
+                    "          when {}\n",
+                    resolve_statuses_for_display(trigger, self.recipe, self.answers)
+                ));
+            }
+            if let Some(on_success) = workflow.on_success {
+                out.push_str(&format!(
+                    "          then {}\n",
+                    resolve_statuses_for_display(on_success, self.recipe, self.answers)
+                ));
+            }
         }
         if self.write_config {
             out.push_str(&format!("Write:    {}\n", self.config_path.display()));
         } else {
             out.push_str(&format!(
-                "Skip:     {} already exists (left untouched)\n",
+                "Skip:     {} already exists (left untouched) — nothing above is applied to it\n",
                 self.config_path.display()
             ));
         }
@@ -588,18 +625,27 @@ pub(crate) fn build_config(
         text = set_plugin_enabled(&text, plugin.name, true, Some(plugin.kind))?;
     }
     for workflow in recipe.workflows {
+        // Owned, because the fragments are templates until the answers are
+        // substituted in. `WorkflowDraft` is already lifetime-generic, so it
+        // takes a borrow of these without any signature change.
+        let trigger = workflow
+            .trigger
+            .map(|t| resolve_statuses(t, recipe, answers));
+        let on_success = workflow
+            .on_success
+            .map(|t| resolve_statuses(t, recipe, answers));
         text = upsert_workflow(
             &text,
             &WorkflowDraft {
                 name: workflow.name,
                 source: workflow.source,
-                trigger: workflow.trigger,
+                trigger: trigger.as_deref(),
                 profile: workflow.profile,
                 mode: workflow.mode,
                 agent: workflow.agent,
                 output: workflow.output,
                 verification: workflow.verification,
-                on_success: workflow.on_success,
+                on_success: on_success.as_deref(),
                 on_failure: None,
             },
         )?;
@@ -609,6 +655,39 @@ pub(crate) fn build_config(
         text = set_llm(&text, &llm.base_url, &llm.model, Some(&reference))?;
     }
     Ok(text)
+}
+
+/// Substitute a recipe fragment's `{{…}}` placeholders from the answers.
+///
+/// Both entry points guarantee every declared slot is present: the interview
+/// asks for exactly the ones its recipe declares, and `--answers` is refused
+/// with [`AnswersError::MissingStatus`](answers::AnswersError::MissingStatus)
+/// when one is absent. The `unwrap_or_else` below is therefore unreachable —
+/// it is there so a future third caller degrades to the suggestion rather than
+/// writing a literal `{{…}}`, not as a supported path.
+fn resolve_statuses(fragment: &str, recipe: &Recipe, answers: &Answers) -> String {
+    recipes::render_fragment(fragment, &status_values(recipe, answers))
+}
+
+/// [`resolve_statuses`] for the confirmation screen: the operator's own text,
+/// unescaped (see [`recipes::render_fragment_for_display`]).
+fn resolve_statuses_for_display(fragment: &str, recipe: &Recipe, answers: &Answers) -> String {
+    recipes::render_fragment_for_display(fragment, &status_values(recipe, answers))
+}
+
+fn status_values(recipe: &Recipe, answers: &Answers) -> std::collections::BTreeMap<String, String> {
+    recipe
+        .statuses
+        .iter()
+        .map(|slot| {
+            let value = answers
+                .statuses
+                .get(slot.key)
+                .cloned()
+                .unwrap_or_else(|| slot.default.to_string());
+            (slot.key.to_string(), value)
+        })
+        .collect()
 }
 
 /// Write via a temporary file and rename, so an interrupted write cannot leave
@@ -694,6 +773,75 @@ mod tests {
     use super::*;
     use orchestrator_core::config::RootConfig;
 
+    /// **An answers file written before the interview asked is refused, not
+    /// filled in.**
+    ///
+    /// Falling back to a suggestion would write column names the operator
+    /// never chose, and a name that is not on their board fails silently —
+    /// valid config, green `doctor`, a `run` that picks nothing up. Refusing
+    /// by name is the whole point, so it is pinned by replaying a file in the
+    /// old shape rather than by reasoning.
+    #[test]
+    fn an_answers_file_without_statuses_is_refused_with_the_keys_to_add() {
+        let old_file = r#"
+version = 2
+recipe = "design-implement-handoff"
+secret_backend = "keychain"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/totsuka"
+
+[github]
+owner = "tomoya-k31"
+owner_type = "user"
+project_number = 1
+github_login = "tomoya-k31"
+"#;
+        let err = Answers::from_toml_str("old.toml", old_file, RECIPES)
+            .expect_err("a file with no statuses must be refused");
+        let message = err.to_string();
+        // Naming one key is not enough: the operator has to know the whole set
+        // to add, or they come back four times.
+        for key in [
+            "design_status",
+            "design_done_status",
+            "implement_status",
+            "implement_done_status",
+        ] {
+            assert!(message.contains(key), "`{key}` missing from: {message}");
+        }
+    }
+
+    /// A recipe that uses no status columns is unaffected — an old file for it
+    /// still replays.
+    #[test]
+    fn a_recipe_without_status_columns_still_replays_an_old_file() {
+        let old_file = r#"
+version = 2
+recipe = "human-sign-off"
+secret_backend = "keychain"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/totsuka"
+
+[github]
+owner = "tomoya-k31"
+owner_type = "user"
+project_number = 1
+github_login = "tomoya-k31"
+"#;
+        let answers = Answers::from_toml_str("old.toml", old_file, RECIPES).expect("still parses");
+        let recipe = recipes::by_key("human-sign-off").unwrap();
+        let text = build_config("", &answers, recipe).expect("config builds");
+        assert!(text.contains("migration"), "{text}");
+        assert!(
+            !text.contains("{{"),
+            "no placeholder may reach the config:\n{text}"
+        );
+    }
+
     fn answers_for(recipe: &str) -> Answers {
         Answers {
             version: answers::ANSWERS_VERSION,
@@ -727,6 +875,7 @@ mod tests {
                     project_number: 1,
                     github_login: "tomoya-k31".to_string(),
                 }),
+            statuses: Default::default(),
         }
     }
 

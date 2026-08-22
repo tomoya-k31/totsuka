@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:9c09ccaceda6e9c015e2cf0a51e40e21cbe5dfe7ad7b20cfcf8d6bf3a17d4816 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:1fab1b1a68c3133f226c90b1c82ab9234087e9d351f9a3cb11d450a1c554e244 -->
 
 # Setup playbook
 
@@ -36,12 +36,13 @@ Skip the `xattr` step and Gatekeeper silently kills **plugin startup only**. The
 totsuka setup
 ```
 
-It asks four kinds of question and gets the rest from the recipe you choose.
+It asks up to five kinds of question and gets the rest from the recipe you choose. The last one only comes up for recipes that move cards between status columns.
 
 1. **Which recipe to start from** (minimal GitHub, design-to-implement handoff, Slack replies under your own name, human sign-off required)
 2. **Repository paths and names** (more than one is fine)
 3. **Where to keep secrets** (1Password, Keychain, or environment variables) — it never asks for the values themselves
 4. Whatever the recipe still needs (GitHub Project owner and number, your Slack member ID, the LLM model name)
+5. **The Project status column names**, if the recipe moves cards between them. The suggestions describe what each column is for (`Ready to implement`, and so on); **whatever you enter has to match an option in your board's Status field exactly.** Getting one wrong is the quiet failure here — the configuration is valid, `doctor` stays green, and `run` simply never picks anything up — which is why the plan prints each trigger with the names already filled in. An answers file that leaves these out is **refused, naming the keys to add**, rather than filled in with names you did not choose.
 
 It prints a plan; nothing has side effects until you confirm. **Pressing Ctrl-C during the questions leaves nothing behind.**
 

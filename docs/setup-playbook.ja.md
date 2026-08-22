@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:9c09ccaceda6e9c015e2cf0a51e40e21cbe5dfe7ad7b20cfcf8d6bf3a17d4816 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:1fab1b1a68c3133f226c90b1c82ab9234087e9d351f9a3cb11d450a1c554e244 -->
 
 # セットアップ Playbook
 
@@ -37,12 +37,13 @@ sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 totsuka setup
 ```
 
-聞かれるのは 4 種類だけで、残りはレシピが持っている。
+聞かれるのは最大 5 種類で、残りはレシピが持っている。5 つ目は、Status 列の間でカードを動かすレシピを選んだときだけ出る。
 
 1. **どのレシピから始めるか**（GitHub 最小構成 / 設計→実装ハンドオフ / Slack 本人名義返信 / 人間検収必須）
 2. **リポジトリのパスと名前**（複数可）
 3. **シークレットをどこに置くか**（1Password / Keychain / 環境変数）— **値そのものは一切聞かれない**
 4. レシピが要求する項目だけ（GitHub Project の owner や番号、Slack のメンバー ID、LLM のモデル名など）
+5. **Project の Status 列名**（そのレシピが列を使う場合のみ）。候補は役割を説明する名前（`Ready to implement` など）だが、**入力した値はボードの Status フィールドの選択肢と完全に一致させる必要がある。** ここを間違えたときが一番厄介で、設定は valid のまま `doctor` も緑、`run` が何も拾わないという無言の失敗になる。だから計画には、名前を埋めた後の trigger をそのまま表示する。answers ファイルがこれを欠いている場合は、選んでいない名前で埋めるのではなく**足すべきキー名を名指しして拒否する**。
 
 計画が表示され、確認して初めて副作用が出る。**質問の途中で Ctrl-C しても何も残らない。**
 

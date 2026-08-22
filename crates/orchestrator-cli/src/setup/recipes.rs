@@ -50,6 +50,101 @@ pub struct RecipeWorkflow {
     pub on_success: Option<&'static str>,
 }
 
+/// One Project status column a recipe's workflows name, and what to call it.
+///
+/// The recipes used to write these as literals, in Japanese, because that is
+/// what the author's own board uses. On any other board the trigger matches an
+/// option that does not exist, and the failure is the quiet kind: the config is
+/// valid, `doctor` is green, and `run` simply never picks anything up.
+///
+/// [`key`](Self::key) is the placeholder name; the workflow fragments spell it
+/// `{{key}}` and [`render_fragment`] substitutes it.
+#[derive(Debug, Clone, Copy)]
+pub struct StatusSlot {
+    /// Placeholder name, as it appears inside `{{…}}` in a fragment.
+    pub key: &'static str,
+    /// What the interview asks.
+    pub prompt: &'static str,
+    /// What the interview offers as the suggestion.
+    ///
+    /// **Only a suggestion.** It is not a fallback: an answers file that omits
+    /// a declared slot is refused by name rather than quietly filled in, so
+    /// there is no path where this value stands in for an answer nobody gave.
+    ///
+    /// Names that say what the column is *for*, because no board is guaranteed
+    /// to have them — the operator has to compare each against their own
+    /// board's Status field either way, and a name that describes the role
+    /// makes that comparison possible.
+    pub default: &'static str,
+}
+
+/// Substitute `{{key}}` placeholders in a recipe fragment.
+///
+/// Unknown placeholders are left alone rather than blanked — a literal
+/// `{{foo}}` in someone's config is a visible bug, whereas an empty string
+/// would be a trigger that silently matches nothing. The consistency test
+/// below is what keeps one from ever being written.
+pub fn render_fragment(
+    fragment: &str,
+    statuses: &std::collections::BTreeMap<String, String>,
+) -> String {
+    substitute(fragment, statuses, escape_toml_basic)
+}
+
+/// [`render_fragment`] without the TOML escaping, for showing a fragment to a
+/// person.
+///
+/// The confirmation screen exists so the operator can compare each name against
+/// their board's Status options **character by character**; showing the escaped
+/// form would put backslashes in front of the very characters they are checking.
+/// Nothing here is written to a file.
+pub fn render_fragment_for_display(
+    fragment: &str,
+    statuses: &std::collections::BTreeMap<String, String>,
+) -> String {
+    substitute(fragment, statuses, str::to_string)
+}
+
+fn substitute(
+    fragment: &str,
+    statuses: &std::collections::BTreeMap<String, String>,
+    prepare: impl Fn(&str) -> String,
+) -> String {
+    let mut out = fragment.to_string();
+    for (key, value) in statuses {
+        out = out.replace(&format!("{{{{{key}}}}}"), &prepare(value));
+    }
+    out
+}
+
+/// Escape a value being spliced into a TOML basic string.
+///
+/// The placeholders sit **inside** `"…"` in the fragments, so an unescaped
+/// answer decides the TOML rather than filling it in. A name containing `"`
+/// aborts `setup` with an opaque parse error after every question has been
+/// asked; worse, `Ready", labels = ["x` produces a *syntactically valid*
+/// trigger carrying keys nobody asked for. This is the one hand-built TOML in
+/// setup — `plugin_config` uses typed structs precisely so serialisation
+/// cannot mis-quote.
+fn escape_toml_basic(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // TOML forbids raw control characters in a basic string, so one
+            // left through writes a `config.toml` that fails to parse on the
+            // next read — the same breakage the `"` case is escaped for.
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// A blank the interview has to fill for a recipe.
 ///
 /// A blank exists when a plugin's own config has a **required** field that
@@ -105,6 +200,8 @@ pub struct Recipe {
     pub workflows: &'static [RecipeWorkflow],
     /// Extra questions this recipe needs answered.
     pub blanks: &'static [Blank],
+    /// Project status columns this recipe's fragments name, as `{{key}}`.
+    pub statuses: &'static [StatusSlot],
 }
 
 const HERDR: RequiredPlugin = RequiredPlugin {
@@ -145,12 +242,12 @@ pub const RECIPES: &[Recipe] = &[
     Recipe {
         key: "minimal-github-herdr",
         label: "Minimal — GitHub Projects + herdr",
-        blurb: "One workflow: cards in 実装待ち get implemented and written back.",
+        blurb: "One workflow: cards in your implement column get implemented and written back.",
         plugins: &[GITHUB, HERDR],
         workflows: &[RecipeWorkflow {
             name: "implement",
             source: "github",
-            trigger: Some(r#"{ project_status = "実装待ち" }"#),
+            trigger: Some(r#"{ project_status = "{{implement_status}}" }"#),
             profile: Some(Profile::Implement),
             mode: None,
             agent: "herdr",
@@ -158,40 +255,74 @@ pub const RECIPES: &[Recipe] = &[
             // written back for the status transition to mean anything.
             output: Some(OutputPolicy::Source),
             verification: None,
-            on_success: Some(r#"{ set_status = "レビュー待ち" }"#),
+            on_success: Some(r#"{ set_status = "{{implement_done_status}}" }"#),
         }],
         blanks: &[Blank::GitHub],
+        statuses: &[
+            StatusSlot {
+                key: "implement_status",
+                prompt: "Status column tasks wait in before being implemented",
+                default: "Ready to implement",
+            },
+            StatusSlot {
+                key: "implement_done_status",
+                prompt: "Status column they move to once implemented",
+                default: "In review",
+            },
+        ],
     },
     Recipe {
         key: "design-implement-handoff",
         label: "Design → implement handoff",
-        blurb: "Two stages with a human review in between (設計待ち, then 実装待ち).",
+        blurb: "Two stages — design, then implement — with a human review in between.",
         plugins: &[GITHUB, HERDR],
         workflows: &[
             RecipeWorkflow {
                 name: "design",
                 source: "github",
-                trigger: Some(r#"{ project_status = "設計待ち" }"#),
+                trigger: Some(r#"{ project_status = "{{design_status}}" }"#),
                 profile: Some(Profile::Design),
                 mode: None,
                 agent: "herdr",
                 output: Some(OutputPolicy::Source),
                 verification: None,
-                on_success: Some(r#"{ set_status = "設計レビュー待ち" }"#),
+                on_success: Some(r#"{ set_status = "{{design_done_status}}" }"#),
             },
             RecipeWorkflow {
                 name: "implement",
                 source: "github",
-                trigger: Some(r#"{ project_status = "実装待ち" }"#),
+                trigger: Some(r#"{ project_status = "{{implement_status}}" }"#),
                 profile: Some(Profile::Implement),
                 mode: None,
                 agent: "herdr",
                 output: Some(OutputPolicy::Source),
                 verification: None,
-                on_success: Some(r#"{ set_status = "レビュー待ち" }"#),
+                on_success: Some(r#"{ set_status = "{{implement_done_status}}" }"#),
             },
         ],
         blanks: &[Blank::GitHub],
+        statuses: &[
+            StatusSlot {
+                key: "design_status",
+                prompt: "Status column tasks wait in before being designed",
+                default: "Ready to design",
+            },
+            StatusSlot {
+                key: "design_done_status",
+                prompt: "Status column they move to once designed",
+                default: "Design review",
+            },
+            StatusSlot {
+                key: "implement_status",
+                prompt: "Status column tasks wait in before being implemented",
+                default: "Ready to implement",
+            },
+            StatusSlot {
+                key: "implement_done_status",
+                prompt: "Status column they move to once implemented",
+                default: "In review",
+            },
+        ],
     },
     Recipe {
         key: "slack-reply-as-yourself",
@@ -216,6 +347,7 @@ pub const RECIPES: &[Recipe] = &[
             on_success: None,
         }],
         blanks: &[Blank::SlackUserId, Blank::Llm],
+        statuses: &[],
     },
     Recipe {
         key: "human-sign-off",
@@ -237,12 +369,154 @@ pub const RECIPES: &[Recipe] = &[
             on_success: None,
         }],
         blanks: &[Blank::GitHub],
+        // Triggers on labels, not on a status column.
+        statuses: &[],
     },
 ];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An answer is data, not TOML.
+    ///
+    /// The placeholders sit inside `"…"`, so without escaping a `"` in a
+    /// column name either aborts `setup` after every question or — worse —
+    /// closes the string and adds keys nobody asked for.
+    #[test]
+    fn an_answer_cannot_decide_the_toml_around_it() {
+        let statuses = std::collections::BTreeMap::from([(
+            "implement_status".to_string(),
+            r#"Ready", labels = ["x"#.to_string(),
+        )]);
+        let rendered = render_fragment(r#"{ project_status = "{{implement_status}}" }"#, &statuses);
+
+        // Still one key, and its value is the whole answer verbatim.
+        let table: toml::Table = toml::from_str(&format!("t = {rendered}")).expect("valid TOML");
+        let inner = table["t"].as_table().expect("an inline table");
+        assert_eq!(inner.len(), 1, "no key may be smuggled in: {inner:?}");
+        assert_eq!(
+            inner["project_status"].as_str(),
+            Some(r#"Ready", labels = ["x"#)
+        );
+    }
+
+    /// A control character must not reach the file raw: TOML forbids them in a
+    /// basic string, so the config would fail to parse on the next read.
+    #[test]
+    fn a_control_character_is_escaped_rather_than_written_raw() {
+        let statuses = std::collections::BTreeMap::from([(
+            "implement_status".to_string(),
+            "a\u{7}b".to_string(),
+        )]);
+        let rendered = render_fragment(r#"{ project_status = "{{implement_status}}" }"#, &statuses);
+        assert!(!rendered.contains('\u{7}'), "{rendered}");
+        let table: toml::Table = toml::from_str(&format!("t = {rendered}")).expect("valid TOML");
+        assert_eq!(
+            table["t"].as_table().unwrap()["project_status"].as_str(),
+            Some("a\u{7}b"),
+            "the value must survive the round trip"
+        );
+    }
+
+    /// The confirmation screen shows what the operator typed, not the escaped
+    /// form — that screen exists for a character-by-character comparison.
+    #[test]
+    fn the_display_form_is_not_escaped() {
+        let statuses = std::collections::BTreeMap::from([(
+            "implement_status".to_string(),
+            r#"Say "go""#.to_string(),
+        )]);
+        let shown = render_fragment_for_display(
+            r#"{ project_status = "{{implement_status}}" }"#,
+            &statuses,
+        );
+        assert!(shown.contains(r#"Say "go""#), "{shown}");
+        assert!(!shown.contains('\\'), "{shown}");
+    }
+
+    /// Placeholders and slots must agree **in both directions**.
+    ///
+    /// One direction: a `{{…}}` with no slot is never asked, never
+    /// substituted, and lands in the operator's `config.toml` as a literal
+    /// `{{foo}}` — a trigger that matches nothing.
+    ///
+    /// The other: a slot no fragment uses asks a question whose answer is
+    /// silently discarded, which is worse than not asking, because the
+    /// operator believes they configured something.
+    #[test]
+    fn declared_status_slots_and_placeholders_agree() {
+        fn placeholders(fragment: &str) -> Vec<String> {
+            let mut found = Vec::new();
+            let mut rest = fragment;
+            while let Some(start) = rest.find("{{") {
+                let after = &rest[start + 2..];
+                let Some(end) = after.find("}}") else { break };
+                found.push(after[..end].to_string());
+                rest = &after[end + 2..];
+            }
+            found
+        }
+
+        for recipe in RECIPES {
+            let used: Vec<String> = recipe
+                .workflows
+                .iter()
+                .flat_map(|w| {
+                    w.trigger
+                        .into_iter()
+                        .chain(w.on_success)
+                        .flat_map(placeholders)
+                })
+                .collect();
+            let declared: Vec<&str> = recipe.statuses.iter().map(|s| s.key).collect();
+
+            for key in &used {
+                assert!(
+                    declared.contains(&key.as_str()),
+                    "recipe `{}` writes `{{{{{key}}}}}` but declares no slot for it — it would \
+                     reach the config as a literal",
+                    recipe.key
+                );
+            }
+            for slot in recipe.statuses {
+                assert!(
+                    used.iter().any(|k| k == slot.key),
+                    "recipe `{}` asks for `{}` but no fragment uses it — the answer would be \
+                     discarded",
+                    recipe.key,
+                    slot.key
+                );
+            }
+        }
+    }
+
+    /// What the suggestions render to, spelled out so a change to them is a
+    /// visible diff rather than a quiet one.
+    #[test]
+    fn the_suggested_names_render_into_the_fragments() {
+        let recipe = by_key("design-implement-handoff").expect("recipe");
+        let filled: std::collections::BTreeMap<String, String> = recipe
+            .statuses
+            .iter()
+            .map(|s| (s.key.to_string(), s.default.to_string()))
+            .collect();
+        let rendered: Vec<String> = recipe
+            .workflows
+            .iter()
+            .flat_map(|w| w.trigger.into_iter().chain(w.on_success))
+            .map(|f| render_fragment(f, &filled))
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                r#"{ project_status = "Ready to design" }"#,
+                r#"{ set_status = "Design review" }"#,
+                r#"{ project_status = "Ready to implement" }"#,
+                r#"{ set_status = "In review" }"#,
+            ]
+        );
+    }
 
     #[test]
     fn every_recipe_names_plugins_it_actually_uses() {
