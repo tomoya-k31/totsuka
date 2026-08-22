@@ -30,6 +30,41 @@ source .env && tt doctor
 
 `state-db` の fail は `run` 前なら正常。それ以外の fail は先に潰す。
 
+## 0.5. 【必須】検証対象のプラグインを入れ直す
+
+**`cargo build` はここに効かない。** `tt run` が起動するのは
+`$E2E_HOME/data/totsuka/plugins/<name>/<name>` に**インストール済みのコピー**で、
+`target/debug` でも `target/release` でもない。**これを忘れると、直したはずの
+コードではなく前回インストールした古いバイナリを検収することになる**（実際に、
+昨日ビルドしたプラグインで検収を始めかけた）。
+
+変更したプラグインを入れ直す:
+
+```bash
+source .env && tt plugin install --from-source --yes herdr
+```
+
+- 引数は**プラグイン名**（`herdr` / `slack` / `github` / `notion` / `orca` / `macos`）。
+  ディレクトリパスを渡すと `is not a plugin in <checkout>` で落ちる
+- `--from-source` は checkout から `cargo build --release` して入れる。
+  Orchestrator 本体（`totsuka`）は `E2E_TOTSUKA_BIN` が指すものがそのまま使われるので、
+  そちらを変えたときは `cargo build` するだけでよい
+
+**新しさは時刻で確かめる。** 「入れ直したつもり」が一番危ない:
+
+```bash
+plug=plugins/agent-ide-herdr
+installed=$(stat -f %m "$E2E_HOME/data/totsuka/plugins/herdr/herdr")
+newest_src=$(find "$plug" -name '*.rs' -o -name '*.toml' | xargs stat -f %m | sort -n | tail -1)
+[ "$installed" -ge "$newest_src" ] && echo "OK: install はソースより新しい" || echo "NG: 入れ直してください"
+```
+
+**比較先は「そのプラグインのソースの mtime」であって HEAD ではない。** HEAD の
+committer date と比べると、**コミットせずに編集した場合に一切効かない** — live-e2e の
+デバッグで一番踏みやすい「直す → 入れ直さずに再実行」がまさにそれである。
+逆に `git rebase main` は committer date を現在時刻へ振り直すので、本当に新しい
+install を「古い」と誤判定もする。
+
 ## 1. 【手動】常駐プロセスを起動してもらう
 
 **エージェントからは起動できない。** 設定が `op://`（1Password）を参照しており、`op read` は
@@ -94,6 +129,38 @@ bash .claude/skills/live-e2e/scripts/report.sh
 | herdr の pane レイアウト | `[layout]` の見た目（分割方向・比率） |
 | plan モードの設計プレビュー | 画面表示 |
 | macOS 通知センターの通知 | notifier の配送結果 |
+
+## GitHub のレート制限
+
+**GraphQL は 5000 points/時。** 使い切ると 1 時間止まる（実際にやった）。実測値:
+
+| 操作 | コスト | 備考 |
+|---|---|---|
+| task_source の poll | **2 points**（Project #7 / 62 items / 2 ページ） | 60s 間隔で 120 points/h ＝ 2.4% |
+| `github.sh` の `seed`（`set_status`） | 初回 212 / **新しい issue では 103** / 同じ item の 2 回目以降 1 | project・field id はプロジェクト単位、item id は **item 単位** |
+| `github.sh` の `verify` | **102 points**（Status は可変なのでキャッシュ不可） | |
+
+**poll を詰めても割に合わない。** 15s にすると 480 points/h（9.6%）を払って、縮まる
+待ち時間は 1 回あたり平均 22 秒しかない。`poll_interval_secs` は**既定の 60s のまま**にする。
+
+**S1 を 1 周する実際の消費**は、初回 314 points（seed 212 + verify 102）、2 周目以降は
+205（seed 103 + verify 102）。S1 の手順が使う `prime-item` で seed 側の 102 を消せば
+**103 まで下がる**。「1 point になる」のは同じ item へ繰り返し打ったときだけで、
+毎回新しい issue を作る S1 では当たらない。
+
+キャッシュを消すべきとき（Status option を**編集または追加**した／item を Project から
+外して入れ直した／同じ owner で Project を作り直した）。**迷ったら消してよい** —
+初回の 200 points を払い直すだけ:
+
+```bash
+rm -rf "$E2E_HOME/state/live-e2e/cache"
+```
+
+残量はいつでも見られる:
+
+```bash
+gh api graphql -f query='{ rateLimit { remaining limit } }' --jq .data.rateLimit
+```
 
 ## 後始末
 
