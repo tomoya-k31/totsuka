@@ -14,9 +14,15 @@
 # else in totsuka: `{text}`, `{thread_context}` and `{catalog}` carry Slack
 # content chosen by whoever wrote the message.
 #
-# Risk note: everything below is LLM-facing only. A bad override degrades
-# classification (which falls back to the in-thread picker) or produces a
-# weaker draft — it cannot break completion detection, unlike the core prompts.
+# Risk note: a bad override degrades classification (which falls back to the
+# in-thread picker) or produces a weaker draft — it cannot break completion
+# detection, unlike the core prompts.
+#
+# Most keys here are LLM-facing only, but `body_template` and the
+# `body_thread_*` keys render the task body, which a **human** also reads in
+# the pane. That is why they are the one group still written in Japanese while
+# the instructions above them are English (ADR-0054): the instructions are
+# plumbing, the body is what the operator looks at.
 
 [prompts]
 
@@ -26,9 +32,11 @@
 #
 # Placeholders: none.
 reply_instructions = """
-以下の Slack メンションへの返信案を日本語で作成してください。対象リポジトリを調査し、根拠を持って回答してください。出力は返信文のみとし、前置き・後書き・説明を含めないでください。\
-このタスクの成果物は返信文だけです。コードの変更・コミット・Pull Request の作成は行わないでください。\
-実装が必要だと分かった場合も実装は試みず、何をどう変更すべきかの方針を返信文に書いてください。\
+Draft a reply to the Slack mention below. Investigate the target repository and answer with evidence. \
+Write the reply in the same language as the thread. \
+Output the reply text only, with no preamble, no postscript and no commentary. \
+The reply text is the only deliverable of this task. Do not change code, do not commit, and do not open a pull request. \
+Even if you conclude that an implementation is needed, do not attempt it: write what should change and how, in the reply.\
 """
 
 # Sent when the matched workflow's profile is `implement` (#398) — the reaction
@@ -44,9 +52,11 @@ reply_instructions = """
 #
 # Placeholders: none.
 implement_instructions = """
-このスレッドで合意された方針に従って実装し、Pull Request を作成してください。\
-完了後、Slack スレッドへの報告文を出力してください。報告文には**作成した Pull Request の URL を必ず含めてください**（Orchestrator は PR を作らないため、URL を知る手段がこの報告文以外にありません）。\
-出力は報告文のみとし、前置き・後書き・説明を含めないでください。\
+Implement what this thread agreed on, then open a pull request. \
+When you are done, output a report for the Slack thread. The report MUST contain the URL of the pull request you \
+created — the orchestrator does not open pull requests, so this report is the only way the thread learns the URL. \
+Write the report in the same language as the thread. \
+Output the report only, with no preamble, no postscript and no commentary.\
 """
 
 # Sent when the matched workflow's profile is `triage` (#450) — the `:books:`
@@ -65,10 +75,11 @@ implement_instructions = """
 #
 # Placeholders: none.
 triage_instructions = """
-このスレッドの内容を読み、必要な作業を整理して GitHub Issue として起票してください。\
-リポジトリのコードは変更しないでください。\
-完了後、Slack スレッドへの報告文を出力してください。報告文には**起票した Issue の URL を必ず含めてください**（Orchestrator は起票を行わないため、URL を知る手段がこの報告文以外にありません）。\
-出力は報告文のみとし、前置き・後書き・説明を含めないでください。\
+Read this thread, work out what has to be done, and file it as a GitHub issue. Do not change the repository's code. \
+When you are done, output a report for the Slack thread. The report MUST contain the URL of the issue you filed — \
+the orchestrator does not file issues, so this report is the only way the thread learns the URL. \
+Write both the issue and the report in the same language as the thread. \
+Output the report only, with no preamble, no postscript and no commentary.\
 """
 
 # Appended to `reply_instructions` only when `reply_style` is set in
@@ -78,7 +89,7 @@ triage_instructions = """
 # Placeholders: {style}
 reply_style_suffix = """
 
-返信スタイル: {style}\
+Reply style: {style}\
 """
 
 # The visible task body: what the pane shows.

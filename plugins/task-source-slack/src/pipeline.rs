@@ -1382,16 +1382,16 @@ mod tests {
         let (task, _pending) = build_task(&config, &enriched("300.0"), None);
 
         let instructions = task.instructions.expect("instructions are set");
-        assert!(instructions.contains("返信案を日本語で作成してください"));
-        assert!(instructions.contains("返信スタイル: 簡潔・断定調"));
+        assert!(instructions.contains("Draft a reply to the Slack mention"));
+        assert!(instructions.contains("Reply style: 簡潔・断定調"));
 
         let body = task.body.expect("body is set");
         assert!(body.starts_with("## メンション\n"), "body: {body}");
         assert!(
-            !body.contains("返信案を日本語で作成"),
+            !body.contains("Draft a reply to the Slack mention"),
             "no directive in body"
         );
-        assert!(!body.contains("返信スタイル"), "no style in body");
+        assert!(!body.contains("Reply style:"), "no style in body");
     }
 
     /// One `EnrichedMention` per profile shape, differing only in what the
@@ -1429,25 +1429,25 @@ mod tests {
         // triage: prefixed, but the deliverable is an issue — not a PR.
         let triage = instructions_for(Some("books"), Some("triage"));
         assert!(
-            triage.contains("GitHub Issue として起票"),
+            triage.contains("file it as a GitHub issue"),
             "triage must be told to file an issue: {triage}"
         );
         assert!(
-            !triage.contains("方針に従って実装し"),
+            !triage.contains("Implement what this thread agreed on"),
             "triage must NOT be told to implement — this is #450: {triage}"
         );
 
         // implement: prefixed too, and this one really is a PR run.
         let implement = instructions_for(Some("impl"), Some("implement"));
         assert!(
-            implement.contains("方針に従って実装し"),
+            implement.contains("Implement what this thread agreed on"),
             "implement keeps its directive: {implement}"
         );
 
         // answer / plain mention: no prefix, no kind → the reply draft.
         let answer = instructions_for(None, None);
         assert!(
-            answer.contains("返信案を日本語で作成"),
+            answer.contains("Draft a reply to the Slack mention"),
             "the catch-all still drafts a reply: {answer}"
         );
 
@@ -1456,9 +1456,9 @@ mod tests {
         // without a kind (an older core) does the same — neither may silently
         // resolve to "implement".
         //
-        // The negative markers are the *distinctive openings*, not the phrase
-        // "Pull Request を作成": the reply directive legitimately contains a
-        // conditional "PR を作成した場合は URL を含めて" clause, so matching on
+        // The negative markers are the *distinctive openings*, not a phrase
+        // like "pull request": every one of the three directives mentions one
+        // (`reply` to forbid it, `implement` to require it), so matching on
         // that would assert something weaker than intended.
         // `design` leads this list because a **current** core sends it: it is
         // the one unhandled kind actually reachable today
@@ -1474,9 +1474,9 @@ mod tests {
         ] {
             let degraded = instructions_for(prefix, kind);
             assert!(
-                degraded.contains("返信案を日本語で作成")
-                    && !degraded.contains("方針に従って実装し")
-                    && !degraded.contains("GitHub Issue として起票"),
+                degraded.contains("Draft a reply to the Slack mention")
+                    && !degraded.contains("Implement what this thread agreed on")
+                    && !degraded.contains("file it as a GitHub issue"),
                 "unknown/absent kind must fall back to the reply draft ({prefix:?}, {kind:?}): {degraded}"
             );
         }

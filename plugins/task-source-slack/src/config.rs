@@ -533,17 +533,21 @@ mod tests {
     /// draft. Silent on the operator's side, invisible to CI (a mock agent
     /// never attempts an implementation).
     ///
-    /// Checks are positive where they can be. The one negative check names the
-    /// exact sentence that caused #527 rather than guessing at substrings: a
-    /// forbidden-fragment list cannot tell "create a PR" from "do not create a
-    /// PR", and would fail on an innocent rewording.
+    /// Checks are positive where they can be. The negative check is `URL`,
+    /// bare: #527 was a demand for the URL of a created artifact, and this key
+    /// has no artifact to point at — the reply *is* the deliverable. Anything
+    /// asking for a URL here is therefore wrong whatever its wording, which is
+    /// a sharper line than a forbidden-fragment list could draw (such a list
+    /// cannot tell "create a PR" from "do not create a PR"). The sibling keys
+    /// `implement_instructions` and `triage_instructions` do demand a URL and
+    /// are right to; this test reads neither.
     #[test]
     fn the_reply_instructions_ask_only_for_a_reply() {
         let text = &DEFAULTS.reply_instructions;
         for required in [
-            "成果物は返信文だけです",
-            "Pull Request の作成は行わないでください",
-            "実装は試みず",
+            "the only deliverable",
+            "do not open a pull request",
+            "do not attempt it",
         ] {
             assert!(
                 !text.is_empty() && text.contains(required),
@@ -551,8 +555,8 @@ mod tests {
             );
         }
         assert!(
-            !text.contains("URL を返信文に必ず含めてください"),
-            "the #527 sentence is back — `answer` cannot open a pull request:\n{text}"
+            !text.contains("URL"),
+            "a URL demand is back — `answer` has no artifact to point at (#527):\n{text}"
         );
     }
 
@@ -588,6 +592,17 @@ mod tests {
     ///
     /// Expectations are transcribed from the pre-#318 source, NOT re-derived
     /// from `defaults.toml` — deriving them would make this vacuous.
+    ///
+    /// **Two keys are exceptions, and are weaker for it.**
+    /// `reply_instructions` and `reply_style_suffix` were deliberately
+    /// rewritten into English, so their pre-#318 bytes no longer exist to be
+    /// transcribed; their expectations below ARE derived from
+    /// `defaults.toml` and therefore only catch an *unintended* edit, never a
+    /// wrong one. What still checks those two on merit is elsewhere:
+    /// [`the_reply_instructions_ask_only_for_a_reply`] pins what
+    /// `reply_instructions` must and must not ask for, and
+    /// [`SlackPrompts::unknown_placeholders`] pins `{style}`. The remaining
+    /// six assertions are untouched and remain real #318 proofs.
     #[test]
     fn defaults_reproduce_todays_prompt_bytes() {
         let p = SlackPrompts::default();
@@ -603,20 +618,25 @@ mod tests {
         // tried, was refused, and failed the task, leaving the mention with no
         // reply. The request is gone; do not restore it.
         //
-        // What still has to survive the #318 move is the instruction's own
-        // shape: what to produce, and that the output is the reply alone.
-        let original = "以下の Slack メンションへの返信案を日本語で作成してください。\
-             対象リポジトリを調査し、根拠を持って回答してください。\
-             出力は返信文のみとし、前置き・後書き・説明を含めないでください。";
+        // What still has to survive is the instruction's own shape: what to
+        // produce, and that the output is the reply alone. The wording is
+        // English since the language directive moved out of the text (an
+        // instruction that names a language overrides the operator's own), so
+        // this is a re-baseline, not a transcription — see the note above.
+        let original = "Draft a reply to the Slack mention below. \
+             Investigate the target repository and answer with evidence. \
+             Write the reply in the same language as the thread. \
+             Output the reply text only, with no preamble, no postscript and no commentary.";
         assert!(
             p.reply_instructions.starts_with(original),
-            "the pre-#318 text must survive verbatim: {}",
+            "the instruction's shape must survive: {}",
             p.reply_instructions
         );
-        // Was `format!("\n返信スタイル: {style}")`.
+        // Was `format!("\n返信スタイル: {style}")`; the label is English now,
+        // but `{style}` itself stays whatever the operator wrote.
         assert_eq!(
             crate::template::render(&p.reply_style_suffix, &[("style", "簡潔に")]),
-            "\n返信スタイル: 簡潔に"
+            "\nReply style: 簡潔に"
         );
         // Was the body `format!`.
         assert_eq!(

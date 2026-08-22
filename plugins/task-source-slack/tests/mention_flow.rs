@@ -146,7 +146,7 @@ async fn mention_becomes_a_task_and_is_submitted() {
     // from the visible body, so the host can inject them out-of-band.
     let instructions = task["instructions"].as_str().unwrap();
     assert!(
-        instructions.contains("返信案を日本語で作成"),
+        instructions.contains("Draft a reply to the Slack mention"),
         "{instructions}"
     );
     assert!(instructions.contains("丁寧語で簡潔に"), "{instructions}");
@@ -154,7 +154,10 @@ async fn mention_becomes_a_task_and_is_submitted() {
     // Body: only the factual content — mention and the thread context
     // (mention itself excluded, speaker names resolved).
     let body = task["body"].as_str().unwrap();
-    assert!(!body.contains("返信案を日本語で作成"), "{body}");
+    assert!(
+        !body.contains("Draft a reply to the Slack mention"),
+        "{body}"
+    );
     assert!(!body.contains("丁寧語で簡潔に"), "{body}");
     assert!(body.contains("<@U_ME> 原因わかりますか"), "{body}");
     assert!(body.contains("アリス: デプロイが失敗してる"), "{body}");
