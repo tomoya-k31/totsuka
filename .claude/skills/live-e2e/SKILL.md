@@ -30,6 +30,35 @@ source .env && tt doctor
 
 `state-db` の fail は `run` 前なら正常。それ以外の fail は先に潰す。
 
+## 0.5. 【必須】検証対象のプラグインを入れ直す
+
+**`cargo build` はここに効かない。** `tt run` が起動するのは
+`$E2E_HOME/data/totsuka/plugins/<name>/<name>` に**インストール済みのコピー**で、
+`target/debug` でも `target/release` でもない。**これを忘れると、直したはずの
+コードではなく前回インストールした古いバイナリを検収することになる**（実際に、
+昨日ビルドしたプラグインで検収を始めかけた）。
+
+変更したプラグインを入れ直す:
+
+```bash
+source .env && tt plugin install --from-source --yes herdr
+```
+
+- 引数は**プラグイン名**（`herdr` / `slack` / `github` / `notion` / `orca` / `macos`）。
+  ディレクトリパスを渡すと `is not a plugin in <checkout>` で落ちる
+- `--from-source` は checkout から `cargo build --release` して入れる。
+  Orchestrator 本体（`totsuka`）は `E2E_TOTSUKA_BIN` が指すものがそのまま使われるので、
+  そちらを変えたときは `cargo build` するだけでよい
+
+**新しさは時刻で確かめる。** 「入れ直したつもり」が一番危ない:
+
+```bash
+stat -f '%Sm %N' -t '%Y-%m-%d %H:%M' \
+  "$E2E_HOME/data/totsuka/plugins/herdr/herdr" && git log -1 --format='HEAD: %cd' --date=format:'%Y-%m-%d %H:%M'
+```
+
+インストール済みの時刻が HEAD より**後**になっていること。
+
 ## 1. 【手動】常駐プロセスを起動してもらう
 
 **エージェントからは起動できない。** 設定が `op://`（1Password）を参照しており、`op read` は

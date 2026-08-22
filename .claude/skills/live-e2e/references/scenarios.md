@@ -11,11 +11,27 @@
 
 **人間の関与ゼロ。** 最初にこれを通す。ここが通らなければ他は全部止まる。
 
+**毎回、新しい issue を作る。** `seed` の引数は **issue 番号**で、閉じた issue にも
+Project に入っていない issue にも打てるが、どちらも**タスクは生まれない**。使い回すと
+`wait` が前回の done を掴んで「PASS した」ように見える（2026-08-23 に一度そうなった）:
+
 ```bash
-bash .claude/skills/live-e2e/scripts/github.sh seed web 1          # Issue を Todo にする
-bash .claude/skills/live-e2e/scripts/github.sh wait 1              # タスクが終端に達するまで待つ
-bash .claude/skills/live-e2e/scripts/github.sh verify web 1
+url=$(gh issue create --repo "$E2E_GH_OWNER/$E2E_GH_REPO_WEB" \
+        --title "feat: … 関数を追加する（<何の検収か>）" --body "<仕様と完了条件>")
+gh project item-add "$E2E_GH_PROJECT" --owner "$E2E_GH_OWNER" --url "$url"
+n="${url##*/}"
+
+bash .claude/skills/live-e2e/scripts/github.sh seed  web "$n"   # Issue を Todo にする
+bash .claude/skills/live-e2e/scripts/github.sh wait  web "$n"   # **その issue の**タスクを待つ
+bash .claude/skills/live-e2e/scripts/github.sh verify web "$n"
 ```
+
+`wait` は `source_task_id`（issue の node id）で対象を特定し、**`seed` より後に動いた
+タスクだけ**を受け付ける。前回の done しか無ければ `（seed 前の古いタスクのみ）` と
+言い続けてタイムアウトする — **黙って緑にならない**のが要点。
+
+本文は自由だが、**完了条件に「終わったらブランチを push して PR を作る」を入れる**
+（下記のとおり push / PR はリポジトリの `CLAUDE.md` とタスク本文が指示して初めて起きる）。
 
 | 検証点 | 見るもの |
 |---|---|

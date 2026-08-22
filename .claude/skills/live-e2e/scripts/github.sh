@@ -5,11 +5,21 @@
 #   bash .claude/skills/live-e2e/scripts/github.sh status           # Project の item と Status 一覧
 #   bash .claude/skills/live-e2e/scripts/github.sh seed <web|cli> <issue#> [Status]  # 既定 Todo。design を試すなら Design
 #
+# `seed` の `<issue#>` は **issue 番号**であって seed の連番ではない。しかも
+# **既に閉じている issue／Project に入っていない issue に打っても何も起きない**
+# （前者は取り込まれず、後者は `item が見つかりません` で終わる）。使い回しの
+# issue で回そうとして時間を溶かしたことがあるので、**新しい検証は毎回 issue を
+# 作る**のが確実:
+#
+#   gh issue create --repo "$E2E_GH_OWNER/$E2E_GH_REPO_WEB" --title ... --body ...
+#   gh project item-add "$E2E_GH_PROJECT" --owner "$E2E_GH_OWNER" --url <issue url>
+#   bash .../github.sh seed web <新 issue#>
+#
 # 注意: Project #7 は新規 item を自動で Todo にする。design を回したいときは
 # item-add 後すぐ（poll_interval_secs=15 より早く）Design へ倒すこと。遅れると
 # github-task が先に拾って implement が走る。
 #   bash .claude/skills/live-e2e/scripts/github.sh clear <web|cli> <issue#>  # Status を外す
-#   bash .claude/skills/live-e2e/scripts/github.sh wait [sec]       # github タスクが終端に達するまで追う
+#   bash .claude/skills/live-e2e/scripts/github.sh wait <web|cli> <issue#> [sec]  # **その issue の**タスクが終端に達するまで追う
 #   bash .claude/skills/live-e2e/scripts/github.sh verify <web|cli> <issue#> # F-84/F-86 を判定
 #
 # GraphQL のレートに注意（実測 2026-08-11）。`gh project` 系は 1 リクエスト 1 ポイント
@@ -98,14 +108,73 @@ for i in json.load(sys.stdin)["items"]:
     print("%-24s #%-3s %-10s %s" % (c.get("repository","?").split("/")[-1], c.get("number"),
           i.get("status","(none)"), (c.get("title") or "")[:44]))'
   ;;
-seed)  st="${3:-Todo}"; set_status "$(repo_of "$1")" "$2" "$st"; echo "$(repo_of "$1")#$2 → $st";;
+seed)
+  st="${3:-Todo}"; r="$(repo_of "$1")"; n="$2"
+  set_status "$r" "$n" "$st"
+  # **`wait` のための基準時刻を残す。** これが無いと `wait` は「この issue の
+  # タスク」を正しく見つけたうえで、それが**前回の実行の done タスク**でも
+  # 即座に成功と報告する（使い回しの issue で必ず起きる）。seed の時刻より後に
+  # 動いたタスクだけを受け付けさせるためのファイル。
+  mkdir -p "$E2E_HOME/state/live-e2e"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$E2E_HOME/state/live-e2e/seed-$r-$n"
+  echo "$r#$n → $st"
+  ;;
 clear) set_status "$(repo_of "$1")" "$2" --;  echo "$(repo_of "$1")#$2 → (none)";;
 wait)
-  limit="${1:-1800}"; deadline=$(( $(date +%s) + limit ))
+  # **必ず「その issue のタスク」を待つ。**
+  #
+  # 以前はここが `tt task list | grep ' github ' | head -1` だった。一覧は新しい順
+  # なので、**seed が何も生まなかったとき（閉じた issue に打った・Project に入って
+  # いない等）に、前回の done タスクを掴んで即 exit 0 する**。実際に一度それで
+  # 「PASS した」と誤認した（2026-08-23）。**観測が対象を取り違える形は、失敗より
+  # たちが悪い** — 赤くならずに緑になる。
+  #
+  # 同一性は `source_task_id`（GitHub の issue node id）で取る。`tt task list --json`
+  # がそのまま持っているので、突き合わせに追加の API 呼び出しは要らない。
+  case "${1:-}" in web|cli) ;; *)
+    echo "usage: github.sh wait <web|cli> <issue#> [sec]" >&2; exit 2;; esac
+  r="$(repo_of "$1")"; n="${2:?issue 番号が要ります}"; limit="${3:-1800}"
+  node="$(gh issue view "$n" --repo "$OWNER/$r" --json id --jq .id)"
+  [ -n "$node" ] || { echo "issue $r#$n の node id を取得できません" >&2; exit 2; }
+  # seed 時刻より後に動いたタスクだけを受け付ける。無ければ「基準なし」で走るが、
+  # **前回の done を掴みうることを明示して警告する** — 黙って通すのが一番悪い。
+  since_file="$E2E_HOME/state/live-e2e/seed-$r-$n"
+  if [ -f "$since_file" ]; then
+    since="$(cat "$since_file")"
+    echo "待機対象: $r#$n ($node) / seed 以降のみ: $since"
+  else
+    since=""
+    echo "待機対象: $r#$n ($node)"
+    echo "  警告: seed の記録がありません。**前回の実行の done タスクを掴む可能性があります** —" >&2
+    echo '        github.sh seed を通してから待つか、結果の updated_at を自分で確かめてください。' >&2
+  fi
+  deadline=$(( $(date +%s) + limit ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    line=$(tt task list 2>/dev/null | grep ' github ' | head -1 || true)
-    echo "$(date +%H:%M:%S) ${line:-（github タスクなし）}"
-    case "$line" in *done*|*failed*|*escalated*|*waiting*) exit 0;; esac
+    line="$(tt task list --json 2>/dev/null | NODE="$node" SINCE="$since" python3 -c '
+import json, os, sys
+want, since = os.environ["NODE"], os.environ.get("SINCE", "")
+data = json.load(sys.stdin)
+tasks = data if isinstance(data, list) else data.get("tasks", [])
+for t in tasks:
+    if t.get("source_task_id") != want:
+        continue
+    # ISO 8601 の UTC 文字列どうしなので辞書順比較でよい。ただし totsuka は
+    # 小数部を可変長で出すので、比較する前に日時部分だけに切り詰める。
+    if since and (t.get("updated_at") or "")[:19] < since[:19]:
+        print("STALE\t%s\t%s" % (t["id"], t["state"]))
+        break
+    print("%s\t%s\t%s" % (t["id"], t["state"], t["title"][:48]))
+    break
+' 2>/dev/null || true)"
+    case "$line" in
+      STALE*) echo "$(date +%H:%M:%S) （seed 前の古いタスクのみ: ${line#STALE	}）"; sleep 20; continue;;
+    esac
+    if [ -z "$line" ]; then
+      echo "$(date +%H:%M:%S) （まだ取り込まれていません）"
+    else
+      echo "$(date +%H:%M:%S) task $line"
+      case "$line" in *done*|*failed*|*escalated*|*waiting_input*) exit 0;; esac
+    fi
     sleep 20
   done
   echo "タイムアウト（${limit}s）"; exit 1
