@@ -84,6 +84,13 @@ jobs:
       # ベースで数秒で終わるため、重い clippy より先に fail-fast させる。
       - name: Check architecture invariants
         run: bash scripts/arch-lint.sh
+      # herdr Socket API との互換 (#518)。コミット済み schema スライスとだけ
+      # 突き合わせるので**ネットワークに出ない** — PR の CI で herdr の新版を
+      # 取りに行くと、herdr がリリースされた瞬間に無関係な PR が全部赤くなる。
+      # 新版の追随は別レーンへ分ける (日次 cron は #520 §2 で入れる予定で、
+      # まだ無い)。arch-lint と同じく数秒で終わる。
+      - name: Check herdr API compatibility
+        run: bash scripts/herdr-schema-check.sh
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       # 未使用依存ドリフトの検出 (#171)。cargo-machete はテキスト走査
