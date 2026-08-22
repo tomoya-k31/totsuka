@@ -262,6 +262,19 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
         }
     }
 
+    // Status columns last: they are the only questions whose right answer is
+    // sitting on screen in another window, and the operator has just been
+    // asked for the board's coordinates.
+    let mut statuses = std::collections::HashMap::new();
+    if !recipe.statuses.is_empty() {
+        prompt.say("Name the Project status columns this workflow moves cards between.")?;
+        prompt.say("  Each must match an option in the board's Status field exactly.")?;
+        for slot in recipe.statuses {
+            let answer = prompt.ask(&format!("  {}", slot.prompt), Some(slot.default))?;
+            statuses.insert(slot.key.to_string(), answer);
+        }
+    }
+
     Ok(Answers {
         version: answers::ANSWERS_VERSION,
         recipe: recipe.key.to_string(),
@@ -270,6 +283,7 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
         llm,
         slack_user_id,
         github,
+        statuses,
     })
 }
 
@@ -380,6 +394,23 @@ impl<'a> Plan<'a> {
                 "Workflow: {} — {} → {} ({})\n",
                 workflow.name, workflow.source, workflow.agent, shape
             ));
+            // Show the trigger with the status names already substituted. A
+            // column name that does not exist on the board is the one mistake
+            // here whose symptom is silence — `run` picks nothing up and
+            // `doctor` stays green — so it has to be visible while there is
+            // still a prompt to say no at.
+            if let Some(trigger) = workflow.trigger {
+                out.push_str(&format!(
+                    "          when {}\n",
+                    resolve_statuses(trigger, self.recipe, self.answers)
+                ));
+            }
+            if let Some(on_success) = workflow.on_success {
+                out.push_str(&format!(
+                    "          then {}\n",
+                    resolve_statuses(on_success, self.recipe, self.answers)
+                ));
+            }
         }
         if self.write_config {
             out.push_str(&format!("Write:    {}\n", self.config_path.display()));
@@ -588,18 +619,27 @@ pub(crate) fn build_config(
         text = set_plugin_enabled(&text, plugin.name, true, Some(plugin.kind))?;
     }
     for workflow in recipe.workflows {
+        // Owned, because the fragments are templates until the answers are
+        // substituted in. `WorkflowDraft` is already lifetime-generic, so it
+        // takes a borrow of these without any signature change.
+        let trigger = workflow
+            .trigger
+            .map(|t| resolve_statuses(t, recipe, answers));
+        let on_success = workflow
+            .on_success
+            .map(|t| resolve_statuses(t, recipe, answers));
         text = upsert_workflow(
             &text,
             &WorkflowDraft {
                 name: workflow.name,
                 source: workflow.source,
-                trigger: workflow.trigger,
+                trigger: trigger.as_deref(),
                 profile: workflow.profile,
                 mode: workflow.mode,
                 agent: workflow.agent,
                 output: workflow.output,
                 verification: workflow.verification,
-                on_success: workflow.on_success,
+                on_success: on_success.as_deref(),
                 on_failure: None,
             },
         )?;
@@ -609,6 +649,27 @@ pub(crate) fn build_config(
         text = set_llm(&text, &llm.base_url, &llm.model, Some(&reference))?;
     }
     Ok(text)
+}
+
+/// Substitute a recipe fragment's `{{…}}` placeholders from the answers.
+///
+/// A slot the answers do not carry falls back to its declared default, which is
+/// what an answers file written before the interview asked replays with (see
+/// [`Answers::statuses`](answers::Answers::statuses)).
+fn resolve_statuses(fragment: &str, recipe: &Recipe, answers: &Answers) -> String {
+    let filled: std::collections::HashMap<String, String> = recipe
+        .statuses
+        .iter()
+        .map(|slot| {
+            let value = answers
+                .statuses
+                .get(slot.key)
+                .cloned()
+                .unwrap_or_else(|| slot.default.to_string());
+            (slot.key.to_string(), value)
+        })
+        .collect();
+    recipes::render_fragment(fragment, &filled)
 }
 
 /// Write via a temporary file and rename, so an interrupted write cannot leave
@@ -694,6 +755,46 @@ mod tests {
     use super::*;
     use orchestrator_core::config::RootConfig;
 
+    /// **An answers file written before the interview asked for status names
+    /// must still mean what it meant.** That is the whole argument for leaving
+    /// `ANSWERS_VERSION` where it is, so it is pinned by replaying a file in
+    /// the old shape — no `statuses` key at all — rather than by reasoning.
+    #[test]
+    fn an_answers_file_without_statuses_replays_the_original_columns() {
+        let old_file = r#"
+version = 2
+recipe = "design-implement-handoff"
+secret_backend = "keychain"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/totsuka"
+
+[github]
+owner = "tomoya-k31"
+owner_type = "user"
+project_number = 1
+github_login = "tomoya-k31"
+"#;
+        let answers = Answers::from_toml_str("old.toml", old_file, RECIPES)
+            .expect("an old file still parses");
+        assert!(
+            answers.statuses.is_empty(),
+            "the fixture must not carry the new key, or it proves nothing"
+        );
+
+        let recipe = recipes::by_key("design-implement-handoff").unwrap();
+        let text = build_config("", &answers, recipe).expect("config builds");
+        for column in ["設計待ち", "設計レビュー待ち", "実装待ち", "レビュー待ち"]
+        {
+            assert!(text.contains(column), "`{column}` missing from:\n{text}");
+        }
+        assert!(
+            !text.contains("{{"),
+            "no placeholder may reach the config:\n{text}"
+        );
+    }
+
     fn answers_for(recipe: &str) -> Answers {
         Answers {
             version: answers::ANSWERS_VERSION,
@@ -727,6 +828,7 @@ mod tests {
                     project_number: 1,
                     github_login: "tomoya-k31".to_string(),
                 }),
+            statuses: Default::default(),
         }
     }
 

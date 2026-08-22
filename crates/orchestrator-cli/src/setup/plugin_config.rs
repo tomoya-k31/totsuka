@@ -171,6 +171,7 @@ mod tests {
                     project_number: 7,
                     github_login: "tomoya-k31".to_string(),
                 }),
+            statuses: Default::default(),
         }
     }
 

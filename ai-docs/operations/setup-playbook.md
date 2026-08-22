@@ -48,12 +48,13 @@ sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 totsuka setup
 ```
 
-聞かれるのは 4 種類だけで、それ以外はレシピが持つ:
+聞かれるのは 5 種類だけで、それ以外はレシピが持つ:
 
 1. **どのレシピから始めるか**（GitHub 最小構成 / 設計→実装ハンドオフ / Slack 本人名義返信 / 人間検収必須）
 2. **リポジトリのパスと名前**（複数可）
 3. **シークレットをどこに置くか**（1Password / Keychain / 環境変数）— **値そのものは一切聞かれない**
 4. レシピが要求する穴だけ（GitHub Project の owner / owner_type / 番号 / 自分の login、Slack のメンバー ID、LLM の model）
+5. **Project の Status 列名**（そのレシピが列を使う場合のみ）。既定は日本語のボードに合わせた値だが、**ボードの Status フィールドの選択肢と完全に一致させること**。ここを間違えると config は valid で `doctor` も緑のまま、`run` が何も拾わないという無言の失敗になる —— だから計画の確認画面に置換後の trigger をそのまま出している
 
 計画が印字され、確認するとそこから先が副作用を持つ。**質問中の Ctrl-C は何も残さない。**
 

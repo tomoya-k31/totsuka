@@ -176,6 +176,21 @@ pub struct Answers {
     /// GitHub Project coordinates, when the recipe asks for them.
     #[serde(default)]
     pub github: Option<GitHubAnswer>,
+    /// Project status column names, keyed by the recipe's
+    /// [`StatusSlot::key`](super::recipes::StatusSlot::key).
+    ///
+    /// **`ANSWERS_VERSION` deliberately does not move for this.** A file
+    /// written before the interview asked has no `statuses`, and every slot's
+    /// default is the literal the recipes used to hard-code — so an old file
+    /// still means exactly what it meant. The version guards changes that make
+    /// an old file mean something *different*; this one does not. Do not
+    /// "fix" the version here.
+    ///
+    /// A map rather than named fields because the slots belong to the recipe,
+    /// not to any one plugin: they end up in `config.toml`'s workflows, while
+    /// [`github`](Self::github) describes `plugins/github.toml`.
+    #[serde(default)]
+    pub statuses: std::collections::HashMap<String, String>,
 }
 
 /// The version this build writes and accepts.
@@ -344,6 +359,7 @@ mod tests {
                 project_number: 1,
                 github_login: "tomoya-k31".to_string(),
             }),
+            statuses: Default::default(),
         }
     }
 

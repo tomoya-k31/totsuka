@@ -52,6 +52,47 @@ pub struct RecipeWorkflow {
 
 /// A blank the interview has to fill for a recipe.
 ///
+/// One Project status column a recipe's workflows name, and what to call it.
+///
+/// The recipes used to write these as literals, in Japanese, because that is
+/// what the author's own board uses. On any other board the trigger matches an
+/// option that does not exist, and the failure is the quiet kind: the config is
+/// valid, `doctor` is green, and `run` simply never picks anything up.
+///
+/// [`key`](Self::key) is the placeholder name; the workflow fragments spell it
+/// `{{key}}` and [`render_fragment`] substitutes it.
+#[derive(Debug, Clone, Copy)]
+pub struct StatusSlot {
+    /// Placeholder name, as it appears inside `{{…}}` in a fragment.
+    pub key: &'static str,
+    /// What the interview asks.
+    pub prompt: &'static str,
+    /// The value an answers file written before these were asked replays with.
+    ///
+    /// **Deliberately the old literal.** A default that reproduces yesterday's
+    /// behaviour is what lets [`ANSWERS_VERSION`](super::answers::ANSWERS_VERSION)
+    /// stay where it is: an older file without `statuses` still means exactly
+    /// what it meant.
+    pub default: &'static str,
+}
+
+/// Substitute `{{key}}` placeholders in a recipe fragment.
+///
+/// Unknown placeholders are left alone rather than blanked — a literal
+/// `{{foo}}` in someone's config is a visible bug, whereas an empty string
+/// would be a trigger that silently matches nothing. The consistency test
+/// below is what keeps one from ever being written.
+pub fn render_fragment(
+    fragment: &str,
+    statuses: &std::collections::HashMap<String, String>,
+) -> String {
+    let mut out = fragment.to_string();
+    for (key, value) in statuses {
+        out = out.replace(&format!("{{{{{key}}}}}"), value);
+    }
+    out
+}
+
 /// A blank exists when a plugin's own config has a **required** field that
 /// nothing else can supply — not for every knob it exposes. `herdr` and `macos`
 /// default every field, so they need no file and no questions; `github` and
@@ -105,6 +146,8 @@ pub struct Recipe {
     pub workflows: &'static [RecipeWorkflow],
     /// Extra questions this recipe needs answered.
     pub blanks: &'static [Blank],
+    /// Project status columns this recipe's fragments name, as `{{key}}`.
+    pub statuses: &'static [StatusSlot],
 }
 
 const HERDR: RequiredPlugin = RequiredPlugin {
@@ -145,12 +188,12 @@ pub const RECIPES: &[Recipe] = &[
     Recipe {
         key: "minimal-github-herdr",
         label: "Minimal — GitHub Projects + herdr",
-        blurb: "One workflow: cards in 実装待ち get implemented and written back.",
+        blurb: "One workflow: cards in your implement column get implemented and written back.",
         plugins: &[GITHUB, HERDR],
         workflows: &[RecipeWorkflow {
             name: "implement",
             source: "github",
-            trigger: Some(r#"{ project_status = "実装待ち" }"#),
+            trigger: Some(r#"{ project_status = "{{implement_status}}" }"#),
             profile: Some(Profile::Implement),
             mode: None,
             agent: "herdr",
@@ -158,40 +201,74 @@ pub const RECIPES: &[Recipe] = &[
             // written back for the status transition to mean anything.
             output: Some(OutputPolicy::Source),
             verification: None,
-            on_success: Some(r#"{ set_status = "レビュー待ち" }"#),
+            on_success: Some(r#"{ set_status = "{{implement_done_status}}" }"#),
         }],
         blanks: &[Blank::GitHub],
+        statuses: &[
+            StatusSlot {
+                key: "implement_status",
+                prompt: "Status column tasks wait in before being implemented",
+                default: "実装待ち",
+            },
+            StatusSlot {
+                key: "implement_done_status",
+                prompt: "Status column they move to once implemented",
+                default: "レビュー待ち",
+            },
+        ],
     },
     Recipe {
         key: "design-implement-handoff",
         label: "Design → implement handoff",
-        blurb: "Two stages with a human review in between (設計待ち, then 実装待ち).",
+        blurb: "Two stages — design, then implement — with a human review in between.",
         plugins: &[GITHUB, HERDR],
         workflows: &[
             RecipeWorkflow {
                 name: "design",
                 source: "github",
-                trigger: Some(r#"{ project_status = "設計待ち" }"#),
+                trigger: Some(r#"{ project_status = "{{design_status}}" }"#),
                 profile: Some(Profile::Design),
                 mode: None,
                 agent: "herdr",
                 output: Some(OutputPolicy::Source),
                 verification: None,
-                on_success: Some(r#"{ set_status = "設計レビュー待ち" }"#),
+                on_success: Some(r#"{ set_status = "{{design_done_status}}" }"#),
             },
             RecipeWorkflow {
                 name: "implement",
                 source: "github",
-                trigger: Some(r#"{ project_status = "実装待ち" }"#),
+                trigger: Some(r#"{ project_status = "{{implement_status}}" }"#),
                 profile: Some(Profile::Implement),
                 mode: None,
                 agent: "herdr",
                 output: Some(OutputPolicy::Source),
                 verification: None,
-                on_success: Some(r#"{ set_status = "レビュー待ち" }"#),
+                on_success: Some(r#"{ set_status = "{{implement_done_status}}" }"#),
             },
         ],
         blanks: &[Blank::GitHub],
+        statuses: &[
+            StatusSlot {
+                key: "design_status",
+                prompt: "Status column tasks wait in before being designed",
+                default: "設計待ち",
+            },
+            StatusSlot {
+                key: "design_done_status",
+                prompt: "Status column they move to once designed",
+                default: "設計レビュー待ち",
+            },
+            StatusSlot {
+                key: "implement_status",
+                prompt: "Status column tasks wait in before being implemented",
+                default: "実装待ち",
+            },
+            StatusSlot {
+                key: "implement_done_status",
+                prompt: "Status column they move to once implemented",
+                default: "レビュー待ち",
+            },
+        ],
     },
     Recipe {
         key: "slack-reply-as-yourself",
@@ -216,6 +293,7 @@ pub const RECIPES: &[Recipe] = &[
             on_success: None,
         }],
         blanks: &[Blank::SlackUserId, Blank::Llm],
+        statuses: &[],
     },
     Recipe {
         key: "human-sign-off",
@@ -237,12 +315,98 @@ pub const RECIPES: &[Recipe] = &[
             on_success: None,
         }],
         blanks: &[Blank::GitHub],
+        // Triggers on labels, not on a status column.
+        statuses: &[],
     },
 ];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Placeholders and slots must agree **in both directions**.
+    ///
+    /// One direction: a `{{…}}` with no slot is never asked, never
+    /// substituted, and lands in the operator's `config.toml` as a literal
+    /// `{{foo}}` — a trigger that matches nothing.
+    ///
+    /// The other: a slot no fragment uses asks a question whose answer is
+    /// silently discarded, which is worse than not asking, because the
+    /// operator believes they configured something.
+    #[test]
+    fn declared_status_slots_and_placeholders_agree() {
+        fn placeholders(fragment: &str) -> Vec<String> {
+            let mut found = Vec::new();
+            let mut rest = fragment;
+            while let Some(start) = rest.find("{{") {
+                let after = &rest[start + 2..];
+                let Some(end) = after.find("}}") else { break };
+                found.push(after[..end].to_string());
+                rest = &after[end + 2..];
+            }
+            found
+        }
+
+        for recipe in RECIPES {
+            let used: Vec<String> = recipe
+                .workflows
+                .iter()
+                .flat_map(|w| {
+                    w.trigger
+                        .into_iter()
+                        .chain(w.on_success)
+                        .flat_map(placeholders)
+                })
+                .collect();
+            let declared: Vec<&str> = recipe.statuses.iter().map(|s| s.key).collect();
+
+            for key in &used {
+                assert!(
+                    declared.contains(&key.as_str()),
+                    "recipe `{}` writes `{{{{{key}}}}}` but declares no slot for it — it would \
+                     reach the config as a literal",
+                    recipe.key
+                );
+            }
+            for slot in recipe.statuses {
+                assert!(
+                    used.iter().any(|k| k == slot.key),
+                    "recipe `{}` asks for `{}` but no fragment uses it — the answer would be \
+                     discarded",
+                    recipe.key,
+                    slot.key
+                );
+            }
+        }
+    }
+
+    /// The defaults must reproduce what the recipes used to hard-code, or an
+    /// answers file written before the interview asked would start meaning
+    /// something else — the thing `ANSWERS_VERSION` exists to prevent.
+    #[test]
+    fn substituting_the_defaults_reproduces_the_original_fragments() {
+        let recipe = by_key("design-implement-handoff").expect("recipe");
+        let filled: std::collections::HashMap<String, String> = recipe
+            .statuses
+            .iter()
+            .map(|s| (s.key.to_string(), s.default.to_string()))
+            .collect();
+        let rendered: Vec<String> = recipe
+            .workflows
+            .iter()
+            .flat_map(|w| w.trigger.into_iter().chain(w.on_success))
+            .map(|f| render_fragment(f, &filled))
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                r#"{ project_status = "設計待ち" }"#,
+                r#"{ set_status = "設計レビュー待ち" }"#,
+                r#"{ project_status = "実装待ち" }"#,
+                r#"{ set_status = "レビュー待ち" }"#,
+            ]
+        );
+    }
 
     #[test]
     fn every_recipe_names_plugins_it_actually_uses() {
