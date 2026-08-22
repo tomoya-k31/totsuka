@@ -78,10 +78,30 @@ read -r -d '' COMPAT_JQ <<'JQ' || true
 # **型である**（`*Envelope` として生成される）ので、ここに入れる。これを
 # 落としていると、`pong.version` が消えても検査が通ってしまう。
 def typed($doc; $ns):
-  ($doc[$ns + "_defs"] // {})
-  + (if $ns == "result"
-     then ($doc.results // [] | map({key: ((.properties.type.const | variant_name) + "Envelope"), value: .}) | from_entries)
-     else {} end);
+  ($doc[$ns + "_defs"] // {}) as $defs
+  | ($defs
+     # `oneOf` の def は tagged union として生成される（`Subscription` は 26
+     # バリアント）。トップレベルには `.properties` も `.required` も無く、中身は
+     # `.oneOf[]` の下にあるので、**バリアントを 1 つずつ型として展開する**。
+     # これを falten せずに `typed()` へ入れても空を返すだけで、生成される
+     # Rust enum のフィールドが丸ごと検査の外に出る（封筒と同じクラスの穴）。
+     + ($defs | to_entries
+        | map(.key as $t | ((.value.oneOf // [])
+              | map({ key: ($t + "::" + (.properties.type.const | variant_name)),
+                      value: (. | del(.properties.type)) })))
+        | flatten | from_entries)
+     + (if $ns == "result"
+        then ($doc.results // []
+              | map({key: ((.properties.type.const | variant_name) + "Envelope"), value: .})
+              | from_entries)
+        else {} end));
+
+# tagged union の**バリアント名の集合**。`enum` と同じ意味で「消えたら落とす」
+# 対象なので、`enums()` と合わせて扱う。
+def variants($doc; $ns):
+  (($doc[$ns + "_defs"] // {}) | to_entries
+   | map(.key as $t | ((.value.oneOf // []) | map($t + "::" + .properties.type.const)))
+   | flatten | unique);
 
 def props($doc; $ns):
   (typed($doc; $ns) | to_entries
@@ -124,10 +144,20 @@ $floor as $f | . as $v
       | map("生成した型に載っている params のプロパティが消えた: " + .)),
     (required($f; "result") - required($v; "result")
       | map("result の required から外れた（新しい版が省略しうる）: " + .)),
-    (required($v; "request") - required($f; "request")
-      | map("request に required が増えた（totsuka は送っていない）: " + .)),
+    # **下限版に無い型の `required` は数えない。** 新しい任意パラメータが新しい
+    # def を `$ref` するのは追加のみのリリースで最もありふれた形で、totsuka は
+    # そのキーを一切送らないので何も壊れていない。型名で絞らないと、純粋に
+    # 追加だけの herdr 版で CI が赤くなる。
+    ([typed($f; "request") | keys[]] as $known
+      | (required($v; "request") - required($f; "request"))
+      | map(select((. | split(".")[0]) as $t | $known | index($t))
+            | "request に required が増えた（totsuka は送っていない）: " + .)),
     (enums($f; "result") - enums($v; "result") | map("読む enum のバリアントが消えた: " + .)),
     (enums($f; "request") - enums($v; "request") | map("送る enum のバリアントが消えた: " + .)),
+    (variants($f; "result") - variants($v; "result")
+      | map("読む tagged union のバリアントが消えた: " + .)),
+    (variants($f; "request") - variants($v; "request")
+      | map("送る tagged union のバリアントが消えた: " + .)),
     ($fsr | to_entries | map(select($vsr[.key] != null and $vsr[.key] != .value)
       | "result のプロパティの型が変わった: \(.key) は \(.value) だったが \($vsr[.key])")),
     ($fsq | to_entries | map(select($vsq[.key] != null and $vsq[.key] != .value)

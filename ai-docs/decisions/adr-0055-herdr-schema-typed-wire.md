@@ -4,6 +4,8 @@ title: ADR-0055 herdr Socket API を下限版の schema から生成した型で
 description: "herdr のレスポンスを serde 型で受け、互換を CI の schema 差分で機械検査する決定。型は下限版（0.7.5）のスライス済み schema から 1 組だけ生成し、版ごとの分岐は作らない。protocol 整数は互換の信号として使わず version の semver 判定へ置き換える。実行時は寛容（追加を無視）・CI は厳格（削除と required 追加で落とす）。最新版から生成する案・未知メソッドを試す案・実行時に schema を読む案は却下。"
 tags: [decision, herdr, socket-api, schema, codegen, compatibility, ci, adr]
 generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
+verified:
+  - { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable
 owner: tomoya-k31
 sources:
@@ -153,6 +155,20 @@ herdr の schema は **method と result を結び付けていない。**
 **`result` が `null` のメソッドは、totsuka が応答を読んでいない。** その場合は
 封筒の型も作らず、互換検査もメソッドの存在と params の形しか見ない。読んで
 いない result の型を主張しても、裏の取りようがない主張が 1 つ増えるだけである。
+
+### 対応表のどこが実機で確認済みか
+
+`verified` は**この表の範囲にだけ**掛かる。ADR 全体が実機検収済みという意味ではない
+（CI 検査・型の消費・日次 cron は実機検収の対象ですらない、あるいはまだ無い）。
+
+| method → result | 裏取り |
+|---|---|
+| `ping` → `pong` / `workspace.list` → `workspace_list` / `pane.list` → `pane_list` / `pane.get` → `pane_info` / `pane.read` → `pane_read` / `events.subscribe` → `subscription_started` | **herdr 0.7.5 の実機ソケットへ直接投げて確認**（2026-08-23、read-only メソッドのみ） |
+| `workspace.create` → `workspace_created` / `agent.start` → `agent_started` / `agent.prompt` → `agent_prompted`（→ 後に `null` へ） / `pane.split` → `pane_info`（→ 後に `null` へ） | 過去の実機プローブ由来（[herdr Socket API](/references/herdr-socket-api.md) の実測表、#124 / #356 / ADR-0032） |
+| `result: null` の 15 メソッド | **確認していない。確認する必要も無い** — totsuka が応答を読んでいないので、主張していない |
+
+**書けない主張は書かない、が D-8 の要点である。** 読んでいない result の型を
+「たぶん `ok`」と書けば、裏の取りようがない主張が 15 個増える。
 
 # Consequences
 

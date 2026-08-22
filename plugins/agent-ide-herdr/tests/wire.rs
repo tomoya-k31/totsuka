@@ -19,8 +19,8 @@
 //! 実データである必要が無い）。
 
 use agent_ide_herdr::wire::result::{
-    AgentStatus, PaneInfoEnvelope, PaneListEnvelope, PaneReadEnvelope, PongEnvelope,
-    WorkspaceCreatedEnvelope, WorkspaceListEnvelope,
+    AgentStartedEnvelope, AgentStatus, PaneInfoEnvelope, PaneListEnvelope, PaneReadEnvelope,
+    PongEnvelope, WorkspaceCreatedEnvelope, WorkspaceListEnvelope,
 };
 
 /// `required` だけの `PaneInfo`。ここに足すたびに「下限版が必ず送るもの」の
@@ -111,4 +111,16 @@ fn the_envelopes_the_plugin_reads_all_parse() {
     )
     .unwrap();
     assert_eq!(read.read.text, "$ ");
+
+    // `AgentInfo` は `PaneInfo` と別の型で、`required` も違う（`focused` /
+    // `revision` / `agent_status` / `pane_id` / `tab_id` / `terminal_id` /
+    // `workspace_id`）。`agent.start` の封筒はこれと `argv` を持つ。
+    let started: AgentStartedEnvelope = serde_json::from_str(
+        r#"{"type":"agent_started","argv":["claude"],
+             "agent":{"pane_id":"w1:p1","terminal_id":"t1","workspace_id":"w1","tab_id":"w1:t1",
+                      "focused":true,"agent_status":"unknown","revision":1}}"#,
+    )
+    .unwrap();
+    assert_eq!(started.agent.pane_id, "w1:p1");
+    assert_eq!(started.argv, ["claude"]);
 }
