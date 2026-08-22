@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:6b55d1902d4b3e9e9f84255f468f2b742cd047fae83b360155d47703783eacb7 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:1fab1b1a68c3133f226c90b1c82ab9234087e9d351f9a3cb11d450a1c554e244 -->
 
 # セットアップ Playbook
 
@@ -43,7 +43,7 @@ totsuka setup
 2. **リポジトリのパスと名前**（複数可）
 3. **シークレットをどこに置くか**（1Password / Keychain / 環境変数）— **値そのものは一切聞かれない**
 4. レシピが要求する項目だけ（GitHub Project の owner や番号、Slack のメンバー ID、LLM のモデル名など）
-5. **Project の Status 列名**（そのレシピが列を使う場合のみ）。**ボードの Status フィールドの選択肢と完全に一致させること。** ここを間違えたときが一番厄介で、設定は valid のまま `doctor` も緑、`run` が何も拾わないという無言の失敗になる。だから計画には、名前を埋めた後の trigger をそのまま表示する。
+5. **Project の Status 列名**（そのレシピが列を使う場合のみ）。候補は役割を説明する名前（`Ready to implement` など）だが、**入力した値はボードの Status フィールドの選択肢と完全に一致させる必要がある。** ここを間違えたときが一番厄介で、設定は valid のまま `doctor` も緑、`run` が何も拾わないという無言の失敗になる。だから計画には、名前を埋めた後の trigger をそのまま表示する。answers ファイルがこれを欠いている場合は、選んでいない名前で埋めるのではなく**足すべきキー名を名指しして拒否する**。
 
 計画が表示され、確認して初めて副作用が出る。**質問の途中で Ctrl-C しても何も残らない。**
 

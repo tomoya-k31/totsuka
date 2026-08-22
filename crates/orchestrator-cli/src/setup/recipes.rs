@@ -65,12 +65,16 @@ pub struct StatusSlot {
     pub key: &'static str,
     /// What the interview asks.
     pub prompt: &'static str,
-    /// The value an answers file written before these were asked replays with.
+    /// What the interview offers as the suggestion.
     ///
-    /// **Deliberately the old literal.** A default that reproduces yesterday's
-    /// behaviour is what lets [`ANSWERS_VERSION`](super::answers::ANSWERS_VERSION)
-    /// stay where it is: an older file without `statuses` still means exactly
-    /// what it meant.
+    /// **Only a suggestion.** It is not a fallback: an answers file that omits
+    /// a declared slot is refused by name rather than quietly filled in, so
+    /// there is no path where this value stands in for an answer nobody gave.
+    ///
+    /// Names that say what the column is *for*, because no board is guaranteed
+    /// to have them — the operator has to compare each against their own
+    /// board's Status field either way, and a name that describes the role
+    /// makes that comparison possible.
     pub default: &'static str,
 }
 
@@ -232,12 +236,12 @@ pub const RECIPES: &[Recipe] = &[
             StatusSlot {
                 key: "implement_status",
                 prompt: "Status column tasks wait in before being implemented",
-                default: "実装待ち",
+                default: "Ready to implement",
             },
             StatusSlot {
                 key: "implement_done_status",
                 prompt: "Status column they move to once implemented",
-                default: "レビュー待ち",
+                default: "In review",
             },
         ],
     },
@@ -275,22 +279,22 @@ pub const RECIPES: &[Recipe] = &[
             StatusSlot {
                 key: "design_status",
                 prompt: "Status column tasks wait in before being designed",
-                default: "設計待ち",
+                default: "Ready to design",
             },
             StatusSlot {
                 key: "design_done_status",
                 prompt: "Status column they move to once designed",
-                default: "設計レビュー待ち",
+                default: "Design review",
             },
             StatusSlot {
                 key: "implement_status",
                 prompt: "Status column tasks wait in before being implemented",
-                default: "実装待ち",
+                default: "Ready to implement",
             },
             StatusSlot {
                 key: "implement_done_status",
                 prompt: "Status column they move to once implemented",
-                default: "レビュー待ち",
+                default: "In review",
             },
         ],
     },
@@ -427,11 +431,10 @@ mod tests {
         }
     }
 
-    /// The defaults must reproduce what the recipes used to hard-code, or an
-    /// answers file written before the interview asked would start meaning
-    /// something else — the thing `ANSWERS_VERSION` exists to prevent.
+    /// What the suggestions render to, spelled out so a change to them is a
+    /// visible diff rather than a quiet one.
     #[test]
-    fn substituting_the_defaults_reproduces_the_original_fragments() {
+    fn the_suggested_names_render_into_the_fragments() {
         let recipe = by_key("design-implement-handoff").expect("recipe");
         let filled: std::collections::HashMap<String, String> = recipe
             .statuses
@@ -447,10 +450,10 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                r#"{ project_status = "設計待ち" }"#,
-                r#"{ set_status = "設計レビュー待ち" }"#,
-                r#"{ project_status = "実装待ち" }"#,
-                r#"{ set_status = "レビュー待ち" }"#,
+                r#"{ project_status = "Ready to design" }"#,
+                r#"{ set_status = "Design review" }"#,
+                r#"{ project_status = "Ready to implement" }"#,
+                r#"{ set_status = "In review" }"#,
             ]
         );
     }

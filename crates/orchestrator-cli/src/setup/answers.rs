@@ -180,11 +180,18 @@ pub struct Answers {
     /// [`StatusSlot::key`](super::recipes::StatusSlot::key).
     ///
     /// **`ANSWERS_VERSION` deliberately does not move for this.** A file
-    /// written before the interview asked has no `statuses`, and every slot's
-    /// default is the literal the recipes used to hard-code — so an old file
-    /// still means exactly what it meant. The version guards changes that make
-    /// an old file mean something *different*; this one does not. Do not
-    /// "fix" the version here.
+    /// written before the interview asked has no `statuses`, and rather than
+    /// being filled in from a default it is **refused by name**, listing the
+    /// keys to add. The version guards changes that make an old file mean
+    /// something *different*; refusing to read one is stricter, not different.
+    /// Do not "fix" the version here.
+    ///
+    /// The alternative — falling back to a declared default — was rejected on
+    /// purpose: it would write column names the operator never chose, and a
+    /// column name that does not exist on the board fails silently (valid
+    /// config, green `doctor`, a `run` that picks nothing up). That is the
+    /// failure this whole change removes; leaving it on the replay path would
+    /// have kept it exactly where the playbook sends a second machine.
     ///
     /// A map rather than named fields because the slots belong to the recipe,
     /// not to any one plugin: they end up in `config.toml`'s workflows, while
@@ -273,6 +280,21 @@ pub enum AnswersError {
         /// The keys the recipe declares, comma-separated.
         known: String,
     },
+    /// A `[statuses]` key the chosen recipe declares but the file omits.
+    #[error(
+        "{path} selects `{recipe}`, which needs status `{missing}` → add it under `[statuses]` \
+         (this recipe names: {known})"
+    )]
+    MissingStatus {
+        /// Path that was tried.
+        path: String,
+        /// Label of the selected recipe.
+        recipe: &'static str,
+        /// The first key that is absent.
+        missing: &'static str,
+        /// Every key the recipe declares, comma-separated.
+        known: String,
+    },
     /// The chosen recipe needs a field the file does not set.
     #[error("{path} selects `{recipe}`, which needs `{field}` → add it to the answers file")]
     MissingBlank {
@@ -356,6 +378,21 @@ impl Answers {
                 } else {
                     declared.join(", ")
                 },
+            });
+        }
+        // Unknown before missing, deliberately: a typo trips both, and
+        // "`implement_statuss` is not a key" points at the line to fix, while
+        // "`implement_status` is missing" leaves the operator hunting.
+        if let Some(slot) = recipe
+            .statuses
+            .iter()
+            .find(|slot| !answers.statuses.contains_key(slot.key))
+        {
+            return Err(AnswersError::MissingStatus {
+                path: path.to_string(),
+                recipe: recipe.label,
+                missing: slot.key,
+                known: declared.join(", "),
             });
         }
         for blank in recipe.blanks {
@@ -465,7 +502,11 @@ implement_status = "Ready"
                 project_number: 1,
                 github_login: "tomoya-k31".to_string(),
             }),
-            statuses: Default::default(),
+            statuses: RECIPES[0]
+                .statuses
+                .iter()
+                .map(|s| (s.key.to_string(), s.default.to_string()))
+                .collect(),
         }
     }
 
@@ -547,6 +588,10 @@ implement_status = "Ready"
 
         let mut answers = sample();
         answers.recipe = slack.key.to_string();
+        // The sample carries the *other* recipe's status columns; this one
+        // declares none, so they would be refused as unknown before the blank
+        // check is reached.
+        answers.statuses.clear();
         let err = Answers::from_toml_str("x", &answers.to_toml(), RECIPES).unwrap_err();
         assert!(
             matches!(err, AnswersError::MissingBlank { .. }),

@@ -137,7 +137,8 @@ fn minimal(repo: &Path) -> String {
         "version = 2\nrecipe = \"minimal-github-herdr\"\nsecret_backend = \"keychain\"\n\n\
          [[repositories]]\nname = \"totsuka\"\npath = \"{}\"\n\n\
          [github]\nowner = \"tomoya-k31\"\nowner_type = \"user\"\n\
-         project_number = 1\ngithub_login = \"tomoya-k31\"\n",
+         project_number = 1\ngithub_login = \"tomoya-k31\"\n\n\
+         [statuses]\nimplement_status = \"Todo\"\nimplement_done_status = \"In Review\"\n",
         repo.display()
     )
 }

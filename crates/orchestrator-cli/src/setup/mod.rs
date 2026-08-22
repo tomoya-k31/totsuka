@@ -661,9 +661,12 @@ pub(crate) fn build_config(
 
 /// Substitute a recipe fragment's `{{…}}` placeholders from the answers.
 ///
-/// A slot the answers do not carry falls back to its declared default, which is
-/// what an answers file written before the interview asked replays with (see
-/// [`Answers::statuses`](answers::Answers::statuses)).
+/// Both entry points guarantee every declared slot is present: the interview
+/// asks for exactly the ones its recipe declares, and `--answers` is refused
+/// with [`AnswersError::MissingStatus`](answers::AnswersError::MissingStatus)
+/// when one is absent. The `unwrap_or_else` below is therefore unreachable —
+/// it is there so a future third caller degrades to the suggestion rather than
+/// writing a literal `{{…}}`, not as a supported path.
 fn resolve_statuses(fragment: &str, recipe: &Recipe, answers: &Answers) -> String {
     let filled: std::collections::HashMap<String, String> = recipe
         .statuses
@@ -763,12 +766,16 @@ mod tests {
     use super::*;
     use orchestrator_core::config::RootConfig;
 
-    /// **An answers file written before the interview asked for status names
-    /// must still mean what it meant.** That is the whole argument for leaving
-    /// `ANSWERS_VERSION` where it is, so it is pinned by replaying a file in
-    /// the old shape — no `statuses` key at all — rather than by reasoning.
+    /// **An answers file written before the interview asked is refused, not
+    /// filled in.**
+    ///
+    /// Falling back to a suggestion would write column names the operator
+    /// never chose, and a name that is not on their board fails silently —
+    /// valid config, green `doctor`, a `run` that picks nothing up. Refusing
+    /// by name is the whole point, so it is pinned by replaying a file in the
+    /// old shape rather than by reasoning.
     #[test]
-    fn an_answers_file_without_statuses_replays_the_original_columns() {
+    fn an_answers_file_without_statuses_is_refused_with_the_keys_to_add() {
         let old_file = r#"
 version = 2
 recipe = "design-implement-handoff"
@@ -784,19 +791,44 @@ owner_type = "user"
 project_number = 1
 github_login = "tomoya-k31"
 "#;
-        let answers = Answers::from_toml_str("old.toml", old_file, RECIPES)
-            .expect("an old file still parses");
-        assert!(
-            answers.statuses.is_empty(),
-            "the fixture must not carry the new key, or it proves nothing"
-        );
-
-        let recipe = recipes::by_key("design-implement-handoff").unwrap();
-        let text = build_config("", &answers, recipe).expect("config builds");
-        for column in ["設計待ち", "設計レビュー待ち", "実装待ち", "レビュー待ち"]
-        {
-            assert!(text.contains(column), "`{column}` missing from:\n{text}");
+        let err = Answers::from_toml_str("old.toml", old_file, RECIPES)
+            .expect_err("a file with no statuses must be refused");
+        let message = err.to_string();
+        // Naming one key is not enough: the operator has to know the whole set
+        // to add, or they come back four times.
+        for key in [
+            "design_status",
+            "design_done_status",
+            "implement_status",
+            "implement_done_status",
+        ] {
+            assert!(message.contains(key), "`{key}` missing from: {message}");
         }
+    }
+
+    /// A recipe that uses no status columns is unaffected — an old file for it
+    /// still replays.
+    #[test]
+    fn a_recipe_without_status_columns_still_replays_an_old_file() {
+        let old_file = r#"
+version = 2
+recipe = "human-sign-off"
+secret_backend = "keychain"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/totsuka"
+
+[github]
+owner = "tomoya-k31"
+owner_type = "user"
+project_number = 1
+github_login = "tomoya-k31"
+"#;
+        let answers = Answers::from_toml_str("old.toml", old_file, RECIPES).expect("still parses");
+        let recipe = recipes::by_key("human-sign-off").unwrap();
+        let text = build_config("", &answers, recipe).expect("config builds");
+        assert!(text.contains("migration"), "{text}");
         assert!(
             !text.contains("{{"),
             "no placeholder may reach the config:\n{text}"
