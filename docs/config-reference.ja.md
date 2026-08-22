@@ -730,18 +730,16 @@ my-claude = "claude"
 name = "design"
 source = "github"
 trigger = { project_status = "設計待ち" }
-mode = "plan"
+profile = "design"          # mode / output / verification を解決する
 agent = "herdr"
-output = "source"
 on_success = { set_status = "設計レビュー待ち" }
 
 [[workflows]]
 name = "implement"
 source = "github"
 trigger = { project_status = "実装待ち" }
-mode = "implement"
+profile = "implement"
 agent = "herdr"
-output = "source"
 on_success = { set_status = "レビュー待ち" }
 ```
 

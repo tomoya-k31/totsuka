@@ -186,7 +186,7 @@ fn fetch_response() -> Value {
 }
 
 #[tokio::test]
-async fn full_flow_initialize_fetch_update() {
+async fn initialize_then_update_status() {
     let shared = Shared::default();
     let mut srv = server(&shared);
 
@@ -234,10 +234,12 @@ async fn full_flow_initialize_fetch_update() {
         json!({ "task_id": "I_1", "content": "x", "format": "markdown" }),
     )
     .await;
-    assert!(
-        resp.error.is_some(),
-        "a removed method must be refused, not silently accepted"
-    );
+    let err = resp.error.expect("a removed method must be refused");
+    assert_eq!(err.code, plugin_protocol::error_code::METHOD_NOT_FOUND);
+    // The message has to name the fix: this is reached only after the agent
+    // has done all the work, so "unknown method" would leave the operator
+    // guessing at the end of a wasted run.
+    assert!(err.message.contains("output"), "{}", err.message);
 }
 
 #[tokio::test]

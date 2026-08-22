@@ -122,6 +122,19 @@ where
             method::CONFIG_VALIDATE => self.config_validate(id, params).await,
             method::SHUTDOWN => Reply::shutdown_ack(id),
             method::TASK_UPDATE_STATUS => self.update_status(id, params).await,
+            // Named rather than left to `unknown method`. An older config with
+            // `output = "source"` reaches here only after the agent has done
+            // all the work, and the orchestrator reports whatever comes back
+            // as a publish failure — so the message has to say what to change.
+            // `config validate` catches this earlier, but only when it can see
+            // the plugin's declared outputs.
+            method::RESULT_PUBLISH => Reply::respond(Response::error(
+                id,
+                Error::new(
+                    error_code::METHOD_NOT_FOUND,
+                    "`result/publish` was removed: the deliverable is the agent's to write itself. Set the workflow's `profile` to design/implement, or write `output = \"none\"` — `output = \"source\"` no longer has a plugin behind it",
+                ),
+            )),
             other => Reply::respond(Response::error(
                 id,
                 Error::new(
@@ -239,8 +252,8 @@ where
     }
 }
 
-/// The capabilities this plugin declares (F-33/F-83): a task source that can
-/// write results back to the source (`result/publish`).
+/// The capabilities this plugin declares (F-33/F-83): a task source that
+/// publishes nothing — the deliverable is the agent's to write.
 ///
 /// It is a **push** source — it calls `task/submit` and is never polled — but
 /// that is no longer declared. Since `tasks/fetch` was removed at protocol
@@ -249,9 +262,10 @@ where
 fn capabilities_result() -> Value {
     let result = InitializeResult {
         plugin_version: plugin_version(),
-        capabilities: Capabilities {
-            ..Capabilities::default()
-        },
+        // No `outputs`: the deliverable is the agent's to write with Notion
+        // MCP (#398). Declaring `source` would let a workflow ask this plugin
+        // to publish, which it no longer can.
+        capabilities: Capabilities::default(),
     };
     serde_json::to_value(result).unwrap_or(Value::Null)
 }

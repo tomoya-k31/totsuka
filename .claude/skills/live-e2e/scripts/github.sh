@@ -10,7 +10,7 @@
 # github-task が先に拾って implement が走る。
 #   bash .claude/skills/live-e2e/scripts/github.sh clear <web|cli> <issue#>  # Status を外す
 #   bash .claude/skills/live-e2e/scripts/github.sh wait [sec]       # github タスクが終端に達するまで追う
-#   bash .claude/skills/live-e2e/scripts/github.sh verify <web|cli> <issue#> # F-07/F-84/F-86 を判定
+#   bash .claude/skills/live-e2e/scripts/github.sh verify <web|cli> <issue#> # F-84/F-86 を判定
 #
 # GraphQL のレートに注意（実測 2026-08-11）。`gh project` 系は 1 リクエスト 1 ポイント
 # ではない:
@@ -128,9 +128,10 @@ for i in json.load(sys.stdin)["items"]:
   if [ "$status" = "Done" ]; then chk 1 "F-84 Project の Status が Done"
   else chk 0 "F-84 Project の Status が Done（実際: ${status:-不明}）"; fi
 
-  comments="$(gh issue view "$n" -R "$OWNER/$r" --json comments --jq '.comments | length')"
-  if [ "$comments" -ge 1 ]; then chk 1 "F-07 Issue に成果物コメント（$comments 件）"
-  else chk 0 "F-07 Issue に成果物コメントが無い"; fi
+  # F-07（書き戻し）はここでは判定しない。github プラグインは publish せず
+  # （#398）、implement の指示文も「PR を作り URL を最終メッセージに含めよ」と
+  # しか言わないので、Issue コメントは誰も付けない。書き戻しの検証は Slack の
+  # シナリオ（承認 → 本人名義でスレッド返信）が担う。
 
   # main 以外のブランチが push されていれば、エージェントが push まで到達している
   branches="$(gh api "repos/$OWNER/$r/branches" --jq '[.[].name] | length')"

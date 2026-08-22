@@ -1,6 +1,6 @@
 //! GitHub task-source operations over a [`GithubTransport`]: fetch + normalize
-//! (F-01/F-02), status write-back (F-84), result publish (F-07), and token
-//! validation (F-59). All GraphQL is built as plain JSON bodies so no GraphQL
+//! (F-01/F-02), status write-back (F-84), and token validation (F-59). There is
+//! no publish path — the agent writes the deliverable itself (#398). All GraphQL is built as plain JSON bodies so no GraphQL
 //! client dependency is needed (mirrors the LLM adapter in orchestrator-core).
 
 use serde_json::{Value, json};

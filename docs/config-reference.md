@@ -729,18 +729,16 @@ A design-to-implementation handoff:
 name = "design"
 source = "github"
 trigger = { project_status = "Ready for design" }
-mode = "plan"
+profile = "design"          # resolves mode, output and verification
 agent = "herdr"
-output = "source"
 on_success = { set_status = "Ready for design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
 trigger = { project_status = "Ready to implement" }
-mode = "implement"
+profile = "implement"
 agent = "herdr"
-output = "source"
 on_success = { set_status = "Ready for review" }
 ```
 

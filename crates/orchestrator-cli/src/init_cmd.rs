@@ -47,11 +47,14 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # [[workflows]]
 # name = "implement"
 # source = "github"
-# trigger = { project_status = "実装待ち" }
-# mode = "implement"
+# trigger = { project_status = "Ready to implement" }
+# profile = "implement"          # resolves mode / output / verification
 # agent = "herdr"
-# output = "source"
-# on_success = { set_status = "レビュー待ち" }
+# on_success = { set_status = "In review" }
+#
+# `profile` resolves `output` for you. Do not write `output = "source"` for a
+# github or notion workflow: those plugins publish nothing (the agent writes
+# the deliverable itself), so the config would be rejected.
 "#;
 
 /// Create the XDG directories totsuka writes into (§5.6).

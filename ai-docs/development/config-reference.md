@@ -845,18 +845,16 @@ my-claude = "claude"
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "設計待ち" }
-mode = "plan"
+trigger = { project_status = "Ready to design" }
+profile = "design"
 agent = "herdr"
-output = "source"
-on_success = { set_status = "設計レビュー待ち" }
+on_success = { set_status = "Design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "実装待ち" }
-mode = "implement"
+trigger = { project_status = "Ready to implement" }
+profile = "implement"
 agent = "herdr"
-output = "source"
-on_success = { set_status = "レビュー待ち" }
+on_success = { set_status = "In review" }
 ```

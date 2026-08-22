@@ -1,6 +1,7 @@
 //! Notion task-source operations over a [`NotionTransport`]: fetch + normalize
-//! via the property map (F-01/F-03), status write-back (F-84), result publish
-//! (F-07), and token/schema validation (F-59). All bodies are plain JSON built
+//! via the property map (F-01/F-03), status write-back (F-84), and
+//! token/schema validation (F-59). There is no publish path — the agent writes
+//! the deliverable itself (#398). All bodies are plain JSON built
 //! with `serde_json` — no Notion SDK dependency.
 
 use serde_json::{Value, json};
