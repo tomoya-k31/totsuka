@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](click-to-focus-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:e54e4962b19963fbf07a6bc66bae646224275973bcca2515969101c6728414d1 -->
+<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:4ad9e93bc635818d285579b1a814db883576a7ed9ed7bf5ed0f274927ab78499 -->
 
 # Click a notification to open the task's pane
 
@@ -81,8 +81,30 @@ With `totsuka run` going, clicking a real notification should both raise the ter
 | Notifications arrive but clicks never worked, and the log warns about terminal-notifier | Not installed; each send falls back to `osascript` | Notifications are unaffected. Install terminal-notifier if you want click-to-focus |
 | `totsuka focus` prints a 401 | The running event receiver and the configured auth token disagree | Align the token and restart `totsuka run` |
 
+## Choosing which events notify you
+
+The same file controls which events produce a notification at all. Everything is on by default; list only what you want to turn off.
+
+```toml
+backend = "terminal_notifier"
+activate_bundle_id = "org.alacritty"
+
+# Applies to every workflow
+[filter.events]
+done = false
+pending = false
+
+# Per-workflow override — wins over the global setting above
+[filter.workflows.slack-reply]
+done = true
+```
+
+The event names are `waiting_input`, `done`, `failed`, `pending`, `escalated`, and `verification_pending`. The workflow name is the one from your `[[workflows]]` entry.
+
+The most specific setting wins: a per-workflow toggle beats the global one, and an event you never mention anywhere is delivered. A typo is not silently ignored — `totsuka config validate` rejects an unknown event name and lists the valid ones.
+
 ## Related
 
-The full setup path for a new machine is in the [setup playbook](setup-playbook.md). Notification filtering — which events notify you, per workflow — is in the [configuration reference](config-reference.md).
+The full setup path for a new machine is in the [setup playbook](setup-playbook.md).
 
 Detailed design notes and the reasoning behind these steps live in `ai-docs/operations/click-to-focus-setup.md` in the repository.

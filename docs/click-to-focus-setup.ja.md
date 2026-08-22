@@ -1,7 +1,7 @@
 > 🌐 [English](click-to-focus-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:e54e4962b19963fbf07a6bc66bae646224275973bcca2515969101c6728414d1 -->
+<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:4ad9e93bc635818d285579b1a814db883576a7ed9ed7bf5ed0f274927ab78499 -->
 
 # 通知をクリックしてタスクの pane を開く
 
@@ -82,8 +82,30 @@ terminal-notifier -title "test" -subtitle "click-to-focus" -message "click me" \
 | 通知は届くがクリックが一度も効かず、ログに terminal-notifier の警告が出る | 未導入。送信ごとに `osascript` へフォールバックしている | 通知自体には影響しない。click-to-focus が要るなら導入する |
 | `totsuka focus` が 401 を返す | 動いているイベント receiver と設定中の認証トークンが食い違っている | トークンを揃えて `totsuka run` を再起動する |
 
+## どのイベントで通知するか
+
+同じファイルで、そもそもどのイベントを通知するかも決められる。既定は全部 on なので、**切りたいものだけ**を書く。
+
+```toml
+backend = "terminal_notifier"
+activate_bundle_id = "org.alacritty"
+
+# 全ワークフローに効く
+[filter.events]
+done = false
+pending = false
+
+# ワークフロー別の上書き。上のグローバル設定より優先される
+[filter.workflows.slack-reply]
+done = true
+```
+
+イベント名は `waiting_input` / `done` / `failed` / `pending` / `escalated` / `verification_pending` の 6 つ。ワークフロー名は自分の `[[workflows]]` に書いた名前である。
+
+**より具体的な指定が勝つ** —— ワークフロー別がグローバルより優先され、どこにも書かなかったイベントは通知される。書き間違えても黙って無視はされない。`totsuka config validate` が不明なイベント名を弾き、有効な名前を並べて表示する。
+
 ## 関連
 
-新マシンの導入手順全体は [セットアップ Playbook](setup-playbook.ja.md) にある。どのイベントで通知するか（ワークフロー別の絞り込み）は [設定リファレンス](config-reference.ja.md) にある。
+新マシンの導入手順全体は [セットアップ Playbook](setup-playbook.ja.md) にある。
 
 詳細な設計上の判断と、これらの手順の背景はリポジトリの `ai-docs/operations/click-to-focus-setup.md` にある。

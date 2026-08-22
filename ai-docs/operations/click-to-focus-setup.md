@@ -55,6 +55,29 @@ owner: tomoya-k31
 
    通知クリックで「GUI ターミナルが前面化し、対象タスクの pane がフォーカスされる」ことを確認する。並走タスクがある場合は、それぞれの通知が正しい方の pane を開くこと（`-group totsuka-<task_id>` でタスク別に集約される）。
 
+# 通知するイベントを絞る（F-92）
+
+同じ `plugins/macos.toml` が配送フィルタも持つ。既定は全 on なので、**切りたいものだけ**を書く。
+
+```toml
+[filter.events]                    # 全ワークフローに効く
+done = false
+pending = false
+
+[filter.workflows.slack-reply]     # ワークフロー別。グローバルより優先される
+done = true
+```
+
+イベント名は `waiting_input` / `done` / `failed` / `pending` / `escalated` / `verification_pending`
+の 6 つ。`Filter::allows` は「**ワークフロー別 > グローバル > 既定（全 on）**」で判定するので、
+どこにも書かなかったイベントは配送される（新イベントも既定 on）。
+
+**キーの入れ子は `[filter.events]` であって `[notifier.filter.events]` ではない。**
+`plugins/macos.toml` の中身がそのまま `NotifierConfig` になるため、`notifier` という段は無い。
+`deny_unknown_fields` なので誤ると `initialize` が `-32003` で落ち、有効なキーを並べて示す
+（実測: `unknown field \`notifier\`, expected one of \`backend\`, …, \`filter\``）。
+イベント名の書き間違いも同様に弾かれる。
+
 # 切り分け表
 
 | 症状 | 原因候補 | 対処 |
