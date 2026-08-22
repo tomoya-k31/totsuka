@@ -4,7 +4,7 @@ title: herdr Socket API / 統合エージェント capability（外部一次情�
 description: "herdr の Socket API（NDJSON・1接続1リクエストの接続モデル・workspace/pane/agent メソッド・events.subscribe・agent_status・pane レイアウト）と統合エージェント capability マトリクスの要約。agent_ide プラグイン（#60/#124/#356）設計の根拠。protocol 17 で agent.start が manifest 駆動（kind + 既存 pane）へ、プロンプト投入が agent.prompt へ変わった破壊的変更を含む。Claude Code は lifecycle authority を持たず状態は screen manifest 由来（done は発火しない）という制約を含む。"
 resource: https://herdr.dev/docs/socket-api/
 tags: [herdr, socket-api, integration, agent-ide, external]
-generated: { by: claude-code/opus-5, at: 2026-08-11T15:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-23T21:00:00Z }
 status: stable
 stale_after: 2027-02-01
 owner: tomoya-k31
@@ -319,6 +319,15 @@ cwd のエンコードは `/` と `.` を `-` に置換（`/w/repo/.worktrees/x`
 
 - **Lifecycle Authority ✓** のエージェントのみ、`idle`/`working`/`blocked` を native に権威報告する。
   ✗ のエージェントは herdr の screen manifest（画面解析）フォールバックに依存し、リアルタイム状態の捕捉が不確実。
+
+# schema に載らない依存
+
+この文書は herdr が**公開している**契約のミラーである。totsuka はそれ以外に、
+**schema に一度も現れない振る舞い**にも依存している（metadata token の 80 文字上限、
+pane id の `:` 区切り、`workspace.create` の env が root pane に適用されること、
+`pane.split` が env を継承しないこと）。生成型も CI の schema 差分もその層を
+1 つもカバーしないので、一覧と確かめ方は
+[herdr の暗黙契約](/references/herdr-implicit-contracts.md) に分けてある。
 
 # Claude Code 固有の制約（要注意）
 
