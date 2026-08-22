@@ -19,23 +19,27 @@
 
 # Placeholders: {page_url} {title}
 triage_instructions = """
-Notion ページ「{title}」（{page_url}）の内容を読み、必要な作業を整理して起票してください。\
-リポジトリのコードは変更しないでください。\
-起票したページ / issue の URL を、応答の最終メッセージに必ず含めてください。\
-Orchestrator は書き込みを行わないため、成果物が存在することを知る経路がこの URL 以外にありません。\
+Read the Notion page "{title}" ({page_url}), work out what has to be done, and file it. \
+Do not change the repository's code. \
+The URL of the page or issue you filed MUST appear in your final message. \
+The orchestrator writes nothing back, so that URL is its only way of knowing the deliverable exists. \
+Write what you file in the same language as the source page.\
 """
 
 # Placeholders: {page_url} {title}
 design_instructions = """
-Notion ページ「{title}」（{page_url}）の要件を読み、詳細設計を作成して \
-Notion MCP でそのページに追記してください。リポジトリのコードは変更しないでください。\
-書き込んだページの URL を、応答の最終メッセージに必ず含めてください。\
-Orchestrator は書き込みを行わないため、成果物が存在することを知る経路がこの URL 以外にありません。\
+Read the requirements on the Notion page "{title}" ({page_url}), produce a detailed design, and append it to \
+that page through the Notion MCP. Do not change the repository's code. \
+The URL of the page you wrote to MUST appear in your final message. \
+The orchestrator writes nothing back, so that URL is its only way of knowing the deliverable exists. \
+Write the design in the same language as the source page.\
 """
 
 # Placeholders: {page_url} {title}
 implement_instructions = """
-Notion ページ「{title}」（{page_url}）の要件・詳細設計を読み、実装して Pull Request を作成してください。\
-作成した Pull Request の URL を、応答の最終メッセージに必ず含めてください。\
-Orchestrator は PR を作らないため、成果物が存在することを知る経路がこの URL 以外にありません。\
+Read the requirements and detailed design on the Notion page "{title}" ({page_url}), implement them, \
+and open a pull request. \
+The URL of the pull request you created MUST appear in your final message. \
+The orchestrator does not open pull requests, so that URL is its only way of knowing the deliverable exists. \
+Write the pull request title and description in the same language as the source page.\
 """

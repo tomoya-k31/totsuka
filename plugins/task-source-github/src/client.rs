@@ -525,9 +525,9 @@ mod tests {
                 .instructions
                 .unwrap()
         };
-        assert!(for_kind("implement").contains("Pull Request"));
-        assert!(for_kind("triage").contains("起票"));
-        assert!(for_kind("design").contains("詳細設計"));
+        assert!(for_kind("implement").contains("open a pull request"));
+        assert!(for_kind("triage").contains("work out what has to be done"));
+        assert!(for_kind("design").contains("produce a detailed design"));
     }
 
     /// **The compatibility half.** An Orchestrator that sends no

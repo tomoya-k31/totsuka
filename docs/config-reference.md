@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:95edbb486f7383c97f27500a0959ca63c625e67be3f59f45238394fc5c89cec2 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:78eaa47f947380a6876c3c72b5f8f818c57aa65c359138dbb3f1b23ec1b2c9d8 -->
 
 # Configuration reference
 
@@ -309,6 +309,10 @@ All are optional. **Without profiles these keys are never used** and task instru
 The Slack source reads the same signal and picks from its own three keys. **The choice is made on the kind, not on the task id prefix** — both `triage` and `implement` have prefixes, so branching on the prefix hands implementation instructions to a triage task. When the kind is unknown it falls back to reply instructions rather than guessing.
 
 **Setting `profile = "design"` on a Slack source does nothing visible.** The Slack plugin has no design instructions, and `design` outputs nothing, so the agent works and the result goes nowhere. Configuration validation passes, so the plugin logs a warning at dispatch. Use `triage` if you want Slack to file something.
+
+**The built-in defaults are English, and they never name a language.** The language of the deliverable is decided by a rule the agent follows — write the reply in the same language as the thread, the issue, or the page it came from. When you override these keys, prefer to leave the language unnamed too: naming one overrides both your agent's own settings and the language of the source message. Name a language only when you want to force it.
+
+The labels in the task **body** (`body_template` and the thread-context keys of the Slack source) are a separate decision and are left in Japanese: a human reads those in the pane, while the instructions above are read only by the agent.
 
 Expansion is single-pass: an issue title or page name is written by someone else, so a `{placeholder}` in it is inserted as text and never becomes an instruction.
 

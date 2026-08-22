@@ -59,4 +59,5 @@
 * [ADR-0051 プラグインの死活監視を全 kind へ広げ、予算付きで自動再起動する](adr-0051-plugin-supervision.md) - 死活検知が agent_ide だけに配線され、しかも通知ストリームの終端に紐づいていた非対称を解消する決定。検知は子プロセスの終了そのものに紐づけ、Liveness で「クラッシュ」と「意図した停止」を区別し、予算を使い切ったらエスカレーションする。プロトコル変更なし。
 * [ADR-0052 プロトコルの宣言は「誰かが読んでいる」ことを機械検証する（protocol 0.5.0）](adr-0052-declaration-consumed.md) - Capabilities のフィールドと error_code の定数が実際に消費されていることを arch-lint で検査し、それに引っかかった 5 件を削除する決定。resume_session は hook_completion へ置き換え、diagnostics_snapshot は実 RPC をゲートするため独立のまま残す。ワイヤは壊れないが型は壊れるので protocol を 0.5.0 へ。
 * [ADR-0053 配布を Homebrew tap に寄せ、formula は別リポジトリに置く](adr-0053-homebrew-tap-distribution.md) - sudo 5 本の tarball 手配置をやめ brew install / brew upgrade へ移す決定。formula は tomoya-k31/homebrew-tap に置き、リリースジョブが version と sha256 の 2 行だけを書き換えて push する。本リポジトリ内の Formula/ 案はブランチ保護で自動化できないため却下。tap が実際に効くのは本リポジトリが public になってから。
+* [ADR-0054 組み込みプロンプトは英語で書き、成果物の言語は文脈に従わせる](adr-0054-prompt-language-policy.md) - プラグインの defaults.toml が持つエージェント向け指示文を英語へ統一し、そこに焼き込まれていた「日本語で」という言語指定を「スレッド / 元 issue と同じ言語で書け」という規則へ置き換える決定。locale を読む案と output_language キー新設案は却下。人間が読む UI 文言とタスク本文のラベルは対象外。
 <!-- okf:index:end -->

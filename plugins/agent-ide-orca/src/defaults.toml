@@ -33,4 +33,4 @@
 # The trailing blank line matters: the task prompt is concatenated directly
 # after this string, and without the separation the directive runs into the
 # first line of the task.
-plan_prefix = "【設計のみ / plan mode】まず設計・計画を提示し、コードの実装や変更はしないでください。\n\n"
+plan_prefix = "[Design only / plan mode] Present a design and a plan first. Do not implement or modify code.\n\n"

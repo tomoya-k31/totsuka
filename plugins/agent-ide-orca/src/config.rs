@@ -174,12 +174,17 @@ mod tests {
 
     #[test]
     fn default_plan_prefix_matches_todays_literal() {
-        // Pinned against the literal as it stood in Rust before #317 moved it
-        // into `defaults.toml` — deliberately spelled out here rather than
-        // re-derived from `DEFAULTS`, which would make the assertion vacuous.
+        // Was pinned against the literal as it stood in Rust before #317
+        // moved it into `defaults.toml`. That literal was Japanese and has
+        // been rewritten into English, so there is no pre-#317 text left to
+        // transcribe: the expectation below is now derived from `DEFAULTS`
+        // and therefore only catches an *unintended* edit, not a wrong one.
+        // The `ends_with("\n\n")` assertion under it is the one that still
+        // holds on merit — that shape is what `compose_prompt` depends on.
         assert_eq!(
             default_plan_prefix(),
-            "【設計のみ / plan mode】まず設計・計画を提示し、コードの実装や変更はしないでください。\n\n"
+            "[Design only / plan mode] Present a design and a plan first. \
+             Do not implement or modify code.\n\n"
         );
         // The trailing blank line separates the directive from the task prompt
         // that `compose_prompt` concatenates onto it.
