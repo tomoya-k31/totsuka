@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0054 組み込みプロンプトは英語で書き、成果物の言語は文脈に従わせる
 description: "プラグインの defaults.toml が持つエージェント向け指示文を英語へ統一し、そこに焼き込まれていた「日本語で」という言語指定を「スレッド / 元 issue と同じ言語で書け」という規則へ置き換える決定。locale を読む案と output_language キー新設案は却下。人間が読む UI 文言とタスク本文のラベルは対象外。"
 tags: [decision, prompts, i18n, plugins, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-22T13:00:00Z }
 verified: { by: human:tomoya-k31, at: 2026-08-22T13:00:00Z }
 status: stable
 owner: tomoya-k31
