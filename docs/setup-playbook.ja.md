@@ -80,7 +80,7 @@ totsuka run --watch
 | Codex | TUI で hooks の信頼を承認する。**しないとフックが黙ってスキップされ、全タスクがタイムアウトする** |
 | OpenCode | 初回起動と設定の配置 |
 | 1Password | `op://` 参照を使うなら `op signin` |
-| 通知クリック | `terminal-notifier` の導入と bundle id の設定 |
+| 通知クリック | `terminal-notifier` の導入と bundle id の設定 → [click-to-focus セットアップ](click-to-focus-setup.ja.md) |
 
 ## 開発機に入れる
 

@@ -79,7 +79,7 @@ Things setup cannot do on your behalf.
 | Codex | Approve hooks trust in the TUI. **Without it, hooks are silently skipped and every task times out** |
 | OpenCode | First launch and config placement |
 | 1Password | `op signin`, if you use `op://` references |
-| Click-to-focus notifications | Install `terminal-notifier` and set the bundle id |
+| Click-to-focus notifications | Install `terminal-notifier` and set the bundle id — see [click-to-focus setup](click-to-focus-setup.md) |
 
 ## Installing from a development checkout
 

@@ -1,6 +1,6 @@
 ---
 name: human-docs
-description: 人間向け docs/ を ai-docs/ の対応ソースから生成・更新するときに使う。トリガー: ai-docs/development/config-reference.md・plugin-dev-guide.md、ai-docs/operations/setup-playbook.md・operations-guide.md・slack-quickstart.md、ai-docs/product/orchestrator-spec(.ja).md のいずれかを編集したとき（この 6 本は docs/ の生成元なので、触ったら必ず生成物も更新する）。docs/ 配下の生成ページを直すとき、生成ページを増減するとき、「鮮度検査が落ちた」「generated-from が stale」「宣言した生成物が無い」等の依頼にも使う。手書きの docs/index.md・index.ja.md だけは生成対象外で、このスキルの手順は適用しない。
+description: 人間向け docs/ を ai-docs/ の対応ソースから生成・更新するときに使う。トリガー: ai-docs/development/config-reference.md・plugin-dev-guide.md、ai-docs/operations/setup-playbook.md・operations-guide.md・slack-quickstart.md・click-to-focus-setup.md、ai-docs/product/orchestrator-spec(.ja).md のいずれかを編集したとき（この 7 本は docs/ の生成元なので、触ったら必ず生成物も更新する）。docs/ 配下の生成ページを直すとき、生成ページを増減するとき、「鮮度検査が落ちた」「generated-from が stale」「宣言した生成物が無い」等の依頼にも使う。手書きの docs/index.md・index.ja.md だけは生成対象外で、このスキルの手順は適用しない。
 allowed-tools: Read, Write, Edit, Bash, Grep
 ---
 
@@ -22,10 +22,11 @@ OKF ではない（frontmatter も元帳も index 掲載義務も無い）。**`
 | `docs/setup-playbook.md` / `.ja.md` | `ai-docs/operations/setup-playbook.md` |
 | `docs/operations-guide.md` / `.ja.md` | `ai-docs/operations/operations-guide.md` |
 | `docs/slack-setup.md` / `.ja.md` | `ai-docs/operations/slack-quickstart.md` |
+| `docs/click-to-focus-setup.md` / `.ja.md` | `ai-docs/operations/click-to-focus-setup.md` |
 | `docs/orchestrator-spec.md` | `ai-docs/product/orchestrator-spec.md` |
 | `docs/orchestrator-spec.ja.md` | `ai-docs/product/orchestrator-spec.ja.md` |
 
-`orchestrator-spec` **だけ**が英日で別ソースを持つ。残り 5 本のソースは日本語 1 本で、
+`orchestrator-spec` **だけ**が英日で別ソースを持つ。残り 6 本のソースは日本語 1 本で、
 そこから `.md`（英語）と `.ja.md`（日本語）の両方を作る。したがって両者には
 **同じソースの同じ hash** が入る。
 
