@@ -17,9 +17,12 @@ pub trait GithubTransport: Send + Sync {
     /// return the full response JSON (including any top-level `errors`).
     ///
     /// `idempotent` guards automatic retries: a timed-out/5xx request is only
-    /// re-sent when replaying it is safe. Mutations that create side effects
-    /// (e.g. `addComment`) pass `false` so a lost response never posts a
-    /// duplicate.
+    /// re-sent when replaying it is safe. **Every current caller passes `true`**
+    /// — setting a project field to a value gives the same result however many
+    /// times it lands, and the one call that could duplicate (`addComment`)
+    /// went with `result/publish` (#398). The flag stays because a future
+    /// create-shaped mutation would need it, and finding that out from a
+    /// duplicated side effect is expensive.
     fn post_graphql(
         &self,
         body: Value,

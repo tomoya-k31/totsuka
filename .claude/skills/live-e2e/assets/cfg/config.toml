@@ -83,15 +83,16 @@ agent = "herdr"
 output = "source"
 
 # GitHub: Todo の item を拾い、実際にコードを書かせる。
-# 検証点は F-84（ステータス書き戻し）、F-07（Issue コメント）、
+# 検証点は F-84（ステータス書き戻し）と
 # F-86 / ADR-0026（エージェント自身がブランチを切って push する）。
+# Issue コメントは検証点ではない —— github プラグインは publish しない
+# （#398。成果物はエージェントが gh で自分で書く）。
 [[workflows]]
 name = "github-task"
 source = "github"
 trigger = { project_status = "Todo" }
-mode = "implement"
+profile = "implement"
 agent = "herdr"
-output = "source"
 on_success = { set_status = "Done" }
 # 既定 1800s は検証には長すぎる。詰まったら 15 分でエスカレーションさせる。
 timeout_secs = 900

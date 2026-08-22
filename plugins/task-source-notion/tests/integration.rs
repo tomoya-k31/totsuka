@@ -1,6 +1,6 @@
 //! End-to-end plugin flow over a recorded REST transport (no network):
 //! initialize → poll_loop → `task/submit` push (0.1.6), normalize via the
-//! property map → page-body fetch → task/update_status → result/publish
+//! property map → page-body fetch → task/update_status
 //! (with block splitting), plus ingest gating (F-08), unknown-status
 //! rejection (F-84), and config/validate against the database schema
 //! (F-59). `tasks/fetch` no longer exists as of protocol 0.2.0 (#190).
@@ -235,16 +235,17 @@ fn query_response() -> Value {
 }
 
 #[tokio::test]
-async fn full_flow_initialize_update_publish() {
+async fn initialize_then_update_status() {
     let shared = Shared::default();
     let mut srv = server(&shared);
 
-    // initialize → declares outputs = ["source"]. `task_submit` is gone in
-    // 0.5.0: every task_source has been push-only since `tasks/fetch` was
-    // removed at 0.2.0, so the flag could only ever be `true`.
+    // initialize → declares no outputs: the agent writes the deliverable
+    // itself. `task_submit` is gone in 0.5.0 too — every task_source has been
+    // push-only since `tasks/fetch` was removed at 0.2.0, so the flag could
+    // only ever be `true`.
     let resp = call(&mut srv, 1, "initialize", init_params()).await;
     let result = resp.result.expect("initialize result");
-    assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
+    assert_eq!(result["capabilities"]["outputs"], json!([]));
 
     // task/update_status → maps レビュー待ち → "In Review", verifies the option
     // exists (DB fetch), then PATCHes the page property.
@@ -269,22 +270,20 @@ async fn full_flow_initialize_update_publish() {
         "In Review"
     );
 
-    // result/publish → appends converted blocks to the page (F-07).
-    shared.push(Canned::Data(json!({ "results": [] })));
+    // `result/publish` is gone: the agent writes the deliverable itself.
     let resp = call(
         &mut srv,
         4,
         "result/publish",
-        json!({ "task_id": "P_1", "content": "# Design\n- point", "format": "markdown" }),
+        json!({ "task_id": "PAGE_1", "content": "x", "format": "markdown" }),
     )
     .await;
-    assert!(resp.error.is_none(), "publish failed: {:?}", resp.error);
-    let append = shared.last_request();
-    assert_eq!(append.method, HttpMethod::Patch);
-    assert_eq!(append.path, "/blocks/P_1/children");
-    let children = append.body.unwrap()["children"].clone();
-    assert_eq!(children[0]["type"], "heading_1");
-    assert_eq!(children[1]["type"], "bulleted_list_item");
+    let err = resp.error.expect("a removed method must be refused");
+    assert_eq!(err.code, plugin_protocol::error_code::METHOD_NOT_FOUND);
+    // The message has to name the fix: this is reached only after the agent
+    // has done all the work, so "unknown method" would leave the operator
+    // guessing at the end of a wasted run.
+    assert!(err.message.contains("output"), "{}", err.message);
 }
 
 #[tokio::test]
@@ -338,32 +337,6 @@ async fn fetch_excludes_in_progress_on_statusless_trigger() {
             .is_none(),
         "no server-side filter without a trigger status"
     );
-}
-
-#[tokio::test]
-async fn publish_splits_long_content_over_2000_chars() {
-    let shared = Shared::default();
-    let mut srv = server(&shared);
-    call(&mut srv, 1, "initialize", init_params()).await;
-
-    // One 2500-char paragraph → two blocks, appended in a single request.
-    shared.push(Canned::Data(json!({ "results": [] })));
-    let long = "あ".repeat(2500);
-    let resp = call(
-        &mut srv,
-        2,
-        "result/publish",
-        json!({ "task_id": "P_1", "content": long }),
-    )
-    .await;
-    assert!(resp.error.is_none(), "publish failed: {:?}", resp.error);
-    let children = shared.last_request().body.unwrap()["children"].clone();
-    let children = children.as_array().unwrap();
-    assert_eq!(children.len(), 2, "2500 chars split at the 2000 limit");
-    let first = children[0]["paragraph"]["rich_text"][0]["text"]["content"]
-        .as_str()
-        .unwrap();
-    assert_eq!(first.chars().count(), 2000);
 }
 
 #[tokio::test]
@@ -535,10 +508,10 @@ fn shipped_manifest_is_valid_and_declares_push_source() {
         .expect("plugin.toml parses");
     assert_eq!(manifest.name, "notion");
     assert_eq!(manifest.kind, plugin_protocol::PluginKind::TaskSource);
-    assert_eq!(
-        manifest.capabilities.outputs,
-        vec![plugin_protocol::OutputCapability::Source]
-    );
+    // Nothing is published by this plugin any more: the agent writes the
+    // deliverable itself, so declaring `source` would advertise an RPC that
+    // no longer exists.
+    assert!(manifest.capabilities.outputs.is_empty());
     assert!(
         manifest.is_compatible_with(&plugin_protocol::protocol_version()),
         "manifest must accept the current protocol version"

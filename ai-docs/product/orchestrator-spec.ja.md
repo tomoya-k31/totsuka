@@ -88,7 +88,7 @@ Notion タスクや GitHub Projects に紐づく Issue などのタスク管理�
 | F-05 | タスク完了・進行中などのステータスをソース側へ書き戻せる(双方向同期) | S |
 | F-08 | **複数人利用時の取り込み確認・制御はタスクソースプラグインの役割**とする(厳密な排他制御までは不要)。例: assignee の有無・実行中ステータスの確認により、他メンバーが着手中のタスクを取り込まない | M |
 | F-06 | ポーリング間隔の設定(webhook はローカルアプリのため v1 では非対応) | S |
-| F-07 | **結果の書き戻し(`result/publish` RPC)**: 詳細設計の成果物(設計ドキュメント等)を Issue コメント / Notion ページ本文などソース側へ記載できる。記載先・フォーマットの実現はタスクソースプラグインの責務 | M |
+| F-07 | **結果の書き戻し(`result/publish` RPC)**: タスクソースは Orchestrator の成果物を書き戻せる*ことがある*。記載先・フォーマットの実現はプラグインの責務で、実装するプラグインだけが `source` の output ケイパビリティを宣言する。**全ソースが実装するわけではない。** エージェント自身が成果物を書ける場合(`gh` のコメント、Notion のページ)はそちらが書き、プラグインは何も宣言しない。この RPC は Orchestrator が仲介しなければならないソース向けである —— 承認を経て本人名義で出す Slack の返信がそれにあたる | M |
 
 **Task 共通スキーマ(案)**: `id, source, title, body, repo_hint, labels, priority, status, url, assignee`
 
@@ -230,20 +230,18 @@ request_timeout_secs = 30
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "設計待ち" }
-mode = "plan"
+trigger = { project_status = "Ready to design" }
+profile = "design"                       # mode / output / verification を解決する
 agent = "herdr"
-output = "source"                        # 結果を Issue コメントへ記載
-on_success = { set_status = "設計レビュー待ち" }
+on_success = { set_status = "Design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "実装待ち" }
-mode = "implement"
+trigger = { project_status = "Ready to implement" }
+profile = "implement"
 agent = "herdr"
-output = "source"
-on_success = { set_status = "レビュー待ち" }
+on_success = { set_status = "In review" }
 ```
 
 ### 4.10 通知(Notifier プラグイン)
@@ -412,7 +410,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | `config/validate` | O→P | 共通 | 固有設定の検証(F-59) |
 | `task/submit` | **P→O request** | task_source | プラグインが見つけたタスクを push(persist-before-ack、protocol 0.1.6)。protocol 0.2.0 で削除された `tasks/fetch` の後継 — task_source は全て push 専用 |
 | `task/update_status` | O→P | task_source | ソース側ステータス遷移(F-84) |
-| `result/publish` | O→P | task_source | 設計結果等の書き戻し(F-07) |
+| `result/publish` | O→P | task_source | 成果物の書き戻し。実装するソースのみ(F-07) |
 | `task/dispatch` | O→P | agent_ide | worktree・タスク・mode を渡し実行開始。セッション ID を返す |
 | `task/cancel` | O→P | agent_ide | 実行キャンセル |
 | `session/attach` | O→P | agent_ide | 既存セッションへの再接続(F-37) |

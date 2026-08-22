@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:02a7d68856b453a244b0696eb4d507a639124b95e04c2f74662fec297b349332 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:1a6f0ee472dc41f8adbbaa107fbb8ea5ca13596e9bd92d3158c2c895b07fb593 -->
 
 # Plugin development guide
 
@@ -40,7 +40,9 @@ state_stream = true                 # agent: supports the state stream
 pane_control = true                 # agent: can focus, release and list panes
 hook_completion = true              # agent: reports completion via tool hooks
 diagnostics_snapshot = true         # agent: answers diagnostics/snapshot
-outputs = ["source"]                # task_source: supports publishing results
+outputs = ["source"]                # declare it only if you implement
+                                   # result/publish; without it, a workflow
+                                   # asking for output = "source" is rejected
 ```
 
 Before starting your plugin, the orchestrator checks `protocol_version` for compatibility and only asks for the capabilities you declared.

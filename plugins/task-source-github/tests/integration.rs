@@ -1,6 +1,6 @@
 //! End-to-end plugin flow over a recorded GraphQL transport (no network):
 //! initialize → poll_loop → `task/submit` push (0.1.6), normalize →
-//! task/update_status → result/publish, plus ingest gating (F-08) and
+//! task/update_status, plus ingest gating (F-08) and
 //! invalid-token config/validate (F-59). `tasks/fetch` no longer exists as
 //! of protocol 0.2.0 (#190).
 
@@ -186,16 +186,17 @@ fn fetch_response() -> Value {
 }
 
 #[tokio::test]
-async fn full_flow_initialize_update_publish() {
+async fn initialize_then_update_status() {
     let shared = Shared::default();
     let mut srv = server(&shared);
 
-    // initialize → declares outputs = ["source"]. `task_submit` is gone in
-    // 0.5.0: every task_source has been push-only since `tasks/fetch` was
-    // removed at 0.2.0, so the flag could only ever be `true`.
+    // initialize → declares no outputs: the agent writes the deliverable
+    // itself. `task_submit` is gone in 0.5.0 too — every task_source has been
+    // push-only since `tasks/fetch` was removed at 0.2.0, so the flag could
+    // only ever be `true`.
     let resp = call(&mut srv, 1, "initialize", init_params()).await;
     let result = resp.result.expect("initialize result");
-    assert_eq!(result["capabilities"]["outputs"], json!(["source"]));
+    assert_eq!(result["capabilities"]["outputs"], json!([]));
 
     // task/update_status → maps レビュー待ち → "In Review", resolves ids, mutates.
     shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
@@ -225,20 +226,20 @@ async fn full_flow_initialize_update_publish() {
     assert_eq!(vars["field"], "FIELD_1");
     assert_eq!(vars["option"], "OPT_review");
 
-    // result/publish → posts an Issue comment on the task's subject id (F-07).
-    shared.push(Canned::Data(json!({ "data": { "addComment": {
-        "commentEdge": { "node": { "url": "https://github.com/me/totsuka/issues/1#c1" } } } } })));
+    // `result/publish` is gone: the agent writes the deliverable itself.
     let resp = call(
         &mut srv,
         4,
         "result/publish",
-        json!({ "task_id": "I_1", "content": "# Design\nlooks good", "format": "markdown" }),
+        json!({ "task_id": "I_1", "content": "x", "format": "markdown" }),
     )
     .await;
-    assert!(resp.error.is_none(), "publish failed: {:?}", resp.error);
-    let vars = &shared.last_request()["variables"];
-    assert_eq!(vars["subject"], "I_1");
-    assert_eq!(vars["body"], "# Design\nlooks good");
+    let err = resp.error.expect("a removed method must be refused");
+    assert_eq!(err.code, plugin_protocol::error_code::METHOD_NOT_FOUND);
+    // The message has to name the fix: this is reached only after the agent
+    // has done all the work, so "unknown method" would leave the operator
+    // guessing at the end of a wasted run.
+    assert!(err.message.contains("output"), "{}", err.message);
 }
 
 #[tokio::test]
@@ -441,10 +442,10 @@ fn shipped_manifest_is_valid_and_declares_push_source() {
         .expect("plugin.toml parses");
     assert_eq!(manifest.name, "github");
     assert_eq!(manifest.kind, plugin_protocol::PluginKind::TaskSource);
-    assert_eq!(
-        manifest.capabilities.outputs,
-        vec![plugin_protocol::OutputCapability::Source]
-    );
+    // Nothing is published by this plugin any more: the agent writes the
+    // deliverable itself, so declaring `source` would advertise an RPC that
+    // no longer exists.
+    assert!(manifest.capabilities.outputs.is_empty());
     assert!(
         manifest.is_compatible_with(&plugin_protocol::protocol_version()),
         "manifest must accept the current protocol version"

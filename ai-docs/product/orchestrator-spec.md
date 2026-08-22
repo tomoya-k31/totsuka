@@ -87,7 +87,7 @@ Priorities use MoSCoW (M: Must / S: Should / C: Could / W: Won't in v1).
 | F-05 | Write statuses such as task done / in progress back to the source (bidirectional sync) | S |
 | F-08 | **Intake confirmation/control for multi-user usage is the task-source plugin's role** (strict mutual exclusion not required). E.g. check assignee presence / in-progress status so tasks another member is working on are not picked up | M |
 | F-06 | Configurable polling interval (webhooks unsupported in v1 since this is a local app) | S |
-| F-07 | **Result write-back (`result/publish` RPC)**: artifacts of detailed design (design documents etc.) can be written to the source — Issue comments, Notion page bodies, etc. Destination and formatting are the task-source plugin's responsibility | M |
+| F-07 | **Result write-back (`result/publish` RPC)**: a task source *may* write the orchestrator's artifact back — the destination and formatting are the plugin's responsibility, and a plugin that implements it declares the `source` output capability. **Not every source does.** Where the agent can write the deliverable itself (a `gh` comment, a Notion page), it does, and the plugin declares nothing; the RPC is for sources where the orchestrator has to mediate — Slack, whose reply goes out under the operator's own name only after approval | M |
 
 **Task common schema (proposal)**: `id, source, title, body, repo_hint, labels, priority, status, url, assignee`
 
@@ -229,20 +229,18 @@ On top of the same plugin binaries, any number of **named configurations — wor
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "設計待ち" }
-mode = "plan"
+trigger = { project_status = "Ready to design" }
+profile = "design"                       # resolves mode / output / verification
 agent = "herdr"
-output = "source"                        # write results to an Issue comment
-on_success = { set_status = "設計レビュー待ち" }
+on_success = { set_status = "Design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "実装待ち" }
-mode = "implement"
+trigger = { project_status = "Ready to implement" }
+profile = "implement"
 agent = "herdr"
-output = "source"
-on_success = { set_status = "レビュー待ち" }
+on_success = { set_status = "In review" }
 ```
 
 ### 4.10 Notifications (notifier plugins)
@@ -409,7 +407,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 | `config/validate` | O→P | common | Validate plugin-specific config (F-59) |
 | `task/submit` | **P→O request** | task_source | Push a task the plugin found (persist-before-ack, protocol 0.1.6). Replaces the removed `tasks/fetch` as of protocol 0.2.0 — every task_source is push-only |
 | `task/update_status` | O→P | task_source | Source-side status transition (F-84) |
-| `result/publish` | O→P | task_source | Write back design results etc. (F-07) |
+| `result/publish` | O→P | task_source | Write the artifact back, for the sources that implement it (F-07) |
 | `task/dispatch` | O→P | agent_ide | Pass worktree, task, and mode; start execution. Returns a session ID |
 | `task/cancel` | O→P | agent_ide | Cancel execution |
 | `session/attach` | O→P | agent_ide | Reconnect to an existing session (F-37) |

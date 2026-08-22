@@ -25,7 +25,6 @@ bash .claude/skills/live-e2e/scripts/github.sh verify web 1
 | 実装 | ブランチが切られ、コミットが乗る |
 | **F-86 / ADR-0026** | **ブランチが push され、PR が作られる** |
 | 完了検知 + `verification = "llm"` | `dispatched → running → publishing → done` |
-| **F-07** | **Issue にコメントが付く** |
 | **F-84** | **Project の Status が `Todo` → `Done`** |
 | 掃除 | `$E2E_HOME/wt/` が空、`herdr agent list` が空 |
 | セッション記録 | `tt task show <id>` に `pane_id|session_id` |

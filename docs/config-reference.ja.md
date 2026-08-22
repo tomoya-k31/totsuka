@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:3f50844c3296dd480fa8e2f7336d7ffb961c8128252a238040a0c46c9e7131b5 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:28d258b2bbe0532c17d66c541bfce9498bd82aa4080409141ae3727b165fab20 -->
 
 # 設定リファレンス
 
@@ -582,14 +582,14 @@ poll_interval_secs = 60   # 60 は既定値でもある
 
 ### トークンに必要な権限
 
-**コードが呼んでいるものからの導出であって、実測ではない** — 最小値は絞り込んでいない。呼び出しは全て `https://api.github.com/graphql` への POST で、操作は 5 つだけである: Project アイテムの取得、Project / フィールド / アイテムの id 解決、`updateProjectV2ItemFieldValue`、Issue への `addComment`、`viewer`。REST も Contents API も使わない。
+**コードが呼んでいるものからの導出であって、実測ではない** — 最小値は絞り込んでいない。呼び出しは全て `https://api.github.com/graphql` への POST で、操作は 4 つだけである: Project アイテムの取得、Project / フィールド / アイテムの id 解決、`updateProjectV2ItemFieldValue`、`viewer`。REST も Contents API も使わず、**Issue へは何も書き込まない** —— 成果物はエージェントが自分で書く。
 
 fine-grained PAT の場合:
 
 | 種別 | 権限 |
 |---|---|
 | Repository | **Metadata: Read**（必須） |
-| Repository | **Issues: Read and write** |
+| Repository | **Issues: Read**（write は不要） |
 | Organization **または** Account | **Projects: Read and write** — org 所有のボードなら Organization、user 所有なら Account |
 
 **Contents は不要。** classic PAT なら `project` と、`repo`（private リポジトリを含む場合）または `public_repo`。private な組織のボードでは `read:org` も要りうる。
@@ -730,18 +730,16 @@ my-claude = "claude"
 name = "design"
 source = "github"
 trigger = { project_status = "設計待ち" }
-mode = "plan"
+profile = "design"          # mode / output / verification を解決する
 agent = "herdr"
-output = "source"
 on_success = { set_status = "設計レビュー待ち" }
 
 [[workflows]]
 name = "implement"
 source = "github"
 trigger = { project_status = "実装待ち" }
-mode = "implement"
+profile = "implement"
 agent = "herdr"
-output = "source"
 on_success = { set_status = "レビュー待ち" }
 ```
 

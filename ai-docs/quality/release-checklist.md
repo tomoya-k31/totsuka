@@ -24,7 +24,7 @@ CI（[テスト戦略](/quality/test-strategy.md)）は実 mock プラグイン�
 
 - [ ] `totsuka run --dry-run` で実タスクが正しいワークフロー・リポジトリ・エージェントにマッチする
 - [ ] `run` 後、対象 Issue / Notion ページのステータスが `on_success` の値に更新される（F-84）
-- [ ] `output = source` のワークフローで、成果物が Issue コメント / Notion ページ本文に追記される（F-07）
+- [ ] Slack の返信案を承認すると、本人名義でスレッドに投稿される（F-07 の書き戻し。**github / notion は publish しない** —— 成果物はエージェントが `gh` / Notion MCP で自分で書くので、Issue コメントの有無で判定しない）
 
 # agent_ide（herdr）
 

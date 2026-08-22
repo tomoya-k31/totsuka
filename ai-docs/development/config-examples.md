@@ -228,7 +228,7 @@ source = "github"                            # 必須。enabled な task_source 
 trigger = { project_status = "設計待ち" }     # 省略すると全タスクにマッチ
 mode = "plan"                                # plan | implement
 agent = "herdr"                              # 必須。enabled な agent_ide 名
-output = "source"                            # source | none
+output = "none"                              # source | none。github は publish しない（#398）
 on_success = { set_status = "設計レビュー待ち" }
 on_failure = { set_status = "設計失敗" }
 verification = "llm"                         # llm | human | none（省略時 llm）
@@ -237,14 +237,14 @@ timeout_secs = 1800                          # 無応答上限秒。超過でエ
 tool = "claude"                              # AI ツールの明示ピン（#196。llm 検収は claude 必須のため静的に保証。省略時 repo → default_tool）
 
 # 同じことを profile で書いた版。mode / verification は profile が決めるので書かない
-# （書くとエラー）。output だけは上書きしてよい。
+# （書くとエラー）。output だけは上書きしてよいが、ここでは profile の既定
+# （implement → none）がそのまま正しいので書かない。
 [[workflows]]
 name = "implement"
 source = "github"
 trigger = { project_status = "実装待ち" }
 profile = "implement"                        # answer | triage | design | implement
 agent = "herdr"
-output = "source"                            # profile の既定（none）を上書き
 on_success = { set_status = "レビュー待ち" }
 rubric = "テストが追加されており、cargo clippy / cargo fmt が通っていること"
 
@@ -571,15 +571,14 @@ kind = "agent_ide"
 name = "implement"
 source = "github"
 trigger = { project_status = "実装待ち" }
-mode = "implement"
+profile = "implement"
 agent = "herdr"
-output = "source"
 on_success = { set_status = "レビュー待ち" }
 ```
 
 ## 2. 設計 → 実装ハンドオフ
 
-人間のレビューを 1 回挟む 2 段構え。設計は書き戻しだけ、実装は PR。
+人間のレビューを 1 回挟む 2 段構え。**どちらの成果物もエージェントが自分で書く**（設計は `gh issue comment`、実装は PR）—— github プラグインは publish しない（#398）。
 `design` が先に定義されているので、`設計待ち` のカードは `design` に、`実装待ち` のカードは `implement` にマッチする。
 
 ```toml
@@ -587,18 +586,16 @@ on_success = { set_status = "レビュー待ち" }
 name = "design"
 source = "github"
 trigger = { project_status = "設計待ち" }
-mode = "plan"                                   # push しない
+profile = "design"                              # push しない。output は none に解決される
 agent = "herdr"
-output = "source"                               # 設計案を Issue へ書き戻す
 on_success = { set_status = "設計レビュー待ち" }  # 人間のレビュー待ちへ
 
 [[workflows]]
 name = "implement"
 source = "github"
 trigger = { project_status = "実装待ち" }        # 人がレビュー後に手で移す
-mode = "implement"
+profile = "implement"
 agent = "herdr"
-output = "source"
 on_success = { set_status = "レビュー待ち" }
 ```
 
@@ -653,7 +650,8 @@ source = "github"
 trigger = { labels = ["migration", "high-risk"] }   # 両方のラベルが必要（AND）
 mode = "implement"
 agent = "herdr"
-output = "source"
+output = "none"             # github は publish しない（#398）。profile を書かない
+                            # 構成では output の明示が必須なので省略できない
 verification = "human"      # totsuka task verify を待って止まる
 timeout_secs = 3600
 ```

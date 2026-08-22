@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:58208ce5971ef3926e8be1d1c76a76c664448fb3ec50655999bb3ec63e1ce624 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:53b66ebe24b0c860e1cc9ea131ab4ab66ddc5d12ce3e3d647bc18e7ffb5e468b -->
 
 # totsuka とは
 
@@ -32,7 +32,7 @@ GitHub の Issue / Projects や Notion といったソースからタスクを�
 
 **そもそもタスクを拾うかどうかの判断はソースプラグインの仕事**であって、totsuka のものではない — 担当者や進行状況を見て、他の人が着手した作業には手を出さないようにする。人と人の間の厳密な排他は行わない。
 
-成果物をソースへ書き戻すこともできる。設計文書を issue コメントへ、あるいは Notion のページ本文へ、といった形である。どう整形してどこへ書くかはソースプラグインが決める。
+成果物を書き戻すソースもある。エージェント自身が書ける場合 —— `gh` でコメントする、Notion のページを書く —— はそちらが書き、ソースは関与しない。書き戻しの経路は、totsuka が仲介しなければならないソースのためにある。承認すると本人名義で出る Slack の返信がそれにあたる。
 
 ### リポジトリを選ぶ
 

@@ -48,8 +48,11 @@ pub trait NotionTransport: Send + Sync {
     ///
     /// `path` is relative to the configured base URL (e.g.
     /// `/databases/{id}/query`). `idempotent` guards automatic retries: a
-    /// non-idempotent mutation (appending page blocks) passes `false` so a lost
-    /// response never duplicates the write.
+    /// timed-out/5xx request is only re-sent when replaying it is safe.
+    /// **Every current caller passes `true`** — the one that could duplicate
+    /// (appending page blocks) went with `result/publish` (#398). The flag
+    /// stays because a future create-shaped call would need it, and finding
+    /// that out from duplicated content is expensive.
     fn request(
         &self,
         method: HttpMethod,

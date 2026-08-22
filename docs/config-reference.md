@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:3f50844c3296dd480fa8e2f7336d7ffb961c8128252a238040a0c46c9e7131b5 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:28d258b2bbe0532c17d66c541bfce9498bd82aa4080409141ae3727b165fab20 -->
 
 # Configuration reference
 
@@ -581,14 +581,14 @@ An unknown key is the opposite: it is a hard startup failure, because that check
 
 ### Permissions the token needs
 
-**Derived from what the code calls, not measured** — the minimum has not been narrowed empirically. Every call is a POST to `https://api.github.com/graphql`, and there are only five: fetching project items, resolving project/field/item ids, `updateProjectV2ItemFieldValue`, `addComment` on an issue, and `viewer`. No REST, no Contents API.
+**Derived from what the code calls, not measured** — the minimum has not been narrowed empirically. Every call is a POST to `https://api.github.com/graphql`, and there are only four: fetching project items, resolving project/field/item ids, `updateProjectV2ItemFieldValue`, and `viewer`. No REST, no Contents API, and **nothing is written to an issue** — the agent writes the deliverable itself.
 
 For a fine-grained PAT:
 
 | Kind | Permission |
 |---|---|
 | Repository | **Metadata: Read** (required) |
-| Repository | **Issues: Read and write** |
+| Repository | **Issues: Read** (write is not needed) |
 | Organization **or** Account | **Projects: Read and write** — Organization for an org-owned board, Account for a user-owned one |
 
 **Contents is not needed.** For a classic PAT: `project`, plus `repo` (if private repositories are involved) or `public_repo`. A private organization's board may also need `read:org`.
@@ -729,18 +729,16 @@ A design-to-implementation handoff:
 name = "design"
 source = "github"
 trigger = { project_status = "Ready for design" }
-mode = "plan"
+profile = "design"          # resolves mode, output and verification
 agent = "herdr"
-output = "source"
 on_success = { set_status = "Ready for design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
 trigger = { project_status = "Ready to implement" }
-mode = "implement"
+profile = "implement"
 agent = "herdr"
-output = "source"
 on_success = { set_status = "Ready for review" }
 ```
 
