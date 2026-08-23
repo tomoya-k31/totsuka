@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0f829c8d13bcde98a73e99d31bc29f7da7a46831eaf32b7863a163cd9c18606b -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f03b46478eb164f1a8a5c620c15954f70867a69d2d0a65029cc143ac2c466d2a -->
 
 # 設定リファレンス
 
@@ -106,6 +106,8 @@
 | `rubric` | string? | なし | `llm` 検収で使う判定基準。**唯一のプロンプト上書き面**（下記）で、profile の既定より強い |
 | `tool` | string? | なし | AI ツールのピン。ワークフロー > リポジトリ > `default_tool` |
 | `initial_prompt` | string? | なし | このワークフローのエージェントへ前置きする追加指示。下記参照 |
+| `publish` | `draft` \| `direct` | `draft` | 公開結果をどう届けるか。`draft` は承認を挟む（既定）、`direct` は承認なしで即投稿。`output = "source"` 以外では無意味（`totsuka config validate` が警告）。結果を届けるのは Slack ソースだけなので、他ソースでは効果が無い |
+| `cleanup` | `[worktree]` と同じ語彙 | なし | この workflow のタスクの worktree 掃除を上書きし、`[worktree]` の mode 既定に勝つ。`manual` にするとタスク完了後も worktree と **pane** が残る。後から workflow を削除・改名すると、完了済みタスクは mode 既定へ戻る |
 
 ワークフローは定義順に照合され、最初に一致したものが使われる。同一ソース内でトリガーが重なると警告が出る。**catch-all（`trigger = {}`）より後に定義した同一ソースのワークフローは到達不能**で、こちらも警告になる。
 
@@ -514,6 +516,8 @@ OpenAI 互換の `/chat/completions` を前提とする。ヒントを持たな�
 | `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | 配置テンプレート。`{repo}` `{repo_name}` `{worktree_name}` `{task_id}` `{source}` `${ENV}` `~` を展開する。**`{branch}` は廃止された** — ブランチは worktree ができた後にエージェントが決めるので、ディレクトリ名には使えない。残っていると起動しない |
 | `cleanup` | policy? | `manual` | implement モードの掃除ポリシー |
 | `plan_cleanup` | policy? | `immediate` | plan モードの掃除ポリシー |
+
+どちらも **mode で選ばれる既定**であり、workflow 自身の `cleanup` が書かれていればそちらが勝つ。
 
 **既定値の解決。** `location` を省略したときの `<state dir>` は `$XDG_STATE_HOME/totsuka` で、未設定なら `$HOME/.local/state/totsuka` にフォールバックする。既定値は解決済みのパスとして組み立てられるので `${ENV}` 展開を経由しない。逆に `location` を**明示した場合、未設定の `${ENV}` は空文字ではなくエラー**になり、worktree の作成はディスパッチ時なので、起動時ではなく毎タスクの失敗として現れる。`doctor` の `worktree-location` チェックが事前に検出する。
 

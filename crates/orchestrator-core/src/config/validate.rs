@@ -482,6 +482,25 @@ where
             }
         }
 
+        // `publish` only matters when a result is actually published to the
+        // source (#548). With `output = "none"` the key is live-looking dead
+        // config — the operator believes they turned the approval off, but no
+        // publish ever happens, which is the quietest way to be wrong about
+        // it.
+        if wf.publish.is_some() && wf.resolved_output() != crate::config::OutputPolicy::Source {
+            findings.push(Finding {
+                severity: FindingSeverity::Warning,
+                message: format!(
+                    "workflow `{}` sets publish but output = {} → publish only applies when a result is published to the source; set output = \"source\" or remove publish",
+                    wf.name,
+                    match wf.resolved_output() {
+                        crate::config::OutputPolicy::Source => "source",
+                        crate::config::OutputPolicy::None => "none",
+                    }
+                ),
+            });
+        }
+
         // rubric only feeds the llm-verification prompt hook.
         if wf.rubric.is_some() && wf.resolved_verification() != VerificationMode::Llm {
             findings.push(Finding {
@@ -1621,6 +1640,50 @@ location = "/tmp/{{repo-name}}"
                 .iter()
                 .any(|f| f.message.contains("rubric") || f.message.contains("prompt")),
             "got {findings:?}"
+        );
+    }
+
+    /// `publish` with no publish to shape (#548): the operator believes they
+    /// turned the approval off, but nothing is ever published — live-looking
+    /// dead config, warned like `rubric` without llm verification.
+    #[test]
+    fn publish_without_source_output_warns() {
+        let toml = format!(
+            r#"{PLUGIN_PAIR}
+[[workflows]]
+name = "dead_publish"
+source = "github"
+trigger = {{ project_status = "A" }}
+mode = "implement"
+agent = "herdr"
+output = "none"
+verification = "none"
+publish = "direct"
+
+[[workflows]]
+name = "live_publish"
+source = "github"
+trigger = {{ project_status = "B" }}
+mode = "implement"
+agent = "herdr"
+output = "source"
+verification = "none"
+publish = "direct"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.severity == FindingSeverity::Warning
+                    && f.message.contains("dead_publish")
+                    && f.message.contains("publish")),
+            "expected a publish warning: {findings:?}"
+        );
+        assert!(
+            !findings.iter().any(|f| f.message.contains("live_publish")),
+            "output = source is the intended pairing: {findings:?}"
         );
     }
 

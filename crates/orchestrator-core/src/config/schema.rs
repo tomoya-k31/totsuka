@@ -478,6 +478,43 @@ pub struct WorkflowConfig {
     /// Empty or whitespace-only is treated as unset rather than rejected.
     #[serde(default)]
     pub initial_prompt: Option<String>,
+    /// How the source delivers this workflow's published result to a human
+    /// (#548, [ADR-0057]): `draft` (the approval flow — the default) or
+    /// `direct` (post immediately, no approval).
+    ///
+    /// Only meaningful with `output = "source"`; validation warns otherwise.
+    /// Like [`output`](Self::output), this is a wiring choice, not a
+    /// permission, which is why a profile does not fix it.
+    ///
+    /// [ADR-0057]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0057-per-workflow-publish-and-cleanup.md
+    #[serde(default)]
+    pub publish: Option<PublishConfig>,
+    /// Worktree cleanup override for this workflow's tasks (#548, ADR-0057).
+    ///
+    /// Beats the mode-selected `[worktree]` default (`cleanup` /
+    /// `plan_cleanup`). Absent means the default, which is what every config
+    /// written before this key existed says. If the workflow is later removed
+    /// or renamed in config, the sweep can no longer resolve this override
+    /// and **falls back to the default** — deliberate (ADR-0057): the
+    /// operator changed the config, and persisting overrides elsewhere just
+    /// to survive that is not worth a second source of truth.
+    #[serde(default)]
+    pub cleanup: Option<CleanupPolicyConfig>,
+}
+
+/// `[[workflows]].publish` — how a published result reaches the human (#548).
+///
+/// The wire twin is [`plugin_protocol::methods::PublishDelivery`]; this stays
+/// a separate type because config vocabulary and wire vocabulary evolve on
+/// different clocks (the wire enum has an `Unrecognized` catch-all this
+/// config type must not accept).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublishConfig {
+    /// Present for approval before anything is visible (the default).
+    Draft,
+    /// Post immediately, no approval step.
+    Direct,
 }
 
 impl WorkflowConfig {

@@ -129,6 +129,8 @@ owner: tomoya-k31
 | `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告。**唯一のプロンプト上書き面**（下記）で、profile の既定より強い |
 | `tool` | string? | なし | AI ツールの明示ピン（#196）。優先順位は workflow > repo > `default_tool`。`verification = "llm"` は Claude の prompt 型 Stop フックが必要なので、非 claude 系へ解決されうる構成では `tool = "claude"` のピンを警告で提案 |
 | `initial_prompt` | string? | なし | このワークフローのエージェントに渡す**追加の前置き指示**（#415、[ADR-0038](/decisions/adr-0038-workflow-initial-prompt.md)）。**可視**（pane に見える）・**タスク本文の前**・**新規会話のときだけ**。下記 |
+| `publish` | `draft` \| `direct` | `draft` | 公開結果を人へどう届けるか（#548、[ADR-0057](/decisions/adr-0057-per-workflow-publish-and-cleanup.md)）。`draft` = 承認フロー（従来）、`direct` = 承認なしで即投稿。**`output = "source"` 以外では無意味**（validate が警告）。読むのは Slack ソースだけ — github / notion は publish を受けない |
+| `cleanup` | `[worktree]` と同じ語彙 | なし | この workflow のタスクの worktree 掃除を **`[worktree]` の mode 既定より優先**して上書き（#548、ADR-0057）。`manual` にすると pane も worktree も残る（pane の寿命は worktree に従う、ADR-0010）。**タスク完了後に workflow を削除・改名すると引けなくなり mode 既定へ縮退する**（仕様。sweep が 1 行 log に出す） |
 
 定義順に first-match（F-81）。同一ソース内でトリガーが重なると警告。**catch-all（`trigger = {}`）より後に定義した同一ソースの workflow は到達不能**で、警告が出る（#396）。
 
@@ -608,6 +610,8 @@ OpenAI 互換 `/chat/completions` を前提。repo_hint を持たないタスク
 | `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | 配置テンプレート。`{repo}`/`{repo_name}`/`{worktree_name}`/`{task_id}`/`{source}`/`${ENV}`/`~` を展開。`{worktree_name}` は `{source}-{task_id}` を git ref 規則で正規化して `/` を潰したもの。**`{branch}` は廃止** — ブランチは worktree ができた後にエージェントが決めるので、作成時点のディレクトリ名には使えない。残っていると設定エラーで起動しない |
 | `cleanup` | policy? | `manual` | implement モードの掃除ポリシー（F-23） |
 | `plan_cleanup` | policy? | `immediate` | plan モードの掃除ポリシー（F-85） |
+
+どちらも **`[[workflows]].cleanup` が書かれていればそちらが勝つ**（#548）。ここの 2 キーは mode で選ばれる既定であり、workflow 単位の例外は workflow 行に書く。
 
 **既定値の解決**: `location` を省略したときの `<state dir>` は `$XDG_STATE_HOME/totsuka`、`XDG_STATE_HOME` 未設定なら XDG 仕様どおり `$HOME/.local/state/totsuka` にフォールバックする（state DB・ログ・hook spool と同じ解決）。既定値はテンプレート文字列ではなく**解決済みのパス**として組み立てられるため、`${ENV}` 展開を経由しない。逆に `location` を**明示した場合の `${ENV}` は未設定だとエラー**（`expand_env` は空文字にフォールバックしない）で、worktree 作成はタスクのディスパッチ時なので run 起動時ではなく毎タスクの失敗として現れる。`totsuka doctor` の `worktree-location` チェックが事前に検出する。`[[repositories]].worktree_location` の上書きも同じ扱い。
 
