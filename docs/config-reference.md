@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:9f3ac32726a67a87b8b77d17225abd55d13c4f2321dfea0046850c37baca8c44 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:afbe44cef7c127f7cce9e041ee2f392611385ba21aa09b03fe364f6e6b59dc25 -->
 
 # Configuration reference
 
@@ -592,7 +592,7 @@ Every call is a POST to `https://api.github.com/graphql`, and there are only fou
 | Who owns the project | Token type that works |
 |---|---|
 | An **organization** | A fine-grained PAT (Projects under Organization permissions), or a classic PAT |
-| A **user** | **A classic PAT only.** Fine-grained PATs have no Projects permission under Account permissions, so they cannot reach ProjectsV2 on a user-owned board |
+| A **user** | **A scope-based token** — a classic PAT with `project`, or the OAuth token `gh auth token` returns (which carries the same scope). Fine-grained PATs have no Projects permission under Account permissions, so they cannot reach ProjectsV2 here. What matters is the scope, not the label on the token |
 
 For a fine-grained PAT (org-owned boards only):
 
@@ -604,7 +604,7 @@ For a fine-grained PAT (org-owned boards only):
 
 **Contents is not needed.** For a classic PAT: `project`, plus `repo` (if private repositories are involved) or `public_repo`. A private organization's board may also need `read:org`.
 
-**These values are known to be sufficient, not known to be minimal.** A token carrying them works — that much has been run against a real project. Whether every one of them is required has not been narrowed, so treat the tables as an upper bound and cut them down for your own setup if you want the tightest token.
+**Both tables above are derived from what the code calls, not measured.** No token matching either one has been tried. What *has* been run against a real user-owned project is a single scope-based OAuth token carrying `gist, project, read:org, repo, workflow` — a superset of the classic list — and it passed all four operations. So the classic route is known to work with at least that much; the fine-grained table has not been exercised at all. Treat both as an upper bound, and cut them down for your own setup if you want the tightest token.
 
 **Opening the pull request is not this token's job.** In an `implement` workflow the agent runs `gh pr create` itself, using your own `gh` authentication from the pane's environment. `gh auth login` is a separate prerequisite.
 

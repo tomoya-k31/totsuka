@@ -117,8 +117,25 @@ HTTP 200・`data` あり・**フィールドが `null`** という形で出う�
 後者は「測れなかった」なので skip 扱いで、終了コードも pass（0）と分ける（skip は 3）。
 
 そのため **board に「ラベルとアサイニーが付いた Issue」が最低 1 件要る**。無いと
-その 2 項目は永久に skip になる。サンドボックスでは `totsuka-sandbox-web#1` に
-`perm-probe` ラベルと assignee を付けてある（CLOSED な issue なので取り込まれない）。
+その 2 項目は永久に skip になる。サンドボックスでは `totsuka-sandbox-web#1` を
+その fixture にしてある（`perm-probe` ラベル + assignee、**Status = Done**）。
+
+**この fixture を Todo に戻さないこと。** 安全なのは「issue が CLOSED だから」
+ではない —— **プラグインは issue の open/closed を一切見ていない**（`fetch_query`
+は `state` を選択せず、`normalize_item` のゲートは trigger（`project_status` /
+`label`）・`repo_allowed`・`assignable_to_me`・`is_in_progress` だけ）。
+効いているのは **Status が `github-task` の trigger（`Todo`）から外れていること**
+である。しかも probe のために付けた assignee は `assignable_to_me`（F-08）を
+**通してしまう**側なので、Todo に戻すと全ゲートが通り、実 run が CLOSED な
+issue にエージェントを走らせる。
+
+**org 所有の board を測るときは `E2E_GH_OWNER_TYPE=organization` を渡すこと。**
+既定は `user` で、間違えると `user(login:)` を叩いて「board が見えない」と
+**誤報告する**（権限の問題に見えるが、根本は root フィールド違い）。
+
+測るのは **先頭ページだけ**で、`hasNextPage` が真なら「以降は見ていない」と出る。
+対象は **public GitHub のみ**（プラグインの `api_url` 上書き = GitHub Enterprise には非対応）。
+`--write` の非破壊性は「実行中に他の actor が同じ item の Status を変えない」ことが前提。
 
 ## 3. 結果を報告する
 

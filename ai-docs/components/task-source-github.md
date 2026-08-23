@@ -1,7 +1,7 @@
 ---
 type: Component
 title: task-source-github プラグイン
-description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、Issue コメント publish を行う。呼び出す 5 つの GraphQL 操作と、そこから導いたトークン権限（未実測）を含む。
+description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻しを行い、Issue へは何も書かない。呼び出す 4 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
 generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
@@ -87,7 +87,10 @@ present/null を判定しているのはこのためで、`assignees` / `labels`
 したがって:
 
 - **org 所有**のボード → fine-grained PAT が使える（Organization permissions の Projects）
-- **user 所有**のボード → fine-grained PAT では ProjectsV2 に到達できない。**classic PAT の `project` scope を使う**
+- **user 所有**のボード → fine-grained PAT では ProjectsV2 に到達できない。**scope を持つトークン**を使う —
+  classic PAT の `project` scope、または `gh auth token` が返す OAuth トークン（同じく `project` scope を含むもの）。
+  下の実測はまさに後者で通しているので、**「classic PAT でなければ駄目」ではない**。効いているのは
+  トークンの呼び名ではなく **scope を持つ方式かどうか**である
 
 サンドボックスは user 所有なので、**fine-grained PAT の最小値はこの環境では測れない**。
 測るには org 所有の Project が要る。
@@ -104,7 +107,7 @@ present/null を判定しているのはこのためで、`assignees` / `labels`
 
 **Contents は不要**である。このトークンでリポジトリの中身を読み書きすることはない。
 
-**classic PAT**（user 所有ボードではこちら。最小値は未実測）: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
+**scope ベースのトークン**（classic PAT、または `gh auth token` の OAuth トークン。user 所有ボードではこちら。最小値は未実測）: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
 
 **未解決の問い**: Issue の本文・ラベル・アサイニーは `projectV2` のアイテム経由でしか読んでおらず、Issues エンドポイントを直接は叩かない。**`project` scope だけでこれらが返るなら `repo` は要らない**。どちらなのかは `project` だけの classic PAT を切って上のスクリプトを回せば 1 回で分かる（#514 手順 2）。
 

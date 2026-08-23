@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:9f3ac32726a67a87b8b77d17225abd55d13c4f2321dfea0046850c37baca8c44 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:afbe44cef7c127f7cce9e041ee2f392611385ba21aa09b03fe364f6e6b59dc25 -->
 
 # 設定リファレンス
 
@@ -593,7 +593,7 @@ poll_interval_secs = 60   # 60 は既定値でもある
 | Project の所有者 | 使えるトークンの種別 |
 |---|---|
 | **組織**（org） | fine-grained PAT（Organization permissions の Projects）または classic PAT |
-| **ユーザー** | **classic PAT のみ。** fine-grained PAT の Account permissions に Projects が無いため、user 所有のボードでは ProjectsV2 に到達できない |
+| **ユーザー** | **scope を持つトークン** — `project` scope の classic PAT か、`gh auth token` が返す OAuth トークン（同じ scope を持つ）。fine-grained PAT は Account permissions に Projects が無いため、ここでは ProjectsV2 に到達できない。効くのはトークンの呼び名ではなく scope である |
 
 fine-grained PAT の場合（org 所有のボードのみ）:
 
@@ -605,7 +605,7 @@ fine-grained PAT の場合（org 所有のボードのみ）:
 
 **Contents は不要。** classic PAT なら `project` と、`repo`（private リポジトリを含む場合）または `public_repo`。private な組織のボードでは `read:org` も要りうる。
 
-**これらは「足りる」ことが分かっている値であって、「最小」であることは分かっていない。** これを持つトークンで動くところまでは実際の Project に対して確かめてある。一つひとつが本当に必要かは絞り込んでいないので、この表は上限だと思って読み、もっと絞りたければ自分の構成で削っていくとよい。
+**上の 2 つの表は、いずれもコードが呼んでいるものからの導出であって実測ではない。** どちらの表そのままのトークンも試していない。実際の user 所有 Project に対して通したのは、scope を持つ OAuth トークン 1 本（`gist, project, read:org, repo, workflow`。classic の表の**上位集合**）で、これが 4 操作すべてを通った。したがって classic 側は「少なくともこれだけあれば動く」ことが分かっており、fine-grained 側は**一度も試していない**。どちらも上限だと思って読み、もっと絞りたければ自分の構成で削っていくとよい。
 
 **PR を開くのはこのトークンの仕事ではない。** `implement` のワークフローでは、エージェント自身がペインの環境にあるあなた自身の `gh` 認証を使って `gh pr create` を実行する。`gh auth login` は別個の前提条件である。
 

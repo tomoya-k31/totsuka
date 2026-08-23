@@ -687,7 +687,7 @@ poll_interval_secs = 60   # 省略時も 60
 | Project の所有者 | 使えるトークン |
 |---|---|
 | **org** 所有 | fine-grained PAT（Organization permissions の Projects）または classic PAT |
-| **user** 所有 | **classic PAT のみ**。fine-grained PAT の Account permissions に **Projects は存在しない**ので、ProjectsV2 に到達できない |
+| **user** 所有 | **scope を持つトークン**（classic PAT の `project`、または `gh auth token` の OAuth トークン）。fine-grained PAT は Account permissions に **Projects が存在しない**ので到達できない — 効くのはトークンの呼び名ではなく scope 方式かどうかである |
 
 **fine-grained PAT**（org 所有ボードのみ。未実測）:
 

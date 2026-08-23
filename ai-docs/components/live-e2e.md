@@ -4,7 +4,7 @@ title: live-e2e スキル
 description: 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順・設定雛形・駆動スクリプト一式。自動／手動／目視の区分と、別環境での一からの構築手順を含む。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.claude/skills/live-e2e
 tags: [testing, e2e, skill, tooling, slack, github, herdr]
-generated: { by: claude-code/opus-5, at: 2026-08-04T02:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -35,6 +35,7 @@ D-03 アンカー）。いずれも実機で走らせるまで検出されてい
 | `scripts/slack.sh` | Slack の駆動と観測。**投稿コマンドは意図的に持たない**（下記） |
 | `scripts/github.sh` | Project の操作と F-07 / F-84 / F-86 の自動判定 |
 | `scripts/report.sh` | 結果の集約。目視項目とスコープ外を明示して残す |
+| `scripts/github-permissions.sh` | GitHub トークンの権限を実測する単発プローブ。プラグインが投げる 4 操作（read 3 + write 1）を同じ endpoint / header / クエリで送り、`errors` の有無と**独立に**フィールド単位で present/null を判定する — GraphQL の権限不足は HTTP 200 + `data` あり + フィールド `null` で出うるため。`doctor --online` が `viewer` 1 操作しか叩かない（F-59）ことで生じる隙間を埋める |
 
 # 設計上の判断
 
