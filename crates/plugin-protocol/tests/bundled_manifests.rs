@@ -5,11 +5,18 @@
 //!
 //! `ai-docs/components/plugin-protocol.md` already carries the obligation:
 //! "同梱プラグイン manifest の `protocol_version` 上限も同一 PR で見直す".
-//! It was followed for the six manifests under `plugins/` on every bump and
-//! missed for the seventh — `.claude/skills/live-e2e/assets/cfg/mock-agent.plugin.toml`
-//! sat at `<0.5` while `PROTOCOL_VERSION` reached 0.5.0 (#526). The rule was
-//! never wrong; "同梱プラグイン" just reads as "the plugins directory" to
-//! everyone counting by hand, and the outlier is invisible from there.
+//! The rule was never wrong, and it is not reliably forgotten either — the
+//! 0.4.0 bump (#413) moved all seven manifests, including the one outside
+//! `plugins/`. The 0.5.0 bump (#501) moved six, and
+//! `.claude/skills/live-e2e/assets/cfg/mock-agent.plugin.toml` was left at
+//! `<0.5` while `PROTOCOL_VERSION` reached 0.5.0 (#526).
+//!
+//! That is the case for automating it rather than restating it: an obligation
+//! discharged by counting by hand is not wrong on the bumps it happens to
+//! catch, it is *unreliable*, and "同梱プラグイン" reads as "the plugins
+//! directory" to whoever is counting. One miss is enough, because the miss is
+//! silent — the manifest ships `enabled = false`, so the refusal only appears
+//! the moment someone reaches for the mock.
 //!
 //! # Why here, and not in `scripts/arch-lint.sh`
 //!
@@ -21,8 +28,14 @@
 //! the thing it checks is worse than none, because it reads as coverage.
 //!
 //! Parsing through [`Manifest`] rather than grepping for the key is the same
-//! argument one level down: it is `deny_unknown_fields`, so a typo'd key in
-//! any bundled manifest fails here too.
+//! argument one level down — but be precise about how far it reaches.
+//! [`Manifest`] is `deny_unknown_fields`, so a typo in a **top-level** key
+//! (`protocol_versoin`, `kindd`) fails here. [`Capabilities`] is **not**:
+//! it carries only `#[serde(default)]`, deliberately, so that a retired
+//! capability key on an old manifest is ignored rather than fatal (pinned by
+//! `retired_capability_keys_are_tolerated_and_ignored`). A typo *inside*
+//! `[capabilities]` therefore parses fine and silently leaves the flag false.
+//! This check does not cover that, and nothing else does either.
 
 use std::path::{Path, PathBuf};
 
@@ -45,11 +58,22 @@ fn is_manifest(name: &str) -> bool {
     name == "plugin.toml" || name.ends_with(".plugin.toml")
 }
 
-/// Every manifest in the tree, depth-first.
+/// Every manifest **this checkout** ships, depth-first.
 ///
-/// `target/` is skipped because it is enormous and holds only copies; `.git/`
-/// because it holds none. Nothing else is skipped — the point of the walk is
-/// that a manifest cannot hide from it by living outside `plugins/`.
+/// Three prunes, and each one has to earn it — the point of the walk is that
+/// a manifest cannot hide from it by living outside `plugins/`, so anything
+/// skipped is a hole:
+///
+/// - `target/`: enormous, and holds only copies of what is already visible.
+/// - `.git/`: holds no manifest.
+/// - any subdirectory containing a `.git` entry: a nested checkout or a git
+///   worktree, which is a *different* revision that happens to sit inside
+///   this one. `.worktrees/` and `.claude/worktrees/` are both real paths
+///   here (git-excluded, and the latter is auto-populated by worktree-isolated
+///   subagents). Without this prune, a worktree parked on a pre-fix branch
+///   fails the local test run with a message that reads as a manifest
+///   violation in *this* tree. CI never sees it — a fresh clone has no
+///   worktrees — which is exactly what makes it expensive to diagnose.
 fn discover(dir: &Path, found: &mut Vec<PathBuf>) {
     let entries =
         std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
@@ -62,7 +86,10 @@ fn discover(dir: &Path, found: &mut Vec<PathBuf>) {
             .file_type()
             .unwrap_or_else(|e| panic!("file_type {}: {e}", path.display()));
         if file_type.is_dir() {
-            if name != "target" && name != ".git" {
+            // `.git` is a file, not a directory, in a git worktree — so this
+            // must test for existence, not for a directory.
+            let is_nested_checkout = path.join(".git").exists();
+            if name != "target" && name != ".git" && !is_nested_checkout {
                 discover(&path, found);
             }
         } else if is_manifest(&name) {

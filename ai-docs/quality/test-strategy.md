@@ -60,7 +60,7 @@ owner: tomoya-k31
 
 | テスト | 何を保証するか |
 |---|---|
-| [plugin-protocol `tests/bundled_manifests.rs`](https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-protocol/tests/bundled_manifests.rs) | このツリーが同梱する **全 manifest** が、同じツリーの `PROTOCOL_VERSION` で起動できる（F-54）。リポジトリ全体を走査して `plugin.toml` / `*.plugin.toml` を集め、本物の `Manifest` デシリアライザ（`deny_unknown_fields` なのでキーの typo もここで落ちる）で読み、`is_compatible_with_current` で判定する。走査が空を返す事故を「違反なし」と読まないよう、`plugins/*` の全ディレクトリと `.claude/skills/**` の 1 本が現れたことを先に検査する（フェイルクローズ） |
+| [plugin-protocol `tests/bundled_manifests.rs`](https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-protocol/tests/bundled_manifests.rs) | このツリーが同梱する **全 manifest** が、同じツリーの `PROTOCOL_VERSION` で起動できる（F-54）。リポジトリ全体を走査して `plugin.toml` / `*.plugin.toml` を集め、本物の `Manifest` デシリアライザで読み、`is_compatible_with_current`（起動ゲートと同じ述語）で判定する。走査が空を返す事故を「違反なし」と読まないよう、`plugins/*` の全ディレクトリと `.claude/skills/**` の 1 本が現れたことを先に検査する（フェイルクローズ）。除外は `target/` / `.git/` と、**`.git` を持つサブディレクトリ**（ネストしたチェックアウト・git worktree。`.worktrees/` と `.claude/worktrees/` が実在し、後者は worktree 隔離のサブエージェントが自動生成する。除外しないと、修正前のブランチを置いた worktree がローカルのテスト実行だけを落とし、しかも「このツリーの manifest 違反」に見える）。**及ぶ範囲**: `Manifest` は `deny_unknown_fields` なのでトップレベルのキーの typo は落ちるが、`Capabilities` は `serde(default)` のみなので **`[capabilities]` の中の typo は素通りする**（`retired_capability_keys_are_tolerated_and_ignored` が意図としてピン留め） |
 
 `scripts/arch-lint.sh` との使い分けは判定に必要な材料で決まる。arch-lint は `cargo metadata` から読める**依存グラフの事実**を検査する。semver の範囲判定のように本物の実装（`semver::VersionReq`）を呼ばないと再実装になるものは、テスト側に置く（#526）。
 
