@@ -60,6 +60,39 @@ start-point argument, so the branch is created exactly where HEAD already is. \
 Commit only after that.\
 """
 
+# Appended to a `triage` task's instructions when a task source claims the
+# repository the task was routed to (#542, ADR-0056).
+#
+# The plugin supplies `{destination}` — prose it built from its own config
+# (which board / database, and how to file into it). Core never parses it and
+# never learns what a `project_number` or a `database_id` is; this template
+# only frames it.
+#
+# `triage` only. It is the one profile whose deliverable is an item filed
+# somewhere else; an `implement` run works in the repository it was given, and
+# a board it has no business touching is noise it might act on.
+#
+# The demand for the URL is not decoration. The claim's `destination` is prose
+# that nothing machine-checks (ADR-0056), so the verification rubric reading
+# the agent's report is the only thing standing between "filed it in the right
+# place" and "filed it somewhere". Without a URL in the report there is nothing
+# for the rubric to judge.
+#
+# **It must not contradict the source's own instructions.** Every
+# `triage_instructions` in the bundled sources already demands the URL of what
+# was filed, and on a GitHub board the item *is* the issue — there is no second
+# URL. An earlier draft said "the item at that destination, not just an issue
+# you opened on the way there", which told the agent to produce a URL that does
+# not exist for the commonest destination. What this adds over the source's own
+# text is the **completion condition**, not a different URL.
+#
+# Placeholders: {destination}
+tracker_destination = """
+[orchestrator] Where to file it: {destination}
+Filing is complete only once the item exists at that destination, and the URL \
+of what you filed MUST appear in your final report.\
+"""
+
 # Injected into EVERY hook-capable dispatch via `TOTSUKA_PROMPT_CONTEXT`
 # (D-12; hook knowledge stays in core per H-01, so source plugins never mention
 # markers). The `UserPromptSubmit` hook turns that env into invisible

@@ -33,6 +33,8 @@ fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tas
 
 **`task/update_status` はボードを逆引きする。** `TaskUpdateStatusParams` は `{task_id, status}` だけで、どのボードの item かを request が語らない。ingest 時に `task_id → [[projects]] の index` を**プロセス内メモリ**に覚えておき、それを先頭にして**全ボードを順に試す**。メモが外れるのは異常ではなく通常で（再起動でメモは消えるがタスクは残る、item は後からボード間を移動しうる）、メモは最適化であって前提ではない — 見つからなければ試したボードを全部名指しするエラーになる。
 
+**探索中のボードに対象の Status 列が無くても、そこで打ち切らない。** 探索は item が載っていないボードも訪れるので、そういうボードが対象の列を持っている必要はない。ここでエラーにすると**呼び出し側が `?` で探索ループごと抜け**、次のボードなら成功したはずの遷移が失敗する。メモが空になる再起動直後は必ず先頭のボードから当たるので、現実に踏む経路である。列が無いことをエラーにするのは **item がそのボードで見つかった後**で、そのときは意味どおり「このボードの設定が足りない」を指す。
+
 # capabilities（F-83）
 
 manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1.6, <0.6"`）と `initialize` 応答で `kind = task_source` を宣言する。**`outputs` は空**（#398）—— 成果物はエージェントが `gh` で自分で書くので、このプラグインは何も publish しない。`output = "source"` を書いた workflow は `config validate` が弾く（F-83）。

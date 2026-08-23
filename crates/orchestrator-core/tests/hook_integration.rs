@@ -1825,6 +1825,239 @@ on_failure = { set_status = "failed" }
     }
 }
 
+// ---------------------------------------------------------------------------
+// #542: the tracker destination reaches a `triage` agent's prompt
+// ---------------------------------------------------------------------------
+
+/// A `triage` workflow on `mock_src`, plus a source that claims `clone`.
+///
+/// `profile = "triage"` rather than the `mode`/`verification` pair the other
+/// tests use: the injection is keyed on the profile, so a workflow spelled out
+/// longhand would not exercise it.
+fn profile_workflows(profile: &str) -> Vec<Workflow> {
+    let cfg = RootConfig::from_toml_str(&format!(
+        r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {{}}
+profile = "{profile}"
+agent = "mock_agent"
+"#
+    ))
+    .unwrap();
+    Workflow::from_configs(&cfg.workflows)
+}
+
+const CLAIM_DESTINATION: &str = "GitHub Project #7 owned by the user `tomoya-k31`.";
+
+/// A plugin set whose source claims the repository the task routes to.
+async fn claiming_plugins(
+    fetched: serde_json::Value,
+    dispatch_log: &Path,
+    notify_log: &Path,
+    claims: serde_json::Value,
+) -> PluginSet {
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({ "submit_tasks": fetched, "claimed_repos": claims }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({
+                "resume_session": true, "stream_states": ["running"],
+                "dispatch_log": dispatch_log,
+            }),
+        )
+        .await,
+    );
+    plugins.notifiers.insert(
+        "mock_notify".to_string(),
+        launch(
+            "notifier",
+            "mock_notify",
+            json!({ "notify_log": notify_log }),
+        )
+        .await,
+    );
+    plugins
+}
+
+/// #542: a `triage` dispatch is told **where** to file, using the prose the
+/// claiming plugin built from its own config.
+///
+/// The mock agent declares `resume_session`, so the orchestrator takes the
+/// hook path and the instructions ride the invisible channel — asserted on the
+/// `tool_launch` env rather than on `extra_context`, which is where they
+/// actually travel.
+#[tokio::test]
+async fn a_triage_dispatch_is_told_where_to_file() {
+    let base = scratch("triage_destination");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let plugins = claiming_plugins(
+        json!([{ "id": "1", "source": "mock_src", "title": "t" }]),
+        &dispatch_log,
+        &notify_log,
+        json!([{ "repo": "clone", "destination": CLAIM_DESTINATION }]),
+    )
+    .await;
+    let mut settings = resume_settings(&repo, &base);
+    settings.workflows = profile_workflows("triage");
+    let mut engine = Engine::new(
+        StateDb::open(&base.join("state.db")).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
+    engine.shutdown(GRACE).await;
+
+    let params = last_dispatch_params(&dispatch_log);
+    let context = params["tool_launch"]["env"]["TOTSUKA_PROMPT_CONTEXT"]
+        .as_str()
+        .expect("the hook path injects invisibly");
+    assert!(
+        context.contains(CLAIM_DESTINATION),
+        "the destination must reach the agent: {context}"
+    );
+    // Not just the prose: the report demand is what the verification rubric
+    // has to judge, and it is the only guard on a destination nothing
+    // machine-checks.
+    assert!(
+        context.contains("URL"),
+        "the report demand must travel with it: {context}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #542: a repository nobody claims adds nothing.
+///
+/// The normal state for anyone who has not configured a tracker — and the
+/// state every plugin predating protocol 0.5.1 reports — so it must be silent
+/// rather than an error or an empty stanza.
+#[tokio::test]
+async fn a_triage_dispatch_for_an_unclaimed_repository_says_nothing_extra() {
+    let base = scratch("triage_unclaimed");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let plugins = claiming_plugins(
+        json!([{ "id": "1", "source": "mock_src", "title": "t" }]),
+        &dispatch_log,
+        &notify_log,
+        // Claims a *different* repository, so the registry is non-empty and
+        // the lookup is the thing under test — an empty claim list would also
+        // pass while proving less.
+        json!([{ "repo": "somewhere-else", "destination": CLAIM_DESTINATION }]),
+    )
+    .await;
+    let mut settings = resume_settings(&repo, &base);
+    settings.workflows = profile_workflows("triage");
+    let mut engine = Engine::new(
+        StateDb::open(&base.join("state.db")).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
+    engine.shutdown(GRACE).await;
+
+    let params = last_dispatch_params(&dispatch_log);
+    // `expect`, not `unwrap_or_default`: an absent env would make the
+    // assertion below vacuously true, so the test would keep passing if the
+    // hook path stopped running at all.
+    let context = params["tool_launch"]["env"]["TOTSUKA_PROMPT_CONTEXT"]
+        .as_str()
+        .expect("the hook path injects invisibly");
+    assert!(
+        !context.contains(CLAIM_DESTINATION) && !context.contains("Where to file it"),
+        "an unclaimed repository must add nothing: {context}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #542: a profile that is **not** `triage` is not told about the board, even
+/// when the repository is claimed.
+///
+/// `triage`'s deliverable is an item filed somewhere else; every other
+/// profile works inside the repository it was given, and a board it has no
+/// business touching is noise it might act on.
+///
+/// **`design`, not `implement`.** The point needs a real, spelled-out profile
+/// — the `mode = "implement"` helper the other tests share sets no `profile`
+/// at all, so the dispatch would resolve to `None` and this would prove "a
+/// profile-less workflow adds nothing" instead.
+///
+/// `implement` is the one profile that cannot be used here: it is the only
+/// profile with a required tool (`agent_tools::required` → `Gh`), and
+/// `agent_tools::available(Gh)` wants `gh` on `PATH` **and** a `hosts.yml`
+/// — i.e. an authenticated `gh`. A CI runner ships `gh` but nobody has run
+/// `gh auth login`, so the task parks on the tool gate and never dispatches:
+/// green on a developer's machine, a 30-second timeout in CI. (Measured: this
+/// test failed exactly that way on `ubuntu-latest` before the switch.)
+#[tokio::test]
+async fn a_non_triage_dispatch_is_not_told_about_the_board() {
+    let base = scratch("triage_non_triage");
+    let repo = setup_repo(&base);
+    let notify_log = base.join("notify.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+
+    let plugins = claiming_plugins(
+        json!([{ "id": "1", "source": "mock_src", "title": "t" }]),
+        &dispatch_log,
+        &notify_log,
+        json!([{ "repo": "clone", "destination": CLAIM_DESTINATION }]),
+    )
+    .await;
+    let mut settings = resume_settings(&repo, &base);
+    settings.workflows = profile_workflows("design");
+    let mut engine = Engine::new(
+        StateDb::open(&base.join("state.db")).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
+    engine.shutdown(GRACE).await;
+
+    let params = last_dispatch_params(&dispatch_log);
+    // Same reason as above: prove the channel exists before proving what is
+    // *not* on it.
+    let context = params["tool_launch"]["env"]["TOTSUKA_PROMPT_CONTEXT"]
+        .as_str()
+        .expect("the hook path injects invisibly");
+    assert!(
+        !context.contains(CLAIM_DESTINATION),
+        "a non-triage dispatch must not be told about the board: {context}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// The `[[workflows]].initial_prompt` used by the #415 tests below.
 const INITIAL_PROMPT: &str = "/grill-me スキルを使用して、詳細設計を行ってください";
 

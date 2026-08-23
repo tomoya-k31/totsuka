@@ -50,7 +50,7 @@ use std::time::Duration;
 
 use plugin_protocol::jsonrpc::{self, Notification, Request};
 use plugin_protocol::manifest::Manifest;
-use plugin_protocol::methods::{InitializeParams, InitializeResult};
+use plugin_protocol::methods::{ClaimedRepo, InitializeParams, InitializeResult};
 use plugin_protocol::{Capabilities, version};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -496,6 +496,12 @@ pub struct Plugin {
     incoming: Mutex<Option<mpsc::UnboundedReceiver<IncomingRequest>>>,
     capabilities: Capabilities,
     plugin_version: semver::Version,
+    /// Repositories this plugin declared itself the tracker for (0.5.1, #542).
+    ///
+    /// Empty for every non-task_source plugin and for any plugin predating
+    /// 0.5.1 — which is **not** the same as "these repositories have no
+    /// tracker", so a caller must never read an empty list that way.
+    claimed_repos: Vec<ClaimedRepo>,
 }
 
 impl std::fmt::Debug for Plugin {
@@ -570,6 +576,7 @@ impl Plugin {
             incoming: Mutex::new(Some(incoming_rx)),
             capabilities: Capabilities::default(),
             plugin_version: semver::Version::new(0, 0, 0),
+            claimed_repos: Vec::new(),
         };
 
         // 3. initialize (F-65: config already has secrets resolved).
@@ -588,6 +595,7 @@ impl Plugin {
         Ok(Self {
             capabilities: result.capabilities,
             plugin_version: result.plugin_version,
+            claimed_repos: result.claimed_repos,
             ..plugin
         })
     }
@@ -595,6 +603,11 @@ impl Plugin {
     /// The plugin's declared capabilities (F-33).
     pub fn capabilities(&self) -> &Capabilities {
         &self.capabilities
+    }
+
+    /// The repositories this plugin is the tracker for (#542).
+    pub fn claimed_repos(&self) -> &[ClaimedRepo] {
+        &self.claimed_repos
     }
 
     /// The plugin's own version (from `initialize`).
@@ -745,27 +758,48 @@ const VALIDATE_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// `config/validate` (F-59). Each plugin is shut down afterwards. This is the
 /// online part of `config validate`, skipped under `--offline` (F-63).
 ///
-/// Returns one entry per spec: the plugin name and either its validation
-/// result or the host error (spawn/protocol/timeout/crash).
-pub async fn validate_all(
-    specs: Vec<(PluginSpec, Value)>,
-) -> Vec<(
-    String,
-    Result<plugin_protocol::methods::ConfigValidateResult, HostError>,
-)> {
+/// Returns one entry per spec: the plugin name, either its validation result
+/// or the host error (spawn/protocol/timeout/crash), and whatever it claimed
+/// at `initialize`.
+///
+/// The claims ride along rather than being collected by a second pass, because
+/// gathering them means launching the plugin — and *which* plugins may be
+/// launched is a decision with real conditions attached (a `op://` reference
+/// doctor must not prompt for, a `cmd:` reference it must not execute). A
+/// separate pass would have to restate those conditions, and the copy that
+/// drifts is the one that silently probes something it should not.
+pub async fn validate_all(specs: Vec<(PluginSpec, Value)>) -> Vec<ValidatedPlugin> {
     let mut out = Vec::with_capacity(specs.len());
     for (spec, config) in specs {
         let name = spec.name.clone();
+        let mut claimed_repos = Vec::new();
         let result = async {
             let plugin = Plugin::launch(spec).await?;
+            claimed_repos = plugin.claimed_repos().to_vec();
             let validation = plugin.config_validate(config).await;
             let _ = plugin.shutdown(VALIDATE_SHUTDOWN_GRACE).await;
             validation
         }
         .await;
-        out.push((name, result));
+        out.push(ValidatedPlugin {
+            name,
+            result,
+            claimed_repos,
+        });
     }
     out
+}
+
+/// One plugin's outcome from [`validate_all`].
+pub struct ValidatedPlugin {
+    /// The plugin instance name.
+    pub name: String,
+    /// Its `config/validate` answer, or the host error that stopped it.
+    pub result: Result<plugin_protocol::methods::ConfigValidateResult, HostError>,
+    /// What it claimed at `initialize` (#542). Empty when the launch failed,
+    /// which is why a caller must not read emptiness as "claims nothing" —
+    /// pair it with `result`.
+    pub claimed_repos: Vec<ClaimedRepo>,
 }
 
 /// Writer task: drain the outgoing channel to the plugin's stdin as NDJSON.

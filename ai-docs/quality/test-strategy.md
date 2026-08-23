@@ -71,6 +71,7 @@ owner: tomoya-k31
 - 実プロセステストは実 git の bare origin をローカル tempdir に作り、外部ネットワークに依存しない。
 - LLM 呼び出しは、単一リポジトリ経路（LLM 不要）と `MockRouter`（ユニット）でスタブ化。HTTP レベルの VCR 再生は将来対応（[Known Issue](/quality/known-issues.md) 参照）。
 - git のコミット署名はテストヘルパで無効化（ローカル署名エージェントによるブロック回避）。
+- **`profile` を明示した統合テストは、その profile が要求する外部ツールに依存する。** `agent_tools::required` が非空なのは `implement` だけ（`Gh`）で、`available(Gh)` は **`gh` が PATH にあること + `hosts.yml` があること**、つまり**認証済みの `gh`** を要求する。CI ランナーには `gh` が入っているが `gh auth login` は誰も走らせていないので、`profile = "implement"` のタスクはツールゲートで park し、**dispatch が一度も起きないまま 30 秒でタイムアウト**する — 開発者のマシンでは緑、CI でだけ落ちる（#542 で実測）。「triage 以外の profile には何も注入しない」のような**否定を主張するテストは `design` で書く**（要求ツールが無く、`triage` に最も近い隣人でもある）。
 - **テスト用にバイナリを配置するときは `fs::copy` ではなくハードリンク**（`test_support::place_binary`。CLI の E2E 4 ファイルすべてがこれを使う）。Linux で `ETXTBSY`（`ExecutableFileBusy`）を踏む。原因は自分の書き込みではなく**同一プロセス内で並行する他のテスト**で、`Command::spawn` の fork が `copy` の書き込み fd を継承したまま残ると、その間 `execve` が拒否される。ハードリンクは書き込み用に開かないのでこの窓が存在しない。同一ファイルシステムでないときだけ copy にフォールバックし、有限回リトライしたうえで**尽きたら panic する** — 実行できないバイナリを置いたまま返すと、数行あとの spawn 失敗という分かりにくい形で出るため。
 
 # CI 品質ゲート

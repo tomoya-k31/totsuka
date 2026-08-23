@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:04d6fa4d4c6fec8dfca9867af8c9bdfc3d01751b29246e61c620d38a69f302f7 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:87d22a3038a829368b14497b55eb88102cabc64e817d4b710eaa4bcb381ddbe2 -->
 
 # Operations guide
 
@@ -21,6 +21,7 @@ Day-to-day operation: reading `doctor`, cleaning up worktrees and panes, stoppin
 | `llm-online` | The provider accepted the API key (only with `--online`) | On 401 or 403, reissue the key with your provider and update `[llm].api_key_ref`. Unreachable hosts and 5xx responses stay warnings |
 | `worktrees` | No orphaned worktrees | Offers to clean them up interactively |
 | `panes` | No orphaned panes | Offers to release them interactively |
+| `trackers` | Each repository files into exactly one tracker | Remove the repository from all but one plugin's `repos`. **No plugin can see this on its own** — each one validates only its own list, so the conflict exists only in the union. Absent when no source claims anything |
 
 A failing `worktree-location` is the nastiest of these: worktrees are created **at the moment a task is dispatched**, so `run` starts up perfectly normally and then every task fails.
 

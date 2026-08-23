@@ -320,6 +320,39 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
 }
 
 impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
+    /// Where a new tracker item goes, per repository (#542).
+    ///
+    /// Rebuilt on each call from the live plugin set rather than cached at
+    /// startup: a plugin restart (#495) replaces the `Plugin` object, so a
+    /// snapshot taken once would go on describing the dead process's claims —
+    /// and a plugin whose config changed across the restart would route to the
+    /// old board with nothing saying so.
+    ///
+    /// Sources are visited in **name order**. `PluginSet::sources` is a
+    /// `HashMap`, so without sorting, a repository claimed by two plugins
+    /// (which is a config error, reported separately) would route to a
+    /// different one between runs of the same config.
+    /// Report repositories claimed by more than one source (#542).
+    ///
+    /// Called at every point where the set of claims can change — startup and
+    /// each task_source restart — because routing follows the live claims and
+    /// would otherwise change under a conflict nothing announced.
+    pub(super) fn warn_on_claim_conflicts(&self) {
+        for conflict in self.claim_registry().conflicts() {
+            tracing::warn!("{conflict}");
+        }
+    }
+
+    fn claim_registry(&self) -> crate::plugins::claims::ClaimRegistry {
+        let mut names: Vec<&String> = self.plugins.sources.keys().collect();
+        names.sort();
+        crate::plugins::claims::ClaimRegistry::from_sources(
+            names
+                .into_iter()
+                .map(|name| (name.as_str(), self.plugins.sources[name].claimed_repos())),
+        )
+    }
+
     /// Build an engine over launched plugins. Spawns a forwarder per agent
     /// plugin so `state/notification` streams (F-38) are consumed from the
     /// moment of construction — dispatch must happen after this, never before,
@@ -386,7 +419,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
         let slots = SlotManager::new(settings.limits.clone());
         let readme_cache = settings.readme_cache_dir.clone().map(ReadmeCache::new);
-        Self {
+        let engine = Self {
             agent_tools: crate::agent_tools::ToolCache::default(),
             blocked_on_tools: std::collections::HashSet::new(),
             blocked_on_agent: std::collections::HashSet::new(),
@@ -410,7 +443,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             last_worktree_sweep: None,
             clock,
             stats: RunStats::default(),
-        }
+        };
+        // Startup is the first point where the claims are all known (#542).
+        // Reported here rather than by the CLI so that startup and the restart
+        // path in `supervise` go through one implementation — two copies of a
+        // conflict check drift, and the one that drifts stays quiet.
+        engine.warn_on_claim_conflicts();
+        engine
     }
 
     /// Borrow the state DB (status queries, tests).

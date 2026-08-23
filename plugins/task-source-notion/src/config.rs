@@ -350,7 +350,9 @@ impl NotionConfig {
             columns.push(format!("`{repo_hint}` (the repository name)"));
         }
         format!(
-            "Notion database `{}`. Create a page there and fill {}.              Totsuka does not create Notion pages itself, so use whatever Notion              tooling you have available (an MCP server, the API with your own token).",
+            "Notion database `{}`. Create a page there and fill {}. \
+             Totsuka does not create Notion pages itself, so use whatever Notion \
+             tooling you have available (an MCP server, the API with your own token).",
             database.database_id,
             columns.join(", "),
         )
@@ -404,6 +406,131 @@ fn default_rate_limit() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The destination is prose that lands in an agent's prompt, so it must
+    /// read as prose: no run of spaces from a line continuation written
+    /// without its backslash, and no newline.
+    ///
+    /// Checked on the rendered value rather than by reading the literal —
+    /// that is the thing the agent sees.
+    #[test]
+    fn the_destination_reads_as_one_paragraph() {
+        let cfg = parse(serde_json::json!({
+            "token": "t",
+            "databases": [{ "database_id": "db1", "repos": ["totsuka"] }],
+            "property_map": { "title": "Name", "status": "Status", "repo_hint": "Repo" }
+        }));
+        let destination = &cfg.claimed_repos()[0].destination;
+        assert!(
+            !destination.contains("  ") && !destination.contains('\n'),
+            "{destination:?}"
+        );
+        // And it carries what an agent creating the page cannot guess: the
+        // database and the operator's own column names.
+        for needle in ["db1", "`Name`", "`Status`", "`Repo`"] {
+            assert!(
+                destination.contains(needle),
+                "{needle} missing: {destination}"
+            );
+        }
+    }
+
+    /// Only the mapped columns appear. Naming a property the operator never
+    /// mapped would send the agent looking for a column that does not exist.
+    #[test]
+    fn the_destination_names_only_mapped_columns() {
+        let cfg = parse(serde_json::json!({
+            "token": "t",
+            "databases": [{ "database_id": "db1", "repos": ["totsuka"] }],
+            "property_map": { "title": "Name" }
+        }));
+        let destination = &cfg.claimed_repos()[0].destination;
+        assert!(destination.contains("`Name`"), "{destination}");
+        assert!(!destination.contains("(status)"), "{destination}");
+        assert!(!destination.contains("repository name"), "{destination}");
+    }
+
+    /// A repository on two databases makes the claim ambiguous (#542).
+    ///
+    /// The github plugin has the same check; leaving it out here would be the
+    /// half-closed hole this repository keeps rediscovering.
+    #[test]
+    fn static_errors_flag_a_repository_claimed_by_two_databases() {
+        let cfg = parse(serde_json::json!({
+            "token": "t",
+            "databases": [
+                { "database_id": "db1", "repos": ["totsuka", "shared"] },
+                { "database_id": "db2", "repos": ["shared"] }
+            ]
+        }));
+        let errors = crate::client::static_config_errors(&cfg);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("shared") && e.contains("db1") && e.contains("db2")),
+            "got {errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|e| e.contains("totsuka")),
+            "got {errors:?}"
+        );
+    }
+
+    /// The same repository twice **within one database** is harmless: both
+    /// entries name the same destination.
+    #[test]
+    fn a_repository_repeated_within_one_database_is_not_an_error() {
+        let cfg = parse(serde_json::json!({
+            "token": "t",
+            "databases": [{ "database_id": "db1", "repos": ["r", "r"] }],
+            "property_map": { "title": "Name", "status": "Status" }
+        }));
+        assert!(crate::client::static_config_errors(&cfg).is_empty());
+    }
+
+    /// An empty `repos` cannot become a claim, so it is rejected rather than
+    /// quietly meaning "every page in the database".
+    #[test]
+    fn static_errors_flag_an_empty_repos_list() {
+        let cfg = parse(serde_json::json!({
+            "token": "t",
+            "databases": [{ "database_id": "db1", "repos": [] }],
+            "property_map": { "title": "Name", "status": "Status" }
+        }));
+        let errors = crate::client::static_config_errors(&cfg);
+        assert!(errors.iter().any(|e| e.contains("repos")), "got {errors:?}");
+    }
+
+    /// `databases = []` deserializes fine (it is a list, not a missing field),
+    /// so the check has to live in validation.
+    #[test]
+    fn static_errors_flag_no_databases() {
+        let cfg = parse(serde_json::json!({
+            "token": "t", "databases": [],
+            "property_map": { "title": "Name", "status": "Status" }
+        }));
+        let errors = crate::client::static_config_errors(&cfg);
+        assert!(
+            errors.iter().any(|e| e.contains("[[databases]]")),
+            "got {errors:?}"
+        );
+    }
+
+    /// A page whose `repo_hint` is absent passes every database's filter — the
+    /// asymmetry with the github plugin, where an issue always has a
+    /// repository. Dropping those would ingest nothing at all for anyone who
+    /// has not mapped `repo_hint`.
+    #[test]
+    fn a_page_without_a_repo_hint_passes_the_filter() {
+        let cfg = parse(serde_json::json!({
+            "token": "t",
+            "databases": [{ "database_id": "db1", "repos": ["totsuka"] }]
+        }));
+        let database = &cfg.databases[0];
+        assert!(database.repo_allowed(Some("totsuka")));
+        assert!(!database.repo_allowed(Some("other")));
+        assert!(database.repo_allowed(None));
+    }
 
     fn parse(json: serde_json::Value) -> NotionConfig {
         serde_json::from_value(json).unwrap()
