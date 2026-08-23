@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:53b66ebe24b0c860e1cc9ea131ab4ab66ddc5d12ce3e3d647bc18e7ffb5e468b -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:54036f379a467fd61e7edf8604a7c878ee6e7f6646af432a2c7f999459df0385 -->
 
 # totsuka とは
 
@@ -32,7 +32,7 @@ GitHub の Issue / Projects や Notion といったソースからタスクを�
 
 **そもそもタスクを拾うかどうかの判断はソースプラグインの仕事**であって、totsuka のものではない — 担当者や進行状況を見て、他の人が着手した作業には手を出さないようにする。人と人の間の厳密な排他は行わない。
 
-成果物を書き戻すソースもある。エージェント自身が書ける場合 —— `gh` でコメントする、Notion のページを書く —— はそちらが書き、ソースは関与しない。書き戻しの経路は、totsuka が仲介しなければならないソースのためにある。承認すると本人名義で出る Slack の返信がそれにあたる。
+成果物を書き戻すソースもある。エージェント自身が書ける場合 —— `gh` でコメントする、Notion のページを書く —— はそちらが書き、ソースは関与しない。書き戻しの経路は、totsuka が仲介しなければならないソースのためにある。本人名義で出る Slack の返信がそれにあたる —— 既定では承認してから、`publish = "direct"` を設定した workflow では即時に投稿される。
 
 ### リポジトリを選ぶ
 

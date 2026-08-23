@@ -280,6 +280,13 @@ async fn direct_delivery_posts_immediately_without_a_draft() {
     let body = posts[0].body.as_ref().unwrap();
     assert_eq!(body["text"].as_str().unwrap(), expected_posted_reply());
     assert_eq!(body["thread_ts"], "100.0");
+    // Same rendering as an approved draft (#454): the `markdown` block, so the
+    // agent's GFM does not render broken just because approval was skipped.
+    assert_eq!(body["blocks"][0]["type"], "markdown", "{body}");
+    assert_eq!(
+        body["blocks"][0]["text"].as_str().unwrap(),
+        expected_posted_reply()
+    );
     assert!(
         requests_for(&shared, "chat.postEphemeral").is_empty(),
         "direct must not present a draft"

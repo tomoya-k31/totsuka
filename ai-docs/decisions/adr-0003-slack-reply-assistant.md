@@ -25,6 +25,8 @@ Decision §2（バッファ + 短周期 `tasks/fetch`）は [ADR-0008](/decision
 
 Decision §3 の「Bot なし」は [ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)（#305）で部分改訂された: 通知ナッジ DM 専用の bot user を追加する（エフェメラルと自分名義 self-DM は Slack 通知を発生させないため）。会話に見える投稿の主体は従来どおり user token（本人名義）で、承認フローの防波堤は不変。
 
+Decision §3 の「承認フロー必須」は [ADR-0057](/decisions/adr-0057-per-workflow-publish-and-cleanup.md)（#548）で部分改訂された: 承認は**既定のまま**、workflow 単位の `publish = "direct"` で opt-out できる。想定する opt-out は triage の起票報告（「issue を立てた」という事実の通知で、承認が守りたい「本人の*発言*を勝手に出さない」が掛かっていない）。投稿の主体は変わらず user token（本人名義）。
+
 # Context
 
 「自分宛の Slack メンションを totsuka のタスクにし、AI エージェントの返信案を自分の承認後に本人名義で返信する」機能（[task-source-slack](/components/task-source-slack.md)）を追加するにあたり、3 つの構造判断が必要だった:

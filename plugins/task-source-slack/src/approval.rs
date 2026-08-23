@@ -2,8 +2,10 @@
 //! (mechanically prefixed with a `<@sender_id>` mention of the asker) into a
 //! [`Draft`] presented twice — an ephemeral inside the mention's thread and a
 //! persistent self-DM record — and the approve/reject `block_actions` finish
-//! it. Only an approval posts to the thread, under the operator's own name
-//! (user token).
+//! it. In the draft flow only an approval posts to the thread; a
+//! `result/publish` carrying `delivery = direct` (#548, ADR-0057) skips the
+//! draft and posts immediately. Either way the post is under the operator's
+//! own name (user token).
 //!
 //! Failure posture:
 //! - one presentation surface failing to post is logged and tolerated (the
@@ -36,8 +38,6 @@ const BLOCK_TEXT_LIMIT: usize = 2900;
 /// one Slack rejects for size, only fall back earlier than strictly needed.
 const MARKDOWN_BLOCK_LIMIT: usize = 12_000;
 
-/// `result/publish`: build a draft from the agent's `content`, store it, and
-/// present it (thread ephemeral + self-DM record). `Err` is reserved for
 /// `result/publish` with `delivery = direct` (#548, ADR-0057): post the reply
 /// into the thread immediately, no draft and no buttons.
 ///
@@ -78,7 +78,14 @@ pub async fn publish_direct<T: SlackTransport>(
         text: &text,
         thread_ts: Some(&pending.reply_ts),
         unfurl_links: None,
-        blocks: None,
+        // Same rendering as an approved draft (#454, ADR-0046): the agent
+        // writes GFM, and without the `markdown` block, headings and tables
+        // render broken. The delivery mode changes the *gate*, never how the
+        // same reply looks — a direct post that renders worse than an
+        // approved one would punish exactly the workflows trusted enough to
+        // skip approval. Oversized replies fall back to bare `text`, also as
+        // the approve path does.
+        blocks: reply_markdown_block(&text).map(|b| Value::Array(vec![b])),
     })
     .await
     .map_err(|e| format!("direct reply could not be posted: {e}"))?;
@@ -88,6 +95,8 @@ pub async fn publish_direct<T: SlackTransport>(
     Ok(())
 }
 
+/// `result/publish`: build a draft from the agent's `content`, store it, and
+/// present it (thread ephemeral + self-DM record). `Err` is reserved for
 /// requests that cannot become a draft at all (unknown task, empty reply);
 /// presentation failures are logged, not returned.
 pub async fn publish_draft<T: SlackTransport>(
