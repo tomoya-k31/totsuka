@@ -48,6 +48,7 @@ impl TaskSourceHandler for Recording {
         self.calls.push("initialize");
         Ok(InitializeResult {
             plugin_version: semver::Version::new(0, 1, 0),
+            claimed_repos: Vec::new(),
             capabilities: Default::default(),
         })
     }

@@ -166,6 +166,37 @@ pub struct LlmInfo {
     pub api_key: Option<String>,
 }
 
+/// One repository this task_source is the tracker for, and where a new item
+/// for it goes (#542).
+///
+/// The *forward* mapping repository → tracker, which nothing carried before:
+/// [`RepoInfo`] and the Orchestrator's `[[repositories]]` describe a
+/// repository, and a task's `repo_hint` points backwards from an item to a
+/// repository. Neither answers "a new request about `totsuka` — which board
+/// does it belong on".
+///
+/// The plugin derives this from its own config, which stays the single source
+/// of truth: the Orchestrator never learns what a `project_number` or a
+/// `database_id` is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaimedRepo {
+    /// The repository this claim is for (`[[repositories]].name`, the same id
+    /// `repo_hint` uses).
+    pub repo: String,
+    /// Where an item for `repo` goes, **as prose addressed to an agent** —
+    /// the board/database and how to file into it.
+    ///
+    /// Prose rather than a structured `{project_number, owner}` on purpose:
+    /// the consumer is an agent's prompt, not code. A struct would force the
+    /// Orchestrator to know each tracker's shape and to render it back into a
+    /// sentence, which is the coupling this field exists to avoid — and it
+    /// would need a new variant, i.e. a protocol change, for every future
+    /// task_source. Nothing machine-checks the text; the triage rubric
+    /// checking the agent's report is the only guard
+    /// (the same class of guarantee as ADR-0045's read-only).
+    pub destination: String,
+}
+
 /// `initialize` result (P→O): the plugin's version and declared capabilities.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InitializeResult {
@@ -173,6 +204,14 @@ pub struct InitializeResult {
     pub plugin_version: Version,
     /// Capabilities the plugin actually supports (F-33).
     pub capabilities: Capabilities,
+    /// Repositories this task_source is the tracker for (#542, 0.5.1).
+    ///
+    /// Empty (or absent) means "I claim nothing", which is what every plugin
+    /// predating this version says by omission — so an empty list must never
+    /// be read as "this repository has no tracker anywhere", only as "not
+    /// this plugin's". Non-task_source plugins leave it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claimed_repos: Vec<ClaimedRepo>,
 }
 
 /// `config/validate` params (O→P): the plugin config to validate (F-59).
@@ -708,6 +747,7 @@ mod tests {
         });
         round_trip(&InitializeResult {
             plugin_version: Version::new(1, 0, 0),
+            claimed_repos: Vec::new(),
             capabilities: Capabilities {
                 hook_completion: true,
                 ..Default::default()
@@ -743,6 +783,28 @@ mod tests {
         let ignored: ConfigValidateParams =
             serde_json::from_str(r#"{"config":{},"repositories":[{"name":"x"}]}"#).unwrap();
         assert_eq!(ignored.config, serde_json::json!({}));
+        // `claimed_repos` (0.5.1, #542) under the same contract, this time on
+        // the *result*: a plugin predating it sends no key and must read back
+        // as "claims nothing" rather than failing to deserialize.
+        let old_result: InitializeResult =
+            serde_json::from_str(r#"{"plugin_version":"1.0.0","capabilities":{"outputs":[]}}"#)
+                .unwrap();
+        assert!(old_result.claimed_repos.is_empty());
+        assert!(
+            !serde_json::to_string(&old_result)
+                .unwrap()
+                .contains("claimed_repos"),
+            "an empty claim list must not appear on the wire, so an older \
+             Orchestrator never sees an unknown key"
+        );
+        round_trip(&InitializeResult {
+            plugin_version: Version::new(1, 0, 0),
+            capabilities: Capabilities::default(),
+            claimed_repos: vec![ClaimedRepo {
+                repo: "totsuka".into(),
+                destination: "GitHub Project tomoya-k31/#7 (user)".into(),
+            }],
+        });
         round_trip(&ConfigValidateResult {
             valid: false,
             errors: vec!["missing socket_path → set it".into()],

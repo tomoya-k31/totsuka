@@ -228,6 +228,7 @@ impl<F: CliFactory> Server<F> {
 fn capabilities_result() -> Value {
     to_value(&InitializeResult {
         plugin_version: plugin_version(),
+        claimed_repos: Vec::new(),
         capabilities: Capabilities {
             state_stream: true,
             ..Capabilities::default()

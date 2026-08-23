@@ -9,6 +9,12 @@
       "hook_completion": true,
       "diagnostics_snapshot": true,
       "outputs": []
-    }
+    },
+    "claimed_repos": [
+      {
+        "repo": "totsuka",
+        "destination": "GitHub Project tomoya-k31/#7 (user). File the issue in the repository, then add it to the board with `gh project item-add 7 --owner tomoya-k31 --url <issue-url>`."
+      }
+    ]
   }
 }
