@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:04d6fa4d4c6fec8dfca9867af8c9bdfc3d01751b29246e61c620d38a69f302f7 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:87d22a3038a829368b14497b55eb88102cabc64e817d4b710eaa4bcb381ddbe2 -->
 
 # 運用ガイド
 
@@ -22,6 +22,7 @@
 | `llm-online` | プロバイダが API キーを受理した（`--online` 時のみ） | 401 / 403 ならプロバイダで鍵を再発行し `[llm].api_key_ref` を更新する。到達不能や 5xx は警告止まり |
 | `worktrees` | 孤児 worktree が無い | 対話的に掃除を提案する |
 | `panes` | 孤児 pane が無い | 対話的に解放を提案する |
+| `trackers` | 1 つのリポジトリの起票先が 1 つに定まる | 重複しているリポジトリを、どれか 1 つのプラグインの `repos` だけに残す。**プラグイン単体では見えない検査**で、それぞれは自分のリストしか検証しないため、矛盾は和集合にしか現れない。どのソースも何も claim していない構成では出ない |
 
 `worktree-location` の失敗は放置すると厄介で、**worktree を作るのはタスクを割り当てる瞬間**なので、`run` は正常に起動したまま全タスクが失敗する。
 

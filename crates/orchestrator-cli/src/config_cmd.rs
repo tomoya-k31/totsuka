@@ -68,7 +68,9 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
             specs.push((spec, init_config));
         }
         let runtime = tokio::runtime::Runtime::new()?;
-        for (name, result) in runtime.block_on(plugin_host::validate_all(specs)) {
+        for plugin_host::ValidatedPlugin { name, result, .. } in
+            runtime.block_on(plugin_host::validate_all(specs))
+        {
             match result {
                 Ok(v) if v.valid => println!("ok: plugin `{name}` accepted its config"),
                 Ok(v) => {

@@ -15,6 +15,7 @@ use orchestrator_core::adapters::{RunLock, StateDb};
 use orchestrator_core::config::{self, PluginKind, RootConfig, secret_resolver};
 use orchestrator_core::logging::{self, LogConfig};
 use orchestrator_core::platform::PlatformProcessProbe;
+use orchestrator_core::plugins::claims::ClaimRegistry;
 use orchestrator_core::plugins::plugin_spec;
 use orchestrator_core::ports::SecretString;
 use orchestrator_core::run::{Engine, HookRuntime, PluginSet, RunSummary, settings_from_config};
@@ -118,6 +119,7 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
 
     let db = StateDb::open(&paths.state_dir().join("state.db"))?;
     let plugins = launch_plugins(cx, &cfg, &env).await?;
+    warn_on_claim_conflicts(&plugins);
 
     // AI Gateway router (F-12), if configured.
     let llm = match &cfg.llm {
@@ -227,6 +229,31 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
     engine.shutdown(SHUTDOWN_GRACE).await;
     print_summary(&summary, json)?;
     Ok(())
+}
+
+/// Warn about repositories claimed as a tracker target by more than one source
+/// (#542).
+///
+/// A warning, not a refusal. The run is still useful — every other repository
+/// routes correctly, and the contested one routes to one of the two places the
+/// operator actually configured. Refusing to start would take a whole session
+/// away over a config line that only affects `triage` tasks for that one
+/// repository.
+///
+/// **No plugin can see this on its own.** Each one's `config/validate` checks
+/// only its own list, so the github and notion configs are both individually
+/// valid; the conflict exists only in the union.
+fn warn_on_claim_conflicts(plugins: &PluginSet) {
+    let mut names: Vec<&String> = plugins.sources.keys().collect();
+    names.sort();
+    let registry = ClaimRegistry::from_sources(
+        names
+            .into_iter()
+            .map(|name| (name.as_str(), plugins.sources[name].claimed_repos())),
+    );
+    for conflict in registry.conflicts() {
+        tracing::warn!("{conflict}");
+    }
 }
 
 /// Launch every enabled plugin from the store (F-58), passing its

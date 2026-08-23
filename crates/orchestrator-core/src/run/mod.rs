@@ -320,6 +320,28 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
 }
 
 impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
+    /// Where a new tracker item goes, per repository (#542).
+    ///
+    /// Rebuilt on each call from the live plugin set rather than cached at
+    /// startup: a plugin restart (#495) replaces the `Plugin` object, so a
+    /// snapshot taken once would go on describing the dead process's claims —
+    /// and a plugin whose config changed across the restart would route to the
+    /// old board with nothing saying so.
+    ///
+    /// Sources are visited in **name order**. `PluginSet::sources` is a
+    /// `HashMap`, so without sorting, a repository claimed by two plugins
+    /// (which is a config error, reported separately) would route to a
+    /// different one between runs of the same config.
+    fn claim_registry(&self) -> crate::plugins::claims::ClaimRegistry {
+        let mut names: Vec<&String> = self.plugins.sources.keys().collect();
+        names.sort();
+        crate::plugins::claims::ClaimRegistry::from_sources(
+            names
+                .into_iter()
+                .map(|name| (name.as_str(), self.plugins.sources[name].claimed_repos())),
+        )
+    }
+
     /// Build an engine over launched plugins. Spawns a forwarder per agent
     /// plugin so `state/notification` streams (F-38) are consumed from the
     /// moment of construction — dispatch must happen after this, never before,

@@ -18,6 +18,7 @@ use orchestrator_core::adapters::plugin_host;
 use orchestrator_core::config::{
     self, PluginKind as ConfigPluginKind, RootConfig, secret_resolver,
 };
+use orchestrator_core::plugins::claims::ClaimRegistry;
 use orchestrator_core::ports::SecretString;
 use orchestrator_core::ports::git::GitRunner;
 use orchestrator_core::worktree::WorktreeManager;
@@ -1594,7 +1595,8 @@ fn check_plugins(
         ));
         return;
     };
-    for (name, result) in runtime.block_on(plugin_host::validate_all(specs)) {
+    let validated = runtime.block_on(plugin_host::validate_all(specs));
+    for plugin_host::ValidatedPlugin { name, result, .. } in &validated {
         match result {
             Ok(v) if v.valid => {
                 checks.push(Check::ok(
@@ -1612,6 +1614,61 @@ fn check_plugins(
                 e.to_string(),
                 "check the binary and protocol compatibility",
             )),
+        }
+    }
+    check_tracker_claims(&validated, checks);
+}
+
+/// Repositories claimed as a tracker target by more than one source (#542).
+///
+/// **The only place this is visible.** Each plugin's own `config/validate`
+/// checks its own list, so both configs are individually valid and the
+/// conflict exists only in the union — which nothing but the Orchestrator
+/// ever assembles.
+///
+/// Reads the claims [`validate_all`](plugin_host::validate_all) already
+/// gathered, so it inherits the launch gating (`op://` prompts, `cmd:`
+/// execution) exactly rather than restating it.
+fn check_tracker_claims(validated: &[plugin_host::ValidatedPlugin], checks: &mut Vec<Check>) {
+    // A plugin that failed to launch reports no claims, which is not the same
+    // as claiming nothing: including it would let a crashed github plugin
+    // "resolve" a conflict by disappearing.
+    let launched: Vec<&plugin_host::ValidatedPlugin> =
+        validated.iter().filter(|v| v.result.is_ok()).collect();
+    let registry = ClaimRegistry::from_sources(
+        launched
+            .iter()
+            .map(|v| (v.name.as_str(), v.claimed_repos.as_slice())),
+    );
+    if registry.is_empty() {
+        // Not a failure and not worth a line: no source claims anything, which
+        // is every config that has not set a tracker up.
+        return;
+    }
+    if launched.len() < validated.len() {
+        checks.push(Check::skip(
+            "trackers",
+            "some plugins did not launch, so their claims are unknown",
+            "fix the plugin failures above, then re-run to check for conflicting trackers",
+        ));
+        return;
+    }
+    match registry.conflicts() {
+        [] => checks.push(Check::ok(
+            "trackers",
+            format!(
+                "{} repositories route to exactly one tracker",
+                registry.len()
+            ),
+        )),
+        conflicts => {
+            for conflict in conflicts {
+                checks.push(Check::fail(
+                    "trackers",
+                    conflict.to_string(),
+                    "remove the repository from all but one plugin's `repos`",
+                ));
+            }
         }
     }
 }

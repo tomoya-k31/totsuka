@@ -3,6 +3,7 @@
 //! Enable/disable is not here — that is a `config.toml` edit
 //! ([`config::edit`](crate::config::edit)) since it is declarative (F-56).
 
+pub mod claims;
 pub mod spec;
 pub mod store;
 

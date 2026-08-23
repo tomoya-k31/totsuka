@@ -97,6 +97,7 @@ pub struct Prompts {
     /// Dispatch-time instruction to create the task's branch. Emitted only
     /// when the worktree is handed over detached.
     branch_convention: String,
+    tracker_destination: String,
     /// Judging criteria of the `prompt`-type Stop hook.
     verification_rubric: String,
     /// The rubric [`resolve_for`](Self::resolve_for) substitutes for
@@ -176,6 +177,7 @@ pub const ALLOWED_PLACEHOLDERS: &[(&str, &[&str])] = &[
         ],
     ),
     ("branch_convention", &[]),
+    ("tracker_destination", &["destination"]),
     ("verification_rubric", &[]),
     ("verification_rubric_artifact_url", &[]),
     ("verification_rubric_human_approval", &[]),
@@ -332,6 +334,16 @@ impl Prompts {
         &self.branch_convention
     }
 
+    /// The instruction naming where a `triage` task's item goes (#542).
+    ///
+    /// `destination` is the claiming plugin's own prose, rendered into the
+    /// `{destination}` placeholder. Core does not interpret it — see
+    /// [ADR-0056](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0056-multi-tracker-routing.md).
+    pub fn tracker_destination(&self, destination: &str) -> String {
+        self.tracker_destination
+            .replace("{destination}", destination)
+    }
+
     /// The rubric leaf, unassembled. Lets a caller distinguish "this set uses
     /// the built-in rubric" from "this set was given one".
     pub fn verification_rubric(&self) -> &str {
@@ -486,6 +498,7 @@ mod tests {
                 &p.marker_self_report_confirm_question,
             ),
             ("branch_convention", &p.branch_convention),
+            ("tracker_destination", &p.tracker_destination),
             ("verification_rubric", &p.verification_rubric),
             (
                 "verification_rubric_human_approval",

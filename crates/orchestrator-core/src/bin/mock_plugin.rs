@@ -131,11 +131,19 @@ fn main() {
                 // input, not the wire, and rewriting every fixture would be
                 // churn with no signal.
                 let flag = |k: &str| config.get(k).and_then(Value::as_bool).unwrap_or(false);
+                // 0.5.1 (#542): repositories this fake source is the tracker
+                // for, supplied verbatim by the test as
+                // `claimed_repos = [{ repo, destination }]`.
+                let claimed_repos = config
+                    .get("claimed_repos")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default();
                 Response::result(
                     request_id(&id),
                     serde_json::to_value(InitializeResult {
                         plugin_version: semver::Version::new(0, 1, 0),
-                        claimed_repos: Vec::new(),
+                        claimed_repos,
                         capabilities: Capabilities {
                             state_stream,
                             pane_control: flag("pane_control"),

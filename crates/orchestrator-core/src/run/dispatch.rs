@@ -817,6 +817,28 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         if let Some(body) = conversation_prompt(&pending) {
             task.body = Some(body);
         }
+        // Where the deliverable goes, for a workflow whose deliverable is a
+        // *new tracker item* (#542). Appended to the task-source's own
+        // instructions rather than delivered on a channel of its own, so it
+        // travels wherever those already travel — invisibly through the hook's
+        // prompt context, or visibly for a tool with no invisible channel.
+        //
+        // `triage` only: it is the one profile whose output is an item filed
+        // somewhere else. An `implement` run works in the repository it was
+        // given, and telling it about a board would be noise it might act on.
+        if wf_profile == Some(Profile::Triage)
+            && let Some(destination) = self.claim_registry().destination(&repo.name)
+        {
+            let block = self
+                .settings
+                .prompts
+                .for_workflow(&record.workflow)
+                .tracker_destination(destination);
+            task.instructions = Some(match task.instructions.take() {
+                Some(existing) => format!("{existing}\n\n{block}"),
+                None => block,
+            });
+        }
         let (job_id, hook_spec, reserved_row, visible_hook_context) = self
             .wire_hooks(
                 &record,
