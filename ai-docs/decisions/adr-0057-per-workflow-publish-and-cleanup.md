@@ -68,5 +68,5 @@ cleanup = "manual"    # この workflow だけ worktree と pane を残す
 
 - `:books:` の報告は承認なしで**本人名義**のスレッド返信になる。ADR-0003 の承認が守っていた「本人の発言を勝手に出さない」は、`answer` 系 workflow では**既定のまま**残る。`publish = "direct"` を answer に書くことも構文上は可能で、それは**運用者が明示的にゲートを外す**行為である（設定面から権限的な決定に到達できてしまう形ではあるが、ADR-0023 が禁じたのは*プロンプト文字列*からの到達であり、これは output と同じ「配線の選択」の側に置く）
 - 直接投稿は `<@sender>` プレフィックス付きの通常メッセージなので Slack 通知が飛ぶ。ADR-0021 の nudge DM は draft 経路にだけ要る（direct では投稿そのものが通知になる）
-- `cleanup = "manual"` の workflow は worktree が溜まり、`doctor` が孤児として数えるようになる。期限で回収したければ `keep_7d` を書く
+- `cleanup = "manual"` の workflow は worktree が**黙って**溜まる。`doctor` の孤児検査は捕まえ**ない** — `check_orphans` の known 集合は `list_tasks()` の worktree を state 無関係に全部含むので、タスク行が残っている worktree は定義上孤児にならない（孤児検査は「DB に対応が無い worktree」のためのもので、これは「対応があるが残す判断をした worktree」）。見えるのは `totsuka status` のタスク一覧とディスク使用量だけなので、無制限に溜めたくなければ `keep_7d` を書く
 - 検収は「triage だけ」を主張する変更なので、**同じ run で answer 側が巻き添えになっていないこと**（承認待ちのまま／pane が消えるまま)を対で確かめる必要がある

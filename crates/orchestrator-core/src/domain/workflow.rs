@@ -216,12 +216,12 @@ impl Workflow {
             rubric: config.rubric.clone(),
             tool: config.tool.clone(),
             profile: config.profile,
+            publish: config.publish,
+            cleanup: config.cleanup,
             // `""` and `"   "` mean the operator wrote the key and left it
             // blank. Rejecting that would be a validation error for something
             // with an obvious reading; normalising it here means no downstream
             // caller has to remember to trim.
-            publish: config.publish,
-            cleanup: config.cleanup,
             initial_prompt: config
                 .initial_prompt
                 .as_deref()

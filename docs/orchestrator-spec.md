@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:b8048b7f320ca59d7ee01ef23657106f84ea52a52b62a36ca2e01ead4cadb10f -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:0a04cb0b2662020f1564eed1247a2f9a0380437debf4aef83481270d868d8b3c -->
 
 # What totsuka is
 
@@ -31,7 +31,7 @@ Sources push tasks as they find them. Field mapping and filter conditions are co
 
 **Deciding whether to pick a task up at all is the source plugin's job**, not totsuka's — checking assignees or in-progress status so that work another person has started is left alone. There is no strict mutual exclusion between people.
 
-Some sources write the result back for you. Where the agent can write the deliverable itself — a `gh` comment, a Notion page — it does, and the source stays out of it; the write-back path exists for sources where totsuka has to mediate, like a Slack reply that goes out under your own name once you approve it.
+Some sources write the result back for you. Where the agent can write the deliverable itself — a `gh` comment, a Notion page — it does, and the source stays out of it; the write-back path exists for sources where totsuka has to mediate, like a Slack reply that goes out under your own name — after your approval by default, or immediately for a workflow you configure with `publish = "direct"`.
 
 ### Choosing the repository
 
