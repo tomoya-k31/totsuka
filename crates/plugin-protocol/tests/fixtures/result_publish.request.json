@@ -5,6 +5,7 @@
   "params": {
     "task_id": "42",
     "content": "# Design\n…",
-    "format": "markdown"
+    "format": "markdown",
+    "delivery": "direct"
   }
 }

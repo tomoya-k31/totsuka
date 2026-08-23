@@ -207,6 +207,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             task_id: record.source_task_id.clone(),
             content,
             format: Some("markdown".to_string()),
+            // Wired to `[[workflows]].publish` in the next commit of #548;
+            // `None` keeps today's behaviour (the plugin's approval flow).
+            delivery: None,
         };
         source
             .call::<_, Value>(method::RESULT_PUBLISH, &params)
