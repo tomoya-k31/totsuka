@@ -482,6 +482,7 @@ owner = "tomoya-k31"                    # 必須。ユーザー名または組�
 owner_type = "user"                     # "user"（既定）| "organization"。エントリごとに指定できる
 project_number = 3                      # 必須。Project の URL 末尾の数字
 repos = ["totsuka", "dotfiles"]         # 必須・非空。取り込みフィルタ兼「このリポジトリの起票先」
+triage_status = "📥 Inbox"              # 任意。triage 起票した item に付ける Status（未設定 = Status なし）
 
 [[projects]]
 owner = "my-org"

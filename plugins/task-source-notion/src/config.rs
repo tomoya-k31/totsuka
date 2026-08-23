@@ -235,6 +235,17 @@ pub struct DatabaseConfig {
     /// filtering those out would silently ingest nothing at all for anyone who
     /// has not mapped `repo_hint`.
     pub repos: Vec<String>,
+    /// The status option a triage-filed page should be created with (#548
+    /// follow-up).
+    ///
+    /// Absent means the page is created without a status, leaving a
+    /// human-triage gate. **Setting this to a value some workflow trigger
+    /// polls removes that gate** — filing then flows straight into an
+    /// unattended run. Requires `property_map.status` to be mapped
+    /// (`static_config_errors` rejects the combination otherwise: an
+    /// instruction to fill a column nobody can name is unfollowable).
+    #[serde(default)]
+    pub triage_status: Option<String>,
 }
 
 impl DatabaseConfig {
@@ -344,7 +355,15 @@ impl NotionConfig {
         let map = &self.property_map;
         let mut columns = vec![format!("`{}` (title)", map.title)];
         if let Some(status) = &map.status {
-            columns.push(format!("`{status}` (status)"));
+            match &database.triage_status {
+                // Name the exact value, so the agent creates the page already
+                // in the right column instead of guessing one or leaving it
+                // blank.
+                Some(value) => {
+                    columns.push(format!("`{status}` (status — set it to `{value}`)"));
+                }
+                None => columns.push(format!("`{status}` (status)")),
+            }
         }
         if let Some(repo_hint) = &map.repo_hint {
             columns.push(format!("`{repo_hint}` (the repository name)"));
@@ -435,6 +454,36 @@ mod tests {
         }
     }
 
+    /// `triage_status` names the exact value inline on the status column;
+    /// absent keeps the plain column listing.
+    #[test]
+    fn triage_status_lands_in_the_destination_only_when_set() {
+        let with = parse(serde_json::json!({
+            "token": "t",
+            "databases": [{ "database_id": "db1", "repos": ["totsuka"],
+                            "triage_status": "📥 Inbox" }],
+            "property_map": { "title": "Name", "status": "Status" }
+        }));
+        let destination = &with.claimed_repos()[0].destination;
+        assert!(
+            destination.contains("`Status` (status — set it to `📥 Inbox`)"),
+            "{destination}"
+        );
+        assert!(
+            !destination.contains("  ") && !destination.contains('\n'),
+            "{destination:?}"
+        );
+
+        let without = parse(serde_json::json!({
+            "token": "t",
+            "databases": [{ "database_id": "db1", "repos": ["totsuka"] }],
+            "property_map": { "title": "Name", "status": "Status" }
+        }));
+        let destination = &without.claimed_repos()[0].destination;
+        assert!(destination.contains("`Status` (status)"), "{destination}");
+        assert!(!destination.contains("set it to"), "{destination}");
+    }
+
     /// Only the mapped columns appear. Naming a property the operator never
     /// mapped would send the agent looking for a column that does not exist.
     #[test]
@@ -486,6 +535,25 @@ mod tests {
             "property_map": { "title": "Name", "status": "Status" }
         }));
         assert!(crate::client::static_config_errors(&cfg).is_empty());
+    }
+
+    /// `triage_status` with no mapped status property is an instruction to
+    /// fill a column nobody can name — rejected at validation.
+    #[test]
+    fn static_errors_flag_triage_status_without_a_status_property() {
+        let cfg = parse(serde_json::json!({
+            "token": "t",
+            "databases": [{ "database_id": "db1", "repos": ["r"],
+                            "triage_status": "Inbox" }],
+            "property_map": { "title": "Name" }
+        }));
+        let errors = crate::client::static_config_errors(&cfg);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("triage_status") && e.contains("property_map.status")),
+            "got {errors:?}"
+        );
     }
 
     /// An empty `repos` cannot become a claim, so it is rejected rather than

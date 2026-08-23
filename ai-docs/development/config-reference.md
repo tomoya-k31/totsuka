@@ -679,6 +679,7 @@ poll_interval_secs = 60   # 省略時も 60
 | `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か。GraphQL のルートフィールドがこれで決まる。**エントリごとに指定できる**（user 所有と org 所有のボードを混在させられる） |
 | `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。**正数チェックは `initialize` では走らない**（下記） |
 | `repos` | string[] | **必須・非空** | このボードが担当するリポジトリ名。**2 つの役割を兼ねる**（下記） |
+| `triage_status` | string? | なし | triage 起票した item に付ける Status オプション名（#548 派生）。**未設定 = Status なしで追加**され、人間がトリアージするまでどの workflow にも拾われない。**polling trigger と同じ値（例 `Todo`）を書くとそのゲートが消え、起票が即・無人実装に流れる** — 意図してやる分には正しい設定だが、事故でそうならないよう既定は「なし」 |
 
 ```toml
 token = "cmd:gh auth token"
@@ -694,6 +695,7 @@ owner = "my-org"
 owner_type = "organization"
 project_number = 3
 repos = ["web-app"]
+triage_status = "📥 Inbox"   # triage 起票をこの列に入れる（任意）
 
 status_field = "Status"
 in_progress_statuses = ["In Progress"]

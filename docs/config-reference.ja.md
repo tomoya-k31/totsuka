@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:f03b46478eb164f1a8a5c620c15954f70867a69d2d0a65029cc143ac2c466d2a -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:769f3df963d610f4dc44f6e8cb74cdedc33e74db3ed1e444dd9fb35891df2743 -->
 
 # 設定リファレンス
 
@@ -585,6 +585,7 @@ poll_interval_secs = 60   # 60 は既定値でもある
 | `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か。**エントリごとに指定できる**ので、user 所有と組織所有のボードを混在させられる |
 | `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。正数チェックは起動時には**走らない** — 下記参照 |
 | `repos` | string[] | **必須・非空** | このボードが担当するリポジトリ名。**2 つの役割を兼ねる** — 下記参照 |
+| `triage_status` | string? | なし | triage 起票した item に付ける Status オプション名。**未設定 = Status なしで追加**され、ボードでトリアージするまでどの workflow にも拾われない。**polling trigger と同じ値（例 `Todo`）を書くとそのゲートが消え、起票が即・無人実行に流れる** — 意図してやる分には正しいが、既定は事故を防ぐ「なし」 |
 
 ```toml
 token = "cmd:gh auth token"
@@ -600,6 +601,7 @@ owner = "my-org"
 owner_type = "organization"
 project_number = 3
 repos = ["web-app"]
+triage_status = "📥 Inbox"   # 任意: triage 起票をこの列に入れる
 
 status_field = "Status"
 in_progress_statuses = ["In Progress"]
