@@ -424,9 +424,16 @@ fn enum_wire_values_are_pinned() {
         serde_json::from_str(r#"{"task_id":"42","content":"x","delivery":"hologram"}"#).unwrap();
     assert_eq!(params.effective_delivery(), PublishDelivery::Draft);
     // Absent — a pre-0.5.2 Orchestrator — is also draft, and an absent field
-    // must not appear on the wire when unset.
+    // must not appear on the wire when unset. Asserted on the serialized
+    // *object's keys*, not a substring: `content` could legitimately contain
+    // the word "delivery" and a substring check would then lie both ways.
     let old: ResultPublishParams =
         serde_json::from_str(r#"{"task_id":"42","content":"x"}"#).unwrap();
     assert_eq!(old.effective_delivery(), PublishDelivery::Draft);
-    assert!(!serde_json::to_string(&old).unwrap().contains("delivery"));
+    let wire = serde_json::to_value(&old).unwrap();
+    assert!(
+        wire.as_object()
+            .is_some_and(|o| !o.contains_key("delivery")),
+        "{wire}"
+    );
 }
