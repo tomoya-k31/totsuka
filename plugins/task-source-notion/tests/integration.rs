@@ -168,7 +168,7 @@ async fn call(srv: &mut Server<FakeFactory>, id: i64, method: &str, params: Valu
 fn init_config() -> Value {
     json!({
         "token": "secret_test",
-        "database_id": "DB1",
+        "databases": [{ "database_id": "DB1", "repos": ["totsuka"] }],
         "notion_user_id": "u_me",
         "body_source": "page",
         "in_progress_statuses": ["実装中"],
@@ -234,6 +234,257 @@ fn query_response() -> Value {
     })
 }
 
+/// Two databases, each tracking a different repository (#542).
+fn two_database_config() -> Value {
+    let mut cfg = init_config();
+    cfg["databases"] = json!([
+        { "database_id": "DB1", "repos": ["totsuka"] },
+        { "database_id": "DB2", "repos": ["web-app"] }
+    ]);
+    cfg
+}
+
+/// A one-page result for the second database: one page in a repository it
+/// tracks, one in a repository it does not.
+fn second_database_response() -> Value {
+    json!({
+        "has_more": false,
+        "next_cursor": null,
+        "results": [
+            { "id": "P_20", "url": "https://notion.so/P_20", "properties": {
+                "Name": { "title": [{ "plain_text": "Web task" }] },
+                "Status": { "status": { "name": "実装待ち" } },
+                "Owner": { "people": [] },
+                "Priority": { "select": { "name": "High" } },
+                "Repo": { "rich_text": [{ "plain_text": "web-app" }] }
+            } },
+            { "id": "P_21", "url": "https://notion.so/P_21", "properties": {
+                "Name": { "title": [{ "plain_text": "Not ours" }] },
+                "Status": { "status": { "name": "実装待ち" } },
+                "Owner": { "people": [] },
+                "Priority": { "select": { "name": "High" } },
+                "Repo": { "rich_text": [{ "plain_text": "other" }] }
+            } }
+        ]
+    })
+}
+
+/// A poll visits every configured database, and each one's `repos` gates its
+/// own pages (#542).
+#[tokio::test]
+async fn a_poll_walks_every_database_and_each_one_gates_its_own_repos() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    shared.push(Canned::Data(query_response()));
+    shared.push(Canned::Data(json!({ "results": [] }))); // P_1's page blocks
+    shared.push(Canned::Data(second_database_response()));
+    shared.push(Canned::Data(json!({ "results": [] }))); // P_20's page blocks
+    let params = json!({
+        "protocol_version": "0.5.1",
+        "config": two_database_config(),
+        "triggers": [
+            { "workflow": "design", "trigger": { "status": "実装待ち" } }
+        ],
+        "poll_interval_secs": 60
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
+
+    let first = harness.next_task().await;
+    assert_eq!(first["id"], "P_1");
+    let second = harness.next_task().await;
+    assert_eq!(second["id"], "P_20");
+    // `P_21` is on DB2 but its `Repo` names a repository DB2 does not track.
+    harness.assert_no_task(Duration::from_millis(200)).await;
+
+    let queried: Vec<String> = shared
+        .requests()
+        .iter()
+        .filter(|r| r.path.ends_with("/query"))
+        .map(|r| r.path.clone())
+        .collect();
+    assert_eq!(queried, ["/databases/DB1/query", "/databases/DB2/query"]);
+}
+
+/// A page with **no** `repo_hint` passes every database's filter (#542).
+///
+/// Unlike a GitHub issue, a Notion page need not name a repository — the
+/// property is optional. Dropping those would ingest nothing at all for anyone
+/// who has not mapped `repo_hint`, so the filter only applies when there is a
+/// value to filter on.
+#[tokio::test]
+async fn a_page_without_a_repo_hint_is_still_ingested() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    shared.push(Canned::Data(json!({
+        "has_more": false, "next_cursor": null,
+        "results": [
+            { "id": "P_30", "url": "https://notion.so/P_30", "properties": {
+                "Name": { "title": [{ "plain_text": "No repo" }] },
+                "Status": { "status": { "name": "実装待ち" } },
+                "Owner": { "people": [] },
+                "Priority": { "select": { "name": "High" } },
+                "Repo": { "rich_text": [] }
+            } }
+        ]
+    })));
+    shared.push(Canned::Data(json!({ "results": [] })));
+    let params = json!({
+        "protocol_version": "0.5.1",
+        "config": init_config(),
+        "triggers": [{ "workflow": "design", "trigger": { "status": "実装待ち" } }],
+        "poll_interval_secs": 60
+    });
+    call(&mut srv, 1, "initialize", params).await;
+
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "P_30");
+    assert!(task.get("repo_hint").is_none() || task["repo_hint"].is_null());
+}
+
+/// `initialize` answers with the repository → database mapping (protocol
+/// 0.5.1), naming the properties an agent has to fill.
+#[tokio::test]
+async fn initialize_publishes_the_repository_to_database_mapping() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let params = json!({ "protocol_version": "0.5.1", "config": two_database_config() });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let claims = resp.result.expect("initialize result")["claimed_repos"].clone();
+    assert_eq!(claims.as_array().map(Vec::len), Some(2));
+    assert_eq!(claims[0]["repo"], "totsuka");
+    let first = claims[0]["destination"].as_str().unwrap();
+    assert!(first.contains("DB1"), "{first}");
+    // The property names are the operator's, and an agent creating the page
+    // cannot guess them.
+    assert!(
+        first.contains("`Name`") && first.contains("`Repo`"),
+        "{first}"
+    );
+    assert_eq!(claims[1]["repo"], "web-app");
+    assert!(
+        claims[1]["destination"].as_str().unwrap().contains("DB2"),
+        "{claims}"
+    );
+}
+
+/// `task/update_status` asks Notion which database the page belongs to rather
+/// than guessing, and checks the options on **that** database (#542).
+#[tokio::test]
+async fn update_status_verifies_options_on_the_page_own_database() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        json!({ "protocol_version": "0.5.1", "config": two_database_config() }),
+    )
+    .await;
+
+    // The page lives in DB2.
+    shared.push(Canned::Data(json!({
+        "id": "P_20", "parent": { "type": "database_id", "database_id": "DB2" }
+    })));
+    shared.push(Canned::Data(
+        json!({ "properties": { "Status": { "status": {
+        "options": [{ "name": "In Review" }] } } } }),
+    ));
+    shared.push(Canned::Data(json!({ "id": "P_20" })));
+
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "P_20", "status": "レビュー待ち" }),
+    )
+    .await;
+    assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
+    let paths: Vec<String> = shared.requests().iter().map(|r| r.path.clone()).collect();
+    assert_eq!(paths, ["/pages/P_20", "/databases/DB2", "/pages/P_20"]);
+}
+
+/// Notion accepts database ids with or without hyphens and echoes back the
+/// hyphenated form, so matching the page's parent against the configured id
+/// must ignore them — otherwise a perfectly good config never matches and
+/// every status transition fails with "not in `[[databases]]`".
+#[tokio::test]
+async fn a_hyphenated_parent_id_matches_a_config_written_without_hyphens() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let mut config = init_config();
+    config["databases"] = json!([
+        { "database_id": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", "repos": ["totsuka"] }
+    ]);
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        json!({ "protocol_version": "0.5.1", "config": config }),
+    )
+    .await;
+
+    shared.push(Canned::Data(json!({
+        "id": "P_1",
+        "parent": {
+            "type": "database_id",
+            "database_id": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+        }
+    })));
+    shared.push(Canned::Data(
+        json!({ "properties": { "Status": { "status": {
+        "options": [{ "name": "In Review" }] } } } }),
+    ));
+    shared.push(Canned::Data(json!({ "id": "P_1" })));
+
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "P_1", "status": "レビュー待ち" }),
+    )
+    .await;
+    assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
+    // The GET went to the id **as configured**, not the hyphenated echo.
+    assert_eq!(
+        shared.requests()[1].path,
+        "/databases/1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d"
+    );
+}
+
+/// A page whose database is not configured is named, not silently patched
+/// against some other database's options (#542).
+#[tokio::test]
+async fn update_status_refuses_a_page_from_an_unconfigured_database() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        json!({ "protocol_version": "0.5.1", "config": two_database_config() }),
+    )
+    .await;
+
+    shared.push(Canned::Data(json!({
+        "id": "P_99", "parent": { "type": "database_id", "database_id": "DB_ELSEWHERE" }
+    })));
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "P_99", "status": "レビュー待ち" }),
+    )
+    .await;
+    let err = resp.error.expect("an unconfigured database must error");
+    assert!(err.message.contains("DB_ELSEWHERE"), "{}", err.message);
+    // Nothing was written.
+    let methods: Vec<HttpMethod> = shared.requests().iter().map(|r| r.method).collect();
+    assert_eq!(methods, [HttpMethod::Get], "{methods:?}");
+}
+
 #[tokio::test]
 async fn initialize_then_update_status() {
     let shared = Shared::default();
@@ -247,8 +498,12 @@ async fn initialize_then_update_status() {
     let result = resp.result.expect("initialize result");
     assert_eq!(result["capabilities"]["outputs"], json!([]));
 
-    // task/update_status → maps レビュー待ち → "In Review", verifies the option
-    // exists (DB fetch), then PATCHes the page property.
+    // task/update_status → resolves which database the page lives in (#542:
+    // the memo is empty here, so Notion is asked), maps レビュー待ち → "In
+    // Review", verifies the option exists (DB fetch), then PATCHes the page.
+    shared.push(Canned::Data(
+        json!({ "id": "P_1", "parent": { "type": "database_id", "database_id": "DB1" } }),
+    ));
     shared.push(Canned::Data(
         json!({ "properties": { "Status": { "status": {
         "options": [{ "name": "In Review" }, { "name": "実装待ち" }] } } } }),
@@ -345,7 +600,11 @@ async fn update_status_rejects_unknown_option() {
     let mut srv = server(&shared);
     call(&mut srv, 1, "initialize", init_params()).await;
 
-    // The property has no option matching the (mapped) target status.
+    // The page's database is resolved first (#542), and that database's
+    // property has no option matching the (mapped) target status.
+    shared.push(Canned::Data(
+        json!({ "id": "P_1", "parent": { "type": "database_id", "database_id": "DB1" } }),
+    ));
     shared.push(Canned::Data(
         json!({ "properties": { "Status": { "status": {
         "options": [{ "name": "実装待ち" }] } } } }),
@@ -363,8 +622,12 @@ async fn update_status_rejects_unknown_option() {
         "got {}",
         err.message
     );
-    // Only the DB fetch happened — no PATCH was attempted.
-    assert_eq!(shared.requests().len(), 1);
+    // Only the parent lookup and the DB fetch happened — no PATCH was
+    // attempted. Asserted on the methods, not just the count: a PATCH slipping
+    // through is what this test exists to catch, and a bare count would also
+    // pass if the two reads were replaced by a read and a write.
+    let methods: Vec<HttpMethod> = shared.requests().iter().map(|r| r.method).collect();
+    assert_eq!(methods, [HttpMethod::Get, HttpMethod::Get], "{methods:?}");
 }
 
 #[tokio::test]
@@ -430,7 +693,7 @@ async fn config_validate_flags_static_problem_without_network() {
 
     // An empty database_id is caught statically; no transport call is made.
     let mut bad = init_config();
-    bad["database_id"] = json!("");
+    bad["databases"] = json!([]);
     let resp = call(&mut srv, 1, "config/validate", json!({ "config": bad })).await;
     let result = resp.result.unwrap();
     assert_eq!(result["valid"], false);

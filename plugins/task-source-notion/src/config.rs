@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use std::sync::LazyLock;
 
+use plugin_protocol::methods::ClaimedRepo;
 use serde::Deserialize;
 
 /// The embedded instruction defaults, parsed once on first use.
@@ -209,6 +210,45 @@ impl Default for PropertyMap {
     }
 }
 
+/// One Notion database this plugin polls, and the repositories it is the
+/// tracker for (`[[databases]]`, #542).
+///
+/// A list rather than one-plugin-instance-per-database, for the reason
+/// [ADR-0056](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0056-multi-tracker-routing.md)
+/// gives: instances would need `name ≠ bin name`, which ADR-0027 refused.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseConfig {
+    /// The database queried for tasks.
+    pub database_id: String,
+    /// The repositories this database is the tracker for.
+    ///
+    /// Required and non-empty because it is the forward mapping repository →
+    /// database that [`NotionConfig::claimed_repos`] publishes; a database
+    /// cannot say which repositories it will hold in future, so an omitted
+    /// list has nothing to publish.
+    ///
+    /// **As an ingest filter it is conditional, unlike the GitHub plugin's.**
+    /// There, every issue carries a repository. Here the repository comes from
+    /// the optional `repo_hint` property, so a page that has none is ingested
+    /// and the Orchestrator resolves its repository as it did before (F-11) —
+    /// filtering those out would silently ingest nothing at all for anyone who
+    /// has not mapped `repo_hint`.
+    pub repos: Vec<String>,
+}
+
+impl DatabaseConfig {
+    /// Whether a page whose `repo_hint` is `repo` belongs to this database's
+    /// tracked set. `None` (no hint on the page) always passes — see
+    /// [`repos`](Self::repos).
+    pub fn repo_allowed(&self, repo: Option<&str>) -> bool {
+        match repo {
+            Some(repo) => self.repos.iter().any(|r| r == repo),
+            None => true,
+        }
+    }
+}
+
 /// Notion task-source settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -216,8 +256,13 @@ pub struct NotionConfig {
     /// Integration token (resolved by the orchestrator, F-65). Never touched by
     /// us beyond sending it as a bearer token.
     pub token: String,
-    /// The database queried for tasks.
-    pub database_id: String,
+    /// The databases this plugin polls (`[[databases]]`, #542). Required and
+    /// non-empty; `static_config_errors` rejects an empty list.
+    ///
+    /// This replaced the flat `database_id` outright. `deny_unknown_fields`
+    /// makes a pre-#542 config a hard `initialize` failure, which is the
+    /// intended outcome (ADR-0056).
+    pub databases: Vec<DatabaseConfig>,
     /// The operator's own Notion user id, used to detect self-assigned tasks
     /// (F-08). When unset, self-detection is disabled: only *unassigned* tasks
     /// are ingestable (any assigned task is treated as someone else's).
@@ -269,6 +314,46 @@ impl NotionConfig {
     /// [`status_map`](Self::status_map), falling back to the name itself.
     pub fn map_status<'a>(&'a self, status: &'a str) -> &'a str {
         self.status_map.get(status).map_or(status, String::as_str)
+    }
+
+    /// The repositories this plugin is the tracker for, and where an item for
+    /// each goes (`InitializeResult.claimed_repos`, protocol 0.5.1, #542).
+    ///
+    /// The destination names the required properties as well as the database:
+    /// an agent creating the page has to know which columns to fill, and the
+    /// names are the operator's, not Notion's.
+    pub fn claimed_repos(&self) -> Vec<ClaimedRepo> {
+        self.databases
+            .iter()
+            .flat_map(|database| {
+                let destination = self.destination_for(database);
+                database.repos.iter().map(move |repo| ClaimedRepo {
+                    repo: repo.clone(),
+                    destination: destination.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Prose telling an agent how to file into `database` (#542).
+    ///
+    /// Lives on `NotionConfig` rather than `DatabaseConfig` because the
+    /// property names are shared across databases — the agent needs both
+    /// halves to create a usable page.
+    fn destination_for(&self, database: &DatabaseConfig) -> String {
+        let map = &self.property_map;
+        let mut columns = vec![format!("`{}` (title)", map.title)];
+        if let Some(status) = &map.status {
+            columns.push(format!("`{status}` (status)"));
+        }
+        if let Some(repo_hint) = &map.repo_hint {
+            columns.push(format!("`{repo_hint}` (the repository name)"));
+        }
+        format!(
+            "Notion database `{}`. Create a page there and fill {}.              Totsuka does not create Notion pages itself, so use whatever Notion              tooling you have available (an MCP server, the API with your own token).",
+            database.database_id,
+            columns.join(", "),
+        )
     }
 
     /// Whether a task with these assignee user ids may be ingested by this
@@ -326,7 +411,9 @@ mod tests {
 
     #[test]
     fn minimal_config_applies_defaults() {
-        let cfg = parse(serde_json::json!({ "token": "t", "database_id": "db" }));
+        let cfg = parse(
+            serde_json::json!({ "token": "t", "databases": [{ "database_id": "db", "repos": ["totsuka"] }] }),
+        );
         assert_eq!(cfg.source_name, "notion");
         assert_eq!(cfg.api_url, "https://api.notion.com/v1");
         assert_eq!(cfg.api_version, "2022-06-28");
@@ -341,7 +428,7 @@ mod tests {
     #[test]
     fn unknown_field_is_rejected() {
         let err = serde_json::from_value::<NotionConfig>(serde_json::json!({
-            "token": "t", "database_id": "db", "typo_field": true
+            "token": "t", "databases": [{ "database_id": "db", "repos": ["totsuka"] }], "typo_field": true
         }))
         .unwrap_err();
         assert!(err.to_string().contains("typo_field"), "got {err}");
@@ -350,7 +437,7 @@ mod tests {
     #[test]
     fn ingest_gating_helpers() {
         let cfg = parse(serde_json::json!({
-            "token": "t", "database_id": "db", "notion_user_id": "u_me",
+            "token": "t", "databases": [{ "database_id": "db", "repos": ["totsuka"] }], "notion_user_id": "u_me",
             "in_progress_statuses": ["実装中"]
         }));
         // Unassigned is ingestable; I count as assigned regardless of position;
@@ -365,7 +452,9 @@ mod tests {
 
     #[test]
     fn without_user_id_only_unassigned_is_mine() {
-        let cfg = parse(serde_json::json!({ "token": "t", "database_id": "db" }));
+        let cfg = parse(
+            serde_json::json!({ "token": "t", "databases": [{ "database_id": "db", "repos": ["totsuka"] }] }),
+        );
         assert!(cfg.assignable_to_me(&[]));
         assert!(!cfg.assignable_to_me(&["u_me"]));
     }
@@ -373,7 +462,7 @@ mod tests {
     #[test]
     fn status_and_priority_maps() {
         let cfg = parse(serde_json::json!({
-            "token": "t", "database_id": "db",
+            "token": "t", "databases": [{ "database_id": "db", "repos": ["totsuka"] }],
             "status_map": { "レビュー待ち": "In Review" },
             "priority_map": { "High": 10, "Low": 1 }
         }));
