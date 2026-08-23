@@ -1997,19 +1997,28 @@ async fn a_triage_dispatch_for_an_unclaimed_repository_says_nothing_extra() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// #542: `profile = "implement"` is not told about the board even when the
-/// repository is claimed.
+/// #542: a profile that is **not** `triage` is not told about the board, even
+/// when the repository is claimed.
 ///
-/// `implement` works inside the repository it was given; a board it has no
+/// `triage`'s deliverable is an item filed somewhere else; every other
+/// profile works inside the repository it was given, and a board it has no
 /// business touching is noise it might act on.
 ///
-/// The workflow spells out `profile = "implement"` rather than reusing the
-/// `mode = "implement"` helper the other tests share: that helper sets no
-/// `profile` at all, so the dispatch resolves to `None` and the test would
-/// prove "a profile-less workflow adds nothing" while claiming to prove this.
+/// **`design`, not `implement`.** The point needs a real, spelled-out profile
+/// — the `mode = "implement"` helper the other tests share sets no `profile`
+/// at all, so the dispatch would resolve to `None` and this would prove "a
+/// profile-less workflow adds nothing" instead.
+///
+/// `implement` is the one profile that cannot be used here: it is the only
+/// profile with a required tool (`agent_tools::required` → `Gh`), and
+/// `agent_tools::available(Gh)` wants `gh` on `PATH` **and** a `hosts.yml`
+/// — i.e. an authenticated `gh`. A CI runner ships `gh` but nobody has run
+/// `gh auth login`, so the task parks on the tool gate and never dispatches:
+/// green on a developer's machine, a 30-second timeout in CI. (Measured: this
+/// test failed exactly that way on `ubuntu-latest` before the switch.)
 #[tokio::test]
-async fn an_implement_dispatch_is_not_told_about_the_board() {
-    let base = scratch("triage_implement");
+async fn a_non_triage_dispatch_is_not_told_about_the_board() {
+    let base = scratch("triage_non_triage");
     let repo = setup_repo(&base);
     let notify_log = base.join("notify.ndjson");
     let dispatch_log = base.join("dispatch.ndjson");
@@ -2022,7 +2031,7 @@ async fn an_implement_dispatch_is_not_told_about_the_board() {
     )
     .await;
     let mut settings = resume_settings(&repo, &base);
-    settings.workflows = profile_workflows("implement");
+    settings.workflows = profile_workflows("design");
     let mut engine = Engine::new(
         StateDb::open(&base.join("state.db")).unwrap(),
         settings,
@@ -2044,7 +2053,7 @@ async fn an_implement_dispatch_is_not_told_about_the_board() {
         .expect("the hook path injects invisibly");
     assert!(
         !context.contains(CLAIM_DESTINATION),
-        "an implement dispatch must not be told about the board: {context}"
+        "a non-triage dispatch must not be told about the board: {context}"
     );
     let _ = std::fs::remove_dir_all(&base);
 }
