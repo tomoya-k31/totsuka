@@ -5,9 +5,6 @@
 # fine-grained PAT は user 所有の Project には使えない（アカウント権限に Projects が無い）。
 token = "${E2E_GH_TOKEN}"
 
-owner = "________"
-owner_type = "user"
-project_number = 0
 status_field = "Status"
 
 # F-08 の自己判定。他人 assignee のタスクを除外するかの基準。
@@ -16,5 +13,14 @@ github_login = "________"
 # このステータスの item は取り込まない（実行中とみなす）。
 in_progress_statuses = ["In Progress"]
 
-# Project には他リポジトリの item も入りうるので、対象を明示する。
+# polling するボード（#542）。複数書ける。
+#
+# トップレベルのキーはこのブロックより前に置くこと。TOML のテーブル配列は次の見出しまで
+# 続くので、後ろに書いたスカラはエントリの中に入り、未知キーとして initialize が落ちる。
+[[projects]]
+owner = "________"
+owner_type = "user"
+project_number = 0
+# 必須・非空。取り込みフィルタであると同時に「このリポジトリの起票先」を引く対応表になる
+# （#542 より前の「省略 = Project 内のどれでも」は無くなった）。
 repos = ["totsuka-sandbox-web", "totsuka-sandbox-cli"]
