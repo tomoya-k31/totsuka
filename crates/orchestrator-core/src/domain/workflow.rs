@@ -15,7 +15,10 @@
 use plugin_protocol::Task;
 use plugin_protocol::manifest::OutputCapability;
 
-use crate::config::{OutputPolicy, Profile, VerificationMode, WorkflowConfig, WorkflowMode};
+use crate::config::{
+    CleanupPolicyConfig, OutputPolicy, Profile, PublishConfig, VerificationMode, WorkflowConfig,
+    WorkflowMode,
+};
 
 /// How a reaction-derived task announces which emoji started it (#396).
 ///
@@ -183,6 +186,12 @@ pub struct Workflow {
     /// Normalised at interpretation: empty or whitespace-only in the config
     /// becomes `None`, so downstream only has to ask "is there one".
     pub initial_prompt: Option<String>,
+    /// How the source delivers the published result (#548): `None` means the
+    /// default (the plugin's approval flow).
+    pub publish: Option<PublishConfig>,
+    /// Worktree cleanup override (#548): `None` means the mode-selected
+    /// `[worktree]` default.
+    pub cleanup: Option<CleanupPolicyConfig>,
 }
 
 impl Workflow {
@@ -211,6 +220,8 @@ impl Workflow {
             // blank. Rejecting that would be a validation error for something
             // with an obvious reading; normalising it here means no downstream
             // caller has to remember to trim.
+            publish: config.publish,
+            cleanup: config.cleanup,
             initial_prompt: config
                 .initial_prompt
                 .as_deref()

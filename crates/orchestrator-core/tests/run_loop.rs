@@ -751,6 +751,193 @@ async fn output_source_publishes_result_artifact() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// #548: `[[workflows]].publish = "direct"` reaches the source plugin as
+/// `delivery: "direct"` on `result/publish`, and an unset key sends nothing.
+///
+/// One test, both workflows, one run: the point of the key is that it is
+/// per-workflow, and two separate tests would each pass with a global flag.
+#[tokio::test]
+async fn publish_delivery_follows_the_workflow_key() {
+    let base = scratch("publish_delivery");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([
+            { "id": "7", "source": "github", "title": "task 7", "status": "A" },
+            { "id": "8", "source": "github", "title": "task 8", "status": "B" },
+        ]),
+        json!({ "stream_states": ["running", "done"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    // Serial execution: the mock agent answers every dispatch with the same
+    // session id (`sess-mock`), so two live sessions collide in the
+    // (plugin, session) -> task routing map and one task never finishes.
+    settings.limits = Limits::global(1);
+    // Distinct triggers: task 7 (status A) hits the direct workflow, task 8
+    // (status B) the one with no `publish` key.
+    let cfg = RootConfig::from_toml_str(
+        r#"
+[[workflows]]
+name = "wf_direct"
+source = "mock_src"
+trigger = { status = "A" }
+mode = "plan"
+agent = "mock_agent"
+output = "source"
+publish = "direct"
+
+[[workflows]]
+name = "wf_default"
+source = "mock_src"
+trigger = { status = "B" }
+mode = "plan"
+agent = "mock_agent"
+output = "source"
+"#,
+    )
+    .unwrap();
+    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    settings.cleanup_plan = CleanupPolicy::Immediate;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        let db = StateDb::open(&db_probe).unwrap();
+        ["7", "8"].iter().all(|id| {
+            db.find_by_source("mock_src", id)
+                .unwrap()
+                .is_some_and(|t| t.state == TaskState::Done)
+        })
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let source_calls = read_log(&source_log);
+    let publish_for = |task_id: &str| {
+        source_calls
+            .iter()
+            .find(|c| c["method"] == "result/publish" && c["params"]["task_id"] == task_id)
+            .unwrap_or_else(|| panic!("result/publish for task {task_id}"))
+            .clone()
+    };
+    assert_eq!(publish_for("7")["params"]["delivery"], "direct");
+    // Unset must be *absent on the wire*, not `"draft"`: absence is what a
+    // pre-0.5.2 plugin understands, and it is also the proof that the key is
+    // per-workflow rather than a run-wide setting.
+    assert!(
+        publish_for("8")["params"]
+            .as_object()
+            .is_some_and(|o| !o.contains_key("delivery")),
+        "{}",
+        publish_for("8")
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #548: `[[workflows]].cleanup = "manual"` keeps that workflow's worktree —
+/// and therefore its pane — while a sibling workflow under the same
+/// mode-default (`immediate`) is still cleaned up.
+#[tokio::test]
+async fn a_workflow_cleanup_override_beats_the_mode_default() {
+    let base = scratch("wf_cleanup");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([
+            { "id": "7", "source": "github", "title": "task 7", "status": "A" },
+            { "id": "8", "source": "github", "title": "task 8", "status": "B" },
+        ]),
+        json!({ "stream_states": ["running", "done"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    // Serial execution: the mock agent answers every dispatch with the same
+    // session id (`sess-mock`), so two live sessions collide in the
+    // (plugin, session) -> task routing map and one task never finishes.
+    settings.limits = Limits::global(1);
+    let cfg = RootConfig::from_toml_str(
+        r#"
+[[workflows]]
+name = "wf_keep"
+source = "mock_src"
+trigger = { status = "A" }
+mode = "plan"
+agent = "mock_agent"
+output = "none"
+cleanup = "manual"
+
+[[workflows]]
+name = "wf_sweep"
+source = "mock_src"
+trigger = { status = "B" }
+mode = "plan"
+agent = "mock_agent"
+output = "none"
+"#,
+    )
+    .unwrap();
+    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    settings.cleanup_plan = CleanupPolicy::Immediate;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        let db = StateDb::open(&db_probe).unwrap();
+        ["7", "8"].iter().all(|id| {
+            db.find_by_source("mock_src", id)
+                .unwrap()
+                .is_some_and(|t| t.state == TaskState::Done)
+        })
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let worktree_of = |id: &str| {
+        db.find_by_source("mock_src", id)
+            .unwrap()
+            .unwrap()
+            .worktree_path
+            .expect("dispatched task has a worktree path")
+    };
+    let keep = worktree_of("7");
+    let sweep = worktree_of("8");
+    assert!(
+        std::path::Path::new(&keep).exists(),
+        "cleanup = \"manual\" must retain the worktree: {keep}"
+    );
+    assert!(
+        !std::path::Path::new(&sweep).exists(),
+        "the sibling under the immediate default must be removed: {sweep}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn a_retry_releases_the_stale_pane_before_dispatching_again() {
     // #481: `totsuka task cancel` only writes the DB — the CLI has no plugin

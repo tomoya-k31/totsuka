@@ -203,13 +203,27 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     record.title
                 )
             });
+        // How the human receives it (#548, ADR-0057): the workflow's
+        // `publish` choice, translated to the wire enum. `None` on the wire —
+        // the key unset, or the workflow since removed from config — is what
+        // every plugin reads as the approval flow, so a removed workflow
+        // degrades to the *safe* mode rather than remembering the old one.
+        let delivery = workflows_by_name(&self.settings.workflows)
+            .get(record.workflow.as_str())
+            .and_then(|wf| wf.publish)
+            .map(|publish| match publish {
+                crate::config::PublishConfig::Draft => {
+                    plugin_protocol::methods::PublishDelivery::Draft
+                }
+                crate::config::PublishConfig::Direct => {
+                    plugin_protocol::methods::PublishDelivery::Direct
+                }
+            });
         let params = ResultPublishParams {
             task_id: record.source_task_id.clone(),
             content,
             format: Some("markdown".to_string()),
-            // Wired to `[[workflows]].publish` in the next commit of #548;
-            // `None` keeps today's behaviour (the plugin's approval flow).
-            delivery: None,
+            delivery,
         };
         source
             .call::<_, Value>(method::RESULT_PUBLISH, &params)
@@ -299,10 +313,33 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         else {
             return Ok(());
         };
-        let policy = if record.mode == "plan" {
+        let mode_default = if record.mode == "plan" {
             self.settings.cleanup_plan
         } else {
             self.settings.cleanup_implement
+        };
+        // The workflow's own `cleanup` beats the mode default (#548,
+        // ADR-0057). A workflow removed or renamed since the task finished
+        // cannot be resolved; that falls back to the default — the operator
+        // changed the config, and a second store of truth just to survive it
+        // is not worth having — with one line saying so, because "the
+        // worktree I marked `manual` got swept" deserves a trace.
+        let policy = match workflows_by_name(&self.settings.workflows)
+            .get(record.workflow.as_str())
+            .map(|wf| wf.cleanup)
+        {
+            Some(Some(cleanup)) => {
+                crate::run::settings::cleanup_policy(Some(cleanup), mode_default)
+            }
+            Some(None) => mode_default,
+            None => {
+                tracing::info!(
+                    task_id,
+                    workflow = %record.workflow,
+                    "workflow no longer in config; using the mode-default cleanup policy"
+                );
+                mode_default
+            }
         };
         let now = self.clock.now_rfc3339();
         let decision = match self.worktrees.decide_cleanup(

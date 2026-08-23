@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0f829c8d13bcde98a73e99d31bc29f7da7a46831eaf32b7863a163cd9c18606b -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f03b46478eb164f1a8a5c620c15954f70867a69d2d0a65029cc143ac2c466d2a -->
 
 # Configuration reference
 
@@ -105,6 +105,8 @@ The guidance depends on which side is behind:
 | `rubric` | string? | none | The criteria used for `llm` verification. **The only prompt override there is** (see below); it beats the profile's default |
 | `tool` | string? | none | Pins the AI tool. Workflow beats repository beats `default_tool` |
 | `initial_prompt` | string? | none | Extra instructions prepended for this workflow's agent. See below |
+| `publish` | `draft` \| `direct` | `draft` | How a published result reaches you. `draft` presents it for approval first (the default); `direct` posts it immediately with no approval step. Only meaningful with `output = "source"` — `totsuka config validate` warns otherwise. Only the Slack source delivers results, so this key has no effect on other sources |
+| `cleanup` | same values as `[worktree]` | none | Worktree cleanup override for this workflow's tasks. Beats the mode default in `[worktree]`. `manual` keeps the worktree **and its pane** open after the task finishes. If you later remove or rename the workflow in config, finished tasks fall back to the mode default |
 
 Workflows are matched in definition order, first match wins. Overlapping triggers within one source produce a warning. **A workflow defined after a catch-all (`trigger = {}`) for the same source is unreachable**, and you get a warning.
 
@@ -513,6 +515,8 @@ Assumes an OpenAI-compatible `/chat/completions`. Used to pick a repository for 
 | `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | Placement template. Expands `{repo}`, `{repo_name}`, `{worktree_name}`, `{task_id}`, `{source}`, `${ENV}`, and `~`. **`{branch}` was removed** — the agent chooses the branch after the worktree exists, so it cannot appear in the directory name. Leaving it in stops startup |
 | `cleanup` | policy? | `manual` | Cleanup policy for implement mode |
 | `plan_cleanup` | policy? | `immediate` | Cleanup policy for plan mode |
+
+Both are **defaults selected by mode**; a workflow that sets its own `cleanup` wins over them.
 
 **Resolving the default.** With `location` omitted, `<state dir>` is `$XDG_STATE_HOME/totsuka`, falling back to `$HOME/.local/state/totsuka`. The default is built as an already-resolved path, so it never goes through `${ENV}` expansion. If you **do** set `location`, an unset `${ENV}` is an error rather than an empty string — and since worktrees are created at dispatch, it shows up as every task failing rather than as a startup failure. `doctor`'s `worktree-location` check finds it first.
 

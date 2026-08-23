@@ -211,7 +211,10 @@ pub fn settings_from_config(
 /// Map a config cleanup policy to the worktree policy, with a default. The
 /// `keep_*` presets (#210) desugar to `RetentionDays` here — [`CleanupPolicy`]
 /// never learns about them.
-fn cleanup_policy(config: Option<CleanupPolicyConfig>, default: CleanupPolicy) -> CleanupPolicy {
+pub(super) fn cleanup_policy(
+    config: Option<CleanupPolicyConfig>,
+    default: CleanupPolicy,
+) -> CleanupPolicy {
     match config {
         None => default,
         Some(CleanupPolicyConfig::Named(CleanupPolicyName::Immediate)) => CleanupPolicy::Immediate,
