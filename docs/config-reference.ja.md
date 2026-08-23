@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:afbe44cef7c127f7cce9e041ee2f392611385ba21aa09b03fe364f6e6b59dc25 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0c206b2c24f9c9a6cd768af70eca35410cc7cb0296bcdb5f85aad6e749ef223b -->
 
 # 設定リファレンス
 
@@ -563,18 +563,56 @@ poll_interval_secs = 60   # 60 は既定値でもある
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `token` | string | 必須 | API トークン。bearer として送る以外には使わない。必要な権限は下記。`cmd:gh auth token` が使える |
-| `owner` | string | 必須 | Project の所有者ログイン（user または組織） |
-| `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か |
-| `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。正数チェックは起動時には**走らない** — 下記参照 |
-| `status_field` | string | `Status` | ステータス列を保持する single-select フィールド名 |
+| `[[projects]]` | テーブル配列 | 必須・非空 | polling するボード。1 つ以上。中身は下表 |
+| `status_field` | string | `Status` | ステータス列を保持する single-select フィールド名。**全ボード共通** |
 | `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出に使う |
-| `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして取り込まないステータス名 |
-| `status_map` | テーブル | `{}` | totsuka 側のステータス名 → Project のオプション名。**対応の無い名前はそのまま使われる** |
-| `repos` | string[] | `[]` | 取り込みをこのリポジトリ名に限る。空なら Project 内のどれでもよい |
-| `source_name` | string | `github` | 各タスクに刻印されるソース名 |
+| `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして取り込まないステータス名。**全ボード共通** |
+| `status_map` | テーブル | `{}` | totsuka 側のステータス名 → Project のオプション名。**対応の無い名前はそのまま使われる**。**全ボード共通** |
+| `source_name` | string | `github` | 各タスクに刻印されるソース名。ボードを増やしても変わらないので、`[[workflows]].source = "github"` は 1 本のまま |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の再試行回数 |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
+
+`[[projects]]` の各エントリ:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `owner` | string | 必須 | Project の所有者ログイン（user または組織） |
+| `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か。**エントリごとに指定できる**ので、user 所有と組織所有のボードを混在させられる |
+| `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。正数チェックは起動時には**走らない** — 下記参照 |
+| `repos` | string[] | **必須・非空** | このボードが担当するリポジトリ名。**2 つの役割を兼ねる** — 下記参照 |
+
+```toml
+token = "cmd:gh auth token"
+github_login = "your-login"
+
+[[projects]]
+owner = "your-login"
+project_number = 7
+repos = ["totsuka", "dotfiles"]
+
+[[projects]]
+owner = "my-org"
+owner_type = "organization"
+project_number = 3
+repos = ["web-app"]
+
+status_field = "Status"
+in_progress_statuses = ["In Progress"]
+```
+
+**TOML の順序に注意。** `[[projects]]` ブロックより**後ろ**に書いたトップレベルのキーは、**そのブロックの中に入る**（テーブル配列は次の見出しまで続く）。上の例で `status_field` が末尾にあるのは読みやすさのためだが、迷いたくなければトップレベルのキーは最初の `[[projects]]` より**前**に置けばよい。間違えると、project エントリ内の未知キーとして起動が失敗する。
+
+### `[[projects]].repos` は 2 つの役割を兼ねる
+
+次の両方である。
+
+1. **取り込みフィルタ** — そのボードに載っていても、ここに無いリポジトリの issue は取り込まれない
+2. **リポジトリ → ボードの対応** — Slack から始まった triage タスクが「どのボードへ起票するか」を知る材料になる
+
+必須・非空なのは 2 のためである。ボードは自分が将来どのリポジトリを持つかを知らないので、省略されたリストを対応表に変換する方法が無い。
+
+**1 つのリポジトリは 1 つのボードにしか書けない。** 同じリポジトリを 2 度書いた設定は `totsuka config validate` が弾く。「このリポジトリの起票先」に答えが 2 つあるのは、答えが無いのと同じだからである。GitHub ソースと Notion ソースの両方が同じリポジトリを担当している場合は、totsuka 自身が起動時と `totsuka doctor` で検出する。
 
 ### `project_number` の誤りは起動時には出ない
 

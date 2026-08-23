@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:afbe44cef7c127f7cce9e041ee2f392611385ba21aa09b03fe364f6e6b59dc25 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0c206b2c24f9c9a6cd768af70eca35410cc7cb0296bcdb5f85aad6e749ef223b -->
 
 # Configuration reference
 
@@ -562,18 +562,56 @@ poll_interval_secs = 60   # 60 is also the default
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `token` | string | required | API token, sent as a bearer token and nothing else. See the permissions below. `cmd:gh auth token` works |
-| `owner` | string | required | Login of the project owner, a user or an organization |
-| `owner_type` | `user` \| `organization` | `user` | Whether `owner` is a user or an organization |
-| `project_number` | int | required | The ProjectsV2 number under `owner`. The positive-number check does **not** run at startup — see below |
-| `status_field` | string | `Status` | Name of the single-select field holding the status column |
+| `[[projects]]` | array of tables | required, non-empty | The boards to poll. One or more; see the table below |
+| `status_field` | string | `Status` | Name of the single-select field holding the status column. **Shared by every board** |
 | `github_login` | string | required | Your own login, used to detect self-assigned tasks |
-| `in_progress_statuses` | string[] | `[]` | Status names treated as in progress and therefore skipped |
-| `status_map` | table | `{}` | Maps a totsuka status name to the project's option name. **Unmapped names are used as-is** |
-| `repos` | string[] | `[]` | Restrict intake to these repository names. Empty means any repository in the project |
-| `source_name` | string | `github` | The source name stamped on each task |
+| `in_progress_statuses` | string[] | `[]` | Status names treated as in progress and therefore skipped. **Shared by every board** |
+| `status_map` | table | `{}` | Maps a totsuka status name to the project's option name. **Unmapped names are used as-is**. **Shared by every board** |
+| `source_name` | string | `github` | The source name stamped on each task. Adding boards does not change it, so `[[workflows]].source = "github"` stays a single entry |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise or testing |
 | `max_retries` | int | 3 | Retries for retryable API failures |
 | `[prompts]` | table | — | Overrides for the prompts this plugin sends |
+
+Each `[[projects]]` entry:
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `owner` | string | required | Login of the project owner, a user or an organization |
+| `owner_type` | `user` \| `organization` | `user` | Whether `owner` is a user or an organization. **Set per entry**, so user-owned and org-owned boards can be mixed |
+| `project_number` | int | required | The ProjectsV2 number under `owner`. The positive-number check does **not** run at startup — see below |
+| `repos` | string[] | **required, non-empty** | Repository names this board is the tracker for. **It does two jobs** — see below |
+
+```toml
+token = "cmd:gh auth token"
+github_login = "your-login"
+
+[[projects]]
+owner = "your-login"
+project_number = 7
+repos = ["totsuka", "dotfiles"]
+
+[[projects]]
+owner = "my-org"
+owner_type = "organization"
+project_number = 3
+repos = ["web-app"]
+
+status_field = "Status"
+in_progress_statuses = ["In Progress"]
+```
+
+**Mind the TOML ordering.** A top-level key written *after* a `[[projects]]` block lands **inside that block** — an array-of-tables runs until the next heading. In the example above `status_field` sits at the end because that is where it belongs for readability; put top-level keys **before** the first `[[projects]]` block if you would rather not think about it, because getting it wrong makes startup fail with an unknown key inside a project entry.
+
+### `[[projects]].repos` does two jobs
+
+It is both:
+
+1. **The intake filter** — an issue on that board, but in a repository not listed here, is skipped.
+2. **The repository → board mapping** — this is what lets a triage task started from Slack know which board to file into.
+
+It is required and non-empty because of the second job: a board does not know which repositories it will hold in future, so an omitted list cannot be turned into a mapping.
+
+**A repository may appear on only one board.** `totsuka config validate` rejects a config that lists the same repository twice, because two answers to "where does an item for this repository go" is the same as no answer. A repository claimed by both the GitHub and the Notion source is caught by totsuka itself, at startup and by `totsuka doctor`.
 
 ### A wrong `project_number` does not fail at startup
 

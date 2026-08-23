@@ -19,7 +19,7 @@ GitHub Issues / ProjectsV2 を totsuka のタスクソースとして接続す�
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `plugins/github.toml`（= `InitializeParams.config`）を型付け。`token` / `owner`(+`owner_type` user\|org) / `project_number` / `status_field` / `github_login`（F-08 の自己判定）/ `in_progress_statuses` / `status_map`（orchestrator status→Project option）/ `repos` フィルタ / `source_name` / `api_url` / `max_retries`。`deny_unknown_fields` |
+| `config` | `plugins/github.toml`（= `InitializeParams.config`）を型付け。`token` / **`[[projects]]`**（各要素が `owner` + `owner_type` user\|org + `project_number` + `repos`、#542）/ `status_field` / `github_login`（F-08 の自己判定）/ `in_progress_statuses` / `status_map`（orchestrator status→Project option）/ `source_name` / `api_url` / `max_retries`。`deny_unknown_fields`（要素側も）。`claimed_repos()` が `[[projects]]` から `initialize` 応答の claim を組み立てる |
 | `transport` | `GithubTransport` trait（`post_graphql`）＋ reqwest 実装 `ReqwestTransport`（bearer 認証・User-Agent 必須・タイムアウト・指数バックオフ §5.3）。ロジックを録画レスポンスでテストするための seam |
 | `client` | `GithubClient<T: GithubTransport>`。`fetch`（ProjectsV2 items を GraphQL 取得→`Task` 正規化→トリガー絞り込み→取り込み制御 F-08）/ `update_status`（SingleSelect option を解決して mutation、未知 option はエラー F-84）/ `publish`（Issue コメント、長文は `<details>` 折りたたみ F-07）/ `validate`（viewer 疎通 F-59）。GraphQL は plain JSON で構築（GraphQL クレート不使用） |
 | `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。`Server::new(factory, SubmitClient)`（#188: SDK の stdio ランタイム[単一 writer タスク]で駆動され、`LineHandler` 実装経由で serve される）。initialize（config 型付け → client 構築 → triggers があれば SDK `poll_loop` を常駐 spawn — 各 tick で全 trigger を fetch し `task/submit` push。triggers 空なら poll なし）/ config·validate / task·update_status / result·publish / shutdown。`tasks/fetch` は **0.2.0（#190）で削除済み** — 未初期化メソッドは拒否。Session drop（re-initialize 含む）で poll タスクを abort。`TransportFactory` で録画トランスポートを注入しテスト |
@@ -27,7 +27,11 @@ GitHub Issues / ProjectsV2 を totsuka のタスクソースとして接続す�
 
 # 取り込み制御（F-08）
 
-fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は、まずワークフローの trigger（`project_status` / `label`）で候補を絞り、次に多人数運用ゲーティングを適用する: assignee が他者のタスクを除外（自分は `github_login` で判定・大小無視）、`in_progress_statuses` のステータスを除外、`repos` フィルタ外を除外。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
+fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`[[projects]]` の全ボードを設定順に走査し**（#542）、ボードごとに: まずワークフローの trigger（`project_status` / `label`）で候補を絞り、次に多人数運用ゲーティングを適用する: assignee が他者のタスクを除外（自分は `github_login` で判定・大小無視）、`in_progress_statuses` のステータスを除外、**そのボードの `repos` 外**を除外。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
+
+**1 ボードの失敗は poll 全体の失敗にする。** そのボードを飛ばして残りを返すと、トークンの失効やボードの削除が「いま取り込むものが無い」と区別できなくなり、静かなボードと同じ見た目になって表に出てこない。
+
+**`task/update_status` はボードを逆引きする。** `TaskUpdateStatusParams` は `{task_id, status}` だけで、どのボードの item かを request が語らない。ingest 時に `task_id → [[projects]] の index` を**プロセス内メモリ**に覚えておき、それを先頭にして**全ボードを順に試す**。メモが外れるのは異常ではなく通常で（再起動でメモは消えるがタスクは残る、item は後からボード間を移動しうる）、メモは最適化であって前提ではない — 見つからなければ試したボードを全部名指しするエラーになる。
 
 # capabilities（F-83）
 

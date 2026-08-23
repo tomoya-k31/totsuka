@@ -3,11 +3,14 @@
 //! no publish path — the agent writes the deliverable itself (#398). All GraphQL is built as plain JSON bodies so no GraphQL
 //! client dependency is needed (mirrors the LLM adapter in orchestrator-core).
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use serde_json::{Value, json};
 
 use plugin_protocol::Task;
 
-use crate::config::GithubConfig;
+use crate::config::{GithubConfig, ProjectConfig};
 use crate::error::GithubError;
 use crate::transport::GithubTransport;
 
@@ -66,12 +69,30 @@ impl TriggerFilter {
 pub struct GithubClient<T> {
     config: GithubConfig,
     transport: T,
+    /// Which `[[projects]]` entry an ingested task came from, keyed by issue
+    /// node id (#542).
+    ///
+    /// `task/update_status` is given only `{task_id, status}`, so with more
+    /// than one board there is nothing in the request saying which board holds
+    /// the item. Remembering it at ingest turns the common case into one
+    /// board's worth of API calls instead of every board's.
+    ///
+    /// **A miss is normal, not an error**: the map is process-local, so it is
+    /// empty after a restart while the Orchestrator's tasks outlive it.
+    /// [`update_status`](Self::update_status) falls back to scanning every
+    /// board, which is what the memo is an optimisation over — never a
+    /// precondition.
+    item_project: Mutex<HashMap<String, usize>>,
 }
 
 impl<T: GithubTransport> GithubClient<T> {
     /// A client using `config` and `transport`.
     pub fn new(config: GithubConfig, transport: T) -> Self {
-        Self { config, transport }
+        Self {
+            config,
+            transport,
+            item_project: Mutex::new(HashMap::new()),
+        }
     }
 
     /// The plugin settings.
@@ -79,13 +100,35 @@ impl<T: GithubTransport> GithubClient<T> {
         &self.config
     }
 
-    /// Fetch project issues matching `trigger`, normalize to [`Task`], and apply
-    /// ingest gating (F-08): skip other people's tasks, in-progress statuses,
-    /// and repositories outside the configured filter.
+    /// Fetch issues matching `trigger` from **every** configured board (#542),
+    /// normalize to [`Task`], and apply ingest gating (F-08): skip other
+    /// people's tasks, in-progress statuses, and repositories the board does
+    /// not track.
+    ///
+    /// One board failing fails the whole poll. The alternative — skip it and
+    /// return the rest — would make a broken token or a deleted board look
+    /// like "no tasks right now", which is indistinguishable from a quiet
+    /// board and never surfaces.
     pub async fn fetch(&self, trigger: &Value) -> Result<Vec<Task>, GithubError> {
         let filter = TriggerFilter::parse(trigger);
-        let query = fetch_query(self.config.owner_type.graphql_root());
         let mut tasks = Vec::new();
+        for (index, project) in self.config.projects.iter().enumerate() {
+            self.fetch_project(index, project, &filter, &mut tasks)
+                .await?;
+        }
+        Ok(tasks)
+    }
+
+    /// Page one board, appending its ingestable tasks to `tasks` and recording
+    /// which board each came from (see [`Self::item_project`]).
+    async fn fetch_project(
+        &self,
+        index: usize,
+        project_config: &ProjectConfig,
+        filter: &TriggerFilter,
+        tasks: &mut Vec<Task>,
+    ) -> Result<(), GithubError> {
+        let query = fetch_query(project_config.owner_type.graphql_root());
         let mut cursor: Option<String> = None;
 
         // Filtering is client-side (ProjectsV2 has no server-side status filter),
@@ -95,43 +138,61 @@ impl<T: GithubTransport> GithubClient<T> {
             let body = json!({
                 "query": query,
                 "variables": {
-                    "owner": self.config.owner,
-                    "number": self.config.project_number,
+                    "owner": project_config.owner,
+                    "number": project_config.project_number,
                     "statusField": self.config.status_field,
                     "cursor": cursor,
                 },
             });
             let resp = self.transport.post_graphql(body, true).await?;
-            let project = self.project_node(&resp)?;
+            let project = self.project_node(&resp, project_config)?;
             let items = &project["items"];
 
             for node in items["nodes"].as_array().into_iter().flatten() {
-                if let Some(task) = self.normalize_item(node, &filter) {
+                if let Some(task) = self.normalize_item(node, project_config, filter) {
+                    self.remember_project(&task.id, index);
                     tasks.push(task);
                 }
             }
 
             let page = &items["pageInfo"];
             if page["hasNextPage"].as_bool() != Some(true) {
-                return Ok(tasks);
+                return Ok(());
             }
             cursor = page["endCursor"].as_str().map(str::to_string);
             if cursor.is_none() {
-                return Ok(tasks); // defensive: hasNextPage without a cursor
+                return Ok(()); // defensive: hasNextPage without a cursor
             }
             if page_num + 1 == MAX_FETCH_PAGES {
                 tracing::warn!(
                     pages = MAX_FETCH_PAGES,
+                    project = project_config.project_number,
                     "reached the fetch page cap; some project items were not scanned this poll"
                 );
             }
         }
-        Ok(tasks)
+        Ok(())
+    }
+
+    /// Note that `task_id` lives on board `index`, so a later
+    /// `task/update_status` can go straight there.
+    fn remember_project(&self, task_id: &str, index: usize) {
+        // A poisoned mutex means a previous holder panicked while holding it.
+        // The map is a cache, so the right answer is to carry on without it
+        // rather than to propagate the panic into a poll.
+        if let Ok(mut memo) = self.item_project.lock() {
+            memo.insert(task_id.to_string(), index);
+        }
     }
 
     /// Normalize one project item to a [`Task`], or `None` if it is not an
     /// ingestable Issue (non-Issue content, or filtered out by trigger/gating).
-    fn normalize_item(&self, node: &Value, filter: &TriggerFilter) -> Option<Task> {
+    fn normalize_item(
+        &self,
+        node: &Value,
+        project_config: &ProjectConfig,
+        filter: &TriggerFilter,
+    ) -> Option<Task> {
         let content = &node["content"];
         if content["__typename"].as_str() != Some("Issue") {
             return None; // draft items and PRs are not tasks
@@ -158,7 +219,7 @@ impl<T: GithubTransport> GithubClient<T> {
         if !filter.matches(status, &labels) {
             return None;
         }
-        if !self.config.repo_allowed(repo)
+        if !project_config.repo_allowed(repo)
             || !self.config.assignable_to_me(&assignees)
             || status.is_some_and(|s| self.config.is_in_progress(s))
         {
@@ -204,9 +265,62 @@ impl<T: GithubTransport> GithubClient<T> {
     /// Move a task's project status column to `status` (F-84). `status` is the
     /// orchestrator-side name; it is mapped to a project option via config, and
     /// an unknown option is a hard error rather than a silent no-op.
+    ///
+    /// With several boards configured (#542) the request does not say which one
+    /// holds the item — `TaskUpdateStatusParams` is `{task_id, status}` — so
+    /// the board is recovered from the ingest-time memo, and failing that by
+    /// trying each board in config order.
     pub async fn update_status(&self, task_id: &str, status: &str) -> Result<(), GithubError> {
+        for index in self.project_search_order(task_id) {
+            let project_config = &self.config.projects[index];
+            if self
+                .update_status_in(index, project_config, task_id, status)
+                .await?
+            {
+                return Ok(());
+            }
+        }
+        Err(GithubError::NotFound(format!(
+            "issue `{task_id}` is not an item of any project in plugins/github.toml \
+             ({}) → check that the issue is still on one of those boards",
+            self.config
+                .projects
+                .iter()
+                .map(|p| format!("#{}", p.project_number))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )))
+    }
+
+    /// Which boards to try for `task_id`, remembered board first.
+    ///
+    /// Always yields **every** board, not just the remembered one: the memo
+    /// says where the item was at ingest, and an item can be moved between
+    /// boards afterwards. Ordering it first makes the common case one board's
+    /// worth of calls; keeping the rest makes a stale memo slow, not wrong.
+    fn project_search_order(&self, task_id: &str) -> Vec<usize> {
+        let remembered = self
+            .item_project
+            .lock()
+            .ok()
+            .and_then(|memo| memo.get(task_id).copied())
+            .filter(|index| *index < self.config.projects.len());
+        let mut order: Vec<usize> = remembered.into_iter().collect();
+        order.extend((0..self.config.projects.len()).filter(|i| Some(*i) != remembered));
+        order
+    }
+
+    /// Try to move `task_id` on one board. `Ok(false)` means the item is not on
+    /// this board (try the next); an API or config failure is `Err`.
+    async fn update_status_in(
+        &self,
+        index: usize,
+        project_config: &ProjectConfig,
+        task_id: &str,
+        status: &str,
+    ) -> Result<bool, GithubError> {
         let target = self.config.map_status(status).to_string();
-        let query = resolve_query(self.config.owner_type.graphql_root());
+        let query = resolve_query(project_config.owner_type.graphql_root());
 
         // Resolve the project id + status option once, then page the item list
         // until the issue's item is found (a busy board can hold >1 page).
@@ -220,14 +334,14 @@ impl<T: GithubTransport> GithubClient<T> {
             let resolve = json!({
                 "query": query,
                 "variables": {
-                    "owner": self.config.owner,
-                    "number": self.config.project_number,
+                    "owner": project_config.owner,
+                    "number": project_config.project_number,
                     "statusField": self.config.status_field,
                     "cursor": cursor,
                 },
             });
             let resp = self.transport.post_graphql(resolve, true).await?;
-            let project = self.project_node(&resp)?;
+            let project = self.project_node(&resp, project_config)?;
 
             if page_num == 0 {
                 project_id = project["id"]
@@ -247,8 +361,8 @@ impl<T: GithubTransport> GithubClient<T> {
                     .and_then(|o| o["id"].as_str())
                     .ok_or_else(|| {
                         GithubError::NotFound(format!(
-                            "unknown status `{target}` for field `{}` → add the option in the project or fix status_map in plugins/github.toml",
-                            self.config.status_field
+                            "unknown status `{target}` for field `{}` on project #{} → add the option in that project or fix status_map in plugins/github.toml",
+                            self.config.status_field, project_config.project_number
                         ))
                     })?
                     .to_string();
@@ -275,12 +389,9 @@ impl<T: GithubTransport> GithubClient<T> {
             }
         }
 
-        let item_id = item_id.ok_or_else(|| {
-            GithubError::NotFound(format!(
-                "issue `{task_id}` is not an item of project #{}",
-                self.config.project_number
-            ))
-        })?;
+        let Some(item_id) = item_id else {
+            return Ok(false); // not on this board — the caller tries the next
+        };
 
         let mutation = json!({
             "query": UPDATE_STATUS_MUTATION,
@@ -292,7 +403,10 @@ impl<T: GithubTransport> GithubClient<T> {
         // Idempotent: setting the same option again yields the same state.
         let resp = self.transport.post_graphql(mutation, true).await?;
         check_errors(&resp)?;
-        Ok(())
+        // Found by a scan when the memo was empty or stale — record it so the
+        // next transition on this task goes straight to the right board.
+        self.remember_project(task_id, index);
+        Ok(true)
     }
 
     /// Confirm the token works by reading `viewer.login` (F-59). Static config
@@ -314,14 +428,18 @@ impl<T: GithubTransport> GithubClient<T> {
 
     /// Extract `data.<owner-root>.projectV2`, surfacing GraphQL errors and a
     /// missing project (e.g. wrong owner/number) as actionable failures.
-    fn project_node<'a>(&self, resp: &'a Value) -> Result<&'a Value, GithubError> {
+    fn project_node<'a>(
+        &self,
+        resp: &'a Value,
+        project_config: &ProjectConfig,
+    ) -> Result<&'a Value, GithubError> {
         let data = check_errors(resp)?;
-        let root = self.config.owner_type.graphql_root();
+        let root = project_config.owner_type.graphql_root();
         let project = &data[root]["projectV2"];
         if project.is_null() {
             return Err(GithubError::NotFound(format!(
-                "project #{} not found for {} `{}` → check owner/owner_type/project_number in plugins/github.toml",
-                self.config.project_number, root, self.config.owner
+                "project #{} not found for {} `{}` → check owner/owner_type/project_number in that `[[projects]]` entry of plugins/github.toml",
+                project_config.project_number, root, project_config.owner
             )));
         }
         Ok(project)
@@ -351,19 +469,51 @@ pub fn static_config_errors(config: &GithubConfig) -> Vec<String> {
     if config.token.is_empty() {
         errors.push("`token` is empty → set it (or its ${ENV}/keychain: reference)".into());
     }
-    if config.owner.is_empty() {
-        errors.push("`owner` is empty → set the project owner login".into());
-    }
     if config.github_login.is_empty() {
         errors.push(
             "`github_login` is empty → set your GitHub login for ingest gating (F-08)".into(),
         );
     }
-    if config.project_number <= 0 {
-        errors.push(format!(
-            "`project_number` must be positive, got {} → use the ProjectsV2 number",
-            config.project_number
-        ));
+    if config.projects.is_empty() {
+        errors.push(
+            "`[[projects]]` is empty → declare at least one board (owner / project_number / repos)"
+                .into(),
+        );
+    }
+    // A repository may be tracked by exactly one board (#542): the claim it
+    // produces answers "where does an item for this repo go", and two answers
+    // is the same as none. Reported here rather than left to the Orchestrator's
+    // cross-plugin check, because within one config it is plainly a typo.
+    let mut seen: HashMap<&str, i64> = HashMap::new();
+    for project in &config.projects {
+        if project.owner.is_empty() {
+            errors.push(format!(
+                "`owner` is empty in the `[[projects]]` entry for project #{} → set the project owner login",
+                project.project_number
+            ));
+        }
+        if project.project_number <= 0 {
+            errors.push(format!(
+                "`project_number` must be positive, got {} → use the ProjectsV2 number",
+                project.project_number
+            ));
+        }
+        if project.repos.is_empty() {
+            errors.push(format!(
+                "`repos` is empty in the `[[projects]]` entry for project #{} → list the repositories this board tracks (it is also the repository -> board mapping, so it cannot be inferred)",
+                project.project_number
+            ));
+        }
+        for repo in &project.repos {
+            if let Some(first) = seen.insert(repo.as_str(), project.project_number)
+                && first != project.project_number
+            {
+                errors.push(format!(
+                    "repository `{repo}` is listed on both project #{first} and project #{} → a repository may be tracked by exactly one board",
+                    project.project_number
+                ));
+            }
+        }
     }
     errors
 }
@@ -482,10 +632,19 @@ mod tests {
 
     fn client_for_tests() -> GithubClient<NeverCalled> {
         let cfg: GithubConfig = serde_json::from_value(json!({
-            "token": "t", "owner": "me", "project_number": 1, "github_login": "me"
+            "token": "t", "github_login": "me",
+            "projects": [{ "owner": "me", "project_number": 1, "repos": ["web-app"] }]
         }))
         .unwrap();
         GithubClient::new(cfg, NeverCalled)
+    }
+
+    /// The board `item()` belongs to, for the `normalize_item` callers below.
+    fn project_for_tests() -> ProjectConfig {
+        serde_json::from_value(json!({
+            "owner": "me", "project_number": 1, "repos": ["web-app"]
+        }))
+        .unwrap()
     }
 
     /// The `instructions_kind` the Orchestrator baked into the trigger picks
@@ -498,7 +657,7 @@ mod tests {
             "instructions_kind": "design",
         }));
         let task = client_for_tests()
-            .normalize_item(&item("設計待ち"), &filter)
+            .normalize_item(&item("設計待ち"), &project_for_tests(), &filter)
             .expect("ingestable");
         let instructions = task.instructions.expect("design tasks carry instructions");
 
@@ -520,7 +679,7 @@ mod tests {
         let for_kind = |kind: &str| {
             let filter = TriggerFilter::parse(&json!({ "instructions_kind": kind }));
             client_for_tests()
-                .normalize_item(&item("any"), &filter)
+                .normalize_item(&item("any"), &project_for_tests(), &filter)
                 .unwrap()
                 .instructions
                 .unwrap()
@@ -537,7 +696,7 @@ mod tests {
     fn no_instructions_kind_means_no_instructions() {
         let filter = TriggerFilter::parse(&json!({ "project_status": "実装待ち" }));
         let task = client_for_tests()
-            .normalize_item(&item("実装待ち"), &filter)
+            .normalize_item(&item("実装待ち"), &project_for_tests(), &filter)
             .expect("ingestable");
         assert_eq!(task.instructions, None);
     }
@@ -549,7 +708,7 @@ mod tests {
     fn an_unknown_kind_falls_back_to_no_instructions() {
         let filter = TriggerFilter::parse(&json!({ "instructions_kind": "audit" }));
         let task = client_for_tests()
-            .normalize_item(&item("any"), &filter)
+            .normalize_item(&item("any"), &project_for_tests(), &filter)
             .expect("ingestable");
         assert_eq!(task.instructions, None);
     }
@@ -571,12 +730,80 @@ mod tests {
     #[test]
     fn static_errors_flag_bad_project_number() {
         let cfg: GithubConfig = serde_json::from_value(json!({
-            "token": "t", "owner": "me", "project_number": 0, "github_login": "me"
+            "token": "t", "github_login": "me",
+            "projects": [{ "owner": "me", "project_number": 0, "repos": ["r"] }]
         }))
         .unwrap();
         let errors = static_config_errors(&cfg);
         assert!(
             errors.iter().any(|e| e.contains("project_number")),
+            "got {errors:?}"
+        );
+    }
+
+    /// A repository on two boards makes the claim ambiguous, and two answers to
+    /// "where does an item for this repo go" is the same as none (#542).
+    #[test]
+    fn static_errors_flag_a_repository_claimed_by_two_boards() {
+        let cfg: GithubConfig = serde_json::from_value(json!({
+            "token": "t", "github_login": "me",
+            "projects": [
+                { "owner": "me", "project_number": 1, "repos": ["totsuka", "shared"] },
+                { "owner": "me", "project_number": 2, "repos": ["shared"] }
+            ]
+        }))
+        .unwrap();
+        let errors = static_config_errors(&cfg);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("shared") && e.contains("#1") && e.contains("#2")),
+            "got {errors:?}"
+        );
+        // `totsuka` appears once and must not be reported.
+        assert!(
+            !errors.iter().any(|e| e.contains("totsuka")),
+            "got {errors:?}"
+        );
+    }
+
+    /// The same repository listed twice **on one board** is a harmless
+    /// duplicate, not the ambiguity above: both entries name the same
+    /// destination. Flagging it would train the operator to ignore the check.
+    #[test]
+    fn a_repository_repeated_within_one_board_is_not_an_error() {
+        let cfg: GithubConfig = serde_json::from_value(json!({
+            "token": "t", "github_login": "me",
+            "projects": [{ "owner": "me", "project_number": 1, "repos": ["r", "r"] }]
+        }))
+        .unwrap();
+        assert!(static_config_errors(&cfg).is_empty());
+    }
+
+    /// An empty `repos` cannot be turned into a claim, so it is rejected rather
+    /// than quietly meaning "every repo on the board" as it did pre-#542.
+    #[test]
+    fn static_errors_flag_an_empty_repos_list() {
+        let cfg: GithubConfig = serde_json::from_value(json!({
+            "token": "t", "github_login": "me",
+            "projects": [{ "owner": "me", "project_number": 1, "repos": [] }]
+        }))
+        .unwrap();
+        let errors = static_config_errors(&cfg);
+        assert!(errors.iter().any(|e| e.contains("repos")), "got {errors:?}");
+    }
+
+    /// No boards at all: serde accepts `projects = []` (it is a list, not a
+    /// missing field), so the check has to be here.
+    #[test]
+    fn static_errors_flag_no_boards() {
+        let cfg: GithubConfig = serde_json::from_value(json!({
+            "token": "t", "github_login": "me", "projects": []
+        }))
+        .unwrap();
+        let errors = static_config_errors(&cfg);
+        assert!(
+            errors.iter().any(|e| e.contains("[[projects]]")),
             "got {errors:?}"
         );
     }
