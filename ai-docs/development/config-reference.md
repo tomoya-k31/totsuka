@@ -680,17 +680,26 @@ poll_interval_secs = 60   # 省略時も 60
 
 ## `token` に必要な権限
 
-**導出であって実測ではない**（最小値は測っていない）。呼んでいるのは `https://api.github.com/graphql` への 4 操作だけ — Project アイテム取得、Project/フィールド/アイテムの id 解決、`updateProjectV2ItemFieldValue`、`viewer`。REST も Contents API も使わない。**Issue への書き込みは無い**（#398 で `result/publish` とともに `addComment` が消えた）。導出の根拠は [task-source-github](/components/task-source-github.md)。
+**十分条件は実測済み、最小値は未実測**（#514、2026-08-23）。呼んでいるのは `https://api.github.com/graphql` への 4 操作だけ — Project アイテム取得、Project/フィールド/アイテムの id 解決、`updateProjectV2ItemFieldValue`、`viewer`。REST も Contents API も使わない。**Issue への書き込みは無い**（#398 で `result/publish` とともに `addComment` が消えた）。実測の内容と根拠は [task-source-github](/components/task-source-github.md)。
 
-**fine-grained PAT**:
+**まず種別を選ぶ。ここを間違えると権限の表を読んでも解決しない**:
+
+| Project の所有者 | 使えるトークン |
+|---|---|
+| **org** 所有 | fine-grained PAT（Organization permissions の Projects）または classic PAT |
+| **user** 所有 | **scope を持つトークン**（classic PAT の `project`、または `gh auth token` の OAuth トークン）。fine-grained PAT は Account permissions に **Projects が存在しない**ので到達できない — 効くのはトークンの呼び名ではなく scope 方式かどうかである |
+
+**fine-grained PAT**（org 所有ボードのみ。未実測）:
 
 | 種別 | 権限 |
 |---|---|
 | Repository | **Metadata: Read**（必須） |
 | Repository | **Issues: Read**（write は不要） |
-| Organization **または** Account | **Projects: Read and write**（org 所有のボードなら Organization、user 所有なら Account） |
+| Organization | **Projects: Read and write**（Organization permissions にしか無い） |
 
 **Contents は不要。** classic PAT なら `project` と、`repo`（private を含む場合）または `public_repo`。private org のボードでは `read:org` も要りうる。
+
+実測できているのは「OAuth トークン（scope `gist, project, read:org, repo, workflow`）で 4 操作すべてが通る」まで。**どれが要らないかは測っていない** — とくに Issue の本文・ラベル・アサイニーは `projectV2` 経由でしか読まないので、`project` だけで返るなら `repo` は不要である。確かめ方は `bash .claude/skills/live-e2e/scripts/github-permissions.sh probe --write`。
 
 **PR 作成はこのトークンの仕事ではない。** `gh pr create` を実行するのはエージェント自身で、ペインの環境にあるあなた自身の `gh` 認証を使う。`gh auth login` は別個の前提条件である。
 

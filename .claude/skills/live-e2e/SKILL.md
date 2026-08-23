@@ -95,6 +95,48 @@ install を「古い」と誤判定もする。
 各シナリオは「起動 → 観測 → 判定」の 3 段。観測は `scripts/` が担うので、**手で `gh` や
 `curl` を組み立て直さない**（今回の検証で同じコマンドを何度も書き直して時間を溶かした）。
 
+### 番外: GitHub トークンの権限を測る
+
+シナリオではなく単発の測定。`totsuka doctor --online` は `viewer` しか叩かない（F-59）ので、
+**doctor が緑でも fetch が空になる権限構成が存在する**。実 `run` は逆に権限だけを切り分け
+られない（LLM・herdr・worktree が同時に動く）。その隙間を埋める:
+
+```bash
+bash .claude/skills/live-e2e/scripts/github-permissions.sh probe          # read の 3 操作
+bash .claude/skills/live-e2e/scripts/github-permissions.sh probe --write  # + カード移動
+GH_PROBE_TOKEN='ghp_…' bash .../github-permissions.sh probe --write       # 権限を削った PAT を試す
+```
+
+プラグインが実際に投げる 4 操作を、同じエンドポイント・同じヘッダ・同じクエリ本文で送る。
+**`--write` は現在の Status と同じ option を書き戻す**ので盤面は動かない。
+
+**「エラーが出なかった」を pass と読まないこと。** GraphQL の権限不足は
+HTTP 200・`data` あり・**フィールドが `null`** という形で出うるので、スクリプトは
+`errors` の有無と独立にフィールド単位で present/null を判定する。`assignees` / `labels` は
+**`nodes: null`（権限不足の疑い）と `nodes: []`（本当に付いていない）を別物として数える** —
+後者は「測れなかった」なので skip 扱いで、終了コードも pass（0）と分ける（skip は 3）。
+
+そのため **board に「ラベルとアサイニーが付いた Issue」が最低 1 件要る**。無いと
+その 2 項目は永久に skip になる。サンドボックスでは `totsuka-sandbox-web#1` を
+その fixture にしてある（`perm-probe` ラベル + assignee、**Status = Done**）。
+
+**この fixture を Todo に戻さないこと。** 安全なのは「issue が CLOSED だから」
+ではない —— **プラグインは issue の open/closed を一切見ていない**（`fetch_query`
+は `state` を選択せず、`normalize_item` のゲートは trigger（`project_status` /
+`label`）・`repo_allowed`・`assignable_to_me`・`is_in_progress` だけ）。
+効いているのは **Status が `github-task` の trigger（`Todo`）から外れていること**
+である。しかも probe のために付けた assignee は `assignable_to_me`（F-08）を
+**通してしまう**側なので、Todo に戻すと全ゲートが通り、実 run が CLOSED な
+issue にエージェントを走らせる。
+
+**org 所有の board を測るときは `E2E_GH_OWNER_TYPE=organization` を渡すこと。**
+既定は `user` で、間違えると `user(login:)` を叩いて「board が見えない」と
+**誤報告する**（権限の問題に見えるが、根本は root フィールド違い）。
+
+測るのは **先頭ページだけ**で、`hasNextPage` が真なら「以降は見ていない」と出る。
+対象は **public GitHub のみ**（プラグインの `api_url` 上書き = GitHub Enterprise には非対応）。
+`--write` の非破壊性は「実行中に他の actor が同じ item の Status を変えない」ことが前提。
+
 ## 3. 結果を報告する
 
 ```bash

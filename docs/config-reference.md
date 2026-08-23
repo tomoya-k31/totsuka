@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:5e9ab1f73d1a033608e51ac938662a0f4e85ae6f217176cc83b85fed1bcbb905 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:afbe44cef7c127f7cce9e041ee2f392611385ba21aa09b03fe364f6e6b59dc25 -->
 
 # Configuration reference
 
@@ -585,17 +585,26 @@ An unknown key is the opposite: it is a hard startup failure, because that check
 
 ### Permissions the token needs
 
-**Derived from what the code calls, not measured** — the minimum has not been narrowed empirically. Every call is a POST to `https://api.github.com/graphql`, and there are only four: fetching project items, resolving project/field/item ids, `updateProjectV2ItemFieldValue`, and `viewer`. No REST, no Contents API, and **nothing is written to an issue** — the agent writes the deliverable itself.
+Every call is a POST to `https://api.github.com/graphql`, and there are only four: fetching project items, resolving project/field/item ids, `updateProjectV2ItemFieldValue`, and `viewer`. No REST, no Contents API, and **nothing is written to an issue** — the agent writes the deliverable itself.
 
-For a fine-grained PAT:
+**Pick the token type first. Getting this wrong is not something the permission tables below can fix:**
+
+| Who owns the project | Token type that works |
+|---|---|
+| An **organization** | A fine-grained PAT (Projects under Organization permissions), or a classic PAT |
+| A **user** | **A scope-based token** — a classic PAT with `project`, or the OAuth token `gh auth token` returns (which carries the same scope). Fine-grained PATs have no Projects permission under Account permissions, so they cannot reach ProjectsV2 here. What matters is the scope, not the label on the token |
+
+For a fine-grained PAT (org-owned boards only):
 
 | Kind | Permission |
 |---|---|
 | Repository | **Metadata: Read** (required) |
 | Repository | **Issues: Read** (write is not needed) |
-| Organization **or** Account | **Projects: Read and write** — Organization for an org-owned board, Account for a user-owned one |
+| Organization | **Projects: Read and write** |
 
 **Contents is not needed.** For a classic PAT: `project`, plus `repo` (if private repositories are involved) or `public_repo`. A private organization's board may also need `read:org`.
+
+**Both tables above are derived from what the code calls, not measured.** No token matching either one has been tried. What *has* been run against a real user-owned project is a single scope-based OAuth token carrying `gist, project, read:org, repo, workflow` — a superset of the classic list — and it passed all four operations. So the classic route is known to work with at least that much; the fine-grained table has not been exercised at all. Treat both as an upper bound, and cut them down for your own setup if you want the tightest token.
 
 **Opening the pull request is not this token's job.** In an `implement` workflow the agent runs `gh pr create` itself, using your own `gh` authentication from the pane's environment. `gh auth login` is a separate prerequisite.
 
