@@ -4,12 +4,15 @@
 //! the deliverable itself (#398). All bodies are plain JSON built
 //! with `serde_json` — no Notion SDK dependency.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use serde_json::{Value, json};
 
 use plugin_protocol::Task;
 
 use crate::blocks::{blocks_to_markdown, rich_text_plain};
-use crate::config::{BodySource, NotionConfig};
+use crate::config::{BodySource, DatabaseConfig, NotionConfig};
 use crate::error::NotionError;
 use crate::transport::{HttpMethod, NotionTransport};
 
@@ -66,12 +69,26 @@ impl TriggerFilter {
 pub struct NotionClient<T> {
     config: NotionConfig,
     transport: T,
+    /// Which `[[databases]]` entry an ingested page came from, keyed by page id
+    /// (#542).
+    ///
+    /// `task/update_status` patches the page directly, but it first verifies
+    /// the target option exists on **that page's** database, and the request
+    /// carries only `{task_id, status}`. A miss is normal (the map is
+    /// process-local and the Orchestrator's tasks outlive a restart), so
+    /// [`database_of`](Self::database_of) falls back to asking Notion for the
+    /// page's parent rather than guessing.
+    page_database: Mutex<HashMap<String, usize>>,
 }
 
 impl<T: NotionTransport> NotionClient<T> {
     /// A client using `config` and `transport`.
     pub fn new(config: NotionConfig, transport: T) -> Self {
-        Self { config, transport }
+        Self {
+            config,
+            transport,
+            page_database: Mutex::new(HashMap::new()),
+        }
     }
 
     /// The plugin settings.
@@ -87,46 +104,128 @@ impl<T: NotionTransport> NotionClient<T> {
         let filter = TriggerFilter::parse(trigger);
         let server_filter = self.build_filter(&filter);
         let mut tasks = Vec::new();
+        for (index, database) in self.config.databases.iter().enumerate() {
+            self.fetch_database(index, database, &filter, server_filter.as_ref(), &mut tasks)
+                .await?;
+        }
+        Ok(tasks)
+    }
+
+    /// Page one database, appending its ingestable tasks to `tasks`.
+    ///
+    /// One database failing fails the whole poll, for the reason the GitHub
+    /// plugin gives: a skipped database is indistinguishable from a quiet one,
+    /// so a revoked token would look like "nothing to do" forever.
+    async fn fetch_database(
+        &self,
+        index: usize,
+        database: &DatabaseConfig,
+        filter: &TriggerFilter,
+        server_filter: Option<&Value>,
+        tasks: &mut Vec<Task>,
+    ) -> Result<(), NotionError> {
         let mut cursor: Option<String> = None;
 
         for page_num in 0..MAX_FETCH_PAGES {
             let mut body = json!({ "page_size": QUERY_PAGE_SIZE });
-            if let Some(f) = &server_filter {
+            if let Some(f) = server_filter {
                 body["filter"] = f.clone();
             }
             if let Some(c) = &cursor {
                 body["start_cursor"] = json!(c);
             }
-            let path = format!("/databases/{}/query", self.config.database_id);
+            let path = format!("/databases/{}/query", database.database_id);
             let resp = self
                 .transport
                 .request(HttpMethod::Post, &path, Some(body), true)
                 .await?;
 
             for page in resp["results"].as_array().into_iter().flatten() {
-                if let Some(mut task) = self.normalize_page(page, &filter) {
+                if let Some(mut task) = self.normalize_page(page, filter) {
+                    if !database.repo_allowed(task.repo_hint.as_deref()) {
+                        continue;
+                    }
                     if self.config.body_source == BodySource::Page {
                         task.body = self.fetch_page_body(&task.id).await?;
                     }
+                    self.remember_database(&task.id, index);
                     tasks.push(task);
                 }
             }
 
             if resp["has_more"].as_bool() != Some(true) {
-                return Ok(tasks);
+                return Ok(());
             }
             cursor = resp["next_cursor"].as_str().map(str::to_string);
             if cursor.is_none() {
-                return Ok(tasks); // defensive: has_more without a cursor
+                return Ok(()); // defensive: has_more without a cursor
             }
             if page_num + 1 == MAX_FETCH_PAGES {
                 tracing::warn!(
                     pages = MAX_FETCH_PAGES,
+                    database = database.database_id,
                     "reached the fetch page cap; some database pages were not scanned this poll"
                 );
             }
         }
-        Ok(tasks)
+        Ok(())
+    }
+
+    /// Note that `page_id` lives in database `index`.
+    fn remember_database(&self, page_id: &str, index: usize) {
+        // A poisoned mutex means an earlier holder panicked. The map is a
+        // cache, so carrying on without it beats propagating the panic.
+        if let Ok(mut memo) = self.page_database.lock() {
+            memo.insert(page_id.to_string(), index);
+        }
+    }
+
+    /// The configured database holding `page_id`.
+    ///
+    /// The memo first; otherwise Notion is **asked** (`GET /pages/{id}` →
+    /// `parent.database_id`) rather than guessed at. Trying each database's
+    /// options in turn would accept an option that exists on some *other*
+    /// database, turning a clear "unknown status" error into a confusing
+    /// failure from the Notion API on the patch.
+    async fn database_of(&self, page_id: &str) -> Result<&DatabaseConfig, NotionError> {
+        if let Some(index) = self
+            .page_database
+            .lock()
+            .ok()
+            .and_then(|memo| memo.get(page_id).copied())
+            && let Some(database) = self.config.databases.get(index)
+        {
+            return Ok(database);
+        }
+
+        let page = self
+            .transport
+            .request(HttpMethod::Get, &format!("/pages/{page_id}"), None, true)
+            .await?;
+        let parent = page["parent"]["database_id"].as_str().ok_or_else(|| {
+            NotionError::NotFound(format!(
+                "page `{page_id}` has no parent database → it is not a database page, so its status cannot be moved"
+            ))
+        })?;
+        // Notion accepts ids with and without hyphens and echoes back the
+        // hyphenated form, so compare with them stripped.
+        let normalize = |id: &str| id.replace('-', "").to_ascii_lowercase();
+        let wanted = normalize(parent);
+        let found = self
+            .config
+            .databases
+            .iter()
+            .position(|d| normalize(&d.database_id) == wanted);
+        match found {
+            Some(index) => {
+                self.remember_database(page_id, index);
+                Ok(&self.config.databases[index])
+            }
+            None => Err(NotionError::NotFound(format!(
+                "page `{page_id}` lives in database `{parent}`, which is not in `[[databases]]` \
+                 of plugins/notion.toml → add it, or check that the task is still where it was"
+            ))),
+        }
     }
 
     /// Build the server-side query filter: a raw passthrough if the trigger
@@ -284,8 +383,10 @@ impl<T: NotionTransport> NotionClient<T> {
         let target = self.config.map_status(status).to_string();
         let kind = self.config.property_map.status_kind;
 
-        // Verify the option exists on the property (F-84 clear error).
-        let options = self.status_options(status_prop).await?;
+        // Verify the option exists on the property (F-84 clear error), on the
+        // database this page actually lives in (#542).
+        let database = self.database_of(task_id).await?;
+        let options = self.status_options(database, status_prop).await?;
         if !options.iter().any(|o| o == &target) {
             return Err(NotionError::NotFound(format!(
                 "unknown status `{target}` for property `{status_prop}` (options: {}) → add it in Notion or fix status_map in plugins/notion.toml",
@@ -305,8 +406,12 @@ impl<T: NotionTransport> NotionClient<T> {
     }
 
     /// The option names available on a `status`/`select` database property.
-    async fn status_options(&self, status_prop: &str) -> Result<Vec<String>, NotionError> {
-        let path = format!("/databases/{}", self.config.database_id);
+    async fn status_options(
+        &self,
+        database: &DatabaseConfig,
+        status_prop: &str,
+    ) -> Result<Vec<String>, NotionError> {
+        let path = format!("/databases/{}", database.database_id);
         let resp = self
             .transport
             .request(HttpMethod::Get, &path, None, true)
@@ -335,22 +440,29 @@ impl<T: NotionTransport> NotionClient<T> {
             .request(HttpMethod::Get, "/users/me", None, true)
             .await?;
 
-        let path = format!("/databases/{}", self.config.database_id);
-        let db = self
-            .transport
-            .request(HttpMethod::Get, &path, None, true)
-            .await?;
-        let props = &db["properties"];
-        let missing: Vec<&str> = self
-            .mapped_property_names()
-            .into_iter()
-            .filter(|name| props[name].is_null())
-            .collect();
-        if !missing.is_empty() {
-            return Err(NotionError::NotFound(format!(
-                "database is missing mapped properties: {} → fix property_map in plugins/notion.toml or share the right database",
-                missing.join(", ")
-            )));
+        // Every database, not just the first: `property_map` is shared across
+        // all of them, so a database that is missing a mapped property breaks
+        // only the tasks that come from it — the quietest way for this to be
+        // wrong is for the check to look at one database and pass.
+        for database in &self.config.databases {
+            let path = format!("/databases/{}", database.database_id);
+            let db = self
+                .transport
+                .request(HttpMethod::Get, &path, None, true)
+                .await?;
+            let props = &db["properties"];
+            let missing: Vec<&str> = self
+                .mapped_property_names()
+                .into_iter()
+                .filter(|name| props[name].is_null())
+                .collect();
+            if !missing.is_empty() {
+                return Err(NotionError::NotFound(format!(
+                    "database `{}` is missing mapped properties: {} → fix property_map in plugins/notion.toml or share the right database",
+                    database.database_id,
+                    missing.join(", ")
+                )));
+            }
         }
         Ok(())
     }
@@ -415,8 +527,35 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
     if config.token.is_empty() {
         errors.push("`token` is empty → set it (or its ${ENV}/keychain: reference)".into());
     }
-    if config.database_id.is_empty() {
-        errors.push("`database_id` is empty → set the source database id".into());
+    if config.databases.is_empty() {
+        errors.push(
+            "`[[databases]]` is empty → declare at least one database (database_id / repos)".into(),
+        );
+    }
+    // A repository may be tracked by exactly one database (#542): the claim it
+    // produces answers "where does an item for this repo go", and two answers
+    // is the same as none.
+    let mut seen: HashMap<&str, &str> = HashMap::new();
+    for database in &config.databases {
+        if database.database_id.is_empty() {
+            errors.push("`database_id` is empty → set the source database id".into());
+        }
+        if database.repos.is_empty() {
+            errors.push(format!(
+                "`repos` is empty in the `[[databases]]` entry for `{}` → list the repositories this database tracks (it is also the repository -> database mapping, so it cannot be inferred)",
+                database.database_id
+            ));
+        }
+        for repo in &database.repos {
+            if let Some(first) = seen.insert(repo.as_str(), database.database_id.as_str())
+                && first != database.database_id
+            {
+                errors.push(format!(
+                    "repository `{repo}` is listed on both database `{first}` and database `{}` → a repository may be tracked by exactly one database",
+                    database.database_id
+                ));
+            }
+        }
     }
     if config.property_map.title.is_empty() {
         errors.push("`property_map.title` is empty → name the title property".into());
@@ -476,7 +615,7 @@ mod tests {
         NotionClient::new(
             config(json!({
                 "token": "secret_t",
-                "database_id": "db1",
+                "databases": [{ "database_id": "db1", "repos": ["totsuka"] }],
                 "property_map": { "title": "Name", "status": "Status" }
             })),
             NeverCalled,
@@ -632,8 +771,8 @@ mod tests {
     #[test]
     fn static_errors_flag_body_and_status_misconfig() {
         let cfg = config(json!({
-            "token": "t", "database_id": "db", "body_source": "property",
-            "in_progress_statuses": ["実装中"]
+            "token": "t", "databases": [{ "database_id": "db", "repos": ["r"] }],
+            "body_source": "property", "in_progress_statuses": ["実装中"]
         }));
         let errors = static_config_errors(&cfg);
         assert!(errors.iter().any(|e| e.contains("property_map.body")));
@@ -643,7 +782,7 @@ mod tests {
     #[test]
     fn mapped_property_names_include_configured_only() {
         let cfg = config(json!({
-            "token": "t", "database_id": "db",
+            "token": "t", "databases": [{ "database_id": "db", "repos": ["r"] }],
             "property_map": { "title": "Name", "status": "Status", "assignee": "Owner" }
         }));
         let client = NotionClient::new(cfg, DummyTransport);

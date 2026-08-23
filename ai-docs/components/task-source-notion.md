@@ -19,7 +19,7 @@ Notion データベースを totsuka のタスクソースとして接続する�
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `plugins/notion.toml`（= `InitializeParams.config`）を型付け。`token` / `database_id` / `notion_user_id`（F-08 の自己判定）/ `property_map`（title / status(+`status_kind` status\|select) / assignee / priority / repo_hint / body ↔ Notion プロパティ名, F-03）/ `body_source`（none\|property\|page）/ `in_progress_statuses` / `status_map`（orchestrator status→Notion option）/ `priority_map`（option 名→数値）/ `source_name` / `api_url` / `api_version` / `max_retries` / `rate_limit_rps`。`deny_unknown_fields` |
+| `config` | `plugins/notion.toml`（= `InitializeParams.config`）を型付け。`token` / **`[[databases]]`**（各要素が `database_id` + `repos`、#542）/ `notion_user_id`（F-08 の自己判定）/ `property_map`（title / status(+`status_kind` status\|select) / assignee / priority / repo_hint / body ↔ Notion プロパティ名, F-03）/ `body_source`（none\|property\|page）/ `in_progress_statuses` / `status_map`（orchestrator status→Notion option）/ `priority_map`（option 名→数値）/ `source_name` / `api_url` / `api_version` / `max_retries` / `rate_limit_rps`。`deny_unknown_fields`（要素側も）。`claimed_repos()` が `[[databases]]` と `property_map` から `initialize` 応答の claim を組み立てる |
 | `transport` | `NotionTransport` trait（`request(method, path, body, idempotent)`）＋ reqwest 実装 `ReqwestTransport`（bearer 認証・`Notion-Version` ヘッダ固定・タイムアウト・指数バックオフ §5.3・3rps スロットリング）。ロジックを録画レスポンスでテストするための seam |
 | `blocks` | Notion ブロック ↔ Markdown 変換。読み（`blocks_to_markdown`, ページ本文→body）は主要ブロック型（heading/paragraph/bullet/numbered/to_do/quote/code）対応・未対応型はプレーンテキスト化。書き（`markdown_to_blocks`, F-07）は heading/bullet/quote/paragraph を生成し、2000 文字/リッチテキストの上限で分割（マルチバイト境界安全） |
 | `client` | `NotionClient<T: NotionTransport>`。`fetch`（databases query をページング取得→property_map で `Task` 正規化→トリガー絞り込み→取り込み制御 F-08。body=page 時のみ生存タスクのブロックを取得）/ `update_status`（DB スキーマから option を検証、未知 option はエラー→ページ property を PATCH, F-84）/ `publish`（Markdown→blocks 変換、100 件バッチで追記, F-07）/ `validate`（users/me 疎通＋マップ先プロパティ存在確認 F-59） |
@@ -32,7 +32,15 @@ Notion データベースを totsuka のタスクソースとして接続する�
 
 # 取り込み制御（F-08）
 
-fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は、まずトリガー（`status` / raw `filter`）で候補を絞り（可能なら databases query の server-side filter で削減）、次に多人数運用ゲーティングを適用する: assignee（people プロパティ）が他者のタスクを除外（自分は `notion_user_id` で判定、未設定時は未 assign のみ取り込み）、`in_progress_statuses` のステータスを除外。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
+fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`[[databases]]` の全データベースを設定順に走査し**（#542）、それぞれについて: まずトリガー（`status` / raw `filter`）で候補を絞り（可能なら databases query の server-side filter で削減）、次に多人数運用ゲーティングを適用する: assignee（people プロパティ）が他者のタスクを除外（自分は `notion_user_id` で判定、未設定時は未 assign のみ取り込み）、`in_progress_statuses` のステータスを除外、**そのデータベースの `repos` 外**を除外。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
+
+**`repos` によるフィルタは github と非対称で、条件付きである。** GitHub の issue は必ずリポジトリを持つが、Notion のページの `repo_hint` は任意プロパティなので、値が無いページは**そのまま取り込む**（Orchestrator が従来どおり F-11 で解決する）。落としてしまうと、`repo_hint` をマップしていない利用者は 1 件も取り込めなくなる。
+
+**1 データベースの失敗は poll 全体の失敗にする**（github と同じ理由: 飛ばすと「取り込むものが無い」と区別できない）。
+
+**`task/update_status` はページの親データベースを Notion に問い合わせる。** PATCH 先はページ id だけで足りるが、その前に「対象 option がそのデータベースに存在するか」を検証しており、どのデータベースかは request が語らない。ingest 時のメモを先に引き、無ければ `GET /pages/{id}` の `parent.database_id` を読む — **各データベースの option を順に試す方式は採らない**。別のデータベースにだけ存在する option を通してしまい、明確な「unknown status」エラーが Notion API 側の分かりにくい失敗に化けるからである。id はハイフンの有無を無視して突き合わせる（Notion は両形式を受け付け、ハイフン付きで返す）。
+
+**`config/validate` は全データベースを見る。** `property_map` は全データベース共通なので、あるデータベースだけがマップ先プロパティを欠いていると、そこ由来のタスクだけが壊れる — 1 つ目だけ見て緑にするのが一番静かな壊れ方になる。
 
 # capabilities（F-83）
 
