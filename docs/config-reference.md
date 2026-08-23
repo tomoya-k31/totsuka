@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0c206b2c24f9c9a6cd768af70eca35410cc7cb0296bcdb5f85aad6e749ef223b -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0f829c8d13bcde98a73e99d31bc29f7da7a46831eaf32b7863a163cd9c18606b -->
 
 # Configuration reference
 
@@ -611,7 +611,7 @@ It is both:
 
 It is required and non-empty because of the second job: a board does not know which repositories it will hold in future, so an omitted list cannot be turned into a mapping.
 
-**A repository may appear on only one board.** `totsuka config validate` rejects a config that lists the same repository twice, because two answers to "where does an item for this repository go" is the same as no answer. A repository claimed by both the GitHub and the Notion source is caught by totsuka itself, at startup and by `totsuka doctor`.
+**A repository may appear on only one board.** `totsuka config validate` rejects a config that lists the same repository twice, because two answers to "where does an item for this repository go" is the same as no answer. A board is identified by `(owner, project_number)` — ProjectsV2 numbers are per-owner, so comparing numbers alone would treat `me/#7` and `acme/#7` as one board and miss the duplicate. A repository claimed by both the GitHub and the Notion source is caught by totsuka itself, at startup and by `totsuka doctor`.
 
 ### A wrong `project_number` does not fail at startup
 

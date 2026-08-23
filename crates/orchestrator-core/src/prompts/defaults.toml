@@ -78,11 +78,19 @@ Commit only after that.\
 # place" and "filed it somewhere". Without a URL in the report there is nothing
 # for the rubric to judge.
 #
+# **It must not contradict the source's own instructions.** Every
+# `triage_instructions` in the bundled sources already demands the URL of what
+# was filed, and on a GitHub board the item *is* the issue — there is no second
+# URL. An earlier draft said "the item at that destination, not just an issue
+# you opened on the way there", which told the agent to produce a URL that does
+# not exist for the commonest destination. What this adds over the source's own
+# text is the **completion condition**, not a different URL.
+#
 # Placeholders: {destination}
 tracker_destination = """
 [orchestrator] Where to file it: {destination}
-The URL of what you filed MUST appear in your final report, and it must be the \
-item at that destination — not just an issue you opened on the way there.\
+Filing is complete only once the item exists at that destination, and the URL \
+of what you filed MUST appear in your final report.\
 """
 
 # Injected into EVERY hook-capable dispatch via `TOTSUKA_PROMPT_CONTEXT`

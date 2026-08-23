@@ -347,6 +347,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             ManifestKind::TaskSource => {
                 wire_source(name, &plugin, &tx).await;
                 self.plugins.sources.insert(name.to_string(), plugin);
+                // A restarted source re-answers `initialize`, so its claims can
+                // differ from the ones the startup warning was computed from
+                // (#542). Routing already follows the new answer — the registry
+                // is rebuilt per dispatch — so without this the conflict would
+                // take effect with nothing ever saying so.
+                self.warn_on_claim_conflicts();
             }
             ManifestKind::AgentIde => {
                 wire_agent(name, &plugin, &tx).await;

@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0c206b2c24f9c9a6cd768af70eca35410cc7cb0296bcdb5f85aad6e749ef223b -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0f829c8d13bcde98a73e99d31bc29f7da7a46831eaf32b7863a163cd9c18606b -->
 
 # 設定リファレンス
 
@@ -612,7 +612,7 @@ in_progress_statuses = ["In Progress"]
 
 必須・非空なのは 2 のためである。ボードは自分が将来どのリポジトリを持つかを知らないので、省略されたリストを対応表に変換する方法が無い。
 
-**1 つのリポジトリは 1 つのボードにしか書けない。** 同じリポジトリを 2 度書いた設定は `totsuka config validate` が弾く。「このリポジトリの起票先」に答えが 2 つあるのは、答えが無いのと同じだからである。GitHub ソースと Notion ソースの両方が同じリポジトリを担当している場合は、totsuka 自身が起動時と `totsuka doctor` で検出する。
+**1 つのリポジトリは 1 つのボードにしか書けない。** 同じリポジトリを 2 度書いた設定は `totsuka config validate` が弾く。「このリポジトリの起票先」に答えが 2 つあるのは、答えが無いのと同じだからである。ボードの同一性は `(owner, project_number)` で判定する — ProjectsV2 の番号は所有者ごとなので、番号だけで比べると `me/#7` と `acme/#7` が同じボードに見えて重複を見逃す。GitHub ソースと Notion ソースの両方が同じリポジトリを担当している場合は、totsuka 自身が起動時と `totsuka doctor` で検出する。
 
 ### `project_number` の誤りは起動時には出ない
 

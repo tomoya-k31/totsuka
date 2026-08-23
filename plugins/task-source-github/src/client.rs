@@ -324,9 +324,16 @@ impl<T: GithubTransport> GithubClient<T> {
 
         // Resolve the project id + status option once, then page the item list
         // until the issue's item is found (a busy board can hold >1 page).
+        //
+        // **A missing status option is not an error yet.** With several boards
+        // the search visits boards the item is not on, and those boards need
+        // not have the target column at all — erroring here would abort the
+        // whole search (the caller propagates with `?`) and fail a transition
+        // that would have succeeded on the next board. The error is raised
+        // below, once the item *is* found here, where it means what it says.
         let mut project_id = String::new();
         let mut field_id = String::new();
-        let mut option_id = String::new();
+        let mut option_id: Option<String> = None;
         let mut item_id: Option<String> = None;
         let mut cursor: Option<String> = None;
 
@@ -359,13 +366,7 @@ impl<T: GithubTransport> GithubClient<T> {
                     .flatten()
                     .find(|o| o["name"].as_str() == Some(target.as_str()))
                     .and_then(|o| o["id"].as_str())
-                    .ok_or_else(|| {
-                        GithubError::NotFound(format!(
-                            "unknown status `{target}` for field `{}` on project #{} → add the option in that project or fix status_map in plugins/github.toml",
-                            self.config.status_field, project_config.project_number
-                        ))
-                    })?
-                    .to_string();
+                    .map(str::to_string);
             }
 
             let items = &project["items"];
@@ -392,6 +393,14 @@ impl<T: GithubTransport> GithubClient<T> {
         let Some(item_id) = item_id else {
             return Ok(false); // not on this board — the caller tries the next
         };
+        // The item is here, so a missing option is this board's problem and
+        // the operator's to fix — searching on would hide it.
+        let option_id = option_id.ok_or_else(|| {
+            GithubError::NotFound(format!(
+                "unknown status `{target}` for field `{}` on project #{}, which is where issue `{task_id}` lives → add the option in that project or fix status_map in plugins/github.toml",
+                self.config.status_field, project_config.project_number
+            ))
+        })?;
 
         let mutation = json!({
             "query": UPDATE_STATUS_MUTATION,
@@ -484,7 +493,11 @@ pub fn static_config_errors(config: &GithubConfig) -> Vec<String> {
     // produces answers "where does an item for this repo go", and two answers
     // is the same as none. Reported here rather than left to the Orchestrator's
     // cross-plugin check, because within one config it is plainly a typo.
-    let mut seen: HashMap<&str, i64> = HashMap::new();
+    // Keyed by `(owner, project_number)`, not the number alone: ProjectsV2
+    // numbers are per-owner, so `tomoya-k31/#7` and `acme/#7` are different
+    // boards. Comparing numbers would call them the same and let a genuine
+    // duplicate through — with two claims for one repository as the result.
+    let mut seen: HashMap<&str, (&str, i64)> = HashMap::new();
     for project in &config.projects {
         if project.owner.is_empty() {
             errors.push(format!(
@@ -504,13 +517,14 @@ pub fn static_config_errors(config: &GithubConfig) -> Vec<String> {
                 project.project_number
             ));
         }
+        let board = (project.owner.as_str(), project.project_number);
         for repo in &project.repos {
-            if let Some(first) = seen.insert(repo.as_str(), project.project_number)
-                && first != project.project_number
+            if let Some(first) = seen.insert(repo.as_str(), board)
+                && first != board
             {
                 errors.push(format!(
-                    "repository `{repo}` is listed on both project #{first} and project #{} → a repository may be tracked by exactly one board",
-                    project.project_number
+                    "repository `{repo}` is listed on both project {}/#{} and project {}/#{} → a repository may be tracked by exactly one board",
+                    first.0, first.1, board.0, board.1
                 ));
             }
         }
@@ -763,6 +777,29 @@ mod tests {
         // `totsuka` appears once and must not be reported.
         assert!(
             !errors.iter().any(|e| e.contains("totsuka")),
+            "got {errors:?}"
+        );
+    }
+
+    /// Board identity is `(owner, number)`. ProjectsV2 numbers are per-owner,
+    /// so two owners can both have `#7` — comparing numbers alone would call
+    /// them one board and let a genuine duplicate through.
+    #[test]
+    fn two_owners_sharing_a_project_number_are_different_boards() {
+        let cfg: GithubConfig = serde_json::from_value(json!({
+            "token": "t", "github_login": "me",
+            "projects": [
+                { "owner": "me", "project_number": 7, "repos": ["shared"] },
+                { "owner": "acme", "owner_type": "organization",
+                  "project_number": 7, "repos": ["shared"] }
+            ]
+        }))
+        .unwrap();
+        let errors = static_config_errors(&cfg);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("shared") && e.contains("me/#7") && e.contains("acme/#7")),
             "got {errors:?}"
         );
     }

@@ -134,11 +134,17 @@ fn main() {
                 // 0.5.1 (#542): repositories this fake source is the tracker
                 // for, supplied verbatim by the test as
                 // `claimed_repos = [{ repo, destination }]`.
-                let claimed_repos = config
-                    .get("claimed_repos")
-                    .cloned()
-                    .and_then(|v| serde_json::from_value(v).ok())
-                    .unwrap_or_default();
+                // `expect`, not `.ok()`: a test that misspells a key here
+                // would otherwise initialize with zero claims and keep
+                // passing, having quietly stopped testing anything. The tests
+                // that assert "nothing extra was injected" depend on the
+                // registry being *non-empty*, so a silent empty is the exact
+                // shape that makes them vacuous.
+                let claimed_repos = match config.get("claimed_repos") {
+                    Some(v) => serde_json::from_value(v.clone())
+                        .expect("`claimed_repos` must be [{repo, destination}]"),
+                    None => Vec::new(),
+                };
                 Response::result(
                     request_id(&id),
                     serde_json::to_value(InitializeResult {

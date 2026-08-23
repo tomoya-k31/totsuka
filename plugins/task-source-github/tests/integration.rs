@@ -579,6 +579,92 @@ async fn update_status_scans_past_a_board_that_does_not_hold_the_item() {
     assert_eq!(vars["option"], "OPT_review3");
 }
 
+/// The board the item is **not** on need not have the target column at all.
+///
+/// The search visits boards the item is not on; if a missing status option
+/// aborted the search there, a transition that would have succeeded on the
+/// next board fails instead. Reachable on every restart, because the memo that
+/// would have gone straight to the right board is process-local.
+#[tokio::test]
+async fn a_board_without_the_target_column_does_not_abort_the_search() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        json!({ "protocol_version": "0.5.1", "config": two_board_config() }),
+    )
+    .await;
+
+    // Board #1: no `In Review` option **and** not holding the item.
+    shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
+        "id": "PROJ_1",
+        "field": { "id": "FIELD_1", "options": [{ "id": "OPT_todo", "name": "実装待ち" }] },
+        "items": { "nodes": [{ "id": "ITEM_9", "content": { "id": "I_9" } }] }
+    } } } })));
+    // Board #3 has both.
+    shared.push(Canned::Data(
+        json!({ "data": { "organization": { "projectV2": {
+        "id": "PROJ_3",
+        "field": { "id": "FIELD_3", "options": [{ "id": "OPT_review3", "name": "In Review" }] },
+        "items": { "nodes": [{ "id": "ITEM_20", "content": { "id": "I_20" } }] }
+    } } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "updateProjectV2ItemFieldValue": {
+        "projectV2Item": { "id": "ITEM_20" } } } }),
+    ));
+
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "I_20", "status": "レビュー待ち" }),
+    )
+    .await;
+    assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
+    assert_eq!(shared.last_request()["variables"]["option"], "OPT_review3");
+}
+
+/// A missing option on the board the item **is** on stays a hard error: that
+/// is the operator's config to fix, and searching on would hide it.
+#[tokio::test]
+async fn a_missing_option_on_the_items_own_board_is_an_error() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        json!({ "protocol_version": "0.5.1", "config": two_board_config() }),
+    )
+    .await;
+
+    // Board #1 holds the item but lacks the column.
+    shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
+        "id": "PROJ_1",
+        "field": { "id": "FIELD_1", "options": [{ "id": "OPT_todo", "name": "実装待ち" }] },
+        "items": { "nodes": [{ "id": "ITEM_1", "content": { "id": "I_1" } }] }
+    } } } })));
+
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "I_1", "status": "レビュー待ち" }),
+    )
+    .await;
+    let err = resp
+        .error
+        .expect("a missing option on the right board must error");
+    assert!(err.message.contains("unknown status"), "{}", err.message);
+    // Names the board, so the operator knows which project to fix.
+    assert!(err.message.contains("#1"), "{}", err.message);
+    // And it stopped there — no second board was queried, no write attempted.
+    assert_eq!(shared.all_requests().len(), 1);
+}
+
 /// An item on none of the boards is an error naming every board tried — not a
 /// silent no-op, and not a message naming only the first board.
 #[tokio::test]

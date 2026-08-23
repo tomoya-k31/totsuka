@@ -97,6 +97,8 @@ pub struct Prompts {
     /// Dispatch-time instruction to create the task's branch. Emitted only
     /// when the worktree is handed over detached.
     branch_convention: String,
+    /// Appended to a `triage` task's instructions, naming where the item goes
+    /// (#542). `{destination}` is the claiming plugin's own prose.
     tracker_destination: String,
     /// Judging criteria of the `prompt`-type Stop hook.
     verification_rubric: String,

@@ -1834,17 +1834,17 @@ on_failure = { set_status = "failed" }
 /// `profile = "triage"` rather than the `mode`/`verification` pair the other
 /// tests use: the injection is keyed on the profile, so a workflow spelled out
 /// longhand would not exercise it.
-fn triage_workflows() -> Vec<Workflow> {
-    let cfg = RootConfig::from_toml_str(
+fn profile_workflows(profile: &str) -> Vec<Workflow> {
+    let cfg = RootConfig::from_toml_str(&format!(
         r#"
 [[workflows]]
 name = "wf"
 source = "mock_src"
-trigger = {}
-profile = "triage"
+trigger = {{}}
+profile = "{profile}"
 agent = "mock_agent"
-"#,
-    )
+"#
+    ))
     .unwrap();
     Workflow::from_configs(&cfg.workflows)
 }
@@ -1914,7 +1914,7 @@ async fn a_triage_dispatch_is_told_where_to_file() {
     )
     .await;
     let mut settings = resume_settings(&repo, &base);
-    settings.workflows = triage_workflows();
+    settings.workflows = profile_workflows("triage");
     let mut engine = Engine::new(
         StateDb::open(&base.join("state.db")).unwrap(),
         settings,
@@ -1969,7 +1969,7 @@ async fn a_triage_dispatch_for_an_unclaimed_repository_says_nothing_extra() {
     )
     .await;
     let mut settings = resume_settings(&repo, &base);
-    settings.workflows = triage_workflows();
+    settings.workflows = profile_workflows("triage");
     let mut engine = Engine::new(
         StateDb::open(&base.join("state.db")).unwrap(),
         settings,
@@ -1984,9 +1984,12 @@ async fn a_triage_dispatch_for_an_unclaimed_repository_says_nothing_extra() {
     engine.shutdown(GRACE).await;
 
     let params = last_dispatch_params(&dispatch_log);
+    // `expect`, not `unwrap_or_default`: an absent env would make the
+    // assertion below vacuously true, so the test would keep passing if the
+    // hook path stopped running at all.
     let context = params["tool_launch"]["env"]["TOTSUKA_PROMPT_CONTEXT"]
         .as_str()
-        .unwrap_or_default();
+        .expect("the hook path injects invisibly");
     assert!(
         !context.contains(CLAIM_DESTINATION) && !context.contains("Where to file it"),
         "an unclaimed repository must add nothing: {context}"
@@ -1994,11 +1997,16 @@ async fn a_triage_dispatch_for_an_unclaimed_repository_says_nothing_extra() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// #542: a non-`triage` profile is not told about the board even when the
+/// #542: `profile = "implement"` is not told about the board even when the
 /// repository is claimed.
 ///
 /// `implement` works inside the repository it was given; a board it has no
 /// business touching is noise it might act on.
+///
+/// The workflow spells out `profile = "implement"` rather than reusing the
+/// `mode = "implement"` helper the other tests share: that helper sets no
+/// `profile` at all, so the dispatch resolves to `None` and the test would
+/// prove "a profile-less workflow adds nothing" while claiming to prove this.
 #[tokio::test]
 async fn an_implement_dispatch_is_not_told_about_the_board() {
     let base = scratch("triage_implement");
@@ -2013,8 +2021,8 @@ async fn an_implement_dispatch_is_not_told_about_the_board() {
         json!([{ "repo": "clone", "destination": CLAIM_DESTINATION }]),
     )
     .await;
-    // `resume_settings`'s own workflows are `mode = "implement"`.
-    let settings = resume_settings(&repo, &base);
+    let mut settings = resume_settings(&repo, &base);
+    settings.workflows = profile_workflows("implement");
     let mut engine = Engine::new(
         StateDb::open(&base.join("state.db")).unwrap(),
         settings,
@@ -2029,9 +2037,11 @@ async fn an_implement_dispatch_is_not_told_about_the_board() {
     engine.shutdown(GRACE).await;
 
     let params = last_dispatch_params(&dispatch_log);
+    // Same reason as above: prove the channel exists before proving what is
+    // *not* on it.
     let context = params["tool_launch"]["env"]["TOTSUKA_PROMPT_CONTEXT"]
         .as_str()
-        .unwrap_or_default();
+        .expect("the hook path injects invisibly");
     assert!(
         !context.contains(CLAIM_DESTINATION),
         "an implement dispatch must not be told about the board: {context}"

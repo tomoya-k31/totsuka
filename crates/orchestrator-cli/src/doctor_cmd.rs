@@ -1540,6 +1540,12 @@ fn check_plugins(
         return;
     }
     let mut specs = Vec::new();
+    // Plugins that never reach `validate_all`, and why. `validated.len()` only
+    // counts what got into `specs`, so the tracker check below cannot tell
+    // "nothing was skipped" from "everything was skipped" without this — and
+    // being skipped is the *normal* state for a `cmd:` token, not an edge case
+    // (#542 review).
+    let mut not_probed: Vec<(String, &'static str)> = Vec::new();
     for name in enabled {
         // `plugin_spec` resolves secrets, so a plugin that needs 1Password
         // cannot be probed while `op read` would prompt (#289). Decided per
@@ -1551,6 +1557,7 @@ fn check_plugins(
                 op.skip_reason(),
                 "run `op signin`, then re-run `totsuka doctor` to probe this plugin",
             ));
+            not_probed.push((name.clone(), "its op:// reference would prompt"));
             continue;
         }
         // A `cmd:` reference has no session to measure: doctor cannot know
@@ -1564,6 +1571,10 @@ fn check_plugins(
                 "the command runs when `totsuka run` resolves the config; \
                  test it by hand if unsure",
             ));
+            not_probed.push((
+                name.clone(),
+                "resolving its cmd: reference would run a command",
+            ));
             continue;
         }
         match plugin_spec(&cx.store(), &cx.plugin_config_dir(), cfg, name, env) {
@@ -1576,14 +1587,20 @@ fn check_plugins(
             }
             // Failure may be "not installed" or a plugins/{name}.toml
             // parse/secret-resolution error — point at both.
-            Err(e) => checks.push(Check::fail(
-                &format!("plugin:{name}"),
-                e.to_string(),
-                "install it (`totsuka plugin install <dir>`) or fix plugins/{name}.toml if it is already installed",
-            )),
+            Err(e) => {
+                checks.push(Check::fail(
+                    &format!("plugin:{name}"),
+                    e.to_string(),
+                    "install it (`totsuka plugin install <dir>`) or fix plugins/{name}.toml if it is already installed",
+                ));
+                not_probed.push((name.clone(), "its launch spec could not be built"));
+            }
         }
     }
     if specs.is_empty() {
+        // Still report the tracker check: with nothing probed it can only say
+        // "cannot tell", and saying nothing at all reads as "no conflicts".
+        check_tracker_claims(&[], &not_probed, checks);
         return;
     }
     // Live probe: launch, initialize, config/validate, shutdown (F-59).
@@ -1616,20 +1633,30 @@ fn check_plugins(
             )),
         }
     }
-    check_tracker_claims(&validated, checks);
+    check_tracker_claims(&validated, &not_probed, checks);
 }
 
 /// Repositories claimed as a tracker target by more than one source (#542).
 ///
 /// **The only place this is visible.** Each plugin's own `config/validate`
-/// checks its own list, so both configs are individually valid and the
-/// conflict exists only in the union — which nothing but the Orchestrator
-/// ever assembles.
+/// checks its own list, so the configs are individually valid and the conflict
+/// exists only in the union — which nothing but the Orchestrator assembles.
 ///
 /// Reads the claims [`validate_all`](plugin_host::validate_all) already
-/// gathered, so it inherits the launch gating (`op://` prompts, `cmd:`
-/// execution) exactly rather than restating it.
-fn check_tracker_claims(validated: &[plugin_host::ValidatedPlugin], checks: &mut Vec<Check>) {
+/// gathered, so it inherits the launch gating exactly rather than restating it.
+/// `not_probed` carries what that gating *excluded*, which the claims alone
+/// cannot express: a plugin that was never launched reports no claims, and so
+/// does a plugin that genuinely claims nothing.
+///
+/// **A conflict is always reported, even when the picture is incomplete.** Only
+/// the all-clear verdict degrades to a skip: "these two claim the same
+/// repository" stays true whatever the un-probed plugins would have said, while
+/// "every repository routes to exactly one tracker" does not.
+fn check_tracker_claims(
+    validated: &[plugin_host::ValidatedPlugin],
+    not_probed: &[(String, &'static str)],
+    checks: &mut Vec<Check>,
+) {
     // A plugin that failed to launch reports no claims, which is not the same
     // as claiming nothing: including it would let a crashed github plugin
     // "resolve" a conflict by disappearing.
@@ -1640,37 +1667,59 @@ fn check_tracker_claims(validated: &[plugin_host::ValidatedPlugin], checks: &mut
             .iter()
             .map(|v| (v.name.as_str(), v.claimed_repos.as_slice())),
     );
-    if registry.is_empty() {
-        // Not a failure and not worth a line: no source claims anything, which
-        // is every config that has not set a tracker up.
+
+    // Conflicts first and unconditionally: what was seen is seen.
+    let conflicts = registry.conflicts();
+    for conflict in conflicts {
+        checks.push(Check::fail(
+            "trackers",
+            conflict.to_string(),
+            "remove the repository from all but one plugin's `repos`",
+        ));
+    }
+
+    // Everything the union is missing, in one list. `not_probed` is the common
+    // case in real configs — a `cmd:` token (ADR-0044) means doctor never
+    // launches that plugin — so treating it as an edge case would report an
+    // all-clear from a single source's claims.
+    let mut unseen: Vec<String> = not_probed
+        .iter()
+        .map(|(name, why)| format!("`{name}` ({why})"))
+        .collect();
+    unseen.extend(
+        validated
+            .iter()
+            .filter(|v| v.result.is_err())
+            .map(|v| format!("`{}` (it did not launch)", v.name)),
+    );
+
+    if !conflicts.is_empty() {
+        // The failures above already say what is wrong; a skip line on top
+        // would only muddy them.
         return;
     }
-    if launched.len() < validated.len() {
+    if !unseen.is_empty() {
         checks.push(Check::skip(
             "trackers",
-            "some plugins did not launch, so their claims are unknown",
-            "fix the plugin failures above, then re-run to check for conflicting trackers",
+            format!("cannot tell: {} was not probed", unseen.join(", ")),
+            "doctor stays non-interactive, so a plugin whose secrets need a prompt or a \
+             command is never launched — check those configs by hand, or run `totsuka run` \
+             which resolves them and warns about conflicts at startup",
         ));
         return;
     }
-    match registry.conflicts() {
-        [] => checks.push(Check::ok(
-            "trackers",
-            format!(
-                "{} repositories route to exactly one tracker",
-                registry.len()
-            ),
-        )),
-        conflicts => {
-            for conflict in conflicts {
-                checks.push(Check::fail(
-                    "trackers",
-                    conflict.to_string(),
-                    "remove the repository from all but one plugin's `repos`",
-                ));
-            }
-        }
+    if registry.is_empty() {
+        // Every source was probed and none claims anything: the normal state
+        // for a config with no tracker set up. Not worth a line.
+        return;
     }
+    checks.push(Check::ok(
+        "trackers",
+        format!(
+            "{} repositories route to exactly one tracker",
+            registry.len()
+        ),
+    ));
 }
 
 /// The LLM API key reference must resolve (no network call). With `online`,
@@ -2204,6 +2253,142 @@ mod tests {
     use orchestrator_core::adapters::TaskRecord;
     use orchestrator_core::domain::state::TaskState;
     use plugin_protocol::methods::SessionInfo;
+
+    // --- `trackers` (#542) -------------------------------------------------
+
+    fn validated(name: &str, claims: &[(&str, &str)]) -> plugin_host::ValidatedPlugin {
+        plugin_host::ValidatedPlugin {
+            name: name.to_string(),
+            result: Ok(plugin_protocol::methods::ConfigValidateResult {
+                valid: true,
+                errors: Vec::new(),
+            }),
+            claimed_repos: claims
+                .iter()
+                .map(
+                    |(repo, destination)| plugin_protocol::methods::ClaimedRepo {
+                        repo: (*repo).to_string(),
+                        destination: (*destination).to_string(),
+                    },
+                )
+                .collect(),
+        }
+    }
+
+    fn tracker_checks(
+        validated: &[plugin_host::ValidatedPlugin],
+        not_probed: &[(String, &'static str)],
+    ) -> Vec<Check> {
+        let mut checks = Vec::new();
+        check_tracker_claims(validated, not_probed, &mut checks);
+        checks
+    }
+
+    #[test]
+    fn trackers_pass_when_every_source_was_probed_and_none_conflict() {
+        let checks = tracker_checks(
+            &[
+                validated("github", &[("totsuka", "Project #7")]),
+                validated("notion", &[("web-app", "Database DB2")]),
+            ],
+            &[],
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].ok && !checks[0].skipped, "{:?}", checks[0]);
+        assert!(checks[0].detail.contains('2'), "{:?}", checks[0]);
+    }
+
+    /// The failure this check exists for: two sources, one repository.
+    #[test]
+    fn trackers_fail_when_two_sources_claim_one_repository() {
+        let checks = tracker_checks(
+            &[
+                validated("github", &[("shared", "Project #7")]),
+                validated("notion", &[("shared", "Database DB1")]),
+            ],
+            &[],
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(!checks[0].ok, "{:?}", checks[0]);
+        assert!(checks[0].detail.contains("shared"), "{:?}", checks[0]);
+    }
+
+    /// A plugin doctor never launched must not read as "claims nothing".
+    ///
+    /// This is the **common** case, not an edge one: a `cmd:` token (ADR-0044)
+    /// means doctor skips that plugin on every run, so an all-clear here would
+    /// be assembled from whatever single source happened to be probeable.
+    #[test]
+    fn trackers_cannot_conclude_while_a_plugin_was_never_probed() {
+        let checks = tracker_checks(
+            &[validated("notion", &[("web-app", "Database DB2")])],
+            &[(
+                "github".to_string(),
+                "resolving its cmd: reference would run a command",
+            )],
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].skipped, "{:?}", checks[0]);
+        assert!(checks[0].detail.contains("github"), "{:?}", checks[0]);
+        assert!(checks[0].detail.contains("cmd:"), "{:?}", checks[0]);
+    }
+
+    /// A conflict that *was* seen is still reported when the picture is
+    /// incomplete: it stays true whatever the un-probed plugin would have said.
+    #[test]
+    fn a_visible_conflict_is_reported_even_with_a_plugin_unprobed() {
+        let checks = tracker_checks(
+            &[
+                validated("github", &[("shared", "Project #7")]),
+                validated("notion", &[("shared", "Database DB1")]),
+            ],
+            &[("slack".to_string(), "its op:// reference would prompt")],
+        );
+        assert!(
+            checks.iter().any(|c| !c.ok && c.detail.contains("shared")),
+            "{checks:?}"
+        );
+        assert!(
+            !checks.iter().any(|c| c.skipped),
+            "a seen conflict must not degrade to a skip: {checks:?}"
+        );
+    }
+
+    /// A plugin that launched and failed validation is "unknown", like one that
+    /// was never probed — it answered `initialize` but its config is wrong, so
+    /// its claim list is not something to conclude from.
+    #[test]
+    fn a_plugin_that_failed_to_launch_blocks_the_all_clear() {
+        let mut failed = validated("github", &[]);
+        failed.result = Err(plugin_host::HostError::Spawn {
+            name: "github".to_string(),
+            source: std::io::Error::other("boom"),
+        });
+        let checks = tracker_checks(&[validated("notion", &[("web-app", "DB2")]), failed], &[]);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].skipped, "{:?}", checks[0]);
+        assert!(checks[0].detail.contains("github"), "{:?}", checks[0]);
+    }
+
+    /// Nothing probed at all (every plugin skipped) must not read as an
+    /// all-clear either — the path `check_plugins` takes when `specs` is empty.
+    #[test]
+    fn trackers_say_nothing_conclusive_when_nothing_was_probed() {
+        let checks = tracker_checks(
+            &[],
+            &[("github".to_string(), "its op:// reference would prompt")],
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].skipped, "{:?}", checks[0]);
+    }
+
+    /// Every source probed, none claims anything: a config with no tracker set
+    /// up. Silent — a line saying "0 repositories route" is noise.
+    #[test]
+    fn trackers_are_silent_when_no_source_claims_anything() {
+        let checks = tracker_checks(&[validated("slack", &[])], &[]);
+        assert!(checks.is_empty(), "{checks:?}");
+    }
 
     fn worktree_location_checks(toml: &str, env: &[(&str, &str)]) -> Vec<Check> {
         let cfg = RootConfig::from_toml_str(toml).unwrap();

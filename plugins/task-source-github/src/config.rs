@@ -249,9 +249,14 @@ impl GithubConfig {
     /// The repositories this plugin is the tracker for, and where an item for
     /// each goes (`InitializeResult.claimed_repos`, protocol 0.5.1, #542).
     ///
-    /// One entry per (board, repo) pair, in config order. A repository listed
-    /// on two boards would appear twice — `static_config_errors` rejects that
-    /// config, so it cannot reach here from a config the plugin accepted.
+    /// One entry per (board, repo) pair, in config order.
+    ///
+    /// A repository listed on two boards appears **twice**, and this does not
+    /// deduplicate. `static_config_errors` rejects such a config, but only
+    /// `config/validate` calls it — `initialize` does not, so a config the
+    /// operator never validated reaches here intact. The Orchestrator's own
+    /// cross-source check is what sees the duplicate either way, and it keeps
+    /// the first claim; dropping one here would hide the conflict from it.
     pub fn claimed_repos(&self) -> Vec<ClaimedRepo> {
         self.projects
             .iter()
@@ -354,6 +359,24 @@ mod tests {
         }));
         assert_eq!(cfg.map_status("レビュー待ち"), "In Review");
         assert_eq!(cfg.map_status("実装待ち"), "実装待ち");
+    }
+
+    /// The destination lands in an agent's prompt, so it must read as prose:
+    /// no run of spaces from a line continuation written without its
+    /// backslash, and no newline. Checked on the rendered value, which is what
+    /// the agent actually sees — reading the literal is how the notion plugin's
+    /// copy of this string shipped with a 14-space gap in it.
+    #[test]
+    fn the_destination_reads_as_one_paragraph() {
+        let cfg = parse(serde_json::json!({
+            "token": "t", "github_login": "me",
+            "projects": [{ "owner": "me", "project_number": 7, "repos": ["totsuka"] }]
+        }));
+        let destination = &cfg.claimed_repos()[0].destination;
+        assert!(
+            !destination.contains("  ") && !destination.contains('\n'),
+            "{destination:?}"
+        );
     }
 
     #[test]
