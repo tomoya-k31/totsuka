@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 
 use common::{
     Canned, FakeFactory, LookupHarness, Recorded, Shared, SubmitHarness, accept_with_hello,
-    block_actions_envelope, call, mention_envelope, scratch_state_dir, send_and_await_ack,
-    wait_until, ws_listener,
+    block_actions_envelope, call, call_expecting_error, mention_envelope, scratch_state_dir,
+    send_and_await_ack, wait_until, ws_listener,
 };
 use task_source_slack::server::Server;
 
@@ -224,6 +224,149 @@ fn draft_buttons(shared: &Shared) -> (String, Value, Value) {
         .clone();
     let draft_id = approve["value"].as_str().unwrap().to_string();
     (draft_id, approve, reject)
+}
+
+// ---------------------------------------------------------------------------
+// delivery = direct (#548, ADR-0057)
+// ---------------------------------------------------------------------------
+
+/// Drive initialize → mention → submit, WITHOUT publishing yet — the direct
+/// tests publish with their own `delivery` value.
+async fn mention_flow(
+    shared: &Shared,
+    listener: &tokio::net::TcpListener,
+) -> (
+    Server<FakeFactory>,
+    SubmitHarness,
+    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+) {
+    let (mut srv, mut harness) = server(shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+    let mut ws = accept_with_hello(listener).await;
+    send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.0");
+    (srv, harness, ws)
+}
+
+/// `delivery = "direct"`: the reply is posted into the thread immediately —
+/// under the operator's name, `<@asker>`-prefixed like an approved draft —
+/// and **no draft surface is created** (no ephemeral, no buttons).
+#[tokio::test]
+async fn direct_delivery_posts_immediately_without_a_draft() {
+    let (listener, ws_url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &ws_url);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "100.9" })),
+    );
+    let (mut srv, _harness, _ws) = mention_flow(&shared, &listener).await;
+
+    let result = call(
+        &mut srv,
+        3,
+        "result/publish",
+        json!({
+            "task_id": "C1:100.0", "content": PUBLISHED_CONTENT,
+            "format": "markdown", "delivery": "direct"
+        }),
+    )
+    .await;
+    assert_eq!(result, Value::Null);
+
+    let posts = requests_for(&shared, "chat.postMessage");
+    assert_eq!(posts.len(), 1, "exactly the reply, no DM record");
+    let body = posts[0].body.as_ref().unwrap();
+    assert_eq!(body["text"].as_str().unwrap(), expected_posted_reply());
+    assert_eq!(body["thread_ts"], "100.0");
+    assert!(
+        requests_for(&shared, "chat.postEphemeral").is_empty(),
+        "direct must not present a draft"
+    );
+
+    // The coordinates were consumed by the successful post: a second publish
+    // for the same conversation has nowhere to go.
+    let again = call_expecting_error(
+        &mut srv,
+        4,
+        "result/publish",
+        json!({
+            "task_id": "C1:100.0", "content": PUBLISHED_CONTENT,
+            "format": "markdown", "delivery": "direct"
+        }),
+    )
+    .await;
+    assert!(again.contains("no pending"), "{again}");
+}
+
+/// A failed direct post keeps the coordinates, so the publish can be retried
+/// — there is no persisted draft to fall back on, which is exactly why they
+/// must not be consumed first (#548).
+#[tokio::test]
+async fn a_failed_direct_post_keeps_the_coordinates_for_a_retry() {
+    let (listener, ws_url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &ws_url);
+    shared.push_for("chat.postMessage", Canned::Network);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "100.9" })),
+    );
+    let (mut srv, _harness, _ws) = mention_flow(&shared, &listener).await;
+
+    let publish = json!({
+        "task_id": "C1:100.0", "content": PUBLISHED_CONTENT,
+        "format": "markdown", "delivery": "direct"
+    });
+    let failed = call_expecting_error(&mut srv, 3, "result/publish", publish.clone()).await;
+    assert!(failed.contains("could not be posted"), "{failed}");
+
+    // Same request again — the network is back. Consuming the coordinates on
+    // the failed attempt would make this one fail with "no pending" instead.
+    let retried = call(&mut srv, 4, "result/publish", publish).await;
+    assert_eq!(retried, Value::Null);
+    assert_eq!(
+        requests_for(&shared, "chat.postMessage")[1]
+            .body
+            .as_ref()
+            .unwrap()["text"]
+            .as_str()
+            .unwrap(),
+        expected_posted_reply()
+    );
+}
+
+/// A delivery value this build does not know must take the DRAFT path: the
+/// modes differ in whether a human gate is skipped, and skipping it on an
+/// unreadable instruction is the wrong side to err on (protocol 0.5.2).
+#[tokio::test]
+async fn an_unrecognised_delivery_still_presents_a_draft() {
+    let (listener, ws_url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &ws_url);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "9.2" })),
+    );
+    let (mut srv, _harness, _ws) = mention_flow(&shared, &listener).await;
+
+    let result = call(
+        &mut srv,
+        3,
+        "result/publish",
+        json!({
+            "task_id": "C1:100.0", "content": PUBLISHED_CONTENT,
+            "format": "markdown", "delivery": "hologram"
+        }),
+    )
+    .await;
+    assert_eq!(result, Value::Null);
+    assert_eq!(
+        requests_for(&shared, "chat.postEphemeral").len(),
+        1,
+        "the approval gate must still be presented"
+    );
 }
 
 #[tokio::test]

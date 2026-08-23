@@ -446,12 +446,22 @@ where
         Reply::respond(Response::result(id, Value::Null))
     }
 
-    /// `result/publish`: the agent's reply draft arrives here. It becomes a
-    /// stored [`Draft`](crate::draft::Draft) presented as an in-thread
-    /// ephemeral + a self-DM record, both carrying approve/reject buttons
-    /// (#107). Fails only when no draft can be made at all (unknown task
-    /// after a restart, empty content); presentation failures are logged and
-    /// tolerated.
+    /// `result/publish`: the agent's reply arrives here. By default — and for
+    /// every Orchestrator that predates protocol 0.5.2 — it becomes a stored
+    /// [`Draft`](crate::draft::Draft) presented as an in-thread ephemeral + a
+    /// self-DM record, both carrying approve/reject buttons (#107). With
+    /// `delivery = "direct"` (#548) it is posted into the thread immediately
+    /// instead, still under the operator's name.
+    ///
+    /// The branch is [`ResultPublishParams::effective_delivery`], not a match
+    /// on the raw field: absent and unrecognised values both resolve to the
+    /// draft flow there, so this plugin never has to know which of the two it
+    /// was — skipping the approval gate on an instruction it cannot read is
+    /// the wrong side to err on.
+    ///
+    /// Fails only when nothing can be presented at all (unknown task after a
+    /// restart, empty content, a direct post the API refused); draft
+    /// presentation failures are logged and tolerated.
     async fn result_publish(&mut self, id: RequestId, params: Value) -> Reply {
         let Some(session) = self.session.as_ref() else {
             return not_initialized(id);
@@ -460,15 +470,32 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        match crate::approval::publish_draft(
-            session.api.as_ref(),
-            &session.config,
-            &session.state,
-            &parsed.task_id,
-            &parsed.content,
-        )
-        .await
-        {
+        let result = match parsed.effective_delivery() {
+            plugin_protocol::methods::PublishDelivery::Direct => {
+                crate::approval::publish_direct(
+                    session.api.as_ref(),
+                    &session.state,
+                    &parsed.task_id,
+                    &parsed.content,
+                )
+                .await
+            }
+            // Spelled out rather than `_`: a future delivery mode added to
+            // the protocol should fail compilation here, not silently take
+            // the draft path.
+            plugin_protocol::methods::PublishDelivery::Draft
+            | plugin_protocol::methods::PublishDelivery::Unrecognized => {
+                crate::approval::publish_draft(
+                    session.api.as_ref(),
+                    &session.config,
+                    &session.state,
+                    &parsed.task_id,
+                    &parsed.content,
+                )
+                .await
+            }
+        };
+        match result {
             Ok(()) => Reply::respond(Response::result(id, Value::Null)),
             Err(message) => Reply::respond(Response::error(
                 id,

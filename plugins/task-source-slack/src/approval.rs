@@ -38,6 +38,56 @@ const MARKDOWN_BLOCK_LIMIT: usize = 12_000;
 
 /// `result/publish`: build a draft from the agent's `content`, store it, and
 /// present it (thread ephemeral + self-DM record). `Err` is reserved for
+/// `result/publish` with `delivery = direct` (#548, ADR-0057): post the reply
+/// into the thread immediately, no draft and no buttons.
+///
+/// Still the operator's own name (the user token) — what changed is only the
+/// gate, and only because the Orchestrator said so for this workflow. The
+/// mechanical `<@sender>` mention prefix is kept so the asker is notified,
+/// exactly as an approved draft would have.
+///
+/// **The pending coordinates are consumed only after the post succeeds.**
+/// `publish_draft` below consumes them first and gets away with it because the
+/// draft it creates is persisted (`drafts.json`) and can still be sent after a
+/// crash; a direct post has no such residue, so consuming first would strand
+/// the reply with no way to retry — the coordinates are gone even across a
+/// plugin restart. On failure the entry stays put and the error goes back to
+/// the Orchestrator, whose publish-failure path keeps the task's worktree.
+pub async fn publish_direct<T: SlackTransport>(
+    api: &SlackApi<T>,
+    state: &SharedState,
+    task_id: &str,
+    content: &str,
+) -> Result<(), String> {
+    let text = extract_reply(content);
+    if text.is_empty() {
+        return Err(format!(
+            "task {task_id} published an empty result → nothing to post as a reply"
+        ));
+    }
+    // Peek, do not take: see above.
+    let Some(pending) = state.pending(task_id) else {
+        return Err(format!(
+            "task {task_id} has no pending Slack coordinates (plugin restarted since the \
+             mention?) → the reply cannot be placed; re-trigger from a fresh mention"
+        ));
+    };
+    let text = format!("<@{}> {text}", pending.sender_id);
+    api.chat_post_message(&PostMessage {
+        channel: &pending.channel,
+        text: &text,
+        thread_ts: Some(&pending.reply_ts),
+        unfurl_links: None,
+        blocks: None,
+    })
+    .await
+    .map_err(|e| format!("direct reply could not be posted: {e}"))?;
+    // Success is the terminal step: only now is the conversation's pending
+    // entry spent.
+    state.take_pending(task_id);
+    Ok(())
+}
+
 /// requests that cannot become a draft at all (unknown task, empty reply);
 /// presentation failures are logged, not returned.
 pub async fn publish_draft<T: SlackTransport>(
