@@ -180,7 +180,21 @@ use semver::{Version, VersionReq};
 /// declaration-ahead-of-implementation is still possible — it goes in the
 /// script's `DECLARATION_EXEMPT` list with a reason, which is what makes
 /// "deliberate" distinguishable from "forgotten".
-pub const PROTOCOL_VERSION: &str = "0.5.0";
+///
+/// 0.5.1: [`InitializeResult::claimed_repos`](crate::methods::InitializeResult::claimed_repos)
+/// (#542) — the repositories a task_source is the tracker for, and where an
+/// item for each goes. This is the *forward* mapping repository → tracker; the
+/// protocol only ever carried the reverse one (a task's `repo_hint`), so a
+/// Slack-borne request could be routed to a repository but not to the board
+/// that repository files into. Additive and optional under the same contract
+/// as `repo_name` in 0.4.1: absent means the plugin predates this version and
+/// claims nothing, which is never the same statement as "this repository has
+/// no tracker". `<0.6` manifests keep matching.
+///
+/// **Patch, not minor**, for the reason spelled out at 0.4.1: a minor strands
+/// every `<0.5`-bounded manifest, and nothing here requires a plugin to
+/// change. The bundled manifests keep `<0.6` untouched.
+pub const PROTOCOL_VERSION: &str = "0.5.1";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -204,7 +218,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 5, 0));
+        assert_eq!(protocol_version(), Version::new(0, 5, 1));
     }
 
     #[test]

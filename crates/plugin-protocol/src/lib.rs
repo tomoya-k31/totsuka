@@ -79,6 +79,9 @@
 //! let result = InitializeResult {
 //!     plugin_version: semver::Version::new(1, 2, 0),
 //!     capabilities: Default::default(),
+//!     // A task_source lists the repositories it is the tracker for here
+//!     // (#542); every other kind leaves it empty.
+//!     claimed_repos: Vec::new(),
 //! };
 //! let response = Response::result(parsed.id, serde_json::to_value(&result)?);
 //! assert!(!response.is_error());

@@ -135,6 +135,7 @@ fn main() {
                     request_id(&id),
                     serde_json::to_value(InitializeResult {
                         plugin_version: semver::Version::new(0, 1, 0),
+                        claimed_repos: Vec::new(),
                         capabilities: Capabilities {
                             state_stream,
                             pane_control: flag("pane_control"),

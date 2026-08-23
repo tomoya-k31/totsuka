@@ -262,6 +262,7 @@ where
 fn capabilities_result() -> Value {
     let result = InitializeResult {
         plugin_version: plugin_version(),
+        claimed_repos: Vec::new(),
         // No `outputs`: the deliverable is the agent's to write with Notion
         // MCP (#398). Declaring `source` would let a workflow ask this plugin
         // to publish, which it no longer can.

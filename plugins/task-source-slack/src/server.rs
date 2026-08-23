@@ -615,6 +615,7 @@ fn scope_warnings(
 fn capabilities_result() -> Value {
     let result = InitializeResult {
         plugin_version: plugin_version(),
+        claimed_repos: Vec::new(),
         capabilities: Capabilities {
             outputs: vec![OutputCapability::Source],
             ..Capabilities::default()

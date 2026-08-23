@@ -251,6 +251,7 @@ fn event_label(event: NotifierEvent) -> (&'static str, &'static str) {
 fn capabilities_result() -> Value {
     serde_json::to_value(InitializeResult {
         plugin_version: plugin_version(),
+        claimed_repos: Vec::new(),
         capabilities: Capabilities::default(),
     })
     .unwrap_or(Value::Null)
