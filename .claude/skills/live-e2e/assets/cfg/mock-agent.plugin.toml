@@ -4,8 +4,18 @@
 name = "mock_agent"
 kind = "agent_ide"
 version = "0.1.0"
-protocol_version = ">=0.1.6, <0.5"
+# 上限は同梱 6 プラグインと同じ `<0.6`。0.4.0 / 0.5.0 の削除はどちらも
+# agent_ide の使う面に触れていないので、同じ理由がそのまま使える。
+# **この manifest は `plugins/` の外にあるため、プロトコルをバンプするたびに
+# 数え落とされる**（#526: `<0.5` のまま取り残され、有効化した瞬間に F-54 で
+# 起動拒否される状態だった）。plugin-protocol の
+# `tests/bundled_manifests.rs` がこのファイルも走査対象に含めている。
+protocol_version = ">=0.1.6, <0.6"
 
 [capabilities]
 state_stream = true
-outputs = ["source"]
+# `outputs` は宣言しない。manifest の `outputs` を読むのは workflow 検証の
+# `source_outputs(&wf.source)` だけで、`wf.source` は `check_plugin_ref` が
+# `kind = task_source` に限定している。`kind = agent_ide` のこの manifest では
+# 何も読まないので、書いても「誰も読まない宣言」にしかならない（ADR-0052）。
+# herdr / orca も宣言していない。

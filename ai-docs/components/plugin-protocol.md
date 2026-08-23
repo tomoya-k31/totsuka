@@ -4,7 +4,7 @@ title: plugin-protocol クレート
 description: プラグイン開発者向けに公開する型定義クレート。JSON-RPC 2.0（NDJSON）エンベロープ・plugin.toml マニフェスト・capabilities・§11 メソッド型・Task 共通スキーマ・プロトコルバージョニングを提供する、プラグイン境界の単一の正。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [rust, crate, plugin, protocol, json-rpc]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -47,7 +47,7 @@ null-ack（`shutdown` / `task/update_status` 等の `"result": null`）は write
 wire 形状に影響する変更は必ず fixture の差分として PR に現れる（現れない wire 変更はテストが fail する）。fixture 差分を含む PR では次を判定する:
 
 - **追加的変更**（新フィールドは `#[serde(default, skip_serializing_if = …)]` の Option/Vec、新メソッドは既存 capability にゲート、enum variant 追加）→ `PROTOCOL_VERSION` の**パッチ**を上げる（0.x 系の慣行、上記バージョニング節）。`version.rs` の doc comment・本ドキュメント・対応する fixture を同一 PR で更新し、enum variant 追加は `enum_wire_values_are_pinned` にも追加する。
-- **破壊的変更**（フィールド / メソッド / variant の rename・削除、optional の必須化、既存 wire の形が変わる serde 属性変更）→ `PROTOCOL_VERSION` の**マイナー**を上げる（0.2 → 0.3。caret 意味論により範囲外 manifest は F-54 で起動拒否）。0.1.6 → 0.2.0（`tasks/fetch` 削除）の前例に従い、可能なら deprecated 併送の猶予窓を挟み、削除予定を `version.rs` と本ドキュメントに明記する。同梱プラグイン manifest の `protocol_version` 上限も同一 PR で見直す。
+- **破壊的変更**（フィールド / メソッド / variant の rename・削除、optional の必須化、既存 wire の形が変わる serde 属性変更）→ `PROTOCOL_VERSION` の**マイナー**を上げる（0.2 → 0.3。caret 意味論により範囲外 manifest は F-54 で起動拒否）。0.1.6 → 0.2.0（`tasks/fetch` 削除）の前例に従い、可能なら deprecated 併送の猶予窓を挟み、削除予定を `version.rs` と本ドキュメントに明記する。同梱 manifest の `protocol_version` 上限も同一 PR で見直す — ただし**これは手で数えるな**。同梱 manifest は `plugins/` の 6 本ではなく **7 本**で、7 本目は `.claude/skills/live-e2e/assets/cfg/mock-agent.plugin.toml` にある。この義務は 0.4.0 でも 0.5.0 でも `plugins/` の 6 本にだけ適用され、7 本目は `<0.5` のまま取り残された（#526）。`enabled = false` なので実害は出ず、**mock で経路を通そうとした瞬間にだけ** F-54 で拒否される — 実エージェントで検証している限り気づけない壊れ方である。現在は plugin-protocol の `tests/bundled_manifests.rs` が、リポジトリ全体を走査して見つけた `plugin.toml` / `*.plugin.toml` を**本物の `Manifest` デシリアライザ**で読み、`is_compatible_with_current`（= F-54 の起動ゲートと同じ述語）で検査する。awk での再実装を避けて `scripts/arch-lint.sh` ではなくテストに置いたのは、semver の範囲判定を書き直せば「いま使われている 2 つの形では一致するが `^` / `~` / `*` / pre-release では食い違う別の述語」になり、検査が対象より弱くなるからである。
 
 # 依存
 
