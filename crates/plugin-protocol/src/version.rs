@@ -192,8 +192,17 @@ use semver::{Version, VersionReq};
 /// no tracker". `<0.6` manifests keep matching.
 ///
 /// **Patch, not minor**, for the reason spelled out at 0.4.1: a minor strands
-/// every `<0.5`-bounded manifest, and nothing here requires a plugin to
-/// change. The bundled manifests keep `<0.6` untouched.
+/// every `<0.5`-bounded manifest, and no plugin has to *send* this field to
+/// keep working. The bundled manifests keep `<0.6` untouched.
+///
+/// **The wire is compatible; the Rust type is not.** Unlike `repo_name` and
+/// `not_released`'s params, `InitializeResult` is a type plugins **construct**,
+/// so an out-of-tree plugin does not compile until it adds a `claimed_repos`
+/// initializer — the same source-level break 0.4.2 made when it added
+/// `not_released` to `SessionReleaseResult`. Nothing about the *protocol*
+/// requires the change (omitting the key is a valid 0.5.1 response), which is
+/// why the version is a patch; the recompile is the cost of the field living
+/// in a struct rather than behind a constructor.
 pub const PROTOCOL_VERSION: &str = "0.5.1";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
