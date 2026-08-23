@@ -203,7 +203,24 @@ use semver::{Version, VersionReq};
 /// requires the change (omitting the key is a valid 0.5.1 response), which is
 /// why the version is a patch; the recompile is the cost of the field living
 /// in a struct rather than behind a constructor.
-pub const PROTOCOL_VERSION: &str = "0.5.1";
+/// 0.5.2: [`ResultPublishParams::delivery`](crate::methods::ResultPublishParams::delivery)
+/// (#548) — how the source should deliver a published result to a human:
+/// `draft` (the approval flow, unchanged default) or `direct` (post
+/// immediately, no approval). The Orchestrator decides from
+/// `[[workflows]].publish`; the plugin obeys. Additive and optional under the
+/// familiar contract: absent means a pre-0.5.2 Orchestrator, and the plugin
+/// must fall back to `draft` — the behaviour those Orchestrators were written
+/// against. An *unrecognised* value must also resolve to `draft`
+/// ([`PublishDelivery::Unrecognized`](crate::methods::PublishDelivery)):
+/// the modes differ in whether a human gate is skipped, and skipping a gate
+/// on an instruction this build cannot read is the wrong side to err on.
+/// Today only the Slack source reads it — github/notion declare no outputs
+/// since #398 and are never sent `result/publish` — which is acceptable:
+/// the draft/approve machinery is Slack's, and the field exists so the
+/// *policy* (which workflows may skip approval) lives in core config rather
+/// than in a plugin-side emoji table (#396 deliberately removed one).
+/// `<0.6` manifests keep matching; patch, not minor, for the 0.4.1 reason.
+pub const PROTOCOL_VERSION: &str = "0.5.2";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -227,7 +244,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 5, 1));
+        assert_eq!(protocol_version(), Version::new(0, 5, 2));
     }
 
     #[test]
