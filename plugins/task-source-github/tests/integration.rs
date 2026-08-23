@@ -40,6 +40,9 @@ impl Shared {
     fn last_request(&self) -> Value {
         self.requests.lock().unwrap().last().cloned().unwrap()
     }
+    fn all_requests(&self) -> Vec<Value> {
+        self.requests.lock().unwrap().clone()
+    }
 }
 
 struct FakeTransport {
@@ -148,7 +151,22 @@ async fn call(srv: &mut Server<FakeFactory>, id: i64, method: &str, params: Valu
 
 fn init_config() -> Value {
     json!({
-        "token": "ghp_test", "owner": "me", "project_number": 1, "github_login": "me",
+        "token": "ghp_test", "github_login": "me",
+        "projects": [{ "owner": "me", "project_number": 1, "repos": ["totsuka"] }],
+        "in_progress_statuses": ["実装中"],
+        "status_map": { "レビュー待ち": "In Review" }
+    })
+}
+
+/// Two boards, each tracking a different repository (#542).
+fn two_board_config() -> Value {
+    json!({
+        "token": "ghp_test", "github_login": "me",
+        "projects": [
+            { "owner": "me", "project_number": 1, "repos": ["totsuka"] },
+            { "owner": "acme", "owner_type": "organization",
+              "project_number": 3, "repos": ["web-app"] }
+        ],
         "in_progress_statuses": ["実装中"],
         "status_map": { "レビュー待ち": "In Review" }
     })
@@ -301,7 +319,7 @@ async fn config_validate_flags_static_problem_without_network() {
 
     // project_number = 0 is caught statically; no transport call is made.
     let mut bad = init_config();
-    bad["project_number"] = json!(0);
+    bad["projects"][0]["project_number"] = json!(0);
     let resp = call(&mut srv, 1, "config/validate", json!({ "config": bad })).await;
     let result = resp.result.unwrap();
     assert_eq!(result["valid"], false);
@@ -417,6 +435,188 @@ async fn initialize_with_triggers_polls_and_submits() {
     assert_eq!(task["labels"], json!(["bug"]));
     assert!(task.get("assignee").is_none() || task["assignee"].is_null());
     harness.assert_no_task(Duration::from_millis(200)).await;
+}
+
+/// One page for a board that tracks `web-app`, holding one ingestable issue.
+fn web_app_page() -> Value {
+    json!({ "data": { "organization": { "projectV2": { "items": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "nodes": [
+            { "status": { "name": "実装待ち" }, "content": {
+                "__typename": "Issue", "id": "I_20", "number": 20, "title": "Web task",
+                "url": "https://github.com/acme/web-app/issues/20",
+                "repository": { "name": "web-app" },
+                "assignees": { "nodes": [] }, "labels": { "nodes": [] } } },
+            // Same board, a repository it does not track: the per-board `repos`
+            // filter must drop this even though the board holds it.
+            { "status": { "name": "実装待ち" }, "content": {
+                "__typename": "Issue", "id": "I_21", "number": 21, "title": "Not ours",
+                "url": "https://github.com/acme/other/issues/21",
+                "repository": { "name": "other" },
+                "assignees": { "nodes": [] }, "labels": { "nodes": [] } } }
+        ]
+    } } } } })
+}
+
+/// A poll visits **every** configured board, and each board's `repos` gates
+/// its own items (#542).
+#[tokio::test]
+async fn a_poll_walks_every_board_and_each_board_gates_its_own_repos() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    // Board order is config order, so the queue order is fixed.
+    shared.push(Canned::Data(fetch_response()));
+    shared.push(Canned::Data(web_app_page()));
+    let params = json!({
+        "protocol_version": "0.5.1",
+        "config": two_board_config(),
+        "triggers": [
+            { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
+        ],
+        "poll_interval_secs": 60
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
+
+    let first = harness.next_task().await;
+    assert_eq!(first["id"], "I_1");
+    assert_eq!(first["repo_hint"], "totsuka");
+    let second = harness.next_task().await;
+    assert_eq!(second["id"], "I_20");
+    assert_eq!(second["repo_hint"], "web-app");
+    // `I_21` lives on the second board but in an untracked repository.
+    harness.assert_no_task(Duration::from_millis(200)).await;
+
+    // Each board was queried with its own owner/number/root — a single shared
+    // owner would silently poll the same board twice.
+    let requests = shared.all_requests();
+    assert_eq!(requests.len(), 2, "one request per board");
+    assert_eq!(requests[0]["variables"]["owner"], "me");
+    assert_eq!(requests[0]["variables"]["number"], 1);
+    assert!(
+        requests[0]["query"]
+            .as_str()
+            .unwrap()
+            .contains("user(login:")
+    );
+    assert_eq!(requests[1]["variables"]["owner"], "acme");
+    assert_eq!(requests[1]["variables"]["number"], 3);
+    assert!(
+        requests[1]["query"]
+            .as_str()
+            .unwrap()
+            .contains("organization(login:")
+    );
+}
+
+/// `initialize` answers with the repository → board mapping (protocol 0.5.1),
+/// which is the only way the Orchestrator can learn it.
+#[tokio::test]
+async fn initialize_publishes_the_repository_to_board_mapping() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let params = json!({ "protocol_version": "0.5.1", "config": two_board_config() });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let claims = resp.result.expect("initialize result")["claimed_repos"].clone();
+    assert_eq!(claims.as_array().map(Vec::len), Some(2));
+    assert_eq!(claims[0]["repo"], "totsuka");
+    assert!(
+        claims[0]["destination"].as_str().unwrap().contains("#1"),
+        "{claims}"
+    );
+    assert_eq!(claims[1]["repo"], "web-app");
+    assert!(
+        claims[1]["destination"].as_str().unwrap().contains("#3"),
+        "{claims}"
+    );
+}
+
+/// With several boards, `task/update_status` has nothing in the request naming
+/// the board, so it scans — and the scan must not stop at the first board.
+#[tokio::test]
+async fn update_status_scans_past_a_board_that_does_not_hold_the_item() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        json!({ "protocol_version": "0.5.1", "config": two_board_config() }),
+    )
+    .await;
+
+    // Board #1 resolves fine but holds a different item.
+    shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
+        "id": "PROJ_1",
+        "field": { "id": "FIELD_1", "options": [{ "id": "OPT_review", "name": "In Review" }] },
+        "items": { "nodes": [{ "id": "ITEM_9", "content": { "id": "I_9" } }] }
+    } } } })));
+    // Board #3 holds it.
+    shared.push(Canned::Data(
+        json!({ "data": { "organization": { "projectV2": {
+        "id": "PROJ_3",
+        "field": { "id": "FIELD_3", "options": [{ "id": "OPT_review3", "name": "In Review" }] },
+        "items": { "nodes": [{ "id": "ITEM_20", "content": { "id": "I_20" } }] }
+    } } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "updateProjectV2ItemFieldValue": {
+        "projectV2Item": { "id": "ITEM_20" } } } }),
+    ));
+
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "I_20", "status": "レビュー待ち" }),
+    )
+    .await;
+    assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
+    let vars = &shared.last_request()["variables"];
+    assert_eq!(vars["project"], "PROJ_3");
+    assert_eq!(vars["item"], "ITEM_20");
+    assert_eq!(vars["option"], "OPT_review3");
+}
+
+/// An item on none of the boards is an error naming every board tried — not a
+/// silent no-op, and not a message naming only the first board.
+#[tokio::test]
+async fn update_status_for_an_item_on_no_board_names_every_board() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        json!({ "protocol_version": "0.5.1", "config": two_board_config() }),
+    )
+    .await;
+
+    for (root, project_id, option) in [
+        ("user", "PROJ_1", "OPT_1"),
+        ("organization", "PROJ_3", "OPT_3"),
+    ] {
+        shared.push(Canned::Data(json!({ "data": { root: { "projectV2": {
+            "id": project_id,
+            "field": { "id": "F", "options": [{ "id": option, "name": "In Review" }] },
+            "items": { "nodes": [] }
+        } } } })));
+    }
+
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "I_404", "status": "レビュー待ち" }),
+    )
+    .await;
+    let err = resp.error.expect("an item on no board must fail");
+    assert!(
+        err.message.contains("#1") && err.message.contains("#3"),
+        "{}",
+        err.message
+    );
 }
 
 /// Without triggers there is nothing to watch: no poll loop, no submissions,

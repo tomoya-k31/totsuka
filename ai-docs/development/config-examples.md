@@ -458,28 +458,39 @@ security add-generic-password -s totsuka -a hook-token -w "$(openssl rand -hex 3
 
 GitHub Projects (v2) のステータス列をタスクの入口にする。
 
+**トップレベルのキーは `[[projects]]` より前に書く。** TOML のテーブル配列は次の見出しまで続くので、後ろに置いたスカラは `[[projects]]` の**中**に入り、未知キーとして `initialize` が落ちる。
+
 ```toml
 token = "op://Dev/GitHub/totsuka_pat"   # 必須。Projects 読み書き権限のある PAT
-owner = "tomoya-k31"                    # 必須。ユーザー名または組織名
-owner_type = "user"                     # "user"（既定）| "organization"
-project_number = 3                      # 必須。Project の URL 末尾の数字
 github_login = "tomoya-k31"             # 必須。担当者がこのログイン名のカードだけ拾う（大小無視）
-status_field = "Status"                 # ステータス列の名前（既定 "Status"）
+status_field = "Status"                 # ステータス列の名前（既定 "Status"）。全ボード共通
 
 # すでに着手中とみなすステータス。ここに入っているカードは再度タスク化されない
 in_progress_statuses = ["実装中", "設計中"]
+
+source_name = "github"                          # Task.source に刻まれる名前（既定 "github"）
+api_url = "https://api.github.com/graphql"      # GHES 利用時に上書き
+max_retries = 3                                 # リトライ可能な API 失敗の再試行回数
 
 # Orchestrator 内部のステータス名 ← → Project 上の表示名の対応（未定義キーは素通し）
 [status_map]
 "レビュー待ち" = "In Review"
 
-# 対象リポジトリの絞り込み。省略すると Project 内の全リポジトリが対象
-repos = ["totsuka", "dotfiles"]
+# polling するボード。複数書ける（#542）
+[[projects]]
+owner = "tomoya-k31"                    # 必須。ユーザー名または組織名
+owner_type = "user"                     # "user"（既定）| "organization"。エントリごとに指定できる
+project_number = 3                      # 必須。Project の URL 末尾の数字
+repos = ["totsuka", "dotfiles"]         # 必須・非空。取り込みフィルタ兼「このリポジトリの起票先」
 
-source_name = "github"                          # Task.source に刻まれる名前（既定 "github"）
-api_url = "https://api.github.com/graphql"      # GHES 利用時に上書き
-max_retries = 3                                 # リトライ可能な API 失敗の再試行回数
+[[projects]]
+owner = "my-org"
+owner_type = "organization"
+project_number = 7
+repos = ["web-app"]
 ```
+
+`repos` を省略して「Project 内の全リポジトリ」を対象にする書き方は #542 で無くなった。このリストは取り込みフィルタであると同時に、リポジトリ → ボードの対応表として `initialize` の応答へ載るため、省略すると起票先を引けなくなる。同じリポジトリを 2 つのボードに書くと `config/validate` がエラーにする。
 
 ## `plugins/slack.toml`（task-source-slack）
 

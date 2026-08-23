@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
-    ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
+    ClaimedRepo, ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
     TaskUpdateStatusParams, TriggerInfo,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
@@ -188,8 +188,9 @@ where
             ));
             Some(handle.abort_handle())
         };
+        let claims = client.config().claimed_repos();
         self.session = Some(Session { client, poll });
-        Reply::respond(Response::result(id, capabilities_result()))
+        Reply::respond(Response::result(id, capabilities_result(claims)))
     }
 
     async fn config_validate(&mut self, id: RequestId, params: Value) -> Reply {
@@ -252,10 +253,10 @@ where
 /// that is no longer declared. Since `tasks/fetch` was removed at protocol
 /// 0.2.0 every task source is push-only, so the `task_submit` flag could only
 /// ever be `true`; it was removed in 0.5.0 (#496).
-fn capabilities_result() -> Value {
+fn capabilities_result(claimed_repos: Vec<ClaimedRepo>) -> Value {
     let result = InitializeResult {
         plugin_version: plugin_version(),
-        claimed_repos: Vec::new(),
+        claimed_repos,
         // No `outputs`: the deliverable is the agent's to write with `gh`
         // (#398). Declaring `source` would let a workflow ask this plugin to
         // publish, which it no longer can.

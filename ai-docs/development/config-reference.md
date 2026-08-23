@@ -657,18 +657,56 @@ poll_interval_secs = 60   # 省略時も 60
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `token` | string | 必須 | API トークン（オーケストレータが解決して渡す、F-65）。プラグインは bearer として送る以外に触らない。必要な権限は [task-source-github](/components/task-source-github.md) を参照。`cmd:gh auth token` が使える（[ADR-0044](/decisions/adr-0044-cmd-secret-scheme.md)） |
-| `owner` | string | 必須 | Project の所有者ログイン（user または org） |
-| `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か。GraphQL のルートフィールドがこれで決まる |
-| `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。**正数チェックは `initialize` では走らない**（下記） |
-| `status_field` | string | `Status` | ステータス列を保持する SingleSelect フィールド名（F-02） |
+| `[[projects]]` | テーブル配列 | 必須・非空 | polling するボード（複数可、#542）。中身は下表 |
+| `status_field` | string | `Status` | ステータス列を保持する SingleSelect フィールド名（F-02）。**全ボード共通** |
 | `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出に使う（F-08） |
-| `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして ingest から除外するステータス名（F-08） |
-| `status_map` | テーブル | `{}` | オーケストレータ側のステータス名 → Project の SingleSelect オプション名の対応（`task/update_status` 用、F-84）。**未設定のキーは恒等**（名前がそのまま使われる） |
-| `repos` | string[] | `[]` | ingest を**リポジトリ名**で絞る。空 = Project 内のどのリポジトリでもよい |
-| `source_name` | string | `github` | `Task.source` に刻印するソース名 |
+| `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして ingest から除外するステータス名（F-08）。**全ボード共通** |
+| `status_map` | テーブル | `{}` | オーケストレータ側のステータス名 → Project の SingleSelect オプション名の対応（`task/update_status` 用、F-84）。**未設定のキーは恒等**（名前がそのまま使われる）。**全ボード共通** |
+| `source_name` | string | `github` | `Task.source` に刻印するソース名。ボードを増やしても変わらない（だから `[[workflows]].source = "github"` は 1 本のまま） |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用の上書き） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#398） |
+
+`[[projects]]` の各エントリ（こちらも `deny_unknown_fields`）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `owner` | string | 必須 | Project の所有者ログイン（user または org） |
+| `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か。GraphQL のルートフィールドがこれで決まる。**エントリごとに指定できる**（user 所有と org 所有のボードを混在させられる） |
+| `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。**正数チェックは `initialize` では走らない**（下記） |
+| `repos` | string[] | **必須・非空** | このボードが担当するリポジトリ名。**2 つの役割を兼ねる**（下記） |
+
+```toml
+token = "cmd:gh auth token"
+github_login = "tomoya-k31"
+
+[[projects]]
+owner = "tomoya-k31"
+project_number = 7
+repos = ["totsuka", "dotfiles"]
+
+[[projects]]
+owner = "my-org"
+owner_type = "organization"
+project_number = 3
+repos = ["web-app"]
+
+status_field = "Status"
+in_progress_statuses = ["In Progress"]
+```
+
+**TOML の順序に注意**: `[[projects]]` より後ろに書いたトップレベルのキーは、**最後の `[[projects]]` エントリの中**に入る（配列テーブルは次の見出しまで続く）。上の例で `status_field` が最後にあるのは読みやすさのためではなく、そう書くと `ProjectConfig` の未知キーとして `initialize` が落ちる、という失敗を避けるためである。トップレベルのキーは `[[projects]]` より**前**に書くのが安全。
+
+## `[[projects]].repos` は「絞り込み」と「行き先」を兼ねる
+
+役割が 2 つあり、分けられない。
+
+1. **ingest フィルタ**: そのボードに載っていても、ここに無いリポジトリの issue は取り込まれない
+2. **リポジトリ → ボードの順方向マッピング**: `initialize` の応答（`claimed_repos`、protocol 0.5.1）でオーケストレータへ渡り、Slack 発などの triage タスクが「どのボードへ起票するか」を知る材料になる
+
+**#542 より前は省略可で、空 = 「Project 内のどのリポジトリでもよい」だった。**必須・非空になったのは 2 の理由による — ボードは自分が将来どのリポジトリを持つかを知らないので、省略された `repos` を claim へ変換する方法が無い。
+
+**1 つのリポジトリを 2 つのボードに書くことはできない**（`config/validate` がエラーにする）。「このリポジトリの起票先」に答えが 2 つあるのは、答えが無いのと同じだからである。github と notion をまたぐ重複は片方のプラグインからは見えないので、そちらはオーケストレータが起動時 warn と `doctor` で検出する。
 
 ## `project_number` の誤りは起動時には出ない
 
@@ -677,6 +715,14 @@ poll_interval_secs = 60   # 省略時も 60
 結果として症状は「毎 poll で Project が見つからず、**タスクが 1 件も取り込まれない**」になる。起動ログは正常なので、これは一番切り分けにくい壊れ方である。捕まえられるのは `totsuka doctor` と `totsuka config validate` だけなので、設定を書いたらどちらかを通すこと。
 
 （未知キーのほうは対照的に `initialize` の硬い失敗になる。`deny_unknown_fields` は serde の層で効くため。）
+
+## #542 より前の設定は起動しない
+
+トップレベルの `owner` / `owner_type` / `project_number` / `repos` は `[[projects]]` エントリの中へ移った。`deny_unknown_fields` なので旧設定は `initialize` の硬い失敗になる（serde が `unknown field \`project_number\`` と言う）。
+
+**移行案内は実装していない。** #542 の時点で totsuka はまだ非公開で、設定ファイルは実運用 1 本と live-e2e 1 本しか存在せず、どちらも #542 の作業で書き換えた。案内のコードを維持する相手がいない。
+
+書き換えで唯一手が要るのは `repos` で、省略していた場合は担当リポジトリ名を明示的に並べる必要がある。
 
 ## `token` に必要な権限
 

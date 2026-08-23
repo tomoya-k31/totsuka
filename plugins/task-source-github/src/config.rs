@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use plugin_protocol::methods::ClaimedRepo;
 use serde::Deserialize;
 
 /// The embedded instruction defaults, parsed once on first use.
@@ -122,13 +123,16 @@ impl OwnerType {
     }
 }
 
-/// GitHub task-source settings.
+/// One ProjectsV2 board this plugin polls, and the repositories it is the
+/// tracker for (`[[projects]]`, #542).
+///
+/// Boards are a list rather than one-plugin-instance-per-board: the instance
+/// route would need `name ≠ bin name`, which is the relaxation
+/// [ADR-0027](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0027-plugin-artifact-naming.md)
+/// refused, and it would fork `[[workflows]].source` per board too.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct GithubConfig {
-    /// API token (resolved by the orchestrator, F-65). Never touched by us
-    /// beyond sending it as a bearer token.
-    pub token: String,
+pub struct ProjectConfig {
     /// Project owner login (user or org).
     pub owner: String,
     /// Whether `owner` is a user or an organization.
@@ -136,6 +140,61 @@ pub struct GithubConfig {
     pub owner_type: OwnerType,
     /// ProjectsV2 number under `owner`.
     pub project_number: i64,
+    /// The repositories this board is the tracker for.
+    ///
+    /// Two jobs in one list, and they are not separable. It is the ingest
+    /// filter (an issue from a repository not listed here is skipped) *and*
+    /// the forward mapping repository → board that
+    /// [`GithubConfig::claimed_repos`] publishes. Required and non-empty for
+    /// the second reason: an omitted list used to mean "every repo on the
+    /// board", which cannot be turned into claims — the board does not know
+    /// its own future repositories.
+    pub repos: Vec<String>,
+}
+
+impl ProjectConfig {
+    /// Whether `repo` is one this board tracks.
+    pub fn repo_allowed(&self, repo: &str) -> bool {
+        self.repos.iter().any(|r| r == repo)
+    }
+
+    /// Prose telling an agent where an item for this board goes (#542).
+    ///
+    /// Read by nothing in this plugin: it travels in `claimed_repos` and ends
+    /// up in a triage agent's prompt, so it is written as an instruction, not
+    /// as a description.
+    pub fn destination(&self) -> String {
+        format!(
+            "GitHub Project #{} owned by the {} `{}`. \
+             File the issue in the repository itself, then add it to that board with \
+             `gh project item-add {} --owner {} --url <issue-url>`.",
+            self.project_number,
+            match self.owner_type {
+                OwnerType::User => "user",
+                OwnerType::Organization => "organization",
+            },
+            self.owner,
+            self.project_number,
+            self.owner,
+        )
+    }
+}
+
+/// GitHub task-source settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GithubConfig {
+    /// API token (resolved by the orchestrator, F-65). Never touched by us
+    /// beyond sending it as a bearer token.
+    pub token: String,
+    /// The boards this plugin polls (`[[projects]]`, #542). Required and
+    /// non-empty; `static_config_errors` rejects an empty list.
+    ///
+    /// This replaced the flat `owner` / `owner_type` / `project_number` /
+    /// `repos` keys outright. `deny_unknown_fields` makes a pre-#542 config a
+    /// hard `initialize` failure, which is the intended outcome — see
+    /// [ADR-0056](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0056-multi-tracker-routing.md).
+    pub projects: Vec<ProjectConfig>,
     /// SingleSelect field name holding the status column (F-02).
     #[serde(default = "default_status_field")]
     pub status_field: String,
@@ -149,10 +208,6 @@ pub struct GithubConfig {
     /// option name for `task/update_status` (F-84). Identity when absent.
     #[serde(default)]
     pub status_map: HashMap<String, String>,
-    /// Restricts ingest to issues in these repositories (by name). Empty = any
-    /// repo in the project.
-    #[serde(default)]
-    pub repos: Vec<String>,
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
     pub source_name: String,
@@ -191,9 +246,23 @@ impl GithubConfig {
         self.in_progress_statuses.iter().any(|s| s == status)
     }
 
-    /// Whether `repo` passes the optional repository filter (empty = any).
-    pub fn repo_allowed(&self, repo: &str) -> bool {
-        self.repos.is_empty() || self.repos.iter().any(|r| r == repo)
+    /// The repositories this plugin is the tracker for, and where an item for
+    /// each goes (`InitializeResult.claimed_repos`, protocol 0.5.1, #542).
+    ///
+    /// One entry per (board, repo) pair, in config order. A repository listed
+    /// on two boards would appear twice — `static_config_errors` rejects that
+    /// config, so it cannot reach here from a config the plugin accepted.
+    pub fn claimed_repos(&self) -> Vec<ClaimedRepo> {
+        self.projects
+            .iter()
+            .flat_map(|project| {
+                let destination = project.destination();
+                project.repos.iter().map(move |repo| ClaimedRepo {
+                    repo: repo.clone(),
+                    destination: destination.clone(),
+                })
+            })
+            .collect()
     }
 }
 
@@ -221,20 +290,21 @@ mod tests {
     #[test]
     fn minimal_config_applies_defaults() {
         let cfg = parse(serde_json::json!({
-            "token": "t", "owner": "me", "project_number": 1, "github_login": "me"
+            "token": "t", "github_login": "me",
+            "projects": [{ "owner": "me", "project_number": 1, "repos": ["totsuka"] }]
         }));
         assert_eq!(cfg.status_field, "Status");
         assert_eq!(cfg.source_name, "github");
         assert_eq!(cfg.api_url, "https://api.github.com/graphql");
         assert_eq!(cfg.max_retries, 3);
-        assert_eq!(cfg.owner_type, OwnerType::User);
-        assert!(cfg.repos.is_empty());
+        assert_eq!(cfg.projects[0].owner_type, OwnerType::User);
     }
 
     #[test]
     fn unknown_field_is_rejected() {
         let err = serde_json::from_value::<GithubConfig>(serde_json::json!({
-            "token": "t", "owner": "me", "project_number": 1, "github_login": "me",
+            "token": "t", "github_login": "me",
+            "projects": [{ "owner": "me", "project_number": 1, "repos": ["r"] }],
             "typo_field": true
         }))
         .unwrap_err();
@@ -242,10 +312,23 @@ mod tests {
     }
 
     #[test]
+    fn unknown_field_inside_a_project_entry_is_rejected() {
+        let err = serde_json::from_value::<GithubConfig>(serde_json::json!({
+            "token": "t", "github_login": "me",
+            "projects": [{
+                "owner": "me", "project_number": 1, "repos": ["r"], "statusField": "Status"
+            }]
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("statusField"), "got {err}");
+    }
+
+    #[test]
     fn ingest_gating_helpers() {
         let cfg = parse(serde_json::json!({
-            "token": "t", "owner": "me", "project_number": 1, "github_login": "Me",
-            "in_progress_statuses": ["In Progress"], "repos": ["totsuka"]
+            "token": "t", "github_login": "Me",
+            "in_progress_statuses": ["In Progress"],
+            "projects": [{ "owner": "me", "project_number": 1, "repos": ["totsuka"] }]
         }));
         // Self-detection is case-insensitive; others are excluded; and I count
         // as assigned even when I am not the first assignee.
@@ -256,17 +339,51 @@ mod tests {
         assert!(!cfg.assignable_to_me(&["a", "b"]));
         assert!(cfg.is_in_progress("In Progress"));
         assert!(!cfg.is_in_progress("Todo"));
-        assert!(cfg.repo_allowed("totsuka"));
-        assert!(!cfg.repo_allowed("other"));
+        // The repository filter is per board now (#542), and there is no
+        // "empty means any" arm left: `repos` is required and non-empty.
+        assert!(cfg.projects[0].repo_allowed("totsuka"));
+        assert!(!cfg.projects[0].repo_allowed("other"));
     }
 
     #[test]
     fn status_map_falls_back_to_identity() {
         let cfg = parse(serde_json::json!({
-            "token": "t", "owner": "me", "project_number": 1, "github_login": "me",
+            "token": "t", "github_login": "me",
+            "projects": [{ "owner": "me", "project_number": 1, "repos": ["r"] }],
             "status_map": { "レビュー待ち": "In Review" }
         }));
         assert_eq!(cfg.map_status("レビュー待ち"), "In Review");
         assert_eq!(cfg.map_status("実装待ち"), "実装待ち");
+    }
+
+    #[test]
+    fn claims_one_entry_per_board_and_repo_pair() {
+        let cfg = parse(serde_json::json!({
+            "token": "t", "github_login": "me",
+            "projects": [
+                { "owner": "me", "project_number": 7, "repos": ["totsuka", "dotfiles"] },
+                { "owner": "acme", "owner_type": "organization",
+                  "project_number": 3, "repos": ["web-app"] }
+            ]
+        }));
+        let claims = cfg.claimed_repos();
+        let repos: Vec<&str> = claims.iter().map(|c| c.repo.as_str()).collect();
+        assert_eq!(repos, ["totsuka", "dotfiles", "web-app"]);
+        // Repos on the same board share one destination; different boards must
+        // not — a claim naming the wrong board sends the agent to the wrong
+        // place, and nothing downstream can tell.
+        assert_eq!(claims[0].destination, claims[1].destination);
+        assert_ne!(claims[0].destination, claims[2].destination);
+        assert!(
+            claims[0].destination.contains("#7") && claims[0].destination.contains("user `me`"),
+            "got {}",
+            claims[0].destination
+        );
+        assert!(
+            claims[2].destination.contains("#3")
+                && claims[2].destination.contains("organization `acme`"),
+            "got {}",
+            claims[2].destination
+        );
     }
 }
