@@ -4,7 +4,7 @@ title: テスト戦略（自動結合テスト / E2E / モックプラグイン�
 description: totsuka のテスト層（ユニット・実プロセス結合・バイナリE2E）とモックプラグインによるシナリオ注入、フレーク対策、CI 品質ゲートの定義。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates
 tags: [testing, e2e, integration, mock, ci, quality, slack]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -38,7 +38,7 @@ owner: tomoya-k31
 
 # 自動化済みの異常系
 
-- **プラグインクラッシュ**: `crash_on_dispatch` → タスク failed、Orchestrator は生存（`e2e_agent_crash_fails_task_and_orchestrator_survives`、`plugin_host.rs`）。
+- **プラグインクラッシュ**: `crash_on_dispatch` → Orchestrator は生存。**層ごとに主張できることが違う**（#504 / #512）: `plugin_host.rs` の `crash_fails_task_and_host_survives` はホスト境界でタスクが failed になることまで言えるが、バイナリ E2E の `e2e_agent_crash_is_isolated_and_the_orchestrator_survives`（`e2e.rs`）は**終端状態もクラッシュ計数も主張しない** — dispatch の RPC がトランスポート断を記録した時点と、子プロセスの終了を監視するタスクが `PluginEvent::Closed` を届けて `plugin_crashes` が増える時点は別の観測者で、前者だけが済んだ中間状態でワンショット run が終わりうる（`plugin_crashes = 0` かつ `outcomes.crashed = 1`）。E2E が言うのは「run がきれいに終わる」「タスクを失わない」の 2 つで、計数と状態遷移の契約は `plugin_supervision.rs` の `a_task_queued_during_a_crash_window_is_not_failed` / `giving_up_escalates_instead_of_retrying_forever` が backoff を明示的に駆動して決定的に検査する。
 - **attach 失敗 / セッション消失**: `session_id` に `gone` → 継続確認待ち（自動 failed にしない、§5.3）（`run_loop.rs`, `session_recovery.rs`）。
 - **waiting_input**: ワンショットが待機タスクを残して終了（`e2e_waiting_input_leaves_task_and_status_shows_it`, `run_loop.rs`）。
 - **down 中に完了 / finalize 途中クラッシュ**: 回復時 finalize と成果物復元（`run_loop.rs`）。
@@ -53,6 +53,16 @@ owner: tomoya-k31
 - CLI バイナリを起動する E2E は構造体を触れないため、`run --one-shot-grace-ms`（hidden）を使う。0 ではなく 250ms を渡す — この猶予は `task/submit` が新規 spawn したプラグインから非同期に届くことへの備えで、0 にすると負荷の高いランナーでハンドシェイクと競合してフレークする。
 
 テスト実行中に `cargo build` を呼ばない。兄弟クレートのバイナリは `test_support::sibling_bin` で解決し、CI は `TEST_SUPPORT_PREBUILT_BINS=1` でビルド自体を飛ばす（この env が `TOTSUKA_` 接頭辞を避けている理由は ADR-0018 §3）。
+
+# リポジトリ不変条件をテストで持つ
+
+ビルドもテストも通るのに**運用時にだけ壊れる**種類の不変条件は、テストとして持つ。判定に本物の型・本物の述語を使えることが条件で、シェルで書き直すと「対象より弱い述語」になるものはここに置く。
+
+| テスト | 何を保証するか |
+|---|---|
+| [plugin-protocol `tests/bundled_manifests.rs`](https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-protocol/tests/bundled_manifests.rs) | このツリーが同梱する **全 manifest** が、同じツリーの `PROTOCOL_VERSION` で起動できる（F-54）。リポジトリ全体を走査して `plugin.toml` / `*.plugin.toml` を集め、本物の `Manifest` デシリアライザで読み、`is_compatible_with_current`（起動ゲートと同じ述語）で判定する。走査が空を返す事故を「違反なし」と読まないよう、`plugins/*` の全ディレクトリと `.claude/skills/**` の 1 本が現れたことを先に検査する（フェイルクローズ）。除外は `target/` / `.git/` と、**`.git` を持つサブディレクトリ**（ネストしたチェックアウト・git worktree。`.worktrees/` と `.claude/worktrees/` が実在し、後者は worktree 隔離のサブエージェントが自動生成する。除外しないと、修正前のブランチを置いた worktree がローカルのテスト実行だけを落とし、しかも「このツリーの manifest 違反」に見える）。**及ぶ範囲**: `Manifest` は `deny_unknown_fields` なのでトップレベルのキーの typo は落ちるが、`Capabilities` は `serde(default)` のみなので **`[capabilities]` の中の typo は素通りする**（`retired_capability_keys_are_tolerated_and_ignored` が意図としてピン留め） |
+
+`scripts/arch-lint.sh` との使い分けは判定に必要な材料で決まる。arch-lint は `cargo metadata` から読める**依存グラフの事実**を検査する。semver の範囲判定のように本物の実装（`semver::VersionReq`）を呼ばないと再実装になるものは、テスト側に置く（#526）。
 
 # フレーク対策
 
