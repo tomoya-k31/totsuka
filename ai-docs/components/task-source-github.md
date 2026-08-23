@@ -4,7 +4,7 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、Issue コメント publish を行う。呼び出す 5 つの GraphQL 操作と、そこから導いたトークン権限（未実測）を含む。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-08-22T12:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -47,7 +47,7 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1
 
 # トークンに必要な権限
 
-**この節は導出であって実測ではない。** スコープ名は GitHub API の性質であってこのリポジトリの性質ではないので、コードからは検証できない。下の「実際に呼んでいるもの」は確定した事実で、そこから必要権限を GitHub のドキュメントに従って導いている。**最小値は測っていない**（`verified` を付けていないのはこのため）。
+**十分条件は実測済み、最小値は未実測**（#514、2026-08-23）。下の「実際に呼んでいるもの」は確定した事実で、「実測できたこと」はサンドボックス（user 所有の Project、private リポジトリ 2 本）に対して`.claude/skills/live-e2e/scripts/github-permissions.sh` が 4 操作すべてを実際に投げて確かめた。「導いた権限」の側は**依然として導出**である — 権限を削ったトークンをまだ試していないので、そこに書かれた値が**最小**であることは示されていない。**この但し書きは実測が済むまで消さないこと。** 断定に固まると、間違っていたときに誰も疑わなくなる。
 
 ## 実際に呼んでいるもの
 
@@ -60,19 +60,53 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.1
 | カード移動 | `updateProjectV2ItemFieldValue` |
 | 疎通確認 | `viewer { login }` |
 
+## 実測できたこと（2026-08-23）
+
+`bash .claude/skills/live-e2e/scripts/github-permissions.sh probe --write` を、実 GitHub の
+サンドボックス（`tomoya-k31` 所有の Project #7 / private リポジトリ 2 本）に対して実行した。
+このスクリプトはプラグインと**同じエンドポイント・同じヘッダ・同じクエリ本文**で 4 操作だけを投げる。
+
+| トークン | 結果 |
+|---|---|
+| OAuth（`gh auth token`）scope = `gist, project, read:org, repo, workflow` | **4 操作すべて成功**。`title` / `body` / `url` / `number` / `repository.name` は 62/62 件で非 null、`assignees` / `labels` も `nodes` が null にならず非空を確認。カード移動（write）も成功 |
+
+これが言うのは「**この scope 集合で足りる**」までで、**どれが要らないかは言っていない**。
+
+**「エラーが出なかった」を pass と読まないこと。** GraphQL の権限不足は HTTP 200・`data` あり・
+**フィールドが `null`** という形で出うる。スクリプトが `errors` の有無と独立にフィールド単位で
+present/null を判定しているのはこのためで、`assignees` / `labels` は
+**`nodes: null`（権限不足の疑い）と `nodes: []`（本当に付いていない）を別物として数える**。
+
+## fine-grained PAT は user 所有ボードには使えない
+
+**Account permissions に Projects は存在しない。** GitHub の
+[fine-grained PAT の権限一覧](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
+が挙げる User permissions に Projects は無く、Projects は **Organization permissions にしか無い**
+（[community discussion #156512](https://github.com/orgs/community/discussions/156512) が同じ制約を追っている）。
+
+したがって:
+
+- **org 所有**のボード → fine-grained PAT が使える（Organization permissions の Projects）
+- **user 所有**のボード → fine-grained PAT では ProjectsV2 に到達できない。**classic PAT の `project` scope を使う**
+
+サンドボックスは user 所有なので、**fine-grained PAT の最小値はこの環境では測れない**。
+測るには org 所有の Project が要る。
+
 ## 導いた権限
 
-**fine-grained PAT**:
+**fine-grained PAT**（org 所有ボードのみ。未実測）:
 
 | 種別 | 権限 | なぜ |
 |---|---|---|
 | Repository | **Metadata: Read** | 必須（他の Repository 権限の前提） |
 | Repository | **Issues: Read** | Project アイテム経由で読む Issue の本文・ラベル・アサイニー。**write は不要**（#398 で `addComment` が消えた） |
-| Organization **または** Account | **Projects: Read and write** | ProjectsV2 の読み取りと `updateProjectV2ItemFieldValue`。org 所有のボードなら Organization permissions、user 所有なら Account permissions |
+| Organization | **Projects: Read and write** | ProjectsV2 の読み取りと `updateProjectV2ItemFieldValue`。**Organization permissions にしか無い** — user 所有ボード向けの Account permissions は存在しないので、その場合は classic PAT を使う（上節） |
 
 **Contents は不要**である。このトークンでリポジトリの中身を読み書きすることはない。
 
-**classic PAT**: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
+**classic PAT**（user 所有ボードではこちら。最小値は未実測）: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
+
+**未解決の問い**: Issue の本文・ラベル・アサイニーは `projectV2` のアイテム経由でしか読んでおらず、Issues エンドポイントを直接は叩かない。**`project` scope だけでこれらが返るなら `repo` は要らない**。どちらなのかは `project` だけの classic PAT を切って上のスクリプトを回せば 1 回で分かる（#514 手順 2）。
 
 ## PR 作成はこのトークンの仕事ではない
 

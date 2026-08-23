@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:5e9ab1f73d1a033608e51ac938662a0f4e85ae6f217176cc83b85fed1bcbb905 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:9f3ac32726a67a87b8b77d17225abd55d13c4f2321dfea0046850c37baca8c44 -->
 
 # 設定リファレンス
 
@@ -586,17 +586,26 @@ poll_interval_secs = 60   # 60 は既定値でもある
 
 ### トークンに必要な権限
 
-**コードが呼んでいるものからの導出であって、実測ではない** — 最小値は絞り込んでいない。呼び出しは全て `https://api.github.com/graphql` への POST で、操作は 4 つだけである: Project アイテムの取得、Project / フィールド / アイテムの id 解決、`updateProjectV2ItemFieldValue`、`viewer`。REST も Contents API も使わず、**Issue へは何も書き込まない** —— 成果物はエージェントが自分で書く。
+呼び出しは全て `https://api.github.com/graphql` への POST で、操作は 4 つだけである: Project アイテムの取得、Project / フィールド / アイテムの id 解決、`updateProjectV2ItemFieldValue`、`viewer`。REST も Contents API も使わず、**Issue へは何も書き込まない** —— 成果物はエージェントが自分で書く。
 
-fine-grained PAT の場合:
+**まずトークンの種別を選ぶこと。ここを間違えると、下の権限表を読んでも解決しない**:
+
+| Project の所有者 | 使えるトークンの種別 |
+|---|---|
+| **組織**（org） | fine-grained PAT（Organization permissions の Projects）または classic PAT |
+| **ユーザー** | **classic PAT のみ。** fine-grained PAT の Account permissions に Projects が無いため、user 所有のボードでは ProjectsV2 に到達できない |
+
+fine-grained PAT の場合（org 所有のボードのみ）:
 
 | 種別 | 権限 |
 |---|---|
 | Repository | **Metadata: Read**（必須） |
 | Repository | **Issues: Read**（write は不要） |
-| Organization **または** Account | **Projects: Read and write** — org 所有のボードなら Organization、user 所有なら Account |
+| Organization | **Projects: Read and write** |
 
 **Contents は不要。** classic PAT なら `project` と、`repo`（private リポジトリを含む場合）または `public_repo`。private な組織のボードでは `read:org` も要りうる。
+
+**これらは「足りる」ことが分かっている値であって、「最小」であることは分かっていない。** これを持つトークンで動くところまでは実際の Project に対して確かめてある。一つひとつが本当に必要かは絞り込んでいないので、この表は上限だと思って読み、もっと絞りたければ自分の構成で削っていくとよい。
 
 **PR を開くのはこのトークンの仕事ではない。** `implement` のワークフローでは、エージェント自身がペインの環境にあるあなた自身の `gh` 認証を使って `gh pr create` を実行する。`gh auth login` は別個の前提条件である。
 
