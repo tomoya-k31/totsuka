@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:769f3df963d610f4dc44f6e8cb74cdedc33e74db3ed1e444dd9fb35891df2743 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:b7d588fe5fd199983811b0a9a1f5b03d3378facf071dad48fa70a0fcfb4d2db4 -->
 
 # 設定リファレンス
 
@@ -585,7 +585,7 @@ poll_interval_secs = 60   # 60 は既定値でもある
 | `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か。**エントリごとに指定できる**ので、user 所有と組織所有のボードを混在させられる |
 | `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。正数チェックは起動時には**走らない** — 下記参照 |
 | `repos` | string[] | **必須・非空** | このボードが担当するリポジトリ名。**2 つの役割を兼ねる** — 下記参照 |
-| `triage_status` | string? | なし | triage 起票した item に付ける Status オプション名。**未設定 = Status なしで追加**され、ボードでトリアージするまでどの workflow にも拾われない。**polling trigger と同じ値（例 `Todo`）を書くとそのゲートが消え、起票が即・無人実行に流れる** — 意図してやる分には正しいが、既定は事故を防ぐ「なし」 |
+| `triage_status` | string? | なし | triage 起票した item に付ける Status オプション名。**未設定 = Status なしで追加**される。`project_status` 条件の trigger には一致しないので、**全 workflow が status で絞っている構成なら**ボードでトリアージするまで拾われない（status 条件の無い trigger には一致する — ゲートの実在は trigger の書き方次第）。**polling trigger と同じ値（例 `Todo`）を書くとそのゲートが消え、起票が即・無人実行に流れる** — 意図してやる分には正しいが、既定は事故を防ぐ「なし」 |
 
 ```toml
 token = "cmd:gh auth token"

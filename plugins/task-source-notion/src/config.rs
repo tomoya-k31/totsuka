@@ -241,9 +241,12 @@ pub struct DatabaseConfig {
     /// Absent means the page is created without a status, leaving a
     /// human-triage gate. **Setting this to a value some workflow trigger
     /// polls removes that gate** — filing then flows straight into an
-    /// unattended run. Requires `property_map.status` to be mapped
-    /// (`static_config_errors` rejects the combination otherwise: an
-    /// instruction to fill a column nobody can name is unfollowable).
+    /// unattended run. Requires `property_map.status` to be mapped:
+    /// `static_config_errors` rejects the combination — but that check runs
+    /// only via `config/validate`, **not at `initialize`** (the same split
+    /// the github plugin documents for `project_number`). A config that was
+    /// never validated starts fine and silently omits the status instruction
+    /// from the destination, because there is no column to name.
     #[serde(default)]
     pub triage_status: Option<String>,
 }

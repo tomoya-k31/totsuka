@@ -152,12 +152,15 @@ pub struct ProjectConfig {
     pub repos: Vec<String>,
     /// The Status option a triage-filed item should land in (#548 follow-up).
     ///
-    /// Absent means the item is added with **no** Status, which leaves a
-    /// human-triage gate: nothing polls a status-less item. **Setting this to
-    /// a value some `[[workflows]].trigger` polls (e.g. `Todo`) removes that
-    /// gate** — filing then flows straight into an unattended run. That can
-    /// be exactly what the operator wants; it just should not happen by
-    /// accident, which is why the default is "no status".
+    /// Absent means the item is added with **no** Status. That leaves a
+    /// human-triage gate *when every workflow on this source filters by
+    /// status*: a status-less item matches no `project_status` condition —
+    /// but a trigger **without** one matches everything, status-less items
+    /// included, so the gate is only as real as the operator's triggers.
+    /// **Setting this to a value some trigger polls (e.g. `Todo`) removes
+    /// the gate outright** — filing then flows straight into an unattended
+    /// run. That can be exactly what the operator wants; it just should not
+    /// happen by accident, which is why the default is "no status".
     ///
     /// Per board, not top-level: option names belong to a board.
     #[serde(default)]

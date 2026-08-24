@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/fable-5, at: 2026-08-24T10:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

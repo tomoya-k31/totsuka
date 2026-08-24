@@ -4,7 +4,7 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻しを行い、Issue へは何も書かない。呼び出す 4 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
+generated: { by: claude-code/fable-5, at: 2026-08-24T10:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -19,7 +19,7 @@ GitHub Issues / ProjectsV2 を totsuka のタスクソースとして接続す�
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `plugins/github.toml`（= `InitializeParams.config`）を型付け。`token` / **`[[projects]]`**（各要素が `owner` + `owner_type` user\|org + `project_number` + `repos`、#542）/ `status_field` / `github_login`（F-08 の自己判定）/ `in_progress_statuses` / `status_map`（orchestrator status→Project option）/ `source_name` / `api_url` / `max_retries`。`deny_unknown_fields`（要素側も）。`claimed_repos()` が `[[projects]]` から `initialize` 応答の claim を組み立てる。要素の `triage_status`（任意、#548 派生）を書くと destination に「起票後にこの Status を付けよ」と具体的なコマンド列（`item-list` / `field-list` で id を引いて `item-edit`）が入る — 未設定なら Status なしで追加され、人間トリアージのゲートが残る |
+| `config` | `plugins/github.toml`（= `InitializeParams.config`）を型付け。`token` / **`[[projects]]`**（各要素が `owner` + `owner_type` user\|org + `project_number` + `repos`、#542）/ `status_field` / `github_login`（F-08 の自己判定）/ `in_progress_statuses` / `status_map`（orchestrator status→Project option）/ `source_name` / `api_url` / `max_retries`。`deny_unknown_fields`（要素側も）。`claimed_repos()` が `[[projects]]` から `initialize` 応答の claim を組み立てる。要素の `triage_status`（任意、#548 派生）を書くと destination に「起票後にこの Status を付けよ」と具体的なコマンド列（`item-list` / `field-list` で id を引いて `item-edit`）が入る — 未設定なら Status なしで追加される（`project_status` 条件の trigger に一致しないという意味でのゲート。status 条件の無い trigger には一致する） |
 | `transport` | `GithubTransport` trait（`post_graphql`）＋ reqwest 実装 `ReqwestTransport`（bearer 認証・User-Agent 必須・タイムアウト・指数バックオフ §5.3）。ロジックを録画レスポンスでテストするための seam |
 | `client` | `GithubClient<T: GithubTransport>`。`fetch`（ProjectsV2 items を GraphQL 取得→`Task` 正規化→トリガー絞り込み→取り込み制御 F-08）/ `update_status`（SingleSelect option を解決して mutation、未知 option はエラー F-84）/ `publish`（Issue コメント、長文は `<details>` 折りたたみ F-07）/ `validate`（viewer 疎通 F-59）。GraphQL は plain JSON で構築（GraphQL クレート不使用） |
 | `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。`Server::new(factory, SubmitClient)`（#188: SDK の stdio ランタイム[単一 writer タスク]で駆動され、`LineHandler` 実装経由で serve される）。initialize（config 型付け → client 構築 → triggers があれば SDK `poll_loop` を常駐 spawn — 各 tick で全 trigger を fetch し `task/submit` push。triggers 空なら poll なし）/ config·validate / task·update_status / result·publish / shutdown。`tasks/fetch` は **0.2.0（#190）で削除済み** — 未初期化メソッドは拒否。Session drop（re-initialize 含む）で poll タスクを abort。`TransportFactory` で録画トランスポートを注入しテスト |
