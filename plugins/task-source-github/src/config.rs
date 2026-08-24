@@ -150,6 +150,21 @@ pub struct ProjectConfig {
     /// board", which cannot be turned into claims — the board does not know
     /// its own future repositories.
     pub repos: Vec<String>,
+    /// The Status option a triage-filed item should land in (#548 follow-up).
+    ///
+    /// Absent means the item is added with **no** Status. That leaves a
+    /// human-triage gate *when every workflow on this source filters by
+    /// status*: a status-less item matches no `project_status` condition —
+    /// but a trigger **without** one matches everything, status-less items
+    /// included, so the gate is only as real as the operator's triggers.
+    /// **Setting this to a value some trigger polls (e.g. `Todo`) removes
+    /// the gate outright** — filing then flows straight into an unattended
+    /// run. That can be exactly what the operator wants; it just should not
+    /// happen by accident, which is why the default is "no status".
+    ///
+    /// Per board, not top-level: option names belong to a board.
+    #[serde(default)]
+    pub triage_status: Option<String>,
 }
 
 impl ProjectConfig {
@@ -163,8 +178,14 @@ impl ProjectConfig {
     /// Read by nothing in this plugin: it travels in `claimed_repos` and ends
     /// up in a triage agent's prompt, so it is written as an instruction, not
     /// as a description.
-    pub fn destination(&self) -> String {
-        format!(
+    ///
+    /// `status_field` is the operator's name for the status column
+    /// ([`GithubConfig::status_field`], shared across boards) — passed in
+    /// rather than hard-coding `Status`, because an instruction naming a
+    /// column the board does not have sends the agent editing the wrong
+    /// field, or reporting that it could not find it.
+    pub fn destination(&self, status_field: &str) -> String {
+        let mut destination = format!(
             "GitHub Project #{} owned by the {} `{}`. \
              File the issue in the repository itself, then add it to that board with \
              `gh project item-add {} --owner {} --url <issue-url>`.",
@@ -176,7 +197,22 @@ impl ProjectConfig {
             self.owner,
             self.project_number,
             self.owner,
-        )
+        );
+        if let Some(status) = &self.triage_status {
+            // The concrete command sequence, because there is no one-shot CLI
+            // for this: `gh project item-edit` wants raw ids. Naming the
+            // steps is the difference between the agent doing it and the
+            // agent reporting that it could not find out how.
+            destination.push_str(&format!(
+                " Then set the new item's `{status_field}` to `{status}`: resolve the ids with \
+                 `gh project item-list {} --owner {} --format json` and \
+                 `gh project field-list {} --owner {} --format json`, then apply with \
+                 `gh project item-edit --project-id <project-id> --id <item-id> \
+                 --field-id <status-field-id> --single-select-option-id <option-id>`.",
+                self.project_number, self.owner, self.project_number, self.owner,
+            ));
+        }
+        destination
     }
 }
 
@@ -261,7 +297,7 @@ impl GithubConfig {
         self.projects
             .iter()
             .flat_map(|project| {
-                let destination = project.destination();
+                let destination = project.destination(&self.status_field);
                 project.repos.iter().map(move |repo| ClaimedRepo {
                     repo: repo.clone(),
                     destination: destination.clone(),
@@ -377,6 +413,38 @@ mod tests {
             !destination.contains("  ") && !destination.contains('\n'),
             "{destination:?}"
         );
+    }
+
+    /// `triage_status` puts the concrete follow-up commands into the
+    /// destination; absent leaves the item status-less (the human-triage
+    /// gate), so the instruction must not appear at all.
+    #[test]
+    fn triage_status_lands_in_the_destination_only_when_set() {
+        // A non-default `status_field`, so the test fails if the prose ever
+        // hard-codes `Status` again: an instruction naming a column the board
+        // does not have sends the agent editing the wrong field.
+        let with = parse(serde_json::json!({
+            "token": "t", "github_login": "me", "status_field": "状態",
+            "projects": [{ "owner": "me", "project_number": 7,
+                           "repos": ["totsuka"], "triage_status": "📥 Inbox" }]
+        }));
+        let destination = &with.claimed_repos()[0].destination;
+        assert!(destination.contains("`📥 Inbox`"), "{destination}");
+        assert!(destination.contains("`状態`"), "{destination}");
+        assert!(!destination.contains("`Status`"), "{destination}");
+        assert!(destination.contains("item-edit"), "{destination}");
+        // Still one readable paragraph (the prose lands in a prompt).
+        assert!(
+            !destination.contains("  ") && !destination.contains('\n'),
+            "{destination:?}"
+        );
+
+        let without = parse(serde_json::json!({
+            "token": "t", "github_login": "me",
+            "projects": [{ "owner": "me", "project_number": 7, "repos": ["totsuka"] }]
+        }));
+        let destination = &without.claimed_repos()[0].destination;
+        assert!(!destination.contains("Status"), "{destination}");
     }
 
     #[test]

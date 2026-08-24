@@ -546,6 +546,15 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
                 database.database_id
             ));
         }
+        // `triage_status` is an instruction to fill the status column; with no
+        // status property mapped there is no column to name, so the agent
+        // would be told to set a value somewhere unnameable.
+        if database.triage_status.is_some() && config.property_map.status.is_none() {
+            errors.push(format!(
+                "`triage_status` is set in the `[[databases]]` entry for `{}` but `property_map.status` is unset → map the status property, or remove triage_status",
+                database.database_id
+            ));
+        }
         for repo in &database.repos {
             if let Some(first) = seen.insert(repo.as_str(), database.database_id.as_str())
                 && first != database.database_id

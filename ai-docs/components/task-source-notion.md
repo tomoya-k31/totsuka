@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/fable-5, at: 2026-08-24T10:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -19,7 +19,7 @@ Notion データベースを totsuka のタスクソースとして接続する�
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `plugins/notion.toml`（= `InitializeParams.config`）を型付け。`token` / **`[[databases]]`**（各要素が `database_id` + `repos`、#542）/ `notion_user_id`（F-08 の自己判定）/ `property_map`（title / status(+`status_kind` status\|select) / assignee / priority / repo_hint / body ↔ Notion プロパティ名, F-03）/ `body_source`（none\|property\|page）/ `in_progress_statuses` / `status_map`（orchestrator status→Notion option）/ `priority_map`（option 名→数値）/ `source_name` / `api_url` / `api_version` / `max_retries` / `rate_limit_rps`。`deny_unknown_fields`（要素側も）。`claimed_repos()` が `[[databases]]` と `property_map` から `initialize` 応答の claim を組み立てる |
+| `config` | `plugins/notion.toml`（= `InitializeParams.config`）を型付け。`token` / **`[[databases]]`**（各要素が `database_id` + `repos`、#542）/ `notion_user_id`（F-08 の自己判定）/ `property_map`（title / status(+`status_kind` status\|select) / assignee / priority / repo_hint / body ↔ Notion プロパティ名, F-03）/ `body_source`（none\|property\|page）/ `in_progress_statuses` / `status_map`（orchestrator status→Notion option）/ `priority_map`（option 名→数値）/ `source_name` / `api_url` / `api_version` / `max_retries` / `rate_limit_rps`。`deny_unknown_fields`（要素側も）。`claimed_repos()` が `[[databases]]` と `property_map` から `initialize` 応答の claim を組み立てる。要素の `triage_status`（任意、#548 派生）を書くと destination の status 列に「set it to `値`」が入る。`property_map.status` 未設定との組は `config/validate` がエラー（埋める列を名指しできない指示になるため）。**この検査は `initialize` では走らない**（`project_number` と同じ分離）— 未 validate の設定は起動し、status 指示が黙って落ちるだけになる |
 | `transport` | `NotionTransport` trait（`request(method, path, body, idempotent)`）＋ reqwest 実装 `ReqwestTransport`（bearer 認証・`Notion-Version` ヘッダ固定・タイムアウト・指数バックオフ §5.3・3rps スロットリング）。ロジックを録画レスポンスでテストするための seam |
 | `blocks` | Notion ブロック ↔ Markdown 変換。読み（`blocks_to_markdown`, ページ本文→body）は主要ブロック型（heading/paragraph/bullet/numbered/to_do/quote/code）対応・未対応型はプレーンテキスト化。書き（`markdown_to_blocks`, F-07）は heading/bullet/quote/paragraph を生成し、2000 文字/リッチテキストの上限で分割（マルチバイト境界安全） |
 | `client` | `NotionClient<T: NotionTransport>`。`fetch`（databases query をページング取得→property_map で `Task` 正規化→トリガー絞り込み→取り込み制御 F-08。body=page 時のみ生存タスクのブロックを取得）/ `update_status`（DB スキーマから option を検証、未知 option はエラー→ページ property を PATCH, F-84）/ `publish`（Markdown→blocks 変換、100 件バッチで追記, F-07）/ `validate`（users/me 疎通＋マップ先プロパティ存在確認 F-59） |

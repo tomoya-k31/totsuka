@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/fable-5, at: 2026-08-24T10:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -482,6 +482,7 @@ owner = "tomoya-k31"                    # 必須。ユーザー名または組�
 owner_type = "user"                     # "user"（既定）| "organization"。エントリごとに指定できる
 project_number = 3                      # 必須。Project の URL 末尾の数字
 repos = ["totsuka", "dotfiles"]         # 必須・非空。取り込みフィルタ兼「このリポジトリの起票先」
+triage_status = "📥 Inbox"              # 任意。triage 起票した item に付ける Status（未設定 = Status なし）
 
 [[projects]]
 owner = "my-org"

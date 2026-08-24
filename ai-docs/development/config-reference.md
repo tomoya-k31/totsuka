@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml と plugins/{name}.toml の全キー・デフォルト値・意味の一覧。シークレット参照、設定スキーマのバージョニング方針、ワークフロー、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の plugins/github.toml、task-source-slack の plugins/slack.toml、agent-ide-herdr の plugins/herdr.toml を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
+generated: { by: claude-code/fable-5, at: 2026-08-24T10:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -679,6 +679,7 @@ poll_interval_secs = 60   # 省略時も 60
 | `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か。GraphQL のルートフィールドがこれで決まる。**エントリごとに指定できる**（user 所有と org 所有のボードを混在させられる） |
 | `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。**正数チェックは `initialize` では走らない**（下記） |
 | `repos` | string[] | **必須・非空** | このボードが担当するリポジトリ名。**2 つの役割を兼ねる**（下記） |
+| `triage_status` | string? | なし | triage 起票した item に付ける Status オプション名（#548 派生）。**未設定 = Status なしで追加**される。`project_status` を条件にする trigger には一致しないので、**全 workflow が status で絞っている構成なら**人間がトリアージするまで拾われない（status 条件の無い trigger は Status なしの item にも一致する — ゲートの実在は trigger の書き方次第）。**polling trigger と同じ値（例 `Todo`）を書くとそのゲートが消え、起票が即・無人実装に流れる** — 意図してやる分には正しい設定だが、事故でそうならないよう既定は「なし」 |
 
 ```toml
 token = "cmd:gh auth token"
@@ -694,6 +695,7 @@ owner = "my-org"
 owner_type = "organization"
 project_number = 3
 repos = ["web-app"]
+triage_status = "📥 Inbox"   # triage 起票をこの列に入れる（任意）
 
 status_field = "Status"
 in_progress_statuses = ["In Progress"]

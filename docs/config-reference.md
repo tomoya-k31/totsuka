@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:f03b46478eb164f1a8a5c620c15954f70867a69d2d0a65029cc143ac2c466d2a -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:b7d588fe5fd199983811b0a9a1f5b03d3378facf071dad48fa70a0fcfb4d2db4 -->
 
 # Configuration reference
 
@@ -584,6 +584,7 @@ Each `[[projects]]` entry:
 | `owner_type` | `user` \| `organization` | `user` | Whether `owner` is a user or an organization. **Set per entry**, so user-owned and org-owned boards can be mixed |
 | `project_number` | int | required | The ProjectsV2 number under `owner`. The positive-number check does **not** run at startup — see below |
 | `repos` | string[] | **required, non-empty** | Repository names this board is the tracker for. **It does two jobs** — see below |
+| `triage_status` | string? | none | Status option to put a triage-filed item into. **Unset = the item is added with no Status.** A status-less item matches no `project_status` trigger condition, so **if every workflow on this source filters by status** nothing picks it up until you triage it on the board (a trigger without a status condition matches it regardless — the gate is only as real as your triggers). **Setting this to a value one of your workflow triggers polls (e.g. `Todo`) removes that gate** — filing then flows straight into an unattended run. Fine when intended; the default keeps it from happening by accident |
 
 ```toml
 token = "cmd:gh auth token"
@@ -599,6 +600,7 @@ owner = "my-org"
 owner_type = "organization"
 project_number = 3
 repos = ["web-app"]
+triage_status = "📥 Inbox"   # optional: put triage-filed items into this column
 
 status_field = "Status"
 in_progress_statuses = ["In Progress"]
