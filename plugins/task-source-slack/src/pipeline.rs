@@ -328,7 +328,10 @@ where
     S: Submitter + Clone + 'static,
 {
     tokio::spawn(async move {
-        let mut filter = MentionFilter::new(&config.target_user_id);
+        let mut filter = MentionFilter::new(
+            &config.target_user_id,
+            trigger_reactions.mention_workflow().map(str::to_string),
+        );
         // Resolve the self-DM record channel up front (filter row 3). Failure
         // is not fatal: row 2 (own posts) already breaks reply loops.
         match api.conversations_open_self(&config.target_user_id).await {
@@ -733,12 +736,25 @@ async fn submit<S: Submitter>(
 ) {
     let (task, pending) = build_task(config, enriched, repo_hint);
     let task_id = task.id.clone();
+    // No workflow claims this task, so there is nowhere to submit it (#554).
+    // Dropping here rather than submitting is the honest end: the
+    // Orchestrator would reject it anyway, and going through the motions
+    // would install a pending entry for a task that never exists.
+    let Some(workflow) = enriched.mention.workflow.clone() else {
+        tracing::warn!(
+            task_id,
+            "no workflow claims this task → configure a `[[workflows]]` entry \
+             with source = \"slack\" (a mention needs one without a `reaction` \
+             trigger); dropping"
+        );
+        return;
+    };
     // Identifies *this* delivery's entry on the rollback paths below: since
     // #242 the pending index is keyed by conversation, and a sibling message
     // may have installed (or may yet install) coordinates under the same key.
     let mention_ts = pending.mention_ts.clone();
     state.insert_pending(task_id.clone(), pending);
-    match submitter.submit(task).await {
+    match submitter.submit(task, &workflow).await {
         SubmitOutcome::Accepted => {
             tracing::info!(task_id, "mention became a task; submitted");
         }
@@ -1210,6 +1226,7 @@ mod tests {
     /// "implement what this thread concluded" case.
     fn threaded_mention(prefix: Option<&str>) -> Mention {
         Mention {
+            workflow: Some("slack-reply".into()),
             channel: "C1".into(),
             user: "U_ME".into(),
             text: "やろう".into(),
@@ -1320,6 +1337,7 @@ mod tests {
     fn enriched(task_id_ts: &str) -> EnrichedMention {
         EnrichedMention {
             mention: Mention {
+                workflow: Some("slack-reply".into()),
                 channel: "C1".into(),
                 user: "U_OTHER".into(),
                 text: "<@U_ME> hi".into(),

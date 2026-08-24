@@ -189,7 +189,7 @@ async fn retryable_error_is_retried_then_final_ack_wins() {
         }));
     });
 
-    let outcome = client.submit_task(sample_task("r1")).await;
+    let outcome = client.submit_task(sample_task("r1"), "wf").await;
     assert_eq!(outcome, SubmitOutcome::Accepted);
     driver.await.unwrap();
 }
@@ -213,7 +213,7 @@ async fn final_statuses_are_never_retried() {
         );
     });
 
-    let outcome = client.submit_task(sample_task("f1")).await;
+    let outcome = client.submit_task(sample_task("f1"), "wf").await;
     assert_eq!(
         outcome,
         SubmitOutcome::Rejected {
@@ -236,7 +236,7 @@ async fn ack_timeout_retries_and_duplicate_resolves() {
         }));
     });
 
-    let outcome = client.submit_task(sample_task("t1")).await;
+    let outcome = client.submit_task(sample_task("t1"), "wf").await;
     assert_eq!(outcome, SubmitOutcome::Duplicate);
     driver.await.unwrap();
 }
@@ -246,7 +246,7 @@ async fn closed_writer_gives_up_immediately() {
     let (client, rx) = client_and_requests(Duration::from_millis(50));
     drop(rx); // host gone — permanent, no backoff
     let start = std::time::Instant::now();
-    let outcome = client.submit_task(sample_task("g1")).await;
+    let outcome = client.submit_task(sample_task("g1"), "wf").await;
     assert!(
         matches!(outcome, SubmitOutcome::GaveUp { .. }),
         "{outcome:?}"
@@ -277,7 +277,7 @@ async fn non_contract_error_code_gives_up_without_retry() {
         );
     });
 
-    let outcome = client.submit_task(sample_task("m1")).await;
+    let outcome = client.submit_task(sample_task("m1"), "wf").await;
     assert!(
         matches!(outcome, SubmitOutcome::GaveUp { .. }),
         "{outcome:?}"
@@ -295,7 +295,7 @@ struct CountingSubmitter {
 }
 
 impl Submitter for CountingSubmitter {
-    async fn submit(&self, task: Task) -> SubmitOutcome {
+    async fn submit(&self, task: Task, _workflow: &str) -> SubmitOutcome {
         self.submitted.lock().unwrap().push(task.id);
         SubmitOutcome::Accepted
     }

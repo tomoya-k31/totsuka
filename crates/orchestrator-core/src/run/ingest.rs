@@ -85,28 +85,52 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         Ok((id, outcome))
     }
 
-    /// Ingest one pushed task (`task/submit`, 0.1.6): normalize and
-    /// defensively re-match the workflow. Returns the final ack; `Err` is a
+    /// Ingest one pushed task (`task/submit`, 0.1.6): normalize and resolve
+    /// the workflow the plugin named. Returns the final ack; `Err` is a
     /// persistence failure (retryable for the plugin, fatal for the run).
+    ///
+    /// # Why the plugin names the workflow
+    ///
+    /// The plugin ran first-match over the workflows it was given at
+    /// `initialize`, so it already knows. Until 0.6.0 the Orchestrator
+    /// re-derived the same answer from `task.status` / `task.labels` — fields
+    /// this very plugin had just filled in. That check could not catch a
+    /// wrong plugin (it was reading the plugin's own report), and it forced
+    /// every trigger key a source wanted into the Orchestrator's vocabulary:
+    /// `reaction` is Slack's word and `project_status` is GitHub Projects',
+    /// and both sat in `domain::workflow` (#554).
+    ///
+    /// What the Orchestrator checks is what it alone knows: that the named
+    /// workflow exists, and that it belongs to the plugin that submitted.
     pub(super) fn on_task_submit(
         &mut self,
         source: String,
+        workflow: String,
         mut task: Task,
     ) -> Result<TaskSubmitResult, EngineError> {
-        // Workflow matching and the ingest key use the `[plugins.<name>]`
-        // key, not the plugin's own notion of its source name.
+        // The ingest key uses the `[plugins.<name>]` key, not the plugin's own
+        // notion of its source name.
         task.source = source;
         let workflows = self.settings.workflows.clone();
-        let Some(wf) = match_workflow(&workflows, &task) else {
+        let Some(wf) = workflows.iter().find(|w| w.name == workflow) else {
             return Ok(TaskSubmitResult {
                 status: TaskSubmitStatus::Rejected,
                 reason: Some(format!(
-                    "no workflow matches source `{}` (status: {:?}, labels: {:?}) → \
-                     add a [[workflows]] entry or fix its trigger",
-                    task.source, task.status, task.labels
+                    "no workflow named `{workflow}` → add a [[workflows]] entry \
+                     with that name, or correct the name the plugin submits"
                 )),
             });
         };
+        if wf.source != task.source {
+            return Ok(TaskSubmitResult {
+                status: TaskSubmitStatus::Rejected,
+                reason: Some(format!(
+                    "workflow `{workflow}` has source = `{}`, but `{}` submitted \
+                     the task → a plugin may only submit to its own workflows",
+                    wf.source, task.source
+                )),
+            });
+        }
         let (id, outcome) = self.ingest_task(wf, &task)?;
         match outcome {
             IngestOutcome::Created => {
@@ -265,7 +289,7 @@ fn forward_submit(
         Ok(None) => {
             request.responder.err(jsonrpc::Error::new(
                 error_code::INVALID_PARAMS,
-                "task/submit requires params → send { \"task\": { … } }",
+                "task/submit requires params → send { \"task\": { … }, \"workflow\": \"…\" }",
             ));
             return;
         }
@@ -290,6 +314,7 @@ fn forward_submit(
     if tx
         .send(PluginEvent::TaskSubmit {
             source: source.to_string(),
+            workflow: params.workflow,
             task: params.task,
             respond: otx,
         })
@@ -327,8 +352,9 @@ fn forward_submit(
 mod tests {
     use super::*;
 
-    /// An engine with one catch-all workflow, so `on_task_submit` always
-    /// matches and the ingest path is what the test observes.
+    /// An engine with one workflow named `implement`, which is the name every
+    /// test below submits under — so `on_task_submit` resolves and the ingest
+    /// path is what the test observes.
     async fn ingest_test_engine() -> Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter> {
         let mut engine = test_engine(Duration::from_secs(3600)).await;
         engine.settings.workflows = vec![Workflow {
@@ -378,7 +404,11 @@ mod tests {
         let mut engine = ingest_test_engine().await;
 
         let ack = engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         assert_eq!(ack.status, TaskSubmitStatus::Accepted);
         let id = engine
@@ -404,7 +434,11 @@ mod tests {
 
         // A new message in the same thread.
         let ack = engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:300"), "two"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:300"), "two"),
+            )
             .unwrap();
         assert_eq!(ack.status, TaskSubmitStatus::Accepted);
         let record = engine.db.get_task(id).unwrap().unwrap();
@@ -430,7 +464,11 @@ mod tests {
     async fn a_redelivered_message_is_a_duplicate_and_changes_nothing() {
         let mut engine = ingest_test_engine().await;
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         let id = engine
             .db
@@ -448,7 +486,11 @@ mod tests {
         }
 
         let ack = engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         assert_eq!(ack.status, TaskSubmitStatus::Duplicate);
         assert_eq!(
@@ -465,7 +507,11 @@ mod tests {
     async fn a_message_for_a_running_conversation_is_queued_without_touching_its_state() {
         let mut engine = ingest_test_engine().await;
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         let id = engine
             .db
@@ -480,7 +526,11 @@ mod tests {
         engine.db.apply_event(id, TaskEvent::Start, None).unwrap();
 
         let ack = engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:200"), "two"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:200"), "two"),
+            )
             .unwrap();
         assert_eq!(ack.status, TaskSubmitStatus::Accepted);
         assert_eq!(
@@ -501,7 +551,7 @@ mod tests {
 
         assert_eq!(
             engine
-                .on_task_submit("slack".into(), issue.clone())
+                .on_task_submit("slack".into(), "implement".into(), issue.clone())
                 .unwrap()
                 .status,
             TaskSubmitStatus::Accepted
@@ -517,7 +567,10 @@ mod tests {
         }
 
         assert_eq!(
-            engine.on_task_submit("slack".into(), issue).unwrap().status,
+            engine
+                .on_task_submit("slack".into(), "implement".into(), issue)
+                .unwrap()
+                .status,
             TaskSubmitStatus::Duplicate,
             "without a message_key the conversation id is the dedup key"
         );
@@ -535,7 +588,11 @@ mod tests {
     async fn a_new_conversation_starts_its_ledger_with_the_first_message() {
         let mut engine = ingest_test_engine().await;
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         let id = engine
             .db
@@ -559,7 +616,11 @@ mod tests {
     async fn retry_puts_the_failed_dispatch_s_messages_back_on_the_queue() {
         let mut engine = ingest_test_engine().await;
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         let id = engine
             .db
@@ -593,7 +654,11 @@ mod tests {
     async fn a_finished_conversation_with_unsent_messages_is_requeued() {
         let mut engine = ingest_test_engine().await;
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         let id = engine
             .db
@@ -610,7 +675,11 @@ mod tests {
 
         // A message lands mid-flight: ingest leaves the running task alone.
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:200"), "two"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:200"), "two"),
+            )
             .unwrap();
         engine
             .requeue_conversations_with_unsent_messages()
@@ -678,7 +747,11 @@ mod tests {
     async fn a_failed_conversation_is_not_requeued_by_the_sweep() {
         let mut engine = ingest_test_engine().await;
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         let id = engine
             .db
@@ -714,7 +787,11 @@ mod tests {
     async fn retry_does_not_revive_an_already_answered_batch() {
         let mut engine = ingest_test_engine().await;
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         let id = engine
             .db
@@ -741,7 +818,11 @@ mod tests {
         // A second message reopens it, but this dispatch fails before it is
         // handed over — so "two" is still unsent.
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:200"), "two"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:200"), "two"),
+            )
             .unwrap();
         engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
 
@@ -790,7 +871,11 @@ mod tests {
         );
 
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         let id = engine
             .db
@@ -913,7 +998,11 @@ mod tests {
     async fn a_cancelled_conversation_is_not_revived_by_leftover_messages() {
         let mut engine = ingest_test_engine().await;
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:100"), "one"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:100"), "one"),
+            )
             .unwrap();
         let id = engine
             .db
@@ -934,7 +1023,11 @@ mod tests {
 
         // ...but a message arriving now is a fresh instruction.
         engine
-            .on_task_submit("slack".into(), delivery("C1:100", Some("C1:200"), "two"))
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("C1:200"), "two"),
+            )
             .unwrap();
         assert_eq!(
             engine.db.get_task(id).unwrap().unwrap().state,

@@ -61,7 +61,11 @@ fn init_config() -> Value {
 }
 
 fn init_params() -> Value {
-    json!({ "protocol_version": "0.1.0", "config": init_config() })
+    json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
+    })
 }
 
 fn auth_ok() -> Value {
@@ -252,6 +256,7 @@ fn init_params_with_repos(config: Value, repositories: Value) -> Value {
         "protocol_version": "0.1.1",
         "config": config,
         "repositories": repositories,
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
     })
 }
 
@@ -368,6 +373,7 @@ fn init_params_with_llm(config: Value, repositories: Value, llm: Value) -> Value
         "config": config,
         "repositories": repositories,
         "llm": llm,
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
     })
 }
 

@@ -44,6 +44,7 @@ fn server_with_lookup(
 /// at the recorded transport and Socket Mode at the local WS mock.
 fn init_params() -> Value {
     json!({
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
         "protocol_version": "0.1.0",
         "config": {
             "state_dir": scratch_state_dir(),
@@ -238,6 +239,7 @@ async fn enrichment_failures_degrade_the_task_instead_of_dropping_it() {
 /// ③ (the ephemeral picker).
 fn init_params_multi_repo() -> Value {
     json!({
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
         "protocol_version": "0.1.0",
         "config": {
             "state_dir": scratch_state_dir(),

@@ -1360,7 +1360,7 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         launch(
             "task_source",
             "mock_src",
-            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
+            json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
                                 "instructions": "回答は日本語で作成してください。" }] }),
         )
         .await,
@@ -1535,7 +1535,7 @@ async fn dispatch_with_codex_tool_builds_codex_argv() {
         launch(
             "task_source",
             "mock_src",
-            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+            json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
         )
         .await,
     );
@@ -1642,7 +1642,7 @@ async fn dispatch_with_opencode_tool_routes_context_visibly() {
         launch(
             "task_source",
             "mock_src",
-            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
+            json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
                                 "instructions": "回答は日本語で作成してください。" }] }),
         )
         .await,
@@ -1746,7 +1746,7 @@ async fn a_design_dispatch_selects_the_question_variant_per_tool() {
             launch(
                 "task_source",
                 "mock_src",
-                json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+                json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
             )
             .await,
         );
@@ -1864,7 +1864,7 @@ async fn claiming_plugins(
         launch(
             "task_source",
             "mock_src",
-            json!({ "submit_tasks": fetched, "claimed_repos": claims }),
+            json!({ "submit_workflow": "wf", "submit_tasks": fetched, "claimed_repos": claims }),
         )
         .await,
     );
@@ -2216,7 +2216,7 @@ async fn an_initial_prompt_precedes_the_visible_marker_convention() {
         launch(
             "task_source",
             "mock_src",
-            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
+            json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
                                 "instructions": "回答は日本語で作成してください。" }] }),
         )
         .await,
@@ -2302,7 +2302,7 @@ async fn dispatch_without_hook_falls_back_to_visible_extra_context() {
         launch(
             "task_source",
             "mock_src",
-            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
+            json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
                                 "instructions": "回答は日本語で作成してください。" }] }),
         )
         .await,
@@ -2449,7 +2449,7 @@ async fn failed_hook_dispatch_rolls_back_reserved_session() {
         launch(
             "task_source",
             "mock_src",
-            json!({ "task_submit": true, "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+            json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
         )
         .await,
     );
@@ -2613,7 +2613,7 @@ async fn resume_plugins_with(
         launch(
             "task_source",
             "mock_src",
-            json!({ "task_submit": true, "submit_tasks": fetched }),
+            json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": fetched }),
         )
         .await,
     );

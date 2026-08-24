@@ -1227,8 +1227,14 @@ tool = "codex-cli"
     fn unified_validate_surfaces_workflow_errors_and_warnings() {
         // Two enabled plugins so plugin-ref checks pass; an `output = source`
         // workflow whose source declares no `source` output (error, F-83) and
-        // an overlapping pair (warning, F-81). Both must appear in one pass —
-        // an error must not stop the warnings from being reported.
+        // a `rubric` on a workflow that does not verify with the llm judge
+        // (warning). Both must appear in one pass — an error must not stop the
+        // warnings from being reported.
+        //
+        // The warning used to be trigger overlap (F-81). That check needed the
+        // Orchestrator to interpret triggers, which it stopped doing in #554;
+        // any other warning exercises the same "errors and warnings coexist"
+        // property this test is about.
         let toml = r#"
 [plugins.github]
 enabled = true
@@ -1247,20 +1253,14 @@ agent = "herdr"
 output = "source"
 
 [[workflows]]
-name = "overlap_a"
+name = "rubric_without_llm"
 source = "github"
 trigger = { label = "y" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-
-[[workflows]]
-name = "overlap_b"
-source = "github"
-trigger = { status = "実装待ち" }
-mode = "implement"
-agent = "herdr"
-output = "none"
+verification = "none"
+rubric = "the PR is open"
 "#;
         let cfg = RootConfig::from_toml_str(toml).unwrap();
         let findings = validate(&cfg, &env_from(&[]), |_| Some(vec![]), |_| None);
@@ -1273,9 +1273,11 @@ output = "none"
                     && f.message.contains("output = source"))
         );
         assert!(
-            findings.iter().any(
-                |f| f.severity == FindingSeverity::Warning && f.message.contains("overlapping")
-            )
+            findings
+                .iter()
+                .any(|f| f.severity == FindingSeverity::Warning
+                    && f.message.contains("rubric_without_llm")),
+            "{findings:?}"
         );
     }
 

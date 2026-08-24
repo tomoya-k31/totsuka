@@ -67,11 +67,14 @@ protocol_version = ">=0.6.0, <0.7"
 }
 
 /// The single test workflow: everything from `mock_src` runs on `mock_agent`.
+///
+/// Named `wf` to match [`workflows_with`], because the mock source names the
+/// workflow on `task/submit` (#554) and every fixture here says `wf`.
 fn workflows() -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(
         r#"
 [[workflows]]
-name = "implement"
+name = "wf"
 source = "mock_src"
 trigger = {}
 mode = "implement"
@@ -170,8 +173,7 @@ async fn plugin_set_with_source(
     notify_log: &Path,
 ) -> PluginSet {
     let mut set = PluginSet::default();
-    let mut source_config =
-        json!({ "task_submit": true, "submit_tasks": tasks, "notify_log": source_log });
+    let mut source_config = json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": tasks, "notify_log": source_log });
     if let Some(extra) = source_extra.as_object() {
         let target = source_config.as_object_mut().expect("object");
         for (k, v) in extra {
@@ -281,7 +283,7 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
     assert!(
         notifications
             .iter()
-            .any(|n| n["params"]["event"] == "done" && n["params"]["workflow"] == "implement"),
+            .any(|n| n["params"]["event"] == "done" && n["params"]["workflow"] == "wf"),
         "expected done notification: {notifications:?}"
     );
 
@@ -765,9 +767,11 @@ async fn publish_delivery_follows_the_workflow_key() {
     let db_path = base.join("state.db");
 
     let plugins = plugin_set(
+        // The source names the workflow now (#554), so the routing under test
+        // is the name — not a status the Orchestrator would re-match.
         json!([
-            { "id": "7", "source": "github", "title": "task 7", "status": "A" },
-            { "id": "8", "source": "github", "title": "task 8", "status": "B" },
+            { "id": "7", "source": "github", "title": "task 7", "workflow": "wf_direct" },
+            { "id": "8", "source": "github", "title": "task 8", "workflow": "wf_default" },
         ]),
         json!({ "stream_states": ["running", "done"] }),
         &source_log,
@@ -779,14 +783,14 @@ async fn publish_delivery_follows_the_workflow_key() {
     // session id (`sess-mock`), so two live sessions collide in the
     // (plugin, session) -> task routing map and one task never finishes.
     settings.limits = Limits::global(1);
-    // Distinct triggers: task 7 (status A) hits the direct workflow, task 8
-    // (status B) the one with no `publish` key.
+    // Two workflows: task 7 is submitted under the one with `publish =
+    // "direct"`, task 8 under the one with no `publish` key.
     let cfg = RootConfig::from_toml_str(
         r#"
 [[workflows]]
 name = "wf_direct"
 source = "mock_src"
-trigger = { status = "A" }
+trigger = {}
 mode = "plan"
 agent = "mock_agent"
 output = "source"
@@ -795,7 +799,7 @@ publish = "direct"
 [[workflows]]
 name = "wf_default"
 source = "mock_src"
-trigger = { status = "B" }
+trigger = {}
 mode = "plan"
 agent = "mock_agent"
 output = "source"
@@ -859,9 +863,10 @@ async fn a_workflow_cleanup_override_beats_the_mode_default() {
     let db_path = base.join("state.db");
 
     let plugins = plugin_set(
+        // Routed by the name the source submits under (#554).
         json!([
-            { "id": "7", "source": "github", "title": "task 7", "status": "A" },
-            { "id": "8", "source": "github", "title": "task 8", "status": "B" },
+            { "id": "7", "source": "github", "title": "task 7", "workflow": "wf_keep" },
+            { "id": "8", "source": "github", "title": "task 8", "workflow": "wf_sweep" },
         ]),
         json!({ "stream_states": ["running", "done"] }),
         &source_log,
@@ -878,7 +883,7 @@ async fn a_workflow_cleanup_override_beats_the_mode_default() {
 [[workflows]]
 name = "wf_keep"
 source = "mock_src"
-trigger = { status = "A" }
+trigger = {}
 mode = "plan"
 agent = "mock_agent"
 output = "none"
@@ -887,7 +892,7 @@ cleanup = "manual"
 [[workflows]]
 name = "wf_sweep"
 source = "mock_src"
-trigger = { status = "B" }
+trigger = {}
 mode = "plan"
 agent = "mock_agent"
 output = "none"
@@ -1375,7 +1380,7 @@ async fn submitted_task_is_persisted_acked_and_dispatched_without_polling() {
             // task_submit.
             json!({
                 "task_submit": true,
-                "submit_tasks": [mock_task("s1")],
+                "submit_workflow": "wf", "submit_tasks": [mock_task("s1")],
                 "notify_log": source_log,
             }),
         )
@@ -1439,7 +1444,7 @@ async fn duplicate_submit_is_acked_duplicate_and_ingested_once() {
             // answered `duplicate`, never ingested twice.
             json!({
                 "task_submit": true,
-                "submit_tasks": [mock_task("d1"), mock_task("d1")],
+                "submit_workflow": "wf", "submit_tasks": [mock_task("d1"), mock_task("d1")],
                 "notify_log": source_log,
             }),
         )
@@ -1495,7 +1500,7 @@ async fn submit_without_matching_workflow_is_rejected() {
             "stray_src",
             json!({
                 "task_submit": true,
-                "submit_tasks": [mock_task("r1")],
+                "submit_workflow": "wf", "submit_tasks": [mock_task("r1")],
                 "notify_log": source_log,
             }),
         )
@@ -1542,7 +1547,7 @@ async fn restart_dispatches_persisted_but_undispatched_submission() {
                 "mock_src",
                 json!({
                     "task_submit": true,
-                    "submit_tasks": [mock_task("s9")],
+                    "submit_workflow": "wf", "submit_tasks": [mock_task("s9")],
                     "notify_log": source_log,
                 }),
             )

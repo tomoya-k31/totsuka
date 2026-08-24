@@ -40,6 +40,7 @@ fn init_params() -> Value {
 /// the plugin and must reload the same persisted draft store (#122).
 fn init_params_in(state_dir: &std::path::Path) -> Value {
     json!({
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
         "protocol_version": "0.1.0",
         "config": {
             "state_dir": state_dir,

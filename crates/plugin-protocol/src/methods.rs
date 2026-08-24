@@ -295,6 +295,19 @@ pub struct ConfigValidateResult {
 pub struct TaskSubmitParams {
     /// The task to ingest.
     pub task: Task,
+    /// The workflow this task belongs to (`[[workflows]].name`), 0.6.0 / #554.
+    ///
+    /// **The plugin decides.** It already ran first-match over the workflows
+    /// it was given at `initialize`, so it knows; before 0.6.0 the
+    /// Orchestrator re-derived the same answer from `Task.status`/`labels`,
+    /// which was the *plugin's own* report of the task — the check and the
+    /// thing checked came from one place, so it protected against nothing
+    /// while forcing every trigger key into the Orchestrator's vocabulary.
+    ///
+    /// The Orchestrator verifies the two things it can: that a workflow of
+    /// this name exists, and that its `source` is the submitting plugin. A
+    /// mismatch is [`TaskSubmitStatus::Rejected`].
+    pub workflow: String,
 }
 
 /// The final disposition of a `task/submit` (0.1.6). Every variant is
@@ -314,8 +327,8 @@ pub enum TaskSubmitStatus {
     /// The task was already ingested (same `source` + task id) — an
     /// idempotent re-submit, e.g. a retry after a lost ack. Drop it.
     Duplicate,
-    /// Permanently unprocessable (e.g. no workflow matches the task).
-    /// `reason` says why; drop and log.
+    /// Permanently unprocessable (e.g. the named workflow does not exist,
+    /// or belongs to a different source). `reason` says why; drop and log.
     Rejected,
 }
 
@@ -935,6 +948,7 @@ mod tests {
         });
         round_trip(&TaskSubmitParams {
             task: sample_task(),
+            workflow: "gh-implement".into(),
         });
         round_trip(&TaskSubmitResult {
             status: TaskSubmitStatus::Accepted,
@@ -942,7 +956,7 @@ mod tests {
         });
         round_trip(&TaskSubmitResult {
             status: TaskSubmitStatus::Rejected,
-            reason: Some("no workflow matches source \"github\" → add one".into()),
+            reason: Some("workflow `gh-implement` is not defined → add it".into()),
         });
     }
 

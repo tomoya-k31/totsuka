@@ -16,6 +16,7 @@
       "assignee": "tomoya",
       "message_key": "C0123456789:1718000000.000300",
       "instructions": "返信案を日本語で作成してください。"
-    }
+    },
+    "workflow": "slack-reply"
   }
 }

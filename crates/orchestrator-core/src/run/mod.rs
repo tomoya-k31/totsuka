@@ -56,7 +56,7 @@ use crate::config::{
 };
 use crate::domain::signal::{AgentSignal, JobId};
 use crate::domain::state::{TaskEvent, TaskState};
-use crate::domain::workflow::{Workflow, match_workflow};
+use crate::domain::workflow::Workflow;
 use crate::paths::Paths;
 use crate::ports::agent_session::AttachOutcome;
 use crate::ports::clock::Clock;
@@ -160,6 +160,8 @@ pub(crate) enum PluginEvent {
     TaskSubmit {
         /// The submitting plugin's instance name (overwrites `task.source`).
         source: String,
+        /// The workflow the plugin says this task belongs to (0.6.0, #554).
+        workflow: String,
         /// The task in the common schema.
         task: Task,
         /// Where the forwarder awaits the ack.

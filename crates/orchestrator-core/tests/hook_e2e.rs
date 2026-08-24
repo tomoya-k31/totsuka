@@ -180,6 +180,7 @@ async fn plugins(
             "mock_src",
             json!({
                 "task_submit": true,
+                "submit_workflow": "wf",
                 "submit_tasks": [{ "id": "1", "source": "github", "title": "hook task" }],
             }),
         )
@@ -435,7 +436,7 @@ async fn conversation_plugins(
             // the requests it made — i.e. the `task/submit` ack. That is the
             // only positive evidence that a submission was processed, which a
             // test asserting "nothing else happened" needs to wait for.
-            json!({ "task_submit": true, "submit_tasks": tasks, "notify_log": source_log }),
+            json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": tasks, "notify_log": source_log }),
         )
         .await,
     );

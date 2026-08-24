@@ -448,12 +448,41 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(ms));
             }
             if let Some(tasks) = config.get("submit_tasks").and_then(Value::as_array) {
+                // Which workflow each task belongs to (0.6.0, #554). A real
+                // source runs first-match over `params.workflows`; this double
+                // takes `submit_workflow` when the test names one, else the
+                // first workflow it was handed. A per-task `"workflow": "…"`
+                // overrides both — including with a name that does not exist,
+                // which is how the reject path is exercised.
+                let default_workflow = config
+                    .get("submit_workflow")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        params
+                            .get("workflows")
+                            .and_then(Value::as_array)
+                            .and_then(|w| w.first())
+                            .and_then(|w| w.get("workflow"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default();
                 for (i, task) in tasks.iter().enumerate() {
+                    let workflow = task
+                        .get("workflow")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| default_workflow.clone());
+                    let mut task = task.clone();
+                    if let Some(obj) = task.as_object_mut() {
+                        obj.remove("workflow");
+                    }
                     let request = serde_json::json!({
                         "jsonrpc": "2.0",
                         "id": format!("submit-{i}"),
                         "method": "task/submit",
-                        "params": { "task": task },
+                        "params": { "task": task, "workflow": workflow },
                     });
                     let _ = writeln!(stdout, "{}", serde_json::to_string(&request).unwrap());
                     let _ = stdout.flush();

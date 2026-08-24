@@ -49,9 +49,17 @@ pub struct Mention {
     /// Which instruction set the matched workflow's profile asks for (#398),
     /// from `instructions_kind` in the trigger. This is what the pipeline
     /// branches on (#450) — **not** the prefix, which `triage` and
-    /// `implement` both carry. `None` on the plain mention path, where the
-    /// workflow is matched Orchestrator-side after submit.
+    /// `implement` both carry. `None` on the plain mention path, whose
+    /// workflow carries no `instructions_kind`.
     pub instructions_kind: Option<String>,
+    /// The workflow this task belongs to (0.6.0, #554), named on
+    /// `task/submit`.
+    ///
+    /// Filled from the reaction's trigger, or — on the mention path — from
+    /// the first workflow the Orchestrator listed that requires no reaction.
+    /// `None` means no workflow claims this mention, and the task is dropped
+    /// rather than submitted somewhere arbitrary.
+    pub workflow: Option<String>,
 }
 
 impl Mention {
@@ -120,18 +128,23 @@ pub struct MentionFilter {
     tag_closed: String,
     tag_labeled: String,
     self_dm_channel: Option<String>,
+    /// The workflow a plain mention belongs to (0.6.0, #554). `None` means
+    /// none is configured, and mentions are dropped rather than submitted to
+    /// a workflow nobody named.
+    mention_workflow: Option<String>,
     processed: HashSet<String>,
     processed_order: VecDeque<String>,
 }
 
 impl MentionFilter {
     /// A filter for mentions of `target_user_id`.
-    pub fn new(target_user_id: &str) -> Self {
+    pub fn new(target_user_id: &str, mention_workflow: Option<String>) -> Self {
         Self {
             target_user_id: target_user_id.to_string(),
             tag_closed: format!("<@{target_user_id}>"),
             tag_labeled: format!("<@{target_user_id}|"),
             self_dm_channel: None,
+            mention_workflow,
             processed: HashSet::new(),
             processed_order: VecDeque::new(),
         }
@@ -208,11 +221,11 @@ impl MentionFilter {
             // …and the catch-all is `answer`, whose task *is* the conversation
             // (ADR-0015). A prefix here would open a second task per message.
             task_id_prefix: None,
-            // Which workflow a plain mention matches is decided
-            // Orchestrator-side *after* submit, so the plugin cannot know the
-            // kind here. `None` selects the reply instructions, which is what
-            // the catch-all `answer` wants.
+            // The mention workflow carries no `instructions_kind` — it is
+            // the catch-all `answer`, and `None` selects the reply
+            // instructions, which is what that wants.
             instructions_kind: None,
+            workflow: self.mention_workflow.clone(),
         })
     }
 
@@ -242,6 +255,7 @@ mod tests {
 
     fn reacted(ts: &str, thread_ts: Option<&str>, prefix: Option<&str>) -> Mention {
         Mention {
+            workflow: Some("slack-reply".into()),
             channel: "C1".into(),
             user: "U_OTHER".into(),
             text: "方針はこれでいこう".into(),
@@ -295,7 +309,7 @@ mod tests {
     use serde_json::json;
 
     fn filter() -> MentionFilter {
-        let mut f = MentionFilter::new("U_ME");
+        let mut f = MentionFilter::new("U_ME", Some("slack-reply".into()));
         f.set_self_dm_channel("D_SELF".to_string());
         f
     }

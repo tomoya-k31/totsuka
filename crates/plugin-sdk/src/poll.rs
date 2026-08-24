@@ -1,8 +1,10 @@
 //! [`poll_loop`]: the fetch→submit timer for polling-style sources (GitHub,
 //! Notion) that migrated off the deprecated `tasks/fetch`.
 //!
-//! Each tick fetches every trigger (the `InitializeParams.triggers` supplied
-//! at initialize, 0.1.6) and submits each task. Ticks never overlap — the
+//! Each tick fetches every workflow's trigger (the
+//! `InitializeParams.workflows` supplied at initialize) and submits each task
+//! **naming that workflow** (0.6.0, #554) — the loop already iterates per
+//! workflow, so the answer the Orchestrator used to re-derive is right here. Ticks never overlap — the
 //! next sleep starts after the current pass finishes — and the interval is
 //! jittered ±10% so multiple plugins do not thundering-herd a shared API.
 //! Duplicate submissions are cheap `duplicate` acks, so no seen-set is kept.
@@ -44,7 +46,7 @@ pub async fn poll_loop<S, F, Fut>(
             };
             for task in tasks {
                 let task_id = task.id.clone();
-                match submitter.submit(task).await {
+                match submitter.submit(task, &trigger.workflow).await {
                     SubmitOutcome::Accepted => {
                         tracing::info!(task = %task_id, workflow = %trigger.workflow, "task submitted");
                     }
