@@ -372,7 +372,6 @@ mod tests {
             tool: None,
             profile: None,
             initial_prompt: None,
-            publish: None,
             cleanup: None,
         }];
         engine

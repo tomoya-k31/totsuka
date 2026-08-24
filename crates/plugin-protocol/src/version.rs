@@ -203,23 +203,12 @@ use semver::{Version, VersionReq};
 /// requires the change (omitting the key is a valid 0.5.1 response), which is
 /// why the version is a patch; the recompile is the cost of the field living
 /// in a struct rather than behind a constructor.
-/// 0.5.2: [`ResultPublishParams::delivery`](crate::methods::ResultPublishParams::delivery)
-/// (#548) — how the source should deliver a published result to a human:
-/// `draft` (the approval flow, unchanged default) or `direct` (post
-/// immediately, no approval). The Orchestrator decides from
-/// `[[workflows]].publish`; the plugin obeys. Additive and optional under the
-/// familiar contract: absent means a pre-0.5.2 Orchestrator, and the plugin
-/// must fall back to `draft` — the behaviour those Orchestrators were written
-/// against. An *unrecognised* value must also resolve to `draft`
-/// ([`PublishDelivery::Unrecognized`](crate::methods::PublishDelivery)):
-/// the modes differ in whether a human gate is skipped, and skipping a gate
-/// on an instruction this build cannot read is the wrong side to err on.
-/// Today only the Slack source reads it — github/notion declare no outputs
-/// since #398 and are never sent `result/publish` — which is acceptable:
-/// the draft/approve machinery is Slack's, and the field exists so the
-/// *policy* (which workflows may skip approval) lives in core config rather
-/// than in a plugin-side emoji table (#396 deliberately removed one).
-/// `<0.6` manifests keep matching; patch, not minor, for the 0.4.1 reason.
+/// 0.5.2: `ResultPublishParams.delivery` (#548) — how the source should
+/// deliver a published result to a human. **Removed again in 0.6.0**: the
+/// choice is a plugin's own setting, so it travels as a `[[workflows]]` option
+/// the plugin claims rather than as a wire field the Orchestrator computes
+/// (#554). The policy is still the operator's and still lives in
+/// `config.toml`; what changed is who reads it.
 ///
 /// 0.6.0 (#554): plugin-owned settings reach the places the Orchestrator owns.
 ///
@@ -237,6 +226,12 @@ use semver::{Version, VersionReq};
 /// - [`ConfigValidateParams::workflows`](crate::methods::ConfigValidateParams::workflows)
 ///   carries the same list, so `totsuka config validate` asks the question
 ///   without the plugin having to remember what `initialize` said.
+/// - `ResultPublishParams.delivery` and `PublishDelivery` are **removed**:
+///   `publish` became one of those claimed options. Two generations is a short
+///   life for a wire field, and the reason is worth naming — 0.5.2 put it on
+///   the wire because there was no way for a plugin-owned key to reach a
+///   plugin, so the Orchestrator had to read the key and translate. This
+///   release is that missing way.
 ///
 /// **Minor, and it strands every `<0.6` manifest — that is the intent.** The
 /// rename is a wire break: a plugin reading `triggers` sees nothing under a

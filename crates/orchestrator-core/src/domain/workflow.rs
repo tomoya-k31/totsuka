@@ -21,8 +21,7 @@
 use plugin_protocol::manifest::OutputCapability;
 
 use crate::config::{
-    CleanupPolicyConfig, OutputPolicy, Profile, PublishConfig, VerificationMode, WorkflowConfig,
-    WorkflowMode,
+    CleanupPolicyConfig, OutputPolicy, Profile, VerificationMode, WorkflowConfig, WorkflowMode,
 };
 
 /// A trigger condition: an opaque key-value set the plugin filters on.
@@ -118,9 +117,6 @@ pub struct Workflow {
     /// Normalised at interpretation: empty or whitespace-only in the config
     /// becomes `None`, so downstream only has to ask "is there one".
     pub initial_prompt: Option<String>,
-    /// How the source delivers the published result (#548): `None` means the
-    /// default (the plugin's approval flow).
-    pub publish: Option<PublishConfig>,
     /// Worktree cleanup override (#548): `None` means the mode-selected
     /// `[worktree]` default.
     pub cleanup: Option<CleanupPolicyConfig>,
@@ -148,7 +144,6 @@ impl Workflow {
             rubric: config.rubric.clone(),
             tool: config.tool.clone(),
             profile: config.profile,
-            publish: config.publish,
             cleanup: config.cleanup,
             // `""` and `"   "` mean the operator wrote the key and left it
             // blank. Rejecting that would be a validation error for something

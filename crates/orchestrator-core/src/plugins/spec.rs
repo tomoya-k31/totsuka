@@ -346,6 +346,46 @@ agent = "herdr"
         assert!(triggers[1].trigger.is_object());
     }
 
+    /// The plugin-owned `[[workflows]]` keys reach the plugins the workflow
+    /// names — **both** of them (#554). The Orchestrator cannot tell whose a
+    /// key is, so sending it to only one would decide that question by
+    /// omission.
+    #[test]
+    fn workflow_options_reach_the_source_and_the_agent() {
+        let cfg = root(
+            r#"
+[[workflows]]
+name = "slack-books"
+source = "slack"
+agent = "herdr"
+profile = "triage"
+publish = "direct"
+
+[[workflows]]
+name = "gh-design"
+source = "github"
+agent = "herdr"
+profile = "design"
+"#,
+        );
+        let slack = workflow_infos(&cfg, "slack", true);
+        assert_eq!(slack.len(), 1);
+        assert_eq!(slack[0].options["publish"], serde_json::json!("direct"));
+
+        // The agent sees the same key — and every workflow naming it, not just
+        // the ones with options.
+        let herdr = workflow_infos(&cfg, "herdr", false);
+        assert_eq!(herdr.len(), 2);
+        let books = herdr.iter().find(|w| w.workflow == "slack-books").unwrap();
+        assert_eq!(books.options["publish"], serde_json::json!("direct"));
+        // …but not the trigger: selecting tasks is the source's business.
+        assert_eq!(books.trigger, serde_json::json!({}));
+
+        // A workflow with no plugin keys carries an empty map, never `null`.
+        let design = herdr.iter().find(|w| w.workflow == "gh-design").unwrap();
+        assert!(design.options.is_empty());
+    }
+
     /// The profile → `instructions_kind` translation the source plugins read
     /// (#398), and the two silences that are deliberate.
     #[test]

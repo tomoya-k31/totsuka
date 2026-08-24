@@ -37,7 +37,7 @@ use plugin_protocol::method;
 use plugin_protocol::methods::{
     AgentState, ConfigValidateParams, ConfigValidateResult, DiagnosticsSnapshotParams,
     DiagnosticsSnapshotResult, ExecutionMode, InitializeParams, InitializeResult, NotifierEvent,
-    NotifyParams, PublishDelivery, ResultPublishParams, SessionAttachParams, SessionAttachResult,
+    NotifyParams, ResultPublishParams, SessionAttachParams, SessionAttachResult,
     SessionFocusParams, SessionFocusResult, SessionListParams, SessionListResult,
     SessionReleaseParams, SessionReleaseResult, StateNotification, StateSubscribeParams,
     TaskCancelParams, TaskDispatchParams, TaskDispatchResult, TaskLookupParams, TaskLookupResult,
@@ -410,27 +410,17 @@ fn enum_wire_values_are_pinned() {
     pin(PluginKind::AgentIde, "agent_ide");
     pin(PluginKind::Notifier, "notifier");
     pin(OutputCapability::Source, "source");
-    pin(PublishDelivery::Draft, "draft");
-    pin(PublishDelivery::Direct, "direct");
-    // `Unrecognized` is deliberately NOT pinned to a wire string: it exists to
-    // *receive* unknown values, never to be sent. What is pinned is the
-    // receiving contract — any unknown string lands on it, and the effective
-    // mode stays the safe one (the approval gate is not skipped on an
-    // instruction this build cannot read).
-    let unknown: PublishDelivery =
-        serde_json::from_value(Value::String("hologram".into())).unwrap();
-    assert_eq!(unknown, PublishDelivery::Unrecognized);
-    let params: ResultPublishParams =
-        serde_json::from_str(r#"{"task_id":"42","content":"x","delivery":"hologram"}"#).unwrap();
-    assert_eq!(params.effective_delivery(), PublishDelivery::Draft);
-    // Absent — a pre-0.5.2 Orchestrator — is also draft, and an absent field
-    // must not appear on the wire when unset. Asserted on the serialized
-    // *object's keys*, not a substring: `content` could legitimately contain
-    // the word "delivery" and a substring check would then lie both ways.
-    let old: ResultPublishParams =
-        serde_json::from_str(r#"{"task_id":"42","content":"x"}"#).unwrap();
-    assert_eq!(old.effective_delivery(), PublishDelivery::Draft);
-    let wire = serde_json::to_value(&old).unwrap();
+    // `delivery` is gone from `result/publish` in 0.6.0 (#554): how a result
+    // reaches a human is the source plugin's own setting, claimed off
+    // `[[workflows]]`, not something the Orchestrator computes and sends. An
+    // Orchestrator that still sent it would be ignored, so the assertion that
+    // matters is that nothing *emits* it.
+    let params = ResultPublishParams {
+        task_id: "42".into(),
+        content: "x".into(),
+        format: None,
+    };
+    let wire = serde_json::to_value(&params).unwrap();
     assert!(
         wire.as_object()
             .is_some_and(|o| !o.contains_key("delivery")),

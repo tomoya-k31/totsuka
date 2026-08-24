@@ -390,32 +390,6 @@ pub struct TaskUpdateStatusParams {
     pub status: String,
 }
 
-/// How a source should deliver a published result to a human (0.5.2, #548).
-///
-/// Named from the *plugin's* vocabulary: `draft` is what the Slack source has
-/// always done (a `Draft` awaiting approval buttons), `direct` skips the
-/// approval and posts immediately. The Orchestrator decides which — from
-/// `[[workflows]].publish` — and the plugin obeys; the policy question "which
-/// workflows may post without approval" stays in core config where the
-/// operator wrote it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PublishDelivery {
-    /// Present the content for human approval before anything is visible
-    /// (the pre-0.5.2 behaviour, and what an absent field means).
-    Draft,
-    /// Post the content immediately, no approval step.
-    Direct,
-    /// A value this build does not know. **Must be treated as
-    /// [`Draft`](PublishDelivery::Draft)**:
-    /// the two known modes differ in whether a human gate is skipped, and
-    /// skipping a gate on an unrecognised instruction is the wrong side to
-    /// err on. `#[serde(other)]` so a future mode never makes the whole
-    /// params undeserializable (same contract as `NotReleased::Unknown`).
-    #[serde(other)]
-    Unrecognized,
-}
-
 /// `result/publish` params (O→P, F-07): write a result back to the source
 /// (Issue comment, Notion page body, …). The plugin decides the destination.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -427,25 +401,6 @@ pub struct ResultPublishParams {
     /// Content format hint (e.g. `markdown`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
-    /// How to deliver it to the human (0.5.2, #548). Absent — every
-    /// pre-0.5.2 Orchestrator — means [`PublishDelivery::Draft`], the
-    /// behaviour those Orchestrators were written against.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delivery: Option<PublishDelivery>,
-}
-
-impl ResultPublishParams {
-    /// The effective delivery mode: absent and unrecognised both resolve to
-    /// [`PublishDelivery::Draft`] — see the enum's docs for why unrecognised
-    /// must not skip the approval gate.
-    pub fn effective_delivery(&self) -> PublishDelivery {
-        match self.delivery {
-            Some(PublishDelivery::Direct) => PublishDelivery::Direct,
-            Some(PublishDelivery::Draft) | Some(PublishDelivery::Unrecognized) | None => {
-                PublishDelivery::Draft
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -943,7 +898,6 @@ mod tests {
         round_trip(&ResultPublishParams {
             task_id: "42".into(),
             content: "# Design".into(),
-            delivery: Some(PublishDelivery::Direct),
             format: Some("markdown".into()),
         });
         round_trip(&TaskSubmitParams {

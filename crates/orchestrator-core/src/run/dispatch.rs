@@ -1369,7 +1369,6 @@ mod tests {
             tool: tool.map(str::to_string),
             profile: None,
             initial_prompt: None,
-            publish: None,
             cleanup: None,
         }
     }

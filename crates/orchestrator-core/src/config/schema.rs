@@ -516,17 +516,6 @@ pub struct WorkflowConfig {
     /// Empty or whitespace-only is treated as unset rather than rejected.
     #[serde(default)]
     pub initial_prompt: Option<String>,
-    /// How the source delivers this workflow's published result to a human
-    /// (#548, [ADR-0057]): `draft` (the approval flow — the default) or
-    /// `direct` (post immediately, no approval).
-    ///
-    /// Only meaningful with `output = "source"`; validation warns otherwise.
-    /// Like [`output`](Self::output), this is a wiring choice, not a
-    /// permission, which is why a profile does not fix it.
-    ///
-    /// [ADR-0057]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0057-per-workflow-publish-and-cleanup.md
-    #[serde(default)]
-    pub publish: Option<PublishConfig>,
     /// Worktree cleanup override for this workflow's tasks (#548, ADR-0057).
     ///
     /// Beats the mode-selected `[worktree]` default (`cleanup` /
@@ -555,21 +544,6 @@ pub struct WorkflowConfig {
     /// Orchestrator will not settle by picking.
     #[serde(flatten)]
     pub options: toml::Table,
-}
-
-/// `[[workflows]].publish` — how a published result reaches the human (#548).
-///
-/// The wire twin is [`plugin_protocol::methods::PublishDelivery`]; this stays
-/// a separate type because config vocabulary and wire vocabulary evolve on
-/// different clocks (the wire enum has an `Unrecognized` catch-all this
-/// config type must not accept).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PublishConfig {
-    /// Present for approval before anything is visible (the default).
-    Draft,
-    /// Post immediately, no approval step.
-    Direct,
 }
 
 impl WorkflowConfig {
@@ -968,11 +942,11 @@ thread_scope = "parent"
         let wf = &cfg.workflows[0];
         assert_eq!(
             wf.options.keys().collect::<Vec<_>>(),
-            vec!["thread_scope"],
-            "only the plugin-defined key is leftover"
+            vec!["publish", "thread_scope"],
+            "the plugin-defined keys are leftover — `publish` among them since \
+             #554 moved it out of core"
         );
         // …and the named fields still parsed, rather than being shadowed.
-        assert_eq!(wf.publish, Some(PublishConfig::Direct));
         assert_eq!(wf.timeout_secs, Some(0));
         assert_eq!(
             wf.trigger.get("reaction").and_then(|v| v.as_str()),

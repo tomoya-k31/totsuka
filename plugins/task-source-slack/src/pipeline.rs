@@ -50,6 +50,12 @@ pub struct PendingMention {
     pub sender_name: String,
     /// Permalink to the mention (for the record), when resolvable.
     pub permalink: Option<String>,
+    /// The workflow this task was submitted under (#554).
+    ///
+    /// `result/publish` arrives with a task id and nothing else, so this is
+    /// how the plugin gets back to the workflow whose `publish` key decides
+    /// whether the result goes through the approval gate.
+    pub workflow: String,
 }
 
 /// Bound on the pending-mention index. `result/publish` (#107) consumes
@@ -131,6 +137,18 @@ impl SharedState {
     /// Remove and return `task_id`'s coordinates — the terminal consumption
     /// at `result/publish` time, which also keeps the index from holding
     /// entries for tasks that already round-tripped.
+    /// The workflow a pending task was submitted under (#554), without
+    /// consuming the entry — `result/publish` needs it *before* deciding which
+    /// presentation path takes (and consumes) it.
+    pub fn workflow_of(&self, task_id: &str) -> Option<String> {
+        self.pending
+            .lock()
+            .unwrap()
+            .entries
+            .get(task_id)
+            .map(|p| p.workflow.clone())
+    }
+
     pub fn take_pending(&self, task_id: &str) -> Option<PendingMention> {
         let mut index = self.pending.lock().unwrap();
         let taken = index.entries.remove(task_id);
@@ -734,7 +752,7 @@ async fn submit<S: Submitter>(
     repo_hint: Option<String>,
     submitter: &S,
 ) {
-    let (task, pending) = build_task(config, enriched, repo_hint);
+    let (task, mut pending) = build_task(config, enriched, repo_hint);
     let task_id = task.id.clone();
     // No workflow claims this task, so there is nowhere to submit it (#554).
     // Dropping here rather than submitting is the honest end: the
@@ -749,6 +767,7 @@ async fn submit<S: Submitter>(
         );
         return;
     };
+    pending.workflow = workflow.clone();
     // Identifies *this* delivery's entry on the rollback paths below: since
     // #242 the pending index is keyed by conversation, and a sibling message
     // may have installed (or may yet install) coordinates under the same key.
@@ -1081,6 +1100,8 @@ fn build_task(
         sender_id: mention.user.clone(),
         sender_name: enriched.sender_name.clone(),
         permalink: enriched.permalink.clone(),
+        // Filled in by `submit`, which is where the workflow is known.
+        workflow: String::new(),
     };
     (task, pending)
 }
@@ -1531,6 +1552,7 @@ mod tests {
 
     fn coords(mention_ts: &str) -> PendingMention {
         PendingMention {
+            workflow: "slack-reply".into(),
             channel: "C1".into(),
             reply_ts: "100.0".into(),
             mention_ts: mention_ts.into(),

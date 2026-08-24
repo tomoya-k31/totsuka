@@ -137,6 +137,9 @@ pub struct Server<F: TransportFactory> {
 /// and the resident runtime.
 struct Session<T> {
     config: SlackConfig,
+    /// The plugin-owned `[[workflows]]` keys, resolved at `initialize`
+    /// (#554). `result/publish` reads the delivery mode from here.
+    workflow_options: crate::workflow_options::WorkflowOptions,
     /// The Web API client `result/publish` presents drafts through (the
     /// running pipeline holds its own Arc clone).
     api: Arc<SlackApi<T>>,
@@ -341,6 +344,10 @@ where
                     ReactionTriggers::default()
                 }
             };
+        // …and the plugin-owned `[[workflows]]` keys on the same call (#554).
+        let (workflow_options, mut option_errors) =
+            crate::workflow_options::WorkflowOptions::resolve(&init.workflows);
+        errors.append(&mut option_errors);
         if !errors.is_empty() {
             return Reply::respond(Response::error(
                 id,
@@ -397,13 +404,15 @@ where
             runtime.push(pipeline.abort_handle());
         }
 
+        let claims = capabilities_result(&init.workflows);
         self.session = Some(Session {
             config,
+            workflow_options,
             api,
             state,
             runtime,
         });
-        Reply::respond(Response::result(id, capabilities_result()))
+        Reply::respond(Response::result(id, claims))
     }
 
     /// `config/validate`: schema + static consistency checks only (F-59/F-63).
@@ -470,8 +479,18 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        let result = match parsed.effective_delivery() {
-            plugin_protocol::methods::PublishDelivery::Direct => {
+        // Which mode this task's workflow asked for (#554). The workflow is
+        // the one the pipeline submitted under; a task whose entry is gone —
+        // a restart, or a workflow renamed out of config since — falls back to
+        // the approval flow, which is the side to err on when the difference
+        // is whether a human gate is skipped.
+        let delivery = session
+            .state
+            .workflow_of(&parsed.task_id)
+            .map(|wf| session.workflow_options.delivery(&wf))
+            .unwrap_or_default();
+        let result = match delivery {
+            crate::workflow_options::Delivery::Direct => {
                 crate::approval::publish_direct(
                     session.api.as_ref(),
                     &session.state,
@@ -480,11 +499,9 @@ where
                 )
                 .await
             }
-            // Spelled out rather than `_`: a future delivery mode added to
-            // the protocol should fail compilation here, not silently take
-            // the draft path.
-            plugin_protocol::methods::PublishDelivery::Draft
-            | plugin_protocol::methods::PublishDelivery::Unrecognized => {
+            // Spelled out rather than `_`: a future delivery mode should fail
+            // compilation here, not silently take the draft path.
+            crate::workflow_options::Delivery::Draft => {
                 crate::approval::publish_draft(
                     session.api.as_ref(),
                     &session.config,
@@ -639,10 +656,10 @@ fn scope_warnings(
 /// that is no longer declared. Since `tasks/fetch` was removed at protocol
 /// 0.2.0 every task source is push-only, so the `task_submit` flag could only
 /// ever be `true`; it was removed in 0.5.0 (#496).
-fn capabilities_result() -> Value {
+fn capabilities_result(workflows: &[plugin_protocol::methods::WorkflowInfo]) -> Value {
     let result = InitializeResult {
-        // No workflow options of its own (#554).
-        claimed_options: Vec::new(),
+        // The `[[workflows]]` keys this plugin consumes (#554).
+        claimed_options: crate::workflow_options::claims(workflows),
         plugin_version: plugin_version(),
         claimed_repos: Vec::new(),
         capabilities: Capabilities {
