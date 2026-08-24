@@ -9,7 +9,8 @@ use crate::common::{CliError, Cx};
 
 /// The generated `config.toml` skeleton (§4.6 example, commented out).
 const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tomoya-k31/totsuka)
-# Uncomment and adjust. Plugin-specific settings live in plugins/{name}.toml.
+# Uncomment and adjust. One file: `[plugins.<name>]` says which plugins run,
+# and a top-level `[<name>]` table holds that plugin's own settings.
 
 # Global maximum concurrent tasks (F-40).
 # max_concurrency = 4
@@ -39,6 +40,17 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # cleanup = "manual"            # or "immediate" / { retention_days = 5 }
 # plan_cleanup = "immediate"
 
+# A plugin's own settings go in a top-level table named after it. The
+# Orchestrator does not interpret what is inside; the plugin validates it
+# (`totsuka config validate`). A name with no `[plugins.<name>]` entry is an
+# error, so a typo here is caught rather than read as settings nobody asked for.
+# [github]
+# token = "cmd:gh auth token"
+# [[github.projects]]
+# owner = "my-org"
+# project_number = 1
+# repos = ["my-repo"]
+
 # [llm]
 # base_url = "https://openrouter.ai/api/v1"
 # model = "anthropic/claude-haiku-4-5"
@@ -65,7 +77,6 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 pub fn ensure_dirs(cx: &Cx) -> Result<(), CliError> {
     for (label, dir) in [
         ("config", cx.config_path.parent().unwrap_or(Path::new("."))),
-        ("plugin config", &cx.plugin_config_dir()),
         ("data", cx.paths.data_dir()),
         ("state", cx.paths.state_dir()),
         ("cache", cx.paths.cache_dir()),

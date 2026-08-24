@@ -1,7 +1,8 @@
-//! End-to-end exercise of the config pipeline against real files and a real
-//! environment: parse `config.toml` + `plugins/{name}.toml` from disk, resolve
-//! a `${ENV}` secret, expand a plugin path, and run static validation against
-//! an existing repository directory.
+//! End-to-end exercise of the config pipeline against a real file and a real
+//! environment: parse `config.toml` from disk — the Orchestrator's own keys
+//! and a plugin's `[<name>]` table in one document (#554) — resolve a `${ENV}`
+//! secret out of that table, expand a plugin path, and run static validation
+//! against an existing repository directory.
 //!
 //! Uses `CARGO_TARGET_TMPDIR` so no extra dependency is needed.
 
@@ -9,9 +10,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use orchestrator_core::config::{
-    PluginRawConfig, RootConfig, SecretResolver, expand_path, validate_static,
-};
+use orchestrator_core::config::{RootConfig, SecretResolver, expand_path, validate_static};
 use orchestrator_core::ports::{SecretError, SecretRef, SecretStore, SecretString};
 
 /// A secret store that has nothing — proves `${ENV}` resolution needs no store.
@@ -73,27 +72,33 @@ mode = "implement"
 agent = "herdr"
 output = "source"
 on_success = {{ set_status = "レビュー待ち" }}
+
+[herdr]
+socket_path = "${{XDG_RUNTIME_DIR}}/herdr.sock"
+request_timeout_secs = 30
+api_key_ref = "${{HERDR_TOKEN}}"
+user_token = "op://Dev/Slack/user_token"
 "#,
         repo = repo_dir.display()
     );
     let config_path = tmp.join("config.toml");
     fs::write(&config_path, &config_toml).unwrap();
 
-    let plugin_toml = r#"
-socket_path = "${XDG_RUNTIME_DIR}/herdr.sock"
-request_timeout_secs = 30
-api_key_ref = "${HERDR_TOKEN}"
-user_token = "op://Dev/Slack/user_token"
-"#;
-    let plugin_path = tmp.join("herdr.toml");
-    fs::write(&plugin_path, plugin_toml).unwrap();
-
-    // Parse from disk.
+    // Parse from disk. One document now carries both layers.
     let cfg = RootConfig::from_toml_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
     assert_eq!(cfg.repositories[0].name, "totsuka");
     assert_eq!(cfg.workflows.len(), 1);
 
-    let raw = PluginRawConfig::from_toml_str(&fs::read_to_string(&plugin_path).unwrap()).unwrap();
+    // The plugin's own table came through uninterpreted, and only it — the
+    // Orchestrator's own keys are named fields and never land here.
+    let raw = cfg
+        .plugin_settings("herdr")
+        .expect("[herdr] is held verbatim");
+    assert_eq!(
+        cfg.plugin_settings.keys().collect::<Vec<_>>(),
+        vec!["herdr"],
+        "only the plugin table is leftover"
+    );
 
     // A controlled environment (not the process env, so the test is stable).
     let env_map: HashMap<String, String> = [
@@ -107,7 +112,7 @@ user_token = "op://Dev/Slack/user_token"
 
     // Resolve a ${ENV} secret from the plugin file (F-62/65).
     let resolver = SecretResolver::new(EmptyStore, &env);
-    let token_ref = raw.as_table().get("api_key_ref").unwrap().as_str().unwrap();
+    let token_ref = raw.get("api_key_ref").unwrap().as_str().unwrap();
     let token = resolver.resolve(token_ref).unwrap();
     assert_eq!(token.expose(), "tok_abc123");
     // The secret must not leak through Display.
@@ -116,13 +121,13 @@ user_token = "op://Dev/Slack/user_token"
     // Resolve an `op://` secret from an arbitrary plugin string leaf (#156):
     // same resolver entry point, routed to the store instead of the env.
     let op_resolver = SecretResolver::new(OpStore, &env);
-    let user_token_ref = raw.as_table().get("user_token").unwrap().as_str().unwrap();
+    let user_token_ref = raw.get("user_token").unwrap().as_str().unwrap();
     let user_token = op_resolver.resolve(user_token_ref).unwrap();
     assert_eq!(user_token.expose(), "xoxp-from-op");
     assert_eq!(format!("{user_token}"), "***");
 
     // Expand a plugin socket path template.
-    let socket = raw.as_table().get("socket_path").unwrap().as_str().unwrap();
+    let socket = raw.get("socket_path").unwrap().as_str().unwrap();
     assert_eq!(
         expand_path(socket, &env).unwrap(),
         PathBuf::from("/run/user/501/herdr.sock")

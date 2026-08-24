@@ -230,7 +230,7 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
 }
 
 /// Launch every enabled plugin from the store (F-58), passing its
-/// secret-resolved `plugins/{name}.toml` as the `initialize` config (F-64/65).
+/// secret-resolved `[<name>]` table as the `initialize` config (F-65, #554).
 async fn launch_plugins(
     cx: &Cx,
     cfg: &RootConfig,
@@ -238,7 +238,7 @@ async fn launch_plugins(
 ) -> Result<PluginSet, CliError> {
     let mut set = PluginSet::default();
     for (name, plugin_cfg) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
-        let spec = plugin_spec(&cx.store(), &cx.plugin_config_dir(), cfg, name, env)?;
+        let spec = plugin_spec(&cx.store(), cfg, name, env)?;
         // Keep the spec: it is everything a relaunch needs (#495), and
         // re-deriving it later would re-resolve the plugin's secrets — a
         // Keychain/1Password round trip per crash, on the engine loop.

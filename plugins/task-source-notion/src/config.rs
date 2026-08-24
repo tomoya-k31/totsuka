@@ -1,5 +1,6 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
-//! `plugins/notion.toml` as JSON with secrets already expanded (F-64/F-65).
+//! `[notion]` table of `config.toml` as JSON with secrets already
+//! expanded (F-65, #554).
 //!
 //! The [`PropertyMap`] is what lets one plugin serve *any* database layout
 //! (F-03): it names which Notion property carries each field of the shared
@@ -52,7 +53,7 @@ struct EmbeddedPrompts {
 ///
 /// Built-in values live in the embedded `defaults.toml`, not in Rust string
 /// literals, so rewording is a data edit. Field names are the config keys under
-/// `[prompts]` in `plugins/notion.toml`.
+/// `[notion.prompts]` in config.toml.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NotionPrompts {
@@ -582,7 +583,7 @@ mod tests {
         }));
         let errors = crate::client::static_config_errors(&cfg);
         assert!(
-            errors.iter().any(|e| e.contains("[[databases]]")),
+            errors.iter().any(|e| e.contains("[[notion.databases]]")),
             "got {errors:?}"
         );
     }

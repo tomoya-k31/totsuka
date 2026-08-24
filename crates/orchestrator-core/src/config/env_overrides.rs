@@ -4,7 +4,7 @@
 //!
 //! 1. CLI flags
 //! 2. environment variables (`TOTSUKA_*`) — **this module**
-//! 3. `plugins/{name}.toml` (plugin-specific file; opaque to the Orchestrator,
+//! 3. the plugin's `[<name>]` table (opaque to the Orchestrator,
 //!    §4.6 — not overridable from here)
 //! 4. `config.toml` defaults
 //!

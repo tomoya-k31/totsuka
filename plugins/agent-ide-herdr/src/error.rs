@@ -5,7 +5,7 @@
 pub enum HerdrError {
     /// The Unix socket could not be reached (herdr not running / wrong path).
     #[error(
-        "cannot connect to herdr socket at {path} → is herdr running? check `socket_path`/`session` in plugins/herdr.toml (or HERDR_SOCKET_PATH): {source}"
+        "cannot connect to herdr socket at {path} → is herdr running? check `socket_path`/`session` in `[herdr]` of config.toml (or HERDR_SOCKET_PATH): {source}"
     )]
     Connect {
         /// The socket path we tried.

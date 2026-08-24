@@ -70,7 +70,7 @@ pub struct PluginSpec {
     pub args: Vec<String>,
     /// The plugin's manifest (used for the F-54 compatibility check).
     pub manifest: Manifest,
-    /// Resolved plugin-specific config passed to `initialize` (F-64/F-65).
+    /// Resolved plugin-specific config passed to `initialize` (F-65, #554).
     pub init_config: Value,
     /// Orchestrator-configured repositories supplied at `initialize`
     /// (#109). Populated for task_source plugins only; empty otherwise

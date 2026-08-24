@@ -2,14 +2,12 @@
 //! in #217).
 //!
 //! [`plugin_spec`] combines the on-disk store (manifest, binary path), the
-//! plugin's secret-resolved `plugins/{name}.toml`, and the `config.toml`
-//! material a task_source needs at `initialize` (repositories #109, `[llm]`
-//! defaults #119, workflow triggers + poll cadence 0.1.6) into one
-//! [`PluginSpec`] for [`plugin_host`](crate::adapters::plugin_host).
+//! plugin's secret-resolved `[<name>]` table from `config.toml`, and the
+//! `config.toml` material a task_source needs at `initialize` (repositories
+//! #109, `[llm]` defaults #119, workflow triggers + poll cadence 0.1.6) into
+//! one [`PluginSpec`] for [`plugin_host`](crate::adapters::plugin_host).
 
 use std::collections::HashMap;
-use std::io;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use plugin_protocol::manifest::PluginKind;
@@ -18,7 +16,7 @@ use serde_json::Value;
 
 use crate::adapters::plugin_host::PluginSpec;
 use crate::config::{
-    self, ConfigError, PluginRawConfig, ResolveError, RootConfig, resolve_strings, secret_resolver,
+    self, ConfigError, ResolveError, RootConfig, resolve_strings, secret_resolver,
 };
 use crate::plugins::{PluginStore, StoreError};
 
@@ -34,34 +32,24 @@ pub enum SpecError {
     /// The plugin store failed (unreadable manifest, invalid name, ...).
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// `plugins/{name}.toml` could not be read.
-    #[error("could not read plugin config {path}: {source}")]
-    Io {
-        /// The unreadable `plugins/{name}.toml`.
-        path: PathBuf,
-        /// The underlying filesystem error.
-        source: io::Error,
-    },
-    /// `plugins/{name}.toml` could not be parsed or converted.
+    /// The plugin's `[<name>]` table could not be converted to JSON.
     #[error(transparent)]
     Config(#[from] ConfigError),
-    /// A secret reference inside `plugins/{name}.toml` did not resolve.
-    #[error("in {path}: {source}")]
+    /// A secret reference inside the plugin's `[<name>]` table did not
+    /// resolve.
+    #[error("in [{name}] of config.toml: {source}")]
     Resolve {
-        /// The offending `plugins/{name}.toml`.
-        path: PathBuf,
+        /// The plugin whose table holds the offending reference.
+        name: String,
         /// What failed to resolve.
         source: ResolveError,
     },
 }
 
 /// Build the [`PluginSpec`] for one enabled plugin from the store and its
-/// secret-resolved `plugins/{name}.toml` (F-58/64/65). `plugin_config_dir` is
-/// the `plugins/` directory itself (next to `config.toml`); the file read is
-/// `{plugin_config_dir}/{name}.toml`.
+/// secret-resolved `[<name>]` table in `config.toml` (F-58/65, #554).
 pub fn plugin_spec(
     store: &PluginStore,
-    plugin_config_dir: &Path,
     cfg: &RootConfig,
     name: &str,
     env: &HashMap<String, String>,
@@ -69,7 +57,7 @@ pub fn plugin_spec(
     let manifest = store
         .manifest_of(name)?
         .ok_or_else(|| SpecError::NotInstalled(name.to_string()))?;
-    let init_config = plugin_init_config(plugin_config_dir, name, env)?;
+    let init_config = plugin_init_config(cfg, name, env)?;
     let timeout = cfg
         .plugin(name)
         .and_then(|p| p.timeout_secs)
@@ -154,24 +142,29 @@ fn llm_info(cfg: &RootConfig, env: &HashMap<String, String>) -> Option<LlmInfo> 
     })
 }
 
-/// Load `plugins/{name}.toml` (empty object if absent) and resolve secret
-/// references in its string values (F-65).
+/// Take the plugin's `[<name>]` table from `config.toml` (empty object when
+/// it wrote none) and resolve the secret references in its string values
+/// (F-65, #554).
+///
+/// The table is never interpreted: it round-trips TOML → JSON with only the
+/// string leaves rewritten, which is the same contract `plugins/{name}.toml`
+/// had before the two files became one. Resolution is scoped to this subtree
+/// on purpose — the Orchestrator's own fields resolve their references by
+/// name, where each one is used.
 pub fn plugin_init_config(
-    plugin_config_dir: &Path,
+    cfg: &RootConfig,
     name: &str,
     env: &HashMap<String, String>,
 ) -> Result<Value, SpecError> {
-    let path = plugin_config_dir.join(format!("{name}.toml"));
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => PluginRawConfig::from_toml_str(&s)?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => PluginRawConfig::from_toml_str("")?,
-        Err(e) => {
-            return Err(SpecError::Io { path, source: e });
-        }
+    let mut value = match cfg.plugin_settings(name) {
+        Some(table) => serde_json::to_value(table).map_err(ConfigError::from)?,
+        None => Value::Object(serde_json::Map::new()),
     };
-    let mut value = raw.to_json()?;
     let resolver = secret_resolver(env);
-    resolve_strings(&mut value, &resolver).map_err(|source| SpecError::Resolve { path, source })?;
+    resolve_strings(&mut value, &resolver).map_err(|source| SpecError::Resolve {
+        name: name.to_string(),
+        source,
+    })?;
     Ok(value)
 }
 

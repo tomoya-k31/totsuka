@@ -5,7 +5,7 @@
 pub enum NotionError {
     /// The token was rejected (HTTP 401): bad or expired integration secret.
     #[error(
-        "Notion rejected the token (HTTP 401) → check `token` in plugins/notion.toml (or the referenced env/Keychain secret) and that the integration is shared with the database"
+        "Notion rejected the token (HTTP 401) → check `token` in `[notion]` of config.toml (or the referenced env/Keychain secret) and that the integration is shared with the database"
     )]
     Unauthorized,
     /// The API returned a non-success HTTP status.

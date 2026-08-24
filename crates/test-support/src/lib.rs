@@ -262,3 +262,25 @@ pub fn sibling_bin(anchor: &Path, package: &str, bin: &str) -> PathBuf {
     cache.insert(bin.to_string(), path.clone());
     path
 }
+
+/// Render a plugin's settings as the `[<name>]` section of `config.toml`
+/// (#554), from the body it used to have as `plugins/<name>.toml`.
+///
+/// Nesting has to go through the TOML data model rather than a header line and
+/// a string append: a body containing `[[submit_tasks]]` is a **top-level**
+/// array-of-tables, and only re-serialising it under the plugin's key turns it
+/// into `[[<name>.submit_tasks]]`, which is what the plugin is actually
+/// handed. Prefixing the raw text with `[<name>]` leaves the array where it
+/// was and silently produces a config the plugin never sees.
+///
+/// # Panics
+///
+/// If `body` is not a valid TOML document — a fixture, not a runtime input.
+pub fn plugin_section(name: &str, body: &str) -> String {
+    let table: toml::Table = body
+        .parse()
+        .unwrap_or_else(|e| panic!("fixture for `{name}` is not valid TOML: {e}\n{body}"));
+    let mut wrapper = toml::Table::new();
+    wrapper.insert(name.to_string(), toml::Value::Table(table));
+    toml::to_string_pretty(&wrapper).expect("a parsed table re-serialises")
+}

@@ -317,8 +317,8 @@ where
         let mut errors = static_config_errors(&config);
         if config.repos.is_empty() {
             errors.push(
-                "no repository candidates → declare `[[repos]]` in plugins/slack.toml or \
-                 `[[repositories]]` in the orchestrator's config.toml"
+                "no repository candidates → declare `[[slack.repos]]`, or the \
+                 Orchestrator's own `[[repositories]]`, in config.toml"
                     .into(),
             );
         }
@@ -326,7 +326,7 @@ where
             errors.push(
                 "`[llm]` is required when more than one repository candidate is declared (it \
                  classifies which repository a mention concerns) → add an `[llm]` table \
-                 (base_url / model / api_key) to plugins/slack.toml, or configure the \
+                 (base_url / model / api_key) to `[slack]` in config.toml, or configure the \
                  orchestrator's `[llm]` with an `api_key_ref` in config.toml"
                     .into(),
             );
@@ -620,7 +620,7 @@ fn scope_warnings(
     if !config.channel_groups.is_empty() && !(has("channels:read") || has("groups:read")) {
         warnings.push(
             concat!(
-                "`[[channel_groups]]` is set but the user token has neither ",
+                "`[[slack.channel_groups]]` is set but the user token has neither ",
                 "`channels:read` nor `groups:read` → channel names cannot be resolved, ",
                 "so every prefix rule misses and repository selection always falls ",
                 "through to the LLM or the picker. Reinstall the app with the current ",

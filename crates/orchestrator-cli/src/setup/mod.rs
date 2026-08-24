@@ -41,6 +41,7 @@ mod interview;
 mod plugin_config;
 mod recipes;
 
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -338,8 +339,9 @@ struct Plan<'a> {
     /// `config.toml` is written only when absent or still a bare skeleton.
     write_config: bool,
     config_path: PathBuf,
-    /// `plugins/<name>.toml` files to write, minus the ones already there.
-    plugin_configs: Vec<PathBuf>,
+    /// Plugin settings tables (`[<name>]`) to add to `config.toml`, minus the
+    /// ones already there (#554).
+    plugin_configs: Vec<&'static str>,
     plugin_source: PluginSource,
 }
 
@@ -350,14 +352,12 @@ impl<'a> Plan<'a> {
         // it just read out of `RECIPES`.
         let recipe =
             recipes::by_key(&answers.recipe).expect("the recipe key was validated on the way in");
-        let plugin_dir = cx.plugin_config_dir();
-        let mut plugin_configs = Vec::new();
-        for draft in plugin_config::drafts_for(answers, recipe) {
-            let path = plugin_dir.join(format!("{}.toml", draft.name));
-            if is_absent(&path)? {
-                plugin_configs.push(path);
-            }
-        }
+        let existing = existing_top_level_tables(&cx.config_path)?;
+        let plugin_configs: Vec<&'static str> = plugin_config::drafts_for(answers, recipe)
+            .into_iter()
+            .map(|draft| draft.name)
+            .filter(|name| !existing.contains(*name))
+            .collect();
         Ok(Plan {
             recipe,
             answers,
@@ -426,8 +426,11 @@ impl<'a> Plan<'a> {
                 self.config_path.display()
             ));
         }
-        for path in &self.plugin_configs {
-            out.push_str(&format!("Write:    {}\n", path.display()));
+        for name in &self.plugin_configs {
+            out.push_str(&format!(
+                "Write:    [{name}] in {}\n",
+                self.config_path.display()
+            ));
         }
         out.push_str(&match &self.plugin_source {
             PluginSource::Bundled(root) => {
@@ -470,22 +473,37 @@ fn is_unconfigured(path: &Path) -> Result<bool, CliError> {
     }
 }
 
-/// Whether `path` is absent, refusing to guess when the answer is unclear.
+/// The names of the top-level tables `config.toml` already defines.
 ///
-/// The counterpart of [`is_unconfigured`] for files that have no skeleton form,
-/// and it exists for the same reason: `Path::exists` folds *every* failure —
-/// permission denied, a symlink loop, a directory in the way — into `false`,
-/// which here reads as "safe to create". It is not. [`write_atomically`]'s
-/// `rename` only needs the **directory** to be writable, so a `plugins/*.toml`
-/// that cannot be examined can still be replaced, and these files hold the
-/// user's secret references.
-fn is_absent(path: &Path) -> Result<bool, CliError> {
-    path.try_exists().map(|exists| !exists).map_err(|e| {
+/// Used to decide which `[<name>]` plugin settings tables `setup` still has to
+/// add (#554). An absent file has none; **any other failure is reported**
+/// rather than read as "no tables", for the same reason
+/// [`is_unconfigured`] refuses to guess: the answer decides whether `setup`
+/// writes into a file it could not inspect, and those tables hold the
+/// operator's secret references.
+///
+/// Unparsable content is an error too. Appending a section to a document that
+/// does not parse would either produce a second definition of a table that is
+/// already there or compound a syntax error, and neither is a state to leave a
+/// config in.
+fn existing_top_level_tables(path: &Path) -> Result<HashSet<String>, CliError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(e) => {
+            return Err(CliError::from(format!(
+                "cannot read {} ({e}) → refusing to write into a config it cannot inspect",
+                path.display()
+            )));
+        }
+    };
+    let table: toml::Table = text.parse().map_err(|e| {
         CliError::from(format!(
-            "cannot examine {} ({e}) → refusing to overwrite a file it cannot inspect",
+            "cannot parse {} ({e}) → fix the syntax before running setup again",
             path.display()
         ))
-    })
+    })?;
+    Ok(table.keys().cloned().collect())
 }
 
 /// The effecting phase. Every step is idempotent so a failure part-way can be
@@ -505,7 +523,7 @@ fn apply(cx: &Cx, answers: &Answers, plan: &Plan) -> Result<(), CliError> {
         );
     }
 
-    write_plugin_configs(cx, answers, plan.recipe)?;
+    merge_plugin_configs(cx, answers, plan.recipe)?;
     install_plugins(cx, plan)?;
     print_secret_checklist(answers, plan.recipe);
 
@@ -521,27 +539,49 @@ fn apply(cx: &Cx, answers: &Answers, plan: &Plan) -> Result<(), CliError> {
     doctor_cmd::run(cx, doctor_cmd::DoctorArgs::default())
 }
 
-/// Write each `plugins/<name>.toml` the recipe needs, skipping ones that exist.
+/// Add each `[<name>]` plugin settings table the recipe needs to `config.toml`,
+/// skipping the ones already there (#554).
 ///
-/// Same rule as `config.toml`, minus the skeleton exception: nothing generates
-/// a commented placeholder for these, so a file that exists was written by a
-/// human or by an earlier `setup`, and either way it is theirs. "Exists" is
-/// decided by [`is_absent`], which errors rather than guessing — the same
-/// hazard [`is_unconfigured`] guards against.
-fn write_plugin_configs(cx: &Cx, answers: &Answers, recipe: &Recipe) -> Result<(), CliError> {
-    let dir = cx.plugin_config_dir();
-    for draft in plugin_config::drafts_for(answers, recipe) {
-        let path = dir.join(format!("{}.toml", draft.name));
-        if !is_absent(&path)? {
+/// The unit is the **table**, not the file. Before the two config files became
+/// one, "the file exists" meant "a human or an earlier `setup` wrote it, and
+/// either way it is theirs"; the same rule keyed on `config.toml` would mean
+/// `setup` could never add plugin settings after its first run, because
+/// `config.toml` is a file it writes itself.
+///
+/// Sections are appended as text rather than merged through a TOML editor so
+/// the rest of the document — comments included — comes out byte-identical.
+/// Appending is safe precisely because a table that already exists is skipped:
+/// a second definition of one would be a parse error.
+fn merge_plugin_configs(cx: &Cx, answers: &Answers, recipe: &Recipe) -> Result<(), CliError> {
+    let drafts = plugin_config::drafts_for(answers, recipe);
+    if drafts.is_empty() {
+        return Ok(());
+    }
+    let existing = existing_top_level_tables(&cx.config_path)?;
+    let mut text = std::fs::read_to_string(&cx.config_path).unwrap_or_default();
+    let mut added = Vec::new();
+    for draft in &drafts {
+        if existing.contains(draft.name) {
             println!(
-                "skipped: {} already exists (left untouched)",
-                path.display()
+                "skipped: [{}] already in {} (left untouched)",
+                draft.name,
+                cx.config_path.display()
             );
             continue;
         }
-        std::fs::create_dir_all(&dir)?;
-        write_atomically(&path, &draft.body)?;
-        println!("wrote: {}", path.display());
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push('\n');
+        text.push_str(&draft.body);
+        added.push(draft.name);
+    }
+    if added.is_empty() {
+        return Ok(());
+    }
+    write_atomically(&cx.config_path, &text)?;
+    for name in added {
+        println!("wrote: [{name}] in {}", cx.config_path.display());
     }
     Ok(())
 }
@@ -960,28 +1000,45 @@ github_login = "tomoya-k31"
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The successor of the `is_absent` hazard test (#554). The file whose
+    /// readability decides whether `setup` writes is now `config.toml` itself,
+    /// so the "every failure folds into safe-to-create" mistake would be worse
+    /// than before: it would append a duplicate table to a document holding
+    /// every setting the operator has.
     #[test]
-    fn an_unexaminable_plugin_config_is_reported_not_assumed_absent() {
-        // The same hazard `is_unconfigured` guards for `config.toml`, and it
-        // was reintroduced here once by reaching for `Path::exists` — which
-        // folds every failure into `false`, i.e. "safe to create". These files
-        // hold the user's secret references, and `write_atomically`'s rename
-        // only needs the *directory* to be writable.
-        let dir = std::env::temp_dir().join(format!("totsuka-absent-{}", std::process::id()));
+    fn an_unexaminable_config_is_reported_not_assumed_empty() {
+        let dir = std::env::temp_dir().join(format!("totsuka-tables-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        assert!(is_absent(&dir.join("nope.toml")).unwrap());
-        std::fs::write(dir.join("there.toml"), "x = 1\n").unwrap();
-        assert!(!is_absent(&dir.join("there.toml")).unwrap());
+        // Absent is the one failure that legitimately means "no tables".
+        assert!(
+            existing_top_level_tables(&dir.join("nope.toml"))
+                .unwrap()
+                .is_empty()
+        );
 
-        // A path whose *parent* is a file, not a directory: `try_exists` reports
-        // the error instead of claiming the file is not there.
-        let err = is_absent(&dir.join("there.toml/child.toml"))
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[slack]\nx = 1\n\n[worktree]\n").unwrap();
+        let tables = existing_top_level_tables(&path).unwrap();
+        assert!(
+            tables.contains("slack") && tables.contains("worktree"),
+            "{tables:?}"
+        );
+
+        // A path whose *parent* is a file, not a directory: reported, not
+        // read as empty.
+        let err = existing_top_level_tables(&path.join("child.toml"))
             .unwrap_err()
             .to_string();
         assert!(err.contains("child.toml"), "{err}");
-        assert!(err.contains("refusing to overwrite"), "{err}");
+        assert!(err.contains("refusing to write into"), "{err}");
+
+        // Unparsable is reported too: appending a section to a broken document
+        // cannot produce a config worth writing.
+        std::fs::write(&path, "[slack\n").unwrap();
+        let err = existing_top_level_tables(&path).unwrap_err().to_string();
+        assert!(err.contains("cannot parse"), "{err}");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

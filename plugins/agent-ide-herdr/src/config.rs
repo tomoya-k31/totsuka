@@ -1,5 +1,5 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
-//! `plugins/herdr.toml` as JSON (F-64/F-65).
+//! `[herdr]` table of `config.toml` as JSON (F-65, #554).
 
 use std::collections::HashMap;
 use std::path::PathBuf;

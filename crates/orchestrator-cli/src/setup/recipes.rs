@@ -153,9 +153,9 @@ fn escape_toml_basic(value: &str) -> String {
 /// `slack` do not, and a missing one is a plugin that refuses to initialise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Blank {
-    /// The Slack member ID to act for (`plugins/slack.toml`).
+    /// The Slack member ID to act for (`[slack]` in config.toml).
     SlackUserId,
-    /// Which GitHub Project to poll, and as whom (`plugins/github.toml`).
+    /// Which GitHub Project to poll, and as whom (`[github]` in config.toml).
     GitHub,
     /// `[llm]` base URL + model + key reference.
     Llm,

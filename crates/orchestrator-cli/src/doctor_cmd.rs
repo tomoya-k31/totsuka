@@ -353,7 +353,7 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
 }
 
 /// 1Password backend probes (#156), fired **only when** `config.toml` or a
-/// `plugins/*.toml` actually contains an `op://` reference: `op --version`
+/// `config.toml` actually contains an `op://` reference: `op --version`
 /// (CLI present) and `op whoami` (session established — unlike `op read`, it
 /// never triggers a biometric prompt). No `op://` in config ⇒ no checks.
 /// Returns whether the rest of `doctor` may resolve `op://` references
@@ -601,26 +601,20 @@ fn llm_key_is_onepassword(cfg: &RootConfig) -> bool {
         .is_some_and(|reference| reference.starts_with("op://"))
 }
 
-/// Whether `plugins/{name}.toml` holds an `op://` reference in a real string
-/// value. Per-plugin counterpart of [`config_mentions_onepassword`], so one
-/// plugin's 1Password usage does not gate the probes of every other plugin.
-fn plugin_config_mentions_onepassword(cx: &Cx, name: &str) -> bool {
-    let path = cx.plugin_config_dir().join(format!("{name}.toml"));
-    std::fs::read_to_string(&path).is_ok_and(|content| {
-        // `Table` for the same reason as `config_mentions_onepassword`: in
-        // toml 0.9 `parse::<Value>()` cannot parse a document.
-        content
-            .parse::<toml::Table>()
-            .is_ok_and(|table| table.values().any(toml_has_op_reference))
-    })
+/// Whether the plugin's `[<name>]` table holds an `op://` reference in a real
+/// string value. Per-plugin counterpart of [`config_mentions_onepassword`], so
+/// one plugin's 1Password usage does not gate the probes of every other
+/// plugin.
+fn plugin_config_mentions_onepassword(cfg: &RootConfig, name: &str) -> bool {
+    cfg.plugin_settings(name).is_some_and(toml_has_op_reference)
 }
 
 /// Whether launching `name` would make `plugin_spec` resolve an `op://`
 /// reference (#289).
 ///
 /// Two independent doors, both inside `plugin_spec`: `plugin_init_config`
-/// resolves **every string leaf** of `plugins/{name}.toml`, and `llm_info`
-/// resolves `[llm].api_key_ref` — but only for a task source.
+/// resolves **every string leaf** of the plugin's `[<name>]` table, and
+/// `llm_info` resolves `[llm].api_key_ref` — but only for a task source.
 ///
 /// "Task source" is asked of **both** the manifest and the config roster, and
 /// either one saying yes is enough. `plugin_spec` itself branches on
@@ -646,24 +640,18 @@ fn plugin_needs_onepassword(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
         .flatten()
         .is_some_and(|m| m.kind == plugin_protocol::manifest::PluginKind::TaskSource);
     let is_task_source = declared_task_source || manifest_task_source;
-    plugin_config_mentions_onepassword(cx, name) || (is_task_source && llm_key_is_onepassword(cfg))
+    plugin_config_mentions_onepassword(cfg, name) || (is_task_source && llm_key_is_onepassword(cfg))
 }
 
-/// Whether `config.toml` or any `plugins/*.toml` contains an `op://` secret
-/// reference in an **actual string value** (resolution stays lazy, this only
-/// gates doctor). Each file is TOML-parsed and its string leaves walked, so a
-/// commented-out example — like the one `totsuka init` generates — never
-/// triggers the 1Password checks.
+/// Whether `config.toml` contains an `op://` secret reference in an **actual
+/// string value** (resolution stays lazy, this only gates doctor). The file is
+/// TOML-parsed and its string leaves walked, so a commented-out example — like
+/// the one `totsuka init` generates — never triggers the 1Password checks.
+///
+/// One file since #554: plugin settings live in the same document, so the
+/// separate `plugins/*.toml` sweep this used to do is now the same walk.
 fn config_mentions_onepassword(cx: &Cx) -> bool {
-    let mut sources: Vec<PathBuf> = vec![cx.config_path.clone()];
-    if let Ok(entries) = std::fs::read_dir(cx.plugin_config_dir()) {
-        sources.extend(
-            entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|e| e == "toml")),
-        );
-    }
+    let sources: Vec<PathBuf> = vec![cx.config_path.clone()];
     sources.iter().any(|path| {
         std::fs::read_to_string(path).is_ok_and(|content| {
             // `toml::Table`, not `toml::Value`: in toml 0.9 `FromStr for Value`
@@ -701,7 +689,7 @@ fn toml_has_cmd_reference(value: &toml::Value) -> bool {
 
 /// Whether launching `name` would make `plugin_spec` run a `cmd:` reference's
 /// command (#444). Same two doors as [`plugin_needs_onepassword`]: the
-/// plugin's own config file, and `[llm].api_key_ref` for a task source.
+/// plugin's own `[<name>]` table, and `[llm].api_key_ref` for a task source.
 ///
 /// Unlike `op://` there is no session to measure — doctor cannot know whether
 /// the command is prompt-free (`cmd:op read …` is a real spelling), so a
@@ -723,12 +711,9 @@ fn plugin_needs_command_exec(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
         .as_ref()
         .and_then(|llm| llm.api_key_ref.as_deref())
         .is_some_and(|reference| reference.starts_with("cmd:"));
-    let path = cx.plugin_config_dir().join(format!("{name}.toml"));
-    let plugin_mentions_cmd = std::fs::read_to_string(&path).is_ok_and(|content| {
-        content
-            .parse::<toml::Table>()
-            .is_ok_and(|table| table.values().any(toml_has_cmd_reference))
-    });
+    let plugin_mentions_cmd = cfg
+        .plugin_settings(name)
+        .is_some_and(toml_has_cmd_reference);
     plugin_mentions_cmd || (is_task_source && llm_key_is_command)
 }
 
@@ -1577,21 +1562,21 @@ fn check_plugins(
             ));
             continue;
         }
-        match plugin_spec(&cx.store(), &cx.plugin_config_dir(), cfg, name, env) {
-            // `plugin_spec` already resolved plugins/{name}.toml (with secrets)
+        match plugin_spec(&cx.store(), cfg, name, env) {
+            // `plugin_spec` already resolved the plugin's `[<name>]` table
             // into `init_config`; reuse it rather than re-reading and hitting
             // the Keychain a second time.
             Ok(spec) => {
                 let init = spec.init_config.clone();
                 specs.push((spec, init));
             }
-            // Failure may be "not installed" or a plugins/{name}.toml
+            // Failure may be "not installed" or a `[<name>]` table
             // parse/secret-resolution error — point at both.
             Err(e) => {
                 checks.push(Check::fail(
                     &format!("plugin:{name}"),
                     e.to_string(),
-                    "install it (`totsuka plugin install <dir>`) or fix plugins/{name}.toml if it is already installed",
+                    format!("install it (`totsuka plugin install <dir>`) or fix `[{name}]` in config.toml if it is already installed"),
                 ));
                 not_probed.push((name.clone(), "its launch spec could not be built"));
             }
@@ -1624,7 +1609,7 @@ fn check_plugins(
             Ok(v) => checks.push(Check::fail(
                 &format!("plugin:{name}"),
                 v.errors.join("; "),
-                format!("fix plugins/{name}.toml"),
+                format!("fix `[{name}]` in config.toml"),
             )),
             Err(e) => checks.push(Check::fail(
                 &format!("plugin:{name}"),
@@ -2096,7 +2081,7 @@ fn check_orphan_panes(
             skipped.push(name.as_str());
             continue;
         }
-        let spec = match plugin_spec(&store, &cx.plugin_config_dir(), cfg, name, env) {
+        let spec = match plugin_spec(&store, cfg, name, env) {
             Ok(spec) => spec,
             // plugin_spec failures are already reported per-plugin by
             // check_plugins; don't fail the pane check on top.
@@ -2186,8 +2171,7 @@ fn check_orphan_panes(
             if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
                 continue;
             }
-            let Ok(spec) = plugin_spec(&store, &cx.plugin_config_dir(), cfg, &orphan.plugin, env)
-            else {
+            let Ok(spec) = plugin_spec(&store, cfg, &orphan.plugin, env) else {
                 continue;
             };
             let released = runtime.block_on(async {

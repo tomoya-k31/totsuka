@@ -344,14 +344,31 @@ fn one_run_goes_from_nothing_to_installed_enabled_and_diagnosed() {
     assert!(out.contains("Installed `herdr`"), "{out}{err}");
     assert!(out.contains("Running `totsuka doctor`"), "{out}{err}");
 
-    // `plugins/github.toml` exists, holds a reference rather than a token, and
-    // carries the coordinates the plugin cannot default.
-    let plugin_toml = env.root.join("config/totsuka/plugins/github.toml");
-    let body = fs::read_to_string(&plugin_toml)
-        .unwrap_or_else(|e| panic!("{} missing: {e}\n{out}", plugin_toml.display()));
-    assert!(body.contains("keychain:totsuka/github-token"), "{body}");
+    // The `[github]` table is in `config.toml` (#554), holds a reference rather
+    // than a token, and carries the coordinates the plugin cannot default.
+    let body = fs::read_to_string(env.config_toml())
+        .unwrap_or_else(|e| panic!("{} missing: {e}\n{out}", env.config_toml().display()));
+    let document: toml::Table = body.parse().unwrap_or_else(|e| panic!("{e}\n{body}"));
+    let github = document
+        .get("github")
+        .unwrap_or_else(|| panic!("no [github] table:\n{body}"));
+    assert_eq!(
+        github.get("token").and_then(toml::Value::as_str),
+        Some("keychain:totsuka/github-token"),
+        "{body}"
+    );
     assert!(!body.contains("ghp_"), "a token value was written: {body}");
-    assert!(body.contains("project_number = 1"), "{body}");
+    // Nested under the plugin, not at the top level: a `[[projects]]` written
+    // there would be a table the plugin never receives.
+    assert_eq!(
+        github["projects"][0]["project_number"].as_integer(),
+        Some(1),
+        "{body}"
+    );
+    assert!(
+        !document.contains_key("projects"),
+        "the board landed at the top level instead of inside [github]:\n{body}"
+    );
 
     // Both plugins are installed *and* enabled — the two are separate concepts
     // (F-56), and setup opts into both.
@@ -407,20 +424,17 @@ fn one_run_goes_from_nothing_to_installed_enabled_and_diagnosed() {
         "the config setup wrote does not pass doctor: {failed:?}"
     );
 
-    // Re-running converges: the second pass writes nothing new.
+    // Re-running converges: the second pass writes nothing new. One file now,
+    // so this is also the assertion that the per-table skip works — an
+    // append-anyway bug would show up as a second `[github]`, which is a parse
+    // error rather than a diff.
     let config_before = fs::read_to_string(env.config_toml()).unwrap();
-    let plugin_before = fs::read_to_string(&plugin_toml).unwrap();
     let (_, out, err) = env.setup_yes(&answers, &bundled);
     assert!(out.contains("skipped"), "{out}{err}");
     assert_eq!(
         fs::read_to_string(env.config_toml()).unwrap(),
         config_before,
         "a second run changed config.toml"
-    );
-    assert_eq!(
-        fs::read_to_string(&plugin_toml).unwrap(),
-        plugin_before,
-        "a second run changed plugins/github.toml"
     );
 }
 

@@ -281,7 +281,7 @@ impl<T: GithubTransport> GithubClient<T> {
             }
         }
         Err(GithubError::NotFound(format!(
-            "issue `{task_id}` is not an item of any project in plugins/github.toml \
+            "issue `{task_id}` is not an item of any `[[github.projects]]` board \
              ({}) → check that the issue is still on one of those boards",
             self.config
                 .projects
@@ -397,7 +397,7 @@ impl<T: GithubTransport> GithubClient<T> {
         // the operator's to fix — searching on would hide it.
         let option_id = option_id.ok_or_else(|| {
             GithubError::NotFound(format!(
-                "unknown status `{target}` for field `{}` on project #{}, which is where issue `{task_id}` lives → add the option in that project or fix status_map in plugins/github.toml",
+                "unknown status `{target}` for field `{}` on project #{}, which is where issue `{task_id}` lives → add the option in that project or fix `github.status_map` in config.toml",
                 self.config.status_field, project_config.project_number
             ))
         })?;
@@ -447,7 +447,7 @@ impl<T: GithubTransport> GithubClient<T> {
         let project = &data[root]["projectV2"];
         if project.is_null() {
             return Err(GithubError::NotFound(format!(
-                "project #{} not found for {} `{}` → check owner/owner_type/project_number in that `[[projects]]` entry of plugins/github.toml",
+                "project #{} not found for {} `{}` → check owner/owner_type/project_number in that `[[github.projects]]` entry of config.toml",
                 project_config.project_number, root, project_config.owner
             )));
         }
@@ -485,7 +485,7 @@ pub fn static_config_errors(config: &GithubConfig) -> Vec<String> {
     }
     if config.projects.is_empty() {
         errors.push(
-            "`[[projects]]` is empty → declare at least one board (owner / project_number / repos)"
+            "`[[github.projects]]` is empty → declare at least one board (owner / project_number / repos)"
                 .into(),
         );
     }
@@ -501,7 +501,7 @@ pub fn static_config_errors(config: &GithubConfig) -> Vec<String> {
     for project in &config.projects {
         if project.owner.is_empty() {
             errors.push(format!(
-                "`owner` is empty in the `[[projects]]` entry for project #{} → set the project owner login",
+                "`owner` is empty in the `[[github.projects]]` entry for project #{} → set the project owner login",
                 project.project_number
             ));
         }
@@ -513,7 +513,7 @@ pub fn static_config_errors(config: &GithubConfig) -> Vec<String> {
         }
         if project.repos.is_empty() {
             errors.push(format!(
-                "`repos` is empty in the `[[projects]]` entry for project #{} → list the repositories this board tracks (it is also the repository -> board mapping, so it cannot be inferred)",
+                "`repos` is empty in the `[[github.projects]]` entry for project #{} → list the repositories this board tracks (it is also the repository -> board mapping, so it cannot be inferred)",
                 project.project_number
             ));
         }
@@ -840,7 +840,7 @@ mod tests {
         .unwrap();
         let errors = static_config_errors(&cfg);
         assert!(
-            errors.iter().any(|e| e.contains("[[projects]]")),
+            errors.iter().any(|e| e.contains("[[github.projects]]")),
             "got {errors:?}"
         );
     }

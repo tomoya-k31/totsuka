@@ -1,18 +1,20 @@
-//! Generating `plugins/<name>.toml` from the interview's answers (#349).
+//! Generating each plugin's `[<name>]` settings table from the interview's
+//! answers (#349, moved into `config.toml` by #554).
 //!
-//! `config.toml` says *which* plugins run; each plugin's own file says how to
-//! reach the service it talks to (F-64). A recipe that installs `github` but
-//! leaves `plugins/github.toml` unwritten produces a setup that looks finished
-//! and fails at the first poll, so the wizard writes both.
+//! `[plugins.<name>]` says *which* plugins run; `[<name>]` says how to reach
+//! the service one talks to. A recipe that installs `github` but leaves
+//! `[github]` unwritten produces a setup that looks finished and fails at the
+//! first poll, so the wizard writes both.
 //!
 //! # What gets written
 //!
 //! Two kinds of key, and no third: what the plugin **requires**, plus what the
 //! chosen **recipe's behaviour depends on**. Nothing that is merely available.
 //!
-//! `herdr` and `macos` default every field of their config, so they get no file
-//! at all — an empty file would be indistinguishable from one a human wrote and
-//! then emptied, and [`crate::setup`] would stop offering to fill it in.
+//! `herdr` and `macos` default every field of their config, so they get no
+//! table at all — an empty one would be indistinguishable from a table a human
+//! wrote and then emptied, and [`crate::setup`] would stop offering to fill it
+//! in.
 //! `github` and `slack` do have required fields, and those are exactly the
 //! questions [`super::recipes::Blank`] declares.
 //!
@@ -37,16 +39,16 @@ use serde::Serialize;
 use super::answers::Answers;
 use super::recipes::Recipe;
 
-/// A `plugins/<name>.toml` the wizard would write.
+/// A `[<name>]` settings table the wizard would add to `config.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginConfigDraft {
-    /// Plugin name, which is also the file stem.
+    /// Plugin name, which is also the table name.
     pub name: &'static str,
-    /// Complete file contents.
+    /// The complete section, header line included, ready to append.
     pub body: String,
 }
 
-/// The required half of `plugins/github.toml`.
+/// The required half of `[github]`.
 ///
 /// A struct rather than a hand-built table so the field list is the thing the
 /// compiler checks, and so serialisation cannot produce mis-quoted TOML. The
@@ -68,7 +70,7 @@ struct GithubFile<'a> {
     projects: Vec<GithubProjectFile<'a>>,
 }
 
-/// One `[[projects]]` entry in the generated `plugins/github.toml`.
+/// One `[[github.projects]]` entry in the generated `[github]` table.
 #[derive(Debug, Serialize)]
 struct GithubProjectFile<'a> {
     owner: &'a str,
@@ -84,7 +86,7 @@ struct GithubProjectFile<'a> {
     repos: Vec<&'a str>,
 }
 
-/// The required half of `plugins/slack.toml`.
+/// The required half of `[slack]`.
 ///
 /// Three separate tokens, not one: the app token opens Socket Mode, the user
 /// token is what makes the reply come from the human rather than a bot
@@ -97,7 +99,7 @@ struct SlackFile<'a> {
     target_user_id: &'a str,
 }
 
-/// The plugin config files `recipe` needs, given `answers`.
+/// The plugin settings tables `recipe` needs, given `answers`.
 ///
 /// A plugin whose blanks were not answered is skipped rather than written with
 /// a placeholder: [`Answers::from_toml_str`](super::answers::Answers::from_toml_str)
@@ -109,28 +111,34 @@ pub fn drafts_for(answers: &Answers, recipe: &Recipe) -> Vec<PluginConfigDraft> 
         let reference = |account: &str| answers.secret_backend.reference(account);
         let body = match plugin.name {
             "github" => answers.github.as_ref().map(|gh| {
-                render(&GithubFile {
-                    token: reference("github-token"),
-                    github_login: &gh.github_login,
-                    projects: vec![GithubProjectFile {
-                        owner: &gh.owner,
-                        owner_type: gh.owner_type.as_str(),
-                        project_number: gh.project_number,
-                        repos: answers
-                            .repositories
-                            .iter()
-                            .map(|r| r.name.as_str())
-                            .collect(),
-                    }],
-                })
+                render(
+                    "github",
+                    &GithubFile {
+                        token: reference("github-token"),
+                        github_login: &gh.github_login,
+                        projects: vec![GithubProjectFile {
+                            owner: &gh.owner,
+                            owner_type: gh.owner_type.as_str(),
+                            project_number: gh.project_number,
+                            repos: answers
+                                .repositories
+                                .iter()
+                                .map(|r| r.name.as_str())
+                                .collect(),
+                        }],
+                    },
+                )
             }),
             "slack" => answers.slack_user_id.as_deref().map(|target_user_id| {
-                render(&SlackFile {
-                    app_token: reference("slack-app"),
-                    user_token: reference("slack-user"),
-                    bot_token: reference("slack-bot"),
-                    target_user_id,
-                })
+                render(
+                    "slack",
+                    &SlackFile {
+                        app_token: reference("slack-app"),
+                        user_token: reference("slack-user"),
+                        bot_token: reference("slack-bot"),
+                        target_user_id,
+                    },
+                )
             }),
             // Everything else defaults every field; see the module docs.
             _ => None,
@@ -145,14 +153,23 @@ pub fn drafts_for(answers: &Answers, recipe: &Recipe) -> Vec<PluginConfigDraft> 
     drafts
 }
 
-/// Serialise a file struct, with a header saying where it came from.
+/// Serialise a settings struct **nested under its plugin name**, with a header
+/// saying where it came from.
+///
+/// The nesting is not cosmetic. `GithubFile::projects` serialises as an
+/// array-of-tables, and at the top level that is `[[projects]]` — a *different*
+/// table from `[github.projects]`, which is what the plugin is handed. Wrapping
+/// the struct in a one-key map before serialising is what makes the header
+/// lines come out as `[github]` and `[[github.projects]]`; writing `[github]`
+/// by hand above a top-level serialisation would not.
 ///
 /// Every field of these structs is a plain scalar, so serialisation is
 /// infallible in practice; a panic here would mean the struct grew a shape TOML
-/// cannot represent at the top level, which is a bug to fix, not a runtime
-/// condition to report.
-fn render<T: Serialize>(file: &T) -> String {
-    let body = toml::to_string_pretty(file).expect("plugin config structs are plain scalars");
+/// cannot represent, which is a bug to fix, not a runtime condition to report.
+fn render<T: Serialize>(name: &str, file: &T) -> String {
+    let mut wrapper = std::collections::BTreeMap::new();
+    wrapper.insert(name, file);
+    let body = toml::to_string_pretty(&wrapper).expect("plugin config structs are plain scalars");
     format!(
         "# Written by `totsuka setup`. Secret values live in your secret store;\n\
          # only references appear here. Add optional settings below.\n\
@@ -205,6 +222,27 @@ mod tests {
         }
     }
 
+    /// The draft's `[<name>]` table, as the Orchestrator would hand it to the
+    /// plugin at `initialize` — TOML parsed, that one table taken, converted
+    /// to JSON, and **not** interpreted.
+    ///
+    /// Secret resolution is deliberately not exercised: the drafts carry
+    /// `keychain:` references, and resolving one would reach for the real
+    /// Keychain. What this checks is the step before that, which is the whole
+    /// of what `setup` is responsible for producing.
+    ///
+    /// Taking the table *by name* is also the assertion that the section
+    /// header is right. A body that serialised at the top level (the
+    /// `[[projects]]` vs `[[github.projects]]` hazard `render` guards) has no
+    /// `[github]` key at all and fails here.
+    fn draft_json(draft: &PluginConfigDraft) -> Result<serde_json::Value, String> {
+        let document: toml::Table = draft.body.parse().map_err(|e| format!("{e}"))?;
+        let table = document
+            .get(draft.name)
+            .ok_or_else(|| format!("no `[{}]` table in the rendered section", draft.name))?;
+        serde_json::to_value(table).map_err(|e| format!("{e}"))
+    }
+
     #[test]
     fn every_generated_file_is_accepted_by_the_plugin_that_reads_it() {
         // The contract, checked against the plugins' **real** deserializers
@@ -214,12 +252,13 @@ mod tests {
         for recipe in RECIPES {
             let answers = answers_for(recipe.key);
             for draft in drafts_for(&answers, recipe) {
-                // Held uninterpreted by the orchestrator first (F-64) …
-                let raw = orchestrator_core::config::PluginRawConfig::from_toml_str(&draft.body)
-                    .unwrap_or_else(|e| {
-                        panic!("{}: {} does not parse: {e}", recipe.label, draft.name)
-                    });
-                let json = raw.to_json().unwrap();
+                // Held uninterpreted by the orchestrator first (#554) …
+                let json = draft_json(&draft).unwrap_or_else(|e| {
+                    panic!(
+                        "{}: {} does not parse: {e}\n{}",
+                        recipe.label, draft.name, draft.body
+                    )
+                });
 
                 // … then deserialized by the plugin itself.
                 match draft.name {
@@ -277,16 +316,19 @@ mod tests {
         // Asserted through the plugin's own deserializer rather than on the
         // rendered text: `toml` breaks a two-element array across lines, so a
         // string match would be testing the formatter, not the contents.
-        let raw = orchestrator_core::config::PluginRawConfig::from_toml_str(&draft.body).unwrap();
         let config: task_source_github::config::GithubConfig =
-            serde_json::from_value(raw.to_json().unwrap()).unwrap();
+            serde_json::from_value(draft_json(&draft).unwrap()).unwrap();
         assert_eq!(config.projects.len(), 1);
         assert_eq!(config.projects[0].repos, ["totsuka", "dotfiles"]);
     }
 
     /// TOML puts a scalar written after an array-of-tables *inside* it, so the
-    /// field order in `GithubFile` is load-bearing: `github_login` must land at
-    /// the top level, not inside `[[projects]]`.
+    /// field order in `GithubFile` is load-bearing: `github_login` must land in
+    /// `[github]`, not inside `[[github.projects]]`.
+    ///
+    /// Checked through the parser rather than by comparing byte offsets: since
+    /// #554 the section is nested, and a text search for `[[projects]]` would
+    /// now miss the very hazard it was written for.
     #[test]
     fn top_level_keys_are_written_before_the_projects_block() {
         let recipe = RECIPES
@@ -297,9 +339,18 @@ mod tests {
             .into_iter()
             .find(|d| d.name == "github")
             .expect("a github draft");
-        let login = draft.body.find("github_login").expect("github_login");
-        let projects = draft.body.find("[[projects]]").expect("[[projects]]");
-        assert!(login < projects, "{}", draft.body);
+        let document: toml::Table = draft.body.parse().expect("the section parses");
+        let github = document["github"].as_table().expect("[github] is a table");
+        assert!(
+            github.contains_key("github_login"),
+            "github_login was swallowed by the projects block:\n{}",
+            draft.body
+        );
+        assert!(
+            github["projects"][0].get("github_login").is_none(),
+            "github_login landed inside [[github.projects]]:\n{}",
+            draft.body
+        );
     }
 
     #[test]
@@ -307,15 +358,15 @@ mod tests {
         // The mapping the other direction: a plugin with a required field but
         // no draft is the failure this module exists to prevent, and it would
         // otherwise be invisible until run time.
-        const NEEDS_A_FILE: &[&str] = &["github", "slack"];
+        const NEEDS_A_TABLE: &[&str] = &["github", "slack"];
         for recipe in RECIPES {
             let drafts = drafts_for(&answers_for(recipe.key), recipe);
             let written: Vec<&str> = drafts.iter().map(|d| d.name).collect();
             for plugin in recipe.plugins {
-                if NEEDS_A_FILE.contains(&plugin.name) {
+                if NEEDS_A_TABLE.contains(&plugin.name) {
                     assert!(
                         written.contains(&plugin.name),
-                        "{}: no plugins/{}.toml generated",
+                        "{}: no [{}] table generated",
                         recipe.label,
                         plugin.name
                     );

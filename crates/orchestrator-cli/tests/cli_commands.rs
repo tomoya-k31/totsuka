@@ -789,11 +789,11 @@ fn init_creates_skeleton_and_never_overwrites() {
 fn config_show_redacts_secret_keys() {
     let base = scratch("redact");
     let cfg_dir = base.join("cfg/totsuka");
-    std::fs::create_dir_all(cfg_dir.join("plugins")).unwrap();
-    std::fs::write(cfg_dir.join("config.toml"), "").unwrap();
+    std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::write(
-        cfg_dir.join("plugins/github.toml"),
-        "github_token = \"ghp_secret_value\"\nname = \"visible\"\n",
+        cfg_dir.join("config.toml"),
+        "[plugins.github]\nenabled = true\nkind = \"task_source\"\n\n\
+         [github]\ngithub_token = \"ghp_secret_value\"\nname = \"visible\"\n",
     )
     .unwrap();
 
@@ -1026,16 +1026,10 @@ fn fake_op(base: &Path, signed_in: bool) -> (PathBuf, PathBuf) {
 fn seed_op_plugin(base: &Path) {
     seed_empty_config(
         base,
-        "[plugins.herdr]\nenabled = true\nkind = \"agent_ide\"\n",
+        "[plugins.herdr]\nenabled = true\nkind = \"agent_ide\"\n\n\
+         [herdr]\ntoken = \"op://Dev/Herdr/token\"\n",
     );
     seed_manifest(base, "herdr", "pane_control = false\n");
-    let plugin_cfg = base.join("cfg/totsuka/plugins");
-    std::fs::create_dir_all(&plugin_cfg).unwrap();
-    std::fs::write(
-        plugin_cfg.join("herdr.toml"),
-        "token = \"op://Dev/Herdr/token\"\n",
-    )
-    .unwrap();
 }
 
 fn path_with(bin: &Path) -> String {
@@ -1115,22 +1109,16 @@ fn doctor_probes_normally_when_a_session_is_active() {
 #[test]
 fn a_plugin_that_needs_no_secret_is_still_probed() {
     let base = scratch("doctor_op_mixed");
+    // Only herdr needs 1Password.
     seed_empty_config(
         &base,
         "[plugins.herdr]\nenabled = true\nkind = \"agent_ide\"\n\
-         [plugins.orca]\nenabled = true\nkind = \"agent_ide\"\n",
+         [plugins.orca]\nenabled = true\nkind = \"agent_ide\"\n\n\
+         [herdr]\ntoken = \"op://Dev/Herdr/token\"\n\n\
+         [orca]\ntoken = \"plain\"\n",
     );
     seed_manifest(&base, "herdr", "pane_control = false\n");
     seed_manifest(&base, "orca", "pane_control = false\n");
-    let plugin_cfg = base.join("cfg/totsuka/plugins");
-    std::fs::create_dir_all(&plugin_cfg).unwrap();
-    // Only herdr needs 1Password.
-    std::fs::write(
-        plugin_cfg.join("herdr.toml"),
-        "token = \"op://Dev/Herdr/token\"\n",
-    )
-    .unwrap();
-    std::fs::write(plugin_cfg.join("orca.toml"), "token = \"plain\"\n").unwrap();
     let (bin, marker) = fake_op(&base, false);
 
     let out = run_env(&base, &["doctor", "--json"], &[("PATH", &path_with(&bin))]);
@@ -1171,7 +1159,7 @@ fn a_stale_roster_kind_cannot_reopen_the_hang() {
          protocol_version = \"^0.2\"\n\n[capabilities]\n",
     )
     .unwrap();
-    // No plugins/gh.toml at all: the only op:// door is `[llm].api_key_ref`,
+    // No `[gh]` table at all: the only op:// door is `[llm].api_key_ref`,
     // which `plugin_spec` opens solely because the *manifest* is a task source.
     let (bin, marker) = fake_op(&base, false);
 

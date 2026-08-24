@@ -1,13 +1,13 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
-//! `plugins/orca.toml` as JSON (F-64/F-65).
+//! `[orca]` table of `config.toml` as JSON (F-65, #554).
 //!
 //! Prompt text lives in the sibling `defaults.toml` rather than in Rust string
 //! literals (#317), so adjusting the wording is an edit to a data file instead
 //! of a code change. Every prompt default there is still just a
 //! `#[serde(default = "...")]` fallback: the live value comes from
-//! `plugins/orca.toml` whenever the operator sets it. Note the two files use
+//! `[orca]` in config.toml whenever the operator sets it. Note the two files use
 //! different key names — `defaults.toml` groups prompts under `[prompts]`,
-//! while `plugins/orca.toml` is a flat table of [`OrcaConfig`] fields.
+//! while `[orca]` in config.toml is a flat table of [`OrcaConfig`] fields.
 
 use std::sync::LazyLock;
 
@@ -36,7 +36,7 @@ struct Defaults {
 }
 
 /// The `[prompts]` table of `defaults.toml`. Field names are the TOML keys, and
-/// are deliberately *not* the `plugins/orca.toml` override keys — each one names
+/// are deliberately *not* the `[orca]` in config.toml override keys — each one names
 /// its counterpart below.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -222,8 +222,8 @@ impl<T: NotionTransport> NotionClient<T> {
                 Ok(&self.config.databases[index])
             }
             None => Err(NotionError::NotFound(format!(
-                "page `{page_id}` lives in database `{parent}`, which is not in `[[databases]]` \
-                 of plugins/notion.toml → add it, or check that the task is still where it was"
+                "page `{page_id}` lives in database `{parent}`, which is not in \
+                 `[[notion.databases]]` → add it, or check that the task is still where it was"
             ))),
         }
     }
@@ -377,7 +377,8 @@ impl<T: NotionTransport> NotionClient<T> {
     pub async fn update_status(&self, task_id: &str, status: &str) -> Result<(), NotionError> {
         let status_prop = self.config.property_map.status.as_ref().ok_or_else(|| {
             NotionError::NotFound(
-                "no status property mapped → set property_map.status in plugins/notion.toml".into(),
+                "no status property mapped → set property_map.status in `[notion]` of config.toml"
+                    .into(),
             )
         })?;
         let target = self.config.map_status(status).to_string();
@@ -389,7 +390,7 @@ impl<T: NotionTransport> NotionClient<T> {
         let options = self.status_options(database, status_prop).await?;
         if !options.iter().any(|o| o == &target) {
             return Err(NotionError::NotFound(format!(
-                "unknown status `{target}` for property `{status_prop}` (options: {}) → add it in Notion or fix status_map in plugins/notion.toml",
+                "unknown status `{target}` for property `{status_prop}` (options: {}) → add it in Notion or fix `notion.status_map` in config.toml",
                 options.join(", ")
             )));
         }
@@ -419,7 +420,7 @@ impl<T: NotionTransport> NotionClient<T> {
         let prop = &resp["properties"][status_prop];
         if prop.is_null() {
             return Err(NotionError::NotFound(format!(
-                "database has no property `{status_prop}` → fix property_map.status in plugins/notion.toml"
+                "database has no property `{status_prop}` → fix property_map.status in `[notion]` of config.toml"
             )));
         }
         let kind = self.config.property_map.status_kind;
@@ -458,7 +459,7 @@ impl<T: NotionTransport> NotionClient<T> {
                 .collect();
             if !missing.is_empty() {
                 return Err(NotionError::NotFound(format!(
-                    "database `{}` is missing mapped properties: {} → fix property_map in plugins/notion.toml or share the right database",
+                    "database `{}` is missing mapped properties: {} → fix property_map in `[notion]` of config.toml or share the right database",
                     database.database_id,
                     missing.join(", ")
                 )));
@@ -529,7 +530,8 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
     }
     if config.databases.is_empty() {
         errors.push(
-            "`[[databases]]` is empty → declare at least one database (database_id / repos)".into(),
+            "`[[notion.databases]]` is empty → declare at least one database (database_id / repos)"
+                .into(),
         );
     }
     // A repository may be tracked by exactly one database (#542): the claim it
@@ -542,7 +544,7 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
         }
         if database.repos.is_empty() {
             errors.push(format!(
-                "`repos` is empty in the `[[databases]]` entry for `{}` → list the repositories this database tracks (it is also the repository -> database mapping, so it cannot be inferred)",
+                "`repos` is empty in the `[[notion.databases]]` entry for `{}` → list the repositories this database tracks (it is also the repository -> database mapping, so it cannot be inferred)",
                 database.database_id
             ));
         }
@@ -551,7 +553,7 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
         // would be told to set a value somewhere unnameable.
         if database.triage_status.is_some() && config.property_map.status.is_none() {
             errors.push(format!(
-                "`triage_status` is set in the `[[databases]]` entry for `{}` but `property_map.status` is unset → map the status property, or remove triage_status",
+                "`triage_status` is set in the `[[notion.databases]]` entry for `{}` but `property_map.status` is unset → map the status property, or remove triage_status",
                 database.database_id
             ));
         }

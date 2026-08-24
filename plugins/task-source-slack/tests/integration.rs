@@ -350,7 +350,7 @@ async fn initialize_without_any_repositories_is_config_invalid() {
     .await;
     let (code, message) = error_of(&response);
     assert_eq!(code, error_code::CONFIG_INVALID);
-    assert!(message.contains("[[repos]]"), "{message}");
+    assert!(message.contains("[[slack.repos]]"), "{message}");
     assert!(message.contains("[[repositories]]"), "{message}");
     // Rejected before the TokenGuard spent a network call.
     assert!(shared.requests().is_empty());
@@ -452,7 +452,7 @@ async fn keyless_supplied_llm_is_not_adopted() {
     let response = call(&mut srv, 1, "initialize", params).await;
     let (code, message) = error_of(&response);
     assert_eq!(code, error_code::CONFIG_INVALID);
-    assert!(message.contains("plugins/slack.toml"), "{message}");
+    assert!(message.contains("`[slack]` in config.toml"), "{message}");
     assert!(message.contains("api_key_ref"), "{message}");
     assert!(shared.requests().is_empty());
 }

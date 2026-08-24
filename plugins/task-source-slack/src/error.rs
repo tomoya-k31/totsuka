@@ -11,7 +11,7 @@ pub enum SlackError {
     /// refused so the plugin can never reply as somebody else.
     #[error(
         "the user token belongs to `{actual}` but `target_user_id` is `{expected}` → replies \
-         would be posted as the wrong person; fix `target_user_id` in plugins/slack.toml or \
+         would be posted as the wrong person; fix `target_user_id` in `[slack]` of config.toml or \
          supply that user's own xoxp- token"
     )]
     IdentityMismatch {
@@ -101,23 +101,23 @@ pub fn auth_failure(error: &str) -> SlackError {
         "invalid_auth" => {
             "Slack rejected the user token (invalid_auth) → the token is wrong or expired; \
              re-issue the User OAuth Token (xoxp-) from the Slack app's OAuth & Permissions \
-             page and update the secret referenced by `user_token` in plugins/slack.toml \
+             page and update the secret referenced by `user_token` in `[slack]` of config.toml \
              (e.g. the Keychain entry)"
         }
         "token_revoked" => {
             "the user token was revoked (token_revoked) → re-install the Slack app to your \
              workspace to issue a fresh User OAuth Token (xoxp-), then update the secret \
-             referenced by `user_token` in plugins/slack.toml (e.g. the Keychain entry)"
+             referenced by `user_token` in `[slack]` of config.toml (e.g. the Keychain entry)"
         }
         "account_inactive" => {
             "the token's Slack account is deactivated (account_inactive) → the workspace \
              account tied to this token no longer works; ask a workspace admin, or issue the \
-             token from an active account and update plugins/slack.toml"
+             token from an active account and update `[slack]` in config.toml"
         }
         other => {
             return SlackError::Auth(format!(
                 "Slack `auth.test` failed: {other} → check the user token and the Slack app's \
-                 configuration, then update plugins/slack.toml"
+                 configuration, then update `[slack]` in config.toml"
             ));
         }
     };
@@ -140,7 +140,7 @@ pub fn app_auth_failure(error: &str) -> SlackError {
         "Slack rejected the App-Level Token ({error}) → {hint}regenerate the xapp- token \
          under the Slack app's Basic Information > App-Level Tokens (scope \
          `connections:write`) and update the secret referenced by `app_token` in \
-         plugins/slack.toml"
+         `[slack]` in config.toml"
     ))
 }
 
@@ -160,7 +160,7 @@ pub fn bot_auth_failure(error: &str) -> SlackError {
     SlackError::Auth(format!(
         "Slack rejected the bot token ({error}) → {hint}re-install the Slack app if needed, \
          copy the Bot User OAuth Token (xoxb-) from its OAuth & Permissions page, and update \
-         the secret referenced by `bot_token` in plugins/slack.toml (a re-install also \
+         the secret referenced by `bot_token` in `[slack]` of config.toml (a re-install also \
          re-issues the xoxp- user token — update both)"
     ))
 }

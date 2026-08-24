@@ -1,5 +1,6 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
-//! `plugins/github.toml` as JSON with secrets already expanded (F-64/F-65).
+//! `[github]` table of `config.toml` as JSON with secrets already
+//! expanded (F-65, #554).
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -47,7 +48,7 @@ struct EmbeddedPrompts {
 ///
 /// Built-in values live in the embedded `defaults.toml`, not in Rust string
 /// literals, so rewording is a data edit. Field names are the config keys under
-/// `[prompts]` in `plugins/github.toml`.
+/// `[github.prompts]` in config.toml.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GithubPrompts {

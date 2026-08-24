@@ -796,7 +796,7 @@ impl Driver {
         self.init_with(socket, json!({})).await
     }
 
-    /// `initialize` with extra `plugins/herdr.toml` keys merged in (`[layout]`,
+    /// `initialize` with extra `[herdr]` in config.toml keys merged in (`[layout]`,
     /// #356). `extra` must be a JSON object.
     async fn init_with(&mut self, socket: &Path, extra: Value) -> Value {
         let mut config = json!({ "socket_path": socket.to_str().unwrap() });

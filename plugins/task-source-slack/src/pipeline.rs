@@ -351,7 +351,7 @@ where
             None => {
                 tracing::warn!(
                     "`bot_token` is not configured; drafts and pickers will generate no \
-                     Slack push notification (see plugins/slack.toml to enable the nudge)"
+                     Slack push notification (see `[slack]` in config.toml to enable the nudge)"
                 );
             }
             Some(_) => match api.conversations_open_bot(&config.target_user_id).await {

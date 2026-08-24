@@ -170,6 +170,39 @@ pub enum ValidationError {
         "workflow `{workflow}` has no profile and no `{key}` → set `profile` to one of answer/triage/design/implement, or write `{key}` out"
     )]
     WorkflowMissingKey { workflow: String, key: &'static str },
+
+    /// A top-level table matches no plugin in the `[plugins.*]` roster (#554).
+    ///
+    /// This is what replaces `deny_unknown_fields` on
+    /// [`RootConfig`], and it catches strictly more:
+    /// a mistyped core key (`[worktre]`) and a mistyped plugin name (`[slak]`)
+    /// both land here, where serde only ever saw the first.
+    #[error(
+        "unknown top-level table `{name}` in config.toml → no plugin named `{name}` is declared in [plugins.*]; add `[plugins.{name}]` if this is a plugin's settings, or fix the spelling of a core key"
+    )]
+    UnknownTopLevelTable { name: String },
+
+    /// A leftover top-level key holds something other than a table (#554).
+    ///
+    /// Split from [`UnknownTopLevelTable`](Self::UnknownTopLevelTable) because
+    /// the fix is different: a scalar is never a plugin's settings, so naming
+    /// the roster would send the operator down the wrong path.
+    #[error(
+        "top-level key `{name}` in config.toml is a {found}, not a table → only plugin settings tables may sit at the top level next to the Orchestrator's own keys"
+    )]
+    TopLevelKeyNotATable { name: String, found: &'static str },
+
+    /// A roster entry uses a name that is already a `config.toml` top-level
+    /// key (#554).
+    ///
+    /// Its `[<name>]` table would be parsed as the Orchestrator's own key of
+    /// that name, so the plugin would start with an empty config and nothing
+    /// would say so. Plugin names are binary names and cannot be renamed
+    /// (ADR-0027), so the roster entry itself has to go.
+    #[error(
+        "plugin `{name}` cannot be used: `{name}` is already a top-level key of config.toml, so its `[{name}]` settings table would be read as that key instead → the plugin needs a different binary name"
+    )]
+    PluginNameIsReserved { name: String },
 }
 
 /// Placeholders permitted in worktree location templates (F-22 addendum).
@@ -197,6 +230,31 @@ where
             expected: CURRENT_SCHEMA_VERSION,
         }),
         std::cmp::Ordering::Equal => {}
+    }
+
+    // Top-level tables that are not the Orchestrator's own keys are plugin
+    // settings (#554). serde can no longer reject an unknown key — the
+    // flattened catch-all swallows every one of them — so the roster is what
+    // decides which are legitimate.
+    for (name, value) in &cfg.plugin_settings {
+        match value {
+            toml::Value::Table(_) if cfg.plugins.contains_key(name) => {}
+            toml::Value::Table(_) => {
+                errors.push(ValidationError::UnknownTopLevelTable { name: name.clone() })
+            }
+            other => errors.push(ValidationError::TopLevelKeyNotATable {
+                name: name.clone(),
+                found: other.type_str(),
+            }),
+        }
+    }
+
+    // A roster name that collides with one of the Orchestrator's own top-level
+    // keys silently loses its settings table, so it is refused outright (#554).
+    for name in cfg.plugins.keys() {
+        if crate::config::is_reserved_top_level_key(name) {
+            errors.push(ValidationError::PluginNameIsReserved { name: name.clone() });
+        }
     }
 
     // Global worktree template (F-22).
@@ -727,6 +785,84 @@ mod tests {
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect();
         move |k: &str| map.get(k).cloned()
+    }
+
+    /// The check that replaced `deny_unknown_fields` on `RootConfig` (#554).
+    /// A table the roster knows is settings; one it does not is a typo, and
+    /// the typo can be in either half — a core key or a plugin name.
+    #[test]
+    fn a_top_level_table_is_legitimate_only_when_the_roster_knows_it() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[plugins.slack]
+enabled = true
+kind = "task_source"
+
+[slack]
+app_token = "op://Dev/Slack/app_token"
+
+[slak]
+app_token = "typo"
+
+[worktre]
+cleanup = "keep_7d"
+"#,
+        )
+        .unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        let named: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        assert!(
+            named.iter().any(|e| e.contains("`slak`")),
+            "a mistyped plugin name must be caught: {named:?}"
+        );
+        assert!(
+            named.iter().any(|e| e.contains("`worktre`")),
+            "a mistyped core key must still be caught: {named:?}"
+        );
+        assert!(
+            !named.iter().any(|e| e.contains("`slack`")),
+            "the roster knows slack, so its table is fine: {named:?}"
+        );
+    }
+
+    /// A scalar at the top level is never a plugin's settings, so it gets its
+    /// own message instead of being pointed at the roster.
+    #[test]
+    fn a_leftover_top_level_scalar_is_reported_as_not_a_table() {
+        let cfg = RootConfig::from_toml_str("max_concurency = 8\n").unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        let named: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        assert!(
+            named
+                .iter()
+                .any(|e| e.contains("`max_concurency`") && e.contains("not a table")),
+            "{named:?}"
+        );
+    }
+
+    /// A roster entry named after one of the Orchestrator's own top-level keys
+    /// would lose its settings table to that key — silently, which is the whole
+    /// hazard (#554).
+    #[test]
+    fn a_roster_name_that_collides_with_a_core_key_is_refused() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[plugins.log]
+enabled = true
+kind = "notifier"
+"#,
+        )
+        .unwrap();
+        let named: Vec<String> = validate_static(&cfg, &env_from(&[]))
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            named
+                .iter()
+                .any(|e| e.contains("`log`") && e.contains("already a top-level key")),
+            "{named:?}"
+        );
     }
 
     #[test]

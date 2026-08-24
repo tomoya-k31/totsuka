@@ -90,8 +90,9 @@ pub mod method {
 pub struct InitializeParams {
     /// The Orchestrator's protocol version (F-54).
     pub protocol_version: Version,
-    /// The plugin's own settings (from `plugins/{name}.toml`) with secret
-    /// references already resolved, passed through uninterpreted (F-64/F-65).
+    /// The plugin's own settings (the `[<name>]` table of `config.toml`) with
+    /// secret references already resolved, passed through uninterpreted
+    /// (F-65, #554).
     pub config: serde_json::Value,
     /// The repositories the Orchestrator is configured with (`config.toml`
     /// `[[repositories]]`), supplied to **task_source** plugins so they can

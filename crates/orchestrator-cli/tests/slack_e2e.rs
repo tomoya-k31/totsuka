@@ -447,7 +447,7 @@ fn setup(mock_api_url: &str) -> Env {
 
     let env = Env { base };
     let cfg_dir = env.cfg_dir();
-    std::fs::create_dir_all(cfg_dir.join("plugins")).unwrap();
+    std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::create_dir_all(env.state_dir()).unwrap();
 
     install_plugin(
@@ -503,27 +503,22 @@ trigger = {{}}
 mode = "plan"
 agent = "mock_agent"
 output = "source"
+
+# Deliberately no `[[slack.repos]]`: the orchestrator supplies its single
+# `[[repositories]]` entry at initialize (#109), and one candidate resolves
+# without any LLM — the acceptance path for the fallback.
+[slack]
+app_token = "xapp-1-A1-e2e"
+user_token = "xoxp-e2e-user"
+target_user_id = "U_ME"
+api_url = "{mock_api_url}"
+
+[mock_agent]
+stream_states = ["running", "done"]
 "#,
             clone = repo.join("clone").display(),
             state = env.state_dir().display(),
         ),
-    )
-    .unwrap();
-
-    // Deliberately no `[[repos]]`: the orchestrator supplies its single
-    // `[[repositories]]` entry at initialize (#109), and one candidate
-    // resolves without any LLM — the acceptance path for the fallback.
-    std::fs::write(
-        cfg_dir.join("plugins/slack.toml"),
-        format!(
-            "app_token = \"xapp-1-A1-e2e\"\nuser_token = \"xoxp-e2e-user\"\n\
-             target_user_id = \"U_ME\"\napi_url = \"{mock_api_url}\"\n"
-        ),
-    )
-    .unwrap();
-    std::fs::write(
-        cfg_dir.join("plugins/mock_agent.toml"),
-        "stream_states = [\"running\", \"done\"]\n",
     )
     .unwrap();
 
