@@ -17,7 +17,7 @@ version = "0.1.0"
 # mock で経路を通そうとした瞬間にだけ F-54 で拒否される。手で数える運用は
 # 「捕まえた回は正しいが、当てにならない」ので、plugin-protocol の
 # `tests/bundled_manifests.rs` がこのファイルも走査対象に含めている。
-protocol_version = ">=0.1.6, <0.6"
+protocol_version = ">=0.6.0, <0.7"
 
 [capabilities]
 state_stream = true

@@ -6,7 +6,7 @@ version = "0.3.0"
 # `Task.thread_key` (#242/#264); `<0.6` carries it across the 0.4.0 removal of
 # `TaskDispatchParams.hook` and `Capabilities.design_preview` (#411), neither
 # of which a task_source ever touched.
-protocol_version = ">=0.1.6, <0.6"
+protocol_version = ">=0.6.0, <0.7"
 
 # No `[capabilities] outputs`: the deliverable is the agent's to write
 # itself, so this plugin publishes nothing.

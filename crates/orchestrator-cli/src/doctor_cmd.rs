@@ -2247,6 +2247,7 @@ mod tests {
                 valid: true,
                 errors: Vec::new(),
             }),
+            claimed_options: Vec::new(),
             claimed_repos: claims
                 .iter()
                 .map(

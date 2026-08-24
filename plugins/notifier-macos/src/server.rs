@@ -250,6 +250,8 @@ fn event_label(event: NotifierEvent) -> (&'static str, &'static str) {
 /// A notifier declares no feature capabilities; it only receives `notify`.
 fn capabilities_result() -> Value {
     serde_json::to_value(InitializeResult {
+        // No workflow options of its own (#554).
+        claimed_options: Vec::new(),
         plugin_version: plugin_version(),
         claimed_repos: Vec::new(),
         capabilities: Capabilities::default(),

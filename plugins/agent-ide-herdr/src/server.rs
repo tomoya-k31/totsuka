@@ -389,6 +389,8 @@ impl<F: TransportFactory> Server<F> {
 /// in `scripts/arch-lint.sh`.
 fn capabilities_result() -> Value {
     to_value(&InitializeResult {
+        // No workflow options of its own (#554).
+        claimed_options: Vec::new(),
         plugin_version: plugin_version(),
         claimed_repos: Vec::new(),
         capabilities: Capabilities {

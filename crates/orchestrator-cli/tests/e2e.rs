@@ -120,7 +120,7 @@ fn install_plugin(env: &Env, name: &str, kind: &str) {
         dir.join("plugin.toml"),
         format!(
             "name = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.1.0\"\n\
-             protocol_version = \">=0.1.6, <0.6\"\n\n[capabilities]\nstate_stream = true\n\
+             protocol_version = \">=0.6.0, <0.7\"\n\n[capabilities]\nstate_stream = true\n\
              outputs = [\"source\"]\n"
         ),
     )
@@ -435,6 +435,76 @@ fn json_empty() -> serde_json::Value {
 /// mock agent が pane 一覧を返し、doctor が DB と突き合わせて「終端タスクかつ
 /// worktree 消滅の pane と DB 未知の pane を候補にし、非終端タスクの pane は
 /// 候補にしない」ことを、非 TTY（`--json`）の検出のみ経路で固定する。
+/// A workflow key nobody claims stops the run (#554).
+///
+/// This is what replaced `deny_unknown_fields` on `WorkflowConfig`: the
+/// Orchestrator cannot tell a typo from a plugin's option, so it asks, and a
+/// key with no owner is refused rather than carried along doing nothing.
+#[test]
+fn an_unclaimed_workflow_key_refuses_to_run() {
+    let env = setup(
+        "unclaimed-option",
+        "stream_states = [\"running\", \"done\"]\n",
+        "none",
+        "plan",
+    );
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    // `profil` is what a mistyped `profile` looks like. Nothing claims it.
+    std::fs::write(
+        &config,
+        text.replace(
+            "\nagent = \"mock_agent\"\n",
+            "\nagent = \"mock_agent\"\nprofil = \"triage\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = env.run(&[&["run"], GRACE].concat());
+    assert!(!out.status.success(), "{}", stdout(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("profil"), "{err}");
+    assert!(
+        err.contains("mock_src") && err.contains("mock_agent"),
+        "the message must name who was asked: {err}"
+    );
+}
+
+/// …and the same key runs once a plugin says it is its own. The pair matters:
+/// without this half, a `check_workflow_options` that rejected *everything*
+/// would pass the test above.
+#[test]
+fn a_claimed_workflow_key_runs() {
+    let env = setup(
+        "claimed-option",
+        "stream_states = [\"running\", \"done\"]\n",
+        "none",
+        "plan",
+    );
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        text.replace(
+            "\nagent = \"mock_agent\"\n",
+            "\nagent = \"mock_agent\"\nthread_scope = \"parent\"\n",
+        )
+        .replace(
+            "[mock_src]\n",
+            "[mock_src]\nclaim_options = [\"thread_scope\"]\n",
+        ),
+    )
+    .unwrap();
+
+    let out = env.run(&[&["run"], GRACE].concat());
+    assert!(
+        out.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&out),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn doctor_detects_orphan_panes_via_session_list() {
     use orchestrator_core::adapters::{NewTask, StateDb};
@@ -459,7 +529,7 @@ fn doctor_detects_orphan_panes_via_session_list() {
     std::fs::write(
         dir.join("plugin.toml"),
         "name = \"mock_agent\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
-         protocol_version = \">=0.1.6, <0.6\"\n\n[capabilities]\nstate_stream = true\n\
+         protocol_version = \">=0.6.0, <0.7\"\n\n[capabilities]\nstate_stream = true\n\
          pane_control = true\n",
     )
     .unwrap();
@@ -567,7 +637,7 @@ fn doctor_human_output_cannot_repaint_the_terminal_yet_json_stays_verbatim() {
     std::fs::write(
         dir.join("plugin.toml"),
         "name = \"mock_agent\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
-         protocol_version = \">=0.1.6, <0.6\"\n\n[capabilities]\nstate_stream = true\n\
+         protocol_version = \">=0.6.0, <0.7\"\n\n[capabilities]\nstate_stream = true\n\
          pane_control = true\n",
     )
     .unwrap();

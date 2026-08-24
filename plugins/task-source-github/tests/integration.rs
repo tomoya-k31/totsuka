@@ -348,7 +348,7 @@ async fn ingests_task_assigned_to_me_among_multiple_assignees() {
     let params = json!({
         "protocol_version": "0.1.6",
         "config": init_config(),
-        "triggers": [
+        "workflows": [
             { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
         ],
         "poll_interval_secs": 60
@@ -415,7 +415,7 @@ async fn initialize_with_triggers_polls_and_submits() {
     let params = json!({
         "protocol_version": "0.1.6",
         "config": init_config(),
-        "triggers": [
+        "workflows": [
             { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
         ],
         "poll_interval_secs": 60
@@ -471,7 +471,7 @@ async fn a_poll_walks_every_board_and_each_board_gates_its_own_repos() {
     let params = json!({
         "protocol_version": "0.5.1",
         "config": two_board_config(),
-        "triggers": [
+        "workflows": [
             { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
         ],
         "poll_interval_secs": 60

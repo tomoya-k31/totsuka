@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use plugin_protocol::manifest::PluginKind;
-use plugin_protocol::methods::{LlmInfo, RepoInfo, TriggerInfo};
+use plugin_protocol::methods::{LlmInfo, RepoInfo, WorkflowInfo};
 use serde_json::Value;
 
 use crate::adapters::plugin_host::PluginSpec;
@@ -63,26 +63,21 @@ pub fn plugin_spec(
         .and_then(|p| p.timeout_secs)
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_PLUGIN_TIMEOUT);
-    // task_source plugins get the orchestrator's repository list (#109),
-    // `[llm]` settings (#119), and — 0.1.6 — their workflow triggers plus
-    // `poll_interval_secs` at `initialize`, so a push source knows its watch
-    // conditions and cadence without a `tasks/fetch` call carrying them.
-    let (repositories, llm, triggers, poll_interval_secs) =
-        if manifest.kind == PluginKind::TaskSource {
-            let triggers = cfg
-                .workflows
-                .iter()
-                .filter(|w| w.source == name)
-                .map(|w| TriggerInfo {
-                    workflow: w.name.clone(),
-                    trigger: trigger_value(w),
-                })
-                .collect();
-            let poll = cfg.plugin(name).and_then(|p| p.poll_interval_secs);
-            (repo_infos(cfg, env), llm_info(cfg, env), triggers, poll)
-        } else {
-            (vec![], None, vec![], None)
-        };
+    let is_source = manifest.kind == PluginKind::TaskSource;
+    // Every plugin a workflow names — `source` or `agent` — is told about that
+    // workflow (0.6.0, #554), because a plugin-owned option written on it may
+    // belong to either. `trigger` stays a source's alone: it selects tasks,
+    // and an agent has no say in that.
+    let workflows = workflow_infos(cfg, name, is_source);
+    // task_source plugins additionally get the orchestrator's repository list
+    // (#109), `[llm]` settings (#119), and `poll_interval_secs` (0.1.6), so a
+    // push source knows its watch cadence without a call carrying it.
+    let (repositories, llm, poll_interval_secs) = if is_source {
+        let poll = cfg.plugin(name).and_then(|p| p.poll_interval_secs);
+        (repo_infos(cfg, env), llm_info(cfg, env), poll)
+    } else {
+        (vec![], None, None)
+    };
     Ok(PluginSpec {
         name: name.to_string(),
         program: store.plugin_dir(name).join(&manifest.name),
@@ -91,10 +86,51 @@ pub fn plugin_spec(
         init_config,
         repositories,
         llm,
-        triggers,
+        workflows,
         poll_interval_secs,
         timeout,
     })
+}
+
+/// The workflows naming `name`, in `[[workflows]]` definition order.
+///
+/// Definition order is load-bearing for a source: it reproduces the
+/// Orchestrator's first-match rule (F-81) on its own side. For an agent the
+/// order carries nothing, but keeping one list keeps one contract.
+pub fn workflow_infos(cfg: &RootConfig, name: &str, is_source: bool) -> Vec<WorkflowInfo> {
+    cfg.workflows
+        .iter()
+        .filter(|w| {
+            if is_source {
+                w.source == name
+            } else {
+                w.agent == name
+            }
+        })
+        .map(|w| WorkflowInfo {
+            workflow: w.name.clone(),
+            // An agent is sent an empty object rather than `null`: a plugin
+            // reading `.get("…")` off `null` mis-branches, which is the same
+            // reason the catch-all trigger is `{}` (#396).
+            trigger: if is_source {
+                trigger_value(w)
+            } else {
+                Value::Object(serde_json::Map::new())
+            },
+            options: workflow_options(w),
+        })
+        .collect()
+}
+
+/// A workflow's plugin-owned keys as a JSON object (#554).
+///
+/// Empty when the workflow writes none, which is what every config written
+/// before this existed says.
+pub fn workflow_options(wf: &crate::config::WorkflowConfig) -> serde_json::Map<String, Value> {
+    match serde_json::to_value(&wf.options) {
+        Ok(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    }
 }
 
 /// `config.toml` `[[repositories]]` mapped to the protocol's [`RepoInfo`],
@@ -294,15 +330,7 @@ profile = "design"
 agent = "herdr"
 "#,
         );
-        let triggers: Vec<TriggerInfo> = cfg
-            .workflows
-            .iter()
-            .filter(|w| w.source == "slack")
-            .map(|w| TriggerInfo {
-                workflow: w.name.clone(),
-                trigger: trigger_value(w),
-            })
-            .collect();
+        let triggers = workflow_infos(&cfg, "slack", true);
 
         // Only this source's workflows, in definition order — the plugin
         // reproduces first-match from this list.

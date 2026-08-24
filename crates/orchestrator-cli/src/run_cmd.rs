@@ -5,7 +5,7 @@
 //! (F-74), plugin launch (enabled entries only, F-58, with secrets resolved
 //! F-65), startup recovery (§5.3), then one-shot / `--watch` / `--dry-run`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use orchestrator_core::adapters::git::SystemGitRunner;
@@ -15,7 +15,7 @@ use orchestrator_core::adapters::{RunLock, StateDb};
 use orchestrator_core::config::{self, PluginKind, RootConfig, secret_resolver};
 use orchestrator_core::logging::{self, LogConfig};
 use orchestrator_core::platform::PlatformProcessProbe;
-use orchestrator_core::plugins::plugin_spec;
+use orchestrator_core::plugins::{check_workflow_options, plugin_spec};
 use orchestrator_core::ports::SecretString;
 use orchestrator_core::run::{Engine, HookRuntime, PluginSet, RunSummary, settings_from_config};
 
@@ -237,6 +237,8 @@ async fn launch_plugins(
     env: &HashMap<String, String>,
 ) -> Result<PluginSet, CliError> {
     let mut set = PluginSet::default();
+    let mut claims: BTreeMap<String, Vec<plugin_protocol::methods::WorkflowOption>> =
+        BTreeMap::new();
     for (name, plugin_cfg) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
         let spec = plugin_spec(&cx.store(), cfg, name, env)?;
         // Keep the spec: it is everything a relaunch needs (#495), and
@@ -244,11 +246,29 @@ async fn launch_plugins(
         // Keychain/1Password round trip per crash, on the engine loop.
         set.specs.insert(name.clone(), spec.clone());
         let plugin = Plugin::launch(spec).await?;
+        claims.insert(name.clone(), plugin.claimed_options().to_vec());
         match plugin_cfg.kind {
             PluginKind::TaskSource => set.sources.insert(name.clone(), plugin),
             PluginKind::AgentIde => set.agents.insert(name.clone(), plugin),
             PluginKind::Notifier => set.notifiers.insert(name.clone(), plugin),
         };
+    }
+    // Every plugin answered (a failed launch returned above), so a workflow
+    // key nobody claims is a real one — refuse to run rather than carry a
+    // setting that does nothing (#554). This is the check `config validate`
+    // does too; it lives here as well because `run` never calls that, and a
+    // typo that only `config validate` catches is a typo nothing catches for
+    // an operator who does not run it.
+    let issues = check_workflow_options(cfg, &claims);
+    if !issues.is_empty() {
+        let listed = issues
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n  ");
+        return Err(CliError::from(format!(
+            "config.toml has workflow keys no plugin owns:\n  {listed}"
+        )));
     }
     Ok(set)
 }

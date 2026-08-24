@@ -46,7 +46,7 @@ async fn launch(kind: &str, name: &str, init_config: serde_json::Value) -> Plugi
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = ">=0.1.6, <0.6"
+protocol_version = ">=0.6.0, <0.7"
 "#
     ))
     .unwrap();
@@ -58,7 +58,7 @@ protocol_version = ">=0.1.6, <0.6"
         init_config,
         repositories: vec![],
         llm: None,
-        triggers: vec![],
+        workflows: vec![],
         poll_interval_secs: None,
         timeout: Duration::from_secs(10),
     })

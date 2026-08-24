@@ -220,7 +220,30 @@ use semver::{Version, VersionReq};
 /// *policy* (which workflows may skip approval) lives in core config rather
 /// than in a plugin-side emoji table (#396 deliberately removed one).
 /// `<0.6` manifests keep matching; patch, not minor, for the 0.4.1 reason.
-pub const PROTOCOL_VERSION: &str = "0.5.2";
+///
+/// 0.6.0 (#554): plugin-owned settings reach the places the Orchestrator owns.
+///
+/// - `InitializeParams.triggers` is renamed to
+///   [`workflows`](crate::methods::InitializeParams::workflows) and is now sent
+///   to **agent** plugins too, because an option written on `[[workflows]]` may
+///   belong to either plugin the workflow names. `TriggerInfo` becomes
+///   [`WorkflowInfo`](crate::methods::WorkflowInfo) and grows
+///   [`options`](crate::methods::WorkflowInfo::options).
+/// - [`InitializeResult::claimed_options`](crate::methods::InitializeResult::claimed_options)
+///   is the answer: which of those keys the plugin recognises. The Orchestrator
+///   requires **exactly one** claimant per key, so an unclaimed key is a typo
+///   that fails startup instead of doing nothing, and a doubly-claimed one is
+///   an ambiguity it refuses to resolve on the operator's behalf.
+/// - [`ConfigValidateParams::workflows`](crate::methods::ConfigValidateParams::workflows)
+///   carries the same list, so `totsuka config validate` asks the question
+///   without the plugin having to remember what `initialize` said.
+///
+/// **Minor, and it strands every `<0.6` manifest — that is the intent.** The
+/// rename is a wire break: a plugin reading `triggers` sees nothing under a
+/// 0.6.0 Orchestrator and would silently watch for no triggers at all, which
+/// is precisely the class of failure F-54's version gate exists to convert
+/// into a refusal to launch. The bundled manifests move to `>=0.6.0, <0.7`.
+pub const PROTOCOL_VERSION: &str = "0.6.0";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -244,22 +267,21 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 5, 2));
+        assert_eq!(protocol_version(), Version::new(0, 6, 0));
     }
 
     #[test]
     fn compatible_requirement_matches() {
-        // What the bundled plugins declare after the 0.4.0 boundary (#411):
-        // task_source/notifier keep a wide lower bound, agent_ide plugins
-        // require `tool_launch` (0.2.3) because their local argv fallback is
-        // gone.
-        for req in [">=0.1.6, <0.6", ">=0.2.3, <0.6"] {
-            let parsed = VersionReq::parse(req).unwrap();
-            assert!(
-                is_compatible_with_current(&parsed),
-                "{req} must be accepted by protocol 0.5.0"
-            );
-        }
+        // What the bundled plugins declare after the 0.6.0 boundary (#554).
+        // The lower bounds converge here: `initialize` renamed `triggers` to
+        // `workflows`, and no plugin — of any kind — reads the old spelling
+        // any more, so nothing is left that a wider bound could still serve.
+        let req = ">=0.6.0, <0.7";
+        let parsed = VersionReq::parse(req).unwrap();
+        assert!(
+            is_compatible_with_current(&parsed),
+            "{req} must be accepted by protocol 0.6.0"
+        );
     }
 
     #[test]
@@ -292,7 +314,7 @@ mod tests {
         // the plugin any more. That is a claim about the *manifest range*, not
         // about the code, so it is asserted here: `>=0.2.3` excludes every
         // release that predates `tool_launch`.
-        let herdr = VersionReq::parse(">=0.2.3, <0.6").unwrap();
+        let herdr = VersionReq::parse(">=0.2.3, <0.7").unwrap();
         for pre_tool_launch in ["0.1.0", "0.1.6", "0.2.0", "0.2.2"] {
             let v = Version::parse(pre_tool_launch).unwrap();
             assert!(
@@ -304,7 +326,7 @@ mod tests {
 
         // The floor tracks the dependency, not the kind: orca is an agent_ide
         // too, reads no `tool_launch`, and keeps working with all of them.
-        let orca = VersionReq::parse(">=0.1.0, <0.6").unwrap();
+        let orca = VersionReq::parse(">=0.1.0, <0.7").unwrap();
         assert!(is_compatible(&orca, &Version::new(0, 1, 0)));
         assert!(is_compatible_with_current(&orca));
     }
@@ -319,14 +341,30 @@ mod tests {
         let old_bound = VersionReq::parse(">=0.2.3, <0.5").unwrap();
         assert!(
             !is_compatible_with_current(&old_bound),
-            "0.5.0 strands the previous generation's bound, by design"
+            "each generation's bound strands the previous one, by design"
         );
-        let bundled = VersionReq::parse(">=0.2.3, <0.6").unwrap();
-        assert!(is_compatible_with_current(&bundled), "0.5.0 is inside <0.6");
+        let bundled = VersionReq::parse(">=0.6.0, <0.7").unwrap();
+        assert!(is_compatible_with_current(&bundled), "0.6.0 is inside <0.7");
         assert!(
-            !is_compatible(&bundled, &Version::new(0, 6, 0)),
+            !is_compatible(&bundled, &Version::new(0, 7, 0)),
             "and the same boundary is waiting for the next removal"
         );
+    }
+
+    /// The 0.6.0 boundary (#554), and the reason it is a *break* rather than
+    /// an addition: `initialize` renamed `triggers` to `workflows`. A 0.5
+    /// plugin reading `triggers` under this Orchestrator would find nothing
+    /// and conclude it watches for nothing — a running, silent, wrong plugin.
+    /// F-54's gate turns that into a refusal to launch.
+    #[test]
+    fn zero_five_manifests_are_stranded_by_the_zero_six_boundary() {
+        for req in ["^0.5", ">=0.1.6, <0.6", ">=0.2.3, <0.6", ">=0.5.0, <0.6"] {
+            let parsed = VersionReq::parse(req).unwrap();
+            assert!(
+                !is_compatible_with_current(&parsed),
+                "{req} must be refused by protocol 0.6.0"
+            );
+        }
     }
 
     /// The 0.5.0 boundary (#496), stated the way F-54 means it: every manifest

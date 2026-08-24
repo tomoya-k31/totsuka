@@ -15,7 +15,7 @@ use std::time::Duration;
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
     ClaimedRepo, ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    TaskUpdateStatusParams, TriggerInfo,
+    TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
 use plugin_sdk::{LineHandler, Reply, SubmitClient, poll_loop};
@@ -167,7 +167,7 @@ where
         };
         let transport = self.factory.build(settings(&config));
         let client = Arc::new(NotionClient::new(config, transport));
-        let poll = if init.triggers.is_empty() {
+        let poll = if init.workflows.is_empty() {
             None
         } else {
             // 0 would make the loop spin without sleeping (API hammering);
@@ -186,10 +186,10 @@ where
             let interval = Duration::from_secs(secs);
             let fetch_client = Arc::clone(&client);
             let handle = tokio::spawn(poll_loop(
-                init.triggers,
+                init.workflows,
                 interval,
                 self.submit.clone(),
-                move |trigger: &TriggerInfo| {
+                move |trigger: &WorkflowInfo| {
                     let client = Arc::clone(&fetch_client);
                     let condition = trigger.trigger.clone();
                     async move { client.fetch(&condition).await.map_err(|e| e.to_string()) }
@@ -262,6 +262,8 @@ where
 /// ever be `true`; it was removed in 0.5.0 (#496).
 fn capabilities_result(claimed_repos: Vec<ClaimedRepo>) -> Value {
     let result = InitializeResult {
+        // No workflow options of its own (#554).
+        claimed_options: Vec::new(),
         plugin_version: plugin_version(),
         claimed_repos,
         // No `outputs`: the deliverable is the agent's to write with Notion

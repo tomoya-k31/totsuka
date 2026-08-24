@@ -70,7 +70,7 @@ impl Env {
                 dir.join("plugin.toml"),
                 format!(
                     "name = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.2.0\"\n\
-                     protocol_version = \">=0.1.6, <0.6\"\n\n[capabilities]\n{capabilities}"
+                     protocol_version = \">=0.6.0, <0.7\"\n\n[capabilities]\n{capabilities}"
                 ),
             )
             .unwrap();

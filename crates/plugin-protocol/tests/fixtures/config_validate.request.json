@@ -3,6 +3,13 @@
   "id": 2,
   "method": "config/validate",
   "params": {
-    "config": { "channel": "#dev-null" }
+    "config": { "channel": "#dev-null" },
+    "workflows": [
+      {
+        "workflow": "design",
+        "trigger": { "project_status": "設計待ち" },
+        "options": { "publish": "direct" }
+      }
+    ]
   }
 }

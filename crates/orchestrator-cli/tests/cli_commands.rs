@@ -986,7 +986,7 @@ fn seed_manifest(base: &Path, name: &str, capabilities: &str) {
         dir.join("plugin.toml"),
         format!(
             "name = \"{name}\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
-             protocol_version = \"^0.2\"\n\n[capabilities]\n{capabilities}\n"
+             protocol_version = \"^0.6\"\n\n[capabilities]\n{capabilities}\n"
         ),
     )
     .unwrap();
@@ -1156,7 +1156,7 @@ fn a_stale_roster_kind_cannot_reopen_the_hang() {
     std::fs::write(
         dir.join("plugin.toml"),
         "name = \"gh\"\nkind = \"task_source\"\nversion = \"0.1.0\"\n\
-         protocol_version = \"^0.2\"\n\n[capabilities]\n",
+         protocol_version = \"^0.6\"\n\n[capabilities]\n",
     )
     .unwrap();
     // No `[gh]` table at all: the only op:// door is `[llm].api_key_ref`,

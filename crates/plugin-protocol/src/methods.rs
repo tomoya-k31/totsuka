@@ -111,13 +111,19 @@ pub struct InitializeParams {
     /// not use it. `None` for non-task_source plugins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm: Option<LlmInfo>,
-    /// The workflow triggers targeting this **task_source** plugin, in
-    /// `config.toml` `[[workflows]]` definition order — a push source's
-    /// watch conditions, supplied once at `initialize` instead of a per-call
-    /// argument. Additive since protocol 0.1.6, same contract as
-    /// `repositories`. Empty for non-task_source plugins.
+    /// The workflows naming this plugin — as `source` or as `agent` — in
+    /// `config.toml` `[[workflows]]` definition order.
+    ///
+    /// Carries two things a plugin needs and cannot derive: a push source's
+    /// watch conditions ([`WorkflowInfo::trigger`], 0.1.6) and the workflow's
+    /// plugin-owned settings ([`WorkflowInfo::options`], 0.6.0 / #554).
+    ///
+    /// Renamed from `triggers` in 0.6.0, and it now reaches agent plugins too:
+    /// an option written on a workflow can belong to either of the plugins the
+    /// workflow names, so both have to see it. `trigger` is still a task
+    /// source's alone and arrives empty for an agent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub triggers: Vec<TriggerInfo>,
+    pub workflows: Vec<WorkflowInfo>,
     /// The `[plugins.{name}].poll_interval_secs` value: a push source's
     /// *internal* fetch cadence (the Orchestrator itself never polls).
     /// Additive since protocol 0.1.6. `None` for non-task_source plugins or
@@ -126,14 +132,28 @@ pub struct InitializeParams {
     pub poll_interval_secs: Option<u64>,
 }
 
-/// One workflow trigger, as supplied to task_source plugins in
-/// [`InitializeParams::triggers`] (0.1.6).
+/// One workflow, as supplied to the plugins it names in
+/// [`InitializeParams::workflows`] (0.1.6 as `TriggerInfo`, renamed and
+/// extended in 0.6.0).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TriggerInfo {
+pub struct WorkflowInfo {
     /// The workflow's `name` (`[[workflows]].name`).
     pub workflow: String,
-    /// Trigger condition; plugin-defined shape.
+    /// Trigger condition; plugin-defined shape. An empty object for a plugin
+    /// named as the workflow's `agent` — triggers select tasks, which is the
+    /// source's business.
     pub trigger: serde_json::Value,
+    /// The keys written on `[[workflows]]` that are **not** the Orchestrator's
+    /// own (#554), verbatim.
+    ///
+    /// The Orchestrator cannot tell whose they are: a workflow names a source
+    /// *and* an agent, and either may define a key. So it hands the whole set
+    /// to both and asks each which ones it recognises — see
+    /// [`InitializeResult::claimed_options`]. A key nobody claims is a typo
+    /// and fails startup; one that two plugins claim is ambiguous and fails
+    /// too.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub options: serde_json::Map<String, serde_json::Value>,
 }
 
 /// One orchestrator-configured repository, as supplied to task_source
@@ -213,6 +233,25 @@ pub struct InitializeResult {
     /// this plugin's". Non-task_source plugins leave it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub claimed_repos: Vec<ClaimedRepo>,
+    /// Which of the workflow options it was handed this plugin recognises as
+    /// its own (0.6.0, #554).
+    ///
+    /// The Orchestrator uses the union across a workflow's `source` and
+    /// `agent` to decide whether every key written on that workflow has
+    /// exactly one owner. **A plugin must claim only keys it actually
+    /// consumes**: claiming a key it ignores turns a typo into silence, which
+    /// is the failure this handshake exists to remove.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claimed_options: Vec<WorkflowOption>,
+}
+
+/// One `(workflow, key)` pair a plugin claims as its own (0.6.0, #554).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowOption {
+    /// The workflow the key was written on (`[[workflows]].name`).
+    pub workflow: String,
+    /// The key, as spelled in `config.toml`.
+    pub key: String,
 }
 
 /// `config/validate` params (O→P): the plugin config to validate (F-59).
@@ -220,6 +259,16 @@ pub struct InitializeResult {
 pub struct ConfigValidateParams {
     /// The plugin-specific config to check.
     pub config: serde_json::Value,
+    /// The workflows naming this plugin, with the options written on each
+    /// (0.6.0, #554) — the same list `initialize` supplied.
+    ///
+    /// Repeated here rather than remembered from `initialize` so the two calls
+    /// stay independent: `config/validate` is the offline-ish gate an operator
+    /// runs, and a plugin that answered it from state left over from a
+    /// different call would be validating something other than what it was
+    /// asked about.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflows: Vec<WorkflowInfo>,
 }
 
 /// `config/validate` result (P→O).
@@ -785,15 +834,23 @@ mod tests {
                 model: "anthropic/claude-haiku-4.5".into(),
                 api_key: Some("sk-or-resolved".into()),
             }),
-            triggers: vec![TriggerInfo {
+            workflows: vec![WorkflowInfo {
                 workflow: "design".into(),
                 trigger: serde_json::json!({"project_status": "設計待ち"}),
+                options: serde_json::json!({"publish": "direct"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
             }],
             poll_interval_secs: Some(60),
         });
         round_trip(&InitializeResult {
             plugin_version: Version::new(1, 0, 0),
             claimed_repos: Vec::new(),
+            claimed_options: vec![WorkflowOption {
+                workflow: "design".into(),
+                key: "publish".into(),
+            }],
             capabilities: Capabilities {
                 hook_completion: true,
                 ..Default::default()
@@ -801,34 +858,35 @@ mod tests {
         });
         round_trip(&ConfigValidateParams {
             config: serde_json::json!({}),
+            workflows: vec![],
         });
-        // The compatibility contract for the additive fields (`repositories`
-        // since 0.1.1, `llm` since 0.1.2, `triggers`/`poll_interval_secs`
-        // since 0.1.6): absent in old params (default), omitted when unset
-        // (an old plugin never sees an unknown field), and ignored by an
-        // older plugin when present.
+        // The absent-when-unset contract for the optional fields
+        // (`repositories`, `llm`, `workflows`, `poll_interval_secs`): absent
+        // in minimal params (default), omitted when unset, and ignored when a
+        // plugin is sent a field it does not know.
         let old: InitializeParams =
             serde_json::from_str(r#"{"protocol_version":"0.1.0","config":{}}"#).unwrap();
         assert!(old.repositories.is_empty());
         assert!(old.llm.is_none());
-        assert!(old.triggers.is_empty());
+        assert!(old.workflows.is_empty());
         assert!(old.poll_interval_secs.is_none());
         let empty = InitializeParams {
             protocol_version: Version::new(0, 1, 2),
             config: serde_json::json!({}),
             repositories: vec![],
             llm: None,
-            triggers: vec![],
+            workflows: vec![],
             poll_interval_secs: None,
         };
         let wire = serde_json::to_string(&empty).unwrap();
         assert!(!wire.contains("repositories"));
         assert!(!wire.contains("llm"));
-        assert!(!wire.contains("triggers"));
+        assert!(!wire.contains("workflows"));
         assert!(!wire.contains("poll_interval_secs"));
         let ignored: ConfigValidateParams =
             serde_json::from_str(r#"{"config":{},"repositories":[{"name":"x"}]}"#).unwrap();
         assert_eq!(ignored.config, serde_json::json!({}));
+        assert!(ignored.workflows.is_empty());
         // `claimed_repos` (0.5.1, #542) under the same contract, this time on
         // the *result*: a plugin predating it sends no key and must read back
         // as "claims nothing" rather than failing to deserialize.
@@ -836,6 +894,11 @@ mod tests {
             serde_json::from_str(r#"{"plugin_version":"1.0.0","capabilities":{"outputs":[]}}"#)
                 .unwrap();
         assert!(old_result.claimed_repos.is_empty());
+        // `claimed_options` (0.6.0, #554) omits the same way. Note what an
+        // empty list means here: "I claim none of the keys I was handed", and
+        // the Orchestrator turns that into an error if nobody else claims
+        // them — silence is not consent.
+        assert!(old_result.claimed_options.is_empty());
         assert!(
             !serde_json::to_string(&old_result)
                 .unwrap()
@@ -846,6 +909,7 @@ mod tests {
         round_trip(&InitializeResult {
             plugin_version: Version::new(1, 0, 0),
             capabilities: Capabilities::default(),
+            claimed_options: Vec::new(),
             claimed_repos: vec![ClaimedRepo {
                 repo: "totsuka".into(),
                 destination: "GitHub Project tomoya-k31/#7 (user)".into(),

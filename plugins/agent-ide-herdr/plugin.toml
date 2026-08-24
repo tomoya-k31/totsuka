@@ -5,7 +5,7 @@ version = "0.1.0"
 # `TaskDispatchParams.tool_launch` arrived, and this plugin no longer has a
 # local argv fallback for orchestrators that send none. Refusing them here
 # (F-54) is what makes deleting `agent_command`/`plan_args` safe.
-protocol_version = ">=0.2.3, <0.6"
+protocol_version = ">=0.6.0, <0.7"
 
 [capabilities]
 pane_control = true

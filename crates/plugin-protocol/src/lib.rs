@@ -66,7 +66,7 @@
 //!     config: serde_json::json!({ "socket_path": "/run/herdr.sock" }),
 //!     repositories: vec![],
 //!     llm: None,
-//!     triggers: vec![],
+//!     workflows: vec![],
 //!     poll_interval_secs: None,
 //! };
 //! let request = Request::new(1, method::INITIALIZE, Some(serde_json::to_value(&params)?));
@@ -82,6 +82,9 @@
 //!     // A task_source lists the repositories it is the tracker for here
 //!     // (#542); every other kind leaves it empty.
 //!     claimed_repos: Vec::new(),
+//!     // …and every kind answers which workflow options it recognises
+//!     // (#554). Nothing here means "none of them are mine".
+//!     claimed_options: Vec::new(),
 //! };
 //! let response = Response::result(parsed.id, serde_json::to_value(&result)?);
 //! assert!(!response.is_error());
@@ -103,7 +106,7 @@ pub use methods::{
     NotifyParams, RepoInfo, ResultPublishParams, SessionAttachParams, SessionAttachResult,
     StateNotification, StateSubscribeParams, TaskCancelParams, TaskDispatchParams,
     TaskDispatchResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus,
-    TaskUpdateStatusParams, TriggerInfo,
+    TaskUpdateStatusParams, WorkflowInfo, WorkflowOption,
 };
 pub use task::Task;
 pub use version::{PROTOCOL_VERSION, is_compatible, is_compatible_with_current, protocol_version};

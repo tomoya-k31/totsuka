@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use plugin_protocol::Task;
-use plugin_protocol::methods::TriggerInfo;
+use plugin_protocol::methods::WorkflowInfo;
 
 use crate::submit::{SubmitOutcome, Submitter};
 
@@ -20,13 +20,13 @@ use crate::submit::{SubmitOutcome, Submitter};
 /// human-readable error — a failing trigger skips this tick, not the loop
 /// (transient API failures must not kill the source).
 pub async fn poll_loop<S, F, Fut>(
-    triggers: Vec<TriggerInfo>,
+    triggers: Vec<WorkflowInfo>,
     interval: Duration,
     submitter: S,
     mut fetch: F,
 ) where
     S: Submitter,
-    F: FnMut(&TriggerInfo) -> Fut + Send,
+    F: FnMut(&WorkflowInfo) -> Fut + Send,
     Fut: Future<Output = Result<Vec<Task>, String>> + Send,
 {
     let mut tick: u64 = 0;

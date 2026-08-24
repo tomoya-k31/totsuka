@@ -423,8 +423,19 @@ impl Profile {
 /// [`resolved_verification`](Self::resolved_verification) — the raw fields are
 /// for validation only, which is the one place that has to tell "omitted" from
 /// "written out".
+///
+/// # Why this is not `deny_unknown_fields`
+///
+/// A plugin may define keys of its own on a workflow, written **flat**,
+/// alongside the Orchestrator's (#554) — see
+/// [`options`](Self::options). serde therefore cannot decide what is unknown,
+/// because the Orchestrator does not know either: a workflow names a `source`
+/// *and* an `agent`, and the key could be either one's.
+///
+/// The check moves to the plugins, which is the only place the answer exists.
+/// It is not weaker: a key **no** plugin claims is an error, so `profil` still
+/// fails — just at `initialize` rather than at parse.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct WorkflowConfig {
     /// Workflow name.
     pub name: String,
@@ -527,6 +538,23 @@ pub struct WorkflowConfig {
     /// to survive that is not worth a second source of truth.
     #[serde(default)]
     pub cleanup: Option<CleanupPolicyConfig>,
+    /// Every key on this workflow that is not one of the fields above: a
+    /// plugin's own, held **uninterpreted** (#554).
+    ///
+    /// Written flat, next to the Orchestrator's keys, because that is what a
+    /// workflow option is from the operator's side — `publish = "direct"`
+    /// reads the same whether core or the Slack source is the one that
+    /// consumes it. The nesting that would make ownership syntactically
+    /// obvious would also make the config say something the operator does not
+    /// care about.
+    ///
+    /// Ownership is resolved by asking instead: the whole set goes to the
+    /// workflow's `source` and `agent` at `initialize`, and each answers which
+    /// keys are its own (`InitializeResult::claimed_options`). **Exactly one**
+    /// claimant is required — zero is a typo, two is an ambiguity the
+    /// Orchestrator will not settle by picking.
+    #[serde(flatten)]
+    pub options: toml::Table,
 }
 
 /// `[[workflows]].publish` — how a published result reaches the human (#548).
@@ -914,6 +942,42 @@ on_success = { set_status = "レビュー待ち" }
                 "`{name}` is not a RootConfig field but was reported as reserved"
             );
         }
+    }
+
+    /// The flattened catch-all must capture **only** what the Orchestrator does
+    /// not name (#554). If a core key leaked into it, every workflow using that
+    /// key would demand a plugin claim for it — and, worse, the tests that
+    /// exercise the claim rule would be asserting on the wrong keys and pass
+    /// while checking nothing.
+    #[test]
+    fn workflow_options_hold_only_the_keys_core_does_not_name() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[[workflows]]
+name = "reply"
+source = "slack"
+agent = "herdr"
+profile = "answer"
+publish = "direct"
+timeout_secs = 0
+trigger = { reaction = "eyes" }
+thread_scope = "parent"
+"#,
+        )
+        .unwrap();
+        let wf = &cfg.workflows[0];
+        assert_eq!(
+            wf.options.keys().collect::<Vec<_>>(),
+            vec!["thread_scope"],
+            "only the plugin-defined key is leftover"
+        );
+        // …and the named fields still parsed, rather than being shadowed.
+        assert_eq!(wf.publish, Some(PublishConfig::Direct));
+        assert_eq!(wf.timeout_secs, Some(0));
+        assert_eq!(
+            wf.trigger.get("reaction").and_then(|v| v.as_str()),
+            Some("eyes")
+        );
     }
 
     /// A plugin's table travels through parsing untouched, nested shapes

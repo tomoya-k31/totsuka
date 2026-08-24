@@ -7,7 +7,7 @@ use plugin_protocol::Task;
 use plugin_protocol::jsonrpc::{Error, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskUpdateStatusParams, TriggerInfo,
+    ResultPublishParams, TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_sdk::{
     LineHandler, Lookup, LookupClient, SubmitClient, SubmitOutcome, Submitter, TaskSourceHandler,
@@ -49,6 +49,7 @@ impl TaskSourceHandler for Recording {
         Ok(InitializeResult {
             plugin_version: semver::Version::new(0, 1, 0),
             claimed_repos: Vec::new(),
+            claimed_options: Vec::new(),
             capabilities: Default::default(),
         })
     }
@@ -303,13 +304,15 @@ impl Submitter for CountingSubmitter {
 #[tokio::test]
 async fn poll_loop_fetches_every_trigger_and_survives_fetch_errors() {
     let triggers = vec![
-        TriggerInfo {
+        WorkflowInfo {
             workflow: "ok".into(),
             trigger: json!({}),
+            options: Default::default(),
         },
-        TriggerInfo {
+        WorkflowInfo {
             workflow: "broken".into(),
             trigger: json!({}),
+            options: Default::default(),
         },
     ];
     let submitter = CountingSubmitter::default();

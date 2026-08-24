@@ -3,7 +3,7 @@
   "id": 1,
   "method": "initialize",
   "params": {
-    "protocol_version": "0.4.0",
+    "protocol_version": "0.6.0",
     "config": { "socket_path": "/run/herdr.sock" },
     "repositories": [
       { "name": "web-app", "summary": "customer web app", "path": "/repos/web-app" }
@@ -13,8 +13,12 @@
       "model": "anthropic/claude-haiku-4.5",
       "api_key": "resolved-dummy-api-key"
     },
-    "triggers": [
-      { "workflow": "design", "trigger": { "project_status": "設計待ち" } }
+    "workflows": [
+      {
+        "workflow": "design",
+        "trigger": { "project_status": "設計待ち" },
+        "options": { "publish": "direct" }
+      }
     ],
     "poll_interval_secs": 60
   }

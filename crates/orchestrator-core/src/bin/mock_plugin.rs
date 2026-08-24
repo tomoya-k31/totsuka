@@ -145,11 +145,19 @@ fn main() {
                         .expect("`claimed_repos` must be [{repo, destination}]"),
                     None => Vec::new(),
                 };
+                // 0.6.0 (#554): which workflow options this fake plugin owns,
+                // named by the test as `claim_options = ["publish", …]`.
+                // Absent means "claim nothing", which is what an honest
+                // plugin with no options of its own answers — and it is what
+                // makes an unclaimed key in a test config fail rather than
+                // pass by the double being agreeable.
+                let claimed_options = claimed_options(&config, &params);
                 Response::result(
                     request_id(&id),
                     serde_json::to_value(InitializeResult {
                         plugin_version: semver::Version::new(0, 1, 0),
                         claimed_repos,
+                        claimed_options,
                         capabilities: Capabilities {
                             state_stream,
                             pane_control: flag("pane_control"),
@@ -739,6 +747,54 @@ fn commit_in(worktree: &str) {
 }
 
 /// Convert a JSON id value into a `RequestId` (numbers used by the host).
+/// The `(workflow, key)` pairs this double claims: every option key the
+/// Orchestrator handed it whose name appears in the test's `claim_options`
+/// list.
+fn claimed_options(
+    config: &Value,
+    params: &Value,
+) -> Vec<plugin_protocol::methods::WorkflowOption> {
+    let claimable: Vec<String> = config
+        .get("claim_options")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if claimable.is_empty() {
+        return Vec::new();
+    }
+    params
+        .get("workflows")
+        .and_then(Value::as_array)
+        .map(|workflows| {
+            workflows
+                .iter()
+                .flat_map(|w| {
+                    let name = w
+                        .get("workflow")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    w.get("options")
+                        .and_then(Value::as_object)
+                        .map(|o| o.keys().cloned().collect::<Vec<_>>())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|k| claimable.contains(k))
+                        .map(move |key| plugin_protocol::methods::WorkflowOption {
+                            workflow: name.clone(),
+                            key,
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn request_id(id: &Value) -> plugin_protocol::RequestId {
     match id.as_i64() {
         Some(n) => plugin_protocol::RequestId::Number(n),

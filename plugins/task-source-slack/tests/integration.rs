@@ -150,7 +150,7 @@ async fn a_missing_scope_warns_without_failing_initialize() {
             &mut srv,
             1,
             "initialize",
-            json!({ "protocol_version": "0.1.0", "config": config, "triggers": triggers }),
+            json!({ "protocol_version": "0.1.0", "config": config, "workflows": triggers }),
         )
         .await,
     );
@@ -176,7 +176,7 @@ async fn unknown_scopes_add_no_round_trip() {
             &mut srv,
             1,
             "initialize",
-            json!({ "protocol_version": "0.1.0", "config": config, "triggers": triggers }),
+            json!({ "protocol_version": "0.1.0", "config": config, "workflows": triggers }),
         )
         .await,
     );

@@ -283,7 +283,7 @@ async fn a_poll_walks_every_database_and_each_one_gates_its_own_repos() {
     let params = json!({
         "protocol_version": "0.5.1",
         "config": two_database_config(),
-        "triggers": [
+        "workflows": [
             { "workflow": "design", "trigger": { "status": "実装待ち" } }
         ],
         "poll_interval_secs": 60
@@ -334,7 +334,7 @@ async fn a_page_without_a_repo_hint_is_still_ingested() {
     let params = json!({
         "protocol_version": "0.5.1",
         "config": init_config(),
-        "triggers": [{ "workflow": "design", "trigger": { "status": "実装待ち" } }],
+        "workflows": [{ "workflow": "design", "trigger": { "status": "実装待ち" } }],
         "poll_interval_secs": 60
     });
     call(&mut srv, 1, "initialize", params).await;
@@ -569,7 +569,7 @@ async fn fetch_excludes_in_progress_on_statusless_trigger() {
     let params = json!({
         "protocol_version": "0.1.6",
         "config": init_config(),
-        "triggers": [
+        "workflows": [
             { "workflow": "design", "trigger": {} }
         ],
         "poll_interval_secs": 60
@@ -720,7 +720,7 @@ async fn initialize_with_triggers_polls_and_submits() {
     let params = json!({
         "protocol_version": "0.1.6",
         "config": init_config(),
-        "triggers": [
+        "workflows": [
             { "workflow": "design", "trigger": { "status": "実装待ち" } }
         ],
         "poll_interval_secs": 60

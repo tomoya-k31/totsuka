@@ -62,7 +62,7 @@ pub trait TransportFactory {
 /// source. The two halves then fail in opposite directions from one typo: no
 /// emoji is registered here, and everything is swallowed there. Neither end
 /// reports an error on its own, so the warning is the only signal.
-fn workflow_reactions(triggers: &[plugin_protocol::methods::TriggerInfo]) -> Vec<WorkflowTrigger> {
+fn workflow_reactions(triggers: &[plugin_protocol::methods::WorkflowInfo]) -> Vec<WorkflowTrigger> {
     triggers
         .iter()
         .map(|t| {
@@ -333,14 +333,14 @@ where
         }
         // Reaction triggers arrive on this call as `[[workflows]].trigger.reaction`
         // (#396), so this is where they are resolved.
-        let reaction_triggers = match ReactionTriggers::resolve(&workflow_reactions(&init.triggers))
-        {
-            Ok(t) => t,
-            Err(mut e) => {
-                errors.append(&mut e);
-                ReactionTriggers::default()
-            }
-        };
+        let reaction_triggers =
+            match ReactionTriggers::resolve(&workflow_reactions(&init.workflows)) {
+                Ok(t) => t,
+                Err(mut e) => {
+                    errors.append(&mut e);
+                    ReactionTriggers::default()
+                }
+            };
         if !errors.is_empty() {
             return Reply::respond(Response::error(
                 id,
@@ -641,6 +641,8 @@ fn scope_warnings(
 /// ever be `true`; it was removed in 0.5.0 (#496).
 fn capabilities_result() -> Value {
     let result = InitializeResult {
+        // No workflow options of its own (#554).
+        claimed_options: Vec::new(),
         plugin_version: plugin_version(),
         claimed_repos: Vec::new(),
         capabilities: Capabilities {

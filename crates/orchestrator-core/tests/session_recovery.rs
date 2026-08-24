@@ -26,14 +26,14 @@ fn spec() -> PluginSpec {
 name = "mock"
 kind = "agent_ide"
 version = "0.1.0"
-protocol_version = ">=0.1.6, <0.6"
+protocol_version = ">=0.6.0, <0.7"
 "#,
         )
         .unwrap(),
         init_config: serde_json::json!({}),
         repositories: vec![],
         llm: None,
-        triggers: vec![],
+        workflows: vec![],
         poll_interval_secs: None,
         timeout: Duration::from_secs(10),
     }
