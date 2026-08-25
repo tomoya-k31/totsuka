@@ -115,7 +115,7 @@ pub trait TaskSourceHandler: Send {
         async {
             Err(Error::new(
                 error_code::METHOD_NOT_FOUND,
-                "task/claim is not supported by this plugin → do not declare the                  `task_claim` capability",
+                "task/claim is not supported by this plugin → do not declare the `task_claim` capability",
             ))
         }
     }
