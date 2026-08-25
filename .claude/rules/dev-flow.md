@@ -115,9 +115,12 @@ for why. CI's own flags stay exactly as they are:
       costs 12.6s on the next full rebuild (5.57s → 18.14s, measured). It only
       grows on disk (19–30 MB/dir; it had reached 1,126 dirs / 21G), and
       `cargo clean` is the only way to reclaim it.
-    - the two compose: because `.o` never accumulates, the periodic
-      `cargo clean` deletes ~11k files in **0.88s** instead of the 222s it took
-      on a neglected tree. The full build right after it is 27.8s.
+    - the two compose, and **delete cost is not linear in entry count**: the
+      same `find … -name '*.o' -delete` takes **0.53s at ~9,500 entries, 18.4s
+      at ~250,000, and 903s at ~874,000** (measured, sweeping a tree left for a
+      month — 15 minutes, i.e. one whole slow build). Sweeping every run keeps
+      the periodic `cargo clean` at ~11k files / **0.88s** instead of the 222s a
+      neglected tree cost. The full build right after a clean is 27.8s.
 - `cargo doc --workspace --no-deps` — rustdoc link integrity. `[workspace.lints.rust]
   warnings = "deny"` already makes a broken intra-doc link a hard error
   (exit 101), but **CI never runs `cargo doc`**, so nothing fires it: 18
