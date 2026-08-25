@@ -120,6 +120,8 @@ mod tests {
         WorkflowInfo {
             workflow: name.to_string(),
             trigger: json!({}),
+            instructions_kind: None,
+            task_id_prefix: None,
             options: options.as_object().cloned().unwrap_or_default(),
         }
     }

@@ -70,18 +70,17 @@ pub fn plugin_spec(
     // and an agent has no say in that.
     let workflows = workflow_infos(cfg, name, is_source);
     // task_source plugins additionally get the orchestrator's repository list
-    // (#109), `[llm]` settings (#119), and `poll_interval_secs` (0.1.6), so a
-    // push source knows its watch cadence without a call carrying it.
-    let (repositories, projects, llm, poll_interval_secs) = if is_source {
-        let poll = cfg.plugin(name).and_then(|p| p.poll_interval_secs);
+    // (#109) and `[llm]` settings (#119). Their fetch cadence
+    // (`poll_interval_secs`) is their own `[<name>]` key since 0.6.0 and
+    // travels inside `init_config` like any other plugin-owned setting.
+    let (repositories, projects, llm) = if is_source {
         (
             repo_infos(cfg, env),
             project_infos(cfg, name),
             llm_info(cfg, env),
-            poll,
         )
     } else {
-        (vec![], vec![], None, None)
+        (vec![], vec![], None)
     };
     Ok(PluginSpec {
         name: name.to_string(),
@@ -93,7 +92,6 @@ pub fn plugin_spec(
         projects,
         llm,
         workflows,
-        poll_interval_secs,
         timeout,
     })
 }
@@ -102,7 +100,7 @@ pub fn plugin_spec(
 ///
 /// Filtered here rather than sent whole and filtered plugin-side: `source` is
 /// the Orchestrator's key on the entry, so deciding whose it is *is* its job —
-/// and a plugin that received other plugins' trackers would have to be trusted
+/// and a plugin that received other plugins' projects would have to be trusted
 /// to ignore them.
 fn project_infos(cfg: &RootConfig, name: &str) -> Vec<ProjectInfo> {
     cfg.projects
@@ -137,11 +135,30 @@ pub fn workflow_infos(cfg: &RootConfig, name: &str, is_source: bool) -> Vec<Work
             workflow: w.name.clone(),
             // An agent is sent an empty object rather than `null`: a plugin
             // reading `.get("…")` off `null` mis-branches, which is the same
-            // reason the catch-all trigger is `{}` (#396).
+            // reason the catch-all trigger is `{}` (#396). A source gets the
+            // operator's table **verbatim** — the profile-derived keys that
+            // used to be injected here travel as the two dedicated fields
+            // below since 0.6.0, so the trigger is a filter condition and
+            // nothing else.
             trigger: if is_source {
-                trigger_value(w)
+                serde_json::to_value(&w.trigger).unwrap_or(Value::Null)
             } else {
                 Value::Object(serde_json::Map::new())
+            },
+            // Profile-derived instructions for the source (#398/#397): what
+            // kind of instructions to write and what to prefix task ids with.
+            // The Orchestrator translates because a plugin cannot read
+            // `profile` — that is core schema — and an agent has no use for
+            // either.
+            instructions_kind: if is_source {
+                w.profile.and_then(instructions_kind).map(str::to_string)
+            } else {
+                None
+            },
+            task_id_prefix: if is_source {
+                w.profile.and_then(task_id_prefix).map(str::to_string)
+            } else {
+                None
             },
             options: workflow_options(w),
         })
@@ -229,43 +246,6 @@ pub fn plugin_init_config(
         source,
     })?;
     Ok(value)
-}
-
-/// A workflow's trigger as the plugin receives it, with the profile-derived
-/// keys the Orchestrator adds (#398).
-///
-/// # Why the trigger table carries this
-///
-/// A source plugin has to write different instructions for a `design` task than
-/// for an `implement` one — where to put the design comment, what URL to report
-/// back. It cannot read the profile: `[[workflows]]` is the Orchestrator's
-/// schema, and teaching every plugin about profiles would make each one depend
-/// on a core concept that keeps changing.
-///
-/// So the Orchestrator translates. The trigger is already a plugin-defined
-/// `Value` that plugins parse loosely, so an extra key rides along with **no
-/// protocol change and no version bump**: an older plugin ignores what it does
-/// not recognise and behaves exactly as before.
-///
-/// The **cost is that the degradation is silent**. A new Orchestrator against
-/// an old plugin sends `instructions_kind`, gets no instructions back in the
-/// task, and dispatches an agent that was never told where to write. Nothing
-/// errors. There is no capability flag to probe for, so this cannot be checked
-/// at runtime — release core and the source plugins together.
-fn trigger_value(wf: &crate::config::WorkflowConfig) -> serde_json::Value {
-    let mut value = serde_json::to_value(&wf.trigger).unwrap_or(serde_json::Value::Null);
-    let Some(table) = value.as_object_mut() else {
-        return value;
-    };
-    for (key, derived) in [
-        ("instructions_kind", wf.profile.and_then(instructions_kind)),
-        ("task_id_prefix", wf.profile.and_then(task_id_prefix)),
-    ] {
-        if let Some(v) = derived {
-            table.insert(key.to_string(), serde_json::Value::String(v.to_string()));
-        }
-    }
-    value
 }
 
 /// The task-id prefix a profile's tasks carry, or `None` when they keep the
@@ -416,9 +396,11 @@ profile = "design"
     }
 
     /// The profile → `instructions_kind` translation the source plugins read
-    /// (#398), and the two silences that are deliberate.
+    /// (#398), and the two silences that are deliberate. Since 0.6.0 the
+    /// derived values are dedicated [`WorkflowInfo`] fields — the trigger
+    /// itself is the operator's spelling, verbatim.
     #[test]
-    fn a_profile_bakes_its_instructions_kind_into_the_trigger() {
+    fn a_profile_derives_instructions_kind_and_prefix_beside_the_trigger() {
         let cfg = root(
             r#"
 [[workflows]]
@@ -451,21 +433,20 @@ output = "source"
 agent = "herdr"
 "#,
         );
-        let kind_of = |name: &str| {
-            let wf = cfg.workflows.iter().find(|w| w.name == name).unwrap();
-            trigger_value(wf)
-                .get("instructions_kind")
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
+        let info_of = |name: &str| {
+            let source = &cfg
+                .workflows
+                .iter()
+                .find(|w| w.name == name)
+                .unwrap()
+                .source;
+            workflow_infos(&cfg, source, true)
+                .into_iter()
+                .find(|w| w.workflow == name)
+                .unwrap()
         };
-
-        let prefix_of = |name: &str| {
-            let wf = cfg.workflows.iter().find(|w| w.name == name).unwrap();
-            trigger_value(wf)
-                .get("task_id_prefix")
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        };
+        let kind_of = |name: &str| info_of(name).instructions_kind;
+        let prefix_of = |name: &str| info_of(name).task_id_prefix;
 
         assert_eq!(kind_of("gh-design").as_deref(), Some("design"));
         assert_eq!(kind_of("gh-implement").as_deref(), Some("implement"));
@@ -487,17 +468,15 @@ agent = "herdr"
         assert_eq!(prefix_of("gh-design"), None);
         assert_eq!(prefix_of("spelled-out"), None);
 
-        // The existing trigger keys survive — the plugin still filters on them.
-        let design = cfg
-            .workflows
-            .iter()
-            .find(|w| w.name == "gh-design")
-            .unwrap();
+        // The trigger stays the operator's spelling, and **only** that: the
+        // derived keys must not leak back into the table now that they have
+        // fields of their own — a plugin still reading them off the trigger
+        // would silently work against this Orchestrator and break against the
+        // next, which is the drift 0.6.0 exists to end.
+        let design = info_of("gh-design");
         assert_eq!(
-            trigger_value(design)
-                .get("project_status")
-                .and_then(|v| v.as_str()),
-            Some("設計待ち")
+            design.trigger,
+            serde_json::json!({ "project_status": "設計待ち" })
         );
     }
 

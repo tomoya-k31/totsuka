@@ -87,7 +87,7 @@ Commit only after that.\
 # text is the **completion condition**, not a different URL.
 #
 # Placeholders: {destination}
-tracker_destination = """
+project_destination = """
 [orchestrator] Where to file it: {destination}
 Filing is complete only once the item exists at that destination, and the URL \
 of what you filed MUST appear in your final report.\

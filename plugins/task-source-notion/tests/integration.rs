@@ -173,6 +173,9 @@ fn init_config() -> Value {
         "in_progress_statuses": ["実装中"],
         "status_map": { "レビュー待ち": "In Review" },
         "priority_map": { "High": 10 },
+        // The fetch cadence is this plugin's own `[notion]` key since 0.6.0
+        // (#554) — it arrives inside `config`, not beside it.
+        "poll_interval_secs": 60,
         "property_map": {
             "title": "Name",
             "status": "Status",
@@ -311,7 +314,6 @@ async fn a_poll_walks_every_database_and_each_one_gates_its_own_repos() {
         "workflows": [
             { "workflow": "design", "trigger": { "status": "実装待ち" } }
         ],
-        "poll_interval_secs": 60
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
     assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
@@ -362,7 +364,6 @@ async fn a_page_without_a_repo_hint_is_still_ingested() {
         "projects": one_database().0,
         "repositories": one_database().1,
         "workflows": [{ "workflow": "design", "trigger": { "status": "実装待ち" } }],
-        "poll_interval_secs": 60
     });
     call(&mut srv, 1, "initialize", params).await;
 
@@ -602,7 +603,6 @@ async fn fetch_excludes_in_progress_on_statusless_trigger() {
         "workflows": [
             { "workflow": "design", "trigger": {} }
         ],
-        "poll_interval_secs": 60
     });
     call(&mut srv, 1, "initialize", params).await;
 
@@ -761,7 +761,6 @@ async fn initialize_with_triggers_polls_and_submits() {
         "workflows": [
             { "workflow": "design", "trigger": { "status": "実装待ち" } }
         ],
-        "poll_interval_secs": 60
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
     assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);

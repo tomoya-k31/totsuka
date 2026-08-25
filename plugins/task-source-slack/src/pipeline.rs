@@ -1073,10 +1073,10 @@ fn build_task(
         title,
         body: Some(body),
         repo_hint,
-        // How a reaction-derived task reaches its `trigger = { reaction = ... }`
-        // workflow (#396). The Orchestrator re-checks the emoji against this
-        // label, so its absence is not cosmetic — the task would fall through
-        // to the catch-all and be answered instead of implemented.
+        // A record of how the task was raised (#396). Since 0.6.0 (#554) the
+        // workflow is decided here and named on `task/submit` — the
+        // Orchestrator no longer re-checks this label, so dropping it changes
+        // nothing about routing; it stays for humans reading `task list`.
         labels: mention
             .reaction
             .iter()

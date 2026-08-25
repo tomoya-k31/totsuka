@@ -66,7 +66,6 @@ protocol_version = ">=0.6.0, <0.7"
         llm: None,
         projects: vec![],
         workflows: vec![],
-        poll_interval_secs: None,
         timeout: Duration::from_secs(10),
     })
     .await

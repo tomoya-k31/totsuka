@@ -307,11 +307,15 @@ async fn poll_loop_fetches_every_trigger_and_survives_fetch_errors() {
         WorkflowInfo {
             workflow: "ok".into(),
             trigger: json!({}),
+            instructions_kind: None,
+            task_id_prefix: None,
             options: Default::default(),
         },
         WorkflowInfo {
             workflow: "broken".into(),
             trigger: json!({}),
+            instructions_kind: None,
+            task_id_prefix: None,
             options: Default::default(),
         },
     ];

@@ -76,7 +76,7 @@ pub struct PluginSpec {
     /// (#109). Populated for task_source plugins only; empty otherwise
     /// (the field is omitted from the wire when empty).
     pub repositories: Vec<plugin_protocol::methods::RepoInfo>,
-    /// The `[[projects]]` trackers this task_source owns (#554). Empty for
+    /// The `[[projects]]` entries this task_source owns (#554). Empty for
     /// other kinds (omitted from the wire).
     pub projects: Vec<plugin_protocol::methods::ProjectInfo>,
     /// The orchestrator's `[llm]` settings supplied at `initialize` as a
@@ -88,10 +88,6 @@ pub struct PluginSpec {
     /// and, for either kind, the plugin-owned options written on each
     /// workflow. Empty when no workflow names it (omitted from the wire).
     pub workflows: Vec<plugin_protocol::methods::WorkflowInfo>,
-    /// `[plugins.{name}].poll_interval_secs`, forwarded at `initialize`
-    /// (0.1.6) as a push source's internal fetch cadence. `None` when unset
-    /// or for non-source kinds (omitted from the wire).
-    pub poll_interval_secs: Option<u64>,
     /// Per-call RPC timeout.
     pub timeout: Duration,
 }
@@ -500,11 +496,11 @@ pub struct Plugin {
     incoming: Mutex<Option<mpsc::UnboundedReceiver<IncomingRequest>>>,
     capabilities: Capabilities,
     plugin_version: semver::Version,
-    /// Repositories this plugin declared itself the tracker for (0.5.1, #542).
+    /// Repositories this plugin files project items for (0.5.1, #542).
     ///
     /// Empty for every non-task_source plugin and for any plugin predating
     /// 0.5.1 — which is **not** the same as "these repositories have no
-    /// tracker", so a caller must never read an empty list that way.
+    /// project", so a caller must never read an empty list that way.
     claimed_repos: Vec<ClaimedRepo>,
     claimed_options: Vec<WorkflowOption>,
 }
@@ -593,7 +589,6 @@ impl Plugin {
             projects: spec.projects,
             llm: spec.llm,
             workflows: spec.workflows,
-            poll_interval_secs: spec.poll_interval_secs,
         };
         let result: InitializeResult = plugin
             .call(plugin_protocol::method::INITIALIZE, &init)
@@ -613,7 +608,7 @@ impl Plugin {
         &self.capabilities
     }
 
-    /// The repositories this plugin is the tracker for (#542).
+    /// The repositories this plugin files project items for (#542).
     pub fn claimed_repos(&self) -> &[ClaimedRepo] {
         &self.claimed_repos
     }

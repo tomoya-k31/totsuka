@@ -8,8 +8,18 @@
       {
         "workflow": "design",
         "trigger": { "project_status": "設計待ち" },
+        "instructions_kind": "design",
         "options": { "publish": "direct" }
       }
+    ],
+    "projects": [
+      {
+        "name": "tomo-prj",
+        "options": { "owner": "tomoya-k31", "owner_type": "user", "project_number": 7 }
+      }
+    ],
+    "repositories": [
+      { "name": "web-app", "path": "/repos/web-app", "project": "tomo-prj" }
     ]
   }
 }

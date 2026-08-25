@@ -26,15 +26,17 @@ struct TriggerFilter {
     label: Option<String>,
     /// Which instruction set this workflow's profile asks for (#398).
     ///
-    /// Baked into the trigger table by the Orchestrator rather than derived
-    /// here: `[[workflows]].profile` is core's schema, and this plugin stays
-    /// unaware of it. Absent from an older Orchestrator, in which case the task
-    /// carries no instructions — exactly the pre-#398 behaviour.
+    /// Derived by the Orchestrator rather than here: `[[workflows]].profile`
+    /// is core's schema, and this plugin stays unaware of it. It arrives as
+    /// `WorkflowInfo.instructions_kind` (a dedicated field since 0.6.0 /
+    /// #554, no longer a key inside the trigger table) and is threaded in via
+    /// [`GithubClient::fetch`]. Absent means the task carries no
+    /// instructions — exactly the pre-#398 behaviour.
     instructions_kind: Option<String>,
 }
 
 impl TriggerFilter {
-    fn parse(trigger: &Value) -> Self {
+    fn parse(trigger: &Value, instructions_kind: Option<&str>) -> Self {
         Self {
             project_status: trigger
                 .get("project_status")
@@ -44,10 +46,7 @@ impl TriggerFilter {
                 .get("label")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            instructions_kind: trigger
-                .get("instructions_kind")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            instructions_kind: instructions_kind.map(str::to_string),
         }
     }
 
@@ -109,8 +108,12 @@ impl<T: GithubTransport> GithubClient<T> {
     /// return the rest — would make a broken token or a deleted board look
     /// like "no tasks right now", which is indistinguishable from a quiet
     /// board and never surfaces.
-    pub async fn fetch(&self, trigger: &Value) -> Result<Vec<Task>, GithubError> {
-        let filter = TriggerFilter::parse(trigger);
+    pub async fn fetch(
+        &self,
+        trigger: &Value,
+        instructions_kind: Option<&str>,
+    ) -> Result<Vec<Task>, GithubError> {
+        let filter = TriggerFilter::parse(trigger, instructions_kind);
         let mut tasks = Vec::new();
         for (index, project) in self.config.projects.iter().enumerate() {
             self.fetch_project(index, project, &filter, &mut tasks)
@@ -578,7 +581,10 @@ mod tests {
 
     #[test]
     fn trigger_filter_matches_status_and_label() {
-        let f = TriggerFilter::parse(&json!({ "project_status": "実装待ち", "label": "bug" }));
+        let f = TriggerFilter::parse(
+            &json!({ "project_status": "実装待ち", "label": "bug" }),
+            None,
+        );
         assert!(f.matches(Some("実装待ち"), &["bug".into()]));
         assert!(!f.matches(Some("実装中"), &["bug".into()])); // wrong status
         assert!(!f.matches(Some("実装待ち"), &["docs".into()])); // missing label
@@ -586,7 +592,7 @@ mod tests {
 
     #[test]
     fn empty_trigger_matches_everything() {
-        let f = TriggerFilter::parse(&json!({}));
+        let f = TriggerFilter::parse(&json!({}), None);
         assert!(f.matches(Some("anything"), &[]));
         assert!(f.matches(None, &["x".into()]));
     }
@@ -637,15 +643,13 @@ mod tests {
         ProjectConfig::new("board-0", "me", 1, &["web-app"])
     }
 
-    /// The `instructions_kind` the Orchestrator baked into the trigger picks
-    /// the instruction text, and the placeholders are filled from the issue
+    /// The `instructions_kind` the Orchestrator derives beside the trigger
+    /// (a dedicated `WorkflowInfo` field since 0.6.0, #554) picks the
+    /// instruction text, and the placeholders are filled from the issue
     /// (#398).
     #[test]
     fn a_design_trigger_tells_the_agent_where_to_put_the_design() {
-        let filter = TriggerFilter::parse(&json!({
-            "project_status": "設計待ち",
-            "instructions_kind": "design",
-        }));
+        let filter = TriggerFilter::parse(&json!({ "project_status": "設計待ち" }), Some("design"));
         let task = client_for_tests()
             .normalize_item(&item("設計待ち"), &project_for_tests(), &filter)
             .expect("ingestable");
@@ -667,7 +671,7 @@ mod tests {
     #[test]
     fn each_kind_selects_its_own_text() {
         let for_kind = |kind: &str| {
-            let filter = TriggerFilter::parse(&json!({ "instructions_kind": kind }));
+            let filter = TriggerFilter::parse(&json!({}), Some(kind));
             client_for_tests()
                 .normalize_item(&item("any"), &project_for_tests(), &filter)
                 .unwrap()
@@ -684,7 +688,7 @@ mod tests {
     /// the spelled-out notation — must produce exactly the task it did before.
     #[test]
     fn no_instructions_kind_means_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({ "project_status": "実装待ち" }));
+        let filter = TriggerFilter::parse(&json!({ "project_status": "実装待ち" }), None);
         let task = client_for_tests()
             .normalize_item(&item("実装待ち"), &project_for_tests(), &filter)
             .expect("ingestable");
@@ -696,7 +700,7 @@ mod tests {
     /// worse than dispatching it with the instructions it had before.
     #[test]
     fn an_unknown_kind_falls_back_to_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({ "instructions_kind": "audit" }));
+        let filter = TriggerFilter::parse(&json!({}), Some("audit"));
         let task = client_for_tests()
             .normalize_item(&item("any"), &project_for_tests(), &filter)
             .expect("ingestable");

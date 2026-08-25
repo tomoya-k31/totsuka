@@ -22,10 +22,6 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 /// (F-40).
 pub const DEFAULT_GLOBAL_CONCURRENCY: u32 = 4;
 
-/// Default task-source polling interval in seconds when `poll_interval_secs`
-/// is omitted (F-06).
-pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
-
 /// Default number of Stop-hook block re-asks before a task escalates, when
 /// `[hooks].block_retry_limit` is omitted (D-02).
 pub const DEFAULT_BLOCK_RETRY_LIMIT: u32 = 3;
@@ -66,7 +62,7 @@ pub struct RootConfig {
     /// Registered local repositories (F-61).
     #[serde(default)]
     pub repositories: Vec<RepositoryConfig>,
-    /// Trackers a repository can file into (#554): a GitHub Project, a Notion
+    /// Projects a repository can file into (#554): a GitHub Project, a Notion
     /// database, a Jira project.
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
@@ -175,14 +171,14 @@ pub struct RepositoryConfig {
     /// Overrides the global `[worktree].location` for this repo (F-22).
     #[serde(default)]
     pub worktree_location: Option<String>,
-    /// Which tracker this repository files into: the `name` of a
+    /// Which project this repository files into: the `name` of a
     /// `[[projects]]` entry (#554).
     ///
-    /// Optional — a repository with no tracker is the normal state for anyone
+    /// Optional — a repository with no project is the normal state for anyone
     /// who has not set one up, and the source plugins must treat it as "say
     /// nothing extra", never as an error.
     ///
-    /// **One scalar, so a repository has at most one tracker by
+    /// **One scalar, so a repository has at most one project by
     /// construction.** Until #554 the mapping lived the other way round, as a
     /// `repos = [...]` list inside each source plugin's config
     /// ([ADR-0056](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0056-multi-tracker-routing.md)),
@@ -192,7 +188,7 @@ pub struct RepositoryConfig {
     pub project: Option<String>,
 }
 
-/// A tracker a repository can file into (#554): one `[[projects]]` entry.
+/// A project a repository can file into (#554): one `[[projects]]` entry.
 ///
 /// `name` and `source` are the Orchestrator's — the reference target and the
 /// owning plugin. Everything else belongs to that plugin and is held
@@ -209,7 +205,7 @@ pub struct RepositoryConfig {
 pub struct ProjectConfig {
     /// Stable identifier `[[repositories]].project` points at.
     pub name: String,
-    /// The task_source plugin that owns this tracker.
+    /// The task_source plugin that owns this project.
     pub source: String,
     /// Everything else on the entry, uninterpreted (#554).
     ///
@@ -261,10 +257,6 @@ pub struct PluginConfig {
     /// Plugin log level.
     #[serde(default)]
     pub log_level: Option<String>,
-    /// Polling interval in seconds for `run --watch` (task sources only,
-    /// F-06). Defaults to [`DEFAULT_POLL_INTERVAL_SECS`].
-    #[serde(default)]
-    pub poll_interval_secs: Option<u64>,
     /// Whether a crash of this plugin is followed by a relaunch (#495).
     /// Defaults to `true`.
     ///
@@ -942,6 +934,7 @@ on_success = { set_status = "レビュー待ち" }
             "version",
             "max_concurrency",
             "repositories",
+            "projects",
             "plugins",
             "default_tool",
             "tools",
@@ -1141,7 +1134,6 @@ max_concurrency = 8
 [plugins.github]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 30
 
 [worktree]
 cleanup = { retention_days = 5 }
@@ -1150,7 +1142,6 @@ plan_cleanup = "immediate"
         )
         .unwrap();
         assert_eq!(cfg.max_concurrency, Some(8));
-        assert_eq!(cfg.plugin("github").unwrap().poll_interval_secs, Some(30));
         assert_eq!(
             cfg.worktree.cleanup,
             Some(CleanupPolicyConfig::Retention { retention_days: 5 })

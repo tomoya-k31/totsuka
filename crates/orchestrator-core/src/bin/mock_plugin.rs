@@ -131,7 +131,7 @@ fn main() {
                 // input, not the wire, and rewriting every fixture would be
                 // churn with no signal.
                 let flag = |k: &str| config.get(k).and_then(Value::as_bool).unwrap_or(false);
-                // 0.5.1 (#542): repositories this fake source is the tracker
+                // 0.5.1 (#542): repositories this fake source files project items
                 // for, supplied verbatim by the test as
                 // `claimed_repos = [{ repo, destination }]`.
                 // `expect`, not `.ok()`: a test that misspells a key here

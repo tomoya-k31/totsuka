@@ -26,8 +26,8 @@ use crate::client::{GithubClient, static_config_errors};
 use crate::config::GithubConfig;
 use crate::transport::GithubTransport;
 
-/// The internal fetch cadence when the orchestrator supplies no
-/// `poll_interval_secs` (F-06's default, now applied plugin-side).
+/// The internal fetch cadence when `[github]` sets no `poll_interval_secs`
+/// (F-06's default; the key is this plugin's own since 0.6.0, #554).
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
 
 /// Builds a transport from resolved connection settings. Abstracted so the
@@ -176,7 +176,7 @@ where
         } else {
             // 0 would make the loop spin without sleeping (API hammering);
             // fall back to the default rather than honoring it.
-            let secs = match init.poll_interval_secs {
+            let secs = match client.config().poll_interval_secs {
                 Some(0) => {
                     tracing::warn!(
                         "poll_interval_secs = 0 would busy-spin the poll loop → \
@@ -196,7 +196,13 @@ where
                 move |trigger: &WorkflowInfo| {
                     let client = Arc::clone(&fetch_client);
                     let condition = trigger.trigger.clone();
-                    async move { client.fetch(&condition).await.map_err(|e| e.to_string()) }
+                    let kind = trigger.instructions_kind.clone();
+                    async move {
+                        client
+                            .fetch(&condition, kind.as_deref())
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
                 },
             ));
             Some(handle.abort_handle())

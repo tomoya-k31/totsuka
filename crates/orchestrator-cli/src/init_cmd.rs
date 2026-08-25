@@ -18,7 +18,6 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # [plugins.github]
 # enabled = true
 # kind = "task_source"
-# poll_interval_secs = 60
 
 # [plugins.herdr]
 # enabled = true
@@ -32,7 +31,7 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # summary = "What lives in this repository (used for LLM repo selection)"
 # project = "my-board"          # where tasks for this repository are filed
 
-# The trackers you file into: a GitHub Project, a Notion database. `name` and
+# The projects you file into: a GitHub Project, a Notion database. `name` and
 # `source` are totsuka's — a repository points at one by `name`, and `source`
 # says which plugin owns it. Every other key belongs to that plugin.
 # [[projects]]
@@ -56,6 +55,7 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # error, so a typo here is caught rather than read as settings nobody asked for.
 # [github]
 # token = "cmd:gh auth token"
+# poll_interval_secs = 60      # fetch cadence — the plugin's key, not the roster's
 
 # [llm]
 # base_url = "https://openrouter.ai/api/v1"

@@ -196,7 +196,7 @@ pub enum ValidationError {
     /// pointing at it would file into whichever the code happened to reach
     /// first.
     #[error(
-        "two [[projects]] entries are both named `{name}` → a repository's `project` names one tracker; rename one of them"
+        "two [[projects]] entries are both named `{name}` → a repository's `project` names one of them; rename one"
     )]
     DuplicateProject { name: String },
 
@@ -899,6 +899,95 @@ kind = "notifier"
                 .any(|e| e.contains("`log`") && e.contains("already a top-level key")),
             "{named:?}"
         );
+    }
+
+    /// The `[[projects]]` reference chain — repository → project → plugin —
+    /// resolves offline (#554): a duplicate name, a dangling `project`, and a
+    /// `source` that is not an enabled task_source are each their own error,
+    /// while an intact chain says nothing. This is the check that replaced
+    /// `ClaimConflict`: the broken states are refused before any plugin runs.
+    #[test]
+    fn the_projects_reference_chain_is_validated_without_launching_anything() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[projects]]
+name = "board"
+source = "github"
+owner = "me"
+project_number = 1
+
+[[projects]]
+name = "board"
+source = "github"
+
+[[projects]]
+name = "notion-db"
+source = "herdr"
+
+[[repositories]]
+name = "web-app"
+path = "/tmp"
+project = "board"
+
+[[repositories]]
+name = "cli"
+path = "/tmp"
+project = "no-such-board"
+"#,
+        )
+        .unwrap();
+        let named: Vec<String> = validate_static(&cfg, &env_from(&[]))
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            named.iter().any(|e| e.contains("both named `board`")),
+            "a duplicate project name must be caught: {named:?}"
+        );
+        assert!(
+            named
+                .iter()
+                .any(|e| e.contains("`cli`") && e.contains("`no-such-board`")),
+            "a dangling `project` reference must be caught: {named:?}"
+        );
+        assert!(
+            named
+                .iter()
+                .any(|e| e.contains("`notion-db`") && e.contains("`herdr`")),
+            "a source that is not an enabled task_source must be caught: {named:?}"
+        );
+        // The intact half of the chain raises nothing.
+        assert!(
+            !named.iter().any(|e| e.contains("`web-app`")),
+            "a resolvable reference must not be reported: {named:?}"
+        );
+    }
+
+    /// `project` is optional (#554): a repository with none is the normal
+    /// state, never a finding.
+    #[test]
+    fn a_repository_without_a_project_is_not_a_finding() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[[repositories]]
+name = "web-app"
+path = "/tmp"
+"#,
+        )
+        .unwrap();
+        let named: Vec<String> = validate_static(&cfg, &env_from(&[]))
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(!named.iter().any(|e| e.contains("project")), "{named:?}");
     }
 
     #[test]

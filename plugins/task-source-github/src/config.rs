@@ -322,6 +322,12 @@ pub struct GithubConfig {
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
+    /// here from `[plugins.github]` in 0.6.0 (#554): the Orchestrator only
+    /// ever forwarded it, so it is this plugin's own key. `0` is treated as
+    /// unset (busy-spin guard, applied in the server).
+    #[serde(default)]
+    pub poll_interval_secs: Option<u64>,
     /// Instruction text overrides (#398). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]

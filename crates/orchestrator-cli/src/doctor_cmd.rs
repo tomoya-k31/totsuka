@@ -352,8 +352,8 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// 1Password backend probes (#156), fired **only when** `config.toml` or a
-/// `config.toml` actually contains an `op://` reference: `op --version`
+/// 1Password backend probes (#156), fired **only when** `config.toml`
+/// actually contains an `op://` reference: `op --version`
 /// (CLI present) and `op whoami` (session established — unlike `op read`, it
 /// never triggers a biometric prompt). No `op://` in config ⇒ no checks.
 /// Returns whether the rest of `doctor` may resolve `op://` references
@@ -651,19 +651,16 @@ fn plugin_needs_onepassword(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
 /// One file since #554: plugin settings live in the same document, so the
 /// separate `plugins/*.toml` sweep this used to do is now the same walk.
 fn config_mentions_onepassword(cx: &Cx) -> bool {
-    let sources: Vec<PathBuf> = vec![cx.config_path.clone()];
-    sources.iter().any(|path| {
-        std::fs::read_to_string(path).is_ok_and(|content| {
-            // `toml::Table`, not `toml::Value`: in toml 0.9 `FromStr for Value`
-            // parses a *single value*, so `"a = 1".parse::<Value>()` is an
-            // error ("unexpected content, expected nothing") for every real
-            // config file. This helper silently answered "no op:// anywhere"
-            // for its whole life, which meant the 1Password checks below never
-            // ran at all (#289). `Table` is the document parser.
-            content
-                .parse::<toml::Table>()
-                .is_ok_and(|table| table.values().any(toml_has_op_reference))
-        })
+    std::fs::read_to_string(&cx.config_path).is_ok_and(|content| {
+        // `toml::Table`, not `toml::Value`: in toml 0.9 `FromStr for Value`
+        // parses a *single value*, so `"a = 1".parse::<Value>()` is an
+        // error ("unexpected content, expected nothing") for every real
+        // config file. This helper silently answered "no op:// anywhere"
+        // for its whole life, which meant the 1Password checks below never
+        // ran at all (#289). `Table` is the document parser.
+        content
+            .parse::<toml::Table>()
+            .is_ok_and(|table| table.values().any(toml_has_op_reference))
     })
 }
 
@@ -1526,7 +1523,7 @@ fn check_plugins(
     }
     let mut specs = Vec::new();
     // Plugins that never reach `validate_all`, and why. `validated.len()` only
-    // counts what got into `specs`, so the tracker check below cannot tell
+    // counts what got into `specs`, so the projects check below cannot tell
     // "nothing was skipped" from "everything was skipped" without this — and
     // being skipped is the *normal* state for a `cmd:` token, not an edge case
     // (#542 review).
@@ -1583,9 +1580,9 @@ fn check_plugins(
         }
     }
     if specs.is_empty() {
-        // Still report the tracker check: with nothing probed it can only say
+        // Still report the projects check: with nothing probed it can only say
         // "cannot tell", and saying nothing at all reads as "no conflicts".
-        check_tracker_claims(&[], &not_probed, checks);
+        check_project_claims(&[], &not_probed, checks);
         return;
     }
     // Live probe: launch, initialize, config/validate, shutdown (F-59).
@@ -1618,10 +1615,10 @@ fn check_plugins(
             )),
         }
     }
-    check_tracker_claims(&validated, &not_probed, checks);
+    check_project_claims(&validated, &not_probed, checks);
 }
 
-/// How many repositories have a tracker to file into (#542, narrowed by #554).
+/// How many repositories have a project to file into (#542, narrowed by #554).
 ///
 /// **This reports, it no longer detects.** Until #554 it was the only place a
 /// repository claimed by two sources became visible, because each plugin's
@@ -1637,9 +1634,9 @@ fn check_plugins(
 /// does a plugin that genuinely claims nothing.
 ///
 /// **An incomplete picture degrades to a skip rather than an all-clear.**
-/// "Every repository routes to exactly one tracker" is a statement about the
+/// "Every repository routes to exactly one project" is a statement about the
 /// union, so it cannot be made from the plugins that happened to launch.
-fn check_tracker_claims(
+fn check_project_claims(
     validated: &[plugin_host::ValidatedPlugin],
     not_probed: &[(String, &'static str)],
     checks: &mut Vec<Check>,
@@ -1678,7 +1675,7 @@ fn check_tracker_claims(
 
     if !unseen.is_empty() {
         checks.push(Check::skip(
-            "trackers",
+            "projects",
             format!("cannot tell: {} was not probed", unseen.join(", ")),
             "doctor stays non-interactive, so a plugin whose secrets need a prompt or a \
              command is never launched — check those configs by hand, or run `totsuka run` \
@@ -1688,13 +1685,13 @@ fn check_tracker_claims(
     }
     if registry.is_empty() {
         // Every source was probed and none claims anything: the normal state
-        // for a config with no tracker set up. Not worth a line.
+        // for a config with no project set up. Not worth a line.
         return;
     }
     checks.push(Check::ok(
-        "trackers",
+        "projects",
         format!(
-            "{} repositories route to exactly one tracker",
+            "{} repositories route to exactly one project",
             registry.len()
         ),
     ));
@@ -2231,7 +2228,7 @@ mod tests {
     use orchestrator_core::domain::state::TaskState;
     use plugin_protocol::methods::SessionInfo;
 
-    // --- `trackers` (#542) -------------------------------------------------
+    // --- `projects` (#542) -------------------------------------------------
 
     fn validated(name: &str, claims: &[(&str, &str)]) -> plugin_host::ValidatedPlugin {
         plugin_host::ValidatedPlugin {
@@ -2253,18 +2250,18 @@ mod tests {
         }
     }
 
-    fn tracker_checks(
+    fn project_checks(
         validated: &[plugin_host::ValidatedPlugin],
         not_probed: &[(String, &'static str)],
     ) -> Vec<Check> {
         let mut checks = Vec::new();
-        check_tracker_claims(validated, not_probed, &mut checks);
+        check_project_claims(validated, not_probed, &mut checks);
         checks
     }
 
     #[test]
-    fn trackers_pass_when_every_source_was_probed_and_none_conflict() {
-        let checks = tracker_checks(
+    fn projects_pass_when_every_source_was_probed_and_none_conflict() {
+        let checks = project_checks(
             &[
                 validated("github", &[("totsuka", "Project #7")]),
                 validated("notion", &[("web-app", "Database DB2")]),
@@ -2282,8 +2279,8 @@ mod tests {
     /// means doctor skips that plugin on every run, so an all-clear here would
     /// be assembled from whatever single source happened to be probeable.
     #[test]
-    fn trackers_cannot_conclude_while_a_plugin_was_never_probed() {
-        let checks = tracker_checks(
+    fn projects_cannot_conclude_while_a_plugin_was_never_probed() {
+        let checks = project_checks(
             &[validated("notion", &[("web-app", "Database DB2")])],
             &[(
                 "github".to_string(),
@@ -2306,7 +2303,7 @@ mod tests {
             name: "github".to_string(),
             source: std::io::Error::other("boom"),
         });
-        let checks = tracker_checks(&[validated("notion", &[("web-app", "DB2")]), failed], &[]);
+        let checks = project_checks(&[validated("notion", &[("web-app", "DB2")]), failed], &[]);
         assert_eq!(checks.len(), 1);
         assert!(checks[0].skipped, "{:?}", checks[0]);
         assert!(checks[0].detail.contains("github"), "{:?}", checks[0]);
@@ -2315,8 +2312,8 @@ mod tests {
     /// Nothing probed at all (every plugin skipped) must not read as an
     /// all-clear either — the path `check_plugins` takes when `specs` is empty.
     #[test]
-    fn trackers_say_nothing_conclusive_when_nothing_was_probed() {
-        let checks = tracker_checks(
+    fn projects_say_nothing_conclusive_when_nothing_was_probed() {
+        let checks = project_checks(
             &[],
             &[("github".to_string(), "its op:// reference would prompt")],
         );
@@ -2324,11 +2321,11 @@ mod tests {
         assert!(checks[0].skipped, "{:?}", checks[0]);
     }
 
-    /// Every source probed, none claims anything: a config with no tracker set
+    /// Every source probed, none claims anything: a config with no project set
     /// up. Silent — a line saying "0 repositories route" is noise.
     #[test]
-    fn trackers_are_silent_when_no_source_claims_anything() {
-        let checks = tracker_checks(&[validated("slack", &[])], &[]);
+    fn projects_are_silent_when_no_source_claims_anything() {
+        let checks = project_checks(&[validated("slack", &[])], &[]);
         assert!(checks.is_empty(), "{checks:?}");
     }
 

@@ -108,7 +108,7 @@ pub struct RepositoryDraft<'a> {
     pub summary: Option<&'a str>,
     /// The `[[projects]]` entry this repository files into (#554). `None`
     /// removes the binding, which is the state of a repository with no
-    /// tracker.
+    /// project.
     pub project: Option<&'a str>,
 }
 
@@ -123,7 +123,7 @@ pub struct ProjectDraft<'a> {
     /// Identity within `config.toml`, and what `[[repositories]].project`
     /// points at.
     pub name: &'a str,
-    /// The task_source plugin that owns this tracker.
+    /// The task_source plugin that owns this project.
     pub source: &'a str,
     /// The plugin's own keys, as an inline-table fragment.
     pub options: &'a str,

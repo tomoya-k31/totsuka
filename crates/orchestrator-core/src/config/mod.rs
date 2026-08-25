@@ -25,10 +25,10 @@ pub use resolve::{
 };
 pub use schema::{
     CURRENT_SCHEMA_VERSION, CleanupPolicyConfig, CleanupPolicyName, ConfigError,
-    DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_POLL_INTERVAL_SECS,
-    DEFAULT_WORKFLOW_TIMEOUT_SECS, HooksConfig, LlmConfig, LogSettings, OutputPolicy, PluginConfig,
-    PluginKind, Profile, ProjectConfig, RepositoryConfig, RootConfig, ToolConfig, VerificationMode,
-    WorkflowConfig, WorkflowMode, WorktreeConfig, is_reserved_top_level_key,
+    DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_WORKFLOW_TIMEOUT_SECS,
+    HooksConfig, LlmConfig, LogSettings, OutputPolicy, PluginConfig, PluginKind, Profile,
+    ProjectConfig, RepositoryConfig, RootConfig, ToolConfig, VerificationMode, WorkflowConfig,
+    WorkflowMode, WorktreeConfig, is_reserved_top_level_key,
 };
 pub use validate::{
     Finding, FindingSeverity, ValidationError, has_errors, validate, validate_static,

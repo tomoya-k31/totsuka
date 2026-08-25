@@ -1,12 +1,12 @@
-//! Repository → tracker routing, assembled from what the task sources
+//! Repository → project routing, assembled from what the task sources
 //! claimed at `initialize` (#542, #554).
 //!
-//! The Orchestrator decides **which** plugin is a repository's tracker — that
+//! The Orchestrator decides **which** plugin owns a repository's project — that
 //! is `[[repositories]].project` naming a `[[projects]]` entry, and the entry
 //! naming its `source` (#554). What it cannot produce is the *destination
-//! prose*: "file the issue, then `gh project item-add 7 …`" is the tracker's
-//! own vocabulary, addressed to an agent, and rendering it would require the
-//! Orchestrator to know each tracker's shape. So the plugin answers
+//! prose*: "file the issue, then `gh project item-add 7 …`" is the owning
+//! plugin's own vocabulary, addressed to an agent, and rendering it would
+//! require the Orchestrator to know each project's shape. So the plugin answers
 //! `initialize` with one line per repository it was given, and this module is
 //! the union of those answers.
 //!
@@ -20,7 +20,8 @@
 //!
 //! ## What an absent claim means
 //!
-//! Nothing claiming a repository means **no configured source is its tracker**,
+//! Nothing claiming a repository means **no configured source files it into a
+//! project**,
 //! which is the normal state for anyone who has not set one up. Callers must
 //! treat it as "say nothing extra", never as an error.
 //!
@@ -65,12 +66,12 @@ impl ClaimRegistry {
         self.by_repo.get(repo).map(|(_, dest)| dest.as_str())
     }
 
-    /// The plugin that is `repo`'s tracker, or `None`.
+    /// The plugin that owns `repo`'s project, or `None`.
     pub fn source_for(&self, repo: &str) -> Option<&str> {
         self.by_repo.get(repo).map(|(name, _)| name.as_str())
     }
 
-    /// How many repositories have a tracker.
+    /// How many repositories have a project.
     pub fn len(&self) -> usize {
         self.by_repo.len()
     }
@@ -127,7 +128,7 @@ mod tests {
     fn an_unclaimed_repository_is_absent_not_an_error() {
         let github = [claim("totsuka", "Project #7")];
         let registry = ClaimRegistry::from_sources([("github", &github[..])]);
-        // The normal state for anyone who has not configured a tracker, and
+        // The normal state for anyone who has not configured a project, and
         // also what a plugin predating protocol 0.5.1 produces.
         assert_eq!(registry.destination("unconfigured"), None);
     }

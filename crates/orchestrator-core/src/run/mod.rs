@@ -322,7 +322,7 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
 }
 
 impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
-    /// Where a new tracker item goes, per repository (#542).
+    /// Where a new project item goes, per repository (#542).
     ///
     /// Rebuilt on each call from the live plugin set rather than cached at
     /// startup: a plugin restart (#495) replaces the `Plugin` object, so a

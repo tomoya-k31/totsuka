@@ -818,7 +818,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             task.body = Some(body);
         }
         // Where the deliverable goes, for a workflow whose deliverable is a
-        // *new tracker item* (#542). Appended to the task-source's own
+        // *new project item* (#542). Appended to the task-source's own
         // instructions rather than delivered on a channel of its own, so it
         // travels wherever those already travel — invisibly through the hook's
         // prompt context, or visibly for a tool with no invisible channel.
@@ -833,7 +833,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 .settings
                 .prompts
                 .for_workflow(&record.workflow)
-                .tracker_destination(destination);
+                .project_destination(destination);
             task.instructions = Some(match task.instructions.take() {
                 Some(existing) => format!("{existing}\n\n{block}"),
                 None => block,

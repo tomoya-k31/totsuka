@@ -56,7 +56,6 @@ protocol_version = ">=0.6.0, <0.7"
         llm: None,
         projects: vec![],
         workflows: vec![],
-        poll_interval_secs: None,
         timeout: Duration::from_secs(10),
     })
     .await
@@ -1827,7 +1826,7 @@ on_failure = { set_status = "failed" }
 }
 
 // ---------------------------------------------------------------------------
-// #542: the tracker destination reaches a `triage` agent's prompt
+// #542: the project destination reaches a `triage` agent's prompt
 // ---------------------------------------------------------------------------
 
 /// A `triage` workflow on `mock_src`, plus a source that claims `clone`.
@@ -1949,7 +1948,7 @@ async fn a_triage_dispatch_is_told_where_to_file() {
 
 /// #542: a repository nobody claims adds nothing.
 ///
-/// The normal state for anyone who has not configured a tracker — and the
+/// The normal state for anyone who has not configured a project — and the
 /// state every plugin predating protocol 0.5.1 reports — so it must be silent
 /// rather than an error or an empty stanza.
 #[tokio::test]

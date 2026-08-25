@@ -186,7 +186,7 @@ C-3（herdr 内部の 5 秒下限）は独立に測れない。dispatch のロ�
 | `update_status` の逆引き | ボード B の item を実行 → 完了で B 側の Status が動く | A 側を書き換えたら逆引きが壊れている。**再起動後にも 1 回試す**（メモが消えた状態＝フォールバック探索の経路） |
 | 重複 claim の検出 | 同じリポジトリを 2 エントリの `repos` に書く → `tt config validate` | エラーになること（プラグイン内の重複） |
 | **起票先の注入**（本命） | Slack で `:books:` リアクション（profile = `triage`）→ 解決先リポジトリのボードへ起票されること | ボードに載らない / 別のボードに載るなら claim か注入が壊れている |
-| `trackers` チェック | `tt doctor` | claim が 1 件以上あれば `trackers` が OK と出る |
+| `projects` チェック | `tt doctor` | claim が 1 件以上あれば `projects` が OK と出る（#554 で `trackers` から改名） |
 
 **起票先の注入は「issue が立ったか」ではなく「ボードに載ったか」で判定する。**
 `destination` は機械検査されない散文（ADR-0056）で、守っているのは検収 rubric の

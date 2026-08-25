@@ -68,7 +68,6 @@
 //!     llm: None,
 //!     workflows: vec![],
 //!     projects: vec![],
-//!     poll_interval_secs: None,
 //! };
 //! let request = Request::new(1, method::INITIALIZE, Some(serde_json::to_value(&params)?));
 //! let line = to_line(&request)?; // send `line + "\n"` to the plugin's stdin
@@ -80,7 +79,7 @@
 //! let result = InitializeResult {
 //!     plugin_version: semver::Version::new(1, 2, 0),
 //!     capabilities: Default::default(),
-//!     // A task_source lists the repositories it is the tracker for here
+//!     // A task_source lists the repositories it files project items for here
 //!     // (#542); every other kind leaves it empty.
 //!     claimed_repos: Vec::new(),
 //!     // …and every kind answers which workflow options it recognises

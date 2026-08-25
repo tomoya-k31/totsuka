@@ -372,6 +372,12 @@ pub struct NotionConfig {
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
+    /// here from `[plugins.notion]` in 0.6.0 (#554): the Orchestrator only
+    /// ever forwarded it, so it is this plugin's own key. `0` is treated as
+    /// unset (busy-spin guard, applied in the server).
+    #[serde(default)]
+    pub poll_interval_secs: Option<u64>,
     /// Client-side request rate cap (requests/second) for the built-in
     /// throttle. Notion's public limit is ~3 rps.
     #[serde(default = "default_rate_limit")]

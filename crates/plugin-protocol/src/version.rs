@@ -182,14 +182,14 @@ use semver::{Version, VersionReq};
 /// "deliberate" distinguishable from "forgotten".
 ///
 /// 0.5.1: [`InitializeResult::claimed_repos`](crate::methods::InitializeResult::claimed_repos)
-/// (#542) — the repositories a task_source is the tracker for, and where an
-/// item for each goes. This is the *forward* mapping repository → tracker; the
+/// (#542) — the repositories a task_source files project items for, and where
+/// an item for each goes. This is the *forward* mapping repository → project; the
 /// protocol only ever carried the reverse one (a task's `repo_hint`), so a
 /// Slack-borne request could be routed to a repository but not to the board
 /// that repository files into. Additive and optional under the same contract
 /// as `repo_name` in 0.4.1: absent means the plugin predates this version and
 /// claims nothing, which is never the same statement as "this repository has
-/// no tracker". `<0.6` manifests keep matching.
+/// no project". `<0.6` manifests keep matching.
 ///
 /// **Patch, not minor**, for the reason spelled out at 0.4.1: a minor strands
 /// every `<0.5`-bounded manifest, and no plugin has to *send* this field to
@@ -232,6 +232,29 @@ use semver::{Version, VersionReq};
 ///   the wire because there was no way for a plugin-owned key to reach a
 ///   plugin, so the Orchestrator had to read the key and translate. This
 ///   release is that missing way.
+/// - `InitializeParams.poll_interval_secs` is **removed** for the same
+///   reason: it was a plugin-owned value the Orchestrator only ever
+///   forwarded, so it now lives in the plugin's own `[<name>]` table and
+///   arrives inside `config`. The 0-means-busy-spin guard was already
+///   plugin-side and stays there.
+/// - [`WorkflowInfo`](crate::methods::WorkflowInfo) grows
+///   [`instructions_kind`](crate::methods::WorkflowInfo::instructions_kind)
+///   and [`task_id_prefix`](crate::methods::WorkflowInfo::task_id_prefix),
+///   and [`trigger`](crate::methods::WorkflowInfo::trigger) becomes
+///   **verbatim**: until now the Orchestrator injected those two
+///   profile-derived keys into the trigger table (#398) because the trigger
+///   was the only plugin-bound surface that could carry them without a
+///   protocol change. With `[[workflows]]` options on the wire that excuse is
+///   gone, so the filter condition and the derived settings travel apart and
+///   the trigger is exactly what the operator wrote.
+/// - `[[projects]]` routing (#542 → #554):
+///   [`InitializeParams::projects`](crate::methods::InitializeParams::projects)
+///   and [`ConfigValidateParams::projects`](crate::methods::ConfigValidateParams::projects)
+///   / [`repositories`](crate::methods::ConfigValidateParams::repositories)
+///   carry the boards a task_source owns, and
+///   [`RepoInfo::project`](crate::methods::RepoInfo::project) binds a
+///   repository to one of them — replacing the reverse `repos = [...]` lists
+///   each plugin kept in its own file.
 ///
 /// **Minor, and it strands every `<0.6` manifest — that is the intent.** The
 /// rename is a wire break: a plugin reading `triggers` sees nothing under a

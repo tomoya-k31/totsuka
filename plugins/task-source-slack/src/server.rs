@@ -48,61 +48,56 @@ pub trait TransportFactory {
     fn build_chat(&self) -> Self::Chat;
 }
 
-/// `(workflow name, its `trigger.reaction`)` for every trigger the
+/// `(workflow name, its `trigger.reaction`)` for every workflow the
 /// Orchestrator sent, in definition order (#396).
 ///
 /// The trigger is an opaque `serde_json::Value` (a TOML inline table converted
-/// to JSON), so a non-string `reaction` cannot be turned into an emoji here and
-/// reads as absent.
+/// to JSON), so a non-string `reaction` cannot be turned into an emoji here.
 ///
-/// **A present-but-unreadable value is warned about rather than ignored.** A
-/// current Orchestrator rejects it (`validate_workflows`), so this only fires
-/// against an older core — and there the same value is *also* skipped by
-/// `Trigger::matches`, which makes that workflow match every task from this
-/// source. The two halves then fail in opposite directions from one typo: no
-/// emoji is registered here, and everything is swallowed there. Neither end
-/// reports an error on its own, so the warning is the only signal.
-fn workflow_reactions(triggers: &[plugin_protocol::methods::WorkflowInfo]) -> Vec<WorkflowTrigger> {
-    triggers
+/// **A present-but-unreadable value is a hard `initialize` error.** Reading it
+/// as "no reaction" would silently re-classify the workflow as the mention
+/// catch-all — a trigger behaving weaker than it reads, the exact hazard #396
+/// existed to stop. The Orchestrator's own value-type check went away with
+/// `Trigger::matches` (#554), so this plugin is the only place left that can
+/// refuse it.
+fn workflow_reactions(
+    workflows: &[plugin_protocol::methods::WorkflowInfo],
+) -> Result<Vec<WorkflowTrigger>, Vec<String>> {
+    let mut errors = Vec::new();
+    let triggers = workflows
         .iter()
-        .map(|t| {
-            let raw = t.trigger.get("reaction");
-            if let Some(value) = raw
-                && value.as_str().is_none()
-            {
-                tracing::warn!(
-                    workflow = %t.workflow,
-                    value = %value,
-                    "`trigger.reaction` is not a string → this workflow registers no emoji, and \
-                     an orchestrator that does not reject the value will match every task from \
-                     this source against it; write the emoji name as a string \
-                     (`reaction = \"eyes\"`)"
-                );
-            }
-            WorkflowTrigger {
+        .filter_map(|t| {
+            let reaction = match t.trigger.get("reaction") {
+                Some(value) => match value.as_str() {
+                    Some(s) => Some(s.to_string()),
+                    None => {
+                        errors.push(format!(
+                            "workflow `{}` has `trigger = {{ reaction = {} }}`, which is not a \
+                             string → reading it as \"no reaction\" would silently make this \
+                             workflow the plain-mention destination; write the emoji name as a \
+                             string (`reaction = \"eyes\"`)",
+                            t.workflow, value
+                        ));
+                        return None;
+                    }
+                },
+                None => None,
+            };
+            Some(WorkflowTrigger {
                 workflow: t.workflow.clone(),
-                reaction: raw.and_then(Value::as_str).map(str::to_string),
-                // Absent from an older Orchestrator → no prefix → the
-                // conversation id, which is the pre-#397 behaviour.
-                task_id_prefix: t
-                    .trigger
-                    .get("task_id_prefix")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                // Which instruction set the workflow's profile wants (#398).
-                // Absent only from a core older than #404 — which predates
-                // `task_id_prefix` (#405), so "a prefix but no kind" is not a
-                // combination any shipped core produces. Such a core sends
-                // neither, and the pipeline's fallback is the reply draft,
-                // exactly what it always produced.
-                instructions_kind: t
-                    .trigger
-                    .get("instructions_kind")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            }
+                reaction,
+                // Dedicated `WorkflowInfo` fields since 0.6.0 (#554) — the
+                // profile-derived keys no longer ride inside the trigger.
+                task_id_prefix: t.task_id_prefix.clone(),
+                instructions_kind: t.instructions_kind.clone(),
+            })
         })
-        .collect()
+        .collect();
+    if errors.is_empty() {
+        Ok(triggers)
+    } else {
+        Err(errors)
+    }
 }
 
 /// Connection settings derived from a [`SlackConfig`].
@@ -336,14 +331,15 @@ where
         }
         // Reaction triggers arrive on this call as `[[workflows]].trigger.reaction`
         // (#396), so this is where they are resolved.
-        let reaction_triggers =
-            match ReactionTriggers::resolve(&workflow_reactions(&init.workflows)) {
-                Ok(t) => t,
-                Err(mut e) => {
-                    errors.append(&mut e);
-                    ReactionTriggers::default()
-                }
-            };
+        let reaction_triggers = match workflow_reactions(&init.workflows)
+            .and_then(|ws| ReactionTriggers::resolve(&ws))
+        {
+            Ok(t) => t,
+            Err(mut e) => {
+                errors.append(&mut e);
+                ReactionTriggers::default()
+            }
+        };
         // …and the plugin-owned `[[workflows]]` keys on the same call (#554).
         let (workflow_options, mut option_errors) =
             crate::workflow_options::WorkflowOptions::resolve(&init.workflows);
@@ -766,6 +762,27 @@ mod tests {
             })
             .collect();
         ReactionTriggers::resolve(&workflows).expect("valid")
+    }
+
+    /// A non-string `reaction` fails `initialize` instead of degrading. The
+    /// degradation would be silent and severe: "no reaction" makes the
+    /// workflow a plain-mention candidate, so a typo like `reaction = 42`
+    /// would route every mention into a workflow meant for one emoji. Core
+    /// used to reject the value type (`validate_workflows`); since #554 it
+    /// reads no trigger at all, so this refusal is the only gate left.
+    #[test]
+    fn a_non_string_reaction_is_refused_not_read_as_no_reaction() {
+        let wf = plugin_protocol::methods::WorkflowInfo {
+            workflow: "books".into(),
+            trigger: serde_json::json!({ "reaction": 42 }),
+            instructions_kind: None,
+            task_id_prefix: None,
+            options: serde_json::Map::new(),
+        };
+        let errors = workflow_reactions(std::slice::from_ref(&wf)).unwrap_err();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("not a string"), "{}", errors[0]);
+        assert!(errors[0].contains("books"), "{}", errors[0]);
     }
 
     /// The case that cost hours live (#379): the feature is configured, the

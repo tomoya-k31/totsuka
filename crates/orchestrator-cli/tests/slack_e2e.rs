@@ -470,7 +470,6 @@ fn setup(mock_api_url: &str) -> Env {
 [plugins.slack]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 1
 
 [plugins.mock_agent]
 enabled = true
@@ -625,11 +624,11 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
     //
     // This is the one place the whole chain is exercised against real
     // processes — core sends `trigger.reaction` at `initialize`, the plugin
-    // reads it and stamps `reaction:eyes` into `Task.labels`, and core
-    // re-checks that label to select the workflow. Each link has its own unit
-    // test; none of them can catch a break *between* two links, which is the
-    // failure mode this notation invites (the `triggers` contract existed for
-    // versions before anything read it).
+    // resolves which workflow the emoji selects, and names it on
+    // `task/submit` (0.6.0, #554 — core no longer re-checks any label). Each
+    // link has its own unit test; none of them can catch a break *between*
+    // two links, which is the failure mode this notation invites (the
+    // `triggers` contract existed for versions before anything read it).
     rt.block_on(send_and_await_ack(&mut ws, reaction_envelope()));
     let watched = wait_for("the reaction task", Duration::from_secs(60), || {
         let out = env.run(&["task", "list", "--json"]);

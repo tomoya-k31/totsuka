@@ -153,7 +153,10 @@ fn init_config() -> Value {
     json!({
         "token": "ghp_test", "github_login": "me",
         "in_progress_statuses": ["実装中"],
-        "status_map": { "レビュー待ち": "In Review" }
+        "status_map": { "レビュー待ち": "In Review" },
+        // The fetch cadence is this plugin's own `[github]` key since 0.6.0
+        // (#554) — it arrives inside `config`, not beside it.
+        "poll_interval_secs": 60
     })
 }
 
@@ -386,7 +389,6 @@ async fn ingests_task_assigned_to_me_among_multiple_assignees() {
         "workflows": [
             { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
         ],
-        "poll_interval_secs": 60
     });
     call(&mut srv, 1, "initialize", params).await;
 
@@ -456,7 +458,6 @@ async fn initialize_with_triggers_polls_and_submits() {
         "workflows": [
             { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
         ],
-        "poll_interval_secs": 60
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
     assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
@@ -515,7 +516,6 @@ async fn a_poll_walks_every_board_and_each_board_gates_its_own_repos() {
         "workflows": [
             { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
         ],
-        "poll_interval_secs": 60
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
     assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
