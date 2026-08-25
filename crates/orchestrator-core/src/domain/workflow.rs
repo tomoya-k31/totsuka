@@ -86,6 +86,8 @@ pub struct Workflow {
     pub agent: String,
     /// Output policy.
     pub output: OutputPolicy,
+    /// Action when the task starts running (#556).
+    pub on_start: Option<OutcomeAction>,
     /// Action on success.
     pub on_success: Option<OutcomeAction>,
     /// Action on failure.
@@ -137,6 +139,7 @@ impl Workflow {
             mode: config.resolved_mode(),
             agent: config.agent.clone(),
             output: config.resolved_output(),
+            on_start: config.on_start.as_ref().map(OutcomeAction::from_table),
             on_success: config.on_success.as_ref().map(OutcomeAction::from_table),
             on_failure: config.on_failure.as_ref().map(OutcomeAction::from_table),
             verification: config.resolved_verification(),
@@ -284,6 +287,41 @@ output = "none"
         assert_eq!(workflows[1].verification, VerificationMode::Llm);
         assert!(workflows[1].timeout_secs.is_none());
         assert!(workflows[1].rubric.is_none());
+    }
+
+    #[test]
+    fn on_start_is_wired_from_config_and_absent_by_default() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "with-start"
+source = "github"
+trigger = { project_status = "実装待ち" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_start = { set_status = "実装中" }
+on_success = { set_status = "レビュー待ち" }
+
+[[workflows]]
+name = "without-start"
+source = "github"
+trigger = { project_status = "実装待ち" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+"#,
+        );
+        assert_eq!(
+            workflows[0]
+                .on_start
+                .as_ref()
+                .and_then(|a| a.set_status.as_deref()),
+            Some("実装中"),
+        );
+        // Omitted means "write nothing at start" — the pre-#556 behaviour,
+        // which every existing config must keep byte-for-byte.
+        assert!(workflows[1].on_start.is_none());
     }
 
     #[test]

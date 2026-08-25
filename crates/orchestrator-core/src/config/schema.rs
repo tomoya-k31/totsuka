@@ -497,6 +497,12 @@ pub struct WorkflowConfig {
     /// and the one field a profile may be overridden on.
     #[serde(default)]
     pub output: Option<OutputPolicy>,
+    /// Source status transition when the task starts running (#556): applied
+    /// right before dispatch, after the exclusion claim (when the source has
+    /// one) has settled. `None` writes nothing — exactly the pre-#556
+    /// behaviour — so existing configs are untouched.
+    #[serde(default)]
+    pub on_start: Option<toml::Table>,
     /// Source status transition on success; kept raw (interpreted in #54).
     #[serde(default)]
     pub on_success: Option<toml::Table>,

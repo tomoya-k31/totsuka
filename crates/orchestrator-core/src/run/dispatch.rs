@@ -44,7 +44,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         Some(serde_json::json!({ "kind": "repo_select", "reason": reason })),
                     )?;
                     self.stats.failed += 1;
-                    self.write_back_status(record, false).await;
+                    self.write_back_status(record, StatusMoment::Failure).await;
                     notify_all(
                         &self.plugins.notifiers,
                         NotifierEvent::Failed,
@@ -657,6 +657,18 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             Err(DispatchRefusal::AgentDown) => unreachable!("parked above"),
         };
 
+        // `on_start` write-back (#556): the task is definitely being handed
+        // to an agent this cycle, so mirror that on the source's status
+        // column before the first side effect. Placed here — ahead of the
+        // session-reuse fast path below — so a re-attached conversation
+        // moves the column too. Best-effort like every write-back: a failed
+        // write is logged inside and must not cost the dispatch.
+        //
+        // When the source supports an exclusion claim (#556 follow-up), the
+        // claim will run immediately before this, and this write then only
+        // happens for a task this instance actually holds.
+        self.write_back_status(&record, StatusMoment::Start).await;
+
         // Conversation continuity (#242, superseding #140's D-10): a follow-up
         // message reopens *this* task, so the session to resume is simply this
         // task's own most recent one — no cross-task search. Read before
@@ -1104,7 +1116,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
 
         self.stats.failed += 1;
-        self.write_back_status(record, false).await;
+        self.write_back_status(record, StatusMoment::Failure).await;
         notify_all(
             &self.plugins.notifiers,
             NotifierEvent::Failed,
@@ -1361,6 +1373,7 @@ mod tests {
             mode: WorkflowMode::Implement,
             agent: agent.to_string(),
             output: crate::config::OutputPolicy::None,
+            on_start: None,
             on_success: None,
             on_failure: None,
             verification: crate::config::VerificationMode::None,

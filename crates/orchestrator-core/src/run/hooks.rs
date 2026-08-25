@@ -24,7 +24,7 @@ use plugin_protocol::methods::{
     SessionFocusParams, SessionFocusResult,
 };
 
-use super::{Engine, EngineError, notify_all, workflows_by_name};
+use super::{Engine, EngineError, StatusMoment, notify_all, workflows_by_name};
 use crate::adapters::hook_uds;
 use crate::adapters::state_db::{HookEventInsert, HookEventOutcome, StateError, TaskRecord};
 use crate::config::{DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_WORKFLOW_TIMEOUT_SECS, VerificationMode};
@@ -353,7 +353,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         self.drop_task_sessions(record.id);
         self.agent_output.remove(&record.id);
         self.stats.failed += 1;
-        self.write_back_status(record, false).await;
+        self.write_back_status(record, StatusMoment::Failure).await;
         notify_all(
             &self.plugins.notifiers,
             NotifierEvent::Failed,

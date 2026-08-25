@@ -249,7 +249,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 self.drop_task_sessions(task_id);
                 self.agent_output.remove(&task_id);
                 self.stats.failed += 1;
-                self.write_back_status(&record, false).await;
+                self.write_back_status(&record, StatusMoment::Failure).await;
                 // The worktree is kept for `task retry` (F-44).
                 notify_all(
                     &self.plugins.notifiers,

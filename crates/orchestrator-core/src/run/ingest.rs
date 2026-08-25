@@ -364,6 +364,7 @@ mod tests {
             mode: WorkflowMode::Implement,
             agent: "mock_agent".to_string(),
             output: crate::config::OutputPolicy::None,
+            on_start: None,
             on_success: None,
             on_failure: None,
             verification: crate::config::VerificationMode::None,
