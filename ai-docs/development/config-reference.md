@@ -173,7 +173,8 @@ project = "tomo-prj"
 | `timeout_secs` | int? | 120 | RPC タイムアウト秒 |
 | `log_level` | string? | なし | プラグインのログレベル |
 | `restart` | bool | true | クラッシュしたら再起動するか（#495 / [ADR-0051](/decisions/adr-0051-plugin-supervision.md)）。指数バックオフ（1s / 2s / 4s …）で**最大 5 回・5 分のスライディング窓**、尽きたら `escalated` を通知する。**`false` にしても検知は残る** — ログに出て `RunSummary.plugin_crashes` に計上され、`escalated` も飛ぶ（`plugin_restarts` のほうは 0 のまま。だから死亡を数える counter が別に要る）。agent なら在席タスクも畳まれる。止まるのは再起動だけで、プラグインを手で調べたいときの形。バックオフの形は設定に出していない（運用者が調整する材料を持たないため） |
-| `poll_interval_secs` | int? | 60 | task_source のみ。**全 task_source は push 型**（0.2.0 で `tasks/fetch` を削除、[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）なので Orchestrator 側のポーリングは存在しない。この値は `initialize` でプラグインへ転送され、プラグイン内部の fetch 周期になる。イベント駆動ソースは無視してよい |
+
+`poll_interval_secs` はここには**無い**（0.6.0 / #554 で各ソースの `[<name>]` へ移動 — core は使わず転送するだけだった）。下の `[github]` の節を参照。
 
 # `[[workflows]]`
 
@@ -730,12 +731,14 @@ Claude Code フックイベント受信（UDS）の設定（#131。全キー省�
 
 # `[github]`（task-source-github）
 
-config.toml 側の推奨設定。**このリポジトリで唯一のポーリング型 task_source** で、`poll_interval_secs` がそのままプラグイン内部の fetch 周期になる（隣の task-source-slack はイベント駆動でこの値を使わない）:
+config.toml 側の推奨設定。**このリポジトリで唯一のポーリング型 task_source** で、`poll_interval_secs` がそのままプラグイン内部の fetch 周期になる（0.6.0 / #554 で `[plugins.github]` から `[github]` へ移動。隣の task-source-slack はイベント駆動でこの値を使わない）:
 
 ```toml
 [plugins.github]
 enabled = true
 kind = "task_source"
+
+[github]
 poll_interval_secs = 60   # 省略時も 60
 ```
 

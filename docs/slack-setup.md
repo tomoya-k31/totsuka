@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:9d05d01e8c44d59633911120116f277f83f0d8668a4b1747b1383acfe6ff116d -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:a186d905c6d5772826c66779a22220f93c7edf7e2ce7c7b9dc739899d2fba410 -->
 
 # Setting up the Slack source
 
@@ -75,13 +75,14 @@ In `~/.config/totsuka/config.toml`:
 [plugins.slack]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 5   # how often the socket-mode buffer is drained
 
 # Optional: reacting with :eyes: yourself turns a message into a task.
-# Put it BEFORE the catch-all — `trigger = {}` matches everything, so a
-# reaction workflow placed after it can never be reached. Get the order
-# wrong and `totsuka config validate` names it in a warning ("move X
-# above Y"), so run that once after editing.
+# The plugin decides which workflow each event selects: a reaction picks
+# the workflow with the matching emoji, a plain mention goes to the one
+# workflow WITHOUT a `reaction` trigger — order in this file does not
+# matter. Writing the same emoji on two workflows, or two workflows
+# without a reaction, is rejected at startup (and by
+# `totsuka config validate`).
 # Someone else reacting does not start anything, and there is no setting
 # that relaxes this. Names take or omit the colons; 👀 is `eyes` and
 # 👁 is `eye`, which are different emoji.

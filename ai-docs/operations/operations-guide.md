@@ -27,7 +27,7 @@ owner: tomoya-k31
 | `llm-online` | プロバイダが API キーを**受理した**（`--online` 時のみ） | 401/403 = 鍵をプロバイダで再発行し `[llm].api_key_ref` を更新。到達不能・5xx は warning 止まり（鍵が悪いとは限らない） |
 | `worktrees` | 孤児 worktree なし | 対話的に掃除を提案（TTY） |
 | `panes` | 孤児 agent pane なし（#211） | 対話的に解放を提案（TTY）。`pane_control` 宣言 agent が無い構成では出ない |
-| `trackers` | 1 リポジトリの起票先が 1 つに定まる（#542） | 重複しているリポジトリを、どれか 1 つのプラグインの `repos` だけに残す。**プラグイン単体では見えない検査** — 各 `config/validate` は自分のリストしか見ないので、和集合にしか矛盾が現れない。claim が 1 件も無い構成では出ない |
+| `projects` | 起票先を claim しているリポジトリの数を報告する（#542、#554 で `trackers` から改名・縮小） | **検出ではなく報告**。重複はもう書けない — 1 リポジトリは `[[repositories]].project` で 1 つの `[[projects]]` を、その要素は `source` で 1 つのプラグインを指す。probe できなかったソースがあると skip（`cmd:` トークン等で doctor は起動しない）、claim が 1 件も無い構成では出ない |
 
 `--json` 出力は不具合報告に添付する（Issue テンプレートが要求、§10.3）。
 

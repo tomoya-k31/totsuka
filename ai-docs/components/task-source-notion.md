@@ -11,7 +11,7 @@ owner: tomoya-k31
 
 # 責務
 
-Notion データベースを totsuka のタスクソースとして接続する公式プラグイン（F-02/F-03）。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、stdio JSON-RPC 2.0（NDJSON）サーバとして起動する。[task-source-github](/components/task-source-github.md) と同じ構造を Notion REST API へ適用したもの。#189（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md) Phase B）で protocol 0.1.6 の **push 型**へ移行 — [plugin-sdk](/components/plugin-sdk.md) の `poll_loop` が `initialize` 供給の triggers を内部 cadence（`poll_interval_secs`、既定 60s）で fetch し、各タスクを `task/submit` で push する。orchestrator 側のポーリングは行われない。
+Notion データベースを totsuka のタスクソースとして接続する公式プラグイン（F-02/F-03）。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、stdio JSON-RPC 2.0（NDJSON）サーバとして起動する。[task-source-github](/components/task-source-github.md) と同じ構造を Notion REST API へ適用したもの。#189（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md) Phase B）で protocol 0.1.6 の **push 型**へ移行 — [plugin-sdk](/components/plugin-sdk.md) の `poll_loop` が `initialize` 供給の workflows を内部 cadence（`[notion].poll_interval_secs`、既定 60s — 0.6.0 / #554 で `[plugins.notion]` から移動）で fetch し、各タスクを `task/submit` で push する。orchestrator 側のポーリングは行われない。
 
 トークンは `initialize` の config で解決済みのものを受領し（F-65）、プラグイン自身は Keychain に触れない。JSON-RPC は stdout、診断ログは stderr（ホストがログへ転送）。GitHub と異なり、任意の DB 構造を扱うため **プロパティマッピング**（F-03）を設定で受け取り、共通 [`Task`](/components/plugin-protocol.md) スキーマ（F-01）へ正規化する。
 
@@ -56,7 +56,7 @@ manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.6
 
 # 成果物の書き込み（#398 で非推奨）
 
-`design` / `implement` profile の workflow は `output = "none"` になり、成果物はエージェントが Notion MCP で自分で書く。**`result/publish` の実体は削除済み**（#398）。`blocks.rs` は**読み取り方向だけ**が残った（`blocks_to_markdown` / `rich_text_plain`）—— ADR-0033 は「`blocks.rs` の削除」と書いたが、ページ本文をタスク本体に載せる経路が使い続けているので、消えたのは書き込み方向（`markdown_to_blocks` とその補助）だけである。`answer` / `triage` profile をこのソースで使うには **`output = "none"` を明示する**。代わりに `instructions_kind`（コアが `TriggerInfo.trigger` に焼き込む）から `[prompts]` の指示文を選び、`Task.instructions` に載せる — これが書き込み先をエージェントへ伝える唯一の経路で、**旧プラグインでは無言で欠落する**（capability 宣言が無いので probe できない。コアと同時にリリースすること）。
+`design` / `implement` profile の workflow は `output = "none"` になり、成果物はエージェントが Notion MCP で自分で書く。**`result/publish` の実体は削除済み**（#398）。`blocks.rs` は**読み取り方向だけ**が残った（`blocks_to_markdown` / `rich_text_plain`）—— ADR-0033 は「`blocks.rs` の削除」と書いたが、ページ本文をタスク本体に載せる経路が使い続けているので、消えたのは書き込み方向（`markdown_to_blocks` とその補助）だけである。`answer` / `triage` profile をこのソースで使うには **`output = "none"` を明示する**。代わりに `instructions_kind`（コアが `WorkflowInfo` の専用フィールドで送る。0.6.0 までは trigger に焼き込んでいた）から `[prompts]` の指示文を選び、`Task.instructions` に載せる — これが書き込み先をエージェントへ伝える唯一の経路で、**旧プラグインでは無言で欠落する**（capability 宣言が無いので probe できない。コアと同時にリリースすること）。
 
 # 関連
 

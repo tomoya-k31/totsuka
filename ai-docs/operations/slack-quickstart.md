@@ -83,12 +83,12 @@ totsuka plugin install --bundled slack --enable
 [plugins.slack]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 5   # Socket Mode バッファの吸い上げ周期（推奨）
 
-# 任意: 自分が :eyes: を付けたらタスクにする（#396）。catch-all より前に置くこと
-# —— trigger = {} は全マッチなので、後ろに置くと絶対に届かない。
-# 順序を間違えると `totsuka config validate` が warning で名指しする
-# （"move X above Y"）ので、書いたら一度通すこと。
+# 任意: 自分が :eyes: を付けたらタスクにする（#396）。どの workflow が
+# 選ばれるかはプラグインが決める（0.6.0 / #554）: リアクションは絵文字で、
+# メンションは「reaction を持たない workflow」で選ぶ。並び順は関係ない。
+# 同じ絵文字を 2 つの workflow に書く／reaction 無しの workflow を 2 つ書くと
+# `initialize`（= `totsuka config validate` の online パート）が拒否する。
 # 他人が同じ絵文字を付けても起動しない（緩和する設定は無い）。
 # 名前はコロン有無どちらでも可。👀 は eyes、👁 は eye で別物。
 [[workflows]]

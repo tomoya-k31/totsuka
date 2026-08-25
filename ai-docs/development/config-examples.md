@@ -187,7 +187,6 @@ triage_status = "📥 Inbox"             # triage 起票時に付ける Status�
 [plugins.github]
 enabled = true                # 省略時 false。false のプラグインを workflow から参照するとエラー
 kind = "task_source"          # 必須: task_source | agent_ide | notifier
-poll_interval_secs = 60       # task_source のみ。push 型ではプラグイン内部の取得周期になる
 timeout_secs = 120            # RPC タイムアウト秒（省略時 120）
 log_level = "info"            # プラグイン側のログレベル
 

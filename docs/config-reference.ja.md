@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:65ff31d266be71d0afa6f60271b4166bfbb23dbce3f633c8e634cea8ecaa5837 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:4150516e6b29fba4c9b84bb72ccf523f3be0d51f515812a2b058ff6d2157b048 -->
 
 # 設定リファレンス
 
@@ -128,7 +128,6 @@ project = "tomo-prj"
 | `timeout_secs` | int? | 120 | プラグイン呼び出し 1 本のタイムアウト |
 | `log_level` | string? | なし | プラグインのログレベル |
 | `restart` | bool | true | クラッシュしたプラグインを起動し直すか。1 秒・2 秒・4 秒…と間隔を広げながら**最大 5 回・直近 5 分以内**まで試し、使い切ったら `escalated` を通知する。**`false` にしても死んだことの検知は残る** — ログに出て、実行サマリの `plugin_crashes` に計上され、`escalated` の通知も飛ぶ。エージェントのプラグインなら実行中のタスクも失敗として畳まれる。止まるのは起動し直す動作だけなので、プラグインを手元で調べたいときに使う |
-| `poll_interval_secs` | int? | 60 | task_source のみ。task_source はすべて push 型なので **totsuka 自身がポーリングすることはない** — この値は起動時にプラグインへ転送され、プラグイン内部の取得周期になる。イベント駆動のソースは無視してよい |
 
 ## `[[workflows]]`
 
@@ -623,7 +622,7 @@ plan_cleanup = "immediate"            # plan: 即削除（既定）
 
 ## `[github]`
 
-ここで唯一のポーリング型 task source であり、`poll_interval_secs` がそのままプラグイン自身の fetch 周期になる（隣の Slack ソースはイベント駆動でこの値を使わない）。
+ここで唯一のポーリング型 task source であり、`poll_interval_secs` がそのままプラグイン自身の fetch 周期になる。置き場所はプラグイン自身の `[github]` テーブルである（隣の Slack ソースはイベント駆動でこの値を使わない）。
 
 ```toml
 [plugins.github]

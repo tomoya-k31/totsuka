@@ -1,7 +1,7 @@
 > 🌐 [English](slack-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:9d05d01e8c44d59633911120116f277f83f0d8668a4b1747b1383acfe6ff116d -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:a186d905c6d5772826c66779a22220f93c7edf7e2ce7c7b9dc739899d2fba410 -->
 
 # Slack ソースのセットアップ
 
@@ -76,13 +76,13 @@ totsuka plugin install --bundled slack --enable
 [plugins.slack]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 5   # Socket Mode バッファの吸い上げ周期
 
 # 任意: 自分が :eyes: を付けるとメッセージがタスクになる。
-# catch-all より前に置くこと —— `trigger = {}` は全マッチなので、
-# その後ろに置いたリアクション workflow には絶対に到達しない。
-# 順序を間違えると `totsuka config validate` が warning で名指しする
-# （"move X above Y"）ので、書いたら一度通すこと。
+# どの workflow が選ばれるかはプラグインが決める: リアクションは絵文字が
+# 一致する workflow、素のメンションは `reaction` トリガを持たない唯一の
+# workflow へ行く —— このファイル内の並び順は関係ない。同じ絵文字を
+# 2 つの workflow に書く／reaction 無しの workflow を 2 つ書くと、起動時
+#（と `totsuka config validate`）に拒否される。
 # 他人が付けても起動せず、それを緩和する設定は無い。
 # 名前はコロン有無どちらでもよい。👀 は `eyes`、👁 は `eye` で別の絵文字。
 [[workflows]]

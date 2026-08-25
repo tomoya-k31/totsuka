@@ -74,13 +74,13 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 
 | メソッド | 方向 | 内容 |
 |---|---|---|
-| `initialize` | O→P | 解決済み config + プロトコル版を渡す。plugin_version + capabilities を返す（F-65）。**task_source には orchestrator の `[[repositories]]` も `repositories: [{name, summary?, path?}]` として供給される**（0.1.1、#109。任意フィールド — 使わなければ無視してよい。ソース側でリポジトリ解決するプラグインは自前設定の重複を省ける）。**同じく orchestrator の `[llm]` も `llm: {base_url, model, api_key?}` として供給される**（0.1.2、#119。api_key は解決済み。プラグイン自身の LLM 設定があればそちらを優先する default + override を推奨）。**そのプラグインを名指す `[[workflows]]` が `workflows: [{workflow, trigger, options}]`（定義順）として供給される**（0.6.0 で `triggers` から改名、#554）。`source` と `agent` の**両方**に届き、`trigger` はソースにだけ意味がある（agent には空オブジェクト）。`options` は Orchestrator が解釈しない余りキーで、消費するものを `claimed_options` で申告する。**task_source にはさらに `projects: [{name, options}]`**（`[[projects]]` のうち `source` が自分のもの、#554）と **`poll_interval_secs: Option<u64>`**（0.1.6、[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)。自プラグイン内部の fetch 周期。イベント駆動ソースは無視してよい）|
+| `initialize` | O→P | 解決済み config + プロトコル版を渡す。plugin_version + capabilities を返す（F-65）。**task_source には orchestrator の `[[repositories]]` も `repositories: [{name, summary?, path?}]` として供給される**（0.1.1、#109。任意フィールド — 使わなければ無視してよい。ソース側でリポジトリ解決するプラグインは自前設定の重複を省ける）。**同じく orchestrator の `[llm]` も `llm: {base_url, model, api_key?}` として供給される**（0.1.2、#119。api_key は解決済み。プラグイン自身の LLM 設定があればそちらを優先する default + override を推奨）。**そのプラグインを名指す `[[workflows]]` が `workflows: [{workflow, trigger, options}]`（定義順）として供給される**（0.6.0 で `triggers` から改名、#554）。`source` と `agent` の**両方**に届き、`trigger` はソースにだけ意味がある（agent には空オブジェクト）。`options` は Orchestrator が解釈しない余りキーで、消費するものを `claimed_options` で申告する。**task_source にはさらに `projects: [{name, options}]`**（`[[projects]]` のうち `source` が自分のもの、#554）。`trigger` は運用者の書いたテーブルの**素通し**で、profile 由来の `instructions_kind` / `task_id_prefix` は `workflows` 要素の**専用フィールド**として届く（0.6.0 までは trigger に焼き込まれていた）。fetch 周期 `poll_interval_secs` は自分の `[<name>]` のキーで、`config` の中に入って届く（0.6.0 / #554 で `InitializeParams` から削除）|
 | `config/validate` | O→P | プラグイン設定を検証（F-59）。`initialize` と同じ `workflows` / `projects` / `repositories` も届く（0.6.0）— 記憶ではなく「今聞かれているもの」を検証させるため |
 | `shutdown` | O→P | 猶予付き終了要求 |
 
 ## task_source
 
-`task_source` は **push 専用**（プロトコル 0.2.0、[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。タスクを見つけたら `task/submit` を Orchestrator へ**自分から**送る — Orchestrator がタスクを取りに来る RPC（旧 `tasks/fetch`）は存在しない。イベント駆動ソース（Webhook/Socket 等）は受信のたびに、ポーリングが自然なソース（GitHub/Notion 等）は `initialize` で受け取った `workflows`/`poll_interval_secs` で自前タイマーを回して、それぞれ `task/submit` を呼ぶ（[plugin-sdk](/components/plugin-sdk.md) の `poll_loop` がこのタイマー実装を提供する）。
+`task_source` は **push 専用**（プロトコル 0.2.0、[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。タスクを見つけたら `task/submit` を Orchestrator へ**自分から**送る — Orchestrator がタスクを取りに来る RPC（旧 `tasks/fetch`）は存在しない。イベント駆動ソース（Webhook/Socket 等）は受信のたびに、ポーリングが自然なソース（GitHub/Notion 等）は `initialize` で受け取った `workflows` と自分の `[<name>].poll_interval_secs` で自前タイマーを回して、それぞれ `task/submit` を呼ぶ（[plugin-sdk](/components/plugin-sdk.md) の `poll_loop` がこのタイマー実装を提供する）。
 
 | メソッド | 方向 | 内容 |
 |---|---|---|

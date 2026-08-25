@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:4ac4ea6e54c47dffb8646b97cd3c6d4ecbfccf026e2622fe9697fc9f0994fe32 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:0c4da921b332fe2b83ceb51d1a7c1d24ed759289889cead16eae4c83dd08cc90 -->
 
 # Plugin development guide
 
@@ -75,13 +75,14 @@ The cases that *don't* line up show the rule better. In 0.4.0 only the herdr plu
 
 - `repositories: [{name, summary?, path?}]` — the orchestrator's configured repositories, so a source that resolves repositories itself does not need its own copy
 - `llm: {base_url, model, api_key?}` — the orchestrator's LLM settings with the key already resolved. If your plugin has its own LLM configuration, prefer that and treat this as the default
-- `workflows: [{workflow, trigger, options}]` — every workflow that names you, as its `source` or its `agent`, in the order they appear in the configuration. `trigger` is what a source watches for (an agent gets an empty object); `options` holds the keys on that workflow the orchestrator does not understand
-- `projects: [{name, options}]` — the trackers you own, from `[[projects]]` entries whose `source` is you. The repositories bound to each come from `[[repositories]].project`
-- `poll_interval_secs` — how often to look. Event-driven sources can ignore it
+- `workflows: [{workflow, trigger, instructions_kind?, task_id_prefix?, options}]` — every workflow that names you, as its `source` or its `agent`, in the order they appear in the configuration. `trigger` is what a source watches for, passed through exactly as the operator wrote it (an agent gets an empty object); `instructions_kind` and `task_id_prefix` are derived by the orchestrator from the workflow's `profile`; `options` holds the keys on that workflow the orchestrator does not understand
+- `projects: [{name, options}]` — the projects you own, from `[[projects]]` entries whose `source` is you. The repositories bound to each come from `[[repositories]].project`
+
+How often a polling source fetches is its own business: put `poll_interval_secs` in your plugin's `[<name>]` table and read it from `config`.
 
 ### task_source
 
-**A task source is push-only.** When you find a task you send `task/submit` to the orchestrator yourself; there is no RPC where the orchestrator comes to fetch tasks. Event-driven sources (webhooks, sockets) submit on each event; sources that are naturally polled run their own timer from the `workflows` and `poll_interval_secs` you got in `initialize`. The `plugin-sdk` crate provides that timer as `poll_loop`.
+**A task source is push-only.** When you find a task you send `task/submit` to the orchestrator yourself; there is no RPC where the orchestrator comes to fetch tasks. Event-driven sources (webhooks, sockets) submit on each event; sources that are naturally polled run their own timer from the `workflows` you got in `initialize` and the `poll_interval_secs` in their own `[<name>]` table. The `plugin-sdk` crate provides that timer as `poll_loop`.
 
 | Method | Direction | What it does |
 |---|---|---|

@@ -107,6 +107,10 @@ error: unknown top-level table `worktre` → …
 
 `version` は据え置き、`config migrate` も作らず、旧 `plugins/*.toml` の残存検出もしない。リポジトリは未公開で利用者は 1 人、変更と同日に消せば済むため。残っていても読まれないだけで、パースエラーにもならない。
 
+### `poll_interval_secs` も `[<name>]` へ
+
+`[plugins.{name}].poll_interval_secs` は背景の表のとおり core が使わず転送するだけだったので、各ソースの `[<name>]` のキーにし、`InitializeParams.poll_interval_secs` を削除した。値は `initialize.config` の中で届き、`0` を busy-spin に倒さないガードは元からプラグイン側にあってそのまま残る。ロスターの `[plugins.{name}]` に残るのは core がその値で何かを決めるキーだけ（`enabled` / `kind` / `max_concurrency` / `timeout_secs` / `log_level` / `restart`）である。
+
 ## 2. core 構造体の中のプラグイン固有キーは「フラット + 引き取り規則」
 
 `[[workflows]]` にはプロパティを**そのまま**足す。名前空間もサブテーブルも挟まない。
@@ -140,9 +144,11 @@ publish = "direct"      # プラグインが定義するプロパティ。見た
 
 削除したもの: `Trigger::matches` と予約キー表、`match_workflow`、trigger の重なり警告・catch-all 到達不能検出・`reaction` の型検査。
 
-**Slack ではこの危険が移動ではなく消滅する。** メンションとリアクションはプラグイン内で別のイベント経路なので、リアクションの workflow をメンションの後ろに書いても隠されない（#396 の危険は core が 1 本のリストを first-match していたことに由来していた）。本当に曖昧なもの —— 同じ絵文字を 2 つの workflow が主張する / メンションを 2 つが主張する —— は意味論のある場所、つまりプラグインの `initialize` で拒否する（後者は今回新設）。
+**Slack ではこの危険が移動ではなく消滅する。** メンションとリアクションはプラグイン内で別のイベント経路なので、リアクションの workflow をメンションの後ろに書いても隠されない（#396 の危険は core が 1 本のリストを first-match していたことに由来していた）。本当に曖昧なもの —— 同じ絵文字を 2 つの workflow が主張する / メンションを 2 つが主張する —— は意味論のある場所、つまりプラグインの `initialize` で拒否する（後者は今回新設）。文字列でない `reaction` 値も同じ場所で拒否する —— 「reaction 無し」と読むと黙ってメンションの行き先になるためで、core の型検査は削除済みなので、この拒否が唯一の門である。
 
 `reaction:<emoji>` ラベルは残すが、義務ではなくなった。core が再導出しなくなったので、元から読めていたとおりの「どう起票されたかの記録」になる。
+
+**trigger への注入も撤廃した。** core が profile から導出する `instructions_kind` / `task_id_prefix` は `WorkflowInfo` の専用フィールドで運び、`trigger` は運用者が書いたテーブルの**素通し**になった。#398 が trigger に焼き込んだのは「プロトコル変更なしで運べる面が trigger しか無かった」ためで、options が wire に載った 0.6.0 でその理由は消えている（不採用案の「`trigger` をそのまま拡張フィールドとして使い続ける」参照）。
 
 **失うもの**: trigger の重なり警告が**どこにも無くなった**。`--offline` の話ではない —— 検査そのものを移していないので、オンラインでも出ない。github / notion で 2 つの workflow が同じ `project_status` を書いても、報告なしで先勝ちになる。
 
@@ -216,10 +222,11 @@ project = "tomo-prj"
 
 # Consequences
 
-- **protocol 0.6.0（破壊的）。** `initialize.triggers` → `workflows` の改名、`WorkflowInfo.options` / `ProjectInfo` / `RepoInfo.project` / `InitializeResult.claimed_options` / `TaskSubmitParams.workflow` の追加、`ResultPublishParams.delivery` の削除。同梱 manifest は `>=0.6.0, <0.7` へ。**`triggers` を読む 0.5 系プラグインは「トリガーゼロ」と読んで黙って何も監視しなくなる**ので、F-54 のゲートで起動拒否に倒す
+- **protocol 0.6.0（破壊的）。** `initialize.triggers` → `workflows` の改名、`WorkflowInfo.options` / `.instructions_kind` / `.task_id_prefix` / `ProjectInfo` / `RepoInfo.project` / `InitializeResult.claimed_options` / `TaskSubmitParams.workflow` の追加、`ResultPublishParams.delivery` と `InitializeParams.poll_interval_secs` の削除。同梱 manifest は `>=0.6.0, <0.7` へ。**`triggers` を読む 0.5 系プラグインは「トリガーゼロ」と読んで黙って何も監視しなくなる**ので、F-54 のゲートで起動拒否に倒す
 - **trigger の重なり警告は完全に無くなった**（`--offline` に限らない）。上の決定 3 を参照
 - **`config validate --offline` は弱くなる。** `[[workflows]]` のプラグイン定義キーの検証が出なくなる。`run` は起動時に必ず検査するので、素通りするのは「`config validate --offline` だけを実行して `run` しない」場合に限られる
 - **プラグインが workflow 名を詐称できる。** read-only な source が `profile = "implement"` の workflow を名乗れる。ただし**以前も同じ**（`status` / `labels` をプラグインが作っていた）ので後退ではない。core は `source` の一致だけは必ず検証する
 - **`totsuka setup` の爆風範囲が広がる。** 書き込み単位がファイルからテーブルへ変わり、編集をしくじると `config.toml` 全体を損なう。以前はプラグイン 1 ファイルで済んだ
 - **旧 `plugins/*.toml` は黙って無視される。** `version` を上げず検出もしないと決めたため。プラグインは空設定で起動し、症状は原因から遠い場所に出る。利用者が 1 人で同日に消すため許容した
+- **`tracker` という語は core から消した**（同一概念に 2 語を並存させない）。`doctor` のチェック id は `trackers` → `projects`、`[prompts].tracker_destination` は `project_destination` へ改名（上書きしている config はキー名を追随する）。ADR-0056 のタイトルなど過去の記録はそのまま
 - F-64 は撤廃、F-01 / F-56 / F-59 / F-81 は記述を更新した

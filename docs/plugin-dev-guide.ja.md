@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:4ac4ea6e54c47dffb8646b97cd3c6d4ecbfccf026e2622fe9697fc9f0994fe32 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:0c4da921b332fe2b83ceb51d1a7c1d24ed759289889cead16eae4c83dd08cc90 -->
 
 # プラグイン開発ガイド
 
@@ -78,13 +78,14 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 
 - `repositories: [{name, summary?, path?}]` — Orchestrator 側のリポジトリ設定。ソース側でリポジトリを解決するプラグインは自前設定の重複を省ける
 - `llm: {base_url, model, api_key?}` — Orchestrator 側の LLM 設定（鍵は解決済み）。プラグイン自身の LLM 設定があればそちらを優先し、これは既定値として扱う
-- `workflows: [{workflow, trigger, options}]` — 自分を `source` または `agent` として名指す workflow が、設定に書かれた順で届く。`trigger` はソースが監視する条件（agent には空オブジェクト）、`options` はその workflow に書かれた、Orchestrator が解釈しないキー
-- `projects: [{name, options}]` — 自分が所有するトラッカー（`source` が自分の `[[projects]]` エントリ）。各トラッカーに紐づくリポジトリは `[[repositories]].project` から届く
-- `poll_interval_secs` — どの周期で見るか。イベント駆動のソースは無視してよい
+- `workflows: [{workflow, trigger, instructions_kind?, task_id_prefix?, options}]` — 自分を `source` または `agent` として名指す workflow が、設定に書かれた順で届く。`trigger` はソースが監視する条件で、運用者が書いたとおり素通しで届く（agent には空オブジェクト）。`instructions_kind` / `task_id_prefix` は workflow の `profile` から Orchestrator が導出した値。`options` はその workflow に書かれた、Orchestrator が解釈しないキー
+- `projects: [{name, options}]` — 自分が所有するプロジェクト（`source` が自分の `[[projects]]` エントリ）。各プロジェクトに紐づくリポジトリは `[[repositories]].project` から届く
+
+ポーリング型ソースの取得周期はプラグイン自身の設定である: `poll_interval_secs` を自分の `[<name>]` テーブルに置き、`config` から読む。
 
 ### task_source
 
-**task_source は push 専用である。** タスクを見つけたら `task/submit` を Orchestrator へ自分から送る。Orchestrator がタスクを取りに来る RPC は存在しない。イベント駆動のソース（Webhook や Socket）は受信のたびに送り、ポーリングが自然なソースは `initialize` で受け取った `workflows` と `poll_interval_secs` で自前のタイマーを回す。そのタイマーは `plugin-sdk` クレートが `poll_loop` として提供している。
+**task_source は push 専用である。** タスクを見つけたら `task/submit` を Orchestrator へ自分から送る。Orchestrator がタスクを取りに来る RPC は存在しない。イベント駆動のソース（Webhook や Socket）は受信のたびに送り、ポーリングが自然なソースは `initialize` で受け取った `workflows` と、自分の `[<name>]` テーブルの `poll_interval_secs` で自前のタイマーを回す。そのタイマーは `plugin-sdk` クレートが `poll_loop` として提供している。
 
 | メソッド | 方向 | 内容 |
 |---|---|---|

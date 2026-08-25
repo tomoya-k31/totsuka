@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:65ff31d266be71d0afa6f60271b4166bfbb23dbce3f633c8e634cea8ecaa5837 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:4150516e6b29fba4c9b84bb72ccf523f3be0d51f515812a2b058ff6d2157b048 -->
 
 # Configuration reference
 
@@ -127,7 +127,6 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 | `timeout_secs` | int? | 120 | Timeout for a single call to the plugin |
 | `log_level` | string? | none | The plugin's log level |
 | `restart` | bool | true | Whether a crashed plugin is launched again. Retries back off (1s, 2s, 4s, …) up to **5 attempts within a rolling 5 minutes**, then send an `escalated` notification. **Setting it to `false` keeps the detection** — the death is logged, counted in the run summary's `plugin_crashes`, and still sends an `escalated` notification; an agent plugin's in-flight tasks are still failed. Only the relaunch stops, which is what you want while investigating a plugin by hand |
-| `poll_interval_secs` | int? | 60 | Task sources only. Every task source is push-style, so totsuka never polls one itself — this value is forwarded to the plugin at startup and becomes its own internal fetch interval. Event-driven sources ignore it |
 
 ## `[[workflows]]`
 
@@ -622,12 +621,14 @@ If a workflow uses a hook-capable agent, leaving `auth_token_ref` unset makes `c
 
 ## `[github]`
 
-This is the only polling task source here — `poll_interval_secs` becomes the plugin's own fetch interval. (The Slack source next door is event-driven and ignores it.)
+This is the only polling task source here — `poll_interval_secs` is the plugin's own fetch interval, set in its `[github]` table. (The Slack source next door is event-driven and ignores it.)
 
 ```toml
 [plugins.github]
 enabled = true
 kind = "task_source"
+
+[github]
 poll_interval_secs = 60   # 60 is also the default
 ```
 
