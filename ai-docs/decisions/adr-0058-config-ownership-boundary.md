@@ -144,7 +144,9 @@ publish = "direct"      # プラグインが定義するプロパティ。見た
 
 `reaction:<emoji>` ラベルは残すが、義務ではなくなった。core が再導出しなくなったので、元から読めていたとおりの「どう起票されたかの記録」になる。
 
-**失うもの**: オフラインでの trigger 重なり警告。`--offline` はプラグインに聞けないので、そこでは検出できない。
+**失うもの**: trigger の重なり警告が**どこにも無くなった**。`--offline` の話ではない —— 検査そのものを移していないので、オンラインでも出ない。github / notion で 2 つの workflow が同じ `project_status` を書いても、報告なしで先勝ちになる。
+
+移さなかったのは、slack で消滅したのと同じ理由が github / notion には**当たらない**からではなく、当たるからである: これらの trigger はステータス・ラベルのフィルタで、重なりの意味は「両方に一致したら定義順で先勝ち」という**定義済みの挙動**でしかない。core が警告していたのは catch-all を追い越す `reaction` の危険（#396）と同じ枠で見ていたためで、その危険は slack 固有だった。とはいえ「意図しない重なり」を利用者が知りたいことはありうるので、必要になったら各プラグインの `config/validate` へ足す。
 
 ## 4. repo→トラッカーの紐付けは `[[projects]]` + `[[repositories]].project`
 
@@ -215,7 +217,8 @@ project = "tomo-prj"
 # Consequences
 
 - **protocol 0.6.0（破壊的）。** `initialize.triggers` → `workflows` の改名、`WorkflowInfo.options` / `ProjectInfo` / `RepoInfo.project` / `InitializeResult.claimed_options` / `TaskSubmitParams.workflow` の追加、`ResultPublishParams.delivery` の削除。同梱 manifest は `>=0.6.0, <0.7` へ。**`triggers` を読む 0.5 系プラグインは「トリガーゼロ」と読んで黙って何も監視しなくなる**ので、F-54 のゲートで起動拒否に倒す
-- **`config validate --offline` は弱くなる。** trigger の重なり警告と、`[[workflows]]` のプラグイン定義キーの検証が出なくなる。`run` は起動時に後者を必ず検査するので、素通りするのは「`config validate --offline` だけを実行して `run` しない」場合に限られる
+- **trigger の重なり警告は完全に無くなった**（`--offline` に限らない）。上の決定 3 を参照
+- **`config validate --offline` は弱くなる。** `[[workflows]]` のプラグイン定義キーの検証が出なくなる。`run` は起動時に必ず検査するので、素通りするのは「`config validate --offline` だけを実行して `run` しない」場合に限られる
 - **プラグインが workflow 名を詐称できる。** read-only な source が `profile = "implement"` の workflow を名乗れる。ただし**以前も同じ**（`status` / `labels` をプラグインが作っていた）ので後退ではない。core は `source` の一致だけは必ず検証する
 - **`totsuka setup` の爆風範囲が広がる。** 書き込み単位がファイルからテーブルへ変わり、編集をしくじると `config.toml` 全体を損なう。以前はプラグイン 1 ファイルで済んだ
 - **旧 `plugins/*.toml` は黙って無視される。** `version` を上げず検出もしないと決めたため。プラグインは空設定で起動し、症状は原因から遠い場所に出る。利用者が 1 人で同日に消すため許容した
