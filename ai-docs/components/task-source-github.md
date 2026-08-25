@@ -4,7 +4,7 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。Issue への書き込みは claim の assignee 操作だけ。呼び出す 8 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-08-26T10:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T13:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -55,7 +55,7 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.6
 
 # トークンに必要な権限
 
-**十分条件は実測済み、最小値は未実測**（#514、2026-08-23）。下の「実際に呼んでいるもの」は確定した事実で、「実測できたこと」はサンドボックス（user 所有の Project、private リポジトリ 2 本）に対して`.claude/skills/live-e2e/scripts/github-permissions.sh` が 4 操作すべてを実際に投げて確かめた。「導いた権限」の側は**依然として導出**である — 権限を削ったトークンをまだ試していないので、そこに書かれた値が**最小**であることは示されていない。**この但し書きは実測が済むまで消さないこと。** 断定に固まると、間違っていたときに誰も疑わなくなる。
+**十分条件は実測済み、最小値は未実測**（#514、2026-08-23 / #556、2026-08-25）。下の「実際に呼んでいるもの」は確定した事実で、「実測できたこと」は 2 本のプローブが分担する: 従来 4 操作（fetch / resolve / viewer / カード移動）は `.claude/skills/live-e2e/scripts/github-permissions.sh`（2026-08-23）、claim の 4 操作（claim 読み / user id / self-assign / 自己除去）は `.claude/skills/live-e2e/scripts/github-claim-probe.sh`（2026-08-25、OAuth `gho_` トークンで全 PASS）が、同じサンドボックス（user 所有の Project、private リポジトリ 2 本）へ実際に投げて確かめた。「導いた権限」の側は**依然として導出**である — 権限を削ったトークンをまだ試していないので、そこに書かれた値が**最小**であることは示されていない。**この但し書きは実測が済むまで消さないこと。** 断定に固まると、間違っていたときに誰も疑わなくなる。
 
 ## 実際に呼んでいるもの
 

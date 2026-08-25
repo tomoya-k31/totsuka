@@ -303,7 +303,10 @@ pub struct GithubConfig {
     /// SingleSelect field name holding the status column (F-02).
     #[serde(default = "default_status_field")]
     pub status_field: String,
-    /// The operator's own login, used to detect self-assigned tasks (F-08).
+    /// The operator's own login: detects self-assigned tasks (F-08) and is
+    /// the login the claim self-assigns (#556). One login = one totsuka
+    /// instance — assignees carry only the login, so two instances sharing
+    /// one are indistinguishable to the adjudication (unsupported).
     pub github_login: String,
     /// Status names treated as "in progress" and therefore excluded from
     /// ingest (F-08).

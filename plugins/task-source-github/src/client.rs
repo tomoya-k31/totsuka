@@ -1,6 +1,7 @@
 //! GitHub task-source operations over a [`GithubTransport`]: fetch + normalize
-//! (F-01/F-02), status write-back (F-84), and token validation (F-59). There is
-//! no publish path — the agent writes the deliverable itself (#398). All GraphQL is built as plain JSON bodies so no GraphQL
+//! (F-01/F-02), status write-back (F-84), the exclusion claim (#556, see
+//! [`crate::claim`] for the adjudication rule), and token validation (F-59).
+//! There is no publish path — the agent writes the deliverable itself (#398). All GraphQL is built as plain JSON bodies so no GraphQL
 //! client dependency is needed (mirrors the LLM adapter in orchestrator-core).
 
 use std::collections::HashMap;
@@ -577,7 +578,11 @@ impl<T: GithubTransport> GithubClient<T> {
             "query": mutation,
             "variables": { "a": task_id, "u": [my_id] },
         });
-        let resp = self.transport.post_graphql(body, false).await?;
+        // `idempotent: true`: adding an assignee that is already there and
+        // removing one that is not are both no-ops on GitHub's side, so a
+        // replay after a timed-out attempt cannot double anything — and
+        // without it a transient 5xx/429 fails the whole claim for a cycle.
+        let resp = self.transport.post_graphql(body, true).await?;
         check_errors(&resp)?;
         Ok(())
     }
