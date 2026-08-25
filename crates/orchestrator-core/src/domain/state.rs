@@ -153,8 +153,8 @@ pub enum TaskEvent {
     /// competing claim, this instance already holds it (the claim settles
     /// before the first side effect of a dispatch).
     Skip,
-    /// Retry a finished task (F-44): requeue from `Failed` / `Cancelled`.
-    /// **Not** from `Done` — see [`Reopen`](Self::Reopen).
+    /// Retry a finished task (F-44): requeue from `Failed` / `Cancelled` /
+    /// `Skipped` (#556). **Not** from `Done` — see [`Reopen`](Self::Reopen).
     Retry,
     /// A new message arrived for a finished conversation (#242): requeue it.
     ///

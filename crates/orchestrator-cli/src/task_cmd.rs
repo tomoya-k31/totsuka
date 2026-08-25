@@ -36,8 +36,9 @@ pub enum TaskCommand {
         /// Task id.
         id: i64,
     },
-    /// Re-queue a failed or cancelled task (reuses its worktree/session when
-    /// possible, F-44).
+    /// Re-queue a failed, cancelled, or skipped task (reuses its
+    /// worktree/session when possible, F-44; a skipped task re-enters the
+    /// claim, #556).
     Retry {
         /// Task id.
         id: i64,
