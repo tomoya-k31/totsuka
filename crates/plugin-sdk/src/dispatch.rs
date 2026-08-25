@@ -6,7 +6,7 @@
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskUpdateStatusParams,
+    ResultPublishParams, TaskClaimParams, TaskClaimResult, TaskUpdateStatusParams,
 };
 use plugin_protocol::{RequestId, method};
 use serde::de::DeserializeOwned;
@@ -99,6 +99,26 @@ pub trait TaskSourceHandler: Send {
         &mut self,
         params: ResultPublishParams,
     ) -> impl Future<Output = Result<Value, Error>> + Send;
+
+    /// `task/claim` (0.6.1, #556): claim a task for exclusive execution.
+    ///
+    /// Defaulted to a `METHOD_NOT_FOUND` error so existing handlers keep
+    /// compiling — the Orchestrator only calls this on plugins whose
+    /// `initialize` declared the `task_claim` capability, so a handler that
+    /// overrides this must declare the flag, and one that declares the flag
+    /// must override this.
+    fn task_claim(
+        &mut self,
+        params: TaskClaimParams,
+    ) -> impl Future<Output = Result<TaskClaimResult, Error>> + Send {
+        let _ = params;
+        async {
+            Err(Error::new(
+                error_code::METHOD_NOT_FOUND,
+                "task/claim is not supported by this plugin → do not declare the                  `task_claim` capability",
+            ))
+        }
+    }
 }
 
 /// Adapter: drive a [`TaskSourceHandler`] as a [`LineHandler`].
@@ -146,6 +166,7 @@ impl<H: TaskSourceHandler> LineHandler for TaskSourceServer<H> {
             method::INITIALIZE => call!(InitializeParams, initialize),
             method::CONFIG_VALIDATE => call!(ConfigValidateParams, config_validate),
             method::TASK_UPDATE_STATUS => call!(TaskUpdateStatusParams, update_status),
+            method::TASK_CLAIM => call!(TaskClaimParams, task_claim),
             method::RESULT_PUBLISH => call!(ResultPublishParams, result_publish),
             method::SHUTDOWN => Reply::shutdown_ack(id),
             other => Reply::respond(Response::error(

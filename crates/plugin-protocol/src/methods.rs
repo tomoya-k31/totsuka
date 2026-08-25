@@ -43,6 +43,12 @@ pub mod method {
     pub const TASK_LOOKUP: &str = "task/lookup";
     /// Transition source-side status (O→P, F-84).
     pub const TASK_UPDATE_STATUS: &str = "task/update_status";
+    /// Claim a task for exclusive execution before dispatching it
+    /// (O→P, 0.6.1, #556). Only sent to plugins whose [`Capabilities`]
+    /// declare [`task_claim`](crate::Capabilities::task_claim).
+    ///
+    /// [`Capabilities`]: crate::Capabilities
+    pub const TASK_CLAIM: &str = "task/claim";
     /// Publish a result back to the source (O→P, F-07).
     pub const RESULT_PUBLISH: &str = "result/publish";
 
@@ -452,6 +458,54 @@ pub struct TaskUpdateStatusParams {
     pub task_id: String,
     /// Target status value (source-defined).
     pub status: String,
+}
+
+/// `task/claim` params (O→P, 0.6.1, #556): claim `task_id` for exclusive
+/// execution, immediately before dispatching it.
+///
+/// The Orchestrator decides **when** to claim (a free execution slot exists
+/// and the task is about to run); the plugin decides **how** — writing a
+/// marker on the source that other members' instances will see, and
+/// adjudicating races by an ordered, server-side record (F-08 keeps intake
+/// control the source plugin's job). The call must be idempotent: claiming a
+/// task this identity already holds answers [`TaskClaimOutcome::Won`] without
+/// re-writing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskClaimParams {
+    /// Source task id.
+    pub task_id: String,
+}
+
+/// `task/claim` outcome (0.6.1, #556).
+///
+/// A transient failure (network, rate limit, an adjudication that cannot be
+/// decided yet) is a JSON-RPC **error**, not a variant: the Orchestrator
+/// leaves the task queued and retries on a later cycle, so the enum only
+/// carries answers that are settled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskClaimOutcome {
+    /// This identity holds the task; dispatch may proceed.
+    Won,
+    /// Another member holds it; the task must not be dispatched here.
+    Lost,
+    /// The claim write was silently discarded and will keep being discarded
+    /// until a human fixes the configuration (e.g. GitHub ignores an
+    /// assignment when the assignee lacks push access — the API answers
+    /// 200 either way, so only a read-back detects it). Permanent until
+    /// acted on: the Orchestrator must not retry on its own.
+    Forbidden,
+}
+
+/// `task/claim` result (O→P, 0.6.1, #556).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskClaimResult {
+    /// How the claim settled.
+    pub outcome: TaskClaimOutcome,
+    /// Who holds the task, in the source's own vocabulary (a GitHub login,
+    /// …). Meaningful with [`TaskClaimOutcome::Lost`]; omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder: Option<String>,
 }
 
 /// `result/publish` params (O→P, F-07): write a result back to the source
@@ -970,6 +1024,23 @@ mod tests {
             task_id: "42".into(),
             status: "レビュー待ち".into(),
         });
+        round_trip(&TaskClaimParams {
+            task_id: "I_node".into(),
+        });
+        round_trip(&TaskClaimResult {
+            outcome: TaskClaimOutcome::Won,
+            holder: None,
+        });
+        round_trip(&TaskClaimResult {
+            outcome: TaskClaimOutcome::Lost,
+            holder: Some("member-b".into()),
+        });
+        // The wire spelling is stable snake_case, and `Forbidden` must never
+        // be confused with an error object.
+        assert_eq!(
+            serde_json::to_value(TaskClaimOutcome::Forbidden).unwrap(),
+            serde_json::json!("forbidden"),
+        );
         round_trip(&ResultPublishParams {
             task_id: "42".into(),
             content: "# Design".into(),

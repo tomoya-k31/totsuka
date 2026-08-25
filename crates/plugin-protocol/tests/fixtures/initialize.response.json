@@ -8,7 +8,8 @@
       "state_stream": true,
       "hook_completion": true,
       "diagnostics_snapshot": true,
-      "outputs": []
+      "outputs": [],
+      "task_claim": false
     },
     "claimed_repos": [
       {
@@ -16,6 +17,11 @@
         "destination": "GitHub Project tomoya-k31/#7 (user). File the issue in the repository, then add it to the board with `gh project item-add 7 --owner tomoya-k31 --url <issue-url>`."
       }
     ],
-    "claimed_options": [{ "workflow": "design", "key": "publish" }]
+    "claimed_options": [
+      {
+        "workflow": "design",
+        "key": "publish"
+      }
+    ]
   }
 }

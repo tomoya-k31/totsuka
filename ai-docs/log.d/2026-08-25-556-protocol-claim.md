@@ -1,0 +1,2 @@
+* **Creation**: [ADR-0059 多人数 poll の二重着手は Issue self-assign の claim と AssignedEvent 先着裁定で防ぐ](/decisions/adr-0059-task-claim-exclusion.md)（#556）。設計と Phase 0 実測の確定分を記録（claim の置き場・裁定規則・Skipped / Forbidden の扱い・on_start・updatedAt を message_key に刻む reopen・不採用 10 案）。
+* **Update**: [plugin-protocol](/components/plugin-protocol.md)（#556）。protocol 0.6.1（追加的 patch）: `task/claim` RPC（`won`/`lost`/`forbidden`、一時障害は JSON-RPC error）と `Capabilities.task_claim` を追加。SDK `TaskSourceHandler::task_claim` はデフォルト実装付き、mock_plugin は `claim_result` 注入に対応、wire fixture を更新。

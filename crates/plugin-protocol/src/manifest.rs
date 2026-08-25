@@ -56,6 +56,15 @@ pub struct Capabilities {
     /// merging the two would silently require every hook-completing agent to
     /// also answer snapshots.
     pub diagnostics_snapshot: bool,
+    /// Answers `task/claim` — claiming a task for exclusive execution on the
+    /// source before dispatch (task_source, 0.6.1, #556).
+    ///
+    /// Undeclared means the Orchestrator never sends `task/claim` and
+    /// dispatches without exclusion, exactly as before this flag existed —
+    /// which is why the default is `false` rather than an error: a source
+    /// whose tasks cannot race (Slack mentions addressed to one person) has
+    /// nothing to claim.
+    pub task_claim: bool,
     /// Output policies this (task source) plugin can fulfil.
     pub outputs: Vec<OutputCapability>,
 }

@@ -9,6 +9,10 @@
 //!   params are recorded to the config's `"init_log"` file, if set — separate
 //!   from `notify_log`, which tests read as "observable side effects".
 //! - `config/validate` → valid unless the config contains `"invalid": true`.
+//! - `task/claim` → answers the config's `"claim_result"` verbatim (or a
+//!   JSON-RPC error when it has an `"error"` key); absent means
+//!   `{"outcome": "won"}`. Declared via `"task_claim": true` (#556). Recorded
+//!   to `notify_log` like the other task_source calls.
 //! - `task/update_status` / `result/publish` → acknowledge (recorded to the
 //!   config's `"notify_log"` file, if set, as `{"method": ..., "params": ...}`).
 //!   `"publish_error": true` makes `result/publish` answer with an error
@@ -163,6 +167,7 @@ fn main() {
                             pane_control: flag("pane_control"),
                             hook_completion: flag("hook_completion") || flag("resume_session"),
                             diagnostics_snapshot: flag("diagnostics_snapshot"),
+                            task_claim: flag("task_claim"),
                             outputs: vec![OutputCapability::Source],
                             // No `..Default::default()`: removing
                             // `design_preview` in 0.4.0 (#411) made this
@@ -216,6 +221,34 @@ fn main() {
             "task/update_status" | "result/publish" => {
                 record(&config, method, &params);
                 Response::result(request_id(&id), Value::Null)
+            }
+            // `task/claim` (0.6.1, #556): the outcome is staged by the test as
+            // `"claim_result": {"outcome": "lost", "holder": "member-b"}` or
+            // `"claim_result": {"error": "boom"}` (a JSON-RPC error, for the
+            // stay-queued retry path). Absent means `won` — a mock that
+            // declares the capability and then blocks every dispatch would
+            // make the happy path untestable. The attempt is always recorded,
+            // because what the tests assert is whether (and when) the
+            // orchestrator asked at all.
+            "task/claim" => {
+                record(&config, method, &params);
+                match config.get("claim_result") {
+                    Some(r) if r.get("error").is_some() => Response::error(
+                        request_id(&id),
+                        Error {
+                            code: error_code::INTERNAL_ERROR,
+                            message: r["error"]
+                                .as_str()
+                                .unwrap_or("mock claim error")
+                                .to_string(),
+                            data: None,
+                        },
+                    ),
+                    Some(r) => Response::result(request_id(&id), r.clone()),
+                    None => {
+                        Response::result(request_id(&id), serde_json::json!({"outcome": "won"}))
+                    }
+                }
             }
             // `dispatch_error` (#261): answer with an arbitrary JSON-RPC error
             // instead of a session id — the only way to drive the

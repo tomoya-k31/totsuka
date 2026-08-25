@@ -40,8 +40,9 @@ use plugin_protocol::methods::{
     NotifyParams, ResultPublishParams, SessionAttachParams, SessionAttachResult,
     SessionFocusParams, SessionFocusResult, SessionListParams, SessionListResult,
     SessionReleaseParams, SessionReleaseResult, StateNotification, StateSubscribeParams,
-    TaskCancelParams, TaskDispatchParams, TaskDispatchResult, TaskLookupParams, TaskLookupResult,
-    TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus, TaskUpdateStatusParams,
+    TaskCancelParams, TaskClaimOutcome, TaskClaimParams, TaskClaimResult, TaskDispatchParams,
+    TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams, TaskSubmitResult,
+    TaskSubmitStatus, TaskUpdateStatusParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -280,6 +281,15 @@ fn result_publish_wire() {
     check_ack_response("result_publish.response.json");
 }
 
+#[test]
+fn task_claim_wire() {
+    check_request::<TaskClaimParams>("task_claim.request.json", method::TASK_CLAIM);
+    // Won omits `holder` entirely; Lost carries it. Both shapes are the
+    // committed wire, so a future `skip_serializing_if` change surfaces here.
+    check_response::<TaskClaimResult>("task_claim.response.json");
+    check_response::<TaskClaimResult>("task_claim_lost.response.json");
+}
+
 // ---------------------------------------------------------------------------
 // agent_ide
 // ---------------------------------------------------------------------------
@@ -404,6 +414,9 @@ fn enum_wire_values_are_pinned() {
     pin(NotifierEvent::Done, "done");
     pin(NotifierEvent::Failed, "failed");
     pin(NotifierEvent::Pending, "pending");
+    pin(TaskClaimOutcome::Won, "won");
+    pin(TaskClaimOutcome::Lost, "lost");
+    pin(TaskClaimOutcome::Forbidden, "forbidden");
     pin(NotifierEvent::Escalated, "escalated");
     pin(NotifierEvent::VerificationPending, "verification_pending");
     pin(PluginKind::TaskSource, "task_source");
