@@ -14,6 +14,7 @@
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) の `version` 行を 0.6.0 へ、[プラグイン開発ガイド](/development/plugin-dev-guide.md) の範囲の節を 0.6 世代へ更新（上限 `<0.7`、下限が全プラグインで揃った理由）。同梱 manifest 7 本のコメントも、旧い下限の根拠を説明したままだったので書き直した。
 * **Update**: #554 のレビューで見つかった設計との残差 4 件を実装で解消（[ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) に追記）: ① `poll_interval_secs` を `[plugins.{name}]` から各ソースの `[<name>]` へ移し `InitializeParams` から削除 ② trigger への `instructions_kind` / `task_id_prefix` 注入を撤廃し `WorkflowInfo` の専用フィールドへ（trigger は素通しに） ③ core 内の `tracker` の語を `project` へ統一（doctor チェック id `trackers`→`projects`、`[prompts].tracker_destination`→`project_destination`） ④ 予約トップレベル名の列挙テストに `projects` を追加。
 * **Update**: slack は文字列でない `trigger.reaction` を `initialize` で拒否するようになった —— 「reaction 無し」と読むと黙ってメンションの行き先になり、core の型検査（#396）が消えた今はプラグインが唯一の門であるため。[operations-guide](/operations/operations-guide.md) の doctor 表と [slack-quickstart](/operations/slack-quickstart.md) の並び順の助言（撤去済みの重なり警告を前提にしていた）も現状へ追随。
+* **Update**: [live-e2e スキル](/components/live-e2e.md)（#556 Phase 0）。claim 設計（self-assign 排他 + スイムレーン reopen）の前提を実測する `scripts/github-claim-probe.sh` を追加。実測（2 周・全 PASS）: self-assign は読み戻しに p50 ≈ 450ms / max 983ms で反映（`claim_verify_delay_ms` 既定 750ms の根拠）、`AssignedEvent` は unassign 後も残り返却順は de-facto 昇順、Status セルの `updatedAt` は列移動で進み同一 option 再セットでは進まない。黙殺の負のパスと creator の意味論は未実測と明記。
 
 ## 2026-08-24
 
