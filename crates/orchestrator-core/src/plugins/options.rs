@@ -27,7 +27,7 @@
 //! launch failure — which the caller already reports — stays the one thing
 //! that needs fixing.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use plugin_protocol::methods::WorkflowOption;
 
@@ -116,10 +116,12 @@ pub fn check_workflow_options(
         };
         // The same plugin can be both the source and the agent of a workflow.
         // Deduplicate, or it would claim every key twice and every key would
-        // read as ambiguous with itself.
-        let asked: Vec<String> = BTreeSet::from([wf.source.clone(), wf.agent.clone()])
-            .into_iter()
-            .collect();
+        // read as ambiguous with itself. Not through a set: the message names
+        // them in the order they were asked, and a set would sort them.
+        let mut asked: Vec<String> = vec![wf.source.clone()];
+        if wf.agent != wf.source {
+            asked.push(wf.agent.clone());
+        }
         for key in wf.options.keys() {
             let mut claimants: Vec<String> = Vec::new();
             for (plugin, claimed) in [(&wf.source, source_claims), (&wf.agent, agent_claims)] {
@@ -210,11 +212,15 @@ profile = "answer"
         );
         assert_eq!(issues.len(), 1, "{issues:?}");
         assert_eq!(issues[0].key, "profil");
+        // Asked order, not sorted order: this workflow's source is `slack` and
+        // its agent is `herdr`, so alphabetical would print them the other way
+        // round and stop matching what the message says happened.
+        let OptionIssueKind::Unclaimed { asked } = &issues[0].kind else {
+            panic!("{:?}", issues[0].kind);
+        };
+        assert_eq!(asked, &["slack".to_string(), "herdr".to_string()]);
         let text = issues[0].to_string();
-        assert!(
-            text.contains("`slack`") && text.contains("`herdr`"),
-            "{text}"
-        );
+        assert!(text.contains("`slack` and `herdr`"), "{text}");
     }
 
     #[test]

@@ -30,6 +30,16 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # name = "my-repo"
 # path = "~/Workspace/my-repo"
 # summary = "What lives in this repository (used for LLM repo selection)"
+# project = "my-board"          # where tasks for this repository are filed
+
+# The trackers you file into: a GitHub Project, a Notion database. `name` and
+# `source` are totsuka's — a repository points at one by `name`, and `source`
+# says which plugin owns it. Every other key belongs to that plugin.
+# [[projects]]
+# name = "my-board"
+# source = "github"
+# owner = "my-org"
+# project_number = 1
 
 # [worktree]
 # Default: <state dir>/worktrees/{repo_name}/{worktree_name}, where <state dir> is
@@ -46,10 +56,6 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # error, so a typo here is caught rather than read as settings nobody asked for.
 # [github]
 # token = "cmd:gh auth token"
-# [[github.projects]]
-# owner = "my-org"
-# project_number = 1
-# repos = ["my-repo"]
 
 # [llm]
 # base_url = "https://openrouter.ai/api/v1"
