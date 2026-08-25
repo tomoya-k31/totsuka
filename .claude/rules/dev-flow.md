@@ -91,11 +91,13 @@ for why. CI's own flags stay exactly as they are:
     (→ [ADR-0018](../../ai-docs/decisions/adr-0018-ci-test-time.md)).
   - **`target/` is cleaned by the script itself — you no longer do it by hand**
     (→ [ADR-0060](../../ai-docs/decisions/adr-0060-target-dir-cleanup.md)). After
-    the tests pass it sweeps `target/debug/deps/*.o` every run (0.53s) and runs
-    `cargo clean` on a 7-day interval (or when `target/debug/incremental` passes
-    300 sessions). Both are Darwin-only; `DEV_TEST_SKIP_TARGET_CLEANUP=1` turns
-    the whole thing off and `DEV_TEST_CLEAN_MAX_AGE_DAYS=<n>` changes the
-    interval.
+    the tests pass it sweeps `<target>/debug/deps/*.o` every run (0.53s) and runs
+    `cargo clean --profile dev` on a 7-day interval (or when
+    `<target>/debug/incremental` passes 300 per-crate dirs).
+    `DEV_TEST_SKIP_TARGET_CLEANUP=1` turns the whole thing off and
+    `DEV_TEST_CLEAN_MAX_AGE_DAYS=<n>` changes the interval (`0` = every run).
+    `<target>` comes from `cargo metadata`, so `CARGO_TARGET_DIR` and
+    `build.target-dir` are honoured.
     - **why it exists**: macOS cargo defaults the dev profile to
       `split-debuginfo = "unpacked"`, so workspace `.o` files pile up in
       `target/debug/deps` and cargo never GCs them — measured at **839,365 files
@@ -111,16 +113,29 @@ for why. CI's own flags stay exactly as they are:
       the `panicked at …:434:5` line is `file!()`-derived and unaffected); it
       comes back the next time that crate is rebuilt. A run whose build or tests
       failed never reaches the sweep, so debugging keeps its debuginfo.
+    - **the sweep buys build time, not disk.** Those `.o` are *hard links* into
+      `incremental/<crate>/s-<session>/` (measured: link count 3, same inode), so
+      deleting the `deps` link leaves the data behind. Sweeping 874k files off a
+      month-old tree took it from **34G to 28G**, no further. Disk comes back
+      only from `cargo clean`. The same fact rules out "keep only this run's
+      `.o`": a hard link carries the mtime of the *first* compile, so freshly
+      rebuilt objects still look old.
     - **`incremental/` is never swept** — it *is* a build input, and wiping it
       costs 12.6s on the next full rebuild (5.57s → 18.14s, measured). It only
-      grows on disk (19–30 MB/dir; it had reached 1,126 dirs / 21G), and
-      `cargo clean` is the only way to reclaim it.
+      grows on disk (19–30 MB per crate dir; it had reached 1,126 dirs / 21G),
+      and `cargo clean` is the only way to reclaim it.
+    - **`--profile dev` is deliberate**: a bare `cargo clean` would also wipe
+      `<target>/release` and take your locally built plugin binaries with it
+      (measured: `--profile dev` removed 11,116 files and left a release file
+      untouched). `<target>/debug` is still shared with clippy, `cargo doc` and
+      rust-analyzer, so those go cold too — the cost is not just the 27.8s
+      rebuild.
     - the two compose, and **delete cost is not linear in entry count**: the
       same `find … -name '*.o' -delete` takes **0.53s at ~9,500 entries, 18.4s
       at ~250,000, and 903s at ~874,000** (measured, sweeping a tree left for a
       month — 15 minutes, i.e. one whole slow build). Sweeping every run keeps
       the periodic `cargo clean` at ~11k files / **0.88s** instead of the 222s a
-      neglected tree cost. The full build right after a clean is 27.8s.
+      neglected tree cost.
 - `cargo doc --workspace --no-deps` — rustdoc link integrity. `[workspace.lints.rust]
   warnings = "deny"` already makes a broken intra-doc link a hard error
   (exit 101), but **CI never runs `cargo doc`**, so nothing fires it: 18

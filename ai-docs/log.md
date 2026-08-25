@@ -2,7 +2,7 @@
 
 ## 2026-08-26
 
-* **Creation**: `scripts/dev-test.sh` が target/ を掃除するようにした決定を [ADR-0060 dev-test.sh が target/ を掃除する（.o は毎回、cargo clean は定期）](/decisions/adr-0060-target-dir-cleanup.md) に記録。ローカルのフル再ビルドが 15 分近くまで劣化した原因は `target/debug/deps` に溜まった 839,365 個の `.o` で、エントリ数だけを変えた対照実験で 6.6 秒が 40〜126 秒になることを実測した。`.o` はビルドの入力ではないので毎回掃いてもキャッシュを失わず（削除直後のフルビルドが 0.33 秒の no-op）、`incremental/` は入力なので消さずに `cargo clean` を既定 7 日間隔で自動実行する。
+* **Creation**: `scripts/dev-test.sh` が target/ を掃除するようにした決定を [ADR-0060 dev-test.sh が target/ を掃除する（.o は毎回、cargo clean は定期）](/decisions/adr-0060-target-dir-cleanup.md) に記録。ローカルのフル再ビルドが 15 分近くまで劣化した原因は `<target>/debug/deps` に溜まった 839,365 個の `.o` で、エントリ数だけを変えた対照実験で 6.6 秒が 40〜126 秒になることを実測した。`.o` はビルドの入力ではないので毎回掃いてもキャッシュを失わず（削除直後のフルビルドが 0.33 秒の no-op）、`incremental/` は入力なので消さずに `cargo clean --profile dev` を既定 7 日間隔で自動実行する。`.o` は incremental へのハードリンクなので、掃除が効くのはビルド時間であってディスクではない。
 
 ## 2026-08-25
 

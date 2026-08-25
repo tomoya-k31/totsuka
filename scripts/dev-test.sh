@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dev-test.sh — ローカルのテスト実行（依存: cargo, cargo-nextest）
+# dev-test.sh — ローカルのテスト実行（依存: cargo, cargo-nextest。jq があれば使う）
 #
 # ワークスペースをビルドしてから nextest でテストを回し、最後に doctest を回す。
 # 3 コマンドをスクリプトにしてあるのは、順序と環境変数に**壊れ方の分かっている
@@ -24,10 +24,12 @@
 #
 # テストが通ったあとに target/ を掃除する（ADR-0060）。放っておくと `.o` が
 # 際限なく溜まってビルドが桁で遅くなるため。詳細は下の「target/ の掃除」を参照。
-#   - 毎回: target/debug/deps の .o を掃く（0.53 秒・キャッシュ損失ゼロ）
-#   - 定期: cargo clean（既定 7 日ごと、または incremental が 300 セッション超）
+#   - 毎回: `<target>/debug/deps` の `.o` を掃く（キャッシュ損失ゼロ。効くのは
+#     ビルド時間で、ディスクではない）
+#   - 定期: `cargo clean --profile dev`（既定 7 日ごと、または incremental の
+#     クレート単位ディレクトリが 300 個超）
 # 掃除ごと止めたいときは DEV_TEST_SKIP_TARGET_CLEANUP=1、
-# clean の間隔だけ変えたいときは DEV_TEST_CLEAN_MAX_AGE_DAYS=<日数>。
+# clean の間隔だけ変えたいときは DEV_TEST_CLEAN_MAX_AGE_DAYS=<日数>（0 で毎回）。
 #
 # 終了コード: 0 成功 / それ以外は失敗したコマンドのもの
 set -euo pipefail
@@ -47,7 +49,7 @@ cd "$(dirname "$0")/.."
 # target/ の掃除（ADR-0060）
 #
 # macOS の cargo は dev プロファイルで split-debuginfo = "unpacked" が既定なので、
-# ワークスペースの .o が target/debug/deps に**残り続ける**。cargo はこれを GC
+# ワークスペースの .o が <target>/debug/deps に**残り続ける**。cargo はこれを GC
 # しないので放っておくと際限なく増える（実測: 1 か月で 839,365 個 / 15G）。
 #
 # エントリ数はそのままビルド時間に効く。同一ワークスペース・同一の変更（葉クレート
@@ -60,11 +62,22 @@ cd "$(dirname "$0")/.."
 #
 # そこで毎回掃く。**.o はビルドの入力ではない**ので、これでキャッシュは 1 バイトも
 # 失われない（実測: 250,001 → 664 エントリまで消した直後の
-# `cargo build --workspace --all-targets` が 0.33 秒の no-op）。フル再ビルド 1 回分
-# の .o は約 8,900 個 / 1.2G で、掃除は 0.53 秒。
+# `cargo build --workspace --all-targets` が 0.33 秒の no-op）。
 #
-# 対象は target/debug/deps だけ。target/release/deps は実測で 610M 止まりで、
-# 問題として観測されていないので触らない。
+# **効くのはビルド時間であってディスクではない。** deps の .o は incremental の
+# オブジェクトへの**ハードリンク**である（実測: link count 3、inode が
+# incremental/<crate>/s-<session>/*.o と一致）。したがって deps 側のリンクを消しても
+# 実体は残り、解放されるのは incremental 側が既に GC 済みだったものだけ。実際、
+# 84 万件を掃いた木で減ったのは 34G → 28G にとどまった。ディスクを戻すのは
+# cargo clean のほうの仕事である。
+#
+# 同じ理由で「このランでビルドした .o だけ残す」はできない。ハードリンクなので
+# mtime は**その CGU を最初にコンパイルした時刻**であり、今回のビルドで作り直した
+# ものでも古い時刻を持つ（実測で確認）。世代を mtime で切り分ける方法は無い。
+#
+# 同じ target を使う別プロセスと**排他はしていない**。掃除中に別のビルドがリンク段階
+# に入っていると、開けなくなった .o でリンクエラーになりうる。起きるのは即座に見える
+# 失敗で、再実行すれば直る（壊れたものが黙って残る類ではない）。
 #
 # 失うものは 1 つだけで、実測で特定してある: RUST_BACKTRACE のスタックフレームから
 # 自前クレートの `at <file>:<line>` が落ちる（関数名は残る）。パニック位置の
@@ -75,128 +88,180 @@ cd "$(dirname "$0")/.."
 # デバッグ中の回は debuginfo が残る。
 #
 # incremental/ は .o と違って**ビルドの入力**なので、掃くとその場で損をする
-# （消した直後のフル再ビルドは 5.57s → 18.14s。12.6 秒の実損）。しかしセッション
+# （消した直後のフル再ビルドは 5.57s → 18.14s。12.6 秒の実損）。しかしクレート単位の
 # ディレクトリは溜まり続け、実測 19〜30 MB/dir でディスクだけが膨らむ（実測で
 # 1,126 個 / 21G まで到達していた）。回収する手段は cargo clean しかない。
 #
 # そこで cargo clean は「溜まったら」ではなく**定期的に**、テストが通ったあとに
 # 自動で実行する。走らせるタイミングをテストの後にしてあるのは、その回の結果は
-# もう出ていて、待たされているものが無いからである。代償は次回のフルビルドが
-# incremental 無しの 27.8 秒になることだけで、それ以外は何も失わない。
+# もう出ていて、待たされているものが無いからである。
+#
+# **`--profile dev` を付けて <target>/debug だけを消す。** 素の `cargo clean` は
+# <target>/release まで消してしまい、手元でビルドしたプラグインのリリースバイナリを
+# 巻き込む（実測で確認: `--profile dev` は 11,116 ファイルを消し、release に置いた
+# ファイルは残る）。それでも <target>/debug は clippy・cargo doc・rust-analyzer と
+# 共有しているので、**次に回すそれらも cold になる**。フルビルドの 27.8 秒
+# （空の target からの実測。10 コア・user 182 秒）だけでは済まない。
 # ---------------------------------------------------------------------------
 
-# APFS のディレクトリ st_size は「エントリ数 × 32 バイト」ちょうどになる。
-# 36〜852,720 エントリの 7 ディレクトリで誤差 0 を確認済み。実行 0.005 秒で、
-# 実数を数える `find … -name '*.o' | wc -l` の 8.2 秒とは桁が違う。
-# この定数は APFS 固有なので、Darwin 以外では掃除も検査もスキップする。
-readonly APFS_DIR_BYTES_PER_ENTRY=32
+# cargo clean を回す間隔（日。0 なら毎回）と、間隔を待たずに回す incremental の
+# クレート単位ディレクトリ数。<target>/debug/incremental の直下は
+# `<crate>-<hash>/` で、その中に `s-<session>/` が入る。数えているのは前者。
+# 300 個は実測 19〜30 MB/dir でおおよそ 6〜9 GB にあたる。
+#
+# `:-` ではなく `-` を使う: `DEV_TEST_CLEAN_MAX_AGE_DAYS=` と明示的に空を渡された
+# ときも既定値で握り潰さず、下の検証で弾くため。
+readonly CLEAN_MAX_AGE_DAYS="${DEV_TEST_CLEAN_MAX_AGE_DAYS-7}"
+readonly CLEAN_INCREMENTAL_CRATE_DIRS=300
 
-# cargo clean を回す間隔（日）と、間隔を待たずに回す incremental セッション数。
-# 300 セッションは実測 19〜30 MB/dir でおおよそ 6〜9 GB にあたる。
-readonly CLEAN_MAX_AGE_DAYS="${DEV_TEST_CLEAN_MAX_AGE_DAYS:-7}"
-readonly CLEAN_INCREMENTAL_SESSIONS=300
-
-# 数値でない値を黙って受けると `find -mtime +abc` が失敗し、「掃除の時期ではない」と
+# 数値でない値を黙って受けると日数の比較が成立せず、「掃除の時期ではない」と
 # 見分けがつかないまま**永久に掃除されなくなる**。ここで落とす。
-case "${CLEAN_MAX_AGE_DAYS}" in
-'' | *[!0-9]*)
-  echo "dev-test: DEV_TEST_CLEAN_MAX_AGE_DAYS は 0 以上の整数で指定してください（受け取った値: ${CLEAN_MAX_AGE_DAYS}）" >&2
-  exit 2
-  ;;
-esac
-
-# 最後に cargo clean した時刻の記録。target/ の中に置くので clean で必ず消え、
-# 直後に置き直す。つまりこのファイルの mtime = 最後に掃除した時刻。
-readonly CLEAN_STAMP=target/.dev-test-last-clean
-
-# ディレクトリのエントリ数を返す（`.` と `..` を含む）。
-# 読めない・数値でないときは非ゼロ終了。
-dir_entries() {
-  local z
-  z=$(stat -f '%z' "$1" 2>/dev/null) || return 1
-  case "${z}" in
-  '' | *[!0-9]*) return 1 ;;
+# ただし掃除を切っている人には関係がないので、そのときは検証もしない。
+if [ -z "${DEV_TEST_SKIP_TARGET_CLEANUP:-}" ]; then
+  case "${CLEAN_MAX_AGE_DAYS}" in
+  '' | *[!0-9]*)
+    echo "dev-test: DEV_TEST_CLEAN_MAX_AGE_DAYS は 0 以上の整数で指定してください（受け取った値: ${CLEAN_MAX_AGE_DAYS}）" >&2
+    exit 2
+    ;;
   esac
-  echo $((z / APFS_DIR_BYTES_PER_ENTRY))
+fi
+
+# target ディレクトリは cargo に聞く。CARGO_TARGET_DIR や .cargo/config.toml の
+# build.target-dir で移動していると、`target` 決め打ちでは掃除が空振りする一方で
+# cargo clean だけが本物に効く、という食い違いが起きる。実測 0.02 秒。
+# jq が無い環境では環境変数と既定値に落とす。
+resolve_target_dir() {
+  local d=""
+  if command -v jq >/dev/null 2>&1; then
+    d=$(cargo metadata --format-version 1 --no-deps --offline 2>/dev/null |
+      jq -r '.target_directory // empty' 2>/dev/null) || d=""
+  fi
+  case "${d}" in
+  '' | null) echo "${CARGO_TARGET_DIR:-target}" ;;
+  *) echo "${d}" ;;
+  esac
 }
 
-# incremental/ のセッションディレクトリ数。取れなければ 0。
-incremental_sessions() {
-  local entries
-  [ -d target/debug/incremental ] || {
+TARGET_DIR=$(resolve_target_dir)
+readonly TARGET_DIR
+readonly DEPS_DIR="${TARGET_DIR}/debug/deps"
+readonly INCREMENTAL_DIR="${TARGET_DIR}/debug/incremental"
+
+# 最後に cargo clean した時刻の記録。<target> 直下なので
+# `cargo clean --profile dev`（= <target>/debug のみ）では消えない。
+readonly CLEAN_STAMP="${TARGET_DIR}/.dev-test-last-clean"
+
+# ファイルの mtime を epoch 秒で返す。GNU stat と BSD stat では綴りが違ううえ、
+# GNU の `stat -f` は「ファイルシステム情報」で成功してしまうので、素性を先に見る。
+stat_mtime() {
+  if stat --version >/dev/null 2>&1; then
+    stat -c '%Y' "$1" 2>/dev/null
+  else
+    stat -f '%m' "$1" 2>/dev/null
+  fi
+}
+
+# incremental/ 直下のクレート単位ディレクトリ数。取れなければ 0。
+incremental_crate_dirs() {
+  [ -d "${INCREMENTAL_DIR}" ] || {
     echo 0
     return 0
   }
-  entries=$(dir_entries target/debug/incremental) || {
-    echo 0
-    return 0
-  }
-  # dir_entries は `.` と `..` も数えるので引く。
-  echo $((entries > 2 ? entries - 2 : 0))
+  find "${INCREMENTAL_DIR}" -maxdepth 1 -mindepth 1 -type d 2>/dev/null |
+    wc -l | tr -d ' '
+}
+
+# 前回の掃除から CLEAN_MAX_AGE_DAYS 日以上経っていれば 0。
+#
+# `find -mtime +N` は使わない。BSD find の -mtime は 24 時間単位を切り捨てるので
+# `+7` は「8 日以上」になり、`0` も「毎回」ではなく「24 時間以上」になってしまう。
+# epoch 秒で比べれば言葉どおりになる。
+clean_due_by_age() {
+  # スタンプが無い状態は「掃除した直後」と区別できないので、掃除せず置くだけに
+  # する（下の ensure_clean_stamp）。初回の実行が必ず cargo clean になるのを
+  # 避けるため。この規則が効くのは**この日数による経路だけ**で、下の
+  # クレート単位ディレクトリ数による経路はスタンプの有無を見ない
+  # ——既に膨らんでいる木は、初回だろうと掃除するのが正しい。
+  [ -e "${CLEAN_STAMP}" ] || return 1
+
+  local stamp now
+  stamp=$(stat_mtime "${CLEAN_STAMP}") || return 1
+  case "${stamp}" in
+  '' | *[!0-9]*) return 1 ;;
+  esac
+  now=$(date +%s)
+  [ "$((now - stamp))" -ge "$((CLEAN_MAX_AGE_DAYS * 86400))" ]
 }
 
 # cargo clean を回すべき理由を 1 行で返す。回す必要がなければ非ゼロ終了。
 clean_reason() {
-  local sessions
-  sessions=$(incremental_sessions)
-  if [ "${sessions}" -gt "${CLEAN_INCREMENTAL_SESSIONS}" ]; then
-    echo "incremental のセッションが ${sessions} 個（閾値 ${CLEAN_INCREMENTAL_SESSIONS}、実測 19〜30 MB/dir）"
+  local dirs
+  dirs=$(incremental_crate_dirs)
+  if [ "${dirs}" -gt "${CLEAN_INCREMENTAL_CRATE_DIRS}" ]; then
+    echo "incremental のクレート単位ディレクトリが ${dirs} 個（閾値 ${CLEAN_INCREMENTAL_CRATE_DIRS}、実測 19〜30 MB/dir）"
     return 0
   fi
-  # スタンプが無い状態は「掃除した直後」と区別できないので、掃除せず置くだけに
-  # する。初回の実行が必ず cargo clean になるのを避けるため。
-  [ -e "${CLEAN_STAMP}" ] || return 1
-  if [ -z "$(find "${CLEAN_STAMP}" -maxdepth 0 -mtime "+${CLEAN_MAX_AGE_DAYS}" 2>/dev/null)" ]; then
-    return 1
-  fi
+  clean_due_by_age || return 1
   echo "前回の cargo clean から ${CLEAN_MAX_AGE_DAYS} 日以上経過"
 }
 
-# 掃除本体。cargo clean を回したら 0、回さなかったら 1 を返す。
+# cargo clean を回したら 0、回さなかった・失敗したら 1 を返す。
+# **失敗を 0 で返さない**のが要点で、0 を返すと呼び出し側が「掃除済み」と見なして
+# .o 掃除まで飛ばしてしまい、掃除が続けて失敗する環境では .o が野放しになる。
 run_cargo_clean_if_due() {
   local reason
   reason=$(clean_reason) || return 1
 
-  echo "==> cargo clean（${reason}）"
-  echo "    次のフルビルドは incremental 無しの実測 27.8 秒になります。"
+  echo "==> cargo clean --profile dev（${reason}）"
+  echo "    <target>/debug を消すので、次のフルビルドに加えて clippy / cargo doc /"
+  echo "    rust-analyzer も cold になります（空からのフルビルドは実測 27.8 秒）。"
 
   # 掃除の失敗でランごと失敗扱いにはしない。ここまで来た時点でテストは全部通って
   # いるので、非ゼロで抜けると「テストが落ちた」と読まれる。ただし黙って諦めると
   # 掃除されないまま溜まり続けるので、警告は出してスタンプも進めない
   # （＝次のランでもう一度試す）。
-  if ! cargo clean; then
+  if ! cargo clean --profile dev; then
     echo "dev-test: cargo clean に失敗しました。次のランで再試行します" >&2
-    return 0
+    return 1
   fi
-  mkdir -p target
-  : >"${CLEAN_STAMP}"
+  # スタンプ書き込みの失敗でランを落とさない（次のランでもう一度掃除するだけ）。
+  : >"${CLEAN_STAMP}" 2>/dev/null || true
+  return 0
 }
 
-# .o を掃く。.o は**ビルドの入力ではない**ので、キャッシュは 1 バイトも失われない。
+# スタンプが無ければ置く。ここで失敗してもランは落とさない。
+ensure_clean_stamp() {
+  [ -e "${CLEAN_STAMP}" ] && return 0
+  mkdir -p "${TARGET_DIR}" 2>/dev/null && : >"${CLEAN_STAMP}" 2>/dev/null || true
+  return 0
+}
+
+# deps の .o を掃く。.o は**ビルドの入力ではない**ので、キャッシュは 1 バイトも
+# 失われない。
 sweep_stale_objects() {
-  [ -d target/debug/deps ] || return 0
+  [ -d "${DEPS_DIR}" ] || return 0
 
-  local before after
-  before=$(dir_entries target/debug/deps) || return 0
-  find target/debug/deps -maxdepth 1 -name '*.o' -delete 2>/dev/null || true
-  after=$(dir_entries target/debug/deps) || return 0
+  local removed
+  removed=$(find "${DEPS_DIR}" -maxdepth 1 -name '*.o' \
+    -print -delete 2>/dev/null | wc -l | tr -d ' ') || removed=0
 
-  if [ "${before}" -le "${after}" ]; then
-    echo "dev-test: 掃除する .o はありませんでした（target/debug/deps: ${after} エントリ）"
+  if [ "${removed}" -eq 0 ]; then
+    echo "dev-test: 掃除する .o はありませんでした"
     return 0
   fi
-  echo "dev-test: .o を $((before - after)) 個掃除しました（target/debug/deps: ${before} → ${after} エントリ）"
+  echo "dev-test: .o を ${removed} 個掃除しました（${DEPS_DIR}）"
 }
 
 # テストが通ったあとの後始末。ビルドかテストが落ちた回は set -e でここまで来ない
 # ので、デバッグ中の回は debuginfo も incremental もそのまま残る。
 cleanup_target() {
   [ -z "${DEV_TEST_SKIP_TARGET_CLEANUP:-}" ] || return 0
-  [ "$(uname -s)" = "Darwin" ] || return 0
 
-  # cargo clean を回したなら .o もろとも消えているので、掃く対象はもう無い。
-  run_cargo_clean_if_due && return 0
-  [ -e "${CLEAN_STAMP}" ] || { mkdir -p target && : >"${CLEAN_STAMP}"; }
+  # cargo clean を回せたなら .o もろとも消えているので、掃く対象はもう無い。
+  if run_cargo_clean_if_due; then
+    return 0
+  fi
+  ensure_clean_stamp
   sweep_stale_objects
 }
 
