@@ -5,8 +5,6 @@ description: totsuka のコア。ヘキサゴナルアーキテクチャの doma
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [rust, crate, core, hexagonal, xdg, platform, config, sqlite, statemachine, logging, plugin, worktree, git, workflow, scheduler, llm, repo-select, recovery, session, run, output, signal, hook]
 generated: { by: claude-code/opus-5, at: 2026-08-26T09:10:00+09:00 }
-verified:
-  - { by: human:tomoya-k31, at: 2026-08-20T10:30:00Z }
 status: stable
 owner: tomoya-k31
 ---

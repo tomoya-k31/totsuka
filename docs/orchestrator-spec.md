@@ -95,7 +95,7 @@ Whenever you ask for machine-readable output, stdout carries the document and no
 totsuka run --json | jq -e '.stats.failed == 0'
 ```
 
-The document has `stats` (`submitted` / `dispatched` / `done` / `failed`), the task ids left in `waiting`, `pending`, and `queued`, and `interrupted`. **The exit code does not follow it** — a run that correctly recorded a failing task still exits 0, so decide from the document. `--json` cannot be combined with `--dry-run`, which has nothing to preview.
+The document has `stats` (`submitted` / `dispatched` / `done` / `failed` / `skipped`), the task ids left in `waiting`, `pending`, and `queued`, and `interrupted`. **The exit code does not follow it** — a run that correctly recorded a failing task still exits 0, so decide from the document. `--json` cannot be combined with `--dry-run`, which has nothing to preview.
 
 `task export` writes the audit log — every state change every task has been through — to stdout as NDJSON, one event per line, oldest first:
 

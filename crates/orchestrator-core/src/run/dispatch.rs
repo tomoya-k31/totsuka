@@ -989,7 +989,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// would mean a second pane and a second answer. Something has to notice
     /// once that dispatch is over, and this is that something.
     ///
-    /// Only `Done`. The two other terminal states are a human's business:
+    /// Only `Done`. The other terminal states are somebody else's business:
     ///
     /// - `Failed` would be a **loop**. A dispatch that fails leaves its
     ///   messages unsent (they are stamped only on success), so requeueing on
@@ -1002,6 +1002,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     ///   cancel still reopens the conversation through ingest — that is a
     ///   fresh instruction — but one that was already sitting in the ledger
     ///   when they cancelled must not undo them.
+    /// - `Skipped` (#556) would re-run a task another member's instance
+    ///   claimed: the unsent messages are theirs to handle now, and a local
+    ///   requeue would just lose the claim again next dispatch.
     pub(super) async fn requeue_conversations_with_unsent_messages(
         &mut self,
     ) -> Result<(), EngineError> {
@@ -1039,7 +1042,6 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
-    /// Release the slot a task holds, if it holds one (per-task ledger).
     /// Settle the exclusion claim for a task about to dispatch (#556).
     ///
     /// Returns `Ok(true)` when the dispatch may proceed: the source declared
@@ -1136,6 +1138,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
     }
 
+    /// Release the slot a task holds, if it holds one (per-task ledger).
     pub(super) fn release_slot(&mut self, task_id: i64) {
         if let Some((repo, agent)) = self.slot_holders.remove(&task_id) {
             self.slots.release(&repo, &agent);

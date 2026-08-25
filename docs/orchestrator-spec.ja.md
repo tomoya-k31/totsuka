@@ -96,7 +96,7 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 totsuka run --json | jq -e '.stats.failed == 0'
 ```
 
-ドキュメントの内容は `stats`（`submitted` / `dispatched` / `done` / `failed`）、残ったタスク id の `waiting` / `pending` / `queued`、そして `interrupted`。**終了コードはこれに追随しない** — 失敗したタスクを正しく記録した実行も 0 で終わるので、判定はドキュメントから行うこと。`--json` は `--dry-run` とは併用できない（プレビューする対象が無いため）。
+ドキュメントの内容は `stats`（`submitted` / `dispatched` / `done` / `failed` / `skipped`）、残ったタスク id の `waiting` / `pending` / `queued`、そして `interrupted`。**終了コードはこれに追随しない** — 失敗したタスクを正しく記録した実行も 0 で終わるので、判定はドキュメントから行うこと。`--json` は `--dry-run` とは併用できない（プレビューする対象が無いため）。
 
 `task export` は監査ログ — 各タスクがたどった全状態遷移 — を NDJSON で標準出力へ流す。1 行 1 イベント、古い順:
 
