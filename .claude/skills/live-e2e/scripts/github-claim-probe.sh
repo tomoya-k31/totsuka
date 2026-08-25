@@ -20,7 +20,7 @@
 # |---|---|---|
 # | P-1 | このトークンで self-assign が読み戻しに現れるか | 現れなければ claim 方式ごと不成立。API エラーと「200 で黙殺」を区別する |
 # | P-2 | assign→unassign→re-assign 後の timelineItems(ASSIGNED_EVENT) の件数・順序・last: の意味 | 裁定は createdAt+id の自前ソートだが、取得が末尾ページであることは last: に依存する |
-# | P-3 | mutation → 読み戻し反映の遅延（add/remove 各 6 標本） | `claim_verify_delay_ms` の既定値の根拠 |
+# | P-3 | mutation → 読み戻し反映の遅延（add/remove 混合。標本数は出力の `n=` が正 — P-1/P-2 の分も加算され、途中エラーで減りうる） | `claim_verify_delay_ms` の既定値の根拠 |
 # | P-4 | Status 列の移動で fieldValue の updatedAt が進むか + creator | **PR R（reopen の message_key）の前提**。creator は参考記録 |
 # | P-5 | 同一 option への再セットで updatedAt が進むか | 参考（validate エラー化で運用上は moot） |
 #
