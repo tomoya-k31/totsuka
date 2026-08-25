@@ -1643,8 +1643,8 @@ fn check_tracker_claims(
     checks: &mut Vec<Check>,
 ) {
     // A plugin that failed to launch reports no claims, which is not the same
-    // as claiming nothing: including it would let a crashed github plugin
-    // "resolve" a conflict by disappearing.
+    // as claiming nothing: counting it as "claims nothing" would report an
+    // all-clear built from one source's answer.
     let launched: Vec<&plugin_host::ValidatedPlugin> =
         validated.iter().filter(|v| v.result.is_ok()).collect();
     let registry = ClaimRegistry::from_sources(
@@ -1653,16 +1653,12 @@ fn check_tracker_claims(
             .map(|v| (v.name.as_str(), v.claimed_repos.as_slice())),
     );
 
-    // Conflicts first and unconditionally: what was seen is seen.
-    let conflicts = registry.conflicts();
-    for conflict in conflicts {
-        checks.push(Check::fail(
-            "trackers",
-            conflict.to_string(),
-            "remove the repository from all but one plugin's `repos`",
-        ));
-    }
-
+    // Two sources claiming one repository used to be reported here (#542).
+    // Since #554 a repository names one `[[projects]]` entry and the entry
+    // names one source, so the state cannot be written — `config validate`
+    // rejects a `project` that resolves to nothing, and there is no second
+    // claimant to find.
+    //
     // Everything the union is missing, in one list. `not_probed` is the common
     // case in real configs — a `cmd:` token (ADR-0044) means doctor never
     // launches that plugin — so treating it as an edge case would report an
@@ -1678,18 +1674,13 @@ fn check_tracker_claims(
             .map(|v| format!("`{}` (it did not launch)", v.name)),
     );
 
-    if !conflicts.is_empty() {
-        // The failures above already say what is wrong; a skip line on top
-        // would only muddy them.
-        return;
-    }
     if !unseen.is_empty() {
         checks.push(Check::skip(
             "trackers",
             format!("cannot tell: {} was not probed", unseen.join(", ")),
             "doctor stays non-interactive, so a plugin whose secrets need a prompt or a \
              command is never launched — check those configs by hand, or run `totsuka run` \
-             which resolves them and warns about conflicts at startup",
+             which resolves them",
         ));
         return;
     }
@@ -2283,21 +2274,6 @@ mod tests {
         assert!(checks[0].detail.contains('2'), "{:?}", checks[0]);
     }
 
-    /// The failure this check exists for: two sources, one repository.
-    #[test]
-    fn trackers_fail_when_two_sources_claim_one_repository() {
-        let checks = tracker_checks(
-            &[
-                validated("github", &[("shared", "Project #7")]),
-                validated("notion", &[("shared", "Database DB1")]),
-            ],
-            &[],
-        );
-        assert_eq!(checks.len(), 1);
-        assert!(!checks[0].ok, "{:?}", checks[0]);
-        assert!(checks[0].detail.contains("shared"), "{:?}", checks[0]);
-    }
-
     /// A plugin doctor never launched must not read as "claims nothing".
     ///
     /// This is the **common** case, not an edge one: a `cmd:` token (ADR-0044)
@@ -2316,27 +2292,6 @@ mod tests {
         assert!(checks[0].skipped, "{:?}", checks[0]);
         assert!(checks[0].detail.contains("github"), "{:?}", checks[0]);
         assert!(checks[0].detail.contains("cmd:"), "{:?}", checks[0]);
-    }
-
-    /// A conflict that *was* seen is still reported when the picture is
-    /// incomplete: it stays true whatever the un-probed plugin would have said.
-    #[test]
-    fn a_visible_conflict_is_reported_even_with_a_plugin_unprobed() {
-        let checks = tracker_checks(
-            &[
-                validated("github", &[("shared", "Project #7")]),
-                validated("notion", &[("shared", "Database DB1")]),
-            ],
-            &[("slack".to_string(), "its op:// reference would prompt")],
-        );
-        assert!(
-            checks.iter().any(|c| !c.ok && c.detail.contains("shared")),
-            "{checks:?}"
-        );
-        assert!(
-            !checks.iter().any(|c| c.skipped),
-            "a seen conflict must not degrade to a skip: {checks:?}"
-        );
     }
 
     /// A plugin that launched and failed validation is "unknown", like one that

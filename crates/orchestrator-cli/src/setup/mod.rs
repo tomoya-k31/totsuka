@@ -46,7 +46,8 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use orchestrator_core::config::{
-    RepositoryDraft, WorkflowDraft, set_llm, set_plugin_enabled, upsert_repository, upsert_workflow,
+    ProjectDraft, RepositoryDraft, WorkflowDraft, set_llm, set_plugin_enabled, upsert_project,
+    upsert_repository, upsert_workflow,
 };
 
 use crate::common::{CliError, Cx, EXIT_USAGE, ExitWith};
@@ -644,6 +645,13 @@ fn install_plugins(cx: &Cx, plan: &Plan) -> Result<(), CliError> {
 ///
 /// Separated from the writing so it can be tested directly — the property that
 /// matters is that the result loads and validates, not that a file appeared.
+/// The `[[projects]]` entry the wizard writes for the GitHub board.
+///
+/// One name, because the wizard asks about one board. An operator adding a
+/// second edits `config.toml` by hand, and this name is what the first one is
+/// called there.
+const GITHUB_BOARD_NAME: &str = "github-board";
+
 pub(crate) fn build_config(
     current: &str,
     answers: &Answers,
@@ -651,6 +659,27 @@ pub(crate) fn build_config(
 ) -> Result<String, CliError> {
     let mut text = current.to_string();
 
+    // The board goes in as a `[[projects]]` entry, and every repository binds
+    // to it (#554). The wizard asks about one board, so every repository the
+    // operator listed files into it — which is what a single-board setup meant
+    // before the mapping moved out of the plugin's own config.
+    let board = answers.github.as_ref().map(|_| GITHUB_BOARD_NAME);
+    if let Some(gh) = answers.github.as_ref() {
+        let options = format!(
+            "{{ owner = \"{}\", owner_type = \"{}\", project_number = {} }}",
+            gh.owner,
+            gh.owner_type.as_str(),
+            gh.project_number
+        );
+        text = upsert_project(
+            &text,
+            &ProjectDraft {
+                name: GITHUB_BOARD_NAME,
+                source: "github",
+                options: &options,
+            },
+        )?;
+    }
     for repo in &answers.repositories {
         text = upsert_repository(
             &text,
@@ -658,6 +687,7 @@ pub(crate) fn build_config(
                 name: &repo.name,
                 path: &repo.path,
                 summary: repo.summary.as_deref(),
+                project: board,
             },
         )?;
     }
@@ -917,6 +947,87 @@ github_login = "tomoya-k31"
                 }),
             statuses: Default::default(),
         }
+    }
+
+    /// The board the wizard writes, and the binding that makes it reachable
+    /// (#554). Two halves of one answer: a `[[projects]]` entry nothing points
+    /// at routes nothing, and a `project` naming no entry fails validation.
+    #[test]
+    fn the_board_is_written_and_every_repository_binds_to_it() {
+        let recipe = RECIPES
+            .iter()
+            .find(|r| r.plugins.iter().any(|p| p.name == "github"))
+            .expect("a recipe with the github plugin");
+        let mut answers = answers_for(recipe.key);
+        answers.repositories.push(super::answers::RepositoryAnswer {
+            name: "dotfiles".to_string(),
+            path: "/tmp/dotfiles".to_string(),
+            summary: None,
+        });
+        let text = build_config("", &answers, recipe).expect("builds");
+        let cfg = RootConfig::from_toml_str(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+
+        assert_eq!(cfg.projects.len(), 1, "{text}");
+        let board = &cfg.projects[0];
+        assert_eq!(board.source, "github");
+        // The plugin's own keys ride in the entry's options, uninterpreted.
+        assert_eq!(
+            board
+                .options
+                .get("project_number")
+                .and_then(toml::Value::as_integer),
+            Some(1),
+            "{text}"
+        );
+        assert_eq!(
+            board
+                .options
+                .get("owner_type")
+                .and_then(toml::Value::as_str),
+            Some(answers.github.as_ref().unwrap().owner_type.as_str()),
+            "the owner_type the operator picked is what gets written: {text}"
+        );
+
+        // **Every** repository binds to it: that is what a single-board setup
+        // meant before the mapping moved out of the plugin's config.
+        assert_eq!(cfg.repositories.len(), 2, "{text}");
+        for repo in &cfg.repositories {
+            assert_eq!(repo.project.as_deref(), Some(board.name.as_str()), "{text}");
+        }
+
+        // Parseable is not the same as configured. Resolve the board the way
+        // `initialize` does and run the plugin's own static checks over it —
+        // an entry the plugin cannot read, or one nothing binds to, is the
+        // "setup reported success, the plugin refuses later" failure.
+        let projects: Vec<plugin_protocol::methods::ProjectInfo> = cfg
+            .projects
+            .iter()
+            .map(|p| plugin_protocol::methods::ProjectInfo {
+                name: p.name.clone(),
+                options: match serde_json::to_value(&p.options) {
+                    Ok(serde_json::Value::Object(map)) => map,
+                    _ => Default::default(),
+                },
+            })
+            .collect();
+        let repositories: Vec<plugin_protocol::methods::RepoInfo> = cfg
+            .repositories
+            .iter()
+            .map(|r| plugin_protocol::methods::RepoInfo {
+                name: r.name.clone(),
+                summary: None,
+                path: None,
+                project: r.project.clone(),
+            })
+            .collect();
+        let mut github: task_source_github::config::GithubConfig =
+            serde_json::from_value(serde_json::json!({ "token": "t", "github_login": "me" }))
+                .expect("a minimal github table");
+        github.projects =
+            task_source_github::config::ProjectConfig::resolve(&projects, &repositories)
+                .unwrap_or_else(|e| panic!("the wizard's board does not resolve: {e:?}\n{text}"));
+        let errors = task_source_github::client::static_config_errors(&github);
+        assert!(errors.is_empty(), "{errors:?}\n{text}");
     }
 
     #[test]

@@ -153,7 +153,7 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        let config: NotionConfig = match serde_json::from_value(init.config) {
+        let mut config: NotionConfig = match serde_json::from_value(init.config) {
             Ok(c) => c,
             Err(e) => {
                 return Reply::respond(Response::error(
@@ -165,6 +165,18 @@ where
                 ));
             }
         };
+        // The databases come from the Orchestrator's `[[projects]]` and their
+        // repositories from `[[repositories]].project` (#554), not `[notion]`.
+        config.databases =
+            match crate::config::DatabaseConfig::resolve(&init.projects, &init.repositories) {
+                Ok(d) => d,
+                Err(errors) => {
+                    return Reply::respond(Response::error(
+                        id,
+                        Error::new(error_code::CONFIG_INVALID, errors.join("; ")),
+                    ));
+                }
+            };
         let transport = self.factory.build(settings(&config));
         let client = Arc::new(NotionClient::new(config, transport));
         let poll = if init.workflows.is_empty() {
@@ -207,10 +219,18 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        let config: NotionConfig = match serde_json::from_value(parsed.config) {
+        let mut config: NotionConfig = match serde_json::from_value(parsed.config) {
             Ok(c) => c,
             Err(e) => return ok_validate(id, vec![format!("config does not parse: {e}")]),
         };
+        // Same resolution as `initialize` (#554): validating the raw `[notion]`
+        // table alone would report "declare at least one database" for every
+        // correct config, since the databases are not in it.
+        config.databases =
+            match crate::config::DatabaseConfig::resolve(&parsed.projects, &parsed.repositories) {
+                Ok(d) => d,
+                Err(errors) => return ok_validate(id, errors),
+            };
         let mut errors = static_config_errors(&config);
         // Only ping the API if the config is otherwise well-formed (F-63).
         if errors.is_empty() {

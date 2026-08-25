@@ -66,6 +66,10 @@ pub struct RootConfig {
     /// Registered local repositories (F-61).
     #[serde(default)]
     pub repositories: Vec<RepositoryConfig>,
+    /// Trackers a repository can file into (#554): a GitHub Project, a Notion
+    /// database, a Jira project.
+    #[serde(default)]
+    pub projects: Vec<ProjectConfig>,
     /// Plugin roster + common fields, keyed by plugin instance name (F-56).
     #[serde(default)]
     pub plugins: BTreeMap<String, PluginConfig>,
@@ -171,6 +175,49 @@ pub struct RepositoryConfig {
     /// Overrides the global `[worktree].location` for this repo (F-22).
     #[serde(default)]
     pub worktree_location: Option<String>,
+    /// Which tracker this repository files into: the `name` of a
+    /// `[[projects]]` entry (#554).
+    ///
+    /// Optional — a repository with no tracker is the normal state for anyone
+    /// who has not set one up, and the source plugins must treat it as "say
+    /// nothing extra", never as an error.
+    ///
+    /// **One scalar, so a repository has at most one tracker by
+    /// construction.** Until #554 the mapping lived the other way round, as a
+    /// `repos = [...]` list inside each source plugin's config
+    /// ([ADR-0056](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0056-multi-tracker-routing.md)),
+    /// where two plugins could name the same repository and the Orchestrator
+    /// had machinery to detect and report that. Here it cannot be written.
+    #[serde(default)]
+    pub project: Option<String>,
+}
+
+/// A tracker a repository can file into (#554): one `[[projects]]` entry.
+///
+/// `name` and `source` are the Orchestrator's — the reference target and the
+/// owning plugin. Everything else belongs to that plugin and is held
+/// uninterpreted, exactly like a `[<name>]` table.
+///
+/// # Why `source` is written out rather than inferred
+///
+/// It could be guessed from the keys (only github understands
+/// `project_number`), but naming it makes the reference chain
+/// `[[repositories]].project` → `[[projects]].name` → `[plugins.<source>]`
+/// walkable **without launching a plugin**, so a broken reference is caught by
+/// `config validate --offline` and by anyone reading the file.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectConfig {
+    /// Stable identifier `[[repositories]].project` points at.
+    pub name: String,
+    /// The task_source plugin that owns this tracker.
+    pub source: String,
+    /// Everything else on the entry, uninterpreted (#554).
+    ///
+    /// Unlike a workflow's options these need no claim handshake: an entry
+    /// names exactly one plugin, so ownership is not in question and the
+    /// plugin's own `deny_unknown_fields` is what rejects a typo.
+    #[serde(flatten)]
+    pub options: toml::Table,
 }
 
 /// Plugin kind (F-50).

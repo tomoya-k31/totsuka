@@ -645,20 +645,16 @@ mod tests {
     }
 
     fn client_for_tests() -> GithubClient<NeverCalled> {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me",
             "projects": [{ "owner": "me", "project_number": 1, "repos": ["web-app"] }]
-        }))
-        .unwrap();
+        }));
         GithubClient::new(cfg, NeverCalled)
     }
 
     /// The board `item()` belongs to, for the `normalize_item` callers below.
     fn project_for_tests() -> ProjectConfig {
-        serde_json::from_value(json!({
-            "owner": "me", "project_number": 1, "repos": ["web-app"]
-        }))
-        .unwrap()
+        ProjectConfig::new("board-0", "me", 1, &["web-app"])
     }
 
     /// The `instructions_kind` the Orchestrator baked into the trigger picks
@@ -743,11 +739,10 @@ mod tests {
 
     #[test]
     fn static_errors_flag_bad_project_number() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me",
             "projects": [{ "owner": "me", "project_number": 0, "repos": ["r"] }]
-        }))
-        .unwrap();
+        }));
         let errors = static_config_errors(&cfg);
         assert!(
             errors.iter().any(|e| e.contains("project_number")),
@@ -759,14 +754,13 @@ mod tests {
     /// "where does an item for this repo go" is the same as none (#542).
     #[test]
     fn static_errors_flag_a_repository_claimed_by_two_boards() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me",
             "projects": [
                 { "owner": "me", "project_number": 1, "repos": ["totsuka", "shared"] },
                 { "owner": "me", "project_number": 2, "repos": ["shared"] }
             ]
-        }))
-        .unwrap();
+        }));
         let errors = static_config_errors(&cfg);
         assert!(
             errors
@@ -786,15 +780,14 @@ mod tests {
     /// them one board and let a genuine duplicate through.
     #[test]
     fn two_owners_sharing_a_project_number_are_different_boards() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me",
             "projects": [
                 { "owner": "me", "project_number": 7, "repos": ["shared"] },
                 { "owner": "acme", "owner_type": "organization",
                   "project_number": 7, "repos": ["shared"] }
             ]
-        }))
-        .unwrap();
+        }));
         let errors = static_config_errors(&cfg);
         assert!(
             errors
@@ -809,11 +802,10 @@ mod tests {
     /// destination. Flagging it would train the operator to ignore the check.
     #[test]
     fn a_repository_repeated_within_one_board_is_not_an_error() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me",
             "projects": [{ "owner": "me", "project_number": 1, "repos": ["r", "r"] }]
-        }))
-        .unwrap();
+        }));
         assert!(static_config_errors(&cfg).is_empty());
     }
 
@@ -821,11 +813,10 @@ mod tests {
     /// than quietly meaning "every repo on the board" as it did pre-#542.
     #[test]
     fn static_errors_flag_an_empty_repos_list() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me",
             "projects": [{ "owner": "me", "project_number": 1, "repos": [] }]
-        }))
-        .unwrap();
+        }));
         let errors = static_config_errors(&cfg);
         assert!(errors.iter().any(|e| e.contains("repos")), "got {errors:?}");
     }
@@ -834,10 +825,9 @@ mod tests {
     /// missing field), so the check has to be here.
     #[test]
     fn static_errors_flag_no_boards() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me", "projects": []
-        }))
-        .unwrap();
+        }));
         let errors = static_config_errors(&cfg);
         assert!(
             errors.iter().any(|e| e.contains("[[github.projects]]")),

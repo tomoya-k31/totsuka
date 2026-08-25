@@ -358,16 +358,21 @@ fn one_run_goes_from_nothing_to_installed_enabled_and_diagnosed() {
         "{body}"
     );
     assert!(!body.contains("ghp_"), "a token value was written: {body}");
-    // Nested under the plugin, not at the top level: a `[[projects]]` written
-    // there would be a table the plugin never receives.
-    assert_eq!(
-        github["projects"][0]["project_number"].as_integer(),
-        Some(1),
-        "{body}"
-    );
+    // The board is a **top-level** `[[projects]]` entry since #554, not a key
+    // inside `[github]`: it is what `[[repositories]].project` points at, and
+    // the Orchestrator has to be able to resolve that reference.
+    let board = document["projects"][0].clone();
+    assert_eq!(board["source"].as_str(), Some("github"), "{body}");
+    assert_eq!(board["project_number"].as_integer(), Some(1), "{body}");
     assert!(
-        !document.contains_key("projects"),
-        "the board landed at the top level instead of inside [github]:\n{body}"
+        github.get("projects").is_none(),
+        "the board stayed inside [github] instead of moving out:\n{body}"
+    );
+    // …and the repository binds to it, or the entry routes nothing.
+    assert_eq!(
+        document["repositories"][0]["project"].as_str(),
+        board["name"].as_str(),
+        "{body}"
     );
 
     // Both plugins are installed *and* enabled — the two are separate concepts

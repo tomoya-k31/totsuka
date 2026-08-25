@@ -142,7 +142,7 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        let config: GithubConfig = match serde_json::from_value(init.config) {
+        let mut config: GithubConfig = match serde_json::from_value(init.config) {
             Ok(c) => c,
             Err(e) => {
                 return Reply::respond(Response::error(
@@ -154,6 +154,19 @@ where
                 ));
             }
         };
+        // The boards come from the Orchestrator's `[[projects]]` and their
+        // repositories from `[[repositories]].project` (#554), not from
+        // `[github]`.
+        config.projects =
+            match crate::config::ProjectConfig::resolve(&init.projects, &init.repositories) {
+                Ok(p) => p,
+                Err(errors) => {
+                    return Reply::respond(Response::error(
+                        id,
+                        Error::new(error_code::CONFIG_INVALID, errors.join("; ")),
+                    ));
+                }
+            };
         let transport = self
             .factory
             .build(&config.api_url, &config.token, config.max_retries);
@@ -198,10 +211,18 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        let config: GithubConfig = match serde_json::from_value(parsed.config) {
+        let mut config: GithubConfig = match serde_json::from_value(parsed.config) {
             Ok(c) => c,
             Err(e) => return ok_validate(id, vec![format!("config does not parse: {e}")]),
         };
+        // Same resolution as `initialize` (#554): validating the raw `[github]`
+        // table alone would report "declare at least one board" for every
+        // correct config, since the boards are not in it.
+        config.projects =
+            match crate::config::ProjectConfig::resolve(&parsed.projects, &parsed.repositories) {
+                Ok(p) => p,
+                Err(errors) => return ok_validate(id, errors),
+            };
         let mut errors = static_config_errors(&config);
         // Only ping the API if the config is otherwise well-formed (F-63).
         if errors.is_empty() {

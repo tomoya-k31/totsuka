@@ -39,6 +39,7 @@ fn spec(protocol_req: &str) -> PluginSpec {
         init_config: serde_json::json!({}),
         repositories: vec![],
         llm: None,
+        projects: vec![],
         workflows: vec![],
         poll_interval_secs: None,
         timeout: Duration::from_secs(10),
@@ -56,6 +57,7 @@ async fn initialize_carries_the_supplied_repositories_and_llm() {
         name: "web-app".into(),
         summary: Some("customer web app".into()),
         path: Some("/repos/web-app".into()),
+        project: None,
     }];
     with_supplies.llm = Some(plugin_protocol::methods::LlmInfo {
         base_url: "https://openrouter.ai/api/v1".into(),
@@ -98,12 +100,17 @@ async fn lifecycle_initialize_shutdown_and_config_validate() {
 
     // config/validate delegation (F-59).
     let ok = plugin
-        .config_validate(serde_json::json!({}), vec![])
+        .config_validate(serde_json::json!({}), vec![], vec![], vec![])
         .await
         .unwrap();
     assert!(ok.valid);
     let bad = plugin
-        .config_validate(serde_json::json!({ "invalid": true }), vec![])
+        .config_validate(
+            serde_json::json!({ "invalid": true }),
+            vec![],
+            vec![],
+            vec![],
+        )
         .await
         .unwrap();
     assert!(!bad.valid);
@@ -170,7 +177,7 @@ async fn crash_fails_task_and_host_survives() {
         .expect("relaunch");
     assert!(
         plugin2
-            .config_validate(serde_json::json!({}), vec![])
+            .config_validate(serde_json::json!({}), vec![], vec![], vec![])
             .await
             .unwrap()
             .valid
@@ -283,7 +290,7 @@ async fn plugin_initiated_request_is_surfaced_and_answered() {
     // Bidirectional interleaving: an O→P call round-trips while the plugin's
     // own request is still unanswered.
     let ok = plugin
-        .config_validate(serde_json::json!({}), vec![])
+        .config_validate(serde_json::json!({}), vec![], vec![], vec![])
         .await
         .unwrap();
     assert!(ok.valid);

@@ -76,6 +76,9 @@ pub struct PluginSpec {
     /// (#109). Populated for task_source plugins only; empty otherwise
     /// (the field is omitted from the wire when empty).
     pub repositories: Vec<plugin_protocol::methods::RepoInfo>,
+    /// The `[[projects]]` trackers this task_source owns (#554). Empty for
+    /// other kinds (omitted from the wire).
+    pub projects: Vec<plugin_protocol::methods::ProjectInfo>,
     /// The orchestrator's `[llm]` settings supplied at `initialize` as a
     /// source-side classification default (#119). Populated for task_source
     /// plugins only; `None` otherwise (omitted from the wire when unset).
@@ -587,6 +590,7 @@ impl Plugin {
             protocol_version: orchestrator,
             config: spec.init_config,
             repositories: spec.repositories,
+            projects: spec.projects,
             llm: spec.llm,
             workflows: spec.workflows,
             poll_interval_secs: spec.poll_interval_secs,
@@ -710,14 +714,21 @@ impl Plugin {
 
     /// Ask the plugin to validate a plugin-specific config (F-59).
     ///
-    /// `workflows` repeats what `initialize` supplied so the plugin answers
-    /// about what it is being asked, not about what it happened to remember.
+    /// The lists repeat what `initialize` supplied so the plugin answers about
+    /// what it is being asked, not about what it happened to remember.
     pub async fn config_validate(
         &self,
         config: Value,
         workflows: Vec<plugin_protocol::methods::WorkflowInfo>,
+        projects: Vec<plugin_protocol::methods::ProjectInfo>,
+        repositories: Vec<plugin_protocol::methods::RepoInfo>,
     ) -> Result<plugin_protocol::methods::ConfigValidateResult, HostError> {
-        let params = plugin_protocol::methods::ConfigValidateParams { config, workflows };
+        let params = plugin_protocol::methods::ConfigValidateParams {
+            config,
+            workflows,
+            projects,
+            repositories,
+        };
         self.call(plugin_protocol::method::CONFIG_VALIDATE, &params)
             .await
     }
@@ -786,13 +797,17 @@ pub async fn validate_all(specs: Vec<(PluginSpec, Value)>) -> Vec<ValidatedPlugi
     for (spec, config) in specs {
         let name = spec.name.clone();
         let workflows = spec.workflows.clone();
+        let projects = spec.projects.clone();
+        let repositories = spec.repositories.clone();
         let mut claimed_repos = Vec::new();
         let mut claimed_options = Vec::new();
         let result = async {
             let plugin = Plugin::launch(spec).await?;
             claimed_repos = plugin.claimed_repos().to_vec();
             claimed_options = plugin.claimed_options().to_vec();
-            let validation = plugin.config_validate(config, workflows).await;
+            let validation = plugin
+                .config_validate(config, workflows, projects, repositories)
+                .await;
             let _ = plugin.shutdown(VALIDATE_SHUTDOWN_GRACE).await;
             validation
         }

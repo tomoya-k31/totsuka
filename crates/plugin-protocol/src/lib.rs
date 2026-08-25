@@ -103,9 +103,9 @@ pub use methods::method;
 pub use methods::{
     AgentState, ConfigValidateParams, ConfigValidateResult, DiagnosticsSnapshotParams,
     DiagnosticsSnapshotResult, ExecutionMode, InitializeParams, InitializeResult, NotifierEvent,
-    NotifyParams, RepoInfo, ResultPublishParams, SessionAttachParams, SessionAttachResult,
-    StateNotification, StateSubscribeParams, TaskCancelParams, TaskDispatchParams,
-    TaskDispatchResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus,
+    NotifyParams, ProjectInfo, RepoInfo, ResultPublishParams, SessionAttachParams,
+    SessionAttachResult, StateNotification, StateSubscribeParams, TaskCancelParams,
+    TaskDispatchParams, TaskDispatchResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus,
     TaskUpdateStatusParams, WorkflowInfo, WorkflowOption,
 };
 pub use task::Task;

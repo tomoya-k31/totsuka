@@ -592,7 +592,7 @@ mod tests {
     use super::*;
 
     fn config(json: serde_json::Value) -> NotionConfig {
-        serde_json::from_value(json).unwrap()
+        crate::config::config_from_json(json)
     }
 
     #[test]

@@ -58,32 +58,6 @@ pub struct PluginConfigDraft {
 struct GithubFile<'a> {
     token: String,
     github_login: &'a str,
-    /// The boards to poll (#542). The wizard asks about one, so this is always
-    /// a single entry — the plugin's schema is a list because several boards
-    /// are configurable by hand.
-    ///
-    /// **Last field on purpose**: TOML puts every scalar written after an
-    /// array-of-tables *inside* that table, and the `toml` serializer emits
-    /// fields in declaration order. A scalar declared below this one would be
-    /// written into the `[[projects]]` block and rejected by the plugin as an
-    /// unknown key.
-    projects: Vec<GithubProjectFile<'a>>,
-}
-
-/// One `[[github.projects]]` entry in the generated `[github]` table.
-#[derive(Debug, Serialize)]
-struct GithubProjectFile<'a> {
-    owner: &'a str,
-    owner_type: &'static str,
-    project_number: i64,
-    /// Which repositories this board tracks — required and non-empty since
-    /// #542, because it is also the repository → board mapping.
-    ///
-    /// The wizard fills it with **every** repository the operator configured.
-    /// That matches what a single-board setup meant before #542 (an omitted
-    /// `repos` accepted any repository on the board) and it is the only answer
-    /// derivable without asking a question the wizard does not ask.
-    repos: Vec<&'a str>,
 }
 
 /// The required half of `[slack]`.
@@ -116,16 +90,6 @@ pub fn drafts_for(answers: &Answers, recipe: &Recipe) -> Vec<PluginConfigDraft> 
                     &GithubFile {
                         token: reference("github-token"),
                         github_login: &gh.github_login,
-                        projects: vec![GithubProjectFile {
-                            owner: &gh.owner,
-                            owner_type: gh.owner_type.as_str(),
-                            project_number: gh.project_number,
-                            repos: answers
-                                .repositories
-                                .iter()
-                                .map(|r| r.name.as_str())
-                                .collect(),
-                        }],
                     },
                 )
             }),
@@ -263,24 +227,18 @@ mod tests {
                 // … then deserialized by the plugin itself.
                 match draft.name {
                     "github" => {
-                        let config = serde_json::from_value::<
-                            task_source_github::config::GithubConfig,
-                        >(json)
-                        .unwrap_or_else(|e| {
-                            panic!("{}: github rejects it: {e}\n{}", recipe.label, draft.body)
-                        });
-                        // Deserializing is not the whole contract. `projects`
-                        // and `repos` are lists, so an *empty* one parses
-                        // cleanly and is then rejected by `config validate` —
-                        // exactly the "setup reported success, the plugin
-                        // refuses later" failure this test exists to stop.
-                        let errors = task_source_github::client::static_config_errors(&config);
-                        assert!(
-                            errors.is_empty(),
-                            "{}: github accepts the file but validation rejects it: {errors:?}\n{}",
-                            recipe.label,
-                            draft.body
-                        );
+                        serde_json::from_value::<task_source_github::config::GithubConfig>(json)
+                            .unwrap_or_else(|e| {
+                                panic!("{}: github rejects it: {e}\n{}", recipe.label, draft.body)
+                            });
+                        // The other half of the contract — that the boards are
+                        // configured, not merely parseable — is asserted where
+                        // the boards are written since #554: on `build_config`
+                        // output, in
+                        // `setup::tests::the_board_is_written_and_every_repository_binds_to_it`.
+                        // Running `static_config_errors` here would report an
+                        // empty board list for every correct setup, because
+                        // this table no longer holds one.
                     }
                     "slack" => {
                         serde_json::from_value::<task_source_slack::config::SlackConfig>(json)
@@ -292,65 +250,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// The generated board claims the repositories the operator configured.
-    /// An empty `repos` would parse and then fail validation, and a board that
-    /// claims nothing routes nothing (#542).
-    #[test]
-    fn the_generated_board_tracks_every_configured_repository() {
-        let recipe = RECIPES
-            .iter()
-            .find(|r| r.plugins.iter().any(|p| p.name == "github"))
-            .expect("a recipe with the github plugin");
-        let mut answers = answers_for(recipe.key);
-        answers.repositories.push(RepositoryAnswer {
-            name: "dotfiles".to_string(),
-            path: "/tmp/dotfiles".to_string(),
-            summary: None,
-        });
-        let draft = drafts_for(&answers, recipe)
-            .into_iter()
-            .find(|d| d.name == "github")
-            .expect("a github draft");
-        // Asserted through the plugin's own deserializer rather than on the
-        // rendered text: `toml` breaks a two-element array across lines, so a
-        // string match would be testing the formatter, not the contents.
-        let config: task_source_github::config::GithubConfig =
-            serde_json::from_value(draft_json(&draft).unwrap()).unwrap();
-        assert_eq!(config.projects.len(), 1);
-        assert_eq!(config.projects[0].repos, ["totsuka", "dotfiles"]);
-    }
-
-    /// TOML puts a scalar written after an array-of-tables *inside* it, so the
-    /// field order in `GithubFile` is load-bearing: `github_login` must land in
-    /// `[github]`, not inside `[[github.projects]]`.
-    ///
-    /// Checked through the parser rather than by comparing byte offsets: since
-    /// #554 the section is nested, and a text search for `[[projects]]` would
-    /// now miss the very hazard it was written for.
-    #[test]
-    fn top_level_keys_are_written_before_the_projects_block() {
-        let recipe = RECIPES
-            .iter()
-            .find(|r| r.plugins.iter().any(|p| p.name == "github"))
-            .expect("a recipe with the github plugin");
-        let draft = drafts_for(&answers_for(recipe.key), recipe)
-            .into_iter()
-            .find(|d| d.name == "github")
-            .expect("a github draft");
-        let document: toml::Table = draft.body.parse().expect("the section parses");
-        let github = document["github"].as_table().expect("[github] is a table");
-        assert!(
-            github.contains_key("github_login"),
-            "github_login was swallowed by the projects block:\n{}",
-            draft.body
-        );
-        assert!(
-            github["projects"][0].get("github_login").is_none(),
-            "github_login landed inside [[github.projects]]:\n{}",
-            draft.body
-        );
     }
 
     #[test]
@@ -395,21 +294,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn the_owner_type_the_user_picked_is_what_gets_written() {
-        // Defaulting this wrong is not a formatting nit: `user(login:)` and
-        // `organization(login:)` are different GraphQL roots, so an org board
-        // polled as a user returns nothing, with no error to explain it.
-        let mut answers = answers_for(RECIPES[0].key);
-        let github = answers.github.as_mut().unwrap();
-        github.owner_type = GitHubOwnerType::Organization;
-        let drafts = drafts_for(&answers, &RECIPES[0]);
-        assert!(drafts[0].body.contains(r#"owner_type = "organization""#));
-
-        answers.github.as_mut().unwrap().owner_type = GitHubOwnerType::User;
-        let drafts = drafts_for(&answers, &RECIPES[0]);
-        assert!(drafts[0].body.contains(r#"owner_type = "user""#));
     }
 }

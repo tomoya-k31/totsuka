@@ -124,6 +124,10 @@ pub struct InitializeParams {
     /// source's alone and arrives empty for an agent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<WorkflowInfo>,
+    /// The trackers this **task_source** plugin owns (`[[projects]]` entries
+    /// whose `source` is this plugin), 0.6.0 / #554. Empty for other kinds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<ProjectInfo>,
     /// The `[plugins.{name}].poll_interval_secs` value: a push source's
     /// *internal* fetch cadence (the Orchestrator itself never polls).
     /// Additive since protocol 0.1.6. `None` for non-task_source plugins or
@@ -170,6 +174,40 @@ pub struct RepoInfo {
     /// the path as optional material).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The tracker this repository files into (`[[repositories]].project`,
+    /// 0.6.0 / #554) — the `name` of one of the [`ProjectInfo`] entries.
+    ///
+    /// `None` means no tracker is configured for it, which is the normal
+    /// state for a repository nobody files issues about. A source plugin uses
+    /// this as the *ingest filter* too: an item from a repository not bound to
+    /// one of its projects is none of its business.
+    ///
+    /// This replaces the reverse list each plugin used to keep
+    /// (`[[projects]].repos`, #542 / ADR-0056). One repository files into one
+    /// tracker, so binding it here makes "two plugins claim this repository"
+    /// unrepresentable rather than reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+/// One tracker this plugin owns, from `config.toml`'s `[[projects]]`
+/// (0.6.0, #554).
+///
+/// Only the entries whose `source` is this plugin are sent, so a plugin never
+/// has to filter — and the Orchestrator never has to understand what is
+/// inside [`options`](Self::options).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    /// The entry's `name`, which is what `[[repositories]].project` points at.
+    pub name: String,
+    /// Everything else written on the entry, verbatim.
+    ///
+    /// **No claim handshake here, unlike `[[workflows]]`.** A project entry
+    /// names exactly one plugin (`source`), so there is no ambiguity to
+    /// resolve: the whole table is that plugin's, and its own
+    /// `deny_unknown_fields` is what rejects a typo.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub options: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The Orchestrator's `[llm]` (AI Gateway) settings, as supplied to
@@ -269,6 +307,19 @@ pub struct ConfigValidateParams {
     /// asked about.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<WorkflowInfo>,
+    /// The trackers this plugin owns and the repositories bound to them
+    /// (0.6.0, #554) — the same lists `initialize` supplied, for the same
+    /// reason as `workflows`.
+    ///
+    /// A source needs both to say anything useful about its config: the
+    /// boards are in `[[projects]]` and their repositories in
+    /// `[[repositories]].project`, so validating the plugin's own table alone
+    /// would report "no boards configured" for every correct setup.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<ProjectInfo>,
+    /// The Orchestrator's repositories, with their `project` bindings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<RepoInfo>,
 }
 
 /// `config/validate` result (P→O).
@@ -796,6 +847,14 @@ mod tests {
                 name: "web-app".into(),
                 summary: Some("customer web app".into()),
                 path: Some("/repos/web-app".into()),
+                project: Some("tomo-prj".into()),
+            }],
+            projects: vec![ProjectInfo {
+                name: "tomo-prj".into(),
+                options: serde_json::json!({ "project_number": 7 })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
             }],
             llm: Some(LlmInfo {
                 base_url: "https://openrouter.ai/api/v1".into(),
@@ -827,6 +886,8 @@ mod tests {
         round_trip(&ConfigValidateParams {
             config: serde_json::json!({}),
             workflows: vec![],
+            projects: vec![],
+            repositories: vec![],
         });
         // The absent-when-unset contract for the optional fields
         // (`repositories`, `llm`, `workflows`, `poll_interval_secs`): absent
@@ -835,6 +896,7 @@ mod tests {
         let old: InitializeParams =
             serde_json::from_str(r#"{"protocol_version":"0.1.0","config":{}}"#).unwrap();
         assert!(old.repositories.is_empty());
+        assert!(old.projects.is_empty());
         assert!(old.llm.is_none());
         assert!(old.workflows.is_empty());
         assert!(old.poll_interval_secs.is_none());
@@ -842,12 +904,14 @@ mod tests {
             protocol_version: Version::new(0, 1, 2),
             config: serde_json::json!({}),
             repositories: vec![],
+            projects: vec![],
             llm: None,
             workflows: vec![],
             poll_interval_secs: None,
         };
         let wire = serde_json::to_string(&empty).unwrap();
         assert!(!wire.contains("repositories"));
+        assert!(!wire.contains("projects"));
         assert!(!wire.contains("llm"));
         assert!(!wire.contains("workflows"));
         assert!(!wire.contains("poll_interval_secs"));

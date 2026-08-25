@@ -192,6 +192,30 @@ pub enum ValidationError {
     )]
     TopLevelKeyNotATable { name: String, found: &'static str },
 
+    /// Two `[[projects]]` entries share a `name` (#554), so a repository
+    /// pointing at it would file into whichever the code happened to reach
+    /// first.
+    #[error(
+        "two [[projects]] entries are both named `{name}` → a repository's `project` names one tracker; rename one of them"
+    )]
+    DuplicateProject { name: String },
+
+    /// A `[[repositories]].project` names no `[[projects]]` entry (#554).
+    #[error(
+        "repository `{repo}` has project = `{project}`, which no [[projects]] entry declares → add that entry, or fix the name"
+    )]
+    UnknownProjectRef { repo: String, project: String },
+
+    /// A `[[projects]].source` names no enabled task_source (#554).
+    ///
+    /// The field is `plugin`, not `source`: thiserror reads a field literally
+    /// named `source` as the error's *cause*, and would try to make a `String`
+    /// implement `Error`.
+    #[error(
+        "project `{name}` has source = `{plugin}`, which is not an enabled task_source → enable `[plugins.{plugin}]` with kind = \"task_source\", or fix the name"
+    )]
+    ProjectSourceNotASource { name: String, plugin: String },
+
     /// A roster entry uses a name that is already a `config.toml` top-level
     /// key (#554).
     ///
@@ -281,6 +305,37 @@ where
     for wf in &cfg.workflows {
         if let Some(rubric) = wf.rubric.as_deref() {
             check_rubric_placeholders(&wf.name, rubric, &mut errors);
+        }
+    }
+
+    // `[[projects]]` and the references into it (#554). The whole chain
+    // — repository → project → plugin — resolves without launching anything,
+    // which is the point of writing `source` out rather than inferring it.
+    let mut seen_projects = HashSet::new();
+    for project in &cfg.projects {
+        if !seen_projects.insert(project.name.as_str()) {
+            errors.push(ValidationError::DuplicateProject {
+                name: project.name.clone(),
+            });
+        }
+        let is_source = cfg
+            .plugin(&project.source)
+            .is_some_and(|p| p.enabled && p.kind == crate::config::PluginKind::TaskSource);
+        if !is_source {
+            errors.push(ValidationError::ProjectSourceNotASource {
+                name: project.name.clone(),
+                plugin: project.source.clone(),
+            });
+        }
+    }
+    for repo in &cfg.repositories {
+        if let Some(project) = &repo.project
+            && !cfg.projects.iter().any(|p| &p.name == project)
+        {
+            errors.push(ValidationError::UnknownProjectRef {
+                repo: repo.name.clone(),
+                project: project.clone(),
+            });
         }
     }
 

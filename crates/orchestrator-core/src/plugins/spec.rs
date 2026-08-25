@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use plugin_protocol::manifest::PluginKind;
-use plugin_protocol::methods::{LlmInfo, RepoInfo, WorkflowInfo};
+use plugin_protocol::methods::{LlmInfo, ProjectInfo, RepoInfo, WorkflowInfo};
 use serde_json::Value;
 
 use crate::adapters::plugin_host::PluginSpec;
@@ -72,11 +72,16 @@ pub fn plugin_spec(
     // task_source plugins additionally get the orchestrator's repository list
     // (#109), `[llm]` settings (#119), and `poll_interval_secs` (0.1.6), so a
     // push source knows its watch cadence without a call carrying it.
-    let (repositories, llm, poll_interval_secs) = if is_source {
+    let (repositories, projects, llm, poll_interval_secs) = if is_source {
         let poll = cfg.plugin(name).and_then(|p| p.poll_interval_secs);
-        (repo_infos(cfg, env), llm_info(cfg, env), poll)
+        (
+            repo_infos(cfg, env),
+            project_infos(cfg, name),
+            llm_info(cfg, env),
+            poll,
+        )
     } else {
-        (vec![], None, None)
+        (vec![], vec![], None, None)
     };
     Ok(PluginSpec {
         name: name.to_string(),
@@ -85,11 +90,32 @@ pub fn plugin_spec(
         manifest,
         init_config,
         repositories,
+        projects,
         llm,
         workflows,
         poll_interval_secs,
         timeout,
     })
+}
+
+/// The `[[projects]]` entries `name` owns, with their opaque options (#554).
+///
+/// Filtered here rather than sent whole and filtered plugin-side: `source` is
+/// the Orchestrator's key on the entry, so deciding whose it is *is* its job —
+/// and a plugin that received other plugins' trackers would have to be trusted
+/// to ignore them.
+fn project_infos(cfg: &RootConfig, name: &str) -> Vec<ProjectInfo> {
+    cfg.projects
+        .iter()
+        .filter(|p| p.source == name)
+        .map(|p| ProjectInfo {
+            name: p.name.clone(),
+            options: match serde_json::to_value(&p.options) {
+                Ok(Value::Object(map)) => map,
+                _ => serde_json::Map::new(),
+            },
+        })
+        .collect()
 }
 
 /// The workflows naming `name`, in `[[workflows]]` definition order.
@@ -149,6 +175,7 @@ fn repo_infos(cfg: &RootConfig, env: &HashMap<String, String>) -> Vec<RepoInfo> 
                 name: repo.name.clone(),
                 summary: repo.summary.clone(),
                 path: Some(path),
+                project: repo.project.clone(),
             }
         })
         .collect()

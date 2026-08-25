@@ -14,8 +14,9 @@ pub mod schema;
 pub mod validate;
 
 pub use edit::{
-    EditError, RepositoryDraft, WorkflowDraft, set_default_tool, set_hooks_auth_token_ref, set_llm,
-    set_plugin_enabled, set_tool, upsert_repository, upsert_workflow,
+    EditError, ProjectDraft, RepositoryDraft, WorkflowDraft, set_default_tool,
+    set_hooks_auth_token_ref, set_llm, set_plugin_enabled, set_tool, upsert_project,
+    upsert_repository, upsert_workflow,
 };
 
 pub use env_overrides::{ENV_PREFIX, apply_env_overrides, override_keys};
@@ -26,7 +27,7 @@ pub use schema::{
     CURRENT_SCHEMA_VERSION, CleanupPolicyConfig, CleanupPolicyName, ConfigError,
     DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_POLL_INTERVAL_SECS,
     DEFAULT_WORKFLOW_TIMEOUT_SECS, HooksConfig, LlmConfig, LogSettings, OutputPolicy, PluginConfig,
-    PluginKind, Profile, RepositoryConfig, RootConfig, ToolConfig, VerificationMode,
+    PluginKind, Profile, ProjectConfig, RepositoryConfig, RootConfig, ToolConfig, VerificationMode,
     WorkflowConfig, WorkflowMode, WorktreeConfig, is_reserved_top_level_key,
 };
 pub use validate::{
