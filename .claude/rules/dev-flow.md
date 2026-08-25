@@ -89,13 +89,35 @@ for why. CI's own flags stay exactly as they are:
     `TOTSUKA_*` variables print a warning to the child's stderr (ADR-0009) and
     break the tests that parse stderr as JSON
     (→ [ADR-0018](../../ai-docs/decisions/adr-0018-ci-test-time.md)).
-  - **`target/` needs an occasional `cargo clean`.** Nothing garbage-collects
-    it: it had reached 1,131,673 files / 80.2 GiB, accumulated one artifact
-    space per flag set. #459 reconstructed a ~20-minute local test run from
-    artifact mtimes at that size; measured immediately after the clean, the same
-    command took 32s. The bloated run was never timed directly, so treat the
-    size as the leading suspect rather than a proven cause — but the clean took
-    222s, which is cheap against either number.
+  - **`target/` is cleaned by the script itself — you no longer do it by hand**
+    (→ [ADR-0060](../../ai-docs/decisions/adr-0060-target-dir-cleanup.md)). After
+    the tests pass it sweeps `target/debug/deps/*.o` every run (0.53s) and runs
+    `cargo clean` on a 7-day interval (or when `target/debug/incremental` passes
+    300 sessions). Both are Darwin-only; `DEV_TEST_SKIP_TARGET_CLEANUP=1` turns
+    the whole thing off and `DEV_TEST_CLEAN_MAX_AGE_DAYS=<n>` changes the
+    interval.
+    - **why it exists**: macOS cargo defaults the dev profile to
+      `split-debuginfo = "unpacked"`, so workspace `.o` files pile up in
+      `target/debug/deps` and cargo never GCs them — measured at **839,365 files
+      / 15G accumulated in one month**, ~8,900 added per full rebuild. Entry
+      count translates straight into build time. Controlled experiment, same
+      workspace and same edit, varying **only** the entry count: 53,733 → 6.6s,
+      250,029 → 21s, 852,733 → **40–126s**. That, not the tests, is what a
+      15-minute `dev-test.sh` run was.
+    - **the `.o` sweep costs no cache.** `.o` is not a build input: deleting all
+      of them and immediately running `cargo build --workspace --all-targets`
+      is a **0.33s no-op**, measured. What it does cost is the `at <file>:<line>`
+      on `RUST_BACKTRACE` frames of our own crates (function names survive, and
+      the `panicked at …:434:5` line is `file!()`-derived and unaffected); it
+      comes back the next time that crate is rebuilt. A run whose build or tests
+      failed never reaches the sweep, so debugging keeps its debuginfo.
+    - **`incremental/` is never swept** — it *is* a build input, and wiping it
+      costs 12.6s on the next full rebuild (5.57s → 18.14s, measured). It only
+      grows on disk (19–30 MB/dir; it had reached 1,126 dirs / 21G), and
+      `cargo clean` is the only way to reclaim it.
+    - the two compose: because `.o` never accumulates, the periodic
+      `cargo clean` deletes ~11k files in **0.88s** instead of the 222s it took
+      on a neglected tree. The full build right after it is 27.8s.
 - `cargo doc --workspace --no-deps` — rustdoc link integrity. `[workspace.lints.rust]
   warnings = "deny"` already makes a broken intra-doc link a hard error
   (exit 101), but **CI never runs `cargo doc`**, so nothing fires it: 18
