@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0bf92ed698e9f158a3ba576e1a14339c90552d5dbf99307d6e0958bbf5dc36ad -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:bf1c9c1937f5edd13b68b7b954232a6442250d1158bd9ca436e300add48d1018 -->
 
 # 設定リファレンス
 
@@ -636,11 +636,12 @@ poll_interval_secs = 60   # 60 は既定値でもある
 |---|---|---|---|
 | `token` | string | 必須 | API トークン。bearer として送る以外には使わない。必要な権限は下記。`cmd:gh auth token` が使える |
 | `status_field` | string | `Status` | ステータス列を保持する single-select フィールド名。**全ボード共通** |
-| `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出に使う |
+| `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出と、claim（タスクを取るときに totsuka が self-assign する先）に使う。**1 login = 1 インスタンス**: 同じログインで複数の totsuka を動かす構成は非対応 — claim の裁定が互いを区別できない |
 | `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして取り込まないステータス名。**全ボード共通** |
 | `status_map` | テーブル | `{}` | totsuka 側のステータス名 → Project のオプション名。**対応の無い名前はそのまま使われる**。**全ボード共通** |
 | `source_name` | string | `github` | 各タスクに刻印されるソース名。ボードを増やしても変わらないので、`[[workflows]].source = "github"` は 1 本のまま |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用） |
+| `claim_verify_delay_ms` | int? | `750` | claim（self-assign）の書き込みから読み戻しまでの待ち ms。読み戻しがチームメイトとの競合と黙殺の両方を検出するので、API に反映される前に読んではいけない。`0` も有効（早すぎる読みは再試行 1 回を足すだけ） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の再試行回数 |
 | `[github.prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
 

@@ -4,11 +4,17 @@
 //! client dependency is needed (mirrors the LLM adapter in orchestrator-core).
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Value, json};
 
 use plugin_protocol::Task;
+use plugin_protocol::methods::{TaskClaimOutcome, TaskClaimResult};
+
+use crate::claim::{
+    ADD_ASSIGNEES_MUTATION, AdjudicationError, CLAIM_READ_QUERY, ClaimState,
+    REMOVE_ASSIGNEES_MUTATION, USER_ID_QUERY, adjudicate, parse_claim_state,
+};
 
 use crate::config::{GithubConfig, ProjectConfig};
 use crate::error::GithubError;
@@ -82,6 +88,9 @@ pub struct GithubClient<T> {
     /// board, which is what the memo is an optimisation over — never a
     /// precondition.
     item_project: Mutex<HashMap<String, usize>>,
+    /// The operator's user node id, resolved once per process for the claim
+    /// mutations (#556). A failed resolution is retried on the next claim.
+    my_user_id: OnceLock<String>,
 }
 
 impl<T: GithubTransport> GithubClient<T> {
@@ -91,6 +100,7 @@ impl<T: GithubTransport> GithubClient<T> {
             config,
             transport,
             item_project: Mutex::new(HashMap::new()),
+            my_user_id: OnceLock::new(),
         }
     }
 
@@ -421,6 +431,137 @@ impl<T: GithubTransport> GithubClient<T> {
         Ok(true)
     }
 
+    /// Claim `task_id` (an issue node id) for exclusive execution (#556,
+    /// ADR-0059): self-assign, read back, and adjudicate races by the
+    /// earliest effective `AssignedEvent` (see [`crate::claim`]).
+    ///
+    /// Contract with the Orchestrator: the three [`TaskClaimOutcome`]s are
+    /// **settled answers**; anything transient — transport failures, and an
+    /// adjudication that cannot be decided because a competitor's event is
+    /// not visible yet — is an `Err`, which the Orchestrator answers by
+    /// leaving the task queued and retrying next cycle.
+    pub async fn claim(&self, task_id: &str) -> Result<TaskClaimResult, GithubError> {
+        let me = self.config.github_login.as_str();
+
+        // Pre-read. Already holding — a human pre-assigned this operator, a
+        // previous run claimed it, or this is a retry — is a Won without a
+        // write: adjudication is a tool for breaking the race between
+        // *automated* claimers starting from unassigned, and must not
+        // overrule a human's explicit routing (me + a reviewer, say).
+        let state = self.read_claim_state(task_id).await?;
+        if state.holds(me) {
+            return Ok(won());
+        }
+        if let Some(other) = state.assignees.first() {
+            // Someone else already holds it; the fetch that queued this task
+            // was simply stale. Nothing was written, nothing to undo.
+            return Ok(lost(other.clone()));
+        }
+
+        // Unassigned: write the claim, then read back after the measured
+        // propagation delay.
+        let my_id = self.my_user_id(me).await?;
+        self.assign_mutation(ADD_ASSIGNEES_MUTATION, task_id, &my_id)
+            .await?;
+        tokio::time::sleep(self.config.claim_verify_delay()).await;
+        let mut state = self.read_claim_state(task_id).await?;
+
+        if !state.holds(me) {
+            // The API answered 200 and the assignee is still not there. One
+            // slower re-read distinguishes propagation from the silent
+            // discard GitHub performs for assignees without push access —
+            // only then is it the permanent, human-must-act answer.
+            tokio::time::sleep(self.config.claim_verify_delay() * 2).await;
+            state = self.read_claim_state(task_id).await?;
+            if !state.holds(me) {
+                return Ok(TaskClaimResult {
+                    outcome: TaskClaimOutcome::Forbidden,
+                    holder: None,
+                });
+            }
+        }
+
+        if state.assignees.len() == 1 {
+            return Ok(won()); // sole assignee — no race to adjudicate
+        }
+        match adjudicate(&state) {
+            Ok(winner) if winner.eq_ignore_ascii_case(me) => Ok(won()),
+            Ok(winner) => {
+                let winner = winner.to_string();
+                // Step aside: remove only this operator's own assignment.
+                // Best-effort — the winner is already running either way, so
+                // a failed removal costs board tidiness, not correctness.
+                if let Err(e) = self
+                    .assign_mutation(REMOVE_ASSIGNEES_MUTATION, task_id, &my_id)
+                    .await
+                {
+                    tracing::warn!(
+                        task_id,
+                        "lost the claim but could not remove own assignee: {e}"
+                    );
+                }
+                Ok(lost(winner))
+            }
+            // A current assignee's event is not visible yet. Err — not a
+            // forfeit: if both racers yielded on mutual invisibility the
+            // task would be held by nobody and re-ingested by nobody. The
+            // Orchestrator retries next cycle, when the event is there.
+            Err(AdjudicationError::MissingEvent(login)) => {
+                Err(GithubError::InvalidResponse(format!(
+                    "assignee `{login}`'s AssignedEvent is not visible yet — the claim \
+                     cannot be adjudicated on this read; it will be retried"
+                )))
+            }
+        }
+    }
+
+    /// Read the issue's assignees + assignment history (see [`crate::claim`]).
+    async fn read_claim_state(&self, task_id: &str) -> Result<ClaimState, GithubError> {
+        let body = json!({ "query": CLAIM_READ_QUERY, "variables": { "id": task_id } });
+        let resp = self.transport.post_graphql(body, true).await?;
+        let data = check_errors(&resp)?;
+        parse_claim_state(data).ok_or_else(|| {
+            GithubError::NotFound(format!(
+                "issue `{task_id}` cannot be read (deleted, or not an Issue node) → \
+                 `totsuka task cancel` the task if the issue is gone"
+            ))
+        })
+    }
+
+    /// The operator's user node id, resolved once per process.
+    async fn my_user_id(&self, login: &str) -> Result<String, GithubError> {
+        if let Some(id) = self.my_user_id.get() {
+            return Ok(id.clone());
+        }
+        let body = json!({ "query": USER_ID_QUERY, "variables": { "login": login } });
+        let resp = self.transport.post_graphql(body, true).await?;
+        let data = check_errors(&resp)?;
+        let id = data["user"]["id"].as_str().ok_or_else(|| {
+            GithubError::NotFound(format!(
+                "user `{login}` was not found → check `github_login` in `[github]` of config.toml"
+            ))
+        })?;
+        // A concurrent resolution racing here stores the same value; ignore.
+        let _ = self.my_user_id.set(id.to_string());
+        Ok(id.to_string())
+    }
+
+    /// Run one of the two assignee mutations for this operator only.
+    async fn assign_mutation(
+        &self,
+        mutation: &str,
+        task_id: &str,
+        my_id: &str,
+    ) -> Result<(), GithubError> {
+        let body = json!({
+            "query": mutation,
+            "variables": { "a": task_id, "u": [my_id] },
+        });
+        let resp = self.transport.post_graphql(body, false).await?;
+        check_errors(&resp)?;
+        Ok(())
+    }
+
     /// Confirm the token works by reading `viewer.login` (F-59). Static config
     /// problems are reported separately by [`static_config_errors`].
     pub async fn validate(&self) -> Result<(), GithubError> {
@@ -455,6 +596,22 @@ impl<T: GithubTransport> GithubClient<T> {
             )));
         }
         Ok(project)
+    }
+}
+
+/// A settled `won` answer.
+fn won() -> TaskClaimResult {
+    TaskClaimResult {
+        outcome: TaskClaimOutcome::Won,
+        holder: None,
+    }
+}
+
+/// A settled `lost` answer naming the holder.
+fn lost(holder: String) -> TaskClaimResult {
+    TaskClaimResult {
+        outcome: TaskClaimOutcome::Lost,
+        holder: Some(holder),
     }
 }
 

@@ -5,6 +5,7 @@
 //! all logic lives here behind a [`transport::GithubTransport`] seam so it is
 //! testable against recorded responses without a network.
 
+pub mod claim;
 pub mod client;
 pub mod config;
 pub mod error;

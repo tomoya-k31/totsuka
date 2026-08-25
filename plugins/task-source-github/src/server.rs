@@ -15,7 +15,7 @@ use std::time::Duration;
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
     ClaimedRepo, ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    TaskUpdateStatusParams, WorkflowInfo,
+    TaskClaimParams, TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
 use plugin_sdk::{LineHandler, Reply, SubmitClient, poll_loop};
@@ -111,6 +111,7 @@ where
             method::CONFIG_VALIDATE => self.config_validate(id, params).await,
             method::SHUTDOWN => Reply::shutdown_ack(id),
             method::TASK_UPDATE_STATUS => self.update_status(id, params).await,
+            method::TASK_CLAIM => self.task_claim(id, params).await,
             // Named rather than left to `unknown method`. An older config with
             // `output = "source"` reaches here only after the agent has done
             // all the work, and the orchestrator reports whatever comes back
@@ -242,6 +243,28 @@ where
         ok_validate(id, errors)
     }
 
+    /// `task/claim` (#556): delegate to
+    /// [`GithubClient::claim`](crate::client::GithubClient::claim). Errors —
+    /// including "the adjudication cannot be decided on this read" — go back
+    /// as JSON-RPC errors, which the Orchestrator answers by leaving the task
+    /// queued and retrying next cycle.
+    async fn task_claim(&mut self, id: RequestId, params: Value) -> Reply {
+        let Some(session) = self.session.as_ref() else {
+            return not_initialized(id);
+        };
+        let parsed: TaskClaimParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(reply) => return reply.with_id(id),
+        };
+        match session.client.claim(&parsed.task_id).await {
+            Ok(result) => Reply::respond(Response::result(
+                id,
+                serde_json::to_value(result).unwrap_or(Value::Null),
+            )),
+            Err(e) => Reply::respond(rpc_error(id, &e)),
+        }
+    }
+
     async fn update_status(&mut self, id: RequestId, params: Value) -> Reply {
         let Some(session) = self.session.as_ref() else {
             return not_initialized(id);
@@ -288,8 +311,13 @@ fn capabilities_result(claimed_repos: Vec<ClaimedRepo>) -> Value {
         claimed_repos,
         // No `outputs`: the deliverable is the agent's to write with `gh`
         // (#398). Declaring `source` would let a workflow ask this plugin to
-        // publish, which it no longer can.
-        capabilities: Capabilities::default(),
+        // publish, which it no longer can. `task_claim` (#556): this plugin
+        // answers `task/claim` by self-assigning the issue — the one place it
+        // writes to an Issue rather than a Project.
+        capabilities: Capabilities {
+            task_claim: true,
+            ..Capabilities::default()
+        },
     };
     serde_json::to_value(result).unwrap_or(Value::Null)
 }
