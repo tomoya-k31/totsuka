@@ -212,6 +212,7 @@ impl<T: GithubTransport> GithubClient<T> {
             return None; // draft items and PRs are not tasks
         }
         let status = node["status"]["name"].as_str();
+        let status_updated_at = node["status"]["updatedAt"].as_str();
         let repo = content["repository"]["name"].as_str().unwrap_or_default();
         let issue_number = content["number"].as_i64().unwrap_or_default().to_string();
         let labels: Vec<String> = content["labels"]["nodes"]
@@ -259,7 +260,24 @@ impl<T: GithubTransport> GithubClient<T> {
             status: status.map(str::to_string),
             url: content["url"].as_str().map(str::to_string),
             assignee,
-            message_key: None,
+            // Lane-entry identity (#556, ADR-0059 §5): the status cell's
+            // server-issued `updatedAt` changes exactly when the card moves
+            // columns, so keying the delivery on it turns "a human moved the
+            // card back into the trigger column" into a **new** message —
+            // which is what reopens a finished conversation (#242) — while
+            // every re-delivery of the same entry (each poll tick, and a
+            // stale pre-completion fetch snapshot arriving late) carries the
+            // same key and dedups. Server-timestamp equality only: no local
+            // clock is ever compared.
+            //
+            // Only when the workflow triggers on a column: a label-only
+            // trigger has no lane, so *any* column move would re-run it —
+            // those keep the at-most-once `None` (ingest falls back to the
+            // conversation id).
+            message_key: match (&filter.project_status, status, status_updated_at) {
+                (Some(_), Some(name), Some(at)) => Some(format!("status:{name}@{at}")),
+                _ => None,
+            },
             // Layer 1 of ADR-0024: where this task's deliverable goes. Absent
             // unless the Orchestrator asked for a kind (#398), which keeps
             // every pre-profile config behaving exactly as before.
@@ -708,7 +726,7 @@ fn fetch_query(root: &str) -> String {
         pageInfo {{ hasNextPage endCursor }}
         nodes {{
           status: fieldValueByName(name: $statusField) {{
-            ... on ProjectV2ItemFieldSingleSelectValue {{ name }}
+            ... on ProjectV2ItemFieldSingleSelectValue {{ name updatedAt }}
           }}
           content {{
             __typename

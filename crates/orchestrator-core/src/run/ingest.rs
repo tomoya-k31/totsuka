@@ -23,6 +23,27 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         task: &Task,
     ) -> Result<(i64, IngestOutcome), EngineError> {
         let existing = self.db.find_by_source(&task.source, &task.id)?;
+        // Cross-workflow deliveries are dropped, loudly (#556). A conversation
+        // belongs to the workflow that created it (`ON CONFLICT DO NOTHING`
+        // never updates the row), so accepting this delivery would either
+        // dedup it silently (the pre-#556 behaviour — a two-stage column
+        // pipeline's second stage has never actually run) or, worse, reopen
+        // the conversation under the *old* workflow now that lane re-entries
+        // mint fresh message keys. Dropped **without** touching the ledger:
+        // the source re-delivers every poll tick, so nothing is stranded if
+        // the config changes.
+        if let Some(existing) = &existing
+            && existing.workflow != wf.name
+        {
+            tracing::warn!(
+                task_id = existing.id,
+                have = %existing.workflow,
+                delivered = %wf.name,
+                "cross-workflow delivery dropped: a conversation stays with the workflow \
+                 that created it (column pipelines across workflows are not supported)"
+            );
+            return Ok((existing.id, IngestOutcome::Duplicate));
+        }
         let new_task = NewTask {
             source: task.source.clone(),
             source_task_id: task.id.clone(),
@@ -455,6 +476,52 @@ mod tests {
         assert_eq!(
             messages.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(),
             ["one", "two"]
+        );
+    }
+
+    /// Cross-workflow deliveries are dropped, loudly (#556): a conversation
+    /// belongs to the workflow that created it. Before the guard this was a
+    /// silent dedup; with lane re-entries minting fresh message keys it would
+    /// have become a reopen under the *old* workflow.
+    #[tokio::test]
+    async fn a_delivery_under_another_workflow_is_dropped() {
+        let mut engine = ingest_test_engine().await;
+        // A second workflow on the same source.
+        let mut second = engine.settings.workflows[0].clone();
+        second.name = "review".to_string();
+        engine.settings.workflows.push(second);
+
+        let ack = engine
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("k1"), "one"),
+            )
+            .unwrap();
+        assert_eq!(ack.status, TaskSubmitStatus::Accepted);
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+
+        // The same conversation delivered under the other workflow, with a
+        // *new* message key — exactly the shape a lane move produces.
+        let ack = engine
+            .on_task_submit(
+                "slack".into(),
+                "review".into(),
+                delivery("C1:100", Some("k2"), "two"),
+            )
+            .unwrap();
+        assert_eq!(ack.status, TaskSubmitStatus::Duplicate, "dropped as final");
+        let record = engine.db.get_task(id).unwrap().unwrap();
+        assert_eq!(record.workflow, "implement", "the row keeps its workflow");
+        assert_eq!(
+            engine.db.list_task_messages(id).unwrap().len(),
+            1,
+            "the ledger is untouched — nothing to strand, the source re-delivers"
         );
     }
 

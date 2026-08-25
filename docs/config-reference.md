@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:bf1c9c1937f5edd13b68b7b954232a6442250d1158bd9ca436e300add48d1018 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:66f75ce3c807cf44f544a3c22fdedec1d97d05dd8f42d1baa739d13bcb387868 -->
 
 # Configuration reference
 
@@ -134,7 +134,7 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 |---|---|---|---|
 | `name` | string | required | Workflow name |
 | `source` | string | required | Task source instance name |
-| `trigger` | table | `{}` | Match conditions. **totsuka does not interpret the contents** — the source plugin does. See below |
+| `trigger` | table | `{}` | Trigger condition. **totsuka does not interpret its contents** — the source plugin receives it and runs first-match. For GitHub's `project_status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim) |
 | `profile` | enum? | none | One of `answer`, `triage`, `design`, `implement`. Decides `mode`, `output`, and `verification` together |
 | `mode` | enum | required without `profile` | `plan` or `implement` |
 | `agent` | string | required | Agent instance name |
@@ -268,6 +268,7 @@ on_success = { set_status = "Designed" }
 | `profile` plus `output` | **Allowed**, and `output` wins. This is a wiring choice rather than a permission, and a Slack-triggered implement workflow needs it to return the pull request URL to the thread |
 | No `profile` and no `mode` / `output` | **Error.** Either name a profile or write both |
 | `profile` plus `rubric`, `tool`, `timeout_secs`, `on_start`, `on_success`, `on_failure` | Allowed |
+| `on_start` / `on_success` / `on_failure` whose `set_status` equals the workflow's **own** `trigger.project_status` | **Error.** A lane re-entry now means "run it again", so writing back into your own trigger column is an infinite re-run loop. The check is lexical only — a `status_map` aliasing two names onto one column is beyond its sight |
 
 Profiles are optional. Combinations they cannot express — `verification = "human"`, for instance, since all four resolve to `llm` — are written out explicitly.
 
