@@ -4,7 +4,7 @@ title: 設定例集（config.toml / plugins/*.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/fable-5, at: 2026-08-24T10:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -21,22 +21,31 @@ owner: tomoya-k31
 
 # ファイル配置と優先順位
 
-| ファイル | 場所 | 役割 |
-|---|---|---|
-| `config.toml` | `$XDG_CONFIG_HOME/totsuka/config.toml`（既定 `~/.config/totsuka/config.toml`） | Orchestrator 本体の設定 |
-| `plugins/{name}.toml` | `$XDG_CONFIG_HOME/totsuka/plugins/{name}.toml` | プラグイン個別設定。Orchestrator は無解釈で保持し、シークレット解決後に `initialize` で渡す |
+**ファイルは 1 本だけ** `$XDG_CONFIG_HOME/totsuka/config.toml`（既定 `~/.config/totsuka/config.toml`）。`--config <path>` で場所を上書きできる。
 
-`{name}` は `config.toml` の `[plugins.{name}]` のインスタンス名と一致させる。
-`--config <path>` で `config.toml` の場所を上書きすると、`plugins/` の探索基準も**そのファイルの親ディレクトリ**に移る。
+| テーブル | 役割 |
+|---|---|
+| `version` / `[[repositories]]` / `[[projects]]` / `[[workflows]]` / `[llm]` / `[worktree]` / `[log]` / `[hooks]` / `[tools.*]` | Orchestrator 本体の設定 |
+| `[plugins.<name>]` | プラグインのロスター（`enabled` / `kind` / 共通項目）。Orchestrator が解釈する |
+| `[<name>]` | プラグイン個別設定。Orchestrator は無解釈で保持し、シークレット解決後に `initialize` で渡す |
+
+`<name>` は `[plugins.<name>]` のインスタンス名（= プラグインのバイナリ名）と一致させる。**ロスターに無い名前のトップレベルテーブルは検証エラー**になる（#554）。
+
+`plugins/{name}.toml` への分離は **#554 で廃止**した（[ADR-0058](/decisions/adr-0058-config-ownership-boundary.md)）。残っていても読まれないので、移行時に消すこと。
 
 優先順位（上が強い）:
 
 1. CLI フラグ（`--config`、`--debug`）
 2. 環境変数 `TOTSUKA_*`（[対応表は後述](#環境変数によるオーバーライド)）
-3. `plugins/{name}.toml`
-4. `config.toml`
+3. `[<name>]`（プラグイン個別設定）
+4. `config.toml` の Orchestrator 側の既定
 
 設定テーブルはいずれも `deny_unknown_fields`。**キーを 1 文字打ち間違えると既定値へのフォールバックではなくパースエラーになる**（これは意図的な設計で、typo が黙って無視される事故を防ぐ）。
+
+**トップレベルと `[[workflows]]` だけは serde の外で検査する**（#554）。プラグインが自分のキーを足せる場所なので serde には判断できず、代わりに:
+
+- トップレベルの未知テーブルは `[plugins.*]` のロスターと照合する（`[worktre]` も `[slak]` も落ちる）
+- `[[workflows]]` の余ったキーはその workflow の `source` と `agent` に聞き、**ちょうど 1 つ**が引き取ることを要求する（0 = タイポ、2 = 曖昧。どちらも起動を止める）
 
 ただし次の 3 つは例外で、**typo が黙って無視される**ので注意すること:
 
@@ -72,7 +81,7 @@ owner: tomoya-k31
 `config.toml` に `[llm]` が無い状態で `TOTSUKA_LLM_*` を設定すると起動エラーになる（黙って無視はしない）。
 
 **スコープ外**: 配列・動的キー（`[[repositories]]` / `[[workflows]]` / `[plugins.{name}]`）は
-環境変数名で一意に指し示せないため対象外。`plugins/{name}.toml` の中身も Orchestrator が解釈しない
+環境変数名で一意に指し示せないため対象外。`[<name>]` の中身も Orchestrator が解釈しない
 領域（優先順位の第 3 層）なので対象外で、そこへの env 適用はプラグイン側の責務。
 
 ## 不正値・typo の扱い
@@ -154,12 +163,25 @@ summary = "AI 駆動の開発フロー自動化ツール。Rust ワークスペ�
 tool = "claude"                        # このリポジトリの既定 AI ツール（#196。省略時 default_tool → 組み込み claude）
 max_concurrency = 2                    # このリポジトリの同時実行上限（省略時は無制限）
 worktree_location = "~/work/wt/{repo_name}/{worktree_name}"  # [worktree].location をこのリポジトリだけ上書き
+project = "tomo-prj"                   # 起票先トラッカー（[[projects]].name、#554）
 
 [[repositories]]
 name = "dotfiles"
 path = "~/Workspace/github/tomoya-k31/dotfiles"
 summary = "zsh / mise / GNU Stow による dotfiles 管理。"
 tool = "codex"                         # このリポジトリだけ Codex CLI で作業（組み込み codex、#196 Phase 2）
+project = "tomo-prj"                   # 起票先トラッカー（[[projects]].name、#554）。無ければトラッカー無し
+
+# ── トラッカー（#554）──────────────────────────────────────
+# リポジトリの起票先。`name` と `source` は Orchestrator が読み、
+# 残りのキーはその task_source プラグインのもの（無解釈で渡る）。
+[[projects]]
+name = "tomo-prj"
+source = "github"
+owner = "tomoya-k31"
+owner_type = "user"
+project_number = 6
+triage_status = "📥 Inbox"             # triage 起票時に付ける Status（省略 = Status なし）
 
 # ── プラグイン ────────────────────────────────────────────
 [plugins.github]
@@ -179,7 +201,7 @@ kind = "agent_ide"
 max_concurrency = 3           # この agent 経由の同時実行上限（省略時は無制限）
 timeout_secs = 120
 
-[plugins.notifier-macos]
+[plugins.macos]
 enabled = true
 kind = "notifier"
 
@@ -349,7 +371,7 @@ plan の結果を人に見せたいなら `output = "source"`（ソース側に�
 push しない。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、
 PR 作成手順はリポジトリの規約（CLAUDE.md / CONTRIBUTING.md など）に書く。
 PR の URL を Slack 返信に載せたい場合は、エージェントの最終メッセージに含めさせる
-（`plugins/slack.toml` の `[prompts].reply_instructions`）。
+（`[slack]` の `[prompts].reply_instructions`）。
 
 ## `[[workflows]].verification` — llm / human / none
 
@@ -366,8 +388,7 @@ PR の URL を Slack 返信に載せたい場合は、エージェントの最�
 
 ## `[[workflows]].trigger` — マッチ条件
 
-省略または `{}` は**全タスクにマッチ**する。定義順の first-match なので、広いトリガーは後ろに置く。
-catch-all より後ろに書いた同一ソースの workflow は**到達不能**で、警告が出る（#396）。
+省略または `{}` は**全タスクにマッチ**する。定義順の first-match だが、**その判定を走らせるのはソースプラグインである**（#554）。Orchestrator は `trigger` の中身を一切解釈せず、`initialize` でプラグインへ渡すだけになった。
 
 ### 絵文字でワークフローを選ぶ（#396）
 
@@ -391,20 +412,20 @@ agent = "herdr"
 
 | やりがちな間違い | どうなるか |
 |---|---|
-| リアクション workflow を catch-all の**後ろ**に書く | 絵文字が無反応になる（到達不能警告が出る） |
 | 同じ絵文字を 2 つの workflow に書く | `CONFIG_INVALID` |
+| リアクションを持たない workflow（= メンション）を 2 つ書く | `CONFIG_INVALID`（#554） |
 
 本人限定の不変条件（他人のリアクションでは起動しない）は緩和できない。
 
-| キー | 型 | 意味 |
-|---|---|---|
-| `status` / `project_status` | string | タスクのステータスと一致比較（両者は同じ次元） |
-| `label` | string | 単一ラベルの存在 |
-| `labels` | 配列 | **すべて**含むこと（AND） |
-| その他のキー | 任意 | Orchestrator は解釈せず、`initialize` の `triggers` としてプラグインへ渡す |
+**「catch-all より前に書け」の制約は #554 で消えた。** Slack プラグイン内ではメンションとリアクションが別のイベント経路なので、順序で隠れることがない。
 
-上記の予約キーは、プラグインの絞り込みを信用せず Orchestrator 側でも防御的に再判定する。
-同一ソース内でトリガーが重なりうる 2 つの workflow を定義すると警告が出る（先勝ちで後者が死ぬため）。
+trigger のキーはすべて**プラグインが解釈する**。`status` / `project_status` / `label` / `labels` / `reaction` が Orchestrator の予約語だったのは #554 まで —— `reaction` は Slack の語、`project_status` は GitHub Projects の語で、core の語彙に置く理由が無かった。どのキーが効くかは各プラグインのページを参照:
+
+| ソース | 効くキー |
+|---|---|
+| github | `project_status` / `status`、`label` / `labels` |
+| notion | `status`、生の `filter` |
+| slack | `reaction`（無ければメンション） |
 
 ## `[worktree].cleanup` / `plan_cleanup` — 掃除ポリシー
 
@@ -449,18 +470,19 @@ agent = "herdr"
 security add-generic-password -s totsuka -a hook-token -w "$(openssl rand -hex 32)"
 ```
 
-# Part 2: plugins/{name}.toml（主要 3 プラグイン）
+# Part 2: `[<name>]`（主要 3 プラグイン）
 
 `notion` / `orca` / `notifier-macos` の全キーは各コンポーネントページ（[task-source-notion](/components/task-source-notion.md) /
 [agent-ide-orca](/components/agent-ide-orca.md) / [notifier-macos](/components/notifier-macos.md)）を参照。
 
-## `plugins/github.toml`（task-source-github）
+## `[github]`（task-source-github）
 
 GitHub Projects (v2) のステータス列をタスクの入口にする。
 
-**トップレベルのキーは `[[projects]]` より前に書く。** TOML のテーブル配列は次の見出しまで続くので、後ろに置いたスカラは `[[projects]]` の**中**に入り、未知キーとして `initialize` が落ちる。
+**ボードはここに書かない。** Orchestrator のトップレベル `[[projects]]`（`source = "github"`）に書き、リポジトリは `[[repositories]].project` で紐づける（#554）。
 
 ```toml
+[github]
 token = "op://Dev/GitHub/totsuka_pat"   # 必須。Projects 読み書き権限のある PAT
 github_login = "tomoya-k31"             # 必須。担当者がこのログイン名のカードだけ拾う（大小無視）
 status_field = "Status"                 # ステータス列の名前（既定 "Status"）。全ボード共通
@@ -473,33 +495,49 @@ api_url = "https://api.github.com/graphql"      # GHES 利用時に上書き
 max_retries = 3                                 # リトライ可能な API 失敗の再試行回数
 
 # Orchestrator 内部のステータス名 ← → Project 上の表示名の対応（未定義キーは素通し）
-[status_map]
+[github.status_map]
 "レビュー待ち" = "In Review"
 
-# polling するボード。複数書ける（#542）
+# ボードは Orchestrator 側。複数書ける（#542 / #554）
 [[projects]]
+name = "tomo-prj"                       # 必須。[[repositories]].project が指す名前
+source = "github"                       # 必須。このボードを所有するプラグイン
 owner = "tomoya-k31"                    # 必須。ユーザー名または組織名
-owner_type = "user"                     # "user"（既定）| "organization"。エントリごとに指定できる
+owner_type = "user"                     # "user"（既定）| "organization"
 project_number = 3                      # 必須。Project の URL 末尾の数字
-repos = ["totsuka", "dotfiles"]         # 必須・非空。取り込みフィルタ兼「このリポジトリの起票先」
 triage_status = "📥 Inbox"              # 任意。triage 起票した item に付ける Status（未設定 = Status なし）
 
 [[projects]]
+name = "web-board"
+source = "github"
 owner = "my-org"
 owner_type = "organization"
 project_number = 7
-repos = ["web-app"]
+
+# 紐付けはリポジトリ側に 1 つだけ書く
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/github/tomoya-k31/totsuka"
+project = "tomo-prj"
+
+[[repositories]]
+name = "web-app"
+path = "~/Workspace/github/my-org/web-app"
+project = "web-board"
 ```
 
-`repos` を省略して「Project 内の全リポジトリ」を対象にする書き方は #542 で無くなった。このリストは取り込みフィルタであると同時に、リポジトリ → ボードの対応表として `initialize` の応答へ載るため、省略すると起票先を引けなくなる。同じリポジトリを 2 つのボードに書くと `config/validate` がエラーにする。
+この紐付けは取り込みフィルタ（そのボードに載っていても、紐づかないリポジトリの issue は取り込まない）と、リポジトリ → ボードの対応表（`initialize` の応答に載り、Slack 発の triage が起票先を引く材料になる）を兼ねる。**役割は 2 つだが正本は 1 箇所**で、#554 より前はプラグイン側の `repos = [...]` に書いていた。
 
-## `plugins/slack.toml`（task-source-slack）
+`project` はスカラー 1 つなので、**同じリポジトリを 2 つのボードに紐づけることはできない** —— 以前は `config/validate` が検出する対象だった。
+
+## `[slack]`（task-source-slack）
 
 Socket Mode で自分宛メンションを受け、本人名義で返信する。導入手順は
 [Slack セットアップ Quickstart](/operations/slack-quickstart.md)、トークンの扱いは
 [取り扱いポリシー](/security/slack-user-token.md) を参照。
 
 ```toml
+[slack]
 app_token = "op://Dev/Slack/app_token"     # 必須。App-Level Token（xapp- で始まる）
 user_token = "op://Dev/Slack/user_token"   # 必須。User OAuth Token（xoxp- で始まる）
 target_user_id = "U01ABCDEF"               # 必須。自分の Slack ユーザー ID
@@ -515,7 +553,7 @@ api_url = "https://slack.com/api"
 max_retries = 3
 
 # チャンネル名の prefix ごとに候補リポジトリを絞る（定義順 first-match）
-[[channel_groups]]
+[[slack.channel_groups]]
 prefix = "proj-totsuka"
 repos = ["totsuka"]
 ```
@@ -531,9 +569,10 @@ repos = ["totsuka"]
 
 `poll_interval_secs` は使わない。Socket Mode のイベント駆動で即 push するため（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。
 
-## `plugins/herdr.toml`（agent-ide-herdr）
+## `[herdr]`（agent-ide-herdr）
 
 ```toml
+[herdr]
 # ソケットの決定順: socket_path > session > $HERDR_SOCKET_PATH > $HERDR_SESSION
 #                  > $XDG_CONFIG_HOME/herdr/herdr.sock
 #                    （XDG_CONFIG_HOME 未設定時のみ ~/.config/herdr/herdr.sock）
@@ -544,7 +583,7 @@ repos = ["totsuka"]
 request_timeout_secs = 30                       # herdr への RPC タイムアウト
 
 # dispatch した pane の配置（省略可。以下が既定値）
-[layout]
+[herdr.layout]
 shell     = true                                # 併設シェル pane を出すか（false ならエージェント全画面）
 direction = "down"                              # "down" = 上下 / "right" = 左右（herdr の SplitDirection）
 ratio     = 0.8                                 # エージェント側の取り分
@@ -554,8 +593,8 @@ ratio     = 0.8                                 # エージェント側の取り
   [ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。まだ書いてあると `initialize` が
   `CONFIG_INVALID` で落ちる（キー名と代替を挙げたメッセージが出る）ので消すこと。argv は
   `config.toml` の `[tools]` が決め（[ADR-0014](/decisions/adr-0014-tool-abstraction.md)）、
-  pane の配置は `[layout]` が決める（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。
-- `[layout]` の `ratio` は**エージェント側**の取り分。範囲検査はせず herdr へそのまま送る（不正値は herdr が拒否し、
+  pane の配置は `[herdr.layout]` が決める（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。
+- `[herdr.layout]` の `ratio` は**エージェント側**の取り分。範囲検査はせず herdr へそのまま送る（不正値は herdr が拒否し、
   その場合は警告のうえシェル pane なしで続行する）。`direction` は `down` / `right` のみで、
   他の値は `initialize` の時点でエラーになる。`shell = false` のとき `direction` / `ratio` は無視される。
 
@@ -570,10 +609,21 @@ ratio     = 0.8                                 # エージェント側の取り
 [[repositories]]
 name = "totsuka"
 path = "~/Workspace/github/tomoya-k31/totsuka"
+project = "tomo-prj"                            # 起票先トラッカー（#554）
+
+[[projects]]
+name = "tomo-prj"
+source = "github"
+owner = "tomoya-k31"
+project_number = 6
 
 [plugins.github]
 enabled = true
 kind = "task_source"
+
+[github]
+token = "cmd:gh auth token"
+github_login = "tomoya-k31"
 
 [plugins.herdr]
 enabled = true
@@ -587,6 +637,8 @@ profile = "implement"
 agent = "herdr"
 on_success = { set_status = "レビュー待ち" }
 ```
+
+**`[[projects]]` は省略できない。** github プラグインはボードが 1 つも無い構成を `config/validate` で拒否する —— polling する対象が無いので、起動しても何も起きないためである。
 
 ## 2. 設計 → 実装ハンドオフ
 
@@ -625,7 +677,7 @@ kind = "task_source"
 enabled = true
 kind = "agent_ide"
 
-[plugins.notifier-macos]
+[plugins.macos]
 enabled = true
 kind = "notifier"
 
@@ -652,7 +704,7 @@ rubric = "質問に直接答えており、根拠となるファイルパスや�
 `verification = "human"` は通知が届かないと気づけないため、`notifier` の有効化とセットで使う。
 
 ```toml
-[plugins.notifier-macos]
+[plugins.macos]
 enabled = true
 kind = "notifier"
 

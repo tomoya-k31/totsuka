@@ -4,12 +4,29 @@ title: ADR-0025 リアクション起点のタスク起動は「本人が付け�
 description: "本人が付けた :eyes: リアクションを mention と同じタスク起動トリガにする決定。user scope の reactions:read 1 本で足り、可視範囲は変わらない。他人のリアクションを受理するとリモート実行トリガになるため本人限定を緩和する設定は作らない。reaction_removed の購読と event_ts を dedup キーに混ぜる案は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/319
 tags: [decision, slack, trigger, security, reaction, adr]
-generated: { by: claude-code/opus-5, at: 2026-07-31T16:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
 
 # Status
+
+**不変条件はそのまま。判定の置き場所だけ [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) が変えた**（#554）。
+本人が付けたリアクションでだけ起動する、という決定は無傷である。
+
+変わったのは、Orchestrator が二度目の照合をやめたこと。`trigger.reaction` は core の予約語彙で
+なくなり、`Trigger::matches` と `reaction` の型検証は削除された。プラグインが first-match を
+走らせ、`task/submit` で workflow を名指しする。
+
+**`reaction:<emoji>` ラベルは残るが、義務ではなくなった。** 以前は core がこのラベルから
+workflow を再導出していたので、詰め忘れたタスクはどの workflow にもマッチせず黙って捨てられた。
+今は「どう起票されたかの記録」で、`totsuka status` とログのためのものである。
+
+**本 ADR が挙げた「catch-all より前に書け」の危険も消えた。** あれは core が 1 本のリストを
+first-match していたことに由来する。Slack プラグイン内ではメンションとリアクションが**別の
+イベント経路**なので、リアクションの workflow をメンションの後ろに書いても隠されない。
+本当に曖昧なもの（同じ絵文字を 2 つの workflow が主張する / メンションを 2 つが主張する）は
+プラグインの `initialize` が拒否する。
 
 stable。[#319](https://github.com/tomoya-k31/totsuka/issues/319) の実装とともに確定した。
 

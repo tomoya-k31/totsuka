@@ -31,7 +31,7 @@ Bot トークンより影響半径が大きい前提で扱うこと。App-Level 
 
 # 保管ルール
 
-- トークンは **macOS Keychain のみ** に保存し、`plugins/slack.toml` からは `keychain:<service>/<account>` 参照で解決する（F-64/F-65）。設定ファイル・リポジトリ・環境変数ファイルへの平文書き込みは禁止。
+- トークンは **macOS Keychain のみ** に保存し、`[slack]` からは `keychain:<service>/<account>` 参照で解決する（F-64/F-65）。設定ファイル・リポジトリ・環境変数ファイルへの平文書き込みは禁止。
 - プラグインは Keychain に直接触れない（orchestrator が解決して `initialize` で渡す）。ログは redact 規約（[ログ規約](/development/logging-conventions.md)）に従い、トークンを出力しない。
 - トークンローテーションは無効（長命トークン、[ADR-0003](/decisions/adr-0003-slack-reply-assistant.md)）。失効させる手段は下記の Revoke のみ。
 
@@ -50,7 +50,7 @@ Bot トークンより影響半径が大きい前提で扱うこと。App-Level 
 導入前にワークスペース管理者のポリシーを確認する:
 
 - アプリ導入が承認制の場合、[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) のスコープ一覧で申請する（読み書きは user scopes = 本人の権限範囲のみ・bot は本人への通知 DM 専用の最小スコープ（chat:write / im:write）・Socket Mode で外部公開エンドポイントなし、が説明ポイント）。
-- メッセージの読み取り範囲は「本人が参加しているチャンネル」に限られるが、その内容がローカルのタスク本文・ログ（`log_prompts`）・LLM 分類リクエスト（`plugins/slack.toml` の `[llm]` 先）へ流れることを理解した上で、社外 LLM エンドポイントの利用可否を確認する。
+- メッセージの読み取り範囲は「本人が参加しているチャンネル」に限られるが、その内容がローカルのタスク本文・ログ（`log_prompts`）・LLM 分類リクエスト（`[slack]` の `[llm]` 先）へ流れることを理解した上で、社外 LLM エンドポイントの利用可否を確認する。
 - 返信は承認フロー（[エフェメラル承認フロー](/glossary/ephemeral-approval.md)）を通るため自動送信はないが、承認した投稿の責任は本人名義で発生する。
 
 # 関連

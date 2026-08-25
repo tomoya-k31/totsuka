@@ -1,7 +1,7 @@
 ---
 type: Playbook
 title: click-to-focus セットアップ（terminal-notifier / bundle id / 切り分け）
-description: 通知クリックで対象タスクの herdr pane を開く F-94 の導入手順。terminal-notifier の導入、plugins/macos.toml の backend / activate_bundle_id / click_command 設定、bundle id の調べ方、動作確認、クリックが効かない・通知が出ないときの切り分け表。
+description: 通知クリックで対象タスクの herdr pane を開く F-94 の導入手順。terminal-notifier の導入、config.toml の `[macos]` テーブルでの backend / activate_bundle_id / click_command 設定、bundle id の調べ方、動作確認、クリックが効かない・通知が出ないときの切り分け表。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/notifier-macos
 tags: [operations, playbook, notifier, terminal-notifier, click-to-focus, macos]
 generated: { by: claude-code/opus-5, at: 2026-08-22T13:30:00Z }
@@ -31,11 +31,12 @@ owner: tomoya-k31
    # 例: iTerm2 → com.googlecode.iterm2 / Kitty → net.kovidgoyal.kitty / WezTerm → com.github.wez.wezterm
    ```
 
-3. **`plugins/macos.toml` を設定する**（notifier プラグインの設定。[notifier-macos](/components/notifier-macos.md)）:
+3. **`config.toml` に `[macos]` を書く**（notifier プラグインの設定。[notifier-macos](/components/notifier-macos.md)）:
 
-   ファイル名は**プラグイン名**であってクレート名ではない。crate は `notifier-macos` だが `plugin.toml` の `name` は `macos` で、設定パスは `{plugin_config_dir}/{name}.toml` として導出される。`notifier-macos.toml` という名前で置くと**読まれず、エラーも出ない** —— 通知は届き続けるがクリックは効かないままになる。
+   テーブル名は**プラグイン名**であってクレート名ではない。crate は `notifier-macos` だが `plugin.toml` の `name` は `macos` なので、テーブルは `[macos]` である。`[notifier-macos]` と書くと **`[plugins.*]` のロスターに無い名前として `config validate` が落とす**（#554）—— 以前は `plugins/notifier-macos.toml` として黙って読まれないだけだった。
 
    ```toml
+   [macos]
    backend = "terminal_notifier"
    activate_bundle_id = "org.alacritty"          # 環境依存・手順 2 の値
    # 以下は既定値のままでよい:
@@ -57,14 +58,14 @@ owner: tomoya-k31
 
 # 通知するイベントを絞る（F-92）
 
-同じ `plugins/macos.toml` が配送フィルタも持つ。既定は全 on なので、**切りたいものだけ**を書く。
+同じ `[macos]` が配送フィルタも持つ。既定は全 on なので、**切りたいものだけ**を書く。
 
 ```toml
-[filter.events]                    # 全ワークフローに効く
+[macos.filter.events]              # 全ワークフローに効く
 done = false
 pending = false
 
-[filter.workflows.slack-reply]     # ワークフロー別。グローバルより優先される
+[macos.filter.workflows.slack-reply]   # ワークフロー別。グローバルより優先される
 done = true
 ```
 
@@ -73,7 +74,7 @@ done = true
 どこにも書かなかったイベントは配送される（新イベントも既定 on）。
 
 **キーの入れ子は `[filter.events]` であって `[notifier.filter.events]` ではない。**
-`plugins/macos.toml` の中身がそのまま `NotifierConfig` になるため、`notifier` という段は無い。
+`[macos]` の中身がそのまま `NotifierConfig` になるため、`notifier` という段は無い。
 `deny_unknown_fields` なので誤ると `initialize` が `-32003` で落ち、有効なキーを並べて示す
 （実測: `unknown field \`notifier\`, expected one of \`backend\`, …, \`filter\``）。
 イベント名の書き間違いも同様に弾かれる。
@@ -82,7 +83,7 @@ done = true
 
 | 症状 | 原因候補 | 対処 |
 |---|---|---|
-| 通知は出るがクリックしても何も起きない | `backend` が既定の `osascript` のまま | `plugins/macos.toml` に `backend = "terminal_notifier"` を設定 |
+| 通知は出るがクリックしても何も起きない | `backend` が既定の `osascript` のまま | `[macos]` に `backend = "terminal_notifier"` を設定 |
 | クリックでアプリは前面化するが pane が変わらない | Orchestrator 停止中（`totsuka focus` は静かに no-op）/ pane が既に閉じている / agent が `pane_control` 非宣言（orca 等） | `totsuka focus <task-id>` を手で実行し理由を確認（`focus skipped: …` / `pane not focused — …` が原因を表示） |
 | クリックでコマンドは走るがアプリが前面化しない | `activate_bundle_id` 未設定 or bundle id が誤り | 手順 2 で正しい id を確認して設定 |
 | `config validate` が terminal-notifier のエラーを出す | 未導入 / PATH 外 / `terminal_notifier_bin` が誤り | `brew install terminal-notifier` するか絶対パスを設定。導入せず使う場合は `backend = "osascript"` に戻す（通知は出るがクリック不可） |

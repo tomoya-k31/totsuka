@@ -193,7 +193,7 @@ C-3（herdr 内部の 5 秒下限）は独立に測れない。dispatch のロ�
 「投稿先の URL を報告に含めよ」だけである。エージェントが issue だけ作ってボード追加を
 忘れる経路は実在しうるので、**GitHub の Project 画面で item を目視する**こと。
 
-**Notion 側は未設定なので今回は測れない。** `plugins/notion.toml` は実運用にも
+**Notion 側は未設定なので今回は測れない。** `[notion]` は実運用にも
 live-e2e にも存在しない。測るなら database を 2 つ作るところから要る — 測っていない
 ことを報告に明記する。
 
@@ -207,7 +207,7 @@ live-e2e にも存在しない。測るなら database を 2 つ作るところ�
 - notifier の click-to-focus（F-94）と通知フィルタ（F-92）👀
 - plan モードの設計プレビュー（F-34）👀
 - orca（`agent_ide` のもう一方）
-- **Notion の複数 database（#542）** — `plugins/notion.toml` が実運用にも live-e2e にも存在しないため、S7 の Notion 側は 1 度も回していない
+- **Notion の複数 database（#542）** — `[notion]` が実運用にも live-e2e にも存在しないため、S7 の Notion 側は 1 度も回していない
 
 ---
 

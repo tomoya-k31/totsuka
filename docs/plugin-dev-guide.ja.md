@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:1a6f0ee472dc41f8adbbaa107fbb8ea5ca13596e9bd92d3158c2c895b07fb593 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:8240dc1144cf9907aa5ff4d4cb1083dd923a31181864853ebbd607c7f86bc01a -->
 
 # プラグイン開発ガイド
 
@@ -34,7 +34,7 @@ plugin-protocol = { git = "https://github.com/tomoya-k31/totsuka" }
 name = "github"                     # バイナリ名と一致させる
 kind = "task_source"                # task_source | agent_ide | notifier
 version = "0.1.0"                   # プラグイン自身の版
-protocol_version = ">=0.1.6, <0.6"  # 対応する Orchestrator プロトコルの範囲
+protocol_version = ">=0.6.0, <0.7"  # 対応する Orchestrator プロトコルの範囲
 
 [capabilities]                      # 実装しているものだけ宣言する
 state_stream = true                 # agent: 状態ストリーム対応
@@ -67,22 +67,24 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 | メソッド | 方向 | 内容 |
 |---|---|---|
 | `initialize` | O→P | 解決済みの設定とプロトコル版を渡す。プラグインは自分の版と capability を返す |
-| `config/validate` | O→P | プラグイン設定を検証する |
+| `config/validate` | O→P | プラグイン設定を検証する。`initialize` と同じ workflows / projects / repositories も一緒に届くので、記憶ではなく「今聞かれているもの」を検証する |
 | `shutdown` | O→P | 猶予付きで終了を要求する |
 
 `initialize` は `task_source` に対して、二重に設定せずに済むものをいくつか渡す。いずれも任意なので、使わないなら無視してよい。
 
 - `repositories: [{name, summary?, path?}]` — Orchestrator 側のリポジトリ設定。ソース側でリポジトリを解決するプラグインは自前設定の重複を省ける
 - `llm: {base_url, model, api_key?}` — Orchestrator 側の LLM 設定（鍵は解決済み）。プラグイン自身の LLM 設定があればそちらを優先し、これは既定値として扱う
-- `triggers: [{workflow, trigger}]` と `poll_interval_secs` — 何を監視するかと、どの周期で見るか。イベント駆動のソースは周期を無視してよい
+- `workflows: [{workflow, trigger, options}]` — 自分を `source` または `agent` として名指す workflow が、設定に書かれた順で届く。`trigger` はソースが監視する条件（agent には空オブジェクト）、`options` はその workflow に書かれた、Orchestrator が解釈しないキー
+- `projects: [{name, options}]` — 自分が所有するトラッカー（`source` が自分の `[[projects]]` エントリ）。各トラッカーに紐づくリポジトリは `[[repositories]].project` から届く
+- `poll_interval_secs` — どの周期で見るか。イベント駆動のソースは無視してよい
 
 ### task_source
 
-**task_source は push 専用である。** タスクを見つけたら `task/submit` を Orchestrator へ自分から送る。Orchestrator がタスクを取りに来る RPC は存在しない。イベント駆動のソース（Webhook や Socket）は受信のたびに送り、ポーリングが自然なソースは `initialize` で受け取った `triggers` と `poll_interval_secs` で自前のタイマーを回す。そのタイマーは `plugin-sdk` クレートが `poll_loop` として提供している。
+**task_source は push 専用である。** タスクを見つけたら `task/submit` を Orchestrator へ自分から送る。Orchestrator がタスクを取りに来る RPC は存在しない。イベント駆動のソース（Webhook や Socket）は受信のたびに送り、ポーリングが自然なソースは `initialize` で受け取った `workflows` と `poll_interval_secs` で自前のタイマーを回す。そのタイマーは `plugin-sdk` クレートが `poll_loop` として提供している。
 
 | メソッド | 方向 | 内容 |
 |---|---|---|
-| `task/submit` | **P→O request** | 見つけたタスクを push する。Orchestrator は永続化してから応答する |
+| `task/submit` | **P→O request** | 見つけたタスクを、**属する workflow を名指して** push する。受け取った workflow 群に対して first-match を走らせたのは自分なので既に分かっており、Orchestrator はその名前が実在して自分のものかだけを確かめる。Orchestrator は永続化してから応答する |
 | `task/update_status` | O→P | タスクの状態遷移を伝える。ソース側へ反映する |
 | `result/publish` | O→P | 成果物をソースへ書き戻す |
 
@@ -182,6 +184,19 @@ totsuka plugin install ./dist/github
 | `notifier` | `notifier-macos`（osascript） |
 
 最小の骨格としては `crates/orchestrator-core/src/bin/mock_plugin.rs` があり、設定駆動で全 kind を演じる。
+
+## 設定の置き場所
+
+プラグイン自身の設定は `config.toml` のトップレベル `[<name>]` テーブルである。`<name>` は `[plugins.<name>]` のロスター名 = バイナリ名。Orchestrator は中身を解釈せず、シークレット参照だけ解決して `initialize` の `config` として渡す。ロスターに無い名前のトップレベルテーブルは設定エラーになるので、タイポは黙って無視されずに報告される。
+
+Orchestrator 側の構造体にキーを定義することもできる:
+
+| 置き場所 | 所有の決め方 | 実装すること |
+|---|---|---|
+| `[[workflows]]` | **聞いて決める。** 余ったキーはその workflow の `source` と `agent` に届き、ちょうど 1 つが引き取る | `claimed_options` に `{workflow, key}` を返す。**消費しないキーを claim しない** —— タイポを沈黙に変える |
+| `[[projects]]` | **`source` が決める。** エントリはちょうど 1 つのプラグインを名指す | `deny_unknown_fields` の構造体へデシリアライズするだけ。握手は不要 |
+
+誰も引き取らない workflow のキーは起動を止める。2 つが引き取る場合も同じ。
 
 ## 動作確認
 

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](click-to-focus-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:4ad9e93bc635818d285579b1a814db883576a7ed9ed7bf5ed0f274927ab78499 -->
+<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:249a4afe70b35be017281ed4507c45195d52c5273a9a90e70659f153425bb99d -->
 
 # Click a notification to open the task's pane
 
@@ -31,11 +31,12 @@ Substitute your own terminal. Common ones:
 | Kitty | `net.kovidgoyal.kitty` |
 | WezTerm | `com.github.wez.wezterm` |
 
-## 3. Write `plugins/macos.toml`
+## 3. Write the `[macos]` table
 
 In your config directory (`$XDG_CONFIG_HOME/totsuka/plugins/`, usually `~/.config/totsuka/plugins/`):
 
 ```toml
+[macos]
 backend = "terminal_notifier"
 activate_bundle_id = "org.alacritty"          # the value from step 2
 
@@ -44,7 +45,7 @@ activate_bundle_id = "org.alacritty"          # the value from step 2
 # click_command = "totsuka focus {task_id}"
 ```
 
-**The file is `macos.toml`, not `notifier-macos.toml`.** It is named after the plugin. Getting this wrong is silent: the file is never read, no error or warning appears, notifications keep arriving — and clicking one still opens Script Editor.
+**The table is `[macos]`, not `[notifier-macos]`.** It is named after the plugin, which is `macos`. Getting this wrong is caught: a top-level table whose name is not in the `[plugins.*]` roster is rejected by `totsuka config validate`.
 
 `backend` is the key that matters. Setting `activate_bundle_id` alone changes nothing while the backend is still the default.
 
@@ -73,8 +74,8 @@ With `totsuka run` going, clicking a real notification should both raise the ter
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Notifications arrive, clicking does nothing | `backend` is still the default `osascript` | Set `backend = "terminal_notifier"` in `plugins/macos.toml`, then restart `totsuka run` |
-| You edited the config and nothing changed | The file is named `notifier-macos.toml`, or sits outside the plugins config directory | It must be `plugins/macos.toml`. Add a nonsense key temporarily — `totsuka config validate` rejects an unknown key only if it is actually reading the file |
+| Notifications arrive, clicking does nothing | `backend` is still the default `osascript` | Set `backend = "terminal_notifier"` under `[macos]`, then restart `totsuka run` |
+| You edited the config and nothing changed | The table is named `[notifier-macos]`, or the settings ended up under `[plugins.macos]` (the roster) instead of `[macos]` | `[plugins.macos]` declares the plugin; `[macos]` configures it. `totsuka config validate` rejects an unknown top-level table, so a wrong name is reported rather than ignored |
 | The app comes forward but the pane does not change | `totsuka run` is not running (the focus command quietly does nothing), the pane is already closed, or the agent you use cannot control panes | Run `totsuka focus <task-id>` by hand — it prints the reason |
 | The click runs but the app does not come forward | `activate_bundle_id` unset or wrong | Recheck it with step 2 |
 | `config validate` reports a terminal-notifier error | Not installed, not on `PATH`, or `terminal_notifier_bin` is wrong | Install it, or give an absolute path. To go without it, set `backend = "osascript"` — notifications still arrive, clicks do nothing |
@@ -83,19 +84,20 @@ With `totsuka run` going, clicking a real notification should both raise the ter
 
 ## Choosing which events notify you
 
-The same file controls which events produce a notification at all. Everything is on by default; list only what you want to turn off.
+The same table controls which events produce a notification at all. Everything is on by default; list only what you want to turn off.
 
 ```toml
+[macos]
 backend = "terminal_notifier"
 activate_bundle_id = "org.alacritty"
 
 # Applies to every workflow
-[filter.events]
+[macos.filter.events]
 done = false
 pending = false
 
 # Per-workflow override — wins over the global setting above
-[filter.workflows.slack-reply]
+[macos.filter.workflows.slack-reply]
 done = true
 ```
 

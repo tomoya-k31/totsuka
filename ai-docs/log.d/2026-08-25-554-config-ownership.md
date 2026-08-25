@@ -1,0 +1,7 @@
+* **Creation**: 設定の所有をファイル位置ではなく宣言で切り、config.toml へ一本化する決定を [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) に記録（#554、protocol 0.6.0）。`plugins/{name}.toml` 廃止、`[[workflows]]` のフラットな追加キーと「ちょうど 1 つが引き取る」規則、ワークフロー選択のプラグインへの一元化、`[[projects]]` + `[[repositories]].project`。
+* **Update**: [ADR-0056](/decisions/adr-0056-multi-tracker-routing.md) の §4（repo→トラッカーのマッピングはプラグイン設定を正本にする）を ADR-0058 が置き換えた。§1〜§3 は生きている。`ClaimConflict` は状態が書けなくなったので機構ごと削除。
+* **Update**: [ADR-0057](/decisions/adr-0057-per-workflow-publish-and-cleanup.md) の `publish` は設定も判断もそのままで、読む主体が core から Slack プラグインへ移った。`ResultPublishParams.delivery` は 0.6.0 で削除。
+* **Update**: [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md) の不変条件（本人が付けたときだけ起動）は不変。Orchestrator の二度目の照合と `reaction` 予約語彙が消え、「catch-all より前に書け」の順序制約も構造的に消滅した。
+* **Update**: [設定リファレンス](/development/config-reference.md) / [設定例集](/development/config-examples.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) を 1 ファイル構成へ書き換え、`[[projects]]` と引き取り規則を追記。
+* **Update**: [orchestrator-spec](/product/orchestrator-spec.md) の F-01 / F-56 / F-59 / F-64 / F-81 を更新し、F-67（トラッカー宣言）と F-88（プラグイン定義の workflow キー）を新設。F-64 は「ファイルへ分離する」から「config.toml の `[<name>]` に置く」へ意味が変わった。
+* **Update**: [plugin-protocol](/components/plugin-protocol.md) / [orchestrator-core](/components/orchestrator-core.md) / [orchestrator-cli](/components/orchestrator-cli.md) / [task-source-github](/components/task-source-github.md) / [task-source-notion](/components/task-source-notion.md) / [task-source-slack](/components/task-source-slack.md) に 0.6.0 の変更を反映。

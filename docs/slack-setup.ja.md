@@ -1,7 +1,7 @@
 > 🌐 [English](slack-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:58fc01583e754a7029a9a90678c1d47eda29374b1ec2a9824a31ab32165bc6d6 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:9d05d01e8c44d59633911120116f277f83f0d8668a4b1747b1383acfe6ff116d -->
 
 # Slack ソースのセットアップ
 
@@ -38,7 +38,7 @@ op item edit totsuka slack-app='xapp-…'
 op item edit totsuka slack-bot='xoxb-…'    # 任意
 ```
 
-**vault 名 `Dev` も固定である。** 別の vault を使っているなら、`setup` の生成後に `plugins/slack.toml` の参照を手で書き換える（下記のとおり手で書く場合は任意の参照でよい）。
+**vault 名 `Dev` も固定である。** 別の vault を使っているなら、`setup` の生成後に `[slack]` の参照を手で書き換える（下記のとおり手で書く場合は任意の参照でよい）。
 
 macOS なら Keychain でもよい。参照は `keychain:totsuka/slack-user` の形になり、これは `setup` が書くものと一致する:
 
@@ -54,7 +54,7 @@ security add-generic-password -U -s totsuka -a slack-bot  -w 'xoxb-…'   # 任�
 totsuka setup
 ```
 
-レシピは **「Slack — reply as yourself」** を選ぶ。聞かれるのはリポジトリ、手順 1 で控えたメンバー ID、そしてメンションがどのリポジトリの話かを判定する LLM だけである。`plugins/slack.toml` の生成、プラグインの install と enable、`doctor` の実行まで、この 1 コマンドで済む。**トークンの値は一切聞かれない。**
+レシピは **「Slack — reply as yourself」** を選ぶ。聞かれるのはリポジトリ、手順 1 で控えたメンバー ID、そしてメンションがどのリポジトリの話かを判定する LLM だけである。`[slack]` の生成、プラグインの install と enable、`doctor` の実行まで、この 1 コマンドで済む。**トークンの値は一切聞かれない。**
 
 トークンをまだ保管していなければ、`setup` が実行すべきコマンドのチェックリストを印字する。
 
@@ -102,9 +102,10 @@ agent = "herdr"
 output = "source"        # 結果は承認フローへ渡る
 ```
 
-`~/.config/totsuka/plugins/slack.toml`:
+`~/.config/totsuka/config.toml`:
 
 ```toml
+[slack]
 app_token = "op://Dev/totsuka/slack-app"
 user_token = "op://Dev/totsuka/slack-user"
 bot_token = "op://Dev/totsuka/slack-bot"  # 任意: 通知 DM。

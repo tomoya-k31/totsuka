@@ -14,7 +14,7 @@ REPO="$(cd "$SKILL_DIR/../../.." && pwd)"
 echo "==> repo=$REPO"
 echo "==> E2E_HOME=$E2E_HOME"
 
-mkdir -p "$E2E_HOME"/{cfg/totsuka/plugins,data/totsuka/plugins,state/totsuka,cache,repo,pkg}
+mkdir -p "$E2E_HOME"/{cfg/totsuka,data/totsuka/plugins,state/totsuka,cache,repo,pkg}
 
 echo "==> cargo build --workspace"
 (cd "$REPO" && cargo build --workspace >/dev/null)
@@ -40,10 +40,8 @@ place() {  # place <src> <dst>
   fi
 }
 echo "==> 設定の配置"
+# 設定は 1 本だけ（#554。プラグイン個別設定も [<name>] としてこの中にある）
 place "$SKILL_DIR/assets/cfg/config.toml"          "$E2E_HOME/cfg/totsuka/config.toml"
-for f in slack github herdr; do
-  place "$SKILL_DIR/assets/cfg/plugins/$f.toml"    "$E2E_HOME/cfg/totsuka/plugins/$f.toml"
-done
 
 echo "==> プラグインの install"
 for name in slack github herdr mock_agent; do
@@ -63,7 +61,7 @@ done
 cat <<'MSG'
 
 ==> 次にやること
-  1. $E2E_HOME/cfg/totsuka/plugins/{slack,github}.toml の ________ を埋める
+  1. $E2E_HOME/cfg/totsuka/config.toml の ________ を埋める（[slack] / [github] / [[projects]]）
   2. source .env && tt config validate
   3. source .env && tt doctor      # state-db の fail は run 前なら正常
   4. 人間のターミナルで: source .env && tt run --watch

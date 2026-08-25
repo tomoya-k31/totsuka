@@ -93,11 +93,11 @@ fi
 : "${E2E_GH_OWNER:?E2E_GH_OWNER が未設定です。リポジトリルートで source .env してください}"
 OWNER="$E2E_GH_OWNER"
 PROJECT="${E2E_GH_PROJECT:?E2E_GH_PROJECT が未設定です}"
-# plugins/github.toml の `owner_type` と同じ意味で、GraphQL のルートフィールドが
+# [[projects]] の `owner_type` と同じ意味で、GraphQL のルートフィールドが
 # 変わる（client.rs の `OwnerType::graphql_root`）。**既定は user なので、org 所有
 # の board を測るときは必ず `E2E_GH_OWNER_TYPE=organization` を渡すこと** —
 # 渡さないと `user(login:)` を叩いて「board が見えない」と誤報告する。
-# plugins/github.toml からは読まない（このスクリプトは totsuka の設定に依存せず、
+# config.toml からは読まない（このスクリプトは totsuka の設定に依存せず、
 # トークンだけを差し替えて回せることを優先している）。
 OWNER_TYPE="${E2E_GH_OWNER_TYPE:-user}"
 STATUS_FIELD="${E2E_GH_STATUS_FIELD:-Status}"

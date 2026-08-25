@@ -1,7 +1,7 @@
 > 🌐 [English](click-to-focus-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:4ad9e93bc635818d285579b1a814db883576a7ed9ed7bf5ed0f274927ab78499 -->
+<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:249a4afe70b35be017281ed4507c45195d52c5273a9a90e70659f153425bb99d -->
 
 # 通知をクリックしてタスクの pane を開く
 
@@ -32,11 +32,12 @@ osascript -e 'id of app "Alacritty"'   # → org.alacritty
 | Kitty | `net.kovidgoyal.kitty` |
 | WezTerm | `com.github.wez.wezterm` |
 
-## 3. `plugins/macos.toml` を書く
+## 3. `[macos]` テーブルを書く
 
 設定ディレクトリ（`$XDG_CONFIG_HOME/totsuka/plugins/`、通常は `~/.config/totsuka/plugins/`）に置く:
 
 ```toml
+[macos]
 backend = "terminal_notifier"
 activate_bundle_id = "org.alacritty"          # 手順 2 の値
 
@@ -45,7 +46,7 @@ activate_bundle_id = "org.alacritty"          # 手順 2 の値
 # click_command = "totsuka focus {task_id}"
 ```
 
-**ファイル名は `macos.toml` である。`notifier-macos.toml` ではない。** プラグイン名が付く。ここを間違えると黙って効かない —— ファイルは読まれず、エラーも警告も出ず、通知は届き続け、クリックすると相変わらずスクリプトエディタが開く。
+**テーブル名は `[macos]` である。`[notifier-macos]` ではない。** プラグイン名が付く。ここを間違えると `totsuka config validate` が弾く —— `[plugins.*]` に無い名前のトップレベルテーブルは受け付けない。
 
 効くのは `backend` である。バックエンドが既定のままだと、`activate_bundle_id` だけ書いても何も変わらない。
 
@@ -74,8 +75,8 @@ terminal-notifier -title "test" -subtitle "click-to-focus" -message "click me" \
 
 | 症状 | 原因の候補 | 対処 |
 |---|---|---|
-| 通知は届くがクリックしても何も起きない | `backend` が既定の `osascript` のまま | `plugins/macos.toml` に `backend = "terminal_notifier"` を書いて `totsuka run` を再起動する |
-| 設定を書いたのに何も変わらない | ファイル名が `notifier-macos.toml` になっている、または plugins 設定ディレクトリの外にある | `plugins/macos.toml` でなければならない。試しに出鱈目なキーを 1 行足すとよい —— `totsuka config validate` が不明キーを弾くのは、そのファイルを実際に読んでいるときだけである |
+| 通知は届くがクリックしても何も起きない | `backend` が既定の `osascript` のまま | `[macos]` に `backend = "terminal_notifier"` を書いて `totsuka run` を再起動する |
+| 設定を書いたのに何も変わらない | テーブル名が `[notifier-macos]` になっている、または設定を `[macos]` ではなく `[plugins.macos]`（ロスター）へ書いている | `[plugins.macos]` はプラグインの宣言、`[macos]` はその設定である。名前を間違えたトップレベルテーブルは `totsuka config validate` が弾くので、黙って無視されることはない |
 | アプリは前面に来るが pane が変わらない | `totsuka run` が動いていない（フォーカス操作は静かに何もしない）／pane が既に閉じている／使っているエージェントが pane の操作に対応していない | `totsuka focus <task-id>` を手で実行する。理由が表示される |
 | クリックでコマンドは走るがアプリが前面に来ない | `activate_bundle_id` が未設定か誤り | 手順 2 で確認し直す |
 | `config validate` が terminal-notifier のエラーを出す | 未導入／`PATH` 外／`terminal_notifier_bin` が誤り | 導入するか絶対パスを書く。使わずに済ませるなら `backend = "osascript"` に戻す（通知は届くがクリックは効かない） |
@@ -84,19 +85,20 @@ terminal-notifier -title "test" -subtitle "click-to-focus" -message "click me" \
 
 ## どのイベントで通知するか
 
-同じファイルで、そもそもどのイベントを通知するかも決められる。既定は全部 on なので、**切りたいものだけ**を書く。
+同じテーブルで、そもそもどのイベントを通知するかも決められる。既定は全部 on なので、**切りたいものだけ**を書く。
 
 ```toml
+[macos]
 backend = "terminal_notifier"
 activate_bundle_id = "org.alacritty"
 
 # 全ワークフローに効く
-[filter.events]
+[macos.filter.events]
 done = false
 pending = false
 
 # ワークフロー別の上書き。上のグローバル設定より優先される
-[filter.workflows.slack-reply]
+[macos.filter.workflows.slack-reply]
 done = true
 ```
 

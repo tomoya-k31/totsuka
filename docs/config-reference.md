@@ -1,16 +1,19 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:b7d588fe5fd199983811b0a9a1f5b03d3378facf071dad48fa70a0fcfb4d2db4 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:65ff31d266be71d0afa6f60271b4166bfbb23dbce3f633c8e634cea8ecaa5837 -->
 
 # Configuration reference
 
-Every key in `config.toml` and in the per-plugin `plugins/{name}.toml`, with its type, default, and meaning.
+Every key in `config.toml` — totsuka's own and each plugin's — with its type, default, and meaning.
 
-## Where the files live
+## Where the file lives
 
-- Shared configuration: `$XDG_CONFIG_HOME/totsuka/config.toml` (by default `~/.config/totsuka/config.toml`)
-- Per-plugin configuration: `$XDG_CONFIG_HOME/totsuka/plugins/{name}.toml`. totsuka keeps this uninterpreted and passes it to the plugin once secrets are resolved
-- `--config <path>` overrides the location of `config.toml`
+**There is one configuration file:** `$XDG_CONFIG_HOME/totsuka/config.toml` (by default `~/.config/totsuka/config.toml`).
+
+- `--config <path>` overrides its location
+- A plugin's own settings are a top-level `[<name>]` table in the same file. totsuka keeps it uninterpreted and passes it to the plugin once secrets are resolved
+
+The separate `plugins/{name}.toml` files are gone. If you still have them they are not read, and they do not produce an error either — delete them when you move your settings across.
 
 `totsuka init` writes a template. `totsuka config validate` checks it; `totsuka config show [--redacted]` prints it.
 
@@ -72,10 +75,49 @@ The guidance depends on which side is behind:
 | `tool` | string? | `default_tool` | Default AI tool for tasks dispatched to this repository. A workflow's `tool` wins |
 | `max_concurrency` | int? | unlimited | Per-repository limit on tasks running at once |
 | `worktree_location` | string? | `[worktree].location` | Overrides the worktree placement template for this repository |
+| `project` | string? | none | The tracker new items for this repository are filed into: the `name` of a `[[projects]]` entry. **One at most.** Leaving it out is normal — it means no tracker is configured |
+
+## `[[projects]]`
+
+Where a new item goes: a GitHub Project, a Notion database, and so on.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | required | Stable id that `[[repositories]].project` points at |
+| `source` | string | required | The task source plugin that owns this tracker |
+| everything else | — | — | Belongs to that plugin. totsuka passes it through without reading it |
+
+```toml
+[[projects]]
+name = "tomo-prj"
+source = "github"
+owner = "tomoya-k31"        # read by the github plugin
+owner_type = "user"
+project_number = 6
+triage_status = "Inbox"     # status a filed item lands in (omit for none)
+
+[[projects]]
+name = "design-db"
+source = "notion"
+database_id = "..."         # read by the notion plugin
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/github/tomoya-k31/totsuka"
+project = "tomo-prj"
+```
+
+Writing `source` out is what lets `totsuka config validate` follow the chain `[[repositories]].project` → `[[projects]].name` → `[plugins.<source>]` **without launching a plugin**, so a broken reference is caught offline. `config validate` rejects a duplicate `name`, a `source` that is not an enabled task source, and a `project` pointing at an entry that does not exist.
+
+Because `project` is a single value, a repository files into exactly one tracker. Two sources cannot end up claiming the same repository.
 
 ## `[plugins.{name}]`
 
-`{name}` is the instance name a workflow refers to with `source` or `agent`.
+`{name}` is the instance name a workflow refers to with `source` or `agent`. **This is the roster, not the settings** — a plugin's own settings go in the top-level `[<name>]` table.
+
+The roster is also what makes a `[<name>]` table legitimate: **a top-level table whose name is not in it is a configuration error**. That catches a mistyped core key (`[worktre]`) and a mistyped plugin name (`[slak]`) alike.
+
+**A plugin cannot be named after one of totsuka's own top-level keys** (`version`, `max_concurrency`, `repositories`, `projects`, `plugins`, `default_tool`, `tools`, `workflows`, `llm`, `worktree`, `log`, `hooks`, `prompts`). Its `[<name>]` table would be read as that key instead, and the plugin would start with an empty configuration and no complaint, so the roster entry is refused up front.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -93,7 +135,7 @@ The guidance depends on which side is behind:
 |---|---|---|---|
 | `name` | string | required | Workflow name |
 | `source` | string | required | Task source instance name |
-| `trigger` | table | `{}` (matches everything) | Match conditions. See below |
+| `trigger` | table | `{}` | Match conditions. **totsuka does not interpret the contents** — the source plugin does. See below |
 | `profile` | enum? | none | One of `answer`, `triage`, `design`, `implement`. Decides `mode`, `output`, and `verification` together |
 | `mode` | enum | required without `profile` | `plan` or `implement` |
 | `agent` | string | required | Agent instance name |
@@ -105,24 +147,52 @@ The guidance depends on which side is behind:
 | `rubric` | string? | none | The criteria used for `llm` verification. **The only prompt override there is** (see below); it beats the profile's default |
 | `tool` | string? | none | Pins the AI tool. Workflow beats repository beats `default_tool` |
 | `initial_prompt` | string? | none | Extra instructions prepended for this workflow's agent. See below |
-| `publish` | `draft` \| `direct` | `draft` | How a published result reaches you. `draft` presents it for approval first (the default); `direct` posts it immediately with no approval step. Only meaningful with `output = "source"` — `totsuka config validate` warns otherwise. Only the Slack source delivers results, so this key has no effect on other sources |
 | `cleanup` | same values as `[worktree]` | none | Worktree cleanup override for this workflow's tasks. Beats the mode default in `[worktree]`. `manual` keeps the worktree **and its pane** open after the task finishes. If you later remove or rename the workflow in config, finished tasks fall back to the mode default |
 
-Workflows are matched in definition order, first match wins. Overlapping triggers within one source produce a warning. **A workflow defined after a catch-all (`trigger = {}`) for the same source is unreachable**, and you get a warning.
+Workflows are matched in definition order, first match wins — **and the source plugin is what runs that match**. It receives your workflows at startup, decides which one a task belongs to, and names it when it hands the task over. totsuka checks only that the name exists and belongs to that source.
+
+### Keys a plugin defines
+
+A plugin can add its own keys to a workflow, written **flat**, next to totsuka's:
+
+```toml
+[[workflows]]
+name = "slack-books"
+source = "slack"
+agent = "herdr"
+profile = "triage"
+publish = "direct"      # defined by the slack plugin
+```
+
+totsuka cannot tell whose key that is — a workflow names a `source` **and** an `agent`. So it does not decide: the leftover keys go to both plugins at startup, and each answers which ones it consumes.
+
+| Claimants | Result |
+|---|---|
+| 0 | **Error.** Either a typo (`profil = "triage"` fails here) or a key meant for a plugin this workflow does not name |
+| 1 | That plugin's key |
+| 2 | **Error.** One key would mean two things; totsuka will not pick |
+
+Both `totsuka run` and `totsuka config validate` enforce this. **`--offline` cannot** — it never launches a plugin, so it cannot ask.
+
+Keys that exist today:
+
+| Key | Owner | Meaning |
+|---|---|---|
+| `publish` | slack | `draft` (present it for approval first — the default) or `direct` (post immediately). A value neither of those **fails at startup**, so a typo cannot silently leave the approval gate in place — or take it away |
 
 Setting `timeout_secs = 0` is for attended workflows where a human is watching the pane. A genuinely hung agent stops being detected too, so do not set it on unattended workflows.
 
 If `verification = "llm"` may resolve to a non-Claude tool, you get a warning suggesting `tool = "claude"` — in-session verification needs Claude's stop hook.
 
-### Reserved trigger keys
+### Which trigger keys work
 
-These are re-checked by totsuka against the normalized task. Anything else is passed through to the plugin as an opaque value for it to interpret.
+Every key is interpreted by the source plugin; totsuka passes the whole table through untouched. What each source understands:
 
-| Key | Matched against |
+| Source | Keys |
 |---|---|
-| `status` / `project_status` | The task's status |
-| `label` (string) / `labels` (array) | The task's labels; an array requires all of them |
-| `reaction` | A `reaction:<emoji name>` label |
+| github | `project_status` / `status`, `label` / `labels` |
+| notion | `status`, a raw `filter` |
+| slack | `reaction` (a workflow without one takes mentions) |
 
 ### `reaction` — pick a workflow with an emoji
 
@@ -135,20 +205,18 @@ profile = "implement"
 agent = "herdr"
 
 [[workflows]]
-name = "slack-reply"                  # mentions: catch-all, must be last
+name = "slack-reply"                  # mentions: the workflow with no reaction
 source = "slack"
 trigger = {}
 profile = "answer"
 agent = "herdr"
 ```
 
-- **Define reaction workflows before the catch-all.** After it they are unreachable and the emoji does nothing (you get a warning)
 - The emoji name is a **string** in the form Slack reports, without colons. Writing `":eyes:"` works — the colons are stripped. Note that 👀 is `eyes` and 👁 is `eye`, which are different
-- **A non-string value such as `reaction = 123` is a startup error.** An unreadable reserved key is skipped at match time, which would break things in two opposite directions at once: the workflow would match every task (and, sitting before the catch-all, swallow your mentions) while the plugin registered no emoji at all. Neither half reports an error on its own
-- **Using the same emoji in two workflows is a configuration error**, rather than letting first-match silently pick one
+- **Using the same emoji in two workflows is a configuration error**, rather than letting one silently win
+- **Two workflows without a reaction is also an error** — a mention would go to whichever came first
+- **Order does not matter.** Mentions and reactions arrive on different paths inside the plugin, so a reaction workflow written after the mention one is not shadowed by it
 - Only your own reactions start a task. There is no setting that relaxes this
-
-**Mixed versions:** with a new plugin against an older core, the core has no `reaction` reserved key and the reaction workflow swallows every task. Upgrade the core before the plugin. When rolling back, remove reaction workflows from your configuration.
 
 ### `initial_prompt`
 
@@ -298,7 +366,7 @@ agent = "herdr"
 
 ### Source plugin instructions
 
-`plugins/github.toml` and `plugins/notion.toml` accept a `[prompts]` table with the instructions a plugin attaches when a profile tells it what kind of task this is.
+`[github.prompts]` and `[notion.prompts]` hold the instructions a plugin attaches when a profile tells it what kind of task this is.
 
 | Key | Used when | Placeholders |
 |---|---|---|
@@ -415,7 +483,7 @@ Left alone, an unconfigured claude launches in its manual mode and stops dead on
 
 **Setting `mode_args` or `plan_args` replaces the defaults wholesale**, including these flags. Add them back yourself if you run unattended.
 
-Tool resolution at dispatch is workflow pin, then repository default, then `default_tool`, then the built-in `claude`. totsuka builds the complete command line here, so the `agent_command` and `plan_args` keys in `plugins/herdr.toml` — once a backward-compatibility fallback — **have been removed**. Leaving one in place makes the plugin refuse to start, naming the key and its replacement. Configure tools through `[tools.{name}]`.
+Tool resolution at dispatch is workflow pin, then repository default, then `default_tool`, then the built-in `claude`. totsuka builds the complete command line here, so the `agent_command` and `plan_args` keys under `[herdr]` — once a backward-compatibility fallback — **have been removed**. Leaving one in place makes the plugin refuse to start, naming the key and its replacement. Configure tools through `[tools.{name}]`.
 
 ## Prompt text
 
@@ -552,7 +620,7 @@ Settings for receiving agent CLI hook events. Every key is optional.
 
 If a workflow uses a hook-capable agent, leaving `auth_token_ref` unset makes `config validate` and `run` warn per workflow, and makes `doctor` **fail**. Without any hook-capable agent, `doctor` only warns. A reference that is set but cannot be resolved always fails.
 
-## `plugins/github.toml`
+## `[github]`
 
 This is the only polling task source here — `poll_interval_secs` becomes the plugin's own fetch interval. (The Slack source next door is event-driven and ignores it.)
 
@@ -566,7 +634,6 @@ poll_interval_secs = 60   # 60 is also the default
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `token` | string | required | API token, sent as a bearer token and nothing else. See the permissions below. `cmd:gh auth token` works |
-| `[[projects]]` | array of tables | required, non-empty | The boards to poll. One or more; see the table below |
 | `status_field` | string | `Status` | Name of the single-select field holding the status column. **Shared by every board** |
 | `github_login` | string | required | Your own login, used to detect self-assigned tasks |
 | `in_progress_statuses` | string[] | `[]` | Status names treated as in progress and therefore skipped. **Shared by every board** |
@@ -574,50 +641,61 @@ poll_interval_secs = 60   # 60 is also the default
 | `source_name` | string | `github` | The source name stamped on each task. Adding boards does not change it, so `[[workflows]].source = "github"` stays a single entry |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise or testing |
 | `max_retries` | int | 3 | Retries for retryable API failures |
-| `[prompts]` | table | — | Overrides for the prompts this plugin sends |
+| `[github.prompts]` | table | — | Overrides for the prompts this plugin sends |
 
-Each `[[projects]]` entry:
+**The boards are not in this table.** They are `[[projects]]` entries with `source = "github"`, and the repositories that use them say so with `[[repositories]].project`:
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
+| `name` | string | required | totsuka's key: what `[[repositories]].project` points at |
+| `source` | string | required | totsuka's key: `"github"` |
 | `owner` | string | required | Login of the project owner, a user or an organization |
 | `owner_type` | `user` \| `organization` | `user` | Whether `owner` is a user or an organization. **Set per entry**, so user-owned and org-owned boards can be mixed |
 | `project_number` | int | required | The ProjectsV2 number under `owner`. The positive-number check does **not** run at startup — see below |
-| `repos` | string[] | **required, non-empty** | Repository names this board is the tracker for. **It does two jobs** — see below |
 | `triage_status` | string? | none | Status option to put a triage-filed item into. **Unset = the item is added with no Status.** A status-less item matches no `project_status` trigger condition, so **if every workflow on this source filters by status** nothing picks it up until you triage it on the board (a trigger without a status condition matches it regardless — the gate is only as real as your triggers). **Setting this to a value one of your workflow triggers polls (e.g. `Todo`) removes that gate** — filing then flows straight into an unattended run. Fine when intended; the default keeps it from happening by accident |
 
 ```toml
+[github]
 token = "cmd:gh auth token"
 github_login = "your-login"
+status_field = "Status"
+in_progress_statuses = ["In Progress"]
 
 [[projects]]
+name = "my-board"
+source = "github"
 owner = "your-login"
 project_number = 7
-repos = ["totsuka", "dotfiles"]
 
 [[projects]]
+name = "web-board"
+source = "github"
 owner = "my-org"
 owner_type = "organization"
 project_number = 3
-repos = ["web-app"]
 triage_status = "📥 Inbox"   # optional: put triage-filed items into this column
 
-status_field = "Status"
-in_progress_statuses = ["In Progress"]
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/github/your-login/totsuka"
+project = "my-board"
+
+[[repositories]]
+name = "web-app"
+path = "~/Workspace/github/my-org/web-app"
+project = "web-board"
 ```
 
-**Mind the TOML ordering.** A top-level key written *after* a `[[projects]]` block lands **inside that block** — an array-of-tables runs until the next heading. In the example above `status_field` sits at the end because that is where it belongs for readability; put top-level keys **before** the first `[[projects]]` block if you would rather not think about it, because getting it wrong makes startup fail with an unknown key inside a project entry.
+**Mind the TOML ordering.** A key written *after* a `[[projects]]` block lands **inside that block** — an array-of-tables runs until the next heading. Put the `[github]` keys under the `[github]` heading and the boards after them, or startup fails with an unknown key inside a project entry.
 
-### `[[projects]].repos` does two jobs
+### What the binding does
 
 It is both:
 
-1. **The intake filter** — an issue on that board, but in a repository not listed here, is skipped.
+1. **The intake filter** — an issue on that board, but in a repository not bound to it, is skipped.
 2. **The repository → board mapping** — this is what lets a triage task started from Slack know which board to file into.
 
-It is required and non-empty because of the second job: a board does not know which repositories it will hold in future, so an omitted list cannot be turned into a mapping.
-
-**A repository may appear on only one board.** `totsuka config validate` rejects a config that lists the same repository twice, because two answers to "where does an item for this repository go" is the same as no answer. A board is identified by `(owner, project_number)` — ProjectsV2 numbers are per-owner, so comparing numbers alone would treat `me/#7` and `acme/#7` as one board and miss the duplicate. A repository claimed by both the GitHub and the Notion source is caught by totsuka itself, at startup and by `totsuka doctor`.
+Two jobs, one place to write it. **A repository files into exactly one board**, because `project` is a single value; there is no way to write the ambiguity that used to need checking. The same holds across sources — a repository cannot be claimed by both the GitHub and the Notion plugin.
 
 ### A wrong `project_number` does not fail at startup
 
@@ -652,7 +730,7 @@ For a fine-grained PAT (org-owned boards only):
 
 **Opening the pull request is not this token's job.** In an `implement` workflow the agent runs `gh pr create` itself, using your own `gh` authentication from the pane's environment. `gh auth login` is a separate prerequisite.
 
-### `[prompts]` for the GitHub source
+### `[github.prompts]`
 
 Built-in defaults are embedded in the binary; this table overrides them one key at a time, and the key names are the config keys.
 
@@ -662,7 +740,7 @@ Built-in defaults are embedded in the binary; this table overrides them one key 
 | `design_instructions` | The workflow's profile is `design` |
 | `implement_instructions` | The workflow's profile is `implement` |
 
-## `plugins/slack.toml`
+## `[slack]`
 
 The Slack source is event-driven — it pushes each event as it arrives — so `poll_interval_secs` is unused.
 
@@ -680,15 +758,15 @@ kind = "task_source"
 | `target_user_id` | string | required | Your Slack user id. Mentions of this user become tasks, and it is checked against the token's own identity |
 | `thread_context_limit` | int | 6 | How many recent thread messages to include in the task body |
 | `reply_style` | string? | none | Tone instructions injected into the task body |
-| `[prompts]` | table | — | Overrides for the prompts this plugin sends |
+| `[slack.prompts]` | table | — | Overrides for the prompts this plugin sends |
 | `source_name` | string | `slack` | The source name stamped on each task |
-| `[[repos]]` | array | none | Candidate repositories: `name` (must match one in `config.toml`), optional `summary` and `path`. **Omit it and the repositories from `config.toml` are used**, which is usually what you want |
-| `[[channel_groups]]` | array | none | Narrow the candidates by channel name prefix; first match in definition order. `prefix` plus `repos` |
-| `[llm]` | table | none | The classifier LLM: `base_url`, `model`, `api_key`, and `confidence_threshold` (default 0.6; below it you get a picker). **Omit it and `config.toml`'s `[llm]` is the default**, provided it has a key. With two or more candidates and neither source of settings, startup fails |
+| `[[slack.repos]]` | array | none | Candidate repositories: `name` (must match one in `config.toml`), optional `summary` and `path`. **Omit it and the repositories from `config.toml` are used**, which is usually what you want |
+| `[[slack.channel_groups]]` | array | none | Narrow the candidates by channel name prefix; first match in definition order. `prefix` plus `repos` |
+| `[slack.llm]` | table | none | The classifier LLM: `base_url`, `model`, `api_key`, and `confidence_threshold` (default 0.6; below it you get a picker). **Omit it and `config.toml`'s `[llm]` is the default**, provided it has a key. With two or more candidates and neither source of settings, startup fails |
 | `api_url` | string | `https://slack.com/api` | Web API base URL, for testing |
 | `max_retries` | int | 3 | Retries for retryable API failures |
 
-### `[prompts]` for the Slack source
+### `[slack.prompts]`
 
 Per-key overrides for the prompts this plugin sends; the key name is the setting name.
 
@@ -713,7 +791,7 @@ Things to know:
 - Unknown placeholders pass through and are logged as a warning at startup. **This is deliberately not an error**: the symptom is a visible `{token}` in the draft. The core's `rubric` fails hard instead, because it is the judging condition and a broken one only makes verification looser
 - These are **LLM prompts only**. A bad override degrades classification or draft quality; it cannot break completion detection. That difference in blast radius is why this table stayed while the core's prompt overrides were removed
 
-## `plugins/herdr.toml`
+## `[herdr]`
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -728,10 +806,10 @@ Socket resolution order: `socket_path`, then `session`, then `HERDR_SOCKET_PATH`
 
 **herdr 0.7.5 or newer is required.** Against anything older, initialization is refused and `config validate` and `doctor` name the version. The check reads herdr's own version, and **there is no upper bound** — a newer herdr is never refused.
 
-### `[identity]`
+### `[herdr.identity]`
 
 ```toml
-[identity]
+[herdr.identity]
 enabled = true   # the default
 ```
 
@@ -752,12 +830,12 @@ Only when both reports succeed is the workspace label renamed to `{repo}: {title
 
 Setting `enabled = false` stops the reporting entirely.
 
-### `[kind_map]`
+### `[herdr.kind_map]`
 
 herdr picks the executable from its own fixed vocabulary, so the plugin translates a **file name** into it. `claude`, `codex`, and `opencode` pass through, so you usually need nothing here. You need it for a wrapper script under a name herdr does not know:
 
 ```toml
-[kind_map]
+[herdr.kind_map]
 my-claude = "claude"
 ```
 
@@ -765,7 +843,7 @@ my-claude = "claude"
 - Values are not validated. herdr rejects an unknown one itself; duplicating its vocabulary here would silently drift when herdr adds to it
 - This does not belong in the `[tools]` registry, which is shared across agents — herdr-specific vocabulary there would leak into setups that never use herdr
 
-### `[layout]`
+### `[herdr.layout]`
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|

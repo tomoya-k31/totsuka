@@ -25,7 +25,7 @@ owner: tomoya-k31
 
 # 2. トークンを保管する
 
-**通常は 1Password に置く。** 手順 3 で `plugins/slack.toml` に書かれるのは**参照であって、トークンの値ではない**。
+**通常は 1Password に置く。** 手順 3 で `[slack]` に書かれるのは**参照であって、トークンの値ではない**。
 
 **`setup` が書く参照に合わせること。** 1Password バックエンドを選ぶと `setup` は vault `Dev` / item `totsuka` の固定形（`SecretBackend::reference`）を書くので、別の item に入れると**設定が指す先と実際の保管先が食い違い、プラグインが起動できない**:
 
@@ -41,7 +41,7 @@ op item edit totsuka slack-app='xapp-…'
 op item edit totsuka slack-bot='xoxb-…'    # 通知ナッジを使う場合
 ```
 
-**vault 名 `Dev` も固定である。** 別の vault を使っているなら、`setup` の生成後に `plugins/slack.toml` の参照を手で書き換える（手で書く場合は下記のとおり任意の参照でよい）。
+**vault 名 `Dev` も固定である。** 別の vault を使っているなら、`setup` の生成後に `[slack]` の参照を手で書き換える（手で書く場合は下記のとおり任意の参照でよい）。
 
 macOS でしか使わないなら Keychain でもよい（参照は `keychain:totsuka/slack-user` の形になり、こちらも `setup` の生成と一致する）:
 
@@ -59,7 +59,7 @@ security add-generic-password -U -s totsuka -a slack-bot  -w 'xoxb-…'   # 通�
 totsuka setup
 ```
 
-レシピの選択で **「Slack — reply as yourself」** を選ぶ。聞かれるのはリポジトリと、手順 2 で控えたメンバー ID、リポジトリ分類用の LLM だけで、`plugins/slack.toml` の生成・プラグインの install + enable・`doctor` の実行までこの 1 コマンドで済む。トークンの**値**は聞かれない（[ADR-0028](/decisions/adr-0028-setup-wizard.md)）。
+レシピの選択で **「Slack — reply as yourself」** を選ぶ。聞かれるのはリポジトリと、手順 2 で控えたメンバー ID、リポジトリ分類用の LLM だけで、`[slack]` の生成・プラグインの install + enable・`doctor` の実行までこの 1 コマンドで済む。トークンの**値**は聞かれない（[ADR-0028](/decisions/adr-0028-setup-wizard.md)）。
 
 手順 2 のトークン保管がまだなら、`setup` が登録コマンドのチェックリストを印字するので、それから登録する。
 
@@ -108,9 +108,10 @@ agent = "herdr"
 output = "source"        # result/publish → 承認フローへ
 ```
 
-`~/.config/totsuka/plugins/slack.toml`:
+`~/.config/totsuka/config.toml` の `[slack]` テーブル:
 
 ```toml
+[slack]
 app_token = "op://Dev/totsuka/slack-app"
 user_token = "op://Dev/totsuka/slack-user"
 bot_token = "op://Dev/totsuka/slack-bot"  # 任意: 返信案/ピッカー到着の通知 DM（#305）。

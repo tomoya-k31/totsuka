@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:1a6f0ee472dc41f8adbbaa107fbb8ea5ca13596e9bd92d3158c2c895b07fb593 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:8240dc1144cf9907aa5ff4d4cb1083dd923a31181864853ebbd607c7f86bc01a -->
 
 # Plugin development guide
 
@@ -33,7 +33,7 @@ Every plugin ships a `plugin.toml` next to its binary.
 name = "github"                     # must match the binary name
 kind = "task_source"                # task_source | agent_ide | notifier
 version = "0.1.0"                   # your plugin's own version
-protocol_version = ">=0.1.6, <0.6"  # the orchestrator protocol range you support
+protocol_version = ">=0.6.0, <0.7"  # the orchestrator protocol range you support
 
 [capabilities]                      # declare only what you actually implement
 state_stream = true                 # agent: supports the state stream
@@ -66,22 +66,24 @@ The orca plugin is the same kind and still declares `>=0.1.0`, because it drives
 | Method | Direction | What it does |
 |---|---|---|
 | `initialize` | O→P | Passes resolved config and the protocol version; you return your version and capabilities |
-| `config/validate` | O→P | Validates your plugin's configuration |
+| `config/validate` | O→P | Validates your plugin's configuration. The same workflows, projects and repositories from `initialize` come with it, so you validate what you are being asked about rather than what you remembered |
 | `shutdown` | O→P | Asks you to exit, with a grace period |
 
 `initialize` also hands a `task_source` several things it would otherwise have to configure twice. All are optional — ignore what you do not use.
 
 - `repositories: [{name, summary?, path?}]` — the orchestrator's configured repositories, so a source that resolves repositories itself does not need its own copy
 - `llm: {base_url, model, api_key?}` — the orchestrator's LLM settings with the key already resolved. If your plugin has its own LLM configuration, prefer that and treat this as the default
-- `triggers: [{workflow, trigger}]` and `poll_interval_secs` — what to watch for and how often to look. Event-driven sources can ignore the interval
+- `workflows: [{workflow, trigger, options}]` — every workflow that names you, as its `source` or its `agent`, in the order they appear in the configuration. `trigger` is what a source watches for (an agent gets an empty object); `options` holds the keys on that workflow the orchestrator does not understand
+- `projects: [{name, options}]` — the trackers you own, from `[[projects]]` entries whose `source` is you. The repositories bound to each come from `[[repositories]].project`
+- `poll_interval_secs` — how often to look. Event-driven sources can ignore it
 
 ### task_source
 
-**A task source is push-only.** When you find a task you send `task/submit` to the orchestrator yourself; there is no RPC where the orchestrator comes to fetch tasks. Event-driven sources (webhooks, sockets) submit on each event; sources that are naturally polled run their own timer from the `triggers` and `poll_interval_secs` you got in `initialize`. The `plugin-sdk` crate provides that timer as `poll_loop`.
+**A task source is push-only.** When you find a task you send `task/submit` to the orchestrator yourself; there is no RPC where the orchestrator comes to fetch tasks. Event-driven sources (webhooks, sockets) submit on each event; sources that are naturally polled run their own timer from the `workflows` and `poll_interval_secs` you got in `initialize`. The `plugin-sdk` crate provides that timer as `poll_loop`.
 
 | Method | Direction | What it does |
 |---|---|---|
-| `task/submit` | **P→O request** | Pushes a task you found. The orchestrator persists before acknowledging |
+| `task/submit` | **P→O request** | Pushes a task you found, **naming the workflow it belongs to**. You ran first-match over the workflows you were given, so you already know; the orchestrator only checks that the name exists and is yours. The orchestrator persists before acknowledging |
 | `task/update_status` | O→P | Tells you the task moved, so you can reflect it in the source |
 | `result/publish` | O→P | Hands you the result to write back to the source |
 
@@ -184,6 +186,19 @@ Reinstalling **never overwrites the installed binary in place.** It writes a tem
 | `notifier` | `notifier-macos` (osascript) |
 
 For a minimal skeleton, `crates/orchestrator-core/src/bin/mock_plugin.rs` plays every kind, driven by configuration.
+
+## Where your configuration lives
+
+Your plugin's own settings are a top-level `[<name>]` table in `config.toml`, where `<name>` is the roster name from `[plugins.<name>]` — the same as your binary name. The orchestrator holds it uninterpreted, resolves any secret references, and hands it to you as `initialize`'s `config`. A top-level table whose name is not in the roster is a configuration error, so a typo is reported rather than silently ignored.
+
+You can also define keys on the orchestrator's own structures:
+
+| Where | How ownership is decided | What you implement |
+|---|---|---|
+| `[[workflows]]` | **Asked.** Leftover keys go to the workflow's `source` and `agent`, and exactly one must claim each | Return `{workflow, key}` pairs in `claimed_options`. **Never claim a key you ignore** — that turns a typo into silence |
+| `[[projects]]` | **Settled by `source`.** An entry names exactly one plugin | Deserialize into a `deny_unknown_fields` struct. No handshake needed |
+
+A workflow key nobody claims fails startup, and so does one two plugins claim.
 
 ## Checking it works
 
