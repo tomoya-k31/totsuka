@@ -223,7 +223,7 @@ impl<T: NotionTransport> NotionClient<T> {
             }
             None => Err(NotionError::NotFound(format!(
                 "page `{page_id}` lives in database `{parent}`, which is not in \
-                 `[[notion.databases]]` → add it, or check that the task is still where it was"
+                 any `[[projects]]` entry with `source = \"notion\"` → add it, or check that the task is still where it was"
             ))),
         }
     }
@@ -530,22 +530,18 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
     }
     if config.databases.is_empty() {
         errors.push(
-            "`[[notion.databases]]` is empty → declare at least one database (database_id / repos)"
+            "no `[[projects]]` entry has `source = \"notion\"` → declare at least one database (name / database_id)"
                 .into(),
         );
     }
-    // A repository may be tracked by exactly one database (#542): the claim it
-    // produces answers "where does an item for this repo go", and two answers
-    // is the same as none.
-    let mut seen: HashMap<&str, &str> = HashMap::new();
     for database in &config.databases {
         if database.database_id.is_empty() {
             errors.push("`database_id` is empty → set the source database id".into());
         }
         if database.repos.is_empty() {
             errors.push(format!(
-                "`repos` is empty in the `[[notion.databases]]` entry for `{}` → list the repositories this database tracks (it is also the repository -> database mapping, so it cannot be inferred)",
-                database.database_id
+                "no repository is bound to the `[[projects]]` entry `{}` → set `project = \"{}\"` on the `[[repositories]]` entries this database tracks, or drop the database",
+                database.name, database.name
             ));
         }
         // `triage_status` is an instruction to fill the status column; with no
@@ -553,19 +549,9 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
         // would be told to set a value somewhere unnameable.
         if database.triage_status.is_some() && config.property_map.status.is_none() {
             errors.push(format!(
-                "`triage_status` is set in the `[[notion.databases]]` entry for `{}` but `property_map.status` is unset → map the status property, or remove triage_status",
-                database.database_id
+                "`triage_status` is set in the `[[projects]]` entry `{}` but `property_map.status` is unset → map the status property, or remove triage_status",
+                database.name
             ));
-        }
-        for repo in &database.repos {
-            if let Some(first) = seen.insert(repo.as_str(), database.database_id.as_str())
-                && first != database.database_id
-            {
-                errors.push(format!(
-                    "repository `{repo}` is listed on both database `{first}` and database `{}` → a repository may be tracked by exactly one database",
-                    database.database_id
-                ));
-            }
         }
     }
     if config.property_map.title.is_empty() {

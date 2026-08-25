@@ -281,7 +281,7 @@ impl<T: GithubTransport> GithubClient<T> {
             }
         }
         Err(GithubError::NotFound(format!(
-            "issue `{task_id}` is not an item of any `[[github.projects]]` board \
+            "issue `{task_id}` is not an item of any board this plugin polls \
              ({}) → check that the issue is still on one of those boards",
             self.config
                 .projects
@@ -447,8 +447,8 @@ impl<T: GithubTransport> GithubClient<T> {
         let project = &data[root]["projectV2"];
         if project.is_null() {
             return Err(GithubError::NotFound(format!(
-                "project #{} not found for {} `{}` → check owner/owner_type/project_number in that `[[github.projects]]` entry of config.toml",
-                project_config.project_number, root, project_config.owner
+                "project #{} not found for {} `{}` → check owner/owner_type/project_number in the `[[projects]]` entry `{}` of config.toml",
+                project_config.project_number, root, project_config.owner, project_config.name
             )));
         }
         Ok(project)
@@ -485,24 +485,15 @@ pub fn static_config_errors(config: &GithubConfig) -> Vec<String> {
     }
     if config.projects.is_empty() {
         errors.push(
-            "`[[github.projects]]` is empty → declare at least one board (owner / project_number / repos)"
+            "no `[[projects]]` entry has `source = \"github\"` → declare at least one board (name / owner / project_number)"
                 .into(),
         );
     }
-    // A repository may be tracked by exactly one board (#542): the claim it
-    // produces answers "where does an item for this repo go", and two answers
-    // is the same as none. Reported here rather than left to the Orchestrator's
-    // cross-plugin check, because within one config it is plainly a typo.
-    // Keyed by `(owner, project_number)`, not the number alone: ProjectsV2
-    // numbers are per-owner, so `tomoya-k31/#7` and `acme/#7` are different
-    // boards. Comparing numbers would call them the same and let a genuine
-    // duplicate through — with two claims for one repository as the result.
-    let mut seen: HashMap<&str, (&str, i64)> = HashMap::new();
     for project in &config.projects {
         if project.owner.is_empty() {
             errors.push(format!(
-                "`owner` is empty in the `[[github.projects]]` entry for project #{} → set the project owner login",
-                project.project_number
+                "`owner` is empty in the `[[projects]]` entry `{}` → set the project owner login",
+                project.name
             ));
         }
         if project.project_number <= 0 {
@@ -513,20 +504,9 @@ pub fn static_config_errors(config: &GithubConfig) -> Vec<String> {
         }
         if project.repos.is_empty() {
             errors.push(format!(
-                "`repos` is empty in the `[[github.projects]]` entry for project #{} → list the repositories this board tracks (it is also the repository -> board mapping, so it cannot be inferred)",
-                project.project_number
+                "no repository is bound to the `[[projects]]` entry `{}` → set `project = \"{}\"` on the `[[repositories]]` entries this board tracks, or drop the board",
+                project.name, project.name
             ));
-        }
-        let board = (project.owner.as_str(), project.project_number);
-        for repo in &project.repos {
-            if let Some(first) = seen.insert(repo.as_str(), board)
-                && first != board
-            {
-                errors.push(format!(
-                    "repository `{repo}` is listed on both project {}/#{} and project {}/#{} → a repository may be tracked by exactly one board",
-                    first.0, first.1, board.0, board.1
-                ));
-            }
         }
     }
     errors
@@ -750,75 +730,72 @@ mod tests {
         );
     }
 
-    /// A repository on two boards makes the claim ambiguous, and two answers to
-    /// "where does an item for this repo go" is the same as none (#542).
+    /// The "a repository is on two boards" check `static_config_errors` used to
+    /// carry (#542) is gone, because #554 made the state unwritable rather than
+    /// merely invalid: `repos` is no longer typed by the operator, it is
+    /// derived from the `[[repositories]]` entries whose single-valued
+    /// `project` names this board. Pinned through `resolve`, not through the
+    /// deleted check — a test asserting "no error is reported" would keep
+    /// passing if the derivation itself started handing one repository to two
+    /// boards, which is the failure the old check existed to prevent.
     #[test]
-    fn static_errors_flag_a_repository_claimed_by_two_boards() {
+    fn resolve_gives_each_repository_to_exactly_one_board() {
+        use plugin_protocol::methods::{ProjectInfo, RepoInfo};
+
+        let project = |name: &str, number: i64| ProjectInfo {
+            name: name.to_string(),
+            options: serde_json::json!({ "owner": "me", "project_number": number })
+                .as_object()
+                .unwrap()
+                .clone(),
+        };
+        let repo = |name: &str, project: &str| RepoInfo {
+            name: name.to_string(),
+            summary: None,
+            path: None,
+            project: Some(project.to_string()),
+        };
+
+        let boards = crate::config::ProjectConfig::resolve(
+            &[project("first", 1), project("second", 2)],
+            &[
+                repo("totsuka", "first"),
+                repo("shared", "first"),
+                repo("web", "second"),
+            ],
+        )
+        .expect("resolves");
+
+        let mut homes: Vec<(&str, &str)> = Vec::new();
+        for board in &boards {
+            for r in &board.repos {
+                homes.push((r.as_str(), board.name.as_str()));
+            }
+        }
+        homes.sort_unstable();
+        assert_eq!(
+            homes,
+            [("shared", "first"), ("totsuka", "first"), ("web", "second")]
+        );
+    }
+
+    /// A board no repository points at polls nothing and claims nothing, so it
+    /// is reported — the operator either meant to bind a repository to it or
+    /// meant to delete it. The message names the entry and the key to set,
+    /// because there is no longer a `repos` list to fill in on the board side.
+    #[test]
+    fn static_errors_flag_a_board_no_repository_is_bound_to() {
         let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me",
-            "projects": [
-                { "owner": "me", "project_number": 1, "repos": ["totsuka", "shared"] },
-                { "owner": "me", "project_number": 2, "repos": ["shared"] }
-            ]
+            "projects": [{ "name": "lonely", "owner": "me", "project_number": 1, "repos": [] }]
         }));
         let errors = static_config_errors(&cfg);
         assert!(
             errors
                 .iter()
-                .any(|e| e.contains("shared") && e.contains("#1") && e.contains("#2")),
+                .any(|e| e.contains("lonely") && e.contains("[[repositories]]")),
             "got {errors:?}"
         );
-        // `totsuka` appears once and must not be reported.
-        assert!(
-            !errors.iter().any(|e| e.contains("totsuka")),
-            "got {errors:?}"
-        );
-    }
-
-    /// Board identity is `(owner, number)`. ProjectsV2 numbers are per-owner,
-    /// so two owners can both have `#7` — comparing numbers alone would call
-    /// them one board and let a genuine duplicate through.
-    #[test]
-    fn two_owners_sharing_a_project_number_are_different_boards() {
-        let cfg: GithubConfig = crate::config::config_from_json(json!({
-            "token": "t", "github_login": "me",
-            "projects": [
-                { "owner": "me", "project_number": 7, "repos": ["shared"] },
-                { "owner": "acme", "owner_type": "organization",
-                  "project_number": 7, "repos": ["shared"] }
-            ]
-        }));
-        let errors = static_config_errors(&cfg);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("shared") && e.contains("me/#7") && e.contains("acme/#7")),
-            "got {errors:?}"
-        );
-    }
-
-    /// The same repository listed twice **on one board** is a harmless
-    /// duplicate, not the ambiguity above: both entries name the same
-    /// destination. Flagging it would train the operator to ignore the check.
-    #[test]
-    fn a_repository_repeated_within_one_board_is_not_an_error() {
-        let cfg: GithubConfig = crate::config::config_from_json(json!({
-            "token": "t", "github_login": "me",
-            "projects": [{ "owner": "me", "project_number": 1, "repos": ["r", "r"] }]
-        }));
-        assert!(static_config_errors(&cfg).is_empty());
-    }
-
-    /// An empty `repos` cannot be turned into a claim, so it is rejected rather
-    /// than quietly meaning "every repo on the board" as it did pre-#542.
-    #[test]
-    fn static_errors_flag_an_empty_repos_list() {
-        let cfg: GithubConfig = crate::config::config_from_json(json!({
-            "token": "t", "github_login": "me",
-            "projects": [{ "owner": "me", "project_number": 1, "repos": [] }]
-        }));
-        let errors = static_config_errors(&cfg);
-        assert!(errors.iter().any(|e| e.contains("repos")), "got {errors:?}");
     }
 
     /// No boards at all: serde accepts `projects = []` (it is a list, not a
@@ -830,7 +807,7 @@ mod tests {
         }));
         let errors = static_config_errors(&cfg);
         assert!(
-            errors.iter().any(|e| e.contains("[[github.projects]]")),
+            errors.iter().any(|e| e.contains("`source = \"github\"`")),
             "got {errors:?}"
         );
     }

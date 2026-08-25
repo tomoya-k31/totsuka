@@ -120,12 +120,14 @@ pub fn drafts_for(answers: &Answers, recipe: &Recipe) -> Vec<PluginConfigDraft> 
 /// Serialise a settings struct **nested under its plugin name**, with a header
 /// saying where it came from.
 ///
-/// The nesting is not cosmetic. `GithubFile::projects` serialises as an
-/// array-of-tables, and at the top level that is `[[projects]]` — a *different*
-/// table from `[github.projects]`, which is what the plugin is handed. Wrapping
-/// the struct in a one-key map before serialising is what makes the header
-/// lines come out as `[github]` and `[[github.projects]]`; writing `[github]`
-/// by hand above a top-level serialisation would not.
+/// The nesting is not cosmetic, even though these structs are currently all
+/// scalars. A field that serialised as an array-of-tables would come out at
+/// the top level as `[[thing]]` — a *different* table from `[github.thing]`,
+/// which is what the plugin is handed. Wrapping the struct in a one-key map
+/// before serialising is what keeps every header under `[github]`; writing
+/// `[github]` by hand above a top-level serialisation would not. `[[projects]]`
+/// is exactly that hazard made real: it is written by `build_config` as a
+/// top-level table (#554), and it would be silently wrong here.
 ///
 /// Every field of these structs is a plain scalar, so serialisation is
 /// infallible in practice; a panic here would mean the struct grew a shape TOML

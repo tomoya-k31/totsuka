@@ -331,9 +331,11 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// old board with nothing saying so.
     ///
     /// Sources are visited in **name order**. `PluginSet::sources` is a
-    /// `HashMap`, so without sorting, a repository claimed by two plugins
-    /// (which is a config error, reported separately) would route to a
-    /// different one between runs of the same config.
+    /// `HashMap`, and iteration order would otherwise vary between runs of the
+    /// same config. Since #554 that no longer decides anything — a repository
+    /// names one `[[projects]]` entry and the entry names one source, so two
+    /// plugins cannot claim it — but the registry is also what the prose is
+    /// read out of, and unordered iteration would still shuffle *that*.
     fn claim_registry(&self) -> crate::plugins::claims::ClaimRegistry {
         let mut names: Vec<&String> = self.plugins.sources.keys().collect();
         names.sort();

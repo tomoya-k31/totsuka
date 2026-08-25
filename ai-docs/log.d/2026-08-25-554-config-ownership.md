@@ -5,3 +5,5 @@
 * **Update**: [設定リファレンス](/development/config-reference.md) / [設定例集](/development/config-examples.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) を 1 ファイル構成へ書き換え、`[[projects]]` と引き取り規則を追記。
 * **Update**: [orchestrator-spec](/product/orchestrator-spec.md) の F-01 / F-56 / F-59 / F-64 / F-81 を更新し、F-67（トラッカー宣言）と F-88（プラグイン定義の workflow キー）を新設。F-64 は「ファイルへ分離する」から「config.toml の `[<name>]` に置く」へ意味が変わった。
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) / [orchestrator-core](/components/orchestrator-core.md) / [orchestrator-cli](/components/orchestrator-cli.md) / [task-source-github](/components/task-source-github.md) / [task-source-notion](/components/task-source-notion.md) / [task-source-slack](/components/task-source-slack.md) に 0.6.0 の変更を反映。
+* **Update**: [plugin-sdk](/components/plugin-sdk.md) — `poll_loop` は `InitializeParams.workflows`（旧 `triggers`）を取り、`submit_task(task, workflow)` はどの `[[workflows]]` に属するかを名前で運ぶ。`trigger` の解釈もワークフローの選択もプラグイン側で行う。
+* **Update**: [ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md) の「プラグインは自分の設定を使う」は不変で、その置き場所だけが `plugins/{name}.toml` から `config.toml` の `[<name>]` へ移った。

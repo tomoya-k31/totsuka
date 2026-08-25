@@ -1621,11 +1621,14 @@ fn check_plugins(
     check_tracker_claims(&validated, &not_probed, checks);
 }
 
-/// Repositories claimed as a tracker target by more than one source (#542).
+/// How many repositories have a tracker to file into (#542, narrowed by #554).
 ///
-/// **The only place this is visible.** Each plugin's own `config/validate`
-/// checks its own list, so the configs are individually valid and the conflict
-/// exists only in the union — which nothing but the Orchestrator assembles.
+/// **This reports, it no longer detects.** Until #554 it was the only place a
+/// repository claimed by two sources became visible, because each plugin's
+/// `config/validate` sees only its own list and the conflict existed only in
+/// the union. That conflict is now unwritable — a repository names one
+/// `[[projects]]` entry and the entry names one source — so what is left is a
+/// count, and the check only ever produces `ok` or `skip`.
 ///
 /// Reads the claims [`validate_all`](plugin_host::validate_all) already
 /// gathered, so it inherits the launch gating exactly rather than restating it.
@@ -1633,10 +1636,9 @@ fn check_plugins(
 /// cannot express: a plugin that was never launched reports no claims, and so
 /// does a plugin that genuinely claims nothing.
 ///
-/// **A conflict is always reported, even when the picture is incomplete.** Only
-/// the all-clear verdict degrades to a skip: "these two claim the same
-/// repository" stays true whatever the un-probed plugins would have said, while
-/// "every repository routes to exactly one tracker" does not.
+/// **An incomplete picture degrades to a skip rather than an all-clear.**
+/// "Every repository routes to exactly one tracker" is a statement about the
+/// union, so it cannot be made from the plugins that happened to launch.
 fn check_tracker_claims(
     validated: &[plugin_host::ValidatedPlugin],
     not_probed: &[(String, &'static str)],

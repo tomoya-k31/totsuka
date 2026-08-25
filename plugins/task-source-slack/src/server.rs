@@ -462,11 +462,12 @@ where
     /// `delivery = "direct"` (#548) it is posted into the thread immediately
     /// instead, still under the operator's name.
     ///
-    /// The branch is [`ResultPublishParams::effective_delivery`], not a match
-    /// on the raw field: absent and unrecognised values both resolve to the
-    /// draft flow there, so this plugin never has to know which of the two it
-    /// was — skipping the approval gate on an instruction it cannot read is
-    /// the wrong side to err on.
+    /// The branch is `WorkflowOptions::delivery`, resolved once at
+    /// `initialize` from the workflow's own `publish` key (#554) — this method
+    /// only looks up the workflow the task belongs to. An unrecognised value
+    /// fails at startup rather than reaching here, so there is no "unreadable
+    /// instruction" case left to err on: the gate is decided before any task
+    /// exists.
     ///
     /// Fails only when nothing can be presented at all (unknown task after a
     /// restart, empty content, a direct post the API refused); draft

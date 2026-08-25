@@ -775,7 +775,6 @@ fn commit_in(worktree: &str) {
     }
 }
 
-/// Convert a JSON id value into a `RequestId` (numbers used by the host).
 /// The `(workflow, key)` pairs this double claims: every option key the
 /// Orchestrator handed it whose name appears in the test's `claim_options`
 /// list.
@@ -824,6 +823,7 @@ fn claimed_options(
         .unwrap_or_default()
 }
 
+/// Convert a JSON id value into a `RequestId` (numbers used by the host).
 fn request_id(id: &Value) -> plugin_protocol::RequestId {
     match id.as_i64() {
         Some(n) => plugin_protocol::RequestId::Number(n),

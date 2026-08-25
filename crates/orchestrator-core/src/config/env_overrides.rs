@@ -16,7 +16,9 @@
 //! The mapping is an explicit whitelist (`OVERRIDES`): each variable names
 //! exactly one typed field. A generic "TOML overlay from env" was rejected
 //! because `TOTSUKA_MAX_CONCURRENCY` cannot tell a word separator from a table
-//! separator, and `RootConfig` is `deny_unknown_fields` (see ADR-0009).
+//! separator, and an overlay that guessed wrong would land in
+//! `RootConfig::plugin_settings` — which since #554 catches every unrecognised
+//! top-level key and hands it to a plugin of that name (see ADR-0009).
 //!
 //! Handling is fail-loud: a whitelisted variable that does not convert aborts
 //! startup, while an unrecognized `TOTSUKA_*` name only warns (it may belong to

@@ -603,29 +603,55 @@ mod tests {
         assert!(!destination.contains("repository name"), "{destination}");
     }
 
-    /// A repository on two databases makes the claim ambiguous (#542).
-    ///
-    /// The github plugin has the same check; leaving it out here would be the
-    /// half-closed hole this repository keeps rediscovering.
+    /// The "a repository is on two databases" check (#542) is gone here for
+    /// the same reason as in the github plugin: #554 made the state unwritable
+    /// rather than invalid, because `repos` is derived from the
+    /// `[[repositories]]` entries whose single-valued `project` names this
+    /// database. Pinned through `resolve`, not through the absence of an error
+    /// — the latter would keep passing if the derivation itself started
+    /// handing one repository to two databases.
     #[test]
-    fn static_errors_flag_a_repository_claimed_by_two_databases() {
-        let cfg = parse(serde_json::json!({
-            "token": "t",
-            "databases": [
-                { "database_id": "db1", "repos": ["totsuka", "shared"] },
-                { "database_id": "db2", "repos": ["shared"] }
+    fn resolve_gives_each_repository_to_exactly_one_database() {
+        use plugin_protocol::methods::{ProjectInfo, RepoInfo};
+
+        let project = |name: &str, id: &str| ProjectInfo {
+            name: name.to_string(),
+            options: serde_json::json!({ "database_id": id })
+                .as_object()
+                .unwrap()
+                .clone(),
+        };
+        let repo = |name: &str, project: &str| RepoInfo {
+            name: name.to_string(),
+            summary: None,
+            path: None,
+            project: Some(project.to_string()),
+        };
+
+        let databases = DatabaseConfig::resolve(
+            &[project("design", "db1"), project("ops", "db2")],
+            &[
+                repo("totsuka", "design"),
+                repo("shared", "design"),
+                repo("infra", "ops"),
+            ],
+        )
+        .expect("resolves");
+
+        let mut homes: Vec<(&str, &str)> = Vec::new();
+        for database in &databases {
+            for r in &database.repos {
+                homes.push((r.as_str(), database.name.as_str()));
+            }
+        }
+        homes.sort_unstable();
+        assert_eq!(
+            homes,
+            [
+                ("infra", "ops"),
+                ("shared", "design"),
+                ("totsuka", "design")
             ]
-        }));
-        let errors = crate::client::static_config_errors(&cfg);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("shared") && e.contains("db1") && e.contains("db2")),
-            "got {errors:?}"
-        );
-        assert!(
-            !errors.iter().any(|e| e.contains("totsuka")),
-            "got {errors:?}"
         );
     }
 
@@ -660,17 +686,23 @@ mod tests {
         );
     }
 
-    /// An empty `repos` cannot become a claim, so it is rejected rather than
-    /// quietly meaning "every page in the database".
+    /// A database no repository points at polls nothing and claims nothing, so
+    /// it is reported. The message names the entry and the key to set, because
+    /// there is no longer a `repos` list to fill in on the database side.
     #[test]
-    fn static_errors_flag_an_empty_repos_list() {
+    fn static_errors_flag_a_database_no_repository_is_bound_to() {
         let cfg = parse(serde_json::json!({
             "token": "t",
-            "databases": [{ "database_id": "db1", "repos": [] }],
+            "databases": [{ "name": "lonely", "database_id": "db1", "repos": [] }],
             "property_map": { "title": "Name", "status": "Status" }
         }));
         let errors = crate::client::static_config_errors(&cfg);
-        assert!(errors.iter().any(|e| e.contains("repos")), "got {errors:?}");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("lonely") && e.contains("[[repositories]]")),
+            "got {errors:?}"
+        );
     }
 
     /// `databases = []` deserializes fine (it is a list, not a missing field),
@@ -683,7 +715,7 @@ mod tests {
         }));
         let errors = crate::client::static_config_errors(&cfg);
         assert!(
-            errors.iter().any(|e| e.contains("[[notion.databases]]")),
+            errors.iter().any(|e| e.contains(r#"`source = "notion"`"#)),
             "got {errors:?}"
         );
     }

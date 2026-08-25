@@ -1,6 +1,6 @@
 ---
 type: Guide
-title: 設定例集（config.toml / plugins/*.toml）
+title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
@@ -288,7 +288,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 
 ## シークレット参照 — 4 方式
 
-設定ファイルに生のトークンを書かない。文字列値は次の 4 形式を取れる（`config.toml` / `plugins/*.toml` の**任意の文字列 leaf** で使える）。
+設定ファイルに生のトークンを書かない。文字列値は次の 4 形式を取れる（`config.toml` の**任意の文字列 leaf** で使える — プラグインの `[<name>]` テーブルの中も含む）。
 
 | 形式 | 例 | 選ぶ基準 |
 |---|---|---|
