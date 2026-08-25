@@ -657,16 +657,29 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             Err(DispatchRefusal::AgentDown) => unreachable!("parked above"),
         };
 
+        // Exclusion claim (#556, ADR-0059): before the first side effect,
+        // ask the source to take (or confirm) this instance's hold on the
+        // task. Only sources that declared the `task_claim` capability are
+        // asked; everything else — Slack, Notion, a pre-0.6.1 github plugin —
+        // skips the block and dispatches exactly as before, which is the
+        // accepted degradation (no exclusion, not an error).
+        //
+        // A source that is *down* also cannot be asked, and the answer must
+        // then be "not now", not "go ahead": the task stays queued and the
+        // supervisor's restart brings the source back. That is the same
+        // outcome as a transient claim error, so both share the arm.
+        if !self.claim_task(&record).await? {
+            return Ok(());
+        }
+
         // `on_start` write-back (#556): the task is definitely being handed
         // to an agent this cycle, so mirror that on the source's status
         // column before the first side effect. Placed here — ahead of the
         // session-reuse fast path below — so a re-attached conversation
         // moves the column too. Best-effort like every write-back: a failed
-        // write is logged inside and must not cost the dispatch.
-        //
-        // When the source supports an exclusion claim (#556 follow-up), the
-        // claim will run immediately before this, and this write then only
-        // happens for a task this instance actually holds.
+        // write is logged inside and must not cost the dispatch. It runs
+        // after the claim settles, so on a claim-capable source it only ever
+        // writes for a task this instance actually holds.
         self.write_back_status(&record, StatusMoment::Start).await;
 
         // Conversation continuity (#242, superseding #140's D-10): a follow-up
@@ -1027,6 +1040,102 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     }
 
     /// Release the slot a task holds, if it holds one (per-task ledger).
+    /// Settle the exclusion claim for a task about to dispatch (#556).
+    ///
+    /// Returns `Ok(true)` when the dispatch may proceed: the source declared
+    /// no `task_claim` capability (no exclusion — the pre-#556 behaviour), or
+    /// it answered `won`. Every other outcome ends this dispatch attempt:
+    ///
+    /// - **`lost`** → the slot is released and the task moves to `Skipped`
+    ///   (terminal). Not `Failed`: the failure write-back would move the
+    ///   board column of a task another member is actively running. The ways
+    ///   back are `totsuka task retry` and a reopened conversation.
+    /// - **`forbidden`** → the claim write was silently discarded (GitHub
+    ///   answers 200 for an assignee without push access) and will keep
+    ///   being discarded until a human fixes it. The task fails **without**
+    ///   the `on_failure` write-back — nobody holds this task, so moving its
+    ///   column would remove it from every other member's trigger.
+    /// - **transient error / source down** → the task stays `Queued` and the
+    ///   next cycle retries; nothing is recorded. The plugin reports "the
+    ///   adjudication cannot be decided yet" this way too, so a temporarily
+    ///   invisible timeline event costs a delay, never a wrong answer.
+    async fn claim_task(&mut self, record: &TaskRecord) -> Result<bool, EngineError> {
+        let outcome = match self.plugins.sources.get(&record.source) {
+            Some(source) if source.capabilities().task_claim => {
+                let params = TaskClaimParams {
+                    task_id: record.source_task_id.clone(),
+                };
+                source
+                    .call::<_, TaskClaimResult>(method::TASK_CLAIM, &params)
+                    .await
+            }
+            Some(_) => return Ok(true), // no capability → no exclusion (F-08)
+            None => {
+                self.release_slot(record.id);
+                tracing::warn!(
+                    task_id = record.id,
+                    source = %record.source,
+                    "cannot claim: source plugin not running; task stays queued"
+                );
+                return Ok(false);
+            }
+        };
+        match outcome {
+            Ok(TaskClaimResult {
+                outcome: TaskClaimOutcome::Won,
+                ..
+            }) => Ok(true),
+            Ok(TaskClaimResult {
+                outcome: TaskClaimOutcome::Lost,
+                holder,
+            }) => {
+                self.release_slot(record.id);
+                self.db.apply_event(
+                    record.id,
+                    TaskEvent::Skip,
+                    Some(serde_json::json!({ "kind": "claim_lost", "holder": holder })),
+                )?;
+                self.stats.skipped += 1;
+                tracing::info!(
+                    task_id = record.id,
+                    holder = holder.as_deref().unwrap_or("unknown"),
+                    "claimed by another member; skipping"
+                );
+                Ok(false)
+            }
+            Ok(TaskClaimResult {
+                outcome: TaskClaimOutcome::Forbidden,
+                ..
+            }) => {
+                self.release_slot(record.id);
+                self.db.apply_event(
+                    record.id,
+                    TaskEvent::Fail,
+                    Some(serde_json::json!({ "kind": "claim_forbidden" })),
+                )?;
+                self.stats.failed += 1;
+                notify_all(
+                    &self.plugins.notifiers,
+                    NotifierEvent::Failed,
+                    record,
+                    Some(
+                        "task claim was silently ignored by the source — on GitHub this                          means `github_login` lacks push access to the repository → grant                          access, then `totsuka task retry`"
+                            .to_string(),
+                    ),
+                );
+                Ok(false)
+            }
+            Err(e) => {
+                self.release_slot(record.id);
+                tracing::warn!(
+                    task_id = record.id,
+                    "task/claim failed (will retry next cycle): {e}"
+                );
+                Ok(false)
+            }
+        }
+    }
+
     pub(super) fn release_slot(&mut self, task_id: i64) {
         if let Some((repo, agent)) = self.slot_holders.remove(&task_id) {
             self.slots.release(&repo, &agent);

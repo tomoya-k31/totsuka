@@ -18,6 +18,9 @@ pub struct RunStats {
     pub done: usize,
     /// Tasks that reached `failed` this run.
     pub failed: usize,
+    /// Tasks that stepped aside because another member's instance claimed
+    /// them first (#556): reached `skipped` this run.
+    pub skipped: usize,
     /// Plugin processes that exited without being asked to (#495). Counted
     /// whatever happens next, so a crash is visible even when nothing is
     /// relaunched — which is exactly the `[plugins.{name}].restart = false`

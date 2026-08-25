@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T09:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -86,7 +86,7 @@ Notion タスクや GitHub Projects に紐づく Issue などのタスク管理�
 | F-03 | Notion プラグイン(データベースのプロパティマッピングを設定で定義) | M |
 | F-04 | プラグインごとに出力(フィールドマッピング・フィルタ条件)を設定ファイルで定義できる | M |
 | F-05 | タスク完了・進行中などのステータスをソース側へ書き戻せる(双方向同期) | S |
-| F-08 | **複数人利用時の取り込み確認・制御はタスクソースプラグインの役割**とする(厳密な排他制御までは不要)。例: assignee の有無・実行中ステータスの確認により、他メンバーが着手中のタスクを取り込まない | M |
+| F-08 | **複数人利用時の取り込み確認・制御はタスクソースプラグインの役割**とする(厳密な排他制御までは不要)。例: assignee の有無・実行中ステータスの確認により、他メンバーが着手中のタスクを取り込まない。読み取りゲートに加え、`task_claim` capability を宣言したソースには Orchestrator が **dispatch 直前に `task/claim` で占有を要求**し、負けたタスクは実行せず `skipped` で退く(楽観排他。宣言しないソースは従来どおり) | M |
 | F-06 | ポーリング間隔の設定(webhook はローカルアプリのため v1 では非対応) | S |
 | F-07 | **結果の書き戻し(`result/publish` RPC)**: タスクソースは Orchestrator の成果物を書き戻せる*ことがある*。記載先・フォーマットの実現はプラグインの責務で、実装するプラグインだけが `source` の output ケイパビリティを宣言する。**全ソースが実装するわけではない。** エージェント自身が成果物を書ける場合(`gh` のコメント、Notion のページ)はそちらが書き、プラグインは何も宣言しない。この RPC は Orchestrator が仲介しなければならないソース向けである —— 本人名義で出す Slack の返信がそれにあたる。既定では承認を経るが、workflow の `publish = "direct"` が承認ゲートを外せる(#548) | M |
 

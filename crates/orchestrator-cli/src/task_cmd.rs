@@ -475,7 +475,10 @@ fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
 fn retry(cx: &Cx, id: i64) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
     let task = db.get_task(id)?.ok_or_else(|| not_found(id))?;
-    if !matches!(task.state, TaskState::Failed | TaskState::Cancelled) {
+    if !matches!(
+        task.state,
+        TaskState::Failed | TaskState::Cancelled | TaskState::Skipped
+    ) {
         let action = if task.state == TaskState::Done {
             // Since #242 `done` means "no unprocessed messages", not "closed
             // forever": a new message reopens the conversation. Re-running the
@@ -483,9 +486,18 @@ fn retry(cx: &Cx, id: i64) -> Result<(), CliError> {
             // asking about a finished task wants.
             "it finished; send another message in the conversation (the reply in its thread/issue) to continue it — a re-run of the same instructions is not what `retry` is for"
         } else {
-            "only failed/cancelled tasks can be retried; `totsuka task cancel` it first if you want a re-run"
+            "only failed/cancelled/skipped tasks can be retried; `totsuka task cancel` it first if you want a re-run"
         };
         return Err(format!("task {id} is {} → {action}", task.state).into());
+    }
+    // A skipped task (#556) is another member's: they claimed it, this
+    // instance stepped aside. Retrying is the deliberate override, so say
+    // what it re-enters rather than refusing.
+    if task.state == TaskState::Skipped {
+        println!(
+            "task {id} was skipped because another member claimed it — retrying re-enters \
+             the claim: it runs here only if they have since released the task"
+        );
     }
     // `retry_task`, not `apply_event(Retry)`: requeueing the task without the
     // messages its failed run was given would dispatch an empty prompt (#242).
