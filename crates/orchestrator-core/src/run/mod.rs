@@ -410,7 +410,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
         let slots = SlotManager::new(settings.limits.clone());
         let readme_cache = settings.readme_cache_dir.clone().map(ReadmeCache::new);
-        let engine = Self {
+        Self {
             agent_tools: crate::agent_tools::ToolCache::default(),
             blocked_on_tools: std::collections::HashSet::new(),
             blocked_on_agent: std::collections::HashSet::new(),
@@ -434,8 +434,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             last_worktree_sweep: None,
             clock,
             stats: RunStats::default(),
-        };
-        engine
+        }
     }
 
     /// Borrow the state DB (status queries, tests).
