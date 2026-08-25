@@ -498,9 +498,11 @@ pub struct WorkflowConfig {
     #[serde(default)]
     pub output: Option<OutputPolicy>,
     /// Source status transition when the task starts running (#556): applied
-    /// right before dispatch, after the exclusion claim (when the source has
-    /// one) has settled. `None` writes nothing — exactly the pre-#556
-    /// behaviour — so existing configs are untouched.
+    /// right before dispatch. When the source supports an exclusion claim
+    /// (#556's follow-up in this stack), that claim settles first, so the
+    /// write only ever happens for a task this instance actually holds.
+    /// `None` writes nothing — exactly the pre-#556 behaviour — so existing
+    /// configs are untouched.
     #[serde(default)]
     pub on_start: Option<toml::Table>,
     /// Source status transition on success; kept raw (interpreted in #54).
