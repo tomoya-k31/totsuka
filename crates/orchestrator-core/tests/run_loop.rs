@@ -621,12 +621,19 @@ on_failure = { set_status = "失敗" }
          member's trigger: {calls:?}"
     );
     let notifications = read_log(&notify_log);
+    let failed = notifications
+        .iter()
+        .find(|n| n["params"]["event"] == "failed")
+        .unwrap_or_else(|| panic!("a human is told: {notifications:?}"));
+    // The remedy text is read by a human; source indentation inside the
+    // message (a wrapped literal that lost its line continuations) shipped
+    // twice before this guard existed (#491, and the first cut of #556).
+    let body = failed["params"]["body"].as_str().unwrap_or_default();
     assert!(
-        notifications
-            .iter()
-            .any(|n| n["params"]["event"] == "failed"),
-        "a human is told: {notifications:?}"
+        !body.contains("  "),
+        "the remedy carries source indentation: {body:?}"
     );
+    assert!(body.contains("task retry"), "names the way back: {body}");
 
     let _ = std::fs::remove_dir_all(&base);
 }
