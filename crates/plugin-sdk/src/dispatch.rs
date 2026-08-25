@@ -179,3 +179,52 @@ impl<H: TaskSourceHandler> LineHandler for TaskSourceServer<H> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plugin_protocol::methods::TaskClaimParams;
+
+    /// A handler that overrides nothing, so `task_claim` is the default.
+    struct Bare;
+    impl TaskSourceHandler for Bare {
+        async fn initialize(&mut self, _: InitializeParams) -> Result<InitializeResult, Error> {
+            unreachable!("not exercised")
+        }
+        async fn config_validate(
+            &mut self,
+            _: ConfigValidateParams,
+        ) -> Result<ConfigValidateResult, Error> {
+            unreachable!("not exercised")
+        }
+        async fn update_status(&mut self, _: TaskUpdateStatusParams) -> Result<Value, Error> {
+            unreachable!("not exercised")
+        }
+        async fn result_publish(&mut self, _: ResultPublishParams) -> Result<Value, Error> {
+            unreachable!("not exercised")
+        }
+    }
+
+    /// The default `task_claim` refuses with `METHOD_NOT_FOUND` — and the
+    /// message, read by a plugin author, must not carry source indentation.
+    /// A wrapped string literal that loses its line continuations keeps the
+    /// indentation *inside* the message and `contains` alone never notices;
+    /// this shipped twice already (#491, and the first cut of this very
+    /// method), so the guard is part of the contract now.
+    #[tokio::test]
+    async fn default_task_claim_refuses_with_a_clean_message() {
+        let err = Bare
+            .task_claim(TaskClaimParams {
+                task_id: "x".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, error_code::METHOD_NOT_FOUND);
+        assert!(
+            !err.message.contains("  "),
+            "the message carries source indentation: {:?}",
+            err.message
+        );
+        assert!(err.message.contains("task_claim"), "{}", err.message);
+    }
+}
