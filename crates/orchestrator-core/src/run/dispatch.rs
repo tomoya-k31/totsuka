@@ -1119,7 +1119,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     NotifierEvent::Failed,
                     record,
                     Some(
-                        "task claim was silently ignored by the source — on GitHub this                          means `github_login` lacks push access to the repository → grant                          access, then `totsuka task retry`"
+                        "task claim was silently ignored by the source — on GitHub this means `github_login` lacks push access to the repository → grant access, then `totsuka task retry`"
                             .to_string(),
                     ),
                 );
