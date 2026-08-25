@@ -131,7 +131,7 @@ fn main() {
                 // input, not the wire, and rewriting every fixture would be
                 // churn with no signal.
                 let flag = |k: &str| config.get(k).and_then(Value::as_bool).unwrap_or(false);
-                // 0.5.1 (#542): repositories this fake source is the tracker
+                // 0.5.1 (#542): repositories this fake source files project items
                 // for, supplied verbatim by the test as
                 // `claimed_repos = [{ repo, destination }]`.
                 // `expect`, not `.ok()`: a test that misspells a key here
@@ -145,11 +145,19 @@ fn main() {
                         .expect("`claimed_repos` must be [{repo, destination}]"),
                     None => Vec::new(),
                 };
+                // 0.6.0 (#554): which workflow options this fake plugin owns,
+                // named by the test as `claim_options = ["publish", …]`.
+                // Absent means "claim nothing", which is what an honest
+                // plugin with no options of its own answers — and it is what
+                // makes an unclaimed key in a test config fail rather than
+                // pass by the double being agreeable.
+                let claimed_options = claimed_options(&config, &params);
                 Response::result(
                     request_id(&id),
                     serde_json::to_value(InitializeResult {
                         plugin_version: semver::Version::new(0, 1, 0),
                         claimed_repos,
+                        claimed_options,
                         capabilities: Capabilities {
                             state_stream,
                             pane_control: flag("pane_control"),
@@ -440,12 +448,41 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(ms));
             }
             if let Some(tasks) = config.get("submit_tasks").and_then(Value::as_array) {
+                // Which workflow each task belongs to (0.6.0, #554). A real
+                // source runs first-match over `params.workflows`; this double
+                // takes `submit_workflow` when the test names one, else the
+                // first workflow it was handed. A per-task `"workflow": "…"`
+                // overrides both — including with a name that does not exist,
+                // which is how the reject path is exercised.
+                let default_workflow = config
+                    .get("submit_workflow")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        params
+                            .get("workflows")
+                            .and_then(Value::as_array)
+                            .and_then(|w| w.first())
+                            .and_then(|w| w.get("workflow"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default();
                 for (i, task) in tasks.iter().enumerate() {
+                    let workflow = task
+                        .get("workflow")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| default_workflow.clone());
+                    let mut task = task.clone();
+                    if let Some(obj) = task.as_object_mut() {
+                        obj.remove("workflow");
+                    }
                     let request = serde_json::json!({
                         "jsonrpc": "2.0",
                         "id": format!("submit-{i}"),
                         "method": "task/submit",
-                        "params": { "task": task },
+                        "params": { "task": task, "workflow": workflow },
                     });
                     let _ = writeln!(stdout, "{}", serde_json::to_string(&request).unwrap());
                     let _ = stdout.flush();
@@ -736,6 +773,54 @@ fn commit_in(worktree: &str) {
         ),
         Err(e) => eprintln!("mock_plugin: could not run git commit in {worktree}: {e}"),
     }
+}
+
+/// The `(workflow, key)` pairs this double claims: every option key the
+/// Orchestrator handed it whose name appears in the test's `claim_options`
+/// list.
+fn claimed_options(
+    config: &Value,
+    params: &Value,
+) -> Vec<plugin_protocol::methods::WorkflowOption> {
+    let claimable: Vec<String> = config
+        .get("claim_options")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if claimable.is_empty() {
+        return Vec::new();
+    }
+    params
+        .get("workflows")
+        .and_then(Value::as_array)
+        .map(|workflows| {
+            workflows
+                .iter()
+                .flat_map(|w| {
+                    let name = w
+                        .get("workflow")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    w.get("options")
+                        .and_then(Value::as_object)
+                        .map(|o| o.keys().cloned().collect::<Vec<_>>())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|k| claimable.contains(k))
+                        .map(move |key| plugin_protocol::methods::WorkflowOption {
+                            workflow: name.clone(),
+                            key,
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Convert a JSON id value into a `RequestId` (numbers used by the host).

@@ -203,27 +203,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     record.title
                 )
             });
-        // How the human receives it (#548, ADR-0057): the workflow's
-        // `publish` choice, translated to the wire enum. `None` on the wire —
-        // the key unset, or the workflow since removed from config — is what
-        // every plugin reads as the approval flow, so a removed workflow
-        // degrades to the *safe* mode rather than remembering the old one.
-        let delivery = workflows_by_name(&self.settings.workflows)
-            .get(record.workflow.as_str())
-            .and_then(|wf| wf.publish)
-            .map(|publish| match publish {
-                crate::config::PublishConfig::Draft => {
-                    plugin_protocol::methods::PublishDelivery::Draft
-                }
-                crate::config::PublishConfig::Direct => {
-                    plugin_protocol::methods::PublishDelivery::Direct
-                }
-            });
+        // How the human receives it is the source's own setting since #554:
+        // the plugin claims `publish` off `[[workflows]]` and reads it itself,
+        // so nothing about delivery travels on this call.
         let params = ResultPublishParams {
             task_id: record.source_task_id.clone(),
             content,
             format: Some("markdown".to_string()),
-            delivery,
         };
         source
             .call::<_, Value>(method::RESULT_PUBLISH, &params)

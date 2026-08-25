@@ -1,4 +1,7 @@
 # 実機 E2E 用の totsuka 設定。$E2E_HOME/cfg/totsuka/config.toml へ置く。
+#
+# **設定はこの 1 本だけ**（#554）。プラグイン個別設定もトップレベルの [<name>] に入る
+# —— plugins/{name}.toml は廃止された。
 version = 1
 max_concurrency = 2
 
@@ -13,33 +16,31 @@ max_concurrency = 2
 [[repositories]]
 name = "totsuka-sandbox-web"
 path = "${E2E_HOME}/repo/totsuka-sandbox-web"
+project = "e2e-board"
 summary = "顧客向けの Web アプリ。画面・HTTP API・認証・フォームのバリデーション"
 
 [[repositories]]
 name = "totsuka-sandbox-cli"
 path = "${E2E_HOME}/repo/totsuka-sandbox-cli"
+project = "e2e-board"
 summary = "ログ集計のコマンドラインツール。サブコマンド・集計ロジック・出力フォーマット"
 
 [plugins.slack]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 1
+
+# 起票先トラッカー（#554）。name / source は Orchestrator が読み、残りは github のもの。
+# リポジトリ側は project = "<name>" で 1 つだけ指す。
+[[projects]]
+name = "e2e-board"
+source = "github"
+owner = "________"
+owner_type = "user"
+project_number = 0
 
 [plugins.github]
 enabled = true
 kind = "task_source"
-# **既定（60s）から下げない。** 以前は 15s にして「検証の待ち時間を詰める」と
-# していたが、割に合わない:
-#
-#   実測（Project #7 / 62 items / 2 ページ）: 1 poll = **2 points**
-#     15s → 240 polls/h = 480 points/h（上限 5000 の 9.6%）
-#     60s →  60 polls/h = 120 points/h（2.4%）
-#
-# 縮められる待ち時間は 1 回あたり平均 22 秒で、その対価に 4 倍のレートを払う。
-# しかも e2e で本当に高いのは poll ではなく **`gh project` 系の CLI**
-# （`set_status` 1 回 ≒ 200 points ＝ poll 100 回分。github.sh 冒頭の表を参照）。
-# **削るならそちらで、poll を詰めるのは効果が薄いのに副作用だけ大きい。**
-poll_interval_secs = 60
 
 [plugins.herdr]
 enabled = true
@@ -70,9 +71,9 @@ cleanup = "immediate"
 plan_cleanup = "immediate"
 
 # S4: 本人が :totsuka-test: を付けたらタスクを起こす。
-# **catch-all より前に置くこと** — 下の slack-reply は trigger = {} で全マッチ
-# なので、後ろに置くとこの workflow には絶対に到達しない
-# （順序を間違えると `totsuka config validate` が名指しで警告する）。
+# 順序の制約は #554 で消えた —— Slack プラグイン内でメンションとリアクションは
+# 別のイベント経路なので、どちらを先に書いても隠れない。
+# （同じ絵文字を 2 つ、またはメンションを 2 つ書くと initialize が CONFIG_INVALID）
 [[workflows]]
 name = "slack-reaction"
 source = "slack"
@@ -106,3 +107,91 @@ agent = "herdr"
 on_success = { set_status = "Done" }
 # 既定 1800s は検証には長すぎる。詰まったら 15 分でエスカレーションさせる。
 timeout_secs = 900
+
+# ── プラグイン個別設定（#554 で config.toml へ統合）──────────
+
+[github]
+#
+# ProjectsV2 の書き戻し（F-84）には project write が要る。gh の OAuth を流用する場合は
+# `gh auth refresh -s project` を先に実行し、.env で E2E_GH_TOKEN に入れておく。
+# fine-grained PAT は user 所有の Project には使えない（アカウント権限に Projects が無い）。
+token = "${E2E_GH_TOKEN}"
+
+status_field = "Status"
+
+# F-08 の自己判定。他人 assignee のタスクを除外するかの基準。
+github_login = "________"
+
+# このステータスの item は取り込まない（実行中とみなす）。
+in_progress_statuses = ["In Progress"]
+
+# **既定（60s）から下げない。** 以前は 15s にして「検証の待ち時間を詰める」と
+# していたが、割に合わない:
+#
+#   実測（Project #7 / 62 items / 2 ページ）: 1 poll = **2 points**
+#     15s → 240 polls/h = 480 points/h（上限 5000 の 9.6%）
+#     60s →  60 polls/h = 120 points/h（2.4%）
+#
+# 縮められる待ち時間は 1 回あたり平均 22 秒で、その対価に 4 倍のレートを払う。
+# しかも e2e で本当に高いのは poll ではなく **`gh project` 系の CLI**
+# （`set_status` 1 回 ≒ 200 points ＝ poll 100 回分。github.sh 冒頭の表を参照）。
+# **削るならそちらで、poll を詰めるのは効果が薄いのに副作用だけ大きい。**
+# （0.6.0 / #554 で [plugins.github] からここへ移動 — プラグイン自身のキー）
+poll_interval_secs = 60
+
+[slack]
+#
+# トークンの置き方は 2 通り。1Password を使うと常駐プロセスは人間のターミナルから
+# しか起動できない（op read がデスクトップ承認を要求するため）。
+app_token = "op://Dev/Totsuka - local/app_token"
+user_token = "op://Dev/Totsuka - local/user_token"
+bot_token = "op://Dev/Totsuka - local/bot_token"
+# 環境変数に置く場合はこちら（トークンが平文でディスクに載る）:
+#app_token = "${E2E_SLACK_APP_TOKEN}"
+#user_token = "${E2E_SLACK_USER_TOKEN}"
+#bot_token = "${E2E_SLACK_BOT_TOKEN}"
+
+# 運用者本人のメンバー ID。auth.test の identity と一致検証される（なりすまし防止）。
+target_user_id = "U________"
+
+# 本人が付けるとタスクを起こす絵文字（#319）。省略 = 無効。
+#
+# リアクション起動は config.toml の [[workflows]].trigger.reaction で設定する。
+# 個人ワークスペースを流用するなら、日常で押さないカスタム絵文字にすること。
+# `eyes` にすると普段どおり 👀 を付けた瞬間にタスクが起動する。
+#
+# この機能には user token の `reactions:read` が要る。無いと Slack はイベントを
+# 配送せず、エラーも出ない（TokenGuard が警告する）。
+
+reply_style = "丁寧語で簡潔に"
+
+# [[repos]] は書かない。config.toml の [[repositories]] がそのまま候補になり（#109）、
+# 分類は config.toml の [llm] が initialize で供給される（#119）。
+# 候補を 1 件に絞りたいとき（LLM キーがまだ無い等）だけ明示する:
+#[[slack.repos]]
+#name = "totsuka-sandbox-web"
+#summary = "顧客向けの Web アプリ"
+
+[herdr]
+#
+# socket_path を明示している理由:
+# 既定は $XDG_CONFIG_HOME/herdr/herdr.sock に解決されるが、検証では XDG を
+# $E2E_HOME/cfg へ隔離しているため、そこを見にいって「cannot connect to herdr socket」で
+# initialize が落ちる。herdr は totsuka とは別プログラムで、ソケットは本物の ~/.config にある。
+socket_path = "${HOME}/.config/herdr/herdr.sock"
+
+# agent_command / plan_args / design_preview はプロトコル 0.4.0 で削除された（#411）。
+# 書くと initialize が CONFIG_INVALID で落ちる。起動する CLI は config.toml の
+# [tools] レジストリ側（既定 claude）が決める。
+
+[herdr.layout]
+# エージェントの隣にシェル pane を割り、様子を見ながら手で git を叩けるようにする。
+# ratio は分割元（= エージェント pane）の取り分。
+shell = true
+direction = "down"
+ratio = 0.8
+
+# 実行ファイル名 → herdr の kind の写像（ADR-0032 D-1）。claude / codex / opencode は
+# そのまま通るので通常は不要。ラッパースクリプトを使うときだけ書く。
+#[herdr.kind_map]
+#my-claude = "claude"

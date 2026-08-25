@@ -1,17 +1,20 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:b7d588fe5fd199983811b0a9a1f5b03d3378facf071dad48fa70a0fcfb4d2db4 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:4150516e6b29fba4c9b84bb72ccf523f3be0d51f515812a2b058ff6d2157b048 -->
 
 # 設定リファレンス
 
-`config.toml` とプラグインごとの `plugins/{name}.toml` の全キーを、型・既定値・意味とともに示す。
+`config.toml` の全キー —— totsuka 自身のものと各プラグインのもの —— を、型・既定値・意味とともに示す。
 
 ## ファイルの場所
 
-- 共通設定: `$XDG_CONFIG_HOME/totsuka/config.toml`（既定は `~/.config/totsuka/config.toml`）
-- プラグイン個別設定: `$XDG_CONFIG_HOME/totsuka/plugins/{name}.toml`。totsuka は中身を解釈せずに保持し、シークレットを解決してからプラグインへ渡す
-- `--config <path>` で `config.toml` の場所を上書きできる
+**設定ファイルは 1 本だけ**である: `$XDG_CONFIG_HOME/totsuka/config.toml`（既定は `~/.config/totsuka/config.toml`）。
+
+- `--config <path>` で場所を上書きできる
+- プラグイン個別設定は同じファイルのトップレベル `[<name>]` テーブル。totsuka は中身を解釈せずに保持し、シークレットを解決してからプラグインへ渡す
+
+`plugins/{name}.toml` への分離は無くなった。残っていても読まれず、エラーにもならないので、設定を移したら消すこと。
 
 `totsuka init` が雛形を書き出す。`totsuka config validate` で検証し、`totsuka config show [--redacted]` で表示する。
 
@@ -73,10 +76,49 @@
 | `tool` | string? | `default_tool` | このリポジトリへ渡されるタスクの既定 AI ツール。ワークフローの `tool` が優先される |
 | `max_concurrency` | int? | 無制限 | リポジトリ単位の同時実行上限 |
 | `worktree_location` | string? | `[worktree].location` | このリポジトリの worktree 配置テンプレートを上書きする |
+| `project` | string? | なし | このリポジトリの起票先トラッカー（`[[projects]].name`）。**1 つだけ**。書かないのは正常で、トラッカー未設定という意味になる |
+
+## `[[projects]]`
+
+新しく起票する先。GitHub Project、Notion のデータベースなど。
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `name` | string | 必須 | `[[repositories]].project` が指す安定した ID |
+| `source` | string | 必須 | このトラッカーを所有する task_source プラグイン |
+| その他すべて | — | — | そのプラグインのもの。totsuka は読まずに渡す |
+
+```toml
+[[projects]]
+name = "tomo-prj"
+source = "github"
+owner = "tomoya-k31"        # github プラグインが読む
+owner_type = "user"
+project_number = 6
+triage_status = "Inbox"     # 起票した item に付ける Status（省略 = 付けない）
+
+[[projects]]
+name = "design-db"
+source = "notion"
+database_id = "..."         # notion プラグインが読む
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/github/tomoya-k31/totsuka"
+project = "tomo-prj"
+```
+
+`source` を書かせるのは、`totsuka config validate` が `[[repositories]].project` → `[[projects]].name` → `[plugins.<source>]` の連鎖を**プラグインを起動せずに**辿れるようにするためで、壊れた参照はオフラインでも検出される。`config validate` は `name` の重複、有効な task_source でない `source`、存在しないエントリを指す `project` を拒否する。
+
+`project` は値 1 つなので、リポジトリの起票先はちょうど 1 つに決まる。2 つのソースが同じリポジトリを主張することは起こりえない。
 
 ## `[plugins.{name}]`
 
-`{name}` は、ワークフローが `source` / `agent` で参照するインスタンス名。
+`{name}` は、ワークフローが `source` / `agent` で参照するインスタンス名。**これはロスターであって設定ではない** —— プラグイン自身の設定はトップレベルの `[<name>]` テーブルに書く。
+
+このロスターは `[<name>]` を正当と認める根拠でもある: **ロスターに無い名前のトップレベルテーブルは設定エラー**になる。これで core キーのタイポ（`[worktre]`）もプラグイン名のタイポ（`[slak]`）も同じ検査で落ちる。
+
+**totsuka 自身のトップレベルキーと同じ名前のプラグインは使えない**（`version` / `max_concurrency` / `repositories` / `projects` / `plugins` / `default_tool` / `tools` / `workflows` / `llm` / `worktree` / `log` / `hooks` / `prompts`）。`[<name>]` テーブルがそのキーとして読まれ、プラグインが空設定のまま何も言わずに起動してしまうので、ロスター登録の時点で拒否する。
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
@@ -86,7 +128,6 @@
 | `timeout_secs` | int? | 120 | プラグイン呼び出し 1 本のタイムアウト |
 | `log_level` | string? | なし | プラグインのログレベル |
 | `restart` | bool | true | クラッシュしたプラグインを起動し直すか。1 秒・2 秒・4 秒…と間隔を広げながら**最大 5 回・直近 5 分以内**まで試し、使い切ったら `escalated` を通知する。**`false` にしても死んだことの検知は残る** — ログに出て、実行サマリの `plugin_crashes` に計上され、`escalated` の通知も飛ぶ。エージェントのプラグインなら実行中のタスクも失敗として畳まれる。止まるのは起動し直す動作だけなので、プラグインを手元で調べたいときに使う |
-| `poll_interval_secs` | int? | 60 | task_source のみ。task_source はすべて push 型なので **totsuka 自身がポーリングすることはない** — この値は起動時にプラグインへ転送され、プラグイン内部の取得周期になる。イベント駆動のソースは無視してよい |
 
 ## `[[workflows]]`
 
@@ -94,7 +135,7 @@
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source のインスタンス名 |
-| `trigger` | テーブル | `{}`（全マッチ） | 一致条件。下記参照 |
+| `trigger` | テーブル | `{}` | 一致条件。**totsuka は中身を解釈しない** —— 解釈するのはソースプラグインである。下記参照 |
 | `profile` | enum? | なし | `answer` / `triage` / `design` / `implement` のいずれか。`mode` / `output` / `verification` をまとめて決める |
 | `mode` | enum | `profile` が無ければ必須 | `plan` / `implement` |
 | `agent` | string | 必須 | agent_ide のインスタンス名 |
@@ -106,24 +147,52 @@
 | `rubric` | string? | なし | `llm` 検収で使う判定基準。**唯一のプロンプト上書き面**（下記）で、profile の既定より強い |
 | `tool` | string? | なし | AI ツールのピン。ワークフロー > リポジトリ > `default_tool` |
 | `initial_prompt` | string? | なし | このワークフローのエージェントへ前置きする追加指示。下記参照 |
-| `publish` | `draft` \| `direct` | `draft` | 公開結果をどう届けるか。`draft` は承認を挟む（既定）、`direct` は承認なしで即投稿。`output = "source"` 以外では無意味（`totsuka config validate` が警告）。結果を届けるのは Slack ソースだけなので、他ソースでは効果が無い |
 | `cleanup` | `[worktree]` と同じ語彙 | なし | この workflow のタスクの worktree 掃除を上書きし、`[worktree]` の mode 既定に勝つ。`manual` にするとタスク完了後も worktree と **pane** が残る。後から workflow を削除・改名すると、完了済みタスクは mode 既定へ戻る |
 
-ワークフローは定義順に照合され、最初に一致したものが使われる。同一ソース内でトリガーが重なると警告が出る。**catch-all（`trigger = {}`）より後に定義した同一ソースのワークフローは到達不能**で、こちらも警告になる。
+ワークフローは定義順に照合され、最初に一致したものが使われる。**その照合を走らせるのはソースプラグインである。** 起動時にワークフローの一覧を受け取り、タスクがどれに属するかを決め、タスクを渡すときに名前で伝える。totsuka はその名前が実在し、そのソースのものかだけを確かめる。
+
+### プラグインが定義するキー
+
+プラグインは自分のキーをワークフローへ**フラットに**足せる。totsuka のキーと同じ並びに書く:
+
+```toml
+[[workflows]]
+name = "slack-books"
+source = "slack"
+agent = "herdr"
+profile = "triage"
+publish = "direct"      # slack プラグインが定義するキー
+```
+
+そのキーが誰のものかは totsuka には分からない —— ワークフローは `source` **と** `agent` の両方を名指すからである。だから決めない: 余ったキーは起動時に両方のプラグインへ渡り、各々が「自分が消費するもの」を答える。
+
+| 引き取り手 | 結果 |
+|---|---|
+| 0 | **エラー。** タイポ（`profil = "triage"` はここで落ちる）か、そのワークフローが名指していないプラグイン向けのキー |
+| 1 | そのプラグインのキー |
+| 2 | **エラー。** 1 つのキーが 2 つの意味を持つので、totsuka は選ばない |
+
+`totsuka run` と `totsuka config validate` の両方が検査する。**`--offline` はできない** —— プラグインを起動しないので聞けない。
+
+現在あるキー:
+
+| キー | 所有 | 意味 |
+|---|---|---|
+| `publish` | slack | `draft`（まず承認を求める。既定）か `direct`（即時投稿）。どちらでもない値は**起動時に失敗する**ので、タイポで承認ゲートが残ったり外れたりすることは無い |
 
 `timeout_secs = 0` は、人間が pane を見ている運用向けである。真にハングしたエージェントも検知されなくなるので、無人のワークフローには設定しないこと。
 
 `verification = "llm"` が Claude 以外のツールへ解決されうる構成では、`tool = "claude"` のピンを勧める警告が出る。セッション内検収には Claude のフックが要るためである。
 
-### trigger の予約キー
+### 効く trigger キー
 
-次のキーは totsuka が正規化済みのタスクに対して再判定する。それ以外は不透明な値としてプラグインへ素通しされ、プラグインが解釈する。
+キーはすべてソースプラグインが解釈する。totsuka はテーブルをそのまま渡すだけである。各ソースが理解するもの:
 
-| キー | 照合先 |
+| ソース | キー |
 |---|---|
-| `status` / `project_status` | タスクのステータス |
-| `label`（文字列）/ `labels`（配列） | タスクのラベル。配列は全部必要 |
-| `reaction` | `reaction:<絵文字名>` のラベル |
+| github | `project_status` / `status`、`label` / `labels` |
+| notion | `status`、生の `filter` |
+| slack | `reaction`（持たないワークフローがメンションを受ける） |
 
 ### `reaction` — 絵文字でワークフローを選ぶ
 
@@ -136,20 +205,18 @@ profile = "implement"
 agent = "herdr"
 
 [[workflows]]
-name = "slack-reply"                  # メンション: catch-all。必ず最後
+name = "slack-reply"                  # メンション: reaction を持たないワークフロー
 source = "slack"
 trigger = {}
 profile = "answer"
 agent = "herdr"
 ```
 
-- **リアクションのワークフローは catch-all より前に定義する。** 後ろに置くと到達不能で、絵文字を付けても何も起きない（警告は出る）
 - 絵文字名は Slack が報告する形（コロン無し）の**文字列**。`":eyes:"` と書いてもコロンは剥がされる。👀 は `eyes`、👁 は `eye` で別物である
-- **`reaction = 123` のような文字列以外の値は起動時エラー。** 読めない予約キーは照合時にスキップされる仕様なので、放置すると逆方向に 2 つ壊れる — そのワークフローが全タスクに一致し（catch-all より前にあるのでメンションを吸う）、一方でプラグインは絵文字を 1 つも登録しない。どちらも単体ではエラーを出さない
-- **同じ絵文字を 2 つのワークフローに書くと設定エラー。** first-match で片方が黙って勝つのを許さない
+- **同じ絵文字を 2 つのワークフローに書くと設定エラー。** 片方が黙って勝つのを許さない
+- **reaction を持たないワークフローが 2 つあるのもエラー。** メンションが先に書いたほうへ吸われる
+- **順序は関係ない。** メンションとリアクションはプラグイン内で別の経路を通るので、リアクションのワークフローをメンションの後ろに書いても隠れない
 - 起動するのは自分が付けたリアクションだけで、これを緩める設定は無い
-
-**混在バージョンの注意:** 新しいプラグインを古いコアと組み合わせると、コアに `reaction` 予約キーが無いためリアクションのワークフローが全タスクを吸う。コアを先に、プラグインを後に上げること。戻すときはリアクションのワークフローを設定から外す。
 
 ### `initial_prompt`
 
@@ -299,7 +366,7 @@ agent = "herdr"
 
 ### ソースプラグインの指示文
 
-`plugins/github.toml` と `plugins/notion.toml` は `[prompts]` テーブルを受け付ける。profile がタスクの種類を伝えたときに、そのプラグインが載せる書き込み先の指示である。
+`[github.prompts]` と `[notion.prompts]` を書ける。profile がタスクの種類を伝えたときに、そのプラグインが載せる書き込み先の指示である。
 
 | キー | 使われるとき | プレースホルダ |
 |---|---|---|
@@ -416,7 +483,7 @@ tool = "claude-deep"
 
 **`mode_args` / `plan_args` を明示すると既定を丸ごと置き換える**ので、これらのフラグも消える。無人で回すなら自分で書き足すこと。
 
-ディスパッチ時のツール解決は、ワークフローのピン > リポジトリの既定 > `default_tool` > 組み込みの `claude` の順である。完全なコマンドラインをここで組み立てるため、`plugins/herdr.toml` の `agent_command` / `plan_args` —— かつての後方互換フォールバック —— は**削除済み**である。残っているとプラグインが起動を拒否し、キー名と代替を名指しする。ツールの設定は `[tools.{name}]` で行うこと。
+ディスパッチ時のツール解決は、ワークフローのピン > リポジトリの既定 > `default_tool` > 組み込みの `claude` の順である。完全なコマンドラインをここで組み立てるため、`[herdr]` の `agent_command` / `plan_args` —— かつての後方互換フォールバック —— は**削除済み**である。残っているとプラグインが起動を拒否し、キー名と代替を名指しする。ツールの設定は `[tools.{name}]` で行うこと。
 
 ## プロンプト文
 
@@ -553,9 +620,9 @@ plan_cleanup = "immediate"            # plan: 即削除（既定）
 
 フック対応のエージェントを使うワークフローがある構成で `auth_token_ref` が未設定だと、`config validate` と `run` がワークフローごとに警告を出し、`doctor` は**失敗**する。フック対応エージェントを使わない構成では `doctor` は警告のみ。参照を設定したのに解決できない場合は、構成によらず失敗する。
 
-## `plugins/github.toml`
+## `[github]`
 
-ここで唯一のポーリング型 task source であり、`poll_interval_secs` がそのままプラグイン自身の fetch 周期になる（隣の Slack ソースはイベント駆動でこの値を使わない）。
+ここで唯一のポーリング型 task source であり、`poll_interval_secs` がそのままプラグイン自身の fetch 周期になる。置き場所はプラグイン自身の `[github]` テーブルである（隣の Slack ソースはイベント駆動でこの値を使わない）。
 
 ```toml
 [plugins.github]
@@ -567,7 +634,6 @@ poll_interval_secs = 60   # 60 は既定値でもある
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `token` | string | 必須 | API トークン。bearer として送る以外には使わない。必要な権限は下記。`cmd:gh auth token` が使える |
-| `[[projects]]` | テーブル配列 | 必須・非空 | polling するボード。1 つ以上。中身は下表 |
 | `status_field` | string | `Status` | ステータス列を保持する single-select フィールド名。**全ボード共通** |
 | `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出に使う |
 | `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして取り込まないステータス名。**全ボード共通** |
@@ -575,50 +641,61 @@ poll_interval_secs = 60   # 60 は既定値でもある
 | `source_name` | string | `github` | 各タスクに刻印されるソース名。ボードを増やしても変わらないので、`[[workflows]].source = "github"` は 1 本のまま |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の再試行回数 |
-| `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
+| `[github.prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
 
-`[[projects]]` の各エントリ:
+**ボードはこのテーブルには書かない。** `source = "github"` の `[[projects]]` エントリがボードで、それを使うリポジトリは `[[repositories]].project` でそう言う:
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
+| `name` | string | 必須 | totsuka のキー。`[[repositories]].project` が指す |
+| `source` | string | 必須 | totsuka のキー。`"github"` |
 | `owner` | string | 必須 | Project の所有者ログイン（user または組織） |
 | `owner_type` | `user` \| `organization` | `user` | `owner` が user か組織か。**エントリごとに指定できる**ので、user 所有と組織所有のボードを混在させられる |
 | `project_number` | int | 必須 | `owner` 配下の ProjectsV2 番号。正数チェックは起動時には**走らない** — 下記参照 |
-| `repos` | string[] | **必須・非空** | このボードが担当するリポジトリ名。**2 つの役割を兼ねる** — 下記参照 |
 | `triage_status` | string? | なし | triage 起票した item に付ける Status オプション名。**未設定 = Status なしで追加**される。`project_status` 条件の trigger には一致しないので、**全 workflow が status で絞っている構成なら**ボードでトリアージするまで拾われない（status 条件の無い trigger には一致する — ゲートの実在は trigger の書き方次第）。**polling trigger と同じ値（例 `Todo`）を書くとそのゲートが消え、起票が即・無人実行に流れる** — 意図してやる分には正しいが、既定は事故を防ぐ「なし」 |
 
 ```toml
+[github]
 token = "cmd:gh auth token"
 github_login = "your-login"
+status_field = "Status"
+in_progress_statuses = ["In Progress"]
 
 [[projects]]
+name = "my-board"
+source = "github"
 owner = "your-login"
 project_number = 7
-repos = ["totsuka", "dotfiles"]
 
 [[projects]]
+name = "web-board"
+source = "github"
 owner = "my-org"
 owner_type = "organization"
 project_number = 3
-repos = ["web-app"]
-triage_status = "📥 Inbox"   # 任意: triage 起票をこの列に入れる
+triage_status = "📥 Inbox"   # 任意: 起票した item をこの列へ
 
-status_field = "Status"
-in_progress_statuses = ["In Progress"]
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/github/your-login/totsuka"
+project = "my-board"
+
+[[repositories]]
+name = "web-app"
+path = "~/Workspace/github/my-org/web-app"
+project = "web-board"
 ```
 
-**TOML の順序に注意。** `[[projects]]` ブロックより**後ろ**に書いたトップレベルのキーは、**そのブロックの中に入る**（テーブル配列は次の見出しまで続く）。上の例で `status_field` が末尾にあるのは読みやすさのためだが、迷いたくなければトップレベルのキーは最初の `[[projects]]` より**前**に置けばよい。間違えると、project エントリ内の未知キーとして起動が失敗する。
+**TOML の順序に注意。** `[[projects]]` ブロックより*後ろ*に書いたキーは、**そのブロックの中**に入る（テーブル配列は次の見出しまで続く）。`[github]` のキーは `[github]` 見出しの直後に、ボードはその後に置くこと。逆にすると、project エントリの未知キーとして起動が失敗する。
 
-### `[[projects]].repos` は 2 つの役割を兼ねる
+### この紐付けがしていること
 
-次の両方である。
+2 つの役割がある:
 
-1. **取り込みフィルタ** — そのボードに載っていても、ここに無いリポジトリの issue は取り込まれない
-2. **リポジトリ → ボードの対応** — Slack から始まった triage タスクが「どのボードへ起票するか」を知る材料になる
+1. **取り込みフィルタ** — そのボードに載っていても、紐づいていないリポジトリの issue は取り込まれない
+2. **リポジトリ → ボードの対応表** — Slack から始まった triage タスクが、どのボードへ起票するかを知る材料になる
 
-必須・非空なのは 2 のためである。ボードは自分が将来どのリポジトリを持つかを知らないので、省略されたリストを対応表に変換する方法が無い。
-
-**1 つのリポジトリは 1 つのボードにしか書けない。** 同じリポジトリを 2 度書いた設定は `totsuka config validate` が弾く。「このリポジトリの起票先」に答えが 2 つあるのは、答えが無いのと同じだからである。ボードの同一性は `(owner, project_number)` で判定する — ProjectsV2 の番号は所有者ごとなので、番号だけで比べると `me/#7` と `acme/#7` が同じボードに見えて重複を見逃す。GitHub ソースと Notion ソースの両方が同じリポジトリを担当している場合は、totsuka 自身が起動時と `totsuka doctor` で検出する。
+役割は 2 つだが、書く場所は 1 つである。`project` は値 1 つなので、**リポジトリの起票先はちょうど 1 つ**になり、以前は検査で捕まえていた曖昧さがそもそも書けない。ソースをまたいでも同じで、1 つのリポジトリを GitHub と Notion の両方が主張することはできない。
 
 ### `project_number` の誤りは起動時には出ない
 
@@ -653,7 +730,7 @@ fine-grained PAT の場合（org 所有のボードのみ）:
 
 **PR を開くのはこのトークンの仕事ではない。** `implement` のワークフローでは、エージェント自身がペインの環境にあるあなた自身の `gh` 認証を使って `gh pr create` を実行する。`gh auth login` は別個の前提条件である。
 
-### GitHub ソースの `[prompts]`
+### `[github.prompts]`
 
 組み込みのデフォルトはバイナリに埋め込まれており、このテーブルはキー単位の上書きである。キー名がそのまま設定キーになる。
 
@@ -663,7 +740,7 @@ fine-grained PAT の場合（org 所有のボードのみ）:
 | `design_instructions` | 同 `design` |
 | `implement_instructions` | 同 `implement` |
 
-## `plugins/slack.toml`
+## `[slack]`
 
 Slack ソースはイベント駆動で、受け取ったイベントをその場で push するため `poll_interval_secs` は使わない。
 
@@ -681,15 +758,15 @@ kind = "task_source"
 | `target_user_id` | string | 必須 | 自分の Slack ユーザー ID。このユーザー宛のメンションがタスクになり、トークン自身の identity とも照合される |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
 | `reply_style` | string? | なし | タスク本文へ注入する返信トーンの指示 |
-| `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
+| `[slack.prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
 | `source_name` | string | `slack` | 各タスクに刻印するソース名 |
-| `[[repos]]` | 配列 | なし | リポジトリ候補。`name`（`config.toml` のものと一致必須）と、任意の `summary` / `path`。**省略すると `config.toml` のリポジトリがそのまま候補になる**ので、通常は書かなくてよい |
-| `[[channel_groups]]` | 配列 | なし | チャンネル名の接頭辞で候補を絞る規則。定義順に first-match。`prefix` と `repos` を持つ |
-| `[llm]` | テーブル | なし | 分類用の LLM。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、下回るとピッカーへ）。**省略すると `config.toml` の `[llm]` が既定になる**（キーが解決できる場合のみ）。候補が 2 件以上でどちらにも無ければ起動に失敗する |
+| `[[slack.repos]]` | 配列 | なし | リポジトリ候補。`name`（`config.toml` のものと一致必須）と、任意の `summary` / `path`。**省略すると `config.toml` のリポジトリがそのまま候補になる**ので、通常は書かなくてよい |
+| `[[slack.channel_groups]]` | 配列 | なし | チャンネル名の接頭辞で候補を絞る規則。定義順に first-match。`prefix` と `repos` を持つ |
+| `[slack.llm]` | テーブル | なし | 分類用の LLM。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、下回るとピッカーへ）。**省略すると `config.toml` の `[llm]` が既定になる**（キーが解決できる場合のみ）。候補が 2 件以上でどちらにも無ければ起動に失敗する |
 | `api_url` | string | `https://slack.com/api` | Web API のベース URL（テスト用） |
 | `max_retries` | int | 3 | 再試行可能な API 失敗の最大再試行回数 |
 
-### Slack ソースの `[prompts]`
+### `[slack.prompts]`
 
 このプラグインが送るプロンプト文のキー単位の上書き。キー名がそのまま設定キーである。
 
@@ -714,14 +791,14 @@ kind = "task_source"
 - 未知のプレースホルダはそのまま出力され、起動時に警告としてログに出る。**エラーにしないのは意図的である** — 症状は下書きに見える `{token}` であって目に見える。コアの `rubric` がエラーにするのは、あちらが検収の判定条件で、壊れても症状が「検収が緩くなる」だけだからである
 - ここは **LLM 向けのプロンプトのみ**である。悪い上書きは分類の劣化や返信案の質低下に留まり、完了検知は壊せない。この被害範囲の違いが、コア側の上書き面を削除しつつ**このテーブルを残した**理由である
 
-## `plugins/herdr.toml`
+## `[herdr]`
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `socket_path` | string? | なし | ソケットの明示パス。解決順の最上位 |
 | `session` | string? | なし | 名前付きセッション。`socket_path` 未設定時に使う |
-| `[layout]` | テーブル | 下記 | ディスパッチした pane の配置 |
-| `[kind_map]` | テーブル | `{}` | 実行ファイル名を herdr 側の語彙へ写像する |
+| `[herdr.layout]` | テーブル | 下記 | ディスパッチした pane の配置 |
+| `[herdr.kind_map]` | テーブル | `{}` | 実行ファイル名を herdr 側の語彙へ写像する |
 | `[identity]` | テーブル | `{ enabled = true }` | ディスパッチがリポジトリとタスクを herdr へ報告するか |
 | `request_timeout_secs` | int | 30 | ソケット呼び出し 1 本あたりのタイムアウト |
 
@@ -729,10 +806,10 @@ kind = "task_source"
 
 **herdr は 0.7.5 以降が必要。** それより古い herdr に対しては初期化を拒否し、`config validate` と `doctor` がバージョンを名指しで報告する。検査は herdr 自身のバージョンを読むもので、**上限は無い** — 新しい herdr を拒否することはない。
 
-### `[identity]`
+### `[herdr.identity]`
 
 ```toml
-[identity]
+[herdr.identity]
 enabled = true   # 既定
 ```
 
@@ -753,12 +830,12 @@ enabled = true   # 既定
 
 `enabled = false` で報告が止まる。
 
-### `[kind_map]`
+### `[herdr.kind_map]`
 
 herdr は実行ファイルを自身の固定語彙から選ぶので、プラグインは**ファイル名**をその語彙へ翻訳する。`claude` / `codex` / `opencode` はそのまま通るため、通常このテーブルは要らない。必要になるのは、herdr が知らない名前のラッパースクリプトを使うときだけである。
 
 ```toml
-[kind_map]
+[herdr.kind_map]
 my-claude = "claude"
 ```
 
@@ -766,7 +843,7 @@ my-claude = "claude"
 - 値は検証しない。未知の値は herdr 自身が拒否する。語彙をこちらに複製すると、herdr が増やしたときに黙って食い違う
 - `[tools]` レジストリには置かない。あちらは agent に依存しない共有設定なので、herdr 固有の語彙を持ち込むと herdr を使わない構成にも漏れる
 
-### `[layout]`
+### `[herdr.layout]`
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|

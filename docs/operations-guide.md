@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:87d22a3038a829368b14497b55eb88102cabc64e817d4b710eaa4bcb381ddbe2 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:5bb23d6ae75e04eef6f71f3ea540ea8b1f633a7400b8290c8e863287d909e9d8 -->
 
 # Operations guide
 
@@ -16,12 +16,12 @@ Day-to-day operation: reading `doctor`, cleaning up worktrees and panes, stoppin
 | `config` | `config.toml` passes validation | Run `totsuka config validate` to see every error |
 | `state-db` | The state database opens. Shows the schema version and which totsuka version applied it | If it does not exist yet, run `totsuka run` once. If the database is too new (you downgraded), update totsuka to at least the version named in the message. If it is too old (you just upgraded), run `totsuka run` once — only `run` applies schema changes; `status`, `task`, `focus`, and `doctor` do not |
 | `worktree-location` | The configured worktree location expands | Export the missing `${ENV}` variable, or drop the key to fall back to the default |
-| `plugin:{name}` | The plugin starts and answers a config validation request | Check that it is installed, and fix `plugins/{name}.toml` |
+| `plugin:{name}` | The plugin starts and answers a config validation request | Check that it is installed, and fix its `[<name>]` table in `config.toml` |
 | `llm` | `api_key_ref` resolves (it does not check whether the key works) | Create a 1Password item, export the environment variable, or add it to your keychain |
 | `llm-online` | The provider accepted the API key (only with `--online`) | On 401 or 403, reissue the key with your provider and update `[llm].api_key_ref`. Unreachable hosts and 5xx responses stay warnings |
 | `worktrees` | No orphaned worktrees | Offers to clean them up interactively |
 | `panes` | No orphaned panes | Offers to release them interactively |
-| `trackers` | Each repository files into exactly one tracker | Remove the repository from all but one plugin's `repos`. **No plugin can see this on its own** — each one validates only its own list, so the conflict exists only in the union. Absent when no source claims anything |
+| `projects` | Reports how many repositories have a project to file into | **A report, not a detection** — a conflict can no longer be written: each repository names one `[[projects]]` entry via `project`, and that entry names one plugin via `source`. Skipped when some source could not be probed (a `cmd:` token keeps doctor from launching it); absent when nothing claims anything |
 
 A failing `worktree-location` is the nastiest of these: worktrees are created **at the moment a task is dispatched**, so `run` starts up perfectly normally and then every task fails.
 

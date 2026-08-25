@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -80,7 +80,7 @@ Priorities use MoSCoW (M: Must / S: Should / C: Could / W: Won't in v1).
 
 | ID | Requirement | Priority |
 |---|---|---|
-| F-01 | Task sources connect as plugins; task lists and details are retrieved in a normalized common schema (Task) | M |
+| F-01 | Task sources connect as plugins; task lists and details are retrieved in a normalized common schema (Task). A source names the workflow each task belongs to on `task/submit` (0.6.0, #554) — it has already run first-match over the workflows it was given, and the Orchestrator verifies only that the name exists and belongs to that source | M |
 | F-02 | GitHub Issues / Projects plugin (GraphQL API, reads Projects status columns) | M |
 | F-03 | Notion plugin (database property mapping defined in configuration) | M |
 | F-04 | Per-plugin output (field mapping, filter conditions) definable in the configuration file | M |
@@ -148,10 +148,10 @@ Priorities use MoSCoW (M: Must / S: Should / C: Could / W: Won't in v1).
 | F-53 | A plugin manifest (`plugin.toml`: name, kind, version, supported protocol version, capabilities) is mandatory | M |
 | F-54 | Protocol-version compatibility check (explicit error on mismatch) | M |
 | F-55 | Distribution: v1 supports local path / binary download from GitHub Releases. A registry is W | S |
-| F-56 | **Separate install (binary presence) from enabled (config declaration)**. Install to `$XDG_DATA_HOME/totsuka/plugins/{name}/`; enable/disable is declared via the `[plugins.{name}] enabled` flag in config.toml | M |
+| F-56 | **Separate install (binary presence) from enabled (config declaration)**. Install to `$XDG_DATA_HOME/totsuka/plugins/{name}/`; enable/disable is declared via the `[plugins.{name}] enabled` flag in config.toml. The roster is also what makes a top-level `[<name>]` settings table legitimate (F-64) | M |
 | F-57 | `plugin enable / disable` are editing helpers that rewrite `enabled` in config.toml (toml_edit preserves comments/formatting). Direct edits to the config file must produce identical results | M |
 | F-58 | Disabled plugins are never started. Configuration referring to a disabled plugin (a repository's default agent, etc.) is an error in `config validate` | M |
-| F-59 | Validation of plugin-specific config is delegated via a mandatory `config/validate` RPC method on the plugin. `config validate` briefly starts all enabled plugins to let them validate (enables checks not expressible in a schema, e.g. socket connectivity) | M |
+| F-59 | Validation of plugin-specific config is delegated via a mandatory `config/validate` RPC method on the plugin. `config validate` briefly starts all enabled plugins to let them validate (enables checks not expressible in a schema, e.g. socket connectivity). Since 0.6.0 the call also carries the workflows, projects and repositories the plugin was given, so it validates what it is asked about rather than what it remembered | M |
 
 **Plugin configuration design policy (declarative + CLI as editing helper)**
 
@@ -161,19 +161,18 @@ The configuration file is the single source of truth; a config distributed via g
 |---|---|
 | `$XDG_DATA_HOME/totsuka/plugins/{name}/` | Binary + manifest (target of install / uninstall) |
 | `[plugins.{name}]` in `config.toml` | Enable/disable roster + common fields (`kind`, `max_concurrency`, `timeout_secs`, `log_level`, etc. — interpreted by the orchestrator) |
-| `plugins/{name}.toml` | Plugin-specific config. The orchestrator does not interpret it; it is passed verbatim as JSON-RPC initialize params |
+| `[<name>]` in `config.toml` | Plugin-specific config. The orchestrator does not interpret it; it is passed verbatim as JSON-RPC initialize params. Legitimate only when `<name>` is in the roster above |
 
 ```toml
-# config.toml
+# config.toml — the roster (interpreted by the orchestrator)
 [plugins.herdr]
 enabled = true
 kind = "agent_ide"
 max_concurrency = 3
 timeout_secs = 120
-```
 
-```toml
-# plugins/herdr.toml (plugin-specific)
+# …and the plugin's own settings, in the same file (uninterpreted)
+[herdr]
 socket_path = "${XDG_RUNTIME_DIR}/herdr.sock"
 request_timeout_secs = 30
 ```
@@ -194,9 +193,10 @@ request_timeout_secs = 30
 | F-61 | Repository definitions: path, summary text (for LLM selection), default agent, concurrency limit | M |
 | F-62 | Secrets (Notion / GitHub / AI-gateway API keys) must not be plaintext in config. Support env-var references (`${ENV_VAR}` expansion) and macOS Keychain references | M |
 | F-63 | `config validate` performs static validation (schema, path existence, plugin consistency) plus delegated validation to enabled plugins (F-59). `--offline` skips validation requiring plugin startup/connectivity and runs static checks only (for CI) | M |
-| F-64 | Plugin-specific configuration is separated into `$XDG_CONFIG_HOME/totsuka/plugins/{name}.toml` (common fields in config.toml, specific fields in individual files; see F-56) | M |
+| F-64 | Plugin-specific configuration lives in **config.toml**, in a top-level `[<name>]` table held uninterpreted by the Orchestrator. A table whose name is not in the `[plugins.*]` roster is a validation error, which catches a mistyped core key and a mistyped plugin name alike. Keys a plugin defines on a *core* structure (`[[workflows]]`, `[[projects]]`) are written flat and resolved by asking the plugins which ones they consume — see [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md). Until #554 this requirement mandated a separate `plugins/{name}.toml`, which expressed ownership through file location and therefore could not reach inside a core structure | M |
 | F-65 | Secret-reference resolution (`${ENV_VAR}` / `keychain:` prefix) happens **in the orchestrator**; resolved values are passed to plugins in initialize params. Plugins get no Keychain access | M |
-| F-66 | Configuration precedence: CLI flags > environment variables > `plugins/{name}.toml` > defaults in `config.toml` | M |
+| F-66 | Configuration precedence: CLI flags > environment variables > the plugin's own `[<name>]` table > defaults in `config.toml` | M |
+| F-67 | Trackers a repository files into are declared as top-level `[[projects]]` entries (`name`, `source`, plus that plugin's own keys held uninterpreted), and a repository names **one** of them with `[[repositories]].project`. Optional — a repository with no tracker is the normal state. Writing `source` out is what makes the chain `repositories.project` → `projects.name` → `plugins.<source>` resolvable without launching a plugin. Replaces the reverse `repos = [...]` list each source used to keep (#554, [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md)) | M |
 
 ### 4.8 State management
 
@@ -215,13 +215,14 @@ On top of the same plugin binaries, any number of **named configurations — wor
 | ID | Requirement | Priority |
 |---|---|---|
 | F-80 | Workflow = a named configuration of `source (task-source instance) × trigger (intake condition) × mode (plan / implement) × agent × output (output policy)`. Any number definable as `[[workflows]]` in config.toml | M |
-| F-81 | Triggers are specified via Issue / Projects status columns or labels, Notion property values, etc. One task must match at most one workflow at a time (multiple matches produce a `config validate` warning; precedence is definition order) | M |
+| F-81 | Triggers are specified via Issue / Projects status columns or labels, Notion property values, etc. One task belongs to at most one workflow; **the source plugin decides which**, running first-match over the workflows supplied at `initialize` in definition order, and names it on `task/submit`. The Orchestrator holds the trigger as an opaque table and does not interpret a key of it (0.6.0, #554) | M |
 | F-82 | `mode = "plan"` (detailed design): a worktree IS created (for codebase reference) but the pane cannot run git at all, so it never branches, commits, pushes or opens a PR. The agent runs in plan mode and returns a design document as the artifact | M |
 | F-83 | Output policy `output`: `source` (write to Issue comment, Notion page, etc. via the task-source plugin's `result/publish`) / `none`. Task-source plugins declare supported outputs as capabilities; realization is plugin-side. A `pull_request` policy existed until push and PR creation became the agent's responsibility (F-86) | M |
 | F-84 | `on_success` / `on_failure`: transition the source-side status on completion (e.g. "awaiting design → awaiting design review"). This **source-side status transition is the handoff mechanism for plan → human review → implement**, naturally inserting human review between design and implementation | M |
 | F-85 | Worktree cleanup policy for plan mode configurable separately from implement (immediate cleanup is the default for design-only) | S |
 | F-86 | **Push and PR creation are the agent's responsibility**, following the repository's own conventions (which is where those procedures are written down). The orchestrator owns the worktree and the task lifecycle, and never pushes. `output = "pull_request"` was retired with this boundary — see [ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) for what this gives up | M |
 | F-87 | `[[workflows]].initial_prompt`: extra instructions the operator writes in the config, prepended to the task body in the pane the **first** time a conversation starts (never on a resume, which would restart a skill mid-conversation). Literal text — no placeholder substitution. It is the first instruction channel scoped to a workflow rather than to a task source, so a flow no longer has to depend on its source plugin having a key for it (the Slack plugin's `reply_instructions` and friends still exist and are unchanged) | M |
+| F-88 | A plugin may define its own keys on `[[workflows]]`, written **flat** beside the Orchestrator's. Ownership is resolved by asking: the leftover keys go to the workflow's `source` and `agent` at `initialize`, each answers which it consumes (`claimed_options`), and **exactly one** claimant is required — zero is a typo and fails startup, two is an ambiguity the Orchestrator refuses to settle. `run` and `config validate` both enforce it; `--offline` cannot (#554) | M |
 
 **Configuration example**
 
@@ -402,7 +403,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 
 | Method | Direction | Kind | Purpose |
 |---|---|---|---|
-| `initialize` | O→P | common | Exchange plugin-specific config (including resolved secrets) and capabilities. For `task_source`, also carries `triggers`/`poll_interval_secs` (protocol 0.1.6) |
+| `initialize` | O→P | common | Exchange plugin-specific config (including resolved secrets) and capabilities. `workflows` (the `[[workflows]]` naming this plugin as `source` or `agent`) goes to every kind; `projects` / `repositories` go to `task_source` (renamed from `triggers` in 0.6.0, #554; `poll_interval_secs` moved into the plugin's own `[<name>]` table) |
 | `shutdown` | O→P | common | Termination request |
 | `config/validate` | O→P | common | Validate plugin-specific config (F-59) |
 | `task/submit` | **P→O request** | task_source | Push a task the plugin found (persist-before-ack, protocol 0.1.6). Replaces the removed `tasks/fetch` as of protocol 0.2.0 — every task_source is push-only |

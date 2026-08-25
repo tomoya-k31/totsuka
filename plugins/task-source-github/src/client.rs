@@ -26,15 +26,17 @@ struct TriggerFilter {
     label: Option<String>,
     /// Which instruction set this workflow's profile asks for (#398).
     ///
-    /// Baked into the trigger table by the Orchestrator rather than derived
-    /// here: `[[workflows]].profile` is core's schema, and this plugin stays
-    /// unaware of it. Absent from an older Orchestrator, in which case the task
-    /// carries no instructions — exactly the pre-#398 behaviour.
+    /// Derived by the Orchestrator rather than here: `[[workflows]].profile`
+    /// is core's schema, and this plugin stays unaware of it. It arrives as
+    /// `WorkflowInfo.instructions_kind` (a dedicated field since 0.6.0 /
+    /// #554, no longer a key inside the trigger table) and is threaded in via
+    /// [`GithubClient::fetch`]. Absent means the task carries no
+    /// instructions — exactly the pre-#398 behaviour.
     instructions_kind: Option<String>,
 }
 
 impl TriggerFilter {
-    fn parse(trigger: &Value) -> Self {
+    fn parse(trigger: &Value, instructions_kind: Option<&str>) -> Self {
         Self {
             project_status: trigger
                 .get("project_status")
@@ -44,10 +46,7 @@ impl TriggerFilter {
                 .get("label")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            instructions_kind: trigger
-                .get("instructions_kind")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            instructions_kind: instructions_kind.map(str::to_string),
         }
     }
 
@@ -109,8 +108,12 @@ impl<T: GithubTransport> GithubClient<T> {
     /// return the rest — would make a broken token or a deleted board look
     /// like "no tasks right now", which is indistinguishable from a quiet
     /// board and never surfaces.
-    pub async fn fetch(&self, trigger: &Value) -> Result<Vec<Task>, GithubError> {
-        let filter = TriggerFilter::parse(trigger);
+    pub async fn fetch(
+        &self,
+        trigger: &Value,
+        instructions_kind: Option<&str>,
+    ) -> Result<Vec<Task>, GithubError> {
+        let filter = TriggerFilter::parse(trigger, instructions_kind);
         let mut tasks = Vec::new();
         for (index, project) in self.config.projects.iter().enumerate() {
             self.fetch_project(index, project, &filter, &mut tasks)
@@ -281,7 +284,7 @@ impl<T: GithubTransport> GithubClient<T> {
             }
         }
         Err(GithubError::NotFound(format!(
-            "issue `{task_id}` is not an item of any project in plugins/github.toml \
+            "issue `{task_id}` is not an item of any board this plugin polls \
              ({}) → check that the issue is still on one of those boards",
             self.config
                 .projects
@@ -397,7 +400,7 @@ impl<T: GithubTransport> GithubClient<T> {
         // the operator's to fix — searching on would hide it.
         let option_id = option_id.ok_or_else(|| {
             GithubError::NotFound(format!(
-                "unknown status `{target}` for field `{}` on project #{}, which is where issue `{task_id}` lives → add the option in that project or fix status_map in plugins/github.toml",
+                "unknown status `{target}` for field `{}` on project #{}, which is where issue `{task_id}` lives → add the option in that project or fix `github.status_map` in config.toml",
                 self.config.status_field, project_config.project_number
             ))
         })?;
@@ -447,8 +450,8 @@ impl<T: GithubTransport> GithubClient<T> {
         let project = &data[root]["projectV2"];
         if project.is_null() {
             return Err(GithubError::NotFound(format!(
-                "project #{} not found for {} `{}` → check owner/owner_type/project_number in that `[[projects]]` entry of plugins/github.toml",
-                project_config.project_number, root, project_config.owner
+                "project #{} not found for {} `{}` → check owner/owner_type/project_number in the `[[projects]]` entry `{}` of config.toml",
+                project_config.project_number, root, project_config.owner, project_config.name
             )));
         }
         Ok(project)
@@ -485,24 +488,15 @@ pub fn static_config_errors(config: &GithubConfig) -> Vec<String> {
     }
     if config.projects.is_empty() {
         errors.push(
-            "`[[projects]]` is empty → declare at least one board (owner / project_number / repos)"
+            "no `[[projects]]` entry has `source = \"github\"` → declare at least one board (name / owner / project_number)"
                 .into(),
         );
     }
-    // A repository may be tracked by exactly one board (#542): the claim it
-    // produces answers "where does an item for this repo go", and two answers
-    // is the same as none. Reported here rather than left to the Orchestrator's
-    // cross-plugin check, because within one config it is plainly a typo.
-    // Keyed by `(owner, project_number)`, not the number alone: ProjectsV2
-    // numbers are per-owner, so `tomoya-k31/#7` and `acme/#7` are different
-    // boards. Comparing numbers would call them the same and let a genuine
-    // duplicate through — with two claims for one repository as the result.
-    let mut seen: HashMap<&str, (&str, i64)> = HashMap::new();
     for project in &config.projects {
         if project.owner.is_empty() {
             errors.push(format!(
-                "`owner` is empty in the `[[projects]]` entry for project #{} → set the project owner login",
-                project.project_number
+                "`owner` is empty in the `[[projects]]` entry `{}` → set the project owner login",
+                project.name
             ));
         }
         if project.project_number <= 0 {
@@ -513,20 +507,9 @@ pub fn static_config_errors(config: &GithubConfig) -> Vec<String> {
         }
         if project.repos.is_empty() {
             errors.push(format!(
-                "`repos` is empty in the `[[projects]]` entry for project #{} → list the repositories this board tracks (it is also the repository -> board mapping, so it cannot be inferred)",
-                project.project_number
+                "no repository is bound to the `[[projects]]` entry `{}` → set `project = \"{}\"` on the `[[repositories]]` entries this board tracks, or drop the board",
+                project.name, project.name
             ));
-        }
-        let board = (project.owner.as_str(), project.project_number);
-        for repo in &project.repos {
-            if let Some(first) = seen.insert(repo.as_str(), board)
-                && first != board
-            {
-                errors.push(format!(
-                    "repository `{repo}` is listed on both project {}/#{} and project {}/#{} → a repository may be tracked by exactly one board",
-                    first.0, first.1, board.0, board.1
-                ));
-            }
         }
     }
     errors
@@ -598,7 +581,10 @@ mod tests {
 
     #[test]
     fn trigger_filter_matches_status_and_label() {
-        let f = TriggerFilter::parse(&json!({ "project_status": "実装待ち", "label": "bug" }));
+        let f = TriggerFilter::parse(
+            &json!({ "project_status": "実装待ち", "label": "bug" }),
+            None,
+        );
         assert!(f.matches(Some("実装待ち"), &["bug".into()]));
         assert!(!f.matches(Some("実装中"), &["bug".into()])); // wrong status
         assert!(!f.matches(Some("実装待ち"), &["docs".into()])); // missing label
@@ -606,7 +592,7 @@ mod tests {
 
     #[test]
     fn empty_trigger_matches_everything() {
-        let f = TriggerFilter::parse(&json!({}));
+        let f = TriggerFilter::parse(&json!({}), None);
         assert!(f.matches(Some("anything"), &[]));
         assert!(f.matches(None, &["x".into()]));
     }
@@ -645,31 +631,25 @@ mod tests {
     }
 
     fn client_for_tests() -> GithubClient<NeverCalled> {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me",
             "projects": [{ "owner": "me", "project_number": 1, "repos": ["web-app"] }]
-        }))
-        .unwrap();
+        }));
         GithubClient::new(cfg, NeverCalled)
     }
 
     /// The board `item()` belongs to, for the `normalize_item` callers below.
     fn project_for_tests() -> ProjectConfig {
-        serde_json::from_value(json!({
-            "owner": "me", "project_number": 1, "repos": ["web-app"]
-        }))
-        .unwrap()
+        ProjectConfig::new("board-0", "me", 1, &["web-app"])
     }
 
-    /// The `instructions_kind` the Orchestrator baked into the trigger picks
-    /// the instruction text, and the placeholders are filled from the issue
+    /// The `instructions_kind` the Orchestrator derives beside the trigger
+    /// (a dedicated `WorkflowInfo` field since 0.6.0, #554) picks the
+    /// instruction text, and the placeholders are filled from the issue
     /// (#398).
     #[test]
     fn a_design_trigger_tells_the_agent_where_to_put_the_design() {
-        let filter = TriggerFilter::parse(&json!({
-            "project_status": "設計待ち",
-            "instructions_kind": "design",
-        }));
+        let filter = TriggerFilter::parse(&json!({ "project_status": "設計待ち" }), Some("design"));
         let task = client_for_tests()
             .normalize_item(&item("設計待ち"), &project_for_tests(), &filter)
             .expect("ingestable");
@@ -691,7 +671,7 @@ mod tests {
     #[test]
     fn each_kind_selects_its_own_text() {
         let for_kind = |kind: &str| {
-            let filter = TriggerFilter::parse(&json!({ "instructions_kind": kind }));
+            let filter = TriggerFilter::parse(&json!({}), Some(kind));
             client_for_tests()
                 .normalize_item(&item("any"), &project_for_tests(), &filter)
                 .unwrap()
@@ -708,7 +688,7 @@ mod tests {
     /// the spelled-out notation — must produce exactly the task it did before.
     #[test]
     fn no_instructions_kind_means_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({ "project_status": "実装待ち" }));
+        let filter = TriggerFilter::parse(&json!({ "project_status": "実装待ち" }), None);
         let task = client_for_tests()
             .normalize_item(&item("実装待ち"), &project_for_tests(), &filter)
             .expect("ingestable");
@@ -720,7 +700,7 @@ mod tests {
     /// worse than dispatching it with the instructions it had before.
     #[test]
     fn an_unknown_kind_falls_back_to_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({ "instructions_kind": "audit" }));
+        let filter = TriggerFilter::parse(&json!({}), Some("audit"));
         let task = client_for_tests()
             .normalize_item(&item("any"), &project_for_tests(), &filter)
             .expect("ingestable");
@@ -743,11 +723,10 @@ mod tests {
 
     #[test]
     fn static_errors_flag_bad_project_number() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me",
             "projects": [{ "owner": "me", "project_number": 0, "repos": ["r"] }]
-        }))
-        .unwrap();
+        }));
         let errors = static_config_errors(&cfg);
         assert!(
             errors.iter().any(|e| e.contains("project_number")),
@@ -755,92 +734,84 @@ mod tests {
         );
     }
 
-    /// A repository on two boards makes the claim ambiguous, and two answers to
-    /// "where does an item for this repo go" is the same as none (#542).
+    /// The "a repository is on two boards" check `static_config_errors` used to
+    /// carry (#542) is gone, because #554 made the state unwritable rather than
+    /// merely invalid: `repos` is no longer typed by the operator, it is
+    /// derived from the `[[repositories]]` entries whose single-valued
+    /// `project` names this board. Pinned through `resolve`, not through the
+    /// deleted check — a test asserting "no error is reported" would keep
+    /// passing if the derivation itself started handing one repository to two
+    /// boards, which is the failure the old check existed to prevent.
     #[test]
-    fn static_errors_flag_a_repository_claimed_by_two_boards() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+    fn resolve_gives_each_repository_to_exactly_one_board() {
+        use plugin_protocol::methods::{ProjectInfo, RepoInfo};
+
+        let project = |name: &str, number: i64| ProjectInfo {
+            name: name.to_string(),
+            options: serde_json::json!({ "owner": "me", "project_number": number })
+                .as_object()
+                .unwrap()
+                .clone(),
+        };
+        let repo = |name: &str, project: &str| RepoInfo {
+            name: name.to_string(),
+            summary: None,
+            path: None,
+            project: Some(project.to_string()),
+        };
+
+        let boards = crate::config::ProjectConfig::resolve(
+            &[project("first", 1), project("second", 2)],
+            &[
+                repo("totsuka", "first"),
+                repo("shared", "first"),
+                repo("web", "second"),
+            ],
+        )
+        .expect("resolves");
+
+        let mut homes: Vec<(&str, &str)> = Vec::new();
+        for board in &boards {
+            for r in &board.repos {
+                homes.push((r.as_str(), board.name.as_str()));
+            }
+        }
+        homes.sort_unstable();
+        assert_eq!(
+            homes,
+            [("shared", "first"), ("totsuka", "first"), ("web", "second")]
+        );
+    }
+
+    /// A board no repository points at polls nothing and claims nothing, so it
+    /// is reported — the operator either meant to bind a repository to it or
+    /// meant to delete it. The message names the entry and the key to set,
+    /// because there is no longer a `repos` list to fill in on the board side.
+    #[test]
+    fn static_errors_flag_a_board_no_repository_is_bound_to() {
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me",
-            "projects": [
-                { "owner": "me", "project_number": 1, "repos": ["totsuka", "shared"] },
-                { "owner": "me", "project_number": 2, "repos": ["shared"] }
-            ]
-        }))
-        .unwrap();
+            "projects": [{ "name": "lonely", "owner": "me", "project_number": 1, "repos": [] }]
+        }));
         let errors = static_config_errors(&cfg);
         assert!(
             errors
                 .iter()
-                .any(|e| e.contains("shared") && e.contains("#1") && e.contains("#2")),
+                .any(|e| e.contains("lonely") && e.contains("[[repositories]]")),
             "got {errors:?}"
         );
-        // `totsuka` appears once and must not be reported.
-        assert!(
-            !errors.iter().any(|e| e.contains("totsuka")),
-            "got {errors:?}"
-        );
-    }
-
-    /// Board identity is `(owner, number)`. ProjectsV2 numbers are per-owner,
-    /// so two owners can both have `#7` — comparing numbers alone would call
-    /// them one board and let a genuine duplicate through.
-    #[test]
-    fn two_owners_sharing_a_project_number_are_different_boards() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
-            "token": "t", "github_login": "me",
-            "projects": [
-                { "owner": "me", "project_number": 7, "repos": ["shared"] },
-                { "owner": "acme", "owner_type": "organization",
-                  "project_number": 7, "repos": ["shared"] }
-            ]
-        }))
-        .unwrap();
-        let errors = static_config_errors(&cfg);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("shared") && e.contains("me/#7") && e.contains("acme/#7")),
-            "got {errors:?}"
-        );
-    }
-
-    /// The same repository listed twice **on one board** is a harmless
-    /// duplicate, not the ambiguity above: both entries name the same
-    /// destination. Flagging it would train the operator to ignore the check.
-    #[test]
-    fn a_repository_repeated_within_one_board_is_not_an_error() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
-            "token": "t", "github_login": "me",
-            "projects": [{ "owner": "me", "project_number": 1, "repos": ["r", "r"] }]
-        }))
-        .unwrap();
-        assert!(static_config_errors(&cfg).is_empty());
-    }
-
-    /// An empty `repos` cannot be turned into a claim, so it is rejected rather
-    /// than quietly meaning "every repo on the board" as it did pre-#542.
-    #[test]
-    fn static_errors_flag_an_empty_repos_list() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
-            "token": "t", "github_login": "me",
-            "projects": [{ "owner": "me", "project_number": 1, "repos": [] }]
-        }))
-        .unwrap();
-        let errors = static_config_errors(&cfg);
-        assert!(errors.iter().any(|e| e.contains("repos")), "got {errors:?}");
     }
 
     /// No boards at all: serde accepts `projects = []` (it is a list, not a
     /// missing field), so the check has to be here.
     #[test]
     fn static_errors_flag_no_boards() {
-        let cfg: GithubConfig = serde_json::from_value(json!({
+        let cfg: GithubConfig = crate::config::config_from_json(json!({
             "token": "t", "github_login": "me", "projects": []
-        }))
-        .unwrap();
+        }));
         let errors = static_config_errors(&cfg);
         assert!(
-            errors.iter().any(|e| e.contains("[[projects]]")),
+            errors.iter().any(|e| e.contains("`source = \"github\"`")),
             "got {errors:?}"
         );
     }

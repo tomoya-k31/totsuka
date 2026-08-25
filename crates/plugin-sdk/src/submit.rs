@@ -61,8 +61,9 @@ pub enum SubmitOutcome {
 /// Anything that can submit a task — the seam [`poll_loop`](crate::poll)
 /// tests mock.
 pub trait Submitter: Send + Sync {
-    /// Submit one task and await its final outcome.
-    fn submit(&self, task: Task) -> impl Future<Output = SubmitOutcome> + Send;
+    /// Submit one task, naming the workflow it belongs to, and await its
+    /// final outcome (0.6.0, #554).
+    fn submit(&self, task: Task, workflow: &str) -> impl Future<Output = SubmitOutcome> + Send;
 }
 
 /// A failed attempt: whether backing off and re-submitting can help, plus a
@@ -125,12 +126,13 @@ impl SubmitClient {
         self
     }
 
-    /// Submit `task`, retrying retryable failures, until a final outcome.
-    pub async fn submit_task(&self, task: Task) -> SubmitOutcome {
+    /// Submit `task` as belonging to `workflow`, retrying retryable
+    /// failures, until a final outcome.
+    pub async fn submit_task(&self, task: Task, workflow: &str) -> SubmitOutcome {
         let mut backoff = self.first_backoff;
         let mut last_error = String::new();
         for attempt in 1..=MAX_ATTEMPTS {
-            match self.submit_once(&task).await {
+            match self.submit_once(&task, workflow).await {
                 Ok(result) => {
                     return match result.status {
                         TaskSubmitStatus::Accepted => SubmitOutcome::Accepted,
@@ -179,9 +181,16 @@ impl SubmitClient {
     /// One attempt: send the request, await its ack (or time out). Final
     /// statuses come back as `Ok`; an `Err` carries whether backing off and
     /// re-submitting can help.
-    async fn submit_once(&self, task: &Task) -> Result<TaskSubmitResult, AttemptError> {
+    async fn submit_once(
+        &self,
+        task: &Task,
+        workflow: &str,
+    ) -> Result<TaskSubmitResult, AttemptError> {
         let id = format!("submit-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
-        let params = TaskSubmitParams { task: task.clone() };
+        let params = TaskSubmitParams {
+            task: task.clone(),
+            workflow: workflow.to_string(),
+        };
         let request = Request::new(
             RequestId::Str(id.clone()),
             method::TASK_SUBMIT,
@@ -255,8 +264,8 @@ impl SubmitClient {
 }
 
 impl Submitter for SubmitClient {
-    async fn submit(&self, task: Task) -> SubmitOutcome {
-        self.submit_task(task).await
+    async fn submit(&self, task: Task, workflow: &str) -> SubmitOutcome {
+        self.submit_task(task, workflow).await
     }
 }
 

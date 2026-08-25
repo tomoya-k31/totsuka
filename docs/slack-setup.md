@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:58fc01583e754a7029a9a90678c1d47eda29374b1ec2a9824a31ab32165bc6d6 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:a186d905c6d5772826c66779a22220f93c7edf7e2ce7c7b9dc739899d2fba410 -->
 
 # Setting up the Slack source
 
@@ -37,7 +37,7 @@ op item edit totsuka slack-app='xapp-…'
 op item edit totsuka slack-bot='xoxb-…'    # optional
 ```
 
-**The vault name `Dev` is fixed too.** If your vault is called something else, edit the references in `plugins/slack.toml` after `setup` generates it. (Writing the file by hand, below, lets you use any reference you like.)
+**The vault name `Dev` is fixed too.** If your vault is called something else, edit the references in the `[slack]` table after `setup` generates it. (Writing the file by hand, below, lets you use any reference you like.)
 
 On macOS the Keychain works too. Those references look like `keychain:totsuka/slack-user`, and they match what `setup` writes:
 
@@ -53,7 +53,7 @@ security add-generic-password -U -s totsuka -a slack-bot  -w 'xoxb-…'   # opti
 totsuka setup
 ```
 
-Pick the **"Slack — reply as yourself"** recipe. It asks for your repositories, the member id from step 1, and the LLM used to decide which repository a mention is about. It writes `plugins/slack.toml`, installs and enables the plugin, and runs `doctor` — all from this one command. **It never asks for a token value.**
+Pick the **"Slack — reply as yourself"** recipe. It asks for your repositories, the member id from step 1, and the LLM used to decide which repository a mention is about. It writes the `[slack]` table, installs and enables the plugin, and runs `doctor` — all from this one command. **It never asks for a token value.**
 
 If you have not stored the tokens yet, `setup` prints a checklist of the exact commands to run.
 
@@ -75,13 +75,14 @@ In `~/.config/totsuka/config.toml`:
 [plugins.slack]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 5   # how often the socket-mode buffer is drained
 
 # Optional: reacting with :eyes: yourself turns a message into a task.
-# Put it BEFORE the catch-all — `trigger = {}` matches everything, so a
-# reaction workflow placed after it can never be reached. Get the order
-# wrong and `totsuka config validate` names it in a warning ("move X
-# above Y"), so run that once after editing.
+# The plugin decides which workflow each event selects: a reaction picks
+# the workflow with the matching emoji, a plain mention goes to the one
+# workflow WITHOUT a `reaction` trigger — order in this file does not
+# matter. Writing the same emoji on two workflows, or two workflows
+# without a reaction, is rejected at startup (and by
+# `totsuka config validate`).
 # Someone else reacting does not start anything, and there is no setting
 # that relaxes this. Names take or omit the colons; 👀 is `eyes` and
 # 👁 is `eye`, which are different emoji.
@@ -102,9 +103,10 @@ agent = "herdr"
 output = "source"        # the result goes through the approval flow
 ```
 
-In `~/.config/totsuka/plugins/slack.toml`:
+In `~/.config/totsuka/config.toml`:
 
 ```toml
+[slack]
 app_token = "op://Dev/totsuka/slack-app"
 user_token = "op://Dev/totsuka/slack-user"
 bot_token = "op://Dev/totsuka/slack-bot"  # optional: the notification DM.

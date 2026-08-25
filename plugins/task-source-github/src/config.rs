@@ -1,5 +1,6 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
-//! `plugins/github.toml` as JSON with secrets already expanded (F-64/F-65).
+//! `[github]` table of `config.toml` as JSON with secrets already
+//! expanded (F-65, #554).
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -47,7 +48,7 @@ struct EmbeddedPrompts {
 ///
 /// Built-in values live in the embedded `defaults.toml`, not in Rust string
 /// literals, so rewording is a data edit. Field names are the config keys under
-/// `[prompts]` in `plugins/github.toml`.
+/// `[github.prompts]` in config.toml.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GithubPrompts {
@@ -123,16 +124,14 @@ impl OwnerType {
     }
 }
 
-/// One ProjectsV2 board this plugin polls, and the repositories it is the
-/// tracker for (`[[projects]]`, #542).
+/// The options on one `[[projects]]` entry, as this plugin reads them.
 ///
-/// Boards are a list rather than one-plugin-instance-per-board: the instance
-/// route would need `name ≠ bin name`, which is the relaxation
-/// [ADR-0027](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0027-plugin-artifact-naming.md)
-/// refused, and it would fork `[[workflows]].source` per board too.
+/// `name` and `source` are the Orchestrator's keys and never reach here;
+/// `deny_unknown_fields` is what turns a typo in the rest into an
+/// `initialize` failure instead of a setting that quietly does nothing.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectConfig {
+pub struct ProjectOptions {
     /// Project owner login (user or org).
     pub owner: String,
     /// Whether `owner` is a user or an organization.
@@ -140,16 +139,6 @@ pub struct ProjectConfig {
     pub owner_type: OwnerType,
     /// ProjectsV2 number under `owner`.
     pub project_number: i64,
-    /// The repositories this board is the tracker for.
-    ///
-    /// Two jobs in one list, and they are not separable. It is the ingest
-    /// filter (an issue from a repository not listed here is skipped) *and*
-    /// the forward mapping repository → board that
-    /// [`GithubConfig::claimed_repos`] publishes. Required and non-empty for
-    /// the second reason: an omitted list used to mean "every repo on the
-    /// board", which cannot be turned into claims — the board does not know
-    /// its own future repositories.
-    pub repos: Vec<String>,
     /// The Status option a triage-filed item should land in (#548 follow-up).
     ///
     /// Absent means the item is added with **no** Status. That leaves a
@@ -167,7 +156,86 @@ pub struct ProjectConfig {
     pub triage_status: Option<String>,
 }
 
+/// One board this plugin polls: its `[[projects]]` entry plus the
+/// repositories bound to it.
+///
+/// The repositories are **derived** (#554): they are the `[[repositories]]`
+/// entries whose `project` names this board, which the Orchestrator supplies
+/// on `RepoInfo`. Until then the list lived here, written by hand, doing two
+/// jobs at once — the ingest filter and the repository → board mapping
+/// ([ADR-0056](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0056-multi-tracker-routing.md)).
+/// Deriving it separates them without duplicating anything: one binding, read
+/// two ways.
+#[derive(Debug, Clone)]
+pub struct ProjectConfig {
+    /// The entry's `name` — what `[[repositories]].project` points at.
+    pub name: String,
+    /// Project owner login (user or org).
+    pub owner: String,
+    /// Whether `owner` is a user or an organization.
+    pub owner_type: OwnerType,
+    /// ProjectsV2 number under `owner`.
+    pub project_number: i64,
+    /// The Status option a triage-filed item lands in.
+    pub triage_status: Option<String>,
+    /// The repositories bound to this board, in `[[repositories]]` order.
+    pub repos: Vec<String>,
+}
+
 impl ProjectConfig {
+    /// A board built directly, for tests and for callers that already have the
+    /// pieces. Production builds these through [`resolve`](Self::resolve).
+    pub fn new(name: &str, owner: &str, project_number: i64, repos: &[&str]) -> Self {
+        Self {
+            name: name.to_string(),
+            owner: owner.to_string(),
+            owner_type: OwnerType::default(),
+            project_number,
+            triage_status: None,
+            repos: repos.iter().map(|r| (*r).to_string()).collect(),
+        }
+    }
+
+    /// Build the boards from what `initialize` supplied.
+    ///
+    /// A board with no repositories bound to it is kept, not dropped: it
+    /// polls nothing and claims nothing, which is what the config says, and
+    /// `static_config_errors` is where that is reported as a mistake.
+    pub fn resolve(
+        projects: &[plugin_protocol::methods::ProjectInfo],
+        repositories: &[plugin_protocol::methods::RepoInfo],
+    ) -> Result<Vec<Self>, Vec<String>> {
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        for info in projects {
+            let options: ProjectOptions =
+                match serde_json::from_value(serde_json::Value::Object(info.options.clone())) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        errors.push(format!("project `{}`: {e}", info.name));
+                        continue;
+                    }
+                };
+            out.push(Self {
+                name: info.name.clone(),
+                owner: options.owner,
+                owner_type: options.owner_type,
+                project_number: options.project_number,
+                triage_status: options.triage_status,
+                repos: repositories
+                    .iter()
+                    .filter(|r| r.project.as_deref() == Some(info.name.as_str()))
+                    .map(|r| r.name.clone())
+                    .collect(),
+            });
+        }
+        if errors.is_empty() {
+            Ok(out)
+        } else {
+            Err(errors)
+        }
+    }
+
     /// Whether `repo` is one this board tracks.
     pub fn repo_allowed(&self, repo: &str) -> bool {
         self.repos.iter().any(|r| r == repo)
@@ -223,13 +291,14 @@ pub struct GithubConfig {
     /// API token (resolved by the orchestrator, F-65). Never touched by us
     /// beyond sending it as a bearer token.
     pub token: String,
-    /// The boards this plugin polls (`[[projects]]`, #542). Required and
-    /// non-empty; `static_config_errors` rejects an empty list.
+    /// The boards this plugin polls.
     ///
-    /// This replaced the flat `owner` / `owner_type` / `project_number` /
-    /// `repos` keys outright. `deny_unknown_fields` makes a pre-#542 config a
-    /// hard `initialize` failure, which is the intended outcome — see
-    /// [ADR-0056](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0056-multi-tracker-routing.md).
+    /// **Not read from `[github]`** (#554): the entries live in the
+    /// Orchestrator's `[[projects]]`, and their repositories in
+    /// `[[repositories]].project`. Filled in at `initialize` by
+    /// [`ProjectConfig::resolve`]; `deny_unknown_fields` on the surrounding
+    /// struct is what rejects a `projects = [...]` left over in `[github]`.
+    #[serde(skip)]
     pub projects: Vec<ProjectConfig>,
     /// SingleSelect field name holding the status column (F-02).
     #[serde(default = "default_status_field")]
@@ -253,6 +322,12 @@ pub struct GithubConfig {
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
+    /// here from `[plugins.github]` in 0.6.0 (#554): the Orchestrator only
+    /// ever forwarded it, so it is this plugin's own key. `0` is treated as
+    /// unset (busy-spin guard, applied in the server).
+    #[serde(default)]
+    pub poll_interval_secs: Option<u64>,
     /// Instruction text overrides (#398). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
@@ -287,12 +362,9 @@ impl GithubConfig {
     ///
     /// One entry per (board, repo) pair, in config order.
     ///
-    /// A repository listed on two boards appears **twice**, and this does not
-    /// deduplicate. `static_config_errors` rejects such a config, but only
-    /// `config/validate` calls it — `initialize` does not, so a config the
-    /// operator never validated reaches here intact. The Orchestrator's own
-    /// cross-source check is what sees the duplicate either way, and it keeps
-    /// the first claim; dropping one here would hide the conflict from it.
+    /// A repository can no longer appear twice: it names **one** board
+    /// (#554), so the duplicate this used to have to reason about is
+    /// unrepresentable rather than detected.
     pub fn claimed_repos(&self) -> Vec<ClaimedRepo> {
         self.projects
             .iter()
@@ -305,6 +377,47 @@ impl GithubConfig {
             })
             .collect()
     }
+}
+
+/// Build a config the way `initialize` does, for tests: the `[github]` table
+/// minus the boards, plus the boards resolved from `[[projects]]` /
+/// `[[repositories]]` (#554).
+///
+/// Tests write the board inline as `"projects": [{ name, owner,
+/// project_number, repos }]` — the same information, in one literal — and this
+/// splits it into the two lists the Orchestrator actually sends, so the test
+/// exercises [`ProjectConfig::resolve`] rather than bypassing it.
+#[cfg(test)]
+pub(crate) fn config_from_json(mut value: serde_json::Value) -> GithubConfig {
+    use plugin_protocol::methods::{ProjectInfo, RepoInfo};
+
+    let boards = value
+        .as_object_mut()
+        .and_then(|o| o.remove("projects"))
+        .and_then(|p| p.as_array().cloned())
+        .unwrap_or_default();
+    let mut projects = Vec::new();
+    let mut repositories = Vec::new();
+    for (i, board) in boards.iter().enumerate() {
+        let mut options = board.as_object().cloned().unwrap_or_default();
+        let repos = options.remove("repos").unwrap_or(serde_json::json!([]));
+        let name = options
+            .remove("name")
+            .and_then(|n| n.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("board-{i}"));
+        for repo in repos.as_array().cloned().unwrap_or_default() {
+            repositories.push(RepoInfo {
+                name: repo.as_str().unwrap_or_default().to_string(),
+                summary: None,
+                path: None,
+                project: Some(name.clone()),
+            });
+        }
+        projects.push(ProjectInfo { name, options });
+    }
+    let mut config: GithubConfig = serde_json::from_value(value).expect("github config");
+    config.projects = ProjectConfig::resolve(&projects, &repositories).expect("boards resolve");
+    config
 }
 
 fn default_status_field() -> String {
@@ -325,7 +438,7 @@ mod tests {
     use super::*;
 
     fn parse(json: serde_json::Value) -> GithubConfig {
-        serde_json::from_value(json).unwrap()
+        config_from_json(json)
     }
 
     #[test]
@@ -345,23 +458,43 @@ mod tests {
     fn unknown_field_is_rejected() {
         let err = serde_json::from_value::<GithubConfig>(serde_json::json!({
             "token": "t", "github_login": "me",
-            "projects": [{ "owner": "me", "project_number": 1, "repos": ["r"] }],
             "typo_field": true
         }))
         .unwrap_err();
         assert!(err.to_string().contains("typo_field"), "got {err}");
     }
 
+    /// A `projects = [...]` left in `[github]` is now an unknown field: the
+    /// boards moved to the Orchestrator's top-level `[[projects]]` (#554), and
+    /// accepting the old spelling would leave a table that reads as configured
+    /// and is never consulted.
     #[test]
-    fn unknown_field_inside_a_project_entry_is_rejected() {
+    fn the_old_projects_key_in_the_plugin_table_is_rejected() {
         let err = serde_json::from_value::<GithubConfig>(serde_json::json!({
             "token": "t", "github_login": "me",
-            "projects": [{
-                "owner": "me", "project_number": 1, "repos": ["r"], "statusField": "Status"
-            }]
+            "projects": [{ "owner": "me", "project_number": 1, "repos": ["r"] }]
         }))
         .unwrap_err();
-        assert!(err.to_string().contains("statusField"), "got {err}");
+        assert!(err.to_string().contains("projects"), "got {err}");
+    }
+
+    #[test]
+    fn unknown_field_inside_a_project_entry_is_rejected() {
+        let errors = ProjectConfig::resolve(
+            &[plugin_protocol::methods::ProjectInfo {
+                name: "board".into(),
+                options: serde_json::json!({
+                    "owner": "me", "project_number": 1, "statusField": "Status"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            }],
+            &[],
+        )
+        .unwrap_err();
+        assert!(errors[0].contains("statusField"), "got {errors:?}");
+        assert!(errors[0].contains("board"), "got {errors:?}");
     }
 
     #[test]

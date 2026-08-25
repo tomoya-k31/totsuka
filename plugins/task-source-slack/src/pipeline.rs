@@ -50,6 +50,12 @@ pub struct PendingMention {
     pub sender_name: String,
     /// Permalink to the mention (for the record), when resolvable.
     pub permalink: Option<String>,
+    /// The workflow this task was submitted under (#554).
+    ///
+    /// `result/publish` arrives with a task id and nothing else, so this is
+    /// how the plugin gets back to the workflow whose `publish` key decides
+    /// whether the result goes through the approval gate.
+    pub workflow: String,
 }
 
 /// Bound on the pending-mention index. `result/publish` (#107) consumes
@@ -131,6 +137,18 @@ impl SharedState {
     /// Remove and return `task_id`'s coordinates — the terminal consumption
     /// at `result/publish` time, which also keeps the index from holding
     /// entries for tasks that already round-tripped.
+    /// The workflow a pending task was submitted under (#554), without
+    /// consuming the entry — `result/publish` needs it *before* deciding which
+    /// presentation path takes (and consumes) it.
+    pub fn workflow_of(&self, task_id: &str) -> Option<String> {
+        self.pending
+            .lock()
+            .unwrap()
+            .entries
+            .get(task_id)
+            .map(|p| p.workflow.clone())
+    }
+
     pub fn take_pending(&self, task_id: &str) -> Option<PendingMention> {
         let mut index = self.pending.lock().unwrap();
         let taken = index.entries.remove(task_id);
@@ -328,7 +346,10 @@ where
     S: Submitter + Clone + 'static,
 {
     tokio::spawn(async move {
-        let mut filter = MentionFilter::new(&config.target_user_id);
+        let mut filter = MentionFilter::new(
+            &config.target_user_id,
+            trigger_reactions.mention_workflow().map(str::to_string),
+        );
         // Resolve the self-DM record channel up front (filter row 3). Failure
         // is not fatal: row 2 (own posts) already breaks reply loops.
         match api.conversations_open_self(&config.target_user_id).await {
@@ -351,7 +372,7 @@ where
             None => {
                 tracing::warn!(
                     "`bot_token` is not configured; drafts and pickers will generate no \
-                     Slack push notification (see plugins/slack.toml to enable the nudge)"
+                     Slack push notification (see `[slack]` in config.toml to enable the nudge)"
                 );
             }
             Some(_) => match api.conversations_open_bot(&config.target_user_id).await {
@@ -731,14 +752,28 @@ async fn submit<S: Submitter>(
     repo_hint: Option<String>,
     submitter: &S,
 ) {
-    let (task, pending) = build_task(config, enriched, repo_hint);
+    let (task, mut pending) = build_task(config, enriched, repo_hint);
     let task_id = task.id.clone();
+    // No workflow claims this task, so there is nowhere to submit it (#554).
+    // Dropping here rather than submitting is the honest end: the
+    // Orchestrator would reject it anyway, and going through the motions
+    // would install a pending entry for a task that never exists.
+    let Some(workflow) = enriched.mention.workflow.clone() else {
+        tracing::warn!(
+            task_id,
+            "no workflow claims this task → configure a `[[workflows]]` entry \
+             with source = \"slack\" (a mention needs one without a `reaction` \
+             trigger); dropping"
+        );
+        return;
+    };
+    pending.workflow = workflow.clone();
     // Identifies *this* delivery's entry on the rollback paths below: since
     // #242 the pending index is keyed by conversation, and a sibling message
     // may have installed (or may yet install) coordinates under the same key.
     let mention_ts = pending.mention_ts.clone();
     state.insert_pending(task_id.clone(), pending);
-    match submitter.submit(task).await {
+    match submitter.submit(task, &workflow).await {
         SubmitOutcome::Accepted => {
             tracing::info!(task_id, "mention became a task; submitted");
         }
@@ -1038,10 +1073,10 @@ fn build_task(
         title,
         body: Some(body),
         repo_hint,
-        // How a reaction-derived task reaches its `trigger = { reaction = ... }`
-        // workflow (#396). The Orchestrator re-checks the emoji against this
-        // label, so its absence is not cosmetic — the task would fall through
-        // to the catch-all and be answered instead of implemented.
+        // A record of how the task was raised (#396). Since 0.6.0 (#554) the
+        // workflow is decided here and named on `task/submit` — the
+        // Orchestrator no longer re-checks this label, so dropping it changes
+        // nothing about routing; it stays for humans reading `task list`.
         labels: mention
             .reaction
             .iter()
@@ -1065,6 +1100,8 @@ fn build_task(
         sender_id: mention.user.clone(),
         sender_name: enriched.sender_name.clone(),
         permalink: enriched.permalink.clone(),
+        // Filled in by `submit`, which is where the workflow is known.
+        workflow: String::new(),
     };
     (task, pending)
 }
@@ -1210,6 +1247,7 @@ mod tests {
     /// "implement what this thread concluded" case.
     fn threaded_mention(prefix: Option<&str>) -> Mention {
         Mention {
+            workflow: Some("slack-reply".into()),
             channel: "C1".into(),
             user: "U_ME".into(),
             text: "やろう".into(),
@@ -1320,6 +1358,7 @@ mod tests {
     fn enriched(task_id_ts: &str) -> EnrichedMention {
         EnrichedMention {
             mention: Mention {
+                workflow: Some("slack-reply".into()),
                 channel: "C1".into(),
                 user: "U_OTHER".into(),
                 text: "<@U_ME> hi".into(),
@@ -1513,6 +1552,7 @@ mod tests {
 
     fn coords(mention_ts: &str) -> PendingMention {
         PendingMention {
+            workflow: "slack-reply".into(),
             channel: "C1".into(),
             reply_ts: "100.0".into(),
             mention_ts: mention_ts.into(),

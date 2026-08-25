@@ -43,7 +43,7 @@ fn spec(kind: &str, name: &str, init_config: serde_json::Value) -> PluginSpec {
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = ">=0.1.6, <0.6"
+protocol_version = ">=0.6.0, <0.7"
 "#
     ))
     .unwrap();
@@ -55,8 +55,8 @@ protocol_version = ">=0.1.6, <0.6"
         init_config,
         repositories: vec![],
         llm: None,
-        triggers: vec![],
-        poll_interval_secs: None,
+        projects: vec![],
+        workflows: vec![],
         timeout: Duration::from_secs(10),
     }
 }
@@ -79,7 +79,7 @@ fn workflows() -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(
         r#"
 [[workflows]]
-name = "implement"
+name = "wf"
 source = "mock_src"
 trigger = {}
 mode = "implement"
@@ -571,14 +571,14 @@ async fn a_parked_task_does_not_starve_a_healthy_agent() {
         &mut plugins,
         "task_source",
         "src_down",
-        json!({ "submit_tasks": [{ "id": "for-the-dead-agent", "source": "src_down", "title": "a" }] }),
+        json!({ "submit_workflow": "wf-down", "submit_tasks": [{ "id": "for-the-dead-agent", "source": "src_down", "title": "a" }] }),
     )
     .await;
     install(
         &mut plugins,
         "task_source",
         "src_up",
-        json!({ "submit_tasks": [{ "id": "for-the-live-agent", "source": "src_up", "title": "b" }] }),
+        json!({ "submit_workflow": "wf-up", "submit_tasks": [{ "id": "for-the-live-agent", "source": "src_up", "title": "b" }] }),
     )
     .await;
     // Down for the whole run.
@@ -678,6 +678,7 @@ async fn a_task_queued_during_a_crash_window_is_not_failed() {
         // detection, and the test would then pass or fail on timing.
         json!({
             "submit_delay_ms": 800,
+            "submit_workflow": "wf",
             "submit_tasks": [{
                 "id": "crash-window-1",
                 "source": "mock_src",

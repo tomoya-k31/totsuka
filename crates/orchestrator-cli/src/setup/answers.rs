@@ -110,7 +110,7 @@ pub enum GitHubOwnerType {
 }
 
 impl GitHubOwnerType {
-    /// The value `plugins/github.toml` uses.
+    /// The value the `[github]` table uses.
     pub fn as_str(self) -> &'static str {
         match self {
             GitHubOwnerType::User => "user",
@@ -119,7 +119,7 @@ impl GitHubOwnerType {
     }
 }
 
-/// What `plugins/github.toml` needs beyond the token.
+/// What the `[github]` table needs beyond the token.
 ///
 /// The GitHub plugin requires all of these — none has a default — so a recipe
 /// that installs it cannot produce a working setup without asking.
@@ -199,7 +199,7 @@ pub struct Answers {
     ///
     /// A map rather than named fields because the slots belong to the recipe,
     /// not to any one plugin: they end up in `config.toml`'s workflows, while
-    /// [`github`](Self::github) describes `plugins/github.toml`.
+    /// [`github`](Self::github) describes the `[github]` table.
     #[serde(default)]
     pub statuses: std::collections::BTreeMap<String, String>,
 }

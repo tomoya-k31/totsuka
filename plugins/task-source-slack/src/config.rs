@@ -1,5 +1,6 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
-//! `plugins/slack.toml` as JSON with secrets already expanded (F-64/F-65).
+//! `[slack]` table of `config.toml` as JSON with secrets already expanded
+//! (F-65, #554).
 //!
 //! Slack tokens involved: the App-Level Token (`xapp-`) opens the Socket
 //! Mode WebSocket, and the *user* token (`xoxp-`) calls the Web API so
@@ -112,7 +113,7 @@ struct EmbeddedPrompts {
 ///
 /// Built-in values live in the embedded `defaults.toml`, not in Rust string
 /// literals, so rewording is a data edit. Every field is overridden per
-/// installation under `[prompts]` in `plugins/slack.toml`, and the field names
+/// installation under `[slack.prompts]` in `config.toml`, and the field names
 /// here are the config keys.
 ///
 /// Everything here is LLM-facing: a bad override degrades classification or
@@ -410,7 +411,7 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
         errors.push(
             "`app_token` is not an App-Level Token (must start with `xapp-`) → generate one \
              under the Slack app's Basic Information > App-Level Tokens (scope \
-             `connections:write`) and update plugins/slack.toml"
+             `connections:write`) and update `[slack]` in config.toml"
                 .into(),
         );
     }
@@ -418,7 +419,7 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
         errors.push(
             "`user_token` is not a User OAuth Token (must start with `xoxp-`; a bot token \
              `xoxb-` cannot post as you) → copy the User OAuth Token from the Slack app's \
-             OAuth & Permissions page and update plugins/slack.toml"
+             OAuth & Permissions page and update `[slack]` in config.toml"
                 .into(),
         );
     }
@@ -428,7 +429,7 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
         errors.push(
             "`bot_token` is not a Bot User OAuth Token (must start with `xoxb-`; an `xoxp-` \
              user token cannot send the notification nudge) → copy the Bot User OAuth Token \
-             from the Slack app's OAuth & Permissions page and update plugins/slack.toml, or \
+             from the Slack app's OAuth & Permissions page and update `[slack]` in config.toml, or \
              remove `bot_token` to disable the nudge"
                 .into(),
         );
@@ -451,7 +452,7 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
     for (i, name) in names.iter().enumerate() {
         if names[..i].contains(name) {
             errors.push(format!(
-                "`[[repos]]` declares `{name}` more than once → remove the duplicate entry"
+                "`[[slack.repos]]` declares `{name}` more than once → remove the duplicate entry"
             ));
         }
     }
@@ -481,14 +482,14 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
     for group in &config.channel_groups {
         if group.prefix.is_empty() {
             errors.push(
-                "a `[[channel_groups]]` entry has an empty `prefix` → set the channel-name \
+                "a `[[slack.channel_groups]]` entry has an empty `prefix` → set the channel-name \
                  prefix it should match"
                     .into(),
             );
         }
         if group.repos.is_empty() {
             errors.push(format!(
-                "`[[channel_groups]]` (prefix `{}`) has an empty `repos` list → list the \
+                "`[[slack.channel_groups]]` (prefix `{}`) has an empty `repos` list → list the \
                  candidate repositories that prefix should narrow to",
                 group.prefix
             ));
@@ -501,8 +502,8 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
         for repo in &group.repos {
             if !names.contains(&repo.as_str()) {
                 errors.push(format!(
-                    "`[[channel_groups]]` (prefix `{}`) references repo `{repo}` which is not \
-                     declared in `[[repos]]` → add it to `[[repos]]` or fix the name",
+                    "`[[slack.channel_groups]]` (prefix `{}`) references repo `{repo}` which is \
+                     not declared in `[[slack.repos]]` → add it there or fix the name",
                     group.prefix
                 ));
             }

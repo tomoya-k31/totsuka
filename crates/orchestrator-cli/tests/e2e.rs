@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
-use test_support::scratch;
+use test_support::{plugin_section, scratch};
 
 /// Path to the compiled `totsuka` binary.
 fn totsuka() -> PathBuf {
@@ -120,7 +120,7 @@ fn install_plugin(env: &Env, name: &str, kind: &str) {
         dir.join("plugin.toml"),
         format!(
             "name = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.1.0\"\n\
-             protocol_version = \">=0.1.6, <0.6\"\n\n[capabilities]\nstate_stream = true\n\
+             protocol_version = \">=0.6.0, <0.7\"\n\n[capabilities]\nstate_stream = true\n\
              outputs = [\"source\"]\n"
         ),
     )
@@ -145,7 +145,7 @@ fn setup(name: &str, agent_cfg: &str, output: &str, mode: &str) -> Env {
     };
 
     let cfg_dir = env.cfg_dir();
-    std::fs::create_dir_all(cfg_dir.join("plugins")).unwrap();
+    std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::create_dir_all(env.state_dir()).unwrap();
 
     install_plugin(&env, "mock_src", "task_source");
@@ -185,25 +185,26 @@ mode = "{mode}"
 agent = "mock_agent"
 output = "{output}"
 on_success = {{ set_status = "レビュー待ち" }}
+
+{mock_src}
+{mock_agent}
+{mock_notify}
 "#,
             clone = env.repo.join("clone").display(),
             state = env.state_dir().display(),
+            mock_src = plugin_section(
+                "mock_src",
+                &format!(
+                    "notify_log = \"{}\"\ntask_submit = true\n[[submit_tasks]]\nid = \"1\"\nsource = \"mock_src\"\ntitle = \"e2e task\"\n",
+                    env.source_log.display()
+                ),
+            ),
+            mock_agent = plugin_section("mock_agent", agent_cfg),
+            mock_notify = plugin_section(
+                "mock_notify",
+                &format!("notify_log = \"{}\"\n", env.notify_log.display()),
+            ),
         ),
-    )
-    .unwrap();
-
-    std::fs::write(
-        cfg_dir.join("plugins/mock_src.toml"),
-        format!(
-            "notify_log = \"{}\"\ntask_submit = true\n[[submit_tasks]]\nid = \"1\"\nsource = \"mock_src\"\ntitle = \"e2e task\"\n",
-            env.source_log.display()
-        ),
-    )
-    .unwrap();
-    std::fs::write(cfg_dir.join("plugins/mock_agent.toml"), agent_cfg).unwrap();
-    std::fs::write(
-        cfg_dir.join("plugins/mock_notify.toml"),
-        format!("notify_log = \"{}\"\n", env.notify_log.display()),
     )
     .unwrap();
 
@@ -434,6 +435,76 @@ fn json_empty() -> serde_json::Value {
 /// mock agent が pane 一覧を返し、doctor が DB と突き合わせて「終端タスクかつ
 /// worktree 消滅の pane と DB 未知の pane を候補にし、非終端タスクの pane は
 /// 候補にしない」ことを、非 TTY（`--json`）の検出のみ経路で固定する。
+/// A workflow key nobody claims stops the run (#554).
+///
+/// This is what replaced `deny_unknown_fields` on `WorkflowConfig`: the
+/// Orchestrator cannot tell a typo from a plugin's option, so it asks, and a
+/// key with no owner is refused rather than carried along doing nothing.
+#[test]
+fn an_unclaimed_workflow_key_refuses_to_run() {
+    let env = setup(
+        "unclaimed-option",
+        "stream_states = [\"running\", \"done\"]\n",
+        "none",
+        "plan",
+    );
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    // `profil` is what a mistyped `profile` looks like. Nothing claims it.
+    std::fs::write(
+        &config,
+        text.replace(
+            "\nagent = \"mock_agent\"\n",
+            "\nagent = \"mock_agent\"\nprofil = \"triage\"\n",
+        ),
+    )
+    .unwrap();
+
+    let out = env.run(&[&["run"], GRACE].concat());
+    assert!(!out.status.success(), "{}", stdout(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("profil"), "{err}");
+    assert!(
+        err.contains("mock_src") && err.contains("mock_agent"),
+        "the message must name who was asked: {err}"
+    );
+}
+
+/// …and the same key runs once a plugin says it is its own. The pair matters:
+/// without this half, a `check_workflow_options` that rejected *everything*
+/// would pass the test above.
+#[test]
+fn a_claimed_workflow_key_runs() {
+    let env = setup(
+        "claimed-option",
+        "stream_states = [\"running\", \"done\"]\n",
+        "none",
+        "plan",
+    );
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        text.replace(
+            "\nagent = \"mock_agent\"\n",
+            "\nagent = \"mock_agent\"\nthread_scope = \"parent\"\n",
+        )
+        .replace(
+            "[mock_src]\n",
+            "[mock_src]\nclaim_options = [\"thread_scope\"]\n",
+        ),
+    )
+    .unwrap();
+
+    let out = env.run(&[&["run"], GRACE].concat());
+    assert!(
+        out.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&out),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn doctor_detects_orphan_panes_via_session_list() {
     use orchestrator_core::adapters::{NewTask, StateDb};
@@ -447,7 +518,7 @@ fn doctor_detects_orphan_panes_via_session_list() {
         repo: PathBuf::new(),
     };
     let cfg_dir = env.cfg_dir();
-    std::fs::create_dir_all(cfg_dir.join("plugins")).unwrap();
+    std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::create_dir_all(env.state_dir()).unwrap();
 
     // pane_control 宣言つき agent_ide として mock を install（既定の
@@ -458,25 +529,26 @@ fn doctor_detects_orphan_panes_via_session_list() {
     std::fs::write(
         dir.join("plugin.toml"),
         "name = \"mock_agent\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
-         protocol_version = \">=0.1.6, <0.6\"\n\n[capabilities]\nstate_stream = true\n\
+         protocol_version = \">=0.6.0, <0.7\"\n\n[capabilities]\nstate_stream = true\n\
          pane_control = true\n",
     )
     .unwrap();
 
+    // mock の `session/list` 応答は `[mock_agent]` で staging する（#554）。
     std::fs::write(
         cfg_dir.join("config.toml"),
-        "[plugins.mock_agent]\nenabled = true\nkind = \"agent_ide\"\n",
-    )
-    .unwrap();
-    // mock の `session/list` 応答を plugins/{name}.toml で staging する。
-    std::fs::write(
-        cfg_dir.join("plugins/mock_agent.toml"),
-        r#"list_sessions = [
+        format!(
+            "[plugins.mock_agent]\nenabled = true\nkind = \"agent_ide\"\n\n{}",
+            plugin_section(
+                "mock_agent",
+                r#"list_sessions = [
   { session_id = "w1:p1|", label = "totsuka C9:9.9" },
   { session_id = "w2:p1|", label = "totsuka C1:1.0" },
   { session_id = "w3:p1|", label = "totsuka 99" },
 ]
 "#,
+            )
+        ),
     )
     .unwrap();
 
@@ -556,7 +628,7 @@ fn doctor_human_output_cannot_repaint_the_terminal_yet_json_stays_verbatim() {
         repo: PathBuf::new(),
     };
     let cfg_dir = env.cfg_dir();
-    std::fs::create_dir_all(cfg_dir.join("plugins")).unwrap();
+    std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::create_dir_all(env.state_dir()).unwrap();
 
     let dir = env.plugins_store().join("mock_agent");
@@ -565,16 +637,10 @@ fn doctor_human_output_cannot_repaint_the_terminal_yet_json_stays_verbatim() {
     std::fs::write(
         dir.join("plugin.toml"),
         "name = \"mock_agent\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
-         protocol_version = \">=0.1.6, <0.6\"\n\n[capabilities]\nstate_stream = true\n\
+         protocol_version = \">=0.6.0, <0.7\"\n\n[capabilities]\nstate_stream = true\n\
          pane_control = true\n",
     )
     .unwrap();
-    std::fs::write(
-        cfg_dir.join("config.toml"),
-        "[plugins.mock_agent]\nenabled = true\nkind = \"agent_ide\"\n",
-    )
-    .unwrap();
-
     // ESC[2J clears the screen, ESC[1A walks the cursor back over the row
     // already printed, and the bare CR rewrites the current row from column 0
     // — the pane listing is the last place an operator should be reading a
@@ -582,11 +648,17 @@ fn doctor_human_output_cannot_repaint_the_terminal_yet_json_stays_verbatim() {
     let esc = char::from_u32(0x1b).unwrap();
     let label = format!("totsuka C9:{esc}[2Jinnocent{esc}[1A\rforged");
     std::fs::write(
-        cfg_dir.join("plugins/mock_agent.toml"),
-        // Written with TOML's own escapes so the staging file itself
-        // stays printable; the plugin reports the decoded bytes.
-        "list_sessions = [\n  { session_id = \"w1:p1|\", \
-         label = \"totsuka C9:\\u001B[2Jinnocent\\u001B[1A\\rforged\" },\n]\n",
+        cfg_dir.join("config.toml"),
+        format!(
+            "[plugins.mock_agent]\nenabled = true\nkind = \"agent_ide\"\n\n{}",
+            plugin_section(
+                "mock_agent",
+                // Written with TOML's own escapes so the staged text itself
+                // stays printable; the plugin reports the decoded bytes.
+                "list_sessions = [\n  { session_id = \"w1:p1|\", \
+                 label = \"totsuka C9:\\u001B[2Jinnocent\\u001B[1A\\rforged\" },\n]\n",
+            )
+        ),
     )
     .unwrap();
 

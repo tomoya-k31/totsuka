@@ -84,7 +84,10 @@ async fn auth_test_treats_any_api_failure_as_credential_class() {
         assert!(err.is_credential(), "{code}: {err}");
         let message = err.to_string();
         assert!(message.contains(code), "{code}: {message}");
-        assert!(message.contains("plugins/slack.toml"), "{code}: {message}");
+        assert!(
+            message.contains("`[slack]` in config.toml"),
+            "{code}: {message}"
+        );
     }
 }
 

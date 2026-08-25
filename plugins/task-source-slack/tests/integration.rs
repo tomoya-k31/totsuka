@@ -61,7 +61,11 @@ fn init_config() -> Value {
 }
 
 fn init_params() -> Value {
-    json!({ "protocol_version": "0.1.0", "config": init_config() })
+    json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
+    })
 }
 
 fn auth_ok() -> Value {
@@ -150,7 +154,7 @@ async fn a_missing_scope_warns_without_failing_initialize() {
             &mut srv,
             1,
             "initialize",
-            json!({ "protocol_version": "0.1.0", "config": config, "triggers": triggers }),
+            json!({ "protocol_version": "0.1.0", "config": config, "workflows": triggers }),
         )
         .await,
     );
@@ -176,7 +180,7 @@ async fn unknown_scopes_add_no_round_trip() {
             &mut srv,
             1,
             "initialize",
-            json!({ "protocol_version": "0.1.0", "config": config, "triggers": triggers }),
+            json!({ "protocol_version": "0.1.0", "config": config, "workflows": triggers }),
         )
         .await,
     );
@@ -252,6 +256,7 @@ fn init_params_with_repos(config: Value, repositories: Value) -> Value {
         "protocol_version": "0.1.1",
         "config": config,
         "repositories": repositories,
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
     })
 }
 
@@ -350,7 +355,7 @@ async fn initialize_without_any_repositories_is_config_invalid() {
     .await;
     let (code, message) = error_of(&response);
     assert_eq!(code, error_code::CONFIG_INVALID);
-    assert!(message.contains("[[repos]]"), "{message}");
+    assert!(message.contains("[[slack.repos]]"), "{message}");
     assert!(message.contains("[[repositories]]"), "{message}");
     // Rejected before the TokenGuard spent a network call.
     assert!(shared.requests().is_empty());
@@ -368,6 +373,7 @@ fn init_params_with_llm(config: Value, repositories: Value, llm: Value) -> Value
         "config": config,
         "repositories": repositories,
         "llm": llm,
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
     })
 }
 
@@ -452,7 +458,7 @@ async fn keyless_supplied_llm_is_not_adopted() {
     let response = call(&mut srv, 1, "initialize", params).await;
     let (code, message) = error_of(&response);
     assert_eq!(code, error_code::CONFIG_INVALID);
-    assert!(message.contains("plugins/slack.toml"), "{message}");
+    assert!(message.contains("`[slack]` in config.toml"), "{message}");
     assert!(message.contains("api_key_ref"), "{message}");
     assert!(shared.requests().is_empty());
 }

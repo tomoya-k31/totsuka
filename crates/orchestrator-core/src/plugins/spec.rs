@@ -2,23 +2,21 @@
 //! in #217).
 //!
 //! [`plugin_spec`] combines the on-disk store (manifest, binary path), the
-//! plugin's secret-resolved `plugins/{name}.toml`, and the `config.toml`
-//! material a task_source needs at `initialize` (repositories #109, `[llm]`
-//! defaults #119, workflow triggers + poll cadence 0.1.6) into one
-//! [`PluginSpec`] for [`plugin_host`](crate::adapters::plugin_host).
+//! plugin's secret-resolved `[<name>]` table from `config.toml`, and the
+//! `config.toml` material a task_source needs at `initialize` (repositories
+//! #109, `[llm]` defaults #119, workflow triggers + poll cadence 0.1.6) into
+//! one [`PluginSpec`] for [`plugin_host`](crate::adapters::plugin_host).
 
 use std::collections::HashMap;
-use std::io;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use plugin_protocol::manifest::PluginKind;
-use plugin_protocol::methods::{LlmInfo, RepoInfo, TriggerInfo};
+use plugin_protocol::methods::{LlmInfo, ProjectInfo, RepoInfo, WorkflowInfo};
 use serde_json::Value;
 
 use crate::adapters::plugin_host::PluginSpec;
 use crate::config::{
-    self, ConfigError, PluginRawConfig, ResolveError, RootConfig, resolve_strings, secret_resolver,
+    self, ConfigError, ResolveError, RootConfig, resolve_strings, secret_resolver,
 };
 use crate::plugins::{PluginStore, StoreError};
 
@@ -34,34 +32,24 @@ pub enum SpecError {
     /// The plugin store failed (unreadable manifest, invalid name, ...).
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// `plugins/{name}.toml` could not be read.
-    #[error("could not read plugin config {path}: {source}")]
-    Io {
-        /// The unreadable `plugins/{name}.toml`.
-        path: PathBuf,
-        /// The underlying filesystem error.
-        source: io::Error,
-    },
-    /// `plugins/{name}.toml` could not be parsed or converted.
+    /// The plugin's `[<name>]` table could not be converted to JSON.
     #[error(transparent)]
     Config(#[from] ConfigError),
-    /// A secret reference inside `plugins/{name}.toml` did not resolve.
-    #[error("in {path}: {source}")]
+    /// A secret reference inside the plugin's `[<name>]` table did not
+    /// resolve.
+    #[error("in [{name}] of config.toml: {source}")]
     Resolve {
-        /// The offending `plugins/{name}.toml`.
-        path: PathBuf,
+        /// The plugin whose table holds the offending reference.
+        name: String,
         /// What failed to resolve.
         source: ResolveError,
     },
 }
 
 /// Build the [`PluginSpec`] for one enabled plugin from the store and its
-/// secret-resolved `plugins/{name}.toml` (F-58/64/65). `plugin_config_dir` is
-/// the `plugins/` directory itself (next to `config.toml`); the file read is
-/// `{plugin_config_dir}/{name}.toml`.
+/// secret-resolved `[<name>]` table in `config.toml` (F-58/65, #554).
 pub fn plugin_spec(
     store: &PluginStore,
-    plugin_config_dir: &Path,
     cfg: &RootConfig,
     name: &str,
     env: &HashMap<String, String>,
@@ -69,32 +57,31 @@ pub fn plugin_spec(
     let manifest = store
         .manifest_of(name)?
         .ok_or_else(|| SpecError::NotInstalled(name.to_string()))?;
-    let init_config = plugin_init_config(plugin_config_dir, name, env)?;
+    let init_config = plugin_init_config(cfg, name, env)?;
     let timeout = cfg
         .plugin(name)
         .and_then(|p| p.timeout_secs)
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_PLUGIN_TIMEOUT);
-    // task_source plugins get the orchestrator's repository list (#109),
-    // `[llm]` settings (#119), and — 0.1.6 — their workflow triggers plus
-    // `poll_interval_secs` at `initialize`, so a push source knows its watch
-    // conditions and cadence without a `tasks/fetch` call carrying them.
-    let (repositories, llm, triggers, poll_interval_secs) =
-        if manifest.kind == PluginKind::TaskSource {
-            let triggers = cfg
-                .workflows
-                .iter()
-                .filter(|w| w.source == name)
-                .map(|w| TriggerInfo {
-                    workflow: w.name.clone(),
-                    trigger: trigger_value(w),
-                })
-                .collect();
-            let poll = cfg.plugin(name).and_then(|p| p.poll_interval_secs);
-            (repo_infos(cfg, env), llm_info(cfg, env), triggers, poll)
-        } else {
-            (vec![], None, vec![], None)
-        };
+    let is_source = manifest.kind == PluginKind::TaskSource;
+    // Every plugin a workflow names — `source` or `agent` — is told about that
+    // workflow (0.6.0, #554), because a plugin-owned option written on it may
+    // belong to either. `trigger` stays a source's alone: it selects tasks,
+    // and an agent has no say in that.
+    let workflows = workflow_infos(cfg, name, is_source);
+    // task_source plugins additionally get the orchestrator's repository list
+    // (#109) and `[llm]` settings (#119). Their fetch cadence
+    // (`poll_interval_secs`) is their own `[<name>]` key since 0.6.0 and
+    // travels inside `init_config` like any other plugin-owned setting.
+    let (repositories, projects, llm) = if is_source {
+        (
+            repo_infos(cfg, env),
+            project_infos(cfg, name),
+            llm_info(cfg, env),
+        )
+    } else {
+        (vec![], vec![], None)
+    };
     Ok(PluginSpec {
         name: name.to_string(),
         program: store.plugin_dir(name).join(&manifest.name),
@@ -102,11 +89,91 @@ pub fn plugin_spec(
         manifest,
         init_config,
         repositories,
+        projects,
         llm,
-        triggers,
-        poll_interval_secs,
+        workflows,
         timeout,
     })
+}
+
+/// The `[[projects]]` entries `name` owns, with their opaque options (#554).
+///
+/// Filtered here rather than sent whole and filtered plugin-side: `source` is
+/// the Orchestrator's key on the entry, so deciding whose it is *is* its job —
+/// and a plugin that received other plugins' projects would have to be trusted
+/// to ignore them.
+fn project_infos(cfg: &RootConfig, name: &str) -> Vec<ProjectInfo> {
+    cfg.projects
+        .iter()
+        .filter(|p| p.source == name)
+        .map(|p| ProjectInfo {
+            name: p.name.clone(),
+            options: match serde_json::to_value(&p.options) {
+                Ok(Value::Object(map)) => map,
+                _ => serde_json::Map::new(),
+            },
+        })
+        .collect()
+}
+
+/// The workflows naming `name`, in `[[workflows]]` definition order.
+///
+/// Definition order is load-bearing for a source: it reproduces the
+/// Orchestrator's first-match rule (F-81) on its own side. For an agent the
+/// order carries nothing, but keeping one list keeps one contract.
+pub fn workflow_infos(cfg: &RootConfig, name: &str, is_source: bool) -> Vec<WorkflowInfo> {
+    cfg.workflows
+        .iter()
+        .filter(|w| {
+            if is_source {
+                w.source == name
+            } else {
+                w.agent == name
+            }
+        })
+        .map(|w| WorkflowInfo {
+            workflow: w.name.clone(),
+            // An agent is sent an empty object rather than `null`: a plugin
+            // reading `.get("…")` off `null` mis-branches, which is the same
+            // reason the catch-all trigger is `{}` (#396). A source gets the
+            // operator's table **verbatim** — the profile-derived keys that
+            // used to be injected here travel as the two dedicated fields
+            // below since 0.6.0, so the trigger is a filter condition and
+            // nothing else.
+            trigger: if is_source {
+                serde_json::to_value(&w.trigger).unwrap_or(Value::Null)
+            } else {
+                Value::Object(serde_json::Map::new())
+            },
+            // Profile-derived instructions for the source (#398/#397): what
+            // kind of instructions to write and what to prefix task ids with.
+            // The Orchestrator translates because a plugin cannot read
+            // `profile` — that is core schema — and an agent has no use for
+            // either.
+            instructions_kind: if is_source {
+                w.profile.and_then(instructions_kind).map(str::to_string)
+            } else {
+                None
+            },
+            task_id_prefix: if is_source {
+                w.profile.and_then(task_id_prefix).map(str::to_string)
+            } else {
+                None
+            },
+            options: workflow_options(w),
+        })
+        .collect()
+}
+
+/// A workflow's plugin-owned keys as a JSON object (#554).
+///
+/// Empty when the workflow writes none, which is what every config written
+/// before this existed says.
+pub fn workflow_options(wf: &crate::config::WorkflowConfig) -> serde_json::Map<String, Value> {
+    match serde_json::to_value(&wf.options) {
+        Ok(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    }
 }
 
 /// `config.toml` `[[repositories]]` mapped to the protocol's [`RepoInfo`],
@@ -125,6 +192,7 @@ fn repo_infos(cfg: &RootConfig, env: &HashMap<String, String>) -> Vec<RepoInfo> 
                 name: repo.name.clone(),
                 summary: repo.summary.clone(),
                 path: Some(path),
+                project: repo.project.clone(),
             }
         })
         .collect()
@@ -154,62 +222,30 @@ fn llm_info(cfg: &RootConfig, env: &HashMap<String, String>) -> Option<LlmInfo> 
     })
 }
 
-/// Load `plugins/{name}.toml` (empty object if absent) and resolve secret
-/// references in its string values (F-65).
+/// Take the plugin's `[<name>]` table from `config.toml` (empty object when
+/// it wrote none) and resolve the secret references in its string values
+/// (F-65, #554).
+///
+/// The table is never interpreted: it round-trips TOML → JSON with only the
+/// string leaves rewritten, which is the same contract `plugins/{name}.toml`
+/// had before the two files became one. Resolution is scoped to this subtree
+/// on purpose — the Orchestrator's own fields resolve their references by
+/// name, where each one is used.
 pub fn plugin_init_config(
-    plugin_config_dir: &Path,
+    cfg: &RootConfig,
     name: &str,
     env: &HashMap<String, String>,
 ) -> Result<Value, SpecError> {
-    let path = plugin_config_dir.join(format!("{name}.toml"));
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => PluginRawConfig::from_toml_str(&s)?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => PluginRawConfig::from_toml_str("")?,
-        Err(e) => {
-            return Err(SpecError::Io { path, source: e });
-        }
+    let mut value = match cfg.plugin_settings(name) {
+        Some(table) => serde_json::to_value(table).map_err(ConfigError::from)?,
+        None => Value::Object(serde_json::Map::new()),
     };
-    let mut value = raw.to_json()?;
     let resolver = secret_resolver(env);
-    resolve_strings(&mut value, &resolver).map_err(|source| SpecError::Resolve { path, source })?;
+    resolve_strings(&mut value, &resolver).map_err(|source| SpecError::Resolve {
+        name: name.to_string(),
+        source,
+    })?;
     Ok(value)
-}
-
-/// A workflow's trigger as the plugin receives it, with the profile-derived
-/// keys the Orchestrator adds (#398).
-///
-/// # Why the trigger table carries this
-///
-/// A source plugin has to write different instructions for a `design` task than
-/// for an `implement` one — where to put the design comment, what URL to report
-/// back. It cannot read the profile: `[[workflows]]` is the Orchestrator's
-/// schema, and teaching every plugin about profiles would make each one depend
-/// on a core concept that keeps changing.
-///
-/// So the Orchestrator translates. The trigger is already a plugin-defined
-/// `Value` that plugins parse loosely, so an extra key rides along with **no
-/// protocol change and no version bump**: an older plugin ignores what it does
-/// not recognise and behaves exactly as before.
-///
-/// The **cost is that the degradation is silent**. A new Orchestrator against
-/// an old plugin sends `instructions_kind`, gets no instructions back in the
-/// task, and dispatches an agent that was never told where to write. Nothing
-/// errors. There is no capability flag to probe for, so this cannot be checked
-/// at runtime — release core and the source plugins together.
-fn trigger_value(wf: &crate::config::WorkflowConfig) -> serde_json::Value {
-    let mut value = serde_json::to_value(&wf.trigger).unwrap_or(serde_json::Value::Null);
-    let Some(table) = value.as_object_mut() else {
-        return value;
-    };
-    for (key, derived) in [
-        ("instructions_kind", wf.profile.and_then(instructions_kind)),
-        ("task_id_prefix", wf.profile.and_then(task_id_prefix)),
-    ] {
-        if let Some(v) = derived {
-            table.insert(key.to_string(), serde_json::Value::String(v.to_string()));
-        }
-    }
-    value
 }
 
 /// The task-id prefix a profile's tasks carry, or `None` when they keep the
@@ -270,11 +306,13 @@ mod tests {
             .collect()
     }
 
-    /// The `initialize.triggers` contract has existed since protocol 0.1.6,
-    /// and #396 made a plugin depend on it for the first time: the Slack
-    /// plugin reads `trigger.reaction` from here to know which emoji start a
-    /// task. Silently dropping the key — or reordering the list — turns the
-    /// emoji into a no-op with no error anywhere.
+    /// This contract has existed since protocol 0.1.6 (as `initialize.triggers`
+    /// until 0.6.0 renamed it to `workflows`, #554), and #396 made a plugin
+    /// depend on it for the first time: the Slack plugin reads
+    /// `trigger.reaction` from here to know which emoji start a task. Since
+    /// 0.6.0 it also depends on the **order**, because first-match runs there
+    /// and nowhere else. Silently dropping the key — or reordering the list —
+    /// turns the emoji into a no-op with no error anywhere.
     #[test]
     fn a_task_sources_triggers_arrive_whole_and_in_definition_order() {
         let cfg = root(
@@ -301,15 +339,7 @@ profile = "design"
 agent = "herdr"
 "#,
         );
-        let triggers: Vec<TriggerInfo> = cfg
-            .workflows
-            .iter()
-            .filter(|w| w.source == "slack")
-            .map(|w| TriggerInfo {
-                workflow: w.name.clone(),
-                trigger: trigger_value(w),
-            })
-            .collect();
+        let triggers = workflow_infos(&cfg, "slack", true);
 
         // Only this source's workflows, in definition order — the plugin
         // reproduces first-match from this list.
@@ -325,10 +355,52 @@ agent = "herdr"
         assert!(triggers[1].trigger.is_object());
     }
 
-    /// The profile → `instructions_kind` translation the source plugins read
-    /// (#398), and the two silences that are deliberate.
+    /// The plugin-owned `[[workflows]]` keys reach the plugins the workflow
+    /// names — **both** of them (#554). The Orchestrator cannot tell whose a
+    /// key is, so sending it to only one would decide that question by
+    /// omission.
     #[test]
-    fn a_profile_bakes_its_instructions_kind_into_the_trigger() {
+    fn workflow_options_reach_the_source_and_the_agent() {
+        let cfg = root(
+            r#"
+[[workflows]]
+name = "slack-books"
+source = "slack"
+agent = "herdr"
+profile = "triage"
+publish = "direct"
+
+[[workflows]]
+name = "gh-design"
+source = "github"
+agent = "herdr"
+profile = "design"
+"#,
+        );
+        let slack = workflow_infos(&cfg, "slack", true);
+        assert_eq!(slack.len(), 1);
+        assert_eq!(slack[0].options["publish"], serde_json::json!("direct"));
+
+        // The agent sees the same key — and every workflow naming it, not just
+        // the ones with options.
+        let herdr = workflow_infos(&cfg, "herdr", false);
+        assert_eq!(herdr.len(), 2);
+        let books = herdr.iter().find(|w| w.workflow == "slack-books").unwrap();
+        assert_eq!(books.options["publish"], serde_json::json!("direct"));
+        // …but not the trigger: selecting tasks is the source's business.
+        assert_eq!(books.trigger, serde_json::json!({}));
+
+        // A workflow with no plugin keys carries an empty map, never `null`.
+        let design = herdr.iter().find(|w| w.workflow == "gh-design").unwrap();
+        assert!(design.options.is_empty());
+    }
+
+    /// The profile → `instructions_kind` translation the source plugins read
+    /// (#398), and the two silences that are deliberate. Since 0.6.0 the
+    /// derived values are dedicated [`WorkflowInfo`] fields — the trigger
+    /// itself is the operator's spelling, verbatim.
+    #[test]
+    fn a_profile_derives_instructions_kind_and_prefix_beside_the_trigger() {
         let cfg = root(
             r#"
 [[workflows]]
@@ -361,21 +433,20 @@ output = "source"
 agent = "herdr"
 "#,
         );
-        let kind_of = |name: &str| {
-            let wf = cfg.workflows.iter().find(|w| w.name == name).unwrap();
-            trigger_value(wf)
-                .get("instructions_kind")
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
+        let info_of = |name: &str| {
+            let source = &cfg
+                .workflows
+                .iter()
+                .find(|w| w.name == name)
+                .unwrap()
+                .source;
+            workflow_infos(&cfg, source, true)
+                .into_iter()
+                .find(|w| w.workflow == name)
+                .unwrap()
         };
-
-        let prefix_of = |name: &str| {
-            let wf = cfg.workflows.iter().find(|w| w.name == name).unwrap();
-            trigger_value(wf)
-                .get("task_id_prefix")
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        };
+        let kind_of = |name: &str| info_of(name).instructions_kind;
+        let prefix_of = |name: &str| info_of(name).task_id_prefix;
 
         assert_eq!(kind_of("gh-design").as_deref(), Some("design"));
         assert_eq!(kind_of("gh-implement").as_deref(), Some("implement"));
@@ -397,17 +468,15 @@ agent = "herdr"
         assert_eq!(prefix_of("gh-design"), None);
         assert_eq!(prefix_of("spelled-out"), None);
 
-        // The existing trigger keys survive — the plugin still filters on them.
-        let design = cfg
-            .workflows
-            .iter()
-            .find(|w| w.name == "gh-design")
-            .unwrap();
+        // The trigger stays the operator's spelling, and **only** that: the
+        // derived keys must not leak back into the table now that they have
+        // fields of their own — a plugin still reading them off the trigger
+        // would silently work against this Orchestrator and break against the
+        // next, which is the drift 0.6.0 exists to end.
+        let design = info_of("gh-design");
         assert_eq!(
-            trigger_value(design)
-                .get("project_status")
-                .and_then(|v| v.as_str()),
-            Some("設計待ち")
+            design.trigger,
+            serde_json::json!({ "project_status": "設計待ち" })
         );
     }
 

@@ -5,7 +5,7 @@
 pub enum GithubError {
     /// The token was rejected (HTTP 401): bad or expired credentials.
     #[error(
-        "GitHub rejected the token (HTTP 401) → check `token` in plugins/github.toml (or the referenced env/Keychain secret) and its scopes"
+        "GitHub rejected the token (HTTP 401) → check `token` in `[github]` of config.toml (or the referenced env/Keychain secret) and its scopes"
     )]
     Unauthorized,
     /// The API returned a non-success HTTP status.

@@ -7,7 +7,7 @@ use plugin_protocol::Task;
 use plugin_protocol::jsonrpc::{Error, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskUpdateStatusParams, TriggerInfo,
+    ResultPublishParams, TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_sdk::{
     LineHandler, Lookup, LookupClient, SubmitClient, SubmitOutcome, Submitter, TaskSourceHandler,
@@ -49,6 +49,7 @@ impl TaskSourceHandler for Recording {
         Ok(InitializeResult {
             plugin_version: semver::Version::new(0, 1, 0),
             claimed_repos: Vec::new(),
+            claimed_options: Vec::new(),
             capabilities: Default::default(),
         })
     }
@@ -188,7 +189,7 @@ async fn retryable_error_is_retried_then_final_ack_wins() {
         }));
     });
 
-    let outcome = client.submit_task(sample_task("r1")).await;
+    let outcome = client.submit_task(sample_task("r1"), "wf").await;
     assert_eq!(outcome, SubmitOutcome::Accepted);
     driver.await.unwrap();
 }
@@ -212,7 +213,7 @@ async fn final_statuses_are_never_retried() {
         );
     });
 
-    let outcome = client.submit_task(sample_task("f1")).await;
+    let outcome = client.submit_task(sample_task("f1"), "wf").await;
     assert_eq!(
         outcome,
         SubmitOutcome::Rejected {
@@ -235,7 +236,7 @@ async fn ack_timeout_retries_and_duplicate_resolves() {
         }));
     });
 
-    let outcome = client.submit_task(sample_task("t1")).await;
+    let outcome = client.submit_task(sample_task("t1"), "wf").await;
     assert_eq!(outcome, SubmitOutcome::Duplicate);
     driver.await.unwrap();
 }
@@ -245,7 +246,7 @@ async fn closed_writer_gives_up_immediately() {
     let (client, rx) = client_and_requests(Duration::from_millis(50));
     drop(rx); // host gone — permanent, no backoff
     let start = std::time::Instant::now();
-    let outcome = client.submit_task(sample_task("g1")).await;
+    let outcome = client.submit_task(sample_task("g1"), "wf").await;
     assert!(
         matches!(outcome, SubmitOutcome::GaveUp { .. }),
         "{outcome:?}"
@@ -276,7 +277,7 @@ async fn non_contract_error_code_gives_up_without_retry() {
         );
     });
 
-    let outcome = client.submit_task(sample_task("m1")).await;
+    let outcome = client.submit_task(sample_task("m1"), "wf").await;
     assert!(
         matches!(outcome, SubmitOutcome::GaveUp { .. }),
         "{outcome:?}"
@@ -294,7 +295,7 @@ struct CountingSubmitter {
 }
 
 impl Submitter for CountingSubmitter {
-    async fn submit(&self, task: Task) -> SubmitOutcome {
+    async fn submit(&self, task: Task, _workflow: &str) -> SubmitOutcome {
         self.submitted.lock().unwrap().push(task.id);
         SubmitOutcome::Accepted
     }
@@ -303,13 +304,19 @@ impl Submitter for CountingSubmitter {
 #[tokio::test]
 async fn poll_loop_fetches_every_trigger_and_survives_fetch_errors() {
     let triggers = vec![
-        TriggerInfo {
+        WorkflowInfo {
             workflow: "ok".into(),
             trigger: json!({}),
+            instructions_kind: None,
+            task_id_prefix: None,
+            options: Default::default(),
         },
-        TriggerInfo {
+        WorkflowInfo {
             workflow: "broken".into(),
             trigger: json!({}),
+            instructions_kind: None,
+            task_id_prefix: None,
+            options: Default::default(),
         },
     ];
     let submitter = CountingSubmitter::default();

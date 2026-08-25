@@ -182,14 +182,14 @@ use semver::{Version, VersionReq};
 /// "deliberate" distinguishable from "forgotten".
 ///
 /// 0.5.1: [`InitializeResult::claimed_repos`](crate::methods::InitializeResult::claimed_repos)
-/// (#542) — the repositories a task_source is the tracker for, and where an
-/// item for each goes. This is the *forward* mapping repository → tracker; the
+/// (#542) — the repositories a task_source files project items for, and where
+/// an item for each goes. This is the *forward* mapping repository → project; the
 /// protocol only ever carried the reverse one (a task's `repo_hint`), so a
 /// Slack-borne request could be routed to a repository but not to the board
 /// that repository files into. Additive and optional under the same contract
 /// as `repo_name` in 0.4.1: absent means the plugin predates this version and
 /// claims nothing, which is never the same statement as "this repository has
-/// no tracker". `<0.6` manifests keep matching.
+/// no project". `<0.6` manifests keep matching.
 ///
 /// **Patch, not minor**, for the reason spelled out at 0.4.1: a minor strands
 /// every `<0.5`-bounded manifest, and no plugin has to *send* this field to
@@ -203,24 +203,65 @@ use semver::{Version, VersionReq};
 /// requires the change (omitting the key is a valid 0.5.1 response), which is
 /// why the version is a patch; the recompile is the cost of the field living
 /// in a struct rather than behind a constructor.
-/// 0.5.2: [`ResultPublishParams::delivery`](crate::methods::ResultPublishParams::delivery)
-/// (#548) — how the source should deliver a published result to a human:
-/// `draft` (the approval flow, unchanged default) or `direct` (post
-/// immediately, no approval). The Orchestrator decides from
-/// `[[workflows]].publish`; the plugin obeys. Additive and optional under the
-/// familiar contract: absent means a pre-0.5.2 Orchestrator, and the plugin
-/// must fall back to `draft` — the behaviour those Orchestrators were written
-/// against. An *unrecognised* value must also resolve to `draft`
-/// ([`PublishDelivery::Unrecognized`](crate::methods::PublishDelivery)):
-/// the modes differ in whether a human gate is skipped, and skipping a gate
-/// on an instruction this build cannot read is the wrong side to err on.
-/// Today only the Slack source reads it — github/notion declare no outputs
-/// since #398 and are never sent `result/publish` — which is acceptable:
-/// the draft/approve machinery is Slack's, and the field exists so the
-/// *policy* (which workflows may skip approval) lives in core config rather
-/// than in a plugin-side emoji table (#396 deliberately removed one).
-/// `<0.6` manifests keep matching; patch, not minor, for the 0.4.1 reason.
-pub const PROTOCOL_VERSION: &str = "0.5.2";
+/// 0.5.2: `ResultPublishParams.delivery` (#548) — how the source should
+/// deliver a published result to a human. **Removed again in 0.6.0**: the
+/// choice is a plugin's own setting, so it travels as a `[[workflows]]` option
+/// the plugin claims rather than as a wire field the Orchestrator computes
+/// (#554). The policy is still the operator's and still lives in
+/// `config.toml`; what changed is who reads it.
+///
+/// 0.6.0 (#554): plugin-owned settings reach the places the Orchestrator owns.
+///
+/// - `InitializeParams.triggers` is renamed to
+///   [`workflows`](crate::methods::InitializeParams::workflows) and is now sent
+///   to **agent** plugins too, because an option written on `[[workflows]]` may
+///   belong to either plugin the workflow names. `TriggerInfo` becomes
+///   [`WorkflowInfo`](crate::methods::WorkflowInfo) and grows
+///   [`options`](crate::methods::WorkflowInfo::options).
+/// - [`InitializeResult::claimed_options`](crate::methods::InitializeResult::claimed_options)
+///   is the answer: which of those keys the plugin recognises. The Orchestrator
+///   requires **exactly one** claimant per key, so an unclaimed key is a typo
+///   that fails startup instead of doing nothing, and a doubly-claimed one is
+///   an ambiguity it refuses to resolve on the operator's behalf.
+/// - [`ConfigValidateParams::workflows`](crate::methods::ConfigValidateParams::workflows)
+///   carries the same list, so `totsuka config validate` asks the question
+///   without the plugin having to remember what `initialize` said.
+/// - `ResultPublishParams.delivery` and `PublishDelivery` are **removed**:
+///   `publish` became one of those claimed options. Two generations is a short
+///   life for a wire field, and the reason is worth naming — 0.5.2 put it on
+///   the wire because there was no way for a plugin-owned key to reach a
+///   plugin, so the Orchestrator had to read the key and translate. This
+///   release is that missing way.
+/// - `InitializeParams.poll_interval_secs` is **removed** for the same
+///   reason: it was a plugin-owned value the Orchestrator only ever
+///   forwarded, so it now lives in the plugin's own `[<name>]` table and
+///   arrives inside `config`. The 0-means-busy-spin guard was already
+///   plugin-side and stays there.
+/// - [`WorkflowInfo`](crate::methods::WorkflowInfo) grows
+///   [`instructions_kind`](crate::methods::WorkflowInfo::instructions_kind)
+///   and [`task_id_prefix`](crate::methods::WorkflowInfo::task_id_prefix),
+///   and [`trigger`](crate::methods::WorkflowInfo::trigger) becomes
+///   **verbatim**: until now the Orchestrator injected those two
+///   profile-derived keys into the trigger table (#398) because the trigger
+///   was the only plugin-bound surface that could carry them without a
+///   protocol change. With `[[workflows]]` options on the wire that excuse is
+///   gone, so the filter condition and the derived settings travel apart and
+///   the trigger is exactly what the operator wrote.
+/// - `[[projects]]` routing (#542 → #554):
+///   [`InitializeParams::projects`](crate::methods::InitializeParams::projects)
+///   and [`ConfigValidateParams::projects`](crate::methods::ConfigValidateParams::projects)
+///   / [`repositories`](crate::methods::ConfigValidateParams::repositories)
+///   carry the boards a task_source owns, and
+///   [`RepoInfo::project`](crate::methods::RepoInfo::project) binds a
+///   repository to one of them — replacing the reverse `repos = [...]` lists
+///   each plugin kept in its own file.
+///
+/// **Minor, and it strands every `<0.6` manifest — that is the intent.** The
+/// rename is a wire break: a plugin reading `triggers` sees nothing under a
+/// 0.6.0 Orchestrator and would silently watch for no triggers at all, which
+/// is precisely the class of failure F-54's version gate exists to convert
+/// into a refusal to launch. The bundled manifests move to `>=0.6.0, <0.7`.
+pub const PROTOCOL_VERSION: &str = "0.6.0";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -244,22 +285,21 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 5, 2));
+        assert_eq!(protocol_version(), Version::new(0, 6, 0));
     }
 
     #[test]
     fn compatible_requirement_matches() {
-        // What the bundled plugins declare after the 0.4.0 boundary (#411):
-        // task_source/notifier keep a wide lower bound, agent_ide plugins
-        // require `tool_launch` (0.2.3) because their local argv fallback is
-        // gone.
-        for req in [">=0.1.6, <0.6", ">=0.2.3, <0.6"] {
-            let parsed = VersionReq::parse(req).unwrap();
-            assert!(
-                is_compatible_with_current(&parsed),
-                "{req} must be accepted by protocol 0.5.0"
-            );
-        }
+        // What the bundled plugins declare after the 0.6.0 boundary (#554).
+        // The lower bounds converge here: `initialize` renamed `triggers` to
+        // `workflows`, and no plugin — of any kind — reads the old spelling
+        // any more, so nothing is left that a wider bound could still serve.
+        let req = ">=0.6.0, <0.7";
+        let parsed = VersionReq::parse(req).unwrap();
+        assert!(
+            is_compatible_with_current(&parsed),
+            "{req} must be accepted by protocol 0.6.0"
+        );
     }
 
     #[test]
@@ -292,7 +332,7 @@ mod tests {
         // the plugin any more. That is a claim about the *manifest range*, not
         // about the code, so it is asserted here: `>=0.2.3` excludes every
         // release that predates `tool_launch`.
-        let herdr = VersionReq::parse(">=0.2.3, <0.6").unwrap();
+        let herdr = VersionReq::parse(">=0.2.3, <0.7").unwrap();
         for pre_tool_launch in ["0.1.0", "0.1.6", "0.2.0", "0.2.2"] {
             let v = Version::parse(pre_tool_launch).unwrap();
             assert!(
@@ -304,7 +344,7 @@ mod tests {
 
         // The floor tracks the dependency, not the kind: orca is an agent_ide
         // too, reads no `tool_launch`, and keeps working with all of them.
-        let orca = VersionReq::parse(">=0.1.0, <0.6").unwrap();
+        let orca = VersionReq::parse(">=0.1.0, <0.7").unwrap();
         assert!(is_compatible(&orca, &Version::new(0, 1, 0)));
         assert!(is_compatible_with_current(&orca));
     }
@@ -319,14 +359,30 @@ mod tests {
         let old_bound = VersionReq::parse(">=0.2.3, <0.5").unwrap();
         assert!(
             !is_compatible_with_current(&old_bound),
-            "0.5.0 strands the previous generation's bound, by design"
+            "each generation's bound strands the previous one, by design"
         );
-        let bundled = VersionReq::parse(">=0.2.3, <0.6").unwrap();
-        assert!(is_compatible_with_current(&bundled), "0.5.0 is inside <0.6");
+        let bundled = VersionReq::parse(">=0.6.0, <0.7").unwrap();
+        assert!(is_compatible_with_current(&bundled), "0.6.0 is inside <0.7");
         assert!(
-            !is_compatible(&bundled, &Version::new(0, 6, 0)),
+            !is_compatible(&bundled, &Version::new(0, 7, 0)),
             "and the same boundary is waiting for the next removal"
         );
+    }
+
+    /// The 0.6.0 boundary (#554), and the reason it is a *break* rather than
+    /// an addition: `initialize` renamed `triggers` to `workflows`. A 0.5
+    /// plugin reading `triggers` under this Orchestrator would find nothing
+    /// and conclude it watches for nothing — a running, silent, wrong plugin.
+    /// F-54's gate turns that into a refusal to launch.
+    #[test]
+    fn zero_five_manifests_are_stranded_by_the_zero_six_boundary() {
+        for req in ["^0.5", ">=0.1.6, <0.6", ">=0.2.3, <0.6", ">=0.5.0, <0.6"] {
+            let parsed = VersionReq::parse(req).unwrap();
+            assert!(
+                !is_compatible_with_current(&parsed),
+                "{req} must be refused by protocol 0.6.0"
+            );
+        }
     }
 
     /// The 0.5.0 boundary (#496), stated the way F-54 means it: every manifest

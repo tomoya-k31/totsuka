@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:0a04cb0b2662020f1564eed1247a2f9a0380437debf4aef83481270d868d8b3c -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:fae761e03c3afb1b46bb182861d86c7ada7e96755c933dbffd286347d744bc44 -->
 
 # What totsuka is
 
@@ -29,7 +29,9 @@ Task sources connect as plugins and hand totsuka a normalized task: id, source, 
 
 Sources push tasks as they find them. Field mapping and filter conditions are configurable per plugin, and statuses can be written back to the source as the task progresses.
 
-**Deciding whether to pick a task up at all is the source plugin's job**, not totsuka's — checking assignees or in-progress status so that work another person has started is left alone. There is no strict mutual exclusion between people.
+**Deciding whether to pick a task up at all is the source plugin's job**, not totsuka's — checking assignees or in-progress status so that work another person has started is left alone. There is no strict mutual exclusion between people. The plugin also decides *which* of your workflows a task belongs to, and says so when it hands the task over.
+
+**Where a new item gets filed is your configuration.** A `[[projects]]` entry names a tracker — a GitHub Project, a Notion database — and each repository points at one of them with `project = "…"`. One repository files into one tracker, so a request that arrives through Slack and turns into an issue has exactly one place to go.
 
 Some sources write the result back for you. Where the agent can write the deliverable itself — a `gh` comment, a Notion page — it does, and the source stays out of it; the write-back path exists for sources where totsuka has to mediate, like a Slack reply that goes out under your own name — after your approval by default, or immediately for a workflow you configure with `publish = "direct"`.
 

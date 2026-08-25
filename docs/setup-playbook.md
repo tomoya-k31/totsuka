@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:1fab1b1a68c3133f226c90b1c82ab9234087e9d351f9a3cb11d450a1c554e244 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:fb6c25c9d8adfde0aee9d65b9f0e2f7fae392dfea4c8437c1287916b8f374c5d -->
 
 # Setup playbook
 
@@ -46,7 +46,7 @@ It asks up to five kinds of question and gets the rest from the recipe you choos
 
 It prints a plan; nothing has side effects until you confirm. **Pressing Ctrl-C during the questions leaves nothing behind.**
 
-It then generates per-plugin config, installs and enables the plugins, and runs `doctor`. You do not need to run `totsuka init` first.
+It then writes each plugin's `[<name>]` table into `config.toml`, installs and enables the plugins, and runs `doctor`. You do not need to run `totsuka init` first.
 
 ### 3. Register your secrets
 

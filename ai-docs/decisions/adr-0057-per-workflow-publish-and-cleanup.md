@@ -4,7 +4,7 @@ title: ADR-0057 publish の配送方式と worktree 掃除を workflow 単位で
 description: "Slack の triage 報告を承認なしでスレッドへ直接投稿し、workflow ごとに worktree/pane の掃除ポリシーを変えるための設計。ADR-0003 の「承認フロー必須」を workflow 単位の opt-out へ条件付きに緩める。配送方式は core が [[workflows]].publish から決めて ResultPublishParams.delivery（0.5.2）でプラグインへ渡し、プラグインは従うだけ。絵文字→挙動の対応表をプラグインに持つ案・kind をプラグインに解釈させる案は不採用。掃除は [[workflows]].cleanup が [worktree] の mode 既定に勝つ。"
 resource: https://github.com/tomoya-k31/totsuka/issues/548
 tags: [decision, slack, workflow, config, protocol, worktree, cleanup, adr]
-generated: { by: claude-code/fable-5, at: 2026-08-24T09:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -12,6 +12,20 @@ owner: tomoya-k31
 # Status
 
 stable。[#548](https://github.com/tomoya-k31/totsuka/issues/548) の実装とともに確定した。
+
+**`publish` の運び方は [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) が変えた**（#554）。
+設定の綴り（`[[workflows]].publish = "draft" | "direct"`）も、「triage の報告は承認を飛ばしてよい」
+という §1 の判断も、`cleanup` の §2 もそのまま。変わったのは**読む主体**で、core が読んで
+`ResultPublishParams.delivery` へ翻訳するのをやめ、Slack プラグインが `[[workflows]]` の
+キーとして直接引き取るようになった。`delivery` と `PublishDelivery` は protocol 0.6.0 で削除。
+
+wire フィールドが 2 世代で消えたのは失敗ではなく帰結である。0.5.2 でそこに置いたのは、
+**プラグイン所有のキーがプラグインへ届く経路が無かった**から —— ADR-0058 がその経路そのものを
+作った。副産物として、読めない値の扱いが良くなった: 呼び出しごとに届いていたときは
+「draft に倒して黙る」しか答えが無かったが、`initialize` で読むようになったため**拒否できる**。
+
+以下の Decision の §1 のうち、配送方式が `result/publish` の params に乗るとしている記述は
+ADR-0058 が上書きする。
 
 [ADR-0003](/decisions/adr-0003-slack-reply-assistant.md)（本人名義返信 + 承認フロー必須）を**条件付きに緩める**: 承認は既定のまま、workflow 単位で opt-out できるようにする。[ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md) が「承認フローの防波堤は不変」とした据え置きは、**既定としては**引き続き真である。[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)（pane の寿命は worktree に従う）は変えない。
 

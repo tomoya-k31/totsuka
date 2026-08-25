@@ -217,17 +217,19 @@ outputs = ["source"]
         )
         .unwrap();
         assert!(m.is_compatible_with(&Version::new(0, 1, 6)));
-        // A push-only plugin survives the 0.2.0 fetch removal, the 0.3.0
+        // A push-only plugin survived the 0.2.0 fetch removal, the 0.3.0
         // removal of `Task.thread_key`, the 0.4.0 removal of
-        // `TaskDispatchParams.hook` (#411), and — with the bound raised to
-        // `<0.6` (#496) — the 0.5.0 removal of `Capabilities::task_submit`.
-        // A task_source read none of them…
+        // `TaskDispatchParams.hook` (#411) and the 0.5.0 removal of
+        // `Capabilities::task_submit` (#496) — a task_source read none of
+        // them, so one wide bound carried it across four boundaries…
         assert!(m.is_compatible_with(&Version::new(0, 2, 0)));
         assert!(m.is_compatible_with(&Version::new(0, 3, 0)));
         assert!(m.is_compatible_with(&Version::new(0, 4, 0)));
-        assert!(m.is_compatible_with(&crate::version::protocol_version()));
-        // …while staying honest about the next boundary, whatever it removes.
-        assert!(!m.is_compatible_with(&Version::new(0, 6, 0)));
+        assert!(m.is_compatible_with(&Version::new(0, 5, 0)));
+        // …and 0.6.0 is where that ends (#554): `initialize.triggers` was
+        // renamed, which a task_source very much does read, so this manifest
+        // is refused by the version currently shipping.
+        assert!(!m.is_compatible_with(&crate::version::protocol_version()));
     }
 
     #[test]

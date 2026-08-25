@@ -4,12 +4,27 @@ title: ADR-0056 複数トラッカーは単一プラグイン内のリストで�
 description: "GitHub Project / Notion Database を複数同時に polling し、Slack 発の依頼を解決済みリポジトリに対応するトラッカーへ起票するための設計。複数プラグインインスタンスを不採用にし、単一プラグイン内の [[projects]] / [[databases]] リストを採る。repo→トラッカーの順方向マッピングはプラグイン設定を唯一の正本とし、initialize 応答の claimed_repos で Orchestrator へ伝える。Slack 発の起票は既存 triage profile の Agent 経路を完成させる形にし、新規 RPC は足さない。"
 resource: https://github.com/tomoya-k31/totsuka/issues/542
 tags: [decision, task-source, github, notion, slack, routing, config, protocol, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-23T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
 
 # Status
+
+stable、ただし **§4 は [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) が置き換えた**（#554）。
+
+- **§4（repo→トラッカーの順方向マッピングはプラグイン設定を正本にする）は無効。** マッピングは
+  `config.toml` の `[[projects]]` と `[[repositories]].project` へ移り、プラグイン側の
+  `repos = [...]` は消えた。却下理由に挙げた「二重管理」と「core が固有概念を知る」は、
+  情報を*複製*せず*移動*し、core が読むのを参照だけに留める形には当たらなかった
+- **§1〜§3 は生きている。** 複数対象を単一プラグイン内のリストで持つこと（複数インスタンスを
+  採らない）、旧トップキーを互換なしで削除したこと、要素を「対象を特定するキー + repos」に
+  絞ったこと —— いずれも変わらない。変わったのは `repos` の出どころだけである
+- `initialize` 応答の `claimed_repos` も生きている。宛先の散文は core が組み立てられないため
+
+以下の Decision / Consequences は **2026-08-23 時点の決定として読むこと**。§4 と、`ClaimConflict`
+（2 プラグインが同じリポジトリを主張したときの報告）に言及している箇所は ADR-0058 が上書きする
+—— その状態は現在**書けない**ので、機構ごと削除された。
 
 stable。[#542](https://github.com/tomoya-k31/totsuka/issues/542) の実装とともに確定した。
 

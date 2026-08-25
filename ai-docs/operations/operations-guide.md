@@ -22,12 +22,12 @@ owner: tomoya-k31
 | `config` | config.toml が検証を通る | `totsuka config validate` で全エラー確認 |
 | `state-db` | 状態 DB が開け、**スキーマ版数と適用したアプリ版数**を表示（`… opens — schema v7 (applied by 0.1.4)`。`applied by unknown` は `applied_by` 列を持たない旧版が適用したもので異常ではない） | まだ無いなら一度 `totsuka run`。**DB が新しすぎる**（ダウングレード）ならメッセージが名指す版以降へ totsuka を更新。**DB が古い**（アップグレード直後で未適用）なら一度 `totsuka run` — 適用するのは `run` だけで、`status` / `task` / `focus` / `doctor` は適用しない（→ [アップグレードとロールバック](/releases/upgrade-and-rollback.md)、[ADR-0017](/decisions/adr-0017-state-db-compatibility-policy.md)） |
 | `worktree-location` | 明示した `[worktree].location` / `[[repositories]].worktree_location` が展開できる | `${ENV}` の未設定変数を export、またはキーを削って既定値（`$XDG_STATE_HOME/totsuka` 配下、未設定なら `$HOME/.local/state/totsuka`）に戻す。**worktree 作成はディスパッチ時**なので、これを放置すると run は正常起動したまま全タスクが失敗する |
-| `plugin:{name}` | 起動 + `config/validate` 疎通 | install 済みか / `plugins/{name}.toml` を修正 |
+| `plugin:{name}` | 起動 + `config/validate` 疎通 | install 済みか / `[<name>]` を修正 |
 | `llm` | `api_key_ref` が**解決する**（鍵が有効かは見ない） | 1Password に item を作る / 環境変数 export / Keychain 登録 |
 | `llm-online` | プロバイダが API キーを**受理した**（`--online` 時のみ） | 401/403 = 鍵をプロバイダで再発行し `[llm].api_key_ref` を更新。到達不能・5xx は warning 止まり（鍵が悪いとは限らない） |
 | `worktrees` | 孤児 worktree なし | 対話的に掃除を提案（TTY） |
 | `panes` | 孤児 agent pane なし（#211） | 対話的に解放を提案（TTY）。`pane_control` 宣言 agent が無い構成では出ない |
-| `trackers` | 1 リポジトリの起票先が 1 つに定まる（#542） | 重複しているリポジトリを、どれか 1 つのプラグインの `repos` だけに残す。**プラグイン単体では見えない検査** — 各 `config/validate` は自分のリストしか見ないので、和集合にしか矛盾が現れない。claim が 1 件も無い構成では出ない |
+| `projects` | 起票先を claim しているリポジトリの数を報告する（#542、#554 で `trackers` から改名・縮小） | **検出ではなく報告**。重複はもう書けない — 1 リポジトリは `[[repositories]].project` で 1 つの `[[projects]]` を、その要素は `source` で 1 つのプラグインを指す。probe できなかったソースがあると skip（`cmd:` トークン等で doctor は起動しない）、claim が 1 件も無い構成では出ない |
 
 `--json` 出力は不具合報告に添付する（Issue テンプレートが要求、§10.3）。
 
@@ -46,7 +46,7 @@ totsuka doctor --online
 
 したがって **CI や cron からは使わない**。
 
-> **注**: 生体認証プロンプトは `--online` 固有ではない。プラグインが 1 つでも enabled なら `plugin:{name}` チェックがプラグインを起動するために `plugin_spec` 経由で `[llm].api_key_ref` と `plugins/{name}.toml` のシークレットを `op://` 含めて実解決するため、**フラグ無しの `doctor` でもプロンプトは出うる**。[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md) の「doctor は非対話」は `llm` チェック単体の話で、doctor 全体では既に成立していない（#267 以前からの既存挙動）。手元で「鍵を差し替えた直後」「リポジトリ選択 UI が毎回出る」ときの切り分けに使う。
+> **注**: 生体認証プロンプトは `--online` 固有ではない。プラグインが 1 つでも enabled なら `plugin:{name}` チェックがプラグインを起動するために `plugin_spec` 経由で `[llm].api_key_ref` と `[<name>]` のシークレットを `op://` 含めて実解決するため、**フラグ無しの `doctor` でもプロンプトは出うる**。[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md) の「doctor は非対話」は `llm` チェック単体の話で、doctor 全体では既に成立していない（#267 以前からの既存挙動）。手元で「鍵を差し替えた直後」「リポジトリ選択 UI が毎回出る」ときの切り分けに使う。
 
 **鍵が失効すると何が起きるか**: 候補リポジトリが 2 件以上ある構成では分類に LLM が要るため、鍵が無効だと [task-source-slack](/components/task-source-slack.md) の解決が毎回 picker へ縮退する。縮退自体は設計どおり安全なので、**設定不備が「少し不便な正常動作」に見える**のが厄介な点。run のログに次の `warn` が出ていたらこれ:
 

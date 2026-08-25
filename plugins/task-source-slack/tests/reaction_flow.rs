@@ -47,7 +47,7 @@ fn init_params() -> Value {
 /// either way.
 fn init_params_with_workflow_trigger() -> Value {
     let mut params = init_params();
-    params["triggers"] = json!([
+    params["workflows"] = json!([
         { "workflow": "slack-watch", "trigger": { "reaction": "eyes" } },
         { "workflow": "slack-reply", "trigger": {} },
     ]);

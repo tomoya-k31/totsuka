@@ -1,5 +1,6 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
-//! `plugins/notion.toml` as JSON with secrets already expanded (F-64/F-65).
+//! `[notion]` table of `config.toml` as JSON with secrets already
+//! expanded (F-65, #554).
 //!
 //! The [`PropertyMap`] is what lets one plugin serve *any* database layout
 //! (F-03): it names which Notion property carries each field of the shared
@@ -52,7 +53,7 @@ struct EmbeddedPrompts {
 ///
 /// Built-in values live in the embedded `defaults.toml`, not in Rust string
 /// literals, so rewording is a data edit. Field names are the config keys under
-/// `[prompts]` in `plugins/notion.toml`.
+/// `[notion.prompts]` in config.toml.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NotionPrompts {
@@ -210,31 +211,16 @@ impl Default for PropertyMap {
     }
 }
 
-/// One Notion database this plugin polls, and the repositories it is the
-/// tracker for (`[[databases]]`, #542).
+/// The options on one `[[projects]]` entry, as this plugin reads them.
 ///
-/// A list rather than one-plugin-instance-per-database, for the reason
-/// [ADR-0056](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0056-multi-tracker-routing.md)
-/// gives: instances would need `name ≠ bin name`, which ADR-0027 refused.
+/// `name` and `source` are the Orchestrator's keys and never reach here;
+/// `deny_unknown_fields` turns a typo in the rest into an `initialize`
+/// failure rather than a setting that quietly does nothing.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DatabaseConfig {
+pub struct DatabaseOptions {
     /// The database queried for tasks.
     pub database_id: String,
-    /// The repositories this database is the tracker for.
-    ///
-    /// Required and non-empty because it is the forward mapping repository →
-    /// database that [`NotionConfig::claimed_repos`] publishes; a database
-    /// cannot say which repositories it will hold in future, so an omitted
-    /// list has nothing to publish.
-    ///
-    /// **As an ingest filter it is conditional, unlike the GitHub plugin's.**
-    /// There, every issue carries a repository. Here the repository comes from
-    /// the optional `repo_hint` property, so a page that has none is ingested
-    /// and the Orchestrator resolves its repository as it did before (F-11) —
-    /// filtering those out would silently ingest nothing at all for anyone who
-    /// has not mapped `repo_hint`.
-    pub repos: Vec<String>,
     /// The status option a triage-filed page should be created with (#548
     /// follow-up).
     ///
@@ -243,12 +229,83 @@ pub struct DatabaseConfig {
     /// polls removes that gate** — filing then flows straight into an
     /// unattended run. Requires `property_map.status` to be mapped:
     /// `static_config_errors` rejects the combination — but that check runs
-    /// only via `config/validate`, **not at `initialize`** (the same split
-    /// the github plugin documents for `project_number`). A config that was
+    /// only via `config/validate`, **not at `initialize`**. A config that was
     /// never validated starts fine and silently omits the status instruction
     /// from the destination, because there is no column to name.
     #[serde(default)]
     pub triage_status: Option<String>,
+}
+
+/// One database this plugin polls: its `[[projects]]` entry plus the
+/// repositories bound to it.
+///
+/// The repositories are **derived** (#554) from `[[repositories]].project`,
+/// which the Orchestrator supplies on `RepoInfo`. They used to be written
+/// here as `repos = [...]` ([ADR-0056](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0056-multi-tracker-routing.md)).
+///
+/// **As an ingest filter this list is conditional, unlike the GitHub
+/// plugin's.** There, every issue carries a repository. Here the repository
+/// comes from the optional `repo_hint` property, so a page that has none is
+/// ingested and the Orchestrator resolves its repository as it did before
+/// (F-11) — filtering those out would silently ingest nothing at all for
+/// anyone who has not mapped `repo_hint`.
+#[derive(Debug, Clone)]
+pub struct DatabaseConfig {
+    /// The entry's `name` — what `[[repositories]].project` points at.
+    pub name: String,
+    /// The database queried for tasks.
+    pub database_id: String,
+    /// The status option a triage-filed page is created with.
+    pub triage_status: Option<String>,
+    /// The repositories bound to this database, in `[[repositories]]` order.
+    pub repos: Vec<String>,
+}
+
+impl DatabaseConfig {
+    /// A database built directly, for tests and for callers that already have
+    /// the pieces. Production builds these through [`resolve`](Self::resolve).
+    pub fn new(name: &str, database_id: &str, repos: &[&str]) -> Self {
+        Self {
+            name: name.to_string(),
+            database_id: database_id.to_string(),
+            triage_status: None,
+            repos: repos.iter().map(|r| (*r).to_string()).collect(),
+        }
+    }
+
+    /// Build the databases from what `initialize` supplied (#554).
+    pub fn resolve(
+        projects: &[plugin_protocol::methods::ProjectInfo],
+        repositories: &[plugin_protocol::methods::RepoInfo],
+    ) -> Result<Vec<Self>, Vec<String>> {
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        for info in projects {
+            let options: DatabaseOptions =
+                match serde_json::from_value(serde_json::Value::Object(info.options.clone())) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        errors.push(format!("project `{}`: {e}", info.name));
+                        continue;
+                    }
+                };
+            out.push(Self {
+                name: info.name.clone(),
+                database_id: options.database_id,
+                triage_status: options.triage_status,
+                repos: repositories
+                    .iter()
+                    .filter(|r| r.project.as_deref() == Some(info.name.as_str()))
+                    .map(|r| r.name.clone())
+                    .collect(),
+            });
+        }
+        if errors.is_empty() {
+            Ok(out)
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 impl DatabaseConfig {
@@ -270,12 +327,14 @@ pub struct NotionConfig {
     /// Integration token (resolved by the orchestrator, F-65). Never touched by
     /// us beyond sending it as a bearer token.
     pub token: String,
-    /// The databases this plugin polls (`[[databases]]`, #542). Required and
-    /// non-empty; `static_config_errors` rejects an empty list.
+    /// The databases this plugin polls.
     ///
-    /// This replaced the flat `database_id` outright. `deny_unknown_fields`
-    /// makes a pre-#542 config a hard `initialize` failure, which is the
-    /// intended outcome (ADR-0056).
+    /// **Not read from `[notion]`** (#554): the entries live in the
+    /// Orchestrator's `[[projects]]`, and their repositories in
+    /// `[[repositories]].project`. Filled in at `initialize` by
+    /// [`DatabaseConfig::resolve`]; `deny_unknown_fields` on the surrounding
+    /// struct is what rejects a `databases = [...]` left over in `[notion]`.
+    #[serde(skip)]
     pub databases: Vec<DatabaseConfig>,
     /// The operator's own Notion user id, used to detect self-assigned tasks
     /// (F-08). When unset, self-detection is disabled: only *unassigned* tasks
@@ -313,6 +372,12 @@ pub struct NotionConfig {
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
+    /// here from `[plugins.notion]` in 0.6.0 (#554): the Orchestrator only
+    /// ever forwarded it, so it is this plugin's own key. `0` is treated as
+    /// unset (busy-spin guard, applied in the server).
+    #[serde(default)]
+    pub poll_interval_secs: Option<u64>,
     /// Client-side request rate cap (requests/second) for the built-in
     /// throttle. Notion's public limit is ~3 rps.
     #[serde(default = "default_rate_limit")]
@@ -412,6 +477,48 @@ fn default_title_prop() -> String {
 fn default_source_name() -> String {
     "notion".to_string()
 }
+/// Build a config the way `initialize` does, for tests: the `[notion]` table
+/// minus the databases, plus the databases resolved from `[[projects]]` /
+/// `[[repositories]]` (#554).
+///
+/// Tests write the database inline as `"databases": [{ name, database_id,
+/// repos }]` and this splits it into the two lists the Orchestrator actually
+/// sends, so the test exercises [`DatabaseConfig::resolve`] rather than
+/// bypassing it.
+#[cfg(test)]
+pub(crate) fn config_from_json(mut value: serde_json::Value) -> NotionConfig {
+    use plugin_protocol::methods::{ProjectInfo, RepoInfo};
+
+    let entries = value
+        .as_object_mut()
+        .and_then(|o| o.remove("databases"))
+        .and_then(|d| d.as_array().cloned())
+        .unwrap_or_default();
+    let mut projects = Vec::new();
+    let mut repositories = Vec::new();
+    for (i, entry) in entries.iter().enumerate() {
+        let mut options = entry.as_object().cloned().unwrap_or_default();
+        let repos = options.remove("repos").unwrap_or(serde_json::json!([]));
+        let name = options
+            .remove("name")
+            .and_then(|n| n.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("db-{i}"));
+        for repo in repos.as_array().cloned().unwrap_or_default() {
+            repositories.push(RepoInfo {
+                name: repo.as_str().unwrap_or_default().to_string(),
+                summary: None,
+                path: None,
+                project: Some(name.clone()),
+            });
+        }
+        projects.push(ProjectInfo { name, options });
+    }
+    let mut config: NotionConfig = serde_json::from_value(value).expect("notion config");
+    config.databases =
+        DatabaseConfig::resolve(&projects, &repositories).expect("databases resolve");
+    config
+}
+
 fn default_api_url() -> String {
     "https://api.notion.com/v1".to_string()
 }
@@ -502,29 +609,55 @@ mod tests {
         assert!(!destination.contains("repository name"), "{destination}");
     }
 
-    /// A repository on two databases makes the claim ambiguous (#542).
-    ///
-    /// The github plugin has the same check; leaving it out here would be the
-    /// half-closed hole this repository keeps rediscovering.
+    /// The "a repository is on two databases" check (#542) is gone here for
+    /// the same reason as in the github plugin: #554 made the state unwritable
+    /// rather than invalid, because `repos` is derived from the
+    /// `[[repositories]]` entries whose single-valued `project` names this
+    /// database. Pinned through `resolve`, not through the absence of an error
+    /// — the latter would keep passing if the derivation itself started
+    /// handing one repository to two databases.
     #[test]
-    fn static_errors_flag_a_repository_claimed_by_two_databases() {
-        let cfg = parse(serde_json::json!({
-            "token": "t",
-            "databases": [
-                { "database_id": "db1", "repos": ["totsuka", "shared"] },
-                { "database_id": "db2", "repos": ["shared"] }
+    fn resolve_gives_each_repository_to_exactly_one_database() {
+        use plugin_protocol::methods::{ProjectInfo, RepoInfo};
+
+        let project = |name: &str, id: &str| ProjectInfo {
+            name: name.to_string(),
+            options: serde_json::json!({ "database_id": id })
+                .as_object()
+                .unwrap()
+                .clone(),
+        };
+        let repo = |name: &str, project: &str| RepoInfo {
+            name: name.to_string(),
+            summary: None,
+            path: None,
+            project: Some(project.to_string()),
+        };
+
+        let databases = DatabaseConfig::resolve(
+            &[project("design", "db1"), project("ops", "db2")],
+            &[
+                repo("totsuka", "design"),
+                repo("shared", "design"),
+                repo("infra", "ops"),
+            ],
+        )
+        .expect("resolves");
+
+        let mut homes: Vec<(&str, &str)> = Vec::new();
+        for database in &databases {
+            for r in &database.repos {
+                homes.push((r.as_str(), database.name.as_str()));
+            }
+        }
+        homes.sort_unstable();
+        assert_eq!(
+            homes,
+            [
+                ("infra", "ops"),
+                ("shared", "design"),
+                ("totsuka", "design")
             ]
-        }));
-        let errors = crate::client::static_config_errors(&cfg);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("shared") && e.contains("db1") && e.contains("db2")),
-            "got {errors:?}"
-        );
-        assert!(
-            !errors.iter().any(|e| e.contains("totsuka")),
-            "got {errors:?}"
         );
     }
 
@@ -559,17 +692,23 @@ mod tests {
         );
     }
 
-    /// An empty `repos` cannot become a claim, so it is rejected rather than
-    /// quietly meaning "every page in the database".
+    /// A database no repository points at polls nothing and claims nothing, so
+    /// it is reported. The message names the entry and the key to set, because
+    /// there is no longer a `repos` list to fill in on the database side.
     #[test]
-    fn static_errors_flag_an_empty_repos_list() {
+    fn static_errors_flag_a_database_no_repository_is_bound_to() {
         let cfg = parse(serde_json::json!({
             "token": "t",
-            "databases": [{ "database_id": "db1", "repos": [] }],
+            "databases": [{ "name": "lonely", "database_id": "db1", "repos": [] }],
             "property_map": { "title": "Name", "status": "Status" }
         }));
         let errors = crate::client::static_config_errors(&cfg);
-        assert!(errors.iter().any(|e| e.contains("repos")), "got {errors:?}");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("lonely") && e.contains("[[repositories]]")),
+            "got {errors:?}"
+        );
     }
 
     /// `databases = []` deserializes fine (it is a list, not a missing field),
@@ -582,7 +721,7 @@ mod tests {
         }));
         let errors = crate::client::static_config_errors(&cfg);
         assert!(
-            errors.iter().any(|e| e.contains("[[databases]]")),
+            errors.iter().any(|e| e.contains(r#"`source = "notion"`"#)),
             "got {errors:?}"
         );
     }
@@ -604,7 +743,7 @@ mod tests {
     }
 
     fn parse(json: serde_json::Value) -> NotionConfig {
-        serde_json::from_value(json).unwrap()
+        config_from_json(json)
     }
 
     #[test]
@@ -626,10 +765,23 @@ mod tests {
     #[test]
     fn unknown_field_is_rejected() {
         let err = serde_json::from_value::<NotionConfig>(serde_json::json!({
-            "token": "t", "databases": [{ "database_id": "db", "repos": ["totsuka"] }], "typo_field": true
+            "token": "t", "typo_field": true
         }))
         .unwrap_err();
         assert!(err.to_string().contains("typo_field"), "got {err}");
+    }
+
+    /// A `databases = [...]` left in `[notion]` is now an unknown field: the
+    /// entries moved to the Orchestrator's `[[projects]]` (#554), and
+    /// accepting the old spelling would leave a table that reads as configured
+    /// and is never consulted.
+    #[test]
+    fn the_old_databases_key_in_the_plugin_table_is_rejected() {
+        let err = serde_json::from_value::<NotionConfig>(serde_json::json!({
+            "token": "t", "databases": [{ "database_id": "db", "repos": ["totsuka"] }]
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("databases"), "got {err}");
     }
 
     #[test]

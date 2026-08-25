@@ -1,9 +1,12 @@
-//! `config.toml` schema (F-60, F-61, F-64) and parsing.
+//! `config.toml` schema (F-60, F-61) and parsing.
 //!
-//! The two-layer configuration model (§4.6): common, Orchestrator-interpreted
-//! fields live in `config.toml`; plugin-specific settings live in
-//! `plugins/{name}.toml` and are held uninterpreted (see
-//! [`PluginRawConfig`](crate::config::PluginRawConfig)).
+//! **One file.** Both layers live in `config.toml` (#554): the
+//! Orchestrator-interpreted keys are the named fields of [`RootConfig`], and
+//! every other top-level table is one plugin's own settings, held
+//! uninterpreted in [`RootConfig::plugin_settings`]. The `plugins/{name}.toml`
+//! split that F-64 used to mandate is gone — it expressed ownership through
+//! file location, which is exactly the thing that had no way to reach inside a
+//! core structure like `[[workflows]]`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -19,10 +22,6 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 /// (F-40).
 pub const DEFAULT_GLOBAL_CONCURRENCY: u32 = 4;
 
-/// Default task-source polling interval in seconds when `poll_interval_secs`
-/// is omitted (F-06).
-pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
-
 /// Default number of Stop-hook block re-asks before a task escalates, when
 /// `[hooks].block_retry_limit` is omitted (D-02).
 pub const DEFAULT_BLOCK_RETRY_LIMIT: u32 = 3;
@@ -32,8 +31,18 @@ pub const DEFAULT_BLOCK_RETRY_LIMIT: u32 = 3;
 pub const DEFAULT_WORKFLOW_TIMEOUT_SECS: u64 = 1800;
 
 /// Root of `config.toml`.
+///
+/// # Why this is not `deny_unknown_fields`
+///
+/// Every top-level table that is *not* a named field here is a plugin's own
+/// settings, captured verbatim by [`plugin_settings`](Self::plugin_settings)
+/// (#554). serde therefore cannot be the one to reject an unknown key.
+///
+/// The check moves to validation and gets **stronger** rather than weaker:
+/// a leftover table is legitimate only when a plugin of that name is in the
+/// `[plugins.*]` roster, so `[worktre]` (a core-key typo) and `[slak]` (a
+/// plugin-name typo) both fail, where before only the first did.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RootConfig {
     /// Schema version (§10.2). Startup validation rejects a mismatch; the
     /// config is never migrated automatically (#276).
@@ -53,6 +62,10 @@ pub struct RootConfig {
     /// Registered local repositories (F-61).
     #[serde(default)]
     pub repositories: Vec<RepositoryConfig>,
+    /// Projects a repository can file into (#554): a GitHub Project, a Notion
+    /// database, a Jira project.
+    #[serde(default)]
+    pub projects: Vec<ProjectConfig>,
     /// Plugin roster + common fields, keyed by plugin instance name (F-56).
     #[serde(default)]
     pub plugins: BTreeMap<String, PluginConfig>,
@@ -90,6 +103,20 @@ pub struct RootConfig {
     /// operator who wrote it on purpose (#465).
     #[serde(default)]
     pub prompts: toml::Table,
+    /// Every top-level table that is not one of the fields above: one
+    /// plugin's own settings, held **uninterpreted** (#554).
+    ///
+    /// Keyed by plugin instance name, so `[slack]` here is the config the
+    /// `slack` plugin receives at `initialize` — the same bytes that used to
+    /// live in `[slack]` in config.toml. The Orchestrator never reads inside:
+    /// secret references are resolved (F-65) and the rest is handed over as
+    /// JSON, and `config/validate` (F-59) is what checks the contents.
+    ///
+    /// A name in here that the `[plugins.*]` roster does not know is a
+    /// validation error, which is what keeps a typo from being read as
+    /// "settings for a plugin nobody enabled".
+    #[serde(flatten)]
+    pub plugin_settings: BTreeMap<String, toml::Value>,
 }
 
 /// Hook-event ingestion settings from `[hooks]` (#131).
@@ -144,6 +171,49 @@ pub struct RepositoryConfig {
     /// Overrides the global `[worktree].location` for this repo (F-22).
     #[serde(default)]
     pub worktree_location: Option<String>,
+    /// Which project this repository files into: the `name` of a
+    /// `[[projects]]` entry (#554).
+    ///
+    /// Optional — a repository with no project is the normal state for anyone
+    /// who has not set one up, and the source plugins must treat it as "say
+    /// nothing extra", never as an error.
+    ///
+    /// **One scalar, so a repository has at most one project by
+    /// construction.** Until #554 the mapping lived the other way round, as a
+    /// `repos = [...]` list inside each source plugin's config
+    /// ([ADR-0056](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0056-multi-tracker-routing.md)),
+    /// where two plugins could name the same repository and the Orchestrator
+    /// had machinery to detect and report that. Here it cannot be written.
+    #[serde(default)]
+    pub project: Option<String>,
+}
+
+/// A project a repository can file into (#554): one `[[projects]]` entry.
+///
+/// `name` and `source` are the Orchestrator's — the reference target and the
+/// owning plugin. Everything else belongs to that plugin and is held
+/// uninterpreted, exactly like a `[<name>]` table.
+///
+/// # Why `source` is written out rather than inferred
+///
+/// It could be guessed from the keys (only github understands
+/// `project_number`), but naming it makes the reference chain
+/// `[[repositories]].project` → `[[projects]].name` → `[plugins.<source>]`
+/// walkable **without launching a plugin**, so a broken reference is caught by
+/// `config validate --offline` and by anyone reading the file.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectConfig {
+    /// Stable identifier `[[repositories]].project` points at.
+    pub name: String,
+    /// The task_source plugin that owns this project.
+    pub source: String,
+    /// Everything else on the entry, uninterpreted (#554).
+    ///
+    /// Unlike a workflow's options these need no claim handshake: an entry
+    /// names exactly one plugin, so ownership is not in question and the
+    /// plugin's own `deny_unknown_fields` is what rejects a typo.
+    #[serde(flatten)]
+    pub options: toml::Table,
 }
 
 /// Plugin kind (F-50).
@@ -187,10 +257,6 @@ pub struct PluginConfig {
     /// Plugin log level.
     #[serde(default)]
     pub log_level: Option<String>,
-    /// Polling interval in seconds for `run --watch` (task sources only,
-    /// F-06). Defaults to [`DEFAULT_POLL_INTERVAL_SECS`].
-    #[serde(default)]
-    pub poll_interval_secs: Option<u64>,
     /// Whether a crash of this plugin is followed by a relaunch (#495).
     /// Defaults to `true`.
     ///
@@ -396,8 +462,19 @@ impl Profile {
 /// [`resolved_verification`](Self::resolved_verification) — the raw fields are
 /// for validation only, which is the one place that has to tell "omitted" from
 /// "written out".
+///
+/// # Why this is not `deny_unknown_fields`
+///
+/// A plugin may define keys of its own on a workflow, written **flat**,
+/// alongside the Orchestrator's (#554) — see
+/// [`options`](Self::options). serde therefore cannot decide what is unknown,
+/// because the Orchestrator does not know either: a workflow names a `source`
+/// *and* an `agent`, and the key could be either one's.
+///
+/// The check moves to the plugins, which is the only place the answer exists.
+/// It is not weaker: a key **no** plugin claims is an error, so `profil` still
+/// fails — just at `initialize` rather than at parse.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct WorkflowConfig {
     /// Workflow name.
     pub name: String,
@@ -478,17 +555,6 @@ pub struct WorkflowConfig {
     /// Empty or whitespace-only is treated as unset rather than rejected.
     #[serde(default)]
     pub initial_prompt: Option<String>,
-    /// How the source delivers this workflow's published result to a human
-    /// (#548, [ADR-0057]): `draft` (the approval flow — the default) or
-    /// `direct` (post immediately, no approval).
-    ///
-    /// Only meaningful with `output = "source"`; validation warns otherwise.
-    /// Like [`output`](Self::output), this is a wiring choice, not a
-    /// permission, which is why a profile does not fix it.
-    ///
-    /// [ADR-0057]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0057-per-workflow-publish-and-cleanup.md
-    #[serde(default)]
-    pub publish: Option<PublishConfig>,
     /// Worktree cleanup override for this workflow's tasks (#548, ADR-0057).
     ///
     /// Beats the mode-selected `[worktree]` default (`cleanup` /
@@ -500,21 +566,23 @@ pub struct WorkflowConfig {
     /// to survive that is not worth a second source of truth.
     #[serde(default)]
     pub cleanup: Option<CleanupPolicyConfig>,
-}
-
-/// `[[workflows]].publish` — how a published result reaches the human (#548).
-///
-/// The wire twin is [`plugin_protocol::methods::PublishDelivery`]; this stays
-/// a separate type because config vocabulary and wire vocabulary evolve on
-/// different clocks (the wire enum has an `Unrecognized` catch-all this
-/// config type must not accept).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PublishConfig {
-    /// Present for approval before anything is visible (the default).
-    Draft,
-    /// Post immediately, no approval step.
-    Direct,
+    /// Every key on this workflow that is not one of the fields above: a
+    /// plugin's own, held **uninterpreted** (#554).
+    ///
+    /// Written flat, next to the Orchestrator's keys, because that is what a
+    /// workflow option is from the operator's side — `publish = "direct"`
+    /// reads the same whether core or the Slack source is the one that
+    /// consumes it. The nesting that would make ownership syntactically
+    /// obvious would also make the config say something the operator does not
+    /// care about.
+    ///
+    /// Ownership is resolved by asking instead: the whole set goes to the
+    /// workflow's `source` and `agent` at `initialize`, and each answers which
+    /// keys are its own (`InitializeResult::claimed_options`). **Exactly one**
+    /// claimant is required — zero is a typo, two is an ambiguity the
+    /// Orchestrator will not settle by picking.
+    #[serde(flatten)]
+    pub options: toml::Table,
 }
 
 impl WorkflowConfig {
@@ -690,7 +758,7 @@ pub enum ConfigError {
     /// A TOML document failed to parse against the schema.
     #[error("failed to parse TOML config: {0}")]
     Parse(#[from] toml::de::Error),
-    /// Converting a raw plugin config to JSON failed (F-64).
+    /// Converting a plugin's settings table to JSON failed (#554).
     #[error("failed to convert plugin config to JSON: {0}")]
     Convert(#[from] serde_json::Error),
     /// A `TOTSUKA_*` override could not be applied (F-66 layer 2; see
@@ -704,6 +772,35 @@ pub enum ConfigError {
     },
 }
 
+/// Whether `name` is already a top-level key of [`RootConfig`], and therefore
+/// cannot be used as a plugin instance name (#554).
+///
+/// A plugin called `log` would write its settings to `[log]`, which serde
+/// hands to [`RootConfig::log`] instead — the plugin would start with an
+/// **empty config and no error anywhere**. Plugin names are binary names and
+/// cannot be renamed ([ADR-0027] refused `name != bin name`), so the only
+/// honest answer is to reject the roster entry.
+///
+/// # Why this probes instead of consulting a list
+///
+/// A hand-written list of reserved names is a second copy of the struct's
+/// field set with nothing keeping the two in step: add a top-level key,
+/// forget the list, and the silent-empty-config bug is back. Deserializing a
+/// one-key probe asks serde the question directly, so the answer is correct
+/// by construction. A name that fails to parse as its field's type (`version`
+/// as a table, say) is reserved too — it never reaches
+/// [`RootConfig::plugin_settings`] either way.
+///
+/// [ADR-0027]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0027-plugin-artifact-naming.md
+pub fn is_reserved_top_level_key(name: &str) -> bool {
+    let mut probe = toml::Table::new();
+    probe.insert(name.to_string(), toml::Value::Table(toml::Table::new()));
+    match toml::Value::Table(probe).try_into::<RootConfig>() {
+        Ok(cfg) => !cfg.plugin_settings.contains_key(name),
+        Err(_) => true,
+    }
+}
+
 impl RootConfig {
     /// Parse a `config.toml` document.
     pub fn from_toml_str(s: &str) -> Result<Self, ConfigError> {
@@ -713,6 +810,15 @@ impl RootConfig {
     /// Look up a plugin's common config by instance name.
     pub fn plugin(&self, name: &str) -> Option<&PluginConfig> {
         self.plugins.get(name)
+    }
+
+    /// A plugin's own uninterpreted settings (`[<name>]`), if it wrote any.
+    ///
+    /// Absent is normal — a plugin whose defaults suffice needs no table at
+    /// all, which is the same thing an absent `plugins/{name}.toml` used to
+    /// mean.
+    pub fn plugin_settings(&self, name: &str) -> Option<&toml::Value> {
+        self.plugin_settings.get(name)
     }
 
     /// Look up a `[tools.<name>]` entry by tool name (#196). Built-in
@@ -799,10 +905,130 @@ on_success = { set_status = "レビュー待ち" }
         );
     }
 
+    /// Since #554 an unknown top-level key is not a parse error — it is a
+    /// plugin's settings table, and rejecting it here would reject every valid
+    /// config. Parsing holds it; `validate_static` is what decides whether the
+    /// roster knows the name.
     #[test]
-    fn unknown_top_level_key_is_rejected() {
-        let err = RootConfig::from_toml_str("bogus_key = 1").unwrap_err();
-        assert!(matches!(err, ConfigError::Parse(_)));
+    fn unknown_top_level_keys_are_held_for_validation() {
+        let cfg = RootConfig::from_toml_str("bogus_key = 1").unwrap();
+        assert_eq!(
+            cfg.plugin_settings
+                .get("bogus_key")
+                .and_then(|v| v.as_integer()),
+            Some(1)
+        );
+    }
+
+    /// The Orchestrator's own keys must never be captured as plugin settings,
+    /// or a plugin named after one would start with an empty config and no
+    /// error (#554). Probed rather than listed so the answer cannot drift from
+    /// the struct.
+    #[test]
+    fn every_root_field_is_a_reserved_plugin_name() {
+        // Two shapes on purpose: `worktree` parses fine from an empty table
+        // (all-default struct), `version` does not (it is a `u32`). Both are
+        // reserved, and the two paths through `is_reserved_top_level_key` are
+        // exactly those cases.
+        for name in [
+            "version",
+            "max_concurrency",
+            "repositories",
+            "projects",
+            "plugins",
+            "default_tool",
+            "tools",
+            "workflows",
+            "llm",
+            "worktree",
+            "log",
+            "hooks",
+            "prompts",
+        ] {
+            assert!(
+                is_reserved_top_level_key(name),
+                "`{name}` is a RootConfig field but was not reported as reserved"
+            );
+        }
+        for name in ["slack", "github", "herdr", "macos", "mock_agent"] {
+            assert!(
+                !is_reserved_top_level_key(name),
+                "`{name}` is not a RootConfig field but was reported as reserved"
+            );
+        }
+    }
+
+    /// The flattened catch-all must capture **only** what the Orchestrator does
+    /// not name (#554). If a core key leaked into it, every workflow using that
+    /// key would demand a plugin claim for it — and, worse, the tests that
+    /// exercise the claim rule would be asserting on the wrong keys and pass
+    /// while checking nothing.
+    #[test]
+    fn workflow_options_hold_only_the_keys_core_does_not_name() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[[workflows]]
+name = "reply"
+source = "slack"
+agent = "herdr"
+profile = "answer"
+publish = "direct"
+timeout_secs = 0
+trigger = { reaction = "eyes" }
+thread_scope = "parent"
+"#,
+        )
+        .unwrap();
+        let wf = &cfg.workflows[0];
+        assert_eq!(
+            wf.options.keys().collect::<Vec<_>>(),
+            vec!["publish", "thread_scope"],
+            "the plugin-defined keys are leftover — `publish` among them since \
+             #554 moved it out of core"
+        );
+        // …and the named fields still parsed, rather than being shadowed.
+        assert_eq!(wf.timeout_secs, Some(0));
+        assert_eq!(
+            wf.trigger.get("reaction").and_then(|v| v.as_str()),
+            Some("eyes")
+        );
+    }
+
+    /// A plugin's table travels through parsing untouched, nested shapes
+    /// included — that is the whole contract `plugins/{name}.toml` used to
+    /// carry.
+    #[test]
+    fn a_plugin_table_is_held_verbatim() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[plugins.slack]
+enabled = true
+kind = "task_source"
+
+[slack]
+app_token = "op://Dev/Slack/app_token"
+
+[[slack.channel_groups]]
+prefix = "dev-"
+repos = ["dotfiles"]
+"#,
+        )
+        .unwrap();
+        let slack = cfg.plugin_settings("slack").expect("[slack] is held");
+        assert_eq!(
+            slack.get("app_token").and_then(|v| v.as_str()),
+            Some("op://Dev/Slack/app_token")
+        );
+        assert_eq!(
+            slack["channel_groups"][0]["prefix"].as_str(),
+            Some("dev-"),
+            "the array-of-tables came through nested under the plugin"
+        );
+        // The roster table is a named field and never leaks into the catch-all.
+        assert_eq!(
+            cfg.plugin_settings.keys().collect::<Vec<_>>(),
+            vec!["slack"]
+        );
     }
 
     #[test]
@@ -908,7 +1134,6 @@ max_concurrency = 8
 [plugins.github]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 30
 
 [worktree]
 cleanup = { retention_days = 5 }
@@ -917,7 +1142,6 @@ plan_cleanup = "immediate"
         )
         .unwrap();
         assert_eq!(cfg.max_concurrency, Some(8));
-        assert_eq!(cfg.plugin("github").unwrap().poll_interval_secs, Some(30));
         assert_eq!(
             cfg.worktree.cleanup,
             Some(CleanupPolicyConfig::Retention { retention_days: 5 })

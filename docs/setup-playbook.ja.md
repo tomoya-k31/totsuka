@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:1fab1b1a68c3133f226c90b1c82ab9234087e9d351f9a3cb11d450a1c554e244 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:fb6c25c9d8adfde0aee9d65b9f0e2f7fae392dfea4c8437c1287916b8f374c5d -->
 
 # セットアップ Playbook
 
@@ -47,7 +47,7 @@ totsuka setup
 
 計画が表示され、確認して初めて副作用が出る。**質問の途中で Ctrl-C しても何も残らない。**
 
-続けてプラグインの設定ファイル生成、プラグインのインストールと有効化、`doctor` までが走る。先に `totsuka init` を打つ必要はない。
+続けて各プラグインの `[<name>]` テーブルを `config.toml` へ書き、プラグインのインストールと有効化、`doctor` までが走る。先に `totsuka init` を打つ必要はない。
 
 ### 3. シークレットを登録する
 

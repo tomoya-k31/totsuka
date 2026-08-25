@@ -1,12 +1,11 @@
 name = "github"
 kind = "task_source"
 version = "0.3.0"
-# 0.1.6 introduced `task/submit` (push ingestion), which carried this plugin
-# across the 0.2.0 `tasks/fetch` removal (ADR-0008) and the 0.3.0 removal of
-# `Task.thread_key` (#242/#264); `<0.6` carries it across the 0.4.0 removal of
-# `TaskDispatchParams.hook` and `Capabilities.design_preview` (#411), neither
-# of which a task_source ever touched.
-protocol_version = ">=0.1.6, <0.6"
+# 0.6.0 renamed `InitializeParams.triggers` to `workflows` (#554). A plugin
+# built against the old name reads no field and reports zero workflows —
+# it starts, runs, and watches nothing — so the floor moved to `>=0.6.0`
+# and the F-54 gate turns that silent failure into a refused launch.
+protocol_version = ">=0.6.0, <0.7"
 
 # No `[capabilities] outputs`: the deliverable is the agent's to write
 # itself, so this plugin publishes nothing.

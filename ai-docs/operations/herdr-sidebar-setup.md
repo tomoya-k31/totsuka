@@ -166,12 +166,12 @@ identity を再報告する経路を足すかで、[ADR-0039](/decisions/adr-003
 | 行が増えない | `herdr server reload-config` を実行したか。`herdr config check` は**未知キーを名指しで報告する**（`unknown config key ui.…; ignoring key`）ので、綴りはそれで確かめる |
 | `$repo` だけ空 | Orchestrator が protocol 0.4.1 以上か（`repo_name` は 0.4.1 の追加。それ以前は報告されない） |
 | workspace label が `totsuka {id}` のまま | **rename しない条件が 4 つある。いずれも正常な縮退**（[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) D4）。`totsuka logs` の文言で切り分ける: ①identity 報告の失敗 → `could not report … identity` ②rename 自体の失敗 → `could not rename the workspace` ③`repo_name` が届いていない（Orchestrator が 0.4.1 未満）→ ログ無し ④タスク ID が長すぎて（80 文字超）マーカー token を載せられない → `task id exceeds herdr's token limit`（`--debug` が要る） |
-| すべて出ない | `plugins/herdr.toml` の `[identity] enabled` が `false` になっていないか |
+| すべて出ない | `[herdr]` の `[identity] enabled` が `false` になっていないか |
 | 自分で開いた space / 手起動の agent の行が空になる | `rows` はグローバルなので、報告されたトークンだけで組んだ行は空になる。**1 行目に常に非空のトークンを 1 つ以上**混ぜること（spaces なら `workspace`、agents なら `terminal_title_stripped` 等）。上のスニペットはそうしてある |
 | agent が居るリポジトリではなく space 名が出る | 1 つの space に別リポジトリの tab を足すとこうなる。`workspace` を 1 行目の主語にしないこと。手起動の agent に repo を出すには上の shell フックが要る |
 | `$mode` が長い label に押し出される | 可変長の `workspace` は行の**最後**に置く。固定長のトークンを先に |
 
-**totsuka を元に戻したいだけなら** `plugins/herdr.toml` に `[identity] enabled = false` を書く。
+**totsuka を元に戻したいだけなら** `[herdr]` に `[identity] enabled = false` を書く。
 報告も rename も止まり、#417 以前と同じ挙動になる。herdr 側の設定はそのままでよい
 （`$repo` などが空になるだけ）。
 
@@ -179,4 +179,4 @@ identity を再報告する経路を足すかで、[ADR-0039](/decisions/adr-003
 
 - [herdr サイドバー設定のトークン語彙](/references/herdr-sidebar-config.md) — `rows` に書ける値の一覧
 - [ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md) — なぜ totsuka がこのファイルを書き換えないか（D6）
-- [config.toml リファレンス](/development/config-reference.md) — `plugins/herdr.toml` の `[identity]`
+- [config.toml リファレンス](/development/config-reference.md) — `[herdr]` の `[identity]`

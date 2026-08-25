@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:87d22a3038a829368b14497b55eb88102cabc64e817d4b710eaa4bcb381ddbe2 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:5bb23d6ae75e04eef6f71f3ea540ea8b1f633a7400b8290c8e863287d909e9d8 -->
 
 # 運用ガイド
 
@@ -17,12 +17,12 @@
 | `config` | `config.toml` が検証を通る | `totsuka config validate` で全エラーを確認する |
 | `state-db` | 状態 DB が開ける。スキーマ版数と、それを適用した totsuka の版数を表示する | まだ無いなら一度 `totsuka run`。DB が新しすぎる（ダウングレードした）ならメッセージが名指す版以降へ totsuka を更新する。DB が古い（アップグレード直後）なら一度 `totsuka run` — スキーマを適用するのは `run` だけで、`status` / `task` / `focus` / `doctor` は適用しない |
 | `worktree-location` | 明示した worktree の配置先が展開できる | `${ENV}` の未設定変数を export するか、キーを削って既定値に戻す |
-| `plugin:{name}` | プラグインが起動し、設定の検証に応答する | インストール済みか確認し、`plugins/{name}.toml` を修正する |
+| `plugin:{name}` | プラグインが起動し、設定の検証に応答する | インストール済みか確認し、`config.toml` の `[<name>]` テーブルを修正する |
 | `llm` | `api_key_ref` が解決する（鍵が有効かは見ない） | 1Password に item を作る、環境変数を export する、Keychain に登録する、のいずれか |
 | `llm-online` | プロバイダが API キーを受理した（`--online` 時のみ） | 401 / 403 ならプロバイダで鍵を再発行し `[llm].api_key_ref` を更新する。到達不能や 5xx は警告止まり |
 | `worktrees` | 孤児 worktree が無い | 対話的に掃除を提案する |
 | `panes` | 孤児 pane が無い | 対話的に解放を提案する |
-| `trackers` | 1 つのリポジトリの起票先が 1 つに定まる | 重複しているリポジトリを、どれか 1 つのプラグインの `repos` だけに残す。**プラグイン単体では見えない検査**で、それぞれは自分のリストしか検証しないため、矛盾は和集合にしか現れない。どのソースも何も claim していない構成では出ない |
+| `projects` | 起票先を claim しているリポジトリの数を報告する | **検出ではなく報告** — 重複はもう書けない。各リポジトリは `project` で 1 つの `[[projects]]` を、その要素は `source` で 1 つのプラグインを指す。probe できなかったソースがあると skip（`cmd:` トークンのプラグインは doctor から起動されない）、どのソースも何も claim していない構成では出ない |
 
 `worktree-location` の失敗は放置すると厄介で、**worktree を作るのはタスクを割り当てる瞬間**なので、`run` は正常に起動したまま全タスクが失敗する。
 

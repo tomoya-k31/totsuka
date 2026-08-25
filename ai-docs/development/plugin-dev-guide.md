@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -33,7 +33,7 @@ plugin-protocol = { git = "https://github.com/tomoya-k31/totsuka" }
 name = "github"                 # インスタンスバイナリ名と一致
 kind = "task_source"            # task_source | agent_ide | notifier
 version = "0.1.0"               # プラグイン自身の版
-protocol_version = ">=0.1.6, <0.6"  # 対応する Orchestrator プロトコル範囲(F-54)
+protocol_version = ">=0.6.0, <0.7"  # 対応する Orchestrator プロトコル範囲(F-54)
 
 [capabilities]                  # 実際に対応する機能だけ宣言(F-33)
 state_stream = true             # agent: state/subscribe ストリーム(F-38)
@@ -56,13 +56,15 @@ outputs = ["source"]            # result/publish に対応するなら宣言す�
 `resume_session` は `hook_completion` に**置き換わった**ので、フック経由で完了を
 報告する agent は新しい名前で宣言し直すこと。
 
-Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push 専用**（`tasks/fetch` は削除済み。起動できる task_source は例外なく push 型なので、0.5.0 でこれを宣言する `task_submit` は情報量ゼロとして削除された）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に、`<0.3` を上限とする manifest は **0.3.0**（#264 の `Task.thread_key` 削除）に、`<0.4` を上限とする manifest は **0.4.0**（#411 の `TaskDispatchParams.hook` / `Capabilities.design_preview` 削除）に、`<0.5` を上限とする manifest は **0.5.0**（#496 の到達不能な宣言 5 件の削除）に、それぞれ起動拒否される — 上限は超えたい破壊的バンプの**次**のメジャー/マイナーに置く（現行なら `<0.6`）。
+Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push 専用**（`tasks/fetch` は削除済み。起動できる task_source は例外なく push 型なので、0.5.0 でこれを宣言する `task_submit` は情報量ゼロとして削除された）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に、`<0.3` を上限とする manifest は **0.3.0**（#264 の `Task.thread_key` 削除）に、`<0.4` を上限とする manifest は **0.4.0**（#411 の `TaskDispatchParams.hook` / `Capabilities.design_preview` 削除）に、`<0.5` を上限とする manifest は **0.5.0**（#496 の到達不能な宣言 5 件の削除）に、`<0.6` を上限とする manifest は **0.6.0**（#554 の `initialize.triggers` → `workflows` 改名）に、それぞれ起動拒否される — 上限は超えたい破壊的バンプの**次**のメジャー/マイナーに置く（現行なら `<0.7`）。
 
-上の例は下限を `>=0.1.6`（`task/submit` RPC が入ったバージョン）に置いている。それより前の Orchestrator には push する手段が無いので、範囲に含めても動かない。
+上の例は下限を `>=0.6.0` に置いている。0.6.0 で `initialize` の `triggers` が `workflows` へ改名されたので、それより前を範囲に含めると **`workflows` を読むプラグインが空を受け取り、何も監視しない**まま起動してしまう（#554）。F-54 のゲートはこの形の失敗を起動拒否へ倒すためにある。
 
-**下限も上限と同じくらい意味を持つ。** 例えば herdr は `>=0.2.3` を宣言する。0.2.3 が `TaskDispatchParams.tool_launch` の入ったバージョンで、herdr には argv を自前で組み立てるフォールバックがもう無いためである。下限で弾いておくことが、そのフォールバックを「非推奨」ではなく**到達不能**にしている（[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。
+**下限も上限と同じくらい意味を持ち、「何に依存しているか」に従う。** プラグインの kind でも、その時点の最新プロトコルでもない。
 
-**これは kind で決まる規則ではない。** 同じ agent_ide でも orca は `>=0.1.0` のままである — `orca` CLI 自体を駆動していて `tool_launch` を一度も読まないので、下限を上げると**問題なく動く Orchestrator を弾く**ことになる。task_source / notifier も同じ理由で据え置き。**下限は「何に依存しているか」に従う**のであって、プラグインの kind やその時点の最新プロトコルに合わせるものではない。
+0.6.0 では**結果として同梱 7 本すべてが `>=0.6.0` に揃った**が、それは全部が同じものに依存しているからである —— `initialize` の改名は kind を問わず全プラグインが読む面だからで、「最新に合わせた」のではない。一律に見える状態を規則と読み違えないこと。
+
+**揃わない例のほうが規則をよく表す。** 0.4.0 では agent_ide のうち herdr だけを `>=0.2.3` へ上げた。0.2.3 が `TaskDispatchParams.tool_launch` の入ったバージョンで、herdr には argv を自前で組み立てるフォールバックがもう無かったためである（下限で弾くことが、そのフォールバックを「非推奨」ではなく**到達不能**にした、[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。同じ agent_ide の orca は `>=0.1.0` のままだった —— `orca` CLI 自体を駆動していて `tool_launch` を一度も読まないので、下限を上げれば**問題なく動く Orchestrator を弾く**ことになる。
 
 # メソッド（§11 付録 A）
 
@@ -72,17 +74,17 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 
 | メソッド | 方向 | 内容 |
 |---|---|---|
-| `initialize` | O→P | 解決済み config + プロトコル版を渡す。plugin_version + capabilities を返す（F-65）。**task_source には orchestrator の `[[repositories]]` も `repositories: [{name, summary?, path?}]` として供給される**（0.1.1、#109。任意フィールド — 使わなければ無視してよい。ソース側でリポジトリ解決するプラグインは自前設定の重複を省ける）。**同じく orchestrator の `[llm]` も `llm: {base_url, model, api_key?}` として供給される**（0.1.2、#119。api_key は解決済み。プラグイン自身の LLM 設定があればそちらを優先する default + override を推奨）。**task_source には `triggers: [{workflow, trigger}]`（`[[workflows]]` 定義順）と `poll_interval_secs: Option<u64>` も供給される**（0.1.6、[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)。監視条件と自プラグイン内部の fetch 周期。イベント駆動ソースは `poll_interval_secs` を無視してよい） |
-| `config/validate` | O→P | プラグイン設定を検証（F-59） |
+| `initialize` | O→P | 解決済み config + プロトコル版を渡す。plugin_version + capabilities を返す（F-65）。**task_source には orchestrator の `[[repositories]]` も `repositories: [{name, summary?, path?}]` として供給される**（0.1.1、#109。任意フィールド — 使わなければ無視してよい。ソース側でリポジトリ解決するプラグインは自前設定の重複を省ける）。**同じく orchestrator の `[llm]` も `llm: {base_url, model, api_key?}` として供給される**（0.1.2、#119。api_key は解決済み。プラグイン自身の LLM 設定があればそちらを優先する default + override を推奨）。**そのプラグインを名指す `[[workflows]]` が `workflows: [{workflow, trigger, options}]`（定義順）として供給される**（0.6.0 で `triggers` から改名、#554）。`source` と `agent` の**両方**に届き、`trigger` はソースにだけ意味がある（agent には空オブジェクト）。`options` は Orchestrator が解釈しない余りキーで、消費するものを `claimed_options` で申告する。**task_source にはさらに `projects: [{name, options}]`**（`[[projects]]` のうち `source` が自分のもの、#554）。`trigger` は運用者の書いたテーブルの**素通し**で、profile 由来の `instructions_kind` / `task_id_prefix` は `workflows` 要素の**専用フィールド**として届く（0.6.0 までは trigger に焼き込まれていた）。fetch 周期 `poll_interval_secs` は自分の `[<name>]` のキーで、`config` の中に入って届く（0.6.0 / #554 で `InitializeParams` から削除）|
+| `config/validate` | O→P | プラグイン設定を検証（F-59）。`initialize` と同じ `workflows` / `projects` / `repositories` も届く（0.6.0）— 記憶ではなく「今聞かれているもの」を検証させるため |
 | `shutdown` | O→P | 猶予付き終了要求 |
 
 ## task_source
 
-`task_source` は **push 専用**（プロトコル 0.2.0、[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。タスクを見つけたら `task/submit` を Orchestrator へ**自分から**送る — Orchestrator がタスクを取りに来る RPC（旧 `tasks/fetch`）は存在しない。イベント駆動ソース（Webhook/Socket 等）は受信のたびに、ポーリングが自然なソース（GitHub/Notion 等）は `initialize` で受け取った `triggers`/`poll_interval_secs` で自前タイマーを回して、それぞれ `task/submit` を呼ぶ（[plugin-sdk](/components/plugin-sdk.md) の `poll_loop` がこのタイマー実装を提供する）。
+`task_source` は **push 専用**（プロトコル 0.2.0、[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。タスクを見つけたら `task/submit` を Orchestrator へ**自分から**送る — Orchestrator がタスクを取りに来る RPC（旧 `tasks/fetch`）は存在しない。イベント駆動ソース（Webhook/Socket 等）は受信のたびに、ポーリングが自然なソース（GitHub/Notion 等）は `initialize` で受け取った `workflows` と自分の `[<name>].poll_interval_secs` で自前タイマーを回して、それぞれ `task/submit` を呼ぶ（[plugin-sdk](/components/plugin-sdk.md) の `poll_loop` がこのタイマー実装を提供する）。
 
 | メソッド | 方向 | 内容 |
 |---|---|---|
-| `task/submit` | **P→O request** | プラグインが見つけたタスクを Orchestrator へ push（persist-before-ack）。応答は `accepted`（永続化）/ `duplicate`（冪等キー衝突、破棄してよい）/ `rejected`（恒久的に処理不能、reason 付き）のいずれかで**すべて最終**（同じタスクを reason で再送しない）。`NOT_ACCEPTING`/`SUBMIT_OVERLOADED`/`INTERNAL_ERROR` は再送可能（submit は冪等なのでバックオフ再送してよい） |
+| `task/submit` | **P→O request** | プラグインが見つけたタスクを Orchestrator へ push（persist-before-ack）。**`workflow` を必ず名指す**（0.6.0、#554）— 受け取った `workflows` に対して first-match を走らせるのはプラグインで、Orchestrator は名前が実在しその `source` が自分かだけを検証する。応答は `accepted`（永続化）/ `duplicate`（冪等キー衝突、破棄してよい）/ `rejected`（恒久的に処理不能、reason 付き）のいずれかで**すべて最終**（同じタスクを reason で再送しない）。`NOT_ACCEPTING`/`SUBMIT_OVERLOADED`/`INTERNAL_ERROR` は再送可能（submit は冪等なのでバックオフ再送してよい） |
 | `task/update_status` | O→P | ソース側ステータス遷移（F-84） |
 | `result/publish` | O→P | 成果物をソースへ書き戻し（F-07） |
 
@@ -174,3 +176,16 @@ totsuka plugin install ./dist/github
 # 動作確認
 
 `totsuka config validate`（online で `config/validate` を委譲）と `totsuka doctor`（ライブ疎通 probe）で自作プラグインの疎通を確認できる。
+
+# 設定の置き場所（#554）
+
+プラグイン自身の設定は `config.toml` のトップレベル `[<name>]` テーブルに書く。`<name>` は `[plugins.<name>]` のロスター名 = バイナリ名で、**ロスターに無い名前のテーブルは検証エラー**になる。Orchestrator は中身を解釈せず、シークレット解決だけして `initialize.config` へ渡す。
+
+**core の構造体にキーを足したいとき**（`[[workflows]]` / `[[projects]]`）は 2 つの作法がある:
+
+| 置き場所 | 所有の決め方 | プラグイン側の実装 |
+|---|---|---|
+| `[[workflows]]` | **聞いて決める。** 余ったキーは `source` と `agent` の両方に届き、ちょうど 1 つが引き取る | `InitializeResult.claimed_options` に `{workflow, key}` を返す。**消費しないキーを claim しない** — タイポを沈黙に変える |
+| `[[projects]]` | **`source` が決める。** 要素はちょうど 1 つのプラグインを名指す | `deny_unknown_fields` の struct へデシリアライズするだけ。claim の握手は無い |
+
+`[[workflows]]` の引き取り手が 0 なら起動が止まる（タイポ）、2 なら曖昧として止まる。この検査があるので `WorkflowConfig` から `deny_unknown_fields` を外せた —— 検査の場所が serde から握手へ移っただけで、弱くはなっていない。

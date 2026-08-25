@@ -40,6 +40,7 @@ fn init_params() -> Value {
 /// the plugin and must reload the same persisted draft store (#122).
 fn init_params_in(state_dir: &std::path::Path) -> Value {
     json!({
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
         "protocol_version": "0.1.0",
         "config": {
             "state_dir": state_dir,
@@ -230,18 +231,26 @@ fn draft_buttons(shared: &Shared) -> (String, Value, Value) {
 // delivery = direct (#548, ADR-0057)
 // ---------------------------------------------------------------------------
 
-/// Drive initialize → mention → submit, WITHOUT publishing yet — the direct
-/// tests publish with their own `delivery` value.
-async fn mention_flow(
+/// Drive initialize → mention → submit, WITHOUT publishing yet.
+///
+/// `publish` is the workflow option the mention workflow declares (#554) —
+/// how a result reaches the human is settled at `initialize` now, not per
+/// `result/publish` call.
+async fn mention_flow_with_publish(
     shared: &Shared,
     listener: &tokio::net::TcpListener,
+    publish: Option<&str>,
 ) -> (
     Server<FakeFactory>,
     SubmitHarness,
     tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
 ) {
     let (mut srv, mut harness) = server(shared);
-    call(&mut srv, 1, "initialize", init_params()).await;
+    let mut params = init_params();
+    if let Some(publish) = publish {
+        params["workflows"][0]["options"] = json!({ "publish": publish });
+    }
+    call(&mut srv, 1, "initialize", params).await;
     let mut ws = accept_with_hello(listener).await;
     send_and_await_ack(&mut ws, mention_envelope("e1", "100.2")).await;
     let task = harness.next_task().await;
@@ -249,7 +258,7 @@ async fn mention_flow(
     (srv, harness, ws)
 }
 
-/// `delivery = "direct"`: the reply is posted into the thread immediately —
+/// `publish = "direct"`: the reply is posted into the thread immediately —
 /// under the operator's name, `<@asker>`-prefixed like an approved draft —
 /// and **no draft surface is created** (no ephemeral, no buttons).
 #[tokio::test]
@@ -261,7 +270,8 @@ async fn direct_delivery_posts_immediately_without_a_draft() {
         "chat.postMessage",
         Canned::Data(json!({ "ok": true, "ts": "100.9" })),
     );
-    let (mut srv, _harness, _ws) = mention_flow(&shared, &listener).await;
+    let (mut srv, _harness, _ws) =
+        mention_flow_with_publish(&shared, &listener, Some("direct")).await;
 
     let result = call(
         &mut srv,
@@ -269,7 +279,7 @@ async fn direct_delivery_posts_immediately_without_a_draft() {
         "result/publish",
         json!({
             "task_id": "C1:100.0", "content": PUBLISHED_CONTENT,
-            "format": "markdown", "delivery": "direct"
+            "format": "markdown"
         }),
     )
     .await;
@@ -300,7 +310,7 @@ async fn direct_delivery_posts_immediately_without_a_draft() {
         "result/publish",
         json!({
             "task_id": "C1:100.0", "content": PUBLISHED_CONTENT,
-            "format": "markdown", "delivery": "direct"
+            "format": "markdown"
         }),
     )
     .await;
@@ -320,11 +330,12 @@ async fn a_failed_direct_post_keeps_the_coordinates_for_a_retry() {
         "chat.postMessage",
         Canned::Data(json!({ "ok": true, "ts": "100.9" })),
     );
-    let (mut srv, _harness, _ws) = mention_flow(&shared, &listener).await;
+    let (mut srv, _harness, _ws) =
+        mention_flow_with_publish(&shared, &listener, Some("direct")).await;
 
     let publish = json!({
         "task_id": "C1:100.0", "content": PUBLISHED_CONTENT,
-        "format": "markdown", "delivery": "direct"
+        "format": "markdown"
     });
     let failed = call_expecting_error(&mut srv, 3, "result/publish", publish.clone()).await;
     assert!(failed.contains("could not be posted"), "{failed}");
@@ -344,36 +355,25 @@ async fn a_failed_direct_post_keeps_the_coordinates_for_a_retry() {
     );
 }
 
-/// A delivery value this build does not know must take the DRAFT path: the
-/// modes differ in whether a human gate is skipped, and skipping it on an
-/// unreadable instruction is the wrong side to err on (protocol 0.5.2).
+/// A `publish` value this build cannot read fails `initialize` (#554).
+///
+/// Before the key moved into the plugin it arrived per `result/publish` call,
+/// where the only available answer was "take the draft path and say nothing".
+/// Read at `initialize` it can be *refused*, which is strictly better: an
+/// operator who wrote `diretc` believing they had turned the approval gate off
+/// finds out at startup rather than never.
 #[tokio::test]
-async fn an_unrecognised_delivery_still_presents_a_draft() {
+async fn an_unreadable_publish_value_fails_initialize() {
     let (listener, ws_url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &ws_url);
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "9.2" })),
-    );
-    let (mut srv, _harness, _ws) = mention_flow(&shared, &listener).await;
-
-    let result = call(
-        &mut srv,
-        3,
-        "result/publish",
-        json!({
-            "task_id": "C1:100.0", "content": PUBLISHED_CONTENT,
-            "format": "markdown", "delivery": "hologram"
-        }),
-    )
-    .await;
-    assert_eq!(result, Value::Null);
-    assert_eq!(
-        requests_for(&shared, "chat.postEphemeral").len(),
-        1,
-        "the approval gate must still be presented"
-    );
+    let _ = &listener;
+    let (mut srv, _harness) = server(&shared);
+    let mut params = init_params();
+    params["workflows"][0]["options"] = json!({ "publish": "diretc" });
+    let message = call_expecting_error(&mut srv, 1, "initialize", params).await;
+    assert!(message.contains("diretc"), "{message}");
+    assert!(message.contains("slack-reply"), "{message}");
 }
 
 #[tokio::test]

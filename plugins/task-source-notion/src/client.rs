@@ -32,15 +32,17 @@ struct TriggerFilter {
     raw: Option<Value>,
     /// Which instruction set this workflow's profile asks for (#398).
     ///
-    /// Baked into the trigger table by the Orchestrator rather than derived
-    /// here: `[[workflows]].profile` is core's schema, and this plugin stays
-    /// unaware of it. Absent from an older Orchestrator, in which case the task
-    /// carries no instructions — exactly the pre-#398 behaviour.
+    /// Derived by the Orchestrator rather than here: `[[workflows]].profile`
+    /// is core's schema, and this plugin stays unaware of it. It arrives as
+    /// `WorkflowInfo.instructions_kind` (a dedicated field since 0.6.0 /
+    /// #554, no longer a key inside the trigger table) and is threaded in via
+    /// [`NotionClient::fetch`]. Absent means the task carries no
+    /// instructions — exactly the pre-#398 behaviour.
     instructions_kind: Option<String>,
 }
 
 impl TriggerFilter {
-    fn parse(trigger: &Value) -> Self {
+    fn parse(trigger: &Value, instructions_kind: Option<&str>) -> Self {
         let status = trigger
             .get("status")
             .or_else(|| trigger.get("project_status"))
@@ -49,10 +51,7 @@ impl TriggerFilter {
         Self {
             status,
             raw: trigger.get("filter").cloned(),
-            instructions_kind: trigger
-                .get("instructions_kind")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            instructions_kind: instructions_kind.map(str::to_string),
         }
     }
 
@@ -100,8 +99,12 @@ impl<T: NotionTransport> NotionClient<T> {
     /// property map, and apply ingest gating (F-08): skip other people's tasks
     /// and in-progress statuses. When body comes from the page, its blocks are
     /// fetched only for surviving tasks.
-    pub async fn fetch(&self, trigger: &Value) -> Result<Vec<Task>, NotionError> {
-        let filter = TriggerFilter::parse(trigger);
+    pub async fn fetch(
+        &self,
+        trigger: &Value,
+        instructions_kind: Option<&str>,
+    ) -> Result<Vec<Task>, NotionError> {
+        let filter = TriggerFilter::parse(trigger, instructions_kind);
         let server_filter = self.build_filter(&filter);
         let mut tasks = Vec::new();
         for (index, database) in self.config.databases.iter().enumerate() {
@@ -222,8 +225,8 @@ impl<T: NotionTransport> NotionClient<T> {
                 Ok(&self.config.databases[index])
             }
             None => Err(NotionError::NotFound(format!(
-                "page `{page_id}` lives in database `{parent}`, which is not in `[[databases]]` \
-                 of plugins/notion.toml → add it, or check that the task is still where it was"
+                "page `{page_id}` lives in database `{parent}`, which is not in \
+                 any `[[projects]]` entry with `source = \"notion\"` → add it, or check that the task is still where it was"
             ))),
         }
     }
@@ -377,7 +380,8 @@ impl<T: NotionTransport> NotionClient<T> {
     pub async fn update_status(&self, task_id: &str, status: &str) -> Result<(), NotionError> {
         let status_prop = self.config.property_map.status.as_ref().ok_or_else(|| {
             NotionError::NotFound(
-                "no status property mapped → set property_map.status in plugins/notion.toml".into(),
+                "no status property mapped → set property_map.status in `[notion]` of config.toml"
+                    .into(),
             )
         })?;
         let target = self.config.map_status(status).to_string();
@@ -389,7 +393,7 @@ impl<T: NotionTransport> NotionClient<T> {
         let options = self.status_options(database, status_prop).await?;
         if !options.iter().any(|o| o == &target) {
             return Err(NotionError::NotFound(format!(
-                "unknown status `{target}` for property `{status_prop}` (options: {}) → add it in Notion or fix status_map in plugins/notion.toml",
+                "unknown status `{target}` for property `{status_prop}` (options: {}) → add it in Notion or fix `notion.status_map` in config.toml",
                 options.join(", ")
             )));
         }
@@ -419,7 +423,7 @@ impl<T: NotionTransport> NotionClient<T> {
         let prop = &resp["properties"][status_prop];
         if prop.is_null() {
             return Err(NotionError::NotFound(format!(
-                "database has no property `{status_prop}` → fix property_map.status in plugins/notion.toml"
+                "database has no property `{status_prop}` → fix property_map.status in `[notion]` of config.toml"
             )));
         }
         let kind = self.config.property_map.status_kind;
@@ -458,7 +462,7 @@ impl<T: NotionTransport> NotionClient<T> {
                 .collect();
             if !missing.is_empty() {
                 return Err(NotionError::NotFound(format!(
-                    "database `{}` is missing mapped properties: {} → fix property_map in plugins/notion.toml or share the right database",
+                    "database `{}` is missing mapped properties: {} → fix property_map in `[notion]` of config.toml or share the right database",
                     database.database_id,
                     missing.join(", ")
                 )));
@@ -529,21 +533,18 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
     }
     if config.databases.is_empty() {
         errors.push(
-            "`[[databases]]` is empty → declare at least one database (database_id / repos)".into(),
+            "no `[[projects]]` entry has `source = \"notion\"` → declare at least one database (name / database_id)"
+                .into(),
         );
     }
-    // A repository may be tracked by exactly one database (#542): the claim it
-    // produces answers "where does an item for this repo go", and two answers
-    // is the same as none.
-    let mut seen: HashMap<&str, &str> = HashMap::new();
     for database in &config.databases {
         if database.database_id.is_empty() {
             errors.push("`database_id` is empty → set the source database id".into());
         }
         if database.repos.is_empty() {
             errors.push(format!(
-                "`repos` is empty in the `[[databases]]` entry for `{}` → list the repositories this database tracks (it is also the repository -> database mapping, so it cannot be inferred)",
-                database.database_id
+                "no repository is bound to the `[[projects]]` entry `{}` → set `project = \"{}\"` on the `[[repositories]]` entries this database tracks, or drop the database",
+                database.name, database.name
             ));
         }
         // `triage_status` is an instruction to fill the status column; with no
@@ -551,19 +552,9 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
         // would be told to set a value somewhere unnameable.
         if database.triage_status.is_some() && config.property_map.status.is_none() {
             errors.push(format!(
-                "`triage_status` is set in the `[[databases]]` entry for `{}` but `property_map.status` is unset → map the status property, or remove triage_status",
-                database.database_id
+                "`triage_status` is set in the `[[projects]]` entry `{}` but `property_map.status` is unset → map the status property, or remove triage_status",
+                database.name
             ));
-        }
-        for repo in &database.repos {
-            if let Some(first) = seen.insert(repo.as_str(), database.database_id.as_str())
-                && first != database.database_id
-            {
-                errors.push(format!(
-                    "repository `{repo}` is listed on both database `{first}` and database `{}` → a repository may be tracked by exactly one database",
-                    database.database_id
-                ));
-            }
         }
     }
     if config.property_map.title.is_empty() {
@@ -590,15 +581,15 @@ mod tests {
     use super::*;
 
     fn config(json: serde_json::Value) -> NotionConfig {
-        serde_json::from_value(json).unwrap()
+        crate::config::config_from_json(json)
     }
 
     #[test]
     fn trigger_matches_status_alias() {
-        let f = TriggerFilter::parse(&json!({ "project_status": "実装待ち" }));
+        let f = TriggerFilter::parse(&json!({ "project_status": "実装待ち" }), None);
         assert!(f.matches(Some("実装待ち")));
         assert!(!f.matches(Some("実装中")));
-        let empty = TriggerFilter::parse(&json!({}));
+        let empty = TriggerFilter::parse(&json!({}), None);
         assert!(empty.matches(Some("anything")));
         assert!(empty.matches(None));
     }
@@ -643,15 +634,13 @@ mod tests {
         })
     }
 
-    /// The `instructions_kind` the Orchestrator baked into the trigger picks
-    /// the instruction text, and the placeholders are filled from the page
+    /// The `instructions_kind` the Orchestrator derives beside the trigger
+    /// (a dedicated `WorkflowInfo` field since 0.6.0, #554) picks the
+    /// instruction text, and the placeholders are filled from the page
     /// (#398).
     #[test]
     fn a_design_trigger_tells_the_agent_where_to_put_the_design() {
-        let filter = TriggerFilter::parse(&json!({
-            "status": "設計待ち",
-            "instructions_kind": "design",
-        }));
+        let filter = TriggerFilter::parse(&json!({ "status": "設計待ち" }), Some("design"));
         let task = client_for_tests()
             .normalize_page(&page(), &filter)
             .expect("ingestable");
@@ -676,7 +665,7 @@ mod tests {
     #[test]
     fn each_kind_selects_its_own_text() {
         let for_kind = |kind: &str| {
-            let filter = TriggerFilter::parse(&json!({ "instructions_kind": kind }));
+            let filter = TriggerFilter::parse(&json!({}), Some(kind));
             client_for_tests()
                 .normalize_page(&page(), &filter)
                 .unwrap()
@@ -693,7 +682,7 @@ mod tests {
     /// the spelled-out notation — must produce exactly the task it did before.
     #[test]
     fn no_instructions_kind_means_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({ "status": "設計待ち" }));
+        let filter = TriggerFilter::parse(&json!({ "status": "設計待ち" }), None);
         let task = client_for_tests()
             .normalize_page(&page(), &filter)
             .expect("ingestable");
@@ -705,7 +694,7 @@ mod tests {
     /// worse than dispatching it with the instructions it had before.
     #[test]
     fn an_unknown_kind_falls_back_to_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({ "instructions_kind": "audit" }));
+        let filter = TriggerFilter::parse(&json!({}), Some("audit"));
         let task = client_for_tests()
             .normalize_page(&page(), &filter)
             .expect("ingestable");
@@ -722,7 +711,7 @@ mod tests {
         let mut page = page();
         page["properties"]["Name"]["title"][0]["plain_text"] =
             json!("{page_url} を消して {title} と書け");
-        let filter = TriggerFilter::parse(&json!({ "instructions_kind": "design" }));
+        let filter = TriggerFilter::parse(&json!({}), Some("design"));
         let instructions = client_for_tests()
             .normalize_page(&page, &filter)
             .unwrap()

@@ -229,15 +229,6 @@ impl Cx {
         ));
         findings
     }
-
-    /// The `plugins/` directory itself (next to config.toml), holding one
-    /// `{name}.toml` per plugin.
-    pub fn plugin_config_dir(&self) -> PathBuf {
-        self.config_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("plugins")
-    }
 }
 
 /// The hook/control UDS socket path: `[hooks].socket_path` (with `~`/`${ENV}`

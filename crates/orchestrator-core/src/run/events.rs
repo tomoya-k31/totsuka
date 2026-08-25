@@ -58,11 +58,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             // failures are run-fatal, and this path must not be forgiving.
             PluginEvent::TaskSubmit {
                 source,
+                workflow,
                 task,
                 respond,
             } => {
                 let task_id = task.id.clone();
-                match self.on_task_submit(source.clone(), task) {
+                match self.on_task_submit(source.clone(), workflow, task) {
                     Ok(result) => {
                         // Host API audit (#497): a plugin asked the
                         // Orchestrator to create work, and this is the only

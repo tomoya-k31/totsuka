@@ -168,12 +168,14 @@ async fn call(srv: &mut Server<FakeFactory>, id: i64, method: &str, params: Valu
 fn init_config() -> Value {
     json!({
         "token": "secret_test",
-        "databases": [{ "database_id": "DB1", "repos": ["totsuka"] }],
         "notion_user_id": "u_me",
         "body_source": "page",
         "in_progress_statuses": ["実装中"],
         "status_map": { "レビュー待ち": "In Review" },
         "priority_map": { "High": 10 },
+        // The fetch cadence is this plugin's own `[notion]` key since 0.6.0
+        // (#554) — it arrives inside `config`, not beside it.
+        "poll_interval_secs": 60,
         "property_map": {
             "title": "Name",
             "status": "Status",
@@ -185,8 +187,42 @@ fn init_config() -> Value {
     })
 }
 
+/// The database this plugin polls, as the Orchestrator supplies it since
+/// #554: a `[[projects]]` entry, plus the `[[repositories]]` bound to it.
+fn one_database() -> (Value, Value) {
+    (
+        json!([{ "name": "db-1", "options": { "database_id": "DB1" } }]),
+        json!([{ "name": "totsuka", "project": "db-1" }]),
+    )
+}
+
+/// Two databases, each tracking a different repository (#542).
+fn two_databases() -> (Value, Value) {
+    (
+        json!([
+            { "name": "db-1", "options": { "database_id": "DB1" } },
+            { "name": "db-2", "options": { "database_id": "DB2" } }
+        ]),
+        json!([
+            { "name": "totsuka", "project": "db-1" },
+            { "name": "web-app", "project": "db-2" }
+        ]),
+    )
+}
+
 fn init_params() -> Value {
-    json!({ "protocol_version": "0.1.0", "config": init_config() })
+    init_params_at("0.1.0", one_database())
+}
+
+/// `initialize` params at an explicit version, with a chosen database layout.
+fn init_params_at(version: &str, layout: (Value, Value)) -> Value {
+    let (projects, repositories) = layout;
+    json!({
+        "protocol_version": version,
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+    })
 }
 
 /// A database query page with four pages exercising every gating branch.
@@ -234,16 +270,6 @@ fn query_response() -> Value {
     })
 }
 
-/// Two databases, each tracking a different repository (#542).
-fn two_database_config() -> Value {
-    let mut cfg = init_config();
-    cfg["databases"] = json!([
-        { "database_id": "DB1", "repos": ["totsuka"] },
-        { "database_id": "DB2", "repos": ["web-app"] }
-    ]);
-    cfg
-}
-
 /// A one-page result for the second database: one page in a repository it
 /// tracks, one in a repository it does not.
 fn second_database_response() -> Value {
@@ -282,11 +308,12 @@ async fn a_poll_walks_every_database_and_each_one_gates_its_own_repos() {
     shared.push(Canned::Data(json!({ "results": [] }))); // P_20's page blocks
     let params = json!({
         "protocol_version": "0.5.1",
-        "config": two_database_config(),
-        "triggers": [
+        "config": init_config(),
+        "projects": two_databases().0,
+        "repositories": two_databases().1,
+        "workflows": [
             { "workflow": "design", "trigger": { "status": "実装待ち" } }
         ],
-        "poll_interval_secs": 60
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
     assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
@@ -334,8 +361,9 @@ async fn a_page_without_a_repo_hint_is_still_ingested() {
     let params = json!({
         "protocol_version": "0.5.1",
         "config": init_config(),
-        "triggers": [{ "workflow": "design", "trigger": { "status": "実装待ち" } }],
-        "poll_interval_secs": 60
+        "projects": one_database().0,
+        "repositories": one_database().1,
+        "workflows": [{ "workflow": "design", "trigger": { "status": "実装待ち" } }],
     });
     call(&mut srv, 1, "initialize", params).await;
 
@@ -350,7 +378,7 @@ async fn a_page_without_a_repo_hint_is_still_ingested() {
 async fn initialize_publishes_the_repository_to_database_mapping() {
     let shared = Shared::default();
     let mut srv = server(&shared);
-    let params = json!({ "protocol_version": "0.5.1", "config": two_database_config() });
+    let params = init_params_at("0.5.1", two_databases());
     let resp = call(&mut srv, 1, "initialize", params).await;
     let claims = resp.result.expect("initialize result")["claimed_repos"].clone();
     assert_eq!(claims.as_array().map(Vec::len), Some(2));
@@ -380,7 +408,7 @@ async fn update_status_verifies_options_on_the_page_own_database() {
         &mut srv,
         1,
         "initialize",
-        json!({ "protocol_version": "0.5.1", "config": two_database_config() }),
+        init_params_at("0.5.1", two_databases()),
     )
     .await;
 
@@ -414,15 +442,16 @@ async fn update_status_verifies_options_on_the_page_own_database() {
 async fn a_hyphenated_parent_id_matches_a_config_written_without_hyphens() {
     let shared = Shared::default();
     let mut srv = server(&shared);
-    let mut config = init_config();
-    config["databases"] = json!([
-        { "database_id": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", "repos": ["totsuka"] }
-    ]);
+    let hyphenless = (
+        json!([{ "name": "db-1", "options": {
+            "database_id": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d" } }]),
+        json!([{ "name": "totsuka", "project": "db-1" }]),
+    );
     call(
         &mut srv,
         1,
         "initialize",
-        json!({ "protocol_version": "0.5.1", "config": config }),
+        init_params_at("0.5.1", hyphenless),
     )
     .await;
 
@@ -464,7 +493,7 @@ async fn update_status_refuses_a_page_from_an_unconfigured_database() {
         &mut srv,
         1,
         "initialize",
-        json!({ "protocol_version": "0.5.1", "config": two_database_config() }),
+        init_params_at("0.5.1", one_database()),
     )
     .await;
 
@@ -569,10 +598,11 @@ async fn fetch_excludes_in_progress_on_statusless_trigger() {
     let params = json!({
         "protocol_version": "0.1.6",
         "config": init_config(),
-        "triggers": [
+        "projects": one_database().0,
+        "repositories": one_database().1,
+        "workflows": [
             { "workflow": "design", "trigger": {} }
         ],
-        "poll_interval_secs": 60
     });
     call(&mut srv, 1, "initialize", params).await;
 
@@ -641,7 +671,7 @@ async fn config_validate_reports_invalid_token() {
         &mut srv,
         1,
         "config/validate",
-        json!({ "config": init_config() }),
+        json!({ "config": init_config(), "projects": one_database().0, "repositories": one_database().1 }),
     )
     .await;
     let result = resp
@@ -672,7 +702,7 @@ async fn config_validate_flags_missing_mapped_property() {
         &mut srv,
         1,
         "config/validate",
-        json!({ "config": init_config() }),
+        json!({ "config": init_config(), "projects": one_database().0, "repositories": one_database().1 }),
     )
     .await;
     let result = resp.result.unwrap();
@@ -691,10 +721,16 @@ async fn config_validate_flags_static_problem_without_network() {
     let shared = Shared::default();
     let mut srv = server(&shared);
 
-    // An empty database_id is caught statically; no transport call is made.
-    let mut bad = init_config();
-    bad["databases"] = json!([]);
-    let resp = call(&mut srv, 1, "config/validate", json!({ "config": bad })).await;
+    // No `[[projects]]` at all is caught statically; no transport call is
+    // made. Since #554 the databases come from there, so "none configured" is
+    // an empty list rather than an empty key in `[notion]`.
+    let resp = call(
+        &mut srv,
+        1,
+        "config/validate",
+        json!({ "config": init_config() }),
+    )
+    .await;
     let result = resp.result.unwrap();
     assert_eq!(result["valid"], false);
     assert!(shared.requests().is_empty(), "no network on static failure");
@@ -720,10 +756,11 @@ async fn initialize_with_triggers_polls_and_submits() {
     let params = json!({
         "protocol_version": "0.1.6",
         "config": init_config(),
-        "triggers": [
+        "projects": one_database().0,
+        "repositories": one_database().1,
+        "workflows": [
             { "workflow": "design", "trigger": { "status": "実装待ち" } }
         ],
-        "poll_interval_secs": 60
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
     assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);

@@ -106,6 +106,27 @@ pub struct RepositoryDraft<'a> {
     pub path: &'a str,
     /// One-line summary used for LLM repository selection. `None` removes it.
     pub summary: Option<&'a str>,
+    /// The `[[projects]]` entry this repository files into (#554). `None`
+    /// removes the binding, which is the state of a repository with no
+    /// project.
+    pub project: Option<&'a str>,
+}
+
+/// A `[[projects]]` entry to write (#554).
+///
+/// `options` is a TOML **inline table** fragment for the same reason
+/// [`WorkflowDraft`]'s trigger is: the keys belong to the plugin named by
+/// `source`, and the schema keeps them as an untyped table rather than
+/// inventing a structure the Orchestrator does not have.
+#[derive(Debug, Clone)]
+pub struct ProjectDraft<'a> {
+    /// Identity within `config.toml`, and what `[[repositories]].project`
+    /// points at.
+    pub name: &'a str,
+    /// The task_source plugin that owns this project.
+    pub source: &'a str,
+    /// The plugin's own keys, as an inline-table fragment.
+    pub options: &'a str,
 }
 
 /// A `[[workflows]]` entry to write.
@@ -154,6 +175,22 @@ pub fn upsert_repository(config_toml: &str, draft: &RepositoryDraft) -> Result<S
     set_value(entry, "name", draft.name);
     set_value(entry, "path", draft.path);
     put_value(entry, "summary", draft.summary);
+    put_value(entry, "project", draft.project);
+    Ok(doc.to_string())
+}
+
+/// Insert or update `[[projects]]` matched by `name` (#554).
+pub fn upsert_project(config_toml: &str, draft: &ProjectDraft) -> Result<String, EditError> {
+    let options = parse_fragment("options", Some(draft.options))?;
+    let mut doc: DocumentMut = config_toml.parse()?;
+    let entry = array_entry(&mut doc, "projects", draft.name)?;
+    set_value(entry, "name", draft.name);
+    set_value(entry, "source", draft.source);
+    if let Some(options) = options {
+        for (key, value) in options.iter() {
+            entry[key] = toml_edit::Item::Value(value.clone());
+        }
+    }
     Ok(doc.to_string())
 }
 
@@ -466,6 +503,7 @@ max_concurrency = 3
                 name: "totsuka",
                 path: "~/Workspace/totsuka",
                 summary: Some("the orchestrator itself"),
+                project: None,
             },
         )
         .unwrap();
@@ -551,6 +589,7 @@ max_concurrency = 3
                     name: "totsuka",
                     path: "~/Workspace/totsuka",
                     summary: Some("the orchestrator itself"),
+                    project: None,
                 },
             )
             .unwrap();
@@ -592,6 +631,7 @@ path = "/dotfiles"
                 name: "totsuka",
                 path: "/new/path",
                 summary: None,
+                project: None,
             },
         )
         .unwrap();
@@ -771,6 +811,7 @@ path = "/dotfiles"
                 name: "x",
                 path: "/x",
                 summary: None,
+                project: None,
             },
         )
         .unwrap_err();
@@ -868,6 +909,7 @@ path = "/dotfiles"
                 name: "r",
                 path: "/r",
                 summary: Some("was here"),
+                project: None,
             },
         )
         .unwrap();
@@ -877,6 +919,7 @@ path = "/dotfiles"
                 name: "r",
                 path: "/r",
                 summary: None,
+                project: None,
             },
         )
         .unwrap();

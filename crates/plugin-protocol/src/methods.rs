@@ -90,8 +90,9 @@ pub mod method {
 pub struct InitializeParams {
     /// The Orchestrator's protocol version (F-54).
     pub protocol_version: Version,
-    /// The plugin's own settings (from `plugins/{name}.toml`) with secret
-    /// references already resolved, passed through uninterpreted (F-64/F-65).
+    /// The plugin's own settings (the `[<name>]` table of `config.toml`) with
+    /// secret references already resolved, passed through uninterpreted
+    /// (F-65, #554).
     pub config: serde_json::Value,
     /// The repositories the Orchestrator is configured with (`config.toml`
     /// `[[repositories]]`), supplied to **task_source** plugins so they can
@@ -110,29 +111,66 @@ pub struct InitializeParams {
     /// not use it. `None` for non-task_source plugins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm: Option<LlmInfo>,
-    /// The workflow triggers targeting this **task_source** plugin, in
-    /// `config.toml` `[[workflows]]` definition order — a push source's
-    /// watch conditions, supplied once at `initialize` instead of a per-call
-    /// argument. Additive since protocol 0.1.6, same contract as
-    /// `repositories`. Empty for non-task_source plugins.
+    /// The workflows naming this plugin — as `source` or as `agent` — in
+    /// `config.toml` `[[workflows]]` definition order.
+    ///
+    /// Carries two things a plugin needs and cannot derive: a push source's
+    /// watch conditions ([`WorkflowInfo::trigger`], 0.1.6) and the workflow's
+    /// plugin-owned settings ([`WorkflowInfo::options`], 0.6.0 / #554).
+    ///
+    /// Renamed from `triggers` in 0.6.0, and it now reaches agent plugins too:
+    /// an option written on a workflow can belong to either of the plugins the
+    /// workflow names, so both have to see it. `trigger` is still a task
+    /// source's alone and arrives empty for an agent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub triggers: Vec<TriggerInfo>,
-    /// The `[plugins.{name}].poll_interval_secs` value: a push source's
-    /// *internal* fetch cadence (the Orchestrator itself never polls).
-    /// Additive since protocol 0.1.6. `None` for non-task_source plugins or
-    /// when unset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub poll_interval_secs: Option<u64>,
+    pub workflows: Vec<WorkflowInfo>,
+    /// The projects this **task_source** plugin owns (`[[projects]]` entries
+    /// whose `source` is this plugin), 0.6.0 / #554. Empty for other kinds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<ProjectInfo>,
 }
 
-/// One workflow trigger, as supplied to task_source plugins in
-/// [`InitializeParams::triggers`] (0.1.6).
+/// One workflow, as supplied to the plugins it names in
+/// [`InitializeParams::workflows`] (0.1.6 as `TriggerInfo`, renamed and
+/// extended in 0.6.0).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TriggerInfo {
+pub struct WorkflowInfo {
     /// The workflow's `name` (`[[workflows]].name`).
     pub workflow: String,
-    /// Trigger condition; plugin-defined shape.
+    /// Trigger condition; plugin-defined shape, sent **verbatim** from
+    /// `[[workflows]].trigger`. An empty object for a plugin named as the
+    /// workflow's `agent` — triggers select tasks, which is the source's
+    /// business.
+    ///
+    /// Until 0.6.0 the Orchestrator also injected two profile-derived keys
+    /// into this table (#398); those now travel as
+    /// [`instructions_kind`](Self::instructions_kind) and
+    /// [`task_id_prefix`](Self::task_id_prefix), so the table is the
+    /// operator's spelling and nothing else.
     pub trigger: serde_json::Value,
+    /// Which instruction set the source plugin should write for this
+    /// workflow's tasks (`"triage"` / `"design"` / `"implement"`), derived by
+    /// the Orchestrator from the workflow's `profile` (#398). `None` means
+    /// "keep your existing behaviour" — the source's own publish path already
+    /// knows what to say. Always `None` for agent plugins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions_kind: Option<String>,
+    /// The prefix a task id raised for this workflow must carry (e.g.
+    /// `impl`, `books`), derived from `profile` (#397). `None` means the
+    /// plain conversation id. Always `None` for agent plugins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id_prefix: Option<String>,
+    /// The keys written on `[[workflows]]` that are **not** the Orchestrator's
+    /// own (#554), verbatim.
+    ///
+    /// The Orchestrator cannot tell whose they are: a workflow names a source
+    /// *and* an agent, and either may define a key. So it hands the whole set
+    /// to both and asks each which ones it recognises — see
+    /// [`InitializeResult::claimed_options`]. A key nobody claims is a typo
+    /// and fails startup; one that two plugins claim is ambiguous and fails
+    /// too.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub options: serde_json::Map<String, serde_json::Value>,
 }
 
 /// One orchestrator-configured repository, as supplied to task_source
@@ -149,6 +187,40 @@ pub struct RepoInfo {
     /// the path as optional material).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The project this repository files into (`[[repositories]].project`,
+    /// 0.6.0 / #554) — the `name` of one of the [`ProjectInfo`] entries.
+    ///
+    /// `None` means no project is configured for it, which is the normal
+    /// state for a repository nobody files issues about. A source plugin uses
+    /// this as the *ingest filter* too: an item from a repository not bound to
+    /// one of its projects is none of its business.
+    ///
+    /// This replaces the reverse list each plugin used to keep
+    /// (`[[projects]].repos`, #542 / ADR-0056). One repository files into one
+    /// project, so binding it here makes "two plugins claim this repository"
+    /// unrepresentable rather than reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+/// One project this plugin owns, from `config.toml`'s `[[projects]]`
+/// (0.6.0, #554).
+///
+/// Only the entries whose `source` is this plugin are sent, so a plugin never
+/// has to filter — and the Orchestrator never has to understand what is
+/// inside [`options`](Self::options).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    /// The entry's `name`, which is what `[[repositories]].project` points at.
+    pub name: String,
+    /// Everything else written on the entry, verbatim.
+    ///
+    /// **No claim handshake here, unlike `[[workflows]]`.** A project entry
+    /// names exactly one plugin (`source`), so there is no ambiguity to
+    /// resolve: the whole table is that plugin's, and its own
+    /// `deny_unknown_fields` is what rejects a typo.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub options: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The Orchestrator's `[llm]` (AI Gateway) settings, as supplied to
@@ -166,10 +238,10 @@ pub struct LlmInfo {
     pub api_key: Option<String>,
 }
 
-/// One repository this task_source is the tracker for, and where a new item
-/// for it goes (#542).
+/// One repository this task_source files project items for, and where a new
+/// item for it goes (#542).
 ///
-/// The *forward* mapping repository → tracker, which nothing carried before:
+/// The *forward* mapping repository → project, which nothing carried before:
 /// [`RepoInfo`] and the Orchestrator's `[[repositories]]` describe a
 /// repository, and a task's `repo_hint` points backwards from an item to a
 /// repository. Neither answers "a new request about `totsuka` — which board
@@ -188,7 +260,7 @@ pub struct ClaimedRepo {
     ///
     /// Prose rather than a structured `{project_number, owner}` on purpose:
     /// the consumer is an agent's prompt, not code. A struct would force the
-    /// Orchestrator to know each tracker's shape and to render it back into a
+    /// Orchestrator to know each project's shape and to render it back into a
     /// sentence, which is the coupling this field exists to avoid — and it
     /// would need a new variant, i.e. a protocol change, for every future
     /// task_source. Nothing machine-checks the text; the triage rubric
@@ -204,14 +276,33 @@ pub struct InitializeResult {
     pub plugin_version: Version,
     /// Capabilities the plugin actually supports (F-33).
     pub capabilities: Capabilities,
-    /// Repositories this task_source is the tracker for (#542, 0.5.1).
+    /// Repositories this task_source files project items for (#542, 0.5.1).
     ///
     /// Empty (or absent) means "I claim nothing", which is what every plugin
     /// predating this version says by omission — so an empty list must never
-    /// be read as "this repository has no tracker anywhere", only as "not
+    /// be read as "this repository has no project anywhere", only as "not
     /// this plugin's". Non-task_source plugins leave it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub claimed_repos: Vec<ClaimedRepo>,
+    /// Which of the workflow options it was handed this plugin recognises as
+    /// its own (0.6.0, #554).
+    ///
+    /// The Orchestrator uses the union across a workflow's `source` and
+    /// `agent` to decide whether every key written on that workflow has
+    /// exactly one owner. **A plugin must claim only keys it actually
+    /// consumes**: claiming a key it ignores turns a typo into silence, which
+    /// is the failure this handshake exists to remove.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claimed_options: Vec<WorkflowOption>,
+}
+
+/// One `(workflow, key)` pair a plugin claims as its own (0.6.0, #554).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowOption {
+    /// The workflow the key was written on (`[[workflows]].name`).
+    pub workflow: String,
+    /// The key, as spelled in `config.toml`.
+    pub key: String,
 }
 
 /// `config/validate` params (O→P): the plugin config to validate (F-59).
@@ -219,6 +310,29 @@ pub struct InitializeResult {
 pub struct ConfigValidateParams {
     /// The plugin-specific config to check.
     pub config: serde_json::Value,
+    /// The workflows naming this plugin, with the options written on each
+    /// (0.6.0, #554) — the same list `initialize` supplied.
+    ///
+    /// Repeated here rather than remembered from `initialize` so the two calls
+    /// stay independent: `config/validate` is the offline-ish gate an operator
+    /// runs, and a plugin that answered it from state left over from a
+    /// different call would be validating something other than what it was
+    /// asked about.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflows: Vec<WorkflowInfo>,
+    /// The projects this plugin owns and the repositories bound to them
+    /// (0.6.0, #554) — the same lists `initialize` supplied, for the same
+    /// reason as `workflows`.
+    ///
+    /// A source needs both to say anything useful about its config: the
+    /// boards are in `[[projects]]` and their repositories in
+    /// `[[repositories]].project`, so validating the plugin's own table alone
+    /// would report "no boards configured" for every correct setup.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<ProjectInfo>,
+    /// The Orchestrator's repositories, with their `project` bindings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<RepoInfo>,
 }
 
 /// `config/validate` result (P→O).
@@ -245,6 +359,19 @@ pub struct ConfigValidateResult {
 pub struct TaskSubmitParams {
     /// The task to ingest.
     pub task: Task,
+    /// The workflow this task belongs to (`[[workflows]].name`), 0.6.0 / #554.
+    ///
+    /// **The plugin decides.** It already ran first-match over the workflows
+    /// it was given at `initialize`, so it knows; before 0.6.0 the
+    /// Orchestrator re-derived the same answer from `Task.status`/`labels`,
+    /// which was the *plugin's own* report of the task — the check and the
+    /// thing checked came from one place, so it protected against nothing
+    /// while forcing every trigger key into the Orchestrator's vocabulary.
+    ///
+    /// The Orchestrator verifies the two things it can: that a workflow of
+    /// this name exists, and that its `source` is the submitting plugin. A
+    /// mismatch is [`TaskSubmitStatus::Rejected`].
+    pub workflow: String,
 }
 
 /// The final disposition of a `task/submit` (0.1.6). Every variant is
@@ -264,8 +391,8 @@ pub enum TaskSubmitStatus {
     /// The task was already ingested (same `source` + task id) — an
     /// idempotent re-submit, e.g. a retry after a lost ack. Drop it.
     Duplicate,
-    /// Permanently unprocessable (e.g. no workflow matches the task).
-    /// `reason` says why; drop and log.
+    /// Permanently unprocessable (e.g. the named workflow does not exist,
+    /// or belongs to a different source). `reason` says why; drop and log.
     Rejected,
 }
 
@@ -327,32 +454,6 @@ pub struct TaskUpdateStatusParams {
     pub status: String,
 }
 
-/// How a source should deliver a published result to a human (0.5.2, #548).
-///
-/// Named from the *plugin's* vocabulary: `draft` is what the Slack source has
-/// always done (a `Draft` awaiting approval buttons), `direct` skips the
-/// approval and posts immediately. The Orchestrator decides which — from
-/// `[[workflows]].publish` — and the plugin obeys; the policy question "which
-/// workflows may post without approval" stays in core config where the
-/// operator wrote it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PublishDelivery {
-    /// Present the content for human approval before anything is visible
-    /// (the pre-0.5.2 behaviour, and what an absent field means).
-    Draft,
-    /// Post the content immediately, no approval step.
-    Direct,
-    /// A value this build does not know. **Must be treated as
-    /// [`Draft`](PublishDelivery::Draft)**:
-    /// the two known modes differ in whether a human gate is skipped, and
-    /// skipping a gate on an unrecognised instruction is the wrong side to
-    /// err on. `#[serde(other)]` so a future mode never makes the whole
-    /// params undeserializable (same contract as `NotReleased::Unknown`).
-    #[serde(other)]
-    Unrecognized,
-}
-
 /// `result/publish` params (O→P, F-07): write a result back to the source
 /// (Issue comment, Notion page body, …). The plugin decides the destination.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -364,25 +465,6 @@ pub struct ResultPublishParams {
     /// Content format hint (e.g. `markdown`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
-    /// How to deliver it to the human (0.5.2, #548). Absent — every
-    /// pre-0.5.2 Orchestrator — means [`PublishDelivery::Draft`], the
-    /// behaviour those Orchestrators were written against.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delivery: Option<PublishDelivery>,
-}
-
-impl ResultPublishParams {
-    /// The effective delivery mode: absent and unrecognised both resolve to
-    /// [`PublishDelivery::Draft`] — see the enum's docs for why unrecognised
-    /// must not skip the approval gate.
-    pub fn effective_delivery(&self) -> PublishDelivery {
-        match self.delivery {
-            Some(PublishDelivery::Direct) => PublishDelivery::Direct,
-            Some(PublishDelivery::Draft) | Some(PublishDelivery::Unrecognized) | None => {
-                PublishDelivery::Draft
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -778,21 +860,38 @@ mod tests {
                 name: "web-app".into(),
                 summary: Some("customer web app".into()),
                 path: Some("/repos/web-app".into()),
+                project: Some("tomo-prj".into()),
+            }],
+            projects: vec![ProjectInfo {
+                name: "tomo-prj".into(),
+                options: serde_json::json!({ "project_number": 7 })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
             }],
             llm: Some(LlmInfo {
                 base_url: "https://openrouter.ai/api/v1".into(),
                 model: "anthropic/claude-haiku-4.5".into(),
                 api_key: Some("sk-or-resolved".into()),
             }),
-            triggers: vec![TriggerInfo {
+            workflows: vec![WorkflowInfo {
                 workflow: "design".into(),
                 trigger: serde_json::json!({"project_status": "設計待ち"}),
+                instructions_kind: Some("design".into()),
+                task_id_prefix: None,
+                options: serde_json::json!({"publish": "direct"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
             }],
-            poll_interval_secs: Some(60),
         });
         round_trip(&InitializeResult {
             plugin_version: Version::new(1, 0, 0),
             claimed_repos: Vec::new(),
+            claimed_options: vec![WorkflowOption {
+                workflow: "design".into(),
+                key: "publish".into(),
+            }],
             capabilities: Capabilities {
                 hook_completion: true,
                 ..Default::default()
@@ -800,34 +899,37 @@ mod tests {
         });
         round_trip(&ConfigValidateParams {
             config: serde_json::json!({}),
+            workflows: vec![],
+            projects: vec![],
+            repositories: vec![],
         });
-        // The compatibility contract for the additive fields (`repositories`
-        // since 0.1.1, `llm` since 0.1.2, `triggers`/`poll_interval_secs`
-        // since 0.1.6): absent in old params (default), omitted when unset
-        // (an old plugin never sees an unknown field), and ignored by an
-        // older plugin when present.
+        // The absent-when-unset contract for the optional fields
+        // (`repositories`, `llm`, `workflows`): absent in minimal params
+        // (default), omitted when unset, and ignored when a plugin is sent a
+        // field it does not know.
         let old: InitializeParams =
             serde_json::from_str(r#"{"protocol_version":"0.1.0","config":{}}"#).unwrap();
         assert!(old.repositories.is_empty());
+        assert!(old.projects.is_empty());
         assert!(old.llm.is_none());
-        assert!(old.triggers.is_empty());
-        assert!(old.poll_interval_secs.is_none());
+        assert!(old.workflows.is_empty());
         let empty = InitializeParams {
             protocol_version: Version::new(0, 1, 2),
             config: serde_json::json!({}),
             repositories: vec![],
+            projects: vec![],
             llm: None,
-            triggers: vec![],
-            poll_interval_secs: None,
+            workflows: vec![],
         };
         let wire = serde_json::to_string(&empty).unwrap();
         assert!(!wire.contains("repositories"));
+        assert!(!wire.contains("projects"));
         assert!(!wire.contains("llm"));
-        assert!(!wire.contains("triggers"));
-        assert!(!wire.contains("poll_interval_secs"));
+        assert!(!wire.contains("workflows"));
         let ignored: ConfigValidateParams =
             serde_json::from_str(r#"{"config":{},"repositories":[{"name":"x"}]}"#).unwrap();
         assert_eq!(ignored.config, serde_json::json!({}));
+        assert!(ignored.workflows.is_empty());
         // `claimed_repos` (0.5.1, #542) under the same contract, this time on
         // the *result*: a plugin predating it sends no key and must read back
         // as "claims nothing" rather than failing to deserialize.
@@ -835,6 +937,11 @@ mod tests {
             serde_json::from_str(r#"{"plugin_version":"1.0.0","capabilities":{"outputs":[]}}"#)
                 .unwrap();
         assert!(old_result.claimed_repos.is_empty());
+        // `claimed_options` (0.6.0, #554) omits the same way. Note what an
+        // empty list means here: "I claim none of the keys I was handed", and
+        // the Orchestrator turns that into an error if nobody else claims
+        // them — silence is not consent.
+        assert!(old_result.claimed_options.is_empty());
         assert!(
             !serde_json::to_string(&old_result)
                 .unwrap()
@@ -845,6 +952,7 @@ mod tests {
         round_trip(&InitializeResult {
             plugin_version: Version::new(1, 0, 0),
             capabilities: Capabilities::default(),
+            claimed_options: Vec::new(),
             claimed_repos: vec![ClaimedRepo {
                 repo: "totsuka".into(),
                 destination: "GitHub Project tomoya-k31/#7 (user)".into(),
@@ -865,11 +973,11 @@ mod tests {
         round_trip(&ResultPublishParams {
             task_id: "42".into(),
             content: "# Design".into(),
-            delivery: Some(PublishDelivery::Direct),
             format: Some("markdown".into()),
         });
         round_trip(&TaskSubmitParams {
             task: sample_task(),
+            workflow: "gh-implement".into(),
         });
         round_trip(&TaskSubmitResult {
             status: TaskSubmitStatus::Accepted,
@@ -877,7 +985,7 @@ mod tests {
         });
         round_trip(&TaskSubmitResult {
             status: TaskSubmitStatus::Rejected,
-            reason: Some("no workflow matches source \"github\" → add one".into()),
+            reason: Some("workflow `gh-implement` is not defined → add it".into()),
         });
     }
 

@@ -58,7 +58,7 @@ totsuka setup
 
 計画が印字され、確認するとそこから先が副作用を持つ。**質問中の Ctrl-C は何も残さない。**
 
-`setup` は続けて `plugins/<name>.toml` の生成 → プラグインの install + enable → `doctor` まで走る。`init` を先に打つ必要はない（ディレクトリ作成は `setup` が内包する）。
+`setup` は続けて プラグイン個別設定（`config.toml` の `[<name>]` テーブル）の追記 → プラグインの install + enable → `doctor` まで走る。`init` を先に打つ必要はない（ディレクトリ作成は `setup` が内包する）。
 
 ## 3. シークレットを登録する
 

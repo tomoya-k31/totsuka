@@ -50,7 +50,7 @@ use std::time::Duration;
 
 use plugin_protocol::jsonrpc::{self, Notification, Request};
 use plugin_protocol::manifest::Manifest;
-use plugin_protocol::methods::{ClaimedRepo, InitializeParams, InitializeResult};
+use plugin_protocol::methods::{ClaimedRepo, InitializeParams, InitializeResult, WorkflowOption};
 use plugin_protocol::{Capabilities, version};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -70,24 +70,24 @@ pub struct PluginSpec {
     pub args: Vec<String>,
     /// The plugin's manifest (used for the F-54 compatibility check).
     pub manifest: Manifest,
-    /// Resolved plugin-specific config passed to `initialize` (F-64/F-65).
+    /// Resolved plugin-specific config passed to `initialize` (F-65, #554).
     pub init_config: Value,
     /// Orchestrator-configured repositories supplied at `initialize`
     /// (#109). Populated for task_source plugins only; empty otherwise
     /// (the field is omitted from the wire when empty).
     pub repositories: Vec<plugin_protocol::methods::RepoInfo>,
+    /// The `[[projects]]` entries this task_source owns (#554). Empty for
+    /// other kinds (omitted from the wire).
+    pub projects: Vec<plugin_protocol::methods::ProjectInfo>,
     /// The orchestrator's `[llm]` settings supplied at `initialize` as a
     /// source-side classification default (#119). Populated for task_source
     /// plugins only; `None` otherwise (omitted from the wire when unset).
     pub llm: Option<plugin_protocol::methods::LlmInfo>,
-    /// The workflow triggers targeting this task_source plugin, in
-    /// `[[workflows]]` definition order (0.1.6): a push source's watch
-    /// conditions. Empty for other kinds (omitted from the wire).
-    pub triggers: Vec<plugin_protocol::methods::TriggerInfo>,
-    /// `[plugins.{name}].poll_interval_secs`, forwarded at `initialize`
-    /// (0.1.6) as a push source's internal fetch cadence. `None` when unset
-    /// or for non-source kinds (omitted from the wire).
-    pub poll_interval_secs: Option<u64>,
+    /// The workflows naming this plugin, in `[[workflows]]` definition order
+    /// (0.1.6 as `triggers`, widened in 0.6.0): a source's watch conditions
+    /// and, for either kind, the plugin-owned options written on each
+    /// workflow. Empty when no workflow names it (omitted from the wire).
+    pub workflows: Vec<plugin_protocol::methods::WorkflowInfo>,
     /// Per-call RPC timeout.
     pub timeout: Duration,
 }
@@ -496,12 +496,13 @@ pub struct Plugin {
     incoming: Mutex<Option<mpsc::UnboundedReceiver<IncomingRequest>>>,
     capabilities: Capabilities,
     plugin_version: semver::Version,
-    /// Repositories this plugin declared itself the tracker for (0.5.1, #542).
+    /// Repositories this plugin files project items for (0.5.1, #542).
     ///
     /// Empty for every non-task_source plugin and for any plugin predating
     /// 0.5.1 — which is **not** the same as "these repositories have no
-    /// tracker", so a caller must never read an empty list that way.
+    /// project", so a caller must never read an empty list that way.
     claimed_repos: Vec<ClaimedRepo>,
+    claimed_options: Vec<WorkflowOption>,
 }
 
 impl std::fmt::Debug for Plugin {
@@ -577,6 +578,7 @@ impl Plugin {
             capabilities: Capabilities::default(),
             plugin_version: semver::Version::new(0, 0, 0),
             claimed_repos: Vec::new(),
+            claimed_options: Vec::new(),
         };
 
         // 3. initialize (F-65: config already has secrets resolved).
@@ -584,9 +586,9 @@ impl Plugin {
             protocol_version: orchestrator,
             config: spec.init_config,
             repositories: spec.repositories,
+            projects: spec.projects,
             llm: spec.llm,
-            triggers: spec.triggers,
-            poll_interval_secs: spec.poll_interval_secs,
+            workflows: spec.workflows,
         };
         let result: InitializeResult = plugin
             .call(plugin_protocol::method::INITIALIZE, &init)
@@ -596,6 +598,7 @@ impl Plugin {
             capabilities: result.capabilities,
             plugin_version: result.plugin_version,
             claimed_repos: result.claimed_repos,
+            claimed_options: result.claimed_options,
             ..plugin
         })
     }
@@ -605,9 +608,14 @@ impl Plugin {
         &self.capabilities
     }
 
-    /// The repositories this plugin is the tracker for (#542).
+    /// The repositories this plugin files project items for (#542).
     pub fn claimed_repos(&self) -> &[ClaimedRepo] {
         &self.claimed_repos
+    }
+
+    /// The workflow options this plugin recognised as its own (#554).
+    pub fn claimed_options(&self) -> &[WorkflowOption] {
+        &self.claimed_options
     }
 
     /// The plugin's own version (from `initialize`).
@@ -700,11 +708,22 @@ impl Plugin {
     }
 
     /// Ask the plugin to validate a plugin-specific config (F-59).
+    ///
+    /// The lists repeat what `initialize` supplied so the plugin answers about
+    /// what it is being asked, not about what it happened to remember.
     pub async fn config_validate(
         &self,
         config: Value,
+        workflows: Vec<plugin_protocol::methods::WorkflowInfo>,
+        projects: Vec<plugin_protocol::methods::ProjectInfo>,
+        repositories: Vec<plugin_protocol::methods::RepoInfo>,
     ) -> Result<plugin_protocol::methods::ConfigValidateResult, HostError> {
-        let params = plugin_protocol::methods::ConfigValidateParams { config };
+        let params = plugin_protocol::methods::ConfigValidateParams {
+            config,
+            workflows,
+            projects,
+            repositories,
+        };
         self.call(plugin_protocol::method::CONFIG_VALIDATE, &params)
             .await
     }
@@ -772,11 +791,18 @@ pub async fn validate_all(specs: Vec<(PluginSpec, Value)>) -> Vec<ValidatedPlugi
     let mut out = Vec::with_capacity(specs.len());
     for (spec, config) in specs {
         let name = spec.name.clone();
+        let workflows = spec.workflows.clone();
+        let projects = spec.projects.clone();
+        let repositories = spec.repositories.clone();
         let mut claimed_repos = Vec::new();
+        let mut claimed_options = Vec::new();
         let result = async {
             let plugin = Plugin::launch(spec).await?;
             claimed_repos = plugin.claimed_repos().to_vec();
-            let validation = plugin.config_validate(config).await;
+            claimed_options = plugin.claimed_options().to_vec();
+            let validation = plugin
+                .config_validate(config, workflows, projects, repositories)
+                .await;
             let _ = plugin.shutdown(VALIDATE_SHUTDOWN_GRACE).await;
             validation
         }
@@ -785,6 +811,7 @@ pub async fn validate_all(specs: Vec<(PluginSpec, Value)>) -> Vec<ValidatedPlugi
             name,
             result,
             claimed_repos,
+            claimed_options,
         });
     }
     out
@@ -800,6 +827,10 @@ pub struct ValidatedPlugin {
     /// which is why a caller must not read emptiness as "claims nothing" —
     /// pair it with `result`.
     pub claimed_repos: Vec<ClaimedRepo>,
+    /// Which workflow options it claimed at `initialize` (#554). Same caveat
+    /// as `claimed_repos`: empty after a failed launch means "no answer", not
+    /// "no claims".
+    pub claimed_options: Vec<WorkflowOption>,
 }
 
 /// Writer task: drain the outgoing channel to the plugin's stdin as NDJSON.

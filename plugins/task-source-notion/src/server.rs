@@ -15,7 +15,7 @@ use std::time::Duration;
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
     ClaimedRepo, ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    TaskUpdateStatusParams, TriggerInfo,
+    TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
 use plugin_sdk::{LineHandler, Reply, SubmitClient, poll_loop};
@@ -26,8 +26,8 @@ use crate::client::{NotionClient, static_config_errors};
 use crate::config::NotionConfig;
 use crate::transport::{NotionTransport, TransportSettings};
 
-/// The internal fetch cadence when the orchestrator supplies no
-/// `poll_interval_secs` (F-06's default, now applied plugin-side).
+/// The internal fetch cadence when `[notion]` sets no `poll_interval_secs`
+/// (F-06's default; the key is this plugin's own since 0.6.0, #554).
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
 
 /// Builds a transport from resolved connection settings. Abstracted so the
@@ -153,7 +153,7 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        let config: NotionConfig = match serde_json::from_value(init.config) {
+        let mut config: NotionConfig = match serde_json::from_value(init.config) {
             Ok(c) => c,
             Err(e) => {
                 return Reply::respond(Response::error(
@@ -165,14 +165,26 @@ where
                 ));
             }
         };
+        // The databases come from the Orchestrator's `[[projects]]` and their
+        // repositories from `[[repositories]].project` (#554), not `[notion]`.
+        config.databases =
+            match crate::config::DatabaseConfig::resolve(&init.projects, &init.repositories) {
+                Ok(d) => d,
+                Err(errors) => {
+                    return Reply::respond(Response::error(
+                        id,
+                        Error::new(error_code::CONFIG_INVALID, errors.join("; ")),
+                    ));
+                }
+            };
         let transport = self.factory.build(settings(&config));
         let client = Arc::new(NotionClient::new(config, transport));
-        let poll = if init.triggers.is_empty() {
+        let poll = if init.workflows.is_empty() {
             None
         } else {
             // 0 would make the loop spin without sleeping (API hammering);
             // fall back to the default rather than honoring it.
-            let secs = match init.poll_interval_secs {
+            let secs = match client.config().poll_interval_secs {
                 Some(0) => {
                     tracing::warn!(
                         "poll_interval_secs = 0 would busy-spin the poll loop → \
@@ -186,13 +198,19 @@ where
             let interval = Duration::from_secs(secs);
             let fetch_client = Arc::clone(&client);
             let handle = tokio::spawn(poll_loop(
-                init.triggers,
+                init.workflows,
                 interval,
                 self.submit.clone(),
-                move |trigger: &TriggerInfo| {
+                move |trigger: &WorkflowInfo| {
                     let client = Arc::clone(&fetch_client);
                     let condition = trigger.trigger.clone();
-                    async move { client.fetch(&condition).await.map_err(|e| e.to_string()) }
+                    let kind = trigger.instructions_kind.clone();
+                    async move {
+                        client
+                            .fetch(&condition, kind.as_deref())
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
                 },
             ));
             Some(handle.abort_handle())
@@ -207,10 +225,18 @@ where
             Ok(v) => v,
             Err(reply) => return reply.with_id(id),
         };
-        let config: NotionConfig = match serde_json::from_value(parsed.config) {
+        let mut config: NotionConfig = match serde_json::from_value(parsed.config) {
             Ok(c) => c,
             Err(e) => return ok_validate(id, vec![format!("config does not parse: {e}")]),
         };
+        // Same resolution as `initialize` (#554): validating the raw `[notion]`
+        // table alone would report "declare at least one database" for every
+        // correct config, since the databases are not in it.
+        config.databases =
+            match crate::config::DatabaseConfig::resolve(&parsed.projects, &parsed.repositories) {
+                Ok(d) => d,
+                Err(errors) => return ok_validate(id, errors),
+            };
         let mut errors = static_config_errors(&config);
         // Only ping the API if the config is otherwise well-formed (F-63).
         if errors.is_empty() {
@@ -262,6 +288,8 @@ where
 /// ever be `true`; it was removed in 0.5.0 (#496).
 fn capabilities_result(claimed_repos: Vec<ClaimedRepo>) -> Value {
     let result = InitializeResult {
+        // No workflow options of its own (#554).
+        claimed_options: Vec::new(),
         plugin_version: plugin_version(),
         claimed_repos,
         // No `outputs`: the deliverable is the agent's to write with Notion

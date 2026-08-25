@@ -5,7 +5,7 @@
 pub enum OrcaError {
     /// The `orca` binary could not be spawned (not installed / wrong path).
     #[error(
-        "cannot run the orca CLI (`{bin}`) → is orca installed and on PATH? set `orca_bin` in plugins/orca.toml: {source}"
+        "cannot run the orca CLI (`{bin}`) → is orca installed and on PATH? set `orca_bin` in `[orca]` of config.toml: {source}"
     )]
     Spawn {
         /// The binary we tried to run.

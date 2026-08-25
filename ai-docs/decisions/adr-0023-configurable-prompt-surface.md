@@ -43,7 +43,7 @@ claude / codex / opencode に差し込むプロンプト文が Rust の文字列
 
 ## 1. プロンプト文はデータとして外出しし、設定で上書き可能にする
 
-組み込みデフォルトを埋め込み `defaults.toml`（`include_str!` + `LazyLock`）へ移し、`config.toml` の `[prompts]`（グローバル）と `[[workflows]].prompts`（ワークフロー単位）で上書きできるようにする。プラグイン側は自分の `plugins/{name}.toml` を使う（プラグインは core の設定を見られないため）。
+組み込みデフォルトを埋め込み `defaults.toml`（`include_str!` + `LazyLock`）へ移し、`config.toml` の `[prompts]`（グローバル）と `[[workflows]].prompts`（ワークフロー単位）で上書きできるようにする。プラグイン側は自分の設定を使う（プラグインは core の設定を見られないため）。当時それは `plugins/{name}.toml` という別ファイルで、#554 以降は `config.toml` の `[<name>]` テーブルである（[ADR-0058](/decisions/adr-0058-config-ownership-boundary.md)）— 置き場所が変わっただけで、この決定の論点である「誰が持つか」は変わっていない。
 
 ## 2. 守る一線: プロンプトは「何を伝えるか」だけを変え、「何が動くか」は変えない
 

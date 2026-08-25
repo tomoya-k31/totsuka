@@ -4,14 +4,14 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/fable-5, at: 2026-08-24T10:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
 
 # 責務
 
-Notion データベースを totsuka のタスクソースとして接続する公式プラグイン（F-02/F-03）。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、stdio JSON-RPC 2.0（NDJSON）サーバとして起動する。[task-source-github](/components/task-source-github.md) と同じ構造を Notion REST API へ適用したもの。#189（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md) Phase B）で protocol 0.1.6 の **push 型**へ移行 — [plugin-sdk](/components/plugin-sdk.md) の `poll_loop` が `initialize` 供給の triggers を内部 cadence（`poll_interval_secs`、既定 60s）で fetch し、各タスクを `task/submit` で push する。orchestrator 側のポーリングは行われない。
+Notion データベースを totsuka のタスクソースとして接続する公式プラグイン（F-02/F-03）。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、stdio JSON-RPC 2.0（NDJSON）サーバとして起動する。[task-source-github](/components/task-source-github.md) と同じ構造を Notion REST API へ適用したもの。#189（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md) Phase B）で protocol 0.1.6 の **push 型**へ移行 — [plugin-sdk](/components/plugin-sdk.md) の `poll_loop` が `initialize` 供給の workflows を内部 cadence（`[notion].poll_interval_secs`、既定 60s — 0.6.0 / #554 で `[plugins.notion]` から移動）で fetch し、各タスクを `task/submit` で push する。orchestrator 側のポーリングは行われない。
 
 トークンは `initialize` の config で解決済みのものを受領し（F-65）、プラグイン自身は Keychain に触れない。JSON-RPC は stdout、診断ログは stderr（ホストがログへ転送）。GitHub と異なり、任意の DB 構造を扱うため **プロパティマッピング**（F-03）を設定で受け取り、共通 [`Task`](/components/plugin-protocol.md) スキーマ（F-01）へ正規化する。
 
@@ -19,7 +19,7 @@ Notion データベースを totsuka のタスクソースとして接続する�
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `plugins/notion.toml`（= `InitializeParams.config`）を型付け。`token` / **`[[databases]]`**（各要素が `database_id` + `repos`、#542）/ `notion_user_id`（F-08 の自己判定）/ `property_map`（title / status(+`status_kind` status\|select) / assignee / priority / repo_hint / body ↔ Notion プロパティ名, F-03）/ `body_source`（none\|property\|page）/ `in_progress_statuses` / `status_map`（orchestrator status→Notion option）/ `priority_map`（option 名→数値）/ `source_name` / `api_url` / `api_version` / `max_retries` / `rate_limit_rps`。`deny_unknown_fields`（要素側も）。`claimed_repos()` が `[[databases]]` と `property_map` から `initialize` 応答の claim を組み立てる。要素の `triage_status`（任意、#548 派生）を書くと destination の status 列に「set it to `値`」が入る。`property_map.status` 未設定との組は `config/validate` がエラー（埋める列を名指しできない指示になるため）。**この検査は `initialize` では走らない**（`project_number` と同じ分離）— 未 validate の設定は起動し、status 指示が黙って落ちるだけになる |
+| `config` | `[notion]`（= `InitializeParams.config`）を型付け。`token` / `notion_user_id`（F-08 の自己判定）/ `property_map`（title / status(+`status_kind` status\|select) / assignee / priority / repo_hint / body ↔ Notion プロパティ名, F-03）/ `body_source`（none\|property\|page）/ `in_progress_statuses` / `status_map`（orchestrator status→Notion option）/ `priority_map`（option 名→数値）/ `source_name` / `api_url` / `api_version` / `max_retries` / `rate_limit_rps`。`deny_unknown_fields`。**データベースはここに無い**（#554）: Orchestrator の `[[projects]]`（`source = "notion"` の要素）から `initialize` で届き、`DatabaseConfig::resolve` が `RepoInfo.project` の紐付けと突き合わせて組み立てる。要素のキーは `database_id` / `triage_status`（`DatabaseOptions`、こちらも `deny_unknown_fields`）。`claimed_repos()` はそこと `property_map` から `initialize` 応答の claim を組み立てる。`triage_status`（任意、#548 派生）を書くと destination の status 列に「set it to `値`」が入る。`property_map.status` 未設定との組は `config/validate` がエラー（埋める列を名指しできない指示になるため）。**この検査は `initialize` では走らない**（`project_number` と同じ分離）— 未 validate の設定は起動し、status 指示が黙って落ちるだけになる |
 | `transport` | `NotionTransport` trait（`request(method, path, body, idempotent)`）＋ reqwest 実装 `ReqwestTransport`（bearer 認証・`Notion-Version` ヘッダ固定・タイムアウト・指数バックオフ §5.3・3rps スロットリング）。ロジックを録画レスポンスでテストするための seam |
 | `blocks` | Notion ブロック ↔ Markdown 変換。読み（`blocks_to_markdown`, ページ本文→body）は主要ブロック型（heading/paragraph/bullet/numbered/to_do/quote/code）対応・未対応型はプレーンテキスト化。書き（`markdown_to_blocks`, F-07）は heading/bullet/quote/paragraph を生成し、2000 文字/リッチテキストの上限で分割（マルチバイト境界安全） |
 | `client` | `NotionClient<T: NotionTransport>`。`fetch`（databases query をページング取得→property_map で `Task` 正規化→トリガー絞り込み→取り込み制御 F-08。body=page 時のみ生存タスクのブロックを取得）/ `update_status`（DB スキーマから option を検証、未知 option はエラー→ページ property を PATCH, F-84）/ `publish`（Markdown→blocks 変換、100 件バッチで追記, F-07）/ `validate`（users/me 疎通＋マップ先プロパティ存在確認 F-59） |
@@ -32,9 +32,9 @@ Notion データベースを totsuka のタスクソースとして接続する�
 
 # 取り込み制御（F-08）
 
-fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`[[databases]]` の全データベースを設定順に走査し**（#542）、それぞれについて: まずトリガー（`status` / raw `filter`）で候補を絞り（可能なら databases query の server-side filter で削減）、次に多人数運用ゲーティングを適用する: assignee（people プロパティ）が他者のタスクを除外（自分は `notion_user_id` で判定、未設定時は未 assign のみ取り込み）、`in_progress_statuses` のステータスを除外、**そのデータベースの `repos` 外**を除外。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
+fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`[[projects]]` の全データベースを設定順に走査し**（#542）、それぞれについて: まずトリガー（`status` / raw `filter`）で候補を絞り（可能なら databases query の server-side filter で削減）、次に多人数運用ゲーティングを適用する: assignee（people プロパティ）が他者のタスクを除外（自分は `notion_user_id` で判定、未設定時は未 assign のみ取り込み）、`in_progress_statuses` のステータスを除外、**そのデータベースに紐づかないリポジトリ**を除外（紐付けは `[[repositories]].project`、#554）。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
 
-**`repos` によるフィルタは github と非対称で、条件付きである。** GitHub の issue は必ずリポジトリを持つが、Notion のページの `repo_hint` は任意プロパティなので、値が無いページは**そのまま取り込む**（Orchestrator が従来どおり F-11 で解決する）。落としてしまうと、`repo_hint` をマップしていない利用者は 1 件も取り込めなくなる。
+**この紐付けによるフィルタは github と非対称で、条件付きである。** GitHub の issue は必ずリポジトリを持つが、Notion のページの `repo_hint` は任意プロパティなので、値が無いページは**そのまま取り込む**（Orchestrator が従来どおり F-11 で解決する）。落としてしまうと、`repo_hint` をマップしていない利用者は 1 件も取り込めなくなる。
 
 **1 データベースの失敗は poll 全体の失敗にする**（github と同じ理由: 飛ばすと「取り込むものが無い」と区別できない）。
 
@@ -44,7 +44,7 @@ fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tas
 
 # capabilities（F-83）
 
-manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.1.6, <0.6"`）と `initialize` 応答で `kind = task_source` を宣言する。**`outputs` は空**（#398）—— 成果物はエージェントが Notion MCP で自分で書くので、このプラグインは何も publish しない。
+manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.6.0, <0.7"`）と `initialize` 応答で `kind = task_source` を宣言する。**`outputs` は空**（#398）—— 成果物はエージェントが Notion MCP で自分で書くので、このプラグインは何も publish しない。
 
 # テスト
 
@@ -56,7 +56,7 @@ manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.1
 
 # 成果物の書き込み（#398 で非推奨）
 
-`design` / `implement` profile の workflow は `output = "none"` になり、成果物はエージェントが Notion MCP で自分で書く。**`result/publish` の実体は削除済み**（#398）。`blocks.rs` は**読み取り方向だけ**が残った（`blocks_to_markdown` / `rich_text_plain`）—— ADR-0033 は「`blocks.rs` の削除」と書いたが、ページ本文をタスク本体に載せる経路が使い続けているので、消えたのは書き込み方向（`markdown_to_blocks` とその補助）だけである。`answer` / `triage` profile をこのソースで使うには **`output = "none"` を明示する**。代わりに `instructions_kind`（コアが `TriggerInfo.trigger` に焼き込む）から `[prompts]` の指示文を選び、`Task.instructions` に載せる — これが書き込み先をエージェントへ伝える唯一の経路で、**旧プラグインでは無言で欠落する**（capability 宣言が無いので probe できない。コアと同時にリリースすること）。
+`design` / `implement` profile の workflow は `output = "none"` になり、成果物はエージェントが Notion MCP で自分で書く。**`result/publish` の実体は削除済み**（#398）。`blocks.rs` は**読み取り方向だけ**が残った（`blocks_to_markdown` / `rich_text_plain`）—— ADR-0033 は「`blocks.rs` の削除」と書いたが、ページ本文をタスク本体に載せる経路が使い続けているので、消えたのは書き込み方向（`markdown_to_blocks` とその補助）だけである。`answer` / `triage` profile をこのソースで使うには **`output = "none"` を明示する**。代わりに `instructions_kind`（コアが `WorkflowInfo` の専用フィールドで送る。0.6.0 までは trigger に焼き込んでいた）から `[prompts]` の指示文を選び、`Task.instructions` に載せる — これが書き込み先をエージェントへ伝える唯一の経路で、**旧プラグインでは無言で欠落する**（capability 宣言が無いので probe できない。コアと同時にリリースすること）。
 
 # 関連
 

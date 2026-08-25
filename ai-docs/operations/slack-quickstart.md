@@ -25,7 +25,7 @@ owner: tomoya-k31
 
 # 2. トークンを保管する
 
-**通常は 1Password に置く。** 手順 3 で `plugins/slack.toml` に書かれるのは**参照であって、トークンの値ではない**。
+**通常は 1Password に置く。** 手順 3 で `[slack]` に書かれるのは**参照であって、トークンの値ではない**。
 
 **`setup` が書く参照に合わせること。** 1Password バックエンドを選ぶと `setup` は vault `Dev` / item `totsuka` の固定形（`SecretBackend::reference`）を書くので、別の item に入れると**設定が指す先と実際の保管先が食い違い、プラグインが起動できない**:
 
@@ -41,7 +41,7 @@ op item edit totsuka slack-app='xapp-…'
 op item edit totsuka slack-bot='xoxb-…'    # 通知ナッジを使う場合
 ```
 
-**vault 名 `Dev` も固定である。** 別の vault を使っているなら、`setup` の生成後に `plugins/slack.toml` の参照を手で書き換える（手で書く場合は下記のとおり任意の参照でよい）。
+**vault 名 `Dev` も固定である。** 別の vault を使っているなら、`setup` の生成後に `[slack]` の参照を手で書き換える（手で書く場合は下記のとおり任意の参照でよい）。
 
 macOS でしか使わないなら Keychain でもよい（参照は `keychain:totsuka/slack-user` の形になり、こちらも `setup` の生成と一致する）:
 
@@ -59,7 +59,7 @@ security add-generic-password -U -s totsuka -a slack-bot  -w 'xoxb-…'   # 通�
 totsuka setup
 ```
 
-レシピの選択で **「Slack — reply as yourself」** を選ぶ。聞かれるのはリポジトリと、手順 2 で控えたメンバー ID、リポジトリ分類用の LLM だけで、`plugins/slack.toml` の生成・プラグインの install + enable・`doctor` の実行までこの 1 コマンドで済む。トークンの**値**は聞かれない（[ADR-0028](/decisions/adr-0028-setup-wizard.md)）。
+レシピの選択で **「Slack — reply as yourself」** を選ぶ。聞かれるのはリポジトリと、手順 2 で控えたメンバー ID、リポジトリ分類用の LLM だけで、`[slack]` の生成・プラグインの install + enable・`doctor` の実行までこの 1 コマンドで済む。トークンの**値**は聞かれない（[ADR-0028](/decisions/adr-0028-setup-wizard.md)）。
 
 手順 2 のトークン保管がまだなら、`setup` が登録コマンドのチェックリストを印字するので、それから登録する。
 
@@ -83,12 +83,12 @@ totsuka plugin install --bundled slack --enable
 [plugins.slack]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 5   # Socket Mode バッファの吸い上げ周期（推奨）
 
-# 任意: 自分が :eyes: を付けたらタスクにする（#396）。catch-all より前に置くこと
-# —— trigger = {} は全マッチなので、後ろに置くと絶対に届かない。
-# 順序を間違えると `totsuka config validate` が warning で名指しする
-# （"move X above Y"）ので、書いたら一度通すこと。
+# 任意: 自分が :eyes: を付けたらタスクにする（#396）。どの workflow が
+# 選ばれるかはプラグインが決める（0.6.0 / #554）: リアクションは絵文字で、
+# メンションは「reaction を持たない workflow」で選ぶ。並び順は関係ない。
+# 同じ絵文字を 2 つの workflow に書く／reaction 無しの workflow を 2 つ書くと
+# `initialize`（= `totsuka config validate` の online パート）が拒否する。
 # 他人が同じ絵文字を付けても起動しない（緩和する設定は無い）。
 # 名前はコロン有無どちらでも可。👀 は eyes、👁 は eye で別物。
 [[workflows]]
@@ -108,9 +108,10 @@ agent = "herdr"
 output = "source"        # result/publish → 承認フローへ
 ```
 
-`~/.config/totsuka/plugins/slack.toml`:
+`~/.config/totsuka/config.toml` の `[slack]` テーブル:
 
 ```toml
+[slack]
 app_token = "op://Dev/totsuka/slack-app"
 user_token = "op://Dev/totsuka/slack-user"
 bot_token = "op://Dev/totsuka/slack-bot"  # 任意: 返信案/ピッカー到着の通知 DM（#305）。

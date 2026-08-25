@@ -152,29 +152,58 @@ async fn call(srv: &mut Server<FakeFactory>, id: i64, method: &str, params: Valu
 fn init_config() -> Value {
     json!({
         "token": "ghp_test", "github_login": "me",
-        "projects": [{ "owner": "me", "project_number": 1, "repos": ["totsuka"] }],
         "in_progress_statuses": ["実装中"],
-        "status_map": { "レビュー待ち": "In Review" }
+        "status_map": { "レビュー待ち": "In Review" },
+        // The fetch cadence is this plugin's own `[github]` key since 0.6.0
+        // (#554) — it arrives inside `config`, not beside it.
+        "poll_interval_secs": 60
     })
 }
 
+/// The board this plugin polls, as the Orchestrator supplies it since #554:
+/// a `[[projects]]` entry, plus the `[[repositories]]` bound to it.
+fn one_board() -> (Value, Value) {
+    (
+        json!([{ "name": "board-1", "options": { "owner": "me", "project_number": 1 } }]),
+        json!([{ "name": "totsuka", "project": "board-1" }]),
+    )
+}
+
 /// Two boards, each tracking a different repository (#542).
-fn two_board_config() -> Value {
-    json!({
-        "token": "ghp_test", "github_login": "me",
-        "projects": [
-            { "owner": "me", "project_number": 1, "repos": ["totsuka"] },
-            { "owner": "acme", "owner_type": "organization",
-              "project_number": 3, "repos": ["web-app"] }
-        ],
-        "in_progress_statuses": ["実装中"],
-        "status_map": { "レビュー待ち": "In Review" }
-    })
+fn two_boards() -> (Value, Value) {
+    (
+        json!([
+            { "name": "board-1", "options": { "owner": "me", "project_number": 1 } },
+            { "name": "board-3", "options": {
+                "owner": "acme", "owner_type": "organization", "project_number": 3 } }
+        ]),
+        json!([
+            { "name": "totsuka", "project": "board-1" },
+            { "name": "web-app", "project": "board-3" }
+        ]),
+    )
 }
 
 /// `initialize` params wrap the plugin config alongside the protocol version.
 fn init_params() -> Value {
-    json!({ "protocol_version": "0.1.0", "config": init_config() })
+    let (projects, repositories) = one_board();
+    json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+    })
+}
+
+/// [`init_params`] with the two-board layout, at an explicit version.
+fn init_params_two_boards_at(version: &str) -> Value {
+    let (projects, repositories) = two_boards();
+    json!({
+        "protocol_version": version,
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+    })
 }
 
 /// A project-items page with four items exercising every gating branch.
@@ -298,7 +327,7 @@ async fn config_validate_reports_invalid_token() {
         &mut srv,
         1,
         "config/validate",
-        json!({ "config": init_config() }),
+        json!({ "config": init_config(), "projects": one_board().0, "repositories": one_board().1 }),
     )
     .await;
     let result = resp
@@ -318,9 +347,15 @@ async fn config_validate_flags_static_problem_without_network() {
     let mut srv = server(&shared);
 
     // project_number = 0 is caught statically; no transport call is made.
-    let mut bad = init_config();
-    bad["projects"][0]["project_number"] = json!(0);
-    let resp = call(&mut srv, 1, "config/validate", json!({ "config": bad })).await;
+    let (mut projects, repositories) = one_board();
+    projects[0]["options"]["project_number"] = json!(0);
+    let resp = call(
+        &mut srv,
+        1,
+        "config/validate",
+        json!({ "config": init_config(), "projects": projects, "repositories": repositories }),
+    )
+    .await;
     let result = resp.result.unwrap();
     assert_eq!(result["valid"], false);
     assert!(
@@ -345,13 +380,15 @@ async fn ingests_task_assigned_to_me_among_multiple_assignees() {
             "labels": { "nodes": [] } } } ]
     } } } } }),
     ));
+    let (projects, repositories) = one_board();
     let params = json!({
         "protocol_version": "0.1.6",
         "config": init_config(),
-        "triggers": [
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
             { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
         ],
-        "poll_interval_secs": 60
     });
     call(&mut srv, 1, "initialize", params).await;
 
@@ -412,13 +449,15 @@ async fn initialize_with_triggers_polls_and_submits() {
 
     // The first tick runs before any sleep, consuming this canned page.
     shared.push(Canned::Data(fetch_response()));
+    let (projects, repositories) = one_board();
     let params = json!({
         "protocol_version": "0.1.6",
         "config": init_config(),
-        "triggers": [
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
             { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
         ],
-        "poll_interval_secs": 60
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
     assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
@@ -468,13 +507,15 @@ async fn a_poll_walks_every_board_and_each_board_gates_its_own_repos() {
     // Board order is config order, so the queue order is fixed.
     shared.push(Canned::Data(fetch_response()));
     shared.push(Canned::Data(web_app_page()));
+    let (projects, repositories) = two_boards();
     let params = json!({
         "protocol_version": "0.5.1",
-        "config": two_board_config(),
-        "triggers": [
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
             { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
         ],
-        "poll_interval_secs": 60
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
     assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
@@ -516,7 +557,7 @@ async fn a_poll_walks_every_board_and_each_board_gates_its_own_repos() {
 async fn initialize_publishes_the_repository_to_board_mapping() {
     let shared = Shared::default();
     let mut srv = server(&shared);
-    let params = json!({ "protocol_version": "0.5.1", "config": two_board_config() });
+    let params = init_params_two_boards_at("0.5.1");
     let resp = call(&mut srv, 1, "initialize", params).await;
     let claims = resp.result.expect("initialize result")["claimed_repos"].clone();
     assert_eq!(claims.as_array().map(Vec::len), Some(2));
@@ -542,7 +583,7 @@ async fn update_status_scans_past_a_board_that_does_not_hold_the_item() {
         &mut srv,
         1,
         "initialize",
-        json!({ "protocol_version": "0.5.1", "config": two_board_config() }),
+        init_params_two_boards_at("0.5.1"),
     )
     .await;
 
@@ -593,7 +634,7 @@ async fn a_board_without_the_target_column_does_not_abort_the_search() {
         &mut srv,
         1,
         "initialize",
-        json!({ "protocol_version": "0.5.1", "config": two_board_config() }),
+        init_params_two_boards_at("0.5.1"),
     )
     .await;
 
@@ -637,7 +678,7 @@ async fn a_missing_option_on_the_items_own_board_is_an_error() {
         &mut srv,
         1,
         "initialize",
-        json!({ "protocol_version": "0.5.1", "config": two_board_config() }),
+        init_params_two_boards_at("0.5.1"),
     )
     .await;
 
@@ -675,7 +716,7 @@ async fn update_status_for_an_item_on_no_board_names_every_board() {
         &mut srv,
         1,
         "initialize",
-        json!({ "protocol_version": "0.5.1", "config": two_board_config() }),
+        init_params_two_boards_at("0.5.1"),
     )
     .await;
 

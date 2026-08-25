@@ -5,21 +5,21 @@
 //! to delegate `config/validate` (F-59). `show` prints the effective files,
 //! masking secret-looking values with `--redacted`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 
 use clap::Subcommand;
 use orchestrator_core::adapters::plugin_host;
 use orchestrator_core::config::{self, FindingSeverity};
 
-use orchestrator_core::plugins::plugin_spec;
+use orchestrator_core::plugins::{check_workflow_options, plugin_spec};
 
 use crate::common::{CliError, Cx};
 
 /// Config subcommands.
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
-    /// Validate config.toml and plugins/{name}.toml.
+    /// Validate config.toml, the Orchestrator's keys and every plugin's.
     Validate {
         /// Skip the online part (launching plugins for `config/validate`).
         #[arg(long)]
@@ -60,21 +60,35 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
     if !offline && !errors {
         let mut specs = Vec::new();
         for (name, _) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
-            // `plugin_spec` already read and secret-resolved plugins/{name}.toml
-            // into `init_config`; reuse it rather than resolving secrets twice
+            // `plugin_spec` already took and secret-resolved the plugin's
+            // `[<name>]` table into `init_config`; reuse it rather than
+            // resolving secrets twice
             // (a second Keychain access could trigger a second Touch prompt).
-            let spec = plugin_spec(&cx.store(), &cx.plugin_config_dir(), &cfg, name, &env)?;
+            let spec = plugin_spec(&cx.store(), &cfg, name, &env)?;
             let init_config = spec.init_config.clone();
             specs.push((spec, init_config));
         }
         let runtime = tokio::runtime::Runtime::new()?;
-        for plugin_host::ValidatedPlugin { name, result, .. } in
-            runtime.block_on(plugin_host::validate_all(specs))
+        // Only plugins that answered go into the claim map: a name missing
+        // from it means "no answer", which `check_workflow_options` treats as
+        // unjudgeable rather than as "claims nothing" (#554).
+        let mut claims: BTreeMap<String, Vec<plugin_protocol::methods::WorkflowOption>> =
+            BTreeMap::new();
+        for plugin_host::ValidatedPlugin {
+            name,
+            result,
+            claimed_options,
+            ..
+        } in runtime.block_on(plugin_host::validate_all(specs))
         {
             match result {
-                Ok(v) if v.valid => println!("ok: plugin `{name}` accepted its config"),
+                Ok(v) if v.valid => {
+                    claims.insert(name.clone(), claimed_options);
+                    println!("ok: plugin `{name}` accepted its config");
+                }
                 Ok(v) => {
                     errors = true;
+                    claims.insert(name.clone(), claimed_options);
                     for problem in v.errors {
                         println!("error: plugin `{name}`: {problem}");
                     }
@@ -85,8 +99,19 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
                 }
             }
         }
+        for issue in check_workflow_options(&cfg, &claims) {
+            errors = true;
+            println!("error: {issue}");
+        }
     } else if offline {
         println!("note: --offline skipped plugin config/validate probes (F-63)");
+        // Naming the degradation: the plugin-defined keys on `[[workflows]]`
+        // are checked by asking the plugins, so `--offline` cannot check them
+        // at all — a typo there passes here and fails at `run` (#554).
+        println!(
+            "note: --offline cannot check plugin-defined `[[workflows]]` keys; \
+             `totsuka run` still refuses to start on an unclaimed one"
+        );
     }
 
     if errors {
@@ -110,20 +135,6 @@ fn show(cx: &Cx, redacted: bool) -> Result<(), CliError> {
     })?;
     println!("# {}", cx.config_path.display());
     print_toml(&contents, redacted)?;
-
-    let plugin_dir = cx.plugin_config_dir();
-    if let Ok(entries) = std::fs::read_dir(&plugin_dir) {
-        let mut paths: Vec<_> = entries
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "toml"))
-            .collect();
-        paths.sort();
-        for path in paths {
-            println!("\n# {}", path.display());
-            print_toml(&std::fs::read_to_string(&path)?, redacted)?;
-        }
-    }
 
     // `show` prints the *files*, so the env layer is not folded into the TOML
     // above — but leaving it out entirely would misrepresent what the daemon

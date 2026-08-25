@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:1a6f0ee472dc41f8adbbaa107fbb8ea5ca13596e9bd92d3158c2c895b07fb593 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:0c4da921b332fe2b83ceb51d1a7c1d24ed759289889cead16eae4c83dd08cc90 -->
 
 # プラグイン開発ガイド
 
@@ -34,7 +34,7 @@ plugin-protocol = { git = "https://github.com/tomoya-k31/totsuka" }
 name = "github"                     # バイナリ名と一致させる
 kind = "task_source"                # task_source | agent_ide | notifier
 version = "0.1.0"                   # プラグイン自身の版
-protocol_version = ">=0.1.6, <0.6"  # 対応する Orchestrator プロトコルの範囲
+protocol_version = ">=0.6.0, <0.7"  # 対応する Orchestrator プロトコルの範囲
 
 [capabilities]                      # 実装しているものだけ宣言する
 state_stream = true                 # agent: 状態ストリーム対応
@@ -52,11 +52,15 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 
 ### 範囲の決め方
 
-**上限**は、下回っていたい破壊的変更の**次**のメジャー／マイナーに置く（現行なら `<0.6`）。上限 `<0.3` のマニフェストは 0.3.0 の Orchestrator に、`<0.4` は 0.4.0 に、`<0.5` は 0.5.0 に、それぞれ起動を拒否される。
+**上限**は、下回っていたい破壊的変更の**次**のメジャー／マイナーに置く（現行なら `<0.7`）。上限 `<0.3` のマニフェストは 0.3.0 の Orchestrator に、`<0.4` は 0.4.0 に、`<0.5` は 0.5.0 に、`<0.6` は 0.6.0 に、それぞれ起動を拒否される。
 
-**下限も上限と同じくらい意味を持ち、決めるのは「何に依存しているか」である。** プラグインの kind でも、その時点の最新プロトコルでもない。herdr プラグインが `>=0.2.3` を宣言しているのは、ツール起動に必要なフィールドが入ったのが 0.2.3 で、コマンドラインを自前で組み立てるフォールバックをもう持っていないからである。下限で弾いておくことが、削除したフォールバックを「非推奨」ではなく**到達不能**にしている。
+**下限も上限と同じくらい意味を持ち、決めるのは「何に依存しているか」である。** プラグインの kind でも、その時点の最新プロトコルでもない。
 
-同じ kind の orca プラグインは `>=0.1.0` のままである。`orca` CLI を駆動していてそのフィールドを一度も読まないので、下限を上げると**問題なく動く Orchestrator を弾く**ことになる。
+0.6.0 では同梱プラグインが結果として全部 `>=0.6.0` に揃ったが、それは全部が同じものに依存しているからである —— `initialize` が改名され、その呼び出しは kind を問わず全プラグインが読む。揃った結果を規則と読み違えないこと。
+
+**揃わない例のほうが規則をよく表す。** 0.4.0 で herdr プラグインだけを `>=0.2.3` へ上げたのは、ツール起動に必要なフィールドが入ったのが 0.2.3 で、コマンドラインを自前で組み立てるフォールバックをもう持っていないからである。下限で弾いておくことが、削除したフォールバックを「非推奨」ではなく**到達不能**にしている。
+
+同じ kind の orca プラグインは `>=0.1.0` のままだった。`orca` CLI を駆動していてそのフィールドを一度も読まないので、下限を上げると**問題なく動く Orchestrator を弾く**ことになる。
 
 ## メソッド
 
@@ -67,22 +71,25 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 | メソッド | 方向 | 内容 |
 |---|---|---|
 | `initialize` | O→P | 解決済みの設定とプロトコル版を渡す。プラグインは自分の版と capability を返す |
-| `config/validate` | O→P | プラグイン設定を検証する |
+| `config/validate` | O→P | プラグイン設定を検証する。`initialize` と同じ workflows / projects / repositories も一緒に届くので、記憶ではなく「今聞かれているもの」を検証する |
 | `shutdown` | O→P | 猶予付きで終了を要求する |
 
 `initialize` は `task_source` に対して、二重に設定せずに済むものをいくつか渡す。いずれも任意なので、使わないなら無視してよい。
 
 - `repositories: [{name, summary?, path?}]` — Orchestrator 側のリポジトリ設定。ソース側でリポジトリを解決するプラグインは自前設定の重複を省ける
 - `llm: {base_url, model, api_key?}` — Orchestrator 側の LLM 設定（鍵は解決済み）。プラグイン自身の LLM 設定があればそちらを優先し、これは既定値として扱う
-- `triggers: [{workflow, trigger}]` と `poll_interval_secs` — 何を監視するかと、どの周期で見るか。イベント駆動のソースは周期を無視してよい
+- `workflows: [{workflow, trigger, instructions_kind?, task_id_prefix?, options}]` — 自分を `source` または `agent` として名指す workflow が、設定に書かれた順で届く。`trigger` はソースが監視する条件で、運用者が書いたとおり素通しで届く（agent には空オブジェクト）。`instructions_kind` / `task_id_prefix` は workflow の `profile` から Orchestrator が導出した値。`options` はその workflow に書かれた、Orchestrator が解釈しないキー
+- `projects: [{name, options}]` — 自分が所有するプロジェクト（`source` が自分の `[[projects]]` エントリ）。各プロジェクトに紐づくリポジトリは `[[repositories]].project` から届く
+
+ポーリング型ソースの取得周期はプラグイン自身の設定である: `poll_interval_secs` を自分の `[<name>]` テーブルに置き、`config` から読む。
 
 ### task_source
 
-**task_source は push 専用である。** タスクを見つけたら `task/submit` を Orchestrator へ自分から送る。Orchestrator がタスクを取りに来る RPC は存在しない。イベント駆動のソース（Webhook や Socket）は受信のたびに送り、ポーリングが自然なソースは `initialize` で受け取った `triggers` と `poll_interval_secs` で自前のタイマーを回す。そのタイマーは `plugin-sdk` クレートが `poll_loop` として提供している。
+**task_source は push 専用である。** タスクを見つけたら `task/submit` を Orchestrator へ自分から送る。Orchestrator がタスクを取りに来る RPC は存在しない。イベント駆動のソース（Webhook や Socket）は受信のたびに送り、ポーリングが自然なソースは `initialize` で受け取った `workflows` と、自分の `[<name>]` テーブルの `poll_interval_secs` で自前のタイマーを回す。そのタイマーは `plugin-sdk` クレートが `poll_loop` として提供している。
 
 | メソッド | 方向 | 内容 |
 |---|---|---|
-| `task/submit` | **P→O request** | 見つけたタスクを push する。Orchestrator は永続化してから応答する |
+| `task/submit` | **P→O request** | 見つけたタスクを、**属する workflow を名指して** push する。受け取った workflow 群に対して first-match を走らせたのは自分なので既に分かっており、Orchestrator はその名前が実在して自分のものかだけを確かめる。Orchestrator は永続化してから応答する |
 | `task/update_status` | O→P | タスクの状態遷移を伝える。ソース側へ反映する |
 | `result/publish` | O→P | 成果物をソースへ書き戻す |
 
@@ -182,6 +189,19 @@ totsuka plugin install ./dist/github
 | `notifier` | `notifier-macos`（osascript） |
 
 最小の骨格としては `crates/orchestrator-core/src/bin/mock_plugin.rs` があり、設定駆動で全 kind を演じる。
+
+## 設定の置き場所
+
+プラグイン自身の設定は `config.toml` のトップレベル `[<name>]` テーブルである。`<name>` は `[plugins.<name>]` のロスター名 = バイナリ名。Orchestrator は中身を解釈せず、シークレット参照だけ解決して `initialize` の `config` として渡す。ロスターに無い名前のトップレベルテーブルは設定エラーになるので、タイポは黙って無視されずに報告される。
+
+Orchestrator 側の構造体にキーを定義することもできる:
+
+| 置き場所 | 所有の決め方 | 実装すること |
+|---|---|---|
+| `[[workflows]]` | **聞いて決める。** 余ったキーはその workflow の `source` と `agent` に届き、ちょうど 1 つが引き取る | `claimed_options` に `{workflow, key}` を返す。**消費しないキーを claim しない** —— タイポを沈黙に変える |
+| `[[projects]]` | **`source` が決める。** エントリはちょうど 1 つのプラグインを名指す | `deny_unknown_fields` の構造体へデシリアライズするだけ。握手は不要 |
+
+誰も引き取らない workflow のキーは起動を止める。2 つが引き取る場合も同じ。
 
 ## 動作確認
 

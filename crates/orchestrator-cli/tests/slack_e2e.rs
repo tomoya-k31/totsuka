@@ -429,7 +429,7 @@ fn install_plugin(env: &Env, name: &str, kind: &str, binary: &Path) {
         dir.join("plugin.toml"),
         format!(
             "name = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.1.0\"\n\
-             protocol_version = \">=0.1.6, <0.6\"\n\n[capabilities]\nstate_stream = true\n\
+             protocol_version = \">=0.6.0, <0.7\"\n\n[capabilities]\nstate_stream = true\n\
              outputs = [\"source\"]\n"
         ),
     )
@@ -447,7 +447,7 @@ fn setup(mock_api_url: &str) -> Env {
 
     let env = Env { base };
     let cfg_dir = env.cfg_dir();
-    std::fs::create_dir_all(cfg_dir.join("plugins")).unwrap();
+    std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::create_dir_all(env.state_dir()).unwrap();
 
     install_plugin(
@@ -470,7 +470,6 @@ fn setup(mock_api_url: &str) -> Env {
 [plugins.slack]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 1
 
 [plugins.mock_agent]
 enabled = true
@@ -503,27 +502,22 @@ trigger = {{}}
 mode = "plan"
 agent = "mock_agent"
 output = "source"
+
+# Deliberately no `[[slack.repos]]`: the orchestrator supplies its single
+# `[[repositories]]` entry at initialize (#109), and one candidate resolves
+# without any LLM — the acceptance path for the fallback.
+[slack]
+app_token = "xapp-1-A1-e2e"
+user_token = "xoxp-e2e-user"
+target_user_id = "U_ME"
+api_url = "{mock_api_url}"
+
+[mock_agent]
+stream_states = ["running", "done"]
 "#,
             clone = repo.join("clone").display(),
             state = env.state_dir().display(),
         ),
-    )
-    .unwrap();
-
-    // Deliberately no `[[repos]]`: the orchestrator supplies its single
-    // `[[repositories]]` entry at initialize (#109), and one candidate
-    // resolves without any LLM — the acceptance path for the fallback.
-    std::fs::write(
-        cfg_dir.join("plugins/slack.toml"),
-        format!(
-            "app_token = \"xapp-1-A1-e2e\"\nuser_token = \"xoxp-e2e-user\"\n\
-             target_user_id = \"U_ME\"\napi_url = \"{mock_api_url}\"\n"
-        ),
-    )
-    .unwrap();
-    std::fs::write(
-        cfg_dir.join("plugins/mock_agent.toml"),
-        "stream_states = [\"running\", \"done\"]\n",
     )
     .unwrap();
 
@@ -630,11 +624,11 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
     //
     // This is the one place the whole chain is exercised against real
     // processes — core sends `trigger.reaction` at `initialize`, the plugin
-    // reads it and stamps `reaction:eyes` into `Task.labels`, and core
-    // re-checks that label to select the workflow. Each link has its own unit
-    // test; none of them can catch a break *between* two links, which is the
-    // failure mode this notation invites (the `triggers` contract existed for
-    // versions before anything read it).
+    // resolves which workflow the emoji selects, and names it on
+    // `task/submit` (0.6.0, #554 — core no longer re-checks any label). Each
+    // link has its own unit test; none of them can catch a break *between*
+    // two links, which is the failure mode this notation invites (the
+    // `triggers` contract existed for versions before anything read it).
     rt.block_on(send_and_await_ack(&mut ws, reaction_envelope()));
     let watched = wait_for("the reaction task", Duration::from_secs(60), || {
         let out = env.run(&["task", "list", "--json"]);

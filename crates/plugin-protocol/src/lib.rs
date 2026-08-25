@@ -66,8 +66,8 @@
 //!     config: serde_json::json!({ "socket_path": "/run/herdr.sock" }),
 //!     repositories: vec![],
 //!     llm: None,
-//!     triggers: vec![],
-//!     poll_interval_secs: None,
+//!     workflows: vec![],
+//!     projects: vec![],
 //! };
 //! let request = Request::new(1, method::INITIALIZE, Some(serde_json::to_value(&params)?));
 //! let line = to_line(&request)?; // send `line + "\n"` to the plugin's stdin
@@ -79,9 +79,12 @@
 //! let result = InitializeResult {
 //!     plugin_version: semver::Version::new(1, 2, 0),
 //!     capabilities: Default::default(),
-//!     // A task_source lists the repositories it is the tracker for here
+//!     // A task_source lists the repositories it files project items for here
 //!     // (#542); every other kind leaves it empty.
 //!     claimed_repos: Vec::new(),
+//!     // …and every kind answers which workflow options it recognises
+//!     // (#554). Nothing here means "none of them are mine".
+//!     claimed_options: Vec::new(),
 //! };
 //! let response = Response::result(parsed.id, serde_json::to_value(&result)?);
 //! assert!(!response.is_error());
@@ -100,10 +103,10 @@ pub use methods::method;
 pub use methods::{
     AgentState, ConfigValidateParams, ConfigValidateResult, DiagnosticsSnapshotParams,
     DiagnosticsSnapshotResult, ExecutionMode, InitializeParams, InitializeResult, NotifierEvent,
-    NotifyParams, RepoInfo, ResultPublishParams, SessionAttachParams, SessionAttachResult,
-    StateNotification, StateSubscribeParams, TaskCancelParams, TaskDispatchParams,
-    TaskDispatchResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus,
-    TaskUpdateStatusParams, TriggerInfo,
+    NotifyParams, ProjectInfo, RepoInfo, ResultPublishParams, SessionAttachParams,
+    SessionAttachResult, StateNotification, StateSubscribeParams, TaskCancelParams,
+    TaskDispatchParams, TaskDispatchResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus,
+    TaskUpdateStatusParams, WorkflowInfo, WorkflowOption,
 };
 pub use task::Task;
 pub use version::{PROTOCOL_VERSION, is_compatible, is_compatible_with_current, protocol_version};

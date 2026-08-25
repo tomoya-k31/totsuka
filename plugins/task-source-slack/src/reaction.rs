@@ -35,16 +35,29 @@ use crate::slack_api::SlackMessage;
 /// Which emoji start a task (#396).
 ///
 /// Reaction triggers are declared as `[[workflows]].trigger = { reaction =
-/// "..." }`. The Orchestrator sends them at `initialize` and re-checks the
-/// emoji against `reaction:<emoji>` in `Task.labels`, so a task raised this
-/// way **must** carry that label or it matches no workflow and is silently
-/// dropped after submission.
+/// "..." }`. The Orchestrator sends them at `initialize` and does **not**
+/// re-check them: since 0.6.0 (#554) this type is what decides which workflow
+/// a reaction belongs to, and the name travels on `task/submit`. The
+/// `reaction:<emoji>` label is still written, but as a record of how the task
+/// was raised — dropping it no longer makes the task vanish.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReactionTriggers {
     /// Accepted emoji, normalized (colon-free), each with the task-id prefix
     /// its workflow's profile asks for (#397). Empty disables the trigger,
     /// which is the default.
     emojis: Vec<TriggerEmoji>,
+    /// The workflow a plain mention belongs to: the **first** one the
+    /// Orchestrator listed that does not require a reaction (0.6.0, #554).
+    ///
+    /// This is first-match (F-81) run here rather than Orchestrator-side. It
+    /// used to be run in both places — the plugin picked the emoji, the
+    /// Orchestrator re-derived the workflow from the labels the plugin had
+    /// just written — and the duplicate is what forced `reaction` to be a
+    /// vocabulary word in `config.toml`'s core schema.
+    ///
+    /// `None` means no mention workflow is configured, so a mention has
+    /// nowhere to go and is dropped before it is built.
+    mention_workflow: Option<String>,
 }
 
 /// One accepted emoji and what the workflow behind it wants.
@@ -52,6 +65,9 @@ pub struct ReactionTriggers {
 struct TriggerEmoji {
     /// Normalized emoji name, as `reaction_added` reports it.
     name: String,
+    /// The workflow this emoji selects (`[[workflows]].name`), named on
+    /// `task/submit` since 0.6.0.
+    workflow: String,
     /// `task_id_prefix` from the trigger (#397), or `None` for the plain
     /// conversation id.
     task_id_prefix: Option<String>,
@@ -103,6 +119,7 @@ impl ReactionTriggers {
             claimed_by.push((emoji.clone(), workflow.clone()));
             emojis.push(TriggerEmoji {
                 name: emoji,
+                workflow: workflow.clone(),
                 task_id_prefix: task_id_prefix.clone(),
                 instructions_kind: instructions_kind.clone(),
             });
@@ -112,15 +129,43 @@ impl ReactionTriggers {
             return Err(errors);
         }
 
-        if !emojis.is_empty() {
-            return Ok(Self { emojis });
+        // The workflows that do **not** require a reaction: that is where a
+        // plain mention goes. Two of them is the same failure as two workflows
+        // claiming one emoji — first-match would pick one and say nothing —
+        // so it is refused rather than resolved.
+        let mention_candidates: Vec<&String> = triggers
+            .iter()
+            .filter(|t| t.reaction.is_none())
+            .map(|t| &t.workflow)
+            .collect();
+        if mention_candidates.len() > 1 {
+            errors.push(format!(
+                "workflows {} all trigger on a plain mention → a mention selects \
+                 one workflow; give the others a `reaction` trigger or merge them",
+                mention_candidates
+                    .iter()
+                    .map(|w| format!("`{w}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            return Err(errors);
         }
-        Ok(Self::default())
+        let mention_workflow = mention_candidates.first().map(|w| (*w).clone());
+
+        Ok(Self {
+            emojis,
+            mention_workflow,
+        })
     }
 
     /// Whether any emoji is configured.
     pub fn is_empty(&self) -> bool {
         self.emojis.is_empty()
+    }
+
+    /// The workflow a plain mention belongs to, if one is configured.
+    pub fn mention_workflow(&self) -> Option<&str> {
+        self.mention_workflow.as_deref()
     }
 
     /// The configured entry for `emoji`, if it is a trigger at all.
@@ -153,10 +198,15 @@ pub struct ReactionTarget {
     pub channel: String,
     /// Timestamp of the reacted-to message.
     pub ts: String,
-    /// The emoji to announce as a `reaction:` label. Always present — the
-    /// Orchestrator re-checks it against `Task.labels`, so a task raised by a
-    /// reaction that arrived without one would match no workflow.
+    /// The emoji to announce as a `reaction:` label.
+    ///
+    /// Informational since 0.6.0: the Orchestrator no longer re-derives the
+    /// workflow from it (the plugin names the workflow on `task/submit`), so
+    /// the label is now what it always read as — a record of how the task
+    /// started, for `totsuka status` and the logs.
     pub reaction: String,
+    /// The workflow this emoji selects, named on `task/submit` (#554).
+    pub workflow: String,
     /// The task-id prefix the matched workflow's profile asks for (#397), from
     /// `task_id_prefix` in the trigger. `None` keeps the conversation id.
     pub task_id_prefix: Option<String>,
@@ -220,6 +270,7 @@ pub fn reaction_target(
         channel: item_str("channel")?.to_string(),
         ts: item_str("ts")?.to_string(),
         reaction: reaction.to_string(),
+        workflow: entry.workflow.clone(),
         task_id_prefix: entry.task_id_prefix.clone(),
         instructions_kind: entry.instructions_kind.clone(),
     })
@@ -249,6 +300,7 @@ pub fn to_mention(target: &ReactionTarget, message: SlackMessage) -> Option<Ment
         ts: message.ts,
         thread_ts: message.thread_ts,
         reaction: Some(target.reaction.clone()),
+        workflow: Some(target.workflow.clone()),
         task_id_prefix: target.task_id_prefix.clone(),
         instructions_kind: target.instructions_kind.clone(),
     })
@@ -258,6 +310,58 @@ pub fn to_mention(target: &ReactionTarget, message: SlackMessage) -> Option<Ment
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Two workflows both claiming plain mentions is the mention-path twin of
+    /// two claiming one emoji: first-match would pick one silently, and since
+    /// #554 this plugin — not the Orchestrator — is the one making that pick.
+    #[test]
+    fn two_mention_workflows_are_refused() {
+        let errors = ReactionTriggers::resolve(&[
+            WorkflowTrigger {
+                workflow: "slack-reply".into(),
+                reaction: None,
+                task_id_prefix: None,
+                instructions_kind: None,
+            },
+            WorkflowTrigger {
+                workflow: "slack-other".into(),
+                reaction: None,
+                task_id_prefix: None,
+                instructions_kind: None,
+            },
+        ])
+        .expect_err("two mention workflows must be refused");
+        assert!(
+            errors[0].contains("slack-reply") && errors[0].contains("slack-other"),
+            "{errors:?}"
+        );
+    }
+
+    /// One of each resolves: the emoji picks its workflow, the mention picks
+    /// the other.
+    #[test]
+    fn a_reaction_and_a_mention_workflow_resolve_separately() {
+        let resolved = ReactionTriggers::resolve(&[
+            WorkflowTrigger {
+                workflow: "slack-implement".into(),
+                reaction: Some("hammer".into()),
+                task_id_prefix: Some("impl".into()),
+                instructions_kind: Some("implement".into()),
+            },
+            WorkflowTrigger {
+                workflow: "slack-reply".into(),
+                reaction: None,
+                task_id_prefix: None,
+                instructions_kind: None,
+            },
+        ])
+        .expect("one of each is the intended shape");
+        assert_eq!(resolved.mention_workflow(), Some("slack-reply"));
+        assert_eq!(
+            resolved.entry("hammer").map(|e| e.workflow.as_str()),
+            Some("slack-implement")
+        );
+    }
 
     /// A resolved trigger set holding `eyes`.
     fn triggers() -> ReactionTriggers {
@@ -518,6 +622,7 @@ mod tests {
     #[test]
     fn a_plain_message_converts_with_the_authors_identity() {
         let target = ReactionTarget {
+            workflow: "slack-implement".into(),
             channel: "C1".to_string(),
             ts: "1.0".to_string(),
             reaction: "eyes".into(),
@@ -540,6 +645,7 @@ mod tests {
     #[test]
     fn the_operators_own_message_converts() {
         let target = ReactionTarget {
+            workflow: "slack-implement".into(),
             channel: "C1".to_string(),
             ts: "1.0".to_string(),
             reaction: "eyes".into(),
@@ -557,6 +663,7 @@ mod tests {
     #[test]
     fn threaded_messages_keep_their_thread_and_join_the_threads_task() {
         let target = ReactionTarget {
+            workflow: "slack-implement".into(),
             channel: "C1".to_string(),
             ts: "2.0".to_string(),
             reaction: "eyes".into(),
@@ -579,6 +686,7 @@ mod tests {
     #[test]
     fn edits_system_messages_and_bot_posts_are_rejected() {
         let target = ReactionTarget {
+            workflow: "slack-implement".into(),
             channel: "C1".to_string(),
             ts: "1.0".to_string(),
             reaction: "eyes".into(),
@@ -600,6 +708,7 @@ mod tests {
     #[test]
     fn a_message_without_an_author_is_rejected() {
         let target = ReactionTarget {
+            workflow: "slack-implement".into(),
             channel: "C1".to_string(),
             ts: "1.0".to_string(),
             reaction: "eyes".into(),

@@ -352,8 +352,8 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// 1Password backend probes (#156), fired **only when** `config.toml` or a
-/// `plugins/*.toml` actually contains an `op://` reference: `op --version`
+/// 1Password backend probes (#156), fired **only when** `config.toml`
+/// actually contains an `op://` reference: `op --version`
 /// (CLI present) and `op whoami` (session established — unlike `op read`, it
 /// never triggers a biometric prompt). No `op://` in config ⇒ no checks.
 /// Returns whether the rest of `doctor` may resolve `op://` references
@@ -601,26 +601,20 @@ fn llm_key_is_onepassword(cfg: &RootConfig) -> bool {
         .is_some_and(|reference| reference.starts_with("op://"))
 }
 
-/// Whether `plugins/{name}.toml` holds an `op://` reference in a real string
-/// value. Per-plugin counterpart of [`config_mentions_onepassword`], so one
-/// plugin's 1Password usage does not gate the probes of every other plugin.
-fn plugin_config_mentions_onepassword(cx: &Cx, name: &str) -> bool {
-    let path = cx.plugin_config_dir().join(format!("{name}.toml"));
-    std::fs::read_to_string(&path).is_ok_and(|content| {
-        // `Table` for the same reason as `config_mentions_onepassword`: in
-        // toml 0.9 `parse::<Value>()` cannot parse a document.
-        content
-            .parse::<toml::Table>()
-            .is_ok_and(|table| table.values().any(toml_has_op_reference))
-    })
+/// Whether the plugin's `[<name>]` table holds an `op://` reference in a real
+/// string value. Per-plugin counterpart of [`config_mentions_onepassword`], so
+/// one plugin's 1Password usage does not gate the probes of every other
+/// plugin.
+fn plugin_config_mentions_onepassword(cfg: &RootConfig, name: &str) -> bool {
+    cfg.plugin_settings(name).is_some_and(toml_has_op_reference)
 }
 
 /// Whether launching `name` would make `plugin_spec` resolve an `op://`
 /// reference (#289).
 ///
 /// Two independent doors, both inside `plugin_spec`: `plugin_init_config`
-/// resolves **every string leaf** of `plugins/{name}.toml`, and `llm_info`
-/// resolves `[llm].api_key_ref` — but only for a task source.
+/// resolves **every string leaf** of the plugin's `[<name>]` table, and
+/// `llm_info` resolves `[llm].api_key_ref` — but only for a task source.
 ///
 /// "Task source" is asked of **both** the manifest and the config roster, and
 /// either one saying yes is enough. `plugin_spec` itself branches on
@@ -646,36 +640,27 @@ fn plugin_needs_onepassword(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
         .flatten()
         .is_some_and(|m| m.kind == plugin_protocol::manifest::PluginKind::TaskSource);
     let is_task_source = declared_task_source || manifest_task_source;
-    plugin_config_mentions_onepassword(cx, name) || (is_task_source && llm_key_is_onepassword(cfg))
+    plugin_config_mentions_onepassword(cfg, name) || (is_task_source && llm_key_is_onepassword(cfg))
 }
 
-/// Whether `config.toml` or any `plugins/*.toml` contains an `op://` secret
-/// reference in an **actual string value** (resolution stays lazy, this only
-/// gates doctor). Each file is TOML-parsed and its string leaves walked, so a
-/// commented-out example — like the one `totsuka init` generates — never
-/// triggers the 1Password checks.
+/// Whether `config.toml` contains an `op://` secret reference in an **actual
+/// string value** (resolution stays lazy, this only gates doctor). The file is
+/// TOML-parsed and its string leaves walked, so a commented-out example — like
+/// the one `totsuka init` generates — never triggers the 1Password checks.
+///
+/// One file since #554: plugin settings live in the same document, so the
+/// separate `plugins/*.toml` sweep this used to do is now the same walk.
 fn config_mentions_onepassword(cx: &Cx) -> bool {
-    let mut sources: Vec<PathBuf> = vec![cx.config_path.clone()];
-    if let Ok(entries) = std::fs::read_dir(cx.plugin_config_dir()) {
-        sources.extend(
-            entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|e| e == "toml")),
-        );
-    }
-    sources.iter().any(|path| {
-        std::fs::read_to_string(path).is_ok_and(|content| {
-            // `toml::Table`, not `toml::Value`: in toml 0.9 `FromStr for Value`
-            // parses a *single value*, so `"a = 1".parse::<Value>()` is an
-            // error ("unexpected content, expected nothing") for every real
-            // config file. This helper silently answered "no op:// anywhere"
-            // for its whole life, which meant the 1Password checks below never
-            // ran at all (#289). `Table` is the document parser.
-            content
-                .parse::<toml::Table>()
-                .is_ok_and(|table| table.values().any(toml_has_op_reference))
-        })
+    std::fs::read_to_string(&cx.config_path).is_ok_and(|content| {
+        // `toml::Table`, not `toml::Value`: in toml 0.9 `FromStr for Value`
+        // parses a *single value*, so `"a = 1".parse::<Value>()` is an
+        // error ("unexpected content, expected nothing") for every real
+        // config file. This helper silently answered "no op:// anywhere"
+        // for its whole life, which meant the 1Password checks below never
+        // ran at all (#289). `Table` is the document parser.
+        content
+            .parse::<toml::Table>()
+            .is_ok_and(|table| table.values().any(toml_has_op_reference))
     })
 }
 
@@ -701,7 +686,7 @@ fn toml_has_cmd_reference(value: &toml::Value) -> bool {
 
 /// Whether launching `name` would make `plugin_spec` run a `cmd:` reference's
 /// command (#444). Same two doors as [`plugin_needs_onepassword`]: the
-/// plugin's own config file, and `[llm].api_key_ref` for a task source.
+/// plugin's own `[<name>]` table, and `[llm].api_key_ref` for a task source.
 ///
 /// Unlike `op://` there is no session to measure — doctor cannot know whether
 /// the command is prompt-free (`cmd:op read …` is a real spelling), so a
@@ -723,12 +708,9 @@ fn plugin_needs_command_exec(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
         .as_ref()
         .and_then(|llm| llm.api_key_ref.as_deref())
         .is_some_and(|reference| reference.starts_with("cmd:"));
-    let path = cx.plugin_config_dir().join(format!("{name}.toml"));
-    let plugin_mentions_cmd = std::fs::read_to_string(&path).is_ok_and(|content| {
-        content
-            .parse::<toml::Table>()
-            .is_ok_and(|table| table.values().any(toml_has_cmd_reference))
-    });
+    let plugin_mentions_cmd = cfg
+        .plugin_settings(name)
+        .is_some_and(toml_has_cmd_reference);
     plugin_mentions_cmd || (is_task_source && llm_key_is_command)
 }
 
@@ -1541,7 +1523,7 @@ fn check_plugins(
     }
     let mut specs = Vec::new();
     // Plugins that never reach `validate_all`, and why. `validated.len()` only
-    // counts what got into `specs`, so the tracker check below cannot tell
+    // counts what got into `specs`, so the projects check below cannot tell
     // "nothing was skipped" from "everything was skipped" without this — and
     // being skipped is the *normal* state for a `cmd:` token, not an edge case
     // (#542 review).
@@ -1577,30 +1559,30 @@ fn check_plugins(
             ));
             continue;
         }
-        match plugin_spec(&cx.store(), &cx.plugin_config_dir(), cfg, name, env) {
-            // `plugin_spec` already resolved plugins/{name}.toml (with secrets)
+        match plugin_spec(&cx.store(), cfg, name, env) {
+            // `plugin_spec` already resolved the plugin's `[<name>]` table
             // into `init_config`; reuse it rather than re-reading and hitting
             // the Keychain a second time.
             Ok(spec) => {
                 let init = spec.init_config.clone();
                 specs.push((spec, init));
             }
-            // Failure may be "not installed" or a plugins/{name}.toml
+            // Failure may be "not installed" or a `[<name>]` table
             // parse/secret-resolution error — point at both.
             Err(e) => {
                 checks.push(Check::fail(
                     &format!("plugin:{name}"),
                     e.to_string(),
-                    "install it (`totsuka plugin install <dir>`) or fix plugins/{name}.toml if it is already installed",
+                    format!("install it (`totsuka plugin install <dir>`) or fix `[{name}]` in config.toml if it is already installed"),
                 ));
                 not_probed.push((name.clone(), "its launch spec could not be built"));
             }
         }
     }
     if specs.is_empty() {
-        // Still report the tracker check: with nothing probed it can only say
+        // Still report the projects check: with nothing probed it can only say
         // "cannot tell", and saying nothing at all reads as "no conflicts".
-        check_tracker_claims(&[], &not_probed, checks);
+        check_project_claims(&[], &not_probed, checks);
         return;
     }
     // Live probe: launch, initialize, config/validate, shutdown (F-59).
@@ -1624,7 +1606,7 @@ fn check_plugins(
             Ok(v) => checks.push(Check::fail(
                 &format!("plugin:{name}"),
                 v.errors.join("; "),
-                format!("fix plugins/{name}.toml"),
+                format!("fix `[{name}]` in config.toml"),
             )),
             Err(e) => checks.push(Check::fail(
                 &format!("plugin:{name}"),
@@ -1633,14 +1615,17 @@ fn check_plugins(
             )),
         }
     }
-    check_tracker_claims(&validated, &not_probed, checks);
+    check_project_claims(&validated, &not_probed, checks);
 }
 
-/// Repositories claimed as a tracker target by more than one source (#542).
+/// How many repositories have a project to file into (#542, narrowed by #554).
 ///
-/// **The only place this is visible.** Each plugin's own `config/validate`
-/// checks its own list, so the configs are individually valid and the conflict
-/// exists only in the union — which nothing but the Orchestrator assembles.
+/// **This reports, it no longer detects.** Until #554 it was the only place a
+/// repository claimed by two sources became visible, because each plugin's
+/// `config/validate` sees only its own list and the conflict existed only in
+/// the union. That conflict is now unwritable — a repository names one
+/// `[[projects]]` entry and the entry names one source — so what is left is a
+/// count, and the check only ever produces `ok` or `skip`.
 ///
 /// Reads the claims [`validate_all`](plugin_host::validate_all) already
 /// gathered, so it inherits the launch gating exactly rather than restating it.
@@ -1648,18 +1633,17 @@ fn check_plugins(
 /// cannot express: a plugin that was never launched reports no claims, and so
 /// does a plugin that genuinely claims nothing.
 ///
-/// **A conflict is always reported, even when the picture is incomplete.** Only
-/// the all-clear verdict degrades to a skip: "these two claim the same
-/// repository" stays true whatever the un-probed plugins would have said, while
-/// "every repository routes to exactly one tracker" does not.
-fn check_tracker_claims(
+/// **An incomplete picture degrades to a skip rather than an all-clear.**
+/// "Every repository routes to exactly one project" is a statement about the
+/// union, so it cannot be made from the plugins that happened to launch.
+fn check_project_claims(
     validated: &[plugin_host::ValidatedPlugin],
     not_probed: &[(String, &'static str)],
     checks: &mut Vec<Check>,
 ) {
     // A plugin that failed to launch reports no claims, which is not the same
-    // as claiming nothing: including it would let a crashed github plugin
-    // "resolve" a conflict by disappearing.
+    // as claiming nothing: counting it as "claims nothing" would report an
+    // all-clear built from one source's answer.
     let launched: Vec<&plugin_host::ValidatedPlugin> =
         validated.iter().filter(|v| v.result.is_ok()).collect();
     let registry = ClaimRegistry::from_sources(
@@ -1668,16 +1652,12 @@ fn check_tracker_claims(
             .map(|v| (v.name.as_str(), v.claimed_repos.as_slice())),
     );
 
-    // Conflicts first and unconditionally: what was seen is seen.
-    let conflicts = registry.conflicts();
-    for conflict in conflicts {
-        checks.push(Check::fail(
-            "trackers",
-            conflict.to_string(),
-            "remove the repository from all but one plugin's `repos`",
-        ));
-    }
-
+    // Two sources claiming one repository used to be reported here (#542).
+    // Since #554 a repository names one `[[projects]]` entry and the entry
+    // names one source, so the state cannot be written — `config validate`
+    // rejects a `project` that resolves to nothing, and there is no second
+    // claimant to find.
+    //
     // Everything the union is missing, in one list. `not_probed` is the common
     // case in real configs — a `cmd:` token (ADR-0044) means doctor never
     // launches that plugin — so treating it as an edge case would report an
@@ -1693,30 +1673,25 @@ fn check_tracker_claims(
             .map(|v| format!("`{}` (it did not launch)", v.name)),
     );
 
-    if !conflicts.is_empty() {
-        // The failures above already say what is wrong; a skip line on top
-        // would only muddy them.
-        return;
-    }
     if !unseen.is_empty() {
         checks.push(Check::skip(
-            "trackers",
+            "projects",
             format!("cannot tell: {} was not probed", unseen.join(", ")),
             "doctor stays non-interactive, so a plugin whose secrets need a prompt or a \
              command is never launched — check those configs by hand, or run `totsuka run` \
-             which resolves them and warns about conflicts at startup",
+             which resolves them",
         ));
         return;
     }
     if registry.is_empty() {
         // Every source was probed and none claims anything: the normal state
-        // for a config with no tracker set up. Not worth a line.
+        // for a config with no project set up. Not worth a line.
         return;
     }
     checks.push(Check::ok(
-        "trackers",
+        "projects",
         format!(
-            "{} repositories route to exactly one tracker",
+            "{} repositories route to exactly one project",
             registry.len()
         ),
     ));
@@ -2096,7 +2071,7 @@ fn check_orphan_panes(
             skipped.push(name.as_str());
             continue;
         }
-        let spec = match plugin_spec(&store, &cx.plugin_config_dir(), cfg, name, env) {
+        let spec = match plugin_spec(&store, cfg, name, env) {
             Ok(spec) => spec,
             // plugin_spec failures are already reported per-plugin by
             // check_plugins; don't fail the pane check on top.
@@ -2186,8 +2161,7 @@ fn check_orphan_panes(
             if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
                 continue;
             }
-            let Ok(spec) = plugin_spec(&store, &cx.plugin_config_dir(), cfg, &orphan.plugin, env)
-            else {
+            let Ok(spec) = plugin_spec(&store, cfg, &orphan.plugin, env) else {
                 continue;
             };
             let released = runtime.block_on(async {
@@ -2254,7 +2228,7 @@ mod tests {
     use orchestrator_core::domain::state::TaskState;
     use plugin_protocol::methods::SessionInfo;
 
-    // --- `trackers` (#542) -------------------------------------------------
+    // --- `projects` (#542) -------------------------------------------------
 
     fn validated(name: &str, claims: &[(&str, &str)]) -> plugin_host::ValidatedPlugin {
         plugin_host::ValidatedPlugin {
@@ -2263,6 +2237,7 @@ mod tests {
                 valid: true,
                 errors: Vec::new(),
             }),
+            claimed_options: Vec::new(),
             claimed_repos: claims
                 .iter()
                 .map(
@@ -2275,18 +2250,18 @@ mod tests {
         }
     }
 
-    fn tracker_checks(
+    fn project_checks(
         validated: &[plugin_host::ValidatedPlugin],
         not_probed: &[(String, &'static str)],
     ) -> Vec<Check> {
         let mut checks = Vec::new();
-        check_tracker_claims(validated, not_probed, &mut checks);
+        check_project_claims(validated, not_probed, &mut checks);
         checks
     }
 
     #[test]
-    fn trackers_pass_when_every_source_was_probed_and_none_conflict() {
-        let checks = tracker_checks(
+    fn projects_pass_when_every_source_was_probed_and_none_conflict() {
+        let checks = project_checks(
             &[
                 validated("github", &[("totsuka", "Project #7")]),
                 validated("notion", &[("web-app", "Database DB2")]),
@@ -2298,29 +2273,14 @@ mod tests {
         assert!(checks[0].detail.contains('2'), "{:?}", checks[0]);
     }
 
-    /// The failure this check exists for: two sources, one repository.
-    #[test]
-    fn trackers_fail_when_two_sources_claim_one_repository() {
-        let checks = tracker_checks(
-            &[
-                validated("github", &[("shared", "Project #7")]),
-                validated("notion", &[("shared", "Database DB1")]),
-            ],
-            &[],
-        );
-        assert_eq!(checks.len(), 1);
-        assert!(!checks[0].ok, "{:?}", checks[0]);
-        assert!(checks[0].detail.contains("shared"), "{:?}", checks[0]);
-    }
-
     /// A plugin doctor never launched must not read as "claims nothing".
     ///
     /// This is the **common** case, not an edge one: a `cmd:` token (ADR-0044)
     /// means doctor skips that plugin on every run, so an all-clear here would
     /// be assembled from whatever single source happened to be probeable.
     #[test]
-    fn trackers_cannot_conclude_while_a_plugin_was_never_probed() {
-        let checks = tracker_checks(
+    fn projects_cannot_conclude_while_a_plugin_was_never_probed() {
+        let checks = project_checks(
             &[validated("notion", &[("web-app", "Database DB2")])],
             &[(
                 "github".to_string(),
@@ -2333,27 +2293,6 @@ mod tests {
         assert!(checks[0].detail.contains("cmd:"), "{:?}", checks[0]);
     }
 
-    /// A conflict that *was* seen is still reported when the picture is
-    /// incomplete: it stays true whatever the un-probed plugin would have said.
-    #[test]
-    fn a_visible_conflict_is_reported_even_with_a_plugin_unprobed() {
-        let checks = tracker_checks(
-            &[
-                validated("github", &[("shared", "Project #7")]),
-                validated("notion", &[("shared", "Database DB1")]),
-            ],
-            &[("slack".to_string(), "its op:// reference would prompt")],
-        );
-        assert!(
-            checks.iter().any(|c| !c.ok && c.detail.contains("shared")),
-            "{checks:?}"
-        );
-        assert!(
-            !checks.iter().any(|c| c.skipped),
-            "a seen conflict must not degrade to a skip: {checks:?}"
-        );
-    }
-
     /// A plugin that launched and failed validation is "unknown", like one that
     /// was never probed — it answered `initialize` but its config is wrong, so
     /// its claim list is not something to conclude from.
@@ -2364,7 +2303,7 @@ mod tests {
             name: "github".to_string(),
             source: std::io::Error::other("boom"),
         });
-        let checks = tracker_checks(&[validated("notion", &[("web-app", "DB2")]), failed], &[]);
+        let checks = project_checks(&[validated("notion", &[("web-app", "DB2")]), failed], &[]);
         assert_eq!(checks.len(), 1);
         assert!(checks[0].skipped, "{:?}", checks[0]);
         assert!(checks[0].detail.contains("github"), "{:?}", checks[0]);
@@ -2373,8 +2312,8 @@ mod tests {
     /// Nothing probed at all (every plugin skipped) must not read as an
     /// all-clear either — the path `check_plugins` takes when `specs` is empty.
     #[test]
-    fn trackers_say_nothing_conclusive_when_nothing_was_probed() {
-        let checks = tracker_checks(
+    fn projects_say_nothing_conclusive_when_nothing_was_probed() {
+        let checks = project_checks(
             &[],
             &[("github".to_string(), "its op:// reference would prompt")],
         );
@@ -2382,11 +2321,11 @@ mod tests {
         assert!(checks[0].skipped, "{:?}", checks[0]);
     }
 
-    /// Every source probed, none claims anything: a config with no tracker set
+    /// Every source probed, none claims anything: a config with no project set
     /// up. Silent — a line saying "0 repositories route" is noise.
     #[test]
-    fn trackers_are_silent_when_no_source_claims_anything() {
-        let checks = tracker_checks(&[validated("slack", &[])], &[]);
+    fn projects_are_silent_when_no_source_claims_anything() {
+        let checks = project_checks(&[validated("slack", &[])], &[]);
         assert!(checks.is_empty(), "{checks:?}");
     }
 

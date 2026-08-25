@@ -41,11 +41,13 @@ mod interview;
 mod plugin_config;
 mod recipes;
 
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use orchestrator_core::config::{
-    RepositoryDraft, WorkflowDraft, set_llm, set_plugin_enabled, upsert_repository, upsert_workflow,
+    ProjectDraft, RepositoryDraft, WorkflowDraft, set_llm, set_plugin_enabled, upsert_project,
+    upsert_repository, upsert_workflow,
 };
 
 use crate::common::{CliError, Cx, EXIT_USAGE, ExitWith};
@@ -338,8 +340,9 @@ struct Plan<'a> {
     /// `config.toml` is written only when absent or still a bare skeleton.
     write_config: bool,
     config_path: PathBuf,
-    /// `plugins/<name>.toml` files to write, minus the ones already there.
-    plugin_configs: Vec<PathBuf>,
+    /// Plugin settings tables (`[<name>]`) to add to `config.toml`, minus the
+    /// ones already there (#554).
+    plugin_configs: Vec<&'static str>,
     plugin_source: PluginSource,
 }
 
@@ -350,14 +353,12 @@ impl<'a> Plan<'a> {
         // it just read out of `RECIPES`.
         let recipe =
             recipes::by_key(&answers.recipe).expect("the recipe key was validated on the way in");
-        let plugin_dir = cx.plugin_config_dir();
-        let mut plugin_configs = Vec::new();
-        for draft in plugin_config::drafts_for(answers, recipe) {
-            let path = plugin_dir.join(format!("{}.toml", draft.name));
-            if is_absent(&path)? {
-                plugin_configs.push(path);
-            }
-        }
+        let existing = existing_top_level_tables(&cx.config_path)?;
+        let plugin_configs: Vec<&'static str> = plugin_config::drafts_for(answers, recipe)
+            .into_iter()
+            .map(|draft| draft.name)
+            .filter(|name| !existing.contains(*name))
+            .collect();
         Ok(Plan {
             recipe,
             answers,
@@ -426,8 +427,11 @@ impl<'a> Plan<'a> {
                 self.config_path.display()
             ));
         }
-        for path in &self.plugin_configs {
-            out.push_str(&format!("Write:    {}\n", path.display()));
+        for name in &self.plugin_configs {
+            out.push_str(&format!(
+                "Write:    [{name}] in {}\n",
+                self.config_path.display()
+            ));
         }
         out.push_str(&match &self.plugin_source {
             PluginSource::Bundled(root) => {
@@ -470,22 +474,37 @@ fn is_unconfigured(path: &Path) -> Result<bool, CliError> {
     }
 }
 
-/// Whether `path` is absent, refusing to guess when the answer is unclear.
+/// The names of the top-level tables `config.toml` already defines.
 ///
-/// The counterpart of [`is_unconfigured`] for files that have no skeleton form,
-/// and it exists for the same reason: `Path::exists` folds *every* failure —
-/// permission denied, a symlink loop, a directory in the way — into `false`,
-/// which here reads as "safe to create". It is not. [`write_atomically`]'s
-/// `rename` only needs the **directory** to be writable, so a `plugins/*.toml`
-/// that cannot be examined can still be replaced, and these files hold the
-/// user's secret references.
-fn is_absent(path: &Path) -> Result<bool, CliError> {
-    path.try_exists().map(|exists| !exists).map_err(|e| {
+/// Used to decide which `[<name>]` plugin settings tables `setup` still has to
+/// add (#554). An absent file has none; **any other failure is reported**
+/// rather than read as "no tables", for the same reason
+/// [`is_unconfigured`] refuses to guess: the answer decides whether `setup`
+/// writes into a file it could not inspect, and those tables hold the
+/// operator's secret references.
+///
+/// Unparsable content is an error too. Appending a section to a document that
+/// does not parse would either produce a second definition of a table that is
+/// already there or compound a syntax error, and neither is a state to leave a
+/// config in.
+fn existing_top_level_tables(path: &Path) -> Result<HashSet<String>, CliError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(e) => {
+            return Err(CliError::from(format!(
+                "cannot read {} ({e}) → refusing to write into a config it cannot inspect",
+                path.display()
+            )));
+        }
+    };
+    let table: toml::Table = text.parse().map_err(|e| {
         CliError::from(format!(
-            "cannot examine {} ({e}) → refusing to overwrite a file it cannot inspect",
+            "cannot parse {} ({e}) → fix the syntax before running setup again",
             path.display()
         ))
-    })
+    })?;
+    Ok(table.keys().cloned().collect())
 }
 
 /// The effecting phase. Every step is idempotent so a failure part-way can be
@@ -505,7 +524,7 @@ fn apply(cx: &Cx, answers: &Answers, plan: &Plan) -> Result<(), CliError> {
         );
     }
 
-    write_plugin_configs(cx, answers, plan.recipe)?;
+    merge_plugin_configs(cx, answers, plan.recipe)?;
     install_plugins(cx, plan)?;
     print_secret_checklist(answers, plan.recipe);
 
@@ -521,27 +540,49 @@ fn apply(cx: &Cx, answers: &Answers, plan: &Plan) -> Result<(), CliError> {
     doctor_cmd::run(cx, doctor_cmd::DoctorArgs::default())
 }
 
-/// Write each `plugins/<name>.toml` the recipe needs, skipping ones that exist.
+/// Add each `[<name>]` plugin settings table the recipe needs to `config.toml`,
+/// skipping the ones already there (#554).
 ///
-/// Same rule as `config.toml`, minus the skeleton exception: nothing generates
-/// a commented placeholder for these, so a file that exists was written by a
-/// human or by an earlier `setup`, and either way it is theirs. "Exists" is
-/// decided by [`is_absent`], which errors rather than guessing — the same
-/// hazard [`is_unconfigured`] guards against.
-fn write_plugin_configs(cx: &Cx, answers: &Answers, recipe: &Recipe) -> Result<(), CliError> {
-    let dir = cx.plugin_config_dir();
-    for draft in plugin_config::drafts_for(answers, recipe) {
-        let path = dir.join(format!("{}.toml", draft.name));
-        if !is_absent(&path)? {
+/// The unit is the **table**, not the file. Before the two config files became
+/// one, "the file exists" meant "a human or an earlier `setup` wrote it, and
+/// either way it is theirs"; the same rule keyed on `config.toml` would mean
+/// `setup` could never add plugin settings after its first run, because
+/// `config.toml` is a file it writes itself.
+///
+/// Sections are appended as text rather than merged through a TOML editor so
+/// the rest of the document — comments included — comes out byte-identical.
+/// Appending is safe precisely because a table that already exists is skipped:
+/// a second definition of one would be a parse error.
+fn merge_plugin_configs(cx: &Cx, answers: &Answers, recipe: &Recipe) -> Result<(), CliError> {
+    let drafts = plugin_config::drafts_for(answers, recipe);
+    if drafts.is_empty() {
+        return Ok(());
+    }
+    let existing = existing_top_level_tables(&cx.config_path)?;
+    let mut text = std::fs::read_to_string(&cx.config_path).unwrap_or_default();
+    let mut added = Vec::new();
+    for draft in &drafts {
+        if existing.contains(draft.name) {
             println!(
-                "skipped: {} already exists (left untouched)",
-                path.display()
+                "skipped: [{}] already in {} (left untouched)",
+                draft.name,
+                cx.config_path.display()
             );
             continue;
         }
-        std::fs::create_dir_all(&dir)?;
-        write_atomically(&path, &draft.body)?;
-        println!("wrote: {}", path.display());
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push('\n');
+        text.push_str(&draft.body);
+        added.push(draft.name);
+    }
+    if added.is_empty() {
+        return Ok(());
+    }
+    write_atomically(&cx.config_path, &text)?;
+    for name in added {
+        println!("wrote: [{name}] in {}", cx.config_path.display());
     }
     Ok(())
 }
@@ -604,6 +645,13 @@ fn install_plugins(cx: &Cx, plan: &Plan) -> Result<(), CliError> {
 ///
 /// Separated from the writing so it can be tested directly — the property that
 /// matters is that the result loads and validates, not that a file appeared.
+/// The `[[projects]]` entry the wizard writes for the GitHub board.
+///
+/// One name, because the wizard asks about one board. An operator adding a
+/// second edits `config.toml` by hand, and this name is what the first one is
+/// called there.
+const GITHUB_BOARD_NAME: &str = "github-board";
+
 pub(crate) fn build_config(
     current: &str,
     answers: &Answers,
@@ -611,6 +659,27 @@ pub(crate) fn build_config(
 ) -> Result<String, CliError> {
     let mut text = current.to_string();
 
+    // The board goes in as a `[[projects]]` entry, and every repository binds
+    // to it (#554). The wizard asks about one board, so every repository the
+    // operator listed files into it — which is what a single-board setup meant
+    // before the mapping moved out of the plugin's own config.
+    let board = answers.github.as_ref().map(|_| GITHUB_BOARD_NAME);
+    if let Some(gh) = answers.github.as_ref() {
+        let options = format!(
+            "{{ owner = \"{}\", owner_type = \"{}\", project_number = {} }}",
+            gh.owner,
+            gh.owner_type.as_str(),
+            gh.project_number
+        );
+        text = upsert_project(
+            &text,
+            &ProjectDraft {
+                name: GITHUB_BOARD_NAME,
+                source: "github",
+                options: &options,
+            },
+        )?;
+    }
     for repo in &answers.repositories {
         text = upsert_repository(
             &text,
@@ -618,6 +687,7 @@ pub(crate) fn build_config(
                 name: &repo.name,
                 path: &repo.path,
                 summary: repo.summary.as_deref(),
+                project: board,
             },
         )?;
     }
@@ -879,6 +949,87 @@ github_login = "tomoya-k31"
         }
     }
 
+    /// The board the wizard writes, and the binding that makes it reachable
+    /// (#554). Two halves of one answer: a `[[projects]]` entry nothing points
+    /// at routes nothing, and a `project` naming no entry fails validation.
+    #[test]
+    fn the_board_is_written_and_every_repository_binds_to_it() {
+        let recipe = RECIPES
+            .iter()
+            .find(|r| r.plugins.iter().any(|p| p.name == "github"))
+            .expect("a recipe with the github plugin");
+        let mut answers = answers_for(recipe.key);
+        answers.repositories.push(super::answers::RepositoryAnswer {
+            name: "dotfiles".to_string(),
+            path: "/tmp/dotfiles".to_string(),
+            summary: None,
+        });
+        let text = build_config("", &answers, recipe).expect("builds");
+        let cfg = RootConfig::from_toml_str(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+
+        assert_eq!(cfg.projects.len(), 1, "{text}");
+        let board = &cfg.projects[0];
+        assert_eq!(board.source, "github");
+        // The plugin's own keys ride in the entry's options, uninterpreted.
+        assert_eq!(
+            board
+                .options
+                .get("project_number")
+                .and_then(toml::Value::as_integer),
+            Some(1),
+            "{text}"
+        );
+        assert_eq!(
+            board
+                .options
+                .get("owner_type")
+                .and_then(toml::Value::as_str),
+            Some(answers.github.as_ref().unwrap().owner_type.as_str()),
+            "the owner_type the operator picked is what gets written: {text}"
+        );
+
+        // **Every** repository binds to it: that is what a single-board setup
+        // meant before the mapping moved out of the plugin's config.
+        assert_eq!(cfg.repositories.len(), 2, "{text}");
+        for repo in &cfg.repositories {
+            assert_eq!(repo.project.as_deref(), Some(board.name.as_str()), "{text}");
+        }
+
+        // Parseable is not the same as configured. Resolve the board the way
+        // `initialize` does and run the plugin's own static checks over it —
+        // an entry the plugin cannot read, or one nothing binds to, is the
+        // "setup reported success, the plugin refuses later" failure.
+        let projects: Vec<plugin_protocol::methods::ProjectInfo> = cfg
+            .projects
+            .iter()
+            .map(|p| plugin_protocol::methods::ProjectInfo {
+                name: p.name.clone(),
+                options: match serde_json::to_value(&p.options) {
+                    Ok(serde_json::Value::Object(map)) => map,
+                    _ => Default::default(),
+                },
+            })
+            .collect();
+        let repositories: Vec<plugin_protocol::methods::RepoInfo> = cfg
+            .repositories
+            .iter()
+            .map(|r| plugin_protocol::methods::RepoInfo {
+                name: r.name.clone(),
+                summary: None,
+                path: None,
+                project: r.project.clone(),
+            })
+            .collect();
+        let mut github: task_source_github::config::GithubConfig =
+            serde_json::from_value(serde_json::json!({ "token": "t", "github_login": "me" }))
+                .expect("a minimal github table");
+        github.projects =
+            task_source_github::config::ProjectConfig::resolve(&projects, &repositories)
+                .unwrap_or_else(|e| panic!("the wizard's board does not resolve: {e:?}\n{text}"));
+        let errors = task_source_github::client::static_config_errors(&github);
+        assert!(errors.is_empty(), "{errors:?}\n{text}");
+    }
+
     #[test]
     fn every_recipe_produces_a_config_that_loads_and_validates() {
         // The wizard's whole job. A recipe that writes an unloadable config
@@ -960,28 +1111,45 @@ github_login = "tomoya-k31"
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The successor of the `is_absent` hazard test (#554). The file whose
+    /// readability decides whether `setup` writes is now `config.toml` itself,
+    /// so the "every failure folds into safe-to-create" mistake would be worse
+    /// than before: it would append a duplicate table to a document holding
+    /// every setting the operator has.
     #[test]
-    fn an_unexaminable_plugin_config_is_reported_not_assumed_absent() {
-        // The same hazard `is_unconfigured` guards for `config.toml`, and it
-        // was reintroduced here once by reaching for `Path::exists` — which
-        // folds every failure into `false`, i.e. "safe to create". These files
-        // hold the user's secret references, and `write_atomically`'s rename
-        // only needs the *directory* to be writable.
-        let dir = std::env::temp_dir().join(format!("totsuka-absent-{}", std::process::id()));
+    fn an_unexaminable_config_is_reported_not_assumed_empty() {
+        let dir = std::env::temp_dir().join(format!("totsuka-tables-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        assert!(is_absent(&dir.join("nope.toml")).unwrap());
-        std::fs::write(dir.join("there.toml"), "x = 1\n").unwrap();
-        assert!(!is_absent(&dir.join("there.toml")).unwrap());
+        // Absent is the one failure that legitimately means "no tables".
+        assert!(
+            existing_top_level_tables(&dir.join("nope.toml"))
+                .unwrap()
+                .is_empty()
+        );
 
-        // A path whose *parent* is a file, not a directory: `try_exists` reports
-        // the error instead of claiming the file is not there.
-        let err = is_absent(&dir.join("there.toml/child.toml"))
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[slack]\nx = 1\n\n[worktree]\n").unwrap();
+        let tables = existing_top_level_tables(&path).unwrap();
+        assert!(
+            tables.contains("slack") && tables.contains("worktree"),
+            "{tables:?}"
+        );
+
+        // A path whose *parent* is a file, not a directory: reported, not
+        // read as empty.
+        let err = existing_top_level_tables(&path.join("child.toml"))
             .unwrap_err()
             .to_string();
         assert!(err.contains("child.toml"), "{err}");
-        assert!(err.contains("refusing to overwrite"), "{err}");
+        assert!(err.contains("refusing to write into"), "{err}");
+
+        // Unparsable is reported too: appending a section to a broken document
+        // cannot produce a config worth writing.
+        std::fs::write(&path, "[slack\n").unwrap();
+        let err = existing_top_level_tables(&path).unwrap_err().to_string();
+        assert!(err.contains("cannot parse"), "{err}");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

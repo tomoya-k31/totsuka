@@ -447,6 +447,19 @@ fn install_one(
     let store = cx.store();
     let plan = store.prepare_install_from(&source.manifest_path, &source.binary_dir)?;
 
+    // A plugin whose name is one of the Orchestrator's own top-level keys can
+    // never be configured: its `[<name>]` table would parse as that key (#554).
+    // Refused here rather than left to `config validate`, because the name is
+    // the binary name and cannot be changed afterwards (ADR-0027) — installing
+    // it first would only produce something to uninstall.
+    if orchestrator_core::config::is_reserved_top_level_key(&plan.name) {
+        return Err(format!(
+            "plugin `{}` cannot be installed: `{}` is already a top-level key of config.toml, so its `[{}]` settings table would be read as that key instead → the plugin needs a different binary name",
+            plan.name, plan.name, plan.name
+        )
+        .into());
+    }
+
     // Show the source and checksum, and require confirmation (§5.4).
     println!(
         "Plugin:   {} v{} ({:?})",
