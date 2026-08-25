@@ -386,6 +386,75 @@ async fn claim_when_held_by_another_is_lost_without_writing() {
     assert_eq!(shared.all_requests().len(), 1, "read only — no mutation");
 }
 
+/// Two competitors already hold the issue: the reported holder is the
+/// **adjudicated** winner, not whichever login the unordered assignee list
+/// happens to put first.
+#[tokio::test]
+async fn claim_lost_names_the_adjudicated_holder() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(
+        &["member-c", "member-b"],
+        &[
+            ("member-b", "2026-08-26T10:00:01Z", "E1"),
+            ("member-c", "2026-08-26T10:00:05Z", "E2"),
+        ],
+    )));
+    let resp = claim(&mut srv, 2, "I_1").await;
+    let result = resp.result.expect("result");
+    assert_eq!(result["outcome"], "lost");
+    assert_eq!(
+        result["holder"], "member-b",
+        "earliest effective event wins"
+    );
+}
+
+/// A failed self-removal is retried in-call: a leftover self-assignment
+/// would make a later `task retry` re-win through the pre-read fast path
+/// and double-run the task.
+#[tokio::test]
+async fn claim_race_lost_retries_the_self_removal() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(&[], &[])));
+    shared.push(Canned::Data(
+        json!({ "data": { "user": { "id": "U_me" } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "addAssigneesToAssignable": { "clientMutationId": null } } }),
+    ));
+    shared.push(Canned::Data(claim_read(
+        &["me", "member-b"],
+        &[
+            ("member-b", "2026-08-26T10:00:01Z", "E1"),
+            ("me", "2026-08-26T10:00:03Z", "E2"),
+        ],
+    )));
+    shared.push(Canned::Unauthorized); // 1 回目の除去が失敗
+    shared.push(Canned::Data(
+        json!({ "data": { "removeAssigneesFromAssignable": { "clientMutationId": null } } }),
+    ));
+
+    let resp = claim(&mut srv, 2, "I_1").await;
+    let result = resp.result.expect("lost is still the settled answer");
+    assert_eq!(result["outcome"], "lost");
+    let removes = shared
+        .all_requests()
+        .iter()
+        .filter(|r| {
+            r["query"]
+                .as_str()
+                .unwrap_or("")
+                .contains("removeAssignees")
+        })
+        .count();
+    assert_eq!(removes, 2, "the removal was retried after the failure");
+}
+
 /// The race: both instances assigned; the competitor's effective event is
 /// older, so this one removes **its own assignee only** and reports lost.
 #[tokio::test]

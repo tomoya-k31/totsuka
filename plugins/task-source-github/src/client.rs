@@ -454,8 +454,15 @@ impl<T: GithubTransport> GithubClient<T> {
         }
         if let Some(other) = state.assignees.first() {
             // Someone else already holds it; the fetch that queued this task
-            // was simply stale. Nothing was written, nothing to undo.
-            return Ok(lost(other.clone()));
+            // was simply stale. Nothing was written, nothing to undo. The
+            // holder is adjudicated when the events allow it — `first()` is
+            // an unordered list's head, not the winner — but it is an
+            // informational label, so an invisible event degrades to the
+            // first assignee rather than to a retry.
+            let holder = adjudicate(&state)
+                .map(str::to_string)
+                .unwrap_or_else(|_| other.clone());
+            return Ok(lost(holder));
         }
 
         // Unassigned: write the claim, then read back after the measured
@@ -489,15 +496,28 @@ impl<T: GithubTransport> GithubClient<T> {
             Ok(winner) => {
                 let winner = winner.to_string();
                 // Step aside: remove only this operator's own assignment.
-                // Best-effort — the winner is already running either way, so
-                // a failed removal costs board tidiness, not correctness.
-                if let Err(e) = self
-                    .assign_mutation(REMOVE_ASSIGNEES_MUTATION, task_id, &my_id)
-                    .await
-                {
-                    tracing::warn!(
+                // Best-effort for the *outcome* — the winner is already
+                // running either way — but not for trying: a leftover
+                // self-assignment makes a later `task retry` re-win through
+                // the pre-read fast path (this operator is an assignee
+                // again, indistinguishable from a human's routing) and
+                // double-run the task. One in-call retry closes most of that
+                // window; the final failure names the consequence.
+                let mut removed = Ok(());
+                for _ in 0..2 {
+                    removed = self
+                        .assign_mutation(REMOVE_ASSIGNEES_MUTATION, task_id, &my_id)
+                        .await;
+                    if removed.is_ok() {
+                        break;
+                    }
+                }
+                if let Err(e) = removed {
+                    tracing::error!(
                         task_id,
-                        "lost the claim but could not remove own assignee: {e}"
+                        "lost the claim but could not remove own assignee: {e} → remove it \
+                         by hand, or a later `task retry` will re-win the claim and \
+                         double-run the task"
                     );
                 }
                 Ok(lost(winner))
