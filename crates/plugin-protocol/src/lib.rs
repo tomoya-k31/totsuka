@@ -67,6 +67,7 @@
 //!     repositories: vec![],
 //!     llm: None,
 //!     workflows: vec![],
+//!     projects: vec![],
 //!     poll_interval_secs: None,
 //! };
 //! let request = Request::new(1, method::INITIALIZE, Some(serde_json::to_value(&params)?));
