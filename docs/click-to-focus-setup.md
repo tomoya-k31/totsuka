@@ -33,7 +33,7 @@ Substitute your own terminal. Common ones:
 
 ## 3. Write the `[macos]` table
 
-In your config directory (`$XDG_CONFIG_HOME/totsuka/plugins/`, usually `~/.config/totsuka/plugins/`):
+In your config file (`$XDG_CONFIG_HOME/totsuka/config.toml`, usually `~/.config/totsuka/config.toml`), as a top-level table:
 
 ```toml
 [macos]

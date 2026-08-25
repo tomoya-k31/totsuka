@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:8240dc1144cf9907aa5ff4d4cb1083dd923a31181864853ebbd607c7f86bc01a -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:4ac4ea6e54c47dffb8646b97cd3c6d4ecbfccf026e2622fe9697fc9f0994fe32 -->
 
 # Plugin development guide
 
@@ -51,11 +51,13 @@ Before starting your plugin, the orchestrator checks `protocol_version` for comp
 
 ### Choosing the range
 
-The **upper bound** goes at the next major or minor after the breaking change you want to stay below — currently `<0.6`. A manifest capping at `<0.3` is refused by a 0.3.0 orchestrator, one capping at `<0.4` is refused by 0.4.0, one capping at `<0.5` is refused by 0.5.0, and so on.
+The **upper bound** goes at the next major or minor after the breaking change you want to stay below — currently `<0.7`. A manifest capping at `<0.3` is refused by a 0.3.0 orchestrator, one capping at `<0.4` is refused by 0.4.0, `<0.5` by 0.5.0, `<0.6` by 0.6.0, and so on.
 
-**The lower bound matters just as much, and it follows what you depend on — not your plugin's kind, and not whatever protocol version is newest.** The herdr plugin declares `>=0.2.3` because 0.2.3 is where the field it needs to launch tools was added, and it no longer has a fallback that builds the command line itself. Refusing older orchestrators is what makes that removed fallback **unreachable** rather than merely deprecated.
+**The lower bound matters just as much, and it follows what you depend on — not your plugin's kind, and not whatever protocol version is newest.**
 
-The orca plugin is the same kind and still declares `>=0.1.0`, because it drives the `orca` CLI and never reads that field. Raising its lower bound would reject orchestrators it works with perfectly well.
+In 0.6.0 every bundled plugin ended up at `>=0.6.0`, but that is because they all depend on the same thing: `initialize` was renamed, and every plugin of every kind reads that call. Do not read the uniform result as a rule.
+
+The cases that *don't* line up show the rule better. In 0.4.0 only the herdr plugin was raised, to `>=0.2.3`, because 0.2.3 is where the field it needs to launch tools was added and it no longer has a fallback that builds the command line itself — refusing older orchestrators is what makes that removed fallback **unreachable** rather than merely deprecated. The orca plugin is the same kind and stayed at `>=0.1.0`, because it drives the `orca` CLI and never reads that field; raising its lower bound would reject orchestrators it works with perfectly well.
 
 ## Methods
 

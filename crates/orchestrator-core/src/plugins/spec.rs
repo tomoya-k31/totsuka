@@ -326,11 +326,13 @@ mod tests {
             .collect()
     }
 
-    /// The `initialize.triggers` contract has existed since protocol 0.1.6,
-    /// and #396 made a plugin depend on it for the first time: the Slack
-    /// plugin reads `trigger.reaction` from here to know which emoji start a
-    /// task. Silently dropping the key — or reordering the list — turns the
-    /// emoji into a no-op with no error anywhere.
+    /// This contract has existed since protocol 0.1.6 (as `initialize.triggers`
+    /// until 0.6.0 renamed it to `workflows`, #554), and #396 made a plugin
+    /// depend on it for the first time: the Slack plugin reads
+    /// `trigger.reaction` from here to know which emoji start a task. Since
+    /// 0.6.0 it also depends on the **order**, because first-match runs there
+    /// and nowhere else. Silently dropping the key — or reordering the list —
+    /// turns the emoji into a no-op with no error anywhere.
     #[test]
     fn a_task_sources_triggers_arrive_whole_and_in_definition_order() {
         let cfg = root(

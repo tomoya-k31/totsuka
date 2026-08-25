@@ -35,10 +35,11 @@ use crate::slack_api::SlackMessage;
 /// Which emoji start a task (#396).
 ///
 /// Reaction triggers are declared as `[[workflows]].trigger = { reaction =
-/// "..." }`. The Orchestrator sends them at `initialize` and re-checks the
-/// emoji against `reaction:<emoji>` in `Task.labels`, so a task raised this
-/// way **must** carry that label or it matches no workflow and is silently
-/// dropped after submission.
+/// "..." }`. The Orchestrator sends them at `initialize` and does **not**
+/// re-check them: since 0.6.0 (#554) this type is what decides which workflow
+/// a reaction belongs to, and the name travels on `task/submit`. The
+/// `reaction:<emoji>` label is still written, but as a record of how the task
+/// was raised — dropping it no longer makes the task vanish.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReactionTriggers {
     /// Accepted emoji, normalized (colon-free), each with the task-id prefix

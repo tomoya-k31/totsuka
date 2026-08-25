@@ -37,7 +37,7 @@ impl Trigger {
         Self(table)
     }
 
-    /// The raw table, for passing to `initialize`'s `triggers` and for JSON
+    /// The raw table, for passing to `initialize`'s `workflows` and for JSON
     /// conversion.
     pub fn as_table(&self) -> &toml::Table {
         &self.0

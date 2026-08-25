@@ -1,10 +1,12 @@
 name = "orca"
 kind = "agent_ide"
 version = "0.1.0"
-# Unlike herdr this stays at `>=0.1.0`: orca drives the `orca` CLI itself and
-# never reads `TaskDispatchParams.tool_launch`, so the 0.2.3 floor that #411
-# put on herdr (whose local argv fallback was deleted) would exclude
-# orchestrators this plugin works with perfectly well.
+# This used to stay at `>=0.1.0` while herdr sat at `>=0.2.3`: orca drives the
+# `orca` CLI itself and never reads `TaskDispatchParams.tool_launch`, so #411's
+# floor would have excluded orchestrators it works with perfectly well. #554 is
+# a different case — 0.6.0 renamed `InitializeParams.triggers` to `workflows`,
+# and every plugin of every kind reads `initialize`. The floors match now
+# because the dependency does, not because agent_ide plugins move together.
 protocol_version = ">=0.6.0, <0.7"
 
 # orca has no structured plan API and no pane-control surface, so only the

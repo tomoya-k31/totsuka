@@ -242,6 +242,29 @@ fn install_requires_confirmation() {
     );
 }
 
+/// A plugin named after one of the Orchestrator's own top-level config keys
+/// can never be configured — its `[<name>]` table parses as that key (#554).
+/// Refused at install, not only at `config validate`: the name is the binary
+/// name and cannot be changed afterwards (ADR-0027), so installing it first
+/// would only produce something to uninstall.
+#[test]
+fn a_plugin_named_after_a_reserved_top_level_key_is_rejected() {
+    let env = Env::new("reserved");
+    let src = env.root.join("src");
+    fake_source(&src, "workflows", ">=0.6.0, <0.7");
+
+    let (ok, _, stderr) = env.run(&["plugin", "install", src.to_str().unwrap(), "--yes"], None);
+    assert!(!ok, "install of a reserved name must fail");
+    assert!(stderr.contains("top-level key"), "stderr: {stderr}");
+
+    let (_, out, _) = env.run(&["plugin", "list", "--json"], None);
+    let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(
+        rows.as_array().unwrap().is_empty(),
+        "nothing may be committed: {out}"
+    );
+}
+
 #[test]
 fn incompatible_manifest_is_rejected() {
     let env = Env::new("incompat");

@@ -403,7 +403,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 
 | Method | Direction | Kind | Purpose |
 |---|---|---|---|
-| `initialize` | O→P | common | Exchange plugin-specific config (including resolved secrets) and capabilities. For `task_source`, also carries `triggers`/`poll_interval_secs` (protocol 0.1.6) |
+| `initialize` | O→P | common | Exchange plugin-specific config (including resolved secrets) and capabilities. `workflows` (the `[[workflows]]` naming this plugin as `source` or `agent`) goes to every kind; `projects` / `repositories` / `poll_interval_secs` go to `task_source` (renamed from `triggers` in 0.6.0, #554) |
 | `shutdown` | O→P | common | Termination request |
 | `config/validate` | O→P | common | Validate plugin-specific config (F-59) |
 | `task/submit` | **P→O request** | task_source | Push a task the plugin found (persist-before-ack, protocol 0.1.6). Replaces the removed `tasks/fetch` as of protocol 0.2.0 — every task_source is push-only |

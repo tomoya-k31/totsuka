@@ -34,7 +34,7 @@ osascript -e 'id of app "Alacritty"'   # → org.alacritty
 
 ## 3. `[macos]` テーブルを書く
 
-設定ディレクトリ（`$XDG_CONFIG_HOME/totsuka/plugins/`、通常は `~/.config/totsuka/plugins/`）に置く:
+設定ファイル（`$XDG_CONFIG_HOME/totsuka/config.toml`、通常は `~/.config/totsuka/config.toml`）のトップレベルに置く:
 
 ```toml
 [macos]

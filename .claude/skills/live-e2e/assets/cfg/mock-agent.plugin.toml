@@ -4,12 +4,13 @@
 name = "mock_agent"
 kind = "agent_ide"
 version = "0.1.0"
-# 上限は同梱 6 プラグインと同じ `<0.6`。理由は agent_ide 一般ではなく
-# **このテストダブルについて**の話で、mock_plugin は 0.4.0 で消えた
-# `TaskDispatchParams.hook` / `Capabilities.design_preview` も、0.5.0 で消えた
-# 到達不能な宣言も読んでいない（dispatch params は記録するだけ）。
-# 0.4.0 の削除は agent_ide の使う面に**触れている** — herdr は下限を
-# `>=0.2.3` へ上げている。
+# 範囲は同梱 6 プラグインと同じ `>=0.6.0, <0.7`。下限が動いたのは #554 で、
+# 0.6.0 が `InitializeParams.triggers` を `workflows` へ改名したためである
+# — `initialize` は kind を問わず全プラグインが読むので、ここだけ据え置く
+# 理由が無い。上限の理由は agent_ide 一般ではなく**このテストダブルについて**
+# の話で、mock_plugin は 0.4.0 で消えた `TaskDispatchParams.hook` /
+# `Capabilities.design_preview` も、0.5.0 で消えた到達不能な宣言も読んで
+# いない（dispatch params は記録するだけ）。
 #
 # **この manifest は `plugins/` の外にあるため、バンプのたびに数え落とされうる**。
 # 0.4.0（#413）は 7 本とも動かしたが、0.5.0（#501）は 6 本だけで、ここが

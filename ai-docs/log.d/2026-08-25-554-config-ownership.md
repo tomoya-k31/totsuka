@@ -7,3 +7,4 @@
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) / [orchestrator-core](/components/orchestrator-core.md) / [orchestrator-cli](/components/orchestrator-cli.md) / [task-source-github](/components/task-source-github.md) / [task-source-notion](/components/task-source-notion.md) / [task-source-slack](/components/task-source-slack.md) に 0.6.0 の変更を反映。
 * **Update**: [plugin-sdk](/components/plugin-sdk.md) — `poll_loop` は `InitializeParams.workflows`（旧 `triggers`）を取り、`submit_task(task, workflow)` はどの `[[workflows]]` に属するかを名前で運ぶ。`trigger` の解釈もワークフローの選択もプラグイン側で行う。
 * **Update**: [ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md) の「プラグインは自分の設定を使う」は不変で、その置き場所だけが `plugins/{name}.toml` から `config.toml` の `[<name>]` へ移った。
+* **Update**: [plugin-protocol](/components/plugin-protocol.md) の `version` 行を 0.6.0 へ、[プラグイン開発ガイド](/development/plugin-dev-guide.md) の範囲の節を 0.6 世代へ更新（上限 `<0.7`、下限が全プラグインで揃った理由）。同梱 manifest 7 本のコメントも、旧い下限の根拠を説明したままだったので書き直した。

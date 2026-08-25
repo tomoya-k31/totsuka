@@ -1,10 +1,13 @@
 name = "herdr"
 kind = "agent_ide"
 version = "0.1.0"
-# The lower bound is load-bearing, not cosmetic (#411): 0.2.3 is where
-# `TaskDispatchParams.tool_launch` arrived, and this plugin no longer has a
-# local argv fallback for orchestrators that send none. Refusing them here
-# (F-54) is what makes deleting `agent_command`/`plan_args` safe.
+# The lower bound is load-bearing, not cosmetic. It was `>=0.2.3` for #411
+# (0.2.3 is where `TaskDispatchParams.tool_launch` arrived, and this plugin
+# has no local argv fallback for orchestrators that send none — refusing them
+# here is what made deleting `agent_command`/`plan_args` safe). #554 raised it
+# again: 0.6.0 renamed `InitializeParams.triggers` to `workflows`, which every
+# kind of plugin reads. Both floors are the same rule — depend on it, require
+# it — and F-54 is what enforces them.
 protocol_version = ">=0.6.0, <0.7"
 
 [capabilities]

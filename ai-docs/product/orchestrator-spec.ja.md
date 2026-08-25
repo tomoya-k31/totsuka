@@ -406,7 +406,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 
 | メソッド | 方向 | 対象種別 | 用途 |
 |---|---|---|---|
-| `initialize` | O→P | 共通 | 固有設定(解決済みシークレット含む)と capability の交換。task_source には `triggers`/`poll_interval_secs` も渡す(protocol 0.1.6) |
+| `initialize` | O→P | 共通 | 固有設定(解決済みシークレット含む)と capability の交換。`workflows`(その名前を `source` または `agent` として名指す `[[workflows]]`)は全 kind へ、`projects`/`repositories`/`poll_interval_secs` は task_source へ渡す(0.6.0 で `triggers` から改名、#554) |
 | `shutdown` | O→P | 共通 | 終了要求 |
 | `config/validate` | O→P | 共通 | 固有設定の検証(F-59) |
 | `task/submit` | **P→O request** | task_source | プラグインが見つけたタスクを push(persist-before-ack、protocol 0.1.6)。protocol 0.2.0 で削除された `tasks/fetch` の後継 — task_source は全て push 専用 |

@@ -56,13 +56,15 @@ outputs = ["source"]            # result/publish に対応するなら宣言す�
 `resume_session` は `hook_completion` に**置き換わった**ので、フック経由で完了を
 報告する agent は新しい名前で宣言し直すこと。
 
-Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push 専用**（`tasks/fetch` は削除済み。起動できる task_source は例外なく push 型なので、0.5.0 でこれを宣言する `task_submit` は情報量ゼロとして削除された）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に、`<0.3` を上限とする manifest は **0.3.0**（#264 の `Task.thread_key` 削除）に、`<0.4` を上限とする manifest は **0.4.0**（#411 の `TaskDispatchParams.hook` / `Capabilities.design_preview` 削除）に、`<0.5` を上限とする manifest は **0.5.0**（#496 の到達不能な宣言 5 件の削除）に、それぞれ起動拒否される — 上限は超えたい破壊的バンプの**次**のメジャー/マイナーに置く（現行なら `<0.6`）。
+Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push 専用**（`tasks/fetch` は削除済み。起動できる task_source は例外なく push 型なので、0.5.0 でこれを宣言する `task_submit` は情報量ゼロとして削除された）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に、`<0.3` を上限とする manifest は **0.3.0**（#264 の `Task.thread_key` 削除）に、`<0.4` を上限とする manifest は **0.4.0**（#411 の `TaskDispatchParams.hook` / `Capabilities.design_preview` 削除）に、`<0.5` を上限とする manifest は **0.5.0**（#496 の到達不能な宣言 5 件の削除）に、`<0.6` を上限とする manifest は **0.6.0**（#554 の `initialize.triggers` → `workflows` 改名）に、それぞれ起動拒否される — 上限は超えたい破壊的バンプの**次**のメジャー/マイナーに置く（現行なら `<0.7`）。
 
 上の例は下限を `>=0.6.0` に置いている。0.6.0 で `initialize` の `triggers` が `workflows` へ改名されたので、それより前を範囲に含めると **`workflows` を読むプラグインが空を受け取り、何も監視しない**まま起動してしまう（#554）。F-54 のゲートはこの形の失敗を起動拒否へ倒すためにある。
 
-**下限も上限と同じくらい意味を持つ。** 例えば herdr は `>=0.2.3` を宣言する。0.2.3 が `TaskDispatchParams.tool_launch` の入ったバージョンで、herdr には argv を自前で組み立てるフォールバックがもう無いためである。下限で弾いておくことが、そのフォールバックを「非推奨」ではなく**到達不能**にしている（[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。
+**下限も上限と同じくらい意味を持ち、「何に依存しているか」に従う。** プラグインの kind でも、その時点の最新プロトコルでもない。
 
-**これは kind で決まる規則ではない。** 同じ agent_ide でも orca は `>=0.1.0` のままである — `orca` CLI 自体を駆動していて `tool_launch` を一度も読まないので、下限を上げると**問題なく動く Orchestrator を弾く**ことになる。task_source / notifier も同じ理由で据え置き。**下限は「何に依存しているか」に従う**のであって、プラグインの kind やその時点の最新プロトコルに合わせるものではない。
+0.6.0 では**結果として同梱 7 本すべてが `>=0.6.0` に揃った**が、それは全部が同じものに依存しているからである —— `initialize` の改名は kind を問わず全プラグインが読む面だからで、「最新に合わせた」のではない。一律に見える状態を規則と読み違えないこと。
+
+**揃わない例のほうが規則をよく表す。** 0.4.0 では agent_ide のうち herdr だけを `>=0.2.3` へ上げた。0.2.3 が `TaskDispatchParams.tool_launch` の入ったバージョンで、herdr には argv を自前で組み立てるフォールバックがもう無かったためである（下限で弾くことが、そのフォールバックを「非推奨」ではなく**到達不能**にした、[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。同じ agent_ide の orca は `>=0.1.0` のままだった —— `orca` CLI 自体を駆動していて `tool_launch` を一度も読まないので、下限を上げれば**問題なく動く Orchestrator を弾く**ことになる。
 
 # メソッド（§11 付録 A）
 
