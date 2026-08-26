@@ -40,7 +40,7 @@ set -euo pipefail
 #
 # このリストの存在が検査の主眼である: 放置された宣言と、意図した猶予とを
 # 区別できるようにするためにある。理由なしで足さないこと。
-DECLARATION_EXEMPT=""
+DECLARATION_EXEMPT="task_claim=#556 のスタック PR 1（protocol 0.6.1）が宣言だけを先に運ぶ。消費者は同スタックの core claim ゲート（dispatch_one）で、そちらのマージ時にこの免除を外す"
 
 PLUGIN_ALLOWED_NORMAL="plugin-protocol plugin-sdk"
 PLUGIN_ALLOWED_DEV="plugin-protocol plugin-sdk test-support"

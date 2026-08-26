@@ -261,7 +261,23 @@ use semver::{Version, VersionReq};
 /// 0.6.0 Orchestrator and would silently watch for no triggers at all, which
 /// is precisely the class of failure F-54's version gate exists to convert
 /// into a refusal to launch. The bundled manifests move to `>=0.6.0, <0.7`.
-pub const PROTOCOL_VERSION: &str = "0.6.0";
+///
+/// 0.6.1 (#556): claim-before-dispatch for multi-member sources.
+///
+/// - [`method::TASK_CLAIM`](crate::method::TASK_CLAIM) (O→P) with
+///   [`TaskClaimParams`](crate::methods::TaskClaimParams) /
+///   [`TaskClaimResult`](crate::methods::TaskClaimResult): claim a task for
+///   exclusive execution immediately before dispatch. The Orchestrator
+///   decides *when*, the plugin decides *how* and adjudicates races (F-08).
+/// - [`Capabilities::task_claim`](crate::Capabilities::task_claim) gates it:
+///   the method is only sent to plugins that declare the flag, so an
+///   undeclaring plugin keeps today's dispatch-without-exclusion exactly.
+///
+/// **Patch, for the 0.4.1/0.5.1 reason**: no plugin has to answer the method
+/// or send the flag to keep working — `Capabilities` deserializes with
+/// defaults, and the Orchestrator only calls what was declared. `>=0.6.0`
+/// manifests keep matching.
+pub const PROTOCOL_VERSION: &str = "0.6.1";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -285,7 +301,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 6, 0));
+        assert_eq!(protocol_version(), Version::new(0, 6, 1));
     }
 
     #[test]

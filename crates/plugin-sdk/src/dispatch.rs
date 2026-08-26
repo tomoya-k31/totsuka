@@ -6,7 +6,7 @@
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskUpdateStatusParams,
+    ResultPublishParams, TaskClaimParams, TaskClaimResult, TaskUpdateStatusParams,
 };
 use plugin_protocol::{RequestId, method};
 use serde::de::DeserializeOwned;
@@ -99,6 +99,26 @@ pub trait TaskSourceHandler: Send {
         &mut self,
         params: ResultPublishParams,
     ) -> impl Future<Output = Result<Value, Error>> + Send;
+
+    /// `task/claim` (0.6.1, #556): claim a task for exclusive execution.
+    ///
+    /// Defaulted to a `METHOD_NOT_FOUND` error so existing handlers keep
+    /// compiling — the Orchestrator only calls this on plugins whose
+    /// `initialize` declared the `task_claim` capability, so a handler that
+    /// overrides this must declare the flag, and one that declares the flag
+    /// must override this.
+    fn task_claim(
+        &mut self,
+        params: TaskClaimParams,
+    ) -> impl Future<Output = Result<TaskClaimResult, Error>> + Send {
+        let _ = params;
+        async {
+            Err(Error::new(
+                error_code::METHOD_NOT_FOUND,
+                "task/claim is not supported by this plugin → do not declare the `task_claim` capability",
+            ))
+        }
+    }
 }
 
 /// Adapter: drive a [`TaskSourceHandler`] as a [`LineHandler`].
@@ -146,6 +166,7 @@ impl<H: TaskSourceHandler> LineHandler for TaskSourceServer<H> {
             method::INITIALIZE => call!(InitializeParams, initialize),
             method::CONFIG_VALIDATE => call!(ConfigValidateParams, config_validate),
             method::TASK_UPDATE_STATUS => call!(TaskUpdateStatusParams, update_status),
+            method::TASK_CLAIM => call!(TaskClaimParams, task_claim),
             method::RESULT_PUBLISH => call!(ResultPublishParams, result_publish),
             method::SHUTDOWN => Reply::shutdown_ack(id),
             other => Reply::respond(Response::error(
@@ -156,5 +177,54 @@ impl<H: TaskSourceHandler> LineHandler for TaskSourceServer<H> {
                 ),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plugin_protocol::methods::TaskClaimParams;
+
+    /// A handler that overrides nothing, so `task_claim` is the default.
+    struct Bare;
+    impl TaskSourceHandler for Bare {
+        async fn initialize(&mut self, _: InitializeParams) -> Result<InitializeResult, Error> {
+            unreachable!("not exercised")
+        }
+        async fn config_validate(
+            &mut self,
+            _: ConfigValidateParams,
+        ) -> Result<ConfigValidateResult, Error> {
+            unreachable!("not exercised")
+        }
+        async fn update_status(&mut self, _: TaskUpdateStatusParams) -> Result<Value, Error> {
+            unreachable!("not exercised")
+        }
+        async fn result_publish(&mut self, _: ResultPublishParams) -> Result<Value, Error> {
+            unreachable!("not exercised")
+        }
+    }
+
+    /// The default `task_claim` refuses with `METHOD_NOT_FOUND` — and the
+    /// message, read by a plugin author, must not carry source indentation.
+    /// A wrapped string literal that loses its line continuations keeps the
+    /// indentation *inside* the message and `contains` alone never notices;
+    /// this shipped twice already (#491, and the first cut of this very
+    /// method), so the guard is part of the contract now.
+    #[tokio::test]
+    async fn default_task_claim_refuses_with_a_clean_message() {
+        let err = Bare
+            .task_claim(TaskClaimParams {
+                task_id: "x".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, error_code::METHOD_NOT_FOUND);
+        assert!(
+            !err.message.contains("  "),
+            "the message carries source indentation: {:?}",
+            err.message
+        );
+        assert!(err.message.contains("task_claim"), "{}", err.message);
     }
 }
