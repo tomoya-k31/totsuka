@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-26T09:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T03:30:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -231,18 +231,18 @@ request_timeout_secs = 30
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "Ready to design" }
+trigger = { status = "Ready to design" }
 profile = "design"                       # mode / output / verification を解決する
 agent = "herdr"
-on_success = { set_status = "Design review" }
+on_success = { status = "Design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "Ready to implement" }
+trigger = { status = "Ready to implement" }
 profile = "implement"
 agent = "herdr"
-on_success = { set_status = "In review" }
+on_success = { status = "In review" }
 ```
 
 ### 4.10 通知(Notifier プラグイン)

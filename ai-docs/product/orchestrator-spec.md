@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-26T09:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T03:30:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -230,18 +230,18 @@ On top of the same plugin binaries, any number of **named configurations — wor
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "Ready to design" }
+trigger = { status = "Ready to design" }
 profile = "design"                       # resolves mode / output / verification
 agent = "herdr"
-on_success = { set_status = "Design review" }
+on_success = { status = "Design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "Ready to implement" }
+trigger = { status = "Ready to implement" }
 profile = "implement"
 agent = "herdr"
-on_success = { set_status = "In review" }
+on_success = { status = "In review" }
 ```
 
 ### 4.10 Notifications (notifier plugins)

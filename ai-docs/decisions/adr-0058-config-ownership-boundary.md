@@ -4,7 +4,7 @@ title: ADR-0058 設定の所有はファイル位置ではなく宣言で切り�
 description: "プラグイン固有の設定項目の定義と検証をプラグインへ委譲するための設計。plugins/{name}.toml を廃止して config.toml のトップレベル [<name>] へ移し、[[workflows]] の追加キーはフラットに書いて source と agent の両方へ送り「ちょうど 1 つが引き取る」を規則にする。ワークフロー選択はプラグインが task/submit で名指しし、core の予約 trigger 語彙（reaction / project_status / label）を撤廃する。repo→トラッカーの紐付けは [[projects]] と [[repositories]].project へ移し ADR-0056 を置き換える。manifest への静的スキーマ宣言・名前空間つきの記法・互換のための二重読みは不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/554
 tags: [decision, config, protocol, plugin, workflow, projects, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T03:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

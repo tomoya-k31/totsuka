@@ -4,7 +4,7 @@ title: ADR-0056 複数トラッカーは単一プラグイン内のリストで�
 description: "GitHub Project / Notion Database を複数同時に polling し、Slack 発の依頼を解決済みリポジトリに対応するトラッカーへ起票するための設計。複数プラグインインスタンスを不採用にし、単一プラグイン内の [[projects]] / [[databases]] リストを採る。repo→トラッカーの順方向マッピングはプラグイン設定を唯一の正本とし、initialize 応答の claimed_repos で Orchestrator へ伝える。Slack 発の起票は既存 triage profile の Agent 経路を完成させる形にし、新規 RPC は足さない。"
 resource: https://github.com/tomoya-k31/totsuka/issues/542
 tags: [decision, task-source, github, notion, slack, routing, config, protocol, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T03:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -81,7 +81,7 @@ repos = ["web-app"]
 
 ## 3. 配列要素は「対象を特定するキー + `repos`」だけに絞る
 
-ステータス列（`status_field` / `status_map` / `in_progress_statuses`）・`property_map`・`prompts`・`token` はトップ共有のまま。board ごとに列名が違う運用はありうるが、今の要件に無い。必要になったら additive で要素側に上書きキーを足せる — 先に入れると「効いていない設定」を作る。
+ステータス列（`status_field` / `status_map` / `in_progress_statuses`）・`property_map`・`prompts`・`token` はトップ共有のまま（`status_map` はその後 [ADR-0062](/decisions/adr-0062-status-vocabulary.md) で廃止された）。board ごとに列名が違う運用はありうるが、今の要件に無い。必要になったら additive で要素側に上書きキーを足せる — 先に入れると「効いていない設定」を作る。
 
 Notion の `[[databases]].repos` は**新設の挙動**である。これまで Notion 側に repo フィルタは無かったので、`repo_hint` プロパティの値がその要素の `repos` に無いページは skip されるようになる。
 

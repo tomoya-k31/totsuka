@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:2b42367e8c373a317920fc761b9299a09ae53dad2249794417408d10d68de268 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:ee94f682a1ff5f3ad8b0a277478517306d6e267da43da304788fae087abbb335 -->
 
 # Configuration reference
 
@@ -134,14 +134,14 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 |---|---|---|---|
 | `name` | string | required | Workflow name |
 | `source` | string | required | Task source instance name |
-| `trigger` | table | `{}` | Trigger condition. **totsuka does not interpret its contents** — the source plugin receives it and runs first-match. For GitHub's `project_status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim). If the card lands in **another** workflow's trigger column, the conversation is handed over to that workflow — the next stage of a column pipeline continues with the same worktree and the same agent session. Only a finished conversation is handed over. A delivery that arrives while a stage is still running is passed over: with a **polling** source (github / notion) the next tick brings it back and the handoff happens then, but Slack acks first and never re-sends, so that trigger is lost — re-issue it once the run has finished. **An unknown key in this table is a hard startup failure.** A trigger is read key by key, so a key nobody reads is dropped and the condition simply goes away — which means a typo does not narrow the trigger, it *widens* it (write `assinee` and you get "no condition", firing on exactly the tasks you meant to exclude). The error lists the keys the source does read, so it doubles as migration guidance. `trigger = {}` (catch-all) has no keys and is always valid |
+| `trigger` | table | `{}` | Trigger condition. **Deciding which tasks match is the source plugin's job** — it receives it and runs first-match. For GitHub's `status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim). If the card lands in **another** workflow's trigger column, the conversation is handed over to that workflow — the next stage of a column pipeline continues with the same worktree and the same agent session. Only a finished conversation is handed over. A delivery that arrives while a stage is still running is passed over: with a **polling** source (github / notion) the next tick brings it back and the handoff happens then, but Slack acks first and never re-sends, so that trigger is lost — re-issue it once the run has finished. **An unknown key in this table is a hard startup failure.** A trigger is read key by key, so a key nobody reads is dropped and the condition simply goes away — which means a typo does not narrow the trigger, it *widens* it (write `assinee` and you get "no condition", firing on exactly the tasks you meant to exclude). The error lists the keys the source does read, so it doubles as migration guidance. `trigger = {}` (catch-all) has no keys and is always valid One key is totsuka's own: **`status`** names the source's status column, and totsuka reads it to build the column graph its cycle check walks — it only compares that string against an `on_*` write-back, and never uses it to match a task. Whether a source accepts the key is up to that source; Slack has no status column and rejects it as unknown. |
 | `profile` | enum? | none | One of `answer`, `triage`, `design`, `implement`. Decides `mode`, `output`, and `verification` together |
 | `mode` | enum | required without `profile` | `plan` or `implement` |
 | `agent` | string | required | Agent instance name |
 | `output` | enum | required without `profile` | `source` or `none` |
-| `on_start` | `{ set_status = "..." }`? | none | Update the status in the source right before the task is handed to an agent, so the board mirrors "in progress" while the run happens. In a multi-member setup this also makes `in_progress_statuses` keep other members' instances from picking the task up. Omitted, nothing is written. **If you set it, set `on_failure` too** — otherwise a failed task leaves the column stuck on the in-progress status. **An unknown key in `on_start` / `on_success` / `on_failure` is a startup error** (`set_status` is the only valid key). The check exists because the breakage is silent: write `set_stauts` and the task still runs, still succeeds, and only the board stops moving |
-| `on_success` | `{ set_status = "..." }`? | none | Update the status in the source on success |
-| `on_failure` | `{ set_status = "..." }`? | none | Update the status in the source on failure. Retryable failures do not write back |
+| `on_start` | `{ status = "..." }`? | none | Update the status in the source right before the task is handed to an agent, so the board mirrors "in progress" while the run happens. In a multi-member setup this also makes `in_progress_statuses` keep other members' instances from picking the task up. Omitted, nothing is written. **If you set it, set `on_failure` too** — otherwise a failed task leaves the column stuck on the in-progress status. **An unknown key in `on_start` / `on_success` / `on_failure` is a startup error** (`status` is the only valid key). The check exists because the breakage is silent: write `set_stauts` and the task still runs, still succeeds, and only the board stops moving |
+| `on_success` | `{ status = "..." }`? | none | Update the status in the source on success |
+| `on_failure` | `{ status = "..." }`? | none | Update the status in the source on failure. Retryable failures do not write back |
 | `verification` | enum | `llm` | How a completion claim is checked: `llm` (checked in session), `human` (waits for `totsuka task verify`), or `none`. Cannot be combined with `profile` |
 | `timeout_secs` | int? | 1800 | Seconds of silence after the last signal before escalating. **`0` opts this workflow out of the timeout sweep entirely** |
 | `rubric` | string? | none | The criteria used for `llm` verification. **The only prompt override there is** (see below); it beats the profile's default |
@@ -190,7 +190,7 @@ Every key is interpreted by the source plugin; totsuka passes the whole table th
 
 | Source | Keys |
 |---|---|
-| github | `project_status` / `status`, `label` / `labels` |
+| github | `status` / `status`, `label` / `labels` |
 | notion | `status`, a raw `filter` |
 | slack | `reaction` (a workflow without one takes mentions) |
 
@@ -224,10 +224,10 @@ agent = "herdr"
 [[workflows]]
 name = "github-design"
 source = "github"
-trigger = { project_status = "Design" }
+trigger = { status = "Design" }
 profile = "design"
 agent = "herdr"
-on_success = { set_status = "Design Review" }
+on_success = { status = "Design Review" }
 initial_prompt = "Use the /grill-me skill and produce a detailed design."
 ```
 
@@ -256,10 +256,10 @@ A profile names a combination of `mode`, `output`, and `verification` that fits 
 [[workflows]]
 name = "gh-design"
 source = "github"
-trigger = { project_status = "Ready for design" }
+trigger = { status = "Ready for design" }
 profile = "design"
 agent = "herdr"
-on_success = { set_status = "Designed" }
+on_success = { status = "Designed" }
 ```
 
 | Combination | Result |
@@ -268,7 +268,7 @@ on_success = { set_status = "Designed" }
 | `profile` plus `output` | **Allowed**, and `output` wins. This is a wiring choice rather than a permission, and a Slack-triggered implement workflow needs it to return the pull request URL to the thread |
 | No `profile` and no `mode` / `output` | **Error.** Either name a profile or write both |
 | `profile` plus `rubric`, `tool`, `timeout_secs`, `on_start`, `on_success`, `on_failure` | Allowed |
-| `set_status` write-backs that form a **cycle of columns** | **Error.** Columns are nodes and write-backs are edges; a cycle re-runs forever with **no human in it**, dispatching an agent every lap. Writing back into your own trigger column is the length-1 case. The error names the actual route; the fix is to route one hop through a column no workflow triggers on, so a person moves the card out of it. Checked per `source`, lexically only — a `status_map` aliasing two names onto one column is beyond its sight |
+| `status` write-backs that form a **cycle of columns** | **Error.** Columns are nodes and write-backs are edges; a cycle re-runs forever with **no human in it**, dispatching an agent every lap. Writing back into your own trigger column is the length-1 case. The error names the actual route; the fix is to route one hop through a column no workflow triggers on, so a person moves the card out of it. Checked per `source`, lexically only — two different boards that happen to share a column name are not a cycle, and `source` keeps them apart here |
 
 Profiles are optional. Combinations they cannot express — `verification = "human"`, for instance, since all four resolve to `llm` — are written out explicitly.
 
@@ -640,7 +640,6 @@ poll_interval_secs = 60   # 60 is also the default
 | `status_field` | string | `Status` | Name of the single-select field holding the status column. **Shared by every board** |
 | `github_login` | string | required | Your own login, used to detect self-assigned tasks and as the claim target (the login totsuka self-assigns when it takes a task). **One login = one instance**: running several totsuka instances under the same login is unsupported — the claim arbitration cannot tell them apart |
 | `in_progress_statuses` | string[] | `[]` | Status names treated as in progress and therefore skipped. **Shared by every board** |
-| `status_map` | table | `{}` | Maps a totsuka status name to the project's option name. **Unmapped names are used as-is**. **Shared by every board** |
 | `source_name` | string | `github` | The source name stamped on each task. Adding boards does not change it, so `[[workflows]].source = "github"` stays a single entry |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise or testing |
 | `claim_verify_delay_ms` | int? | `750` | Milliseconds to wait between writing the claim (self-assign) and reading it back. The read-back is what detects both a race with a teammate and a silently ignored assignment, so it must not run before the API shows the write. `0` is honoured (a too-early read only costs one retry) |
@@ -656,7 +655,7 @@ poll_interval_secs = 60   # 60 is also the default
 | `owner` | string | required | Login of the project owner, a user or an organization |
 | `owner_type` | `user` \| `organization` | `user` | Whether `owner` is a user or an organization. **Set per entry**, so user-owned and org-owned boards can be mixed |
 | `project_number` | int | required | The ProjectsV2 number under `owner`. The positive-number check does **not** run at startup — see below |
-| `triage_status` | string? | none | Status option to put a triage-filed item into. **Unset = the item is added with no Status.** A status-less item matches no `project_status` trigger condition, so **if every workflow on this source filters by status** nothing picks it up until you triage it on the board (a trigger without a status condition matches it regardless — the gate is only as real as your triggers). **Setting this to a value one of your workflow triggers polls (e.g. `Todo`) removes that gate** — filing then flows straight into an unattended run. Fine when intended; the default keeps it from happening by accident |
+| `triage_status` | string? | none | Status option to put a triage-filed item into. **Unset = the item is added with no Status.** A status-less item matches no `status` trigger condition, so **if every workflow on this source filters by status** nothing picks it up until you triage it on the board (a trigger without a status condition matches it regardless — the gate is only as real as your triggers). **Setting this to a value one of your workflow triggers polls (e.g. `Todo`) removes that gate** — filing then flows straight into an unattended run. Fine when intended; the default keeps it from happening by accident |
 
 ```toml
 [github]
@@ -867,18 +866,18 @@ A design-to-implementation handoff:
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "Ready for design" }
+trigger = { status = "Ready for design" }
 profile = "design"          # resolves mode, output and verification
 agent = "herdr"
-on_success = { set_status = "Ready for design review" }
+on_success = { status = "Ready for design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "Ready to implement" }
+trigger = { status = "Ready to implement" }
 profile = "implement"
 agent = "herdr"
-on_success = { set_status = "Ready for review" }
+on_success = { status = "Ready for review" }
 ```
 
 ---

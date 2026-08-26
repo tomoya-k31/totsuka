@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-08-27T03:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T03:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -245,12 +245,12 @@ block_retry_limit = 3                                             # Stop フッ�
 [[workflows]]
 name = "design"
 source = "github"                            # 必須。enabled な task_source 名
-trigger = { project_status = "設計待ち" }     # 省略すると全タスクにマッチ
+trigger = { status = "設計待ち" }     # 省略すると全タスクにマッチ
 mode = "plan"                                # plan | implement
 agent = "herdr"                              # 必須。enabled な agent_ide 名
 output = "none"                              # source | none。github は publish しない（#398）
-on_success = { set_status = "設計レビュー待ち" }
-on_failure = { set_status = "設計失敗" }
+on_success = { status = "設計レビュー待ち" }
+on_failure = { status = "設計失敗" }
 verification = "llm"                         # llm | human | none（省略時 llm）
 rubric = "設計方針・影響範囲・代替案の比較が明示されていること"
 timeout_secs = 1800                          # 無応答上限秒。超過でエスカレーション
@@ -262,10 +262,10 @@ tool = "claude"                              # AI ツールの明示ピン（#19
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "実装待ち" }
+trigger = { status = "実装待ち" }
 profile = "implement"                        # answer | triage | design | implement
 agent = "herdr"
-on_success = { set_status = "レビュー待ち" }
+on_success = { status = "レビュー待ち" }
 rubric = "テストが追加されており、cargo clippy / cargo fmt が通っていること"
 
 # ワークフローごとの前置き指示（#415）。可視・タスク本文の前・新規会話のときだけ。
@@ -274,10 +274,10 @@ rubric = "テストが追加されており、cargo clippy / cargo fmt が通っ
 [[workflows]]
 name = "github-design"
 source = "github"
-trigger = { project_status = "Design" }
+trigger = { status = "Design" }
 profile = "design"                           # 完了は人間の pane 上承認（#440）
 agent = "herdr"
-on_success = { set_status = "Design Review" }
+on_success = { status = "Design Review" }
 timeout_secs = 0                             # attended pane: D-03 掃引を無効化（#439）
 initial_prompt = "/grill-me スキルを使用して、詳細設計を行ってください"
 ```
@@ -327,10 +327,10 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 [[workflows]]
 name = "gh-design"
 source = "github"
-trigger = { project_status = "設計待ち" }
+trigger = { status = "設計待ち" }
 profile = "design"                           # mode / verification は書かない（書くとエラー）
 agent = "herdr"
-on_success = { set_status = "設計済み" }
+on_success = { status = "設計済み" }
 
 [[workflows]]
 name = "slack-implement"
@@ -417,11 +417,15 @@ agent = "herdr"
 
 **「catch-all より前に書け」の制約は #554 で消えた。** Slack プラグイン内ではメンションとリアクションが別のイベント経路なので、順序で隠れることがない。
 
-trigger のキーはすべて**プラグインが解釈する**。`status` / `project_status` / `label` / `labels` / `reaction` が Orchestrator の予約語だったのは #554 まで —— `reaction` は Slack の語、`project_status` は GitHub Projects の語で、core の語彙に置く理由が無かった。どのキーが効くかは各プラグインのページを参照:
+trigger のキーは、`status` を除いて**プラグインが解釈する**。`reaction` / `label` / `labels` / `project_status` が Orchestrator の予約語だったのは #554 まで —— `reaction` は Slack の語、`project_status` は GitHub Projects の語で、core の語彙に置く理由が無かった。
+
+**`status` だけは core が読む**（#575、[ADR-0062](/decisions/adr-0062-status-vocabulary.md)）。用途は列パイプラインの閉路検査だけで、`on_*` の書き戻し先と文字列として突き合わせる。タスクの照合には使わないので、どのタスクが一致するかは今もプラグインが決める。**受理するかは各ソースの自由**で、状態列を持たない slack は未知キーとして拒否する。
+
+未知キーは `initialize` の硬い失敗になる（#574）。どのキーが効くかは:
 
 | ソース | 効くキー |
 |---|---|
-| github | `project_status` / `status`、`label` / `labels` |
+| github | `status`、`label` |
 | notion | `status`、生の `filter` |
 | slack | `reaction`（無ければメンション） |
 
@@ -492,9 +496,6 @@ source_name = "github"                          # Task.source に刻まれる名
 api_url = "https://api.github.com/graphql"      # GHES 利用時に上書き
 max_retries = 3                                 # リトライ可能な API 失敗の再試行回数
 
-# Orchestrator 内部のステータス名 ← → Project 上の表示名の対応（未定義キーは素通し）
-[github.status_map]
-"レビュー待ち" = "In Review"
 
 # ボードは Orchestrator 側。複数書ける（#542 / #554）
 [[projects]]
@@ -630,10 +631,10 @@ kind = "agent_ide"
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "実装待ち" }
+trigger = { status = "実装待ち" }
 profile = "implement"
 agent = "herdr"
-on_success = { set_status = "レビュー待ち" }
+on_success = { status = "レビュー待ち" }
 ```
 
 **`[[projects]]` は省略できない。** github プラグインはボードが 1 つも無い構成を `config/validate` で拒否する —— polling する対象が無いので、起動しても何も起きないためである。
@@ -647,18 +648,18 @@ on_success = { set_status = "レビュー待ち" }
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "設計待ち" }
+trigger = { status = "設計待ち" }
 profile = "design"                              # push しない。output は none に解決される
 agent = "herdr"
-on_success = { set_status = "設計レビュー待ち" }  # 人間のレビュー待ちへ
+on_success = { status = "設計レビュー待ち" }  # 人間のレビュー待ちへ
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "実装待ち" }        # 人がレビュー後に手で移す
+trigger = { status = "実装待ち" }        # 人がレビュー後に手で移す
 profile = "implement"
 agent = "herdr"
-on_success = { set_status = "レビュー待ち" }
+on_success = { status = "レビュー待ち" }
 ```
 
 ## 3. Slack 起点で本人名義返信
