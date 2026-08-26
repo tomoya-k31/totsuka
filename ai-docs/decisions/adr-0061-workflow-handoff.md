@@ -4,7 +4,7 @@ title: ADR-0061 列パイプラインの段間は、会話を配送元のワー�
 description: "同一 issue を列で受け渡す 2 段ワークフロー（design→implement）が動くようにするための設計。terminal な会話に別ワークフローの配送が届いたら workflow / mode / source_payload を 1 トランザクションで付け替えて Reopen する。実行中の会話は台帳に書かずに見送る。全自動ループを解禁する副作用に対しては、列を節点とするグラフの閉路検出を validate に入れる。会話行を段ごとに分ける案・実行中の乗り換え・opt-in フラグは不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/565
 tags: [decision, core, workflow, ingest, conversation, pipeline, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-26T16:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T21:30:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-08-26T12:15:00Z }
 status: stable

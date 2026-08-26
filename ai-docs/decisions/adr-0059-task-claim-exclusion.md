@@ -4,7 +4,7 @@ title: ADR-0059 多人数 poll の二重着手は Issue self-assign の claim �
 description: "複数メンバーが同じ GitHub Project を poll する構成の二重着手対策。dispatch 直前にコアが task/claim（protocol 0.6.1、capability 宣言制）でソースプラグインへ占有を要求し、github プラグインは Issue への self-assign と AssignedEvent の createdAt 先着で裁定する。敗北は新終端状態 Skipped、claim 黙殺（Forbidden）は書き戻し無しの Fail。on_start を新設し勝者確定後に Status を動かす。人間がカードをトリガー列へ差し戻したときの再実行は status セルの updatedAt を message_key に刻んで #242 の会話再開に乗せる。Status LWW 単独・git ref CAS・単一ディスパッチャ・ハッシュ裁定は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/556
 tags: [decision, github, task-source, protocol, dispatch, concurrency, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-26T15:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T21:30:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-08-26T12:15:00Z }
 sources:
