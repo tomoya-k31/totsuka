@@ -18,7 +18,9 @@ use plugin_protocol::methods::{
     TaskClaimParams, TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
-use plugin_sdk::{LineHandler, Reply, SubmitClient, poll_loop, unknown_trigger_keys};
+use plugin_sdk::{
+    LineHandler, Reply, SubmitClient, check_assignee_triggers, poll_loop, unknown_trigger_keys,
+};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -171,12 +173,26 @@ where
         // Trigger keys are this plugin's vocabulary, so this is the only
         // place that can tell a typo from a condition (#574). Without it an
         // unread key is dropped and the trigger matches *more* than written.
-        let unknown = unknown_trigger_keys(&init.workflows, TRIGGER_KEYS);
-        if !unknown.is_empty() {
+        let mut config_errors = unknown_trigger_keys(&init.workflows, TRIGGER_KEYS);
+        // `github_login` is required, so `@me` always has something to compare
+        // against; Issue assignees are built in, so there is no property to map
+        // (#572).
+        let (assignee_errors, assignee_warnings) = check_assignee_triggers(
+            &init.workflows,
+            Some(config.github_login.as_str()),
+            "`github_login`",
+            None,
+            "",
+        );
+        config_errors.extend(assignee_errors);
+        if !config_errors.is_empty() {
             return Reply::respond(Response::error(
                 id,
-                Error::new(error_code::CONFIG_INVALID, unknown.join("; ")),
+                Error::new(error_code::CONFIG_INVALID, config_errors.join("; ")),
             ));
+        }
+        for warning in assignee_warnings {
+            tracing::warn!("{warning}");
         }
         let transport = self
             .factory
@@ -208,9 +224,10 @@ where
                     let client = Arc::clone(&fetch_client);
                     let condition = trigger.trigger.clone();
                     let kind = trigger.instructions_kind.clone();
+                    let name = trigger.workflow.clone();
                     async move {
                         client
-                            .fetch(&condition, kind.as_deref())
+                            .fetch(&condition, kind.as_deref(), &name)
                             .await
                             .map_err(|e| e.to_string())
                     }

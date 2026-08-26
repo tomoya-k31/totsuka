@@ -19,12 +19,17 @@
 //! - [`trigger`] — [`unknown_trigger_keys`]: reject `[[workflows]].trigger`
 //!   keys the source does not read, so a typo fails startup instead of
 //!   silently widening the trigger (#574).
+//! - [`assignee`] — [`AssigneeFilter`]: the `trigger.assignee` condition
+//!   (`@me` / `@none` / `@any` / a login / a list), which replaces the
+//!   plugin-wide F-08 gate so a workflow can leave the unassigned to people
+//!   (#572).
 //!
 //! Out of scope by design: HTTP clients, LLM helpers, and config schemas —
 //! those stay source-specific.
 //!
 //! [ADR-0008]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0008-task-submit-push-ingestion.md
 
+pub mod assignee;
 pub mod dispatch;
 pub mod lookup;
 pub mod poll;
@@ -32,6 +37,7 @@ pub mod runtime;
 pub mod submit;
 pub mod trigger;
 
+pub use assignee::{AssigneeFilter, check as check_assignee_triggers};
 pub use dispatch::{Reply, TaskSourceHandler, TaskSourceServer, parse_params, request_id};
 pub use lookup::{Lookup, LookupClient};
 pub use poll::poll_loop;

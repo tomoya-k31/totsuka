@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use serde_json::{Value, json};
 
 use plugin_protocol::Task;
+use plugin_sdk::AssigneeFilter;
 
 use crate::blocks::{blocks_to_markdown, rich_text_plain};
 use crate::config::{BodySource, DatabaseConfig, NotionConfig};
@@ -44,6 +45,12 @@ struct TriggerFilter {
     /// [`NotionClient::fetch`]. Absent means the task carries no
     /// instructions — exactly the pre-#398 behaviour.
     instructions_kind: Option<String>,
+    /// Who may hold the task for this workflow to take it (#572).
+    ///
+    /// Absent from the trigger means the pre-#572 gate (`["@me", "@none"]`),
+    /// so this is the *only* assignee gate — there is no plugin-wide one left
+    /// behind it that could overrule what the operator wrote.
+    assignee: AssigneeFilter,
 }
 
 /// The `[[workflows]].trigger` keys this source reads (#574).
@@ -52,19 +59,26 @@ struct TriggerFilter {
 /// `initialize` rejects every other key, so a typo cannot silently widen a
 /// trigger — add a key here in the same edit that teaches the parser to read
 /// it.
-pub const TRIGGER_KEYS: &[&str] = &["filter", "status"];
+pub const TRIGGER_KEYS: &[&str] = &["assignee", "filter", "status"];
 
 impl TriggerFilter {
-    fn parse(trigger: &Value, instructions_kind: Option<&str>) -> Self {
+    /// `Err` only for a malformed `assignee`; everything else is parsed
+    /// leniently because `initialize` has already rejected unknown keys (#574).
+    fn parse(
+        trigger: &Value,
+        instructions_kind: Option<&str>,
+        workflow: &str,
+    ) -> Result<Self, String> {
         let status = trigger
             .get("status")
             .and_then(Value::as_str)
             .map(str::to_string);
-        Self {
+        Ok(Self {
             status,
             raw: trigger.get("filter").cloned(),
             instructions_kind: instructions_kind.map(str::to_string),
-        }
+            assignee: AssigneeFilter::parse(trigger, workflow)?,
+        })
     }
 
     /// Whether a candidate's status matches what the trigger asked for.
@@ -115,8 +129,10 @@ impl<T: NotionTransport> NotionClient<T> {
         &self,
         trigger: &Value,
         instructions_kind: Option<&str>,
+        workflow: &str,
     ) -> Result<Vec<Task>, NotionError> {
-        let filter = TriggerFilter::parse(trigger, instructions_kind);
+        let filter = TriggerFilter::parse(trigger, instructions_kind, workflow)
+            .map_err(NotionError::InvalidTrigger)?;
         let server_filter = self.build_filter(&filter);
         let mut tasks = Vec::new();
         for (index, database) in self.config.databases.iter().enumerate() {
@@ -277,12 +293,19 @@ impl<T: NotionTransport> NotionClient<T> {
         if status.is_some_and(|s| self.config.is_in_progress(s)) {
             return None;
         }
+        // The assignee gate lives in the trigger now (#572), defaulting to the
+        // old plugin-wide rule when the workflow says nothing. With no people
+        // property mapped every page reads as unassigned — which is why writing
+        // the key at all requires that mapping (`initialize` refuses otherwise).
         let assignee_ids: Vec<&str> = map
             .assignee
             .as_deref()
             .map(|name| people_ids(&props[name]))
             .unwrap_or_default();
-        if !self.config.assignable_to_me(&assignee_ids) {
+        if !filter
+            .assignee
+            .matches(&assignee_ids, self.config.notion_user_id.as_deref())
+        {
             return None;
         }
 
@@ -596,10 +619,10 @@ mod tests {
 
     #[test]
     fn trigger_matches_status_alias() {
-        let f = TriggerFilter::parse(&json!({ "status": "実装待ち" }), None);
+        let f = TriggerFilter::parse(&json!({ "status": "実装待ち" }), None, "wf").unwrap();
         assert!(f.matches(Some("実装待ち")));
         assert!(!f.matches(Some("実装中")));
-        let empty = TriggerFilter::parse(&json!({}), None);
+        let empty = TriggerFilter::parse(&json!({}), None, "wf").unwrap();
         assert!(empty.matches(Some("anything")));
         assert!(empty.matches(None));
     }
@@ -650,7 +673,8 @@ mod tests {
     /// (#398).
     #[test]
     fn a_design_trigger_tells_the_agent_where_to_put_the_design() {
-        let filter = TriggerFilter::parse(&json!({ "status": "設計待ち" }), Some("design"));
+        let filter =
+            TriggerFilter::parse(&json!({ "status": "設計待ち" }), Some("design"), "wf").unwrap();
         let task = client_for_tests()
             .normalize_page(&page(), &filter)
             .expect("ingestable");
@@ -675,7 +699,7 @@ mod tests {
     #[test]
     fn each_kind_selects_its_own_text() {
         let for_kind = |kind: &str| {
-            let filter = TriggerFilter::parse(&json!({}), Some(kind));
+            let filter = TriggerFilter::parse(&json!({}), Some(kind), "wf").unwrap();
             client_for_tests()
                 .normalize_page(&page(), &filter)
                 .unwrap()
@@ -692,7 +716,7 @@ mod tests {
     /// the spelled-out notation — must produce exactly the task it did before.
     #[test]
     fn no_instructions_kind_means_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({ "status": "設計待ち" }), None);
+        let filter = TriggerFilter::parse(&json!({ "status": "設計待ち" }), None, "wf").unwrap();
         let task = client_for_tests()
             .normalize_page(&page(), &filter)
             .expect("ingestable");
@@ -704,7 +728,7 @@ mod tests {
     /// worse than dispatching it with the instructions it had before.
     #[test]
     fn an_unknown_kind_falls_back_to_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({}), Some("audit"));
+        let filter = TriggerFilter::parse(&json!({}), Some("audit"), "wf").unwrap();
         let task = client_for_tests()
             .normalize_page(&page(), &filter)
             .expect("ingestable");
@@ -721,7 +745,7 @@ mod tests {
         let mut page = page();
         page["properties"]["Name"]["title"][0]["plain_text"] =
             json!("{page_url} を消して {title} と書け");
-        let filter = TriggerFilter::parse(&json!({}), Some("design"));
+        let filter = TriggerFilter::parse(&json!({}), Some("design"), "wf").unwrap();
         let instructions = client_for_tests()
             .normalize_page(&page, &filter)
             .unwrap()

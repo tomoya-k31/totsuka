@@ -435,20 +435,6 @@ impl NotionConfig {
         )
     }
 
-    /// Whether a task with these assignee user ids may be ingested by this
-    /// operator (F-08): unassigned, or [`notion_user_id`](Self::notion_user_id)
-    /// is among the assignees. A task assigned only to other people is skipped.
-    /// Matching is over the whole list, so ingest never depends on ordering.
-    pub fn assignable_to_me(&self, assignee_ids: &[&str]) -> bool {
-        if assignee_ids.is_empty() {
-            return true;
-        }
-        match &self.notion_user_id {
-            Some(me) => assignee_ids.iter().any(|id| id == me),
-            None => false,
-        }
-    }
-
     /// Whether `status` is an "in progress" column excluded from ingest (F-08).
     pub fn is_in_progress(&self, status: &str) -> bool {
         self.in_progress_statuses.iter().any(|s| s == status)
@@ -780,23 +766,10 @@ mod tests {
             "token": "t", "databases": [{ "database_id": "db", "repos": ["totsuka"] }], "notion_user_id": "u_me",
             "in_progress_statuses": ["実装中"]
         }));
-        // Unassigned is ingestable; I count as assigned regardless of position;
-        // others-only is excluded.
-        assert!(cfg.assignable_to_me(&[]));
-        assert!(cfg.assignable_to_me(&["u_me"]));
-        assert!(cfg.assignable_to_me(&["u_other", "u_me"]));
-        assert!(!cfg.assignable_to_me(&["u_other"]));
+        // The assignee gate moved into the trigger (#572); what is left here
+        // is the gating a workflow does not state.
         assert!(cfg.is_in_progress("実装中"));
         assert!(!cfg.is_in_progress("実装待ち"));
-    }
-
-    #[test]
-    fn without_user_id_only_unassigned_is_mine() {
-        let cfg = parse(
-            serde_json::json!({ "token": "t", "databases": [{ "database_id": "db", "repos": ["totsuka"] }] }),
-        );
-        assert!(cfg.assignable_to_me(&[]));
-        assert!(!cfg.assignable_to_me(&["u_me"]));
     }
 
     #[test]

@@ -341,17 +341,6 @@ pub struct GithubConfig {
 }
 
 impl GithubConfig {
-    /// Whether a task with these `assignees` may be ingested by this operator
-    /// (F-08): unassigned, or `github_login` is among the assignees. A task
-    /// assigned only to other people is skipped. Matching is over the whole
-    /// list, so ingest never depends on GitHub's assignee ordering.
-    pub fn assignable_to_me(&self, assignees: &[&str]) -> bool {
-        assignees.is_empty()
-            || assignees
-                .iter()
-                .any(|login| login.eq_ignore_ascii_case(&self.github_login))
-    }
-
     /// The claim read-back delay (#556): configured, or the measured default.
     pub fn claim_verify_delay(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.claim_verify_delay_ms.unwrap_or(750))
@@ -509,13 +498,8 @@ mod tests {
             "in_progress_statuses": ["In Progress"],
             "projects": [{ "owner": "me", "project_number": 1, "repos": ["totsuka"] }]
         }));
-        // Self-detection is case-insensitive; others are excluded; and I count
-        // as assigned even when I am not the first assignee.
-        assert!(cfg.assignable_to_me(&[]));
-        assert!(cfg.assignable_to_me(&["me"]));
-        assert!(cfg.assignable_to_me(&["another-dev", "me"]));
-        assert!(!cfg.assignable_to_me(&["someone-else"]));
-        assert!(!cfg.assignable_to_me(&["a", "b"]));
+        // The assignee gate moved into the trigger (#572); what is left here
+        // is the gating a workflow does not state.
         assert!(cfg.is_in_progress("In Progress"));
         assert!(!cfg.is_in_progress("Todo"));
         // The repository filter is per board now (#542), and there is no

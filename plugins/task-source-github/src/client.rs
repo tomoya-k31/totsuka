@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use plugin_protocol::Task;
 use plugin_protocol::methods::{TaskClaimOutcome, TaskClaimResult};
+use plugin_sdk::AssigneeFilter;
 
 use crate::claim::{
     ADD_ASSIGNEES_MUTATION, AdjudicationError, CLAIM_READ_QUERY, ClaimState,
@@ -40,6 +41,12 @@ struct TriggerFilter {
     /// [`GithubClient::fetch`]. Absent means the task carries no
     /// instructions — exactly the pre-#398 behaviour.
     instructions_kind: Option<String>,
+    /// Who may hold the task for this workflow to take it (#572).
+    ///
+    /// Absent from the trigger means the pre-#572 gate (`["@me", "@none"]`),
+    /// so this is the *only* assignee gate — there is no plugin-wide one left
+    /// behind it that could overrule what the operator wrote.
+    assignee: AssigneeFilter,
 }
 
 /// The `[[workflows]].trigger` keys this source reads (#574).
@@ -48,11 +55,17 @@ struct TriggerFilter {
 /// `initialize` rejects every other key, so a typo cannot silently widen a
 /// trigger — add a key here in the same edit that teaches the parser to read
 /// it.
-pub const TRIGGER_KEYS: &[&str] = &["label", "status"];
+pub const TRIGGER_KEYS: &[&str] = &["assignee", "label", "status"];
 
 impl TriggerFilter {
-    fn parse(trigger: &Value, instructions_kind: Option<&str>) -> Self {
-        Self {
+    /// `Err` only for a malformed `assignee`; everything else is parsed
+    /// leniently because `initialize` has already rejected unknown keys (#574).
+    fn parse(
+        trigger: &Value,
+        instructions_kind: Option<&str>,
+        workflow: &str,
+    ) -> Result<Self, String> {
+        Ok(Self {
             status: trigger
                 .get("status")
                 .and_then(Value::as_str)
@@ -62,7 +75,8 @@ impl TriggerFilter {
                 .and_then(Value::as_str)
                 .map(str::to_string),
             instructions_kind: instructions_kind.map(str::to_string),
-        }
+            assignee: AssigneeFilter::parse(trigger, workflow)?,
+        })
     }
 
     /// Whether a candidate task matches the trigger the workflow asked for.
@@ -131,8 +145,10 @@ impl<T: GithubTransport> GithubClient<T> {
         &self,
         trigger: &Value,
         instructions_kind: Option<&str>,
+        workflow: &str,
     ) -> Result<Vec<Task>, GithubError> {
-        let filter = TriggerFilter::parse(trigger, instructions_kind);
+        let filter = TriggerFilter::parse(trigger, instructions_kind, workflow)
+            .map_err(GithubError::InvalidTrigger)?;
         let mut tasks = Vec::new();
         for (index, project) in self.config.projects.iter().enumerate() {
             self.fetch_project(index, project, &filter, &mut tasks)
@@ -238,12 +254,21 @@ impl<T: GithubTransport> GithubClient<T> {
             .filter_map(|a| a["login"].as_str())
             .collect();
 
-        // Workflow trigger first, then multi-user ingest gating (F-08).
-        if !filter.matches(status, &labels) {
+        // Workflow trigger first, then the gating that is not the workflow's
+        // to state: which repositories this board tracks, and which columns
+        // mean "already running" (F-08).
+        //
+        // The assignee gate lives in the trigger now (#572), defaulting to the
+        // old plugin-wide rule when the workflow says nothing. It is checked
+        // here rather than in `matches` because it needs the operator's login.
+        if !filter.matches(status, &labels)
+            || !filter
+                .assignee
+                .matches(&assignees, Some(&self.config.github_login))
+        {
             return None;
         }
         if !project_config.repo_allowed(repo)
-            || !self.config.assignable_to_me(&assignees)
             || status.is_some_and(|s| self.config.is_in_progress(s))
         {
             return None;
@@ -789,7 +814,8 @@ mod tests {
 
     #[test]
     fn trigger_filter_matches_status_and_label() {
-        let f = TriggerFilter::parse(&json!({ "status": "実装待ち", "label": "bug" }), None);
+        let f = TriggerFilter::parse(&json!({ "status": "実装待ち", "label": "bug" }), None, "wf")
+            .unwrap();
         assert!(f.matches(Some("実装待ち"), &["bug".into()]));
         assert!(!f.matches(Some("実装中"), &["bug".into()])); // wrong status
         assert!(!f.matches(Some("実装待ち"), &["docs".into()])); // missing label
@@ -797,7 +823,7 @@ mod tests {
 
     #[test]
     fn empty_trigger_matches_everything() {
-        let f = TriggerFilter::parse(&json!({}), None);
+        let f = TriggerFilter::parse(&json!({}), None, "wf").unwrap();
         assert!(f.matches(Some("anything"), &[]));
         assert!(f.matches(None, &["x".into()]));
     }
@@ -854,7 +880,8 @@ mod tests {
     /// (#398).
     #[test]
     fn a_design_trigger_tells_the_agent_where_to_put_the_design() {
-        let filter = TriggerFilter::parse(&json!({ "status": "設計待ち" }), Some("design"));
+        let filter =
+            TriggerFilter::parse(&json!({ "status": "設計待ち" }), Some("design"), "wf").unwrap();
         let task = client_for_tests()
             .normalize_item(&item("設計待ち"), &project_for_tests(), &filter)
             .expect("ingestable");
@@ -876,7 +903,7 @@ mod tests {
     #[test]
     fn each_kind_selects_its_own_text() {
         let for_kind = |kind: &str| {
-            let filter = TriggerFilter::parse(&json!({}), Some(kind));
+            let filter = TriggerFilter::parse(&json!({}), Some(kind), "wf").unwrap();
             client_for_tests()
                 .normalize_item(&item("any"), &project_for_tests(), &filter)
                 .unwrap()
@@ -893,7 +920,7 @@ mod tests {
     /// the spelled-out notation — must produce exactly the task it did before.
     #[test]
     fn no_instructions_kind_means_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({ "status": "実装待ち" }), None);
+        let filter = TriggerFilter::parse(&json!({ "status": "実装待ち" }), None, "wf").unwrap();
         let task = client_for_tests()
             .normalize_item(&item("実装待ち"), &project_for_tests(), &filter)
             .expect("ingestable");
@@ -905,7 +932,7 @@ mod tests {
     /// worse than dispatching it with the instructions it had before.
     #[test]
     fn an_unknown_kind_falls_back_to_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({}), Some("audit"));
+        let filter = TriggerFilter::parse(&json!({}), Some("audit"), "wf").unwrap();
         let task = client_for_tests()
             .normalize_item(&item("any"), &project_for_tests(), &filter)
             .expect("ingestable");

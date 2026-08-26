@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-08-27T03:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T05:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -425,9 +425,49 @@ trigger のキーは、`status` を除いて**プラグインが解釈する**�
 
 | ソース | 効くキー |
 |---|---|
-| github | `status`、`label` |
-| notion | `status`、生の `filter` |
+| github | `status`、`label`、`assignee` |
+| notion | `status`、生の `filter`、`assignee` |
 | slack | `reaction`（無ければメンション） |
+
+## `trigger.assignee` — 未アサインを人間の取り分として残す（#572）
+
+「着手可能」を表す列が無い／増やせないボードで、**assignee を「AI に渡す合図」に使う**ためのキー。
+
+```toml
+[[workflows]]
+name       = "github-implement"
+source     = "github"
+trigger    = { status = "🤖 実装・受入検証", assignee = "@me" }
+profile    = "implement"
+on_start   = { status = "🚧 実装中" }
+on_success = { status = "🚧 最終レビュー" }
+```
+
+未アサインの `🤖 実装・受入検証` はどの workflow にも一致しないので、人間の取り分として残る。
+
+| 値 | 意味 |
+|---|---|
+| 省略 | `["@me", "@none"]`（#572 以前の挙動と同一） |
+| `"@me"` | 自分が assignee に含まれる |
+| `"@none"` | 未アサイン |
+| `"@any"` | 条件なし。**他人のタスクも取り込む** |
+| `"<login>"` | その login（notion は user id） |
+| 配列 | いずれか（OR） |
+
+**`@` は必須である。** `me` / `none` / `any` はどれも実在しうるログイン名なので、`assignee = "any"` は「`any` というユーザーのタスク」を意味する。
+
+**順序に注意。** 既定が許容的なので、`assignee` を書かない catch-all を先に置くと未アサインごと飲み込む:
+
+```toml
+[[workflows]]
+trigger = { status = "Todo" }                     # ← これが上にあると
+[[workflows]]
+trigger = { status = "Todo", assignee = "@me" }   # ← ここへ来ない
+```
+
+**`status` を併記すること。** `assignee` 単独だと配送に lane identity が付かず、そのタスクは 1 回しか実行されない（アサインし直しても再実行されない）。起動時に警告が出る。
+
+notion では `property_map.assignee` が必須で、`@me` を使うなら `notion_user_id` も必須。どちらも欠けていると条件が評価不能なので、`initialize` で落ちる。
 
 ## `[worktree].cleanup` / `plan_cleanup` — 掃除ポリシー
 
