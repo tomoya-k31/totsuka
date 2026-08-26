@@ -23,10 +23,11 @@ pub(super) fn read_only_side_effect(
     Some(format!(
         concat!(
             "workflow `{}` is `profile = \"{}\"`, a read-only profile, but its worktree ended ",
-            "up on the branch `{}`. A worktree is handed over detached — and one inherited by a ",
-            "handoff (#565) is detached again on the way in — so this is normally the agent ",
-            "having run git. Check the log for a failed detach before reading it that way: a ",
-            "branch inherited from the previous stage looks identical here. Nothing ",
+            "up on the branch `{}`. A first dispatch hands the worktree over detached, and a ",
+            "handoff (#565) into a read-only profile detaches the inherited one on the way in ",
+            "(#568), so this is normally the agent having run git. Before reading it that way, ",
+            "check the log for a failed detach: a branch inherited from the previous stage ",
+            "looks identical here. Nothing ",
             "here prevented that; this check only refuses to publish it as a success. The ",
             "worktree and its commits are kept for inspection. Check whether it also pushed or ",
             "opened a pull request: neither can be undone from here. `totsuka task retry {}` ",
@@ -99,8 +100,11 @@ pub(super) fn plan_mode_side_effect(mode: &str, branch: &str) -> Option<String> 
         format!(
             concat!(
                 "a plan-mode task's worktree is on the branch `{}` — normally the agent ",
-                "ran git, since a worktree is handed over detached (a handed-off one is ",
-                "detached again on the way in, #568). Plan is documented as making no branch, ",
+                "ran git, since a first dispatch hands the worktree over detached. A ",
+                "conversation handed to another workflow (#565) keeps its worktree, so this ",
+                "can also be a branch inherited from the previous stage: that is detached on ",
+                "the way in only when the receiving profile is read-only (#568), and this ",
+                "warning does not know the profile. Plan is documented as making no branch, ",
                 "commit or push (F-82), and nothing stopped it, so the agent followed ",
                 "the repository's own conventions instead. Check whether it also pushed or ",
                 "opened a pull request. A workflow with a read-only `profile` is failed for ",

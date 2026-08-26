@@ -608,9 +608,11 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// Put a worktree back on a detached `HEAD`, leaving it at the same
     /// commit (#568).
     ///
-    /// Creation hands every worktree over detached, and the read-only check
-    /// (ADR-0045) reads "on a branch" as "the agent ran git" **because** of
-    /// that invariant. A conversation handed to another workflow (#565) keeps
+    /// A first dispatch hands the worktree over detached, and the read-only
+    /// check (ADR-0045) reads "on a branch" as "the agent ran git" **because**
+    /// of that. (Re-creation can put it back on a branch the task was already
+    /// seen on — `BranchSource::Existing` — so the invariant is about the
+    /// normal first dispatch, not about every call to `create`.) A conversation handed to another workflow (#565) keeps
     /// its worktree, so a stage that inherits one already on a branch would
     /// break the invariant and be blamed for a branch it never made. Detaching
     /// at the handoff restores it.

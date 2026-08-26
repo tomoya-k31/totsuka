@@ -218,17 +218,24 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             return;
         };
         let path = Path::new(path);
-        let Some(branch) = self.worktrees.head_branch(path) else {
-            return; // already detached — the ordinary case
-        };
+        // `head_branch` answers `None` for a detached worktree **and** for a
+        // git that could not be read, and those must not share an exit here:
+        // treating a failed read as "already detached" is how the false
+        // positive comes back. Detach unconditionally — it is idempotent, so
+        // the ordinary already-detached case costs one no-op git call — and
+        // use the branch only to say *what* was detached.
+        let branch = self.worktrees.head_branch(path);
         if self.worktrees.detach(path) {
-            tracing::info!(
-                task_id = existing.id,
-                workflow = %wf.name,
-                branch = %branch,
-                "detached the inherited worktree for a read-only stage (the branch is kept)"
-            );
+            if let Some(branch) = branch {
+                tracing::info!(
+                    task_id = existing.id,
+                    workflow = %wf.name,
+                    branch = %branch,
+                    "detached the inherited worktree for a read-only stage (the branch is kept)"
+                );
+            }
         } else {
+            let branch = branch.unwrap_or_else(|| "<unreadable>".to_string());
             // Loud, and it names what happens next: the read-only check will
             // fail this task and close its pane for `branch`, which the new
             // stage did not create.
@@ -827,6 +834,70 @@ mod tests {
                 .success(),
             "the branch ref survives"
         );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A read-only stage is detached even when the branch cannot be read
+    /// (#568 review). `head_branch` answers `None` both for an
+    /// already-detached worktree and for a git it could not run, so branching
+    /// the decision on it would skip the detach exactly when the state is
+    /// unknown — which is when the false positive comes back. Pinned by
+    /// handing over a worktree whose `HEAD` git cannot resolve (an empty
+    /// repository with no commits): the detach still runs.
+    #[tokio::test]
+    async fn an_unreadable_head_still_gets_a_detach_attempt() {
+        let base = test_support::scratch("handoff_unreadable");
+        let repo = base.join("empty");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = crate::adapters::git::SystemGitRunner;
+        assert!(
+            crate::ports::git::GitRunner::run(&git, &repo, &["init", "-q"])
+                .unwrap()
+                .success()
+        );
+        let wt = crate::worktree::WorktreeManager::new(crate::adapters::git::SystemGitRunner);
+        // No commits: `rev-parse --abbrev-ref HEAD` fails, so this is the
+        // "cannot read" flavour of `None`, not the detached one.
+        assert!(wt.head_branch(&repo).is_none());
+
+        let mut engine = ingest_test_engine().await;
+        let mut design = engine.settings.workflows[0].clone();
+        design.name = "design".to_string();
+        design.mode = WorkflowMode::Plan;
+        design.profile = Some(crate::config::Profile::Design);
+        engine.settings.workflows.push(design);
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("k1"), "one"),
+            )
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        engine
+            .db
+            .set_worktree(id, repo.to_str().unwrap(), None, "HEAD")
+            .unwrap();
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+
+        // The handoff still completes — the detach is best-effort and its
+        // failure is logged, never fatal to the ingest.
+        let ack = engine
+            .on_task_submit(
+                "slack".into(),
+                "design".into(),
+                delivery("C1:100", Some("k2"), "two"),
+            )
+            .unwrap();
+        assert_eq!(ack.status, TaskSubmitStatus::Accepted);
+        assert_eq!(engine.db.get_task(id).unwrap().unwrap().workflow, "design");
 
         let _ = std::fs::remove_dir_all(&base);
     }
