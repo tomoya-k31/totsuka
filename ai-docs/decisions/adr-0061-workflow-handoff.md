@@ -4,14 +4,16 @@ title: ADR-0061 列パイプラインの段間は、会話を配送元のワー�
 description: "同一 issue を列で受け渡す 2 段ワークフロー（design→implement）が動くようにするための設計。terminal な会話に別ワークフローの配送が届いたら workflow / mode / source_payload を 1 トランザクションで付け替えて Reopen する。実行中の会話は台帳に書かずに見送る。全自動ループを解禁する副作用に対しては、列を節点とするグラフの閉路検出を validate に入れる。会話行を段ごとに分ける案・実行中の乗り換え・opt-in フラグは不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/565
 tags: [decision, core, workflow, ingest, conversation, pipeline, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-26T21:55:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T22:25:17+09:00 }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-26T13:25:17Z }
 status: stable
 owner: tomoya-k31
 ---
 
 # Status
 
-stable。実装・**実機検収（2026-08-26）**まで完了。ただし #568 の修正で引き渡しの挙動（read-only 段への detach と `branch` 列のクリア、掃除ガードの到達可能性判定）が変わったため、**その部分は再検収が要る** — `verified` はいったん外してある。
+stable。実装・**実機検収（2026-08-26）**まで完了。#568 の修正で変わった部分（read-only 段への detach と `branch` 列のクリア、掃除ガードの到達可能性判定）も**同日に再検収済み**。
 
 [ADR-0059](/decisions/adr-0059-task-claim-exclusion.md) §5 の「段間 handoff は別 issue」を**解消する**決定であり、同 ADR が入れた「別ワークフロー配送は破棄」を**置き換える**。[ADR-0015](/decisions/adr-0015-conversation-task-identity.md) の会話同一性（1 会話 = 1 行）は**不変** — 変わるのは、その行が属するワークフローが固定ではなくなること。
 
@@ -107,7 +109,13 @@ append・Reopen・3 列更新は 1 トランザクション。途中で落ちて
 
 実行中の配送を台帳に書かずに見送る判断も実地で裏が取れた: 実行中に列を移した配送は無視され、段が終端になった後の poll で同じ lane 入場が**一度だけ**刻まれて引き渡された。`Failed` からの引き渡しも観測している。
 
-**逆向き（implement → design）で見つかった問題は解消した**（worktree が残っている場合も、掃除で消えている場合も）。 前段がブランチへ載せた worktree を read-only profile が引き継ぐと、read-only 検査が failed にしたうえで**質問待ちのエージェントの pane を閉じていた**（[#568](https://github.com/tomoya-k31/totsuka/issues/568)）。引き渡し時に detach して不変条件を回復させることで直した（上の「既知の限界」参照）。
+**逆向き（implement → design）で見つかった問題は解消した**（worktree が残っている場合も、掃除で消えている場合も）。#568 の修正後に再検収し、実データで確認した:
+
+- **質問待ちのエージェントが生き残る**: `waiting_input` に入ってから承認まで **3 分 54 秒**。修正前は質問提示の **3 秒後**に pane を閉じられていた（`pane released` が `session_end` より先に出るのが、その判別法）
+- `read_only_violation` は **0 件**
+- `branch` 列が `NULL` になる。このときの worktree は**掃除で既に消えていた**ので、detach ではなく列のクリアが効いた側を通したことになる
+- **掃除は 3 回とも `Removed`**。到達可能性判定は `0` を返しており、`Dirty` に倒れて worktree と pane を留める回帰は起きていない。`doctor` も孤児なし
+- 前段の成果物（PR とブランチ）は無傷。design → implement の往復も完走し、引き渡し後も会話 uuid は同一 前段がブランチへ載せた worktree を read-only profile が引き継ぐと、read-only 検査が failed にしたうえで**質問待ちのエージェントの pane を閉じていた**（[#568](https://github.com/tomoya-k31/totsuka/issues/568)）。引き渡し時に detach して不変条件を回復させることで直した（上の「既知の限界」参照）。
 
 # Alternatives considered
 
