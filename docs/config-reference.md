@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0bf92ed698e9f158a3ba576e1a14339c90552d5dbf99307d6e0958bbf5dc36ad -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:bf1c9c1937f5edd13b68b7b954232a6442250d1158bd9ca436e300add48d1018 -->
 
 # Configuration reference
 
@@ -637,11 +637,12 @@ poll_interval_secs = 60   # 60 is also the default
 |---|---|---|---|
 | `token` | string | required | API token, sent as a bearer token and nothing else. See the permissions below. `cmd:gh auth token` works |
 | `status_field` | string | `Status` | Name of the single-select field holding the status column. **Shared by every board** |
-| `github_login` | string | required | Your own login, used to detect self-assigned tasks |
+| `github_login` | string | required | Your own login, used to detect self-assigned tasks and as the claim target (the login totsuka self-assigns when it takes a task). **One login = one instance**: running several totsuka instances under the same login is unsupported — the claim arbitration cannot tell them apart |
 | `in_progress_statuses` | string[] | `[]` | Status names treated as in progress and therefore skipped. **Shared by every board** |
 | `status_map` | table | `{}` | Maps a totsuka status name to the project's option name. **Unmapped names are used as-is**. **Shared by every board** |
 | `source_name` | string | `github` | The source name stamped on each task. Adding boards does not change it, so `[[workflows]].source = "github"` stays a single entry |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise or testing |
+| `claim_verify_delay_ms` | int? | `750` | Milliseconds to wait between writing the claim (self-assign) and reading it back. The read-back is what detects both a race with a teammate and a silently ignored assignment, so it must not run before the API shows the write. `0` is honoured (a too-early read only costs one retry) |
 | `max_retries` | int | 3 | Retries for retryable API failures |
 | `[github.prompts]` | table | — | Overrides for the prompts this plugin sends |
 

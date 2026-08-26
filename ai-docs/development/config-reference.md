@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] のトラッカー宣言、ワークフローとプラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-25T22:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T10:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -749,11 +749,12 @@ poll_interval_secs = 60   # 省略時も 60
 |---|---|---|---|
 | `token` | string | 必須 | API トークン（オーケストレータが解決して渡す、F-65）。プラグインは bearer として送る以外に触らない。必要な権限は [task-source-github](/components/task-source-github.md) を参照。`cmd:gh auth token` が使える（[ADR-0044](/decisions/adr-0044-cmd-secret-scheme.md)） |
 | `status_field` | string | `Status` | ステータス列を保持する SingleSelect フィールド名（F-02）。**全ボード共通** |
-| `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出に使う（F-08） |
+| `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出（F-08）と、claim の self-assign 先（#556）に使う。**1 login = 1 インスタンス**: 同じ login で複数の totsuka を動かすと claim の裁定が原理的にできない（assignee にはログイン名しか載らない）ため非対応 |
 | `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして ingest から除外するステータス名（F-08）。**全ボード共通** |
 | `status_map` | テーブル | `{}` | オーケストレータ側のステータス名 → Project の SingleSelect オプション名の対応（`task/update_status` 用、F-84）。**未設定のキーは恒等**（名前がそのまま使われる）。**全ボード共通** |
 | `source_name` | string | `github` | `Task.source` に刻印するソース名。ボードを増やしても変わらない（だから `[[workflows]].source = "github"` は 1 本のまま） |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用の上書き） |
+| `claim_verify_delay_ms` | int? | `750` | claim（#556）の self-assign 書き込みから読み戻しまでの待ち ms。読み戻しが競合と黙殺の両方を検出するので、API に反映される前に読んではいけない。既定値は実測（p95 ≈ 700ms / max 983ms）に基づく。`0` も有効（テスト用。早すぎる読みは再試行 1 回を足すだけ） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#398） |
 

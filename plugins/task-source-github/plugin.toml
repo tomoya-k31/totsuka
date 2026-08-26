@@ -8,4 +8,8 @@ version = "0.3.0"
 protocol_version = ">=0.6.0, <0.7"
 
 # No `[capabilities] outputs`: the deliverable is the agent's to write
-# itself, so this plugin publishes nothing.
+# itself, so this plugin publishes nothing. `task_claim` (#556): answers
+# `task/claim` by self-assigning the issue and adjudicating races via
+# AssignedEvent order.
+[capabilities]
+task_claim = true

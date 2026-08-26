@@ -303,7 +303,10 @@ pub struct GithubConfig {
     /// SingleSelect field name holding the status column (F-02).
     #[serde(default = "default_status_field")]
     pub status_field: String,
-    /// The operator's own login, used to detect self-assigned tasks (F-08).
+    /// The operator's own login: detects self-assigned tasks (F-08) and is
+    /// the login the claim self-assigns (#556). One login = one totsuka
+    /// instance — assignees carry only the login, so two instances sharing
+    /// one are indistinguishable to the adjudication (unsupported).
     pub github_login: String,
     /// Status names treated as "in progress" and therefore excluded from
     /// ingest (F-08).
@@ -328,6 +331,14 @@ pub struct GithubConfig {
     /// unset (busy-spin guard, applied in the server).
     #[serde(default)]
     pub poll_interval_secs: Option<u64>,
+    /// Milliseconds to wait between writing the exclusion claim and reading
+    /// it back (#556). The read-back is what detects both the race and the
+    /// silently-ignored write, so it must not run before the API shows the
+    /// mutation. Default 750 — measured p95 ≈ 700ms / max 983ms (#556
+    /// Phase 0). `0` is honoured (no wait): useful for tests, harmless in
+    /// production because a too-early read only costs one extra retry.
+    #[serde(default)]
+    pub claim_verify_delay_ms: Option<u64>,
     /// Instruction text overrides (#398). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
@@ -350,6 +361,11 @@ impl GithubConfig {
             || assignees
                 .iter()
                 .any(|login| login.eq_ignore_ascii_case(&self.github_login))
+    }
+
+    /// The claim read-back delay (#556): configured, or the measured default.
+    pub fn claim_verify_delay(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.claim_verify_delay_ms.unwrap_or(750))
     }
 
     /// Whether `status` is an "in progress" column excluded from ingest (F-08).

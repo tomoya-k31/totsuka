@@ -1,10 +1,10 @@
 ---
 type: Component
 title: task-source-github プラグイン
-description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻しを行い、Issue へは何も書かない。呼び出す 4 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
+description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。Issue への書き込みは claim の assignee 操作だけ。呼び出す 8 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T13:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -19,9 +19,9 @@ GitHub Issues / ProjectsV2 を totsuka のタスクソースとして接続す�
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `[github]`（= `InitializeParams.config`）を型付け。`token` / `status_field` / `github_login`（F-08 の自己判定）/ `in_progress_statuses` / `status_map`（orchestrator status→Project option）/ `source_name` / `api_url` / `max_retries`。`deny_unknown_fields`。**ボードはここに無い**（#554）: Orchestrator の `[[projects]]`（`source = "github"` の要素）から `initialize` で届き、`ProjectConfig::resolve` が `RepoInfo.project` の紐付けと突き合わせて組み立てる。要素のキーは `owner` / `owner_type` / `project_number` / `triage_status`（`ProjectOptions`、こちらも `deny_unknown_fields`）。`claimed_repos()` はそこから `initialize` 応答の claim を組み立てる。`triage_status`（任意、#548 派生）を書くと destination に「起票後にこの Status を付けよ」と具体的なコマンド列（`item-list` / `field-list` で id を引いて `item-edit`）が入る — 未設定なら Status なしで追加される |
+| `config` | `[github]`（= `InitializeParams.config`）を型付け。`token` / `status_field` / `github_login`（F-08 の自己判定）/ `in_progress_statuses` / `status_map`（orchestrator status→Project option）/ `source_name` / `api_url` / `max_retries` / `claim_verify_delay_ms`（#556: claim の書き込み→読み戻し間の待ち。既定 750ms）。`deny_unknown_fields`。**ボードはここに無い**（#554）: Orchestrator の `[[projects]]`（`source = "github"` の要素）から `initialize` で届き、`ProjectConfig::resolve` が `RepoInfo.project` の紐付けと突き合わせて組み立てる。要素のキーは `owner` / `owner_type` / `project_number` / `triage_status`（`ProjectOptions`、こちらも `deny_unknown_fields`）。`claimed_repos()` はそこから `initialize` 応答の claim を組み立てる。`triage_status`（任意、#548 派生）を書くと destination に「起票後にこの Status を付けよ」と具体的なコマンド列（`item-list` / `field-list` で id を引いて `item-edit`）が入る — 未設定なら Status なしで追加される |
 | `transport` | `GithubTransport` trait（`post_graphql`）＋ reqwest 実装 `ReqwestTransport`（bearer 認証・User-Agent 必須・タイムアウト・指数バックオフ §5.3）。ロジックを録画レスポンスでテストするための seam |
-| `client` | `GithubClient<T: GithubTransport>`。`fetch`（ProjectsV2 items を GraphQL 取得→`Task` 正規化→トリガー絞り込み→取り込み制御 F-08）/ `update_status`（SingleSelect option を解決して mutation、未知 option はエラー F-84）/ `publish`（Issue コメント、長文は `<details>` 折りたたみ F-07）/ `validate`（viewer 疎通 F-59）。GraphQL は plain JSON で構築（GraphQL クレート不使用） |
+| `client` | `GithubClient<T: GithubTransport>`。`fetch`（ProjectsV2 items を GraphQL 取得→`Task` 正規化→トリガー絞り込み→取り込み制御 F-08）/ `update_status`（SingleSelect option を解決して mutation、未知 option はエラー F-84）/ `claim`（#556: self-assign + 読み戻し + 裁定。裁定の純粋部分は `claim` モジュール）/ `validate`（viewer 疎通 F-59）。GraphQL は plain JSON で構築（GraphQL クレート不使用） |
 | `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。`Server::new(factory, SubmitClient)`（#188: SDK の stdio ランタイム[単一 writer タスク]で駆動され、`LineHandler` 実装経由で serve される）。initialize（config 型付け → client 構築 → triggers があれば SDK `poll_loop` を常駐 spawn — 各 tick で全 trigger を fetch し `task/submit` push。triggers 空なら poll なし）/ config·validate / task·update_status / result·publish / shutdown。`tasks/fetch` は **0.2.0（#190）で削除済み** — 未初期化メソッドは拒否。Session drop（re-initialize 含む）で poll タスクを abort。`TransportFactory` で録画トランスポートを注入しテスト |
 | `main` | SDK stdio ランタイム（`plugin_sdk::runtime::stdio` + `serve`）。`ReqwestFactory` を配線。ログは stderr |
 
@@ -33,11 +33,13 @@ fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tas
 
 **`task/update_status` はボードを逆引きする。** `TaskUpdateStatusParams` は `{task_id, status}` だけで、どのボードの item かを request が語らない。ingest 時に `task_id → ボードの index` を**プロセス内メモリ**に覚えておき、それを先頭にして**全ボードを順に試す**。メモが外れるのは異常ではなく通常で（再起動でメモは消えるがタスクは残る、item は後からボード間を移動しうる）、メモは最適化であって前提ではない — 見つからなければ試したボードを全部名指しするエラーになる。
 
+**claim（#556、[ADR-0059](/decisions/adr-0059-task-claim-exclusion.md)）**: 読み取りゲートに加え、Orchestrator が dispatch 直前に送る `task/claim` に **Issue への self-assign** で答える。pre-read で既に自分が assignee なら**書き込みゼロで won**（人間の事前アサイン・過去の claim・retry を 1 規則で吸収 — 裁定は自動 claim 同士の対称レースを破る道具であり、人間の意図に適用しない）。他者のみなら書き込みゼロで lost。空なら add → `claim_verify_delay_ms`（既定 750ms、実測 p95 ≈ 700ms）待って読み戻し → 自分不在なら遅延 2 倍で 1 回だけ再読、なお不在なら **forbidden**（push 権限の無い assignee は 200 のまま黙殺されるため読み戻しでしか検出できない）。競合時の裁定は「現 assignee ごとの最新 AssignedEvent のうち createdAt 最古（同時刻は event node id）が勝ち」— actor でなく **assignee の login** で判定し、負けたら自分の assignee だけ外す。**現 assignee のイベントが timeline に見えないときは降りずにエラー**で返す（相互不可視で両者が降りると誰も保持しないタスクが生まれる。エラーなら次 cycle の再読で裁定できる — 遅延であって誤答ではない）。createdAt の比較は辞書順 — GitHub のこの DateTime は固定幅 `YYYY-MM-DDTHH:MM:SSZ` で小数部を持たないため安全（可変長小数部で壊れた #478 とは前提が違う）。**制約: 1 login = 1 インスタンス** — assignee は login しか運べず actor も同一になるため、同じ login の複数 totsuka は原理的に裁定できない（非対応）。
+
 **探索中のボードに対象の Status 列が無くても、そこで打ち切らない。** 探索は item が載っていないボードも訪れるので、そういうボードが対象の列を持っている必要はない。ここでエラーにすると**呼び出し側が `?` で探索ループごと抜け**、次のボードなら成功したはずの遷移が失敗する。メモが空になる再起動直後は必ず先頭のボードから当たるので、現実に踏む経路である。列が無いことをエラーにするのは **item がそのボードで見つかった後**で、そのときは意味どおり「このボードの設定が足りない」を指す。
 
 # capabilities（F-83）
 
-manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.6.0, <0.7"`）と `initialize` 応答で `kind = task_source` を宣言する。**`outputs` は空**（#398）—— 成果物はエージェントが `gh` で自分で書くので、このプラグインは何も publish しない。`output = "source"` を書いた workflow は `config validate` が弾く（F-83）。
+manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.6.0, <0.7"`）と `initialize` 応答で `kind = task_source` を宣言する。**`task_claim = true`**（#556、protocol 0.6.1）— `task/claim` に上記の self-assign で答える。**`outputs` は空**（#398）—— 成果物はエージェントが `gh` で自分で書くので、このプラグインは何も publish しない。`output = "source"` を書いた workflow は `config validate` が弾く（F-83）。
 
 # テスト
 
@@ -53,11 +55,11 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.6
 
 # トークンに必要な権限
 
-**十分条件は実測済み、最小値は未実測**（#514、2026-08-23）。下の「実際に呼んでいるもの」は確定した事実で、「実測できたこと」はサンドボックス（user 所有の Project、private リポジトリ 2 本）に対して`.claude/skills/live-e2e/scripts/github-permissions.sh` が 4 操作すべてを実際に投げて確かめた。「導いた権限」の側は**依然として導出**である — 権限を削ったトークンをまだ試していないので、そこに書かれた値が**最小**であることは示されていない。**この但し書きは実測が済むまで消さないこと。** 断定に固まると、間違っていたときに誰も疑わなくなる。
+**十分条件は実測済み、最小値は未実測**（#514、2026-08-23 / #556、2026-08-25）。下の「実際に呼んでいるもの」は確定した事実で、「実測できたこと」は 2 本のプローブが分担する: 従来 4 操作（fetch / resolve / viewer / カード移動）は `.claude/skills/live-e2e/scripts/github-permissions.sh`（2026-08-23）、claim の 4 操作（claim 読み / user id / self-assign / 自己除去）は `.claude/skills/live-e2e/scripts/github-claim-probe.sh`（2026-08-25、OAuth `gho_` トークンで全 PASS）が、同じサンドボックス（user 所有の Project、private リポジトリ 2 本）へ実際に投げて確かめた。「導いた権限」の側は**依然として導出**である — 権限を削ったトークンをまだ試していないので、そこに書かれた値が**最小**であることは示されていない。**この但し書きは実測が済むまで消さないこと。** 断定に固まると、間違っていたときに誰も疑わなくなる。
 
 ## 実際に呼んでいるもの
 
-全て `https://api.github.com/graphql` への単一 POST に bearer トークンを載せる形で、操作は **4 つだけ**である。REST も Contents API も使わない。**書き込みは Project のカード移動だけ**で、Issue へは何も書かない（#398 で `addComment` ごと消えた）。
+全て `https://api.github.com/graphql` への単一 POST に bearer トークンを載せる形で、操作は **8 つ**である。REST も Contents API も使わない。書き込みは **Project のカード移動**と、#556 で加わった **claim の assignee 操作（自分の追加・除去）**の 2 系統 — 成果物のコメントは書かない（#398 で `addComment` ごと消えた。「Issue へは何も書かない」はそのとき正しかったが、claim が assignee 操作を持ち込んだので**もう正しくない**）。
 
 | 操作 | 触るもの |
 |---|---|
@@ -65,6 +67,10 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.6
 | Project / フィールド / アイテムの id 解決 | `projectV2 { id, field(name:) { options }, items { id } }` |
 | カード移動 | `updateProjectV2ItemFieldValue` |
 | 疎通確認 | `viewer { login }` |
+| claim 読み（#556） | `node(id:)` → Issue の `assignees` + `timelineItems(last: 100, itemTypes: [ASSIGNED_EVENT])`（pre-read と読み戻しの両方で同じクエリ） |
+| user id 解決（#556） | `user(login:) { id }`。プロセス内キャッシュ |
+| self-assign（#556） | `addAssigneesToAssignable`。**Issue node id = task_id を直接使う**のでボード逆引き不要 |
+| 自己除去（#556） | `removeAssigneesFromAssignable`。**自分の分だけ** — 他人の assignee には決して触れない |
 
 ## 実測できたこと（2026-08-23）
 

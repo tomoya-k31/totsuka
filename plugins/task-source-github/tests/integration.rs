@@ -156,7 +156,10 @@ fn init_config() -> Value {
         "status_map": { "レビュー待ち": "In Review" },
         // The fetch cadence is this plugin's own `[github]` key since 0.6.0
         // (#554) — it arrives inside `config`, not beside it.
-        "poll_interval_secs": 60
+        "poll_interval_secs": 60,
+        // No read-back wait in tests: the fake transport is instantaneous,
+        // and 0 is an honoured production value (#556).
+        "claim_verify_delay_ms": 0
     })
 }
 
@@ -287,6 +290,301 @@ async fn initialize_then_update_status() {
     // has done all the work, so "unknown method" would leave the operator
     // guessing at the end of a wasted run.
     assert!(err.message.contains("output"), "{}", err.message);
+}
+
+// ---------------------------------------------------------------------------
+// task/claim (#556, ADR-0059)
+// ---------------------------------------------------------------------------
+
+/// Shorthand for one claim-read response body.
+fn claim_read(assignees: &[&str], events: &[(&str, &str, &str)]) -> Value {
+    json!({ "data": { "node": {
+        "assignees": { "nodes": assignees.iter().map(|l| json!({ "login": l })).collect::<Vec<_>>() },
+        "timelineItems": { "nodes": events.iter().map(|(login, at, id)| json!({
+            "id": id, "createdAt": at, "assignee": { "login": login } })).collect::<Vec<_>>() }
+    } } })
+}
+
+async fn claim(srv: &mut Server<FakeFactory>, id: i64, task: &str) -> Response {
+    call(srv, id, "task/claim", json!({ "task_id": task })).await
+}
+
+/// The capability is declared, and the manifest agrees (the initialize
+/// response is what the Orchestrator's runtime gate reads).
+#[tokio::test]
+async fn initialize_declares_task_claim() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let resp = call(&mut srv, 1, "initialize", init_params()).await;
+    assert_eq!(
+        resp.result.expect("result")["capabilities"]["task_claim"],
+        json!(true)
+    );
+}
+
+/// Unassigned issue: pre-read (empty) → resolve user id → add → read-back
+/// (sole assignee) → won. The mutation targets the issue node id directly —
+/// no board scan.
+#[tokio::test]
+async fn claim_on_an_unassigned_issue_assigns_and_wins() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(&[], &[])));
+    shared.push(Canned::Data(
+        json!({ "data": { "user": { "id": "U_me" } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "addAssigneesToAssignable": { "clientMutationId": null } } }),
+    ));
+    shared.push(Canned::Data(claim_read(
+        &["me"],
+        &[("me", "2026-08-26T10:00:01Z", "E1")],
+    )));
+
+    let resp = claim(&mut srv, 2, "I_1").await;
+    let result = resp.result.expect("claim result");
+    assert_eq!(result["outcome"], "won");
+    assert!(result.get("holder").is_none(), "won carries no holder");
+    // The add mutation went to the issue node id with the resolved user id.
+    // Request order: pre-read, user-id, add, read-back — the add is #2.
+    let requests = shared.all_requests();
+    let add = &requests[2];
+    assert_eq!(add["variables"]["a"], "I_1");
+    assert_eq!(add["variables"]["u"], json!(["U_me"]));
+}
+
+/// Already assigned to this operator (a human routed it, a previous run
+/// claimed it, or this is a retry): won with **zero writes**.
+#[tokio::test]
+async fn claim_when_already_mine_wins_without_writing() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    // Pre-assigned together with a reviewer: adjudication must NOT run —
+    // a human's routing beats the race-breaking rule.
+    shared.push(Canned::Data(claim_read(&["Me", "reviewer"], &[])));
+    let resp = claim(&mut srv, 2, "I_1").await;
+    assert_eq!(resp.result.expect("result")["outcome"], "won");
+    assert_eq!(shared.all_requests().len(), 1, "read only — no mutation");
+}
+
+/// Someone else already holds it (the fetch was stale): lost, zero writes.
+#[tokio::test]
+async fn claim_when_held_by_another_is_lost_without_writing() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(&["member-b"], &[])));
+    let resp = claim(&mut srv, 2, "I_1").await;
+    let result = resp.result.expect("result");
+    assert_eq!(result["outcome"], "lost");
+    assert_eq!(result["holder"], "member-b");
+    assert_eq!(shared.all_requests().len(), 1, "read only — no mutation");
+}
+
+/// Two competitors already hold the issue: the reported holder is the
+/// **adjudicated** winner, not whichever login the unordered assignee list
+/// happens to put first.
+#[tokio::test]
+async fn claim_lost_names_the_adjudicated_holder() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(
+        &["member-c", "member-b"],
+        &[
+            ("member-b", "2026-08-26T10:00:01Z", "E1"),
+            ("member-c", "2026-08-26T10:00:05Z", "E2"),
+        ],
+    )));
+    let resp = claim(&mut srv, 2, "I_1").await;
+    let result = resp.result.expect("result");
+    assert_eq!(result["outcome"], "lost");
+    assert_eq!(
+        result["holder"], "member-b",
+        "earliest effective event wins"
+    );
+}
+
+/// A failed self-removal is retried in-call: a leftover self-assignment
+/// would make a later `task retry` re-win through the pre-read fast path
+/// and double-run the task.
+#[tokio::test]
+async fn claim_race_lost_retries_the_self_removal() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(&[], &[])));
+    shared.push(Canned::Data(
+        json!({ "data": { "user": { "id": "U_me" } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "addAssigneesToAssignable": { "clientMutationId": null } } }),
+    ));
+    shared.push(Canned::Data(claim_read(
+        &["me", "member-b"],
+        &[
+            ("member-b", "2026-08-26T10:00:01Z", "E1"),
+            ("me", "2026-08-26T10:00:03Z", "E2"),
+        ],
+    )));
+    shared.push(Canned::Unauthorized); // 1 回目の除去が失敗
+    shared.push(Canned::Data(
+        json!({ "data": { "removeAssigneesFromAssignable": { "clientMutationId": null } } }),
+    ));
+
+    let resp = claim(&mut srv, 2, "I_1").await;
+    let result = resp.result.expect("lost is still the settled answer");
+    assert_eq!(result["outcome"], "lost");
+    let removes = shared
+        .all_requests()
+        .iter()
+        .filter(|r| {
+            r["query"]
+                .as_str()
+                .unwrap_or("")
+                .contains("removeAssignees")
+        })
+        .count();
+    assert_eq!(removes, 2, "the removal was retried after the failure");
+}
+
+/// The race: both instances assigned; the competitor's effective event is
+/// older, so this one removes **its own assignee only** and reports lost.
+#[tokio::test]
+async fn claim_race_lost_steps_aside_and_removes_only_itself() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(&[], &[])));
+    shared.push(Canned::Data(
+        json!({ "data": { "user": { "id": "U_me" } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "addAssigneesToAssignable": { "clientMutationId": null } } }),
+    ));
+    shared.push(Canned::Data(claim_read(
+        &["me", "member-b"],
+        &[
+            ("member-b", "2026-08-26T10:00:01Z", "E1"),
+            ("me", "2026-08-26T10:00:03Z", "E2"),
+        ],
+    )));
+    shared.push(Canned::Data(
+        json!({ "data": { "removeAssigneesFromAssignable": { "clientMutationId": null } } }),
+    ));
+
+    let resp = claim(&mut srv, 2, "I_1").await;
+    let result = resp.result.expect("result");
+    assert_eq!(result["outcome"], "lost");
+    assert_eq!(result["holder"], "member-b");
+    let remove = shared.last_request();
+    assert!(
+        remove["query"]
+            .as_str()
+            .unwrap()
+            .contains("removeAssignees"),
+        "{remove}"
+    );
+    assert_eq!(remove["variables"]["u"], json!(["U_me"]), "only itself");
+}
+
+/// The race, won: this instance's effective event is older — no removal.
+#[tokio::test]
+async fn claim_race_won_keeps_both_assignees() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(&[], &[])));
+    shared.push(Canned::Data(
+        json!({ "data": { "user": { "id": "U_me" } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "addAssigneesToAssignable": { "clientMutationId": null } } }),
+    ));
+    shared.push(Canned::Data(claim_read(
+        &["me", "member-b"],
+        &[
+            ("me", "2026-08-26T10:00:01Z", "E1"),
+            ("member-b", "2026-08-26T10:00:03Z", "E2"),
+        ],
+    )));
+
+    let resp = claim(&mut srv, 2, "I_1").await;
+    assert_eq!(resp.result.expect("result")["outcome"], "won");
+    assert_eq!(
+        shared.all_requests().len(),
+        4,
+        "no removal was issued — the other instance steps aside on its own"
+    );
+}
+
+/// 200-with-silent-discard (GitHub ignores assignees without push access):
+/// the add "succeeds" but two read-backs never show the assignee → forbidden.
+#[tokio::test]
+async fn claim_silently_discarded_is_forbidden() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(&[], &[])));
+    shared.push(Canned::Data(
+        json!({ "data": { "user": { "id": "U_me" } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "addAssigneesToAssignable": { "clientMutationId": null } } }),
+    ));
+    shared.push(Canned::Data(claim_read(&[], &[]))); // 読み戻し 1 回目: 不在
+    shared.push(Canned::Data(claim_read(&[], &[]))); // 再読でも不在 → 黙殺確定
+    let resp = claim(&mut srv, 2, "I_1").await;
+    assert_eq!(resp.result.expect("result")["outcome"], "forbidden");
+}
+
+/// A competitor is a current assignee but their AssignedEvent is not visible
+/// yet: a JSON-RPC **error** (the Orchestrator keeps the task queued and
+/// retries), never a forfeit — mutual invisibility must not strand the task
+/// with no holder.
+#[tokio::test]
+async fn claim_with_an_invisible_event_is_a_retryable_error() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(&[], &[])));
+    shared.push(Canned::Data(
+        json!({ "data": { "user": { "id": "U_me" } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "addAssigneesToAssignable": { "clientMutationId": null } } }),
+    ));
+    shared.push(Canned::Data(claim_read(
+        &["me", "member-b"],
+        &[("me", "2026-08-26T10:00:01Z", "E1")], // member-b のイベントが見えない
+    )));
+    let resp = claim(&mut srv, 2, "I_1").await;
+    let err = resp.error.expect("a retryable error, not an outcome");
+    assert!(err.message.contains("member-b"), "{}", err.message);
+}
+
+/// A deleted issue is an error, not an outcome — `task cancel` is the exit.
+#[tokio::test]
+async fn claim_on_a_deleted_issue_is_an_error() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(json!({ "data": { "node": null } })));
+    let resp = claim(&mut srv, 2, "I_gone").await;
+    let err = resp.error.expect("error");
+    assert!(err.message.contains("task cancel"), "{}", err.message);
 }
 
 #[tokio::test]
