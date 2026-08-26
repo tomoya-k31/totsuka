@@ -122,9 +122,11 @@ impl<T: NotionTransport> NotionClient<T> {
     }
 
     /// Fetch database pages matching `trigger`, normalize to [`Task`] via the
-    /// property map, and apply ingest gating (F-08): skip other people's tasks
-    /// and in-progress statuses. When body comes from the page, its blocks are
-    /// fetched only for surviving tasks.
+    /// property map, and apply ingest gating: whoever `trigger`'s `assignee`
+    /// condition says may hold the task (#572 — by default unassigned-or-mine,
+    /// but `@any` and a named id deliberately take other people's), plus the
+    /// in-progress statuses a workflow does not state (F-08). When body comes
+    /// from the page, its blocks are fetched only for surviving tasks.
     pub async fn fetch(
         &self,
         trigger: &Value,
@@ -289,7 +291,8 @@ impl<T: NotionTransport> NotionClient<T> {
             return None;
         }
 
-        // Ingest gating (F-08): exclude in-progress and other people's tasks.
+        // The gating a workflow does not state (F-08); the assignee side of it
+        // moved into the trigger (#572) and is applied below.
         if status.is_some_and(|s| self.config.is_in_progress(s)) {
             return None;
         }

@@ -193,6 +193,10 @@ where
             "`notion_user_id`",
             Some(config.property_map.assignee.is_some()),
             "`property_map.assignee`",
+            // Notion mints no lane identity for any trigger (#573), so adding a
+            // `status` would not make a task repeatable and we do not say it
+            // would.
+            false,
         );
         config_errors.extend(assignee_errors);
         if !config_errors.is_empty() {

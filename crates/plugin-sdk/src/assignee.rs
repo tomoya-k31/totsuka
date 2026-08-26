@@ -154,8 +154,9 @@ impl AssigneeFilter {
     /// operator's own login / user id, absent when the source has no setting
     /// for it.
     ///
-    /// Comparison ignores ASCII case, matching how GitHub treats logins; Notion
-    /// user ids are hex, where it is equally harmless.
+    /// Comparison ignores ASCII case, matching how GitHub treats logins. Notion
+    /// user ids are UUIDs, where it is harmless but not free: their matching
+    /// was case-sensitive before this, so a differently-cased id now matches.
     ///
     /// `@me` with no `me` matches nothing. That is only reachable for a
     /// *default* filter — an explicit one is refused at `initialize` — and
@@ -198,6 +199,7 @@ pub fn check(
     identity_key: &str,
     people_property: Option<bool>,
     property_key: &str,
+    status_mints_lane_identity: bool,
 ) -> (Vec<String>, Vec<String>) {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
@@ -228,7 +230,7 @@ pub fn check(
                 wf.workflow
             ));
         }
-        if wf.trigger.get("status").is_none() {
+        if status_mints_lane_identity && wf.trigger.get("status").is_none() {
             warnings.push(format!(
                 "workflow `{}` triggers on `assignee` with no `status`, so its deliveries carry no \
                  lane identity and it runs at most once per task — re-assigning will not re-run \
@@ -345,6 +347,81 @@ mod tests {
             !parse(json!({ "assignee": "@any" }))
                 .unwrap()
                 .needs_self_identity()
+        );
+    }
+
+    #[test]
+    fn the_lane_warning_is_only_for_sources_that_mint_one() {
+        let wf = |trigger| WorkflowInfo {
+            workflow: "wf".into(),
+            trigger,
+            instructions_kind: None,
+            task_id_prefix: None,
+            options: serde_json::Map::new(),
+        };
+        let assignee_only = [wf(json!({ "assignee": "@me" }))];
+
+        let (errors, warnings) = check(&assignee_only, Some("me"), "`login`", None, "", true);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("at most once"), "{warnings:?}");
+
+        // A source with no lane identity would not be helped by adding a
+        // `status`, so it is not told to.
+        let (_, warnings) = check(&assignee_only, Some("me"), "`login`", None, "", false);
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // With a `status` beside it there is nothing to warn about.
+        let paired = [wf(json!({ "status": "Todo", "assignee": "@me" }))];
+        let (_, warnings) = check(&paired, Some("me"), "`login`", None, "", true);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn unevaluable_conditions_stop_startup() {
+        let wf = |trigger| WorkflowInfo {
+            workflow: "wf".into(),
+            trigger,
+            instructions_kind: None,
+            task_id_prefix: None,
+            options: serde_json::Map::new(),
+        };
+        // `@me` with nobody configured to be "me".
+        let (errors, _) = check(
+            &[wf(json!({ "status": "Todo", "assignee": "@me" }))],
+            None,
+            "`notion_user_id`",
+            Some(true),
+            "`property_map.assignee`",
+            false,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("notion_user_id"), "{errors:?}");
+
+        // A condition written with no way to read assignees at all.
+        let (errors, _) = check(
+            &[wf(json!({ "status": "Todo", "assignee": "@none" }))],
+            Some("u"),
+            "`notion_user_id`",
+            Some(false),
+            "`property_map.assignee`",
+            false,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("property_map.assignee"), "{errors:?}");
+
+        // The default filter asks for nothing, so neither fires.
+        let (errors, warnings) = check(
+            &[wf(json!({ "status": "Todo" }))],
+            None,
+            "`notion_user_id`",
+            Some(false),
+            "`property_map.assignee`",
+            true,
+        );
+        assert!(
+            errors.is_empty() && warnings.is_empty(),
+            "{errors:?} {warnings:?}"
         );
     }
 

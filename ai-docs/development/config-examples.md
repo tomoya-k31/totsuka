@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-08-27T05:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T05:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -465,7 +465,7 @@ trigger = { status = "Todo" }                     # ← これが上にあると
 trigger = { status = "Todo", assignee = "@me" }   # ← ここへ来ない
 ```
 
-**`status` を併記すること。** `assignee` 単独だと配送に lane identity が付かず、そのタスクは 1 回しか実行されない（アサインし直しても再実行されない）。起動時に警告が出る。
+**github では `status` を併記すること。** `assignee` 単独だと配送に lane identity が付かず、そのタスクは 1 回しか実行されない（アサインし直しても再実行されない）。起動時に警告が出る。notion は**どのトリガーでも** lane identity を刻まないので（#573）、`status` を足しても再実行にはならない —— そのため notion ではこの警告も出さない。
 
 notion では `property_map.assignee` が必須で、`@me` を使うなら `notion_user_id` も必須。どちらも欠けていると条件が評価不能なので、`initialize` で落ちる。
 

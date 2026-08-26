@@ -183,6 +183,9 @@ where
             "`github_login`",
             None,
             "",
+            // GitHub keys deliveries on the status cell, so a column move repeats
+            // the task and "add a `status`" is real advice here (#556).
+            true,
         );
         config_errors.extend(assignee_errors);
         if !config_errors.is_empty() {

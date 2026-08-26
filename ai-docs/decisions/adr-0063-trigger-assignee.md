@@ -4,7 +4,7 @@ title: ADR-0063 取り込みの assignee ゲートは workflow ごとの trigger
 description: "プラグイン全体でハードコードされていた F-08 の取り込みゲート（未アサイン または 自分）を、[[workflows]].trigger.assignee へ移す決定。@me / @none / @any / login / 配列の語彙を持ち、省略時の既定が旧ゲートと同一なので二重ゲートにならない。未アサインを人間の取り分として残す運用が初めて書けるようになる。式言語・二重ゲートの維持・bot アカウントの分離は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/572
 tags: [decision, config, workflow, trigger, assignee, ingest, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-27T05:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T05:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -86,9 +86,11 @@ notion には**黙って効かなくなる前提が 2 つ**ある。people プ�
 
 **`@me` 以外のログイン名は `notion_user_id` を要求しない。** 名前を assignee 一覧と突き合わせる作業は誰が実行しても同じで、「自分が誰か」を知る必要がないためである（起票時の #572 本文はここを「ログイン名でも必須」と書いていたが、実装では不要と判断した）。
 
-## 5. `assignee` 単独トリガーは at-most-once（警告 1 行）
+## 5. `assignee` 単独トリガーは at-most-once（github でのみ警告 1 行）
 
-`message_key` は status トリガーのときだけ `status:{name}@{updatedAt}` になる。`assignee` 単独だと `None` にフォールバックし、`UNIQUE(task_id, message_key)` で 1 タスク 1 回になる。label 単独トリガーが今日そうなっているのと同じ性質なので、**エラーではなく `initialize` の警告 1 行**にする（エラーにすると label 単独の既存挙動と不揃いになる）。
+github の `message_key` は status トリガーのときだけ `status:{name}@{updatedAt}` になる。`assignee` 単独だと `None` にフォールバックし、`UNIQUE(task_id, message_key)` で 1 タスク 1 回になる。label 単独トリガーが今日そうなっているのと同じ性質なので、**エラーではなく `initialize` の警告 1 行**にする（エラーにすると label 単独の既存挙動と不揃いになる）。
+
+**警告を出すのは lane identity を刻むソースだけである。** notion は `message_key` を**どのトリガーでも** `None` にしている（#573）ので、そこで「`status` を足せば再実行できる」と案内しても直らない。効かない対処を教えるのは黙っているより悪いので、`check` は `status_mints_lane_identity` を受け取り、github だけがこの警告を出す。notion の at-most-once はトリガーの種類によらないソース全体の性質で、#573 の担当である。
 
 # Consequences
 
@@ -96,6 +98,7 @@ notion には**黙って効かなくなる前提が 2 つ**ある。people プ�
 - **`@any` は新しい能力である。** 他人のタスクまで取り込めるようになったので、書くときは意図的であること。
 - **first-match の順序に落とし穴がある。** 既定が許容的（`["@me","@none"]`）なので、`assignee` を省略した catch-all を上に置くと未アサインごと飲み込む。設定例集に順序の注意を書いた。
 - **claim（#556）は同一ログイン運用で書き込みなしの `Won` に縮退する。** `assignee = "@me"` で dispatch されるタスクは既に自分がアサインされており、`claim` の pre-read が `holds(me)` で即 `Won` を返す。壊れではなく、**排他の担い手が claim から「人間のアサインそのもの」へ移る**ということである。ただし同一 `github_login` で 2 台の totsuka を動かすと原理的に裁定不能という制約は今より重くなる。
+- **notion の assignee 照合が case-insensitive になった。** 旧 `assignable_to_me` は user id を `==` で比べていた。UUID の表記ゆれで一致するようになるだけで実害は想定していないが、挙動の拡大ではある。
 - **`@me` を「AI に渡す合図」に使う運用では、「人間が自分で作業中」をボード上で表現できない**（アサインした瞬間に走る）。bot アカウントを分ければ表現できるが、下記の理由で今回は採らない。
 
 # Alternatives considered
@@ -103,7 +106,7 @@ notion には**黙って効かなくなる前提が 2 つ**ある。people プ�
 - **式言語**（`status:todo && assignees in (tomoya-k31)`）: パーサ・検証・エラーメッセージの維持コストに見合わない。キーの AND と配列の OR で `in (...)` と `is empty` は表現できる。将来もっと複雑な条件が要るなら、notion の raw `filter` と同型のエスケープハッチを足すほうが筋がよい。
 - **旧ゲートを前に残し、`assignee` があればバイパスする**: 差分は小さいが、`assignee = "teammate"` のような「書けるのに効かない」設定を許す。二重ゲートは一番デバッグしづらい壊れ方を作る。
 - **bot アカウントを `github_login` にする**: 「人間が自分で作業中」「AI に渡す」「AI が claim した印」の 3 つを分離できるが、bot 用トークンと権限（user 所有ボードは scope 方式のトークンが必須）が要る。今回の運用は「自分にアサイン = AI に渡す」で意図が一致するので同一ログインのままとする。
-- **`AssignedEvent` を fetch に足して `assignee:{login}@{createdAt}` を lane-entry identity にする**: 「アサインを外して付け直す = 再実行」を作る案。列が存在しない環境を想定していたが、その前提が誤りだった（列は在って動く。分かれていないだけ）。status を併記すれば既存の `message_key` で再実行が成立するので不要。
+- **`AssignedEvent` を fetch に足して `assignee:{login}@{createdAt}` を lane-entry identity にする**: 「アサインを外して付け直す = 再実行」を作る案。列が存在しない環境を想定していたが、その前提が誤りだった（列は在って動く。分かれていないだけ）。**github なら** status を併記すれば既存の `message_key` で再実行が成立するので不要。notion には元から lane identity が無く（#573）、この案でも解決しないので、そちらは #573 の側で決める。
 - **プラグインごとに別の綴りにする**（notion は `person` 等）: ソース固有の語を使えるが、乗り換え時に workflow を書き直すことになる。`assignee` は両ソースで意味が同じなので揃えた。
 
 # 関連

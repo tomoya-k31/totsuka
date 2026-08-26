@@ -133,9 +133,11 @@ impl<T: GithubTransport> GithubClient<T> {
     }
 
     /// Fetch issues matching `trigger` from **every** configured board (#542),
-    /// normalize to [`Task`], and apply ingest gating (F-08): skip other
-    /// people's tasks, in-progress statuses, and repositories the board does
-    /// not track.
+    /// normalize to [`Task`], and apply ingest gating: whoever `trigger`'s
+    /// `assignee` condition says may hold the task (#572 — which by default is
+    /// unassigned-or-mine, but `@any` and a named login deliberately take other
+    /// people's), plus the two things a workflow does not state — in-progress
+    /// statuses and repositories the board does not track (F-08).
     ///
     /// One board failing fails the whole poll. The alternative — skip it and
     /// return the rest — would make a broken token or a deleted board look
