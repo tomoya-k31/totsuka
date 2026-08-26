@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T02:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

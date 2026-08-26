@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:6cdbbb4b3ffdca61385026757badbddf6a92c606606e495c76d26ad296c12e15 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:2b42367e8c373a317920fc761b9299a09ae53dad2249794417408d10d68de268 -->
 
 # 設定リファレンス
 

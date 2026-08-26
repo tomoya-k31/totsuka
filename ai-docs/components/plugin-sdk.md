@@ -4,7 +4,7 @@ title: plugin-sdk クレート
 description: task_source プラグイン作成用のヘルパークレート。単一 writer タスクの stdio ランタイム・JSON-RPC dispatch ボイラープレート（TaskSourceHandler）・task/submit クライアント（バックオフ再送）・ポーリング型ソース向け poll_loop・trigger キーの未知検査を提供する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-sdk
 tags: [rust, crate, plugin, sdk, task-source, push]
-generated: { by: human:tomoya-k31, at: 2026-08-25T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T02:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

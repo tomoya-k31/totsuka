@@ -1,11 +1,17 @@
 //! `[[workflows]].trigger` key validation for task_source plugins (#574).
 //!
-//! The Orchestrator carries the trigger table verbatim and does not interpret
-//! it (#554), so a key only ever means something to the plugin that reads it.
-//! Every reader does that with `.get("…")`, which means a key nobody asks for
-//! is **dropped without a word** — and the failure that produces is silent in
-//! the worst direction: a mistyped condition does not narrow anything, so the
-//! workflow fires on tasks the operator meant to exclude.
+//! The Orchestrator carries the trigger table verbatim (#554), so a key only
+//! ever means something to the plugin that reads it. Every reader does that
+//! with `.get("…")`, which means a key nobody asks for is **dropped without a
+//! word** — and the failure that produces is silent in the worst direction: a
+//! mistyped condition does not narrow anything, so the workflow fires on tasks
+//! the operator meant to exclude.
+//!
+//! "Verbatim" is not quite "untouched": the Orchestrator does read
+//! `project_status` out of the table, but only to build the column graph its
+//! cycle check walks — lexically, comparing two operator-written strings
+//! without acting on either. Nothing on the core side reacts to a trigger key's
+//! *value*, which is why this check has to live in the plugin.
 //!
 //! [`unknown_trigger_keys`] turns that into a startup error. A source calls it
 //! from `initialize` with the keys it actually reads.

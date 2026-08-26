@@ -48,6 +48,14 @@ pub trait TransportFactory {
     fn build_chat(&self) -> Self::Chat;
 }
 
+/// The `[[workflows]].trigger` keys this source reads (#574).
+///
+/// Kept beside `workflow_reactions` because that is what makes them true.
+/// `initialize` rejects every other key, so a typo cannot silently turn a
+/// reaction workflow into the plain-mention catch-all — add a key here in the
+/// same edit that teaches the reader to read it.
+const TRIGGER_KEYS: &[&str] = &["reaction"];
+
 /// `(workflow name, its `trigger.reaction`)` for every workflow the
 /// Orchestrator sent, in definition order (#396).
 ///
@@ -60,14 +68,6 @@ pub trait TransportFactory {
 /// existed to stop. The Orchestrator's own value-type check went away with
 /// `Trigger::matches` (#554), so this plugin is the only place left that can
 /// refuse it.
-/// The `[[workflows]].trigger` keys this source reads (#574).
-///
-/// Kept beside `workflow_reactions` because that is what makes them true.
-/// `initialize` rejects every other key, so a typo cannot silently turn a
-/// reaction workflow into the plain-mention catch-all — add a key here in the
-/// same edit that teaches the reader to read it.
-const TRIGGER_KEYS: &[&str] = &["reaction"];
-
 fn workflow_reactions(
     workflows: &[plugin_protocol::methods::WorkflowInfo],
 ) -> Result<Vec<WorkflowTrigger>, Vec<String>> {
