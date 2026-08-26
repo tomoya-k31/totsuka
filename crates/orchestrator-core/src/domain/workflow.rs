@@ -327,8 +327,13 @@ fn walk<'a>(
             ));
         }
         route.push_str(&format!("column `{column}`"));
-        // Normalise so the same loop found from a different entry point is
-        // reported once: rotate the workflow names to their smallest order.
+        // Report each loop once, keyed by the **set** of workflows in it —
+        // not by the route, which differs with the entry point the walk
+        // happened to start from. Being a set also collapses the same
+        // workflows looping through a different write-back key (`on_success`
+        // and `on_failure` both pointing at the next column) into one
+        // finding: that is one structure for the operator to fix, and
+        // reporting it twice would just make the real count harder to read.
         let mut names: Vec<&str> = cycle.iter().map(|(_, h)| h.workflow).collect();
         names.sort_unstable();
         names.dedup();
