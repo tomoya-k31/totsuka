@@ -4,14 +4,16 @@ title: ADR-0061 列パイプラインの段間は、会話を配送元のワー�
 description: "同一 issue を列で受け渡す 2 段ワークフロー（design→implement）が動くようにするための設計。terminal な会話に別ワークフローの配送が届いたら workflow / mode / source_payload を 1 トランザクションで付け替えて Reopen する。実行中の会話は台帳に書かずに見送る。全自動ループを解禁する副作用に対しては、列を節点とするグラフの閉路検出を validate に入れる。会話行を段ごとに分ける案・実行中の乗り換え・opt-in フラグは不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/565
 tags: [decision, core, workflow, ingest, conversation, pipeline, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-26T16:00:00+09:00 }
-status: draft
+generated: { by: claude-code/opus-5, at: 2026-08-26T21:30:00+09:00 }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-26T12:15:00Z }
+status: stable
 owner: tomoya-k31
 ---
 
 # Status
 
-draft。実装済み・実機検収は未了。検収が済んだら stable にする。
+stable。実装・**実機検収（2026-08-26）**まで完了。
 
 [ADR-0059](/decisions/adr-0059-task-claim-exclusion.md) §5 の「段間 handoff は別 issue」を**解消する**決定であり、同 ADR が入れた「別ワークフロー配送は破棄」を**置き換える**。[ADR-0015](/decisions/adr-0015-conversation-task-identity.md) の会話同一性（1 会話 = 1 行）は**不変** — 変わるのは、その行が属するワークフローが固定ではなくなること。
 
@@ -99,9 +101,13 @@ append・Reopen・3 列更新は 1 トランザクション。途中で落ちて
 - **段ごとに `agent` / `tool` を変えると、前段のセッション id が次段のツールへ渡る。** `latest_session` はどのツールが作ったセッションかを見ないので、design を A、implement を B のツールに固定した構成では B に A の resume id が渡る。プラグインが `SESSION_UNRESUMABLE` を返せば retry で救われるが、それ以外のエラーは `fail_dispatch` になる。引き渡し以前は会話の `workflow` が不変だったので到達しなかった経路である。
 - **閉路検査は絡み合った群を 1 件にまとめて報告する**（§5）。1 つ直して再検証すると次が出る。`config validate` が起動ゲートなので安全側には倒れている。
 
-## 未検証（実機で確かめる）
+## 実機で確かめたこと（2026-08-26）
 
-**plan モードの会話を implement 権限で resume できるか**は机上で保証できない唯一の点。`mode` 列を更新したうえで同一セッションを resume するので、agent 側がモード変更をどう扱うかは実機でしか分からない。
+**plan モードの会話は implement 権限で resume できる。** 唯一机上で保証できなかった点で、実データで確認した: 設計段のセッション `w8V:p1|5cf2c680-…` に対し、引き渡し後の実装段は `w8W:p1|5cf2c680-…` と**会話 uuid が同一**のまま dispatch され、worktree は detached（`[-]`）からブランチ（`[feat/add-titlecase]`）へ移った — **plan では禁じられていたブランチ作成が実際にできている**ので、`mode` 列の切り替えが効いたうえで resume が成立している。2 段パイプラインは設計コメント投稿 → 引き渡し → 実装 → PR 作成まで通しで完走した。
+
+実行中の配送を台帳に書かずに見送る判断も実地で裏が取れた: 実行中に列を移した配送は無視され、段が終端になった後の poll で同じ lane 入場が**一度だけ**刻まれて引き渡された。`Failed` からの引き渡しも観測している。
+
+**ただし逆向き（implement → design）には未解決の問題がある。** 前段がブランチへ載せた worktree を read-only profile が引き継ぐため read-only 検査が failed にし、その診断が「エージェントが git を実行した」と**誤った原因を名指しする**（判定自体は妥当）。→ [#568](https://github.com/tomoya-k31/totsuka/issues/568)
 
 # Alternatives considered
 
