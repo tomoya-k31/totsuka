@@ -176,7 +176,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// finishing run's immediate cleanup attempt retained the worktree).
     pub(super) async fn sweep_finished_worktrees(&mut self) -> Result<(), EngineError> {
         let mut candidates = Vec::new();
-        for state in [TaskState::Done, TaskState::Cancelled] {
+        // `Skipped` is included (#556): a failed task that a human retried
+        // can lose the claim to another member and step aside *with the
+        // worktree its failed run left behind* — nothing else sweeps it.
+        for state in [TaskState::Done, TaskState::Cancelled, TaskState::Skipped] {
             for record in self.db.tasks_in_state(state)? {
                 if record
                     .worktree_path

@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T09:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -85,7 +85,7 @@ Priorities use MoSCoW (M: Must / S: Should / C: Could / W: Won't in v1).
 | F-03 | Notion plugin (database property mapping defined in configuration) | M |
 | F-04 | Per-plugin output (field mapping, filter conditions) definable in the configuration file | M |
 | F-05 | Write statuses such as task done / in progress back to the source (bidirectional sync) | S |
-| F-08 | **Intake confirmation/control for multi-user usage is the task-source plugin's role** (strict mutual exclusion not required). E.g. check assignee presence / in-progress status so tasks another member is working on are not picked up | M |
+| F-08 | **Intake confirmation/control for multi-user usage is the task-source plugin's role** (strict mutual exclusion not required). E.g. check assignee presence / in-progress status so tasks another member is working on are not picked up. On top of the read-side gates, sources declaring the `task_claim` capability are asked to **claim the task via `task/claim` right before dispatch**; a lost claim steps aside as `skipped` instead of running (optimistic exclusion; undeclaring sources behave as before) | M |
 | F-06 | Configurable polling interval (webhooks unsupported in v1 since this is a local app) | S |
 | F-07 | **Result write-back (`result/publish` RPC)**: a task source *may* write the orchestrator's artifact back — the destination and formatting are the plugin's responsibility, and a plugin that implements it declares the `source` output capability. **Not every source does.** Where the agent can write the deliverable itself (a `gh` comment, a Notion page), it does, and the plugin declares nothing; the RPC is for sources where the orchestrator has to mediate — Slack, whose reply goes out under the operator's own name, gated by approval unless the workflow's `publish = "direct"` opts that gate out (#548) | M |
 

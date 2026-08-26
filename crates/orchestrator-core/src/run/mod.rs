@@ -36,9 +36,9 @@ use std::time::Duration;
 use plugin_protocol::method;
 use plugin_protocol::methods::{
     AgentState, ExecutionMode, NotReleased, NotifierEvent, NotifyParams, ResultPublishParams,
-    SessionReleaseParams, SessionReleaseResult, StateNotification, TaskDispatchParams,
-    TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams, TaskSubmitResult,
-    TaskSubmitStatus, TaskUpdateStatusParams,
+    SessionReleaseParams, SessionReleaseResult, StateNotification, TaskClaimOutcome,
+    TaskClaimParams, TaskClaimResult, TaskDispatchParams, TaskDispatchResult, TaskLookupParams,
+    TaskLookupResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus, TaskUpdateStatusParams,
 };
 use plugin_protocol::{Notification, Task, jsonrpc};
 use serde_json::Value;

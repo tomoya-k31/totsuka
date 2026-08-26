@@ -36,6 +36,13 @@ pub enum TaskState {
     Failed,
     /// Cancelled by a human.
     Cancelled,
+    /// Another member's instance claimed the task before this one could
+    /// dispatch it (#556): the source-side claim was adjudicated and lost.
+    /// Terminal — not `Failed`, whose write-back would move the board column
+    /// of a task somebody else is actively running, and not `Cancelled`,
+    /// which would fabricate a human decision that never happened. The ways
+    /// back are `totsuka task retry` and a reopened conversation.
+    Skipped,
 }
 
 impl TaskState {
@@ -53,13 +60,14 @@ impl TaskState {
             TaskState::Done => "done",
             TaskState::Failed => "failed",
             TaskState::Cancelled => "cancelled",
+            TaskState::Skipped => "skipped",
         }
     }
 
     /// Whether this is a terminal state — the only events that leave one are
-    /// [`Reopen`](TaskEvent::Reopen) (from any of the three) and
-    /// [`Retry`](TaskEvent::Retry) (from `Failed` / `Cancelled` only; a
-    /// successful task has nothing to run again).
+    /// [`Reopen`](TaskEvent::Reopen) (from any of the four) and
+    /// [`Retry`](TaskEvent::Retry) (from `Failed` / `Cancelled` / `Skipped`;
+    /// a successful task has nothing to run again).
     ///
     /// "Terminal" is about *this* run of the task, not about the task's whole
     /// life: since #242 a conversation may reopen from any of these states, so
@@ -68,7 +76,7 @@ impl TaskState {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            TaskState::Done | TaskState::Failed | TaskState::Cancelled
+            TaskState::Done | TaskState::Failed | TaskState::Cancelled | TaskState::Skipped
         )
     }
 }
@@ -100,6 +108,7 @@ impl FromStr for TaskState {
             "done" => TaskState::Done,
             "failed" => TaskState::Failed,
             "cancelled" => TaskState::Cancelled,
+            "skipped" => TaskState::Skipped,
             other => return Err(UnknownState(other.to_string())),
         })
     }
@@ -139,8 +148,13 @@ pub enum TaskEvent {
     Fail,
     /// Human cancelled the task.
     Cancel,
-    /// Retry a finished task (F-44): requeue from `Failed` / `Cancelled`.
-    /// **Not** from `Done` — see [`Reopen`](Self::Reopen).
+    /// Another member holds the claim (#556): step aside without running.
+    /// Only from `Queued` — by the time anything later could learn about a
+    /// competing claim, this instance already holds it (the claim settles
+    /// before the first side effect of a dispatch).
+    Skip,
+    /// Retry a finished task (F-44): requeue from `Failed` / `Cancelled` /
+    /// `Skipped` (#556). **Not** from `Done` — see [`Reopen`](Self::Reopen).
     Retry,
     /// A new message arrived for a finished conversation (#242): requeue it.
     ///
@@ -182,6 +196,8 @@ pub fn transition(from: TaskState, event: TaskEvent) -> Result<TaskState, Invali
         (S::Queued, E::NeedRepoConfirmation) => S::Pending,
         (S::Pending, E::RepoConfirmed) => S::Queued,
         (S::Queued, E::Dispatch) => S::Dispatched,
+        // Claim lost (#556): terminal, see `TaskState::Skipped`.
+        (S::Queued, E::Skip) => S::Skipped,
         (S::Dispatched, E::Start) => S::Running,
         (S::Running, E::WaitInput) => S::WaitingInput,
         (S::WaitingInput, E::ResumeInput) => S::Running,
@@ -200,11 +216,11 @@ pub fn transition(from: TaskState, event: TaskEvent) -> Result<TaskState, Invali
         (S::Escalated, E::WaitInput) => S::WaitingInput,
         (S::Publishing, E::Complete) => S::Done,
         // Retry a terminal (non-Done) task: worktree/session handling is #57.
-        (S::Failed | S::Cancelled, E::Retry) => S::Queued,
+        (S::Failed | S::Cancelled | S::Skipped, E::Retry) => S::Queued,
         // A finished conversation that receives a new message goes back to
         // work (#242). `Done` is included on purpose: it now means "no
         // unprocessed messages", not "finished forever".
-        (S::Done | S::Failed | S::Cancelled, E::Reopen) => S::Queued,
+        (S::Done | S::Failed | S::Cancelled | S::Skipped, E::Reopen) => S::Queued,
         // Escalation is reachable from any non-terminal state (#131 D-02).
         (s, E::Escalate) if !s.is_terminal() => S::Escalated,
         // Failure is reachable from any non-terminal state.
@@ -283,13 +299,39 @@ mod tests {
 
     #[test]
     fn retry_requeues_terminal_failures() {
+        for from in [TaskState::Failed, TaskState::Cancelled, TaskState::Skipped] {
+            assert_eq!(
+                transition(from, TaskEvent::Retry).unwrap(),
+                TaskState::Queued
+            );
+        }
+    }
+
+    /// The claim-lost path (#556): only a queued task can step aside — and
+    /// once it did, it is terminal (no Fail/Cancel/Escalate out of it), but
+    /// both deliberate ways back stay open.
+    #[test]
+    fn skip_is_queued_only_and_terminal() {
+        let s = transition(TaskState::Queued, TaskEvent::Skip).unwrap();
+        assert_eq!(s, TaskState::Skipped);
+        assert!(s.is_terminal());
+        for from in NON_TERMINAL {
+            if from == TaskState::Queued {
+                continue;
+            }
+            assert_eq!(
+                transition(from, TaskEvent::Skip).unwrap_err(),
+                InvalidTransition {
+                    from,
+                    event: TaskEvent::Skip
+                },
+                "Skip from {from}"
+            );
+        }
         assert_eq!(
-            transition(TaskState::Failed, TaskEvent::Retry).unwrap(),
-            TaskState::Queued
-        );
-        assert_eq!(
-            transition(TaskState::Cancelled, TaskEvent::Retry).unwrap(),
-            TaskState::Queued
+            "skipped".parse::<TaskState>().unwrap(),
+            TaskState::Skipped,
+            "wire string round-trips"
         );
     }
 
@@ -297,7 +339,12 @@ mod tests {
     /// `Done` — which `Retry` deliberately cannot reach.
     #[test]
     fn reopen_requeues_every_terminal_state() {
-        for from in [TaskState::Done, TaskState::Failed, TaskState::Cancelled] {
+        for from in [
+            TaskState::Done,
+            TaskState::Failed,
+            TaskState::Cancelled,
+            TaskState::Skipped,
+        ] {
             assert_eq!(
                 transition(from, TaskEvent::Reopen).unwrap(),
                 TaskState::Queued,

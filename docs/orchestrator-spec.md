@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:fae761e03c3afb1b46bb182861d86c7ada7e96755c933dbffd286347d744bc44 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:0095595a31ac214efb9a587cf55ee4d9cb7d2f2e71b699dd12648ef21aab19f9 -->
 
 # What totsuka is
 
@@ -29,7 +29,7 @@ Task sources connect as plugins and hand totsuka a normalized task: id, source, 
 
 Sources push tasks as they find them. Field mapping and filter conditions are configurable per plugin, and statuses can be written back to the source as the task progresses.
 
-**Deciding whether to pick a task up at all is the source plugin's job**, not totsuka's — checking assignees or in-progress status so that work another person has started is left alone. There is no strict mutual exclusion between people. The plugin also decides *which* of your workflows a task belongs to, and says so when it hands the task over.
+**Deciding whether to pick a task up at all is the source plugin's job**, not totsuka's — checking assignees or in-progress status so that work another person has started is left alone. There is no strict mutual exclusion between people, but a source that supports claiming is asked to claim the task right before it runs: if a teammate's instance got there first, your copy of the task steps aside as `skipped` instead of running the same work twice (`totsuka task retry` re-enters it deliberately). Sources without claim support behave as before. The plugin also decides *which* of your workflows a task belongs to, and says so when it hands the task over.
 
 **Where a new item gets filed is your configuration.** A `[[projects]]` entry names a tracker — a GitHub Project, a Notion database — and each repository points at one of them with `project = "…"`. One repository files into one tracker, so a request that arrives through Slack and turns into an issue has exactly one place to go.
 
@@ -95,7 +95,7 @@ Whenever you ask for machine-readable output, stdout carries the document and no
 totsuka run --json | jq -e '.stats.failed == 0'
 ```
 
-The document has `stats` (`submitted` / `dispatched` / `done` / `failed`), the task ids left in `waiting`, `pending`, and `queued`, and `interrupted`. **The exit code does not follow it** — a run that correctly recorded a failing task still exits 0, so decide from the document. `--json` cannot be combined with `--dry-run`, which has nothing to preview.
+The document has `stats` (`submitted` / `dispatched` / `done` / `failed` / `skipped`), the task ids left in `waiting`, `pending`, and `queued`, and `interrupted`. **The exit code does not follow it** — a run that correctly recorded a failing task still exits 0, so decide from the document. `--json` cannot be combined with `--dry-run`, which has nothing to preview.
 
 `task export` writes the audit log — every state change every task has been through — to stdout as NDJSON, one event per line, oldest first:
 

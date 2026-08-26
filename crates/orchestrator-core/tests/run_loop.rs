@@ -406,8 +406,9 @@ async fn absent_on_start_writes_nothing_at_dispatch() {
     .await;
     engine.shutdown(Duration::from_secs(5)).await;
 
-    let update_calls: Vec<_> = read_log(&source_log)
-        .into_iter()
+    let source_calls = read_log(&source_log);
+    let update_calls: Vec<_> = source_calls
+        .iter()
         .filter(|c| c["method"] == "task/update_status")
         .collect();
     assert_eq!(
@@ -416,6 +417,274 @@ async fn absent_on_start_writes_nothing_at_dispatch() {
         "exactly the on_success write-back: {update_calls:?}"
     );
     assert_eq!(update_calls[0]["params"]["status"], "レビュー待ち");
+    // And a source that never declared `task_claim` is never asked (#556):
+    // the pre-claim dispatch is the compatibility baseline.
+    assert!(
+        !source_calls.iter().any(|c| c["method"] == "task/claim"),
+        "no claim without the capability: {source_calls:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Claim happy path (#556): a source declaring `task_claim` is asked before
+/// the dispatch's first side effect, `won` lets everything proceed, and the
+/// `on_start` write-back lands after the claim settles.
+#[tokio::test]
+async fn claim_won_dispatches_and_is_asked_before_on_start() {
+    let base = scratch("claim_won");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set_with_source(
+        json!([mock_task("cw1")]),
+        json!({ "stream_states": ["running", "done"] }),
+        json!({ "task_claim": true }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    let cfg = RootConfig::from_toml_str(
+        r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {}
+mode = "implement"
+agent = "mock_agent"
+output = "none"
+on_start = { set_status = "実装中" }
+on_success = { set_status = "レビュー待ち" }
+"#,
+    )
+    .unwrap();
+    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "cw1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let calls = read_log(&source_log);
+    let claim_at = calls
+        .iter()
+        .position(|c| c["method"] == "task/claim" && c["params"]["task_id"] == "cw1")
+        .expect("the claim was asked");
+    let start_at = calls
+        .iter()
+        .position(|c| c["method"] == "task/update_status" && c["params"]["status"] == "実装中")
+        .expect("on_start was written");
+    assert!(
+        claim_at < start_at,
+        "the claim settles before the on_start write: {calls:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Claim lost (#556): the task steps aside — terminal `Skipped`, no worktree,
+/// and **no status write-back of any kind**, because the board belongs to
+/// whoever actually holds the task.
+#[tokio::test]
+async fn claim_lost_skips_without_touching_the_source() {
+    let base = scratch("claim_lost");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set_with_source(
+        json!([mock_task("cl1")]),
+        json!({ "stream_states": ["running", "done"] }),
+        json!({ "task_claim": true,
+                "claim_result": { "outcome": "lost", "holder": "member-b" } }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    let summary = run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "cl1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Skipped)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    assert_eq!(summary.stats.skipped, 1);
+    assert_eq!(summary.stats.dispatched, 0);
+    assert_eq!(summary.stats.failed, 0);
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "cl1").unwrap().unwrap();
+    assert_eq!(task.state, TaskState::Skipped);
+    assert!(
+        task.worktree_path.is_none(),
+        "no side effect before the claim"
+    );
+
+    let calls = read_log(&source_log);
+    assert!(
+        !calls.iter().any(|c| c["method"] == "task/update_status"),
+        "a lost claim writes nothing back: {calls:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Claim silently discarded (#556): the task fails so a human notices, but
+/// the `on_failure` write-back is **bypassed** — nobody holds the task, so
+/// moving its column would remove it from every other member's trigger.
+#[tokio::test]
+async fn claim_forbidden_fails_without_the_failure_writeback() {
+    let base = scratch("claim_forbidden");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set_with_source(
+        json!([mock_task("cf1")]),
+        json!({ "stream_states": ["running", "done"] }),
+        json!({ "task_claim": true, "claim_result": { "outcome": "forbidden" } }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    let cfg = RootConfig::from_toml_str(
+        r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {}
+mode = "implement"
+agent = "mock_agent"
+output = "none"
+on_failure = { set_status = "失敗" }
+"#,
+    )
+    .unwrap();
+    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "cf1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Failed)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let calls = read_log(&source_log);
+    assert!(
+        !calls.iter().any(|c| c["method"] == "task/update_status"),
+        "forbidden bypasses on_failure — the column must stay in every other \
+         member's trigger: {calls:?}"
+    );
+    let notifications = read_log(&notify_log);
+    let failed = notifications
+        .iter()
+        .find(|n| n["params"]["event"] == "failed")
+        .unwrap_or_else(|| panic!("a human is told: {notifications:?}"));
+    // The remedy text is read by a human; source indentation inside the
+    // message (a wrapped literal that lost its line continuations) shipped
+    // twice before this guard existed (#491, and the first cut of #556).
+    let body = failed["params"]["body"].as_str().unwrap_or_default();
+    assert!(
+        !body.contains("  "),
+        "the remedy carries source indentation: {body:?}"
+    );
+    assert!(body.contains("task retry"), "names the way back: {body}");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A transient claim error (#556) parks nothing permanently: the task stays
+/// `Queued` and later cycles keep retrying — a temporarily invisible
+/// adjudication costs a delay, never a wrong answer.
+#[tokio::test]
+async fn claim_error_leaves_the_task_queued_and_retries() {
+    let base = scratch("claim_err");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set_with_source(
+        json!([mock_task("ce1")]),
+        json!({ "stream_states": ["running", "done"] }),
+        json!({ "task_claim": true, "claim_result": { "error": "rate limited" } }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    // Wait until at least two claim attempts are on record — that *is* the
+    // retry assertion — then stop; the task itself never leaves `Queued`.
+    let log_probe = source_log.clone();
+    let summary = run_watch_until(&mut engine, move || {
+        test_support::read_ndjson_log(&log_probe)
+            .iter()
+            .filter(|c| c["method"] == "task/claim")
+            .count()
+            >= 2
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    assert_eq!(summary.stats.skipped, 0);
+    assert_eq!(summary.stats.failed, 0);
+    assert_eq!(summary.stats.dispatched, 0);
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "ce1").unwrap().unwrap();
+    assert_eq!(task.state, TaskState::Queued);
 
     let _ = std::fs::remove_dir_all(&base);
 }

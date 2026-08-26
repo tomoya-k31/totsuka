@@ -2,6 +2,7 @@
 
 ## 2026-08-26
 
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) / [orchestrator-spec](/product/orchestrator-spec.ja.md)（#556 / [ADR-0059](/decisions/adr-0059-task-claim-exclusion.md)）。dispatch 直前の claim ゲートを実装: `task_claim` 宣言ソースへ `task/claim` を送り、`lost` は新終端状態 `Skipped`（slot 解放・worktree 未作成・書き戻しゼロ）、`forbidden` は **on_failure を迂回した** Fail + 通知（誰も保持しないタスクの列を動かして他メンバーの trigger から消さないため）、一時障害とソース down は `Queued` 維持で次 cycle 再試行。`task retry` は Skipped からも可。worktree sweep の対象に Skipped を追加（retry 中に負けた行が worktree を持ち得る）。`RunStats.skipped` 新設。F-08 の spec 本文も楽観排他の追記で更新。
 * **Creation**: `scripts/dev-test.sh` が target/ を掃除するようにした決定を [ADR-0060 dev-test.sh が target/ を掃除する（.o は毎回、cargo clean は定期）](/decisions/adr-0060-target-dir-cleanup.md) に記録。ローカルのフル再ビルドが 15 分近くまで劣化した原因は `<target>/debug/deps` に溜まった 839,365 個の `.o` で、エントリ数だけを変えた対照実験で 6.6 秒が 40〜126 秒になることを実測した。`.o` はビルドの入力ではないので毎回掃いてもキャッシュを失わず（削除直後のフルビルドが 0.33 秒の no-op）、`incremental/` は入力なので消さずに `cargo clean --profile dev` を既定 7 日間隔で自動実行する。`.o` は incremental へのハードリンクなので、掃除が効くのはビルド時間であってディスクではない。
 
 ## 2026-08-25

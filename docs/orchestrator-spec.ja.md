@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:18d581f9c858ea9dd3b54daf40bdfffdabfd1d203651b90c28d8dcbaeb30f2c0 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:6b62cbe578afa4cadeadebdeb849e52591c65eef057a955d78108b1ee971fb84 -->
 
 # totsuka とは
 
@@ -30,7 +30,7 @@ GitHub の Issue / Projects や Notion といったソースからタスクを�
 
 ソースはタスクを見つけたら自分から push する。フィールドの対応付けや絞り込み条件はプラグインごとに設定でき、進行に応じてソース側のステータスを書き戻せる。
 
-**そもそもタスクを拾うかどうかの判断はソースプラグインの仕事**であって、totsuka のものではない — 担当者や進行状況を見て、他の人が着手した作業には手を出さないようにする。人と人の間の厳密な排他は行わない。どの workflow に属するタスクかを決めるのもプラグインで、タスクを渡すときに一緒に伝える。
+**そもそもタスクを拾うかどうかの判断はソースプラグインの仕事**であって、totsuka のものではない — 担当者や進行状況を見て、他の人が着手した作業には手を出さないようにする。人と人の間の厳密な排他は行わないが、占有（claim）に対応したソースには実行の直前に占有を要求する: チームメイトのインスタンスが先に取っていたら、手元のタスクは同じ作業を二重に走らせる代わりに `skipped` として退く（意図してやり直すなら `totsuka task retry`）。claim 非対応のソースは従来どおり。どの workflow に属するタスクかを決めるのもプラグインで、タスクを渡すときに一緒に伝える。
 
 **新しく起票する先は設定で決める。** `[[projects]]` の 1 エントリがトラッカー（GitHub Project、Notion のデータベース）を表し、各リポジトリは `project = "…"` でそのうち 1 つを指す。1 リポジトリの起票先は 1 つなので、Slack から来た依頼が issue になるとき、行き先は一意に決まる。
 
@@ -96,7 +96,7 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 totsuka run --json | jq -e '.stats.failed == 0'
 ```
 
-ドキュメントの内容は `stats`（`submitted` / `dispatched` / `done` / `failed`）、残ったタスク id の `waiting` / `pending` / `queued`、そして `interrupted`。**終了コードはこれに追随しない** — 失敗したタスクを正しく記録した実行も 0 で終わるので、判定はドキュメントから行うこと。`--json` は `--dry-run` とは併用できない（プレビューする対象が無いため）。
+ドキュメントの内容は `stats`（`submitted` / `dispatched` / `done` / `failed` / `skipped`）、残ったタスク id の `waiting` / `pending` / `queued`、そして `interrupted`。**終了コードはこれに追随しない** — 失敗したタスクを正しく記録した実行も 0 で終わるので、判定はドキュメントから行うこと。`--json` は `--dry-run` とは併用できない（プレビューする対象が無いため）。
 
 `task export` は監査ログ — 各タスクがたどった全状態遷移 — を NDJSON で標準出力へ流す。1 行 1 イベント、古い順:
 

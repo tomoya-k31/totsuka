@@ -292,8 +292,8 @@ fn print_summary(summary: &RunSummary, json: bool) -> Result<(), CliError> {
     }
     let s = &summary.stats;
     println!(
-        "run summary: submitted {} / dispatched {} / done {} / failed {}",
-        s.submitted, s.dispatched, s.done, s.failed
+        "run summary: submitted {} / dispatched {} / done {} / failed {} / skipped {}",
+        s.submitted, s.dispatched, s.done, s.failed, s.skipped
     );
     if s.plugin_restarts > 0 {
         // The restart itself is deliberately quiet, so this line is the only
