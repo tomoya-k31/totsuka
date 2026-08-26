@@ -779,6 +779,32 @@ async fn initialize_with_triggers_polls_and_submits() {
     harness.assert_no_task(Duration::from_millis(200)).await;
 }
 
+/// A mistyped trigger key used to be dropped, which does not narrow the
+/// trigger — it *widens* it to "no condition" (#574).
+#[tokio::test]
+async fn an_unknown_trigger_key_fails_initialize() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    let (projects, repositories) = one_board();
+    let params = json!({
+        "protocol_version": "0.1.6",
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
+            { "workflow": "design", "trigger": { "project_stat": "実装待ち" } }
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let error = resp.error.expect("initialize must fail");
+    assert!(error.message.contains("project_stat"), "{error:?}");
+    assert!(error.message.contains("`project_status`"), "{error:?}");
+    assert!(error.message.contains("`label`"), "{error:?}");
+    // The poll loop never started, so nothing is submitted either.
+    harness.assert_no_task(Duration::from_millis(200)).await;
+}
+
 /// A label-only trigger has no lane, so *any* column move would re-run it:
 /// those keep the at-most-once `None` key (#556).
 #[tokio::test]

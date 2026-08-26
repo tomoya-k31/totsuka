@@ -42,6 +42,14 @@ struct TriggerFilter {
     instructions_kind: Option<String>,
 }
 
+/// The `[[workflows]].trigger` keys this source reads (#574).
+///
+/// Kept beside `TriggerFilter::parse` because that is what makes them true.
+/// `initialize` rejects every other key, so a typo cannot silently widen a
+/// trigger — add a key here in the same edit that teaches the parser to read
+/// it.
+pub const TRIGGER_KEYS: &[&str] = &["label", "project_status"];
+
 impl TriggerFilter {
     fn parse(trigger: &Value, instructions_kind: Option<&str>) -> Self {
         Self {

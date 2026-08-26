@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-08-27
+
+* **Fix**: [plugin-sdk](/components/plugin-sdk.md) / [orchestrator-core](/components/orchestrator-core.md)（#574）。`[[workflows]].trigger` と `on_start` / `on_success` / `on_failure` の未知キーを起動時エラーにした。どちらも `toml::Table` を無検査で保持し、読み手は `.get("…")` を引くだけなので、**知らないキーは黙って捨てられていた**。#554 は workflow のトップレベルの余りキーに「引き取り手 0 = エラー」を入れたが、テーブルの中には及んでいなかった。壊れ方は 2 方向とも無言で、しかも症状が直感と逆になる: `trigger` 側のタイポは条件を 1 つ減らすので**トリガーを狭めず広げ**（`assinee` と書くと「条件なし」になり、除外したかったタスクにこそ発火する）、`on_*` 側のタイポは書き戻しを消すので**タスクは成功したのにボードだけ動かない**。検査は所有に従って分けた: `on_*` は core のテーブルなので `validate_static` が `domain::workflow::OUTCOME_ACTION_KEYS` と突き合わせ、`trigger` はプラグインのものなので各ソースが `initialize` で `plugin_sdk::unknown_trigger_keys` を呼ぶ（github `label` / `project_status`、notion `filter` / `project_status` / `status`、slack `reaction`）。有効キーの一覧はどちらもパーサの隣にリテラルで置き、導出しない —— キーを足してここを忘れたら、その新しいキーのテストが落ちる。エラー文は有効キーを列挙するので、改名からの移行案内も兼ねる。`trigger = {}`（catch-all、#396）はキーが無いので常に通る。
+
 ## 2026-08-26
 
 * **Update**: [ADR-0059](/decisions/adr-0059-task-claim-exclusion.md) / [ADR-0061](/decisions/adr-0061-workflow-handoff.md) を実機検収の完了により `stable` へ（#556 / #565、2026-08-26）。**plan モードの会話が implement 権限で resume できる**ことを実データで確認（会話 uuid 同一・worktree が detached からブランチへ移り、plan では禁じられたブランチ作成が成立）。2 段パイプラインは設計コメント → 引き渡し → 実装 → PR まで通しで完走。実行中の配送を台帳に書かずに見送る判断、`Failed` からの引き渡しも観測。逆向き（implement → design）で read-only 検査が誤った原因を名指しする問題は [#568](https://github.com/tomoya-k31/totsuka/issues/568) へ分離した。

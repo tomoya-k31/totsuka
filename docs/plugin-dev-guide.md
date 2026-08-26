@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:0c4da921b332fe2b83ceb51d1a7c1d24ed759289889cead16eae4c83dd08cc90 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:cb9ba047cb3a666c5c9632558cc2afea969edd6e0f53648d06dd6bff81ff6aa8 -->
 
 # Plugin development guide
 
@@ -75,7 +75,7 @@ The cases that *don't* line up show the rule better. In 0.4.0 only the herdr plu
 
 - `repositories: [{name, summary?, path?}]` — the orchestrator's configured repositories, so a source that resolves repositories itself does not need its own copy
 - `llm: {base_url, model, api_key?}` — the orchestrator's LLM settings with the key already resolved. If your plugin has its own LLM configuration, prefer that and treat this as the default
-- `workflows: [{workflow, trigger, instructions_kind?, task_id_prefix?, options}]` — every workflow that names you, as its `source` or its `agent`, in the order they appear in the configuration. `trigger` is what a source watches for, passed through exactly as the operator wrote it (an agent gets an empty object); `instructions_kind` and `task_id_prefix` are derived by the orchestrator from the workflow's `profile`; `options` holds the keys on that workflow the orchestrator does not understand
+- `workflows: [{workflow, trigger, instructions_kind?, task_id_prefix?, options}]` — every workflow that names you, as its `source` or its `agent`, in the order they appear in the configuration. `trigger` is what a source watches for, passed through exactly as the operator wrote it (an agent gets an empty object); `instructions_kind` and `task_id_prefix` are derived by the orchestrator from the workflow's `profile`; `options` holds the keys on that workflow the orchestrator does not understand. **Reject `trigger` keys you do not read.** Pass-through means nobody else checks them, so a key you ignore is silently dropped and the condition goes away — a typo does not narrow the trigger, it *widens* it. `plugin_sdk::unknown_trigger_keys(&init.workflows, TRIGGER_KEYS)` returns one message per unknown key, each listing the keys you do read; fail `initialize` with `CONFIG_INVALID` if it is not empty
 - `projects: [{name, options}]` — the projects you own, from `[[projects]]` entries whose `source` is you. The repositories bound to each come from `[[repositories]].project`
 
 How often a polling source fetches is its own business: put `poll_interval_secs` in your plugin's `[<name>]` table and read it from `config`.

@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T02:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -74,7 +74,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 
 | メソッド | 方向 | 内容 |
 |---|---|---|
-| `initialize` | O→P | 解決済み config + プロトコル版を渡す。plugin_version + capabilities を返す（F-65）。**task_source には orchestrator の `[[repositories]]` も `repositories: [{name, summary?, path?}]` として供給される**（0.1.1、#109。任意フィールド — 使わなければ無視してよい。ソース側でリポジトリ解決するプラグインは自前設定の重複を省ける）。**同じく orchestrator の `[llm]` も `llm: {base_url, model, api_key?}` として供給される**（0.1.2、#119。api_key は解決済み。プラグイン自身の LLM 設定があればそちらを優先する default + override を推奨）。**そのプラグインを名指す `[[workflows]]` が `workflows: [{workflow, trigger, options}]`（定義順）として供給される**（0.6.0 で `triggers` から改名、#554）。`source` と `agent` の**両方**に届き、`trigger` はソースにだけ意味がある（agent には空オブジェクト）。`options` は Orchestrator が解釈しない余りキーで、消費するものを `claimed_options` で申告する。**task_source にはさらに `projects: [{name, options}]`**（`[[projects]]` のうち `source` が自分のもの、#554）。`trigger` は運用者の書いたテーブルの**素通し**で、profile 由来の `instructions_kind` / `task_id_prefix` は `workflows` 要素の**専用フィールド**として届く（0.6.0 までは trigger に焼き込まれていた）。fetch 周期 `poll_interval_secs` は自分の `[<name>]` のキーで、`config` の中に入って届く（0.6.0 / #554 で `InitializeParams` から削除）|
+| `initialize` | O→P | 解決済み config + プロトコル版を渡す。plugin_version + capabilities を返す（F-65）。**task_source には orchestrator の `[[repositories]]` も `repositories: [{name, summary?, path?}]` として供給される**（0.1.1、#109。任意フィールド — 使わなければ無視してよい。ソース側でリポジトリ解決するプラグインは自前設定の重複を省ける）。**同じく orchestrator の `[llm]` も `llm: {base_url, model, api_key?}` として供給される**（0.1.2、#119。api_key は解決済み。プラグイン自身の LLM 設定があればそちらを優先する default + override を推奨）。**そのプラグインを名指す `[[workflows]]` が `workflows: [{workflow, trigger, options}]`（定義順）として供給される**（0.6.0 で `triggers` から改名、#554）。`source` と `agent` の**両方**に届き、`trigger` はソースにだけ意味がある（agent には空オブジェクト）。`options` は Orchestrator が解釈しない余りキーで、消費するものを `claimed_options` で申告する。**task_source にはさらに `projects: [{name, options}]`**（`[[projects]]` のうち `source` が自分のもの、#554）。`trigger` は運用者の書いたテーブルの**素通し**で、profile 由来の `instructions_kind` / `task_id_prefix` は `workflows` 要素の**専用フィールド**として届く（0.6.0 までは trigger に焼き込まれていた）。fetch 周期 `poll_interval_secs` は自分の `[<name>]` のキーで、`config` の中に入って届く（0.6.0 / #554 で `InitializeParams` から削除）。**`trigger` の未知キーは `initialize` で拒否すること**（#574） —— 素通しということは、読み手が居ないキーは黙って捨てられるということで、タイポはトリガーを狭めず**広げる**。`plugin_sdk::unknown_trigger_keys(&init.workflows, TRIGGER_KEYS)` が有効キーを列挙したメッセージを返すので、空でなければ `CONFIG_INVALID` で落とす|
 | `config/validate` | O→P | プラグイン設定を検証（F-59）。`initialize` と同じ `workflows` / `projects` / `repositories` も届く（0.6.0）— 記憶ではなく「今聞かれているもの」を検証させるため |
 | `shutdown` | O→P | 猶予付き終了要求 |
 

@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T03:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -47,10 +47,9 @@ owner: tomoya-k31
 - トップレベルの未知テーブルは `[plugins.*]` のロスターと照合する（`[worktre]` も `[slak]` も落ちる）
 - `[[workflows]]` の余ったキーはその workflow の `source` と `agent` に聞き、**ちょうど 1 つ**が引き取ることを要求する（0 = タイポ、2 = 曖昧。どちらも起動を止める）
 
-ただし次の 3 つは例外で、**typo が黙って無視される**ので注意すること:
+ただし `cleanup` / `plan_cleanup` の `{ retention_days = N }` 形式だけは例外で、**typo が黙って無視される** —— untagged なので余分なキーを書いてもエラーにならない。
 
-- `trigger` / `on_success` / `on_failure` — 中身は無検査の TOML テーブル。`on_success = { set_statuss = "..." }` はパースを通り、実行時に黙って捨てられる
-- `cleanup` / `plan_cleanup` の `{ retention_days = N }` 形式 — untagged なので余分なキーを書いてもエラーにならない
+`trigger` と `on_start` / `on_success` / `on_failure` も同じ穴だったが、#574 で塞いだ。中身は今も無型の TOML テーブルだが、**未知キーは起動時エラー**になり、メッセージがそのテーブルで有効なキーを列挙する。`trigger` は各ソースプラグインが `initialize` で、`on_*` は Orchestrator が `config validate`（`run` が共有する）で拒否する。
 
 # 環境変数によるオーバーライド
 

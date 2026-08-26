@@ -4,7 +4,7 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。Issue への書き込みは claim の assignee 操作だけ。呼び出す 8 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-08-26T13:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T02:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -22,7 +22,7 @@ GitHub Issues / ProjectsV2 を totsuka のタスクソースとして接続す�
 | `config` | `[github]`（= `InitializeParams.config`）を型付け。`token` / `status_field` / `github_login`（F-08 の自己判定）/ `in_progress_statuses` / `status_map`（orchestrator status→Project option）/ `source_name` / `api_url` / `max_retries` / `claim_verify_delay_ms`（#556: claim の書き込み→読み戻し間の待ち。既定 750ms）。`deny_unknown_fields`。**ボードはここに無い**（#554）: Orchestrator の `[[projects]]`（`source = "github"` の要素）から `initialize` で届き、`ProjectConfig::resolve` が `RepoInfo.project` の紐付けと突き合わせて組み立てる。要素のキーは `owner` / `owner_type` / `project_number` / `triage_status`（`ProjectOptions`、こちらも `deny_unknown_fields`）。`claimed_repos()` はそこから `initialize` 応答の claim を組み立てる。`triage_status`（任意、#548 派生）を書くと destination に「起票後にこの Status を付けよ」と具体的なコマンド列（`item-list` / `field-list` で id を引いて `item-edit`）が入る — 未設定なら Status なしで追加される |
 | `transport` | `GithubTransport` trait（`post_graphql`）＋ reqwest 実装 `ReqwestTransport`（bearer 認証・User-Agent 必須・タイムアウト・指数バックオフ §5.3）。ロジックを録画レスポンスでテストするための seam |
 | `client` | `GithubClient<T: GithubTransport>`。`fetch`（ProjectsV2 items を GraphQL 取得→`Task` 正規化→トリガー絞り込み→取り込み制御 F-08）/ `update_status`（SingleSelect option を解決して mutation、未知 option はエラー F-84）/ `claim`（#556: self-assign + 読み戻し + 裁定。裁定の純粋部分は `claim` モジュール）/ `validate`（viewer 疎通 F-59）。GraphQL は plain JSON で構築（GraphQL クレート不使用） |
-| `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。`Server::new(factory, SubmitClient)`（#188: SDK の stdio ランタイム[単一 writer タスク]で駆動され、`LineHandler` 実装経由で serve される）。initialize（config 型付け → client 構築 → triggers があれば SDK `poll_loop` を常駐 spawn — 各 tick で全 trigger を fetch し `task/submit` push。triggers 空なら poll なし）/ config·validate / task·update_status / result·publish / shutdown。`tasks/fetch` は **0.2.0（#190）で削除済み** — 未初期化メソッドは拒否。Session drop（re-initialize 含む）で poll タスクを abort。`TransportFactory` で録画トランスポートを注入しテスト |
+| `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。`Server::new(factory, SubmitClient)`（#188: SDK の stdio ランタイム[単一 writer タスク]で駆動され、`LineHandler` 実装経由で serve される）。initialize（config 型付け → client 構築 → triggers があれば SDK `poll_loop` を常駐 spawn — 各 tick で全 trigger を fetch し `task/submit` push。triggers 空なら poll なし）/ config·validate / task·update_status / result·publish / shutdown。`tasks/fetch` は **0.2.0（#190）で削除済み** — 未初期化メソッドは拒否。Session drop（re-initialize 含む）で poll タスクを abort。`TransportFactory` で録画トランスポートを注入しテスト **#574: `TRIGGER_KEYS`（`label` / `project_status`）と突き合わせ、未知の `trigger` キーがあれば `initialize` を `CONFIG_INVALID` で落とす**（`plugin_sdk::unknown_trigger_keys`）。トリガーの解釈は `.get("…")` なので、読まないキーは黙って捨てられ条件が 1 つ減る —— つまりタイポはトリガーを狭めず**広げる**。一覧は `client` のパーサの隣にリテラルで置き導出しない |
 | `main` | SDK stdio ランタイム（`plugin_sdk::runtime::stdio` + `serve`）。`ReqwestFactory` を配線。ログは stderr |
 
 # 取り込み制御（F-08）
