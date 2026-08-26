@@ -733,7 +733,7 @@ Claude Code フックイベント受信（UDS）の設定（#131。全キー省�
 
 # `[github]`（task-source-github）
 
-config.toml 側の推奨設定。**このリポジトリで唯一のポーリング型 task_source** で、`poll_interval_secs` がそのままプラグイン内部の fetch 周期になる（0.6.0 / #554 で `[plugins.github]` から `[github]` へ移動。隣の task-source-slack はイベント駆動でこの値を使わない）:
+config.toml 側の推奨設定。**ポーリング型の task_source**（もう 1 つは下の `[notion]`）で、`poll_interval_secs` がそのままプラグイン内部の fetch 周期になる（0.6.0 / #554 で `[plugins.github]` から `[github]` へ移動。task-source-slack はイベント駆動でこの値を使わない）:
 
 ```toml
 [plugins.github]
@@ -741,7 +741,7 @@ enabled = true
 kind = "task_source"
 
 [github]
-poll_interval_secs = 60   # 省略時も 60
+poll_interval_secs = 60   # 省略時も 60。`0` は警告を出して 60 へフォールバックする
 ```
 
 `[github]` の全キー（`deny_unknown_fields`。**未知キーは `initialize` の硬い失敗になる**ので、タイポは起動時に分かる）:
@@ -885,7 +885,7 @@ in_progress_statuses = ["実装中"]
 | `api_url` | string | `https://api.notion.com/v1` | REST のベース URL（テスト用の上書き） |
 | `api_version` | string | `2022-06-28` | `Notion-Version` ヘッダに送る API 版 |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
-| `poll_interval_secs` | int? | 60 | fetch 周期。`0` は未設定扱い（ビジースピン防止） |
+| `poll_interval_secs` | int? | 60 | fetch 周期。**`0` はポーリングを止めない** —— ビジースピンになるので警告を 1 行出して既定の 60 秒へフォールバックする。止めたいならワークフローを消すか `[plugins.notion] enabled = false` にする（github も同じ挙動）。**同じファイルの `[[workflows]].timeout_secs` は `0` が opt-out を意味するので、逆である** |
 | `rate_limit_rps` | int | 3 | クライアント側のリクエスト毎秒上限。Notion の公開上限が約 3 rps なのでそれに合わせてある |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記） |
 

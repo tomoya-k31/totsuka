@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:48491ed9e29ab7d64b133d69f8005ca3ac96a9ae3aaa2a531b7ee11191accd6f -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:c23dd252c26cfc9fff3e78a04086079f010b1ac417b4f8e575d3886cba936457 -->
 
 # Configuration reference
 
@@ -623,7 +623,7 @@ If a workflow uses a hook-capable agent, leaving `auth_token_ref` unset makes `c
 
 ## `[github]`
 
-This is the only polling task source here — `poll_interval_secs` is the plugin's own fetch interval, set in its `[github]` table. (The Slack source next door is event-driven and ignores it.)
+This is one of the two polling task sources (the other is `[notion]`) — `poll_interval_secs` is the plugin's own fetch interval, set in its `[github]` table. (The Slack source next door is event-driven and ignores it.)
 
 ```toml
 [plugins.github]
@@ -631,7 +631,7 @@ enabled = true
 kind = "task_source"
 
 [github]
-poll_interval_secs = 60   # 60 is also the default
+poll_interval_secs = 60   # 60 is also the default; 0 warns and falls back to it
 ```
 
 | Key | Type | Default | Meaning |
@@ -773,7 +773,7 @@ Unknown keys here are a hard startup failure, so a typo shows up immediately.
 | `api_url` | string | `https://api.notion.com/v1` | REST base URL. |
 | `api_version` | string | `2022-06-28` | The `Notion-Version` header. |
 | `max_retries` | int | 3 | Retries for retryable API failures. |
-| `poll_interval_secs` | int? | 60 | Fetch cadence. `0` counts as unset. |
+| `poll_interval_secs` | int? | 60 | Fetch cadence. **`0` does not stop polling**: it would busy-spin, so it logs one warning and falls back to the 60-second default. To stop polling, remove the workflow or set `[plugins.notion] enabled = false`. GitHub behaves the same way. Note that `[[workflows]].timeout_secs` reads `0` the opposite way, as an opt-out. |
 | `rate_limit_rps` | int | 3 | Client-side requests per second. Notion's published limit is about 3 rps. |
 | `[prompts]` | table | — | Overrides for the instruction text this plugin sends (below). |
 

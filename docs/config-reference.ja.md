@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:48491ed9e29ab7d64b133d69f8005ca3ac96a9ae3aaa2a531b7ee11191accd6f -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:c23dd252c26cfc9fff3e78a04086079f010b1ac417b4f8e575d3886cba936457 -->
 
 # 設定リファレンス
 
@@ -624,13 +624,13 @@ plan_cleanup = "immediate"            # plan: 即削除（既定）
 
 ## `[github]`
 
-ここで唯一のポーリング型 task source であり、`poll_interval_secs` がそのままプラグイン自身の fetch 周期になる。置き場所はプラグイン自身の `[github]` テーブルである（隣の Slack ソースはイベント駆動でこの値を使わない）。
+ポーリング型 task source の 1 つで（もう 1 つは `[notion]`）、`poll_interval_secs` がそのままプラグイン自身の fetch 周期になる。置き場所はプラグイン自身の `[github]` テーブルである（隣の Slack ソースはイベント駆動でこの値を使わない）。
 
 ```toml
 [plugins.github]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 60   # 60 は既定値でもある
+poll_interval_secs = 60   # 60 は既定値でもある。0 は警告を出してこれへ戻る
 ```
 
 | キー | 型 | 既定 | 意味 |
@@ -772,7 +772,7 @@ in_progress_statuses = ["実装中"]
 | `api_url` | string | `https://api.notion.com/v1` | REST のベース URL |
 | `api_version` | string | `2022-06-28` | `Notion-Version` ヘッダ |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の再試行回数 |
-| `poll_interval_secs` | int? | 60 | 取得周期。`0` は未設定扱い |
+| `poll_interval_secs` | int? | 60 | 取得周期。**`0` はポーリングを止めない** —— ビジースピンになるので警告を 1 行出して既定の 60 秒へ戻る。止めたいならワークフローを消すか `[plugins.notion] enabled = false` にする。GitHub も同じ挙動。なお `[[workflows]].timeout_secs` の `0` は逆に opt-out を意味する |
 | `rate_limit_rps` | int | 3 | クライアント側の毎秒リクエスト数。Notion の公開上限が約 3 rps |
 | `[prompts]` | テーブル | — | このプラグインが送る指示文の上書き（下記） |
 
