@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:66f75ce3c807cf44f544a3c22fdedec1d97d05dd8f42d1baa739d13bcb387868 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:119da35b5648b4c20f749bbaac6155dbc373d7dbcbde5ab62e2668204b9eb9ee -->
 
 # Configuration reference
 
@@ -134,7 +134,7 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 |---|---|---|---|
 | `name` | string | required | Workflow name |
 | `source` | string | required | Task source instance name |
-| `trigger` | table | `{}` | Trigger condition. **totsuka does not interpret its contents** — the source plugin receives it and runs first-match. For GitHub's `project_status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim) |
+| `trigger` | table | `{}` | Trigger condition. **totsuka does not interpret its contents** — the source plugin receives it and runs first-match. For GitHub's `project_status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim). If the card lands in **another** workflow's trigger column, the conversation is handed over to that workflow — the next stage of a column pipeline continues with the same worktree and the same agent session. Only a finished conversation is handed over. A delivery that arrives while a stage is still running is passed over: with a **polling** source (github / notion) the next tick brings it back and the handoff happens then, but Slack acks first and never re-sends, so that trigger is lost — re-issue it once the run has finished |
 | `profile` | enum? | none | One of `answer`, `triage`, `design`, `implement`. Decides `mode`, `output`, and `verification` together |
 | `mode` | enum | required without `profile` | `plan` or `implement` |
 | `agent` | string | required | Agent instance name |
@@ -268,7 +268,7 @@ on_success = { set_status = "Designed" }
 | `profile` plus `output` | **Allowed**, and `output` wins. This is a wiring choice rather than a permission, and a Slack-triggered implement workflow needs it to return the pull request URL to the thread |
 | No `profile` and no `mode` / `output` | **Error.** Either name a profile or write both |
 | `profile` plus `rubric`, `tool`, `timeout_secs`, `on_start`, `on_success`, `on_failure` | Allowed |
-| `on_start` / `on_success` / `on_failure` whose `set_status` equals the workflow's **own** `trigger.project_status` | **Error.** A lane re-entry now means "run it again", so writing back into your own trigger column is an infinite re-run loop. The check is lexical only — a `status_map` aliasing two names onto one column is beyond its sight |
+| `set_status` write-backs that form a **cycle of columns** | **Error.** Columns are nodes and write-backs are edges; a cycle re-runs forever with **no human in it**, dispatching an agent every lap. Writing back into your own trigger column is the length-1 case. The error names the actual route; the fix is to route one hop through a column no workflow triggers on, so a person moves the card out of it. Checked per `source`, lexically only — a `status_map` aliasing two names onto one column is beyond its sight |
 
 Profiles are optional. Combinations they cannot express — `verification = "human"`, for instance, since all four resolve to `llm` — are written out explicitly.
 

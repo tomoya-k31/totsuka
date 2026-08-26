@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:66f75ce3c807cf44f544a3c22fdedec1d97d05dd8f42d1baa739d13bcb387868 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:119da35b5648b4c20f749bbaac6155dbc373d7dbcbde5ab62e2668204b9eb9ee -->
 
 # 設定リファレンス
 
@@ -135,7 +135,7 @@ project = "tomo-prj"
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source のインスタンス名 |
-| `trigger` | テーブル | `{}` | トリガー条件。**totsuka は中身を解釈しない** — ソースプラグインが受け取り first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める） |
+| `trigger` | テーブル | `{}` | トリガー条件。**totsuka は中身を解釈しない** — ソースプラグインが受け取り first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列に入った場合は、その会話がそのワークフローへ引き渡される** — 列パイプラインの次の段が、同じ worktree・同じエージェントのセッションのまま始まる。引き渡されるのは完了済みの会話だけ。実行中に届いた配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと） |
 | `profile` | enum? | なし | `answer` / `triage` / `design` / `implement` のいずれか。`mode` / `output` / `verification` をまとめて決める |
 | `mode` | enum | `profile` が無ければ必須 | `plan` / `implement` |
 | `agent` | string | 必須 | agent_ide のインスタンス名 |
@@ -269,7 +269,7 @@ on_success = { set_status = "設計済み" }
 | `profile` + `output` | **可。** `output` が勝つ。権限ではなく配線先の選択であり、Slack 起点の implement がプルリクエストの URL をスレッドへ返すのに要る |
 | `profile` 無しで `mode` / `output` が欠けている | **エラー。** profile を書くか、両方を明示する |
 | `profile` + `rubric` / `tool` / `timeout_secs` / `on_start` / `on_success` / `on_failure` | 可 |
-| `on_start` / `on_success` / `on_failure` の `set_status` が**自分の** `trigger.project_status` と同じ | **エラー**。列差し戻しが再実行を意味するようになったため、自分のトリガー列へ書き戻す構成は無限再実行ループになる。検査は字面の一致のみ — `status_map` が別名を同じ列へ写す構成までは見えない |
+| `set_status` の書き戻しが作る**列の閉路** | **エラー**。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行**され、毎周エージェントが起動する。自分のトリガー列へ書き戻すのはその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は `source` ごと・字面の一致のみ — `status_map` が別名を同じ列へ写す構成までは見えない |
 
 profile は必須ではない。4 原型で表せない組み合わせ（たとえば `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
 
