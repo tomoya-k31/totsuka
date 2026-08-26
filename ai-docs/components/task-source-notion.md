@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-08-27T05:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T06:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -41,6 +41,22 @@ fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tas
 **`task/update_status` はページの親データベースを Notion に問い合わせる。** PATCH 先はページ id だけで足りるが、その前に「対象 option がそのデータベースに存在するか」を検証しており、どのデータベースかは request が語らない。ingest 時のメモを先に引き、無ければ `GET /pages/{id}` の `parent.database_id` を読む — **各データベースの option を順に試す方式は採らない**。別のデータベースにだけ存在する option を通してしまい、明確な「unknown status」エラーが Notion API 側の分かりにくい失敗に化けるからである。id はハイフンの有無を無視して突き合わせる（Notion は両形式を受け付け、ハイフン付きで返す）。
 
 **`config/validate` は全データベースを見る。** `property_map` は全データベース共通なので、あるデータベースだけがマップ先プロパティを欠いていると、そこ由来のタスクだけが壊れる — 1 つ目だけ見て緑にするのが一番静かな壊れ方になる。
+
+# 再実行はできない（#573、仕様として確定）
+
+**notion のタスクは、トリガーが何であれ 1 回しか実行されない。** `normalize_page` は `message_key` を**無条件で `None`** にするので、core はそれを `task.id` にフォールバックさせ、`UNIQUE(task_id, message_key)` が以降の再配送をすべて重複として捨てる。ステータスを戻しても再実行されず、`totsuka task retry` も `done` を拒否する。
+
+これは実装漏れではなく**決定である**。github は `status` セルの `updatedAt` を lane identity に使えるが（#556）、**Notion API にはプロパティ単位の更新時刻が無い**ので同じものが作れない。取りうる代替は 3 つとも代償が釣り合わなかった:
+
+| 案 | 破れ方 |
+|---|---|
+| `status:{name}@{page.last_edited_time}` | ページ単位の時刻なので、**カードがトリガー列に居る間にタイトルや説明を編集しただけで再実行される** |
+| `status:{name}`（時刻なし） | 列を出て同じ列へ戻すと同じ鍵になり、再実行**されない**。at-most-once とほぼ変わらない |
+| 直近ステータスをプラグインが記憶 | プロセスローカルなので**再起動で消える**。消えた後を取りこぼす側に倒すか余分に走る側に倒すかを、実運用の要求なしには決められない |
+
+**core 側で「前回と違うステータスなら新しい配送」にする案も成立しない。** `UNIQUE` は履歴全体に効くので、`Todo → 実行中 → Todo` と戻すと 2 回目の `Todo` が衝突する —— ステータス値ごとに 1 回しか使えない鍵になる。
+
+したがって「再実行が要る運用が実在してから、その要求に合わせて決める」を選んだ。要求が出たら #573 を再開する。
 
 # capabilities（F-83）
 
