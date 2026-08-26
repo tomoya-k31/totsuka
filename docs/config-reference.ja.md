@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:bf1c9c1937f5edd13b68b7b954232a6442250d1158bd9ca436e300add48d1018 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:66f75ce3c807cf44f544a3c22fdedec1d97d05dd8f42d1baa739d13bcb387868 -->
 
 # 設定リファレンス
 
@@ -135,7 +135,7 @@ project = "tomo-prj"
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source のインスタンス名 |
-| `trigger` | テーブル | `{}` | 一致条件。**totsuka は中身を解釈しない** —— 解釈するのはソースプラグインである。下記参照 |
+| `trigger` | テーブル | `{}` | トリガー条件。**totsuka は中身を解釈しない** — ソースプラグインが受け取り first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める） |
 | `profile` | enum? | なし | `answer` / `triage` / `design` / `implement` のいずれか。`mode` / `output` / `verification` をまとめて決める |
 | `mode` | enum | `profile` が無ければ必須 | `plan` / `implement` |
 | `agent` | string | 必須 | agent_ide のインスタンス名 |
@@ -269,6 +269,7 @@ on_success = { set_status = "設計済み" }
 | `profile` + `output` | **可。** `output` が勝つ。権限ではなく配線先の選択であり、Slack 起点の implement がプルリクエストの URL をスレッドへ返すのに要る |
 | `profile` 無しで `mode` / `output` が欠けている | **エラー。** profile を書くか、両方を明示する |
 | `profile` + `rubric` / `tool` / `timeout_secs` / `on_start` / `on_success` / `on_failure` | 可 |
+| `on_start` / `on_success` / `on_failure` の `set_status` が**自分の** `trigger.project_status` と同じ | **エラー**。列差し戻しが再実行を意味するようになったため、自分のトリガー列へ書き戻す構成は無限再実行ループになる。検査は字面の一致のみ — `status_map` が別名を同じ列へ写す構成までは見えない |
 
 profile は必須ではない。4 原型で表せない組み合わせ（たとえば `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
 

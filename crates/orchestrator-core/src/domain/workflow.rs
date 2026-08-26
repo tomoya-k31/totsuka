@@ -223,6 +223,36 @@ where
                 ),
             });
         }
+        // #556: a status write-back that re-enters the workflow's own trigger
+        // column is a reopen loop — since lane re-entries mint fresh message
+        // keys, the write-back would immediately requeue what it just
+        // finished. A **lexical** check only: the Orchestrator does not
+        // interpret triggers (#554) and this compares two operator-written
+        // strings without acting on either; a plugin-side `status_map` that
+        // aliases two different names onto one column is out of its sight
+        // (documented in config-reference).
+        if let Some(trigger_status) = wf
+            .trigger
+            .as_table()
+            .get("project_status")
+            .and_then(|v| v.as_str())
+        {
+            for (key, action) in [
+                ("on_start", &wf.on_start),
+                ("on_success", &wf.on_success),
+                ("on_failure", &wf.on_failure),
+            ] {
+                if action.as_ref().and_then(|a| a.set_status.as_deref()) == Some(trigger_status) {
+                    issues.push(WorkflowIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "workflow `{}` {key} sets status `{trigger_status}`, which is its own trigger column → the write-back would re-trigger the workflow in a loop; use a different column",
+                            wf.name
+                        ),
+                    });
+                }
+            }
+        }
     }
 
     issues
@@ -287,6 +317,51 @@ output = "none"
         assert_eq!(workflows[1].verification, VerificationMode::Llm);
         assert!(workflows[1].timeout_secs.is_none());
         assert!(workflows[1].rubric.is_none());
+    }
+
+    #[test]
+    fn a_write_back_into_the_own_trigger_column_is_a_loop_and_errors() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "looping"
+source = "github"
+trigger = { project_status = "実装待ち" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_failure = { set_status = "実装待ち" }
+
+[[workflows]]
+name = "fine"
+source = "github"
+trigger = { project_status = "実装待ち" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "レビュー待ち" }
+
+[[workflows]]
+name = "label-only"
+source = "github"
+trigger = { label = "実装待ち" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "実装待ち" }
+"#,
+        );
+        let issues = validate_workflows(&workflows, |_| None);
+        // Only the first workflow loops: `fine` writes elsewhere, and
+        // `label-only` has no lane for the write-back to re-enter (the check
+        // is lexical, over `project_status` only).
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].severity, Severity::Error);
+        assert!(
+            issues[0].message.contains("looping") && issues[0].message.contains("on_failure"),
+            "{}",
+            issues[0].message
+        );
     }
 
     #[test]

@@ -214,7 +214,7 @@ fn fetch_response() -> Value {
     json!({ "data": { "user": { "projectV2": { "items": {
         "pageInfo": { "hasNextPage": false, "endCursor": null },
         "nodes": [
-            { "status": { "name": "実装待ち" }, "content": {
+            { "status": { "name": "実装待ち", "updatedAt": "2026-08-26T01:02:03Z" }, "content": {
                 "__typename": "Issue", "id": "I_1", "number": 1, "title": "Task one",
                 "body": "please do it", "url": "https://github.com/me/totsuka/issues/1",
                 "repository": { "name": "totsuka" },
@@ -771,6 +771,85 @@ async fn initialize_with_triggers_polls_and_submits() {
     assert_eq!(task["status"], "実装待ち");
     assert_eq!(task["labels"], json!(["bug"]));
     assert!(task.get("assignee").is_none() || task["assignee"].is_null());
+    // Lane-entry identity (#556): a `project_status` trigger keys the
+    // delivery on the status cell's server-issued `updatedAt`, so a human
+    // moving the card back into the column mints a *new* message (→ reopen)
+    // while every re-delivery of the same entry dedups.
+    assert_eq!(task["message_key"], "status:実装待ち@2026-08-26T01:02:03Z");
+    harness.assert_no_task(Duration::from_millis(200)).await;
+}
+
+/// A label-only trigger has no lane, so *any* column move would re-run it:
+/// those keep the at-most-once `None` key (#556).
+#[tokio::test]
+async fn label_only_triggers_mint_no_message_key() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    shared.push(Canned::Data(fetch_response()));
+    let (projects, repositories) = one_board();
+    let params = json!({
+        "protocol_version": "0.1.6",
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
+            { "workflow": "design", "trigger": { "label": "bug" } }
+        ],
+    });
+    call(&mut srv, 1, "initialize", params).await;
+
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "I_1");
+    assert!(
+        task.get("message_key").is_none() || task["message_key"].is_null(),
+        "label-only trigger must not key on lane entries: {task}"
+    );
+    harness.assert_no_task(Duration::from_millis(200)).await;
+}
+
+/// The defensive arm: a `project_status` trigger, but the API answered no
+/// `updatedAt` for the status cell. There is no lane-entry identity to mint,
+/// so the delivery degrades to the at-most-once `None` key rather than to a
+/// key that would collide across genuinely different entries. The field is
+/// always selected, so this should be unreachable — which is exactly why it
+/// is pinned: an unreachable arm nobody exercises is an assumption, not a
+/// behaviour.
+#[tokio::test]
+async fn a_status_cell_without_updated_at_mints_no_message_key() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    shared.push(Canned::Data(
+        json!({ "data": { "user": { "projectV2": { "items": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "nodes": [
+            { "status": { "name": "実装待ち" }, "content": {
+                "__typename": "Issue", "id": "I_7", "number": 7, "title": "No updatedAt",
+                "url": "https://github.com/me/totsuka/issues/7",
+                "repository": { "name": "totsuka" },
+                "assignees": { "nodes": [] }, "labels": { "nodes": [] } } }
+        ]
+    } } } } }),
+    ));
+    let (projects, repositories) = one_board();
+    let params = json!({
+        "protocol_version": "0.1.6",
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
+            { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
+        ],
+    });
+    call(&mut srv, 1, "initialize", params).await;
+
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "I_7");
+    assert!(
+        task.get("message_key").is_none() || task["message_key"].is_null(),
+        "no updatedAt means no lane-entry key: {task}"
+    );
     harness.assert_no_task(Duration::from_millis(200)).await;
 }
 

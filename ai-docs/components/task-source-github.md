@@ -27,7 +27,7 @@ GitHub Issues / ProjectsV2 を totsuka のタスクソースとして接続す�
 
 # 取り込み制御（F-08）
 
-fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`[[projects]]` の全ボードを設定順に走査し**（#542）、ボードごとに: まずワークフローの trigger（`project_status` / `label`）で候補を絞り、次に多人数運用ゲーティングを適用する: assignee が他者のタスクを除外（自分は `github_login` で判定・大小無視）、`in_progress_statuses` のステータスを除外、**そのボードに紐づかないリポジトリ**を除外（紐付けは `[[repositories]].project`、#554）。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
+fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`[[projects]]` の全ボードを設定順に走査し**（#542）、ボードごとに: まずワークフローの trigger（`project_status` / `label`）で候補を絞り、次に多人数運用ゲーティングを適用する: assignee が他者のタスクを除外（自分は `github_login` で判定・大小無視）、`in_progress_statuses` のステータスを除外、**そのボードに紐づかないリポジトリ**を除外（紐付けは `[[repositories]].project`、#554）。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。**`project_status` トリガーの配送は `message_key = "status:{列名}@{セルの updatedAt}"` を刻む**（#556 / [ADR-0059](/decisions/adr-0059-task-claim-exclusion.md) §5）: セルの updatedAt は列移動でだけ進む（同一 option の冪等再セットでは進まない — 実測）ので、「人間がカードをトリガー列へ差し戻した」が**新しいメッセージ**になり、完了済みの会話が #242 の機構で reopen して再実行される。毎 tick の再配送と、完了直前の古い fetch スナップショットの遅延配送は同じ key なので dedup — **サーバー発行タイムスタンプ同士の等値比較だけ**で、ローカル時計は一切比較しない。label-only トリガーは「列」が無く任意の列移動で誤爆するため従来どおり key なし（at-most-once）。**アップグレード時の一回性**: 旧台帳の key は task.id なので、トリガー列に置き去りの完了済みカードは新形式 key の初回 poll で 1 回だけ reopen する（`on_success` で列外へ出す運用なら配送自体が無く影響ゼロ）。
 
 **1 ボードの失敗は poll 全体の失敗にする。** そのボードを飛ばして残りを返すと、トークンの失効やボードの削除が「いま取り込むものが無い」と区別できなくなり、静かなボードと同じ見た目になって表に出てこない。
 
