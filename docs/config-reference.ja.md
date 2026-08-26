@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:30b7ee7cee20e6c2abd2db1835c0ecf31c92225e6420f14f8911e7c7e2d7e3cd -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:119da35b5648b4c20f749bbaac6155dbc373d7dbcbde5ab62e2668204b9eb9ee -->
 
 # 設定リファレンス
 
@@ -135,7 +135,7 @@ project = "tomo-prj"
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source のインスタンス名 |
-| `trigger` | テーブル | `{}` | トリガー条件。**totsuka は中身を解釈しない** — ソースプラグインが受け取り first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列に入った場合は、その会話がそのワークフローへ引き渡される** — 列パイプラインの次の段が、同じ worktree・同じエージェントのセッションのまま始まる。引き渡されるのは完了済みの会話だけで、実行中の段は終わるまで手放さない |
+| `trigger` | テーブル | `{}` | トリガー条件。**totsuka は中身を解釈しない** — ソースプラグインが受け取り first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列に入った場合は、その会話がそのワークフローへ引き渡される** — 列パイプラインの次の段が、同じ worktree・同じエージェントのセッションのまま始まる。引き渡されるのは完了済みの会話だけ。実行中に届いた配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと） |
 | `profile` | enum? | なし | `answer` / `triage` / `design` / `implement` のいずれか。`mode` / `output` / `verification` をまとめて決める |
 | `mode` | enum | `profile` が無ければ必須 | `plan` / `implement` |
 | `agent` | string | 必須 | agent_ide のインスタンス名 |

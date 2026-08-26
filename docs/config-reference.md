@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:30b7ee7cee20e6c2abd2db1835c0ecf31c92225e6420f14f8911e7c7e2d7e3cd -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:119da35b5648b4c20f749bbaac6155dbc373d7dbcbde5ab62e2668204b9eb9ee -->
 
 # Configuration reference
 
@@ -134,7 +134,7 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 |---|---|---|---|
 | `name` | string | required | Workflow name |
 | `source` | string | required | Task source instance name |
-| `trigger` | table | `{}` | Trigger condition. **totsuka does not interpret its contents** — the source plugin receives it and runs first-match. For GitHub's `project_status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim). If the card lands in **another** workflow's trigger column, the conversation is handed over to that workflow — the next stage of a column pipeline continues with the same worktree and the same agent session. Only a finished conversation is handed over; a stage still running keeps it until it ends |
+| `trigger` | table | `{}` | Trigger condition. **totsuka does not interpret its contents** — the source plugin receives it and runs first-match. For GitHub's `project_status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim). If the card lands in **another** workflow's trigger column, the conversation is handed over to that workflow — the next stage of a column pipeline continues with the same worktree and the same agent session. Only a finished conversation is handed over. A delivery that arrives while a stage is still running is passed over: with a **polling** source (github / notion) the next tick brings it back and the handoff happens then, but Slack acks first and never re-sends, so that trigger is lost — re-issue it once the run has finished |
 | `profile` | enum? | none | One of `answer`, `triage`, `design`, `implement`. Decides `mode`, `output`, and `verification` together |
 | `mode` | enum | required without `profile` | `plan` or `implement` |
 | `agent` | string | required | Agent instance name |

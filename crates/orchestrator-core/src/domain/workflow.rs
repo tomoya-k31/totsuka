@@ -254,6 +254,15 @@ struct Hop<'a> {
 /// its sight, and so is a column shared by name across two different trackers
 /// (which is not a cycle at all — different boards, and `source` separates
 /// them here).
+///
+/// **One finding per interlocking group, not per cycle.** The walk settles a
+/// column once it has been explored, so a group of workflows that contains
+/// several loops through the same columns is reported once, naming one
+/// concrete route. Fixing that route and re-validating surfaces the next one
+/// if there is one. This is deliberate — it keeps the walk linear instead of
+/// enumerating every simple cycle — and it is safe because `config validate`
+/// is a startup gate: no loop reaches a running orchestrator either way. The
+/// message says so, so nobody reads a single finding as "one loop left".
 fn column_cycles(workflows: &[Workflow]) -> Vec<WorkflowIssue> {
     let mut issues = Vec::new();
     // Per source: a column reached by a write-back only re-triggers a workflow
@@ -343,7 +352,9 @@ fn walk<'a>(
                 message: format!(
                     "status write-backs form a loop with no human in it: {route} → each lap \
                      dispatches an agent again, forever → route one hop through a column no \
-                     workflow triggers on (a review column a person moves the card out of)"
+                     workflow triggers on (a review column a person moves the card out of). \
+                     Workflows can interlock through several loops at once; re-run \
+                     `config validate` after fixing this one"
                 ),
             });
         }
@@ -460,6 +471,111 @@ on_success = { set_status = "Design" }
         for needle in ["design", "implement", "Design", "Todo"] {
             assert!(m.contains(needle), "route must name `{needle}`: {m}");
         }
+    }
+
+    /// Interlocking loops are reported **once**, not once per cycle: the walk
+    /// settles a column after exploring it. Pinned rather than described,
+    /// because "reports every loop" is exactly the kind of claim that reads
+    /// true until someone relies on it — here two real cycles
+    /// (`wa,wb,wd` and `wa,wc,wd`) share the same columns and produce one
+    /// finding. Safe because `config validate` gates startup: the operator
+    /// fixes this route and re-validates, and the message says to.
+    #[test]
+    fn interlocking_loops_are_reported_once_naming_one_route() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "wa"
+source = "github"
+trigger = { project_status = "colA" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "colB" }
+on_failure = { set_status = "colC" }
+
+[[workflows]]
+name = "wb"
+source = "github"
+trigger = { project_status = "colB" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "colD" }
+
+[[workflows]]
+name = "wc"
+source = "github"
+trigger = { project_status = "colC" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "colD" }
+
+[[workflows]]
+name = "wd"
+source = "github"
+trigger = { project_status = "colD" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "colA" }
+"#,
+        );
+        let issues = validate_workflows(&workflows, |_| None);
+        assert_eq!(issues.len(), 1, "one finding for the group: {issues:?}");
+        // And it tells the operator that fixing this one may not be the end.
+        assert!(
+            issues[0].message.contains("re-run"),
+            "the message must not read as `one loop left`: {}",
+            issues[0].message
+        );
+    }
+
+    /// Two loops that share no columns are separate groups, so both are
+    /// reported — the settling above collapses a group, never the graph.
+    #[test]
+    fn disjoint_loops_are_both_reported() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "a1"
+source = "github"
+trigger = { project_status = "A" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "B" }
+
+[[workflows]]
+name = "a2"
+source = "github"
+trigger = { project_status = "B" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "A" }
+
+[[workflows]]
+name = "b1"
+source = "github"
+trigger = { project_status = "X" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "Y" }
+
+[[workflows]]
+name = "b2"
+source = "github"
+trigger = { project_status = "Y" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "X" }
+"#,
+        );
+        assert_eq!(validate_workflows(&workflows, |_| None).len(), 2);
     }
 
     /// The pipeline the spec's §4.9 example describes: design hands off to

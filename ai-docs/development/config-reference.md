@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] のトラッカー宣言、ワークフローとプラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-26T15:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T16:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -182,7 +182,7 @@ project = "tomo-prj"
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source インスタンス名 |
-| `trigger` | テーブル | `{}` | トリガー条件。**Orchestrator は中身を一切解釈しない**（#554）。プラグインが `initialize` の `workflows` として受け取り、first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列へ入った場合は、その会話がそのワークフローへ引き渡される**（#565、列パイプライン）— worktree とエージェントのセッションを保ったまま次の段が始まる。引き渡しは**完了済みの会話だけ**で、実行中の段は走り切ってから次の tick で移る |
+| `trigger` | テーブル | `{}` | トリガー条件。**Orchestrator は中身を一切解釈しない**（#554）。プラグインが `initialize` の `workflows` として受け取り、first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列へ入った場合は、その会話がそのワークフローへ引き渡される**（#565、列パイプライン）— worktree とエージェントのセッションを保ったまま次の段が始まる。引き渡しは**完了済みの会話だけ**。実行中に別ワークフローの列へ移された配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと） |
 | `profile` | enum? | なし | 4 原型のいずれか（`answer` / `triage` / `design` / `implement`）。`mode` / `output` / `verification` の 3 つをまとめて決める。うち `mode` / `verification` は併記不可、`output` は併記すればそちらが勝つ（下記） |
 | `mode` | enum | `profile` が無ければ必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |

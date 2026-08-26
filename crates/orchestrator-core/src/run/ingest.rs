@@ -104,11 +104,20 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// The two outcomes are deliberately asymmetric. A finished conversation
     /// is **reopened under the new workflow** — that is the column pipeline
     /// working. A running one is **dropped without touching the ledger**: the
-    /// stage in flight owns the conversation until it ends, and the source
-    /// re-delivers every poll, so the handoff simply happens on a later tick
-    /// instead. Switching mid-run would need a cancel, and cancelling is a
-    /// person's decision — an operator moving a card must not silently abort
-    /// an agent.
+    /// stage in flight owns the conversation until it ends. Switching mid-run
+    /// would need a cancel, and cancelling is a person's decision — an
+    /// operator moving a card must not silently abort an agent.
+    ///
+    /// **Dropping it unwritten only recovers on a source that re-delivers.**
+    /// A poller does (`plugin_sdk::poll_loop` keeps no seen-set, so the next
+    /// tick brings the same lane entry back and the handoff happens then), and
+    /// that is the case column pipelines are built on. A push source that acks
+    /// first does **not**: Slack's Socket Mode envelope is acked before the
+    /// work, so a cross-workflow trigger that arrives while the conversation
+    /// is running is lost — only the `warn!` below records it. Writing the
+    /// message instead would be worse, not better: it would strand the
+    /// delivery on *every* source, permanently, because the ledger would then
+    /// dedup the re-delivery the poller was about to send.
     ///
     /// A conversation whose deliveries carry no `message_key` (a label-only
     /// GitHub trigger, a source that sends one message per task) can never
@@ -131,7 +140,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             url: task.url.clone(),
             payload: serde_json::to_string(task).map_err(StateError::from)?,
         };
-        let payload = serde_json::to_value(task).ok();
+        // `?`, not `.ok()`: this value **overwrites** the row's existing
+        // `source_payload`, so swallowing the error would replace the previous
+        // stage's payload with NULL and leave the next dispatch rebuilding the
+        // task from nothing. On the create path a `None` merely means a fresh
+        // row has no payload yet, which is why that one may be lenient.
+        let payload = serde_json::to_value(task).map_err(StateError::from)?;
         let detail = serde_json::json!({
             "kind": "reopen",
             "cause": "workflow_handoff",
@@ -142,7 +156,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             &insert,
             &wf.name,
             mode_str(wf.mode),
-            payload.as_ref(),
+            Some(&payload),
             Some(detail),
         )?;
         match outcome {
@@ -162,8 +176,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     delivered = %wf.name,
                     state = %existing.state,
                     "cross-workflow delivery ignored while the conversation is running: \
-                     the stage in flight keeps it until it finishes, and the source \
-                     re-delivers until then"
+                     the stage in flight keeps it until it finishes. A polling source \
+                     re-delivers, so the handoff happens on a later tick; a source that \
+                     acks first (Slack) does not, so this trigger is lost — re-issue it \
+                     once the run has finished"
                 );
                 Ok((existing.id, IngestOutcome::Duplicate))
             }
