@@ -12,7 +12,7 @@
 
 use plugin_protocol::methods::WorkflowInfo;
 
-/// One message per `trigger` key none of `valid` names, plus one per trigger
+/// One message per `trigger` key that is not in `valid`, plus one per trigger
 /// that is not a table at all.
 ///
 /// `valid` is the list of keys this source reads — write it out at the call
