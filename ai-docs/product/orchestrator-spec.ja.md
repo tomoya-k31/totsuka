@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-26T09:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T04:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -216,7 +216,7 @@ request_timeout_secs = 30
 | ID | 要件 | 優先度 |
 |---|---|---|
 | F-80 | ワークフロー = `source(タスクソースインスタンス) × trigger(取り込み条件) × mode(plan / implement) × agent × output(出力ポリシー)` の名前付き設定。config.toml に `[[workflows]]` として任意個定義できる | M |
-| F-81 | trigger は Issue / Projects のステータス列・ラベル、Notion のプロパティ値等で指定する。1タスクが属する workflow は高々1つで、**どれかを決めるのはソースプラグイン**である。`initialize` で渡された workflow 群に対して定義順で first-match を走らせ、`task/submit` で名指す。Orchestrator は trigger を不透明なテーブルとして保持し、そのキーを解釈しない(0.6.0、#554) | M |
+| F-81 | trigger は Issue / Projects のステータス列・ラベル、Notion のプロパティ値等で指定する。1タスクが属する workflow は高々1つで、**どれかを決めるのはソースプラグイン**である。`initialize` で渡された workflow 群に対して定義順で first-match を走らせ、`task/submit` で名指す。Orchestrator は trigger を不透明なテーブルとして保持し、それでタスクを照合しない(0.6.0、#554)。ただし `status` は Orchestrator 自身のキーで、閉路検査の列グラフを組むために字面として読む(#575) | M |
 | F-82 | `mode = "plan"`(詳細設計): worktree は作成する(コードベース参照のため)が、**push・PR 作成は行わない**。エージェントは plan モードで実行し、成果物として設計ドキュメントを返す | M |
 | F-83 | 出力ポリシー `output`: `source`(タスクソースプラグインの `result/publish` で Issue コメント・Notion ページ等へ記載)/ `none`。タスクソースプラグインは対応可能な出力を capability として宣言し、実現方法はプラグイン側で実装する。`pull_request` は push・PR 作成がエージェントの責務になるまで存在した(F-86) | M |
 | F-84 | `on_success` / `on_failure`: 完了時にソース側のステータスを遷移させる(例: 「設計待ち → 設計レビュー待ち」)。この**ソース上のステータス遷移が plan → 人間レビュー → implement のハンドオフ機構**となり、設計と実装の間に人間のレビューが自然に挟まる | M |
@@ -231,18 +231,18 @@ request_timeout_secs = 30
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "Ready to design" }
+trigger = { status = "Ready to design" }
 profile = "design"                       # mode / output / verification を解決する
 agent = "herdr"
-on_success = { set_status = "Design review" }
+on_success = { status = "Design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "Ready to implement" }
+trigger = { status = "Ready to implement" }
 profile = "implement"
 agent = "herdr"
-on_success = { set_status = "In review" }
+on_success = { status = "In review" }
 ```
 
 ### 4.10 通知(Notifier プラグイン)

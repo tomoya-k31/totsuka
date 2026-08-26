@@ -120,8 +120,8 @@ mode = "implement"
 agent = "mock_agent"
 output = "{output}"
 verification = "{verification}"
-on_success = {{ set_status = "done" }}
-on_failure = {{ set_status = "failed" }}
+on_success = {{ status = "done" }}
+on_failure = {{ status = "failed" }}
 "#
     ))
     .unwrap();
@@ -508,8 +508,8 @@ trigger = {}
 profile = "answer"
 agent = "mock_agent"
 output = "none"
-on_success = { set_status = "done" }
-on_failure = { set_status = "failed" }
+on_success = { status = "done" }
+on_failure = { status = "failed" }
 "#,
     )
     .unwrap();
@@ -1135,8 +1135,8 @@ agent = "mock_agent"
 output = "none"
 verification = "llm"
 timeout_secs = {timeout_secs}
-on_success = {{ set_status = "done" }}
-on_failure = {{ set_status = "failed" }}
+on_success = {{ status = "done" }}
+on_failure = {{ status = "failed" }}
 "#
     ))
     .unwrap();
@@ -1775,8 +1775,8 @@ source = "mock_src"
 trigger = {}
 profile = "design"
 agent = "mock_agent"
-on_success = { set_status = "done" }
-on_failure = { set_status = "failed" }
+on_success = { status = "done" }
+on_failure = { status = "failed" }
 "#,
         )
         .unwrap();

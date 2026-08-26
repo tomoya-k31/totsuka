@@ -930,7 +930,7 @@ mod tests {
             }),
             workflows: vec![WorkflowInfo {
                 workflow: "design".into(),
-                trigger: serde_json::json!({"project_status": "設計待ち"}),
+                trigger: serde_json::json!({"status": "設計待ち"}),
                 instructions_kind: Some("design".into()),
                 task_id_prefix: None,
                 options: serde_json::json!({"publish": "direct"})

@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] のトラッカー宣言、ワークフローとプラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-27T02:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T04:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -182,14 +182,14 @@ project = "tomo-prj"
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source インスタンス名 |
-| `trigger` | テーブル | `{}` | トリガー条件。**Orchestrator は中身を一切解釈しない**（#554）。プラグインが `initialize` の `workflows` として受け取り、first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列へ入った場合は、その会話がそのワークフローへ引き渡される**（#565、列パイプライン）— worktree とエージェントのセッションを保ったまま次の段が始まる。引き渡しは**完了済みの会話だけ**。実行中に別ワークフローの列へ移された配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと）。**この表の未知キーは `initialize` の硬い失敗になる**（#574）。トリガーの解釈は `.get("…")` なので、読み手の居ないキーは黙って捨てられ、条件が 1 つ減る —— つまりタイポはトリガーを**狭めず広げる**（`assinee` と書くと「条件なし」になり、除外したかったタスクにこそ発火する）。エラーはそのソースが読む有効キーを列挙するので、改名からの移行案内も兼ねる。`trigger = {}`（catch-all）はキーが無いので常に有効 |
+| `trigger` | テーブル | `{}` | トリガー条件。**中身を解釈してタスクを選ぶのはプラグインである**（#554）。ただし `status` は **core 所有のキー**で（#575、[ADR-0062](/decisions/adr-0062-status-vocabulary.md)）、Orchestrator が閉路検査の列グラフを組むために読む —— `on_*` の書き戻し先と文字列を突き合わせるだけで、タスクの照合には使わない。受理するかは各ソースの自由（状態列を持たない slack は未知キーとして拒否する）。プラグインが `initialize` の `workflows` として受け取り、first-match を走らせる。github の `status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列へ入った場合は、その会話がそのワークフローへ引き渡される**（#565、列パイプライン）— worktree とエージェントのセッションを保ったまま次の段が始まる。引き渡しは**完了済みの会話だけ**。実行中に別ワークフローの列へ移された配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと）。**この表の未知キーは `initialize` の硬い失敗になる**（#574）。トリガーの解釈は `.get("…")` なので、読み手の居ないキーは黙って捨てられ、条件が 1 つ減る —— つまりタイポはトリガーを**狭めず広げる**（`assinee` と書くと「条件なし」になり、除外したかったタスクにこそ発火する）。エラーはそのソースが読む有効キーを列挙するので、改名からの移行案内も兼ねる。`trigger = {}`（catch-all）はキーが無いので常に有効 |
 | `profile` | enum? | なし | 4 原型のいずれか（`answer` / `triage` / `design` / `implement`）。`mode` / `output` / `verification` の 3 つをまとめて決める。うち `mode` / `verification` は併記不可、`output` は併記すればそちらが勝つ（下記） |
 | `mode` | enum | `profile` が無ければ必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
 | `output` | enum | `profile` が無ければ必須 | `source` / `none`。**`pull_request` は廃止** — push と PR 作成はエージェントの責務になった（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、PR 作成手順はリポジトリの規約に書く |
-| `on_start` | `{ set_status = "..." }`? | なし | dispatch 直前にソース側ステータスを更新（#556、[ADR-0059](/decisions/adr-0059-task-claim-exclusion.md)）。ボードが「実行中」を映し、多人数運用では `in_progress_statuses` による取り込み除外の第 2 防御線になる。**未設定なら何も書かない**（従来挙動）。**使うなら `on_failure` も設定すること** — 失敗時に列が実行中のまま残り、ボードと実態が食い違う。**`on_start` / `on_success` / `on_failure` の未知キーは起動時エラーになる**（#574、有効キーは `set_status` のみ）。`trigger` と違いこれは core が読むテーブルなので、検査も `config validate`（`run` が共有する）の側にある。検査が要るのは壊れ方が無言だからで、`set_stauts` と書くと**タスクは成功したのにボードだけ動かない** |
-| `on_success` | `{ set_status = "..." }`? | なし | 成功時にソース側ステータスを更新（F-84） |
-| `on_failure` | `{ set_status = "..." }`? | なし | 失敗時にソース側ステータスを更新（publish 失敗など retry 可能な失敗では書き戻さない） |
+| `on_start` | `{ status = "..." }`? | なし | dispatch 直前にソース側ステータスを更新（#556、[ADR-0059](/decisions/adr-0059-task-claim-exclusion.md)）。ボードが「実行中」を映し、多人数運用では `in_progress_statuses` による取り込み除外の第 2 防御線になる。**未設定なら何も書かない**（従来挙動）。**使うなら `on_failure` も設定すること** — 失敗時に列が実行中のまま残り、ボードと実態が食い違う。**`on_start` / `on_success` / `on_failure` の未知キーは起動時エラーになる**（#574、有効キーは `status` のみ）。`trigger` と違いこれは core が読むテーブルなので、検査も `config validate`（`run` が共有する）の側にある。検査が要るのは壊れ方が無言だからで、`set_stauts` と書くと**タスクは成功したのにボードだけ動かない** |
+| `on_success` | `{ status = "..." }`? | なし | 成功時にソース側ステータスを更新（F-84） |
+| `on_failure` | `{ status = "..." }`? | なし | 失敗時にソース側ステータスを更新（publish 失敗など retry 可能な失敗では書き戻さない） |
 | `verification` | enum | `llm` | 完了自己申告の検収方式（D-01）: `llm`（prompt 型 Stop フックで in-session 検収）/ `human`（`totsuka task verify` 待ち。有効な notifier が無いと警告）/ `none`（検収なし）。`profile` 指定時は書けない |
 | `timeout_secs` | int? | 1800 | 最終フックシグナルからの無応答上限秒。超過でエスカレーション（D-03）。**`0` はこのワークフローを掃引の対象外にする**（#439、[ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md)）— 人間が pane を見ている attended 運用向け。真にハングしたエージェントも検知されなくなるので、無人ワークフローには設定しないこと |
 | `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告。**唯一のプロンプト上書き面**（下記）で、profile の既定より強い |
@@ -261,10 +261,10 @@ agent = "herdr"
 [[workflows]]
 name = "github-design"
 source = "github"
-trigger = { project_status = "Design" }
+trigger = { status = "Design" }
 profile = "design"
 agent = "herdr"
-on_success = { set_status = "Design Review" }
+on_success = { status = "Design Review" }
 initial_prompt = "/grill-me スキルを使用して、詳細設計を行ってください"
 ```
 
@@ -297,10 +297,10 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 [[workflows]]
 name = "gh-design"
 source = "github"
-trigger = { project_status = "設計待ち" }
+trigger = { status = "設計待ち" }
 profile = "design"
 agent = "herdr"
-on_success = { set_status = "設計済み" }
+on_success = { status = "設計済み" }
 ```
 
 併用の規則:
@@ -311,7 +311,7 @@ on_success = { set_status = "設計済み" }
 | `profile` + `output` | **可**。`output` が profile の値に勝つ。権限ではなく配線先の選択なので上書きを許している（Slack 起点の implement が PR URL をスレッドへ返すのに要る） |
 | `profile` 無し + `mode` / `output` の欠落 | **エラー**。`profile` を書くか、両方を明示するか |
 | `profile` + `rubric` / `tool` / `timeout_secs` / `on_start` / `on_success` / `on_failure` | 可 |
-| `set_status`（`on_start` / `on_success` / `on_failure`）が作る**列の閉路** | **エラー**（#556 → #565 で一般化）。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行され続ける**（毎周エージェントが起動して実費が出る）。自分のトリガー列へ書き戻す構成はその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は**同一 `source` 内・字面の一致のみ** — プラグインの `status_map` が別名を同じ列へ写す構成は見えない |
+| `status`（`on_start` / `on_success` / `on_failure`）が作る**列の閉路** | **エラー**（#556 → #565 で一般化）。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行され続ける**（毎周エージェントが起動して実費が出る）。自分のトリガー列へ書き戻す構成はその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は**同一 `source` 内・字面の一致のみ** — 列名がたまたま同じだけの別のボードは閉路ではなく、`source` がそれを分けている |
 
 `profile` は必須ではない。4 原型で表せない組み合わせ（例: `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
 
@@ -752,7 +752,6 @@ poll_interval_secs = 60   # 省略時も 60
 | `status_field` | string | `Status` | ステータス列を保持する SingleSelect フィールド名（F-02）。**全ボード共通** |
 | `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出（F-08）と、claim の self-assign 先（#556）に使う。**1 login = 1 インスタンス**: 同じ login で複数の totsuka を動かすと claim の裁定が原理的にできない（assignee にはログイン名しか載らない）ため非対応 |
 | `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして ingest から除外するステータス名（F-08）。**全ボード共通** |
-| `status_map` | テーブル | `{}` | オーケストレータ側のステータス名 → Project の SingleSelect オプション名の対応（`task/update_status` 用、F-84）。**未設定のキーは恒等**（名前がそのまま使われる）。**全ボード共通** |
 | `source_name` | string | `github` | `Task.source` に刻印するソース名。ボードを増やしても変わらない（だから `[[workflows]].source = "github"` は 1 本のまま） |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用の上書き） |
 | `claim_verify_delay_ms` | int? | `750` | claim（#556）の self-assign 書き込みから読み戻しまでの待ち ms。読み戻しが競合と黙殺の両方を検出するので、API に反映される前に読んではいけない。既定値は実測（p95 ≈ 700ms / max 983ms）に基づく。`0` も有効（テスト用。早すぎる読みは再試行 1 回を足すだけ） |
@@ -1006,16 +1005,16 @@ my-claude = "claude"
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "Ready to design" }
+trigger = { status = "Ready to design" }
 profile = "design"
 agent = "herdr"
-on_success = { set_status = "Design review" }
+on_success = { status = "Design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "Ready to implement" }
+trigger = { status = "Ready to implement" }
 profile = "implement"
 agent = "herdr"
-on_success = { set_status = "In review" }
+on_success = { status = "In review" }
 ```

@@ -171,7 +171,6 @@ fn init_config() -> Value {
         "notion_user_id": "u_me",
         "body_source": "page",
         "in_progress_statuses": ["実装中"],
-        "status_map": { "レビュー待ち": "In Review" },
         "priority_map": { "High": 10 },
         // The fetch cadence is this plugin's own `[notion]` key since 0.6.0
         // (#554) — it arrives inside `config`, not beside it.
@@ -451,7 +450,7 @@ async fn update_status_verifies_options_on_the_page_own_database() {
         &mut srv,
         2,
         "task/update_status",
-        json!({ "task_id": "P_20", "status": "レビュー待ち" }),
+        json!({ "task_id": "P_20", "status": "In Review" }),
     )
     .await;
     assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
@@ -497,7 +496,7 @@ async fn a_hyphenated_parent_id_matches_a_config_written_without_hyphens() {
         &mut srv,
         2,
         "task/update_status",
-        json!({ "task_id": "P_1", "status": "レビュー待ち" }),
+        json!({ "task_id": "P_1", "status": "In Review" }),
     )
     .await;
     assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
@@ -529,7 +528,7 @@ async fn update_status_refuses_a_page_from_an_unconfigured_database() {
         &mut srv,
         2,
         "task/update_status",
-        json!({ "task_id": "P_99", "status": "レビュー待ち" }),
+        json!({ "task_id": "P_99", "status": "In Review" }),
     )
     .await;
     let err = resp.error.expect("an unconfigured database must error");
@@ -553,8 +552,8 @@ async fn initialize_then_update_status() {
     assert_eq!(result["capabilities"]["outputs"], json!([]));
 
     // task/update_status → resolves which database the page lives in (#542:
-    // the memo is empty here, so Notion is asked), maps レビュー待ち → "In
-    // Review", verifies the option exists (DB fetch), then PATCHes the page.
+    // the memo is empty here, so Notion is asked), verifies "In Review" exists
+    // as an option (DB fetch), then PATCHes the page.
     shared.push(Canned::Data(
         json!({ "id": "P_1", "parent": { "type": "database_id", "database_id": "DB1" } }),
     ));
@@ -567,7 +566,7 @@ async fn initialize_then_update_status() {
         &mut srv,
         3,
         "task/update_status",
-        json!({ "task_id": "P_1", "status": "レビュー待ち" }),
+        json!({ "task_id": "P_1", "status": "In Review" }),
     )
     .await;
     assert!(resp.error.is_none(), "update failed: {:?}", resp.error);

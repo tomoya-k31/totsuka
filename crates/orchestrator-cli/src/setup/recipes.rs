@@ -247,7 +247,7 @@ pub const RECIPES: &[Recipe] = &[
         workflows: &[RecipeWorkflow {
             name: "implement",
             source: "github",
-            trigger: Some(r#"{ project_status = "{{implement_status}}" }"#),
+            trigger: Some(r#"{ status = "{{implement_status}}" }"#),
             profile: Some(Profile::Implement),
             mode: None,
             agent: "herdr",
@@ -257,7 +257,7 @@ pub const RECIPES: &[Recipe] = &[
             // (`task/update_status`) that owes nothing to the output policy.
             output: None,
             verification: None,
-            on_success: Some(r#"{ set_status = "{{implement_done_status}}" }"#),
+            on_success: Some(r#"{ status = "{{implement_done_status}}" }"#),
         }],
         blanks: &[Blank::GitHub],
         statuses: &[
@@ -282,24 +282,24 @@ pub const RECIPES: &[Recipe] = &[
             RecipeWorkflow {
                 name: "design",
                 source: "github",
-                trigger: Some(r#"{ project_status = "{{design_status}}" }"#),
+                trigger: Some(r#"{ status = "{{design_status}}" }"#),
                 profile: Some(Profile::Design),
                 mode: None,
                 agent: "herdr",
                 output: None,
                 verification: None,
-                on_success: Some(r#"{ set_status = "{{design_done_status}}" }"#),
+                on_success: Some(r#"{ status = "{{design_done_status}}" }"#),
             },
             RecipeWorkflow {
                 name: "implement",
                 source: "github",
-                trigger: Some(r#"{ project_status = "{{implement_status}}" }"#),
+                trigger: Some(r#"{ status = "{{implement_status}}" }"#),
                 profile: Some(Profile::Implement),
                 mode: None,
                 agent: "herdr",
                 output: None,
                 verification: None,
-                on_success: Some(r#"{ set_status = "{{implement_done_status}}" }"#),
+                on_success: Some(r#"{ status = "{{implement_done_status}}" }"#),
             },
         ],
         blanks: &[Blank::GitHub],
@@ -394,16 +394,13 @@ mod tests {
             "implement_status".to_string(),
             r#"Ready", labels = ["x"#.to_string(),
         )]);
-        let rendered = render_fragment(r#"{ project_status = "{{implement_status}}" }"#, &statuses);
+        let rendered = render_fragment(r#"{ status = "{{implement_status}}" }"#, &statuses);
 
         // Still one key, and its value is the whole answer verbatim.
         let table: toml::Table = toml::from_str(&format!("t = {rendered}")).expect("valid TOML");
         let inner = table["t"].as_table().expect("an inline table");
         assert_eq!(inner.len(), 1, "no key may be smuggled in: {inner:?}");
-        assert_eq!(
-            inner["project_status"].as_str(),
-            Some(r#"Ready", labels = ["x"#)
-        );
+        assert_eq!(inner["status"].as_str(), Some(r#"Ready", labels = ["x"#));
     }
 
     /// A control character must not reach the file raw: TOML forbids them in a
@@ -414,11 +411,11 @@ mod tests {
             "implement_status".to_string(),
             "a\u{7}b".to_string(),
         )]);
-        let rendered = render_fragment(r#"{ project_status = "{{implement_status}}" }"#, &statuses);
+        let rendered = render_fragment(r#"{ status = "{{implement_status}}" }"#, &statuses);
         assert!(!rendered.contains('\u{7}'), "{rendered}");
         let table: toml::Table = toml::from_str(&format!("t = {rendered}")).expect("valid TOML");
         assert_eq!(
-            table["t"].as_table().unwrap()["project_status"].as_str(),
+            table["t"].as_table().unwrap()["status"].as_str(),
             Some("a\u{7}b"),
             "the value must survive the round trip"
         );
@@ -432,10 +429,8 @@ mod tests {
             "implement_status".to_string(),
             r#"Say "go""#.to_string(),
         )]);
-        let shown = render_fragment_for_display(
-            r#"{ project_status = "{{implement_status}}" }"#,
-            &statuses,
-        );
+        let shown =
+            render_fragment_for_display(r#"{ status = "{{implement_status}}" }"#, &statuses);
         assert!(shown.contains(r#"Say "go""#), "{shown}");
         assert!(!shown.contains('\\'), "{shown}");
     }
@@ -515,10 +510,10 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                r#"{ project_status = "Ready to design" }"#,
-                r#"{ set_status = "Design review" }"#,
-                r#"{ project_status = "Ready to implement" }"#,
-                r#"{ set_status = "In review" }"#,
+                r#"{ status = "Ready to design" }"#,
+                r#"{ status = "Design review" }"#,
+                r#"{ status = "Ready to implement" }"#,
+                r#"{ status = "In review" }"#,
             ]
         );
     }

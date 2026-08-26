@@ -132,7 +132,7 @@ pub struct ProjectDraft<'a> {
 /// A `[[workflows]]` entry to write.
 ///
 /// `trigger` / `on_success` / `on_failure` are TOML **inline table** fragments
-/// (`{ project_status = "実装待ち" }`) rather than typed values: their shape is
+/// (`{ status = "実装待ち" }`) rather than typed values: their shape is
 /// plugin-defined — the schema itself keeps them as an untyped `toml::Table` —
 /// so mirroring that in a Rust type would invent a structure the orchestrator
 /// does not have. A malformed fragment is rejected as
@@ -862,13 +862,13 @@ path = "/dotfiles"
             &WorkflowDraft {
                 name: "w",
                 source: "s",
-                trigger: Some(r#"{ project_status = "実装待ち" }"#),
+                trigger: Some(r#"{ status = "実装待ち" }"#),
                 profile: None,
                 mode: Some(WorkflowMode::Implement),
                 agent: "a",
                 output: Some(OutputPolicy::Source),
                 verification: Some(VerificationMode::Human),
-                on_success: Some(r#"{ set_status = "done" }"#),
+                on_success: Some(r#"{ status = "done" }"#),
                 on_failure: None,
             },
         )

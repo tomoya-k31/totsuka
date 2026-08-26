@@ -334,7 +334,7 @@ agent = "herdr"
 [[workflows]]
 name = "gh-design"
 source = "github"
-trigger = { project_status = "設計待ち" }
+trigger = { status = "設計待ち" }
 profile = "design"
 agent = "herdr"
 "#,
@@ -406,14 +406,14 @@ profile = "design"
 [[workflows]]
 name = "gh-design"
 source = "github"
-trigger = { project_status = "設計待ち" }
+trigger = { status = "設計待ち" }
 profile = "design"
 agent = "herdr"
 
 [[workflows]]
 name = "gh-implement"
 source = "github"
-trigger = { project_status = "実装待ち" }
+trigger = { status = "実装待ち" }
 profile = "implement"
 agent = "herdr"
 
@@ -427,7 +427,7 @@ agent = "herdr"
 [[workflows]]
 name = "spelled-out"
 source = "github"
-trigger = { project_status = "その他" }
+trigger = { status = "その他" }
 mode = "plan"
 output = "source"
 agent = "herdr"
@@ -474,10 +474,7 @@ agent = "herdr"
         // would silently work against this Orchestrator and break against the
         // next, which is the drift 0.6.0 exists to end.
         let design = info_of("gh-design");
-        assert_eq!(
-            design.trigger,
-            serde_json::json!({ "project_status": "設計待ち" })
-        );
+        assert_eq!(design.trigger, serde_json::json!({ "status": "設計待ち" }));
     }
 
     #[test]

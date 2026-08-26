@@ -26,10 +26,10 @@ use crate::transport::GithubTransport;
 const MAX_FETCH_PAGES: usize = 40;
 
 /// A parsed trigger condition (workflow-defined shape, F-81), e.g.
-/// `{"project_status": "実装待ち"}` and/or `{"label": "bug"}`.
+/// `{"status": "実装待ち"}` and/or `{"label": "bug"}`.
 #[derive(Debug, Default)]
 struct TriggerFilter {
-    project_status: Option<String>,
+    status: Option<String>,
     label: Option<String>,
     /// Which instruction set this workflow's profile asks for (#398).
     ///
@@ -48,13 +48,13 @@ struct TriggerFilter {
 /// `initialize` rejects every other key, so a typo cannot silently widen a
 /// trigger — add a key here in the same edit that teaches the parser to read
 /// it.
-pub const TRIGGER_KEYS: &[&str] = &["label", "project_status"];
+pub const TRIGGER_KEYS: &[&str] = &["label", "status"];
 
 impl TriggerFilter {
     fn parse(trigger: &Value, instructions_kind: Option<&str>) -> Self {
         Self {
-            project_status: trigger
-                .get("project_status")
+            status: trigger
+                .get("status")
                 .and_then(Value::as_str)
                 .map(str::to_string),
             label: trigger
@@ -67,7 +67,7 @@ impl TriggerFilter {
 
     /// Whether a candidate task matches the trigger the workflow asked for.
     fn matches(&self, status: Option<&str>, labels: &[String]) -> bool {
-        let status_ok = match &self.project_status {
+        let status_ok = match &self.status {
             Some(want) => status == Some(want.as_str()),
             None => true,
         };
@@ -282,7 +282,7 @@ impl<T: GithubTransport> GithubClient<T> {
             // trigger has no lane, so *any* column move would re-run it —
             // those keep the at-most-once `None` (ingest falls back to the
             // conversation id).
-            message_key: match (&filter.project_status, status, status_updated_at) {
+            message_key: match (&filter.status, status, status_updated_at) {
                 (Some(_), Some(name), Some(at)) => Some(format!("status:{name}@{at}")),
                 _ => None,
             },
@@ -359,7 +359,7 @@ impl<T: GithubTransport> GithubClient<T> {
         task_id: &str,
         status: &str,
     ) -> Result<bool, GithubError> {
-        let target = self.config.map_status(status).to_string();
+        let target = status.to_string();
         let query = resolve_query(project_config.owner_type.graphql_root());
 
         // Resolve the project id + status option once, then page the item list
@@ -437,7 +437,7 @@ impl<T: GithubTransport> GithubClient<T> {
         // the operator's to fix — searching on would hide it.
         let option_id = option_id.ok_or_else(|| {
             GithubError::NotFound(format!(
-                "unknown status `{target}` for field `{}` on project #{}, which is where issue `{task_id}` lives → add the option in that project or fix `github.status_map` in config.toml",
+                "unknown status `{target}` for field `{}` on project #{}, which is where issue `{task_id}` lives → add the option in that project, or write the column's exact option name",
                 self.config.status_field, project_config.project_number
             ))
         })?;
@@ -789,10 +789,7 @@ mod tests {
 
     #[test]
     fn trigger_filter_matches_status_and_label() {
-        let f = TriggerFilter::parse(
-            &json!({ "project_status": "実装待ち", "label": "bug" }),
-            None,
-        );
+        let f = TriggerFilter::parse(&json!({ "status": "実装待ち", "label": "bug" }), None);
         assert!(f.matches(Some("実装待ち"), &["bug".into()]));
         assert!(!f.matches(Some("実装中"), &["bug".into()])); // wrong status
         assert!(!f.matches(Some("実装待ち"), &["docs".into()])); // missing label
@@ -857,7 +854,7 @@ mod tests {
     /// (#398).
     #[test]
     fn a_design_trigger_tells_the_agent_where_to_put_the_design() {
-        let filter = TriggerFilter::parse(&json!({ "project_status": "設計待ち" }), Some("design"));
+        let filter = TriggerFilter::parse(&json!({ "status": "設計待ち" }), Some("design"));
         let task = client_for_tests()
             .normalize_item(&item("設計待ち"), &project_for_tests(), &filter)
             .expect("ingestable");
@@ -896,7 +893,7 @@ mod tests {
     /// the spelled-out notation — must produce exactly the task it did before.
     #[test]
     fn no_instructions_kind_means_no_instructions() {
-        let filter = TriggerFilter::parse(&json!({ "project_status": "実装待ち" }), None);
+        let filter = TriggerFilter::parse(&json!({ "status": "実装待ち" }), None);
         let task = client_for_tests()
             .normalize_item(&item("実装待ち"), &project_for_tests(), &filter)
             .expect("ingestable");

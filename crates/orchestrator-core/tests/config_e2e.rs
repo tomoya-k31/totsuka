@@ -67,11 +67,11 @@ tool = "claude"
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = {{ project_status = "実装待ち" }}
+trigger = {{ status = "実装待ち" }}
 mode = "implement"
 agent = "herdr"
 output = "source"
-on_success = {{ set_status = "レビュー待ち" }}
+on_success = {{ status = "レビュー待ち" }}
 
 [herdr]
 socket_path = "${{XDG_RUNTIME_DIR}}/herdr.sock"

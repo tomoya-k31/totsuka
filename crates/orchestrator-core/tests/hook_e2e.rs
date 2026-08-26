@@ -101,8 +101,8 @@ mode = "{mode}"
 agent = "mock_agent"
 output = "none"
 verification = "{verification}"
-on_success = {{ set_status = "done" }}
-on_failure = {{ set_status = "failed" }}
+on_success = {{ status = "done" }}
+on_failure = {{ status = "failed" }}
 "#
     ))
     .unwrap();

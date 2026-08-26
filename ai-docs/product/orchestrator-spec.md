@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-26T09:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T04:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -215,7 +215,7 @@ On top of the same plugin binaries, any number of **named configurations — wor
 | ID | Requirement | Priority |
 |---|---|---|
 | F-80 | Workflow = a named configuration of `source (task-source instance) × trigger (intake condition) × mode (plan / implement) × agent × output (output policy)`. Any number definable as `[[workflows]]` in config.toml | M |
-| F-81 | Triggers are specified via Issue / Projects status columns or labels, Notion property values, etc. One task belongs to at most one workflow; **the source plugin decides which**, running first-match over the workflows supplied at `initialize` in definition order, and names it on `task/submit`. The Orchestrator holds the trigger as an opaque table and does not interpret a key of it (0.6.0, #554) | M |
+| F-81 | Triggers are specified via Issue / Projects status columns or labels, Notion property values, etc. One task belongs to at most one workflow; **the source plugin decides which**, running first-match over the workflows supplied at `initialize` in definition order, and names it on `task/submit`. The Orchestrator holds the trigger as an opaque table and matches no task with it (0.6.0, #554). One key inside it is the Orchestrator's own: `status` names the source's status column, and it is read lexically to build the column graph the cycle check walks (#575) | M |
 | F-82 | `mode = "plan"` (detailed design): a worktree IS created (for codebase reference) but the pane cannot run git at all, so it never branches, commits, pushes or opens a PR. The agent runs in plan mode and returns a design document as the artifact | M |
 | F-83 | Output policy `output`: `source` (write to Issue comment, Notion page, etc. via the task-source plugin's `result/publish`) / `none`. Task-source plugins declare supported outputs as capabilities; realization is plugin-side. A `pull_request` policy existed until push and PR creation became the agent's responsibility (F-86) | M |
 | F-84 | `on_success` / `on_failure`: transition the source-side status on completion (e.g. "awaiting design → awaiting design review"). This **source-side status transition is the handoff mechanism for plan → human review → implement**, naturally inserting human review between design and implementation | M |
@@ -230,18 +230,18 @@ On top of the same plugin binaries, any number of **named configurations — wor
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "Ready to design" }
+trigger = { status = "Ready to design" }
 profile = "design"                       # resolves mode / output / verification
 agent = "herdr"
-on_success = { set_status = "Design review" }
+on_success = { status = "Design review" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "Ready to implement" }
+trigger = { status = "Ready to implement" }
 profile = "implement"
 agent = "herdr"
-on_success = { set_status = "In review" }
+on_success = { status = "In review" }
 ```
 
 ### 4.10 Notifications (notifier plugins)

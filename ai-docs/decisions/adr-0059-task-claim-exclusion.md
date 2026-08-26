@@ -4,7 +4,7 @@ title: ADR-0059 多人数 poll の二重着手は Issue self-assign の claim �
 description: "複数メンバーが同じ GitHub Project を poll する構成の二重着手対策。dispatch 直前にコアが task/claim（protocol 0.6.1、capability 宣言制）でソースプラグインへ占有を要求し、github プラグインは Issue への self-assign と AssignedEvent の createdAt 先着で裁定する。敗北は新終端状態 Skipped、claim 黙殺（Forbidden）は書き戻し無しの Fail。on_start を新設し勝者確定後に Status を動かす。人間がカードをトリガー列へ差し戻したときの再実行は status セルの updatedAt を message_key に刻んで #242 の会話再開に乗せる。Status LWW 単独・git ref CAS・単一ディスパッチャ・ハッシュ裁定は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/556
 tags: [decision, github, task-source, protocol, dispatch, concurrency, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-26T21:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T04:00:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-08-26T12:15:00Z }
 sources:
@@ -19,6 +19,8 @@ owner: tomoya-k31
 stable。設計・Phase 0 実測（2026-08-25）・実装の全 6 PR・**実機検収（2026-08-26）**まで完了。検収では claim が `on_start` に 3 秒先行すること、lane 差し戻しが会話の 2 通目として記録されて reopen すること、reopen 後の claim が pre-read fast-path で書き込みゼロの Won になることを実データで確認した。
 
 決定の全文と経緯は [#556](https://github.com/tomoya-k31/totsuka/issues/556)（本文 = 決定 10 件と不採用案、コメント = 詳細設計・reopen 追補・実測結果）。この ADR はその確定部分を記録する。
+
+> **綴りの注記**: 以降 [ADR-0062](/decisions/adr-0062-status-vocabulary.md) が `trigger.project_status` と `on_*.set_status` を両側 `status` に統一した。本文中の旧綴りは当時の記述として残してある。
 
 # Context
 

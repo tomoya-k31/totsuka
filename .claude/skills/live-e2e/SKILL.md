@@ -126,7 +126,7 @@ HTTP 200・`data` あり・**フィールドが `null`** という形で出う�
 
 **この fixture を Todo に戻さないこと。** 安全なのは「issue が CLOSED だから」
 ではない —— **プラグインは issue の open/closed を一切見ていない**（`fetch_query`
-は `state` を選択せず、`normalize_item` のゲートは trigger（`project_status` /
+は `state` を選択せず、`normalize_item` のゲートは trigger（`status` /
 `label`）・`repo_allowed`・`assignable_to_me`・`is_in_progress` だけ）。
 効いているのは **Status が `github-task` の trigger（`Todo`）から外れていること**
 である。しかも probe のために付けた assignee は `assignable_to_me`（F-08）を

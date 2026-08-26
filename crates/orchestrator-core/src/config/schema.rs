@@ -870,20 +870,20 @@ api_key_ref = "keychain:totsuka/openrouter"
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "設計待ち" }
+trigger = { status = "設計待ち" }
 mode = "plan"
 agent = "herdr"
 output = "source"
-on_success = { set_status = "設計レビュー待ち" }
+on_success = { status = "設計レビュー待ち" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "実装待ち" }
+trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
 output = "source"
-on_success = { set_status = "レビュー待ち" }
+on_success = { status = "レビュー待ち" }
 "#;
 
     #[test]
@@ -901,7 +901,7 @@ on_success = { set_status = "レビュー待ち" }
         assert_eq!(design.mode, Some(WorkflowMode::Plan));
         assert_eq!(design.output, Some(OutputPolicy::Source));
         assert_eq!(
-            design.trigger.get("project_status").unwrap().as_str(),
+            design.trigger.get("status").unwrap().as_str(),
             Some("設計待ち")
         );
         assert_eq!(cfg.workflows[1].output, Some(OutputPolicy::Source));

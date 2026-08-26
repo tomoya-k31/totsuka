@@ -351,10 +351,6 @@ pub struct NotionConfig {
     /// ingest (F-08).
     #[serde(default)]
     pub in_progress_statuses: Vec<String>,
-    /// Maps an orchestrator-side status name to the database's option name for
-    /// `task/update_status` (F-84). Identity when absent.
-    #[serde(default)]
-    pub status_map: HashMap<String, String>,
     /// Maps a priority option name (for `select`/`status` priority properties)
     /// to a numeric priority. Higher runs first. A `number` priority property is
     /// used directly and ignores this map.
@@ -389,12 +385,6 @@ pub struct NotionConfig {
 }
 
 impl NotionConfig {
-    /// Resolve the Notion option name for an orchestrator status via
-    /// [`status_map`](Self::status_map), falling back to the name itself.
-    pub fn map_status<'a>(&'a self, status: &'a str) -> &'a str {
-        self.status_map.get(status).map_or(status, String::as_str)
-    }
-
     /// The repositories this plugin is the tracker for, and where an item for
     /// each goes (`InitializeResult.claimed_repos`, protocol 0.5.1, #542).
     ///
@@ -810,14 +800,11 @@ mod tests {
     }
 
     #[test]
-    fn status_and_priority_maps() {
+    fn priority_map_resolves_option_names_to_numbers() {
         let cfg = parse(serde_json::json!({
             "token": "t", "databases": [{ "database_id": "db", "repos": ["totsuka"] }],
-            "status_map": { "レビュー待ち": "In Review" },
             "priority_map": { "High": 10, "Low": 1 }
         }));
-        assert_eq!(cfg.map_status("レビュー待ち"), "In Review");
-        assert_eq!(cfg.map_status("実装待ち"), "実装待ち");
         assert_eq!(cfg.priority_value("High"), 10);
         assert_eq!(cfg.priority_value("Unknown"), 0);
     }

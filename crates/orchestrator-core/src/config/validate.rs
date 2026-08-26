@@ -1057,7 +1057,7 @@ tool = "claude"
 [[workflows]]
 name = "impl"
 source = "github"
-trigger = {{ project_status = "todo" }}
+trigger = {{ status = "todo" }}
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -1082,7 +1082,7 @@ kind = "agent_ide"
 [[workflows]]
 name = "impl"
 source = "github"
-trigger = { project_status = "todo" }
+trigger = { status = "todo" }
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1098,7 +1098,7 @@ on_success = { set_stauts = "done" }
             .find(|e| e.contains("set_stauts"))
             .unwrap_or_else(|| panic!("no finding for the typo: {errors:?}"));
         assert!(hit.contains("on_success"), "names the table: {hit}");
-        assert!(hit.contains("`set_status`"), "names the valid key: {hit}");
+        assert!(hit.contains("`status`"), "names the valid key: {hit}");
         // The reason this is an error rather than a passthrough: the run
         // succeeds and only the board stops moving.
         assert!(hit.contains("silently"), "says what breaks: {hit}");
@@ -1118,12 +1118,12 @@ kind = "agent_ide"
 [[workflows]]
 name = "impl"
 source = "github"
-trigger = { project_status = "todo" }
+trigger = { status = "todo" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_start = { set_status = "doing" }
-on_success = { set_status = "done" }
+on_start = { status = "doing" }
+on_success = { status = "done" }
 on_failure = { nope = "x" }
 "#;
         let cfg = RootConfig::from_toml_str(toml).unwrap();

@@ -1,10 +1,10 @@
 ---
 type: Decision
 title: ADR-0058 設定の所有はファイル位置ではなく宣言で切り、config.toml へ一本化する
-description: "プラグイン固有の設定項目の定義と検証をプラグインへ委譲するための設計。plugins/{name}.toml を廃止して config.toml のトップレベル [<name>] へ移し、[[workflows]] の追加キーはフラットに書いて source と agent の両方へ送り「ちょうど 1 つが引き取る」を規則にする。ワークフロー選択はプラグインが task/submit で名指しし、core の予約 trigger 語彙（reaction / project_status / label）を撤廃する。repo→トラッカーの紐付けは [[projects]] と [[repositories]].project へ移し ADR-0056 を置き換える。manifest への静的スキーマ宣言・名前空間つきの記法・互換のための二重読みは不採用。"
+description: "プラグイン固有の設定項目の定義と検証をプラグインへ委譲するための設計。plugins/{name}.toml を廃止して config.toml のトップレベル [<name>] へ移し、[[workflows]] の追加キーはフラットに書いて source と agent の両方へ送り「ちょうど 1 つが引き取る」を規則にする。ワークフロー選択はプラグインが task/submit で名指しし、core の予約 trigger 語彙（reaction / project_status / label）を撤廃する（このうち status は ADR-0062 で core 所有へ戻した）。repo→トラッカーの紐付けは [[projects]] と [[repositories]].project へ移し ADR-0056 を置き換える。manifest への静的スキーマ宣言・名前空間つきの記法・互換のための二重読みは不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/554
 tags: [decision, config, protocol, plugin, workflow, projects, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T04:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -35,7 +35,7 @@ stable。[#554](https://github.com/tomoya-k31/totsuka/issues/554) の実装と�
 
 | core にあったもの | 実体 |
 |---|---|
-| 予約 trigger キー `project_status` | GitHub Projects の概念 |
+| 予約 trigger キー `project_status` | GitHub Projects の概念（[ADR-0062](/decisions/adr-0062-status-vocabulary.md) が `status` として core 所有に戻した） |
 | 予約 trigger キー `reaction` | Slack の概念 |
 | `reaction` の型検証・重複検出・trigger の重なり警告 | Slack 固有の妥当性判断 |
 | `[[workflows]].publish` | 実装しているのは slack だけ |
@@ -150,7 +150,9 @@ publish = "direct"      # プラグインが定義するプロパティ。見た
 
 **trigger への注入も撤廃した。** core が profile から導出する `instructions_kind` / `task_id_prefix` は `WorkflowInfo` の専用フィールドで運び、`trigger` は運用者が書いたテーブルの**素通し**になった。#398 が trigger に焼き込んだのは「プロトコル変更なしで運べる面が trigger しか無かった」ためで、options が wire に載った 0.6.0 でその理由は消えている（不採用案の「`trigger` をそのまま拡張フィールドとして使い続ける」参照）。
 
-**失うもの**: trigger の重なり警告が**どこにも無くなった**。`--offline` の話ではない —— 検査そのものを移していないので、オンラインでも出ない。github / notion で 2 つの workflow が同じ `project_status` を書いても、報告なしで先勝ちになる。
+**失うもの**: trigger の重なり警告が**どこにも無くなった**。`--offline` の話ではない —— 検査そのものを移していないので、オンラインでも出ない。github / notion で 2 つの workflow が同じステータス列を書いても、報告なしで先勝ちになる。
+
+> **改訂（[ADR-0062](/decisions/adr-0062-status-vocabulary.md)）。** 「core の予約 trigger 語彙を撤廃する」は 1 語だけ戻った。`status`（当時の `project_status`）は **core 所有のキーとして `trigger` テーブルに住む**と定め直してある。用途は #565 の閉路検査の列グラフを組む 1 つだけで、文字列を比較するだけの lexical な読み方に限られる —— タスクの照合には使わないので、この節が撤廃した「core による二度目の照合」は撤廃されたままである。受理するかは各ソースが決めてよい（slack は未知キーとして拒否する）。あわせて同 ADR が `project_status` / `set_status` の綴りを `status` に統一し、`status_map` を廃止した。
 
 移さなかったのは、slack で消滅したのと同じ理由が github / notion には**当たらない**からではなく、当たるからである: これらの trigger はステータス・ラベルのフィルタで、重なりの意味は「両方に一致したら定義順で先勝ち」という**定義済みの挙動**でしかない。core が警告していたのは catch-all を追い越す `reaction` の危険（#396）と同じ枠で見ていたためで、その危険は slack 固有だった。とはいえ「意図しない重なり」を利用者が知りたいことはありうるので、必要になったら各プラグインの `config/validate` へ足す。
 
