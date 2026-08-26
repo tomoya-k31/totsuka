@@ -778,6 +778,79 @@ async fn initialize_with_triggers_polls_and_submits() {
     harness.assert_no_task(Duration::from_millis(200)).await;
 }
 
+/// The arrangement #572 exists for: unassigned tasks stay with people, and the
+/// run starts only on the ones a human handed over by assigning them.
+#[tokio::test]
+async fn assignee_me_leaves_the_unassigned_alone() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    // `I_1` is unassigned and `I_2` belongs to another-dev; the default gate
+    // would take `I_1`.
+    shared.push(Canned::Data(fetch_response()));
+    let (projects, repositories) = one_board();
+    let params = json!({
+        "protocol_version": "0.1.6",
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
+            { "workflow": "impl", "trigger": { "status": "実装待ち", "assignee": "@me" } }
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
+    harness.assert_no_task(Duration::from_millis(200)).await;
+}
+
+/// …and the same board still yields the unassigned one under `@none`, so the
+/// exclusion above is the condition doing its job rather than the fetch failing.
+#[tokio::test]
+async fn assignee_none_takes_exactly_the_unassigned() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    shared.push(Canned::Data(fetch_response()));
+    let (projects, repositories) = one_board();
+    let params = json!({
+        "protocol_version": "0.1.6",
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
+            { "workflow": "triage", "trigger": { "status": "実装待ち", "assignee": "@none" } }
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "I_1");
+    harness.assert_no_task(Duration::from_millis(200)).await;
+}
+
+/// A condition that cannot be evaluated must stop the plugin starting, not
+/// leave a workflow that quietly never fires.
+#[tokio::test]
+async fn a_malformed_assignee_fails_initialize() {
+    let shared = Shared::default();
+    let (mut srv, _harness) = server_with_harness(&shared);
+
+    let (projects, repositories) = one_board();
+    let params = json!({
+        "protocol_version": "0.1.6",
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
+            { "workflow": "impl", "trigger": { "status": "実装待ち", "assignee": "@mee" } }
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let error = resp.error.expect("initialize must fail");
+    assert!(error.message.contains("@mee"), "{error:?}");
+    assert!(error.message.contains("typo"), "{error:?}");
+}
+
 /// A mistyped trigger key used to be dropped, which does not narrow the
 /// trigger — it *widens* it to "no condition" (#574).
 #[tokio::test]

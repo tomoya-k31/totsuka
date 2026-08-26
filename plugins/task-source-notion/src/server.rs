@@ -18,7 +18,9 @@ use plugin_protocol::methods::{
     TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
-use plugin_sdk::{LineHandler, Reply, SubmitClient, poll_loop, unknown_trigger_keys};
+use plugin_sdk::{
+    LineHandler, Reply, SubmitClient, check_assignee_triggers, poll_loop, unknown_trigger_keys,
+};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -180,12 +182,31 @@ where
         // Trigger keys are this plugin's vocabulary, so this is the only
         // place that can tell a typo from a condition (#574). Without it an
         // unread key is dropped and the trigger matches *more* than written.
-        let unknown = unknown_trigger_keys(&init.workflows, TRIGGER_KEYS);
-        if !unknown.is_empty() {
+        let mut config_errors = unknown_trigger_keys(&init.workflows, TRIGGER_KEYS);
+        // Both of Notion's assignee prerequisites are optional settings, and
+        // both fail silently when missing — an unmapped people property makes
+        // every page read as unassigned, and no `notion_user_id` makes `@me`
+        // match nobody (#572).
+        let (assignee_errors, assignee_warnings) = check_assignee_triggers(
+            &init.workflows,
+            config.notion_user_id.as_deref(),
+            "`notion_user_id`",
+            Some(config.property_map.assignee.is_some()),
+            "`property_map.assignee`",
+            // Notion mints no lane identity for any trigger (#573), so adding a
+            // `status` would not make a task repeatable and we do not say it
+            // would.
+            false,
+        );
+        config_errors.extend(assignee_errors);
+        if !config_errors.is_empty() {
             return Reply::respond(Response::error(
                 id,
-                Error::new(error_code::CONFIG_INVALID, unknown.join("; ")),
+                Error::new(error_code::CONFIG_INVALID, config_errors.join("; ")),
             ));
+        }
+        for warning in assignee_warnings {
+            tracing::warn!("{warning}");
         }
         let transport = self.factory.build(settings(&config));
         let client = Arc::new(NotionClient::new(config, transport));
@@ -215,9 +236,10 @@ where
                     let client = Arc::clone(&fetch_client);
                     let condition = trigger.trigger.clone();
                     let kind = trigger.instructions_kind.clone();
+                    let name = trigger.workflow.clone();
                     async move {
                         client
-                            .fetch(&condition, kind.as_deref())
+                            .fetch(&condition, kind.as_deref(), &name)
                             .await
                             .map_err(|e| e.to_string())
                     }

@@ -73,7 +73,7 @@ S1 と同時に確認できる。`bootstrap` は cli#2 を `In Progress` にし�
 |---|---|
 | `in_progress_statuses` の除外 | cli#2 が最後まで取り込まれない |
 | Status 未設定の除外 | `(none)` の item が取り込まれない |
-| 他人 assignee の除外 | **GitHub アカウントが 1 つだと素直に作れない**。`github.toml` の `github_login` を実在しない値に 1 回だけ差し替えて走らせれば、同じ `assignable_to_me` を逆側から通せる |
+| 他人 assignee の除外 | **GitHub アカウントが 1 つだと素直に作れない**。`github.toml` の `github_login` を実在しない値に 1 回だけ差し替えて走らせれば、同じ assignee 条件を逆側から通せる（#572 以降は `trigger.assignee` にも `"@none"` などを書いて直接作れる） |
 
 ## S3. Slack / メンション経路 🙋👀
 

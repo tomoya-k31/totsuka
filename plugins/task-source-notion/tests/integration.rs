@@ -294,6 +294,37 @@ fn second_database_response() -> Value {
     })
 }
 
+/// Notion's two assignee prerequisites are optional settings that fail
+/// silently when missing (#572): with no people property mapped every page
+/// reads as unassigned, and with no `notion_user_id` nobody is `@me`. Writing
+/// the condition without them must stop the plugin, not leave a workflow that
+/// never fires.
+#[tokio::test]
+async fn an_assignee_condition_without_its_settings_fails_initialize() {
+    let shared = Shared::default();
+    let (mut srv, _harness) = server_with_harness(&shared);
+
+    let mut config = init_config();
+    config["notion_user_id"] = json!(null);
+    config["property_map"]
+        .as_object_mut()
+        .unwrap()
+        .remove("assignee");
+    let params = json!({
+        "protocol_version": "0.5.1",
+        "config": config,
+        "projects": two_databases().0,
+        "repositories": two_databases().1,
+        "workflows": [
+            { "workflow": "impl", "trigger": { "status": "実装待ち", "assignee": "@me" } }
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let error = resp.error.expect("initialize must fail");
+    assert!(error.message.contains("property_map.assignee"), "{error:?}");
+    assert!(error.message.contains("notion_user_id"), "{error:?}");
+}
+
 /// A mistyped trigger key used to be dropped, which does not narrow the
 /// trigger — it *widens* it to "no condition" (#574).
 #[tokio::test]

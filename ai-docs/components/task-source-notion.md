@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-08-27T03:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T05:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -23,7 +23,7 @@ Notion データベースを totsuka のタスクソースとして接続する�
 | `transport` | `NotionTransport` trait（`request(method, path, body, idempotent)`）＋ reqwest 実装 `ReqwestTransport`（bearer 認証・`Notion-Version` ヘッダ固定・タイムアウト・指数バックオフ §5.3・3rps スロットリング）。ロジックを録画レスポンスでテストするための seam |
 | `blocks` | Notion ブロック ↔ Markdown 変換。読み（`blocks_to_markdown`, ページ本文→body）は主要ブロック型（heading/paragraph/bullet/numbered/to_do/quote/code）対応・未対応型はプレーンテキスト化。書き（`markdown_to_blocks`, F-07）は heading/bullet/quote/paragraph を生成し、2000 文字/リッチテキストの上限で分割（マルチバイト境界安全） |
 | `client` | `NotionClient<T: NotionTransport>`。`fetch`（databases query をページング取得→property_map で `Task` 正規化→トリガー絞り込み→取り込み制御 F-08。body=page 時のみ生存タスクのブロックを取得）/ `update_status`（DB スキーマから option を検証、未知 option はエラー→ページ property を PATCH, F-84）/ `publish`（Markdown→blocks 変換、100 件バッチで追記, F-07）/ `validate`（users/me 疎通＋マップ先プロパティ存在確認 F-59） |
-| `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。`Server::new(factory, SubmitClient)`（#189: SDK の stdio ランタイム[単一 writer タスク]で駆動され、`LineHandler` 実装経由で serve される）。initialize（config 型付け → client 構築 → triggers があれば SDK `poll_loop` を常駐 spawn — 各 tick で全 trigger を fetch し `task/submit` push。triggers 空なら poll なし。`poll_interval_secs = 0` は既定 60s へフォールバック[warn ログ]）/ config·validate / task·update_status / result·publish / shutdown。`tasks/fetch` は **0.2.0（#190）で削除済み** — 未初期化メソッドは拒否。Session drop（re-initialize 含む）で poll タスクを abort。`TransportFactory` で録画トランスポートを注入しテスト **#574: `TRIGGER_KEYS`（`filter` / `status`）と突き合わせ、未知の `trigger` キーがあれば `initialize` を `CONFIG_INVALID` で落とす**（`plugin_sdk::unknown_trigger_keys`）。トリガーの解釈は `.get("…")` なので、読まないキーは黙って捨てられ条件が 1 つ減る —— つまりタイポはトリガーを狭めず**広げる**。一覧は `client` のパーサの隣にリテラルで置き導出しない |
+| `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。`Server::new(factory, SubmitClient)`（#189: SDK の stdio ランタイム[単一 writer タスク]で駆動され、`LineHandler` 実装経由で serve される）。initialize（config 型付け → client 構築 → triggers があれば SDK `poll_loop` を常駐 spawn — 各 tick で全 trigger を fetch し `task/submit` push。triggers 空なら poll なし。`poll_interval_secs = 0` は既定 60s へフォールバック[warn ログ]）/ config·validate / task·update_status / result·publish / shutdown。`tasks/fetch` は **0.2.0（#190）で削除済み** — 未初期化メソッドは拒否。Session drop（re-initialize 含む）で poll タスクを abort。`TransportFactory` で録画トランスポートを注入しテスト **#574: `TRIGGER_KEYS`（`assignee` / `filter` / `status`）と突き合わせ、未知の `trigger` キーがあれば `initialize` を `CONFIG_INVALID` で落とす**（`plugin_sdk::unknown_trigger_keys`）。トリガーの解釈は `.get("…")` なので、読まないキーは黙って捨てられ条件が 1 つ減る —— つまりタイポはトリガーを狭めず**広げる**。一覧は `client` のパーサの隣にリテラルで置き導出しない **#572: `trigger.assignee`** —— `plugin_sdk::check_assignee_triggers` で起動時に検証する。notion は前提が 2 つとも任意設定で、**どちらも欠けると黙って効かなくなる**（people プロパティ未マップ → 全ページが未アサインに見える／`notion_user_id` 未設定 → `@me` が誰にも一致しない）。そのため `assignee` を書いたら `property_map.assignee` は必須、`@me` を含むなら `notion_user_id` も必須として `CONFIG_INVALID` で落とす |
 | `main` | SDK stdio ランタイム（`plugin_sdk::runtime::stdio` + `serve`）。`ReqwestFactory` を配線。ログは stderr |
 
 # プロパティマッピング（F-03）
@@ -32,7 +32,7 @@ Notion データベースを totsuka のタスクソースとして接続する�
 
 # 取り込み制御（F-08）
 
-fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`[[projects]]` の全データベースを設定順に走査し**（#542）、それぞれについて: まずトリガー（`status` / raw `filter`）で候補を絞り（可能なら databases query の server-side filter で削減）、次に多人数運用ゲーティングを適用する: assignee（people プロパティ）が他者のタスクを除外（自分は `notion_user_id` で判定、未設定時は未 assign のみ取り込み）、`in_progress_statuses` のステータスを除外、**そのデータベースに紐づかないリポジトリ**を除外（紐付けは `[[repositories]].project`、#554）。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
+fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`[[projects]]` の全データベースを設定順に走査し**（#542）、それぞれについて: まずトリガー（`status` / raw `filter` / `assignee`）で候補を絞る（`status` / `filter` は可能なら databases query の server-side filter で削減）。**assignee もこの trigger の一部である**（#572） —— 誰が持っているタスクを取るかは workflow が決め、省略時の既定 `["@me", "@none"]` が #572 以前のプラグイン全体のゲートと同一になる（自分は `notion_user_id` で判定、未設定時は未 assign のみ取り込み）。旧ゲートは削除済みで、これの後ろには残っていない。次に、**workflow が言わないこと**だけを適用する: `in_progress_statuses` のステータスを除外、**そのデータベースに紐づかないリポジトリ**を除外（紐付けは `[[repositories]].project`、#554）。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
 
 **この紐付けによるフィルタは github と非対称で、条件付きである。** GitHub の issue は必ずリポジトリを持つが、Notion のページの `repo_hint` は任意プロパティなので、値が無いページは**そのまま取り込む**（Orchestrator が従来どおり F-11 で解決する）。落としてしまうと、`repo_hint` をマップしていない利用者は 1 件も取り込めなくなる。
 

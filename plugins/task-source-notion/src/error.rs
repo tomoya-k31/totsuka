@@ -28,6 +28,14 @@ pub enum NotionError {
     /// A referenced entity (property, status option) was not found.
     #[error("{0}")]
     NotFound(String),
+    /// The workflow's trigger could not be read (#572).
+    ///
+    /// Unreachable in a running plugin: `initialize` parses every trigger and
+    /// refuses to start on the same error. It exists so `fetch` has somewhere
+    /// to put the failure rather than falling back to a default that differs
+    /// from what the operator wrote.
+    #[error("{0}")]
+    InvalidTrigger(String),
 }
 
 impl NotionError {
