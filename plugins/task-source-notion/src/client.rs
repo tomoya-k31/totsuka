@@ -24,10 +24,10 @@ const QUERY_PAGE_SIZE: usize = 100;
 const MAX_FETCH_PAGES: usize = 40;
 
 /// A parsed trigger condition (workflow-defined shape, F-81). Supports a status
-/// value (`{"status": "実装待ち"}`, also accepted as `status`) and/or a
-/// raw Notion `filter` object passed straight to the query API.
+/// value (`{"status": "実装待ち"}`) and/or a raw Notion `filter` object passed
+/// straight to the query API.
 ///
-/// `status` used to also be spelled `status`; the alias went away with
+/// `status` used to also be spelled `project_status`; that alias went away with
 /// #575. It cost more than a second spelling: the Orchestrator's cycle check
 /// reads `status` out of the trigger, so a workflow written the other way was
 /// invisible to it and could close a loop without `config validate` noticing.

@@ -101,10 +101,10 @@ output = "source"
 [[workflows]]
 name = "github-task"
 source = "github"
-trigger = { project_status = "Todo" }
+trigger = { status = "Todo" }
 profile = "implement"
 agent = "herdr"
-on_success = { set_status = "Done" }
+on_success = { status = "Done" }
 # 既定 1800s は検証には長すぎる。詰まったら 15 分でエスカレーションさせる。
 timeout_secs = 900
 

@@ -4,7 +4,7 @@ title: ADR-0061 列パイプラインの段間は、会話を配送元のワー�
 description: "同一 issue を列で受け渡す 2 段ワークフロー（design→implement）が動くようにするための設計。terminal な会話に別ワークフローの配送が届いたら workflow / mode / source_payload を 1 トランザクションで付け替えて Reopen する。実行中の会話は台帳に書かずに見送る。全自動ループを解禁する副作用に対しては、列を節点とするグラフの閉路検出を validate に入れる。会話行を段ごとに分ける案・実行中の乗り換え・opt-in フラグは不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/565
 tags: [decision, core, workflow, ingest, conversation, pipeline, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-26T22:25:17+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T04:00:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-08-26T13:25:17Z }
 status: stable
@@ -16,6 +16,8 @@ owner: tomoya-k31
 stable。実装・**実機検収（2026-08-26）**まで完了。#568 の修正で変わった部分（read-only 段への detach と `branch` 列のクリア、掃除ガードの到達可能性判定）も**同日に再検収済み**。
 
 [ADR-0059](/decisions/adr-0059-task-claim-exclusion.md) §5 の「段間 handoff は別 issue」を**解消する**決定であり、同 ADR が入れた「別ワークフロー配送は破棄」を**置き換える**。[ADR-0015](/decisions/adr-0015-conversation-task-identity.md) の会話同一性（1 会話 = 1 行）は**不変** — 変わるのは、その行が属するワークフローが固定ではなくなること。
+
+> **綴りの注記**: 以降 [ADR-0062](/decisions/adr-0062-status-vocabulary.md) が `trigger.project_status` と `on_*.set_status` を両側 `status` に統一した。本文中の旧綴りは当時の記述として残してある。
 
 # Context
 

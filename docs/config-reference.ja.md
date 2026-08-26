@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:ee94f682a1ff5f3ad8b0a277478517306d6e267da43da304788fae087abbb335 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:b7c5cff86b825d24a80cbd52d9b2713c0d2572c8430165f7c1e0f76e1ab376c8 -->
 
 # 設定リファレンス
 
@@ -191,7 +191,7 @@ publish = "direct"      # slack プラグインが定義するキー
 
 | ソース | キー |
 |---|---|
-| github | `status` / `status`、`label` / `labels` |
+| github | `status`、`label` |
 | notion | `status`、生の `filter` |
 | slack | `reaction`（持たないワークフローがメンションを受ける） |
 
