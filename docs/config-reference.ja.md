@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:c23dd252c26cfc9fff3e78a04086079f010b1ac417b4f8e575d3886cba936457 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:8663f7db5b719a5b82ef8ee5608c4fad47c72ca7a3247eb9c9417f969fb867f9 -->
 
 # 設定リファレンス
 
@@ -763,7 +763,7 @@ in_progress_statuses = ["実装中"]
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `token` | string | 必須 | Notion のインテグレーショントークン。bearer として送る以外には使わない |
-| `notion_user_id` | string? | なし | 自分の Notion user id。`trigger.assignee` の `@me` がこれと突き合わせる。**省略すると `@me` は誰にも一致しない** —— 既定のトリガーは「未アサインのタスクだけ」に縮退し、`@me` を明示したワークフローは起動に失敗する。GitHub では `github_login` が必須なので、そこは非対称である |
+| `notion_user_id` | string? | なし | 自分の Notion user id。`trigger.assignee` の `@me` がこれと突き合わせる。**省略すると `@me` は誰にも一致しない** —— 既定のトリガーは「未アサインのタスクだけ」になり、`@me` を明示したワークフローは起動に失敗する。GitHub では `github_login` が必須なので、そこは非対称である。**さらに `property_map.assignee` が未設定だと、その「未アサインだけ」も成立しない** —— assignee を読む先が無いので全ページが未アサインに見え、**assignee による絞り込みが消えてデータベースの全ページが取り込まれる**。既定の条件は書かれていないので警告も出ない。assignee で仕事を分けているデータベースでは、必ずこのプロパティをマップすること |
 | `property_map` | テーブル | 下記 | どの Notion プロパティがどのフィールドかの対応 |
 | `body_source` | enum | `none` | 本文の取得元。`none` / `property`（`property_map.body` が指す `rich_text`）/ `page`（ページのブロックを Markdown 化） |
 | `in_progress_statuses` | string[] | `[]` | 「実行中」を意味し取り込みから外すステータス option。全データベース共通 |
@@ -785,7 +785,7 @@ in_progress_statuses = ["実装中"]
 | `title` | string | `Name` | タイトルを持つプロパティ（Notion 自身の既定が `Name`） |
 | `status` | string? | なし | ステータスのプロパティ。`trigger.status` と `on_*.status` の両方がこれを読み書きする |
 | `status_kind` | enum | `status` | `status`（Notion 専用のステータス型）または `select` |
-| `assignee` | string? | なし | assignee を持つ `people` プロパティ。**`trigger.assignee` を書くなら必須** —— 無いと全ページが未アサインに見えて条件が何もしなくなるので、動いているように見せず起動時に失敗させる |
+| `assignee` | string? | なし | assignee を持つ `people` プロパティ。**`trigger.assignee` を書くなら必須** —— 無いと全ページが未アサインに見えて条件が何もしなくなるので、動いているように見せず起動時に失敗させる。**そのキーを書かない場合も未設定は無害ではない**: 既定の条件から見ても全ページが未アサインなので、assignee による絞り込みが丸ごと消える（上の `notion_user_id` を参照） |
 | `priority` | string? | なし | 優先度を持つ `number` / `select` / `status` プロパティ |
 | `repo_hint` | string? | なし | リポジトリ名を持つ `rich_text` / `select` / `url` プロパティ |
 | `body` | string? | なし | `body_source = "property"` のときに読む `rich_text` プロパティ |
@@ -815,7 +815,7 @@ project = "design-db"
 
 ### Notion のタスクは高々 1 回しか実行されない
 
-**Notion のタスクは、トリガーが何であれ 1 回しか実行されない。** 配送に lane identity が無いため、ステータスを戻しても再配送は重複として捨てられる。GitHub はステータスセルの変更時刻を記録しているのでカードを列へ戻せば再実行できるが、Notion API にはプロパティ単位の時刻が無く、同じ方法が取れない。
+**Notion のタスクは、トリガーが何であれ 1 回しか実行されない。** 配送に lane identity が無いため、ステータスを戻しても再配送は重複として捨てられる。GitHub はステータスセルの変更時刻を記録しているのでカードを列へ戻せば再実行できる —— **ただしトリガーに `status` があるワークフローに限る**。`label` 単独・`assignee` 単独のトリガーは GitHub でも高々 1 回である。Notion API にはプロパティ単位の時刻が無いので、そもそも同じ方法が取れない。
 
 **トリガーに `status` を足しても、Notion のタスクが再実行可能になることはない。**
 

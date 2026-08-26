@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-08-27T06:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T06:45:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -42,21 +42,11 @@ fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tas
 
 **`config/validate` は全データベースを見る。** `property_map` は全データベース共通なので、あるデータベースだけがマップ先プロパティを欠いていると、そこ由来のタスクだけが壊れる — 1 つ目だけ見て緑にするのが一番静かな壊れ方になる。
 
-# 再実行はできない（#573、仕様として確定）
+# 再実行はできない（#573 / [ADR-0064](/decisions/adr-0064-notion-at-most-once.md)）
 
 **notion のタスクは、トリガーが何であれ 1 回しか実行されない。** `normalize_page` は `message_key` を**無条件で `None`** にするので、core はそれを `task.id` にフォールバックさせ、`UNIQUE(task_id, message_key)` が以降の再配送をすべて重複として捨てる。ステータスを戻しても再実行されず、`totsuka task retry` も `done` を拒否する。
 
-これは実装漏れではなく**決定である**。github は `status` セルの `updatedAt` を lane identity に使えるが（#556）、**Notion API にはプロパティ単位の更新時刻が無い**ので同じものが作れない。取りうる代替は 3 つとも代償が釣り合わなかった:
-
-| 案 | 破れ方 |
-|---|---|
-| `status:{name}@{page.last_edited_time}` | ページ単位の時刻なので、**カードがトリガー列に居る間にタイトルや説明を編集しただけで再実行される** |
-| `status:{name}`（時刻なし） | 列を出て同じ列へ戻すと同じ鍵になり、再実行**されない**。at-most-once とほぼ変わらない |
-| 直近ステータスをプラグインが記憶 | プロセスローカルなので**再起動で消える**。消えた後を取りこぼす側に倒すか余分に走る側に倒すかを、実運用の要求なしには決められない |
-
-**core 側で「前回と違うステータスなら新しい配送」にする案も成立しない。** `UNIQUE` は履歴全体に効くので、`Todo → 実行中 → Todo` と戻すと 2 回目の `Todo` が衝突する —— ステータス値ごとに 1 回しか使えない鍵になる。
-
-したがって「再実行が要る運用が実在してから、その要求に合わせて決める」を選んだ。要求が出たら #573 を再開する。
+これは実装漏れではなく**決定である**（ADR-0064）。github は `trigger.status` を持つワークフローに限り `status` セルの `updatedAt` を lane identity に使えるが（#556。`label` 単独・`assignee` 単独のトリガーは **github でも at-most-once** である）、**Notion API にはプロパティ単位の更新時刻が無い**ので同じものが作れない。却下した代替案とその破れ方は ADR-0064 にある。
 
 # capabilities（F-83）
 

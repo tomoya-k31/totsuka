@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:c23dd252c26cfc9fff3e78a04086079f010b1ac417b4f8e575d3886cba936457 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:8663f7db5b719a5b82ef8ee5608c4fad47c72ca7a3247eb9c9417f969fb867f9 -->
 
 # Configuration reference
 
@@ -764,7 +764,7 @@ Unknown keys here are a hard startup failure, so a typo shows up immediately.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `token` | string | required | Notion integration token. Sent as a bearer token and nothing else. |
-| `notion_user_id` | string? | none | Your own Notion user id — what `trigger.assignee`'s `@me` is compared against. **Omit it and `@me` matches nobody**: the default trigger falls back to "only unassigned tasks", and a workflow that spells out `@me` fails to start. Note the asymmetry with GitHub, where `github_login` is required. |
+| `notion_user_id` | string? | none | Your own Notion user id — what `trigger.assignee`'s `@me` is compared against. **Omit it and `@me` matches nobody**: the default trigger becomes "only unassigned tasks", and a workflow that spells out `@me` fails to start. Note the asymmetry with GitHub, where `github_login` is required. **And with `property_map.assignee` unset, even "only unassigned" does not hold** — there is nowhere to read assignees from, so every page looks unassigned and **the assignee filter disappears: the whole database is ingested**. Nothing warns, because the default condition was never written down. If your database divides work by assignee, map that property. |
 | `property_map` | table | below | Which Notion property holds which field. |
 | `body_source` | enum | `none` | Where a task's body comes from: `none`, `property` (the `rich_text` named by `property_map.body`), or `page` (the page's blocks, converted to Markdown). |
 | `in_progress_statuses` | string[] | `[]` | Status options that mean "already running" and are skipped on ingest. Shared across every database. |
@@ -786,7 +786,7 @@ Unknown keys here are a hard startup failure, so a typo shows up immediately.
 | `title` | string | `Name` | The property holding the title (Notion's own default is `Name`). |
 | `status` | string? | none | The status property. Both `trigger.status` and `on_*.status` read and write this one. |
 | `status_kind` | enum | `status` | `status` (Notion's dedicated status type) or `select`. |
-| `assignee` | string? | none | A `people` property holding assignees. **Required if you write `trigger.assignee`** — without it every page reads as unassigned, so the condition could not do anything, and startup fails rather than letting it look like it works. |
+| `assignee` | string? | none | A `people` property holding assignees. **Required if you write `trigger.assignee`** — without it every page reads as unassigned, so the condition could not do anything, and startup fails rather than letting it look like it works. **Leaving it unset is not harmless even without that key**: the default condition also sees every page as unassigned, so the assignee filter disappears entirely (see `notion_user_id` above). |
 | `priority` | string? | none | A `number` / `select` / `status` property holding priority. |
 | `repo_hint` | string? | none | A `rich_text` / `select` / `url` property naming a repository. |
 | `body` | string? | none | The `rich_text` property read when `body_source = "property"`. |
@@ -816,7 +816,7 @@ project = "design-db"
 
 ### Notion tasks run at most once
 
-**A Notion task runs once, whatever its trigger is.** Its deliveries carry no lane identity, so moving the status back does not re-deliver it — the repeat is discarded as a duplicate. GitHub records when the status cell changed and can therefore repeat a task when a card moves back into the column; the Notion API exposes no per-property timestamp, so the same approach is not available.
+**A Notion task runs once, whatever its trigger is.** Its deliveries carry no lane identity, so moving the status back does not re-deliver it — the repeat is discarded as a duplicate. GitHub records when the status cell changed and can therefore repeat a task when a card moves back into the column — **but only for a workflow whose trigger has a `status`**; a `label`-only or `assignee`-only trigger is at most once on GitHub too. The Notion API exposes no per-property timestamp, so the same approach is not available there at all.
 
 **Adding a `status` to the trigger does not make a Notion task repeatable.**
 

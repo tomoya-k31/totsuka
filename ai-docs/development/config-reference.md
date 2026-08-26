@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] のトラッカー宣言、ワークフローとプラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-27T06:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T06:45:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -876,7 +876,7 @@ in_progress_statuses = ["実装中"]
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `token` | string | 必須 | Notion インテグレーショントークン（オーケストレータが解決して渡す、F-65）。プラグインは bearer として送る以外に触らない |
-| `notion_user_id` | string? | なし | 自分の Notion user id。`trigger.assignee` の `@me` がこれと突き合わせる。**省略すると `@me` が誰にも一致しない** — 既定のトリガー（`["@me", "@none"]`）では「未アサインのタスクだけ取り込む」に縮退し、`@me` を明示したワークフローは `initialize` で落ちる（#572）。github の `github_login` が必須なのと**非対称**なので注意 |
+| `notion_user_id` | string? | なし | 自分の Notion user id。`trigger.assignee` の `@me` がこれと突き合わせる。**省略すると `@me` が誰にも一致しない** —— 既定のトリガー（`["@me", "@none"]`）は「未アサインのタスクだけ取り込む」になり、`@me` を明示したワークフローは `initialize` で落ちる（#572）。github の `github_login` が必須なのと**非対称**なので注意。**さらに `property_map.assignee` が未設定だと、この「未アサインだけ」も成立しない** —— assignee を読む先が無いので全ページが未アサインに見え、**assignee による絞り込みが消えてデータベースの全ページが取り込まれる**（既定のトリガーは明示されていないので警告もエラーも出ない）。assignee でタスクを分けている DB では、`property_map.assignee` を必ずマップすること。挙動そのものをどうするかは #582 |
 | `property_map` | テーブル | 下記 | 共通スキーマ ↔ Notion のプロパティ名の対応（F-03） |
 | `body_source` | enum | `none` | 本文の取得元。`none` / `property`（`property_map.body` の `rich_text`）/ `page`（ページ本文のブロックを Markdown 化） |
 | `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして ingest から除外するステータス option 名（F-08）。**全データベース共通** |
@@ -898,7 +898,7 @@ in_progress_statuses = ["実装中"]
 | `title` | string | `Name` | タイトルを持つプロパティ名（Notion の既定が `Name`） |
 | `status` | string? | なし | ステータスを持つプロパティ名。`trigger.status` と `on_*.status` の両方がこれを読み書きする |
 | `status_kind` | enum | `status` | `status`（Notion 専用のステータス型）/ `select`。書き戻しの本体形状と option 解決を切り替える |
-| `assignee` | string? | なし | assignee を持つ `people` プロパティ名。**`trigger.assignee` を書くなら必須**（未設定だと全ページが未アサインに見え、条件が何もしなくなるので `initialize` で落ちる、#572） |
+| `assignee` | string? | なし | assignee を持つ `people` プロパティ名。**`trigger.assignee` を書くなら必須**（未設定だと全ページが未アサインに見え、条件が何もしなくなるので `initialize` で落ちる、#572） **未設定のまま `trigger.assignee` を書かない場合も無害ではない** —— 既定のトリガーから見ると全ページが未アサインなので、assignee による絞り込みが丸ごと消える（上の `notion_user_id` の行を参照） |
 | `priority` | string? | なし | 優先度を持つ `number` / `select` / `status` プロパティ名 |
 | `repo_hint` | string? | なし | リポジトリのヒントを持つ `rich_text` / `select` / `url` プロパティ名（F-10） |
 | `body` | string? | なし | `body_source = "property"` のときに本文を読む `rich_text` プロパティ名 |
@@ -928,9 +928,9 @@ project = "design-db"
 
 ## 再実行はできない（#573）
 
-**notion のタスクは、どのトリガーでも 1 回しか実行されない。** 配送に lane identity が無い（`message_key` が常に空）ので、ステータスを戻しても再配送は重複として捨てられる。github はステータスセルの更新時刻を刻むので差し戻しで再実行できるが、Notion API にはプロパティ単位の更新時刻が無く、同じ方法が取れない。
+**notion のタスクは、どのトリガーでも 1 回しか実行されない。** 配送に lane identity が無い（`message_key` が常に空）ので、ステータスを戻しても再配送は重複として捨てられる。github は**`trigger.status` を持つワークフローに限り**ステータスセルの更新時刻を刻むので差し戻しで再実行できる（`label` 単独・`assignee` 単独のトリガーは github でも at-most-once である）。Notion API にはプロパティ単位の更新時刻が無いので、同じ方法が取れない。
 
-したがって **`trigger.status` を足しても再実行可能にはならない**。この非対称は #573 で追っている。
+したがって **`trigger.status` を足しても再実行可能にはならない**。この非対称は [ADR-0064](/decisions/adr-0064-notion-at-most-once.md) で決定として確定させた（#573）。
 
 ## `[prompts]`（task-source-notion、#398）
 
