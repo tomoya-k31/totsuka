@@ -40,7 +40,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 have = %existing.workflow,
                 delivered = %wf.name,
                 "cross-workflow delivery dropped: a conversation stays with the workflow \
-                 that created it (column pipelines across workflows are not supported)"
+                 that created it → either a column pipeline across workflows (not \
+                 supported yet) or a renamed workflow, in which case the old \
+                 conversations keep the old name and only new ones use the new one"
             );
             return Ok((existing.id, IngestOutcome::Duplicate));
         }
