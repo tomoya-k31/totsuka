@@ -605,6 +605,46 @@ impl<G: GitRunner> WorktreeManager<G> {
         (!head.is_empty() && head != DETACHED_HEAD).then(|| head.to_string())
     }
 
+    /// Put a worktree back on a detached `HEAD`, leaving it at the same
+    /// commit (#568).
+    ///
+    /// Creation hands every worktree over detached, and the read-only check
+    /// (ADR-0045) reads "on a branch" as "the agent ran git" **because** of
+    /// that invariant. A conversation handed to another workflow (#565) keeps
+    /// its worktree, so a stage that inherits one already on a branch would
+    /// break the invariant and be blamed for a branch it never made. Detaching
+    /// at the handoff restores it.
+    ///
+    /// **Nothing is lost.** The branch ref still exists and still points at
+    /// the same commit, so the previous stage's commits are reachable; and
+    /// `switch --detach` to the commit already checked out leaves uncommitted
+    /// changes in place. Only the worktree's association with the branch name
+    /// goes away.
+    ///
+    /// Returns whether the worktree ended up detached. Best-effort like
+    /// [`head_branch`](Self::head_branch): a git that failed answers `false`
+    /// and the caller decides what that costs.
+    pub fn detach(&self, worktree_path: &Path) -> bool {
+        match self.git.run(worktree_path, &["switch", "--detach"]) {
+            Ok(out) if out.success() => true,
+            Ok(out) => {
+                tracing::warn!(
+                    worktree = %worktree_path.display(),
+                    stderr = %out.stderr.trim(),
+                    "could not detach the worktree"
+                );
+                false
+            }
+            Err(e) => {
+                tracing::warn!(
+                    worktree = %worktree_path.display(),
+                    "could not detach the worktree: {e}"
+                );
+                false
+            }
+        }
+    }
+
     /// Detect `origin`'s default branch (e.g. `main`), falling back to `main`.
     fn detect_default_branch(&self, repo_path: &Path) -> Result<String, WorktreeError> {
         let out = self
@@ -1017,6 +1057,62 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect()
+    }
+
+    /// `detach` puts the worktree back on a detached `HEAD` **without moving
+    /// it**: the branch ref survives and still points at the same commit, so
+    /// the previous stage's work stays reachable (#568). Run against real git
+    /// — the whole value of this operation is what git actually does to the
+    /// refs, which a fake runner would only restate.
+    #[test]
+    fn detach_leaves_the_branch_and_the_commit_alone() {
+        let base = test_support::scratch("wt_detach");
+        let repo = test_support::bare_origin_and_clone(&base);
+        let git = crate::adapters::git::SystemGitRunner;
+        let mgr = WorktreeManager::new(crate::adapters::git::SystemGitRunner);
+
+        // Put the clone on a branch, as an implement stage would leave it.
+        for args in [
+            &["switch", "-c", "feat/x"][..],
+            &["commit", "--allow-empty", "-m", "work"][..],
+        ] {
+            let out = crate::ports::git::GitRunner::run(&git, &repo, args).expect("git ran");
+            assert!(out.success(), "{args:?}: {}", out.stderr);
+        }
+        assert_eq!(mgr.head_branch(&repo).as_deref(), Some("feat/x"));
+        let before = mgr
+            .git
+            .run(&repo, &["rev-parse", "HEAD"])
+            .unwrap()
+            .stdout
+            .trim()
+            .to_string();
+
+        assert!(mgr.detach(&repo), "detach reports success");
+        assert!(mgr.head_branch(&repo).is_none(), "now detached");
+        // The commit did not move…
+        let after = mgr
+            .git
+            .run(&repo, &["rev-parse", "HEAD"])
+            .unwrap()
+            .stdout
+            .trim()
+            .to_string();
+        assert_eq!(before, after);
+        // …and the branch still names it, so nothing was lost.
+        let branch_tip = mgr
+            .git
+            .run(&repo, &["rev-parse", "feat/x"])
+            .unwrap()
+            .stdout
+            .trim()
+            .to_string();
+        assert_eq!(branch_tip, before, "the branch ref survives the detach");
+
+        // Idempotent: detaching an already-detached worktree is not an error.
+        assert!(mgr.detach(&repo), "already detached is still success");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
