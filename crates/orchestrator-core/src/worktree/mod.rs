@@ -718,10 +718,15 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// worktree on a branch itself; it becomes reachable the moment creation is
     /// detached and the agent may simply not have branched.
     ///
-    /// Plan mode lands here every time and is *not* affected — a plan-mode pane
-    /// cannot run git at all, so the commit count is zero and cleanup proceeds
-    /// as before. What this catches is an implement-mode agent that committed
-    /// without branching, which is an anomaly worth a human's eyes.
+    /// What this catches is an agent that committed **without branching**, so
+    /// the commits hang off `HEAD` and nothing else — an anomaly worth a
+    /// human's eyes. Commits a branch (or a remote) still names are not that,
+    /// however the worktree ended up detached: a plan stage that never ran git
+    /// has none of its own, and one handed an implement stage's worktree
+    /// (#565, detached on the way in by #568) is looking at commits `feat/…`
+    /// still points to. Counting those would pin the worktree on disk forever
+    /// and, because the `Dirty` arm keeps the pane too, leak an open pane with
+    /// it.
     ///
     /// Without a recorded `base_commit` the question cannot be asked, so the
     /// answer is "no" — reporting an unprovable loss on every legacy row would
@@ -753,9 +758,23 @@ impl<G: GitRunner> WorktreeManager<G> {
         if head.stdout.trim() != DETACHED_HEAD {
             return Ok(false);
         }
+        // `--not --branches --remotes` is what makes this "commits **no ref
+        // points at**" rather than "commits above the base". Without it a
+        // detached `HEAD` sitting on a branch's tip counts that branch's work
+        // as unreachable and pins the worktree forever — which is exactly the
+        // state a handoff into a read-only stage produces (#568): it detaches
+        // the inherited worktree, and the branch it came from still names
+        // every commit on it.
         let out = self.git.run(
             worktree_path,
-            &["rev-list", "--count", &format!("{base}..HEAD")],
+            &[
+                "rev-list",
+                "--count",
+                &format!("{base}..HEAD"),
+                "--not",
+                "--branches",
+                "--remotes",
+            ],
         )?;
         let count = out
             .success()

@@ -210,11 +210,24 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         if !wf.profile.is_some_and(|p| p.is_read_only()) {
             return;
         }
+        // Forget the branch first, and unconditionally: `acquire_worktree`
+        // re-creates a missing worktree **from this column** and puts it back
+        // on that branch, so a worktree that cleanup already removed would
+        // hand the read-only stage a branch it never made — the same failure
+        // the detach below avoids, reached without ever touching git.
+        if let Err(e) = self.db.clear_branch(existing.id) {
+            tracing::warn!(
+                task_id = existing.id,
+                "could not forget the inherited branch before a read-only stage: {e}"
+            );
+        }
         let Some(path) = existing
             .worktree_path
             .as_deref()
             .filter(|p| Path::new(p).is_dir())
         else {
+            // Nothing on disk to detach. Cleared above, so re-creation hands
+            // over a detached worktree; nothing further to do.
             return;
         };
         let path = Path::new(path);
@@ -827,6 +840,10 @@ mod tests {
             wt.head_branch(&repo).is_none(),
             "the read-only stage must start detached, or it is blamed for `feat/prev`"
         );
+        assert!(
+            engine.db.get_task(id).unwrap().unwrap().branch.is_none(),
+            "and the column is cleared, so a re-creation cannot put it back on the branch"
+        );
         // And the previous stage's work is still reachable by name.
         assert!(
             crate::ports::git::GitRunner::run(&git, &repo, &["rev-parse", "feat/prev"])
@@ -897,9 +914,68 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ack.status, TaskSubmitStatus::Accepted);
-        assert_eq!(engine.db.get_task(id).unwrap().unwrap().workflow, "design");
+        let row = engine.db.get_task(id).unwrap().unwrap();
+        assert_eq!(row.workflow, "design");
+        // The assertion that actually pins the behaviour: the read-only path
+        // ran and forgot the branch. Asserting only the ack would stay green
+        // if the `head_branch().is_none()` early return came back.
+        assert!(
+            row.branch.is_none(),
+            "the read-only path must run even when HEAD cannot be read"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The worktree is gone from disk (cleanup removed it, or an operator
+    /// did): there is nothing to detach, but `acquire_worktree` re-creates it
+    /// **from `tasks.branch`** and would put the read-only stage back on the
+    /// previous stage's branch. Clearing the column is what makes re-creation
+    /// hand over a detached worktree instead (#568 review).
+    #[tokio::test]
+    async fn a_removed_worktree_still_loses_its_branch_for_a_read_only_stage() {
+        let mut engine = ingest_test_engine().await;
+        let mut design = engine.settings.workflows[0].clone();
+        design.name = "design".to_string();
+        design.mode = WorkflowMode::Plan;
+        design.profile = Some(crate::config::Profile::Design);
+        engine.settings.workflows.push(design);
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("k1"), "one"),
+            )
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        // Recorded, but not on disk — exactly what `cleanup = immediate` or an
+        // elapsed retention leaves behind.
+        engine
+            .db
+            .set_worktree(id, "/nonexistent/wt", Some("feat/prev"), "HEAD")
+            .unwrap();
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "design".into(),
+                delivery("C1:100", Some("k2"), "two"),
+            )
+            .unwrap();
+
+        let row = engine.db.get_task(id).unwrap().unwrap();
+        assert_eq!(row.workflow, "design");
+        assert!(
+            row.branch.is_none(),
+            "re-creation must hand the read-only stage a detached worktree"
+        );
     }
 
     /// Handing to a stage that is **not** read-only leaves the worktree on its

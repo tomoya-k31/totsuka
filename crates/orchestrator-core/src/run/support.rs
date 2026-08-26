@@ -24,9 +24,9 @@ pub(super) fn read_only_side_effect(
         concat!(
             "workflow `{}` is `profile = \"{}\"`, a read-only profile, but its worktree ended ",
             "up on the branch `{}`. A first dispatch hands the worktree over detached, and a ",
-            "handoff (#565) into a read-only profile detaches the inherited one on the way in ",
-            "(#568), so this is normally the agent having run git. Before reading it that way, ",
-            "check the log for a failed detach: a branch inherited from the previous stage ",
+            "handoff (#565) into a read-only profile detaches the inherited one and forgets its ",
+            "branch (#568), so this is normally the agent having run git. Before reading it that ",
+            "way, check the log for a failed detach — a branch inherited from a previous stage ",
             "looks identical here. Nothing ",
             "here prevented that; this check only refuses to publish it as a success. The ",
             "worktree and its commits are kept for inspection. Check whether it also pushed or ",
