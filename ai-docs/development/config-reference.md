@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: 設定リファレンス（config.toml）
-description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] のトラッカー宣言、ワークフローとプラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
+description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] のトラッカー宣言、ワークフローとプラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
-tags: [config, reference, toml, secrets, workflow, worktree, github, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-27T05:00:00+09:00 }
+tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
+generated: { by: claude-code/opus-5, at: 2026-08-27T06:45:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -733,7 +733,7 @@ Claude Code フックイベント受信（UDS）の設定（#131。全キー省�
 
 # `[github]`（task-source-github）
 
-config.toml 側の推奨設定。**このリポジトリで唯一のポーリング型 task_source** で、`poll_interval_secs` がそのままプラグイン内部の fetch 周期になる（0.6.0 / #554 で `[plugins.github]` から `[github]` へ移動。隣の task-source-slack はイベント駆動でこの値を使わない）:
+config.toml 側の推奨設定。**ポーリング型の task_source**（もう 1 つは下の `[notion]`）で、`poll_interval_secs` がそのままプラグイン内部の fetch 周期になる（0.6.0 / #554 で `[plugins.github]` から `[github]` へ移動。task-source-slack はイベント駆動でこの値を使わない）:
 
 ```toml
 [plugins.github]
@@ -741,7 +741,7 @@ enabled = true
 kind = "task_source"
 
 [github]
-poll_interval_secs = 60   # 省略時も 60
+poll_interval_secs = 60   # 省略時も 60。`0` は警告を出して 60 へフォールバックする
 ```
 
 `[github]` の全キー（`deny_unknown_fields`。**未知キーは `initialize` の硬い失敗になる**ので、タイポは起動時に分かる）:
@@ -854,6 +854,93 @@ project = "tomo-prj"
 | `triage_instructions` | ワークフローの profile が `triage` のとき送られる |
 | `design_instructions` | 同 `design` |
 | `implement_instructions` | 同 `implement` |
+
+# `[notion]`（task-source-notion）
+
+github と並ぶポーリング型 task_source。`poll_interval_secs` がそのままプラグイン内部の fetch 周期になる。
+
+```toml
+[plugins.notion]
+enabled = true
+kind = "task_source"
+
+[notion]
+token = "op://Dev/Notion/integration_token"
+notion_user_id = "8f2c…"                 # 自分（省略すると自己アサイン検知が無効）
+property_map = { title = "名前", status = "ステータス", assignee = "担当者" }
+in_progress_statuses = ["実装中"]
+```
+
+`[notion]` の全キー（`deny_unknown_fields`。**未知キーは `initialize` の硬い失敗になる**ので、タイポは起動時に分かる）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `token` | string | 必須 | Notion インテグレーショントークン（オーケストレータが解決して渡す、F-65）。プラグインは bearer として送る以外に触らない |
+| `notion_user_id` | string? | なし | 自分の Notion user id。`trigger.assignee` の `@me` がこれと突き合わせる。**省略すると `@me` が誰にも一致しない** —— 既定のトリガー（`["@me", "@none"]`）は「未アサインのタスクだけ取り込む」になり、`@me` を明示したワークフローは `initialize` で落ちる（#572）。github の `github_login` が必須なのと**非対称**なので注意。**さらに `property_map.assignee` が未設定だと、この「未アサインだけ」も成立しない** —— assignee を読む先が無いので全ページが未アサインに見え、**assignee による絞り込みが消えてデータベースの全ページが取り込まれる**（既定のトリガーは明示されていないので警告もエラーも出ない）。assignee でタスクを分けている DB では、`property_map.assignee` を必ずマップすること。挙動そのものをどうするかは #582 |
+| `property_map` | テーブル | 下記 | 共通スキーマ ↔ Notion のプロパティ名の対応（F-03） |
+| `body_source` | enum | `none` | 本文の取得元。`none` / `property`（`property_map.body` の `rich_text`）/ `page`（ページ本文のブロックを Markdown 化） |
+| `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして ingest から除外するステータス option 名（F-08）。**全データベース共通** |
+| `priority_map` | テーブル | `{}` | 優先度の option 名 → 数値。大きいほど先に走る。`number` 型の優先度プロパティはこの表を無視して値をそのまま使う |
+| `source_name` | string | `notion` | `Task.source` に刻印するソース名 |
+| `api_url` | string | `https://api.notion.com/v1` | REST のベース URL（テスト用の上書き） |
+| `api_version` | string | `2022-06-28` | `Notion-Version` ヘッダに送る API 版 |
+| `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
+| `poll_interval_secs` | int? | 60 | fetch 周期。**`0` はポーリングを止めない** —— ビジースピンになるので警告を 1 行出して既定の 60 秒へフォールバックする。止めたいならワークフローを消すか `[plugins.notion] enabled = false` にする（github も同じ挙動）。**同じファイルの `[[workflows]].timeout_secs` は `0` が opt-out を意味するので、逆である** |
+| `rate_limit_rps` | int | 3 | クライアント側のリクエスト毎秒上限。Notion の公開上限が約 3 rps なのでそれに合わせてある |
+| `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記） |
+
+## `property_map` — 共通スキーマ ↔ Notion のプロパティ名（F-03）
+
+**`title` だけが必須**で、未設定の任意フィールドは単に抽出されない。これにより単一のプラグインで任意の DB 構造を正規化できる。
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `title` | string | `Name` | タイトルを持つプロパティ名（Notion の既定が `Name`） |
+| `status` | string? | なし | ステータスを持つプロパティ名。`trigger.status` と `on_*.status` の両方がこれを読み書きする |
+| `status_kind` | enum | `status` | `status`（Notion 専用のステータス型）/ `select`。書き戻しの本体形状と option 解決を切り替える |
+| `assignee` | string? | なし | assignee を持つ `people` プロパティ名。**`trigger.assignee` を書くなら必須**（未設定だと全ページが未アサインに見え、条件が何もしなくなるので `initialize` で落ちる、#572） **未設定のまま `trigger.assignee` を書かない場合も無害ではない** —— 既定のトリガーから見ると全ページが未アサインなので、assignee による絞り込みが丸ごと消える（上の `notion_user_id` の行を参照） |
+| `priority` | string? | なし | 優先度を持つ `number` / `select` / `status` プロパティ名 |
+| `repo_hint` | string? | なし | リポジトリのヒントを持つ `rich_text` / `select` / `url` プロパティ名（F-10） |
+| `body` | string? | なし | `body_source = "property"` のときに本文を読む `rich_text` プロパティ名 |
+
+**`config/validate` は全データベースを見る。** `property_map` は全 DB 共通なので、あるデータベースだけがマップ先プロパティを欠いていると**そこ由来のタスクだけが壊れる** —— 1 つ目だけ見て緑にするのが一番静かな壊れ方になる。
+
+データベースは `[notion]` ではなく **Orchestrator の `[[projects]]`** に書く（#554）。`source = "notion"` の要素がそのプラグインのデータベースになる:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `name` | string | 必須 | core のキー。`[[repositories]].project` が指す |
+| `source` | string | 必須 | core のキー。`"notion"` |
+| `database_id` | string | 必須 | 対象データベースの id |
+| `triage_status` | string? | なし | triage 起票時に付ける Status option 名。**省略すると Status なしで作成される**（人間のトリアージゲートが残る）。polling trigger と同じ値を書くとそのゲートは消え、起票が即・無人実装へ流れる。`property_map.status` が未設定のまま書くと `config/validate` がエラーにする（埋める列を名指しできない指示文になるため）—— **ただしこの検査は `initialize` では走らない**ので、未 validate の設定は起動し、status 指示が黙って落ちるだけになる |
+
+```toml
+[[projects]]
+name = "design-db"
+source = "notion"
+database_id = "…"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/github/tomoya-k31/totsuka"
+project = "design-db"
+```
+
+## 再実行はできない（#573）
+
+**notion のタスクは、どのトリガーでも 1 回しか実行されない。** 配送に lane identity が無い（`message_key` が常に空）ので、ステータスを戻しても再配送は重複として捨てられる。github は**`trigger.status` を持つワークフローに限り**ステータスセルの更新時刻を刻むので差し戻しで再実行できる（`label` 単独・`assignee` 単独のトリガーは github でも at-most-once である）。Notion API にはプロパティ単位の更新時刻が無いので、同じ方法が取れない。
+
+したがって **`trigger.status` を足しても再実行可能にはならない**。この非対称は [ADR-0064](/decisions/adr-0064-notion-at-most-once.md) で決定として確定させた（#573）。
+
+## `[prompts]`（task-source-notion、#398）
+
+組み込みデフォルトは `plugins/task-source-notion/src/defaults.toml` にバイナリ埋め込みされており、このテーブルは**キー単位の上書き**である（未指定キーは組み込みのまま）。**キー名がそのまま設定キー**である。
+
+| キー | 用途 | プレースホルダ |
+|---|---|---|
+| `triage_instructions` | ワークフローの profile が `triage` のとき送られる | `{page_url}` `{title}` |
+| `design_instructions` | 同 `design` | `{page_url}` `{title}` |
+| `implement_instructions` | 同 `implement` | `{page_url}` `{title}` |
 
 # `[slack]`（task-source-slack）
 

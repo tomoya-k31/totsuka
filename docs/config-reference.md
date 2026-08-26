@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:87523ae7ceff1145be68f6d3e82d7e351b4a47bc1a733a04004f58dfbe03b2b0 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:8663f7db5b719a5b82ef8ee5608c4fad47c72ca7a3247eb9c9417f969fb867f9 -->
 
 # Configuration reference
 
@@ -623,7 +623,7 @@ If a workflow uses a hook-capable agent, leaving `auth_token_ref` unset makes `c
 
 ## `[github]`
 
-This is the only polling task source here — `poll_interval_secs` is the plugin's own fetch interval, set in its `[github]` table. (The Slack source next door is event-driven and ignores it.)
+This is one of the two polling task sources (the other is `[notion]`) — `poll_interval_secs` is the plugin's own fetch interval, set in its `[github]` table. (The Slack source next door is event-driven and ignores it.)
 
 ```toml
 [plugins.github]
@@ -631,7 +631,7 @@ enabled = true
 kind = "task_source"
 
 [github]
-poll_interval_secs = 60   # 60 is also the default
+poll_interval_secs = 60   # 60 is also the default; 0 warns and falls back to it
 ```
 
 | Key | Type | Default | Meaning |
@@ -742,6 +742,93 @@ Built-in defaults are embedded in the binary; this table overrides them one key 
 | `triage_instructions` | The workflow's profile is `triage` |
 | `design_instructions` | The workflow's profile is `design` |
 | `implement_instructions` | The workflow's profile is `implement` |
+
+## `[notion]`
+
+The other polling task source. `poll_interval_secs` is the fetch cadence.
+
+```toml
+[plugins.notion]
+enabled = true
+kind = "task_source"
+
+[notion]
+token = "op://Dev/Notion/integration_token"
+notion_user_id = "8f2c…"                 # you (omit and self-detection is off)
+property_map = { title = "Name", status = "Status", assignee = "Owner" }
+in_progress_statuses = ["In progress"]
+```
+
+Unknown keys here are a hard startup failure, so a typo shows up immediately.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `token` | string | required | Notion integration token. Sent as a bearer token and nothing else. |
+| `notion_user_id` | string? | none | Your own Notion user id — what `trigger.assignee`'s `@me` is compared against. **Omit it and `@me` matches nobody**: the default trigger becomes "only unassigned tasks", and a workflow that spells out `@me` fails to start. Note the asymmetry with GitHub, where `github_login` is required. **And with `property_map.assignee` unset, even "only unassigned" does not hold** — there is nowhere to read assignees from, so every page looks unassigned and **the assignee filter disappears: the whole database is ingested**. Nothing warns, because the default condition was never written down. If your database divides work by assignee, map that property. |
+| `property_map` | table | below | Which Notion property holds which field. |
+| `body_source` | enum | `none` | Where a task's body comes from: `none`, `property` (the `rich_text` named by `property_map.body`), or `page` (the page's blocks, converted to Markdown). |
+| `in_progress_statuses` | string[] | `[]` | Status options that mean "already running" and are skipped on ingest. Shared across every database. |
+| `priority_map` | table | `{}` | Priority option name to a number; higher runs first. A `number` priority property is used directly and ignores this. |
+| `source_name` | string | `notion` | The source name stamped on each task. |
+| `api_url` | string | `https://api.notion.com/v1` | REST base URL. |
+| `api_version` | string | `2022-06-28` | The `Notion-Version` header. |
+| `max_retries` | int | 3 | Retries for retryable API failures. |
+| `poll_interval_secs` | int? | 60 | Fetch cadence. **`0` does not stop polling**: it would busy-spin, so it logs one warning and falls back to the 60-second default. To stop polling, remove the workflow or set `[plugins.notion] enabled = false`. GitHub behaves the same way. Note that `[[workflows]].timeout_secs` reads `0` the opposite way, as an opt-out. |
+| `rate_limit_rps` | int | 3 | Client-side requests per second. Notion's published limit is about 3 rps. |
+| `[prompts]` | table | — | Overrides for the instruction text this plugin sends (below). |
+
+### `property_map`
+
+**Only `title` is required**; an optional field you leave unset is simply not extracted, which is how one plugin handles any database layout.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `title` | string | `Name` | The property holding the title (Notion's own default is `Name`). |
+| `status` | string? | none | The status property. Both `trigger.status` and `on_*.status` read and write this one. |
+| `status_kind` | enum | `status` | `status` (Notion's dedicated status type) or `select`. |
+| `assignee` | string? | none | A `people` property holding assignees. **Required if you write `trigger.assignee`** — without it every page reads as unassigned, so the condition could not do anything, and startup fails rather than letting it look like it works. **Leaving it unset is not harmless even without that key**: the default condition also sees every page as unassigned, so the assignee filter disappears entirely (see `notion_user_id` above). |
+| `priority` | string? | none | A `number` / `select` / `status` property holding priority. |
+| `repo_hint` | string? | none | A `rich_text` / `select` / `url` property naming a repository. |
+| `body` | string? | none | The `rich_text` property read when `body_source = "property"`. |
+
+`property_map` is shared by every database, so `totsuka config validate` checks all of them: if one database is missing a mapped property, only the tasks from that database break — checking just the first one would be the quietest possible failure.
+
+Databases go in `[[projects]]`, not here. An entry with `source = "notion"` belongs to this plugin:
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | required | What `[[repositories]].project` points at. |
+| `source` | string | required | `"notion"`. |
+| `database_id` | string | required | The database to poll. |
+| `triage_status` | string? | none | The status a triage-filed page is created with. **Leave it out and the page is created with no status**, which keeps a human triage gate. Setting it to a value some trigger polls removes that gate: filing then flows straight into an unattended run. It needs `property_map.status` to be mapped — `config validate` errors if it is not, but `run` does not check, so an unvalidated config starts and the status instruction is silently dropped. |
+
+```toml
+[[projects]]
+name = "design-db"
+source = "notion"
+database_id = "…"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/github/tomoya-k31/totsuka"
+project = "design-db"
+```
+
+### Notion tasks run at most once
+
+**A Notion task runs once, whatever its trigger is.** Its deliveries carry no lane identity, so moving the status back does not re-deliver it — the repeat is discarded as a duplicate. GitHub records when the status cell changed and can therefore repeat a task when a card moves back into the column — **but only for a workflow whose trigger has a `status`**; a `label`-only or `assignee`-only trigger is at most once on GitHub too. The Notion API exposes no per-property timestamp, so the same approach is not available there at all.
+
+**Adding a `status` to the trigger does not make a Notion task repeatable.**
+
+### `[prompts]`
+
+Per-key overrides of the instruction text this plugin sends; anything you leave out keeps the built-in wording.
+
+| Key | Used when the workflow's profile is | Placeholders |
+|---|---|---|
+| `triage_instructions` | `triage` | `{page_url}` `{title}` |
+| `design_instructions` | `design` | `{page_url}` `{title}` |
+| `implement_instructions` | `implement` | `{page_url}` `{title}` |
 
 ## `[slack]`
 

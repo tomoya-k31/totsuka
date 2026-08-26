@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-08-27T05:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T06:45:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -41,6 +41,12 @@ fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tas
 **`task/update_status` はページの親データベースを Notion に問い合わせる。** PATCH 先はページ id だけで足りるが、その前に「対象 option がそのデータベースに存在するか」を検証しており、どのデータベースかは request が語らない。ingest 時のメモを先に引き、無ければ `GET /pages/{id}` の `parent.database_id` を読む — **各データベースの option を順に試す方式は採らない**。別のデータベースにだけ存在する option を通してしまい、明確な「unknown status」エラーが Notion API 側の分かりにくい失敗に化けるからである。id はハイフンの有無を無視して突き合わせる（Notion は両形式を受け付け、ハイフン付きで返す）。
 
 **`config/validate` は全データベースを見る。** `property_map` は全データベース共通なので、あるデータベースだけがマップ先プロパティを欠いていると、そこ由来のタスクだけが壊れる — 1 つ目だけ見て緑にするのが一番静かな壊れ方になる。
+
+# 再実行はできない（#573 / [ADR-0064](/decisions/adr-0064-notion-at-most-once.md)）
+
+**notion のタスクは、トリガーが何であれ 1 回しか実行されない。** `normalize_page` は `message_key` を**無条件で `None`** にするので、core はそれを `task.id` にフォールバックさせ、`UNIQUE(task_id, message_key)` が以降の再配送をすべて重複として捨てる。ステータスを戻しても再実行されず、`totsuka task retry` も `done` を拒否する。
+
+これは実装漏れではなく**決定である**（ADR-0064）。github は `trigger.status` を持つワークフローに限り `status` セルの `updatedAt` を lane identity に使えるが（#556。`label` 単独・`assignee` 単独のトリガーは **github でも at-most-once** である）、**Notion API にはプロパティ単位の更新時刻が無い**ので同じものが作れない。却下した代替案とその破れ方は ADR-0064 にある。
 
 # capabilities（F-83）
 

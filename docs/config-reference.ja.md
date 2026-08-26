@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:87523ae7ceff1145be68f6d3e82d7e351b4a47bc1a733a04004f58dfbe03b2b0 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:8663f7db5b719a5b82ef8ee5608c4fad47c72ca7a3247eb9c9417f969fb867f9 -->
 
 # 設定リファレンス
 
@@ -624,13 +624,13 @@ plan_cleanup = "immediate"            # plan: 即削除（既定）
 
 ## `[github]`
 
-ここで唯一のポーリング型 task source であり、`poll_interval_secs` がそのままプラグイン自身の fetch 周期になる。置き場所はプラグイン自身の `[github]` テーブルである（隣の Slack ソースはイベント駆動でこの値を使わない）。
+ポーリング型 task source の 1 つで（もう 1 つは `[notion]`）、`poll_interval_secs` がそのままプラグイン自身の fetch 周期になる。置き場所はプラグイン自身の `[github]` テーブルである（隣の Slack ソースはイベント駆動でこの値を使わない）。
 
 ```toml
 [plugins.github]
 enabled = true
 kind = "task_source"
-poll_interval_secs = 60   # 60 は既定値でもある
+poll_interval_secs = 60   # 60 は既定値でもある。0 は警告を出してこれへ戻る
 ```
 
 | キー | 型 | 既定 | 意味 |
@@ -741,6 +741,93 @@ fine-grained PAT の場合（org 所有のボードのみ）:
 | `triage_instructions` | ワークフローの profile が `triage` のとき |
 | `design_instructions` | 同 `design` |
 | `implement_instructions` | 同 `implement` |
+
+## `[notion]`
+
+もう 1 つのポーリング型タスクソース。`poll_interval_secs` が取得周期になる。
+
+```toml
+[plugins.notion]
+enabled = true
+kind = "task_source"
+
+[notion]
+token = "op://Dev/Notion/integration_token"
+notion_user_id = "8f2c…"                 # 自分（省略すると自己検知が無効）
+property_map = { title = "名前", status = "ステータス", assignee = "担当者" }
+in_progress_statuses = ["実装中"]
+```
+
+ここの未知キーは起動時の硬い失敗になるので、タイポはすぐ分かる。
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `token` | string | 必須 | Notion のインテグレーショントークン。bearer として送る以外には使わない |
+| `notion_user_id` | string? | なし | 自分の Notion user id。`trigger.assignee` の `@me` がこれと突き合わせる。**省略すると `@me` は誰にも一致しない** —— 既定のトリガーは「未アサインのタスクだけ」になり、`@me` を明示したワークフローは起動に失敗する。GitHub では `github_login` が必須なので、そこは非対称である。**さらに `property_map.assignee` が未設定だと、その「未アサインだけ」も成立しない** —— assignee を読む先が無いので全ページが未アサインに見え、**assignee による絞り込みが消えてデータベースの全ページが取り込まれる**。既定の条件は書かれていないので警告も出ない。assignee で仕事を分けているデータベースでは、必ずこのプロパティをマップすること |
+| `property_map` | テーブル | 下記 | どの Notion プロパティがどのフィールドかの対応 |
+| `body_source` | enum | `none` | 本文の取得元。`none` / `property`（`property_map.body` が指す `rich_text`）/ `page`（ページのブロックを Markdown 化） |
+| `in_progress_statuses` | string[] | `[]` | 「実行中」を意味し取り込みから外すステータス option。全データベース共通 |
+| `priority_map` | テーブル | `{}` | 優先度の option 名 → 数値。大きいほど先に走る。`number` 型の優先度プロパティはこの表を使わず値を直接読む |
+| `source_name` | string | `notion` | 各タスクに刻まれるソース名 |
+| `api_url` | string | `https://api.notion.com/v1` | REST のベース URL |
+| `api_version` | string | `2022-06-28` | `Notion-Version` ヘッダ |
+| `max_retries` | int | 3 | リトライ可能な API 失敗の再試行回数 |
+| `poll_interval_secs` | int? | 60 | 取得周期。**`0` はポーリングを止めない** —— ビジースピンになるので警告を 1 行出して既定の 60 秒へ戻る。止めたいならワークフローを消すか `[plugins.notion] enabled = false` にする。GitHub も同じ挙動。なお `[[workflows]].timeout_secs` の `0` は逆に opt-out を意味する |
+| `rate_limit_rps` | int | 3 | クライアント側の毎秒リクエスト数。Notion の公開上限が約 3 rps |
+| `[prompts]` | テーブル | — | このプラグインが送る指示文の上書き（下記） |
+
+### `property_map`
+
+**必須は `title` だけ**で、未設定の任意フィールドは単に抽出されない。これにより 1 つのプラグインで任意のデータベース構造を扱える。
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `title` | string | `Name` | タイトルを持つプロパティ（Notion 自身の既定が `Name`） |
+| `status` | string? | なし | ステータスのプロパティ。`trigger.status` と `on_*.status` の両方がこれを読み書きする |
+| `status_kind` | enum | `status` | `status`（Notion 専用のステータス型）または `select` |
+| `assignee` | string? | なし | assignee を持つ `people` プロパティ。**`trigger.assignee` を書くなら必須** —— 無いと全ページが未アサインに見えて条件が何もしなくなるので、動いているように見せず起動時に失敗させる。**そのキーを書かない場合も未設定は無害ではない**: 既定の条件から見ても全ページが未アサインなので、assignee による絞り込みが丸ごと消える（上の `notion_user_id` を参照） |
+| `priority` | string? | なし | 優先度を持つ `number` / `select` / `status` プロパティ |
+| `repo_hint` | string? | なし | リポジトリ名を持つ `rich_text` / `select` / `url` プロパティ |
+| `body` | string? | なし | `body_source = "property"` のときに読む `rich_text` プロパティ |
+
+`property_map` は全データベース共通なので、`totsuka config validate` は全部を見る。あるデータベースだけがマップ先プロパティを欠いていると、そこ由来のタスクだけが壊れる —— 1 つ目だけ見て済ませるのが、一番静かな壊れ方になる。
+
+データベースはここではなく `[[projects]]` に書く。`source = "notion"` の要素がこのプラグインのものになる:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `name` | string | 必須 | `[[repositories]].project` が指す名前 |
+| `source` | string | 必須 | `"notion"` |
+| `database_id` | string | 必須 | ポーリング対象のデータベース |
+| `triage_status` | string? | なし | triage で起票したページに付けるステータス。**省略するとステータス無しで作成され**、人間のトリアージゲートが残る。どれかのトリガーが見ている値を書くとそのゲートは消え、起票がそのまま無人の実行へ流れる。`property_map.status` のマップが必要で、無い場合は `config validate` がエラーにする —— ただし `run` は検査しないので、未検証の設定は起動し、ステータス指示は黙って落ちる |
+
+```toml
+[[projects]]
+name = "design-db"
+source = "notion"
+database_id = "…"
+
+[[repositories]]
+name = "totsuka"
+path = "~/Workspace/github/tomoya-k31/totsuka"
+project = "design-db"
+```
+
+### Notion のタスクは高々 1 回しか実行されない
+
+**Notion のタスクは、トリガーが何であれ 1 回しか実行されない。** 配送に lane identity が無いため、ステータスを戻しても再配送は重複として捨てられる。GitHub はステータスセルの変更時刻を記録しているのでカードを列へ戻せば再実行できる —— **ただしトリガーに `status` があるワークフローに限る**。`label` 単独・`assignee` 単独のトリガーは GitHub でも高々 1 回である。Notion API にはプロパティ単位の時刻が無いので、そもそも同じ方法が取れない。
+
+**トリガーに `status` を足しても、Notion のタスクが再実行可能になることはない。**
+
+### `[prompts]`
+
+このプラグインが送る指示文のキー単位の上書き。書かなかったキーは組み込みの文面のまま。
+
+| キー | ワークフローの profile が | プレースホルダ |
+|---|---|---|
+| `triage_instructions` | `triage` | `{page_url}` `{title}` |
+| `design_instructions` | `design` | `{page_url}` `{title}` |
+| `implement_instructions` | `implement` | `{page_url}` `{title}` |
 
 ## `[slack]`
 
