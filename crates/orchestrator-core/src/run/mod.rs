@@ -74,6 +74,22 @@ use crate::worktree::{
 };
 
 mod dispatch;
+/// Which of a workflow's status transitions to apply (#556): the moment the
+/// task starts running, or one of the two terminal outcomes (F-84).
+///
+/// An enum rather than the old `success: bool` because `on_start` made the
+/// question three-valued — and a bool caller reads as "did it succeed?",
+/// which at dispatch time is not even a meaningful question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatusMoment {
+    /// The task is about to be dispatched (`on_start`).
+    Start,
+    /// The task finished successfully (`on_success`).
+    Success,
+    /// The task failed (`on_failure`).
+    Failure,
+}
+
 mod events;
 mod finalize;
 use finalize::{PaneRelease, ReleaseMode};

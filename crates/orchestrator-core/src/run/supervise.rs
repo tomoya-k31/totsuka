@@ -41,7 +41,7 @@ use tokio::time::Instant;
 use super::ingest::{PluginRequestBudgets, forward_plugin_request};
 use super::{
     Engine, EngineError, LOOKUP_IN_FLIGHT_BUDGET, MethodReport, PluginEvent, PluginReport,
-    SUBMIT_IN_FLIGHT_BUDGET, deliver_notification, state_event,
+    SUBMIT_IN_FLIGHT_BUDGET, StatusMoment, deliver_notification, state_event,
 };
 use crate::adapters::plugin_host::{CallStats, HostError, Liveness, Plugin};
 use crate::ports::git::GitRunner;
@@ -212,7 +212,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             self.release_slot(task_id);
             self.agent_output.remove(&task_id);
             self.stats.failed += 1;
-            self.write_back_status(&record, false).await;
+            self.write_back_status(&record, StatusMoment::Failure).await;
             super::notify_all(
                 &self.plugins.notifiers,
                 NotifierEvent::Failed,

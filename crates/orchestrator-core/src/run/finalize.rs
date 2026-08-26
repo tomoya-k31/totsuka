@@ -89,7 +89,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         match self.execute_output_policy(record, policy).await {
             Ok(pr_url) => {
                 // Success: on_success write-back (F-84) → Complete → cleanup.
-                self.write_back_status(record, true).await;
+                self.write_back_status(record, StatusMoment::Success).await;
                 self.db.apply_event(
                     record.id,
                     TaskEvent::Complete,
@@ -218,18 +218,20 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             .map_err(|e| format!("result/publish failed: {e}"))
     }
 
-    /// Apply the workflow's `on_success`/`on_failure` status transition on the
-    /// source (F-84). Failures are logged, never fatal: the task outcome is
-    /// already decided.
-    pub(super) async fn write_back_status(&self, record: &TaskRecord, success: bool) {
+    /// Apply the workflow's `on_start`/`on_success`/`on_failure` status
+    /// transition on the source (F-84, #556). Failures are logged, never
+    /// fatal: for the terminal moments the task outcome is already decided,
+    /// and at start a missed write-back must not cost the dispatch itself —
+    /// the status column is a mirror of the run, not a precondition for it.
+    pub(super) async fn write_back_status(&self, record: &TaskRecord, moment: StatusMoment) {
         let workflows = workflows_by_name(&self.settings.workflows);
         let Some(wf) = workflows.get(record.workflow.as_str()) else {
             return;
         };
-        let action = if success {
-            wf.on_success.as_ref()
-        } else {
-            wf.on_failure.as_ref()
+        let action = match moment {
+            StatusMoment::Start => wf.on_start.as_ref(),
+            StatusMoment::Success => wf.on_success.as_ref(),
+            StatusMoment::Failure => wf.on_failure.as_ref(),
         };
         let Some(status) = action.and_then(|a| a.set_status.clone()) else {
             return;

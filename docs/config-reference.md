@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:4150516e6b29fba4c9b84bb72ccf523f3be0d51f515812a2b058ff6d2157b048 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0bf92ed698e9f158a3ba576e1a14339c90552d5dbf99307d6e0958bbf5dc36ad -->
 
 # Configuration reference
 
@@ -139,6 +139,7 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 | `mode` | enum | required without `profile` | `plan` or `implement` |
 | `agent` | string | required | Agent instance name |
 | `output` | enum | required without `profile` | `source` or `none` |
+| `on_start` | `{ set_status = "..." }`? | none | Update the status in the source right before the task is handed to an agent, so the board mirrors "in progress" while the run happens. In a multi-member setup this also makes `in_progress_statuses` keep other members' instances from picking the task up. Omitted, nothing is written. **If you set it, set `on_failure` too** — otherwise a failed task leaves the column stuck on the in-progress status |
 | `on_success` | `{ set_status = "..." }`? | none | Update the status in the source on success |
 | `on_failure` | `{ set_status = "..." }`? | none | Update the status in the source on failure. Retryable failures do not write back |
 | `verification` | enum | `llm` | How a completion claim is checked: `llm` (checked in session), `human` (waits for `totsuka task verify`), or `none`. Cannot be combined with `profile` |
@@ -266,7 +267,7 @@ on_success = { set_status = "Designed" }
 | `profile` plus `mode` or `verification` | **Error.** The profile decides these, so writing them would leave dead settings that look alive |
 | `profile` plus `output` | **Allowed**, and `output` wins. This is a wiring choice rather than a permission, and a Slack-triggered implement workflow needs it to return the pull request URL to the thread |
 | No `profile` and no `mode` / `output` | **Error.** Either name a profile or write both |
-| `profile` plus `rubric`, `tool`, `timeout_secs`, `on_success`, `on_failure` | Allowed |
+| `profile` plus `rubric`, `tool`, `timeout_secs`, `on_start`, `on_success`, `on_failure` | Allowed |
 
 Profiles are optional. Combinations they cannot express — `verification = "human"`, for instance, since all four resolve to `llm` — are written out explicitly.
 

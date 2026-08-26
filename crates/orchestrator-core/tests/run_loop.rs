@@ -290,6 +290,136 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// `on_start` (#556): configured, the dispatch itself moves the source's
+/// status column — before the terminal write-back, so the board mirrors the
+/// run while it is happening. Unconfigured (every pre-#556 config), the call
+/// count stays exactly what it was: one `task/update_status`, from
+/// `on_success`. The count is the assertion because "nothing extra" is the
+/// compatibility promise.
+#[tokio::test]
+async fn on_start_moves_the_status_column_at_dispatch() {
+    let base = scratch("on_start");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("os1")]),
+        json!({ "stream_states": ["running", "done"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    let cfg = RootConfig::from_toml_str(
+        r#"
+[[workflows]]
+name = "wf"
+source = "mock_src"
+trigger = {}
+mode = "implement"
+agent = "mock_agent"
+output = "none"
+on_start = { set_status = "実装中" }
+on_success = { set_status = "レビュー待ち" }
+"#,
+    )
+    .unwrap();
+    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "os1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let statuses: Vec<String> = read_log(&source_log)
+        .iter()
+        .filter(|c| c["method"] == "task/update_status")
+        .map(|c| {
+            c["params"]["status"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    // Start first, then the terminal outcome — the order is the point: a
+    // column that only moved after completion would defeat the mirror.
+    assert_eq!(
+        statuses,
+        vec!["実装中".to_string(), "レビュー待ち".to_string()],
+        "expected on_start then on_success"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Without `on_start` the dispatch writes nothing: exactly one
+/// `task/update_status` (the `on_success` one), byte-for-byte the pre-#556
+/// behaviour.
+#[tokio::test]
+async fn absent_on_start_writes_nothing_at_dispatch() {
+    let base = scratch("no_on_start");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("os2")]),
+        json!({ "stream_states": ["running", "done"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "os2")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let update_calls: Vec<_> = read_log(&source_log)
+        .into_iter()
+        .filter(|c| c["method"] == "task/update_status")
+        .collect();
+    assert_eq!(
+        update_calls.len(),
+        1,
+        "exactly the on_success write-back: {update_calls:?}"
+    );
+    assert_eq!(update_calls[0]["params"]["status"], "レビュー待ち");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// The loop settles once a dispatched task reaches `waiting_input`: it is
 /// not "actively executing" (§5.1), so the run stops with it still listed
 /// in `summary.waiting`, and the notifier fires. Idempotent re-submission

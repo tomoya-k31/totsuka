@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:4150516e6b29fba4c9b84bb72ccf523f3be0d51f515812a2b058ff6d2157b048 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0bf92ed698e9f158a3ba576e1a14339c90552d5dbf99307d6e0958bbf5dc36ad -->
 
 # 設定リファレンス
 
@@ -140,6 +140,7 @@ project = "tomo-prj"
 | `mode` | enum | `profile` が無ければ必須 | `plan` / `implement` |
 | `agent` | string | 必須 | agent_ide のインスタンス名 |
 | `output` | enum | `profile` が無ければ必須 | `source` / `none` |
+| `on_start` | `{ set_status = "..." }`? | なし | タスクをエージェントへ渡す直前にソース側のステータスを更新する。実行中であることがボードに映り、多人数運用では `in_progress_statuses` により他メンバーのインスタンスがそのタスクを取り込まなくなる。未設定なら何も書かない。**設定するなら `on_failure` も設定すること** — 失敗時に列が実行中のまま残り、ボードと実態が食い違う |
 | `on_success` | `{ set_status = "..." }`? | なし | 成功時にソース側のステータスを更新する |
 | `on_failure` | `{ set_status = "..." }`? | なし | 失敗時にソース側のステータスを更新する。再試行可能な失敗では書き戻さない |
 | `verification` | enum | `llm` | 完了申告の検収方式。`llm`（セッション内で検収）/ `human`（`totsuka task verify` を待つ）/ `none`。`profile` とは併記できない |
@@ -267,7 +268,7 @@ on_success = { set_status = "設計済み" }
 | `profile` + `mode` / `verification` | **エラー。** profile が決める値なので、書くと「生きて見える死んだ設定」が残る |
 | `profile` + `output` | **可。** `output` が勝つ。権限ではなく配線先の選択であり、Slack 起点の implement がプルリクエストの URL をスレッドへ返すのに要る |
 | `profile` 無しで `mode` / `output` が欠けている | **エラー。** profile を書くか、両方を明示する |
-| `profile` + `rubric` / `tool` / `timeout_secs` / `on_success` / `on_failure` | 可 |
+| `profile` + `rubric` / `tool` / `timeout_secs` / `on_start` / `on_success` / `on_failure` | 可 |
 
 profile は必須ではない。4 原型で表せない組み合わせ（たとえば `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
 
