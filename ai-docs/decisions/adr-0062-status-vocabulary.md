@@ -4,7 +4,7 @@ title: ADR-0062 status は trigger と on_* で同じ綴りにし、status_map �
 description: "同じ状態列を指す 2 つのキーが別名（trigger.project_status / on_*.set_status）で、しかも片方だけが status_map の写像を通っていた問題への決定。両側を status に統一し、写像表を廃止して全キーがボードの option 名を生で指すようにする。あわせて trigger 内の status を core 予約キーとして正式化する。式言語・両側 project_status・on_* のスカラー化・in_progress_statuses などの改名は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/575
 tags: [decision, config, workflow, trigger, status, breaking, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-27T03:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T05:35:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-08-26T20:11:00Z }
 status: stable

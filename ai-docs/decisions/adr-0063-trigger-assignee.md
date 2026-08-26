@@ -4,7 +4,9 @@ title: ADR-0063 取り込みの assignee ゲートは workflow ごとの trigger
 description: "プラグイン全体でハードコードされていた F-08 の取り込みゲート（未アサイン または 自分）を、[[workflows]].trigger.assignee へ移す決定。@me / @none / @any / login / 配列の語彙を持ち、省略時の既定が旧ゲートと同一なので二重ゲートにならない。未アサインを人間の取り分として残す運用が初めて書けるようになる。式言語・二重ゲートの維持・bot アカウントの分離は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/572
 tags: [decision, config, workflow, trigger, assignee, ingest, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-27T05:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T05:35:00+09:00 }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-26T20:11:00Z }
 status: stable
 owner: tomoya-k31
 ---
