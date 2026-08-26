@@ -167,6 +167,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                     to = %wf.name,
                     "conversation handed over to the delivering workflow"
                 );
+                self.detach_for_read_only_stage(existing, wf);
                 Ok((existing.id, IngestOutcome::Reopened))
             }
             HandoffOutcome::InFlight => {
@@ -184,6 +185,81 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 Ok((existing.id, IngestOutcome::Duplicate))
             }
             HandoffOutcome::Duplicate => Ok((existing.id, IngestOutcome::Duplicate)),
+        }
+    }
+
+    /// Put an inherited worktree back on a detached `HEAD` when the stage it
+    /// was just handed to is read-only (#568).
+    ///
+    /// Every worktree is created detached, and the read-only check
+    /// (ADR-0045) reads "on a branch" as "the agent ran git" **because** of
+    /// that. A handoff (#565) keeps the worktree, so a read-only stage
+    /// inheriting one from an implement stage inherits its branch too — and
+    /// the check then fails it, closes its pane to stop a push it never
+    /// intended, and names it for a branch it never made. Observed live: the
+    /// pane was killed three seconds in, while the agent was waiting on a
+    /// question nobody got to read.
+    ///
+    /// Detaching restores the invariant instead of teaching the check about
+    /// handoffs, so a branch the read-only stage *does* make is still caught
+    /// and still stopped hard, which is the behaviour that check is for.
+    ///
+    /// Nothing is lost: the previous stage's branch ref still points at the
+    /// same commit, and the files in the worktree do not move.
+    fn detach_for_read_only_stage(&mut self, existing: &TaskRecord, wf: &Workflow) {
+        if !wf.profile.is_some_and(|p| p.is_read_only()) {
+            return;
+        }
+        // Forget the branch first, and unconditionally: `acquire_worktree`
+        // re-creates a missing worktree **from this column** and puts it back
+        // on that branch, so a worktree that cleanup already removed would
+        // hand the read-only stage a branch it never made — the same failure
+        // the detach below avoids, reached without ever touching git.
+        if let Err(e) = self.db.clear_branch(existing.id) {
+            tracing::warn!(
+                task_id = existing.id,
+                "could not forget the inherited branch before a read-only stage: {e}"
+            );
+        }
+        let Some(path) = existing
+            .worktree_path
+            .as_deref()
+            .filter(|p| Path::new(p).is_dir())
+        else {
+            // Nothing on disk to detach. Cleared above, so re-creation hands
+            // over a detached worktree; nothing further to do.
+            return;
+        };
+        let path = Path::new(path);
+        // `head_branch` answers `None` for a detached worktree **and** for a
+        // git that could not be read, and those must not share an exit here:
+        // treating a failed read as "already detached" is how the false
+        // positive comes back. Detach unconditionally — it is idempotent, so
+        // the ordinary already-detached case costs one no-op git call — and
+        // use the branch only to say *what* was detached.
+        let branch = self.worktrees.head_branch(path);
+        if self.worktrees.detach(path) {
+            if let Some(branch) = branch {
+                tracing::info!(
+                    task_id = existing.id,
+                    workflow = %wf.name,
+                    branch = %branch,
+                    "detached the inherited worktree for a read-only stage (the branch is kept)"
+                );
+            }
+        } else {
+            let branch = branch.unwrap_or_else(|| "<unreadable>".to_string());
+            // Loud, and it names what happens next: the read-only check will
+            // fail this task and close its pane for `branch`, which the new
+            // stage did not create.
+            tracing::error!(
+                task_id = existing.id,
+                workflow = %wf.name,
+                branch = %branch,
+                "could not detach the inherited worktree for a read-only stage → the \
+                 read-only check will fail this task and close its pane for a branch the \
+                 stage did not make; detach it by hand and `totsuka task retry`"
+            );
         }
     }
 
@@ -695,6 +771,274 @@ mod tests {
             "review",
             "the re-delivery landed once the stage ended"
         );
+    }
+
+    /// Handing a worktree to a **read-only** stage detaches it first (#568).
+    ///
+    /// Without this the inherited branch trips the read-only check on the
+    /// first sweep after dispatch: the task is failed and its pane is closed
+    /// to stop a push it never intended — observed live, three seconds in,
+    /// while the agent was waiting on a question nobody got to read. Real git
+    /// here, because what is being asserted is what git did to `HEAD`.
+    #[tokio::test]
+    async fn a_read_only_stage_inherits_a_detached_worktree() {
+        let base = test_support::scratch("handoff_detach");
+        let repo = test_support::bare_origin_and_clone(&base);
+        let git = crate::adapters::git::SystemGitRunner;
+        let wt = crate::worktree::WorktreeManager::new(crate::adapters::git::SystemGitRunner);
+        for args in [
+            &["switch", "-c", "feat/prev"][..],
+            &["commit", "--allow-empty", "-m", "implement stage"][..],
+        ] {
+            assert!(
+                crate::ports::git::GitRunner::run(&git, &repo, args)
+                    .unwrap()
+                    .success(),
+                "{args:?}"
+            );
+        }
+        assert_eq!(wt.head_branch(&repo).as_deref(), Some("feat/prev"));
+
+        let mut engine = ingest_test_engine().await;
+        // The next stage is read-only (design); the current one is not.
+        let mut design = engine.settings.workflows[0].clone();
+        design.name = "design".to_string();
+        design.mode = WorkflowMode::Plan;
+        design.profile = Some(crate::config::Profile::Design);
+        engine.settings.workflows.push(design);
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("k1"), "one"),
+            )
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        // Give the row the branched worktree the previous stage left behind.
+        engine
+            .db
+            .set_worktree(id, repo.to_str().unwrap(), Some("feat/prev"), "HEAD")
+            .unwrap();
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "design".into(),
+                delivery("C1:100", Some("k2"), "two"),
+            )
+            .unwrap();
+
+        assert_eq!(engine.db.get_task(id).unwrap().unwrap().workflow, "design");
+        assert!(
+            wt.head_branch(&repo).is_none(),
+            "the read-only stage must start detached, or it is blamed for `feat/prev`"
+        );
+        assert!(
+            engine.db.get_task(id).unwrap().unwrap().branch.is_none(),
+            "and the column is cleared, so a re-creation cannot put it back on the branch"
+        );
+        // And the previous stage's work is still reachable by name.
+        assert!(
+            crate::ports::git::GitRunner::run(&git, &repo, &["rev-parse", "feat/prev"])
+                .unwrap()
+                .success(),
+            "the branch ref survives"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A read-only stage is detached even when the branch cannot be read
+    /// (#568 review). `head_branch` answers `None` both for an
+    /// already-detached worktree and for a git it could not run, so branching
+    /// the decision on it would skip the detach exactly when the state is
+    /// unknown — which is when the false positive comes back. Pinned by
+    /// handing over a worktree whose `HEAD` git cannot resolve (an empty
+    /// repository with no commits): the detach still runs.
+    #[tokio::test]
+    async fn an_unreadable_head_still_gets_a_detach_attempt() {
+        let base = test_support::scratch("handoff_unreadable");
+        let repo = base.join("empty");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = crate::adapters::git::SystemGitRunner;
+        assert!(
+            crate::ports::git::GitRunner::run(&git, &repo, &["init", "-q"])
+                .unwrap()
+                .success()
+        );
+        let wt = crate::worktree::WorktreeManager::new(crate::adapters::git::SystemGitRunner);
+        // No commits: `rev-parse --abbrev-ref HEAD` fails, so this is the
+        // "cannot read" flavour of `None`, not the detached one.
+        assert!(wt.head_branch(&repo).is_none());
+
+        let mut engine = ingest_test_engine().await;
+        let mut design = engine.settings.workflows[0].clone();
+        design.name = "design".to_string();
+        design.mode = WorkflowMode::Plan;
+        design.profile = Some(crate::config::Profile::Design);
+        engine.settings.workflows.push(design);
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("k1"), "one"),
+            )
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        engine
+            .db
+            .set_worktree(id, repo.to_str().unwrap(), None, "HEAD")
+            .unwrap();
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+
+        // The handoff still completes — the detach is best-effort and its
+        // failure is logged, never fatal to the ingest.
+        let ack = engine
+            .on_task_submit(
+                "slack".into(),
+                "design".into(),
+                delivery("C1:100", Some("k2"), "two"),
+            )
+            .unwrap();
+        assert_eq!(ack.status, TaskSubmitStatus::Accepted);
+        let row = engine.db.get_task(id).unwrap().unwrap();
+        assert_eq!(row.workflow, "design");
+        // The assertion that actually pins the behaviour: the read-only path
+        // ran and forgot the branch. Asserting only the ack would stay green
+        // if the `head_branch().is_none()` early return came back.
+        assert!(
+            row.branch.is_none(),
+            "the read-only path must run even when HEAD cannot be read"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The worktree is gone from disk (cleanup removed it, or an operator
+    /// did): there is nothing to detach, but `acquire_worktree` re-creates it
+    /// **from `tasks.branch`** and would put the read-only stage back on the
+    /// previous stage's branch. Clearing the column is what makes re-creation
+    /// hand over a detached worktree instead (#568 review).
+    #[tokio::test]
+    async fn a_removed_worktree_still_loses_its_branch_for_a_read_only_stage() {
+        let mut engine = ingest_test_engine().await;
+        let mut design = engine.settings.workflows[0].clone();
+        design.name = "design".to_string();
+        design.mode = WorkflowMode::Plan;
+        design.profile = Some(crate::config::Profile::Design);
+        engine.settings.workflows.push(design);
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("k1"), "one"),
+            )
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        // Recorded, but not on disk — exactly what `cleanup = immediate` or an
+        // elapsed retention leaves behind.
+        engine
+            .db
+            .set_worktree(id, "/nonexistent/wt", Some("feat/prev"), "HEAD")
+            .unwrap();
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "design".into(),
+                delivery("C1:100", Some("k2"), "two"),
+            )
+            .unwrap();
+
+        let row = engine.db.get_task(id).unwrap().unwrap();
+        assert_eq!(row.workflow, "design");
+        assert!(
+            row.branch.is_none(),
+            "re-creation must hand the read-only stage a detached worktree"
+        );
+    }
+
+    /// Handing to a stage that is **not** read-only leaves the worktree on its
+    /// branch: that is the pipeline continuing its own work, and detaching
+    /// would make the next stage start over.
+    #[tokio::test]
+    async fn a_writing_stage_keeps_the_inherited_branch() {
+        let base = test_support::scratch("handoff_keep");
+        let repo = test_support::bare_origin_and_clone(&base);
+        let git = crate::adapters::git::SystemGitRunner;
+        let wt = crate::worktree::WorktreeManager::new(crate::adapters::git::SystemGitRunner);
+        for args in [
+            &["switch", "-c", "feat/prev"][..],
+            &["commit", "--allow-empty", "-m", "stage one"][..],
+        ] {
+            assert!(
+                crate::ports::git::GitRunner::run(&git, &repo, args)
+                    .unwrap()
+                    .success(),
+                "{args:?}"
+            );
+        }
+
+        let mut engine = ingest_test_engine().await;
+        let mut second = engine.settings.workflows[0].clone();
+        second.name = "more-implement".to_string();
+        second.profile = Some(crate::config::Profile::Implement);
+        engine.settings.workflows.push(second);
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("k1"), "one"),
+            )
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        engine
+            .db
+            .set_worktree(id, repo.to_str().unwrap(), Some("feat/prev"), "HEAD")
+            .unwrap();
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "more-implement".into(),
+                delivery("C1:100", Some("k2"), "two"),
+            )
+            .unwrap();
+
+        assert_eq!(
+            wt.head_branch(&repo).as_deref(),
+            Some("feat/prev"),
+            "a writing stage continues on the branch it inherited"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A re-delivery of a key the ledger already holds changes nothing, even

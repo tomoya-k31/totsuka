@@ -1650,6 +1650,26 @@ impl StateDb {
         Ok(HandoffOutcome::HandedOff)
     }
 
+    /// Forget the branch a task's worktree was on (#568).
+    ///
+    /// Handing a conversation to a **read-only** stage detaches its worktree
+    /// so the stage is not blamed for a branch the previous one made. The
+    /// detach alone is not enough: if the worktree is no longer on disk,
+    /// `acquire_worktree` re-creates it from this column and puts it straight
+    /// back on that branch, reproducing the very failure the detach avoids.
+    /// Clearing the column makes re-creation hand over a detached worktree,
+    /// which is what a read-only stage should start from.
+    ///
+    /// The branch itself is untouched — this forgets a pointer, not work. A
+    /// later writing stage records whatever branch its agent chooses.
+    pub fn clear_branch(&self, id: i64) -> Result<(), StateError> {
+        self.conn.execute(
+            "UPDATE tasks SET branch = NULL, updated_at = ?1 WHERE id = ?2",
+            params![self.clock.now_rfc3339(), id],
+        )?;
+        Ok(())
+    }
+
     /// Requeue a task **and** put the batch of messages its failed run was
     /// given back on the queue, in one transaction (#242).
     ///

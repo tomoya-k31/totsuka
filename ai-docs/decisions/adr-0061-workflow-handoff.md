@@ -4,16 +4,14 @@ title: ADR-0061 列パイプラインの段間は、会話を配送元のワー�
 description: "同一 issue を列で受け渡す 2 段ワークフロー（design→implement）が動くようにするための設計。terminal な会話に別ワークフローの配送が届いたら workflow / mode / source_payload を 1 トランザクションで付け替えて Reopen する。実行中の会話は台帳に書かずに見送る。全自動ループを解禁する副作用に対しては、列を節点とするグラフの閉路検出を validate に入れる。会話行を段ごとに分ける案・実行中の乗り換え・opt-in フラグは不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/565
 tags: [decision, core, workflow, ingest, conversation, pipeline, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-26T21:30:00+09:00 }
-verified:
-  - { by: human:tomoya-k31, at: 2026-08-26T12:15:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-26T21:55:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
 
 # Status
 
-stable。実装・**実機検収（2026-08-26）**まで完了。
+stable。実装・**実機検収（2026-08-26）**まで完了。ただし #568 の修正で引き渡しの挙動（read-only 段への detach と `branch` 列のクリア、掃除ガードの到達可能性判定）が変わったため、**その部分は再検収が要る** — `verified` はいったん外してある。
 
 [ADR-0059](/decisions/adr-0059-task-claim-exclusion.md) §5 の「段間 handoff は別 issue」を**解消する**決定であり、同 ADR が入れた「別ワークフロー配送は破棄」を**置き換える**。[ADR-0015](/decisions/adr-0015-conversation-task-identity.md) の会話同一性（1 会話 = 1 行）は**不変** — 変わるのは、その行が属するワークフローが固定ではなくなること。
 
@@ -97,6 +95,8 @@ append・Reopen・3 列更新は 1 トランザクション。途中で落ちて
 
 ## 既知の限界（受容・文書化）
 
+- **read-only 段へ引き渡すときは worktree を detach し、`branch` 列も忘れる**（[#568](https://github.com/tomoya-k31/totsuka/issues/568)）。引き渡しは worktree を持ち越すので、implement 段がブランチに載せた worktree を design 段が引き継ぐと、read-only 検査（[ADR-0045](/decisions/adr-0045-read-only-is-not-guaranteed.md)）が「エージェントが git を実行した」と判定して**タスクを失敗させ pane を閉じる** — 実機では質問待ちのエージェントが 3 秒で殺され、何を聞かれていたのか誰も読めなかった。検査に引き渡しを教えるのではなく、**検査が拠り所にしている不変条件（worktree は detached で渡る）を回復させる**: 引き渡し先の profile が read-only なら、その場で `git switch --detach` し、あわせて `tasks.branch` を消す。**列を消すほうが本体である** — worktree が既に掃除で消えている場合、`acquire_worktree` はこの列から再作成して**ブランチに載せ直す**ので、detach だけでは同じ失敗に戻る。ブランチ ref は残るので前段の作業は失われず、read-only 段が**自分で**ブランチを作った場合は従来どおり検出され、従来どおり止められる。
+- **detach は掃除の data-loss ガードに引っかかっていた**（同 #568 のレビューで発覚）。`is_detached_with_commits` は「どの ref からも到達できない commit」を守るはずだったが、実装は `base..HEAD` を数えるだけで、**ブランチの先頭で detached になった worktree をそのまま「失われる commit あり」と判定**していた。結果 `decide_cleanup` が毎回 `Dirty` を返し、worktree も pane も永久に残る。`--not --branches --remotes` を足して実装を doc の意味へ合わせた（本来の検出対象＝ブランチを作らずコミットした場合は引き続き 1 件として捕まる。実 git で両方確認済み）。
 - **`initial_prompt` は次の段で再提示されない。** 引き渡された会話は必ず resume で dispatch され、`initial_prompt` は「新規会話のときだけ」入る（#415 / [ADR-0038](/decisions/adr-0038-workflow-initial-prompt.md)。開始宣言を会話の途中で再入力するとスキルが再起動して文脈を壊すため）。引き渡しは新しい会話ではなく同じ会話の継続なので、この規約に**従っている**。ただし「次の段は次の段の指示で走る」（§2 の `source_payload`）から `initial_prompt` まで及ぶと読まないこと — 及ばない。
 - **段ごとに `agent` / `tool` を変えると、前段のセッション id が次段のツールへ渡る。** `latest_session` はどのツールが作ったセッションかを見ないので、design を A、implement を B のツールに固定した構成では B に A の resume id が渡る。プラグインが `SESSION_UNRESUMABLE` を返せば retry で救われるが、それ以外のエラーは `fail_dispatch` になる。引き渡し以前は会話の `workflow` が不変だったので到達しなかった経路である。
 - **閉路検査は絡み合った群を 1 件にまとめて報告する**（§5）。1 つ直して再検証すると次が出る。`config validate` が起動ゲートなので安全側には倒れている。
@@ -107,7 +107,7 @@ append・Reopen・3 列更新は 1 トランザクション。途中で落ちて
 
 実行中の配送を台帳に書かずに見送る判断も実地で裏が取れた: 実行中に列を移した配送は無視され、段が終端になった後の poll で同じ lane 入場が**一度だけ**刻まれて引き渡された。`Failed` からの引き渡しも観測している。
 
-**ただし逆向き（implement → design）には未解決の問題がある。** 前段がブランチへ載せた worktree を read-only profile が引き継ぐため read-only 検査が failed にし、その診断が「エージェントが git を実行した」と**誤った原因を名指しする**（判定自体は妥当）。→ [#568](https://github.com/tomoya-k31/totsuka/issues/568)
+**逆向き（implement → design）で見つかった問題は解消した**（worktree が残っている場合も、掃除で消えている場合も）。 前段がブランチへ載せた worktree を read-only profile が引き継ぐと、read-only 検査が failed にしたうえで**質問待ちのエージェントの pane を閉じていた**（[#568](https://github.com/tomoya-k31/totsuka/issues/568)）。引き渡し時に detach して不変条件を回復させることで直した（上の「既知の限界」参照）。
 
 # Alternatives considered
 
