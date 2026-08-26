@@ -297,6 +297,31 @@ fn second_database_response() -> Value {
 
 /// A poll visits every configured database, and each one's `repos` gates its
 /// own pages (#542).
+/// A mistyped trigger key used to be dropped, which does not narrow the
+/// trigger — it *widens* it to "no condition" (#574).
+#[tokio::test]
+async fn an_unknown_trigger_key_fails_initialize() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    let params = json!({
+        "protocol_version": "0.5.1",
+        "config": init_config(),
+        "projects": two_databases().0,
+        "repositories": two_databases().1,
+        "workflows": [
+            { "workflow": "design", "trigger": { "stauts": "実装待ち" } }
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let error = resp.error.expect("initialize must fail");
+    assert!(error.message.contains("stauts"), "{error:?}");
+    assert!(error.message.contains("`status`"), "{error:?}");
+    assert!(error.message.contains("`filter`"), "{error:?}");
+    // The poll loop never started, so nothing is submitted either.
+    harness.assert_no_task(Duration::from_millis(200)).await;
+}
+
 #[tokio::test]
 async fn a_poll_walks_every_database_and_each_one_gates_its_own_repos() {
     let shared = Shared::default();

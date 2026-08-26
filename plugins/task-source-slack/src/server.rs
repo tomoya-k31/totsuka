@@ -15,7 +15,7 @@ use plugin_protocol::methods::{
     ResultPublishParams, TaskUpdateStatusParams,
 };
 use plugin_protocol::{Capabilities, OutputCapability, RequestId, method};
-use plugin_sdk::{LineHandler, LookupClient, Reply, SubmitClient};
+use plugin_sdk::{LineHandler, LookupClient, Reply, SubmitClient, unknown_trigger_keys};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -60,6 +60,14 @@ pub trait TransportFactory {
 /// existed to stop. The Orchestrator's own value-type check went away with
 /// `Trigger::matches` (#554), so this plugin is the only place left that can
 /// refuse it.
+/// The `[[workflows]].trigger` keys this source reads (#574).
+///
+/// Kept beside `workflow_reactions` because that is what makes them true.
+/// `initialize` rejects every other key, so a typo cannot silently turn a
+/// reaction workflow into the plain-mention catch-all — add a key here in the
+/// same edit that teaches the reader to read it.
+const TRIGGER_KEYS: &[&str] = &["reaction"];
+
 fn workflow_reactions(
     workflows: &[plugin_protocol::methods::WorkflowInfo],
 ) -> Result<Vec<WorkflowTrigger>, Vec<String>> {
@@ -329,6 +337,12 @@ where
                     .into(),
             );
         }
+        // Trigger keys are this plugin's vocabulary, so this is the only place
+        // that can tell a typo from a condition (#574). Without it an unread
+        // key is dropped and the trigger matches *more* than written — for
+        // Slack that means a workflow silently becoming the plain-mention
+        // catch-all.
+        errors.extend(unknown_trigger_keys(&init.workflows, TRIGGER_KEYS));
         // Reaction triggers arrive on this call as `[[workflows]].trigger.reaction`
         // (#396), so this is where they are resolved.
         let reaction_triggers = match workflow_reactions(&init.workflows)

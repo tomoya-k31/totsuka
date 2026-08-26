@@ -68,6 +68,26 @@ fn init_params() -> Value {
     })
 }
 
+/// A mistyped trigger key used to be dropped, which does not narrow the
+/// trigger — here it *widens* the workflow into the plain-mention catch-all
+/// (#574).
+#[tokio::test]
+async fn an_unknown_trigger_key_fails_initialize() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "workflows": [{ "workflow": "slack-reaction", "trigger": { "reation": "eyes" } }],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let error = resp.error.expect("initialize must fail");
+    assert!(error.message.contains("reation"), "{error:?}");
+    assert!(error.message.contains("`reaction`"), "{error:?}");
+}
+
 fn auth_ok() -> Value {
     json!({ "ok": true, "user_id": "U_ME", "user": "me", "team": "T1" })
 }

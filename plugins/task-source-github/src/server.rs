@@ -18,11 +18,11 @@ use plugin_protocol::methods::{
     TaskClaimParams, TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
-use plugin_sdk::{LineHandler, Reply, SubmitClient, poll_loop};
+use plugin_sdk::{LineHandler, Reply, SubmitClient, poll_loop, unknown_trigger_keys};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::client::{GithubClient, static_config_errors};
+use crate::client::{GithubClient, TRIGGER_KEYS, static_config_errors};
 use crate::config::GithubConfig;
 use crate::transport::GithubTransport;
 
@@ -168,6 +168,16 @@ where
                     ));
                 }
             };
+        // Trigger keys are this plugin's vocabulary, so this is the only
+        // place that can tell a typo from a condition (#574). Without it an
+        // unread key is dropped and the trigger matches *more* than written.
+        let unknown = unknown_trigger_keys(&init.workflows, TRIGGER_KEYS);
+        if !unknown.is_empty() {
+            return Reply::respond(Response::error(
+                id,
+                Error::new(error_code::CONFIG_INVALID, unknown.join("; ")),
+            ));
+        }
         let transport = self
             .factory
             .build(&config.api_url, &config.token, config.max_retries);

@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:119da35b5648b4c20f749bbaac6155dbc373d7dbcbde5ab62e2668204b9eb9ee -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:1404dd74bb2dc0b755b2d5a23e0378fce59b4d9ccd245f1c6217a657287131ad -->
 
 # 設定リファレンス
 
@@ -135,12 +135,12 @@ project = "tomo-prj"
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source のインスタンス名 |
-| `trigger` | テーブル | `{}` | トリガー条件。**totsuka は中身を解釈しない** — ソースプラグインが受け取り first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列に入った場合は、その会話がそのワークフローへ引き渡される** — 列パイプラインの次の段が、同じ worktree・同じエージェントのセッションのまま始まる。引き渡されるのは完了済みの会話だけ。実行中に届いた配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと） |
+| `trigger` | テーブル | `{}` | トリガー条件。**totsuka は中身を解釈しない** — ソースプラグインが受け取り first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列に入った場合は、その会話がそのワークフローへ引き渡される** — 列パイプラインの次の段が、同じ worktree・同じエージェントのセッションのまま始まる。引き渡されるのは完了済みの会話だけ。実行中に届いた配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと） **この表の未知キーは起動時の硬い失敗になる。** トリガーはキー単位で読まれるので、読み手の居ないキーは捨てられ、条件が 1 つ消える —— つまりタイポはトリガーを**狭めず広げる**（`assinee` と書くと「条件なし」になり、除外したかったタスクにこそ発火する）。エラーはそのソースが読む有効キーを列挙するので、移行案内も兼ねる。`trigger = {}`（catch-all）はキーが無いので常に有効 |
 | `profile` | enum? | なし | `answer` / `triage` / `design` / `implement` のいずれか。`mode` / `output` / `verification` をまとめて決める |
 | `mode` | enum | `profile` が無ければ必須 | `plan` / `implement` |
 | `agent` | string | 必須 | agent_ide のインスタンス名 |
 | `output` | enum | `profile` が無ければ必須 | `source` / `none` |
-| `on_start` | `{ set_status = "..." }`? | なし | タスクをエージェントへ渡す直前にソース側のステータスを更新する。実行中であることがボードに映り、多人数運用では `in_progress_statuses` により他メンバーのインスタンスがそのタスクを取り込まなくなる。未設定なら何も書かない。**設定するなら `on_failure` も設定すること** — 失敗時に列が実行中のまま残り、ボードと実態が食い違う |
+| `on_start` | `{ set_status = "..." }`? | なし | タスクをエージェントへ渡す直前にソース側のステータスを更新する。実行中であることがボードに映り、多人数運用では `in_progress_statuses` により他メンバーのインスタンスがそのタスクを取り込まなくなる。未設定なら何も書かない。**設定するなら `on_failure` も設定すること** — 失敗時に列が実行中のまま残り、ボードと実態が食い違う **`on_start` / `on_success` / `on_failure` の未知キーは起動時エラーになる**（有効キーは `set_status` のみ）。検査が要るのは壊れ方が無言だからで、`set_stauts` と書くと**タスクは成功したのにボードだけ動かない** |
 | `on_success` | `{ set_status = "..." }`? | なし | 成功時にソース側のステータスを更新する |
 | `on_failure` | `{ set_status = "..." }`? | なし | 失敗時にソース側のステータスを更新する。再試行可能な失敗では書き戻さない |
 | `verification` | enum | `llm` | 完了申告の検収方式。`llm`（セッション内で検収）/ `human`（`totsuka task verify` を待つ）/ `none`。`profile` とは併記できない |

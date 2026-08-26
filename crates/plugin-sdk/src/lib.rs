@@ -16,6 +16,9 @@
 //! - [`poll`] — [`poll_loop`]: a jittered, non-overlapping fetch→submit
 //!   timer for polling-style sources (GitHub, Notion) migrating off the
 //!   deprecated `tasks/fetch`.
+//! - [`trigger`] — [`unknown_trigger_keys`]: reject `[[workflows]].trigger`
+//!   keys the source does not read, so a typo fails startup instead of
+//!   silently widening the trigger (#574).
 //!
 //! Out of scope by design: HTTP clients, LLM helpers, and config schemas —
 //! those stay source-specific.
@@ -27,9 +30,11 @@ pub mod lookup;
 pub mod poll;
 pub mod runtime;
 pub mod submit;
+pub mod trigger;
 
 pub use dispatch::{Reply, TaskSourceHandler, TaskSourceServer, parse_params, request_id};
 pub use lookup::{Lookup, LookupClient};
 pub use poll::poll_loop;
 pub use runtime::{LineHandler, Stdio, Writer, serve};
 pub use submit::{SubmitClient, SubmitOutcome, Submitter};
+pub use trigger::unknown_trigger_keys;

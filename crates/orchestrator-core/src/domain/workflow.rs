@@ -61,6 +61,15 @@ pub struct OutcomeAction {
     pub set_status: Option<String>,
 }
 
+/// The `on_start` / `on_success` / `on_failure` keys the Orchestrator reads
+/// (#574).
+///
+/// Kept beside `OutcomeAction::from_table` because that is what makes them
+/// true. `config validate` — which `run` shares — rejects every other key, so
+/// a typo cannot silently drop a status write-back; add a key here in the same
+/// edit that teaches `from_table` to read it.
+pub const OUTCOME_ACTION_KEYS: &[&str] = &["set_status"];
+
 impl OutcomeAction {
     /// Interpret an `on_success`/`on_failure` table.
     fn from_table(table: &toml::Table) -> Self {

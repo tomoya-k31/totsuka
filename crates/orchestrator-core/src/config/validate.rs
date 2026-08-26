@@ -119,6 +119,24 @@ pub enum ValidationError {
         allowed: String,
     },
 
+    /// A key written in an `on_start` / `on_success` / `on_failure` table that
+    /// the Orchestrator does not read (#574).
+    ///
+    /// An **error**, not a passthrough, and for the same reason as
+    /// [`UnknownPromptPlaceholder`](Self::UnknownPromptPlaceholder): the table
+    /// is interpreted with `.get("…")`, so an unread key is dropped without a
+    /// word. The write-back simply never happens — the task still runs and
+    /// still succeeds, and the only symptom is a board that stops moving.
+    #[error(
+        "{referrer} sets `{key}` in `{table}`, which the Orchestrator does not read → valid keys: {allowed} (an unread key is dropped, so the status write-back would silently not happen)"
+    )]
+    UnknownOutcomeActionKey {
+        referrer: String,
+        table: &'static str,
+        key: String,
+        allowed: String,
+    },
+
     /// A key written under a `prompts` table that #465 removed.
     ///
     /// The table is still parsed (opaquely) purely so this can be raised.
@@ -298,6 +316,33 @@ where
             &wf.prompts,
             &mut errors,
         );
+    }
+
+    // `on_*` is core's table (the trigger beside it is the plugin's, #554), so
+    // this is the only place that can tell a typo from a transition. The
+    // plugins do the same for `trigger` at `initialize` (#574).
+    for wf in &cfg.workflows {
+        for (table, action) in [
+            ("on_start", &wf.on_start),
+            ("on_success", &wf.on_success),
+            ("on_failure", &wf.on_failure),
+        ] {
+            let Some(action) = action else { continue };
+            for key in action.keys() {
+                if !workflow::OUTCOME_ACTION_KEYS.contains(&key.as_str()) {
+                    errors.push(ValidationError::UnknownOutcomeActionKey {
+                        referrer: format!("workflow `{}`", wf.name),
+                        table,
+                        key: key.clone(),
+                        allowed: workflow::OUTCOME_ACTION_KEYS
+                            .iter()
+                            .map(|k| format!("`{k}`"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    });
+                }
+            }
+        }
     }
 
     // The one prompt knob left (#465). Placeholder typos are errors here rather
@@ -1021,6 +1066,77 @@ output = "source"
         let cfg = RootConfig::from_toml_str(&toml).unwrap();
         let errors = validate_static(&cfg, &env_from(&[]));
         assert!(errors.is_empty(), "unexpected: {errors:?}");
+    }
+
+    #[test]
+    fn an_unknown_on_action_key_is_rejected_and_names_the_valid_ones() {
+        let toml = r#"
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[workflows]]
+name = "impl"
+source = "github"
+trigger = { project_status = "todo" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_stauts = "done" }
+"#;
+        let cfg = RootConfig::from_toml_str(toml).unwrap();
+        let errors: Vec<String> = validate_static(&cfg, &env_from(&[]))
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let hit = errors
+            .iter()
+            .find(|e| e.contains("set_stauts"))
+            .unwrap_or_else(|| panic!("no finding for the typo: {errors:?}"));
+        assert!(hit.contains("on_success"), "names the table: {hit}");
+        assert!(hit.contains("`set_status`"), "names the valid key: {hit}");
+        // The reason this is an error rather than a passthrough: the run
+        // succeeds and only the board stops moving.
+        assert!(hit.contains("silently"), "says what breaks: {hit}");
+    }
+
+    #[test]
+    fn every_on_action_table_is_checked_and_a_correct_one_passes() {
+        let toml = r#"
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[workflows]]
+name = "impl"
+source = "github"
+trigger = { project_status = "todo" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_start = { set_status = "doing" }
+on_success = { set_status = "done" }
+on_failure = { nope = "x" }
+"#;
+        let cfg = RootConfig::from_toml_str(toml).unwrap();
+        let errors: Vec<String> = validate_static(&cfg, &env_from(&[]))
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let hits: Vec<&String> = errors
+            .iter()
+            .filter(|e| e.contains("does not read"))
+            .collect();
+        assert_eq!(hits.len(), 1, "only `on_failure` is wrong: {errors:?}");
+        assert!(hits[0].contains("on_failure"), "got {hits:?}");
     }
 
     #[test]

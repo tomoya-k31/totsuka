@@ -18,11 +18,11 @@ use plugin_protocol::methods::{
     TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
-use plugin_sdk::{LineHandler, Reply, SubmitClient, poll_loop};
+use plugin_sdk::{LineHandler, Reply, SubmitClient, poll_loop, unknown_trigger_keys};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::client::{NotionClient, static_config_errors};
+use crate::client::{NotionClient, TRIGGER_KEYS, static_config_errors};
 use crate::config::NotionConfig;
 use crate::transport::{NotionTransport, TransportSettings};
 
@@ -177,6 +177,16 @@ where
                     ));
                 }
             };
+        // Trigger keys are this plugin's vocabulary, so this is the only
+        // place that can tell a typo from a condition (#574). Without it an
+        // unread key is dropped and the trigger matches *more* than written.
+        let unknown = unknown_trigger_keys(&init.workflows, TRIGGER_KEYS);
+        if !unknown.is_empty() {
+            return Reply::respond(Response::error(
+                id,
+                Error::new(error_code::CONFIG_INVALID, unknown.join("; ")),
+            ));
+        }
         let transport = self.factory.build(settings(&config));
         let client = Arc::new(NotionClient::new(config, transport));
         let poll = if init.workflows.is_empty() {
