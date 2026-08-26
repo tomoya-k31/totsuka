@@ -4,14 +4,20 @@ title: ADR-0063 取り込みの assignee ゲートは workflow ごとの trigger
 description: "プラグイン全体でハードコードされていた F-08 の取り込みゲート（未アサイン または 自分）を、[[workflows]].trigger.assignee へ移す決定。@me / @none / @any / login / 配列の語彙を持ち、省略時の既定が旧ゲートと同一なので二重ゲートにならない。未アサインを人間の取り分として残す運用が初めて書けるようになる。式言語・二重ゲートの維持・bot アカウントの分離は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/572
 tags: [decision, config, workflow, trigger, assignee, ingest, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-27T05:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T05:35:00+09:00 }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-26T20:11:00Z }
 status: stable
 owner: tomoya-k31
 ---
 
 # Status
 
-stable。実装完了、実機検収は未了。
+stable。実装・**実機検収（2026-08-27）**まで完了。
+
+検収は**同じ issue で assignee だけを変える A/B** で取った。片側だけだと「fetch が空振りしただけ」と区別できないためで、単体テストで対にしてある形をそのまま実機へ持ち込んでいる。`trigger = { status = "Todo", assignee = "@me" }` の下で、`Todo` 列にある**未アサインの** issue は 2 ポーリングを超えて（4 回観測）取り込まれず、同じ issue に `tomoya-k31` を付けた 73 秒後に `dispatched` になった。列も本文も変えていない。
+
+あわせて claim の縮退（§Consequences）も確認できた: 取り込み後も assignee は `tomoya-k31` 1 人のままで、self-assign の書き込みは発生していない。
 
 [ADR-0062](/decisions/adr-0062-status-vocabulary.md) が揃えた `trigger` の語彙に乗る決定であり、同じテーブルにキーを 1 つ足す。
 

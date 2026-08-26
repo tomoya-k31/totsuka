@@ -4,14 +4,18 @@ title: ADR-0062 status は trigger と on_* で同じ綴りにし、status_map �
 description: "同じ状態列を指す 2 つのキーが別名（trigger.project_status / on_*.set_status）で、しかも片方だけが status_map の写像を通っていた問題への決定。両側を status に統一し、写像表を廃止して全キーがボードの option 名を生で指すようにする。あわせて trigger 内の status を core 予約キーとして正式化する。式言語・両側 project_status・on_* のスカラー化・in_progress_statuses などの改名は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/575
 tags: [decision, config, workflow, trigger, status, breaking, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-27T03:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-27T05:35:00+09:00 }
+verified:
+  - { by: human:tomoya-k31, at: 2026-08-26T20:11:00Z }
 status: stable
 owner: tomoya-k31
 ---
 
 # Status
 
-stable。実装完了、実機検収は未了。
+stable。実装・**実機検収（2026-08-27）**まで完了。
+
+検収は「旧綴りが無言にならないこと」と「新綴りが実際に書き戻すこと」の両方を見た。実運用と同形の e2e 設定（`[[workflows]]` 5 本、うち github 2 本）を旧綴りのまま `totsuka config validate --offline` に掛けると、`on_*` 側の 3 箇所を**すべて**名指しして exit 1 で止まる。`on_*` だけ新綴りへ直して `totsuka run` を起動すると、今度は github プラグインが `initialize` を `-32003` で落とし、`project_status` を名指しして有効キー 3 つ（`assignee` / `label` / `status`）を列挙する —— **プロセス全体が起動しない**（`launch_plugins` の `?` が伝播する）。完全移行後は `on_start = { status = "In Progress" }` と `on_success = { status = "Done" }` の**両方**が実際に ProjectsV2 のカードを動かした。
 
 [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) の「Orchestrator は `trigger` の中身を一切解釈しない」を**この 1 点について改訂する**。ADR-0058 は全体としては有効で、`deprecated` にはしない。
 
