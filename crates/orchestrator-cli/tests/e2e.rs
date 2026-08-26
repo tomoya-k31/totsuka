@@ -184,7 +184,7 @@ trigger = {{}}
 mode = "{mode}"
 agent = "mock_agent"
 output = "{output}"
-on_success = {{ set_status = "レビュー待ち" }}
+on_success = {{ status = "レビュー待ち" }}
 
 {mock_src}
 {mock_agent}

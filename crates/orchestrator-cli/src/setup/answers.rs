@@ -287,7 +287,7 @@ pub enum AnswersError {
     /// A `[statuses]` value that cannot name a column.
     ///
     /// `contains_key` is not enough: `""` passes every presence check and
-    /// renders `{ project_status = "" }`, which no task can match — a valid
+    /// renders `{ status = "" }`, which no task can match — a valid
     /// config, a green `doctor`, and a `run` that picks nothing up. Surrounding
     /// whitespace does the same thing while *looking* right. Neither is
     /// silently trimmed: altering what the operator wrote is how a file stops
@@ -498,7 +498,7 @@ implement_statuss = "Ready"
 
     /// Present is not the same as usable.
     ///
-    /// `""` satisfies `contains_key`, renders `{ project_status = "" }`, and no
+    /// `""` satisfies `contains_key`, renders `{ status = "" }`, and no
     /// task can ever match it — valid config, green `doctor`, a `run` that
     /// picks nothing up. Surrounding whitespace does the same while looking
     /// right on screen.

@@ -24,8 +24,13 @@ const QUERY_PAGE_SIZE: usize = 100;
 const MAX_FETCH_PAGES: usize = 40;
 
 /// A parsed trigger condition (workflow-defined shape, F-81). Supports a status
-/// value (`{"status": "実装待ち"}`, also accepted as `project_status`) and/or a
+/// value (`{"status": "実装待ち"}`, also accepted as `status`) and/or a
 /// raw Notion `filter` object passed straight to the query API.
+///
+/// `status` used to also be spelled `status`; the alias went away with
+/// #575. It cost more than a second spelling: the Orchestrator's cycle check
+/// reads `status` out of the trigger, so a workflow written the other way was
+/// invisible to it and could close a loop without `config validate` noticing.
 #[derive(Debug, Default)]
 struct TriggerFilter {
     status: Option<String>,
@@ -47,13 +52,12 @@ struct TriggerFilter {
 /// `initialize` rejects every other key, so a typo cannot silently widen a
 /// trigger — add a key here in the same edit that teaches the parser to read
 /// it.
-pub const TRIGGER_KEYS: &[&str] = &["filter", "project_status", "status"];
+pub const TRIGGER_KEYS: &[&str] = &["filter", "status"];
 
 impl TriggerFilter {
     fn parse(trigger: &Value, instructions_kind: Option<&str>) -> Self {
         let status = trigger
             .get("status")
-            .or_else(|| trigger.get("project_status"))
             .and_then(Value::as_str)
             .map(str::to_string);
         Self {
@@ -392,7 +396,7 @@ impl<T: NotionTransport> NotionClient<T> {
                     .into(),
             )
         })?;
-        let target = self.config.map_status(status).to_string();
+        let target = status.to_string();
         let kind = self.config.property_map.status_kind;
 
         // Verify the option exists on the property (F-84 clear error), on the
@@ -401,7 +405,7 @@ impl<T: NotionTransport> NotionClient<T> {
         let options = self.status_options(database, status_prop).await?;
         if !options.iter().any(|o| o == &target) {
             return Err(NotionError::NotFound(format!(
-                "unknown status `{target}` for property `{status_prop}` (options: {}) → add it in Notion or fix `notion.status_map` in config.toml",
+                "unknown status `{target}` for property `{status_prop}` (options: {}) → add it in Notion, or write the property's exact option name",
                 options.join(", ")
             )));
         }
@@ -574,11 +578,9 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
                 .into(),
         );
     }
-    if config.property_map.status.is_none()
-        && (!config.status_map.is_empty() || !config.in_progress_statuses.is_empty())
-    {
+    if config.property_map.status.is_none() && !config.in_progress_statuses.is_empty() {
         errors.push(
-            "`status_map`/`in_progress_statuses` set but `property_map.status` is unset → map the status property".into(),
+            "`in_progress_statuses` is set but `property_map.status` is unset → map the status property".into(),
         );
     }
     errors
@@ -594,7 +596,7 @@ mod tests {
 
     #[test]
     fn trigger_matches_status_alias() {
-        let f = TriggerFilter::parse(&json!({ "project_status": "実装待ち" }), None);
+        let f = TriggerFilter::parse(&json!({ "status": "実装待ち" }), None);
         assert!(f.matches(Some("実装待ち")));
         assert!(!f.matches(Some("実装中")));
         let empty = TriggerFilter::parse(&json!({}), None);

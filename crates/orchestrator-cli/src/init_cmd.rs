@@ -65,10 +65,10 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # [[workflows]]
 # name = "implement"
 # source = "github"
-# trigger = { project_status = "Ready to implement" }
+# trigger = { status = "Ready to implement" }
 # profile = "implement"          # resolves mode / output / verification
 # agent = "herdr"
-# on_success = { set_status = "In review" }
+# on_success = { status = "In review" }
 #
 # `profile` resolves `output` for you. Do not write `output = "source"` for a
 # github or notion workflow: those plugins publish nothing (the agent writes

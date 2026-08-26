@@ -21,13 +21,13 @@
     "workflows": [
       {
         "workflow": "design",
-        "trigger": { "project_status": "設計待ち" },
+        "trigger": { "status": "設計待ち" },
         "instructions_kind": "design",
         "options": { "publish": "direct" }
       },
       {
         "workflow": "implement",
-        "trigger": { "project_status": "実装待ち" },
+        "trigger": { "status": "実装待ち" },
         "instructions_kind": "implement",
         "task_id_prefix": "impl"
       }

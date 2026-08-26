@@ -8,7 +8,7 @@
 //! the operator meant to exclude.
 //!
 //! "Verbatim" is not quite "untouched": the Orchestrator does read
-//! `project_status` out of the table, but only to build the column graph its
+//! `status` out of the table, but only to build the column graph its
 //! cycle check walks — lexically, comparing two operator-written strings
 //! without acting on either. Nothing on the core side reacts to a trigger key's
 //! *value*, which is why this check has to live in the plugin.
@@ -82,11 +82,11 @@ mod tests {
     #[test]
     fn known_keys_and_the_catch_all_pass() {
         let workflows = [
-            workflow("a", json!({ "project_status": "Todo", "label": "bug" })),
+            workflow("a", json!({ "status": "Todo", "label": "bug" })),
             workflow("catch-all", json!({})),
         ];
         assert!(
-            unknown_trigger_keys(&workflows, &["project_status", "label"]).is_empty(),
+            unknown_trigger_keys(&workflows, &["status", "label"]).is_empty(),
             "every key is read by this source"
         );
     }
@@ -94,10 +94,10 @@ mod tests {
     #[test]
     fn a_typo_is_reported_and_names_the_valid_keys() {
         let workflows = [workflow("a", json!({ "project_stat": "Todo" }))];
-        let errors = unknown_trigger_keys(&workflows, &["project_status", "label"]);
+        let errors = unknown_trigger_keys(&workflows, &["status", "label"]);
         assert_eq!(errors.len(), 1, "got {errors:?}");
         assert!(errors[0].contains("`project_stat`"), "got {errors:?}");
-        assert!(errors[0].contains("`project_status`"), "got {errors:?}");
+        assert!(errors[0].contains("`status`"), "got {errors:?}");
         assert!(errors[0].contains("`label`"), "got {errors:?}");
         // The reason the check exists: without it this trigger matches
         // everything rather than nothing.
@@ -110,14 +110,14 @@ mod tests {
             workflow("a", json!({ "x": 1, "y": 2 })),
             workflow("b", json!({ "z": 3 })),
         ];
-        let errors = unknown_trigger_keys(&workflows, &["project_status"]);
+        let errors = unknown_trigger_keys(&workflows, &["status"]);
         assert_eq!(errors.len(), 3, "got {errors:?}");
     }
 
     #[test]
     fn a_non_table_trigger_is_reported_rather_than_skipped() {
         let workflows = [workflow("a", json!("Todo"))];
-        let errors = unknown_trigger_keys(&workflows, &["project_status"]);
+        let errors = unknown_trigger_keys(&workflows, &["status"]);
         assert_eq!(errors.len(), 1, "got {errors:?}");
         assert!(errors[0].contains("not a table"), "got {errors:?}");
     }

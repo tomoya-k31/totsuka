@@ -80,7 +80,7 @@ trigger = {}
 mode = "implement"
 agent = "mock_agent"
 output = "none"
-on_success = { set_status = "レビュー待ち" }
+on_success = { status = "レビュー待ち" }
 "#,
     )
     .unwrap();
@@ -135,8 +135,8 @@ trigger = {{}}
 mode = "{mode}"
 agent = "mock_agent"
 output = "{output}"
-on_success = {{ set_status = "レビュー待ち" }}
-on_failure = {{ set_status = "失敗" }}
+on_success = {{ status = "レビュー待ち" }}
+on_failure = {{ status = "失敗" }}
 "#
     ))
     .unwrap();
@@ -321,8 +321,8 @@ trigger = {}
 mode = "implement"
 agent = "mock_agent"
 output = "none"
-on_start = { set_status = "実装中" }
-on_success = { set_status = "レビュー待ち" }
+on_start = { status = "実装中" }
+on_success = { status = "レビュー待ち" }
 "#,
     )
     .unwrap();
@@ -456,8 +456,8 @@ trigger = {}
 mode = "implement"
 agent = "mock_agent"
 output = "none"
-on_start = { set_status = "実装中" }
-on_success = { set_status = "レビュー待ち" }
+on_start = { status = "実装中" }
+on_success = { status = "レビュー待ち" }
 "#,
     )
     .unwrap();
@@ -589,7 +589,7 @@ trigger = {}
 mode = "implement"
 agent = "mock_agent"
 output = "none"
-on_failure = { set_status = "失敗" }
+on_failure = { status = "失敗" }
 "#,
     )
     .unwrap();

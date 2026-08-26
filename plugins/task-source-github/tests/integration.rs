@@ -153,7 +153,6 @@ fn init_config() -> Value {
     json!({
         "token": "ghp_test", "github_login": "me",
         "in_progress_statuses": ["実装中"],
-        "status_map": { "レビュー待ち": "In Review" },
         // The fetch cadence is this plugin's own `[github]` key since 0.6.0
         // (#554) — it arrives inside `config`, not beside it.
         "poll_interval_secs": 60,
@@ -248,7 +247,7 @@ async fn initialize_then_update_status() {
     let result = resp.result.expect("initialize result");
     assert_eq!(result["capabilities"]["outputs"], json!([]));
 
-    // task/update_status → maps レビュー待ち → "In Review", resolves ids, mutates.
+    // task/update_status → resolves the ids for "In Review", mutates.
     shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
         "id": "PROJ_1",
         "field": { "id": "FIELD_1", "options": [
@@ -266,7 +265,7 @@ async fn initialize_then_update_status() {
         &mut srv,
         3,
         "task/update_status",
-        json!({ "task_id": "I_1", "status": "レビュー待ち" }),
+        json!({ "task_id": "I_1", "status": "In Review" }),
     )
     .await;
     assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
@@ -685,7 +684,7 @@ async fn ingests_task_assigned_to_me_among_multiple_assignees() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
+            { "workflow": "design", "trigger": { "status": "実装待ち" } }
         ],
     });
     call(&mut srv, 1, "initialize", params).await;
@@ -725,7 +724,7 @@ async fn update_status_finds_item_on_a_later_page() {
         &mut srv,
         2,
         "task/update_status",
-        json!({ "task_id": "I_1", "status": "レビュー待ち" }),
+        json!({ "task_id": "I_1", "status": "In Review" }),
     )
     .await;
     assert!(
@@ -754,7 +753,7 @@ async fn initialize_with_triggers_polls_and_submits() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
+            { "workflow": "design", "trigger": { "status": "実装待ち" } }
         ],
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
@@ -771,7 +770,7 @@ async fn initialize_with_triggers_polls_and_submits() {
     assert_eq!(task["status"], "実装待ち");
     assert_eq!(task["labels"], json!(["bug"]));
     assert!(task.get("assignee").is_none() || task["assignee"].is_null());
-    // Lane-entry identity (#556): a `project_status` trigger keys the
+    // Lane-entry identity (#556): a `status` trigger keys the
     // delivery on the status cell's server-issued `updatedAt`, so a human
     // moving the card back into the column mints a *new* message (→ reopen)
     // while every re-delivery of the same entry dedups.
@@ -799,7 +798,7 @@ async fn an_unknown_trigger_key_fails_initialize() {
     let resp = call(&mut srv, 1, "initialize", params).await;
     let error = resp.error.expect("initialize must fail");
     assert!(error.message.contains("project_stat"), "{error:?}");
-    assert!(error.message.contains("`project_status`"), "{error:?}");
+    assert!(error.message.contains("`status`"), "{error:?}");
     assert!(error.message.contains("`label`"), "{error:?}");
     // The poll loop never started, so nothing is submitted either.
     harness.assert_no_task(Duration::from_millis(200)).await;
@@ -834,7 +833,7 @@ async fn label_only_triggers_mint_no_message_key() {
     harness.assert_no_task(Duration::from_millis(200)).await;
 }
 
-/// The defensive arm: a `project_status` trigger, but the API answered no
+/// The defensive arm: a `status` trigger, but the API answered no
 /// `updatedAt` for the status cell. There is no lane-entry identity to mint,
 /// so the delivery degrades to the at-most-once `None` key rather than to a
 /// key that would collide across genuinely different entries. The field is
@@ -865,7 +864,7 @@ async fn a_status_cell_without_updated_at_mints_no_message_key() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
+            { "workflow": "design", "trigger": { "status": "実装待ち" } }
         ],
     });
     call(&mut srv, 1, "initialize", params).await;
@@ -917,7 +916,7 @@ async fn a_poll_walks_every_board_and_each_board_gates_its_own_repos() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "design", "trigger": { "project_status": "実装待ち" } }
+            { "workflow": "design", "trigger": { "status": "実装待ち" } }
         ],
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
@@ -1013,7 +1012,7 @@ async fn update_status_scans_past_a_board_that_does_not_hold_the_item() {
         &mut srv,
         2,
         "task/update_status",
-        json!({ "task_id": "I_20", "status": "レビュー待ち" }),
+        json!({ "task_id": "I_20", "status": "In Review" }),
     )
     .await;
     assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
@@ -1064,7 +1063,7 @@ async fn a_board_without_the_target_column_does_not_abort_the_search() {
         &mut srv,
         2,
         "task/update_status",
-        json!({ "task_id": "I_20", "status": "レビュー待ち" }),
+        json!({ "task_id": "I_20", "status": "In Review" }),
     )
     .await;
     assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
@@ -1096,7 +1095,7 @@ async fn a_missing_option_on_the_items_own_board_is_an_error() {
         &mut srv,
         2,
         "task/update_status",
-        json!({ "task_id": "I_1", "status": "レビュー待ち" }),
+        json!({ "task_id": "I_1", "status": "In Review" }),
     )
     .await;
     let err = resp
@@ -1138,7 +1137,7 @@ async fn update_status_for_an_item_on_no_board_names_every_board() {
         &mut srv,
         2,
         "task/update_status",
-        json!({ "task_id": "I_404", "status": "レビュー待ち" }),
+        json!({ "task_id": "I_404", "status": "In Review" }),
     )
     .await;
     let err = resp.error.expect("an item on no board must fail");

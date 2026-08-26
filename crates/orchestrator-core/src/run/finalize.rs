@@ -233,7 +233,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             StatusMoment::Success => wf.on_success.as_ref(),
             StatusMoment::Failure => wf.on_failure.as_ref(),
         };
-        let Some(status) = action.and_then(|a| a.set_status.clone()) else {
+        let Some(status) = action.and_then(|a| a.status.clone()) else {
             return;
         };
         let Some(source) = self.plugins.sources.get(&record.source) else {

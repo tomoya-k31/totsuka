@@ -9,13 +9,20 @@
 //! Trigger *meaning* is owned by the task source plugin end to end (0.6.0,
 //! #554): it filters on the trigger it receives at `initialize`, runs
 //! first-match (F-81) on its own side, and **names the resulting workflow on
-//! `task/submit`**. The Orchestrator holds the trigger as an opaque table it
-//! passes along and never reads.
+//! `task/submit`**. The Orchestrator carries the trigger table along and
+//! matches nothing with it.
+//!
+//! One key inside it is the Orchestrator's own, and is spelled out as such
+//! (#575): `status` names the source's status column, and the cycle check
+//! reads it to build the column graph it walks. That is the whole of core's
+//! interest — it compares the string to a write-back's, and never asks a plugin
+//! what the column is or whether a task matches. A source that has no status
+//! column (Slack) is free to reject the key as unknown.
 //!
 //! It used to re-check the pushed task's `status`/`labels` against the trigger
 //! as well. That protected nothing — both fields are the plugin's own report
 //! of the task, so the check and the thing checked came from one place — while
-//! requiring every trigger key a source wanted (`reaction`, `project_status`)
+//! requiring every trigger key a source wanted (`reaction`, `status`)
 //! to be a word in this module's vocabulary.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,8 +35,10 @@ use crate::config::{
 
 /// A trigger condition: an opaque key-value set the plugin filters on.
 ///
-/// Opaque all the way through since 0.6.0 (#554) — the Orchestrator carries it
-/// to `initialize` and never interprets a key of it.
+/// Opaque as a *filter* since 0.6.0 (#554) — the Orchestrator carries it to
+/// `initialize` and matches no task with it. The one key it reads is `status`,
+/// which is core's own (#575) and is used lexically, for the cycle check's
+/// column graph.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trigger(toml::Table);
 
@@ -57,8 +66,8 @@ impl Trigger {
 /// A source-side status transition applied when a task ends (F-84).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OutcomeAction {
-    /// Status to set on the source (`set_status`).
-    pub set_status: Option<String>,
+    /// Status to set on the source (`status`).
+    pub status: Option<String>,
 }
 
 /// The `on_start` / `on_success` / `on_failure` keys the Orchestrator reads
@@ -68,14 +77,18 @@ pub struct OutcomeAction {
 /// true. `config validate` — which `run` shares — rejects every other key, so
 /// a typo cannot silently drop a status write-back; add a key here in the same
 /// edit that teaches `from_table` to read it.
-pub const OUTCOME_ACTION_KEYS: &[&str] = &["set_status"];
+///
+/// The key is spelled the same as the `trigger` one it pairs with (#575): both
+/// name the source's status column, and the surrounding table says which
+/// direction it is read in.
+pub const OUTCOME_ACTION_KEYS: &[&str] = &["status"];
 
 impl OutcomeAction {
     /// Interpret an `on_success`/`on_failure` table.
     fn from_table(table: &toml::Table) -> Self {
         Self {
-            set_status: table
-                .get("set_status")
+            status: table
+                .get("status")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
         }
@@ -257,12 +270,16 @@ struct Hop<'a> {
 /// and spends real tokens. The single-workflow case (a write-back into the
 /// workflow's own trigger column) is this same check with a cycle of length 1.
 ///
-/// **Lexical only.** The Orchestrator does not interpret triggers (#554), and
-/// this reads two operator-written strings without acting on either: a
-/// plugin-side `status_map` that aliases two names onto one column is out of
-/// its sight, and so is a column shared by name across two different trackers
-/// (which is not a cycle at all — different boards, and `source` separates
-/// them here).
+/// **Lexical only.** This reads two operator-written strings without acting on
+/// either, so a column shared by name across two different trackers is out of
+/// its sight — which is not a cycle at all, since those are different boards
+/// and `source` separates them here.
+///
+/// It used to have a real blind spot as well: a plugin-side `status_map` could
+/// alias the write-back's name onto a column some workflow triggers on, and the
+/// walk compared the pre-alias string and saw nothing. #575 deleted that map,
+/// so both sides now name the board's option directly and the comparison is
+/// over the same vocabulary.
 ///
 /// **One finding per interlocking group, not per cycle.** The walk settles a
 /// column once it has been explored, so a group of workflows that contains
@@ -293,7 +310,7 @@ fn column_cycles(workflows: &[Workflow]) -> Vec<WorkflowIssue> {
                 ("on_success", &wf.on_success),
                 ("on_failure", &wf.on_failure),
             ] {
-                if let Some(to) = action.as_ref().and_then(|a| a.set_status.as_deref()) {
+                if let Some(to) = action.as_ref().and_then(|a| a.status.as_deref()) {
                     edges.entry(from).or_default().push(Hop {
                         workflow: wf.name.as_str(),
                         key,
@@ -379,10 +396,7 @@ fn walk<'a>(
 
 /// The column a workflow triggers on, when it triggers on one at all.
 fn trigger_column(wf: &Workflow) -> Option<&str> {
-    wf.trigger
-        .as_table()
-        .get("project_status")
-        .and_then(|v| v.as_str())
+    wf.trigger.as_table().get("status").and_then(|v| v.as_str())
 }
 
 #[cfg(test)]
@@ -399,20 +413,20 @@ mod tests {
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "設計待ち" }
+trigger = { status = "設計待ち" }
 mode = "plan"
 agent = "herdr"
 output = "source"
-on_success = { set_status = "設計レビュー待ち" }
+on_success = { status = "設計レビュー待ち" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "実装待ち" }
+trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
 output = "source"
-on_success = { set_status = "レビュー待ち" }
+on_success = { status = "レビュー待ち" }
 "#;
 
     #[test]
@@ -457,20 +471,20 @@ output = "none"
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "Design" }
+trigger = { status = "Design" }
 mode = "plan"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "Todo" }
+on_success = { status = "Todo" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "Todo" }
+trigger = { status = "Todo" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "Design" }
+on_success = { status = "Design" }
 "#,
         );
         let issues = validate_workflows(&workflows, |_| None);
@@ -479,6 +493,48 @@ on_success = { set_status = "Design" }
         assert_eq!(issues[0].severity, Severity::Error);
         for needle in ["design", "implement", "Design", "Todo"] {
             assert!(m.contains(needle), "route must name `{needle}`: {m}");
+        }
+    }
+
+    /// A notion cycle is caught by the same walk (#575).
+    ///
+    /// It was not, before: notion spelled its column `status` while this walk
+    /// only read `project_status`, so a notion loop closed without
+    /// `config validate` ever seeing an edge. Pinned rather than trusted to the
+    /// rename, because the failure it guards against is silent — the check
+    /// would still report "no issues" and the loop would still run forever.
+    #[test]
+    fn a_notion_column_cycle_is_caught_by_the_same_walk() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "triage"
+source = "notion"
+trigger = { status = "Inbox" }
+mode = "plan"
+agent = "herdr"
+output = "none"
+on_success = { status = "Ready" }
+
+[[workflows]]
+name = "build"
+source = "notion"
+trigger = { status = "Ready" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { status = "Inbox" }
+"#,
+        );
+        let issues = validate_workflows(&workflows, |_| None);
+        assert_eq!(issues.len(), 1, "one loop, reported once: {issues:?}");
+        assert_eq!(issues[0].severity, Severity::Error);
+        for needle in ["triage", "build", "Inbox", "Ready"] {
+            assert!(
+                issues[0].message.contains(needle),
+                "route must name `{needle}`: {}",
+                issues[0].message
+            );
         }
     }
 
@@ -496,39 +552,39 @@ on_success = { set_status = "Design" }
 [[workflows]]
 name = "wa"
 source = "github"
-trigger = { project_status = "colA" }
+trigger = { status = "colA" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "colB" }
-on_failure = { set_status = "colC" }
+on_success = { status = "colB" }
+on_failure = { status = "colC" }
 
 [[workflows]]
 name = "wb"
 source = "github"
-trigger = { project_status = "colB" }
+trigger = { status = "colB" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "colD" }
+on_success = { status = "colD" }
 
 [[workflows]]
 name = "wc"
 source = "github"
-trigger = { project_status = "colC" }
+trigger = { status = "colC" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "colD" }
+on_success = { status = "colD" }
 
 [[workflows]]
 name = "wd"
 source = "github"
-trigger = { project_status = "colD" }
+trigger = { status = "colD" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "colA" }
+on_success = { status = "colA" }
 "#,
         );
         let issues = validate_workflows(&workflows, |_| None);
@@ -550,38 +606,38 @@ on_success = { set_status = "colA" }
 [[workflows]]
 name = "a1"
 source = "github"
-trigger = { project_status = "A" }
+trigger = { status = "A" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "B" }
+on_success = { status = "B" }
 
 [[workflows]]
 name = "a2"
 source = "github"
-trigger = { project_status = "B" }
+trigger = { status = "B" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "A" }
+on_success = { status = "A" }
 
 [[workflows]]
 name = "b1"
 source = "github"
-trigger = { project_status = "X" }
+trigger = { status = "X" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "Y" }
+on_success = { status = "Y" }
 
 [[workflows]]
 name = "b2"
 source = "github"
-trigger = { project_status = "Y" }
+trigger = { status = "Y" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "X" }
+on_success = { status = "X" }
 "#,
         );
         assert_eq!(validate_workflows(&workflows, |_| None).len(), 2);
@@ -597,22 +653,22 @@ on_success = { set_status = "X" }
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "Design" }
+trigger = { status = "Design" }
 mode = "plan"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "Todo" }
+on_success = { status = "Todo" }
 
 [[workflows]]
 name = "implement"
 source = "github"
-trigger = { project_status = "Todo" }
+trigger = { status = "Todo" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_start = { set_status = "In Progress" }
-on_success = { set_status = "Done" }
-on_failure = { set_status = "Failed" }
+on_start = { status = "In Progress" }
+on_success = { status = "Done" }
+on_failure = { status = "Failed" }
 "#,
         );
         assert!(
@@ -630,20 +686,20 @@ on_failure = { set_status = "Failed" }
 [[workflows]]
 name = "gh"
 source = "github"
-trigger = { project_status = "Todo" }
+trigger = { status = "Todo" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "Review" }
+on_success = { status = "Review" }
 
 [[workflows]]
 name = "nt"
 source = "notion"
-trigger = { project_status = "Review" }
+trigger = { status = "Review" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "Todo" }
+on_success = { status = "Todo" }
 "#,
         );
         assert!(
@@ -659,20 +715,20 @@ on_success = { set_status = "Todo" }
 [[workflows]]
 name = "looping"
 source = "github"
-trigger = { project_status = "実装待ち" }
+trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_failure = { set_status = "実装待ち" }
+on_failure = { status = "実装待ち" }
 
 [[workflows]]
 name = "fine"
 source = "github"
-trigger = { project_status = "実装待ち" }
+trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "レビュー待ち" }
+on_success = { status = "レビュー待ち" }
 
 [[workflows]]
 name = "label-only"
@@ -681,13 +737,13 @@ trigger = { label = "実装待ち" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_success = { set_status = "実装待ち" }
+on_success = { status = "実装待ち" }
 "#,
         );
         let issues = validate_workflows(&workflows, |_| None);
         // Only the first workflow loops: `fine` writes elsewhere, and
         // `label-only` has no lane for the write-back to re-enter (the check
-        // is lexical, over `project_status` only). A self-loop is a cycle of
+        // is lexical, over `status` only). A self-loop is a cycle of
         // length 1 — the same check as the multi-workflow ping-pong (#565).
         assert_eq!(issues.len(), 1, "{issues:?}");
         assert_eq!(issues[0].severity, Severity::Error);
@@ -705,17 +761,17 @@ on_success = { set_status = "実装待ち" }
 [[workflows]]
 name = "with-start"
 source = "github"
-trigger = { project_status = "実装待ち" }
+trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
 output = "none"
-on_start = { set_status = "実装中" }
-on_success = { set_status = "レビュー待ち" }
+on_start = { status = "実装中" }
+on_success = { status = "レビュー待ち" }
 
 [[workflows]]
 name = "without-start"
 source = "github"
-trigger = { project_status = "実装待ち" }
+trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -725,7 +781,7 @@ output = "none"
             workflows[0]
                 .on_start
                 .as_ref()
-                .and_then(|a| a.set_status.as_deref()),
+                .and_then(|a| a.status.as_deref()),
             Some("実装中"),
         );
         // Omitted means "write nothing at start" — the pre-#556 behaviour,
@@ -822,7 +878,7 @@ agent = "herdr"
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "Design" }
+trigger = { status = "Design" }
 profile = "design"
 agent = "herdr"
 initial_prompt = "  /grill-me で {設計観点} を詰めてください  "
@@ -862,7 +918,7 @@ agent = "herdr"
 [[workflows]]
 name = "design"
 source = "github"
-trigger = { project_status = "設計待ち" }
+trigger = { status = "設計待ち" }
 mode = "plan"
 agent = "herdr"
 output = "source"

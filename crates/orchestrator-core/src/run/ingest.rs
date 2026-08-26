@@ -275,7 +275,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// this very plugin had just filled in. That check could not catch a
     /// wrong plugin (it was reading the plugin's own report), and it forced
     /// every trigger key a source wanted into the Orchestrator's vocabulary:
-    /// `reaction` is Slack's word and `project_status` is GitHub Projects',
+    /// `reaction` is Slack's word and `label` is GitHub's,
     /// and both sat in `domain::workflow` (#554).
     ///
     /// What the Orchestrator checks is what it alone knows: that the named

@@ -2,7 +2,6 @@
 //! `[github]` table of `config.toml` as JSON with secrets already
 //! expanded (F-65, #554).
 
-use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use plugin_protocol::methods::ClaimedRepo;
@@ -143,7 +142,7 @@ pub struct ProjectOptions {
     ///
     /// Absent means the item is added with **no** Status. That leaves a
     /// human-triage gate *when every workflow on this source filters by
-    /// status*: a status-less item matches no `project_status` condition —
+    /// status*: a status-less item matches no `status` condition —
     /// but a trigger **without** one matches everything, status-less items
     /// included, so the gate is only as real as the operator's triggers.
     /// **Setting this to a value some trigger polls (e.g. `Todo`) removes
@@ -312,10 +311,6 @@ pub struct GithubConfig {
     /// ingest (F-08).
     #[serde(default)]
     pub in_progress_statuses: Vec<String>,
-    /// Maps an orchestrator-side status name to the project's SingleSelect
-    /// option name for `task/update_status` (F-84). Identity when absent.
-    #[serde(default)]
-    pub status_map: HashMap<String, String>,
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
     pub source_name: String,
@@ -346,12 +341,6 @@ pub struct GithubConfig {
 }
 
 impl GithubConfig {
-    /// Resolve the project option name for an orchestrator status via
-    /// [`status_map`](Self::status_map), falling back to the name itself.
-    pub fn map_status<'a>(&'a self, status: &'a str) -> &'a str {
-        self.status_map.get(status).map_or(status, String::as_str)
-    }
-
     /// Whether a task with these `assignees` may be ingested by this operator
     /// (F-08): unassigned, or `github_login` is among the assignees. A task
     /// assigned only to other people is skipped. Matching is over the whole
@@ -533,17 +522,6 @@ mod tests {
         // "empty means any" arm left: `repos` is required and non-empty.
         assert!(cfg.projects[0].repo_allowed("totsuka"));
         assert!(!cfg.projects[0].repo_allowed("other"));
-    }
-
-    #[test]
-    fn status_map_falls_back_to_identity() {
-        let cfg = parse(serde_json::json!({
-            "token": "t", "github_login": "me",
-            "projects": [{ "owner": "me", "project_number": 1, "repos": ["r"] }],
-            "status_map": { "レビュー待ち": "In Review" }
-        }));
-        assert_eq!(cfg.map_status("レビュー待ち"), "In Review");
-        assert_eq!(cfg.map_status("実装待ち"), "実装待ち");
     }
 
     /// The destination lands in an agent's prompt, so it must read as prose:
