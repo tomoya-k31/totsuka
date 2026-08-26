@@ -36,6 +36,7 @@ D-03 アンカー）。いずれも実機で走らせるまで検出されてい
 | `scripts/github.sh` | Project の操作と F-07 / F-84 / F-86 の自動判定 |
 | `scripts/report.sh` | 結果の集約。目視項目とスコープ外を明示して残す |
 | `scripts/github-permissions.sh` | GitHub トークンの権限を実測する単発プローブ。プラグインが投げる 4 操作（read 3 + write 1）を同じ endpoint / header / クエリで送り、`errors` の有無と**独立に**フィールド単位で present/null を判定する — GraphQL の権限不足は HTTP 200 + `data` あり + フィールド `null` で出うるため。`doctor --online` が `viewer` 1 操作しか叩かない（F-59）ことで生じる隙間を埋める |
+| `scripts/github-claim-probe.sh` | #556（self-assign claim + スイムレーン reopen）の設計前提の実測プローブ。probe 専用 issue を毎回新規作成して self-assign の反映（黙殺は 200 で返るため読み戻しでしか検出できない）・`AssignedEvent` の履歴と順序・mutation→読み戻しの反映遅延・Status セル `updatedAt` の進み方（列移動で進む／同一 option 再セットでは進まない）を測り、終了時に issue を閉じて board から外す。2026-08-25 の実測結果は [#556 のコメント](https://github.com/tomoya-k31/totsuka/issues/556#issuecomment-5409966837) |
 
 # 設計上の判断
 
