@@ -78,7 +78,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 
 - `repositories: [{name, summary?, path?}]` — Orchestrator 側のリポジトリ設定。ソース側でリポジトリを解決するプラグインは自前設定の重複を省ける
 - `llm: {base_url, model, api_key?}` — Orchestrator 側の LLM 設定（鍵は解決済み）。プラグイン自身の LLM 設定があればそちらを優先し、これは既定値として扱う
-- `workflows: [{workflow, trigger, instructions_kind?, task_id_prefix?, options}]` — 自分を `source` または `agent` として名指す workflow が、設定に書かれた順で届く。`trigger` はソースが監視する条件で、運用者が書いたとおり素通しで届く（agent には空オブジェクト）。`instructions_kind` / `task_id_prefix` は workflow の `profile` から Orchestrator が導出した値。`options` はその workflow に書かれた、Orchestrator が解釈しないキー。**自分が読まない `trigger` キーは拒否すること。** 素通しということは他の誰も検査しないということで、無視したキーは黙って捨てられ条件が消える —— タイポはトリガーを狭めず**広げる**。`plugin_sdk::unknown_trigger_keys(&init.workflows, TRIGGER_KEYS)` が未知キー 1 件につき1 メッセージ（自分が読む有効キー入り）を返すので、空でなければ `CONFIG_INVALID` で`initialize` を失敗させる
+- `workflows: [{workflow, trigger, instructions_kind?, task_id_prefix?, options}]` — 自分を `source` または `agent` として名指す workflow が、設定に書かれた順で届く。`trigger` はソースが監視する条件で、運用者が書いたとおり素通しで届く（agent には空オブジェクト）。`instructions_kind` / `task_id_prefix` は workflow の `profile` から Orchestrator が導出した値。`options` はその workflow に書かれた、Orchestrator が解釈しないキー。**自分が読まない `trigger` キーは拒否すること。** 素通しということは他の誰も検査しないということで、無視したキーは黙って捨てられ条件が消える —— タイポはトリガーを狭めず**広げる**。`plugin_sdk::unknown_trigger_keys(&init.workflows, TRIGGER_KEYS)` が未知キー 1 件につき 1 メッセージ（自分が読む有効キー入り）を返すので、空でなければ `CONFIG_INVALID` で`initialize` を失敗させる
 - `projects: [{name, options}]` — 自分が所有するプロジェクト（`source` が自分の `[[projects]]` エントリ）。各プロジェクトに紐づくリポジトリは `[[repositories]].project` から届く
 
 ポーリング型ソースの取得周期はプラグイン自身の設定である: `poll_interval_secs` を自分の `[<name>]` テーブルに置き、`config` から読む。
