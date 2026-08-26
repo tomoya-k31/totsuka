@@ -115,7 +115,7 @@ append・Reopen・3 列更新は 1 トランザクション。途中で落ちて
 - `read_only_violation` は **0 件**
 - `branch` 列が `NULL` になる。このときの worktree は**掃除で既に消えていた**ので、detach ではなく列のクリアが効いた側を通したことになる
 - **掃除は 3 回とも `Removed`**。到達可能性判定は `0` を返しており、`Dirty` に倒れて worktree と pane を留める回帰は起きていない。`doctor` も孤児なし
-- 前段の成果物（PR とブランチ）は無傷。design → implement の往復も完走し、引き渡し後も会話 uuid は同一 前段がブランチへ載せた worktree を read-only profile が引き継ぐと、read-only 検査が failed にしたうえで**質問待ちのエージェントの pane を閉じていた**（[#568](https://github.com/tomoya-k31/totsuka/issues/568)）。引き渡し時に detach して不変条件を回復させることで直した（上の「既知の限界」参照）。
+- 前段の成果物（PR とブランチ）は無傷。design → implement の往復も完走し、引き渡し後も会話 uuid は同一
 
 # Alternatives considered
 
