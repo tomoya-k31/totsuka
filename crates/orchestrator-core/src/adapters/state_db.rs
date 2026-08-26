@@ -648,6 +648,23 @@ pub enum TaskMessageOutcome {
     Duplicate,
 }
 
+/// Outcome of [`StateDb::append_task_message_handing_off`] (#565).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffOutcome {
+    /// The conversation already had this `message_key`; nothing was written.
+    Duplicate,
+    /// The conversation is still in flight, so it was **not** handed over and
+    /// **nothing was written** — not even the message. Writing it would strand
+    /// the delivery: the ledger would dedup every re-delivery from then on
+    /// while the row kept its old workflow, and no later poll could repair it.
+    /// Left unwritten, the source re-delivers until the run finishes and the
+    /// handoff can happen for real.
+    InFlight,
+    /// The message was appended, the conversation reopened, and its workflow /
+    /// mode / payload now name the delivering workflow. The row is `Queued`.
+    HandedOff,
+}
+
 /// Columns of `task_messages`, read by name in [`row_to_task_message`].
 const TASK_MESSAGE_COLUMNS: &str = "id, task_id, message_key, author, body, url, \
      payload, received_at, processed_at";
@@ -1555,6 +1572,82 @@ impl StateDb {
         };
         tx.commit()?;
         Ok((TaskMessageOutcome::New, reopened))
+    }
+
+    /// Append a message that arrived under a **different workflow** and, in
+    /// the same transaction, hand the conversation over to it (#565).
+    ///
+    /// A conversation is one row keyed by `(source, source_task_id)`, and its
+    /// `workflow` was fixed when the row was created (`ON CONFLICT DO
+    /// NOTHING` never updates it). A column pipeline — design finishes, the
+    /// card lands in the implement column — therefore delivered under a
+    /// workflow the row did not belong to, and the delivery was dropped. This
+    /// moves the row to the delivering workflow instead, so the same
+    /// conversation (and its worktree, and its agent session) continues into
+    /// the next stage.
+    ///
+    /// Three columns move together and all three are load-bearing:
+    ///
+    /// - `workflow` — everything downstream resolves settings by this name on
+    ///   each use (dispatch target, status write-backs, verification, tool),
+    ///   so it switches the whole stage.
+    /// - `mode` — dispatch reads the **column**, not the workflow, to pick
+    ///   [`ExecutionMode`](plugin_protocol::methods::ExecutionMode); leaving it
+    ///   would run the implement stage under plan's restrictions. It also
+    ///   routes worktree cleanup and the plan side-effect check.
+    /// - `source_payload` — `task_from_record` rebuilds the dispatched task
+    ///   from it, so leaving it would hand the new stage the **previous**
+    ///   stage's instructions.
+    ///
+    /// **Atomic, and the atomicity is the point.** A crash between the append
+    /// and the update leaves the row on its old workflow with the new message
+    /// already in the ledger — which every re-delivery then dedups against,
+    /// permanently. That is the same stranding
+    /// [`append_task_message_reopening`](Self::append_task_message_reopening)
+    /// exists to avoid, reached from the other side.
+    ///
+    /// Only a **terminal** conversation is handed over; see
+    /// [`HandoffOutcome::InFlight`] for why the in-flight case writes nothing.
+    pub fn append_task_message_handing_off(
+        &self,
+        msg: &TaskMessageInsert,
+        new_workflow: &str,
+        new_mode: &str,
+        new_source_payload: Option<&serde_json::Value>,
+        detail: Option<serde_json::Value>,
+    ) -> Result<HandoffOutcome, StateError> {
+        let now = self.clock.now_rfc3339();
+        let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
+        let payload = new_source_payload.map(serde_json::to_string).transpose()?;
+        let tx = self.conn.unchecked_transaction()?;
+
+        // State first: an in-flight conversation must leave the ledger
+        // untouched, so this cannot run after the insert.
+        let state: Option<String> = tx
+            .query_row(
+                "SELECT state FROM tasks WHERE id = ?1",
+                params![msg.task_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let state: TaskState = state.ok_or(StateError::NotFound(msg.task_id))?.parse()?;
+        if !state.is_terminal() {
+            tx.commit()?;
+            return Ok(HandoffOutcome::InFlight);
+        }
+
+        if insert_task_message_tx(&tx, msg, &now)? == 0 {
+            tx.commit()?;
+            return Ok(HandoffOutcome::Duplicate);
+        }
+        apply_event_tx(&tx, &now, msg.task_id, TaskEvent::Reopen, detail.as_deref())?;
+        tx.execute(
+            "UPDATE tasks SET workflow = ?2, mode = ?3, source_payload = ?4, updated_at = ?5 \
+             WHERE id = ?1",
+            params![msg.task_id, new_workflow, new_mode, payload, now],
+        )?;
+        tx.commit()?;
+        Ok(HandoffOutcome::HandedOff)
     }
 
     /// Requeue a task **and** put the batch of messages its failed run was

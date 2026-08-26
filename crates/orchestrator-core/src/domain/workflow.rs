@@ -18,6 +18,8 @@
 //! requiring every trigger key a source wanted (`reaction`, `project_status`)
 //! to be a word in this module's vocabulary.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use plugin_protocol::manifest::OutputCapability;
 
 use crate::config::{
@@ -223,39 +225,139 @@ where
                 ),
             });
         }
-        // #556: a status write-back that re-enters the workflow's own trigger
-        // column is a reopen loop — since lane re-entries mint fresh message
-        // keys, the write-back would immediately requeue what it just
-        // finished. A **lexical** check only: the Orchestrator does not
-        // interpret triggers (#554) and this compares two operator-written
-        // strings without acting on either; a plugin-side `status_map` that
-        // aliases two different names onto one column is out of its sight
-        // (documented in config-reference).
-        if let Some(trigger_status) = wf
-            .trigger
-            .as_table()
-            .get("project_status")
-            .and_then(|v| v.as_str())
-        {
+    }
+    issues.extend(column_cycles(workflows));
+
+    issues
+}
+
+/// One hop of a column cycle: the workflow that ran, and the column its
+/// write-back sent the card to.
+struct Hop<'a> {
+    workflow: &'a str,
+    key: &'a str,
+    to_column: &'a str,
+}
+
+/// Status write-backs that route a card back into a column some workflow
+/// triggers on, in a loop (#565).
+///
+/// Since a lane re-entry is a *request* (#556) and a re-entry under another
+/// workflow hands the conversation over to it (#565), a cycle in the column
+/// graph runs **forever with no human in it** — every lap dispatches an agent
+/// and spends real tokens. The single-workflow case (a write-back into the
+/// workflow's own trigger column) is this same check with a cycle of length 1.
+///
+/// **Lexical only.** The Orchestrator does not interpret triggers (#554), and
+/// this reads two operator-written strings without acting on either: a
+/// plugin-side `status_map` that aliases two names onto one column is out of
+/// its sight, and so is a column shared by name across two different trackers
+/// (which is not a cycle at all — different boards, and `source` separates
+/// them here).
+fn column_cycles(workflows: &[Workflow]) -> Vec<WorkflowIssue> {
+    let mut issues = Vec::new();
+    // Per source: a column reached by a write-back only re-triggers a workflow
+    // watching the *same* tracker.
+    let sources: BTreeSet<&str> = workflows.iter().map(|w| w.source.as_str()).collect();
+    for source in sources {
+        let of_source: Vec<&Workflow> = workflows
+            .iter()
+            .filter(|w| w.source == source)
+            .filter(|w| trigger_column(w).is_some())
+            .collect();
+        // column → the hops leaving it (one per write-back key that names a
+        // column, from every workflow triggering on it).
+        let mut edges: BTreeMap<&str, Vec<Hop>> = BTreeMap::new();
+        for wf in &of_source {
+            let from = trigger_column(wf).expect("filtered above");
             for (key, action) in [
                 ("on_start", &wf.on_start),
                 ("on_success", &wf.on_success),
                 ("on_failure", &wf.on_failure),
             ] {
-                if action.as_ref().and_then(|a| a.set_status.as_deref()) == Some(trigger_status) {
-                    issues.push(WorkflowIssue {
-                        severity: Severity::Error,
-                        message: format!(
-                            "workflow `{}` {key} sets status `{trigger_status}`, which is its own trigger column → the write-back would re-trigger the workflow in a loop; use a different column",
-                            wf.name
-                        ),
+                if let Some(to) = action.as_ref().and_then(|a| a.set_status.as_deref()) {
+                    edges.entry(from).or_default().push(Hop {
+                        workflow: wf.name.as_str(),
+                        key,
+                        to_column: to,
                     });
                 }
             }
         }
+        // DFS with an explicit path, so the message can name the actual loop
+        // rather than just asserting one exists.
+        let mut settled: BTreeSet<&str> = BTreeSet::new();
+        let mut reported: BTreeSet<String> = BTreeSet::new();
+        for start in edges.keys().copied().collect::<Vec<_>>() {
+            let mut path: Vec<(&str, &Hop)> = Vec::new();
+            walk(
+                start,
+                &edges,
+                &mut path,
+                &mut settled,
+                &mut reported,
+                &mut issues,
+            );
+        }
     }
-
     issues
+}
+
+/// Depth-first walk over the column graph, reporting each cycle once.
+fn walk<'a>(
+    column: &'a str,
+    edges: &'a BTreeMap<&'a str, Vec<Hop<'a>>>,
+    path: &mut Vec<(&'a str, &'a Hop<'a>)>,
+    settled: &mut BTreeSet<&'a str>,
+    reported: &mut BTreeSet<String>,
+    issues: &mut Vec<WorkflowIssue>,
+) {
+    if settled.contains(column) {
+        return;
+    }
+    // The column is already on the path: everything from its first appearance
+    // onwards is the cycle.
+    if let Some(at) = path.iter().position(|(c, _)| *c == column) {
+        let cycle = &path[at..];
+        let mut route = String::new();
+        for (from, hop) in cycle {
+            route.push_str(&format!(
+                "column `{from}` → workflow `{}` ({}) → ",
+                hop.workflow, hop.key
+            ));
+        }
+        route.push_str(&format!("column `{column}`"));
+        // Normalise so the same loop found from a different entry point is
+        // reported once: rotate the workflow names to their smallest order.
+        let mut names: Vec<&str> = cycle.iter().map(|(_, h)| h.workflow).collect();
+        names.sort_unstable();
+        names.dedup();
+        if reported.insert(names.join("\u{1f}")) {
+            issues.push(WorkflowIssue {
+                severity: Severity::Error,
+                message: format!(
+                    "status write-backs form a loop with no human in it: {route} → each lap \
+                     dispatches an agent again, forever → route one hop through a column no \
+                     workflow triggers on (a review column a person moves the card out of)"
+                ),
+            });
+        }
+        return;
+    }
+    for hop in edges.get(column).into_iter().flatten() {
+        path.push((column, hop));
+        walk(hop.to_column, edges, path, settled, reported, issues);
+        path.pop();
+    }
+    settled.insert(column);
+}
+
+/// The column a workflow triggers on, when it triggers on one at all.
+fn trigger_column(wf: &Workflow) -> Option<&str> {
+    wf.trigger
+        .as_table()
+        .get("project_status")
+        .and_then(|v| v.as_str())
 }
 
 #[cfg(test)]
@@ -319,6 +421,107 @@ output = "none"
         assert!(workflows[1].rubric.is_none());
     }
 
+    /// Two workflows handing the card back and forth (#565): with handoff,
+    /// a lane re-entry under another workflow re-runs the conversation there,
+    /// so this ping-pong never stops and never asks a person. The message has
+    /// to name the actual route — "there is a cycle" is not actionable.
+    #[test]
+    fn a_two_workflow_column_ping_pong_is_a_loop_and_errors() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "design"
+source = "github"
+trigger = { project_status = "Design" }
+mode = "plan"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "Todo" }
+
+[[workflows]]
+name = "implement"
+source = "github"
+trigger = { project_status = "Todo" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "Design" }
+"#,
+        );
+        let issues = validate_workflows(&workflows, |_| None);
+        assert_eq!(issues.len(), 1, "one loop, reported once: {issues:?}");
+        let m = &issues[0].message;
+        assert_eq!(issues[0].severity, Severity::Error);
+        for needle in ["design", "implement", "Design", "Todo"] {
+            assert!(m.contains(needle), "route must name `{needle}`: {m}");
+        }
+    }
+
+    /// The pipeline the spec's §4.9 example describes: design hands off to
+    /// implement, and implement parks the card in a column nobody triggers on.
+    /// A person moves it from there — that is the hop that breaks the cycle.
+    #[test]
+    fn a_pipeline_that_ends_in_a_human_column_is_fine() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "design"
+source = "github"
+trigger = { project_status = "Design" }
+mode = "plan"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "Todo" }
+
+[[workflows]]
+name = "implement"
+source = "github"
+trigger = { project_status = "Todo" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_start = { set_status = "In Progress" }
+on_success = { set_status = "Done" }
+on_failure = { set_status = "Failed" }
+"#,
+        );
+        assert!(
+            validate_workflows(&workflows, |_| None).is_empty(),
+            "a chain is not a cycle"
+        );
+    }
+
+    /// Two trackers can name a column the same way without it being one
+    /// column: the graph is built per `source`.
+    #[test]
+    fn identically_named_columns_on_different_sources_are_not_a_cycle() {
+        let workflows = workflows_from_toml(
+            r#"
+[[workflows]]
+name = "gh"
+source = "github"
+trigger = { project_status = "Todo" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "Review" }
+
+[[workflows]]
+name = "nt"
+source = "notion"
+trigger = { project_status = "Review" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { set_status = "Todo" }
+"#,
+        );
+        assert!(
+            validate_workflows(&workflows, |_| None).is_empty(),
+            "different trackers, different columns"
+        );
+    }
+
     #[test]
     fn a_write_back_into_the_own_trigger_column_is_a_loop_and_errors() {
         let workflows = workflows_from_toml(
@@ -354,7 +557,8 @@ on_success = { set_status = "実装待ち" }
         let issues = validate_workflows(&workflows, |_| None);
         // Only the first workflow loops: `fine` writes elsewhere, and
         // `label-only` has no lane for the write-back to re-enter (the check
-        // is lexical, over `project_status` only).
+        // is lexical, over `project_status` only). A self-loop is a cycle of
+        // length 1 — the same check as the multi-workflow ping-pong (#565).
         assert_eq!(issues.len(), 1, "{issues:?}");
         assert_eq!(issues[0].severity, Severity::Error);
         assert!(

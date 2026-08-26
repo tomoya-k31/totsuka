@@ -47,7 +47,8 @@ use tokio::sync::{Semaphore, mpsc};
 use crate::adapters::clock::SystemClock;
 use crate::adapters::plugin_host::{HostError, IncomingRequest, Plugin};
 use crate::adapters::state_db::{
-    NewTask, StateDb, StateError, TaskMessage, TaskMessageInsert, TaskMessageOutcome, TaskRecord,
+    HandoffOutcome, NewTask, StateDb, StateError, TaskMessage, TaskMessageInsert,
+    TaskMessageOutcome, TaskRecord,
 };
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{

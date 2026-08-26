@@ -4,7 +4,7 @@ title: ADR-0059 多人数 poll の二重着手は Issue self-assign の claim �
 description: "複数メンバーが同じ GitHub Project を poll する構成の二重着手対策。dispatch 直前にコアが task/claim（protocol 0.6.1、capability 宣言制）でソースプラグインへ占有を要求し、github プラグインは Issue への self-assign と AssignedEvent の createdAt 先着で裁定する。敗北は新終端状態 Skipped、claim 黙殺（Forbidden）は書き戻し無しの Fail。on_start を新設し勝者確定後に Status を動かす。人間がカードをトリガー列へ差し戻したときの再実行は status セルの updatedAt を message_key に刻んで #242 の会話再開に乗せる。Status LWW 単独・git ref CAS・単一ディスパッチャ・ハッシュ裁定は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/556
 tags: [decision, github, task-source, protocol, dispatch, concurrency, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-26T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T15:00:00+09:00 }
 sources:
   - { resource: "https://docs.github.com/en/rest/issues/assignees" }
   - { resource: "https://github.com/tomoya-k31/totsuka/issues/556#issuecomment-5409966837" }
@@ -57,7 +57,7 @@ pre-read で**既に自分が assignee なら書き込まずに Won**。この 1
 - 差し戻し → 新しい updatedAt → terminal 行 → Reopened → claim をやり直して再実行。assignee の付け替えで**誰が**再実行するかを人間が指定できる
 - `project_status` トリガーを持つ workflow だけが対象（label-only は「列」の概念が無く、任意の列移動で誤爆するため従来どおり at-most-once）
 
-**必須ガード**: 同一 issue は `UNIQUE(source, source_task_id)` で 1 行・行の workflow は初回から不変なので、**別ワークフローからの配送は警告して破棄**する（台帳に書かずに）。これが無いと、設計→実装の 2 段列パイプライン（今日も Duplicate で黙って動いていない既存の穴）が「旧ワークフローを誤 reopen」に化ける。段間 handoff は別 issue。**新 validate エラー**: `set_status` が自分の `trigger.project_status` と一致する workflow は拒否（on_start で列外へ出た後に書き戻しで戻ると無限 reopen ループ）。
+**必須ガード**: 同一 issue は `UNIQUE(source, source_task_id)` で 1 行・行の workflow は初回から不変なので、別ワークフローからの配送をそのまま受けると「旧ワークフローでの誤 reopen」に化ける。当初は破棄で塞いだが、**[#565](https://github.com/tomoya-k31/totsuka/issues/565) が引き渡し（handoff）へ置き換えた** — terminal な会話は配送元のワークフローへ移り、実行中の会話だけが（台帳に書かずに）見送られる。**新 validate エラー**: `set_status` が自分の `trigger.project_status` と一致する workflow は拒否（on_start で列外へ出た後に書き戻しで戻ると無限 reopen ループ）。**#565 でこれは列グラフの閉路検出へ一般化された**（自己ループはその長さ 1 の場合）。
 
 ## 6. 前提と制約
 

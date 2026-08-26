@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] のトラッカー宣言、ワークフローとプラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-26T11:05:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-26T15:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -182,7 +182,7 @@ project = "tomo-prj"
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `source` | string | 必須 | task_source インスタンス名 |
-| `trigger` | テーブル | `{}` | トリガー条件。**Orchestrator は中身を一切解釈しない**（#554）。プラグインが `initialize` の `workflows` として受け取り、first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める） |
+| `trigger` | テーブル | `{}` | トリガー条件。**Orchestrator は中身を一切解釈しない**（#554）。プラグインが `initialize` の `workflows` として受け取り、first-match を走らせる。github の `project_status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列へ入った場合は、その会話がそのワークフローへ引き渡される**（#565、列パイプライン）— worktree とエージェントのセッションを保ったまま次の段が始まる。引き渡しは**完了済みの会話だけ**で、実行中の段は走り切ってから次の tick で移る |
 | `profile` | enum? | なし | 4 原型のいずれか（`answer` / `triage` / `design` / `implement`）。`mode` / `output` / `verification` の 3 つをまとめて決める。うち `mode` / `verification` は併記不可、`output` は併記すればそちらが勝つ（下記） |
 | `mode` | enum | `profile` が無ければ必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
@@ -311,7 +311,7 @@ on_success = { set_status = "設計済み" }
 | `profile` + `output` | **可**。`output` が profile の値に勝つ。権限ではなく配線先の選択なので上書きを許している（Slack 起点の implement が PR URL をスレッドへ返すのに要る） |
 | `profile` 無し + `mode` / `output` の欠落 | **エラー**。`profile` を書くか、両方を明示するか |
 | `profile` + `rubric` / `tool` / `timeout_secs` / `on_start` / `on_success` / `on_failure` | 可 |
-| `on_start` / `on_success` / `on_failure` の `set_status` が**自分の** `trigger.project_status` と同じ | **エラー**（#556）。列差し戻しが再実行を意味するようになったため、自分のトリガー列へ書き戻す構成は無限再実行ループになる。検査は字面の一致のみ — プラグインの `status_map` が別名を同じ列へ写す構成までは見えない |
+| `set_status`（`on_start` / `on_success` / `on_failure`）が作る**列の閉路** | **エラー**（#556 → #565 で一般化）。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行され続ける**（毎周エージェントが起動して実費が出る）。自分のトリガー列へ書き戻す構成はその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は**同一 `source` 内・字面の一致のみ** — プラグインの `status_map` が別名を同じ列へ写す構成は見えない |
 
 `profile` は必須ではない。4 原型で表せない組み合わせ（例: `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
 

@@ -23,28 +23,18 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         task: &Task,
     ) -> Result<(i64, IngestOutcome), EngineError> {
         let existing = self.db.find_by_source(&task.source, &task.id)?;
-        // Cross-workflow deliveries are dropped, loudly (#556). A conversation
-        // belongs to the workflow that created it (`ON CONFLICT DO NOTHING`
-        // never updates the row), so accepting this delivery would either
-        // dedup it silently (the pre-#556 behaviour — a two-stage column
-        // pipeline's second stage has never actually run) or, worse, reopen
-        // the conversation under the *old* workflow now that lane re-entries
-        // mint fresh message keys. Dropped **without** touching the ledger:
-        // the source re-delivers every poll tick, so nothing is stranded if
-        // the config changes.
+        // A delivery under a **different workflow** hands the conversation
+        // over to it (#565), when the conversation has finished. This is what
+        // makes a column pipeline work: design finishes, its write-back puts
+        // the card in the implement column, and that lane entry (#556) arrives
+        // as a new message under the implement workflow — the same
+        // conversation continues there, keeping its worktree and its agent
+        // session. A conversation still in flight is left alone; see
+        // `append_task_message_handing_off`.
         if let Some(existing) = &existing
             && existing.workflow != wf.name
         {
-            tracing::warn!(
-                task_id = existing.id,
-                have = %existing.workflow,
-                delivered = %wf.name,
-                "cross-workflow delivery dropped: a conversation stays with the workflow \
-                 that created it → either a column pipeline across workflows (not \
-                 supported yet) or a renamed workflow, in which case the old \
-                 conversations keep the old name and only new ones use the new one"
-            );
-            return Ok((existing.id, IngestOutcome::Duplicate));
+            return self.hand_off_workflow(existing, wf, task);
         }
         let new_task = NewTask {
             source: task.source.clone(),
@@ -106,6 +96,79 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             (Some(_), TaskMessageOutcome::New, None) => IngestOutcome::Appended,
         };
         Ok((id, outcome))
+    }
+
+    /// Move a finished conversation to the workflow a delivery arrived under
+    /// (#565), or leave it alone while it is still running.
+    ///
+    /// The two outcomes are deliberately asymmetric. A finished conversation
+    /// is **reopened under the new workflow** — that is the column pipeline
+    /// working. A running one is **dropped without touching the ledger**: the
+    /// stage in flight owns the conversation until it ends, and the source
+    /// re-delivers every poll, so the handoff simply happens on a later tick
+    /// instead. Switching mid-run would need a cancel, and cancelling is a
+    /// person's decision — an operator moving a card must not silently abort
+    /// an agent.
+    ///
+    /// A conversation whose deliveries carry no `message_key` (a label-only
+    /// GitHub trigger, a source that sends one message per task) can never
+    /// reach the handoff: its key falls back to the conversation id, which the
+    /// ledger already holds, so the delivery is a `Duplicate`. That is the same
+    /// limit lane re-entry has (#556) and it is the same reason — without a key
+    /// per lane entry there is no way to tell a re-entry from a re-delivery.
+    fn hand_off_workflow(
+        &mut self,
+        existing: &TaskRecord,
+        wf: &Workflow,
+        task: &Task,
+    ) -> Result<(i64, IngestOutcome), EngineError> {
+        let message_key = task.message_key.clone().unwrap_or_else(|| task.id.clone());
+        let insert = TaskMessageInsert {
+            task_id: existing.id,
+            message_key: message_key.clone(),
+            author: None,
+            body: task.body.clone().unwrap_or_default(),
+            url: task.url.clone(),
+            payload: serde_json::to_string(task).map_err(StateError::from)?,
+        };
+        let payload = serde_json::to_value(task).ok();
+        let detail = serde_json::json!({
+            "kind": "reopen",
+            "cause": "workflow_handoff",
+            "workflow": { "from": existing.workflow, "to": wf.name },
+            "message_key": message_key,
+        });
+        let outcome = self.db.append_task_message_handing_off(
+            &insert,
+            &wf.name,
+            mode_str(wf.mode),
+            payload.as_ref(),
+            Some(detail),
+        )?;
+        match outcome {
+            HandoffOutcome::HandedOff => {
+                tracing::info!(
+                    task_id = existing.id,
+                    from = %existing.workflow,
+                    to = %wf.name,
+                    "conversation handed over to the delivering workflow"
+                );
+                Ok((existing.id, IngestOutcome::Reopened))
+            }
+            HandoffOutcome::InFlight => {
+                tracing::warn!(
+                    task_id = existing.id,
+                    have = %existing.workflow,
+                    delivered = %wf.name,
+                    state = %existing.state,
+                    "cross-workflow delivery ignored while the conversation is running: \
+                     the stage in flight keeps it until it finishes, and the source \
+                     re-delivers until then"
+                );
+                Ok((existing.id, IngestOutcome::Duplicate))
+            }
+            HandoffOutcome::Duplicate => Ok((existing.id, IngestOutcome::Duplicate)),
+        }
     }
 
     /// Ingest one pushed task (`task/submit`, 0.1.6): normalize and resolve
@@ -481,35 +544,43 @@ mod tests {
         );
     }
 
-    /// Cross-workflow deliveries are dropped, loudly (#556): a conversation
-    /// belongs to the workflow that created it. Before the guard this was a
-    /// silent dedup; with lane re-entries minting fresh message keys it would
-    /// have become a reopen under the *old* workflow.
-    #[tokio::test]
-    async fn a_delivery_under_another_workflow_is_dropped() {
-        let mut engine = ingest_test_engine().await;
-        // A second workflow on the same source.
+    /// Add a second workflow on the same source, differing in the fields the
+    /// handoff has to move.
+    fn add_second_workflow(
+        engine: &mut Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter>,
+    ) {
         let mut second = engine.settings.workflows[0].clone();
         second.name = "review".to_string();
+        second.mode = WorkflowMode::Plan;
         engine.settings.workflows.push(second);
+    }
 
-        let ack = engine
+    /// The column pipeline (#565): a finished conversation delivered under
+    /// another workflow moves to it, keeping its identity. The three columns
+    /// that carry the stage — `workflow`, `mode`, `source_payload` — all move
+    /// together, because dispatch reads `mode` and rebuilds the task from
+    /// `source_payload` rather than re-resolving either from the workflow.
+    #[tokio::test]
+    async fn a_finished_conversation_is_handed_over_to_the_delivering_workflow() {
+        let mut engine = ingest_test_engine().await;
+        add_second_workflow(&mut engine);
+
+        engine
             .on_task_submit(
                 "slack".into(),
                 "implement".into(),
                 delivery("C1:100", Some("k1"), "one"),
             )
             .unwrap();
-        assert_eq!(ack.status, TaskSubmitStatus::Accepted);
         let id = engine
             .db
             .find_by_source("slack", "C1:100")
             .unwrap()
             .unwrap()
             .id;
+        // Finish it: only a terminal conversation is handed over.
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
 
-        // The same conversation delivered under the other workflow, with a
-        // *new* message key — exactly the shape a lane move produces.
         let ack = engine
             .on_task_submit(
                 "slack".into(),
@@ -517,14 +588,135 @@ mod tests {
                 delivery("C1:100", Some("k2"), "two"),
             )
             .unwrap();
-        assert_eq!(ack.status, TaskSubmitStatus::Duplicate, "dropped as final");
+        assert_eq!(ack.status, TaskSubmitStatus::Accepted, "handed over");
+
         let record = engine.db.get_task(id).unwrap().unwrap();
-        assert_eq!(record.workflow, "implement", "the row keeps its workflow");
+        assert_eq!(record.workflow, "review", "the stage moved");
+        assert_eq!(
+            record.mode, "plan",
+            "dispatch reads this column, not the workflow"
+        );
+        assert_eq!(record.state, TaskState::Queued, "reopened");
+        // The dispatched task is rebuilt from `source_payload`, so it has to
+        // be the delivery that arrived — not the one the row was created with.
+        let payload = record.source_payload.expect("payload");
+        assert_eq!(payload["body"], "two", "the new stage gets the new body");
+        assert_eq!(
+            engine.db.list_task_messages(id).unwrap().len(),
+            2,
+            "both deliveries are in the ledger"
+        );
+        // The audit trail names the move: `events` records only from/to state,
+        // so the provenance has to live in the detail (same rule as Retry).
+        let events = engine.db.list_events(id).unwrap();
+        let handoff = events
+            .iter()
+            .filter_map(|e| e.detail.as_ref())
+            .find(|d| d["cause"] == "workflow_handoff")
+            .expect("the handoff is auditable");
+        assert_eq!(handoff["workflow"]["from"], "implement");
+        assert_eq!(handoff["workflow"]["to"], "review");
+    }
+
+    /// A conversation still in flight keeps its stage, and — the part that
+    /// matters — **nothing is written**. Writing the message would make every
+    /// re-delivery dedup against it while the row kept the old workflow, so
+    /// the handoff could never happen at all.
+    #[tokio::test]
+    async fn a_running_conversation_is_not_handed_over_and_nothing_is_written() {
+        let mut engine = ingest_test_engine().await;
+        add_second_workflow(&mut engine);
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("k1"), "one"),
+            )
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        // Still queued (non-terminal), which is what the guard turns on.
+        let ack = engine
+            .on_task_submit(
+                "slack".into(),
+                "review".into(),
+                delivery("C1:100", Some("k2"), "two"),
+            )
+            .unwrap();
+        assert_eq!(
+            ack.status,
+            TaskSubmitStatus::Duplicate,
+            "ignored, final ack"
+        );
+
+        let record = engine.db.get_task(id).unwrap().unwrap();
+        assert_eq!(record.workflow, "implement", "the running stage keeps it");
+        assert_eq!(record.mode, "implement");
         assert_eq!(
             engine.db.list_task_messages(id).unwrap().len(),
             1,
-            "the ledger is untouched — nothing to strand, the source re-delivers"
+            "the ledger is untouched, so a later re-delivery can still hand it over"
         );
+
+        // And once it finishes, the very same delivery does hand it over —
+        // this is why dropping it unwritten is safe.
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        let ack = engine
+            .on_task_submit(
+                "slack".into(),
+                "review".into(),
+                delivery("C1:100", Some("k2"), "two"),
+            )
+            .unwrap();
+        assert_eq!(ack.status, TaskSubmitStatus::Accepted);
+        assert_eq!(
+            engine.db.get_task(id).unwrap().unwrap().workflow,
+            "review",
+            "the re-delivery landed once the stage ended"
+        );
+    }
+
+    /// A re-delivery of a key the ledger already holds changes nothing, even
+    /// across workflows: the handoff is driven by *new* messages only.
+    #[tokio::test]
+    async fn a_duplicate_key_under_another_workflow_changes_nothing() {
+        let mut engine = ingest_test_engine().await;
+        add_second_workflow(&mut engine);
+
+        engine
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                delivery("C1:100", Some("k1"), "one"),
+            )
+            .unwrap();
+        let id = engine
+            .db
+            .find_by_source("slack", "C1:100")
+            .unwrap()
+            .unwrap()
+            .id;
+        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+
+        let ack = engine
+            .on_task_submit(
+                "slack".into(),
+                "review".into(),
+                delivery("C1:100", Some("k1"), "one again"),
+            )
+            .unwrap();
+        assert_eq!(ack.status, TaskSubmitStatus::Duplicate);
+        let record = engine.db.get_task(id).unwrap().unwrap();
+        assert_eq!(
+            record.workflow, "implement",
+            "a known key hands nothing over"
+        );
+        assert_eq!(record.state, TaskState::Failed, "and does not reopen");
     }
 
     /// At-least-once delivery: the same `message_key` twice must change
