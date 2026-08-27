@@ -192,6 +192,13 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
                 .block_retry_limit
                 .unwrap_or(config::DEFAULT_BLOCK_RETRY_LIMIT),
         });
+        // Runtime health (F-110), next to `run.lock` — the same category of
+        // fact, and for the same reason it is a file rather than a row. Set
+        // inside the same `!dry_run` guard as the hook runtime: a dry run
+        // dispatches nothing and has no health to report.
+        settings.health_path = Some(orchestrator_core::adapters::run_health::path_in(
+            paths.state_dir(),
+        ));
     }
 
     let mut engine = Engine::new(db, settings, plugins, SystemGitRunner, llm).await;

@@ -10,6 +10,7 @@ pub mod git;
 pub mod hook_uds;
 pub mod llm;
 pub mod plugin_host;
+pub mod run_health;
 pub mod run_lock;
 pub mod state_db;
 
@@ -17,5 +18,6 @@ pub use agent_session::PluginAgentSession;
 pub use clock::{ManualClock, SystemClock};
 pub use engine_signal_sink::EngineSignalSink;
 pub use plugin_host::{HostError, Plugin, PluginSpec};
+pub use run_health::{Degradation, RunHealth};
 pub use run_lock::{LockError, RunLock};
 pub use state_db::{EventRecord, NewTask, SessionRecord, StateDb, StateError, TaskRecord};

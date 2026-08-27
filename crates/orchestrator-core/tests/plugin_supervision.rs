@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use orchestrator_core::adapters::Degradation;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::adapters::state_db::StateDb;
 use orchestrator_core::config::RootConfig;
@@ -97,11 +98,20 @@ fn settings(max_attempts: u32) -> EngineSettings {
     settings_with_backoff(max_attempts, Duration::ZERO)
 }
 
+/// [`settings`] that also publishes the runtime health document (F-110).
+fn settings_publishing_health(max_attempts: u32, dir: &Path) -> EngineSettings {
+    EngineSettings {
+        health_path: Some(orchestrator_core::adapters::run_health::path_in(dir)),
+        ..settings_with_backoff(max_attempts, Duration::from_millis(200))
+    }
+}
+
 /// [`settings`] with a real backoff, for the one test that needs the plugin to
 /// still be **down** when a dispatch is attempted. Zero backoff relaunches so
 /// fast that no crash window exists to observe.
 fn settings_with_backoff(max_attempts: u32, first_backoff: Duration) -> EngineSettings {
     EngineSettings {
+        health_path: None,
         workflows: workflows(),
         repos: vec![RepoSettings {
             name: "clone".to_string(),
@@ -821,5 +831,75 @@ async fn a_restart_does_not_reset_the_accounting() {
     );
     assert_eq!(report.crashes, 1, "and the crash is attributed by name");
     assert_eq!(report.restarts, 1);
+    engine.shutdown(Duration::from_secs(2)).await;
+}
+
+/// A plugin the supervisor has given up on must reach the operator as a
+/// **standing** condition, not only as the notification that scrolled past
+/// (F-110). This is the case `totsuka menu` paints its warning glyph for: the
+/// run is alive and busy, and one of its plugins is never coming back.
+#[tokio::test]
+async fn an_abandoned_plugin_is_published_as_a_degradation() {
+    let dir = test_support::scratch("supervise_health");
+    let counter = dir.join("launches");
+    let notify_log = dir.join("notify.ndjson");
+    let db = StateDb::open(&dir.join("state.db")).unwrap();
+
+    let mut plugins = PluginSet::default();
+    // `times` far above the budget: every relaunch dies the same way, so the
+    // supervisor exhausts its attempts and abandons it.
+    install(
+        &mut plugins,
+        "task_source",
+        "mock_src",
+        json!({ "task_submit": true, "suicide": { "counter": counter, "times": 99 } }),
+    )
+    .await;
+    install(
+        &mut plugins,
+        "notifier",
+        "mock_notify",
+        json!({ "notify_log": notify_log }),
+    )
+    .await;
+
+    let mut engine = Engine::new(
+        db,
+        settings_publishing_health(2, &dir),
+        plugins,
+        SystemGitRunner,
+        None::<OpenAiRouter>,
+    )
+    .await;
+
+    let probe = notify_log.clone();
+    run_until(&mut engine, move || {
+        notifications(&probe)
+            .iter()
+            .any(|n| n["params"]["event"] == "escalated")
+    })
+    .await;
+
+    // The run has stopped, so it cleared its health on the way out — which is
+    // itself the contract (a stopped run has no health, only a lock). Ask the
+    // engine directly for what it would have published.
+    let degraded = engine.degradations_for_test();
+    let named: Vec<&str> = degraded
+        .iter()
+        .filter_map(|d| match d {
+            Degradation::PluginDown { plugin, abandoned } if *abandoned => Some(plugin.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        named,
+        vec!["mock_src"],
+        "the abandoned plugin must be named, not merely counted: {degraded:?}"
+    );
+    assert!(
+        !orchestrator_core::adapters::run_health::path_in(&dir).exists(),
+        "a run that has stopped leaves no health behind"
+    );
+
     engine.shutdown(Duration::from_secs(2)).await;
 }

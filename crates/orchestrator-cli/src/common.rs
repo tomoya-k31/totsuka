@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use orchestrator_core::adapters::StateDb;
+use orchestrator_core::adapters::run_health::{self, RunHealth};
 use orchestrator_core::config::{self, Finding, FindingSeverity, RootConfig};
 use orchestrator_core::paths::Paths;
 use orchestrator_core::platform::PlatformProcessProbe;
@@ -289,6 +290,30 @@ pub fn lock_status(cx: &Cx) -> OrchestratorStatus {
             pid: None,
             stale_lock: true,
         },
+    }
+}
+
+/// The runtime health published by the **live** `run`, if there is one
+/// (F-110).
+///
+/// `None` whenever the document must not be trusted, and the three ways that
+/// happens are different:
+///
+/// - **No live run.** `run.lock` decides first. A run that was killed leaves
+///   its health behind, and that file describes a process that no longer
+///   exists — reading it would report "degraded" about nothing.
+/// - **No file, or an unreadable one.** A run that has not finished its first
+///   cycle has not published anything yet.
+/// - **A different pid.** Belt and braces for the case above: a leftover file
+///   plus a new run that has not yet overwritten it.
+pub fn live_health(cx: &Cx, lock: &OrchestratorStatus) -> Option<RunHealth> {
+    if !lock.running {
+        return None;
+    }
+    let health = run_health::read(&run_health::path_in(cx.paths.state_dir()))?;
+    match lock.pid {
+        Some(pid) if pid == health.pid => Some(health),
+        _ => None,
     }
 }
 

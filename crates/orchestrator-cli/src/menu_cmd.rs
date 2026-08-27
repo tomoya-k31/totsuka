@@ -41,13 +41,13 @@
 //! the operations guide suggests for debugging) would exit 101. The same
 //! lesson is already pinned for `task export`.
 
-use orchestrator_core::domain::state::TaskState;
-use serde::Serialize;
-
 use std::io::Write;
 use std::path::Path;
 
-use crate::common::{CliError, Cx, lock_status, safe};
+use orchestrator_core::domain::state::TaskState;
+use serde::Serialize;
+
+use crate::common::{CliError, Cx, live_health, lock_status, safe};
 
 /// How many characters of a task title reach the menu before it is elided.
 const TITLE_BUDGET: usize = 60;
@@ -56,8 +56,11 @@ const TITLE_BUDGET: usize = 60;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Availability {
-    /// A live `run` holds the lock.
+    /// A live `run` holds the lock and reports nothing wrong.
     Ok,
+    /// A live `run`, but it cannot do its whole job (F-110) — the case worth
+    /// its own glyph, because the process looks fine from the outside.
+    Degraded,
     /// No `run` is holding the lock — including a stale lock from a crashed
     /// one. Nothing moves until it is started again.
     Down,
@@ -68,6 +71,7 @@ impl Availability {
     fn glyph(self) -> &'static str {
         match self {
             Availability::Ok => "○",
+            Availability::Degraded => "⚠",
             Availability::Down => "✕",
         }
     }
@@ -139,6 +143,10 @@ pub struct MenuModel {
     pub attention: Vec<MenuRow>,
     /// Tasks an agent is working on.
     pub working: Vec<MenuRow>,
+    /// What the live `run` cannot currently do (F-110), already worded for a
+    /// human. Empty when it is healthy — or when nothing is running, in which
+    /// case the glyph is `✕` and a stale document would only mislead.
+    pub degraded: Vec<String>,
     /// Why the menu could not be built, if it could not be. The model is
     /// still emitted (with `availability: down`) so both output modes stay
     /// parseable and the exit code stays 0.
@@ -156,6 +164,7 @@ impl MenuModel {
             attention_count: 0,
             attention: Vec::new(),
             working: Vec::new(),
+            degraded: Vec::new(),
             error: Some(error),
         }
     }
@@ -190,6 +199,11 @@ pub fn run(config: Option<&Path>, json: bool) -> Result<(), CliError> {
 /// Read the state and assemble the model.
 fn build(cx: &Cx) -> Result<MenuModel, CliError> {
     let lock = lock_status(cx);
+    // `run.lock` decides availability first: a run that was killed leaves its
+    // health file behind, and trusting it would paint `⚠` over a `✕`.
+    let degraded: Vec<String> = live_health(cx, &lock)
+        .map(|h| h.degraded.iter().map(|d| d.message()).collect())
+        .unwrap_or_default();
     let db = cx.open_state_db()?;
     let notes = db.open_notes()?;
 
@@ -211,14 +225,15 @@ fn build(cx: &Cx) -> Result<MenuModel, CliError> {
     }
 
     Ok(MenuModel {
-        availability: if lock.running {
-            Availability::Ok
-        } else {
-            Availability::Down
+        availability: match (lock.running, degraded.is_empty()) {
+            (false, _) => Availability::Down,
+            (true, true) => Availability::Ok,
+            (true, false) => Availability::Degraded,
         },
         attention_count: attention.len(),
         attention,
         working,
+        degraded,
         error: None,
     })
 }
@@ -304,8 +319,15 @@ fn render_swiftbar(model: &MenuModel, binary: &str) -> String {
         Some(error) => out.push_str(&format!("{}\n", menu_text(error))),
         None => out.push_str(match model.availability {
             Availability::Ok => "totsuka: running\n",
+            Availability::Degraded => "totsuka: running, degraded\n",
             Availability::Down => "totsuka: not running\n",
         }),
+    }
+
+    // Ahead of the task sections: when both are present, the degradation is
+    // why the tasks are not moving.
+    for reason in &model.degraded {
+        out.push_str(&format!("• {}\n", menu_text(reason)));
     }
 
     if !model.attention.is_empty() {
@@ -353,8 +375,51 @@ mod tests {
             attention_count: attention.len(),
             attention,
             working,
+            degraded: Vec::new(),
             error: None,
         }
+    }
+
+    fn degraded_model(reasons: Vec<&str>) -> MenuModel {
+        MenuModel {
+            availability: Availability::Degraded,
+            attention_count: 0,
+            attention: Vec::new(),
+            working: Vec::new(),
+            degraded: reasons.into_iter().map(str::to_string).collect(),
+            error: None,
+        }
+    }
+
+    /// The case the warning glyph exists for: the process is alive and looks
+    /// healthy, but it cannot do its whole job.
+    #[test]
+    fn a_degraded_run_gets_its_own_glyph_and_lists_why() {
+        let out = render_swiftbar(
+            &degraded_model(vec![
+                "the hook receiver could not bind /x → nothing completes",
+            ]),
+            "/usr/local/bin/totsuka",
+        );
+        assert_eq!(out.lines().next(), Some("⚠"), "{out}");
+        assert!(out.contains("totsuka: running, degraded"), "{out}");
+        assert!(out.contains("could not bind /x"), "{out}");
+    }
+
+    /// A degradation reason is prose assembled by core, but it still reaches a
+    /// SwiftBar line — so it goes through the same escaping as a title.
+    #[test]
+    fn a_degradation_reason_is_escaped_too() {
+        let out = render_swiftbar(
+            &degraded_model(vec!["broken | bash=/bin/sh param1=-c"]),
+            "/usr/local/bin/totsuka",
+        );
+        let line = out
+            .lines()
+            .find(|l| l.contains("broken"))
+            .expect("the reason is rendered");
+        assert_eq!(line.matches('|').count(), 0, "{line}");
+        assert!(line.contains("\\u{7c}"), "{line}");
     }
 
     /// The 要対応 set is exactly five states — the badge's whole contract.

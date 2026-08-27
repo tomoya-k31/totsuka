@@ -8,7 +8,7 @@ use orchestrator_core::agent_tools;
 use orchestrator_core::domain::state::TaskState;
 use serde::Serialize;
 
-use crate::common::{CliError, Cx, OrchestratorStatus, lock_status, print_json, safe};
+use crate::common::{CliError, Cx, OrchestratorStatus, live_health, lock_status, print_json, safe};
 
 /// One task row of the status report.
 #[derive(Debug, Serialize)]
@@ -38,16 +38,40 @@ struct WaitReason {
     message: String,
 }
 
+/// One reason the running orchestrator cannot do its whole job (F-110).
+#[derive(Debug, Serialize)]
+struct HealthRow {
+    /// The degradation's kind, so a script can branch without parsing prose.
+    kind: String,
+    /// One line for a human, including what to do about it.
+    message: String,
+}
+
 /// The whole `--json` document.
 #[derive(Debug, Serialize)]
 struct StatusReport {
     orchestrator: OrchestratorStatus,
+    /// What the live `run` cannot currently do (F-110). Absent when nothing
+    /// is running — a stopped orchestrator has no health, only a lock.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health: Option<Vec<HealthRow>>,
     tasks: Vec<TaskRow>,
 }
 
 /// Execute `totsuka status`.
 pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     let orchestrator = lock_status(cx);
+    // Read before the tasks so both halves describe the same moment as
+    // closely as the two sources allow.
+    let health = live_health(cx, &orchestrator).map(|h| {
+        h.degraded
+            .iter()
+            .map(|d| HealthRow {
+                kind: d.kind().to_string(),
+                message: d.message(),
+            })
+            .collect::<Vec<_>>()
+    });
     let db = cx.open_state_db()?;
     let mut notes = db.open_notes()?;
     let tasks: Vec<TaskRow> = db
@@ -69,6 +93,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
     if json {
         return print_json(&StatusReport {
             orchestrator,
+            health,
             tasks,
         });
     }
@@ -89,6 +114,16 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
             "orchestrator: not running (unreadable lock file → it will be reclaimed on the next `totsuka run`)"
         ),
         (false, false, _) => println!("orchestrator: not running"),
+    }
+
+    // Right under the liveness line: "running" on its own is not the whole
+    // answer, and the case this exists for is a run that looks healthy while
+    // no task can report completion at all.
+    if let Some(rows) = health.as_ref().filter(|r| !r.is_empty()) {
+        println!("degraded:");
+        for row in rows {
+            println!("  {}", safe(&row.message));
+        }
     }
 
     if tasks.is_empty() {

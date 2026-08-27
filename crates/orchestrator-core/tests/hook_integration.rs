@@ -130,6 +130,7 @@ on_failure = {{ status = "failed" }}
 
 fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSettings {
     EngineSettings {
+        health_path: None,
         workflows: wfs,
         repos: vec![RepoSettings {
             name: "clone".to_string(),

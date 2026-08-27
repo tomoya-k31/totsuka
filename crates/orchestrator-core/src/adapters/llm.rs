@@ -308,3 +308,135 @@ mod tests {
         ));
     }
 }
+
+/// An [`LlmRouter`] decorator that latches "the gateway rejected our
+/// credentials" (F-110).
+///
+/// A bad key does not get better on its own, and its symptom is easy to
+/// misread: repository selection simply falls back to asking the operator,
+/// which looks like a slightly inconvenient normal day rather than a broken
+/// configuration. So the fact is recorded where `run` can publish it as a
+/// degradation.
+///
+/// **A latch, not a counter, and it clears itself.** Any successful call
+/// resets it, so rotating the key makes the warning disappear on its own —
+/// which is the property that keeps the menu-bar glyph from becoming
+/// permanent background noise. Only 401/403 sets it
+/// ([`LlmError::is_auth_failure`]): a timeout or a 5xx says nothing about
+/// whether the key is good.
+///
+/// Wrapping rather than checking at the call site is deliberate — every LLM
+/// call the engine makes, present and future, goes through one place.
+pub struct AuthLatchRouter<L> {
+    inner: L,
+    rejected: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl<L> AuthLatchRouter<L> {
+    /// Wrap `inner`, reporting through the returned flag.
+    pub fn new(inner: L) -> Self {
+        Self {
+            inner,
+            rejected: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// A handle on the latch, for whoever publishes the health.
+    pub fn flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        std::sync::Arc::clone(&self.rejected)
+    }
+}
+
+impl<L: LlmRouter> LlmRouter for AuthLatchRouter<L> {
+    async fn chat_json(&self, request: &ChatRequest) -> Result<Value, LlmError> {
+        let result = self.inner.chat_json(request).await;
+        match &result {
+            Ok(_) => self
+                .rejected
+                .store(false, std::sync::atomic::Ordering::Relaxed),
+            Err(e) if e.is_auth_failure() => self
+                .rejected
+                .store(true, std::sync::atomic::Ordering::Relaxed),
+            // Anything else says nothing about the key: leave the latch alone
+            // rather than clearing a real rejection on an unrelated timeout.
+            Err(_) => {}
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod auth_latch_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    struct Scripted(std::sync::Mutex<Vec<Result<Value, LlmError>>>);
+
+    impl LlmRouter for Scripted {
+        async fn chat_json(&self, _request: &ChatRequest) -> Result<Value, LlmError> {
+            self.0.lock().unwrap().remove(0)
+        }
+    }
+
+    fn request() -> ChatRequest {
+        ChatRequest {
+            system: String::new(),
+            user: String::new(),
+            json_schema: json!({}),
+            max_tokens: None,
+        }
+    }
+
+    fn scripted(script: Vec<Result<Value, LlmError>>) -> AuthLatchRouter<Scripted> {
+        AuthLatchRouter::new(Scripted(std::sync::Mutex::new(script)))
+    }
+
+    #[tokio::test]
+    async fn a_401_sets_the_latch_and_a_success_clears_it() {
+        let router = scripted(vec![
+            Err(LlmError::Status {
+                status: 401,
+                body: "no".into(),
+            }),
+            Ok(json!({"ok": true})),
+        ]);
+        let flag = router.flag();
+        assert!(!flag.load(Ordering::Relaxed), "starts clear");
+
+        let _ = router.chat_json(&request()).await;
+        assert!(flag.load(Ordering::Relaxed), "401 latches");
+
+        let _ = router.chat_json(&request()).await;
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "a success clears it, so rotating the key makes the warning go away"
+        );
+    }
+
+    /// The whole point of latching only on 401/403: an unrelated outage must
+    /// not clear a real rejection, and must not raise one either.
+    #[tokio::test]
+    async fn other_failures_leave_the_latch_untouched() {
+        let router = scripted(vec![
+            Err(LlmError::Timeout(30)),
+            Err(LlmError::Status {
+                status: 403,
+                body: "nope".into(),
+            }),
+            Err(LlmError::Transport("refused".into())),
+        ]);
+        let flag = router.flag();
+
+        let _ = router.chat_json(&request()).await;
+        assert!(!flag.load(Ordering::Relaxed), "a timeout raises nothing");
+
+        let _ = router.chat_json(&request()).await;
+        assert!(flag.load(Ordering::Relaxed), "403 latches");
+
+        let _ = router.chat_json(&request()).await;
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "a later transport error must not clear a real rejection"
+        );
+    }
+}

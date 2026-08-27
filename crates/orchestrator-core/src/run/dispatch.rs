@@ -1456,6 +1456,7 @@ mod tests {
 
     fn settings(workflows: Vec<Workflow>, repos: Vec<RepoSettings>) -> EngineSettings {
         EngineSettings {
+            health_path: None,
             workflows,
             repos,
             limits: Limits::global(1),
