@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f488ff2ccb2bb1842d587355758fcaccffeaed9bdefc01ab4992a2d6992e3b88 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:11102225dc440c2f4df35b3c83fdf5badd61a37539f56d6131ce20218349be32 -->
 
 # Operations guide
 
@@ -183,25 +183,53 @@ The dropdown has two sections, "Needs you" and "Working". Clicking a task row ru
 
 ```bash
 brew install --cask swiftbar   # pick a plugin folder on first launch
-mkdir -p ~/SwiftBar
-cat > ~/SwiftBar/totsuka.5s.sh <<'EOF'
+
+# **Wrapped in a subshell.** The `exit`s below are there to stop the setup when
+# something is missing; without the wrapper, pasting this into an interactive
+# shell would close the terminal window instead.
+(
+  set -eu
+
+  # SwiftBar remembers the folder you picked. It is not necessarily ~/SwiftBar
+  # (on the machine this was verified on it was ~/.config/swiftbar). If SwiftBar
+  # has never been launched the key does not exist and this comes back empty —
+  # carrying on would create something like /totsuka.5s.sh, so stop here.
+  dir=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null) || {
+    echo "SwiftBar has no plugin folder yet — launch it once and pick one" >&2; exit 1; }
+  [ -n "${dir}" ] || { echo "PluginDirectory is empty" >&2; exit 1; }
+
+  # Check totsuka the same way before using it. If it is not on PATH,
+  # `$(command -v totsuka)` expands to nothing and a broken `exec  menu` line
+  # gets baked in without a word.
+  bin=$(command -v totsuka) || { echo "totsuka is not on PATH" >&2; exit 1; }
+
+  # `${bin}` expands here, baking the absolute path into the file. Leaving the
+  # heredoc unquoted is what makes that happen.
+  mkdir -p "${dir}"
+  cat > "${dir}/totsuka.5s.sh" <<EOF
 #!/bin/sh
-exec /usr/local/bin/totsuka menu
+exec ${bin} menu
 EOF
-chmod +x ~/SwiftBar/totsuka.5s.sh
+  chmod +x "${dir}/totsuka.5s.sh"
+
+  cat "${dir}/totsuka.5s.sh"   # read back the path that was baked in
+)
 ```
 
 - The `5s` in the filename is the refresh interval, which is SwiftBar's convention. `totsuka menu` reads the state database and nothing else: **7 ms per run, measured** (average of 100 consecutive runs against a real database, process start included). That interval is free.
-- **Write the absolute path to `totsuka`.** A process launched from a GUI inherits a minimal `PATH` with neither `/usr/local/bin` nor a mise shim on it, so calling it by name works from a terminal and fails under SwiftBar. Paste what `which totsuka` prints.
+- **Bake in the absolute path.** The `PATH` a plugin runs with is not something you can predict, so calling `totsuka` by name works from a terminal and fails under SwiftBar. Measured on one machine it had Homebrew and the mise shims on it but not `/usr/local/bin`, and what it contains depends both on your shell's startup files and on how SwiftBar itself was launched. The script is verified to work even under `env -i`, with no `PATH` at all.
+- **Do not hard-code the path.** It depends on how totsuka was installed: `/usr/local/bin/totsuka` for a tarball, `/opt/homebrew/bin/totsuka` for Homebrew on Apple Silicon, `/usr/local/bin/totsuka` for Homebrew on Intel. The `$(command -v totsuka)` above resolves all of them.
+- Where the menu items themselves point (`totsuka focus <id>` and friends) needs no configuration: totsuka fills that in with the path it is running from, whatever that turns out to be.
 
 ### When nothing shows up
 
 | Symptom | Where to look |
 |---|---|
-| Nothing in the menu bar | Is the file in SwiftBar's plugin folder, and is it executable? Run `~/SwiftBar/totsuka.5s.sh` directly and read its output |
-| The item looks broken or empty | Is `totsuka` an absolute path? Check with `env -i /usr/local/bin/totsuka menu` that it works in a bare environment |
+| Nothing in the menu bar | Is the file in the plugin folder, and is it executable? Run `"$(defaults read com.ameba.SwiftBar PluginDirectory)/totsuka.5s.sh"` directly and read its output |
+| The item looks broken or empty | Is `totsuka` an absolute path? Check with `env -i "$(command -v totsuka)" menu` that it works in a bare environment (`command -v` expands *outside* `env -i` — inside there is no `PATH` to resolve it with) |
 | Stuck on `✕` | `run` is not up. This should agree with the first line of `totsuka status` |
 | Stuck on `⚠` | Something is degraded. The dropdown lists why — the same reasons `totsuka status` prints under `degraded:` |
+| Clicking a task does nothing | That is by design: bringing a pane to the front degrades quietly when totsuka is stopped or the pane is gone. To see what a click actually runs, press `Open logs` — SwiftBar opens a login shell and prints the command line it assembled. **That shell does not inherit the plugin script's environment**, so anything you set there (an `XDG_STATE_HOME`, say) is not passed on |
 | The count disagrees with `totsuka status` | Finished tasks are not counted, by design. Compare against the `attention` array in `totsuka menu --json` |
 
 **`totsuka menu` exits 0 even when it fails**, and prints the reason as a row in the menu — a missing state database, pending migrations, an environment so bare that its paths will not resolve. It has to, because a menu-bar plugin that exits non-zero renders as a broken item. So do not read "no error" as "healthy": read the menu itself. It never reads `config.toml`, so a broken configuration does not change what it shows — use `totsuka config validate` for that.

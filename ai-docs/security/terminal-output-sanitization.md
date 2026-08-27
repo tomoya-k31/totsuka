@@ -4,7 +4,7 @@ title: 端末出力の信頼境界（外部由来テキストの無害化）
 description: totsuka が第三者の書いたテキスト（Slack 本文・GitHub issue タイトル・author・url・source_task_id）を端末へ出す際の制御シーケンス無害化ポリシー。safe() の置き場所（core の terminal モジュール）と適用範囲、エスケープであって除去ではない理由、--json と JSON ログを通さない理由、one_line の 3 段の順序、menu が足す SwiftBar 書式の第 2 層、未カバー経路を定める。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/terminal.rs
 tags: [security, cli, terminal, ansi, escape-sequence, sanitization, output]
-generated: { by: claude-code/opus-5, at: 2026-08-28T06:35:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T08:25:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -55,7 +55,7 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 | `status` | `title` / `branch` / `worktree_path` |
 | `logs` | `message` / `extras` / `timestamp` / `level` / JSON としてパースできない行 |
 | `doctor`（#297） | **すべての `Check`** の `name` / `detail` / `action`、および TTY 時の対話プロンプト（孤児 worktree の削除確認・孤児 pane の解放確認と、その結果行） |
-| `menu`（#585） | `title` / `state` / `workflow` と、`bash=` に補間するバイナリのパス。**このコマンドだけは `safe()` の外側にもう 1 層ある** — 下記参照 |
+| `menu`（#585） | `title` / `state` / `workflow` と、`bash=` に補間するバイナリのパス。**このコマンドだけは `safe()` の外側に別の層がある** — 下記参照 |
 
 # `menu` の第 2 層（#585）
 
@@ -64,13 +64,25 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 これは本文書が扱う脅威 —— **第三者が内容を決められるテキストが、表示を乗っ取る** —— の一形態であって、
 制御文字とは別の入口である。`safe()` はこれを知らない（知る必要も無い。`|` は端末にとって普通の文字である）。
 
-したがって `menu_cmd::menu_text` は 2 段で無害化する。順序に意味がある:
+**しかも SwiftBar が読む構文は 3 層ある。** `|` の区切りに加えて、(2) 行テキスト内の**バックスラッシュエスケープを SwiftBar 自身が処理し**（2.1.1 実測: `\n` は本物の改行になり、知らないエスケープは `\u{7c}` → `u{7c}` とバックスラッシュだけ食われる。**`safe()` の退避はここで元に戻される**）、(3) **`:name:` を SF Symbol / 絵文字へ展開する**（`symbolize` / `emojize` が既定 true。実測で `:checkmark.seal.fill:` の 21 文字がバッジ画像 1 つに置き換わった）。
 
-1. `safe()` —— 制御文字を可視のエスケープ形へ。**改行を潰すのはここ**で、これが無いと 1 行が 2 行に割れる
-2. `|` を `\u{7c}` へ
+初版はここを見落として出荷し、実機検収で捕まった —— 改行を含むタイトルが **1 行を 3 行に割り、`---` の区切り線まで偽装できた**。ユニットテストは全部通っていた。制御文字を「見える形」にする `safe()` の出力自体が、別のパーサにとってはまだ命令だった、という形である。
 
-2 段目も **escape-not-strip** を守る。注入テキストは消えず、行の**テキスト側**に丸ごと残るので、
+したがって `menu_cmd::menu_text` は 3 段で無害化する。順序に意味がある:
+
+1. `safe()` —— 制御文字を可視のエスケープ形へ
+2. **バックスラッシュを全て二重化** —— 1 が作ったものも含む。これが無いと 1 の退避が無効になる
+3. `|` を（二重化済みの形で）退避 —— operator が読むのは `\u{7c}`
+
+3 段目も **escape-not-strip** を守る。注入テキストは消えず、行の**テキスト側**に丸ごと残るので、
 何が来たのかは読める。`--json` は他のコマンドと同じくバイト完全のまま。
+
+**3 層目だけはエスケープで塞げない。** `:mushroom:` をテキストとして生き残らせる綴りは無いので、
+外部由来のテキストを載せる全ての行に `symbolize=false emojize=false` を付けて切る。
+
+**3 つに共通する型を名前で押さえておく: ある消費者にとって安全にしたテキストが、次の消費者に
+とっても安全とは限らない。** `safe()` は端末に対して制御文字を無害化するが、その出力を
+SwiftBar が改行として、あるいはシンボル名として読み直した。無害化は**出力先ごと**に要る。
 
 **この防御を Rust の外へ出さないことが、`menu` がサブコマンドである理由そのものである。**
 整形を jq / シェルスクリプトに任せる設計も検討したが（[ADR-0065](/decisions/adr-0065-menubar-status.md)）、

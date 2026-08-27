@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:a3d60e1325550f0d8038b5b3341a369b8cb1399d8a9a26943706a2d5e3d6bf94 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:27b5bbf15bec8f1755115fab37b7ff666859269e9e6cd65c5795449f554c565c -->
 
 # What totsuka is
 
@@ -75,7 +75,7 @@ That number counts five states — `pending`, `waiting_input`, `verifying`, `esc
 
 The glyph has a third state, `⚠`: totsuka is running but cannot do its whole job. It covers four things it can re-check every cycle — the hook receiver failed to bind (nothing can report completion for that run), a plugin is down, hook signals are stuck in the spool, or the LLM gateway rejected the API key. Each clears on its own once fixed. There is a fifth case totsuka cannot report about itself: if it stops publishing altogether for two minutes while its process is still alive, that shows as `⚠` too — a wedged run cannot tell you it is wedged. `totsuka status` shows the same reasons under `degraded:`.
 
-The default output is SwiftBar's plugin format; `--json` gives you the same view as data. It always exits 0 — a plugin that does not renders as a broken item — so failures appear as a row instead. Setup is two lines of shell, in the operations guide.
+The default output is SwiftBar's plugin format; `--json` gives you the same view as data. It always exits 0, because SwiftBar renders a plugin that exits non-zero as a broken item; failures appear as a row instead. Task titles come from whoever filed the task, so totsuka neutralises them before they reach SwiftBar: nothing in a title can add parameters to a row, split it into several, or replace written characters with a symbol. Setup is a short shell snippet in the operations guide.
 
 ## The command line
 
