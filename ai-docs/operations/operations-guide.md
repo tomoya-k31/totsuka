@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-08-28T07:58:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T08:15:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -207,26 +207,34 @@ worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane
 ```bash
 brew install --cask swiftbar   # 初回起動でプラグインフォルダを選ぶ
 
-# 選んだフォルダは SwiftBar 自身が覚えている。`~/SwiftBar` とは限らない
-# （実機では `~/.config/swiftbar` だった）。**まだ SwiftBar を起動していないと
-# このキーは存在せず、`dir` が空になる** — 空のまま進むと `/totsuka.5s.sh` の
-# ような無関係な場所を作りにいくので、ここで止める。
-dir=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null) || {
-  echo "SwiftBar のプラグインフォルダが未設定。SwiftBar を一度起動して選ぶこと" >&2
-  exit 1
-}
-[ -n "${dir}" ] || { echo "PluginDirectory が空" >&2; exit 1; }
+# **サブシェルで囲む。** 中の `exit` は失敗したときにセットアップを止めるための
+# もので、囲まないと対話シェルに貼ったときターミナルのウィンドウごと閉じる。
+(
+  set -eu
 
-# `$(command -v totsuka)` はここで展開され、絶対パスがファイルに焼き込まれる。
-# ヒアドキュメントを引用符で囲まないのがその要点。
-mkdir -p "${dir}"
-cat > "${dir}/totsuka.5s.sh" <<EOF
+  # 選んだフォルダは SwiftBar 自身が覚えている。`~/SwiftBar` とは限らない
+  # （実機では `~/.config/swiftbar` だった）。まだ SwiftBar を起動していないと
+  # このキーは存在せず空になる — 空のまま進むと `/totsuka.5s.sh` のような
+  # 無関係な場所を作りにいくので、ここで止める。
+  dir=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null) || {
+    echo "SwiftBar のプラグインフォルダが未設定。一度起動して選ぶこと" >&2; exit 1; }
+  [ -n "${dir}" ] || { echo "PluginDirectory が空" >&2; exit 1; }
+
+  # totsuka も同じく確認してから使う。PATH に無いと `$(command -v totsuka)` は
+  # 空へ展開され、`exec  menu` という壊れた行が黙って焼き込まれる。
+  bin=$(command -v totsuka) || { echo "totsuka が PATH に無い" >&2; exit 1; }
+
+  # `${bin}` はここで展開され、絶対パスがファイルへ焼き込まれる。
+  # ヒアドキュメントを引用符で囲まないのがその要点。
+  mkdir -p "${dir}"
+  cat > "${dir}/totsuka.5s.sh" <<EOF
 #!/bin/sh
-exec $(command -v totsuka) menu
+exec ${bin} menu
 EOF
-chmod +x "${dir}/totsuka.5s.sh"
+  chmod +x "${dir}/totsuka.5s.sh"
 
-cat "${dir}/totsuka.5s.sh"   # 焼き込まれたパスを目で確認する
+  cat "${dir}/totsuka.5s.sh"   # 焼き込まれたパスを目で確認する
+)
 ```
 
 - ファイル名の `5s` が更新間隔である（SwiftBar の規約）。`totsuka menu` は状態 DB を直読みするだけで、**実測 7ms/回**（100 回連続実行の平均、20 タスクの実 DB・プロセス起動込み）。この間隔でも負荷にならない

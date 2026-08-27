@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:06e274e619c7bf10914ee37f9cde6b5e25efa1f90694720fa418001d882e6067 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:80c57084cc03c4e9666fd147002d6b066674a91dd8ffdf45932a3848e78b0594 -->
 
 # 運用ガイド
 
@@ -185,32 +185,40 @@ worktree と pane の連動が破れると、pane だけが残る（手動での
 ```bash
 brew install --cask swiftbar   # 初回起動でプラグインフォルダを選ぶ
 
-# 選んだフォルダは SwiftBar 自身が覚えている。`~/SwiftBar` とは限らない
-# （検証した機体では `~/.config/swiftbar` だった）。**SwiftBar を一度も起動して
-# いないとこのキーは無く、`dir` が空になる** — そのまま進むと `/totsuka.5s.sh`
-# のような無関係な場所を作りにいくので、ここで止める。
-dir=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null) || {
-  echo "SwiftBar のプラグインフォルダが未設定。一度起動して選ぶこと" >&2
-  exit 1
-}
-[ -n "${dir}" ] || { echo "PluginDirectory が空" >&2; exit 1; }
+# **サブシェルで囲む。** 中の `exit` は失敗したときにセットアップを止めるための
+# もので、囲まないと対話シェルに貼ったときターミナルのウィンドウごと閉じる。
+(
+  set -eu
 
-# `$(command -v totsuka)` はここで展開され、絶対パスがファイルに焼き込まれる。
-# ヒアドキュメントを引用符で囲まないのがその要点。
-mkdir -p "${dir}"
-cat > "${dir}/totsuka.5s.sh" <<EOF
+  # 選んだフォルダは SwiftBar 自身が覚えている。`~/SwiftBar` とは限らない
+  # （実機では `~/.config/swiftbar` だった）。まだ SwiftBar を起動していないと
+  # このキーは存在せず空になる — 空のまま進むと `/totsuka.5s.sh` のような
+  # 無関係な場所を作りにいくので、ここで止める。
+  dir=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null) || {
+    echo "SwiftBar のプラグインフォルダが未設定。一度起動して選ぶこと" >&2; exit 1; }
+  [ -n "${dir}" ] || { echo "PluginDirectory が空" >&2; exit 1; }
+
+  # totsuka も同じく確認してから使う。PATH に無いと `$(command -v totsuka)` は
+  # 空へ展開され、`exec  menu` という壊れた行が黙って焼き込まれる。
+  bin=$(command -v totsuka) || { echo "totsuka が PATH に無い" >&2; exit 1; }
+
+  # `${bin}` はここで展開され、絶対パスがファイルへ焼き込まれる。
+  # ヒアドキュメントを引用符で囲まないのがその要点。
+  mkdir -p "${dir}"
+  cat > "${dir}/totsuka.5s.sh" <<EOF
 #!/bin/sh
-exec $(command -v totsuka) menu
+exec ${bin} menu
 EOF
-chmod +x "${dir}/totsuka.5s.sh"
+  chmod +x "${dir}/totsuka.5s.sh"
 
-cat "${dir}/totsuka.5s.sh"   # 焼き込まれたパスを読み返す
+  cat "${dir}/totsuka.5s.sh"   # 焼き込まれたパスを目で確認する
+)
 ```
 
 - ファイル名の `5s` が更新間隔で、これは SwiftBar の規約。`totsuka menu` は状態データベースを読むだけで、**実測 7ms/回**（実データベースに対する 100 回連続実行の平均、プロセス起動込み）。この間隔でも負荷にならない。
 - **絶対パスを焼き込む。** GUI から起動されたプロセスは `/usr/local/bin` も mise も含まない最小の `PATH` を継承するので、`totsuka` を名前で呼ぶとターミナルからは動いて SwiftBar 経由では失敗する。スクリプトを `env -i` で実行して確認済み。
 - **パスをベタ書きしない。** インストール方法で変わる —— tarball なら `/usr/local/bin/totsuka`、Homebrew は Apple Silicon で `/opt/homebrew/bin/totsuka`、Intel で `/usr/local/bin/totsuka`。上の `$(command -v totsuka)` はそのどれでも解決する。
-- メニュー項目のクリック先（`totsuka focus <id>` 等）は totsuka 自身が `current_exe()` から出すので、設定は要らない。
+- メニュー項目のクリック先（`totsuka focus <id>` 等）は、totsuka が自分の起動元のパスをそのまま使うので設定は要らない。
 
 ### 出ないとき
 

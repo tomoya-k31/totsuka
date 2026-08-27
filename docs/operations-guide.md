@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:06e274e619c7bf10914ee37f9cde6b5e25efa1f90694720fa418001d882e6067 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:80c57084cc03c4e9666fd147002d6b066674a91dd8ffdf45932a3848e78b0594 -->
 
 # Operations guide
 
@@ -184,32 +184,42 @@ The dropdown has two sections, "Needs you" and "Working". Clicking a task row ru
 ```bash
 brew install --cask swiftbar   # pick a plugin folder on first launch
 
-# SwiftBar remembers the folder you picked. It is not necessarily ~/SwiftBar
-# (on the machine this was verified on it was ~/.config/swiftbar). **If SwiftBar
-# has never been launched the key does not exist and `dir` comes back empty** —
-# carrying on would create something like /totsuka.5s.sh, so stop here instead.
-dir=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null) || {
-  echo "SwiftBar has no plugin folder yet — launch it once and pick one" >&2
-  exit 1
-}
-[ -n "${dir}" ] || { echo "PluginDirectory is empty" >&2; exit 1; }
+# **Wrapped in a subshell.** The `exit`s below are there to stop the setup when
+# something is missing; without the wrapper, pasting this into an interactive
+# shell would close the terminal window instead.
+(
+  set -eu
 
-# `$(command -v totsuka)` expands here, baking the absolute path into the file.
-# Leaving the heredoc unquoted is what makes that happen.
-mkdir -p "${dir}"
-cat > "${dir}/totsuka.5s.sh" <<EOF
+  # SwiftBar remembers the folder you picked. It is not necessarily ~/SwiftBar
+  # (on the machine this was verified on it was ~/.config/swiftbar). If SwiftBar
+  # has never been launched the key does not exist and this comes back empty —
+  # carrying on would create something like /totsuka.5s.sh, so stop here.
+  dir=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null) || {
+    echo "SwiftBar has no plugin folder yet — launch it once and pick one" >&2; exit 1; }
+  [ -n "${dir}" ] || { echo "PluginDirectory is empty" >&2; exit 1; }
+
+  # Check totsuka the same way before using it. If it is not on PATH,
+  # `$(command -v totsuka)` expands to nothing and a broken `exec  menu` line
+  # gets baked in without a word.
+  bin=$(command -v totsuka) || { echo "totsuka is not on PATH" >&2; exit 1; }
+
+  # `${bin}` expands here, baking the absolute path into the file. Leaving the
+  # heredoc unquoted is what makes that happen.
+  mkdir -p "${dir}"
+  cat > "${dir}/totsuka.5s.sh" <<EOF
 #!/bin/sh
-exec $(command -v totsuka) menu
+exec ${bin} menu
 EOF
-chmod +x "${dir}/totsuka.5s.sh"
+  chmod +x "${dir}/totsuka.5s.sh"
 
-cat "${dir}/totsuka.5s.sh"   # read back the path that was baked in
+  cat "${dir}/totsuka.5s.sh"   # read back the path that was baked in
+)
 ```
 
 - The `5s` in the filename is the refresh interval, which is SwiftBar's convention. `totsuka menu` reads the state database and nothing else: **7 ms per run, measured** (average of 100 consecutive runs against a real database, process start included). That interval is free.
 - **Bake in the absolute path.** A process launched from a GUI inherits a minimal `PATH` with neither `/usr/local/bin` nor a mise shim on it, so calling `totsuka` by name works from a terminal and fails under SwiftBar. Verified by running the script under `env -i`.
 - **Do not hard-code the path.** It depends on how totsuka was installed: `/usr/local/bin/totsuka` for a tarball, `/opt/homebrew/bin/totsuka` for Homebrew on Apple Silicon, `/usr/local/bin/totsuka` for Homebrew on Intel. The `$(command -v totsuka)` above resolves all of them.
-- Where the menu items themselves point (`totsuka focus <id>` and friends) needs no configuration: totsuka fills that in from its own `current_exe()`.
+- Where the menu items themselves point (`totsuka focus <id>` and friends) needs no configuration: totsuka fills that in with the path it is running from, whatever that turns out to be.
 
 ### When nothing shows up
 

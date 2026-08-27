@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-28T07:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T08:25:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -278,7 +278,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 
 | ID | 要件 | 優先度 |
 |---|---|---|
-| F-109 | **メニューバー表示(`totsuka menu`)**: 2 チャネルで返す — **形**が可用性(`○` = 健全 / `⚠` = 生きているが縮退している(F-110) / `✕` = 停止・stale lock)、**数**が**要対応**件数(`glossary/attention.md`: `pending` / `waiting_input` / `verifying` / `escalated` / `queued` + `wait_reason` の 5 状態。終端状態は数えない)。ドロップダウンは要対応・稼働中の 2 節で、タスク行のクリックは `totsuka focus <id>`、他は SwiftBar の `terminal=true` でターミナルへ受け渡す。既定の出力形式は SwiftBar のプラグイン書式、`--json` は表示モデルそのもの。**行の整形は Rust 側が持つ**: SwiftBar が読む構文は 2 層で、`text \| key=value` の `\|` に加えて**行テキスト内のバックスラッシュエスケープを SwiftBar 自身が処理する**(2.1.1 実測)。ソース由来のタイトルに `\|` が 1 つあれば行にパラメータを追加でき、改行があれば `safe()` の退避が 2 層目で元に戻されて 1 行が複数行に割れる(#280 と同じクラス)。`safe()` → バックスラッシュ二重化 → `\|` の退避、の 3 段で塞ぐ。**常に exit 0** — メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるため、状態 DB 欠如・migration 未適用・XDG パスの解決失敗はすべてメニューの 1 行として描く。`config.toml` は読まない。この契約は `menu_cmd` の外側にも及び、`main` は共有の `Cx::resolve` より前に分岐させ、書き込みも panic しない経路を使う(ADR-0065 参照) | S |
+| F-109 | **メニューバー表示(`totsuka menu`)**: 2 チャネルで返す — **形**が可用性(`○` = 健全 / `⚠` = 生きているが縮退している(F-110) / `✕` = 停止・stale lock)、**数**が**要対応**件数(`glossary/attention.md`: `pending` / `waiting_input` / `verifying` / `escalated` / `queued` + `wait_reason` の 5 状態。終端状態は数えない)。ドロップダウンは要対応・稼働中の 2 節で、タスク行のクリックは `totsuka focus <id>`、他は SwiftBar の `terminal=true` でターミナルへ受け渡す。既定の出力形式は SwiftBar のプラグイン書式、`--json` は表示モデルそのもの。**行の整形は Rust 側が持つ**: SwiftBar が読む構文は 3 層で、`text \| key=value` の `\|`、**行テキスト内のバックスラッシュエスケープ**(2.1.1 実測)、**`:name:` の SF Symbol / 絵文字展開**(`symbolize` / `emojize` が既定 true)。`\|` が 1 つあれば行にパラメータを追加でき、改行があれば `safe()` の退避が元に戻されて行が割れ、`:name:` があれば書かれた文字が消えてグリフに化ける(いずれも #280 と同じクラス)。`safe()` → バックスラッシュ二重化 → `\|` の退避の 3 段に加え、外部由来テキストを載せる全行へ `symbolize=false emojize=false` を付けて塞ぐ(3 層目はエスケープでは塞げない)。**常に exit 0** — メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるため、状態 DB 欠如・migration 未適用・XDG パスの解決失敗はすべてメニューの 1 行として描く。`config.toml` は読まない。この契約は `menu_cmd` の外側にも及び、`main` は共有の `Cx::resolve` より前に分岐させ、書き込みも panic しない経路を使う(ADR-0065 参照) | S |
 | F-110 | **ランタイム health(`health.json`)**: `run` は毎サイクル `$XDG_STATE_HOME/totsuka/health.json` を temp+rename で置き換え、graceful shutdown で削除する。内容は**毎サイクル問い直せる縮退だけ** — hook receiver の bind 失敗 / プラグインの停止(`abandoned` かどうかで対処が変わる) / spool バックログ(`*.jsonl` のみ。`.corrupt` は自動回収されないので数えない) / LLM 鍵の 401·403(成功で解除するラッチ)。一過性の失敗(notify 配送失敗・掃除失敗)は再評価できず永久に消えないため入れない。散文は保存せず読み出し側が組み立て、未知の `kind` も行として残す。`totsuka status` は `degraded:` ブロック(`--json` は `health`)、`totsuka menu` は `⚠` として読む。**`run.lock` が優先**で、停止中の run が残した文書は無視する(pid も突き合わせる) — 落ちた run の health は存在しないプロセスの話だからである。さらに読み手は**鮮度**も見る: pid は生きているのに 120 秒 republish が無い文書は stale として扱い、**捨てずに 1 つの縮退として出す**(捨てると、黙った run について「健全」と報告することになる)。stale は run が publish するものではなく読み手の判断で、`status --json` は `health.recorded_at` と `health.stale` の両方を出す。state.db でなくファイルなのは、スキーマを上げると古い totsuka が DB を開けなくなる(ADR-0017)ため | S |
 
 ## 5. 非機能要件

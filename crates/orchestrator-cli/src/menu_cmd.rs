@@ -17,21 +17,31 @@
 //! ## Why the escaping is the point
 //!
 //! Task titles are written by whoever can post in the connected Slack channel
-//! or file the GitHub issue, and SwiftBar reads a row through **two** layers
-//! of syntax, not one:
+//! or file the GitHub issue, and SwiftBar reads a row through **three** layers
+//! of syntax, not one. All three were found on real hardware, one at a time,
+//! after the unit tests were green:
 //!
-//! - `text | key=value …` — `|` separates a row's text from its parameters, so
-//!   an unescaped one lets its author append arbitrary parameters, `bash=`
-//!   included.
-//! - **backslash escapes inside the text.** Measured on SwiftBar 2.1.1: a `\n`
-//!   in the output becomes a real line break, and an escape it does not know
-//!   loses its backslash (`\u{7c}` printed as `u{7c}`).
+//! 1. `text | key=value …` — `|` separates a row's text from its parameters,
+//!    so an unescaped one lets its author append arbitrary parameters, `bash=`
+//!    included. Closed by [`menu_text`].
+//! 2. **backslash escapes inside the text.** Measured on SwiftBar 2.1.1: a
+//!    `\n` in the output becomes a real line break, and an escape it does not
+//!    know loses its backslash (`\u{7c}` printed as `u{7c}`). The first
+//!    shipped version escaped control characters with [`safe`] and stopped
+//!    there, so a title containing a newline had that newline **restored** by
+//!    SwiftBar — splitting one row into three, forged `---` separator
+//!    included. Closed by the doubling step in [`menu_text`].
+//! 3. **`:name:` expansion.** `symbolize` and `emojize` default to true, so
+//!    SwiftBar swaps `:checkmark.seal.fill:` for an SF Symbol image and
+//!    `:mushroom:` for an emoji — written characters simply **vanish**.
+//!    **This one cannot be escaped**: no spelling of `:mushroom:` survives as
+//!    text. Closed by [`RENDER_AS_TEXT`], repeated on every row that carries
+//!    externally-authored text.
 //!
-//! The second layer is the one that is easy to miss, and it was missed: the
-//! first shipped version escaped control characters with [`safe`] and stopped
-//! there, so a title containing a newline had that newline restored by
-//! SwiftBar — splitting one row into three, forged `---` separator included.
-//! Real hardware is the only place that showed up.
+//! The pattern across all three is worth naming: making text safe for one
+//! consumer does not make it safe for the next one down. `safe` renders
+//! control characters harmless *to a terminal*, and every layer above read
+//! its output as syntax again.
 //!
 //! Both layers are the same class of problem as #280 (see
 //! `ai-docs/security/terminal-output-sanitization.md`), which is why the
@@ -64,6 +74,22 @@ use crate::common::{CliError, Cx, live_health, lock_status, safe, stale_health_m
 
 /// How many characters of a task title reach the menu before it is elided.
 const TITLE_BUDGET: usize = 60;
+
+/// Parameters every row carrying externally-authored text must repeat, so
+/// SwiftBar renders that text *as text*.
+///
+/// `symbolize` and `emojize` both default to **true** upstream: SwiftBar
+/// replaces a `:name:` sequence in a row's text with an SF Symbol or an emoji
+/// (`:sun.max:`, `:mushroom:`). Task titles are written by whoever can post in
+/// the connected Slack channel, so leaving those on lets their author make
+/// written characters **disappear into a glyph** — precisely what
+/// escape-not-strip exists to prevent, and a way to forge what a row appears
+/// to say.
+///
+/// **This layer cannot be escaped away.** Unlike `|` and backslashes there is
+/// no spelling of `:mushroom:` that survives as text; the parameter is the
+/// only switch. That is why it lives here and not in [`menu_text`].
+const RENDER_AS_TEXT: &str = "symbolize=false emojize=false";
 
 /// Whether the orchestrator can make progress right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -339,7 +365,7 @@ fn row_glyph(state: &str) -> &'static str {
 /// Render one task row, with `totsuka focus <id>` as its click action.
 fn render_row(row: &MenuRow, binary: &str) -> String {
     format!(
-        "{glyph} #{id} {state}  {workflow} — {title} | bash=\"{binary}\" param1=focus param2={id} terminal=false\n",
+        "{glyph} #{id} {state}  {workflow} — {title} | bash=\"{binary}\" param1=focus param2={id} terminal=false {RENDER_AS_TEXT}\n",
         glyph = row_glyph(&row.state),
         id = row.task_id,
         state = menu_text(&row.state),
@@ -362,7 +388,7 @@ fn render_swiftbar(model: &MenuModel, binary: &str) -> String {
     out.push_str("---\n");
 
     match &model.error {
-        Some(error) => out.push_str(&format!("{}\n", menu_text(error))),
+        Some(error) => out.push_str(&format!("{} | {RENDER_AS_TEXT}\n", menu_text(error))),
         None => out.push_str(match model.availability {
             Availability::Ok => "totsuka: running\n",
             Availability::Degraded => "totsuka: running, degraded\n",
@@ -373,7 +399,7 @@ fn render_swiftbar(model: &MenuModel, binary: &str) -> String {
     // Ahead of the task sections: when both are present, the degradation is
     // why the tasks are not moving.
     for reason in &model.degraded {
-        out.push_str(&format!("• {}\n", menu_text(reason)));
+        out.push_str(&format!("• {} | {RENDER_AS_TEXT}\n", menu_text(reason)));
     }
 
     if !model.attention.is_empty() {
@@ -464,8 +490,12 @@ mod tests {
             .lines()
             .find(|l| l.contains("broken"))
             .expect("the reason is rendered");
-        assert_eq!(line.matches('|').count(), 0, "{line}");
-        assert!(line.contains("\\u{7c}"), "{line}");
+        // One `|` — the separator we emit before our own parameters. The
+        // injected one is escaped and stays in the text half.
+        assert_eq!(line.matches('|').count(), 1, "{line}");
+        let (text, params) = line.split_once('|').expect("one separator");
+        assert!(text.contains("\\u{7c}"), "{line}");
+        assert_eq!(params.trim(), RENDER_AS_TEXT);
     }
 
     /// The 要対応 set is exactly five states — the badge's whole contract.
@@ -571,6 +601,46 @@ mod tests {
         }
     }
 
+    /// **The third layer, and the one escaping cannot reach.** `symbolize` and
+    /// `emojize` default to true upstream, so SwiftBar swaps a `:name:` in a
+    /// row's text for a glyph. Measured on 2.1.1: a title containing
+    /// `:checkmark.seal.fill:` had those 21 written characters **replaced by an
+    /// SF Symbol image**. There is no spelling that survives as text, so every
+    /// row carrying externally-authored text must repeat the parameters.
+    #[test]
+    fn every_row_with_external_text_switches_symbol_expansion_off() {
+        let m = MenuModel {
+            availability: Availability::Degraded,
+            attention_count: 1,
+            attention: vec![row(1, "verifying", "a :mushroom: title")],
+            working: vec![row(2, "running", "another :sun.max: title")],
+            degraded: vec!["plugin `:sparkles:` is down".to_string()],
+            error: None,
+        };
+        let out = render_swiftbar(&m, "/usr/local/bin/totsuka");
+        for line in out
+            .lines()
+            .filter(|l| l.contains("title") || l.starts_with('•'))
+        {
+            assert!(
+                line.contains(RENDER_AS_TEXT),
+                "a row carrying source-controlled text must disable symbol \
+                 expansion: {line}"
+            );
+        }
+        // The failure row too — its message embeds paths from the environment.
+        let failed = render_swiftbar(
+            &MenuModel::unavailable("no state database at /x/:sun.max:/y".to_string()),
+            "/usr/local/bin/totsuka",
+        );
+        assert!(
+            failed
+                .lines()
+                .any(|l| l.contains("no state database") && l.contains(RENDER_AS_TEXT)),
+            "{failed}"
+        );
+    }
+
     /// The reason this rendering lives in Rust: a `|` in a source-controlled
     /// title must not be able to append parameters to the row.
     #[test]
@@ -594,7 +664,9 @@ mod tests {
         assert!(text.contains("bash=/bin/sh"), "{task_line}");
         assert_eq!(
             params.trim(),
-            "bash=\"/usr/local/bin/totsuka\" param1=focus param2=7 terminal=false"
+            format!(
+                "bash=\"/usr/local/bin/totsuka\" param1=focus param2=7 terminal=false {RENDER_AS_TEXT}"
+            )
         );
     }
 
