@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:51a99bf11811122bb02bf78d4ee3f56b4996db021b49b15daff57920955eb1b2 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:d48e4fa2a942d30e808e1f33c2774ca657e8e776b642bd4b8e6e1e1a5f44ab98 -->
 
 # What totsuka is
 
@@ -67,6 +67,14 @@ Concurrency is limited globally, per repository, and per agent plugin. A task wa
 
 Notifier plugins deliver events — waiting for input, done, failed, pending. A macOS notification plugin is bundled. **A failed notification never affects task execution.**
 
+### Showing status in the menu bar
+
+`totsuka menu` renders a view for a menu-bar host such as SwiftBar. It has two channels: the **glyph** is availability (`○` when totsuka is running, `✕` when it is not), and the **number** is how many tasks are waiting on you.
+
+That number counts five states — `pending`, `waiting_input`, `verifying`, `escalated`, and `queued` with a recorded reason — and nothing else. Finished tasks are never counted, so the number returns to zero once you have dealt with everything. Clicking a task row brings its pane to the front; nothing in the menu changes a task's state.
+
+The default output is SwiftBar's plugin format; `--json` gives you the same view as data. It always exits 0 — a plugin that does not renders as a broken item — so failures appear as a row instead. Setup is two lines of shell, in the operations guide.
+
 ## The command line
 
 A single binary, run in the foreground.
@@ -77,6 +85,7 @@ A single binary, run in the foreground.
 | `setup` | Interactive first-time setup, from a recipe |
 | `run [--watch] [--json]` | The main loop, from intake to dispatch. `--watch` stays up until you stop it |
 | `status [--json]` | Running, queued, and waiting tasks, plus worktrees |
+| `menu [--json]` | The menu-bar view: availability, plus how many tasks are waiting on you |
 | `task list / show <id> / cancel <id> / retry <id>` | Working with individual tasks |
 | `task export` | Stream the audit log to stdout as NDJSON |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
@@ -85,7 +94,7 @@ A single binary, run in the foreground.
 | `logs [-f] [--task <id>]` | Read or follow logs |
 | `completion <shell>` | Shell completions |
 
-Common flags are `--debug`, `--json`, `--dry-run`, and `--config <path>`. `--json` is available on the commands that print a document — `status`, `task list`, `task show`, `plugin list`, `doctor` — so other tools can consume them. `task export` needs no such flag, since NDJSON is the only thing it prints.
+Common flags are `--debug`, `--json`, `--dry-run`, and `--config <path>`. `--json` is available on the commands that print a document — `status`, `menu`, `task list`, `task show`, `plugin list`, `doctor` — so other tools can consume them. `task export` needs no such flag, since NDJSON is the only thing it prints. `menu` is the one command that always exits 0: it is read by a menu-bar host, and a plugin that exits non-zero renders as a broken item, so failures become a row in the menu instead.
 
 Whenever you ask for machine-readable output, stdout carries the document and nothing else; anything advisory goes to stderr.
 
@@ -124,7 +133,7 @@ Read-only commands like `status` start in under a second.
 
 | Not included | Why |
 |---|---|
-| A GUI or web dashboard | It is a terminal tool |
+| A web dashboard or cloud UI | State stays local. Text for a local menu bar is supported; the drawing is the host's job |
 | Pull request review, merge decisions, merge tracking | Human review territory. Nothing is tracked after the pull request is opened |
 | Guaranteed Linux and Windows support | The abstractions are there; the implementation and testing are not |
 | A resident daemon or server | The lifecycle is bounded by the process you launched |

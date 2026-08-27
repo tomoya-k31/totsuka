@@ -18,4 +18,5 @@
 * [AI Tool（AI ツール）と 2 軸モデル](ai-tool.md) - pane 内で起動する AI エージェント CLI（Claude Code / Codex / OpenCode）。pane を管理する agent プラグイン（herdr 等）とは直交する軸で、[tools] レジストリと tool フィールド（workflow > repo > default_tool > 組み込み claude）で選択される。
 * [pane（ペイン）](pane.md) - エージェント CLI が実際に動くターミナル区画（herdr の pane）。dispatch 時に worktree を cwd、label を totsuka + source task id として作られ、pane_control capability 越しの session/focus・session/release・session/list で制御され、寿命は worktree の掃除ポリシーに連動する。
 * [click-to-focus（クリックで pane を開く）](click-to-focus.md) - 通知をクリックすると、その通知を出したタスクの herdr pane が前面に来る機能（F-94）。terminal-notifier の -activate（GUI 前面化）+ -execute（totsuka focus → 制御 UDS /focus → agent_ide の session/focus 委譲）の 2 段で実現し、縮退はすべて静か。
+* [要対応（Attention）](attention.md) - 人間が動かさない限り永久に進まない非終端タスクの集合。pending / waiting_input / verifying / escalated / queued+wait_reason の 5 状態からなり、メニューバーのバッジ（F-109）が数える対象。終端状態を含めないのは、含めると数字が単調増加して 0 に戻らなくなるため。
 <!-- okf:index:end -->

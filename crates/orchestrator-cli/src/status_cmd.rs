@@ -6,22 +6,9 @@
 use orchestrator_core::adapters::state_db::TaskNote;
 use orchestrator_core::agent_tools;
 use orchestrator_core::domain::state::TaskState;
-use orchestrator_core::platform::PlatformProcessProbe;
-use orchestrator_core::ports::ProcessProbe;
 use serde::Serialize;
 
-use crate::common::{CliError, Cx, print_json, safe};
-
-/// Liveness of the `run` process, from the lock file (F-74).
-#[derive(Debug, Serialize)]
-struct OrchestratorStatus {
-    /// Whether a live `run` holds the lock.
-    running: bool,
-    /// The lock holder's PID, if a lock file exists.
-    pid: Option<u32>,
-    /// A lock file exists but its PID is dead (crashed run).
-    stale_lock: bool,
-}
+use crate::common::{CliError, Cx, OrchestratorStatus, lock_status, print_json, safe};
 
 /// One task row of the status report.
 #[derive(Debug, Serialize)]
@@ -203,31 +190,4 @@ fn wait_reason(note: TaskNote) -> WaitReason {
 
 fn count(tasks: &[TaskRow], state: TaskState) -> usize {
     tasks.iter().filter(|t| t.state == state.as_str()).count()
-}
-
-/// Inspect the run lock (F-74): live holder, stale lock, or no lock.
-fn lock_status(cx: &Cx) -> OrchestratorStatus {
-    let path = cx.paths.state_dir().join("run.lock");
-    let Ok(contents) = std::fs::read_to_string(&path) else {
-        return OrchestratorStatus {
-            running: false,
-            pid: None,
-            stale_lock: false,
-        };
-    };
-    match contents.trim().parse::<u32>() {
-        Ok(pid) => {
-            let alive = PlatformProcessProbe::default().is_alive(pid);
-            OrchestratorStatus {
-                running: alive,
-                pid: Some(pid),
-                stale_lock: !alive,
-            }
-        }
-        Err(_) => OrchestratorStatus {
-            running: false,
-            pid: None,
-            stale_lock: true,
-        },
-    }
 }

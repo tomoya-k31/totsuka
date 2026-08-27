@@ -12,6 +12,7 @@ mod focus_cmd;
 mod from_source;
 mod init_cmd;
 mod logs_cmd;
+mod menu_cmd;
 mod plugin_cmd;
 mod run_cmd;
 mod setup;
@@ -114,6 +115,18 @@ enum Command {
     Task {
         #[command(subcommand)]
         cmd: task_cmd::TaskCommand,
+    },
+    /// Render the menu-bar view: the availability glyph plus how many tasks
+    /// are waiting on a human (F-109).
+    ///
+    /// The default output is SwiftBar's plugin format, so a two-line shell
+    /// script in SwiftBar's plugin folder is the whole integration; `--json`
+    /// emits the same model for any other host. Always exits 0 — a menu-bar
+    /// plugin that fails renders as a broken item, so every degraded outcome
+    /// is a row in the menu instead.
+    Menu {
+        #[command(flatten)]
+        json: common::JsonFlag,
     },
     /// Bring a task's agent pane to the foreground (the notification's
     /// click target, F-94). Quietly no-ops when the orchestrator is stopped.
@@ -240,6 +253,16 @@ fn execute(
         tracing::debug!("--debug: verbose diagnostics enabled");
     }
 
+    // `menu` resolves its own paths, ahead of the shared `Cx::resolve` below.
+    // Its whole contract is that it never exits non-zero (a menu-bar plugin
+    // that does renders as a broken item), and a `?` on a shared line before
+    // the dispatch would break that from outside the command — which is
+    // exactly what a review of #585 found. Everything it can still fail at is
+    // now inside `menu_cmd::run`, which turns failure into a row.
+    if let Command::Menu { json } = command {
+        return menu_cmd::run(config, json.json);
+    }
+
     // Completion needs no environment at all.
     if let Command::Completion { shell } = command {
         clap_complete::generate(
@@ -287,6 +310,7 @@ fn execute(
             },
         ),
         Command::Status { json } => status_cmd::run(&cx, json.json),
+        Command::Menu { .. } => unreachable!("handled above"),
         Command::Task { cmd } => task_cmd::run(&cx, cmd),
         Command::Focus { id } => focus_cmd::run(&cx, id),
         Command::Plugin { cmd } => plugin_cmd::run(&cx, cmd),

@@ -1,10 +1,10 @@
 ---
 type: Policy
 title: 端末出力の信頼境界（外部由来テキストの無害化）
-description: totsuka が第三者の書いたテキスト（Slack 本文・GitHub issue タイトル・author・url・source_task_id）を端末へ出す際の制御シーケンス無害化ポリシー。safe() の置き場所（core の terminal モジュール）と適用範囲、エスケープであって除去ではない理由、--json と JSON ログを通さない理由、one_line の 3 段の順序、未カバー経路を定める。
+description: totsuka が第三者の書いたテキスト（Slack 本文・GitHub issue タイトル・author・url・source_task_id）を端末へ出す際の制御シーケンス無害化ポリシー。safe() の置き場所（core の terminal モジュール）と適用範囲、エスケープであって除去ではない理由、--json と JSON ログを通さない理由、one_line の 3 段の順序、menu が足す SwiftBar 書式の第 2 層、未カバー経路を定める。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/terminal.rs
 tags: [security, cli, terminal, ansi, escape-sequence, sanitization, output]
-generated: { by: human:tomoya-k31, at: 2026-07-28T03:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-28T06:35:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -55,6 +55,26 @@ ANSI 制御シーケンスはコード実行を与えない。壊すのは
 | `status` | `title` / `branch` / `worktree_path` |
 | `logs` | `message` / `extras` / `timestamp` / `level` / JSON としてパースできない行 |
 | `doctor`（#297） | **すべての `Check`** の `name` / `detail` / `action`、および TTY 時の対話プロンプト（孤児 worktree の削除確認・孤児 pane の解放確認と、その結果行） |
+| `menu`（#585） | `title` / `state` / `workflow` と、`bash=` に補間するバイナリのパス。**このコマンドだけは `safe()` の外側にもう 1 層ある** — 下記参照 |
+
+# `menu` の第 2 層（#585）
+
+`totsuka menu` の既定出力は SwiftBar のプラグイン書式で、その行は `text | key=value …` と読まれる。
+つまり **`|` がメタ文字**であり、タイトルに `|` が 1 つあれば行にパラメータ（`bash=` を含む）を追加できてしまう。
+これは本文書が扱う脅威 —— **第三者が内容を決められるテキストが、表示を乗っ取る** —— の一形態であって、
+制御文字とは別の入口である。`safe()` はこれを知らない（知る必要も無い。`|` は端末にとって普通の文字である）。
+
+したがって `menu_cmd::menu_text` は 2 段で無害化する。順序に意味がある:
+
+1. `safe()` —— 制御文字を可視のエスケープ形へ。**改行を潰すのはここ**で、これが無いと 1 行が 2 行に割れる
+2. `|` を `\u{7c}` へ
+
+2 段目も **escape-not-strip** を守る。注入テキストは消えず、行の**テキスト側**に丸ごと残るので、
+何が来たのかは読める。`--json` は他のコマンドと同じくバイト完全のまま。
+
+**この防御を Rust の外へ出さないことが、`menu` がサブコマンドである理由そのものである。**
+整形を jq / シェルスクリプトに任せる設計も検討したが（[ADR-0065](/decisions/adr-0065-menubar-status.md)）、
+それは型もテストも無い場所へこの層を移すことになる。
 
 加えて [orchestrator-core](/components/orchestrator-core.md) の human ログ層（stderr、#297）:
 

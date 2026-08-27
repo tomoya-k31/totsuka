@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-27T04:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T06:35:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -53,12 +53,13 @@ As a basic principle it adopts the **1 task = 1 repo = 1 worktree** normalizatio
 - Plugin install / uninstall / enable / disable
 - XDG Base Directory–compliant configuration, state, and log management
 - Status inspection and operations via CLI
+- Status display on a local GUI host (a menu bar, for one): totsuka emits text, the host does the drawing (F-109)
 
 ### 3.2 Out of Scope (v1)
 
 | Item | Reason |
 |---|---|
-| GUI / web dashboard | Terminal launch is assumed. A TUI may be considered later as P2 |
+| Web dashboard / cloud UI | State stays local. Text output for a local GUI host is in scope per §3.1; a TUI may still be considered later as P2 |
 | PR review automation, merge decisions, merge tracking | Human review territory. No tracking after PR creation |
 | Guaranteed Linux / Windows support | Abstraction only; implementation and testing are out of scope |
 | Resident daemon / server operation | Limited to a locally launched lifecycle |
@@ -270,6 +271,14 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 | F-107 | **Pane post-processing**: a pane's lifetime tracks its worktree's cleanup policy, not the task's state ([ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)). The pane is closed (`session/release`) only where `decide_cleanup` answers `Remove` — so under the **default `manual`** it is never closed, which is deliberate: the pane is the review surface for committed-but-unpushed work. `Retain` / `Dirty` keep it for the same reason, and `Failed` / `Escalated` panes are retained for diagnosis. The one exception is a **re-dispatch** of the same task, which closes a retained pane first (#481) — a second pane for one task is not a review surface. Panes left behind are `totsuka doctor`'s job (#211). **This supersedes the original wording** (`Done` panes auto-close via idempotent `task/cancel`): nothing has ever called `task/cancel` on completion — its only caller is the `state/subscribe`-failure rollback in `dispatch_one` | M |
 | F-108 | **Question-pending park** (#487, ADR-0050): design / implement (attended) profiles ask the human through the tool's native question UI — claude `AskUserQuestion` (a `PreToolUse` hook rendered only into those profiles' settings), opencode `question` (the plugin's `tool.execute.before`, which also suppresses idle judgement while the dialog waits); codex has no default-mode question tool and keeps `NEEDS_INPUT` with a numbered choice list. While the dialog waits the turn does not end and no `Stop` arrives, so the hook POSTs `QuestionPending` (per-question `prompt_id` — required, or a second question dedups away) and the engine parks the task in `waiting_input` exactly like `Stop{NEEDS_INPUT}`: slot released, operator notified with the question text; a *new* question while parked re-notifies. Markers stay the completion wire signal (ADR-0020) and `NEEDS_INPUT` + numbered list remains the in-prompt fallback when the question tool is unavailable | M |
 
+### 4.12 Menu-bar display
+
+The path to a surface that is **always in view**, such as the macOS menu bar. Notifications (§4.10) are transient — miss one and it is gone — whereas this stays. totsuka draws no GUI of its own; it only emits text a GUI host can read (§3.1).
+
+| ID | Requirement | Priority |
+|---|---|---|
+| F-109 | **Menu-bar display (`totsuka menu`)**: two channels — the **glyph** is availability (`○` = a live `run` holds the lock / `✕` = stopped or a stale lock) and the **number** is the **attention** count (`glossary/attention.md`: `pending` / `waiting_input` / `verifying` / `escalated` / `queued` + `wait_reason`; terminal states are never counted). The dropdown has two sections, attention and working; clicking a task row runs `totsuka focus <id>`, and the rest hand off to a terminal through SwiftBar's `terminal=true`. The default output is SwiftBar's plugin format; `--json` emits the display model itself. **Row rendering belongs to the Rust side**: SwiftBar's format is `text \| key=value`, where `\|` is a metacharacter, so a single `\|` in a source-controlled title would let its author append parameters to the row (the same class of problem as #280). **Always exits 0** — a menu-bar plugin that exits non-zero renders as a broken item, so a missing state DB, pending migrations, or XDG paths that will not resolve all become a row in the menu instead; it never reads `config.toml`. The contract reaches outside the command's own body: `main` dispatches it ahead of the shared `Cx::resolve`, and it writes through a path that does not panic (see ADR-0065) | S |
+
 ## 5. Non-Functional Requirements
 
 ### 5.1 Launch / CLI
@@ -285,6 +294,7 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 | `setup` | Interactive first-time setup from a recipe (added after this table was first written; see the setup playbook) |
 | `run [--watch] [--json]` | Main loop from task intake (push, `task/submit`) to dispatch (one-shot by default; `--watch` stays up receiving pushes until shutdown — see Open Question #2, resolved) |
 | `status [--json]` | List running / queued / waiting tasks and worktrees |
+| `menu [--json]` | The menu-bar view (F-109). SwiftBar plugin format by default, the display model with `--json`. Always exits 0 |
 | `task list / show <id> / cancel <id> / retry <id>` | Individual task operations |
 | `task export [--since <event_id>] [--task <id>] [--no-detail]` | Stream the audit log (`events`) to stdout as NDJSON. The state of record lives in SQLite, so this is the way out in a form other tools can read; the table is append-only, which makes `--since` a complete incremental cursor |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
@@ -341,7 +351,7 @@ Claude Code has no lifecycle authority, so herdr's screen-manifest completion de
 
 ## 7. UI/UX Requirements
 
-- No GUI. CLI output quality is defined as the UX.
+- totsuka draws no GUI of its own. CLI output quality is defined as the UX — and a text format meant to be fed to a GUI host (a menu bar, for one) is treated as one more CLI output under that same definition (F-109).
 - Error messages always include "cause + next action" (e.g. `config not found → run 'app init'`).
 - `--debug` outputs information needed during development (RPC payloads, state transitions, LLM decision rationale). Sensitive data follows the §5.2 masking policy.
 - Output respects the NO_COLOR environment variable and non-TTY.
