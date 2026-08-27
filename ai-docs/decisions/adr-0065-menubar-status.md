@@ -4,9 +4,10 @@ title: ADR-0065 メニューバー表示は SwiftBar プラグイン + totsuka m
 description: "常時視界に入る面へ totsuka の状態を出すために、GUI を自前で描かず SwiftBar のプラグイン書式を吐く `totsuka menu` サブコマンドを足す。可用性と要対応件数を 2 チャネルに分け、要対応から終端状態を外し、行の整形（特に `|` のエスケープ）を Rust 側に置く。却下した 8 案（run 自身の描画・メニューからの run 起動・doctor のポーリング・ログ文言マッチ・Swift アプリ・objc2 常駐・jq 整形・state.db 直読み）とその理由を記録する。"
 resource: https://github.com/tomoya-k31/totsuka/issues/584
 tags: [decision, menu, swiftbar, macos, observability, attention, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-28T08:45:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T08:50:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-08-28T07:32:00+09:00 }
+  - { by: human:tomoya-k31, at: 2026-08-28T08:44:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -15,7 +16,7 @@ owner: tomoya-k31
 
 stable。#584（エピック）の設計決定。実装は #585（`totsuka menu`）と #586（`health.json` と `⚠`）の 2 段で、**どちらも実装済み**。
 
-**実機（SwiftBar 2.1.1 / macOS）で検収した。何が確認できて何が残っているかを明示する** —— `verified` はこの範囲についてのものである。
+**実機（SwiftBar 2.1.1 / macOS）で検収完了。** 何を確認したかを明示する —— `verified` はこの範囲についてのものである。
 
 確認できたこと:
 
@@ -26,8 +27,10 @@ stable。#584（エピック）の設計決定。実装は #585（`totsuka menu`
 - **絶対パスが必要という主張** —— プラグインスクリプトを `env -i`（`PATH` も `HOME` も無い）で実行して動くことを確認
 - 速度 —— 実測 7ms/回（100 回連続実行の平均）
 - **クリックが仕込みどおり動く** —— 注入を仕込んだ行をクリックしても電卓は開かず（`bash=` を奪えていない）、`totsuka focus` が `run` 停止中に静かに縮退した。`Open logs` は Ghostty を開き、絶対パスの `totsuka logs` を実行した
+- **`⚠`（縮退）が実機で発火する** —— 隔離した XDG で `run --watch` を起こし、hook receiver の bind を失敗させた状態で、`health.json` に `hook_receiver_down` が publish され、`totsuka status` の `degraded:`・`status --json` の `health`・`totsuka menu` の `⚠` が同じ記録を読むところまで一本で確認した。**この機能の存在理由そのものの状態** —— `status` は `running (pid …)` と出て、プロセスは元気なまま完了検知だけが死んでいる
+- **graceful shutdown で `health.json` が消える** —— SIGINT 後にファイルが無くなり、`menu` が `⚠` から `✕` へ戻る。ユニットテストでしか押さえていなかった経路
 
-**残っていること**: `⚠`（縮退）の実機発火は `run` を起こしていないので未確認で、これは [F-110](/product/orchestrator-spec.ja.md) 側の検収に属する。
+**残っていること**: 無し。
 
 # Context
 
