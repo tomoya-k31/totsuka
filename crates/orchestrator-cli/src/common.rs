@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use orchestrator_core::adapters::StateDb;
 use orchestrator_core::config::{self, Finding, FindingSeverity, RootConfig};
 use orchestrator_core::paths::Paths;
+use orchestrator_core::platform::PlatformProcessProbe;
 use orchestrator_core::plugins::PluginStore;
+use orchestrator_core::ports::ProcessProbe;
+use serde::Serialize;
 
 /// A boxed error for CLI operations.
 pub type CliError = Box<dyn std::error::Error>;
@@ -244,6 +247,48 @@ pub fn hook_socket_path(
         Some(raw) => config::expand_path(raw, &env_fn)
             .map_err(|e| format!("[hooks].socket_path does not expand: {e}").into()),
         None => Ok(cx.paths.runtime_dir().join("agent-events.sock")),
+    }
+}
+
+/// Liveness of the `run` process, from the lock file (F-74).
+///
+/// Shared plumbing rather than a `status` detail: `totsuka menu` asks the same
+/// question to pick its availability glyph (F-109), and the two must never
+/// disagree about what "running" means.
+#[derive(Debug, Serialize)]
+pub struct OrchestratorStatus {
+    /// Whether a live `run` holds the lock.
+    pub running: bool,
+    /// The lock holder's PID, if a lock file exists.
+    pub pid: Option<u32>,
+    /// A lock file exists but its PID is dead (crashed run).
+    pub stale_lock: bool,
+}
+
+/// Inspect the run lock (F-74): live holder, stale lock, or no lock.
+pub fn lock_status(cx: &Cx) -> OrchestratorStatus {
+    let path = cx.paths.state_dir().join("run.lock");
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return OrchestratorStatus {
+            running: false,
+            pid: None,
+            stale_lock: false,
+        };
+    };
+    match contents.trim().parse::<u32>() {
+        Ok(pid) => {
+            let alive = PlatformProcessProbe::default().is_alive(pid);
+            OrchestratorStatus {
+                running: alive,
+                pid: Some(pid),
+                stale_lock: !alive,
+            }
+        }
+        Err(_) => OrchestratorStatus {
+            running: false,
+            pid: None,
+            stale_lock: true,
+        },
     }
 }
 
