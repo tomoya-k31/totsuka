@@ -4,7 +4,7 @@ title: ADR-0065 メニューバー表示は SwiftBar プラグイン + totsuka m
 description: "常時視界に入る面へ totsuka の状態を出すために、GUI を自前で描かず SwiftBar のプラグイン書式を吐く `totsuka menu` サブコマンドを足す。可用性と要対応件数を 2 チャネルに分け、要対応から終端状態を外し、行の整形（特に `|` のエスケープ）を Rust 側に置く。却下した 8 案（run 自身の描画・メニューからの run 起動・doctor のポーリング・ログ文言マッチ・Swift アプリ・objc2 常駐・jq 整形・state.db 直読み）とその理由を記録する。"
 resource: https://github.com/tomoya-k31/totsuka/issues/584
 tags: [decision, menu, swiftbar, macos, observability, attention, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-28T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T05:43:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

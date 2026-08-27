@@ -3,7 +3,7 @@ type: Term
 title: 要対応（Attention）
 description: 人間が動かさない限り永久に進まない非終端タスクの集合。pending / waiting_input / verifying / escalated / queued+wait_reason の 5 状態からなり、メニューバーのバッジ（F-109）が数える対象。終端状態を含めないのは、含めると数字が単調増加して 0 に戻らなくなるため。
 tags: [glossary, attention, menu, status, task-state]
-generated: { by: claude-code/opus-5, at: 2026-08-28T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T05:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
