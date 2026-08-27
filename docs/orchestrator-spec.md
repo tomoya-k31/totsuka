@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:eab912b139bdcac6cb6c0130f685a0dcbc6f9887a1d8cd78b2608e3e3cbb4357 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:d48e4fa2a942d30e808e1f33c2774ca657e8e776b642bd4b8e6e1e1a5f44ab98 -->
 
 # What totsuka is
 
@@ -73,7 +73,7 @@ Notifier plugins deliver events — waiting for input, done, failed, pending. A 
 
 That number counts five states — `pending`, `waiting_input`, `verifying`, `escalated`, and `queued` with a recorded reason — and nothing else. Finished tasks are never counted, so the number returns to zero once you have dealt with everything. Clicking a task row brings its pane to the front; nothing in the menu changes a task's state.
 
-The default output is SwiftBar's plugin format; `--json` gives you the same view as data. Setup is two lines of shell, in the operations guide.
+The default output is SwiftBar's plugin format; `--json` gives you the same view as data. It always exits 0 — a plugin that does not renders as a broken item — so failures appear as a row instead. Setup is two lines of shell, in the operations guide.
 
 ## The command line
 

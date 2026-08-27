@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-27T04:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T06:35:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -278,7 +278,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 
 | ID | 要件 | 優先度 |
 |---|---|---|
-| F-109 | **メニューバー表示(`totsuka menu`)**: 2 チャネルで返す — **形**が可用性(`○` = `run` が生きている / `✕` = 停止・stale lock)、**数**が**要対応**件数(`glossary/attention.md`: `pending` / `waiting_input` / `verifying` / `escalated` / `queued` + `wait_reason` の 5 状態。終端状態は数えない)。ドロップダウンは要対応・稼働中の 2 節で、タスク行のクリックは `totsuka focus <id>`、他は SwiftBar の `terminal=true` でターミナルへ受け渡す。既定の出力形式は SwiftBar のプラグイン書式、`--json` は表示モデルそのもの。**行の整形は Rust 側が持つ**: SwiftBar の書式は `text \| key=value` で `\|` がメタ文字であり、ソース由来のタイトルに `\|` が 1 つあれば行にパラメータを追加できてしまう(#280 と同じクラス)。**常に exit 0** — メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるため、状態 DB 欠如・migration 未適用・config 不正はすべてメニューの 1 行として描く(ADR-0065 参照) | S |
+| F-109 | **メニューバー表示(`totsuka menu`)**: 2 チャネルで返す — **形**が可用性(`○` = `run` が生きている / `✕` = 停止・stale lock)、**数**が**要対応**件数(`glossary/attention.md`: `pending` / `waiting_input` / `verifying` / `escalated` / `queued` + `wait_reason` の 5 状態。終端状態は数えない)。ドロップダウンは要対応・稼働中の 2 節で、タスク行のクリックは `totsuka focus <id>`、他は SwiftBar の `terminal=true` でターミナルへ受け渡す。既定の出力形式は SwiftBar のプラグイン書式、`--json` は表示モデルそのもの。**行の整形は Rust 側が持つ**: SwiftBar の書式は `text \| key=value` で `\|` がメタ文字であり、ソース由来のタイトルに `\|` が 1 つあれば行にパラメータを追加できてしまう(#280 と同じクラス)。**常に exit 0** — メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるため、状態 DB 欠如・migration 未適用・XDG パスの解決失敗はすべてメニューの 1 行として描く。`config.toml` は読まない。この契約は `menu_cmd` の外側にも及び、`main` は共有の `Cx::resolve` より前に分岐させ、書き込みも panic しない経路を使う(ADR-0065 参照) | S |
 
 ## 5. 非機能要件
 

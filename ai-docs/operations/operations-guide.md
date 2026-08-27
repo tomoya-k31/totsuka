@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-08-01T22:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T06:35:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -169,7 +169,7 @@ EOF
 chmod +x ~/SwiftBar/totsuka.5s.sh
 ```
 
-- ファイル名の `5s` が更新間隔である（SwiftBar の規約）。`totsuka menu` は状態 DB の直読みだけで 10ms 未満なので、この間隔でも負荷にならない
+- ファイル名の `5s` が更新間隔である（SwiftBar の規約）。`totsuka menu` は状態 DB を直読みするだけで、**実測 7ms/回**（100 回連続実行の平均、20 タスクの実 DB・プロセス起動込み）。この間隔でも負荷にならない
 - **`totsuka` は絶対パスで書く。** GUI から起動されたプロセスは `/usr/local/bin` も mise も含まない最小 `PATH` を継承するので、名前で呼ぶとターミナルからだけ動いて、SwiftBar 経由では「command not found」になる。`which totsuka` の結果を貼ること
 
 ## 出ないとき
@@ -181,7 +181,7 @@ chmod +x ~/SwiftBar/totsuka.5s.sh
 | `✕` のまま | `run` が動いていない。`totsuka status` の 1 行目と一致するはず（一致しないなら不具合） |
 | 件数が `totsuka status` と合わない | 終端状態は数えない仕様。`totsuka menu --json` の `attention` 配列と突き合わせる |
 
-**`totsuka menu` は失敗しても exit 0 で、原因をメニューの 1 行として出す**（状態 DB が無い、migration が未適用、config が壊れている等）。非ゼロ終了するとメニュー項目ごと壊れるための設計なので、「エラーが出ない」ことを健全さの証拠にしないこと — メニューの本文を読む。
+**`totsuka menu` は失敗しても exit 0 で、原因をメニューの 1 行として出す**（状態 DB が無い、migration が未適用、`HOME` すら無い最小環境で XDG パスが解決できない等）。非ゼロ終了するとメニュー項目ごと壊れるための設計なので、「エラーが出ない」ことを健全さの証拠にしないこと — メニューの本文を読む。なお **`config.toml` は読まない**ので、config が壊れていても `menu` の表示は変わらない（切り分けには `totsuka config validate` を使う）。
 
 # FAQ / 切り分け
 

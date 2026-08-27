@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:5188308f9ab315d7d07fb94e6e47506a6630fec98ef8c0122c24e9241117e868 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:b22ccfdcefb4e4e2725c7ce1d612cfc4691b3ffeacce67a8400a2a7d8f4551c4 -->
 
 # totsuka とは
 
@@ -74,7 +74,7 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 
 数に入るのは `pending` / `waiting_input` / `verifying` / `escalated` / 理由が記録された `queued` の 5 状態だけで、他は入らない。終わったタスクは決して数えないので、対応し終えれば数は 0 に戻る。タスク行をクリックするとその pane が前面に来る。メニューからタスクの状態を変える操作は無い。
 
-既定の出力は SwiftBar のプラグイン書式で、`--json` は同じ内容をデータとして返す。設定はシェル 2 行で、運用ガイドに手順がある。
+既定の出力は SwiftBar のプラグイン書式で、`--json` は同じ内容をデータとして返す。常に exit 0 で終わり（非ゼロ終了するとメニュー項目ごと壊れるため）、失敗は行として出る。設定はシェル 2 行で、運用ガイドに手順がある。
 
 ## コマンドライン
 

@@ -298,6 +298,106 @@ fn task_export_streams_ndjson_with_a_resumable_cursor() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// `totsuka menu | head` must not exit non-zero either (#585).
+///
+/// The operations guide suggests running the plugin script by hand to debug
+/// it, and piping it is the obvious next step. The fixture makes more output
+/// than a pipe buffer holds (macOS: 64 KiB), so the child is still writing
+/// when the reader disappears.
+///
+/// **What this does not pin.** `print!` panics on a write error where
+/// `write_all` returns one, which is why `menu_cmd` uses the latter — but a
+/// stdout that actually fails to accept bytes could not be constructed here
+/// (on macOS neither a read-only `/dev/null` nor a closed fd 1 makes a write
+/// fail), and this test passes either way. The panic-free write is therefore a
+/// property of the code, not something a red test would catch if it regressed.
+/// Said plainly rather than left implied, so nobody reads a green run as more
+/// than it is.
+#[test]
+fn menu_exits_quietly_when_the_reader_goes_away() {
+    use std::io::{BufRead, BufReader};
+
+    let base = scratch("menu-pipe");
+    let state_dir = base.join("state").join("totsuka");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    {
+        let db = StateDb::open(&state_dir.join("state.db")).unwrap();
+        for i in 0..600 {
+            let id = db
+                .upsert_task(&NewTask {
+                    source: "github".into(),
+                    source_task_id: i.to_string(),
+                    workflow: "implement".into(),
+                    mode: "implement".into(),
+                    repo: None,
+                    priority: 0,
+                    title: format!("waiting task number {i} with a title long enough to matter"),
+                    url: None,
+                    source_payload: None,
+                    last_signal_at: None,
+                })
+                .unwrap();
+            for event in [TaskEvent::Dispatch, TaskEvent::Start, TaskEvent::WaitInput] {
+                db.apply_event(id, event, None).unwrap();
+            }
+        }
+    }
+
+    let mut child = base_cmd(&base)
+        .arg("menu")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Read one line, then drop the pipe — the reader has gone away.
+    {
+        let mut reader = BufReader::new(child.stdout.take().unwrap());
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        assert!(first.starts_with('✕'), "{first}");
+    }
+
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "a reader that went away is not a failure: status={:?} stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).is_empty(),
+        "and it says nothing about it: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `menu` resolves its own paths, so an environment where they cannot be
+/// resolved at all is still a row rather than an exit code (#585).
+#[test]
+fn menu_survives_an_environment_with_no_home() {
+    let base = scratch("menu_no_home");
+    seed_db(&base);
+
+    let out = Command::new(totsuka())
+        .arg("menu")
+        .env_clear()
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.starts_with('✕'), "{text}");
+    assert!(text.contains("HOME"), "the row names the cause: {text}");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// `task export | head` stops quietly: the reader going away is success, not
 /// failure (#463).
 ///
@@ -1642,6 +1742,78 @@ fn a_newer_state_db_is_refused_with_an_upgrade_hint() {
     assert!(
         check["detail"].as_str().unwrap().contains("9.9.9"),
         "{check}"
+    );
+
+    // `menu` is the one reader that must **not** stop: a menu-bar plugin that
+    // exits non-zero renders as a broken item, so a schema it cannot read is a
+    // row saying so (#585).
+    let out = run(&base, &["menu"]);
+    assert!(
+        out.status.success(),
+        "menu must survive an unreadable schema: {}",
+        stderr(&out)
+    );
+    let text = stdout(&out);
+    assert!(text.starts_with('✕'), "{text}");
+    assert!(text.contains("9.9.9"), "and it names the release: {text}");
+
+    let out = run(&base, &["menu", "--json"]);
+    assert!(out.status.success());
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("still parseable");
+    assert!(
+        doc["error"].as_str().unwrap_or_default().contains("9.9.9"),
+        "{doc}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `menu` must never migrate. The dividing line is `run.lock`, not read vs
+/// write (#275), and `menu` never takes it — so a database with pending
+/// migrations has to come back untouched.
+///
+/// Pinned by observation rather than by trusting the call site: a later edit
+/// could swap `open_no_migrate` for `open` and nothing else would notice.
+#[test]
+fn menu_does_not_migrate_a_pending_state_database() {
+    let base = scratch("menu_no_migrate");
+    seed_db(&base);
+    let db_path = base.join("state/totsuka/state.db");
+
+    // Roll the ledger back a version, leaving the schema itself alone: to any
+    // reader that migrates, one migration is now pending.
+    let before = {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let latest: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        conn.execute(
+            "DELETE FROM schema_migrations WHERE version = ?1",
+            rusqlite::params![latest],
+        )
+        .unwrap();
+        latest - 1
+    };
+
+    let out = run(&base, &["menu"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).starts_with('✕'),
+        "a pending migration is a row, not an exit code: {}",
+        stdout(&out)
+    );
+
+    let after: i64 = rusqlite::Connection::open(&db_path)
+        .unwrap()
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        after, before,
+        "menu must leave the schema exactly as it found it"
     );
 
     let _ = std::fs::remove_dir_all(&base);

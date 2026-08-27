@@ -28,14 +28,26 @@
 //! ## Why it never fails
 //!
 //! A menu-bar plugin that exits non-zero renders as a broken item, so every
-//! degraded outcome — no state DB, pending migrations, unreadable config — is
-//! a **row in the menu** and a clean exit, the same contract `totsuka focus`
-//! keeps for the same reason (it is the click target of a notification).
+//! degraded outcome — no state DB, pending migrations, XDG paths that will not
+//! resolve — is a **row in the menu** and a clean exit, the same contract
+//! `totsuka focus` keeps for the same reason (it is the click target of a
+//! notification).
+//!
+//! That contract reaches further than the body of [`run`]: `main` dispatches
+//! `menu` **before** the shared `Cx::resolve`, because a `?` on a line outside
+//! this module would end the process non-zero without ever reaching the code
+//! that turns a failure into a row. Writing is deliberate too — `println!`
+//! *panics* on a write error, so a closed pipe (`totsuka menu | head`, which
+//! the operations guide suggests for debugging) would exit 101. The same
+//! lesson is already pinned for `task export`.
 
 use orchestrator_core::domain::state::TaskState;
 use serde::Serialize;
 
-use crate::common::{CliError, Cx, lock_status, print_json, safe};
+use std::io::Write;
+use std::path::Path;
+
+use crate::common::{CliError, Cx, lock_status, safe};
 
 /// How many characters of a task title reach the menu before it is elided.
 const TITLE_BUDGET: usize = 60;
@@ -135,8 +147,10 @@ pub struct MenuModel {
 }
 
 impl MenuModel {
-    /// The model to show when the state could not be read at all.
-    fn degraded(error: String) -> Self {
+    /// The model to show when the menu itself could not be built — distinct
+    /// from the `degraded` field, which is a *live* run's own report about
+    /// what it cannot do.
+    fn unavailable(error: String) -> Self {
         Self {
             availability: Availability::Down,
             attention_count: 0,
@@ -149,14 +163,27 @@ impl MenuModel {
 
 /// Execute `totsuka menu`.
 ///
-/// Always returns `Ok`: see the module docs on why a menu-bar plugin must not
-/// exit non-zero.
-pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
-    let model = build(cx).unwrap_or_else(|e| MenuModel::degraded(e.to_string()));
-    if json {
-        return print_json(&model);
-    }
-    print!("{}", render_swiftbar(&model, &binary_path()));
+/// Always returns `Ok`, and resolves its own paths rather than taking a [`Cx`]:
+/// see the module docs on why a menu-bar plugin must not exit non-zero, and why
+/// that has to hold outside this function's body as well.
+pub fn run(config: Option<&Path>, json: bool) -> Result<(), CliError> {
+    let model = Cx::resolve(config)
+        .and_then(|cx| build(&cx))
+        .unwrap_or_else(|e| MenuModel::unavailable(e.to_string()));
+    let body = if json {
+        // Serializing our own types cannot fail; if it somehow did, saying so
+        // in the document beats exiting non-zero.
+        serde_json::to_string_pretty(&model)
+            .unwrap_or_else(|e| format!("{{\"error\":\"could not serialize the menu: {e}\"}}"))
+            + "\n"
+    } else {
+        render_swiftbar(&model, &binary_path())
+    };
+    // **Not `print!`.** The `print*!` macros panic on a write error, so a
+    // closed pipe would exit 101 — the failure mode this command exists to
+    // avoid. A reader that went away has already stopped caring.
+    let _ = std::io::stdout().write_all(body.as_bytes());
+    let _ = std::io::stdout().flush();
     Ok(())
 }
 
@@ -469,7 +496,7 @@ mod tests {
     /// A failure is a row, not an exit code.
     #[test]
     fn a_failure_renders_as_a_menu_row() {
-        let m = MenuModel::degraded(
+        let m = MenuModel::unavailable(
             "state database not found at /x → run `totsuka run` at least once".to_string(),
         );
         let out = render_swiftbar(&m, "/usr/local/bin/totsuka");

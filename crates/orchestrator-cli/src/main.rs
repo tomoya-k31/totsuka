@@ -253,6 +253,16 @@ fn execute(
         tracing::debug!("--debug: verbose diagnostics enabled");
     }
 
+    // `menu` resolves its own paths, ahead of the shared `Cx::resolve` below.
+    // Its whole contract is that it never exits non-zero (a menu-bar plugin
+    // that does renders as a broken item), and a `?` on a shared line before
+    // the dispatch would break that from outside the command — which is
+    // exactly what a review of #585 found. Everything it can still fail at is
+    // now inside `menu_cmd::run`, which turns failure into a row.
+    if let Command::Menu { json } = command {
+        return menu_cmd::run(config, json.json);
+    }
+
     // Completion needs no environment at all.
     if let Command::Completion { shell } = command {
         clap_complete::generate(
@@ -300,7 +310,7 @@ fn execute(
             },
         ),
         Command::Status { json } => status_cmd::run(&cx, json.json),
-        Command::Menu { json } => menu_cmd::run(&cx, json.json),
+        Command::Menu { .. } => unreachable!("handled above"),
         Command::Task { cmd } => task_cmd::run(&cx, cmd),
         Command::Focus { id } => focus_cmd::run(&cx, id),
         Command::Plugin { cmd } => plugin_cmd::run(&cx, cmd),

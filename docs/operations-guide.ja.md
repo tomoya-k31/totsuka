@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:d7b4931e5d984204356fc4d120a8f5e5d12b45e673701a419942667f1445dbd4 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:a2a23219ec2c428da0aa7351b13ba6c721ad8e73bad6a43cf7b1065bc6275aec -->
 
 # 運用ガイド
 
@@ -168,7 +168,7 @@ EOF
 chmod +x ~/SwiftBar/totsuka.5s.sh
 ```
 
-- ファイル名の `5s` が更新間隔で、これは SwiftBar の規約。`totsuka menu` は状態データベースを読むだけで 10ms 未満なので、この間隔でも負荷にならない。
+- ファイル名の `5s` が更新間隔で、これは SwiftBar の規約。`totsuka menu` は状態データベースを読むだけで、**実測 7ms/回**（実データベースに対する 100 回連続実行の平均、プロセス起動込み）。この間隔でも負荷にならない。
 - **`totsuka` は絶対パスで書く。** GUI から起動されたプロセスは `/usr/local/bin` も mise も含まない最小の `PATH` を継承するので、名前で呼ぶとターミナルからは動いて SwiftBar 経由では失敗する。`which totsuka` の結果を貼ること。
 
 ### 出ないとき
@@ -180,7 +180,7 @@ chmod +x ~/SwiftBar/totsuka.5s.sh
 | `✕` のまま | `run` が動いていない。`totsuka status` の 1 行目と一致するはず |
 | 件数が `totsuka status` と合わない | 終わったタスクを数えないのは仕様。`totsuka menu --json` の `attention` 配列と突き合わせる |
 
-**`totsuka menu` は失敗しても exit 0 で終わり**、原因をメニューの 1 行として出す（状態データベースが無い、マイグレーションが未適用、設定が壊れている等）。メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるためで、「エラーが出ない」ことを健全さの証拠にせず、メニューの本文を読むこと。
+**`totsuka menu` は失敗しても exit 0 で終わり**、原因をメニューの 1 行として出す（状態データベースが無い、マイグレーションが未適用、パスすら解決できない最小環境で動かした等）。メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるためで、「エラーが出ない」ことを健全さの証拠にせず、メニューの本文を読むこと。なお `config.toml` は読まないので、設定が壊れていても表示は変わらない（それを見るのは `totsuka config validate`）。
 
 ## よくある問題
 
