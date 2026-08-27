@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f892e8cae2bd1c4ea7430b1e2737f622925286754d59f5af7563efe6a6b0f423 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:cdefbc5bdaad5a7eecd1649bcb62ff6ca82dded352b647c5128f09cdbe2ef296 -->
 
 # 運用ガイド
 
@@ -214,6 +214,7 @@ cat "${dir}/totsuka.5s.sh"   # 焼き込まれたパスを読み返す
 | 項目が壊れて見える・空になる | `totsuka` が絶対パスか。`env -i /usr/local/bin/totsuka menu` で最小環境でも動くか確かめる |
 | `✕` のまま | `run` が動いていない。`totsuka status` の 1 行目と一致するはず |
 | `⚠` のまま | 何かが縮退している。ドロップダウンに理由が出る（`totsuka status` の `degraded:` と同じ内容） |
+| タスクをクリックしても何も起きない | 設計どおりである。pane の前面化は totsuka が停止中や pane 消失のとき静かに縮退する。クリックで実際に何が走るかは `Open logs` を押すと分かる —— SwiftBar が login shell を開き、組み立てたコマンド行をそのまま表示する。**その shell はプラグインスクリプトの環境を引き継がない**ので、そこで設定したもの（`XDG_STATE_HOME` 等）は渡らない |
 | 件数が `totsuka status` と合わない | 終わったタスクを数えないのは仕様。`totsuka menu --json` の `attention` 配列と突き合わせる |
 
 **`totsuka menu` は失敗しても exit 0 で終わり**、原因をメニューの 1 行として出す（状態データベースが無い、マイグレーションが未適用、パスすら解決できない最小環境で動かした等）。メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるためで、「エラーが出ない」ことを健全さの証拠にせず、メニューの本文を読むこと。なお `config.toml` は読まないので、設定が壊れていても表示は変わらない（それを見るのは `totsuka config validate`）。

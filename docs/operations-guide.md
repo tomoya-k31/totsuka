@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f892e8cae2bd1c4ea7430b1e2737f622925286754d59f5af7563efe6a6b0f423 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:cdefbc5bdaad5a7eecd1649bcb62ff6ca82dded352b647c5128f09cdbe2ef296 -->
 
 # Operations guide
 
@@ -213,6 +213,7 @@ cat "${dir}/totsuka.5s.sh"   # read back the path that was baked in
 | The item looks broken or empty | Is `totsuka` an absolute path? Check with `env -i /usr/local/bin/totsuka menu` that it works in a bare environment |
 | Stuck on `✕` | `run` is not up. This should agree with the first line of `totsuka status` |
 | Stuck on `⚠` | Something is degraded. The dropdown lists why — the same reasons `totsuka status` prints under `degraded:` |
+| Clicking a task does nothing | That is by design: bringing a pane to the front degrades quietly when totsuka is stopped or the pane is gone. To see what a click actually runs, press `Open logs` — SwiftBar opens a login shell and prints the command line it assembled. **That shell does not inherit the plugin script's environment**, so anything you set there (an `XDG_STATE_HOME`, say) is not passed on |
 | The count disagrees with `totsuka status` | Finished tasks are not counted, by design. Compare against the `attention` array in `totsuka menu --json` |
 
 **`totsuka menu` exits 0 even when it fails**, and prints the reason as a row in the menu — a missing state database, pending migrations, an environment so bare that its paths will not resolve. It has to, because a menu-bar plugin that exits non-zero renders as a broken item. So do not read "no error" as "healthy": read the menu itself. It never reads `config.toml`, so a broken configuration does not change what it shows — use `totsuka config validate` for that.

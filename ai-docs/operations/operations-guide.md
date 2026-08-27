@@ -237,6 +237,7 @@ cat "${dir}/totsuka.5s.sh"   # 焼き込まれたパスを目で確認する
 | `✕` のまま | `run` が動いていない。`totsuka status` の 1 行目と一致するはず（一致しないなら不具合） |
 | `⚠` のまま | 縮退している。ドロップダウンに理由が出る。`totsuka status` の `degraded:` と同じ内容 |
 | `⚠` で「may be wedged」と出る | run が 120 秒以上 health を更新していない。`totsuka logs -f` で最後に何をしていたか見る |
+| クリックしても何も起きない | タスク行の `totsuka focus` は `run` 停止中や pane 消失で**静かに縮退する**（設計どおり）。実際に何が走るかは `Open logs` を押すと分かる —— SwiftBar は `SWIFTBAR_*` を export した login shell を開き、組み立てたコマンド行をそのまま表示する。**その環境はプラグインスクリプトの env を引き継がない**（`XDG_STATE_HOME` 等は渡らず、既定の XDG に解決される） |
 | 件数が `totsuka status` と合わない | 終端状態は数えない仕様。`totsuka menu --json` の `attention` 配列と突き合わせる |
 
 **`totsuka menu` は失敗しても exit 0 で、原因をメニューの 1 行として出す**（状態 DB が無い、migration が未適用、`HOME` すら無い最小環境で XDG パスが解決できない等）。非ゼロ終了するとメニュー項目ごと壊れるための設計なので、「エラーが出ない」ことを健全さの証拠にしないこと — メニューの本文を読む。なお **`config.toml` は読まない**ので、config が壊れていても `menu` の表示は変わらない（切り分けには `totsuka config validate` を使う）。
