@@ -95,6 +95,14 @@ pub struct EngineSettings {
     /// tests; when `None` the receiver never starts and dispatch never resolves
     /// a hook launch (no `--settings`, no `TOTSUKA_*` env).
     pub hook: Option<HookRuntime>,
+    /// Where to publish the runtime health document (F-110), or `None` to
+    /// publish nothing.
+    ///
+    /// Supplied by the CLI alongside [`hook`](Self::hook) rather than derived
+    /// here: `settings_from_config` reads `config.toml` and knows nothing
+    /// about XDG paths. `None` keeps every test and embedder that never asked
+    /// for it from writing files.
+    pub health_path: Option<std::path::PathBuf>,
 }
 
 /// Everything the engine needs to drive hook-based agents for one run
@@ -164,6 +172,8 @@ pub fn settings_from_config(
     };
 
     Ok(EngineSettings {
+        // Supplied by the caller (the CLI) after this returns, like `hook`.
+        health_path: None,
         workflows: Workflow::from_configs(&cfg.workflows),
         repos,
         limits,

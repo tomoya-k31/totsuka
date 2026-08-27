@@ -46,6 +46,7 @@ use tokio::sync::{Semaphore, mpsc};
 
 use crate::adapters::clock::SystemClock;
 use crate::adapters::plugin_host::{HostError, IncomingRequest, Plugin};
+use crate::adapters::run_health::{self, Degradation, RunHealth};
 use crate::adapters::state_db::{
     HandoffOutcome, NewTask, StateDb, StateError, TaskMessage, TaskMessageInsert,
     TaskMessageOutcome, TaskRecord,
@@ -266,12 +267,34 @@ impl LlmRouter for NoLlmRouter {
 
 /// The run-loop engine. Owns the state DB, the launched plugins, and the slot
 /// accounting for one `run` invocation.
+/// Whether this run has a hook receiver, and whether it came up (F-110).
+///
+/// The middle case is the one worth publishing: the process is alive and
+/// looks healthy, but **no task can report completion for the whole run**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookReceiver {
+    /// No `[hooks]` runtime — nothing was meant to listen.
+    NotConfigured,
+    /// Bound and serving.
+    Listening,
+    /// Configured but the socket could not be bound.
+    BindFailed,
+}
+
 pub struct Engine<G: GitRunner, L: LlmRouter> {
     db: StateDb,
     settings: EngineSettings,
     plugins: PluginSet,
     worktrees: WorktreeManager<G>,
-    llm: Option<L>,
+    /// The LLM router, wrapped so a 401/403 from the gateway is latched and
+    /// can be published as a degradation (F-110).
+    llm: Option<crate::adapters::llm::AuthLatchRouter<L>>,
+    /// The latch that wrapper writes; `None` when no LLM is configured.
+    llm_key_rejected: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Whether the hook receiver is listening (F-110). Set once, in
+    /// [`run`](Self::run); `cycle()` alone leaves it `NotConfigured`, which is
+    /// correct for a caller that never started a receiver.
+    hook_receiver: HookReceiver,
     slots: SlotManager,
     /// Per-task slot ledger: task id → the exact `(repo, agent)` pair it holds
     /// a slot under. Releases go through this so a task that never acquired
@@ -429,6 +452,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
         let slots = SlotManager::new(settings.limits.clone());
         let readme_cache = settings.readme_cache_dir.clone().map(ReadmeCache::new);
+        let llm = llm.map(crate::adapters::llm::AuthLatchRouter::new);
+        let llm_key_rejected = llm.as_ref().map(|l| l.flag());
         Self {
             agent_tools: crate::agent_tools::ToolCache::default(),
             blocked_on_tools: std::collections::HashSet::new(),
@@ -439,6 +464,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             plugins,
             worktrees: WorktreeManager::new(git),
             llm,
+            llm_key_rejected,
+            hook_receiver: HookReceiver::NotConfigured,
             slots,
             restarts: HashMap::new(),
             retired_stats: HashMap::new(),
@@ -586,6 +613,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 Ok(listener) => {
                     let socket_path = hs.socket_path.clone();
                     tracing::info!(socket = %socket_path.display(), "hook receiver listening");
+                    self.hook_receiver = HookReceiver::Listening;
                     let sink = EngineSignalSink::new(self.events_tx.clone());
                     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
                     // The sink doubles as the focus port (F-94): both feed the
@@ -605,6 +633,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                         socket = %hs.socket_path.display(),
                         "hook receiver failed to bind: {e} → hook-driven completion is unavailable this run"
                     );
+                    self.hook_receiver = HookReceiver::BindFailed;
                     None
                 }
             },
@@ -648,6 +677,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
                 }
             }
         }
+
+        // Nothing is running any more, so no health is the truth (F-110).
+        // A reader would ignore a leftover file anyway — `run.lock` decides
+        // first — but leaving one behind means the next reader has to reason
+        // about which of two files is stale.
+        self.clear_health();
 
         // Stop the hook receiver and wait for it to unlink its socket.
         if let Some((stop_tx, handle)) = hook_handle {
@@ -768,7 +803,130 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             self.sweep_finished_worktrees().await?;
             self.last_worktree_sweep = Some(tokio::time::Instant::now());
         }
+        // Last, so what is published describes the state this cycle left
+        // behind rather than the one it started from.
+        self.publish_health();
         Ok(())
+    }
+
+    /// Everything currently wrong, recomputed from scratch (F-110).
+    ///
+    /// **Only re-askable facts.** A one-off failure (a notification that did
+    /// not deliver, a cleanup that could not run) has no answer to "is it
+    /// still true?", so it would latch on forever and make the warning
+    /// meaningless; those stay in the log.
+    fn degradations(&self) -> Vec<Degradation> {
+        let mut out = Vec::new();
+
+        if self.hook_receiver == HookReceiver::BindFailed
+            && let Some(hs) = self.settings.hook.as_ref()
+        {
+            out.push(Degradation::HookReceiverDown {
+                socket: hs.socket_path.display().to_string(),
+            });
+        }
+
+        // Every kind, not just agents: a dead task source stops new work
+        // arriving, and a dead notifier stops the operator hearing about it.
+        // Sorted by name so the published document does not reshuffle between
+        // cycles for `HashMap` reasons alone.
+        let mut down: Vec<Degradation> = self
+            .plugins
+            .sources
+            .iter()
+            .chain(self.plugins.agents.iter())
+            .chain(self.plugins.notifiers.iter())
+            .filter(|(_, plugin)| plugin.is_closed())
+            .map(|(name, _)| Degradation::PluginDown {
+                plugin: name.clone(),
+                abandoned: self.abandoned_plugins.contains(name),
+            })
+            .collect();
+        down.sort_by(|a, b| match (a, b) {
+            (
+                Degradation::PluginDown { plugin: x, .. },
+                Degradation::PluginDown { plugin: y, .. },
+            ) => x.cmp(y),
+            _ => std::cmp::Ordering::Equal,
+        });
+        out.extend(down);
+
+        if let Some(dir) = self
+            .settings
+            .hook
+            .as_ref()
+            .and_then(|h| h.spool_dir.as_ref())
+        {
+            // **`.jsonl` only — exactly what `replay_spool` tries to drain.**
+            // A leftover one therefore means replay ran and could not take it,
+            // which is a real, still-true condition. The quarantined
+            // `.corrupt` files are deliberately excluded: nothing collects
+            // them automatically, so counting them would pin the warning on
+            // until a human deleted the file — the permanent flag this whole
+            // module is built to avoid. `doctor`'s `hook-spool` check is where
+            // those belong.
+            //
+            // A read failure is not a backlog either. The directory not
+            // existing yet is the normal state of a run that has never
+            // spooled anything.
+            let files = std::fs::read_dir(dir)
+                .map(|entries| {
+                    entries
+                        .filter_map(Result::ok)
+                        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
+                        .count()
+                })
+                .unwrap_or(0);
+            if files > 0 {
+                out.push(Degradation::SpoolBacklog { files });
+            }
+        }
+
+        if self
+            .llm_key_rejected
+            .as_ref()
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            out.push(Degradation::LlmKeyRejected);
+        }
+
+        out
+    }
+
+    /// [`degradations`](Self::degradations) for the integration tests, which
+    /// live outside this crate and cannot reach a private method.
+    #[doc(hidden)]
+    pub fn degradations_for_test(&self) -> Vec<Degradation> {
+        self.degradations()
+    }
+
+    /// Write the health file, if this run was given a path for it.
+    ///
+    /// A write failure is logged and dropped: publishing health is an aid to
+    /// the operator, and failing a cycle over it would make the observability
+    /// feature the thing that stops the work.
+    fn publish_health(&self) {
+        let Some(path) = self.settings.health_path.as_ref() else {
+            return;
+        };
+        let health = RunHealth {
+            pid: std::process::id(),
+            recorded_at: self.clock.now_rfc3339(),
+            degraded: self.degradations(),
+        };
+        if let Err(e) = run_health::write(path, &health) {
+            tracing::warn!(path = %path.display(), "could not publish run health: {e}");
+        }
+    }
+
+    /// Remove the health file (a stopped run has no health to report).
+    fn clear_health(&self) {
+        let Some(path) = self.settings.health_path.as_ref() else {
+            return;
+        };
+        if let Err(e) = run_health::remove(path) {
+            tracing::warn!(path = %path.display(), "could not clear run health: {e}");
+        }
     }
 }
 
@@ -833,6 +991,7 @@ pub(crate) async fn test_engine(
     interval: Duration,
 ) -> Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter> {
     let settings = EngineSettings {
+        health_path: None,
         workflows: Vec::new(),
         repos: Vec::new(),
         limits: Limits::global(1),
@@ -860,6 +1019,178 @@ pub(crate) async fn test_engine(
         None,
     )
     .await
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+
+    /// An engine that publishes health into `dir`, with the hook runtime
+    /// pointed at `dir` too so the spool signal is reachable.
+    async fn engine_with_health(
+        dir: &std::path::Path,
+    ) -> Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter> {
+        let mut engine = test_engine(Duration::from_secs(3600)).await;
+        engine.settings.health_path = Some(run_health::path_in(dir));
+        engine.settings.hook = Some(crate::run::settings::HookRuntime {
+            socket_path: dir.join("agent-events.sock"),
+            auth_token: None,
+            spool_dir: Some(dir.join("spool")),
+            settings_paths: HashMap::new(),
+            block_retry_limit: 3,
+        });
+        engine
+    }
+
+    fn published(dir: &std::path::Path) -> RunHealth {
+        run_health::read(&run_health::path_in(dir)).expect("a cycle published health")
+    }
+
+    #[tokio::test]
+    async fn a_cycle_publishes_health_and_a_healthy_run_reports_nothing() {
+        let dir = test_support::scratch("health_publish");
+        let mut engine = engine_with_health(&dir).await;
+        engine.cycle().await.unwrap();
+
+        let health = published(&dir);
+        assert_eq!(health.pid, std::process::id());
+        assert!(!health.is_degraded(), "{health:?}");
+    }
+
+    /// The reason this feature exists: the process is alive and looks fine,
+    /// but no task can report completion for the whole run.
+    #[tokio::test]
+    async fn a_failed_hook_bind_is_published() {
+        let dir = test_support::scratch("health_hook_bind");
+        let mut engine = engine_with_health(&dir).await;
+        engine.hook_receiver = HookReceiver::BindFailed;
+        engine.cycle().await.unwrap();
+
+        let socket = dir.join("agent-events.sock").display().to_string();
+        assert_eq!(
+            published(&dir).degraded,
+            vec![Degradation::HookReceiverDown { socket }]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_spool_backlog_is_reported_and_clears_when_it_drains() {
+        let dir = test_support::scratch("health_spool");
+        let engine = engine_with_health(&dir).await;
+        let spool = dir.join("spool");
+        std::fs::create_dir_all(&spool).unwrap();
+        std::fs::write(spool.join("a.jsonl"), "{}\n").unwrap();
+        std::fs::write(spool.join("b.jsonl"), "{}\n").unwrap();
+
+        assert_eq!(
+            engine.degradations(),
+            vec![Degradation::SpoolBacklog { files: 2 }]
+        );
+
+        // The whole contract of a re-askable fact: fix it and the warning goes
+        // away by itself, with nothing to dismiss.
+        std::fs::remove_file(spool.join("a.jsonl")).unwrap();
+        std::fs::remove_file(spool.join("b.jsonl")).unwrap();
+        assert!(engine.degradations().is_empty());
+    }
+
+    /// **Quarantined files must not count.** `replay_spool` renames an
+    /// unparseable spool file to `.corrupt` and nothing ever collects it, so
+    /// counting those would light the warning glyph permanently — which is
+    /// exactly the failure mode this module exists to avoid.
+    #[tokio::test]
+    async fn quarantined_spool_files_are_not_a_backlog() {
+        let dir = test_support::scratch("health_spool_corrupt");
+        let mut engine = engine_with_health(&dir).await;
+        let spool = dir.join("spool");
+        std::fs::create_dir_all(&spool).unwrap();
+        std::fs::write(spool.join("a.jsonl"), "not a signal\n").unwrap();
+
+        // A real cycle, so the real quarantine path runs.
+        engine.cycle().await.unwrap();
+        let left: Vec<String> = std::fs::read_dir(&spool)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["a.jsonl.corrupt".to_string()], "{left:?}");
+        assert!(
+            !published(&dir).is_degraded(),
+            "a quarantined file is doctor's business, not a permanent warning"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rejected_llm_key_is_published_and_clears_when_it_starts_working() {
+        let dir = test_support::scratch("health_llm");
+        let mut engine = engine_with_health(&dir).await;
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        engine.llm_key_rejected = Some(Arc::clone(&flag));
+
+        engine.cycle().await.unwrap();
+        assert_eq!(published(&dir).degraded, vec![Degradation::LlmKeyRejected]);
+
+        // Rotating the key clears it with nothing to dismiss.
+        flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        engine.cycle().await.unwrap();
+        assert!(!published(&dir).is_degraded());
+    }
+
+    /// A one-off failure has no answer to "is it still true?", so nothing that
+    /// cannot be re-asked may reach this file. Guarded by construction: the
+    /// only inputs are the four re-askable ones.
+    #[tokio::test]
+    async fn the_published_set_is_recomputed_from_scratch_each_cycle() {
+        let dir = test_support::scratch("health_recompute");
+        let mut engine = engine_with_health(&dir).await;
+        engine.hook_receiver = HookReceiver::BindFailed;
+        engine.cycle().await.unwrap();
+        assert!(published(&dir).is_degraded());
+
+        engine.hook_receiver = HookReceiver::Listening;
+        engine.cycle().await.unwrap();
+        assert!(
+            !published(&dir).is_degraded(),
+            "a cleared condition must not survive into the next cycle"
+        );
+    }
+
+    /// A run that has stopped has no health — only a lock, which is what says
+    /// it stopped.
+    #[tokio::test]
+    async fn clearing_removes_the_file() {
+        let dir = test_support::scratch("health_clear");
+        let mut engine = engine_with_health(&dir).await;
+        engine.cycle().await.unwrap();
+        assert!(run_health::path_in(&dir).exists());
+
+        engine.clear_health();
+        assert!(!run_health::path_in(&dir).exists());
+    }
+
+    /// Publishing is an aid, so it must never be the thing that stops the
+    /// work: an unwritable path is logged and the cycle still succeeds.
+    #[tokio::test]
+    async fn an_unwritable_health_path_does_not_fail_the_cycle() {
+        let dir = test_support::scratch("health_unwritable");
+        let mut engine = engine_with_health(&dir).await;
+        // A path whose parent is a *file* can never be created.
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        engine.settings.health_path = Some(blocker.join("health.json"));
+
+        engine.cycle().await.expect("the cycle still succeeds");
+    }
+
+    /// Without a path there is nothing to publish, and no file appears.
+    #[tokio::test]
+    async fn no_health_path_publishes_nothing() {
+        let dir = test_support::scratch("health_none");
+        let mut engine = engine_with_health(&dir).await;
+        engine.settings.health_path = None;
+        engine.cycle().await.unwrap();
+        assert!(!run_health::path_in(&dir).exists());
+    }
 }
 
 #[cfg(test)]

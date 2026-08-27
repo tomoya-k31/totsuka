@@ -129,6 +129,7 @@ fn settings_with(
         block_retry_limit: 3,
     };
     EngineSettings {
+        health_path: None,
         workflows,
         repos: vec![RepoSettings {
             name: "clone".to_string(),

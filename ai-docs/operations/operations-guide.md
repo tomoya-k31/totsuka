@@ -1,10 +1,10 @@
 ---
 type: Runbook
 title: 運用ガイド（doctor / worktree 掃除 / FAQ）
-description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
+description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
-tags: [operations, doctor, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-08-28T06:35:00+09:00 }
+tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
+generated: { by: claude-code/opus-5, at: 2026-08-28T06:50:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -81,6 +81,51 @@ totsuka doctor --no-repair
 
 `doctor --fix`（残った fail を機械的に直す）は入れない。理由は [ADR-0028](/decisions/adr-0028-setup-wizard.md) の却下案に記録がある。
 
+# ランタイム health（縮退の読み方）
+
+`doctor` が「設定と環境は正しいか」を答えるのに対し、**health は「今動いている `run` が仕事を全部できているか」**を答える。守備範囲が違うので、どちらかで代用できない。
+
+| | doctor | health |
+|---|---|---|
+| いつ | 人間が叩いたとき | `run` が毎サイクル自分で書く |
+| 何を見る | 設定・環境・プラグイン疎通・孤児 | 今この run の縮退 4 種 |
+| コスト | プラグインを起動し `op://` を実解決する（**生体認証が出うる**） | ゼロ（`run` が既に知っていることを書くだけ） |
+| 読み方 | `totsuka doctor [--json]` | `totsuka status` の `degraded:` / `--json` の `health` / `totsuka menu` の `⚠` |
+
+**`doctor` は数秒おきに叩けない**（プラグイン起動と秘密の実解決を伴う）ので、常時監視は health 側が引き受ける。
+
+## 入るもの・入らないもの
+
+health に入るのは **「今もそうか」を毎サイクル問い直せる事実だけ**である。一過性の失敗を入れるとフラグが消えなくなり、警告が背景ノイズになるため。
+
+| 縮退 | 何が起きているか |
+|---|---|
+| `hook_receiver_down` | UDS を bind できなかった。**その run は全タスクの完了検知が効かない** — プロセスは元気に見えるので、これが `⚠` の最重要ケース |
+| `plugin_down` | プラグインが落ちている。`abandoned` なら supervisor が再起動を諦めた後で、待っても戻らない |
+| `spool_backlog` | `replay_spool` が drain できなかった `*.jsonl` が残っている |
+| `llm_key_rejected` | ゲートウェイが鍵を 401/403 で拒否した。**成功した呼び出しで自動的に解除される** |
+
+入らないもの: `notify delivery failed` / `worktree cleanup failed` のような一過性の失敗（再評価できないので永久に残る）と、**隔離済みの `*.jsonl.corrupt`**（自動回収されないので数えると `⚠` が永久化する。あちらは `doctor` の `hook-spool` チェックの担当）。
+
+## 停止中の扱い
+
+**`run.lock` が health より優先する。** `run` が SIGKILL された場合 `health.json` は残るが、それは存在しないプロセスの話なので読まない（`pid` も突き合わせる）。したがって停止中は必ず `✕` であって `⚠` にはならず、`status --json` の `health` キーもごと消える。
+
+## 黙った run（stale）
+
+pid は生きているのに **120 秒 republish が無い** health は stale として扱い、`⚠` の理由に 1 行足す。**捨てない**のが要点で、捨てると「黙っている run について健全と報告する」ことになる —— プラグイン呼び出しでハングした run は pid を保ったままなので、これが唯一の手掛かりになる。
+
+stale は `run` が publish するものではなく**読み手の判断**である（黙った run は「自分は黙っている」と書けない）。したがって `status --json` は判断材料そのものも出す:
+
+```bash
+totsuka status --json | jq '{recorded: .health.recorded_at, stale: .health.stale}'
+```
+
+```bash
+totsuka status --json | jq '.health // "not running"'
+ls -l "${XDG_STATE_HOME:-$HOME/.local/state}/totsuka/health.json"   # run 中だけ存在する
+```
+
 # worktree 掃除
 
 「1 タスク = 1 worktree」の後始末は掃除ポリシーで決まる。
@@ -148,7 +193,7 @@ worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane
 
 | チャネル | 意味 |
 |---|---|
-| 形 | `○` = `run` が生きている / `✕` = 停止中・stale lock |
+| 形 | `○` = 健全 / `⚠` = 生きているが縮退している（上記 health） / `✕` = 停止中・stale lock |
 | 数 | 要対応の件数。**0 件なら数字そのものが出ない** |
 
 数に入るのは `pending` / `waiting_input` / `verifying` / `escalated` / `queued`+`wait_reason` の 5 状態だけで、**終端状態（`done` / `failed` / `cancelled` / `skipped`）は数えない**。数えると `totsuka status` の表と同じく単調に増え続け、0 に戻らなくなるため。失敗の確認は `totsuka status` の担当。
@@ -179,6 +224,8 @@ chmod +x ~/SwiftBar/totsuka.5s.sh
 | メニューバーに何も出ない | SwiftBar のプラグインフォルダにファイルがあるか、実行ビットが立っているか。`~/SwiftBar/totsuka.5s.sh` を直接実行して出力を見る |
 | 項目が壊れて見える / 空 | スクリプトの `totsuka` が絶対パスか。`env -i /usr/local/bin/totsuka menu` で最小環境でも動くか確認する |
 | `✕` のまま | `run` が動いていない。`totsuka status` の 1 行目と一致するはず（一致しないなら不具合） |
+| `⚠` のまま | 縮退している。ドロップダウンに理由が出る。`totsuka status` の `degraded:` と同じ内容 |
+| `⚠` で「may be wedged」と出る | run が 120 秒以上 health を更新していない。`totsuka logs -f` で最後に何をしていたか見る |
 | 件数が `totsuka status` と合わない | 終端状態は数えない仕様。`totsuka menu --json` の `attention` 配列と突き合わせる |
 
 **`totsuka menu` は失敗しても exit 0 で、原因をメニューの 1 行として出す**（状態 DB が無い、migration が未適用、`HOME` すら無い最小環境で XDG パスが解決できない等）。非ゼロ終了するとメニュー項目ごと壊れるための設計なので、「エラーが出ない」ことを健全さの証拠にしないこと — メニューの本文を読む。なお **`config.toml` は読まない**ので、config が壊れていても `menu` の表示は変わらない（切り分けには `totsuka config validate` を使う）。

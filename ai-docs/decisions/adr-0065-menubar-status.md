@@ -4,14 +4,14 @@ title: ADR-0065 メニューバー表示は SwiftBar プラグイン + totsuka m
 description: "常時視界に入る面へ totsuka の状態を出すために、GUI を自前で描かず SwiftBar のプラグイン書式を吐く `totsuka menu` サブコマンドを足す。可用性と要対応件数を 2 チャネルに分け、要対応から終端状態を外し、行の整形（特に `|` のエスケープ）を Rust 側に置く。却下した 8 案（run 自身の描画・メニューからの run 起動・doctor のポーリング・ログ文言マッチ・Swift アプリ・objc2 常駐・jq 整形・state.db 直読み）とその理由を記録する。"
 resource: https://github.com/tomoya-k31/totsuka/issues/584
 tags: [decision, menu, swiftbar, macos, observability, attention, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-28T05:43:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T06:50:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
 
 # Status
 
-stable。#584（エピック）の設計決定。実装は #585（`totsuka menu`）と #586（`health.json` と `⚠`）の 2 段。
+stable。#584（エピック）の設計決定。実装は #585（`totsuka menu`）と #586（`health.json` と `⚠`）の 2 段で、**どちらも実装済み**。
 
 **実機検収は未了**のため `verified` は付けていない。SwiftBar はこの環境にまだ導入されておらず、`|` のエスケープ規則・`terminal=true`・`bash=` の引用規則は実物での確認が残っている。
 
@@ -99,4 +99,4 @@ SwiftBar のプラグインフォルダは初回起動時にユーザーが選�
 - 仕様 §3.2 の非目標から `GUI / Web ダッシュボード` が消え、`Web ダッシュボード / クラウド UI` に縮んだ。ローカル GUI ホストへの表示は §3.1 のスコープ内になる。**`常駐デーモン / サーバ運用` の行は維持** —— 常駐するのは SwiftBar で、totsuka はワンショット実行のままである
 - `totsuka menu` は SwiftBar 依存のサブコマンドとして CLI の公開面に入る。SwiftBar 以外のホスト（xbar / tmux / Übersicht）が必要になったら `--json` を読ませるか、シリアライザを 1 本足す
 - **SwiftBar は新しいサードパーティ依存**である。totsuka 側の必須依存ではなく、この機能を使う人だけが入れる
-- 縮退（`⚠`）は #586 まで出ない。それまでの可用性は `○` / `✕` の 2 値で、「`run` は生きているが完了判定が効いていない」クラスの障害は映らない
+- 縮退（`⚠`）は #586 で入った。`run` が毎サイクル `health.json` を書き、`status` / `menu` の両方が同じ記録を読む（F-110）。入るのは**毎サイクル問い直せる 4 つ**だけで、`.corrupt` な spool ファイルのように自動回収されないものは意図的に外してある —— 数えると警告が永久に消えず、`⚠` が背景ノイズになるため

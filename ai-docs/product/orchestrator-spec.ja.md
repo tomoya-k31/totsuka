@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-08-28T06:35:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T06:50:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -278,7 +278,8 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 
 | ID | 要件 | 優先度 |
 |---|---|---|
-| F-109 | **メニューバー表示(`totsuka menu`)**: 2 チャネルで返す — **形**が可用性(`○` = `run` が生きている / `✕` = 停止・stale lock)、**数**が**要対応**件数(`glossary/attention.md`: `pending` / `waiting_input` / `verifying` / `escalated` / `queued` + `wait_reason` の 5 状態。終端状態は数えない)。ドロップダウンは要対応・稼働中の 2 節で、タスク行のクリックは `totsuka focus <id>`、他は SwiftBar の `terminal=true` でターミナルへ受け渡す。既定の出力形式は SwiftBar のプラグイン書式、`--json` は表示モデルそのもの。**行の整形は Rust 側が持つ**: SwiftBar の書式は `text \| key=value` で `\|` がメタ文字であり、ソース由来のタイトルに `\|` が 1 つあれば行にパラメータを追加できてしまう(#280 と同じクラス)。**常に exit 0** — メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるため、状態 DB 欠如・migration 未適用・XDG パスの解決失敗はすべてメニューの 1 行として描く。`config.toml` は読まない。この契約は `menu_cmd` の外側にも及び、`main` は共有の `Cx::resolve` より前に分岐させ、書き込みも panic しない経路を使う(ADR-0065 参照) | S |
+| F-109 | **メニューバー表示(`totsuka menu`)**: 2 チャネルで返す — **形**が可用性(`○` = 健全 / `⚠` = 生きているが縮退している(F-110) / `✕` = 停止・stale lock)、**数**が**要対応**件数(`glossary/attention.md`: `pending` / `waiting_input` / `verifying` / `escalated` / `queued` + `wait_reason` の 5 状態。終端状態は数えない)。ドロップダウンは要対応・稼働中の 2 節で、タスク行のクリックは `totsuka focus <id>`、他は SwiftBar の `terminal=true` でターミナルへ受け渡す。既定の出力形式は SwiftBar のプラグイン書式、`--json` は表示モデルそのもの。**行の整形は Rust 側が持つ**: SwiftBar の書式は `text \| key=value` で `\|` がメタ文字であり、ソース由来のタイトルに `\|` が 1 つあれば行にパラメータを追加できてしまう(#280 と同じクラス)。**常に exit 0** — メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるため、状態 DB 欠如・migration 未適用・XDG パスの解決失敗はすべてメニューの 1 行として描く。`config.toml` は読まない。この契約は `menu_cmd` の外側にも及び、`main` は共有の `Cx::resolve` より前に分岐させ、書き込みも panic しない経路を使う(ADR-0065 参照) | S |
+| F-110 | **ランタイム health(`health.json`)**: `run` は毎サイクル `$XDG_STATE_HOME/totsuka/health.json` を temp+rename で置き換え、graceful shutdown で削除する。内容は**毎サイクル問い直せる縮退だけ** — hook receiver の bind 失敗 / プラグインの停止(`abandoned` かどうかで対処が変わる) / spool バックログ(`*.jsonl` のみ。`.corrupt` は自動回収されないので数えない) / LLM 鍵の 401·403(成功で解除するラッチ)。一過性の失敗(notify 配送失敗・掃除失敗)は再評価できず永久に消えないため入れない。散文は保存せず読み出し側が組み立て、未知の `kind` も行として残す。`totsuka status` は `degraded:` ブロック(`--json` は `health`)、`totsuka menu` は `⚠` として読む。**`run.lock` が優先**で、停止中の run が残した文書は無視する(pid も突き合わせる) — 落ちた run の health は存在しないプロセスの話だからである。さらに読み手は**鮮度**も見る: pid は生きているのに 120 秒 republish が無い文書は stale として扱い、**捨てずに 1 つの縮退として出す**(捨てると、黙った run について「健全」と報告することになる)。stale は run が publish するものではなく読み手の判断で、`status --json` は `health.recorded_at` と `health.stale` の両方を出す。state.db でなくファイルなのは、スキーマを上げると古い totsuka が DB を開けなくなる(ADR-0017)ため | S |
 
 ## 5. 非機能要件
 
@@ -294,7 +295,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 | `init` | 設定ファイルの雛形生成、環境チェック |
 | `setup` | レシピからの対話的な初期セットアップ（この表を最初に書いた後に追加された。セットアップ Playbook 参照） |
 | `run [--watch] [--json]` | タスク取り込み（push、`task/submit`）〜ディスパッチのメインループ実行(デフォルトはワンショット、`--watch` は push を受け続けたまま shutdown まで常駐 — 未決事項 #2 は解決済み) |
-| `status [--json]` | 実行中 / キュー / 待機中タスクと worktree の一覧 |
+| `status [--json]` | 実行中 / キュー / 待機中タスクと worktree の一覧、および動作中の run の縮退(F-110) |
 | `menu [--json]` | メニューバー向けの表示(F-109)。既定は SwiftBar のプラグイン書式、`--json` は表示モデル。常に exit 0 |
 | `task list / show <id> / cancel <id> / retry <id>` | タスク個別操作 |
 | `task export [--since <event_id>] [--task <id>] [--no-detail]` | 監査ログ（`events`）を NDJSON で標準出力へ。状態の正本は SQLite なので、他のツールが読める形で持ち出す口（追記専用テーブルなので `--since` が完全な差分カーソルになる） |

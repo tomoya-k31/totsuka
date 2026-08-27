@@ -7,10 +7,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use orchestrator_core::adapters::StateDb;
+use orchestrator_core::adapters::clock::SystemClock;
+use orchestrator_core::adapters::run_health::{self, RunHealth};
 use orchestrator_core::config::{self, Finding, FindingSeverity, RootConfig};
 use orchestrator_core::paths::Paths;
 use orchestrator_core::platform::PlatformProcessProbe;
 use orchestrator_core::plugins::PluginStore;
+use orchestrator_core::ports::Clock;
 use orchestrator_core::ports::ProcessProbe;
 use serde::Serialize;
 
@@ -290,6 +293,60 @@ pub fn lock_status(cx: &Cx) -> OrchestratorStatus {
             stale_lock: true,
         },
     }
+}
+
+/// A health document, plus whether it has gone quiet.
+pub struct LiveHealth {
+    /// What the run reported.
+    pub health: RunHealth,
+    /// The run's pid is alive but it has not republished within
+    /// [`run_health::STALE_AFTER_SECS`] — so this document describes a moment
+    /// that may have passed. Surfaced rather than dropped: silently discarding
+    /// it would report "healthy" about a process that has stopped talking.
+    pub stale: bool,
+}
+
+/// The runtime health published by the **live** `run`, if there is one
+/// (F-110).
+///
+/// `None` whenever the document must not be trusted, and the three ways that
+/// happens are different:
+///
+/// - **No live run.** `run.lock` decides first. A run that was killed leaves
+///   its health behind, and that file describes a process that no longer
+///   exists — reading it would report "degraded" about nothing.
+/// - **No file, or an unreadable one.** A run that has not finished its first
+///   cycle has not published anything yet.
+/// - **A different pid.** Belt and braces for the case above: a leftover file
+///   plus a new run that has not yet overwritten it.
+pub fn live_health(cx: &Cx, lock: &OrchestratorStatus) -> Option<LiveHealth> {
+    if !lock.running {
+        return None;
+    }
+    let health = run_health::read(&run_health::path_in(cx.paths.state_dir()))?;
+    match lock.pid {
+        Some(pid) if pid == health.pid => {
+            let stale = health.is_stale(SystemClock.now_utc());
+            Some(LiveHealth { health, stale })
+        }
+        _ => None,
+    }
+}
+
+/// The line shown when a live run has stopped republishing its health.
+///
+/// Its own sentence rather than a silent drop: a pid that is alive while
+/// nothing is being published is a wedged run, which is exactly the thing an
+/// availability display is for.
+pub fn stale_health_message(health: &RunHealth) -> String {
+    let age = health
+        .age_secs(SystemClock.now_utc())
+        .map(|s| format!("{s}s ago"))
+        .unwrap_or_else(|| "at an unreadable time".to_string());
+    format!(
+        "the orchestrator is running but last reported its health {age} → it may be wedged; \
+         check `totsuka logs -f`"
+    )
 }
 
 /// Print a value as pretty JSON (the `--json` contract: parseable output on

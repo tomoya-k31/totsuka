@@ -2013,3 +2013,244 @@ fn no_repair_diagnoses_a_missing_tool_home_the_same_way_a_repairing_run_does() {
         );
     }
 }
+
+/// Write a health document as if a `run` with `pid` had published it (F-110).
+fn write_health(base: &Path, pid: u32, degraded: Vec<orchestrator_core::adapters::Degradation>) {
+    write_health_at(base, pid, degraded, 0);
+}
+
+/// [`write_health`] with the document stamped `age_secs` in the past.
+fn write_health_at(
+    base: &Path,
+    pid: u32,
+    degraded: Vec<orchestrator_core::adapters::Degradation>,
+    age_secs: i64,
+) {
+    use orchestrator_core::ports::Clock;
+    let state_dir = base.join("state").join("totsuka");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let when =
+        orchestrator_core::adapters::SystemClock.now_utc() - time::Duration::seconds(age_secs);
+    orchestrator_core::adapters::run_health::write(
+        &orchestrator_core::adapters::run_health::path_in(&state_dir),
+        &orchestrator_core::adapters::RunHealth {
+            pid,
+            recorded_at: when
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap(),
+            degraded,
+        },
+    )
+    .unwrap();
+}
+
+/// The menu bar's two channels, end to end: the glyph is availability and the
+/// number is the attention count (F-109).
+#[test]
+fn menu_renders_the_glyph_the_count_and_a_focus_action() {
+    let base = scratch("menu_render");
+    let (running_id, _, _) = seed_db(&base);
+    // `seed_db` leaves one running, one failed and one done task — none of
+    // which is 要対応. Add the one state the badge exists to count.
+    let waiting_id = {
+        let db = StateDb::open(&base.join("state/totsuka/state.db")).unwrap();
+        let id = db
+            .upsert_task(&NewTask {
+                source: "github".into(),
+                source_task_id: "waiting".into(),
+                workflow: "implement".into(),
+                mode: "implement".into(),
+                repo: Some("web".into()),
+                priority: 0,
+                title: "needs an answer".into(),
+                url: None,
+                source_payload: None,
+                last_signal_at: None,
+            })
+            .unwrap();
+        for event in [TaskEvent::Dispatch, TaskEvent::Start, TaskEvent::WaitInput] {
+            db.apply_event(id, event, None).unwrap();
+        }
+        id
+    };
+
+    let out = run(&base, &["menu"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    let title = text.lines().next().unwrap();
+    assert!(title.starts_with('✕'), "no run holds the lock: {title}");
+    assert!(
+        title.contains('1'),
+        "the one waiting task is the badge count: {title}"
+    );
+    assert!(
+        text.contains(&format!("param2={waiting_id}")),
+        "a task row's click action focuses it: {text}"
+    );
+    assert!(
+        text.contains(&format!("#{running_id} running")),
+        "an in-flight task belongs in the working section: {text}"
+    );
+
+    let out = run(&base, &["menu", "--json"]);
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("jq-parseable JSON");
+    assert_eq!(doc["availability"], "down");
+    assert_eq!(doc["attention_count"], 1);
+    assert_eq!(doc["attention"][0]["task_id"], waiting_id);
+}
+
+/// A menu-bar plugin that exits non-zero renders as a broken item, so every
+/// failure has to be a row instead.
+#[test]
+fn menu_reports_a_missing_state_database_as_a_row_and_still_exits_zero() {
+    let base = scratch("menu_no_db");
+    std::fs::create_dir_all(base.join("state")).unwrap();
+
+    let out = run(&base, &["menu"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.starts_with('✕'), "{text}");
+    assert!(text.contains("state database not found"), "{text}");
+
+    let out = run(&base, &["menu", "--json"]);
+    assert!(out.status.success());
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("still parseable");
+    assert!(
+        doc["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("state database not found"),
+        "{doc}"
+    );
+}
+
+/// `run.lock` decides availability before the health file does: a document a
+/// crashed run left behind describes a process that no longer exists, so it
+/// must never paint a warning over "stopped".
+#[test]
+fn a_health_file_left_by_a_dead_run_does_not_become_a_warning() {
+    let base = scratch("menu_stale_health");
+    seed_db(&base);
+    std::fs::write(base.join("state/totsuka/run.lock"), "999999").unwrap();
+    write_health(
+        &base,
+        999999,
+        vec![orchestrator_core::adapters::Degradation::LlmKeyRejected],
+    );
+
+    let out = run(&base, &["menu"]);
+    let text = stdout(&out);
+    assert!(
+        text.starts_with('✕'),
+        "a stale lock is `not running`, not `degraded`: {text}"
+    );
+    assert!(!text.contains('⚠'), "{text}");
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&run(&base, &["status", "--json"]))).unwrap();
+    assert!(
+        doc.get("health").is_none(),
+        "a stopped orchestrator has no health, only a lock: {doc}"
+    );
+}
+
+/// The case the warning glyph exists for: a live run that cannot do its whole
+/// job. The lock holds this test process's own pid, which is certainly alive.
+#[test]
+fn a_live_degraded_run_shows_a_warning_in_both_menu_and_status() {
+    let base = scratch("menu_degraded");
+    seed_db(&base);
+    let pid = std::process::id();
+    std::fs::write(base.join("state/totsuka/run.lock"), pid.to_string()).unwrap();
+    write_health(
+        &base,
+        pid,
+        vec![orchestrator_core::adapters::Degradation::PluginDown {
+            plugin: "mock_src".to_string(),
+            abandoned: true,
+        }],
+    );
+
+    let text = stdout(&run(&base, &["menu"]));
+    assert!(text.starts_with('⚠'), "{text}");
+    assert!(text.contains("totsuka: running, degraded"), "{text}");
+    assert!(text.contains("mock_src"), "{text}");
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&run(&base, &["menu", "--json"]))).unwrap();
+    assert_eq!(doc["availability"], "degraded");
+
+    let text = stdout(&run(&base, &["status"]));
+    assert!(text.contains("degraded:"), "{text}");
+    assert!(text.contains("mock_src"), "{text}");
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&run(&base, &["status", "--json"]))).unwrap();
+    assert_eq!(doc["health"]["degraded"][0]["kind"], "plugin_down");
+    assert!(
+        doc["health"]["degraded"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("will not be relaunched"),
+        "the kind is for scripts, the message for a human: {doc}"
+    );
+    assert_eq!(doc["health"]["stale"], false);
+    assert!(
+        doc["health"]["recorded_at"].as_str().is_some(),
+        "freshness is judgeable from the outside, not only through the flag: {doc}"
+    );
+}
+
+/// A run whose pid is alive but which has stopped republishing is wedged —
+/// and it is the one condition the run itself cannot report, because
+/// reporting is what it stopped doing. It must not read as healthy.
+#[test]
+fn a_live_run_that_stopped_publishing_is_reported_as_stale() {
+    let base = scratch("menu_stale_publish");
+    seed_db(&base);
+    let pid = std::process::id();
+    std::fs::write(base.join("state/totsuka/run.lock"), pid.to_string()).unwrap();
+    // Healthy content, but written long enough ago that nobody should still
+    // be believing it.
+    write_health_at(&base, pid, Vec::new(), 600);
+
+    let text = stdout(&run(&base, &["menu"]));
+    assert!(
+        text.starts_with('⚠'),
+        "a document nobody is refreshing is not a clean bill of health: {text}"
+    );
+    assert!(text.contains("may be wedged"), "{text}");
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&run(&base, &["status", "--json"]))).unwrap();
+    assert_eq!(doc["health"]["stale"], true);
+    assert_eq!(
+        doc["health"]["degraded"].as_array().unwrap().len(),
+        0,
+        "staleness is the reader's judgement, not something the run published: {doc}"
+    );
+    assert!(stdout(&run(&base, &["status"])).contains("may be wedged"));
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Belt and braces around the lock check: a leftover document plus a fresh run
+/// that has not published yet must not be read as that run's health.
+#[test]
+fn a_health_file_from_another_pid_is_ignored() {
+    let base = scratch("menu_other_pid");
+    seed_db(&base);
+    let pid = std::process::id();
+    std::fs::write(base.join("state/totsuka/run.lock"), pid.to_string()).unwrap();
+    write_health(
+        &base,
+        pid.wrapping_add(1),
+        vec![orchestrator_core::adapters::Degradation::LlmKeyRejected],
+    );
+
+    let text = stdout(&run(&base, &["menu"]));
+    assert!(
+        text.starts_with('○'),
+        "a document from a different process says nothing about this one: {text}"
+    );
+}

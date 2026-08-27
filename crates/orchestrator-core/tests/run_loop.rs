@@ -91,6 +91,7 @@ on_success = { status = "レビュー待ち" }
 /// cleanup.
 fn engine_settings(repo_path: &Path) -> EngineSettings {
     EngineSettings {
+        health_path: None,
         workflows: workflows(),
         repos: vec![RepoSettings {
             name: "clone".to_string(),
