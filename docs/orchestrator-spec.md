@@ -73,6 +73,8 @@ Notifier plugins deliver events — waiting for input, done, failed, pending. A 
 
 That number counts five states — `pending`, `waiting_input`, `verifying`, `escalated`, and `queued` with a recorded reason — and nothing else. Finished tasks are never counted, so the number returns to zero once you have dealt with everything. Clicking a task row brings its pane to the front; nothing in the menu changes a task's state.
 
+The glyph has a third state, `⚠`: totsuka is running but cannot do its whole job. It covers four things it can re-check every cycle — the hook receiver failed to bind (nothing can report completion for that run), a plugin is down, hook signals are stuck in the spool, or the LLM gateway rejected the API key. Each clears on its own once fixed. `totsuka status` shows the same reasons under `degraded:`.
+
 The default output is SwiftBar's plugin format; `--json` gives you the same view as data. It always exits 0 — a plugin that does not renders as a broken item — so failures appear as a row instead. Setup is two lines of shell, in the operations guide.
 
 ## The command line
@@ -84,7 +86,7 @@ A single binary, run in the foreground.
 | `init` | Generate configuration scaffolding and check the environment |
 | `setup` | Interactive first-time setup, from a recipe |
 | `run [--watch] [--json]` | The main loop, from intake to dispatch. `--watch` stays up until you stop it |
-| `status [--json]` | Running, queued, and waiting tasks, plus worktrees |
+| `status [--json]` | Running, queued, and waiting tasks, plus worktrees, and anything the running orchestrator cannot currently do |
 | `menu [--json]` | The menu-bar view: availability, plus how many tasks are waiting on you |
 | `task list / show <id> / cancel <id> / retry <id>` | Working with individual tasks |
 | `task export` | Stream the audit log to stdout as NDJSON |

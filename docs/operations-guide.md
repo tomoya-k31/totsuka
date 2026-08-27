@@ -77,6 +77,28 @@ suppresses those four writes.
 - **The trade-off**: it cannot verify that the spool directory is writable, so a missing directory becomes a warning rather than a failure
 - **The set of checks and the exit codes do not change.** It only stops writes; it does not check less
 
+## When something is not working
+
+`totsuka doctor` answers "is the configuration and the environment right?". It is not something you can poll: it starts your plugins and resolves their secrets for real, which on a Mac can raise a biometric prompt.
+
+**What the running orchestrator can and cannot do right now is a separate question**, and it answers itself. Every cycle, `run` writes what is currently degraded, and `totsuka status` reads it back:
+
+```bash
+totsuka status              # a `degraded:` block under the first line
+totsuka status --json | jq '.health // "not running"'
+```
+
+Four things show up there, and each one clears on its own once you fix it:
+
+| Reported | What it means |
+|---|---|
+| The hook receiver could not bind | **No task can report completion for this whole run.** The process looks perfectly healthy, which is what makes this the worst one to miss. Restart `totsuka run` once the socket path is free |
+| A plugin is down | Tasks that need it stay queued. If it says it will not be relaunched, waiting will not help — fix it and restart |
+| Hook signals stuck in the spool | Deliveries are failing. Check the socket path and the token with `doctor` |
+| The LLM gateway rejected the API key | Repository selection falls back to asking you for every new conversation. Reissue the key and update `[llm].api_key_ref` |
+
+**A stopped orchestrator has no health, only a lock.** If `run` was killed, its last report is left on disk but ignored — you get "not running", never "degraded".
+
 ## Cleaning up worktrees
 
 Each task gets its own worktree, and a cleanup policy decides what happens afterwards.
@@ -146,7 +168,7 @@ Two channels, read independently.
 
 | Channel | Meaning |
 |---|---|
-| Glyph | `○` totsuka is running · `✕` stopped, or a stale lock is left behind |
+| Glyph | `○` running and healthy · `⚠` running but degraded (see above) · `✕` stopped, or a stale lock is left behind |
 | Number | How many tasks are waiting on you. **No number at all when there are none** |
 
 The number counts five states — `pending`, `waiting_input`, `verifying`, `escalated`, and `queued` with a recorded reason. **Finished tasks are never counted**: they stay in the database forever, so counting them would make the number climb and never come back to zero. Use `totsuka status` to review failures.
@@ -177,6 +199,7 @@ chmod +x ~/SwiftBar/totsuka.5s.sh
 | Nothing in the menu bar | Is the file in SwiftBar's plugin folder, and is it executable? Run `~/SwiftBar/totsuka.5s.sh` directly and read its output |
 | The item looks broken or empty | Is `totsuka` an absolute path? Check with `env -i /usr/local/bin/totsuka menu` that it works in a bare environment |
 | Stuck on `✕` | `run` is not up. This should agree with the first line of `totsuka status` |
+| Stuck on `⚠` | Something is degraded. The dropdown lists why — the same reasons `totsuka status` prints under `degraded:` |
 | The count disagrees with `totsuka status` | Finished tasks are not counted, by design. Compare against the `attention` array in `totsuka menu --json` |
 
 **`totsuka menu` exits 0 even when it fails**, and prints the reason as a row in the menu — a missing state database, pending migrations, an environment so bare that its paths will not resolve. It has to, because a menu-bar plugin that exits non-zero renders as a broken item. So do not read "no error" as "healthy": read the menu itself. It never reads `config.toml`, so a broken configuration does not change what it shows — use `totsuka config validate` for that.
