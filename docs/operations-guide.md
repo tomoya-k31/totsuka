@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f488ff2ccb2bb1842d587355758fcaccffeaed9bdefc01ab4992a2d6992e3b88 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f892e8cae2bd1c4ea7430b1e2737f622925286754d59f5af7563efe6a6b0f423 -->
 
 # Operations guide
 
@@ -183,16 +183,27 @@ The dropdown has two sections, "Needs you" and "Working". Clicking a task row ru
 
 ```bash
 brew install --cask swiftbar   # pick a plugin folder on first launch
-mkdir -p ~/SwiftBar
-cat > ~/SwiftBar/totsuka.5s.sh <<'EOF'
+
+# SwiftBar remembers the folder you picked. It is not necessarily ~/SwiftBar
+# (on the machine this was verified on it was ~/.config/swiftbar).
+dir=$(defaults read com.ameba.SwiftBar PluginDirectory)
+
+# `$(command -v totsuka)` expands here, baking the absolute path into the file.
+# Leaving the heredoc unquoted is what makes that happen.
+mkdir -p "${dir}"
+cat > "${dir}/totsuka.5s.sh" <<EOF
 #!/bin/sh
-exec /usr/local/bin/totsuka menu
+exec $(command -v totsuka) menu
 EOF
-chmod +x ~/SwiftBar/totsuka.5s.sh
+chmod +x "${dir}/totsuka.5s.sh"
+
+cat "${dir}/totsuka.5s.sh"   # read back the path that was baked in
 ```
 
 - The `5s` in the filename is the refresh interval, which is SwiftBar's convention. `totsuka menu` reads the state database and nothing else: **7 ms per run, measured** (average of 100 consecutive runs against a real database, process start included). That interval is free.
-- **Write the absolute path to `totsuka`.** A process launched from a GUI inherits a minimal `PATH` with neither `/usr/local/bin` nor a mise shim on it, so calling it by name works from a terminal and fails under SwiftBar. Paste what `which totsuka` prints.
+- **Bake in the absolute path.** A process launched from a GUI inherits a minimal `PATH` with neither `/usr/local/bin` nor a mise shim on it, so calling `totsuka` by name works from a terminal and fails under SwiftBar. Verified by running the script under `env -i`.
+- **Do not hard-code the path.** It depends on how totsuka was installed: `/usr/local/bin/totsuka` for a tarball, `/opt/homebrew/bin/totsuka` for Homebrew on Apple Silicon, `/usr/local/bin/totsuka` for Homebrew on Intel. The `$(command -v totsuka)` above resolves all of them.
+- Where the menu items themselves point (`totsuka focus <id>` and friends) needs no configuration: totsuka fills that in from its own `current_exe()`.
 
 ### When nothing shows up
 

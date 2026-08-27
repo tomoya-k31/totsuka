@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-08-28T06:50:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T07:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -206,16 +206,27 @@ worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane
 
 ```bash
 brew install --cask swiftbar   # 初回起動でプラグインフォルダを選ぶ
-mkdir -p ~/SwiftBar
-cat > ~/SwiftBar/totsuka.5s.sh <<'EOF'
+
+# 選んだフォルダは SwiftBar 自身が覚えている。`~/SwiftBar` とは限らない
+# （実機では `~/.config/swiftbar` だった）
+dir=$(defaults read com.ameba.SwiftBar PluginDirectory)
+
+# `$(command -v totsuka)` はここで展開され、絶対パスがファイルに焼き込まれる。
+# ヒアドキュメントを引用符で囲まないのがその要点。
+mkdir -p "${dir}"
+cat > "${dir}/totsuka.5s.sh" <<EOF
 #!/bin/sh
-exec /usr/local/bin/totsuka menu
+exec $(command -v totsuka) menu
 EOF
-chmod +x ~/SwiftBar/totsuka.5s.sh
+chmod +x "${dir}/totsuka.5s.sh"
+
+cat "${dir}/totsuka.5s.sh"   # 焼き込まれたパスを目で確認する
 ```
 
 - ファイル名の `5s` が更新間隔である（SwiftBar の規約）。`totsuka menu` は状態 DB を直読みするだけで、**実測 7ms/回**（100 回連続実行の平均、20 タスクの実 DB・プロセス起動込み）。この間隔でも負荷にならない
-- **`totsuka` は絶対パスで書く。** GUI から起動されたプロセスは `/usr/local/bin` も mise も含まない最小 `PATH` を継承するので、名前で呼ぶとターミナルからだけ動いて、SwiftBar 経由では「command not found」になる。`which totsuka` の結果を貼ること
+- **`totsuka` は絶対パスで焼き込む。** GUI から起動されたプロセスは `/usr/local/bin` も mise も含まない最小 `PATH` を継承するので、名前で呼ぶとターミナルからだけ動いて、SwiftBar 経由では「command not found」になる。実機で `env -i` 実行して確認済み
+- **パスをベタ書きしない。** インストール方法で変わる —— tarball 配置なら `/usr/local/bin/totsuka`、Homebrew なら Apple Silicon で `/opt/homebrew/bin/totsuka`、Intel で `/usr/local/bin/totsuka`。上の `$(command -v totsuka)` はそのどれでも正しく解決する
+- メニュー項目のクリック先（`totsuka focus <id>` 等）は totsuka 自身が `current_exe()` から出すので、**そちらは設定不要**である
 
 ## 出ないとき
 

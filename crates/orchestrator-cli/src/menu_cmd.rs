@@ -16,11 +16,24 @@
 //!
 //! ## Why the escaping is the point
 //!
-//! SwiftBar's line format is `text | key=value …`, so **`|` is a
-//! metacharacter**. Task titles are written by whoever can post in the
-//! connected Slack channel or file the GitHub issue, so an unescaped `|` in a
-//! title lets that person append arbitrary parameters to the row — including
-//! `bash=`. That is the same class of problem as #280 (see
+//! Task titles are written by whoever can post in the connected Slack channel
+//! or file the GitHub issue, and SwiftBar reads a row through **two** layers
+//! of syntax, not one:
+//!
+//! - `text | key=value …` — `|` separates a row's text from its parameters, so
+//!   an unescaped one lets its author append arbitrary parameters, `bash=`
+//!   included.
+//! - **backslash escapes inside the text.** Measured on SwiftBar 2.1.1: a `\n`
+//!   in the output becomes a real line break, and an escape it does not know
+//!   loses its backslash (`\u{7c}` printed as `u{7c}`).
+//!
+//! The second layer is the one that is easy to miss, and it was missed: the
+//! first shipped version escaped control characters with [`safe`] and stopped
+//! there, so a title containing a newline had that newline restored by
+//! SwiftBar — splitting one row into three, forged `---` separator included.
+//! Real hardware is the only place that showed up.
+//!
+//! Both layers are the same class of problem as #280 (see
 //! `ai-docs/security/terminal-output-sanitization.md`), which is why the
 //! rendering lives here in Rust and not in a shell/jq formatter: moving it out
 //! would move the defence somewhere with no types and no tests.
@@ -273,7 +286,22 @@ fn binary_path() -> String {
 ///    escape-don't-strip rule as `safe` — a deleted character is one the
 ///    operator cannot see was ever there.
 fn menu_text(text: &str) -> String {
-    safe(text).replace('|', "\\u{7c}")
+    // 1. Control characters become their visible escaped form (#280/#297).
+    //    This is also where a real newline turns into the two characters
+    //    `\` and `n` — which, on its own, is *not* enough (step 2).
+    let visible = safe(text);
+    // 2. **Double every backslash.** SwiftBar processes backslash escapes in a
+    //    row's text itself: measured on SwiftBar 2.1.1, a `\n` in the output
+    //    is rendered as a real line break and `\u{7c}` prints as `u{7c}` with
+    //    the backslash eaten. So step 1's escaping is undone by the very thing
+    //    it was meant to protect — a title with a newline in it split one row
+    //    into three, complete with a forged `---` separator. Doubling makes
+    //    SwiftBar print one literal backslash and stop there.
+    let doubled = visible.replace('\\', "\\\\");
+    // 3. `|` separates a row's text from its parameters, so it must never
+    //    reach SwiftBar as itself. Written pre-doubled, so what the operator
+    //    sees is `\u{7c}` — escape-not-strip, as everywhere else.
+    doubled.replace('|', "\\\\u{7c}")
 }
 
 /// Elide `title` to [`TITLE_BUDGET`] characters *before* escaping, so a cut
@@ -477,6 +505,61 @@ mod tests {
             TaskState::Publishing,
         ] {
             assert_eq!(classify(state, false), Section::Working, "{state}");
+        }
+    }
+
+    /// Exactly what `menu_text` emits, pinned by equality rather than by
+    /// `contains` — a substring check passes on both the doubled and the
+    /// single-backslash form, so it cannot tell the fix from the bug it
+    /// replaced. **Measured against SwiftBar 2.1.1**: it un-doubles `\\` to
+    /// one backslash, turns a lone `\n` into a real line break, and drops the
+    /// backslash of an escape it does not know (`\u{7c}` printed as `u{7c}`).
+    /// So the doubling is what makes step 1's escaping survive at all.
+    #[test]
+    fn every_backslash_reaches_swiftbar_doubled() {
+        // A real newline: `safe` makes it `\n`, and the doubling is what stops
+        // SwiftBar turning that back into a line break. Before this, one task
+        // title split a row into three, forged `---` separator included.
+        assert_eq!(menu_text("a\nb"), r"a\\nb");
+        // A backslash the author typed themselves.
+        assert_eq!(menu_text(r"a\b"), r"a\\b");
+        // `|` is written pre-doubled so the operator reads `\u{7c}`.
+        assert_eq!(menu_text("a|b"), r"a\\u{7c}b");
+        // Ordinary text is untouched — escaping must not become its own way of
+        // mangling the content.
+        assert_eq!(menu_text("リポジトリ選択のバグ"), "リポジトリ選択のバグ");
+    }
+
+    /// The property behind the equalities above: nothing reaches SwiftBar with
+    /// an odd run of backslashes, because an odd run is exactly what leaves it
+    /// an escape to act on.
+    #[test]
+    fn no_odd_run_of_backslashes_survives() {
+        for title in [
+            "a\nb",
+            "a\tb",
+            r"a\b",
+            r"a\\b",
+            r"a\\\b",
+            "a|b",
+            "a\u{1b}[31mred\u{1b}[0m",
+            "plain",
+        ] {
+            let rendered = menu_text(title);
+            let mut run = 0usize;
+            for c in rendered.chars() {
+                if c == '\\' {
+                    run += 1;
+                } else {
+                    assert_eq!(
+                        run % 2,
+                        0,
+                        "odd backslash run in {rendered:?} (from {title:?})"
+                    );
+                    run = 0;
+                }
+            }
+            assert_eq!(run % 2, 0, "odd trailing backslash run in {rendered:?}");
         }
     }
 
