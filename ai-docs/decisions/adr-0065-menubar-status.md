@@ -4,7 +4,7 @@ title: ADR-0065 メニューバー表示は SwiftBar プラグイン + totsuka m
 description: "常時視界に入る面へ totsuka の状態を出すために、GUI を自前で描かず SwiftBar のプラグイン書式を吐く `totsuka menu` サブコマンドを足す。可用性と要対応件数を 2 チャネルに分け、要対応から終端状態を外し、行の整形（特に `|` のエスケープ）を Rust 側に置く。却下した 8 案（run 自身の描画・メニューからの run 起動・doctor のポーリング・ログ文言マッチ・Swift アプリ・objc2 常駐・jq 整形・state.db 直読み）とその理由を記録する。"
 resource: https://github.com/tomoya-k31/totsuka/issues/584
 tags: [decision, menu, swiftbar, macos, observability, attention, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-28T08:25:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T08:45:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-08-28T07:32:00+09:00 }
 status: stable
@@ -102,7 +102,7 @@ stable。#584（エピック）の設計決定。実装は #585（`totsuka menu`
 
 SwiftBar のプラグインフォルダは初回起動時にユーザーが選ぶもので固定パスが無く、totsuka 側から一意に決められない。フックアセットを自動生成しているのは「無いと完了判定が壊れる」からであって、任意の表示をユーザーのフォルダに書き込むのは同じ基準ではない。
 
-**バイナリは絶対パスで書く。** GUI アプリの `PATH` には `/usr/local/bin` も mise も入っていない（Finder / LaunchAgent 起動のプロセスは最小 `PATH` を継承する）ので、`totsuka` を名前で呼ぶとターミナルからは動いて配布すると壊れる。`menu` 自身も `std::env::current_exe()` から絶対パスを出す。
+**バイナリは絶対パスで書く。** 理由は「最小 `PATH` だから」ではなく **「`PATH` が予測できないから」**である（初版はここを実測せずに書き、検収で否定された）。実測ではプラグインの `PATH` に Homebrew と mise shims は入っていたが **`/usr/local/bin` は無かった** —— shims は全ての zsh が読む `.zshenv` 由来、`/usr/local/bin` は login shell でしか走らない `/etc/zprofile` の `path_helper` 由来である。したがって**ユーザーの shell 設定ごとに違う**。加えて SwiftBar 自身の起動方法にも依存する（`launchctl getenv PATH` が未設定なら launchd 起動のアプリは `/usr/bin:/bin:/usr/sbin:/sbin` だけ）。`menu` 自身も `std::env::current_exe()` から絶対パスを出すので、この問いに答えずに済む。
 
 ## 7. 設定テーブルは増やさない
 
@@ -113,7 +113,7 @@ SwiftBar のプラグインフォルダは初回起動時にユーザーが選�
 | 案 | 破れ方 |
 |---|---|
 | **`run --watch` 自身がメニューバー項目を持つ** | `run` が落ちたら項目ごと消えるので、**`✕`（止まっている）を原理的に表示できない**。可用性を映す主体は `run` とは別プロセスでなければならない |
-| **メニューから `totsuka run` を起こせるようにする** | GUI 起動のプロセスは mise の `PATH` も 1Password の CLI セッションも継承しない。`op://` 参照が解決できず、**起動したように見えて全プラグインが落ちている**という最も判別しにくい状態を作る |
+| **メニューから `totsuka run` を起こせるようにする** | GUI 起動のプロセスは 1Password の CLI セッションを継承せず、`PATH` も予測できない（下記の実測を参照 —— 当初「mise も継承しない」と書いていたが、実測ではプラグインの `PATH` に mise shims は入っており、これは起動方法とシェル設定に依存する）。`op://` 参照が解決できず、**起動したように見えて全プラグインが落ちている**という最も判別しにくい状態を作る |
 | **`doctor` を定期実行して縮退を出す** | enabled なプラグインが 1 つでもあると `plugin:{name}` チェックがプラグインを起動し、`plugin_spec` 経由で `op://` を含むシークレットを**実解決**する。`--online` 無しでも 1Password の生体認証プロンプトが出うる（[運用ガイド](/operations/operations-guide.md)）。数秒おきに叩く常駐プロセスからは呼べない |
 | **ログの warn/error 文言をパターンマッチして縮退を判定** | **メッセージは契約ではない。** リファクタで一語変わった瞬間に、黙って「健全」と言い続ける |
 | **独立した Swift/AppKit `.app`** | 新言語・`xcodebuild` の CI ジョブ・Developer ID による公証パイプラインがリポジトリに入る。得るものは UI の自由度だけで、要件はそれを必要としない |

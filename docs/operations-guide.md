@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:80c57084cc03c4e9666fd147002d6b066674a91dd8ffdf45932a3848e78b0594 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:11102225dc440c2f4df35b3c83fdf5badd61a37539f56d6131ce20218349be32 -->
 
 # Operations guide
 
@@ -217,7 +217,7 @@ EOF
 ```
 
 - The `5s` in the filename is the refresh interval, which is SwiftBar's convention. `totsuka menu` reads the state database and nothing else: **7 ms per run, measured** (average of 100 consecutive runs against a real database, process start included). That interval is free.
-- **Bake in the absolute path.** A process launched from a GUI inherits a minimal `PATH` with neither `/usr/local/bin` nor a mise shim on it, so calling `totsuka` by name works from a terminal and fails under SwiftBar. Verified by running the script under `env -i`.
+- **Bake in the absolute path.** The `PATH` a plugin runs with is not something you can predict, so calling `totsuka` by name works from a terminal and fails under SwiftBar. Measured on one machine it had Homebrew and the mise shims on it but not `/usr/local/bin`, and what it contains depends both on your shell's startup files and on how SwiftBar itself was launched. The script is verified to work even under `env -i`, with no `PATH` at all.
 - **Do not hard-code the path.** It depends on how totsuka was installed: `/usr/local/bin/totsuka` for a tarball, `/opt/homebrew/bin/totsuka` for Homebrew on Apple Silicon, `/usr/local/bin/totsuka` for Homebrew on Intel. The `$(command -v totsuka)` above resolves all of them.
 - Where the menu items themselves point (`totsuka focus <id>` and friends) needs no configuration: totsuka fills that in with the path it is running from, whatever that turns out to be.
 

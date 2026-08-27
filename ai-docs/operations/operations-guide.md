@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-08-28T08:15:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T08:45:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -238,7 +238,7 @@ EOF
 ```
 
 - ファイル名の `5s` が更新間隔である（SwiftBar の規約）。`totsuka menu` は状態 DB を直読みするだけで、**実測 7ms/回**（100 回連続実行の平均、20 タスクの実 DB・プロセス起動込み）。この間隔でも負荷にならない
-- **`totsuka` は絶対パスで焼き込む。** GUI から起動されたプロセスは `/usr/local/bin` も mise も含まない最小 `PATH` を継承するので、名前で呼ぶとターミナルからだけ動いて、SwiftBar 経由では「command not found」になる。実機で `env -i` 実行して確認済み
+- **`totsuka` は絶対パスで焼き込む。** **プラグインが走る `PATH` は予測できない**ためで、名前で呼ぶとターミナルからだけ動いて SwiftBar 経由では「command not found」になる。実測では Homebrew と mise shims は入っていたが **`/usr/local/bin` は無かった**（shims は全ての zsh が読む `.zshenv` 由来、`/usr/local/bin` は login shell でしか走らない `/etc/zprofile` の `path_helper` 由来）。SwiftBar 自身の起動方法にも依存する（launchd 起動なら `/usr/bin:/bin:/usr/sbin:/sbin` だけ）。スクリプトが `env -i`（PATH ゼロ）でも動くことは実機で確認済み
 - **パスをベタ書きしない。** インストール方法で変わる —— tarball 配置なら `/usr/local/bin/totsuka`、Homebrew なら Apple Silicon で `/opt/homebrew/bin/totsuka`、Intel で `/usr/local/bin/totsuka`。上の `$(command -v totsuka)` はそのどれでも正しく解決する
 - メニュー項目のクリック先（`totsuka focus <id>` 等）は totsuka 自身が `current_exe()` から出すので、**そちらは設定不要**である
 

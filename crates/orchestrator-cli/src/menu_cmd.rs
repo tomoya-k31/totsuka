@@ -289,11 +289,16 @@ fn build(cx: &Cx) -> Result<MenuModel, CliError> {
 
 /// Absolute path of the running binary, for the `bash=` parameters.
 ///
-/// A GUI-launched process inherits a minimal `PATH` — neither `/usr/local/bin`
-/// nor a mise shim is on it — so a bare `totsuka` would work from a terminal
-/// and break once SwiftBar is the one launching it. `current_exe` is the only
-/// answer that survives both. If it is unavailable there is nothing better to
-/// fall back to than the name.
+/// **The `PATH` a SwiftBar plugin runs with is not predictable**, so a bare
+/// `totsuka` would work from a terminal and break once SwiftBar is the one
+/// launching it. Measured on this machine it held Homebrew and the mise shims
+/// but *not* `/usr/local/bin` — the shims come from `.zshenv`, which every
+/// zsh reads, while `/usr/local/bin` is added by `/etc/zprofile`'s
+/// `path_helper`, which only a login shell runs. And it depends on how
+/// SwiftBar itself was started: with `launchctl getenv PATH` unset, an app
+/// launched by launchd gets `/usr/bin:/bin:/usr/sbin:/sbin` and nothing else.
+/// `current_exe` sidesteps the whole question. If it is unavailable there is
+/// nothing better to fall back to than the name.
 fn binary_path() -> String {
     std::env::current_exe()
         .map(|p| p.display().to_string())

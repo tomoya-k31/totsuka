@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:80c57084cc03c4e9666fd147002d6b066674a91dd8ffdf45932a3848e78b0594 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:11102225dc440c2f4df35b3c83fdf5badd61a37539f56d6131ce20218349be32 -->
 
 # 運用ガイド
 
@@ -216,7 +216,7 @@ EOF
 ```
 
 - ファイル名の `5s` が更新間隔で、これは SwiftBar の規約。`totsuka menu` は状態データベースを読むだけで、**実測 7ms/回**（実データベースに対する 100 回連続実行の平均、プロセス起動込み）。この間隔でも負荷にならない。
-- **絶対パスを焼き込む。** GUI から起動されたプロセスは `/usr/local/bin` も mise も含まない最小の `PATH` を継承するので、`totsuka` を名前で呼ぶとターミナルからは動いて SwiftBar 経由では失敗する。スクリプトを `env -i` で実行して確認済み。
+- **絶対パスを焼き込む。** プラグインが走る `PATH` は予測できないので、`totsuka` を名前で呼ぶとターミナルからは動いて SwiftBar 経由では失敗する。あるマシンでの実測では Homebrew と mise shims は入っていたが `/usr/local/bin` は無かった。何が入るかはシェルの起動ファイルにも、SwiftBar 自身の起動のされ方にも依存する。スクリプトは `PATH` がまったく無い `env -i` でも動くことを確認済み。
 - **パスをベタ書きしない。** インストール方法で変わる —— tarball なら `/usr/local/bin/totsuka`、Homebrew は Apple Silicon で `/opt/homebrew/bin/totsuka`、Intel で `/usr/local/bin/totsuka`。上の `$(command -v totsuka)` はそのどれでも解決する。
 - メニュー項目のクリック先（`totsuka focus <id>` 等）は、totsuka が自分の起動元のパスをそのまま使うので設定は要らない。
 
