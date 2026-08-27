@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:cdefbc5bdaad5a7eecd1649bcb62ff6ca82dded352b647c5128f09cdbe2ef296 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:06e274e619c7bf10914ee37f9cde6b5e25efa1f90694720fa418001d882e6067 -->
 
 # Operations guide
 
@@ -185,8 +185,14 @@ The dropdown has two sections, "Needs you" and "Working". Clicking a task row ru
 brew install --cask swiftbar   # pick a plugin folder on first launch
 
 # SwiftBar remembers the folder you picked. It is not necessarily ~/SwiftBar
-# (on the machine this was verified on it was ~/.config/swiftbar).
-dir=$(defaults read com.ameba.SwiftBar PluginDirectory)
+# (on the machine this was verified on it was ~/.config/swiftbar). **If SwiftBar
+# has never been launched the key does not exist and `dir` comes back empty** —
+# carrying on would create something like /totsuka.5s.sh, so stop here instead.
+dir=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null) || {
+  echo "SwiftBar has no plugin folder yet — launch it once and pick one" >&2
+  exit 1
+}
+[ -n "${dir}" ] || { echo "PluginDirectory is empty" >&2; exit 1; }
 
 # `$(command -v totsuka)` expands here, baking the absolute path into the file.
 # Leaving the heredoc unquoted is what makes that happen.
@@ -209,8 +215,8 @@ cat "${dir}/totsuka.5s.sh"   # read back the path that was baked in
 
 | Symptom | Where to look |
 |---|---|
-| Nothing in the menu bar | Is the file in SwiftBar's plugin folder, and is it executable? Run `~/SwiftBar/totsuka.5s.sh` directly and read its output |
-| The item looks broken or empty | Is `totsuka` an absolute path? Check with `env -i /usr/local/bin/totsuka menu` that it works in a bare environment |
+| Nothing in the menu bar | Is the file in the plugin folder, and is it executable? Run `"$(defaults read com.ameba.SwiftBar PluginDirectory)/totsuka.5s.sh"` directly and read its output |
+| The item looks broken or empty | Is `totsuka` an absolute path? Check with `env -i "$(command -v totsuka)" menu` that it works in a bare environment (`command -v` expands *outside* `env -i` — inside there is no `PATH` to resolve it with) |
 | Stuck on `✕` | `run` is not up. This should agree with the first line of `totsuka status` |
 | Stuck on `⚠` | Something is degraded. The dropdown lists why — the same reasons `totsuka status` prints under `degraded:` |
 | Clicking a task does nothing | That is by design: bringing a pane to the front degrades quietly when totsuka is stopped or the pane is gone. To see what a click actually runs, press `Open logs` — SwiftBar opens a login shell and prints the command line it assembled. **That shell does not inherit the plugin script's environment**, so anything you set there (an `XDG_STATE_HOME`, say) is not passed on |

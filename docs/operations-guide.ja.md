@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:cdefbc5bdaad5a7eecd1649bcb62ff6ca82dded352b647c5128f09cdbe2ef296 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:06e274e619c7bf10914ee37f9cde6b5e25efa1f90694720fa418001d882e6067 -->
 
 # 運用ガイド
 
@@ -186,8 +186,14 @@ worktree と pane の連動が破れると、pane だけが残る（手動での
 brew install --cask swiftbar   # 初回起動でプラグインフォルダを選ぶ
 
 # 選んだフォルダは SwiftBar 自身が覚えている。`~/SwiftBar` とは限らない
-# （検証した機体では `~/.config/swiftbar` だった）。
-dir=$(defaults read com.ameba.SwiftBar PluginDirectory)
+# （検証した機体では `~/.config/swiftbar` だった）。**SwiftBar を一度も起動して
+# いないとこのキーは無く、`dir` が空になる** — そのまま進むと `/totsuka.5s.sh`
+# のような無関係な場所を作りにいくので、ここで止める。
+dir=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null) || {
+  echo "SwiftBar のプラグインフォルダが未設定。一度起動して選ぶこと" >&2
+  exit 1
+}
+[ -n "${dir}" ] || { echo "PluginDirectory が空" >&2; exit 1; }
 
 # `$(command -v totsuka)` はここで展開され、絶対パスがファイルに焼き込まれる。
 # ヒアドキュメントを引用符で囲まないのがその要点。
@@ -210,8 +216,8 @@ cat "${dir}/totsuka.5s.sh"   # 焼き込まれたパスを読み返す
 
 | 症状 | 見るところ |
 |---|---|
-| メニューバーに何も出ない | SwiftBar のプラグインフォルダにファイルがあるか、実行ビットが立っているか。`~/SwiftBar/totsuka.5s.sh` を直接実行して出力を見る |
-| 項目が壊れて見える・空になる | `totsuka` が絶対パスか。`env -i /usr/local/bin/totsuka menu` で最小環境でも動くか確かめる |
+| メニューバーに何も出ない | プラグインフォルダにファイルがあるか、実行ビットが立っているか。`"$(defaults read com.ameba.SwiftBar PluginDirectory)/totsuka.5s.sh"` を直接実行して出力を見る |
+| 項目が壊れて見える・空になる | `totsuka` が絶対パスか。`env -i "$(command -v totsuka)" menu` で最小環境でも動くか確かめる（`command -v` は `env -i` の**外**で展開される — 中には `PATH` が無い） |
 | `✕` のまま | `run` が動いていない。`totsuka status` の 1 行目と一致するはず |
 | `⚠` のまま | 何かが縮退している。ドロップダウンに理由が出る（`totsuka status` の `degraded:` と同じ内容） |
 | タスクをクリックしても何も起きない | 設計どおりである。pane の前面化は totsuka が停止中や pane 消失のとき静かに縮退する。クリックで実際に何が走るかは `Open logs` を押すと分かる —— SwiftBar が login shell を開き、組み立てたコマンド行をそのまま表示する。**その shell はプラグインスクリプトの環境を引き継がない**ので、そこで設定したもの（`XDG_STATE_HOME` 等）は渡らない |

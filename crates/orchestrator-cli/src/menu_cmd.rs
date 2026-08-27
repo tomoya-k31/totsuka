@@ -276,15 +276,23 @@ fn binary_path() -> String {
 
 /// Make externally-authored text safe to place in a SwiftBar line.
 ///
-/// Two layers, in order:
+/// **Three steps, and the order is the whole point** — see the module docs for
+/// the two layers of SwiftBar syntax this is defending against:
 ///
 /// 1. [`safe`] turns terminal control characters into their visible escaped
-///    form (#280/#297) — which also disposes of the newline that would
-///    otherwise split one row into two.
-/// 2. `|` becomes `\u{7c}`, because it is what separates a row's text from its
-///    parameters. The escaped spelling is deliberate: the same
-///    escape-don't-strip rule as `safe` — a deleted character is one the
-///    operator cannot see was ever there.
+///    form (#280/#297). On its own this is **not** enough: the `\n` it writes
+///    for a newline is something SwiftBar turns back into a line break.
+/// 2. Every backslash is doubled — including the ones step 1 just produced.
+///    This is what makes step 1 survive contact with SwiftBar.
+/// 3. `|` is escaped, because it is what separates a row's text from its
+///    parameters. Written pre-doubled, so the operator reads `\u{7c}`. The
+///    escaped spelling is deliberate: the same escape-don't-strip rule as
+///    `safe` — a deleted character is one the operator cannot see was ever
+///    there.
+///
+/// Step 2 was missing in the first shipped version, which is how a title with
+/// a newline in it split one row into three. Removing it again would reopen
+/// that: `every_backslash_reaches_swiftbar_doubled` fails if you do.
 fn menu_text(text: &str) -> String {
     // 1. Control characters become their visible escaped form (#280/#297).
     //    This is also where a real newline turns into the two characters

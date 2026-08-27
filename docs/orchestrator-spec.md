@@ -75,7 +75,7 @@ That number counts five states — `pending`, `waiting_input`, `verifying`, `esc
 
 The glyph has a third state, `⚠`: totsuka is running but cannot do its whole job. It covers four things it can re-check every cycle — the hook receiver failed to bind (nothing can report completion for that run), a plugin is down, hook signals are stuck in the spool, or the LLM gateway rejected the API key. Each clears on its own once fixed. There is a fifth case totsuka cannot report about itself: if it stops publishing altogether for two minutes while its process is still alive, that shows as `⚠` too — a wedged run cannot tell you it is wedged. `totsuka status` shows the same reasons under `degraded:`.
 
-The default output is SwiftBar's plugin format; `--json` gives you the same view as data. It always exits 0 — a plugin that does not renders as a broken item — so failures appear as a row instead. Task titles come from whoever filed the task, so totsuka escapes them before they reach SwiftBar: neither a `|` nor a newline in a title can add parameters to a row or split it in two. Setup is two lines of shell, in the operations guide.
+The default output is SwiftBar's plugin format; `--json` gives you the same view as data. It always exits 0, because SwiftBar renders a plugin that exits non-zero as a broken item; failures appear as a row instead. Task titles come from whoever filed the task, so totsuka escapes them before they reach SwiftBar: neither a `|` nor a newline in a title can add parameters to a row or split it in two. Setup is two lines of shell, in the operations guide.
 
 ## The command line
 

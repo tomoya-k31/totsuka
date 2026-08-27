@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-08-28T07:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T07:58:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -208,8 +208,14 @@ worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane
 brew install --cask swiftbar   # 初回起動でプラグインフォルダを選ぶ
 
 # 選んだフォルダは SwiftBar 自身が覚えている。`~/SwiftBar` とは限らない
-# （実機では `~/.config/swiftbar` だった）
-dir=$(defaults read com.ameba.SwiftBar PluginDirectory)
+# （実機では `~/.config/swiftbar` だった）。**まだ SwiftBar を起動していないと
+# このキーは存在せず、`dir` が空になる** — 空のまま進むと `/totsuka.5s.sh` の
+# ような無関係な場所を作りにいくので、ここで止める。
+dir=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null) || {
+  echo "SwiftBar のプラグインフォルダが未設定。SwiftBar を一度起動して選ぶこと" >&2
+  exit 1
+}
+[ -n "${dir}" ] || { echo "PluginDirectory が空" >&2; exit 1; }
 
 # `$(command -v totsuka)` はここで展開され、絶対パスがファイルに焼き込まれる。
 # ヒアドキュメントを引用符で囲まないのがその要点。
@@ -232,8 +238,8 @@ cat "${dir}/totsuka.5s.sh"   # 焼き込まれたパスを目で確認する
 
 | 症状 | 見るところ |
 |---|---|
-| メニューバーに何も出ない | SwiftBar のプラグインフォルダにファイルがあるか、実行ビットが立っているか。`~/SwiftBar/totsuka.5s.sh` を直接実行して出力を見る |
-| 項目が壊れて見える / 空 | スクリプトの `totsuka` が絶対パスか。`env -i /usr/local/bin/totsuka menu` で最小環境でも動くか確認する |
+| メニューバーに何も出ない | プラグインフォルダにファイルがあるか、実行ビットが立っているか。`"$(defaults read com.ameba.SwiftBar PluginDirectory)/totsuka.5s.sh"` を直接実行して出力を見る |
+| 項目が壊れて見える / 空 | スクリプトの `totsuka` が絶対パスか。`env -i "$(command -v totsuka)" menu` で最小環境でも動くか確認する（`command -v` は `env -i` の**外**で展開される — 中では `PATH` が無く解決できない） |
 | `✕` のまま | `run` が動いていない。`totsuka status` の 1 行目と一致するはず（一致しないなら不具合） |
 | `⚠` のまま | 縮退している。ドロップダウンに理由が出る。`totsuka status` の `degraded:` と同じ内容 |
 | `⚠` で「may be wedged」と出る | run が 120 秒以上 health を更新していない。`totsuka logs -f` で最後に何をしていたか見る |
