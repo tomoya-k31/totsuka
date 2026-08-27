@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:5bb23d6ae75e04eef6f71f3ea540ea8b1f633a7400b8290c8e863287d909e9d8 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:d7b4931e5d984204356fc4d120a8f5e5d12b45e673701a419942667f1445dbd4 -->
 
 # Operations guide
 
@@ -135,6 +135,51 @@ When the link between a worktree and its pane breaks — you removed a worktree 
 | `totsuka logs [-f] [--task <id>]` | Formatted logs. Secrets are masked unconditionally |
 
 `retry` only accepts failed or cancelled tasks — a completed task cannot be re-run.
+
+## Watching status from the menu bar
+
+While `totsuka run --watch` is up, the only thing telling you that a task is stuck waiting on you is a notification — and notifications are transient. Worse, a failed delivery is swallowed on purpose so it never stops a task, so *no notification* does not mean *nothing is wrong*. `totsuka menu` puts the count somewhere that stays put.
+
+### Reading it
+
+Two channels, read independently.
+
+| Channel | Meaning |
+|---|---|
+| Glyph | `○` totsuka is running · `✕` stopped, or a stale lock is left behind |
+| Number | How many tasks are waiting on you. **No number at all when there are none** |
+
+The number counts five states — `pending`, `waiting_input`, `verifying`, `escalated`, and `queued` with a recorded reason. **Finished tasks are never counted**: they stay in the database forever, so counting them would make the number climb and never come back to zero. Use `totsuka status` to review failures.
+
+The dropdown has two sections, "Needs you" and "Working". Clicking a task row runs `totsuka focus <id>` and brings its pane to the front. **There are no buttons that change a task's state** — approving a task publishes a pull request or posts a reply under your name, which cannot be undone, so it is not something a stray click should do.
+
+### Setting it up
+
+**SwiftBar is a separate install**, and totsuka never writes this file for you: SwiftBar's plugin folder is one you choose the first time you launch it, so there is no fixed path to write to.
+
+```bash
+brew install --cask swiftbar   # pick a plugin folder on first launch
+mkdir -p ~/SwiftBar
+cat > ~/SwiftBar/totsuka.5s.sh <<'EOF'
+#!/bin/sh
+exec /usr/local/bin/totsuka menu
+EOF
+chmod +x ~/SwiftBar/totsuka.5s.sh
+```
+
+- The `5s` in the filename is the refresh interval, which is SwiftBar's convention. `totsuka menu` reads the state database and nothing else, so it costs under 10 ms and that interval is free.
+- **Write the absolute path to `totsuka`.** A process launched from a GUI inherits a minimal `PATH` with neither `/usr/local/bin` nor a mise shim on it, so calling it by name works from a terminal and fails under SwiftBar. Paste what `which totsuka` prints.
+
+### When nothing shows up
+
+| Symptom | Where to look |
+|---|---|
+| Nothing in the menu bar | Is the file in SwiftBar's plugin folder, and is it executable? Run `~/SwiftBar/totsuka.5s.sh` directly and read its output |
+| The item looks broken or empty | Is `totsuka` an absolute path? Check with `env -i /usr/local/bin/totsuka menu` that it works in a bare environment |
+| Stuck on `✕` | `run` is not up. This should agree with the first line of `totsuka status` |
+| The count disagrees with `totsuka status` | Finished tasks are not counted, by design. Compare against the `attention` array in `totsuka menu --json` |
+
+**`totsuka menu` exits 0 even when it fails**, and prints the reason as a row in the menu — a missing state database, pending migrations, a broken config. It has to, because a menu-bar plugin that exits non-zero renders as a broken item. So do not read "no error" as "healthy": read the menu itself.
 
 ## Common problems
 

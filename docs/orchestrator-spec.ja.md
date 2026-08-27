@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:7fa709fd87be1c4b7cd7dff21ef31aac811a9fc4ff961a013f012b94aee5f529 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:5188308f9ab315d7d07fb94e6e47506a6630fec98ef8c0122c24e9241117e868 -->
 
 # totsuka とは
 
@@ -68,6 +68,14 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 
 通知プラグインがイベント（入力待ち / 完了 / 失敗 / 保留）を配送する。macOS の通知プラグインを同梱している。**配送に失敗してもタスクの実行には影響しない。**
 
+### メニューバーに状態を出す
+
+`totsuka menu` は SwiftBar のようなメニューバーホスト向けの表示を返す。チャネルは 2 つで、**形**が可用性（`○` = totsuka が動いている / `✕` = 動いていない）、**数**が自分の対応を待っているタスクの件数である。
+
+数に入るのは `pending` / `waiting_input` / `verifying` / `escalated` / 理由が記録された `queued` の 5 状態だけで、他は入らない。終わったタスクは決して数えないので、対応し終えれば数は 0 に戻る。タスク行をクリックするとその pane が前面に来る。メニューからタスクの状態を変える操作は無い。
+
+既定の出力は SwiftBar のプラグイン書式で、`--json` は同じ内容をデータとして返す。設定はシェル 2 行で、運用ガイドに手順がある。
+
 ## コマンドライン
 
 フォアグラウンドで動く単一バイナリ。
@@ -78,6 +86,7 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 | `setup` | レシピからの対話的な初期セットアップ |
 | `run [--watch] [--json]` | 取り込みからディスパッチまでのメインループ。`--watch` は止めるまで常駐する |
 | `status [--json]` | 実行中・待機中・入力待ちのタスクと worktree の一覧 |
+| `menu [--json]` | メニューバー向けの表示。可用性と、自分の対応を待っている件数 |
 | `task list / show <id> / cancel <id> / retry <id>` | 個別のタスク操作 |
 | `task export` | 監査ログを NDJSON で標準出力へ流す |
 | `plugin list / install / uninstall / enable / disable` | プラグイン管理 |
@@ -86,7 +95,7 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 | `logs [-f] [--task <id>]` | ログの表示・追尾 |
 | `completion <shell>` | シェル補完の生成 |
 
-共通フラグは `--debug` / `--json` / `--dry-run` / `--config <path>`。`--json` はドキュメントを印字するコマンド — `status` / `task list` / `task show` / `plugin list` / `doctor` — に用意されており、他のツールから使える。`task export` にこのフラグは無い。印字するのが NDJSON だけだからである。
+共通フラグは `--debug` / `--json` / `--dry-run` / `--config <path>`。`--json` はドキュメントを印字するコマンド — `status` / `menu` / `task list` / `task show` / `plugin list` / `doctor` — に用意されており、他のツールから使える。`task export` にこのフラグは無い。印字するのが NDJSON だけだからである。`menu` だけは常に exit 0 で終わる。メニューバーホストが読むもので、プラグインが非ゼロ終了すると項目ごと壊れるため、失敗はメニューの 1 行になる。
 
 機械可読な出力を求めたときは、標準出力にはそのドキュメントだけが載る。助言的なメッセージは標準エラーへ出る。
 
@@ -125,7 +134,7 @@ totsuka task export --since 4213 > today.ndjson   # 前回の続きだけ
 
 | 含まないもの | 理由 |
 |---|---|
-| GUI や Web ダッシュボード | 端末のツールだから |
+| Web ダッシュボードやクラウド UI | 状態はローカルに閉じる。ローカルのメニューバー向けにテキストは出すが、描画はホストの仕事 |
 | プルリクエストのレビュー・マージ判断・マージ追跡 | 人間のレビュー領域。プルリクエストを作った後は追跡しない |
 | Linux / Windows の動作保証 | 抽象化はしてあるが、実装とテストは対象外 |
 | 常駐デーモンやサーバー運用 | 起動したプロセスの寿命に閉じる |

@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:5bb23d6ae75e04eef6f71f3ea540ea8b1f633a7400b8290c8e863287d909e9d8 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:d7b4931e5d984204356fc4d120a8f5e5d12b45e673701a419942667f1445dbd4 -->
 
 # 運用ガイド
 
@@ -136,6 +136,51 @@ worktree と pane の連動が破れると、pane だけが残る（手動での
 | `totsuka logs [-f] [--task <id>]` | ログの整形表示。機密は無条件にマスクされる |
 
 `retry` が受け付けるのは失敗・中止したタスクだけで、完了したタスクは再実行できない。
+
+## メニューバーで見張る
+
+`run --watch` を回している間、「自分待ちで止まっているタスク」を知らせてくれるのは通知だけで、通知は流れて消える。しかも配送に失敗してもタスクを止めない設計なので、**通知が来ないことは異常が無いことを意味しない**。`totsuka menu` は、その件数を残り続ける場所に出す。
+
+### 読み方
+
+チャネルは 2 つで、独立に読む。
+
+| チャネル | 意味 |
+|---|---|
+| 形 | `○` totsuka が動いている · `✕` 止まっている、または stale lock が残っている |
+| 数 | 自分の対応を待っているタスクの件数。**0 件なら数字そのものが出ない** |
+
+数に入るのは `pending` / `waiting_input` / `verifying` / `escalated` / 理由が記録された `queued` の 5 状態。**終わったタスクは決して数えない** —— データベースに残り続けるので、数えると数字が増える一方で 0 に戻らなくなる。失敗の確認は `totsuka status` で行う。
+
+ドロップダウンは「Needs you」と「Working」の 2 節。タスク行をクリックすると `totsuka focus <id>` が走り、その pane が前面に来る。**状態を変えるボタンは無い** —— 検収を通すとプルリクエストの作成や本人名義の返信まで走って取り消せないので、うっかり押せる場所には置かない。
+
+### 導入
+
+**SwiftBar は別途インストールが要る**。また totsuka はこのファイルを書き込まない —— SwiftBar のプラグインフォルダは初回起動時に自分で選ぶもので、書き込み先が一意に決まらないためである。
+
+```bash
+brew install --cask swiftbar   # 初回起動でプラグインフォルダを選ぶ
+mkdir -p ~/SwiftBar
+cat > ~/SwiftBar/totsuka.5s.sh <<'EOF'
+#!/bin/sh
+exec /usr/local/bin/totsuka menu
+EOF
+chmod +x ~/SwiftBar/totsuka.5s.sh
+```
+
+- ファイル名の `5s` が更新間隔で、これは SwiftBar の規約。`totsuka menu` は状態データベースを読むだけで 10ms 未満なので、この間隔でも負荷にならない。
+- **`totsuka` は絶対パスで書く。** GUI から起動されたプロセスは `/usr/local/bin` も mise も含まない最小の `PATH` を継承するので、名前で呼ぶとターミナルからは動いて SwiftBar 経由では失敗する。`which totsuka` の結果を貼ること。
+
+### 出ないとき
+
+| 症状 | 見るところ |
+|---|---|
+| メニューバーに何も出ない | SwiftBar のプラグインフォルダにファイルがあるか、実行ビットが立っているか。`~/SwiftBar/totsuka.5s.sh` を直接実行して出力を見る |
+| 項目が壊れて見える・空になる | `totsuka` が絶対パスか。`env -i /usr/local/bin/totsuka menu` で最小環境でも動くか確かめる |
+| `✕` のまま | `run` が動いていない。`totsuka status` の 1 行目と一致するはず |
+| 件数が `totsuka status` と合わない | 終わったタスクを数えないのは仕様。`totsuka menu --json` の `attention` 配列と突き合わせる |
+
+**`totsuka menu` は失敗しても exit 0 で終わり**、原因をメニューの 1 行として出す（状態データベースが無い、マイグレーションが未適用、設定が壊れている等）。メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるためで、「エラーが出ない」ことを健全さの証拠にせず、メニューの本文を読むこと。
 
 ## よくある問題
 

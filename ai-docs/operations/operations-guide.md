@@ -1,9 +1,9 @@
 ---
 type: Runbook
 title: 運用ガイド（doctor / worktree 掃除 / FAQ）
-description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、よくある問題の切り分け。
+description: totsuka 日常運用の手引き。doctor の読み方、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
-tags: [operations, doctor, worktree, faq, troubleshooting]
+tags: [operations, doctor, worktree, menu, swiftbar, faq, troubleshooting]
 generated: { by: claude-code/opus-5, at: 2026-08-01T22:30:00+09:00 }
 status: stable
 owner: tomoya-k31
@@ -137,6 +137,51 @@ worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane
 - `totsuka task show <id>`: 状態・セッション履歴・worktree・イベント全履歴
 - `totsuka task cancel <id>` / `retry <id>`: retry は failed/cancelled のみ。worktree/セッションを再利用して再開（F-44）
 - `totsuka logs [-f] [--task <id>]`: JSON Lines ログの整形表示。機密は logging layer で無条件マスク（§5.2）
+
+# メニューバー表示（SwiftBar）
+
+`run --watch` を回している間、**人間が動かさない限り止まったままのタスク**に気づく手段は、放っておくと通知だけになる。通知は一過性で、しかも配送失敗は握り潰される（F-93）ので、「通知が来ない」は「異常なし」を意味しない。常時視界に入る面へ [要対応](/glossary/attention.md)件数を出すのが `totsuka menu`（F-109、[ADR-0065](/decisions/adr-0065-menubar-status.md)）。
+
+## 読み方
+
+2 チャネルで、独立に読む。
+
+| チャネル | 意味 |
+|---|---|
+| 形 | `○` = `run` が生きている / `✕` = 停止中・stale lock |
+| 数 | 要対応の件数。**0 件なら数字そのものが出ない** |
+
+数に入るのは `pending` / `waiting_input` / `verifying` / `escalated` / `queued`+`wait_reason` の 5 状態だけで、**終端状態（`done` / `failed` / `cancelled` / `skipped`）は数えない**。数えると `totsuka status` の表と同じく単調に増え続け、0 に戻らなくなるため。失敗の確認は `totsuka status` の担当。
+
+ドロップダウンは「Needs you」（要対応）と「Working」（`dispatched` / `running` / `publishing`）の 2 節。タスク行をクリックすると `totsuka focus <id>` が走り、その pane が前面に来る。**状態を変えるボタンは無い** — 検収（`task verify --pass`）は押した瞬間に PR 作成や本人名義返信まで走って取り消せないので、メニューには置いていない。
+
+## 導入
+
+**SwiftBar は別途インストールが要る**（totsuka はこのファイルを書き込まない — SwiftBar のプラグインフォルダは初回起動時にユーザーが選ぶもので、固定パスが無いため）。
+
+```bash
+brew install --cask swiftbar   # 初回起動でプラグインフォルダを選ぶ
+mkdir -p ~/SwiftBar
+cat > ~/SwiftBar/totsuka.5s.sh <<'EOF'
+#!/bin/sh
+exec /usr/local/bin/totsuka menu
+EOF
+chmod +x ~/SwiftBar/totsuka.5s.sh
+```
+
+- ファイル名の `5s` が更新間隔である（SwiftBar の規約）。`totsuka menu` は状態 DB の直読みだけで 10ms 未満なので、この間隔でも負荷にならない
+- **`totsuka` は絶対パスで書く。** GUI から起動されたプロセスは `/usr/local/bin` も mise も含まない最小 `PATH` を継承するので、名前で呼ぶとターミナルからだけ動いて、SwiftBar 経由では「command not found」になる。`which totsuka` の結果を貼ること
+
+## 出ないとき
+
+| 症状 | 見るところ |
+|---|---|
+| メニューバーに何も出ない | SwiftBar のプラグインフォルダにファイルがあるか、実行ビットが立っているか。`~/SwiftBar/totsuka.5s.sh` を直接実行して出力を見る |
+| 項目が壊れて見える / 空 | スクリプトの `totsuka` が絶対パスか。`env -i /usr/local/bin/totsuka menu` で最小環境でも動くか確認する |
+| `✕` のまま | `run` が動いていない。`totsuka status` の 1 行目と一致するはず（一致しないなら不具合） |
+| 件数が `totsuka status` と合わない | 終端状態は数えない仕様。`totsuka menu --json` の `attention` 配列と突き合わせる |
+
+**`totsuka menu` は失敗しても exit 0 で、原因をメニューの 1 行として出す**（状態 DB が無い、migration が未適用、config が壊れている等）。非ゼロ終了するとメニュー項目ごと壊れるための設計なので、「エラーが出ない」ことを健全さの証拠にしないこと — メニューの本文を読む。
 
 # FAQ / 切り分け
 

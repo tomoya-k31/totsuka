@@ -54,12 +54,13 @@ Notion タスクや GitHub Projects に紐づく Issue などのタスク管理�
 - プラグインの install / uninstall / enable / disable
 - XDG Base Directory 準拠の設定・状態・ログ管理
 - CLI によるステータス確認・操作
+- ローカル GUI ホスト(メニューバー等)への状態表示。totsuka はテキストを出し、描画はホストに任せる(F-109)
 
 ### 3.2 Out of Scope(v1)
 
 | 項目 | 理由 |
 |---|---|
-| GUI / Web ダッシュボード | ターミナル起動が前提。将来 TUI を P2 として検討 |
+| Web ダッシュボード / クラウド UI | 状態はローカル完結。ローカル GUI ホストへのテキスト出力は §3.1 のとおりスコープ内で、将来 TUI も P2 として検討 |
 | PR レビュー自動化・マージ判断・マージ追跡 | 人間のレビュー領域。PR 作成後の追跡は行わない |
 | Linux / Windows の動作保証 | 抽象化のみ実施、実装・テストは対象外 |
 | 常駐デーモン / サーバ運用 | ローカル起動のライフサイクルに限定 |
@@ -271,6 +272,14 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | F-107 | **pane の後処理**: pane の寿命はタスクの状態ではなく **worktree の掃除ポリシーに連動**する([ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md))。pane を閉じる(`session/release`)のは `decide_cleanup` が `Remove` を返したときだけで、**既定の `manual` では決して閉じない**。これは意図的で、コミット済み未 push の作業のレビュー面として pane を残す。`Retain` / `Dirty` も同じ理由で保持し、`Failed` / `Escalated` の pane は診断のため保持する。例外は同じタスクの**再 dispatch** で、このときは保持中の pane を先に閉じる(#481) — 1 タスクに 2 枚の pane はレビュー面ではない。閉じ残った pane は `totsuka doctor` の受け持ち(#211)。**元の記述**(`Done` の pane は冪等な `task/cancel` で自動クローズ)**を置き換える** — 完了時に `task/cancel` を呼んだことは一度も無く、唯一の呼び出し元は `dispatch_one` の `state/subscribe` 失敗ロールバックである | M |
 | F-108 | **質問ダイアログの park**(#487、ADR-0050): design / implement(attended)profile は人間への質問・完了確認をツール native の質問 UI で行う — claude は `AskUserQuestion`(この 2 profile の settings にだけ描画される `PreToolUse` フック)、opencode は `question`(プラグインの `tool.execute.before`。ダイアログ待機中の idle 判定も抑止する)。codex は Default mode に質問ツールが無いため `NEEDS_INPUT` + 番号付き選択肢リストのまま。ダイアログ待機中はターンが終わらず `Stop` が届かないので、フックが `QuestionPending`(質問ごとの `prompt_id` 必須 — 空だと 2 問目が dedup で消える)を POST し、Engine は `Stop{NEEDS_INPUT}` と同様に `waiting_input` へ park する: スロット解放・質問文つき通知。park 中の**新しい**質問は再通知される。マーカーは完了ワイヤシグナルのまま(ADR-0020)で、質問ツール不能時のフォールバック(`NEEDS_INPUT` + 番号付きリスト)はプロンプト内に残る | M |
 
+### 4.12 メニューバー表示
+
+macOS のメニューバーのように**常時視界に入る面**へ状態を出す経路。通知(§4.10)が一過性で、見逃したら終わりであるのに対し、こちらは残り続ける。totsuka 自身は GUI を描かず、GUI ホストが読めるテキストを出すだけである(§3.1)。
+
+| ID | 要件 | 優先度 |
+|---|---|---|
+| F-109 | **メニューバー表示(`totsuka menu`)**: 2 チャネルで返す — **形**が可用性(`○` = `run` が生きている / `✕` = 停止・stale lock)、**数**が**要対応**件数(`glossary/attention.md`: `pending` / `waiting_input` / `verifying` / `escalated` / `queued` + `wait_reason` の 5 状態。終端状態は数えない)。ドロップダウンは要対応・稼働中の 2 節で、タスク行のクリックは `totsuka focus <id>`、他は SwiftBar の `terminal=true` でターミナルへ受け渡す。既定の出力形式は SwiftBar のプラグイン書式、`--json` は表示モデルそのもの。**行の整形は Rust 側が持つ**: SwiftBar の書式は `text \| key=value` で `\|` がメタ文字であり、ソース由来のタイトルに `\|` が 1 つあれば行にパラメータを追加できてしまう(#280 と同じクラス)。**常に exit 0** — メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるため、状態 DB 欠如・migration 未適用・config 不正はすべてメニューの 1 行として描く(ADR-0065 参照) | S |
+
 ## 5. 非機能要件
 
 ### 5.1 起動・CLI
@@ -286,6 +295,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 | `setup` | レシピからの対話的な初期セットアップ（この表を最初に書いた後に追加された。セットアップ Playbook 参照） |
 | `run [--watch] [--json]` | タスク取り込み（push、`task/submit`）〜ディスパッチのメインループ実行(デフォルトはワンショット、`--watch` は push を受け続けたまま shutdown まで常駐 — 未決事項 #2 は解決済み) |
 | `status [--json]` | 実行中 / キュー / 待機中タスクと worktree の一覧 |
+| `menu [--json]` | メニューバー向けの表示(F-109)。既定は SwiftBar のプラグイン書式、`--json` は表示モデル。常に exit 0 |
 | `task list / show <id> / cancel <id> / retry <id>` | タスク個別操作 |
 | `task export [--since <event_id>] [--task <id>] [--no-detail]` | 監査ログ（`events`）を NDJSON で標準出力へ。状態の正本は SQLite なので、他のツールが読める形で持ち出す口（追記専用テーブルなので `--since` が完全な差分カーソルになる） |
 | `plugin list / install / uninstall / enable / disable` | プラグイン管理 |
@@ -342,7 +352,7 @@ Claude Code は Lifecycle Authority を持たないため、herdr の screen-man
 
 ## 7. UI/UX 要件
 
-- GUI なし。CLI の出力品質を UX と定義する。
+- totsuka 自身は GUI を描かない。CLI の出力品質を UX と定義する。GUI ホスト(メニューバー等)へ食わせるテキスト形式も、この定義の下にある CLI 出力の一種として扱う(F-109)。
 - エラーメッセージは「原因 + 次のアクション」を必ず含む(例: `config not found → run 'app init'`)。
 - `--debug` オプションで開発中に必要な情報(RPC ペイロード、状態遷移、LLM 判定根拠)を出力。機密情報は 5.2 のマスキング方針に従い出力しない。
 - 出力は NO_COLOR 環境変数と非 TTY を尊重。
