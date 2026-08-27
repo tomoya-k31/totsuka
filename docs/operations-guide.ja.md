@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:a2a23219ec2c428da0aa7351b13ba6c721ad8e73bad6a43cf7b1065bc6275aec -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f488ff2ccb2bb1842d587355758fcaccffeaed9bdefc01ab4992a2d6992e3b88 -->
 
 # 運用ガイド
 
@@ -99,6 +99,8 @@ totsuka status --json | jq '.health // "not running"'
 | LLM ゲートウェイが API キーを拒否した | リポジトリの選択が、新しい会話のたびに人間へ聞く形に縮退する。キーを再発行して `[llm].api_key_ref` を更新する |
 
 **停止している totsuka に health は無く、あるのはロックだけである。** `run` が強制終了された場合、最後の報告はディスクに残るが読まれない —— 出るのは必ず「動いていない」で、「縮退している」にはならない。
+
+**黙ってしまった run は別扱いである。** プロセスは生きているのに 2 分間報告が無い場合、`⚠` と「ハングしている可能性がある」旨の 1 行が出る。報告を捨てないのは、捨てると「健全」と読めてしまうためである。`totsuka status --json` は `health.recorded_at` と `health.stale` を持つので、自分で判断できる。
 
 ## worktree の掃除
 

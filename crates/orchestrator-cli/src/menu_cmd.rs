@@ -47,7 +47,7 @@ use std::path::Path;
 use orchestrator_core::domain::state::TaskState;
 use serde::Serialize;
 
-use crate::common::{CliError, Cx, live_health, lock_status, safe};
+use crate::common::{CliError, Cx, live_health, lock_status, safe, stale_health_message};
 
 /// How many characters of a task title reach the menu before it is elided.
 const TITLE_BUDGET: usize = 60;
@@ -202,7 +202,17 @@ fn build(cx: &Cx) -> Result<MenuModel, CliError> {
     // `run.lock` decides availability first: a run that was killed leaves its
     // health file behind, and trusting it would paint `⚠` over a `✕`.
     let degraded: Vec<String> = live_health(cx, &lock)
-        .map(|h| h.degraded.iter().map(|d| d.message()).collect())
+        .map(|live| {
+            let mut reasons: Vec<String> =
+                live.health.degraded.iter().map(|d| d.message()).collect();
+            // A run whose pid is alive but which has stopped publishing is
+            // its own kind of wrong, and the one the four re-askable facts
+            // cannot report — a wedged run cannot tell you it is wedged.
+            if live.stale {
+                reasons.push(stale_health_message(&live.health));
+            }
+            reasons
+        })
         .unwrap_or_default();
     let db = cx.open_state_db()?;
     let notes = db.open_notes()?;

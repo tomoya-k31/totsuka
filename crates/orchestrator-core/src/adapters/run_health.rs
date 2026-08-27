@@ -31,6 +31,22 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
+/// How long a published document stays believable.
+///
+/// `run` republishes at the end of **every** `cycle()`, and the loop runs one
+/// at least every `SETTLE_TICK` (200 ms) even when nothing happens — so 120 s
+/// is 600× the expected gap. Wide enough that a slow worktree sweep never
+/// trips it; tight enough that a run wedged inside a plugin call (its pid
+/// still alive, so `run.lock` still says "running") stops being read as the
+/// current truth within two minutes.
+///
+/// **Staleness is not silence.** A reader that simply dropped a stale document
+/// would report "healthy" about a process that has stopped saying anything,
+/// which is the failure this whole module exists to prevent. It is surfaced as
+/// its own condition instead.
+pub const STALE_AFTER_SECS: i64 = 120;
 
 /// One reason the orchestrator cannot do its whole job right now.
 ///
@@ -130,6 +146,26 @@ impl RunHealth {
     /// Whether anything is wrong.
     pub fn is_degraded(&self) -> bool {
         !self.degraded.is_empty()
+    }
+
+    /// Seconds since this document was written, or `None` if `recorded_at`
+    /// does not parse (a hand-edited or truncated file).
+    pub fn age_secs(&self, now: OffsetDateTime) -> Option<i64> {
+        let written = OffsetDateTime::parse(
+            &self.recorded_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .ok()?;
+        Some((now - written).whole_seconds())
+    }
+
+    /// Whether the publishing run has gone quiet for longer than
+    /// [`STALE_AFTER_SECS`].
+    ///
+    /// An unparseable timestamp counts as stale: it is not evidence of
+    /// freshness, and the safe direction is to say so rather than to trust it.
+    pub fn is_stale(&self, now: OffsetDateTime) -> bool {
+        self.age_secs(now).is_none_or(|age| age > STALE_AFTER_SECS)
     }
 }
 
@@ -301,5 +337,50 @@ mod tests {
         };
         assert_ne!(restarting.message(), abandoned.message());
         assert!(abandoned.message().contains("will not be relaunched"));
+    }
+}
+
+#[cfg(test)]
+mod staleness_tests {
+    use super::*;
+    use time::Duration as TimeDuration;
+
+    fn at(recorded_at: &str) -> RunHealth {
+        RunHealth {
+            pid: 1,
+            recorded_at: recorded_at.to_string(),
+            degraded: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_fresh_document_is_not_stale() {
+        let now = OffsetDateTime::now_utc();
+        let h = at(&now
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap());
+        assert_eq!(h.age_secs(now), Some(0));
+        assert!(!h.is_stale(now));
+        assert!(!h.is_stale(now + TimeDuration::seconds(STALE_AFTER_SECS)));
+    }
+
+    /// The case this exists for: a run wedged inside a plugin call keeps its
+    /// pid, so `run.lock` still says "running" while nothing is published.
+    #[test]
+    fn a_document_that_stopped_being_republished_goes_stale() {
+        let now = OffsetDateTime::now_utc();
+        let h = at(&now
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap());
+        assert!(h.is_stale(now + TimeDuration::seconds(STALE_AFTER_SECS + 1)));
+    }
+
+    /// An unparseable timestamp is not evidence of freshness.
+    #[test]
+    fn an_unreadable_timestamp_counts_as_stale() {
+        let h = at("whenever");
+        let now = OffsetDateTime::now_utc();
+        assert_eq!(h.age_secs(now), None);
+        assert!(h.is_stale(now));
     }
 }

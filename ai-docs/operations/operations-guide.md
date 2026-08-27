@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-08-28T06:35:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-28T06:50:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -111,6 +111,16 @@ health に入るのは **「今もそうか」を毎サイクル問い直せる�
 
 **`run.lock` が health より優先する。** `run` が SIGKILL された場合 `health.json` は残るが、それは存在しないプロセスの話なので読まない（`pid` も突き合わせる）。したがって停止中は必ず `✕` であって `⚠` にはならず、`status --json` の `health` キーもごと消える。
 
+## 黙った run（stale）
+
+pid は生きているのに **120 秒 republish が無い** health は stale として扱い、`⚠` の理由に 1 行足す。**捨てない**のが要点で、捨てると「黙っている run について健全と報告する」ことになる —— プラグイン呼び出しでハングした run は pid を保ったままなので、これが唯一の手掛かりになる。
+
+stale は `run` が publish するものではなく**読み手の判断**である（黙った run は「自分は黙っている」と書けない）。したがって `status --json` は判断材料そのものも出す:
+
+```bash
+totsuka status --json | jq '{recorded: .health.recorded_at, stale: .health.stale}'
+```
+
 ```bash
 totsuka status --json | jq '.health // "not running"'
 ls -l "${XDG_STATE_HOME:-$HOME/.local/state}/totsuka/health.json"   # run 中だけ存在する
@@ -215,6 +225,7 @@ chmod +x ~/SwiftBar/totsuka.5s.sh
 | 項目が壊れて見える / 空 | スクリプトの `totsuka` が絶対パスか。`env -i /usr/local/bin/totsuka menu` で最小環境でも動くか確認する |
 | `✕` のまま | `run` が動いていない。`totsuka status` の 1 行目と一致するはず（一致しないなら不具合） |
 | `⚠` のまま | 縮退している。ドロップダウンに理由が出る。`totsuka status` の `degraded:` と同じ内容 |
+| `⚠` で「may be wedged」と出る | run が 120 秒以上 health を更新していない。`totsuka logs -f` で最後に何をしていたか見る |
 | 件数が `totsuka status` と合わない | 終端状態は数えない仕様。`totsuka menu --json` の `attention` 配列と突き合わせる |
 
 **`totsuka menu` は失敗しても exit 0 で、原因をメニューの 1 行として出す**（状態 DB が無い、migration が未適用、`HOME` すら無い最小環境で XDG パスが解決できない等）。非ゼロ終了するとメニュー項目ごと壊れるための設計なので、「エラーが出ない」ことを健全さの証拠にしないこと — メニューの本文を読む。なお **`config.toml` は読まない**ので、config が壊れていても `menu` の表示は変わらない（切り分けには `totsuka config validate` を使う）。

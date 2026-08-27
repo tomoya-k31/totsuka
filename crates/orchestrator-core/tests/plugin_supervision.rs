@@ -347,6 +347,14 @@ async fn a_dead_task_source_is_noticed_and_comes_back() {
         summary.stats.plugin_crashes, 1,
         "and so must the death it repaired — equal counts mean nothing is still down"
     );
+    // A plugin that came back must stop being reported (F-110). The other
+    // three degradations have this pinned; without it, only the *raising* of
+    // `plugin_down` was covered and a latch would have gone unnoticed.
+    assert!(
+        engine.degradations_for_test().is_empty(),
+        "a relaunched plugin must clear itself: {:?}",
+        engine.degradations_for_test()
+    );
     engine.shutdown(Duration::from_secs(2)).await;
 }
 

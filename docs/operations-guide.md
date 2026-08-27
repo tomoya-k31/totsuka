@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:a2a23219ec2c428da0aa7351b13ba6c721ad8e73bad6a43cf7b1065bc6275aec -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f488ff2ccb2bb1842d587355758fcaccffeaed9bdefc01ab4992a2d6992e3b88 -->
 
 # Operations guide
 
@@ -98,6 +98,8 @@ Four things show up there, and each one clears on its own once you fix it:
 | The LLM gateway rejected the API key | Repository selection falls back to asking you for every new conversation. Reissue the key and update `[llm].api_key_ref` |
 
 **A stopped orchestrator has no health, only a lock.** If `run` was killed, its last report is left on disk but ignored — you get "not running", never "degraded".
+
+**A run that goes quiet is its own case.** If the process is alive but has not reported for two minutes, you get `⚠` and a line saying it may be wedged — the report is not thrown away, because throwing it away would read as "healthy". `totsuka status --json` carries `health.recorded_at` and `health.stale` so you can judge for yourself.
 
 ## Cleaning up worktrees
 

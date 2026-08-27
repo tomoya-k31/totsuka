@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:d48e4fa2a942d30e808e1f33c2774ca657e8e776b642bd4b8e6e1e1a5f44ab98 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:a3d60e1325550f0d8038b5b3341a369b8cb1399d8a9a26943706a2d5e3d6bf94 -->
 
 # What totsuka is
 
@@ -69,11 +69,11 @@ Notifier plugins deliver events — waiting for input, done, failed, pending. A 
 
 ### Showing status in the menu bar
 
-`totsuka menu` renders a view for a menu-bar host such as SwiftBar. It has two channels: the **glyph** is availability (`○` when totsuka is running, `✕` when it is not), and the **number** is how many tasks are waiting on you.
+`totsuka menu` renders a view for a menu-bar host such as SwiftBar. It has two channels: the **glyph** is availability (`○` running and healthy, `⚠` running but degraded, `✕` not running), and the **number** is how many tasks are waiting on you.
 
 That number counts five states — `pending`, `waiting_input`, `verifying`, `escalated`, and `queued` with a recorded reason — and nothing else. Finished tasks are never counted, so the number returns to zero once you have dealt with everything. Clicking a task row brings its pane to the front; nothing in the menu changes a task's state.
 
-The glyph has a third state, `⚠`: totsuka is running but cannot do its whole job. It covers four things it can re-check every cycle — the hook receiver failed to bind (nothing can report completion for that run), a plugin is down, hook signals are stuck in the spool, or the LLM gateway rejected the API key. Each clears on its own once fixed. `totsuka status` shows the same reasons under `degraded:`.
+The glyph has a third state, `⚠`: totsuka is running but cannot do its whole job. It covers four things it can re-check every cycle — the hook receiver failed to bind (nothing can report completion for that run), a plugin is down, hook signals are stuck in the spool, or the LLM gateway rejected the API key. Each clears on its own once fixed. There is a fifth case totsuka cannot report about itself: if it stops publishing altogether for two minutes while its process is still alive, that shows as `⚠` too — a wedged run cannot tell you it is wedged. `totsuka status` shows the same reasons under `degraded:`.
 
 The default output is SwiftBar's plugin format; `--json` gives you the same view as data. It always exits 0 — a plugin that does not renders as a broken item — so failures appear as a row instead. Setup is two lines of shell, in the operations guide.
 
