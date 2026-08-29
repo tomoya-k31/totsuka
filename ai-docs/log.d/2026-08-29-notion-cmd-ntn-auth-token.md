@@ -1,0 +1,5 @@
+* **Update**: [設定リファレンス](/development/config-reference.md) の `[notion]` `token` を、例・表とも `cmd:ntn auth token --plain` へ更新した。Notion 公式 CLI（`ntn`）に `gh auth token` 相当があり、`cmd:` スキームでそのまま解決できる。実測: `ntn auth token --plain` は exit 0・単一行・`ntn_` 前置・50 文字で、`ntn` が macOS Keychain に置く値（`security find-generic-password -s notion-cli`、`acct` は workspace の UUID）と同長。`NOTION_KEYRING=0` のときは `~/.config/notion/auth.json` に平文で置かれる。**保存先の直接参照ではなくコマンド経由を推奨として書いた** —— Keychain の service/account も `auth.json` も `ntn` の内部都合であり、公開されたコマンドがあるならそちらが契約である。
+
+* **Note**: この `auth` コマンド群は **Notion の公開コマンドリファレンスに載っていない**（`login` / `logout` / `workers` / `api` / `datasources` / `pages` / `files` / `doctor` / `update` のみ）。そのページだけを見て「トークンを出すコマンドは無い」と断定し、`--help` を叩いて否定された。**外部ツールの「機能が無い」は、ドキュメントの不掲載では証明できない** —— 手元にバイナリがあるなら `--help` が一次資料である。実装より遅れているドキュメントは、あることの証拠にはなってもないことの証拠にはならない。
+
+* **Note**: トークンの寿命は**未確定のまま残した**。`ntn_` 前置の非 JWT なので静的トークンと読めるが、公式ドキュメントには "Login sessions expire after a short window" とある。`cmd:` はプラグイン起動時に一度だけ解決されるので（`plugins/spec.rs` が `initialize` を組む時点）、もし失効するなら常駐ポーラーはその時点から 401 を吐き続ける。数日空けて値の同一性を見れば確定する。

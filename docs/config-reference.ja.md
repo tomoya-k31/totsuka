@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:8663f7db5b719a5b82ef8ee5608c4fad47c72ca7a3247eb9c9417f969fb867f9 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:130ea79ba8389f7c74d89dba926609b02a63e94a7502f216c459382dc56e9711 -->
 
 # 設定リファレンス
 
@@ -752,7 +752,7 @@ enabled = true
 kind = "task_source"
 
 [notion]
-token = "op://Dev/Notion/integration_token"
+token = "cmd:ntn auth token --plain"
 notion_user_id = "8f2c…"                 # 自分（省略すると自己検知が無効）
 property_map = { title = "名前", status = "ステータス", assignee = "担当者" }
 in_progress_statuses = ["実装中"]
@@ -762,7 +762,7 @@ in_progress_statuses = ["実装中"]
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `token` | string | 必須 | Notion のインテグレーショントークン。bearer として送る以外には使わない |
+| `token` | string | 必須 | Notion のインテグレーショントークン。bearer として送る以外には使わない。公式 Notion CLI を使っているなら `cmd:ntn auth token --plain` が使える —— `ntn` は資格情報を macOS Keychain（service `notion-cli`、account は workspace id）か、`NOTION_KEYRING=0` のときは `~/.config/notion/auth.json` に持つ。保存形式は `ntn` の内部都合で変わりうるので、どちらかを直接参照するよりこのコマンド経由が良い |
 | `notion_user_id` | string? | なし | 自分の Notion user id。`trigger.assignee` の `@me` がこれと突き合わせる。**省略すると `@me` は誰にも一致しない** —— 既定のトリガーは「未アサインのタスクだけ」になり、`@me` を明示したワークフローは起動に失敗する。GitHub では `github_login` が必須なので、そこは非対称である。**さらに `property_map.assignee` が未設定だと、その「未アサインだけ」も成立しない** —— assignee を読む先が無いので全ページが未アサインに見え、**assignee による絞り込みが消えてデータベースの全ページが取り込まれる**。既定の条件は書かれていないので警告も出ない。assignee で仕事を分けているデータベースでは、必ずこのプロパティをマップすること |
 | `property_map` | テーブル | 下記 | どの Notion プロパティがどのフィールドかの対応 |
 | `body_source` | enum | `none` | 本文の取得元。`none` / `property`（`property_map.body` が指す `rich_text`）/ `page`（ページのブロックを Markdown 化） |

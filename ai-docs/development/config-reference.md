@@ -865,7 +865,7 @@ enabled = true
 kind = "task_source"
 
 [notion]
-token = "op://Dev/Notion/integration_token"
+token = "cmd:ntn auth token --plain"
 notion_user_id = "8f2c…"                 # 自分（省略すると自己アサイン検知が無効）
 property_map = { title = "名前", status = "ステータス", assignee = "担当者" }
 in_progress_statuses = ["実装中"]
@@ -875,7 +875,7 @@ in_progress_statuses = ["実装中"]
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `token` | string | 必須 | Notion インテグレーショントークン（オーケストレータが解決して渡す、F-65）。プラグインは bearer として送る以外に触らない |
+| `token` | string | 必須 | Notion インテグレーショントークン（オーケストレータが解決して渡す、F-65）。プラグインは bearer として送る以外に触らない。公式 CLI を使っているなら `cmd:ntn auth token --plain` が使える（[ADR-0044](/decisions/adr-0044-cmd-secret-scheme.md)） —— `ntn` は資格情報を macOS Keychain（service `notion-cli`、account は workspace id）か、`NOTION_KEYRING=0` のときは `~/.config/notion/auth.json` に持つ。そのどちらを直接参照するよりこのコマンド経由が良い（保存形式は `ntn` の内部都合で変わりうる） |
 | `notion_user_id` | string? | なし | 自分の Notion user id。`trigger.assignee` の `@me` がこれと突き合わせる。**省略すると `@me` が誰にも一致しない** —— 既定のトリガー（`["@me", "@none"]`）は「未アサインのタスクだけ取り込む」になり、`@me` を明示したワークフローは `initialize` で落ちる（#572）。github の `github_login` が必須なのと**非対称**なので注意。**さらに `property_map.assignee` が未設定だと、この「未アサインだけ」も成立しない** —— assignee を読む先が無いので全ページが未アサインに見え、**assignee による絞り込みが消えてデータベースの全ページが取り込まれる**（既定のトリガーは明示されていないので警告もエラーも出ない）。assignee でタスクを分けている DB では、`property_map.assignee` を必ずマップすること。挙動そのものをどうするかは #582 |
 | `property_map` | テーブル | 下記 | 共通スキーマ ↔ Notion のプロパティ名の対応（F-03） |
 | `body_source` | enum | `none` | 本文の取得元。`none` / `property`（`property_map.body` の `rich_text`）/ `page`（ページ本文のブロックを Markdown 化） |

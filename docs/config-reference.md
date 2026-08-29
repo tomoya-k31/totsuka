@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:8663f7db5b719a5b82ef8ee5608c4fad47c72ca7a3247eb9c9417f969fb867f9 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:130ea79ba8389f7c74d89dba926609b02a63e94a7502f216c459382dc56e9711 -->
 
 # Configuration reference
 
@@ -753,7 +753,7 @@ enabled = true
 kind = "task_source"
 
 [notion]
-token = "op://Dev/Notion/integration_token"
+token = "cmd:ntn auth token --plain"
 notion_user_id = "8f2c…"                 # you (omit and self-detection is off)
 property_map = { title = "Name", status = "Status", assignee = "Owner" }
 in_progress_statuses = ["In progress"]
@@ -763,7 +763,7 @@ Unknown keys here are a hard startup failure, so a typo shows up immediately.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `token` | string | required | Notion integration token. Sent as a bearer token and nothing else. |
+| `token` | string | required | Notion integration token. Sent as a bearer token and nothing else. If you use the official Notion CLI, `cmd:ntn auth token --plain` works — `ntn` keeps its credentials in the macOS Keychain (service `notion-cli`, account = workspace id), or in `~/.config/notion/auth.json` when `NOTION_KEYRING=0`. Prefer the command over reading either of those directly, since the storage layout is `ntn`'s own business and may change. |
 | `notion_user_id` | string? | none | Your own Notion user id — what `trigger.assignee`'s `@me` is compared against. **Omit it and `@me` matches nobody**: the default trigger becomes "only unassigned tasks", and a workflow that spells out `@me` fails to start. Note the asymmetry with GitHub, where `github_login` is required. **And with `property_map.assignee` unset, even "only unassigned" does not hold** — there is nowhere to read assignees from, so every page looks unassigned and **the assignee filter disappears: the whole database is ingested**. Nothing warns, because the default condition was never written down. If your database divides work by assignee, map that property. |
 | `property_map` | table | below | Which Notion property holds which field. |
 | `body_source` | enum | `none` | Where a task's body comes from: `none`, `property` (the `rich_text` named by `property_map.body`), or `page` (the page's blocks, converted to Markdown). |
