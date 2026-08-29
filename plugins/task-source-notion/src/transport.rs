@@ -103,6 +103,25 @@ impl ReqwestTransport {
         }
     }
 
+    /// Override the request timeout. Intended for tests: the production value
+    /// is 30s, and no test can afford to wait that out — which is why the
+    /// timeout → `Timeout` mapping went unpinned until this existed.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// The configured timeout in whole seconds, **rounded up**.
+    ///
+    /// `Duration::as_secs` truncates, so anything under a second would be
+    /// reported as `timed out after 0s` — a message that reads like a bug in
+    /// the reporting rather than a timeout. Production is 30s and never sees
+    /// this; [`with_timeout`](Self::with_timeout) is what makes sub-second
+    /// values reachable, so the rounding belongs next to it.
+    fn timeout_secs(&self) -> u64 {
+        self.timeout.as_millis().div_ceil(1000) as u64
+    }
+
     /// Wait until the throttle permits another request, then reserve the slot.
     async fn throttle(&self) {
         if self.min_interval.is_zero() {
@@ -143,7 +162,7 @@ impl ReqwestTransport {
 
         let response = req.send().await.map_err(|e| {
             if e.is_timeout() {
-                NotionError::Timeout(self.timeout.as_secs())
+                NotionError::Timeout(self.timeout_secs())
             } else {
                 NotionError::Transport(e.to_string())
             }
@@ -280,15 +299,101 @@ mod tests {
     }
 
     fn transport(api_url: &str) -> ReqwestTransport {
+        transport_with_retries(api_url, 0)
+    }
+
+    /// As [`transport`], with a retry budget — needed only where the *absence*
+    /// of a retry is the result, which `max_retries: 0` cannot demonstrate.
+    fn transport_with_retries(api_url: &str, max_retries: u32) -> ReqwestTransport {
         ReqwestTransport::new(TransportSettings {
             api_url,
             token: "t",
             api_version: "2022-06-28",
-            // No retries: a 5xx is retryable and the one-shot server answers once.
-            max_retries: 0,
-            // No throttle — this is a mapping test, not a pacing one.
+            // Default: no retries, because a 5xx is retryable and the one-shot
+            // server answers once.
+            max_retries,
+            // No throttle — these are mapping tests, not pacing ones.
             rate_limit_rps: 0,
         })
+    }
+
+    /// A listener that never answers. Nothing accepts it: the kernel completes
+    /// the handshake from the backlog, so the client connects, sends, and then
+    /// waits — which is what a timeout needs, and what dropping the socket
+    /// would *not* produce (that is a reset, i.e. `Transport`).
+    ///
+    /// The listener is handed back so the test owns it; nothing is spawned.
+    async fn silent_server() -> (String, tokio::net::TcpListener) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        (base, listener)
+    }
+
+    /// How long the timeout tests let a request hang.
+    const TEST_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// Between one attempt (~500ms) and one retry (500ms + the 500ms backoff +
+    /// 500ms), so the two are told apart by elapsed time.
+    const RETRY_BOUNDARY: Duration = Duration::from_millis(1000);
+
+    /// A request that never gets an answer becomes [`NotionError::Timeout`],
+    /// not a transport error — different next actions, and nothing pinned which
+    /// one this path produces until `with_timeout` existed.
+    #[tokio::test]
+    async fn a_request_that_never_answers_becomes_a_timeout() {
+        let (url, _listener) = silent_server().await;
+
+        let started = std::time::Instant::now();
+        let err = transport(&url)
+            .with_timeout(TEST_TIMEOUT)
+            .request(HttpMethod::Get, "/users/me", None, true)
+            .await
+            .expect_err("nothing ever answers");
+
+        // Rounded up: `as_secs` would truncate 500ms to `0`.
+        assert!(matches!(err, NotionError::Timeout(1)), "{err:?}");
+        assert!(started.elapsed() >= TEST_TIMEOUT, "{:?}", started.elapsed());
+    }
+
+    /// **A timed-out write must not be replayed.** A timeout proves nothing —
+    /// the request may have been applied and only the answer lost.
+    #[tokio::test]
+    async fn a_timeout_is_not_retried_for_a_non_idempotent_call() {
+        let (url, _listener) = silent_server().await;
+
+        let started = std::time::Instant::now();
+        let err = transport_with_retries(&url, 3)
+            .with_timeout(TEST_TIMEOUT)
+            .request(HttpMethod::Patch, "/pages/x", None, false)
+            .await
+            .expect_err("nothing ever answers");
+
+        assert!(matches!(err, NotionError::Timeout(_)), "{err:?}");
+        assert!(
+            started.elapsed() < RETRY_BOUNDARY,
+            "must stop after one attempt, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// An idempotent call is replayed, and still surfaces the timeout.
+    #[tokio::test]
+    async fn a_timeout_is_retried_for_an_idempotent_call() {
+        let (url, _listener) = silent_server().await;
+
+        let started = std::time::Instant::now();
+        let err = transport_with_retries(&url, 1)
+            .with_timeout(TEST_TIMEOUT)
+            .request(HttpMethod::Get, "/users/me", None, true)
+            .await
+            .expect_err("nothing ever answers");
+
+        assert!(matches!(err, NotionError::Timeout(_)), "{err:?}");
+        assert!(
+            started.elapsed() >= RETRY_BOUNDARY,
+            "one retry means two waits plus the backoff, took only {:?}",
+            started.elapsed()
+        );
     }
 
     /// 404 is the one status whose next action differs from "the call failed",
