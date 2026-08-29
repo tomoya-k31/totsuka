@@ -632,9 +632,16 @@ async fn config_validate_reports_invalid_token() {
         .expect("config/validate always succeeds at the RPC level");
     assert_eq!(result["valid"], false);
     let errors = result["errors"].as_array().unwrap();
+    // Assert the next action too, not just the "401" — the comment promised
+    // guidance and the assertion did not, so the whole `(or the secret it
+    // references) and its scopes` half could be deleted with this test still
+    // green.
     assert!(
-        errors.iter().any(|e| e.as_str().unwrap().contains("401")),
-        "expected a 401/next-action message, got {errors:?}"
+        errors.iter().any(|e| {
+            let e = e.as_str().unwrap();
+            e.contains("401") && e.contains("`[github]`") && e.contains("scopes")
+        }),
+        "expected a 401 message naming the config key and scopes, got {errors:?}"
     );
 }
 
