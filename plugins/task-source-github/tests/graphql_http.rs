@@ -66,7 +66,25 @@ impl CannedHttp {
                 "X-RateLimit-Remaining: 0".into(),
                 format!("X-RateLimit-Reset: {reset_epoch_secs}"),
             ],
-            body: String::new(),
+            body: json!({ "message": "API rate limit exceeded" }).to_string(),
+        }
+    }
+
+    /// **GraphQL's primary rate limit: HTTP 200** with `RATE_LIMITED` in the
+    /// errors array and a spent budget in the headers. This is the shape a
+    /// status-only classifier misses entirely.
+    fn graphql_rate_limited(reset_epoch_secs: u64) -> Self {
+        Self {
+            status: "200 OK",
+            headers: vec![
+                "X-RateLimit-Remaining: 0".into(),
+                format!("X-RateLimit-Reset: {reset_epoch_secs}"),
+            ],
+            body: json!({
+                "data": null,
+                "errors": [{ "type": "RATE_LIMITED", "message": "API rate limit exceeded" }],
+            })
+            .to_string(),
         }
     }
 }
@@ -280,8 +298,8 @@ async fn a_server_error_is_not_retried_for_a_non_idempotent_call() {
 }
 
 /// **A rejected token must not be replayed.** `is_retryable` answers `false`
-/// for everything outside 429/5xx/transport, and nothing above pins that: every
-/// other failure test runs with a retry budget of zero, which hides the
+/// for everything outside throttles/5xx/transport, and nothing above pins that:
+/// every other failure test runs with a retry budget of zero, which hides the
 /// vocabulary entirely. Without this, flipping `is_retryable`'s fallthrough to
 /// `true` stays green — and in production an expired token would be replayed on
 /// every `poll_loop` tick, which is exactly what GitHub rate-limits.
@@ -302,9 +320,9 @@ async fn unauthorized_is_not_retried_even_with_a_budget() {
     );
 }
 
-/// The same for a 4xx that is not 429: retryable is 429 and 5xx, not "any
-/// failing status". A budget is given so the absence of a retry is a result,
-/// not an artefact of `max_retries = 0`.
+/// The same for a 4xx that is not a throttle: retryable is throttles and 5xx,
+/// not "any failing status". A budget is given so the absence of a retry is a
+/// result, not an artefact of `max_retries = 0`.
 #[tokio::test]
 async fn a_client_error_is_not_retried_even_with_a_budget() {
     let (base, log) = mock_server(vec![CannedHttp::status("422 Unprocessable", "bad query")]).await;
@@ -430,6 +448,91 @@ async fn a_spent_budget_on_a_403_is_a_throttle() {
         other => panic!("expected RateLimited, got {other:?}"),
     }
     assert_eq!(log.lock().unwrap().len(), 1);
+}
+
+/// **GraphQL's primary rate limit is an HTTP 200**, so the classifier cannot
+/// key off the status. GitHub's own docs: "the response status will still be
+/// `200` … the value of the `x-ratelimit-remaining` header will be `0`". A
+/// status-only test would let this sail through as a successful response and
+/// hand a `RATE_LIMITED` envelope to the client as a permanent GraphQL error —
+/// on the only API this plugin uses, that is the *common* throttle shape.
+#[tokio::test]
+async fn a_200_carrying_rate_limited_is_a_throttle() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let (base, log) = mock_server(vec![CannedHttp::graphql_rate_limited(now + 300)]).await;
+
+    let err = transport(&base, 3)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("a rate-limited 200 is not a successful response");
+
+    match err {
+        GithubError::RateLimited { retry_after_secs } => {
+            assert!(
+                (295..=300).contains(&retry_after_secs),
+                "{retry_after_secs}"
+            )
+        }
+        other => panic!("expected RateLimited, got {other:?}"),
+    }
+    assert_eq!(log.lock().unwrap().len(), 1);
+}
+
+/// A secondary rate limit can arrive as a **403 with no rate-limit headers at
+/// all** — only the body names it. Falling back to the documented minimum is
+/// what keeps it out of the permission-error bucket.
+#[tokio::test]
+async fn a_403_naming_a_secondary_rate_limit_is_a_throttle() {
+    let (base, log) = mock_server(vec![CannedHttp::status(
+        "403 Forbidden",
+        &json!({ "message": "You have exceeded a secondary rate limit" }).to_string(),
+    )])
+    .await;
+
+    let err = transport(&base, 3)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("the 60s fallback exceeds the budget");
+
+    assert!(
+        matches!(
+            err,
+            GithubError::RateLimited {
+                retry_after_secs: 60
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(log.lock().unwrap().len(), 1);
+}
+
+/// A zero wait is floored to one second. `retry-after: 0`, a reset instant
+/// already past, or a skewed clock would otherwise mean no sleep at all, and
+/// the budget would fund `max_retries` back-to-back requests against an
+/// endpoint that just said it is throttled.
+#[tokio::test]
+async fn a_zero_wait_is_floored_to_one_second() {
+    let (base, log) = mock_server(vec![
+        CannedHttp::rate_limited("0"),
+        CannedHttp::ok(json!({ "data": { "ok": true } })),
+    ])
+    .await;
+
+    let started = Instant::now();
+    transport(&base, 3)
+        .post_graphql(query(), true)
+        .await
+        .expect("the retry succeeds");
+
+    assert_eq!(log.lock().unwrap().len(), 2);
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "a zero wait must not become a hammer loop, waited {:?}",
+        started.elapsed()
+    );
 }
 
 /// **A bare 403 is a permission error, not a throttle.** Retrying it would burn

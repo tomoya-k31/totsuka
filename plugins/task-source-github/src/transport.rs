@@ -62,22 +62,36 @@ pub struct ReqwestTransport {
     retry_budget: Duration,
 }
 
-/// The wait GitHub is asking for, or `None` when this response is not a
-/// throttle.
+/// Whether this response body says we were rate limited.
 ///
-/// GitHub returns **403 or 429** for both rate-limit kinds, so the status is
-/// not enough — a bare 403 is an ordinary permission error and must never be
-/// retried. The order below is GitHub's own documented decision tree:
-/// `retry-after` first, then a spent budget via `x-ratelimit-remaining: 0` plus
-/// `x-ratelimit-reset`, then a floor.
-fn rate_limit_wait(
-    status: reqwest::StatusCode,
-    headers: &reqwest::header::HeaderMap,
-) -> Option<u64> {
-    if status != reqwest::StatusCode::TOO_MANY_REQUESTS && status != reqwest::StatusCode::FORBIDDEN
+/// **This, not the status code, is the discriminator.** On the GraphQL API a
+/// primary rate limit comes back as **HTTP 200** with an error message, and a
+/// secondary one as **200 or 403** — so a status-only test misses the common
+/// case entirely, and cannot tell a throttled 403 from a permission error.
+fn body_says_rate_limited(body: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return false;
+    };
+    let mentions = |s: &str| s.to_ascii_lowercase().contains("rate limit");
+    // GraphQL: `errors[].type == "RATE_LIMITED"`, or a message naming it —
+    // that is how the secondary limit announces itself.
+    if let Some(errors) = value["errors"].as_array()
+        && errors.iter().any(|e| {
+            e["type"].as_str() == Some("RATE_LIMITED")
+                || e["message"].as_str().is_some_and(mentions)
+        })
     {
-        return None;
+        return true;
     }
+    // The REST-shaped error body a 403 can carry.
+    value["message"].as_str().is_some_and(mentions)
+}
+
+/// The wait the headers ask for, if they say anything usable.
+///
+/// GitHub's documented order: `retry-after` first, then a spent budget via
+/// `x-ratelimit-remaining: 0` plus the epoch-seconds `x-ratelimit-reset`.
+fn wait_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
 
     if let Some(secs) = header("retry-after").and_then(|v| v.trim().parse::<u64>().ok()) {
@@ -94,10 +108,33 @@ fn rate_limit_wait(
             .unwrap_or(0);
         return Some(reset.saturating_sub(now));
     }
-    // A 429 is a throttle whatever its headers say. A 403 without any of them
-    // is a permission problem — retrying it would burn the budget and hide the
-    // real cause.
-    (status == reqwest::StatusCode::TOO_MANY_REQUESTS).then_some(FALLBACK_RETRY_AFTER_SECS)
+    None
+}
+
+/// The wait GitHub is asking for, or `None` when this response is not a
+/// throttle.
+///
+/// A 429 is always one. Anything else — **including a 200** — is one only when
+/// the body says so, which is what keeps an ordinary 403 (insufficient scopes)
+/// and an ordinary GraphQL error out of the retry path.
+///
+/// The result is floored at one second: `retry-after: 0`, a reset instant
+/// already past, or a skewed clock would otherwise produce a zero delay and
+/// turn the budget into `max_retries` back-to-back requests — the exact
+/// hammering the fallback exists to prevent.
+fn rate_limit_wait(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+) -> Option<u64> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS && !body_says_rate_limited(body) {
+        return None;
+    }
+    Some(
+        wait_from_headers(headers)
+            .unwrap_or(FALLBACK_RETRY_AFTER_SECS)
+            .max(1),
+    )
 }
 
 impl ReqwestTransport {
@@ -157,14 +194,14 @@ impl ReqwestTransport {
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(GithubError::Unauthorized);
         }
-        // Classify before `text()`, which consumes the response and with it the
-        // headers the classification depends on.
-        let throttled = rate_limit_wait(status, response.headers());
+        // The headers must be taken before `text()`, which consumes the
+        // response; the body is the other half of the classification.
+        let headers = response.headers().clone();
         let text = response
             .text()
             .await
             .map_err(|e| GithubError::Transport(e.to_string()))?;
-        if let Some(retry_after_secs) = throttled {
+        if let Some(retry_after_secs) = rate_limit_wait(status, &headers, &text) {
             return Err(GithubError::RateLimited { retry_after_secs });
         }
         if !status.is_success() {
@@ -197,14 +234,14 @@ impl GithubTransport for ReqwestTransport {
                     // Fail fast with the real cause once the budget is spent:
                     // sleeping for minutes inside one `poll_loop` tick looks
                     // like a wedged plugin from the outside.
-                    if slept + delay > self.retry_budget {
+                    if slept.saturating_add(delay) > self.retry_budget {
                         tracing::warn!(
                             error = %e, ?delay,
                             "retry delay would exceed the per-call retry budget; giving up"
                         );
                         return Err(e);
                     }
-                    slept += delay;
+                    slept = slept.saturating_add(delay);
                     tracing::warn!(attempt, error = %e, "github call failed; retrying");
                     tokio::time::sleep(delay).await;
                     attempt += 1;
