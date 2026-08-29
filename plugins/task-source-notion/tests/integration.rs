@@ -743,8 +743,11 @@ async fn config_validate_reports_invalid_token() {
             let e = e.as_str().unwrap();
             e.contains("401")
                 && e.contains("`[notion]`")
-                && e.contains("integration")
+                && e.contains("integration secret")
                 && e.contains("Notion CLI token")
+                // 復旧手順まで。cmd: は起動時 1 回きりの解決なので
+                // `ntn login` だけでは 401 が消えない。
+                && e.contains("restart `totsuka run`")
         }),
         "expected a 401 message naming both token kinds, got {errors:?}"
     );
