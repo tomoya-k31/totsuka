@@ -4,7 +4,7 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。Issue への書き込みは claim の assignee 操作だけ。呼び出す 8 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-08-30T02:05:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-30T02:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -45,7 +45,7 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.6
 
 `GithubTransport` を録画レスポンスの fake に差し替え、initialize→poll_loop→`task/submit` push（SubmitHarness で観測・ack 注入）、正規化→update_status の全経路を JSON-RPC 境界越しに結合テスト（`tests/integration.rs`）。取り込み制御（他者 assignee / 実行中）、triggers 空での no-poll、トークン無効時の `config/validate`（原因＋次アクション）も検証。実バイナリを stdio で駆動して疎通確認済み。
 
-ただし **fake は `GithubError` の変種を直接返すので、実 transport が HTTP ステータスをその変種へ写像すること自体は結合テストでは検査できない**（401 分岐や User-Agent ヘッダを消しても全部緑になる）。そこは `tests/graphql_http.rs` が持つ —— `TcpListener` にcanned な HTTP/1.1 応答を並べ、ヘッダ 3 種・401／その他ステータス／body の切り詰め・冪等なときだけのリトライ・リトライ枯渇・`errors` 入り 200 の素通し・スロットル 5 種（`retry-after` を実際に待つこと／非冪等でも replay すること／予算超過で即座に返すこと／`x-ratelimit-reset` 経路／ヘッダの無い 403 は再送しないこと）を固定する。`task-source-slack` の `tests/web_api_http.rs` と同じ形である。**切り詰めの検査は多バイト文字で行う** —— ASCII では `chars().take(500)` とバイトスライスを区別できず、区別できないまま通すと、非 ASCII の本文で「エラー処理の中で char 境界パニック」になり元の HTTP 失敗が消える。**非リトライ性の検査はリトライ予算を与えた状態で行う** —— `max_retries = 0` で測ると「リトライしない」が予算ゼロの副作用なのか`is_retryable` の答えなのか区別できない。
+ただし **fake は `GithubError` の変種を直接返すので、実 transport が HTTP ステータスをその変種へ写像すること自体は結合テストでは検査できない**（401 分岐や User-Agent ヘッダを消しても全部緑になる）。そこは `tests/graphql_http.rs` が持つ —— `TcpListener` にcanned な HTTP/1.1 応答を並べ、ヘッダ 3 種・401／その他ステータス／body の切り詰め・冪等なときだけのリトライ・リトライ枯渇・`errors` 入り 200 の素通し・スロットル 5 種（`retry-after` を実際に待つこと／非冪等でも replay すること／予算超過で即座に返すこと／`x-ratelimit-reset` 経路／ヘッダの無い 403 は再送しないこと）を固定する。**タイムアウトは応答しないリスナ**（accept せず backlog に任せる。ソケットを閉じると reset ＝ `Transport` になってしまう）に `with_timeout` を短くした transport を当てて固定する —— `Timeout` へ写ること、**非冪等では再送しないこと**（スロットルと違い、適用済みで応答だけ失われた可能性がある）、冪等では再送すること。`task-source-slack` の `tests/web_api_http.rs` と同じ形である。**切り詰めの検査は多バイト文字で行う** —— ASCII では `chars().take(500)` とバイトスライスを区別できず、区別できないまま通すと、非 ASCII の本文で「エラー処理の中で char 境界パニック」になり元の HTTP 失敗が消える。**非リトライ性の検査はリトライ予算を与えた状態で行う** —— `max_retries = 0` で測ると「リトライしない」が予算ゼロの副作用なのか`is_retryable` の答えなのか区別できない。
 
 # 依存
 

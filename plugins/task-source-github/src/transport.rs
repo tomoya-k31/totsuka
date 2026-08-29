@@ -159,6 +159,14 @@ impl ReqwestTransport {
         self
     }
 
+    /// Override the request timeout. Intended for tests: the production value
+    /// is 30s, and no test can afford to wait that out — which is why the
+    /// timeout → `Timeout` mapping went unpinned until this existed.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// The wait before retry number `attempt`: exactly what GitHub asked for on
     /// a throttle, capped exponential backoff otherwise.
     fn retry_delay(&self, error: &GithubError, attempt: u32) -> Duration {

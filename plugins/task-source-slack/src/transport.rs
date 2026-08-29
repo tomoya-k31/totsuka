@@ -198,6 +198,14 @@ impl ReqwestTransport {
         self
     }
 
+    /// Override the request timeout. Intended for tests: the production value
+    /// is 30s, and no test can afford to wait that out — which is why the
+    /// timeout → `Timeout` mapping went unpinned until this existed.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     fn token(&self, kind: TokenKind) -> Result<&str, SlackError> {
         match kind {
             TokenKind::App => Ok(&self.app_token),

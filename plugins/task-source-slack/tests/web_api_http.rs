@@ -393,3 +393,87 @@ async fn post_url_sends_json_and_maps_failure_status() {
     assert!(matches!(err, SlackError::Http { status: 500, .. }), "{err}");
     assert_eq!(requests.lock().unwrap().len(), 2);
 }
+
+/// A listener that never answers. Nothing accepts it: the kernel completes the
+/// handshake from the backlog, so the client connects, sends, and then waits —
+/// which is what a timeout needs, and what dropping the socket would *not*
+/// produce (that is a reset, i.e. `Transport`).
+///
+/// The listener is handed back so the test owns it; nothing is spawned.
+async fn silent_server() -> (String, TcpListener) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    (base, listener)
+}
+
+/// How long the timeout tests let a request hang.
+const TEST_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Halfway between one attempt (~500ms) and two (~1000ms).
+const RETRY_BOUNDARY: Duration = Duration::from_millis(800);
+
+/// A request that never gets an answer becomes [`SlackError::Timeout`], not a
+/// transport error — different next actions, and nothing pinned which one this
+/// path produces until `with_timeout` existed.
+#[tokio::test]
+async fn a_request_that_never_answers_becomes_a_timeout() {
+    let (base, _listener) = silent_server().await;
+
+    let started = std::time::Instant::now();
+    let err = transport(&base, 0)
+        .with_timeout(TEST_TIMEOUT)
+        .call(TokenKind::User, "auth.test", None, true)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, SlackError::Timeout(_)), "{err}");
+    assert!(started.elapsed() >= TEST_TIMEOUT, "{:?}", started.elapsed());
+}
+
+/// **A timed-out post must not be replayed.** Unlike a 429 — which is
+/// `is_rejected`, so provably never ran — a timeout may have applied the write
+/// and only lost the answer. This is the one place the two retryable classes
+/// must behave differently.
+#[tokio::test]
+async fn a_timeout_is_not_retried_for_a_non_idempotent_call() {
+    let (base, _listener) = silent_server().await;
+
+    let started = std::time::Instant::now();
+    let err = transport(&base, 3)
+        .with_timeout(TEST_TIMEOUT)
+        .call(
+            TokenKind::User,
+            "chat.postMessage",
+            Some(json!({ "channel": "C1", "text": "x" })),
+            false,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, SlackError::Timeout(_)), "{err}");
+    assert!(
+        started.elapsed() < RETRY_BOUNDARY,
+        "must stop after one attempt, took {:?}",
+        started.elapsed()
+    );
+}
+
+/// An idempotent call is replayed, and still surfaces the timeout.
+#[tokio::test]
+async fn a_timeout_is_retried_for_an_idempotent_call() {
+    let (base, _listener) = silent_server().await;
+
+    let started = std::time::Instant::now();
+    let err = transport(&base, 1)
+        .with_timeout(TEST_TIMEOUT)
+        .call(TokenKind::User, "auth.test", None, true)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, SlackError::Timeout(_)), "{err}");
+    assert!(
+        started.elapsed() >= RETRY_BOUNDARY,
+        "one retry means two waits, took only {:?}",
+        started.elapsed()
+    );
+}

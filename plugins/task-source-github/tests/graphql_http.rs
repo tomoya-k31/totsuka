@@ -157,6 +157,26 @@ fn transport(base: &str, max_retries: u32) -> ReqwestTransport {
         .with_retry_timing(Duration::from_millis(10), Duration::from_secs(5))
 }
 
+/// A listener that never answers. Nothing accepts it: the kernel completes the
+/// handshake from the backlog, so the client connects, sends, and then waits —
+/// which is what a timeout needs, and what dropping the socket would *not*
+/// produce (that is a connection reset, i.e. `Transport`).
+///
+/// The listener is handed back so the test owns it. Nothing is spawned, so
+/// nothing outlives the test.
+async fn silent_server() -> (String, TcpListener) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    (base, listener)
+}
+
+/// How long the timeout tests let a request hang. Every assertion below is
+/// "one attempt" vs "two attempts", and [`RETRY_BOUNDARY`] sits between them.
+const TEST_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Halfway between one attempt (~500ms) and two (~1000ms).
+const RETRY_BOUNDARY: Duration = Duration::from_millis(800);
+
 fn query() -> Value {
     json!({ "query": "{ viewer { login } }" })
 }
@@ -616,4 +636,72 @@ async fn a_non_json_success_body_is_an_invalid_response() {
         .expect_err("html is not a GraphQL envelope");
 
     assert!(matches!(err, GithubError::InvalidResponse(_)), "{err:?}");
+}
+
+/// A request that never gets an answer becomes [`GithubError::Timeout`], not a
+/// transport error — the two are different next actions (wait/retry vs. check
+/// the endpoint), and until `with_timeout` existed nothing pinned which one
+/// this path produces.
+#[tokio::test]
+async fn a_request_that_never_answers_becomes_a_timeout() {
+    let (base, _listener) = silent_server().await;
+
+    let started = Instant::now();
+    let err = transport(&base, 0)
+        .with_timeout(TEST_TIMEOUT)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("nothing ever answers");
+
+    assert!(matches!(err, GithubError::Timeout(_)), "{err:?}");
+    assert!(
+        started.elapsed() >= TEST_TIMEOUT,
+        "must actually wait the timeout, returned after {:?}",
+        started.elapsed()
+    );
+}
+
+/// **A timed-out mutation must not be replayed.** Unlike a throttle, a timeout
+/// proves nothing: the request may well have been applied and only the answer
+/// lost, so replaying it can duplicate the side effect. This is the one place
+/// `Timeout` and `RateLimited` must behave differently despite both being
+/// retryable.
+#[tokio::test]
+async fn a_timeout_is_not_retried_for_a_non_idempotent_call() {
+    let (base, _listener) = silent_server().await;
+
+    let started = Instant::now();
+    let err = transport(&base, 3)
+        .with_timeout(TEST_TIMEOUT)
+        .post_graphql(query(), false)
+        .await
+        .expect_err("nothing ever answers");
+
+    assert!(matches!(err, GithubError::Timeout(_)), "{err:?}");
+    assert!(
+        started.elapsed() < RETRY_BOUNDARY,
+        "a non-idempotent call must stop after one attempt, took {:?}",
+        started.elapsed()
+    );
+}
+
+/// An idempotent call is replayed on a timeout, and still surfaces the timeout
+/// once the budget is spent.
+#[tokio::test]
+async fn a_timeout_is_retried_for_an_idempotent_call() {
+    let (base, _listener) = silent_server().await;
+
+    let started = Instant::now();
+    let err = transport(&base, 1)
+        .with_timeout(TEST_TIMEOUT)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("nothing ever answers");
+
+    assert!(matches!(err, GithubError::Timeout(_)), "{err:?}");
+    assert!(
+        started.elapsed() >= RETRY_BOUNDARY,
+        "one retry means two waits, took only {:?}",
+        started.elapsed()
+    );
 }
