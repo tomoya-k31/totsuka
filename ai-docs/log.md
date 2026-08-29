@@ -10,6 +10,8 @@
 
 * **Note**: `max_retries` の説明が「最大再試行回数」だけだったので、**90 秒の予算で頭打ちになる**ことを [設定リファレンス](/development/config-reference.md) に足した。`slack` 側も同じ予算を持ちながら未記載だったので同時に書いた —— 挙動を変えた側だけ書くと、ドキュメント上に新しい非対称を作ってしまう。
 
+* **Note**: 振る舞いを変えた後、それを説明する散文が **3 箇所**古いまま残っていた —— `is_retryable` の doc（「rate limiting (429)」＝ステータスで判定していた頃の記述）、component の表（「リトライは冪等なときだけ」と書いた直後に例外を述べて自己矛盾）、`post_graphql` の trait doc（スロットルが `idempotent` の外に出たことに触れていない）。Copilot が前 2 つを、grep が 3 つ目を見つけた。**このセッションだけで同じ形を 4 回やっている。** 挙動を変えたら、変えた対象名ではなく**「その挙動を説明している文」を探す**（`冪等` / `idempotent` / `429` で引いた）。
+
 * **Update**: [task-source-github](/components/task-source-github.md) に `tests/graphql_http.rs` を追加した。`TcpListener` に canned な HTTP/1.1 応答を並べ、実 `ReqwestTransport` を通して 10 本を固定する —— bearer / User-Agent / Content-Type の 3 ヘッダ、401 → `Unauthorized`、その他ステータス → `Http`、body の 500 文字切り詰め、**冪等なときだけのリトライ**、リトライ枯渇、`errors` 入り 200 の素通し、非 JSON の 200 → `InvalidResponse`。**4 つの変異（User-Agent 削除／401 分岐削除／冪等性ゲート削除／切り詰め削除）がすべてテストを落とすことを確認**してから戻した。
 
 * **Note**: これは [task-source-notion](/components/task-source-notion.md) の同種の穴を塞いだ直後に、**同じ構造が github にも残っている**と気づいて調べたもの。調べてみると **`task-source-slack` の `tests/web_api_http.rs` が既に完全に同じことをやっていた**（TCP モック・retry 規律・ステータス写像）。`agent-ide-herdr` も実 `UnixListener` に実 `SocketTransport` を繋いでいる。**つまりリポジトリには既に正解の型があり、notion と github だけがそこから外れていた。** notion 側を書くとき既存の 2 例を探しておらず、独自の形を発明している。**「初めてのユニットテスト」を書くときは、まず隣のクレートが同じ問題をどう解いているか見る。**

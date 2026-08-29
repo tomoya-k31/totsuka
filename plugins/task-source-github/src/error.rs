@@ -56,8 +56,14 @@ pub enum GithubError {
 }
 
 impl GithubError {
-    /// Whether retrying with backoff is worthwhile (§5.3): transient network,
-    /// timeouts, rate limiting (429) and 5xx server errors.
+    /// Whether retrying is worthwhile (§5.3): transient network, timeouts,
+    /// throttles and 5xx server errors.
+    ///
+    /// "Throttle" means [`GithubError::RateLimited`], which `transport` derives
+    /// from the rate-limit **headers** — not from a status code. GitHub returns
+    /// 403 or 429 for both its rate-limit kinds, so a 403 may or may not be one
+    /// and a 429 always is. Note also that a throttle is not retried with
+    /// backoff: the wait it carries is honoured exactly.
     pub fn is_retryable(&self) -> bool {
         match self {
             GithubError::Transport(_)

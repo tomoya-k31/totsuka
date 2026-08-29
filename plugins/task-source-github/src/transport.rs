@@ -17,7 +17,9 @@ pub trait GithubTransport: Send + Sync {
     /// return the full response JSON (including any top-level `errors`).
     ///
     /// `idempotent` guards automatic retries: a timed-out/5xx request is only
-    /// re-sent when replaying it is safe. **Every current caller passes `true`**
+    /// re-sent when replaying it is safe. **A throttle is outside that guard**
+    /// — the request provably never ran, so it is replayed regardless of the
+    /// flag. **Every current caller passes `true`**
     /// — setting a project field to a value gives the same result however many
     /// times it lands, and the one call that could duplicate (`addComment`)
     /// went with `result/publish` (#398). The flag stays because a future
