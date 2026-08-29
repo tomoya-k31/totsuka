@@ -734,9 +734,19 @@ async fn config_validate_reports_invalid_token() {
         .expect("config/validate always succeeds at the RPC level");
     assert_eq!(result["valid"], false);
     let errors = result["errors"].as_array().unwrap();
+    // Assert the next action too, not just the "401" — the message promises
+    // guidance for *both* token kinds (integration secret / Notion CLI login),
+    // and a check that only looks for the status code would not notice one of
+    // them going missing.
     assert!(
-        errors.iter().any(|e| e.as_str().unwrap().contains("401")),
-        "expected a 401/next-action message, got {errors:?}"
+        errors.iter().any(|e| {
+            let e = e.as_str().unwrap();
+            e.contains("401")
+                && e.contains("`[notion]`")
+                && e.contains("integration")
+                && e.contains("Notion CLI token")
+        }),
+        "expected a 401 message naming both token kinds, got {errors:?}"
     );
 }
 

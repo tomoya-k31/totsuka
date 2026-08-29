@@ -3,9 +3,15 @@
 /// An error talking to the Notion API or interpreting its response.
 #[derive(Debug, thiserror::Error)]
 pub enum NotionError {
-    /// The token was rejected (HTTP 401): bad or expired integration secret.
+    /// The token was rejected (HTTP 401): a bad or expired integration secret,
+    /// or a Notion CLI login that expired or moved to another workspace.
+    ///
+    /// The next action differs by which kind of token is configured, so the
+    /// message names both rather than only the integration case — a CLI token
+    /// has no "share the integration with the database" setting to check, and
+    /// sending its holder looking for one costs more than the extra clause.
     #[error(
-        "Notion rejected the token (HTTP 401) → check `token` in `[notion]` of config.toml (or the referenced env/Keychain secret) and that the integration is shared with the database"
+        "Notion rejected the token (HTTP 401) → check `token` in `[notion]` of config.toml (or the secret it references). An integration secret needs the database shared with the integration; a Notion CLI token (`cmd:ntn auth token`) instead expires with the CLI login and follows whichever workspace you logged into"
     )]
     Unauthorized,
     /// The API returned a non-success HTTP status.

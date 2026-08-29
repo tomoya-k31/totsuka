@@ -1,5 +1,13 @@
 # Bundle Update Log
 
+## 2026-08-30
+
+* **Update**: [task-source-notion](/components/task-source-notion.md) の 401 メッセージを、設定されうる **2 種類のトークン**に合わせて出し分けるようにした。従来は「integration をデータベースに共有したか確認」の 1 本で、Notion CLI（`ntn`）のログイントークンを使っている読者を**存在しない設定を探しに行かせる**文面だった。新しい文面は integration secret には共有設定を、CLI トークンには「ログインの失効」と「ログインした workspace」を案内する。あわせて括弧内の `(or the referenced env/Keychain secret)` を `(or the secret it references)` に改めた —— `op://` と `cmd:` が入った今、env と Keychain だけを名指すのは**参照スキームの一覧として古い**。同じ文言が [task-source-github](/components/task-source-github.md) にもあったので同時に直した。
+
+* **Note**: 既存のテストは `contains("401")` しか見ておらず、コメントは `expected a 401/next-action message` と**次の一手まで約束していた**。メッセージが約束するより検査が弱い状態で、片方の案内が消えても落ちない。両方の種類を名指すことまで検査するよう強めた上で、**修正を無効化すると実際に落ちること**を確認してから戻した。
+
+* **Note**: メッセージを変えると、それを説明していた散文が別の場所で腐る。今回は[設定リファレンス](/development/config-reference.md)の `token` 行に「401 のメッセージは『integration をデータベースに共有したか』を案内するが」と**旧文面を引用した注意書き**が前日の PR で入ったばかりだった。**対象名ではなく「それが何をしていたか」で grep する**という以前の教訓がそのまま効いた（`shared with the database` で引いて発見した）。
+
 ## 2026-08-29
 
 * **Update**: [設定リファレンス](/development/config-reference.md) の `[notion]` `token` を、例・表とも `cmd:ntn auth token --plain` へ更新した。Notion 公式 CLI（`ntn`）に `gh auth token` 相当があり、`cmd:` スキームでそのまま解決できる。実測: `ntn auth token --plain` は exit 0・単一行・`ntn_` 前置・50 文字で、`ntn` が macOS Keychain に置く値（`security find-generic-password -s notion-cli`、`acct` は workspace の UUID）と同長。`NOTION_KEYRING=0` のときは `~/.config/notion/auth.json` に平文で置かれる。**保存先の直接参照ではなくコマンド経由を推奨として書いた** —— Keychain の service/account も `auth.json` も `ntn` の内部都合であり、公開されたコマンドがあるならそちらが契約である。
