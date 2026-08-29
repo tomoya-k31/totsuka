@@ -1,5 +1,15 @@
 # Bundle Update Log
 
+## 2026-08-29
+
+* **Update**: [設定リファレンス](/development/config-reference.md) の `[notion]` `token` を、例・表とも `cmd:ntn auth token --plain` へ更新した。Notion 公式 CLI（`ntn`）に `gh auth token` 相当があり、`cmd:` スキームでそのまま解決できる。実測: `ntn auth token --plain` は exit 0・単一行・`ntn_` 前置・50 文字で、`ntn` が macOS Keychain に置く値（`security find-generic-password -s notion-cli`、`acct` は workspace の UUID）と同長。`NOTION_KEYRING=0` のときは `~/.config/notion/auth.json` に平文で置かれる。**保存先の直接参照ではなくコマンド経由を推奨として書いた** —— Keychain の service/account も `auth.json` も `ntn` の内部都合であり、公開されたコマンドがあるならそちらが契約である。
+
+* **Note**: この `auth` コマンド群は **Notion の公開コマンドリファレンスに載っていない**（`login` / `logout` / `workers` / `api` / `datasources` / `pages` / `files` / `doctor` / `update` のみ）。そのページだけを見て「トークンを出すコマンドは無い」と断定し、`--help` を叩いて否定された。**外部ツールの「機能が無い」は、ドキュメントの不掲載では証明できない** —— 手元にバイナリがあるなら `--help` が一次資料である。実装より遅れているドキュメントは、あることの証拠にはなってもないことの証拠にはならない。
+
+* **Note**: レビューで「実 API 疎通が未検証」を突かれ、実測した —— CLI のトークンは `GET /v1/users/me` に `Notion-Version: 2022-06-28` 付きで **200** を返す（プラグインが `validate` で使うのと同じ呼び出し）。**「コマンドが動く」と「その出力が目的の API で受理される」は別の主張である** —— 前者だけを測って後者を書いていた。通っていなければ `cmd:` の解決は成功したままポーリングだけが全部 401 になり、`doctor` は `cmd:` を probe skip するので設定側からは見えなかった。
+
+* **Note**: トークンの寿命は**未確定のまま残した**。`ntn_` 前置の非 JWT なので静的トークンと読めるが、公式ドキュメントには "Login sessions expire after a short window" とある。`cmd:` はプラグイン起動時に一度だけ解決されるので（`plugins/spec.rs` が `initialize` を組む時点）、もし失効するなら常駐ポーラーはその時点から 401 を吐き続ける。数日空けて値の同一性を見れば確定する。
+
 ## 2026-08-28
 
 * **Added**: `totsuka menu`（#585、F-109、[ADR-0065](/decisions/adr-0065-menubar-status.md)）。macOS のメニューバーへ状態を出す経路を、GUI を自前で描かずに用意した — SwiftBar のプラグイン書式を吐くサブコマンドが 1 本増えるだけで、GUI コード・署名・常駐管理はゼロ。**形＝可用性（`○`/`✕`）、数＝[要対応](/glossary/attention.md)件数**の 2 チャネルで、`--json` は表示モデルそのものを返す。要対応は `pending` / `waiting_input` / `verifying` / `escalated` / `queued`+`wait_reason` の 5 状態で、**終端状態は数えない** — `StateDb::list_tasks` は絞り込みも上限も無く全タスクを返すので、数えるとバッジが単調増加して二度と 0 に戻らず、「押せば減る」性質を失った数字は読まれなくなるため。定義は `menu_cmd::classify` 一箇所に置き、`_ =>` の無い網羅 `match` で書いた（状態が増えたときに黙って対象外へ倒れず、コンパイルが通らなくなる）。**行の整形を Rust 側に置いたことが設計の中核**で、SwiftBar の書式 `text | key=value` は `|` がメタ文字であり、タイトルはソース由来なので、`|` を 1 つ書けば行に `bash=` を含む任意のパラメータを足せる — #280 と同じクラスの穴。`safe()` で制御文字と改行を潰し、`|` を `\u{7c}` へ退避する 2 段で、escape-not-strip を守るため注入テキストは行のテキスト側に丸ごと残る。**常に exit 0**（状態 DB 欠如・migration 未適用・XDG パス解決失敗はメニューの 1 行になる。`config.toml` は読まない）で、メニューバーのプラグインが非ゼロ終了すると項目ごと壊れるため。**この契約は関数の内側だけでは足りず、レビューで反例が 2 つ出た** —— 共有の `Cx::resolve` が分岐より前にあること、`print!` が書き込み失敗で panic すること。前者は `main` の分岐位置を上げ、後者は `write_all` にして塞いだ。`main::wants_json` に**登録しない唯一のコマンド**でもある（`Err` を返さないので発火する余地が無く、登録は「失敗しうる」という嘘の含意だけを残す）。

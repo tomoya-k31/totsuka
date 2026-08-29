@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:8663f7db5b719a5b82ef8ee5608c4fad47c72ca7a3247eb9c9417f969fb867f9 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:a83fa3ffd202814fab53814c32da7605c4fa4b90169ffa2199b4e1995828b870 -->
 
 # 設定リファレンス
 
@@ -752,7 +752,7 @@ enabled = true
 kind = "task_source"
 
 [notion]
-token = "op://Dev/Notion/integration_token"
+token = "cmd:ntn auth token --plain"
 notion_user_id = "8f2c…"                 # 自分（省略すると自己検知が無効）
 property_map = { title = "名前", status = "ステータス", assignee = "担当者" }
 in_progress_statuses = ["実装中"]
@@ -762,7 +762,7 @@ in_progress_statuses = ["実装中"]
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `token` | string | 必須 | Notion のインテグレーショントークン。bearer として送る以外には使わない |
+| `token` | string | 必須 | Notion のトークン。プラグインは bearer として送る以外に触らない。**インテグレーションシークレットのほか、公式 CLI（`ntn`）のログイントークンも使える** —— `cmd:ntn auth token --plain`。プラグインが検証に使うのと同じ `GET /v1/users/me` に `Notion-Version: 2022-06-28` 付きで投げて 200 を返すことを実測済み。`ntn` は資格情報を macOS Keychain（service `notion-cli`、account は workspace id）か、`NOTION_KEYRING=0` のときは `~/.config/notion/auth.json` に持つが、**保存先を直接参照するよりこのコマンド経由が良い**（保存形式は `ntn` の内部都合で変わりうる）。ただし CLI 由来のときは 3 点注意する。**(1) 出力は `ntn` の既定 workspace に従う** —— 別の workspace へ `ntn login` すると、config.toml を 1 文字も変えないまま token が入れ替わり、`database_id` に届かなくなる。固定するなら `cmd:NOTION_WORKSPACE_ID=<workspace id> ntn auth token --plain` と書く。**(2) `cmd:` の解決は起動時 1 回きり**なので、CLI のログインセッションが失効するとポーリングが 401 を吐き続ける（`totsuka run` の再起動で復帰する）。失効しない値が要るならインテグレーションシークレットを `op://` に置く。**(3) 401 のメッセージは「integration をデータベースに共有したか」を案内するが、CLI トークンにその共有設定は無い** —— 見るのは workspace と、そのページが `ntn` のログインに見えているかである。 |
 | `notion_user_id` | string? | なし | 自分の Notion user id。`trigger.assignee` の `@me` がこれと突き合わせる。**省略すると `@me` は誰にも一致しない** —— 既定のトリガーは「未アサインのタスクだけ」になり、`@me` を明示したワークフローは起動に失敗する。GitHub では `github_login` が必須なので、そこは非対称である。**さらに `property_map.assignee` が未設定だと、その「未アサインだけ」も成立しない** —— assignee を読む先が無いので全ページが未アサインに見え、**assignee による絞り込みが消えてデータベースの全ページが取り込まれる**。既定の条件は書かれていないので警告も出ない。assignee で仕事を分けているデータベースでは、必ずこのプロパティをマップすること |
 | `property_map` | テーブル | 下記 | どの Notion プロパティがどのフィールドかの対応 |
 | `body_source` | enum | `none` | 本文の取得元。`none` / `property`（`property_map.body` が指す `rich_text`）/ `page`（ページのブロックを Markdown 化） |
