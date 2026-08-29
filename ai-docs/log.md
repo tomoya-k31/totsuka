@@ -2,6 +2,14 @@
 
 ## 2026-08-30
 
+* **Update**: [task-source-github](/components/task-source-github.md) がレート制限の待ち時間を**言われたとおりに待つ**ようになった。`GithubError::RateLimited { retry_after_secs }` を新設し、`transport` が**ヘッダで**スロットルを判定する —— GitHub は primary / secondary のどちらのレート制限でも **403 か 429** を返すので、状態コードだけでは権限エラーと区別できない。優先順は GitHub 自身の決定木どおり `retry-after` →（`x-ratelimit-remaining: 0` かつ `x-ratelimit-reset`）→ 429 なら 60 秒で、**ヘッダの無い素の 403 は権限エラーとして再送しない**。あわせて `is_rejected()` を入れ、**スロットルは非冪等な呼び出しでも replay してよい**ことにした（絞られた要求は実行されていないので、応答を失った 5xx と違い副作用が重ならない）。1 回の呼び出しの合計 sleep は 90 秒で頭打ちにし、超えるなら再試行せず本当の原因を返す。
+
+* **Note**: これは前日「**現状の挙動を固定しただけで直したわけではない**」と明記した既知のギャップの解消。`task-source-slack` に完成形（`RateLimited` 変種・`is_rejected`・`retry_delay`・`retry_budget`・`with_retry_timing`）があったので、**構造ごと写した**。前回の反省がそのまま効いた形で、設計判断はほぼ発生していない。違うのは GitHub 固有の 2 点だけ —— **403 もレート制限になる**ことと、ヘッダ欠落時のフォールバックが 30 秒でなく 60 秒（GitHub のドキュメントが "at least one minute" と書いている）。
+
+* **Note**: 変異テストで**また**「コンパイルが通らない変異を『落ちなかった』と読み違えかけた」。`retry_delay` から `retry-after` の分岐を消すと `error` 引数が未使用になり `warnings = "deny"` で `error`。**同じ罠を前日に記録したばかりで、翌日踏んだ。** 変異を作ったら、まず `cargo build --tests` が通ることを確認してからテストを回す。
+
+* **Note**: `max_retries` の説明が「最大再試行回数」だけだったので、**90 秒の予算で頭打ちになる**ことを [設定リファレンス](/development/config-reference.md) に足した。`slack` 側も同じ予算を持ちながら未記載だったので同時に書いた —— 挙動を変えた側だけ書くと、ドキュメント上に新しい非対称を作ってしまう。
+
 * **Update**: [task-source-github](/components/task-source-github.md) に `tests/graphql_http.rs` を追加した。`TcpListener` に canned な HTTP/1.1 応答を並べ、実 `ReqwestTransport` を通して 10 本を固定する —— bearer / User-Agent / Content-Type の 3 ヘッダ、401 → `Unauthorized`、その他ステータス → `Http`、body の 500 文字切り詰め、**冪等なときだけのリトライ**、リトライ枯渇、`errors` 入り 200 の素通し、非 JSON の 200 → `InvalidResponse`。**4 つの変異（User-Agent 削除／401 分岐削除／冪等性ゲート削除／切り詰め削除）がすべてテストを落とすことを確認**してから戻した。
 
 * **Note**: これは [task-source-notion](/components/task-source-notion.md) の同種の穴を塞いだ直後に、**同じ構造が github にも残っている**と気づいて調べたもの。調べてみると **`task-source-slack` の `tests/web_api_http.rs` が既に完全に同じことをやっていた**（TCP モック・retry 規律・ステータス写像）。`agent-ide-herdr` も実 `UnixListener` に実 `SocketTransport` を繋いでいる。**つまりリポジトリには既に正解の型があり、notion と github だけがそこから外れていた。** notion 側を書くとき既存の 2 例を探しておらず、独自の形を発明している。**「初めてのユニットテスト」を書くときは、まず隣のクレートが同じ問題をどう解いているか見る。**
