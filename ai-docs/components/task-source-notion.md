@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-08-27T06:45:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-30T01:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -20,7 +20,7 @@ Notion データベースを totsuka のタスクソースとして接続する�
 | モジュール | 内容 |
 |---|---|
 | `config` | `[notion]`（= `InitializeParams.config`）を型付け。`token` / `notion_user_id`（F-08 の自己判定）/ `property_map`（title / status(+`status_kind` status\|select) / assignee / priority / repo_hint / body ↔ Notion プロパティ名, F-03）/ `body_source`（none\|property\|page）/ `in_progress_statuses`/ `priority_map`（option 名→数値）/ `source_name` / `api_url` / `api_version` / `max_retries` / `rate_limit_rps`。`deny_unknown_fields`。**データベースはここに無い**（#554）: Orchestrator の `[[projects]]`（`source = "notion"` の要素）から `initialize` で届き、`DatabaseConfig::resolve` が `RepoInfo.project` の紐付けと突き合わせて組み立てる。要素のキーは `database_id` / `triage_status`（`DatabaseOptions`、こちらも `deny_unknown_fields`）。`claimed_repos()` はそこと `property_map` から `initialize` 応答の claim を組み立てる。`triage_status`（任意、#548 派生）を書くと destination の status 列に「set it to `値`」が入る。`property_map.status` 未設定との組は `config/validate` がエラー（埋める列を名指しできない指示になるため）。**この検査は `initialize` では走らない**（`project_number` と同じ分離）— 未 validate の設定は起動し、status 指示が黙って落ちるだけになる |
-| `transport` | `NotionTransport` trait（`request(method, path, body, idempotent)`）＋ reqwest 実装 `ReqwestTransport`（bearer 認証・`Notion-Version` ヘッダ固定・タイムアウト・指数バックオフ §5.3・3rps スロットリング）。ロジックを録画レスポンスでテストするための seam |
+| `transport` | `NotionTransport` trait（`request(method, path, body, idempotent)`）＋ reqwest 実装 `ReqwestTransport`（bearer 認証・`Notion-Version` ヘッダ固定・タイムアウト・指数バックオフ §5.3・3rps スロットリング）。ロジックを録画レスポンスでテストするための seam。**HTTP ステータス → エラー変種の写像もここが持つ**: 401 → `Unauthorized`、Notion 自身が `code: "object_not_found"` を返した 404 → `ObjectNotFound`、それ以外の失敗 → `Http { status, body }`。404 をコードで絞るのは `api_url` が設定可能で、**base URL の打ち間違いやプロキシ由来の 404 に共有漏れの案内を出さない**ため |
 | `blocks` | Notion ブロック ↔ Markdown 変換。読み（`blocks_to_markdown`, ページ本文→body）は主要ブロック型（heading/paragraph/bullet/numbered/to_do/quote/code）対応・未対応型はプレーンテキスト化。書き（`markdown_to_blocks`, F-07）は heading/bullet/quote/paragraph を生成し、2000 文字/リッチテキストの上限で分割（マルチバイト境界安全） |
 | `client` | `NotionClient<T: NotionTransport>`。`fetch`（databases query をページング取得→property_map で `Task` 正規化→トリガー絞り込み→取り込み制御 F-08。body=page 時のみ生存タスクのブロックを取得）/ `update_status`（DB スキーマから option を検証、未知 option はエラー→ページ property を PATCH, F-84）/ `publish`（Markdown→blocks 変換、100 件バッチで追記, F-07）/ `validate`（users/me 疎通＋マップ先プロパティ存在確認 F-59） |
 | `server` | JSON-RPC ディスパッチ `Server<F: TransportFactory>`。`Server::new(factory, SubmitClient)`（#189: SDK の stdio ランタイム[単一 writer タスク]で駆動され、`LineHandler` 実装経由で serve される）。initialize（config 型付け → client 構築 → triggers があれば SDK `poll_loop` を常駐 spawn — 各 tick で全 trigger を fetch し `task/submit` push。triggers 空なら poll なし。`poll_interval_secs = 0` は既定 60s へフォールバック[warn ログ]）/ config·validate / task·update_status / result·publish / shutdown。`tasks/fetch` は **0.2.0（#190）で削除済み** — 未初期化メソッドは拒否。Session drop（re-initialize 含む）で poll タスクを abort。`TransportFactory` で録画トランスポートを注入しテスト **#574: `TRIGGER_KEYS`（`assignee` / `filter` / `status`）と突き合わせ、未知の `trigger` キーがあれば `initialize` を `CONFIG_INVALID` で落とす**（`plugin_sdk::unknown_trigger_keys`）。トリガーの解釈は `.get("…")` なので、読まないキーは黙って捨てられ条件が 1 つ減る —— つまりタイポはトリガーを狭めず**広げる**。一覧は `client` のパーサの隣にリテラルで置き導出しない **#572: `trigger.assignee`** —— `plugin_sdk::check_assignee_triggers` で起動時に検証する。notion は前提が 2 つとも任意設定で、**どちらも欠けると黙って効かなくなる**（people プロパティ未マップ → 全ページが未アサインに見える／`notion_user_id` 未設定 → `@me` が誰にも一致しない）。そのため `assignee` を書いたら `property_map.assignee` は必須、`@me` を含むなら `notion_user_id` も必須として `CONFIG_INVALID` で落とす |
@@ -55,6 +55,8 @@ manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.6
 # テスト
 
 `NotionTransport` を録画レスポンスの fake に差し替え、initialize→poll_loop→`task/submit` push（SubmitHarness で観測・ack 注入）、property_map 正規化→ページ本文取得→update_status の全経路を JSON-RPC 境界越しに結合テスト（`tests/integration.rs`）。取り込み制御（他者 assignee / 実行中 / トリガー不一致）、triggers 空での no-poll、未知 option の update_status 拒否、トークン無効／マップ先プロパティ欠落時の `config/validate`（原因＋次アクション）を検証。実バイナリを stdio で駆動して疎通確認済み。
+
+ただし **fake は `NotionError` の変種を直接返すので、実 transport が HTTP ステータスをその変種へ写像すること自体は結合テストでは検査できない**（写像を丸ごと消しても全部緑になる）。そこは `transport.rs` のユニットテストが持つ —— `TcpListener` で 1 発だけ応答するサーバを立て、401 / Notion の 404 / Notion 以外の 404 / 500 と、本体のある POST を固定する。
 
 # 依存
 

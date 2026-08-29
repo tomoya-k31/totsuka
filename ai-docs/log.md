@@ -18,6 +18,12 @@
 
 * **Note**: 401 の文面を直したとき、設定リファレンスの注意書き (3) を「401 のときに確認するのは workspace とページの可視性」と書いた。**これは 404 の話で、401 の説明としては誤りだった。** 401 と 404 の切り分けを済ませた後に書いたにもかかわらず、直前まで信じていた古い理解が散文側に残った。**コードを直したら、その振る舞いを説明している散文を必ず読み直す。**
 
+* **Note**: レビューで **404 側にも同じ誤誘導を入れていた**ことが判明した。文面に「`[notion]` の id が違う」と書いたが、`database_id` は #554 で `[[projects]]` へ移っており `[notion]` には無い（`databases` は `#[serde(skip)]`）。**共有し忘れた運用者が `[notion]` を開いても直すものが何も無い。** さらに、この 404 は config の id だけでなく**実行中のページ id**（`GET /pages/{id}` / `GET /blocks/{id}/children` / `PATCH /pages/{id}`）にも届くので、「設定を確認しろ」と決め打つと**config が正しいのにページが消えただけ**のケースで嘘になる。両方を書き分けた。
+
+* **Note**: 404 の写像を **Notion 自身が `code: "object_not_found"` を返したときだけ**に絞った。`api_url` は設定可能なので、base URL の打ち間違いやプロキシ由来の 404 に共有漏れの案内を出すのは、この変種が消そうとしている誤誘導そのものだった。
+
+* **Note**: テストサーバのリクエスト全ドレインは**実測では必要なかった** —— 本体つき POST でも、ドレイン無しで 5/5 通る（loopback・小さい body では 1 回の `read` が全部拾う）。RST で応答が捨てられるという筋は原理としては正しいが、**観測された不具合ではない**ので「将来の保険」としてそう書いた。コメントに「無いとこのテストは落ちる」と書きかけて、測って撤回した。
+
 ## 2026-08-29
 
 * **Update**: [設定リファレンス](/development/config-reference.md) の `[notion]` `token` を、例・表とも `cmd:ntn auth token --plain` へ更新した。Notion 公式 CLI（`ntn`）に `gh auth token` 相当があり、`cmd:` スキームでそのまま解決できる。実測: `ntn auth token --plain` は exit 0・単一行・`ntn_` 前置・50 文字で、`ntn` が macOS Keychain に置く値（`security find-generic-password -s notion-cli`、`acct` は workspace の UUID）と同長。`NOTION_KEYRING=0` のときは `~/.config/notion/auth.json` に平文で置かれる。**保存先の直接参照ではなくコマンド経由を推奨として書いた** —— Keychain の service/account も `auth.json` も `ntn` の内部都合であり、公開されたコマンドがあるならそちらが契約である。

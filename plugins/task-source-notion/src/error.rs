@@ -25,13 +25,19 @@ pub enum NotionError {
     /// not exist. This error can also indicate that the resource has not been
     /// shared with owner of the bearer token." So the message names both.
     ///
+    /// It reaches config ids (`database_id` in `[[projects]]`) *and* runtime
+    /// page ids — `GET /pages/{id}`, `GET /blocks/{id}/children` and
+    /// `PATCH /pages/{id}` all go through here — so the message must not
+    /// assume the operator mistyped something: a page trashed or moved mid-run
+    /// 404s with a perfectly correct config.
+    ///
     /// **This, not [`NotionError::Unauthorized`], is where sharing belongs.**
     /// Measured against the live API: an unshared or unknown id returns 404
     /// `object_not_found`, while a rejected bearer token returns 401
     /// `unauthorized`. The 401 message used to send its reader to the sharing
     /// settings, which cannot cause a 401.
     #[error(
-        "Notion could not find the object (HTTP 404) → the id in `[notion]` is wrong, or it is not shared with the token. For an integration secret, share the database with the integration; for a Notion CLI token (`cmd:ntn auth token --plain`), check that the page is in the workspace you logged into. Notion's own response: {0}"
+        "Notion could not find the object (HTTP 404) → it does not exist, or it is not shared with the token; Notion does not distinguish the two. A configured id lives in `database_id` of the matching `[[projects]]` entry, not in `[notion]`; a page id comes from the task itself and may have been trashed or moved since. For sharing: an integration secret needs that page or database shared with the integration, while a Notion CLI token (`cmd:ntn auth token --plain`) needs it to be in the workspace you logged into. Notion's own response: {0}"
     )]
     ObjectNotFound(String),
     /// The API returned a non-success HTTP status.
