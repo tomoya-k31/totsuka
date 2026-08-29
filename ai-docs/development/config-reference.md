@@ -755,7 +755,7 @@ poll_interval_secs = 60   # 省略時も 60。`0` は警告を出して 60 へ�
 | `source_name` | string | `github` | `Task.source` に刻印するソース名。ボードを増やしても変わらない（だから `[[workflows]].source = "github"` は 1 本のまま） |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用の上書き） |
 | `claim_verify_delay_ms` | int? | `750` | claim（#556）の self-assign 書き込みから読み戻しまでの待ち ms。読み戻しが競合と黙殺の両方を検出するので、API に反映される前に読んではいけない。既定値は実測（p95 ≈ 700ms / max 983ms）に基づく。`0` も有効（テスト用。早すぎる読みは再試行 1 回を足すだけ） |
-| `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
+| `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数。**ただし 1 回の呼び出しで眠れる合計は 90 秒**で、次の待ち時間がそれを超えるなら再試行せず本当の原因を返す（スロットルの `retry-after` が長いときに「ハングしたように見える」のを避けるため）。したがって `max_retries` を大きくしても待ち時間の合計はこの予算で頭打ちになる |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#398） |
 
 ボードは `[github]` ではなく **Orchestrator の `[[projects]]`** に書く（#554）。`source = "github"` の要素が、そのプラグインのボードになる:
@@ -968,7 +968,7 @@ kind = "task_source"
 | `[[channel_groups]]` | 配列 | なし | チャンネル名 prefix → 候補 repos の絞り込みルール（定義順 first-match）。`prefix` / `repos`（`[[repos]]` に存在する名前のみ） |
 | `[llm]` | テーブル | なし（省略可、#119） | リポジトリ分類用 OpenAI 互換 LLM。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、未満はエフェメラル選択へ）。**省略時は config.toml の `[llm]`（initialize で供給）が default になる**（`api_key_ref` 必須 — キーなし供給は採用されない。`confidence_threshold` は既定 0.6）。明示した場合はそちらが優先。候補 2 件以上でどちらにも無ければ initialize が `CONFIG_INVALID` |
 | `api_url` | string | `https://slack.com/api` | Web API ベース URL（テスト用上書き） |
-| `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数 |
+| `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数。**ただし 1 回の呼び出しで眠れる合計は 90 秒**で、次の待ち時間がそれを超えるなら再試行せず本当の原因を返す（スロットルの `retry-after` が長いときに「ハングしたように見える」のを避けるため）。したがって `max_retries` を大きくしても待ち時間の合計はこの予算で頭打ちになる |
 
 ## `[prompts]`（task-source-slack、#318）
 

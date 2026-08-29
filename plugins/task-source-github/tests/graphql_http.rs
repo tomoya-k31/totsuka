@@ -12,20 +12,13 @@
 //! The mock is a raw TCP loop serving canned HTTP/1.1 responses — no HTTP
 //! server dependency, mirroring the workspace's no-new-deps test policy.
 //!
-//! **Known gap, pinned here as it stands, not endorsed**: on a 429 this
-//! transport ignores `Retry-After` and backs off on its own 500ms exponential
-//! schedule. `task-source-slack` honours it and has three dedicated tests for
-//! it. GitHub sends `Retry-After` on secondary rate limits and penalises
-//! clients that ignore it, so this is a real asymmetry — closing it is a
-//! production change, so these tests describe today's behaviour rather than
-//! the behaviour we want.
-//!
 //! Not covered: the timeout → [`GithubError::Timeout`] mapping. The 30s timeout
 //! is hard-coded in `ReqwestTransport::new` with no knob to shorten it, so
 //! pinning it would cost 30s of wall clock per run. Reaching it would need a
 //! settings field, which is a production change, not a test one.
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -34,9 +27,10 @@ use tokio::net::TcpListener;
 use task_source_github::error::GithubError;
 use task_source_github::transport::{GithubTransport, ReqwestTransport};
 
-/// One canned HTTP response: status line and a body.
+/// One canned HTTP response: status line, extra headers, and a body.
 struct CannedHttp {
     status: &'static str,
+    headers: Vec<String>,
     body: String,
 }
 
@@ -44,13 +38,53 @@ impl CannedHttp {
     fn ok(body: Value) -> Self {
         Self {
             status: "200 OK",
+            headers: Vec::new(),
             body: body.to_string(),
         }
     }
     fn status(status: &'static str, body: &str) -> Self {
         Self {
             status,
+            headers: Vec::new(),
             body: body.to_string(),
+        }
+    }
+    /// A throttle that names its wait in `retry-after`.
+    fn rate_limited(retry_after: &str) -> Self {
+        Self {
+            status: "429 Too Many Requests",
+            headers: vec![format!("Retry-After: {retry_after}")],
+            body: String::new(),
+        }
+    }
+    /// A throttle with no `retry-after`, reporting a spent budget instead —
+    /// GitHub's second case, and the one that arrives as a **403**.
+    fn budget_spent(reset_epoch_secs: u64) -> Self {
+        Self {
+            status: "403 Forbidden",
+            headers: vec![
+                "X-RateLimit-Remaining: 0".into(),
+                format!("X-RateLimit-Reset: {reset_epoch_secs}"),
+            ],
+            body: json!({ "message": "API rate limit exceeded" }).to_string(),
+        }
+    }
+
+    /// **GraphQL's primary rate limit: HTTP 200** with `RATE_LIMITED` in the
+    /// errors array and a spent budget in the headers. This is the shape a
+    /// status-only classifier misses entirely.
+    fn graphql_rate_limited(reset_epoch_secs: u64) -> Self {
+        Self {
+            status: "200 OK",
+            headers: vec![
+                "X-RateLimit-Remaining: 0".into(),
+                format!("X-RateLimit-Reset: {reset_epoch_secs}"),
+            ],
+            body: json!({
+                "data": null,
+                "errors": [{ "type": "RATE_LIMITED", "message": "API rate limit exceeded" }],
+            })
+            .to_string(),
         }
     }
 }
@@ -97,8 +131,13 @@ async fn mock_server(responses: Vec<CannedHttp>) -> (String, Arc<Mutex<Vec<Strin
             log.lock().unwrap().push(request);
 
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 canned.status,
+                canned
+                    .headers
+                    .iter()
+                    .map(|h| format!("{h}\r\n"))
+                    .collect::<String>(),
                 canned.body.len(),
                 canned.body,
             );
@@ -112,6 +151,10 @@ async fn mock_server(responses: Vec<CannedHttp>) -> (String, Arc<Mutex<Vec<Strin
 
 fn transport(base: &str, max_retries: u32) -> ReqwestTransport {
     ReqwestTransport::new(base.to_string(), "t0ken".to_string(), max_retries)
+        // Fast backoff so the 5xx retry tests do not pay production-scale
+        // sleeps. The `retry-after` waits stay real — the header is whole
+        // seconds — and the 5s budget is what the fail-fast tests lean on.
+        .with_retry_timing(Duration::from_millis(10), Duration::from_secs(5))
 }
 
 fn query() -> Value {
@@ -255,8 +298,8 @@ async fn a_server_error_is_not_retried_for_a_non_idempotent_call() {
 }
 
 /// **A rejected token must not be replayed.** `is_retryable` answers `false`
-/// for everything outside 429/5xx/transport, and nothing above pins that: every
-/// other failure test runs with a retry budget of zero, which hides the
+/// for everything outside throttles/5xx/transport, and nothing above pins that:
+/// every other failure test runs with a retry budget of zero, which hides the
 /// vocabulary entirely. Without this, flipping `is_retryable`'s fallthrough to
 /// `true` stays green — and in production an expired token would be replayed on
 /// every `poll_loop` tick, which is exactly what GitHub rate-limits.
@@ -277,9 +320,9 @@ async fn unauthorized_is_not_retried_even_with_a_budget() {
     );
 }
 
-/// The same for a 4xx that is not 429: retryable is 429 and 5xx, not "any
-/// failing status". A budget is given so the absence of a retry is a result,
-/// not an artefact of `max_retries = 0`.
+/// The same for a 4xx that is not a throttle: retryable is throttles and 5xx,
+/// not "any failing status". A budget is given so the absence of a retry is a
+/// result, not an artefact of `max_retries = 0`.
 #[tokio::test]
 async fn a_client_error_is_not_retried_even_with_a_budget() {
     let (base, log) = mock_server(vec![CannedHttp::status("422 Unprocessable", "bad query")]).await;
@@ -296,21 +339,227 @@ async fn a_client_error_is_not_retried_even_with_a_budget() {
     assert_eq!(log.lock().unwrap().len(), 1, "422 is not transient");
 }
 
-/// Rate limiting is retryable too, on the same gate.
+/// **`retry-after` is honoured exactly, and a throttle may be replayed even
+/// when the call is not idempotent.** A throttled request never ran, so
+/// replaying it cannot duplicate a side effect — unlike a lost 5xx.
 #[tokio::test]
-async fn a_rate_limit_is_retried_for_an_idempotent_call() {
+async fn a_throttle_waits_the_requested_time_and_replays_a_non_idempotent_call() {
     let (base, log) = mock_server(vec![
-        CannedHttp::status("429 Too Many Requests", ""),
+        CannedHttp::rate_limited("1"),
         CannedHttp::ok(json!({ "data": { "ok": true } })),
     ])
     .await;
 
-    transport(&base, 1)
+    let started = Instant::now();
+    let value = transport(&base, 3)
+        .post_graphql(query(), false)
+        .await
+        .expect("the retry succeeds");
+
+    assert_eq!(value["data"]["ok"], true);
+    assert_eq!(log.lock().unwrap().len(), 2, "expected one retry");
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "must wait what `retry-after` asked for, waited only {:?}",
+        started.elapsed()
+    );
+}
+
+/// A wait longer than the budget surfaces the throttle immediately instead of
+/// sleeping. One `poll_loop` tick parked for two minutes is indistinguishable
+/// from a wedged plugin.
+#[tokio::test]
+async fn a_wait_beyond_the_budget_fails_fast_instead_of_sleeping() {
+    let (base, log) = mock_server(vec![CannedHttp::rate_limited("120")]).await;
+
+    let started = Instant::now();
+    let err = transport(&base, 3)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("the budget is spent before the wait");
+
+    assert!(
+        matches!(
+            err,
+            GithubError::RateLimited {
+                retry_after_secs: 120
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(log.lock().unwrap().len(), 1, "no premature retry");
+    assert!(started.elapsed() < Duration::from_secs(2), "must not sleep");
+}
+
+/// An HTTP-date `retry-after` is valid per RFC 9110 but not a number. Falling
+/// back to a small value would turn it into a hammer loop, so the fallback is a
+/// minute — which exceeds the test budget, hence one request and no sleep.
+#[tokio::test]
+async fn an_unparseable_retry_after_falls_back_conservatively() {
+    let (base, log) = mock_server(vec![CannedHttp::rate_limited(
+        "Wed, 21 Oct 2026 07:28:00 GMT",
+    )])
+    .await;
+
+    let started = Instant::now();
+    let err = transport(&base, 3)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("the fallback exceeds the budget");
+
+    assert!(
+        matches!(
+            err,
+            GithubError::RateLimited {
+                retry_after_secs: 60
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(log.lock().unwrap().len(), 1);
+    assert!(started.elapsed() < Duration::from_secs(2), "must not sleep");
+}
+
+/// GitHub's second throttle shape: **a 403** with no `retry-after`, reporting a
+/// spent budget through `x-ratelimit-remaining: 0` and an epoch-seconds
+/// `x-ratelimit-reset`. Treating the status alone as the signal would miss it
+/// entirely and fall into the generic `Http` bucket.
+#[tokio::test]
+async fn a_spent_budget_on_a_403_is_a_throttle() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let (base, log) = mock_server(vec![CannedHttp::budget_spent(now + 300)]).await;
+
+    let err = transport(&base, 3)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("300s exceeds the budget");
+
+    match err {
+        // ~300s, computed from the reset instant rather than taken literally.
+        GithubError::RateLimited { retry_after_secs } => {
+            assert!(
+                (295..=300).contains(&retry_after_secs),
+                "{retry_after_secs}"
+            )
+        }
+        other => panic!("expected RateLimited, got {other:?}"),
+    }
+    assert_eq!(log.lock().unwrap().len(), 1);
+}
+
+/// **GraphQL's primary rate limit is an HTTP 200**, so the classifier cannot
+/// key off the status. GitHub's own docs: "the response status will still be
+/// `200` … the value of the `x-ratelimit-remaining` header will be `0`". A
+/// status-only test would let this sail through as a successful response and
+/// hand a `RATE_LIMITED` envelope to the client as a permanent GraphQL error —
+/// on the only API this plugin uses, that is the *common* throttle shape.
+#[tokio::test]
+async fn a_200_carrying_rate_limited_is_a_throttle() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let (base, log) = mock_server(vec![CannedHttp::graphql_rate_limited(now + 300)]).await;
+
+    let err = transport(&base, 3)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("a rate-limited 200 is not a successful response");
+
+    match err {
+        GithubError::RateLimited { retry_after_secs } => {
+            assert!(
+                (295..=300).contains(&retry_after_secs),
+                "{retry_after_secs}"
+            )
+        }
+        other => panic!("expected RateLimited, got {other:?}"),
+    }
+    assert_eq!(log.lock().unwrap().len(), 1);
+}
+
+/// A secondary rate limit can arrive as a **403 with no rate-limit headers at
+/// all** — only the body names it. Falling back to the documented minimum is
+/// what keeps it out of the permission-error bucket.
+#[tokio::test]
+async fn a_403_naming_a_secondary_rate_limit_is_a_throttle() {
+    let (base, log) = mock_server(vec![CannedHttp::status(
+        "403 Forbidden",
+        &json!({ "message": "You have exceeded a secondary rate limit" }).to_string(),
+    )])
+    .await;
+
+    let err = transport(&base, 3)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("the 60s fallback exceeds the budget");
+
+    assert!(
+        matches!(
+            err,
+            GithubError::RateLimited {
+                retry_after_secs: 60
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(log.lock().unwrap().len(), 1);
+}
+
+/// A zero wait is floored to one second. `retry-after: 0`, a reset instant
+/// already past, or a skewed clock would otherwise mean no sleep at all, and
+/// the budget would fund `max_retries` back-to-back requests against an
+/// endpoint that just said it is throttled.
+#[tokio::test]
+async fn a_zero_wait_is_floored_to_one_second() {
+    let (base, log) = mock_server(vec![
+        CannedHttp::rate_limited("0"),
+        CannedHttp::ok(json!({ "data": { "ok": true } })),
+    ])
+    .await;
+
+    let started = Instant::now();
+    transport(&base, 3)
         .post_graphql(query(), true)
         .await
         .expect("the retry succeeds");
 
-    assert_eq!(log.lock().unwrap().len(), 2, "expected one retry");
+    assert_eq!(log.lock().unwrap().len(), 2);
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "a zero wait must not become a hammer loop, waited {:?}",
+        started.elapsed()
+    );
+}
+
+/// **A bare 403 is a permission error, not a throttle.** Retrying it would burn
+/// the budget and bury the real cause, so the rate-limit headers — not the
+/// status — are what decide.
+#[tokio::test]
+async fn a_403_without_rate_limit_headers_is_not_retried() {
+    let (base, log) = mock_server(vec![CannedHttp::status(
+        "403 Forbidden",
+        "insufficient scopes",
+    )])
+    .await;
+
+    let err = transport(&base, 3)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("403 is an error");
+
+    assert!(
+        matches!(err, GithubError::Http { status: 403, .. }),
+        "{err:?}"
+    );
+    assert_eq!(
+        log.lock().unwrap().len(),
+        1,
+        "a permission error is not transient"
+    );
 }
 
 /// Exhausting the budget surfaces the last error, not a success or a panic.

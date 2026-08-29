@@ -16,6 +16,20 @@ pub enum GithubError {
         /// Response body (truncated).
         body: String,
     },
+    /// The API throttled us, with the wait it asked for.
+    ///
+    /// **GitHub returns 403 *or* 429 for both its primary and secondary rate
+    /// limits**, so the status alone cannot separate a throttle from a
+    /// permission error — the rate-limit headers decide, and `transport` does
+    /// that classification. Carrying the wait here is what lets the retry
+    /// honour it instead of guessing with backoff: retrying earlier than asked
+    /// is guaranteed to be throttled again, and GitHub penalises clients that
+    /// ignore `retry-after`.
+    #[error("GitHub API rate limited → retry after {retry_after_secs}s")]
+    RateLimited {
+        /// Seconds to wait, from `retry-after` or `x-ratelimit-reset`.
+        retry_after_secs: u64,
+    },
     /// A network/transport failure (retryable).
     #[error("GitHub API transport error: {0}")]
     Transport(String),
@@ -42,13 +56,34 @@ pub enum GithubError {
 }
 
 impl GithubError {
-    /// Whether retrying with backoff is worthwhile (§5.3): transient network,
-    /// timeouts, rate limiting (429) and 5xx server errors.
+    /// Whether retrying is worthwhile (§5.3): transient network, timeouts,
+    /// throttles and 5xx server errors.
+    ///
+    /// "Throttle" means [`GithubError::RateLimited`], which `transport` derives
+    /// from the rate-limit **headers** — not from a status code. GitHub returns
+    /// 403 or 429 for both its rate-limit kinds, so a 403 may or may not be one
+    /// and a 429 always is. Note also that a throttle is not retried with
+    /// backoff: the wait it carries is honoured exactly.
     pub fn is_retryable(&self) -> bool {
         match self {
-            GithubError::Transport(_) | GithubError::Timeout(_) => true,
-            GithubError::Http { status, .. } => *status == 429 || (500..=599).contains(status),
+            GithubError::Transport(_)
+            | GithubError::Timeout(_)
+            | GithubError::RateLimited { .. } => true,
+            // 429 is absent on purpose: `transport` turns every throttle into
+            // `RateLimited` above, so a 429 never reaches this arm. Leaving it
+            // here would suggest a second, header-less throttle path exists.
+            GithubError::Http { status, .. } => (500..=599).contains(status),
             _ => false,
         }
+    }
+
+    /// Whether the request is known to have been **rejected** rather than
+    /// possibly applied.
+    ///
+    /// A throttled call never ran, so replaying it is safe even for a
+    /// non-idempotent mutation — unlike a lost 5xx or timeout, where the write
+    /// may well have landed.
+    pub fn is_rejected(&self) -> bool {
+        matches!(self, GithubError::RateLimited { .. })
     }
 }

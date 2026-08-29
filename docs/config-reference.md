@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:bfb3baa3445e99b8fcb175387bc47840cc90a063c220d79092aaf883a51068c7 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0c8ece00436d9308822b5f92888f53298db9cd5d7d5b1cf1bdb1aa354b242fd5 -->
 
 # Configuration reference
 
@@ -643,7 +643,7 @@ poll_interval_secs = 60   # 60 is also the default; 0 warns and falls back to it
 | `source_name` | string | `github` | The source name stamped on each task. Adding boards does not change it, so `[[workflows]].source = "github"` stays a single entry |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise or testing |
 | `claim_verify_delay_ms` | int? | `750` | Milliseconds to wait between writing the claim (self-assign) and reading it back. The read-back is what detects both a race with a teammate and a silently ignored assignment, so it must not run before the API shows the write. `0` is honoured (a too-early read only costs one retry) |
-| `max_retries` | int | 3 | Retries for retryable API failures |
+| `max_retries` | int | 3 | Retries for retryable API failures. **One call may sleep 90s in total**; if the next wait would exceed that, the call returns the real cause instead of retrying, so a long `retry-after` cannot look like a hang. Raising `max_retries` therefore does not raise the total wait |
 | `[github.prompts]` | table | — | Overrides for the prompts this plugin sends |
 
 **The boards are not in this table.** They are `[[projects]]` entries with `source = "github"`, and the repositories that use them say so with `[[repositories]].project`:
@@ -854,7 +854,7 @@ kind = "task_source"
 | `[[slack.channel_groups]]` | array | none | Narrow the candidates by channel name prefix; first match in definition order. `prefix` plus `repos` |
 | `[slack.llm]` | table | none | The classifier LLM: `base_url`, `model`, `api_key`, and `confidence_threshold` (default 0.6; below it you get a picker). **Omit it and `config.toml`'s `[llm]` is the default**, provided it has a key. With two or more candidates and neither source of settings, startup fails |
 | `api_url` | string | `https://slack.com/api` | Web API base URL, for testing |
-| `max_retries` | int | 3 | Retries for retryable API failures |
+| `max_retries` | int | 3 | Retries for retryable API failures. **One call may sleep 90s in total**; if the next wait would exceed that, the call returns the real cause instead of retrying, so a long `retry-after` cannot look like a hang. Raising `max_retries` therefore does not raise the total wait |
 
 ### `[slack.prompts]`
 

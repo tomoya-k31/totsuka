@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:bfb3baa3445e99b8fcb175387bc47840cc90a063c220d79092aaf883a51068c7 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0c8ece00436d9308822b5f92888f53298db9cd5d7d5b1cf1bdb1aa354b242fd5 -->
 
 # 設定リファレンス
 
@@ -642,7 +642,7 @@ poll_interval_secs = 60   # 60 は既定値でもある。0 は警告を出し�
 | `source_name` | string | `github` | 各タスクに刻印されるソース名。ボードを増やしても変わらないので、`[[workflows]].source = "github"` は 1 本のまま |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用） |
 | `claim_verify_delay_ms` | int? | `750` | claim（self-assign）の書き込みから読み戻しまでの待ち ms。読み戻しがチームメイトとの競合と黙殺の両方を検出するので、API に反映される前に読んではいけない。`0` も有効（早すぎる読みは再試行 1 回を足すだけ） |
-| `max_retries` | int | 3 | リトライ可能な API 失敗の再試行回数 |
+| `max_retries` | int | 3 | リトライ可能な API 失敗の再試行回数。**1 回の呼び出しで眠れる合計は 90 秒**で、次の待ち時間がそれを超えるなら再試行せず本当の原因を返す（スロットルの `retry-after` が長いときに「ハングしたように見える」のを避けるため）。`max_retries` を大きくしても待ち時間の合計はこの予算で頭打ちになる |
 | `[github.prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
 
 **ボードはこのテーブルには書かない。** `source = "github"` の `[[projects]]` エントリがボードで、それを使うリポジトリは `[[repositories]].project` でそう言う:
@@ -853,7 +853,7 @@ kind = "task_source"
 | `[[slack.channel_groups]]` | 配列 | なし | チャンネル名の接頭辞で候補を絞る規則。定義順に first-match。`prefix` と `repos` を持つ |
 | `[slack.llm]` | テーブル | なし | 分類用の LLM。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、下回るとピッカーへ）。**省略すると `config.toml` の `[llm]` が既定になる**（キーが解決できる場合のみ）。候補が 2 件以上でどちらにも無ければ起動に失敗する |
 | `api_url` | string | `https://slack.com/api` | Web API のベース URL（テスト用） |
-| `max_retries` | int | 3 | 再試行可能な API 失敗の最大再試行回数 |
+| `max_retries` | int | 3 | 再試行可能な API 失敗の最大再試行回数。**1 回の呼び出しで眠れる合計は 90 秒**で、次の待ち時間がそれを超えるなら再試行せず本当の原因を返す（スロットルの `retry-after` が長いときに「ハングしたように見える」のを避けるため）。`max_retries` を大きくしても待ち時間の合計はこの予算で頭打ちになる |
 
 ### `[slack.prompts]`
 

@@ -2,6 +2,20 @@
 
 ## 2026-08-30
 
+* **Update**: [task-source-github](/components/task-source-github.md) がレート制限の待ち時間を**言われたとおりに待つ**ようになった。`GithubError::RateLimited { retry_after_secs }` を新設し、`transport` が**ヘッダで**スロットルを判定する —— GitHub は primary / secondary のどちらのレート制限でも **403 か 429** を返すので、状態コードだけでは権限エラーと区別できない。優先順は GitHub 自身の決定木どおり `retry-after` →（`x-ratelimit-remaining: 0` かつ `x-ratelimit-reset`）→ 429 なら 60 秒で、**ヘッダの無い素の 403 は権限エラーとして再送しない**。あわせて `is_rejected()` を入れ、**スロットルは非冪等な呼び出しでも replay してよい**ことにした（絞られた要求は実行されていないので、応答を失った 5xx と違い副作用が重ならない）。1 回の呼び出しの合計 sleep は 90 秒で頭打ちにし、超えるなら再試行せず本当の原因を返す。
+
+* **Note**: これは前日「**現状の挙動を固定しただけで直したわけではない**」と明記した既知のギャップの解消。`task-source-slack` に完成形（`RateLimited` 変種・`is_rejected`・`retry_delay`・`retry_budget`・`with_retry_timing`）があったので、**構造ごと写した**。前回の反省がそのまま効いた形で、設計判断はほぼ発生していない。違うのは GitHub 固有の 2 点だけ —— **403 もレート制限になる**ことと、ヘッダ欠落時のフォールバックが 30 秒でなく 60 秒（GitHub のドキュメントが "at least one minute" と書いている）。
+
+* **Note**: 変異テストで**また**「コンパイルが通らない変異を『落ちなかった』と読み違えかけた」。`retry_delay` から `retry-after` の分岐を消すと `error` 引数が未使用になり `warnings = "deny"` で `error`。**同じ罠を前日に記録したばかりで、翌日踏んだ。** 変異を作ったら、まず `cargo build --tests` が通ることを確認してからテストを回す。
+
+* **Note**: `max_retries` の説明が「最大再試行回数」だけだったので、**90 秒の予算で頭打ちになる**ことを [設定リファレンス](/development/config-reference.md) に足した。`slack` 側も同じ予算を持ちながら未記載だったので同時に書いた —— 挙動を変えた側だけ書くと、ドキュメント上に新しい非対称を作ってしまう。
+
+* **Note**: 振る舞いを変えた後、それを説明する散文が **3 箇所**古いまま残っていた —— `is_retryable` の doc（「rate limiting (429)」＝ステータスで判定していた頃の記述）、component の表（「リトライは冪等なときだけ」と書いた直後に例外を述べて自己矛盾）、`post_graphql` の trait doc（スロットルが `idempotent` の外に出たことに触れていない）。Copilot が前 2 つを、grep が 3 つ目を見つけた。**このセッションだけで同じ形を 4 回やっている。** 挙動を変えたら、変えた対象名ではなく**「その挙動を説明している文」を探す**（`冪等` / `idempotent` / `429` で引いた）。
+
+* **Note**: レビューで **判定条件そのものが的外れだった**ことが分かった。**GraphQL の primary rate limit は HTTP 200 で返る**（"the response status will still be `200`"）、secondary は 200 か 403。**このプラグインは GraphQL しか使っていない**ので、403/429 だけを見る実装では**最も一般的な形が素通り**し、`RATE_LIMITED` の envelope が恒久的な GraphQL エラーとして client に渡っていた。**原因は読んだドキュメントを間違えたこと** —— REST の rate-limit ページを読んで実装し、GraphQL のページを見ていない。「GitHub のドキュメントで裏を取った」と PR に書いたが、**裏を取った対象が実際に使っている API ではなかった**。判定を本文（`errors[].type == "RATE_LIMITED"` 等）ベースに変え、これで 403 の secondary も同じ経路で拾えるようになった。
+
+* **Note**: 待ち時間に**下限 1 秒**を入れた。`retry-after: 0`・過去の reset・時計のずれで 0 秒になると、予算が `max_retries` 回の連打を賄ってしまう —— フォールバック定数が防ごうとしているものそのもの。`slept + delay` も `saturating_add` にした（`Duration` の `Add` は overflow でパニックする）。
+
 * **Update**: [task-source-github](/components/task-source-github.md) に `tests/graphql_http.rs` を追加した。`TcpListener` に canned な HTTP/1.1 応答を並べ、実 `ReqwestTransport` を通して 10 本を固定する —— bearer / User-Agent / Content-Type の 3 ヘッダ、401 → `Unauthorized`、その他ステータス → `Http`、body の 500 文字切り詰め、**冪等なときだけのリトライ**、リトライ枯渇、`errors` 入り 200 の素通し、非 JSON の 200 → `InvalidResponse`。**4 つの変異（User-Agent 削除／401 分岐削除／冪等性ゲート削除／切り詰め削除）がすべてテストを落とすことを確認**してから戻した。
 
 * **Note**: これは [task-source-notion](/components/task-source-notion.md) の同種の穴を塞いだ直後に、**同じ構造が github にも残っている**と気づいて調べたもの。調べてみると **`task-source-slack` の `tests/web_api_http.rs` が既に完全に同じことをやっていた**（TCP モック・retry 規律・ステータス写像）。`agent-ide-herdr` も実 `UnixListener` に実 `SocketTransport` を繋いでいる。**つまりリポジトリには既に正解の型があり、notion と github だけがそこから外れていた。** notion 側を書くとき既存の 2 例を探しておらず、独自の形を発明している。**「初めてのユニットテスト」を書くときは、まず隣のクレートが同じ問題をどう解いているか見る。**
