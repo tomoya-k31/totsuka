@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-08-30T01:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-30T01:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
