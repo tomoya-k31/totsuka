@@ -12,6 +12,12 @@
 
 * **Note**: メッセージを変えると、それを説明していた散文が別の場所で腐る。今回は[設定リファレンス](/development/config-reference.md)の `token` 行に「401 のメッセージは『integration をデータベースに共有したか』を案内するが」と**旧文面を引用した注意書き**が前日の PR で入ったばかりだった。**対象名ではなく「それが何をしていたか」で grep する**という以前の教訓がそのまま効いた（`shared with the database` で引いて発見した）。
 
+* **Update**: [task-source-notion](/components/task-source-notion.md) に 404 用のエラー変種 `ObjectNotFound` を足し、**「共有されているか」の案内を本来の場所へ移した**。401 からこの案内を外した際（同日の 401 メッセージ修正）、案内の行き先が無くなっていた —— 共有されていないリソースは `Notion API returned HTTP 404: {body}` になるだけで、次の一手が 1 つも無かった。Notion は「存在しない」と「共有されていない」を**意図的に区別しない**（`object_not_found` の定義が両方を含む）ので、メッセージは id の誤りと共有漏れの両方を、integration secret / CLI トークンの別に応じて案内する。
+
+* **Note**: `transport.rs` に**このプラグイン初のユニットテスト**を置いた。既存の統合テストは fake transport が変種を直接返すので、**実 transport が HTTP ステータスを変種へ写像すること自体は 1 度も検査されていなかった** —— 404 分岐を丸ごと消しても統合テストは全部緑のままになる。`TcpListener` で 1 発だけ応答するサーバを立て、404 → `ObjectNotFound` / 401 → `Unauthorized` / その他 → `Http` の 3 本を固定した。**「差し込んだ検査が、fake の向こう側まで届いているか」を毎回確かめる。**
+
+* **Note**: 401 の文面を直したとき、設定リファレンスの注意書き (3) を「401 のときに確認するのは workspace とページの可視性」と書いた。**これは 404 の話で、401 の説明としては誤りだった。** 401 と 404 の切り分けを済ませた後に書いたにもかかわらず、直前まで信じていた古い理解が散文側に残った。**コードを直したら、その振る舞いを説明している散文を必ず読み直す。**
+
 ## 2026-08-29
 
 * **Update**: [設定リファレンス](/development/config-reference.md) の `[notion]` `token` を、例・表とも `cmd:ntn auth token --plain` へ更新した。Notion 公式 CLI（`ntn`）に `gh auth token` 相当があり、`cmd:` スキームでそのまま解決できる。実測: `ntn auth token --plain` は exit 0・単一行・`ntn_` 前置・50 文字で、`ntn` が macOS Keychain に置く値（`security find-generic-password -s notion-cli`、`acct` は workspace の UUID）と同長。`NOTION_KEYRING=0` のときは `~/.config/notion/auth.json` に平文で置かれる。**保存先の直接参照ではなくコマンド経由を推奨として書いた** —— Keychain の service/account も `auth.json` も `ntn` の内部都合であり、公開されたコマンドがあるならそちらが契約である。

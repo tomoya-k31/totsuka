@@ -158,9 +158,16 @@ impl ReqwestTransport {
             .await
             .map_err(|e| NotionError::Transport(e.to_string()))?;
         if !status.is_success() {
-            return Err(NotionError::Http {
-                status: status.as_u16(),
-                body: text.chars().take(500).collect(),
+            let body: String = text.chars().take(500).collect();
+            // 404 gets its own variant: it is the one status whose next action
+            // ("is it shared with this token?") differs from "the call failed".
+            return Err(if status == reqwest::StatusCode::NOT_FOUND {
+                NotionError::ObjectNotFound(body)
+            } else {
+                NotionError::Http {
+                    status: status.as_u16(),
+                    body,
+                }
             });
         }
         serde_json::from_str(&text).map_err(|e| NotionError::InvalidResponse(e.to_string()))
@@ -193,6 +200,87 @@ impl NotionTransport for ReqwestTransport {
                 }
                 Err(e) => return Err(e),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serve exactly one HTTP response with `status` and `body`, and return the
+    /// base URL to point a transport at.
+    async fn one_shot(status: u16, body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            // Read the request head; we do not parse it, we only need the
+            // client to finish sending before we reply.
+            let mut buf = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await;
+            let resp = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, resp.as_bytes()).await;
+        });
+        format!("http://{addr}")
+    }
+
+    fn transport(api_url: &str) -> ReqwestTransport {
+        ReqwestTransport::new(TransportSettings {
+            api_url,
+            token: "t",
+            api_version: "2022-06-28",
+            // No retries: a 5xx is retryable and the one-shot server answers once.
+            max_retries: 0,
+            // No throttle — this is a mapping test, not a pacing one.
+            rate_limit_rps: 0,
+        })
+    }
+
+    /// 404 is the one status whose next action differs from "the call failed",
+    /// so it must not fall into the generic [`NotionError::Http`] bucket.
+    #[tokio::test]
+    async fn maps_404_to_object_not_found() {
+        let url = one_shot(404, r#"{"code":"object_not_found"}"#).await;
+        let err = transport(&url)
+            .request(HttpMethod::Get, "/databases/x", None, true)
+            .await
+            .expect_err("404 is an error");
+        match err {
+            NotionError::ObjectNotFound(body) => {
+                assert!(body.contains("object_not_found"), "{body}")
+            }
+            other => panic!("expected ObjectNotFound, got {other:?}"),
+        }
+    }
+
+    /// 401 stays its own variant — and, crucially, is *not* what an unshared
+    /// resource produces.
+    #[tokio::test]
+    async fn maps_401_to_unauthorized() {
+        let url = one_shot(401, r#"{"code":"unauthorized"}"#).await;
+        let err = transport(&url)
+            .request(HttpMethod::Get, "/users/me", None, true)
+            .await
+            .expect_err("401 is an error");
+        assert!(matches!(err, NotionError::Unauthorized), "{err:?}");
+    }
+
+    /// Every other failing status keeps the generic mapping, so adding the 404
+    /// branch did not swallow the rest.
+    #[tokio::test]
+    async fn maps_other_failures_to_http() {
+        let url = one_shot(500, r#"{"code":"internal_server_error"}"#).await;
+        let err = transport(&url)
+            .request(HttpMethod::Get, "/users/me", None, true)
+            .await
+            .expect_err("500 is an error");
+        match err {
+            NotionError::Http { status, .. } => assert_eq!(status, 500),
+            other => panic!("expected Http, got {other:?}"),
         }
     }
 }

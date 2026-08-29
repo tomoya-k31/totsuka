@@ -17,6 +17,23 @@ pub enum NotionError {
         "Notion rejected the token (HTTP 401) → check `token` in `[notion]` of config.toml (or the secret it references). An integration secret may have been revoked; a Notion CLI token (`cmd:ntn auth token --plain`) expires with the CLI login and follows whichever workspace you logged into — after `ntn login`, restart `totsuka run`, because `cmd:` is resolved once at startup. A resource that is only unshared returns 404, not 401"
     )]
     Unauthorized,
+    /// HTTP 404 (`object_not_found`): the id does not exist, **or** it exists
+    /// and is not shared with the token.
+    ///
+    /// Notion deliberately does not distinguish the two — the API defines
+    /// `object_not_found` as "Given the bearer token used, the resource does
+    /// not exist. This error can also indicate that the resource has not been
+    /// shared with owner of the bearer token." So the message names both.
+    ///
+    /// **This, not [`NotionError::Unauthorized`], is where sharing belongs.**
+    /// Measured against the live API: an unshared or unknown id returns 404
+    /// `object_not_found`, while a rejected bearer token returns 401
+    /// `unauthorized`. The 401 message used to send its reader to the sharing
+    /// settings, which cannot cause a 401.
+    #[error(
+        "Notion could not find the object (HTTP 404) → the id in `[notion]` is wrong, or it is not shared with the token. For an integration secret, share the database with the integration; for a Notion CLI token (`cmd:ntn auth token --plain`), check that the page is in the workspace you logged into. Notion's own response: {0}"
+    )]
+    ObjectNotFound(String),
     /// The API returned a non-success HTTP status.
     #[error("Notion API returned HTTP {status}: {body}")]
     Http {
