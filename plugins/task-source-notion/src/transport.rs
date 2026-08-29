@@ -111,6 +111,17 @@ impl ReqwestTransport {
         self
     }
 
+    /// The configured timeout in whole seconds, **rounded up**.
+    ///
+    /// `Duration::as_secs` truncates, so anything under a second would be
+    /// reported as `timed out after 0s` — a message that reads like a bug in
+    /// the reporting rather than a timeout. Production is 30s and never sees
+    /// this; [`with_timeout`](Self::with_timeout) is what makes sub-second
+    /// values reachable, so the rounding belongs next to it.
+    fn timeout_secs(&self) -> u64 {
+        self.timeout.as_millis().div_ceil(1000) as u64
+    }
+
     /// Wait until the throttle permits another request, then reserve the slot.
     async fn throttle(&self) {
         if self.min_interval.is_zero() {
@@ -151,7 +162,7 @@ impl ReqwestTransport {
 
         let response = req.send().await.map_err(|e| {
             if e.is_timeout() {
-                NotionError::Timeout(self.timeout.as_secs())
+                NotionError::Timeout(self.timeout_secs())
             } else {
                 NotionError::Transport(e.to_string())
             }
@@ -339,7 +350,8 @@ mod tests {
             .await
             .expect_err("nothing ever answers");
 
-        assert!(matches!(err, NotionError::Timeout(_)), "{err:?}");
+        // Rounded up: `as_secs` would truncate 500ms to `0`.
+        assert!(matches!(err, NotionError::Timeout(1)), "{err:?}");
         assert!(started.elapsed() >= TEST_TIMEOUT, "{:?}", started.elapsed());
     }
 

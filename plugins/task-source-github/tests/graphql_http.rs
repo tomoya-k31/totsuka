@@ -653,7 +653,10 @@ async fn a_request_that_never_answers_becomes_a_timeout() {
         .await
         .expect_err("nothing ever answers");
 
-    assert!(matches!(err, GithubError::Timeout(_)), "{err:?}");
+    // The reported seconds are rounded **up**: `as_secs` would truncate a
+    // sub-second timeout to `0`, and "timed out after 0s" reads like a bug in
+    // the reporting rather than a timeout.
+    assert!(matches!(err, GithubError::Timeout(1)), "{err:?}");
     assert!(
         started.elapsed() >= TEST_TIMEOUT,
         "must actually wait the timeout, returned after {:?}",

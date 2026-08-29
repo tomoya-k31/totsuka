@@ -62,6 +62,8 @@
 
 * **Note**: 30 秒ハードコードは **3 プラグイン共通**だった。片方だけ塞ぐと同じクラスの穴が残るので 3 つとも入れた。production の変更は各 1 メソッド（`with_timeout`）だけで、既定値は変えていない。
 
+* **Note**: **フックを足したことで、それまで到達しなかった不正確さが到達可能になった。** `Timeout` は `self.timeout.as_secs()` で作られており、`as_secs` は切り捨てるのでサブ秒のタイムアウトは `timed out after 0s` になる。本番は 30 秒なのでこれまで一度も起きなかったが、`with_timeout` がサブ秒を可能にした瞬間に実在するようになった。Copilot が 3 ファイルとも拾った。`as_millis().div_ceil(1000)` で切り上げ、テストも `Timeout(1)` まで固定した。**テスト用フックは production の不変条件を 1 つ緩めている** —— 緩めた先で何が壊れるかを見る。
+
 ## 2026-08-29
 
 * **Update**: [設定リファレンス](/development/config-reference.md) の `[notion]` `token` を、例・表とも `cmd:ntn auth token --plain` へ更新した。Notion 公式 CLI（`ntn`）に `gh auth token` 相当があり、`cmd:` スキームでそのまま解決できる。実測: `ntn auth token --plain` は exit 0・単一行・`ntn_` 前置・50 文字で、`ntn` が macOS Keychain に置く値（`security find-generic-password -s notion-cli`、`acct` は workspace の UUID）と同長。`NOTION_KEYRING=0` のときは `~/.config/notion/auth.json` に平文で置かれる。**保存先の直接参照ではなくコマンド経由を推奨として書いた** —— Keychain の service/account も `auth.json` も `ntn` の内部都合であり、公開されたコマンドがあるならそちらが契約である。

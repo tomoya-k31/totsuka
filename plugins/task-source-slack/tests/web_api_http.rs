@@ -426,7 +426,8 @@ async fn a_request_that_never_answers_becomes_a_timeout() {
         .await
         .unwrap_err();
 
-    assert!(matches!(err, SlackError::Timeout(_)), "{err}");
+    // Rounded up: `as_secs` would truncate 500ms to `0`.
+    assert!(matches!(err, SlackError::Timeout(1)), "{err}");
     assert!(started.elapsed() >= TEST_TIMEOUT, "{:?}", started.elapsed());
 }
 

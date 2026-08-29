@@ -167,6 +167,17 @@ impl ReqwestTransport {
         self
     }
 
+    /// The configured timeout in whole seconds, **rounded up**.
+    ///
+    /// `Duration::as_secs` truncates, so anything under a second would be
+    /// reported as `timed out after 0s` — a message that reads like a bug in
+    /// the reporting rather than a timeout. Production is 30s and never sees
+    /// this; [`with_timeout`](Self::with_timeout) is what makes sub-second
+    /// values reachable, so the rounding belongs next to it.
+    fn timeout_secs(&self) -> u64 {
+        self.timeout.as_millis().div_ceil(1000) as u64
+    }
+
     /// The wait before retry number `attempt`: exactly what GitHub asked for on
     /// a throttle, capped exponential backoff otherwise.
     fn retry_delay(&self, error: &GithubError, attempt: u32) -> Duration {
@@ -192,7 +203,7 @@ impl ReqwestTransport {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
-                    GithubError::Timeout(self.timeout.as_secs())
+                    GithubError::Timeout(self.timeout_secs())
                 } else {
                     GithubError::Transport(e.to_string())
                 }
