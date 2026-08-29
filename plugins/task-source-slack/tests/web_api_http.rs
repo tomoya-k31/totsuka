@@ -409,8 +409,17 @@ async fn silent_server() -> (String, TcpListener) {
 /// How long the timeout tests let a request hang.
 const TEST_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Halfway between one attempt (~500ms) and two (~1000ms).
-const RETRY_BOUNDARY: Duration = Duration::from_millis(800);
+/// The line between "one attempt" and "two". One attempt lands at ~500ms; the
+/// retrying test below forces a 1s backoff so its second attempt lands at
+/// ~2000ms. The boundary sits between them with ~700ms of slack on each side —
+/// the upper bound is the one that matters, because it can only be broken by
+/// *slowness* (a loaded CI runner), and its failure message would then be the
+/// lie "a non-idempotent call was replayed".
+const RETRY_BOUNDARY: Duration = Duration::from_millis(1200);
+
+/// The backoff the retrying timeout test uses, purely to separate one attempt
+/// from two by more than scheduling noise.
+const TIMEOUT_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 
 /// A request that never gets an answer becomes [`SlackError::Timeout`], not a
 /// transport error — different next actions, and nothing pinned which one this
@@ -466,6 +475,7 @@ async fn a_timeout_is_retried_for_an_idempotent_call() {
 
     let started = std::time::Instant::now();
     let err = transport(&base, 1)
+        .with_retry_timing(TIMEOUT_RETRY_BACKOFF, Duration::from_secs(5))
         .with_timeout(TEST_TIMEOUT)
         .call(TokenKind::User, "auth.test", None, true)
         .await

@@ -12,10 +12,8 @@
 //! The mock is a raw TCP loop serving canned HTTP/1.1 responses — no HTTP
 //! server dependency, mirroring the workspace's no-new-deps test policy.
 //!
-//! Not covered: the timeout → [`GithubError::Timeout`] mapping. The 30s timeout
-//! is hard-coded in `ReqwestTransport::new` with no knob to shorten it, so
-//! pinning it would cost 30s of wall clock per run. Reaching it would need a
-//! settings field, which is a production change, not a test one.
+//! The timeout mapping is covered at the bottom of this file. It needed a knob
+//! — `with_timeout` — because the production 30s cannot be waited out per test.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -174,8 +172,17 @@ async fn silent_server() -> (String, TcpListener) {
 /// "one attempt" vs "two attempts", and [`RETRY_BOUNDARY`] sits between them.
 const TEST_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Halfway between one attempt (~500ms) and two (~1000ms).
-const RETRY_BOUNDARY: Duration = Duration::from_millis(800);
+/// The line between "one attempt" and "two". One attempt lands at ~500ms; the
+/// retrying test below forces a 1s backoff so its second attempt lands at
+/// ~2000ms. The boundary sits between them with ~700ms of slack on each side —
+/// the upper bound is the one that matters, because it can only be broken by
+/// *slowness* (a loaded CI runner), and its failure message would then be the
+/// lie "a non-idempotent call was replayed".
+const RETRY_BOUNDARY: Duration = Duration::from_millis(1200);
+
+/// The backoff the retrying timeout test uses, purely to separate one attempt
+/// from two by more than scheduling noise.
+const TIMEOUT_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 
 fn query() -> Value {
     json!({ "query": "{ viewer { login } }" })
@@ -696,6 +703,7 @@ async fn a_timeout_is_retried_for_an_idempotent_call() {
 
     let started = Instant::now();
     let err = transport(&base, 1)
+        .with_retry_timing(TIMEOUT_RETRY_BACKOFF, Duration::from_secs(5))
         .with_timeout(TEST_TIMEOUT)
         .post_graphql(query(), true)
         .await

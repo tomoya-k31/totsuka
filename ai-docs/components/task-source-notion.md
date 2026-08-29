@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-08-30T02:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-08-30T02:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -56,7 +56,7 @@ manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.6
 
 `NotionTransport` を録画レスポンスの fake に差し替え、initialize→poll_loop→`task/submit` push（SubmitHarness で観測・ack 注入）、property_map 正規化→ページ本文取得→update_status の全経路を JSON-RPC 境界越しに結合テスト（`tests/integration.rs`）。取り込み制御（他者 assignee / 実行中 / トリガー不一致）、triggers 空での no-poll、未知 option の update_status 拒否、トークン無効／マップ先プロパティ欠落時の `config/validate`（原因＋次アクション）を検証。実バイナリを stdio で駆動して疎通確認済み。
 
-ただし **fake は `NotionError` の変種を直接返すので、実 transport が HTTP ステータスをその変種へ写像すること自体は結合テストでは検査できない**（写像を丸ごと消しても全部緑になる）。そこは `transport.rs` のユニットテストが持つ —— `TcpListener` で 1 発だけ応答するサーバを立て、401 / Notion の 404 / Notion 以外の 404 / 500 と、本体のある POST を固定する。さらに**応答しないリスナ**（accept せず backlog に任せる。ソケットを閉じると reset ＝ `Transport` になってしまう）に `with_timeout` を短くした transport を当て、`Timeout` へ写ること・**非冪等では再送しないこと**（適用済みで応答だけ失われた可能性がある）・冪等では再送することを固定する。
+ただし **fake は `NotionError` の変種を直接返すので、実 transport が HTTP ステータスをその変種へ写像すること自体は結合テストでは検査できない**（写像を丸ごと消しても全部緑になる）。そこは `transport.rs` のユニットテストが持つ —— `TcpListener` で 1 発だけ応答するサーバを立て、401 / Notion の 404 / Notion 以外の 404 / 500 と、本体のある POST を固定する。さらに**応答しないリスナ**（accept せず backlog に任せる。ソケットを閉じると reset ＝ `Transport` になってしまう）に `with_timeout` を短くした transport を当て、`Timeout` へ写ること・**非冪等では再送しないこと**（適用済みで応答だけ失われた可能性がある）・冪等では再送することを固定する。なお **notion のリトライゲートは `idempotent` 一枚**で、github / slack が持つ「スロットルは拒否済みなので非冪等でも replay 可」という例外（`is_rejected`）は無い。
 
 # 依存
 
