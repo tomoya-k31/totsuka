@@ -1,0 +1,9 @@
+* **Update**: [task-source-github](/components/task-source-github.md) / [task-source-notion](/components/task-source-notion.md) / [task-source-slack](/components/task-source-slack.md) の **3 つとも**、タイムアウト → `Timeout` の写像が一度も検査されていなかった。30 秒が `ReqwestTransport::new` にハードコードで短くする手段が無く、固定すると 1 テストに 30 秒かかるためである。テスト用フック `with_timeout` を足して塞いだ。各 3 本 —— `Timeout` へ写ること、**非冪等では再送しないこと**、冪等では再送すること。
+
+* **Note**: **github と slack では、タイムアウトとスロットルはどちらも retryable でありながら再送可否が逆になる**。スロットル（`is_rejected`）は要求が実行されていないので非冪等でも replay してよい。タイムアウトは**適用済みで応答だけ失われた可能性がある**ので replay してはいけない。この対比が今回一番押さえたかった性質で、実際 `is_rejected` に `Timeout` を混ぜる変異でテストが落ちる。**notion にはこの対比が無い** —— `RateLimited` も `is_rejected` も持たず、ゲートは `idempotent` 一枚なので、notion のテストが固定するのは「非冪等なら再送しない」だけである（混ぜる先の関数が無いので、その変異自体が作れない）。
+
+* **Note**: 応答しないサーバの作り方に一手要る。**ソケットを閉じると reset ＝ `Transport` になってタイムアウトにならない**ので、握ったまま黙る必要がある。ただしタスクを spawn して accept で待たせると、テストより長生きして nextest が `leaky` と報告する。**accept せずに listener を bind するだけ**にすると、カーネルが backlog でハンドシェイクを完了させるのでクライアントは送信して待ち、タスクは 1 つも要らない。listener をテストに返して所有させれば、テスト終了で片付く。
+
+* **Note**: 30 秒ハードコードは **3 プラグイン共通**だった。片方だけ塞ぐと同じクラスの穴が残るので 3 つとも入れた。production の変更は各 1 メソッド（`with_timeout`）だけで、既定値は変えていない。
+
+* **Note**: **フックを足したことで、それまで到達しなかった不正確さが到達可能になった。** `Timeout` は `self.timeout.as_secs()` で作られており、`as_secs` は切り捨てるのでサブ秒のタイムアウトは `timed out after 0s` になる。本番は 30 秒なのでこれまで一度も起きなかったが、`with_timeout` がサブ秒を可能にした瞬間に実在するようになった。Copilot が 3 ファイルとも拾った。`as_millis().div_ceil(1000)` で切り上げ、テストも `Timeout(1)` まで固定した。**テスト用フックは production の不変条件を 1 つ緩めている** —— 緩めた先で何が壊れるかを見る。
