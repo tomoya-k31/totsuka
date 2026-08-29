@@ -12,6 +12,14 @@
 //! The mock is a raw TCP loop serving canned HTTP/1.1 responses — no HTTP
 //! server dependency, mirroring the workspace's no-new-deps test policy.
 //!
+//! **Known gap, pinned here as it stands, not endorsed**: on a 429 this
+//! transport ignores `Retry-After` and backs off on its own 500ms exponential
+//! schedule. `task-source-slack` honours it and has three dedicated tests for
+//! it. GitHub sends `Retry-After` on secondary rate limits and penalises
+//! clients that ignore it, so this is a real asymmetry — closing it is a
+//! production change, so these tests describe today's behaviour rather than
+//! the behaviour we want.
+//!
 //! Not covered: the timeout → [`GithubError::Timeout`] mapping. The 30s timeout
 //! is hard-coded in `ReqwestTransport::new` with no knob to shorten it, so
 //! pinning it would cost 30s of wall clock per run. Reaching it would need a
@@ -48,7 +56,7 @@ impl CannedHttp {
 }
 
 /// Serve `responses` in order, one per connection, recording each raw request.
-/// Returns the base URL and the request log.
+/// Returns the base URL, the request log, and the guard that stops the server.
 async fn mock_server(responses: Vec<CannedHttp>) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -177,10 +185,17 @@ async fn other_failures_carry_their_status() {
     }
 }
 
-/// The body is truncated so a huge error page cannot flood the log.
+/// The body is truncated so a huge error page cannot flood the log — and it is
+/// truncated **by codepoint, not by byte**.
+///
+/// The body is deliberately multibyte. With ASCII the two are
+/// indistinguishable, so an ASCII fixture would pass just as happily against
+/// `text[..500]` — which panics on a non-boundary index, *inside error
+/// handling*, destroying the original HTTP failure. This repo's issue titles
+/// are Japanese, so that body is the realistic one.
 #[tokio::test]
-async fn a_long_error_body_is_truncated() {
-    let long = "x".repeat(2000);
+async fn a_long_error_body_is_truncated_on_a_codepoint_boundary() {
+    let long = "あ".repeat(2000);
     let (base, _log) =
         mock_server(vec![CannedHttp::status("500 Internal Server Error", &long)]).await;
 
@@ -217,10 +232,10 @@ async fn a_server_error_is_retried_for_an_idempotent_call() {
 /// error rather than run twice — replaying it could duplicate a side effect.
 #[tokio::test]
 async fn a_server_error_is_not_retried_for_a_non_idempotent_call() {
-    let (base, log) = mock_server(vec![
-        CannedHttp::status("500 Internal Server Error", "oops"),
-        CannedHttp::ok(json!({ "data": { "ok": true } })),
-    ])
+    let (base, log) = mock_server(vec![CannedHttp::status(
+        "500 Internal Server Error",
+        "oops",
+    )])
     .await;
 
     let err = transport(&base, 1)
@@ -235,8 +250,50 @@ async fn a_server_error_is_not_retried_for_a_non_idempotent_call() {
     assert_eq!(
         log.lock().unwrap().len(),
         1,
-        "the second canned response must be untouched"
+        "a lost mutation response must surface, not re-run"
     );
+}
+
+/// **A rejected token must not be replayed.** `is_retryable` answers `false`
+/// for everything outside 429/5xx/transport, and nothing above pins that: every
+/// other failure test runs with a retry budget of zero, which hides the
+/// vocabulary entirely. Without this, flipping `is_retryable`'s fallthrough to
+/// `true` stays green — and in production an expired token would be replayed on
+/// every `poll_loop` tick, which is exactly what GitHub rate-limits.
+#[tokio::test]
+async fn unauthorized_is_not_retried_even_with_a_budget() {
+    let (base, log) = mock_server(vec![CannedHttp::status("401 Unauthorized", "nope")]).await;
+
+    let err = transport(&base, 1)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("401 is an error");
+
+    assert!(matches!(err, GithubError::Unauthorized), "{err:?}");
+    assert_eq!(
+        log.lock().unwrap().len(),
+        1,
+        "a rejected token is not a transient failure"
+    );
+}
+
+/// The same for a 4xx that is not 429: retryable is 429 and 5xx, not "any
+/// failing status". A budget is given so the absence of a retry is a result,
+/// not an artefact of `max_retries = 0`.
+#[tokio::test]
+async fn a_client_error_is_not_retried_even_with_a_budget() {
+    let (base, log) = mock_server(vec![CannedHttp::status("422 Unprocessable", "bad query")]).await;
+
+    let err = transport(&base, 1)
+        .post_graphql(query(), true)
+        .await
+        .expect_err("422 is an error");
+
+    assert!(
+        matches!(err, GithubError::Http { status: 422, .. }),
+        "{err:?}"
+    );
+    assert_eq!(log.lock().unwrap().len(), 1, "422 is not transient");
 }
 
 /// Rate limiting is retryable too, on the same gate.
