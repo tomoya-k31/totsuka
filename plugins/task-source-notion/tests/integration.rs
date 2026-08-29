@@ -24,6 +24,8 @@ enum Canned {
     Data(Value),
     /// Simulate an HTTP 401 (bad token).
     Unauthorized,
+    /// Simulate an HTTP 404 (`object_not_found`) carrying Notion's own body.
+    NotFound(String),
 }
 
 /// One recorded request: its method, path, and body.
@@ -75,6 +77,7 @@ impl NotionTransport for FakeTransport {
             match next {
                 Some(Canned::Data(v)) => Ok(v),
                 Some(Canned::Unauthorized) => Err(NotionError::Unauthorized),
+                Some(Canned::NotFound(body)) => Err(NotionError::ObjectNotFound(body)),
                 None => Err(NotionError::InvalidResponse("no canned response".into())),
             }
         }
@@ -713,6 +716,52 @@ async fn update_status_rejects_unknown_option() {
     // pass if the two reads were replaced by a read and a write.
     let methods: Vec<HttpMethod> = shared.requests().iter().map(|r| r.method).collect();
     assert_eq!(methods, [HttpMethod::Get, HttpMethod::Get], "{methods:?}");
+}
+
+/// A database the token cannot see comes back as 404 `object_not_found`, and
+/// **that** is where the sharing guidance lives — not on the 401, which the
+/// live API only returns for a rejected bearer token.
+#[tokio::test]
+async fn config_validate_guides_on_a_database_it_cannot_see() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+
+    // users/me succeeds (the token is fine), then the database 404s.
+    shared.push(Canned::Data(json!({ "id": "u_me" })));
+    shared.push(Canned::NotFound(
+        json!({
+            "object": "error",
+            "status": 404,
+            "code": "object_not_found",
+            "message": "Could not find database with ID: db.",
+        })
+        .to_string(),
+    ));
+    let resp = call(
+        &mut srv,
+        1,
+        "config/validate",
+        json!({ "config": init_config(), "projects": one_database().0, "repositories": one_database().1 }),
+    )
+    .await;
+    let result = resp
+        .result
+        .expect("config/validate always succeeds at the RPC level");
+    assert_eq!(result["valid"], false);
+    let errors = result["errors"].as_array().unwrap();
+    // The next action for both token kinds, plus Notion's own body — a check
+    // for "404" alone would stay green if the guidance were deleted.
+    assert!(
+        errors.iter().any(|e| {
+            let e = e.as_str().unwrap();
+            e.contains("404")
+                && e.contains("not shared with the token")
+                && e.contains("integration secret")
+                && e.contains("Notion CLI token")
+                && e.contains("object_not_found")
+        }),
+        "expected a 404 message naming both token kinds, got {errors:?}"
+    );
 }
 
 #[tokio::test]
