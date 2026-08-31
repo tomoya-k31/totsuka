@@ -128,19 +128,25 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
 | secret | スコープ | 用途 | 失効日 |
 |---|---|---|---|
 | `RELEASE_PLEASE_TOKEN` | `totsuka` のみ / Contents + Pull requests: RW | Release PR を実 identity で作り CI を走らせる | （記録なし） |
-| `HOMEBREW_TAP_TOKEN` | `homebrew-tap` のみ / Contents: RW | tap へ formula の bump を push する | **未発行** |
+| `HOMEBREW_TAP_TOKEN` | `homebrew-tap` のみ / Contents: RW | tap へ formula の bump を push する | **2026-09-30**（2026-08-31 発行 / 30 日） |
 
 **2 本を兼用しない。** `RELEASE_PLEASE_TOKEN` を tap まで届くよう広げると、リリーストークンの爆発半径とローテーション周期が tap に結合する。
 
-`HOMEBREW_TAP_TOKEN` が失効すると `git clone` が落ち、**リリース run が赤くなる**（タグ・Release・アセットは既に公開済みで無事）。発行したら失効日を上の表に書くこと。
+`HOMEBREW_TAP_TOKEN` が失効すると **リリース run が赤くなる**（タグ・Release・アセットは既に公開済みで無事）。発行し直したら失効日を上の表に書くこと。
+
+**落ちるのは `git clone` ではなく `git push`。** tap 自体が public なので、トークンが空でも失効していても **clone は成功する**（実測: `git ls-remote 'https://x-access-token:@github.com/tomoya-k31/homebrew-tap.git'` は rc=0）。`sed` も直後の `grep -q` の表明も通り、最後の push で初めて認証が要る。赤くなった run の原因を clone のログに探しても何も無い。
+
+**失効日が短いことを前提に運用する。** 現行の 30 日はリリース間隔より短くなりうるので、**失効後の最初のリリースは高い確率で赤くなる**。上の表の日付を過ぎていたら、リリース前に PAT を再発行して `HOMEBREW_TAP_TOKEN` を更新すること。
 
 **復旧は job の再実行ではない。** 再実行すると tarball が作り直され、`tar`/`gzip` が mtime を埋め込むためバイト同一にならず、`--clobber` が公開済みアセットを別の sha256 のものへ差し替えてしまう。 tap の `Formula/totsuka.rb` を公開済みアセットの値に手で合わせて push すること。
 
-## public 化までステップを止めている可視性ゲート
+## 可視性ゲート（2026-08-31 に発火済み）
 
-Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で取る。本リポジトリが private である間、リリースアセットの URL は未認証では 404 になり、**tap 経路は動かない**。
+Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で取る。本リポジトリが private である間、リリースアセットの URL は未認証では 404 になり、**tap 経路は動かなかった**。
 
-そのため bump ステップは `if: ${{ !github.event.repository.private }}` でゲートしてある。**public 化した瞬間に自分で有効になるので、外す作業は要らない。**
+そのため bump ステップは `if: ${{ !github.event.repository.private }}` でゲートしてある。**2026-08-31 の public 化で自分で有効になった**（未認証 `curl` が 200 を返すことを実測済み）。外す作業は無かった。
+
+**ゲートの副作用が 1 度出た。** v0.6.0（2026-08-29）は private 中のリリースだったため bump がスキップされ、formula が v0.5.0 に取り残された。v0.5.0 のアセットは実在するので `brew install` は**成功したうえで古いものを入れる**。public 化に合わせて手で 0.6.0 へ合わせた（[homebrew-tap#1](https://github.com/tomoya-k31/homebrew-tap/pull/1)）。**private のままリリースを重ねると、そのぶん静かに開く差**なので、次に可視性を戻すことがあれば同じ手当てが要る。
 
 シークレットの有無でゲートしていないのは意図的で、そちらは危険を読み違える（失効トークンは素通りする一方、未登録のシークレットが毎リリース緑で skip され tap が永久に遅れる）。詳細は [Homebrew tap](/infrastructure/homebrew-tap.md)。
 
