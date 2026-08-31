@@ -4,7 +4,7 @@ title: ADR-0053 配布を Homebrew tap に寄せ、formula は別リポジトリ
 description: "sudo 5 本の tarball 手配置をやめ brew install / brew upgrade へ移す決定。formula は tomoya-k31/homebrew-tap に置き、リリースジョブが version と sha256 の 2 行だけを書き換えて push する。本リポジトリ内の Formula/ 案はブランチ保護で自動化できないため却下。tap が実際に効くのは本リポジトリが public になってから。"
 resource: https://github.com/tomoya-k31/homebrew-tap
 tags: [decision, distribution, homebrew, release, install, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-31T00:00:00Z }
 status: stable
 owner: tomoya-k31
 sources:
@@ -29,8 +29,15 @@ sources:
 
 stable。ワークフロー配線と tap リポジトリの作成は本 ADR と同一 PR。
 
-**未検収。** 本リポジトリが private である限り brew 経路は動かない（下の「public 化が前提条件」）。
-`brew install` を通した実測が取れていないので `verified` は付けていない。
+**一部検収済み（2026-08-31）。** 2026-08-31 に本リポジトリを public 化し、`brew install`
+→ `brew test` → `doctor` を実測して通した（結果は下の「public 化の後に実測すること」）。
+
+**それでも `verified` は付けていない。** ADR が挙げた実測項目のうち **`brew trust` の
+対話プロンプト**がまだ測れていないためである。検証機では 8/22 の非対話実行で
+`trust.json` に `tomoya-k31/tap/totsuka` が既に記録されており、**プロンプトが出る経路に
+原理的に入らない**。また実測は開発機で行っており、ADR が指定した「totsuka を一度も
+入れたことのない Mac」ではない（レイアウト検証の中心である `brew test` は `test do` が
+XDG を張り替えるので隔離されているが、その 1 点だけである）。
 
 # Context
 
@@ -165,16 +172,43 @@ public 化の後に残る手順は [Homebrew tap](/infrastructure/homebrew-tap.m
 - tap 名の解決規則と、`totsuka` が homebrew-core と衝突しないこと
 - **リリースアセットが未認証 `curl` で 404 になること**（= public 化が前提条件であること）
 
-public 化の後に実測すること（totsuka を一度も入れたことのない Mac で 1 回）:
+public 化の後に実測すること（2026-08-31 に実施済み、結果は下記）:
 
 ```sh
 brew install tomoya-k31/tap/totsuka
-xattr -l "$(brew --prefix)/bin/totsuka"                                    # 空であること
-xattr -l "$(brew --prefix totsuka)/libexec/totsuka/plugins/github/github"  # 空であること
-codesign -dv --verbose=2 "$(brew --prefix)/bin/totsuka"                    # adhoc
+
+# quarantine が「無い」ことを見る。`xattr -l` が空であることではない（下記）。
+# `grep -q … && echo NG` と書いてはいけない —— 正常系（quarantine 無し）で grep が
+# 1 を返すため、`set -e` 下では「OK のときだけ止まる」検査になる。
+for f in "$(brew --prefix)/bin/totsuka" \
+         "$(brew --prefix totsuka)/libexec/totsuka/plugins/github/github"; do
+  if xattr "$f" | grep -q com.apple.quarantine; then echo "NG  $f"; else echo "ok  $f"; fi
+done
+
+codesign -dv --verbose=2 "$(brew --prefix)/bin/totsuka"   # adhoc
 brew test totsuka
 totsuka doctor    # 本命。quarantine されたプラグインは無言で殺され、
                   # doctor は "crashed or exited" としか言えない
 ```
 
+**当初この検査を「`xattr -l` が空であること」と書いていたが、それは誤りだった。**
+macOS 13 以降、システムは実行された非システムバイナリに `com.apple.provenance` を
+付ける。実測（macOS 15.7.3）では `brew` / `jq` / `gh` を含む**すべての brew バイナリ**に
+付いており、totsuka 固有でも tap 固有でもない（`/bin/ls` のようなシステム同梱には付かない）。
+空を期待する検査は誰がやっても falsify されるので、**見るべきは `com.apple.quarantine` が
+無いこと**である。構造的な主張（`curl` は quarantine xattr を書かない）は変わらず成立する。
+
 `totsuka doctor` が鋭い端である。quarantine された**プラグイン**はメインのバイナリが動いたまま黙って落ちるので、`--version` が通ることは何の証拠にもならない。
+
+実測結果（macOS 15.7.3 / Homebrew 6.0.20 / totsuka 0.6.0）:
+
+- `com.apple.quarantine` は本体・プラグインとも**無し**
+- `codesign` は両方とも `flags=0x2(adhoc)` / `TeamIdentifier=not set`
+- `brew test totsuka` が **exit 0**。`test do` が XDG を `testpath` へ張り替えるので、
+  この検査だけは開発機でも既存の設定・プラグインに汚染されない
+- 新規ユーザー相当の `doctor`（一時 XDG）で
+  `bundled-plugins — 6 in .../bin/../libexec/totsuka/plugins` を確認。探索順
+  `<exe dir>/../libexec/totsuka/plugins` が実環境で解決している
+- **`brew trust` の対話プロンプトは未確認のまま**。検証機では 8/22 の非対話実行で
+  `trust.json` に `tomoya-k31/tap/totsuka` が既に記録されており、プロンプトが出る
+  経路に入らなかった
