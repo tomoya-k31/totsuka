@@ -165,16 +165,37 @@ public 化の後に残る手順は [Homebrew tap](/infrastructure/homebrew-tap.m
 - tap 名の解決規則と、`totsuka` が homebrew-core と衝突しないこと
 - **リリースアセットが未認証 `curl` で 404 になること**（= public 化が前提条件であること）
 
-public 化の後に実測すること（totsuka を一度も入れたことのない Mac で 1 回）:
+public 化の後に実測すること（2026-08-31 に実施済み、結果は下記）:
 
 ```sh
 brew install tomoya-k31/tap/totsuka
-xattr -l "$(brew --prefix)/bin/totsuka"                                    # 空であること
-xattr -l "$(brew --prefix totsuka)/libexec/totsuka/plugins/github/github"  # 空であること
-codesign -dv --verbose=2 "$(brew --prefix)/bin/totsuka"                    # adhoc
+# quarantine が「無い」ことを見る。`xattr -l` が空であることではない（下記）
+xattr "$(brew --prefix)/bin/totsuka"                                    | grep -q com.apple.quarantine && echo NG
+xattr "$(brew --prefix totsuka)/libexec/totsuka/plugins/github/github"  | grep -q com.apple.quarantine && echo NG
+codesign -dv --verbose=2 "$(brew --prefix)/bin/totsuka"                 # adhoc
 brew test totsuka
 totsuka doctor    # 本命。quarantine されたプラグインは無言で殺され、
                   # doctor は "crashed or exited" としか言えない
 ```
 
+**当初この検査を「`xattr -l` が空であること」と書いていたが、それは誤りだった。**
+macOS 13 以降、システムは実行された非システムバイナリに `com.apple.provenance` を
+付ける。実測（macOS 15.7.3）では `brew` / `jq` / `gh` を含む**すべての brew バイナリ**に
+付いており、totsuka 固有でも tap 固有でもない（`/bin/ls` のようなシステム同梱には付かない）。
+空を期待する検査は誰がやっても falsify されるので、**見るべきは `com.apple.quarantine` が
+無いこと**である。構造的な主張（`curl` は quarantine xattr を書かない）は変わらず成立する。
+
 `totsuka doctor` が鋭い端である。quarantine された**プラグイン**はメインのバイナリが動いたまま黙って落ちるので、`--version` が通ることは何の証拠にもならない。
+
+実測結果（macOS 15.7.3 / Homebrew 6.0.20 / totsuka 0.6.0）:
+
+- `com.apple.quarantine` は本体・プラグインとも**無し**
+- `codesign` は両方とも `flags=0x2(adhoc)` / `TeamIdentifier=not set`
+- `brew test totsuka` が **exit 0**。`test do` が XDG を `testpath` へ張り替えるので、
+  この検査だけは開発機でも既存の設定・プラグインに汚染されない
+- 新規ユーザー相当の `doctor`（一時 XDG）で
+  `bundled-plugins — 6 in .../bin/../libexec/totsuka/plugins` を確認。探索順
+  `<exe dir>/../libexec/totsuka/plugins` が実環境で解決している
+- **`brew trust` の対話プロンプトは未確認のまま**。検証機では 8/22 の非対話実行で
+  `trust.json` に `tomoya-k31/tap/totsuka` が既に記録されており、プロンプトが出る
+  経路に入らなかった
