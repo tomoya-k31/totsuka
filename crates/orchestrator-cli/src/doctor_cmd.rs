@@ -1312,6 +1312,10 @@ fn count_spool_backlog(dir: &Path) -> usize {
 /// synthetic event (E-04: it answers 200 immediately). `doctor` usually runs
 /// while the orchestrator is *not* running, so an absent socket is expected and
 /// reported ok — the probe only asserts health when a receiver is actually live.
+///
+/// "Actually live" is settled by connecting, not by the socket file existing:
+/// the file outlives the listener, and the token gates below return before the
+/// authenticated probe would have found that out.
 fn check_hook_socket(
     cx: &Cx,
     cfg: &RootConfig,
@@ -1337,6 +1341,24 @@ fn check_hook_socket(
                 "no live receiver at {} (expected unless `totsuka run` is active)",
                 socket_path.display()
             ),
+        ));
+        return;
+    }
+    // `is_socket` reads the file *type* and nothing else, so a socket left
+    // behind by a previous `totsuka run` passes it. Connect before any branch
+    // below says a receiver is live, because the token gates return early and
+    // would otherwise assert a liveness that nothing measured — a stale socket
+    // plus an `op://` token reported "a receiver is live" while `lsof` showed
+    // no holder at all. Connecting needs no token, so it is the one liveness
+    // proof available on every path.
+    if let Err(e) = can_connect(&socket_path) {
+        checks.push(Check::warn(
+            "hook-socket",
+            format!(
+                "socket {} exists but is not accepting connections: {e}",
+                socket_path.display()
+            ),
+            STALE_SOCKET_ACTION,
         ));
         return;
     }
@@ -1398,17 +1420,17 @@ fn check_hook_socket(
             ),
             "check the `totsuka run` logs for the hook receiver",
         )),
-        // A socket file that exists but refuses/drops the connection is almost
-        // always a stale socket from a prior `totsuka run` (the file lingers on
-        // Linux after the listener exits). Since `doctor` must pass when the
-        // orchestrator is *not* running, this is advisory, not a failure.
+        // The connect above already passed, so reaching here means the
+        // listener went away between the two calls, or answered nothing
+        // parseable. Same advice either way, and still advisory: `doctor` must
+        // pass when the orchestrator is *not* running.
         Err(e) => checks.push(Check::warn(
             "hook-socket",
             format!(
                 "socket {} exists but is not accepting connections: {e}",
                 socket_path.display()
             ),
-            "the receiver is not running, or this is a stale socket — ignore if `totsuka run` is not active, else remove the stale socket file and restart",
+            STALE_SOCKET_ACTION,
         )),
     }
 }
@@ -1433,6 +1455,28 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(not(unix))]
 fn is_executable(path: &Path) -> bool {
     path.is_file()
+}
+
+/// What to tell the operator when the socket file is there but nothing answers.
+/// Shared by the pre-probe and the post-probe arm so the two cannot drift.
+const STALE_SOCKET_ACTION: &str = "the receiver is not running, or this is a stale socket — ignore if `totsuka run` is not active, else remove the stale socket file and restart";
+
+/// Whether a listener actually accepts a connection on `path`. `is_socket`
+/// only proves the inode is a socket; this is what separates a live receiver
+/// from a file left behind by a previous run. Deliberately connect-only — it
+/// needs no token, so it can run before the `op://` / `cmd:` gates that skip
+/// the authenticated probe.
+#[cfg(unix)]
+fn can_connect(path: &Path) -> io::Result<()> {
+    std::os::unix::net::UnixStream::connect(path).map(|_| ())
+}
+
+#[cfg(not(unix))]
+fn can_connect(_path: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "UDS hook socket probe is only supported on Unix",
+    ))
 }
 
 /// Whether `path` is an existing Unix domain socket (a live receiver's socket).
