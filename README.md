@@ -46,10 +46,10 @@ quarantine attribute to clear. Homebrew fetches the release tarball with plain
 `curl`, which does not set `com.apple.quarantine` — measured on macOS 15.7.3,
 on the binary and on the bundled plugins.
 
-Homebrew requires trust for third-party taps, but **naming the formula grants it
-in the same command**. The install prints one line —
-`==> Trusted formula tomoya-k31/tap/totsuka` — and carries on. There is no
-prompt to answer.
+Homebrew requires trust for third-party taps.
+**Naming the formula grants it in the same command**: the install prints one
+line — `==> Trusted formula tomoya-k31/tap/totsuka` — and carries on. There is
+no prompt to answer.
 
 Upgrade with `brew upgrade totsuka`; the release workflow points the formula at
 each new release.

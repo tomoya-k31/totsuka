@@ -48,9 +48,10 @@ brew install tomoya-k31/tap/totsuka
 `com.apple.quarantine` を書かないためです（macOS 15.7.3 で本体・同梱プラグイン
 とも実測）。
 
-Homebrew はサードパーティ tap に trust を要求しますが、**formula を名指しすれば
-同じコマンドの中で付与されます**。`==> Trusted formula tomoya-k31/tap/totsuka`
-という 1 行が出て、そのまま進みます。答えるべきプロンプトはありません。
+Homebrew はサードパーティ tap に trust を要求しますが、
+**formula を名指しすれば同じコマンドの中で付与されます**。
+`==> Trusted formula tomoya-k31/tap/totsuka` という 1 行が出て、そのまま進みます。
+答えるべきプロンプトはありません。
 
 更新は `brew upgrade totsuka` です。リリースのたびにワークフローが formula を
 新しいリリースへ向けます。
@@ -58,8 +59,9 @@ Homebrew はサードパーティ tap に trust を要求しますが、**formul
 ### ビルド済み tarball（GitHub Releases）
 
 Homebrew を使わないマシン向けです。[最新リリース](https://github.com/tomoya-k31/totsuka/releases/latest)
-から macOS ユニバーサル tarball をダウンロードします。`totsuka` **と同梱プラグ
-イン**が入っているので、ツリーごと配置してバイナリを `PATH` に symlink します:
+から macOS ユニバーサル tarball をダウンロードします。
+`totsuka` **と同梱プラグイン**が入っているので、ツリーごと配置してバイナリを
+`PATH` に symlink します:
 
 ```sh
 tar -xzf totsuka-*-macos-universal.tar.gz
@@ -110,8 +112,8 @@ totsuka run             # 実行: fetch -> dispatch -> 監視 -> publish
 ます。これは `doctor` が「まだ人間がやることが残っている」と報告しているので
 あって、setup 自体の失敗ではありません。
 
-**シークレットを全部登録しても、`totsuka run` を一度打つまで `doctor` は赤の
-ままです。** 状態 DB が無いあいだ `state-db` チェックが fail し、これを作るのは
+**シークレットを全部登録しても、`totsuka run` を一度打つまで `doctor` は赤のままです。**
+状態 DB が無いあいだ `state-db` チェックが fail し、これを作るのは
 `run` だけだからです。上の順番どおり「登録 → 1 回実行 → `totsuka doctor`」で
 終了コード 0 になります。`warn:` の行（hook トークン未設定、同梱プラグイン無し
 など）は残ることがありますが、これらは助言であって失敗ではありません。
