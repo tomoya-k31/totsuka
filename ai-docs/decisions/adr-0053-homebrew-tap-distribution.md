@@ -4,7 +4,7 @@ title: ADR-0053 配布を Homebrew tap に寄せ、formula は別リポジトリ
 description: "sudo 5 本の tarball 手配置をやめ brew install / brew upgrade へ移す決定。formula は tomoya-k31/homebrew-tap に置き、リリースジョブが version と sha256 の 2 行だけを書き換えて push する。本リポジトリ内の Formula/ 案はブランチ保護で自動化できないため却下。tap が実際に効くのは本リポジトリが public になってから。"
 resource: https://github.com/tomoya-k31/homebrew-tap
 tags: [decision, distribution, homebrew, release, install, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-08-31T00:00:00Z }
 status: stable
 owner: tomoya-k31
 sources:
@@ -29,8 +29,15 @@ sources:
 
 stable。ワークフロー配線と tap リポジトリの作成は本 ADR と同一 PR。
 
-**未検収。** 本リポジトリが private である限り brew 経路は動かない（下の「public 化が前提条件」）。
-`brew install` を通した実測が取れていないので `verified` は付けていない。
+**一部検収済み（2026-08-31）。** 2026-08-31 に本リポジトリを public 化し、`brew install`
+→ `brew test` → `doctor` を実測して通した（結果は下の「public 化の後に実測すること」）。
+
+**それでも `verified` は付けていない。** ADR が挙げた実測項目のうち **`brew trust` の
+対話プロンプト**がまだ測れていないためである。検証機では 8/22 の非対話実行で
+`trust.json` に `tomoya-k31/tap/totsuka` が既に記録されており、**プロンプトが出る経路に
+原理的に入らない**。また実測は開発機で行っており、ADR が指定した「totsuka を一度も
+入れたことのない Mac」ではない（レイアウト検証の中心である `brew test` は `test do` が
+XDG を張り替えるので隔離されているが、その 1 点だけである）。
 
 # Context
 
@@ -169,10 +176,16 @@ public 化の後に実測すること（2026-08-31 に実施済み、結果は�
 
 ```sh
 brew install tomoya-k31/tap/totsuka
-# quarantine が「無い」ことを見る。`xattr -l` が空であることではない（下記）
-xattr "$(brew --prefix)/bin/totsuka"                                    | grep -q com.apple.quarantine && echo NG
-xattr "$(brew --prefix totsuka)/libexec/totsuka/plugins/github/github"  | grep -q com.apple.quarantine && echo NG
-codesign -dv --verbose=2 "$(brew --prefix)/bin/totsuka"                 # adhoc
+
+# quarantine が「無い」ことを見る。`xattr -l` が空であることではない（下記）。
+# `grep -q … && echo NG` と書いてはいけない —— 正常系（quarantine 無し）で grep が
+# 1 を返すため、`set -e` 下では「OK のときだけ止まる」検査になる。
+for f in "$(brew --prefix)/bin/totsuka" \
+         "$(brew --prefix totsuka)/libexec/totsuka/plugins/github/github"; do
+  if xattr "$f" | grep -q com.apple.quarantine; then echo "NG  $f"; else echo "ok  $f"; fi
+done
+
+codesign -dv --verbose=2 "$(brew --prefix)/bin/totsuka"   # adhoc
 brew test totsuka
 totsuka doctor    # 本命。quarantine されたプラグインは無言で殺され、
                   # doctor は "crashed or exited" としか言えない

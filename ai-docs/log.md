@@ -12,6 +12,8 @@
 
 * **Note**: **0.3.0 → 0.6.0 の実運用アップグレードで壊れたのは 3 層あった。** ① config の形（`poll_interval_secs` の移動でパースエラー。その裏に `trigger.project_status` → `status`（#575）、`on_success.set_status` → `status`（#574）、`plugins/*.toml` の廃止と `[[projects]]` 新設（#554）が隠れていた）② プラグインのバイナリが全て protocol `<0.6` で起動拒否 ③ 本体。**①は最初のパースエラーが後続を隠す形**で、`poll_interval_secs` だけ直しても次の起動でまた止まる。[ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) が「移行はしない」と決めているので、この段差は手で越えることになる。
 
+* **Note**: **検査を `cmd | grep -q X && echo NG` と書くと、`set -e` 下で正常系だけが止まる。** quarantine が「無い」ことを見たいので、正常系では `grep` が 1 を返して行全体が失敗になる —— つまり **OK のときだけ落ちる検査**である。`if … then NG else ok fi` にして常に 0 で終わらせる。Copilot が拾った。**「異常を検出したら真」の道具で「正常であること」を書くと真偽が反転する。**
+
 * **Update**: リポジトリを **public へ切り替えた**（#506）。[release-runbook](/operations/release-runbook.md) のトークン表に `HOMEBREW_TAP_TOKEN` の失効日（2026-09-30）を記録し、可視性ゲートの節を「public 化までステップを止めている」から「発火済み」へ書き換えた。
 
 * **Note**: **`pull_request_creation_policy` は可視性変更を跨いで保たれた。** #506 の中心的な未確認事項で、`collaborators_only` が既定へ戻る可能性を疑っていたが、実測では戻らず再適用は不要だった。`allow_forking` は public では変更できないが、`collaborators_only` がある以上 fork されても PR は作れないので目的は満たされている。
