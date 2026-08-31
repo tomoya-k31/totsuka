@@ -11,6 +11,15 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.6.1](https://github.com/tomoya-k31/totsuka/compare/v0.6.0...v0.6.1) (2026-08-31)
+
+
+### Documentation
+
+* **adr-0053:** xattr の検査基準を実測へ直し、brew install の結果を記録する ([#600](https://github.com/tomoya-k31/totsuka/issues/600)) ([5cabb8b](https://github.com/tomoya-k31/totsuka/commit/5cabb8b0e5f94decaceecfcf5d09444822c061a6))
+* **release-runbook:** トークン失効日を記録し、失効時に落ちる場所を実測へ直す ([#598](https://github.com/tomoya-k31/totsuka/issues/598)) ([23f4965](https://github.com/tomoya-k31/totsuka/commit/23f496546b89cadae502f7e89d63dba0fc6e3b59))
+* インストール手順を Homebrew 主導へ書き換える ([#601](https://github.com/tomoya-k31/totsuka/issues/601)) ([5cbc797](https://github.com/tomoya-k31/totsuka/commit/5cbc797ce75b263bd79fda8b3ba9f88780b81ec1))
+
 ## [0.6.0](https://github.com/tomoya-k31/totsuka/compare/v0.5.0...v0.6.0) (2026-08-29)
 
 
