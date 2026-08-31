@@ -35,9 +35,28 @@ agent IDE and point a workflow at it:
 
 ## Install
 
+### Homebrew
+
+```sh
+brew install tomoya-k31/tap/totsuka
+```
+
+That is the whole install: no `sudo`, no tree to place by hand, and no
+quarantine attribute to clear. Homebrew fetches the release tarball with plain
+`curl`, which does not set `com.apple.quarantine` — measured on macOS 15.7.3,
+on the binary and on the bundled plugins.
+
+Homebrew requires trust for third-party taps, but **naming the formula grants it
+in the same command**. The install prints one line —
+`==> Trusted formula tomoya-k31/tap/totsuka` — and carries on. There is no
+prompt to answer.
+
+Upgrade with `brew upgrade totsuka`; the release workflow points the formula at
+each new release.
+
 ### Prebuilt tarball (GitHub Releases)
 
-Download the macOS universal tarball from the
+For a machine without Homebrew. Download the macOS universal tarball from the
 [latest release](https://github.com/tomoya-k31/totsuka/releases/latest). It
 contains `totsuka` **and the bundled plugins**, so keep the tree together and
 symlink the binary onto your `PATH`:

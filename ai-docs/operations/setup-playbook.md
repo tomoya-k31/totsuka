@@ -30,6 +30,18 @@ owner: tomoya-k31
 
 ## 1. 配置
 
+```bash
+brew install tomoya-k31/tap/totsuka
+```
+
+これで終わり。`sudo` も、ツリーの手配置も、`xattr` も要らない（[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md)）。**同梱プラグインは formula が `libexec/totsuka/plugins` へ置き**、`totsuka` の探索順（`<exe dir>/../libexec/totsuka/plugins`）がそこに当たるので、`setup` はパス指定なしでプラグインを入れられる。
+
+trust について: Homebrew はサードパーティ tap に trust を要求するが、**formula を名指しすれば同じコマンドの中で付与される**。`==> Trusted formula tomoya-k31/tap/totsuka` の 1 行が出て進むだけで、**答えるべきプロンプトは無い**（対話・非対話とも実測）。
+
+更新は `brew upgrade totsuka`。
+
+### Homebrew を使わない場合
+
 [最新リリース](https://github.com/tomoya-k31/totsuka/releases/latest) の macOS ユニバーサル tarball を落とす。**ツリーごと**置くこと — `totsuka` は同梱プラグインを自分の隣から探すので、バイナリだけ移すと `setup` がプラグインを見つけられない。
 
 ```bash
@@ -40,7 +52,7 @@ sudo ln -sf /usr/local/lib/totsuka/totsuka /usr/local/bin/totsuka
 sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 ```
 
-`xattr` を忘れると Gatekeeper が**プラグインの起動だけ**を黙って殺し、`doctor` は「crashed or exited」としか言えない。本体は動くので原因が見えにくい。
+**この経路でだけ `xattr` が要る。** ブラウザでダウンロードすると `com.apple.quarantine` が付き、Gatekeeper が**プラグインの起動だけ**を黙って殺す。`doctor` は「crashed or exited」としか言えず、本体は動くので原因が見えにくい。brew 経路では素の `curl` が取るので、この属性は付かない（実測）。
 
 ## 2. `totsuka setup`
 

@@ -37,11 +37,29 @@ totsuka はエージェントをオーケストレーションするツールで
 
 ## インストール
 
+### Homebrew
+
+```sh
+brew install tomoya-k31/tap/totsuka
+```
+
+これだけです。`sudo` も、ツリーを手で配置することも、quarantine 属性を除去する
+ことも要りません。Homebrew は素の `curl` でリリースアセットを取り、`curl` は
+`com.apple.quarantine` を書かないためです（macOS 15.7.3 で本体・同梱プラグイン
+とも実測）。
+
+Homebrew はサードパーティ tap に trust を要求しますが、**formula を名指しすれば
+同じコマンドの中で付与されます**。`==> Trusted formula tomoya-k31/tap/totsuka`
+という 1 行が出て、そのまま進みます。答えるべきプロンプトはありません。
+
+更新は `brew upgrade totsuka` です。リリースのたびにワークフローが formula を
+新しいリリースへ向けます。
+
 ### ビルド済み tarball（GitHub Releases）
 
-[最新リリース](https://github.com/tomoya-k31/totsuka/releases/latest) から macOS
-ユニバーサル tarball をダウンロードします。`totsuka` **と同梱プラグイン**が入って
-いるので、ツリーごと配置してバイナリを `PATH` に symlink します:
+Homebrew を使わないマシン向けです。[最新リリース](https://github.com/tomoya-k31/totsuka/releases/latest)
+から macOS ユニバーサル tarball をダウンロードします。`totsuka` **と同梱プラグ
+イン**が入っているので、ツリーごと配置してバイナリを `PATH` に symlink します:
 
 ```sh
 tar -xzf totsuka-*-macos-universal.tar.gz

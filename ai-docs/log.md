@@ -2,6 +2,14 @@
 
 ## 2026-08-31
 
+* **Update**: README（英日）と [setup-playbook](/operations/setup-playbook.md) のインストール手順を **Homebrew 主導**へ書き換えた（[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) の目的そのもの）。`sudo` 3 行 + `xattr` 1 行の tarball 配置は「Homebrew を使わない場合」へ降ろした。生成物の `docs/setup-playbook.md` / `.ja.md` も同時に更新。
+
+* **Note**: **`brew trust` は「1 コマンドで入る」を壊さなかった。** ADR-0053 と #506 が「未確認」として残していた最後の項目で、実測の結論は **formula を名指しすれば同じコマンドの中で trust が付与される** —— `==> Trusted formula tomoya-k31/tap/totsuka` の 1 行が出て進むだけで、プロンプトは無い。**対話・非対話の両方で同じ**だった（`trust.json` の該当エントリを退避して再現）。
+
+* **Note**: **測り方を 2 回間違えた。** ① `brew info` では発火しない —— 出力に `Installed (on request)` とあるとおりインストール済みの receipt を読んでおり、tap の formula を load しないため。`brew trust --help` の「Homebrew may **load** them」から `info` でも出ると踏んだが外れた。発火するのは `reinstall`（= formula を実際に load して実行する経路）である。② 警告の切れ端 `This is not recommended and will be removed in a later release.` を「自動 trust が将来消える」と読みかけたが、全文を採ると**直前の `export HOMEBREW_NO_REQUIRE_TAP_TRUST=1` を指していた**。消えるのは env var の抜け道のほうで、名指し時の自動 trust ではない。**切れ端で読んでいたら逆の結論を README に書いていた。**
+
+* **Note**: quarantine が付かないことは brew 経路の性質であって tarball 経路の性質ではないので、`xattr -dr` の説明は tarball 側へ移し「**この経路だけが必要**」と明示した。両方に同じ注意書きを残すと、brew で入れた人が不要な `sudo xattr` を打つ。
+
 * **Update**: Homebrew tap を public 化後に実測し、[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) の検査手順を実測結果へ差し替えた。`brew install` → `brew test` → `doctor` まで全て通過（macOS 15.7.3 / Homebrew 6.0.20 / totsuka 0.6.0）。
 
 * **Note**: **`xattr -l` が「空であること」という検査基準が誤りだった。** macOS 13 以降、システムは実行された非システムバイナリに `com.apple.provenance` を付ける。実測では `brew` / `jq` / `gh` を含む**すべての brew バイナリ**に付いており、totsuka 固有でも tap 固有でもない（`/bin/ls` のようなシステム同梱には付かない）。**空を期待する検査は誰がやっても falsify される。** 見るべきは `com.apple.quarantine` が無いことで、構造的な主張（`curl` は quarantine xattr を書かない）のほうは変わらず成立していた —— **主張は正しく、それを測る式だけが間違っていた**という形である。

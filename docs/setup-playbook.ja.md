@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:fb6c25c9d8adfde0aee9d65b9f0e2f7fae392dfea4c8437c1287916b8f374c5d -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:f9ade033efad7ae5c6000d3c678445ffe120734ac895b021510c532d7b6af3ab -->
 
 # セットアップ Playbook
 
@@ -19,6 +19,18 @@
 
 ### 1. 配置する
 
+```bash
+brew install tomoya-k31/tap/totsuka
+```
+
+これで終わり。`sudo` も、ツリーの手配置も、`xattr` も要らない。同梱プラグインは `libexec/totsuka/plugins` に置かれ、そこは `totsuka` が探す場所のひとつなので、セットアップはパス指定なしでプラグインを入れられる。
+
+Homebrew はサードパーティ tap に trust を要求するが、formula を名指しすれば同じコマンドの中で付与される。`==> Trusted formula tomoya-k31/tap/totsuka` の 1 行が出て、そのまま進む。答えるべきプロンプトは無い。
+
+更新は `brew upgrade totsuka`。
+
+#### Homebrew を使わない場合
+
 [最新リリース](https://github.com/tomoya-k31/totsuka/releases/latest) の macOS ユニバーサル tarball を落とす。**ツリーごと**置くこと — `totsuka` は同梱プラグインを自分の隣から探すので、バイナリだけ移すとセットアップがプラグインを見つけられない。
 
 ```bash
@@ -29,7 +41,7 @@ sudo ln -sf /usr/local/lib/totsuka/totsuka /usr/local/bin/totsuka
 sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 ```
 
-`xattr` を忘れると Gatekeeper が**プラグインの起動だけ**を黙って止める。本体は動くので原因が見えにくく、`doctor` は「crashed or exited」としか言えない。
+**`xattr` が要るのはこの経路だけ。** ブラウザでダウンロードすると `com.apple.quarantine` が付き、Gatekeeper が**プラグインの起動だけ**を黙って止める。本体は動くので原因が見えにくく、`doctor` は「crashed or exited」としか言えない。Homebrew は素の `curl` で取るので、この属性は付かない。
 
 ### 2. `totsuka setup` を走らせる
 

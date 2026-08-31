@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:fb6c25c9d8adfde0aee9d65b9f0e2f7fae392dfea4c8437c1287916b8f374c5d -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:f9ade033efad7ae5c6000d3c678445ffe120734ac895b021510c532d7b6af3ab -->
 
 # Setup playbook
 
@@ -18,6 +18,18 @@ Targets macOS. For individual topics:
 
 ### 1. Put it in place
 
+```bash
+brew install tomoya-k31/tap/totsuka
+```
+
+That is the whole install: no `sudo`, no tree to place by hand, and no `xattr`. The bundled plugins land in `libexec/totsuka/plugins`, which is one of the places `totsuka` looks, so setup can install them with no path from you.
+
+Homebrew requires trust for third-party taps, but naming the formula grants it in the same command. The install prints one line — `==> Trusted formula tomoya-k31/tap/totsuka` — and carries on. There is no prompt to answer.
+
+Upgrade with `brew upgrade totsuka`.
+
+#### Without Homebrew
+
 Download the macOS universal tarball from the [latest release](https://github.com/tomoya-k31/totsuka/releases/latest). Move the **whole tree** — `totsuka` looks for its bundled plugins next to itself, so moving just the binary leaves setup unable to find them.
 
 ```bash
@@ -28,7 +40,7 @@ sudo ln -sf /usr/local/lib/totsuka/totsuka /usr/local/bin/totsuka
 sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 ```
 
-Skip the `xattr` step and Gatekeeper silently kills **plugin startup only**. The main binary works, which makes this hard to spot; `doctor` can only report "crashed or exited".
+**Only this route needs the `xattr` step.** A browser download carries `com.apple.quarantine`, and Gatekeeper then silently kills **plugin startup only**. The main binary works, which makes this hard to spot; `doctor` can only report "crashed or exited". Homebrew fetches with plain `curl`, which never sets the attribute.
 
 ### 2. Run `totsuka setup`
 
