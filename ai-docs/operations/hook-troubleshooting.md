@@ -17,7 +17,7 @@ Claude Code のフック完了判定（[F-100〜F-107](/product/orchestrator-spe
 
 | プローブ（チェック名） | 見るもの | 失敗が示すこと |
 |---|---|---|
-| `hook-socket` | UDS への自己 POST が 200 か | 受信サーバ不達・Bearer/権限不整合 |
+| `hook-socket` | connect が通るか → 自己 POST が 200 か | 受信サーバ不達・**stale socket**・Bearer/権限不整合 |
 | `hooks` | スクリプト + `orchestrator-*.json` の存在・0700/0600・内容ハッシュ | アセット未生成・パーミッションドリフト・改ざん |
 | `hook-token` | `[hooks].auth_token_ref` が解決するか | keychain/env 参照切れ |
 | `hook-deps` | `curl` / `jq` の存在（H-14） | Stop 等の送信系フックは生 JSON を spool へ退避。`on-user-prompt-submit.sh` は無出力で縮退（そのターンの不可視コンテキスト注入が失われ、マーカー欠落は `on-stop.sh` の block が是正） |

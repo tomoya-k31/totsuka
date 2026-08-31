@@ -997,6 +997,51 @@ fn env_override_reaches_a_downstream_consumer() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A socket file that outlives its listener must not be reported as a live
+/// receiver. `is_socket` only reads the file *type*, and the `op://` token gate
+/// returns before the authenticated probe would have found out — so without a
+/// connect-only probe, `doctor` announced "a receiver is live" on a socket that
+/// `lsof` showed no holder for.
+#[test]
+fn stale_hook_socket_is_not_reported_as_a_live_receiver() {
+    let base = scratch("hksock");
+    let sock = base.join("s.sock");
+    // Bind then drop: the file stays behind, exactly as it does when a previous
+    // `totsuka run` exits without unlinking it.
+    let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    drop(listener);
+    assert!(sock.exists(), "the socket file must outlive its listener");
+
+    seed_empty_config(
+        &base,
+        &format!("[hooks]\nsocket_path = {sock:?}\nauth_token_ref = \"op://Dev/T/hook\"\n"),
+    );
+    // Not signed in, so the op:// gate engages — the path that used to skip
+    // straight past the only code that measured liveness.
+    let (bin, _) = fake_op(&base, false);
+
+    let out = run_env(&base, &["doctor", "--json"], &[("PATH", &path_with(&bin))]);
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
+    let detail = doc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "hook-socket")
+        .expect("hook-socket check present")["detail"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        !detail.contains("receiver is live"),
+        "a stale socket must not be called live: {detail}"
+    );
+    assert!(
+        detail.contains("not accepting connections"),
+        "the stale socket must be named as such: {detail}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A bad value aborts with the variable named — the point of #208 is that a
 /// broken override is never silent.
 #[test]
