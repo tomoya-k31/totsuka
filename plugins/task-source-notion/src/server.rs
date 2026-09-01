@@ -24,7 +24,7 @@ use plugin_sdk::{
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::client::{NotionClient, TRIGGER_KEYS, static_config_errors};
+use crate::client::{NotionClient, TRIGGER_KEYS, static_config_errors, unknown_dynamic_refs};
 use crate::config::NotionConfig;
 use crate::transport::{NotionTransport, TransportSettings};
 
@@ -183,6 +183,10 @@ where
         // place that can tell a typo from a condition (#574). Without it an
         // unread key is dropped and the trigger matches *more* than written.
         let mut config_errors = unknown_trigger_keys(&init.workflows, TRIGGER_KEYS);
+        // A `@<name>` no `[notion.dynamic.*]` declares must fail here: left
+        // alone it goes to Notion verbatim, matches nothing, and ingests zero
+        // tasks with no error anywhere (#606).
+        config_errors.extend(unknown_dynamic_refs(&init.workflows, &config.dynamic));
         // Both of Notion's assignee prerequisites are optional settings, and
         // both fail silently when missing — an unmapped people property makes
         // every page read as unassigned, and no `notion_user_id` makes `@me`

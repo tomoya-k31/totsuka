@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 
 use plugin_protocol::methods::ClaimedRepo;
 use serde::Deserialize;
+use serde_json::Value;
 
 /// The embedded instruction defaults, parsed once on first use.
 ///
@@ -382,6 +383,36 @@ pub struct NotionConfig {
     /// default when omitted.
     #[serde(default)]
     pub prompts: NotionPrompts,
+    /// Named lookups a `trigger.filter` may reference as `@<name>` (#606).
+    ///
+    /// Notion's query filter only reads properties **of the database being
+    /// queried**, so a condition like "the related sprint is the current one"
+    /// cannot be written at all: the only expressible form is the sprint's
+    /// page id, and that changes every sprint. Each entry here names a lookup
+    /// that resolves to one page id per poll, so the config holds the *rule*
+    /// instead of this fortnight's answer.
+    #[serde(default)]
+    pub dynamic: HashMap<String, DynamicRef>,
+}
+
+/// One named lookup resolvable as `@<name>` inside a `trigger.filter` (#606).
+///
+/// `filter` is a **raw Notion filter**, passed to the query untouched, exactly
+/// like `trigger.filter` itself. That is deliberate: resolving a lookup needs
+/// no knowledge of the property's type (`status` vs `select` vs `date`), so
+/// there is no type key here to keep in step with Notion's vocabulary — the
+/// operator writes the filter Notion documents.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DynamicRef {
+    /// The database to look in. Need not be one of the polled `[[projects]]`
+    /// databases — a sprint list usually is not — but the token must be able
+    /// to read it.
+    pub database_id: String,
+    /// The Notion filter that selects **exactly one** page. Zero and
+    /// two-or-more are both errors: see `NotionClient::resolve_dynamic_ref`
+    /// for why neither may degrade into "no condition".
+    pub filter: Value,
 }
 
 impl NotionConfig {
