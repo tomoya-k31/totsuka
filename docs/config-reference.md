@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0c8ece00436d9308822b5f92888f53298db9cd5d7d5b1cf1bdb1aa354b242fd5 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e1635cd9f076253afb50ab6ae7812f8e0e855ec0aa1a57de5c42f31a3fe56782 -->
 
 # Configuration reference
 
@@ -788,7 +788,7 @@ Unknown keys here are a hard startup failure, so a typo shows up immediately.
 | `status_kind` | enum | `status` | `status` (Notion's dedicated status type) or `select`. |
 | `assignee` | string? | none | A `people` property holding assignees. **Required if you write `trigger.assignee`** — without it every page reads as unassigned, so the condition could not do anything, and startup fails rather than letting it look like it works. **Leaving it unset is not harmless even without that key**: the default condition also sees every page as unassigned, so the assignee filter disappears entirely (see `notion_user_id` above). |
 | `priority` | string? | none | A `number` / `select` / `status` property holding priority. |
-| `repo_hint` | string? | none | A `rich_text` / `select` / `url` property naming a repository. |
+| `repo_hint` | string? | none | A `rich_text` / `select` / `multi_select` / `url` property naming a repository. Read in the order `rich_text` → `select`/`status` → `multi_select` → `url` → `title`; the first one that holds a value wins. A `multi_select` answers only when **exactly one** option is selected — zero and two-or-more both count as "no hint", and the task falls back to repository selection (`[llm]`, or pending when there is none). Two-or-more is deliberately not narrowed to the first option: the page really does name several repositories, and the agent must not run against an arbitrary one of them. A pending task is re-evaluated on every poll, so narrowing the choice on the board is picked up on the next tick. |
 | `body` | string? | none | The `rich_text` property read when `body_source = "property"`. |
 
 `property_map` is shared by every database, so `totsuka config validate` checks all of them: if one database is missing a mapped property, only the tasks from that database break — checking just the first one would be the quietest possible failure.

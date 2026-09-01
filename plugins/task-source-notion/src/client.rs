@@ -545,14 +545,36 @@ fn people_ids(prop: &Value) -> Vec<&str> {
         .collect()
 }
 
+/// The sole option name of a `multi_select` property value (#604).
+///
+/// `repo_hint` is one string, so only an unambiguous selection can answer it:
+/// **exactly one** option yields that name, and both zero and two-or-more
+/// yield `None`. Two-or-more is the case worth naming — the page really does
+/// point at several repositories, and picking the first would silently run
+/// the agent against an arbitrary one of them. `None` sends the task to repo
+/// selection instead (the LLM, or `pending`, which is re-evaluated every
+/// poll), which is the honest answer until a task can fan out to several
+/// repositories.
+fn multi_select_sole_name(prop: &Value) -> Option<&str> {
+    let options = prop["multi_select"].as_array()?;
+    match options.as_slice() {
+        [only] => only["name"].as_str(),
+        _ => None,
+    }
+}
+
 /// A plain-text reading of a property for `repo_hint`: `rich_text`, then a
-/// `select`/`status` option name, then a `url`, then a `title`.
+/// `select`/`status` option name, then a lone `multi_select` option name,
+/// then a `url`, then a `title`.
 fn prop_text(prop: &Value) -> Option<String> {
     let rich = rich_text_plain(&prop["rich_text"]);
     if !rich.is_empty() {
         return Some(rich);
     }
     if let Some(name) = prop_option_name(prop) {
+        return Some(name.to_string());
+    }
+    if let Some(name) = multi_select_sole_name(prop) {
         return Some(name.to_string());
     }
     if let Some(url) = prop["url"].as_str() {
@@ -801,6 +823,61 @@ mod tests {
             Some("https://example.com".to_string())
         );
         assert_eq!(prop_text(&json!({ "rich_text": [] })), None);
+    }
+
+    /// A `multi_select` repo column answers `repo_hint` only when the choice is
+    /// unambiguous (#604). The shape is the one Notion really sends: the other
+    /// property keys are absent, not null, so the earlier arms of `prop_text`
+    /// see nothing.
+    #[test]
+    fn repo_hint_reads_a_lone_multi_select_option() {
+        assert_eq!(
+            prop_text(&json!({
+                "type": "multi_select",
+                "multi_select": [{ "id": "a", "name": "gmo-media/Mikasa.Server" }]
+            })),
+            Some("gmo-media/Mikasa.Server".to_string())
+        );
+    }
+
+    #[test]
+    fn repo_hint_declines_an_ambiguous_or_empty_multi_select() {
+        // Two repositories: picking either would run the agent against an
+        // arbitrary one, so this defers to repo selection instead.
+        assert_eq!(
+            prop_text(&json!({
+                "type": "multi_select",
+                "multi_select": [
+                    { "id": "a", "name": "gmo-media/Mikasa.Server" },
+                    { "id": "b", "name": "gmo-media/Mikasa.Admin" }
+                ]
+            })),
+            None
+        );
+        assert_eq!(
+            prop_text(&json!({ "type": "multi_select", "multi_select": [] })),
+            None
+        );
+    }
+
+    /// `rich_text` and `select` still win, so a database that maps a text or
+    /// select column keeps its old reading (#604 only adds a fallback).
+    #[test]
+    fn repo_hint_keeps_rich_text_and_select_ahead_of_multi_select() {
+        assert_eq!(
+            prop_text(&json!({
+                "rich_text": [{ "plain_text": "totsuka" }],
+                "multi_select": [{ "id": "a", "name": "other" }]
+            })),
+            Some("totsuka".to_string())
+        );
+        assert_eq!(
+            prop_text(&json!({
+                "select": { "name": "totsuka" },
+                "multi_select": [{ "id": "a", "name": "other" }]
+            })),
+            Some("totsuka".to_string())
+        );
     }
 
     #[test]
