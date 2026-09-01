@@ -834,9 +834,9 @@ mod tests {
         assert_eq!(
             prop_text(&json!({
                 "type": "multi_select",
-                "multi_select": [{ "id": "a", "name": "gmo-media/Mikasa.Server" }]
+                "multi_select": [{ "id": "a", "name": "acme/service-api" }]
             })),
-            Some("gmo-media/Mikasa.Server".to_string())
+            Some("acme/service-api".to_string())
         );
     }
 
@@ -848,8 +848,8 @@ mod tests {
             prop_text(&json!({
                 "type": "multi_select",
                 "multi_select": [
-                    { "id": "a", "name": "gmo-media/Mikasa.Server" },
-                    { "id": "b", "name": "gmo-media/Mikasa.Admin" }
+                    { "id": "a", "name": "acme/service-api" },
+                    { "id": "b", "name": "acme/admin-web" }
                 ]
             })),
             None
