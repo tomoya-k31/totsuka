@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e1635cd9f076253afb50ab6ae7812f8e0e855ec0aa1a57de5c42f31a3fe56782 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:42ad4a9a0c4c1f3b06b77206ab44f8958fa79d23f880d4c6f6a5d931d9e37412 -->
 
 # 設定リファレンス
 
@@ -787,7 +787,7 @@ in_progress_statuses = ["実装中"]
 | `status_kind` | enum | `status` | `status`（Notion 専用のステータス型）または `select` |
 | `assignee` | string? | なし | assignee を持つ `people` プロパティ。**`trigger.assignee` を書くなら必須** —— 無いと全ページが未アサインに見えて条件が何もしなくなるので、動いているように見せず起動時に失敗させる。**そのキーを書かない場合も未設定は無害ではない**: 既定の条件から見ても全ページが未アサインなので、assignee による絞り込みが丸ごと消える（上の `notion_user_id` を参照） |
 | `priority` | string? | なし | 優先度を持つ `number` / `select` / `status` プロパティ |
-| `repo_hint` | string? | なし | リポジトリ名を持つ `rich_text` / `select` / `multi_select` / `url` プロパティ。読む順は `rich_text` → `select`/`status` → `multi_select` → `url` → `title` で、値を持つ最初のものが勝つ。`multi_select` は**ちょうど 1 つ選ばれているときだけ**その option 名を返す —— 0 個と 2 個以上はどちらも「ヒント無し」になり、リポジトリ選択（`[llm]`、無ければ pending）へ落ちる。2 個以上を先頭で代表させないのは、ページが本当に複数のリポジトリを指しているときに、エージェントを任意の 1 つに対して走らせないため。pending のタスクは毎ポーリング再評価されるので、ボード上で 1 つに絞れば次の tick で拾われる |
+| `repo_hint` | string? | なし | リポジトリ名を持つ `rich_text` / `select` / `status` / `multi_select` / `url` / `title` プロパティ。読む順は `rich_text` → `select`/`status` → `multi_select` → `url` → `title` で、値を持つ最初のものが勝つ。`multi_select` は**ちょうど 1 つ選ばれているときだけ**その option 名を返す —— 0 個と 2 個以上はどちらも「ヒント無し」になり、リポジトリ選択（`[llm]`、無ければ pending）へ落ちる。2 個以上を先頭で代表させないのは、ページが本当に複数のリポジトリを指しているときに、エージェントを任意の 1 つに対して走らせないため。pending のタスクは毎ポーリング再評価されるので、ボード上で 1 つに絞れば次の tick で拾われる |
 | `body` | string? | なし | `body_source = "property"` のときに読む `rich_text` プロパティ |
 
 `property_map` は全データベース共通なので、`totsuka config validate` は全部を見る。あるデータベースだけがマップ先プロパティを欠いていると、そこ由来のタスクだけが壊れる —— 1 つ目だけ見て済ませるのが、一番静かな壊れ方になる。
