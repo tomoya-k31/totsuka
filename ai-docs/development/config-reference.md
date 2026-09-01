@@ -900,7 +900,7 @@ in_progress_statuses = ["実装中"]
 | `status_kind` | enum | `status` | `status`（Notion 専用のステータス型）/ `select`。書き戻しの本体形状と option 解決を切り替える |
 | `assignee` | string? | なし | assignee を持つ `people` プロパティ名。**`trigger.assignee` を書くなら必須**（未設定だと全ページが未アサインに見え、条件が何もしなくなるので `initialize` で落ちる、#572） **未設定のまま `trigger.assignee` を書かない場合も無害ではない** —— 既定のトリガーから見ると全ページが未アサインなので、assignee による絞り込みが丸ごと消える（上の `notion_user_id` の行を参照） |
 | `priority` | string? | なし | 優先度を持つ `number` / `select` / `status` プロパティ名 |
-| `repo_hint` | string? | なし | リポジトリのヒントを持つ `rich_text` / `select` / `url` プロパティ名（F-10） |
+| `repo_hint` | string? | なし | リポジトリのヒントを持つ `rich_text` / `select` / `status` / `multi_select` / `url` / `title` プロパティ名（F-10）。読む順は `rich_text` → `select`/`status` → `multi_select` → `url` → `title` で、**先に当たったものが勝つ**。`multi_select` は**ちょうど 1 つ選ばれているときだけ**その option 名を返す（#604）—— 0 個と 2 個以上はどちらも「ヒント無し」になり、リポジトリ選択（`[llm]`、無ければ `pending`）へ落ちる。**2 個以上を先頭で代表させない**のは、ページが本当に複数のリポジトリを指しているときに、エージェントを任意の 1 つに対して黙って走らせないため。`pending` は毎 poll 再評価されるので、人がボード上で 1 つに絞れば次の tick で拾われる。1 タスクを複数リポジトリへ展開する話は #605 |
 | `body` | string? | なし | `body_source = "property"` のときに本文を読む `rich_text` プロパティ名 |
 
 **`config/validate` は全データベースを見る。** `property_map` は全 DB 共通なので、あるデータベースだけがマップ先プロパティを欠いていると**そこ由来のタスクだけが壊れる** —— 1 つ目だけ見て緑にするのが一番静かな壊れ方になる。
