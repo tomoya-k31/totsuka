@@ -888,6 +888,48 @@ in_progress_statuses = ["実装中"]
 | `poll_interval_secs` | int? | 60 | fetch 周期。**`0` はポーリングを止めない** —— ビジースピンになるので警告を 1 行出して既定の 60 秒へフォールバックする。止めたいならワークフローを消すか `[plugins.notion] enabled = false` にする（github も同じ挙動）。**同じファイルの `[[workflows]].timeout_secs` は `0` が opt-out を意味するので、逆である** |
 | `rate_limit_rps` | int | 3 | クライアント側のリクエスト毎秒上限。Notion の公開上限が約 3 rps なのでそれに合わせてある |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記） |
+| `[dynamic.{name}]` | テーブル | `{}` | `trigger.filter` の中で `@{name}` として参照できる名前付き lookup（#606、[ADR-0066](/decisions/adr-0066-notion-dynamic-filter-refs.md)）。下記 |
+
+## `[dynamic.{name}]` — `trigger.filter` の動的な値（#606）
+
+**Notion のクエリフィルタは、クエリ対象のデータベースのプロパティしか読めない。** relation の先のプロパティは条件にできないので、「関連先のスプリントのステータスが `現在`」は書けず、書けるのは**そのスプリントの page id そのもの**だけになる。そして id はスプリントが替わるたびに変わる。
+
+`[notion.dynamic.{name}]` は、その id を **poll ごとに引き直す規則**を置く場所である。設定は「現在のスプリントを指す」という規則を持ち、今期の答えは持たない。
+
+```toml
+[notion.dynamic.current_sprint]
+database_id = "…"                                                  # スプリント一覧 DB
+filter = { property = "スプリントステータス", status = { equals = "現在" } }
+
+[[workflows]]
+name = "notion-implement"
+source = "notion"
+agent = "herdr"
+profile = "implement"
+trigger = { status = "未着手", assignee = "@me", filter = { and = [
+  { property = "タイプ",     multi_select = { contains = "AI" } },
+  { property = "スプリント", relation = { contains = "@current_sprint" } },
+] } }
+```
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `database_id` | string | 必須 | 引く先のデータベース。**`[[projects]]` に無くてよい**（スプリント一覧は普通ポーリング対象ではない）が、トークンから読める必要がある |
+| `filter` | テーブル | 必須 | **ちょうど 1 ページを選ぶ** Notion filter。`trigger.filter` と同じく**生のまま**クエリへ渡すので、プロパティの型（`status` / `select` / `date` …）を totsuka が知る必要がない |
+
+**0 件と 2 件以上はどちらもエラーで、poll が失敗する。** 「解決できないので条件を落とす」という縮退は**しない** —— フィルタが消えれば**データベース全体が取り込まれる**ので、一番派手な事故が成功の見た目で起きる。2 件以上で先頭を採らないのも同じ理由で、任意の一方を黙って選ぶより失敗するほうが安全である。判定は `page_size: 2` の 1 クエリで足りる（1 件だけ要求すると曖昧さが原理的に検出できない）。
+
+**名前は `[a-z0-9_]+` に限る。** `@example.com` のような**リテラル**を参照の名前空間から外すためで、この制限があるから次の規則を強くできる:
+
+**宣言の無い `@{name}` は `initialize` で落ちる。** リテラルとして通すと、タイポ（`@current_sprnt`）がそのまま Notion へ送られ、何にも一致せず**取り込み 0 件**になる —— このキーが直そうとしている壊れ方そのものである。エラー文は宣言済みの名前を列挙する。
+
+検査は **`trigger.filter` の部分木だけ**を歩く。トリガー表全体に広げると `assignee = "@me"` を未宣言の参照として読んでしまうため、assignee の語彙（`@me` / `@none` / `@any`）とはスコープで分けている。したがって **`@{name}` が書けるのは `trigger.filter` の中だけ**で、`trigger.status` には書けない。
+
+**poll を跨ぐキャッシュは無い。** 解決は 1 回の fetch 内でのみメモ化する。lookup の答えが変わることが存在理由なので、キャッシュには staleness ポリシーが必要になるが、スプリントが切り替わる時刻を config は知らない。代価は「参照している名前 × workflow 数」のクエリが毎 poll 増えることで、既定 60 秒間隔・`rate_limit_rps = 3` に対しては十分小さい。
+
+**`[notion]` の下なので全データベース共通**である。データベースごとに違う lookup は書けない。
+
+**Notion 側に派生列を足す道も有効である。** タスク DB に rollup / formula でスプリントのステータスを引く列を作れば、`filter` でそれを見るだけで済み、totsuka 側の設定は要らない。**触れるボードならそちらが安い。** このキーは「共有本番ボードのスキーマを触れない」場合のためにある。
 
 ## `property_map` — 共通スキーマ ↔ Notion のプロパティ名（F-03）
 

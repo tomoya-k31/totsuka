@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:42ad4a9a0c4c1f3b06b77206ab44f8958fa79d23f880d4c6f6a5d931d9e37412 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:184333d3017a3bc2c6b331221623fec3776dbd811bfe4e03fc9d640953c65d4a -->
 
 # 設定リファレンス
 
@@ -775,6 +775,48 @@ in_progress_statuses = ["実装中"]
 | `poll_interval_secs` | int? | 60 | 取得周期。**`0` はポーリングを止めない** —— ビジースピンになるので警告を 1 行出して既定の 60 秒へ戻る。止めたいならワークフローを消すか `[plugins.notion] enabled = false` にする。GitHub も同じ挙動。なお `[[workflows]].timeout_secs` の `0` は逆に opt-out を意味する |
 | `rate_limit_rps` | int | 3 | クライアント側の毎秒リクエスト数。Notion の公開上限が約 3 rps |
 | `[prompts]` | テーブル | — | このプラグインが送る指示文の上書き（下記） |
+| `[dynamic.{name}]` | テーブル | `{}` | `trigger.filter` の中で `@{name}` として参照できる名前付き lookup（下記） |
+
+### `[dynamic.{name}]` — `trigger.filter` の動的な値
+
+**Notion のクエリフィルタは、クエリ対象のデータベースのプロパティしか読めない。** relation の先のプロパティは条件にできないので、「関連先のスプリントのステータスが `現在`」は書けず、書けるのは**そのスプリントの page id そのもの**だけになる。そして id はスプリントが替わるたびに変わる。
+
+`[notion.dynamic.{name}]` は、その id を **poll ごとに引き直す規則**を置く場所である。設定は「現在のスプリントを指す」という規則を持ち、今期の答えは持たない。
+
+```toml
+[notion.dynamic.current_sprint]
+database_id = "…"                                                  # スプリント一覧 DB
+filter = { property = "スプリントステータス", status = { equals = "現在" } }
+
+[[workflows]]
+name = "notion-implement"
+source = "notion"
+agent = "herdr"
+profile = "implement"
+trigger = { status = "未着手", assignee = "@me", filter = { and = [
+  { property = "タイプ",     multi_select = { contains = "AI" } },
+  { property = "スプリント", relation = { contains = "@current_sprint" } },
+] } }
+```
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `database_id` | string | 必須 | 引く先のデータベース。**`[[projects]]` に無くてよい**（スプリント一覧は普通ポーリング対象ではない）が、トークンから読める必要がある |
+| `filter` | テーブル | 必須 | **ちょうど 1 ページを選ぶ** Notion filter。`trigger.filter` と同じく**生のまま**クエリへ渡すので、プロパティの型（`status` / `select` / `date` …）を totsuka が知る必要がない |
+
+**0 件と 2 件以上はどちらもエラーで、poll が失敗する。** 「解決できないので条件を落とす」という縮退は**しない** —— フィルタが消えれば**データベース全体が取り込まれる**ので、一番派手な事故が成功の見た目で起きる。2 件以上で先頭を採らないのも同じ理由で、任意の一方を黙って選ぶより失敗するほうが安全である。判定は `page_size: 2` の 1 クエリで足りる（1 件だけ要求すると曖昧さが原理的に検出できない）。
+
+**名前は `[a-z0-9_]+` に限る。** `@example.com` のような**リテラル**を参照の名前空間から外すためで、この制限があるから次の規則を強くできる:
+
+**宣言の無い `@{name}` は起動時に落ちる。** リテラルとして通すと、タイポがそのまま Notion へ送られ、何にも一致せず**取り込み 0 件**になる —— このキーが無くそうとしている静かな失敗そのものである。エラー文は宣言済みの名前を列挙する。
+
+検査は `trigger.filter` の部分木だけを歩く。トリガー表全体に広げると `assignee = "@me"` を未宣言の参照として読んでしまうため、2 つの名前空間はスコープで分けている。したがって **`@{name}` が書けるのは `trigger.filter` の中だけ**で、`trigger.status` には書けない。
+
+**poll を跨ぐキャッシュは無い。** 解決は 1 回の fetch 内でのみメモ化する。lookup の答えが変わることが存在理由なので、キャッシュには staleness ポリシーが必要になるが、スプリントが切り替わる時刻を設定は知らない。代価は「参照している名前 × workflow 数」のクエリが毎 poll 増えることで、既定 60 秒間隔・`rate_limit_rps = 3` に対しては十分小さい。
+
+`[notion]` の下なので、**lookup は全データベース共通**である。データベースごとに違う lookup は書けない。
+
+**Notion 側に派生列を足す道も有効で、触れるボードならそちらが安い。** タスク DB に rollup / formula でスプリントのステータスを引く列を作れば、それを直接フィルタできて totsuka 側の設定は要らない。このキーは、ボードのスキーマが自分の裁量にない場合のためにある。
 
 ### `property_map`
 

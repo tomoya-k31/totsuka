@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:42ad4a9a0c4c1f3b06b77206ab44f8958fa79d23f880d4c6f6a5d931d9e37412 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:184333d3017a3bc2c6b331221623fec3776dbd811bfe4e03fc9d640953c65d4a -->
 
 # Configuration reference
 
@@ -776,6 +776,48 @@ Unknown keys here are a hard startup failure, so a typo shows up immediately.
 | `poll_interval_secs` | int? | 60 | Fetch cadence. **`0` does not stop polling**: it would busy-spin, so it logs one warning and falls back to the 60-second default. To stop polling, remove the workflow or set `[plugins.notion] enabled = false`. GitHub behaves the same way. Note that `[[workflows]].timeout_secs` reads `0` the opposite way, as an opt-out. |
 | `rate_limit_rps` | int | 3 | Client-side requests per second. Notion's published limit is about 3 rps. |
 | `[prompts]` | table | — | Overrides for the instruction text this plugin sends (below). |
+| `[dynamic.{name}]` | table | `{}` | A named lookup referenceable as `@{name}` inside `trigger.filter` (below). |
+
+### `[dynamic.{name}]` — dynamic values in `trigger.filter`
+
+**A Notion query filter can only read properties of the database being queried.** A property on the other side of a relation cannot be a condition, so "the related sprint's status is `Current`" is unwritable — the only expressible form is that sprint's page id, and the id changes every sprint.
+
+`[notion.dynamic.{name}]` holds the **rule for looking that id up on every poll**, so the config states "the current sprint" instead of this fortnight's answer.
+
+```toml
+[notion.dynamic.current_sprint]
+database_id = "..."                                             # the sprint list database
+filter = { property = "Sprint status", status = { equals = "Current" } }
+
+[[workflows]]
+name = "notion-implement"
+source = "notion"
+agent = "herdr"
+profile = "implement"
+trigger = { status = "Not started", assignee = "@me", filter = { and = [
+  { property = "Type",   multi_select = { contains = "AI" } },
+  { property = "Sprint", relation = { contains = "@current_sprint" } },
+] } }
+```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `database_id` | string | required | The database to look in. It **need not be one of your `[[projects]]` databases** — a sprint list usually is not — but the token must be able to read it. |
+| `filter` | table | required | A Notion filter selecting **exactly one** page. Like `trigger.filter`, it is passed to the query **untouched**, so totsuka never needs to know the property's type (`status` / `select` / `date` ...). |
+
+**Zero matches and two-or-more matches are both errors, and the poll fails.** There is deliberately no fallback to "no condition": dropping the filter would ingest **the entire database** — the loudest possible failure wearing the face of success. Two-or-more does not take the first match for the same reason; failing beats silently picking an arbitrary one. Detecting this costs one query with `page_size: 2` (asking for a single page would make ambiguity undetectable).
+
+**Names are limited to `[a-z0-9_]+`.** That keeps literal filter values that merely start with `@` (`@example.com`) out of the reference namespace, which is what makes the next rule safe:
+
+**An `@{name}` that nothing declares fails at startup.** Passed through as a literal it would go to Notion verbatim, match nothing, and ingest zero tasks — exactly the silent failure this key exists to remove. The error lists the names that are configured.
+
+Only the `trigger.filter` subtree is checked. Widening that to the whole trigger table would read `assignee = "@me"` as an undeclared reference, so the two namespaces are separated by scope: **`@{name}` may only appear inside `trigger.filter`**, never in `trigger.status`.
+
+**Nothing is cached between polls.** A lookup is memoized within a single fetch only. The whole point of a lookup is that its answer changes, and a cache would need a staleness policy — but the config has no way to know when a sprint rolls over. The cost is one extra query per referenced name per workflow per poll, which is small against the 60-second default and `rate_limit_rps = 3`.
+
+It lives under `[notion]`, so **a lookup is shared by every database**. Per-database lookups cannot be expressed.
+
+**Adding a derived column on the Notion side also works, and is cheaper when you can.** A rollup or formula on the task database that pulls the sprint's status can be filtered directly, with no totsuka configuration at all. This key exists for the case where the board's schema is not yours to change.
 
 ### `property_map`
 

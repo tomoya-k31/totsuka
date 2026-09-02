@@ -4,16 +4,17 @@
 //! the deliverable itself (#398). All bodies are plain JSON built
 //! with `serde_json` — no Notion SDK dependency.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Mutex;
 
 use serde_json::{Value, json};
 
 use plugin_protocol::Task;
+use plugin_protocol::methods::WorkflowInfo;
 use plugin_sdk::AssigneeFilter;
 
 use crate::blocks::{blocks_to_markdown, rich_text_plain};
-use crate::config::{BodySource, DatabaseConfig, NotionConfig};
+use crate::config::{BodySource, DatabaseConfig, DynamicRef, NotionConfig};
 use crate::error::NotionError;
 use crate::transport::{HttpMethod, NotionTransport};
 
@@ -135,7 +136,13 @@ impl<T: NotionTransport> NotionClient<T> {
     ) -> Result<Vec<Task>, NotionError> {
         let filter = TriggerFilter::parse(trigger, instructions_kind, workflow)
             .map_err(NotionError::InvalidTrigger)?;
-        let server_filter = self.build_filter(&filter);
+        let mut server_filter = self.build_filter(&filter);
+        // Resolve `@<name>` lookups before the first query (#606). One
+        // resolution per referenced name per poll; memoized only for this
+        // call, so nothing can go stale between ticks.
+        if let Some(f) = server_filter.take() {
+            server_filter = Some(self.resolve_dynamic_refs(f, workflow).await?);
+        }
         let mut tasks = Vec::new();
         for (index, database) in self.config.databases.iter().enumerate() {
             self.fetch_database(index, database, &filter, server_filter.as_ref(), &mut tasks)
@@ -257,6 +264,83 @@ impl<T: NotionTransport> NotionClient<T> {
             None => Err(NotionError::NotFound(format!(
                 "page `{page_id}` lives in database `{parent}`, which is not in \
                  any `[[projects]]` entry with `source = \"notion\"` → add it, or check that the task is still where it was"
+            ))),
+        }
+    }
+
+    /// Replace every `@<name>` string in `filter` with the page id that
+    /// `[notion.dynamic.<name>]` resolves to (#606).
+    ///
+    /// Resolution is memoized for this call only: a poll asks Notion once per
+    /// referenced name, and the next tick asks again. There is deliberately no
+    /// cross-poll cache — the whole point of a lookup is that its answer
+    /// changes, and a cache would need a staleness policy nobody can pick
+    /// correctly (the sprint rolls over at an hour no config knows).
+    async fn resolve_dynamic_refs(
+        &self,
+        filter: Value,
+        workflow: &str,
+    ) -> Result<Value, NotionError> {
+        let mut names = BTreeSet::new();
+        collect_dynamic_refs(&filter, &mut names);
+        if names.is_empty() {
+            return Ok(filter);
+        }
+        let mut resolved = HashMap::new();
+        for name in names {
+            let id = self.resolve_dynamic_ref(&name, workflow).await?;
+            resolved.insert(name, id);
+        }
+        let mut filter = filter;
+        substitute_dynamic_refs(&mut filter, &resolved);
+        Ok(filter)
+    }
+
+    /// Resolve one named lookup to the single page id it selects (#606).
+    ///
+    /// **Zero and two-or-more matches are both errors, and neither degrades.**
+    /// Returning "no condition" instead would drop the filter and ingest the
+    /// entire database — the loudest possible failure dressed as success. An
+    /// `Err` here fails the poll, which the operator sees repeatedly until the
+    /// lookup is fixed; that is the intended cost of a condition that cannot
+    /// be evaluated.
+    async fn resolve_dynamic_ref(&self, name: &str, workflow: &str) -> Result<String, NotionError> {
+        let Some(spec) = self.config.dynamic.get(name) else {
+            // `initialize` rejects an undeclared reference, so this is
+            // unreachable in a running plugin; it exists so the failure has
+            // somewhere to go rather than silently staying a literal.
+            return Err(NotionError::InvalidTrigger(format!(
+                "workflow `{workflow}` references `@{name}` in `trigger.filter`, but no \
+                 `[notion.dynamic.{name}]` is configured"
+            )));
+        };
+        // `page_size: 2` is all it takes to tell "one" from "more than one",
+        // and asking for less is what makes ambiguity detectable at all.
+        let body = json!({ "filter": spec.filter, "page_size": 2 });
+        let path = format!("/databases/{}/query", spec.database_id);
+        let resp = self
+            .transport
+            .request(HttpMethod::Post, &path, Some(body), true)
+            .await?;
+        let results = resp["results"].as_array().ok_or_else(|| {
+            NotionError::InvalidResponse(format!("query for `@{name}` returned no `results` array"))
+        })?;
+        match results.as_slice() {
+            [only] => only["id"].as_str().map(str::to_string).ok_or_else(|| {
+                NotionError::InvalidResponse(format!("the page `@{name}` resolved to has no `id`"))
+            }),
+            [] => Err(NotionError::NotFound(format!(
+                "`@{name}` (workflow `{workflow}`) matched no page in database `{}` → check \
+                 `[notion.dynamic.{name}].filter`, and that the database still has a page \
+                 satisfying it. No task is ingested while this is unresolvable, because \
+                 dropping the condition would ingest the whole database",
+                spec.database_id
+            ))),
+            _ => Err(NotionError::NotFound(format!(
+                "`@{name}` (workflow `{workflow}`) matched more than one page in database \
+                 `{}` → narrow `[notion.dynamic.{name}].filter` so it selects exactly one. \
+                 Taking the first would pick an arbitrary one silently",
+                spec.database_id
             ))),
         }
     }
@@ -526,6 +610,102 @@ impl<T: NotionTransport> NotionClient<T> {
         }
         names
     }
+}
+
+/// The `<name>` of a `@<name>` dynamic reference, or `None` for any other
+/// string (#606).
+///
+/// The name must be `[a-z0-9_]+`. That is not decoration: it is what keeps a
+/// literal filter value that merely starts with `@` (`@example.com`,
+/// `@Channel`) out of the reference namespace, so the strict
+/// "undeclared reference is an error" rule below cannot break one.
+fn dynamic_ref_name(s: &str) -> Option<&str> {
+    let name = s.strip_prefix('@')?;
+    let ok = !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    ok.then_some(name)
+}
+
+/// Collect every `@<name>` appearing anywhere in `filter` (#606).
+fn collect_dynamic_refs(filter: &Value, out: &mut BTreeSet<String>) {
+    match filter {
+        Value::String(s) => {
+            if let Some(name) = dynamic_ref_name(s) {
+                out.insert(name.to_string());
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|v| collect_dynamic_refs(v, out)),
+        Value::Object(map) => map.values().for_each(|v| collect_dynamic_refs(v, out)),
+        _ => {}
+    }
+}
+
+/// Replace every `@<name>` in `filter` with `resolved[name]` (#606).
+///
+/// A name missing from `resolved` is left as-is. That cannot happen from
+/// [`NotionClient::resolve_dynamic_refs`], which resolves exactly the set this
+/// walk finds, and leaving it beats inventing a value.
+fn substitute_dynamic_refs(filter: &mut Value, resolved: &HashMap<String, String>) {
+    match filter {
+        Value::String(s) => {
+            if let Some(id) = dynamic_ref_name(s).and_then(|n| resolved.get(n)) {
+                *s = id.clone();
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|v| substitute_dynamic_refs(v, resolved)),
+        Value::Object(map) => map
+            .values_mut()
+            .for_each(|v| substitute_dynamic_refs(v, resolved)),
+        _ => {}
+    }
+}
+
+/// `initialize` errors for `@<name>` references no `[notion.dynamic.*]`
+/// declares (#606).
+///
+/// Only `trigger.filter` is walked. Widening this to the whole trigger table
+/// would read `assignee = "@me"` as an undeclared reference — `@me` is the
+/// assignee vocabulary's own spelling (#572), and the two namespaces stay
+/// apart by scope rather than by a reserved-word list that would have to be
+/// kept in step with `plugin_sdk::AssigneeFilter`.
+///
+/// A typo must fail here rather than stay a literal: an unresolved
+/// `@current_sprnt` would be sent to Notion verbatim, match nothing, and
+/// ingest zero tasks with no error anywhere.
+pub fn unknown_dynamic_refs(
+    workflows: &[WorkflowInfo],
+    declared: &HashMap<String, DynamicRef>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for wf in workflows {
+        let Some(filter) = wf.trigger.get("filter") else {
+            continue;
+        };
+        let mut names = BTreeSet::new();
+        collect_dynamic_refs(filter, &mut names);
+        for name in names {
+            if declared.contains_key(&name) {
+                continue;
+            }
+            let mut known: Vec<&str> = declared.keys().map(String::as_str).collect();
+            known.sort_unstable();
+            let known = if known.is_empty() {
+                "none are configured".to_string()
+            } else {
+                format!("configured: {}", known.join(", "))
+            };
+            errors.push(format!(
+                "workflow `{}` references `@{name}` in `trigger.filter`, but no \
+                 `[notion.dynamic.{name}]` is configured → add it, or fix the name ({known})",
+                wf.workflow
+            ));
+        }
+    }
+    errors
 }
 
 /// The option name of a `status` or `select` property value (either key).
@@ -915,5 +1095,175 @@ mod tests {
         ) -> Result<Value, NotionError> {
             Err(NotionError::InvalidResponse("dummy".into()))
         }
+    }
+
+    // ---- dynamic filter references (#606) -------------------------------
+
+    /// A transport answering every query with a fixed `results` array, and
+    /// recording the bodies it was handed so a test can assert what was sent.
+    struct Canned {
+        results: Vec<Value>,
+        seen: Mutex<Vec<Value>>,
+    }
+
+    impl Canned {
+        fn new(results: Vec<Value>) -> Self {
+            Self {
+                results,
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl NotionTransport for Canned {
+        async fn request(
+            &self,
+            _method: HttpMethod,
+            _path: &str,
+            body: Option<Value>,
+            _idempotent: bool,
+        ) -> Result<Value, NotionError> {
+            self.seen.lock().unwrap().push(body.unwrap_or(Value::Null));
+            Ok(json!({ "results": self.results, "has_more": false }))
+        }
+    }
+
+    fn dynamic_config() -> NotionConfig {
+        config(json!({
+            "token": "t",
+            "dynamic": {
+                "current_sprint": {
+                    "database_id": "sprint-db",
+                    "filter": { "property": "S", "status": { "equals": "現在" } }
+                }
+            }
+        }))
+    }
+
+    #[test]
+    fn a_dynamic_ref_name_must_be_lowercase_word_chars() {
+        assert_eq!(dynamic_ref_name("@current_sprint"), Some("current_sprint"));
+        assert_eq!(dynamic_ref_name("@a9_"), Some("a9_"));
+        // Not references: no `@`, an empty name, and anything outside the
+        // narrow charset — which is what keeps literals like an address or a
+        // capitalised handle out of the namespace.
+        assert_eq!(dynamic_ref_name("current_sprint"), None);
+        assert_eq!(dynamic_ref_name("@"), None);
+        assert_eq!(dynamic_ref_name("@Current"), None);
+        assert_eq!(dynamic_ref_name("@example.com"), None);
+        assert_eq!(dynamic_ref_name("@me!"), None);
+    }
+
+    #[test]
+    fn refs_are_collected_from_anywhere_in_the_filter() {
+        let filter = json!({ "and": [
+            { "property": "スプリント", "relation": { "contains": "@current_sprint" } },
+            { "or": [{ "property": "P", "people": { "contains": "@lead" } }] },
+            { "property": "T", "multi_select": { "contains": "AI" } },
+        ] });
+        let mut names = BTreeSet::new();
+        collect_dynamic_refs(&filter, &mut names);
+        assert_eq!(
+            names.into_iter().collect::<Vec<_>>(),
+            vec!["current_sprint", "lead"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sole_match_is_substituted_into_the_filter() {
+        let transport = Canned::new(vec![json!({ "id": "page-1" })]);
+        let client = NotionClient::new(dynamic_config(), transport);
+        let filter =
+            json!({ "property": "スプリント", "relation": { "contains": "@current_sprint" } });
+        let resolved = client.resolve_dynamic_refs(filter, "wf").await.unwrap();
+        assert_eq!(
+            resolved,
+            json!({ "property": "スプリント", "relation": { "contains": "page-1" } })
+        );
+        // The lookup asks for two so that ambiguity is detectable at all.
+        let seen = client.transport.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0]["page_size"], json!(2));
+        assert_eq!(seen[0]["filter"]["property"], json!("S"));
+    }
+
+    /// Zero and two-or-more must both fail. Degrading to "no condition" would
+    /// drop the filter and ingest the whole database.
+    #[tokio::test]
+    async fn zero_and_ambiguous_matches_are_errors() {
+        let filter = json!({ "relation": { "contains": "@current_sprint" } });
+
+        let client = NotionClient::new(dynamic_config(), Canned::new(vec![]));
+        let err = client
+            .resolve_dynamic_refs(filter.clone(), "wf")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, NotionError::NotFound(_)), "got {err:?}");
+        assert!(err.to_string().contains("matched no page"));
+        assert!(!err.is_retryable());
+
+        let two = Canned::new(vec![json!({ "id": "a" }), json!({ "id": "b" })]);
+        let client = NotionClient::new(dynamic_config(), two);
+        let err = client.resolve_dynamic_refs(filter, "wf").await.unwrap_err();
+        assert!(err.to_string().contains("more than one page"));
+    }
+
+    /// A filter with no references must not touch the transport at all — a
+    /// poll pays for a lookup only when one is actually written.
+    #[tokio::test]
+    async fn a_filter_without_refs_performs_no_query() {
+        let client = NotionClient::new(dynamic_config(), NeverCalled);
+        let filter = json!({ "property": "T", "multi_select": { "contains": "AI" } });
+        let out = client
+            .resolve_dynamic_refs(filter.clone(), "wf")
+            .await
+            .unwrap();
+        assert_eq!(out, filter);
+    }
+
+    fn wf(name: &str, trigger: Value) -> WorkflowInfo {
+        WorkflowInfo {
+            workflow: name.to_string(),
+            trigger,
+            instructions_kind: None,
+            task_id_prefix: None,
+            options: Default::default(),
+        }
+    }
+
+    #[test]
+    fn an_undeclared_ref_fails_initialize_and_names_what_is_configured() {
+        let declared = dynamic_config().dynamic;
+        let errors = unknown_dynamic_refs(
+            &[wf(
+                "notion-implement",
+                json!({ "filter": { "relation": { "contains": "@current_sprnt" } } }),
+            )],
+            &declared,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("@current_sprnt"));
+        assert!(errors[0].contains("notion-implement"));
+        assert!(errors[0].contains("configured: current_sprint"));
+    }
+
+    /// `assignee = "@me"` lives outside `filter`, and must not be read as an
+    /// undeclared reference — the two namespaces are kept apart by scope.
+    #[test]
+    fn the_assignee_vocabulary_is_not_treated_as_a_ref() {
+        let declared = dynamic_config().dynamic;
+        let errors = unknown_dynamic_refs(
+            &[
+                wf("a", json!({ "assignee": "@me", "status": "未着手" })),
+                wf("b", json!({ "assignee": ["@me", "@none"] })),
+                wf(
+                    "c",
+                    json!({ "assignee": "@me",
+                            "filter": { "relation": { "contains": "@current_sprint" } } }),
+                ),
+            ],
+            &declared,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
     }
 }
