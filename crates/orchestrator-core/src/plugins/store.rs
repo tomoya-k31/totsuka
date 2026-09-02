@@ -22,6 +22,12 @@ use sha2::{Digest, Sha256};
 /// Filename of the manifest inside a plugin directory.
 const MANIFEST_FILE: &str = "plugin.toml";
 
+/// Marks a plugin directory as a **bundled** install: the store holds this
+/// file and nothing else, and the files come from the running binary's tree
+/// (#611). Its presence is the whole record — deliberately not a path, see
+/// [`Origin::Bundled`].
+const BUNDLED_MARKER: &str = "bundled";
+
 /// Errors from plugin-store operations.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -59,6 +65,20 @@ pub enum StoreError {
         /// Orchestrator protocol version.
         have: String,
     },
+    /// A plugin is declared as a bundled install, but this build ships no
+    /// bundled tree (#611) — the usual cause is a `cargo install` build, which
+    /// has no `libexec` beside it.
+    ///
+    /// Deliberately distinct from "not installed": the declaration is intact
+    /// and it is the tree that is absent, so the repair is to install from a
+    /// directory, not to re-run the same `--bundled` command.
+    #[error(
+        "plugin `{name}` was installed from the bundled tree, but this build has none → install it from a directory (`totsuka plugin install <dir>`) or use a build that ships plugins"
+    )]
+    NoBundledTree {
+        /// Plugin name.
+        name: String,
+    },
 }
 
 /// A validated, ready-to-commit installation (no side effects yet).
@@ -93,27 +113,108 @@ pub struct InstalledPlugin {
     pub protocol_version: String,
 }
 
+/// Where an installed plugin's files actually are (#611).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// Copied into the store: a directory install or `--from-source`.
+    ///
+    /// A copy is a snapshot, so it is the operator's to keep — an upgrade of
+    /// the CLI must never silently replace a build someone chose.
+    Copied,
+    /// Provided by the running binary's bundled tree, resolved fresh on every
+    /// use (#611, [ADR-0067]).
+    ///
+    /// **Nothing is copied and no path is stored**, because the bundled root
+    /// is *computed* from `current_exe` rather than remembered. That is what
+    /// makes the pointer survive an upgrade: Homebrew deletes the old Cellar
+    /// directory, so any path recorded at install time would dangle, while a
+    /// path derived from the binary that is running now always names that
+    /// binary's own tree.
+    ///
+    /// [ADR-0067]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0067-bundled-plugin-resolution.md
+    Bundled,
+}
+
 /// Manages installed plugin binaries under a root directory.
 #[derive(Debug, Clone)]
 pub struct PluginStore {
     root: PathBuf,
+    /// The running binary's bundled plugins tree, when it has one.
+    ///
+    /// Passed in rather than discovered here: locating it means reasoning
+    /// about the executable's own layout, which belongs to the CLI. `None` is
+    /// the normal state for a `cargo install` build, and for every test that
+    /// does not exercise bundled plugins.
+    bundled_root: Option<PathBuf>,
 }
 
 impl PluginStore {
-    /// A store rooted at `root` (usually `$XDG_DATA_HOME/totsuka/plugins`).
+    /// A store rooted at `root` (usually `$XDG_DATA_HOME/totsuka/plugins`),
+    /// with no bundled tree.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            bundled_root: None,
+        }
     }
 
-    /// The install directory for a plugin.
+    /// The same store, told where the running binary's bundled plugins live.
+    #[must_use]
+    pub fn with_bundled_root(mut self, bundled_root: Option<PathBuf>) -> Self {
+        self.bundled_root = bundled_root;
+        self
+    }
+
+    /// The store's own directory for a plugin: where a copy lives, and where
+    /// the marker of a bundled install lives.
+    ///
+    /// **This is not always where the plugin's files are** — use
+    /// [`resolved_dir`](Self::resolved_dir) for that.
     pub fn plugin_dir(&self, name: &str) -> PathBuf {
         self.root.join(name)
     }
 
-    /// Whether a plugin is installed (its manifest exists). An unsafe name is
-    /// treated as not installed (never probes outside the plugins root).
+    /// How `name` was installed. An uninstalled plugin reads as `Copied`,
+    /// which is what every path below already handles as "no files".
+    pub fn origin_of(&self, name: &str) -> Origin {
+        if self.plugin_dir(name).join(BUNDLED_MARKER).is_file() {
+            Origin::Bundled
+        } else {
+            Origin::Copied
+        }
+    }
+
+    /// The directory holding `name`'s manifest and binary right now.
+    ///
+    /// For a bundled install this is recomputed on every call, so a CLI
+    /// upgrade takes effect with nothing to re-run.
+    pub fn resolved_dir(&self, name: &str) -> Result<PathBuf, StoreError> {
+        validate_plugin_name(name)?;
+        match self.origin_of(name) {
+            Origin::Copied => Ok(self.plugin_dir(name)),
+            Origin::Bundled => match &self.bundled_root {
+                Some(root) => Ok(root.join(name)),
+                None => Err(StoreError::NoBundledTree {
+                    name: name.to_string(),
+                }),
+            },
+        }
+    }
+
+    /// Whether a plugin is installed. An unsafe name is treated as not
+    /// installed (never probes outside the plugins root).
+    ///
+    /// A bundled install counts as installed on the strength of its marker
+    /// alone. Requiring the bundled tree to resolve as well would report a
+    /// `cargo install` build as "not installed" and send the operator to
+    /// `plugin install`, which is the wrong repair — the declaration is
+    /// intact and it is the tree that is missing. That case is named by
+    /// [`resolved_dir`](Self::resolved_dir) instead, where the message can say
+    /// so.
     pub fn is_installed(&self, name: &str) -> bool {
-        validate_plugin_name(name).is_ok() && self.plugin_dir(name).join(MANIFEST_FILE).is_file()
+        validate_plugin_name(name).is_ok()
+            && (self.plugin_dir(name).join(MANIFEST_FILE).is_file()
+                || self.plugin_dir(name).join(BUNDLED_MARKER).is_file())
     }
 
     /// Validate a source directory and compute its checksum, **without** writing
@@ -218,6 +319,23 @@ impl PluginStore {
         Ok(())
     }
 
+    /// Record `name` as a bundled install: write the marker and copy nothing
+    /// (#611).
+    ///
+    /// Any previous copy is removed first, so switching a `--from-source`
+    /// build back to bundled leaves no stale binary that a later change could
+    /// accidentally resolve to.
+    pub fn commit_link_bundled(&self, name: &str) -> Result<(), StoreError> {
+        validate_plugin_name(name)?;
+        let dir = self.plugin_dir(name);
+        if dir.exists() {
+            fs::remove_dir_all(&dir)?;
+        }
+        fs::create_dir_all(&dir)?;
+        fs::write(dir.join(BUNDLED_MARKER), b"")?;
+        Ok(())
+    }
+
     /// The plugin kind of an installed plugin as a config string, if installed.
     pub fn kind_str_of(&self, name: &str) -> Result<Option<String>, StoreError> {
         Ok(self
@@ -240,7 +358,10 @@ impl PluginStore {
     /// Read one installed plugin's manifest.
     pub fn manifest_of(&self, name: &str) -> Result<Option<Manifest>, StoreError> {
         validate_plugin_name(name)?;
-        let path = self.plugin_dir(name).join(MANIFEST_FILE);
+        if !self.is_installed(name) {
+            return Ok(None);
+        }
+        let path = self.resolved_dir(name)?.join(MANIFEST_FILE);
         if !path.is_file() {
             return Ok(None);
         }
@@ -258,7 +379,19 @@ impl PluginStore {
             if !entry.file_type()?.is_dir() {
                 continue;
             }
-            let manifest_path = entry.path().join(MANIFEST_FILE);
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            // A bundled entry holds only the marker, so its manifest is read
+            // from the running binary's tree — which is what makes `list`
+            // report the version that would actually launch.
+            let manifest_path = match self.resolved_dir(&name) {
+                Ok(dir) => dir.join(MANIFEST_FILE),
+                // A bundled entry with no tree to resolve: skip it here rather
+                // than fail the whole listing. `plugin list` is a diagnostic,
+                // and the actionable error belongs where the plugin is used.
+                Err(_) => continue,
+            };
             if !manifest_path.is_file() {
                 continue;
             }
@@ -583,5 +716,175 @@ protocol_version = "{protocol_req}"
             store.prepare_install(&no_bin).unwrap_err(),
             StoreError::NoBinary { .. }
         ));
+    }
+
+    // ---- bundled installs resolve at runtime (#611) --------------------
+
+    /// A bundled install stores **only the marker**, and both the manifest and
+    /// the binary resolve into whatever tree the store is currently told about.
+    #[test]
+    fn a_bundled_install_copies_nothing_and_resolves_into_the_bundled_tree() {
+        let base = scratch("bundled-link");
+        let bundled = base.join("libexec/plugins/github");
+        fs::create_dir_all(&bundled).unwrap();
+        fake_source(&bundled, "github", ">=0.1.0", b"v1");
+
+        let store = PluginStore::new(base.join("plugins"))
+            .with_bundled_root(Some(base.join("libexec/plugins")));
+        store.commit_link_bundled("github").unwrap();
+
+        assert!(store.is_installed("github"));
+        assert_eq!(store.origin_of("github"), Origin::Bundled);
+        // Nothing was copied: the store's own directory holds the marker alone.
+        let own = store.plugin_dir("github");
+        assert!(own.join(BUNDLED_MARKER).is_file());
+        assert!(
+            !own.join("github").exists(),
+            "the binary must not be copied"
+        );
+        assert!(
+            !own.join(MANIFEST_FILE).exists(),
+            "the manifest must not be copied"
+        );
+        // ...and resolution points into the bundled tree.
+        assert_eq!(store.resolved_dir("github").unwrap(), bundled);
+        assert!(store.manifest_of("github").unwrap().is_some());
+    }
+
+    /// The point of the whole design: replacing the bundled tree's contents —
+    /// what a CLI upgrade does — changes what launches, with nothing re-run.
+    #[test]
+    fn an_upgraded_bundled_tree_is_picked_up_with_no_reinstall() {
+        let base = scratch("bundled-upgrade");
+        let old_tree = base.join("Cellar/0.1.0/libexec/plugins");
+        fs::create_dir_all(old_tree.join("github")).unwrap();
+        fake_source(&old_tree.join("github"), "github", ">=0.1.0", b"old");
+
+        let store = PluginStore::new(base.join("plugins"));
+        let at_old = store.clone().with_bundled_root(Some(old_tree.clone()));
+        at_old.commit_link_bundled("github").unwrap();
+        assert_eq!(
+            at_old.resolved_dir("github").unwrap(),
+            old_tree.join("github")
+        );
+
+        // The upgrade: a *new* tree at a different path, and the old one gone —
+        // exactly what Homebrew does when it prunes the previous Cellar.
+        let new_tree = base.join("Cellar/0.2.0/libexec/plugins");
+        fs::create_dir_all(new_tree.join("github")).unwrap();
+        fake_source(&new_tree.join("github"), "github", ">=0.1.0", b"new");
+        fs::remove_dir_all(base.join("Cellar/0.1.0")).unwrap();
+
+        // The same store record, a newer binary: the marker held no path, so
+        // there is nothing stale to correct.
+        let at_new = store.with_bundled_root(Some(new_tree.clone()));
+        assert_eq!(
+            at_new.resolved_dir("github").unwrap(),
+            new_tree.join("github")
+        );
+        assert_eq!(
+            fs::read(new_tree.join("github/github")).unwrap(),
+            b"new".to_vec()
+        );
+        assert!(at_new.is_installed("github"));
+    }
+
+    /// A build with no bundled tree (`cargo install`) must say *that*, not
+    /// "not installed" — the declaration is intact and the tree is what is
+    /// missing, so the repair is different.
+    #[test]
+    fn a_bundled_install_without_a_tree_is_a_named_error_not_a_missing_plugin() {
+        let base = scratch("bundled-no-tree");
+        let store = PluginStore::new(base.join("plugins"));
+        store.commit_link_bundled("github").unwrap();
+
+        assert!(
+            store.is_installed("github"),
+            "the declaration is still there"
+        );
+        let err = store.resolved_dir("github").unwrap_err();
+        assert!(
+            matches!(err, StoreError::NoBundledTree { .. }),
+            "got {err:?}"
+        );
+        assert!(err.to_string().contains("install it from a directory"));
+        // `list` is a diagnostic and must not fail wholesale over one entry.
+        assert!(store.list().unwrap().is_empty());
+    }
+
+    /// A copied install is a snapshot the operator chose. Nothing about a
+    /// bundled tree may change where it resolves.
+    #[test]
+    fn a_copied_install_is_unaffected_by_the_bundled_tree() {
+        let base = scratch("copied-unaffected");
+        let src = base.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fake_source(&src, "github", ">=0.1.0", b"mine");
+        let bundled = base.join("libexec/plugins/github");
+        fs::create_dir_all(&bundled).unwrap();
+        fake_source(&bundled, "github", ">=0.1.0", b"theirs");
+
+        let store = PluginStore::new(base.join("plugins"))
+            .with_bundled_root(Some(base.join("libexec/plugins")));
+        let plan = store.prepare_install(&src).unwrap();
+        store.commit_install(&plan).unwrap();
+
+        assert_eq!(store.origin_of("github"), Origin::Copied);
+        assert_eq!(
+            store.resolved_dir("github").unwrap(),
+            store.plugin_dir("github")
+        );
+        assert_eq!(
+            fs::read(store.plugin_dir("github").join("github")).unwrap(),
+            b"mine".to_vec()
+        );
+    }
+
+    /// Switching a copy over to bundled must not leave the old binary behind.
+    #[test]
+    fn linking_over_a_copy_removes_the_copy() {
+        let base = scratch("relink");
+        let src = base.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fake_source(&src, "github", ">=0.1.0", b"copied");
+        let bundled = base.join("libexec/plugins/github");
+        fs::create_dir_all(&bundled).unwrap();
+        fake_source(&bundled, "github", ">=0.1.0", b"bundled");
+
+        let store = PluginStore::new(base.join("plugins"))
+            .with_bundled_root(Some(base.join("libexec/plugins")));
+        let plan = store.prepare_install(&src).unwrap();
+        store.commit_install(&plan).unwrap();
+        assert!(store.plugin_dir("github").join("github").is_file());
+
+        store.commit_link_bundled("github").unwrap();
+        assert_eq!(store.origin_of("github"), Origin::Bundled);
+        assert!(
+            !store.plugin_dir("github").join("github").exists(),
+            "the previous copy must be gone, not shadowed"
+        );
+        assert!(!store.plugin_dir("github").join(MANIFEST_FILE).exists());
+    }
+
+    /// `uninstall` clears a bundled record and must never touch the tree it
+    /// pointed at — that tree belongs to the installed CLI.
+    #[test]
+    fn uninstalling_a_bundled_plugin_leaves_the_bundled_tree_alone() {
+        let base = scratch("bundled-uninstall");
+        let bundled = base.join("libexec/plugins/github");
+        fs::create_dir_all(&bundled).unwrap();
+        fake_source(&bundled, "github", ">=0.1.0", b"v1");
+
+        let store = PluginStore::new(base.join("plugins"))
+            .with_bundled_root(Some(base.join("libexec/plugins")));
+        store.commit_link_bundled("github").unwrap();
+        assert!(store.uninstall("github").unwrap());
+
+        assert!(!store.is_installed("github"));
+        assert_eq!(store.origin_of("github"), Origin::Copied, "no marker left");
+        assert!(
+            bundled.join("github").is_file(),
+            "the CLI's own tree survives"
+        );
     }
 }
