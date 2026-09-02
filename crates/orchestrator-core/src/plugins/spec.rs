@@ -84,7 +84,10 @@ pub fn plugin_spec(
     };
     Ok(PluginSpec {
         name: name.to_string(),
-        program: store.plugin_dir(name).join(&manifest.name),
+        // Resolved rather than joined onto the store's own directory: a
+        // bundled install has no copy there, and resolving on every launch is
+        // what makes a CLI upgrade take effect with nothing to re-run (#611).
+        program: store.resolved_dir(name)?.join(&manifest.name),
         args: vec![],
         manifest,
         init_config,

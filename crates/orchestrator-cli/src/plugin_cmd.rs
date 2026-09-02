@@ -163,6 +163,13 @@ struct InstallSource {
     binary_dir: PathBuf,
     /// What to show as "Source:" — the directory a human would look in.
     label: PathBuf,
+    /// Install by recording "bundled" instead of copying (#611).
+    ///
+    /// True only for the tree this build resolves on its own. An explicit
+    /// `--bundled-dir` is **copied**: runtime resolution derives the root from
+    /// `current_exe`, so it would not point at an operator-chosen tree, and
+    /// silently substituting a different one is worse than taking a snapshot.
+    bundled: bool,
 }
 
 impl InstallSource {
@@ -172,6 +179,7 @@ impl InstallSource {
             manifest_path: dir.join("plugin.toml"),
             binary_dir: dir.clone(),
             label: dir,
+            bundled: false,
         }
     }
 }
@@ -302,7 +310,12 @@ fn resolve_sources(args: &InstallArgs) -> Result<Option<Vec<InstallSource>>, Cli
             available
                 .into_iter()
                 .find(|p| &p.name == name)
-                .map(|p| Some(vec![InstallSource::dir(p.dir)]))
+                .map(|p| {
+                    Some(vec![InstallSource {
+                        bundled: args.bundled_dir.is_none(),
+                        ..InstallSource::dir(p.dir)
+                    }])
+                })
                 .ok_or_else(|| {
                     format!("`{name}` is not bundled with this `totsuka` → available: {names}")
                         .into()
@@ -311,7 +324,10 @@ fn resolve_sources(args: &InstallArgs) -> Result<Option<Vec<InstallSource>>, Cli
         (None, true) => Ok(Some(
             available
                 .into_iter()
-                .map(|p| InstallSource::dir(p.dir))
+                .map(|p| InstallSource {
+                    bundled: args.bundled_dir.is_none(),
+                    ..InstallSource::dir(p.dir)
+                })
                 .collect(),
         )),
         (Some(_), true) => {
@@ -403,6 +419,9 @@ fn from_source_sources(args: &InstallArgs) -> Result<Option<Vec<InstallSource>>,
             manifest_path: p.manifest_path.clone(),
             binary_dir: binary_dir.clone(),
             label: root.join("plugins"),
+            // A `--from-source` build is a snapshot the operator chose; it is
+            // copied, and an upgrade must never replace it (#611).
+            bundled: false,
         })
         .collect();
 
@@ -466,18 +485,31 @@ fn install_one(
         plan.name, plan.manifest.version, plan.manifest.kind
     );
     println!("Source:   {}", source.label.display());
+    // The checksum describes the binary that would launch *now*. For a bundled
+    // install that is not a pin — say so, or it reads like one.
     println!("SHA-256:  {}", plan.checksum);
+    if source.bundled {
+        println!("Install:  link to this build's bundled tree (resolved at launch)");
+    }
     if !args.yes && !confirm("Install this plugin?")? {
         println!("Aborted; nothing was installed.");
         return Ok(());
     }
 
-    store.commit_install(&plan)?;
-    println!(
-        "Installed `{}` to {}",
-        plan.name,
-        store.plugin_dir(&plan.name).display()
-    );
+    if source.bundled {
+        store.commit_link_bundled(&plan.name)?;
+        println!(
+            "Linked `{}` to the bundled tree; a `totsuka` upgrade updates it with nothing to re-run",
+            plan.name
+        );
+    } else {
+        store.commit_install(&plan)?;
+        println!(
+            "Installed `{}` to {}",
+            plan.name,
+            store.plugin_dir(&plan.name).display()
+        );
+    }
 
     if args.enable {
         set_enabled(cx, &plan.name, true)?;
@@ -551,6 +583,9 @@ fn set_enabled(cx: &Cx, name: &str, enabled: bool) -> Result<(), CliError> {
 struct PluginRow {
     name: String,
     installed: bool,
+    /// Where the files come from: `bundled` (this build's tree, resolved at
+    /// launch) or `copied` (#611). `-` when the plugin is not installed.
+    origin: Option<String>,
     enabled: bool,
     kind: Option<String>,
     version: Option<String>,
@@ -558,7 +593,8 @@ struct PluginRow {
 }
 
 fn list(cx: &Cx, env: &HashMap<String, String>, json: bool) -> Result<(), CliError> {
-    let installed = cx.store().list()?;
+    let store = cx.store();
+    let installed = store.list()?;
     let config = cx.load_config_or_default(env)?;
 
     // Union of installed and configured plugin names.
@@ -577,6 +613,13 @@ fn list(cx: &Cx, env: &HashMap<String, String>, json: bool) -> Result<(), CliErr
             let cfg = config.plugins.get(&name);
             PluginRow {
                 installed: inst.is_some(),
+                origin: inst.is_some().then(|| {
+                    match store.origin_of(&name) {
+                        orchestrator_core::plugins::Origin::Bundled => "bundled",
+                        orchestrator_core::plugins::Origin::Copied => "copied",
+                    }
+                    .to_string()
+                }),
                 enabled: cfg.map(|c| c.enabled).unwrap_or(false),
                 kind: inst
                     .map(|i| i.kind.clone())
@@ -594,14 +637,15 @@ fn list(cx: &Cx, env: &HashMap<String, String>, json: bool) -> Result<(), CliErr
         println!("No plugins installed or configured.");
     } else {
         println!(
-            "{:<16} {:<9} {:<8} {:<10} {:<8} {:<8}",
-            "NAME", "INSTALLED", "ENABLED", "KIND", "VERSION", "PROTOCOL"
+            "{:<16} {:<9} {:<8} {:<8} {:<10} {:<8} {:<8}",
+            "NAME", "INSTALLED", "ORIGIN", "ENABLED", "KIND", "VERSION", "PROTOCOL"
         );
         for r in &rows {
             println!(
-                "{:<16} {:<9} {:<8} {:<10} {:<8} {}",
+                "{:<16} {:<9} {:<8} {:<8} {:<10} {:<8} {}",
                 r.name,
                 r.installed,
+                r.origin.as_deref().unwrap_or("-"),
                 r.enabled,
                 r.kind.as_deref().unwrap_or("-"),
                 r.version.as_deref().unwrap_or("-"),

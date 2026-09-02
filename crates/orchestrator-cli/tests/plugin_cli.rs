@@ -493,11 +493,17 @@ fn bundled_discovery_follows_the_symlink_to_the_real_tree() {
         None,
     );
     assert!(ok, "{out}{err}");
-    assert!(out.contains("Installed `github`"), "{out}");
+    // A bundled install links rather than copies (#611), so this is the line
+    // that proves discovery found the tree behind the symlink.
+    assert!(out.contains("Linked `github`"), "{out}");
 
-    let (_, listed, _) = env.run(&["plugin", "list", "--json"], None);
+    // Listed through the **same** binary. A bundled record names no path, so it
+    // resolves only for a build that actually ships that plugin — running the
+    // bare test binary here would (correctly) find no tree and list nothing.
+    let (_, listed, _) = env.run_bin(&link, &["plugin", "list", "--json"], &[], None);
     let rows: serde_json::Value = serde_json::from_str(&listed).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1, "{listed}");
+    assert_eq!(rows[0]["origin"], "bundled", "{listed}");
 }
 
 #[test]
