@@ -11,6 +11,18 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.6.3](https://github.com/tomoya-k31/totsuka/compare/v0.6.2...v0.6.3) (2026-09-02)
+
+
+### Features
+
+* **cli:** 同梱プラグインをコピーせず実行時に解決する ([#612](https://github.com/tomoya-k31/totsuka/issues/612)) ([f636365](https://github.com/tomoya-k31/totsuka/commit/f636365a3031b4b00f16e5c2d5bb90a7d428f011))
+
+
+### Bug Fixes
+
+* **plugin-sdk:** [@any](https://github.com/any) は people プロパティのマップを要求しない ([#614](https://github.com/tomoya-k31/totsuka/issues/614)) ([7fbdb07](https://github.com/tomoya-k31/totsuka/commit/7fbdb07ecef3a506a46c3b0f2c93888de47685b8)), closes [#582](https://github.com/tomoya-k31/totsuka/issues/582)
+
 ## [0.6.2](https://github.com/tomoya-k31/totsuka/compare/v0.6.1...v0.6.2) (2026-09-02)
 
 
