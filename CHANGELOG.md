@@ -11,6 +11,19 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.6.2](https://github.com/tomoya-k31/totsuka/compare/v0.6.1...v0.6.2) (2026-09-02)
+
+
+### Features
+
+* **task-source-notion:** repo_hint で multi_select を読む ([#607](https://github.com/tomoya-k31/totsuka/issues/607)) ([ab23c5e](https://github.com/tomoya-k31/totsuka/commit/ab23c5ecfaf057aa13f6fe523f1d3a12fcc5a989))
+* **task-source-notion:** trigger.filter に @&lt;name&gt; の動的参照を入れる ([#610](https://github.com/tomoya-k31/totsuka/issues/610)) ([3ba0475](https://github.com/tomoya-k31/totsuka/commit/3ba047566efae3568c8f18a938c365784ba7c2f3)), closes [#606](https://github.com/tomoya-k31/totsuka/issues/606)
+
+
+### Bug Fixes
+
+* **doctor:** stale socket を live な receiver と報告しないようにする ([#602](https://github.com/tomoya-k31/totsuka/issues/602)) ([3e05439](https://github.com/tomoya-k31/totsuka/commit/3e05439970c3a34aa8ace77f21814d44cb005786))
+
 ## [0.6.1](https://github.com/tomoya-k31/totsuka/compare/v0.6.0...v0.6.1) (2026-08-31)
 
 
