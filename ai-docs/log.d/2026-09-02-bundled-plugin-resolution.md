@@ -15,3 +15,7 @@
 * **Update**: `plugin list` に `ORIGIN` 列（`bundled` / `copied`）を追加した。`--json` にも `origin` フィールドが入る。`--bundled` の出力も「Installed … to \<path\>」から「Linked … to the bundled tree」へ変わった。
 
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) の `--bundled` の記述と、[orchestrator-core](/components/orchestrator-core.md) の `plugins` モジュールの行を更新した。
+
+* **Note**: **同じディレクトリにマーカーとコピーを同居させない**と決めた（#612 のレビュー指摘）。`commit_link_bundled` はコピーを消してからマーカーを書くが、`commit_install`（コピー側）はマーカーを消していなかった。その状態では `origin_of` が `Bundled` を答え続け、**運用者が今入れたバイナリが解決で飛ばされて一度も起動しない**。両方向で相手の痕跡を消し、ディスク上の表現を常に 1 つに保つことで、「どちらが勝つか」を暗黙の優先順位ではなく到達不能な状態にした。
+
+* **Note**: `origin_of` は `pub` なので**自分で名前を検証する**（同指摘）。`is_installed` が doc で「never probes outside the plugins root」と明記している不変条件を、呼び出し側の検証に委ねると `pub` な入口から破れる。不正な名前は `Copied` と答えてルート内に留まる。実害は読み取り専用の `is_file()` 探査に留まるが、モジュールの約束のほうを守る。

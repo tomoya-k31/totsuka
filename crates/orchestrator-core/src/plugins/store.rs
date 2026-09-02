@@ -176,8 +176,16 @@ impl PluginStore {
 
     /// How `name` was installed. An uninstalled plugin reads as `Copied`,
     /// which is what every path below already handles as "no files".
+    ///
+    /// The name is validated here rather than left to callers: this is `pub`,
+    /// and the store's standing invariant is that it **never probes outside
+    /// the plugins root** (see [`is_installed`](Self::is_installed)). An
+    /// unsafe name reads as `Copied` so the answer stays inside the root,
+    /// where the caller's own validation then rejects it.
     pub fn origin_of(&self, name: &str) -> Origin {
-        if self.plugin_dir(name).join(BUNDLED_MARKER).is_file() {
+        if validate_plugin_name(name).is_ok()
+            && self.plugin_dir(name).join(BUNDLED_MARKER).is_file()
+        {
             Origin::Bundled
         } else {
             Origin::Copied
@@ -295,6 +303,15 @@ impl PluginStore {
     pub fn commit_install(&self, plan: &InstallPlan) -> Result<(), StoreError> {
         let dir = self.plugin_dir(&plan.name);
         fs::create_dir_all(&dir)?;
+        // Clear any bundled record first, mirroring what `commit_link_bundled`
+        // does to a copy. Exactly one representation may exist: leaving the
+        // marker beside a fresh copy would keep `origin_of` answering
+        // `Bundled`, so the binary the operator just chose would be resolved
+        // past and never launched (#612 review).
+        let marker = dir.join(BUNDLED_MARKER);
+        if marker.exists() {
+            fs::remove_file(&marker)?;
+        }
         let dest_binary = dir.join(&plan.name);
         // Staged inside `dir` so the rename stays on one filesystem, which is
         // what makes it atomic. (`list` never sees it either way — it walks the
@@ -886,5 +903,64 @@ protocol_version = "{protocol_req}"
             bundled.join("github").is_file(),
             "the CLI's own tree survives"
         );
+    }
+
+    /// Copilot's finding on #612: a copy installed over a bundled record must
+    /// win, and must not leave the marker behind to misclassify it.
+    #[test]
+    fn a_copy_installed_over_a_bundled_record_replaces_it() {
+        let base = scratch("copy-over-link");
+        let src = base.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fake_source(&src, "github", ">=0.1.0", b"mine");
+        let bundled = base.join("libexec/plugins/github");
+        fs::create_dir_all(&bundled).unwrap();
+        fake_source(&bundled, "github", ">=0.1.0", b"theirs");
+
+        let store = PluginStore::new(base.join("plugins"))
+            .with_bundled_root(Some(base.join("libexec/plugins")));
+        store.commit_link_bundled("github").unwrap();
+        assert_eq!(store.origin_of("github"), Origin::Bundled);
+
+        // Now install a copy over it. Without clearing the marker this reads
+        // as Bundled and resolves into the bundled tree, silently ignoring the
+        // binary the operator just chose.
+        let plan = store.prepare_install(&src).unwrap();
+        store.commit_install(&plan).unwrap();
+
+        assert_eq!(store.origin_of("github"), Origin::Copied);
+        assert!(!store.plugin_dir("github").join(BUNDLED_MARKER).exists());
+        assert_eq!(
+            fs::read(store.resolved_dir("github").unwrap().join("github")).unwrap(),
+            b"mine".to_vec()
+        );
+    }
+
+    /// The store never probes outside its root — the invariant `is_installed`
+    /// states. `origin_of` is public, so it holds it too rather than trusting
+    /// callers (also Copilot's finding on #612).
+    #[test]
+    fn an_unsafe_name_never_probes_outside_the_root() {
+        let base = scratch("unsafe-name");
+        let store = PluginStore::new(base.join("plugins"));
+        // Plant a real marker at the traversal target, so a passing assertion
+        // means the name was rejected — not merely that nothing was there.
+        fs::create_dir_all(base.join("plugins")).unwrap();
+        fs::create_dir_all(base.join("escape")).unwrap();
+        fs::write(base.join("escape").join(BUNDLED_MARKER), b"").unwrap();
+        assert!(
+            base.join("plugins/../escape")
+                .join(BUNDLED_MARKER)
+                .is_file(),
+            "the probe would find this if the name were not validated"
+        );
+        for name in ["../escape", "a/b", "..", "", "with\\backslash"] {
+            assert_eq!(store.origin_of(name), Origin::Copied, "name {name:?}");
+            assert!(matches!(
+                store.resolved_dir(name).unwrap_err(),
+                StoreError::InvalidName(_)
+            ));
+            assert!(!store.is_installed(name));
+        }
     }
 }
