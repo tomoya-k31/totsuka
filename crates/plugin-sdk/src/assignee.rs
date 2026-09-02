@@ -141,6 +141,19 @@ impl AssigneeFilter {
         self.explicit
     }
 
+    /// Whether the condition looks at a task's assignees at all.
+    ///
+    /// Only `@any` does not: [`matches`](Self::matches) answers `true` before
+    /// reading the list. So `@any` is the one condition a source can evaluate
+    /// **without** a mapped people property — and saying so is what makes it
+    /// the way to write "I do not filter by assignee" (#582). Before this it
+    /// was rejected alongside the conditions that genuinely need the property,
+    /// which left omitting the key as the only quiet option — and omitting it
+    /// is exactly the silent hole that #582 is about.
+    pub fn reads_assignees(&self) -> bool {
+        self.terms.is_some()
+    }
+
     /// Whether the condition mentions `@me`, and so cannot be evaluated without
     /// knowing who the operator is.
     ///
@@ -214,11 +227,15 @@ pub fn check(
         if !filter.is_explicit() {
             continue;
         }
-        if people_property == Some(false) {
+        // `@any` reads no assignees, so an unmapped property cannot stop it
+        // from being evaluated (#582). Rejecting it too would leave no way to
+        // state "no assignee filtering" other than omitting the key.
+        if people_property == Some(false) && filter.reads_assignees() {
             errors.push(format!(
                 "workflow `{}` sets `trigger.assignee`, but `{property_key}` is not set → every \
                  task would read as unassigned, so the condition could not do anything; map the \
-                 property or drop the key",
+                 property, drop the key, or write `assignee = \"@any\"` if you do not filter by \
+                 assignee",
                 wf.workflow
             ));
         }
@@ -430,5 +447,99 @@ mod tests {
         let f = parse(json!({})).unwrap();
         assert!(f.matches(&[], None));
         assert!(!f.matches(&["anyone"], None));
+    }
+
+    /// `@any` reads no assignees, so an unmapped people property cannot make
+    /// it unevaluable (#582). This is also the only way to *state* "I do not
+    /// filter by assignee" — while it was rejected, omitting the key was the
+    /// sole quiet option, and omitting it is the silent hole #582 describes.
+    #[test]
+    fn any_needs_no_people_property() {
+        let wf = |trigger| WorkflowInfo {
+            workflow: "wf".into(),
+            trigger,
+            instructions_kind: None,
+            task_id_prefix: None,
+            options: serde_json::Map::new(),
+        };
+        let (errors, warnings) = check(
+            &[wf(json!({ "status": "Todo", "assignee": "@any" }))],
+            None,
+            "`notion_user_id`",
+            Some(false),
+            "`property_map.assignee`",
+            false,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // Every other condition still needs the property, because every other
+        // condition actually reads the assignee list.
+        for cond in [
+            json!({ "assignee": "@none" }),
+            json!({ "assignee": "@me" }),
+            json!({ "assignee": "someone" }),
+            json!({ "assignee": ["@me", "@none"] }),
+        ] {
+            let mut trigger = cond.clone();
+            trigger["status"] = json!("Todo");
+            let (errors, _) = check(
+                &[wf(trigger)],
+                Some("me"),
+                "`notion_user_id`",
+                Some(false),
+                "`property_map.assignee`",
+                false,
+            );
+            assert!(
+                errors.iter().any(|e| e.contains("property_map.assignee")),
+                "condition {cond} must still be rejected, got {errors:?}"
+            );
+        }
+    }
+
+    /// The rejection now names `@any` as a way out, so the message tells the
+    /// operator what to write instead of only what is wrong.
+    #[test]
+    fn the_unmapped_property_error_offers_any_as_a_way_out() {
+        let (errors, _) = check(
+            &[WorkflowInfo {
+                workflow: "wf".into(),
+                trigger: json!({ "assignee": "@none" }),
+                instructions_kind: None,
+                task_id_prefix: None,
+                options: serde_json::Map::new(),
+            }],
+            None,
+            "`notion_user_id`",
+            Some(false),
+            "`property_map.assignee`",
+            false,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("@any"), "{errors:?}");
+    }
+
+    /// `reads_assignees` is the distinction the check now turns on, so it is
+    /// pinned directly rather than only through `check`.
+    #[test]
+    fn only_any_reads_no_assignees() {
+        assert!(
+            !parse(json!({ "assignee": "@any" }))
+                .unwrap()
+                .reads_assignees()
+        );
+        for cond in [
+            json!({}),
+            json!({ "assignee": "@me" }),
+            json!({ "assignee": "@none" }),
+            json!({ "assignee": "someone" }),
+            json!({ "assignee": ["@me", "@none"] }),
+        ] {
+            assert!(
+                parse(cond.clone()).unwrap().reads_assignees(),
+                "condition {cond} does read assignees"
+            );
+        }
     }
 }
