@@ -82,35 +82,37 @@ where
         self
     }
 
-    /// Handle one NDJSON request line.
+    /// Parse one NDJSON line, dispatch it, and produce a reply. A non-JSON line
+    /// yields a `PARSE_ERROR` response with a null id; blank lines and
+    /// notifications (no `id`) produce no response.
     pub async fn handle_line(&mut self, line: &str) -> Reply {
-        let request: Value = match serde_json::from_str(line) {
-            Ok(value) => value,
-            Err(e) => {
-                return Reply::respond(Response::error(
-                    RequestId::Str(String::new()),
-                    Error::new(error_code::PARSE_ERROR, format!("invalid JSON: {e}")),
-                ));
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Reply::none();
+        }
+        let Ok(request) = serde_json::from_str::<Value>(trimmed) else {
+            // A null id, not an empty string: the id is *unknown*, and saying
+            // `""` would claim a correlation key the caller never sent.
+            return Reply::respond(Response::error_without_id(Error::new(
+                error_code::PARSE_ERROR,
+                "request was not valid JSON",
+            )));
+        };
+        // A message without an `id` is a notification: never answered.
+        let Some(id) = request.get("id").map(request_id) else {
+            if request.get("method").and_then(Value::as_str) == Some(method::SHUTDOWN) {
+                self.session = None;
             }
+            return Reply::none();
         };
         let Some(method_name) = request.get("method").and_then(Value::as_str) else {
             return Reply::respond(Response::error(
-                RequestId::Str(String::new()),
+                id,
                 Error::new(error_code::INVALID_REQUEST, "missing `method`"),
             ));
         };
-        let id = request.get("id").map(request_id);
         let params = request.get("params").cloned().unwrap_or(Value::Null);
-        match id {
-            // A notification: answer nothing, whatever it asked for.
-            None => {
-                if method_name == method::SHUTDOWN {
-                    self.session = None;
-                }
-                Reply::none()
-            }
-            Some(id) => self.dispatch(id, method_name, params).await,
-        }
+        self.dispatch(id, method_name, params).await
     }
 
     async fn dispatch(&mut self, id: RequestId, method_name: &str, params: Value) -> Reply {
@@ -137,9 +139,13 @@ where
         let init: InitializeParams = match parse_params(&params) {
             Ok(value) => value,
             Err(message) => {
+                // `INVALID_PARAMS`, not `CONFIG_INVALID`: a request this
+                // plugin cannot deserialize is a protocol problem, and
+                // reporting it as a config one sends the operator to edit a
+                // file that is not the cause.
                 return Reply::respond(Response::error(
                     id,
-                    Error::new(error_code::CONFIG_INVALID, message),
+                    Error::new(error_code::INVALID_PARAMS, message),
                 ));
             }
         };

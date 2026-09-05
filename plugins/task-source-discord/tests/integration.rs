@@ -2,6 +2,7 @@
 //! `initialize`'s validation and the token guard are exercised end to end
 //! with no network.
 
+use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use plugin_protocol::jsonrpc::{Response, error_code};
@@ -9,20 +10,20 @@ use serde_json::{Value, json};
 use task_source_discord::server::{Server, TransportFactory};
 use task_source_discord::transport::{DiscordTransport, HttpMethod, TransportSettings};
 
-/// Canned responses, handed out in order.
+/// Canned responses, handed out in the order they were queued.
 #[derive(Default)]
 struct Shared {
-    queued: Mutex<Vec<Result<Value, u16>>>,
+    queued: Mutex<VecDeque<Result<Value, u16>>>,
     /// Every `(method, path)` actually called, for asserting on round trips.
     calls: Mutex<Vec<(HttpMethod, String)>>,
 }
 
 impl Shared {
     fn push_ok(&self, value: Value) {
-        self.queued.lock().unwrap().push(Ok(value));
+        self.queued.lock().unwrap().push_back(Ok(value));
     }
     fn push_status(&self, status: u16) {
-        self.queued.lock().unwrap().push(Err(status));
+        self.queued.lock().unwrap().push_back(Err(status));
     }
     fn calls(&self) -> Vec<(HttpMethod, String)> {
         self.calls.lock().unwrap().clone()
@@ -44,11 +45,14 @@ impl DiscordTransport for FakeTransport {
             .lock()
             .unwrap()
             .push((method, path.to_string()));
-        let queued = self.0.queued.lock().unwrap().pop();
+        let queued = self.0.queued.lock().unwrap().pop_front();
         match queued {
             Some(Ok(value)) => Ok(value),
             Some(Err(status)) => Err(task_source_discord::error::auth_failure(status)),
-            None => Ok(Value::Null),
+            // Fail loudly rather than answering `null`: a silent default here
+            // would let an unexpected extra round trip pass as success, which
+            // is exactly what the `calls()` assertions exist to catch.
+            None => panic!("unexpected discord call: {method:?} {path} (no response queued)"),
         }
     }
 }
@@ -284,4 +288,48 @@ async fn update_status_is_an_accepted_no_op() {
     .await;
     assert!(resp.error.is_none(), "{:?}", resp.error);
     assert!(shared.calls().is_empty());
+}
+
+/// A line that is not JSON has no id to correlate against, so the reply must
+/// carry a **null** id rather than a made-up empty string.
+#[tokio::test]
+async fn a_non_json_line_answers_with_a_null_id() {
+    let shared = std::sync::Arc::new(Shared::default());
+    let mut srv = server(&shared);
+
+    let reply = srv.handle_line("not json at all").await;
+    let line = reply.line.expect("a response line");
+    let value: Value = serde_json::from_str(&line).expect("valid JSON");
+    assert_eq!(value["id"], Value::Null, "{line}");
+    assert_eq!(value["error"]["code"], error_code::PARSE_ERROR);
+}
+
+/// Blank lines and notifications get no reply at all — answering a
+/// notification would put an unexpected line on the wire.
+#[tokio::test]
+async fn blank_lines_and_notifications_are_not_answered() {
+    let shared = std::sync::Arc::new(Shared::default());
+    let mut srv = server(&shared);
+
+    assert!(srv.handle_line("   ").await.line.is_none());
+    let notification = json!({ "jsonrpc": "2.0", "method": "shutdown" });
+    assert!(
+        srv.handle_line(&notification.to_string())
+            .await
+            .line
+            .is_none()
+    );
+}
+
+/// Malformed request params are a *protocol* problem. Reporting them as
+/// `CONFIG_INVALID` would send the operator to edit a file that is not the
+/// cause.
+#[tokio::test]
+async fn malformed_initialize_params_are_invalid_params() {
+    let shared = std::sync::Arc::new(Shared::default());
+    let mut srv = server(&shared);
+
+    let resp = call(&mut srv, "initialize", json!({ "protocol_version": 42 })).await;
+    let (code, _) = error_of(&resp);
+    assert_eq!(code, error_code::INVALID_PARAMS);
 }
