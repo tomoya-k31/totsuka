@@ -23,6 +23,10 @@
 //!   (`@me` / `@none` / `@any` / a login / a list), which replaces the
 //!   plugin-wide F-08 gate so a workflow can leave the unassigned to people
 //!   (#572).
+//! - [`watch`] — [`WatchTrigger`]: the channel watch trigger
+//!   (`trigger = { channel = … }`, #616) for chat sources — parsing, the
+//!   operator-plus-`from` author gate, the rename check, and the cursor-less
+//!   startup [`backfill_pass`](watch::backfill_pass).
 //!
 //! Out of scope by design: HTTP clients, LLM helpers, and config schemas —
 //! those stay source-specific.
@@ -36,6 +40,7 @@ pub mod poll;
 pub mod runtime;
 pub mod submit;
 pub mod trigger;
+pub mod watch;
 
 pub use assignee::{AssigneeFilter, check as check_assignee_triggers};
 pub use dispatch::{Reply, TaskSourceHandler, TaskSourceServer, parse_params, request_id};
@@ -44,3 +49,4 @@ pub use poll::poll_loop;
 pub use runtime::{LineHandler, Stdio, Writer, serve};
 pub use submit::{SubmitClient, SubmitOutcome, Submitter};
 pub use trigger::unknown_trigger_keys;
+pub use watch::{BackfillLimits, WatchTrigger, resolve as resolve_watch_triggers};

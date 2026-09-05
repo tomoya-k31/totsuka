@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-09-06
+
+* **Creation**: [ADR-0068 チャンネル監視トリガと「操作者本人のみ」不変条件の明示的緩和](/decisions/adr-0068-channel-watch-trigger.md) — `trigger = { channel = … }` の導入（[#615](https://github.com/tomoya-k31/totsuka/issues/615) / [#616](https://github.com/tomoya-k31/totsuka/issues/616)）。リアクショントリガの「操作者本人のみ」不変条件（`reaction.rs` が ADR を要求）を維持したまま、`from` allowlist を唯一の明示的な緩和口として認める。id + `channel_name` 併記・`trigger.repo` 固定・1 投稿 = 1 タスク（`message_key` なし）・カーソルなし起動時 backfill（N 件 + 年齢上限）・メンション優先の判定順もここで決定。
+* **Update**: [plugin-sdk](/components/plugin-sdk.md) に `watch` モジュールを追加（#616）: `WatchTrigger` の解釈・`allows()` の起動ゲート・`name_mismatch()` の改名検知・`BackfillLimits` と `backfill_pass`。`poll_loop` と backfill の submit 結果ログを `submit_all` に共通化。消費側は [#617](https://github.com/tomoya-k31/totsuka/issues/617)（slack）/ [#618](https://github.com/tomoya-k31/totsuka/issues/618)（discord）。
+
 ## 2026-09-02
 
 * **Update**: `trigger.assignee = "@any"` が **people プロパティのマップを要求しなくなった**（#582 の一部）。[plugin-sdk](/components/plugin-sdk.md) の `assignee` の行と [config-reference](/development/config-reference.md) の `trigger` の記述を更新した。

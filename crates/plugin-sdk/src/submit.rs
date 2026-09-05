@@ -66,6 +66,40 @@ pub trait Submitter: Send + Sync {
     fn submit(&self, task: Task, workflow: &str) -> impl Future<Output = SubmitOutcome> + Send;
 }
 
+/// Submit a batch under one workflow, logging each outcome the standard way:
+/// `duplicate` is the silent steady state, everything else says what happened.
+/// Shared by [`poll_loop`](crate::poll_loop) and
+/// [`backfill_pass`](crate::watch::backfill_pass) so the two paths cannot
+/// drift in how an outcome reads in the logs.
+pub async fn submit_all<S: Submitter>(submitter: &S, tasks: Vec<Task>, workflow: &str) {
+    for task in tasks {
+        let task_id = task.id.clone();
+        match submitter.submit(task, workflow).await {
+            SubmitOutcome::Accepted => {
+                tracing::info!(task = %task_id, workflow, "task submitted");
+            }
+            // The normal steady state: the task was already ingested earlier.
+            SubmitOutcome::Duplicate => {}
+            SubmitOutcome::Rejected { reason } => {
+                tracing::warn!(
+                    task = %task_id,
+                    workflow,
+                    "task rejected: {}",
+                    reason.as_deref().unwrap_or("no reason given")
+                );
+            }
+            SubmitOutcome::GaveUp { error } => {
+                tracing::error!(
+                    task = %task_id,
+                    workflow,
+                    "task submission gave up: {error} → a later fetch pass can retry it (the \
+                     source remains the durable origin)"
+                );
+            }
+        }
+    }
+}
+
 /// A failed attempt: whether backing off and re-submitting can help, plus a
 /// human-readable description.
 #[derive(Debug)]
