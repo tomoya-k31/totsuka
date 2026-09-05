@@ -60,6 +60,13 @@ pub struct Mention {
     /// `None` means no workflow claims this mention, and the task is dropped
     /// rather than submitted somewhere arbitrary.
     pub workflow: Option<String>,
+    /// The repository this task is pinned to by a channel watch trigger
+    /// (`trigger.repo`, #617). `Some` short-circuits the whole resolution
+    /// path — no `task/lookup`, no classifier, no in-thread picker — because
+    /// a watched channel's repository is settled in config, not per message.
+    ///
+    /// Always `None` on the mention and reaction paths, which resolve.
+    pub repo_pin: Option<String>,
 }
 
 impl Mention {
@@ -226,6 +233,9 @@ impl MentionFilter {
             // instructions, which is what that wants.
             instructions_kind: None,
             workflow: self.mention_workflow.clone(),
+            // A mention resolves its repository; only a channel watch pins
+            // one (#617).
+            repo_pin: None,
         })
     }
 
@@ -256,6 +266,7 @@ mod tests {
     fn reacted(ts: &str, thread_ts: Option<&str>, prefix: Option<&str>) -> Mention {
         Mention {
             workflow: Some("slack-reply".into()),
+            repo_pin: None,
             channel: "C1".into(),
             user: "U_OTHER".into(),
             text: "方針はこれでいこう".into(),

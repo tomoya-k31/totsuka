@@ -738,3 +738,157 @@ async fn malformed_and_notification_lines() {
     let response = call(&mut srv, 9, "no/such", json!({})).await;
     assert_eq!(error_of(&response).0, error_code::METHOD_NOT_FOUND);
 }
+
+// ---------------------------------------------------------------------------
+// Channel watch (#617)
+// ---------------------------------------------------------------------------
+
+/// `initialize` params with one channel-watch workflow, whose trigger is
+/// `overrides` merged over a valid baseline.
+fn init_params_watching(config: Value, overrides: Value) -> Value {
+    let mut trigger = json!({
+        "channel": "C_CLIP", "channel_name": "clip", "repo": "web-app",
+    });
+    for (key, value) in overrides.as_object().expect("an object").clone() {
+        trigger[key] = value;
+    }
+    json!({
+        "protocol_version": "0.1.0",
+        "config": config,
+        "workflows": [
+            { "workflow": "slack-reply", "trigger": {} },
+            { "workflow": "clip", "trigger": trigger, "task_id_prefix": "impl",
+              "instructions_kind": "implement" },
+        ],
+    })
+}
+
+/// A config carrying the bot token a watch requires.
+fn config_with_bot() -> Value {
+    let mut config = init_config();
+    config["bot_token"] = json!("xoxb-bot-test");
+    config
+}
+
+/// The watch trigger's `repo` must name a repository the plugin will actually
+/// resolve to, or the task lands on one nothing claims.
+#[tokio::test]
+async fn a_watch_on_an_unknown_repo_fails_initialize() {
+    let shared = Shared::default();
+    let (mut srv, _harness) = server(&shared);
+
+    let params = init_params_watching(config_with_bot(), json!({ "repo": "nope" }));
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(code, plugin_protocol::jsonrpc::error_code::CONFIG_INVALID);
+    assert!(message.contains("`nope`"), "{message}");
+    assert!(message.contains("web-app"), "{message}");
+}
+
+/// A watch result is posted by the bot, so a missing `bot_token` must stop
+/// startup — not surface after the agent has already run.
+#[tokio::test]
+async fn a_watch_without_a_bot_token_fails_initialize() {
+    let shared = Shared::default();
+    let (mut srv, _harness) = server(&shared);
+
+    let params = init_params_watching(init_config(), json!({}));
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(code, plugin_protocol::jsonrpc::error_code::CONFIG_INVALID);
+    assert!(message.contains("bot_token"), "{message}");
+    assert!(message.contains("watches a channel"), "{message}");
+}
+
+/// `channel_name` is required precisely because it is redundant: it is what
+/// the startup check compares against the live name to catch a rename.
+#[tokio::test]
+async fn a_watch_without_a_channel_name_fails_initialize() {
+    let shared = Shared::default();
+    let (mut srv, _harness) = server(&shared);
+
+    let mut trigger = json!({ "channel": "C_CLIP", "repo": "web-app" });
+    trigger["channel_name"] = Value::Null;
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": config_with_bot(),
+        "workflows": [{ "workflow": "clip", "trigger": { "channel": "C_CLIP", "repo": "web-app" } }],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(code, plugin_protocol::jsonrpc::error_code::CONFIG_INVALID);
+    assert!(message.contains("channel_name"), "{message}");
+}
+
+/// The watch keys are in `TRIGGER_KEYS`, so `unknown_trigger_keys` accepts
+/// them — which is exactly why a `channel`-less trigger has to be refused by
+/// the parser instead of read as "not a watch".
+#[tokio::test]
+async fn watch_keys_without_a_channel_fail_initialize() {
+    let shared = Shared::default();
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": config_with_bot(),
+        "workflows": [{ "workflow": "clip",
+                        "trigger": { "channel_name": "clip", "repo": "web-app" } }],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(code, plugin_protocol::jsonrpc::error_code::CONFIG_INVALID);
+    assert!(message.contains("no `channel`"), "{message}");
+}
+
+/// A zero backfill window is refused rather than read as "no backfill".
+#[tokio::test]
+async fn a_zero_backfill_window_fails_initialize() {
+    let shared = Shared::default();
+    let (mut srv, _harness) = server(&shared);
+
+    let mut config = config_with_bot();
+    config["watch_backfill_max_age_hours"] = json!(0);
+    let params = init_params_watching(config, json!({}));
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(code, plugin_protocol::jsonrpc::error_code::CONFIG_INVALID);
+    assert!(
+        message.contains("watch_backfill_max_age_hours"),
+        "{message}"
+    );
+}
+
+/// A well-formed watch initializes, and its keys pass the unknown-key check.
+#[tokio::test]
+async fn a_well_formed_watch_initializes() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    // The bot-token probe the TokenGuard runs when `bot_token` is set.
+    shared.push(Canned::Data(json!({ "ok": true })));
+    let (mut srv, _harness) = server(&shared);
+
+    let params = init_params_watching(config_with_bot(), json!({ "from": ["U_MATE"] }));
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    assert!(resp.error.is_none(), "{:?}", resp.error);
+}
+
+/// A watch workflow has no `reaction` key, so before #617 it read as a second
+/// plain-mention workflow and collided with the catch-all. Adding a watch to a
+/// config that already answers mentions must simply work.
+#[tokio::test]
+async fn a_watch_coexists_with_the_mention_catch_all() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    shared.push(Canned::Data(json!({ "ok": true })));
+    let (mut srv, _harness) = server(&shared);
+
+    let params = init_params_watching(config_with_bot(), json!({}));
+    // Both workflows are present in `init_params_watching`: `slack-reply`
+    // (catch-all) and `clip` (watch).
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    assert!(
+        resp.error.is_none(),
+        "a watch must not count as a mention workflow: {:?}",
+        resp.error
+    );
+}

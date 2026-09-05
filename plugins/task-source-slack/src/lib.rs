@@ -25,4 +25,5 @@ pub mod slack_api;
 pub mod socket_mode;
 pub mod template;
 pub mod transport;
+pub mod watch;
 pub mod workflow_options;

@@ -23,8 +23,6 @@ use plugin_protocol::Task;
 use plugin_protocol::methods::WorkflowInfo;
 use serde_json::Value;
 
-use crate::submit::{Submitter, submit_all};
-
 /// One workflow's channel watch trigger, parsed and validated.
 ///
 /// ```toml
@@ -398,16 +396,33 @@ impl BackfillLimits {
 /// A failing channel is logged and skipped, not fatal: backfill is recovery,
 /// and failing startup over it would lose the live events too.
 ///
+/// # Why `submit` is the caller's, not a [`Submitter`](crate::Submitter)
+///
+/// Sources keep per-task bookkeeping alongside the submission — Slack records
+/// where the result must be posted — and that lives behind the source's own
+/// submit path, not behind
+/// [`Submitter::submit`](crate::Submitter::submit), which sees only a [`Task`].
+/// Taking a `Submitter` here would quietly give recovered tasks a *different*
+/// submission path from live ones, and the difference would only surface much
+/// later, as a `result/publish` that fails for backfilled tasks alone. So the
+/// pass owns the policy (per channel, skip a failing one, hold the limit) and
+/// the source owns the submission.
+///
 /// [ADR-0068]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0068-channel-watch-trigger.md
-pub async fn backfill_pass<S, F, Fut>(
+pub async fn backfill_pass<F, Fut, G, GFut>(
     triggers: &[WatchTrigger],
     limits: &BackfillLimits,
-    submitter: &S,
     mut fetch: F,
+    mut submit: G,
 ) where
-    S: Submitter,
     F: FnMut(&WatchTrigger, &BackfillLimits) -> Fut,
     Fut: Future<Output = Result<Vec<Task>, String>>,
+    // The trigger is handed over **owned**: a borrow cannot outlive the
+    // closure call while the returned future still holds it, so every caller
+    // would have to clone out of it by hand anyway. One clone per recovered
+    // message, once per startup, is not worth the API friction.
+    G: FnMut(Task, WatchTrigger) -> GFut,
+    GFut: Future<Output = ()>,
 {
     for trigger in triggers {
         let mut tasks = match fetch(trigger, limits).await {
@@ -434,7 +449,9 @@ pub async fn backfill_pass<S, F, Fut>(
             );
             tasks.truncate(limits.count as usize);
         }
-        submit_all(submitter, tasks, &trigger.workflow).await;
+        for task in tasks {
+            submit(task, trigger.clone()).await;
+        }
     }
 }
 
@@ -705,13 +722,12 @@ mod tests {
         assert_eq!(limits.cutoff(now), now - Duration::from_secs(24 * 3600));
     }
 
-    /// Records `(task id, workflow)` for every submission.
+    /// Records `(task id, workflow)` for every task the pass handed over.
     struct Recorder(std::sync::Mutex<Vec<(String, String)>>);
 
-    impl Submitter for Recorder {
-        async fn submit(&self, task: Task, workflow: &str) -> crate::SubmitOutcome {
-            self.0.lock().unwrap().push((task.id, workflow.to_string()));
-            crate::SubmitOutcome::Accepted
+    impl Recorder {
+        async fn record(&self, task: Task, trigger: WatchTrigger) {
+            self.0.lock().unwrap().push((task.id, trigger.workflow));
         }
     }
 
@@ -740,9 +756,12 @@ mod tests {
         let trigger = WatchTrigger::parse(&full(), "clip").unwrap().unwrap();
         let limits = BackfillLimits::new(Some(3), None).unwrap();
         let recorder = Recorder(std::sync::Mutex::new(Vec::new()));
-        backfill_pass(&[trigger], &limits, &recorder, |_t, _l| async {
-            Ok((0..10).map(|i| bare_task(&format!("m{i}"))).collect())
-        })
+        backfill_pass(
+            &[trigger],
+            &limits,
+            |_t, _l| async { Ok((0..10).map(|i| bare_task(&format!("m{i}"))).collect()) },
+            |task, trigger| recorder.record(task, trigger),
+        )
         .await;
         let submitted = recorder.0.lock().unwrap();
         assert_eq!(submitted.len(), 3, "got {submitted:?}");
@@ -763,7 +782,6 @@ mod tests {
         backfill_pass(
             &[t1, t2],
             &BackfillLimits::default(),
-            &recorder,
             |trigger, _limits| {
                 let failing = trigger.channel == "C1";
                 let tasks = vec![bare_task(&format!("{}:1", trigger.channel))];
@@ -775,6 +793,7 @@ mod tests {
                     }
                 }
             },
+            |task, trigger| recorder.record(task, trigger),
         )
         .await;
 

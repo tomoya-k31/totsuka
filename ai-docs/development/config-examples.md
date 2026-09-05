@@ -585,6 +585,11 @@ target_user_id = "U01ABCDEF"               # 必須。自分の Slack ユーザ�
 # （#396。下の「絵文字でワークフローを選ぶ」参照）。reactions:read スコープが
 # 必要 → 追加後はアプリ再インストール + 保管先の値を 2 本更新。
 
+# チャンネル監視の取りこぼし回収の幅（#617）。監視チャンネルが 1 つも無ければ
+# 読まれない。既定は 100 件 / 24 時間で、どちらも 0 は拒否される。
+# watch_backfill_limit = 100
+# watch_backfill_max_age_hours = 24
+
 thread_context_limit = 6                   # タスク本文に含めるスレッド直近メッセージ数（既定 6）
 reply_style = "丁寧語で簡潔に。箇条書きを多用しない。"   # 返信トーンの指示
 source_name = "slack"
@@ -596,6 +601,31 @@ max_retries = 3
 prefix = "proj-totsuka"
 repos = ["totsuka"]
 ```
+
+## チャンネルに貼ったものを丸ごとタスクにする（#617）
+
+`clip` チャンネルに記事 URL を貼ると、その内容をドキュメントとして特定リポジトリに残す例。メンションもリアクションも要らず、**投稿することがトリガ**になる（→ [チャンネル監視トリガ](/glossary/channel-watch.md)）。
+
+```toml
+[[workflows]]
+name = "clip"
+source = "slack"
+agent = "herdr"
+profile = "implement"
+output = "source"
+initial_prompt = "/clip-doc 本文中の URL の記事を読み、ai-docs/references/ に要約として残してください。URL が無ければ何もせず終了してください。"
+trigger = { channel = "C0123ABCDEF", channel_name = "clip", repo = "my-docs" }
+```
+
+読み方と注意:
+
+- **`channel` は id、`channel_name` は照合用**。名前は改名できるので id が正で、起動時に実名と突き合わせて食い違えば警告が出る。id は Slack のチャンネル詳細か、チャンネルリンクの末尾から取る
+- **`repo` は必須**で、`[[repositories]]` に実在しなければ起動しない。監視チャンネルはリポジトリを固定するので、LLM 分類もピッカーも通らない
+- **既定では自分の投稿しかトリガにならない**。他の人にも開くなら `from = ["U0AAA", "U0BBB"]` を足す（→ [ADR-0068](/decisions/adr-0068-channel-watch-trigger.md)）
+- **`bot_token` が必須**になる。結果は bot 名義で投稿するので、bot を監視チャンネルに招待しておくこと（未招待だと `not_in_channel` で投稿だけ失敗する）
+- **スレッド返信は拾わない**。生成されたドキュメントへの「ありがとう」で 2 本目が走らないようにするため
+- **`initial_prompt` が実質の仕様書**になる。totsuka は本文から URL を抜いたりしない — 何をするかはこことスキル側に書く
+- 監視チャンネル内で自分がメンションされた場合は**メンション経路が勝つ**（監視より明示的な呼びかけが強い）
 
 **省略できるものは省略するのが正解**な 2 つのテーブル:
 

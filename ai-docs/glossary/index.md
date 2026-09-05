@@ -19,4 +19,6 @@
 * [pane（ペイン）](pane.md) - エージェント CLI が実際に動くターミナル区画（herdr の pane）。dispatch 時に worktree を cwd、label を totsuka + source task id として作られ、pane_control capability 越しの session/focus・session/release・session/list で制御され、寿命は worktree の掃除ポリシーに連動する。
 * [click-to-focus（クリックで pane を開く）](click-to-focus.md) - 通知をクリックすると、その通知を出したタスクの herdr pane が前面に来る機能（F-94）。terminal-notifier の -activate（GUI 前面化）+ -execute（totsuka focus → 制御 UDS /focus → agent_ide の session/focus 委譲）の 2 段で実現し、縮退はすべて静か。
 * [要対応（Attention）](attention.md) - 人間が動かさない限り永久に進まない非終端タスクの集合。pending / waiting_input / verifying / escalated / queued+wait_reason の 5 状態からなり、メニューバーのバッジ（F-109）が数える対象。終端状態を含めないのは、含めると数字が単調増加して 0 に戻らなくなるため。
+* [チャンネル監視トリガ（channel watch）](channel-watch.md) - 特定チャンネルへのトップレベル投稿そのものをトリガにして 1 投稿 = 1 タスクを起こす仕組み。メンションもリアクションも要らないぶん「投稿できる人」が実行できる人になるため、既定の起動者は操作者本人だけで、trigger.from が唯一の明示的な緩和口になる。会話継続の対象外。
+* [起動時バックフィル（startup backfill）](startup-backfill.md) - チャンネル監視ソースが起動時に、監視チャンネルの直近 N 件かつ年齢上限以内を無条件に再送してプラグイン停止中の取りこぼしを回収する仕組み。台帳が重複を Duplicate として無害化するため永続カーソルを持たず、取りすぎ側に倒してある。
 <!-- okf:index:end -->

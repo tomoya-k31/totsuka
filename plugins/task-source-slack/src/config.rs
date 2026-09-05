@@ -331,6 +331,18 @@ pub struct SlackConfig {
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Most messages the startup backfill recovers per watched channel
+    /// (#617). Omitted means [`plugin_sdk::watch::DEFAULT_BACKFILL_COUNT`].
+    #[serde(default)]
+    pub watch_backfill_limit: Option<u32>,
+    /// How old a missed post may be and still be recovered, in hours (#617).
+    /// Omitted means [`plugin_sdk::watch::DEFAULT_BACKFILL_MAX_AGE_HOURS`].
+    ///
+    /// The bound exists to keep pointing a watch at an existing channel from
+    /// turning its recent history into tasks — without it, the first startup
+    /// would recover the last `watch_backfill_limit` posts however old.
+    #[serde(default)]
+    pub watch_backfill_max_age_hours: Option<u64>,
     /// Prompt text overrides (#318). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]

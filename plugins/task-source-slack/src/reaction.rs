@@ -301,6 +301,7 @@ pub fn to_mention(target: &ReactionTarget, message: SlackMessage) -> Option<Ment
         thread_ts: message.thread_ts,
         reaction: Some(target.reaction.clone()),
         workflow: Some(target.workflow.clone()),
+        repo_pin: None,
         task_id_prefix: target.task_id_prefix.clone(),
         instructions_kind: target.instructions_kind.clone(),
     })

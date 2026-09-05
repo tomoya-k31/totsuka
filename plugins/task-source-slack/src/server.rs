@@ -54,7 +54,7 @@ pub trait TransportFactory {
 /// `initialize` rejects every other key, so a typo cannot silently turn a
 /// reaction workflow into the plain-mention catch-all — add a key here in the
 /// same edit that teaches the reader to read it.
-const TRIGGER_KEYS: &[&str] = &["reaction"];
+const TRIGGER_KEYS: &[&str] = &["reaction", "channel", "channel_name", "repo", "from"];
 
 /// `(workflow name, its `trigger.reaction`)` for every workflow the
 /// Orchestrator sent, in definition order (#396).
@@ -74,6 +74,12 @@ fn workflow_reactions(
     let mut errors = Vec::new();
     let triggers = workflows
         .iter()
+        // A channel watch is its own trigger kind (#617), so it is neither a
+        // reaction workflow nor a candidate for the plain-mention catch-all.
+        // Without this, adding a watch to a config that already has a mention
+        // workflow is refused as "two workflows trigger on a plain mention" —
+        // it has no `reaction` key, so it otherwise reads as one.
+        .filter(|t| t.trigger.get("channel").is_none())
         .filter_map(|t| {
             let reaction = match t.trigger.get("reaction") {
                 Some(value) => match value.as_str() {
@@ -139,6 +145,9 @@ pub struct Server<F: TransportFactory> {
 /// An initialized plugin session: the validated config, its Slack client,
 /// and the resident runtime.
 struct Session<T> {
+    /// The workflows that watch a channel (#617), by name. `result/publish`
+    /// consults this to decide whether the result goes out as the bot.
+    watch_workflows: Vec<String>,
     config: SlackConfig,
     /// The plugin-owned `[[workflows]]` keys, resolved at `initialize`
     /// (#554). `result/publish` reads the delivery mode from here.
@@ -354,6 +363,52 @@ where
                 ReactionTriggers::default()
             }
         };
+        // Channel watch triggers, on the same call (#617). Resolved against
+        // the *merged* repository list above, so `trigger.repo` is checked
+        // against whatever the plugin will actually resolve tasks to.
+        let repo_names: Vec<&str> = config.repos.iter().map(|r| r.name.as_str()).collect();
+        let watch_triggers = match plugin_sdk::resolve_watch_triggers(
+            &init.workflows,
+            &repo_names,
+            Some(&config.target_user_id),
+            "target_user_id",
+        ) {
+            Ok(t) => t,
+            Err(mut e) => {
+                errors.append(&mut e);
+                Vec::new()
+            }
+        };
+        // A watch result is posted by the bot, never as the operator (#615
+        // decision Q13), so without a bot token a watched channel would
+        // produce tasks whose result has nowhere to go. Caught here rather
+        // than at `result/publish`, where the run has already happened.
+        if !watch_triggers.is_empty() && config.bot_token.is_none() {
+            errors.push(
+                "a workflow watches a channel, but `bot_token` is not set → a watch result is \
+                 posted by the bot, not as you, so the task would run and have nowhere to \
+                 report; add `bot_token` to `[slack]` in config.toml and invite the bot to the \
+                 watched channel"
+                    .into(),
+            );
+        }
+        let watch_workflows: Vec<String> =
+            watch_triggers.iter().map(|t| t.workflow.clone()).collect();
+        let watch_triggers = crate::watch::WatchTriggers::new(
+            watch_triggers,
+            &init.workflows,
+            &config.target_user_id,
+        );
+        let backfill_limits = match plugin_sdk::BackfillLimits::new(
+            config.watch_backfill_limit,
+            config.watch_backfill_max_age_hours,
+        ) {
+            Ok(limits) => limits,
+            Err(e) => {
+                errors.push(e);
+                plugin_sdk::BackfillLimits::default()
+            }
+        };
         // …and the plugin-owned `[[workflows]]` keys on the same call (#554).
         let (workflow_options, mut option_errors) =
             crate::workflow_options::WorkflowOptions::resolve(&init.workflows);
@@ -405,6 +460,8 @@ where
                 Arc::new(self.factory.build_chat()),
                 Arc::new(config.clone()),
                 reaction_triggers,
+                watch_triggers,
+                backfill_limits,
                 events,
                 state.clone(),
                 self.submit.clone(),
@@ -416,6 +473,7 @@ where
 
         let claims = capabilities_result(&init.workflows);
         self.session = Some(Session {
+            watch_workflows,
             config,
             workflow_options,
             api,
@@ -500,6 +558,31 @@ where
             .workflow_of(&parsed.task_id)
             .map(|wf| session.workflow_options.delivery(&wf))
             .unwrap_or_default();
+        // A watched channel's result is the bot's, whatever `publish` says
+        // (#617, ADR-0068): the identity is not a per-workflow preference but
+        // a property of how the task was raised. `publish` still decides the
+        // gate for mention-driven workflows below.
+        let watched = session
+            .state
+            .workflow_of(&parsed.task_id)
+            .is_some_and(|wf| session.watch_workflows.contains(&wf));
+        if watched {
+            let result = crate::approval::publish_direct(
+                session.api.as_ref(),
+                &session.state,
+                &parsed.task_id,
+                &parsed.content,
+                crate::approval::PostAs::Bot,
+            )
+            .await;
+            return match result {
+                Ok(()) => Reply::respond(Response::result(id, Value::Null)),
+                Err(message) => Reply::respond(Response::error(
+                    id,
+                    Error::new(error_code::INTERNAL_ERROR, message),
+                )),
+            };
+        }
         let result = match delivery {
             crate::workflow_options::Delivery::Direct => {
                 crate::approval::publish_direct(
@@ -507,6 +590,7 @@ where
                     &session.state,
                     &parsed.task_id,
                     &parsed.content,
+                    crate::approval::PostAs::Operator,
                 )
                 .await
             }
