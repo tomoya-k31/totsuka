@@ -74,26 +74,35 @@ pub trait Submitter: Send + Sync {
 pub async fn submit_all<S: Submitter>(submitter: &S, tasks: Vec<Task>, workflow: &str) {
     for task in tasks {
         let task_id = task.id.clone();
+        // `%workflow`, never the `workflow` shorthand: a bare `&str` field is
+        // recorded through `record_str`, which tracing-subscriber's default
+        // visitor forwards to `record_debug` — printing `workflow="x"` with
+        // quotes. Display keeps it `workflow=x`, which is what every existing
+        // log line and grep of them already says.
         match submitter.submit(task, workflow).await {
             SubmitOutcome::Accepted => {
-                tracing::info!(task = %task_id, workflow, "task submitted");
+                tracing::info!(task = %task_id, workflow = %workflow, "task submitted");
             }
             // The normal steady state: the task was already ingested earlier.
             SubmitOutcome::Duplicate => {}
             SubmitOutcome::Rejected { reason } => {
                 tracing::warn!(
                     task = %task_id,
-                    workflow,
+                    workflow = %workflow,
                     "task rejected: {}",
                     reason.as_deref().unwrap_or("no reason given")
                 );
             }
             SubmitOutcome::GaveUp { error } => {
+                // Deliberately says nothing about *when* a retry happens: for
+                // `poll_loop` that is the next tick, for `backfill_pass` the
+                // next startup — and then only while the message is still
+                // inside the backfill window.
                 tracing::error!(
                     task = %task_id,
-                    workflow,
-                    "task submission gave up: {error} → a later fetch pass can retry it (the \
-                     source remains the durable origin)"
+                    workflow = %workflow,
+                    "task submission gave up: {error} → the source system remains the durable \
+                     origin of this task"
                 );
             }
         }

@@ -59,14 +59,33 @@ pub struct WatchTrigger {
 
 impl WatchTrigger {
     /// Parse one workflow's trigger table. `Ok(None)` means the workflow is
-    /// not a watch workflow (no `channel` key); errors mean it tried to be
+    /// not a watch workflow (no watch key at all); errors mean it tried to be
     /// one and got the table wrong.
     ///
     /// All problems are collected rather than stopping at the first: an
     /// operator fixing config wants the whole list.
     pub fn parse(trigger: &Value, workflow: &str) -> Result<Option<Self>, Vec<String>> {
         let Some(channel_value) = trigger.get("channel") else {
-            return Ok(None);
+            // A companion key without `channel` is a broken watch, not a
+            // non-watch: these keys are in the sources' valid-key lists, so
+            // `unknown_trigger_keys` cannot catch this — returning `None`
+            // here would ignore the trigger silently.
+            let orphans: Vec<&str> = ["channel_name", "repo", "from"]
+                .into_iter()
+                .filter(|key| trigger.get(*key).is_some())
+                .collect();
+            if orphans.is_empty() {
+                return Ok(None);
+            }
+            return Err(vec![format!(
+                "workflow `{workflow}` has {} in its trigger but no `channel` → a channel watch \
+                 needs the channel id; add `channel = \"<id>\"`, or drop the other watch keys",
+                orphans
+                    .iter()
+                    .map(|key| format!("`{key}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )]);
         };
         let mut errors = Vec::new();
 
@@ -177,8 +196,14 @@ impl WatchTrigger {
     /// would only widen the match for no input that legitimately needs it.
     ///
     /// [ADR-0068]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0068-channel-watch-trigger.md
+    /// An empty `author` or `operator` never matches. Without it the two
+    /// would compare equal and open the gate for an event whose author the
+    /// source could not identify — the one case where failing open is worst.
     pub fn allows(&self, author: &str, operator: &str) -> bool {
-        author == operator || self.from.iter().any(|id| id == author)
+        if author.is_empty() {
+            return false;
+        }
+        (!operator.is_empty() && author == operator) || self.from.iter().any(|id| id == author)
     }
 
     /// The warning to log when the live channel name does not match the
@@ -206,7 +231,10 @@ impl WatchTrigger {
 /// trigger exists, because the default author gate is "the operator only"
 /// and without an identity there is nobody to compare against.
 ///
-/// `Err` carries `CONFIG_INVALID` messages, all of them.
+/// `Err` carries `CONFIG_INVALID` messages, all of them — including the
+/// identity check, which fires on a workflow that *tried* to be a watch even
+/// if its table did not parse. Otherwise fixing the table would only reveal
+/// the missing identity on the next run, one round trip later.
 pub fn resolve(
     workflows: &[WorkflowInfo],
     repo_names: &[&str],
@@ -215,12 +243,17 @@ pub fn resolve(
 ) -> Result<Vec<WatchTrigger>, Vec<String>> {
     let mut errors = Vec::new();
     let mut triggers: Vec<WatchTrigger> = Vec::new();
+    let mut any_watch_attempted = false;
 
     for wf in workflows {
         let trigger = match WatchTrigger::parse(&wf.trigger, &wf.workflow) {
-            Ok(Some(t)) => t,
+            Ok(Some(t)) => {
+                any_watch_attempted = true;
+                t
+            }
             Ok(None) => continue,
             Err(mut e) => {
+                any_watch_attempted = true;
                 errors.append(&mut e);
                 continue;
             }
@@ -256,7 +289,9 @@ pub fn resolve(
         triggers.push(trigger);
     }
 
-    if !triggers.is_empty() && operator.is_none() {
+    // Keyed on "tried to be a watch", not on the surviving triggers: a config
+    // whose watch table is also malformed must learn both problems at once.
+    if any_watch_attempted && operator.is_none_or(str::is_empty) {
         errors.push(format!(
             "a workflow watches a channel, but `{identity_key}` is not set → the author gate \
              defaults to the operator alone, and there is no operator to compare against; set \
@@ -326,8 +361,11 @@ impl BackfillLimits {
         }
         Ok(Self {
             count: count.unwrap_or(defaults.count),
+            // Saturating: release builds skip overflow checks, so `h * 3600`
+            // on an absurd hour count would wrap into a *small* window and
+            // silently shrink the backfill instead of erroring.
             max_age: max_age_hours
-                .map(|h| Duration::from_secs(h * 3600))
+                .map(|h| Duration::from_secs(h.saturating_mul(3600)))
                 .unwrap_or(defaults.max_age),
         })
     }
@@ -343,12 +381,24 @@ impl BackfillLimits {
 /// and submit them all, relying on the Orchestrator's idempotent ingest to
 /// drop what was already seen.
 ///
-/// `fetch` returns the tasks for one channel — already filtered to `limits`
-/// (a source with a server-side `oldest` parameter should push the cutoff
-/// into the API call) and already normalized, the same contract as
-/// [`poll_loop`](crate::poll_loop)'s fetch. A failing channel is logged and
-/// skipped, not fatal: backfill is recovery, and failing startup over it
-/// would lose the live events too.
+/// # What `fetch` must have done already
+///
+/// **Apply [`WatchTrigger::allows`] to every message's author.** Recovery is
+/// not a lesser path: a backfill that skips the gate re-opens on every restart
+/// exactly what [ADR-0068] closed, for a whole `max_age` window at a time.
+/// The SDK cannot enforce it here — a [`Task`] carries no author — so it is
+/// the one part of the contract that is only ever checked by reading this.
+///
+/// Also: normalize to [`Task`]s (as [`poll_loop`](crate::poll_loop)'s fetch
+/// does), and drop anything older than [`BackfillLimits::cutoff`] — pushing
+/// the cutoff into the API call where the platform has an `oldest`-style
+/// parameter. `max_age` is likewise unenforceable here (no timestamp on a
+/// `Task`); `count` is not, and this function truncates to it as a backstop.
+///
+/// A failing channel is logged and skipped, not fatal: backfill is recovery,
+/// and failing startup over it would lose the live events too.
+///
+/// [ADR-0068]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0068-channel-watch-trigger.md
 pub async fn backfill_pass<S, F, Fut>(
     triggers: &[WatchTrigger],
     limits: &BackfillLimits,
@@ -360,7 +410,7 @@ pub async fn backfill_pass<S, F, Fut>(
     Fut: Future<Output = Result<Vec<Task>, String>>,
 {
     for trigger in triggers {
-        let tasks = match fetch(trigger, limits).await {
+        let mut tasks = match fetch(trigger, limits).await {
             Ok(tasks) => tasks,
             Err(e) => {
                 tracing::warn!(
@@ -371,6 +421,19 @@ pub async fn backfill_pass<S, F, Fut>(
                 continue;
             }
         };
+        // The one limit that *is* enforceable here (see the doc comment).
+        // A source that already truncated loses nothing; one that forgot does
+        // not turn a busy channel's whole history into tasks.
+        if tasks.len() > limits.count as usize {
+            tracing::warn!(
+                workflow = %trigger.workflow,
+                channel = %trigger.channel,
+                fetched = tasks.len(),
+                limit = limits.count,
+                "backfill fetch returned more than the configured limit; truncating"
+            );
+            tasks.truncate(limits.count as usize);
+        }
         submit_all(submitter, tasks, &trigger.workflow).await;
     }
 }
@@ -405,6 +468,22 @@ mod tests {
         ] {
             assert_eq!(WatchTrigger::parse(&trigger, "wf"), Ok(None), "{trigger}");
         }
+    }
+
+    #[test]
+    fn watch_keys_without_channel_are_refused_not_ignored() {
+        // `channel_name` / `repo` / `from` are in the sources' valid-key
+        // lists, so `unknown_trigger_keys` cannot catch this — parse must.
+        let errors = WatchTrigger::parse(&json!({ "channel_name": "clip", "repo": "docs" }), "wf")
+            .unwrap_err();
+        assert_eq!(errors.len(), 1, "got {errors:?}");
+        assert!(errors[0].contains("`channel_name`"), "got {errors:?}");
+        assert!(errors[0].contains("`repo`"), "got {errors:?}");
+        assert!(errors[0].contains("no `channel`"), "got {errors:?}");
+
+        let errors = WatchTrigger::parse(&json!({ "from": ["U1"] }), "wf").unwrap_err();
+        assert_eq!(errors.len(), 1, "got {errors:?}");
+        assert!(errors[0].contains("`from`"), "got {errors:?}");
     }
 
     #[test]
@@ -479,6 +558,15 @@ mod tests {
         assert!(t.allows("U0AAA", "U_OP"), "listed author");
         assert!(t.allows("U_OP", "U_OP"), "the operator, though unlisted");
         assert!(!t.allows("U0BBB", "U_OP"), "everyone else");
+    }
+
+    #[test]
+    fn an_unidentified_author_or_operator_never_opens_the_gate() {
+        let t = WatchTrigger::parse(&full(), "wf").unwrap().unwrap();
+        // Both empty would compare *equal* without the guard.
+        assert!(!t.allows("", ""));
+        assert!(!t.allows("", "U_OP"));
+        assert!(!t.allows("U_OP", ""));
     }
 
     #[test]
@@ -557,6 +645,27 @@ mod tests {
     }
 
     #[test]
+    fn a_malformed_watch_still_demands_the_operator_identity() {
+        // Both problems in one pass: fixing the table alone would otherwise
+        // reveal the missing identity only on the next run.
+        let workflows = [wf("clip", json!({ "channel": "C1" }))];
+        let errors = resolve(&workflows, &["docs"], None, "target_user_id").unwrap_err();
+        assert_eq!(errors.len(), 3, "got {errors:?}");
+        assert!(
+            errors.iter().any(|e| e.contains("target_user_id")),
+            "got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_operator_identity_counts_as_unset() {
+        let workflows = [wf("clip", full())];
+        let errors = resolve(&workflows, &["docs"], Some(""), "target_user_id").unwrap_err();
+        assert_eq!(errors.len(), 1, "got {errors:?}");
+        assert!(errors[0].contains("target_user_id"), "got {errors:?}");
+    }
+
+    #[test]
     fn every_problem_is_reported_in_one_pass() {
         let workflows = [
             wf("a", json!({ "channel": "C1" })), // missing name + repo
@@ -583,6 +692,10 @@ mod tests {
         );
         assert!(BackfillLimits::new(Some(0), None).is_err());
         assert!(BackfillLimits::new(None, Some(0)).is_err());
+        // An absurd hour count saturates instead of wrapping into a *small*
+        // window (release builds skip overflow checks).
+        let huge = BackfillLimits::new(None, Some(u64::MAX)).unwrap();
+        assert_eq!(huge.max_age, Duration::from_secs(u64::MAX));
     }
 
     #[test]
@@ -592,24 +705,18 @@ mod tests {
         assert_eq!(limits.cutoff(now), now - Duration::from_secs(24 * 3600));
     }
 
-    #[tokio::test]
-    async fn a_failing_channel_is_skipped_not_fatal() {
-        use std::sync::Mutex;
+    /// Records `(task id, workflow)` for every submission.
+    struct Recorder(std::sync::Mutex<Vec<(String, String)>>);
 
-        struct Recorder(Mutex<Vec<(String, String)>>);
-        impl Submitter for Recorder {
-            async fn submit(&self, task: Task, workflow: &str) -> crate::SubmitOutcome {
-                self.0.lock().unwrap().push((task.id, workflow.to_string()));
-                crate::SubmitOutcome::Accepted
-            }
+    impl Submitter for Recorder {
+        async fn submit(&self, task: Task, workflow: &str) -> crate::SubmitOutcome {
+            self.0.lock().unwrap().push((task.id, workflow.to_string()));
+            crate::SubmitOutcome::Accepted
         }
+    }
 
-        let t1 = WatchTrigger::parse(&full(), "clip").unwrap().unwrap();
-        let mut bad = full();
-        bad["channel"] = json!("C2");
-        let t2 = WatchTrigger::parse(&bad, "clip2").unwrap().unwrap();
-
-        let task = |id: &str| Task {
+    fn bare_task(id: &str) -> Task {
+        Task {
             id: id.to_string(),
             source: "slack".into(),
             title: "t".into(),
@@ -622,16 +729,44 @@ mod tests {
             assignee: None,
             message_key: None,
             instructions: None,
-        };
+        }
+    }
 
-        let recorder = Recorder(Mutex::new(Vec::new()));
+    #[tokio::test]
+    async fn an_over_long_fetch_is_truncated_to_the_count_limit() {
+        // `max_age` cannot be enforced here (a Task carries no timestamp),
+        // but `count` can — a source that forgot to bound its fetch must not
+        // turn a busy channel's whole history into tasks.
+        let trigger = WatchTrigger::parse(&full(), "clip").unwrap().unwrap();
+        let limits = BackfillLimits::new(Some(3), None).unwrap();
+        let recorder = Recorder(std::sync::Mutex::new(Vec::new()));
+        backfill_pass(&[trigger], &limits, &recorder, |_t, _l| async {
+            Ok((0..10).map(|i| bare_task(&format!("m{i}"))).collect())
+        })
+        .await;
+        let submitted = recorder.0.lock().unwrap();
+        assert_eq!(submitted.len(), 3, "got {submitted:?}");
+        // The *newest* end of what the source returned is kept, so a source
+        // that fetches newest-first loses only the oldest overflow.
+        assert_eq!(submitted[0].0, "m0");
+        assert_eq!(submitted[2].0, "m2");
+    }
+
+    #[tokio::test]
+    async fn a_failing_channel_is_skipped_not_fatal() {
+        let t1 = WatchTrigger::parse(&full(), "clip").unwrap().unwrap();
+        let mut bad = full();
+        bad["channel"] = json!("C2");
+        let t2 = WatchTrigger::parse(&bad, "clip2").unwrap().unwrap();
+
+        let recorder = Recorder(std::sync::Mutex::new(Vec::new()));
         backfill_pass(
             &[t1, t2],
             &BackfillLimits::default(),
             &recorder,
             |trigger, _limits| {
                 let failing = trigger.channel == "C1";
-                let tasks = vec![task(&format!("{}:1", trigger.channel))];
+                let tasks = vec![bare_task(&format!("{}:1", trigger.channel))];
                 async move {
                     if failing {
                         Err("rate limited".to_string())
