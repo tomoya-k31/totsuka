@@ -1,0 +1,11 @@
+name = "discord"
+kind = "task_source"
+version = "0.1.0"
+# `InitializeParams.workflows` (0.6.0, #554) is where the channel watch
+# triggers arrive, and this plugin has no other way to learn what to watch —
+# an older orchestrator would start it with nothing to do. The F-54 gate turns
+# that into a refused launch instead.
+protocol_version = ">=0.6.0, <0.7"
+
+[capabilities]
+outputs = ["source"]

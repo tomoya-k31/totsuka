@@ -18,4 +18,5 @@
 * [agent-ide-orca](agent-ide-orca.md) - orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。pane_control は非宣言（capability を正直に宣言）。
 * [notifier-macos](notifier-macos.md) - Orchestrator のイベント（waiting_input / done / failed / pending / escalated / verification_pending）を macOS 通知センターへ配送する公式 notifier プラグイン。バックエンド選択（osascript / terminal-notifier click-to-focus）、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
 * [live-e2e スキル](live-e2e.md) - 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順・設定雛形・駆動スクリプト一式。自動／手動／目視の区分と、別環境での一からの構築手順を含む。
+* [task-source-discord プラグイン](task-source-discord.md) - Discord のチャンネル監視をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。Gateway WebSocket で MESSAGE_CREATE を受け、監視チャンネルへのトップレベル投稿を Task へ正規化し、結果を bot 名義でその投稿のスレッドへ返す。self-bot 禁止により本人名義投稿・承認フローは持たない薄い設計。
 <!-- okf:index:end -->
