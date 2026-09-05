@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:80808cc555b379175e315990af1be21b7c77ae2f6f2dcea0659c7ffc44ea5bf4 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:ecd6d1aefbdf6eabd77838e4b4bcbc10e13550619e0dcfa8efbef1f061a8722e -->
 
 # Configuration reference
 
@@ -940,7 +940,29 @@ Socket resolution order: `socket_path`, then `session`, then `HERDR_SOCKET_PATH`
 
 **herdr 0.7.5 or newer is required.** Against anything older, initialization is refused and `config validate` and `doctor` name the version. The check reads herdr's own version, and **there is no upper bound** — a newer herdr is never refused.
 
-### `[herdr.identity]`
+### `[discord]`
+
+```toml
+[discord]
+bot_token = "op://Dev/Discord/bot_token"   # required
+operator_user_id = "111111111111111111"    # required: your own Discord user ID
+```
+
+Every `[discord]` key (unknown keys are an error; setup steps are in [Discord setup](discord-setup.md)):
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `bot_token` | string | required | Bot token (Developer Portal → Bot). **There is no user-token option** — Discord forbids automating a normal account, so an app can only post under its bot |
+| `operator_user_id` | string | required | Your own Discord user ID. **This is what decides whose posts start a task**; by default only this ID's do. It is **all digits**, copied with "Copy User ID" in developer mode. A username here is rejected at startup |
+| `api_url` | string | `https://discord.com/api/v10` | REST base URL |
+| `source_name` | string | `discord` | This source's name (it appears as the task's `source`) |
+| `max_retries` | int | 3 | Retry attempts for retryable failures |
+| `watch_backfill_limit` | int? | 100 | How many messages per channel are re-read at startup. **Discord's own maximum is 100**, so a larger value is rejected at startup. `0` is rejected too |
+| `watch_backfill_max_age_hours` | int? | 24 | How far back that re-read reaches. `0` is rejected |
+
+The trigger is `trigger = { channel = "…", channel_name = "…", repo = "…" }` (plus an optional `from`). **This source has no other kind of trigger**, so a configuration where no workflow watches a channel fails at startup.
+
+## `[herdr.identity]`
 
 ```toml
 [herdr.identity]

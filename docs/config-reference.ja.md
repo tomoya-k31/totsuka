@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:80808cc555b379175e315990af1be21b7c77ae2f6f2dcea0659c7ffc44ea5bf4 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:ecd6d1aefbdf6eabd77838e4b4bcbc10e13550619e0dcfa8efbef1f061a8722e -->
 
 # 設定リファレンス
 
@@ -939,7 +939,29 @@ kind = "task_source"
 
 **herdr は 0.7.5 以降が必要。** それより古い herdr に対しては初期化を拒否し、`config validate` と `doctor` がバージョンを名指しで報告する。検査は herdr 自身のバージョンを読むもので、**上限は無い** — 新しい herdr を拒否することはない。
 
-### `[herdr.identity]`
+### `[discord]`
+
+```toml
+[discord]
+bot_token = "op://Dev/Discord/bot_token"   # 必須
+operator_user_id = "111111111111111111"    # 必須。自分の Discord ユーザー ID
+```
+
+`[discord]` の全キー（未知のキーはエラー。導入手順は [Discord セットアップ](discord-setup.ja.md)）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `bot_token` | string | 必須 | Bot Token（Developer Portal → Bot）。**ユーザートークンという選択肢はありません** —— Discord は通常アカウントの自動化を禁止しているため、アプリが投稿できるのは bot 名義だけです |
+| `operator_user_id` | string | 必須 | 自分の Discord ユーザー ID。**誰の投稿がタスクを起こすかを決める値**で、既定ではこの ID の投稿だけです。**全桁が数字**で、開発者モードの「ID をコピー」で取れます。ユーザー名を書くと起動時に弾かれます |
+| `api_url` | string | `https://discord.com/api/v10` | REST のベース URL |
+| `source_name` | string | `discord` | このソースの名前（タスクの `source` に入る） |
+| `max_retries` | int | 3 | 再送可能な失敗の再試行回数 |
+| `watch_backfill_limit` | int? | 100 | 起動時に読み直す件数（1 チャンネルあたり）。**Discord の上限が 100** なので、超える値は起動時に拒否されます。`0` も拒否 |
+| `watch_backfill_max_age_hours` | int? | 24 | 起動時に遡る時間の上限。`0` は拒否 |
+
+トリガは `trigger = { channel = "…", channel_name = "…", repo = "…" }`（+ 任意の `from`）です。**このソースにはトリガがこれしかない**ので、監視するワークフローが 1 本も無い設定は起動時にエラーになります。
+
+## `[herdr.identity]`
 
 ```toml
 [herdr.identity]

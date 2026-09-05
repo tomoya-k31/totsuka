@@ -4,7 +4,7 @@ title: ADR-0068 チャンネル監視トリガと「操作者本人のみ」不�
 description: "チャンネルへの投稿そのものをトリガにする trigger = { channel = … } を導入する決定。リアクショントリガが ADR を要求していた「操作者本人のみ」不変条件は維持しつつ、from allowlist を唯一の明示的な緩和口として認める。id + channel_name 併記・trigger.repo 固定・1 投稿 = 1 タスク（message_key なし）・カーソルなし起動時 backfill（N 件 + 年齢上限）もここで決定。判定順はメンション優先。"
 resource: https://github.com/tomoya-k31/totsuka/issues/615
 tags: [decision, trigger, channel-watch, security, plugin-sdk, slack, discord, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-06T00:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-06T06:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -18,7 +18,7 @@ sources:
 
 # Status
 
-stable。#616（plugin-sdk）で語彙を実装。消費側は #617（slack）/ #618（discord）。
+stable。#616（plugin-sdk）で語彙を実装し、#617（slack）と #618（discord）で消費側を実装した。**実機検証は未了**。
 
 # Context
 
@@ -58,6 +58,19 @@ stable。#616（plugin-sdk）で語彙を実装。消費側は #617（slack）/ 
 ## 6. `repo` はトリガに固定で書く
 
 `trigger.repo` を必須にし、`initialize` の `repositories` に無い名前は起動時に拒否する。監視チャンネルは「ここに貼ったものは あのリポジトリ」という固定対応が自然で、LLM 分類に毎回同じ答えを出させる意味が無い。
+
+## 7. Discord 側は「監視 + 結果投稿」だけの薄いソースにする
+
+Slack の重心（本人名義の返信・下書き・承認ゲート）は **Discord では成立しない** —— self-bot 禁止によりアプリは bot 名義でしか投稿できない。bot の声のまわりに承認フローを組み直すと機構だけ残って理由が消えるので、[task-source-discord](/components/task-source-discord.md) はチャンネル監視の取り込みと結果投稿だけを行う。
+
+実装で確定した Discord 固有の事実（#618）:
+
+- **close code 4014（privileged intent 未許可）は恒久エラー**。Discord はハンドシェイクを失敗させず**ソケットを閉じる**ので、再接続し続けるとログ上は回線不調と見分けがつかない。止めて、Developer Portal のトグルまで案内する
+- **`content` が空で配送されるのは、intent を要求しなかった場合だけ**。このプラグインは `MESSAGE_CONTENT` を要求するので、未許可なら 4014 で閉じられて上の恒久エラーに倒れる —— つまり「タスクは起票されるが本文が空」はこのプラグインでは起きない。要求しないアプリの話と混同しないこと
+- **スレッドはチャンネル**なので、返信はスレッド自身の `channel_id` を持つ。Slack で明示的な判定行が要る「スレッド返信を除く」は、Discord では構造的に成立する
+- **webhook 投稿の author には `bot` フラグが無い**。bot フラグだけを見ると通り抜けるので、`webhook_id` の有無も併せて見る
+- 認証スキームは **`Bearer` ではなく `Bot`**。間違えると 401 になるだけで、語が原因だとは分からない
+- バックフィルの下限は **合成 snowflake**（snowflake が生成時刻を内包するので、余分な往復なしに「now − max_age」を表せる）
 
 # Consequences
 

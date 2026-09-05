@@ -1,0 +1,36 @@
+[package]
+name = "task-source-discord"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "totsuka task_source plugin for Discord channel watching (stdio JSON-RPC server)."
+# Internal binary crate — depends on plugin-protocol by path, so it must be
+# non-publishable for cargo-deny to permit the path dependency.
+publish = false
+
+[lints]
+workspace = true
+
+# The bin name must equal `plugin.toml`'s `name` — see the note in
+# plugins/task-source-github/Cargo.toml. Enforced by `scripts/arch-lint.sh`.
+[[bin]]
+name = "discord"
+path = "src/main.rs"
+
+[dependencies]
+plugin-protocol.workspace = true
+plugin-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+semver = { workspace = true, features = ["serde"] }
+reqwest.workspace = true
+# `io-std` (stdin/stdout) and `net` (the Gateway WebSocket + local mock
+# servers in tests) are on top of the workspace tokio feature set.
+tokio = { workspace = true, features = ["io-std", "net"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

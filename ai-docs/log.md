@@ -7,6 +7,8 @@
 * **Creation**: [チャンネル監視トリガ（channel watch）](/glossary/channel-watch.md) と [起動時バックフィル（startup backfill）](/glossary/startup-backfill.md) を用語として追加（[#617](https://github.com/tomoya-k31/totsuka/issues/617)）。前者は他の 2 トリガとの違い（特にジェスチャが「投稿すること」なので起動者が境界になる点と、[会話継続](/glossary/conversation-continuity.md) の対象外である点）、後者は永続カーソルを持たない理由（台帳の冪等性により取りすぎが無害・取り足りないと黙って消える、という損失の非対称）を記録する。
 * **Update**: [task-source-slack](/components/task-source-slack.md) に `watch` モジュールを追加（#617）。既存 manifest が `message.channels` / `message.groups` を購読済みのため**スコープ追加もアプリ再インストールも不要**で、判定表の分岐 1 本で成立する。トリガは 3 系統になり、判定順はメンション優先。結果は bot 名義（`xoxb-`）で投稿し、`bot_token` 未設定は `initialize` で `CONFIG_INVALID`。
 * **Update**: [plugin-sdk](/components/plugin-sdk.md) から共有のバックフィル**ループ**を落とし、`BackfillLimits`（窓とその規則）だけを残した（#617）。最初の消費者を書いて分かったのは、履歴を読み・そのソースの判定表に通し・enrich し・**そのソース自身の submit 経路**（結果投稿先の座標を記録する）へ流す、のどれもソース固有だということ。共通ループが素の `Submitter` へ流すと **backfill 由来のタスクだけ `result/publish` が失敗する**。一般化できたのは窓のほうだった。
+* **Creation**: [task-source-discord](/components/task-source-discord.md) を追加（[#618](https://github.com/tomoya-k31/totsuka/issues/618)、エピック [#615](https://github.com/tomoya-k31/totsuka/issues/615)）。Discord の[チャンネル監視トリガ](/glossary/channel-watch.md)を接続する 7 つ目のプラグイン。**Slack より意図的に薄い**: self-bot が ToS で禁止されているため本人名義投稿が原理的に不可能で、承認ゲート・下書き・LLM リポジトリ分類は持たない。`MESSAGE_CREATE` は Gateway WebSocket でしか届かず（HTTP webhook events はアプリライフサイクル系のみ）、`MESSAGE_CONTENT` は privileged intent。close code 4014（intent 未許可）は**再接続しても直らない**ので恒久エラーとして止め、Developer Portal のトグルまで案内する。スレッドがチャンネルなので「スレッド返信を除く」判定行は構造的に不要。
+* **Creation**: [Discord セットアップ Quickstart](/operations/discord-quickstart.md) を追加（#618）。専用サーバーの用意から `run --watch` までと、**詰まりやすい 4 箇所**（intent off で 4014 停止・チャンネル名を ID の代わりに書く・bot の閲覧権限・スレッド投稿権限）。
 
 ## 2026-09-02
 
