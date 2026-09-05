@@ -121,6 +121,11 @@ pub enum Step {
     Ready(ResumeState),
     /// A resumed session caught up.
     Resumed,
+    /// Discord asked for a heartbeat right now (op 1) — send one before the
+    /// timer would have.
+    HeartbeatNow,
+    /// Discord acknowledged our heartbeat.
+    HeartbeatAck,
     /// A message was posted. The payload is the raw `d` object.
     Message(Value),
     /// Reconnect, resuming if we still hold a session.
@@ -181,9 +186,11 @@ pub fn step(frame: &Value, seq: &mut Option<u64>) -> Step {
         Some(op::INVALID_SESSION) => Step::Reconnect {
             resumable: invalid_session_is_resumable(frame),
         },
-        // A heartbeat request from Discord's side, and its ack, need no
-        // decision from the caller — the heartbeat task answers both.
-        Some(op::HEARTBEAT) | Some(op::HEARTBEAT_ACK) => Step::Idle,
+        // Both need the caller: op 1 is Discord asking for a beat *now*
+        // (ignoring it is how a connection goes quiet), and op 11 is the ack
+        // that proves the socket is still two-way.
+        Some(op::HEARTBEAT) => Step::HeartbeatNow,
+        Some(op::HEARTBEAT_ACK) => Step::HeartbeatAck,
         _ => Step::Idle,
     }
 }
@@ -317,6 +324,15 @@ mod tests {
         };
         assert_eq!(payload["id"], "M1");
         assert_eq!(seq, Some(2));
+    }
+
+    /// Discord asks for an immediate beat with op 1. Reading it as "nothing
+    /// to do" is how a connection goes quiet and gets closed.
+    #[test]
+    fn a_server_requested_heartbeat_and_its_ack_are_both_reported() {
+        let mut seq = None;
+        assert_eq!(step(&json!({ "op": 1 }), &mut seq), Step::HeartbeatNow);
+        assert_eq!(step(&json!({ "op": 11 }), &mut seq), Step::HeartbeatAck);
     }
 
     #[test]

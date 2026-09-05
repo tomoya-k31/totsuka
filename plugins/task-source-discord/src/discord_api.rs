@@ -124,24 +124,31 @@ impl<T: DiscordTransport> DiscordApi<T> {
             })
     }
 
-    /// `GET /channels/{id}/messages` — the most recent messages, newest
-    /// first, bounded by `limit` and by `after` (a snowflake).
+    /// `GET /channels/{id}/messages` — the most recent `limit` messages,
+    /// newest first.
     ///
-    /// The age bound rides on `after` because a snowflake **encodes its
-    /// creation time**: a synthetic snowflake for "now − max_age" is a valid
-    /// lower bound with no extra round trip and no clock of Discord's to
-    /// consult.
+    /// **Deliberately sends no `after`.** `after` is a *forward* paging
+    /// cursor: with it, Discord answers the `limit` messages immediately
+    /// following that snowflake — the **oldest** end of the window, not the
+    /// newest. Pointing it at "now − max_age" therefore returns the oldest
+    /// posts in the window, so a channel busier than `limit` per window would
+    /// recover none of what was actually missed, and would do it silently —
+    /// every recovered post is a `duplicate` ack, which looks exactly like
+    /// "nothing to do".
+    ///
+    /// The age bound is applied by the caller instead, against
+    /// [`snowflake_for`] — a snowflake encodes its own creation time, so no
+    /// extra round trip and no clock of Discord's is needed to compare.
     pub async fn channel_messages(
         &self,
         channel_id: &str,
         limit: u32,
-        after: &str,
     ) -> Result<Vec<DiscordMessage>, DiscordError> {
         let response = self
             .transport
             .call(
                 HttpMethod::Get,
-                &format!("/channels/{channel_id}/messages?limit={limit}&after={after}"),
+                &format!("/channels/{channel_id}/messages?limit={limit}"),
                 None,
                 true,
             )
@@ -220,9 +227,35 @@ pub fn snowflake_for(unix_millis: u64) -> String {
     (since << 22).to_string()
 }
 
+/// Whether `message` was posted at or after `cutoff` (both snowflakes).
+///
+/// Ids are compared **numerically**, not lexically: snowflakes grow past the
+/// digit-count boundary, so `"9999..."` sorts after `"10000..."` as text while
+/// being older as a number. An unparseable id is treated as too old, which
+/// drops it rather than admitting something whose age is unknown.
+pub fn is_at_or_after(message_id: &str, cutoff: &str) -> bool {
+    match (message_id.parse::<u64>(), cutoff.parse::<u64>()) {
+        (Ok(id), Ok(cutoff)) => id >= cutoff,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lexical comparison would get this wrong across a digit-count change,
+    /// and the symptom would be a backfill window that silently shifts.
+    #[test]
+    fn the_age_bound_compares_snowflakes_as_numbers() {
+        assert!(is_at_or_after("100", "99"));
+        assert!(is_at_or_after("99", "99"), "the boundary is inclusive");
+        assert!(!is_at_or_after("98", "99"));
+        // Text order says "9" > "10"; numeric order does not.
+        assert!(is_at_or_after("10000000000000000", "9999999999999999"));
+        // An id that is not a snowflake is dropped, not admitted.
+        assert!(!is_at_or_after("not-a-snowflake", "99"));
+    }
 
     #[test]
     fn a_plain_post_is_human_and_the_others_are_not() {

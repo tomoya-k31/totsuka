@@ -1060,6 +1060,28 @@ kind = "task_source"
 （[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-6）。判定は **`ping` の `version` の semver
 比較**で、`protocol` 整数は見ない（#520）。**上限は無い** — 新しい herdr を拒否することはない。
 
+## `[discord]`（task-source-discord、#618）
+
+```toml
+[discord]
+bot_token = "op://Dev/Discord/bot_token"   # 必須
+operator_user_id = "111111111111111111"    # 必須。自分の Discord ユーザー ID
+```
+
+`[discord]` の全キー（`deny_unknown_fields`。導入手順は [Discord セットアップ Quickstart](/operations/discord-quickstart.md)）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `bot_token` | string | 必須 | Bot Token（Developer Portal → Bot）。`op://` 参照推奨。**ユーザートークンという選択肢は無い** —— Discord は通常アカウントの自動化を禁止しているので、アプリが投稿できるのは bot 名義だけである |
+| `operator_user_id` | string | 必須 | 自分の Discord ユーザー ID。**起動者ゲートの比較対象そのもの**で、既定ではこの id の投稿だけがタスクを起こす。**全桁が数字**（snowflake）で、開発者モードの「ID をコピー」で取る。username を書くと起動時に弾かれる —— 弾かないと誰にも一致せず、「誰も使っていない監視」と見分けがつかなくなる |
+| `api_url` | string | `https://discord.com/api/v10` | REST のベース URL。テスト用の差し替え口 |
+| `source_name` | string | `discord` | このソースインスタンス名（`Task.source` に入る） |
+| `max_retries` | int | 3 | 再送可能な REST 失敗の再試行回数 |
+| `watch_backfill_limit` | int? | 100 | [起動時バックフィル](/glossary/startup-backfill.md)が 1 チャンネルあたり読み直す件数。**Discord の上限は 100** で、超える値は起動時に拒否される —— 通すと毎回 400 になり、warn 1 行のあとバックフィルだけが黙って無効化される。`0` も拒否 |
+| `watch_backfill_max_age_hours` | int? | 24 | 同バックフィルが遡る時間の上限。`0` は拒否 |
+
+トリガは `trigger = { channel = "…", channel_name = "…", repo = "…" }`（+ 任意の `from`）で、[チャンネル監視トリガ](/glossary/channel-watch.md)の語彙は Slack と共通。**このソースにはトリガ種別がこれしか無い**ので、監視ワークフローが 1 本も無い設定は起動時エラーになる（何もしないまま起動するのは常に間違い）。
+
 ## `[herdr.identity]` — サイドバーに出す identity の報告（#417）
 
 ```toml

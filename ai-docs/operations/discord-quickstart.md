@@ -1,7 +1,7 @@
 ---
 type: Playbook
 title: Discord セットアップ Quickstart（task-source-discord）
-description: "専用サーバーの用意 → Developer Portal でのアプリ/bot 作成 → MESSAGE CONTENT INTENT の有効化 → bot 招待 → id の取得 → config.toml の記述 → doctor → run --watch までの導入手順と、無症状で詰まる 4 箇所の対処。"
+description: "専用サーバーの用意 → Developer Portal でのアプリ/bot 作成 → MESSAGE CONTENT INTENT の有効化 → bot 招待 → id の取得 → config.toml の記述 → doctor → run --watch までの導入手順と、詰まりやすい 4 箇所の対処。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-discord
 tags: [operations, playbook, discord, setup, channel-watch]
 generated: { by: claude-code/opus-5, at: 2026-09-06T06:00:00+09:00 }
@@ -9,6 +9,10 @@ status: stable
 owner: tomoya-k31
 stale_after: 2027-03-06
 ---
+
+このファイルは人間向けページの生成元である。編集したら `human-docs` スキルで作り直すこと。
+
+<!-- generates: docs/discord-setup.md docs/discord-setup.ja.md -->
 
 # 前提
 
@@ -80,12 +84,12 @@ totsuka run --watch
 
 起動ログに `discord gateway ready` が出れば接続できている。監視チャンネルに URL を貼ると、タスクが起票され、結果はその投稿から生えたスレッドへ **bot 名義で** 返る。
 
-# 無症状で詰まる 4 箇所
+# 詰まりやすい 4 箇所
 
 | 症状 | 原因 | 対処 |
 |---|---|---|
-| 起動直後に `discord gateway closed with 4014` で止まる | MESSAGE CONTENT INTENT が off | Developer Portal → Bot でトグルを on にして再起動 |
-| タスクは起票されるが**本文が空** | 同じく intent が off …だが Gateway が繋がっている場合。Discord は `content` を空文字にして配送する | 同上。**エラーは出ない**ので、本文が空なら真っ先にここを疑う |
+| 起動直後に `discord gateway closed with 4014` で止まる | MESSAGE CONTENT INTENT が off | Developer Portal → Bot でトグルを on にして再起動。**これは無症状ではなく、恒久エラーとして止まる** —— 再接続を繰り返して回線不調に見えることはない |
+| 起動しても `discord gateway ready` が出ない | intent 以外の理由でトークンが拒否されている（4004）か、ネットワーク | ログの close code を見る。4004 ならトークン、それ以外は再接続を待つ |
 | 投稿しても**何も起きない** | ①チャンネル ID ではなく名前を書いた ②bot がそのチャンネルを見られない ③投稿者が `from` に居ない（既定は自分だけ） | ①は ID をコピーし直す。②はチャンネルの権限の上書きを確認。③は `from` に足す |
 | 結果が投稿されない（タスクは完了する） | bot に Send Messages in Threads / Create Public Threads が無い | ロール権限を追加。エラーは `result/publish` の失敗としてログに出る |
 

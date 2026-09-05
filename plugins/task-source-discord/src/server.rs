@@ -10,7 +10,7 @@ use plugin_protocol::methods::{
     ResultPublishParams, TaskUpdateStatusParams,
 };
 use plugin_protocol::{Capabilities, OutputCapability, RequestId, method};
-use plugin_sdk::{LineHandler, Reply, SubmitClient, unknown_trigger_keys};
+use plugin_sdk::{LineHandler, Reply, SubmitClient, request_id, unknown_trigger_keys};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -26,6 +26,9 @@ use crate::watch::WatchTriggers;
 /// and a dropped key would widen the trigger rather than narrow it, which is
 /// why an unknown one fails startup instead of being ignored.
 const TRIGGER_KEYS: &[&str] = &["channel", "channel_name", "repo", "from"];
+
+/// Discord's ceiling on `GET /channels/{id}/messages?limit=`.
+const DISCORD_MESSAGE_PAGE_MAX: u32 = 100;
 
 /// Builds the plugin's outbound transport. Abstracted so the server is tested
 /// against recorded responses.
@@ -122,8 +125,11 @@ where
             method::TASK_UPDATE_STATUS => self.update_status(id, params),
             method::RESULT_PUBLISH => self.result_publish(id, params).await,
             method::SHUTDOWN => {
+                // `shutdown_ack`, not `respond`: the serve loop exits on the
+                // reply's `shutdown` flag, so a plain response acks the
+                // request and then keeps serving.
                 self.session = None;
-                Reply::respond(Response::result(id, Value::Null))
+                Reply::shutdown_ack(id)
             }
             other => Reply::respond(Response::error(
                 id,
@@ -188,6 +194,21 @@ where
                  repo = \"…\" }`, or disable this plugin"
                     .into(),
             );
+        }
+        // Discord caps `limit` on the messages route at 100. A larger value is
+        // refused with a 400 on **every** backfill, which surfaces as one warn
+        // line and then a recovery path that silently does nothing — so it is
+        // refused here, where the number is still visible to the operator.
+        if config
+            .watch_backfill_limit
+            .is_some_and(|n| n > DISCORD_MESSAGE_PAGE_MAX)
+        {
+            errors.push(format!(
+                "`watch_backfill_limit` is {}, but Discord returns at most \
+                 {DISCORD_MESSAGE_PAGE_MAX} messages per request → lower it, or leave it out \
+                 for the default",
+                config.watch_backfill_limit.unwrap_or_default()
+            ));
         }
         let backfill_limits = match plugin_sdk::BackfillLimits::new(
             config.watch_backfill_limit,
@@ -365,16 +386,4 @@ fn plugin_version() -> semver::Version {
 
 fn parse_params<T: DeserializeOwned>(params: &Value) -> Result<T, String> {
     serde_json::from_value(params.clone()).map_err(|e| format!("invalid params: {e}"))
-}
-
-/// Convert a JSON id value into a [`RequestId`], preserving anything unusual
-/// via its textual form so the caller can still correlate the reply.
-fn request_id(id: &Value) -> RequestId {
-    if let Some(n) = id.as_i64() {
-        RequestId::Number(n)
-    } else if let Some(s) = id.as_str() {
-        RequestId::Str(s.to_string())
-    } else {
-        RequestId::Str(id.to_string())
-    }
 }

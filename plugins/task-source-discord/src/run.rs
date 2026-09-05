@@ -16,9 +16,13 @@ use crate::gateway::{self, ResumeState, Step};
 use crate::pipeline::{self, SharedState};
 use crate::transport::{DiscordTransport, capped_backoff};
 
-/// The gateway URL used for a fresh connection. `resume_gateway_url` from
+/// The gateway host used for a fresh connection. `resume_gateway_url` from
 /// `READY` replaces it for a resume, and only for a resume.
-const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
+const GATEWAY_BASE: &str = "wss://gateway.discord.gg";
+
+/// The query every gateway connection needs — including a resumed one, whose
+/// URL Discord hands over bare.
+const GATEWAY_QUERY: &str = "/?v=10&encoding=json";
 
 /// First reconnect backoff step; doubles up to [`MAX_BACKOFF`].
 const FIRST_BACKOFF: Duration = Duration::from_secs(1);
@@ -39,7 +43,7 @@ pub fn spawn<T, S>(
 ) -> tokio::task::JoinHandle<()>
 where
     T: DiscordTransport + Send + Sync + 'static,
-    S: Submitter + 'static,
+    S: Submitter + Clone + 'static,
 {
     tokio::spawn(async move {
         // Both startup steps run before the first connection, so a post made
@@ -76,9 +80,23 @@ where
                     tracing::error!("discord gateway stopped: {e}");
                     return;
                 }
-                SessionEnd::Resumable(reason) => {
-                    consecutive_failures = 0;
-                    tracing::info!("discord gateway: {reason}; resuming");
+                SessionEnd::Resumable(reason, went_live) => {
+                    // Reset only when the session actually went live. A
+                    // connection that dies during every handshake is not
+                    // progress, and treating it as such produced a reconnect
+                    // loop with no wait at all.
+                    if went_live {
+                        consecutive_failures = 0;
+                    } else {
+                        consecutive_failures += 1;
+                    }
+                    let delay = capped_backoff(FIRST_BACKOFF, MAX_BACKOFF, consecutive_failures);
+                    tracing::info!(
+                        consecutive_failures,
+                        ?delay,
+                        "discord gateway: {reason}; resuming"
+                    );
+                    tokio::time::sleep(delay).await;
                 }
                 SessionEnd::Restart(reason) => {
                     // The resume window is gone, so the events missed since
@@ -112,25 +130,36 @@ where
 enum SessionEnd {
     /// Unfixable — stop, do not reconnect.
     Permanent(DiscordError),
-    /// The session survives; reconnect and `RESUME`.
-    Resumable(String),
+    /// The session survives; reconnect and `RESUME`. Carries whether the
+    /// session ever went live, which is what makes a reset of the failure
+    /// counter mean "progress" rather than "we tried again".
+    Resumable(String, bool),
     /// The session is gone; reconnect fresh and backfill.
     Restart(String),
 }
 
+/// The sleep used while no heartbeat interval is known yet. Long enough never
+/// to fire before `HELLO` arrives.
+const IDLE: Duration = Duration::from_secs(3600);
+
 /// One Gateway session: connect, hand over frames, and report how it ended.
-async fn session<S: Submitter>(
-    config: &DiscordConfig,
+async fn session<S: Submitter + Clone + 'static>(
+    config: &Arc<DiscordConfig>,
     triggers: &crate::watch::WatchTriggers,
     submitter: &S,
     state: &SharedState,
     resume_from: Option<&ResumeState>,
     resume_out: &mut Option<ResumeState>,
 ) -> SessionEnd {
+    // `resume_gateway_url` arrives **without a query string**, and a
+    // connection with no `v` can be closed as an invalid API version (4012) —
+    // which this plugin treats as permanent, so the runtime would stop for
+    // good on the first resume. The first connection never shows it.
     let url = resume_from
         .map(|r| r.resume_gateway_url.clone())
         .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| GATEWAY_URL.to_string());
+        .map(|url| format!("{}{GATEWAY_QUERY}", url.trim_end_matches('/')))
+        .unwrap_or_else(|| format!("{GATEWAY_BASE}{GATEWAY_QUERY}"));
 
     let (mut socket, _) = match tokio_tungstenite::connect_async(&url).await {
         Ok(pair) => pair,
@@ -139,15 +168,30 @@ async fn session<S: Submitter>(
 
     let mut seq: Option<u64> = resume_from.map(|r| r.seq);
     let mut heartbeat_every: Option<Duration> = None;
-    let mut next_beat = Box::pin(tokio::time::sleep(Duration::from_secs(3600)));
+    let mut next_beat = Box::pin(tokio::time::sleep(IDLE));
+    // Whether a heartbeat is still waiting for its ack. A socket that stops
+    // acking is **half-open**: frames stop arriving but nothing errors, so
+    // without this the session would sit silent until something else noticed.
+    let mut awaiting_ack = false;
+    // Whether this session ever went live. Only then is the failure counter
+    // worth resetting — otherwise a connection that dies during the handshake
+    // every time looks like progress.
+    let mut went_live = false;
 
     loop {
         tokio::select! {
             _ = &mut next_beat, if heartbeat_every.is_some() => {
                 let interval = heartbeat_every.expect("guarded by the `if`");
-                if socket.send(Message::Text(gateway::heartbeat(seq).to_string().into())).await.is_err() {
-                    return SessionEnd::Resumable("heartbeat could not be sent".into());
+                if awaiting_ack {
+                    return SessionEnd::Resumable(
+                        "the previous heartbeat was never acknowledged (half-open socket)".into(),
+                        went_live,
+                    );
                 }
+                if socket.send(Message::Text(gateway::heartbeat(seq).to_string().into())).await.is_err() {
+                    return SessionEnd::Resumable("heartbeat could not be sent".into(), went_live);
+                }
+                awaiting_ack = true;
                 next_beat = Box::pin(tokio::time::sleep(interval));
             }
             frame = socket.next() => {
@@ -162,19 +206,19 @@ async fn session<S: Submitter>(
                             // the session even though reconnecting is fine.
                             let restart = matches!(code, 4007 | 4009);
                             let reason = format!("closed with {code}");
-                            if restart { SessionEnd::Restart(reason) } else { SessionEnd::Resumable(reason) }
+                            if restart { SessionEnd::Restart(reason) } else { SessionEnd::Resumable(reason, went_live) }
                         };
                     }
                     Some(Ok(_)) => continue, // binary/ping/pong: nothing to read
-                    Some(Err(e)) => return SessionEnd::Resumable(format!("socket error: {e}")),
-                    None => return SessionEnd::Resumable("socket closed".into()),
+                    Some(Err(e)) => return SessionEnd::Resumable(format!("socket error: {e}"), went_live),
+                    None => return SessionEnd::Resumable("socket closed".into(), went_live),
                 };
                 let Ok(value) = serde_json::from_str::<Value>(&frame) else {
                     tracing::warn!("discord gateway sent a frame that is not JSON; ignoring");
                     continue;
                 };
 
-                match pipeline::handle_frame(&value, &mut seq, config, triggers, submitter, state).await {
+                match pipeline::handle_frame(&value, &mut seq, config, triggers, submitter, state) {
                     Step::Hello { interval } => {
                         heartbeat_every = Some(interval);
                         next_beat = Box::pin(tokio::time::sleep(
@@ -190,12 +234,27 @@ async fn session<S: Submitter>(
                     }
                     Step::Ready(ready) => {
                         tracing::info!(session = %ready.session_id, "discord gateway ready");
+                        went_live = true;
                         *resume_out = Some(ready);
                     }
-                    Step::Resumed => tracing::info!("discord gateway resumed"),
+                    Step::Resumed => {
+                        went_live = true;
+                        tracing::info!("discord gateway resumed");
+                    }
+                    // Discord wants a beat now; the timer's turn has not come.
+                    Step::HeartbeatNow => {
+                        if socket.send(Message::Text(gateway::heartbeat(seq).to_string().into())).await.is_err() {
+                            return SessionEnd::Resumable(
+                                "heartbeat could not be sent".into(),
+                                went_live,
+                            );
+                        }
+                        awaiting_ack = true;
+                    }
+                    Step::HeartbeatAck => awaiting_ack = false,
                     Step::Reconnect { resumable } => {
                         return if resumable {
-                            SessionEnd::Resumable("asked to reconnect".into())
+                            SessionEnd::Resumable("asked to reconnect".into(), went_live)
                         } else {
                             SessionEnd::Restart("session invalidated".into())
                         };
