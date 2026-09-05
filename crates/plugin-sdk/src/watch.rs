@@ -10,20 +10,25 @@
 //! What this module owns is everything about the trigger that is not
 //! platform-specific: parsing and validating the table, the author gate
 //! ([`WatchTrigger::allows`]), the rename check
-//! ([`WatchTrigger::name_mismatch`]), the backfill limits and the one-shot
-//! backfill pass ([`backfill_pass`]). Receiving the messages (Socket Mode,
-//! the Discord Gateway) and normalizing them into [`Task`]s stays in each
-//! source.
+//! ([`WatchTrigger::name_mismatch`]) and the backfill window
+//! ([`BackfillLimits`]).
+//!
+//! The backfill **loop** deliberately is not here. It reads one channel's
+//! history, runs each message through that source's own filter table,
+//! enriches it and submits it through that source's own submit path — which
+//! also records where the result must be posted. Every one of those steps is
+//! source-specific, and a shared loop that took a bare
+//! [`Submitter`](crate::Submitter) would route recovered tasks around that
+//! bookkeeping, so `result/publish` would fail for backfilled tasks alone.
+//! What generalizes is the *window* and the rules for it, so that is what
+//! this module offers; the fifteen lines of glue live with the source.
 //!
 //! [ADR-0068]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0068-channel-watch-trigger.md
 
 use std::time::{Duration, SystemTime};
 
-use plugin_protocol::Task;
 use plugin_protocol::methods::WorkflowInfo;
 use serde_json::Value;
-
-use crate::submit::{Submitter, submit_all};
 
 /// One workflow's channel watch trigger, parsed and validated.
 ///
@@ -377,67 +382,6 @@ impl BackfillLimits {
     }
 }
 
-/// One startup backfill pass: fetch each watched channel's recent messages
-/// and submit them all, relying on the Orchestrator's idempotent ingest to
-/// drop what was already seen.
-///
-/// # What `fetch` must have done already
-///
-/// **Apply [`WatchTrigger::allows`] to every message's author.** Recovery is
-/// not a lesser path: a backfill that skips the gate re-opens on every restart
-/// exactly what [ADR-0068] closed, for a whole `max_age` window at a time.
-/// The SDK cannot enforce it here — a [`Task`] carries no author — so it is
-/// the one part of the contract that is only ever checked by reading this.
-///
-/// Also: normalize to [`Task`]s (as [`poll_loop`](crate::poll_loop)'s fetch
-/// does), and drop anything older than [`BackfillLimits::cutoff`] — pushing
-/// the cutoff into the API call where the platform has an `oldest`-style
-/// parameter. `max_age` is likewise unenforceable here (no timestamp on a
-/// `Task`); `count` is not, and this function truncates to it as a backstop.
-///
-/// A failing channel is logged and skipped, not fatal: backfill is recovery,
-/// and failing startup over it would lose the live events too.
-///
-/// [ADR-0068]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0068-channel-watch-trigger.md
-pub async fn backfill_pass<S, F, Fut>(
-    triggers: &[WatchTrigger],
-    limits: &BackfillLimits,
-    submitter: &S,
-    mut fetch: F,
-) where
-    S: Submitter,
-    F: FnMut(&WatchTrigger, &BackfillLimits) -> Fut,
-    Fut: Future<Output = Result<Vec<Task>, String>>,
-{
-    for trigger in triggers {
-        let mut tasks = match fetch(trigger, limits).await {
-            Ok(tasks) => tasks,
-            Err(e) => {
-                tracing::warn!(
-                    workflow = %trigger.workflow,
-                    channel = %trigger.channel,
-                    "backfill fetch failed (channel skipped): {e}"
-                );
-                continue;
-            }
-        };
-        // The one limit that *is* enforceable here (see the doc comment).
-        // A source that already truncated loses nothing; one that forgot does
-        // not turn a busy channel's whole history into tasks.
-        if tasks.len() > limits.count as usize {
-            tracing::warn!(
-                workflow = %trigger.workflow,
-                channel = %trigger.channel,
-                fetched = tasks.len(),
-                limit = limits.count,
-                "backfill fetch returned more than the configured limit; truncating"
-            );
-            tasks.truncate(limits.count as usize);
-        }
-        submit_all(submitter, tasks, &trigger.workflow).await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,85 +647,5 @@ mod tests {
         let limits = BackfillLimits::default();
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100 * 3600);
         assert_eq!(limits.cutoff(now), now - Duration::from_secs(24 * 3600));
-    }
-
-    /// Records `(task id, workflow)` for every submission.
-    struct Recorder(std::sync::Mutex<Vec<(String, String)>>);
-
-    impl Submitter for Recorder {
-        async fn submit(&self, task: Task, workflow: &str) -> crate::SubmitOutcome {
-            self.0.lock().unwrap().push((task.id, workflow.to_string()));
-            crate::SubmitOutcome::Accepted
-        }
-    }
-
-    fn bare_task(id: &str) -> Task {
-        Task {
-            id: id.to_string(),
-            source: "slack".into(),
-            title: "t".into(),
-            body: None,
-            repo_hint: None,
-            labels: vec![],
-            priority: 0,
-            status: None,
-            url: None,
-            assignee: None,
-            message_key: None,
-            instructions: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn an_over_long_fetch_is_truncated_to_the_count_limit() {
-        // `max_age` cannot be enforced here (a Task carries no timestamp),
-        // but `count` can — a source that forgot to bound its fetch must not
-        // turn a busy channel's whole history into tasks.
-        let trigger = WatchTrigger::parse(&full(), "clip").unwrap().unwrap();
-        let limits = BackfillLimits::new(Some(3), None).unwrap();
-        let recorder = Recorder(std::sync::Mutex::new(Vec::new()));
-        backfill_pass(&[trigger], &limits, &recorder, |_t, _l| async {
-            Ok((0..10).map(|i| bare_task(&format!("m{i}"))).collect())
-        })
-        .await;
-        let submitted = recorder.0.lock().unwrap();
-        assert_eq!(submitted.len(), 3, "got {submitted:?}");
-        // The *newest* end of what the source returned is kept, so a source
-        // that fetches newest-first loses only the oldest overflow.
-        assert_eq!(submitted[0].0, "m0");
-        assert_eq!(submitted[2].0, "m2");
-    }
-
-    #[tokio::test]
-    async fn a_failing_channel_is_skipped_not_fatal() {
-        let t1 = WatchTrigger::parse(&full(), "clip").unwrap().unwrap();
-        let mut bad = full();
-        bad["channel"] = json!("C2");
-        let t2 = WatchTrigger::parse(&bad, "clip2").unwrap().unwrap();
-
-        let recorder = Recorder(std::sync::Mutex::new(Vec::new()));
-        backfill_pass(
-            &[t1, t2],
-            &BackfillLimits::default(),
-            &recorder,
-            |trigger, _limits| {
-                let failing = trigger.channel == "C1";
-                let tasks = vec![bare_task(&format!("{}:1", trigger.channel))];
-                async move {
-                    if failing {
-                        Err("rate limited".to_string())
-                    } else {
-                        Ok(tasks)
-                    }
-                }
-            },
-        )
-        .await;
-
-        // C1 failed and was skipped; C2 still submitted under its workflow.
-        assert_eq!(
-            *recorder.0.lock().unwrap(),
-            vec![("C2:1".to_string(), "clip2".to_string())]
-        );
     }
 }

@@ -56,6 +56,18 @@ pub struct PendingMention {
     /// how the plugin gets back to the workflow whose `publish` key decides
     /// whether the result goes through the approval gate.
     pub workflow: String,
+    /// Whose name the result goes out under (#617), decided **here**, when
+    /// the task is raised, rather than re-derived at `result/publish` from
+    /// the workflow name.
+    ///
+    /// The identity is a property of *how the task was raised* — a channel
+    /// watch result is the bot's ([ADR-0068]) — so deriving it later from a
+    /// name that config can rename underneath us would make an unrelated edit
+    /// able to turn an automated post back into one in the operator's voice.
+    /// Recording it at the source removes the question.
+    ///
+    /// [ADR-0068]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0068-channel-watch-trigger.md
+    pub post_as: crate::approval::PostAs,
 }
 
 /// Bound on the pending-mention index. `result/publish` (#107) consumes
@@ -147,6 +159,17 @@ impl SharedState {
             .entries
             .get(task_id)
             .map(|p| p.workflow.clone())
+    }
+
+    /// Whose name `task_id`'s result goes out under (#617), as recorded when
+    /// the task was raised. Also non-consuming, for the same reason.
+    pub fn post_as_of(&self, task_id: &str) -> Option<crate::approval::PostAs> {
+        self.pending
+            .lock()
+            .unwrap()
+            .entries
+            .get(task_id)
+            .map(|p| p.post_as)
     }
 
     pub fn take_pending(&self, task_id: &str) -> Option<PendingMention> {
@@ -335,6 +358,10 @@ pub fn spawn<T, C, S>(
     // Resolved at `initialize`, where the workflow triggers are in hand
     // (#396); the pipeline is handed the answer rather than re-deriving it.
     trigger_reactions: ReactionTriggers,
+    // Resolved at `initialize` the same way (#617): the channels this config
+    // watches, already checked against `[[repositories]]`.
+    watch_triggers: crate::watch::WatchTriggers,
+    backfill: plugin_sdk::BackfillLimits,
     mut events: mpsc::UnboundedReceiver<SocketEvent>,
     state: SharedState,
     submitter: S,
@@ -389,6 +416,22 @@ where
             submit: submitter,
             lookup,
         };
+        // Watched channels: verify each name, then recover what was posted
+        // while the plugin was down. Both happen before the event loop opens,
+        // so a clip posted during a restart is picked up in submission order
+        // ahead of anything arriving live.
+        if !watch_triggers.is_empty() {
+            verify_watched_names(api.as_ref(), &watch_triggers).await;
+            let deps = WatchStartup {
+                api: api.as_ref(),
+                config: &config,
+                triggers: &watch_triggers,
+                limits: &backfill,
+                submitter: &orchestrator.submit,
+                state: &state,
+            };
+            backfill_watched_channels(&deps, &mut names, &mut filter).await;
+        }
         let awaiting = Arc::new(Mutex::new(AwaitingSelection::default()));
         let mut sweep = tokio::time::interval(SELECTION_SWEEP_INTERVAL);
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -420,7 +463,15 @@ where
             };
             match event {
                 SocketEvent::Message(message) => {
-                    let Some(mention) = filter.assess(&message) else {
+                    // Mention first, watch second (#615 decision S1): an
+                    // explicit `<@…>` outranks "posted in a watched channel",
+                    // so naming the operator in a clip channel still reaches
+                    // the reply flow. Both paths share one processed set, so
+                    // the message becomes exactly one task either way.
+                    let Some(mention) = filter
+                        .assess(&message)
+                        .or_else(|| watch_triggers.assess(&message, &mut filter))
+                    else {
                         continue;
                     };
                     let enriched = enrich(api.as_ref(), &config, &mut names, mention).await;
@@ -537,6 +588,22 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
     enriched: EnrichedMention,
     orchestrator: Orchestrator<S>,
 ) {
+    // A watched channel settles its repository in config (#617), so there is
+    // nothing to look up and nothing to classify: skipping straight to submit
+    // is the whole point of pinning it. This is deliberately *before* the
+    // `task/lookup` below — asking would spend a round trip on an answer that
+    // cannot change the outcome.
+    if let Some(repo) = enriched.mention.repo_pin.clone() {
+        tracing::info!(
+            task_id = enriched.mention.task_id(),
+            channel = enriched.mention.channel,
+            repo,
+            "post in a watched channel; submitting with the channel's pinned repository"
+        );
+        submit(&state, &config, &enriched, Some(repo), &orchestrator.submit).await;
+        return;
+    }
+
     // Ask first whether this conversation already exists (#242). Resolution
     // is a *new* conversation's business: for a reply the orchestrator
     // already knows the repository, and resolving anyway would spend an LLM
@@ -973,6 +1040,117 @@ async fn enrich<T: SlackTransport>(
     }
 }
 
+/// What the watched-channel startup steps need. Grouped so the backfill
+/// takes one argument for its dependencies and one each for the two pieces of
+/// mutable pipeline state it threads through.
+struct WatchStartup<'a, T, S> {
+    api: &'a SlackApi<T>,
+    config: &'a Arc<SlackConfig>,
+    triggers: &'a crate::watch::WatchTriggers,
+    limits: &'a plugin_sdk::BackfillLimits,
+    submitter: &'a S,
+    state: &'a SharedState,
+}
+
+/// Check each watched channel's live name against the configured
+/// `channel_name` (#617), warning on a mismatch.
+///
+/// Advisory, never fatal: the id is what the watch actually keys on, so a
+/// rename does not break anything — it just means the config now describes a
+/// channel by a name it no longer has, which is how a watch silently ends up
+/// pointing somewhere the operator did not mean. A lookup failure says
+/// nothing either way and is logged as such.
+async fn verify_watched_names<T: SlackTransport>(
+    api: &SlackApi<T>,
+    watch_triggers: &crate::watch::WatchTriggers,
+) {
+    for watched in watch_triggers.channels() {
+        match api.conversations_info_name(&watched.trigger.channel).await {
+            Ok(live_name) => {
+                if let Some(warning) = watched.trigger.name_mismatch(&live_name) {
+                    tracing::warn!("{warning}");
+                }
+            }
+            Err(e) => tracing::warn!(
+                channel = %watched.trigger.channel,
+                error = %e,
+                "could not read the watched channel's name; the rename check is skipped \
+                 for this run (the watch itself keys on the id and still works)"
+            ),
+        }
+    }
+}
+
+/// Recover the posts made while the plugin was down (#617, ADR-0068 decision
+/// 4): fetch each watched channel's recent history, run it through the
+/// **same** watch table as the live path, and submit what it admits.
+///
+/// No cursor is persisted. Re-submitting a post the ledger already holds is
+/// an idempotent `duplicate` ack, so over-fetching costs nothing while
+/// under-fetching loses a clip silently — the asymmetry that makes "just
+/// refetch the window every startup" the right shape.
+async fn backfill_watched_channels<T: SlackTransport, S: Submitter>(
+    deps: &WatchStartup<'_, T, S>,
+    names: &mut NameCache,
+    filter: &mut MentionFilter,
+) {
+    let WatchStartup {
+        api,
+        config,
+        triggers: watch_triggers,
+        limits,
+        submitter,
+        state,
+    } = deps;
+    let oldest = slack_ts(limits.cutoff(SystemTime::now()));
+    for watched in watch_triggers.channels() {
+        let channel = &watched.trigger.channel;
+        let messages = match api
+            .conversations_history_recent(channel, limits.count, &oldest)
+            .await
+        {
+            Ok(messages) => messages,
+            Err(e) => {
+                tracing::warn!(
+                    channel = %channel,
+                    error = %e,
+                    "backfill of a watched channel failed; skipping it (live events are \
+                     unaffected, but posts made while the plugin was down are lost)"
+                );
+                continue;
+            }
+        };
+        // Oldest first, so the recovered clips are submitted in the order they
+        // were posted rather than newest-first as Slack returns them.
+        for message in messages.iter().rev() {
+            let Some(mention) = watch_triggers.assess_history(watched, message, filter) else {
+                continue;
+            };
+            let enriched = enrich(api, config, names, mention).await;
+            let repo = enriched.mention.repo_pin.clone();
+            tracing::info!(
+                task_id = enriched.mention.task_id(),
+                channel = %channel,
+                "recovered a post made while the plugin was down"
+            );
+            submit(state, config, &enriched, repo, *submitter).await;
+        }
+    }
+}
+
+/// A `SystemTime` as a Slack `ts` (`"<seconds>.<microseconds>"`), which is
+/// what `conversations.history`'s `oldest` expects.
+fn slack_ts(time: SystemTime) -> String {
+    let since_epoch = time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!(
+        "{}.{:06}",
+        since_epoch.as_secs(),
+        since_epoch.subsec_micros()
+    )
+}
+
 /// Normalize an enriched mention to the common [`Task`] schema.
 fn build_task(
     config: &SlackConfig,
@@ -1102,6 +1280,13 @@ fn build_task(
         permalink: enriched.permalink.clone(),
         // Filled in by `submit`, which is where the workflow is known.
         workflow: String::new(),
+        // A watched channel pins the repository, and it is the same fact that
+        // makes the result the bot's: only a watch sets `repo_pin`.
+        post_as: if mention.repo_pin.is_some() {
+            crate::approval::PostAs::Bot
+        } else {
+            crate::approval::PostAs::Operator
+        },
     };
     (task, pending)
 }
@@ -1248,6 +1433,7 @@ mod tests {
     fn threaded_mention(prefix: Option<&str>) -> Mention {
         Mention {
             workflow: Some("slack-reply".into()),
+            repo_pin: None,
             channel: "C1".into(),
             user: "U_ME".into(),
             text: "やろう".into(),
@@ -1359,6 +1545,7 @@ mod tests {
         EnrichedMention {
             mention: Mention {
                 workflow: Some("slack-reply".into()),
+                repo_pin: None,
                 channel: "C1".into(),
                 user: "U_OTHER".into(),
                 text: "<@U_ME> hi".into(),
@@ -1559,6 +1746,7 @@ mod tests {
             sender_id: "U_OTHER".into(),
             sender_name: "アリス".into(),
             permalink: None,
+            post_as: crate::approval::PostAs::Operator,
         }
     }
 

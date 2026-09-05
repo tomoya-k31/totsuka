@@ -38,13 +38,29 @@ const BLOCK_TEXT_LIMIT: usize = 2900;
 /// one Slack rejects for size, only fall back earlier than strictly needed.
 const MARKDOWN_BLOCK_LIMIT: usize = 12_000;
 
-/// `result/publish` with `delivery = direct` (#548, ADR-0057): post the reply
-/// into the thread immediately, no draft and no buttons.
+/// Who a direct post goes out as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostAs {
+    /// The operator's own name (user token) — `delivery = direct` on a
+    /// mention-driven workflow (#548, ADR-0057). The gate changed, the
+    /// identity did not.
+    Operator,
+    /// The bot (bot token) — a channel watch result (#617, ADR-0068).
+    ///
+    /// A watch fires on someone *posting*, so its result is not the operator
+    /// answering anyone; posting it under their name would put automated
+    /// messages out in their voice, which is the thing the approval gate
+    /// exists to prevent. The bot must be a member of the watched channel, or
+    /// Slack answers `not_in_channel`.
+    Bot,
+}
+
+/// `result/publish` without a draft: post the reply into the thread
+/// immediately, no buttons.
 ///
-/// Still the operator's own name (the user token) — what changed is only the
-/// gate, and only because the Orchestrator said so for this workflow. The
-/// mechanical `<@sender>` mention prefix is kept so the asker is notified,
-/// exactly as an approved draft would have.
+/// The mechanical `<@sender>` mention prefix is kept so the person who raised
+/// the task is notified, exactly as an approved draft would have — for a
+/// watch that is whoever posted the clip.
 ///
 /// **The pending coordinates are consumed only after the post succeeds.**
 /// `publish_draft` below consumes them first and gets away with it because the
@@ -58,6 +74,7 @@ pub async fn publish_direct<T: SlackTransport>(
     state: &SharedState,
     task_id: &str,
     content: &str,
+    post_as: PostAs,
 ) -> Result<(), String> {
     let text = extract_reply(content);
     if text.is_empty() {
@@ -73,7 +90,7 @@ pub async fn publish_direct<T: SlackTransport>(
         ));
     };
     let text = format!("<@{}> {text}", pending.sender_id);
-    api.chat_post_message(&PostMessage {
+    let message = PostMessage {
         channel: &pending.channel,
         text: &text,
         thread_ts: Some(&pending.reply_ts),
@@ -86,9 +103,18 @@ pub async fn publish_direct<T: SlackTransport>(
         // skip approval. Oversized replies fall back to bare `text`, also as
         // the approve path does.
         blocks: reply_markdown_block(&text).map(|b| Value::Array(vec![b])),
-    })
-    .await
-    .map_err(|e| format!("direct reply could not be posted: {e}"))?;
+    };
+    let posted = match post_as {
+        PostAs::Operator => api.chat_post_message(&message).await.map(|_| ()),
+        PostAs::Bot => api.chat_post_message_bot(&message).await.map(|_| ()),
+    };
+    posted.map_err(|e| match post_as {
+        PostAs::Bot => format!(
+            "the watch result could not be posted as the bot: {e} → if this is \
+             `not_in_channel`, invite the bot to the watched channel"
+        ),
+        PostAs::Operator => format!("direct reply could not be posted: {e}"),
+    })?;
     // Success is the terminal step: only now is the conversation's pending
     // entry spent.
     state.take_pending(task_id);

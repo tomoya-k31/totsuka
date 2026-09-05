@@ -10,7 +10,10 @@
 //! 3. the self-DM record channel → ignore (defense in depth against
 //!    re-detecting our own records)
 //! 4. no `<@target_user_id>` in the text → ignore (mentions only)
-//! 5. `channel:ts` already processed → ignore (redelivery dedup; bounded
+//! 5. no workflow answers mentions → ignore, **without spending the dedup
+//!    key**, so a channel watch covering this channel can still claim the
+//!    message (#617)
+//! 6. `channel:ts` already processed → ignore (redelivery dedup; bounded
 //!    LRU, lost on restart — the orchestrator's ingest is idempotent too)
 
 use std::collections::{HashSet, VecDeque};
@@ -60,6 +63,13 @@ pub struct Mention {
     /// `None` means no workflow claims this mention, and the task is dropped
     /// rather than submitted somewhere arbitrary.
     pub workflow: Option<String>,
+    /// The repository this task is pinned to by a channel watch trigger
+    /// (`trigger.repo`, #617). `Some` short-circuits the whole resolution
+    /// path — no `task/lookup`, no classifier, no in-thread picker — because
+    /// a watched channel's repository is settled in config, not per message.
+    ///
+    /// Always `None` on the mention and reaction paths, which resolve.
+    pub repo_pin: Option<String>,
 }
 
 impl Mention {
@@ -203,7 +213,26 @@ impl MentionFilter {
         if !text.contains(&self.tag_closed) && !text.contains(&self.tag_labeled) {
             return None;
         }
-        // 5. redelivery dedup
+        // 5. no workflow answers mentions.
+        //
+        // **Before the dedup key is spent**, because spending it here would
+        // be unrecoverable: the message would be dropped for having no
+        // workflow *and* be invisible to the channel watch, which may well
+        // claim it (#617). "A mention outranks a watch" ranks two candidates;
+        // it cannot rank one that does not exist. Reposting would not help
+        // either — the key is `{channel}:{ts}`, so the burnt key belongs to
+        // that message forever.
+        if self.mention_workflow.is_none() {
+            tracing::warn!(
+                channel,
+                ts,
+                "a mention arrived but no workflow answers mentions → add a `[[workflows]]` \
+                 entry with source = \"slack\" and no `reaction`/`channel` trigger. Leaving it \
+                 for a channel watch if one covers this channel"
+            );
+            return None;
+        }
+        // 6. redelivery dedup
         if !self.remember(format!("{channel}:{ts}")) {
             return None;
         }
@@ -226,6 +255,9 @@ impl MentionFilter {
             // instructions, which is what that wants.
             instructions_kind: None,
             workflow: self.mention_workflow.clone(),
+            // A mention resolves its repository; only a channel watch pins
+            // one (#617).
+            repo_pin: None,
         })
     }
 
@@ -256,6 +288,7 @@ mod tests {
     fn reacted(ts: &str, thread_ts: Option<&str>, prefix: Option<&str>) -> Mention {
         Mention {
             workflow: Some("slack-reply".into()),
+            repo_pin: None,
             channel: "C1".into(),
             user: "U_OTHER".into(),
             text: "方針はこれでいこう".into(),

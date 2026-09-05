@@ -286,6 +286,45 @@ impl<T: SlackTransport> SlackApi<T> {
             .find(|message| message.ts == ts))
     }
 
+    /// The most recent messages in `channel`, newest first, bounded by
+    /// `limit` and by `oldest` (a Slack ts) — the startup backfill for a
+    /// watched channel (#617).
+    ///
+    /// The age bound is pushed into the API call rather than filtered
+    /// afterwards: `conversations.history` takes `oldest` natively, so asking
+    /// for less is strictly cheaper than asking for everything and dropping
+    /// most of it. `oldest` is a **rolling** `now - max_age`, not a saved
+    /// cursor, so it lands on a different message every start and whether the
+    /// boundary message itself is included changes nothing — re-reading one is
+    /// an idempotent `duplicate` ack anyway.
+    pub async fn conversations_history_recent(
+        &self,
+        channel: &str,
+        limit: u32,
+        oldest: &str,
+    ) -> Result<Vec<SlackMessage>, SlackError> {
+        let response = self
+            .call(
+                "conversations.history",
+                Some(json!({
+                    "channel": channel,
+                    "oldest": oldest,
+                    "limit": limit,
+                })),
+                true,
+            )
+            .await?;
+        let messages = response
+            .get("messages")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                SlackError::InvalidResponse(
+                    "`conversations.history` response has no `messages` array".into(),
+                )
+            })?;
+        Ok(messages.iter().map(parse_message).collect())
+    }
+
     /// One message by `(channel, ts)`, whether it sits at channel level or
     /// inside a thread (#319).
     ///
@@ -458,9 +497,12 @@ impl<T: SlackTransport> SlackApi<T> {
         string_field(&response, "chat.postMessage", "ts")
     }
 
-    /// `chat.postMessage` as the **bot** — the notification nudge, and
-    /// nothing else (#305): a reply must never be posted with this token.
-    /// Non-idempotent, like [`chat_post_message`](Self::chat_post_message).
+    /// `chat.postMessage` as the **bot** — the notification nudge (#305), and
+    /// the channel watch result.
+    /// Also the identity a **channel watch** result goes out under (#617,
+    /// ADR-0068): a watch fires on someone posting, so its result is not the
+    /// operator answering anyone. A mention-driven reply is still the
+    /// operator's. Non-idempotent, like [`chat_post_message`](Self::chat_post_message).
     pub async fn chat_post_message_bot(
         &self,
         message: &PostMessage<'_>,
