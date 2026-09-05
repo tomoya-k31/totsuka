@@ -56,6 +56,18 @@ pub struct PendingMention {
     /// how the plugin gets back to the workflow whose `publish` key decides
     /// whether the result goes through the approval gate.
     pub workflow: String,
+    /// Whose name the result goes out under (#617), decided **here**, when
+    /// the task is raised, rather than re-derived at `result/publish` from
+    /// the workflow name.
+    ///
+    /// The identity is a property of *how the task was raised* — a channel
+    /// watch result is the bot's ([ADR-0068]) — so deriving it later from a
+    /// name that config can rename underneath us would make an unrelated edit
+    /// able to turn an automated post back into one in the operator's voice.
+    /// Recording it at the source removes the question.
+    ///
+    /// [ADR-0068]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0068-channel-watch-trigger.md
+    pub post_as: crate::approval::PostAs,
 }
 
 /// Bound on the pending-mention index. `result/publish` (#107) consumes
@@ -147,6 +159,17 @@ impl SharedState {
             .entries
             .get(task_id)
             .map(|p| p.workflow.clone())
+    }
+
+    /// Whose name `task_id`'s result goes out under (#617), as recorded when
+    /// the task was raised. Also non-consuming, for the same reason.
+    pub fn post_as_of(&self, task_id: &str) -> Option<crate::approval::PostAs> {
+        self.pending
+            .lock()
+            .unwrap()
+            .entries
+            .get(task_id)
+            .map(|p| p.post_as)
     }
 
     pub fn take_pending(&self, task_id: &str) -> Option<PendingMention> {
@@ -1257,6 +1280,13 @@ fn build_task(
         permalink: enriched.permalink.clone(),
         // Filled in by `submit`, which is where the workflow is known.
         workflow: String::new(),
+        // A watched channel pins the repository, and it is the same fact that
+        // makes the result the bot's: only a watch sets `repo_pin`.
+        post_as: if mention.repo_pin.is_some() {
+            crate::approval::PostAs::Bot
+        } else {
+            crate::approval::PostAs::Operator
+        },
     };
     (task, pending)
 }
@@ -1716,6 +1746,7 @@ mod tests {
             sender_id: "U_OTHER".into(),
             sender_name: "アリス".into(),
             permalink: None,
+            post_as: crate::approval::PostAs::Operator,
         }
     }
 

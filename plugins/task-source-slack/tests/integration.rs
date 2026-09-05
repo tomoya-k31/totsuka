@@ -807,17 +807,23 @@ async fn a_watch_without_a_channel_name_fails_initialize() {
     let shared = Shared::default();
     let (mut srv, _harness) = server(&shared);
 
-    let mut trigger = json!({ "channel": "C_CLIP", "repo": "web-app" });
-    trigger["channel_name"] = Value::Null;
-    let params = json!({
-        "protocol_version": "0.1.0",
-        "config": config_with_bot(),
-        "workflows": [{ "workflow": "clip", "trigger": { "channel": "C_CLIP", "repo": "web-app" } }],
-    });
-    let resp = call(&mut srv, 1, "initialize", params).await;
-    let (code, message) = error_of(&resp);
-    assert_eq!(code, plugin_protocol::jsonrpc::error_code::CONFIG_INVALID);
-    assert!(message.contains("channel_name"), "{message}");
+    // Both spellings of "no usable name" must fail: the key absent, and the
+    // key present but null. The second is the one a half-finished config
+    // actually produces.
+    for trigger in [
+        json!({ "channel": "C_CLIP", "repo": "web-app" }),
+        json!({ "channel": "C_CLIP", "repo": "web-app", "channel_name": null }),
+    ] {
+        let params = json!({
+            "protocol_version": "0.1.0",
+            "config": config_with_bot(),
+            "workflows": [{ "workflow": "clip", "trigger": trigger }],
+        });
+        let resp = call(&mut srv, 1, "initialize", params).await;
+        let (code, message) = error_of(&resp);
+        assert_eq!(code, plugin_protocol::jsonrpc::error_code::CONFIG_INVALID);
+        assert!(message.contains("channel_name"), "{message}");
+    }
 }
 
 /// The watch keys are in `TRIGGER_KEYS`, so `unknown_trigger_keys` accepts

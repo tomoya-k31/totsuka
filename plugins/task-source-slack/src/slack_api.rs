@@ -251,43 +251,6 @@ impl<T: SlackTransport> SlackApi<T> {
     /// answer, not a failure: `conversations.history` does not return replies
     /// inside a thread unless they were also broadcast to the channel. See
     /// [`fetch_message`](Self::fetch_message) for the fallback that covers it.
-    /// The most recent messages in `channel`, newest first, bounded by
-    /// `limit` and by `oldest` (a Slack ts) — the startup backfill for a
-    /// watched channel (#617).
-    ///
-    /// The age bound is pushed into the API call rather than filtered
-    /// afterwards: `conversations.history` takes `oldest` natively, so asking
-    /// for less is strictly cheaper than asking for everything and dropping
-    /// most of it. `inclusive` is left off, so a message exactly at `oldest`
-    /// (already recovered on the previous startup) is not re-read.
-    pub async fn conversations_history_recent(
-        &self,
-        channel: &str,
-        limit: u32,
-        oldest: &str,
-    ) -> Result<Vec<SlackMessage>, SlackError> {
-        let response = self
-            .call(
-                "conversations.history",
-                Some(json!({
-                    "channel": channel,
-                    "oldest": oldest,
-                    "limit": limit,
-                })),
-                true,
-            )
-            .await?;
-        let messages = response
-            .get("messages")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                SlackError::InvalidResponse(
-                    "`conversations.history` response has no `messages` array".into(),
-                )
-            })?;
-        Ok(messages.iter().map(parse_message).collect())
-    }
-
     pub async fn conversations_history_one(
         &self,
         channel: &str,
@@ -321,6 +284,45 @@ impl<T: SlackTransport> SlackApi<T> {
             .iter()
             .map(parse_message)
             .find(|message| message.ts == ts))
+    }
+
+    /// The most recent messages in `channel`, newest first, bounded by
+    /// `limit` and by `oldest` (a Slack ts) — the startup backfill for a
+    /// watched channel (#617).
+    ///
+    /// The age bound is pushed into the API call rather than filtered
+    /// afterwards: `conversations.history` takes `oldest` natively, so asking
+    /// for less is strictly cheaper than asking for everything and dropping
+    /// most of it. `oldest` is a **rolling** `now - max_age`, not a saved
+    /// cursor, so it lands on a different message every start and whether the
+    /// boundary message itself is included changes nothing — re-reading one is
+    /// an idempotent `duplicate` ack anyway.
+    pub async fn conversations_history_recent(
+        &self,
+        channel: &str,
+        limit: u32,
+        oldest: &str,
+    ) -> Result<Vec<SlackMessage>, SlackError> {
+        let response = self
+            .call(
+                "conversations.history",
+                Some(json!({
+                    "channel": channel,
+                    "oldest": oldest,
+                    "limit": limit,
+                })),
+                true,
+            )
+            .await?;
+        let messages = response
+            .get("messages")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                SlackError::InvalidResponse(
+                    "`conversations.history` response has no `messages` array".into(),
+                )
+            })?;
+        Ok(messages.iter().map(parse_message).collect())
     }
 
     /// One message by `(channel, ts)`, whether it sits at channel level or

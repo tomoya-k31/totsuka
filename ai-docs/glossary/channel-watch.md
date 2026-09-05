@@ -4,7 +4,7 @@ title: チャンネル監視トリガ（channel watch）
 description: "特定チャンネルへのトップレベル投稿そのものをトリガにして 1 投稿 = 1 タスクを起こす仕組み。メンションもリアクションも要らないぶん「投稿できる人」が実行できる人になるため、既定の起動者は操作者本人だけで、trigger.from が唯一の明示的な緩和口になる。会話継続の対象外。"
 resource: https://github.com/tomoya-k31/totsuka/issues/615
 tags: [glossary, trigger, channel-watch, slack, discord, security]
-generated: { by: claude-code/opus-5, at: 2026-09-06T05:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-06T04:41:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

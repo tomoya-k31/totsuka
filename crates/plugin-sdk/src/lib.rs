@@ -25,8 +25,8 @@
 //!   (#572).
 //! - [`watch`] — [`WatchTrigger`]: the channel watch trigger
 //!   (`trigger = { channel = … }`, #616) for chat sources — parsing, the
-//!   operator-plus-`from` author gate, the rename check, and the cursor-less
-//!   startup [`backfill_pass`](watch::backfill_pass).
+//!   operator-plus-`from` author gate, the rename check, and
+//!   [`BackfillLimits`]: the window a source's startup backfill recovers.
 //!
 //! Out of scope by design: HTTP clients, LLM helpers, and config schemas —
 //! those stay source-specific.

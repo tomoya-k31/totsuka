@@ -320,16 +320,37 @@ mod tests {
         );
     }
 
+    /// The failure this ordering exists to avoid: with only a watch workflow
+    /// configured, a post that also mentions the operator must still become a
+    /// watch task. The mention table sees a mention, finds no workflow that
+    /// answers mentions, and must decline **without spending the dedup key**.
+    #[test]
+    fn a_mention_nobody_answers_still_reaches_the_watch() {
+        let watch = triggers(&["U_MATE"]);
+        // No mention workflow — the config has only the watch.
+        let mut filter = MentionFilter::new("U_OP", None);
+        let mut post = post("U_MATE", "C_CLIP");
+        post["text"] = json!("<@U_OP> これ見て https://example.com");
+
+        assert!(
+            filter.assess(&post).is_none(),
+            "no workflow answers mentions, so the mention path must decline"
+        );
+        let mention = watch
+            .assess(&post, &mut filter)
+            .expect("…and the watch must still get it");
+        assert_eq!(mention.workflow.as_deref(), Some("clip"));
+    }
+
     #[test]
     fn a_message_already_handled_as_a_mention_is_not_watched_too() {
         let watch = triggers(&[]);
         let mut filter = filter();
         // The mention path spent the key first.
         assert!(filter.remember("C_CLIP:1.1".into()));
-        assert!(
-            watch
-                .assess(&post("U_OTHER2", "C_CLIP"), &mut filter)
-                .is_none()
-        );
+        // `U_OP`, not a stranger: a stranger is refused by the author gate one
+        // row earlier, so the dedup row would never be reached and this test
+        // would pass with `remember` deleted entirely.
+        assert!(watch.assess(&post("U_OP", "C_CLIP"), &mut filter).is_none());
     }
 }

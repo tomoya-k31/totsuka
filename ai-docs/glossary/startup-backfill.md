@@ -4,7 +4,7 @@ title: 起動時バックフィル（startup backfill）
 description: "チャンネル監視ソースが起動時に、監視チャンネルの直近 N 件かつ年齢上限以内を無条件に再送してプラグイン停止中の取りこぼしを回収する仕組み。台帳が重複を Duplicate として無害化するため永続カーソルを持たず、取りすぎ側に倒してある。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-sdk/src/watch.rs
 tags: [glossary, channel-watch, backfill, idempotency, slack, discord]
-generated: { by: claude-code/opus-5, at: 2026-09-06T05:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-06T04:41:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

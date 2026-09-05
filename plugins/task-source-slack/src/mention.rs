@@ -10,7 +10,10 @@
 //! 3. the self-DM record channel → ignore (defense in depth against
 //!    re-detecting our own records)
 //! 4. no `<@target_user_id>` in the text → ignore (mentions only)
-//! 5. `channel:ts` already processed → ignore (redelivery dedup; bounded
+//! 5. no workflow answers mentions → ignore, **without spending the dedup
+//!    key**, so a channel watch covering this channel can still claim the
+//!    message (#617)
+//! 6. `channel:ts` already processed → ignore (redelivery dedup; bounded
 //!    LRU, lost on restart — the orchestrator's ingest is idempotent too)
 
 use std::collections::{HashSet, VecDeque};
@@ -210,7 +213,26 @@ impl MentionFilter {
         if !text.contains(&self.tag_closed) && !text.contains(&self.tag_labeled) {
             return None;
         }
-        // 5. redelivery dedup
+        // 5. no workflow answers mentions.
+        //
+        // **Before the dedup key is spent**, because spending it here would
+        // be unrecoverable: the message would be dropped for having no
+        // workflow *and* be invisible to the channel watch, which may well
+        // claim it (#617). "A mention outranks a watch" ranks two candidates;
+        // it cannot rank one that does not exist. Reposting would not help
+        // either — the key is `{channel}:{ts}`, so the burnt key belongs to
+        // that message forever.
+        if self.mention_workflow.is_none() {
+            tracing::warn!(
+                channel,
+                ts,
+                "a mention arrived but no workflow answers mentions → add a `[[workflows]]` \
+                 entry with source = \"slack\" and no `reaction`/`channel` trigger. Leaving it \
+                 for a channel watch if one covers this channel"
+            );
+            return None;
+        }
+        // 6. redelivery dedup
         if !self.remember(format!("{channel}:{ts}")) {
             return None;
         }

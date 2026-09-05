@@ -145,9 +145,6 @@ pub struct Server<F: TransportFactory> {
 /// An initialized plugin session: the validated config, its Slack client,
 /// and the resident runtime.
 struct Session<T> {
-    /// The workflows that watch a channel (#617), by name. `result/publish`
-    /// consults this to decide whether the result goes out as the bot.
-    watch_workflows: Vec<String>,
     config: SlackConfig,
     /// The plugin-owned `[[workflows]]` keys, resolved at `initialize`
     /// (#554). `result/publish` reads the delivery mode from here.
@@ -392,8 +389,6 @@ where
                     .into(),
             );
         }
-        let watch_workflows: Vec<String> =
-            watch_triggers.iter().map(|t| t.workflow.clone()).collect();
         let watch_triggers = crate::watch::WatchTriggers::new(
             watch_triggers,
             &init.workflows,
@@ -473,7 +468,6 @@ where
 
         let claims = capabilities_result(&init.workflows);
         self.session = Some(Session {
-            watch_workflows,
             config,
             workflow_options,
             api,
@@ -560,12 +554,12 @@ where
             .unwrap_or_default();
         // A watched channel's result is the bot's, whatever `publish` says
         // (#617, ADR-0068): the identity is not a per-workflow preference but
-        // a property of how the task was raised. `publish` still decides the
-        // gate for mention-driven workflows below.
-        let watched = session
-            .state
-            .workflow_of(&parsed.task_id)
-            .is_some_and(|wf| session.watch_workflows.contains(&wf));
+        // a property of how the task was raised — so it was recorded when the
+        // task was raised rather than re-derived from a name config can rename
+        // underneath us. `publish` still decides the gate for mention-driven
+        // workflows below.
+        let watched =
+            session.state.post_as_of(&parsed.task_id) == Some(crate::approval::PostAs::Bot);
         if watched {
             let result = crate::approval::publish_direct(
                 session.api.as_ref(),
