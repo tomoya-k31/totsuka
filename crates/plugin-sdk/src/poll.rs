@@ -14,7 +14,7 @@ use std::time::Duration;
 use plugin_protocol::Task;
 use plugin_protocol::methods::WorkflowInfo;
 
-use crate::submit::{SubmitOutcome, Submitter};
+use crate::submit::{Submitter, submit_all};
 
 /// Run the fetch→submit loop forever (spawn it; it ends only with the task).
 ///
@@ -44,32 +44,7 @@ pub async fn poll_loop<S, F, Fut>(
                     continue;
                 }
             };
-            for task in tasks {
-                let task_id = task.id.clone();
-                match submitter.submit(task, &trigger.workflow).await {
-                    SubmitOutcome::Accepted => {
-                        tracing::info!(task = %task_id, workflow = %trigger.workflow, "task submitted");
-                    }
-                    // The normal steady state: the task was already ingested
-                    // on an earlier tick.
-                    SubmitOutcome::Duplicate => {}
-                    SubmitOutcome::Rejected { reason } => {
-                        tracing::warn!(
-                            task = %task_id,
-                            workflow = %trigger.workflow,
-                            "task rejected: {}",
-                            reason.as_deref().unwrap_or("no reason given")
-                        );
-                    }
-                    SubmitOutcome::GaveUp { error } => {
-                        tracing::error!(
-                            task = %task_id,
-                            workflow = %trigger.workflow,
-                            "task submission gave up: {error} → will retry on a later tick"
-                        );
-                    }
-                }
-            }
+            submit_all(&submitter, tasks, &trigger.workflow).await;
         }
         tick = tick.wrapping_add(1);
         tokio::time::sleep(jittered(interval, tick)).await;
