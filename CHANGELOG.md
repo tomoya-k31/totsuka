@@ -11,6 +11,21 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.6.4](https://github.com/tomoya-k31/totsuka/compare/v0.6.3...v0.6.4) (2026-09-05)
+
+
+### Features
+
+* **plugin-sdk:** チャンネル監視トリガ（trigger.channel）の解釈ヘルパ ([#619](https://github.com/tomoya-k31/totsuka/issues/619)) ([aef1b97](https://github.com/tomoya-k31/totsuka/commit/aef1b97b1a027f39897cdd031d8ff194959a479a)), closes [#616](https://github.com/tomoya-k31/totsuka/issues/616)
+* **task-source-discord:** Discord チャンネル監視プラグインを追加 ([#622](https://github.com/tomoya-k31/totsuka/issues/622)) ([a1837ce](https://github.com/tomoya-k31/totsuka/commit/a1837ce1665e08d956ba0fa9cd97e82999146838))
+* **task-source-slack:** チャンネル監視トリガと起動時バックフィル ([#621](https://github.com/tomoya-k31/totsuka/issues/621)) ([a448a3a](https://github.com/tomoya-k31/totsuka/commit/a448a3a18045b89973ad07beb197a6fa645bd01b))
+
+
+### Documentation
+
+* components/task-source-discord.md 新規、operations/discord-quickstart.md ([a1837ce](https://github.com/tomoya-k31/totsuka/commit/a1837ce1665e08d956ba0fa9cd97e82999146838))
+* glossary 2 本（チャンネル監視トリガ / 起動時バックフィル）、 ([a448a3a](https://github.com/tomoya-k31/totsuka/commit/a448a3a18045b89973ad07beb197a6fa645bd01b))
+
 ## [0.6.3](https://github.com/tomoya-k31/totsuka/compare/v0.6.2...v0.6.3) (2026-09-02)
 
 
