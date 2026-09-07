@@ -63,9 +63,13 @@ operator_user_id = "111111111111111111"    # 必須。自分のユーザー ID�
 # watch_backfill_limit = 100
 # watch_backfill_max_age_hours = 24
 
+[[projects]]
+name = "discord"
+source = "discord"
+
 [[workflows]]
 name = "discord-clip"
-source = "discord"
+projects = ["discord"]
 agent = "herdr"
 profile = "implement"
 output = "source"

@@ -11,7 +11,7 @@
 //! publish = "direct"
 //! ```
 //!
-//! The Orchestrator cannot tell whose `publish` is — a workflow names a source
+//! The Orchestrator cannot tell whose `publish` is — a workflow reaches a source
 //! *and* an agent — so it hands every non-core key to both and asks. What this
 //! module answers is [`claims`]: the `(workflow, key)` pairs this plugin
 //! actually consumes. **Claiming a key it ignored would turn a typo into
@@ -119,6 +119,7 @@ mod tests {
     fn workflow(name: &str, options: serde_json::Value) -> WorkflowInfo {
         WorkflowInfo {
             workflow: name.to_string(),
+            projects: vec![],
             trigger: json!({}),
             instructions_kind: None,
             task_id_prefix: None,

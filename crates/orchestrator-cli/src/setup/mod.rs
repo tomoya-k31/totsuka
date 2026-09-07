@@ -652,6 +652,21 @@ fn install_plugins(cx: &Cx, plan: &Plan) -> Result<(), CliError> {
 /// called there.
 const GITHUB_BOARD_NAME: &str = "github-board";
 
+/// The `[[projects]]` name for a task source, given its plugin name (#626).
+///
+/// A workflow names domains rather than plugins, so every installed source
+/// needs one entry for its workflows to point at. github's is the board and
+/// keeps the name repositories already bind to; a source that serves a single
+/// domain (a Slack workspace, a Discord guild) has nothing to distinguish, so
+/// its entry is named after the plugin.
+fn domain_name(source: &str) -> &str {
+    if source == "github" {
+        GITHUB_BOARD_NAME
+    } else {
+        source
+    }
+}
+
 pub(crate) fn build_config(
     current: &str,
     answers: &Answers,
@@ -677,6 +692,23 @@ pub(crate) fn build_config(
                 name: GITHUB_BOARD_NAME,
                 source: "github",
                 options: &options,
+            },
+        )?;
+    }
+    // Every other task source the recipe installs gets an entry too, with no
+    // keys of its own: it is one domain, and its existence is the whole point
+    // (#626). Written before the workflows so the names they reference already
+    // resolve in the document being built.
+    for plugin in recipe.plugins {
+        if plugin.kind != "task_source" || plugin.name == "github" {
+            continue;
+        }
+        text = upsert_project(
+            &text,
+            &ProjectDraft {
+                name: domain_name(plugin.name),
+                source: plugin.name,
+                options: "{}",
             },
         )?;
     }
@@ -708,7 +740,7 @@ pub(crate) fn build_config(
             &text,
             &WorkflowDraft {
                 name: workflow.name,
-                source: workflow.source,
+                projects: &[domain_name(workflow.source)],
                 trigger: trigger.as_deref(),
                 profile: workflow.profile,
                 mode: workflow.mode,
@@ -947,6 +979,64 @@ github_login = "tomoya-k31"
                 }),
             statuses: Default::default(),
         }
+    }
+
+    /// Every task source the recipe installs gets a `[[projects]]` entry, and
+    /// each workflow names one (#626).
+    ///
+    /// Checked on a recipe with **no** board question, because that is where
+    /// the gap was: a slack setup wrote no `[[projects]]` at all before #626,
+    /// and a workflow now has to point at something. The wizard reporting
+    /// success and `run` then refusing the config is the failure this pins.
+    #[test]
+    fn every_installed_source_gets_a_domain_a_workflow_can_name() {
+        let recipe = RECIPES
+            .iter()
+            .find(|r| {
+                r.plugins.iter().any(|p| p.name == "slack")
+                    && !r.plugins.iter().any(|p| p.name == "github")
+            })
+            .expect("a recipe with slack and no github board");
+        let text = build_config("", &answers_for(recipe.key), recipe).expect("builds");
+        let cfg = RootConfig::from_toml_str(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+
+        let sources: Vec<&str> = recipe
+            .plugins
+            .iter()
+            .filter(|p| p.kind == "task_source")
+            .map(|p| p.name)
+            .collect();
+        for source in &sources {
+            assert!(
+                cfg.projects.iter().any(|p| &p.source == source),
+                "source `{source}` has no domain to draw from: {text}"
+            );
+        }
+        assert!(!cfg.workflows.is_empty(), "{text}");
+        for wf in &cfg.workflows {
+            assert!(
+                !wf.projects.is_empty(),
+                "workflow `{}` names no project: {text}",
+                wf.name
+            );
+            for name in &wf.projects {
+                assert!(
+                    cfg.projects.iter().any(|p| &p.name == name),
+                    "workflow `{}` names `{name}`, which was not written: {text}",
+                    wf.name
+                );
+            }
+        }
+
+        // And the whole thing passes the checks `run` performs. The repository
+        // paths do not exist here, so those findings are expected.
+        let no_env = |_: &str| None;
+        let unexpected: Vec<String> = orchestrator_core::config::validate_static(&cfg, &no_env)
+            .into_iter()
+            .map(|e| e.to_string())
+            .filter(|e| !e.contains("path"))
+            .collect();
+        assert!(unexpected.is_empty(), "{unexpected:?}\n{text}");
     }
 
     /// The board the wizard writes, and the binding that makes it reachable

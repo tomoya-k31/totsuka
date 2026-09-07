@@ -30,7 +30,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use plugin_protocol::manifest::OutputCapability;
 
 use crate::config::{
-    CleanupPolicyConfig, OutputPolicy, Profile, VerificationMode, WorkflowConfig, WorkflowMode,
+    CleanupPolicyConfig, OutputPolicy, Profile, ProjectConfig, VerificationMode, WorkflowConfig,
+    WorkflowMode,
 };
 
 /// A trigger condition: an opaque key-value set the plugin filters on.
@@ -100,7 +101,18 @@ impl OutcomeAction {
 pub struct Workflow {
     /// Workflow name.
     pub name: String,
-    /// Task source instance name.
+    /// The `[[projects]]` entries this workflow draws from (#626), by `name`,
+    /// in the order written.
+    pub projects: Vec<String>,
+    /// Task source instance name, **resolved** from
+    /// [`projects`](Self::projects) — the config does not spell it out (#626).
+    ///
+    /// Empty when the projects could not be resolved (an unknown name, or
+    /// none written). That is a config-validation error, so this stays a
+    /// `String` rather than an `Option`: the invalid value is inert
+    /// everywhere it is used as a plugin key (nothing is named `""`), which
+    /// keeps every downstream reader free of a branch for a state validation
+    /// has already refused.
     pub source: String,
     /// Trigger condition.
     pub trigger: Trigger,
@@ -155,10 +167,21 @@ impl Workflow {
     /// mode/output/verification values (#394): everything downstream reads this
     /// struct, whose fields are already concrete, so no other code has to know
     /// profiles exist.
-    pub fn from_config(config: &WorkflowConfig) -> Self {
+    ///
+    /// Since #626 the same holds for the task source: it is derived here from
+    /// the workflow's `projects` against `[[projects]]`, so downstream code
+    /// keeps reading a plain [`source`](Self::source) and does not have to
+    /// know the config no longer spells one out.
+    pub fn from_config(config: &WorkflowConfig, projects: &[ProjectConfig]) -> Self {
         Self {
             name: config.name.clone(),
-            source: config.source.clone(),
+            projects: config.projects.clone(),
+            source: config
+                .projects
+                .first()
+                .and_then(|first| projects.iter().find(|p| &p.name == first))
+                .map(|p| p.source.clone())
+                .unwrap_or_default(),
             trigger: Trigger::new(config.trigger.clone()),
             mode: config.resolved_mode(),
             agent: config.agent.clone(),
@@ -186,8 +209,11 @@ impl Workflow {
     }
 
     /// Interpret all workflows from a config.
-    pub fn from_configs(configs: &[WorkflowConfig]) -> Vec<Self> {
-        configs.iter().map(Self::from_config).collect()
+    pub fn from_configs(configs: &[WorkflowConfig], projects: &[ProjectConfig]) -> Vec<Self> {
+        configs
+            .iter()
+            .map(|c| Self::from_config(c, projects))
+            .collect()
     }
 }
 
@@ -271,9 +297,15 @@ struct Hop<'a> {
 /// workflow's own trigger column) is this same check with a cycle of length 1.
 ///
 /// **Lexical only.** This reads two operator-written strings without acting on
-/// either, so a column shared by name across two different trackers is out of
+/// either, so a column shared by name across two different boards is out of
 /// its sight — which is not a cycle at all, since those are different boards
-/// and `source` separates them here.
+/// and the graph is keyed per project (#626).
+///
+/// Keying it per *source* was the same claim with a hole in it: two boards of
+/// one plugin share a `source`, so `Done` on one and `Done` on the other were
+/// one node, and a route through them was reported as a loop that could not
+/// run. A card does cross boards, but only because a person moved it — which
+/// needs a human every lap and so is not what this check is for.
 ///
 /// It used to have a real blind spot as well: a plugin-side `status_map` could
 /// alias the write-back's name onto a column some workflow triggers on, and the
@@ -291,19 +323,26 @@ struct Hop<'a> {
 /// message says so, so nobody reads a single finding as "one loop left".
 fn column_cycles(workflows: &[Workflow]) -> Vec<WorkflowIssue> {
     let mut issues = Vec::new();
-    // Per source: a column reached by a write-back only re-triggers a workflow
-    // watching the *same* tracker.
-    let sources: BTreeSet<&str> = workflows.iter().map(|w| w.source.as_str()).collect();
-    for source in sources {
-        let of_source: Vec<&Workflow> = workflows
+    // Per project: a column reached by a write-back only re-triggers a
+    // workflow watching the *same* board.
+    let domains: BTreeSet<&str> = workflows
+        .iter()
+        .flat_map(|w| w.projects.iter().map(String::as_str))
+        .collect();
+    // Shared across domains, not per domain: a workflow group listing two
+    // boards loops on both, and that is one structure to fix, not two. The
+    // message names the board the walk reached it on.
+    let mut reported: BTreeSet<String> = BTreeSet::new();
+    for domain in domains {
+        let of_domain: Vec<&Workflow> = workflows
             .iter()
-            .filter(|w| w.source == source)
+            .filter(|w| w.projects.iter().any(|p| p == domain))
             .filter(|w| trigger_column(w).is_some())
             .collect();
         // column → the hops leaving it (one per write-back key that names a
         // column, from every workflow triggering on it).
         let mut edges: BTreeMap<&str, Vec<Hop>> = BTreeMap::new();
-        for wf in &of_source {
+        for wf in &of_domain {
             let from = trigger_column(wf).expect("filtered above");
             for (key, action) in [
                 ("on_start", &wf.on_start),
@@ -322,11 +361,11 @@ fn column_cycles(workflows: &[Workflow]) -> Vec<WorkflowIssue> {
         // DFS with an explicit path, so the message can name the actual loop
         // rather than just asserting one exists.
         let mut settled: BTreeSet<&str> = BTreeSet::new();
-        let mut reported: BTreeSet<String> = BTreeSet::new();
         for start in edges.keys().copied().collect::<Vec<_>>() {
             let mut path: Vec<(&str, &Hop)> = Vec::new();
             walk(
                 start,
+                domain,
                 &edges,
                 &mut path,
                 &mut settled,
@@ -341,6 +380,7 @@ fn column_cycles(workflows: &[Workflow]) -> Vec<WorkflowIssue> {
 /// Depth-first walk over the column graph, reporting each cycle once.
 fn walk<'a>(
     column: &'a str,
+    domain: &'a str,
     edges: &'a BTreeMap<&'a str, Vec<Hop<'a>>>,
     path: &mut Vec<(&'a str, &'a Hop<'a>)>,
     settled: &mut BTreeSet<&'a str>,
@@ -376,11 +416,11 @@ fn walk<'a>(
             issues.push(WorkflowIssue {
                 severity: Severity::Error,
                 message: format!(
-                    "status write-backs form a loop with no human in it: {route} → each lap \
-                     dispatches an agent again, forever → route one hop through a column no \
-                     workflow triggers on (a review column a person moves the card out of). \
-                     Workflows can interlock through several loops at once; re-run \
-                     `config validate` after fixing this one"
+                    "status write-backs form a loop with no human in it on project \
+                     `{domain}`: {route} → each lap dispatches an agent again, forever → \
+                     route one hop through a column no workflow triggers on (a review column \
+                     a person moves the card out of). Workflows can interlock through \
+                     several loops at once; re-run `config validate` after fixing this one"
                 ),
             });
         }
@@ -388,7 +428,15 @@ fn walk<'a>(
     }
     for hop in edges.get(column).into_iter().flatten() {
         path.push((column, hop));
-        walk(hop.to_column, edges, path, settled, reported, issues);
+        walk(
+            hop.to_column,
+            domain,
+            edges,
+            path,
+            settled,
+            reported,
+            issues,
+        );
         path.pop();
     }
     settled.insert(column);
@@ -405,14 +453,18 @@ mod tests {
 
     fn workflows_from_toml(toml: &str) -> Vec<Workflow> {
         let cfg = crate::config::RootConfig::from_toml_str(toml).unwrap();
-        Workflow::from_configs(&cfg.workflows)
+        Workflow::from_configs(&cfg.workflows, &cfg.projects)
     }
 
     /// The §4.9 example: design (plan/source) + implement (implement/source).
     const SPEC_EXAMPLE: &str = r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["github"]
 trigger = { status = "設計待ち" }
 mode = "plan"
 agent = "herdr"
@@ -421,7 +473,7 @@ on_success = { status = "設計レビュー待ち" }
 
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["github"]
 trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
@@ -433,9 +485,13 @@ on_success = { status = "レビュー待ち" }
     fn verification_fields_are_wired_from_config() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "verified"
-source = "slack"
+projects = ["slack"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -445,7 +501,7 @@ rubric = "実調査に基づくこと"
 
 [[workflows]]
 name = "defaulted"
-source = "slack"
+projects = ["slack"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -468,9 +524,13 @@ output = "none"
     fn a_two_workflow_column_ping_pong_is_a_loop_and_errors() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["github"]
 trigger = { status = "Design" }
 mode = "plan"
 agent = "herdr"
@@ -479,7 +539,7 @@ on_success = { status = "Todo" }
 
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["github"]
 trigger = { status = "Todo" }
 mode = "implement"
 agent = "herdr"
@@ -507,9 +567,13 @@ on_success = { status = "Design" }
     fn a_notion_column_cycle_is_caught_by_the_same_walk() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "notion"
+source = "notion"
+
 [[workflows]]
 name = "triage"
-source = "notion"
+projects = ["notion"]
 trigger = { status = "Inbox" }
 mode = "plan"
 agent = "herdr"
@@ -518,7 +582,7 @@ on_success = { status = "Ready" }
 
 [[workflows]]
 name = "build"
-source = "notion"
+projects = ["notion"]
 trigger = { status = "Ready" }
 mode = "implement"
 agent = "herdr"
@@ -538,6 +602,133 @@ on_success = { status = "Inbox" }
         }
     }
 
+    /// Two boards of one plugin that reuse a column name are **not** a cycle
+    /// (#626).
+    ///
+    /// The graph is keyed per project now. Keyed per *source* — as it was —
+    /// `Done` on board-a and `Done` on board-b were one node, and this config
+    /// was reported as a loop that cannot run: a card written to board-a's
+    /// `Done` is not on board-b, so nothing re-triggers. That false positive
+    /// is exactly what a per-board lane vocabulary produces, so it is pinned
+    /// here rather than left to the keying.
+    ///
+    /// `config-reference.md` already claimed this property ("a board whose
+    /// column names merely coincide is not a cycle"); before #626 the claim
+    /// held only across *different* plugins.
+    #[test]
+    fn the_same_column_name_on_two_boards_is_not_a_cycle() {
+        let workflows = workflows_from_toml(
+            r#"
+[[projects]]
+name = "board-a"
+source = "github"
+
+[[projects]]
+name = "board-b"
+source = "github"
+
+[[workflows]]
+name = "impl-a"
+projects = ["board-a"]
+trigger = { status = "Todo" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { status = "Done" }
+
+[[workflows]]
+name = "review-b"
+projects = ["board-b"]
+trigger = { status = "Done" }
+mode = "plan"
+agent = "herdr"
+output = "none"
+on_success = { status = "Todo" }
+"#,
+        );
+        let issues = validate_workflows(&workflows, |_| None);
+        assert!(
+            issues.is_empty(),
+            "different boards, so no card ever completes the loop: {issues:?}"
+        );
+    }
+
+    /// The same two hops **on one board** still close a loop, and the message
+    /// names the board (#626).
+    ///
+    /// The pair above and this one differ in one line — which projects the
+    /// workflows name — so keeping them adjacent is what makes the keying
+    /// legible: this is the case the check exists for.
+    #[test]
+    fn one_board_still_closes_the_loop_and_the_message_names_it() {
+        let workflows = workflows_from_toml(
+            r#"
+[[projects]]
+name = "board-a"
+source = "github"
+
+[[workflows]]
+name = "impl-a"
+projects = ["board-a"]
+trigger = { status = "Todo" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { status = "Done" }
+
+[[workflows]]
+name = "review-a"
+projects = ["board-a"]
+trigger = { status = "Done" }
+mode = "plan"
+agent = "herdr"
+output = "none"
+on_success = { status = "Todo" }
+"#,
+        );
+        let issues = validate_workflows(&workflows, |_| None);
+        assert_eq!(issues.len(), 1, "one loop, reported once: {issues:?}");
+        assert_eq!(issues[0].severity, Severity::Error);
+        assert!(
+            issues[0].message.contains("`board-a`"),
+            "the message must name the board the loop is on: {}",
+            issues[0].message
+        );
+    }
+
+    /// A workflow listing two boards contributes its hops to **both**, and an
+    /// interlocking group is still one finding rather than one per board
+    /// (#626).
+    #[test]
+    fn a_multi_board_workflow_loops_on_each_board_but_reports_once() {
+        let workflows = workflows_from_toml(
+            r#"
+[[projects]]
+name = "board-a"
+source = "github"
+
+[[projects]]
+name = "board-b"
+source = "github"
+
+[[workflows]]
+name = "impl"
+projects = ["board-a", "board-b"]
+trigger = { status = "Todo" }
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = { status = "Todo" }
+"#,
+        );
+        let issues = validate_workflows(&workflows, |_| None);
+        assert_eq!(
+            issues.len(),
+            1,
+            "the loop runs on both boards, but it is one structure to fix: {issues:?}"
+        );
+    }
+
     /// Interlocking loops are reported **once**, not once per cycle: the walk
     /// settles a column after exploring it. Pinned rather than described,
     /// because "reports every loop" is exactly the kind of claim that reads
@@ -549,9 +740,13 @@ on_success = { status = "Inbox" }
     fn interlocking_loops_are_reported_once_naming_one_route() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "wa"
-source = "github"
+projects = ["github"]
 trigger = { status = "colA" }
 mode = "implement"
 agent = "herdr"
@@ -561,7 +756,7 @@ on_failure = { status = "colC" }
 
 [[workflows]]
 name = "wb"
-source = "github"
+projects = ["github"]
 trigger = { status = "colB" }
 mode = "implement"
 agent = "herdr"
@@ -570,7 +765,7 @@ on_success = { status = "colD" }
 
 [[workflows]]
 name = "wc"
-source = "github"
+projects = ["github"]
 trigger = { status = "colC" }
 mode = "implement"
 agent = "herdr"
@@ -579,7 +774,7 @@ on_success = { status = "colD" }
 
 [[workflows]]
 name = "wd"
-source = "github"
+projects = ["github"]
 trigger = { status = "colD" }
 mode = "implement"
 agent = "herdr"
@@ -603,9 +798,13 @@ on_success = { status = "colA" }
     fn disjoint_loops_are_both_reported() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "a1"
-source = "github"
+projects = ["github"]
 trigger = { status = "A" }
 mode = "implement"
 agent = "herdr"
@@ -614,7 +813,7 @@ on_success = { status = "B" }
 
 [[workflows]]
 name = "a2"
-source = "github"
+projects = ["github"]
 trigger = { status = "B" }
 mode = "implement"
 agent = "herdr"
@@ -623,7 +822,7 @@ on_success = { status = "A" }
 
 [[workflows]]
 name = "b1"
-source = "github"
+projects = ["github"]
 trigger = { status = "X" }
 mode = "implement"
 agent = "herdr"
@@ -632,7 +831,7 @@ on_success = { status = "Y" }
 
 [[workflows]]
 name = "b2"
-source = "github"
+projects = ["github"]
 trigger = { status = "Y" }
 mode = "implement"
 agent = "herdr"
@@ -650,9 +849,13 @@ on_success = { status = "X" }
     fn a_pipeline_that_ends_in_a_human_column_is_fine() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["github"]
 trigger = { status = "Design" }
 mode = "plan"
 agent = "herdr"
@@ -661,7 +864,7 @@ on_success = { status = "Todo" }
 
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["github"]
 trigger = { status = "Todo" }
 mode = "implement"
 agent = "herdr"
@@ -683,9 +886,17 @@ on_failure = { status = "Failed" }
     fn identically_named_columns_on_different_sources_are_not_a_cycle() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
+[[projects]]
+name = "notion"
+source = "notion"
+
 [[workflows]]
 name = "gh"
-source = "github"
+projects = ["github"]
 trigger = { status = "Todo" }
 mode = "implement"
 agent = "herdr"
@@ -694,7 +905,7 @@ on_success = { status = "Review" }
 
 [[workflows]]
 name = "nt"
-source = "notion"
+projects = ["notion"]
 trigger = { status = "Review" }
 mode = "implement"
 agent = "herdr"
@@ -712,9 +923,13 @@ on_success = { status = "Todo" }
     fn a_write_back_into_the_own_trigger_column_is_a_loop_and_errors() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "looping"
-source = "github"
+projects = ["github"]
 trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
@@ -723,7 +938,7 @@ on_failure = { status = "実装待ち" }
 
 [[workflows]]
 name = "fine"
-source = "github"
+projects = ["github"]
 trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
@@ -732,7 +947,7 @@ on_success = { status = "レビュー待ち" }
 
 [[workflows]]
 name = "label-only"
-source = "github"
+projects = ["github"]
 trigger = { label = "実装待ち" }
 mode = "implement"
 agent = "herdr"
@@ -758,9 +973,13 @@ on_success = { status = "実装待ち" }
     fn on_start_is_wired_from_config_and_absent_by_default() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "with-start"
-source = "github"
+projects = ["github"]
 trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
@@ -770,7 +989,7 @@ on_success = { status = "レビュー待ち" }
 
 [[workflows]]
 name = "without-start"
-source = "github"
+projects = ["github"]
 trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
@@ -796,30 +1015,34 @@ output = "none"
         // hands `implement` powers to an `answer` task.
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "answer"
-source = "slack"
+projects = ["slack"]
 trigger = { label = "a" }
 profile = "answer"
 agent = "herdr"
 
 [[workflows]]
 name = "triage"
-source = "slack"
+projects = ["slack"]
 trigger = { label = "t" }
 profile = "triage"
 agent = "herdr"
 
 [[workflows]]
 name = "design"
-source = "slack"
+projects = ["slack"]
 trigger = { label = "d" }
 profile = "design"
 agent = "herdr"
 
 [[workflows]]
 name = "implement"
-source = "slack"
+projects = ["slack"]
 trigger = { label = "i" }
 profile = "implement"
 agent = "herdr"
@@ -848,9 +1071,13 @@ agent = "herdr"
         // choice of destination is not a permission.
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "slack-implement"
-source = "slack"
+projects = ["slack"]
 profile = "implement"
 output = "source"
 agent = "herdr"
@@ -875,9 +1102,13 @@ agent = "herdr"
     fn initial_prompt_is_carried_through_and_blank_means_unset() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["github"]
 trigger = { status = "Design" }
 profile = "design"
 agent = "herdr"
@@ -885,7 +1116,7 @@ initial_prompt = "  /grill-me で {設計観点} を詰めてください  "
 
 [[workflows]]
 name = "blank"
-source = "github"
+projects = ["github"]
 trigger = {}
 profile = "design"
 agent = "herdr"
@@ -893,7 +1124,7 @@ initial_prompt = "   "
 
 [[workflows]]
 name = "absent"
-source = "github"
+projects = ["github"]
 trigger = {}
 profile = "design"
 agent = "herdr"
@@ -915,9 +1146,13 @@ agent = "herdr"
     fn output_source_requires_declared_capability() {
         let workflows = workflows_from_toml(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["github"]
 trigger = { status = "設計待ち" }
 mode = "plan"
 agent = "herdr"

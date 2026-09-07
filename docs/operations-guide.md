@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:11102225dc440c2f4df35b3c83fdf5badd61a37539f56d6131ce20218349be32 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:660b399042fe6452827c99e900763101e7f7f406678e96f476dfe2b3e26e91b0 -->
 
 # Operations guide
 
@@ -241,7 +241,7 @@ EOF
 | `config not found` | Run `totsuka init` to generate a template, then edit it |
 | `state database not found` | Run `totsuka run` once and it is created |
 | A plugin is `enabled but not installed` | `totsuka plugin install <dir>` |
-| Tasks are not picked up | Use `totsuka run --dry-run` to check trigger matching, repository selection, and agent assignment with no side effects. A workflow's `source` must match the plugin instance name |
+| Tasks are not picked up | Use `totsuka run --dry-run` to check trigger matching, repository selection, and agent assignment with no side effects. A workflow's `projects` must match `[[projects]].name` entries, and their `source` must match the plugin instance name |
 | Repository selection stays `pending` | `[llm]` is unset, or the decision was low-confidence. With a single repository it is chosen automatically; with several, configure `[llm]` or add a `repo_hint` to the request |
 | `task show` shows no branch | The agent did not create one — worktrees are handed over on a detached HEAD. If there are commits, the worktree is kept, so you can pick the work up there. In plan mode this is always the normal state |
 | No notifications arrive | Check that the notifier plugin is enabled and reachable with `doctor`. A failed delivery does not stop the task |

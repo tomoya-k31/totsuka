@@ -215,7 +215,7 @@ On top of the same plugin binaries, any number of **named configurations — wor
 
 | ID | Requirement | Priority |
 |---|---|---|
-| F-80 | Workflow = a named configuration of `source (task-source instance) × trigger (intake condition) × mode (plan / implement) × agent × output (output policy)`. Any number definable as `[[workflows]]` in config.toml | M |
+| F-80 | Workflow = a named configuration of `projects (the domains it draws from) × trigger (intake condition) × mode (plan / implement) × agent × output (output policy)`. Any number definable as `[[workflows]]` in config.toml. The task source is **derived** from the projects rather than written out (#626) | M |
 | F-81 | Triggers are specified via Issue / Projects status columns or labels, Notion property values, etc. One task belongs to at most one workflow; **the source plugin decides which**, running first-match over the workflows supplied at `initialize` in definition order, and names it on `task/submit`. The Orchestrator holds the trigger as an opaque table and matches no task with it (0.6.0, #554). One key inside it is the Orchestrator's own: `status` names the source's status column, and it is read lexically to build the column graph the cycle check walks (#575) | M |
 | F-82 | `mode = "plan"` (detailed design): a worktree IS created (for codebase reference) but the pane cannot run git at all, so it never branches, commits, pushes or opens a PR. The agent runs in plan mode and returns a design document as the artifact | M |
 | F-83 | Output policy `output`: `source` (write to Issue comment, Notion page, etc. via the task-source plugin's `result/publish`) / `none`. Task-source plugins declare supported outputs as capabilities; realization is plugin-side. A `pull_request` policy existed until push and PR creation became the agent's responsibility (F-86) | M |
@@ -223,14 +223,14 @@ On top of the same plugin binaries, any number of **named configurations — wor
 | F-85 | Worktree cleanup policy for plan mode configurable separately from implement (immediate cleanup is the default for design-only) | S |
 | F-86 | **Push and PR creation are the agent's responsibility**, following the repository's own conventions (which is where those procedures are written down). The orchestrator owns the worktree and the task lifecycle, and never pushes. `output = "pull_request"` was retired with this boundary — see [ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) for what this gives up | M |
 | F-87 | `[[workflows]].initial_prompt`: extra instructions the operator writes in the config, prepended to the task body in the pane the **first** time a conversation starts (never on a resume, which would restart a skill mid-conversation). Literal text — no placeholder substitution. It is the first instruction channel scoped to a workflow rather than to a task source, so a flow no longer has to depend on its source plugin having a key for it (the Slack plugin's `reply_instructions` and friends still exist and are unchanged) | M |
-| F-88 | A plugin may define its own keys on `[[workflows]]`, written **flat** beside the Orchestrator's. Ownership is resolved by asking: the leftover keys go to the workflow's `source` and `agent` at `initialize`, each answers which it consumes (`claimed_options`), and **exactly one** claimant is required — zero is a typo and fails startup, two is an ambiguity the Orchestrator refuses to settle. `run` and `config validate` both enforce it; `--offline` cannot (#554) | M |
+| F-88 | A plugin may define its own keys on `[[workflows]]`, written **flat** beside the Orchestrator's. Ownership is resolved by asking: the leftover keys go to the workflow's task source (derived from its `projects`) and its `agent` at `initialize`, each answers which it consumes (`claimed_options`), and **exactly one** claimant is required — zero is a typo and fails startup, two is an ambiguity the Orchestrator refuses to settle. `run` and `config validate` both enforce it; `--offline` cannot (#554) | M |
 
 **Configuration example**
 
 ```toml
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Ready to design" }
 profile = "design"                       # resolves mode / output / verification
 agent = "herdr"
@@ -238,7 +238,7 @@ on_success = { status = "Design review" }
 
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Ready to implement" }
 profile = "implement"
 agent = "herdr"

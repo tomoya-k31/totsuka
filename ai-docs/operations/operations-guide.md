@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-08-28T08:45:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-07T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -261,7 +261,7 @@ EOF
 - **`config not found`**: `totsuka init` で雛形生成 → 編集
 - **`state database not found`**: 一度 `totsuka run` すると作成される
 - **プラグインが `enabled but not installed`**: `totsuka plugin install <dir>`
-- **タスクが取り込まれない**: `totsuka run --dry-run` でトリガーマッチ・リポジトリ選択・エージェント割当を副作用ゼロで確認。ワークフローの `source` は `[plugins.{name}]` のインスタンス名と一致させる
+- **タスクが取り込まれない**: `totsuka run --dry-run` でトリガーマッチ・リポジトリ選択・エージェント割当を副作用ゼロで確認。ワークフローの `projects` は `[[projects]].name` と、その `source` は `[plugins.{name}]` のインスタンス名と一致させる（#626）
 - **リポジトリ選択が `pending`**: `[llm]` 未設定 or 確信度が低い。単一リポジトリなら自動選択、複数なら `[llm]` を設定するか `repo_hint` を付与
 - **`totsuka task show` にブランチが出ない**: エージェントがブランチを切っていない（worktree は detached HEAD で渡る）。コミットがあれば掃除は worktree を残すので、そこで作業を拾える。plan モードは常にこの状態が正常
 - **通知が来ない**: `[plugins.{notifier}] enabled` と `notifier` プラグイン疎通を `doctor` で確認。配送失敗はタスク実行を止めない（F-93）

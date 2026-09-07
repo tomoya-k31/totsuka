@@ -5,7 +5,12 @@ version = "0.2.0"
 # built against the old name reads no field and reports zero workflows —
 # it starts, runs, and watches nothing — so the floor moved to `>=0.6.0`
 # and the F-54 gate turns that silent failure into a refused launch.
-protocol_version = ">=0.6.0, <0.7"
+# The upper bound moved to `<0.8` for #626 (`WorkflowInfo.projects`). The
+# floor did not: this plugin serves a single domain, so filtering by project
+# name is the identity and ignoring the new field costs nothing. Requiring
+# 0.7.0 here would strand orchestrators it works with — the same reason orca's
+# floor differed from herdr's for #411.
+protocol_version = ">=0.6.0, <0.8"
 
 [capabilities]
 outputs = ["source"]

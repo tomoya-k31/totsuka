@@ -129,13 +129,31 @@ pub fn workflow_infos(cfg: &RootConfig, name: &str, is_source: bool) -> Vec<Work
         .iter()
         .filter(|w| {
             if is_source {
-                w.source == name
+                // The source is not written on the workflow (#626): it is the
+                // owner of the projects the workflow names. A workflow whose
+                // projects do not resolve belongs to nobody and is dropped
+                // here — `config validate` is what reports it.
+                cfg.workflow_source(w) == Some(name)
             } else {
                 w.agent == name
             }
         })
         .map(|w| WorkflowInfo {
             workflow: w.name.clone(),
+            // Which of this plugin's domains the workflow watches (#626).
+            // Sent as written, so a plugin scans the boards it was pointed at
+            // and no others; an old plugin that ignored this field would scan
+            // every board it owns, which is why the protocol floor moved to
+            // 0.7.0 rather than defaulting the field.
+            //
+            // Empty for an agent, like `trigger` below: which domain a task
+            // came from is the source's business, and an agent that received
+            // the list would have to be trusted to ignore it.
+            projects: if is_source {
+                w.projects.clone()
+            } else {
+                Vec::new()
+            },
             // An agent is sent an empty object rather than `null`: a plugin
             // reading `.get("…")` off `null` mis-branches, which is the same
             // reason the catch-all trigger is `{}` (#396). A source gets the
@@ -320,23 +338,31 @@ mod tests {
     fn a_task_sources_triggers_arrive_whole_and_in_definition_order() {
         let cfg = root(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "slack-implement"
-source = "slack"
+projects = ["slack"]
 trigger = { reaction = "hammer" }
 profile = "implement"
 agent = "herdr"
 
 [[workflows]]
 name = "slack-reply"
-source = "slack"
+projects = ["slack"]
 trigger = {}
 profile = "answer"
 agent = "herdr"
 
 [[workflows]]
 name = "gh-design"
-source = "github"
+projects = ["github"]
 trigger = { status = "設計待ち" }
 profile = "design"
 agent = "herdr"
@@ -356,6 +382,24 @@ agent = "herdr"
         // The catch-all is an empty object, never `null`: a plugin reading
         // `.get("reaction")` on `null` would panic or mis-branch.
         assert!(triggers[1].trigger.is_object());
+
+        // #626: the source is told which of its domains to scan, and the
+        // **agent is told nothing** — like the trigger, that is the source's
+        // business, and an agent receiving the list would have to be trusted
+        // to ignore it.
+        assert_eq!(triggers[0].projects, vec!["slack".to_string()]);
+        let for_agent = workflow_infos(&cfg, "herdr", false);
+        assert!(
+            !for_agent.is_empty(),
+            "the agent is named by these workflows"
+        );
+        for info in &for_agent {
+            assert!(
+                info.projects.is_empty(),
+                "workflow `{}` leaked its domains to the agent",
+                info.workflow
+            );
+        }
     }
 
     /// The plugin-owned `[[workflows]]` keys reach the plugins the workflow
@@ -366,16 +410,24 @@ agent = "herdr"
     fn workflow_options_reach_the_source_and_the_agent() {
         let cfg = root(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "slack-books"
-source = "slack"
+projects = ["slack"]
 agent = "herdr"
 profile = "triage"
 publish = "direct"
 
 [[workflows]]
 name = "gh-design"
-source = "github"
+projects = ["github"]
 agent = "herdr"
 profile = "design"
 "#,
@@ -406,30 +458,38 @@ profile = "design"
     fn a_profile_derives_instructions_kind_and_prefix_beside_the_trigger() {
         let cfg = root(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "gh-design"
-source = "github"
+projects = ["github"]
 trigger = { status = "設計待ち" }
 profile = "design"
 agent = "herdr"
 
 [[workflows]]
 name = "gh-implement"
-source = "github"
+projects = ["github"]
 trigger = { status = "実装待ち" }
 profile = "implement"
 agent = "herdr"
 
 [[workflows]]
 name = "slack-reply"
-source = "slack"
+projects = ["slack"]
 trigger = {}
 profile = "answer"
 agent = "herdr"
 
 [[workflows]]
 name = "spelled-out"
-source = "github"
+projects = ["github"]
 trigger = { status = "その他" }
 mode = "plan"
 output = "source"
@@ -437,12 +497,8 @@ agent = "herdr"
 "#,
         );
         let info_of = |name: &str| {
-            let source = &cfg
-                .workflows
-                .iter()
-                .find(|w| w.name == name)
-                .unwrap()
-                .source;
+            let wf = cfg.workflows.iter().find(|w| w.name == name).unwrap();
+            let source = cfg.workflow_source(wf).unwrap();
             workflow_infos(&cfg, source, true)
                 .into_iter()
                 .find(|w| w.workflow == name)

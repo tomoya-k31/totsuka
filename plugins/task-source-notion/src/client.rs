@@ -128,11 +128,24 @@ impl<T: NotionTransport> NotionClient<T> {
     /// but `@any` and a named id deliberately take other people's), plus the
     /// in-progress statuses a workflow does not state (F-08). When body comes
     /// from the page, its blocks are fetched only for surviving tasks.
+    ///
+    /// `projects` are the `[[projects]]` names the workflow draws from
+    /// (#626); every configured database not named is left alone. Before
+    /// #626 a workflow named only this plugin and every database was queried
+    /// for it, so a status option present in one database and absent from
+    /// another matched nothing there without saying so.
+    ///
+    /// A name matching no configured database is **skipped with a warning**.
+    /// `totsuka run` refuses an unresolvable reference (a static config
+    /// error) and config is not re-read while running, so this is unreachable
+    /// through the normal path; the branch is defence in depth, and the
+    /// warning is what keeps the resulting partial poll from being silent.
     pub async fn fetch(
         &self,
         trigger: &Value,
         instructions_kind: Option<&str>,
         workflow: &str,
+        projects: &[String],
     ) -> Result<Vec<Task>, NotionError> {
         let filter = TriggerFilter::parse(trigger, instructions_kind, workflow)
             .map_err(NotionError::InvalidTrigger)?;
@@ -144,7 +157,22 @@ impl<T: NotionTransport> NotionClient<T> {
             server_filter = Some(self.resolve_dynamic_refs(f, workflow).await?);
         }
         let mut tasks = Vec::new();
+        for name in projects {
+            if !self.config.databases.iter().any(|d| &d.name == name) {
+                tracing::warn!(
+                    workflow = %workflow,
+                    project = %name,
+                    "workflow names a database this plugin does not have → \
+                     skipping it (the rest are still queried). `totsuka run` \
+                     refuses this config, so seeing this means it was started \
+                     another way"
+                );
+            }
+        }
         for (index, database) in self.config.databases.iter().enumerate() {
+            if !projects.iter().any(|name| name == &database.name) {
+                continue;
+            }
             self.fetch_database(index, database, &filter, server_filter.as_ref(), &mut tasks)
                 .await?;
         }
@@ -1224,6 +1252,7 @@ mod tests {
     fn wf(name: &str, trigger: Value) -> WorkflowInfo {
         WorkflowInfo {
             workflow: name.to_string(),
+            projects: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,

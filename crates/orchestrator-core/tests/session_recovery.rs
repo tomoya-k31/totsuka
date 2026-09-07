@@ -26,7 +26,7 @@ fn spec() -> PluginSpec {
 name = "mock"
 kind = "agent_ide"
 version = "0.1.0"
-protocol_version = ">=0.6.0, <0.7"
+protocol_version = ">=0.6.0, <0.8"
 "#,
         )
         .unwrap(),

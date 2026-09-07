@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:11102225dc440c2f4df35b3c83fdf5badd61a37539f56d6131ce20218349be32 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:660b399042fe6452827c99e900763101e7f7f406678e96f476dfe2b3e26e91b0 -->
 
 # 運用ガイド
 
@@ -240,7 +240,7 @@ EOF
 | `config not found` | `totsuka init` で雛形を作って編集する |
 | `state database not found` | 一度 `totsuka run` すると作成される |
 | プラグインが `enabled but not installed` | `totsuka plugin install <dir>` |
-| タスクが取り込まれない | `totsuka run --dry-run` でトリガーの一致・リポジトリ選択・エージェント割当を副作用ゼロで確認する。ワークフローの `source` はプラグインのインスタンス名と一致させる |
+| タスクが取り込まれない | `totsuka run --dry-run` でトリガーの一致・リポジトリ選択・エージェント割当を副作用ゼロで確認する。ワークフローの `projects` は `[[projects]].name` と、その `source` はプラグインのインスタンス名と一致させる |
 | リポジトリ選択が `pending` のまま | `[llm]` が未設定か、判定の確信度が低い。リポジトリが 1 つなら自動選択される。複数なら `[llm]` を設定するか、依頼に `repo_hint` を付ける |
 | `task show` にブランチが出ない | エージェントがブランチを切っていない（worktree は detached HEAD で渡される）。コミットがあれば worktree は残るので、そこから作業を拾える。plan モードでは常にこの状態が正常 |
 | 通知が来ない | 通知プラグインが有効かと疎通を `doctor` で確認する。配送に失敗してもタスクの実行は止まらない |

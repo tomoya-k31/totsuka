@@ -5,7 +5,11 @@ version = "0.3.0"
 # built against the old name reads no field and reports zero workflows —
 # it starts, runs, and watches nothing — so the floor moved to `>=0.6.0`
 # and the F-54 gate turns that silent failure into a refused launch.
-protocol_version = ">=0.6.0, <0.7"
+# #626 moved it again for the same reason in the other direction: this plugin
+# owns several domains, and 0.7.0 is where `WorkflowInfo.projects` says which
+# of them a workflow watches. A 0.6-era build ignores that field and scans
+# every one — an operator's narrowing silently not happening.
+protocol_version = ">=0.7.0, <0.8"
 
 # No `[capabilities] outputs`: the deliverable is the agent's to write
 # itself, so this plugin publishes nothing.

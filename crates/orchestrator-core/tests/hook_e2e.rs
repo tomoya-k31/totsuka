@@ -52,7 +52,7 @@ async fn launch(kind: &str, name: &str, init_config: serde_json::Value) -> Plugi
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = ">=0.6.0, <0.7"
+protocol_version = ">=0.6.0, <0.8"
 "#
     ))
     .unwrap();
@@ -93,9 +93,13 @@ fn workflows(verification: &str) -> Vec<Workflow> {
 fn workflows_in_mode(verification: &str, mode: &str) -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(&format!(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {{}}
 mode = "{mode}"
 agent = "mock_agent"
@@ -106,7 +110,7 @@ on_failure = {{ status = "failed" }}
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows)
+    Workflow::from_configs(&cfg.workflows, &cfg.projects)
 }
 
 /// Engine settings on a real repo clone with a hook runtime bound to `socket`.

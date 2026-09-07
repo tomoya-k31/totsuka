@@ -303,9 +303,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             return Ok(TaskSubmitResult {
                 status: TaskSubmitStatus::Rejected,
                 reason: Some(format!(
-                    "workflow `{workflow}` has source = `{}`, but `{}` submitted \
-                     the task → a plugin may only submit to its own workflows",
-                    wf.source, task.source
+                    "workflow `{workflow}` draws from `{}`, whose projects belong to \
+                     `{}`, but `{}` submitted the task → a plugin may only submit to \
+                     its own workflows",
+                    wf.projects.join(", "),
+                    wf.source,
+                    task.source
                 )),
             });
         }
@@ -537,6 +540,7 @@ mod tests {
         let mut engine = test_engine(Duration::from_secs(3600)).await;
         engine.settings.workflows = vec![Workflow {
             name: "implement".to_string(),
+            projects: vec!["slack".to_string()],
             source: "slack".to_string(),
             trigger: crate::domain::workflow::Trigger::new(toml::Table::new()),
             mode: WorkflowMode::Implement,

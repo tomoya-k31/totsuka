@@ -3,7 +3,7 @@
   "id": 1,
   "method": "initialize",
   "params": {
-    "protocol_version": "0.6.0",
+    "protocol_version": "0.7.0",
     "config": { "socket_path": "/run/herdr.sock", "poll_interval_secs": 60 },
     "repositories": [
       {
@@ -21,12 +21,14 @@
     "workflows": [
       {
         "workflow": "design",
+        "projects": ["tomo-prj"],
         "trigger": { "status": "設計待ち" },
         "instructions_kind": "design",
         "options": { "publish": "direct" }
       },
       {
         "workflow": "implement",
+        "projects": ["tomo-prj"],
         "trigger": { "status": "実装待ち" },
         "instructions_kind": "implement",
         "task_id_prefix": "impl"

@@ -64,9 +64,13 @@ name = "totsuka"
 path = "{repo}"
 tool = "claude"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["github"]
 trigger = {{ status = "実装待ち" }}
 mode = "implement"
 agent = "herdr"

@@ -14,9 +14,13 @@ owner: tomoya-k31
 チャットソース（Slack / Discord）の**特定チャンネルへのトップレベル投稿**を、そのままタスクの起動ジェスチャとして扱うトリガ。`[[workflows]].trigger` に書く:
 
 ```toml
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "clip"
-source = "slack"
+projects = ["slack"]
 agent = "herdr"
 profile = "implement"
 initial_prompt = "/clip-doc 貼られた URL の記事を ai-docs に残してください"

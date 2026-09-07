@@ -42,7 +42,7 @@ async fn launch(kind: &str, name: &str, init_config: serde_json::Value) -> Plugi
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = ">=0.6.0, <0.7"
+protocol_version = ">=0.6.0, <0.8"
 "#
     ))
     .unwrap();
@@ -112,9 +112,13 @@ async fn run_until(engine: &mut Engine<SystemGitRunner, OpenAiRouter>, cond: imp
 fn workflows(verification: &str, output: &str) -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(&format!(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {{}}
 mode = "implement"
 agent = "mock_agent"
@@ -125,7 +129,7 @@ on_failure = {{ status = "failed" }}
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows)
+    Workflow::from_configs(&cfg.workflows, &cfg.projects)
 }
 
 fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSettings {
@@ -502,9 +506,13 @@ async fn a_profile_workflow_also_degrades_to_human_on_a_tool_without_prompt_hook
 
     let cfg = RootConfig::from_toml_str(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {}
 profile = "answer"
 agent = "mock_agent"
@@ -514,7 +522,7 @@ on_failure = { status = "failed" }
 "#,
     )
     .unwrap();
-    let mut settings = engine_settings(Workflow::from_configs(&cfg.workflows), None);
+    let mut settings = engine_settings(Workflow::from_configs(&cfg.workflows, &cfg.projects), None);
     settings.default_tool = "codex".to_string();
 
     let mut engine = Engine::new(
@@ -1127,9 +1135,13 @@ async fn a_redispatched_task_is_not_escalated_for_the_previous_attempts_silence(
 fn workflows_with_timeout(timeout_secs: u64) -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(&format!(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {{}}
 mode = "implement"
 agent = "mock_agent"
@@ -1141,7 +1153,7 @@ on_failure = {{ status = "failed" }}
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows)
+    Workflow::from_configs(&cfg.workflows, &cfg.projects)
 }
 
 /// `timeout_secs = 0` opts a workflow out of the D-03 sweep (#439). Before
@@ -1770,9 +1782,13 @@ async fn a_design_dispatch_selects_the_question_variant_per_tool() {
         };
         let cfg = RootConfig::from_toml_str(
             r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {}
 profile = "design"
 agent = "mock_agent"
@@ -1781,7 +1797,10 @@ on_failure = { status = "failed" }
 "#,
         )
         .unwrap();
-        let mut settings = engine_settings(Workflow::from_configs(&cfg.workflows), Some(hook));
+        let mut settings = engine_settings(
+            Workflow::from_configs(&cfg.workflows, &cfg.projects),
+            Some(hook),
+        );
         settings.prompts = orchestrator_core::prompts::PromptSet::from_config(&cfg);
         settings.repos = vec![RepoSettings {
             name: "clone".to_string(),
@@ -1838,16 +1857,20 @@ on_failure = { status = "failed" }
 fn profile_workflows(profile: &str) -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(&format!(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {{}}
 profile = "{profile}"
 agent = "mock_agent"
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows)
+    Workflow::from_configs(&cfg.workflows, &cfg.projects)
 }
 
 const CLAIM_DESTINATION: &str = "GitHub Project #7 owned by the user `tomoya-k31`.";

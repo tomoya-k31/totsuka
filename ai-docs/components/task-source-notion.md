@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-08-30T02:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-07T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -32,7 +32,7 @@ Notion データベースを totsuka のタスクソースとして接続する�
 
 # 取り込み制御（F-08）
 
-fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`[[projects]]` の全データベースを設定順に走査し**（#542）、それぞれについて: まずトリガー（`status` / raw `filter` / `assignee`）で候補を絞る（`status` / `filter` は可能なら databases query の server-side filter で削減）。**assignee もこの trigger の一部である**（#572） —— 誰が持っているタスクを取るかは workflow が決め、省略時の既定 `["@me", "@none"]` が #572 以前のプラグイン全体のゲートと同一になる（自分は `notion_user_id` で判定、未設定時は未 assign のみ取り込み）。旧ゲートは削除済みで、これの後ろには残っていない。次に、**workflow が言わないこと**だけを適用する: `in_progress_statuses` のステータスを除外、**そのデータベースに紐づかないリポジトリ**を除外（紐付けは `[[repositories]].project`、#554）。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
+fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`WorkflowInfo.projects` が名指したデータベースだけを設定順に走査し**（#542 → #626 で workflow の列挙に絞られた。[ADR-0069](/decisions/adr-0069-workflow-projects.md)）、それぞれについて: まずトリガー（`status` / raw `filter` / `assignee`）で候補を絞る（`status` / `filter` は可能なら databases query の server-side filter で削減）。**assignee もこの trigger の一部である**（#572） —— 誰が持っているタスクを取るかは workflow が決め、省略時の既定 `["@me", "@none"]` が #572 以前のプラグイン全体のゲートと同一になる（自分は `notion_user_id` で判定、未設定時は未 assign のみ取り込み）。旧ゲートは削除済みで、これの後ろには残っていない。次に、**workflow が言わないこと**だけを適用する: `in_progress_statuses` のステータスを除外、**そのデータベースに紐づかないリポジトリ**を除外（紐付けは `[[repositories]].project`、#554）。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。
 
 **この紐付けによるフィルタは github と非対称で、条件付きである。** GitHub の issue は必ずリポジトリを持つが、Notion のページの `repo_hint` は任意プロパティなので、値が無いページは**そのまま取り込む**（Orchestrator が従来どおり F-11 で解決する）。落としてしまうと、`repo_hint` をマップしていない利用者は 1 件も取り込めなくなる。
 
@@ -50,7 +50,7 @@ fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tas
 
 # capabilities（F-83）
 
-manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.6.0, <0.7"`）と `initialize` 応答で `kind = task_source` を宣言する。**`outputs` は空**（#398）—— 成果物はエージェントが Notion MCP で自分で書くので、このプラグインは何も publish しない。
+manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.7.0, <0.8"`（#626: github と同じ理由で下限を上げた））と `initialize` 応答で `kind = task_source` を宣言する。**`outputs` は空**（#398）—— 成果物はエージェントが Notion MCP で自分で書くので、このプラグインは何も publish しない。
 
 # テスト
 

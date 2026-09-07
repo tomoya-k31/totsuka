@@ -4,7 +4,11 @@
 name = "mock_agent"
 kind = "agent_ide"
 version = "0.1.0"
-# 範囲は同梱 6 プラグインと同じ `>=0.6.0, <0.7`。下限が動いたのは #554 で、
+# 範囲は `>=0.6.0, <0.8`。#626 で上限だけ動いた — `WorkflowInfo.projects` は
+# task_source が走査対象のボードを選ぶための情報で、agent_ide のこの
+# テストダブルは読まない。下限を上げたのは github / notion だけである
+# （複数ボードを持つので、無視すると全ボードを走査してしまう）。
+# 下限が前に動いたのは #554 で、
 # 0.6.0 が `InitializeParams.triggers` を `workflows` へ改名したためである
 # — `initialize` は kind を問わず全プラグインが読むので、ここだけ据え置く
 # 理由が無い。上限の理由は agent_ide 一般ではなく**このテストダブルについて**
@@ -18,7 +22,7 @@ version = "0.1.0"
 # mock で経路を通そうとした瞬間にだけ F-54 で拒否される。手で数える運用は
 # 「捕まえた回は正しいが、当てにならない」ので、plugin-protocol の
 # `tests/bundled_manifests.rs` がこのファイルも走査対象に含めている。
-protocol_version = ">=0.6.0, <0.7"
+protocol_version = ">=0.6.0, <0.8"
 
 [capabilities]
 state_stream = true

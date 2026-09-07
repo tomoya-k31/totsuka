@@ -31,9 +31,12 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # summary = "What lives in this repository (used for LLM repo selection)"
 # project = "my-board"          # where tasks for this repository are filed
 
-# The projects you file into: a GitHub Project, a Notion database. `name` and
-# `source` are totsuka's — a repository points at one by `name`, and `source`
-# says which plugin owns it. Every other key belongs to that plugin.
+# The domains a source serves: a GitHub Project, a Notion database, a Slack
+# workspace. `name` and `source` are totsuka's — a repository points at one by
+# `name` to say where its tasks are filed, a workflow points at one to say
+# where it draws from, and `source` says which plugin owns it. Every other key
+# belongs to that plugin. A source with a single domain (slack, discord) still
+# needs an entry; it just has no keys of its own.
 # [[projects]]
 # name = "my-board"
 # source = "github"
@@ -64,7 +67,7 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 
 # [[workflows]]
 # name = "implement"
-# source = "github"
+# projects = ["my-board"]        # which domains to watch; the source is theirs
 # trigger = { status = "Ready to implement" }
 # profile = "implement"          # resolves mode / output / verification
 # agent = "herdr"

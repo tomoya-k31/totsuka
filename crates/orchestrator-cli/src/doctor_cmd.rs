@@ -530,9 +530,13 @@ mod agent_tools_tests {
     fn cfg_with(profile: &str) -> RootConfig {
         RootConfig::from_toml_str(&format!(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "w"
-source = "github"
+projects = ["github"]
 profile = "{profile}"
 agent = "herdr"
 "#

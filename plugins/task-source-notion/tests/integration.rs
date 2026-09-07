@@ -370,7 +370,8 @@ async fn a_poll_walks_every_database_and_each_one_gates_its_own_repos() {
         "projects": two_databases().0,
         "repositories": two_databases().1,
         "workflows": [
-            { "workflow": "design", "trigger": { "status": "実装待ち" } }
+            { "workflow": "design", "projects": ["db-1", "db-2"],
+              "trigger": { "status": "実装待ち" } }
         ],
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
@@ -421,7 +422,8 @@ async fn a_page_without_a_repo_hint_is_still_ingested() {
         "config": init_config(),
         "projects": one_database().0,
         "repositories": one_database().1,
-        "workflows": [{ "workflow": "design", "trigger": { "status": "実装待ち" } }],
+        "workflows": [{ "workflow": "design", "projects": ["db-1"],
+                        "trigger": { "status": "実装待ち" } }],
     });
     call(&mut srv, 1, "initialize", params).await;
 
@@ -659,7 +661,7 @@ async fn fetch_excludes_in_progress_on_statusless_trigger() {
         "projects": one_database().0,
         "repositories": one_database().1,
         "workflows": [
-            { "workflow": "design", "trigger": {} }
+            { "workflow": "design", "projects": ["db-1"], "trigger": {} }
         ],
     });
     call(&mut srv, 1, "initialize", params).await;
@@ -876,7 +878,7 @@ async fn initialize_with_triggers_polls_and_submits() {
         "projects": one_database().0,
         "repositories": one_database().1,
         "workflows": [
-            { "workflow": "design", "trigger": { "status": "実装待ち" } }
+            { "workflow": "design", "projects": ["db-1"], "trigger": { "status": "実装待ち" } }
         ],
     });
     let resp = call(&mut srv, 1, "initialize", params).await;

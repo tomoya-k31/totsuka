@@ -1,7 +1,7 @@
 ---
 type: Guide
 title: 設定リファレンス（config.toml）
-description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] のトラッカー宣言、ワークフローとプラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
+description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
 generated: { by: claude-code/opus-5, at: 2026-09-07T16:00:00+09:00 }
@@ -105,14 +105,18 @@ owner: tomoya-k31
 | `worktree_location` | string? | `[worktree].location` | このリポジトリの worktree 配置テンプレート上書き |
 | `project` | string? | なし | 起票先トラッカー（`[[projects]].name`、#554）。**1 つだけ**。無いのは正常な状態（トラッカーを設定していない） |
 
-# `[[projects]]`（トラッカー、#554）
+# `[[projects]]`（ソースの domain、#554 / #626）
 
-リポジトリの起票先。GitHub Project / Notion database / 将来の Jira project を同じ形で並べる。
+**1 つのタスクソースが持つ、名前で指せる管轄単位**（[glossary/project](/glossary/project.md)）。GitHub Project のボード / Notion database / Slack ワークスペース / Discord ギルド / 将来の Jira project を同じ形で並べる。
+
+2 方向から指される: `[[workflows]].projects` が**取り込み元**として（配列、#626）、`[[repositories]].project` が**起票先**として（スカラー、#554）。github / notion では両者が一致するが、別の関係である。
+
+**domain を持たないソースもエントリを 1 本書く。** slack / discord は今のところ singleton なので `name` と `source` だけの 2 行になるが、省略はできない —— ワークフローがプラグインではなく domain を名指すので、エントリが無いと指す先が無い。
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `name` | string | 必須 | `[[repositories]].project` が指す安定 ID |
-| `source` | string | 必須 | このトラッカーを所有する task_source プラグイン名 |
+| `name` | string | 必須 | `[[repositories]].project` と `[[workflows]].projects` が指す安定 ID |
+| `source` | string | 必須 | この domain を所有する task_source プラグイン名 |
 | その他のキー | — | — | そのプラグインのもの。core は**無解釈**で `initialize` へ渡す |
 
 ```toml
@@ -135,7 +139,7 @@ path = "~/Workspace/github/tomoya-k31/totsuka"
 project = "tomo-prj"
 ```
 
-**`source` を書かせるのは推測できないからではない。** `project_number` を理解するのは github だけなので推測はできる。書かせるのは、**参照連鎖 `[[repositories]].project` → `[[projects]].name` → `[plugins.<source>]` をプラグインを起動せずに辿れる**ようにするため —— 壊れた参照は `config validate --offline` でも、ファイルを読む人間にも見える。
+**`source` を書かせるのは推測できないからではない。** `project_number` を理解するのは github だけなので推測はできる。書かせるのは、**参照連鎖 `[[repositories]].project` / `[[workflows]].projects` → `[[projects]].name` → `[plugins.<source>]` をプラグインを起動せずに辿れる**ようにするため —— 壊れた参照は `config validate --offline` でも、ファイルを読む人間にも見える。#626 でワークフローの側もこの連鎖に乗った（`source` を書かなくなったのは、**この 1 本があれば導出できる**ため）。
 
 **`[[workflows]]` と違い引き取り規則は要らない。** 要素は `source` でちょうど 1 つのプラグインを名指すので所有が曖昧にならず、プラグイン自身の `deny_unknown_fields` がタイポを弾く。
 
@@ -157,7 +161,7 @@ project = "tomo-prj"
 
 # `[plugins.{name}]`
 
-`{name}` はワークフローの `source` / `agent` と対応するインスタンス名。**ロスターであって設定ではない** —— プラグイン自身の設定はトップレベルの `[<name>]` に書く。
+`{name}` は `[[projects]].source` / ワークフローの `agent` と対応するインスタンス名。**ロスターであって設定ではない** —— プラグイン自身の設定はトップレベルの `[<name>]` に書く。
 
 このロスターは、`[<name>]` を正当と認める根拠でもある: **ロスターに無い名前のトップレベルテーブルは検証エラー**になる（#554）。`RootConfig` の `deny_unknown_fields` を外した代わりで、検査はむしろ強くなった —— core キーのタイポ（`[worktre]`）もプラグイン名のタイポ（`[slak]`）も落ちる。以前は前者しか落ちなかった。
 
@@ -181,7 +185,7 @@ project = "tomo-prj"
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
-| `source` | string | 必須 | task_source インスタンス名 |
+| `projects` | 文字列配列 | 必須 | このワークフローが**タスクを引く先**の `[[projects]].name`（#626、[ADR-0069](/decisions/adr-0069-workflow-projects.md)）。**タスクソースは書かない** —— 名指した domain の所有者として導出される。空配列はエラー（配る先が無い）。複数書くのは「**これらの domain は同じレーン語彙を共有する**」という主張で、`source` が全ボードを暗黙に含んでいたのを列挙に変えたもの。異なる source の domain を混ぜるのはエラー（下記の引き取り規則が claimant を一意に決められない）。スカラーの `[[repositories]].project` と arity が違うので**キー名が複数形**である |
 | `trigger` | テーブル | `{}` | トリガー条件。**中身を解釈してタスクを選ぶのはプラグインである**（#554）。ただし `status` は **core 所有のキー**で（#575、[ADR-0062](/decisions/adr-0062-status-vocabulary.md)）、Orchestrator が閉路検査の列グラフを組むために読む —— `on_*` の書き戻し先と文字列を突き合わせるだけで、タスクの照合には使わない。受理するかは各ソースの自由（状態列を持たない slack は未知キーとして拒否する）。プラグインが `initialize` の `workflows` として受け取り、first-match を走らせる。github の `status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列へ入った場合は、その会話がそのワークフローへ引き渡される**（#565、列パイプライン）— worktree とエージェントのセッションを保ったまま次の段が始まる。引き渡しは**完了済みの会話だけ**。実行中に別ワークフローの列へ移された配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと）。**この表の未知キーは `initialize` の硬い失敗になる**（#574）。トリガーの解釈は `.get("…")` なので、読み手の居ないキーは黙って捨てられ、条件が 1 つ減る —— つまりタイポはトリガーを**狭めず広げる**（`assinee` と書くと「条件なし」になり、除外したかったタスクにこそ発火する）。エラーはそのソースが読む有効キーを列挙するので、改名からの移行案内も兼ねる。`trigger = {}`（catch-all）はキーが無いので常に有効 **`channel` はチャンネル監視トリガ**（#617、[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md)）で、`channel_name`（照合用・必須）/ `repo`（固定するリポジトリ・必須）/ `from`（起動を許す投稿者の追加、既定は操作者本人のみ）を伴う。`reaction` との併記は拒否され、`channel` 抜きで他の 3 つだけ書くのも拒否される（これらは有効キーなので未知キー検査では捕まらない）。監視ワークフローはメンションの catch-all 候補には**数えられない** **`assignee` は取り込みの assignee ゲートそのものである**（#572、[ADR-0063](/decisions/adr-0063-trigger-assignee.md)）。`"@me"` / `"@none"` / `"@any"` / ログイン名 / それらの配列（OR）で、**省略時は `["@me", "@none"]`** —— これは #572 以前のプラグイン全体のゲートと同一である。旧ゲートは削除したので**二重にはならない**（書いた条件を書いていない条件が上書きすることが構造的に起きない）。`@` はログイン名に使えない文字なので、`me` / `none` / `any` という実在しうるログイン名と衝突しない。**`@any` は他人のタスクも取り込む**ので、書くときは意図的であること。**`@any` だけは assignee を読まない**ので、notion で `property_map.assignee` が未マップでも書ける（#582）—— 「assignee で絞り込まない」と明示する唯一の書き方である。他の値は未マップだと `initialize` で落ちる。何と突き合わせるかはソース固有で、github は Issue 組み込みの assignee と `github_login`、notion は `property_map.assignee` が名指すプロパティと `notion_user_id` を使う。`assignee` を単独で書く（`status` を併記しない）と配送に lane identity が付かず **1 タスク 1 回**になるので、起動時に警告が 1 行出る |
 | `profile` | enum? | なし | 4 原型のいずれか（`answer` / `triage` / `design` / `implement`）。`mode` / `output` / `verification` の 3 つをまとめて決める。うち `mode` / `verification` は併記不可、`output` は併記すればそちらが勝つ（下記） |
 | `mode` | enum | `profile` が無ければ必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
@@ -197,7 +201,7 @@ project = "tomo-prj"
 | `initial_prompt` | string? | なし | このワークフローのエージェントに渡す**追加の前置き指示**（#415、[ADR-0038](/decisions/adr-0038-workflow-initial-prompt.md)）。**可視**（pane に見える）・**タスク本文の前**・**新規会話のときだけ**。下記 |
 | `cleanup` | `[worktree]` と同じ語彙 | なし | この workflow のタスクの worktree 掃除を **`[worktree]` の mode 既定より優先**して上書き（#548、ADR-0057）。`manual` にすると pane も worktree も残る（pane の寿命は worktree に従う、ADR-0010）。**タスク完了後に workflow を削除・改名すると引けなくなり mode 既定へ縮退する**（仕様。sweep が 1 行 log に出す） |
 
-定義順に first-match（F-81）。**その判定を走らせるのはソースプラグインである**（#554） —— `initialize` で workflow 群を定義順に受け取り、`task/submit` でどれに属するかを名指す。Orchestrator は名前が実在しその `source` が submit してきたプラグインかだけを検証する。
+定義順に first-match（F-81）。**その判定を走らせるのはソースプラグインである**（#554） —— `initialize` で workflow 群を定義順に受け取り、`task/submit` でどれに属するかを名指す。Orchestrator は名前が実在し、その workflow の `projects` の所有プラグインが submit してきたプラグインかだけを検証する。
 
 ## プラグインが定義する追加プロパティ（#554）
 
@@ -206,13 +210,13 @@ project = "tomo-prj"
 ```toml
 [[workflows]]
 name = "slack-books"
-source = "slack"
+projects = ["slack"]
 agent = "herdr"
 profile = "triage"
 publish = "direct"      # ← slack が定義するプロパティ
 ```
 
-**所有者は core が決めず、聞いて解決する。** workflow は `source` と `agent` の両方を名指すので、そのキーがどちらのものか Orchestrator には分からない。余ったキーは `initialize` で両方へ渡り、各プラグインが消費するものを答える:
+**所有者は core が決めず、聞いて解決する。** workflow はタスクソース（`projects` の所有者として導出）と `agent` の両方に届くので、そのキーがどちらのものか Orchestrator には分からない。余ったキーは `initialize` で両方へ渡り、各プラグインが消費するものを答える:
 
 | 引き取り手 | 判定 |
 |---|---|
@@ -233,16 +237,20 @@ publish = "direct"      # ← slack が定義するプロパティ
 ### `reaction` — 絵文字でワークフローを選ぶ（#396）
 
 ```toml
+[[projects]]
+name = "slack"          # domain を持たないソースもエントリが要る（#626）
+source = "slack"
+
 [[workflows]]
 name = "slack-implement"
-source = "slack"
+projects = ["slack"]
 trigger = { reaction = "hammer" }     # :hammer: を本人が付けたら実装タスク
 profile = "implement"
 agent = "herdr"
 
 [[workflows]]
 name = "slack-reply"                  # メンション: catch-all。必ず最後
-source = "slack"
+projects = ["slack"]
 trigger = {}
 profile = "answer"
 agent = "herdr"
@@ -260,7 +268,7 @@ agent = "herdr"
 ```toml
 [[workflows]]
 name = "github-design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Design" }
 profile = "design"
 agent = "herdr"
@@ -296,7 +304,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 ```toml
 [[workflows]]
 name = "gh-design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "設計待ち" }
 profile = "design"
 agent = "herdr"
@@ -311,7 +319,7 @@ on_success = { status = "設計済み" }
 | `profile` + `output` | **可**。`output` が profile の値に勝つ。権限ではなく配線先の選択なので上書きを許している（Slack 起点の implement が PR URL をスレッドへ返すのに要る） |
 | `profile` 無し + `mode` / `output` の欠落 | **エラー**。`profile` を書くか、両方を明示するか |
 | `profile` + `rubric` / `tool` / `timeout_secs` / `on_start` / `on_success` / `on_failure` | 可 |
-| `status`（`on_start` / `on_success` / `on_failure`）が作る**列の閉路** | **エラー**（#556 → #565 で一般化）。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行され続ける**（毎周エージェントが起動して実費が出る）。自分のトリガー列へ書き戻す構成はその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は**同一 `source` 内・字面の一致のみ** — 列名がたまたま同じだけの別のボードは閉路ではなく、`source` がそれを分けている |
+| `status`（`on_start` / `on_success` / `on_failure`）が作る**列の閉路** | **エラー**（#556 → #565 で一般化）。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行され続ける**（毎周エージェントが起動して実費が出る）。自分のトリガー列へ書き戻す構成はその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は**同一 `[[projects]]` エントリ内・字面の一致のみ** — 列名がたまたま同じだけの別のボードは閉路ではなく、グラフが domain ごとに分かれている（#626、[ADR-0069](/decisions/adr-0069-workflow-projects.md)）。**#626 より前はこの分割が `source` 単位で、同一プラグインの 2 枚のボードは同じ節点になっていた** —— ボード A の `Done` とボード B の `Done` が繋がり、走らない閉路が報告されえた。ボード跨ぎのカード移動は人間が動かすので毎周人手が要り、この検査の対象ではない。`projects` に複数書いた workflow は各 domain に辺を張るが、報告は 1 グループ 1 件で（直す構造は 1 つなので）、メッセージが到達したボードを名指す |
 
 `profile` は必須ではない。4 原型で表せない組み合わせ（例: `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
 
@@ -398,7 +406,7 @@ Slack の「質問 → 方針決定 → 実装」は、**実行中タスクの�
 ```toml
 [[workflows]]
 name = "slack-implement"
-source = "slack"
+projects = ["slack"]
 trigger = { reaction = "hammer" }
 profile = "implement"
 output = "source"                 # PR の URL をスレッドへ返すため（profile 既定は none）
@@ -406,7 +414,7 @@ agent = "herdr"
 
 [[workflows]]
 name = "slack-reply"              # catch-all。必ず最後
-source = "slack"
+projects = ["slack"]
 trigger = {}
 profile = "answer"
 agent = "herdr"
@@ -669,7 +677,7 @@ This stop may be allowed. That is, at least one of the following holds:
 ```toml
 [[workflows]]
 name = "slack-reply"
-source = "slack"
+projects = ["slack"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -752,7 +760,7 @@ poll_interval_secs = 60   # 省略時も 60。`0` は警告を出して 60 へ�
 | `status_field` | string | `Status` | ステータス列を保持する SingleSelect フィールド名（F-02）。**全ボード共通** |
 | `github_login` | string | 必須 | 自分のログイン名。自己アサインされたタスクの検出（F-08）と、claim の self-assign 先（#556）に使う。**1 login = 1 インスタンス**: 同じ login で複数の totsuka を動かすと claim の裁定が原理的にできない（assignee にはログイン名しか載らない）ため非対応 |
 | `in_progress_statuses` | string[] | `[]` | 「進行中」とみなして ingest から除外するステータス名（F-08）。**全ボード共通** |
-| `source_name` | string | `github` | `Task.source` に刻印するソース名。ボードを増やしても変わらない（だから `[[workflows]].source = "github"` は 1 本のまま） |
+| `source_name` | string | `github` | `Task.source` に刻印するソース名。ボードを増やしても変わらない（`Task.source` はプラグインの識別子で、どのボード由来かは持たない）。**ワークフローの側はボードごとに `projects` で名指す**（#626） |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL エンドポイント（GitHub Enterprise / テスト用の上書き） |
 | `claim_verify_delay_ms` | int? | `750` | claim（#556）の self-assign 書き込みから読み戻しまでの待ち ms。読み戻しが競合と黙殺の両方を検出するので、API に反映される前に読んではいけない。既定値は実測（p95 ≈ 700ms / max 983ms）に基づく。`0` も有効（テスト用。早すぎる読みは再試行 1 回を足すだけ） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数。**ただし 1 回の呼び出しで眠れる合計は 90 秒**で、次の待ち時間がそれを超えるなら再試行せず本当の原因を返す（スロットルの `retry-after` が長いときに「ハングしたように見える」のを避けるため）。したがって `max_retries` を大きくしても待ち時間の合計はこの予算で頭打ちになる |
@@ -903,7 +911,7 @@ filter = { property = "スプリントステータス", status = { equals = "現
 
 [[workflows]]
 name = "notion-implement"
-source = "notion"
+projects = ["design-db"]
 agent = "herdr"
 profile = "implement"
 trigger = { status = "未着手", assignee = "@me", filter = { and = [
@@ -1158,7 +1166,7 @@ my-claude = "claude"
 ```toml
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Ready to design" }
 profile = "design"
 agent = "herdr"
@@ -1166,7 +1174,7 @@ on_success = { status = "Design review" }
 
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Ready to implement" }
 profile = "implement"
 agent = "herdr"

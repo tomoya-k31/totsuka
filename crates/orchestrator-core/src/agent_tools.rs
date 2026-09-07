@@ -15,9 +15,10 @@
 //!
 //! `triage` and `design` also write externally, but *where* depends on the
 //! source — `gh issue comment` for GitHub, the Notion MCP server for Notion —
-//! and the Orchestrator cannot tell those apart. `[[workflows]].source` is a
-//! user-chosen instance name (`github`, but equally `gh-work`), and guessing
-//! from it would mean **blocking a task that would have run**. A gate that
+//! and the Orchestrator cannot tell those apart. A workflow's source is a
+//! user-chosen instance name (`github`, but equally `gh-work`) reached through
+//! its `[[projects]]` (#626), and guessing from it would mean **blocking a
+//! task that would have run**. A gate that
 //! guesses wrong is worse than no gate, so those profiles are not checked.
 //! `doctor` says so rather than leaving the silence to be read as a pass.
 //!

@@ -207,6 +207,7 @@ mod tests {
         let watch = WatchTrigger::parse(&trigger, "clip").unwrap().unwrap();
         let workflows = [WorkflowInfo {
             workflow: "clip".into(),
+            projects: vec![],
             trigger,
             instructions_kind: Some("implement".into()),
             task_id_prefix: Some("impl".into()),

@@ -216,7 +216,7 @@ request_timeout_secs = 30
 
 | ID | 要件 | 優先度 |
 |---|---|---|
-| F-80 | ワークフロー = `source(タスクソースインスタンス) × trigger(取り込み条件) × mode(plan / implement) × agent × output(出力ポリシー)` の名前付き設定。config.toml に `[[workflows]]` として任意個定義できる | M |
+| F-80 | ワークフロー = `projects(引く先の domain) × trigger(取り込み条件) × mode(plan / implement) × agent × output(出力ポリシー)` の名前付き設定。config.toml に `[[workflows]]` として任意個定義できる。タスクソースは projects の所有者として**導出**され、書かない(#626) | M |
 | F-81 | trigger は Issue / Projects のステータス列・ラベル、Notion のプロパティ値等で指定する。1タスクが属する workflow は高々1つで、**どれかを決めるのはソースプラグイン**である。`initialize` で渡された workflow 群に対して定義順で first-match を走らせ、`task/submit` で名指す。Orchestrator は trigger を不透明なテーブルとして保持し、それでタスクを照合しない(0.6.0、#554)。ただし `status` は Orchestrator 自身のキーで、閉路検査の列グラフを組むために字面として読む(#575) | M |
 | F-82 | `mode = "plan"`(詳細設計): worktree は作成する(コードベース参照のため)が、**push・PR 作成は行わない**。エージェントは plan モードで実行し、成果物として設計ドキュメントを返す | M |
 | F-83 | 出力ポリシー `output`: `source`(タスクソースプラグインの `result/publish` で Issue コメント・Notion ページ等へ記載)/ `none`。タスクソースプラグインは対応可能な出力を capability として宣言し、実現方法はプラグイン側で実装する。`pull_request` は push・PR 作成がエージェントの責務になるまで存在した(F-86) | M |
@@ -224,14 +224,14 @@ request_timeout_secs = 30
 | F-85 | plan モードの worktree 掃除ポリシーは implement と別に設定可能(設計のみなら即時掃除がデフォルト) | S |
 | F-86 | **push・PR 作成はエージェントの責務**とし、リポジトリ自身の規約(その手順が書かれている場所)に従わせる。Orchestrator は worktree とタスクのライフサイクルを持ち、push は行わない。`output = "pull_request"` はこの境界とともに廃止した — 失うものは [ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) を参照 | M |
 | F-87 | `[[workflows]].initial_prompt`: 運用者が設定ファイルに書く追加指示。**新規会話のときだけ** pane のタスク本文の前に置かれる(resume では入らない — 会話の途中でスキルが再起動して文脈が壊れるため)。テンプレート展開は行わないリテラル。タスクソースではなく**ワークフロー**を単位とする初めての指示チャネルで、ソースプラグインが該当のキーを持っているかどうかにフローが依存しなくなる(Slack プラグインの `reply_instructions` 等はそのまま残っており、変更していない) | M |
-| F-88 | プラグインは `[[workflows]]` に自分のキーを定義できる。Orchestrator のキーと**同格にフラットで**書く。所有は聞いて解決する: 余ったキーは `initialize` でその workflow の `source` と `agent` の両方へ渡り、各々が消費するものを答え(`claimed_options`)、**ちょうど 1 つ**が引き取ることを要求する —— 0 はタイポで起動を止め、2 は曖昧なので Orchestrator は決めない。`run` と `config validate` の両方が検査し、`--offline` は検査できない(#554) | M |
+| F-88 | プラグインは `[[workflows]]` に自分のキーを定義できる。Orchestrator のキーと**同格にフラットで**書く。所有は聞いて解決する: 余ったキーは `initialize` でその workflow のタスクソース(`projects` から導出)と `agent` の両方へ渡り、各々が消費するものを答え(`claimed_options`)、**ちょうど 1 つ**が引き取ることを要求する —— 0 はタイポで起動を止め、2 は曖昧なので Orchestrator は決めない。`run` と `config validate` の両方が検査し、`--offline` は検査できない(#554) | M |
 
 **設定例**
 
 ```toml
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Ready to design" }
 profile = "design"                       # mode / output / verification を解決する
 agent = "herdr"
@@ -239,7 +239,7 @@ on_success = { status = "Design review" }
 
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Ready to implement" }
 profile = "implement"
 agent = "herdr"
