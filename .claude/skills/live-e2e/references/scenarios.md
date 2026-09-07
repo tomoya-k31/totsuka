@@ -241,6 +241,12 @@ config で回すこと）:
 | option の実在検査（#628） | #8 の workflow に `trigger = { status = "Design" }` / `triage_status = "Nope"` を書いて online validate | 実在 option 一覧つきで error。**#8 に紐づく repo が 1 つも無いと先に「no repository is bound」で落ちる**ので、cli を紐づけてから |
 | `setup` の生成物 | `--answers` で github / slack recipe | `projects = ["github-board"]` と `[[projects]] name = "slack"` が出て `validate --offline` を通る |
 
+**Slack 側も回す**（S3 / S4 と `:books:`）。`[[projects]] name = "slack"` のキーなしエントリを
+経由する経路が変わっていないことと、`:books:` の起票が**解決先 repo の `[[repositories]].project`
+が指すボード**（cli なら #8、`triage_status` の列）に載ることを見る。**#8 の `triage_status` を
+`Backlog` にしないこと** —— `board-b-backlog` の trigger と重なり、起票が即・無人実行に流れる。
+`Todo` は #8 ではどの workflow も trigger にしていないので安全。
+
 > `updateProjectV2Field` で Status の option を書き換えるとき、入力に `projectId` は
 > 無い（`fieldId` だけ）。option 全体を並べ直すので、既存の option も省略せず書く。
 > **既存 item が付いている option を落とすとその item の Status が消える。**

@@ -23,6 +23,7 @@ stable。実装済み・テスト green（1,617 件）。**実機（実 GitHub P
 - **表現不能にした 3 状態が `--offline` で落ちる**（§2）。空配列・source 混在・実在しない名前がそれぞれ別のメッセージで exit 1。旧 `source` を残した config は offline は通り、online で「どのプラグインも引き取らない」として落ちる（§6 の記述どおり）
 - **旧 config と旧プラグインが起動しない**（§5・§6）。`source = "github"` のままの実運用同形 config は ``missing field `projects` `` で `validate` / `doctor` とも exit 1。`>=0.6.0, <0.7` の github / herdr は F-54 で `protocol-incompatible` として拒否
 - **status option の実在検査**（§7）。#8 に無い `Design` / `Design Review`（`trigger.status` と書き戻し）と `triage_status = "Nope"` を、実在 option 一覧つきで error。`Backlog` / `Shipped` は通る
+- **domain を持たないソースのキーなしエントリ**（§3）。`[[projects]] name = "slack"` を経由する 4 本の slack workflow（`projects = ["slack"]`）で、メンション → 下書き → 承認 → 本人名義のスレッド返信、リアクション（answer）、`:books:` 起票の 3 経路が従来どおり動いた。`:books:` の起票は、解決先 repo（cli）の `[[repositories]].project` が指す #8 に `triage_status` の `Todo` で載り、#7 には載らなかった
 - **`setup` の生成物**。`--answers` で github recipe は `projects = ["github-board"]`、slack recipe は `[[projects]] name = "slack"` を吐き、両方 `validate --offline` を通る
 
 確認していないこと:
