@@ -867,6 +867,7 @@ mod tests {
         let wf = plugin_protocol::methods::WorkflowInfo {
             workflow: "books".into(),
             projects: vec![],
+            status_writebacks: vec![],
             trigger: serde_json::json!({ "reaction": 42 }),
             instructions_kind: None,
             task_id_prefix: None,

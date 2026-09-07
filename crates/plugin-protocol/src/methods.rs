@@ -159,6 +159,22 @@ pub struct WorkflowInfo {
     /// see it).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<String>,
+    /// The status column values this workflow **writes back** to, derived by
+    /// the Orchestrator from `on_start` / `on_success` / `on_failure` in that
+    /// order, deduplicated (#626).
+    ///
+    /// Sent so a source can check them against the real board while it is
+    /// checking the trigger's — the `on_*` tables themselves stay the
+    /// Orchestrator's (a plugin never acts on them; `task/update_status`
+    /// tells it what to set, when). `status` is already a core-owned key a
+    /// plugin may see (0.6.1), and this is the same arrangement in the other
+    /// direction.
+    ///
+    /// Empty for an agent plugin, and for a workflow that writes nothing
+    /// back. Absent from an older Orchestrator, in which case a source simply
+    /// has nothing to check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_writebacks: Vec<String>,
     /// Trigger condition; plugin-defined shape, sent **verbatim** from
     /// `[[workflows]].trigger`. An empty object for a plugin named as the
     /// workflow's `agent` — triggers select tasks, which is the source's
@@ -948,6 +964,7 @@ mod tests {
             workflows: vec![WorkflowInfo {
                 workflow: "design".into(),
                 projects: vec!["board-a".into()],
+                status_writebacks: vec![],
                 trigger: serde_json::json!({"status": "設計待ち"}),
                 instructions_kind: Some("design".into()),
                 task_id_prefix: None,

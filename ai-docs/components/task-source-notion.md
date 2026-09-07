@@ -30,6 +30,14 @@ Notion データベースを totsuka のタスクソースとして接続する�
 
 `property_map` で共通スキーマの各フィールド ↔ Notion プロパティ名を対応づける。`title` のみ必須、他は任意（未設定フィールドは抽出しない）。status は `status`/`select` 型の双方に対応（`status_kind` で write-back の本体形状と option 解決を切替）。priority は `number` プロパティを直接、または `select`/`status` の option 名を `priority_map` で数値化。body は property（`rich_text`）またはページ本文ブロック（`body_source`）から取得。これにより単一プラグインで任意の DB 構造を正規化できる。
 
+# ステータス列の実在検査（#626）
+
+`config/validate` のオンライン部で、**workflow が名指した データベース だけ**について `property_map.status` の option 一覧を引き、`trigger.status` / `WorkflowInfo.status_writebacks` / `triage_status` がそこに実在するかを突き合わせる（[ADR-0069](/decisions/adr-0069-workflow-projects.md) §7）。1 データベース 1 クエリで、名指されていないものは 1 度も叩かない。
+
+**`projects` で走査範囲を絞ることは検査ではない。** 存在しない列名は「一致しない」だけで、エラーも警告もログも出ない —— これが #626 の動機になった症状そのものである。`initialize` では落とさない（列を 1 つ消しただけで無関係なワークフローまで止まる）。**transport が失敗したら「検査できなかった」をエラーとして返す** —— 「検査して問題なし」と読まれないため。
+
+`in_progress_statuses` は対象外（全データベース共通の値なので、あるデータベースに無い値が正しく存在しうる）。
+
 # 取り込み制御（F-08）
 
 fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tasks/fetch` RPC 自体は削除されたが、`poll_loop` 内部からは引き続き使う）は **`WorkflowInfo.projects` が名指したデータベースだけを設定順に走査し**（#542 → #626 で workflow の列挙に絞られた。[ADR-0069](/decisions/adr-0069-workflow-projects.md)）、それぞれについて: まずトリガー（`status` / raw `filter` / `assignee`）で候補を絞る（`status` / `filter` は可能なら databases query の server-side filter で削減）。**assignee もこの trigger の一部である**（#572） —— 誰が持っているタスクを取るかは workflow が決め、省略時の既定 `["@me", "@none"]` が #572 以前のプラグイン全体のゲートと同一になる（自分は `notion_user_id` で判定、未設定時は未 assign のみ取り込み）。旧ゲートは削除済みで、これの後ろには残っていない。次に、**workflow が言わないこと**だけを適用する: `in_progress_statuses` のステータスを除外、**そのデータベースに紐づかないリポジトリ**を除外（紐付けは `[[repositories]].project`、#554）。厳密な排他制御はしない。重複 push は orchestrator が `duplicate` ack で安価に破棄するため、プラグイン側に seen-set は持たない。

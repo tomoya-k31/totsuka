@@ -278,8 +278,19 @@ where
         // Only ping the API if the config is otherwise well-formed (F-63).
         if errors.is_empty() {
             let transport = self.factory.build(settings(&config));
-            if let Err(e) = NotionClient::new(config, transport).validate().await {
+            let client = NotionClient::new(config, transport);
+            if let Err(e) = client.validate().await {
                 errors.push(e.to_string());
+            } else {
+                // Only after the token and the property mapping are known
+                // good: otherwise every database would fail the status check
+                // with the same underlying fault.
+                match client.validate_statuses(&parsed.workflows).await {
+                    Ok(status_errors) => errors.extend(status_errors),
+                    Err(e) => errors.push(format!(
+                        "ステータスの option を検査できなかった: {e} → 検査できていないので、通ったとは読まないこと"
+                    )),
+                }
             }
         }
         ok_validate(id, errors)

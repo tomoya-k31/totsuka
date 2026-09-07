@@ -18,6 +18,7 @@ use crate::adapters::plugin_host::PluginSpec;
 use crate::config::{
     self, ConfigError, ResolveError, RootConfig, resolve_strings, secret_resolver,
 };
+use crate::domain::workflow::OutcomeAction;
 use crate::plugins::{PluginStore, StoreError};
 
 /// Default per-call plugin RPC timeout when `timeout_secs` is omitted.
@@ -99,6 +100,26 @@ pub fn plugin_spec(
     })
 }
 
+/// The status columns a workflow writes back to, in `on_start` →
+/// `on_success` → `on_failure` order with duplicates dropped (#626).
+///
+/// Read through [`OutcomeAction::from_table`] rather than off the tables here:
+/// which key names a column is stated in one place, and a second reader could
+/// drift from it without anything failing.
+fn status_writebacks(w: &config::WorkflowConfig) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for table in [&w.on_start, &w.on_success, &w.on_failure] {
+        if let Some(status) = table
+            .as_ref()
+            .and_then(|t| OutcomeAction::from_table(t).status)
+            && !out.contains(&status)
+        {
+            out.push(status);
+        }
+    }
+    out
+}
+
 /// The `[[projects]]` entries `name` owns, with their opaque options (#554).
 ///
 /// Filtered here rather than sent whole and filtered plugin-side: `source` is
@@ -140,6 +161,16 @@ pub fn workflow_infos(cfg: &RootConfig, name: &str, is_source: bool) -> Vec<Work
         })
         .map(|w| WorkflowInfo {
             workflow: w.name.clone(),
+            // The columns this workflow writes back to (#626), for the
+            // source to check against the board while it checks the
+            // trigger's. Order is `on_start` → `on_success` → `on_failure`
+            // and duplicates are dropped, so the same column written by two
+            // outcomes is one thing to verify.
+            status_writebacks: if is_source {
+                status_writebacks(w)
+            } else {
+                Vec::new()
+            },
             // Which of this plugin's domains the workflow watches (#626).
             // Sent as written, so a plugin scans the boards it was pointed at
             // and no others; an old plugin that ignored this field would scan
@@ -527,6 +558,13 @@ agent = "herdr"
         assert_eq!(prefix_of("gh-design"), None);
         assert_eq!(prefix_of("spelled-out"), None);
 
+        // #626: the write-back columns, derived so the source can check them
+        // against the real board. `on_*` themselves stay core's.
+        assert!(
+            info_of("gh-design").status_writebacks.is_empty(),
+            "a workflow that writes nothing back sends nothing"
+        );
+
         // The trigger stays the operator's spelling, and **only** that: the
         // derived keys must not leak back into the table now that they have
         // fields of their own — a plugin still reading them off the trigger
@@ -534,6 +572,75 @@ agent = "herdr"
         // next, which is the drift 0.6.0 exists to end.
         let design = info_of("gh-design");
         assert_eq!(design.trigger, serde_json::json!({ "status": "設計待ち" }));
+    }
+
+    /// `status_writebacks` is `on_start` → `on_success` → `on_failure`, with
+    /// duplicates dropped and the agent's copy empty (#626).
+    ///
+    /// Order and dedup are asserted rather than described because the source
+    /// reports one error per entry: the same column written by two outcomes is
+    /// one thing to fix, and reporting it twice would make the real count
+    /// harder to read.
+    #[test]
+    fn status_writebacks_are_ordered_deduplicated_and_source_only() {
+        let cfg = root(
+            r#"
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[projects]]
+name = "board"
+source = "github"
+
+[[workflows]]
+name = "impl"
+projects = ["board"]
+trigger = { status = "Todo" }
+mode = "implement"
+output = "none"
+agent = "herdr"
+on_start = { status = "In progress" }
+on_success = { status = "Done" }
+on_failure = { status = "In progress" }
+
+[[workflows]]
+name = "quiet"
+projects = ["board"]
+trigger = { status = "Idle" }
+mode = "plan"
+output = "none"
+agent = "herdr"
+"#,
+        );
+        let source_of = |name: &str| {
+            workflow_infos(&cfg, "github", true)
+                .into_iter()
+                .find(|w| w.workflow == name)
+                .unwrap()
+        };
+        assert_eq!(
+            source_of("impl").status_writebacks,
+            vec!["In progress".to_string(), "Done".to_string()],
+            "on_start first, and the repeated column once"
+        );
+        assert!(
+            source_of("quiet").status_writebacks.is_empty(),
+            "nothing written back, nothing to check"
+        );
+
+        // The agent gets none of it: which column a task lands in is the
+        // source's business, the same reason its trigger arrives empty.
+        let agent = workflow_infos(&cfg, "herdr", false)
+            .into_iter()
+            .find(|w| w.workflow == "impl")
+            .unwrap();
+        assert!(agent.status_writebacks.is_empty());
+        assert!(agent.projects.is_empty());
     }
 
     #[test]

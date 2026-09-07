@@ -688,6 +688,115 @@ impl<T: GithubTransport> GithubClient<T> {
         }
     }
 
+    /// The names of the status field's options on one board (#626).
+    ///
+    /// `None` means the board has no field by that name at all, which is a
+    /// different fault from "the field exists but not this option" and gets a
+    /// different message — `[github].status_field` is wrong, or that board
+    /// spells its column differently (in which case there is nothing this
+    /// plugin can do until the key is per-board).
+    async fn status_options(
+        &self,
+        project: &ProjectConfig,
+    ) -> Result<Option<Vec<String>>, GithubError> {
+        let body = json!({
+            "query": status_options_query(project.owner_type.graphql_root()),
+            "variables": {
+                "owner": project.owner,
+                "number": project.project_number,
+                "statusField": self.config.status_field,
+            },
+        });
+        let resp = self.transport.post_graphql(body, true).await?;
+        let node = self.project_node(&resp, project)?;
+        let field = &node["field"];
+        if field.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(
+            field["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|o| o["name"].as_str().map(str::to_string))
+                .collect(),
+        ))
+    }
+
+    /// Check that every status a workflow names exists on the boards it names
+    /// (#626), plus each board's own `triage_status`.
+    ///
+    /// **This is the check that turns the motivating bug loud.** A trigger on
+    /// a column the board does not have matches nothing, and nothing says so:
+    /// no error, no warning, no log line — the workflow simply never fires.
+    /// Narrowing a workflow to one board (#626) did not fix that on its own,
+    /// because a misspelling behaves exactly the same way.
+    ///
+    /// The write-backs (`on_*`) are checked here too even though they already
+    /// fail loudly at runtime, since failing before the agent runs is strictly
+    /// better than failing after it did the work.
+    ///
+    /// One query per board, and only for boards some workflow actually names.
+    /// A transport failure is returned as an error rather than swallowed: "we
+    /// could not check" must not read as "checked and fine".
+    pub async fn validate_statuses(
+        &self,
+        workflows: &[plugin_protocol::methods::WorkflowInfo],
+    ) -> Result<Vec<String>, GithubError> {
+        let mut errors = Vec::new();
+        for project in &self.config.projects {
+            // Statuses this board is asked for, with what asked for them.
+            let mut wanted: Vec<(String, String)> = Vec::new();
+            for wf in workflows {
+                if !wf.projects.iter().any(|n| n == &project.name) {
+                    continue;
+                }
+                if let Some(status) = wf.trigger.get("status").and_then(Value::as_str) {
+                    wanted.push((
+                        status.to_string(),
+                        format!("workflow `{}` の trigger.status", wf.workflow),
+                    ));
+                }
+                for status in &wf.status_writebacks {
+                    wanted.push((
+                        status.clone(),
+                        format!("workflow `{}` の書き戻し", wf.workflow),
+                    ));
+                }
+            }
+            if let Some(status) = &project.triage_status {
+                wanted.push((status.clone(), "triage_status".to_string()));
+            }
+            if wanted.is_empty() {
+                continue;
+            }
+            let Some(options) = self.status_options(project).await? else {
+                errors.push(format!(
+                    "project `{}`（#{}）に `{}` という名前のフィールドが無い → `[github].status_field` を直すか、そのボードの列名を揃える",
+                    project.name, project.project_number, self.config.status_field
+                ));
+                continue;
+            };
+            for (status, who) in wanted {
+                if options.contains(&status) {
+                    continue;
+                }
+                errors.push(format!(
+                    "{who} の \"{status}\" は project `{}`（#{}）のフィールド `{}` に存在しない → 存在する option: {}",
+                    project.name,
+                    project.project_number,
+                    self.config.status_field,
+                    if options.is_empty() {
+                        "（なし）".to_string()
+                    } else {
+                        options.join(" / ")
+                    }
+                ));
+            }
+        }
+        Ok(errors)
+    }
+
     /// Extract `data.<owner-root>.projectV2`, surfacing GraphQL errors and a
     /// missing project (e.g. wrong owner/number) as actionable failures.
     fn project_node<'a>(
@@ -825,6 +934,25 @@ fn resolve_query(root: &str) -> String {
       items(first: 100, after: $cursor) {{
         pageInfo {{ hasNextPage endCursor }}
         nodes {{ id content {{ ... on Issue {{ id }} }} }}
+      }}
+    }}
+  }}
+}}"#
+    )
+}
+
+/// The status field's options for one board — no item paging (#626).
+///
+/// Separate from [`resolve_query`] deliberately: that one walks items because
+/// `update_status` has to find one, and validation does not. Reusing it would
+/// page a large board for nothing.
+fn status_options_query(root: &str) -> String {
+    format!(
+        r#"query($owner: String!, $number: Int!, $statusField: String!) {{
+  {root}(login: $owner) {{
+    projectV2(number: $number) {{
+      field(name: $statusField) {{
+        ... on ProjectV2SingleSelectField {{ options {{ name }} }}
       }}
     }}
   }}

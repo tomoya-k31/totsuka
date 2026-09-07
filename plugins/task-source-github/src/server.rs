@@ -267,8 +267,19 @@ where
             let transport = self
                 .factory
                 .build(&config.api_url, &config.token, config.max_retries);
-            if let Err(e) = GithubClient::new(config, transport).validate().await {
+            let client = GithubClient::new(config, transport);
+            if let Err(e) = client.validate().await {
                 errors.push(e.to_string());
+            } else {
+                // Only once the token is known to work: every status check is
+                // a query, and against a dead token they would all fail with
+                // the same auth error and bury the one line that matters.
+                match client.validate_statuses(&parsed.workflows).await {
+                    Ok(status_errors) => errors.extend(status_errors),
+                    Err(e) => errors.push(format!(
+                        "ステータス列の検査ができなかった: {e} → 検査できていないので、通ったとは読まないこと"
+                    )),
+                }
             }
         }
         ok_validate(id, errors)
