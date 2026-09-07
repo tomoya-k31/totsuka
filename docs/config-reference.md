@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:9ca658603a41e5629719449708f14203ba3e81f5b77b36b724be4068f9b9b852 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:35f383ec4b43d650136a1872e1d3d5f0bbd5bd4fa496ccf3f490b329c54d0794 -->
 
 # Configuration reference
 
@@ -920,7 +920,7 @@ Per-key overrides for the prompts this plugin sends; the key name is the setting
 | `implement_instructions` | The default for `implement`: implement, open a pull request, report the URL | — |
 | `triage_instructions` | The default for `triage`: file an issue, report the URL | — |
 | `reply_style_suffix` | Appended to the reply instructions only when `reply_style` is set | `{style}` |
-| `body_template` | The task body shown in the pane | `{sender}`, `{channel}`, `{text}` |
+| `body_template` | The task body shown in the pane. `{text}` is the original message with **your own (`target_user_id`) mention tag removed** — shown a raw `<@U…>`, the agent copies it into the reply | `{sender}`, `{channel}`, `{text}` |
 | `body_thread_header` | Heading of the thread context section | `{count}` |
 | `body_thread_line` | One line of thread context | `{line}` |
 | `body_thread_unavailable` | Replaces the whole section when the context could not be fetched | — |

@@ -160,7 +160,10 @@ async fn mention_becomes_a_task_and_is_submitted() {
         "{body}"
     );
     assert!(!body.contains("丁寧語で簡潔に"), "{body}");
-    assert!(body.contains("<@U_ME> 原因わかりますか"), "{body}");
+    // The operator's own tag is gone from the quote (#632): it is what the
+    // agent used to copy back into the reply. The words after it stay.
+    assert!(body.contains("> 原因わかりますか"), "{body}");
+    assert!(!body.contains("<@U_ME>"), "{body}");
     assert!(body.contains("アリス: デプロイが失敗してる"), "{body}");
     assert!(body.contains("アリス: ログ見た?"), "{body}");
     assert!(

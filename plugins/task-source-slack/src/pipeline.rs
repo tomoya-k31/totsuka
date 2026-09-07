@@ -1219,7 +1219,12 @@ fn build_task(
     // `{text}` is handed over already `>`-quoted: the newline rewrite happens
     // here, before substitution, so an override that drops the leading `> `
     // still gets sane continuation lines.
-    let quoted = mention.text.replace('\n', "\n> ");
+    //
+    // The operator's own tag is dropped from the quoted body first (#632): the
+    // body already says it is a mention, and leaving the raw `<@U_ME>` in
+    // front of the text is exactly what the agent then copies into its reply.
+    let text = crate::approval::remove_mention_of(&mention.text, &config.target_user_id);
+    let quoted = text.trim().replace('\n', "\n> ");
     let mut body = template::render(
         &p.body_template,
         &[

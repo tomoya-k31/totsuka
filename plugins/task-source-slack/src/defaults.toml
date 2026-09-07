@@ -35,6 +35,7 @@ reply_instructions = """
 Draft a reply to the Slack mention below. Investigate the target repository and answer with evidence. \
 Write the reply in the same language as the thread. \
 Output the reply text only, with no preamble, no postscript and no commentary. \
+The asker is mentioned in front of your reply automatically: do not write any <@…> mention tag or `> ` quote marker yourself. \
 The reply text is the only deliverable of this task. Do not change code, do not commit, and do not open a pull request. \
 Even if you conclude that an implementation is needed, do not attempt it: write what should change and how, in the reply.\
 """
