@@ -515,9 +515,15 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
                     .into(),
             );
         } else if !names.is_empty() && !names.contains(&fallback.as_str()) {
+            // Not "declared in `[[slack.repos]]`": at `initialize` the
+            // candidates may well have come from the Orchestrator's
+            // `[[repositories]]` instead, and naming the wrong file is worse
+            // than naming none.
             errors.push(format!(
-                "`fallback_repo` names `{fallback}` which is not declared in `[[slack.repos]]` \
-                 → add it there or fix the name"
+                "`fallback_repo` names `{fallback}`, which is not one of the repository \
+                 candidates → fix the name, or add the repository to `[[slack.repos]]` \
+                 (or to the Orchestrator's `[[repositories]]` when that is where the \
+                 candidates come from)"
             ));
         }
     }
@@ -545,8 +551,10 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
         for repo in &group.repos {
             if !names.contains(&repo.as_str()) {
                 errors.push(format!(
-                    "`[[slack.channel_groups]]` (prefix `{}`) references repo `{repo}` which is \
-                     not declared in `[[slack.repos]]` → add it there or fix the name",
+                    "`[[slack.channel_groups]]` (prefix `{}`) references repo `{repo}`, which \
+                     is not one of the repository candidates → fix the name, or add the \
+                     repository to `[[slack.repos]]` (or to the Orchestrator's \
+                     `[[repositories]]` when that is where the candidates come from)",
                     group.prefix
                 ));
             }

@@ -30,11 +30,17 @@ pub enum Resolution {
 
 /// Stage ①: the candidates after applying the channel-prefix rules. The
 /// first `[[channel_groups]]` whose `prefix` matches `channel_name` wins;
-/// with no match `unmatched_candidates` below decides. A matching group that
-/// narrows to *nothing* (empty `repos`, or names that don't exist —
-/// `config/validate` flags both, but `initialize` does not re-run it) is
-/// treated as no match at all, rather than stranding the mention behind a
-/// picker with no buttons.
+/// with no match `unmatched_candidates` below decides.
+///
+/// A matching group that narrows to *nothing* (empty `repos`, or names that
+/// don't exist) is treated as no match at all, rather than stranding the
+/// mention behind a picker with no buttons. **A running plugin cannot be in
+/// that state**: `static_config_errors` rejects both shapes and `initialize`
+/// runs it against the merged candidate list, so an operator sees
+/// `CONFIG_INVALID` at startup instead. The branch is kept as a safety net
+/// for a caller that has not passed that gate — it is not a supported mode,
+/// and nothing here should be read as "a bad `repos` list degrades
+/// gracefully at runtime".
 pub fn prefix_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoInfo> {
     for group in &config.channel_groups {
         if channel_name.starts_with(&group.prefix) {
@@ -62,11 +68,15 @@ pub fn prefix_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoIn
 /// The candidates for a channel no `[[channel_groups]]` rule covers.
 ///
 /// `fallback_repo` names one of them and short-circuits the classifier
-/// (`resolve` resolves a lone candidate outright). A name that matches no
-/// declared repository degrades to the full catalogue: `static_config_errors`
-/// reports it, but that check cannot run offline when the candidates come
-/// from the orchestrator, and a mention is worth more than a strict reading
-/// of a config the operator can still fix.
+/// (`resolve` resolves a lone candidate outright).
+///
+/// A name matching no candidate falls through to the full catalogue, on the
+/// same safety-net terms as `prefix_candidates` above: `initialize` has
+/// already refused to start on that config (`CONFIG_INVALID`), so the branch
+/// is unreachable in a running plugin. `config/validate` alone cannot catch
+/// it — with `[[repos]]` omitted the candidates are unknown until the
+/// Orchestrator supplies them — which is why the check is written to run in
+/// both places rather than offline only.
 fn unmatched_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoInfo> {
     let Some(name) = &config.fallback_repo else {
         return config.repos.clone();
@@ -325,8 +335,10 @@ mod tests {
 
     #[test]
     fn a_group_narrowing_to_nothing_lands_on_the_fallback_repo() {
-        // The unusable rule is treated as "no rule matched", so the fallback
-        // decides instead of the full picker it produced before.
+        // Also the safety net (`initialize` rejects both shapes): pinned so
+        // that if it is ever reached, the unusable rule reads as "no rule
+        // matched" and the fallback decides, instead of the full picker it
+        // produced before.
         for groups in [
             json!([{ "prefix": "ops-", "repos": [] }]),
             json!([{ "prefix": "ops-", "repos": ["ghost"] }]),
@@ -341,9 +353,10 @@ mod tests {
 
     #[test]
     fn an_unknown_fallback_repo_degrades_to_every_candidate() {
-        // `static_config_errors` reports the bad name, but it cannot when the
-        // candidates arrive at `initialize` — the mention still gets a
-        // working picker rather than none.
+        // The safety net, not a supported mode: `initialize` rejects this
+        // config outright, so a running plugin never reaches here. Pinned so
+        // that a caller bypassing that gate still gets a working picker
+        // rather than none.
         let config = config_with_fallback(json!([]), "ghost");
         assert_eq!(
             names(prefix_candidates(&config, "random-talk")),
