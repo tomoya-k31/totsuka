@@ -29,14 +29,21 @@ summary = "ログ集計のコマンドラインツール。サブコマンド・
 enabled = true
 kind = "task_source"
 
-# 起票先トラッカー（#554）。name / source は Orchestrator が読み、残りは github のもの。
-# リポジトリ側は project = "<name>" で 1 つだけ指す。
+# ソースが持つ domain（#554 / #626）。name / source は Orchestrator が読み、残りは
+# そのプラグインのもの。リポジトリ側は project = "<name>" で起票先を 1 つだけ指し、
+# ワークフロー側は projects = ["<name>"] で取り込み元を名指す。
 [[projects]]
 name = "e2e-board"
 source = "github"
 owner = "________"
 owner_type = "user"
 project_number = 0
+
+# domain が 1 つしか無いソースもエントリが要る（#626）—— ワークフローはプラグイン
+# ではなく domain を指すため。埋めるものは無く、name / source の 2 行だけ。
+[[projects]]
+name = "slack"
+source = "slack"
 
 [plugins.github]
 enabled = true
@@ -76,7 +83,7 @@ plan_cleanup = "immediate"
 # （同じ絵文字を 2 つ、またはメンションを 2 つ書くと initialize が CONFIG_INVALID）
 [[workflows]]
 name = "slack-reaction"
-source = "slack"
+projects = ["slack"]
 trigger = { reaction = "totsuka-test" }
 mode = "plan"
 agent = "herdr"
@@ -87,7 +94,7 @@ output = "source"
 # push / PR の指示があると、返信起案のつもりでも PR が生える。
 [[workflows]]
 name = "slack-reply"
-source = "slack"
+projects = ["slack"]
 trigger = {}
 mode = "plan"
 agent = "herdr"
@@ -100,7 +107,7 @@ output = "source"
 # （#398。成果物はエージェントが gh で自分で書く）。
 [[workflows]]
 name = "github-task"
-source = "github"
+projects = ["e2e-board"]
 trigger = { status = "Todo" }
 profile = "implement"
 agent = "herdr"
