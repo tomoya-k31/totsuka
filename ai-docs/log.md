@@ -2,6 +2,7 @@
 
 ## 2026-09-08
 
+* **Fix**: [task-source-slack](/components/task-source-slack.md) — #632: メンション経路の返信が `<@B> <@A> 本文` と 2 つのメンションで始まっていた。B への前置きはプラグインの機械的なもので正しく、`<@A>`（運用者自身 = 投稿者）はエージェントがプロンプト内の元メッセージを写したもの。2026-09-08 の live-e2e で 2/2 再現（8/23 は出ず、モデル依存）。出口で `<@target_user_id>` を位置を問わず、返信先頭に連なるタグを機械的に除去し、入口で `body_template` の `{text}` から自分宛タグを消して指示文に「前置きは自動、タグや `> ` を書くな」を足した。文中の第三者宛メンションは内容なので残す
 * **Verified**: [ADR-0069](/decisions/adr-0069-workflow-projects.md)（2026-09-08）。実機（Status 語彙の違う実 GitHub ProjectsV2 2 枚 + 実 herdr + 実 Claude Code）で #626 の検収項目を全件通し、`status` を `stable` にした。**取り込みが名指した domain に閉じる**ことは、#8 だけに置いた `Todo` カードを `projects = ["e2e-board"]` の workflow が 2 poll を超えて拾わず、#7 に無い `Backlog → Shipped` のレーンが #8 だけから取り込んで書き戻したことで確認。**書き戻しが由来のボードに着地する**ことは、同じ issue を両ボードに載せて #7 側だけが動いたことで確認（メモが有効な経路のみ。再起動後のフォールバック探索は結合テストまで）。閉路検査は `#7: Todo → Done` + `#8: Done → Todo` が valid で、#8 側を `e2e-board` に向けると閉路。旧 config は ``missing field `projects` ``、旧プラグイン（`<0.7`）は F-54 の `protocol-incompatible` で、どちらも起動しない。#628 の option 実在検査は #8 に無い列名 3 種を実在一覧つきで error にした。slack のキーなし `[[projects]]` エントリ経由でもメンション / リアクション / `:books:` の 3 経路が動き、起票は cli repo の起票先 #8 に `triage_status` の列で載った。**notion は e2e のロスターに無く対象外。** 手順は live-e2e スキルの S8 に残した
 
 ## 2026-09-07

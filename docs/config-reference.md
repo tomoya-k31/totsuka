@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:9ca658603a41e5629719449708f14203ba3e81f5b77b36b724be4068f9b9b852 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:4cca690f679f8ef7ab766b4e865d894ba764812a113e78c8d29a37948688c4c4 -->
 
 # Configuration reference
 
@@ -920,7 +920,7 @@ Per-key overrides for the prompts this plugin sends; the key name is the setting
 | `implement_instructions` | The default for `implement`: implement, open a pull request, report the URL | — |
 | `triage_instructions` | The default for `triage`: file an issue, report the URL | — |
 | `reply_style_suffix` | Appended to the reply instructions only when `reply_style` is set | `{style}` |
-| `body_template` | The task body shown in the pane | `{sender}`, `{channel}`, `{text}` |
+| `body_template` | The task body shown in the pane. For a mention-driven task, `{text}` is the original message with **your own (`target_user_id`) mention tag removed**: when the agent sees the raw `<@U…>` tag, it copies it into a reply that is posted as you. A channel-watch task is answered as the bot, so a mention of you stays there as content | `{sender}`, `{channel}`, `{text}` |
 | `body_thread_header` | Heading of the thread context section | `{count}` |
 | `body_thread_line` | One line of thread context | `{line}` |
 | `body_thread_unavailable` | Replaces the whole section when the context could not be fetched | — |

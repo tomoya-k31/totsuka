@@ -1219,7 +1219,19 @@ fn build_task(
     // `{text}` is handed over already `>`-quoted: the newline rewrite happens
     // here, before substitution, so an override that drops the leading `> `
     // still gets sane continuation lines.
-    let quoted = mention.text.replace('\n', "\n> ");
+    //
+    // For a mention-driven task the operator's own tag is dropped from the
+    // quoted body first (#632): the body already says it is a mention, and
+    // leaving the raw `<@U_ME>` in front of the text is exactly what the agent
+    // then copies into a reply that goes out *as* the operator. A watched
+    // channel's task is answered as the bot, and there a mention of the
+    // operator is content the agent may need — it stays.
+    let text = if mention.repo_pin.is_none() {
+        crate::approval::remove_mention_of(&mention.text, &config.target_user_id)
+    } else {
+        mention.text.clone()
+    };
+    let quoted = text.trim().replace('\n', "\n> ");
     let mut body = template::render(
         &p.body_template,
         &[
@@ -1364,7 +1376,15 @@ async fn thread_context<T: SlackTransport>(
                 .clone()
                 .unwrap_or_else(|| "(unknown)".to_string()),
         };
-        lines.push(format!("{speaker}: {}", message.text.replace('\n', " ")));
+        // Same rule as the quoted body (#632): a mention-driven task answers
+        // as the operator, so the operator's raw tag in a context line is
+        // copy material, not content. A watch keeps it.
+        let text = if mention.repo_pin.is_none() {
+            crate::approval::remove_mention_of(&message.text, &config.target_user_id)
+        } else {
+            message.text.clone()
+        };
+        lines.push(format!("{speaker}: {}", text.replace('\n', " ")));
     }
     Some(lines)
 }

@@ -75,13 +75,8 @@ pub async fn publish_direct<T: SlackTransport>(
     task_id: &str,
     content: &str,
     post_as: PostAs,
+    operator_user_id: &str,
 ) -> Result<(), String> {
-    let text = extract_reply(content);
-    if text.is_empty() {
-        return Err(format!(
-            "task {task_id} published an empty result → nothing to post as a reply"
-        ));
-    }
     // Peek, do not take: see above.
     let Some(pending) = state.pending(task_id) else {
         return Err(format!(
@@ -89,6 +84,12 @@ pub async fn publish_direct<T: SlackTransport>(
              mention?) → the reply cannot be placed; re-trigger from a fresh mention"
         ));
     };
+    let text = sanitize_reply(content, post_as, operator_user_id, &pending.sender_id);
+    if text.is_empty() {
+        return Err(format!(
+            "task {task_id} published an empty result → nothing to post as a reply"
+        ));
+    }
     let text = format!("<@{}> {text}", pending.sender_id);
     let message = PostMessage {
         channel: &pending.channel,
@@ -134,7 +135,19 @@ pub async fn publish_draft<T: SlackTransport>(
 ) -> Result<(), String> {
     // Validate the content BEFORE consuming the pending entry: a rejected
     // publish must leave the coordinates in place so a retry can still land.
-    let text = extract_reply(content);
+    // (Peek for the sender id the sanitizer needs; the take comes after.)
+    let Some(sender_id) = state.pending(task_id).map(|p| p.sender_id) else {
+        return Err(format!(
+            "task {task_id} has no pending Slack coordinates (plugin restarted since the \
+             mention?) → the reply cannot be placed; re-trigger from a fresh mention"
+        ));
+    };
+    let text = sanitize_reply(
+        content,
+        PostAs::Operator,
+        &config.target_user_id,
+        &sender_id,
+    );
     if text.is_empty() {
         return Err(format!(
             "task {task_id} published an empty result → nothing to propose as a reply"
@@ -574,6 +587,128 @@ fn clipped(text: &str) -> String {
     format!("{head}\n…（表示上省略。承認時は全文が送信されます）")
 }
 
+/// The reply text to post: log noise trimmed off the edges, then the mention
+/// tags the agent echoed from its prompt removed (#632), in the order the
+/// mechanical `<@sender>` prefix expects.
+///
+/// Which tags are echoes depends on who posts. A reply going out **as the
+/// operator** can never legitimately mention the operator, so that tag goes
+/// wherever it sits. A reply going out **as the bot** (a watched channel,
+/// #617) is another author's voice, and "ask <@operator>" is real content
+/// there. For both identities the caller prefixes the asker's mention, so an
+/// asker (or, as the operator, a self) tag in front of the text is an echo —
+/// a third party addressed at the head ("<@X> さんに聞いてください") is not,
+/// and stays.
+fn sanitize_reply(
+    content: &str,
+    post_as: PostAs,
+    operator_user_id: &str,
+    sender_id: &str,
+) -> String {
+    let text = extract_reply(content);
+    match post_as {
+        PostAs::Operator => strip_leading_mentions(
+            &remove_mention_of(&text, operator_user_id),
+            &[sender_id, operator_user_id],
+        ),
+        PostAs::Bot => strip_leading_mentions(&text, &[sender_id]),
+    }
+}
+
+/// Drop every `<@user>` / `<@user|label>` tag of `user_id` from `text` (#632).
+///
+/// The agent sees the mention it is answering in its prompt and sometimes
+/// echoes the operator's own tag back into the reply — which is then posted
+/// *as* that operator, so the reply mentions its own author. There is no
+/// legitimate reason for a reply to carry a mention of the account posting
+/// it, so the tag goes wherever it sits. One adjacent space goes with it, so
+/// `foo <@U_ME> bar` reads `foo bar` rather than `foo  bar`.
+///
+/// Third-party mentions are left alone: "ask <@U_OTHER>" is real content.
+pub(crate) fn remove_mention_of(text: &str, user_id: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find("<@") {
+        let (head, tail) = rest.split_at(pos);
+        out.push_str(head);
+        match mention_tag_len(tail) {
+            Some(len) if mention_tag_user(&tail[..len]) == user_id => {
+                let after = &tail[len..];
+                if let Some(after) = after.strip_prefix(' ') {
+                    rest = after;
+                } else {
+                    if out.ends_with(' ') {
+                        out.pop();
+                    }
+                    rest = after;
+                }
+            }
+            Some(len) => {
+                out.push_str(&tail[..len]);
+                rest = &tail[len..];
+            }
+            None => {
+                out.push_str("<@");
+                rest = &tail[2..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Drop the run of mention tags of `echo_ids` a reply *starts* with (#632).
+///
+/// The asker's mention is prefixed mechanically by the caller, so the asker's
+/// own tag in front of the agent's text is an echo of the prompt (`<@B> <@B>
+/// …`), and so is the poster's. Only those ids, and only at the head: a tag
+/// of anyone else — even in front — is the agent addressing someone, and a
+/// mention in the middle of a sentence is content either way.
+pub(crate) fn strip_leading_mentions(text: &str, echo_ids: &[&str]) -> String {
+    let mut rest = text.trim_start();
+    while let Some(len) = mention_tag_len(rest) {
+        if !echo_ids.contains(&mention_tag_user(&rest[..len])) {
+            break;
+        }
+        rest = rest[len..].trim_start();
+    }
+    rest.to_string()
+}
+
+/// Length of the mention tag `s` starts with, or `None` when `s` does not
+/// start with one. A tag is `<@` + a non-empty id (ASCII alphanumerics; `_`
+/// is admitted for the `U_ME`-style ids the test fixtures use) + optionally
+/// `|label` + `>`, on one line.
+fn mention_tag_len(s: &str) -> Option<usize> {
+    let body = s.strip_prefix("<@")?;
+    let id_len = body
+        .bytes()
+        .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        .count();
+    if id_len == 0 {
+        return None;
+    }
+    let after_id = &body[id_len..];
+    let close = if let Some(labelled) = after_id.strip_prefix('|') {
+        let label_len = labelled.find(['>', '<', '\n'])?;
+        if !labelled[label_len..].starts_with('>') {
+            return None;
+        }
+        1 + label_len
+    } else if after_id.starts_with('>') {
+        0
+    } else {
+        return None;
+    };
+    Some(2 + id_len + close + 1)
+}
+
+/// The user id inside a tag `mention_tag_len` accepted.
+fn mention_tag_user(tag: &str) -> &str {
+    let body = &tag[2..tag.len() - 1];
+    body.split('|').next().unwrap_or(body)
+}
+
 /// The agent's published content is its accumulated plan-mode output, which
 /// can carry log-ish noise around the actual reply. Trim noise lines
 /// defensively from both *edges* only — never from the middle, where a reply
@@ -629,6 +764,91 @@ fn starts_with_iso_date(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #632: the operator's own tag goes wherever it sits, with one adjacent
+    /// space, and a third party's stays.
+    #[test]
+    fn the_operators_own_mention_is_removed_wherever_it_sits() {
+        assert_eq!(
+            remove_mention_of("<@U_ME> こんにちは", "U_ME"),
+            "こんにちは"
+        );
+        assert_eq!(
+            remove_mention_of("<@U_ME|tomoya> こんにちは", "U_ME"),
+            "こんにちは"
+        );
+        assert_eq!(remove_mention_of("foo <@U_ME> bar", "U_ME"), "foo bar");
+        assert_eq!(remove_mention_of("foo <@U_ME>", "U_ME"), "foo");
+        assert_eq!(remove_mention_of("foo\n<@U_ME>\nbar", "U_ME"), "foo\n\nbar");
+        assert_eq!(
+            remove_mention_of("ask <@U_OTHER> first", "U_ME"),
+            "ask <@U_OTHER> first"
+        );
+        // A look-alike id is a different user.
+        assert_eq!(remove_mention_of("<@U_MEX> hi", "U_ME"), "<@U_MEX> hi");
+        // Not a tag at all: left byte-for-byte.
+        assert_eq!(
+            remove_mention_of("a <@ b <@U_ME c", "U_ME"),
+            "a <@ b <@U_ME c"
+        );
+    }
+
+    /// #632: only the asker's / poster's tags at the head are echoes; a third
+    /// party addressed at the head, and any mention inside a sentence, stay.
+    #[test]
+    fn leading_echo_mentions_are_stripped_but_addressed_ones_survive() {
+        let ids = &["U_B", "U_A"];
+        assert_eq!(strip_leading_mentions("<@U_B> <@U_A> 本文", ids), "本文");
+        assert_eq!(strip_leading_mentions("  <@U_B|b>\n本文", ids), "本文");
+        assert_eq!(
+            strip_leading_mentions("本文 <@U_B> です", ids),
+            "本文 <@U_B> です"
+        );
+        assert_eq!(strip_leading_mentions("本文", ids), "本文");
+        // Addressing a third party at the head is the agent's content.
+        assert_eq!(
+            strip_leading_mentions("<@U_X> さんに聞いてください", ids),
+            "<@U_X> さんに聞いてください"
+        );
+        // …even behind an echoed asker tag.
+        assert_eq!(
+            strip_leading_mentions("<@U_B> <@U_X> さんに聞いてください", ids),
+            "<@U_X> さんに聞いてください"
+        );
+    }
+
+    /// The two together are what the publish paths apply, in that order:
+    /// self anywhere, then whatever tags are left in front.
+    #[test]
+    fn the_echoed_prefix_from_the_live_run_collapses_to_the_body() {
+        let echoed = "<@U_ME> このリポジトリを確認しました。";
+        let text = sanitize_reply(echoed, PostAs::Operator, "U_ME", "U_B");
+        assert_eq!(text, "このリポジトリを確認しました。");
+        let doubled = "<@U_B> <@U_ME> 本文";
+        let text = sanitize_reply(doubled, PostAs::Operator, "U_ME", "U_B");
+        assert_eq!(text, "本文");
+    }
+
+    /// The identity decides which tags are echoes: as the operator, a mention
+    /// of the operator is always one; as the bot, only the leading run is.
+    #[test]
+    fn a_bot_post_keeps_an_inner_mention_of_the_operator() {
+        let content = "<@U_ASKER> まず <@U_ME> に確認してください。";
+        assert_eq!(
+            sanitize_reply(content, PostAs::Operator, "U_ME", "U_ASKER"),
+            "まず に確認してください。"
+        );
+        assert_eq!(
+            sanitize_reply(content, PostAs::Bot, "U_ME", "U_ASKER"),
+            "まず <@U_ME> に確認してください。"
+        );
+        // As the bot, a leading tag of the operator is not an echo of the
+        // prefix either — it is addressed.
+        assert_eq!(
+            sanitize_reply("<@U_ME> 対応をお願いします", PostAs::Bot, "U_ME", "U_ASKER"),
+            "<@U_ME> 対応をお願いします"
+        );
+    }
 
     #[test]
     fn extract_reply_trims_log_noise_from_the_edges_only() {

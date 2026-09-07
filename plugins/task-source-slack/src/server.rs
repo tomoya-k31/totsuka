@@ -567,6 +567,7 @@ where
                 &parsed.task_id,
                 &parsed.content,
                 crate::approval::PostAs::Bot,
+                &session.config.target_user_id,
             )
             .await;
             return match result {
@@ -585,6 +586,7 @@ where
                     &parsed.task_id,
                     &parsed.content,
                     crate::approval::PostAs::Operator,
+                    &session.config.target_user_id,
                 )
                 .await
             }
