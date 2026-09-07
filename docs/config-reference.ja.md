@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:ecd6d1aefbdf6eabd77838e4b4bcbc10e13550619e0dcfa8efbef1f061a8722e -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:b970d17ef3f4134d3b50e757ab5f243f2f9be356a19233228e83469bc12a9c3f -->
 
 # 設定リファレンス
 
@@ -894,7 +894,8 @@ kind = "task_source"
 | `[slack.prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
 | `source_name` | string | `slack` | 各タスクに刻印するソース名 |
 | `[[slack.repos]]` | 配列 | なし | リポジトリ候補。`name`（`config.toml` のものと一致必須）と、任意の `summary` / `path`。**省略すると `config.toml` のリポジトリがそのまま候補になる**ので、通常は書かなくてよい |
-| `[[slack.channel_groups]]` | 配列 | なし | チャンネル名の接頭辞で候補を絞る規則。定義順に first-match。`prefix` と `repos` を持つ |
+| `[[slack.channel_groups]]` | 配列 | なし | チャンネル名の接頭辞で候補を絞る規則。定義順に first-match。`prefix` と `repos` を持つ。マッチは**前方一致だけ**で、`*` はリテラル文字として扱われる（glob・正規表現は無い）。空の `prefix` は拒否されるので、**全チャンネルに当てる catch-all はここには書けない** —— それは `fallback_repo` の仕事 |
+| `fallback_repo` | string? | なし | `[[slack.channel_groups]]` がどれもマッチしないチャンネルの行き先リポジトリ（`[[slack.repos]]` にある名前）。候補 1 件になるので**分類 LLM を経由せず即確定する**。組織横断の質問のように、特定のコードリポジトリに属さないメンションの受け口を 1 つ決めるためのキー。**省略すると全リポジトリが候補**として分類器へ渡る（候補が多いほど精度は落ちトークンも増える）。マッチした規則が候補ゼロに縮んだ場合（`repos` が空、または存在しない名前だけ）も「マッチしなかった」扱いでここへ落ちる。**これを置いても `[slack.llm]` は省略できない** —— 必須判定は候補件数で行われるので、2 件以上を挙げる規則があれば分類器はやはり必要。存在しない名前を指した場合は警告を出して全候補へ縮退するため、綴り間違いでメンションが座礁することはない |
 | `[slack.llm]` | テーブル | なし | 分類用の LLM。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、下回るとピッカーへ）。**省略すると `config.toml` の `[llm]` が既定になる**（キーが解決できる場合のみ）。候補が 2 件以上でどちらにも無ければ起動に失敗する |
 | `api_url` | string | `https://slack.com/api` | Web API のベース URL（テスト用） |
 | `max_retries` | int | 3 | 再試行可能な API 失敗の最大再試行回数。**1 回の呼び出しで眠れる合計は 90 秒**で、次の待ち時間がそれを超えるなら再試行せず本当の原因を返す（スロットルの `retry-after` が長いときに「ハングしたように見える」のを避けるため）。`max_retries` を大きくしても待ち時間の合計はこの予算で頭打ちになる |

@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-09-07
+
+* **Update**: [task-source-slack](/components/task-source-slack.md) に `fallback_repo` を追加。`[[channel_groups]]` がどれもマッチしないチャンネルの行き先を 1 つ指定できるようにした。候補 1 件になるため LLM 分類を経由せず即確定し、組織横断の質問のように特定のコードリポジトリに属さないメンションの受け口になる。従来は不一致チャンネルは全 `[[repos]]` が候補として分類器に渡っていた（候補が増えるほど精度もトークンも悪化する）。`prefix = ""` は拒否されるため catch-all は `[[channel_groups]]` 側には書けない。マッチしたグループが候補ゼロに縮んだ場合も同じ経路へ合流する。設定キーの記述は [設定リファレンス](/development/config-reference.md) の `[slack]` 節。
+
 ## 2026-09-06
 
 * **Creation**: [ADR-0068 チャンネル監視トリガと「操作者本人のみ」不変条件の明示的緩和](/decisions/adr-0068-channel-watch-trigger.md) — `trigger = { channel = … }` の導入（[#615](https://github.com/tomoya-k31/totsuka/issues/615) / [#616](https://github.com/tomoya-k31/totsuka/issues/616)）。リアクショントリガの「操作者本人のみ」不変条件（`reaction.rs` が ADR を要求）を維持したまま、`from` allowlist を唯一の明示的な緩和口として認める。id + `channel_name` 併記・`trigger.repo` 固定・1 投稿 = 1 タスク（`message_key` なし）・カーソルなし起動時 backfill（N 件 + 年齢上限）・メンション優先の判定順もここで決定。

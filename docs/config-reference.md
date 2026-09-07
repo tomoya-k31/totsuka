@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:ecd6d1aefbdf6eabd77838e4b4bcbc10e13550619e0dcfa8efbef1f061a8722e -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:b970d17ef3f4134d3b50e757ab5f243f2f9be356a19233228e83469bc12a9c3f -->
 
 # Configuration reference
 
@@ -895,7 +895,8 @@ kind = "task_source"
 | `[slack.prompts]` | table | — | Overrides for the prompts this plugin sends |
 | `source_name` | string | `slack` | The source name stamped on each task |
 | `[[slack.repos]]` | array | none | Candidate repositories: `name` (must match one in `config.toml`), optional `summary` and `path`. **Omit it and the repositories from `config.toml` are used**, which is usually what you want |
-| `[[slack.channel_groups]]` | array | none | Narrow the candidates by channel name prefix; first match in definition order. `prefix` plus `repos` |
+| `[[slack.channel_groups]]` | array | none | Narrow the candidates by channel name prefix; first match in definition order. `prefix` plus `repos`. Matching is **prefix-only** — `*` is a literal character, and there is no glob or regex. An empty `prefix` is rejected, so **a catch-all for every channel does not belong here**; that is what `fallback_repo` is for |
+| `fallback_repo` | string? | none | Where a mention goes when no `[[slack.channel_groups]]` rule matches its channel (a name from `[[slack.repos]]`). Being the only candidate it **resolves without calling the classifier**, so this is how you give org-wide questions — the ones that belong to no single code repository — one deliberate destination. **Omit it and every repository stays a candidate** and goes to the classifier, which gets less accurate and more expensive the more candidates there are. A matching rule that narrows to nothing (an empty `repos`, or only names that do not exist) is treated as no match and lands here too. **It does not let you omit `[slack.llm]`**: that requirement is judged on the candidate count, and a rule listing two repositories still needs a classifier. A name that matches no repository logs a warning and falls back to every candidate, so a typo cannot strand the mention |
 | `[slack.llm]` | table | none | The classifier LLM: `base_url`, `model`, `api_key`, and `confidence_threshold` (default 0.6; below it you get a picker). **Omit it and `config.toml`'s `[llm]` is the default**, provided it has a key. With two or more candidates and neither source of settings, startup fails |
 | `api_url` | string | `https://slack.com/api` | Web API base URL, for testing |
 | `max_retries` | int | 3 | Retries for retryable API failures. **One call may sleep 90s in total**; if the next wait would exceed that, the call returns the real cause instead of retrying, so a long `retry-after` cannot look like a hang. Raising `max_retries` therefore does not raise the total wait |
