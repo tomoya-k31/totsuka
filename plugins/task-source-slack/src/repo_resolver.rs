@@ -63,6 +63,12 @@ pub fn prefix_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoIn
                 );
                 break;
             }
+            tracing::debug!(
+                prefix,
+                channel_name,
+                candidates = narrowed.len(),
+                "[[channel_groups]] prefix matched"
+            );
             return narrowed;
         }
     }

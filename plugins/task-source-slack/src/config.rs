@@ -611,10 +611,21 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
             // Reported apart from the whole-list case: a blank entry matches
             // *every* channel, so the group silently becomes the catch-all
             // instead of doing nothing.
+            //
+            // The two forms get different wording. "position 0" is noise for
+            // a bare string, and a bare index leaves the operator guessing
+            // whether it counts from 0 or 1 — "entry 2 of 3" cannot be read
+            // two ways.
+            let where_ = match &group.prefix {
+                ChannelPrefixes::One(_) => " is an empty string".to_string(),
+                ChannelPrefixes::Many(prefixes) => {
+                    format!(" list has a blank entry {} of {}", i + 1, prefixes.len())
+                }
+            };
             errors.push(format!(
-                "`[[slack.channel_groups]]` has a blank `prefix` at position {i} → a blank \
-                 prefix matches every channel; remove it, or use `[slack].fallback_repo` \
-                 for the channels no rule covers"
+                "`[[slack.channel_groups]]`'s `prefix`{where_} → a blank prefix matches every \
+                 channel; remove it, or use `[slack].fallback_repo` for the channels no rule \
+                 covers"
             ));
         }
         if group.repos.is_empty() {
@@ -1065,17 +1076,16 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_entry_inside_a_prefix_list_is_flagged_with_its_position() {
+    fn a_blank_entry_inside_a_prefix_list_is_flagged_with_its_place() {
         // Distinct from an empty list: a blank entry matches every channel,
         // so the group would quietly become the catch-all.
         let mut value = minimal();
         value["channel_groups"] = json!([{ "prefix": ["dev-", ""], "repos": ["web-app"] }]);
         let errors = static_config_errors(&parse(value));
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(
-            errors[0].contains("blank `prefix` at position 1"),
-            "{errors:?}"
-        );
+        // 1-based and bounded: "entry 2 of 2" cannot be misread as an offset
+        // counted from zero, which a bare index can.
+        assert!(errors[0].contains("blank entry 2 of 2"), "{errors:?}");
         assert!(errors[0].contains("fallback_repo"), "{errors:?}");
     }
 
@@ -1085,10 +1095,13 @@ mod tests {
         value["channel_groups"] = json!([{ "prefix": "", "repos": ["web-app"] }]);
         let errors = static_config_errors(&parse(value));
         assert_eq!(errors.len(), 1, "{errors:?}");
+        // No index for a bare string — there is no list to point into, and
+        // "position 0" would only invite the question.
         assert!(
-            errors[0].contains("blank `prefix` at position 0"),
+            errors[0].contains("`prefix` is an empty string"),
             "{errors:?}"
         );
+        assert!(!errors[0].contains("entry"), "{errors:?}");
     }
 
     #[test]
