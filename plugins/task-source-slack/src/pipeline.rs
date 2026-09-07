@@ -1376,7 +1376,15 @@ async fn thread_context<T: SlackTransport>(
                 .clone()
                 .unwrap_or_else(|| "(unknown)".to_string()),
         };
-        lines.push(format!("{speaker}: {}", message.text.replace('\n', " ")));
+        // Same rule as the quoted body (#632): a mention-driven task answers
+        // as the operator, so the operator's raw tag in a context line is
+        // copy material, not content. A watch keeps it.
+        let text = if mention.repo_pin.is_none() {
+            crate::approval::remove_mention_of(&message.text, &config.target_user_id)
+        } else {
+            message.text.clone()
+        };
+        lines.push(format!("{speaker}: {}", text.replace('\n', " ")));
     }
     Some(lines)
 }
