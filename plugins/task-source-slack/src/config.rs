@@ -323,10 +323,16 @@ pub struct SlackConfig {
     /// questions get answered.
     ///
     /// Absent keeps the original behaviour: every repository stays a
-    /// candidate and the classifier picks. It does **not** remove the
-    /// `[llm]` requirement, which is judged on the candidate count
-    /// (see `server`) because a `[[channel_groups]]` entry listing two
-    /// repositories still needs a classifier.
+    /// candidate and the classifier picks.
+    ///
+    /// It does **not** remove the `[llm]` requirement. That check is a plain
+    /// count of the *declared* candidates (`server` asks
+    /// `config.repos.len() > 1`); it reads neither this key nor
+    /// `[[channel_groups]]`, so it also fires for a configuration where
+    /// nothing could reach the classifier — every group naming one
+    /// repository, plus this key set. Deciding otherwise would mean proving
+    /// which paths are reachable, and the count is deliberately blunter than
+    /// that.
     #[serde(default)]
     pub fallback_repo: Option<String>,
     /// Candidate repositories. Optional since #109: when omitted, the
